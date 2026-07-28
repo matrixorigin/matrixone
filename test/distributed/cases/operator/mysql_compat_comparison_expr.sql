@@ -1,0 +1,78 @@
+-- @suite
+
+-- @case
+-- @desc:test MySQL-compatible comparison predicate implicit conversion
+-- @label:bvt
+
+DROP DATABASE IF EXISTS mysql_compat_comparison_expr;
+CREATE DATABASE mysql_compat_comparison_expr;
+USE mysql_compat_comparison_expr;
+
+SELECT
+  '01' = 1 AS str_num_eq_1,
+  '01' < 2 AS str_num_lt_2,
+  '12.50' = 12.5 AS str_decimal_eq,
+  12.5 BETWEEN '12.49' AND '12.51' AS num_between_str_bounds;
+
+SELECT
+  '2' IN (1, 2, 3) AS str_in_num_list,
+  2 IN ('1', '2', '3') AS num_in_str_list,
+  '4' IN (1, 2, NULL) AS str_in_list_with_null,
+  '4' NOT IN (1, 2, NULL) AS str_not_in_list_with_null;
+
+SELECT
+  (1, '2') = (1, 2) AS row_mixed_eq,
+  (1, '02') <=> (1, 2) AS row_mixed_null_safe_eq,
+  (1, 2) < (1, '3') AS row_mixed_lt,
+  (1, NULL) = (1, NULL) AS row_null_eq,
+  (1, NULL) <=> (1, NULL) AS row_null_safe_eq;
+
+SELECT
+  12345 LIKE '12%' AS numeric_like_prefix,
+  12.30 LIKE '12.%' AS decimal_like_pattern,
+  20240102 LIKE '2024%' AS compact_date_number_like,
+  NULL LIKE 'x%' AS null_like_pattern;
+
+DROP TABLE IF EXISTS t_cmp_expr;
+CREATE TABLE t_cmp_expr (
+  id INT PRIMARY KEY,
+  s_num VARCHAR(20),
+  n INT,
+  amount DECIMAL(10, 2)
+);
+
+INSERT INTO t_cmp_expr VALUES
+  (1, '7', 7, 7.00),
+  (2, '08', 8, 8.50),
+  (3, '9', 9, 9.50),
+  (4, NULL, NULL, NULL);
+
+SELECT id, s_num, n
+FROM t_cmp_expr
+WHERE s_num IN (7, '8', 9)
+ORDER BY id;
+
+SELECT id, s_num, amount
+FROM t_cmp_expr
+WHERE s_num BETWEEN 7 AND '9'
+ORDER BY id;
+
+SELECT id, n, amount
+FROM t_cmp_expr
+WHERE amount BETWEEN '7.00' AND 9
+ORDER BY id;
+
+SELECT l.id AS left_id, r.id AS right_id, l.s_num AS left_s, r.n AS right_n
+FROM t_cmp_expr AS l
+JOIN t_cmp_expr AS r ON l.s_num <=> r.n
+ORDER BY left_id, right_id;
+
+SELECT id,
+       s_num,
+       s_num = n AS eq_col,
+       s_num <=> n AS null_safe_eq_col,
+       s_num NOT IN (n, NULL) AS not_in_col_with_null
+FROM t_cmp_expr
+ORDER BY id;
+
+DROP DATABASE mysql_compat_comparison_expr;

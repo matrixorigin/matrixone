@@ -143,8 +143,10 @@ func Test_Append(t *testing.T) {
 		}
 		objIt.Close()
 
-		assert.Equal(t, expectObjCnt, objCnt)
-		assert.Equal(t, expectBlkCnt, blkCnt)
+		// Appendable objects are created committed outside the creating
+		// transaction, so the explicitly created empty object is visible here.
+		assert.Equal(t, expectObjCnt+1, objCnt)
+		assert.Equal(t, expectBlkCnt+1, blkCnt)
 	}
 
 	t.Log(taeEngine.GetDB().Catalog.SimplePPString(common.PPL1))
@@ -270,6 +272,7 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 				require.Nil(t, err)
 
 				_, err = disttaeEngine.Engine.LazyLoadLatestCkp(ctx,
+					0,
 					engineTbl.GetTableID(ctx),
 					engineTbl.GetTableName(),
 					engineTbl.GetDBID(ctx),
@@ -568,7 +571,7 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 
 		checkSubscribed()
 
-		err = disttaeEngine.Engine.UnsubscribeTable(ctx, database.GetID(), rel.ID())
+		err = disttaeEngine.Engine.UnsubscribeTable(ctx, 0, database.GetID(), rel.ID())
 		require.Nil(t, err)
 
 		checkUnSubscribed()
@@ -771,7 +774,7 @@ func TestConsumeCheckpointEntry(t *testing.T) {
 	require.Nil(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	mp := common.DebugAllocator
-	partitionState := disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot().Copy()
+	partitionState := disttaeEngine.Engine.GetOrCreateLatestPart(nil, 0, id.DbID, id.TableID).Snapshot().Copy()
 
 	taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())
 	taeHandler.GetDB().ForceCheckpoint(ctx, taeHandler.GetDB().TxnMgr.Now())

@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -59,6 +58,9 @@ func (txn *txnImpl) CreateDatabase(name, createSql, datTyp string) (db handle.Da
 
 func (txn *txnImpl) CreateDatabaseWithCtx(ctx context.Context,
 	name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
+	if err = txn.Store.WantWrite("CreateDatabaseWithCtx"); err != nil {
+		return nil, err
+	}
 	err = txn.bindCtxInfo(ctx)
 	if err != nil {
 		return nil, err
@@ -118,10 +120,6 @@ func (txn *txnImpl) DatabaseNames() (names []string) {
 
 func (txn *txnImpl) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readedObject, readedTombstone []*common.ID) (err error) {
 	return txn.Store.LogTxnEntry(dbId, tableId, entry, readedObject, readedTombstone)
-}
-
-func (txn *txnImpl) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
-	return txn.Store.LogTxnState(sync)
 }
 
 func makeWorkspaceVector(typ types.Type) containers.Vector {

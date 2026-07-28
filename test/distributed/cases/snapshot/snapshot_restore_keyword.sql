@@ -20,7 +20,7 @@ create snapshot metadb202411181350 for account `01929da4-89af-7ed8-8f32-8df9ed5d
 drop database if exists `mocloud_meta`;
 -- @session
 
-restore account `01929da4-89af-7ed8-8f32-8df9ed5ddd71` from snapshot metadb202411181350 to account `0192fbbb-bfb0-7d54-a2fe-b7fd26dbdb14`;
+restore account `01929da4-89af-7ed8-8f32-8df9ed5ddd71`{snapshot=metadb202411181350} to account `0192fbbb-bfb0-7d54-a2fe-b7fd26dbdb14`;
 
 -- @session:id=2&user=0192fbbb-bfb0-7d54-a2fe-b7fd26dbdb14:test_account&password = 111
 use `mocloud_meta`;
@@ -44,7 +44,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account;
 
 drop table `_binary`;
-restore account sys from snapshot sp01;
+restore account sys{snapshot="sp01"};
 show databases;
 use `select`;
 show tables;
@@ -69,7 +69,7 @@ drop snapshot if exists `div`;
 create snapshot `div` for account;
 
 drop database `column`;
-restore account sys from snapshot `div`;
+restore account sys{snapshot=`div`};
 
 use `column`;
 show tables;
@@ -107,7 +107,7 @@ insert into `groups` values (40,'OPERATIONS','BOSTON');
 
 drop snapshot if exists `ilike`;
 create snapshot `ilike` for account `01929da4-89af-7ed8-8f32-8d123d5ddd71`;
-restore account `01929da4-89af-7ed8-8f32-8d123d5ddd71` from snapshot `ilike` to account `1234567-89af-7ed8-8f32-8d123d5ddd71`;
+restore account `01929da4-89af-7ed8-8f32-8d123d5ddd71`{snapshot=`ilike`} to account `1234567-89af-7ed8-8f32-8d123d5ddd71`;
 
 -- @session:id=4&user=1234567-89af-7ed8-8f32-8d123d5ddd71:test_account&password = 111
 show databases;

@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"slices"
 	"sort"
 	"time"
@@ -25,10 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
 
@@ -46,14 +47,12 @@ type Vector struct {
 	typ types.Type
 
 	// data of fixed length element, in case of varlen, the Varlena
-	col  typedSlice
 	data []byte
 
 	// area for holding large strings.
 	area []byte
 
-	capacity int
-	length   int
+	length int
 
 	nsp nulls.Nulls // nulls list
 	gsp nulls.Nulls // grouping list
@@ -69,37 +68,37 @@ type Vector struct {
 	offHeap bool
 }
 
-type typedSlice struct {
-	Ptr unsafe.Pointer
-	Cap int
-}
-
-func (t *typedSlice) reset() {
-	t.Ptr = nil
-	t.Cap = 0
-}
-
-func (t *typedSlice) setFromVector(v *Vector) {
-	sz := v.typ.TypeSize()
-	if cap(v.data) >= sz {
-		t.Ptr = (unsafe.Pointer)(unsafe.SliceData(v.data))
-		t.Cap = cap(v.data) / sz
+func toSliceOfLengthNoTypeCheck[T any](vec *Vector, length int) []T {
+	if length == 0 {
+		return nil
 	}
+	checkTypeIfRaceDetectorEnabled[T](vec)
+	return util.UnsafeSliceCastToLength[T](vec.data, length)
 }
 
 func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
-	checkTypeIfRaceDetectorEnabled[T](vec)
-	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+	if vec.IsConst() {
+		*ret = toSliceOfLengthNoTypeCheck[T](vec, 1)
+	} else {
+		*ret = toSliceOfLengthNoTypeCheck[T](vec, vec.length)
+	}
 }
 
 func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
-	checkTypeIfRaceDetectorEnabled[T](vec)
-	return unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+	if vec.IsConst() {
+		return toSliceOfLengthNoTypeCheck[T](vec, 1)
+	} else {
+		return toSliceOfLengthNoTypeCheck[T](vec, vec.length)
+	}
 }
 
 func ToSlice[T any](vec *Vector, ret *[]T) {
 	checkType[T](vec)
-	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+	if vec.IsConst() {
+		*ret = util.UnsafeSliceCastToLength[T](vec.data, 1)
+	} else {
+		*ret = util.UnsafeSliceCastToLength[T](vec.data, vec.length)
+	}
 }
 
 func checkType[T any](vec *Vector) {
@@ -130,11 +129,10 @@ func (v *Vector) Reset(typ types.Type) {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.sorted = false
-	v.col.reset()
-	v.setupFromData()
 }
 
 func (v *Vector) ResetWithSameType() {
+	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
@@ -150,7 +148,6 @@ func (v *Vector) ResetArea() {
 
 // TODO: It is semantically same as Reset, need to merge them later.
 func (v *Vector) ResetWithNewType(t *types.Type) {
-	oldTyp := v.typ
 	v.typ = *t
 	v.class = FLAT
 	if v.area != nil {
@@ -159,11 +156,7 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.length = 0
-	v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.sorted = false
-	if oldTyp.Oid != t.Oid {
-		v.setupFromData()
-	}
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -179,7 +172,7 @@ func (v *Vector) Length() int {
 }
 
 func (v *Vector) Capacity() int {
-	return v.capacity
+	return cap(v.data) / v.typ.TypeSize()
 }
 
 // Allocated returns the total allocated memory size of the vector.
@@ -202,8 +195,33 @@ func (v *Vector) GetType() *types.Type {
 	return &v.typ
 }
 
+// Bug #23240
+// This is very dangerous.   We changed vector type
+// but did not change the underlying data.   So the length
+// and capacity are all messed up.
 func (v *Vector) SetType(typ types.Type) {
 	v.typ = typ
+}
+
+// Bug #23240
+// Neither this function, nor the SetType function are good
+// Maybe we should just disallow.
+func (v *Vector) SetTypeAndFixData(typ types.Type, mp *mpool.MPool) {
+	if v.typ.IsVarlen() && typ.IsVarlen() {
+		v.typ = typ
+		return
+	}
+
+	if v.typ.IsVarlen() || typ.IsVarlen() {
+		// this is a weird thing to do, we should not allow it.
+		panic("SetTypeAndFixData is not allowed to change from/to varlen type")
+	}
+
+	v.typ = typ
+	oldLength := v.length
+	v.length = 0
+	extend(v, oldLength, mp)
+	v.length = oldLength
 }
 
 func (v *Vector) SetOffHeap(offHeap bool) {
@@ -228,6 +246,11 @@ func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 		return
 	}
 	v.nsp.Or(nsp)
+}
+
+func (v *Vector) SetAllNulls(length int) {
+	v.nsp.InitWithSize(int(length))
+	v.nsp.AddRange(0, uint64(length))
 }
 
 func (v *Vector) SetGrouping(gsp *nulls.Nulls) {
@@ -356,7 +379,7 @@ func (v *Vector) GetStringAt(i int) string {
 }
 
 // GetArrayAt Returns []T at the specific index of the vector
-func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
+func GetArrayAt[T types.ArrayElement](v *Vector, i int) []T {
 	if v.IsConst() {
 		i = 0
 	}
@@ -365,7 +388,7 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	return types.GetArray[T](&bs[i], v.area)
 }
 
-func GetArrayAt2[T types.RealNumbers](v *Vector, bs []types.Varlena, i int) []T {
+func GetArrayAt2[T types.ArrayElement](v *Vector, bs []types.Varlena, i int) []T {
 	if v.IsConst() {
 		i = 0
 	}
@@ -375,7 +398,7 @@ func GetArrayAt2[T types.RealNumbers](v *Vector, bs []types.Varlena, i int) []T 
 // WARNING: GetAny() return value with any type will cause memory escape to heap which will result in slow GC.
 // If you know the actual type, better use the GetFixedAtWithTypeCheck() to get the values.
 // Only use when you have no choice, e.g. you are dealing with column with any type that don't know in advanced.
-func GetAny(vec *Vector, i int) any {
+func GetAny(vec *Vector, i int, deepCopy bool) any {
 	switch vec.typ.Oid {
 	case types.T_bool:
 		return GetFixedAtNoTypeCheck[bool](vec, i)
@@ -409,12 +432,16 @@ func GetAny(vec *Vector, i int) any {
 		return GetFixedAtNoTypeCheck[types.Time](vec, i)
 	case types.T_timestamp:
 		return GetFixedAtNoTypeCheck[types.Timestamp](vec, i)
+	case types.T_year:
+		return GetFixedAtNoTypeCheck[types.MoYear](vec, i)
 	case types.T_enum:
 		return GetFixedAtNoTypeCheck[types.Enum](vec, i)
 	case types.T_decimal64:
 		return GetFixedAtNoTypeCheck[types.Decimal64](vec, i)
 	case types.T_decimal128:
 		return GetFixedAtNoTypeCheck[types.Decimal128](vec, i)
+	case types.T_decimal256:
+		return GetFixedAtNoTypeCheck[types.Decimal256](vec, i)
 	case types.T_uuid:
 		return GetFixedAtNoTypeCheck[types.Uuid](vec, i)
 	case types.T_TS:
@@ -424,8 +451,14 @@ func GetAny(vec *Vector, i int) any {
 	case types.T_Blockid:
 		return GetFixedAtNoTypeCheck[types.Blockid](vec, i)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		return vec.GetBytesAt(i)
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		ret := vec.GetBytesAt(i)
+		if deepCopy {
+			copied := make([]byte, len(ret))
+			copy(copied, ret)
+			ret = copied
+		}
+		return ret
 	}
 	return nil
 }
@@ -440,6 +473,14 @@ func NewVec(typ types.Type) *Vector {
 func NewOffHeapVecWithType(typ types.Type) *Vector {
 	vec := NewVec(typ)
 	vec.offHeap = true
+	return vec
+}
+
+func NewOffHeapVecWithTypeAndData(typ types.Type, data []byte, length, cap int) *Vector {
+	vec := NewVec(typ)
+	vec.offHeap = true
+	vec.data = data
+	vec.length = length
 	return vec
 }
 
@@ -459,8 +500,37 @@ func NewVecWithData(
 	vec.length = length
 	vec.data = data
 	vec.area = area
-	vec.setupFromData()
 	return vec
+}
+
+// NewVecWithDataCopy copies external backing data into allocations owned by mp.
+func NewVecWithDataCopy(
+	typ types.Type,
+	length int,
+	data []byte,
+	area []byte,
+	mp *mpool.MPool,
+) (*Vector, error) {
+	vec := NewVec(typ)
+	vec.length = length
+	var err error
+	if len(data) > 0 {
+		vec.data, err = mp.Alloc(len(data), false)
+		if err != nil {
+			vec.Free(mp)
+			return nil, err
+		}
+		copy(vec.data, data)
+	}
+	if len(area) > 0 {
+		vec.area, err = mp.Alloc(len(area), false)
+		if err != nil {
+			vec.Free(mp)
+			return nil, err
+		}
+		copy(vec.area, area)
+	}
+	return vec, nil
 }
 
 func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
@@ -468,7 +538,6 @@ func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec.typ = typ
 	vec.class = CONSTANT
 	vec.length = length
-
 	return vec
 }
 
@@ -478,7 +547,6 @@ func NewRollupConst(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec.typ = typ
 	vec.class = CONSTANT
 	vec.length = length
-
 	return vec
 }
 
@@ -507,7 +575,7 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec
 }
 
 // NewConstArray Creates a Const_Array Vector
-func NewConstArray[T types.RealNumbers](typ types.Type, val []T, length int, mp *mpool.MPool) (vec *Vector, err error) {
+func NewConstArray[T types.ArrayElement](typ types.Type, val []T, length int, mp *mpool.MPool) (vec *Vector, err error) {
 	vec = NewVecFromReuse()
 	vec.typ = typ
 	vec.class = CONSTANT
@@ -539,6 +607,14 @@ func (v *Vector) IsNull(i uint64) bool {
 		return false
 	}
 	return v.nsp.Contains(i)
+}
+
+func (v *Vector) SetNull(i uint64) {
+	v.nsp.Add(i)
+}
+
+func (v *Vector) UnsetNull(i uint64) {
+	v.nsp.Del(i)
 }
 
 // call this function if type already checked
@@ -583,6 +659,15 @@ func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 	return SetBytesAt(v, idx, []byte(bs), mp)
 }
 
+func (v *Vector) SetRawBytesAt(i int, bs []byte, mp *mpool.MPool) error {
+	if v.typ.IsVarlen() {
+		return SetBytesAt(v, i, bs, mp)
+	} else {
+		copy(v.data[i*v.typ.TypeSize():i*v.typ.TypeSize()+v.typ.TypeSize()], bs)
+		return nil
+	}
+}
+
 // IsConstNull return true if the vector means a scalar Null.
 // e.g.
 //
@@ -616,6 +701,10 @@ func GetPtrAt[T any](v *Vector, idx int64) *T {
 }
 
 func (v *Vector) Free(mp *mpool.MPool) {
+	if v == nil {
+		return
+	}
+
 	if !v.cantFreeData {
 		mp.Free(v.data)
 	}
@@ -623,10 +712,8 @@ func (v *Vector) Free(mp *mpool.MPool) {
 		mp.Free(v.area)
 	}
 	v.class = FLAT
-	v.col.reset()
 	v.data = nil
 	v.area = nil
-	v.capacity = 0
 	v.length = 0
 	v.cantFreeData = false
 	v.cantFreeArea = false
@@ -724,7 +811,6 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	data = data[4:]
 	if dataLen > 0 {
 		v.data = data[:dataLen]
-		v.setupFromData()
 		data = data[dataLen:]
 	}
 
@@ -781,7 +867,6 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 			return err
 		}
 		copy(v.data, data[:dataLen])
-		v.setupFromData()
 		data = data[dataLen:]
 	}
 
@@ -815,11 +900,66 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	return nil
 }
 
+func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
+	var err error
+
+	if v.class, err = types.ReadByteAsInt(r); err != nil {
+		return err
+	}
+
+	if v.typ, err = types.ReadType(r); err != nil {
+		return err
+	}
+
+	if v.length, err = types.ReadInt32AsInt(r); err != nil {
+		return err
+	}
+
+	// read data
+	dataLen, dataBuf, err := types.ReadSizeBytesMp(r, v.data, mp, v.offHeap)
+	if err != nil {
+		return err
+	}
+	if dataLen > 0 {
+		v.data = dataBuf
+	}
+
+	// read area
+	areaLen, areaBuf, err := types.ReadSizeBytesMp(r, v.area, mp, v.offHeap)
+	if err != nil {
+		return err
+	}
+	if areaLen > 0 {
+		v.area = areaBuf
+	}
+
+	// read nsp, do not use mpool.  nspBuf is different because
+	// it is not managed by vector.  In the following, it will
+	// be unmarshalled into v.nsp
+	nspLen, nspBuf, err := types.ReadSizeBytes(r)
+	if err != nil {
+		return err
+	}
+	if nspLen > 0 {
+		v.nsp.Read(nspBuf)
+	} else {
+		v.nsp.Reset()
+	}
+
+	v.sorted, err = types.ReadBool(r)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (v *Vector) ToConst() {
 	v.class = CONSTANT
 }
 
-// PreExtend use to expand the capacity of the vector
+// PreExtend use to expand the capacity of the vector.
+// PreExtend does not change the length of the vector.
 func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	if v.class == CONSTANT {
 		return nil
@@ -865,6 +1005,15 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 
 // Dup use to copy an identical vector
 func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
+	return v.dup(mp, false, v.offHeap)
+}
+
+// DupOffHeap copies a vector with all owned backing data allocated off-heap.
+func (v *Vector) DupOffHeap(mp *mpool.MPool) (*Vector, error) {
+	return v.dup(mp, true, true)
+}
+
+func (v *Vector) dup(mp *mpool.MPool, offHeap, areaOffHeap bool) (*Vector, error) {
 	if v.IsConstNull() {
 		return NewConstNull(v.typ, v.Length(), mp), nil
 	}
@@ -872,6 +1021,7 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	var err error
 
 	w := NewVecFromReuse()
+	w.offHeap = offHeap
 	w.class = v.class
 	w.typ = v.typ
 	w.length = v.length
@@ -881,10 +1031,12 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	dataLen := v.typ.TypeSize()
 	if v.IsConst() {
 		if err := extend(w, 1, mp); err != nil {
+			w.Free(mp)
 			return nil, err
 		}
 	} else {
 		if err := extend(w, v.length, mp); err != nil {
+			w.Free(mp)
 			return nil, err
 		}
 		dataLen *= v.length
@@ -892,12 +1044,96 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
-		if w.area, err = mp.Alloc(len(v.area), v.offHeap); err != nil {
+		if w.area, err = mp.Alloc(len(v.area), areaOffHeap); err != nil {
+			w.Free(mp)
 			return nil, err
 		}
 		copy(w.area, v.area)
 	}
 	return w, nil
+}
+
+// CloneToFlatCompact returns a deep, flat copy of v. Unlike Dup, the clone only
+// retains varlen payload referenced by the vector's logical rows, so stale or
+// unreferenced bytes in area are not propagated into batch memory accounting.
+func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
+	w := NewVec(v.typ)
+	if v.class != FLAT || (!v.typ.IsFixedLen() && !v.typ.IsVarlen()) {
+		if err := GetUnionAllFunction(v.typ, mp)(w, v); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+		copyBitmapWithinLength(&w.gsp, &v.gsp, v.length)
+		return w, nil
+	}
+
+	if v.length == 0 {
+		return w, nil
+	}
+	if err := extend(w, v.length, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
+	w.length = v.length
+	copyBitmapWithinLength(&w.nsp, &v.nsp, v.length)
+	copyBitmapWithinLength(&w.gsp, &v.gsp, v.length)
+
+	if v.typ.IsFixedLen() {
+		dataLen := v.length * v.typ.TypeSize()
+		copy(w.data[:dataLen], v.data[:dataLen])
+		return w, nil
+	}
+
+	var src, dst []types.Varlena
+	ToSliceNoTypeCheck(v, &src)
+	ToSliceNoTypeCheck(w, &dst)
+	totalArea := 0
+	for i := range src {
+		if v.nsp.Contains(uint64(i)) || src[i].IsSmall() {
+			continue
+		}
+		_, n := src[i].OffsetLen()
+		totalArea += int(n)
+	}
+	if totalArea > 0 {
+		var err error
+		w.area, err = mp.Alloc(totalArea, w.offHeap)
+		if err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+	}
+
+	offset := 0
+	for i := range src {
+		if v.nsp.Contains(uint64(i)) {
+			dst[i] = types.Varlena{}
+			continue
+		}
+		if src[i].IsSmall() {
+			dst[i] = src[i]
+			continue
+		}
+		value := src[i].GetByteSlice(v.area)
+		copy(w.area[offset:], value)
+		dst[i].SetOffsetLen(uint32(offset), uint32(len(value)))
+		offset += len(value)
+	}
+	return w, nil
+}
+
+func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
+	if src.EmptyByFlag() {
+		return
+	}
+	limit := uint64(length)
+	src.Foreach(func(row uint64) bool {
+		if row >= limit {
+			return false
+		}
+		nulls.Add(dst, row)
+		return true
+	})
 }
 
 // Shrink use to shrink vectors, sels must be guaranteed to be ordered
@@ -940,7 +1176,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	case types.T_float64:
 		shrinkFixed[float64](v, sels, negate)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -953,12 +1189,16 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[types.Time](v, sels, negate)
 	case types.T_timestamp:
 		shrinkFixed[types.Timestamp](v, sels, negate)
+	case types.T_year:
+		shrinkFixed[types.MoYear](v, sels, negate)
 	case types.T_enum:
 		shrinkFixed[types.Enum](v, sels, negate)
 	case types.T_decimal64:
 		shrinkFixed[types.Decimal64](v, sels, negate)
 	case types.T_decimal128:
 		shrinkFixed[types.Decimal128](v, sels, negate)
+	case types.T_decimal256:
+		shrinkFixed[types.Decimal256](v, sels, negate)
 	case types.T_uuid:
 		shrinkFixed[types.Uuid](v, sels, negate)
 	case types.T_TS:
@@ -972,7 +1212,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	}
 }
 
-func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool, offset uint64) {
+func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	if v.IsConst() {
 		if negate {
 			v.length -= sels.Count()
@@ -1008,7 +1248,7 @@ func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool, offset uint64) {
 	case types.T_float64:
 		shrinkFixedByMask[float64](v, sels, negate, offset)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
@@ -1021,12 +1261,16 @@ func (v *Vector) ShrinkByMask(sels bitmap.Mask, negate bool, offset uint64) {
 		shrinkFixedByMask[types.Time](v, sels, negate, offset)
 	case types.T_timestamp:
 		shrinkFixedByMask[types.Timestamp](v, sels, negate, offset)
+	case types.T_year:
+		shrinkFixedByMask[types.MoYear](v, sels, negate, offset)
 	case types.T_enum:
 		shrinkFixedByMask[types.Enum](v, sels, negate, offset)
 	case types.T_decimal64:
 		shrinkFixedByMask[types.Decimal64](v, sels, negate, offset)
 	case types.T_decimal128:
 		shrinkFixedByMask[types.Decimal128](v, sels, negate, offset)
+	case types.T_decimal256:
+		shrinkFixedByMask[types.Decimal256](v, sels, negate, offset)
 	case types.T_uuid:
 		shrinkFixedByMask[types.Uuid](v, sels, negate, offset)
 	case types.T_TS:
@@ -1072,7 +1316,7 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	case types.T_float64:
 		err = shuffleFixedNoTypeCheck[float64](v, sels, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		err = shuffleFixedNoTypeCheck[types.Varlena](v, sels, mp)
 	case types.T_date:
 		err = shuffleFixedNoTypeCheck[types.Date](v, sels, mp)
@@ -1082,12 +1326,16 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		err = shuffleFixedNoTypeCheck[types.Time](v, sels, mp)
 	case types.T_timestamp:
 		err = shuffleFixedNoTypeCheck[types.Timestamp](v, sels, mp)
+	case types.T_year:
+		err = shuffleFixedNoTypeCheck[types.MoYear](v, sels, mp)
 	case types.T_enum:
 		err = shuffleFixedNoTypeCheck[types.Enum](v, sels, mp)
 	case types.T_decimal64:
 		err = shuffleFixedNoTypeCheck[types.Decimal64](v, sels, mp)
 	case types.T_decimal128:
 		err = shuffleFixedNoTypeCheck[types.Decimal128](v, sels, mp)
+	case types.T_decimal256:
+		err = shuffleFixedNoTypeCheck[types.Decimal256](v, sels, mp)
 	case types.T_uuid:
 		err = shuffleFixedNoTypeCheck[types.Uuid](v, sels, mp)
 	case types.T_TS:
@@ -1103,15 +1351,103 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	return err
 }
 
-// XXX Old Copy is FUBAR.
+// ShuffleWithBuf is like Shuffle but reuses a scratch buffer to avoid
+// alloc/free churn when the permutation preserves the element count.
+// buf is grown as needed and retained across calls.
+func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
+	if v.IsConst() {
+		return nil
+	}
+	// Fall back to allocating Shuffle if the vector doesn't own its data
+	// or the selection changes the element count.
+	if v.cantFreeData || len(sels) != v.length {
+		return v.Shuffle(sels, mp)
+	}
+
+	switch v.typ.Oid {
+	case types.T_bool:
+		err = shuffleFixedNoTypeCheckWithBuf[bool](v, sels, buf)
+	case types.T_bit:
+		err = shuffleFixedNoTypeCheckWithBuf[uint64](v, sels, buf)
+	case types.T_int8:
+		err = shuffleFixedNoTypeCheckWithBuf[int8](v, sels, buf)
+	case types.T_int16:
+		err = shuffleFixedNoTypeCheckWithBuf[int16](v, sels, buf)
+	case types.T_int32:
+		err = shuffleFixedNoTypeCheckWithBuf[int32](v, sels, buf)
+	case types.T_int64:
+		err = shuffleFixedNoTypeCheckWithBuf[int64](v, sels, buf)
+	case types.T_uint8:
+		err = shuffleFixedNoTypeCheckWithBuf[uint8](v, sels, buf)
+	case types.T_uint16:
+		err = shuffleFixedNoTypeCheckWithBuf[uint16](v, sels, buf)
+	case types.T_uint32:
+		err = shuffleFixedNoTypeCheckWithBuf[uint32](v, sels, buf)
+	case types.T_uint64:
+		err = shuffleFixedNoTypeCheckWithBuf[uint64](v, sels, buf)
+	case types.T_float32:
+		err = shuffleFixedNoTypeCheckWithBuf[float32](v, sels, buf)
+	case types.T_float64:
+		err = shuffleFixedNoTypeCheckWithBuf[float64](v, sels, buf)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Varlena](v, sels, buf)
+	case types.T_date:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Date](v, sels, buf)
+	case types.T_datetime:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Datetime](v, sels, buf)
+	case types.T_time:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Time](v, sels, buf)
+	case types.T_timestamp:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Timestamp](v, sels, buf)
+	case types.T_year:
+		err = shuffleFixedNoTypeCheckWithBuf[types.MoYear](v, sels, buf)
+	case types.T_enum:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Enum](v, sels, buf)
+	case types.T_decimal64:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Decimal64](v, sels, buf)
+	case types.T_decimal128:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Decimal128](v, sels, buf)
+	case types.T_decimal256:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Decimal256](v, sels, buf)
+	case types.T_uuid:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Uuid](v, sels, buf)
+	case types.T_TS:
+		err = shuffleFixedNoTypeCheckWithBuf[types.TS](v, sels, buf)
+	case types.T_Rowid:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Rowid](v, sels, buf)
+	case types.T_Blockid:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Blockid](v, sels, buf)
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.ShuffleWithBuf", v.typ))
+	}
+
+	return err
+}
+
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	if w.class == CONSTANT {
 		if w.IsConstNull() {
+			if !v.typ.IsFixedLen() {
+				vva := MustFixedColNoTypeCheck[types.Varlena](v)
+				// Null varlen slots may retain stale offset/len metadata, so clear
+				// the destination header before marking the row null.
+				vva[vi] = types.Varlena{}
+			}
 			v.nsp.Set(uint64(vi))
 			return nil
 		}
+		// Non-null constant vectors still share the regular null/data path below.
 		wi = 0
+	}
+	if w.GetNulls().Contains(uint64(wi)) {
+		if !v.typ.IsFixedLen() {
+			vva := MustFixedColNoTypeCheck[types.Varlena](v)
+			vva[vi] = types.Varlena{}
+		}
+		v.GetNulls().Set(uint64(vi))
+		return nil
 	}
 	if v.typ.IsFixedLen() {
 		sz := v.typ.TypeSize()
@@ -1131,11 +1467,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 		}
 	}
 
-	if w.GetNulls().Contains(uint64(wi)) {
-		v.GetNulls().Set(uint64(vi))
-	} else {
-		v.GetNulls().Unset(uint64(vi))
-	}
+	v.GetNulls().Unset(uint64(vi))
 	return nil
 }
 
@@ -1540,6 +1872,35 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			v.length += w.length
 			return nil
 		}
+	case types.T_year:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.MoYear](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
 	case types.T_datetime:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
@@ -1714,6 +2075,35 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			v.length += w.length
 			return nil
 		}
+	case types.T_decimal256:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, types.Decimal256{}, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedColNoTypeCheck[types.Decimal256](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				unionNsp(&v.nsp, &w.nsp, v.length, w.length)
+			}
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
 	case types.T_uuid:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
@@ -1803,7 +2193,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
 				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
@@ -1828,9 +2218,9 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				v.area = area[:len(v.area)]
 			}
-			var vs []types.Varlena
-			ToSliceNoTypeCheck(v, &vs)
+
 			var err error
+			vs := toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+w.length)
 
 			bm := w.nsp.GetBitmap()
 			if bm != nil && !bm.EmptyByFlag() {
@@ -1988,7 +2378,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 	case types.T_uint32:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
-				return appendOneFixed(v, uint32(0), true, mp)
+				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedColNoTypeCheck[uint32](w)
 			if w.IsConst() {
@@ -2035,6 +2425,17 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedColNoTypeCheck[types.Date](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
+	case types.T_year:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedColNoTypeCheck[types.MoYear](w)
 			if w.IsConst() {
 				return SetConstFixed(v, ws[0], length, mp)
 			}
@@ -2106,6 +2507,17 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
+	case types.T_decimal256:
+		return func(v, w *Vector, sel int64, length int) error {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
+				return SetConstNull(v, length, mp)
+			}
+			ws := MustFixedColNoTypeCheck[types.Decimal256](w)
+			if w.IsConst() {
+				return SetConstFixed(v, ws[0], length, mp)
+			}
+			return SetConstFixed(v, ws[sel], length, mp)
+		}
 	case types.T_uuid:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
@@ -2140,7 +2552,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_json, types.T_blob, types.T_text, types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return func(v, w *Vector, sel int64, length int) error {
 			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
@@ -2166,6 +2578,51 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.GetConstSetFunction", typ))
 	}
+}
+
+// fillSlice broadcasts val across s[start:end] using exponential copy doubling:
+// write one element, then double the filled region with copy() — O(log n) memmoves
+// instead of n scalar element stores. Used on the hot const-broadcast path.
+func fillSlice[T any](s []T, start, end int, val T) {
+	if start >= end {
+		return
+	}
+	s[start] = val
+	for n := 1; start+n < end; n *= 2 {
+		copy(s[start+n:end], s[start:start+n])
+	}
+}
+
+// broadcastFixed fills dst (whose length is a multiple of unit and whose leading
+// `unit` bytes already hold the value) by repeating that unit across the rest via
+// copy doubling — one growing memmove region instead of a per-slot copy loop.
+func broadcastFixed(dst []byte, unit int) {
+	for n := unit; n < len(dst); {
+		n += copy(dst[n:], dst[:n])
+	}
+}
+
+// pregrowVarlenaArea grows vec.area's capacity once (a single mpool realloc) to fit
+// an additional totalBytes of non-inline varlena content, so the subsequent per-row
+// BuildVarlenaNoInline appends never re-grow — eliminating incremental realloc churn.
+// Length is preserved; only capacity grows. No-op without an mpool or when capacity
+// already suffices. totalBytes may be an over-estimate (e.g. counting null rows that
+// are later skipped) — over-reserving is harmless.
+func pregrowVarlenaArea(vec *Vector, totalBytes int, mp *mpool.MPool) error {
+	if mp == nil || totalBytes <= 0 {
+		return nil
+	}
+	need := len(vec.area) + totalBytes
+	if need <= cap(vec.area) {
+		return nil
+	}
+	origLen := len(vec.area)
+	grown, err := mp.Grow(vec.area, need, vec.offHeap)
+	if err != nil {
+		return err
+	}
+	vec.area = grown[:origLen]
+	return nil
 }
 
 func (v *Vector) UnionNull(mp *mpool.MPool) error {
@@ -2264,31 +2721,11 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 		}
 		var col []types.Varlena
 		ToSliceNoTypeCheck(v, &col)
-		for i := oldLen; i < v.length; i++ {
-			col[i] = va
-		}
+		fillSlice(col, oldLen, v.length, va)
 	} else {
 		tlen := v.GetType().TypeSize()
-		for i := oldLen; i < v.length; i++ {
-			switch tlen {
-			case 8:
-				p1 := unsafe.Pointer(&v.data[i*8])
-				p2 := unsafe.Pointer(&w.data[sel*8])
-				*(*int64)(p1) = *(*int64)(p2)
-			case 4:
-				p1 := unsafe.Pointer(&v.data[i*4])
-				p2 := unsafe.Pointer(&w.data[sel*4])
-				*(*int32)(p1) = *(*int32)(p2)
-			case 2:
-				p1 := unsafe.Pointer(&v.data[i*2])
-				p2 := unsafe.Pointer(&w.data[sel*2])
-				*(*int16)(p1) = *(*int16)(p2)
-			case 1:
-				v.data[i] = w.data[sel]
-			default:
-				copy(v.data[i*tlen:(i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
-			}
-		}
+		copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+		broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 	}
 
 	return nil
@@ -2329,14 +2766,11 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			}
 			var col []types.Varlena
 			ToSliceNoTypeCheck(v, &col)
-			for i := oldLen; i < v.length; i++ {
-				col[i] = va
-			}
+			fillSlice(col, oldLen, v.length, va)
 		} else {
 			tlen := v.GetType().TypeSize()
-			for i := oldLen; i < v.length; i++ {
-				copy(v.data[i*tlen:(i+1)*tlen], w.data[:tlen])
-			}
+			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[:tlen])
+			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 		}
 
 		return nil
@@ -2347,6 +2781,25 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		var vCol, wCol []types.Varlena
 		ToSliceNoTypeCheck(v, &vCol)
 		ToSliceNoTypeCheck(w, &wCol)
+		// pre-grow the area once for the selected non-inline, non-null rows so the
+		// per-row BuildVarlenaNoInline appends below never realloc. Null rows are NOT
+		// copied (the loop below skips them via w.nsp), and a reused vector can retain
+		// a stale non-inline header in a null slot — counting those would reserve area
+		// for dead payload (large needless mp.Grow / alloc failure), so exclude them.
+		total := 0
+		hasNull := !w.GetNulls().EmptyByFlag()
+		for _, sel := range sels {
+			if hasNull && w.nsp.Contains(uint64(sel)) {
+				continue
+			}
+			if !wCol[sel].IsSmall() {
+				_, l := wCol[sel].OffsetLen()
+				total += int(l)
+			}
+		}
+		if err = pregrowVarlenaArea(v, total, mp); err != nil {
+			return err
+		}
 		if !w.GetNulls().EmptyByFlag() {
 			for i, sel := range sels {
 				if w.gsp.Contains(uint64(sel)) {
@@ -2455,14 +2908,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			}
 			var col []types.Varlena
 			ToSliceNoTypeCheck(v, &col)
-			for i := oldLen; i < v.length; i++ {
-				col[i] = va
-			}
+			fillSlice(col, oldLen, v.length, va)
 		} else {
 			tlen := v.GetType().TypeSize()
-			for i := oldLen; i < v.length; i++ {
-				copy(v.data[i*tlen:(i+1)*tlen], w.data[:tlen])
-			}
+			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[:tlen])
+			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 		}
 
 		return nil
@@ -2471,8 +2921,118 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	if v.GetType().IsVarlen() {
 		var err error
 		var vCol, wCol []types.Varlena
-		ToSliceNoTypeCheck(v, &vCol)
+
+		vCol = toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+addCnt)
 		ToSliceNoTypeCheck(w, &wCol)
+
+		// Fast path: appending an entire in-order source varlen vector — the block-scan
+		// materialization path. The general loop below calls BuildVarlenaFromVarlena
+		// per row, which copies each row's content and writes each header individually:
+		// N small memmoves plus incremental area growth, which the scan CPU profile
+		// showed is ~50% of a table scan. Here we instead copy the whole source area in
+		// ONE memmove and the whole header array in another, then rebase the non-inline
+		// offsets with an unsafe walk. Nulls are fine: a null row's content is not in
+		// w.area, and its header is never read — we just propagate w's null/grouping
+		// bitmaps (shifted by oldLen) and zero the null rows' copied headers so no
+		// rebased garbage offset lingers. Semantically identical to the loop.
+		if flags == nil && offset == 0 && cnt == w.length {
+			oldLen := v.length
+			baseOff := len(v.area)
+			if len(w.area) > 0 {
+				// preserve mpool semantics: append within cap, else mpool Grow2 (so
+				// v.area stays mpool-tracked rather than escaping to the Go heap).
+				if baseOff+len(w.area) <= cap(v.area) || mp == nil {
+					v.area = append(v.area, w.area...)
+				} else if v.area, err = mp.Grow2(v.area, w.area, baseOff+len(w.area), v.offHeap); err != nil {
+					return err
+				}
+			}
+			// one memmove of the header array; inline varlenas carry their bytes here.
+			copy(vCol[oldLen:oldLen+cnt], wCol[:cnt])
+			// non-inline headers hold an offset into w.area; rebase into v.area. An
+			// inline varlena has s[0] <= 23 (its length byte), never the 0xffffffff
+			// big-header sentinel, so the check is exact.
+			if baseOff != 0 && len(w.area) > 0 {
+				p := unsafe.Pointer(&vCol[oldLen])
+				for i := 0; i < cnt; i++ {
+					s := (*[6]uint32)(p)
+					if s[0] == types.VarlenaBigHdr {
+						s[1] += uint32(baseOff)
+					}
+					p = unsafe.Add(p, types.VarlenaSize)
+				}
+			}
+			// propagate grouping bits (value is still real for these rows).
+			// Bound to [0,cnt): Foreach walks every set bit in the underlying
+			// bitmap, but w may carry stale bits at index >= w.length (SetLength
+			// shrinks length without clearing nsp/gsp, and vectors are reused).
+			// The per-row path only consults [0,cnt) via Contains, so we must skip
+			// stale bits here too — otherwise they pollute v.gsp / index past vCol.
+			if !w.gsp.EmptyByFlag() {
+				base, ucnt := uint64(oldLen), uint64(cnt)
+				w.gsp.Foreach(func(i uint64) bool {
+					if i < ucnt {
+						nulls.Add(&v.gsp, base+i)
+					}
+					return true
+				})
+			}
+			// propagate null bits and clear those (never-read) headers so a copied
+			// big-header offset can't linger as a dangling reference into v.area.
+			// Same [0,cnt) bound as gsp above: a stale nsp bit at i >= cnt would
+			// index vCol (len oldLen+cnt) out of range and panic.
+			if !w.nsp.EmptyByFlag() {
+				base, ucnt := uint64(oldLen), uint64(cnt)
+				w.nsp.Foreach(func(i uint64) bool {
+					if i < ucnt {
+						nulls.Add(&v.nsp, base+i)
+						vCol[oldLen+int(i)] = types.Varlena{}
+					}
+					return true
+				})
+			}
+			v.length += cnt
+			return nil
+		}
+
+		// pre-grow the area once for the non-inline, non-null source rows in this
+		// append so the per-row BuildVarlenaNoInline calls below never realloc. Null
+		// rows are NOT copied (the loops below skip them via w.nsp), and a reused
+		// vector can retain a stale non-inline header in a null slot — counting those
+		// would reserve area for dead payload (large needless mp.Grow / alloc
+		// failure), so exclude them to match what's actually appended.
+		{
+			total := 0
+			hasNull := !w.nsp.EmptyByFlag()
+			if flags == nil {
+				for i := 0; i < cnt; i++ {
+					if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
+						continue
+					}
+					if s := &wCol[int(offset)+i]; !s.IsSmall() {
+						_, l := s.OffsetLen()
+						total += int(l)
+					}
+				}
+			} else {
+				for i := range flags {
+					if flags[i] == 0 {
+						continue
+					}
+					if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
+						continue
+					}
+					if s := &wCol[int(offset)+i]; !s.IsSmall() {
+						_, l := s.OffsetLen()
+						total += int(l)
+					}
+				}
+			}
+			if err = pregrowVarlenaArea(v, total, mp); err != nil {
+				return err
+			}
+		}
+
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
@@ -2569,8 +3129,18 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			}
 		} else {
 			if flags == nil {
-				copy(v.data[v.length*tlen:(v.length+cnt)*tlen], w.data[(int(offset))*tlen:(int(offset)+cnt)*tlen])
-				v.length += cnt
+				if w.nsp.Any() {
+					for i := 0; i < cnt; i++ {
+						if w.nsp.Contains(uint64(offset) + uint64(i)) {
+							nulls.Add(&v.nsp, uint64(v.length))
+						}
+						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
+						v.length++
+					}
+				} else {
+					copy(v.data[v.length*tlen:(v.length+cnt)*tlen], w.data[(int(offset))*tlen:(int(offset)+cnt)*tlen])
+					v.length += cnt
+				}
 			} else {
 				for i := range flags {
 					if flags[i] == 0 {
@@ -2627,10 +3197,14 @@ func (v *Vector) String() string {
 		return vecToString[types.Timestamp](v)
 	case types.T_enum:
 		return vecToString[types.Enum](v)
+	case types.T_year:
+		return vecToString[types.MoYear](v)
 	case types.T_decimal64:
 		return vecToString[types.Decimal64](v)
 	case types.T_decimal128:
 		return vecToString[types.Decimal128](v)
+	case types.T_decimal256:
+		return vecToString[types.Decimal256](v)
 	case types.T_uuid:
 		return vecToString[types.Uuid](v)
 	case types.T_TS:
@@ -2639,7 +3213,7 @@ func (v *Vector) String() string {
 		return vecToString[types.Rowid](v)
 	case types.T_Blockid:
 		return vecToString[types.Blockid](v)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col := InefficientMustStrCol(v)
 		if len(col) == 1 {
 			if nulls.Contains(&v.nsp, 0) {
@@ -2684,6 +3258,46 @@ func (v *Vector) String() string {
 		if v.nsp.Any() {
 			return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
 		}
+		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_bf16:
+		col := MustArrayCol[types.BF16](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			}
+			return types.ArrayToString[types.BF16](col[0])
+		}
+		str := types.ArraysToString[types.BF16](col, types.DefaultArraysToStringSep)
+		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_float16:
+		col := MustArrayCol[types.Float16](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			}
+			return types.ArrayToString[types.Float16](col[0])
+		}
+		str := types.ArraysToString[types.Float16](col, types.DefaultArraysToStringSep)
+		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_uint8:
+		col := MustArrayCol[uint8](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			}
+			return types.ArrayToString[uint8](col[0])
+		}
+		str := types.ArraysToString[uint8](col, types.DefaultArraysToStringSep)
+		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
+	case types.T_array_int8:
+		col := MustArrayCol[int8](v)
+		if len(col) == 1 {
+			if nulls.Contains(&v.nsp, 0) {
+				return "null"
+			}
+			return types.ArrayToString[int8](col[0])
+		}
+		str := types.ArraysToString[int8](col, types.DefaultArraysToStringSep)
 		return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
 	default:
 		panic("vec to string unknown types.")
@@ -2734,18 +3348,22 @@ func implDatetimeRowToString(v *Vector, idx int) string {
 		return "null"
 	}
 
+	var dt types.Datetime
 	if v.IsConst() {
 		if nulls.Contains(&v.nsp, 0) {
 			return "null"
 		} else {
-			return GetFixedAtNoTypeCheck[types.Datetime](v, 0).String2(v.typ.Scale)
+			dt = GetFixedAtNoTypeCheck[types.Datetime](v, 0)
+		}
+	} else {
+		if v.nsp.Contains(uint64(idx)) {
+			return "null"
+		} else {
+			dt = GetFixedAtNoTypeCheck[types.Datetime](v, idx)
 		}
 	}
-	if v.nsp.Contains(uint64(idx)) {
-		return "null"
-	} else {
-		return GetFixedAtNoTypeCheck[types.Datetime](v, idx).String2(v.typ.Scale)
-	}
+
+	return dt.String2(v.typ.Scale)
 }
 
 func implDecimalRowToString[T types.DecimalWithFormat](v *Vector, idx int) string {
@@ -2767,7 +3385,7 @@ func implDecimalRowToString[T types.DecimalWithFormat](v *Vector, idx int) strin
 	}
 }
 
-func implArrayRowToString[T types.RealNumbers](v *Vector, idx int) string {
+func implArrayRowToString[T types.ArrayElement](v *Vector, idx int) string {
 	if v.IsConstNull() {
 		return "null"
 	}
@@ -2814,6 +3432,8 @@ func (v *Vector) RowToString(idx int) string {
 		return implFixedRowToString[float64](v, idx)
 	case types.T_date:
 		return implFixedRowToString[types.Date](v, idx)
+	case types.T_year:
+		return implFixedRowToString[types.MoYear](v, idx)
 	case types.T_datetime:
 		return implDatetimeRowToString(v, idx)
 	case types.T_time:
@@ -2826,6 +3446,8 @@ func (v *Vector) RowToString(idx int) string {
 		return implDecimalRowToString[types.Decimal64](v, idx)
 	case types.T_decimal128:
 		return implDecimalRowToString[types.Decimal128](v, idx)
+	case types.T_decimal256:
+		return implDecimalRowToString[types.Decimal256](v, idx)
 	case types.T_uuid:
 		return implFixedRowToString[types.Uuid](v, idx)
 	case types.T_TS:
@@ -2834,7 +3456,7 @@ func (v *Vector) RowToString(idx int) string {
 		return implFixedRowToString[types.Rowid](v, idx)
 	case types.T_Blockid:
 		return implFixedRowToString[types.Blockid](v, idx)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col := MustFixedColNoTypeCheck[types.Varlena](v)
 		if len(col) == 1 {
 			if nulls.Contains(&v.nsp, 0) {
@@ -2853,6 +3475,14 @@ func (v *Vector) RowToString(idx int) string {
 		return implArrayRowToString[float32](v, idx)
 	case types.T_array_float64:
 		return implArrayRowToString[float64](v, idx)
+	case types.T_array_bf16:
+		return implArrayRowToString[types.BF16](v, idx)
+	case types.T_array_float16:
+		return implArrayRowToString[types.Float16](v, idx)
+	case types.T_array_int8:
+		return implArrayRowToString[int8](v, idx)
+	case types.T_array_uint8:
+		return implArrayRowToString[uint8](v, idx)
 	default:
 		panic("vec to string unknown types.")
 	}
@@ -2868,75 +3498,78 @@ func SetConstNull(vec *Vector, length int, mp *mpool.MPool) error {
 }
 
 func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error {
-	if vec.capacity == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
+	if err := extend(vec, 1, mp); err != nil {
+		return err
 	}
 	vec.class = CONSTANT
-	var col []T
-	ToSlice(vec, &col)
-	col[0] = val
-	vec.data = vec.data[:cap(vec.data)]
 	vec.length = length
+
+	col := toSliceOfLengthNoTypeCheck[T](vec, 1)
+	col[0] = val
 	return nil
 }
 
 func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
-	var err error
-	if vec.capacity == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
-	}
-	vec.class = CONSTANT
-	var col []types.Varlena
-	ToSliceNoTypeCheck(vec, &col)
-	err = BuildVarlenaFromByteSlice(vec, &col[0], &val, mp)
-	if err != nil {
+	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
-	vec.data = vec.data[:cap(vec.data)]
+	vec.class = CONSTANT
+	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
+	if err := BuildVarlenaFromByteSlice(vec, &col[0], &val, mp); err != nil {
+		return err
+	}
 	vec.length = length
 	return nil
 }
 
 func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.MPool) error {
-	var err error
-	if vec.capacity == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
-	}
-	vec.class = CONSTANT
-	var col []types.Varlena
-	ToSliceNoTypeCheck(vec, &col)
-	err = BuildVarlenaFromByteJson(vec, &col[0], bj, mp)
-	if err != nil {
+	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
-	vec.data = vec.data[:cap(vec.data)]
+	vec.class = CONSTANT
+	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
+	if err := BuildVarlenaFromByteJson(vec, &col[0], bj, mp); err != nil {
+		return err
+	}
+	vec.length = length
+	return nil
+}
+
+func SetConstByteJsonEncoded(
+	vec *Vector,
+	enc bytejson.ByteJsonDataEncoder,
+	length int,
+	mp *mpool.MPool,
+) error {
+	oldAreaLen := len(vec.area)
+	var value types.Varlena
+	if err := BuildVarlenaFromByteJsonEncoded(vec, &value, enc, mp); err != nil {
+		return err
+	}
+	if err := extend(vec, 1, mp); err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		return err
+	}
+	vec.class = CONSTANT
+	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
+	col[0] = value
 	vec.length = length
 	return nil
 }
 
 // SetConstArray set current vector as Constant_Array vector of given length.
-func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mpool.MPool) error {
+func SetConstArray[T types.ArrayElement](vec *Vector, val []T, length int, mp *mpool.MPool) error {
 	var err error
 
-	if vec.capacity == 0 {
-		if err := extend(vec, 1, mp); err != nil {
-			return err
-		}
+	if err := extend(vec, 1, mp); err != nil {
+		return err
 	}
 	vec.class = CONSTANT
-	var col []types.Varlena
-	ToSliceNoTypeCheck(vec, &col)
-	err = BuildVarlenaFromArray[T](vec, &col[0], &val, mp)
+	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
+	err = BuildVarlenaFromArray(vec, &col[0], &val, mp)
 	if err != nil {
 		return err
 	}
-	vec.data = vec.data[:cap(vec.data)]
 	vec.length = length
 	return nil
 }
@@ -2983,6 +3616,8 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(float64), false, mp)
 	case types.T_date:
 		return appendOneFixed(vec, val.(types.Date), false, mp)
+	case types.T_year:
+		return appendOneFixed(vec, val.(types.MoYear), false, mp)
 	case types.T_datetime:
 		return appendOneFixed(vec, val.(types.Datetime), false, mp)
 	case types.T_time:
@@ -2995,6 +3630,8 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(types.Decimal64), false, mp)
 	case types.T_decimal128:
 		return appendOneFixed(vec, val.(types.Decimal128), false, mp)
+	case types.T_decimal256:
+		return appendOneFixed(vec, val.(types.Decimal256), false, mp)
 	case types.T_uuid:
 		return appendOneFixed(vec, val.(types.Uuid), false, mp)
 	case types.T_TS:
@@ -3004,10 +3641,14 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 	case types.T_Blockid:
 		return appendOneFixed(vec, val.(types.Blockid), false, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
+}
+
+func AppendNull(vec *Vector, mp *mpool.MPool) error {
+	return appendOneFixed(vec, 0, true, mp)
 }
 
 func AppendFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) error {
@@ -3040,8 +3681,43 @@ func AppendByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MP
 	return appendOneByteJson(vec, bj, isNull, mp)
 }
 
+func AppendByteJsonEncoded(
+	vec *Vector,
+	enc bytejson.ByteJsonDataEncoder,
+	mp *mpool.MPool,
+) error {
+	if vec.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
+	}
+	if mp == nil {
+		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
+	}
+
+	if err := extend(vec, 1, mp); err != nil {
+		return err
+	}
+	index := vec.length
+	values := toSliceOfLengthNoTypeCheck[types.Varlena](vec, index+1)
+	oldValue := values[index]
+	oldAreaLen := len(vec.area)
+	wasNull := vec.nsp.Contains(uint64(index))
+	if err := BuildVarlenaFromByteJsonEncoded(vec, &values[index], enc, mp); err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		values[index] = oldValue
+		if wasNull {
+			vec.nsp.Add(uint64(index))
+		} else {
+			vec.nsp.Del(uint64(index))
+		}
+		return err
+	}
+	vec.nsp.Del(uint64(index))
+	vec.length++
+	return nil
+}
+
 // AppendArray mainly used in tests
-func AppendArray[T types.RealNumbers](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
+func AppendArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
 	}
@@ -3111,7 +3787,7 @@ func AppendStringList(vec *Vector, ws []string, isNulls []bool, mp *mpool.MPool)
 }
 
 // AppendArrayList mainly used in unit tests
-func AppendArrayList[T types.RealNumbers](vec *Vector, ws [][]T, isNulls []bool, mp *mpool.MPool) error {
+func AppendArrayList[T types.ArrayElement](vec *Vector, ws [][]T, isNulls []bool, mp *mpool.MPool) error {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
 	}
@@ -3121,10 +3797,14 @@ func AppendArrayList[T types.RealNumbers](vec *Vector, ws [][]T, isNulls []bool,
 	if len(ws) == 0 {
 		return nil
 	}
-	return appendArrayList[T](vec, ws, isNulls, mp)
+	return appendArrayList(vec, ws, isNulls, mp)
 }
 
 func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) error {
+	if vec.IsConst() {
+		return moerr.NewInternalErrorNoCtx("append to const vector")
+	}
+
 	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
@@ -3171,7 +3851,7 @@ func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool
 }
 
 // appendOneArray mainly used for unit tests
-func appendOneArray[T types.RealNumbers](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
+func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
 	var err error
 	var va types.Varlena
 
@@ -3194,12 +3874,11 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	vec.length += cnt
 	if isNull {
 		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
-	} else {
+	} else if cnt > 0 {
+		// XXX check cnt > 0 to avoid issue #23295
 		var col []T
 		ToSlice(vec, &col)
-		for i := 0; i < cnt; i++ {
-			col[length+i] = val
-		}
+		fillSlice(col, length, length+cnt, val)
 	}
 	return nil
 }
@@ -3290,7 +3969,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 }
 
 // appendArrayList mainly used for unit tests
-func appendArrayList[T types.RealNumbers](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) error {
+func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) error {
 	var err error
 
 	if err = extend(vec, len(vals), mp); err != nil {
@@ -3345,7 +4024,7 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 	}
 }
 
-func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels bitmap.Mask, negate bool, offset uint64) {
+func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negate bool, offset uint64) {
 	vs := MustFixedColNoTypeCheck[T](v)
 	length := sels.Count()
 	itr := sels.Iterator()
@@ -3393,10 +4072,8 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 		return err
 	}
 	v.data = data
-	v.setupFromData()
-	var ws []T
-	ToSliceNoTypeCheck(v, &ws)
-	ws = ws[:ns]
+	ws := toSliceOfLengthNoTypeCheck[T](v, ns)
+
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	nulls.Filter(&v.gsp, sels, false)
 	nulls.Filter(&v.nsp, sels, false)
@@ -3406,6 +4083,32 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	} else {
 		mp.Free(olddata)
 	}
+	v.length = ns
+	return nil
+}
+
+// shuffleFixedNoTypeCheckWithBuf permutes elements using a reusable scratch
+// buffer instead of allocating a new data buffer. Only valid when
+// len(sels) == v.length and !v.cantFreeData (caller checks).
+func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64, buf *[]byte) error {
+	sz := v.typ.TypeSize()
+	ns := len(sels)
+	needed := ns * sz
+
+	if cap(*buf) < needed {
+		*buf = make([]byte, needed)
+	} else {
+		*buf = (*buf)[:needed]
+	}
+
+	var vs []T
+	ToFixedColNoTypeCheck(v, &vs)
+	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
+
+	shuffle.FixedLengthShuffle(vs, ws, sels)
+	copy(v.data[:needed], *buf)
+	nulls.Filter(&v.gsp, sels, false)
+	nulls.Filter(&v.nsp, sels, false)
 	v.length = ns
 	return nil
 }
@@ -3436,10 +4139,8 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	} else if v.IsConst() {
 		vec := NewVec(v.typ)
 		vec.class = v.class
-		vec.col = v.col
 		vec.data = v.data
 		vec.area = v.area
-		vec.capacity = v.capacity
 		vec.length = end - start
 		vec.cantFreeArea = true
 		vec.cantFreeData = true
@@ -3453,7 +4154,6 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
 	w.length = end - start
-	w.setupFromData()
 	if v.typ.IsVarlen() {
 		w.area = v.area
 	}
@@ -3465,7 +4165,7 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.
 func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	if start == end {
-		return NewVec(v.typ), nil
+		return NewOffHeapVecWithType(v.typ), nil
 	}
 	if end > v.Length() {
 		panic(fmt.Sprintf("CloneWindow end %d >= length %d", end, v.Length()))
@@ -3476,12 +4176,10 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 		if v.typ.IsVarlen() {
 			return NewConstBytes(v.typ, v.GetBytesAt(0), end-start, mp)
 		} else {
-			vec := NewVec(v.typ)
+			vec := NewOffHeapVecWithType(v.typ)
 			vec.class = v.class
-			vec.col = v.col
 			vec.data = make([]byte, len(v.data))
 			copy(vec.data, v.data)
-			vec.capacity = v.capacity
 			vec.length = end - start
 			vec.cantFreeArea = true
 			vec.cantFreeData = true
@@ -3489,7 +4187,7 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 			return vec, nil
 		}
 	}
-	w := NewVec(v.typ)
+	w := NewOffHeapVecWithType(v.typ)
 	if err := v.CloneWindowTo(w, start, end, mp); err != nil {
 		return nil, err
 	}
@@ -3512,10 +4210,8 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 			return nil
 		} else {
 			w.class = v.class
-			w.col = v.col
 			w.data = make([]byte, len(v.data))
 			copy(w.data, v.data)
-			w.capacity = v.capacity
 			w.length = end - start
 			w.cantFreeArea = true
 			w.cantFreeData = true
@@ -3529,7 +4225,6 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		w.data = make([]byte, length)
 		copy(w.data, v.data[start*v.typ.TypeSize():end*v.typ.TypeSize()])
 		w.length = end - start
-		w.setupFromData()
 		if v.typ.IsVarlen() {
 			w.area = make([]byte, len(v.area))
 			copy(w.area, v.area)
@@ -3712,6 +4407,11 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		minv = types.EncodeDate(&minVal)
 		maxv = types.EncodeDate(&maxVal)
 
+	case types.T_year:
+		minVal, maxVal := OrderedGetMinAndMax[types.MoYear](v)
+		minv = types.EncodeMoYear(&minVal)
+		maxv = types.EncodeMoYear(&maxVal)
+
 	case types.T_datetime:
 		minVal, maxVal := OrderedGetMinAndMax[types.Datetime](v)
 		minv = types.EncodeDatetime(&minVal)
@@ -3805,6 +4505,42 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 
 		minv = types.EncodeDecimal128(&minVal)
 		maxv = types.EncodeDecimal128(&maxVal)
+
+	case types.T_decimal256:
+		col := MustFixedColNoTypeCheck[types.Decimal256](v)
+		var minVal, maxVal types.Decimal256
+		if v.HasNull() {
+			first := true
+			for i, j := 0, len(col); i < j; i++ {
+				if v.IsNull(uint64(i)) {
+					continue
+				}
+				if first {
+					minVal, maxVal = col[i], col[i]
+					first = false
+				} else {
+					if col[i].Less(minVal) {
+						minVal = col[i]
+					}
+					if maxVal.Less(col[i]) {
+						maxVal = col[i]
+					}
+				}
+			}
+		} else {
+			minVal, maxVal = col[0], col[0]
+			for i, j := 1, len(col); i < j; i++ {
+				if col[i].Less(minVal) {
+					minVal = col[i]
+				}
+				if maxVal.Less(col[i]) {
+					maxVal = col[i]
+				}
+			}
+		}
+
+		minv = types.EncodeDecimal256(&minVal)
+		maxv = types.EncodeDecimal256(&maxVal)
 
 	case types.T_TS:
 		col := MustFixedColNoTypeCheck[types.TS](v)
@@ -3917,7 +4653,7 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		minv = types.EncodeFixed(minVal)
 		maxv = types.EncodeFixed(maxVal)
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		minv, maxv = VarlenGetMinMax(v)
 	case types.T_array_float32:
 		// Zone map Comparator should be consistent with the SQL Comparator for Array.
@@ -3932,6 +4668,22 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		_minv, _maxv := ArrayGetMinMax[float64](v)
 		minv = types.ArrayToBytes[float64](_minv)
 		maxv = types.ArrayToBytes[float64](_maxv)
+	case types.T_array_bf16:
+		_minv, _maxv := ArrayElementGetMinMax[types.BF16](v)
+		minv = types.ArrayToBytes[types.BF16](_minv)
+		maxv = types.ArrayToBytes[types.BF16](_maxv)
+	case types.T_array_float16:
+		_minv, _maxv := ArrayElementGetMinMax[types.Float16](v)
+		minv = types.ArrayToBytes[types.Float16](_minv)
+		maxv = types.ArrayToBytes[types.Float16](_maxv)
+	case types.T_array_int8:
+		_minv, _maxv := ArrayElementGetMinMax[int8](v)
+		minv = types.ArrayToBytes[int8](_minv)
+		maxv = types.ArrayToBytes[int8](_maxv)
+	case types.T_array_uint8:
+		_minv, _maxv := ArrayElementGetMinMax[uint8](v)
+		minv = types.ArrayToBytes[uint8](_minv)
+		maxv = types.ArrayToBytes[uint8](_maxv)
 	default:
 		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}
@@ -3951,8 +4703,14 @@ func (v *Vector) InplaceSortAndCompact() {
 	switch v.GetType().Oid {
 	case types.T_bool:
 		col := MustFixedColNoTypeCheck[bool](v)
-		sort.Slice(col, func(i, j int) bool {
-			return !col[i] && col[j]
+		slices.SortFunc(col, func(a, b bool) int {
+			if a == b {
+				return 0
+			}
+			if !a { // false sorts before true
+				return -1
+			}
+			return 1
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
@@ -3963,9 +4721,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_bit:
 		col := MustFixedColNoTypeCheck[uint64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -3975,9 +4731,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_int8:
 		col := MustFixedColNoTypeCheck[int8](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -3987,9 +4741,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_int16:
 		col := MustFixedColNoTypeCheck[int16](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -3999,9 +4751,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_int32:
 		col := MustFixedColNoTypeCheck[int32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4011,9 +4761,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_int64:
 		col := MustFixedColNoTypeCheck[int64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4023,9 +4771,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_uint8:
 		col := MustFixedColNoTypeCheck[uint8](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4035,9 +4781,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_uint16:
 		col := MustFixedColNoTypeCheck[uint16](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4047,9 +4791,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_uint32:
 		col := MustFixedColNoTypeCheck[uint32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4059,9 +4801,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_uint64:
 		col := MustFixedColNoTypeCheck[uint64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4071,9 +4811,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_float32:
 		col := MustFixedColNoTypeCheck[float32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4083,9 +4821,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_float64:
 		col := MustFixedColNoTypeCheck[float64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4095,9 +4831,17 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_year:
+		col := MustFixedColNoTypeCheck[types.MoYear](v)
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4107,9 +4851,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_datetime:
 		col := MustFixedColNoTypeCheck[types.Datetime](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4119,9 +4861,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_time:
 		col := MustFixedColNoTypeCheck[types.Time](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4131,9 +4871,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_timestamp:
 		col := MustFixedColNoTypeCheck[types.Timestamp](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4143,9 +4881,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_enum:
 		col := MustFixedColNoTypeCheck[types.Enum](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4155,8 +4891,14 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_decimal64:
 		col := MustFixedColNoTypeCheck[types.Decimal64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+		slices.SortFunc(col, func(a, b types.Decimal64) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Decimal64) bool {
 			return a.Compare(b) == 0
@@ -4169,8 +4911,14 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_decimal128:
 		col := MustFixedColNoTypeCheck[types.Decimal128](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+		slices.SortFunc(col, func(a, b types.Decimal128) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Decimal128) bool {
 			return a.Compare(b) == 0
@@ -4181,10 +4929,36 @@ func (v *Vector) InplaceSortAndCompact() {
 			appendList(v, newCol, nil, nil)
 		}
 
+	case types.T_decimal256:
+		col := MustFixedColNoTypeCheck[types.Decimal256](v)
+		slices.SortFunc(col, func(a, b types.Decimal256) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
+		})
+		newCol := slices.CompactFunc(col, func(a, b types.Decimal256) bool {
+			return a.Compare(b) == 0
+		})
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
 	case types.T_TS:
 		col := MustFixedColNoTypeCheck[types.TS](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].LT(&col[j])
+		slices.SortFunc(col, func(a, b types.TS) int {
+			if a.LT(&b) {
+				return -1
+			}
+			if b.LT(&a) {
+				return 1
+			}
+			return 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.TS) bool {
 			return a.Equal(&b)
@@ -4197,8 +4971,8 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_uuid:
 		col := MustFixedColNoTypeCheck[types.Uuid](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Lt(col[j])
+		slices.SortFunc(col, func(a, b types.Uuid) int {
+			return a.Compare(b)
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Uuid) bool {
 			return a.Compare(b) == 0
@@ -4210,8 +4984,14 @@ func (v *Vector) InplaceSortAndCompact() {
 		}
 	case types.T_Rowid:
 		col := MustFixedColNoTypeCheck[types.Rowid](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].LT(&col[j])
+		slices.SortFunc(col, func(a, b types.Rowid) int {
+			if a.LT(&b) {
+				return -1
+			}
+			if b.LT(&a) {
+				return 1
+			}
+			return 0
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Rowid) bool {
 			return a.EQ(&b)
@@ -4222,10 +5002,10 @@ func (v *Vector) InplaceSortAndCompact() {
 			appendList(v, newCol, nil, nil)
 		}
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
-			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
+		slices.SortFunc(col, func(a, b types.Varlena) int {
+			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
 			return bytes.Equal(a.GetByteSlice(area), b.GetByteSlice(area))
@@ -4238,14 +5018,14 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare(
-				types.GetArray[float32](&col[i], area),
-				types.GetArray[float32](&col[j], area),
-			) < 0
+		slices.SortFunc(col, func(a, b types.Varlena) int {
+			return types.ArrayCompare[float32](
+				types.GetArray[float32](&a, area),
+				types.GetArray[float32](&b, area),
+			)
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float32](
 				types.GetArray[float32](&a, area),
 				types.GetArray[float32](&b, area),
 			) == 0
@@ -4257,14 +5037,14 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare(
-				types.GetArray[float64](&col[i], area),
-				types.GetArray[float64](&col[j], area),
-			) < 0
+		slices.SortFunc(col, func(a, b types.Varlena) int {
+			return types.ArrayCompare[float64](
+				types.GetArray[float64](&a, area),
+				types.GetArray[float64](&b, area),
+			)
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return moarray.Compare(
+			return types.ArrayCompare[float64](
 				types.GetArray[float64](&a, area),
 				types.GetArray[float64](&b, area),
 			) == 0
@@ -4273,6 +5053,41 @@ func (v *Vector) InplaceSortAndCompact() {
 			cleanDataNotResetArea()
 			appendList(v, newCol, nil, nil)
 		}
+	case types.T_array_bf16:
+		inplaceSortAndCompactArrayElement[types.BF16](v, cleanDataNotResetArea)
+	case types.T_array_float16:
+		inplaceSortAndCompactArrayElement[types.Float16](v, cleanDataNotResetArea)
+	case types.T_array_int8:
+		inplaceSortAndCompactArrayElement[int8](v, cleanDataNotResetArea)
+	case types.T_array_uint8:
+		inplaceSortAndCompactArrayElement[uint8](v, cleanDataNotResetArea)
+	default:
+		return
+	}
+	// Sorting happened even when compaction did not change the vector length.
+	// Keep the metadata invariant aligned with the physical ordering.
+	v.SetSorted(true)
+}
+
+// inplaceSortAndCompactArrayElement sorts+dedups a narrow-typed vector using the
+// float32-bridged comparator (so bf16/f16 order by value, not by raw bits).
+func inplaceSortAndCompactArrayElement[T types.ArrayElement](v *Vector, cleanDataNotResetArea func()) {
+	col, area := MustVarlenaRawData(v)
+	sort.Slice(col, func(i, j int) bool {
+		return types.ArrayElementCompare[T](
+			types.GetArray[T](&col[i], area),
+			types.GetArray[T](&col[j], area),
+		) < 0
+	})
+	newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
+		return types.ArrayElementCompare[T](
+			types.GetArray[T](&a, area),
+			types.GetArray[T](&b, area),
+		) == 0
+	})
+	if len(newCol) != len(col) {
+		cleanDataNotResetArea()
+		appendList(v, newCol, nil, nil)
 	}
 }
 
@@ -4280,159 +5095,193 @@ func (v *Vector) InplaceSort() {
 	switch v.GetType().Oid {
 	case types.T_bool:
 		col := MustFixedColNoTypeCheck[bool](v)
-		sort.Slice(col, func(i, j int) bool {
-			return !col[i] && col[j]
+		slices.SortFunc(col, func(a, b bool) int {
+			if a == b {
+				return 0
+			}
+			if !a { // false sorts before true
+				return -1
+			}
+			return 1
 		})
 
 	case types.T_bit:
 		col := MustFixedColNoTypeCheck[uint64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_int8:
 		col := MustFixedColNoTypeCheck[int8](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_int16:
 		col := MustFixedColNoTypeCheck[int16](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_int32:
 		col := MustFixedColNoTypeCheck[int32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_int64:
 		col := MustFixedColNoTypeCheck[int64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_uint8:
 		col := MustFixedColNoTypeCheck[uint8](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_uint16:
 		col := MustFixedColNoTypeCheck[uint16](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_uint32:
 		col := MustFixedColNoTypeCheck[uint32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_uint64:
 		col := MustFixedColNoTypeCheck[uint64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_float32:
 		col := MustFixedColNoTypeCheck[float32](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_float64:
 		col := MustFixedColNoTypeCheck[float64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
+
+	case types.T_year:
+		col := MustFixedColNoTypeCheck[types.MoYear](v)
+		slices.Sort(col)
 
 	case types.T_datetime:
 		col := MustFixedColNoTypeCheck[types.Datetime](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_time:
 		col := MustFixedColNoTypeCheck[types.Time](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_timestamp:
 		col := MustFixedColNoTypeCheck[types.Timestamp](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_enum:
 		col := MustFixedColNoTypeCheck[types.Enum](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
+		slices.Sort(col)
 
 	case types.T_decimal64:
 		col := MustFixedColNoTypeCheck[types.Decimal64](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+		slices.SortFunc(col, func(a, b types.Decimal64) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
 		})
 
 	case types.T_decimal128:
 		col := MustFixedColNoTypeCheck[types.Decimal128](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+		slices.SortFunc(col, func(a, b types.Decimal128) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
+		})
+
+	case types.T_decimal256:
+		col := MustFixedColNoTypeCheck[types.Decimal256](v)
+		slices.SortFunc(col, func(a, b types.Decimal256) int {
+			if a.Less(b) {
+				return -1
+			}
+			if b.Less(a) {
+				return 1
+			}
+			return 0
 		})
 
 	case types.T_TS:
 		col := MustFixedColNoTypeCheck[types.TS](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].LT(&col[j])
+		slices.SortFunc(col, func(a, b types.TS) int {
+			if a.LT(&b) {
+				return -1
+			}
+			if b.LT(&a) {
+				return 1
+			}
+			return 0
 		})
 
 	case types.T_uuid:
 		col := MustFixedColNoTypeCheck[types.Uuid](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Lt(col[j])
+		slices.SortFunc(col, func(a, b types.Uuid) int {
+			return a.Compare(b)
 		})
 
 	case types.T_Rowid:
 		col := MustFixedColNoTypeCheck[types.Rowid](v)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].LT(&col[j])
+		slices.SortFunc(col, func(a, b types.Rowid) int {
+			if a.LT(&b) {
+				return -1
+			}
+			if b.LT(&a) {
+				return 1
+			}
+			return 0
 		})
 
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
-			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
+		slices.SortFunc(col, func(a, b types.Varlena) int {
+			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
 		})
 
 	case types.T_array_float32:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float32](
-				types.GetArray[float32](&col[i], area),
-				types.GetArray[float32](&col[j], area),
-			) < 0
+		slices.SortFunc(col, func(a, b types.Varlena) int {
+			return types.ArrayCompare[float32](
+				types.GetArray[float32](&a, area),
+				types.GetArray[float32](&b, area),
+			)
 		})
 	case types.T_array_float64:
 		col, area := MustVarlenaRawData(v)
-		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float64](
-				types.GetArray[float64](&col[i], area),
-				types.GetArray[float64](&col[j], area),
-			) < 0
+		slices.SortFunc(col, func(a, b types.Varlena) int {
+			return types.ArrayCompare[float64](
+				types.GetArray[float64](&a, area),
+				types.GetArray[float64](&b, area),
+			)
 		})
+	case types.T_array_bf16:
+		sortArrayElement[types.BF16](v)
+	case types.T_array_float16:
+		sortArrayElement[types.Float16](v)
+	case types.T_array_int8:
+		sortArrayElement[int8](v)
+	case types.T_array_uint8:
+		sortArrayElement[uint8](v)
 	}
+}
+
+// sortArrayElement sorts a narrow-typed vector in place using the
+// float32-bridged comparator.
+func sortArrayElement[T types.ArrayElement](v *Vector) {
+	col, area := MustVarlenaRawData(v)
+	sort.Slice(col, func(i, j int) bool {
+		return types.ArrayElementCompare[T](
+			types.GetArray[T](&col[i], area),
+			types.GetArray[T](&col[j], area),
+		) < 0
+	})
 }
 
 func BuildVarlenaInline(v1, v2 *types.Varlena) {
@@ -4530,8 +5379,73 @@ func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJso
 	return BuildVarlenaNoInlineFromByteJson(vec, v, bj, m)
 }
 
+func BuildVarlenaFromByteJsonEncoded(
+	vec *Vector,
+	v *types.Varlena,
+	enc bytejson.ByteJsonDataEncoder,
+	m *mpool.MPool,
+) error {
+	dataSize := uint64(enc.DataSize())
+	storageSize := dataSize + 1
+	maxInt := uint64(^uint(0) >> 1)
+	if storageSize > uint64(^uint32(0)) || storageSize > maxInt {
+		return moerr.NewInvalidInputNoCtx("json value is too large")
+	}
+
+	if storageSize <= types.VarlenaInlineSize {
+		clear(v[:])
+		v[0] = byte(storageSize)
+		v[1] = enc.TypeCode()
+		dst := v[2 : 2+int(dataSize)]
+		n, err := enc.EncodeDataInto(dst)
+		if err != nil {
+			return err
+		}
+		if n != len(dst) {
+			return moerr.NewInternalErrorNoCtxf(
+				"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
+			)
+		}
+		return nil
+	}
+
+	oldAreaLen := len(vec.area)
+	newAreaLen := uint64(oldAreaLen) + storageSize
+	if newAreaLen > uint64(^uint32(0)) || newAreaLen > maxInt {
+		return moerr.NewInvalidInputNoCtx("json vector area is too large")
+	}
+
+	if int(newAreaLen) > cap(vec.area) {
+		newArea, err := m.Grow2(vec.area, nil, int(newAreaLen), vec.offHeap)
+		if err != nil {
+			return err
+		}
+		// Grow2 may have freed the old area. Install the replacement before
+		// invoking an encoder that can fail.
+		vec.area = newArea
+	} else {
+		vec.area = vec.area[:int(newAreaLen)]
+	}
+
+	vec.area[oldAreaLen] = enc.TypeCode()
+	dst := vec.area[oldAreaLen+1 : int(newAreaLen)]
+	n, err := enc.EncodeDataInto(dst)
+	if err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		return err
+	}
+	if n != len(dst) {
+		vec.area = vec.area[:oldAreaLen]
+		return moerr.NewInternalErrorNoCtxf(
+			"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
+		)
+	}
+	v.SetOffsetLen(uint32(oldAreaLen), uint32(storageSize))
+	return nil
+}
+
 // BuildVarlenaFromArray convert array to Varlena so that it can be stored in the vector
-func BuildVarlenaFromArray[T types.RealNumbers](vec *Vector, v *types.Varlena, array *[]T, m *mpool.MPool) error {
+func BuildVarlenaFromArray[T types.ArrayElement](vec *Vector, v *types.Varlena, array *[]T, m *mpool.MPool) error {
 	_bs := types.ArrayToBytes[T](*array)
 	bs := &_bs
 	vlen := len(*bs)
@@ -4550,7 +5464,7 @@ func BuildVarlenaFromArray[T types.RealNumbers](vec *Vector, v *types.Varlena, a
 
 // Intersection2VectorOrdered does a ∩ b ==> ret, keeps all item unique and sorted
 // it assumes that a and b all sorted already
-func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
+func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128 | types.Decimal256](
 	a, b []T,
 	ret *Vector,
 	mp *mpool.MPool,
@@ -4559,7 +5473,9 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 	var preVal T
 	var idxA, idxB int
 
-	if err = ret.PreExtend(len(a)+len(b), mp); err != nil {
+	minAB := min(len(a), len(b))
+
+	if err = ret.PreExtend(minAB, mp); err != nil {
 		return err
 	}
 
@@ -4591,7 +5507,7 @@ func Intersection2VectorOrdered[T types.OrderedT | types.Decimal128](
 
 // Union2VectorOrdered does a ∪ b ==> ret, keeps all item unique and sorted
 // it assumes that a and b all sorted already
-func Union2VectorOrdered[T types.OrderedT | types.Decimal128](
+func Union2VectorOrdered[T types.OrderedT | types.Decimal128 | types.Decimal256](
 	a, b []T,
 	ret *Vector,
 	mp *mpool.MPool,
@@ -4658,7 +5574,8 @@ func Intersection2VectorVarlen(
 	cola, areaa := MustVarlenaRawData(va)
 	colb, areab := MustVarlenaRawData(vb)
 
-	if err = ret.PreExtend(len(cola)+len(colb), mp); err != nil {
+	minAB := min(len(cola), len(colb))
+	if err = ret.PreExtend(minAB, mp); err != nil {
 		return err
 	}
 

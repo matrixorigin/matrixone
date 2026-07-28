@@ -16,16 +16,17 @@ package vector
 
 import (
 	"fmt"
-	"golang.org/x/exp/rand"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/rand"
 )
 
 func TestLength(t *testing.T) {
@@ -59,6 +60,23 @@ func TestLength(t *testing.T) {
 		vec.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+}
+
+func TestDupOffHeap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("a"), []byte("longer value")}, nil, mp))
+
+	dup, err := vec.DupOffHeap(mp)
+	require.NoError(t, err)
+	require.True(t, dup.offHeap)
+	require.Equal(t, vec.Length(), dup.Length())
+	require.Equal(t, vec.GetBytesAt(0), dup.GetBytesAt(0))
+	require.Equal(t, vec.GetBytesAt(1), dup.GetBytesAt(1))
+
+	dup.Free(mp)
+	vec.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestSize(t *testing.T) {
@@ -423,6 +441,24 @@ func TestDup(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestNewVecWithDataCopyOwnsBackingData(t *testing.T) {
+	mp := mpool.MustNewZero()
+	data := []byte("external-data")
+	area := []byte("external-area")
+	vec, err := NewVecWithDataCopy(types.T_text.ToType(), 1, data, area, mp)
+	require.NoError(t, err)
+	require.Equal(t, data, vec.GetData())
+	require.Equal(t, area, vec.GetArea())
+
+	data[0] = 'X'
+	area[0] = 'Y'
+	require.Equal(t, byte('e'), vec.GetData()[0])
+	require.Equal(t, byte('e'), vec.GetArea()[0])
+	require.NotPanics(t, func() { vec.Free(mp) })
+	require.Nil(t, vec.GetData())
+	require.Nil(t, vec.GetArea())
+}
+
 func TestShrink(t *testing.T) {
 	mp := mpool.MustNewZero()
 	{ // Array Float32
@@ -681,8 +717,8 @@ func TestShrinkByMask(t *testing.T) {
 	var bm bitmap.Bitmap
 	bm.InitWithSize(2)
 	bm.AddMany([]uint64{0, 1})
-	var bmask bitmap.BMask
-	bmask.Init(&bm)
+	var bmask bitmap.Bitmap
+	bmask.InitWith(&bm)
 
 	//{ // Array Float32
 	//	v := NewVec(types.T_array_float32.ToType())
@@ -1399,7 +1435,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.TS](v))
-		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0]]", v.String())
+		require.Equal(t, "[0-0 0-0]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -1509,6 +1545,38 @@ func TestCopy(t *testing.T) {
 		err := v.Copy(w, 2, 0, mp)
 		require.NoError(t, err)
 		require.Equal(t, InefficientMustStrCol(v), InefficientMustStrCol(w))
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // string null with stale varlena metadata
+		v := NewVec(types.T_varchar.ToType())
+		err := AppendBytes(v, []byte("seed"), false, mp)
+		require.NoError(t, err)
+		w := NewVec(types.T_varchar.ToType())
+		err = AppendBytes(w, nil, true, mp)
+		require.NoError(t, err)
+		ws := MustFixedColNoTypeCheck[types.Varlena](w)
+		ws[0].SetOffsetLen(25, 8)
+		err = v.Copy(w, 0, 0, mp)
+		require.NoError(t, err)
+		require.True(t, v.GetNulls().Contains(0))
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // array null with stale varlena metadata
+		v := NewVec(types.T_array_float64.ToType())
+		err := AppendArray[float64](v, []float64{1, 2}, false, mp)
+		require.NoError(t, err)
+		w := NewVec(types.T_array_float64.ToType())
+		err = AppendArray[float64](w, nil, true, mp)
+		require.NoError(t, err)
+		ws := MustFixedColNoTypeCheck[types.Varlena](w)
+		ws[0].SetOffsetLen(25, 16)
+		err = v.Copy(w, 0, 0, mp)
+		require.NoError(t, err)
+		require.True(t, v.GetNulls().Contains(0))
 		v.Free(mp)
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -2051,6 +2119,108 @@ func TestSortAndCompact(t *testing.T) {
 	require.NoError(t, err)
 	v.InplaceSortAndCompact()
 	require.Equal(t, v.length, 1)
+
+	v = NewVec(types.T_geometry.ToType())
+	err = AppendBytesList(v, [][]byte{[]byte("POINT(2 2)"), []byte("POINT(1 1)"), []byte("POINT(1 1)")}, nil, mp)
+	require.NoError(t, err)
+	v.InplaceSortAndCompact()
+	require.Equal(t, 2, v.length)
+	require.Equal(t, [][]byte{[]byte("POINT(1 1)"), []byte("POINT(2 2)")}, InefficientMustBytesCol(v))
+	v.Free(mp)
+}
+
+func TestGeometryVarlenPlumbing(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	src := NewVec(types.T_geometry.ToType())
+	err := AppendBytesList(src, [][]byte{
+		[]byte("POINT(1 1)"),
+		[]byte("POINT(2 2)"),
+		[]byte("POINT(3 3)"),
+		[]byte("POINT(4 4)"),
+	}, nil, mp)
+	require.NoError(t, err)
+
+	dst := NewVec(types.T_geometry.ToType())
+	err = dst.UnionOne(src, 1, mp)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("POINT(2 2)")}, InefficientMustBytesCol(dst))
+
+	dst.Shrink([]int64{0}, false)
+	require.Equal(t, [][]byte{[]byte("POINT(2 2)")}, InefficientMustBytesCol(dst))
+
+	err = dst.UnionOne(src, 2, mp)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("POINT(2 2)"), []byte("POINT(3 3)")}, InefficientMustBytesCol(dst))
+
+	err = dst.Shuffle([]int64{1, 0}, mp)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("POINT(3 3)"), []byte("POINT(2 2)")}, InefficientMustBytesCol(dst))
+	require.Equal(t, "[POINT(3 3) POINT(2 2)]", dst.String())
+	require.Equal(t, "POINT(2 2)", dst.RowToString(1))
+	require.Equal(t, []byte("POINT(3 3)"), GetAny(dst, 0, false).([]byte))
+
+	var shuffleBuf []byte
+	err = dst.ShuffleWithBuf([]int64{1, 0}, mp, &shuffleBuf)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("POINT(2 2)"), []byte("POINT(3 3)")}, InefficientMustBytesCol(dst))
+
+	sf := GetConstSetFunction(types.T_geometry.ToType(), mp)
+	constVec := NewConstNull(types.T_geometry.ToType(), 0, mp)
+	err = sf(constVec, src, 2, 1)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{[]byte("POINT(3 3)")}, InefficientMustBytesCol(constVec))
+
+	unionAll := GetUnionAllFunction(types.T_geometry.ToType(), mp)
+	unionDst := NewVec(types.T_geometry.ToType())
+	err = unionAll(unionDst, src)
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{
+		[]byte("POINT(1 1)"),
+		[]byte("POINT(2 2)"),
+		[]byte("POINT(3 3)"),
+		[]byte("POINT(4 4)"),
+	}, InefficientMustBytesCol(unionDst))
+
+	minmax := NewVec(types.T_geometry.ToType())
+	err = AppendAny(minmax, []byte("POINT(2 2)"), false, mp)
+	require.NoError(t, err)
+	err = AppendAny(minmax, []byte("POINT(1 1)"), false, mp)
+	require.NoError(t, err)
+	err = AppendAny(minmax, []byte("POINT(3 3)"), false, mp)
+	require.NoError(t, err)
+	ok, minv, maxv := minmax.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, []byte("POINT(1 1)"), minv)
+	require.Equal(t, []byte("POINT(3 3)"), maxv)
+	minmax.InplaceSort()
+	require.Equal(t, [][]byte{
+		[]byte("POINT(1 1)"),
+		[]byte("POINT(2 2)"),
+		[]byte("POINT(3 3)"),
+	}, InefficientMustBytesCol(minmax))
+
+	var bm bitmap.Bitmap
+	bm.InitWithSize(2)
+	bm.AddMany([]uint64{0, 1})
+	maskVec := NewVec(types.T_geometry.ToType())
+	err = AppendBytesList(maskVec, [][]byte{
+		[]byte("POINT(1 1)"),
+		[]byte("POINT(2 2)"),
+		[]byte("POINT(3 3)"),
+		[]byte("POINT(4 4)"),
+	}, nil, mp)
+	require.NoError(t, err)
+	maskVec.ShrinkByMask(&bm, false, 1)
+	require.Equal(t, [][]byte{[]byte("POINT(2 2)"), []byte("POINT(3 3)")}, InefficientMustBytesCol(maskVec))
+
+	maskVec.Free(mp)
+	minmax.Free(mp)
+	unionDst.Free(mp)
+	constVec.Free(mp)
+	dst.Free(mp)
+	src.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestSetFunction2(t *testing.T) {
@@ -2414,7 +2584,7 @@ func TestGetAny(t *testing.T) {
 		v := NewVec(types.T_int8.ToType())
 		err := AppendFixed(v, int8(0), false, mp)
 		require.NoError(t, err)
-		s := GetAny(v, 0)
+		s := GetAny(v, 0, false)
 		v.Free(mp)
 		require.Equal(t, int8(0), s.(int8))
 	}
@@ -2423,7 +2593,7 @@ func TestGetAny(t *testing.T) {
 		w := NewVec(types.T_varchar.ToType())
 		err := AppendBytes(w, []byte("x"), false, mp)
 		require.NoError(t, err)
-		s := GetAny(w, 0)
+		s := GetAny(w, 0, false)
 		require.Equal(t, []byte("x"), s.([]byte))
 		w.Free(mp)
 	}
@@ -2432,7 +2602,7 @@ func TestGetAny(t *testing.T) {
 		w := NewVec(types.T_bool.ToType())
 		err := AppendFixedList(w, []bool{true, false, true, false}, nil, mp)
 		require.NoError(t, err)
-		s := GetAny(w, 0)
+		s := GetAny(w, 0, false)
 		require.Equal(t, true, s.(bool))
 
 		w.Free(mp)
@@ -2444,7 +2614,7 @@ func TestGetAny(t *testing.T) {
 		err := AppendFixedList(w, []int8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s := GetAny(w, 0)
+		s := GetAny(w, 0, false)
 		require.Equal(t, int8(1), s.(int8))
 
 		w.Free(mp)
@@ -2456,7 +2626,7 @@ func TestGetAny(t *testing.T) {
 		err := AppendFixedList(w, []int16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s := GetAny(w, 0)
+		s := GetAny(w, 0, false)
 		require.Equal(t, int16(1), s.(int16))
 
 		w.Free(mp)
@@ -2468,7 +2638,7 @@ func TestGetAny(t *testing.T) {
 		err := AppendFixedList(w, []int32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s := GetAny(w, 0)
+		s := GetAny(w, 0, false)
 		require.Equal(t, int32(1), s.(int32))
 
 		w.Free(mp)
@@ -2480,7 +2650,7 @@ func TestGetAny(t *testing.T) {
 		err := AppendFixedList(w, []int64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s := GetAny(w, 0)
+		s := GetAny(w, 0, false)
 		require.Equal(t, int64(1), s.(int64))
 
 		w.Free(mp)
@@ -2492,7 +2662,7 @@ func TestGetAny(t *testing.T) {
 		err := AppendFixedList(w, []uint8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s := GetAny(w, 0)
+		s := GetAny(w, 0, false)
 		require.Equal(t, uint8(1), s.(uint8))
 
 		w.Free(mp)
@@ -2504,7 +2674,7 @@ func TestGetAny(t *testing.T) {
 		err := AppendFixedList(w, []uint16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s := GetAny(w, 0)
+		s := GetAny(w, 0, false)
 		require.Equal(t, uint16(1), s.(uint16))
 
 		w.Free(mp)
@@ -2516,7 +2686,7 @@ func TestGetAny(t *testing.T) {
 		err := AppendFixedList(w, []uint32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s := GetAny(w, 0)
+		s := GetAny(w, 0, false)
 		require.Equal(t, uint32(1), s.(uint32))
 
 		w.Free(mp)
@@ -2528,7 +2698,7 @@ func TestGetAny(t *testing.T) {
 		err := AppendFixedList(w, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s := GetAny(w, 0)
+		s := GetAny(w, 0, false)
 		require.Equal(t, uint64(1), s.(uint64))
 
 		w.Free(mp)
@@ -2540,7 +2710,7 @@ func TestGetAny(t *testing.T) {
 		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
 
-		s := GetAny(v, 0)
+		s := GetAny(v, 0, false)
 		require.Equal(t, []byte("1"), s.([]byte))
 
 		v.Free(mp)
@@ -2551,7 +2721,7 @@ func TestGetAny(t *testing.T) {
 		v := NewVec(types.T_time.ToType())
 		err := AppendFixedList(v, []types.Time{12 * 3600 * 1000 * 1000, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		s := GetAny(v, 0)
+		s := GetAny(v, 0, false)
 		require.Equal(t, types.Time(12*3600*1000*1000), s.(types.Time))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -2561,7 +2731,7 @@ func TestGetAny(t *testing.T) {
 		v := NewVec(types.T_timestamp.ToType())
 		err := AppendFixedList(v, []types.Timestamp{10000000, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		s := GetAny(v, 0)
+		s := GetAny(v, 0, false)
 		require.Equal(t, types.Timestamp(10000000), s.(types.Timestamp))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -2573,7 +2743,7 @@ func TestGetAny(t *testing.T) {
 		v := NewVec(typ)
 		err := AppendFixedList(v, []types.Decimal64{1234, 2000}, nil, mp)
 		require.NoError(t, err)
-		s := GetAny(v, 0)
+		s := GetAny(v, 0, false)
 		require.Equal(t, types.Decimal64(1234), s.(types.Decimal64))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -2585,7 +2755,7 @@ func TestGetAny(t *testing.T) {
 		v := NewVec(typ)
 		err := AppendFixedList(v, []types.Decimal128{{B0_63: 1234, B64_127: 0}, {B0_63: 2345, B64_127: 0}}, nil, mp)
 		require.NoError(t, err)
-		s := GetAny(v, 0)
+		s := GetAny(v, 0, false)
 		require.Equal(t, types.Decimal128{B0_63: 1234, B64_127: 0}, s.(types.Decimal128))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -2596,7 +2766,7 @@ func TestGetAny(t *testing.T) {
 		v := NewVec(types.T_uuid.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		s := GetAny(v, 0)
+		s := GetAny(v, 0, false)
 		require.Equal(t, "00000000-0000-0000-0000-000000000000", fmt.Sprint(s))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -2607,7 +2777,7 @@ func TestGetAny(t *testing.T) {
 		v := NewVec(types.T_TS.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		s := GetAny(v, 0)
+		s := GetAny(v, 0, false)
 		require.Equal(t, types.TS(types.TS{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}), s)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -2618,7 +2788,7 @@ func TestGetAny(t *testing.T) {
 		v := NewVec(types.T_Rowid.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		s := GetAny(v, 0)
+		s := GetAny(v, 0, false)
 		require.Equal(t, types.Rowid(types.Rowid{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}), s)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -2835,12 +3005,95 @@ func TestRowToString(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // datetime
+		// Test 1: Non-const vector with non-null value
 		v := NewVec(types.T_datetime.ToType())
 		scale := types.Datetime(types.MicroSecsPerSec * types.SecsPerDay)
 		err := AppendFixedList(v, []types.Datetime{1 * scale, 2 * scale, 3 * scale, 4 * scale}, nil, mp)
 		require.NoError(t, err)
 		require.Equal(t, "0001-01-03 00:00:00", v.RowToString(1))
 		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 2: Non-const vector with null value
+		v2 := NewVec(types.T_datetime.ToType())
+		err = AppendFixedList(v2, []types.Datetime{1 * scale, 2 * scale, 3 * scale, 4 * scale}, []bool{false, false, true, false}, mp)
+		require.NoError(t, err)
+		require.Equal(t, "null", v2.RowToString(2))
+		v2.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 3: Const null vector
+		v3 := NewConstNull(types.T_datetime.ToType(), 1, mp)
+		require.Equal(t, "null", v3.RowToString(0))
+		v3.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 4: Const vector with null
+		v4, err := NewConstFixed(types.T_datetime.ToType(), 1*scale, 1, mp)
+		require.NoError(t, err)
+		nulls.Add(&v4.nsp, 0)
+		require.Equal(t, "null", v4.RowToString(0))
+		v4.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 5: Const vector with non-null value
+		v5, err := NewConstFixed(types.T_datetime.ToType(), 2*scale, 1, mp)
+		require.NoError(t, err)
+		require.Equal(t, "0001-01-03 00:00:00", v5.RowToString(0))
+		v5.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 6: Non-const vector with different scale
+		v6 := NewVec(types.T_datetime.ToType())
+		v6.SetTypeScale(3)
+		err = AppendFixedList(v6, []types.Datetime{1 * scale, 2 * scale}, nil, mp)
+		require.NoError(t, err)
+		// The output should include microseconds with scale 3
+		result := v6.RowToString(0)
+		require.Contains(t, result, "0001-01-02")
+		v6.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 7: Const vector with different scale
+		v7, err := NewConstFixed(types.T_datetime.ToType(), 2*scale, 1, mp)
+		require.NoError(t, err)
+		v7.SetTypeScale(6)
+		result2 := v7.RowToString(0)
+		require.Contains(t, result2, "0001-01-03")
+		v7.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 8: Non-const vector with null at index 0
+		v8 := NewVec(types.T_datetime.ToType())
+		err = AppendFixedList(v8, []types.Datetime{1 * scale, 2 * scale}, []bool{true, false}, mp)
+		require.NoError(t, err)
+		require.Equal(t, "null", v8.RowToString(0))
+		require.Equal(t, "0001-01-03 00:00:00", v8.RowToString(1))
+		v8.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 9: Ensure all code paths are covered - const vector with nulls.Add but not const null
+		// This tests the else branch at line 2747-2748 when const is true but not IsConstNull
+		v9, err := NewConstFixed(types.T_datetime.ToType(), 3*scale, 1, mp)
+		require.NoError(t, err)
+		// Ensure it's not const null (has data)
+		require.False(t, v9.IsConstNull())
+		// Ensure nsp doesn't contain 0 (line 2745 check should be false)
+		require.False(t, nulls.Contains(&v9.nsp, 0))
+		result9 := v9.RowToString(0)
+		require.Contains(t, result9, "0001-01-04")
+		v9.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+
+		// Test 10: Ensure all code paths are covered - non-const vector else branch at line 2753-2754
+		v10 := NewVec(types.T_datetime.ToType())
+		err = AppendFixedList(v10, []types.Datetime{5 * scale, 6 * scale}, []bool{false, false}, mp)
+		require.NoError(t, err)
+		// Ensure idx 0 is not null (line 2751 check should be false)
+		require.False(t, v10.nsp.Contains(0))
+		result10 := v10.RowToString(0)
+		require.Contains(t, result10, "0001-01-06")
+		v10.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // time
@@ -2854,9 +3107,21 @@ func TestRowToString(t *testing.T) {
 	}
 	{ // timestamp
 		v := NewVec(types.T_timestamp.ToType())
-		err := AppendFixedList(v, []types.Timestamp{1, types.Timestamp(types.DatetimeFromClock(1970, 1, 1, 0, 0, 0, 0)), 3, 4}, nil, mp)
+		// Use FromClockZone with UTC to create timestamp that will display correctly
+		// RowToString uses time.Local, so we need to create timestamp that accounts for local timezone
+		// If we want to display "1970-01-01 00:00:00" in local time, we need to create timestamp
+		// that represents that time in local timezone
+		utc := time.UTC
+		ts := types.FromClockZone(utc, 1970, 1, 1, 0, 0, 0, 0)
+		err := AppendFixedList(v, []types.Timestamp{1, ts, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		require.Equal(t, "1970-01-01 00:00:00", v.RowToString(1))
+		// RowToString uses time.Local, so the displayed time will be in local timezone
+		// If local timezone is UTC+8, UTC time 1970-01-01 00:00:00 will display as 1970-01-01 08:00:00
+		// So we need to adjust the expected value based on local timezone offset
+		_, offset := time.Now().In(time.Local).Zone()
+		expectedHour := offset / 3600
+		expectedStr := fmt.Sprintf("1970-01-01 %02d:00:00", expectedHour)
+		require.Equal(t, expectedStr, v.RowToString(1))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -2892,7 +3157,7 @@ func TestRowToString(t *testing.T) {
 		v := NewVec(types.T_TS.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		require.Equal(t, "[0 0 0 0 0 0 0 0 0 0 0 0]", v.RowToString(1))
+		require.Equal(t, "0-0", v.RowToString(1))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -3170,4 +3435,103 @@ func TestProtoVector(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ProtoVectorToVector(vec2)
 	require.NoError(t, err)
+}
+
+func TestVectorPoolTypeChangeBug_Issue23295(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	// Step 1: Create vector with int8 type, allocate small buffer (8 bytes)
+	vec := NewVec(types.T_int8.ToType())
+	err = AppendMultiFixed(vec, int8(1), false, 8, mp)
+	require.NoError(t, err)
+	// Now: cap(data)=8, col.Cap=8 (for int8, 8 bytes = 8 elements)
+
+	// Step 2: Reset to TS type (12 bytes per element)
+	// cap(data)=8 < 12, so setFromVector's condition `cap(v.data) >= sz` fails
+	// Without the fix, col.Ptr and col.Cap keep stale values (Cap=8)
+	tsType := types.T_TS.ToType()
+	vec.ResetWithNewType(&tsType)
+
+	// Step 3: ToSlice with stale Cap=8 would create invalid slice
+	// It thinks there are 8 TS elements (96 bytes), but buffer is only 8 bytes!
+	// With -race, checkType will panic on type mismatch if col.Ptr is stale
+	var col []types.TS
+	ToSlice(vec, &col)
+	require.Equal(t, 0, cap(col)) // After fix: cap should be 0, not stale value 8
+
+	// AppendMultiFixed(vec, types.TS{}, false, 0, mp) also triggers this bug,
+	// because it calls ToSlice without extending buffer
+
+	vec.Free(mp)
+}
+
+func TestResetWithSameTypeResetsClass(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	vec := NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+
+	err := appendOneBytes(vec, []byte("hello"), false, mp)
+	require.NoError(t, err)
+	vec.ToConst()
+	require.True(t, vec.IsConst())
+
+	vec.ResetWithSameType()
+	require.False(t, vec.IsConst())
+	require.Equal(t, FLAT, vec.class)
+	require.Equal(t, 0, vec.Length())
+
+	// after reset, should be able to append normally
+	err = appendOneBytes(vec, []byte("world"), false, mp)
+	require.NoError(t, err)
+	require.Equal(t, 1, vec.Length())
+	require.False(t, vec.IsConst())
+}
+
+func TestFunctionResultAppendNullAfterToConst(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)
+	defer wrapper.Free()
+
+	result := MustFunctionResult[types.Varlena](wrapper)
+
+	// first round: append null, then fold to const
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	require.NoError(t, result.AppendBytes(nil, true))
+	result.vec.ToConst()
+	require.True(t, result.vec.IsConstNull())
+
+	// second round: simulate doFold reuse — PreExtendAndReset should reset class to FLAT
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	require.False(t, result.vec.IsConst()) // class should be FLAT now
+	require.NoError(t, result.AppendBytes(nil, true))
+	result.vec.ToConst()
+	require.True(t, result.vec.IsConstNull()) // must still be recognized as const null
+}
+
+func TestInplaceSortAndCompactMarksUniqueVectorsSorted(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+
+	fixed := NewVec(types.T_int64.ToType())
+	for _, value := range []int64{3, 1, 2} {
+		require.NoError(t, AppendFixed(fixed, value, false, mp))
+	}
+	fixed.InplaceSortAndCompact()
+	require.Equal(t, []int64{1, 2, 3}, MustFixedColNoTypeCheck[int64](fixed))
+	require.True(t, fixed.GetSorted())
+	fixed.Free(mp)
+
+	varlen := NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"c", "a", "b"} {
+		require.NoError(t, AppendBytes(varlen, []byte(value), false, mp))
+	}
+	varlen.InplaceSortAndCompact()
+	require.Equal(t, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, InefficientMustBytesCol(varlen))
+	require.True(t, varlen.GetSorted())
+	varlen.Free(mp)
+
+	unsupported := NewVec(types.T_any.ToType())
+	unsupported.InplaceSortAndCompact()
+	require.False(t, unsupported.GetSorted())
 }

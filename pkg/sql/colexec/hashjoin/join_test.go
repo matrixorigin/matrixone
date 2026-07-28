@@ -1,0 +1,1246 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package hashjoin
+
+import (
+	"bytes"
+	"context"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
+)
+
+const (
+	Rows          = 10     // default rows
+	BenchmarkRows = 100000 // default rows for benchmark
+)
+
+// add unit tests for cases
+type joinTestCase struct {
+	arg         *HashJoin
+	flgs        []bool // flgs[i] == true: nullable
+	types       []types.Type
+	proc        *process.Process
+	cancel      context.CancelFunc
+	barg        *hashbuild.HashBuild
+	resultBatch *batch.Batch
+}
+
+func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := types.T_int32.ToType()
+	valid := newExpr(0, typ)
+	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
+	arg := &HashJoin{
+		EqConds:   [][]*plan.Expr{{valid}, {valid}},
+		NonEqCond: invalid,
+	}
+
+	require.Error(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.eqCondVecs)
+	require.Nil(t, arg.ctr.eqCondExecs)
+	require.Nil(t, arg.ctr.nonEqCondExec)
+
+	arg.NonEqCond = valid
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.eqCondExecs, 1)
+	require.NotNil(t, arg.ctr.nonEqCondExec)
+	arg.Free(proc, false, nil)
+	proc.Free()
+}
+
+func TestHashMarkJoinRejectsResidualCondition(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := NewArgument()
+	arg.JoinType = plan.Node_MARK
+	arg.NonEqCond = newExpr(0, types.T_int32.ToType())
+
+	require.ErrorContains(t, arg.Prepare(proc), "hash MARK join does not support residual conditions")
+
+	arg.Release()
+	proc.Free()
+}
+
+func TestHashMarkJoinRejectsInvalidOperatorContracts(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	key := newExpr(0, types.T_int32.ToType())
+
+	tests := []struct {
+		name string
+		arg  *HashJoin
+	}{
+		{
+			name: "missing keys",
+			arg:  &HashJoin{JoinType: plan.Node_MARK},
+		},
+		{
+			name: "mismatched key counts",
+			arg: &HashJoin{
+				JoinType: plan.Node_MARK,
+				EqConds:  [][]*plan.Expr{{key}, {key, key}},
+			},
+		},
+		{
+			name: "nullable composite keys",
+			arg: &HashJoin{
+				JoinType: plan.Node_MARK,
+				EqConds:  [][]*plan.Expr{{key, key}, {key, key}},
+			},
+		},
+		{
+			name: "build-side result column",
+			arg: &HashJoin{
+				JoinType:   plan.Node_MARK,
+				EqConds:    [][]*plan.Expr{{key}, {key}},
+				ResultCols: []colexec.ResultPos{colexec.NewResultPos(1, 0)},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Error(t, tt.arg.Prepare(proc))
+		})
+	}
+}
+
+var (
+	tag int32
+)
+
+func makeTestCases(t *testing.T) []joinTestCase {
+	return []joinTestCase{
+		newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+			[][]*plan.Expr{
+				{
+					newExpr(0, types.T_int32.ToType()),
+				},
+				{
+					newExpr(0, types.T_int32.ToType()),
+				},
+			}),
+		newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+			[][]*plan.Expr{
+				{
+					newExpr(0, types.T_int32.ToType()),
+				},
+				{
+					newExpr(0, types.T_int32.ToType()),
+				},
+			}),
+	}
+}
+
+func TestString(t *testing.T) {
+	buf := new(bytes.Buffer)
+	for _, tc := range makeTestCases(t) {
+		tc.arg.String(buf)
+	}
+}
+
+func TestJoin(t *testing.T) {
+	for _, tc := range makeTestCases(t) {
+
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
+		err := tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		err = tc.barg.Prepare(tc.proc)
+		require.NoError(t, err)
+
+		res, err := vm.Exec(tc.barg, tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch == nil, true)
+		res, err = vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
+		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
+		for i := range res.Batch.Vecs {
+			vec1 := res.Batch.Vecs[i]
+			vec2 := tc.resultBatch.Vecs[i]
+			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
+			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
+			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+		}
+
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+
+		resetChildren(tc.arg, tc.proc.Mp())
+		resetHashBuildChildren(tc.barg, tc.proc.Mp())
+		tc.proc.GetMessageBoard().Reset()
+		err = tc.arg.Prepare(tc.proc)
+		require.NoError(t, err)
+		err = tc.barg.Prepare(tc.proc)
+		require.NoError(t, err)
+
+		res, err = vm.Exec(tc.barg, tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch == nil, true)
+		res, err = vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
+		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
+		for i := range res.Batch.Vecs {
+			vec1 := res.Batch.Vecs[i]
+			vec2 := tc.resultBatch.Vecs[i]
+			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
+			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
+			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+		}
+
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	}
+}
+
+func TestHashJoinResetAfterEmptyProbe(t *testing.T) {
+	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	}, [][]*plan.Expr{
+		{
+			newExpr(0, types.T_int32.ToType()),
+		},
+		{
+			newExpr(0, types.T_int32.ToType()),
+		},
+	})
+	tc.arg.JoinType = plan.Node_LEFT
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.True(t, res.Batch.Vecs[1].IsConst())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	tc.proc.GetMessageBoard().Reset()
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err = vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.False(t, res.Batch.Vecs[1].IsConst())
+	require.Equal(t, 2, res.Batch.Vecs[1].Length())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestHashJoinConstNullAfterNonEmptyProbe(t *testing.T) {
+	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	}, [][]*plan.Expr{
+		{
+			newExpr(0, types.T_int32.ToType()),
+		},
+		{
+			newExpr(0, types.T_int32.ToType()),
+		},
+	})
+	tc.arg.JoinType = plan.Node_LEFT
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.False(t, res.Batch.Vecs[1].IsConst())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+
+	resetChildrenWithBatch(tc.arg, colexec.MakeMockBatchs(tc.proc.Mp()))
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	tc.proc.GetMessageBoard().Reset()
+	err = tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	err = tc.barg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	res, err = vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.True(t, res.Batch.Vecs[1].IsConstNull())
+	require.Equal(t, 2, res.Batch.Vecs[1].Length())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestHashMarkJoinThreeValuedSemantics(t *testing.T) {
+	type expectedMark struct {
+		value  bool
+		isNull bool
+	}
+
+	tests := []struct {
+		name        string
+		buildValues []int32
+		buildNulls  []uint64
+		expected    []expectedMark
+	}{
+		{
+			name:        "matching value wins over build null",
+			buildValues: []int32{2, 4, 0},
+			buildNulls:  []uint64{2},
+			expected: []expectedMark{
+				{isNull: true},
+				{value: true},
+				{isNull: true},
+				{isNull: true},
+			},
+		},
+		{
+			name:        "non-null build returns false for misses",
+			buildValues: []int32{2, 4},
+			expected: []expectedMark{
+				{value: false},
+				{value: true},
+				{value: false},
+				{isNull: true},
+			},
+		},
+		{
+			name: "empty build is false even for null probe",
+			expected: []expectedMark{
+				{value: false},
+				{value: false},
+				{value: false},
+				{value: false},
+			},
+		},
+		{
+			name:        "all-null build returns unknown",
+			buildValues: []int32{0},
+			buildNulls:  []uint64{0},
+			expected: []expectedMark{
+				{isNull: true},
+				{isNull: true},
+				{isNull: true},
+				{isNull: true},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := newTestCase(t,
+				[]bool{true},
+				[]types.Type{types.T_int32.ToType()},
+				[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+				[][]*plan.Expr{
+					{newExpr(0, types.T_int32.ToType())},
+					{newExpr(0, types.T_int32.ToType())},
+				})
+			tc.arg.JoinType = plan.Node_MARK
+			tc.arg.NonEqCond = nil
+			tc.arg.ResultCols = []colexec.ResultPos{
+				colexec.NewResultPos(0, 0),
+				colexec.NewResultPos(-1, 0),
+			}
+			tc.barg.NeedAllocateSels = false
+			tc.barg.NeedBatches = false
+			tc.barg.TrackNullKeys = true
+
+			probe := batch.NewWithSize(1)
+			probe.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 0}, []uint64{3}, tc.proc.Mp())
+			probe.SetRowCount(4)
+			resetChildrenWithBatch(tc.arg, probe)
+
+			build := batch.EmptyBatch
+			if len(tt.buildValues) > 0 {
+				build = batch.NewWithSize(1)
+				build.Vecs[0] = testutil.MakeInt32Vector(tt.buildValues, tt.buildNulls, tc.proc.Mp())
+				build.SetRowCount(len(tt.buildValues))
+			}
+			resetHashBuildChildrenWithBatch(tc.barg, build)
+
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+			_, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+
+			res, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.NotNil(t, res.Batch)
+			require.Equal(t, len(tt.expected), res.Batch.RowCount())
+			require.Len(t, res.Batch.Vecs, 2)
+
+			marks := vector.GenerateFunctionFixedTypeParameter[bool](res.Batch.Vecs[1])
+			for i, expected := range tt.expected {
+				value, isNull := marks.GetValue(uint64(i))
+				require.Equal(t, expected.isNull, isNull, "row %d null state", i)
+				if !isNull {
+					require.Equal(t, expected.value, value, "row %d value", i)
+				}
+			}
+
+			tc.arg.Reset(tc.proc, false, nil)
+			tc.barg.Reset(tc.proc, false, nil)
+			tc.arg.Free(tc.proc, false, nil)
+			tc.barg.Free(tc.proc, false, nil)
+			tc.proc.Free()
+			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestHashMarkJoinCompositeNotNullKeys(t *testing.T) {
+	probeKey0 := newExpr(0, types.T_int32.ToType())
+	probeKey1 := newExpr(1, types.T_int32.ToType())
+	buildKey0 := newExpr(0, types.T_int32.ToType())
+	buildKey1 := newExpr(1, types.T_int32.ToType())
+	for _, expr := range []*plan.Expr{probeKey0, probeKey1, buildKey0, buildKey1} {
+		expr.Typ.NotNullable = true
+	}
+
+	tc := newTestCase(t,
+		[]bool{false, false},
+		[]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		[][]*plan.Expr{{probeKey0, probeKey1}, {buildKey0, buildKey1}},
+	)
+	tc.arg.JoinType = plan.Node_MARK
+	tc.arg.NonEqCond = nil
+	tc.arg.ResultCols = []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(-1, 0),
+	}
+	tc.barg.NeedAllocateSels = false
+	tc.barg.NeedBatches = false
+	tc.barg.TrackNullKeys = true
+
+	probe := batch.NewWithSize(2)
+	probe.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 3}, nil, tc.proc.Mp())
+	probe.Vecs[1] = testutil.MakeInt32Vector([]int32{2, 4, 4}, nil, tc.proc.Mp())
+	probe.SetRowCount(3)
+	resetChildrenWithBatch(tc.arg, probe)
+
+	build := batch.NewWithSize(2)
+	build.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 3}, nil, tc.proc.Mp())
+	build.Vecs[1] = testutil.MakeInt32Vector([]int32{2, 4}, nil, tc.proc.Mp())
+	build.SetRowCount(2)
+	resetHashBuildChildrenWithBatch(tc.barg, build)
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	res, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.Equal(t, 3, res.Batch.RowCount())
+	marks := vector.GenerateFunctionFixedTypeParameter[bool](res.Batch.Vecs[1])
+	for row, expected := range []bool{true, false, true} {
+		value, isNull := marks.GetValue(uint64(row))
+		require.False(t, isNull, "row %d", row)
+		require.Equal(t, expected, value, "row %d", row)
+	}
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestHashMarkJoinResetClearsBuildNullState(t *testing.T) {
+	tc := newTestCase(t,
+		[]bool{true},
+		[]types.Type{types.T_int32.ToType()},
+		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		[][]*plan.Expr{
+			{newExpr(0, types.T_int32.ToType())},
+			{newExpr(0, types.T_int32.ToType())},
+		})
+	tc.arg.JoinType = plan.Node_MARK
+	tc.arg.NonEqCond = nil
+	tc.arg.ResultCols = []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(-1, 0),
+	}
+	tc.barg.NeedAllocateSels = false
+	tc.barg.NeedBatches = false
+	tc.barg.TrackNullKeys = true
+
+	run := func(probeValue, buildValue int32, buildNull bool) (bool, bool) {
+		probe := batch.NewWithSize(1)
+		probe.Vecs[0] = testutil.MakeInt32Vector([]int32{probeValue}, nil, tc.proc.Mp())
+		probe.SetRowCount(1)
+		resetChildrenWithBatch(tc.arg, probe)
+
+		var buildNulls []uint64
+		if buildNull {
+			buildNulls = []uint64{0}
+		}
+		build := batch.NewWithSize(1)
+		build.Vecs[0] = testutil.MakeInt32Vector([]int32{buildValue}, buildNulls, tc.proc.Mp())
+		build.SetRowCount(1)
+		resetHashBuildChildrenWithBatch(tc.barg, build)
+
+		require.NoError(t, tc.arg.Prepare(tc.proc))
+		require.NoError(t, tc.barg.Prepare(tc.proc))
+		_, err := vm.Exec(tc.barg, tc.proc)
+		require.NoError(t, err)
+		res, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		require.NotNil(t, res.Batch)
+
+		return vector.GenerateFunctionFixedTypeParameter[bool](res.Batch.Vecs[1]).GetValue(0)
+	}
+
+	_, isNull := run(1, 0, true)
+	require.True(t, isNull)
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	require.False(t, tc.arg.ctr.buildHasNullKey)
+	require.Zero(t, tc.arg.ctr.globalBuildRowCnt)
+	tc.proc.GetMessageBoard().Reset()
+
+	value, isNull := run(1, 2, false)
+	require.False(t, isNull)
+	require.False(t, value)
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestHashMarkJoinBatchBoundary(t *testing.T) {
+	tc := newTestCase(t,
+		[]bool{true},
+		[]types.Type{types.T_int32.ToType()},
+		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		[][]*plan.Expr{
+			{newExpr(0, types.T_int32.ToType())},
+			{newExpr(0, types.T_int32.ToType())},
+		})
+	tc.arg.JoinType = plan.Node_MARK
+	tc.arg.NonEqCond = nil
+	tc.arg.ResultCols = []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(-1, 0),
+	}
+	tc.barg.NeedAllocateSels = false
+	tc.barg.NeedBatches = false
+	tc.barg.TrackNullKeys = true
+
+	probeValues := make([]int32, colexec.DefaultBatchSize+1)
+	probeValues[len(probeValues)-1] = 2
+	probe := batch.NewWithSize(1)
+	probe.Vecs[0] = testutil.MakeInt32Vector(probeValues, nil, tc.proc.Mp())
+	probe.SetRowCount(len(probeValues))
+	resetChildrenWithBatch(tc.arg, probe)
+
+	build := batch.NewWithSize(1)
+	build.Vecs[0] = testutil.MakeInt32Vector([]int32{2}, nil, tc.proc.Mp())
+	build.SetRowCount(1)
+	resetHashBuildChildrenWithBatch(tc.barg, build)
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+
+	first, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, first.Batch)
+	require.Equal(t, colexec.DefaultBatchSize, first.Batch.RowCount())
+
+	second, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, second.Batch)
+	require.Equal(t, 1, second.Batch.RowCount())
+	value, isNull := vector.GenerateFunctionFixedTypeParameter[bool](second.Batch.Vecs[1]).GetValue(0)
+	require.False(t, isNull)
+	require.True(t, value)
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestHashJoinSingleRejectsMultipleRows(t *testing.T) {
+	tests := []struct {
+		name        string
+		probeValues []int32
+		buildValues []int32
+		hashOnPK    bool
+		isRightJoin bool
+		nonEqCond   bool
+	}{
+		{
+			name:        "right single unique build",
+			probeValues: []int32{1, 1},
+			buildValues: []int32{1},
+			hashOnPK:    true,
+			isRightJoin: true,
+		},
+		{
+			name:        "right single unique build with non-equi condition",
+			probeValues: []int32{1, 1},
+			buildValues: []int32{1},
+			hashOnPK:    true,
+			isRightJoin: true,
+			nonEqCond:   true,
+		},
+		{
+			name:        "left single duplicate build",
+			probeValues: []int32{1},
+			buildValues: []int32{1, 1},
+		},
+		{
+			name:        "right single duplicate probe",
+			probeValues: []int32{1, 1},
+			buildValues: []int32{1, 2, 2},
+			isRightJoin: true,
+		},
+		{
+			name:        "right single duplicate probe with non-equi condition",
+			probeValues: []int32{1, 1},
+			buildValues: []int32{1, 2, 2},
+			isRightJoin: true,
+			nonEqCond:   true,
+		},
+		{
+			name:        "left single duplicate build with non-equi condition",
+			probeValues: []int32{1},
+			buildValues: []int32{1, 1},
+			nonEqCond:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := newTestCase(t,
+				[]bool{false},
+				[]types.Type{types.T_int32.ToType()},
+				[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+				[][]*plan.Expr{
+					{newExpr(0, types.T_int32.ToType())},
+					{newExpr(0, types.T_int32.ToType())},
+				})
+			tc.arg.JoinType = plan.Node_SINGLE
+			tc.arg.IsRightJoin = tt.isRightJoin
+			tc.arg.HashOnPK = tt.hashOnPK
+			tc.barg.HashOnPK = tt.hashOnPK
+			if !tt.nonEqCond {
+				tc.arg.NonEqCond = nil
+			}
+
+			resetChildrenWithBatch(tc.arg, makeInt32Batch(tc.proc, tt.probeValues))
+			resetHashBuildChildrenWithBatch(tc.barg, makeInt32Batch(tc.proc, tt.buildValues))
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+
+			_, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			_, err = vm.Exec(tc.arg, tc.proc)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrSubqueryNo1Row))
+
+			tc.arg.Reset(tc.proc, true, err)
+			tc.barg.Reset(tc.proc, true, err)
+			tc.arg.Free(tc.proc, true, err)
+			tc.barg.Free(tc.proc, true, err)
+			tc.proc.Free()
+			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestHashJoinSingleRejectsDuplicateMatchesAcrossWorkers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	localMatches := new(bitmap.Bitmap)
+	localMatches.InitWithSize(1)
+	localMatches.Add(0)
+	remoteMatches := localMatches.Clone()
+
+	hashJoin := &HashJoin{
+		JoinType: plan.Node_SINGLE,
+		NumCPU:   2,
+		IsMerger: true,
+		Channel:  make(chan *bitmap.Bitmap, 1),
+	}
+	hashJoin.Channel <- remoteMatches
+	ctr := container{rightRowsMatched: localMatches, probeSingle: true}
+
+	err := ctr.syncBitmap(hashJoin, proc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrSubqueryNo1Row))
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// A merger whose syncBitmap is aborted by a nil bitmap from the channel (a
+// worker torn down before syncing, e.g. when an outer LIMIT stops the query
+// early, sends nil from Reset) must go to End instead of entering Finalize
+// with a nil rightMatchedIter. The aborted generation must also drain the
+// remaining worker messages so a later run over the same channel does not
+// observe stale bitmaps.
+func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rightBat := makeInt32Batch(proc, []int32{10, 20, 30, 40})
+
+	matched := new(bitmap.Bitmap)
+	matched.InitWithSize(4)
+	matched.Add(0)
+	staleMatches := new(bitmap.Bitmap)
+	staleMatches.InitWithSize(4)
+	staleMatches.Add(1)
+
+	hashJoin := &HashJoin{
+		JoinType:    plan.Node_RIGHT,
+		IsRightJoin: true,
+		NumCPU:      3,
+		IsMerger:    true,
+		Channel:     make(chan *bitmap.Bitmap, 3),
+		ResultCols:  []colexec.ResultPos{colexec.NewResultPos(1, 0)},
+		RightTypes:  []types.Type{types.T_int32.ToType()},
+	}
+	// Worker A was torn down before syncing (its Reset sends nil); worker B
+	// synced normally and its bitmap lands after the abort marker.
+	hashJoin.Channel <- nil
+	hashJoin.Channel <- staleMatches
+	hashJoin.ctr.state = SyncBitmap
+	hashJoin.ctr.rightRowsMatched = matched
+	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
+
+	result, err := hashJoin.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.ExecStop, result.Status)
+	// Worker B's bitmap must not be left behind in the shared channel.
+	require.Empty(t, hashJoin.Channel)
+
+	// The merger already synced this generation, so Reset must not push the
+	// nil abort marker either.
+	hashJoin.Reset(proc, false, nil)
+	require.Empty(t, hashJoin.Channel)
+
+	// Next generation over the same operator and channel: a clean sync must
+	// only observe this generation's bitmaps.
+	matched2 := new(bitmap.Bitmap)
+	matched2.InitWithSize(4)
+	matched2.Add(0)
+	workerMatches1 := new(bitmap.Bitmap)
+	workerMatches1.InitWithSize(4)
+	workerMatches1.Add(1)
+	workerMatches2 := new(bitmap.Bitmap)
+	workerMatches2.InitWithSize(4)
+	workerMatches2.Add(2)
+
+	hashJoin.Channel <- workerMatches1
+	hashJoin.Channel <- workerMatches2
+	hashJoin.ctr.state = SyncBitmap
+	hashJoin.ctr.rightRowsMatched = matched2
+	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
+
+	result, err = hashJoin.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	vals := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0])
+	require.Equal(t, []int32{40}, vals[:1])
+
+	result, err = hashJoin.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	rightBat.Clean(proc.Mp())
+	hashJoin.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestHashJoinMergerFinalizeEmitsUnmatchedBuildRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rightBat := makeInt32Batch(proc, []int32{10, 20, 30, 40})
+
+	matched := new(bitmap.Bitmap)
+	matched.InitWithSize(4)
+	matched.Add(0)
+	remoteMatches := new(bitmap.Bitmap)
+	remoteMatches.InitWithSize(4)
+	remoteMatches.Add(1)
+
+	hashJoin := &HashJoin{
+		JoinType:    plan.Node_RIGHT,
+		IsRightJoin: true,
+		NumCPU:      2,
+		IsMerger:    true,
+		Channel:     make(chan *bitmap.Bitmap, 2),
+		ResultCols:  []colexec.ResultPos{colexec.NewResultPos(1, 0)},
+		RightTypes:  []types.Type{types.T_int32.ToType()},
+	}
+	hashJoin.Channel <- remoteMatches
+	hashJoin.ctr.state = SyncBitmap
+	hashJoin.ctr.rightRowsMatched = matched
+	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
+
+	result, err := hashJoin.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 2, result.Batch.RowCount())
+	vals := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0])
+	require.Equal(t, []int32{30, 40}, vals[:2])
+
+	result, err = hashJoin.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	rightBat.Clean(proc.Mp())
+	hashJoin.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func makeInt32Batch(proc *process.Process, values []int32) *batch.Batch {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(len(values))
+	return bat
+}
+
+/*
+	func BenchmarkJoin(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			tcs = []joinTestCase{
+				newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+					[][]*plan.Expr{
+						{
+							newExpr(0, types.T_int8.ToType()),
+						},
+						{
+							newExpr(0, types.T_int8.ToType()),
+						},
+					}),
+				newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+					[][]*plan.Expr{
+						{
+							newExpr(0, types.T_int8.ToType()),
+						},
+						{
+							newExpr(0, types.T_int8.ToType()),
+						},
+					}),
+			}
+			t := new(testing.T)
+			for _, tc := range tcs {
+				bats := hashBuild(t, tc)
+				err := tc.arg.Prepare(tc.proc)
+				require.NoError(t, err)
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
+				tc.proc.Reg.MergeReceivers[0].Ch <- nil
+				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[0])
+				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
+				for {
+					ok, err := tc.arg.Call(tc.proc)
+					if ok.Status == vm.ExecStop || err != nil {
+						break
+					}
+				}
+			}
+		}
+	}
+*/
+func newExpr(pos int32, typ types.Type) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{
+			Scale: typ.Scale,
+			Width: typ.Width,
+			Id:    int32(typ.Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				ColPos: pos,
+			},
+		},
+	}
+}
+
+func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+	ctx, cancel := context.WithCancel(context.Background())
+	fr, _ := function.GetFunctionByName(ctx, "=", ts)
+	fid := fr.GetEncodedOverloadID()
+	args := make([]*plan.Expr, 0, 2)
+	args = append(args, &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(ts[0].Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 0,
+			},
+		},
+	})
+	args = append(args, &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(ts[0].Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 0,
+			},
+		},
+	})
+	cond := &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_bool),
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Args: args,
+				Func: &plan.ObjectRef{Obj: fid, ObjName: "="},
+			},
+		},
+	}
+	resultBatch := batch.NewWithSize(len(rp))
+	resultBatch.SetRowCount(2)
+	for i := range rp {
+		bat := colexec.MakeMockBatchs(proc.Mp())
+		resultBatch.Vecs[i] = bat.Vecs[rp[i].Pos]
+	}
+	tag++
+	return joinTestCase{
+		types:  ts,
+		flgs:   flgs,
+		proc:   proc,
+		cancel: cancel,
+		arg: &HashJoin{
+			LeftTypes:  ts,
+			RightTypes: ts,
+			ResultCols: rp,
+			EqConds:    cs,
+			NumCPU:     1,
+			IsMerger:   true,
+			NonEqCond:  cond,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
+			JoinMapTag: tag,
+		},
+		barg: &hashbuild.HashBuild{
+			NeedHashMap: true,
+			Conditions:  cs[1],
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
+			NeedAllocateSels: true,
+			NeedBatches:      true,
+			JoinMapTag:       tag,
+			JoinMapRefCnt:    1,
+		},
+		resultBatch: resultBatch,
+	}
+}
+
+func resetChildren(arg *HashJoin, m *mpool.MPool) {
+	resetChildrenWithBatch(arg, colexec.MakeMockBatchs(m))
+}
+
+func resetChildrenWithBatch(arg *HashJoin, bat *batch.Batch) {
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
+}
+
+func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
+	resetHashBuildChildrenWithBatch(arg, colexec.MakeMockBatchs(m))
+}
+
+func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch) {
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.Children = nil
+	arg.AppendChild(op)
+}
+
+func TestHashJoinTypeName(t *testing.T) {
+	arg := NewArgument()
+	require.Equal(t, "hash_join", arg.TypeName())
+	arg.Release()
+}
+
+func TestHashJoinOpType(t *testing.T) {
+	arg := NewArgument()
+	require.Equal(t, vm.HashJoin, arg.OpType())
+	arg.Release()
+}
+
+func TestHashJoinReleaseAndReuse(t *testing.T) {
+	arg := NewArgument()
+	arg.JoinMapTag = 100
+	arg.Release()
+
+	arg2 := NewArgument()
+	require.Equal(t, int32(0), arg2.JoinMapTag)
+	arg2.Release()
+}
+
+func TestHashJoinTypeCheckers(t *testing.T) {
+	tests := []struct {
+		name        string
+		joinType    plan.Node_JoinType
+		isRightJoin bool
+		checks      map[string]bool
+	}{
+		{
+			name:     "inner join",
+			joinType: plan.Node_INNER,
+			checks: map[string]bool{
+				"IsInner": true, "IsLeftOuter": false, "IsRightOuter": false,
+				"IsFullOuter": false, "IsSemi": false, "IsAnti": false, "IsSingle": false,
+				"EmitUnmatchedProbe": false, "EmitUnmatchedBuild": false,
+			},
+		},
+		{
+			name:     "left outer join",
+			joinType: plan.Node_LEFT,
+			checks: map[string]bool{
+				"IsInner": false, "IsLeftOuter": true, "IsRightOuter": false,
+				"EmitUnmatchedProbe": true, "EmitUnmatchedBuild": false,
+			},
+		},
+		{
+			name:        "right outer join",
+			joinType:    plan.Node_RIGHT,
+			isRightJoin: true,
+			checks: map[string]bool{
+				"IsInner": false, "IsLeftOuter": false, "IsRightOuter": true,
+				"EmitUnmatchedProbe": false, "EmitUnmatchedBuild": true,
+			},
+		},
+		{
+			name:        "full outer join",
+			joinType:    plan.Node_OUTER,
+			isRightJoin: true,
+			checks: map[string]bool{
+				"IsFullOuter": true, "IsInner": false,
+				"IsLeftOuter": false, "IsRightOuter": false,
+				"IsLeftSemi": false, "IsRightSemi": false,
+				"IsLeftAnti": false, "IsRightAnti": false,
+				"IsLeftSingle": false, "IsRightSingle": false,
+				"EmitUnmatchedProbe": true, "EmitUnmatchedBuild": true,
+			},
+		},
+		{
+			name:     "left semi join",
+			joinType: plan.Node_SEMI,
+			checks: map[string]bool{
+				"IsSemi": true, "IsLeftSemi": true, "IsRightSemi": false,
+			},
+		},
+		{
+			name:        "right semi join",
+			joinType:    plan.Node_SEMI,
+			isRightJoin: true,
+			checks: map[string]bool{
+				"IsSemi": true, "IsLeftSemi": false, "IsRightSemi": true,
+			},
+		},
+		{
+			name:     "left anti join",
+			joinType: plan.Node_ANTI,
+			checks: map[string]bool{
+				"IsAnti": true, "IsLeftAnti": true, "IsRightAnti": false,
+			},
+		},
+		{
+			name:        "right anti join",
+			joinType:    plan.Node_ANTI,
+			isRightJoin: true,
+			checks: map[string]bool{
+				"IsAnti": true, "IsLeftAnti": false, "IsRightAnti": true,
+			},
+		},
+		{
+			name:     "left single join",
+			joinType: plan.Node_SINGLE,
+			checks: map[string]bool{
+				"IsSingle": true, "IsLeftSingle": true, "IsRightSingle": false,
+			},
+		},
+		{
+			name:        "right single join",
+			joinType:    plan.Node_SINGLE,
+			isRightJoin: true,
+			checks: map[string]bool{
+				"IsSingle": true, "IsLeftSingle": false, "IsRightSingle": true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arg := &HashJoin{
+				JoinType:    tt.joinType,
+				IsRightJoin: tt.isRightJoin,
+			}
+
+			if expected, ok := tt.checks["IsInner"]; ok {
+				require.Equal(t, expected, arg.IsInner())
+			}
+			if expected, ok := tt.checks["IsLeftOuter"]; ok {
+				require.Equal(t, expected, arg.IsLeftOuter())
+			}
+			if expected, ok := tt.checks["IsRightOuter"]; ok {
+				require.Equal(t, expected, arg.IsRightOuter())
+			}
+			if expected, ok := tt.checks["IsFullOuter"]; ok {
+				require.Equal(t, expected, arg.IsFullOuter())
+			}
+			if expected, ok := tt.checks["IsSemi"]; ok {
+				require.Equal(t, expected, arg.IsSemi())
+			}
+			if expected, ok := tt.checks["IsLeftSemi"]; ok {
+				require.Equal(t, expected, arg.IsLeftSemi())
+			}
+			if expected, ok := tt.checks["IsRightSemi"]; ok {
+				require.Equal(t, expected, arg.IsRightSemi())
+			}
+			if expected, ok := tt.checks["IsAnti"]; ok {
+				require.Equal(t, expected, arg.IsAnti())
+			}
+			if expected, ok := tt.checks["IsLeftAnti"]; ok {
+				require.Equal(t, expected, arg.IsLeftAnti())
+			}
+			if expected, ok := tt.checks["IsRightAnti"]; ok {
+				require.Equal(t, expected, arg.IsRightAnti())
+			}
+			if expected, ok := tt.checks["IsSingle"]; ok {
+				require.Equal(t, expected, arg.IsSingle())
+			}
+			if expected, ok := tt.checks["IsLeftSingle"]; ok {
+				require.Equal(t, expected, arg.IsLeftSingle())
+			}
+			if expected, ok := tt.checks["IsRightSingle"]; ok {
+				require.Equal(t, expected, arg.IsRightSingle())
+			}
+			if expected, ok := tt.checks["EmitUnmatchedProbe"]; ok {
+				require.Equal(t, expected, arg.EmitUnmatchedProbe(),
+					"EmitUnmatchedProbe mismatch for %s", tt.name)
+			}
+			if expected, ok := tt.checks["EmitUnmatchedBuild"]; ok {
+				require.Equal(t, expected, arg.EmitUnmatchedBuild(),
+					"EmitUnmatchedBuild mismatch for %s", tt.name)
+			}
+		})
+	}
+}
+
+func TestHashJoinGetOperatorBase(t *testing.T) {
+	arg := NewArgument()
+	base := arg.GetOperatorBase()
+	require.NotNil(t, base)
+	arg.Release()
+}
+
+func TestHashJoinExecProjection(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := NewArgument()
+	bat := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, false, 10, proc.Mp())
+	result, err := arg.ExecProjection(proc, bat)
+	require.NoError(t, err)
+	require.Equal(t, bat, result)
+	arg.Release()
+	proc.Free()
+}

@@ -31,6 +31,7 @@ extern "C"
 #include <libgen.h>
 
 // CUDA headers.
+#include <cuda_runtime_api.h>
 #include <cuda.h>
 #include <helper_cuda_drvapi.h>
 #include <helper_functions.h>
@@ -72,7 +73,12 @@ typedef struct CudaEnv {
 int32_t CudaEnv_init(CudaEnv *env, uint8_t *errBuf) {
     MOCL_CHECK_RET(cuInit(0), -1000, errBuf);
     env->cuDevice = findCudaDeviceDRV(0, NULL);
+#if (CUDART_VERSION < 13000)
     MOCL_CHECK_RET(cuCtxCreate(&env->cuContext, 0, env->cuDevice), -1001, errBuf);
+#else
+    MOCL_CHECK_RET(cuCtxCreate(&env->cuContext, nullptr, 0, env->cuDevice), -1001, errBuf);
+#endif
+
 #ifdef __linux__
     char mobin_path[PATH_MAX];
     ssize_t nb = readlink("/proc/self/exe", mobin_path, PATH_MAX);

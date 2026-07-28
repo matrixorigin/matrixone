@@ -23,7 +23,7 @@ cn-template = "./etc/launch-dynamic-with-proxy/cn.toml.base"
 # how many cn service can be launched
 service-count = 2
 # how many cpu can used pr cn instance
-cpu-count = 2
+cpu-count = 8
 
 [dynamic.chaos]
 enable = false

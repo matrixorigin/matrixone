@@ -60,6 +60,10 @@ func (e *errWithCode) Error() string {
 	return fmt.Sprintf("%s: %v", e.code, e.cause)
 }
 
+func (e *errWithCode) Unwrap() error {
+	return e.cause
+}
+
 func withCode(err error, code errorCode) error {
 	if err == nil {
 		return nil
@@ -106,12 +110,23 @@ func isConnEndErr(err error) bool {
 // other servers.
 type connectErr struct {
 	cause error
+	// timeout indicates if the error is caused by timeout.
+	// This helps distinguish between CN being busy (timeout) vs CN being down.
+	timeout bool
 }
 
 // newConnectErr creates a new connectErr.
 func newConnectErr(e error) error {
 	return &connectErr{
 		cause: e,
+	}
+}
+
+// newTimeoutConnectErr creates a new connectErr with timeout flag set.
+func newTimeoutConnectErr(e error) error {
+	return &connectErr{
+		cause:   e,
+		timeout: true,
 	}
 }
 
@@ -125,4 +140,10 @@ var _ error = (*connectErr)(nil)
 func isRetryableErr(e error) bool {
 	_, ok := e.(*connectErr)
 	return ok
+}
+
+// isTimeoutErr returns true if it is a timeout connectErr.
+func isTimeoutErr(e error) bool {
+	ce, ok := e.(*connectErr)
+	return ok && ce.timeout
 }

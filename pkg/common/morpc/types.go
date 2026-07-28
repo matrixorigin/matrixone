@@ -75,6 +75,30 @@ type RPCMessage struct {
 	createAt       time.Time
 }
 
+// StreamTerminalToken proves that the server IO loop validated a particular
+// stream request. Its fields are intentionally private so application handlers
+// can pass, but cannot manufacture, terminal authority.
+type StreamTerminalToken struct {
+	owner    *clientSession
+	streamID uint64
+	sequence uint32
+}
+
+type streamTerminalTokenContextKey struct{}
+
+// StreamTerminalTokenFromContext returns the token attached to a validated
+// streaming request. Non-streaming requests do not carry one.
+func StreamTerminalTokenFromContext(ctx context.Context) (StreamTerminalToken, bool) {
+	token, ok := ctx.Value(streamTerminalTokenContextKey{}).(StreamTerminalToken)
+	return token, ok && token.owner != nil
+}
+
+// StreamFinisher is implemented by server-side sessions that can synchronously
+// flush a final response and atomically retire the stream sequence state.
+type StreamFinisher interface {
+	FinishStream(context.Context, StreamTerminalToken, Message) error
+}
+
 // InternalMessage returns true means the rpc message is the internal message in morpc.
 func (m RPCMessage) InternalMessage() bool {
 	return m.internal
@@ -89,8 +113,9 @@ type RPCClient interface {
 	Send(ctx context.Context, backend string, request Message) (*Future, error)
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream will
-	// be closed.
-	NewStream(backend string, lock bool) (Stream, error)
+	// be closed. The context is used to control cancellation of stream creation; if the context
+	// is cancelled during connection establishment or retry backoff, NewStream will return immediately.
+	NewStream(ctx context.Context, backend string, lock bool) (Stream, error)
 	// Ping is used to check if the remote service is available. The remote service will reply with
 	// a pong when it receives the ping.
 	Ping(ctx context.Context, backend string) error
@@ -98,6 +123,14 @@ type RPCClient interface {
 	Close() error
 
 	CloseBackend() error
+}
+
+// ControlClient exposes only the operations allowed on an isolated control
+// transport. It deliberately cannot carry application messages.
+type ControlClient interface {
+	Ping(ctx context.Context, backend string) error
+	CloseBackendFor(backend string) error
+	Close() error
 }
 
 // ClientSession client session, which is used to send the response message.
@@ -212,7 +245,9 @@ type Stream interface {
 	// Receive returns a channel to read stream message from server. If nil is received, the receive
 	// loop needs to exit. In any case, Stream.Close needs to be called.
 	Receive() (chan Message, error)
-	// Close close the stream. If closeConn is true, the underlying connection will be closed.
+	// Close closes the stream. A receive channel obtained before Close is sent a
+	// nil terminal value. If closeConn is true, the underlying connection is also
+	// closed.
 	Close(closeConn bool) error
 }
 

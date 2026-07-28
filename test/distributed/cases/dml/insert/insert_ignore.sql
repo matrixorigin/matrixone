@@ -57,12 +57,10 @@ insert ignore INTO insert_ignore_05 (id, created_at) VALUES(50, '9999-12-31 23:5
 select * from insert_ignore_05;
 -- @bvt:issue
 
--- @bvt:issue#16438
 -- insert ignore partition table
 create table insert_ignore_06 (sale_id INT AUTO_INCREMENT,product_id INT,sale_amount DECIMAL(10, 2),sale_date DATE,PRIMARY KEY (sale_id, sale_date))PARTITION BY RANGE (year(sale_date)) (PARTITION p0 VALUES LESS THAN (1991),PARTITION p1 VALUES LESS THAN (1992),PARTITION p2 VALUES LESS THAN (1993),PARTITION p3 VALUES LESS THAN (1994));
 insert ignore into insert_ignore_06 (product_id, sale_amount, sale_date) VALUES(1, 1000.00, '1990-04-01'),(2, 1500.00, '1992-05-01'),(3, 500.00, '1995-06-01'),(1, 2000.00, '1991-07-01');
 select * from insert_ignore_06;
--- @bvt:issue
 
 -- insert ignore select from table
 create table insert_ignore_07(c1 int primary key auto_increment, c2 int);
@@ -78,3 +76,61 @@ insert into insert_ignore_09 values(20,45),(21,55),(1,45),(6,22),(5,1),(1000,222
 insert ignore into insert_ignore_09 select result, result from generate_series(1,10000000) g;
 select count(*) from insert_ignore_09;
 select count(*) from insert_ignore_09 where c1 != c2;
+
+-- Test case for INSERT IGNORE with many duplicate primary keys
+-- This test reproduces the index out of range panic issue
+-- Root cause: InputBatchRowCount not updated after Batches.Shrink removes duplicates in hashmap builder
+drop table if exists t_insert_ignore_panic;
+create table t_insert_ignore_panic (
+    pk varchar(50) not null,
+    col1 varchar(20),
+    primary key (pk)
+);
+
+insert ignore into t_insert_ignore_panic (pk, col1) values ('pk001', 'val1xx');
+
+-- Insert 35 rows with 12 duplicates (result: 23 unique rows)
+-- Before fix: would panic with "index out of range [29] with length 29"
+-- After fix: should successfully insert 23 rows
+insert ignore into t_insert_ignore_panic (pk, col1) values
+('pk001', 'val1'),
+('pk002', 'val2'),
+('pk003', 'val3'),
+('pk001', 'dup1'),  -- duplicate
+('pk004', 'val4'),
+('pk005', 'val5'),
+('pk002', 'dup2'),  -- duplicate
+('pk006', 'val6'),
+('pk007', 'val7'),
+('pk003', 'dup3'),  -- duplicate
+('pk008', 'val8'),
+('pk009', 'val9'),
+('pk004', 'dup4'),  -- duplicate
+('pk010', 'val10'),
+('pk011', 'val11'),
+('pk005', 'dup5'),  -- duplicate
+('pk012', 'val12'),
+('pk013', 'val13'),
+('pk006', 'dup6'),  -- duplicate
+('pk014', 'val14'),
+('pk015', 'val15'),
+('pk007', 'dup7'),  -- duplicate
+('pk016', 'val16'),
+('pk017', 'val17'),
+('pk008', 'dup8'),  -- duplicate
+('pk018', 'val18'),
+('pk019', 'val19'),
+('pk009', 'dup9'),  -- duplicate
+('pk020', 'val20'),
+('pk021', 'val21'),
+('pk010', 'dup10'),  -- duplicate
+('pk022', 'val22'),
+('pk023', 'val23'),
+('pk011', 'dup11'),  -- duplicate
+('pk012', 'dup12');  -- duplicate
+
+-- Verify: should have exactly 23 rows
+select count(*) from t_insert_ignore_panic;
+
+
+

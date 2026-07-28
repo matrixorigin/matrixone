@@ -16,13 +16,14 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"io"
 	"iter"
 	"os"
 	pathpkg "path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,14 @@ func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
 			defer f.Close()
 		}
 
+		// resolve symlinks in the path to get the canonical path
+		// This is best-effort: if EvalSymlinks fails (e.g., due to race conditions
+		// in concurrent tests), we fall back to using the original path
+		if resolved, err := filepath.EvalSymlinks(rootPath); err == nil {
+			rootPath = resolved
+		}
+		// If EvalSymlinks fails, continue with the original rootPath
+		// This makes the code more resilient to race conditions in test environments
 	}
 
 	return &LocalETLFS{
@@ -115,8 +124,8 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	nativePath := l.toNativeFilePath(path.File)
 
 	// sort
-	sort.Slice(vector.Entries, func(i, j int) bool {
-		return vector.Entries[i].Offset < vector.Entries[j].Offset
+	slices.SortFunc(vector.Entries, func(a, b IOEntry) int {
+		return cmp.Compare(a.Offset, b.Offset)
 	})
 
 	// size
@@ -438,10 +447,13 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEnt
 			if strings.HasPrefix(name, ".") {
 				continue
 			}
-			info, err := entry.Info()
+			info, ok, err := localDirEntryInfo(entry)
 			if err != nil {
 				yield(nil, err)
 				return
+			}
+			if !ok {
+				continue
 			}
 			isDir, err := entryIsDir(nativePath, name, info)
 			if err != nil {
@@ -781,4 +793,75 @@ func (l *LocalETLFSMutator) Close() error {
 	}
 
 	return nil
+}
+
+// open for read and write, raw os.File API.
+func (l *LocalETLFS) EnsureDir(ctx context.Context, filePath string) error {
+	return l.ensureDir(l.toNativeFilePath(filePath))
+}
+
+func (l *LocalETLFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.OpenFile(nativePath, os.O_RDWR, 0644)
+}
+
+// create or truncate.
+func (l *LocalETLFS) CreateFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.Create(nativePath)
+}
+
+// remove file
+func (l *LocalETLFS) RemoveFile(ctx context.Context, filePath string) error {
+	err := ctx.Err()
+	if err != nil {
+		return err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.Remove(nativePath)
+}
+
+// open/create then immediately remove.   the opend file is good for read/write.
+func (l *LocalETLFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	f, err := os.Create(nativePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// do not check error for this one
+	os.Remove(nativePath)
+	return f, nil
 }

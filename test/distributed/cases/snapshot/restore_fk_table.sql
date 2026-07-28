@@ -63,8 +63,11 @@ create table table02 (col1 int unique key, col2 varchar(20));
 insert into table02 (col1, col2) values (133, 'database');
 create table table03(a INT primary key AUTO_INCREMENT, b INT, c INT);
 create table table04(a INT primary key AUTO_INCREMENT, b INT, c INT);
+set @old_sql_mode = @@sql_mode;
+set sql_mode = concat_ws(',', @@sql_mode, 'NO_AUTO_VALUE_ON_ZERO');
 insert into table03 values (1,1,1), (2,2,2);
 insert into table04 values (0,1,2), (2,3,4);
+set sql_mode = @old_sql_mode;
 
 drop snapshot if exists sp01;
 create snapshot sp01 for account;
@@ -73,17 +76,17 @@ use test01;
 drop table aff01;
 drop table pri01;
 
-restore account sys database test01 table aff01 from snapshot sp01;
+restore table test01.aff01{snapshot="sp01"};
 
 show databases;
 use test01;
 show tables;
 
-restore account sys database test01 table pri01 from snapshot sp01;
+restore table test01.pri01{snapshot="sp01"};
 show tables;
 select * from pri01;
 
-restore account sys database test01 table aff01 from snapshot sp01;
+restore table test01.aff01{snapshot="sp01"};
 show tables;
 select * from aff01;
 show create table pri01;
@@ -155,8 +158,11 @@ create table table02 (col1 int unique key, col2 varchar(20));
 insert into table02 (col1, col2) values (133, 'database');
 create table table03(a INT primary key AUTO_INCREMENT, b INT, c INT);
 create table table04(a INT primary key AUTO_INCREMENT, b INT, c INT);
+set @old_sql_mode = @@sql_mode;
+set sql_mode = concat_ws(',', @@sql_mode, 'NO_AUTO_VALUE_ON_ZERO');
 insert into table03 values (1,1,1), (2,2,2);
 insert into table04 values (0,1,2), (2,3,4);
+set sql_mode = @old_sql_mode;
 
 drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
@@ -165,17 +171,17 @@ use test01;
 drop table aff01;
 drop table pri01;
 
-restore account acc01 database test01 table aff01 from snapshot sp01;
+restore table test01.aff01{snapshot="sp01"};
 
 show databases;
 use test01;
 show tables;
 
-restore account acc01 database test01 table pri01 from snapshot sp01;
+restore table test01.pri01{snapshot="sp01"};
 show tables;
 select * from pri01;
 
-restore account acc01 database test01 table aff01 from snapshot sp01;
+restore table test01.aff01{snapshot="sp01"};
 show tables;
 select * from aff01;
 show create table pri01;
@@ -245,7 +251,7 @@ create snapshot sp03 for account;
 drop database test02;
 drop database test01;
 
-restore account sys database test02 table aff01 from snapshot sp03;
+restore table test02.aff01{snapshot="sp03"};
 
 show databases;
 use test02;
@@ -276,7 +282,7 @@ create snapshot sp04 for account;
 insert into f1 values (3,20);
 insert into f1 values (4,600);
 
-restore account sys database test04 table f1 from snapshot sp04;
+restore table test04.f1{snapshot="sp04"};
 
 use test04;
 show tables;
@@ -309,7 +315,7 @@ create snapshot sp05 for account acc01;
 insert into f1 values (3,20);
 insert into f1 values (4,600);
 
-restore account acc01 database test05 table f1 from snapshot sp05;
+restore table test05.f1{snapshot="sp05"};
 
 use test04;
 show tables;
@@ -350,8 +356,8 @@ insert into f1 values (4,600);
 use test07;
 insert into c1 values (2,9);
 
-restore account acc01 database test06 table f1 from snapshot sp06;
-restore account acc01 from snapshot sp06;
+restore table test06.f1{snapshot="sp06"};
+restore account acc01{snapshot="sp06"};
 
 use test06;
 show tables;
@@ -396,7 +402,7 @@ create snapshot sp07 for account;
 insert into foreign01 values(3, '323214321321', 32, 1);
 insert into foreign02 values(3,2,10);
 
-restore account sys database test07 table foreign02 from snapshot sp07;
+restore table test07.foreign02{snapshot="sp07"};
 select * from foreign01;
 select * from foreign02;
 
@@ -436,7 +442,7 @@ create snapshot sp08 for account acc01;
 insert into foreign01 values(3, '323214321321', 32, 1);
 insert into foreign02 values(3,2,10);
 
-restore account acc01 database test08 table foreign02 from snapshot sp08;
+restore table test08.foreign02{snapshot="sp08"};
 select * from foreign01;
 select * from foreign02;
 

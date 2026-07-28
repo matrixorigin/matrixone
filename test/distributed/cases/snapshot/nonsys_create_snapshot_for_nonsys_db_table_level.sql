@@ -1,4 +1,3 @@
-set experimental_fulltext_index=1;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
@@ -54,7 +53,7 @@ create snapshot spsp01 for database sp_test;
 show snapshots;
 
 drop database sp_test;
-restore account acc01 database sp_test from snapshot spsp01;
+restore database sp_test{snapshot="spsp01"};
 
 show databases;
 use sp_test;
@@ -80,7 +79,6 @@ show snapshots;
 drop database if exists sp_test01;
 create database sp_test01;
 use sp_test01;
--- @bvt:issue#16438
 drop table if exists partition01;
 create table partition01 (
 emp_no      int             not null,
@@ -98,20 +96,17 @@ partition p04 values less than (400001)
 );
 insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
--- @bvt:issue
 drop snapshot if exists spsp02;
 create snapshot spsp02 for database sp_test01;
 -- @ignore:1
 show snapshots;
--- @bvt:issue#16438
 delete from partition01 where birth_date = '1980-12-17';
 select * from partition01;
-restore account acc01 database sp_test01 from snapshot spsp02 ;
+restore database sp_test01{snapshot="spsp02"};
 select * from partition01;
 drop table partition01;
-restore account acc01 database sp_test01 table partition01 from snapshot spsp02;
+restore table sp_test01.partition01{snapshot="spsp02"};
 select * from partition01;
--- @bvt:issue
 drop database sp_test01;
 drop snapshot spsp02;
 
@@ -159,7 +154,7 @@ create table Test02(col1 int, col2 json);
 drop snapshot if exists SP01;
 create snapshot SP01 for database sp_Test03;
 drop database sp_Test03;
-restore account acc01 database sp_Test03 from snapshot SP01;
+restore database sp_Test03{snapshot="SP01"};
 show databases;
 use sp_Test03;
 show tables;
@@ -216,8 +211,8 @@ create table table10(col1 int, col2 decimal, col3 char(1) primary key);
 drop snapshot if exists spsp05;
 create snapshot spsp05 for database db10;
 drop database db10;
-restore account acc01 database db10 table table11 from snapshot spsp05;
-restore account acc01 database db11 from snapshot spsp05;
+restore table db10.table11{snapshot="spsp05"};
+restore database db11{snapshot="spsp05"};
 drop snapshot spsp05;
 
 
@@ -250,15 +245,15 @@ create snapshot spsp06 for database db06;
 drop table aff01;
 drop table pri01;
 
-restore account acc01 database db06 from snapshot spsp06;
+restore database db06{snapshot="spsp06"};
 select * from pri01;
 select * from aff01;
 drop table aff01;
 drop table pri01;
 
-restore account acc01 database db06 table aff01 from snapshot spsp06;
-restore account acc01 database db06 table pri01 from snapshot spsp06;
-restore account acc01 database db06 table aff01 from snapshot spsp06;
+restore table db06.aff01{snapshot="spsp06"};
+restore table db06.pri01{snapshot="spsp06"};
+restore table db06.aff01{snapshot="spsp06"};
 show tables;
 select * from aff01;
 select * from pri01;
@@ -292,11 +287,11 @@ select * from fulltext01;
 drop snapshot if exists spsp08;
 create snapshot spsp08 for database db07;
 drop database db07;
-restore account acc01 database db07 from snapshot spsp08;
+restore database db07{snapshot="spsp08"};
 show databases;
 select * from db07.fulltext01;
 drop database db07;
-restore account acc01 database db07 table fulltext01 from snapshot spsp08;
+restore table db07.fulltext01{snapshot="spsp08"};
 select * from db07.fulltext01;
 select count(*) from db07.fulltext01;
 drop database db07;
@@ -320,7 +315,7 @@ show create table pri01;
 select * from pri01;
 alter table pri01 add constraint primary key(col1);
 show create table pri01;
-restore account acc01 database db08 table pri01 from snapshot spsp09;
+restore table db08.pri01{snapshot="spsp09"};
 show create table pri01;
 insert into pri01 values(234, 'db');
 select * from pri01;
@@ -343,7 +338,7 @@ select * from test01;
 drop snapshot if exists spsp10;
 create snapshot spsp10 for database db10;
 drop table test01;
-restore account acc01 database db10 table test01 from snapshot spsp10;
+restore table db10.test01{snapshot="spsp10"};
 -- @ignore:1
 select * from db10.test01;
 drop database db10;

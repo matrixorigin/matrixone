@@ -93,6 +93,7 @@ type LogServiceDriver struct {
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
+	start := time.Now()
 	// the tasks submitted to LogServiceDriver.workers append entries to logservice,
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
@@ -109,6 +110,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		postCommitQueue:     make(chan any, 10000),
 		workers:             pool,
 	}
+
 	d.config = *cfg
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
@@ -120,6 +122,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	logutil.Info(
 		"Wal-Driver-Start",
 		zap.String("config", cfg.String()),
+		zap.Duration("duration", time.Since(start)),
 	)
 	return d
 }

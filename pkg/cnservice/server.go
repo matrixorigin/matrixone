@@ -19,6 +19,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -41,6 +43,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/gossip"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
+	icebergmaintenance "github.com/matrixorigin/matrixone/pkg/iceberg/maintenance"
+	icebergwritecore "github.com/matrixorigin/matrixone/pkg/iceberg/write"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -53,11 +59,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
@@ -70,6 +77,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const (
+	rssCacheFamilyEvictTimeout   = 10 * time.Second
+	rssCacheAdmissionPressureTTL = 2 * time.Minute
+	rssCachePressureTargetOwner  = "cn-rss"
+)
+
+var (
+	evictMemoryCachesToCapacityPercent = fileservice.EvictMemoryCachesToCapacityPercent
+)
+
+func makeRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
+	return func(ctx context.Context, targetPercent int64) {
+		memoryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseRSSCacheEvict)
+		defer cancel()
+		evictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+	}
+}
+
+func setRSSCachePressureTarget(targetPercent int64) {
+	fileservice.SetMemoryCachePressureTargetPercentByOwner(
+		rssCachePressureTargetOwner,
+		targetPercent,
+		time.Now().Add(rssCacheAdmissionPressureTTL),
+	)
+}
+
+func clearRSSCachePressureTarget() {
+	fileservice.ClearMemoryCachePressureTargetByOwner(rssCachePressureTargetOwner)
+}
 
 func NewService(
 	cfg *Config,
@@ -84,6 +121,9 @@ func NewService(
 
 	//set frontend parameters
 	cfg.Frontend.SetDefaultValues()
+	if err := cfg.Frontend.Iceberg.Validate(ctx); err != nil {
+		return nil, err
+	}
 	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 
 	configKVMap, _ := dumpCnConfig(*cfg)
@@ -119,6 +159,7 @@ func NewService(
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 		gossipNode:  gossipNode,
 	}
+	srv.colexecServer = colexec.NewServer(cfg.UUID)
 
 	srv.requestHandler = func(ctx context.Context,
 		cnAddr string,
@@ -196,11 +237,24 @@ func NewService(
 		panic(err)
 	}
 
+	srv.CNMemoryThrottler = rscthrottler.NewMemThrottler(
+		"CNFlushS3",
+		90.0/100.0,
+		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
+		rscthrottler.WithRSSScavenging(),
+		rscthrottler.WithRSSCachePressureTarget(
+			setRSSCachePressureTarget,
+			clearRSSCachePressureTarget,
+		),
+		rscthrottler.WithRSSCacheEvictor(makeRSSCacheEvictor(rssCacheFamilyEvictTimeout)),
+	)
+
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
 	srv.pu.QueryClient = srv.queryClient
 	srv.pu.UdfService = srv.udfService
 	srv._txnClient = pu.TxnClient
+	srv.pu.CNMemoryThrottler = srv.CNMemoryThrottler
 
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
@@ -241,8 +295,89 @@ func NewService(
 		panic(err)
 	}
 	srv.pipelines.client = c
-	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(runtime.PipelineClient, c)
+
+	rt := runtime.ServiceRuntime(cfg.UUID)
+	rt.SetGlobalVariables("parameter-unit", pu)
+	rt.SetGlobalVariables(runtime.PipelineClient, c)
+	rt.SetGlobalVariables(runtime.CNMemoryThrottler, srv.CNMemoryThrottler)
+	if err := compile.RegisterDefaultIcebergScanPlanner(ctx, cfg.UUID, pu.SV.Iceberg); err != nil {
+		return nil, err
+	}
+	if err := srv.registerDefaultIcebergMaintenanceExecutor(ctx); err != nil {
+		return nil, err
+	}
+
 	return srv, nil
+}
+
+func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context) error {
+	cfg, err := icebergapi.NewConfigFromParameters(ctx, s.cfg.Frontend.Iceberg)
+	if err != nil {
+		return err
+	}
+	restOptions := []icebergcatalog.RESTClientOption{
+		icebergcatalog.WithTokenProvider(compile.NewRuntimeIcebergTokenProvider(s.cfg.UUID)),
+	}
+	if compile.IcebergAllowPlainHTTPFromEnv() {
+		restOptions = append(restOptions, icebergcatalog.WithAllowPlainHTTP(true))
+	}
+	catalogFactory := icebergcatalog.NewFactory(
+		icebergcatalog.WithNativeRESTOptions(restOptions...),
+		icebergcatalog.WithAdapter(
+			icebergcatalog.AdapterIcebergGo,
+			icebergcatalog.UnsupportedAdapterFactory{Name: icebergcatalog.AdapterIcebergGo},
+		),
+	)
+	executor := sqliceberg.NewMaintenanceProcedureExecutorFromInternalSQLExecutor(
+		s.sqlExecutor,
+		sqliceberg.MaintenanceProcedureExecutorOptions{
+			Config:                    cfg,
+			Account:                   sqliceberg.AccountConfigForFeatureGate(cfg, 0),
+			CatalogFactory:            catalogFactory,
+			CommitVerifier:            icebergmaintenance.CatalogFactoryCommitVerifier{CatalogFactory: catalogFactory},
+			OrphanTTL:                 cfg.Write.OrphanTTL,
+			UseNativeRewriteManifests: true,
+			UseNativeRewriteDataFiles: true,
+			UseNativeExpireSnapshots:  true,
+		},
+	)
+	var tableCache icebergwritecore.TableCache
+	if rt := runtime.ServiceRuntime(s.cfg.UUID); rt != nil {
+		if value, ok := rt.GetGlobalVariables(icebergapi.CacheInvalidatorRuntimeKey); ok {
+			tableCache, _ = value.(icebergwritecore.TableCache)
+		}
+	}
+	cacheInvalidator := icebergwritecore.MetadataCacheInvalidator{Cache: tableCache}
+	dmlFactory := sqliceberg.NewDMLDeleteRuntimeCoordinatorFactoryFromInternalSQLExecutor(
+		s.sqlExecutor,
+		sqliceberg.DMLDeleteRuntimeCoordinatorFactoryOptions{
+			Config:           cfg,
+			Account:          sqliceberg.AccountConfigForFeatureGate(cfg, 0),
+			CatalogFactory:   catalogFactory,
+			CacheInvalidator: cacheInvalidator,
+		},
+	)
+	appendFactory := sqliceberg.NewAppendRuntimeCoordinatorFactoryFromInternalSQLExecutor(
+		s.sqlExecutor,
+		sqliceberg.AppendRuntimeCoordinatorFactoryOptions{
+			Config:           cfg,
+			Account:          sqliceberg.AccountConfigForFeatureGate(cfg, 0),
+			CatalogFactory:   catalogFactory,
+			CacheInvalidator: cacheInvalidator,
+		},
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
+		compile.IcebergAppendCoordinatorFactoryRuntimeKey,
+		sqliceberg.WriteRuntimeCoordinatorFactory{
+			Append: appendFactory,
+			DML:    dmlFactory,
+		},
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
+		frontend.IcebergMaintenanceCallExecutorRuntimeKey,
+		frontend.IcebergMaintenanceProcedureExecutor{Executor: executor},
+	)
+	return nil
 }
 
 func (s *service) Start() error {
@@ -257,51 +392,59 @@ func (s *service) Start() error {
 		return err
 	}
 
-	return s.server.Start()
+	if err := s.server.Start(); err != nil {
+		return err
+	}
+
+	s.task.runnerReady.Store(true)
+	s.startTaskRunner()
+	return nil
 }
 
 func (s *service) Close() error {
 	defer logutil.LogClose(s.logger, "cnservice")()
 
 	s.stopper.Stop()
-	if err := s.bootstrapService.Close(); err != nil {
-		return err
-	}
-	if err := s.stopFrontend(); err != nil {
-		return err
-	}
-	if err := s.stopTask(); err != nil {
-		return err
-	}
-	if err := s.stopRPCs(); err != nil {
-		return err
-	}
-	// stop I/O pipeline
-	ioutil.Stop(s.cfg.UUID)
 
-	if s.gossipNode != nil {
-		if err := s.gossipNode.Leave(time.Second); err != nil {
-			return err
-		}
-	}
+	return closeCNServiceSteps(
+		s.bootstrapService.Close,
+		s.stopFrontend,
+		s.stopTask,
+		s.stopRPCs,
+		func() error {
+			// stop I/O pipeline
+			ioutil.Stop(s.cfg.UUID)
+			return nil
+		},
+		func() error {
+			if s.gossipNode != nil {
+				return s.gossipNode.Leave(time.Second)
+			}
+			return nil
+		},
+		s.server.Close,
+		s.lockService.Close,
+		func() error {
+			if s.shardService != nil {
+				return s.shardService.Close()
+			}
+			return nil
+		},
+		func() error {
+			if s.pipelines.client != nil {
+				return s.pipelines.client.Close()
+			}
+			return nil
+		},
+	)
+}
 
-	if err := s.server.Close(); err != nil {
-		return err
+func closeCNServiceSteps(steps ...func() error) error {
+	var err error
+	for _, step := range steps {
+		err = errors.Join(err, step())
 	}
-	if err := s.lockService.Close(); err != nil {
-		return err
-	}
-	if s.shardService != nil {
-		if err := s.shardService.Close(); err != nil {
-			return err
-		}
-	}
-	if s.pipelines.client != nil {
-		if err := s.pipelines.client.Close(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return err
 }
 
 // ID implements the frontend.BaseService interface.
@@ -349,47 +492,38 @@ func (s *service) GetFinalVersion() string {
 func (s *service) stopFrontend() error {
 	defer logutil.LogClose(s.logger, "cnservice/frontend")()
 
-	if err := s.serverShutdown(true); err != nil {
-		return err
+	err := s.serverShutdown(true)
+	if s.cancelMoServerFunc != nil {
+		s.cancelMoServerFunc()
 	}
-	s.cancelMoServerFunc()
-	return nil
+	return err
 }
 
 func (s *service) stopRPCs() error {
+	var err error
 	if s._txnClient != nil {
-		if err := s._txnClient.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, s._txnClient.Close())
 	}
 	if s._hakeeperClient != nil {
 		s.moCluster.Close()
-		if err := s._hakeeperClient.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, s._hakeeperClient.Close())
 	}
 	if s._txnSender != nil {
-		if err := s._txnSender.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, s._txnSender.Close())
 	}
 	if s.lockService != nil {
-		if err := s.lockService.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, s.lockService.Close())
 	}
 	if s.queryService != nil {
-		if err := s.queryService.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, s.queryService.Close())
 	}
 	if s.queryClient != nil {
-		if err := s.queryClient.Close(); err != nil {
-			return err
-		}
+		err = errors.Join(err, s.queryClient.Close())
 	}
-	s.timestampWaiter.Close()
-	return nil
+	if s.timestampWaiter != nil {
+		s.timestampWaiter.Close()
+	}
+	return err
 }
 
 func (s *service) acquireMessage() morpc.Message {
@@ -487,16 +621,6 @@ func (s *service) initEngine(
 			return err
 		}
 
-	case EngineMemory:
-		if err := s.initMemoryEngine(cancelMoServerCtx, pu); err != nil {
-			return err
-		}
-
-	case EngineNonDistributedMemory:
-		if err := s.initMemoryEngineNonDist(cancelMoServerCtx, pu); err != nil {
-			return err
-		}
-
 	default:
 		return moerr.NewInternalErrorf(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
 
@@ -565,77 +689,10 @@ func (s *service) initClusterService() {
 }
 
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
-	// handleTemp is used to manipulate memorystorage stored for temporary table created by sessions.
-	// processing of temporary table is currently on local, so we need to add a WithLocalDispatch logic to service.
-	handleTemp := func(d metadata.TNShard) rpc.TxnRequestHandleFunc {
-		if d.Address != defines.TEMPORARY_TABLE_TN_ADDR {
-			return nil
-		}
-
-		// read, write, commit and rollback for temporary tables
-		return func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) (err error) {
-			storage, ok := ctx.Value(defines.TemporaryTN{}).(*memorystorage.Storage)
-			if !ok {
-				panic("tempStorage should never be nil")
-			}
-
-			resp.RequestID = req.RequestID
-			resp.Txn = &req.Txn
-			resp.Method = req.Method
-			resp.Flag = req.Flag
-
-			switch req.Method {
-			case txn.TxnMethod_Read:
-				res, err := storage.Read(
-					ctx,
-					req.Txn,
-					req.CNRequest.OpCode,
-					req.CNRequest.Payload,
-				)
-				if err != nil {
-					resp.TxnError = txn.WrapError(err, moerr.ErrTAERead)
-				} else {
-					payload, err := res.Read()
-					if err != nil {
-						panic(err)
-					}
-					resp.CNOpResponse = &txn.CNOpResponse{Payload: payload}
-					res.Release()
-				}
-			case txn.TxnMethod_Write:
-				payload, err := storage.Write(
-					ctx,
-					req.Txn,
-					req.CNRequest.OpCode,
-					req.CNRequest.Payload,
-				)
-				if err != nil {
-					resp.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
-				} else {
-					resp.CNOpResponse = &txn.CNOpResponse{Payload: payload}
-				}
-			case txn.TxnMethod_Commit:
-				_, err = storage.Commit(ctx, req.Txn, nil, nil)
-				if err == nil {
-					resp.Txn.Status = txn.TxnStatus_Committed
-				}
-			case txn.TxnMethod_Rollback:
-				err = storage.Rollback(ctx, req.Txn)
-				if err == nil {
-					resp.Txn.Status = txn.TxnStatus_Aborted
-				}
-			default:
-				return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", req.Method.String())
-			}
-			return err
-		}
-	}
-
 	s.initTxnSenderOnce.Do(func() {
 		sender, err = rpc.NewSender(
 			s.cfg.RPC,
 			runtime.ServiceRuntime(s.cfg.UUID),
-			rpc.WithSenderLocalDispatch(handleTemp),
 		)
 		if err != nil {
 			return
@@ -751,8 +808,13 @@ func (s *service) initLockService() {
 	cfg := s.getLockServiceConfig()
 	s.lockService = lockservice.NewLockService(
 		cfg,
-		lockservice.WithWait(func() {
-			<-s.hakeeperConnected
+		lockservice.WithWait(func(ctx context.Context) error {
+			select {
+			case <-s.hakeeperConnected:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}))
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(s.cfg.UUID, s.lockService)
@@ -848,9 +910,10 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
 			return err
 		}
-		cache.Add(message)
+		return cache.Add(message)
+	default:
+		return moerr.NewInvalidInputNoCtx("only pipeline messages may be fragmented")
 	}
-	return nil
 }
 
 func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
@@ -860,19 +923,27 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 	if err != nil {
 		return err
 	}
+	// CreateCache also returns a cache for an unfragmented message. Always
+	// remove the map entry on every terminal assembly path, not just close the
+	// queue object.
+	defer cs.DeleteCache(message.GetID())
+	finalMessage := message.(*pipeline.Message)
 	for {
-		msg, ok, err := cache.Pop()
+		cached, ok, err := cache.Pop()
 		if err != nil {
 			return err
 		}
 		if !ok {
-			cache.Close()
 			break
 		}
-		data = append(data, msg.(*pipeline.Message).GetData()...)
+		fragment, ok := cached.(*pipeline.Message)
+		if !ok || fragment.GetCmd() != finalMessage.GetCmd() ||
+			fragment.GetRequestedTeardownMode() != finalMessage.GetRequestedTeardownMode() {
+			return moerr.NewInvalidInputNoCtx("inconsistent pipeline message fragments")
+		}
+		data = append(data, fragment.GetData()...)
 	}
-	msg := message.(*pipeline.Message)
-	msg.SetData(append(data, msg.GetData()...))
+	finalMessage.SetData(append(data, finalMessage.GetData()...))
 	return nil
 }
 
@@ -886,6 +957,7 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s.queryClient,
 		s._hakeeperClient,
 		s.udfService,
+		s.pu.GetTaskService(),
 	)
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
 }
@@ -929,7 +1001,7 @@ func (s *service) bootstrap() error {
 	// bootstrap cannot fail. We panic here to make sure the service can not start.
 	// If bootstrap failed, need clean all data to retry.
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
-		panic(moerr.AttachCause(ctx, err))
+		return handleBootstrapErr(ctx, err)
 	}
 
 	trace.GetService(s.cfg.UUID).EnableFlush()
@@ -948,6 +1020,18 @@ func (s *service) bootstrap() error {
 		})
 	}
 	return nil
+}
+
+// handleBootstrapErr decides whether a bootstrap error should be returned
+// gracefully (for context cancellation during shutdown) or trigger a panic
+// (for real bootstrap failures).  Only context.Canceled is treated as a
+// graceful shutdown signal; DeadlineExceeded from the 5-minute bootstrap
+// timeout is a legitimate failure that should still panic.
+func handleBootstrapErr(ctx context.Context, err error) error {
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	panic(moerr.AttachCause(ctx, err))
 }
 
 func (s *service) initTxnTraceService() {
@@ -987,15 +1071,26 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 	}
 	err := profile.ProfileRuntime(profileType, gzWriter, debug)
 	if err != nil {
-		logutil.Errorf("get profile of %s failed. err:%v", profilePath, err)
+		logutil.Error(
+			"profile.save.runtime.failed",
+			zap.String("path", profilePath),
+			zap.Error(err),
+		)
 		return
 	}
 	err = gzWriter.Close()
 	if err != nil {
-		logutil.Errorf("close gzip write of %s failed. err:%v", profilePath, err)
+		logutil.Error(
+			"profile.writer.close.failed",
+			zap.String("path", profilePath),
+			zap.Error(err),
+		)
 		return
 	}
-	logutil.Info("get profile done. save profiles ", zap.String("path", profilePath))
+	logutil.Info(
+		"profile.save.get.ok",
+		zap.String("path", profilePath),
+	)
 	writeVec := fileservice.IOVector{
 		FilePath: profilePath,
 		Entries: []fileservice.IOEntry{
@@ -1011,7 +1106,11 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 	err = etlFS.Write(ctx, writeVec)
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
-		logutil.Errorf("save profile %s failed. err:%v", profilePath, err)
+		logutil.Error(
+			"profile.save.failed",
+			zap.String("path", profilePath),
+			zap.Error(err),
+		)
 		return
 	}
 }

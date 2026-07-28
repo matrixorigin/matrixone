@@ -6,7 +6,11 @@ drop table if exists t2;
 create table t1(c2 int, c1 int, c3 int) cluster by (c1,c2);
 create table t2(c1 int, c2 int, c3 int, primary key(c1,c2));
 insert into t1 select result%100,result%10000, result from generate_series(100000) g;
+select count(*) from t1;
+
 insert into t2 select result%100,*,* from generate_series(1000000) g;
+select count(*) from t2;
+
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
@@ -60,6 +64,12 @@ select count(*) from t2 where c1 = 3 and c2 in (1,2,3);
 -- @separator:table
 explain select count(*) from t2 where c1=4 and c2 between 1 and 5;
 select count(*) from t2 where c1=4 and c2 between 1 and 5;
+-- @separator:table
+explain select count(*) from t2 where c1 = 5 and c2 > 3 and c2 < 100;
+select count(*) from t2 where c1 = 5 and c2 > 3 and c2 < 100;
+-- @separator:table
+explain select count(*) from t2 where c1 = 5 and c2 >= 3 and c2 <= 100;
+select count(*) from t2 where c1 = 5 and c2 >= 3 and c2 <= 100;
 drop table if exists t1;
 create table t1 (a varchar(100) primary key, b int);
 insert into t1 select result, 2 from generate_series('2021-01-01 00:00:00','2022-01-01 00:00:00', '1 minute') g;

@@ -45,7 +45,7 @@ select * from v02;
 select * from v03;
 -- @session
 
-restore account acc01 from snapshot sp100 to account acc02;
+restore account acc01{snapshot="sp100"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 use test;
@@ -126,7 +126,7 @@ select * from v04;
 select * from v05;
 -- @session
 
-restore account acc01 from snapshot sp02  to account acc02;
+restore account acc01{snapshot="sp02"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 use test;
@@ -202,7 +202,7 @@ drop table Employees;
 select * from EmployeeDepartmentView;
 -- @session
 
-restore account acc01 from snapshot sp05 to account acc02;
+restore account acc01{snapshot="sp05"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 use test;
@@ -214,7 +214,7 @@ drop view EmployeeDepartmentView;
 select * from EmployeeDepartmentView;
 -- @session
 
-restore account acc01 from snapshot sp05 to account acc02;
+restore account acc01{snapshot="sp05"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 use test;
@@ -286,7 +286,7 @@ drop view department_view;
 select * from employee_with_department_view;
 -- @session
 
-restore account acc01 from snapshot sp04 to account acc02;
+restore account acc01{snapshot="sp04"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 use test;
@@ -298,7 +298,7 @@ truncate departments;
 select * from employee_view;
 -- @session
 
-restore account acc01 from snapshot sp04 to account acc02;
+restore account acc01{snapshot="sp04"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 use test;
@@ -324,7 +324,6 @@ drop snapshot sp04;
 -- view in partition table
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
--- @bvt:issue#16438
 drop table if exists partition01;
 create table partition01 (
                              emp_no      int             not null,
@@ -347,7 +346,6 @@ insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-
 drop view if exists view01;
 create view view01 as select * from partition01;
 select * from view01;
--- @bvt:issue
 -- @session
 
 drop snapshot if exists sp05;
@@ -355,40 +353,32 @@ create snapshot sp05 for cluster;
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
--- @bvt:issue#16438
 insert into partition01 values (9003,'1999-02-20', 'BOB', 'DOCTOR', 'F', '2009-02-20');
 select * from view01;
--- @bvt:issue
 -- @session
 
 drop snapshot if exists sp06;
 create snapshot sp06 for cluster;
-restore account acc01 from snapshot sp05 to account acc02;
+restore account acc01{snapshot="sp05"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 use test;
--- @bvt:issue#16438
 select * from view01;
--- @bvt:issue
 -- @session
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test;
--- @bvt:issue#16438
 drop table partition01;
 select * from view01;
--- @bvt:issue
 -- @session
 
-restore account acc01 from snapshot sp06 to account acc02;
+restore account acc01{snapshot="sp06"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 use test;
--- @bvt:issue#16438
 select * from view01;
 drop view view01;
 drop table partition01;
--- @bvt:issue
 drop database test;
 -- @session
 
@@ -438,7 +428,7 @@ drop database test01;
 select * from test01.EmployeeSalaryRanking;
 -- @session
 
-restore account acc01 from snapshot sp06 to account acc02;
+restore account acc01{snapshot="sp06"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 select * from test01.EmployeeSalaryRanking;
@@ -520,7 +510,7 @@ drop table students;
 select * from StudentCoursesView;
 -- @session
 
-restore account acc01 from snapshot sp07 to account acc02;
+restore account acc01{snapshot="sp07"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 use test02;
@@ -529,7 +519,7 @@ select * from Enrollments;
 select * from StudentCoursesView;
 -- @session
 
-restore account acc01 from snapshot sp07 to account acc02;
+restore account acc01{snapshot="sp07"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 use test02;
@@ -595,7 +585,7 @@ use test02;
 drop database test02;
 -- @session
 
-restore account acc01 from snapshot sp10 to account acc02;
+restore account acc01{snapshot="sp10"} to account acc02;
 -- @session:id=2&user=acc02:test_account&password=111
 use test02;
 show create view employees_view;
@@ -691,7 +681,7 @@ select * from test03.department_view;
 select * from test05.employee_with_department_view;
 -- @session
 
-restore account acc01 from snapshot sp100 to account acc02;
+restore account acc01{snapshot="sp100"} to account acc02;
 
 -- @session:id=2&user=acc02:test_account&password=111
 select * from test04.employee_view;

@@ -1,0 +1,36 @@
+drop database if exists issue_23129;
+create database issue_23129;
+use issue_23129;
+
+create table txn_lock_table (id int primary key, note varchar(20));
+insert into txn_lock_table values (1, 'read');
+
+start transaction;
+lock tables txn_lock_table read;
+select * from txn_lock_table order by id;
+unlock tables;
+commit;
+
+start transaction;
+lock tables txn_lock_table write;
+insert into txn_lock_table values (2, 'write');
+select * from txn_lock_table order by id;
+unlock tables;
+commit;
+
+select * from txn_lock_table order by id;
+
+start transaction;
+insert into txn_lock_table values (3, 'before_lock');
+lock tables txn_lock_table write;
+rollback;
+select * from txn_lock_table order by id;
+
+start transaction;
+lock tables txn_lock_table write;
+insert into txn_lock_table values (4, 'before_unlock');
+unlock tables;
+rollback;
+select * from txn_lock_table order by id;
+
+drop database issue_23129;

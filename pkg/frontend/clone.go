@@ -17,99 +17,272 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+const (
+	injectedError = "injected table clone error"
+)
+
+const (
+	dataBranchLevel_Table    = "table"
+	dataBranchLevel_Database = "database"
+	dataBranchLevel_Account  = "account"
+)
+
+const (
+	insertIntoBranchMetadataSql = `insert into %s.%s values(%d, %d, %d, %d, '%s', false)`
+	scanBranchMetadataSql       = `select * from %s.%s`
+)
+
+type cloneReceipt struct {
+	dstDb  string
+	dstTbl string
+	srcDb  string
+	srcTbl string
+	// this valid only when the snapshot is nil
+	snapshotTS int64
+	snapshot   *plan.Snapshot
+
+	opAccount  uint32
+	toAccount  uint32
+	srcAccount uint32
+
+	// Resolved identifiers used by branch bookkeeping. They are populated by
+	// updateBranchMetaTable so the matching branch-protect snapshot insert can
+	// reuse them without a second catalog round-trip.
+	srcTableID     uint64
+	dstTableID     uint64
+	srcAccountName string
+}
+
+func cloneSnapshotTxnOperator(ses *Session, bh BackgroundExec) TxnOperator {
+	back := bh.(*backExec)
+	if back.backSes.forcePessimisticRC {
+		return back.backSes.GetTxnHandler().GetTxn()
+	}
+	return ses.proc.GetTxnOperator()
+}
+
+func getBackExecutor(
+	ctx context.Context,
+	ses *Session,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+
+	var (
+		err      error
+		bh       BackgroundExec
+		deferred func(error) error
+	)
+
+	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+		bh = ses.GetShareTxnBackgroundExec(ctx, false)
+		bh.ClearExecResultSet()
+		return bh, func(err error) error {
+			bh.Close()
+			return err
+		}, nil
+	}
+
+	bh = ses.GetBackgroundExec(ctx, opts...)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, "begin"); err != nil {
+		bh.Close()
+		return nil, nil, err
+	}
+
+	deferred = func(err2 error) error {
+		err2 = finishTxn(ctx, bh, err2)
+		bh.Close()
+		return err2
+	}
+
+	return bh, deferred, nil
+}
+
+func resolveSnapshot(
+	ses *Session, atTsExpr *tree.AtTimeStamp,
+) (*plan.Snapshot, error) {
+
+	var (
+		err      error
+		snapshot *plan.Snapshot
+	)
+
+	if atTsExpr != nil {
+		builder := plan.NewQueryBuilder(plan2.Query_INSERT, ses.txnCompileCtx, false, true)
+		if snapshot, err = builder.ResolveTsHint(atTsExpr); err != nil {
+			return nil, err
+		}
+	}
+
+	return snapshot, nil
+}
+
+func newMoTimestampHint(snapshotTS int64) *tree.AtTimeStamp {
+	origin := strconv.FormatInt(snapshotTS, 10)
+	return &tree.AtTimeStamp{
+		Type: tree.ATMOTIMESTAMP,
+		Expr: tree.NewNumVal[int64](snapshotTS, origin, false, tree.P_int64),
+	}
+}
+
+func cloneTableRestoreSQL(stmt *tree.CloneTable, snapshotTS int64) string {
+	restoreStmt := *stmt
+	restoreStmt.ToAccountOpt = nil
+	restoreStmt.CopyGrants = false
+	if snapshotTS != 0 {
+		restoreStmt.SrcTable.AtTsExpr = newMoTimestampHint(snapshotTS)
+	}
+	return tree.StringWithOpts(
+		&restoreStmt,
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+}
+
+func cloneTargetTableExists(ctx context.Context, bh BackgroundExec, dbName, tableName string, accountID uint32) (bool, error) {
+	sql, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, accountID, 0)
+	if err != nil {
+		return false, err
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+	return execResultArrayHasData(erArray), nil
+}
+
+func newQualifiedCloneTableName(dbName, tblName string, atTsExpr *tree.AtTimeStamp) tree.TableName {
+	return *tree.NewTableName(
+		tree.Identifier(tblName),
+		tree.ObjectNamePrefix{
+			SchemaName:     tree.Identifier(dbName),
+			ExplicitSchema: true,
+		},
+		atTsExpr,
+	)
+}
 
 func getOpAndToAccountId(
 	reqCtx context.Context,
 	ses *Session,
 	bh BackgroundExec,
-	toAccountName string,
+	toAccountOpt *tree.ToAccountOpt,
 	atTsExpr *tree.AtTimeStamp,
 ) (opAccountId, toAccountId uint32, snapshot *plan2.Snapshot, err error) {
 
-	if atTsExpr != nil {
-		builder := plan.NewQueryBuilder(plan2.Query_INSERT, ses.txnCompileCtx, false, true)
-		if snapshot, err = builder.ResolveTsHint(atTsExpr); err != nil {
-			return 0, 0, nil, err
-		}
+	if snapshot, err = resolveSnapshot(ses, atTsExpr); err != nil {
+		return 0, 0, nil, err
 	}
 
 	if opAccountId, err = defines.GetAccountId(reqCtx); err != nil {
 		return 0, 0, nil, err
 	}
 
-	if len(toAccountName) == 0 {
+	if toAccountOpt == nil {
 		return opAccountId, opAccountId, snapshot, nil
 	}
 
-	if toAccountId, err = getAccountId(reqCtx, bh, toAccountName); err != nil {
+	if toAccountId, err = getAccountId(reqCtx, bh, toAccountOpt.AccountName.String()); err != nil {
 		return 0, 0, nil, err
 	}
 
 	return opAccountId, toAccountId, snapshot, nil
 }
 
+// create table x.y clone r.s {MO_TS, SNAPSHOT}
 // create table x.y clone r.s {MO_TS, SNAPSHOT} to account t
-func handleCloneTableAcrossAccounts(
+func handleCloneTable(
 	execCtx *ExecCtx,
 	ses *Session,
 	stmt *tree.CloneTable,
-) error {
-
-	if len(stmt.ToAccountName.String()) == 0 {
-		panic("expected a non-empty to_account_name")
-	}
+	bh BackgroundExec,
+) (receipt cloneReceipt, err error) {
 
 	var (
-		err    error
 		ctx    context.Context
 		reqCtx = execCtx.reqCtx
 
-		bh BackgroundExec
+		deferred      func(error) error
+		faultInjected bool
 
-		snapshot *plan2.Snapshot
+		snapshot   *plan2.Snapshot
+		snapshotTS int64
 
 		toAccountId   uint32
 		opAccountId   uint32
 		fromAccountId uint32
 	)
 
-	bh = ses.GetBackgroundExec(reqCtx)
-	if err = bh.Exec(reqCtx, "begin"); err != nil {
-		return err
+	if reqCtx.Value(tree.CloneLevelCtxKey{}) == nil {
+		reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
 	}
 
-	defer func() {
-		err = finishTxn(reqCtx, bh, err)
-	}()
+	if bh == nil {
+		// do not open another transaction,
+		// if the clone already executed within a transaction.
+		if bh, deferred, err = getBackExecutor(reqCtx, ses); err != nil {
+			return
+		}
+
+		defer func() {
+			if deferred != nil {
+				//if r := recover(); r != nil {
+				//	err = moerr.ConvertPanicError(reqCtx, r)
+				//}
+				err = deferred(err)
+			}
+		}()
+	}
 
 	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
-		reqCtx, ses, bh, stmt.ToAccountName.String(), stmt.SrcTable.AtTsExpr,
+		reqCtx, ses, bh, stmt.ToAccountOpt, stmt.SrcTable.AtTsExpr,
 	); err != nil {
-		return err
+		return
+	}
+
+	if stmt.CopyGrants && stmt.ToAccountOpt != nil {
+		err = moerr.NewInvalidInputNoCtx("COPY GRANTS cannot be used with TO ACCOUNT")
+		return
 	}
 
 	if snapshot == nil && opAccountId != toAccountId {
-		return moerr.NewInternalErrorNoCtxf("clone table between different accounts need a snapshot")
+		err = moerr.NewInternalErrorNoCtxf("clone table between different accounts need a snapshot")
+		return
+	}
+
+	fromAccountId = opAccountId
+	if snapshot != nil && snapshot.Tenant != nil {
+		fromAccountId = snapshot.Tenant.TenantID
+	}
+	if stmt.CopyGrants && fromAccountId != toAccountId {
+		err = moerr.NewInvalidInputNoCtx("COPY GRANTS cannot be used when cloning across accounts")
+		return
 	}
 
 	if stmt.SrcTable.SchemaName == "" {
-		fromAccountId = opAccountId
-		if snapshot != nil && snapshot.Tenant != nil {
-			fromAccountId = snapshot.Tenant.TenantID
-		}
-
 		// src acc = op acc
 		// src acc = to acc
 		// src != op acc and src != to acc
@@ -119,8 +292,9 @@ func handleCloneTableAcrossAccounts(
 	}
 
 	if stmt.SrcTable.SchemaName == "" {
-		return moerr.NewInternalErrorNoCtxf(
+		err = moerr.NewInternalErrorNoCtxf(
 			"no db selected for the src table %s", stmt.SrcTable.ObjectName)
+		return
 	}
 
 	if stmt.CreateTable.Table.SchemaName == "" {
@@ -130,164 +304,219 @@ func handleCloneTableAcrossAccounts(
 	}
 
 	if stmt.CreateTable.Table.SchemaName == "" {
-		return moerr.NewInternalErrorNoCtxf(
+		err = moerr.NewInternalErrorNoCtxf(
 			"no db selected for the dst table %s", stmt.CreateTable.Table.ObjectName)
+		return
 	}
 
+	oldDefault := bh.(*backExec).backSes.GetDatabaseName()
 	bh.(*backExec).backSes.SetDatabaseName(ses.GetTxnCompileCtx().DefaultDatabase())
+	defer func() {
+		bh.(*backExec).backSes.SetDatabaseName(oldDefault)
+	}()
 
 	if stmt.CreateTable.Table.SchemaName == moCatalog {
-		return moerr.NewInternalErrorNoCtxf("cannot create table under the mo_catalog")
+		err = moerr.NewInternalErrorNoCtxf("cannot clone data into system database")
+		return
 	}
 
 	if opAccountId != sysAccountID && opAccountId != toAccountId {
-		return moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
+		err = moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
+		return
 	}
 
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
 
-	sql := strings.Split(strings.ToLower(execCtx.input.sql), "to")[0]
+	var sql string
+	var dstTableExistedBeforeRestore bool
 
-	if err = bh.ExecRestore(ctx, sql, opAccountId, toAccountId); err != nil {
-		return err
+	if snapshot == nil {
+		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
+			reqCtx, cloneSnapshotTxnOperator(ses, bh),
+		); err != nil {
+			return
+		}
+	}
+	sql = cloneTableRestoreSQL(stmt, snapshotTS)
+
+	if stmt.CopyGrants && stmt.CreateTable.IfNotExists {
+		if dstTableExistedBeforeRestore, err = cloneTargetTableExists(
+			ctx,
+			bh,
+			stmt.CreateTable.Table.SchemaName.String(),
+			stmt.CreateTable.Table.ObjectName.String(),
+			toAccountId,
+		); err != nil {
+			return
+		}
 	}
 
-	return nil
-}
+	if err = bh.ExecRestore(ctx, sql, opAccountId, toAccountId); err != nil {
+		return
+	}
 
-var snapConditionRegex = regexp.MustCompile(`\{[^}]+}`)
+	if stmt.CopyGrants && !dstTableExistedBeforeRestore {
+		copyGrantsSnapshotTS := snapshotTS
+		if snapshot != nil && snapshot.TS != nil {
+			copyGrantsSnapshotTS = snapshot.TS.PhysicalTime
+		}
+		if err = copyTablePrivileges(ctx, ses, bh,
+			stmt.SrcTable.SchemaName.String(), stmt.SrcTable.ObjectName.String(),
+			stmt.CreateTable.Table.SchemaName.String(), stmt.CreateTable.Table.ObjectName.String(),
+			fromAccountId, toAccountId, copyGrantsSnapshotTS,
+		); err != nil {
+			return
+		}
+	}
+
+	receipt.srcDb = stmt.SrcTable.SchemaName.String()
+	receipt.srcTbl = stmt.SrcTable.ObjectName.String()
+	receipt.dstDb = stmt.CreateTable.Table.SchemaName.String()
+	receipt.dstTbl = stmt.CreateTable.Table.ObjectName.String()
+	receipt.snapshot = snapshot
+	receipt.snapshotTS = snapshotTS
+	receipt.toAccount = toAccountId
+	receipt.opAccount = opAccountId
+	receipt.srcAccount = fromAccountId
+
+	if faultInjected, _ = objectio.LogCNCloneFailedInjected(
+		stmt.CreateTable.Table.SchemaName.String(), stmt.CreateTable.Table.ObjectName.String(),
+	); faultInjected {
+		err = moerr.NewInternalErrorNoCtx(injectedError)
+	}
+
+	return
+}
 
 // create database x clone y {MO_TS, SNAPSHOT}
 // create database x clone y {MO_TS, SNAPSHOT} to account t
 func handleCloneDatabase(
 	execCtx *ExecCtx,
 	ses *Session,
+	bh BackgroundExec,
 	stmt *tree.CloneDatabase,
-) error {
+) (receipts []cloneReceipt, err error) {
+	return handleCloneDatabaseWithSource(execCtx, ses, bh, stmt, nil)
+}
+
+func handleCloneDatabaseWithSource(
+	execCtx *ExecCtx,
+	ses *Session,
+	bh BackgroundExec,
+	stmt *tree.CloneDatabase,
+	resolvedSource *cloneDatabaseSource,
+) (receipts []cloneReceipt, err error) {
 
 	var (
-		err    error
 		reqCtx = execCtx.reqCtx
 
-		bh BackgroundExec
+		deferred func(error) error
 
-		toAccountId uint32
-		opAccountId uint32
+		ctx1 context.Context
 
-		ctx1, ctx2 context.Context
-
-		srcTblInfos []*tableInfo
-		snapshot    *plan2.Snapshot
-
-		viewMap = make(map[string]*tableInfo)
-
-		sortedViews   []string
-		sortedFkTbls  []string
-		fkTableMap    map[string]*tableInfo
-		snapCondition string
+		sortedViews []string
 
 		snapshotTS int64
+		source     cloneDatabaseSource
 	)
 
-	bh = ses.GetBackgroundExec(reqCtx)
-	if err = bh.Exec(reqCtx, "begin"); err != nil {
-		return err
-	}
-
+	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
 	defer func() {
-		err = finishTxn(reqCtx, bh, err)
+		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
 	}()
 
-	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
-		reqCtx, ses, bh, stmt.ToAccountName.String(), stmt.AtTsExpr,
-	); err != nil {
-		return err
+	if reqCtx.Value(tree.CloneLevelCtxKey{}) == nil {
+		reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase)
 	}
 
-	if snapshot == nil && opAccountId != toAccountId {
-		return moerr.NewInternalErrorNoCtxf("clone database between different accounts need a snapshot")
-	}
-
-	if opAccountId != sysAccountID && opAccountId != toAccountId {
-		return moerr.NewInternalError(reqCtx, "only sys can clone table to another account")
-	}
-
-	ctx1 = defines.AttachAccountId(reqCtx, toAccountId)
-	if err = bh.Exec(ctx1,
-		fmt.Sprintf("create database `%s`", stmt.DstDatabase),
-	); err != nil {
-		return err
-	}
-
-	if srcTblInfos, err = getTableInfos(
-		reqCtx, ses.GetService(), bh, snapshot,
-		stmt.SrcDatabase.String(), "",
-	); err != nil {
-		return err
-	}
-
-	snapCondition = snapConditionRegex.FindString(execCtx.input.sql)
-
-	if sortedFkTbls, err = fkTablesTopoSort(
-		reqCtx, bh, snapshot, stmt.SrcDatabase.String(), "",
-	); err != nil {
-		return err
-	}
-
-	if fkTableMap, err = getTableInfoMap(
-		reqCtx, ses.GetService(), bh, snapshot, stmt.SrcDatabase.String(), "", sortedFkTbls,
-	); err != nil {
-		return err
-	}
-
-	// consider the following example:
-	// (within a session)
-	//   ...
-	// insert into t1 values (1) ---> commit ts (P2-L3)
-	// insert into t1 values (2) ---> commit ts (P2-L3)
-	// create table t2 clone t1 ---> the read snapshot ts is P2.
-	//
-	// limited by the format for the snapshot read TS, the logic TS is truncated,
-	// so in this example, the clone cannot read the newly inserted data.
-	//
-	// so we try to increase the txn physical ts here to make sure the snapshot TS
-	// the clone will get is greater than P2.
-	if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
-		reqCtx, ses.proc.GetTxnOperator(),
-	); err != nil {
-		return err
-	}
-
-	ctx2 = defines.AttachAccountId(reqCtx, toAccountId)
-
-	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
-		sql := fmt.Sprintf(
-			"create table `%s`.`%s` clone `%s`.`%s`",
-			dstDb, dstTbl, srcDb, srcTbl,
-		)
-
-		if snapCondition != "" {
-			sql = sql + " " + snapCondition
-		} else {
-			sql = sql + fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	if bh == nil {
+		if bh, deferred, err = getBackExecutor(reqCtx, ses); err != nil {
+			return
 		}
 
-		if err = bh.ExecRestore(ctx2, sql, opAccountId, toAccountId); err != nil {
+		defer func() {
+			if deferred != nil {
+				err = deferred(err)
+			}
+		}()
+	}
+
+	if resolvedSource != nil {
+		source = *resolvedSource
+	} else {
+		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt); err != nil {
+			return
+		}
+	}
+
+	ctx1 = defines.AttachAccountId(reqCtx, source.toAccountId)
+	if err = bh.Exec(ctx1,
+		fmt.Sprintf("create database %s", quoteIdentifierForSQL(stmt.DstDatabase.String())),
+	); err != nil {
+		return
+	}
+
+	if stmt.AtTsExpr == nil {
+		// consider the following example:
+		// (within a session)
+		//   ...
+		// insert into t1 values (1) ---> commit ts (P2-L3)
+		// insert into t1 values (2) ---> commit ts (P2-L3)
+		// create table t2 clone t1 ---> the read snapshot ts is P2.
+		//
+		// limited by the format for the snapshot read TS, the logic TS is truncated,
+		// so in this example, the clone cannot read the newly inserted data.
+		//
+		// so we try to increase the txn physical ts here to make sure the snapshot TS
+		// the clone will get is greater than P2.
+		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
+			reqCtx, cloneSnapshotTxnOperator(ses, bh),
+		); err != nil {
+			return
+		}
+	}
+
+	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
+		srcTable := newQualifiedCloneTableName(srcDb, srcTbl, stmt.AtTsExpr)
+		if stmt.AtTsExpr == nil && snapshotTS != 0 {
+			srcTable.AtTsExpr = newMoTimestampHint(snapshotTS)
+		}
+		dstTable := newQualifiedCloneTableName(dstDb, dstTbl, nil)
+		cloneStmt := &tree.CloneTable{
+			SrcTable: srcTable,
+			CreateTable: tree.CreateTable{
+				Table:         dstTable,
+				LikeTableName: srcTable,
+				IsAsLike:      true,
+			},
+			ToAccountOpt: stmt.ToAccountOpt,
+		}
+
+		var (
+			receipt     cloneReceipt
+			tempExecCtx = &ExecCtx{
+				reqCtx: reqCtx,
+			}
+		)
+
+		if receipt, err = handleCloneTable(
+			tempExecCtx, ses, cloneStmt, bh,
+		); err != nil {
 			return err
 		}
 
+		receipts = append(receipts, receipt)
 		return nil
 	}
 
-	for _, srcTbl := range srcTblInfos {
+	for _, srcTbl := range source.srcTblInfos {
 
 		key := genKey(srcTbl.dbName, srcTbl.tblName)
-		if _, ok := fkTableMap[key]; ok {
+		if _, ok := source.fkTableMap[key]; ok {
 			continue
 		}
 
 		if srcTbl.typ == view {
-			viewMap[key] = srcTbl
 			continue
 		}
 
@@ -295,55 +524,98 @@ func handleCloneDatabase(
 			stmt.DstDatabase.String(), srcTbl.tblName,
 			stmt.SrcDatabase.String(), srcTbl.tblName,
 		); err != nil {
-			return err
+			return
 		}
 	}
 
 	// clone foreign key related table
-	for _, key := range sortedFkTbls {
-		if tblInfo := fkTableMap[key]; tblInfo != nil {
+	for _, key := range source.sortedFkTbls {
+		if tblInfo := source.fkTableMap[key]; tblInfo != nil {
 			if err = cloneTable(
 				stmt.DstDatabase.String(), tblInfo.tblName,
 				stmt.SrcDatabase.String(), tblInfo.tblName,
 			); err != nil {
-				return err
+				return
 			}
 		}
 	}
 
 	// clone view table
-	if len(viewMap) != 0 {
-		fromAccount := opAccountId
-		if snapshot != nil && snapshot.Tenant != nil {
-			fromAccount = snapshot.Tenant.TenantID
+	if len(source.viewMap) != 0 {
+		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, snapshotTS)
+		fromAccount := source.opAccountId
+		if viewSnapshot != nil && viewSnapshot.Tenant != nil {
+			fromAccount = viewSnapshot.Tenant.TenantID
 		}
 
 		if sortedViews, err = sortedViewInfos(
-			reqCtx, ses, bh, "", snapshot, viewMap, fromAccount, toAccountId,
+			reqCtx, ses, bh, "", viewSnapshot, source.viewMap, fromAccount, source.toAccountId,
 		); err != nil {
-			return err
+			return
 		}
 
-		for i := range sortedViews {
-			sortedViews[i] = strings.ReplaceAll(
-				sortedViews[i], stmt.SrcDatabase.String(), stmt.DstDatabase.String())
-		}
+		rewrittenViewMap, rewrittenViews := rewriteCloneViewInfos(
+			source.viewMap, sortedViews, source.srcResolveDBName, stmt.DstDatabase.String(),
+		)
 
-		newViewMap := make(map[string]*tableInfo)
-		for key, info := range viewMap {
-			key = strings.ReplaceAll(key, stmt.SrcDatabase.String(), stmt.DstDatabase.String())
-			info.createSql = strings.ReplaceAll(info.createSql, stmt.SrcDatabase.String(), stmt.DstDatabase.String())
-			info.dbName = stmt.DstDatabase.String()
-
-			newViewMap[key] = info
-		}
-
-		if err = restoreViews(reqCtx, ses, bh, "", newViewMap, toAccountId, sortedViews); err != nil {
-			return err
+		if err = restoreViews(reqCtx, ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
+			return
 		}
 	}
 
-	return nil
+	return
+}
+
+func prepareCloneViewSnapshot(snapshot *plan.Snapshot, snapshotTS int64) *plan.Snapshot {
+	if plan.IsSnapshotValid(snapshot) || snapshotTS == 0 {
+		return snapshot
+	}
+	if snapshot == nil {
+		return &plan.Snapshot{
+			TS: &timestamp.Timestamp{PhysicalTime: snapshotTS},
+		}
+	}
+
+	cloned := *snapshot
+	cloned.TS = &timestamp.Timestamp{PhysicalTime: snapshotTS}
+	return &cloned
+}
+
+func rewriteCloneViewInfos(
+	viewMap map[string]*tableInfo,
+	sortedViews []string,
+	srcDBName string,
+	dstDBName string,
+) (map[string]*tableInfo, []string) {
+	rewrittenViews := make([]string, 0, len(sortedViews))
+	for _, key := range sortedViews {
+		dbName, tblName := splitKey(key)
+		if tblName == "" {
+			rewrittenViews = append(rewrittenViews, strings.ReplaceAll(key, srcDBName, dstDBName))
+			continue
+		}
+		if dbName == srcDBName {
+			key = genKey(dstDBName, tblName)
+		}
+		rewrittenViews = append(rewrittenViews, key)
+	}
+
+	rewrittenViewMap := make(map[string]*tableInfo, len(viewMap))
+	for key, info := range viewMap {
+		dbName, tblName := splitKey(key)
+		if tblName == "" {
+			key = strings.ReplaceAll(key, srcDBName, dstDBName)
+		} else if dbName == srcDBName {
+			key = genKey(dstDBName, tblName)
+		}
+
+		clonedInfo := *info
+		clonedInfo.dbName = dstDBName
+		clonedInfo.createSql = strings.ReplaceAll(info.createSql, srcDBName, dstDBName)
+		rewrittenViewMap[key] = &clonedInfo
+	}
+
+	return rewrittenViewMap, rewrittenViews
 }
 
 func tryToIncreaseTxnPhysicalTS(
@@ -374,4 +646,93 @@ func tryToIncreaseTxnPhysicalTS(
 	updatedPhysical -= int64(time.Nanosecond)
 
 	return updatedPhysical, nil
+}
+
+func updateBranchMetaTable(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	receipt *cloneReceipt,
+) (err error) {
+
+	var (
+		srcTblDef  *plan.TableDef
+		dstTblDef  *plan.TableDef
+		dstDB      engine.Database
+		dstRel     engine.Relation
+		cloneTxnOp TxnOperator
+		level      string
+	)
+
+	switch ctx.Value(tree.CloneLevelCtxKey{}).(tree.CloneLevelType) {
+	case tree.NormalCloneLevelTable:
+		level = dataBranchLevel_Table
+	case tree.NormalCloneLevelDatabase:
+		level = dataBranchLevel_Database
+	case tree.NormalCloneLevelAccount:
+		level = dataBranchLevel_Account
+	default:
+		// we do not record the branch metadata for restore
+		return nil
+	}
+
+	srcCtx := defines.AttachAccountId(ctx, receipt.srcAccount)
+	tcc := ses.GetTxnCompileCtx()
+	origCtx := tcc.GetContext()
+	tcc.SetContext(srcCtx)
+	defer tcc.SetContext(origCtx)
+
+	if _, srcTblDef, err = tcc.Resolve(receipt.srcDb, receipt.srcTbl, nil); err != nil {
+		return err
+	}
+	if srcTblDef == nil {
+		return moerr.NewNoSuchTable(srcCtx, receipt.srcDb, receipt.srcTbl)
+	}
+
+	dstCtx := defines.AttachAccountId(ctx, receipt.toAccount)
+
+	// the back session did the clone operation,
+	// we need it's txnOp to read the uncommit table info.
+	cloneTxnOp = bh.(*backExec).backSes.GetTxnHandler().GetTxn()
+	if dstDB, err = ses.proc.GetSessionInfo().StorageEngine.Database(
+		dstCtx, receipt.dstDb, cloneTxnOp,
+	); err != nil {
+		return err
+	}
+
+	if dstRel, err = dstDB.Relation(dstCtx, receipt.dstTbl, nil); err != nil {
+		return err
+	}
+	dstTblDef = dstRel.GetTableDef(dstCtx)
+
+	if receipt.snapshot != nil {
+		receipt.snapshotTS = receipt.snapshot.TS.PhysicalTime
+	}
+
+	// Persist the resolved ids so the branch-protect snapshot insert (and any
+	// other downstream bookkeeping) can avoid re-resolving them.
+	receipt.srcTableID = srcTblDef.TblId
+	receipt.dstTableID = dstTblDef.TblId
+
+	// write branch info into branch_metadata table
+	updateMetadataSql := fmt.Sprintf(
+		insertIntoBranchMetadataSql,
+		catalog.MO_CATALOG,
+		catalog.MO_BRANCH_METADATA,
+		dstTblDef.TblId,
+		receipt.snapshotTS,
+		srcTblDef.TblId,
+		receipt.opAccount,
+		level,
+	)
+
+	tempCtx := ctx
+	if receipt.opAccount != sysAccountID {
+		tempCtx = defines.AttachAccountId(tempCtx, sysAccountID)
+	}
+	if err = bh.Exec(tempCtx, updateMetadataSql); err != nil {
+		return err
+	}
+
+	return nil
 }

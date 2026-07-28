@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.uber.org/zap"
@@ -212,6 +213,14 @@ func (mp *MysqlProtocolImpl) GetTcpConnection() *Conn {
 	return mp.tcpConn
 }
 
+// Disconnect closes the underlying network connection to forcefully disconnect the client.
+func (mp *MysqlProtocolImpl) Disconnect() error {
+	if mp.tcpConn != nil {
+		return mp.tcpConn.Disconnect()
+	}
+	return nil
+}
+
 func (mp *MysqlProtocolImpl) Peer() string {
 	tcp := mp.GetTcpConnection()
 	if tcp == nil {
@@ -241,15 +250,15 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 		if err == nil {
 			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 		}
-		switch myerr := err.(type) {
-		case *moerr.Error:
+		var myerr *moerr.Error
+		if errors.As(err, &myerr) {
 			var code uint16
 			if myerr.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
 				code = myerr.MySQLCode()
 			} else {
 				code = myerr.ErrorCode()
 			}
-			errMsg := myerr.Error()
+			errMsg := err.Error()
 			if attachAbort != "" {
 				errMsg = fmt.Sprintf("%s\n%s", myerr.Error(), attachAbort)
 			}

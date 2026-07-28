@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -59,6 +60,10 @@ func verifyLightPrivilege(ses *Session,
 		if len(dbName) == 0 {
 			dbName = ses.GetDatabaseName()
 		}
+		if !canWriteProtectedDatabase(ses) && isProtectedDatabase(ses, dbName) {
+			return false
+		}
+		dbName = strings.ToLower(dbName)
 		if ok2 := isBannedDatabase(dbName); ok2 {
 			if isClusterTable {
 				ok = verifyAccountCanOperateClusterTable(ses.GetTenantInfo(), dbName, clusterTableOperation)
@@ -170,6 +175,10 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 							// }
 							yes = false
 						} else {
+							if len(mi.originViews) > 0 || mi.directView != "" {
+								// View chains require metadata checks; skip cache-only evaluation.
+								return false, nil
+							}
 							tempEntry := privilegeEntriesMap[mi.privilegeTyp]
 							tempEntry.databaseName = mi.dbName
 							tempEntry.tableName = mi.tableName
@@ -180,9 +189,13 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 								return false, err
 							}
 
+							writeDirectly := priv.writeDatabaseAndTableDirectly
+							if (tempEntry.objType == objectTypeTable || tempEntry.objType == objectTypeView) && mi.privilegeTyp == PrivilegeTypeSelect {
+								writeDirectly = false
+							}
 							yes2 = verifyLightPrivilege(ses,
 								tempEntry.databaseName,
-								priv.writeDatabaseAndTableDirectly,
+								writeDirectly,
 								mi.isClusterTable,
 								mi.clusterTableOperation)
 
@@ -250,22 +263,222 @@ func hasMoCtrl(p *plan2.Plan) bool {
 	return false
 }
 
-func isTargetMergeSettings(p *plan2.Plan) bool {
-	if p != nil && p.GetQuery() != nil {
-		q := p.GetQuery()
-		for _, node := range q.Nodes {
-			if node != nil && node.GetTableDef() != nil {
-				d := node.GetTableDef()
-				if d.DbName == catalog.MO_CATALOG && d.Name == catalog.MO_MERGE_SETTINGS {
-					return true
+// isTargetSysWhiteList checks if ALL DML target tables are in the whitelist.
+// Returns true only when all target tables are in the whitelist.
+// Returns false if any target table is not in the whitelist, or if there are no DML target tables.
+func isTargetSysWhiteList(p *plan2.Plan) bool {
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	q := p.GetQuery()
+
+	isInWhiteList := func(dbname, name string) bool {
+		return dbname == catalog.MO_CATALOG && sysWhiteListTables[name] > 0
+	}
+
+	foundTarget := false
+	for _, node := range q.Nodes {
+		if node == nil {
+			continue
+		}
+		// Only check actual DML target tables, not tables that are just being read
+		switch node.NodeType {
+		case plan.Node_MULTI_UPDATE:
+			// For UPDATE/DELETE via MULTI_UPDATE, check all target tables in UpdateCtxList
+			for _, updateCtx := range node.UpdateCtxList {
+				if ref := updateCtx.ObjRef; ref != nil {
+					foundTarget = true
+					if !isInWhiteList(ref.SchemaName, ref.ObjName) {
+						return false
+					}
+				}
+			}
+		case plan.Node_DELETE:
+			// For DELETE, check the target table in DeleteCtx
+			if node.DeleteCtx != nil && node.DeleteCtx.Ref != nil {
+				ref := node.DeleteCtx.Ref
+				foundTarget = true
+				if !isInWhiteList(ref.SchemaName, ref.ObjName) {
+					return false
+				}
+			}
+		case plan.Node_INSERT:
+			// For INSERT, check the target table in InsertCtx
+			if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
+				ref := node.InsertCtx.Ref
+				foundTarget = true
+				if !isInWhiteList(ref.SchemaName, ref.ObjName) {
+					return false
 				}
 			}
 		}
 	}
-	return false
+	// Return true only if we found at least one target table and all are in whitelist
+	return foundTarget
 }
 
 // verifyAccountCanExecMoCtrl only sys account and moadmin role.
 func verifyAccountCanExecMoCtrl(account *TenantInfo) bool {
 	return account.IsSysTenant() && account.IsMoAdminRole()
+}
+
+func canWriteProtectedDatabase(ses *Session) bool {
+	if ses == nil || ses.GetTenantInfo() == nil {
+		return false
+	}
+	tenant := ses.GetTenantInfo()
+	return tenant.IsAccountAdminRole() || tenant.IsMoAdminRole()
+}
+
+func normalizeProtectedDatabaseName(ses *Session, dbName string) string {
+	dbName = strings.TrimSpace(dbName)
+	if protectedDatabaseNamesAreLowerCased(ses) {
+		dbName = strings.ToLower(dbName)
+	}
+	return dbName
+}
+
+func resolveProtectedDatabaseRuntimeTarget(ses *Session, dbName string) string {
+	dbName = strings.TrimSpace(dbName)
+	if dbName == "" && ses != nil {
+		dbName = ses.GetDatabaseName()
+	}
+	if protectedDatabaseNamesAreLowerCased(ses) {
+		dbName = strings.ToLower(dbName)
+	}
+	return dbName
+}
+
+func protectedDatabaseNamesAreLowerCased(ses *Session) bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		return true
+	}
+	lowerCaseTableNames, ok := value.(int64)
+	return ok && lowerCaseTableNames != 0
+}
+
+func protectedDatabaseSetFromString(ses *Session, raw string) map[string]struct{} {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	protected := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		dbName := normalizeProtectedDatabaseName(ses, part)
+		if dbName != "" {
+			protected[dbName] = struct{}{}
+		}
+	}
+	if len(protected) == 0 {
+		return nil
+	}
+	return protected
+}
+
+func getProtectedDatabaseSet(ses *Session) map[string]struct{} {
+	if ses == nil {
+		return nil
+	}
+	value, err := ses.GetGlobalSysVar(ProtectedDatabases)
+	if err != nil {
+		return nil
+	}
+	raw, ok := value.(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	return protectedDatabaseSetFromString(ses, raw)
+}
+
+func isProtectedDatabase(ses *Session, dbName string) bool {
+	dbName = resolveProtectedDatabaseRuntimeTarget(ses, dbName)
+	if dbName == "" {
+		return false
+	}
+	_, ok := getProtectedDatabaseSet(ses)[dbName]
+	return ok
+}
+
+func checkProtectedDatabaseWrite(ctx context.Context, ses *Session, dbNames ...string) bool {
+	if len(dbNames) == 0 {
+		return true
+	}
+	if ses == nil || !ses.GetFromRealUser() {
+		return true
+	}
+	if canWriteProtectedDatabase(ses) {
+		return true
+	}
+
+	pDbs := getProtectedDatabaseSet(ses)
+	if len(pDbs) == 0 {
+		return true
+	}
+
+	return checkProtectedDatabaseWriteWithSet(ctx, ses, pDbs, dbNames...)
+}
+
+func checkProtectedDatabaseWriteWithSet(ctx context.Context, ses *Session, protectedDatabases map[string]struct{}, dbNames ...string) bool {
+	if len(protectedDatabases) == 0 || len(dbNames) == 0 {
+		return true
+	}
+	for _, dbName := range dbNames {
+		dbName = resolveProtectedDatabaseRuntimeTarget(ses, dbName)
+		if dbName == "" {
+			continue
+		}
+		if _, ok := protectedDatabases[dbName]; ok {
+			return false
+		}
+	}
+	return true
+}
+
+func checkProtectedDatabaseWriteByPrivilege(ctx context.Context, ses *Session, priv *privilege) bool {
+	if ses == nil || !ses.GetFromRealUser() {
+		return true
+	}
+	if priv == nil || len(priv.writeDatabaseTargets) == 0 {
+		return true
+	}
+	if canWriteProtectedDatabase(ses) {
+		return true
+	}
+	protectedDatabases := getProtectedDatabaseSet(ses)
+	if len(protectedDatabases) == 0 {
+		return true
+	}
+	return checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, priv.writeDatabaseTargets...)
+}
+
+func privilegeTipWritesDatabase(tip privilegeTips) bool {
+	switch tip.typ {
+	case PrivilegeTypeSelect, PrivilegeTypeValues:
+		return false
+	default:
+		return true
+	}
+}
+
+func checkProtectedDatabaseWriteByPrivilegeTips(ctx context.Context, ses *Session, tips privilegeTipsArray) bool {
+	if ses == nil || !ses.GetFromRealUser() {
+		return true
+	}
+	if canWriteProtectedDatabase(ses) {
+		return true
+	}
+	protectedDatabases := getProtectedDatabaseSet(ses)
+	if len(protectedDatabases) == 0 {
+		return true
+	}
+	dbNames := make([]string, 0, len(tips))
+	for _, tip := range tips {
+		if privilegeTipWritesDatabase(tip) {
+			dbNames = append(dbNames, tip.databaseName)
+		}
+	}
+	return checkProtectedDatabaseWriteWithSet(ctx, ses, protectedDatabases, dbNames...)
 }

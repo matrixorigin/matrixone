@@ -28,11 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
@@ -56,7 +57,7 @@ type mergeObjectsTask struct {
 	totalMergedBlkCnt int
 	createdBObjs      []*catalog.ObjectEntry
 	commitEntry       *api.MergeCommitEntry
-	transferMaps      api.TransferMaps
+	transferTable     *mergesort.TransferTable
 	tableEntry        *catalog.TableEntry
 	did, tid          uint64
 	isTombstone       bool
@@ -77,7 +78,8 @@ type mergeObjectsTask struct {
 	segmentID *objectio.Segmentid
 	num       uint16
 
-	arena *objectio.WriteArena
+	arena      *objectio.WriteArena
+	tnDataBats []*containers.Batch // cached TN batch wrappers, one per merged object
 }
 
 func NewMergeObjectsTask(
@@ -112,6 +114,7 @@ func NewMergeObjectsTask(
 		isTombstone:      isTombstone,
 		nMergedBlk:       make([]int, len(mergedObjs)),
 		blkCnt:           make([]int, len(mergedObjs)),
+		tnDataBats:       make([]*containers.Batch, len(mergedObjs)),
 		targetObjSize:    targetObjSize,
 		createAt:         time.Now(),
 		segmentID:        objectio.NewSegmentid(),
@@ -152,14 +155,12 @@ func NewMergeObjectsTask(
 		task.idxs = append(task.idxs, def.Idx)
 		task.attrs = append(task.attrs, def.Name)
 	}
-	if isTombstone {
-		task.idxs = append(task.idxs, objectio.SEQNUM_COMMITTS)
-		task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
-	}
+	task.idxs = append(task.idxs, objectio.SEQNUM_COMMITTS)
+	task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 
-	if task.GetTotalSize() > 300*common.Const1MBytes {
-		task.arena = objectio.NewArena(300 * common.Const1MBytes)
+	if task.targetObjSize > 0 {
+		task.arena = objectio.GetArena(objectio.ArenaLarge)
 	}
 	return
 }
@@ -239,38 +240,33 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	var err error
 	var data *containers.Batch
 	var retBatch *batch.Batch
-	var releaseF func()
+
+	// Zero-copy mode: always get a fresh TN batch so vectors wrap
+	// fileservice buffers directly (no CloneVector allocation).
+	ctx = tables.WithScanNoCopy(ctx)
 
 	if reuseBatch != nil {
-		if reuseBatch.RowCount() != 0 {
-			panic("reuseBatch is not empty")
-		}
-		data = containers.ToTNBatch(reuseBatch, common.MergeAllocator)
+		retBatch = reuseBatch
 	}
 
-	if task.nMergedBlk[objIdx] == task.blkCnt[objIdx]-1 {
-		releaseF = func() {
-			if data != nil {
-				data.Close()
-			}
-		}
-	} else {
-		releaseF = func() {
-			if retBatch != nil {
-				retBatch.CleanOnlyData()
-			}
+	// releaseF frees the current TN batch's IOVector buffers and closes
+	// its vectors. The merger calls this before loading the next block.
+	// Close() calls DataRelease automatically.
+	releaseF := func() {
+		if d := task.tnDataBats[objIdx]; d != nil {
+			d.Close()
+			task.tnDataBats[objIdx] = nil
 		}
 	}
 
 	defer func() {
 		if err != nil {
-			if data != nil {
-				data.Close()
-			}
+			releaseF()
 		}
 	}()
 
 	obj := task.mergedObjsHandle[objIdx]
+	ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipAllCache)
 	if task.isTombstone {
 		err = obj.Scan(
 			ctx,
@@ -291,6 +287,9 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// Cache the TN batch so releaseF can free it.
+	task.tnDataBats[objIdx] = data
+
 	if task.isTombstone {
 		err = data.Vecs[0].Foreach(func(v any, isNull bool, row int) error {
 			rowID := v.(types.Rowid)
@@ -314,7 +313,10 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	}
 	task.nMergedBlk[objIdx]++
 
-	retBatch = batch.New(task.attrs)
+	if retBatch == nil {
+		retBatch = batch.New(task.attrs)
+	}
+	// Re-wire CN batch vectors to the new TN batch's downstream vectors.
 	for i, idx := range task.idxs {
 		if idx == objectio.SEQNUM_COMMITTS {
 			id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
@@ -323,6 +325,18 @@ func (task *mergeObjectsTask) LoadNextBatch(
 			retBatch.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
 		}
 	}
+
+	// RelLogicalID COMPAT
+	if task.tid == 2 && !task.isTombstone {
+		// reuse the rel_id column
+		logical_idx := slices.Index(task.attrs, pkgcatalog.SystemRelAttr_LogicalID)
+		if data.Vecs[logical_idx].GetDownstreamVector().IsConstNull() {
+			tid_idx := slices.Index(task.attrs, pkgcatalog.SystemRelAttr_ID)
+			retBatch.Vecs[logical_idx] = data.Vecs[tid_idx].GetDownstreamVector()
+			logutil.Info("LIDX-DEBUG vector sub", zap.Int("logical_id", data.Length()))
+		}
+	}
+
 	retBatch.SetRowCount(data.Length())
 	return retBatch, data.Deletes, releaseF, nil
 }
@@ -334,15 +348,8 @@ func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
 	return task.commitEntry
 }
 
-func (task *mergeObjectsTask) InitTransferMaps(blkCnt int) {
-	task.transferMaps = make(api.TransferMaps, blkCnt)
-	for i := range task.transferMaps {
-		task.transferMaps[i] = make(api.TransferMap)
-	}
-}
-
-func (task *mergeObjectsTask) GetTransferMaps() api.TransferMaps {
-	return task.transferMaps
+func (task *mergeObjectsTask) SetTransferTable(t *mergesort.TransferTable) {
+	task.transferTable = t
 }
 
 func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
@@ -369,9 +376,7 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 		}
 		seqnums = append(seqnums, def.SeqNum)
 	}
-	if task.isTombstone {
-		seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
-	}
+	seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
 	sortkeyIsPK := false
 	sortkeyPos := -1
 
@@ -395,12 +400,20 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 		task.rt.Fs,
 		task.arena,
 	)
+	if !task.isTombstone && task.schema.HasFakePK() {
+		writer.SetFakePK(uint16(task.schema.GetPrimaryKey().Idx))
+	}
 	task.num++
 	return writer
 }
 
 func (task *mergeObjectsTask) DoTransfer() bool {
 	return !task.isTombstone && !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
+}
+
+func (task *mergeObjectsTask) HasBigDelEvent() bool {
+	startTS := task.txn.GetStartTS()
+	return task.rt.BigDeleteHinter.HasBigDelAfter(task.tid, &startTS)
 }
 
 func (task *mergeObjectsTask) Name() string {
@@ -410,11 +423,50 @@ func (task *mergeObjectsTask) Name() string {
 func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	phaseDesc := ""
 	defer func() {
+		if task.arena != nil {
+			task.arena.Reset()
+			objectio.PutArena(task.arena)
+			task.arena = nil
+		}
+		// Close any TN batches that weren't released by the last-block releaseF.
+		// On early exit (error/cancel), non-last-block releaseF only calls
+		// CleanOnlyData on the CN batch but doesn't close the TN batch,
+		// leaking its mpool memory.
+		for i, bat := range task.tnDataBats {
+			if bat != nil {
+				bat.Close()
+				task.tnDataBats[i] = nil
+			}
+		}
 		if err != nil {
 			logutil.Error("[MERGE-ERR]",
 				zap.String("task", task.Name()),
 				zap.String("phase", phaseDesc),
 				zap.Error(err),
+			)
+			if task.commitEntry == nil || len(task.commitEntry.CreatedObjs) == 0 {
+				return
+			}
+			fs := task.rt.Fs
+			// for io task, dispatch by round robin, scope can be nil
+			task.rt.Scheduler.ScheduleScopedFn(
+				&tasks.Context{},
+				tasks.IOTask, nil,
+				func() error {
+					// TODO: variable as timeout
+					ctx, cancel := context.WithTimeoutCause(
+						context.Background(),
+						2*time.Minute,
+						moerr.CausePrepareRollback2,
+					)
+
+					defer cancel()
+					for _, obj := range task.commitEntry.CreatedObjs {
+						stat := objectio.ObjectStats(obj)
+						_ = fs.Delete(ctx, stat.ObjectName().String())
+					}
+					return nil
+				},
 			)
 		}
 	}()
@@ -432,7 +484,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	if task.schema.HasSortKey() {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
-	if task.rt.LockMergeService.IsLockedByUser(task.tid, task.schema.Name) {
+	if task.HasBigDelEvent() {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
 	}
 	phaseDesc = "1-DoMergeAndWrite"
@@ -446,7 +498,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		task.txn,
 		task.Name(),
 		task.commitEntry,
-		task.transferMaps,
+		task.transferTable,
 		task.rt,
 		task.isTombstone,
 	); err != nil {
@@ -459,9 +511,6 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		v2.TaskDataMergeDurationHistogram.Observe(time.Since(begin).Seconds())
 	}
 
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Object.MergeBlocks.Add(1)
-	})
 	return nil
 }
 
@@ -470,7 +519,7 @@ func HandleMergeEntryInTxn(
 	txn txnif.AsyncTxn,
 	taskName string,
 	entry *api.MergeCommitEntry,
-	booking api.TransferMaps,
+	transferTable *mergesort.TransferTable,
 	rt *dbutils.Runtime,
 	isTombstone bool,
 ) ([]*catalog.ObjectEntry, error) {
@@ -544,7 +593,7 @@ func HandleMergeEntryInTxn(
 		rel,
 		mergedObjs,
 		createdObjs,
-		booking,
+		transferTable,
 		isTombstone,
 		rt,
 	)

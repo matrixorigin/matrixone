@@ -16,9 +16,8 @@ package taskservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -29,6 +28,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
+
+type addAsyncErrStorage struct {
+	TaskStorage
+	err error
+}
+
+func (s *addAsyncErrStorage) AddAsyncTask(context.Context, ...task.AsyncTask) (int, error) {
+	return 0, s.err
+}
 
 func TestCreateAsyncTask(t *testing.T) {
 	store := NewMemTaskStorage()
@@ -89,6 +97,51 @@ func TestCreateBatch(t *testing.T) {
 	}
 }
 
+func TestCreateAsyncTaskReturnsStorageError(t *testing.T) {
+	base := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), &addAsyncErrStorage{
+		TaskStorage: base,
+		err:         errors.New("inject add async failure"),
+	})
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := s.CreateAsyncTask(ctx, newTestTaskMetadata("err-async"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "inject add async failure")
+}
+
+func TestCreateBatchReturnsStorageError(t *testing.T) {
+	base := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), &addAsyncErrStorage{
+		TaskStorage: base,
+		err:         errors.New("inject add batch failure"),
+	})
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := s.CreateBatch(ctx, []task.TaskMetadata{newTestTaskMetadata("err-batch")})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "inject add batch failure")
+}
+
+func TestCreateCronTaskWithInvalidExpr(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	err := s.CreateCronTask(context.Background(), newTestTaskMetadata("invalid-cron"), "not-a-cron")
+	assert.Error(t, err)
+}
+
 func TestAllocate(t *testing.T) {
 	store := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), store)
@@ -140,30 +193,52 @@ func TestReAllocate(t *testing.T) {
 	assert.Equal(t, uint32(2), v.Epoch)
 }
 
-func allocateWithNotExistTask(t *testing.T) {
+func TestAllocateWithNotExistTask(t *testing.T) {
 	store := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
+
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
-	_ = s.Allocate(ctx, task.AsyncTask{ID: 1}, "r1")
+
+	// Try to allocate a task that doesn't exist
+	err := s.Allocate(ctx, task.AsyncTask{ID: 1, Metadata: task.TaskMetadata{ID: "non-existent"}}, "r1")
+	// Should return ErrInvalidTask instead of Fatal
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
-func TestAllocateWithNotExistTask(t *testing.T) {
-	if os.Getenv("RUN_TEST") == "1" {
-		allocateWithNotExistTask(t)
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run=TestAllocateWithNotExistTask")
-	cmd.Env = append(os.Environ(), "RUN_TEST=1")
-	err := cmd.Run()
-	// check Fatal is called
-	if e, ok := err.(*exec.ExitError); ok && !e.Success() {
-		return
-	}
-	t.Fatalf("process ran with err %v, want exit status 1", err)
+// TestAllocateWithTaskDeletedDuringAllocation simulates the race condition where
+// a task is deleted (completed and truncated) between queryTasks and Allocate.
+// This is the scenario that caused the FATAL error in production.
+func TestAllocateWithTaskDeletedDuringAllocation(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	// Create a task
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
+
+	// Simulate the task being deleted before Allocate is called
+	// This can happen when:
+	// 1. Scheduler queries Created tasks
+	// 2. CN node picks up and completes the task
+	// 3. Another scheduler cycle truncates completed tasks
+	// 4. Original scheduler tries to allocate the now-deleted task
+	_, err := store.DeleteAsyncTask(ctx, WithTaskIDCond(EQ, v.ID))
+	assert.NoError(t, err)
+
+	// Now try to allocate the deleted task
+	err = s.Allocate(ctx, v, "r1")
+	// Should return ErrInvalidTask instead of causing Fatal
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
 func TestAllocateWithInvalidEpoch(t *testing.T) {
@@ -213,6 +288,80 @@ func TestCompleted(t *testing.T) {
 	v = mustGetTestAsyncTask(t, store, 1)[0]
 	assert.Equal(t, task.TaskStatus_Completed, v.Status)
 	assert.Equal(t, task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"}, *v.ExecuteResult)
+}
+
+func TestCompleteSQLTaskAsyncFailureRepairsRunningRun(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	sqlTask := newTestSQLTask("task-repair", 1)
+	mustAddTestSQLTask(t, store, 1, sqlTask)
+	sqlTask = mustGetTestSQLTask(t, store, 1)[0]
+
+	run := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+	run.StartedAt = time.Now().Add(-time.Minute)
+	run.RunnerCN = "r1"
+	runID, err := store.AcquireSQLTaskRun(ctx, sqlTask, run)
+	assert.NoError(t, err)
+
+	asyncTask := newTaskFromMetadata(BuildSQLTaskMetadata(newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled)))
+	asyncTask.Status = task.TaskStatus_Created
+	asyncTask.TaskRunner = "r1"
+	mustAddTestAsyncTask(t, store, 1, asyncTask)
+	asyncTask = mustGetTestAsyncTask(t, store, 1)[0]
+	assert.NoError(t, s.Allocate(ctx, asyncTask, "r1"))
+	asyncTask = mustGetTestAsyncTask(t, store, 1)[0]
+
+	assert.NoError(t, s.Complete(ctx, "r1", asyncTask,
+		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "heartbeat expired"}))
+
+	runs := mustGetTestSQLTaskRun(t, store, 1, WithSQLTaskRunIDCond(EQ, runID))
+	assert.Equal(t, SQLTaskStatusFailed, runs[0].Status)
+	assert.Equal(t, "heartbeat expired", runs[0].ErrorMessage)
+	assert.False(t, runs[0].FinishedAt.IsZero())
+}
+
+func TestCompleteSQLTaskStaleRunnerDoesNotFailLiveRun(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	sqlTask := newTestSQLTask("task-stale-runner", 1)
+	mustAddTestSQLTask(t, store, 1, sqlTask)
+	sqlTask = mustGetTestSQLTask(t, store, 1)[0]
+
+	liveRun := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+	liveRun.RunnerCN = "r2"
+	mustAddTestSQLTaskRun(t, store, 1, liveRun)
+
+	asyncTask := newTaskFromMetadata(BuildSQLTaskMetadata(newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled)))
+	asyncTask.Status = task.TaskStatus_Running
+	asyncTask.TaskRunner = "r2"
+	asyncTask.Epoch = 2
+	mustAddTestAsyncTask(t, store, 1, asyncTask)
+
+	staleTask := asyncTask
+	staleTask.TaskRunner = "r1"
+	staleTask.Epoch = 1
+	err := s.Complete(ctx, "r1", staleTask,
+		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "stale runner failed"})
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+
+	runs := mustGetTestSQLTaskRun(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
+	assert.Equal(t, SQLTaskStatusRunning, runs[0].Status)
+	assert.Equal(t, "r2", runs[0].RunnerCN)
+	assert.Empty(t, runs[0].ErrorMessage)
 }
 
 func TestCompletedWithInvalidStatus(t *testing.T) {
@@ -565,6 +714,7 @@ func TestAddCdcTask1(t *testing.T) {
 func Test_conditions(t *testing.T) {
 
 	conds := []Condition{
+		WithLimitCond(10),
 		WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
 		WithTaskType(EQ, task.TaskType_CreateCdc.String()),
 		WithAccountID(EQ, catalog.System_Account),
@@ -583,4 +733,52 @@ func Test_conditions(t *testing.T) {
 		cond.sql()
 		cond.eval(nil)
 	}
+}
+
+func TestCreateAsyncTaskWithCanceledContext(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := s.CreateAsyncTask(ctx, newTestTaskMetadata("canceled-task"))
+	assert.Error(t, err)
+}
+
+func TestCreateBatchWithCanceledContext(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := s.CreateBatch(ctx, []task.TaskMetadata{newTestTaskMetadata("canceled-batch-task")})
+	assert.Error(t, err)
+}
+
+func TestTruncateCompletedTasks(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("truncate-task")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
+	assert.NoError(t, s.Allocate(ctx, v, "r1"))
+	v = mustGetTestAsyncTask(t, store, 1)[0]
+	assert.NoError(t, s.Complete(ctx, "r1", v, task.ExecuteResult{Code: task.ResultCode_Success}))
+
+	assert.NoError(t, s.TruncateCompletedTasks(ctx))
+	tasks, err := s.QueryAsyncTask(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, tasks, 0)
 }

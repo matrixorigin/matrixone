@@ -1,0 +1,197 @@
+create table connector_job (
+id bigint primary key,
+file_id bigint,
+task_id bigint,
+status tinyint
+);
+create table task (
+id bigint primary key,
+uid varchar(255)
+);
+create table file (
+id bigint primary key,
+job_id bigint,
+task_id bigint,
+table_id bigint
+);
+select table_cnt from table_stats("associative.connector_job", 'patch', '{"table_cnt": 9, "accurate_object_number": 1}') g;
+➤ table_cnt[8,54,0]  𝄀
+9.0
+explain SELECT DISTINCT t.id
+FROM associative.connector_job job, associative.task t, associative.file f
+WHERE job.task_id = t.id
+AND f.job_id = job.id
+AND f.task_id = t.id
+AND job.status != 4
+AND job.status != 5
+AND t.uid = '019ac448-45b7-7545-9762-2a73f9ab129'
+AND f.table_id in (1);
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Group Key: t.id  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.id = job.task_id), (t.id = f.task_id)  𝄀
+              ->  Table Scan on associative.task  𝄀
+                    Filter Cond: (t.uid = '019ac448-45b7-7545-9762-2a73f9ab129')  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER   hashOnPK  𝄀
+                    Join Cond: (f.job_id = job.id)  𝄀
+                    ->  Table Scan on associative.file  𝄀
+                          Filter Cond: (f.table_id = 1)  𝄀
+                    ->  Table Scan on associative.connector_job  𝄀
+                          Filter Cond: (job.status <> 4), (job.status <> 5)
+CREATE TABLE `lineitem` (
+`L_ORDERKEY` bigint NOT NULL,
+`L_PARTKEY` int NOT NULL,
+`L_SUPPKEY` int NOT NULL,
+`L_LINENUMBER` int NOT NULL,
+`L_QUANTITY` decimal(15,2) NOT NULL,
+`L_EXTENDEDPRICE` decimal(15,2) NOT NULL,
+`L_DISCOUNT` decimal(15,2) NOT NULL,
+`L_TAX` decimal(15,2) NOT NULL,
+`L_RETURNFLAG` varchar(1) NOT NULL,
+`L_LINESTATUS` varchar(1) NOT NULL,
+`L_SHIPDATE` date NOT NULL,
+`L_COMMITDATE` date NOT NULL,
+`L_RECEIPTDATE` date NOT NULL,
+`L_SHIPINSTRUCT` char(25) NOT NULL,
+`L_SHIPMODE` char(10) NOT NULL,
+`L_COMMENT` varchar(44) NOT NULL,
+PRIMARY KEY (`L_ORDERKEY`,`L_LINENUMBER`)
+);
+CREATE TABLE `part` (
+`P_PARTKEY` int NOT NULL,
+`P_NAME` varchar(55) NOT NULL,
+`P_MFGR` char(25) NOT NULL,
+`P_BRAND` char(10) NOT NULL,
+`P_TYPE` varchar(25) NOT NULL,
+`P_SIZE` int NOT NULL,
+`P_CONTAINER` char(10) NOT NULL,
+`P_RETAILPRICE` decimal(15,2) NOT NULL,
+`P_COMMENT` varchar(23) NOT NULL,
+PRIMARY KEY (`P_PARTKEY`)
+);
+select table_cnt from table_stats("associative.lineitem", 'patch', '
+{
+"accurate_object_number": 1063,
+"approx_object_number": 1063,
+"block_number": 73249,
+"ndv_map": {
+"l_partkey": 19732896.19418804,
+"l_quantity": 1769.2467200237772
+},
+"shuffle_range_map": {
+"l_partkey": {
+"overlap": 0.9898975142727277,
+"uniform": 0.999996954035638,
+"result": [1.0, 2.0, 3.0, 4.0, 5.0, 8.0]
+}
+},
+"table_cnt": 600037902
+}'
+) g;
+➤ table_cnt[8,54,0]  𝄀
+6.00037902E8
+select table_cnt from table_stats("associative.part", 'patch', '
+{
+"accurate_object_number": 31,
+"approx_object_number": 31,
+"block_number": 2442,
+"ndv_map": {
+"p_brand": 25,
+"p_container": 40,
+"p_partkey": 20000000
+},
+"table_cnt": 20000000
+}
+') g;
+➤ table_cnt[8,54,0]  𝄀
+2.0E7
+explain select
+sum(l_extendedprice) / 7.0 as avg_yearly
+from
+lineitem,
+part
+where
+p_partkey = l_partkey
+and p_brand = 'Brand#54'
+and p_container = 'LG BAG'
+and l_quantity < (
+select
+0.2 * avg(l_quantity)
+from
+lineitem
+where
+l_partkey = p_partkey
+);
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: sum(lineitem.l_extendedprice)  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < 0.2 * avg(lineitem.l_quantity))
+              -- HINT: Cast expression may prevent index usage  𝄀
+              ->  Join  𝄀
+                    Join Type: RIGHT  𝄀
+                    Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
+                    ->  Project  𝄀
+                          ->  Aggregate  𝄀
+                                Group Key: lineitem.l_partkey shuffle: range(lineitem.l_partkey)  𝄀
+                                Aggregate Functions: avg(lineitem.l_quantity)  𝄀
+                                ->  Table Scan on associative.lineitem  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER   hashOnPK  𝄀
+                          Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on associative.lineitem  𝄀
+                                Runtime Filter Probe: lineitem.l_partkey  𝄀
+                          ->  Table Scan on associative.part  𝄀
+                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')
+select table_cnt, json_extract(ndv_map, '$.l_partkey') partk from table_stats("associative.lineitem", 'patch', '{"ndv_map": {"l_partkey": 1840290, "l_quantity": 50}}') g;
+➤ table_cnt[8,54,0]  ¦  partk[-1,2147483647,0]  𝄀
+6.00037902E8  ¦  1840290
+explain select
+sum(l_extendedprice) / 7.0 as avg_yearly
+from
+lineitem,
+part
+where
+p_partkey = l_partkey
+and p_brand = 'Brand#54'
+and p_container = 'LG BAG'
+and l_quantity < (
+select
+0.2 * avg(l_quantity)
+from
+lineitem
+where
+l_partkey = p_partkey
+);
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: sum(lineitem.l_extendedprice)  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < 0.2 * avg(lineitem.l_quantity))
+              -- HINT: Cast expression may prevent index usage  𝄀
+              ->  Join  𝄀
+                    Join Type: RIGHT  𝄀
+                    Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
+                    ->  Project  𝄀
+                          ->  Aggregate  𝄀
+                                Group Key: lineitem.l_partkey  𝄀
+                                Aggregate Functions: avg(lineitem.l_quantity)  𝄀
+                                ->  Table Scan on associative.lineitem  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER   hashOnPK  𝄀
+                          Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
+                          ->  Table Scan on associative.lineitem  𝄀
+                          ->  Table Scan on associative.part  𝄀
+                                Filter Cond: (part.p_container = 'LG BAG'), (part.p_brand = 'Brand#54')
+drop table if exists associative.lineitem;
+drop table if exists associative.part;
+drop table if exists associative.file;
+drop table if exists associative.task;
+drop table if exists associative.connector_job;

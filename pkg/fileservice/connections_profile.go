@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 )
 
-var connectionsProfiler = malloc.NewProfiler[connectionsProfileSample]()
+var connectionsProfiler = malloc.NewProfiler[connectionsProfileSample]("http-conns")
 
 func init() {
 	http.HandleFunc("/debug/http_conns", func(w http.ResponseWriter, req *http.Request) {

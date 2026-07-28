@@ -193,10 +193,19 @@ message GetChangedTableListResp {
     repeated uint64 DatabaseIds = 3;
     repeated uint64 TableIds = 4;
     bytes Extra = 5;
+    timestamp.Timestamp Oldest = 6;
 }
 
 message FaultInjectReq {
     option (gogoproto.typedecl)     = false;
     string method = 1;
     string parameter = 2;
+}
+
+message SyncProtection {
+    option (gogoproto.typedecl)     = false;
+    string JobID                    = 1;  // Sync job ID
+    string BF                       = 2;  // Base64 encoded BloomFilter data (for register)
+    int64 ValidTS                   = 3;  // Valid timestamp in nanoseconds (for register and renew)
+    string TestObject               = 4;  // Test object name for debugging (optional)
 }

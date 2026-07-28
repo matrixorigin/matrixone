@@ -65,7 +65,6 @@ func Open(
 	dbOpts ...DBOption,
 ) (db *DB, err error) {
 	opts = opts.FillDefaults(dirname)
-	// TODO: remove
 	fillRuntimeOptions(opts)
 
 	var (
@@ -74,6 +73,8 @@ func Open(
 		rollbackSteps stepFuncs
 		logger        = logutil.Info
 	)
+
+	logutil.Info(Phase_Open+"-start", zap.String("dirname", dirname))
 
 	defer func() {
 		if err == nil && dbLocker != nil {
@@ -89,11 +90,9 @@ func Open(
 			logger = logutil.Error
 		}
 		logger(
-			Phase_Open,
-			zap.Duration("total-cost", time.Since(startTime)),
-			zap.String("mode", db.GetTxnMode().String()),
-			zap.String("db-dirname", dirname),
-			zap.String("config", opts.JsonString()),
+			Phase_Open+"-end",
+			zap.Duration("cost", time.Since(startTime)),
+			zap.String("dirname", dirname),
 			zap.Error(err),
 		)
 	}()
@@ -119,15 +118,16 @@ func Open(
 		return
 	}
 
+	logutil.Info(Phase_Open + "-open-wal-start")
 	if opts.WalClientFactory != nil {
 		db.Wal = wal.NewLogserviceHandle(opts.WalClientFactory)
 	} else {
 		db.Wal = wal.NewLocalHandle(dirname, WALDir, nil)
 	}
-
 	rollbackSteps.Add("rollback open wal", func() error {
 		return db.Wal.Close()
 	})
+	logutil.Info(Phase_Open + "-open-wal-end")
 
 	scheduler := newTaskScheduler(
 		db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers,
@@ -148,10 +148,12 @@ func Open(
 		dbutils.WithRuntimeOptions(db.Opts),
 	)
 
+	logutil.Info(Phase_Open + "-open-catalog-start")
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
 	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo, dataFactory); err != nil {
+		logutil.Error(Phase_Open+"-open-catalog-error", zap.Error(err))
 		return
 	}
 	db.usageMemo.C = db.Catalog
@@ -159,6 +161,7 @@ func Open(
 		db.Catalog.Close()
 		return nil
 	})
+	logutil.Info(Phase_Open + "-open-catalog-end")
 
 	db.Controller = NewController(db)
 	if err = db.Controller.AssembleDB(ctx); err != nil {
@@ -166,8 +169,6 @@ func Open(
 	}
 	db.Controller.Start()
 
-	// For debug or test
-	//fmt.Println(db.Catalog.SimplePPString(common.PPL3))
 	return
 }
 

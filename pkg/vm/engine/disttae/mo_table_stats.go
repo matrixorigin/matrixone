@@ -33,17 +33,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/predefine"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
@@ -52,7 +51,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
@@ -270,7 +268,7 @@ const (
 	defaultGamaCycleDur      = time.Minute
 	defaultGetTableListLimit = options.DefaultBlockMaxRows
 
-	logHeader = "MO-TABLE-STATS-TASK"
+	logHeader = "mo.table.stats.task"
 )
 
 const (
@@ -332,8 +330,9 @@ func initMoTableStatsConfig(
 		defer func() {
 			eng.dynamicCtx.defaultConf = eng.dynamicCtx.conf
 			if err != nil {
-				logutil.Error(logHeader,
-					zap.String("source", "init mo table stats config"),
+				logutil.Error(
+					logHeader,
+					zap.String("action", "init.config"),
 					zap.Error(err))
 			}
 		}()
@@ -416,8 +415,9 @@ func initMoTableStatsConfig(
 				runtime.NumCPU(),
 				ants.WithNonblocking(false),
 				ants.WithPanicHandler(func(e interface{}) {
-					logutil.Error(logHeader,
-						zap.String("source", "gama task panic"),
+					logutil.Error(
+						logHeader,
+						zap.String("action", "beta.panic.handler"),
 						zap.Any("error", e))
 				})); err != nil {
 				return
@@ -427,8 +427,9 @@ func initMoTableStatsConfig(
 				runtime.NumCPU(),
 				ants.WithNonblocking(false),
 				ants.WithPanicHandler(func(e interface{}) {
-					logutil.Error(logHeader,
-						zap.String("source", "gama task panic"),
+					logutil.Error(
+						logHeader,
+						zap.String("action", "gama.panic.handler"),
 						zap.Any("error", e))
 				})); err != nil {
 				return
@@ -443,9 +444,11 @@ func initMoTableStatsConfig(
 			task.launchTimes++
 			task.running = true
 
-			logutil.Info(logHeader,
-				zap.String("source", fmt.Sprintf("launch %s", hint)),
-				zap.Int("times", task.launchTimes))
+			logutil.Info(
+				logHeader,
+				zap.String("action", fmt.Sprintf("launch.%s", hint)),
+				zap.Int("times", task.launchTimes),
+			)
 
 			go func() {
 				defer func() {
@@ -482,9 +485,10 @@ func initMoTableStatsConfig(
 			)
 
 			defer func() {
-				logutil.Info(logHeader,
-					zap.String("source", "wait the mo service started"),
-					zap.Duration("duration", moServerStarted.Sub(start)),
+				logutil.Info(
+					logHeader,
+					zap.String("action", "wait.mo.service.started"),
+					zap.Duration("takes", moServerStarted.Sub(start)),
 				)
 			}()
 
@@ -538,9 +542,11 @@ func (d *dynamicCtx) initCronTask(
 	insertTask := func() {
 		sql, err = predefine.GenInitCronTaskSQL(int32(task.TaskCode_MOTableStats))
 		if err != nil {
-			logutil.Error(logHeader,
-				zap.String("source", "init cron task"),
-				zap.Error(err))
+			logutil.Error(
+				logHeader,
+				zap.String("action", "init.cron.task"),
+				zap.Error(err),
+			)
 		}
 
 		d.executeSQL(ctx, sql, "init cron task")
@@ -564,7 +570,10 @@ func (d *dynamicCtx) initCronTask(
 	}
 
 	if checkTask() {
-		logutil.Info(logHeader, zap.String("source", "init cron task succeed"))
+		logutil.Info(
+			logHeader,
+			zap.String("action", "init.cron.task.succeed"),
+		)
 		return true
 	}
 
@@ -820,9 +829,11 @@ func (d *dynamicCtx) checkMoveOnTask() bool {
 
 	disable := d.conf.DisableStatsTask
 
-	logutil.Info(logHeader,
-		zap.String("source", "check move on"),
-		zap.Bool("disable", disable))
+	logutil.Info(
+		logHeader,
+		zap.String("action", "check.move.on"),
+		zap.Bool("state", disable),
+	)
 
 	return disable
 }
@@ -867,9 +878,11 @@ func (d *dynamicCtx) setMoveOnTask(newVal bool) string {
 	d.conf.DisableStatsTask = !newVal
 
 	ret := fmt.Sprintf("move on: %v to %v", oldState, newVal)
-	logutil.Info(logHeader,
-		zap.String("source", "set move on"),
-		zap.String("state", ret))
+	logutil.Info(
+		logHeader,
+		zap.String("action", "set.move.on"),
+		zap.String("state", ret),
+	)
 
 	return ret
 }
@@ -883,9 +896,11 @@ func (d *dynamicCtx) setUseOldImpl(newVal bool) string {
 	d.conf.StatsUsingOldImpl = newVal
 
 	ret := fmt.Sprintf("use old impl: %v to %v", oldState, newVal)
-	logutil.Info(logHeader,
-		zap.String("source", "set use old impl"),
-		zap.String("state", ret))
+	logutil.Info(
+		logHeader,
+		zap.String("action", "set.use.old.impl"),
+		zap.String("state", ret),
+	)
 
 	return ret
 }
@@ -899,9 +914,11 @@ func (d *dynamicCtx) setForceUpdate(newVal bool) string {
 	d.conf.ForceUpdate = newVal
 
 	ret := fmt.Sprintf("force update: %v to %v", oldState, newVal)
-	logutil.Info(logHeader,
-		zap.String("source", "set force update"),
-		zap.String("state", ret))
+	logutil.Info(
+		logHeader,
+		zap.String("action", "set.force.update"),
+		zap.String("state", ret),
+	)
 
 	return ret
 }
@@ -1035,7 +1052,7 @@ func (d *dynamicCtx) executeSQL(ctx context.Context, sql string, hint string) ie
 	ret := exec.(ie.InternalExecutor).Query(newCtx, sql, d.sqlOpts)
 	if ret.Error() != nil {
 		logutil.Info(logHeader,
-			zap.String("source", hint),
+			zap.String("action", hint),
 			zap.Error(ret.Error()),
 			zap.String("sql", sql))
 	}
@@ -1101,10 +1118,11 @@ func (d *dynamicCtx) forceUpdateQuery(
 			oldTS[idx] = timestamp.Timestamp{PhysicalTime: stdTime.UnixNano()}
 		}
 
+		minTS := types.TS{}
 		if err = getChangedTableList(
 			ctx, d.de.service, d.de,
 			accs, dbs, tbls,
-			oldTS, &pairs, &to, cmd_util.CheckChanged); err != nil {
+			oldTS, &pairs, &to, &minTS, cmd_util.CheckChanged, nil); err != nil {
 			return
 		}
 
@@ -1266,12 +1284,13 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 		ctx, sql, "query table stats by account",
 		wantedStatsIdxes, forceUpdate, resetUpdateTime)
 
-	logutil.Info(logHeader,
-		zap.String("source", "QueryTableStatsByAccounts"),
-		zap.Int("acc cnt", len(accs)),
-		zap.Int("tbl cnt", len(tbls)),
-		zap.Bool("forceUpdate", forceUpdate),
-		zap.Bool("resetUpdateTime", resetUpdateTime),
+	logutil.Info(
+		logHeader,
+		zap.String("action", "query.table.stats.by.accounts"),
+		zap.Int("account-count", len(accs)),
+		zap.Int("table-count", len(tbls)),
+		zap.Bool("force-update", forceUpdate),
+		zap.Bool("reset-update-time", resetUpdateTime),
 		zap.Duration("takes", time.Since(now)),
 		zap.Bool("ok", ok),
 		zap.Error(err))
@@ -1302,15 +1321,17 @@ func (d *dynamicCtx) QueryTableStatsByDatabase(
 	statsVals, _, retDb, tbls, ok, err = d.queryTableStatsByXXX(
 		ctx, sql, "query table stats by database", wantedStatsIdxes, forceUpdate, resetUpdateTime)
 
-	logutil.Info(logHeader,
-		zap.String("source", "QueryTableStatsByDatabase"),
-		zap.Int("db cnt", len(dbIds)),
-		zap.Int("tbl cnt", len(tbls)),
-		zap.Bool("forceUpdate", forceUpdate),
-		zap.Bool("resetUpdateTime", resetUpdateTime),
+	logutil.Info(
+		logHeader,
+		zap.String("action", "query.table.stats.by.database"),
+		zap.Int("database-count", len(dbIds)),
+		zap.Int("table-count", len(tbls)),
+		zap.Bool("force-update", forceUpdate),
+		zap.Bool("reset-update-time", resetUpdateTime),
 		zap.Duration("takes", time.Since(now)),
 		zap.Bool("ok", ok),
-		zap.Error(err))
+		zap.Error(err),
+	)
 
 	return statsVals, retDb, ok, err
 }
@@ -1336,14 +1357,16 @@ func (d *dynamicCtx) QueryTableStatsByTable(
 	statsVals, _, _, retTbls, ok, err = d.queryTableStatsByXXX(
 		ctx, sql, "query table stats by table", wantedStatsIdxes, forceUpdate, resetUpdateTime)
 
-	logutil.Info(logHeader,
-		zap.String("source", "QueryTableStatsByTable"),
-		zap.Int("tbl cnt", len(tblIds)),
-		zap.Bool("forceUpdate", forceUpdate),
-		zap.Bool("resetUpdateTime", resetUpdateTime),
+	logutil.Info(
+		logHeader,
+		zap.String("action", "query.table.stats.by.table"),
+		zap.Int("table-count", len(tblIds)),
+		zap.Bool("force-update", forceUpdate),
+		zap.Bool("reset-update-time", resetUpdateTime),
 		zap.Duration("takes", time.Since(now)),
 		zap.Bool("ok", ok),
-		zap.Error(err))
+		zap.Error(err),
+	)
 
 	return statsVals, retTbls, ok, err
 }
@@ -1533,59 +1556,6 @@ type statsList struct {
 	stats map[string]any
 }
 
-type betaCycleStash struct {
-	snapshot types.TS
-
-	born time.Time
-
-	dataObjIds *[]types.Objectid
-
-	totalSize   float64
-	totalRows   float64
-	deletedRows float64
-
-	tblockCnt, dblockCnt   int
-	tobjectCnt, dobjectCnt int
-}
-
-func stashToStats(bcs betaCycleStash) statsList {
-	var (
-		sl statsList
-	)
-
-	sl.stats = make(map[string]any)
-
-	// table rows
-	{
-		leftRows := bcs.totalRows - bcs.deletedRows
-		sl.stats[TableStatsName[TableStatsTableRows]] = leftRows
-	}
-
-	// table size
-	{
-		deletedSize := float64(0)
-		if bcs.totalRows > 0 && bcs.deletedRows > 0 {
-			deletedSize = bcs.totalSize / bcs.totalRows * bcs.deletedRows
-		}
-
-		leftSize := math.Round((bcs.totalSize-deletedSize)*1000) / 1000
-		sl.stats[TableStatsName[TableStatsTableSize]] = leftSize
-	}
-
-	// data object, block count
-	// tombstone object, block count
-	{
-		sl.stats[TableStatsName[TableStatsTObjectCnt]] = bcs.tobjectCnt
-		sl.stats[TableStatsName[TableStatsTBlockCnt]] = bcs.tblockCnt
-		sl.stats[TableStatsName[TableStatsDObjectCnt]] = bcs.dobjectCnt
-		sl.stats[TableStatsName[TableStatsDBlockCnt]] = bcs.dblockCnt
-	}
-
-	sl.took = time.Since(bcs.born)
-
-	return sl
-}
-
 func GetMOTableStatsExecutor(
 	service string,
 	eng engine.Engine,
@@ -1652,7 +1622,7 @@ func (d *dynamicCtx) tableStatsExecutor(
 
 			if !d.moStatsCronTaskInit.Load() {
 				logutil.Info(logHeader,
-					zap.String("source", "table stats executor"),
+					zap.String("action", "table.stats.executor"),
 					zap.String("state", "waiting mo stats cron task init"))
 				continue
 			}
@@ -1724,11 +1694,12 @@ func (d *dynamicCtx) prepare(
 	d.tableStock.specialTo = to
 	d.tableStock.specialFrom = from
 
+	minTS := types.TS{}
 	err = getChangedTableList(
 		ctx, service, eng, nil, nil, nil,
 		[]timestamp.Timestamp{from.ToTimestamp(), to.ToTimestamp()},
 		&d.tableStock.tbls,
-		&d.tableStock.specialTo, cmd_util.CollectChanged)
+		&d.tableStock.specialTo, &minTS, cmd_util.CollectChanged, nil)
 
 	return err
 }
@@ -2573,28 +2544,32 @@ func (d *dynamicCtx) statsCalculateOp(
 		return
 	}
 
-	bcs := betaCycleStash{
-		born:       time.Now(),
-		snapshot:   snapshot,
-		dataObjIds: d.objIdsPool.Get().(*[]types.Objectid),
+	born := time.Now()
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	// Use the new CalculateTableStats function in partition state
+	stats, err := pState.CalculateTableStats(ctx, snapshot, fs, mp)
+	if err != nil {
+		return sl, err
 	}
 
-	defer func() {
-		*bcs.dataObjIds = (*bcs.dataObjIds)[:0]
-		d.objIdsPool.Put(bcs.dataObjIds)
-	}()
+	// Convert to statsList format
+	sl.stats = make(map[string]any)
 
-	if err = collectVisibleData(&bcs, pState); err != nil {
-		return
-	}
+	// table rows and size (already calculated in CalculateTableStats)
+	sl.stats[TableStatsName[TableStatsTableRows]] = stats.TotalRows
+	sl.stats[TableStatsName[TableStatsTableSize]] = math.Round(stats.TotalSize*1000) / 1000
 
-	if err = applyTombstones(ctx, &bcs, fs, pState); err != nil {
-		return
-	}
+	// object and block counts
+	sl.stats[TableStatsName[TableStatsTObjectCnt]] = stats.TombstoneObjectCnt
+	sl.stats[TableStatsName[TableStatsTBlockCnt]] = stats.TombstoneBlockCnt
+	sl.stats[TableStatsName[TableStatsDObjectCnt]] = stats.DataObjectCnt
+	sl.stats[TableStatsName[TableStatsDBlockCnt]] = stats.DataBlockCnt
 
-	sl = stashToStats(bcs)
+	sl.took = time.Since(born)
 
-	v2.CalculateStatsDurationHistogram.Observe(time.Since(bcs.born).Seconds())
+	v2.CalculateStatsDurationHistogram.Observe(time.Since(born).Seconds())
 
 	return sl, nil
 }
@@ -2700,11 +2675,12 @@ func (d *dynamicCtx) updateSpecialStatsStart(
 		start := stats[specialStart].(string)
 		old := oldStart.ToTimestamp().ToStdTime().Format("2006-01-02 15:04:05.000000")
 		if old != start {
-			logutil.Info(logHeader,
-				zap.String("source", "update special stats start"),
-				zap.String("given up update", "the start changed already"),
-				zap.String("current", start),
-				zap.String("last read", old))
+			logutil.Info(
+				logHeader,
+				zap.String("action", "update.special.stats.start"),
+				zap.String("start", start),
+				zap.String("last", old),
+			)
 
 			return false, nil
 		}
@@ -2818,6 +2794,45 @@ func correctAccountForCatalogTables(
 	return nil
 }
 
+func GetChangedTableList(
+	ctx context.Context,
+	service string,
+	eng engine.Engine,
+	accs []uint64,
+	dbs []uint64,
+	tbls []uint64,
+	ts []timestamp.Timestamp,
+	to *types.TS,
+	minTS *types.TS,
+	typ cmd_util.ChangedListType,
+	forEachTable func(
+		accountID int64,
+		databaseID int64,
+		tableID int64,
+		tableName string,
+		dbName string,
+		relKind string,
+		pkSequence int,
+		snapshot types.TS,
+	),
+	handleFn func(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *cmd_util.GetChangedTableListReq,
+		resp *cmd_util.GetChangedTableListResp,
+	) (func(), error),
+) (err error) {
+	pairs := make([]tablePair, 0, len(accs))
+	err = getChangedTableList(ctx, service, eng, accs, dbs, tbls, ts, &pairs, to, minTS, typ, handleFn)
+	if err != nil {
+		return
+	}
+	for _, tbl := range pairs {
+		forEachTable(tbl.acc, tbl.db, tbl.tbl, tbl.tblName, tbl.dbName, tbl.relKind, tbl.pkSequence, tbl.snapshot)
+	}
+	return
+}
+
 func getChangedTableList(
 	ctx context.Context,
 	service string,
@@ -2828,7 +2843,14 @@ func getChangedTableList(
 	ts []timestamp.Timestamp,
 	pairs *[]tablePair,
 	to *types.TS,
+	minTS *types.TS,
 	typ cmd_util.ChangedListType,
+	handleFn func(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *cmd_util.GetChangedTableListReq,
+		resp *cmd_util.GetChangedTableListResp,
+	) (func(), error),
 ) (err error) {
 
 	req := &cmd_util.GetChangedTableListReq{
@@ -2902,24 +2924,34 @@ func getChangedTableList(
 		de.mp, de.cli, txnOperator,
 		de.fs, de.ls,
 		de.qc, de.hakeeper,
-		de.us, nil,
+		de.us, nil, nil,
 	)
 
 	var resp *cmd_util.GetChangedTableListResp
 
-	handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
-	ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
-	if err != nil {
-		return err
+	if handleFn != nil {
+		resp = &cmd_util.GetChangedTableListResp{}
+		payload(0, "", proc)
+		handleFn(ctx, txn.TxnMeta{}, req, resp)
+	} else {
+
+		handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
+		ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
+		if err != nil {
+			return err
+		}
+		resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
 	}
 
-	resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
 	//if resp.Newest == nil {
 	//	*to = types.BuildTS(time.Now().UnixNano(), 0)
 	//} else {
 	//	*to = types.TimestampToTS(*resp.Newest)
 	//}
 	*to = types.TimestampToTS(txnOperator.SnapshotTS())
+	if resp.Oldest != nil {
+		*minTS = types.TimestampToTS(*resp.Oldest)
+	}
 
 	if err = correctAccountForCatalogTables(ctx, eng.(*Engine), resp); err != nil {
 		return
@@ -2992,6 +3024,7 @@ func subscribeTable(
 
 	if pState, err = e.PushClient().toSubscribeTable(
 		ctx,
+		uint64(txnTbl.accountId),
 		txnTbl.tableId,
 		txnTbl.tableName,
 		txnTbl.db.databaseId,
@@ -3000,189 +3033,6 @@ func subscribeTable(
 	}
 
 	return pState, nil
-}
-
-// O(m+n)
-func getDeletedRows(
-	objIds []types.Objectid,
-	rowIds []types.Rowid,
-) (deletedCnt int) {
-
-	var (
-		i int
-		j int
-	)
-
-	for i < len(objIds) && j < len(rowIds) {
-		if j > 0 && rowIds[j-1].EQ(&rowIds[j]) {
-			j++
-			continue
-		}
-
-		cmp := rowIds[j].BorrowObjectID().Compare(&objIds[i])
-
-		if cmp == 0 {
-			deletedCnt++
-			j++
-		} else if cmp > 0 {
-			i++
-		} else {
-			// cmp < 0
-			j++
-		}
-	}
-
-	return deletedCnt
-}
-
-func collectVisibleData(
-	bcs *betaCycleStash,
-	pState *logtailreplay.PartitionState,
-) (err error) {
-
-	var (
-		dRowIter logtailreplay.RowsIter
-		dObjIter objectio.ObjectIter
-
-		estimatedOneRowSize float64
-	)
-
-	defer func() {
-		if dRowIter != nil {
-			err = dRowIter.Close()
-		}
-
-		if dObjIter != nil {
-			err = dObjIter.Close()
-		}
-	}()
-
-	dObjIter, err = pState.NewObjectsIter(bcs.snapshot, true, false)
-	if err != nil {
-		return err
-	}
-
-	dRowIter = pState.NewRowsIter(bcs.snapshot, nil, false)
-
-	// there won't exist visible appendable obj
-	for dObjIter.Next() {
-		obj := dObjIter.Entry()
-
-		bcs.dobjectCnt++
-		bcs.dblockCnt += int(obj.BlkCnt())
-
-		bcs.totalSize += float64(obj.Size())
-		bcs.totalRows += float64(obj.Rows())
-		*bcs.dataObjIds = append(
-			*bcs.dataObjIds, *obj.ObjectStats.ObjectName().ObjectId())
-	}
-
-	if bcs.totalRows != 0 {
-		estimatedOneRowSize = bcs.totalSize / bcs.totalRows
-	}
-
-	// 1. inserts on appendable object
-	for dRowIter.Next() {
-		entry := dRowIter.Entry()
-
-		idx := slices.IndexFunc(*bcs.dataObjIds, func(objId types.Objectid) bool {
-			return objId.EQ(entry.BlockID.Object())
-		})
-
-		if idx == -1 {
-			*bcs.dataObjIds = append(*bcs.dataObjIds, *entry.BlockID.Object())
-		}
-
-		bcs.totalRows += float64(1)
-		if estimatedOneRowSize > 0 {
-			bcs.totalSize += estimatedOneRowSize
-		} else {
-			bcs.totalSize += float64(entry.Batch.Size()) / float64(entry.Batch.RowCount())
-		}
-	}
-
-	return
-}
-
-func applyTombstones(
-	ctx context.Context,
-	bcs *betaCycleStash,
-	fs fileservice.FileService,
-	pState *logtailreplay.PartitionState,
-) (err error) {
-	var (
-		tObjIter objectio.ObjectIter
-
-		hidden  objectio.HiddenColumnSelection
-		release func()
-	)
-
-	tObjIter, err = pState.NewObjectsIter(bcs.snapshot, true, true)
-	if err != nil {
-		return err
-	}
-
-	// 1. non-appendable tombstone obj
-	// 2. appendable tombstone obj
-	for tObjIter.Next() {
-		tombstone := tObjIter.Entry()
-
-		bcs.tobjectCnt++
-		bcs.tblockCnt += int(tombstone.BlkCnt())
-
-		attrs := objectio.GetTombstoneAttrs(hidden)
-		persistedDeletes := containers.NewVectors(len(attrs))
-
-		objectio.ForeachBlkInObjStatsList(true, nil,
-			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-
-				if _, release, err = ioutil.ReadDeletes(
-					ctx, blk.MetaLoc[:], fs, tombstone.GetCNCreated(), persistedDeletes,
-				); err != nil {
-					return false
-				}
-				defer release()
-
-				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
-				cnt := getDeletedRows(*bcs.dataObjIds, rowIds)
-
-				bcs.deletedRows += float64(cnt)
-				//deletedRows += float64(cnt)
-				return true
-			}, tombstone.ObjectStats)
-
-		//loaded += int(tombstone.BlkCnt())
-
-		if err != nil {
-			return
-		}
-	}
-
-	// if appendable tombstone persisted, deletes on it already eliminated
-	// 1. deletes on appendable object
-	// 2. deletes on non-appendable objects
-	//
-	// here, we only collect the deletes that have not paired inserts
-	// according to its LESS function, the deletes come first
-	var lastInsert logtailreplay.RowEntry
-	err = pState.ScanRows(true, func(entry *logtailreplay.RowEntry) (bool, error) {
-		if !entry.Deleted {
-			lastInsert = *entry
-			return true, nil
-		}
-
-		if entry.RowID.EQ(&lastInsert.RowID) {
-			return true, nil
-		}
-
-		bcs.deletedRows += float64(getDeletedRows(*bcs.dataObjIds, []types.Rowid{entry.RowID}))
-		//deletedRows += float64(getDeletedRows(moTableStats.bcs.dataObjIds, []types.Rowid{entry.RowID}))
-
-		return true, nil
-	})
-
-	//return deletedRows, loaded, err
-	return nil
 }
 
 func (d *dynamicCtx) bulkUpdateTableStatsList(

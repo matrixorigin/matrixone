@@ -37,7 +37,9 @@ const (
 	P_decimal
 	P_bit
 	P_ScoreBinary
+	P_ScoreBinaryHexnum
 	P_nulltext
+	P_star // the * in count(*), not a string literal
 )
 
 type P_KIND uint8
@@ -186,7 +188,7 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
-	if node.origString != "" {
+	if strings.Contains(node.origString, "\\") {
 		ctx.WriteValue(node.ValType, FormatString(node.origString))
 		return
 	}

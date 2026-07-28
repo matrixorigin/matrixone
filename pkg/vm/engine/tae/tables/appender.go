@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -113,15 +112,6 @@ func (appender *objectAppender) ApplyAppend(
 	txn txnif.AsyncTxn) (from int, err error) {
 	n := appender.obj.PinNode()
 	defer n.Unref()
-	if txn != nil && !txn.IsReplay() && appender.obj.meta.Load().GetTable().GetLastestSchema(false).Name == "mo_cdc_task" {
-		logutil.Infof(
-			"XXX-DEBUG-21848-apply-append: commit ts %s, rows %d, isTombstone %v",
-			txn.GetPrepareTS().ToString(),
-			bat.Length(),
-			appender.obj.meta.Load().IsTombstone,
-		)
-	}
-
 	node := n.MustMNode()
 	appender.obj.Lock()
 	defer appender.obj.Unlock()

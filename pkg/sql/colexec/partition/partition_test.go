@@ -16,6 +16,7 @@ package partition
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -62,7 +63,7 @@ func TestPrepare(t *testing.T) {
 
 func TestPartition(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, err = vm.Exec(tc.arg, tc.proc)
@@ -70,7 +71,7 @@ func TestPartition(t *testing.T) {
 
 		tc.arg.Reset(tc.proc, false, nil)
 
-		resetChildren(tc.arg)
+		resetChildren(tc.arg, tc.proc.Mp())
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		_, err = vm.Exec(tc.arg, tc.proc)
@@ -80,6 +81,31 @@ func TestPartition(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestPartitionOutputHonorsCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &Partition{
+		OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}},
+	}
+	require.NoError(t, arg.Prepare(proc))
+
+	bat := colexec.MakeMockPartitionBatchs(1, proc.Mp())
+	arg.ctr.batchList = append(arg.ctr.batchList, bat)
+	require.NoError(t, arg.ctr.evaluateOrderColumn(proc, 0))
+	arg.ctr.indexList = []int64{0}
+	arg.ctr.status = eval
+
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	cancel()
+
+	_, err := arg.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func newExpression(pos int32, typeID types.T) *plan.Expr {
@@ -95,10 +121,10 @@ func newExpression(pos int32, typeID types.T) *plan.Expr {
 	}
 }
 
-func resetChildren(arg *Partition) {
-	bat1 := colexec.MakeMockPartitionBatchs(1)
-	bat2 := colexec.MakeMockPartitionBatchs(2)
-	bat3 := colexec.MakeMockPartitionBatchs(3)
+func resetChildren(arg *Partition, m *mpool.MPool) {
+	bat1 := colexec.MakeMockPartitionBatchs(1, m)
+	bat2 := colexec.MakeMockPartitionBatchs(2, m)
+	bat3 := colexec.MakeMockPartitionBatchs(3, m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat1, bat2, bat3})
 	arg.Children = nil
 	arg.AppendChild(op)

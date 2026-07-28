@@ -78,7 +78,7 @@ select * from index02;
 col1    col2    col3
 a    33    1
 c    231    0
-restore account acc01 from snapshot pub_sp;
+restore account acc01{snapshot="pub_sp"};
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show databases like 'db%';
@@ -91,7 +91,7 @@ show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show databases like 'db%';
 Database
-restore account acc01 from snapshot pub_sp to account acc03;
+restore account acc01{snapshot="pub_sp"} to account acc03;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show databases like 'db%';

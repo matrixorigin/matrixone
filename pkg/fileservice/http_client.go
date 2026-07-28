@@ -20,9 +20,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/ncruces/go-dns"
 	"go.uber.org/zap"
 )
@@ -51,6 +53,101 @@ var httpDialer = &net.Dialer{
 	Resolver: dnsResolver,
 }
 
+// activeConnMap tracks connections that are currently in use (active)
+// Key: connection object (net.Conn), Value: last active time (time.Time)
+// Used to deduplicate: same connection may be reused multiple times (GotConn called multiple times)
+var activeConnMap sync.Map // map[net.Conn]time.Time
+
+// trackConnActive marks a connection as active (in use)
+// This is called when a connection is obtained and will be used
+// Note: GotConn may be called multiple times for the same connection (when reused),
+// so we use activeConnMap to deduplicate and only count each connection once
+//
+// This function uses a CAS-like retry loop to handle race conditions with cleanupStaleConnections():
+// 1. If connection doesn't exist: LoadOrStore adds it and we Inc() metric
+// 2. If connection exists: LoadAndDelete removes it, then LoadOrStore re-adds it with new timestamp
+//   - If cleanupStaleConnections() deleted it between LoadOrStore and LoadAndDelete:
+//     existed=false, we retry to re-add and Inc() metric (handling the Dec() from cleanup)
+//   - If we successfully re-added: no metric change needed (we deleted and re-added existing connection)
+//   - If another goroutine added it: we just update timestamp
+//
+// This ensures metric accuracy even when cleanupStaleConnections() runs concurrently.
+func trackConnActive(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	// Use connection object itself as key to identify unique connections
+	// This is more accurate than using remote address (multiple connections can have same address)
+
+	// Use a retry loop similar to CAS (Compare-And-Swap) pattern to handle race conditions
+	// where cleanupStaleConnections() might delete the connection concurrently
+	for {
+		_, loaded := activeConnMap.LoadOrStore(conn, time.Now())
+		if !loaded {
+			// Successfully stored a new connection (either first time or re-added after cleanup)
+			v2.S3ConnActiveGauge.Inc()
+			return
+		}
+
+		// Connection already exists, update timestamp atomically
+		// Use LoadAndDelete + LoadOrStore to atomically update timestamp while handling
+		// the race condition where cleanupStaleConnections() might delete the connection
+		_, existed := activeConnMap.LoadAndDelete(conn)
+		if !existed {
+			// Connection was deleted by cleanupStaleConnections() between LoadOrStore and LoadAndDelete
+			// cleanupStaleConnections() already called Dec(), so we need to re-add and Inc() to correct it
+			// Retry LoadOrStore to re-add it and increment metrics
+			continue
+		}
+
+		// Connection existed before our deletion, now re-add it with new timestamp
+		// If another goroutine added it between LoadAndDelete and LoadOrStore, loaded will be true
+		_, loaded = activeConnMap.LoadOrStore(conn, time.Now())
+		if !loaded {
+			// We successfully re-added the connection that we just deleted
+			// Metrics are already correct: we deleted an existing connection and re-added it
+			// No need to change metrics (connection count unchanged)
+			return
+		}
+
+		// Another goroutine added it between LoadAndDelete and LoadOrStore
+		// Just update the timestamp atomically
+		activeConnMap.Store(conn, time.Now())
+		return
+	}
+}
+
+// cleanupStaleConnections periodically cleans up connections that have been
+// inactive for a long time (likely returned to the idle pool or closed).
+// This keeps the active connection metric bounded without forcing the
+// transport to close idle connections while long uploads are in flight.
+func cleanupStaleConnections() {
+	now := time.Now()
+	// Use a threshold slightly longer than IdleConnTimeout. http.Transport owns
+	// the real connection lifecycle; this only evicts stale metric entries.
+	staleThreshold := idleConnTimeout + 2*time.Second
+
+	activeConnMap.Range(func(key, value interface{}) bool {
+		lastActive, ok := value.(time.Time)
+		if !ok {
+			activeConnMap.Delete(key)
+			return true
+		}
+
+		// Check if connection is stale (inactive for too long)
+		// Connections that have been inactive longer than the threshold are likely:
+		// 1. Returned to the idle pool
+		// 2. Actually closed by the transport's IdleConnTimeout
+		// We can't directly check if a connection is closed, so we use inactivity time as a proxy
+		if now.Sub(lastActive) > staleThreshold {
+			// Connection has been inactive for too long, likely idle or closed
+			activeConnMap.Delete(key)
+			v2.S3ConnActiveGauge.Dec()
+		}
+		return true
+	})
+}
+
 var httpTransport = &http.Transport{
 	DialContext:           wrapDialContext(httpDialer.DialContext),
 	MaxIdleConns:          maxIdleConns,
@@ -67,11 +164,14 @@ var httpTransport = &http.Transport{
 }
 
 func init() {
-	// don't know why there is a large number of connections even though MaxConnsPerHost is set.
-	// close idle connections periodically.
 	go func() {
-		for range time.NewTicker(time.Second).C {
-			httpTransport.CloseIdleConnections()
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			// Do not call CloseIdleConnections here. The transport's own idle
+			// policy should manage connections; this loop only keeps metrics from
+			// retaining stale entries.
+			cleanupStaleConnections()
 		}
 	}()
 }
@@ -107,9 +207,30 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 		}
 	}
 
+	// use default transport if MaxConnsPerHost is not configured
+	transport := httpRoundTripper
+	if args.MaxConnsPerHost > 0 {
+		// create a custom transport with configured MaxConnsPerHost
+		customTransport := &http.Transport{
+			DialContext:           wrapDialContext(httpDialer.DialContext),
+			MaxIdleConns:          maxIdleConns,
+			IdleConnTimeout:       idleConnTimeout,
+			MaxIdleConnsPerHost:   maxIdleConnsPerHost,
+			MaxConnsPerHost:       args.MaxConnsPerHost,
+			TLSHandshakeTimeout:   connectTimeout,
+			ResponseHeaderTimeout: readWriteTimeout,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+				RootCAs:            caPool,
+			},
+			Proxy: http.ProxyFromEnvironment,
+		}
+		transport = wrapRoundTripper(customTransport)
+	}
+
 	// client
 	client := &http.Client{
-		Transport: httpRoundTripper,
+		Transport: transport,
 	}
 
 	return client

@@ -17,13 +17,14 @@ package deletion
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -35,13 +36,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type relationHandleFactory struct {
+	engine.Relation
+	handle         engine.Relation
+	newHandleCalls int
+}
+
+func (f *relationHandleFactory) NewRelationHandle() engine.Relation {
+	f.newHandleCalls++
+	return f.handle
+}
+
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	arg := &Deletion{}
 	arg.String(buf)
 }
 
-func prepareDeletionTest(t *testing.T, ctrl *gomock.Controller, relResetExpectErr bool) (*process.Process, engine.Engine) {
+func prepareDeletionTest(
+	t *testing.T,
+	ctrl *gomock.Controller,
+) (*process.Process, engine.Engine, *mock_frontend.MockRelation, *relationHandleFactory) {
 	ctx := context.TODO()
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -65,26 +80,22 @@ func prepareDeletionTest(t *testing.T, ctrl *gomock.Controller, relResetExpectEr
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	if relResetExpectErr {
-		relation.EXPECT().Reset(gomock.Any()).Return(moerr.NewInternalErrorNoCtx("")).AnyTimes()
-	} else {
-		relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
-	}
-
-	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+	factory := &relationHandleFactory{Relation: relation, handle: relation}
+	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(factory, nil).AnyTimes()
 
 	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	proc.Base.TxnOperator = txnOperator
-	return proc, eng
+	return proc, eng, relation, factory
 }
 
 func TestNormalDeletion(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	proc, eng := prepareDeletionTest(t, ctrl, false)
+	proc, eng, relation, factory := prepareDeletionTest(t, ctrl)
+	relation.EXPECT().Reset(gomock.Any()).Return(nil).Times(1)
 	arg := Deletion{
 		DeleteCtx: &DeleteCtx{
 			Ref: &plan.ObjectRef{
@@ -98,28 +109,37 @@ func TestNormalDeletion(t *testing.T) {
 		ctr: container{},
 	}
 
-	resetChildren(&arg)
+	resetChildren(&arg, proc.Mp())
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
+	firstSource := arg.ctr.source
+	require.Same(t, relation, firstSource)
+	require.Equal(t, 1, factory.newHandleCalls)
 	_, err = vm.Exec(&arg, proc)
 	require.NoError(t, err)
 
 	arg.Reset(proc, false, nil)
+	require.Same(t, firstSource, arg.ctr.source)
 
 	err = arg.Prepare(proc)
 	require.NoError(t, err)
+	require.Same(t, firstSource, arg.ctr.source)
+	require.Equal(t, 1, factory.newHandleCalls)
 	_, err = vm.Exec(&arg, proc)
 	require.NoError(t, err)
 	arg.Free(proc, false, nil)
+	require.Nil(t, arg.ctr.source)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func TestNormalDeletionError(t *testing.T) {
+func TestNormalDeletionResetErrorKeepsHandle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	proc, eng := prepareDeletionTest(t, ctrl, true)
+	proc, eng, relation, factory := prepareDeletionTest(t, ctrl)
+	resetErr := errors.New("reset relation")
+	relation.EXPECT().Reset(gomock.Any()).Return(resetErr).Times(1)
 
 	arg := Deletion{
 		DeleteCtx: &DeleteCtx{
@@ -134,24 +154,29 @@ func TestNormalDeletionError(t *testing.T) {
 		ctr: container{},
 	}
 
-	resetChildren(&arg)
+	resetChildren(&arg, proc.Mp())
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
 	_, err = vm.Exec(&arg, proc)
 	require.NoError(t, err)
 
 	arg.Reset(proc, false, nil)
+	firstSource := arg.ctr.source
+	require.Same(t, relation, firstSource)
 
 	err = arg.Prepare(proc)
-	require.Error(t, err)
-	arg.Free(proc, false, nil)
+	require.ErrorIs(t, err, resetErr)
+	require.Same(t, firstSource, arg.ctr.source)
+	require.Equal(t, 1, factory.newHandleCalls)
+	arg.Free(proc, true, resetErr)
+	require.Nil(t, arg.ctr.source)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
-func resetChildren(arg *Deletion) {
+func resetChildren(arg *Deletion, m *mpool.MPool) {
 	op := colexec.NewMockOperator()
-	bat := colexec.MakeMockBatchsWithRowID()
+	bat := colexec.MakeMockBatchsWithRowID(m)
 	op.WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

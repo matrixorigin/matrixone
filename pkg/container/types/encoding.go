@@ -13,18 +13,21 @@
 // limitations under the License.
 
 //go:build !debug
-// +build !debug
 
 package types
 
 import (
 	"bytes"
+	"cmp"
 	"encoding"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 )
@@ -37,6 +40,7 @@ const (
 	TimestampSize  int = 8
 	Decimal64Size  int = 8
 	Decimal128Size int = 16
+	Decimal256Size int = 32
 	UuidSize       int = 16
 )
 
@@ -237,6 +241,14 @@ func DecodeEnum(v []byte) Enum {
 	return *(*Enum)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeMoYear(v *MoYear) []byte {
+	return util.UnsafeToBytes(v)
+}
+
+func DecodeMoYear(v []byte) MoYear {
+	return *(*MoYear)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeDecimal64(v *Decimal64) []byte {
 	return util.UnsafeToBytes(v)
 }
@@ -251,6 +263,14 @@ func EncodeDecimal128(v *Decimal128) []byte {
 
 func DecodeDecimal128(v []byte) Decimal128 {
 	return *(*Decimal128)(unsafe.Pointer(&v[0]))
+}
+
+func EncodeDecimal256(v *Decimal256) []byte {
+	return util.UnsafeToBytes(v)
+}
+
+func DecodeDecimal256(v []byte) Decimal256 {
+	return *(*Decimal256)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeUuid(v *Uuid) []byte {
@@ -347,22 +367,147 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[Datetime](val)
 	case T_timestamp:
 		return DecodeFixed[Timestamp](val)
+	case T_year:
+		return DecodeFixed[MoYear](val)
 	case T_decimal64:
 		return DecodeFixed[Decimal64](val)
 	case T_decimal128:
 		return DecodeFixed[Decimal128](val)
+	case T_decimal256:
+		return DecodeFixed[Decimal256](val)
 	case T_uuid:
 		return DecodeFixed[Uuid](val)
 	case T_TS:
 		return DecodeFixed[TS](val)
 	case T_Rowid:
 		return DecodeFixed[Rowid](val)
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
 		return val
 	case T_enum:
 		return DecodeFixed[Enum](val)
 	default:
 		panic(fmt.Sprintf("unsupported type %v", t))
+	}
+}
+
+func CompareValue(left, right any) int {
+	if left == nil {
+		if right == nil {
+			return 0
+		}
+		return -1
+	}
+	if right == nil {
+		return 1
+	}
+
+	switch lVal := left.(type) {
+	case bool:
+		rVal := right.(bool)
+		switch {
+		case lVal && !rVal:
+			return 1
+		case !lVal && rVal:
+			return -1
+		default:
+			return 0
+		}
+	case uint64:
+		return cmp.Compare(lVal, right.(uint64))
+	case int8:
+		return cmp.Compare(lVal, right.(int8))
+	case int16:
+		return cmp.Compare(lVal, right.(int16))
+	case int32:
+		return cmp.Compare(lVal, right.(int32))
+	case int64:
+		return cmp.Compare(lVal, right.(int64))
+	case uint8:
+		return cmp.Compare(lVal, right.(uint8))
+	case uint16:
+		return cmp.Compare(lVal, right.(uint16))
+	case uint32:
+		return cmp.Compare(lVal, right.(uint32))
+	case float32:
+		return cmp.Compare(lVal, right.(float32))
+	case float64:
+		return cmp.Compare(lVal, right.(float64))
+	case Decimal64:
+		return lVal.Compare(right.(Decimal64))
+	case Decimal128:
+		return lVal.Compare(right.(Decimal128))
+	case Decimal256:
+		return lVal.Compare(right.(Decimal256))
+	case Date:
+		return cmp.Compare(lVal, right.(Date))
+	case Time:
+		return cmp.Compare(lVal, right.(Time))
+	case Timestamp:
+		return cmp.Compare(lVal, right.(Timestamp))
+	case Datetime:
+		return cmp.Compare(lVal, right.(Datetime))
+	case MoYear:
+		return cmp.Compare(lVal, right.(MoYear))
+	case Uuid:
+		return lVal.Compare(right.(Uuid))
+	case TS:
+		rVal := right.(TS)
+		return lVal.Compare(&rVal)
+	case Blockid:
+		rVal := right.(Blockid)
+		return lVal.Compare(&rVal)
+	case Rowid:
+		rVal := right.(Rowid)
+		return lVal.Compare(&rVal)
+	case []byte:
+		return bytes.Compare(lVal, right.([]byte))
+	case bytejson.ByteJson:
+		return bytejson.CompareByteJson(lVal, right.(bytejson.ByteJson))
+	case []float32:
+		return compareFloatSlice(lVal, right.([]float32))
+	case []float64:
+		return compareFloatSlice(lVal, right.([]float64))
+	// Narrow vector element slices. ArrayElementCompare covers every element
+	// type; compareFloatSlice is float-only.
+	case []BF16:
+		return ArrayElementCompare(lVal, right.([]BF16))
+	case []Float16:
+		return ArrayElementCompare(lVal, right.([]Float16))
+	case []int8:
+		return ArrayElementCompare(lVal, right.([]int8))
+	// NOTE: no []uint8 arm — []uint8 IS []byte in Go, so a vecuint8 value is
+	// already caught by the []byte case above. That is correct: for equal-length
+	// arrays bytes.Compare is exactly element-wise unsigned comparison, which is
+	// what ArrayElementCompare[uint8] would do.
+	case Enum:
+		return cmp.Compare(lVal, right.(Enum))
+	case string:
+		return strings.Compare(lVal, right.(string))
+	default:
+		panic(fmt.Sprintf("CompareValue unsupported type %T", left))
+	}
+}
+
+func compareFloatSlice[T ~float32 | ~float64](left, right []T) int {
+	min := len(left)
+	if len(right) < min {
+		min = len(right)
+	}
+	for i := 0; i < min; i++ {
+		if left[i] < right[i] {
+			return -1
+		}
+		if left[i] > right[i] {
+			return 1
+		}
+	}
+	switch {
+	case len(left) < len(right):
+		return -1
+	case len(left) > len(right):
+		return 1
+	default:
+		return 0
 	}
 }
 
@@ -396,6 +541,8 @@ func EncodeValue(val any, t T) []byte {
 		return EncodeFixed(val.(Decimal64))
 	case T_decimal128:
 		return EncodeFixed(val.(Decimal128))
+	case T_decimal256:
+		return EncodeFixed(val.(Decimal256))
 	case T_date:
 		return EncodeFixed(val.(Date))
 	case T_time:
@@ -404,6 +551,8 @@ func EncodeValue(val any, t T) []byte {
 		return EncodeFixed(val.(Timestamp))
 	case T_datetime:
 		return EncodeFixed(val.(Datetime))
+	case T_year:
+		return EncodeFixed(val.(MoYear))
 	case T_uuid:
 		return EncodeFixed(val.(Uuid))
 	case T_TS:
@@ -411,7 +560,7 @@ func EncodeValue(val any, t T) []byte {
 	case T_Rowid:
 		return EncodeFixed(val.(Rowid))
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary,
-		T_array_float32, T_array_float64, T_datalink:
+		T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
 		// Mainly used by Zonemap, which receives val input from DN batch/vector.
 		// This val is mostly []bytes and not []float32 or []float64
 		return val.([]byte)
@@ -552,4 +701,205 @@ func Uint32ToInt32(ux uint32) int32 {
 		x = ^x
 	}
 	return x
+}
+
+func WriteSizeBytes(bs []byte, w io.Writer) error {
+	sz := int32(len(bs))
+	if _, err := w.Write(EncodeInt32(&sz)); err != nil {
+		return err
+	}
+	if sz > 0 {
+		if _, err := w.Write(bs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ReadInt64(r io.Reader) (int64, error) {
+	var buf [8]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, err
+	}
+	return int64(binary.LittleEndian.Uint64(buf[:])), nil
+}
+
+func ReadUint64(r io.Reader) (uint64, error) {
+	var buf [8]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint64(buf[:]), nil
+}
+
+func WriteInt64(w io.Writer, v int64) error {
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], uint64(v))
+	_, err := w.Write(buf[:])
+	return err
+}
+
+func WriteUint64(w io.Writer, v uint64) error {
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], v)
+	_, err := w.Write(buf[:])
+	return err
+}
+
+func ReadBool(r io.Reader) (bool, error) {
+	var buf [1]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return false, err
+	}
+	return buf[0] != 0, nil
+}
+
+func ReadInt16(r io.Reader) (int16, error) {
+	var buf [2]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, err
+	}
+	return int16(binary.LittleEndian.Uint16(buf[:])), nil
+}
+
+func WriteInt16(w io.Writer, v int16) error {
+	var buf [2]byte
+	binary.LittleEndian.PutUint16(buf[:], uint16(v))
+	_, err := w.Write(buf[:])
+	return err
+}
+
+func ReadUint16(r io.Reader) (uint16, error) {
+	var buf [2]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint16(buf[:]), nil
+}
+
+func WriteUint16(w io.Writer, v uint16) error {
+	var buf [2]byte
+	binary.LittleEndian.PutUint16(buf[:], v)
+	_, err := w.Write(buf[:])
+	return err
+}
+
+func ReadInt32(r io.Reader) (int32, error) {
+	var buf [4]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, err
+	}
+	return int32(binary.LittleEndian.Uint32(buf[:])), nil
+}
+
+func WriteInt32(w io.Writer, v int32) error {
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], uint32(v))
+	_, err := w.Write(buf[:])
+	return err
+}
+
+func ReadUint32(r io.Reader) (uint32, error) {
+	var buf [4]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint32(buf[:]), nil
+}
+
+func WriteUint32(w io.Writer, v uint32) error {
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], v)
+	_, err := w.Write(buf[:])
+	return err
+}
+
+func ReadInt32AsInt(r io.Reader) (int, error) {
+	var buf [4]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, err
+	}
+	return int(int32(binary.LittleEndian.Uint32(buf[:]))), nil
+}
+
+func ReadByte(r io.Reader) (byte, error) {
+	var buf [1]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, err
+	}
+	return buf[0], nil
+}
+
+func ReadByteAsInt(r io.Reader) (int, error) {
+	var buf [1]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, err
+	}
+	return int(buf[0]), nil
+}
+
+func ReadType(r io.Reader) (Type, error) {
+	var buf [TSize]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return Type{}, err
+	}
+	return DecodeType(buf[:]), nil
+}
+
+func ReadSizeBytes(r io.Reader) (int32, []byte, error) {
+	sz, err := ReadInt32(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if sz > 0 {
+		bs := make([]byte, sz)
+		if _, err := io.ReadFull(r, bs); err != nil {
+			return 0, nil, err
+		}
+		return sz, bs, nil
+	}
+	return sz, nil, nil
+}
+
+func ReadSizeBytesToBuf(r io.Reader, buf []byte, offset int32) (int32, []byte, error) {
+	sz, err := ReadInt32(r)
+	if err != nil || sz == 0 {
+		return 0, buf, err
+	}
+
+	if sz+offset <= int32(cap(buf)) {
+		buf = buf[:offset+sz]
+		if _, err := io.ReadFull(r, buf[offset:offset+sz]); err != nil {
+			return 0, buf, err
+		}
+		return sz, buf, nil
+	} else {
+		newbuf := make([]byte, sz+offset)
+		copy(newbuf, buf[:offset])
+		if _, err := io.ReadFull(r, newbuf[offset:offset+sz]); err != nil {
+			return 0, newbuf, err
+		}
+		return sz, newbuf, nil
+	}
+}
+
+func ReadSizeBytesMp(r io.Reader, bs []byte, mp *mpool.MPool, offHeap bool) (int32, []byte, error) {
+	sz, err := ReadInt32(r)
+	if err != nil {
+		return 0, nil, err
+	}
+	if sz > 0 {
+		bs, err = mp.Grow(bs, int(sz), offHeap)
+		if err != nil {
+			return 0, nil, err
+		}
+		if _, err := io.ReadFull(r, bs); err != nil {
+			return 0, nil, err
+		}
+	} else {
+		if bs != nil {
+			bs = bs[:0]
+		}
+	}
+	return sz, bs, nil
 }

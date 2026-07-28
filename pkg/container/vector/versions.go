@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -79,6 +80,7 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 
 	// read length
 	v.length = int(types.DecodeUint32(data[:4]))
+	// capacity is lenght, as this is a nocopy unmarshal.
 	data = data[4:]
 
 	// read data
@@ -86,7 +88,6 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 	data = data[4:]
 	if dataLen > 0 {
 		v.data = data[:dataLen]
-		v.setupFromData()
 		data = data[dataLen:]
 	}
 

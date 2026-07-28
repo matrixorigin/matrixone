@@ -1,0 +1,67 @@
+SELECT MONTHNAME('2008-02-03') AS result1;
+result1
+February
+SELECT MONTHNAME('2008-01-15') AS jan;
+jan
+January
+SELECT MONTHNAME('2008-02-15') AS feb;
+feb
+February
+SELECT MONTHNAME('2008-03-15') AS mar;
+mar
+March
+SELECT MONTHNAME('2008-04-15') AS apr;
+apr
+April
+SELECT MONTHNAME('2008-05-15') AS may;
+may
+May
+SELECT MONTHNAME('2008-06-15') AS jun;
+jun
+June
+SELECT MONTHNAME('2008-07-15') AS jul;
+jul
+July
+SELECT MONTHNAME('2008-08-15') AS aug;
+aug
+August
+SELECT MONTHNAME('2008-09-15') AS sep;
+sep
+September
+SELECT MONTHNAME('2008-10-15') AS oct;
+oct
+October
+SELECT MONTHNAME('2008-11-15') AS nov;
+nov
+November
+SELECT MONTHNAME('2008-12-15') AS dec;
+dec
+December
+SELECT MONTHNAME('2008-02-03') AS date_type;
+date_type
+February
+SELECT MONTHNAME('2008-02-03 10:30:45') AS datetime_type;
+datetime_type
+February
+SELECT MONTHNAME(TIMESTAMP('2008-02-03 10:30:45')) AS timestamp_type;
+timestamp_type
+February
+SELECT MONTHNAME(NULL) AS null_date;
+null_date
+null
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2008-01-15'), ('2008-06-15'), ('2008-12-15');
+SELECT MONTHNAME(d) AS month_name FROM t1;
+month_name
+January
+June
+December
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2008-01-15'), ('2008-06-15'), ('2008-12-15');
+SELECT * FROM t1 WHERE MONTHNAME(d) = 'February';
+d
+DROP TABLE t1;
+SELECT MONTHNAME('2000-02-03') AS year2000, MONTHNAME('2024-02-03') AS year2024;
+year2000    year2024
+February    February

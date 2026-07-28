@@ -22,15 +22,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -39,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -47,7 +43,6 @@ import (
 	client2 "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -57,9 +52,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 var _ engine.Engine = new(Engine)
+
+const (
+	workspaceRSSCacheFamilyEvictTimeout   = 10 * time.Second
+	workspaceRSSCacheAdmissionPressureTTL = 2 * time.Minute
+	workspaceRSSCachePressureTargetOwner  = "workspace-rss"
+)
+
+func makeWorkspaceRSSCacheEvictor(timeout time.Duration) func(context.Context, int64) {
+	return func(ctx context.Context, targetPercent int64) {
+		memoryCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseWorkspaceRSSCacheEvict)
+		defer cancel()
+		fileservice.EvictMemoryCachesToCapacityPercent(memoryCtx, targetPercent)
+	}
+}
+
+func setWorkspaceRSSCachePressureTarget(targetPercent int64) {
+	fileservice.SetMemoryCachePressureTargetPercentByOwner(
+		workspaceRSSCachePressureTargetOwner,
+		targetPercent,
+		time.Now().Add(workspaceRSSCacheAdmissionPressureTTL),
+	)
+}
+
+func clearWorkspaceRSSCachePressureTarget() {
+	fileservice.ClearMemoryCachePressureTargetByOwner(workspaceRSSCachePressureTargetOwner)
+}
 
 func New(
 	ctx context.Context,
@@ -107,10 +130,9 @@ func New(
 			},
 		),
 	}
-	e.mu.snapParts = make(map[[2]uint64]*struct {
-		sync.Mutex
-		snaps []*logtailreplay.Partition
-	})
+	// Initialize snapshot manager
+	e.snapshotMgr = NewSnapshotManager()
+	e.snapshotMgr.Init()
 
 	pool, err := ants.NewPool(GCPoolSize)
 	if err != nil {
@@ -126,22 +148,60 @@ func New(
 		RwMutex:       &sync.Mutex{},
 	}
 
+	e.fillDefaults()
+
 	for _, opt := range options {
 		opt(e)
 	}
-	e.fillDefaults()
 
 	if err := e.init(ctx); err != nil {
 		panic(err)
 	}
 
 	e.pClient.LogtailRPCClientFactory = DefaultNewRpcStreamToTnLogTailService
-	e.pClient.ctx = ctx
 
 	err = initMoTableStatsConfig(ctx, e)
 	if err != nil {
 		panic(err)
 	}
+
+	if e.config.memThrottler == nil {
+		throttlerOptions := []rscthrottler.MemThrottlerOption{
+			rscthrottler.WithRSSScavenging(),
+			rscthrottler.WithRSSCachePressureTarget(
+				setWorkspaceRSSCachePressureTarget,
+				clearWorkspaceRSSCachePressureTarget,
+			),
+			rscthrottler.WithRSSCacheEvictor(
+				makeWorkspaceRSSCacheEvictor(workspaceRSSCacheFamilyEvictTimeout),
+			),
+		}
+		if e.config.quota.Load() != 0 {
+			throttlerOptions = append(
+				throttlerOptions,
+				rscthrottler.WithConstLimit(int64(e.config.quota.Load())),
+			)
+		}
+		e.config.memThrottler = rscthrottler.NewMemThrottler(
+			"Workspace",
+			5.0/100.0,
+			throttlerOptions...,
+		)
+
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.config.memThrottler.Available()))
+	}
+
+	e.cloneTxnCache = newCloneTxnCache()
+	e.ccprTxnCache = NewCCPRTxnCache(e.gcPool, e.fs)
+
+	logutil.Info(
+		"INIT-ENGINE-CONFIG",
+		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
+		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
+		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
+		zap.Int64("ExtraWorkspaceThresholdQuota", e.config.memThrottler.Available()),
+		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
+	)
 
 	return e
 }
@@ -150,7 +210,11 @@ func (e *Engine) Close() error {
 	if e.gcPool != nil {
 		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}
+
 	e.dynamicCtx.Close()
+	e.cloneTxnCache = nil
+	e.ccprTxnCache = nil
+
 	return nil
 }
 
@@ -170,20 +234,6 @@ func (e *Engine) fillDefaults() {
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
 	}
-	if e.config.quota.Load() <= 0 {
-		mem := objectio.TotalMem() / 100 * 5
-		e.config.quota.Store(mem)
-		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(mem))
-	}
-
-	logutil.Info(
-		"INIT-ENGINE-CONFIG",
-		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
-		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
-		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
-		zap.Uint64("ExtraWorkspaceThresholdQuota", e.config.quota.Load()),
-		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
-	)
 }
 
 // SetWorkspaceThreshold updates the commit and write workspace thresholds (in MB).
@@ -201,24 +251,40 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 	return
 }
 
-func (e *Engine) AcquireQuota(v uint64) (uint64, bool) {
-	for {
-		oldRemaining := e.config.quota.Load()
-		if oldRemaining < v {
-			return 0, false
-		}
-		remaining := oldRemaining - v
-		if e.config.quota.CompareAndSwap(oldRemaining, remaining) {
-			v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
-			return remaining, true
-		}
+// for UT
+func (e *Engine) ForceGC(ctx context.Context, ts types.TS) {
+	parts := make(map[[2]uint64]*logtailreplay.Partition)
+	e.Lock()
+	for ids, part := range e.partitions {
+		parts[ids] = part
 	}
+	e.Unlock()
+	collector := logtailreplay.NewTruncateCollector()
+	for ids, part := range parts {
+		part.Truncate(ctx, ids, ts, collector)
+	}
+	e.catalog.Load().GC(ts.ToTimestamp())
 }
 
-func (e *Engine) ReleaseQuota(quota uint64) (remaining uint64) {
-	e.config.quota.Add(quota)
-	remaining = e.config.quota.Load()
-	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
+// GCCatalogCache implements engine.CatalogCacheGCer.
+func (e *Engine) GCCatalogCache(ctx context.Context, ago time.Duration) error {
+	ts := types.BuildTS(time.Now().UTC().UnixNano()-ago.Nanoseconds(), 0)
+	e.catalog.Load().GC(ts.ToTimestamp())
+	return nil
+}
+
+func (e *Engine) AcquireQuota(v int64) (int64, bool) {
+	left, ok := e.config.memThrottler.Acquire(v)
+	if ok {
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(left))
+	}
+
+	return left, ok
+}
+
+func (e *Engine) ReleaseQuota(quota int64) (left uint64) {
+	left = uint64(e.config.memThrottler.Release(quota))
+	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(left))
 	return
 }
 
@@ -236,10 +302,11 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
-	accountId, userId, roleId, err := getAccessInfo(ctx)
+	accountId, userId, _, err := getAccessInfo(ctx)
 	if err != nil {
 		return err
 	}
+	roleId := getDDLOwnerRoleId(ctx)
 	databaseId, err := txn.allocateID(ctx)
 	if err != nil {
 		return err
@@ -263,6 +330,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 
 	key := genDatabaseKey(accountId, name)
 	txn.databaseOps.addCreateDatabase(key, txn.statementID, &txnDatabase{
+		accountId:    accountId,
 		op:           op,
 		databaseId:   databaseId,
 		databaseName: name,
@@ -273,13 +341,18 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 func (e *Engine) loadDatabaseFromStorage(
 	ctx context.Context,
 	accountID uint32,
-	name string, op client.TxnOperator) (*cache.DatabaseItem, error) {
+	name string,
+	op client.TxnOperator,
+) (*cache.DatabaseItem, error) {
 	sql := fmt.Sprintf(catalog.MoDatabaseAllQueryFormat, accountID, name)
 	now := time.Now()
 	defer func() {
 		if time.Since(now) > time.Second {
-			logutil.Info("FIND_TABLE slow loadDatabaseFromStorage",
-				zap.String("sql", sql), zap.Duration("cost", time.Since(now)))
+			logutil.Info(
+				"engine.database.load.from.storage.slow",
+				zap.String("sql", sql),
+				zap.Duration("cost", time.Since(now)),
+			)
 		}
 	}()
 	res, err := execReadSql(ctx, op, sql, true)
@@ -288,10 +361,14 @@ func (e *Engine) loadDatabaseFromStorage(
 	}
 	defer res.Close()
 	logerror := func() {
-		logutil.Error("FIND_TABLE bad loadDatabaseFromStorage", zap.String("batch", stringifySlice(res.Batches, func(a any) string {
-			bat := a.(*batch.Batch)
-			return common.MoBatchToString(bat, 10)
-		})), zap.String("sql", sql))
+		logutil.Error(
+			"engine.database.load.from.storage.bad",
+			zap.String("sql", sql),
+			zap.String("batch", stringifySlice(res.Batches, func(a any) string {
+				bat := a.(*batch.Batch)
+				return common.MoBatchToString(bat, 10)
+			})),
+		)
 	}
 
 	if len(res.Batches) != 1 { // not found
@@ -367,20 +444,50 @@ func (e *Engine) Database(
 
 	if ok := catalog.GetDatabase(item); !ok {
 		if !catalog.CanServe(types.TimestampToTS(op.SnapshotTS())) {
-			logutil.Info("FIND_TABLE loadDatabaseFromStorage", zap.String("name", name), zap.String("cacheTs", catalog.GetStartTS().ToString()), zap.String("txn", op.Txn().DebugString()))
+			logutil.Info(
+				"engine.database.load.from.storage",
+				zap.String("name", name),
+				zap.String("cache-start", catalog.GetStartTS().ToString()),
+				zap.String("txn", op.Txn().DebugString()),
+			)
 			// read batch from storage
 			if item, err = e.loadDatabaseFromStorage(ctx, accountId, name, op); err != nil {
+				logutil.Error(
+					"engine.database.load.from.storage.error",
+					zap.String("name", name),
+					zap.Uint32("account-id", accountId),
+					zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+					zap.String("txn", op.Txn().DebugString()),
+					zap.Error(err),
+				)
 				return nil, err
 			}
 			if item == nil {
+				logutil.Warn(
+					"engine.database.not-found.at.snapshot",
+					zap.String("name", name),
+					zap.Uint32("account-id", accountId),
+					zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+					zap.String("cache-start", catalog.GetStartTS().ToString()),
+					zap.String("txn", op.Txn().DebugString()),
+				)
 				return nil, moerr.GetOkExpectedEOB()
 			}
 		} else {
+			logutil.Warn(
+				"engine.database.not-found.in-cache",
+				zap.String("name", name),
+				zap.Uint32("account-id", accountId),
+				zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+				zap.String("cache-start", catalog.GetStartTS().ToString()),
+				zap.String("txn", op.Txn().DebugString()),
+			)
 			return nil, moerr.GetOkExpectedEOB()
 		}
 	}
 
 	return &txnDatabase{
+		accountId:         accountId,
 		op:                op,
 		databaseName:      name,
 		databaseId:        item.Id,
@@ -417,7 +524,12 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	return
 }
 
-func loadNameByIdFromStorage(ctx context.Context, op client.TxnOperator, accountId uint32, tableId uint64) (dbName string, tblName string, err error) {
+func loadNameByIdFromStorage(
+	ctx context.Context,
+	op client.TxnOperator,
+	accountId uint32,
+	tableId uint64,
+) (dbName string, tblName string, err error) {
 	sql := fmt.Sprintf(catalog.MoTablesQueryNameById, accountId, tableId)
 	tblanmes, dbnames := []string{}, []string{}
 	result, err := execReadSql(ctx, op, sql, true)
@@ -431,9 +543,14 @@ func loadNameByIdFromStorage(ctx context.Context, op client.TxnOperator, account
 		}
 	}
 	if len(tblanmes) != 1 {
-		logutil.Warn("FIND_TABLE GetRelationById sql failed",
-			zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId),
-			zap.Strings("tblanmes", tblanmes), zap.Strings("dbnames", dbnames), zap.String("txn", op.Txn().DebugString()))
+		logutil.Warn(
+			"engine.relation.load.from.storage.bad",
+			zap.Uint64("table-id", tableId),
+			zap.Uint32("account-id", accountId),
+			zap.Strings("table-names", tblanmes),
+			zap.Strings("db-names", dbnames),
+			zap.String("txn", op.Txn().DebugString()),
+		)
 	} else {
 		tblName = tblanmes[0]
 		dbName = dbnames[0]
@@ -465,7 +582,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	txn := op.GetWorkspace().(*Transaction)
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
 	if tableName == "" && deleted {
-		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v. Deleted in txn", tableId, accountId)
+		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
 	}
 
 	// not found in tableOps, try cache
@@ -475,30 +592,77 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		if cacheItem != nil {
 			tableName = cacheItem.Name
 			dbName = cacheItem.DatabaseName
+			logutil.Debug(
+				"engine.relation.resolve.by-id.cache-hit",
+				zap.Uint64("table-id", tableId),
+				zap.Uint32("account-id", accountId),
+				zap.String("db-name", dbName),
+				zap.String("table-name", tableName),
+				zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+				zap.String("txn", op.Txn().DebugString()),
+			)
 		} else if !cache.CanServe(types.TimestampToTS(op.SnapshotTS())) {
 			// not found in cache, try storage
-			logutil.Info("FIND_TABLE loadNameByIdFromStorage", zap.String("txn", op.Txn().DebugString()), zap.Uint64("tableId", tableId))
-			dbName, tableName, err = loadNameByIdFromStorage(ctx, op, accountId, tableId)
-			if err != nil {
+			logutil.Info(
+				"engine.relation.load.from.storage",
+				zap.String("txn", op.Txn().DebugString()),
+				zap.Uint64("table-id", tableId),
+			)
+			if dbName, tableName, err = loadNameByIdFromStorage(
+				ctx, op, accountId, tableId,
+			); err != nil {
 				return "", "", nil, err
+			}
+			if tableName != "" {
+				logutil.Info(
+					"engine.relation.resolve.by-id.storage-hit",
+					zap.Uint64("table-id", tableId),
+					zap.Uint32("account-id", accountId),
+					zap.String("db-name", dbName),
+					zap.String("table-name", tableName),
+					zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+					zap.String("txn", op.Txn().DebugString()),
+				)
 			}
 		}
 	}
 
 	if tableName == "" {
 		accountId, _ := defines.GetAccountId(ctx)
-		logutil.Error("FIND_TABLE GetRelationById failed",
-			zap.Uint64("tableId", tableId), zap.Uint32("accountId", accountId), zap.String("workspace", txn.PPString()))
-		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
+		return "", "", nil, moerr.NewInternalErrorf(
+			ctx,
+			"can not find table by id %d: accountId: %d",
+			tableId, accountId,
+		)
 	}
 
 	txnDb, err := e.Database(ctx, dbName, op)
 	if err != nil {
+		logutil.Error(
+			"engine.relation.resolve.by-id.database-error",
+			zap.Uint64("table-id", tableId),
+			zap.Uint32("account-id", accountId),
+			zap.String("db-name", dbName),
+			zap.String("table-name", tableName),
+			zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+			zap.String("txn", op.Txn().DebugString()),
+			zap.Error(err),
+		)
 		return "", "", nil, err
 	}
 
 	txnTable, err := txnDb.Relation(ctx, tableName, nil)
 	if err != nil {
+		logutil.Error(
+			"engine.relation.resolve.by-id.table-error",
+			zap.Uint64("table-id", tableId),
+			zap.Uint32("account-id", accountId),
+			zap.String("db-name", dbName),
+			zap.String("table-name", tableName),
+			zap.String("snapshot-ts", types.TimestampToTS(op.SnapshotTS()).ToString()),
+			zap.String("txn", op.Txn().DebugString()),
+			zap.Error(err),
+		)
 		return "", "", nil, err
 	}
 
@@ -510,15 +674,6 @@ func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) (err error) {
-	defer func() {
-		if err != nil {
-			if strings.Contains(name, "sysbench_db") {
-				logutil.Errorf("delete database %s failed: %v", name, err)
-				logutil.Errorf("stack: %s", stack.Callers(3))
-				logutil.Errorf("txnmeta %v", op.Txn().DebugString())
-			}
-		}
-	}()
 	if op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete database in snapshot txn")
 	}
@@ -540,6 +695,8 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	txnDB := toDelDB.(*txnDatabase)
+	rels = filterDeleteDatabaseRelations(txnDB, rels, name, op)
 	for _, relName := range rels {
 		if err := toDelDB.Delete(ctx, relName); err != nil {
 			return err
@@ -547,25 +704,29 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	}
 
 	// fetch (accountid, databaseid, rowid) to delete the database
-	databaseId := toDelDB.(*txnDatabase).databaseId
+	databaseId := txnDB.databaseId
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
 	}
-	res, err := execReadSql(ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, name), true)
+	res, err := execReadSql(
+		ctx, op, fmt.Sprintf(catalog.MoDatabaseRowidQueryFormat, accountId, name), true,
+	)
 	if err != nil {
 		return err
 	}
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
-		logutil.Error("FIND_TABLE deleteDatabaseError",
+		logutil.Error(
+			"engine.delete.relation.bad",
+			zap.Uint64("db-id", databaseId),
+			zap.Uint32("account-id", accountId),
+			zap.String("name", name),
+			zap.String("workspace", op.GetWorkspace().PPString()),
 			zap.String("bat", stringifySlice(res.Batches, func(a any) string {
 				bat := a.(*batch.Batch)
 				return common.MoBatchToString(bat, 10)
 			})),
-			zap.Uint32("accountId", accountId),
-			zap.String("name", name),
-			zap.Uint64("did", databaseId),
-			zap.String("workspace", op.GetWorkspace().PPString()))
+		)
 		panic("delete table failed: query failed")
 	}
 	rowId := vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
@@ -594,6 +755,31 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	return nil
 }
 
+func filterDeleteDatabaseRelations(db *txnDatabase, rels []string, databaseName string, op client.TxnOperator) []string {
+	filtered := make([]string, 0, len(rels))
+	for _, relName := range rels {
+		if isDeleteDatabaseRelationDeletedInTxn(db, db.accountId, relName) {
+			logutil.Info(
+				"skip table already deleted in txn during database delete",
+				zap.String("database", databaseName),
+				zap.String("table", relName),
+				zap.String("txn", op.Txn().DebugString()),
+			)
+			continue
+		}
+		filtered = append(filtered, relName)
+	}
+	return filtered
+}
+
+func isDeleteDatabaseRelationDeletedInTxn(db *txnDatabase, accountId uint32, relName string) bool {
+	if db.databaseId == catalog.MO_CATALOG_ID && catalog.IsSystemTableByName(relName) {
+		accountId = catalog.System_Account
+	}
+	key := genTableKey(accountId, relName, db.databaseId, db.databaseName)
+	return db.getTxn().tableOps.existAndDeleted(key)
+}
+
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
@@ -612,6 +798,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.hakeeper,
 		e.us,
 		nil,
+		nil,
 	)
 	txn := NewTxnWorkSpace(e, proc)
 	op.AddWorkspace(txn)
@@ -624,68 +811,322 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Nodes(
 	isInternal bool, tenant string, username string, cnLabel map[string]string,
 ) (engine.Nodes, error) {
-	var ncpu = system.GoMaxProcs()
-	var nodes engine.Nodes
+	candidates, err := e.DiscoverQueryCandidates(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	pool, err := e.ResolveQueryCandidatePool(context.Background(), candidates, engine.QueryCandidatePoolRequest{
+		IsInternal: isInternal,
+		Tenant:     tenant,
+		Username:   username,
+		CNLabel:    cnLabel,
+	})
+	return pool.Nodes, err
+}
 
+var _ engine.QueryCandidateDiscoverer = (*Engine)(nil)
+var _ engine.QueryCandidatePoolResolver = (*Engine)(nil)
+
+// DiscoverQueryCandidates reads a version-compatible CN inventory without
+// applying tenant or label policy.
+func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandidates, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementNodesHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	cluster := clusterservice.GetMOCluster(e.service)
-	var selector clusterservice.Selector
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cluster, err := clusterservice.GetMOClusterWithContext(ctx, e.service)
+	if err != nil {
+		return nil, err
+	}
 
-	// If the requested labels are empty, return all CN servers.
-	if len(cnLabel) == 0 {
-		cluster.GetCNService(selector, func(c metadata.CNService) bool {
+	var candidates engine.QueryCandidates
+	err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+		ctx,
+		cluster,
+		clusterservice.NewSelector(),
+		func(c metadata.CNService) bool {
+			if ctx.Err() != nil {
+				return false
+			}
 			if c.CommitID == version.CommitID {
-				nodes = append(nodes, engine.Node{
-					// should use c.CPUTotal to set Mcpu for the compile and pipeline.
-					// ref: https://github.com/matrixorigin/matrixone/issues/17935
-					Mcpu: ncpu,
-					Id:   c.ServiceID,
-					Addr: c.PipelineServiceAddress,
+				candidates = append(candidates, engine.QueryCandidate{
+					Service: c,
+					Mcpu:    normalizedQueryCandidateCPU(c.CPUTotal),
 				})
 			}
 			return true
 		})
-		return nodes, nil
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+func normalizedQueryCandidateCPU(cpuTotal uint64) int {
+	if cpuTotal == 0 {
+		return 1
+	}
+	maxInt := int(^uint(0) >> 1)
+	if cpuTotal > uint64(maxInt) {
+		// Invalid control-plane input must not turn into enormous execution DOP.
+		return 1
+	}
+	return int(cpuTotal)
+}
+
+// ResolveQueryCandidatePool applies the historical disttae tenant/label route
+// to one candidate snapshot. It does not rank or choose a worker subset.
+func (e *Engine) ResolveQueryCandidatePool(
+	ctx context.Context,
+	candidates engine.QueryCandidates,
+	request engine.QueryCandidatePoolRequest,
+) (engine.ResolvedQueryPool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return engine.ResolvedQueryPool{}, err
+	}
+	if !request.FallbackPolicy.Valid() {
+		return engine.ResolvedQueryPool{}, moerr.NewInvalidInput(ctx, "invalid query pool fallback policy")
+	}
+	if len(request.CNLabel) == 0 {
+		if request.FallbackPolicy == engine.QueryPoolFallbackStrict {
+			identity := request.RequestedPool
+			if identity == "" {
+				identity = string(engine.QueryPoolResolutionNoMatch)
+			}
+			return engine.ResolvedQueryPool{
+				RequestedIdentity: request.RequestedPool,
+				Identity:          identity,
+				Resolution:        engine.QueryPoolResolutionNoMatch,
+				FallbackReason:    "strict-missing-label-selector",
+			}, nil
+		}
+		nodes, err := queryCandidateNodes(ctx, candidates)
+		return engine.ResolvedQueryPool{
+			Nodes:             nodes,
+			RequestedIdentity: request.RequestedPool,
+			Identity:          "all-compatible",
+			Resolution:        engine.QueryPoolResolutionAllCompatible,
+		}, err
 	}
 
-	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ_Globbing)
-	if isInternal || strings.ToLower(tenant) == "sys" {
-		route.RouteForSuperTenant(
-			e.service,
-			selector,
-			username,
-			nil,
-			func(s *metadata.CNService) {
-				if s.CommitID == version.CommitID {
-					nodes = append(nodes, engine.Node{
-						Mcpu: ncpu,
-						Id:   s.ServiceID,
-						Addr: s.PipelineServiceAddress,
-					})
-				}
-			},
-		)
-	} else {
-		route.RouteForCommonTenant(
-			e.service,
-			selector,
-			nil,
-			func(s *metadata.CNService) {
-				if s.CommitID == version.CommitID {
-					nodes = append(nodes, engine.Node{
-						Mcpu: ncpu,
-						Id:   s.ServiceID,
-						Addr: s.PipelineServiceAddress,
-					})
-				}
-			},
-		)
+	labels, err := cloneStringMap(ctx, request.CNLabel)
+	if err != nil {
+		return engine.ResolvedQueryPool{}, err
 	}
-	return nodes, nil
+	selector := clusterservice.NewSelector().SelectByLabel(labels, clusterservice.EQ_Globbing)
+	services, byRoute, err := queryCandidateRoutingInput(ctx, candidates)
+	if err != nil {
+		return engine.ResolvedQueryPool{}, err
+	}
+	var nodes engine.Nodes
+	appendCandidate := func(service *metadata.CNService) {
+		candidate, ok := byRoute[queryCandidateRouteKey{
+			serviceID: service.ServiceID,
+			address:   service.PipelineServiceAddress,
+		}]
+		if ok {
+			nodes = append(nodes, queryCandidateNode(candidate))
+		}
+	}
+	var routeResolution route.PoolResolution
+	if request.IsInternal || strings.ToLower(request.Tenant) == "sys" {
+		routeResolution, err = route.ResolveForSuperTenantCandidates(ctx, services, selector, request.Username, nil, appendCandidate)
+	} else {
+		routeResolution, err = route.ResolveForCommonTenantCandidates(ctx, services, selector, nil, appendCandidate)
+	}
+	if err != nil {
+		return engine.ResolvedQueryPool{}, err
+	}
+	resolution := toQueryPoolResolution(routeResolution)
+	fallback := routeResolution != route.PoolResolutionExactLabels && routeResolution != route.PoolResolutionNoMatch
+	if request.FallbackPolicy == engine.QueryPoolFallbackStrict && fallback {
+		// Strict mode rejects the compatibility branch, but preserves exact
+		// requested-pool members that are currently draining/drained. Eligibility
+		// filtering owns that state transition and needs these nodes for an
+		// accurate empty-pool reason and dropped-candidate trace.
+		var strictNodes engine.Nodes
+		if err = appendRuntimeIneligibleQueryCandidates(ctx, candidates, selector, &strictNodes); err != nil {
+			return engine.ResolvedQueryPool{}, err
+		}
+		strictResolution := engine.QueryPoolResolutionNoMatch
+		if len(strictNodes) > 0 {
+			strictResolution = engine.QueryPoolResolutionExactLabels
+		}
+		return engine.ResolvedQueryPool{
+			Nodes:             strictNodes,
+			RequestedIdentity: request.RequestedPool,
+			Identity:          request.RequestedPool,
+			Resolution:        strictResolution,
+			FallbackReason:    "strict-rejected-" + string(routeResolution),
+		}, nil
+	}
+	if err = appendRuntimeIneligibleQueryCandidates(ctx, candidates, selector, &nodes); err != nil {
+		return engine.ResolvedQueryPool{}, err
+	}
+	if resolution == engine.QueryPoolResolutionNoMatch && len(nodes) > 0 {
+		resolution = engine.QueryPoolResolutionExactLabels
+	}
+	identity := request.RequestedPool
+	if fallback || identity == "" {
+		identity = string(resolution)
+	}
+	return engine.ResolvedQueryPool{
+		Nodes:             nodes,
+		RequestedIdentity: request.RequestedPool,
+		Identity:          identity,
+		Resolution:        resolution,
+		Fallback:          fallback,
+		FallbackReason:    fallbackReason(fallback, routeResolution),
+	}, nil
+}
+
+func toQueryPoolResolution(resolution route.PoolResolution) engine.QueryPoolResolution {
+	switch resolution {
+	case route.PoolResolutionExactLabels:
+		return engine.QueryPoolResolutionExactLabels
+	case route.PoolResolutionNonAccountLabels:
+		return engine.QueryPoolResolutionNonAccountLabels
+	case route.PoolResolutionSharedUnlabeled:
+		return engine.QueryPoolResolutionSharedUnlabeled
+	case route.PoolResolutionPrivilegedAny:
+		return engine.QueryPoolResolutionPrivilegedAny
+	default:
+		return engine.QueryPoolResolutionNoMatch
+	}
+}
+
+func fallbackReason(fallback bool, resolution route.PoolResolution) string {
+	if !fallback {
+		return ""
+	}
+	return string(resolution)
+}
+
+func queryCandidateNodes(ctx context.Context, candidates engine.QueryCandidates) (engine.Nodes, error) {
+	if len(candidates) == 0 {
+		return nil, ctx.Err()
+	}
+	nodes := make(engine.Nodes, 0, len(candidates))
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if candidate.Service.WorkState == metadata.WorkState_Working ||
+			candidate.Service.WorkState == metadata.WorkState_Unknown {
+			nodes = append(nodes, queryCandidateNode(candidate))
+		}
+	}
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if candidate.Service.WorkState == metadata.WorkState_Draining ||
+			candidate.Service.WorkState == metadata.WorkState_Drained {
+			nodes = append(nodes, queryCandidateNode(candidate))
+		}
+	}
+	return nodes, ctx.Err()
+}
+
+func queryCandidateNode(candidate engine.QueryCandidate) engine.Node {
+	return engine.Node{
+		Mcpu:      candidate.Mcpu,
+		Id:        candidate.Service.ServiceID,
+		Addr:      candidate.Service.PipelineServiceAddress,
+		WorkState: candidate.Service.WorkState,
+	}
+}
+
+type queryCandidateRouteKey struct {
+	serviceID string
+	address   string
+}
+
+func queryCandidateRoutingInput(
+	ctx context.Context,
+	candidates engine.QueryCandidates,
+) ([]metadata.CNService, map[queryCandidateRouteKey]engine.QueryCandidate, error) {
+	services := make([]metadata.CNService, 0, len(candidates))
+	byRoute := make(map[queryCandidateRouteKey]engine.QueryCandidate, len(candidates))
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		services = append(services, candidate.Service)
+		byRoute[queryCandidateRouteKey{
+			serviceID: candidate.Service.ServiceID,
+			address:   candidate.Service.PipelineServiceAddress,
+		}] = candidate
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	return services, byRoute, nil
+}
+
+func appendRuntimeIneligibleQueryCandidates(
+	ctx context.Context,
+	candidates engine.QueryCandidates,
+	selector clusterservice.Selector,
+	nodes *engine.Nodes,
+) error {
+	seen := make(map[queryCandidateRouteKey]struct{}, len(*nodes))
+	matcher := new(clusterservice.SelectorMatcher)
+	for _, node := range *nodes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		seen[queryCandidateRouteKey{serviceID: node.Id, address: node.Addr}] = struct{}{}
+	}
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		service := candidate.Service
+		if service.WorkState != metadata.WorkState_Draining && service.WorkState != metadata.WorkState_Drained {
+			continue
+		}
+		if !matcher.MatchCN(selector, service) {
+			continue
+		}
+		key := queryCandidateRouteKey{
+			serviceID: service.ServiceID,
+			address:   service.PipelineServiceAddress,
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		*nodes = append(*nodes, queryCandidateNode(candidate))
+		seen[key] = struct{}{}
+	}
+	return ctx.Err()
+}
+
+func cloneStringMap(ctx context.Context, values map[string]string) (map[string]string, error) {
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		cloned[key] = value
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return cloned, nil
 }
 
 func (e *Engine) Hints() (h engine.Hints) {
@@ -769,15 +1210,16 @@ func (e *Engine) setPushClientStatus(ready bool) {
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	e.Lock()
-	defer e.Unlock()
 	// XXX it's probably not a good way to do that.
 	// after we set it to empty, actually this part of memory was not immediately released.
 	// maybe a very old transaction still using that.
 	delete(e.partitions, [2]uint64{dbId, tblId})
+	e.Unlock()
 
-	//  When removing the PartitionState, you need to remove the tid in globalStats,
-	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
-	//e.globalStats.RemoveTid(tblId)
+	// Remove the tid from globalStats AFTER releasing Engine lock to avoid
+	// deadlock: cleanMemoryTableWithTable holds Engine.mu→GlobalStats.mu,
+	// while GlobalStats.Get holds GlobalStats.mu→Engine.mu (via GetOrCreateLatestPart).
+	e.globalStats.RemoveTid(tblId)
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 
@@ -786,17 +1228,22 @@ func (e *Engine) PushClient() *PushClient {
 }
 
 // TryToSubscribeTable implements the LogtailEngine interface.
-func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64, dbName, tblName string) error {
-	return e.PushClient().TryToSubscribeTable(ctx, dbID, tbID, dbName, tblName)
+func (e *Engine) TryToSubscribeTable(ctx context.Context, accId, dbID, tbID uint64, dbName, tblName string) error {
+	return e.PushClient().TryToSubscribeTable(ctx, accId, dbID, tbID, dbName, tblName)
 }
 
 // UnsubscribeTable implements the LogtailEngine interface.
-func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
-	return e.PushClient().UnsubscribeTable(ctx, dbID, tbID)
+func (e *Engine) UnsubscribeTable(ctx context.Context, accId, dbID, tbID uint64) error {
+	return e.PushClient().UnsubscribeTable(ctx, accId, dbID, tbID)
 }
 
 func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
 	return e.globalStats.Get(ctx, key, sync)
+}
+
+// GetGlobalStats returns the GlobalStats instance
+func (e *Engine) GetGlobalStats() *GlobalStats {
+	return e.globalStats
 }
 
 // return true if the prefetch is received
@@ -821,6 +1268,44 @@ func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return e.pClient.LatestLogtailAppliedTime()
 }
 
-func (e *Engine) HasTempEngine() bool {
-	return false
+// RunGCScheduler runs all GC tasks in a single goroutine with different intervals
+func (e *Engine) RunGCScheduler(ctx context.Context) {
+	unusedTableTicker := time.NewTicker(unsubscribeProcessTicker)
+	partitionStateTicker := time.NewTicker(gcPartitionStateTicker)
+	snapshotTicker := time.NewTicker(gcSnapshotTicker)
+
+	defer unusedTableTicker.Stop()
+	defer partitionStateTicker.Stop()
+	defer snapshotTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			logutil.Info("engine.gc.scheduler.stopped")
+			return
+
+		case <-unusedTableTicker.C:
+			// GC unused tables in PushClient
+			e.pClient.TryGC(ctx)
+
+		case <-partitionStateTicker.C:
+			// GC partition states
+			e.gcPartitionState(ctx)
+
+		case <-snapshotTicker.C:
+			// GC snapshot partitions
+			e.snapshotMgr.MaybeStartGC()
+		}
+	}
+}
+
+// gcPartitionState runs GC for partition states
+func (e *Engine) gcPartitionState(ctx context.Context) {
+	if e.pClient.subscriber == nil {
+		return
+	}
+	if !e.pClient.receivedLogTailTime.ready.Load() {
+		return
+	}
+	e.pClient.doGCPartitionState(ctx, e)
 }

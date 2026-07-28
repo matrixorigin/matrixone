@@ -41,6 +41,7 @@ func TestFilter(t *testing.T) {
 		nil, // no hakeeper
 		nil, // no udf service
 		nil, // no auto increase
+		nil,
 	)
 	defer proc.Free()
 
@@ -922,6 +923,7 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 							mp := mpool.MustNewZeroNoFixed()
 							vec := vector.NewVec(types.T_int64.ToType())
 							_ = vector.AppendFixed[int64](vec, int64(1), false, mp)
+							vec.InplaceSortAndCompact()
 							data, _ := vec.MarshalBinary()
 							return data
 						}(),

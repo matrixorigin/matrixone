@@ -80,8 +80,11 @@ type CSVConfig struct {
 	// This means we will meet unescaped quote in an unquoted field
 	UnescapedQuote bool
 
-	// see csv.Reader
-	Comment byte
+	// Comment is the comment marker: a line whose RAW prefix (before unquoting)
+	// equals it is skipped. The empty string (the default) means no comment
+	// marker, so every line is data — an enclosed value like "#x" is always
+	// data regardless, since its raw prefix is the enclosure char.
+	Comment string
 }
 
 // CSVParser is basically a copy of encoding/csv, but special-cased for MySQL-like input.
@@ -131,7 +134,7 @@ type CSVParser struct {
 	isLastChunk      bool
 
 	// see csv.Reader
-	comment byte
+	comment []byte
 
 	reader io.Reader
 	// stores data that has NOT been parsed yet, it shares same memory as appendBuf.
@@ -162,9 +165,13 @@ func NewCSVParser(
 	shouldParseHeader bool,
 ) (*CSVParser, error) {
 	// see csv.Reader
-	if !validDelim(rune(cfg.FieldsTerminatedBy[0])) || (cfg.Comment != 0 && !validDelim(rune(cfg.Comment))) || cfg.Comment == cfg.FieldsTerminatedBy[0] {
-		return nil, moerr.NewInvalidInputNoCtx("invalid field or comment delimiter")
+	if !validDelim(rune(cfg.FieldsTerminatedBy[0])) {
+		return nil, moerr.NewInvalidInputNoCtx("invalid field delimiter")
 	}
+	// The comment marker is matched as a raw line prefix (see readRecord), so it
+	// no longer shares the tokenizer's byte stop-sets and cannot collide with
+	// the field terminator the way a single-byte marker did; only whether it is
+	// empty or not is meaningful here.
 
 	var err error
 	var separator, delimiter, terminator string
@@ -226,6 +233,7 @@ func NewCSVParser(
 		escapedBy:         cfg.FieldsEscapedBy,
 		unescapeRegexp:    r,
 		escFlavor:         escFlavor,
+		comment:           []byte(cfg.Comment),
 		quoteByteSet:      makeByteSet(quoteStopSet),
 		unquoteByteSet:    makeByteSet(unquoteStopSet),
 		newLineByteSet:    makeByteSet(newLineStopSet),
@@ -550,6 +558,23 @@ func (parser *CSVParser) readRecord() error {
 
 outside:
 	for {
+		// Comment lines are recognized by the RAW prefix of the line, before any
+		// unquoting — so a quoted value such as "#x" (whose raw prefix is the
+		// enclosure char) is data, while an unquoted line beginning with the
+		// comment marker is skipped. This is the first check on each fresh line
+		// (prevToken==newline, nothing accumulated yet, startingBy not matched),
+		// and it loops to skip consecutive comment lines. An empty marker
+		// (the default) disables comments entirely.
+		if len(parser.comment) > 0 && prevToken == csvTokenNewLine &&
+			len(parser.recordBuffer) == 0 && !foundStartingByThisLine {
+			if bs, perr := parser.peekBytes(len(parser.comment)); perr == nil && bytes.Equal(bs, parser.comment) {
+				if _, _, rerr := parser.readUntilTerminator(); rerr != nil && rerr != io.EOF {
+					return rerr
+				}
+				continue
+			}
+		}
+
 		// we should drop
 		// 1. the whole line if it does not contain startingBy
 		// 2. any character before startingBy
@@ -635,19 +660,6 @@ outside:
 					parser.recordBuffer = parser.recordBuffer[:0]
 					continue
 				}
-			}
-			// skip lines start with comment
-			if err == nil && parser.comment != 0 && parser.recordBuffer[0] == parser.comment {
-				parser.recordBuffer = parser.recordBuffer[:0]
-				parser.fieldIndexes = parser.fieldIndexes[:0]
-				parser.fieldIsQuoted = parser.fieldIsQuoted[:0]
-
-				isEmptyLine = true
-				whitespaceLine = true
-				foundStartingByThisLine = false
-				prevToken = csvTokenNewLine
-				fieldIsQuoted = false
-				continue
 			}
 			if bytes.Equal(parser.newLine, []byte{'\n'}) {
 				if n := len(parser.recordBuffer); n > 1 && parser.recordBuffer[n-1] == '\r' {

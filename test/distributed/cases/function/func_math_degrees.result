@@ -1,0 +1,63 @@
+SELECT DEGREES(PI()) AS result1;
+result1
+180.0
+SELECT DEGREES(0) AS zero_radians;
+zero_radians
+0.0
+SELECT DEGREES(PI()) AS pi_radians;
+pi_radians
+180.0
+SELECT DEGREES(PI()/2) AS pi_over_2;
+pi_over_2
+90.0
+SELECT DEGREES(PI()/4) AS pi_over_4;
+pi_over_4
+45.0
+SELECT DEGREES(2*PI()) AS two_pi;
+two_pi
+360.0
+SELECT DEGREES(-PI()) AS negative_pi;
+negative_pi
+-180.0
+SELECT DEGREES(0) AS zero_degrees;
+zero_degrees
+0.0
+SELECT DEGREES(PI()/6) AS thirty_degrees;
+thirty_degrees
+29.999999999999996
+SELECT DEGREES(PI()/4) AS forty_five_degrees;
+forty_five_degrees
+45.0
+SELECT DEGREES(PI()/3) AS sixty_degrees;
+sixty_degrees
+59.99999999999999
+SELECT DEGREES(PI()/2) AS ninety_degrees;
+ninety_degrees
+90.0
+SELECT DEGREES(PI()) AS one_eighty_degrees;
+one_eighty_degrees
+180.0
+SELECT DEGREES(2*PI()) AS three_sixty_degrees;
+three_sixty_degrees
+360.0
+SELECT DEGREES(NULL) AS null_input;
+null_input
+null
+CREATE TABLE t1(radians FLOAT);
+INSERT INTO t1 VALUES (0), (PI()/2), (PI()), (2*PI()), (-PI());
+SELECT radians, DEGREES(radians) AS degrees FROM t1;
+radians    degrees
+0.0    0.0
+1.5707964    90.00000250447816
+3.1415927    180.00000500895632
+6.2831855    360.00001001791264
+-3.1415927    -180.00000500895632
+DROP TABLE t1;
+CREATE TABLE t1(radians FLOAT);
+INSERT INTO t1 VALUES (0), (PI()/2), (PI()), (2*PI()), (-PI());
+SELECT * FROM t1 WHERE DEGREES(radians) > 0;
+radians
+1.5707964
+3.1415927
+6.2831855
+DROP TABLE t1;

@@ -536,7 +536,7 @@ func populateOneRowData(ctx context.Context, bat *batch.Batch, attrKeys []string
 				val = v != 0.0
 			case string:
 				var err error
-				val, err = strconv.ParseBool(v)
+				val, err = types.ParseBool(v)
 				if err != nil {
 					nulls.Add(vec.GetNulls(), uint64(rowIdx))
 					continue

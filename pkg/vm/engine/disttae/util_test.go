@@ -21,21 +21,197 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLinearSearchOffsetByValFactory_Varchar(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	// Build keys vector with varchar values
+	keys := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(keys, []byte("alice"), false, mp))
+	require.NoError(t, vector.AppendBytes(keys, []byte("bob"), false, mp))
+
+	searchFn := LinearSearchOffsetByValFactory(keys)
+
+	// Target vector that does NOT contain the keys
+	target := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(target, []byte("charlie"), false, mp))
+	require.NoError(t, vector.AppendBytes(target, []byte("dave"), false, mp))
+
+	hits := searchFn(target)
+	require.Empty(t, hits, "should not match when target has different values")
+
+	// Target vector that contains one of the keys
+	target2 := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(target2, []byte("charlie"), false, mp))
+	require.NoError(t, vector.AppendBytes(target2, []byte("bob"), false, mp))
+	require.NoError(t, vector.AppendBytes(target2, []byte("dave"), false, mp))
+
+	hits2 := searchFn(target2)
+	require.Equal(t, []int64{1}, hits2, "should match 'bob' at index 1")
+
+	keys.Free(mp)
+	target.Free(mp)
+	target2.Free(mp)
+}
+
+// narrowArrayLinearSearch exercises LinearSearchOffsetByValFactory for a narrow
+// vector array key type (vecbf16/vecf16/vecint8/vecuint8). Both the key-side map
+// build and the target-side search switch on the element type, so a narrow array
+// must be handled in both or this panics "not supported".
+func narrowArrayLinearSearch[T types.ArrayElement](t *testing.T, mp *mpool.MPool, oid types.T, a, b, c []T) {
+	typ := types.New(oid, int32(len(a)), 0)
+
+	keys := vector.NewVec(typ)
+	require.NoError(t, vector.AppendArray[T](keys, a, false, mp))
+	require.NoError(t, vector.AppendArray[T](keys, b, false, mp))
+	searchFn := LinearSearchOffsetByValFactory(keys)
+
+	// target with no matching key
+	target := vector.NewVec(typ)
+	require.NoError(t, vector.AppendArray[T](target, c, false, mp))
+	require.Empty(t, searchFn(target))
+
+	// target containing key b at index 1
+	target2 := vector.NewVec(typ)
+	require.NoError(t, vector.AppendArray[T](target2, c, false, mp))
+	require.NoError(t, vector.AppendArray[T](target2, b, false, mp))
+	require.Equal(t, []int64{1}, searchFn(target2))
+
+	keys.Free(mp)
+	target.Free(mp)
+	target2.Free(mp)
+}
+
+func TestLinearSearchOffsetByValFactory_NarrowArray(t *testing.T) {
+	mp := mpool.MustNewZero()
+	narrowArrayLinearSearch[types.Float16](t, mp, types.T_array_float16,
+		types.Float32ToFloat16Slice([]float32{1, 1}),
+		types.Float32ToFloat16Slice([]float32{2, 2}),
+		types.Float32ToFloat16Slice([]float32{3, 3}))
+	narrowArrayLinearSearch[types.BF16](t, mp, types.T_array_bf16,
+		types.Float32ToBF16Slice([]float32{1, 1}),
+		types.Float32ToBF16Slice([]float32{2, 2}),
+		types.Float32ToBF16Slice([]float32{3, 3}))
+	narrowArrayLinearSearch[int8](t, mp, types.T_array_int8,
+		[]int8{1, 1}, []int8{2, 2}, []int8{3, 3})
+	narrowArrayLinearSearch[uint8](t, mp, types.T_array_uint8,
+		[]uint8{1, 1}, []uint8{2, 2}, []uint8{3, 3})
+}
+
+func TestLinearSearchOffsetByValFactory_Int64(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	keys := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(keys, int64(10), false, mp))
+	require.NoError(t, vector.AppendFixed(keys, int64(20), false, mp))
+
+	searchFn := LinearSearchOffsetByValFactory(keys)
+
+	target := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(target, int64(5), false, mp))
+	require.NoError(t, vector.AppendFixed(target, int64(15), false, mp))
+
+	require.Empty(t, searchFn(target))
+
+	target2 := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(target2, int64(20), false, mp))
+	require.NoError(t, vector.AppendFixed(target2, int64(30), false, mp))
+	require.NoError(t, vector.AppendFixed(target2, int64(10), false, mp))
+
+	require.Equal(t, []int64{0, 2}, searchFn(target2))
+
+	keys.Free(mp)
+	target.Free(mp)
+	target2.Free(mp)
+}
+
+func TestTombstonePKExistsInRange(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	pState := logtailreplay.NewPartitionState("", true, 0, false)
+	int32Type := types.T_int32.ToType()
+
+	// Helper: write a CN tombstone object with given PK values, return its ObjectStats.
+	writeTombstone := func(pkValues []int32) objectio.ObjectStats {
+		writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type, -1)
+		bat := readutil.NewCNTombstoneBatch(&int32Type, objectio.HiddenColumnSelection_None)
+		for _, pk := range pkValues {
+			vector.AppendFixed[types.Rowid](bat.Vecs[0], types.RandomRowid(), false, proc.GetMPool())
+			vector.AppendFixed[int32](bat.Vecs[1], pk, false, proc.GetMPool())
+		}
+		bat.SetRowCount(bat.Vecs[0].Length())
+		require.NoError(t, writer.Write(ctx, bat))
+		ss, err := writer.Sync(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(ss))
+		return ss[0]
+	}
+
+	// Write tombstone with PKs [100, 200, 300]
+	stats1 := writeTombstone([]int32{100, 200, 300})
+	// Write tombstone with PKs [400, 500]
+	stats2 := writeTombstone([]int32{400, 500})
+
+	// Insert into partition state with CreateTime after 'from'
+	from := types.BuildTS(10, 0)
+	require.NoError(t, pState.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{
+		ObjectStats: stats1,
+		CreateTime:  types.BuildTS(15, 0),
+	}, true))
+	require.NoError(t, pState.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{
+		ObjectStats: stats2,
+		CreateTime:  types.BuildTS(20, 0),
+	}, true))
+	// Case 1: search for PK=200, should find it
+	keys1 := vector.NewVec(int32Type)
+	require.NoError(t, vector.AppendFixed[int32](keys1, 200, false, proc.GetMPool()))
+	changed, _, err := tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys1, int32Type, fs)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	// Case 2: search for PK=999, should not find it
+	keys2 := vector.NewVec(int32Type)
+	require.NoError(t, vector.AppendFixed[int32](keys2, 999, false, proc.GetMPool()))
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys2, int32Type, fs)
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	// Case 3: search for PK=500, should find it in second tombstone
+	keys3 := vector.NewVec(int32Type)
+	require.NoError(t, vector.AppendFixed[int32](keys3, 500, false, proc.GetMPool()))
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys3, int32Type, fs)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	// Case 4: no tombstone objects changed after from=25
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), types.MaxTs(), keys1, int32Type, fs)
+	require.NoError(t, err)
+	require.False(t, changed)
+}
 
 func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")
@@ -79,7 +255,7 @@ func TestCheckExprIsZonemappable(t *testing.T) {
 }
 
 func TestEvalZonemapFilter(t *testing.T) {
-	m := mpool.MustNewNoFixed(t.Name())
+	m := mpool.MustNew(t.Name())
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	type myCase = struct {
 		exprs  []*plan.Expr

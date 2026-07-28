@@ -1,0 +1,21 @@
+drop table if exists approx_count_01;
+create table approx_count_01(a int, b varchar(10));
+insert into approx_count_01 values
+(1, 'a'),
+(1, 'a'),
+(1, 'b'),
+(2, null),
+(2, 'x'),
+(2, 'y'),
+(2, 'y');
+select approx_count(a) from approx_count_01;
+➤ approx_count(a)[-5,64,0]  𝄀
+7
+select a, approx_count(b) from approx_count_01 group by a order by a;
+➤ a[4,32,0]  ¦  approx_count(b)[-5,64,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  3
+select approx_count_distinct(b) from approx_count_01;
+➤ approx_count_distinct(b)[-5,64,0]  𝄀
+4
+drop table approx_count_01;

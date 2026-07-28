@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +30,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
+)
+
+var (
+	defaultWaitTimeOnRetryBackendSend = 300 * time.Millisecond
+	// Keep backend send retries bounded so rollback/catalog RPCs fail in finite
+	// time instead of stretching broken explicit txns for hours.
+	defaultMaxWaitTimeOnRetryBackendSend = 30 * time.Second
 )
 
 // WithSenderLocalDispatch set options for dispatch request to local to avoid rpc call
@@ -50,9 +57,8 @@ type sender struct {
 	}
 
 	pool struct {
-		resultPool      *sync.Pool
-		responsePool    *sync.Pool
-		localStreamPool *sync.Pool
+		resultPool   *sync.Pool
+		responsePool *sync.Pool
 	}
 }
 
@@ -67,16 +73,14 @@ func NewSender(
 	}
 	s.adjust()
 
-	s.pool.localStreamPool = &sync.Pool{
-		New: func() any {
-			return newLocalStream(s.releaseLocalStream, s.acquireResponse)
-		},
-	}
 	s.pool.resultPool = &sync.Pool{
 		New: func() any {
 			rs := &SendResult{
 				pool:    s.pool.resultPool,
 				streams: make(map[uint64]morpc.Stream, 16),
+			}
+			if s.options.localDispatch != nil {
+				rs.localHandlers = make(map[uint64]TxnRequestHandleFunc, 1)
 			}
 			return rs
 		},
@@ -88,7 +92,12 @@ func NewSender(
 	}
 
 	s.cfg.BackendOptions = append(s.cfg.BackendOptions,
-		morpc.WithBackendStreamBufferSize(10000))
+		morpc.WithBackendStreamBufferSize(10000),
+		morpc.WithBackendReadTimeout(time.Second*30))
+	s.cfg.ClientOptions = append(s.cfg.ClientOptions,
+		// Bound morpc's initial backend auto-create wait so sender-side retry budget
+		// can stop broken TN/backend sends in finite time.
+		morpc.WithClientAutoCreateWaitTimeout(getBackendAutoCreateWaitTimeout()))
 	client, err := s.cfg.NewClient(
 		s.rt.ServiceUUID(),
 		"txn-client",
@@ -123,8 +132,27 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 	}
 
 	sr.reset(requests)
+	commitResponsesPending := 0
+	var commitTxnID []byte
 	for idx := range requests {
 		tn := requests[idx].GetTargetTN()
+		if s.options.localDispatch != nil {
+			handler, resolved := sr.localHandlers[tn.ShardID]
+			if !resolved {
+				handler = s.options.localDispatch(tn)
+				sr.localHandlers[tn.ShardID] = handler
+			}
+			if handler != nil {
+				requests[idx].RequestID = 0
+				s.handleLocalRequest(ctx, handler, &requests[idx], sr, idx)
+				if requests[idx].Method == txn.TxnMethod_Commit {
+					commitResponsesPending++
+					commitTxnID = requests[idx].Txn.ID
+				}
+				continue
+			}
+		}
+
 		st := sr.getStream(tn.ShardID)
 		if st == nil {
 			v, err := s.createStream(ctx, tn, len(requests))
@@ -139,26 +167,76 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		requests[idx].RequestID = st.ID()
 		if err := st.Send(ctx, &requests[idx]); err != nil {
 			sr.Release()
+			if requests[idx].Method == txn.TxnMethod_Commit {
+				// Stream.Send waits for the backend write/flush completion. A
+				// failure here can therefore be reported after part or all of the
+				// Commit reached TN; it is not proof that Commit was not sent.
+				return nil, newTxnUnknownError(ctx, requests[idx].Txn.ID)
+			}
 			return nil, err
+		}
+		if requests[idx].Method == txn.TxnMethod_Commit {
+			commitResponsesPending++
+			commitTxnID = requests[idx].Txn.ID
 		}
 	}
 
 	for idx := range requests {
+		if sr.localHandlers[requests[idx].GetTargetTN().ShardID] != nil {
+			if requests[idx].Method == txn.TxnMethod_Commit {
+				commitResponsesPending--
+			}
+			continue
+		}
+
 		st := sr.getStream(requests[idx].GetTargetTN().ShardID)
 		c, err := st.Receive()
 		if err != nil {
 			sr.Release()
+			if commitResponsesPending > 0 {
+				// Commit was accepted by the stream, so a response-path error
+				// cannot prove whether TN applied it.
+				return nil, newTxnUnknownError(ctx, commitTxnID)
+			}
 			return nil, err
 		}
 		v, ok := <-c
-		if !ok {
+		if !ok || v == nil {
+			sr.Release()
+			if commitResponsesPending > 0 {
+				// A closed stream after Commit was sent has the same unknown
+				// outcome as a Receive error.
+				return nil, newTxnUnknownError(ctx, commitTxnID)
+			}
 			return nil, moerr.NewStreamClosedNoCtx()
 		}
 		resp := v.(*txn.TxnResponse)
 		sr.setResponse(resp, idx)
 		s.releaseResponse(resp)
+		if requests[idx].Method == txn.TxnMethod_Commit {
+			commitResponsesPending--
+		}
 	}
 	return sr, nil
+}
+
+func (s *sender) handleLocalRequest(
+	ctx context.Context,
+	handler TxnRequestHandleFunc,
+	request *txn.TxnRequest,
+	sr *SendResult,
+	index int,
+) {
+	response := s.acquireResponse()
+	defer s.releaseResponse(response)
+	if err := handler(ctx, request, response); err != nil {
+		response.TxnError = txn.WrapError(moerr.NewRpcErrorNoCtx(err.Error()), 0)
+	}
+	sr.setResponse(response, index)
+}
+
+func newTxnUnknownError(ctx context.Context, txnID []byte) error {
+	return moerr.NewTxnUnknown(ctx, hex.EncodeToString(txnID))
 }
 
 func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnResponse, error) {
@@ -174,6 +252,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	}
 
 	var f *morpc.Future
+	var lastBackendErr error
 	reqFn := func() error {
 		var err error
 		start := time.Now()
@@ -187,16 +266,33 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		return nil
 	}
 
+	retryState := backendRetryState{}
 	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return txn.TxnResponse{}, getBackendRetryExitError(ctxErr, lastBackendErr)
+		}
+
 		err := reqFn()
 		if err != nil {
 			// These errors are retriable error. Retry to send request to TN.
-			if moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
-				moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
-				time.Sleep(time.Millisecond * 300)
+			if isBackendConnectRetryError(err) {
+				lastBackendErr = err
+				wait, ok := getBackendRetryWaitDuration(&retryState)
+				if !ok {
+					s.logBackendRetryStop(err, tn, request, retryState)
+					return txn.TxnResponse{}, err
+				}
+				if !waitToRetrySend(ctx, wait) {
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						// Preserve the backend failure so upper layers can tear down an
+						// explicit txn instead of leaving it alive on a raw context error.
+						return txn.TxnResponse{}, err
+					}
+					return txn.TxnResponse{}, err
+				}
 				continue
 			}
-			return txn.TxnResponse{}, err
+			return txn.TxnResponse{}, getBackendRetryExitError(err, lastBackendErr)
 		}
 		break
 	}
@@ -204,40 +300,169 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	defer f.Close()
 	v, err := f.Get()
 	if err != nil {
+		// Once morpc accepted a Commit and returned a Future, a transport or
+		// response-wait error cannot prove whether TN applied it. This includes a
+		// context deadline after the request was written, not only EOF/reset.
+		if request.Method == txn.TxnMethod_Commit {
+			return txn.TxnResponse{}, newTxnUnknownError(ctx, request.Txn.ID)
+		}
 		// if the error is io.EOF or "connection is reset by peer",
 		// means the connection to TN node is ended, but no response
 		// is returned from TN txn service. In this case, the result
 		// of the txn status is unknown.
 		if errors.Is(err, io.EOF) ||
 			strings.Contains(err.Error(), "connection reset by peer") {
-			return txn.TxnResponse{},
-				moerr.NewTxnUnknown(
-					ctx,
-					hex.EncodeToString(request.Txn.ID),
-				)
+			return txn.TxnResponse{}, newTxnUnknownError(ctx, request.Txn.ID)
 		}
 		return txn.TxnResponse{}, err
 	}
 	return *(v.(*txn.TxnResponse)), nil
 }
 
+type backendRetryState struct {
+	deadline time.Time
+}
+
+func getBackendRetryWaitDuration(retryState *backendRetryState) (time.Duration, bool) {
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 {
+		return 0, false
+	}
+
+	now := time.Now()
+	if retryState.deadline.IsZero() {
+		retryState.deadline = now.Add(defaultMaxWaitTimeOnRetryBackendSend)
+	}
+	if !retryState.deadline.After(now) {
+		return 0, false
+	}
+
+	remaining := time.Until(retryState.deadline)
+	if remaining < defaultWaitTimeOnRetryBackendSend {
+		return remaining, true
+	}
+	return defaultWaitTimeOnRetryBackendSend, true
+}
+
+func getBackendAutoCreateWaitTimeout() time.Duration {
+	if defaultWaitTimeOnRetryBackendSend <= 0 {
+		if defaultMaxWaitTimeOnRetryBackendSend > 0 {
+			return defaultMaxWaitTimeOnRetryBackendSend
+		}
+		return time.Millisecond
+	}
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 {
+		return defaultWaitTimeOnRetryBackendSend
+	}
+	if defaultWaitTimeOnRetryBackendSend < defaultMaxWaitTimeOnRetryBackendSend {
+		return defaultWaitTimeOnRetryBackendSend
+	}
+	return defaultMaxWaitTimeOnRetryBackendSend
+}
+
+func waitToRetrySend(ctx context.Context, wait time.Duration) bool {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		// Honor cancellation that races with timer delivery so we stop retrying a
+		// request whose caller has already given up.
+		return ctx.Err() == nil
+	}
+}
+
+func isBackendConnectRetryError(err error) bool {
+	// A closed backend can come back during TN/backend restart or address refresh,
+	// so we retry it for the same bounded window as the other backend-availability
+	// errors instead of waiting indefinitely.
+	return moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed)
+}
+
+func (s *sender) logBackendRetryStop(
+	err error,
+	tn metadata.TNShard,
+	request txn.TxnRequest,
+	retryState backendRetryState,
+) {
+	fields := []zap.Field{
+		zap.String("address", tn.Address),
+		zap.String("txn-id", hex.EncodeToString(request.Txn.ID)),
+		zap.String("method", request.Method.String()),
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendSend),
+	}
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 || retryState.deadline.IsZero() {
+		s.rt.Logger().Warn("txn sender backend retry disabled by non-positive budget", fields...)
+		return
+	}
+	fields = append(fields, zap.Time("retry-deadline", retryState.deadline))
+	s.rt.Logger().Warn("txn sender backend retry budget exhausted", fields...)
+}
+
 func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, size int) (morpc.Stream, error) {
-	if s.options.localDispatch != nil {
-		if h := s.options.localDispatch(tn); h != nil {
-			ls := s.acquireLocalStream()
-			ls.setup(ctx, h)
-			return ls, nil
+	retryState := backendRetryState{}
+	var lastBackendErr error
+	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, getBackendRetryExitError(ctxErr, lastBackendErr)
+		}
+
+		st, err := s.client.NewStream(ctx, tn.Address, false)
+		if err == nil {
+			return st, nil
+		}
+		if isBackendConnectRetryError(err) {
+			lastBackendErr = err
+		}
+		if !isBackendConnectRetryError(err) {
+			return nil, getBackendRetryExitError(err, lastBackendErr)
+		}
+
+		wait, ok := getBackendRetryWaitDuration(&retryState)
+		if !ok {
+			s.logBackendStreamRetryStop(err, tn, size, retryState)
+			return nil, err
+		}
+		if !waitToRetrySend(ctx, wait) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, err
+			}
+			return nil, err
 		}
 	}
-	return s.client.NewStream(tn.Address, false)
 }
 
-func (s *sender) acquireLocalStream() *localStream {
-	return s.pool.localStreamPool.Get().(*localStream)
+func getBackendRetryExitError(err error, lastBackendErr error) error {
+	if lastBackendErr != nil &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return lastBackendErr
+	}
+	return err
 }
 
-func (s *sender) releaseLocalStream(ls *localStream) {
-	s.pool.localStreamPool.Put(ls)
+func (s *sender) logBackendStreamRetryStop(
+	err error,
+	tn metadata.TNShard,
+	size int,
+	retryState backendRetryState,
+) {
+	fields := []zap.Field{
+		zap.String("address", tn.Address),
+		zap.Uint64("shard-id", tn.ShardID),
+		zap.Int("batch-size", size),
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendSend),
+	}
+	if defaultMaxWaitTimeOnRetryBackendSend <= 0 || retryState.deadline.IsZero() {
+		s.rt.Logger().Warn("txn sender stream backend retry disabled by non-positive budget", fields...)
+		return
+	}
+	fields = append(fields, zap.Time("retry-deadline", retryState.deadline))
+	s.rt.Logger().Warn("txn sender stream backend retry budget exhausted", fields...)
 }
 
 func (s *sender) acquireResponse() *txn.TxnResponse {
@@ -251,109 +476,6 @@ func (s *sender) releaseResponse(response *txn.TxnResponse) {
 
 func (s *sender) acquireSendResult() *SendResult {
 	return s.pool.resultPool.Get().(*SendResult)
-}
-
-type sendMessage struct {
-	request morpc.Message
-	// opts            morpc.SendOptions
-	handleFunc      TxnRequestHandleFunc
-	responseFactory func() *txn.TxnResponse
-	ctx             context.Context
-}
-
-type localStream struct {
-	releaseFunc     func(ls *localStream)
-	responseFactory func() *txn.TxnResponse
-	in              chan sendMessage
-	out             chan morpc.Message
-
-	// reset fields
-	closed     bool
-	handleFunc TxnRequestHandleFunc
-	ctx        context.Context
-}
-
-func newLocalStream(releaseFunc func(ls *localStream), responseFactory func() *txn.TxnResponse) *localStream {
-	ls := &localStream{
-		releaseFunc:     releaseFunc,
-		responseFactory: responseFactory,
-		in:              make(chan sendMessage, 32),
-		out:             make(chan morpc.Message, 32),
-	}
-	ls.setFinalizer()
-	ls.start()
-	return ls
-}
-
-func (ls *localStream) setFinalizer() {
-	runtime.SetFinalizer(ls, func(ls *localStream) {
-		ls.destroy()
-	})
-}
-
-func (ls *localStream) setup(ctx context.Context, handleFunc TxnRequestHandleFunc) {
-	ls.handleFunc = handleFunc
-	ls.ctx = ctx
-	ls.closed = false
-}
-
-func (ls *localStream) ID() uint64 {
-	return 0
-}
-
-func (ls *localStream) Send(ctx context.Context, request morpc.Message) error {
-	if ls.closed {
-		panic("send after closed")
-	}
-
-	ls.in <- sendMessage{
-		request:         request,
-		handleFunc:      ls.handleFunc,
-		responseFactory: ls.responseFactory,
-		ctx:             ls.ctx,
-	}
-	return nil
-}
-
-func (ls *localStream) Receive() (chan morpc.Message, error) {
-	if ls.closed {
-		panic("send after closed")
-	}
-
-	return ls.out, nil
-}
-
-func (ls *localStream) Close(closeConn bool) error {
-	if ls.closed {
-		return nil
-	}
-	ls.closed = true
-	ls.ctx = nil
-	ls.releaseFunc(ls)
-	return nil
-}
-
-func (ls *localStream) destroy() {
-	close(ls.in)
-	close(ls.out)
-}
-
-func (ls *localStream) start() {
-	go func(in chan sendMessage, out chan morpc.Message) {
-		for {
-			v, ok := <-in
-			if !ok {
-				return
-			}
-
-			response := v.responseFactory()
-			err := v.handleFunc(v.ctx, v.request.(*txn.TxnRequest), response)
-			if err != nil {
-				response.TxnError = txn.WrapError(moerr.NewRpcErrorNoCtx(err.Error()), 0)
-			}
-			out <- response
-		}
-	}(ls.in, ls.out)
 }
 
 func (sr *SendResult) reset(requests []txn.TxnRequest) {
@@ -391,6 +513,7 @@ func (sr *SendResult) Release() {
 			}
 			delete(sr.streams, k)
 		}
+		clear(sr.localHandlers)
 		sr.Responses = sr.Responses[:0]
 		sr.pool.Put(sr)
 	}

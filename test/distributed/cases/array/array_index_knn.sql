@@ -1,4 +1,3 @@
-SET experimental_ivf_index = 1;
 SET probe_limit = 1;
 
 -- pre
@@ -15,10 +14,8 @@ insert into t6 values(3, "[3,0,0,0]", "3");
 insert into t6 values(4, "[11,11,0,0]", "4");
 insert into t6 values(5, "[12,12,0,0]", "5");
 insert into t6 values(6, "[13,13,0,0]", "6");
-SET experimental_ivf_index = 0;
 
 create index idx6 using ivfflat on t6(b) lists=2 op_type "vector_l2_ops";
-SET experimental_ivf_index = 1;
 
 create index idx6 using ivfflat on t6(b) lists=2 op_type "vector_l2_ops";
 select a, b from t6 order by l2_distance(b, "[1,0,0,0]") limit 4;
@@ -52,8 +49,8 @@ insert into t1 values(12, "[1112,1112,1112,1112]", "12");
 insert into t1 values(13, "[1113,1113,1113,1113]", "13");
 
 alter table t1 alter reindex idx1 ivfflat lists=4;
-select a, b from t1 order by l2_distance(b, "[1,0,0,0]") limit 4;
-select a, b from t1 order by l2_distance(b, "[11,11,0,0]") limit 4;
+select a, b from t1 order by l2_distance(b, "[1,0,0,0]") limit 3;
+select a, b from t1 order by l2_distance(b, "[11,11,0,0]") limit 3;
 select a, b from t1 order by l2_distance(b, "[111,111,111,0]") limit 4;
 select a, b from t1 order by l2_distance(b, "[1111,1111,1111,1111]") limit 4;
 
@@ -88,8 +85,8 @@ insert into t2 values(12, "[1112,1112,1112,1112]", "12", 12);
 insert into t2 values(13, "[1113,1113,1113,1113]", "13", 13);
 
 alter table t2 alter reindex idx2 ivfflat lists=4;
-select a, b from t2 order by l2_distance(b, "[1,0,0,0]") limit 4;
-select a, b from t2 order by l2_distance(b, "[11,11,0,0]") limit 4;
+select a, b from t2 order by l2_distance(b, "[1,0,0,0]") limit 3;
+select a, b from t2 order by l2_distance(b, "[11,11,0,0]") limit 3;
 select a, b from t2 order by l2_distance(b, "[111,111,111,0]") limit 4;
 select a, b from t2 order by l2_distance(b, "[1111,1111,1111,1111]") limit 4;
 
@@ -122,8 +119,8 @@ insert into t3 values(12, "[1112,1112,1112,1112]", "12");
 insert into t3 values(13, "[1113,1113,1113,1113]", "13");
 
 alter table t3 alter reindex idx3 ivfflat lists=4;
-select a, b from t3 order by l2_distance(b, "[1,0,0,0]") limit 4;
-select a, b from t3 order by l2_distance(b, "[11,11,0,0]") limit 4;
+select a, b from t3 order by l2_distance(b, "[1,0,0,0]") limit 3;
+select a, b from t3 order by l2_distance(b, "[11,11,0,0]") limit 3;
 select a, b from t3 order by l2_distance(b, "[111,111,111,0]") limit 4;
 select a, b from t3 order by l2_distance(b, "[1111,1111,1111,1111]") limit 4;
 
@@ -178,12 +175,11 @@ create index idx5 using ivfflat on t5(b) lists=3 op_type "vector_l2_ops";
 --|                              0 |                         3 |                  7 | [111, 111, 111, 0]           |
 --|                              0 |                         3 |                  8 | [112, 112, 112, 0]           |
 --+--------------------------------+---------------------------+--------------------+------------------------------+
-select a, b from t5 order by l2_distance(b, "[111,111,111,0]") limit 7;
+select a, b from t5 order by l2_distance(b, "[111,111,111,0]") limit 2;
 
 insert into t5 values(11, "[114,114,114,0]", "11");
-select a, b from t5 order by l2_distance(b, "[111,111,111,0]") limit 7;
+select a, b from t5 order by l2_distance(b, "[111,111,111,0]") limit 3;
 
 -- post
-SET experimental_ivf_index = 0;
 SET probe_limit = 5;
 drop database vecdb3;

@@ -259,3 +259,45 @@ func TestIsIndexTableName(t *testing.T) {
 		})
 	}
 }
+
+func TestXXHashVectors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	vecs1 := []*vector.Vector{
+		testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
+		testutil.NewVector(3, types.T_varchar.ToType(), proc.Mp(), false, []string{"1", "2", "3"}),
+		testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
+	}
+
+	vecs2 := []*vector.Vector{
+		testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{4, 5, 6}),
+		testutil.NewVector(3, types.T_varchar.ToType(), proc.Mp(), false, []string{"4", "5", "6"}),
+		testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{4, 5, 6}),
+	}
+
+	vecs3 := []*vector.Vector{
+		testutil.NewVector(6, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3, 4, 5, 6}),
+		testutil.NewVector(6, types.T_varchar.ToType(), proc.Mp(), false, []string{"1", "2", "3", "4", "5", "6"}),
+		testutil.NewVector(6, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3, 4, 5, 6}),
+	}
+
+	var packers PackerList
+
+	hashCode1, rowCount1, err := XXHashVectors(vecs1, proc, &packers, nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, rowCount1)
+	require.Equal(t, 3, len(hashCode1))
+
+	hashCode2, rowCount2, err := XXHashVectors(vecs2, proc, &packers, nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, rowCount2)
+	require.Equal(t, 3, len(hashCode2))
+
+	hashCode3, rowCount3, err := XXHashVectors(vecs3, proc, &packers, nil)
+	require.NoError(t, err)
+	require.Equal(t, 6, rowCount3)
+	require.Equal(t, 6, len(hashCode3))
+
+	require.Equal(t, hashCode1, hashCode3[:3])
+	require.Equal(t, hashCode2, hashCode3[3:])
+}

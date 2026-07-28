@@ -164,7 +164,6 @@ insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20)
 drop database if exists test04;
 create database test04;
 use test04;
--- @bvt:issue#16438
 drop table if exists partition01;
 create table partition01 (
                              emp_no      int             not null,
@@ -183,11 +182,9 @@ create table partition01 (
 
 insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
                                (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
--- @bvt:issue
 drop database if exists test06;
 create database test06;
 use test06;
-set experimental_fulltext_index=1;
 create table src (id bigint primary key, body varchar, title text);
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
                        (4, '遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。', '遠東兒童中文'),
@@ -209,7 +206,7 @@ show create table v01;
 drop snapshot if exists spsp02;
 create snapshot spsp02 for account acc02;
 drop account acc02;
-restore account acc02 from snapshot spsp02;
+restore account acc02{snapshot="spsp02"};
 
 drop snapshot if exists spsp02;
 drop account if exists acc02;

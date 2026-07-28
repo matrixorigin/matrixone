@@ -75,27 +75,27 @@ func (update *MultiUpdate) delete_table(
 	rowCount = deleteBatch.Vecs[0].Length()
 	if rowCount > 0 {
 		deleteBatch.SetRowCount(rowCount)
+
 		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 		update.addDeleteAffectRows(tableType, uint64(rowCount))
 		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		err = source.Delete(newCtx, deleteBatch, catalog.Row_ID)
+		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return source.Delete(newCtx, deleteBatch, catalog.Row_ID)
+		})
 		if err != nil {
 			return err
 		}
 		analyzer.AddDeletedRows(int64(deleteBatch.RowCount()))
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
 	}
 	return
 }
 
 func newDeleteBatch(inputBatch *batch.Batch, mainPkIdx int) *batch.Batch {
-	buf := batch.New([]string{catalog.Row_ID, "pk"})
-	buf.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-	buf.SetVector(1, vector.NewVec(*inputBatch.Vecs[mainPkIdx].GetType()))
+	buf := batch.NewOffHeap([]string{catalog.Row_ID, "pk"})
+	buf.SetVector(0, vector.NewOffHeapVecWithType(types.T_Rowid.ToType()))
+	buf.SetVector(1, vector.NewOffHeapVecWithType(*inputBatch.Vecs[mainPkIdx].GetType()))
 	return buf
 }

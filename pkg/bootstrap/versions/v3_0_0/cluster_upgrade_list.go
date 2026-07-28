@@ -16,6 +16,7 @@ package v3_0_0
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/frontend"

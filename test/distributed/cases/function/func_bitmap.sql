@@ -112,3 +112,17 @@ select bitmap_bucket_number(val) as bitmap_id,
     group by bitmap_id
 );
 drop table bitmap03;
+
+-- issue #24288: bitmap_construct_agg panic when some groups have no matching rows
+-- This triggers SaveIntermediateResultOfChunk with nil mobs entries
+drop table if exists bitmap_nil_mobs;
+create table bitmap_nil_mobs (id int, val bigint);
+insert into bitmap_nil_mobs select result, result * 32768 + result from generate_series(1, 50000) g;
+select bitmap_bucket_number(val) bucket,
+    bitmap_count(bitmap_construct_agg(bitmap_bit_position(val))) cnt
+    from bitmap_nil_mobs
+    where val > 100000000
+    group by bucket
+    order by bucket
+    limit 5;
+drop table bitmap_nil_mobs;

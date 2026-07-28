@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -36,15 +35,13 @@ func (c arrayCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Pro
 		nulls.Add(c.vs[vecDst].GetGrouping(), uint64(dst))
 	} else {
 		nulls.Del(c.vs[vecDst].GetGrouping(), uint64(dst))
-		c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 	}
 	if c.isConstNull[vecSrc] || c.vs[vecSrc].GetNulls().Contains(uint64(src)) {
 		nulls.Add(c.vs[vecDst].GetNulls(), uint64(dst))
 		return nil
-	} else {
-		nulls.Del(c.vs[vecDst].GetNulls(), uint64(dst))
-		return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 	}
+	nulls.Del(c.vs[vecDst].GetNulls(), uint64(dst))
+	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 }
 
 func (c arrayCompare) Compare(veci, vecj int, vi, vj int64) int {
@@ -59,20 +56,18 @@ func (c arrayCompare) Compare(veci, vecj int, vi, vj int64) int {
 
 	switch c.vs[veci].GetType().Oid {
 	case types.T_array_float32:
-		return CompareArrayFromBytes[float32](_x, _y, c.desc)
+		return types.CompareArrayFromBytes[float32](_x, _y, c.desc)
 	case types.T_array_float64:
-		return CompareArrayFromBytes[float64](_x, _y, c.desc)
+		return types.CompareArrayFromBytes[float64](_x, _y, c.desc)
+	case types.T_array_bf16:
+		return types.CompareArrayElementFromBytes[types.BF16](_x, _y, c.desc)
+	case types.T_array_float16:
+		return types.CompareArrayElementFromBytes[types.Float16](_x, _y, c.desc)
+	case types.T_array_int8:
+		return types.CompareArrayElementFromBytes[int8](_x, _y, c.desc)
+	case types.T_array_uint8:
+		return types.CompareArrayElementFromBytes[uint8](_x, _y, c.desc)
 	default:
 		panic("Compare Not supported")
 	}
-}
-
-func CompareArrayFromBytes[T types.RealNumbers](_x, _y []byte, desc bool) int {
-	x := types.BytesToArray[T](_x)
-	y := types.BytesToArray[T](_y)
-
-	if desc {
-		return moarray.Compare[T](y, x)
-	}
-	return moarray.Compare[T](x, y)
 }

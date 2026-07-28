@@ -22,10 +22,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
+// Bytes is a reference-counted byte buffer, optionally backed by an
+// allocator. Misuse is detected and panics: use after the last Release,
+// releasing more times than retained, and retaining an already-released
+// object are all programming errors.
 type Bytes struct {
 	bytes       []byte
 	deallocator malloc.Deallocator
 	refs        atomic.Int32
+}
+
+func NewBytes(data []byte) *Bytes {
+	b := &Bytes{
+		bytes: data,
+	}
+	b.refs.Store(1)
+	return b
 }
 
 func (b *Bytes) Size() int64 {
@@ -34,40 +46,49 @@ func (b *Bytes) Size() int64 {
 
 func (b *Bytes) Bytes() []byte {
 	if b.refs.Load() <= 0 {
-		panic("Bytes.Bytes: memory was already deallocated.")
+		panic("Bytes.Bytes: use after free")
 	}
 	return b.bytes
 }
 
 func (b *Bytes) Slice(length int) fscache.Data {
+	if b.refs.Load() <= 0 {
+		panic("Bytes.Slice: use after free")
+	}
 	b.bytes = b.bytes[:length]
 	return b
 }
 
+// Retain increments the reference count. It refuses to resurrect a released
+// object: incrementing is only possible while the observed count is positive,
+// so a Release that wins the 1 -> 0 transition is final.
 func (b *Bytes) Retain() {
-	b.refs.Add(1)
+	for {
+		n := b.refs.Load()
+		if n <= 0 {
+			panic("Bytes.Retain: use after free")
+		}
+		if b.refs.CompareAndSwap(n, n+1) {
+			return
+		}
+	}
 }
 
+// Release decrements the reference count. The caller that drops the count to
+// zero deallocates; further Release or Retain calls panic.
 func (b *Bytes) Release() {
 	n := b.refs.Add(-1)
 	if n == 0 {
-		// set bytes to nil
+		// Last reference: no other goroutine may legally touch b anymore
+		// (Retain from zero panics), so plain writes are safe here.
 		b.bytes = nil
 		if b.deallocator != nil {
-			b.deallocator.Deallocate(malloc.NoHints)
+			b.deallocator.Deallocate()
 			b.deallocator = nil
 		}
 	} else if n < 0 {
 		panic("Bytes.Release: double free")
 	}
-}
-
-func NewBytes(data []byte) *Bytes {
-	bytes := &Bytes{
-		bytes: data,
-	}
-	bytes.refs.Store(1)
-	return bytes
 }
 
 type bytesAllocator struct {
@@ -95,10 +116,4 @@ func (b *bytesAllocator) AllocateCacheData(ctx context.Context, size int) fscach
 
 func (b *bytesAllocator) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	return b.allocateCacheData(size, hints)
-}
-
-func (b *bytesAllocator) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
-	ret := b.allocateCacheData(len(data), malloc.NoClear)
-	copy(ret.Bytes(), data)
-	return ret
 }

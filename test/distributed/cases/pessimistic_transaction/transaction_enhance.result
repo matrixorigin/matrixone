@@ -5,15 +5,15 @@ start transaction ;
 truncate table atomic_table_10;
 use transaction_enhance;
 select * from atomic_table_10;
-c1    c2
-3    a
-4    b
-5    c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c
 select * from atomic_table_10;
-c1    c2
+➤ c1[4,32,0]  ¦  c2[12,-1,0]
 commit;
 select * from atomic_table_10;
-c1    c2
+➤ c1[4,32,0]  ¦  c2[12,-1,0]
 drop table if exists atomic_table_10;
 create table atomic_table_10(c1 int,c2 varchar(25));
 insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");
@@ -21,18 +21,18 @@ start transaction ;
 truncate table atomic_table_10;
 use transaction_enhance;
 select * from atomic_table_10;
-c1    c2
-3    a
-4    b
-5    c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c
 select * from atomic_table_10;
-c1    c2
+➤ c1[4,32,0]  ¦  c2[12,-1,0]
 rollback;
 select * from atomic_table_10;
-c1    c2
-3    a
-4    b
-5    c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c
 drop table if exists atomic_table_10;
 create table atomic_table_10(c1 int,c2 varchar(25));
 insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");
@@ -41,61 +41,54 @@ truncate table atomic_table_10;
 use transaction_enhance;
 insert into atomic_table_10 values (6,"a"),(7,"b"),(8,"c");
 select * from atomic_table_10;
-c1    c2
-6    a
-7    b
-8    c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+6  ¦  a  𝄀
+7  ¦  b  𝄀
+8  ¦  c
 select * from atomic_table_10;
-c1    c2
-6    a
-7    b
-8    c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+6  ¦  a  𝄀
+7  ¦  b  𝄀
+8  ¦  c
 commit;
 select * from atomic_table_10;
-c1    c2
-6    a
-7    b
-8    c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+6  ¦  a  𝄀
+7  ¦  b  𝄀
+8  ¦  c
 drop table if exists atomic_table_11;
-
 create table atomic_table_11(c1 int,c2 varchar(25));
-
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
-
 begin;
-
 drop table atomic_table_11;
-
 use transaction_enhance;
-
 insert into atomic_table_11 values (6,"a");
-
+no such table transaction_enhance.atomic_table_11
 select * from atomic_table_11;
-
+SQL parser error: table "atomic_table_11" does not exist
 commit;
-
 select * from atomic_table_11;
-
+SQL parser error: table "atomic_table_11" does not exist
 drop table if exists atomic_table_11;
-
 create table atomic_table_11(c1 int,c2 varchar(25));
-
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
-
 begin;
-
 drop table atomic_table_11;
-
 use transaction_enhance;
-
 insert into atomic_table_11 values (6,"a");
-
 select * from atomic_table_11;
-
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c  𝄀
+6  ¦  a
 rollback ;
-
 select * from atomic_table_11;
-
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c  𝄀
+6  ¦  a
 drop table if exists atomic_table_11;
 create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
@@ -113,15 +106,22 @@ alter table atomic_table_12 add index key1(c1);
 alter table atomic_table_12 alter index key1 visible;
 use transaction_enhance;
 show create table atomic_table_12;
-Table    Create Table
-atomic_table_12    CREATE TABLE `atomic_table_12` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_12  ¦  CREATE TABLE `atomic_table_12` (
+  `c1` int DEFAULT NULL,
+  `c2` varchar(25) DEFAULT NULL
+)
 commit;
 show create table atomic_table_12;
-Table    Create Table
-atomic_table_12    CREATE TABLE `atomic_table_12` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  KEY `key1` (`c1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_12  ¦  CREATE TABLE `atomic_table_12` (
+  `c1` int DEFAULT NULL,
+  `c2` varchar(25) DEFAULT NULL,
+  KEY `key1` (`c1`)
+)
 show index from atomic_table_12;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-atomic_table_12    1    key1    1    c1    A    0    NULL    NULL    YES                    YES    c1
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+atomic_table_12  ¦  1  ¦  key1  ¦  1  ¦  c1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  c1
 use transaction_enhance;
 drop table if exists atomic_table_12_1;
 create table atomic_table_12_1(c1 int,c2 varchar(25));
@@ -131,14 +131,20 @@ alter table atomic_table_12_1 add index key1(c1);
 alter table atomic_table_12_1 alter index key1 visible;
 use transaction_enhance;
 show create table atomic_table_12_1;
-Table    Create Table
-atomic_table_12_1    CREATE TABLE `atomic_table_12_1` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_12_1  ¦  CREATE TABLE `atomic_table_12_1` (
+  `c1` int DEFAULT NULL,
+  `c2` varchar(25) DEFAULT NULL
+)
 rollback;
 show create table atomic_table_12_1;
-Table    Create Table
-atomic_table_12_1    CREATE TABLE `atomic_table_12_1` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_12_1  ¦  CREATE TABLE `atomic_table_12_1` (
+  `c1` int DEFAULT NULL,
+  `c2` varchar(25) DEFAULT NULL
+)
 show index from atomic_table_12_1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]
 drop table if exists atomic_table_12_2;
 drop table if exists atomic_table_13;
 create table atomic_table_12_2(c1 int primary key,c2 varchar(25));
@@ -149,21 +155,30 @@ begin;
 alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references atomic_table_12_2(c1);
 use transaction_enhance;
 show create table atomic_table_12_2;
-Table    Create Table
-atomic_table_12_2    CREATE TABLE `atomic_table_12_2` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_12_2  ¦  CREATE TABLE `atomic_table_12_2` (
+  `c1` int NOT NULL,
+  `c2` varchar(25) DEFAULT NULL,
+  PRIMARY KEY (`c1`)
+)
 insert into atomic_table_13 values (8,"h");
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from atomic_table_13;
-c1    c2
-3    d
-4    e
-5    f
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+3  ¦  d  𝄀
+4  ¦  e  𝄀
+5  ¦  f
 insert into atomic_table_13 values (6,"h");
 internal error: Cannot add or update a child row: a foreign key constraint fails
 commit;
 show create table atomic_table_13;
-Table    Create Table
-atomic_table_13    CREATE TABLE `atomic_table_13` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`),\n  CONSTRAINT `ffa` FOREIGN KEY (`c1`) REFERENCES `atomic_table_12_2` (`c1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_13  ¦  CREATE TABLE `atomic_table_13` (
+  `c1` int NOT NULL,
+  `c2` varchar(25) DEFAULT NULL,
+  PRIMARY KEY (`c1`),
+  CONSTRAINT `ffa` FOREIGN KEY (`c1`) REFERENCES `atomic_table_12_2` (`c1`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 drop table if exists atomic_table_12_3;
 drop table if exists atomic_table_13;
 create table atomic_table_12_3(c1 int primary key,c2 varchar(25));
@@ -176,15 +191,19 @@ alter table atomic_table_13 drop foreign key ffa;
 use transaction_enhance;
 insert into atomic_table_13 values (8,"h");
 select * from atomic_table_13;
-c1    c2
-3    d
-4    e
-5    f
-8    h
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+3  ¦  d  𝄀
+4  ¦  e  𝄀
+5  ¦  f  𝄀
+8  ¦  h
 commit;
 show create table atomic_table_13;
-Table    Create Table
-atomic_table_13    CREATE TABLE `atomic_table_13` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_13  ¦  CREATE TABLE `atomic_table_13` (
+  `c1` int NOT NULL,
+  `c2` varchar(25) DEFAULT NULL,
+  PRIMARY KEY (`c1`)
+)
 drop table if exists atomic_table_12_4;
 drop table if exists atomic_table_13;
 create table atomic_table_12_4(c1 int primary key,c2 varchar(25));
@@ -197,15 +216,19 @@ alter table atomic_table_13 drop foreign key ffa;
 use transaction_enhance;
 insert into atomic_table_13 values (8,"h");
 select * from atomic_table_13;
-c1    c2
-3    d
-4    e
-5    f
-8    h
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+3  ¦  d  𝄀
+4  ¦  e  𝄀
+5  ¦  f  𝄀
+8  ¦  h
 rollback ;
 show create table atomic_table_13;
-Table    Create Table
-atomic_table_13    CREATE TABLE `atomic_table_13` (\n  `c1` int NOT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  PRIMARY KEY (`c1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_13  ¦  CREATE TABLE `atomic_table_13` (
+  `c1` int NOT NULL,
+  `c2` varchar(25) DEFAULT NULL,
+  PRIMARY KEY (`c1`)
+)
 drop table if exists atomic_table_12_5;
 drop table if exists atomic_table_13;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
@@ -215,16 +238,20 @@ begin;
 alter table atomic_table_12_5 drop index key1;
 use transaction_enhance;
 show create table atomic_table_12_5;
-Table    Create Table
-atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  KEY `key1` (`c1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_12_5  ¦  CREATE TABLE `atomic_table_12_5` (
+  `c1` int DEFAULT NULL,
+  `c2` varchar(25) DEFAULT NULL,
+  KEY `key1` (`c1`)
+)
 select * from atomic_table_12_5;
-c1    c2
-3    a
-4    b
-5    c
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c
 commit;
 show index from atomic_table_12_5;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]
 drop table if exists atomic_table_14;
 create table atomic_table_14(c1 int,c2 varchar(25));
 insert into atomic_table_14 values (3,"a"),(4,"b"),(5,"c");
@@ -298,11 +325,11 @@ drop account trans_acc1;
 internal error: administrative command is unsupported in transactions
 use transaction_enhance;
 select count(*) from mo_catalog.mo_account where account_name='trans_acc1';
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 commit;
 select count(*) from mo_catalog.mo_account where account_name='trans_acc1';
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 drop table if exists atomic_table_18;
 create table atomic_table_18(c1 int,c2 varchar(25));
@@ -312,14 +339,20 @@ alter table atomic_table_18 add index key1(c1);
 alter table atomic_table_18 alter index key1 visible;
 use transaction_enhance;
 show create table atomic_table_18;
-Table    Create Table
-atomic_table_18    CREATE TABLE `atomic_table_18` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_18  ¦  CREATE TABLE `atomic_table_18` (
+  `c1` int DEFAULT NULL,
+  `c2` varchar(25) DEFAULT NULL
+)
 rollback;
 show create table atomic_table_18;
-Table    Create Table
-atomic_table_18    CREATE TABLE `atomic_table_18` (\n  `c1` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_18  ¦  CREATE TABLE `atomic_table_18` (
+  `c1` int DEFAULT NULL,
+  `c2` varchar(25) DEFAULT NULL
+)
 show index from atomic_table_18;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]
 truncate table atomic_table_18;
 use transaction_enhance;
 drop table atomic_table_18;
@@ -353,20 +386,20 @@ alter table alter01 modify col1 float;
 use transaction_enhance;
 insert into alter01 values (8,"h");
 select * from alter01;
-col1    col2
-3.0    a
-4.0    b
-5.0    c
-8.0    h
+➤ col1[7,24,0]  ¦  col2[12,-1,0]  𝄀
+3.0  ¦  a  𝄀
+4.0  ¦  b  𝄀
+5.0  ¦  c  𝄀
+8.0  ¦  h
 insert into alter01 values (6,"h");
 commit;
 select * from alter01;
-col1    col2
-3.0    a
-4.0    b
-5.0    c
-8.0    h
-6.0    h
+➤ col1[7,24,0]  ¦  col2[12,-1,0]  𝄀
+3.0  ¦  a  𝄀
+4.0  ¦  b  𝄀
+5.0  ¦  c  𝄀
+8.0  ¦  h  𝄀
+6.0  ¦  h
 drop table if exists alter01;
 drop table if exists alter02;
 create table alter01(col1 int not null ,col2 varchar(25));
@@ -376,20 +409,20 @@ alter table alter01 modify col1 float;
 use transaction_enhance;
 insert into alter01 values (8,"h");
 select * from alter01;
-col1    col2
-3.0    a
-4.0    b
-5.0    c
-8.0    h
+➤ col1[7,24,0]  ¦  col2[12,-1,0]  𝄀
+3.0  ¦  a  𝄀
+4.0  ¦  b  𝄀
+5.0  ¦  c  𝄀
+8.0  ¦  h
 insert into alter01 values (6,"h");
 commit;
 select * from alter01;
-col1    col2
-3.0    a
-4.0    b
-5.0    c
-8.0    h
-6.0    h
+➤ col1[7,24,0]  ¦  col2[12,-1,0]  𝄀
+3.0  ¦  a  𝄀
+4.0  ¦  b  𝄀
+5.0  ¦  c  𝄀
+8.0  ¦  h  𝄀
+6.0  ¦  h
 drop table if exists atomic_table_12_5;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
 insert into atomic_table_12_5 values (3,"a"),(4,"b"),(5,"c");
@@ -399,17 +432,25 @@ alter table atomic_table_12_5 change c1 clNew double;
 use transaction_enhance;
 insert into atomic_table_12_5 values (8,"h");
 show create table atomic_table_12_5;
-Table    Create Table
-atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n  `clNew` double DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  KEY `key1` (`clNew`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_12_5  ¦  CREATE TABLE `atomic_table_12_5` (
+  `clNew` double DEFAULT NULL,
+  `c2` varchar(25) DEFAULT NULL,
+  KEY `key1` (`clNew`)
+)
 select * from atomic_table_12_5;
-clnew    c2
-3.0    a
-4.0    b
-5.0    c
-8.0    h
+➤ clnew[8,54,0]  ¦  c2[12,-1,0]  𝄀
+3.0  ¦  a  𝄀
+4.0  ¦  b  𝄀
+5.0  ¦  c  𝄀
+8.0  ¦  h
 show create table atomic_table_12_5;
-Table    Create Table
-atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n  `clNew` double DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  KEY `key1` (`clNew`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_12_5  ¦  CREATE TABLE `atomic_table_12_5` (
+  `clNew` double DEFAULT NULL,
+  `c2` varchar(25) DEFAULT NULL,
+  KEY `key1` (`clNew`)
+)
 drop table if exists alter01;
 create table alter01(col1 int primary key,col2 varchar(25));
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
@@ -418,19 +459,19 @@ alter table alter01 change col1 col1New float;
 use transaction_enhance;
 insert into alter01 values (8,"h");
 select * from alter01;
-col1new    col2
-3.0    a
-4.0    b
-5.0    c
-8.0    h
+➤ col1new[7,24,0]  ¦  col2[12,-1,0]  𝄀
+3.0  ¦  a  𝄀
+4.0  ¦  b  𝄀
+5.0  ¦  c  𝄀
+8.0  ¦  h
 insert into alter01 values (6,"h");
 select * from alter01;
-col1new    col2
-3.0    a
-4.0    b
-5.0    c
-8.0    h
-6.0    h
+➤ col1new[7,24,0]  ¦  col2[12,-1,0]  𝄀
+3.0  ¦  a  𝄀
+4.0  ¦  b  𝄀
+5.0  ¦  c  𝄀
+8.0  ¦  h  𝄀
+6.0  ¦  h
 drop table if exists atomic_table_12_5;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
 insert into atomic_table_12_5 values (3,"a"),(4,"b"),(5,"c");
@@ -440,17 +481,25 @@ alter table atomic_table_12_5 rename column c1 to clNew;
 use transaction_enhance;
 insert into atomic_table_12_5 values (8,"h");
 show create table atomic_table_12_5;
-Table    Create Table
-atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n  `clNew` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  KEY `key1` (`clNew`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_12_5  ¦  CREATE TABLE `atomic_table_12_5` (
+  `clNew` int DEFAULT NULL,
+  `c2` varchar(25) DEFAULT NULL,
+  KEY `key1` (`clNew`)
+)
 select * from atomic_table_12_5;
-clnew    c2
-3    a
-4    b
-5    c
-8    h
+➤ clnew[4,32,0]  ¦  c2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c  𝄀
+8  ¦  h
 show create table atomic_table_12_5;
-Table    Create Table
-atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n  `clNew` int DEFAULT NULL,\n  `c2` varchar(25) DEFAULT NULL,\n  KEY `key1` (`clNew`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+atomic_table_12_5  ¦  CREATE TABLE `atomic_table_12_5` (
+  `clNew` int DEFAULT NULL,
+  `c2` varchar(25) DEFAULT NULL,
+  KEY `key1` (`clNew`)
+)
 drop table if exists alter01;
 create table alter01(col1 int primary key,col2 varchar(25));
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
@@ -459,19 +508,19 @@ alter table alter01 rename column col1 to col1New;
 use transaction_enhance;
 insert into alter01 values (8,"h");
 select * from alter01;
-col1new    col2
-3    a
-4    b
-5    c
-8    h
+➤ col1new[4,32,0]  ¦  col2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c  𝄀
+8  ¦  h
 insert into alter01 values (6,"h");
 select * from alter01;
-col1new    col2
-3    a
-4    b
-5    c
-8    h
-6    h
+➤ col1new[4,32,0]  ¦  col2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c  𝄀
+8  ¦  h  𝄀
+6  ¦  h
 drop table if exists alter01;
 create table alter01(col1 int,col2 varchar(25));
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
@@ -481,17 +530,17 @@ use transaction_enhance;
 insert into alter01 values (5,"h");
 Duplicate entry '5' for key 'col1'
 select * from alter01;
-col1    col2
-3    a
-4    b
-5    c
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c
 insert into alter01 values (6,"h");
 select * from alter01;
-col1    col2
-3    a
-4    b
-5    c
-6    h
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c  𝄀
+6  ¦  h
 drop table if exists alter01;
 create table alter01(col1 int primary key,col2 varchar(25));
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
@@ -500,16 +549,16 @@ alter table alter01 drop primary key;
 use transaction_enhance;
 insert into alter01 values (5,"h");
 select * from alter01;
-col1    col2
-3    a
-4    b
-5    c
-5    h
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c  𝄀
+5  ¦  h
 insert into alter01 values (6,"h");
 select * from alter01;
-col1    col2
-3    a
-4    b
-5    c
-5    h
-6    h
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b  𝄀
+5  ¦  c  𝄀
+5  ¦  h  𝄀
+6  ¦  h

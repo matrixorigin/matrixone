@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -40,7 +41,14 @@ func describeMessage(m *plan.MsgHeader, buf *bytes.Buffer) {
 }
 
 func describeColRef(col *plan.ColRef, buf *bytes.Buffer) {
-	if len(col.Name) > 0 && !strings.HasPrefix(col.Name, catalog.PrefixIndexTableName) {
+	if strings.HasPrefix(col.Name, catalog.PrefixIndexTableName) {
+		dotIdx := strings.Index(col.Name, ".")
+		if dotIdx > 0 {
+			buf.WriteString(col.Name[dotIdx+1:])
+		} else {
+			buf.WriteString(col.Name)
+		}
+	} else if len(col.Name) > 0 {
 		buf.WriteString(col.Name)
 	} else {
 		buf.WriteString("#[")
@@ -90,7 +98,14 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		case *plan.Literal_Timeval:
 			fmt.Fprintf(buf, "%s", types.Time(val.Timeval).String2(expr.Typ.Scale))
 		case *plan.Literal_Sval:
-			buf.WriteString("'" + val.Sval + "'")
+			if expr.Typ.Id == int32(types.T_geometry) || expr.Typ.Id == int32(types.T_geometry32) {
+				// A geometry literal carries raw WKB bytes that are not
+				// printable; render its WKT so EXPLAIN output is readable and
+				// stable rather than emitting binary into the plan text.
+				buf.WriteString("'" + geometryLiteralText(expr.Typ.Id, val.Sval) + "'")
+			} else {
+				buf.WriteString("'" + val.Sval + "'")
+			}
 		case *plan.Literal_Bval:
 			fmt.Fprintf(buf, "%v", val.Bval)
 		case *plan.Literal_EnumVal:
@@ -198,8 +213,28 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 	return nil
 }
 
+// geometryLiteralText renders a geometry literal's WKB payload as WKT so
+// EXPLAIN output is human-readable and stable. If the payload cannot be
+// decoded it falls back to a hex dump, which is at least printable.
+func geometryLiteralText(typeID int32, payload string) string {
+	b := []byte(payload)
+	var (
+		g   geo.Geometry
+		err error
+	)
+	if typeID == int32(types.T_geometry32) {
+		g, err = geo.ReadWKBFloat32(b)
+	} else {
+		g, err = geo.ReadWKB(b)
+	}
+	if err != nil {
+		return fmt.Sprintf("0x%X", b)
+	}
+	return geo.WriteWKT(g)
+}
+
 func needSpecialHandling(funcExpr *plan.Function) bool {
-	if funcExpr.Func.GetObjName() == "prefix_in" || funcExpr.Func.GetObjName() == "prefix_eq" || funcExpr.Func.GetObjName() == "prefix_between" {
+	if funcExpr.Func.GetObjName() == "prefix_in" || funcExpr.Func.GetObjName() == "prefix_eq" || funcExpr.Func.GetObjName() == "prefix_between" || funcExpr.Func.GetObjName() == "prefix_in_range" {
 		return true
 	}
 	if len(funcExpr.Args) > 1 {
@@ -411,6 +446,18 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		buf.WriteString(" from ")
+		err = describeExpr(ctx, funcExpr.Args[1], options, buf)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(")")
+	case function.POSITION_FUNCTION:
+		buf.WriteString(funcExpr.Func.GetObjName() + "(")
+		err = describeExpr(ctx, funcExpr.Args[0], options, buf)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(" in ")
 		err = describeExpr(ctx, funcExpr.Args[1], options, buf)
 		if err != nil {
 			return err

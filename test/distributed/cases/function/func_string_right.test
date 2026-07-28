@@ -1,0 +1,44 @@
+# Basic test cases from requirements
+SELECT RIGHT('Hello World', 5) AS result1;
+SELECT RIGHT('Hello', 10) AS result2;
+SELECT RIGHT('Hello', 0) AS result3;
+
+# Additional test cases
+SELECT RIGHT('abcde', 3) AS three_chars;
+SELECT RIGHT('abcde', -1) AS negative_len;
+SELECT RIGHT('abcde', 100) AS large_len;
+SELECT RIGHT('foobarbar', 5) AS five_chars;
+
+# Edge cases
+SELECT RIGHT('', 5) AS empty_string;
+SELECT RIGHT('test', 4) AS full_string;
+SELECT RIGHT('test', 1) AS single_char;
+
+# NULL handling
+SELECT RIGHT(NULL, 5) AS null_str;
+SELECT RIGHT('Hello World', NULL) AS null_len;
+
+# Unicode test cases
+SELECT RIGHT('是都方式快递费', 3) AS unicode_chinese;
+SELECT RIGHT('ｱｲｳｴｵ', 3) AS unicode_katakana;
+SELECT RIGHT('あいうえお', 3) AS unicode_hiragana;
+
+# Table usage
+CREATE TABLE t1(str VARCHAR(50), len INT);
+INSERT INTO t1 VALUES ('Hello World', 5), ('Hello', 10), ('Hello', 0), ('abcde', 3), ('test', 1);
+SELECT str, len, RIGHT(str, len) AS right_result FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello World'), ('Hello'), ('test'), ('abcde');
+SELECT * FROM t1 WHERE RIGHT(str, 5) = 'World';
+SELECT * FROM t1 WHERE RIGHT(str, 1) = 'o';
+DROP TABLE t1;
+
+# Comparison with LEFT
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello World'), ('test'), ('abcde');
+SELECT str, LEFT(str, 5) AS left_result, RIGHT(str, 5) AS right_result FROM t1;
+DROP TABLE t1;
+

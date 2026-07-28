@@ -9,8 +9,8 @@ insert into t1 values (1,2), (2,2) on duplicate key update b=values(b)+10;
 select * from t1;
 delete from t1;
 insert into t1 values (1,1);
-insert into t1 values (1,11), (2,22), (3,33) on duplicate key update a=a+1,b=100;
 -- @bvt:issue#4423
+insert into t1 values (1,11), (2,22), (3,33) on duplicate key update a=a+1,b=100;
 select * from t1;
 -- @bvt:issue
 delete from t1;
@@ -130,7 +130,6 @@ delete from t1;
 insert into t1 values (1,1),(3,2);
 insert into t1 values (1,2) on duplicate key update a = a+2;
 
--- @bvt:issue#16438
 drop table if exists t1;
 create table t1(a int primary key, b int) partition by key(a) partitions 2;
 insert into t1 values (1,1),(2,2);
@@ -141,7 +140,6 @@ create table t1(a int, b int, c int, primary key(a,b)) partition by key(a,b) par
 insert into t1 values (1,1,1),(2,2,2);
 insert into t1 values (1,1,1),(3,3,3) on duplicate key update c = 10;
 select * from t1 order by a;
--- @bvt:issue
 drop table if exists t1;
 create table t1(a int primary key, b int);
 insert into t1 values (1,1),(2,2);
@@ -159,3 +157,11 @@ select id, counter, create_at = update_at from users;
 select sleep(1);
 insert into users (id, counter) values ('112',2) on duplicate key update counter=counter+values(counter), create_at=current_timestamp();
 select id, counter, create_at = update_at from users;
+
+-- test for on duplicate key update with NULL values in multi-row insert
+drop table if exists t_null_dup;
+create table t_null_dup (id int primary key, a int, b int);
+insert into t_null_dup values (1, 100, 100), (3, 300, 300);
+insert into t_null_dup (id, a, b) values (1, NULL, NULL), (3, NULL, 30) on duplicate key update a = values(a), b = values(b);
+select * from t_null_dup order by id;
+drop table if exists t_null_dup;

@@ -40,7 +40,7 @@ func mustToPBBatch(bat *batch.Batch) *api.Batch {
 
 // improve test coverage
 func TestParseError(t *testing.T) {
-	m := mpool.MustNewNoFixed("test")
+	m := mpool.MustNew("test")
 	packer := types.NewPacker()
 	defer packer.Close()
 
@@ -147,4 +147,23 @@ func TestShowReqs(t *testing.T) {
 		"write req",
 	}
 	t.Log(ShowReqs(reqs))
+}
+
+func TestGenRowsGeometry(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	bat := batch.NewWithSize(1)
+	bat.Attrs = []string{"g"}
+	vec := vector.NewVec(types.T_geometry.ToType())
+	require.NoError(t, vector.AppendBytesList(vec, [][]byte{
+		[]byte("POINT(1 1)"),
+		[]byte("POINT(2 2)"),
+	}, nil, mp))
+	bat.SetVector(0, vec)
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	rows := GenRows(bat)
+	require.Equal(t, []byte("POINT(1 1)"), rows[0][0])
+	require.Equal(t, []byte("POINT(2 2)"), rows[1][0])
 }

@@ -25,6 +25,23 @@ select (1,null) < (2,null);
 select (2,3) >= (1,3);
 select (-2,1,3) >= (-1,2,3);
 select (-387293.324321,32190391.34134,000) <= (-387293.324321, -123, -1);
+select (1,2) in ((1,2),(3,4));
+select (1,2) in ((1,3),(3,4));
+select (1,2) in ((1,2));
+select (1,2) not in ((1,2));
+select (1,2) not in ((1,3),(3,4));
+select (1,2) in ((1,null));
+select (1,2) in ((1,null),(1,2));
+select (1,2) not in ((1,null));
+select (1,null) in ((1,null));
+select (1,2) not in ((1,null),(2,2));
+select null in (1, null) as r;
+select null not in (1, null) as r;
+create sequence seq_null_in;
+select null in (nextval('seq_null_in')) as r;
+select currval('seq_null_in') as v;
+drop sequence seq_null_in;
+select null in ((1,2));
 
 -- + - * / % mod
 select (1,2,3) > (-1,-3+2,2*3);
@@ -186,8 +203,8 @@ create table row05(col1 blob,col2 json,col3 binary(10) not null);
 insert into row05 values('abcdef','{"t1":"a"}',456);
 insert into row05 values('_bcdef','{"t1":"c"}',100000);
 insert into row05 values('__cdef',null,0);
-select (col1,col2) = ('abcdef','{"t1":"a"}') from row05;
-select (col1,col2) != ('abcdef','{"ehyiuwqnve":"ashyiujewv"}') from row05;
+select (col1,col2) = ('abcdef','{"t1": "a"}') from row05;
+select (col1,col2) != ('abcdef','{"ehyiuwqnve": "ashyiujewv"}') from row05;
 drop table row05;
 
 drop database test;

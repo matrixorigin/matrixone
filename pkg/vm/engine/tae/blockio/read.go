@@ -15,13 +15,13 @@
 package blockio
 
 import (
+	"container/heap"
 	"context"
+	"fmt"
+	"slices"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-
-	"go.uber.org/zap"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -31,11 +31,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"go.uber.org/zap"
 )
+
+const maxVectorIndexTopLimit = uint64(^uint(0) >> 1)
+
+func vectorIndexTopLimit(ctx context.Context, limit uint64) (int, error) {
+	if limit == 0 {
+		return 0, moerr.NewInternalError(ctx, "vector index top limit must be positive")
+	}
+	if limit > maxVectorIndexTopLimit {
+		return 0, moerr.NewInternalError(ctx, fmt.Sprintf("vector index top limit %d overflows int", limit))
+	}
+	return int(limit), nil
+}
 
 func removeIf[T any](data []T, pred func(t T) bool) []T {
 	// from plan.RemoveIf
@@ -56,7 +72,7 @@ func removeIf[T any](data []T, pred func(t T) bool) []T {
 
 // ReadDataByFilter only read block data from storage by filter, don't apply deletes.
 // Right now, it cannot support filter by physical address column.
-// len(columns) == len(colTypes) == 1
+// len(columns) == len(colTypes) >= 1 (supports multiple columns for optimization)
 func ReadDataByFilter(
 	ctx context.Context,
 	tableName string,
@@ -90,7 +106,7 @@ func ReadDataByFilter(
 	defer release()
 	defer deleteMask.Release()
 
-	sels = searchFunc(&cacheVectors[0])
+	sels = searchFunc(cacheVectors)
 	if !deleteMask.IsEmpty() {
 		sels = removeIf(sels, func(i int64) bool {
 			return deleteMask.Contains(uint64(i))
@@ -172,7 +188,7 @@ func BlockDataReadNoCopy(
 			outputBat.Vecs[outputColPos] = &cacheVectors[loadedColumnPos]
 			loadedColumnPos++
 		} else {
-			outputBat.Vecs[outputColPos] = vector.NewVec(objectio.RowidType)
+			outputBat.Vecs[outputColPos] = vector.NewOffHeapVecWithType(objectio.RowidType)
 			if err = buildRowidColumn(
 				info, outputBat.Vecs[phyAddrColumnPos], nil, mp,
 			); err != nil {
@@ -209,6 +225,7 @@ func BlockDataRead(
 	filterSeqnums []uint16,
 	filterColTypes []types.Type,
 	filter objectio.BlockReadFilter,
+	orderByLimit *objectio.IndexReaderTopOp,
 	policy fileservice.Policy,
 	tableName string,
 	bat *batch.Batch,
@@ -245,12 +262,10 @@ func BlockDataRead(
 		); err != nil {
 			return err
 		}
-		v2.TaskSelReadFilterTotal.Inc()
-		if len(sels) == 0 {
-			v2.TaskSelReadFilterHit.Inc()
-		}
+		v2.TxnSelReadFilterTotal.Observe(1.0)
 
 		if len(sels) == 0 {
+			v2.TxnSelReadFilterFiltered.Observe(1.0)
 			return nil
 		}
 	}
@@ -264,6 +279,7 @@ func BlockDataRead(
 		phyAddrColumnPos,
 		snapshotTS,
 		sels,
+		orderByLimit,
 		policy,
 		bat,
 		cacheVectors,
@@ -293,7 +309,7 @@ func CopyBlockData(
 		cacheVectors = containers.NewVectors(len(seqnums))
 	)
 
-	if release, err = ioutil.LoadColumns(
+	if release, _, err = ioutil.LoadColumns(
 		ctx, seqnums, colTypes, fs, location, cacheVectors, mp, fileservice.Policy(0),
 	); err != nil {
 		return
@@ -371,6 +387,189 @@ func BlockDataReadBackup(
 	return
 }
 
+// topnDistOf builds a per-row distance closure for the topn order-by-limit scan:
+// it decodes the query and each row's raw column bytes as element type T and
+// returns the float64 distance via the merged ResolveDistanceFn (R=float64).
+func topnDistOf[T types.ArrayElement](numVec []byte, m metric.MetricType) (func([]byte) (float64, error), error) {
+	distFunc, err := metric.ResolveDistanceFn[T, float64](m)
+	if err != nil {
+		return nil, err
+	}
+	rhs := types.BytesToArray[T](numVec)
+	return func(b []byte) (float64, error) {
+		return distFunc(types.BytesToArray[T](b), rhs)
+	}, nil
+}
+
+func HandleOrderByLimitOnIVFFlatIndex(
+	ctx context.Context,
+	selectRows []int64,
+	vecCol *vector.Vector,
+	orderByLimit *objectio.IndexReaderTopOp,
+) ([]int64, []float64, error) {
+	if selectRows == nil {
+		selectRows = make([]int64, vecCol.Length())
+		for i := range selectRows {
+			selectRows[i] = int64(i)
+		}
+	}
+
+	nullsBm := vecCol.GetNulls()
+	selectRows = slices.DeleteFunc(selectRows, func(row int64) bool {
+		return nullsBm.Contains(uint64(row))
+	})
+
+	searchResults := make([]vectorindex.SearchResult, 0, len(selectRows))
+	topLimit, err := vectorIndexTopLimit(ctx, orderByLimit.Limit)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Per-type distance closure: returns the float64 distance between a row's raw
+	// column bytes and the query vector. The single merged ResolveDistanceFn[T,
+	// float64] handles f32/f64 and the narrow quantizations uniformly; the bounds
+	// + top-k heap loop below is shared.
+	var distOf func(colBytes []byte) (float64, error)
+	switch orderByLimit.Typ {
+	case types.T_array_float32:
+		distOf, err = topnDistOf[float32](orderByLimit.NumVec, orderByLimit.MetricType)
+	case types.T_array_float64:
+		distOf, err = topnDistOf[float64](orderByLimit.NumVec, orderByLimit.MetricType)
+	case types.T_array_bf16:
+		distOf, err = topnDistOf[types.BF16](orderByLimit.NumVec, orderByLimit.MetricType)
+	case types.T_array_float16:
+		distOf, err = topnDistOf[types.Float16](orderByLimit.NumVec, orderByLimit.MetricType)
+	case types.T_array_int8:
+		distOf, err = topnDistOf[int8](orderByLimit.NumVec, orderByLimit.MetricType)
+	case types.T_array_uint8:
+		distOf, err = topnDistOf[uint8](orderByLimit.NumVec, orderByLimit.MetricType)
+	default:
+		return nil, nil, moerr.NewInternalError(ctx, fmt.Sprintf("only support float32/float64/bf16/float16/int8/uint8 type for topn: %s", orderByLimit.Typ))
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, row := range selectRows {
+		dist64, err := distOf(vecCol.GetBytesAt(int(row)))
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
+			if dist64 < orderByLimit.LowerBound {
+				continue
+			}
+		} else if orderByLimit.LowerBoundType == plan.BoundType_EXCLUSIVE {
+			if dist64 <= orderByLimit.LowerBound {
+				continue
+			}
+		}
+		if orderByLimit.UpperBoundType == plan.BoundType_INCLUSIVE {
+			if dist64 > orderByLimit.UpperBound {
+				continue
+			}
+		} else if orderByLimit.UpperBoundType == plan.BoundType_EXCLUSIVE {
+			if dist64 >= orderByLimit.UpperBound {
+				continue
+			}
+		}
+
+		if len(orderByLimit.DistHeap) >= topLimit {
+			if dist64 < orderByLimit.DistHeap[0] {
+				orderByLimit.DistHeap[0] = dist64
+				heap.Fix(&orderByLimit.DistHeap, 0)
+			} else {
+				continue
+			}
+		} else {
+			heap.Push(&orderByLimit.DistHeap, dist64)
+		}
+
+		searchResults = append(searchResults, vectorindex.SearchResult{
+			Id:       row,
+			Distance: dist64,
+		})
+	}
+
+	searchResults = slices.DeleteFunc(searchResults, func(res vectorindex.SearchResult) bool {
+		return res.Distance > orderByLimit.DistHeap[0]
+	})
+
+	sels := make([]int64, len(searchResults))
+	dists := make([]float64, len(searchResults))
+	for i, res := range searchResults {
+		sels[i] = res.Id
+		dists[i] = res.Distance
+	}
+
+	return sels, dists, nil
+}
+
+func fillOutputBatchBySelectedRows(
+	info *objectio.BlockInfo,
+	columns []uint16,
+	phyAddrColumnPos int,
+	outputBat *batch.Batch,
+	cacheVectors containers.Vectors,
+	selectRows []int64,
+	orderByLimit *objectio.IndexReaderTopOp,
+	dists []float64,
+	mp *mpool.MPool,
+) (err error) {
+	// phyAddrColumnPos >= 0 means one of the columns is the physical address column.
+	// The physical address column should be generated by blockid + rowid.
+	if phyAddrColumnPos >= 0 {
+		if len(selectRows) == 0 {
+			outputBat.Vecs[phyAddrColumnPos].CleanOnlyData()
+		} else if err = buildRowidColumn(
+			info, outputBat.Vecs[phyAddrColumnPos], selectRows, mp,
+		); err != nil {
+			return err
+		}
+	}
+
+	// cacheVectors contains all loaded columns from storage, and excludes the
+	// physical address column. Fill output columns by selected rows.
+	loadedColumnPos := 0
+	for outputColPos := range columns {
+		if outputColPos == phyAddrColumnPos {
+			continue
+		}
+		if orderByLimit != nil && !orderByLimit.OrderedLimit && loadedColumnPos == int(orderByLimit.ColPos) {
+			loadedColumnPos++
+			continue
+		}
+		if err = outputBat.Vecs[outputColPos].PreExtendWithArea(
+			len(selectRows), 0, mp,
+		); err != nil {
+			return err
+		}
+		if err = outputBat.Vecs[outputColPos].Union(
+			&cacheVectors[loadedColumnPos], selectRows, mp,
+		); err != nil {
+			return err
+		}
+		loadedColumnPos++
+	}
+
+	if orderByLimit != nil && !orderByLimit.OrderedLimit {
+		if len(outputBat.Vecs) == len(columns) {
+			distVec := vector.NewVec(types.T_float64.ToType())
+			if err = vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
+				return err
+			}
+			outputBat.Vecs = append(outputBat.Vecs, distVec)
+		} else {
+			if err = vector.AppendFixedList(outputBat.Vecs[len(outputBat.Vecs)-1], dists, nil, mp); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
 // BlockDataReadInner only read data,don't apply deletes.
 func BlockDataReadInner(
 	ctx context.Context,
@@ -381,6 +580,7 @@ func BlockDataReadInner(
 	phyAddrColumnPos int,
 	ts types.TS,
 	selectRows []int64, // if selectRows is not empty, it was already filtered by filter
+	orderByLimit *objectio.IndexReaderTopOp,
 	policy fileservice.Policy,
 	outputBat *batch.Batch,
 	cacheVectors containers.Vectors,
@@ -413,37 +613,26 @@ func BlockDataReadInner(
 
 	// len(selectRows) > 0 means it was already filtered by pk filter
 	if len(selectRows) > 0 {
-		// phyAddrColumnPos >= 0 means one of the columns is the physical address column
-		// The physical address column should be generated by the blockid and rowid
-		if phyAddrColumnPos >= 0 {
-			if err = buildRowidColumn(
-				info, outputBat.Vecs[phyAddrColumnPos], selectRows, mp,
-			); err != nil {
-				return
+		var dists []float64
+
+		if orderByLimit != nil {
+			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, info, phyAddrColumnPos, cacheVectors)
+			if err != nil {
+				return err
 			}
 		}
 
-		// cacheVectors contains all the loaded columns from the storage, which
-		// doesn't contain the physical address column. And the physical address column
-		// is already filled into the outputBat.Vecs[phyAddrColumnPos]
-		loadedColumnPos := 0
-		for outputColPos := range columns {
-			if outputColPos == phyAddrColumnPos {
-				continue
-			}
-			if err = outputBat.Vecs[outputColPos].PreExtendWithArea(
-				len(selectRows), 0, mp,
-			); err != nil {
-				break
-			}
-			if err = outputBat.Vecs[outputColPos].Union(
-				&cacheVectors[loadedColumnPos], selectRows, mp,
-			); err != nil {
-				break
-			}
-			loadedColumnPos++
-		}
-		return
+		return fillOutputBatchBySelectedRows(
+			info,
+			columns,
+			phyAddrColumnPos,
+			outputBat,
+			cacheVectors,
+			selectRows,
+			orderByLimit,
+			dists,
+			mp,
+		)
 	}
 
 	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
@@ -464,12 +653,41 @@ func BlockDataReadInner(
 	// transform delete mask to deleted rows
 	// TODO: avoid this transformation
 	if !deleteMask.IsEmpty() {
-		arr := common.DefaultAllocator.GetSels()
+		arr := vector.GetSels()
 		defer func() {
-			common.DefaultAllocator.PutSels(arr)
+			vector.PutSels(arr)
 		}()
 
 		deletedRows = deleteMask.ToI64Array(&arr)
+	}
+
+	if shouldFallbackOrderedLimitToFullBlockRead(orderByLimit, info) {
+		// Ordered-limit pushdown can only prune sorted blocks. Fall back to the
+		// normal UnionBatch+Shrink path on unsorted blocks to avoid building
+		// full row-index slices that do not eliminate any rows.
+		orderByLimit = nil
+	}
+
+	// No pre-filter rows, but vector TopN pushdown is requested:
+	// apply TopN on live rows (exclude tombstones first), then materialize selected rows.
+	if orderByLimit != nil {
+		var dists []float64
+		selectRows, dists, err = handleOrderByLimitOnLiveRows(ctx, orderByLimit, info, phyAddrColumnPos, deleteMask, cacheVectors)
+		if err != nil {
+			return err
+		}
+
+		return fillOutputBatchBySelectedRows(
+			info,
+			columns,
+			phyAddrColumnPos,
+			outputBat,
+			cacheVectors,
+			selectRows,
+			orderByLimit,
+			dists,
+			mp,
+		)
 	}
 
 	// build rowid column if needed
@@ -501,6 +719,25 @@ func BlockDataReadInner(
 		}
 	}
 	return
+}
+
+// buildTopInputRows constructs a slice of live row indices by excluding rows
+// present in the deleteMask. Returns nil when there is nothing to filter.
+func buildTopInputRows(length int, deleteMask objectio.Bitmap) []int64 {
+	if length <= 0 || deleteMask.IsEmpty() {
+		return nil
+	}
+	capHint := length - deleteMask.Count()
+	if capHint < 0 {
+		capHint = 0
+	}
+	rows := make([]int64, 0, capHint)
+	for i := 0; i < length; i++ {
+		if !deleteMask.Contains(uint64(i)) {
+			rows = append(rows, int64(i))
+		}
+	}
+	return rows
 }
 
 func excludePhyAddrColumn(
@@ -585,7 +822,7 @@ func readBlockData(
 			return
 		}
 
-		release, err2 = ioutil.LoadColumns(
+		release, _, err2 = ioutil.LoadColumns(
 			ctx, cols, typs, fs, info.MetaLocation(), cacheVectors2, m, policy,
 		)
 		return
@@ -636,4 +873,129 @@ func readBlockData(
 	}
 
 	return
+}
+
+func handleOrderByLimitOnSelectRows(
+	ctx context.Context,
+	selectRows []int64,
+	orderByLimit *objectio.IndexReaderTopOp,
+	info *objectio.BlockInfo,
+	phyAddrColumnPos int,
+	cacheVectors containers.Vectors,
+) ([]int64, []float64, error) {
+	if orderByLimit.OrderedLimit {
+		if info == nil || !info.IsSorted() || uint64(len(selectRows)) <= orderByLimit.Limit {
+			return selectRows, nil, nil
+		}
+		limit := int(orderByLimit.Limit)
+		if orderByLimit.Desc {
+			return selectRows[len(selectRows)-limit:], nil, nil
+		}
+		return selectRows[:limit], nil, nil
+	}
+
+	vecColPos := orderByLimit.ColPos
+	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
+		vecColPos--
+	}
+	vecCol := &cacheVectors[vecColPos]
+
+	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
+}
+
+func handleOrderByLimitOnLiveRows(
+	ctx context.Context,
+	orderByLimit *objectio.IndexReaderTopOp,
+	info *objectio.BlockInfo,
+	phyAddrColumnPos int,
+	deleteMask objectio.Bitmap,
+	cacheVectors containers.Vectors,
+) ([]int64, []float64, error) {
+	vecColPos := orderByLimit.ColPos
+	if phyAddrColumnPos >= 0 && vecColPos > int32(phyAddrColumnPos) {
+		vecColPos--
+	}
+	if orderByLimit.OrderedLimit {
+		rowCount := 0
+		if int(vecColPos) < len(cacheVectors) {
+			rowCount = cacheVectors[vecColPos].Length()
+		} else if info != nil {
+			rowCount = int(info.MetaLocation().Rows())
+		}
+		return buildOrderedLiveRows(rowCount, deleteMask, orderByLimit, info != nil && info.IsSorted()), nil, nil
+	}
+
+	vecCol := &cacheVectors[vecColPos]
+	selectRows := buildTopInputRows(vecCol.Length(), deleteMask)
+	return HandleOrderByLimitOnIVFFlatIndex(ctx, selectRows, vecCol, orderByLimit)
+}
+
+func shouldFallbackOrderedLimitToFullBlockRead(
+	orderByLimit *objectio.IndexReaderTopOp,
+	info *objectio.BlockInfo,
+) bool {
+	return orderByLimit != nil && orderByLimit.OrderedLimit && (info == nil || !info.IsSorted())
+}
+
+func buildOrderedLiveRows(
+	rowCount int,
+	deleteMask objectio.Bitmap,
+	orderByLimit *objectio.IndexReaderTopOp,
+	isSorted bool,
+) []int64 {
+	if rowCount <= 0 {
+		return nil
+	}
+	if !isSorted {
+		if deleteMask.IsEmpty() {
+			return buildContiguousRows(0, rowCount)
+		}
+		return buildTopInputRows(rowCount, deleteMask)
+	}
+	limit := rowCount
+	if orderByLimit.Limit > 0 && orderByLimit.Limit < uint64(rowCount) {
+		limit = int(orderByLimit.Limit)
+	}
+	if orderByLimit.Desc {
+		return buildOrderedLiveRowsDesc(rowCount, deleteMask, limit)
+	}
+	return buildOrderedLiveRowsAsc(rowCount, deleteMask, limit)
+}
+
+func buildOrderedLiveRowsAsc(rowCount int, deleteMask objectio.Bitmap, limit int) []int64 {
+	if deleteMask.IsEmpty() {
+		return buildContiguousRows(0, limit)
+	}
+	rows := make([]int64, 0, limit)
+	for i := 0; i < rowCount && len(rows) < limit; i++ {
+		if !deleteMask.Contains(uint64(i)) {
+			rows = append(rows, int64(i))
+		}
+	}
+	return rows
+}
+
+func buildOrderedLiveRowsDesc(rowCount int, deleteMask objectio.Bitmap, limit int) []int64 {
+	if deleteMask.IsEmpty() {
+		return buildContiguousRows(rowCount-limit, rowCount)
+	}
+	rows := make([]int64, 0, limit)
+	for i := rowCount - 1; i >= 0 && len(rows) < limit; i-- {
+		if !deleteMask.Contains(uint64(i)) {
+			rows = append(rows, int64(i))
+		}
+	}
+	slices.Reverse(rows)
+	return rows
+}
+
+func buildContiguousRows(start, end int) []int64 {
+	if end <= start {
+		return nil
+	}
+	rows := make([]int64, end-start)
+	for i := range rows {
+		rows[i] = int64(start + i)
+	}
+	return rows
 }

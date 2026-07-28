@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"flag"
@@ -28,7 +29,7 @@ import (
 	"path"
 	"runtime"
 	"runtime/pprof"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unsafe"
@@ -54,6 +55,8 @@ var (
 	heapProfilePathFlag   = flag.String("heap-profile", "", "write heap profile to the specified file")
 	httpListenAddr        = flag.String("debug-http", "", "http server listen address")
 	profileInterval       = flag.Duration("profile-interval", 0, "profile interval")
+	blockProfileRate      = flag.Int("block-profile-rate", 0, "enable block profiling with the given rate. 0 means disabled. Recommended: 100 for production, 1 for debugging")
+	mutexProfileFraction  = flag.Int("mutex-profile-fraction", 0, "enable mutex profiling with the given fraction. 0 means disabled. Recommended: 100 for production, 1 for debugging")
 	statusServer          = status.NewServer()
 )
 
@@ -118,7 +121,6 @@ func writeHeapProfile() {
 }
 
 func init() {
-
 	const cssStyles = `
     <style>
     * {
@@ -174,9 +176,7 @@ func init() {
 			allInfos = append(allInfos, infos)
 		}
 
-		sort.Slice(allInfos, func(i, j int) bool {
-			aInfos := allInfos[i]
-			bInfos := allInfos[j]
+		slices.SortFunc(allInfos, func(aInfos, bInfos []positionInfo) int {
 			aNumMOFrame := 0
 			for _, info := range aInfos {
 				if strings.Contains(info.PackagePath, "matrixone") ||
@@ -192,14 +192,14 @@ func init() {
 				}
 			}
 			if aNumMOFrame != bNumMOFrame {
-				return aNumMOFrame > bNumMOFrame
+				return cmp.Compare(bNumMOFrame, aNumMOFrame)
 			}
 			a := aInfos[len(aInfos)-1]
 			b := bInfos[len(bInfos)-1]
 			if a.FileOnDisk != b.FileOnDisk {
-				return a.FileOnDisk < b.FileOnDisk
+				return cmp.Compare(a.FileOnDisk, b.FileOnDisk)
 			}
-			return a.Line < b.Line
+			return cmp.Compare(a.Line, b.Line)
 		})
 
 		for i, infos := range allInfos {
@@ -252,10 +252,10 @@ func init() {
 			}
 			liveBytes[sum] += record.AllocBytes - record.FreeBytes
 		}
-		sort.Slice(positions, func(i, j int) bool {
-			_, sum1 := getStackInfo(positions[i][:])
-			_, sum2 := getStackInfo(positions[j][:])
-			return liveBytes[sum1] > liveBytes[sum2]
+		slices.SortFunc(positions, func(a, b position) int {
+			_, sum1 := getStackInfo(a[:])
+			_, sum2 := getStackInfo(b[:])
+			return cmp.Compare(liveBytes[sum2], liveBytes[sum1])
 		})
 
 		for i, pos := range positions {
@@ -404,14 +404,16 @@ func saveProfilesLoop(sigs chan os.Signal) {
 
 	quit := false
 	tk := time.NewTicker(*profileInterval)
-	logutil.GetGlobalLogger().Info("save profiles loop started", zap.Duration("profile-interval", *profileInterval), zap.Duration("cpuProfileInterval", cpuProfileInterval))
+	logutil.Info(
+		"save.profiles.loop.started",
+		zap.Duration("interval", *profileInterval),
+		zap.Duration("duration", cpuProfileInterval),
+	)
 	for {
 		select {
 		case <-tk.C:
-			logutil.GetGlobalLogger().Info("save profiles start")
 			saveProfiles()
 			saveCpuProfile(cpuProfileInterval)
-			logutil.GetGlobalLogger().Info("save profiles end")
 		case <-sigs:
 			quit = true
 		}
@@ -426,6 +428,14 @@ func saveProfiles() {
 	saveProfile(profile.HEAP)
 	//dump goroutine before stopping services
 	saveProfile(profile.GOROUTINE)
+	//dump block profile if enabled
+	if *blockProfileRate > 0 {
+		saveProfile(profile.BLOCK)
+	}
+	//dump mutex profile if enabled
+	if *mutexProfileFraction > 0 {
+		saveProfile(profile.MUTEX)
+	}
 	// dump malloc profile
 	saveMallocProfile()
 	// dump http connections profile
@@ -435,20 +445,29 @@ func saveProfiles() {
 func saveProfile(typ string) string {
 	name, _ := uuid.NewV7()
 	profilePath := catalog.BuildProfilePath(globalServiceType, globalNodeId, typ, name.String()) + ".gz"
-	logutil.GetGlobalLogger().Info("save profiles ", zap.String("path", profilePath))
 	cnservice.SaveProfile(profilePath, typ, globalEtlFS)
 	return profilePath
 }
 
 func saveCpuProfile(cpuProfileInterval time.Duration) {
+	// Skip CPU profile if already in use (e.g., started via -cpu-profile flag)
+	if *cpuProfilePathFlag != "" {
+		logutil.GetGlobalLogger().Debug("skip cpu profile generation, cpu profiling already enabled via -cpu-profile flag")
+		return
+	}
+
 	genCpuProfile := func(writer io.Writer) error {
 		err := pprof.StartCPUProfile(writer)
 		if err != nil {
+			// If CPU profiling is already in use, skip silently
+			if strings.Contains(err.Error(), "cpu profiling already in use") {
+				return nil
+			}
 			return err
 		}
 		time.Sleep(cpuProfileInterval)
 		pprof.StopCPUProfile()
-		return err
+		return nil
 	}
 	saveProfileWithType("cpu", genCpuProfile)
 }

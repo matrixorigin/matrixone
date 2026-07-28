@@ -18,16 +18,20 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"strings"
 
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergdelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
@@ -39,6 +43,13 @@ var _ vm.Operator = new(External)
 
 const (
 	ColumnCntLargerErrorInfo = "the table column is larger than input data column"
+
+	// IcebergDMLDataFilePathAttr and IcebergDMLRowOrdinalAttr are internal
+	// scan-only columns used by Iceberg row-level DML collectors. They are
+	// materialized from the Parquet reader side channel and must never be
+	// exposed by ordinary SELECT projection.
+	IcebergDMLDataFilePathAttr = api.DMLDataFilePathColumnName
+	IcebergDMLRowOrdinalAttr   = api.DMLRowOrdinalColumnName
 )
 
 // Use for External table scan param
@@ -50,15 +61,14 @@ type ExternalParam struct {
 }
 
 type ExParamConst struct {
-	IgnoreLine    int
-	IgnoreLineTag int
-	ParallelLoad  bool
-	StrictSqlMode bool
-	Close         byte
-	maxBatchSize  uint64
-	Idx           int
-	ColumnListLen int32 // load ...  (col1, col2 , col3), ColumnListLen is 3
-	CreateSql     string
+	ParallelLoad           bool
+	LoadEmptyNumericAsZero bool
+	StrictSqlMode          bool
+	Close                  byte
+	maxBatchSize           uint64
+	Idx                    int
+	ColumnListLen          int32 // load ...  (col1, col2 , col3), ColumnListLen is 3
+	CreateSql              string
 
 	// letter case: origin
 	Attrs           []plan.ExternAttr
@@ -67,20 +77,32 @@ type ExParamConst struct {
 	FileSize        []int64
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
-	Ctx             context.Context
-	Extern          *tree.ExternParam
-	tableDef        *plan.TableDef
-	ClusterTable    *plan.ClusterTable
+	// Optional Parquet row group shards. Empty means whole-file scan.
+	ParquetRowGroupShards       []*pipeline.ParquetRowGroupShard
+	IcebergDataTasks            []*pipeline.IcebergDataFileTask
+	IcebergDeleteTasks          []*pipeline.IcebergDeleteFileTask
+	IcebergColumns              []*pipeline.IcebergColumnMapping
+	IcebergSnapshot             *pipeline.IcebergSnapshotRuntime
+	IcebergObjectIORef          string
+	IcebergHiddenReadCols       []int32
+	IcebergPlanningStats        process.ParquetProfileStats
+	NeedRowOrdinal              bool
+	IcebergDeleteMaxMemoryBytes int64
+	IcebergDeleteSpillEnabled   bool
+	Ctx                         context.Context
+	Extern                      *tree.ExternParam
+	ClusterTable                *plan.ClusterTable
 }
 
 type ExParam struct {
-	prevStr   string
-	reader    io.ReadCloser
-	plh       *ParseLineHandler
-	Fileparam *ExFileparam
-	Zoneparam *ZonemapFileparam
-	Filter    *FilterParam
-	parqh     *ParquetHandler
+	Fileparam                   *ExFileparam
+	Filter                      *FilterParam
+	currentPartValues           map[string]string
+	parquetProfile              process.ParquetProfileStats
+	icebergDeleteStates         map[string]*icebergdelete.ApplyState
+	icebergDeleteLoaded         bool
+	IcebergBatchDataFile        string
+	IcebergBatchStartRowOrdinal int64
 }
 
 type ExFileparam struct {
@@ -100,16 +122,38 @@ type FilterParam struct {
 	zonemappable bool
 	columnMap    map[int]int
 	FilterExpr   *plan.Expr
-	blockReader  *ioutil.BlockReader
+	AuxIdCnt     int32 // saved from AssignAuxIdForExpr in Prepare, reused at runtime
+}
+
+// ExternalFileReader is the unified interface for reading external files.
+// Each format (CSV/Parquet/ZoneMap) implements this interface independently.
+//
+// Lifecycle: NewXxxReader() → Open() → ReadBatch()* → Close() → Open() → ...
+// Reader saves param reference in Open, subsequent methods access it via r.param.
+type ExternalFileReader interface {
+	// Open opens a file and initializes internal state.
+	// fileEmpty=true means the file is empty (e.g. 0-row Parquet),
+	// Call should Close then finishCurrentFile and continue to next file.
+	Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error)
+
+	// ReadBatch reads one batch of data into buf.
+	// Returns true when the current file is fully read.
+	ReadBatch(ctx context.Context, buf *batch.Batch, proc *process.Process, analyzer process.Analyzer) (fileFinished bool, err error)
+
+	// Close closes the current file and releases resources.
+	Close() error
 }
 
 type container struct {
 	maxAllocSize int
 	buf          *batch.Batch
 }
+
 type External struct {
-	ctr container
-	Es  *ExternalParam
+	ctr        container
+	Es         *ExternalParam
+	reader     ExternalFileReader // unified file reader
+	fileOpened bool               // whether a file is currently active
 
 	vm.OperatorBase
 	colexec.Projection
@@ -120,7 +164,7 @@ func (external *External) GetOperatorBase() *vm.OperatorBase {
 }
 
 func init() {
-	reuse.CreatePool[External](
+	reuse.CreatePool(
 		func() *External {
 			return &External{}
 		},
@@ -140,6 +184,69 @@ func NewArgument() *External {
 	return reuse.Alloc[External](nil)
 }
 
+func (param *ExternalParam) addParquetProfile(stats process.ParquetProfileStats) {
+	if param == nil || param.Extern == nil || !strings.EqualFold(param.Extern.Format, tree.PARQUET) || stats.Empty() {
+		return
+	}
+	param.parquetProfile.Add(stats)
+}
+
+func (param *ExternalParam) takeParquetProfile() process.ParquetProfileStats {
+	if param == nil {
+		return process.ParquetProfileStats{}
+	}
+	stats := param.parquetProfile
+	param.parquetProfile = process.ParquetProfileStats{}
+	return stats
+}
+
+func (param *ExternalParam) flushParquetProfile(analyzer process.Analyzer) {
+	if analyzer == nil {
+		return
+	}
+	stats := param.takeParquetProfile()
+	if !stats.Empty() {
+		analyzer.AddParquetProfile(stats)
+	}
+}
+
+func icebergParquetProfileStats(param *ExternalParam) process.ParquetProfileStats {
+	if param == nil || !isIcebergParquetScan(param) {
+		return process.ParquetProfileStats{}
+	}
+	var stats process.ParquetProfileStats
+	stats.Add(param.IcebergPlanningStats)
+	for _, col := range param.Cols {
+		if col != nil && !col.Hidden {
+			stats.TotalColumns++
+		}
+	}
+	for _, mapping := range param.IcebergColumns {
+		if mapping != nil && !mapping.IsHidden && !mapping.DefaultNullFill {
+			stats.ProjectedColumns++
+		}
+	}
+	if stats.ProjectedColumns == 0 && len(param.Attrs) > 0 {
+		stats.ProjectedColumns = int64(len(param.Attrs))
+	}
+	if len(param.IcebergDataTasks) > 0 {
+		stats.SelectedFiles = int64(len(param.IcebergDataTasks))
+		for _, task := range param.IcebergDataTasks {
+			if task != nil && task.FileSize > 0 {
+				stats.SelectedFileBytes += task.FileSize
+			}
+		}
+		return stats
+	}
+	stats.SelectedFiles = int64(len(param.FileList))
+	for _, size := range param.FileSize {
+		if size > 0 {
+			stats.SelectedFileBytes += size
+		}
+	}
+	return stats
+}
+
 func (external *External) WithEs(es *ExternalParam) *External {
 	external.Es = es
 	return external
@@ -147,13 +254,31 @@ func (external *External) WithEs(es *ExternalParam) *External {
 
 func (external *External) Release() {
 	if external != nil {
-		reuse.Free[External](external, nil)
+		reuse.Free(external, nil)
 	}
 }
 
 func (external *External) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if external.reader != nil {
+		if closeErr := external.reader.Close(); closeErr != nil {
+			logutil.Debugf("external reader close on reset: %v", closeErr)
+		}
+		external.reader = nil
+		external.fileOpened = false
+	}
 	if external.ctr.buf != nil {
 		external.ctr.buf.CleanOnlyData()
+	}
+	if external.Es != nil {
+		// Release Iceberg-only execution state without changing External's legacy
+		// terminal file cursor contract. Cached prepared Iceberg scans are rejected
+		// at the compile-cache boundary and receive a freshly planned operator.
+		external.Es.currentPartValues = nil
+		external.Es.icebergDeleteStates = nil
+		external.Es.icebergDeleteLoaded = false
+		external.Es.IcebergBatchDataFile = ""
+		external.Es.IcebergBatchStartRowOrdinal = 0
+		external.Es.parquetProfile = process.ParquetProfileStats{}
 	}
 
 	allocSize := int64(external.ctr.maxAllocSize)
@@ -169,6 +294,14 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if external.reader != nil {
+		external.reader.Close()
+		external.reader = nil
+		external.fileOpened = false
+	}
+	if external.Es != nil {
+		external.Es.releaseIcebergObjectIORef()
+	}
 	if external.ctr.buf != nil {
 		external.ctr.buf.Clean(proc.Mp())
 		external.ctr.buf = nil
@@ -176,11 +309,25 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 	external.FreeProjection(proc)
 }
 
+func (param *ExternalParam) releaseIcebergObjectIORef() {
+	if param == nil {
+		return
+	}
+	ref := strings.TrimSpace(param.IcebergObjectIORef)
+	if ref == "" {
+		return
+	}
+	icebergio.ReleaseObjectIORef(ref)
+	param.IcebergObjectIORef = ""
+}
+
 func (external *External) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	batch := input
 	var err error
 	if external.ProjectList != nil {
 		batch, err = external.EvalProjection(input, proc)
+	} else if external.Es != nil {
+		maskIcebergHiddenReadColumns(external.Es, batch)
 	}
 	return batch, err
 }
@@ -189,22 +336,25 @@ type ParseLineHandler struct {
 	csvReader *csvparser.CSVParser
 }
 
-func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
-	fieldsTerminatedBy := "\t"
-	fieldsEnclosedBy := "\""
-	fieldsEscapedBy := "\\"
+// newCSVParserFromReader is a stateless pure function that creates a CSV parser.
+// It only depends on config and io.Reader, not on ExParam.
+// Used by both CsvReader.Open and getTailSizeStrict.
+func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.CSVParser, error) {
+	fieldsTerminatedBy := tree.DefaultFieldsTerminated
+	fieldsEnclosedBy := tree.DefaultFieldsEnclosedBy
+	fieldsEscapedBy := tree.DefaultFieldsEscapedBy
 
 	linesTerminatedBy := "\n"
 	linesStartingBy := ""
 
-	if param.Extern.Tail.Fields != nil {
-		if terminated := param.Extern.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
+	if extern.Tail.Fields != nil {
+		if terminated := extern.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
 			fieldsTerminatedBy = terminated.Value
 		}
-		if enclosed := param.Extern.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
+		if enclosed := extern.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
 			fieldsEnclosedBy = string(enclosed.Value)
 		}
-		if escaped := param.Extern.Tail.Fields.EscapedBy; escaped != nil {
+		if escaped := extern.Tail.Fields.EscapedBy; escaped != nil {
 			if escaped.Value == 0 {
 				fieldsEscapedBy = ""
 			} else {
@@ -213,16 +363,16 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 		}
 	}
 
-	if param.Extern.Tail.Lines != nil {
-		if terminated := param.Extern.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
-			linesTerminatedBy = param.Extern.Tail.Lines.TerminatedBy.Value
+	if extern.Tail.Lines != nil {
+		if terminated := extern.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
+			linesTerminatedBy = extern.Tail.Lines.TerminatedBy.Value
 		}
-		if param.Extern.Tail.Lines.StartingBy != "" {
-			linesStartingBy = param.Extern.Tail.Lines.StartingBy
+		if extern.Tail.Lines.StartingBy != "" {
+			linesStartingBy = extern.Tail.Lines.StartingBy
 		}
 	}
 
-	if param.Extern.Format == tree.JSONLINE {
+	if extern.Format == tree.JSONLINE {
 		fieldsTerminatedBy = "\t"
 		fieldsEscapedBy = ""
 	}
@@ -236,23 +386,56 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 		NotNull:            false,
 		Null:               []string{`\N`},
 		UnescapedQuote:     true,
-		Comment:            '#',
+		// Comment marker comes from the table's COMMENT option; empty (the
+		// default) means no marker, so every line is data. A configured marker
+		// skips lines whose raw prefix matches it (checked before unquoting).
+		Comment: plan.GetCSVComment(extern),
 	}
 
-	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false)
+	return csvparser.NewCSVParser(&config, bufio.NewReader(r), csvparser.ReadBlockSize, false)
 }
 
 type ParquetHandler struct {
-	file     *parquet.File
-	offset   int64
-	batchCnt int64
-	cols     []*parquet.Column
-	mappers  []*columnMapper
+	file           *parquet.File
+	rowGroup       parquet.RowGroup
+	rowGroups      []parquet.RowGroup
+	rowGroupRows   int64
+	rowOrdinalBase int64
+	offset         int64
+	batchCnt       int64
+	cols           []*parquet.Column
+	mappers        []*columnMapper
+	pages          []parquet.Pages // cached pages iterators for each column
+	currentPage    []parquet.Page  // cached current page for each column
+	pageOffset     []int64         // current offset within each cached page
+	// Iceberg optional columns added after an older data file was written are
+	// materialized as NULL when the file has no matching field id.
+	icebergNullFill []bool
+
+	// for nested types support
+	hasNestedCols bool
+	rowReader     parquet.Rows
+
+	// virtual column support (hive partitions + __mo_filepath)
+	partitionColIndices            []int
+	filepathColIndex               int // -1 = not projected
+	icebergDMLDataFilePathColIndex int // -1 = not projected
+	icebergDMLRowOrdinalColIndex   int // -1 = not projected
+	hasPhysicalCol                 bool
+	rowCountOnly                   bool
+	currentRowGroup                int
+	rowCountRemaining              int
 }
 
 type columnMapper struct {
 	srcNull, dstNull   bool
 	maxDefinitionLevel byte
+	allowRepetition    bool
+	listCanBeNull      bool
+	listNullLevel      byte
+	listEmptyLevel     byte
+	listElemCanBeNull  bool
+	listElemNullLevel  byte
 
 	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
 }

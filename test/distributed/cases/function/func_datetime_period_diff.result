@@ -1,0 +1,85 @@
+SELECT PERIOD_DIFF(200802, 200703) AS result1;
+result1
+11
+SELECT PERIOD_DIFF(200802, 200703) AS diff_11_months;
+diff_11_months
+11
+SELECT PERIOD_DIFF(200703, 200802) AS diff_negative_11_months;
+diff_negative_11_months
+-11
+SELECT PERIOD_DIFF(200802, 200802) AS diff_zero;
+diff_zero
+0
+SELECT PERIOD_DIFF(0802, 0703) AS yymm_format;
+yymm_format
+11
+SELECT PERIOD_DIFF(7002, 6903) AS yymm_1970s;
+yymm_1970s
+-1189
+SELECT PERIOD_DIFF(6902, 7003) AS yymm_negative;
+yymm_negative
+1187
+SELECT PERIOD_DIFF(200812, 200801) AS same_year_11_months;
+same_year_11_months
+11
+SELECT PERIOD_DIFF(200901, 200812) AS year_boundary_1_month;
+year_boundary_1_month
+1
+SELECT PERIOD_DIFF(200901, 200801) AS year_boundary_12_months;
+year_boundary_12_months
+12
+SELECT PERIOD_DIFF(201002, 200802) AS two_years;
+two_years
+24
+SELECT PERIOD_DIFF(201202, 200802) AS four_years;
+four_years
+48
+SELECT PERIOD_DIFF(200802, 201202) AS negative_four_years;
+negative_four_years
+-48
+SELECT PERIOD_DIFF(200801, 200812) AS negative_11_months;
+negative_11_months
+-11
+SELECT PERIOD_DIFF(200802, 200801) AS one_month;
+one_month
+1
+SELECT PERIOD_DIFF(200801, 200802) AS negative_one_month;
+negative_one_month
+-1
+SELECT PERIOD_DIFF(NULL, 200703) AS null_period1;
+null_period1
+null
+SELECT PERIOD_DIFF(200802, NULL) AS null_period2;
+null_period2
+null
+SELECT PERIOD_DIFF(NULL, NULL) AS null_both;
+null_both
+null
+CREATE TABLE t1(period1 INT, period2 INT);
+INSERT INTO t1 VALUES (200802, 200703), (200812, 200801), (201002, 200802);
+SELECT PERIOD_DIFF(period1, period2) AS result FROM t1;
+result
+11
+11
+24
+DROP TABLE t1;
+CREATE TABLE t1(period1 INT, period2 INT);
+INSERT INTO t1 VALUES (200802, 200703), (200812, 200801), (201002, 200802);
+SELECT * FROM t1 WHERE PERIOD_DIFF(period1, period2) > 10;
+period1    period2
+200802    200703
+200812    200801
+201002    200802
+DROP TABLE t1;
+SELECT PERIOD_DIFF(200802.0, 200703.0) AS float_input;
+float_input
+11
+SELECT PERIOD_DIFF(CAST(200802 AS UNSIGNED), CAST(200703 AS UNSIGNED)) AS unsigned_input;
+unsigned_input
+11
+SELECT PERIOD_DIFF(200802, 0803) AS mixed_format1;
+mixed_format1
+-1
+SELECT PERIOD_DIFF(0802, 200703) AS mixed_format2;
+mixed_format2
+11

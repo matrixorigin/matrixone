@@ -59,7 +59,7 @@ func TestCreateRange(t *testing.T) {
 
 				v, ok := memStore.uncommitted[tableID]
 				assert.True(t, ok)
-				assert.Equal(t, fmt.Sprintf("`%s`", columns[0]), v.metadata.Description)
+				assert.Equal(t, fmt.Sprintf("range (`%s`)", columns[0]), v.metadata.Description)
 				assert.Equal(t, 2, len(v.partitions))
 				for _, p := range v.partitions {
 					assert.NotEqual(t, 0, p.PartitionID)
@@ -118,7 +118,7 @@ func TestGetMetadataByRangeColumnsType(t *testing.T) {
 
 			method.ColumnList = nil
 			_, err = s.getMetadataByRangeType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 		},
 	)
 }

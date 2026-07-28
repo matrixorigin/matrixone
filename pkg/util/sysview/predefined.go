@@ -178,7 +178,11 @@ var (
 		"mc.attnum AS ORDINAL_POSITION,"+
 		"mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,"+
 		"(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
-		"mo_show_visible_bin(mc.atttyp,2) as DATA_TYPE,"+
+		"(case when length(mc.attr_enum) > 0 then "+
+		"  (case when mo_show_visible_bin(mc.atttyp,2) = 'GEOMETRY' then "+
+		"    upper(case when upper(split_part(mc.attr_enum, ';', 1)) like 'SRID=%%' then 'GEOMETRY' else split_part(mc.attr_enum, ';', 1) end) "+
+		"  else upper(split_part(mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum), '(', 1)) end) "+
+		" else mo_show_visible_bin(mc.atttyp,2) end) as DATA_TYPE,"+
 		"internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
 		"internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,"+
 		"internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,"+
@@ -186,13 +190,14 @@ var (
 		"internal_datetime_scale(mc.atttyp) AS DATETIME_PRECISION,"+
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,"+
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,"+
-		"mo_show_visible_bin(mc.atttyp,3) as COLUMN_TYPE,"+
+		"(case when length(mc.attr_enum) > 0 then mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum) else mo_show_visible_bin(mc.atttyp,3) end) as COLUMN_TYPE,"+
 		"case when mc.att_constraint_type = 'p' then 'PRI' when mo_show_col_unique(mt.`constraint`, mc.attname) then 'UNI' else '' end as COLUMN_KEY,"+
-		"case when mc.att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,"+
+		"cast(case when mc.att_is_auto_increment = 1 then 'auto_increment' when mc.attr_has_generated = 1 then ifnull(mo_show_visible_bin(mc.attr_generated, 6), '') else '' end as varchar(24)) as EXTRA,"+
 		"'select,insert,update,references' as `PRIVILEGES`,"+
 		"mc.att_comment as COLUMN_COMMENT,"+
-		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
-		"if(true, NULL, 0) as SRS_ID "+
+		"cast(case when mc.attr_has_generated = 1 then ifnull(cast(mo_show_visible_bin(mc.attr_generated, 5) as varchar(500)), '') else '' end as varchar(500)) as GENERATION_EXPRESSION,"+
+		"(case when upper(mo_show_visible_bin(mc.atttyp,3)) like '%% SRID %%' "+
+		" then cast(split_part(upper(mo_show_visible_bin(mc.atttyp,3)), ' SRID ', 2) as bigint) else NULL end) as SRS_ID "+
 		"from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
 		"where mc.account_id = current_account_id() "+
 		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s'",
@@ -308,28 +313,41 @@ var (
 		"'def' AS `TABLE_CATALOG`," +
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
 		"`tbl`.`relname` AS `TABLE_NAME`," +
-		"`part`.`name` AS `PARTITION_NAME`," +
+		"`pt`.`partition_name` AS `PARTITION_NAME`," +
 		"NULL AS `SUBPARTITION_NAME`," +
-		"`part`.`number` AS `PARTITION_ORDINAL_POSITION`," +
+		"(`pt`.`partition_ordinal_position` + 1) AS `PARTITION_ORDINAL_POSITION`," +
 		"NULL AS `SUBPARTITION_ORDINAL_POSITION`," +
-		"(case `part`.`partition_type` when 'HASH' then 'HASH' " +
-		"when 'RANGE' then 'RANGE' " +
-		"when 'LIST' then 'LIST' " +
-		"when 'AUTO' then 'AUTO' " +
-		"when 'KEY_51' then 'KEY' " +
-		"when 'KEY_55' then 'KEY' " +
-		"when 'LINEAR_KEY_51' then 'LINEAR KEY' " +
-		"when 'LINEAR_KEY_55' then 'LINEAR KEY' " +
-		"when 'LINEAR_HASH' then 'LINEAR HASH' " +
-		"when 'RANGE_COLUMNS' then 'RANGE COLUMNS' " +
-		"when 'LIST_COLUMNS' then 'LIST COLUMNS' else NULL end) AS `PARTITION_METHOD`," +
+		"(case `meta`.`partition_method` " +
+		"when 'Key' then NULL " +
+		"when 'LinearKey' then 'LINEAR KEY' " +
+		"when 'Hash' then 'HASH' " +
+		"when 'LinearHash' then 'LINEAR HASH' " +
+		"when 'Range' then (case when `meta`.`partition_description` like '%columns%' then 'RANGE COLUMNS' else 'RANGE' end) " +
+		"when 'List' then 'LIST' " +
+		"else NULL end) AS `PARTITION_METHOD`," +
 		"NULL AS `SUBPARTITION_METHOD`," +
-		"`part`.`partition_expression` AS `PARTITION_EXPRESSION`," +
+		"(case when `meta`.`partition_description` like '%(%' then " +
+		"  replace( " +
+		"    substring( " +
+		"      `meta`.`partition_description`, " +
+		"      locate('(', `meta`.`partition_description`) + 1, " +
+		"      (length(`meta`.`partition_description`) - locate(')', reverse(`meta`.`partition_description`)) + 1) - locate('(', `meta`.`partition_description`) - 1 " +
+		"    ), '`', '' " +
+		"  ) " +
+		"when `meta`.`partition_description` like '%)' then " +
+		"  replace(`meta`.`partition_description`, '`', '') " +
+		"else `meta`.`partition_description` end) AS `PARTITION_EXPRESSION`," +
 		"NULL AS `SUBPARTITION_EXPRESSION`," +
-		"`part`.`description_utf8` AS `PARTITION_DESCRIPTION`," +
-		"mo_table_rows(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `TABLE_ROWS`," +
+		"(case when `pt`.`partition_expression_str` like 'values less than%' then " +
+		"  substring(`pt`.`partition_expression_str`, locate('(', `pt`.`partition_expression_str`) + 1, " +
+		"    locate(')', `pt`.`partition_expression_str`) - locate('(', `pt`.`partition_expression_str`) - 1" +
+		"  ) " +
+		"when `pt`.`partition_expression_str` like 'values in%' then " +
+		"  `pt`.`partition_expression_str` " +
+		"else `pt`.`partition_expression_str` end) AS `PARTITION_DESCRIPTION`," +
+		"mo_table_rows(`tbl`.`reldatabase`, `pt`.`partition_table_name`) AS `TABLE_ROWS`," +
 		"0 AS `AVG_ROW_LENGTH`," +
-		"mo_table_size(`tbl`.`reldatabase`, `part`.`partition_table_name`) AS `DATA_LENGTH`," +
+		"mo_table_size(`tbl`.`reldatabase`, `pt`.`partition_table_name`) AS `DATA_LENGTH`," +
 		"0 AS `MAX_DATA_LENGTH`," +
 		"0 AS `INDEX_LENGTH`," +
 		"0 AS `DATA_FREE`," +
@@ -337,12 +355,13 @@ var (
 		"NULL AS `UPDATE_TIME`," +
 		"NULL AS `CHECK_TIME`," +
 		"NULL AS `CHECKSUM`," +
-		"ifnull(`part`.`comment`,'')  AS `PARTITION_COMMENT`," +
+		"''  AS `PARTITION_COMMENT`," +
 		"'default' AS `NODEGROUP`," +
 		"NULL AS `TABLESPACE_NAME` " +
-		"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
-		"ON `part`.`table_id` = `tbl`.`rel_id` " +
-		"WHERE `tbl`.`account_id` = current_account_id() and `tbl`.`partitioned` = 1"
+		"FROM `mo_catalog`.`mo_tables` `tbl` " +
+		"JOIN `mo_catalog`.`mo_partition_metadata` `meta` ON `meta`.`table_id` = `tbl`.`rel_id` " +
+		"JOIN `mo_catalog`.`mo_partition_tables` `pt` ON `pt`.`primary_table_id` = `tbl`.`rel_id` " +
+		"WHERE `tbl`.`account_id` = current_account_id()"
 
 	InformationSchemaViewsDDL = "CREATE VIEW information_schema.VIEWS AS " +
 		"SELECT 'def' AS `TABLE_CATALOG`," +
@@ -372,14 +391,16 @@ var (
 		"NULL AS `SUB_PART`," +
 		"NULL AS `PACKED`," +
 		"if((`tcl`.`attnotnull` = 0),'YES','') AS `NULLABLE`," +
-		"NULL AS `INDEX_TYPE`," +
+		"`idx`.`algo` AS `INDEX_TYPE`," +
 		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`," +
 		"`idx`.`comment` AS `INDEX_COMMENT`," +
 		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`," +
-		"NULL AS `EXPRESSION`" +
+		"NULL AS `EXPRESSION` " +
 		"from (`mo_catalog`.`mo_indexes` `idx` " +
-		"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`))" +
-		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`)"
+		"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)) " +
+		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname` " +
+		"and `tcl`.`account_id` = `tbl`.`account_id` and `tcl`.`att_database` = `tbl`.`reldatabase` and `tcl`.`att_relname` = `tbl`.`relname`) " +
+		"where `tbl`.`account_id` = current_account_id()"
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +
 		"SELECT DISTINCT " +

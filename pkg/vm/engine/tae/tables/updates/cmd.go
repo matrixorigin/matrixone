@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -152,6 +153,15 @@ func (c *UpdateCmd) VerboseString() string {
 
 func (c *UpdateCmd) GetType() uint16 { return c.cmdType }
 
+func (c *UpdateCmd) ApproxSize() int64 {
+	size := 2 + 2 + 4 + common.IDSize // type, version, id, dest
+	if c.GetType() == IOET_WALTxnCommand_AppendNode {
+		size += int64(catalog.AppendNodeApproxSize)
+	}
+
+	return size
+}
+
 func (c *UpdateCmd) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
 	if _, err = w.Write(types.EncodeUint16(&c.cmdType)); err != nil {
@@ -194,13 +204,33 @@ func (c *UpdateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
+func (c *UpdateCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
+	_, err := c.WriteTo(buf)
+	return err
+}
+
 func (c *UpdateCmd) MarshalBinary() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = c.WriteTo(&bbuf); err != nil {
-		return
+	poolBuf := txnbase.GetMarshalBuffer()
+
+	err = c.MarshalBinaryWithBuffer(poolBuf)
+	if err != nil {
+		txnbase.PutMarshalBuffer(poolBuf) // Return buffer on error
+		return nil, err
 	}
-	buf = bbuf.Bytes()
-	return
+
+	data := poolBuf.Bytes()
+	// Optimization: if buffer capacity exceeds MaxPooledBufSize, it won't be returned to pool.
+	// In this case, we can directly return the underlying array without copy.
+	if poolBuf.Cap() > txnbase.MaxPooledBufSize {
+		txnbase.PutMarshalBuffer(poolBuf) // Will discard, but safe to call
+		return data, nil
+	}
+
+	// Small buffer will be returned to pool and Reset, so we must copy
+	result := make([]byte, len(data))
+	copy(result, data)
+	txnbase.PutMarshalBuffer(poolBuf)
+	return result, nil
 }
 
 func (c *UpdateCmd) UnmarshalBinary(buf []byte) error {

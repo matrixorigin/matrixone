@@ -1,0 +1,33 @@
+SET experimental_hnsw_index = 1;
+drop table if exists hnsw_dml;
+create table hnsw_dml(a bigint primary key, b vecf32(3), c int, KEY idx using hnsw(b) op_type 'vector_l2_ops');
+insert into hnsw_dml values(1,"[1,2,3]",10),(2,"[4,5,6]",20),(3,"[7,8,9]",30);
+select a,b,c from hnsw_dml order by a;
+➤ a[-5,64,0]  ¦  b[12,3,0]  ¦  c[4,32,0]  𝄀
+1  ¦  [1, 2, 3]  ¦  10  𝄀
+2  ¦  [4, 5, 6]  ¦  20  𝄀
+3  ¦  [7, 8, 9]  ¦  30
+insert into hnsw_dml values(1,"[1,1,1]",11) on duplicate key update b="[9,9,9]", c=c+100;
+select a,b,c from hnsw_dml order by a;
+➤ a[-5,64,0]  ¦  b[12,3,0]  ¦  c[4,32,0]  𝄀
+1  ¦  [9, 9, 9]  ¦  110  𝄀
+2  ¦  [4, 5, 6]  ¦  20  𝄀
+3  ¦  [7, 8, 9]  ¦  30
+insert into hnsw_dml values(4,"[2,2,2]",40) on duplicate key update c=c+1;
+select a,b,c from hnsw_dml order by a;
+➤ a[-5,64,0]  ¦  b[12,3,0]  ¦  c[4,32,0]  𝄀
+1  ¦  [9, 9, 9]  ¦  110  𝄀
+2  ¦  [4, 5, 6]  ¦  20  𝄀
+3  ¦  [7, 8, 9]  ¦  30  𝄀
+4  ¦  [2, 2, 2]  ¦  40
+replace into hnsw_dml values(2,"[0,0,0]",22);
+replace into hnsw_dml values(5,"[3,3,3]",50);
+select a,b,c from hnsw_dml order by a;
+➤ a[-5,64,0]  ¦  b[12,3,0]  ¦  c[4,32,0]  𝄀
+1  ¦  [9, 9, 9]  ¦  110  𝄀
+2  ¦  [0, 0, 0]  ¦  22  𝄀
+3  ¦  [7, 8, 9]  ¦  30  𝄀
+4  ¦  [2, 2, 2]  ¦  40  𝄀
+5  ¦  [3, 3, 3]  ¦  50
+drop table if exists hnsw_dml;
+SET experimental_hnsw_index = 0;

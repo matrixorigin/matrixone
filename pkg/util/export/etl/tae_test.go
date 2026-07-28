@@ -147,34 +147,6 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 		items func() []table.RowField
 	}
 
-	var genSpanData = func() []table.RowField {
-		arr := make([]table.RowField, 0, 128)
-		arr = append(arr, &motrace.MOSpan{
-			SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{
-				TraceID: trace.NilTraceID,
-				SpanID:  trace.NilSpanID,
-				Kind:    trace.SpanKindInternal,
-			}},
-			Name:      "span1",
-			StartTime: time.Time{},
-			EndTime:   time.Time{},
-			Duration:  0,
-		})
-		arr = append(arr, &motrace.MOSpan{
-			SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{
-				TraceID: trace.NilTraceID,
-				SpanID:  trace.NilSpanID,
-				Kind:    trace.SpanKindStatement,
-			}},
-			Name:      "span2",
-			StartTime: time.Time{},
-			EndTime:   time.Time{},
-			Duration:  100,
-		})
-
-		return arr
-	}
-
 	var _1TxnID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
 	var _1SesID = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
 	var genStmtData = func() []table.RowField {
@@ -185,12 +157,15 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 				TransactionID:        _1TxnID,
 				SessionID:            _1SesID,
 				Account:              "MO",
+				AccountID:            0,
 				User:                 "moroot",
 				Database:             "system",
 				Statement:            []byte("show tables"),
 				StatementFingerprint: "show tables",
 				StatementTag:         "",
 				ExecPlan:             nil,
+				RequestAt:            time.Now(),
+				ResponseAt:           time.Now(),
 			},
 		)
 		return arr
@@ -212,25 +187,10 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 				items: genStmtData,
 			},
 		},
-		{
-			name: "span",
-			fields: fields{
-				ctx: ctx,
-				fs:  fs,
-			},
-			args: args{
-				tbl:   motrace.SingleRowLogTable,
-				items: genSpanData,
-			},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
-			if tt.name == "span" {
-				return
-			}
 
 			cfg := table.FilePathCfg{NodeUUID: "uuid", NodeType: "type", Extension: table.TaeExtension}
 			filePath := cfg.LogsFilePathFactory("sys", tt.args.tbl, time.Now())
@@ -239,9 +199,11 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 			for _, item := range items {
 				row := item.GetTable().GetRow(tt.fields.ctx)
 				item.FillRow(tt.fields.ctx, row)
-				writer.WriteRow(row)
+				err := writer.WriteRow(row)
+				require.Nil(t, err)
 			}
-			writer.FlushAndClose()
+			_, err := writer.FlushAndClose()
+			require.Nil(t, err)
 
 			folder := path.Dir(filePath)
 			entrys, err := fileservice.SortedList(fs.List(ctx, folder))

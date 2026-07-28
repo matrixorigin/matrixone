@@ -107,11 +107,14 @@ create account if not exists testsuspend ADMIN_NAME 'admin' IDENTIFIED BY '12345
 select user_name, authentication_string from mo_catalog.mo_user;
 -- @session
 alter account testsuspend suspend;
+-- @regex("testsuspend.*suspend",true)
 select account_name,status from mo_catalog.mo_account order by account_name;
 alter account testsuspend OPEN;
+-- @regex("testsuspend.*open",true)
 select account_name,status from mo_catalog.mo_account order by account_name;
 --suspend status alter ADMIN_NAME/comment,drop account
 alter account testsuspend suspend;
+-- @regex("testsuspend.*suspend",true)
 select account_name,status from mo_catalog.mo_account order by account_name;
 alter account testsuspend ADMIN_NAME 'admin' IDENTIFIED BY '1234567890';
 alter account testsuspend comment 'aaaaaaa';
@@ -141,18 +144,24 @@ alter account test suspend comment 'new comment';
 alter account test admin_name='adminuser';
 drop account test;
 
---Executed in a non moadmin role
+--Executed in a non moadmin role with account all privilege
 drop user if exists al_user_2;
 create user 'al_user_2' identified by '123456';
 create role if not exists al_role2;
 grant all on account * to al_role2;
 grant al_role2 to al_user_2;
+drop account if exists account_all_upgrade;
 create account if not exists test ADMIN_NAME '123ERTYU' IDENTIFIED BY '123ERTYU' comment 'account comment';
 -- @session:id=5&user=sys:al_user_2:al_role2&password=123456
+create account account_all_created ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+drop account account_all_created;
+create account account_all_upgrade ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+upgrade account 'account_all_upgrade';
 alter account test admin_name='adminuser'  IDENTIFIED BY '123456';
 alter account test comment 'ccccccc';
 alter account test suspend;
 -- @session
+drop account if exists account_all_upgrade;
 drop role if exists al_role2;
 drop user if exists al_user_2;
 drop account test;

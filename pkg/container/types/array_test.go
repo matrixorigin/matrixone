@@ -15,10 +15,12 @@
 package types
 
 import (
+	"encoding/base64"
 	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBytesToArray(t *testing.T) {
@@ -82,13 +84,13 @@ func TestArrayToBytes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.argsF32 != nil {
-				if got := ArrayToBytes[float32](tt.argsF32); !reflect.DeepEqual(got, tt.want) {
+				if got := ArrayToBytes(tt.argsF32); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArrayToBytes() = %v, want %v", got, tt.want)
 				}
 			}
 
 			if tt.argsF64 != nil {
-				if got := ArrayToBytes[float64](tt.argsF64); !reflect.DeepEqual(got, tt.want) {
+				if got := ArrayToBytes(tt.argsF64); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArrayToBytes() = %v, want %v", got, tt.want)
 				}
 			}
@@ -141,13 +143,13 @@ func TestArrayToString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.argsF32 != nil {
-				if got := ArrayToString[float32](tt.argsF32); !reflect.DeepEqual(got, tt.want) {
+				if got := ArrayToString(tt.argsF32); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArrayToString() = %v, want %v", got, tt.want)
 				}
 			}
 
 			if tt.argsF64 != nil {
-				if got := ArrayToString[float64](tt.argsF64); !reflect.DeepEqual(got, tt.want) {
+				if got := ArrayToString(tt.argsF64); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArrayToString() = %v, want %v", got, tt.want)
 				}
 			}
@@ -177,18 +179,48 @@ func TestArraysToString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.argsF32 != nil {
-				if got := ArraysToString[float32](tt.argsF32, DefaultArraysToStringSep); !reflect.DeepEqual(got, tt.want) {
+				if got := ArraysToString(tt.argsF32, DefaultArraysToStringSep); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArraysToString() = %v, want %v", got, tt.want)
 				}
 			}
 
 			if tt.argsF64 != nil {
-				if got := ArraysToString[float64](tt.argsF64, DefaultArraysToStringSep); !reflect.DeepEqual(got, tt.want) {
+				if got := ArraysToString(tt.argsF64, DefaultArraysToStringSep); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArraysToString() = %v, want %v", got, tt.want)
 				}
 			}
 		})
 	}
+}
+
+func TestArrayToBase64Roundtrip(t *testing.T) {
+	// float32 roundtrip
+	f32 := []float32{1.5, -2.25, 0, 3.14159}
+	b64 := ArrayToBase64(f32)
+	decoded := BytesToArray[float32](mustBase64Decode(t, b64))
+	require.Equal(t, f32, decoded)
+
+	// float64 roundtrip
+	f64 := []float64{1.5, -2.25, 0, 3.141592653589793}
+	b64 = ArrayToBase64(f64)
+	decoded64 := BytesToArray[float64](mustBase64Decode(t, b64))
+	require.Equal(t, f64, decoded64)
+
+	// base64 is more compact than string for large vectors
+	big := make([]float32, 768)
+	for i := range big {
+		big[i] = float32(i) * 0.001
+	}
+	strLen := len(ArrayToString(big))
+	b64Len := len(ArrayToBase64(big))
+	require.Less(t, b64Len, strLen, "base64 should be shorter than text for 768-dim")
+}
+
+func mustBase64Decode(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := base64.StdEncoding.DecodeString(s)
+	require.NoError(t, err)
+	return b
 }
 
 func TestStringToArray(t *testing.T) {

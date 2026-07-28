@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -127,14 +128,12 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 			tuple, err := types.Unpack(buf)
 			if err == nil {
 				var w bytes.Buffer
-				w.WriteString("(")
-				for pos, col := range tuple.SQLStrings(nil) {
-					if pos > 0 {
-						w.WriteString(",")
-					}
-					w.WriteString(col)
+				content := strings.Join(tuple.SQLStrings(nil), ",")
+				if len(content) > 0 {
+					w.WriteString("(")
+					w.WriteString(content)
+					w.WriteString(")")
 				}
-				w.WriteString(")")
 				return w.String()
 			}
 		}
@@ -160,6 +159,14 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 		return types.BytesToArrayToString[float32](v.([]byte))
 	case types.T_array_float64:
 		return types.BytesToArrayToString[float64](v.([]byte))
+	case types.T_array_bf16:
+		return types.BytesToArrayToString[types.BF16](v.([]byte))
+	case types.T_array_float16:
+		return types.BytesToArrayToString[types.Float16](v.([]byte))
+	case types.T_array_int8:
+		return types.BytesToArrayToString[int8](v.([]byte))
+	case types.T_array_uint8:
+		return types.BytesToArrayToString[uint8](v.([]byte))
 	case types.T_date:
 		val := v.(types.Date)
 		return val.String()
@@ -172,6 +179,9 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_timestamp:
 		val := v.(types.Timestamp)
 		return val.String2(time.Local, 6)
+	case types.T_year:
+		val := v.(types.MoYear)
+		return val.String()
 	case types.T_decimal64:
 		val := v.(types.Decimal64)
 		return val.Format(t.Scale)
@@ -265,6 +275,8 @@ func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string
 		return vec2Str(vector.MustFixedColWithTypeCheck[types.Timestamp](v)[:printN], v)
 	case types.T_enum:
 		return vec2Str(vector.MustFixedColWithTypeCheck[types.Enum](v)[:printN], v)
+	case types.T_year:
+		return vec2Str(vector.MustFixedColWithTypeCheck[types.MoYear](v)[:printN], v)
 	case types.T_decimal64:
 		return vec2Str(vector.MustFixedColWithTypeCheck[types.Decimal64](v)[:printN], v)
 	case types.T_decimal128:

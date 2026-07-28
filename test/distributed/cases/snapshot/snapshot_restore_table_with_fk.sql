@@ -36,7 +36,7 @@ create snapshot sn1 for account acc1;
 show snapshots;
 
 drop database fk_test;
-restore account acc1 from snapshot sn1;
+restore account acc1{snapshot="sn1"};
 
 show databases;
 use fk_test;
@@ -91,7 +91,7 @@ select * from fk_test1.t2;
 delete from fk_test2.t3;
 select * from fk_test2.t3;
 
-restore account acc1 from snapshot sn1;
+restore account acc1{snapshot="sn1"};
 
 show databases;
 use fk_test1;

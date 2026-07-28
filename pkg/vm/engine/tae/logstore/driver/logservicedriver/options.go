@@ -26,17 +26,23 @@ import (
 )
 
 const (
-	DefaultMaxClient     = 100
-	DefaultClientBufSize = mpool.MB
-	DefaultMaxTimeout    = time.Minute * 3
-	DefaultOneTryTimeout = time.Minute
+	DefaultMaxClient           = 100
+	DefaultClientBufSize       = 2 * mpool.MB
+	DefaultMaxTimeout          = time.Minute * 3
+	DefaultOneTryTimeout       = time.Minute
+	DefaultClientMaxEntryCount = 50
 )
 
 type Config struct {
-	ClientMaxCount int
-	ClientBufSize  int
+	ClientMaxCount      int
+	ClientBufSize       int
+	ClientMaxEntryCount int
 
 	MaxTimeout time.Duration
+
+	ClientRetryTimes    int
+	ClientRetryInterval time.Duration
+	ClientRetryDuration time.Duration
 
 	ClientFactory LogServiceClientFactory
 	IsMockBackend bool
@@ -139,6 +145,18 @@ func (cfg *Config) fillDefaults() {
 	}
 	if cfg.MaxTimeout <= 0 {
 		cfg.MaxTimeout = DefaultMaxTimeout
+	}
+	if cfg.ClientMaxEntryCount <= 0 {
+		cfg.ClientMaxEntryCount = DefaultClientMaxEntryCount
+	}
+	if cfg.ClientRetryTimes <= 0 {
+		cfg.ClientRetryTimes = DefaultRetryTimes
+	}
+	if cfg.ClientRetryInterval <= 0 {
+		cfg.ClientRetryInterval = DefaultRetryInterval
+	}
+	if cfg.ClientRetryDuration <= 0 {
+		cfg.ClientRetryDuration = DefaultRetryDuration
 	}
 }
 

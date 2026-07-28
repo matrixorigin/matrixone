@@ -129,6 +129,16 @@ var (
 	FSReadDurationIOReadAll         = fsReadWriteDuration.WithLabelValues("io-read-all")
 
 	FSWriteDurationWrite = fsReadWriteDuration.WithLabelValues("write")
+
+	// S3FS Read internal phase metrics
+	FSReadDurationTotal    = fsReadWriteDuration.WithLabelValues("s3fs-read-total")
+	FSReadDurationIOMerger = fsReadWriteDuration.WithLabelValues("s3fs-read-io-merger")
+	FSReadDurationS3Read   = fsReadWriteDuration.WithLabelValues("s3fs-read-s3")
+
+	// S3FS Write internal phase metrics
+	FSWriteDurationExists       = fsReadWriteDuration.WithLabelValues("s3fs-write-exists")
+	FSWriteDurationStorage      = fsReadWriteDuration.WithLabelValues("s3fs-write-storage")
+	FSWriteDurationDiskCacheSet = fsReadWriteDuration.WithLabelValues("s3fs-write-disk-cache-setfile")
 )
 
 var (
@@ -156,6 +166,36 @@ var (
 		}, []string{"component", "type"})
 )
 
+var (
+	fsCachePressureCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "cache_pressure_total",
+			Help:      "Total number of fs cache pressure events.",
+		}, []string{"component", "event"})
+
+	FSCachePressureTriggerCounter     = fsCachePressureCounter.WithLabelValues("rss", "trigger")
+	FSCachePressureMemoryEvictCounter = fsCachePressureCounter.WithLabelValues("memory", "evict")
+	FSCachePressureMetaEvictCounter   = fsCachePressureCounter.WithLabelValues("meta", "evict")
+	FSCachePressureMemorySkipCounter  = fsCachePressureCounter.WithLabelValues("memory", "admission-skip")
+	FSCachePressureMetaSkipCounter    = fsCachePressureCounter.WithLabelValues("meta", "admission-skip")
+)
+
+var (
+	fsCachePressureEvictDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "cache_pressure_evict_duration_seconds",
+			Help:      "Bucketed histogram of fs cache pressure eviction duration.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"component"})
+
+	FSCachePressureMemoryEvictDuration = fsCachePressureEvictDuration.WithLabelValues("memory")
+	FSCachePressureMetaEvictDuration   = fsCachePressureEvictDuration.WithLabelValues("meta")
+)
+
 // GetFsCacheBytesGauge return inuse, cap Gauge metric
 // {typ} should be [mem, disk, meta]
 func GetFsCacheBytesGauge(name, typ string) (inuse prometheus.Gauge, capacity prometheus.Gauge) {
@@ -179,6 +219,46 @@ var (
 		},
 		[]string{
 			"op",
+		},
+	)
+)
+
+// S3 connection pool state metrics
+// Tracks the current number of active (in-use) HTTP connections
+var (
+	// S3ConnActiveGauge tracks the current number of active S3 HTTP connections
+	// Active connections are connections currently being used for HTTP requests
+	S3ConnActiveGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "s3_conn_active",
+			Help:      "Current number of active S3 HTTP connections (connections currently in use)",
+		},
+	)
+)
+
+// Disk cache metrics
+var (
+	// FSDiskCacheEvictCounter tracks the number of disk cache evictions
+	// Evictions occur when cache capacity is exceeded and old entries are removed
+	FSDiskCacheEvictCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_evict_total",
+			Help:      "Total number of disk cache evictions",
+		},
+	)
+
+	// FSDiskCacheErrorCounter tracks the number of disk cache errors
+	// Errors include file I/O failures, permission issues, etc.
+	FSDiskCacheErrorCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_error_total",
+			Help:      "Total number of disk cache errors",
 		},
 	)
 )

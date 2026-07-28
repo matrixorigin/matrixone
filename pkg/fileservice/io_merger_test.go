@@ -17,6 +17,7 @@ package fileservice
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestIOMerger(t *testing.T) {
@@ -34,7 +35,7 @@ func TestIOMerger(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for {
-				done, wait := merger.Merge(key)
+				done, wait := merger.Merge(key, time.Second)
 				if done != nil {
 					cs = append(cs, c)
 					c++
@@ -67,7 +68,7 @@ func BenchmarkIOMergerNoContention(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		done, wait := merger.Merge(key)
+		done, wait := merger.Merge(key, time.Second)
 		if done != nil {
 			done()
 		} else {
@@ -84,7 +85,7 @@ func BenchmarkIOMergerParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			done, wait := merger.Merge(key)
+			done, wait := merger.Merge(key, time.Second)
 			if done != nil {
 				done()
 			} else {
@@ -92,4 +93,61 @@ func BenchmarkIOMergerParallel(b *testing.B) {
 			}
 		}
 	})
+}
+
+func TestIOMergerMaxWait(t *testing.T) {
+	merger := NewIOMerger()
+	key := IOMergeKey{
+		Path: "foo",
+	}
+	// initiate
+	_, _ = merger.Merge(key, time.Second)
+	// wait
+	_, wait := merger.Merge(key, time.Second)
+	// will return
+	wait()
+}
+
+func TestIOMergerShortMaxWait(t *testing.T) {
+	merger := NewIOMerger()
+	key := IOMergeKey{
+		Path: "foo",
+	}
+
+	done, wait := merger.Merge(key, time.Second)
+	if done == nil || wait != nil {
+		t.Fatal("expected first merge to initiate")
+	}
+	defer done()
+
+	_, wait = merger.Merge(key, time.Millisecond*20)
+	if wait == nil {
+		t.Fatal("expected second merge to wait")
+	}
+
+	t0 := time.Now()
+	wait()
+	if elapsed := time.Since(t0); elapsed > time.Second {
+		t.Fatalf("short max wait was delayed by slow wait duration: %v", elapsed)
+	}
+}
+
+func TestIOMergerIsMerging(t *testing.T) {
+	merger := NewIOMerger()
+	key := IOMergeKey{
+		Path: "foo",
+	}
+
+	done, wait := merger.Merge(key, time.Second)
+
+	if done == nil || wait != nil {
+		t.Fatal("expected first merge to initiate")
+	}
+	if !merger.IsMerging(key) {
+		t.Fatal("expected key to be merging")
+	}
+	done()
+	if merger.IsMerging(key) {
+		t.Fatal("expected key to stop merging")
+	}
 }

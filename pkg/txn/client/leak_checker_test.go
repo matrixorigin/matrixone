@@ -77,6 +77,23 @@ func TestLeakCheckWithNoLeak(t *testing.T) {
 	require.NoError(t, c.Close())
 }
 
+func TestLeakCheckCloseClearsTrackedTransactions(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := NewTxnClient(
+		"",
+		newTestTxnSender(),
+		WithEnableLeakCheck(time.Hour, func([]ActiveTxn) {}))
+	c.Resume()
+	_, err := c.New(context.Background(), newTestTimestamp(0))
+	require.NoError(t, err)
+
+	require.NoError(t, c.Close())
+	lc := c.(*txnClient).leakChecker
+	lc.RLock()
+	defer lc.RUnlock()
+	require.Empty(t, lc.actives)
+}
+
 func BenchmarkLeakCheckerTxnClosed(b *testing.B) {
 	// Create a leak checker instance
 	lc := newLeakCheck(10*time.Second, func([]ActiveTxn) {})

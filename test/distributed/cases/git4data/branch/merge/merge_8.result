@@ -1,0 +1,364 @@
+drop database if exists test_chain_merge;
+create database test_chain_merge;
+use test_chain_merge;
+create table t0(a int primary key, b int);
+insert into t0 values (1, 1), (2, 2), (3, 3);
+data branch create table t1 from t0;
+data branch create table t2 from t1;
+insert into t2 values (4, 4), (5, 5);
+update t2 set b = b + 100 where a = 1;
+delete from t2 where a = 2;
+data branch diff t2 against t1 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t1[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  0  𝄀
+DELETED  ¦  1  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch merge t2 into t1;
+select * from t1 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  101  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5
+data branch diff t2 against t1 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t1[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+data branch diff t1 against t0 output summary;
+➤ metric[12,0,0]  ¦  t1[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  0  𝄀
+DELETED  ¦  1  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch merge t1 into t0;
+select * from t0 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  101  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5
+data branch diff t1 against t0 output summary;
+➤ metric[12,0,0]  ¦  t1[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int primary key, b int);
+insert into t0 values (1, 1), (2, 2), (3, 3);
+data branch create table t1 from t0;
+data branch create table t2 from t1;
+insert into t2 values (10, 10), (11, 11);
+update t2 set b = b + 1000 where a = 1;
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch merge t2 into t0;
+select * from t0 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1001  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+10  ¦  10  𝄀
+11  ¦  11
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+data branch diff t2 against t1 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t1[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch diff t1 against t0 output summary;
+➤ metric[12,0,0]  ¦  t1[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  2  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  1
+data branch diff t1 against t0 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+3
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int primary key, b int);
+insert into t0 values (1, 1), (2, 2), (3, 3);
+data branch create table t1 from t0;
+insert into t1 values (4, 4);
+data branch create table t2 from t1;
+insert into t2 values (5, 5);
+update t2 set b = b + 10 where a = 1;
+update t0 set b = b + 100 where a = 1;
+insert into t0 values (50, 50);
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  1  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  1  ¦  1
+data branch merge t2 into t0 when conflict skip;
+select * from t0 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  101  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+50  ¦  50
+data branch merge t2 into t0 when conflict accept;
+select * from t0 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+50  ¦  50
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  1  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+data branch diff t1 against t0 output summary;
+➤ metric[12,0,0]  ¦  t1[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  2  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  1
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int primary key, b varchar(8));
+insert into t0 values (1, 't0'), (2, 't0'), (3, 't0');
+data branch create table t1 from t0;
+insert into t1 values (4, 't1');
+update t1 set b = 't1u' where a = 2;
+data branch create table t2 from t1;
+insert into t2 values (5, 't2');
+update t2 set b = 't2u' where a = 3;
+update t1 set b = 't1late' where a = 1;
+insert into t1 values (6, 't1late');
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  2  ¦  0
+data branch merge t2 into t0;
+select * from t0 order by a;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  t0  𝄀
+2  ¦  t1u  𝄀
+3  ¦  t2u  𝄀
+4  ¦  t1  𝄀
+5  ¦  t2
+data branch diff t1 against t0 output summary;
+➤ metric[12,0,0]  ¦  t1[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  1  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  1  ¦  1
+data branch diff t1 against t0 output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+4
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(region varchar(4), k int, v int, primary key (region, k));
+insert into t0 values ('eu', 1, 10), ('eu', 2, 20), ('us', 1, 100);
+data branch create table t1 from t0;
+insert into t1 values ('us', 2, 200);
+data branch create table t2 from t1;
+update t2 set v = v + 1 where region = 'eu' and k = 1;
+delete from t2 where region = 'us' and k = 2;
+insert into t2 values ('ap', 1, 999);
+data branch diff t2 against t1 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t1[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  0  𝄀
+DELETED  ¦  1  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch merge t2 into t1;
+select * from t1 order by region, k;
+➤ region[12,-1,0]  ¦  k[4,32,0]  ¦  v[4,32,0]  𝄀
+ap  ¦  1  ¦  999  𝄀
+eu  ¦  1  ¦  11  𝄀
+eu  ¦  2  ¦  20  𝄀
+us  ¦  1  ¦  100
+data branch diff t1 against t0 output summary;
+➤ metric[12,0,0]  ¦  t1[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch merge t1 into t0;
+select * from t0 order by region, k;
+➤ region[12,-1,0]  ¦  k[4,32,0]  ¦  v[4,32,0]  𝄀
+ap  ¦  1  ¦  999  𝄀
+eu  ¦  1  ¦  11  𝄀
+eu  ¦  2  ¦  20  𝄀
+us  ¦  1  ¦  100
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+data branch diff t2 against t1 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t1[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int primary key, b int);
+insert into t0 values (1, 1), (2, 2);
+drop snapshot if exists c6_t0_sp0;
+create snapshot c6_t0_sp0 for table test_chain_merge t0;
+data branch create table t1 from t0{snapshot="c6_t0_sp0"};
+insert into t1 values (3, 3);
+drop snapshot if exists c6_t1_sp0;
+create snapshot c6_t1_sp0 for table test_chain_merge t1;
+data branch create table t2 from t1{snapshot="c6_t1_sp0"};
+insert into t2 values (4, 4);
+update t2 set b = b + 10 where a = 1;
+drop snapshot if exists c6_t2_sp0;
+create snapshot c6_t2_sp0 for table test_chain_merge t2;
+data branch diff t2{snapshot="c6_t2_sp0"} against t0{snapshot="c6_t0_sp0"} output summary;
+➤ metric[12,0,0]  ¦  t2{snapshot = 'c6_t2_sp0'}[-5,0,0]  ¦  t0{snapshot = 'c6_t0_sp0'}[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch merge t2 into t1;
+data branch merge t1 into t0;
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+data branch diff t1 against t0 output summary;
+➤ metric[12,0,0]  ¦  t1[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+data branch diff t2{snapshot="c6_t2_sp0"} against t0{snapshot="c6_t0_sp0"} output summary;
+➤ metric[12,0,0]  ¦  t2{snapshot = 'c6_t2_sp0'}[-5,0,0]  ¦  t0{snapshot = 'c6_t0_sp0'}[-5,0,0]  𝄀
+INSERTED  ¦  2  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch diff t2{snapshot="c6_t2_sp0"} against t0{snapshot="c6_t0_sp0"} output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+3
+drop snapshot c6_t0_sp0;
+drop snapshot c6_t1_sp0;
+drop snapshot c6_t2_sp0;
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int primary key, b int, tag varchar(8));
+insert into t0 values (1, 1, 'orig'), (2, 2, 'orig');
+data branch create table t1 from t0;
+data branch create table t2 from t1;
+update t0 set b = 111, tag = 't0-won' where a = 1;
+update t2 set b = 222, tag = 't2-won' where a = 1;
+insert into t0 values (10, 10, 't0-ins');
+insert into t2 values (20, 20, 't2-ins');
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  1  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  1  ¦  1
+data branch merge t2 into t0 when conflict skip;
+select * from t0 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  tag[12,-1,0]  𝄀
+1  ¦  111  ¦  t0-won  𝄀
+2  ¦  2  ¦  orig  𝄀
+10  ¦  10  ¦  t0-ins  𝄀
+20  ¦  20  ¦  t2-ins
+data branch merge t2 into t0 when conflict accept;
+select * from t0 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  tag[12,-1,0]  𝄀
+1  ¦  222  ¦  t2-won  𝄀
+2  ¦  2  ¦  orig  𝄀
+10  ¦  10  ¦  t0-ins  𝄀
+20  ¦  20  ¦  t2-ins
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  1  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int, b int);
+insert into t0 select *, * from generate_series(1, 20) g;
+data branch create table t1 from t0;
+data branch create table t2 from t1;
+insert into t2 values (21, 21), (22, 22);
+update t2 set b = b + 1 where a in (5, 10);
+delete from t2 where a in (1, 2);
+data branch merge t2 into t1;
+data branch merge t1 into t0;
+select count(*) as total_rows from t0;
+➤ total_rows[-5,64,0]  𝄀
+20
+select * from t0 where a in (5, 10, 21, 22) order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+5  ¦  6  𝄀
+10  ¦  11  𝄀
+21  ¦  21  𝄀
+22  ¦  22
+select count(*) as deleted_rows from t0 where a in (1, 2);
+➤ deleted_rows[-5,64,0]  𝄀
+0
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  2  𝄀
+DELETED  ¦  0  ¦  2  𝄀
+UPDATED  ¦  2  ¦  0
+data branch diff t1 against t0 output summary;
+➤ metric[12,0,0]  ¦  t1[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+drop table t2;
+drop table t1;
+drop table t0;
+create table t0(a int primary key, b int);
+insert into t0 values (1, 1), (2, 2);
+data branch create table t1 from t0;
+data branch create table t2 from t1;
+insert into t1 values (3, 3);
+update t1 set b = b + 100 where a = 1;
+data branch merge t1 into t0;
+select * from t0 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  101  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+insert into t2 values (4, 4);
+update t2 set b = b + 1000 where a = 2;
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  1  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  1  ¦  1
+data branch merge t2 into t0 when conflict accept;
+select * from t0 order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  101  𝄀
+2  ¦  1002  𝄀
+3  ¦  3  𝄀
+4  ¦  4
+data branch diff t2 against t0 output summary;
+➤ metric[12,0,0]  ¦  t2[-5,0,0]  ¦  t0[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  1  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  1
+drop table t2;
+drop table t1;
+drop table t0;
+drop database test_chain_merge;

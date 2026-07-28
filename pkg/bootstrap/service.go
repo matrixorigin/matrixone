@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/predefine"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
@@ -52,7 +53,17 @@ var (
 )
 
 var (
-	bootstrappedCheckerDB = catalog.MOTaskDB
+	bootstrappedCheckerDB        = catalog.MOTaskDB
+	bootstrappedVersionCheckerDB = catalog.MO_CATALOG
+	bootstrappedCheckerTables    = []string{
+		catalog.MOSysAsyncTask,
+		"sys_cron_task",
+		catalog.MOSysDaemonTask,
+	}
+	upgradeManagedBootstrapTables = []string{
+		catalog.MOSQLTask,
+		catalog.MOSQLTaskRun,
+	}
 	// Note: The following tables belong to data dictionary table, and system tables's creation will depend on
 	// the following system tables. Therefore, when creating tenants, they must be created first
 	step1InitSQLs = []string{
@@ -67,6 +78,8 @@ var (
 		frontend.MoTaskSysAsyncTaskDDL,
 		frontend.MoTaskSysCronTaskDDL,
 		frontend.MoTaskSysDaemonTaskDDL,
+		frontend.MoTaskSQLTaskDDL,
+		frontend.MoTaskSQLTaskRunDDL,
 
 		fmt.Sprintf(`create index idx_account_id on %s.sys_daemon_task(account_id)`,
 			catalog.MOTaskDB),
@@ -99,9 +112,17 @@ func init() {
 	}
 	initSQLs = append(initSQLs, sql)
 
+	sql = predefine.GenInitISCPTaskSQL()
+	initSQLs = append(initSQLs, sql)
+
+	sql = predefine.GenInitPublicationTaskSQL()
+	initSQLs = append(initSQLs, sql)
+
 	initSQLs = append(initSQLs, trace.InitSQLs...)
 
 	initSQLs = append(initSQLs, shardservice.InitSQLs...)
+
+	initSQLs = append(initSQLs, partitionservice.InitSQLs...)
 }
 
 type service struct {
@@ -207,12 +228,59 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 	})
 	for _, db := range dbs {
 		if strings.EqualFold(db, bootstrappedCheckerDB) {
-			return true, nil
+			return s.checkBootstrapTables(ctx)
 		}
 	}
 	// todo: these should do a log here to indicate that the system is not bootstrapped like the following
 	//  "show databases cannot find the bootstrappedCheckerDB."
 	return false, nil
+}
+
+func (s *service) checkBootstrapTables(ctx context.Context) (bool, error) {
+	res, err := s.exec.Exec(ctx, fmt.Sprintf("show tables from %s", bootstrappedCheckerDB), executor.Options{}.WithMinCommittedTS(s.now()))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	tables := make(map[string]struct{})
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		for _, table := range executor.GetStringRows(cols[0]) {
+			tables[strings.ToLower(table)] = struct{}{}
+		}
+		return true
+	})
+	for _, table := range bootstrappedCheckerTables {
+		if _, ok := tables[strings.ToLower(table)]; !ok {
+			return false, nil
+		}
+	}
+	for _, table := range upgradeManagedBootstrapTables {
+		if _, ok := tables[strings.ToLower(table)]; !ok {
+			return s.checkBootstrapVersionTable(ctx)
+		}
+	}
+	return true, nil
+}
+
+func (s *service) checkBootstrapVersionTable(ctx context.Context) (bool, error) {
+	res, err := s.exec.Exec(ctx, fmt.Sprintf("show tables from %s", bootstrappedVersionCheckerDB), executor.Options{}.WithMinCommittedTS(s.now()))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	var bootstrapped bool
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		for _, table := range executor.GetStringRows(cols[0]) {
+			if strings.EqualFold(table, catalog.MOVersionTable) {
+				bootstrapped = true
+				return false
+			}
+		}
+		return true
+	})
+	return bootstrapped, nil
 }
 
 func (s *service) execBootstrap(ctx context.Context) error {

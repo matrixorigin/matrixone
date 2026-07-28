@@ -60,24 +60,28 @@ func TestQueryType(t *testing.T) {
 					&Delete{}: QueryTypeDML,
 					&Load{}:   QueryTypeDML,
 					// DCL
-					&CreateAccount{}:     QueryTypeDCL,
-					&CreateRole{}:        QueryTypeDCL,
-					&CreateUser{}:        QueryTypeDCL,
-					&Grant{}:             QueryTypeDCL,
-					&GrantPrivilege{}:    QueryTypeDCL,
-					&GrantProxy{}:        QueryTypeDCL,
-					&GrantRole{}:         QueryTypeDCL,
-					&Revoke{}:            QueryTypeDCL,
-					&RevokePrivilege{}:   QueryTypeDCL,
-					&RevokeRole{}:        QueryTypeDCL,
-					&AlterAccount{}:      QueryTypeDCL,
-					&AlterUser{}:         QueryTypeDCL,
-					&DropAccount{}:       QueryTypeDCL,
-					&DropRole{}:          QueryTypeDCL,
-					&DropUser{}:          QueryTypeDCL,
-					&CreatePublication{}: QueryTypeDCL,
-					&DropPublication{}:   QueryTypeDCL,
-					&AlterPublication{}:  QueryTypeDCL,
+					&CreateAccount{}:        QueryTypeDCL,
+					&CreateRole{}:           QueryTypeDCL,
+					&CreateUser{}:           QueryTypeDCL,
+					&Grant{}:                QueryTypeDCL,
+					&GrantPrivilege{}:       QueryTypeDCL,
+					&GrantProxy{}:           QueryTypeDCL,
+					&GrantRole{}:            QueryTypeDCL,
+					&Revoke{}:               QueryTypeDCL,
+					&RevokePrivilege{}:      QueryTypeDCL,
+					&RevokeRole{}:           QueryTypeDCL,
+					&AlterAccount{}:         QueryTypeDCL,
+					&AlterUser{}:            QueryTypeDCL,
+					&DropAccount{}:          QueryTypeDCL,
+					&DropRole{}:             QueryTypeDCL,
+					&DropUser{}:             QueryTypeDCL,
+					&CreatePublication{}:    QueryTypeDCL,
+					&DropPublication{}:      QueryTypeDCL,
+					&AlterPublication{}:     QueryTypeDCL,
+					&DropCcprSubscription{}: QueryTypeDCL,
+					&CreateSQLTask{}:        QueryTypeDDL,
+					&AlterSQLTask{}:         QueryTypeDDL,
+					&DropSQLTask{}:          QueryTypeDDL,
 
 					// TCL
 					&BeginTransaction{}:    QueryTypeTCL,
@@ -112,6 +116,9 @@ func TestQueryType(t *testing.T) {
 					&ShowAccounts{}:                  QueryTypeOth,
 					&ShowCollation{}:                 QueryTypeOth,
 					&ShowDatabases{}:                 QueryTypeOth,
+					&ExecuteSQLTask{}:                QueryTypeOth,
+					&ShowSQLTasks{}:                  QueryTypeOth,
+					&ShowSQLTaskRuns{}:               QueryTypeOth,
 					&ShowErrors{}:                    QueryTypeOth,
 					&ShowFunctionOrProcedureStatus{}: QueryTypeOth,
 					&ShowGrants{}:                    QueryTypeOth,
@@ -128,7 +135,10 @@ func TestQueryType(t *testing.T) {
 					&ShowCreatePublications{}:        QueryTypeOth,
 					&ShowPublications{}:              QueryTypeOth,
 					&ShowSubscriptions{}:             QueryTypeOth,
+					&ShowCcprSubscriptions{}:         QueryTypeOth,
 					&ShowBackendServers{}:            QueryTypeOth,
+					&CheckTableStmt{}:                QueryTypeOth,
+					&ShowProfileStmt{}:               QueryTypeOth,
 				},
 			},
 		},
@@ -141,4 +151,18 @@ func TestQueryType(t *testing.T) {
 		})
 	}
 
+}
+
+func Test_CreateCDC_StmtKind_InternalFlag(t *testing.T) {
+	c1 := &CreateCDC{Internal: true}
+	require.Equal(t, defaultStatusTyp, c1.StmtKind())
+	c2 := &CreateCDC{Internal: false}
+	require.Equal(t, frontendStatusTyp, c2.StmtKind())
+}
+
+func Test_DropCDC_StmtKind_InternalFlag(t *testing.T) {
+	d1 := &DropCDC{Internal: true}
+	require.Equal(t, defaultStatusTyp, d1.StmtKind())
+	d2 := &DropCDC{Internal: false}
+	require.Equal(t, frontendStatusTyp, d2.StmtKind())
 }

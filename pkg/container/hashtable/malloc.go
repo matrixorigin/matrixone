@@ -15,12 +15,12 @@
 package hashtable
 
 import (
-	"fmt"
 	"math"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
@@ -49,9 +49,10 @@ func newAllocator() malloc.Allocator {
 			metric.MallocGauge.WithLabelValues("hashmap-inuse"),
 			metric.MallocCounter.WithLabelValues("hashmap-allocate-objects"),
 			metric.MallocGauge.WithLabelValues("hashmap-inuse-objects"),
+			metric.OffHeapInuseGauge.WithLabelValues("hashmap"),
 		),
 
-		func(inUse uint64) {
+		func(inUse uint64) error {
 
 			// soft limit
 			if inUse > softLimit && time.Since(softLimitLoggedAt) > softLimitLogMinInterval {
@@ -64,13 +65,14 @@ func newAllocator() malloc.Allocator {
 
 			// hard limit
 			if inUse > hardLimit {
-				panic(fmt.Sprintf(
+				return moerr.NewInternalErrorNoCtxf(
 					"hashmap memory exceed hard limit. hard limit %v, inuse %v",
 					hardLimit,
 					inUse,
-				))
+				)
 			}
 
+			return nil
 		},
 	)
 }

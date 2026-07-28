@@ -140,10 +140,8 @@ grant select on table v.A to r1;
 
 -- @session:id=2&user=sys:u1:r1&password=111
 use v;
--- @bvt:issue#22191
 select * from A,B;
 select * from A,B where A.a = B.b;
--- @bvt:issue
 -- @session
 
 grant select on table v.B to r1;

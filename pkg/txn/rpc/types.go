@@ -29,8 +29,8 @@ type Config = morpc.Config
 // TxnSender is used to send transaction requests to the TN nodes.
 type TxnSender interface {
 	// Send send request to the specified TN node, and wait for response synchronously.
-	// For any reason, if no response is received, the internal will keep retrying until
-	// the Context times out.
+	// For backend connectivity failures, the internal will retry for a bounded period
+	// while still respecting Context cancellation and deadlines.
 	Send(context.Context, []txn.TxnRequest) (*SendResult, error)
 	// Close the txn sender
 	Close() error
@@ -62,7 +62,8 @@ type LocalDispatch func(metadata.TNShard) TxnRequestHandleFunc
 
 // SendResult wrapping []txn.TxnResponse for reuse
 type SendResult struct {
-	Responses []txn.TxnResponse
-	streams   map[uint64]morpc.Stream
-	pool      *sync.Pool
+	Responses     []txn.TxnResponse
+	streams       map[uint64]morpc.Stream
+	localHandlers map[uint64]TxnRequestHandleFunc
+	pool          *sync.Pool
 }

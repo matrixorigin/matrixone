@@ -58,12 +58,13 @@ const (
 	ErrWarnDataTruncated uint16 = 201
 
 	// Group 1: Internal errors
-	ErrStart            uint16 = 20100
-	ErrInternal         uint16 = 20101
-	ErrNYI              uint16 = 20102
-	ErrOOM              uint16 = 20103
-	ErrQueryInterrupted uint16 = 20104
-	ErrNotSupported     uint16 = 20105
+	ErrStart                       uint16 = 20100
+	ErrInternal                    uint16 = 20101
+	ErrNYI                         uint16 = 20102
+	ErrOOM                         uint16 = 20103
+	ErrQueryInterrupted            uint16 = 20104
+	ErrNotSupported                uint16 = 20105
+	ErrRemoteDispatchNotRegistered uint16 = 20106
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -71,6 +72,8 @@ const (
 	ErrDataTruncated               uint16 = 20202
 	ErrInvalidArg                  uint16 = 20203
 	ErrTruncatedWrongValueForField uint16 = 20204
+	ErrTooBigPrecision             uint16 = 20205
+	ErrRegexpIllegalArgument       uint16 = 20206
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -87,6 +90,9 @@ const (
 	ErrUpgrateError         uint16 = 20311
 	ErrInvalidTz            uint16 = 20312
 	ErrUnsupportedDML       uint16 = 20313
+	ErrOperandColumns       uint16 = 20314
+	ErrSubqueryNo1Row       uint16 = 20315
+	ErrInvalidTypeForJSON   uint16 = 20316
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -164,20 +170,40 @@ const (
 	ErrBlobCantHaveDefault                      uint16 = 20472
 	ErrCantCompileForPrepare                    uint16 = 20473
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
+	ErrKeyDoesNotExist                          uint16 = 20475
+	ErrMaxPreparedStmtCountReached              uint16 = 20476
 
-	// Group 5: rpc timeout
+	// Group 5: rpc errors
+	//
 	// ErrRPCTimeout rpc timeout
+	// Indicates the operation timed out before completion.
 	ErrRPCTimeout uint16 = 20500
 	// ErrClientClosed rpc client closed
+	// Indicates the rpc client has been closed. The caller should check
+	// their shutdown logic to determine if retry is appropriate.
 	ErrClientClosed uint16 = 20501
-	// ErrBackendClosed backend closed
+	// ErrBackendClosed backend connection closed
+	// Indicates the backend connection was closed. This may be due to
+	// network issues or server-side closure.
 	ErrBackendClosed uint16 = 20502
 	// ErrStreamClosed rpc stream closed
+	// Indicates the rpc stream has ended.
 	ErrStreamClosed uint16 = 20503
 	// ErrNoAvailableBackend no available backend
+	// Indicates no healthy backend is currently available.
 	ErrNoAvailableBackend uint16 = 20504
-	// ErrBackendCannotConnect can not connect to remote backend
+	// ErrBackendCannotConnect cannot establish connection
+	// Indicates the connection attempt to backend failed.
 	ErrBackendCannotConnect uint16 = 20505
+	// ErrServiceUnavailable service temporarily unavailable
+	// Indicates the service is temporarily overloaded or down.
+	ErrServiceUnavailable uint16 = 20506
+	// ErrConnectionReset connection was reset by peer
+	// Indicates the connection was forcibly closed by remote.
+	ErrConnectionReset uint16 = 20507
+	// ErrAllCNServersBusy all CN servers are busy
+	// Indicates all CN servers are overloaded, typically due to too many active transactions.
+	ErrAllCNServersBusy uint16 = 20508
 
 	// Group 6: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
@@ -229,6 +255,17 @@ const (
 	ErrTxnUnknown                uint16 = 20638
 	ErrTxnControl                uint16 = 20639
 	ErrOfflineTxnWrite           uint16 = 20640
+	// ErrSchedulerClosed scheduler has been closed, cannot schedule new jobs
+	ErrSchedulerClosed uint16 = 20641
+
+	// GC sync protection errors
+	ErrGCIsRunning              uint16 = 20642
+	ErrSyncProtectionNotFound   uint16 = 20643
+	ErrSyncProtectionExists     uint16 = 20644
+	ErrSyncProtectionMaxCount   uint16 = 20645
+	ErrSyncProtectionSoftDelete uint16 = 20646
+	ErrSyncProtectionInvalid    uint16 = 20647
+	ErrSyncProtectionExpired    uint16 = 20648
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -247,6 +284,10 @@ const (
 	ErrLockNeedUpgrade uint16 = 20707
 	// ErrCannotCommitOnInvalidCN cannot commit transaction on invalid CN
 	ErrCannotCommitOnInvalidCN uint16 = 20708
+	// ErrRemoteLockWaitTimeout remote lock owner-side wait timeout
+	ErrRemoteLockWaitTimeout uint16 = 20709
+	// ErrLockWaitTimeout a lock waiter exceeded its configured wait budget
+	ErrLockWaitTimeout uint16 = 20710
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -282,6 +323,14 @@ const (
 	ErrUnsupportedDataType uint16 = 20905
 	ErrTaskNotFound        uint16 = 20906
 
+	// ErrCastWidthExceeded is returned by cast width-violation paths (DML
+	// assignment / generated columns) when strict sql_mode rejects an
+	// over-length CHAR/VARCHAR value. It maps to MySQL ER_DATA_TOO_LONG (1406),
+	// the correct protocol code for this condition; the JDBC driver used by
+	// mo-tester wraps it as java.sql.DataTruncation (prepending "Data
+	// truncation: " to the message), which the BVT result files reflect.
+	ErrCastWidthExceeded uint16 = 20907
+
 	// Group 10: skip list
 	ErrKeyAlreadyExists uint16 = 21001
 	ErrArenaFull        uint16 = 21002
@@ -296,6 +345,14 @@ const (
 	// Group 13: CDC
 	ErrStaleRead        uint16 = 22101
 	ErrNoWatermarkFound uint16 = 22102
+
+	// Group 14: TaskService
+	ErrExecutorRunning uint16 = 22201
+
+	// Group 15: Vector Search
+	ErrVectorNeedRetryWithPreMode uint16 = 22301
+	// Group 16: CCPR
+	ErrCCPRReadOnly uint16 = 22401
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -320,19 +377,23 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWarnDataTruncated: {WARN_DATA_TRUNCATED, []string{MySQLDefaultSqlState}, "warning: data truncated"},
 
 	// Group 1: Internal errors
-	ErrStart:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: error code start"},
-	ErrInternal:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: %s"},
-	ErrNYI:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s is not yet implemented"},
-	ErrOOM:              {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "error: out of memory"},
-	ErrQueryInterrupted: {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
-	ErrNotSupported:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
+	ErrStart:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: error code start"},
+	ErrInternal:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: %s"},
+	ErrNYI:                         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s is not yet implemented"},
+	ErrOOM:                         {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "error: out of memory"},
+	ErrQueryInterrupted:            {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
+	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
+	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
 	ErrOutOfRange:                  {ER_DATA_OUT_OF_RANGE, []string{MySQLDefaultSqlState}, "data out of range: data type %s, %s"},
 	ErrDataTruncated:               {ER_DATA_TOO_LONG, []string{MySQLDefaultSqlState}, "data truncated: data type %s, %s"},
+	ErrCastWidthExceeded:           {ER_DATA_TOO_LONG, []string{"22001"}, "%s"},
 	ErrInvalidArg:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid argument %s, bad value %s"},
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
+	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
+	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -348,6 +409,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
 	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
+	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
+	ErrSubqueryNo1Row:       {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
+	ErrInvalidTypeForJSON:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -394,7 +458,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDragonboatShardNotFound:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDragonboatOtherSystemError:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 	ErrDropNonExistsDB:                          {ER_DB_DROP_EXISTS, []string{MySQLDefaultSqlState}, "Can't drop database '%s'; database doesn't exist"},
-	ErrResultFileNotFound:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "result file %s not found"},
+	ErrResultFileNotFound:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "query id %s not found"},
 	ErrNoConfig:                                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	ErrTooManyFields:                            {ER_TOO_MANY_FIELDS, []string{MySQLDefaultSqlState}, "Too many columns"},
 	ErrDupFieldName:                             {ER_DUP_FIELDNAME, []string{MySQLDefaultSqlState}, "Duplicate column name '%-.192s'"},
@@ -410,6 +474,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrForeignKeyColumnCannotChange:             {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
 	ErrForeignKeyOnPartitioned:                  {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
 	ErrKeyColumnDoesNotExist:                    {ER_KEY_COLUMN_DOES_NOT_EXIST, []string{MySQLDefaultSqlState}, "Key column '%-.192s' doesn't exist in table"},
+	ErrKeyDoesNotExist:                          {ER_KEY_DOES_NOT_EXIST, []string{"42000"}, "Key '%-.192s' doesn't exist in table '%-.192s'"},
 	ErrCantDropFieldOrKey:                       {ER_CANT_DROP_FIELD_OR_KEY, []string{MySQLDefaultSqlState}, "Can't DROP '%-.192s'; check that column/key exists"},
 	ErrTableMustHaveColumns:                     {ER_TABLE_MUST_HAVE_COLUMNS, []string{MySQLDefaultSqlState}, "A table must have at least 1 column"},
 	ErrCantRemoveAllFields:                      {ER_CANT_REMOVE_ALL_FIELDS, []string{MySQLDefaultSqlState}, "You can't delete all columns with ALTER TABLE; use DROP TABLE instead"},
@@ -424,15 +489,19 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFKNoReferencedRow2:                       {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
+	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
 
-	// Group 5: rpc timeout
+	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
-	ErrClientClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
+	ErrClientClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc client closed"},
 	ErrBackendClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState},
-		"the connection has been disconnected"},
-	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
+		"backend connection closed"},
+	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc stream closed"},
 	ErrNoAvailableBackend:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
-	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not connect to remote backend, %v"},
+	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot connect to backend: %v"},
+	ErrServiceUnavailable:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service unavailable: %s"},
+	ErrConnectionReset:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "connection reset by peer"},
+	ErrAllCNServersBusy:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "all CN servers are busy, possibly due to too many active transactions"},
 
 	// Group 6: txn
 	ErrTxnClosed:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
@@ -475,6 +544,16 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTxnUnknown:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn commit status is unknown: %s"},
 	ErrTxnControl:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn control error: %s"},
 	ErrOfflineTxnWrite:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "write offline txn: %s"},
+	ErrSchedulerClosed:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "scheduler closed"},
+
+	// GC sync protection errors
+	ErrGCIsRunning:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "GC is running, please retry later"},
+	ErrSyncProtectionNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection not found: %s"},
+	ErrSyncProtectionExists:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection already exists: %s"},
+	ErrSyncProtectionMaxCount:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection max count reached: %d"},
+	ErrSyncProtectionSoftDelete: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection is soft deleted: %s"},
+	ErrSyncProtectionInvalid:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid sync protection request"},
+	ErrSyncProtectionExpired:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection expired: job %s validTS %d < prepareTS %d"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -485,6 +564,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrLockConflict:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock options conflict, wait policy is fast fail"},
 	ErrLockNeedUpgrade:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "row level lock is too large that need upgrade to table level lock"},
 	ErrCannotCommitOnInvalidCN: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
+	ErrRemoteLockWaitTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock wait timeout"},
+	ErrLockWaitTimeout:         {ER_LOCK_WAIT_TIMEOUT, []string{MySQLDefaultSqlState}, "Lock wait timeout exceeded; try restarting transaction"},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -534,6 +615,15 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	// Group 13: CDC
 	ErrStaleRead:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CDC handle: stale read, min TS is %v, receive %v"},
 	ErrNoWatermarkFound: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CDC task: no watermark found of table %s.%s"},
+
+	// Group 14: Task Service
+	ErrExecutorRunning: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "TaskService: executor %s is already running"},
+
+	// Group 15: Vector Search
+	ErrVectorNeedRetryWithPreMode: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector search need retry with pre mode"},
+
+	// Group 16: CCPR
+	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -808,7 +898,8 @@ func NewBadS3Config(ctx context.Context, msg string) *Error {
 }
 
 func NewInternalErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewInternalError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrInternal, msg)
 }
 
 func NewInternalError(ctx context.Context, msg string) *Error {
@@ -828,11 +919,16 @@ func NewNYI(ctx context.Context, msg string) *Error {
 }
 
 func NewNotSupportedf(ctx context.Context, format string, args ...any) *Error {
-	return NewNotSupported(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrNotSupported, msg)
 }
 
 func NewNotSupported(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrNotSupported, msg)
+}
+
+func NewRemoteDispatchNotRegistered(ctx context.Context, uuid string) *Error {
+	return newError(ctx, ErrRemoteDispatchNotRegistered, uuid)
 }
 
 func NewOOM(ctx context.Context) *Error {
@@ -847,8 +943,13 @@ func NewDivByZero(ctx context.Context) *Error {
 	return newError(ctx, ErrDivByZero)
 }
 
+func NewRegexpIllegalArgument(ctx context.Context) *Error {
+	return newError(ctx, ErrRegexpIllegalArgument)
+}
+
 func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any) *Error {
-	return NewOutOfRange(ctx, typ, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrOutOfRange, typ, msg)
 }
 
 func NewOutOfRange(ctx context.Context, typ string, msg string) *Error {
@@ -856,15 +957,13 @@ func NewOutOfRange(ctx context.Context, typ string, msg string) *Error {
 }
 
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {
-	return NewDataTruncated(ctx, typ, fmt.Sprintf(format, args...))
-}
-
-func NewDataTruncated(ctx context.Context, typ string, msg string) *Error {
+	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDataTruncated, typ, msg)
 }
 
 func NewInvalidArg(ctx context.Context, arg string, val any) *Error {
-	return newError(ctx, ErrInvalidArg, arg, fmt.Sprintf("%v", val))
+	msg := fmt.Sprintf("%v", val)
+	return newError(ctx, ErrInvalidArg, arg, msg)
 }
 
 func NewTruncatedValueForField(ctx context.Context, t, v, c string, idx int) *Error {
@@ -872,7 +971,8 @@ func NewTruncatedValueForField(ctx context.Context, t, v, c string, idx int) *Er
 }
 
 func NewBadConfigf(ctx context.Context, format string, args ...any) *Error {
-	return NewBadConfig(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrBadConfig, msg)
 }
 
 func NewBadConfig(ctx context.Context, msg string) *Error {
@@ -880,15 +980,21 @@ func NewBadConfig(ctx context.Context, msg string) *Error {
 }
 
 func NewInvalidInputf(ctx context.Context, format string, args ...any) *Error {
-	return NewInvalidInput(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrInvalidInput, msg)
 }
 
 func NewInvalidInput(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInvalidInput, msg)
 }
 
+func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {
+	return newError(ctx, ErrInvalidTypeForJSON, argument, function)
+}
+
 func NewSyntaxErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewSyntaxError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrSyntaxError, msg)
 }
 
 func NewSyntaxError(ctx context.Context, msg string) *Error {
@@ -896,23 +1002,26 @@ func NewSyntaxError(ctx context.Context, msg string) *Error {
 }
 
 func NewParseErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewParseError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrParseError, msg)
 }
 func NewParseError(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrParseError, msg)
 }
 
 func NewConstraintViolationf(ctx context.Context, format string, args ...any) *Error {
-	return NewConstraintViolation(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrConstraintViolation, msg)
 }
 
 func NewConstraintViolation(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrConstraintViolation, msg)
 }
 
-func NewUnsupportedDML(ctx context.Context, msg string, args ...any) *Error {
-	xmsg := fmt.Sprintf(msg, args...)
-	return newError(ctx, ErrUnsupportedDML, xmsg)
+func NewUnsupportedDML(ctx context.Context, format string, args ...any) *Error {
+	msg := fmt.Sprintf(format, args...)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrUnsupportedDML, msg)
 }
 
 func NewEmptyVector(ctx context.Context) *Error {
@@ -921,6 +1030,10 @@ func NewEmptyVector(ctx context.Context) *Error {
 
 func NewFileNotFound(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrFileNotFound, f)
+}
+
+func NewFileNotFoundErrorf(ctx context.Context, format string, args ...any) *Error {
+	return newError(ctx, ErrFileNotFound, fmt.Sprintf(format, args...))
 }
 
 func NewResultFileNotFound(ctx context.Context, f string) *Error {
@@ -964,7 +1077,8 @@ func NewInvalidPath(ctx context.Context, f string) *Error {
 }
 
 func NewInvalidStatef(ctx context.Context, format string, args ...any) *Error {
-	return NewInvalidState(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrInvalidState, msg)
 }
 
 func NewInvalidState(ctx context.Context, msg string) *Error {
@@ -984,11 +1098,13 @@ func NewLogServiceNotReady(ctx context.Context) *Error {
 }
 
 func NewBadDB(ctx context.Context, name string) *Error {
-	return newError(ctx, ErrBadDB, name)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrBadDB, name)
 }
 
 func NewNoDB(ctx context.Context) *Error {
-	return newError(ctx, ErrNoDB)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrNoDB)
 }
 
 func NewNoWorkingStore(ctx context.Context) *Error {
@@ -1020,11 +1136,13 @@ func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 }
 
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
-	return newError(ctx, ErrNoSuchTable, db, tbl)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrNoSuchTable, db, tbl)
 }
 
 func NewNoSuchSequence(ctx context.Context, db, tbl string) *Error {
-	return newError(ctx, ErrNoSuchSequence, db, tbl)
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrNoSuchSequence, db, tbl)
 }
 
 func NewBadView(ctx context.Context, db, v string) *Error {
@@ -1055,6 +1173,53 @@ func NewBackendCannotConnect(ctx context.Context) *Error {
 	return newError(ctx, ErrBackendCannotConnect)
 }
 
+func NewServiceUnavailable(ctx context.Context, reason string) *Error {
+	return newError(ctx, ErrServiceUnavailable, reason)
+}
+
+func NewConnectionReset(ctx context.Context) *Error {
+	return newError(ctx, ErrConnectionReset)
+}
+
+func NewAllCNServersBusyNoCtx() *Error {
+	return newError(Context(), ErrAllCNServersBusy)
+}
+
+// IsConnectionRelatedRPCError returns true if the error is related to network/connection
+// issues. This includes backend closed, connection failures, and service unavailability.
+// Note: Whether to retry on these errors depends on the caller's specific requirements.
+// Some callers (e.g., CDC) may retry on ErrClientClosed, while others may not.
+func IsConnectionRelatedRPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return IsMoErrCode(err, ErrBackendClosed) ||
+		IsMoErrCode(err, ErrNoAvailableBackend) ||
+		IsMoErrCode(err, ErrBackendCannotConnect) ||
+		IsMoErrCode(err, ErrServiceUnavailable) ||
+		IsMoErrCode(err, ErrConnectionReset)
+}
+
+// IsRPCClientClosed returns true if the error indicates the RPC client
+// has been closed. Whether to retry depends on the caller's shutdown logic.
+func IsRPCClientClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return IsMoErrCode(err, ErrClientClosed)
+}
+
+// IsSyncProtectionValidationError checks if error is any sync protection validation error.
+// This allows CN to easily distinguish sync protection validation errors from other commit errors.
+func IsSyncProtectionValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return IsMoErrCode(err, ErrSyncProtectionNotFound) ||
+		IsMoErrCode(err, ErrSyncProtectionSoftDelete) ||
+		IsMoErrCode(err, ErrSyncProtectionExpired)
+}
+
 func NewTxnClosed(ctx context.Context, txnID []byte) *Error {
 	id := "unknown"
 	if len(txnID) > 0 {
@@ -1064,7 +1229,8 @@ func NewTxnClosed(ctx context.Context, txnID []byte) *Error {
 }
 
 func NewTxnWriteConflictf(ctx context.Context, format string, args ...any) *Error {
-	return NewTxnWriteConflict(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTxnWriteConflict, msg)
 }
 
 func NewTxnWriteConflict(ctx context.Context, msg string) *Error {
@@ -1080,7 +1246,8 @@ func NewUnresolvedConflict(ctx context.Context) *Error {
 }
 
 func NewTxnErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewTxnError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTxnError, msg)
 }
 
 func NewTxnError(ctx context.Context, msg string) *Error {
@@ -1088,7 +1255,8 @@ func NewTxnError(ctx context.Context, msg string) *Error {
 }
 
 func NewTAEErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewTAEError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAEError, msg)
 }
 
 func NewTAEError(ctx context.Context, msg string) *Error {
@@ -1104,7 +1272,8 @@ func NewShardNotReported(ctx context.Context, uuid string, id uint64) *Error {
 }
 
 func NewDragonboatTimeoutf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatTimeout(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatTimeout, msg)
 }
 
 func NewDragonboatTimeout(ctx context.Context, msg string) *Error {
@@ -1112,7 +1281,8 @@ func NewDragonboatTimeout(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatTimeoutTooSmallf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatTimeoutTooSmall(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatTimeoutTooSmall, msg)
 }
 
 func NewDragonboatTimeoutTooSmall(ctx context.Context, msg string) *Error {
@@ -1120,7 +1290,8 @@ func NewDragonboatTimeoutTooSmall(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatInvalidDeadlinef(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatInvalidDeadline(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatInvalidDeadline, msg)
 }
 
 func NewDragonboatInvalidDeadline(ctx context.Context, msg string) *Error {
@@ -1128,7 +1299,8 @@ func NewDragonboatInvalidDeadline(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatRejectedf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatRejected(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatRejected, msg)
 }
 
 func NewDragonboatRejected(ctx context.Context, msg string, args ...any) *Error {
@@ -1136,7 +1308,8 @@ func NewDragonboatRejected(ctx context.Context, msg string, args ...any) *Error 
 }
 
 func NewDragonboatInvalidPayloadSizef(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatInvalidPayloadSize(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatInvalidPayloadSize, msg)
 }
 
 func NewDragonboatInvalidPayloadSize(ctx context.Context, msg string) *Error {
@@ -1144,7 +1317,8 @@ func NewDragonboatInvalidPayloadSize(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatShardNotReadyf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatShardNotReady(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatShardNotReady, msg)
 }
 
 func NewDragonboatShardNotReady(ctx context.Context, msg string) *Error {
@@ -1152,21 +1326,24 @@ func NewDragonboatShardNotReady(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatSystemClosedf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatSystemClosed(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatSystemClosed, msg)
 }
 func NewDragonboatSystemClosed(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatSystemClosed, msg)
 }
 
 func NewDragonboatInvalidRangef(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatInvalidRange(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatInvalidRange, msg)
 }
 func NewDragonboatInvalidRange(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatInvalidRange, msg)
 }
 
 func NewDragonboatShardNotFoundf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatShardNotFound(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatShardNotFound, msg)
 }
 
 func NewDragonboatShardNotFound(ctx context.Context, msg string) *Error {
@@ -1174,7 +1351,8 @@ func NewDragonboatShardNotFound(ctx context.Context, msg string) *Error {
 }
 
 func NewDragonboatOtherSystemErrorf(ctx context.Context, format string, args ...any) *Error {
-	return NewDragonboatOtherSystemError(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrDragonboatOtherSystemError, msg)
 }
 
 func NewDragonboatOtherSystemError(ctx context.Context, msg string) *Error {
@@ -1210,7 +1388,8 @@ func NewTAEWrite(ctx context.Context) *Error {
 }
 
 func NewTAECommitf(ctx context.Context, format string, args ...any) *Error {
-	return NewTAECommit(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAECommit, msg)
 }
 
 func NewTAECommit(ctx context.Context, msg string) *Error {
@@ -1218,7 +1397,8 @@ func NewTAECommit(ctx context.Context, msg string) *Error {
 }
 
 func NewTAERollbackf(ctx context.Context, format string, args ...any) *Error {
-	return NewTAERollback(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAERollback, msg)
 }
 
 func NewTAERollback(ctx context.Context, msg string) *Error {
@@ -1226,7 +1406,8 @@ func NewTAERollback(ctx context.Context, msg string) *Error {
 }
 
 func NewTAEPreparef(ctx context.Context, format string, args ...any) *Error {
-	return NewTAEPrepare(ctx, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	return newError(ctx, ErrTAEPrepare, msg)
 }
 
 func NewTAEPrepare(ctx context.Context, msg string) *Error {
@@ -1264,6 +1445,14 @@ func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 
 func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 	return newError(ctx, ErrWrongValueCountOnRow, row)
+}
+
+func NewOperandColumns(ctx context.Context, columns int) *Error {
+	return newError(ctx, ErrOperandColumns, columns)
+}
+
+func NewErrSubqueryNo1Row(ctx context.Context) *Error {
+	return newError(ctx, ErrSubqueryNo1Row)
 }
 
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
@@ -1340,6 +1529,14 @@ func NewLockTableNotFound(ctx context.Context) *Error {
 
 func NewLockConflict(ctx context.Context) *Error {
 	return newError(ctx, ErrLockConflict)
+}
+
+func NewRemoteLockWaitTimeout(ctx context.Context) *Error {
+	return newError(ctx, ErrRemoteLockWaitTimeout)
+}
+
+func NewLockWaitTimeout(ctx context.Context) *Error {
+	return newError(ctx, ErrLockWaitTimeout)
 }
 
 func NewPartitionFunctionIsNotAllowed(ctx context.Context) *Error {
@@ -1448,6 +1645,10 @@ func NewErrKeyColumnDoesNotExist(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrKeyColumnDoesNotExist, k)
 }
 
+func NewErrKeyDoesNotExist(ctx context.Context, key any, table any) *Error {
+	return newError(ctx, ErrKeyDoesNotExist, key, table)
+}
+
 func NewErrCantDropFieldOrKey(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrCantDropFieldOrKey, k)
 }
@@ -1474,6 +1675,10 @@ func NewErrWrongNameForIndex(ctx context.Context, k any) *Error {
 
 func NewErrInvalidDefault(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrInvalidDefault, k)
+}
+
+func NewErrCastWidthExceeded(ctx context.Context, msg string) *Error {
+	return newError(ctx, ErrCastWidthExceeded, msg)
 }
 
 func NewErrDropIndexNeededInForeignKey(ctx context.Context, args1 any) *Error {
@@ -1576,11 +1781,31 @@ func NewTableMustHaveVisibleColumn(ctx context.Context) *Error {
 	return newError(ctx, ErrTableMustHaveAVisibleColumn)
 }
 
+func NewMaxPreparedStmtCountReached(ctx context.Context, limit uint64) *Error {
+	return newError(ctx, ErrMaxPreparedStmtCountReached, limit)
+}
+
 func NewTxnUnknown(ctx context.Context, txnID string) *Error {
 	return newError(ctx, ErrTxnUnknown, txnID)
 }
 
+func NewErrExecutorRunning(ctx context.Context, executor string) *Error {
+	return newError(ctx, ErrExecutorRunning, executor)
+}
+
+func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string, maxPrecision uint64) *Error {
+	return newError(ctx, ErrTooBigPrecision, precision, funcName, maxPrecision)
+}
+
+func NewCCPRReadOnly(ctx context.Context) *Error {
+	return newError(ctx, ErrCCPRReadOnly)
+}
+
 var contextFunc atomic.Value
+
+// noReportCtx is a cached context that suppresses error reporting.
+// Used by NoCtx functions for high-frequency errors that should not log.
+var noReportCtx context.Context
 
 func SetContextFunc(f func() context.Context) {
 	contextFunc.Store(f)
@@ -1591,6 +1816,16 @@ func Context() context.Context {
 	return contextFunc.Load().(func() context.Context)()
 }
 
+// NoReportContext returns a context that suppresses error logging.
+// Use this for errors that are expected in retry loops or high-frequency paths.
+// When this context is passed to NewXXX functions, no log will be emitted,
+// but the error will still contain proper stack information.
+func NoReportContext() context.Context {
+	return noReportCtx
+}
+
 func init() {
 	SetContextFunc(func() context.Context { return context.Background() })
+	// Initialize the no-report context for high-frequency errors
+	noReportCtx = errutil.ContextWithNoReport(context.Background(), true)
 }

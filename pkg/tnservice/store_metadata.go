@@ -65,10 +65,7 @@ func (s *store) addTNShardLocked(shard metadata.TNShard) {
 	s.mustUpdateMetadataLocked()
 }
 
-func (s *store) removeTNShard(id uint64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *store) removeTNShardLocked(id uint64) {
 	var newShards []metadata.TNShard
 	for _, tn := range s.mu.metadata.Shards {
 		if tn.ShardID != id {

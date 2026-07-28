@@ -58,6 +58,13 @@ select b from t4 where a <= 1 or a <= 3;
 select b from t4 where a < 2 or a = 3;
 select b from t4 where a < 3 or a = 2;
 drop table t4;
+
+create table t5(a varchar(64) primary key, b int);
+insert into t5 select cast(result as varchar), result from generate_series(1, 8192) g;
+select * from t5 where prefix_eq(a, '819') or a in ('20', '30', '40') order by a asc;
+
+drop table t5;
+
 drop database testdb;
 
 select disable_fault_injection();

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -914,7 +916,7 @@ func TestObjectStats1(t *testing.T) {
 	require.Nil(t, err)
 
 	ts := taeHandler.GetDB().TxnMgr.Now()
-	state := disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	state := disttaeEngine.Engine.GetOrCreateLatestPart(nil, 0, id.DbID, id.TableID).Snapshot()
 	iter, err := state.NewObjectsIter(ts, false, false)
 	assert.NoError(t, err)
 	objCount := 0
@@ -954,7 +956,7 @@ func TestObjectStats1(t *testing.T) {
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	ts = taeHandler.GetDB().TxnMgr.Now()
-	state = disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	state = disttaeEngine.Engine.GetOrCreateLatestPart(nil, 0, id.DbID, id.TableID).Snapshot()
 	iter, err = state.NewObjectsIter(ts, true, false)
 	assert.NoError(t, err)
 	objCount = 0
@@ -1003,7 +1005,7 @@ func TestObjectStats2(t *testing.T) {
 	require.Nil(t, err)
 
 	ts := taeHandler.GetDB().TxnMgr.Now()
-	state := disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	state := disttaeEngine.Engine.GetOrCreateLatestPart(nil, 0, id.DbID, id.TableID).Snapshot()
 	iter, err := state.NewObjectsIter(ts, false, false)
 	assert.NoError(t, err)
 	objCount := 0
@@ -1043,7 +1045,7 @@ func TestObjectStats2(t *testing.T) {
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	ts = taeHandler.GetDB().TxnMgr.Now()
-	state = disttaeEngine.Engine.GetOrCreateLatestPart(id.DbID, id.TableID).Snapshot()
+	state = disttaeEngine.Engine.GetOrCreateLatestPart(nil, 0, id.DbID, id.TableID).Snapshot()
 	iter, err = state.NewObjectsIter(ts, true, false)
 	assert.NoError(t, err)
 	objCount = 0
@@ -1281,7 +1283,7 @@ func TestWorkspaceQuota(t *testing.T) {
 	wg.Wait()
 	remaining, _ := e.AcquireQuota(0)
 	require.Equal(t, int(quotaSize), int(remaining))
-	_, acquired := e.AcquireQuota(quotaSize + 1)
+	_, acquired := e.AcquireQuota(int64(quotaSize + 1))
 	require.False(t, acquired)
 }
 
@@ -1634,5 +1636,83 @@ func TestDeleteTupleInTupleList(t *testing.T) {
 	query := `delete from db.t where (mock_1, mock_2) in ((1, 2), (3, 4))`
 	_, err := exec.Exec(p.Ctx, query, executor.Options{}.WithTxn(txnop))
 	require.NoError(t, err)
+	require.NoError(t, txnop.Commit(p.Ctx))
+}
+
+func TestCommitKeepsCreatedIndexTableBeforeDependentWrites(t *testing.T) {
+	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
+	defer p.Close()
+
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	require.True(t, ok)
+	exec := v.(executor.SQLExecutor)
+
+	execSQL := func(txnop client.TxnOperator, sql string) {
+		res, err := exec.Exec(p.Ctx, sql, executor.Options{}.WithTxn(txnop))
+		require.NoError(t, err, sql)
+		res.Close()
+	}
+
+	dbName := "db_commit_order"
+	txnop := p.StartCNTxn()
+	moIndexesDDL := strings.Replace(
+		frontend.MoCatalogMoIndexesDDL,
+		"primary key(id, column_name)",
+		"primary key(table_id, name, column_name)",
+		1)
+	execSQL(txnop, moIndexesDDL)
+	execSQL(txnop, frontend.MoCatalogMoForeignKeysDDL)
+	execSQL(txnop, fmt.Sprintf("create database %s", dbName))
+	for i := 0; i < 15; i++ {
+		execSQL(txnop, fmt.Sprintf(
+			`create table %s.w%d(
+				id int primary key,
+				workspace_id int not null,
+				branch_id int not null,
+				task_id int not null,
+				scheduler_visible bool not null default true,
+				case_start_state varchar(20),
+				payload varchar(200),
+				index idx_%d_branch(workspace_id, branch_id)
+			)`,
+			dbName, i, i))
+		execSQL(txnop, fmt.Sprintf(
+			"insert into %s.w%d values(1, 1, 1, 1, true, 's1', 'p1')",
+			dbName, i))
+	}
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	for i := 0; i < 15; i++ {
+		execSQL(txnop, fmt.Sprintf(
+			"insert into %s.w%d values(%d, 1, 1, %d, true, 'new', 'x')",
+			dbName, i, 200000+i, i))
+		execSQL(txnop, fmt.Sprintf(
+			"insert into %s.w%d values(%d, 1, 2, %d, true, 'new', 'y')",
+			dbName, i, 210000+i, i))
+	}
+	execSQL(txnop, fmt.Sprintf(
+		`create table %s.critical_cases(
+			id int primary key,
+			scheduler_visible bool not null,
+			case_start_state varchar(20),
+			task_id int,
+			payload varchar(100),
+			index idx_cases_scheduler(scheduler_visible, case_start_state, id)
+		)`,
+		dbName))
+	execSQL(txnop, fmt.Sprintf(
+		"insert into %s.critical_cases values(1, true, 's1', 1, 'p')",
+		dbName))
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+	res, err := exec.Exec(
+		p.Ctx,
+		fmt.Sprintf("select count(*) from %s.critical_cases", dbName),
+		executor.Options{}.WithTxn(txnop))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0])[0])
+	res.Close()
 	require.NoError(t, txnop.Commit(p.Ctx))
 }

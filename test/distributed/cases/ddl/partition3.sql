@@ -1,4 +1,3 @@
--- @skip:issue#16438
 -- 1.test KEY Partition
 drop table if exists t1;
 CREATE TABLE t1 (
@@ -62,7 +61,7 @@ col2 INT NOT NULL,
 col3 DATE NOT NULL,
 UNIQUE KEY (col1, col3)
 )
-PARTITION BY HASH(col1 + col3)
+PARTITION BY HASH(col1)
 PARTITIONS 6;
 
 insert into t2 values

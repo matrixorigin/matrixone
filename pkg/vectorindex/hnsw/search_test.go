@@ -15,13 +15,15 @@
 package hnsw
 
 import (
+	"context"
+	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	fallocate "github.com/detailyang/go-fallocate"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,41 +32,209 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 // give metadata [index_id, checksum, timestamp]
-func mock_runSql(proc *process.Process, sql string) (executor.Result, error) {
-
+func mock_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch(proc)}}, nil
 }
 
 // give blob
-func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
+func mock_runSql_streaming(
+	ctx context.Context,
+	sqlproc *sqlexec.SqlProcess,
+	sql string,
+	ch chan executor.Result,
+	err_chan chan error,
+) (executor.Result, error) {
 
-	defer close(ch)
+	proc := sqlproc.Proc
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
 	ch <- res
 	return executor.Result{}, nil
 }
 
+// give metadata [index_id, checksum, timestamp]
+func mock_runSql_2files(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	proc := sqlproc.Proc
+	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch2Files(proc)}}, nil
+}
+
+// give blob
+func mock_runSql_streaming_2files(
+	ctx context.Context,
+	sqlproc *sqlexec.SqlProcess,
+	sql string,
+	ch chan executor.Result,
+	err_chan chan error,
+) (executor.Result, error) {
+
+	fmt.Printf("SQL %s\n", sql)
+	idx := 0
+	if strings.Contains(sql, "abc-1") {
+		idx = 1
+	}
+
+	proc := sqlproc.Proc
+	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch2Files(proc, idx)}}
+	ch <- res
+	return executor.Result{}, nil
+}
+
+func TestHnswSearchFloat32(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+
+	s := NewHnswSearch[float32](idxcfg, tblcfg)
+	// mock Search call by providing a minimal environment where Search might return nil or some values
+	// Since s.Indexes is empty, Search will return nil, nil, nil or error.
+
+	rt := vectorindex.RuntimeConfig{Limit: 4}
+	query := []float32{1, 2, 3}
+
+	// 1. Test with nil results (no indexes loaded)
+	outKeys := make([]int64, 4)
+	outDists := make([]float32, 4)
+	err := s.SearchFloat32(sqlproc, query, rt, outKeys, outDists)
+	require.NoError(t, err)
+
+	// 2. Mock some indexes to test copying logic
+	idx, err := usearch.NewIndex(idxcfg.Usearch)
+	require.NoError(t, err)
+	defer idx.Destroy()
+
+	err = idx.Reserve(1)
+	require.NoError(t, err)
+	err = idx.Add(0, []float32{1, 2, 3})
+	require.NoError(t, err)
+
+	s.Indexes = []*HnswModel[float32]{
+		{
+			Id:    "abc-0",
+			Index: idx,
+		},
+	}
+
+	keysAny, dists64, err := s.Search(sqlproc, query, rt)
+	require.NoError(t, err)
+	expectedKeys := keysAny.([]int64)
+
+	err = s.SearchFloat32(sqlproc, query, rt, outKeys, outDists)
+	require.NoError(t, err)
+
+	require.Equal(t, expectedKeys, outKeys[:len(expectedKeys)])
+	for i := range dists64 {
+		require.InDelta(t, dists64[i], float64(outDists[i]), 1e-5)
+	}
+}
+
+func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{}
+
+	s := NewHnswSearch[float32](idxcfg, tblcfg)
+	rt := vectorindex.RuntimeConfig{Limit: 1}
+
+	// pass non-[]float32 query — Search returns error, SearchFloat32 propagates it
+	err := s.SearchFloat32(sqlproc, "wrong", rt, nil, nil)
+	require.Error(t, err)
+}
+
+func TestBoundedHnswSearchLimits(t *testing.T) {
+	// requested >= every file: each file returns its full cardinality, result = total.
+	perIndex, resultLimit := boundedHnswSearchLimits([]uint{3, 7}, ^uint(0))
+	require.Equal(t, []uint{3, 7}, perIndex)
+	require.Equal(t, uint(10), resultLimit)
+
+	// requested caps each per-file limit and the result; the heap bound is this resultLimit
+	// (5), NOT the sum of per-file limits (8) — that was the shard_count*LIMIT bug (#25637).
+	perIndex, resultLimit = boundedHnswSearchLimits([]uint{3, 7}, 5)
+	require.Equal(t, []uint{3, 5}, perIndex)
+	require.Equal(t, uint(5), resultLimit)
+
+	// total overflows to saturate; resultLimit is capped by requested.
+	_, resultLimit = boundedHnswSearchLimits([]uint{^uint(0), ^uint(0)}, ^uint(0))
+	require.Equal(t, ^uint(0), resultLimit)
+}
+
+func TestHnswSearchUnlockSynchronizesWithWaitPredicate(t *testing.T) {
+	s := NewHnswSearch[float32](vectorindex.IndexConfig{}, vectorindex.IndexTableConfig{ThreadsSearch: 1})
+	s.Concurrency.Store(1)
+	s.Cond.L.Lock()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		s.unlock()
+		close(done)
+	}()
+	<-started
+
+	select {
+	case <-done:
+		t.Fatal("unlock changed the predicate without acquiring the condition lock")
+	case <-time.After(20 * time.Millisecond):
+	}
+	s.Cond.L.Unlock()
+	<-done
+	require.Zero(t, s.Concurrency.Load())
+}
+
+func TestHnswSearchUpdateConfig(t *testing.T) {
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	tblcfg := vectorindex.IndexTableConfig{}
+	s := NewHnswSearch[float32](idxcfg, tblcfg)
+	require.NoError(t, s.UpdateConfig(nil))
+}
+
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	// stub runSql function
+	oldRunSQL := runSql
+	oldRunSQLStreaming := runSql_streaming
+	oldTTL := cache.VectorIndexCacheTTL
+	oldCache := cache.Cache
+
+	// Stub the SQL functions and isolate the process-global cache state.
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
-
-	// init cache
-	cache.VectorIndexCacheTTL = 2 * time.Second
-	cache.VectorIndexCacheTTL = 2 * time.Second
-	cache.Cache = cache.NewVectorIndexCache()
-
-	time.Sleep(1999 * time.Millisecond)
+	cacheTTL := 2 * time.Second
+	nthread := 64
+	iterations := 20000
+	if testing.Short() {
+		// PR CI needs the concurrent load/search/expiry transitions, not the
+		// production-scale stress count.
+		cacheTTL = 100 * time.Millisecond
+		nthread = 16
+		iterations = 1000
+	}
+	cache.VectorIndexCacheTTL = cacheTTL
+	testCache := cache.NewVectorIndexCache()
+	cache.Cache = testCache
+	t.Cleanup(func() {
+		testCache.Destroy()
+		cache.Cache = oldCache
+		cache.VectorIndexCacheTTL = oldTTL
+		runSql = oldRunSQL
+		runSql_streaming = oldRunSQLStreaming
+	})
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -72,17 +242,16 @@ func TestHnsw(t *testing.T) {
 	fp32a := []float32{0, 1, 2}
 
 	var wg sync.WaitGroup
-	nthread := 64
 
 	for i := 0; i < nthread; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 20000; j++ {
+			for j := 0; j < iterations; j++ {
 				cache.Cache.Once()
 
-				algo := NewHnswSearch(idxcfg, tblcfg)
-				anykeys, distances, err := cache.Cache.Search(proc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				algo := NewHnswSearch[float32](idxcfg, tblcfg)
+				anykeys, distances, err := cache.Cache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
 				require.True(t, ok)
@@ -97,8 +266,14 @@ func TestHnsw(t *testing.T) {
 
 	wg.Wait()
 
-	time.Sleep(3 * time.Second)
-	cache.Cache.Destroy()
+	require.Eventually(t, func() bool {
+		empty := true
+		testCache.IndexMap.Range(func(_, _ any) bool {
+			empty = false
+			return false
+		})
+		return empty
+	}, 3*cacheTTL, 10*time.Millisecond, "cache entry must expire after searches stop")
 }
 
 func makeMetaBatch(proc *process.Process) *batch.Batch {
@@ -150,4 +325,55 @@ func TestFallocate(t *testing.T) {
 	require.Nil(t, err)
 	fallocate.Fallocate(f, 0, 10000)
 	f.Close()
+}
+
+func makeMetaBatch2Files(proc *process.Process) *batch.Batch {
+	indexfiles := []string{"resources/hnsw0.bin", "resources/hnsw1.bin"}
+	ids := []string{"abc-0", "abc-1"}
+
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))   // index_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0)) // checksum
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
+	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
+
+	for i, indexfile := range indexfiles {
+
+		vector.AppendBytes(bat.Vecs[0], []byte(ids[i]), false, proc.Mp())
+		chksum, err := vectorindex.CheckSum(indexfile)
+		if err != nil {
+			panic("file checksum error")
+		}
+
+		finfo, err := os.Stat(indexfile)
+		if err != nil {
+			panic("file not found")
+		}
+
+		vector.AppendBytes(bat.Vecs[1], []byte(chksum), false, proc.Mp())
+		vector.AppendFixed[int64](bat.Vecs[2], int64(0), false, proc.Mp())
+		vector.AppendFixed[int64](bat.Vecs[3], finfo.Size(), false, proc.Mp())
+
+	}
+
+	bat.SetRowCount(len(indexfiles))
+	return bat
+}
+
+func makeIndexBatch2Files(proc *process.Process, id int) *batch.Batch {
+	indexfiles := []string{"resources/hnsw0.bin", "resources/hnsw1.bin"}
+	indexfile := indexfiles[id]
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))    // chunk_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0)) // data
+
+	dat, err := os.ReadFile(indexfile)
+	if err != nil {
+		panic("read file error")
+	}
+	vector.AppendFixed[int64](bat.Vecs[0], int64(0), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[1], dat, false, proc.Mp())
+	bat.SetRowCount(1)
+	return bat
 }

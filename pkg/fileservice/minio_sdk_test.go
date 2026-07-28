@@ -15,17 +15,24 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -40,7 +47,9 @@ func TestMinioSDK(t *testing.T) {
 			if cmd == nil {
 				t.SkipNow()
 			}
-			defer cmd.Process.Kill()
+			t.Cleanup(func() {
+				cmd.Process.Kill()
+			})
 
 			ret, err := NewMinioSDK(
 				context.Background(),
@@ -87,11 +96,61 @@ func TestMinioSDK(t *testing.T) {
 				true,
 				false,
 			)
-			assert.Nil(t, err)
+			if err != nil {
+				t.Fatal(err)
+			}
 			return fs
 		})
 	})
 
+}
+
+func TestMinioPutObjectPhysicalAccounting(t *testing.T) {
+	var fail bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Query().Has("location") {
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<LocationConstraint>us-east-1</LocationConstraint>`))
+			return
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		if fail {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`<Error><Code>InvalidRequest</Code><Message>rejected</Message></Error>`))
+			return
+		}
+		w.Header().Set("ETag", "etag")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	endpoint, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	client, err := minio.New(endpoint.Host, &minio.Options{
+		Creds:     credentials.NewStaticV4("id", "secret", ""),
+		Secure:    false,
+		Transport: server.Client().Transport,
+	})
+	require.NoError(t, err)
+	sdk := &MinioSDK{bucket: "bucket", client: client}
+
+	data := []byte("accepted")
+	size := int64(len(data))
+	counter := new(perfcounter.CounterSet)
+	ctx := perfcounter.WithCounterSet(context.Background(), counter)
+	_, err = sdk.putObject(ctx, "object", bytes.NewReader(data), &size, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), counter.FileService.S3.Put.Load())
+	require.Equal(t, size, counter.FileService.S3WriteSize.Load())
+
+	fail = true
+	failed := new(perfcounter.CounterSet)
+	ctx = perfcounter.WithCounterSet(context.Background(), failed)
+	_, err = sdk.putObject(ctx, "object", bytes.NewReader(data), &size, nil)
+	require.Error(t, err)
+	require.Equal(t, int64(1), failed.FileService.S3.Put.Load())
+	require.Zero(t, failed.FileService.S3WriteSize.Load())
 }
 
 func startMinio(dir string) (*exec.Cmd, error) {
@@ -120,7 +179,8 @@ func startMinio(dir string) (*exec.Cmd, error) {
 	}
 
 	// create bucket
-	for {
+	var lastErr error
+	for i := 0; i < 30; i++ {
 		endpoint := "localhost:9007"
 		client, err := minio.New(endpoint, &minio.Options{
 			Creds: credentials.NewStaticV4("minioadmin", "minioadmin", ""),
@@ -128,13 +188,17 @@ func startMinio(dir string) (*exec.Cmd, error) {
 		if err != nil {
 			return nil, err
 		}
-		err = client.MakeBucket(context.Background(), "test", minio.MakeBucketOptions{})
-		if err != nil {
-			logutil.Warn("minio error", zap.Any("error", err))
+		lastErr = client.MakeBucket(context.Background(), "test", minio.MakeBucketOptions{})
+		if lastErr != nil {
+			logutil.Warn("minio error", zap.Any("error", lastErr))
 			time.Sleep(time.Second)
 			continue
 		}
 		break
+	}
+	if lastErr != nil {
+		cmd.Process.Kill()
+		return nil, lastErr
 	}
 
 	return cmd, nil

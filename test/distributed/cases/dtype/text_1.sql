@@ -1,14 +1,12 @@
 
 -- Test not support default value and DDL index on
 
--- @bvt:issue#4538
 drop table if exists t1;
 create table t1 (
 a text not null,
 b text default '111'
 );
 drop table t1;
--- @bvt:issue
 
 drop table if exists t2;
 create table t2(
@@ -228,8 +226,12 @@ select cast(col9 as float) from t8;
 select cast(col9 as double) from t8;
 delete from t8 where col9 is not NULL;
 
-insert into  t8(col9) values ('1000000000000000000000000000000000000000');
-insert into  t8(col9) values (1000000000000000000000000000000000000000);
+insert into t8(col9) values ('1000000000000000000000000000000000000000');
+select cast(col9 as float) from t8;
+select cast(col9 as double) from t8;
+delete from t8 where col9 is not NULL;
+
+insert into t8(col9) values (1000000000000000000000000000000000000000);
 select cast(col9 as float) from t8;
 select cast(col9 as double) from t8;
 delete from t8 where col9 is not NULL;

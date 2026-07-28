@@ -15,6 +15,7 @@
 package tree
 
 import (
+	"bytes"
 	"context"
 	"strconv"
 	"strings"
@@ -25,8 +26,13 @@ import (
 // update statement
 type Update struct {
 	statementImpl
-	Tables  TableExprs
-	Exprs   UpdateExprs
+	Tables TableExprs
+	Exprs  UpdateExprs
+	Ignore bool
+	// From is the optional PostgreSQL-style FROM clause that introduces
+	// additional read-only join sources. It is nil for the classic
+	// single-table and multi-table (comma) UPDATE syntaxes.
+	From    *From
 	Where   *Where
 	OrderBy OrderBy
 	Limit   *Limit
@@ -39,6 +45,9 @@ func (node *Update) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	ctx.WriteString("update")
+	if node.Ignore {
+		ctx.WriteString(" ignore")
+	}
 	if node.Tables != nil {
 		ctx.WriteByte(' ')
 		node.Tables.Format(ctx)
@@ -47,6 +56,32 @@ func (node *Update) Format(ctx *FmtCtx) {
 	if node.Exprs != nil {
 		ctx.WriteByte(' ')
 		node.Exprs.Format(ctx)
+	}
+	if node.From != nil {
+		ctx.WriteByte(' ')
+		// JoinTableExpr.Format does not parenthesize nested join trees in the
+		// right operand, so "FROM b, c JOIN d ON ..." (AST: b CROSS (c INNER
+		// d)) would emit "b cross join c inner join d on ..." and re-parse
+		// left-associatively as "(b CROSS c) INNER d", changing semantics.
+		// Walk the FROM tree and rebuild it with a ParenTableExpr wrapping
+		// each JoinTableExpr that appears as a right operand, leaving the
+		// original AST untouched.
+		fromOut := node.From
+		needRebuild := false
+		for _, t := range node.From.Tables {
+			if joinTreeHasRightJoin(t) {
+				needRebuild = true
+				break
+			}
+		}
+		if needRebuild {
+			rebuilt := make(TableExprs, len(node.From.Tables))
+			for i, t := range node.From.Tables {
+				rebuilt[i] = parenthesizeRightJoins(t)
+			}
+			fromOut = &From{Tables: rebuilt}
+		}
+		fromOut.Format(ctx)
 	}
 	if node.Where != nil {
 		ctx.WriteByte(' ')
@@ -64,6 +99,45 @@ func (node *Update) Format(ctx *FmtCtx) {
 
 func (node *Update) GetStatementType() string { return "Update" }
 func (node *Update) GetQueryType() string     { return QueryTypeDML }
+
+// joinTreeHasRightJoin reports whether t contains a JoinTableExpr that appears
+// as a right operand of another JoinTableExpr — the shape that re-parses with
+// different associativity if printed without parentheses.
+func joinTreeHasRightJoin(t TableExpr) bool {
+	j, ok := t.(*JoinTableExpr)
+	if !ok {
+		return false
+	}
+	if _, rightIsJoin := j.Right.(*JoinTableExpr); rightIsJoin {
+		return true
+	}
+	return joinTreeHasRightJoin(j.Left) || joinTreeHasRightJoin(j.Right)
+}
+
+// parenthesizeRightJoins returns a copy of t in which any JoinTableExpr that
+// occupies a right-operand position is wrapped in ParenTableExpr. The original
+// AST is left untouched so this rewrite is safe to perform during Format only.
+func parenthesizeRightJoins(t TableExpr) TableExpr {
+	j, ok := t.(*JoinTableExpr)
+	if !ok {
+		return t
+	}
+	left := parenthesizeRightJoins(j.Left)
+	right := j.Right
+	if right != nil {
+		right = parenthesizeRightJoins(right)
+		if _, rightIsJoin := j.Right.(*JoinTableExpr); rightIsJoin {
+			right = NewParenTableExpr(right)
+		}
+	}
+	if left == j.Left && right == j.Right {
+		return t
+	}
+	clone := *j
+	clone.Left = left
+	clone.Right = right
+	return &clone
+}
 
 type UpdateExprs []*UpdateExpr
 
@@ -160,18 +234,33 @@ type ExParamConst struct {
 	Data         string
 	Tail         *TailParameter
 	StageName    Identifier
+
+	HivePartitioning      bool
+	HivePartitionCols     []string
+	HivePartitionColTypes []HivePartColType
+}
+
+// HivePartColType is a compact snapshot of a partition column's type info.
+// Defined in tree package to avoid importing pkg/pb/plan.
+type HivePartColType struct {
+	Id          int32
+	Width       int32
+	Scale       int32
+	Enumvalues  string
+	NullAbility bool
 }
 
 type ExParam struct {
-	ExternType  int32
-	JsonData    string
-	FileService fileservice.FileService
-	NullMap     map[string]([]string)
-	S3Param     *S3Parameter
-	Ctx         context.Context
-	Local       bool
-	Parallel    bool
-	Strict      bool
+	ExternType            int32
+	JsonData              string
+	FileService           fileservice.FileService
+	NullMap               map[string]([]string)
+	S3Param               *S3Parameter
+	Ctx                   context.Context
+	Local                 bool
+	Parallel              bool
+	ParallelLoadRequested bool
+	Strict                bool
 }
 
 type S3Parameter struct {
@@ -385,6 +474,12 @@ type Terminated struct {
 	Value string
 }
 
+const (
+	DefaultFieldsTerminated = ","
+	DefaultFieldsEnclosedBy = "\""
+	DefaultFieldsEscapedBy  = "\\"
+)
+
 type Fields struct {
 	Terminated *Terminated
 	Optionally bool
@@ -496,6 +591,59 @@ type ExportParam struct {
 	ForceQuote []string
 	// stage filename path
 	StageFilePath string
+	// ExportFormat: "csv", "jsonline", "parquet", default is ""(csv)
+	ExportFormat string
+	// SplitSize: split file size in bytes, 0 means no split
+	SplitSize uint64
+}
+
+func (ep *ExportParam) String() string {
+	buf := bytes.Buffer{}
+	if ep.Fields != nil {
+		buf.WriteString("FIELDS TERMINATED BY ")
+		buf.WriteString(escapeExportParamLiteral(ep.Fields.Terminated.Value))
+		buf.WriteString(" ")
+
+		buf.WriteString("ENCLOSED BY ")
+		buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EnclosedBy.Value)))
+		buf.WriteString(" ")
+
+		buf.WriteString("ESCAPED BY ")
+		buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EscapedBy.Value)))
+		buf.WriteString(" ")
+	}
+
+	if ep.Lines != nil {
+		buf.WriteString("LINES TERMINATED BY ")
+		buf.WriteString(escapeExportParamLiteral(ep.Lines.TerminatedBy.Value))
+	}
+
+	return buf.String()
+}
+
+func escapeExportParamLiteral(val string) string {
+	if val == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, r := range val {
+		switch r {
+		case '\\':
+			b.WriteString(`'\\'`)
+		case '\n':
+			b.WriteString(`'\n'`)
+		case '\r':
+			b.WriteString(`'\r'`)
+		case '\t':
+			b.WriteString(`'\t'`)
+		default:
+			b.WriteByte('\'')
+			b.WriteRune(r)
+			b.WriteByte('\'')
+		}
+	}
+	return b.String()
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {
@@ -512,11 +660,22 @@ func (ep *ExportParam) format(ctx *FmtCtx, withOutfile bool) {
 	}
 	ctx.WriteByte(' ')
 	ctx.WriteString(ep.FilePath)
-	if ep.Fields != nil {
+	// Format option (csv, jsonline, parquet)
+	if ep.ExportFormat != "" {
+		ctx.WriteString(" format ")
+		ctx.WriteString(ep.ExportFormat)
+	}
+	// SplitSize option
+	if ep.SplitSize != 0 {
+		ctx.WriteString(" splitsize ")
+		ctx.WriteString(strconv.FormatUint(ep.SplitSize, 10))
+	}
+	// Fields option (only for csv format or when format is not specified)
+	if ep.Fields != nil && (ep.ExportFormat == "" || ep.ExportFormat == "csv") {
 		ctx.WriteByte(' ')
 		ep.Fields.Format(ctx)
 	}
-	if ep.Lines != nil {
+	if ep.Lines != nil && (ep.ExportFormat == "" || ep.ExportFormat == "csv") {
 		ctx.WriteByte(' ')
 		ep.Lines.Format(ctx)
 	}

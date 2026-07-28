@@ -1,0 +1,34 @@
+drop database if exists issue_17630;
+create database issue_17630;
+use issue_17630;
+create table region_17630 (
+r_regionkey int primary key,
+r_name varchar(32)
+);
+create table nation_17630 (
+n_nationkey int primary key,
+n_regionkey int,
+constraint fk_nation_region_17630 foreign key (n_regionkey) references region_17630(r_regionkey)
+);
+create table customer_17630 (
+c_custkey int primary key,
+c_nationkey int,
+constraint fk_customer_nation_17630 foreign key (c_nationkey) references nation_17630(n_nationkey)
+);
+show create table customer_17630;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+customer_17630  ¦  CREATE TABLE `customer_17630` (
+  `c_custkey` int NOT NULL,
+  `c_nationkey` int DEFAULT NULL,
+  PRIMARY KEY (`c_custkey`),
+  CONSTRAINT `fk_customer_nation_17630` FOREIGN KEY (`c_nationkey`) REFERENCES `nation_17630` (`n_nationkey`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
+show create table nation_17630;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+nation_17630  ¦  CREATE TABLE `nation_17630` (
+  `n_nationkey` int NOT NULL,
+  `n_regionkey` int DEFAULT NULL,
+  PRIMARY KEY (`n_nationkey`),
+  CONSTRAINT `fk_nation_region_17630` FOREIGN KEY (`n_regionkey`) REFERENCES `region_17630` (`r_regionkey`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
+drop database issue_17630;

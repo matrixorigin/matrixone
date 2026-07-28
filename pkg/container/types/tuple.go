@@ -93,6 +93,8 @@ func (tp Tuple) ErrString(scales []int32) string {
 			res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
 		case Decimal128:
 			res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
+		case Decimal256:
+			res.WriteString(fmt.Sprintf("%v", t.Format(scales[i])))
 		default:
 			res.WriteString(fmt.Sprintf("%v", t))
 		}
@@ -108,27 +110,41 @@ func (tp Tuple) ErrString(scales []int32) string {
 
 func (tp Tuple) SQLStrings(scales []int32) []string {
 	res := make([]string, 0, len(tp))
+	defaultScale := int32(0)
 	for i, t := range tp {
 		switch t := t.(type) {
 		case bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64:
 			res = append(res, fmt.Sprintf("%v", t))
 		case []byte:
-			s := *(*string)(unsafe.Pointer(&t))
-			res = append(res, strconv.Quote(s))
+			res = append(res, *(*string)(unsafe.Pointer(&t)))
 		case Uuid:
-			res = append(res, fmt.Sprintf("'%v'", t.String()))
+			res = append(res, fmt.Sprintf("%v", t.String()))
 		case Date:
-			res = append(res, fmt.Sprintf("'%v'", t.String()))
+			res = append(res, fmt.Sprintf("%v", t.String()))
 		case Time:
-			res = append(res, fmt.Sprintf("'%v'", t.String()))
+			res = append(res, fmt.Sprintf("%v", t.String()))
 		case Datetime:
-			res = append(res, fmt.Sprintf("'%v'", t.String()))
+			res = append(res, fmt.Sprintf("%v", t.String()))
 		case Timestamp:
-			res = append(res, fmt.Sprintf("'%v'", t.String()))
+			res = append(res, fmt.Sprintf("%v", t.String()))
 		case Decimal64:
-			res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
+			if len(scales) > i {
+				res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
+			} else {
+				res = append(res, fmt.Sprintf("%v", t.Format(defaultScale)))
+			}
 		case Decimal128:
-			res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
+			if len(scales) > i {
+				res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
+			} else {
+				res = append(res, fmt.Sprintf("%v", t.Format(defaultScale)))
+			}
+		case Decimal256:
+			if len(scales) > i {
+				res = append(res, fmt.Sprintf("%v", t.Format(scales[i])))
+			} else {
+				res = append(res, fmt.Sprintf("%v", t.Format(defaultScale)))
+			}
 		default:
 			res = append(res, fmt.Sprintf("%v", t))
 		}
@@ -170,6 +186,8 @@ func printTuple(tuple Tuple) string {
 			res.WriteString(fmt.Sprintf("(decimal64: %v)", t.Format(0)))
 		case Decimal128:
 			res.WriteString(fmt.Sprintf("(decimal128: %v)", t.Format(0)))
+		case Decimal256:
+			res.WriteString(fmt.Sprintf("(decimal256: %v)", t.Format(0)))
 		case []byte:
 			res.WriteString(fmt.Sprintf("([]byte: %v)", t))
 		case float32:
@@ -211,10 +229,12 @@ const (
 	decimal128Code = 0x45
 	stringTypeCode = 0x46
 	timeCode       = 0x47
+	decimal256Code = 0x48
 	enumCode       = 0x50 // TODO: reorder the list to put timeCode next to date type code?
 	bitCode        = 0x51
 	uuidCode       = 0x52
 	objectIdCode   = 0x53
+	yearCode       = 0x54
 )
 
 var sizeLimits = []uint64{
@@ -289,6 +309,10 @@ func decodeInt(code byte, b []byte) (interface{}, int) {
 			return Datetime(0), 1
 		case timestampCode:
 			return Timestamp(0), 1
+		case timeCode:
+			return Time(0), 1
+		case yearCode:
+			return MoYear(0), 1
 		default:
 			return int64(0), 1
 		}
@@ -322,6 +346,10 @@ func decodeInt(code byte, b []byte) (interface{}, int) {
 			return Datetime(ret - int64(sizeLimits[n])), n + 1
 		case timestampCode:
 			return Timestamp(ret - int64(sizeLimits[n])), n + 1
+		case timeCode:
+			return Time(ret - int64(sizeLimits[n])), n + 1
+		case yearCode:
+			return MoYear(ret - int64(sizeLimits[n])), n + 1
 		default:
 			return ret - int64(sizeLimits[n]), n + 1
 		}
@@ -339,6 +367,10 @@ func decodeInt(code byte, b []byte) (interface{}, int) {
 		return Datetime(ret), n + 1
 	case timestampCode:
 		return Timestamp(ret), n + 1
+	case timeCode:
+		return Time(ret), n + 1
+	case yearCode:
+		return MoYear(ret), n + 1
 	case enumCode:
 		return Enum(ret), n + 1
 	default:
@@ -422,6 +454,19 @@ func decodeDecimal128(b []byte) (Decimal128, int) {
 	return ret, 17
 }
 
+func decodeDecimal256(b []byte) (Decimal256, int) {
+	bp := make([]byte, 32)
+	copy(bp, b[:])
+	bp[0] ^= 0x80
+	for i := 0; i < 16; i++ {
+		bp[i] ^= bp[31-i]
+		bp[31-i] ^= bp[i]
+		bp[i] ^= bp[31-i]
+	}
+	ret := *(*Decimal256)(unsafe.Pointer(&bp[0]))
+	return ret, 33
+}
+
 func decodeUuid(b []byte) (Uuid, int) {
 	var ret Uuid
 	copy(ret[:], b[1:])
@@ -442,109 +487,178 @@ var DecodeTuple = decodeTuple
 
 func decodeTuple(b []byte) (Tuple, int, []T, error) {
 	var t Tuple
-
-	var i int
 	schema := make([]T, 0)
-	for i < len(b) {
-		var el interface{}
-		var off int
 
-		switch {
-		case b[i] == nilCode:
+	return decodeTupleTo(b, t, schema)
+}
+
+func decodeTupleTo(b []byte, t Tuple, schema []T) (Tuple, int, []T, error) {
+	// Helper function to check if we have enough bytes remaining
+	checkBytes := func(pos, need int) error {
+		if pos+need > len(b) {
+			return moerr.NewInternalErrorNoCtxf("insufficient bytes: need %d at position %d, but only %d bytes available", need, pos, len(b)-pos)
+		}
+		return nil
+	}
+
+	// Helper function to decode with type code offset (most common pattern)
+	decodeWithOffset := func(i int, decodeFn func(byte, []byte) (any, int), code byte) (any, int, error) {
+		if err := checkBytes(i, 2); err != nil { // At least type code + 1 byte for data
+			return nil, 0, err
+		}
+		el, off := decodeFn(code, b[i+1:])
+		return el, off + 1, nil
+	}
+
+	i := 0
+	for i < len(b) {
+		var el any
+		var off int
+		var err error
+
+		switch b[i] {
+		case nilCode:
 			schema = append(schema, T_any)
-			el = nil
-			off = 1
-		case b[i] == int8Code:
+			el, off = nil, 1
+
+		case int8Code:
 			schema = append(schema, T_int8)
-			el, off = decodeInt(int8Code, b[i+1:])
-			off += 1
-		case b[i] == int16Code:
+			el, off, err = decodeWithOffset(i, decodeInt, int8Code)
+
+		case int16Code:
 			schema = append(schema, T_int16)
-			el, off = decodeInt(int16Code, b[i+1:])
-			off += 1
-		case b[i] == int32Code:
+			el, off, err = decodeWithOffset(i, decodeInt, int16Code)
+
+		case int32Code:
 			schema = append(schema, T_int32)
-			el, off = decodeInt(int32Code, b[i+1:])
-			off += 1
-		case b[i] == int64Code:
+			el, off, err = decodeWithOffset(i, decodeInt, int32Code)
+
+		case int64Code:
 			schema = append(schema, T_int64)
-			el, off = decodeInt(int64Code, b[i+1:])
-			off += 1
-		case b[i] == uint8Code:
+			el, off, err = decodeWithOffset(i, decodeInt, int64Code)
+
+		case uint8Code:
 			schema = append(schema, T_uint8)
-			el, off = decodeUint(uint8Code, b[i+1:])
-			off += 1
-		case b[i] == uint16Code:
+			el, off, err = decodeWithOffset(i, decodeUint, uint8Code)
+
+		case uint16Code:
 			schema = append(schema, T_uint16)
-			el, off = decodeUint(uint16Code, b[i+1:])
-			off += 1
-		case b[i] == uint32Code:
+			el, off, err = decodeWithOffset(i, decodeUint, uint16Code)
+
+		case uint32Code:
 			schema = append(schema, T_uint32)
-			el, off = decodeUint(uint32Code, b[i+1:])
-			off += 1
-		case b[i] == uint64Code:
+			el, off, err = decodeWithOffset(i, decodeUint, uint32Code)
+
+		case uint64Code:
 			schema = append(schema, T_uint64)
-			el, off = decodeUint(uint64Code, b[i+1:])
-			off += 1
-		case b[i] == trueCode:
+			el, off, err = decodeWithOffset(i, decodeUint, uint64Code)
+
+		case trueCode:
 			schema = append(schema, T_bool)
-			el = true
-			off = 1
-		case b[i] == falseCode:
+			el, off = true, 1
+
+		case falseCode:
 			schema = append(schema, T_bool)
-			el = false
-			off = 1
-		case b[i] == float32Code:
+			el, off = false, 1
+
+		case float32Code:
+			if err = checkBytes(i, 5); err != nil {
+				return nil, i, nil, err
+			}
 			schema = append(schema, T_float32)
 			el, off = decodeFloat32(b[i:])
-		case b[i] == float64Code:
+
+		case float64Code:
+			if err = checkBytes(i, 9); err != nil {
+				return nil, i, nil, err
+			}
 			schema = append(schema, T_float64)
 			el, off = decodeFloat64(b[i:])
-		case b[i] == dateCode:
+
+		case dateCode:
 			schema = append(schema, T_date)
-			el, off = decodeInt(dateCode, b[i+1:])
-			off += 1
-		case b[i] == datetimeCode:
+			el, off, err = decodeWithOffset(i, decodeInt, dateCode)
+
+		case datetimeCode:
 			schema = append(schema, T_datetime)
-			el, off = decodeInt(datetimeCode, b[i+1:])
-			off += 1
-		case b[i] == timestampCode:
+			el, off, err = decodeWithOffset(i, decodeInt, datetimeCode)
+
+		case timestampCode:
 			schema = append(schema, T_timestamp)
-			el, off = decodeInt(timestampCode, b[i+1:])
-			off += 1
-		case b[i] == timeCode:
+			el, off, err = decodeWithOffset(i, decodeInt, timestampCode)
+
+		case timeCode:
 			schema = append(schema, T_time)
-			el, off = decodeInt(timeCode, b[i+1:])
-			off += 1
-		case b[i] == decimal64Code:
+			el, off, err = decodeWithOffset(i, decodeInt, timeCode)
+
+		case yearCode:
+			schema = append(schema, T_year)
+			el, off, err = decodeWithOffset(i, decodeInt, yearCode)
+
+		case decimal64Code:
+			if err = checkBytes(i, 9); err != nil {
+				return nil, i, nil, err
+			}
 			schema = append(schema, T_decimal64)
 			el, off = decodeDecimal64(b[i+1:])
-		case b[i] == decimal128Code:
+
+		case decimal128Code:
+			if err = checkBytes(i, 17); err != nil {
+				return nil, i, nil, err
+			}
 			schema = append(schema, T_decimal128)
 			el, off = decodeDecimal128(b[i+1:])
-		case b[i] == stringTypeCode:
+
+		case decimal256Code:
+			if err = checkBytes(i, 33); err != nil {
+				return nil, i, nil, err
+			}
+			schema = append(schema, T_decimal256)
+			el, off = decodeDecimal256(b[i+1:])
+
+		case stringTypeCode:
+			if err = checkBytes(i, 2); err != nil { // At least type code + terminator
+				return nil, i, nil, err
+			}
 			schema = append(schema, T_varchar)
 			el, off = decodeBytes(b[i+1:])
 			off += 1
-		case b[i] == bitCode:
+
+		case bitCode:
 			schema = append(schema, T_bit)
-			el, off = decodeUint(uint64Code, b[i+1:])
-			off += 1
-		case b[i] == enumCode:
+			el, off, err = decodeWithOffset(i, decodeUint, uint64Code)
+
+		case enumCode:
 			schema = append(schema, T_enum)
-			// TODO: need to verify @YANGGMM
-			el, off = decodeUint(uint16Code, b[i+1:])
+			// EncodeEnum emits [enumCode, uint16Code, ...]: skip the nested uint16Code byte.
+			el, off, err = decodeWithOffset(i+1, decodeUint, uint16Code)
 			off += 1
-		case b[i] == uuidCode:
+			if err == nil {
+				el = Enum(el.(uint16))
+			}
+
+		case uuidCode:
+			if err = checkBytes(i, 17); err != nil {
+				return nil, i, nil, err
+			}
 			schema = append(schema, T_uuid)
 			el, off = decodeUuid(b[i:])
-			// off += 1
-		case b[i] == objectIdCode:
+
+		case objectIdCode:
+			if err = checkBytes(i, 19); err != nil { // UUID (17) + uint16 offset (at least 2)
+				return nil, i, nil, err
+			}
 			schema = append(schema, T_Objectid)
 			el, off = decodeObjectid(b[i:])
+
 		default:
 			return nil, i, nil, moerr.NewInternalErrorNoCtxf("unable to decode tuple element with unknown typecode %02x", b[i])
 		}
+
+		if err != nil {
+			return nil, i, nil, err
+		}
+
 		t = append(t, el)
 		i += off
 	}
@@ -557,9 +671,167 @@ func Unpack(b []byte) (Tuple, error) {
 	return t, err
 }
 
+func UnpackTo(b []byte, t Tuple, schema []T) (Tuple, []T, error) {
+	t, _, schema, err := decodeTupleTo(b, t, schema)
+	return t, schema, err
+}
+
 func UnpackWithSchema(b []byte) (Tuple, []T, error) {
 	t, _, schema, err := decodeTuple(b)
 	return t, schema, err
+}
+
+// UnpackNthElement decodes only up to the nth element (0-based) and returns
+// just that element plus its type. This avoids deserializing the entire tuple
+// when only one element is needed, which is critical for performance in
+// GROUP BY serial_extract(__mo_index_idx_col, 0, VARCHAR) queries.
+func UnpackNthElement(b []byte, n int) (any, T, error) {
+	checkBytes := func(pos, need int) error {
+		if pos+need > len(b) {
+			return moerr.NewInternalErrorNoCtxf("insufficient bytes: need %d at position %d, but only %d bytes available", need, pos, len(b)-pos)
+		}
+		return nil
+	}
+
+	decodeWithOffset := func(i int, decodeFn func(byte, []byte) (any, int), code byte) (any, int, error) {
+		if err := checkBytes(i, 2); err != nil {
+			return nil, 0, err
+		}
+		el, off := decodeFn(code, b[i+1:])
+		return el, off + 1, nil
+	}
+
+	idx := 0
+	i := 0
+	for i < len(b) {
+		var el any
+		var off int
+		var err error
+		var schema T
+
+		switch b[i] {
+		case nilCode:
+			schema, el, off = T_any, nil, 1
+		case int8Code:
+			schema = T_int8
+			el, off, err = decodeWithOffset(i, decodeInt, int8Code)
+		case int16Code:
+			schema = T_int16
+			el, off, err = decodeWithOffset(i, decodeInt, int16Code)
+		case int32Code:
+			schema = T_int32
+			el, off, err = decodeWithOffset(i, decodeInt, int32Code)
+		case int64Code:
+			schema = T_int64
+			el, off, err = decodeWithOffset(i, decodeInt, int64Code)
+		case uint8Code:
+			schema = T_uint8
+			el, off, err = decodeWithOffset(i, decodeUint, uint8Code)
+		case uint16Code:
+			schema = T_uint16
+			el, off, err = decodeWithOffset(i, decodeUint, uint16Code)
+		case uint32Code:
+			schema = T_uint32
+			el, off, err = decodeWithOffset(i, decodeUint, uint32Code)
+		case uint64Code:
+			schema = T_uint64
+			el, off, err = decodeWithOffset(i, decodeUint, uint64Code)
+		case trueCode:
+			schema, el, off = T_bool, true, 1
+		case falseCode:
+			schema, el, off = T_bool, false, 1
+		case float32Code:
+			if err = checkBytes(i, 5); err != nil {
+				return nil, 0, err
+			}
+			schema = T_float32
+			el, off = decodeFloat32(b[i:])
+		case float64Code:
+			if err = checkBytes(i, 9); err != nil {
+				return nil, 0, err
+			}
+			schema = T_float64
+			el, off = decodeFloat64(b[i:])
+		case dateCode:
+			schema = T_date
+			el, off, err = decodeWithOffset(i, decodeInt, dateCode)
+		case datetimeCode:
+			schema = T_datetime
+			el, off, err = decodeWithOffset(i, decodeInt, datetimeCode)
+		case timestampCode:
+			schema = T_timestamp
+			el, off, err = decodeWithOffset(i, decodeInt, timestampCode)
+		case timeCode:
+			schema = T_time
+			el, off, err = decodeWithOffset(i, decodeInt, timeCode)
+		case yearCode:
+			schema = T_year
+			el, off, err = decodeWithOffset(i, decodeInt, yearCode)
+		case decimal64Code:
+			if err = checkBytes(i, 9); err != nil {
+				return nil, 0, err
+			}
+			schema = T_decimal64
+			el, off = decodeDecimal64(b[i+1:])
+		case decimal128Code:
+			if err = checkBytes(i, 17); err != nil {
+				return nil, 0, err
+			}
+			schema = T_decimal128
+			el, off = decodeDecimal128(b[i+1:])
+		case decimal256Code:
+			if err = checkBytes(i, 33); err != nil {
+				return nil, 0, err
+			}
+			schema = T_decimal256
+			el, off = decodeDecimal256(b[i+1:])
+		case stringTypeCode:
+			if err = checkBytes(i, 2); err != nil {
+				return nil, 0, err
+			}
+			schema = T_varchar
+			el, off = decodeBytes(b[i+1:])
+			off += 1
+		case bitCode:
+			schema = T_bit
+			el, off, err = decodeWithOffset(i, decodeUint, uint64Code)
+		case enumCode:
+			schema = T_enum
+			// EncodeEnum emits [enumCode, uint16Code, ...]: skip the nested uint16Code byte.
+			el, off, err = decodeWithOffset(i+1, decodeUint, uint16Code)
+			off += 1
+			if err == nil {
+				el = Enum(el.(uint16))
+			}
+		case uuidCode:
+			if err = checkBytes(i, 17); err != nil {
+				return nil, 0, err
+			}
+			schema = T_uuid
+			el, off = decodeUuid(b[i:])
+		case objectIdCode:
+			if err = checkBytes(i, 19); err != nil {
+				return nil, 0, err
+			}
+			schema = T_Objectid
+			el, off = decodeObjectid(b[i:])
+		default:
+			return nil, 0, moerr.NewInternalErrorNoCtxf("unable to decode tuple element with unknown typecode %02x", b[i])
+		}
+
+		if err != nil {
+			return nil, 0, err
+		}
+
+		if idx == n {
+			return el, schema, nil
+		}
+
+		idx++
+		i += off
+	}
+
+	return nil, 0, moerr.NewInternalErrorNoCtx("index out of range")
 }
 
 func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
@@ -622,10 +894,15 @@ func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
 		case b[offset] == timeCode:
 			item, itemLen = stringifyInt(timeCode, b[offset+1:], types[i].Scale)
 			itemLen += 1
+		case b[offset] == yearCode:
+			item, itemLen = stringifyInt(yearCode, b[offset+1:], types[i].Scale)
+			itemLen += 1
 		case b[offset] == decimal64Code:
 			item, itemLen = stringifyDecimal64(b[offset+1:], types[i].Scale)
 		case b[offset] == decimal128Code:
 			item, itemLen = stringifyDecimal128(b[offset+1:], types[i].Scale)
+		case b[offset] == decimal256Code:
+			item, itemLen = stringifyDecimal256(b[offset+1:], types[i].Scale)
 		case b[offset] == stringTypeCode:
 			item, itemLen = stringifyBytes(b[offset+1:])
 			itemLen += 1
@@ -633,9 +910,10 @@ func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
 			item, itemLen = stringifyUint(uint64Code, b[offset+1:])
 			itemLen += 1
 		case b[offset] == enumCode:
-			// TODO: need to verify @YANGGMM
-			item, itemLen = stringifyUint(uint16Code, b[offset+1:])
-			itemLen += 1
+			// EncodeEnum emits [enumCode, uint16Code, ...]: skip both the enumCode and
+			// the nested uint16Code byte before reading the uint payload.
+			item, itemLen = stringifyUint(uint16Code, b[offset+2:])
+			itemLen += 2
 		case b[offset] == uuidCode:
 			item, itemLen = stringifyUuid(b[offset:])
 			// off += 1
@@ -667,6 +945,8 @@ func stringifyInt(code byte, b []byte, scale int32) (string, int) {
 			return Datetime(0).String2(scale), 1
 		case timestampCode:
 			return Timestamp(0).String2(loc, scale), 1
+		case yearCode:
+			return MoYear(0).String(), 1
 		default:
 			return "0", 1
 		}
@@ -696,6 +976,8 @@ func stringifyInt(code byte, b []byte, scale int32) (string, int) {
 			return Datetime(ret - int64(sizeLimits[n])).String2(scale), n + 1
 		case timestampCode:
 			return Timestamp(ret-int64(sizeLimits[n])).String2(loc, scale), n + 1
+		case yearCode:
+			return MoYear(ret - int64(sizeLimits[n])).String(), n + 1
 		default:
 			return strconv.FormatInt(ret-int64(sizeLimits[n]), 10), n + 1
 		}
@@ -709,6 +991,8 @@ func stringifyInt(code byte, b []byte, scale int32) (string, int) {
 		return Datetime(ret).String2(scale), n + 1
 	case timestampCode:
 		return Timestamp(ret).String2(loc, scale), n + 1
+	case yearCode:
+		return MoYear(ret).String(), n + 1
 	//case enumCode:
 	//	return Enum(ret), n + 1
 	default:
@@ -773,6 +1057,19 @@ func stringifyDecimal128(b []byte, scale int32) (string, int) {
 	}
 	ret := *(*Decimal128)(unsafe.Pointer(&bp[0]))
 	return ret.Format(scale), 17
+}
+
+func stringifyDecimal256(b []byte, scale int32) (string, int) {
+	bp := make([]byte, 32)
+	copy(bp, b[:])
+	bp[0] ^= 0x80
+	for i := 0; i < 16; i++ {
+		bp[i] ^= bp[31-i]
+		bp[31-i] ^= bp[i]
+		bp[i] ^= bp[31-i]
+	}
+	ret := *(*Decimal256)(unsafe.Pointer(&bp[0]))
+	return ret.Format(scale), 33
 }
 
 func stringifyUuid(b []byte) (string, int) {

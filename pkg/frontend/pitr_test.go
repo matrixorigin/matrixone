@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
@@ -25,7 +24,9 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -37,8 +38,8 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "h",
-			createTime:   "2024-05-01 00:00:00",
-			modifiedTime: "2024-05-01 00:00:00",
+			createTime:   time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			modifiedTime: time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
 		assert.NoError(t, err)
@@ -48,8 +49,8 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "d",
-			createTime:   "2024-05-01 00:00:00",
-			modifiedTime: "2024-05-01 00:00:00",
+			createTime:   time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			modifiedTime: time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
 		assert.NoError(t, err)
@@ -59,8 +60,8 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "mo",
-			createTime:   "2024-05-01 00:00:00",
-			modifiedTime: "2024-05-01 00:00:00",
+			createTime:   time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			modifiedTime: time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
 		assert.NoError(t, err)
@@ -70,8 +71,8 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "y",
-			createTime:   "2024-05-01 00:00:00",
-			modifiedTime: "2024-05-01 00:00:00",
+			createTime:   time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			modifiedTime: time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 		}
 		err := checkPitrInValidDurtion(time.Now().UnixNano(), pitr)
 		assert.NoError(t, err)
@@ -81,8 +82,8 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "h",
-			createTime:   "2024-05-01 00:00:00",
-			modifiedTime: "2024-05-01 00:00:00",
+			createTime:   time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			modifiedTime: time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 		}
 		err := checkPitrInValidDurtion(time.Now().Add(time.Duration(-2)*time.Hour).UnixNano(), pitr)
 		assert.Error(t, err)
@@ -92,8 +93,8 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "h",
-			createTime:   "2024-05-01 00:00:00",
-			modifiedTime: "2024-05-01 00:00:00",
+			createTime:   time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			modifiedTime: time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 		}
 		err := checkPitrInValidDurtion(time.Now().Add(time.Duration(2)*time.Hour).UnixNano(), pitr)
 		assert.Error(t, err)
@@ -103,12 +104,72 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		pitr := &pitrRecord{
 			pitrValue:    1,
 			pitrUnit:     "d",
-			createTime:   "2024-05-01 00:00:00",
-			modifiedTime: "2024-05-01 00:00:00",
+			createTime:   time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			modifiedTime: time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 		}
 		err := checkPitrInValidDurtion(time.Now().Add(time.Duration(25)*time.Hour).UnixNano(), pitr)
 		assert.Error(t, err)
 	})
+}
+
+func Test_checkPitrValidOrNot_AllowsExplicitCurrentAccountForScopedRestore(t *testing.T) {
+	tenant := &TenantInfo{
+		Tenant:   "acc01",
+		TenantID: 101,
+	}
+	pitr := &pitrRecord{
+		pitrName:     "pitr01",
+		level:        tree.PITRLEVELACCOUNT.String(),
+		accountId:    101,
+		accountName:  "acc01",
+		databaseName: "db01",
+		tableName:    "t01",
+	}
+
+	err := checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELDATABASE,
+		AccountName:  "acc01",
+		DatabaseName: "db01",
+	}, tenant)
+	require.NoError(t, err)
+
+	err = checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  "acc01",
+		DatabaseName: "db01",
+		TableName:    "t01",
+	}, tenant)
+	require.NoError(t, err)
+}
+
+func Test_checkPitrValidOrNot_RejectsOtherAccountForScopedRestore(t *testing.T) {
+	tenant := &TenantInfo{
+		Tenant:   "acc01",
+		TenantID: 101,
+	}
+	pitr := &pitrRecord{
+		pitrName:     "pitr01",
+		level:        tree.PITRLEVELACCOUNT.String(),
+		accountId:    101,
+		accountName:  "acc01",
+		databaseName: "db01",
+		tableName:    "t01",
+	}
+
+	err := checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELDATABASE,
+		AccountName:  "acc02",
+		DatabaseName: "db01",
+	}, tenant)
+	require.Error(t, err)
+
+	err = checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  "acc02",
+		DatabaseName: "db01",
+		TableName:    "t01",
+	}, tenant)
+	require.Error(t, err)
 }
 
 func Test_createPubByPitr(t *testing.T) {
@@ -293,8 +354,8 @@ func Test_doRestorePitr(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(0),
 			"sys",
@@ -373,8 +434,8 @@ func Test_doRestorePitr(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(0),
 			"sys",
@@ -455,8 +516,8 @@ func Test_doRestorePitr(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(1),
 			"acc01",
@@ -538,8 +599,8 @@ func Test_doRestorePitr(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(0),
 			"sys",
@@ -622,8 +683,8 @@ func Test_doRestorePitr(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(0),
 			"sys",
@@ -720,8 +781,8 @@ func Test_doRestorePitr(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(0),
 			"sys",
@@ -817,8 +878,8 @@ func Test_doRestorePitr(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"CLUSTER",
 			uint64(0),
 			"",
@@ -915,8 +976,8 @@ func Test_doRestorePitr(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"CLUSTER",
 			uint64(0),
 			"",
@@ -1011,8 +1072,8 @@ func Test_doRestorePitr(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(1),
 			"acc01",
@@ -1092,8 +1153,8 @@ func Test_doRestorePitr(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"CLUSTER",
 			uint64(1),
 			"acc01",
@@ -1431,8 +1492,8 @@ func Test_doRestorePitr_Account(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(0),
 			"sys",
@@ -1482,14 +1543,14 @@ func Test_doRestorePitr_Account(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
 		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 
-		sql = fmt.Sprintf(checkDatabaseIsMasterFormat, "db1")
+		sql = fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral("db1"), quoteSQLStringLiteral("db1"))
 		mrs = newMrsForPitrRecord([][]interface{}{{"db2"}})
 		bh.sql2result[sql] = mrs
 
@@ -1557,8 +1618,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(1),
 			"acc01",
@@ -1608,7 +1669,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -1676,8 +1737,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(2),
 			"acc02",
@@ -1731,7 +1792,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -1797,8 +1858,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(2),
 			"acc02",
@@ -1848,7 +1909,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -1917,8 +1978,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"CLUSTER",
 			uint64(1),
 			"",
@@ -1972,7 +2033,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2039,8 +2100,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"CLUSTER",
 			uint64(1),
 			"",
@@ -2090,7 +2151,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2159,8 +2220,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"CLUSTER",
 			uint64(1),
 			"",
@@ -2218,7 +2279,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2285,8 +2346,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"CLUSTER",
 			uint64(1),
 			"",
@@ -2340,7 +2401,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2407,8 +2468,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"CLUSTER",
 			uint64(1),
 			"",
@@ -2462,25 +2523,25 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
 		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 
-		sql = fmt.Sprintf("show full tables from `mo_catalog` {MO_TS = %d}", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{"mo_user", "BASE TABLE"},
+		sql = buildTableInfoListSQL(moCatalog, "", resovleTs, uint32(sysAccountID))
+		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
+			{"mo_user", "BASE TABLE", "r"},
 		})
 		bh.sql2result[sql] = mrs
 
 		err = restoreSystemDatabaseWithPitr(ctx, "", bh, "pitr01", resovleTs, 0)
 		assert.Error(t, err)
 
-		sql = fmt.Sprintf("show full tables from `mo_catalog` {snapshot = '%s'}", "pitr01")
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{"mo_user", "BASE TABLE"},
+		sql = buildTableInfoListSQL(moCatalog, "", resovleTs, uint32(sysAccountID))
+		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
+			{"mo_user", "BASE TABLE", "r"},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -2555,8 +2616,8 @@ func Test_doCreatePitr(t *testing.T) {
 				"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 				"pitr01",
 				uint64(0),
-				"2024-05-01 00:00:00",
-				"2024-05-01 00:00:00",
+				time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+				time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 				"database",
 				uint64(0),
 				"sys",
@@ -2578,8 +2639,8 @@ func Test_doCreatePitr(t *testing.T) {
 				"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 				"pitr01",
 				uint64(0),
-				"2024-05-01 00:00:00",
-				"2024-05-01 00:00:00",
+				time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+				time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 				"database",
 				uint64(0),
 				"sys",
@@ -2601,8 +2662,8 @@ func Test_doCreatePitr(t *testing.T) {
 				"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 				"pitr01",
 				uint64(0),
-				"2024-05-01 00:00:00",
-				"2024-05-01 00:00:00",
+				time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+				time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 				"database",
 				uint64(0),
 				"sys",
@@ -2958,7 +3019,7 @@ func Test_restoreViews(t *testing.T) {
 
 		sql := "select * from mo_catalog.mo_snapshots where sname = 'sp01'"
 		// string/ string/ int64/ string/ string/ string/ string/ uint64
-		mrs := newMrsForPitrRecord([][]interface{}{{"1", "sp01", int64(0), "ACCOUNT", "sys", "", "", uint64(1)}})
+		mrs := newMrsForSnapshotRecord("1", "sp01", int64(0), "ACCOUNT", "sys", "", "", uint64(1))
 		bh.sql2result[sql] = mrs
 
 		sql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1 and account_name = 'sys'"
@@ -2969,7 +3030,7 @@ func Test_restoreViews(t *testing.T) {
 			ctx, ses, bh, "sp01", nil, viewMap, 0, 0)
 		require.NoError(t, err)
 
-		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews)
+		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
 		assert.NoError(t, err)
 
 		viewMap = map[string]*tableInfo{
@@ -2988,6 +3049,135 @@ func Test_restoreViews(t *testing.T) {
 		//err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews)
 		//assert.Error(t, err)
 	})
+}
+
+func Test_restoreViewsSkipMissingDependency(t *testing.T) {
+	convey.Convey("restoreViews skips missing dependency for clone", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		missingSQL := "create view skip_v as select * from missing_t"
+		okSQL := "create view ok_v as select 1"
+
+		viewMap := map[string]*tableInfo{
+			genKey("db01", "skip_v"): {
+				dbName:    "db01",
+				tblName:   "skip_v",
+				typ:       "VIEW",
+				createSql: missingSQL,
+			},
+			genKey("db01", "ok_v"): {
+				dbName:    "db01",
+				tblName:   "ok_v",
+				typ:       "VIEW",
+				createSql: okSQL,
+			},
+		}
+		sortedViews := []string{genKey("db01", "skip_v"), genKey("db01", "ok_v")}
+
+		testCases := []struct {
+			name       string
+			missingErr error
+		}{
+			{
+				name:       "no such table",
+				missingErr: moerr.NewNoSuchTable(ctx, "db01", "missing_t"),
+			},
+			{
+				name:       "parse missing table",
+				missingErr: moerr.NewParseErrorf(ctx, "table %q does not exist", "missing_t"),
+			},
+		}
+
+		for _, tc := range testCases {
+			bh.sql2err = map[string]error{missingSQL: tc.missingErr}
+			bh.executedSQLs = nil
+
+			err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, true)
+			require.NoError(t, err, tc.name)
+			require.Contains(t, bh.executedSQLs, okSQL, tc.name)
+
+			bh.executedSQLs = nil
+			err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
+			require.Error(t, err, tc.name)
+			require.NotContains(t, bh.executedSQLs, okSQL, tc.name)
+		}
+	})
+}
+
+func Test_canSkipRestoreViewError(t *testing.T) {
+	ctx := context.Background()
+	testCases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "no such table",
+			err:  moerr.NewNoSuchTable(ctx, "db01", "missing_t"),
+			want: true,
+		},
+		{
+			name: "bad database",
+			err:  moerr.NewBadDB(ctx, "missing_db"),
+			want: true,
+		},
+		{
+			name: "parse missing table",
+			err:  moerr.NewParseErrorf(ctx, "table %q does not exist", "missing_t"),
+			want: true,
+		},
+		{
+			name: "parse missing column",
+			err:  moerr.NewParseErrorf(ctx, "column %q does not exist", "missing_c"),
+			want: false,
+		},
+		{
+			name: "other error",
+			err:  moerr.NewInternalError(ctx, "boom"),
+			want: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, canSkipRestoreViewError(tc.err))
+		})
+	}
 }
 
 func Test_restoreViewsWithPitr(t *testing.T) {
@@ -3116,8 +3306,8 @@ func Test_RestoreOtherAccount(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(1),
 			"acc01",
@@ -3205,8 +3395,8 @@ func Test_RestoreOtherAccount(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"ACCOUNT",
 			uint64(1),
 			"acc01",
@@ -3295,8 +3485,8 @@ func Test_RestoreOtherAccount(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"CLUSTER",
 			uint64(1),
 			"acc01",
@@ -3385,8 +3575,8 @@ func Test_RestoreOtherAccount(t *testing.T) {
 			"018ee4cd-5991-7caa-b75d-f9290144bd9f",
 			"pitr01",
 			uint64(0),
-			"2024-05-01 00:00:00",
-			"2024-05-01 00:00:00",
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
+			time.Now().UnixNano() - 60*24*time.Hour.Nanoseconds(),
 			"CLUSTER",
 			uint64(1),
 			"acc01",

@@ -268,3 +268,4 @@ Alice    Johnson    Marketing
 Mark    Patterson    Sales
 David    Finley    Finance
 drop account a1;
+drop database if exists test02;

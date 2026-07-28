@@ -92,6 +92,12 @@ const (
 	FPPauseDaemonTask
 	FPCancelDaemonTask
 	FPResumeDaemonTask
+	FPCreateSQLTask
+	FPAlterSQLTask
+	FPDropSQLTask
+	FPExecuteSQLTask
+	FPShowSQLTasks
+	FPShowSQLTaskRuns
 	FPDropConnector
 	FPShowConnectors
 	FPDeallocate
@@ -100,15 +106,26 @@ const (
 	FPShowVariables
 	FPShowErrors
 	FPAnalyzeStmt
+	FPCheckTableStmt
+	FPShowProfileStmt
 	FPExplainStmt
 	FPInternalCmdFieldList
+	FPInternalCmdGetSnapshotTs
+	FPInternalCmdGetDatabases
+	FPInternalCmdGetMoIndexes
+	FPInternalCmdGetDdl
+	FPInternalCmdGetObject
+	FPInternalCmdObjectList
+	FPInternalCmdCheckSnapshotFlushed
 	FPCreatePublication
 	FPAlterPublication
 	FPDropPublication
+	FPCreateSubscription
 	FPShowSubscriptions
 	FPCreateStage
 	FPDropStage
 	FPAlterStage
+	FPRemoveStageFiles
 	FPCreateAccount
 	FPDropAccount
 	FPAlterAccount
@@ -116,6 +133,10 @@ const (
 	FPCreateUser
 	FPDropUser
 	FPAlterUser
+	FPAlterRole
+	FPAlterRoleAddRule
+	FPAlterRoleDropRule
+	FPShowRules
 	FPCreateRole
 	FPDropRole
 	FPCreateFunction
@@ -133,6 +154,7 @@ const (
 	FPBackupStart
 	FPCreateSnapShot
 	FPDropSnapShot
+	FPCheckSnapshotFlushed
 	FPRestoreSnapShot
 	FPUpgradeStatement
 	FPCreatePitr
@@ -180,6 +202,8 @@ const (
 	FPInternalExecutorExec
 	FPInternalExecutorQuery
 	FPHandleAnalyzeStmt
+	FPHandleCheckTableStmt
+	FPHandleShowProfileStmt
 	FPShowPublications
 	FPCreateCDC
 	FPPauseCDC
@@ -191,6 +215,10 @@ const (
 	FPShowRecoveryWindow
 	FPCloneDatabase
 	FPCloneTable
+	FPObjectList
+	FPGetDdl
+	FPGetObject
+	FPDataBranch
 )
 
 type (
@@ -268,34 +296,62 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	Name           string
-	Sql            string
-	PreparePlan    *plan.Plan
-	PrepareStmt    tree.Statement
-	ParamTypes     []byte
-	ColDefData     [][]byte
-	IsCloudNonuser bool
-	proc           *process.Process
+	Name            string
+	Sql             string
+	PreparePlan     *plan.Plan
+	PrepareStmt     tree.Statement
+	NativeMode      bool
+	ParamTypes      []byte
+	ColDefData      [][]byte
+	IsCloudNonuser  bool
+	proc            *process.Process
+	remapDb         map[string]string
+	defaultDatabase string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
+	// tempTableVersion is the session temporary-table mapping version used to
+	// build PreparePlan and compile.
+	tempTableVersion uint64
+	// protocolVersion is the cluster protocol used to build PreparePlan.
+	// A version change can alter internal function IDs in generated DML plans.
+	protocolVersion int64
+
+	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
+	// EXECUTE must not reinterpret optimizer comments after session sql_mode
+	// changes.
+	schedulingSQLMode string
 }
 
 /*
 Disguise the COMMAND CMD_FIELD_LIST as sql query.
 */
 const (
-	cmdFieldListSql           = "__++__internal_cmd_field_list"
-	cmdFieldListSqlLen        = len(cmdFieldListSql)
-	cloudUserTag              = "cloud_user"
-	cloudNoUserTag            = "cloud_nonuser"
-	saveResultTag             = "save_result"
-	validatePasswordPolicyTag = "validate_password.policy"
-	validatePasswordPolicyLow = "low"
-	validatePasswordPolicyMed = "medium"
+	cmdFieldListSql               = "__++__internal_cmd_field_list"
+	cmdFieldListSqlLen            = len(cmdFieldListSql)
+	cmdGetSnapshotTsSql           = "__++__internal_get_snapshot_ts"
+	cmdGetSnapshotTsSqlLen        = len(cmdGetSnapshotTsSql)
+	cmdGetDatabasesSql            = "__++__internal_get_databases"
+	cmdGetDatabasesSqlLen         = len(cmdGetDatabasesSql)
+	cmdGetMoIndexesSql            = "__++__internal_get_mo_indexes"
+	cmdGetMoIndexesSqlLen         = len(cmdGetMoIndexesSql)
+	cmdGetDdlSql                  = "__++__internal_get_ddl"
+	cmdGetDdlSqlLen               = len(cmdGetDdlSql)
+	cmdGetObjectSql               = "__++__internal_get_object"
+	cmdGetObjectSqlLen            = len(cmdGetObjectSql)
+	cmdObjectListSql              = "__++__internal_object_list"
+	cmdObjectListSqlLen           = len(cmdObjectListSql)
+	cmdCheckSnapshotFlushedSql    = "__++__internal_check_snapshot_flushed"
+	cmdCheckSnapshotFlushedSqlLen = len(cmdCheckSnapshotFlushedSql)
+	cloudUserTag                  = "cloud_user"
+	cloudNoUserTag                = "cloud_nonuser"
+	saveResultTag                 = "save_result"
+	validatePasswordPolicyTag     = "validate_password.policy"
+	validatePasswordPolicyLow     = "low"
+	validatePasswordPolicyMed     = "medium"
 )
 
 var _ tree.Statement = &InternalCmdFieldList{}
@@ -324,6 +380,224 @@ func (icfl *InternalCmdFieldList) StmtKind() tree.StmtKind {
 func (icfl *InternalCmdFieldList) GetStatementType() string { return "InternalCmd" }
 func (icfl *InternalCmdFieldList) GetQueryType() string     { return tree.QueryTypeDQL }
 
+var _ tree.Statement = &InternalCmdGetSnapshotTs{}
+
+// InternalCmdGetSnapshotTs the internal command to get snapshot ts by publication permission
+type InternalCmdGetSnapshotTs struct {
+	snapshotName    string
+	accountName     string
+	publicationName string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetSnapshotTs) Free() {
+}
+
+func (ic *InternalCmdGetSnapshotTs) String() string {
+	return makeGetSnapshotTsSql(ic.snapshotName, ic.accountName, ic.publicationName)
+}
+
+func (ic *InternalCmdGetSnapshotTs) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetSnapshotTsSql(ic.snapshotName, ic.accountName, ic.publicationName))
+}
+
+func (ic *InternalCmdGetSnapshotTs) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetSnapshotTs) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetSnapshotTs) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetDatabases{}
+
+// InternalCmdGetDatabases the internal command to get databases by publication permission
+// Parameters: snapshotName, accountName, publicationName, level, dbName, tableName
+// Returns: list of database names covered by the snapshot
+type InternalCmdGetDatabases struct {
+	snapshotName    string
+	accountName     string
+	publicationName string
+	level           string
+	dbName          string
+	tableName       string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetDatabases) Free() {
+}
+
+func (ic *InternalCmdGetDatabases) String() string {
+	return makeGetDatabasesSql(ic.snapshotName, ic.accountName, ic.publicationName, ic.level, ic.dbName, ic.tableName)
+}
+
+func (ic *InternalCmdGetDatabases) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetDatabasesSql(ic.snapshotName, ic.accountName, ic.publicationName, ic.level, ic.dbName, ic.tableName))
+}
+
+func (ic *InternalCmdGetDatabases) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetDatabases) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetDatabases) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetMoIndexes{}
+
+// InternalCmdGetMoIndexes the internal command to get mo_indexes by publication permission
+// Parameters: tableId, subscriptionAccountName, publicationName, snapshotName
+// Returns: list of index records from mo_indexes table
+type InternalCmdGetMoIndexes struct {
+	tableId                 uint64
+	subscriptionAccountName string
+	publicationName         string
+	snapshotName            string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetMoIndexes) Free() {
+}
+
+func (ic *InternalCmdGetMoIndexes) String() string {
+	return makeGetMoIndexesSql(ic.tableId, ic.subscriptionAccountName, ic.publicationName, ic.snapshotName)
+}
+
+func (ic *InternalCmdGetMoIndexes) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetMoIndexesSql(ic.tableId, ic.subscriptionAccountName, ic.publicationName, ic.snapshotName))
+}
+
+func (ic *InternalCmdGetMoIndexes) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetMoIndexes) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetMoIndexes) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetDdl{}
+
+// InternalCmdGetDdl the internal command to get DDL by publication permission
+// Parameters: snapshotName, subscriptionAccountName, publicationName, level, dbName, tableName
+// Returns: list of DDL records (dbname, tablename, tableid, tablesql)
+type InternalCmdGetDdl struct {
+	snapshotName            string
+	subscriptionAccountName string
+	publicationName         string
+	level                   string
+	dbName                  string
+	tableName               string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetDdl) Free() {
+}
+
+func (ic *InternalCmdGetDdl) String() string {
+	return makeGetDdlSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName, ic.level, ic.dbName, ic.tableName)
+}
+
+func (ic *InternalCmdGetDdl) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetDdlSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName, ic.level, ic.dbName, ic.tableName))
+}
+
+func (ic *InternalCmdGetDdl) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetDdl) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetDdl) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdGetObject{}
+
+// InternalCmdGetObject the internal command to get object data by publication permission
+// Parameters: subscriptionAccountName, publicationName, objectName, chunkIndex
+// Returns: data chunk from the object file
+type InternalCmdGetObject struct {
+	subscriptionAccountName string
+	publicationName         string
+	objectName              string
+	chunkIndex              int64
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdGetObject) Free() {
+}
+
+func (ic *InternalCmdGetObject) String() string {
+	return makeGetObjectSql(ic.subscriptionAccountName, ic.publicationName, ic.objectName, ic.chunkIndex)
+}
+
+func (ic *InternalCmdGetObject) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeGetObjectSql(ic.subscriptionAccountName, ic.publicationName, ic.objectName, ic.chunkIndex))
+}
+
+func (ic *InternalCmdGetObject) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdGetObject) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdGetObject) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdObjectList{}
+
+// InternalCmdObjectList the internal command to get object list by publication permission
+// Parameters: snapshotName, againstSnapshotName, subscriptionAccountName, publicationName
+// The handler will use the snapshot's level to determine dbName and tableName scope
+// Returns: object list records
+type InternalCmdObjectList struct {
+	snapshotName            string
+	againstSnapshotName     string
+	subscriptionAccountName string
+	publicationName         string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdObjectList) Free() {
+}
+
+func (ic *InternalCmdObjectList) String() string {
+	return makeObjectListSql(ic.snapshotName, ic.againstSnapshotName, ic.subscriptionAccountName, ic.publicationName)
+}
+
+func (ic *InternalCmdObjectList) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeObjectListSql(ic.snapshotName, ic.againstSnapshotName, ic.subscriptionAccountName, ic.publicationName))
+}
+
+func (ic *InternalCmdObjectList) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdObjectList) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdObjectList) GetQueryType() string     { return tree.QueryTypeDQL }
+
+var _ tree.Statement = &InternalCmdCheckSnapshotFlushed{}
+
+// InternalCmdCheckSnapshotFlushed the internal command to check if snapshot is flushed by publication permission
+// Parameters: snapshotName, subscriptionAccountName, publicationName
+// Returns: result (bool)
+type InternalCmdCheckSnapshotFlushed struct {
+	snapshotName            string
+	subscriptionAccountName string
+	publicationName         string
+}
+
+// Free implements tree.Statement.
+func (ic *InternalCmdCheckSnapshotFlushed) Free() {
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) String() string {
+	return makeCheckSnapshotFlushedSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName)
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) Format(ctx *tree.FmtCtx) {
+	ctx.WriteString(makeCheckSnapshotFlushedSql(ic.snapshotName, ic.subscriptionAccountName, ic.publicationName))
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_RESULT_ROW, tree.RESP_PREBUILD_RESULT_ROW, tree.EXEC_IN_FRONTEND)
+}
+
+func (ic *InternalCmdCheckSnapshotFlushed) GetStatementType() string { return "InternalCmd" }
+func (ic *InternalCmdCheckSnapshotFlushed) GetQueryType() string     { return tree.QueryTypeDQL }
+
 // ExecResult is the result interface of the execution
 type ExecResult interface {
 	GetRowCount() uint64
@@ -344,13 +618,15 @@ func execResultArrayHasData(arr []ExecResult) bool {
 }
 
 type BackgroundExecOption struct {
-	fromRealUser bool
+	fromRealUser       bool
+	forcePessimisticRC bool
 }
 
 // BackgroundExec executes the sql in background session without network output.
 type BackgroundExec interface {
 	Close()
 	Exec(context.Context, string) error
+	ExecWithSQLMode(context.Context, string, string) error
 	ExecRestore(context.Context, string, uint32, uint32) error
 	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
@@ -408,6 +684,32 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.remapDb = nil
+}
+
+func (prepareStmt *PrepareStmt) resetBinaryParamState() {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.params != nil {
+		prepareStmt.params.GetNulls().Reset()
+	}
+	for k := range prepareStmt.getFromSendLongData {
+		delete(prepareStmt.getFromSendLongData, k)
+	}
+}
+
+func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.params != nil && proc != nil {
+		prepareStmt.params.Free(proc.Mp())
+		prepareStmt.params = nil
+	}
+	for k := range prepareStmt.getFromSendLongData {
+		delete(prepareStmt.getFromSendLongData, k)
+	}
 }
 
 type Allocator interface {
@@ -434,6 +736,7 @@ var baseSessionAllocator = sync.OnceValue(func() malloc.Allocator {
 		metric.MallocGauge.WithLabelValues("session-inuse"),
 		metric.MallocCounter.WithLabelValues("session-allocate-objects"),
 		metric.MallocGauge.WithLabelValues("session-inuse-objects"),
+		metric.OffHeapInuseGauge.WithLabelValues("session"),
 	)
 	return allocator
 })
@@ -442,9 +745,13 @@ func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
 	// base
 	allocator := baseSessionAllocator()
 	// size bounded
+	var guestMmuLimit int64 = 1099511627776 // default: 1 << 40
+	if pu != nil && pu.SV != nil {
+		guestMmuLimit = pu.SV.GuestMmuLimitation
+	}
 	allocator = malloc.NewSizeBoundedAllocator(
 		allocator,
-		uint64(pu.SV.GuestMmuLimitation),
+		uint64(guestMmuLimit),
 		nil,
 	)
 	ret := &SessionAllocator{
@@ -455,11 +762,17 @@ func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
 }
 
 func (s *SessionAllocator) Alloc(capacity int) ([]byte, error) {
+	if capacity == 0 {
+		return []byte{}, nil
+	}
 	return s.allocator.Allocate(uint64(capacity), malloc.NoClear)
 }
 
 func (s SessionAllocator) Free(bs []byte) {
-	s.allocator.Deallocate(bs, malloc.NoClear)
+	if bs == nil {
+		return
+	}
+	s.allocator.Deallocate(bs)
 }
 
 var _ FeSession = &Session{}
@@ -538,13 +851,15 @@ type FeSession interface {
 	getCachedPlan(sql string) *cachedPlan
 	EnterFPrint(idx int)
 	ExitFPrint(idx int)
-	EnterRunSql()
-	ExitRunSql()
 	SetStaticTxnInfo(string)
 	GetStaticTxnInfo() string
 	GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec
 	GetMySQLParser() *mysql.MySQLParser
 	InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec
+	GetTempTable(dbName, alias string) (string, bool)
+	AddTempTable(dbName, alias, realName string)
+	RemoveTempTable(dbName, alias string)
+	RemoveTempTableByRealName(realName string)
 	SessionLogger
 }
 
@@ -575,6 +890,10 @@ type ExecCtx struct {
 	reqCtx      context.Context
 	prepareStmt *PrepareStmt
 	runResult   *util.RunResult
+	// rootSQLOverride is the authoritative SQL for a statement planned
+	// recursively inside this request, such as the statement owned by PREPARE.
+	// A nil value falls back to the session SQL.
+	rootSQLOverride *string
 	//stmt will be replaced by the Execute
 	stmt tree.Statement
 	//isLastStmt : true denotes the last statement in the query
@@ -600,12 +919,33 @@ type ExecCtx struct {
 	results           []ExecResult
 	prepareColDef     [][]byte
 	isIssue3482       bool
+	// remapDb is the effective database remap (role/session/inline merged) for
+	// this statement. It is applied at the AST level to qualified references by
+	// applyRemapDb, and to the current database (for unqualified references) by
+	// TxnCompilerContext.DefaultDatabase. nil when the rewrite feature is off or
+	// no remapdb is configured.
+	remapDb map[string]string
+	// rewriteEnabled is captured once when the request is parsed. It keeps
+	// nested SQL (notably PREPARE ... FROM 'sql'/@var) on the same policy
+	// snapshot even if an earlier statement in the request changes the session
+	// switch before the nested SQL is planned.
+	rewriteEnabled bool
+}
+
+func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
+	previous := execCtx.rootSQLOverride
+	execCtx.rootSQLOverride = &rootSQL
+	defer func() {
+		execCtx.rootSQLOverride = previous
+	}()
+	return fn()
 }
 
 func (execCtx *ExecCtx) Close() {
 	execCtx.reqCtx = nil
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
+	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.tenant = ""
 	execCtx.userName = ""
@@ -621,6 +961,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.rewriteEnabled = false
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -682,6 +1023,7 @@ type feSessionImpl struct {
 	debugStr     string
 	disableTrace bool
 	respr        Responser
+	runSQLTokens []uint64
 	//refreshed once
 	staticTxnInfo string
 	// mysql parser
@@ -690,7 +1032,10 @@ type feSessionImpl struct {
 	// reserved because the connection is still in use in proxy's connection cache.
 	// Default is false, means that the network connection should be closed.
 	reserveConn bool
-	service     string
+	// userLevelLocksMigrated is set after proxy restores this connection on
+	// another CN. The old backend session must not release the migrated locks.
+	userLevelLocksMigrated bool
+	service                string
 
 	//fromRealUser distinguish the sql that the user inputs from the one
 	//that the internal or background program executes
@@ -727,19 +1072,29 @@ func (ses *feSessionImpl) ExitFPrint(idx int) {
 	}
 }
 
-func (ses *feSessionImpl) EnterRunSql() {
-	if ses != nil {
-		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.EnterRunSql()
-		}
+func (ses *feSessionImpl) pushRunSQLToken(token uint64) {
+	if token == 0 {
+		return
 	}
+	ses.runSQLTokens = append(ses.runSQLTokens, token)
 }
-func (ses *feSessionImpl) ExitRunSql() {
-	if ses != nil {
-		if ses.txnHandler != nil && ses.txnHandler.txnOp != nil {
-			ses.txnHandler.txnOp.ExitRunSql()
-		}
+
+func (ses *feSessionImpl) popRunSQLToken() uint64 {
+	n := len(ses.runSQLTokens)
+	if n == 0 {
+		return 0
 	}
+	token := ses.runSQLTokens[n-1]
+	ses.runSQLTokens = ses.runSQLTokens[:n-1]
+	return token
+}
+
+func (ses *feSessionImpl) currentRunSQLToken() uint64 {
+	n := len(ses.runSQLTokens)
+	if n == 0 {
+		return 0
+	}
+	return ses.runSQLTokens[n-1]
 }
 
 // Close releases all reference.
@@ -771,6 +1126,7 @@ func (ses *feSessionImpl) Reset() {
 		ses.txnCompileCtx = nil
 	}
 	ses.sql = ""
+	ses.runSQLTokens = nil
 	ses.gSysVars = nil
 	ses.sesSysVars = nil
 	ses.allResultSet = nil
@@ -1012,6 +1368,10 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
 	}
 
+	// If global vars have not been initialized, fall back to default.
+	if ses.gSysVars == nil {
+		return gSysVarsDefs[name].Default, nil
+	}
 	return ses.gSysVars.Get(name), nil
 }
 
@@ -1054,6 +1414,21 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return err
 	}
 
+	if name == "wait_timeout" || name == "interactive_timeout" {
+		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
+			return err
+		}
+	}
+
+	if name == ProtectedDatabases {
+		if newValue, ok := val.(string); ok && len(protectedDatabaseSetFromString(ses, newValue)) == 0 {
+			oldValue, _ := ses.GetGlobalSysVar(name)
+			if oldString, ok := oldValue.(string); ok && len(protectedDatabaseSetFromString(ses, oldString)) != 0 {
+				return moerr.NewInternalErrorNoCtx("protected_databases cannot be cleared directly")
+			}
+		}
+	}
+
 	// save to table first
 	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
 		return
@@ -1078,11 +1453,29 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	if ses.sesSysVars == nil {
 		return gSysVarsDefs[name].Default, nil
 	}
-	return ses.sesSysVars.Get(name), nil
+	// sesSysVars is a clone of gSysVars (the per-account catalog
+	// snapshot from mo_mysql_compatibility_mode). Sysvars added to
+	// gSysVarsDefs after that snapshot — or never explicitly SET
+	// GLOBAL — are absent from the per-session map; SystemVariables.Get
+	// returns interface{}(nil) on map miss. Falling back to the
+	// registered Default matches MySQL `SELECT @@name` semantics
+	// (session value > global default, never nil for a registered
+	// name) and fixes downstream consumers like sub-Compiles spawned
+	// by CREATE TABLE CLONE that would otherwise see nil for
+	// vector-index sysvars (ivf_threads_build, kmeans_train_percent,
+	// …) and trip BuildIdxcronMetadata or similar nil-rejecting paths.
+	if v := ses.sesSysVars.Get(name); v != nil {
+		return v, nil
+	}
+	return gSysVarsDefs[name].Default, nil
 }
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
+	oldMatrixOneNative := false
+	if name == "sql_mode" {
+		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
+	}
 
 	def, ok := gSysVarsDefs[name]
 	if !ok {
@@ -1101,12 +1494,87 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		return
 	}
 
+	if name == "wait_timeout" || name == "interactive_timeout" {
+		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
+			return err
+		}
+	}
+
+	// Validate remap_rewrites at SET time so an invalid value is rejected up
+	// front and can never be stored. Without this the value would only fail
+	// later in rewriteSQL, which runs on every statement and would make the
+	// session unable to even clear the bad value.
+	if name == "remap_rewrites" {
+		if err = validateRemapRewrites(ctx, val); err != nil {
+			return err
+		}
+	}
+
+	// ensure session system variables container exists in embed/basic cluster
+	if ses.sesSysVars == nil {
+		ses.sesSysVars = &SystemVariables{mp: make(map[string]interface{})}
+	}
+	// Guard: session vars must not share storage with global vars.
+	if ses.gSysVars != nil && ses.sesSysVars == ses.gSysVars {
+		ses.sesSysVars = ses.gSysVars.Clone()
+	}
+
 	if def.UpdateSessVar != nil {
 		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, name, val)
 	} else {
 		ses.sesSysVars.Set(name, val)
 	}
+	if err == nil && name == "sql_mode" {
+		ses.updateSqlModeCaches(oldMatrixOneNative, val)
+	}
+
+	// Update rewriteEnabled cache when enable_remap_hint is changed
+	if err == nil && name == "enable_remap_hint" {
+		if on, convErr := valueIsBoolTrue(val); convErr == nil {
+			ses.rewriteEnabled.Store(on)
+		}
+	}
+
+	// A prepared statement bakes in the rewrite/remap state captured at PREPARE
+	// time (the injected hint and the remapdb applied to its AST). Changing that
+	// state must invalidate the cached prepared statements, otherwise a later
+	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
+	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
+		ses.RemoveAllPrepareStmts()
+	}
 	return
+}
+
+func validateTimeoutLimits(ctx context.Context, ses *Session, name string, val interface{}) error {
+	v, ok := val.(int64)
+	if !ok {
+		return moerr.NewInvalidInputf(ctx, "invalid %s value type", name)
+	}
+
+	pu := getPu(ses.GetService())
+	if pu == nil {
+		return nil
+	}
+
+	var min, max int64
+	switch name {
+	case "wait_timeout":
+		min = pu.SV.WaitTimeoutMin
+		max = pu.SV.WaitTimeoutMax
+	case "interactive_timeout":
+		min = pu.SV.InteractiveTimeoutMin
+		max = pu.SV.InteractiveTimeoutMax
+	default:
+		return nil
+	}
+
+	if min > 0 && v < min {
+		return moerr.NewInvalidInputf(ctx, "%s must be >= %d", name, min)
+	}
+	if max > 0 && v > max {
+		return moerr.NewInvalidInputf(ctx, "%s must be <= %d", name, max)
+	}
+	return nil
 }
 
 func (ses *feSessionImpl) SetSql(sql string) {
@@ -1261,6 +1729,8 @@ type MysqlReader interface {
 	Authenticate(ctx context.Context) error
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+	// Disconnect closes the underlying network connection to forcefully disconnect the client.
+	Disconnect() error
 }
 
 // MysqlWriter write batch & control packets using mysql protocol format

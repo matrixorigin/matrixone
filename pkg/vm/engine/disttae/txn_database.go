@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -166,7 +167,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		return nil, err
 	}
 	if rel == nil {
-		err := moerr.NewNoSuchTable(ctx, db.databaseName, name)
+		err = moerr.NewNoSuchTable(ctx, db.databaseName, name)
 		return nil, err
 	}
 	return rel, nil
@@ -322,6 +323,8 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	}
 
 	{ // 3. delete rows from mo_columns
+		// NOTE: mo_columns entry must immediately follow mo_tables entry for TN's ParseEntryList to work correctly.
+		// The logical_id index entry is written after mo_columns to maintain this ordering.
 		bat, err := catalog.GenDropColumnTuples(rowids, colPKs, txn.proc.Mp())
 		if err != nil {
 			return nil, err
@@ -341,34 +344,20 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 		}
 	}
 
-	// 4. handle map cache
+	{ // 4. sync logical_id index table after mo_columns delete (only for non-alter operations)
+		// This must be after mo_columns to maintain entry ordering for TN's ParseEntryList
+		if !forAlter {
+			if err := db.syncLogicalIdIndexDelete(ctx, toDelTbl.logicalId); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// 5. handle map cache
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)
 	txn.tableCache.Delete(key)
 	txn.tableOps.addDeleteTable(key, txn.statementID, id)
 	return defs, nil
-}
-
-func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error) {
-	if db.op.IsSnapOp() {
-		return 0, moerr.NewInternalErrorNoCtx("truncate table in snapshot transaction")
-	}
-	txn := db.getTxn()
-	newId, err := txn.allocateID(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	defs, err := db.deleteTable(ctx, name, false, false)
-	if err != nil {
-		return 0, err
-	}
-
-	txn.tableOps.addCreatedInTxn(newId, txn.statementID)
-	if err := db.createWithID(ctx, name, newId, defs, false, nil); err != nil {
-		return 0, err
-	}
-
-	return newId, nil
 }
 
 func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
@@ -403,10 +392,11 @@ func (db *txnDatabase) createWithID(
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
-	accountId, userId, roleId, err := getAccessInfo(ctx)
+	accountId, userId, _, err := getAccessInfo(ctx)
 	if err != nil {
 		return err
 	}
+	roleId := getDDLOwnerRoleId(ctx)
 	txn := db.getTxn()
 	m := txn.proc.Mp()
 
@@ -447,7 +437,18 @@ func (db *txnDatabase) createWithID(
 						tbl.createSql = property.Value
 					case catalog.PropSchemaExtra:
 						if extra == nil {
+							// Save current FromPublication value before overwriting
+							fromPub := tbl.extraInfo.FromPublication
 							tbl.extraInfo = api.MustUnmarshalTblExtra([]byte(property.Value))
+							// Restore FromPublication if it was set (in case PropFromPublication was processed first)
+							if fromPub {
+								tbl.extraInfo.FromPublication = true
+							}
+						}
+					case catalog.PropFromPublication:
+						// Store from_publication flag in extraInfo for TN to read
+						if strings.ToLower(property.Value) == "true" {
+							tbl.extraInfo.FromPublication = true
 						}
 					default:
 					}
@@ -497,9 +498,22 @@ func (db *txnDatabase) createWithID(
 	var packer *types.Packer
 	put := db.getEng().packerPool.Get(&packer)
 	defer put.Put()
-	{ // 3. Write create table batch, update tbl.rowiod
+	var logicalId uint64 = tbl.tableId
+	// Check if this is an UPDATE operation (ALTER/TRUNCATE) by looking for LogicalIdKey in context
+	// This is checked once and reused later
+	logicalIdFromCtx := ctx.Value(defines.LogicalIdKey{})
+	isUpdate := logicalIdFromCtx != nil && !strings.HasPrefix(name, catalog.IndexTableNamePrefix)
+	if isUpdate {
+		logicalId = logicalIdFromCtx.(uint64)
+	}
+	tbl.logicalId = logicalId
+	var compositePk []byte // Declared here to be accessible in both block 3 and block 5
+	{                      // 3. Write create table batch, update tbl.rowiod
 
 		db := tbl.db
+		if features.IsPartition(tbl.extraInfo.FeatureFlag) {
+			tbl.relKind = catalog.SystemPartitionRel
+		}
 		arg := catalog.Table{
 			AccountId:     accountId,
 			UserId:        userId,
@@ -517,11 +531,15 @@ func (db *txnDatabase) createWithID(
 			Constraint:    tbl.constraint,
 			Version:       tbl.version,
 			ExtraInfo:     api.MustMarshalTblExtra(tbl.extraInfo),
+			LogicalId:     logicalId,
 		}
 		bat, err := catalog.GenCreateTableTuple(arg, m, packer)
 		if err != nil {
 			return err
 		}
+
+		compositePk = bat.Vecs[catalog.MO_TABLES_CPKEY_IDX].GetBytesAt(0)
+
 		note := noteForCreate(tbl.tableId, tbl.tableName)
 		if useAlterNote {
 			note = noteForAlterIns(tbl.tableId, tbl.tableName)
@@ -535,6 +553,8 @@ func (db *txnDatabase) createWithID(
 	}
 
 	{ // 4. Write create column batch
+		// NOTE: mo_columns entry must immediately follow mo_tables entry for TN's ParseEntryList to work correctly.
+		// The logical_id index entry is written after mo_columns to maintain this ordering.
 		bat, err := catalog.GenCreateColumnTuples(cols, m, packer)
 		if err != nil {
 			return err
@@ -552,7 +572,13 @@ func (db *txnDatabase) createWithID(
 		}
 	}
 
-	// 5. handle map cache
+	{ // 5. Write logical_id index entry (after mo_columns to maintain entry ordering for TN)
+		if err = db.syncLogicalIdIndexInsert(ctx, logicalId, compositePk, isUpdate); err != nil {
+			return err
+		}
+	}
+
+	// 6. handle map cache
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)
 	txn.tableOps.addCreateTable(key, txn.statementID, tbl)
 	return nil
@@ -669,4 +695,84 @@ func (db *txnDatabase) getTableItem(
 		return tableitem, nil
 	}
 	return &item, nil
+}
+
+// syncLogicalIdIndexInsert synchronizes the logical_id index table for INSERT/UPDATE operations
+func (db *txnDatabase) syncLogicalIdIndexInsert(
+	ctx context.Context,
+	logicalId uint64,
+	compositePk []byte,
+	isUpdate bool,
+) error {
+	txn := db.getTxn()
+	m := txn.proc.Mp()
+
+	// For UPDATE operations (ALTER/TRUNCATE), we need to delete the old record first
+	if isUpdate {
+		if err := db.syncLogicalIdIndexDelete(ctx, logicalId); err != nil {
+			return err
+		}
+	}
+
+	// Generate and execute INSERT batch for index table
+	bat, err := catalog.GenLogicalIdIndexInsertBatch(logicalId, compositePk, m)
+	if err != nil {
+		return err
+	}
+	// Note: Do NOT clean bat here. WriteBatch stores the batch reference in txn.writes,
+	// and the batch lifecycle is managed by the transaction (cleaned on commit/rollback).
+
+	note := fmt.Sprintf("sync logical_id index insert %d", logicalId)
+	_, err = txn.WriteBatch(
+		INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, bat, txn.tnStores[0])
+	if err != nil {
+		bat.Clean(m)
+	}
+	return err
+}
+
+// syncLogicalIdIndexDelete synchronizes the logical_id index table for DELETE operations
+func (db *txnDatabase) syncLogicalIdIndexDelete(
+	ctx context.Context,
+	logicalId uint64,
+) error {
+	txn := db.getTxn()
+	m := txn.proc.Mp()
+
+	// Query the rowid from index table
+	sql := fmt.Sprintf(catalog.LogicalIdIndexRowidQueryFormat,
+		catalog.MO_CATALOG, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME,
+		catalog.IndexTableIndexColName, logicalId)
+
+	res, err := execReadSql(ctx, db.op, sql, true)
+	if err != nil {
+		logutil.Infof("LIDX-DEBUG syncLogicalIdIndexDelete query error: logicalId=%d, err=%v", logicalId, err)
+		return err
+	}
+	defer res.Close()
+
+	if len(res.Batches) == 0 || res.Batches[0].Vecs[0].Length() == 0 {
+		return nil
+	}
+
+	rowid := vector.GetFixedAtNoTypeCheck[types.Rowid](res.Batches[0].Vecs[0], 0)
+
+	// Generate DELETE batch for index table
+	bat, err := catalog.GenLogicalIdIndexDeleteBatch(rowid, logicalId, m)
+	if err != nil {
+		return err
+	}
+
+	// Use deleteBatch to filter out rows that were created in this txn (same pattern as deleteTable)
+	if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID); bat.RowCount() > 0 {
+		note := fmt.Sprintf("sync logical_id index delete %d", logicalId)
+		if _, err = txn.WriteBatch(
+			DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID,
+			catalog.MO_CATALOG, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, bat, txn.tnStores[0]); err != nil {
+			bat.Clean(m)
+			return err
+		}
+	}
+	return nil
 }

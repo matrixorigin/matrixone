@@ -1,0 +1,307 @@
+drop database if exists fojdb;
+create database fojdb;
+use fojdb;
+drop table if exists l;
+drop table if exists r;
+create table l (k int, lv varchar(8));
+create table r (k int, rv varchar(8));
+insert into l values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(null,'lN');
+insert into r values (3,'C'),(4,'D'),(5,'E'),(6,'F'),(null,'rN');
+select l.k as lk, lv, r.k as rk, rv
+from l full outer join r on l.k = r.k
+order by lk, rk, lv, rv;
+➤ lk[4,32,0]  ¦  lv[12,-1,0]  ¦  rk[4,32,0]  ¦  rv[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  rN  𝄀
+null  ¦  lN  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  5  ¦  E  𝄀
+null  ¦  null  ¦  6  ¦  F  𝄀
+1  ¦  a  ¦  null  ¦  null  𝄀
+2  ¦  b  ¦  null  ¦  null  𝄀
+3  ¦  c  ¦  3  ¦  C  𝄀
+4  ¦  d  ¦  4  ¦  D
+select count(*) as total,
+sum(case when l.k is not null and r.k is not null then 1 else 0 end) as matched,
+sum(case when l.k is null then 1 else 0 end) as unmatched_right_or_lk_null,
+sum(case when r.k is null then 1 else 0 end) as unmatched_left_or_rk_null
+from l full outer join r on l.k = r.k;
+➤ total[-5,64,0]  ¦  matched[-5,64,0]  ¦  unmatched_right_or_lk_null[-5,64,0]  ¦  unmatched_left_or_rk_null[-5,64,0]  𝄀
+8  ¦  2  ¦  4  ¦  4
+select l.k as lk, r.k as rk
+from l full outer join r on l.k = r.k
+where l.k is not null
+order by lk;
+➤ lk[4,32,0]  ¦  rk[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  3  𝄀
+4  ¦  4
+drop table if exists e;
+create table e (k int);
+select l.k as lk, e.k as ek from e full outer join l on e.k = l.k order by lk;
+➤ lk[4,32,0]  ¦  ek[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
+select l.k as lk, e.k as ek from l full outer join e on l.k = e.k order by lk;
+➤ lk[4,32,0]  ¦  ek[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
+select * from e a full outer join e b on a.k = b.k;
+➤ k[4,32,0]  ¦  k[4,32,0]
+drop table if exists ld;
+drop table if exists rd;
+create table ld (k1 int, k2 int, v int);
+create table rd (k1 int, k2 int, v int);
+insert into ld values (1,1,10),(1,1,11),(2,2,20),(3,3,30);
+insert into rd values (1,1,100),(1,1,101),(2,2,200),(4,4,400);
+select ld.k1, ld.k2, ld.v, rd.v
+from ld full outer join rd on ld.k1=rd.k1 and ld.k2=rd.k2
+order by coalesce(ld.k1,rd.k1), coalesce(ld.k2,rd.k2), ld.v, rd.v;
+➤ k1[4,32,0]  ¦  k2[4,32,0]  ¦  v[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  ¦  10  ¦  100  𝄀
+1  ¦  1  ¦  10  ¦  101  𝄀
+1  ¦  1  ¦  11  ¦  100  𝄀
+1  ¦  1  ¦  11  ¦  101  𝄀
+2  ¦  2  ¦  20  ¦  200  𝄀
+3  ¦  3  ¦  30  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  400
+select coalesce(l.k, r.k) as key_,
+case when l.k is null then 'R-only'
+when r.k is null then 'L-only'
+else 'both' end as origin,
+lv, rv
+from l full outer join r on l.k = r.k
+order by key_, origin, lv, rv;
+➤ key_[4,32,0]  ¦  origin[12,-1,0]  ¦  lv[12,-1,0]  ¦  rv[12,-1,0]  𝄀
+null  ¦  R-only  ¦  null  ¦  rN  𝄀
+null  ¦  R-only  ¦  lN  ¦  null  𝄀
+1  ¦  L-only  ¦  a  ¦  null  𝄀
+2  ¦  L-only  ¦  b  ¦  null  𝄀
+3  ¦  both  ¦  c  ¦  C  𝄀
+4  ¦  both  ¦  d  ¦  D  𝄀
+5  ¦  R-only  ¦  null  ¦  E  𝄀
+6  ¦  R-only  ¦  null  ¦  F
+select origin, count(*) as c
+from (select case when l.k is null then 'R-only'
+when r.k is null then 'L-only'
+else 'both' end as origin
+from l full outer join r on l.k = r.k) t
+group by origin order by origin;
+➤ origin[12,-1,0]  ¦  c[-5,64,0]  𝄀
+L-only  ¦  2  𝄀
+R-only  ¦  4  𝄀
+both  ¦  2
+select l.k as lk, r.k as rk, rv
+from l full outer join r on l.k = r.k and r.rv <> 'C'
+order by lk, rk, rv;
+➤ lk[4,32,0]  ¦  rk[4,32,0]  ¦  rv[12,-1,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  rN  𝄀
+null  ¦  3  ¦  C  𝄀
+null  ¦  5  ¦  E  𝄀
+null  ¦  6  ¦  F  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  4  ¦  D
+drop table if exists big_l;
+drop table if exists big_r;
+create table big_l (k int);
+create table big_r (k int);
+insert into big_l select * from generate_series(1, 5000) g;
+insert into big_r select * from generate_series(2500, 7500) g;
+select count(*) as total,
+sum(case when big_l.k is not null and big_r.k is not null then 1 else 0 end) as matched,
+sum(case when big_l.k is null then 1 else 0 end) as unmatched_right,
+sum(case when big_r.k is null then 1 else 0 end) as unmatched_left
+from big_l full outer join big_r on big_l.k = big_r.k;
+➤ total[-5,64,0]  ¦  matched[-5,64,0]  ¦  unmatched_right[-5,64,0]  ¦  unmatched_left[-5,64,0]  𝄀
+7500  ¦  2501  ¦  2500  ¦  2499
+select count(*) from l full join r on l.k = r.k;
+➤ count(*)[-5,64,0]  𝄀
+8
+select count(*) as total,
+sum(case when l.k is not null and r.k is not null then 1 else 0 end) as matched,
+sum(case when l.k is null then 1 else 0 end) as unmatched_build_or_lk_null,
+sum(case when r.k is null then 1 else 0 end) as unmatched_probe_or_rk_null
+from l full outer join r on l.k > r.k;
+➤ total[-5,64,0]  ¦  matched[-5,64,0]  ¦  unmatched_build_or_lk_null[-5,64,0]  ¦  unmatched_probe_or_rk_null[-5,64,0]  𝄀
+9  ¦  1  ¦  5  ¦  5
+select l.k as lk, e.k as ek
+from l full outer join e on l.k > e.k
+order by lk;
+➤ lk[4,32,0]  ¦  ek[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
+select e.k as ek, l.k as lk
+from e full outer join l on e.k > l.k
+order by lk;
+➤ ek[4,32,0]  ¦  lk[4,32,0]  𝄀
+null  ¦  null  𝄀
+null  ¦  1  𝄀
+null  ¦  2  𝄀
+null  ¦  3  𝄀
+null  ¦  4
+drop table if exists u1;
+drop table if exists u2;
+drop table if exists u3;
+create table u1(id int, v varchar(4));
+create table u2(id int, v varchar(4));
+create table u3(id int, v varchar(4));
+insert into u1 values (1,'a'),(2,'b'),(3,'c');
+insert into u2 values (2,'B'),(3,'C'),(4,'D');
+insert into u3 values (3,'x'),(4,'y'),(5,'z');
+select id from u1 full outer join u2 using(id) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select * from u1 full outer join u2 using(id) order by id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  a  ¦  null  𝄀
+2  ¦  b  ¦  B  𝄀
+3  ¦  c  ¦  C  𝄀
+4  ¦  null  ¦  D
+select id from u1 full outer join u2 using(id) where id = 4;
+➤ id[4,32,0]  𝄀
+4
+select id from u1 full outer join u2 using(id) where id = 1;
+➤ id[4,32,0]  𝄀
+1
+select id, count(*) from u1 full outer join u2 using(id) group by id order by id;
+➤ id[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  1
+select id from (u1 full outer join u2 using(id)) full outer join u3 using(id)
+order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5
+select u1.id as l_id, u2.id as r_id
+from u1 full outer join u2 using(id)
+order by l_id, r_id;
+➤ l_id[4,32,0]  ¦  r_id[4,32,0]  𝄀
+null  ¦  4  𝄀
+1  ¦  null  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+select id from u1 inner join u2 using(id) order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from (u1 full outer join u2 using(id)) inner join u3 using(id)
+order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+select id from (u1 full outer join u2 using(id)) left join u3 using(id)
+order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select * from (u1 full outer join u2 using(id)) full outer join u3 using(id)
+order by id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  v[12,-1,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  a  ¦  null  ¦  null  𝄀
+2  ¦  b  ¦  B  ¦  null  𝄀
+3  ¦  c  ¦  C  ¦  x  𝄀
+4  ¦  null  ¦  D  ¦  y  𝄀
+5  ¦  null  ¦  null  ¦  z
+drop table if exists s1;
+drop table if exists s2;
+create table s1(id int);
+create table s2(id int);
+insert into s1 values (3),(4),(6);
+insert into s2 values (4),(5),(6);
+select * from (u1 full outer join u2 using(id)),
+(s1 full outer join s2 using(id))
+order by 1, 2, 3, 4;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  v[12,-1,0]  ¦  id[4,32,0]  𝄀
+1  ¦  a  ¦  null  ¦  3  𝄀
+1  ¦  a  ¦  null  ¦  4  𝄀
+1  ¦  a  ¦  null  ¦  5  𝄀
+1  ¦  a  ¦  null  ¦  6  𝄀
+2  ¦  b  ¦  B  ¦  3  𝄀
+2  ¦  b  ¦  B  ¦  4  𝄀
+2  ¦  b  ¦  B  ¦  5  𝄀
+2  ¦  b  ¦  B  ¦  6  𝄀
+3  ¦  c  ¦  C  ¦  3  𝄀
+3  ¦  c  ¦  C  ¦  4  𝄀
+3  ¦  c  ¦  C  ¦  5  𝄀
+3  ¦  c  ¦  C  ¦  6  𝄀
+4  ¦  null  ¦  D  ¦  3  𝄀
+4  ¦  null  ¦  D  ¦  4  𝄀
+4  ¦  null  ¦  D  ¦  5  𝄀
+4  ¦  null  ¦  D  ¦  6
+drop table s1;
+drop table s2;
+drop table u1;
+drop table u2;
+drop table u3;
+drop table if exists n1;
+drop table if exists n2;
+create table n1(id int, v varchar(4));
+create table n2(id int, v varchar(4));
+insert into n1 values (1,'a'),(2,'b');
+insert into n2 values (2,'B'),(3,'C');
+select id from n1 natural full outer join n2 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+2  𝄀
+3
+select id from n1 natural full join n2 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+2  𝄀
+3
+select * from n1 natural full outer join n2 order by id, v;
+➤ id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  B  𝄀
+2  ¦  b  𝄀
+3  ¦  C
+drop table n1;
+drop table n2;
+create table fj_o1(s int, v varchar(5));
+create table fj_o2(s int, v varchar(5));
+insert into fj_o1 values (1,'a'),(5,'b'),(NULL,'x');
+insert into fj_o2 values (13,'c'),(14,NULL);
+select fj_o1.s, fj_o1.v, fj_o2.s, fj_o2.v
+from fj_o1 full outer join fj_o2 on fj_o1.s = fj_o2.s
+order by fj_o1.s, fj_o2.s, fj_o1.v, fj_o2.v;
+➤ s[4,32,0]  ¦  v[12,-1,0]  ¦  s[4,32,0]  ¦  v[12,-1,0]  𝄀
+null  ¦  x  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  13  ¦  c  𝄀
+null  ¦  null  ¦  14  ¦  null  𝄀
+1  ¦  a  ¦  null  ¦  null  𝄀
+5  ¦  b  ¦  null  ¦  null
+select fj_o1.s, fj_o2.s
+from fj_o1 full outer join fj_o2 on fj_o1.s = fj_o2.s
+order by fj_o1.s, fj_o2.s desc;
+➤ s[4,32,0]  ¦  s[4,32,0]  𝄀
+null  ¦  14  𝄀
+null  ¦  13  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+5  ¦  null
+drop table fj_o1;
+drop table fj_o2;
+drop database fojdb;

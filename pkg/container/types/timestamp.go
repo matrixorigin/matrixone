@@ -35,6 +35,7 @@ package types
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -50,13 +51,20 @@ var (
 var TimestampMinValue Timestamp
 var TimestampMaxValue Timestamp
 
+const ZeroTimestamp = Timestamp(-1)
+
 // the range for TIMESTAMP values is '1970-01-01 00:00:01.000000' to '2038-01-19 03:14:07.999999'.
+// Note: TimestampMinValue enforces the minimum, but TimestampMaxValue is set to 9999-12-31
+// to allow values beyond MySQL's 2038 limit (we don't enforce maximum value restriction).
 func init() {
 	TimestampMinValue = FromClockUTC(1970, 1, 1, 0, 0, 1, 0)
 	TimestampMaxValue = FromClockUTC(9999, 12, 31, 23, 59, 59, 999999)
 }
 
 func (ts Timestamp) String() string {
+	if ts == ZeroTimestamp {
+		return "0000-00-00 00:00:00.000000 UTC"
+	}
 	dt := Datetime(int64(ts))
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
@@ -66,12 +74,18 @@ func (ts Timestamp) String() string {
 
 // String2 stringify timestamp, including its fractional seconds precision part(fsp)
 func (ts Timestamp) String2(loc *time.Location, scale int32) string {
+	if ts == ZeroTimestamp {
+		if scale > 0 {
+			return "0000-00-00 00:00:00." + strings.Repeat("0", int(scale))
+		}
+		return "0000-00-00 00:00:00"
+	}
 	t := time.UnixMicro(int64(ts) - unixEpochMicroSecs).In(loc)
 	y, m, d := t.Date()
 	hour, minute, sec := t.Clock()
 	if scale > 0 {
 		msec := t.Nanosecond() / 1000
-		msecInstr := fmt.Sprintf("%06d\n", msec)
+		msecInstr := fmt.Sprintf("%06d", msec)
 		msecInstr = msecInstr[:scale]
 
 		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d"+"."+msecInstr, y, m, d, hour, minute, sec)
@@ -81,18 +95,30 @@ func (ts Timestamp) String2(loc *time.Location, scale int32) string {
 }
 
 func (ts Timestamp) Unix() int64 {
+	if ts == ZeroTimestamp {
+		return -1
+	}
 	return (int64(ts) - unixEpochMicroSecs) / MicroSecsPerSec
 }
 
 func (ts Timestamp) UnixToFloat() float64 {
+	if ts == ZeroTimestamp {
+		return -1
+	}
 	return float64(int64(ts)-unixEpochMicroSecs) / MicroSecsPerSec
 }
 
 func (ts Timestamp) UnixToDecimal64() (Decimal64, error) {
+	if ts == ZeroTimestamp {
+		return Decimal64(^uint64(0)), nil
+	}
 	return Decimal64(int64(ts) - unixEpochMicroSecs), nil
 }
 
 func (ts Timestamp) UnixToDecimal128() (Decimal128, error) {
+	if ts == ZeroTimestamp {
+		return Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0)}, nil
+	}
 	return Decimal128{uint64(int64(ts) - unixEpochMicroSecs), 0}, nil
 }
 
@@ -115,9 +141,22 @@ func getMsec(msecStr string, scale int32) (uint32, uint32, error) {
 		}
 		msecStr = msecStr[:scale]
 	} else if len(msecStr) < int(scale) {
-		lengthMsecStr := len(msecStr)
-		padZeros := int(scale) - lengthMsecStr
-		msecStr = msecStr + FillString[padZeros]
+		// Avoid string allocation: parse as-is then multiply by 10^padZeros
+		// to simulate right-padding with zeros.
+		padZeros := int(scale) - len(msecStr)
+		m, err := strconv.ParseUint(msecStr, 10, 64)
+		if err != nil {
+			return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
+		}
+		for i := 0; i < padZeros; i++ {
+			m *= 10
+		}
+		msecs = uint32(m) * scaleTable[scale]
+		if msecs == OneSecInMicroSeconds {
+			carry = 1
+			msecs = 0
+		}
+		return msecs, carry, nil
 	}
 	if len(msecStr) == 0 { // this means the scale is 0
 		return 0, msecCarry, nil
@@ -143,6 +182,9 @@ func ParseTimestamp(loc *time.Location, s string, scale int32) (Timestamp, error
 	dt, err := ParseDatetime(s, scale)
 	if err != nil {
 		return -1, moerr.NewInvalidArgNoCtx("parse timestamp", s)
+	}
+	if dt == ZeroDatetime {
+		return ZeroTimestamp, nil
 	}
 
 	result := dt.ToTimestamp(loc)
@@ -179,10 +221,18 @@ func TimestampToDatetime(loc *time.Location, xs []Timestamp, rs []Datetime) ([]D
 	if len(locPtr.zone) == 1 {
 		offset := int64(locPtr.zone[0].offset) * MicroSecsPerSec
 		for i, x := range xsInInt64 {
-			rsInInt64[i] = x + offset
+			if Timestamp(x) == ZeroTimestamp {
+				rsInInt64[i] = int64(ZeroDatetime)
+			} else {
+				rsInInt64[i] = x + offset
+			}
 		}
 	} else {
 		for i, x := range xsInInt64 {
+			if Timestamp(x) == ZeroTimestamp {
+				rsInInt64[i] = int64(ZeroDatetime)
+				continue
+			}
 			t := time.UnixMicro(x - unixEpochMicroSecs).In(loc)
 			_, offset := t.Zone()
 			rsInInt64[i] = x + int64(offset)*MicroSecsPerSec
@@ -192,9 +242,33 @@ func TimestampToDatetime(loc *time.Location, xs []Timestamp, rs []Datetime) ([]D
 }
 
 func (ts Timestamp) ToDatetime(loc *time.Location) Datetime {
+	if ts == ZeroTimestamp {
+		return ZeroDatetime
+	}
 	t := time.UnixMicro(int64(ts) - unixEpochMicroSecs).In(loc)
 	_, offset := t.Zone()
 	return Datetime(ts) + Datetime(offset)*MicroSecsPerSec
+}
+
+// TruncateToScale truncates a timestamp to the given scale (0-6).
+// Scale represents fractional seconds precision:
+//   - 0: seconds (no fractional part)
+//   - 1-5: fractional seconds with corresponding precision
+//   - 6: microseconds (full precision, no truncation)
+func (ts Timestamp) TruncateToScale(scale int32) Timestamp {
+	if ts == ZeroTimestamp {
+		return ZeroTimestamp
+	}
+	if scale == 6 {
+		return ts
+	}
+	divisor := int64(scaleTable[scale])
+	base := int64(ts) / divisor
+	// Round up if the next digit >= 5
+	if int64(ts)%divisor/(divisor/10) >= 5 {
+		base += 1
+	}
+	return Timestamp(base * divisor)
 }
 
 // FromClockUTC gets the utc time value in Timestamp
@@ -214,8 +288,10 @@ func CurrentTimestamp() Timestamp {
 	return Timestamp(time.Now().UnixMicro() + unixEpochMicroSecs)
 }
 
+// ValidTimestamp reports whether a value is representable by a TIMESTAMP column.
+// The zero sentinel remains subject to the statement's sql_mode policy.
 func ValidTimestamp(timestamp Timestamp) bool {
-	return timestamp > TimestampMinValue
+	return timestamp == ZeroTimestamp || timestamp >= TimestampMinValue
 }
 
 func UnixToTimestamp(ts int64) Timestamp {

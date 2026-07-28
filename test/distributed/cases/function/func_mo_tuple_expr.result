@@ -1,0 +1,60 @@
+select mo_tuple_expr(NULL) as result;
+result
+null
+select mo_tuple_expr('invalid_bytes') as result;
+result
+null
+select mo_tuple_expr('') as result;
+result
+()
+drop database if exists test_tuple;
+create database test_tuple;
+use test_tuple;
+create table products (
+id int primary key,
+name varchar(50),
+price decimal(10,2),
+quantity int,
+discount decimal(5,2),
+category varchar(20),
+key idx_name_qty (name, quantity),
+key idx_price_qty (price, quantity),
+key idx_cat_discount (category, discount)
+);
+insert into products values
+(1, 'Apple', 12.50, 100, 0.10, 'Fruit'),
+(2, 'Banana', 8.30, 150, 0.15, 'Fruit'),
+(3, 'Laptop', 1299.99, 20, 0.05, 'Electronics');
+select count(distinct name) as index_count
+from mo_catalog.mo_indexes
+where name in ('idx_name_qty', 'idx_price_qty', 'idx_cat_discount');
+index_count
+3
+set @tbl1 = (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx_name_qty' limit 1);
+set @sql1 = concat('select mo_tuple_expr(__mo_index_idx_col) as decoded_tuple from test_tuple.`', @tbl1, '` order by __mo_index_pri_col');
+prepare stmt1 from @sql1;
+execute stmt1;
+decoded_tuple
+(Apple, 100, 1)
+(Banana, 150, 2)
+(Laptop, 20, 3)
+deallocate prepare stmt1;
+set @tbl2 = (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx_price_qty' limit 1);
+set @sql2 = concat('select mo_tuple_expr(__mo_index_idx_col) as decoded_tuple from test_tuple.`', @tbl2, '` order by __mo_index_pri_col');
+prepare stmt2 from @sql2;
+execute stmt2;
+decoded_tuple
+(1250, 100, 1)
+(830, 150, 2)
+(129999, 20, 3)
+deallocate prepare stmt2;
+set @tbl3 = (select distinct index_table_name from mo_catalog.mo_indexes where name = 'idx_cat_discount' limit 1);
+set @sql3 = concat('select mo_tuple_expr(__mo_index_idx_col) as decoded_tuple from test_tuple.`', @tbl3, '` order by __mo_index_pri_col');
+prepare stmt3 from @sql3;
+execute stmt3;
+decoded_tuple
+(Fruit, 10, 1)
+(Fruit, 15, 2)
+(Electronics, 5, 3)
+deallocate prepare stmt3;
+drop database if exists test_tuple;

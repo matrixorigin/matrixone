@@ -1,0 +1,5 @@
+show cdc;
+show cdc all;
+drop cdc if exists cdc_not_exist;
+--error
+drop cdc cdc_not_exist;

@@ -17,8 +17,10 @@ package tables
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	api "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -26,7 +28,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestValidatePersistedCommitTSVectors(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	valid := containers.MakeVector(types.T_TS.ToType(), mp)
+	valid.Append(types.BuildTS(1, 0), false)
+	got, err := validatePersistedCommitTSVectors(
+		"valid",
+		[]containers.Vector{valid},
+	)
+	require.NoError(t, err)
+	require.Same(t, valid, got)
+	got.Close()
+	require.Zero(t, mp.CurrNB())
+
+	for _, test := range []struct {
+		name    string
+		vectors func() []containers.Vector
+	}{
+		{
+			name: "empty",
+			vectors: func() []containers.Vector {
+				return nil
+			},
+		},
+		{
+			name: "nil vector",
+			vectors: func() []containers.Vector {
+				return []containers.Vector{nil}
+			},
+		},
+		{
+			name: "wrong type is released",
+			vectors: func() []containers.Vector {
+				vec := containers.MakeVector(types.T_int64.ToType(), mp)
+				vec.Append(int64(1), false)
+				return []containers.Vector{vec}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := validatePersistedCommitTSVectors(
+				"bad",
+				test.vectors(),
+			)
+			require.ErrorContains(t, err, "bad commits layout")
+			require.Nil(t, got)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
 
 func TestGetActiveRow(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -78,4 +132,65 @@ func TestGetActiveRow(t *testing.T) {
 	err := idx.BatchUpsert(vec.GetDownstreamVector(), 0)
 	assert.NoError(t, err)
 	blk.node.Load().MustMNode().pkIndex = idx
+}
+
+func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
+	defer testutils.AfterTest(t)()
+
+	oldSchema := catalog.MockSchema(2, 0)
+	newSchema := oldSchema.Clone()
+	require.NoError(t, newSchema.ApplyAlterTable(
+		api.NewAddColumnReq(0, 0, "added_flag", types.NewProtoType(types.T_int8), 2),
+	))
+
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(oldSchema, nil, nil)
+	require.NoError(t, err)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, err := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	require.NoError(t, err)
+
+	mvcc := updates.NewAppendMVCCHandle(obj)
+	b := &baseObject{
+		RWMutex:    mvcc.RWMutex,
+		appendMVCC: mvcc,
+	}
+	b.meta.Store(obj)
+
+	mnode := &memoryNode{
+		object:      b,
+		writeSchema: newSchema,
+	}
+
+	bat := containers.BuildBatch(
+		oldSchema.AllNames(),
+		oldSchema.AllTypes(),
+		containers.Options{Allocator: common.DefaultAllocator},
+	)
+	defer bat.Close()
+	for _, vec := range bat.Vecs {
+		vec.Append(nil, true)
+	}
+
+	from, err := mnode.ApplyAppendLocked(bat)
+	require.NoError(t, err)
+	require.Equal(t, 0, from)
+
+	for _, vec := range mnode.data.Vecs {
+		require.Equal(t, bat.Length(), vec.Length())
+	}
+	addedVec := mnode.data.GetVectorByName("added_flag")
+	require.Equal(t, bat.Length(), addedVec.Length())
+	require.True(t, addedVec.IsNull(0))
+
+	pool := containers.NewVectorPool("upgrade-compat", 4, containers.WithMPool(common.DefaultAllocator))
+	require.NotPanics(t, func() {
+		win := mnode.data.CloneWindowWithPool(0, bat.Length(), pool)
+		win.Close()
+	})
 }

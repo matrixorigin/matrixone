@@ -19,8 +19,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -40,13 +43,14 @@ type ColumnMetaFetcher interface {
 	MustGetColumn(seqnum uint16) ColumnMeta
 }
 
-type ReadFilterSearchFuncType func(*vector.Vector) []int64
+type ReadFilterSearchFuncType func(containers.Vectors) []int64
 
 type BlockReadFilter struct {
 	HasFakePK          bool
 	Valid              bool
 	SortedSearchFunc   ReadFilterSearchFuncType
 	UnSortedSearchFunc ReadFilterSearchFuncType
+	Cleanup            func() // Cleanup function to release resources (e.g., reusableTempVec)
 }
 
 func (f BlockReadFilter) DecideSearchFunc(isSortedBlk bool) ReadFilterSearchFuncType {
@@ -59,6 +63,41 @@ func (f BlockReadFilter) DecideSearchFunc(isSortedBlk bool) ReadFilterSearchFunc
 	}
 
 	return nil
+}
+
+type Float64Heap []float64
+
+func (h Float64Heap) Len() int           { return len(h) }
+func (h Float64Heap) Less(i, j int) bool { return h[i] > h[j] }
+func (h Float64Heap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+func (h *Float64Heap) Push(x any) {
+	*h = append(*h, x.(float64))
+}
+
+func (h *Float64Heap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
+}
+
+type IndexReaderTopOp struct {
+	Typ          types.T
+	MetricType   metric.MetricType
+	ColPos       int32
+	NumVec       []byte
+	Limit        uint64
+	OrderedLimit bool
+	Desc         bool
+
+	LowerBoundType plan.BoundType
+	UpperBoundType plan.BoundType
+	LowerBound     float64
+	UpperBound     float64
+
+	DistHeap Float64Heap
 }
 
 type WriteOptions struct {

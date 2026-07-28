@@ -19,19 +19,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func Test_container_reset(t *testing.T) {
-	bat := batch.New([]string{"id"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
-	buildBat := batch.New([]string{"id"})
-	buildBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
+	proc := testutil.NewProcess(t)
 
-	proc := &process.Process{
-		Base: &process.BaseProcess{},
-	}
-	proc.SetMPool(testutil.TestUtilMp)
+	bat := batch.New([]string{"id"})
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	buildBat := batch.New([]string{"id"})
+	buildBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
 
 	c := &container{
 		n:                       0,

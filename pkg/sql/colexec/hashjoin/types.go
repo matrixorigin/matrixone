@@ -1,0 +1,359 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package hashjoin
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+var _ vm.Operator = new(HashJoin)
+
+const (
+	Build = iota
+	Probe
+	SyncBitmap
+	Finalize
+	End
+)
+
+type probeState int
+
+const (
+	psNextBatch probeState = iota
+	psSelsForOneRow
+	psBatchRow
+)
+
+type container struct {
+	state       int
+	itr         hashmap.Iterator
+	rightBats   []*batch.Batch
+	rightRowCnt int64
+	// globalBuildRowCnt is independent of the currently loaded spill bucket.
+	// MARK join needs the global empty-build fact for SQL three-valued logic.
+	globalBuildRowCnt int64
+
+	leftBat *batch.Batch
+	resBat  *batch.Batch
+
+	lastIdx int
+	// process idx for zvs and vs, which returned by hashmap.Iterator.Find()
+	// guarantee: vs[ctr.vsIdx] is the result of inbat[ctr.lastIdx]
+	vsIdx int
+	zvs   []int64
+	vs    []uint64
+	sels  []int32
+
+	leftRowMatched bool
+
+	probeState probeState
+
+	// Pre-computed per-query flags — avoid method calls in per-row probe loop.
+	probeHashOnPK      bool // HashOnPK || mp.HashOnUnique()
+	probeEmitUnmatched bool // EmitUnmatchedProbe()
+	probeRightSemiAnti bool // !IsRightSemi() && !IsAnti()
+	probeRightJoin     bool
+	probeSingle        bool
+	probeLeftSingle    bool
+	probeLeftSemi      bool
+	probeLeftAnti      bool
+	probeMark          bool
+	buildHasNullKey    bool
+
+	nonEqCondExec colexec.ExpressionExecutor
+
+	joinBats []*batch.Batch
+	cfs1     []func(*vector.Vector, *vector.Vector, int64, int) error
+	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
+
+	eqCondExecs []colexec.ExpressionExecutor
+	eqCondVecs  []*vector.Vector
+
+	skipProbe bool
+
+	mp *message.JoinMap
+
+	rightRowsMatched *bitmap.Bitmap
+	rightMatchedIter bitmap.Iterator
+	bitmapSynced     bool
+
+	maxAllocSize int64
+
+	// spill support
+	spillEngine       *spillutil.SpillEngine
+	spillThreshold    int64
+	probeBucketActive bool // true while reading probe batches from a bucket
+}
+
+type HashJoin struct {
+	ctr container
+
+	JoinType    plan.Node_JoinType
+	IsRightJoin bool
+
+	ResultCols []colexec.ResultPos
+	LeftTypes  []types.Type
+	RightTypes []types.Type
+	NonEqCond  *plan.Expr
+	EqConds    [][]*plan.Expr
+
+	Channel chan *bitmap.Bitmap
+	NumCPU  uint64
+
+	HashOnPK     bool
+	CanSkipProbe bool
+
+	IsShuffle  bool
+	ShuffleIdx int32
+
+	IsMerger           bool
+	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	JoinMapTag         int32
+	SpillThreshold     int64
+
+	vm.OperatorBase
+}
+
+func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
+	return &hashJoin.OperatorBase
+}
+
+func (hashJoin *HashJoin) NeedBuildBatches() bool {
+	if hashJoin.NonEqCond != nil {
+		return true
+	}
+	for _, rp := range hashJoin.ResultCols {
+		if rp.Rel == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func init() {
+	reuse.CreatePool[HashJoin](
+		func() *HashJoin {
+			return &HashJoin{}
+		},
+		func(a *HashJoin) {
+			*a = HashJoin{}
+		},
+		reuse.DefaultOptions[HashJoin]().
+			WithEnableChecker(),
+	)
+}
+
+func (hashJoin HashJoin) TypeName() string {
+	return opName
+}
+
+func NewArgument() *HashJoin {
+	return reuse.Alloc[HashJoin](nil)
+}
+
+func (hashJoin *HashJoin) Release() {
+	if hashJoin != nil {
+		reuse.Free[HashJoin](hashJoin, nil)
+	}
+}
+
+func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
+func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &hashJoin.ctr
+	ctr.itr = nil
+	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
+		hashJoin.Channel <- nil
+	}
+	ctr.resetEqCondExecutors()
+	ctr.cleanBucketBatches(proc)
+	ctr.cleanHashMap()
+	ctr.resetNonEqCondExecutor()
+	ctr.rightRowsMatched = nil
+	ctr.rightMatchedIter = nil
+	ctr.skipProbe = false
+	ctr.bitmapSynced = false
+	ctr.probeMark = false
+	ctr.buildHasNullKey = false
+	ctr.globalBuildRowCnt = 0
+	ctr.state = Build
+	ctr.probeState = psNextBatch
+	ctr.lastIdx = 0
+
+	if hashJoin.OpAnalyzer != nil {
+		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+	}
+	ctr.leftBat = nil
+	ctr.maxAllocSize = 0
+}
+
+func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	ctr := &hashJoin.ctr
+	ctr.cleanBatch(proc)
+	ctr.cleanEqCondExecutors()
+	ctr.cleanBucketBatches(proc)
+	ctr.cleanHashMap()
+	ctr.cleanNonEqCondExecutor()
+}
+
+func (ctr *container) resetNonEqCondExecutor() {
+	if ctr.nonEqCondExec != nil {
+		ctr.nonEqCondExec.ResetForNextQuery()
+	}
+}
+
+func (ctr *container) cleanNonEqCondExecutor() {
+	if ctr.nonEqCondExec != nil {
+		ctr.nonEqCondExec.Free()
+		ctr.nonEqCondExec = nil
+	}
+}
+
+func (ctr *container) cleanBatch(proc *process.Process) {
+	ctr.rightBats = nil
+	if ctr.resBat != nil {
+		ctr.resBat.Clean(proc.GetMPool())
+		ctr.resBat = nil
+	}
+	for i := range ctr.joinBats {
+		if ctr.joinBats[i] != nil {
+			ctr.joinBats[i].Clean(proc.Mp())
+			ctr.joinBats[i] = nil
+		}
+	}
+	if ctr.rightRowsMatched != nil {
+		ctr.rightRowsMatched = nil
+	}
+}
+
+func (ctr *container) cleanBucketBatches(proc *process.Process) {
+	ctr.probeBucketActive = false
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
+	}
+}
+
+func (ctr *container) cleanHashMap() {
+	if ctr.mp != nil {
+		ctr.mp.Free()
+		ctr.mp = nil
+	}
+}
+
+func (ctr *container) cleanEqCondExecutors() {
+	for i := range ctr.eqCondExecs {
+		if ctr.eqCondExecs[i] != nil {
+			ctr.eqCondExecs[i].Free()
+		}
+	}
+	ctr.eqCondExecs = nil
+}
+
+func (ctr *container) resetEqCondExecutors() {
+	for i := range ctr.eqCondExecs {
+		if ctr.eqCondExecs[i] != nil {
+			ctr.eqCondExecs[i].ResetForNextQuery()
+		}
+	}
+}
+
+func (hashJoin *HashJoin) IsInner() bool {
+	return hashJoin.JoinType == plan.Node_INNER
+}
+
+func (hashJoin *HashJoin) IsLeftOuter() bool {
+	return hashJoin.JoinType == plan.Node_LEFT
+}
+
+func (hashJoin *HashJoin) IsRightOuter() bool {
+	return hashJoin.JoinType == plan.Node_RIGHT
+}
+
+func (hashJoin *HashJoin) IsFullOuter() bool {
+	return hashJoin.JoinType == plan.Node_OUTER
+}
+
+func (hashJoin *HashJoin) IsSemi() bool {
+	return hashJoin.JoinType == plan.Node_SEMI
+}
+
+func (hashJoin *HashJoin) IsLeftSemi() bool {
+	return !hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_SEMI
+}
+
+func (hashJoin *HashJoin) IsRightSemi() bool {
+	return hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_SEMI
+}
+
+func (hashJoin *HashJoin) IsAnti() bool {
+	return hashJoin.JoinType == plan.Node_ANTI
+}
+
+func (hashJoin *HashJoin) IsLeftAnti() bool {
+	return !hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_ANTI
+}
+
+func (hashJoin *HashJoin) IsRightAnti() bool {
+	return hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_ANTI
+}
+
+func (hashJoin *HashJoin) IsSingle() bool {
+	return hashJoin.JoinType == plan.Node_SINGLE
+}
+
+func (hashJoin *HashJoin) IsMark() bool {
+	return hashJoin.JoinType == plan.Node_MARK
+}
+
+func (hashJoin *HashJoin) IsLeftSingle() bool {
+	return !hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_SINGLE
+}
+
+func (hashJoin *HashJoin) IsRightSingle() bool {
+	return hashJoin.IsRightJoin && hashJoin.JoinType == plan.Node_SINGLE
+}
+
+// EmitUnmatchedProbe reports whether the join must emit unmatched rows from
+// the probe (left) side. True for LEFT OUTER, LEFT SINGLE, LEFT ANTI, and
+// FULL OUTER joins.
+func (hashJoin *HashJoin) EmitUnmatchedProbe() bool {
+	return hashJoin.IsLeftOuter() || hashJoin.IsLeftSingle() || hashJoin.IsLeftAnti() || hashJoin.IsFullOuter()
+}
+
+// EmitUnmatchedBuild reports whether the join must emit unmatched rows from
+// the build (right) side. True when IsRightJoin is set (RIGHT-flavoured joins,
+// including RIGHT OUTER / RIGHT SEMI / RIGHT ANTI / RIGHT SINGLE / RIGHT
+// DEDUP), or for FULL OUTER which always needs both sides.
+func (hashJoin *HashJoin) EmitUnmatchedBuild() bool {
+	return hashJoin.IsRightJoin || hashJoin.IsFullOuter()
+}
+
+func (ctr *container) setSpillThreshold(threshold int64) {
+	ctr.spillThreshold = colexec.ResolveSpillThreshold(threshold)
+}

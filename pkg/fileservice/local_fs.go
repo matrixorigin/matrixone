@@ -16,20 +16,24 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"encoding/binary"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"iter"
 	"os"
 	pathpkg "path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 
 	"go.uber.org/zap"
 
@@ -58,9 +62,19 @@ type LocalFS struct {
 	perfCounterSets []*perfcounter.CounterSet
 
 	ioMerger *IOMerger
+
+	// noChecksum, when true, stores files as raw bytes (no per-2KB-block CRC32
+	// framing), matching the S3 (disk-backed) on-disk format. Selected by the
+	// DISK-V2 backend.
+	noChecksum bool
 }
 
 var _ FileService = new(LocalFS)
+
+// RootPath returns the absolute filesystem path of this LocalFS root directory.
+func (l *LocalFS) RootPath() string {
+	return l.rootPath
+}
 
 func NewLocalFS(
 	ctx context.Context,
@@ -68,6 +82,30 @@ func NewLocalFS(
 	rootPath string,
 	cacheConfig CacheConfig,
 	perfCounterSets []*perfcounter.CounterSet,
+) (*LocalFS, error) {
+	return newLocalFS(ctx, name, rootPath, cacheConfig, perfCounterSets, false)
+}
+
+// NewLocalFS2 creates a LocalFS that stores files in the raw (checksum-free)
+// format used by the DISK-V2 backend. The on-disk layout matches the S3
+// (disk-backed) file service.
+func NewLocalFS2(
+	ctx context.Context,
+	name string,
+	rootPath string,
+	cacheConfig CacheConfig,
+	perfCounterSets []*perfcounter.CounterSet,
+) (*LocalFS, error) {
+	return newLocalFS(ctx, name, rootPath, cacheConfig, perfCounterSets, true)
+}
+
+func newLocalFS(
+	ctx context.Context,
+	name string,
+	rootPath string,
+	cacheConfig CacheConfig,
+	perfCounterSets []*perfcounter.CounterSet,
+	noChecksum bool,
 ) (*LocalFS, error) {
 
 	// get absolute path
@@ -104,6 +142,19 @@ func NewLocalFS(
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
 		ioMerger:        NewIOMerger(),
+		noChecksum:      noChecksum,
+	}
+
+	// Fail fast at startup if a raw (DISK-V2) service is pointed at a directory
+	// that already holds legacy DISK (CRC32-framed) data — reading raw over
+	// framed bytes would otherwise silently return wrong bytes. Run this BEFORE
+	// initCaches: the guard only reads a file (no cache needed), and running it
+	// first means a failed guard never leaks the cache eviction goroutines /
+	// disk-cache fd that initCaches would otherwise have started.
+	if noChecksum {
+		if err := fs.checkNotCRCFramed(); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := fs.initCaches(ctx, cacheConfig); err != nil {
@@ -113,23 +164,98 @@ func NewLocalFS(
 	return fs, nil
 }
 
+// checkNotCRCFramed is a best-effort startup guard for a raw (DISK-V2) LocalFS:
+// pointing it at a directory that already contains legacy DISK (CRC32-framed)
+// data would silently return wrong bytes. It scans the first regular file under
+// rootPath and fails if that file is CRC-framed (first 4 bytes are a valid
+// crc32-Castagnoli of the rest of the block). An empty dir (a fresh deploy)
+// passes. A raw file coincidentally passing the CRC check is ~1/2^32, so this
+// never rejects valid DISK-V2 data; a false negative (e.g. an unframed cache
+// file scanned first) just falls back to the object-header magic guard on read.
+func (l *LocalFS) checkNotCRCFramed() error {
+	var first string
+	_ = filepath.WalkDir(l.rootPath, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		first = p
+		return filepath.SkipAll
+	})
+	if first == "" {
+		return nil // empty dir: fresh deploy
+	}
+
+	f, err := os.Open(first)
+	if err != nil {
+		return nil // unreadable: leave it to the read path
+	}
+	defer f.Close()
+
+	buf := make([]byte, _BlockSize)
+	rn, _ := io.ReadFull(f, buf) // partial read at EOF is fine
+	buf = buf[:rn]
+	if len(buf) <= _ChecksumSize {
+		return nil // too small to tell
+	}
+
+	sum := binary.LittleEndian.Uint32(buf[:_ChecksumSize])
+	if crc32.Checksum(buf[_ChecksumSize:], crcTable) == sum {
+		return moerr.NewInternalErrorNoCtxf(
+			"data-dir %q contains legacy DISK (CRC32-framed) data but this file "+
+				"service is DISK-V2 (raw); use the DISK backend to read it "+
+				"(e.g. the etc/v1 launch configs)", l.rootPath)
+	}
+	return nil
+}
+
+// newChecksumOSFile wraps a *os.File for read/write, honoring l.noChecksum to
+// select the raw (passthrough) or CRC32-framed format.
+func (l *LocalFS) newChecksumOSFile(
+	ctx context.Context, f *os.File,
+) (*FileWithChecksum[*os.File], PutBack[*FileWithChecksum[*os.File]]) {
+	if l.noChecksum {
+		return NewFileWithoutChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
+	}
+	return NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
+}
+
+// newChecksumFile is the non-pooled counterpart of newChecksumOSFile.
+func (l *LocalFS) newChecksumFile(
+	ctx context.Context, f *os.File,
+) *FileWithChecksum[*os.File] {
+	if l.noChecksum {
+		return NewFileWithoutChecksum(ctx, f, _BlockContentSize, l.perfCounterSets)
+	}
+	return NewFileWithChecksum(ctx, f, _BlockContentSize, l.perfCounterSets)
+}
+
+// contentSize converts a physical file size to the logical content size,
+// accounting for the per-block CRC32 overhead unless running checksum-free.
+func (l *LocalFS) contentSize(fileSize int64) int64 {
+	if l.noChecksum {
+		return fileSize
+	}
+	nBlock := ceilingDiv(fileSize, _BlockSize)
+	return fileSize - _ChecksumSize*nBlock
+}
+
 func (l *LocalFS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(ctx, size)
+		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (l *LocalFS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(ctx, size)
+		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (l *LocalFS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if l.memCache != nil {
-		l.memCache.cache.EnsureNBytes(ctx, len(data))
+		l.memCache.cache.EnsureNBytes(withoutEventLogger(ctx), len(data))
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
@@ -175,11 +301,14 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			fscache.ConstCapacity(int64(*config.DiskCapacity)),
 			l.perfCounterSets,
 			true,
-			l,
+			nil,
 			l.name,
 		)
 		if err != nil {
 			return err
+		}
+		if l.memCache != nil {
+			l.diskCache.memoryCache = l.memCache.cache
 		}
 		logutil.Info("fileservice: disk cache initialized",
 			zap.Any("fs-name", l.name),
@@ -240,8 +369,8 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 	nativePath := l.toNativeFilePath(path.File)
 
 	// sort
-	sort.Slice(vector.Entries, func(i, j int) bool {
-		return vector.Entries[i].Offset < vector.Entries[j].Offset
+	slices.SortFunc(vector.Entries, func(a, b IOEntry) int {
+		return cmp.Compare(a.Offset, b.Offset)
 	})
 
 	// size
@@ -266,7 +395,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 		}
 	}()
 
-	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
+	fileWithChecksum, put := l.newChecksumOSFile(ctx, f)
 	defer put.Put()
 
 	r := newIOEntriesReader(ctx, vector.Entries)
@@ -388,10 +517,30 @@ read_disk_cache:
 	if l.diskCache != nil {
 
 		t0 := time.Now()
+		LogEvent(ctx, str_read_disk_cache_Caches_begin)
+		// Record which entries are not done before reading from disk cache
+		undoneBefore := make(map[int]bool)
+		for i, entry := range vector.Entries {
+			undoneBefore[i] = !entry.done
+		}
 		err := readCache(ctx, l.diskCache, vector)
+		LogEvent(ctx, str_read_disk_cache_Caches_end)
 		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
 			return err
+		}
+		// Count bytes actually read from disk cache (entries that became done and from disk cache)
+		var actualDiskReadBytes int64
+		for i, entry := range vector.Entries {
+			if undoneBefore[i] && entry.done && entry.fromCache == l.diskCache {
+				actualDiskReadBytes += entry.Size
+			}
+		}
+		// Record disk read size
+		if actualDiskReadBytes > 0 {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.DiskReadSize.Add(actualDiskReadBytes)
+			})
 		}
 		if vector.allDone() {
 			return nil
@@ -424,10 +573,10 @@ read_disk_cache:
 	if mayReadMemoryCache || mayReadDiskCache {
 		// may read caches, merge
 		startLock := time.Now()
-		done, wait := l.ioMerger.Merge(vector.ioMergeKey())
+		done, wait := l.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
 		if done != nil {
-			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 			defer done()
+			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 		} else {
 			wait()
 			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
@@ -439,9 +588,22 @@ read_disk_cache:
 		}
 	}
 
+	// Count bytes that will be read from local disk (entries that are not done yet)
+	var localDiskReadBytes int64
+	for _, entry := range vector.Entries {
+		if !entry.done {
+			localDiskReadBytes += entry.Size
+		}
+	}
 	err = l.read(ctx, vector, bytesCounter)
 	if err != nil {
 		return err
+	}
+	// Record disk read size (all bytes read from local disk)
+	if localDiskReadBytes > 0 {
+		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+			counter.FileService.DiskReadSize.Add(localDiskReadBytes)
+		})
 	}
 
 	return nil
@@ -524,7 +686,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 		numNotDoneEntries++
 
 		if entry.WriterForRead != nil {
-			fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, file, _BlockContentSize, l.perfCounterSets)
+			fileWithChecksum, put := l.newChecksumOSFile(ctx, file)
 			defer put.Put()
 
 			if entry.Offset > 0 {
@@ -561,6 +723,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				if entry.Size > 0 && counter.Load() != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
+				fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
 
 			} else {
 				var buf []byte
@@ -573,6 +736,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				if entry.Size > 0 && n != int64(entry.Size) {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
+				fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
 			}
 
 		} else if entry.ReadCloserForRead != nil {
@@ -588,7 +752,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 			}
 
 		} else {
-			fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, file, _BlockContentSize, l.perfCounterSets)
+			fileWithChecksum, put := l.newChecksumOSFile(ctx, file)
 			defer put.Put()
 
 			if entry.Offset > 0 {
@@ -631,6 +795,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 			if err = entry.setCachedData(ctx, l); err != nil {
 				return err
 			}
+			fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
 
 			vector.Entries[i] = entry
 
@@ -666,7 +831,7 @@ func (l *LocalFS) handleReadCloserForRead(
 		return err
 	}
 
-	fileWithChecksum := NewFileWithChecksum(ctx, file, _BlockContentSize, l.perfCounterSets)
+	fileWithChecksum := l.newChecksumFile(ctx, file)
 
 	entry := vector.Entries[i]
 	if entry.Offset > 0 {
@@ -686,8 +851,11 @@ func (l *LocalFS) handleReadCloserForRead(
 
 	if entry.ToCacheData == nil {
 		*entry.ReadCloserForRead = &readCloser{
-			r:         r,
-			closeFunc: file.Close,
+			r: r,
+			closeFunc: func() error {
+				fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
+				return file.Close()
+			},
 		}
 
 	} else {
@@ -696,6 +864,7 @@ func (l *LocalFS) handleReadCloserForRead(
 			r: io.TeeReader(r, buf),
 			closeFunc: func() error {
 				defer file.Close()
+				defer fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
 				var cacheData fscache.Data
 				cacheData, err = entry.ToCacheData(ctx, buf, buf.Bytes(), l)
 				if err != nil {
@@ -751,14 +920,16 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry,
 			if strings.HasPrefix(name, ".") {
 				continue
 			}
-			info, err := entry.Info()
+			info, ok, err := localDirEntryInfo(entry)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
+			if !ok {
+				continue
+			}
 			fileSize := info.Size()
-			nBlock := ceilingDiv(fileSize, _BlockSize)
-			contentSize := fileSize - _ChecksumSize*nBlock
+			contentSize := l.contentSize(fileSize)
 
 			isDir, err := entryIsDir(nativePath, name, info)
 			if err != nil {
@@ -800,8 +971,11 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 	nativePath := l.toNativeFilePath(path.File)
 
 	stat, err := os.Stat(nativePath)
-	if os.IsNotExist(err) {
-		return nil, moerr.NewFileNotFound(ctx, filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, moerr.NewFileNotFound(ctx, filePath)
+		}
+		return nil, err
 	}
 
 	if stat.IsDir() {
@@ -809,8 +983,7 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 	}
 
 	fileSize := stat.Size()
-	nBlock := ceilingDiv(fileSize, _BlockSize)
-	contentSize := fileSize - _ChecksumSize*nBlock
+	contentSize := l.contentSize(fileSize)
 
 	return &DirEntry{
 		Name:  pathpkg.Base(filePath),
@@ -918,11 +1091,14 @@ func (l *LocalFS) NewReader(ctx context.Context, filePath string) (io.ReadCloser
 		}
 	}()
 
-	fileWithChecksum := NewFileWithChecksum(ctx, file, _BlockContentSize, l.perfCounterSets)
+	fileWithChecksum := l.newChecksumFile(ctx, file)
 
 	return &readCloser{
-		r:         fileWithChecksum,
-		closeFunc: file.Close,
+		r: fileWithChecksum,
+		closeFunc: func() error {
+			fadviseDontNeed(file, 0, 0)
+			return file.Close()
+		},
 	}, nil
 }
 
@@ -958,7 +1134,7 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 		}
 	}()
 
-	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
+	fileWithChecksum, put := l.newChecksumOSFile(ctx, f)
 
 	return &writeCloser{
 		w: fileWithChecksum,
@@ -969,6 +1145,7 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 			if err := f.Sync(); err != nil {
 				return err
 			}
+			fadviseDontNeed(f, 0, 0)
 			// close
 			if err := f.Close(); err != nil {
 				return err
@@ -1077,7 +1254,7 @@ func (l *LocalFS) NewMutator(ctx context.Context, filePath string) (Mutator, err
 	}
 	return &LocalFSMutator{
 		osFile:           f,
-		fileWithChecksum: NewFileWithChecksum(ctx, f, _BlockContentSize, l.perfCounterSets),
+		fileWithChecksum: l.newChecksumFile(ctx, f),
 	}, nil
 }
 
@@ -1150,6 +1327,7 @@ func (l *LocalFSMutator) Close() error {
 	if err := l.osFile.Sync(); err != nil {
 		return err
 	}
+	fadviseDontNeed(l.osFile, 0, 0)
 
 	// close
 	if err := l.osFile.Close(); err != nil {
@@ -1201,20 +1379,103 @@ func (l *LocalFS) Cost() *CostAttr {
 	}
 }
 
+func localDirEntryInfo(entry os.DirEntry) (fs.FileInfo, bool, error) {
+	info, err := entry.Info()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return info, true, nil
+}
+
 func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
 	if entry.IsDir() {
 		return true, nil
 	}
 	if entry.Mode().Type()&fs.ModeSymlink > 0 {
-		stat, err := os.Stat(filepath.Join(path, name))
+		// Follow the symlink to check if the target is a directory
+		targetPath := filepath.Join(path, name)
+		stat, err := os.Stat(targetPath)
 		if err != nil {
-			if os.IsNotExist(err) {
-				// invalid sym link
-				return false, nil
-			}
-			return false, err
+			// Treat broken or problematic symlinks as non-directories
+			// This includes non-existent targets and permission errors
+			return false, nil
 		}
-		return entryIsDir(path, name, stat)
+		// os.Stat follows symlinks, so stat.IsDir() tells us if the final target is a directory
+		return stat.IsDir(), nil
 	}
 	return false, nil
+}
+
+// open for read and write, raw os.File API.
+func (l *LocalFS) EnsureDir(ctx context.Context, filePath string) error {
+	return l.ensureDir(l.toNativeFilePath(filePath))
+}
+
+func (l *LocalFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.OpenFile(nativePath, os.O_RDWR, 0644)
+}
+
+// create or truncate.
+func (l *LocalFS) CreateFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.Create(nativePath)
+}
+
+// remove file
+func (l *LocalFS) RemoveFile(ctx context.Context, filePath string) error {
+	err := ctx.Err()
+	if err != nil {
+		return err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	return os.Remove(nativePath)
+}
+
+// open/create then immediately remove.   the opend file is good for read/write.
+func (l *LocalFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
+	err := ctx.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+	f, err := os.Create(nativePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// do not check error for this one
+	os.Remove(nativePath)
+	return f, nil
 }

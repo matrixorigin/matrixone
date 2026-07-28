@@ -37,10 +37,8 @@ insert into use_db_1.use_table_2 values(10,'yellow',99.99);
 select * from use_db_1.use_table_2;
 drop table use_db_1.use_table_2;
 set secondary role all;
-create table use_db_1.use_table_5(a int,b varchar(20),c double );
-insert into use_db_1.use_table_5 values(10,'yellow',99.99);
-select * from use_db_1.use_table_5;
-drop table use_db_1.use_table_5;
+insert into use_db_1.use_table_2 values(20,'green',88.88);
+select * from use_db_1.use_table_2 order by a;
 set role moadmin;
 -- @session
 
@@ -57,17 +55,17 @@ create role use_role_test;
 set role use_role_test;
 drop role  use_role_test;
 set secondary role all;
-create table use_db_1.use_table_6(a int,b varchar(20),c double);
-insert into use_db_1.use_table_6 values(10,'yellow',99.99);
+insert into use_db_1.use_table_2 values(30,'blue',77.77);
+select * from use_db_1.use_table_2 order by a;
 create database use_db_test;
 drop database use_db_test;
 set secondary role none;
-insert into use_db_1.use_table_6 values (10, 'yellow', 99.99);
-drop table use_db_1.use_table_6;
+insert into use_db_1.use_table_2 values (40, 'red', 66.66);
+drop table use_db_1.use_table_2;
 create role if not exists use_role_test;
 drop role use_role_test;
 set role use_role_5;
-drop table use_db_1.use_table_6;
+drop table use_db_1.use_table_2;
 create database if not exists use_db_test;
 -- @session
 

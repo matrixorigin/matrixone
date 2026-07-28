@@ -23,16 +23,19 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type ObjectStorageArguments struct {
 	// misc
-	Name                 string `toml:"name"`
-	KeyPrefix            string `toml:"key-prefix"`
-	SharedConfigProfile  string `toml:"shared-config-profile"`
-	NoDefaultCredentials bool   `toml:"no-default-credentials"`
-	NoBucketValidation   bool   `toml:"no-bucket-validation"`
-	Concurrency          int64  `toml:"concurrency"`
+	Name                 string       `toml:"name"`
+	KeyPrefix            string       `toml:"key-prefix"`
+	SharedConfigProfile  string       `toml:"shared-config-profile"`
+	NoDefaultCredentials bool         `toml:"no-default-credentials"`
+	NoBucketValidation   bool         `toml:"no-bucket-validation"`
+	Concurrency          int64        `toml:"concurrency"`
+	MaxConnsPerHost      int          `toml:"max-conns-per-host"`
+	ParallelMode         ParallelMode `toml:"parallel-mode"`
 
 	// s3
 	Bucket    string   `toml:"bucket"`
@@ -86,12 +89,12 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 		case "shared-config-profile":
 			o.SharedConfigProfile = value
 		case "no-bucket-validation":
-			b, err := strconv.ParseBool(value)
+			b, err := types.ParseBool(value)
 			if err == nil {
 				o.NoBucketValidation = b
 			}
 		case "no-default-credentials":
-			b, err := strconv.ParseBool(value)
+			b, err := types.ParseBool(value)
 			if err == nil {
 				o.NoDefaultCredentials = b
 			}
@@ -99,6 +102,15 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			n, err := strconv.ParseInt(value, 10, 64)
 			if err == nil {
 				o.Concurrency = n
+			}
+		case "max-conns-per-host":
+			n, err := strconv.Atoi(value)
+			if err == nil {
+				o.MaxConnsPerHost = n
+			}
+		case "parallel-mode", "parallel":
+			if mode, ok := parseParallelMode(value); ok {
+				o.ParallelMode = mode
 			}
 
 		case "bucket":
@@ -156,6 +168,7 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 }
 
 var qcloudEndpointPattern = regexp.MustCompile(`cos\.([^.]+)\.myqcloud\.com`)
+var objectStorageHTTPHead = http.Head
 
 func (o *ObjectStorageArguments) validate() error {
 
@@ -186,7 +199,7 @@ func (o *ObjectStorageArguments) validate() error {
 		} else if o.Endpoint != "" && strings.Contains(o.Endpoint, "amazonaws.com") {
 			// AWS
 			// try to get region from bucket
-			resp, err := http.Head("https://" + o.Bucket + ".s3.amazonaws.com")
+			resp, err := objectStorageHTTPHead("https://" + o.Bucket + ".s3.amazonaws.com")
 			if err == nil {
 				if value := resp.Header.Get("x-amz-bucket-region"); value != "" {
 					o.Region = value

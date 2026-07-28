@@ -1,0 +1,49 @@
+drop database if exists test_int_widening;
+create database test_int_widening;
+use test_int_widening;
+create table test_int32_to_int64(
+id bigint,
+value bigint
+);
+load data infile {'filepath'='$resources/load_data/int32_to_int64.parq', 'format'='parquet'}
+into table test_int32_to_int64;
+select * from test_int32_to_int64 order by id;
+id    value
+-2147483648    -1000000
+-100    -1000
+-1    -50
+1    100
+2    200
+3    300
+4    400
+5    500
+2147483647    1000000
+create table test_uint32_to_uint64(
+id bigint unsigned,
+value bigint unsigned
+);
+load data infile {'filepath'='$resources/load_data/uint32_to_uint64.parq', 'format'='parquet'}
+into table test_uint32_to_uint64;
+select * from test_uint32_to_uint64 order by id;
+id    value
+1    10
+2    20
+3    30
+4    40
+5    50
+100    1000
+1000    10000
+2147483648    2000000
+4294967295    1000000
+create table test_int32_to_int32(
+id int,
+value int
+);
+load data infile {'filepath'='$resources/load_data/int32_to_int64.parq', 'format'='parquet'}
+into table test_int32_to_int32;
+select * from test_int32_to_int32 order by id limit 3;
+id    value
+-2147483648    -1000000
+-100    -1000
+-1    -50
+drop database test_int_widening;

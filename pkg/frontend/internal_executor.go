@@ -138,6 +138,11 @@ func (res *internalExecResult) GetFloat64(ctx context.Context, ridx uint64, cidx
 }
 
 func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (err error) {
+	_, err = ie.ExecWithStatus(ctx, sql, opts)
+	return err
+}
+
+func (ie *internalExecutor) ExecWithStatus(ctx context.Context, sql string, opts ie.SessionOverrideOptions) (status ie.InternalExecStatus, err error) {
 	ie.Lock()
 	defer ie.Unlock()
 	var cancel context.CancelFunc
@@ -151,7 +156,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	defer sess.ExitFPrint(FPInternalExecutorExec)
 	ie.proto.stashResult = false
 	if sql == "" {
-		return
+		return status, nil
 	}
 	tempExecCtx := ExecCtx{
 		reqCtx: ctx,
@@ -159,10 +164,12 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	}
 	defer tempExecCtx.Close()
 	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	res := ie.proto.swapOutResult()
+	status.AffectedRows = res.affectedRows
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		return status, moerr.AttachCause(ctx, err)
 	}
-	return
+	return status, nil
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
@@ -285,6 +292,8 @@ func (ip *internalProtocol) GetU32(id PropertyID) uint32 {
 	switch id {
 	case CONNID:
 		return ip.ConnectionID()
+	case CAPABILITY:
+		return 0
 	}
 	return math.MaxUint32
 }
@@ -483,6 +492,11 @@ func (ip *internalProtocol) SetUserName(username string) {
 }
 
 func (ip *internalProtocol) Close() {}
+
+// Disconnect for internal protocol does nothing since there's no real network connection
+func (ip *internalProtocol) Disconnect() error {
+	return nil
+}
 
 // sendRows
 // case 1: used in WriteResponse and WriteResultSetRow, which are 'copy' op

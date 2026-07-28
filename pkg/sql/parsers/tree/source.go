@@ -129,6 +129,8 @@ func (node *CreateSource) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *CreateSourceWithOption:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:

@@ -21,7 +21,7 @@ import (
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
-	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 

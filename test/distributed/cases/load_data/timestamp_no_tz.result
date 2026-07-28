@@ -1,0 +1,11 @@
+drop database if exists ts_no_tz_test;
+create database ts_no_tz_test;
+use ts_no_tz_test;
+create table ts_test (id int, ts_no_tz timestamp);
+load data infile {'filepath'='$resources/load_data/timestamp_no_tz.parq', 'format'='parquet'} into table ts_test;
+select * from ts_test order by id;
+➤ id[4,32,0]  ¦  ts_no_tz[93,64,0]  𝄀
+1  ¦  2024-01-15 10:30:00  𝄀
+2  ¦  2024-06-20 14:45:30  𝄀
+3  ¦  2024-12-31 23:59:59
+drop database ts_no_tz_test;

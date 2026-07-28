@@ -29,7 +29,8 @@ import (
 
 const (
 	// for schema
-	PropSchemaExtra = "schema_extra"
+	PropSchemaExtra     = "schema_extra"
+	PropFromPublication = "from_publication"
 
 	Row_ID           = objectio.PhysicalAddr_Attr
 	PrefixPriColName = "__mo_cpkey_"
@@ -39,6 +40,10 @@ const (
 	PartitionSubTableWildcard = "\\%!\\%%\\%!\\%%"
 
 	ExternalFilePath = "__mo_filepath"
+	// ExternalFilePathColId identifies the synthetic filepath column that the
+	// query builder appends to external scans. It survives column-position
+	// remapping, unlike TbColToDataCol's original file-field indexes.
+	ExternalFilePathColId = ^uint64(0)
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
@@ -138,6 +143,12 @@ const (
 	// MOSysAsyncTask is the table name of async task table in mo_task.
 	MOSysAsyncTask = "sys_async_task"
 
+	// MOSQLTask is the table name of sql task table in mo_task.
+	MOSQLTask = "sql_task"
+
+	// MOSQLTaskRun is the table name of sql task run table in mo_task.
+	MOSQLTaskRun = "sql_task_run"
+
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
 
@@ -171,15 +182,27 @@ const (
 
 	MO_MERGE_SETTINGS = "mo_merge_settings"
 
+	MO_ISCP_LOG         = "mo_iscp_log"
 	MO_STORED_PROCEDURE = "mo_stored_procedure"
+
+	MO_CCPR_LOG = "mo_ccpr_log"
+
+	MO_INDEX_UPDATE = "mo_index_update"
+
+	MO_BRANCH_METADATA  = "mo_branch_metadata"
+	MO_FEATURE_LIMIT    = "mo_feature_limit"
+	MO_FEATURE_REGISTRY = "mo_feature_registry"
+
+	MO_CCPR_TABLES = "mo_ccpr_tables"
+	MO_CCPR_DBS    = "mo_ccpr_dbs"
 )
 
 func IsSystemTable(id uint64) bool {
-	return id == MO_DATABASE_ID || id == MO_TABLES_ID || id == MO_COLUMNS_ID
+	return id == MO_DATABASE_ID || id == MO_TABLES_ID || id == MO_COLUMNS_ID || id == MO_TABLES_LOGICAL_ID_INDEX_ID
 }
 
 func IsSystemTableByName(name string) bool {
-	return name == MO_DATABASE || name == MO_TABLES || name == MO_COLUMNS
+	return name == MO_DATABASE || name == MO_TABLES || name == MO_COLUMNS || name == MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME
 }
 
 const (
@@ -194,11 +217,15 @@ const (
 	MO_SQL_STMT_CU    = "sql_statement_cu"
 
 	// default database name for catalog
-	MO_CATALOG  = "mo_catalog"
-	MO_DATABASE = "mo_database"
-	MO_TABLES   = "mo_tables"
-	MO_COLUMNS  = "mo_columns"
-	MO_USER     = "mo_user"
+	MO_CATALOG   = "mo_catalog"
+	MO_DATABASE  = "mo_database"
+	MO_TABLES    = "mo_tables"
+	MO_COLUMNS   = "mo_columns"
+	MO_USER      = "mo_user"
+	MO_ROLE_RULE = "mo_role_rule"
+
+	// mo_tables logical_id index table name (fixed name, no UUID)
+	MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME = "__mo_index_unique_mo_tables_logical_id"
 
 	// 'mo_database' table
 	SystemDBAttr_ID          = "dat_id"
@@ -233,6 +260,7 @@ const (
 	SystemRelAttr_CatalogVersion = "catalog_version"
 	SystemRelAttr_ExtraInfo      = "extra_info"
 	SystemRelAttr_CPKey          = CPrimaryKeyColName
+	SystemRelAttr_LogicalID      = "rel_logical_id"
 
 	// 'mo_indexes' table
 	IndexAlgoName      = "algo"
@@ -265,6 +293,8 @@ const (
 	SystemColAttr_Seqnum          = "attr_seqnum"
 	SystemColAttr_EnumValues      = "attr_enum"
 	SystemColAttr_CPKey           = CPrimaryKeyColName
+	SystemColAttr_HasGenerated    = "attr_has_generated"
+	SystemColAttr_Generated       = "attr_generated"
 
 	BlockMeta_ID              = "block_id"
 	BlockMeta_Delete_ID       = "block_delete_id"
@@ -319,6 +349,8 @@ const (
 	UniqueIndexSuffix             = "unique_"
 	FullTextIndexSuffix           = "fulltext_"
 	HnswIndexSuffix               = "hnsw_"
+	CagraIndexSuffix              = "cagra_"
+	IvfpqIndexSuffix              = "ivfpq_"
 	SecondaryIndexSuffix          = "secondary_"
 	PrefixIndexTableName          = "__mo_index_"
 	IndexTableNamePrefix          = PrefixIndexTableName
@@ -326,6 +358,8 @@ const (
 	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
 	FullTextIndexTableNamePrefix  = PrefixIndexTableName + FullTextIndexSuffix
 	HnswIndexTableNamePrefix      = PrefixIndexTableName + HnswIndexSuffix
+	CagraIndexTableNamePrefix     = PrefixIndexTableName + CagraIndexSuffix
+	IvfpqIndexTableNamePrefix     = PrefixIndexTableName + IvfpqIndexSuffix
 
 	/************ 0. Regular Secondary Index ************/
 
@@ -355,6 +389,13 @@ const (
 	SystemSI_IVFFLAT_TblCol_Metadata_key = "__mo_index_key"
 	SystemSI_IVFFLAT_TblCol_Metadata_val = "__mo_index_val"
 
+	// IVF_FLAT MetadataTable - well-known keys (rows in the key/val metadata table)
+	// QuantizeMin/QuantizeMax store the trained int8 scalar-quantizer bounds
+	// (cuVS-style asymmetric): [min,max] is mapped to the full int8 range [-128,127]
+	// via q(x)=round(x*mul+add). Entries and the query use the same transform.
+	SystemSI_IVFFLAT_Metadata_QuantizeMin = "quantize_min"
+	SystemSI_IVFFLAT_Metadata_QuantizeMax = "quantize_max"
+
 	// IVF_FLAT Centroids - Column names
 	SystemSI_IVFFLAT_TblCol_Centroids_version  = "__mo_index_centroid_version"
 	SystemSI_IVFFLAT_TblCol_Centroids_id       = "__mo_index_centroid_id"
@@ -365,8 +406,12 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
+	SystemSI_IVFFLAT_IncludeColPrefix       = "__mo_index_include_"
 
 	/************ 3. FULLTEXT Index **************/
+
+	// FULLTEXT Table Type
+	FullTextIndex_TblType = "fulltext"
 
 	FullTextIndex_TabCol_Word     = "word"
 	FullTextIndex_TabCol_Id       = "doc_id"
@@ -390,14 +435,63 @@ const (
 	Hnsw_TblCol_Metadata_Timestamp = "timestamp"
 	Hnsw_TblCol_Metadata_Checksum  = "checksum"
 	Hnsw_TblCol_Metadata_Filesize  = "filesize"
+
+	/************ Cagra Index *************/
+
+	// CAGRA Table Types
+	// NOTE: avoid duplicate TblType name with IVFFLAT or other index
+	Cagra_TblType_Metadata = "cagra_meta"
+	Cagra_TblType_Storage  = "cagra_index"
+
+	// CAGRA Storage - Column names
+	Cagra_TblCol_Storage_Index_Id = "index_id"
+	Cagra_TblCol_Storage_Chunk_Id = "chunk_id"
+	Cagra_TblCol_Storage_Data     = "data"
+	Cagra_TblCol_Storage_Tag      = "tag"
+
+	// CAGRA Metadata - Column names
+	Cagra_TblCol_Metadata_Index_Id  = "index_id"
+	Cagra_TblCol_Metadata_Timestamp = "timestamp"
+	Cagra_TblCol_Metadata_Checksum  = "checksum"
+	Cagra_TblCol_Metadata_Filesize  = "filesize"
+
+	/************ IVF-PQ Index *************/
+
+	// IVF-PQ Table Types
+	// NOTE: avoid duplicate TblType name with IVFFLAT, CAGRA or other index
+	Ivfpq_TblType_Metadata = "ivfpq_meta"
+	Ivfpq_TblType_Storage  = "ivfpq_index"
+
+	// IVF-PQ Storage - Column names
+	Ivfpq_TblCol_Storage_Index_Id = "index_id"
+	Ivfpq_TblCol_Storage_Chunk_Id = "chunk_id"
+	Ivfpq_TblCol_Storage_Data     = "data"
+	Ivfpq_TblCol_Storage_Tag      = "tag"
+
+	// IVF-PQ Metadata - Column names
+	Ivfpq_TblCol_Metadata_Index_Id  = "index_id"
+	Ivfpq_TblCol_Metadata_Timestamp = "timestamp"
+	Ivfpq_TblCol_Metadata_Checksum  = "checksum"
+	Ivfpq_TblCol_Metadata_Filesize  = "filesize"
+
+	/************ 5. Logical ID Index (mo_tables) ************/
+
+	// Query format for getting rowid from logical_id index table
+	// Parameters: database_name, table_name, index_column_name, logical_id
+	LogicalIdIndexRowidQueryFormat = "SELECT __mo_rowid FROM `%s`.`%s` WHERE `%s` = %d"
+
+	/************ 5. Temporary table *************/
+
+	SystemTemporaryTable = "temporary_table"
 )
 
 const (
 	// default database id for catalog
-	MO_CATALOG_ID  = 1
-	MO_DATABASE_ID = 1
-	MO_TABLES_ID   = 2
-	MO_COLUMNS_ID  = 3
+	MO_CATALOG_ID                 = 1
+	MO_DATABASE_ID                = 1
+	MO_TABLES_ID                  = 2
+	MO_COLUMNS_ID                 = 3
+	MO_TABLES_LOGICAL_ID_INDEX_ID = 4 // ID allocated for mo_tables logical_id index table
 
 	// MO_RESERVED_MAX is the max reserved table ID.
 	MO_RESERVED_MAX = 100
@@ -442,6 +536,7 @@ const (
 	MO_TABLES_CATALOG_VERSION_IDX = 17
 	MO_TABLES_EXTRA_INFO_IDX      = 18
 	MO_TABLES_CPKEY_IDX           = 19
+	MO_TABLES_LOGICAL_ID_IDX      = 20
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -468,7 +563,9 @@ const (
 	MO_COLUMNS_ATT_SEQNUM_IDX            = 22
 	MO_COLUMNS_ATT_ENUM_IDX              = 23
 	MO_COLUMNS_ATT_CPKEY_IDX             = 24
-	MO_COLUMNS_MAXIDX                    = MO_COLUMNS_ATT_CPKEY_IDX
+	MO_COLUMNS_ATT_HAS_GENERATED_IDX     = 25
+	MO_COLUMNS_ATT_GENERATED_IDX         = 26
+	MO_COLUMNS_MAXIDX                    = MO_COLUMNS_ATT_GENERATED_IDX
 
 	BLOCKMETA_ID_IDX            = 0
 	BLOCKMETA_ENTRYSTATE_IDX    = 1
@@ -611,6 +708,7 @@ var (
 		SystemRelAttr_CatalogVersion,
 		SystemRelAttr_ExtraInfo,
 		SystemRelAttr_CPKey,
+		SystemRelAttr_LogicalID,
 	}
 	MoTablesAllColsString = strings.Replace(
 		strings.Join(append([]string{Row_ID}, MoTablesSchema...), ","),
@@ -624,8 +722,8 @@ var (
 
 	// exclude mo_database mo_tables mo_columns
 	MoTablesBatchQuery = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s > 3",
-		MoTablesAllColsString, MO_CATALOG, MO_TABLES, SystemRelAttr_ID)
+		"select %s from `%s`.`%s` where %s > %v",
+		MoTablesAllColsString, MO_CATALOG, MO_TABLES, SystemRelAttr_ID, MO_RESERVED_MAX)
 
 	MoTablesInDBQueryFormat = fmt.Sprintf(
 		"select %s from `%s`.`%s` where %s = %%d and %s = %%q",
@@ -668,6 +766,8 @@ var (
 		SystemColAttr_Seqnum,
 		SystemColAttr_EnumValues,
 		SystemColAttr_CPKey,
+		SystemColAttr_HasGenerated,
+		SystemColAttr_Generated,
 	}
 	MoColumnsAllColsString  = strings.Join(append([]string{Row_ID}, MoColumnsSchema...), ",")
 	MoColumnsAllQueryFormat = fmt.Sprintf(
@@ -677,8 +777,8 @@ var (
 
 	// exclude mo_database mo_tables mo_columns
 	MoColumnsBatchQuery = fmt.Sprintf(
-		"select %s from `%s`.`%s` where %s > 3 order by %s, %s, %s",
-		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS, SystemColAttr_RelID,
+		"select %s from `%s`.`%s` where %s > %d order by %s, %s, %s",
+		MoColumnsAllColsString, MO_CATALOG, MO_COLUMNS, SystemColAttr_RelID, MO_RESERVED_MAX,
 		SystemColAttr_AccID, SystemColAttr_DBName, SystemColAttr_RelName)
 
 	MoColumnsRowidsQueryFormat = fmt.Sprintf(
@@ -729,6 +829,7 @@ var (
 		types.New(types.T_uint32, 0, 0),      // schema_catalog_version
 		types.New(types.T_varchar, 0, 0),     // extra_info
 		types.New(types.T_varchar, 65535, 0), // cpkey
+		types.New(types.T_uint64, 0, 0),      // rel_logical_id
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0),                 // att_uniq_name
@@ -756,6 +857,8 @@ var (
 		types.New(types.T_uint16, 0, 0),                    // att_seqnum
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // att_enum
 		types.New(types.T_varchar, 65535, 0),               // cpkey
+		types.New(types.T_int8, 0, 0),                      // attr_has_generated
+		types.New(types.T_varchar, 2048, 0),                // attr_generated
 	}
 	MoTableMetaTypes = []types.Type{
 		types.New(types.T_Blockid, 0, 0),                   // block_id
@@ -766,6 +869,36 @@ var (
 		types.New(types.T_TS, 0, 0),                        // committs
 		types.New(types.T_uuid, 0, 0),                      // segment_id
 		types.New(types.T_TS, 0, 0),                        // flush_point
+	}
+
+	// mo_ccpr_tables schema: tableid (pk), taskid, dbname, tablename, account_id
+	MoCCPRTablesSchema = []string{
+		"tableid",
+		"taskid",
+		"dbname",
+		"tablename",
+		"account_id",
+	}
+	MoCCPRTablesTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),    // tableid (primary key)
+		types.New(types.T_uuid, 0, 0),      // taskid
+		types.New(types.T_varchar, 256, 0), // dbname
+		types.New(types.T_varchar, 256, 0), // tablename
+		types.New(types.T_uint32, 0, 0),    // account_id
+	}
+
+	// mo_ccpr_dbs schema: dbid (pk), taskid, dbname, account_id
+	MoCCPRDbsSchema = []string{
+		"dbid",
+		"taskid",
+		"dbname",
+		"account_id",
+	}
+	MoCCPRDbsTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),    // dbid (primary key)
+		types.New(types.T_uuid, 0, 0),      // taskid
+		types.New(types.T_varchar, 256, 0), // dbname
+		types.New(types.T_uint32, 0, 0),    // account_id
 	}
 )
 
@@ -880,4 +1013,9 @@ func IsUniqueIndexTable(name string) bool {
 
 func IsSecondaryIndexTable(name string) bool {
 	return strings.HasPrefix(name, SecondaryIndexTableNamePrefix)
+}
+
+func IsFullTextIndexTableType(tableType string, tableName string) bool {
+	return tableType == FullTextIndex_TblType ||
+		(tableType == SystemIndexRel && strings.HasPrefix(tableName, FullTextIndexTableNamePrefix))
 }

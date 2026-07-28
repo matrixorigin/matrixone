@@ -131,7 +131,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 }
 
 func TestScheduleCreatedTasks(t *testing.T) {
-	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
+	service := newTestTaskService(t)
 	scheduler := NewScheduler("", func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := uint64(0)
@@ -174,7 +174,7 @@ func TestScheduleCreatedTasks(t *testing.T) {
 }
 
 func TestReallocateExpiredTasks(t *testing.T) {
-	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
+	service := newTestTaskService(t)
 	scheduler := NewScheduler("", func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
 	currentTick := expiredTick - 1
@@ -208,7 +208,7 @@ func TestReallocateExpiredTasks(t *testing.T) {
 }
 
 func TestAllocTasksWithLabels(t *testing.T) {
-	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
+	service := newTestTaskService(t)
 	scheduler := NewScheduler("", func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{
 		"a": {Labels: map[string]metadata.LabelList{"k1": {Labels: []string{"v1"}}}},
@@ -245,7 +245,7 @@ func TestAllocTasksWithLabels(t *testing.T) {
 }
 
 func TestAllocTasksWithMemoryOrCPU(t *testing.T) {
-	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
+	service := newTestTaskService(t)
 	scheduler := NewScheduler("", func() taskservice.TaskService { return service }, hakeeper.Config{})
 	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{
 		"a": {Resource: pb.Resource{CPUTotal: 1, MemTotal: 200}},
@@ -280,6 +280,15 @@ func TestAllocTasksWithMemoryOrCPU(t *testing.T) {
 	query, err = service.QueryAsyncTask(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(query))
+}
+
+func newTestTaskService(t *testing.T) taskservice.TaskService {
+	t.Helper()
+	service := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
+	t.Cleanup(func() {
+		assert.NoError(t, service.Close())
+	})
+	return service
 }
 
 func TestNilGetter(t *testing.T) {

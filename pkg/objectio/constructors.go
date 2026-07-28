@@ -52,6 +52,7 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 		decompressedData := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
 		bs, err := compress.Decompress(data, decompressedData.Bytes(), compress.Lz4)
 		if err != nil {
+			decompressedData.Release()
 			return
 		}
 		decompressedData = decompressedData.Slice(len(bs))

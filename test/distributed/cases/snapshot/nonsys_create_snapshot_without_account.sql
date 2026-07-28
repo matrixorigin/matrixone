@@ -12,7 +12,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account;
 insert into clu01 values(2,3);
 
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 
 select * from clu01;
 select count(*) from clu01;
@@ -49,7 +49,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase =
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 select count(*) from rs01;
 select * from rs01;
 select count(*) from rs01 {snapshot = 'sp01'};
@@ -100,7 +100,7 @@ delete from rs03 where col1 = 1;
 select count(*) from rs03;
 select count(*) from rs03{snapshot = 'sp02'};
 
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 
 show databases;
 select count(*) from rs02;
@@ -181,7 +181,7 @@ select * from test03.aff01{snapshot = 'sp04'};
 select * from test03.pri01{snapshot = 'sp04'};
 select count(*) from test03.aff01{snapshot = 'sp04'};
 
-restore account acc01 from snapshot sp04;
+restore account acc01{snapshot="sp04"};
 use test03;
 show create table aff01;
 show create table pri01;
@@ -251,7 +251,7 @@ show databases;
 select * from test01.t1;
 select count(*) from test03.t3;
 
-restore account acc01 from snapshot snap01;
+restore account acc01{snapshot="snap01"};
 
 show databases;
 select count(*) from test01.t1;
@@ -275,7 +275,7 @@ drop snapshot snap01;
 drop snapshot if exists sp05;
 create snapshot sp05 for account;
 create database db01;
-restore account acc01 FROM snapshot sp05;
+restore account acc01{snapshot="sp05"};
 show databases;
 drop snapshot sp05;
 
@@ -304,12 +304,12 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account;
 -- @ignore:1
 show snapshots;
-restore account acc01 from snapshot sp08;
+restore account acc01{snapshot="sp08"};
 select * from table02;
 select * from db01.table01;
 select count(*) from table02;
 
-restore account acc01 from snapshot sp07;
+restore account acc01{snapshot="sp07"};
 select * from table01;
 select * from table02;
 select count(*) from table01;
@@ -344,13 +344,13 @@ drop snapshot if exists sp10;
 create snapshot sp10 for account;
 -- @ignore:1
 show snapshots;
-restore account acc01 from snapshot sp09;
+restore account acc01{snapshot="sp09"};
 select * from table02;
 select * from db02.table01;
 select count(*) from table02;
 select count(*) from table01;
 
-restore account acc01 from snapshot sp10;
+restore account acc01{snapshot="sp10"};
 select * from db02.table01;
 select count(*) from table01;
 
@@ -429,7 +429,7 @@ select count(*) from tm1;
 select count(*) from ti2;
 select count(*) from tm2;
 
-restore account acc01 from snapshot sp11;
+restore account acc01{snapshot="sp11"};
 show databases;
 select * from db03.ti1;
 select * from db03.tm1;
@@ -440,7 +440,7 @@ show create table db03.tm1;
 show create table db03.ti2;
 show create table db03.tm2;
 
-restore account acc01 from snapshot sp14;
+restore account acc01{snapshot="sp14"};
 show databases;
 select * from db03.ti1;
 select * from db03.tm1;
@@ -495,7 +495,7 @@ create snapshot sp13 for account;
 insert into db04.table01 values (200);
 insert into db05.table01 values (400);
 
-restore account acc01 database db04 from snapshot sp13;
+restore database db04{snapshot="sp13"};
 
 show databases;
 use db04;
@@ -543,8 +543,8 @@ show create table table02;
 show create table table02 {snapshot = 'sp14'};
 drop database db08;
 
-restore account acc01 database db07 from snapshot sp14;
-restore account acc01 database db08 from snapshot sp14;
+restore database db07{snapshot="sp14"};
+restore database db08{snapshot="sp14"};
 
 show databases;
 use db07;
@@ -556,8 +556,8 @@ select * from table01;
 drop snapshot if exists sp15;
 create snapshot sp15 for account;
 
-restore account acc01 database db07 from snapshot sp15;
-restore account acc01 database db08 from snapshot sp15;
+restore database db07{snapshot="sp15"};
+restore database db08{snapshot="sp15"};
 
 use db08;
 show tables;
@@ -587,7 +587,7 @@ drop snapshot if exists sp15;
 create snapshot sp15 for account;
 insert into db08 (col1) values (3000);
 
-restore account acc01 database db from snapshot sp15;
+restore database db{snapshot="sp15"};
 drop snapshot sp15;
 drop database db08;
 
@@ -653,8 +653,8 @@ use db10;
 truncate index03;
 select * from index03;
 
-restore account acc01 database db09 table index01 from snapshot sp16;
-restore account acc01 database db10 table index03 from snapshot sp16;
+restore table db09.index01{snapshot="sp16"};
+restore table db10.index03{snapshot="sp16"};
 
 use db09;
 select * from index02;
@@ -693,17 +693,17 @@ insert into pri01 values (234222, -3923.2342342);
 drop snapshot if exists sp18;
 create snapshot sp18 for account;
 
-restore account acc01 database db11 table pri01 from snapshot sp18;
+restore table db11.pri01{snapshot="sp18"};
 show create table pri01;
 select * from pri01;
 select count(*) from pri01;
 
-restore account acc01 database db11 table pri01 from snapshot sp17;
+restore table db11.pri01{snapshot="sp17"};
 show create table pri01;
 select * from pri01;
 select count(*) from pri01;
 
-restore account acc01 database db11 table pri01 from snapshot sp18;
+restore table db11.pri01{snapshot="sp18"};
 show create table pri01;
 select * from pri01;
 select count(*) from pri01;
@@ -736,10 +736,10 @@ insert into table01 values (1);
 insert into table02 values ('1');
 insert into table03 values ('3');
 insert into table04 values ('1');
-restore account acc01 database db12 table table01 from snapshot sp19;
-restore account acc01 database db12 table table02 from snapshot sp19;
-restore account acc01 database db12 table table03 from snapshot sp19;
-restore account acc01 database db12 table table04 from snapshot sp19;
+restore table db12.table01{snapshot="sp19"};
+restore table db12.table02{snapshot="sp19"};
+restore table db12.table03{snapshot="sp19"};
+restore table db12.table04{snapshot="sp19"};
 select * from table01;
 select * from table02;
 select * from table03;

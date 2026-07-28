@@ -1,0 +1,749 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package iscp
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
+
+/* IndexConsumer */
+type IndexEntry struct {
+	algo    string
+	indexes []*plan.IndexDef
+}
+
+/* IndexConsumer */
+type IndexConsumer struct {
+	cnUUID       string
+	cnEngine     engine.Engine
+	cnTxnClient  client.TxnClient
+	jobID        JobID
+	info         *ConsumerInfo
+	tableDef     *plan.TableDef
+	sqlWriter    IndexSqlWriter
+	rowdata      []any
+	rowdelete    []any
+	sqlBufSendCh chan []byte
+	algo         string
+}
+
+var _ Consumer = new(IndexConsumer)
+
+var runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
+
+type errorAwareDataRetriever interface {
+	SetError(error)
+}
+
+// SqlWriter returns the writer this consumer is paired with. Used by
+// plugin Hooks.Run impls that need to dispatch on the writer's
+// concrete type (e.g. HNSW picking RunHnsw[float32] vs [float64]).
+func (c *IndexConsumer) SqlWriter() IndexSqlWriter { return c.sqlWriter }
+
+// Algo returns the algorithm string this consumer's writer was built
+// for. Useful for diagnostics inside plugin Hooks.
+func (c *IndexConsumer) Algo() string { return c.algo }
+
+// SqlBufSendCh exposes the channel on which the framing layer delivers
+// writer SQL / CDC JSON blobs. Plugin Hooks.Run impls read from this
+// channel and stop when it closes (signalling end-of-iteration).
+func (c *IndexConsumer) SqlBufSendCh() <-chan []byte { return c.sqlBufSendCh }
+
+// RunTxn wraps sqlexec.RunTxnWithSqlContext bound to this consumer's
+// connection plumbing (engine, txn client, CN UUID) and the retriever's
+// account ID. Plugin Hooks.Run impls living outside pkg/iscp use this
+// to execute SQL / drive a sync object inside a properly scoped txn
+// without needing access to the consumer's private fields.
+func (c *IndexConsumer) RunTxn(
+	ctx context.Context,
+	r DataRetriever,
+	timeout time.Duration,
+	cb func(sqlproc *sqlexec.SqlProcess) error,
+) error {
+	return runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), timeout, nil, nil,
+		func(sqlproc *sqlexec.SqlProcess, _ any) error {
+			return cb(sqlproc)
+		})
+}
+
+func NewIndexConsumer(cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	tableDef *plan.TableDef,
+	jobID JobID,
+	info *ConsumerInfo) (Consumer, error) {
+
+	ie := &IndexEntry{indexes: make([]*plan.IndexDef, 0, 3)}
+
+	for _, idx := range tableDef.Indexes {
+		// Any algorithm that has registered an iscp.Hooks participates
+		// in CDC; the registry is the single source of truth. Replaces
+		// the previous IsHnswIndexAlgo / IsIvfIndexAlgo /
+		// IsFullTextIndexAlgo chain.
+		if idx.TableExist && HasHooks(idx.IndexAlgo) {
+			key := idx.IndexName
+			if key == info.IndexName {
+				if len(ie.algo) == 0 {
+					ie.algo = idx.IndexAlgo
+				}
+				ie.indexes = append(ie.indexes, idx)
+			}
+		}
+
+	}
+
+	sqlwriter, err := NewIndexSqlWriter(ie.algo, jobID, info, tableDef, ie.indexes)
+	if err != nil {
+		return nil, err
+	}
+
+	c := &IndexConsumer{cnUUID: cnUUID,
+		cnEngine:    cnEngine,
+		cnTxnClient: cnTxnClient,
+		jobID:       jobID,
+		info:        info,
+		tableDef:    tableDef,
+		sqlWriter:   sqlwriter,
+		rowdata:     make([]any, len(tableDef.Cols)),
+		rowdelete:   make([]any, 1),
+		algo:        ie.algo,
+		//sqlBufSendCh: make(chan []byte),
+	}
+
+	return c, nil
+}
+
+// RunIndex drives one ISCP consumer iteration for SQL-based index
+// algorithms (fulltext, IVF-FLAT). It drains SQL statements from the
+// consumer's send channel and executes them against the hidden tables,
+// committing each statement individually for snapshot data and under
+// one long-lived transaction for tail data. Used as the default Run
+// implementation by plugin Hooks whose writer produces SQL rather than
+// a JSON CDC blob.
+func RunIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+	runIndex(c, ctx, errch, r)
+}
+
+func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+	datatype := r.GetDataType()
+	indexName := c.indexName()
+
+	if datatype == ISCPDataType_Snapshot {
+		// SNAPSHOT
+		for {
+			if err := ctx.Err(); err != nil {
+				reportIndexConsumerErr(errch, err)
+				return
+			}
+			select {
+			case <-ctx.Done():
+				reportIndexConsumerErr(errch, ctx.Err())
+				return
+			case e2 := <-errch:
+				reportIndexConsumerErr(errch, e2)
+				return
+			case sql, ok := <-c.sqlBufSendCh:
+				if !ok {
+					return
+				}
+
+				// no transaction required and commit every time.
+				err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
+					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+						sqlctx := sqlproc.SqlCtx
+
+						if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeExec, indexName); err != nil {
+							return err
+						}
+						if objectio.ISCPIndexExecErrorInjected() {
+							return injectedISCPIndexErr("exec")
+						}
+						res, err := ExecWithResult(sqlproc.GetContext(), string(sql), sqlctx.GetService(), sqlctx.Txn())
+						if err != nil {
+							logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.info, err, string(sql))
+							os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sql)))
+							os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
+							return err
+						}
+						res.Close()
+						return nil
+					})
+
+				if err != nil {
+					reportIndexConsumerErr(errch, err)
+					return
+				}
+			}
+		}
+
+	} else {
+
+		// all updates under same transaction and transaction can last very long so set timeout to 24 hours
+		err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 24*time.Hour, nil, nil,
+			func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+				sqlctx := sqlproc.SqlCtx
+
+				// TAIL
+				for {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case e2 := <-errch:
+						reportIndexConsumerErr(errch, e2)
+						return e2
+					case sql, ok := <-c.sqlBufSendCh:
+						if !ok {
+							// channel closed
+							if objectio.ISCPIndexWatermarkErrInjected() {
+								return injectedISCPIndexErr("watermark")
+							}
+							return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
+						}
+
+						// update SQL
+						var res executor.Result
+						if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeExec, indexName); err != nil {
+							return err
+						}
+						if objectio.ISCPIndexExecErrorInjected() {
+							return injectedISCPIndexErr("exec")
+						}
+						res, err = ExecWithResult(sqlproc.GetContext(), string(sql), sqlctx.GetService(), sqlctx.Txn())
+						if err != nil {
+							return err
+						}
+						res.Close()
+					}
+				}
+			})
+
+		if err != nil {
+			reportIndexConsumerErr(errch, err)
+			return
+		}
+	}
+}
+
+// RunHnsw drives one ISCP consumer iteration for HNSW indexes. It
+// reads JSON CDC blobs from the writer's send channel, applies them
+// to an in-memory HnswSync graph via Update, then flushes the model
+// to the hidden tables via Save when the channel closes. Used as the
+// Run implementation by HNSW's plugin Hooks.
+//
+// The generic parameter T is the vector element type (float32 or
+// float64), matched against the writer type at the call site.
+func RunHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+	runHnsw[T](c, ctx, errch, r)
+}
+
+func runHnsw[T types.RealNumbers](c *IndexConsumer, ctx context.Context, errch chan error, r DataRetriever) {
+
+	datatype := r.GetDataType()
+	indexName := c.indexName()
+
+	// Suppose we shoult not use transaction here for Snapshot type and commit every time a new batch comes.
+	// However, HNSW only run in local without save to database until Sync.Save().
+	// HNSW is okay to have similar implementation to TAIL
+
+	var err error
+	var sync *hnsw.HnswSync[T]
+
+	// read-only sql so no need transaction here.  All models are loaded at startup.
+	err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
+		func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+
+			w := c.sqlWriter.(*HnswSqlWriter[T])
+			sync, err = w.NewSync(sqlproc)
+			return err
+		})
+
+	if err != nil {
+		// NewSync may have allocated the index (native resources) before the txn
+		// failed — release it here so the early return doesn't leak it (the defer
+		// below isn't reached yet).
+		if sync != nil {
+			sync.Destroy()
+		}
+		reportIndexConsumerErr(errch, err)
+		return
+	}
+
+	if sync == nil {
+		reportIndexConsumerErr(errch, moerr.NewInternalErrorNoCtx("failed create HnswSync"))
+		return
+	}
+
+	defer func() {
+		if sync != nil {
+			sync.Destroy()
+		}
+	}()
+
+	for {
+		if err := ctx.Err(); err != nil {
+			reportIndexConsumerErr(errch, err)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			reportIndexConsumerErr(errch, ctx.Err())
+			return
+		case e2 := <-errch:
+			reportIndexConsumerErr(errch, e2)
+			return
+		case sql, ok := <-c.sqlBufSendCh:
+			if !ok {
+				// channel closed
+
+				// we need a transaction here to save model files and update watermark
+				err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), time.Hour, nil, nil,
+					func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+						sqlctx := sqlproc.SqlCtx
+
+						// save model to db
+						if objectio.ISCPIndexHnswSaveErrInjected() {
+							return injectedISCPIndexErr("hnsw save")
+						}
+						if objectio.WaitInjected(objectio.FJ_ISCPCancelHnswBeforeSave) {
+							logutil.Infof("ISCP-Task cancel fault wait %s index=%s", objectio.FJ_ISCPCancelHnswBeforeSave, indexName)
+						}
+						if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongHnswBeforeSave, indexName); err != nil {
+							return err
+						}
+						if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:hnsw-before-save:"+indexName {
+							logutil.Infof("ISCP-Task injected hook %s", msg)
+						}
+						err = sync.Save(sqlproc)
+						if err != nil {
+							return
+						}
+
+						// update watermark
+						if datatype == ISCPDataType_Tail {
+							if objectio.ISCPIndexWatermarkErrInjected() {
+								return injectedISCPIndexErr("watermark")
+							}
+							if objectio.WaitInjected(objectio.FJ_ISCPCancelBeforeUpdateWatermark) {
+								logutil.Infof("ISCP-Task cancel fault wait %s index=%s", objectio.FJ_ISCPCancelBeforeUpdateWatermark, indexName)
+							}
+							if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeWatermark, indexName); err != nil {
+								return err
+							}
+							if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:before-update-watermark:"+indexName {
+								logutil.Infof("ISCP-Task injected hook %s", msg)
+							}
+							err = r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
+							if err != nil {
+								return
+							}
+						}
+						return
+
+					})
+
+				if err != nil {
+					reportIndexConsumerErr(errch, err)
+					return
+				}
+				return
+			}
+
+			// sql -> cdc
+			var cdc vectorindex.VectorIndexCdc[T]
+			err = sonic.Unmarshal(sql, &cdc)
+			if err != nil {
+				reportIndexConsumerErr(errch, err)
+				return
+			}
+
+			// HNSW models are already in local so hnsw Update should not require executing SQL or should be read-only. No transaction required.
+			err = runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 30*time.Minute, nil, nil,
+				func(sqlproc *sqlexec.SqlProcess, cbdata any) (err error) {
+					if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongHnswBeforeUpdate, indexName); err != nil {
+						return err
+					}
+					if objectio.ISCPIndexHnswUpdateErrInjected() {
+						return injectedISCPIndexErr("hnsw update")
+					}
+					return sync.Update(sqlproc, &cdc)
+				})
+
+			if err != nil {
+				reportIndexConsumerErr(errch, err)
+				return
+			}
+
+		}
+	}
+
+}
+
+func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriever) {
+	// Plugin Hooks own the per-algorithm consumer loop. HNSW's Run
+	// type-switches the writer to pick the right RunHnsw[T]
+	// specialisation; IVF-FLAT and fulltext delegate to RunIndex.
+	// Replaces the hardcoded switch that previously lived here.
+	h, ok := GetHooks(c.algo)
+	if !ok {
+		reportIndexConsumerErr(errch, moerr.NewInternalError(ctx, "iscp: no Hooks registered for algo "+c.algo))
+		return
+	}
+	h.Run(c, ctx, errch, r)
+}
+
+func reportIndexConsumerErr(errch chan error, err error) {
+	if err == nil {
+		return
+	}
+	select {
+	case errch <- err:
+	default:
+	}
+}
+
+func waitISCPIndexCancelCtx(ctx context.Context, key, indexName string) error {
+	injected := false
+	if indexName != "" && objectio.WaitInjectedCtx(ctx, key+":"+indexName) {
+		injected = true
+	} else if objectio.WaitInjectedCtx(ctx, key) {
+		injected = true
+	}
+	if !injected {
+		return nil
+	}
+	logutil.Infof("ISCP-Task cancel ctx fault wait %s index=%s", key, indexName)
+	return ctx.Err()
+}
+
+func (c *IndexConsumer) indexName() string {
+	if c == nil || c.info == nil {
+		return ""
+	}
+	return c.info.IndexName
+}
+
+func injectedISCPIndexErr(point string) error {
+	return moerr.NewInternalErrorNoCtx("injected ISCP index " + point + " failure")
+}
+
+func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, datatype int8, errch chan error) bool {
+	// release the data
+
+	if data == nil {
+		err := c.flushCdc(ctx, errch)
+		if err != nil {
+			reportIndexConsumerErr(errch, err)
+			return true
+		}
+		objectio.ISCPIndexCloseBlockInjected()
+		close(c.sqlBufSendCh)
+		return true
+	}
+
+	defer data.Done()
+
+	insertBatch := data.insertBatch
+	deleteBatch := data.deleteBatch
+	noMoreData := data.noMoreData
+	err := data.err
+	if err != nil {
+		reportIndexConsumerErr(errch, err)
+		return true
+	}
+
+	if noMoreData {
+		err := c.flushCdc(ctx, errch)
+		if err != nil {
+			reportIndexConsumerErr(errch, err)
+			return true
+		}
+		objectio.ISCPIndexCloseBlockInjected()
+		close(c.sqlBufSendCh)
+		return noMoreData
+	}
+
+	// update index
+
+	if datatype == ISCPDataType_Snapshot {
+		// SNAPSHOT
+		err := c.sinkSnapshot(ctx, errch, insertBatch)
+		if err != nil {
+			// error out
+			reportIndexConsumerErr(errch, err)
+			noMoreData = true
+		}
+
+	} else {
+		// sinkTail will save sql to the slice
+		err := c.sinkTail(ctx, errch, insertBatch, deleteBatch)
+		if err != nil {
+			// error out
+			reportIndexConsumerErr(errch, err)
+			noMoreData = true
+		}
+	}
+
+	return noMoreData
+
+}
+
+func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
+	noMoreData := false
+	errch := make(chan error, 2)
+	c.sqlBufSendCh = make(chan []byte)
+	defer func() {
+		c.sqlBufSendCh = nil
+		c.sqlWriter.Reset()
+	}()
+
+	datatype := r.GetDataType()
+
+	// create thread to poll sql
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c.run(ctx, errch, r)
+		select {
+		case err := <-errch:
+			if errSetter, ok := r.(errorAwareDataRetriever); ok {
+				errSetter.SetError(err)
+			}
+			reportIndexConsumerErr(errch, err)
+		default:
+		}
+	}()
+
+	// read data
+	for !noMoreData {
+		data := r.Next()
+		noMoreData = c.processISCPData(ctx, data, datatype, errch)
+	}
+
+	wg.Wait()
+
+	if len(errch) > 0 {
+		return <-errch
+	}
+
+	return nil
+}
+
+func (c *IndexConsumer) sinkSnapshot(ctx context.Context, errch chan error, upsertBatch *AtomicBatch) error {
+	var err error
+
+	for _, bat := range upsertBatch.Batches {
+		for i := 0; i < batchRowCount(bat); i++ {
+			if err = extractRowFromEveryVector(ctx, bat, i, c.rowdata); err != nil {
+				return err
+			}
+
+			err = c.sqlWriter.Upsert(ctx, c.rowdata)
+			if err != nil {
+				return err
+			}
+
+			if c.sqlWriter.Full() {
+				err = c.sendSql(ctx, errch, c.sqlWriter)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// upsertBatch and deleteBatch is sorted by ts
+// for the same ts, delete first, then upsert
+func (c *IndexConsumer) sinkTail(ctx context.Context, errch chan error, upsertBatch, deleteBatch *AtomicBatch) error {
+	var err error
+
+	upsertIter := upsertBatch.GetRowIterator().(*atomicBatchRowIter)
+	deleteIter := deleteBatch.GetRowIterator().(*atomicBatchRowIter)
+	defer func() {
+		upsertIter.Close()
+		deleteIter.Close()
+	}()
+
+	// output sql until one iterator reach the end
+	upsertIterHasNext, deleteIterHasNext := upsertIter.Next(), deleteIter.Next()
+	for upsertIterHasNext && deleteIterHasNext {
+		upsertItem, deleteItem := upsertIter.Item(), deleteIter.Item()
+		// compare ts, ignore pk
+		if upsertItem.Ts.LT(&deleteItem.Ts) {
+			if err = c.sinkInsert(ctx, errch, upsertIter); err != nil {
+				return err
+			}
+			// get next item
+			upsertIterHasNext = upsertIter.Next()
+		} else {
+			if err = c.sinkDelete(ctx, errch, deleteIter); err != nil {
+				return err
+			}
+			// get next item
+			deleteIterHasNext = deleteIter.Next()
+		}
+	}
+
+	// output the rest of upsert iterator
+	for upsertIterHasNext {
+		if err = c.sinkInsert(ctx, errch, upsertIter); err != nil {
+			return err
+		}
+		// get next item
+		upsertIterHasNext = upsertIter.Next()
+	}
+
+	// output the rest of delete iterator
+	for deleteIterHasNext {
+		if err = c.sinkDelete(ctx, errch, deleteIter); err != nil {
+			return err
+		}
+		// get next item
+		deleteIterHasNext = deleteIter.Next()
+	}
+	return c.flushCdc(ctx, errch)
+}
+
+func (c *IndexConsumer) sinkInsert(ctx context.Context, errch chan error, upsertIter *atomicBatchRowIter) (err error) {
+
+	// get row from the batch
+	if err = upsertIter.Row(ctx, c.rowdata); err != nil {
+		return err
+	}
+
+	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_INSERT) {
+		// last op is not INSERT, sendSql first
+		// send SQL
+		err = c.sendSql(ctx, errch, c.sqlWriter)
+		if err != nil {
+			return err
+		}
+
+	}
+
+	err = c.sqlWriter.Insert(ctx, c.rowdata)
+	if err != nil {
+		return err
+	}
+
+	if c.sqlWriter.Full() {
+		// send SQL
+		err = c.sendSql(ctx, errch, c.sqlWriter)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *IndexConsumer) sinkDelete(ctx context.Context, errch chan error, deleteIter *atomicBatchRowIter) (err error) {
+
+	// get row from the batch
+	if err = deleteIter.Row(ctx, c.rowdelete); err != nil {
+		return err
+	}
+
+	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_DELETE) {
+		// last op is not DELETE, sendSql first
+		// send SQL
+		err = c.sendSql(ctx, errch, c.sqlWriter)
+		if err != nil {
+			return err
+		}
+
+	}
+
+	err = c.sqlWriter.Delete(ctx, c.rowdelete)
+	if err != nil {
+		return err
+	}
+
+	if c.sqlWriter.Full() {
+		// send SQL
+		err = c.sendSql(ctx, errch, c.sqlWriter)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *IndexConsumer) sendSql(ctx context.Context, errch chan error, writer IndexSqlWriter) error {
+	if writer.Empty() {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	indexName := c.indexName()
+	if err := waitISCPIndexCancelCtx(ctx, objectio.FJ_ISCPCancelLongBeforeSend, indexName); err != nil {
+		return err
+	}
+
+	// generate sql from cdc
+	sql, err := writer.ToSql()
+	if err != nil {
+		return err
+	}
+
+	objectio.ISCPIndexSendBlockInjected()
+	if objectio.ISCPIndexSendErrorInjected() {
+		return injectedISCPIndexErr("send")
+	}
+
+	select {
+	case c.sqlBufSendCh <- sql:
+	case err := <-errch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	//os.Stderr.WriteString(string(sql))
+	//os.Stderr.WriteString("\n")
+
+	// reset
+	writer.Reset()
+
+	return nil
+}
+
+func (c *IndexConsumer) flushCdc(ctx context.Context, errch chan error) error {
+	return c.sendSql(ctx, errch, c.sqlWriter)
+}

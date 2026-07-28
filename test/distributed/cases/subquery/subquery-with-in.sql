@@ -894,7 +894,6 @@ DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 drop table if exists t3;
 
--- @bvt:issue#5955
 CREATE TABLE t1 (
   pk INT PRIMARY KEY,
   int_key INT,
@@ -909,7 +908,6 @@ WHERE NULL NOT IN (
    WHERE INNR.varchar_key > 'n{'
 );
 DROP TABLE IF EXISTS t1;
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t1(i INT);
@@ -1116,6 +1114,15 @@ INSERT INTO t1 VALUES (1), (2), (3);
 SELECT 2 IN ( SELECT 5 UNION SELECT NULL ) FROM t1;
 DROP TABLE IF EXISTS t1;
 
+drop table if exists task;
+drop table if exists task_detail;
+create table `task` (`id` bigint NOT NULL, PRIMARY KEY (`id`));
+create table `task_detail` (`id` bigint NOT NULL, `task_id` bigint NOT NULL, PRIMARY KEY (`id`), KEY `order_id` (`task_id`));
+insert into task select * from generate_series(1,10000) g;
+insert into task_detail select *,* from generate_series(1,100000) g;
+update task_detail set task_id = task_id % 10000;
+select 100000 - count(*) from task_detail where task_id in (select id from task where id > 1);
+
 drop database if exists test;
 create database test;
 use test;
@@ -1181,5 +1188,77 @@ select id, count(*) from test group by id order by count(*) desc;
 update test set status = 3 where is_deleted = 0 and (id in (10, 11, 12, 10, 13, 10) and is_deleted = 0 and tenant_id = '000000');
 select id, count(*) from test group by id order by count(*) desc;
 
+-- @case
+-- @desc:test for nested correlated IN subquery
+-- @label:bvt
+drop table if exists corr_in_t1;
+drop table if exists corr_in_t2;
+drop table if exists corr_in_t3;
+create table corr_in_t1(id int);
+create table corr_in_t2(id int);
+create table corr_in_t3(id int);
+insert into corr_in_t1 values (1), (2), (3);
+insert into corr_in_t2 values (1), (2);
+insert into corr_in_t3 values (1);
+select c1.id from corr_in_t1 c1 where c1.id in (
+    select c2.id from corr_in_t2 c2 where c2.id in (
+        select c3.id from corr_in_t3 c3 where c3.id = c2.id and c2.id = c1.id
+    )
+) order by c1.id;
+select c1.id from corr_in_t1 c1 where c1.id not in (
+    select c2.id from corr_in_t2 c2 where c2.id in (
+        select c3.id from corr_in_t3 c3 where c3.id = c2.id and c2.id = c1.id
+    )
+) order by c1.id;
+drop table if exists corr_in_t1;
+drop table if exists corr_in_t2;
+drop table if exists corr_in_t3;
+
 drop table test;
 drop database test;
+
+-- @case
+-- @desc:scalar subquery in SELECT list returning multiple rows
+-- @label:bvt
+create database test_subq_err;
+use test_subq_err;
+create table t1 (a int);
+insert into t1 values (1), (2);
+select (select a from t1) from t1;
+drop database test_subq_err;
+
+-- @case
+-- @desc:scalar subquery in WHERE with equality returning multiple rows
+-- @label:bvt
+create database test_subq_err;
+use test_subq_err;
+create table t1 (a int);
+create table t2 (a int);
+insert into t1 values (1);
+insert into t2 values (1), (1);
+select * from t1 where a = (select a from t2 where t2.a = t1.a);
+drop database test_subq_err;
+
+-- @case
+-- @desc:scalar subquery with non-equi condition returning multiple rows
+-- @label:bvt
+create database test_subq_err;
+use test_subq_err;
+create table t1 (a int);
+create table t2 (a int, b int);
+insert into t1 values (3);
+insert into t2 values (1, 10), (2, 20);
+select * from t1 where a > (select b from t2 where t2.a < t1.a);
+drop database test_subq_err;
+
+-- @case
+-- @desc:scalar subquery in SELECT list returning multiple rows without correlation
+-- @label:bvt
+create database test_subq_err;
+use test_subq_err;
+create table t1 (a int);
+create table t2 (a int);
+insert into t1 values (1);
+insert into t2 values (1), (2), (3);
+select (select a from t2) from t1;
+drop database test_subq_err;

@@ -62,6 +62,8 @@ func NewPartitionMultiUpdateFrom(
 	op.MultiUpdateCtx = from.raw.MultiUpdateCtx
 	op.Action = from.raw.Action
 	op.IsOnduplicateKeyUpdate = from.raw.IsOnduplicateKeyUpdate
+	op.CountDeleteAffectRows = from.raw.CountDeleteAffectRows
+	op.RejectZeroTemporal = from.raw.RejectZeroTemporal
 	op.Engine = from.raw.Engine
 	return NewPartitionMultiUpdate(op, from.tableID)
 }
@@ -157,6 +159,7 @@ func (op *PartitionMultiUpdate) writeTable(
 	if len(op.raw.MultiUpdateCtx[0].PartitionCols) > 0 {
 		pos = int32(op.raw.MultiUpdateCtx[0].PartitionCols[0])
 	}
+
 	res, err := partitionprune.Prune(proc, input.Batch, op.meta, pos)
 	if err != nil {
 		return vm.CallResult{}, err
@@ -182,6 +185,9 @@ func (op *PartitionMultiUpdate) writeTable(
 			}
 
 			// mapping all main table and index table to partition's.
+			// Clone each context to avoid mutating shared plan objects
+			// that may be read concurrently by other operators.
+			cloned := make([]*MultiUpdateCtx, len(op.raw.MultiUpdateCtx))
 			for i, c := range op.raw.MultiUpdateCtx {
 				r := rel
 				if features.IsIndexTable(op.rawTableFlags[i]) {
@@ -196,9 +202,11 @@ func (op *PartitionMultiUpdate) writeTable(
 					}
 				}
 
-				c.ObjRef.ObjName = r.GetTableName()
-				c.TableDef = r.GetTableDef(proc.Ctx)
+				cloned[i] = c.clone()
+				cloned[i].ObjRef.ObjName = r.GetTableName()
+				cloned[i].TableDef = r.GetTableDef(proc.Ctx)
 			}
+			op.raw.MultiUpdateCtx = cloned
 			op.raw.resetMultiUpdateCtxs()
 			if err = op.raw.resetMultiSources(proc); err != nil {
 				return false
@@ -250,7 +258,6 @@ func (op *PartitionMultiUpdate) writeS3(
 		if err != nil {
 			return vm.CallResult{}, err
 		}
-		defer res.Close()
 		if res.Empty() {
 			panic("Prune result is empty")
 		}
@@ -270,6 +277,9 @@ func (op *PartitionMultiUpdate) writeS3(
 					return false
 				}
 
+				old := op.raw.MultiUpdateCtx
+				new := make([]*MultiUpdateCtx, 0, len(old))
+
 				// mapping all main table and index table to partition's.
 				for i, c := range op.raw.MultiUpdateCtx {
 					r := rel
@@ -285,9 +295,13 @@ func (op *PartitionMultiUpdate) writeS3(
 						}
 					}
 
-					c.ObjRef.ObjName = r.GetTableName()
-					c.TableDef = r.GetTableDef(proc.Ctx)
+					newC := c.clone()
+					newC.ObjRef.ObjName = r.GetTableName()
+					newC.TableDef = r.GetTableDef(proc.Ctx)
+					new = append(new, newC)
 				}
+				op.raw.MultiUpdateCtx = new
+
 				op.raw.resetMultiUpdateCtxs()
 				if err = op.raw.resetMultiSources(proc); err != nil {
 					return false
@@ -299,6 +313,7 @@ func (op *PartitionMultiUpdate) writeS3(
 				return err == nil
 			},
 		)
+		res.Close()
 		if err != nil {
 			return vm.CallResult{}, err
 		}
@@ -322,9 +337,6 @@ func (op *PartitionMultiUpdate) Free(
 	for _, w := range op.freeWriters {
 		w.free(proc)
 	}
-
-	affectedRows := op.affectedRows
-	*op = PartitionMultiUpdate{affectedRows: affectedRows}
 }
 
 func (op *PartitionMultiUpdate) Release() {
@@ -341,6 +353,16 @@ func (op *PartitionMultiUpdate) Reset(
 
 func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {
 	return &op.OperatorBase
+}
+
+func (op *PartitionMultiUpdate) SetRejectZeroTemporal(reject bool) {
+	op.raw.SetRejectZeroTemporal(reject)
+	for _, writer := range op.writers {
+		writer.rejectZeroTemporal = reject
+	}
+	for _, writer := range op.freeWriters {
+		writer.rejectZeroTemporal = reject
+	}
 }
 
 func (op *PartitionMultiUpdate) getPartitionIndex(
@@ -378,12 +400,13 @@ func (op *PartitionMultiUpdate) getPartitionIndex(
 }
 
 func (op *PartitionMultiUpdate) getS3Writer(
+	sid string,
 	id uint64,
 ) (*s3WriterDelegate, error) {
 	var err error
 	w, ok := op.writers[id]
 	if !ok {
-		w, err = newS3Writer(op.raw)
+		w, err = newS3Writer(sid, op.raw)
 		if err != nil {
 			return nil, err
 		}
@@ -411,4 +434,19 @@ func (op *PartitionMultiUpdate) GetAffectedRows() uint64 {
 
 func (op *PartitionMultiUpdate) SetAffectedRows(affectedRows uint64) {
 	op.affectedRows = affectedRows
+}
+
+func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
+	v := &MultiUpdateCtx{
+		InsertCols:         ctx.InsertCols,
+		DeleteCols:         ctx.DeleteCols,
+		PartitionCols:      ctx.PartitionCols,
+		SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
+		InsertPkColIdx:     ctx.InsertPkColIdx,
+	}
+	objRef := *ctx.ObjRef
+	def := *ctx.TableDef
+	v.ObjRef = &objRef
+	v.TableDef = &def
+	return v
 }

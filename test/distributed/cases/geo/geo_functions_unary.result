@@ -1,0 +1,105 @@
+select st_geometrytype(st_geomfromtext('POINT(1 2)')) as t_point;
+t_point
+POINT
+select st_geometrytype(st_geomfromtext('LINESTRING(0 0,1 1)')) as t_line;
+t_line
+LINESTRING
+select st_geometrytype(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 0))')) as t_poly;
+t_poly
+POLYGON
+select st_geometrytype(st_geomfromtext('MULTIPOLYGON(((0 0,1 0,1 1,0 0)))')) as t_mpoly;
+t_mpoly
+MULTIPOLYGON
+select st_dimension(st_geomfromtext('POINT(1 2)')) as d_point;
+d_point
+0
+select st_dimension(st_geomfromtext('LINESTRING(0 0,1 1)')) as d_line;
+d_line
+1
+select st_dimension(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 0))')) as d_poly;
+d_poly
+2
+select st_isempty(st_geomfromtext('POINT EMPTY')) as empty_yes;
+empty_yes
+1
+select st_isempty(st_geomfromtext('POINT(1 2)')) as empty_no;
+empty_no
+0
+select st_iscollection(st_geomfromtext('MULTIPOINT(1 1,2 2)')) as is_coll;
+is_coll
+1
+select st_iscollection(st_geomfromtext('POINT(1 1)')) as not_coll;
+not_coll
+0
+select st_x(st_geomfromtext('POINT(3 4)')) as x;
+x
+3.0
+select st_y(st_geomfromtext('POINT(3 4)')) as y;
+y
+4.0
+select st_numpoints(st_geomfromtext('LINESTRING(0 0,1 1,2 2)')) as n_points;
+n_points
+3
+select st_isclosed(st_geomfromtext('LINESTRING(0 0,1 0,1 1,0 0)')) as closed_yes;
+closed_yes
+1
+select st_isclosed(st_geomfromtext('LINESTRING(0 0,1 1)')) as closed_no;
+closed_no
+0
+select st_astext(st_startpoint(st_geomfromtext('LINESTRING(7 8,9 10,11 12)'))) as start_pt;
+start_pt
+POINT(7 8)
+select st_astext(st_endpoint(st_geomfromtext('LINESTRING(7 8,9 10,11 12)'))) as end_pt;
+end_pt
+POINT(11 12)
+select st_astext(st_pointn(st_geomfromtext('LINESTRING(7 8,9 10,11 12)'), 2)) as point_n;
+point_n
+POINT(9 10)
+select st_astext(st_exteriorring(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'))) as ext_ring;
+ext_ring
+LINESTRING(0 0,4 0,4 4,0 4,0 0)
+select st_numinteriorrings(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,4 2,4 4,2 4,2 2))')) as n_rings;
+n_rings
+1
+select st_astext(st_interiorringn(st_geomfromtext('POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,4 2,4 4,2 4,2 2))'), 1)) as int_ring;
+int_ring
+LINESTRING(2 2,4 2,4 4,2 4,2 2)
+select st_numgeometries(st_geomfromtext('MULTIPOINT(1 1,2 2,3 3)')) as n_geoms;
+n_geoms
+3
+select st_astext(st_geometryn(st_geomfromtext('MULTIPOINT(1 1,2 2,3 3)'), 2)) as geom_n;
+geom_n
+POINT(2 2)
+select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))')) as rect_area;
+rect_area
+12.0
+select st_area(st_geomfromtext('POLYGON((0 0,20 0,20 20,0 20,0 0),(5 5,15 5,15 15,5 15,5 5))')) as hole_area;
+hole_area
+300.0
+select st_area(st_geomfromtext('MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)),((2 2,4 2,4 4,2 4,2 2)))')) as mpoly_area;
+mpoly_area
+5.0
+select st_length(st_geomfromtext('LINESTRING(0 0,3 4)')) as line_len;
+line_len
+5.0
+select st_length(st_geomfromtext('MULTILINESTRING((0 0,0 1),(0 0,1 0))')) as mline_len;
+mline_len
+2.0
+select st_astext(st_centroid(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'))) as centroid;
+centroid
+POINT(1 1)
+select st_astext(st_centroid(st_geomfromtext('MULTIPOINT(0 0,2 0,2 2,0 2)'))) as centroid_mp;
+invalid input: geometry type is not supported by ST_Centroid
+select st_astext(st_envelope(st_geomfromtext('LINESTRING(1 2,3 4,0 5)'))) as envelope;
+envelope
+POLYGON((0 2,3 2,3 5,0 5,0 2))
+select st_astext(st_boundary(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'))) as boundary;
+boundary
+MULTILINESTRING((0 0,4 0,4 4,0 4,0 0))
+select st_astext(st_pointonsurface(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'))) as pos;
+pos
+POINT(2 2)
+select st_area(st_geomfromtext('POINT(1 1)'));
+invalid input: geometry is not a POLYGON or MULTIPOLYGON
+select st_length(st_geomfromtext('POINT(1 1)'));
+invalid input: geometry is not a LINESTRING or MULTILINESTRING

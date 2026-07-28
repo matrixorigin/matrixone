@@ -47,7 +47,7 @@ drop database view_test3;
 -- @session
 
 -- sys account restore acc1 from snapshot
-restore account acc1 from snapshot syssn1 to account acc1;
+restore account acc1{snapshot="syssn1"} to account acc1;
 
 -- @session:id=2&user=acc1:admin1&password=test123
 show databases;

@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -28,7 +27,7 @@ import (
 func TestIntHashMap_Iterator(t *testing.T) {
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(false)
+		mp, err := NewIntHashMap(false, m)
 		require.NoError(t, err)
 		rowCount := 10
 		vecs := []*vector.Vector{
@@ -53,7 +52,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true)
+		mp, err := NewIntHashMap(true, m)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -74,7 +73,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true)
+		mp, err := NewIntHashMap(true, m)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int64, 0, 0),
@@ -94,7 +93,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true)
+		mp, err := NewIntHashMap(true, m)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_char, 1, 0),
@@ -114,7 +113,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(true)
+		mp, err := NewIntHashMap(true, m)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_char, 1, 0),
@@ -134,7 +133,7 @@ func TestIntHashMap_Iterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewIntHashMap(false)
+		mp, err := NewIntHashMap(false, m)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_char, 1, 0),
@@ -161,7 +160,7 @@ func TestIntHashMap_MarshalUnmarshal(t *testing.T) {
 	}()
 
 	t.Run("Empty Map", func(t *testing.T) {
-		mp, err := NewIntHashMap(false)
+		mp, err := NewIntHashMap(false, m)
 		require.NoError(t, err)
 		defer mp.Free()
 
@@ -169,7 +168,7 @@ func TestIntHashMap_MarshalUnmarshal(t *testing.T) {
 		require.NoError(t, err)
 
 		unmarshaledMp := &IntHashMap{}
-		err = unmarshaledMp.UnmarshalBinary(data, hashtable.DefaultAllocator())
+		err = unmarshaledMp.UnmarshalBinary(data, m)
 		require.NoError(t, err)
 		defer unmarshaledMp.Free()
 
@@ -178,7 +177,7 @@ func TestIntHashMap_MarshalUnmarshal(t *testing.T) {
 	})
 
 	t.Run("Single Element (No Nulls)", func(t *testing.T) {
-		mp, err := NewIntHashMap(false)
+		mp, err := NewIntHashMap(false, m)
 		require.NoError(t, err)
 		defer mp.Free()
 
@@ -202,7 +201,7 @@ func TestIntHashMap_MarshalUnmarshal(t *testing.T) {
 		require.NoError(t, err)
 
 		unmarshaledMp := &IntHashMap{}
-		err = unmarshaledMp.UnmarshalBinary(data, hashtable.DefaultAllocator())
+		err = unmarshaledMp.UnmarshalBinary(data, m)
 		require.NoError(t, err)
 		defer unmarshaledMp.Free()
 
@@ -214,7 +213,7 @@ func TestIntHashMap_MarshalUnmarshal(t *testing.T) {
 	})
 
 	t.Run("Multiple Elements (With Resize, With Nulls, Mixed Types)", func(t *testing.T) {
-		mp, err := NewIntHashMap(true) // Test with nulls enabled
+		mp, err := NewIntHashMap(true, m) // Test with nulls enabled
 		require.NoError(t, err)
 		defer mp.Free()
 
@@ -239,7 +238,7 @@ func TestIntHashMap_MarshalUnmarshal(t *testing.T) {
 		require.NoError(t, err)
 
 		unmarshaledMp := &IntHashMap{}
-		err = unmarshaledMp.UnmarshalBinary(data, hashtable.DefaultAllocator())
+		err = unmarshaledMp.UnmarshalBinary(data, m)
 		require.NoError(t, err)
 		defer unmarshaledMp.Free()
 

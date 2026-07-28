@@ -16,11 +16,11 @@ package client
 
 import (
 	"context"
-	"runtime"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -33,11 +33,13 @@ const (
 type timestampWaiter struct {
 	logger    *log.MOLogger
 	stopper   stopper.Stopper
-	notifiedC chan timestamp.Timestamp
+	notifiedC chan struct{}
 	latestTS  atomic.Pointer[timestamp.Timestamp]
+	notified  atomic.Pointer[timestamp.Timestamp]
+	closed    atomic.Bool
 	mu        struct {
 		sync.Mutex
-		waiters      []*waiter
+		waiters      []*timestampWaiterEntry
 		lastNotified timestamp.Timestamp
 	}
 }
@@ -50,7 +52,7 @@ func NewTimestampWaiter(
 		logger: logger,
 		stopper: *stopper.NewStopper("timestamp-waiter",
 			stopper.WithLogger(logger.RawLogger())),
-		notifiedC: make(chan timestamp.Timestamp, maxNotifiedCount),
+		notifiedC: make(chan struct{}, maxNotifiedCount),
 	}
 	if err := tw.stopper.RunTask(tw.handleEvent); err != nil {
 		panic(err)
@@ -59,6 +61,25 @@ func NewTimestampWaiter(
 }
 
 func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	return tw.getTimestamp(ctx, ts, nil)
+}
+
+func (tw *timestampWaiter) GetTimestampWithClose(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+	closeC <-chan struct{},
+) (timestamp.Timestamp, error) {
+	return tw.getTimestamp(ctx, ts, closeC)
+}
+
+func (tw *timestampWaiter) getTimestamp(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+	closeC <-chan struct{},
+) (timestamp.Timestamp, error) {
+	if tw.closed.Load() {
+		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
+	}
 	latest := tw.latestTS.Load()
 	if latest != nil && latest.GreaterEq(ts) {
 		return latest.Next(), nil
@@ -69,22 +90,69 @@ func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timest
 		return timestamp.Timestamp{}, err
 	}
 	if w != nil {
-		defer w.close()
-		if err := w.wait(ctx); err != nil {
+		defer tw.finishWaiter(w)
+		if err := w.wait(ctx, closeC); err != nil {
 			return timestamp.Timestamp{}, err
 		}
+	}
+	if tw.closed.Load() {
+		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
 	}
 	v := tw.latestTS.Load()
 	return v.Next(), nil
 }
 
+// finishWaiter removes a canceled entry from the registry and returns it to
+// the pool. A timestamp waiter has exactly one owner: its GetTimestamp call.
+// Notification only detaches and wakes the entry; it never returns it to the
+// pool, so a pooled entry cannot be reused while the caller still examines it.
+func (tw *timestampWaiter) finishWaiter(target *timestampWaiterEntry) {
+	tw.mu.Lock()
+	i := target.index
+	if i < 0 || i >= len(tw.mu.waiters) || tw.mu.waiters[i] != target {
+		tw.mu.Unlock()
+		target.release()
+		return
+	}
+	last := len(tw.mu.waiters) - 1
+	if i != last {
+		tw.mu.waiters[i] = tw.mu.waiters[last]
+		tw.mu.waiters[i].index = i
+	}
+	tw.mu.waiters[last] = nil
+	tw.mu.waiters = tw.mu.waiters[:last]
+	target.index = -1
+	tw.mu.Unlock()
+	target.release()
+}
+
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
+	if tw.closed.Load() {
+		return
+	}
 	util.LogTxnPushedTimestampUpdated(tw.logger, ts)
-	tw.notifiedC <- ts
+	if !tw.storeNotified(ts) {
+		return
+	}
+	select {
+	case tw.notifiedC <- struct{}{}:
+	default:
+	}
 }
 
 func (tw *timestampWaiter) Close() {
+	if !tw.closed.CompareAndSwap(false, true) {
+		return
+	}
 	tw.stopper.Stop()
+	tw.mu.Lock()
+	for _, waiter := range tw.mu.waiters {
+		waiter.index = -1
+		waiter.notify()
+	}
+	clear(tw.mu.waiters)
+	tw.mu.waiters = nil
+	tw.mu.Unlock()
 }
 
 func (tw *timestampWaiter) LatestTS() timestamp.Timestamp {
@@ -98,16 +166,19 @@ func (tw *timestampWaiter) LatestTS() timestamp.Timestamp {
 	return *ts
 }
 
-func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) (*waiter, error) {
+func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) (*timestampWaiterEntry, error) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
+	if tw.closed.Load() {
+		return nil, moerr.NewClientClosedNoCtx()
+	}
 	if !tw.mu.lastNotified.IsEmpty() &&
 		tw.mu.lastNotified.GreaterEq(ts) {
 		return nil, nil
 	}
 
-	w := newWaiter(ts)
-	w.ref()
+	w := newTimestampWaiterEntry(ts)
+	w.index = len(tw.mu.waiters)
 	tw.mu.waiters = append(tw.mu.waiters, w)
 	return w, nil
 }
@@ -116,18 +187,19 @@ func (tw *timestampWaiter) notifyWaiters(ts timestamp.Timestamp) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
 	waiters := tw.mu.waiters[:0]
-	for idx, w := range tw.mu.waiters {
+	for _, w := range tw.mu.waiters {
 		if w != nil && ts.GreaterEq(w.waitAfter) {
 			w.notify()
-			w.unref()
-			tw.mu.waiters[idx] = nil
+			w.index = -1
 			w = nil
 		}
 		if w != nil {
+			w.index = len(waiters)
 			waiters = append(waiters, w)
 		}
 	}
 
+	clear(tw.mu.waiters[len(waiters):])
 	tw.mu.waiters = waiters
 	tw.mu.lastNotified = ts
 }
@@ -138,8 +210,8 @@ func (tw *timestampWaiter) handleEvent(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case ts := <-tw.notifiedC:
-			ts = tw.fetchLatestTS(ts)
+		case <-tw.notifiedC:
+			ts := tw.fetchLatestTS()
 			if latest.Less(ts) {
 				latest = ts
 				tw.latestTS.Store(&ts)
@@ -149,89 +221,98 @@ func (tw *timestampWaiter) handleEvent(ctx context.Context) {
 	}
 }
 
-func (tw *timestampWaiter) fetchLatestTS(ts timestamp.Timestamp) timestamp.Timestamp {
+func (tw *timestampWaiter) storeNotified(ts timestamp.Timestamp) bool {
 	for {
+		latest := tw.notified.Load()
+		if latest != nil && latest.GreaterEq(ts) {
+			return false
+		}
+		v := ts
+		if tw.notified.CompareAndSwap(latest, &v) {
+			return true
+		}
+	}
+}
+
+func (tw *timestampWaiter) fetchLatestTS() timestamp.Timestamp {
+	ts := tw.takeNotified()
+	for i := 0; i < maxNotifiedCount; i++ {
 		select {
-		case v := <-tw.notifiedC:
-			if v.Greater(ts) {
+		case <-tw.notifiedC:
+			v := tw.takeNotified()
+			if ts.Less(v) {
 				ts = v
 			}
 		default:
 			return ts
 		}
 	}
+	return ts
+}
+
+func (tw *timestampWaiter) takeNotified() timestamp.Timestamp {
+	for {
+		latest := tw.notified.Load()
+		if latest == nil {
+			return timestamp.Timestamp{}
+		}
+		if tw.notified.CompareAndSwap(latest, nil) {
+			return *latest
+		}
+	}
 }
 
 var (
-	waitersPool = sync.Pool{
+	timestampWaitersPool = sync.Pool{
 		New: func() any {
-			w := &waiter{
+			return &timestampWaiterEntry{
 				notifyC: make(chan struct{}, 1),
 			}
-			runtime.SetFinalizer(w, func(w *waiter) {
-				close(w.notifyC)
-			})
-			return w
 		},
 	}
 )
 
-type waiter struct {
+type timestampWaiterEntry struct {
 	waitAfter timestamp.Timestamp
 	notifyC   chan struct{}
-	refCount  atomic.Int32
+	// index is guarded by timestampWaiter.mu while the waiter is registered.
+	index int
 }
 
-func newWaiter(ts timestamp.Timestamp) *waiter {
-	w := waitersPool.Get().(*waiter)
+func newTimestampWaiterEntry(ts timestamp.Timestamp) *timestampWaiterEntry {
+	w := timestampWaitersPool.Get().(*timestampWaiterEntry)
 	w.init(ts)
 	return w
 }
 
-func (w *waiter) init(ts timestamp.Timestamp) {
+func (w *timestampWaiterEntry) init(ts timestamp.Timestamp) {
 	w.waitAfter = ts
-	if w.ref() != 1 {
-		panic("BUG: waiter init must has ref count 1")
-	}
+	w.index = -1
 }
 
-func (w *waiter) wait(ctx context.Context) error {
+func (w *timestampWaiterEntry) wait(ctx context.Context, closeC <-chan struct{}) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-closeC:
+		return moerr.NewClientClosedNoCtx()
 	case <-w.notifyC:
 		return nil
 	}
 }
 
-func (w *waiter) notify() {
+func (w *timestampWaiterEntry) notify() {
 	w.notifyC <- struct{}{}
 }
 
-func (w *waiter) ref() int32 {
-	return w.refCount.Add(1)
-}
-
-func (w *waiter) unref() {
-	n := w.refCount.Add(-1)
-	if n < 0 {
-		panic("BUG: negative ref count")
-	}
-	if n == 0 {
-		w.reset()
-		waitersPool.Put(w)
-	}
-}
-
-func (w *waiter) close() {
-	w.unref()
-}
-
-func (w *waiter) reset() {
+func (w *timestampWaiterEntry) release() {
+	w.waitAfter = timestamp.Timestamp{}
+	w.index = -1
 	for {
 		select {
 		case <-w.notifyC:
 		default:
+			timestampWaitersPool.Put(w)
 			return
 		}
 	}

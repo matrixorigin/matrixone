@@ -1,0 +1,477 @@
+drop database if exists fulljoin_tbl_db;
+create database fulljoin_tbl_db;
+use fulljoin_tbl_db;
+drop table if exists normal_t;
+create table normal_t(id int primary key, v varchar(10));
+insert into normal_t values (1,'n1'),(2,'n2'),(3,'n3');
+drop table if exists tmp_t;
+create temporary table tmp_t(id int primary key, v varchar(10));
+insert into tmp_t values (2,'t2'),(3,'t3'),(4,'t4');
+select 'tmp_full_normal' as tag;
+➤ tag[12,-1,0]  𝄀
+tmp_full_normal
+select * from tmp_t full outer join normal_t on tmp_t.id = normal_t.id order by tmp_t.id, normal_t.id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  id[4,32,0]  ¦  v[12,-1,0]  𝄀
+null  ¦  null  ¦  1  ¦  n1  𝄀
+2  ¦  t2  ¦  2  ¦  n2  𝄀
+3  ¦  t3  ¦  3  ¦  n3  𝄀
+4  ¦  t4  ¦  null  ¦  null
+select 'normal_full_tmp' as tag;
+➤ tag[12,-1,0]  𝄀
+normal_full_tmp
+select * from normal_t full outer join tmp_t on tmp_t.id = normal_t.id order by tmp_t.id, normal_t.id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  n1  ¦  null  ¦  null  𝄀
+2  ¦  n2  ¦  2  ¦  t2  𝄀
+3  ¦  n3  ¦  3  ¦  t3  𝄀
+null  ¦  null  ¦  4  ¦  t4
+drop table if exists tmp_l;
+drop table if exists tmp_r;
+create temporary table tmp_l(id int, v varchar(5));
+create temporary table tmp_r(id int, v varchar(5));
+insert into tmp_l values (1,'L1'),(2,'L2'),(NULL,'Ln');
+insert into tmp_r values (2,'R2'),(3,'R3'),(NULL,'Rn');
+select 'tmp_full_tmp' as tag;
+➤ tag[12,-1,0]  𝄀
+tmp_full_tmp
+select * from tmp_l full outer join tmp_r on tmp_l.id = tmp_r.id order by tmp_l.id, tmp_r.id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  id[4,32,0]  ¦  v[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  Rn  𝄀
+null  ¦  Ln  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  3  ¦  R3  𝄀
+1  ¦  L1  ¦  null  ¦  null  𝄀
+2  ¦  L2  ¦  2  ¦  R2
+drop table if exists tmp_t;
+drop table if exists tmp_l;
+drop table if exists tmp_r;
+drop table if exists ph;
+create table ph(a int, v varchar(5)) partition by hash(a) partitions 4;
+insert into ph values (1,'a'),(2,'b'),(5,'c'),(7,'d'),(NULL,'n');
+drop table if exists pr;
+create table pr(a int, v varchar(5)) partition by range(a)(
+partition p0 values less than (10),
+partition p1 values less than (20),
+partition p2 values less than (30)
+);
+insert into pr values (1,'a'),(5,'b'),(15,'c'),(25,'d');
+drop table if exists pk;
+create table pk(a int, v varchar(5)) partition by key(a) partitions 3;
+insert into pk values (1,'a'),(2,'b'),(3,'c'),(4,'d');
+drop table if exists pl;
+create table pl(a int, v varchar(5)) partition by list(a)(
+partition l0 values in (1,2,3),
+partition l1 values in (10,20,30)
+);
+insert into pl values (1,'a'),(10,'b'),(20,'c'),(2,'d');
+drop table if exists ref;
+create table ref(a int, label varchar(5));
+insert into ref values (1,'R1'),(3,'R3'),(15,'R15'),(20,'R20'),(99,'R99');
+select 'part_hash'  as tag; select * from ph full outer join ref on ph.a = ref.a order by ph.a, ref.a;
+➤ tag[12,-1,0]  𝄀
+part_hash
+select 'part_range' as tag; select * from pr full outer join ref on pr.a = ref.a order by pr.a, ref.a;
+➤ tag[12,-1,0]  𝄀
+part_range
+select 'part_key'   as tag; select * from pk full outer join ref on pk.a = ref.a order by pk.a, ref.a;
+➤ tag[12,-1,0]  𝄀
+part_key
+select 'part_list'  as tag; select * from pl full outer join ref on pl.a = ref.a order by pl.a, ref.a;
+➤ tag[12,-1,0]  𝄀
+part_list
+select 'part_full_part' as tag;
+➤ tag[12,-1,0]  𝄀
+part_full_part
+select * from ph full outer join pr on ph.a = pr.a order by ph.a, pr.a;
+➤ a[4,32,0]  ¦  v[12,-1,0]  ¦  a[4,32,0]  ¦  v[12,-1,0]  𝄀
+null  ¦  n  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  15  ¦  c  𝄀
+null  ¦  null  ¦  25  ¦  d  𝄀
+1  ¦  a  ¦  1  ¦  a  𝄀
+2  ¦  b  ¦  null  ¦  null  𝄀
+5  ¦  c  ¦  5  ¦  b  𝄀
+7  ¦  d  ¦  null  ¦  null
+drop view if exists v_ph;
+drop view if exists v_ref;
+create view v_ph  as select * from ph where a is not null;
+create view v_ref as select * from ref;
+select 'view_full_view' as tag;
+➤ tag[12,-1,0]  𝄀
+view_full_view
+select * from v_ph full outer join v_ref on v_ph.a = v_ref.a order by v_ph.a, v_ref.a;
+➤ a[4,32,0]  ¦  v[12,-1,0]  ¦  a[4,32,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  null  ¦  3  ¦  R3  𝄀
+null  ¦  null  ¦  15  ¦  R15  𝄀
+null  ¦  null  ¦  20  ¦  R20  𝄀
+null  ¦  null  ¦  99  ¦  R99  𝄀
+1  ¦  a  ¦  1  ¦  R1  𝄀
+2  ¦  b  ¦  null  ¦  null  𝄀
+5  ¦  c  ¦  null  ¦  null  𝄀
+7  ¦  d  ¦  null  ¦  null
+select 'view_full_base' as tag;
+➤ tag[12,-1,0]  𝄀
+view_full_base
+select * from v_ph full outer join pr on v_ph.a = pr.a order by v_ph.a, pr.a;
+➤ a[4,32,0]  ¦  v[12,-1,0]  ¦  a[4,32,0]  ¦  v[12,-1,0]  𝄀
+null  ¦  null  ¦  15  ¦  c  𝄀
+null  ¦  null  ¦  25  ¦  d  𝄀
+1  ¦  a  ¦  1  ¦  a  𝄀
+2  ¦  b  ¦  null  ¦  null  𝄀
+5  ¦  c  ¦  5  ¦  b  𝄀
+7  ¦  d  ¦  null  ¦  null
+drop view v_ph;
+drop view v_ref;
+drop table if exists dims;
+create table dims(id int primary key, label varchar(5));
+insert into dims values (1,'d1'),(2,'d2'),(4,'d4');
+select 'cte_full_base' as tag;
+➤ tag[12,-1,0]  𝄀
+cte_full_base
+with cte_a as (select id, label from dims where id >= 2)
+select * from cte_a full outer join ref on cte_a.id = ref.a order by cte_a.id, ref.a;
+➤ id[4,32,0]  ¦  label[12,-1,0]  ¦  a[4,32,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  null  ¦  1  ¦  R1  𝄀
+null  ¦  null  ¦  3  ¦  R3  𝄀
+null  ¦  null  ¦  15  ¦  R15  𝄀
+null  ¦  null  ¦  20  ¦  R20  𝄀
+null  ¦  null  ¦  99  ¦  R99  𝄀
+2  ¦  d2  ¦  null  ¦  null  𝄀
+4  ¦  d4  ¦  null  ¦  null
+select 'rec_cte_full' as tag;
+➤ tag[12,-1,0]  𝄀
+rec_cte_full
+with recursive nums(n) as (
+select 1 union all select n+1 from nums where n < 5
+)
+select nums.n left_n, ref.a right_a, ref.label
+from nums full outer join ref on nums.n = ref.a
+order by nums.n, ref.a;
+➤ left_n[-5,64,0]  ¦  right_a[4,32,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  15  ¦  R15  𝄀
+null  ¦  20  ¦  R20  𝄀
+null  ¦  99  ¦  R99  𝄀
+1  ¦  1  ¦  R1  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  3  ¦  R3  𝄀
+4  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  null
+select 'derived_full_derived' as tag;
+➤ tag[12,-1,0]  𝄀
+derived_full_derived
+select * from (select a, v from pr where a < 20) l
+full outer join (select a, label from ref) r
+on l.a = r.a
+order by l.a, r.a;
+➤ a[4,32,0]  ¦  v[12,-1,0]  ¦  a[4,32,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  null  ¦  3  ¦  R3  𝄀
+null  ¦  null  ¦  20  ¦  R20  𝄀
+null  ¦  null  ¦  99  ¦  R99  𝄀
+1  ¦  a  ¦  1  ¦  R1  𝄀
+5  ¦  b  ¦  null  ¦  null  𝄀
+15  ¦  c  ¦  15  ¦  R15
+use mo_catalog;
+drop table if exists fj_cluster;
+create cluster table fj_cluster(a int primary key, v varchar(10));
+insert into fj_cluster(a, v) values (1,'c1'),(2,'c2'),(3,'c3');
+use fulljoin_tbl_db;
+drop table if exists fj_peer;
+create table fj_peer(a int primary key, label varchar(10));
+insert into fj_peer values (1,'P1'),(3,'P3'),(5,'P5');
+select 'cluster_full_normal' as tag;
+➤ tag[12,-1,0]  𝄀
+cluster_full_normal
+select mo_catalog.fj_cluster.a c_a, mo_catalog.fj_cluster.v c_v, fj_peer.a p_a, fj_peer.label
+from mo_catalog.fj_cluster full outer join fj_peer
+on mo_catalog.fj_cluster.a = fj_peer.a
+order by c_a, p_a;
+➤ c_a[4,32,0]  ¦  c_v[12,-1,0]  ¦  p_a[4,32,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  null  ¦  5  ¦  P5  𝄀
+1  ¦  c1  ¦  1  ¦  P1  𝄀
+2  ¦  c2  ¦  null  ¦  null  𝄀
+3  ¦  c3  ¦  3  ¦  P3
+drop table mo_catalog.fj_cluster;
+drop table if exists ft_src;
+create table ft_src(
+id int primary key,
+body varchar(200),
+title varchar(100),
+fulltext key ftidx(body, title)
+);
+insert into ft_src values
+(1,'color is red','t1'),
+(2,'car is yellow','crazy car'),
+(3,'sky is blue','no limit'),
+(4,'blue is not red','colorful'),
+(5, NULL, 'placeholder'),
+(6, 'lone body', NULL);
+drop table if exists ft_dim;
+create table ft_dim(id int primary key, cat varchar(10));
+insert into ft_dim values (1,'c_red'),(3,'c_blue'),(7,'c_other');
+select 'ft_plain_full' as tag;
+➤ tag[12,-1,0]  𝄀
+ft_plain_full
+select ft_src.id, ft_src.body, ft_src.title, ft_dim.id, ft_dim.cat
+from ft_src full outer join ft_dim on ft_src.id = ft_dim.id
+order by ft_src.id, ft_dim.id;
+➤ id[4,32,0]  ¦  body[12,-1,0]  ¦  title[12,-1,0]  ¦  id[4,32,0]  ¦  cat[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  7  ¦  c_other  𝄀
+1  ¦  color is red  ¦  t1  ¦  1  ¦  c_red  𝄀
+2  ¦  car is yellow  ¦  crazy car  ¦  null  ¦  null  𝄀
+3  ¦  sky is blue  ¦  no limit  ¦  3  ¦  c_blue  𝄀
+4  ¦  blue is not red  ¦  colorful  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  placeholder  ¦  null  ¦  null  𝄀
+6  ¦  lone body  ¦  null  ¦  null  ¦  null
+show index from ft_src where key_name = 'ftidx';
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+ft_src  ¦  1  ¦  ftidx  ¦  1  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body  𝄀
+ft_src  ¦  1  ¦  ftidx  ¦  2  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title
+select 'ft_match_standalone' as tag;
+➤ tag[12,-1,0]  𝄀
+ft_match_standalone
+select id, body, title from ft_src where match(body, title) against('red') order by id;
+➤ id[4,32,0]  ¦  body[12,-1,0]  ¦  title[12,-1,0]  𝄀
+1  ¦  color is red  ¦  t1  𝄀
+4  ¦  blue is not red  ¦  colorful
+set experimental_ivf_index = 1;
+drop table if exists vi_src;
+create table vi_src(id int primary key, emb vecf32(3));
+insert into vi_src values
+(1,'[1,2,3]'),
+(2,'[1,2,4]'),
+(3,'[1,3,5]'),
+(4,'[100,44,50]'),
+(5,'[120,50,70]');
+create index vi_idx using ivfflat on vi_src(emb) lists = 2 op_type 'vector_l2_ops';
+drop table if exists vi_dim;
+create table vi_dim(id int primary key, label varchar(10));
+insert into vi_dim values (1,'V1'),(3,'V3'),(4,'V4'),(9,'V9');
+select 'ivf_full_plain' as tag;
+➤ tag[12,-1,0]  𝄀
+ivf_full_plain
+select vi_src.id s_id, vi_src.emb, vi_dim.id d_id, vi_dim.label
+from vi_src full outer join vi_dim on vi_src.id = vi_dim.id
+order by vi_src.id, vi_dim.id;
+➤ s_id[4,32,0]  ¦  emb[12,3,0]  ¦  d_id[4,32,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  null  ¦  9  ¦  V9  𝄀
+1  ¦  [1, 2, 3]  ¦  1  ¦  V1  𝄀
+2  ¦  [1, 2, 4]  ¦  null  ¦  null  𝄀
+3  ¦  [1, 3, 5]  ¦  3  ¦  V3  𝄀
+4  ¦  [100, 44, 50]  ¦  4  ¦  V4  𝄀
+5  ¦  [120, 50, 70]  ¦  null  ¦  null
+select 'ivf_full_knn_derived' as tag;
+➤ tag[12,-1,0]  𝄀
+ivf_full_knn_derived
+select knn.id k_id, knn.dist, vi_dim.id d_id, vi_dim.label
+from (
+select id, l2_distance(emb, cast('[1,2,3]' as vecf32(3))) dist
+from vi_src
+order by dist
+limit 3
+) knn
+full outer join vi_dim on knn.id = vi_dim.id
+order by knn.id, vi_dim.id;
+➤ k_id[4,32,0]  ¦  dist[8,54,0]  ¦  d_id[4,32,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  null  ¦  4  ¦  V4  𝄀
+null  ¦  null  ¦  9  ¦  V9  𝄀
+1  ¦  0.0  ¦  1  ¦  V1  𝄀
+2  ¦  1.0  ¦  null  ¦  null  𝄀
+3  ¦  2.2360680103302  ¦  3  ¦  V3
+set experimental_hnsw_index = 1;
+drop table if exists vh_src;
+create table vh_src(a bigint primary key, b vecf32(3));
+insert into vh_src values
+(1,'[1,2,3]'),
+(2,'[1,2,4]'),
+(3,'[1,3,5]'),
+(4,'[100,44,50]'),
+(5,'[120,50,70]');
+create index vh_idx using hnsw on vh_src(b) M 4 EF_CONSTRUCTION 64 EF_SEARCH 32 OP_TYPE 'vector_l2_ops';
+drop table if exists vh_dim;
+create table vh_dim(a bigint primary key, label varchar(10));
+insert into vh_dim values (1,'H1'),(3,'H3'),(6,'H6');
+select 'hnsw_full_plain' as tag;
+➤ tag[12,-1,0]  𝄀
+hnsw_full_plain
+select vh_src.a s_a, vh_src.b, vh_dim.a d_a, vh_dim.label
+from vh_src full outer join vh_dim on vh_src.a = vh_dim.a
+order by vh_src.a, vh_dim.a;
+➤ s_a[-5,64,0]  ¦  b[12,3,0]  ¦  d_a[-5,64,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  null  ¦  6  ¦  H6  𝄀
+1  ¦  [1, 2, 3]  ¦  1  ¦  H1  𝄀
+2  ¦  [1, 2, 4]  ¦  null  ¦  null  𝄀
+3  ¦  [1, 3, 5]  ¦  3  ¦  H3  𝄀
+4  ¦  [100, 44, 50]  ¦  null  ¦  null  𝄀
+5  ¦  [120, 50, 70]  ¦  null  ¦  null
+select 'hnsw_full_knn_derived' as tag;
+➤ tag[12,-1,0]  𝄀
+hnsw_full_knn_derived
+select knn.a k_a, knn.dist, vh_dim.a d_a, vh_dim.label
+from (
+select a, l2_distance(b, cast('[1,2,3]' as vecf32(3))) dist
+from vh_src
+order by dist
+limit 3
+) knn
+full outer join vh_dim on knn.a = vh_dim.a
+order by knn.a, vh_dim.a;
+➤ k_a[-5,64,0]  ¦  dist[8,54,0]  ¦  d_a[-5,64,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  null  ¦  6  ¦  H6  𝄀
+1  ¦  0.0  ¦  1  ¦  H1  𝄀
+2  ¦  1.0  ¦  null  ¦  null  𝄀
+3  ¦  2.2360680103302  ¦  3  ¦  H3
+set experimental_ivf_index = 0;
+set experimental_hnsw_index = 0;
+drop account if exists fulljoin_acc;
+create account fulljoin_acc admin_name = 'fj_admin' identified by '111';
+drop database if exists fulljoin_acc_db;
+create database fulljoin_acc_db;
+use fulljoin_acc_db;
+create table na_a(id int primary key, v varchar(5));
+create table na_b(id int primary key, v varchar(5));
+insert into na_a values (1,'a1'),(2,'a2'),(3,'a3');
+insert into na_b values (2,'b2'),(3,'b3'),(4,'b4');
+select 'na_basic_full' as tag;
+➤ tag[12,-1,0]  𝄀
+na_basic_full
+select na_a.id, na_a.v, na_b.id, na_b.v
+from na_a full outer join na_b on na_a.id = na_b.id
+order by coalesce(na_a.id, na_b.id);
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  a1  ¦  null  ¦  null  𝄀
+2  ¦  a2  ¦  2  ¦  b2  𝄀
+3  ¦  a3  ¦  3  ¦  b3  𝄀
+null  ¦  null  ¦  4  ¦  b4
+create table na_o(oid int, uid int, amt decimal(10,2));
+create table na_p(oid int, uid int, paid decimal(10,2));
+insert into na_o values (1,100,50.00),(2,100,25.00),(3,200,10.00),(4,300,5.00);
+insert into na_p values (1,100,50.00),(2,100,20.00),(5,400,8.00);
+select 'na_multi_on' as tag;
+➤ tag[12,-1,0]  𝄀
+na_multi_on
+select na_o.oid, na_o.uid, na_o.amt, na_p.oid, na_p.uid, na_p.paid
+from na_o full outer join na_p
+on na_o.oid = na_p.oid and na_o.uid = na_p.uid
+order by coalesce(na_o.oid, na_p.oid);
+➤ oid[4,32,0]  ¦  uid[4,32,0]  ¦  amt[3,10,2]  ¦  oid[4,32,0]  ¦  uid[4,32,0]  ¦  paid[3,10,2]  𝄀
+1  ¦  100  ¦  50.00  ¦  1  ¦  100  ¦  50.00  𝄀
+2  ¦  100  ¦  25.00  ¦  2  ¦  100  ¦  20.00  𝄀
+3  ¦  200  ¦  10.00  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  300  ¦  5.00  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  5  ¦  400  ¦  8.00
+select 'na_anti_left' as tag;
+➤ tag[12,-1,0]  𝄀
+na_anti_left
+select na_a.id, na_a.v from na_a full outer join na_b on na_a.id = na_b.id
+where na_b.id is null order by na_a.id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  a1
+select 'na_anti_right' as tag;
+➤ tag[12,-1,0]  𝄀
+na_anti_right
+select na_b.id, na_b.v from na_a full outer join na_b on na_a.id = na_b.id
+where na_a.id is null order by na_b.id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  𝄀
+4  ¦  b4
+create table na_ph(a int, v varchar(5)) partition by hash(a) partitions 4;
+insert into na_ph values (1,'a'),(2,'b'),(5,'c'),(7,'d'),(NULL,'n');
+create table na_ref(a int, label varchar(5));
+insert into na_ref values (1,'R1'),(3,'R3'),(15,'R15');
+select 'na_part_full' as tag;
+➤ tag[12,-1,0]  𝄀
+na_part_full
+select na_ph.a, na_ph.v, na_ref.a, na_ref.label
+from na_ph full outer join na_ref on na_ph.a = na_ref.a
+order by coalesce(na_ph.a, na_ref.a), na_ph.v;
+➤ a[4,32,0]  ¦  v[12,-1,0]  ¦  a[4,32,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  n  ¦  null  ¦  null  𝄀
+1  ¦  a  ¦  1  ¦  R1  𝄀
+2  ¦  b  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  3  ¦  R3  𝄀
+5  ¦  c  ¦  null  ¦  null  𝄀
+7  ¦  d  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  15  ¦  R15
+set experimental_ivf_index = 1;
+create table na_v(id int primary key, e vecf32(3));
+insert into na_v values (1,'[1,2,3]'),(2,'[1,2,4]'),(3,'[1,3,5]');
+create index na_v_idx using ivfflat on na_v(e) lists = 2 op_type 'vector_l2_ops';
+create table na_vd(id int primary key, label varchar(5));
+insert into na_vd values (2,'X'),(3,'Y'),(9,'Z');
+select 'na_ivf_full' as tag;
+➤ tag[12,-1,0]  𝄀
+na_ivf_full
+select na_v.id, na_vd.id, na_vd.label
+from na_v full outer join na_vd on na_v.id = na_vd.id
+order by coalesce(na_v.id, na_vd.id);
+➤ id[4,32,0]  ¦  id[4,32,0]  ¦  label[12,-1,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  2  ¦  X  𝄀
+3  ¦  3  ¦  Y  𝄀
+null  ¦  9  ¦  Z
+create table na_ft(id int primary key, body varchar(100), fulltext key ftx(body));
+insert into na_ft values (1,'hello world'),(2,'red sky'),(3,'blue ocean');
+select 'na_ft_full' as tag;
+➤ tag[12,-1,0]  𝄀
+na_ft_full
+select na_ft.id, na_ft.body, na_vd.id, na_vd.label
+from na_ft full outer join na_vd on na_ft.id = na_vd.id
+order by coalesce(na_ft.id, na_vd.id);
+➤ id[4,32,0]  ¦  body[12,-1,0]  ¦  id[4,32,0]  ¦  label[12,-1,0]  𝄀
+1  ¦  hello world  ¦  null  ¦  null  𝄀
+2  ¦  red sky  ¦  2  ¦  X  𝄀
+3  ¦  blue ocean  ¦  3  ¦  Y  𝄀
+null  ¦  null  ¦  9  ¦  Z
+select 'na_cte_full' as tag;
+➤ tag[12,-1,0]  𝄀
+na_cte_full
+with nc as (select 1 as id union select 3 union select 5)
+select nc.id, na_b.id, na_b.v
+from nc full outer join na_b on nc.id = na_b.id
+order by coalesce(nc.id, na_b.id);
+➤ id[-5,64,0]  ¦  id[4,32,0]  ¦  v[12,-1,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+null  ¦  2  ¦  b2  𝄀
+3  ¦  3  ¦  b3  𝄀
+null  ¦  4  ¦  b4  𝄀
+5  ¦  null  ¦  null
+create cluster table na_cluster(a int, b int);
+internal error: do not have privilege to execute the statement
+set experimental_ivf_index = 0;
+drop database fulljoin_acc_db;
+drop account if exists fulljoin_acc;
+select 'mix_chain' as tag;
+➤ tag[12,-1,0]  𝄀
+mix_chain
+with candidates as (
+select a, v from pr where a < 20
+)
+select candidates.a c_a,
+ref.a       r_a,
+vi_dim.id   v_id,
+vi_dim.label
+from candidates
+full outer join ref    on candidates.a = ref.a
+full outer join vi_dim on coalesce(candidates.a, ref.a) = vi_dim.id
+order by c_a, r_a, v_id;
+➤ c_a[4,32,0]  ¦  r_a[4,32,0]  ¦  v_id[4,32,0]  ¦  label[12,-1,0]  𝄀
+null  ¦  null  ¦  4  ¦  V4  𝄀
+null  ¦  null  ¦  9  ¦  V9  𝄀
+null  ¦  3  ¦  3  ¦  V3  𝄀
+null  ¦  20  ¦  null  ¦  null  𝄀
+null  ¦  99  ¦  null  ¦  null  𝄀
+1  ¦  1  ¦  1  ¦  V1  𝄀
+5  ¦  null  ¦  null  ¦  null  𝄀
+15  ¦  15  ¦  null  ¦  null
+drop table if exists vh_src;
+drop table if exists vh_dim;
+drop table if exists vi_src;
+drop table if exists vi_dim;
+drop table if exists ft_src;
+drop table if exists ft_dim;
+drop table if exists ph;
+drop table if exists pr;
+drop table if exists pk;
+drop table if exists pl;
+drop table if exists ref;
+drop table if exists dims;
+drop table if exists normal_t;
+drop table if exists fj_peer;
+drop database if exists fulljoin_tbl_db;

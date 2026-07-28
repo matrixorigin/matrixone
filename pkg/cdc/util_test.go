@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"math"
 	"testing"
@@ -28,6 +29,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +39,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/mysql"
 )
+
+var (
+	_ func(context.Context, client.TxnOperator, string) func()          = EnterRunSql
+	_ func(context.Context, client.TxnOperator, string) (func(), error) = TryEnterRunSql
+)
+
+type legacyRunSQLTxnOperator struct {
+	client.TxnOperator
+	token      uint64
+	exitTokens []uint64
+}
+
+func (op *legacyRunSQLTxnOperator) EnterRunSqlWithTokenAndSQL(context.CancelFunc, string) uint64 {
+	return op.token
+}
+
+func (op *legacyRunSQLTxnOperator) ExitRunSqlWithToken(token uint64) {
+	op.exitTokens = append(op.exitTokens, token)
+}
+
+func TestEnterRunSqlPreservesLegacyContract(t *testing.T) {
+	op := &legacyRunSQLTxnOperator{token: 0}
+	finish := EnterRunSql(nil, op, "select 1")
+	require.NotNil(t, finish)
+	finish()
+	require.Equal(t, []uint64{0}, op.exitTokens)
+}
 
 func Test_aes(t *testing.T) {
 	AesKey = "test-aes-key-not-use-it-in-cloud"
@@ -438,17 +469,20 @@ func Test_copyBytes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, copyBytes(tt.args.src), "copyBytes(%v)", tt.args.src)
+			assert.Equalf(t, tt.want, commonutil.CloneBytes(tt.args.src), "copyBytes(%v)", tt.args.src)
 		})
 	}
 }
 
 func Test_extractRowFromEveryVector(t *testing.T) {
 	var err error
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bat := batch.New([]string{"const_null", "const", "normal"})
-	bat.Vecs[0] = testutil.MakeScalarNull(t, types.T_int32, 3)
-	bat.Vecs[1] = testutil.MakeScalarInt64(1, 3)
-	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
+	bat.Vecs[0] = testutil.MakeScalarNull(t, types.T_int32, 3, mp)
+	bat.Vecs[1] = testutil.MakeScalarInt64(1, 3, mp)
+	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
 
 	row := make([]any, 3)
 	err = extractRowFromEveryVector(context.Background(), bat, 0, row)
@@ -457,6 +491,9 @@ func Test_extractRowFromEveryVector(t *testing.T) {
 }
 
 func Test_extractRowFromVector(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bj, err := bytejson.ParseFromString("{\"a\": 1}")
 	require.Nil(t, err)
 
@@ -484,7 +521,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeScalarNull(t, types.T_int32, 3),
+				vec:      testutil.MakeScalarNull(t, types.T_int32, 3, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -495,7 +532,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeJsonVector([]string{"{\"a\": 1}"}, nil),
+				vec:      testutil.MakeJsonVector([]string{"{\"a\": 1}"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -506,7 +543,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeBoolVector([]bool{true}, nil),
+				vec:      testutil.MakeBoolVector([]bool{true}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -517,7 +554,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeBitVector([]uint64{1}, nil),
+				vec:      testutil.MakeBitVector([]uint64{1}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -528,7 +565,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeInt8Vector([]int8{1, 2, 3}, nil),
+				vec:      testutil.MakeInt8Vector([]int8{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -539,7 +576,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeInt16Vector([]int16{1, 2, 3}, nil),
+				vec:      testutil.MakeInt16Vector([]int16{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -550,7 +587,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeInt32Vector([]int32{1, 2, 3}, nil),
+				vec:      testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -561,7 +598,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeInt64Vector([]int64{1, 2, 3}, nil),
+				vec:      testutil.MakeInt64Vector([]int64{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -572,7 +609,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeUint8Vector([]uint8{1, 2, 3}, nil),
+				vec:      testutil.MakeUint8Vector([]uint8{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -583,7 +620,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeUint16Vector([]uint16{1, 2, 3}, nil),
+				vec:      testutil.MakeUint16Vector([]uint16{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -594,7 +631,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeUint32Vector([]uint32{1, 2, 3}, nil),
+				vec:      testutil.MakeUint32Vector([]uint32{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -605,7 +642,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil),
+				vec:      testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -616,7 +653,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeFloat32Vector([]float32{1.1, 2.2, 3.3}, nil),
+				vec:      testutil.MakeFloat32Vector([]float32{1.1, 2.2, 3.3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -627,7 +664,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeFloat64Vector([]float64{1.1, 2.2, 3.3}, nil),
+				vec:      testutil.MakeFloat64Vector([]float64{1.1, 2.2, 3.3}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -638,7 +675,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeVarcharVector([]string{"abc"}, nil),
+				vec:      testutil.MakeVarcharVector([]string{"abc"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -650,7 +687,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeDateVector([]string{"2023-02-03 01:23:45"}, nil),
+				vec:      testutil.MakeDateVector([]string{"2023-02-03 01:23:45"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -661,7 +698,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeTimeVector([]string{"2023-02-03 01:23:45"}, nil),
+				vec:      testutil.MakeTimeVector([]string{"2023-02-03 01:23:45"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -672,7 +709,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeDatetimeVector([]string{"2023-02-03 01:23:45"}, nil),
+				vec:      testutil.MakeDatetimeVector([]string{"2023-02-03 01:23:45"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -683,7 +720,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil),
+				vec:      testutil.MakeTimestampVector([]string{"2023-02-03 01:23:45"}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -695,7 +732,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeUUIDVector([]types.Uuid{types.Uuid([]byte("1234567890123456"))}, nil),
+				vec:      testutil.MakeUUIDVector([]types.Uuid{types.Uuid([]byte("1234567890123456"))}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -706,7 +743,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeRowIdVector([]types.Rowid{rowid}, nil),
+				vec:      testutil.MakeRowIdVector([]types.Rowid{rowid}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -717,7 +754,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeBlockIdVector([]types.Blockid{blockid}, nil),
+				vec:      testutil.MakeBlockIdVector([]types.Blockid{blockid}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -728,7 +765,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeTSVector([]types.TS{ts}, nil),
+				vec:      testutil.MakeTSVector([]types.TS{ts}, nil, mp),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,
@@ -787,7 +824,7 @@ func Test_floatArrayToString(t *testing.T) {
 }
 
 func Test_openDbConn(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ string) (*sql.DB, error) {
+	stub := gostub.Stub(&tryConn, func(_ *mysql.Config) (*sql.DB, error) {
 		return nil, nil
 	})
 	defer stub.Reset()
@@ -798,7 +835,7 @@ func Test_openDbConn(t *testing.T) {
 }
 
 func Test_openDbConnFailed(t *testing.T) {
-	stub := gostub.Stub(&tryConn, func(_ string) (*sql.DB, error) {
+	stub := gostub.Stub(&tryConn, func(_ *mysql.Config) (*sql.DB, error) {
 		return nil, moerr.NewInternalErrorNoCtx("")
 	})
 	defer stub.Reset()
@@ -808,16 +845,33 @@ func Test_openDbConnFailed(t *testing.T) {
 	assert.Nil(t, conn)
 }
 
+func Test_makeMysqlConfig(t *testing.T) {
+	cfg, err := makeMysqlConfig("account:user:role", "p@ss", "127.0.0.1", 6001, CDCDefaultSendSqlTimeout)
+	require.NoError(t, err)
+	assert.Equal(t, "account:user:role", cfg.User)
+	assert.Equal(t, "p@ss", cfg.Passwd)
+	assert.Equal(t, "tcp", cfg.Net)
+	assert.Equal(t, "127.0.0.1:6001", cfg.Addr)
+	assert.Equal(t, 10*time.Minute, cfg.Timeout)
+	assert.Equal(t, 10*time.Minute, cfg.ReadTimeout)
+	assert.Equal(t, 10*time.Minute, cfg.WriteTimeout)
+	assert.True(t, cfg.MultiStatements)
+	assert.True(t, cfg.AllowNativePasswords)
+}
+
 func Test_tryConn(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 	mock.ExpectPing()
 
-	stub := gostub.Stub(&openDb, func(_, _ string) (*sql.DB, error) {
-		return db, nil
+	stub := gostub.Stub(&openDbWithConnector, func(_ driver.Connector) *sql.DB {
+		return db
 	})
 	defer stub.Reset()
-	got, err := tryConn("dsn")
+
+	cfg, err := makeMysqlConfig("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
+	require.NoError(t, err)
+	got, err := tryConn(cfg)
 	assert.NoError(t, err)
 	assert.Equal(t, db, got)
 }
@@ -927,12 +981,15 @@ func TestAesCFBDecodeWithKey_EmptyKey(t *testing.T) {
 func Test_batchRowCount(t *testing.T) {
 	assert.Equal(t, 0, batchRowCount(nil))
 
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bat := batch.New([]string{})
 	assert.Equal(t, 0, batchRowCount(bat))
 
 	bat = batch.New([]string{"a", "ts"})
-	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil)
-	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
+	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil, mp)
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
 	bat.SetRowCount(3)
 	assert.Equal(t, 3, batchRowCount(bat))
 }
@@ -955,6 +1012,29 @@ func Test_compUriInfo(t *testing.T) {
 
 	ret, _ = compositedUriInfo("prefixroot:111@3:4", "prefix")
 	assert.True(t, ret)
+
+	ret, info := compositedUriInfo("prefixaccount:user:role:p@ss@127.0.0.1:6001", "prefix")
+	assert.True(t, ret)
+	assert.Equal(t, "account:user:role", info.User)
+	assert.Equal(t, "p@ss", info.Password)
+	assert.Equal(t, "127.0.0.1", info.Ip)
+	assert.Equal(t, 6001, info.Port)
+
+	ret, info = compositedUriInfo("prefixaccount%3Auser%3Arole:p%40ss@127.0.0.1:6001", "prefix")
+	assert.True(t, ret)
+	assert.Equal(t, "account:user:role", info.User)
+	assert.Equal(t, "p@ss", info.Password)
+
+	ret, info = compositedUriInfo("prefixaccount%3Auser%3Arole:p%2540ss@127.0.0.1:6001", "prefix")
+	assert.True(t, ret)
+	assert.Equal(t, "account:user:role", info.User)
+	assert.Equal(t, "p%40ss", info.Password)
+
+	ret, _ = compositedUriInfo("prefixaccount%zzuser:111@127.0.0.1:6001", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixaccount:user:role:@127.0.0.1:6001", "prefix")
+	assert.False(t, ret)
 }
 
 func Test_uriHasPrefix(t *testing.T) {
@@ -972,5 +1052,49 @@ func TestParseFrequencyToDuration(t *testing.T) {
 	}
 	if got := parseFrequencyToDuration("30m"); got != 30*time.Minute {
 		t.Errorf("30m: got %v, want %v", got, 30*time.Minute)
+	}
+}
+
+// CDC enumerated only vecf32/vecf64 in BOTH halves of the pipeline, so a table
+// with a bf16/f16/int8/uint8 vector column failed permanently on its first row:
+// extractRowFromVector errored, and even past that convertColIntoSql errored
+// again. Test the pair together — fixing one alone still leaves CDC broken.
+func Test_narrowVectorCdcRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	ctx := context.Background()
+
+	cases := []struct {
+		name    string
+		typ     types.Type
+		payload []byte
+		wantSQL string
+	}{
+		{"bf16", types.New(types.T_array_bf16, 3, 0),
+			types.ArrayToBytes[types.BF16](types.Float32ToBF16Slice([]float32{1, 2, 3})), "'[1, 2, 3]'"},
+		{"f16", types.New(types.T_array_float16, 3, 0),
+			types.ArrayToBytes[types.Float16](types.Float32ToFloat16Slice([]float32{1, 2, 3})), "'[1, 2, 3]'"},
+		{"int8", types.New(types.T_array_int8, 3, 0),
+			types.ArrayToBytes[int8]([]int8{-1, 0, 7}), "'[-1, 0, 7]'"},
+		{"uint8", types.New(types.T_array_uint8, 3, 0),
+			types.ArrayToBytes[uint8]([]uint8{1, 128, 255}), "'[1, 128, 255]'"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			vec := vector.NewVec(c.typ)
+			require.NoError(t, vector.AppendBytes(vec, c.payload, false, mp))
+			defer vec.Free(mp)
+
+			// half 1: extraction must not error and must yield a typed slice
+			row := make([]any, 1)
+			require.NoError(t, extractRowFromVector(ctx, vec, 0, row, 0))
+			require.NotNil(t, row[0], "extractRowFromVector produced no value")
+
+			// half 2: that same value must serialize to a quoted vector literal
+			buf, err := convertColIntoSql(ctx, row[0], &c.typ, []byte{})
+			require.NoError(t, err)
+			require.Equal(t, c.wantSQL, string(buf))
+		})
 	}
 }

@@ -159,7 +159,7 @@ func (pattern *MatchPattern) WithExactAssignedOutputs(expectedAliases []RValueMa
 				})
 			} else {
 				ret = append(ret, VarRef{
-					Name: expr.String(),
+					Name: expr.ExprString(),
 					Type: expr.GetTyp(),
 				})
 			}
@@ -187,7 +187,7 @@ func (pattern *MatchPattern) WithExactAssignments(expectedAliases []RValueMatche
 				})
 			} else {
 				ret = append(ret, VarRef{
-					Name: expr.String(),
+					Name: expr.ExprString(),
 					Type: expr.GetTyp(),
 				})
 			}

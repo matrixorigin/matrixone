@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
@@ -542,4 +543,114 @@ func runColumnCacheTestsWithInitOffset(
 		},
 	)
 
+}
+
+// TestOldestAllocateAtFollowsConsumableRange verifies that conflict detection
+// starts at the allocation timestamp of the range that can still issue values.
+// A newer prefetched range must not hide manual inserts that can conflict with
+// values remaining in an older range.
+func TestOldestAllocateAtFollowsConsumableRange(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			col := AutoColumn{
+				ColName: "test_col",
+				TableID: 100,
+				Offset:  0,
+				Step:    1,
+			}
+			cc := &columnCache{
+				logger:      getLogger(sid),
+				col:         col,
+				cfg:         Config{CountPerAllocate: 100},
+				ranges:      &ranges{step: 1, values: make([]uint64, 0, 1)},
+				committed:   true,
+				allocatingC: make(chan error, 1), // Initialize allocatingC channel
+			}
+
+			ts1 := timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 1}
+			cc.applyAllocateLocked(1, 4, ts1, nil)
+			assert.Equal(t, ts1, cc.ranges.oldestAllocateAt())
+
+			cc.allocatingC = make(chan error, 1)
+			ts2 := timestamp.Timestamp{PhysicalTime: 2000, LogicalTime: 2}
+			cc.applyAllocateLocked(4, 7, ts2, nil)
+
+			assert.Equal(t, ts1, cc.ranges.oldestAllocateAt(),
+				"prefetch must retain the timestamp of the range still issuing values")
+			assert.Equal(t, uint64(1), cc.ranges.next())
+			assert.Equal(t, uint64(2), cc.ranges.next())
+			assert.Equal(t, uint64(3), cc.ranges.next())
+			assert.Equal(t, ts2, cc.ranges.oldestAllocateAt(),
+				"timestamp should advance after the older range is exhausted")
+		},
+	)
+}
+
+// TestLastAllocateAtEmptyInitial verifies that an empty allocation timestamp
+// remains a safe zero timestamp and the first valid allocation is exposed.
+func TestLastAllocateAtEmptyInitial(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			col := AutoColumn{
+				ColName: "test_col",
+				TableID: 100,
+				Offset:  0,
+				Step:    1,
+			}
+			cc := &columnCache{
+				logger:      getLogger(sid),
+				col:         col,
+				cfg:         Config{CountPerAllocate: 100},
+				ranges:      &ranges{step: 1, values: make([]uint64, 0, 1)},
+				committed:   true,
+				allocatingC: make(chan error, 1), // Initialize allocatingC channel
+			}
+
+			// Verify initial state
+			assert.True(t, cc.ranges.oldestAllocateAt().IsEmpty(), "Initial allocation timestamp should be empty")
+
+			// First allocation should expose its timestamp.
+			ts1 := timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 1}
+			cc.applyAllocateLocked(1, 100, ts1, nil)
+			assert.Equal(t, ts1, cc.ranges.oldestAllocateAt())
+			assert.False(t, cc.ranges.oldestAllocateAt().IsEmpty())
+		},
+	)
+}
+
+func TestTerminalValueRetainsAllocateTimestamp(t *testing.T) {
+	ts := timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 1}
+	cc := &columnCache{
+		col:         AutoColumn{Step: 1},
+		ranges:      &ranges{step: 1},
+		allocatingC: make(chan error, 1),
+	}
+
+	cc.applyAllocateLocked(math.MaxUint64, 0, ts, nil)
+
+	require.True(t, cc.terminal)
+	require.Equal(t, uint64(math.MaxUint64), cc.terminalValue)
+	require.Equal(t, ts, cc.oldestAllocateAtLocked())
+}
+
+func TestWrappedAllocationPreservesAllTerminalValues(t *testing.T) {
+	cc := &columnCache{
+		col:         AutoColumn{Step: 1},
+		ranges:      &ranges{step: 1},
+		allocatingC: make(chan error, 1),
+	}
+
+	cc.applyAllocateLocked(math.MaxUint64-1, 0, timestamp.Timestamp{}, nil)
+
+	require.Equal(t, uint64(math.MaxUint64-1), cc.ranges.next())
+	require.True(t, cc.terminal)
+	require.Equal(t, uint64(math.MaxUint64), cc.terminalValue)
 }

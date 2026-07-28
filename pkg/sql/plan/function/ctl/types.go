@@ -59,6 +59,8 @@ var (
 	MoTableStats             = strings.ToUpper("MoTableStats")
 	WorkspaceThreshold       = strings.ToUpper("WorkspaceThreshold")
 	TableExtra               = strings.ToUpper("table-extra")
+	PrefetchOnSubscribed     = strings.ToUpper("prefetch-on-subscribed")
+	GCCatalogCacheMethod     = strings.ToUpper("GCCatalogCache")
 )
 
 var (
@@ -102,6 +104,8 @@ var (
 		MoTableStats:             handleMoTableStats,
 		WorkspaceThreshold:       handleWorkspaceThreshold,
 		TableExtra:               handleTableExtra,
+		PrefetchOnSubscribed:     handlePrefetchOnSubscribed,
+		GCCatalogCacheMethod:     handleGCCatalogCache,
 	}
 )
 

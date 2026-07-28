@@ -15,10 +15,10 @@
 package cache
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -62,9 +62,11 @@ func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
 	defer cc.mu.Unlock()
 	cc.mu.start = start
 	cc.mu.end = end
-	logutil.Info("FIND_TABLE CACHE update serve range",
+	logutil.Info(
+		"catalog.cache.update.start.end",
 		zap.String("start", cc.mu.start.ToString()),
-		zap.String("end", cc.mu.end.ToString()))
+		zap.String("end", cc.mu.end.ToString()),
+	)
 }
 
 func (cc *CatalogCache) UpdateStart(ts types.TS) {
@@ -72,9 +74,11 @@ func (cc *CatalogCache) UpdateStart(ts types.TS) {
 	defer cc.mu.Unlock()
 	if cc.mu.start != types.MaxTs() && ts.GT(&cc.mu.start) {
 		cc.mu.start = ts
-		logutil.Info("FIND_TABLE CACHE update serve range (by start)",
+		logutil.Info(
+			"catalog.cache.update.start",
 			zap.String("start", cc.mu.start.ToString()),
-			zap.String("end", cc.mu.end.ToString()))
+			zap.String("end", cc.mu.end.ToString()),
+		)
 	}
 }
 
@@ -94,6 +98,9 @@ type GCReport struct {
 }
 
 func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
+	cc.gcMu.Lock()
+	defer cc.gcMu.Unlock()
+
 	/*
 							GC
 		-----------------+--------> ts
@@ -113,7 +120,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 
 	*/
 
-	inst := time.Now()
 	r := GCReport{}
 	{ // table cache gc
 		var prevName string
@@ -195,8 +201,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 		}
 	}
 	cc.UpdateStart(types.TimestampToTS(ts))
-	duration := time.Since(inst)
-	logutil.Info("FIND_TABLE CACHE gc", zap.Any("report", r), zap.Duration("cost", duration))
 	return r
 }
 
@@ -395,7 +399,7 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		}
 
 		if item.Ts.Greater(qry.Ts) {
-			if item.deleted || item.Id != qry.TableId || item.Version < qry.Version {
+			if item.deleted || item.Id != qry.TableId || item.Version > qry.Version {
 				find = true
 			}
 		}
@@ -485,6 +489,7 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 	catalogVersions := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_TABLES_CATALOG_VERSION_IDX + MO_OFF))
 	extraInfos := bat.GetVector(catalog.MO_TABLES_EXTRA_INFO_IDX + MO_OFF)
 	pks := bat.GetVector(catalog.MO_TABLES_CPKEY_IDX + MO_OFF)
+	logicalIds := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(catalog.MO_TABLES_LOGICAL_ID_IDX + MO_OFF))
 	for i, account := range accounts {
 		item := new(TableItem)
 		item.Id = ids[i]
@@ -507,6 +512,7 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 		item.ClusterByIdx = -1
 		item.CPKey = append(item.CPKey, pks.GetBytesAt(i)...)
 		item.ExtraInfo = api.MustUnmarshalTblExtra(extraInfos.GetBytesAt(i))
+		item.LogicalId = logicalIds[i]
 		f(item)
 	}
 }
@@ -543,6 +549,8 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 	clusters := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_CLUSTERBY + MO_OFF))
 	seqnums := vector.MustFixedColWithTypeCheck[uint16](bat.GetVector(catalog.MO_COLUMNS_ATT_SEQNUM_IDX + MO_OFF))
 	enumValues := bat.GetVector(catalog.MO_COLUMNS_ATT_ENUM_IDX + MO_OFF)
+	hasGenerateds := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_HAS_GENERATED_IDX + MO_OFF))
+	generatedExprs := bat.GetVector(catalog.MO_COLUMNS_ATT_GENERATED_IDX + MO_OFF)
 	for i, account := range accounts {
 		ts := timestamps[i].ToTimestamp()
 		tblKey.Name = tableNames.GetStringAt(i)
@@ -559,6 +567,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 			IsAutoIncrement: isAutos[i],
 			HasDef:          hasDefs[i],
 			HasUpdate:       hasUpdates[i],
+			HasGenerated:    hasGenerateds[i],
 			ConstraintType:  constraintTypes.GetStringAt(i),
 			IsClusterBy:     clusters[i],
 			Seqnum:          seqnums[i],
@@ -567,13 +576,14 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 		col.Typ = append(col.Typ, typs.GetBytesAt(i)...)
 		col.UpdateExpr = append(col.UpdateExpr, updateExprs.GetBytesAt(i)...)
 		col.DefaultExpr = append(col.DefaultExpr, defaultExprs.GetBytesAt(i)...)
+		col.GeneratedExpr = append(col.GeneratedExpr, generatedExprs.GetBytesAt(i)...)
 		mp[tblKey] = append(mp[tblKey], col)
 	}
 	f(mp)
 }
 
 func InitTableItemWithColumns(item *TableItem, cols Columns) {
-	sort.Sort(cols)
+	slices.SortFunc(cols, func(a, b catalog.Column) int { return cmp.Compare(a.Num, b.Num) })
 	coldefs := make([]engine.TableDef, 0, len(cols))
 	for i, col := range cols {
 		if col.ConstraintType == catalog.SystemColPKConstraint {
@@ -652,7 +662,11 @@ func genTableDefOfColumn(col catalog.Column) engine.TableDef {
 	attr.AutoIncrement = col.IsAutoIncrement == 1
 	attr.Seqnum = col.Seqnum
 	attr.EnumVlaues = col.EnumValues
-	if err := types.Decode(col.Typ, &attr.Type); err != nil {
+	// Call the concrete Unmarshal method rather than types.Decode: passing
+	// &attr.Type through the encoding.BinaryUnmarshaler interface forces the
+	// whole attr local to escape to the heap. The direct method call avoids
+	// the extra standalone allocation per column.
+	if err := attr.Type.Unmarshal(col.Typ); err != nil {
 		panic(err)
 	}
 	attr.Default = new(plan.Default)
@@ -664,6 +678,12 @@ func genTableDefOfColumn(col catalog.Column) engine.TableDef {
 	if col.HasUpdate == 1 {
 		attr.OnUpdate = new(plan.OnUpdate)
 		if err := types.Decode(col.UpdateExpr, attr.OnUpdate); err != nil {
+			panic(err)
+		}
+	}
+	if col.HasGenerated == 1 {
+		attr.GeneratedCol = new(plan.GeneratedCol)
+		if err := types.Decode(col.GeneratedExpr, attr.GeneratedCol); err != nil {
 			panic(err)
 		}
 	}
@@ -708,13 +728,14 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 					Enumvalues:  attr.Attr.EnumVlaues,
 				},
-				Primary:   attr.Attr.Primary,
-				Default:   attr.Attr.Default,
-				OnUpdate:  attr.Attr.OnUpdate,
-				Comment:   attr.Attr.Comment,
-				ClusterBy: attr.Attr.ClusterBy,
-				Hidden:    attr.Attr.IsHidden,
-				Seqnum:    uint32(attr.Attr.Seqnum),
+				Primary:      attr.Attr.Primary,
+				Default:      attr.Attr.Default,
+				OnUpdate:     attr.Attr.OnUpdate,
+				GeneratedCol: attr.Attr.GeneratedCol,
+				Comment:      attr.Attr.Comment,
+				ClusterBy:    attr.Attr.ClusterBy,
+				Hidden:       attr.Attr.IsHidden,
+				Seqnum:       uint32(attr.Attr.Seqnum),
 			})
 			if attr.Attr.ClusterBy {
 				clusterByDef = &plan.ClusterByDef{
@@ -832,23 +853,26 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	}
 
 	return &plan.TableDef{
-		TblId:         tblItem.Id,
-		Name:          tblItem.Name,
-		DbName:        tblItem.DatabaseName,
-		Cols:          cols,
-		Name2ColIndex: name2index,
-		Defs:          defs,
-		TableType:     TableType,
-		Createsql:     Createsql,
-		Pkey:          primarykey,
-		ViewSql:       viewSql,
-		Fkeys:         foreignKeys,
-		RefChildTbls:  refChildTbls,
-		ClusterBy:     clusterByDef,
-		Indexes:       indexes,
-		Version:       tblItem.Version,
-		DbId:          tblItem.DatabaseId,
-		Partition:     partition,
-		FeatureFlag:   tblItem.ExtraInfo.GetFeatureFlag(),
+		TblId:          tblItem.Id,
+		Name:           tblItem.Name,
+		DbName:         tblItem.DatabaseName,
+		Cols:           cols,
+		Name2ColIndex:  name2index,
+		Defs:           defs,
+		TableType:      TableType,
+		Createsql:      Createsql,
+		Pkey:           primarykey,
+		ViewSql:        viewSql,
+		Fkeys:          foreignKeys,
+		RefChildTbls:   refChildTbls,
+		ClusterBy:      clusterByDef,
+		Indexes:        indexes,
+		Version:        tblItem.Version,
+		DbId:           tblItem.DatabaseId,
+		Partition:      partition,
+		FeatureFlag:    tblItem.ExtraInfo.GetFeatureFlag(),
+		AutoIncrOffset: tblItem.ExtraInfo.GetAutoIncrOffset(),
+		AutoIncrEpoch:  tblItem.ExtraInfo.GetAutoIncrEpoch(),
+		LogicalId:      tblItem.LogicalId,
 	}, tableDef
 }

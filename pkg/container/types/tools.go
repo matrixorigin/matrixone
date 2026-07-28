@@ -14,7 +14,13 @@
 
 package types
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"strconv"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 func NewProtoType(oid T) plan.Type {
 	typ := New(oid, 0, 0)
@@ -23,4 +29,20 @@ func NewProtoType(oid T) plan.Type {
 		Width: typ.Width,
 		Scale: typ.Scale,
 	}
+}
+
+func ParseBool(s string) (bool, error) {
+	// try to parse as a bool, we treat TuRe as true, therefore ToLower.
+	v, err := strconv.ParseBool(strings.ToLower(s))
+	if err == nil {
+		return v, nil
+	}
+
+	// try to parse as a number.   We treat 0 as false, and other numbers as true.
+	num, err := strconv.ParseFloat(s, 64)
+	if err == nil {
+		return num != 0.0, nil
+	}
+
+	return false, moerr.NewInvalidInputNoCtxf("'%s' is not a valid bool expression", s)
 }

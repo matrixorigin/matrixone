@@ -93,6 +93,10 @@ spec:
       logtail-collect-interval = "2ms"
       logtail-response-send-timeout = "10s"
       max-logtail-fetch-failure = 5
+      [malloc]
+      enable-metrics = true
+      full-stack-fraction = 10
+      mpool-profiling = true
       [observability]
       metricUpdateStorageUsageInterval = "15m"
       enableStmtMerge = true
@@ -189,6 +193,10 @@ spec:
       buffer-size = 100000
       flush-bytes = "64M"
       force-flush-duration = "60s"
+      [malloc]
+      enable-metrics = true
+      full-stack-fraction = 10
+      mpool-profiling = true
     replicas: 2
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression: "true"

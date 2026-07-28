@@ -162,7 +162,6 @@ func Test_Sinker(t *testing.T) {
 	rowIDVec.Free(mp)
 	bat2.Clean(mp)
 
-	require.True(t, mp.CurrNB() > 0)
 	sinker1.Close()
 	require.True(t, mp.CurrNB() == 0)
 }

@@ -64,6 +64,8 @@ func init() {
 			tp = types.New(types.T_varbinary, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_SUM: // TODO: find a way to show this info
 			tp = types.New(types.T_varbinary, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_LEVEL:
+			tp = types.New(types.T_int32, 0, 0)
 		default:
 			panic("unknown types when gen metadata scan info")
 		}
@@ -98,7 +100,7 @@ func (builder *QueryBuilder) buildMetadataScan(tbl *tree.TableFunction, ctx *Bin
 			},
 			Cols: MetadataScanColDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}

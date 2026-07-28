@@ -276,7 +276,7 @@ func TestIsConstantObj(t *testing.T) {
 		"Numeric object with different min/max should not be constant")
 }
 
-func TestOverlapStatsError(t *testing.T) {
+func TestOverlapStatsWithoutInitializedZoneMap(t *testing.T) {
 	stats := []*objectio.ObjectStats{}
 	tasks, err := GatherOverlapMergeTasks(context.Background(), stats, NewOverlapOptions(), 0)
 	require.Nil(t, tasks)
@@ -285,9 +285,21 @@ func TestOverlapStatsError(t *testing.T) {
 	require.Nil(t, ret)
 	require.NoError(t, err)
 	stats = append(stats, objectio.NewObjectStats())
-	ret, err = CalculateOverlapStats(context.Background(), stats, NewOverlapOptions())
-	require.Nil(t, ret)
-	require.Error(t, err)
+	ret, err = CalculateOverlapStats(
+		context.Background(),
+		stats,
+		NewOverlapOptions().WithFurtherStat(true),
+	)
+	require.NotNil(t, ret)
+	require.NoError(t, err)
+	require.Equal(t, 1, ret.ScanObj)
+	require.Equal(t, 0, ret.ConstantObj)
+	require.Equal(t, 1, ret.UniniteddObj)
+	require.Equal(t, 0.0, ret.AvgPointDepth)
+	require.Equal(t, 0.0, ret.AvgOverlapCnt)
+	tasks, err = GatherOverlapMergeTasks(context.Background(), stats, NewOverlapOptions(), 0)
+	require.Nil(t, tasks)
+	require.NoError(t, err)
 }
 
 func TestOverlapStats(t *testing.T) {

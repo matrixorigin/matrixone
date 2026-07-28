@@ -34,6 +34,7 @@ const (
 	JoinSideBoth            = JoinSideLeft | JoinSideRight
 	JoinSideMark            = 1 << 3
 	JoinSideCorrelated      = 1 << 4
+	JoinSideOuter           = 1 << 5
 )
 
 type ExpandAliasMode int8
@@ -74,6 +75,16 @@ type SubscriptionMeta = plan.SubscriptionMeta
 type Snapshot = plan.Snapshot
 type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
+
+const ViewSnapshotKeySuffix = "@ts="
+
+// FormatViewKeyWithSnapshot appends snapshot information to a view key for privilege checks.
+func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
+	if !IsSnapshotValid(snapshot) || snapshot.TS == nil {
+		return viewKey
+	}
+	return fmt.Sprintf("%s%s%d", viewKey, ViewSnapshotKeySuffix, snapshot.TS.PhysicalTime)
+}
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -161,33 +172,83 @@ type BaseOptimizer struct {
 type ViewData struct {
 	Stmt            string
 	DefaultDatabase string
+	SQLMode         *string `json:"sql_mode,omitempty"`
+	SecurityType    string  `json:"security_type,omitempty"`
 }
 
 type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode    []*BindContext
-	nameByColRef map[[2]int32]string
+	ctxByNode            []*BindContext
+	nameByColRef         map[[2]int32]string
+	protectedScans       map[int32]int
+	projectSpecialGuards map[int32]*specialIndexGuard
+	indexHintsByScan     map[int32]*indexHintSet
+	indexHintOwnerByNode map[int32]int32
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
 
-	nextTag    int32
-	nextMsgTag int32
+	nextBindTag int32
+	nextMsgTag  int32
 
 	isPrepareStatement    bool
 	mysqlCompatible       bool
-	haveOnDuplicateKey    bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
 	isSkipResolveTableDef bool
 	skipStats             bool
+	isInsertIgnore        bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
+	// spill memory for aggregate function
+	aggSpillMem int64
+
+	// spill memory for join
+	joinSpillMem int64
+
+	// spill memory for sort / merge order
+	sortSpillMem int64
+
 	optimizerHints *OptimizerHints
+
+	// optimizationHistory records key optimization steps for debugging remap errors
+	// Only records when optimizations actually change the plan structure
+	optimizationHistory []string
+
+	// Irregular index (IVF/fulltext) synchronous maintenance for the modern DML
+	// path. The modern dedup+MULTI_UPDATE handles the base table and regular
+	// indexes (1:1 row mapping); irregular indexes need computed 1:N maintenance
+	// (tokenize / nearest-centroid) that cannot fit the UpdateCtx model. So the
+	// new-row image is materialized into irregularMaintSourceStep, and the
+	// maintenance sub-plans are appended after createQuery() (post-optimizer
+	// form), mirroring how regular insert maintenance is built.
+	//
+	// For ON DUPLICATE KEY UPDATE the conflicting rows must also drop their old
+	// index entries: irregularMaintDeleteStep holds the old-row image (keyed by
+	// the immutable PK) from which delete sub-plans are built. It is -1 (unset)
+	// for plain INSERT/LOAD where no old rows exist.
+	irregularMaintSourceStep int32
+	irregularMaintDeleteStep int32
+	// irregularMaintDeletePkPos / Typ identify, inside the materialized maintenance
+	// step, the base-table PK column the stale index entries are keyed by. For ODKU
+	// this is the (immutable) final PK; for REPLACE it is the matched old row's PK,
+	// which can differ from the new PK when the conflict is on a non-PK unique key.
+	irregularMaintDeletePkPos int32
+	irregularMaintDeletePkTyp plan.Type
+	irregularMaintIndexes     []*plan.IndexDef
+	irregularMaintTableDef    *plan.TableDef
+	irregularMaintObjRef      *plan.ObjectRef
+	// sinkColRef records, per materialized step, the post-pruning column remap
+	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
+	// -> newColPos. The irregular-index maintenance sub-plans are appended after
+	// createQuery and read the (already column-pruned) materialized sink directly,
+	// so positions recorded pre-prune (e.g. the REPLACE old-PK key) must be remapped
+	// through this map before use.
+	sinkColRef map[[2]int32]int
 }
 
 type OptimizerHints struct {
@@ -210,15 +271,17 @@ type OptimizerHints struct {
 	forceOneCN                 int
 	execType                   int
 	disableRightJoin           int
+	disableRightSingleRF       int
 	printShuffle               int
 	skipDedup                  int
 }
 
 type CTERef struct {
-	isRecursive bool
-	ast         *tree.CTE
-	maskedCTEs  map[string]bool
-	snapshot    *Snapshot
+	isRecursive    bool
+	ast            *tree.CTE
+	maskedCTEs     map[string]bool
+	snapshot       *Snapshot
+	declarationCtx *BindContext
 }
 
 type CteBindState struct {
@@ -258,13 +321,13 @@ type BindContext struct {
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
 	//cteState records state of binding cte
-	cteState      CteBindState
-	sliding       bool
-	isDistinct    bool
-	isCorrelated  bool
-	hasSingleRow  bool
-	forceWindows  bool
-	isGroupingSet bool
+	cteState                     CteBindState
+	sliding                      bool
+	isDistinct                   bool
+	normalizeGroupingSetDistinct bool
+	isCorrelated                 bool
+	hasSingleRow                 bool
+	isGroupingSet                bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -289,14 +352,22 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	groupByAst     map[string]int32
-	aggregateByAst map[string]int32
-	sampleByAst    map[string]int32
-	windowByAst    map[string]int32
-	projectByExpr  map[string]int32
-	timeByAst      map[string]int32
+	groupByAst      map[string]int32
+	groupByParamAst map[string]int32
+	aggregateByAst  map[string]int32
+	sampleByAst     map[string]int32
+	windowByAst     map[string]int32
+	projectByExpr   map[string]int32
+	timeByAst       map[string]int32
+
+	projectColByAst map[string]int32
 
 	projectByAst []SelectField
+
+	numericProjectionTypes          []Type
+	numericTableProjectionTypes     map[string][]Type
+	numericTableProjectionAmbiguous map[string][]bool
+	numericCteByName                map[string]*tree.CTE
 
 	timeAsts []tree.Expr
 
@@ -307,6 +378,11 @@ type BindContext struct {
 	bindingByTag   map[int32]*Binding //rel_pos
 	bindingByTable map[string]*Binding
 	bindingByCol   map[string]*Binding
+	// outerUsingCols maps an unqualified column name to the ordered list of
+	// leaf tables whose values must be COALESCEd to produce the merged value.
+	// Only populated when the column has been merged through at least one
+	// FULL OUTER JOIN ... USING. Length is always >= 2 when present.
+	outerUsingCols map[string][]string
 
 	// for join tables
 	bindingTree *BindingTreeNode
@@ -318,18 +394,26 @@ type BindContext struct {
 	// sample function related.
 	sampleFunc SampleFuncCtx
 
-	tmpGroups []*plan.Expr
+	// groupConcatOrderBys stores ORDER BY specs from group_concat functions.
+	// Used to generate a Sort node before the Agg node instead of using window function.
+	groupConcatOrderBys []*plan.OrderBySpec
 
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
 	views []string
 	//view in binding or already bound
 	boundViews map[[2]string]*tree.CreateView
+	// viewChain tracks view lineage for the current bind context.
+	viewChain []string
+	// directView tracks the outermost view referenced by the user.
+	directView string
 
 	// lower is sys var lower_case_table_names
 	lower int64
 
 	groupingFlag []bool
+
+	remapOption *tree.RewriteOption
 }
 
 type SelectField struct {
@@ -342,6 +426,13 @@ type SelectField struct {
 type NameTuple struct {
 	table string
 	col   string
+	// coalesceArms is non-empty (len >= 2) only for FOJ-USING merged columns:
+	// the ordered list of contributing leaf-table names so star-expansion at
+	// this join node emits COALESCE(arm1.col, ..., armN.col) without consulting
+	// the bind-context-wide outerUsingCols map (which is shared across sibling
+	// subtrees and so cannot disambiguate two FOJ-USING(c) trees joined at the
+	// same level).
+	coalesceArms []string
 }
 
 type BindingTreeNode struct {
@@ -364,17 +455,35 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx    context.Context
-	builder   *QueryBuilder
-	ctx       *BindContext
-	impl      Binder
-	boundCols []string
+	sysCtx                context.Context
+	builder               *QueryBuilder
+	ctx                   *BindContext
+	impl                  Binder
+	boundCols             []string
+	numericParamType      *Type
+	numericSubqueryTarget *Type
+	numericFunctionTarget bool
 }
 
 type DefaultBinder struct {
 	baseBinder
 	typ  Type
 	cols []string
+}
+
+// ReplaceValueBinder binds the RHS value expressions of a `REPLACE ... SET`
+// statement. MySQL evaluates an RHS reference to a target-table column as
+// DEFAULT(col), so this binder resolves every column reference to that
+// column's default expression instead of an actual row value.
+//
+// The typ field carries the destination column type so that literal values
+// (especially DECIMAL / scientific-notation) bind with the same precision as
+// DefaultBinder. BindExpr delegates to baseBindExpr which uses this typ to
+// drive type-aware numeric binding.
+type ReplaceValueBinder struct {
+	baseBinder
+	typ      plan.Type
+	tableDef *plan.TableDef
 }
 
 type UpdateBinder struct {
@@ -391,6 +500,7 @@ type OndupUpdateBinder struct {
 
 type TableBinder struct {
 	baseBinder
+	allowSubquery bool
 }
 
 type WhereBinder struct {
@@ -399,26 +509,31 @@ type WhereBinder struct {
 
 type GroupBinder struct {
 	baseBinder
-	selectList tree.SelectExprs
+	selectList        tree.SelectExprs
+	projectionExprPos int32
 }
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg bool
+	insideAgg    bool
+	rollupHaving bool
 }
 
 type ProjectionBinder struct {
 	baseBinder
-	havingBinder *HavingBinder
+	havingBinder      *HavingBinder
+	numericTargetType *Type
 }
 
 type OrderBinder struct {
 	*ProjectionBinder
-	selectList tree.SelectExprs
+	selectList     tree.SelectExprs
+	distinctBinder *distinctOrderBinder
 }
 
 type LimitBinder struct {
 	baseBinder
+	isOffset bool // true when binding OFFSET value, false when binding LIMIT count
 }
 
 type PartitionBinder struct {
@@ -438,6 +553,7 @@ var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
 var _ Binder = (*OndupUpdateBinder)(nil)
+var _ Binder = (*ReplaceValueBinder)(nil)
 
 var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}
 
@@ -452,8 +568,10 @@ type Binding struct {
 	db      string
 	table   string
 	tableID uint64
-	// lower case
-	cols        []string
+	// lower case: used for binding/lookup
+	cols []string
+	// original case: only for SELECT * display, must be same length as cols (or empty)
+	originCols  []string
 	colIsHidden []bool
 	types       []*plan.Type
 	refCnts     []uint
@@ -476,8 +594,9 @@ type OriginTableMessageForFuzzy struct {
 }
 
 type MultiTableIndex struct {
-	IndexAlgo string
-	IndexDefs map[string]*plan.IndexDef
+	IndexAlgo       string
+	IndexAlgoParams string
+	IndexDefs       map[string]*plan.IndexDef
 }
 
 type RemapInfo struct {

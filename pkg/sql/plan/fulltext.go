@@ -82,8 +82,6 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 5).")
 	}
 
-	colDefs := _getColDefs(ftIndexColdefs)
-
 	params, err := builder.getFullTextParams(tbl.Func)
 	if err != nil {
 		return 0, err
@@ -91,11 +89,16 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 	// remove the first argment and put the first argument to Param
 	exprs = exprs[1:]
 
-	// get the generated SQL
 	sql, err := builder.getFullTextSql(tbl.Func, params)
 	if err != nil {
 		return 0, err
 	}
+
+	return builder.buildFullTextIndexScanNode(ctx, exprs, children, params, sql)
+}
+
+func (builder *QueryBuilder) buildFullTextIndexScanNode(ctx *BindContext, exprs []*plan.Expr, children []int32, params string, sql string) (int32, error) {
+	colDefs := DeepCopyColDefList(ftIndexColdefs)
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
@@ -109,7 +112,7 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}
@@ -117,25 +120,18 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 }
 
 func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (string, error) {
-	var param fulltext.FullTextParserParam
-	if len(params) > 0 {
-		err := json.Unmarshal([]byte(params), &param)
-		if err != nil {
-			return "", err
-		}
-	}
-
 	if _, ok := fn.Exprs[2].(*tree.NumVal); !ok {
 		return "", moerr.NewInvalidInput(builder.GetContext(), "index table name is not a constant")
 	}
 
 	idxtbl := fn.Exprs[2].String()
 
-	if _, ok := fn.Exprs[3].(*tree.NumVal); !ok {
-		return "", moerr.NewInvalidInput(builder.GetContext(), "pattern is not a constant")
+	patternVal, ok := fn.Exprs[3].(*tree.NumVal)
+	if !ok {
+		return "", nil
 	}
 
-	pattern := fn.Exprs[3].String()
+	pattern := patternVal.String()
 	modeVal, ok := fn.Exprs[4].(*tree.NumVal)
 	if !ok {
 		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not a constant")
@@ -145,7 +141,19 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (s
 		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not an integer")
 	}
 
-	ps, err := fulltext.ParsePattern(pattern, mode)
+	return builder.getFullTextIndexScanSql(params, idxtbl, pattern, mode)
+}
+
+func (builder *QueryBuilder) getFullTextIndexScanSql(params string, idxtbl string, pattern string, mode int64) (string, error) {
+	var param fulltext.FullTextParserParam
+	if len(params) > 0 {
+		err := json.Unmarshal([]byte(params), &param)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	ps, err := fulltext.ParsePattern(pattern, mode, param.Parser)
 	if err != nil {
 		return "", err
 	}
@@ -156,33 +164,62 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (s
 	return fulltext.PatternToSql(ps, mode, idxtbl, param.Parser, scoreAlgo)
 }
 
-// select * from index_table, fulltext_index_tokenize(doc_id, concat(body, ' ', title))
-// arg list [params, doc_id, content]
+// for table scan, primary key type is passed from TableDef
+// select f.* from index_table CROSS APPLY fulltext_index_tokenize('param', doc_id, body, title) as f
+// arg list [params, doc_id, part1, part2,...]
+//
+// for values scan, primary key type is passed from second argument
+// arg list [params, pktype, doc_id, part1, part2,...]
+//
+// select f.* from (select cast(column_0 as bigint) as id, column_1 as body, column_2 as title from (values row(1, 'body content', 'title content'))) as src
+// cross apply fulltext_index_tokenize('{"parser":"ngram"}', 23, id, body, title) as f;
+//
+// for composite primary key,
+//
+// select f.* from (select serial(cast(column_0 as bigint), cast(column_1 as bigint)) as id, column_2 as body, column_3 as title from
+// (values row(1, 2, 'body', 'title'), row(2, 3, 'body is heavy', 'I do not know'))) as src
+// cross apply fulltext_index_tokenize('{"parser":"ngram"}', 61, id, body, title) as f;
+//
+// for composite key, use hex string X'abcd' as input of primary key and skip serial()
+// select unhex(hex(serial(cast(0 as smallint), cast(1 as int))));
 func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 
 	if len(exprs) < 3 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
 	}
 
-	colDefs := _getColDefs(tokenizeColDefs)
+	colDefs := DeepCopyColDefList(tokenizeColDefs)
 	params, err := builder.getFullTextParams(tbl.Func)
 	if err != nil {
 		return 0, err
 	}
 
 	scanNode := builder.qry.Nodes[children[0]]
-	if scanNode.NodeType != plan.Node_TABLE_SCAN {
-		return 0, moerr.NewNoConfig(builder.GetContext(), "child node is not a TABLE SCAN")
+	if scanNode.NodeType == plan.Node_TABLE_SCAN {
+		if len(exprs) < 3 {
+			return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
+		}
+		pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
+		pkType := scanNode.TableDef.Cols[pkPos].Typ
+		// set type to source table primary key
+		colDefs[0].Typ = pkType
+		// remove the first argment and put the first argument to Param
+		exprs = exprs[1:]
+	} else {
+		// VALUES.  First argument is Params and second argument is pkType
+		if len(exprs) < 4 {
+			return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 4).")
+		}
+		pkType, err := builder.getFullTextPkeyType(tbl.Func)
+		if err != nil {
+			return 0, err
+		}
+
+		colDefs[0].Typ = pkType
+		// remove the first two argments and put the first argument to Param
+		exprs = exprs[2:]
+
 	}
-
-	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
-	pkType := scanNode.TableDef.Cols[pkPos].Typ
-
-	// set type to source table primary key
-	colDefs[0].Typ = pkType
-
-	// remove the first argment and put the first argument to Param
-	exprs = exprs[1:]
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
@@ -196,7 +233,7 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 			},
 			Cols: colDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
 	}
@@ -208,4 +245,17 @@ func (builder *QueryBuilder) getFullTextParams(fn *tree.FuncExpr) (string, error
 		return fn.Exprs[0].String(), nil
 	}
 	return "", moerr.NewNoConfig(builder.GetContext(), "first parameter must be string")
+}
+
+func (builder *QueryBuilder) getFullTextPkeyType(fn *tree.FuncExpr) (plan.Type, error) {
+	if v, ok := fn.Exprs[1].(*tree.NumVal); ok {
+		if t64, ok2 := v.Int64(); ok2 {
+			return plan.Type{
+				Id:          int32(t64),
+				NotNullable: false,
+			}, nil
+		}
+		return plan.Type{}, moerr.NewNoConfig(builder.GetContext(), "second parameter must be int32")
+	}
+	return plan.Type{}, moerr.NewNoConfig(builder.GetContext(), "second parameter must be int32")
 }

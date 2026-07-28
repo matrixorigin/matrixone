@@ -56,23 +56,23 @@ udf_dsp03    2025-07-19 05:52:33.805599    account    acc01
 udf_dsp02    2025-07-19 05:52:33.782182    account    acc01        
 udf_dsp01    2025-07-19 05:52:33.77066    account    acc01        
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 drop function subab(x int,y int);
 drop function udf_db.concatenate(str1 varchar(255), str2 varchar(255));
-restore account acc01 from snapshot udf_dsp03 to account acc02;
+restore account acc01{snapshot="udf_dsp03"} to account acc02;
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-restore account acc01 from snapshot udf_dsp02 to account acc02;
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+3    subab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 - $2    sql    udf_db2    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+restore account acc01{snapshot="udf_dsp02"} to account acc02;
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
+1    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+2    concatenate    2    [{"name": "str1", "type": "varchar"}, {"name": "str2", "type": "varchar"}]    varchar    $1 + $2    sql    udf_db    test_account    2025-07-19 05:52:33    2025-07-19 05:52:33    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 drop database udf_db;
 drop snapshot udf_dsp01;
 drop snapshot udf_dsp02;
@@ -86,17 +86,17 @@ create function `addAB`(x int, y int) returns int
 language sql as
 '$1 + $2';
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-4    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
+4    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 drop snapshot if exists udf_sp04;
 create snapshot udf_sp04 for account acc01;
 drop database udf_db2;
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-restore account acc01 from snapshot udf_sp04 to account acc02;
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
+restore account acc01{snapshot="udf_sp04"} to account acc02;
 select * from mo_catalog.mo_user_defined_function;
-function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-4    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+function_id    name    owner    args    rettype    body    language    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation    sql_mode
+4    addab    2    [{"name": "x", "type": "int"}, {"name": "y", "type": "int"}]    int    $1 + $2    sql    udf_db2    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    FUNCTION    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 drop database udf_db2;
 drop snapshot udf_sp04;
 drop database if exists procedure_test;
@@ -126,18 +126,18 @@ id    val
 2    b
 3    c
 select * from mo_catalog.mo_stored_procedure;
-proc_id    name    creator    args    lang    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    test_if_hit_elseif_first_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    test_if_hit_if    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+proc_id    name    creator    args    lang    body    sql_mode    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+1    test_if_hit_elseif_first_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES    procedure_test    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    test_if_hit_if    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES    procedure_test    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop snapshot if exists sp_sp05;
 create snapshot sp_sp05 for account acc01;
 drop procedure test_if_hit_elseif_first_elseif;
 drop procedure test_if_hit_if;
-restore account acc01 from snapshot sp_sp05 to account acc02;
+restore account acc01{snapshot="sp_sp05"} to account acc02;
 select * from mo_catalog.mo_stored_procedure;
-proc_id    name    creator    args    lang    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-1    test_if_hit_elseif_first_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-2    test_if_hit_if    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+proc_id    name    creator    args    lang    body    sql_mode    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+1    test_if_hit_elseif_first_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES    procedure_test    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+2    test_if_hit_if    null    []    sql    begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES    procedure_test    test_account    2025-07-19 05:52:34    2025-07-19 05:52:34    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 call procedure_test.test_if_hit_elseif_first_elseif();
 id    val
 1    a
@@ -180,18 +180,18 @@ id    val
 2    2.5
 3    3.5
 select * from mo_catalog.mo_stored_procedure;
-proc_id    name    creator    args    lang    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-3    test_if_hit_second_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-07-19 05:52:35    2025-07-19 05:52:35    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-4    test_if_hit_else    null    []    sql    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-07-19 05:52:35    2025-07-19 05:52:35    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+proc_id    name    creator    args    lang    body    sql_mode    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+3    test_if_hit_second_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES    procedure_test    test_account    2025-07-19 05:52:35    2025-07-19 05:52:35    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+4    test_if_hit_else    null    []    sql    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES    procedure_test    test_account    2025-07-19 05:52:35    2025-07-19 05:52:35    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop snapshot if exists sp_sp06;
 create snapshot sp_sp06 for account acc01;
 drop table tbh1;
 drop table tbh2;
 drop procedure test_if_hit_second_elseif;
 select * from mo_catalog.mo_stored_procedure;
-proc_id    name    creator    args    lang    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-4    test_if_hit_else    null    []    sql    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-07-19 05:52:35    2025-07-19 05:52:35    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-restore account acc01 from snapshot sp_sp06 to account acc02;
+proc_id    name    creator    args    lang    body    sql_mode    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+4    test_if_hit_else    null    []    sql    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES    procedure_test    test_account    2025-07-19 05:52:35    2025-07-19 05:52:35    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+restore account acc01{snapshot="sp_sp06"} to account acc02;
 call procedure_test.test_if_hit_else();
 id    val
 1    1.5
@@ -201,9 +201,9 @@ call procedure_test.test_if_hit_second_elseif();
 id    val
 1    a
 select * from mo_catalog.mo_stored_procedure;
-proc_id    name    creator    args    lang    body    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
-3    test_if_hit_second_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-07-19 05:52:35    2025-07-19 05:52:35    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
-4    test_if_hit_else    null    []    sql    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    procedure_test    test_account    2025-07-19 05:52:35    2025-07-19 05:52:35    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+proc_id    name    creator    args    lang    body    sql_mode    db    definer    modified_time    created_time    type    security_type    comment    character_set_client    collation_connection    database_collation
+3    test_if_hit_second_elseif    null    []    sql    begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES    procedure_test    test_account    2025-07-19 05:52:35    2025-07-19 05:52:35    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
+4    test_if_hit_else    null    []    sql    begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end    ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES    procedure_test    test_account    2025-07-19 05:52:35    2025-07-19 05:52:35    PROCEDURE    DEFINER        utf8mb4    utf8mb4_0900_ai_ci    utf8mb4_0900_ai_ci
 drop procedure procedure_test.test_if_hit_second_elseif;
 drop procedure procedure_test.test_if_hit_else;
 drop database procedure_test;
@@ -214,17 +214,17 @@ drop stage if exists my_ext_stage1;
 create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    my_ext_stage    s3://load/files/        disabled    2025-07-19 05:52:35    
-2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    disabled    2025-07-19 05:52:35    
+1    my_ext_stage    s3://load/files/        in_use    2025-07-19 05:52:35    
+2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-07-19 05:52:35    
 drop snapshot if exists stage_sp01;
 create snapshot stage_sp01 for account acc01;
 alter stage my_ext_stage1 SET URL='s3://load/files2/';
 drop stage my_ext_stage;
-restore account acc01 from snapshot stage_sp01 to account acc02;
+restore account acc01{snapshot="stage_sp01"} to account acc02;
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    my_ext_stage    s3://load/files/        disabled    2025-07-19 05:52:35    
-2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    disabled    2025-07-19 05:52:35    
+1    my_ext_stage    s3://load/files/        in_use    2025-07-19 05:52:35    
+2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-07-19 05:52:35    
 drop stage my_ext_stage;
 drop stage my_ext_stage1;
 drop snapshot stage_sp01;
@@ -243,13 +243,13 @@ drop user if exists userz;
 create user userz identified by '111';
 drop snapshot if exists user_sp02;
 create snapshot user_sp02 for account acc01;
-restore account acc01 from snapshot user_sp01 to account acc02;
+restore account acc01{snapshot="user_sp01"} to account acc02;
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 user_name    authentication_string    status    login_type    creator    owner    default_role
 test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
 userx    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    1
 usery    *899ECD04E40F745BD52A4C552BE4A818AC65FAF8    unlock    PASSWORD    2    2    1
-restore account acc01 from snapshot user_sp02 to account acc02;
+restore account acc01{snapshot="user_sp02"} to account acc02;
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 user_name    authentication_string    status    login_type    creator    owner    default_role
 test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
@@ -278,7 +278,7 @@ drop snapshot if exists role_sp01;
 create snapshot role_sp01 for account acc01;
 drop role role1;
 drop role role2;
-restore account acc01 from snapshot role_sp01 to account acc02;
+restore account acc01{snapshot="role_sp01"} to account acc02;
 select role_name, creator, owner from mo_catalog.mo_role;
 role_name    creator    owner
 public    2    2
@@ -305,9 +305,9 @@ public    2    2
 test_role    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 role_name    privilege_id    with_grant_option
-test_role    14    false
-test_role    29    false
-test_role    38    false
+test_role    14    0
+test_role    29    0
+test_role    38    0
 drop snapshot if exists prvis_sp01;
 create snapshot prvis_sp01 for account acc01;
 drop role test_role;
@@ -317,7 +317,7 @@ accountadmin    2    2
 public    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 role_name    privilege_id    with_grant_option
-restore account acc01 from snapshot prvis_sp01 to account acc02;
+restore account acc01{snapshot="prvis_sp01"} to account acc02;
 select role_name, creator, owner from mo_catalog.mo_role;
 role_name    creator    owner
 public    2    2
@@ -325,9 +325,9 @@ accountadmin    2    2
 test_role    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='test_role';
 role_name    privilege_id    with_grant_option
-test_role    14    false
-test_role    29    false
-test_role    38    false
+test_role    14    0
+test_role    29    0
+test_role    38    0
 drop role test_role;
 drop snapshot prvis_sp01;
 drop user if exists user_grant_2;
@@ -348,22 +348,22 @@ public    2    2
 role_account_priv_1    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
 role_name    privilege_id    with_grant_option
-role_account_priv_1    3    true
-role_account_priv_1    4    true
-role_account_priv_1    5    true
-role_account_priv_1    6    true
-role_account_priv_1    7    true
-role_account_priv_1    9    true
-role_account_priv_1    10    true
-role_account_priv_1    11    true
-role_account_priv_1    12    true
-role_account_priv_1    13    true
-role_account_priv_1    30    false
+role_account_priv_1    3    1
+role_account_priv_1    4    1
+role_account_priv_1    5    1
+role_account_priv_1    6    1
+role_account_priv_1    7    1
+role_account_priv_1    9    1
+role_account_priv_1    10    1
+role_account_priv_1    11    1
+role_account_priv_1    12    1
+role_account_priv_1    13    1
+role_account_priv_1    30    0
 drop snapshot if exists grant_sp01;
 create snapshot grant_sp01 for account acc01;
 drop user user_grant_2;
 drop role 'role_account_priv_1';
-restore account acc01 from snapshot grant_sp01 to account acc02;
+restore account acc01{snapshot="grant_sp01"} to account acc02;
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 user_name    authentication_string    status    login_type    creator    owner    default_role
 test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
@@ -375,17 +375,17 @@ accountadmin    2    2
 role_account_priv_1    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_1';
 role_name    privilege_id    with_grant_option
-role_account_priv_1    3    true
-role_account_priv_1    4    true
-role_account_priv_1    5    true
-role_account_priv_1    6    true
-role_account_priv_1    7    true
-role_account_priv_1    9    true
-role_account_priv_1    10    true
-role_account_priv_1    11    true
-role_account_priv_1    12    true
-role_account_priv_1    13    true
-role_account_priv_1    30    false
+role_account_priv_1    3    1
+role_account_priv_1    4    1
+role_account_priv_1    5    1
+role_account_priv_1    6    1
+role_account_priv_1    7    1
+role_account_priv_1    9    1
+role_account_priv_1    10    1
+role_account_priv_1    11    1
+role_account_priv_1    12    1
+role_account_priv_1    13    1
+role_account_priv_1    30    0
 drop user user_grant_2;
 drop role role_account_priv_1;
 drop snapshot grant_sp01;
@@ -420,18 +420,18 @@ public    2    2
 role_account_priv_3    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name='role_account_priv_3';
 role_name    privilege_id    with_grant_option
-role_account_priv_3    3    true
-role_account_priv_3    4    true
-role_account_priv_3    5    true
-role_account_priv_3    6    true
-role_account_priv_3    7    true
-role_account_priv_3    9    true
-role_account_priv_3    10    true
-role_account_priv_3    11    true
-role_account_priv_3    12    true
-role_account_priv_3    13    true
-role_account_priv_3    30    false
-restore account acc01 from snapshot grant_sp02 to account acc02;
+role_account_priv_3    3    1
+role_account_priv_3    4    1
+role_account_priv_3    5    1
+role_account_priv_3    6    1
+role_account_priv_3    7    1
+role_account_priv_3    9    1
+role_account_priv_3    10    1
+role_account_priv_3    11    1
+role_account_priv_3    12    1
+role_account_priv_3    13    1
+role_account_priv_3    30    0
+restore account acc01{snapshot="grant_sp02"} to account acc02;
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 user_name    authentication_string    status    login_type    creator    owner    default_role
 test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
@@ -466,21 +466,21 @@ r9    2    2
 r10    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs  where role_name in ('r1','r2','r3','r4','r5');
 role_name    privilege_id    with_grant_option
-r1    30    false
-r2    30    false
-r3    30    false
-r4    30    false
-r5    30    false
-r1    31    false
-r2    31    false
-r3    31    false
-r4    31    false
-r5    31    false
-r1    32    false
-r2    32    false
-r3    32    false
-r4    32    false
-r5    32    false
+r1    30    0
+r2    30    0
+r3    30    0
+r4    30    0
+r5    30    0
+r1    31    0
+r2    31    0
+r3    31    0
+r4    31    0
+r5    31    0
+r1    32    0
+r2    32    0
+r3    32    0
+r4    32    0
+r5    32    0
 drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 drop role r1,r2,r3,r4,r5;
@@ -496,7 +496,7 @@ r9    2    2
 r10    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs  where role_name in ('r1','r2','r3','r4','r5');
 role_name    privilege_id    with_grant_option
-restore account acc01 from snapshot sp01 to account acc02;
+restore account acc01{snapshot="sp01"} to account acc02;
 select role_name, creator, owner from mo_catalog.mo_role;
 role_name    creator    owner
 public    2    2
@@ -514,21 +514,21 @@ r9    2    2
 r10    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs  where role_name in ('r1','r2','r3','r4','r5');
 role_name    privilege_id    with_grant_option
-r1    30    false
-r1    31    false
-r1    32    false
-r2    30    false
-r2    31    false
-r2    32    false
-r3    30    false
-r3    31    false
-r3    32    false
-r4    30    false
-r4    31    false
-r4    32    false
-r5    30    false
-r5    31    false
-r5    32    false
+r1    30    0
+r1    31    0
+r1    32    0
+r2    30    0
+r2    31    0
+r2    32    0
+r3    30    0
+r3    31    0
+r3    32    0
+r4    30    0
+r4    31    0
+r4    32    0
+r5    30    0
+r5    31    0
+r5    32    0
 drop role r6,r7,r8,r9,r10;
 drop snapshot sp01;
 drop role if exists r1, r2, r6,r7;
@@ -560,12 +560,12 @@ r6    2    2
 r7    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs  where role_name in ('r1', 'r2');
 role_name    privilege_id    with_grant_option
-r1    30    true
-r2    30    true
-r1    31    true
-r2    31    true
-r1    32    true
-r2    32    true
+r1    30    1
+r2    30    1
+r1    31    1
+r2    31    1
+r1    32    1
+r2    32    1
 drop snapshot if exists sp02;
 create snapshot sp02 for account acc01;
 drop role r1, r2;
@@ -578,7 +578,7 @@ r6    2    2
 r7    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs  where role_name in ('r1', 'r2');
 role_name    privilege_id    with_grant_option
-restore account acc01 from snapshot sp02 to account acc02;
+restore account acc01{snapshot="sp02"} to account acc02;
 select role_name, creator, owner from mo_catalog.mo_role;
 role_name    creator    owner
 public    2    2
@@ -590,12 +590,12 @@ r6    2    2
 r7    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs  where role_name in ('r1', 'r2');
 role_name    privilege_id    with_grant_option
-r1    30    true
-r1    31    true
-r1    32    true
-r2    30    true
-r2    31    true
-r2    32    true
+r1    30    1
+r1    31    1
+r1    32    1
+r2    30    1
+r2    31    1
+r2    32    1
 drop role r1, r2;
 drop role  r6, r7;
 drop snapshot sp02;
@@ -635,7 +635,7 @@ r7    2    2
 r5    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs  where role_name in ('r5');
 role_name    privilege_id    with_grant_option
-r5    6    false
+r5    6    0
 drop snapshot if exists sp03;
 create snapshot sp03 for account acc01;
 drop role r5;
@@ -657,7 +657,7 @@ r6    2    2
 r7    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs  where role_name in ('r5');
 role_name    privilege_id    with_grant_option
-restore account acc01 from snapshot sp03 to account acc02;
+restore account acc01{snapshot="sp03"} to account acc02;
 select user_name, authentication_string, status, login_type, creator, owner, default_role from mo_catalog.mo_user;
 user_name    authentication_string    status    login_type    creator    owner    default_role
 test_account    *832EB84CB764129D05D498ED9CA7E5CE9B8F83EB    unlock    PASSWORD    2    2    2
@@ -677,7 +677,7 @@ r7    2    2
 r5    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r5');
 role_name    privilege_id    with_grant_option
-r5    6    false
+r5    6    0
 drop user user01, user02, user03, user04, user05;
 drop role r5;
 drop snapshot sp03;

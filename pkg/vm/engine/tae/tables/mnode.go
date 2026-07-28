@@ -16,7 +16,9 @@ package tables
 
 import (
 	"context"
+	"slices"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -243,10 +245,28 @@ func (node *memoryNode) ApplyAppendLocked(
 ) (from int, err error) {
 	schema := node.writeSchema
 	from = int(node.mustData().Length())
+	rows := bat.Length()
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := node.data.Vecs[def.Idx]
 		destVec.Extend(bat.Vecs[srcPos])
+	}
+	// RelLogicalID COMPAT
+	if node.object.meta.Load().GetTable().ID == 2 && len(node.data.Vecs) > 10 /*not tombstone*/ {
+		in_logical_idx := slices.Index(bat.Attrs, pkgcatalog.SystemRelAttr_LogicalID)
+		if in_logical_idx == -1 {
+			desc := node.data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
+			desc.Extend(bat.GetVectorByName(pkgcatalog.SystemRelAttr_ID))
+		}
+	}
+	// Upgrade compat: replayed WAL batches may be encoded with an older schema
+	// and omit columns introduced later. Pad those missing columns with NULLs
+	// for the appended rows so every in-memory vector stays aligned.
+	expectedLen := from + rows
+	for _, destVec := range node.data.Vecs {
+		for destVec.Length() < expectedLen {
+			destVec.Append(nil, true)
+		}
 	}
 	return
 }

@@ -34,12 +34,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const DefaultCheckpointWaitTimeoutMS = 10000
 
 func WithTestAllPKType(t *testing.T, tae *db.DB, test func(*testing.T, *db.DB, *catalog.Schema)) {
 	var wg sync.WaitGroup
@@ -157,6 +160,7 @@ func CreateDatabase2Ext(ctx context.Context, txn txnif.AsyncTxn, dbName, creates
 		return nil, err
 	}
 	bat := makeRespBatchFromSchema(catalog.SystemDBSchema)
+	defer bat.Close()
 	for _, def := range catalog.SystemDBSchema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
@@ -233,6 +237,7 @@ func CreateRelation2(ctx context.Context, txn txnif.AsyncTxn, db handle.Database
 	}
 
 	bat := makeRespBatchFromSchema(catalog.SystemTableSchema)
+	defer bat.Close()
 	for _, def := range catalog.SystemTableSchema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
@@ -243,6 +248,7 @@ func CreateRelation2(ctx context.Context, txn txnif.AsyncTxn, db handle.Database
 		return nil, err
 	}
 	colBat := makeRespBatchFromSchema(catalog.SystemColumnSchema)
+	defer colBat.Close()
 	for _, def := range catalog.SystemColumnSchema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
@@ -286,12 +292,36 @@ func AllCheckpointsFinished(e *db.DB) bool {
 	if e.Wal.GetPenddingCnt() != 0 {
 		return false
 	}
+	if e.Wal.GetCheckpointed() < e.Wal.GetLSNWatermark() {
+		return false
+	}
 	ckp := e.BGCheckpointRunner.GetICKPIntentOnlyForTest()
 	if ckp == nil {
 		return true
 	}
 	return ckp.IsFinished()
 }
+
+func WaitAllCheckpointsFinished(t *testing.T, e *db.DB, timeoutMS ...int) {
+	timeout := DefaultCheckpointWaitTimeoutMS
+	if len(timeoutMS) > 0 {
+		timeout = timeoutMS[0]
+	}
+	targetLSN := e.Wal.GetLSNWatermark()
+	testutils.WaitExpect(timeout, func() bool {
+		return e.Wal.GetCheckpointed() >= targetLSN && AllCheckpointsFinished(e)
+	})
+	require.True(
+		t,
+		e.Wal.GetCheckpointed() >= targetLSN && AllCheckpointsFinished(e),
+		"target LSN: %d, checkpointed LSN: %d, current LSN: %d, pending LSN count: %d",
+		targetLSN,
+		e.Wal.GetCheckpointed(),
+		e.Wal.GetLSNWatermark(),
+		e.Runtime.Scheduler.GetPenddingLSNCnt(),
+	)
+}
+
 func CreateRelationAndAppend(
 	t *testing.T,
 	tenantID uint32,
@@ -668,4 +698,35 @@ func IsCatalogEqual(t *testing.T, c1, c2 *catalog.Catalog) {
 	err = c2.RecurLoop(p2)
 	assert.NoError(t, err)
 	assert.Equal(t, objCount, objCount2)
+}
+
+func DeleteAll(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string) {
+	txn, rel := GetRelation(t, accountID, db, dbName, tableName)
+	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchemaLocked(false)
+	pkIdx := schema.GetPrimaryKey().Idx
+	rowIDIdx := schema.GetColIdx(catalog.PhyAddrColumnName)
+	it := rel.MakeObjectIt(false)
+	for it.Next() {
+		blk := it.GetObject()
+		defer blk.Close()
+		blkCnt := uint16(blk.BlkCnt())
+		for i := uint16(0); i < blkCnt; i++ {
+			var view *containers.Batch
+			err := blk.HybridScan(context.Background(), &view, i, []int{rowIDIdx, pkIdx}, common.DefaultAllocator)
+			assert.NoError(t, err)
+			defer view.Close()
+			view.Compact()
+			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1], handle.DT_Normal)
+			assert.NoError(t, err)
+		}
+	}
+	err := txn.Commit(context.Background())
+	assert.NoError(t, err)
+}
+
+func Append(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string, bat *containers.Batch) {
+	txn, rel := GetRelation(t, accountID, db, dbName, tableName)
+	assert.NoError(t, rel.Append(context.Background(), bat))
+	err := txn.Commit(context.Background())
+	assert.NoError(t, err)
 }

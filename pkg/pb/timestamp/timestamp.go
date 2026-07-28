@@ -15,8 +15,8 @@
 package timestamp
 
 import (
-	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,7 +115,13 @@ func (m Timestamp) Prev() Timestamp {
 
 // DebugString returns debug string
 func (m Timestamp) DebugString() string {
-	return fmt.Sprintf("%d-%d", m.PhysicalTime, m.LogicalTime)
+	// Optimize: use strconv instead of fmt.Sprintf
+	// Pre-allocate buffer for typical timestamp string (~20 bytes)
+	var buf [32]byte
+	b := strconv.AppendInt(buf[:0], m.PhysicalTime, 10)
+	b = append(b, '-')
+	b = strconv.AppendUint(b, uint64(m.LogicalTime), 10)
+	return string(b)
 }
 
 // ParseTimestamp parse timestamp from debug string

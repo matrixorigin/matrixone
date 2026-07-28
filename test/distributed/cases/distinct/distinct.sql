@@ -43,9 +43,7 @@ create table t3 (i int, j int);
 insert into t3 values (1,1), (1,2), (2,3), (2,4);
 select i, count(distinct j) from t3 group by i;
 
--- @bvt:issue#4797
 select i+0.0 as i2, count(distinct j) from t3 group by i2;
--- @bvt:issue
 
 select i+0.0 as i2, count(distinct j) from t3 group by i;
 
@@ -96,7 +94,7 @@ CREATE TABLE t7 (a VARCHAR(400));
 INSERT INTO t7 (a) VALUES ("A"), ("a"), ("a "), ("a   "),
                           ("B"), ("b"), ("b "), ("b   ");
 
-select * from t7;
+select * from t7 order by a;
 SELECT COUNT(DISTINCT a) FROM t7;
 
 DROP TABLE t7;
@@ -202,3 +200,42 @@ INSERT INTO t13 VALUES ( 'Computer', 2,2000, 1200),
 SELECT product, country_id, COUNT(*), COUNT(distinct year) FROM t13 GROUP BY product, country_id order by product;
 
 drop table t13;
+
+
+-- test distinct aggregation with JOIN and GROUP BY multiple columns
+-- This test case verifies that distinct aggregation runs correctly in single CPU mode
+-- without triggering "distinct agg should be run in only one node and without any parallel" error
+drop table if exists t14;
+drop table if exists t15;
+
+create table t14 (i bigint, g bigint);
+create table t15 (o bigint, p bigint, v int);
+
+-- Insert data using generate_series to create sufficient data volume for testing parallel execution
+insert into t14 (select result, (result % 100) + 1 from generate_series(1, 100000, 1) g);
+insert into t15 select (result % 5000) + 1, ((result % 100000) + 1), 100 from generate_series(1, 1000000, 1) g;
+
+-- Test query with COUNT(DISTINCT) + SUM + GROUP BY multiple columns + JOIN
+-- This is the minimal case that triggers the distinct aggregation parallel execution error
+-- The query should execute successfully without error after the fix
+SELECT t14.g, t14.i, COUNT(DISTINCT t15.o), SUM(t15.v) FROM t14 JOIN t15 ON t14.i = t15.p GROUP BY t14.g, t14.i ORDER BY t14.g, t14.i limit 10;
+
+drop table t14;
+drop table t15;
+
+drop table if exists t_order;
+create table t_order(grp int, label varchar(10));
+insert into t_order values (2, 'b'), (1, 'b'), (2, 'a'), (1, 'a'), (1, 'a');
+select distinct grp, label from t_order order by concat(label, 'x'), grp;
+select distinct grp from t_order order by grp + 0 desc;
+select distinct grp + 1 as g from t_order order by g + 1 desc;
+drop table t_order;
+
+drop table if exists t_distinct_order_name;
+create table t_distinct_order_name(a int, b int);
+insert into t_distinct_order_name values (1, 100), (2, 0);
+select distinct a as b, b from t_distinct_order_name order by abs(b);
+select distinct a as b from t_distinct_order_name order by abs(b);
+select distinct a as b, b from t_distinct_order_name order by (b);
+select distinct a as x from t_distinct_order_name order by abs(x);
+drop table t_distinct_order_name;

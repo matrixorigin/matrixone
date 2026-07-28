@@ -132,6 +132,9 @@ func cloneLatestSchema(meta *catalog.TableEntry) *catalog.Schema {
 }
 
 func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err error) {
+	if err = db.txnDB.store.WantWrite("TruncateByName"); err != nil {
+		return
+	}
 	newTableId := db.txnDB.entry.GetCatalog().IDAllocator.NextTable()
 
 	oldRel, err := db.DropRelationByName(name)
@@ -167,6 +170,9 @@ func (db *txnDatabase) TruncateWithID(name string, newTableId uint64) (rel handl
 }
 
 func (db *txnDatabase) TruncateByID(id uint64, newTableId uint64) (rel handle.Relation, err error) {
+	if err = db.txnDB.store.WantWrite("TruncateByID"); err != nil {
+		return
+	}
 
 	oldRel, err := db.DropRelationByID(id)
 	if err != nil {

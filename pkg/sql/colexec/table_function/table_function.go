@@ -123,6 +123,8 @@ func (tableFunction *TableFunction) OpType() vm.OpType {
 }
 
 func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
+	tableFunction.cleanForPrepare(proc)
+
 	if tableFunction.OpAnalyzer == nil {
 		tableFunction.OpAnalyzer = process.NewAnalyzer(tableFunction.GetIdx(), tableFunction.IsFirst, tableFunction.IsLast, "tableFunction")
 	} else {
@@ -182,12 +184,41 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = ivfCreatePrepare(proc, tblArg)
 	case "ivf_search":
 		tblArg.ctr.state, err = ivfSearchPrepare(proc, tblArg)
+	case "parse_jsonl_data":
+		tblArg.ctr.state, err = parseJsonlDataPrepare(proc, tblArg)
+	case "parse_jsonl_file":
+		tblArg.ctr.state, err = parseJsonlFilePrepare(proc, tblArg)
+	case "table_stats":
+		tblArg.ctr.state, err = tableStatsPrepare(proc, tblArg)
+	case "load_file_chunks":
+		tblArg.ctr.state, err = loadFileChunksPrepare(proc, tblArg)
+	case "cagra_create":
+		tblArg.ctr.state, err = cagraCreatePrepare(proc, tblArg)
+	case "cagra_search":
+		tblArg.ctr.state, err = cagraSearchPrepare(proc, tblArg)
+	case "ivfpq_create":
+		tblArg.ctr.state, err = ivfpqCreatePrepare(proc, tblArg)
+	case "ivfpq_search":
+		tblArg.ctr.state, err = ivfpqSearchPrepare(proc, tblArg)
 	default:
 		tblArg.ctr.state = nil
 		err = moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
 	}
 
 	return err
+}
+
+// cleanForPrepare releases resources that Prepare rebuilds. Optimized
+// generate_series state is injected by the compiler and must survive Prepare.
+func (tableFunction *TableFunction) cleanForPrepare(proc *process.Process) {
+	tableFunction.ctr.cleanExecutors()
+	if tableFunction.FuncName == "generate_series" && tableFunction.CanOpt {
+		return
+	}
+	if tableFunction.ctr.state != nil {
+		tableFunction.ctr.state.free(tableFunction, proc, false, nil)
+		tableFunction.ctr.state = nil
+	}
 }
 
 func (tableFunction *TableFunction) createResultBatch() *batch.Batch {

@@ -1,0 +1,36 @@
+drop table if exists having_window_alias_h;
+drop table if exists having_window_alias_s;
+create table having_window_alias_h (
+trade_date date,
+hshsi decimal(10, 2),
+closing int
+);
+create table having_window_alias_s (
+trade_date date,
+sivol int
+);
+insert into having_window_alias_h values
+('2025-01-02', 100.00, 9),
+('2025-01-03', 95.00, 9),
+('2025-01-06', 97.00, 9);
+insert into having_window_alias_s values
+('2025-01-02', 1000),
+('2025-01-02', 500),
+('2025-01-03', 800),
+('2025-01-06', 1200);
+select
+h.trade_date,
+(h.hshsi - lag(h.hshsi) over (order by h.trade_date))
+/ lag(h.hshsi) over (order by h.trade_date) * 100 as hsi_change_pct,
+sum(s.sivol) as total_market_volume
+from having_window_alias_h h
+join having_window_alias_s s on h.trade_date = s.trade_date
+where h.closing = 9
+and h.trade_date between '2025-01-01' and '2025-03-31'
+group by h.trade_date, h.hshsi
+having hsi_change_pct < -2
+order by h.trade_date;
+trade_date    hsi_change_pct    total_market_volume
+2025-01-03    -5.00000000    800
+drop table if exists having_window_alias_h;
+drop table if exists having_window_alias_s;

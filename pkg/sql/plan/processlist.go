@@ -60,7 +60,7 @@ func (builder *QueryBuilder) buildProcesslist(tbl *tree.TableFunction, ctx *Bind
 			},
 			Cols: sessionsColDefs,
 		},
-		BindingTags:     []int32{builder.genNewTag()},
+		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
 	}

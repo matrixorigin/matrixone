@@ -378,9 +378,9 @@ show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
 acc03    test_account    2025-07-19 05:49:18    open    null    5    65    0.0    0.0    
 sys    root    2025-07-19 05:30:43    open    null    8    110    34.336519    0.0    system account
-restore account acc01 from snapshot snapshot_cls;
-restore account acc02 from snapshot snapshot_cls;
-restore account acc03 from snapshot snapshot_cls;
+restore account acc01{snapshot="snapshot_cls"};
+restore account acc02{snapshot="snapshot_cls"};
+restore account acc03{snapshot="snapshot_cls"};
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
 acc03    test_account    2025-07-19 05:49:18    open    null    6    73    0.0    0.0    

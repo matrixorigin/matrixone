@@ -1,6 +1,7 @@
 #NULL
 
 SELECT STD(null);
+SELECT STDDEV(null);
 SELECT STDDEV_POP(null);
 
 
@@ -94,3 +95,56 @@ CREATE TABLE t1(i INT);
 INSERT INTO t1 VALUES (NULL),(1);
 SELECT STDDEV_POP(i)+0 as splus0, i+0 as plain FROM t1 GROUP BY i ;
 DROP TABLE t1;
+
+#STDDEV function (synonym for STD)
+SELECT STDDEV(col) AS result FROM (SELECT 1 AS col UNION SELECT 2 UNION SELECT 3) AS t;
+
+#STDDEV_SAMP function (sample standard deviation)
+SELECT STDDEV_SAMP(null);
+SELECT STDDEV_SAMP(col) AS result FROM (SELECT 1 AS col UNION SELECT 2 UNION SELECT 3) AS t;
+
+#STDDEV_SAMP with different data types
+create table t1(a tinyint, b SMALLINT, c BIGINT, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19));
+insert into t1 values(1, 1, 2, 43, 5, 35.5, 31.133, 14.314);
+insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314);
+insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394);
+insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314);
+select STDDEV_SAMP(a) from t1;
+select STDDEV_SAMP(b) from t1;
+select STDDEV_SAMP(c) from t1;
+select STDDEV_SAMP(d) from t1;
+select STDDEV_SAMP(e) from t1;
+select STDDEV_SAMP(f) from t1;
+select STDDEV_SAMP(g) from t1;
+select STDDEV_SAMP(h) from t1;
+drop table t1;
+
+#STDDEV_SAMP with GROUP BY
+CREATE TABLE t1 (id int(11),value1 float(10,2));
+INSERT INTO t1 VALUES (1,0.00),(1,1.00), (1,2.00), (2,10.00), (2,11.00), (2,12.00), (2,13.00);
+select id, STDDEV_SAMP(value1) from t1 group by id;
+drop table t1;
+
+#STDDEV_SAMP with HAVING
+CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
+INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
+select Fld1, STDDEV_SAMP(Fld2) as q from t1 group by Fld1 having q is not null;
+select Fld1, STDDEV_SAMP(Fld2) from t1 group by Fld1 having STDDEV_SAMP(Fld2) is not null;
+drop table t1;
+
+#STDDEV_SAMP comparison with STDDEV_POP
+CREATE TABLE t1 (value float);
+INSERT INTO t1 VALUES (1),(2),(3),(4),(5);
+select STDDEV_POP(value) as pop, STDDEV_SAMP(value) as samp from t1;
+drop table t1;
+
+#STDDEV_SAMP with single value (should return NULL or 0)
+CREATE TABLE t1 (value int);
+INSERT INTO t1 VALUES (5);
+select STDDEV_SAMP(value) from t1;
+drop table t1;
+
+#STDDEV_SAMP with empty table
+CREATE TABLE t1 (value int);
+select STDDEV_SAMP(value) from t1;
+drop table t1;

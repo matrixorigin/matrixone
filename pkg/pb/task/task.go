@@ -64,6 +64,8 @@ func detailsType(d isDetails_Details) (TaskType, error) {
 		return TaskType_TypeKafkaSinkConnector, nil
 	case *Details_CreateCdc:
 		return TaskType_CreateCdc, nil
+	case *Details_ISCP:
+		return TaskType_ISCP, nil
 	default:
 		return TaskType_TypeUnknown, moerr.NewInternalErrorNoCtxf("Unknown details type: %T", d)
 	}

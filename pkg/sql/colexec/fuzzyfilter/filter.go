@@ -102,7 +102,7 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 		useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
 
 		if useRoaring {
-			ctr.roaringFilter = newroaringFilter(types.T(fuzzyFilter.PkTyp.Id))
+			ctr.roaringFilter = newRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
 		} else {
 			//@see https://hur.st/bloomfilter/
 			var probability float64
@@ -315,6 +315,9 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	//	bloomFilterCardLimit = v.(int64)
 	//}
 
+	// InplaceSort reorders data but NOT the null bitmap.
+	// Reset bitmap before sort to avoid corruption.
+	ctr.pass2RuntimeFilter.GetNulls().Reset()
 	ctr.pass2RuntimeFilter.InplaceSort()
 	data, err := ctr.pass2RuntimeFilter.MarshalBinary()
 	if err != nil {
@@ -327,19 +330,26 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	return nil
 }
 
-func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(v *vector.Vector, proc *process.Process) {
+func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(
+	v *vector.Vector, proc *process.Process,
+) (err error) {
 	ctr := &fuzzyFilter.ctr
 	if ctr.pass2RuntimeFilter != nil && fuzzyFilter.RuntimeFilterSpec != nil {
 		el := ctr.pass2RuntimeFilter.Length()
 		al := v.Length()
 
 		if int64(el)+int64(al) <= int64(fuzzyFilter.RuntimeFilterSpec.UpperLimit) {
-			ctr.pass2RuntimeFilter.UnionMulti(v, 0, al, proc.Mp())
+			if err = ctr.pass2RuntimeFilter.UnionBatch(
+				v, 0, al, nil, proc.Mp(),
+			); err != nil {
+				return
+			}
 		} else {
 			ctr.pass2RuntimeFilter.Free(proc.Mp())
 			ctr.pass2RuntimeFilter = nil
 		}
 	}
+	return
 }
 
 // appendCollisionKey will append collision key into rbat

@@ -53,7 +53,9 @@ func TestTombstoneData1(t *testing.T) {
 	var tombstoneRowIds []types.Rowid
 	int32Type := types.T_int32.ToType()
 	for i := 0; i < 3; i++ {
-		writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type)
+		writer := colexec.NewCNS3TombstoneWriter(
+			proc.Mp(), fs, int32Type, -1,
+		)
 		require.NoError(t, err)
 		bat := NewCNTombstoneBatch(
 			&int32Type,

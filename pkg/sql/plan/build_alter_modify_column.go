@@ -31,38 +31,41 @@ func updateNewColumnInTableDef(
 	oCol *ColDef,
 	nColSpec *tree.ColumnTableDef,
 	nPos *tree.ColumnPosition,
-) error {
+) (bool, error) {
 	ctx := cctx.GetContext()
 
 	nTy, err := getTypeFromAst(ctx, nColSpec.Type)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if err = applyColumnAttributesToType(ctx, &nTy, nColSpec.Attributes); err != nil {
+		return false, err
 	}
 
 	if err = checkTypeCapSize(ctx, &nTy, nColSpec.Name.ColName()); err != nil {
-		return err
+		return false, err
 	}
 
 	// check if the type of the new column is compatible with the old column
 	if err = checkChangeTypeCompatible(ctx, &oCol.Typ, &nTy); err != nil {
-		return err
+		return false, err
 	}
 
 	nCol, err := buildColumnAndConstraint(cctx, tableDef, oCol, nColSpec, nTy)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Check new column foreign key constraints
 	if err = checkColumnForeignkeyConstraint(cctx, tableDef, oCol, nCol); err != nil {
-		return err
+		return false, err
 	}
 
 	if err = modifyColPosition(ctx, tableDef, oCol, nCol, nPos); err != nil {
-		return err
+		return false, err
 	}
 
-	return nil
+	return nCol.Primary, nil
 
 }
 
@@ -74,7 +77,7 @@ func ModifyColumn(
 	alterPlan *plan.AlterTable,
 	spec *tree.AlterTableModifyColumnClause,
 	alterCtx *AlterTableContext,
-) error {
+) (bool, error) {
 	tableDef := alterPlan.CopyTableDef
 	nColSpec := spec.NewColumn
 	nPos := spec.Position
@@ -83,15 +86,21 @@ func ModifyColumn(
 	// Check whether added column has existed.
 	oCol := FindColumn(tableDef.Cols, nColName)
 	if oCol == nil || oCol.Hidden {
-		return moerr.NewBadFieldError(
+		return false, moerr.NewBadFieldError(
 			cctx.GetContext(),
 			nColSpec.Name.ColNameOrigin(),
 			alterPlan.TableDef.Name,
 		)
 	}
-	err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
+
+	// If the column is referenced by a generated column, block the modification
+	if err := checkColumnWithGeneratedDependency(cctx.GetContext(), tableDef, nColName); err != nil {
+		return false, err
+	}
+
+	pkAffected, err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	alterCtx.alterColMap[nColName] = selectExpr{
@@ -99,7 +108,7 @@ func ModifyColumn(
 		sexprStr:  oCol.Name,
 	}
 
-	return nil
+	return pkAffected, nil
 }
 
 // modifyColPosition Check the position information of the newly formed column
@@ -111,10 +120,22 @@ func modifyColPosition(
 	pos *tree.ColumnPosition,
 ) error {
 	if pos != nil && pos.Typ != tree.ColumnPositionNone {
-		// detete old column
+		// Find old column position before removing
+		oldPos := int32(-1)
+		for i, col := range tableDef.Cols {
+			if strings.EqualFold(col.Name, oCol.Name) {
+				oldPos = int32(i)
+				break
+			}
+		}
+
+		// delete old column
 		tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(col *ColDef) bool {
 			return strings.EqualFold(col.Name, oCol.Name)
 		})
+		if oldPos >= 0 {
+			remapGeneratedColExprsAfterDrop(tableDef, oldPos)
+		}
 
 		targetPos, err := findPositionRelativeColumn(ctx, tableDef.Cols, pos)
 		if err != nil {
@@ -124,6 +145,7 @@ func modifyColPosition(
 			tableDef.Cols[:targetPos],
 			append([]*ColDef{nCol}, tableDef.Cols[targetPos:]...)...,
 		)
+		remapGeneratedColExprsAfterInsert(tableDef, int32(targetPos))
 	} else {
 		for i, col := range tableDef.Cols {
 			if strings.EqualFold(col.Name, oCol.Name) {
@@ -143,10 +165,28 @@ func checkChangeTypeCompatible(
 ) error {
 	// Deal with the same type.
 	if origin.Id == to.Id {
+		if isGeometryPlanType(origin) && !geometrySubtypeCompatible(geometrySubtypeName(to), geometrySubtypeName(origin)) {
+			return moerr.NewNotSupportedf(ctx,
+				"currently unsupport change from original geometry subtype %s to %s",
+				geometrySubtypeName(origin),
+				geometrySubtypeName(to),
+			)
+		}
+		if isGeometryPlanType(origin) {
+			originSRID, originHasSRID := geometrySRIDValue(origin)
+			targetSRID, targetHasSRID := geometrySRIDValue(to)
+			if originHasSRID != targetHasSRID || (originHasSRID && originSRID != targetSRID) {
+				return moerr.NewNotSupportedf(ctx,
+					"currently unsupport change from original geometry SRID %s to %s",
+					formatGeometrySRIDForError(originSRID, originHasSRID),
+					formatGeometrySRIDForError(targetSRID, targetHasSRID),
+				)
+			}
+		}
 		return nil
 	}
 	// The enumeration type has an independent cast function to handle it
-	if origin.Id == int32(types.T_enum) || to.Id == int32(types.T_enum) {
+	if origin.Id == int32(types.T_enum) || to.Id == int32(types.T_enum) || isSetPlanType(origin) || isSetPlanType(to) {
 		return nil
 	}
 

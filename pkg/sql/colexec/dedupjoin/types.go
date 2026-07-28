@@ -16,12 +16,14 @@ package dedupjoin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -35,6 +37,31 @@ const (
 	Finalize
 	End
 )
+
+// WorkerJoinMsg carries per-worker state from non-merger workers to the
+// merger worker at finalize time. Regular DEDUP JOIN only populates matched;
+// the REPLACE INTO merged main-table scan path (OldColCapture) additionally
+// populates captured and capturedVecs.
+//
+// Ownership: once a non-merger worker sends this message on the channel, it
+// must relinquish its references to captured / capturedVecs so that the
+// merger is the sole owner and is responsible for Free'ing capturedVecs.
+type WorkerJoinMsg struct {
+	matched      *bitmap.Bitmap
+	captured     *bitmap.Bitmap
+	capturedVecs []*vector.Vector
+}
+
+// freeCapturedVecs releases vectors owned by a WorkerJoinMsg. Intended to be
+// called by the merger after it has finished merging captures out of the
+// message (ownership was transferred from the sender).
+func freeCapturedVecs(vecs []*vector.Vector, proc *process.Process) {
+	for _, v := range vecs {
+		if v != nil {
+			v.Free(proc.GetMPool())
+		}
+	}
+}
 
 type evalVector struct {
 	executor colexec.ExpressionExecutor
@@ -56,17 +83,35 @@ type container struct {
 	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
+	savedVecs []*vector.Vector
+
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *message.JoinMap
+	mp        *message.JoinMap
+	cachedItr hashmap.Iterator
 
 	matched     *bitmap.Bitmap
 	handledLast bool
 
+	// Capture buffers for the REPLACE INTO merged main-table scan. When
+	// OldColCapturePlaceholderIdxList is non-empty, each entry i in the list
+	// owns capturedVecs[i], a vector of length batchRowCount pre-filled with
+	// NULL. When a probe row hits build bucket `sel`, we Copy the probe-side
+	// source column into capturedVecs[i] at position `sel`. In finalize() the
+	// captured values are emitted into the Result slots that point at the
+	// build-side placeholder columns.
+	capturedVecs     []*vector.Vector
+	captured         *bitmap.Bitmap
+	captureResultIdx []int32
+
 	maxAllocSize int64
 	rbat         *batch.Batch
 	buf          []*batch.Batch
+
+	// Spill support for large build sides.
+	spillEngine    *spillutil.SpillEngine
+	spillThreshold int64
 }
 
 type DedupJoin struct {
@@ -81,16 +126,29 @@ type DedupJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 
-	Channel  chan *bitmap.Bitmap
+	Channel  chan *WorkerJoinMsg
 	NumCPU   uint64
 	IsMerger bool
 
-	OnDuplicateAction plan.Node_OnDuplicateAction
-	DedupColName      string
-	DedupColTypes     []plan.Type
-	DelColIdx         int32
-	UpdateColIdxList  []int32
-	UpdateColExprList []*plan.Expr
+	OnDuplicateAction         plan.Node_OnDuplicateAction
+	DedupBuildKeepLast        bool
+	DedupColName              string
+	SpillThreshold            int64
+	DedupColTypes             []plan.Type
+	DelColIdx                 int32
+	DedupDeleteMarkerColIdx   int32
+	DedupDeleteKeepColIdxList []int32
+	UpdateColIdxList          []int32
+	UpdateColExprList         []*plan.Expr
+
+	// OldColCapturePlaceholderIdxList / OldColCaptureProbeIdxList are parallel
+	// arrays. For each i, when probe hits a build bucket the probe-side column
+	// at OldColCaptureProbeIdxList[i] is captured and, in finalize(), emitted
+	// into every Result entry whose (Rel=1, Pos) equals
+	// OldColCapturePlaceholderIdxList[i]. Used by the REPLACE INTO merged
+	// main-table scan path; empty for regular INSERT/UPDATE.
+	OldColCapturePlaceholderIdxList []int32
+	OldColCaptureProbeIdxList       []int32
 
 	vm.OperatorBase
 }
@@ -126,9 +184,17 @@ func (dedupJoin *DedupJoin) Release() {
 	}
 }
 
+// needsFinalizeMerge reports whether parallel workers share one build map and
+// therefore must merge their matched state before a single worker emits the
+// build rows. Shuffle workers own disjoint build partitions, so each worker
+// must finalize and emit its partition independently.
+func (dedupJoin *DedupJoin) needsFinalizeMerge() bool {
+	return dedupJoin.NumCPU > 1 && !dedupJoin.IsShuffle
+}
+
 func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &dedupJoin.ctr
-	if !ctr.handledLast && dedupJoin.NumCPU > 1 && !dedupJoin.IsMerger {
+	if !ctr.handledLast && dedupJoin.needsFinalizeMerge() && !dedupJoin.IsMerger {
 		dedupJoin.Channel <- nil
 	}
 	if dedupJoin.OpAnalyzer != nil {
@@ -137,9 +203,13 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.maxAllocSize = 0
 
 	ctr.cleanBuf(proc)
-	ctr.cleanHashMap()
+	ctr.cleanBucketState(proc)
 	ctr.resetExprExecutor()
 	ctr.resetEvalVectors()
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
+	}
 	ctr.handledLast = false
 	ctr.state = Build
 	ctr.lastPos = 0
@@ -148,10 +218,14 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &dedupJoin.ctr
 	ctr.cleanBuf(proc)
+	ctr.cleanBucketState(proc)
 	ctr.cleanBatch(proc)
-	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()
 	ctr.cleanEvalVectors()
+	if ctr.spillEngine != nil {
+		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine = nil
+	}
 }
 
 func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -172,15 +246,23 @@ func (ctr *container) cleanExprExecutor() {
 }
 
 func (ctr *container) cleanBuf(proc *process.Process) {
-	if ctr.matched != nil && ctr.matched.Count() == 0 {
-		// hash map will free these batches
-		ctr.buf = nil
-		return
-	}
 	for _, bat := range ctr.buf {
-		bat.Clean(proc.GetMPool())
+		if bat != nil && bat != ctr.rbat {
+			bat.Clean(proc.GetMPool())
+		}
 	}
 	ctr.buf = nil
+}
+
+func (ctr *container) cleanCaptured(proc *process.Process) {
+	for _, v := range ctr.capturedVecs {
+		if v != nil {
+			v.Free(proc.GetMPool())
+		}
+	}
+	ctr.capturedVecs = nil
+	ctr.captured = nil
+	ctr.captureResultIdx = nil
 }
 
 func (ctr *container) cleanBatch(proc *process.Process) {
@@ -200,7 +282,19 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 	}
 }
 
+// cleanBucketState releases per-bucket state before advancing to the next
+// spill bucket. This prevents stale JoinMap / capture state from leaking
+// across bucket boundaries.
+func (ctr *container) cleanBucketState(proc *process.Process) {
+	ctr.cleanCaptured(proc)
+	ctr.cleanHashMap()
+	ctr.batches = nil
+	ctr.batchRowCount = 0
+	ctr.matched = nil
+}
+
 func (ctr *container) cleanHashMap() {
+	ctr.cachedItr = nil
 	if ctr.mp != nil {
 		ctr.mp.Free()
 		ctr.mp = nil

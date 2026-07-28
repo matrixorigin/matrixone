@@ -72,7 +72,9 @@ type TestDisttaeEngine struct {
 	commitWorkspaceThreshold uint64
 	writeWorkspaceThreshold  uint64
 	quota                    uint64
+	extraWorkspaceThreshold  uint64
 	insertEntryMaxCount      int
+	newTxnMu                 sync.Mutex
 
 	rootDir string
 }
@@ -124,7 +126,7 @@ func NewTestDisttaeEngine(
 	de.txnClient.Resume()
 
 	hakeeper := newTestHAKeeperClient()
-	colexec.NewServer(hakeeper)
+	colexec.NewServer("")
 
 	var engineOpts []disttae.EngineOptions
 	if de.insertEntryMaxCount != 0 {
@@ -138,6 +140,9 @@ func NewTestDisttaeEngine(
 	}
 	if de.quota != 0 {
 		engineOpts = append(engineOpts, disttae.WithExtraWorkspaceThresholdQuota(de.quota))
+	}
+	if de.extraWorkspaceThreshold != 0 {
+		engineOpts = append(engineOpts, disttae.WithExtraWorkspaceThreshold(de.extraWorkspaceThreshold))
 	}
 
 	internalExecutorFactory := func() ie.InternalExecutor {
@@ -195,6 +200,7 @@ func NewTestDisttaeEngine(
 		qc,
 		hakeeper,
 		nil, //s.udfService
+		nil,
 	)
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
 
@@ -214,16 +220,26 @@ func NewTestDisttaeEngine(
 	setServerLevelParams(de)
 
 	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
-	err = de.Engine.InitLogTailPushModel(de.ctx, de.timestampWaiter)
-	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
-	return de, err
-}
+	if err = de.Engine.InitLogTailPushModel(de.ctx, de.timestampWaiter); err != nil {
+		return de, err
+	}
 
+	// Start unified GC scheduler
+	go de.Engine.RunGCScheduler(de.ctx)
+
+	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
+	return de, nil
+}
+func (de *TestDisttaeEngine) GetTxnClient() client.TxnClient {
+	return de.txnClient
+}
 func (de *TestDisttaeEngine) NewTxnOperator(
 	ctx context.Context,
 	commitTS timestamp.Timestamp,
 	opts ...client.TxnOption,
 ) (client.TxnOperator, error) {
+	de.newTxnMu.Lock()
+	defer de.newTxnMu.Unlock()
 	op, err := de.txnClient.New(ctx, commitTS, opts...)
 	if err != nil {
 		return nil, err
@@ -373,8 +389,8 @@ func (de *TestDisttaeEngine) SubscribeTable(
 	dbName, tblName string,
 	setSubscribed bool,
 ) (err error) {
-	ticker := time.NewTicker(time.Second)
-	timeout := 5
+	ticker := time.NewTicker(time.Millisecond * 5)
+	timeout := 1000
 
 	for range ticker.C {
 		if timeout <= 0 {
@@ -382,7 +398,7 @@ func (de *TestDisttaeEngine) SubscribeTable(
 			break
 		}
 
-		err = de.Engine.TryToSubscribeTable(ctx, dbID, tbID, dbName, tblName)
+		err = de.Engine.TryToSubscribeTable(ctx, 0, dbID, tbID, dbName, tblName)
 		if err != nil {
 			timeout--
 			logutil.Errorf("test disttae engine subscribe table err %v, left trie %d", err, timeout)
@@ -413,7 +429,7 @@ func (de *TestDisttaeEngine) GetPartitionStateStats(
 	)
 
 	ts := types.TimestampToTS(de.Now())
-	state = de.Engine.GetOrCreateLatestPart(databaseId, tableId).Snapshot()
+	state = de.Engine.GetOrCreateLatestPart(ctx, 0, databaseId, tableId).Snapshot()
 
 	// data objects
 	if err = de.analyzeDataObjects(state, &stats, ts); err != nil {
@@ -581,9 +597,15 @@ func (ml *mockLockService) Close() error                                      { 
 func (ml *mockLockService) GetWaitingList(ctx context.Context, txnID []byte) (bool, []lock.WaitTxn, error) {
 	return false, nil, nil
 }
+func (ml *mockLockService) GetLockHolder(ctx context.Context, tableID uint64, row []byte, options lock.LockOptions) (lock.WaitTxn, bool, error) {
+	return lock.WaitTxn{}, false, nil
+}
 func (ml *mockLockService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lock.LockTable) bool) {
 }
 func (ml *mockLockService) GetLockTableBind(group uint32, tableID uint64) (lock.LockTable, error) {
+	return lock.LockTable{}, nil
+}
+func (ml *mockLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
 	return lock.LockTable{}, nil
 }
 func (ml *mockLockService) IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool) {
@@ -664,10 +686,11 @@ func (ha *testHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
 	return ha.id.Add(1), nil
 }
 func (ha *testHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
-	return 0, nil
+	// The mock starts from 0x3fff, which is already above MO_RESERVED_MAX.
+	return ha.AllocateID(ctx)
 }
 func (ha *testHAKeeperClient) AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error) {
-	return 0, nil
+	return ha.id.Add(batch) - batch + 1, nil
 }
 func (ha *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logservice2.ClusterDetails, error) {
 	return logservice2.ClusterDetails{}, nil

@@ -149,22 +149,22 @@ update cluster_table_2 set account_id=(select account_id from mo_account where a
 update cluster_table_2 set account_id=(select account_id from mo_account where account_name="test_account2") where account_id=2;
 select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_2;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
 use mo_catalog;
 select * from cluster_table_2;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
 use mo_catalog;
 select * from cluster_table_2;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
 drop table cluster_table_2;
 drop table if exists cluster_table_3;
 create cluster table cluster_table_3(
@@ -188,99 +188,99 @@ update cluster_table_3 set account_id=(select account_id from mo_account where a
 update cluster_table_3 set account_id=(select account_id from mo_account where account_name="test_account2") where account_id=2;
 select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
 update cluster_table_3 set col1=100 where account_id=0 and col1=1;
 select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
 use mo_catalog;
 select * from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
 use mo_catalog;
 select * from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
 update cluster_table_3 set col1=100 where account_id=(select account_id from mo_account where account_name="test_account1") and col1=1;
 select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
 use mo_catalog;
 select * from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
 use mo_catalog;
 select * from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-1    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
+1    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
 update cluster_table_3 set col1=100 where account_id=(select account_id from mo_account where account_name="test_account2") and col1=1;
 select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
 use mo_catalog;
 select * from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
 use mo_catalog;
 select * from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
 delete from cluster_table_3 where account_id=0;
 select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
 use mo_catalog;
 select * from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
 use mo_catalog;
 select * from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
 delete from cluster_table_3 where account_id=(select account_id from mo_account where account_name="test_account1");
 select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
 use mo_catalog;
 select * from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
 use mo_catalog;
 select * from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9
-2    10.9    13    2022-10-02    true    {"b": 2}    nihao    文本    字符
-100    1.09    1    2022-10-02    false    {"a": 1}    ä½ å¥½    text    varchar
+2    10.9    13    2022-10-02    1    {"b": 2}    nihao    文本    字符
+100    1.09    1    2022-10-02    0    {"a": 1}    ä½ å¥½    text    varchar
 delete from cluster_table_3 where account_id=(select account_id from mo_account where account_name="test_account2");
 select col1,col2,col3,col4,col5,col6,col7,col8,col9 from cluster_table_3;
 col1    col2    col3    col4    col5    col6    col7    col8    col9

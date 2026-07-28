@@ -16,7 +16,7 @@ result
 SELECT JSON_SET('{"fruits": ["apple", "banana", "cherry"]}') AS result;
 invalid argument function json_set, bad value [VARCHAR]
 SELECT JSON_SET('{"user": {"name": "John", "age": 30}}', '$.user.age', 31, '$.user.city') AS result;
-invalid input: pathList and valList should have the same length
+invalid argument function json_set, bad value [VARCHAR VARCHAR BIGINT VARCHAR]
 SELECT JSON_SET(null, '$.fruits[1]', 'orange') AS result;
 result
 null

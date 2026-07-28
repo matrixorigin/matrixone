@@ -39,11 +39,11 @@ func TestSortKey(t *testing.T) {
 	batch1 := &batch.Batch{
 		Attrs: []string{"a"},
 		Vecs: []*vector.Vector{
-			testutil.MakeUint16Vector([]uint16{1, 2, 0}, nil),
+			testutil.MakeUint16Vector([]uint16{1, 2, 0}, nil, proc.Mp()),
 		},
 	}
 	batch1.SetRowCount(3)
-	err := SortByKey(proc, batch1, 0, false, proc.GetMPool())
+	err := SortByKey(proc, batch1, 0, false, proc.Mp())
 	require.NoError(t, err)
 	cols := vector.ExpandFixedCol[uint16](batch1.Vecs[0])
 	for i := range cols {
@@ -53,12 +53,12 @@ func TestSortKey(t *testing.T) {
 	batch2 := &batch.Batch{
 		Attrs: []string{"a"},
 		Vecs: []*vector.Vector{
-			testutil.MakeTextVector([]string{"b", "a", "c"}, nil),
+			testutil.MakeTextVector([]string{"b", "a", "c"}, nil, proc.Mp()),
 		},
 	}
 	batch2.SetRowCount(3)
 	res := []string{"a", "b", "c"}
-	err = SortByKey(proc, batch2, 0, false, proc.GetMPool())
+	err = SortByKey(proc, batch2, 0, false, proc.Mp())
 	require.NoError(t, err)
 	cols2 := vector.ExpandStrCol(batch2.Vecs[0])
 	for i := range cols {
@@ -87,7 +87,7 @@ func TestSetStatsCNCreated(t *testing.T) {
 	fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
+	s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType(), -1)
 
 	err = s3writer.Write(ctx, bat)
 	require.NoError(t, err)
@@ -103,19 +103,17 @@ func TestSetStatsCNCreated(t *testing.T) {
 }
 
 func TestMergeSortBatches(t *testing.T) {
-	pool, err := mpool.NewMPool("", mpool.GB, 0)
+	pool, err := mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 	require.NoError(t, err)
 	var restult *batch.Batch
-	sinker := func(bat *batch.Batch) error {
+	sinker := func(bat *batch.Batch) (*batch.Batch, error) {
 		var err2 error
 		if restult != nil {
 			restult.Clean(pool)
 		}
 		restult, err2 = bat.Dup(pool)
-		if err2 != nil {
-			return err2
-		}
-		return nil
+		bat.CleanOnlyData()
+		return bat, err2
 	}
 	// Test bool
 	{
@@ -134,7 +132,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
 		bats := []*batch.Batch{bat1, bat2}
-		err = mergeutil.MergeSortBatches(
+		buffer, err = mergeutil.MergeSortBatches(
 			bats,
 			1,
 			buffer,
@@ -168,7 +166,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
 		bats := []*batch.Batch{bat1, bat2}
-		err = mergeutil.MergeSortBatches(
+		buffer, err = mergeutil.MergeSortBatches(
 			bats,
 			1,
 			buffer,
@@ -202,7 +200,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
 		bats := []*batch.Batch{bat1, bat2}
-		err = mergeutil.MergeSortBatches(
+		buffer, err = mergeutil.MergeSortBatches(
 			bats,
 			1,
 			buffer,
@@ -236,7 +234,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
 		bats := []*batch.Batch{bat1, bat2}
-		err = mergeutil.MergeSortBatches(
+		buffer, err = mergeutil.MergeSortBatches(
 			bats,
 			1,
 			buffer,
@@ -270,7 +268,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
 		bats := []*batch.Batch{bat1, bat2}
-		err = mergeutil.MergeSortBatches(
+		buffer, err = mergeutil.MergeSortBatches(
 			bats,
 			1,
 			buffer,
@@ -304,7 +302,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
 		bats := []*batch.Batch{bat1, bat2}
-		err = mergeutil.MergeSortBatches(
+		buffer, err = mergeutil.MergeSortBatches(
 			bats,
 			1,
 			buffer,
@@ -338,7 +336,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
 		bats := []*batch.Batch{bat1, bat2}
-		err = mergeutil.MergeSortBatches(
+		buffer, err = mergeutil.MergeSortBatches(
 			bats,
 			1,
 			buffer,
@@ -372,7 +370,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
 		bats := []*batch.Batch{bat1, bat2}
-		err = mergeutil.MergeSortBatches(
+		buffer, err = mergeutil.MergeSortBatches(
 			bats,
 			1,
 			buffer,
@@ -406,7 +404,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
 		bats := []*batch.Batch{bat1, bat2}
-		err = mergeutil.MergeSortBatches(
+		buffer, err = mergeutil.MergeSortBatches(
 			bats,
 			1,
 			buffer,
@@ -440,7 +438,7 @@ func TestMergeSortBatches(t *testing.T) {
 		vector.AppendFixed(bat2.Vecs[0], int32(1), false, pool)
 
 		bats := []*batch.Batch{bat1, bat2}
-		err = mergeutil.MergeSortBatches(
+		buffer, err = mergeutil.MergeSortBatches(
 			bats,
 			1,
 			buffer,
@@ -460,7 +458,7 @@ func TestMergeSortBatches(t *testing.T) {
 }
 
 func TestS3Writer_SortAndSync(t *testing.T) {
-	pool, err := mpool.NewMPool("", mpool.GB, 0)
+	pool, err := mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 	require.NoError(t, err)
 
 	bat := batch.NewWithSize(2)
@@ -485,7 +483,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 		require.NoError(t, err)
 
-		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
+		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType(), -1)
 
 		s, err := s3writer.Sync(ctx)
 		require.NoError(t, err)
@@ -499,7 +497,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		proc := testutil.NewProc(t)
 		ctx := proc.Ctx
 
-		s3writer := NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
+		s3writer := NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType(), -1)
 		err = s3writer.Write(ctx, bat)
 		require.NoError(t, err)
 
@@ -517,7 +515,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 		require.NoError(t, err)
 
-		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
+		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType(), -1)
 
 		err = s3writer.Write(ctx, bat)
 		require.NoError(t, err)
@@ -530,7 +528,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 	// test data size larger than object size limit
 	{
-		pool, err = mpool.NewMPool("", mpool.GB, 0)
+		pool, err = mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 		require.NoError(t, err)
 
 		proc := testutil.NewProc(
@@ -557,7 +555,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 		fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 		require.NoError(t, err)
-		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
+		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType(), -1)
 
 		err = s3writer.Write(ctx, bat2)
 		require.NoError(t, err)

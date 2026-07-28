@@ -262,7 +262,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 			if s3writer == nil {
 				pkType := *bat.Vecs[1].GetType()
-				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType)
+				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType, -1)
 			}
 
 			if err = s3writer.Write(proc.Ctx, bat); err != nil {
@@ -281,13 +281,11 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		if statsList, err = s3writer.Sync(newCtx); err != nil {
+		if statsList, err = process.MeasureFilesystemWait(analyzer, func() ([]objectio.ObjectStats, error) {
+			return s3writer.Sync(newCtx)
+		}); err != nil {
 			return 0, err
 		}
-
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
 
 		for _, stats := range statsList {
 			bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
@@ -309,6 +307,14 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batch.Batch, rowIdIdx int, pIdx int, pkIdx int) {
 	vs := vector.MustFixedColWithTypeCheck[types.Rowid](destBatch.GetVector(int32(rowIdIdx)))
 	var bitmap *nulls.Nulls
+	tableId := uint64(0)
+	txnID := []byte(nil)
+	if deletion.DeleteCtx != nil && deletion.DeleteCtx.Ref != nil {
+		tableId = uint64(deletion.DeleteCtx.Ref.Obj)
+	}
+	if txnOp := proc.GetTxnOperator(); txnOp != nil {
+		txnID = txnOp.Txn().ID
+	}
 	for i, rowId := range vs {
 		blkid := rowId.CloneBlockID()
 		segid := rowId.CloneSegmentID()
@@ -329,7 +335,7 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 
 		deletion.ctr.deleted_length += 1
 
-		if colexec.IsDeletionOnTxnUnCommit(deletion.SegmentMap, &segid) {
+		if colexec.IsDeletionOnTxnUnCommit(deletion.SegmentMap, &segid, tableId, txnID) {
 			deletion.ctr.blockId_type[blkid] = DeletionOnTxnUnCommit
 		} else {
 			deletion.ctr.blockId_type[blkid] = DeletionOnCommitted

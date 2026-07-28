@@ -47,3 +47,19 @@ insert into t3 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
 insert into t3 values (67834,'13456789872',20.23,'5678'),(56473,'',100.00,'5678');
 ALTER TABLE t3 ADD UNIQUE KEY `unique_empty_char`(col2) COMMENT 'Unique constraint for empty char';
 DROP TABLE t3;
+
+drop table if exists files_related_mph;
+CREATE TABLE `files_related_mph` (
+    `id` int(11) NOT NULL AUTO_INCREMENT,
+    `file_id` int(11) DEFAULT NULL,
+    `related_id` int(11) DEFAULT NULL,
+    `related_type` varchar(255) DEFAULT NULL,
+    `field` varchar(255) DEFAULT NULL,
+    `order` double DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    KEY `files_related_mph_fk` (`file_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+alter table `files_related_mph` add index `files_related_mph_oidx`(`order`);
+
+drop table files_related_mph;

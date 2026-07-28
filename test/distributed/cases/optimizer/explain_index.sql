@@ -13,6 +13,7 @@ select Sleep(1);
 explain select c3,c4,c5 from t1 where c3=1;
 select c3,c4,c5 from t1 where c3=1;
 -- @separator:table
+-- @regex("Index Table Scan",true)
 explain select count(*) from t1 where c3 <30;
 select count(*) from t1 where c3<30;
 -- @separator:table
@@ -43,6 +44,7 @@ select * from t1 where c2=12;
 explain select count(*) from t1 where c3 between 100 and 200;
 select count(*) from t1 where c3 between 100 and 200;
 -- @separator:table
+-- @regex("Index Table Scan",true)
 explain select count(*) from t1 where c3 <500;
 select count(*) from t1 where c3 <500;
 -- @separator:table

@@ -1,4 +1,3 @@
--- @skip:issue#7889
 drop database if exists test_temporary;
 create database test_temporary;
 use test_temporary;
@@ -37,3 +36,4 @@ create table c1(a int, constraint ck foreign key(a) REFERENCES t1(a));
 drop table if exists f1;
 drop table if exists t1;
 drop database if exists test_tmp;
+drop database if exists test_temporary;

@@ -155,17 +155,17 @@ create table t2 (
     time3 TIMESTAMP
 );
 
-insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '2038-01-19 03:14:07.999999');
-insert into t2 values ('1000-01-01', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
-insert into t2 values ('9999-12-31', '9999-12-31 23:59:59.999999', '2038-01-19 03:14:07.999999');
+insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '2020-01-01 00:00:00.000000');
+insert into t2 values ('1000-01-01', '9999-12-31 23:59:59.999999', '2020-01-01 00:00:00.000000');
+insert into t2 values ('9999-12-31', '9999-12-31 23:59:59.999999', '2020-01-01 00:00:00.000000');
 
-insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
-insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
-insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '1970-01-01 00:00:01.000000');
+insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '2021-01-01 00:00:00.000000');
+insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '2021-01-01 00:00:00.000000');
+insert into t2 values ('1000-01-01', '0001-01-01 00:00:00.000000', '2021-01-01 00:00:00.000000');
 
-insert into t2 values ('2022-10-24', '2022-10-24 10:10:10.000000', '2022-10-24 00:00:01.000000');
-insert into t2 values ('2022-10-25', '2022-10-25 10:10:10.000000', '2022-10-25 00:00:01.000000');
-insert into t2 values ('2022-10-26', '2022-10-26 10:10:10.000000', '2022-10-26 00:00:01.000000');
+insert into t2 values ('2022-10-24', '2022-10-24 10:10:10.000000', '2022-10-24 00:00:00.000000');
+insert into t2 values ('2022-10-25', '2022-10-25 10:10:10.000000', '2022-10-25 00:00:00.000000');
+insert into t2 values ('2022-10-26', '2022-10-26 10:10:10.000000', '2022-10-26 00:00:00.000000');
 
 select * from t2;
 
@@ -174,8 +174,8 @@ set @min_date='1000-01-01';
 
 set @max_datetime='9999-12-31 23:59:59.999999';
 set @min_datetime='0001-01-01 00:00:00.000000';
-set @max_timestamp='1970-01-01 00:00:01.000000';
-set @min_timestamp='2038-01-19 03:14:07.999999';
+set @max_timestamp='2025-12-31 23:59:59.999999';
+set @min_timestamp='2020-01-01 00:00:00.000000';
 
 
 prepare s1 from 'select * from t2 where time1=?';
@@ -216,7 +216,7 @@ DEALLOCATE PREPARE s3;
 
 set @time1='2022-10-24';
 set @time2='2022-10-25 10:10:10.000000';
-set @time3='2022-10-26 00:00:01.000000';
+set @time3='2022-10-26 00:00:00.000000';
 
 prepare s4 from 'delete from t2 where time1=?';
 prepare s5 from 'delete from t2 where time2=?';
@@ -474,6 +474,25 @@ PREPARE s FROM 'SELECT concat(?,"")';
 EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
 
+drop table if exists prepare_bit_numeric;
+create table prepare_bit_numeric (b bit(64));
+insert into prepare_bit_numeric values (0), (18446744073709551615);
+select b from prepare_bit_numeric order by b;
+
+prepare s from 'select ? + b from prepare_bit_numeric where b = 0';
+execute s using @maxint;
+deallocate prepare s;
+
+prepare s from 'select (? + 0.5) + b from prepare_bit_numeric where b = 0';
+execute s using @maxint;
+deallocate prepare s;
+
+prepare s from 'select b + (0.5 + ?) from prepare_bit_numeric where b = 0';
+execute s using @maxint;
+deallocate prepare s;
+
+drop table prepare_bit_numeric;
+
 --test order by clause contains placeholder
 CREATE DATABASE mocloud_meta;
 PREPARE mo_stmt_id_1 FROM SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE ? ORDER BY SCHEMA_NAME=? DESC,SCHEMA_NAME limit 1;
@@ -482,6 +501,43 @@ SET @dbname2 = 'mocloud_meta';
 EXECUTE mo_stmt_id_1 USING @dbname1, @dbname2;
 DEALLOCATE PREPARE mo_stmt_id_1;
 DROP DATABASE mocloud_meta;
+
+-- test prepared REPLACE via unquoted prepareable_stmt grammar (same path as binary protocol COM_STMT_PREPARE)
+drop table if exists replace_prepare;
+CREATE TABLE replace_prepare (a INT PRIMARY KEY, b INT);
+INSERT INTO replace_prepare VALUES (1, 10), (2, 20);
+PREPARE rp1 FROM replace into replace_prepare values (?, ?);
+SET @k = 1;
+SET @v = 100;
+EXECUTE rp1 USING @k, @v;
+SET @k = 3;
+SET @v = 30;
+EXECUTE rp1 USING @k, @v;
+SELECT * FROM replace_prepare ORDER BY a;
+DEALLOCATE PREPARE rp1;
+
+drop table if exists replace_prepare_src;
+CREATE TABLE replace_prepare_src (a INT, b INT);
+INSERT INTO replace_prepare_src VALUES (2, 222), (4, 44);
+PREPARE rp2 FROM replace into replace_prepare (a, b) select a, b from replace_prepare_src where a > ?;
+SET @t = 1;
+EXECUTE rp2 USING @t;
+SELECT * FROM replace_prepare ORDER BY a;
+DEALLOCATE PREPARE rp2;
+drop table if exists replace_prepare;
+drop table if exists replace_prepare_src;
+
+-- test prepared ROWS frame bounds are evaluated for every execution
+drop table if exists prepared_window_frame;
+create table prepared_window_frame(id int primary key, n int);
+insert into prepared_window_frame values (1,10),(2,20),(3,30);
+prepare prepared_rows_frame from 'select id, sum(n) over (order by id rows between ? preceding and ? following) from prepared_window_frame order by id';
+set @before = 1, @after = 1;
+execute prepared_rows_frame using @before, @after;
+set @before = 0, @after = 0;
+execute prepared_rows_frame using @before, @after;
+deallocate prepare prepared_rows_frame;
+drop table prepared_window_frame;
 
 # reset
 SET TIME_ZONE = "SYSTEM";

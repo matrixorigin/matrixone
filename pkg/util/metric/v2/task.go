@@ -51,24 +51,6 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 13),
 		}, []string{"type"})
 
-	taskBytesHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "mo",
-			Subsystem: "task",
-			Name:      "hist_bytes",
-			Help:      "Bucketed histogram of task result bytes.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
-		}, []string{"type"})
-
-	taskCountHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "mo",
-			Subsystem: "task",
-			Name:      "hist_total",
-			Help:      "Bucketed histogram of task result count.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 30),
-		}, []string{"type"})
-
 	TaskCkpEntryPendingDurationHistogram = taskLongDurationHistogram.WithLabelValues("ckp_entry_pending")
 )
 
@@ -101,24 +83,6 @@ var (
 	TaskTombstoneMergeDurationHistogram       = taskDNMergeDurationHistogram.WithLabelValues("merge", "tombstone")
 )
 
-// selectivity metrics
-var (
-	taskSelectivityCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "task",
-			Name:      "selectivity",
-			Help:      "Selectivity counter for read filter, block etc.",
-		}, []string{"type"})
-
-	TaskSelReadFilterTotal = taskSelectivityCounter.WithLabelValues("readfilter_total")
-	TaskSelReadFilterHit   = taskSelectivityCounter.WithLabelValues("readfilter_hit")
-	TaskSelBlockTotal      = taskSelectivityCounter.WithLabelValues("block_total")
-	TaskSelBlockHit        = taskSelectivityCounter.WithLabelValues("block_hit")
-	TaskSelColumnTotal     = taskSelectivityCounter.WithLabelValues("column_total")
-	TaskSelColumnHit       = taskSelectivityCounter.WithLabelValues("column_hit")
-)
-
 var (
 	TaskMergeTransferPageLengthGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -134,6 +98,22 @@ var (
 			Subsystem: "task",
 			Name:      "storage_usage_cache_size",
 			Help:      "Size of the storage usage cache used",
+		})
+
+	TaskMergeOOMPauseCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "merge_oom_pause_total",
+			Help:      "Total number of DN merge scheduler pauses caused by low available memory.",
+		})
+
+	TaskMergeAvailableMemoryGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "merge_available_memory_bytes",
+			Help:      "Available memory observed by the DN merge scheduler.",
 		})
 )
 
@@ -163,11 +143,20 @@ var (
 		Buckets:   getDurationBuckets(),
 	}, []string{"type"})
 
-	TransferDiskLatencyHistogram           = transferDurationHistogram.WithLabelValues("disk_latency")
-	TransferPageSinceBornDurationHistogram = transferDurationHistogram.WithLabelValues("page_since_born_duration")
-	TransferTableRunTTLDurationHistogram   = transferDurationHistogram.WithLabelValues("table_run_ttl_duration")
-	TransferPageFlushLatencyHistogram      = transferDurationHistogram.WithLabelValues("page_flush_latency")
-	TransferPageMergeLatencyHistogram      = transferDurationHistogram.WithLabelValues("page_merge_latency")
+	TransferDiskLatencyHistogram         = transferDurationHistogram.WithLabelValues("disk_latency")
+	TransferTableRunTTLDurationHistogram = transferDurationHistogram.WithLabelValues("table_run_ttl_duration")
+	TransferPageFlushLatencyHistogram    = transferDurationHistogram.WithLabelValues("page_flush_latency")
+	TransferPageMergeLatencyHistogram    = transferDurationHistogram.WithLabelValues("page_merge_latency")
+
+	transferPageWriteCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_page_write_retry_total",
+		Help:      "Total number of transfer page write retries by outcome.",
+	}, []string{"outcome"})
+
+	TransferPageWriteRetrySucceededCounter = transferPageWriteCounter.WithLabelValues("succeeded")
+	TransferPageWriteRetryExhaustedCounter = transferPageWriteCounter.WithLabelValues("exhausted")
 
 	transferShortDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "mo",
@@ -213,4 +202,13 @@ var (
 	MoTableSizeRowsNormalCountingHistogram          = moTableStatsCountingHistogram.WithLabelValues("mo_table_size_rows_normal_counting")
 	MoTableSizeRowsForceUpdateCountingHistogram     = moTableStatsCountingHistogram.WithLabelValues("mo_table_size_rows_force_update_counting")
 	MoTableSizeRowsResetUpdateTimeCountingHistogram = moTableStatsCountingHistogram.WithLabelValues("mo_table_size_rows_reset_update_counting")
+)
+
+// GC task metrics
+var (
+	TaskGCDurationHistogram                = taskLongDurationHistogram.WithLabelValues("gc_total")
+	TaskGCScanDurationHistogram            = taskLongDurationHistogram.WithLabelValues("gc_scan")
+	TaskGCDeleteDurationHistogram          = taskLongDurationHistogram.WithLabelValues("gc_delete")
+	TaskGCCollectUsageDurationHistogram    = taskLongDurationHistogram.WithLabelValues("gc_collect_usage")
+	TaskGCMergeCheckpointDurationHistogram = taskLongDurationHistogram.WithLabelValues("gc_merge_checkpoint")
 )

@@ -44,6 +44,10 @@ func (connector *Connector) Prepare(proc *process.Process) error {
 }
 
 func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
+	if !process.WaitPipelineSignalCapacity(proc.Ctx, connector.Reg) {
+		return vm.CancelResult, nil
+	}
+
 	result, err := vm.ChildrenCall(connector.GetChildren(0), proc, connector.OpAnalyzer)
 	if err != nil {
 		return result, err
@@ -65,6 +69,8 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 	if queryDone || err != nil {
 		return result, err
 	}
-	connector.Reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(connector.ctr.sp, 0)
+	if !connector.Reg.SendData(proc.Ctx, connector.ctr.sp, 0) {
+		return result, nil
+	}
 	return result, nil
 }

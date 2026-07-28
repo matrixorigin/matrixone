@@ -16,17 +16,16 @@ package ioutil
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 func LoadColumnsData(
@@ -38,7 +37,7 @@ func LoadColumnsData(
 	cacheVectors containers.Vectors, // cacheVectors.Allocated() must be 0
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (dataMeta objectio.ObjectDataMeta, release func(), err error) {
+) (dataMeta objectio.ObjectDataMeta, release func(), fromCache bool, err error) {
 	name := location.Name().UnsafeString()
 	var meta objectio.ObjectMeta
 	var vectors fileservice.IOVector
@@ -58,6 +57,14 @@ func LoadColumnsData(
 		policy,
 	); err != nil {
 		return
+	}
+	// fromCache is true only when every entry was served from cache.
+	fromCache = len(vectors.Entries) > 0
+	for _, entry := range vectors.Entries {
+		if !entry.WasFromCache() {
+			fromCache = false
+			break
+		}
 	}
 	release = func() {
 		objectio.ReleaseIOVector(&vectors)
@@ -91,26 +98,34 @@ func LoadColumnsData2(
 		return
 	}
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
-	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.String(), location.ID(), cols, typs, nil, fs, policy); err != nil {
+	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.UnsafeString(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return
 	}
 	vectors = make([]containers.Vector, len(cols))
 	defer func() {
-		if needCopy {
+		if needCopy || err != nil {
+			// needCopy: caller owns copied vectors; IOVector can be freed now.
+			// err != nil: clean up IOVector internally so callers don't have
+			// to call release on error paths.
 			objectio.ReleaseIOVector(&ioVectors)
 			return
 		}
+		// needCopy=false, success: caller must call release to free IOVector
+		// after it is done with the zero-copy vectors.
 		release = func() {
 			objectio.ReleaseIOVector(&ioVectors)
-			for _, vec := range vectors {
-				vec.Close()
-			}
 		}
 	}()
 	var obj any
 	for i := range cols {
 		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
 		if err != nil {
+			for _, col := range vectors {
+				if col != nil {
+					col.Close()
+				}
+			}
+			vectors = nil
 			return
 		}
 
@@ -121,20 +136,18 @@ func LoadColumnsData2(
 				vPool.GetMPool(),
 				vPool,
 			); err != nil {
+				for _, col := range vectors {
+					if col != nil {
+						col.Close()
+					}
+				}
+				vectors = nil
 				return
 			}
 		} else {
 			vec = containers.ToTNVector(obj.(*vector.Vector), nil)
 		}
 		vectors[i] = vec
-	}
-	if err != nil {
-		for _, col := range vectors {
-			if col != nil {
-				col.Close()
-			}
-		}
-		return nil, release, err
 	}
 	return
 }
@@ -149,9 +162,10 @@ func LoadTombstoneColumns(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (meta objectio.ObjectDataMeta, release func(), err error) {
-	return LoadColumnsData(
+	meta, release, _, err = LoadColumnsData(
 		ctx, cols, typs, fs, location, cacheVectors, m, policy,
 	)
+	return
 }
 
 func LoadColumns(
@@ -163,8 +177,8 @@ func LoadColumns(
 	cacheVectors containers.Vectors, // Allocated() must be 0
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (release func(), err error) {
-	_, release, err = LoadColumnsData(
+) (release func(), fromCache bool, err error) {
+	_, release, fromCache, err = LoadColumnsData(
 		ctx, cols, typs, fs, location, cacheVectors, m, policy,
 	)
 	return

@@ -1,0 +1,305 @@
+drop table if exists t1;
+drop table if exists t2;
+CREATE TABLE t1 (S1 INT);
+CREATE TABLE t2 (S1 INT);
+INSERT INTO t1 VALUES (1),(3),(4),(6);
+INSERT INTO t2 VALUES (2),(4),(5);
+SELECT * FROM t1 JOIN t2 on t1.S1=t2.S1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1 (id int);
+create table t2 (id int);
+insert into t1 values (75);
+insert into t1 values (79);
+insert into t1 values (78);
+insert into t1 values (77);
+insert into t1 values (76);
+insert into t1 values (76);
+insert into t1 values (104);
+insert into t1 values (103);
+insert into t1 values (102);
+insert into t1 values (101);
+insert into t1 values (105);
+insert into t1 values (106);
+insert into t1 values (107);
+insert into t2 values (107),(75),(1000);
+select t1.id, t2.id from t1, t2 where t2.id = t1.id;
+select t1.id, count(t2.id) from t1,t2 where t2.id = t1.id group by t1.id;
+select t1.id,t2.id from t2 join t1 on t1.id=t2.id where t2.id=75;
+drop table if exists t1;
+drop table if exists t2;
+CREATE TABLE t1 (
+id int,
+token varchar(100) DEFAULT '' NOT NULL,
+count int DEFAULT 0 NOT NULL,
+qty int,
+phone char(1) DEFAULT '' NOT NULL,
+times datetime DEFAULT '2000-01-01 00:00:00' NOT NULL
+);
+INSERT INTO t1 VALUES (21,'e45703b64de71482360de8fec94c3ade',3,7800,'n','1999-12-23 17:22:21');
+INSERT INTO t1 VALUES (22,'e45703b64de71482360de8fec94c3ade',4,5000,'y','1999-12-23 17:22:21');
+INSERT INTO t1 VALUES (18,'346d1cb63c89285b2351f0ca4de40eda',3,13200,'b','1999-12-23 11:58:04');
+INSERT INTO t1 VALUES (17,'ca6ddeb689e1b48a04146b1b5b6f936a',4,15000,'b','1999-12-23 11:36:53');
+INSERT INTO t1 VALUES (16,'ca6ddeb689e1b48a04146b1b5b6f936a',3,13200,'b','1999-12-23 11:36:53');
+INSERT INTO t1 VALUES (26,'a71250b7ed780f6ef3185bfffe027983',5,1500,'b','1999-12-27 09:44:24');
+INSERT INTO t1 VALUES (24,'4d75906f3c37ecff478a1eb56637aa09',3,5400,'y','1999-12-23 17:29:12');
+INSERT INTO t1 VALUES (25,'4d75906f3c37ecff478a1eb56637aa09',4,6500,'y','1999-12-23 17:29:12');
+INSERT INTO t1 VALUES (27,'a71250b7ed780f6ef3185bfffe027983',3,6200,'b','1999-12-27 09:44:24');
+INSERT INTO t1 VALUES (28,'a71250b7ed780f6ef3185bfffe027983',3,5400,'y','1999-12-27 09:44:36');
+INSERT INTO t1 VALUES (29,'a71250b7ed780f6ef3185bfffe027983',4,17700,'b','1999-12-27 09:45:05');
+CREATE TABLE t2 (
+id int,
+category int DEFAULT 0 NOT NULL,
+county int DEFAULT 0 NOT NULL,
+state int DEFAULT 0 NOT NULL,
+phones int DEFAULT 0 NOT NULL,
+nophones int DEFAULT 0 NOT NULL
+);
+INSERT INTO t2 VALUES (3,2,11,12,5400,7800);
+INSERT INTO t2 VALUES (4,2,25,12,6500,11200);
+INSERT INTO t2 VALUES (5,1,37,6,10000,12000);
+select t1.id, category as catid, state as stateid, county as countyid from t1 join t2 on count=t2.id where token='a71250b7ed780f6ef3185bfffe027983';
+select t1.id, category as catid, state as stateid, county as countyid from t1 join t2 on count=t2.id where token='a71250b7ed780f6ef3185bfffe027983' and t1.id>26 order by t1.id;
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+CREATE TABLE t1 (
+t1_id int default NULL,
+t2_id int default NULL,
+type varchar(12) default NULL,
+cost_unit varchar(5) default NULL,
+min_value double default NULL,
+max_value double default NULL,
+t3_id int default NULL,
+item_id int default NULL
+);
+CREATE TABLE t2 (
+id int  NOT NULL,
+name varchar(255) default NULL,
+PRIMARY KEY  (id)
+);
+INSERT INTO t1 VALUES (12,5,'Percent','Cost',-1,0,-1,-1),(14,4,'Percent','Cost',-1,0,-1,-1),(18,5,'Percent','Cost',-1,0,-1,-1),(19,4,'Percent','Cost',-1,0,-1,-1),(20,5,'Percent','Cost',100,-1,22,291),(21,5,'Percent','Cost',100,-1,18,291),(22,1,'Percent','Cost',100,-1,6,291),(23,1,'Percent','Cost',100,-1,21,291),(24,1,'Percent','Cost',100,-1,9,291),(25,1,'Percent','Cost',100,-1,4,291),(26,1,'Percent','Cost',100,-1,20,291),(27,4,'Percent','Cost',100,-1,7,202),(28,1,'Percent','Cost',50,-1,-1,137),(29,2,'Percent','Cost',100,-1,4,354),(30,2,'Percent','Cost',100,-1,9,137),(93,2,'Cost','Cost',-1,10000000,-1,-1);
+INSERT INTO t2 VALUES (1,'s1'),(2,'s2'),(3,'s3'),(4,'s4'),(5,'s5');
+select t2_id,name, type  from t1 join t2 on t2.id=t1.t2_id order by id;
+drop table t1;
+drop table t2;
+CREATE TABLE t1 (ID INTEGER NOT NULL PRIMARY KEY, Value1 VARCHAR(255));
+CREATE TABLE t2 (ID INTEGER NOT NULL PRIMARY KEY, Value2 VARCHAR(255));
+INSERT INTO t1 VALUES (1, 'A');
+INSERT INTO t2 VALUES (1, 'B');
+SELECT t1.ID,Value2 FROM t1 JOIN t2 on t1.ID=t2.ID WHERE Value1 = 'A';
+SELECT t1.ID,Value2 FROM t1 JOIN t2 on t1.ID=t2.ID WHERE Value1 = 'A' and Value2 <> 'B';
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+CREATE TABLE t1 (a int);
+CREATE TABLE t2 (b int);
+CREATE TABLE t3 (c int);
+insert into t1 values(1),(2),(3),(4),(5);
+insert into t2 values(1),(3),(5),(7),(9);
+insert into t3 values(1),(1),(3),(4),(7);
+select a,b,c from t1 join t2 on t1.a=t2.b join t3 on t1.a=t3.c where a>1;
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+create table t1 (i int);
+create table t2 (i int);
+create table t3 (i int);
+insert into t1 values(1),(2);
+insert into t2 values(2),(3);
+insert into t3 values (2),(4);
+select t3.i from t1 join t2 on t1.i=t2.i join t3 on t2.i=t3.i;
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
+drop table if exists t5;
+drop table if exists t6;
+create table t1 (c int, b int);
+create table t2 (a int, b int);
+create table t3 (b int, c int);
+create table t4 (y int, c int);
+create table t5 (y int, z int);
+create table t6 (a int, c int);
+insert into t1 values (10,1);
+insert into t1 values (3 ,1);
+insert into t1 values (3 ,2);
+insert into t2 values (2, 1);
+insert into t3 values (1, 3);
+insert into t3 values (1,10);
+insert into t4 values (11,3);
+insert into t4 values (2, 3);
+insert into t5 values (11,4);
+insert into t6 values (2, 3);
+select distinct a,t1.b,t3.c from t1 join t2 on t1.b=t2.b join t3 on t1.b=t3.c;
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
+create table t1 (a1 int, a2 int);
+create table t2 (a1 int, b int);
+create table t3 (c1 int, c2 int);
+create table t4 (c2 int);
+insert into t1 values (1,1);
+insert into t2 values (1,1);
+insert into t3 values (1,1);
+insert into t4 values (1);
+select * from t1 join t2 on t1.a1=t2.a1 join t3 on b=c1 join t4 on t3.c2=t4.c2;
+drop table if exists t1;
+create table t1 (a int);
+insert into t1 values(1);
+drop table if exists t2;
+create table t2 (a int);
+insert into t2 values(1);
+select * from (t1 join t2 on t1.a = t2.a);
+
+drop table if exists tt;
+drop table if exists tt2;
+create table tt(a text,b text,c int);
+create table tt2(a text,b text,c int);
+insert into tt values("a","bc",1);
+insert into tt2 values("ab","c",2);
+select * from tt as t11 join tt2 as t12 on t11.a = t12.a and t11.b = t12.b;
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+create table t1 (q int);
+create table t2 (a int);
+create table t3 (b int);
+select * from t1,t2 join t3 on a=b;
+
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int, b int primary key);
+create table t2(a int, b int,primary key(a,b));
+insert into t1 select result%50,result from generate_series(1,10000,1) g;
+insert into t2 select result/100,result%100 from generate_series(1,10000,1) g;
+select t1.a,t1.b from t1 join t2 on t1.b=t2.a and t1.b=t2.b order by t1.a desc limit 4;
+select t2.a,t2.b from t2 join t1 on t2.a=t1.b and t2.b=t1.a order by t2.a desc limit 4;
+drop table t1;
+drop table t2;
+create table t1(a int, b int primary key);
+create table t2(a int, b int,primary key(a,b));
+insert into t1 select 10000-result,result from generate_series(1,10000,1) g;
+insert into t2 select result%2,result-result%2 from generate_series(1,10000,1) g;
+select t1.a,t1.b,t2.a,t2.b from t1 left join t2 on t1.b=t2.b order by t1.b desc limit 4;
+select t1.a,t1.b,t2.a,t2.b from t1 right join t2 on t1.b=t2.b order by t1.b desc limit 4;
+select * from t1 where t1.b in (select b from t2) order by t1.b desc limit 4;
+select * from t1 where t1.b not in (select b from t2) order by t1.b desc limit 4;
+drop table t1;
+drop table t2;
+
+select * from mo_catalog.mo_indexes where name = 'idx1' and table_id = (select rel_id from mo_catalog.mo_tables where relname = 't1');
+
+create table x1 (a int, b int);
+insert into x1 values (1, 1), (2, 2), (3, 3);
+-- one row has 20000 matches
+insert into x1 select 42, result from generate_series(1,20000,1) g;
+insert into x1 values (10, 10), (20, 20);
+create table x2 as select * from x1 limit 10;
+select count(*) from x2 inner join x1 on x1.a = x2.a;
+select * from x2 inner join x1 on x1.a = x2.a order by x1.a limit 10;
+drop table x1;
+drop table x2;
+
+-- @case
+-- @desc:鲁棒性测试 - LEFT JOIN with type mismatch (INT = VARCHAR) should return error instead of panic
+-- @label:bvt
+drop table if exists t1;
+drop table if exists t2;
+CREATE TABLE t1 (id INT);
+CREATE TABLE t2 (name VARCHAR(100));
+INSERT INTO t1 VALUES (1), (2);
+INSERT INTO t2 VALUES ('abc'), ('123');
+SELECT * FROM t1 LEFT JOIN t2 ON t1.id = t2.name;
+drop table if exists t1;
+drop table if exists t2;
+-- refer to issue 19635
+drop table if exists item;
+drop table if exists supplier;
+drop table if exists stock;
+drop table if exists nation;
+drop table if exists region;
+CREATE TABLE ITEM (
+I_ID INT NOT NULL,
+I_NAME VARCHAR(24) NOT NULL,
+I_PRICE DECIMAL(5,2) NOT NULL,
+I_DATA VARCHAR(50) NOT NULL,
+I_IM_ID INT NOT NULL,
+PRIMARY KEY (I_ID)
+);
+CREATE TABLE STOCK (
+S_W_ID INT NOT NULL,
+S_I_ID INT NOT NULL,
+S_QUANTITY DECIMAL(4,0) NOT NULL,
+S_YTD DECIMAL(8,2) NOT NULL,
+S_ORDER_CNT INT NOT NULL,
+S_REMOTE_CNT INT NOT NULL,
+S_DATA VARCHAR(50) NOT NULL,
+S_DIST_01 CHAR(24) NOT NULL,
+S_DIST_02 CHAR(24) NOT NULL,
+S_DIST_03 CHAR(24) NOT NULL,
+S_DIST_04 CHAR(24) NOT NULL,
+S_DIST_05 CHAR(24) NOT NULL,
+S_DIST_06 CHAR(24) NOT NULL,
+S_DIST_07 CHAR(24) NOT NULL,
+S_DIST_08 CHAR(24) NOT NULL,
+S_DIST_09 CHAR(24) NOT NULL,
+S_DIST_10 CHAR(24) NOT NULL,
+PRIMARY KEY (S_W_ID,S_I_ID)
+);
+create table region (
+r_regionkey int not null,
+r_name char(55) not null,
+r_comment char(152) not null,
+PRIMARY KEY ( r_regionkey )
+);
+create table nation (
+n_nationkey int not null,
+n_name char(25) not null,
+n_regionkey int not null,
+n_comment char(152) not null,
+PRIMARY KEY ( n_nationkey )
+);
+create table supplier (
+s_suppkey int not null,
+s_name char(25) not null,
+s_address varchar(40) not null,
+s_nationkey int not null,
+s_phone char(15) not null,
+s_acctbal numeric(12,2) not null,
+s_comment char(101) not null,
+PRIMARY KEY ( s_suppkey )
+);
+select s_suppkey, s_name, n_name, i_id, i_name, s_address, s_phone, s_comment
+from item, supplier, stock, nation, region,
+(select s_i_id as m_i_id, min(s_quantity) as m_s_quantity
+from stock, supplier, nation, region
+where mod((s_w_id*s_i_id),10000)=s_suppkey
+and s_nationkey=n_nationkey
+and n_regionkey=r_regionkey
+and r_name like 'Europ%'
+group by s_i_id) m
+where i_id = s_i_id
+and mod((s_w_id * s_i_id), 10000) = s_suppkey
+and s_nationkey = n_nationkey
+and n_regionkey = r_regionkey
+and i_data like '%b'
+and r_name like 'Europ%'
+and i_id=m_i_id
+and s_quantity = m_s_quantity
+order by n_name, s_name, i_id;
+drop table if exists item;
+drop table if exists supplier;
+drop table if exists stock;
+drop table if exists nation;
+
+-- subquery in INNER JOIN ON condition
+drop table if exists j_dim;
+create table j_dim (id int, region_id int);
+insert into j_dim values (1, 1), (2, 1), (3, 2), (4, 2), (5, 2);
+select a.id from j_dim a join j_dim b on b.id = (select max(id) from j_dim z where z.region_id = a.region_id) order by a.id;
+-- uncorrelated subquery
+select a.id from j_dim a join j_dim b on b.id = (select max(id) from j_dim) order by a.id;
+drop table j_dim;
+drop table if exists region;

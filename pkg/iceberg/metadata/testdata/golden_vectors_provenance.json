@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "vectors": [
+    {
+      "artifact": "bucket_truncate_golden.json",
+      "generation_command": "python3 pkg/iceberg/metadata/testdata/generate_golden_vectors.py --write",
+      "generator": "pkg/iceberg/metadata/testdata/generate_golden_vectors.py",
+      "id": "bucket-truncate",
+      "input_schemas": [
+        "int",
+        "long",
+        "decimal(scale=2)",
+        "string",
+        "binary"
+      ],
+      "sha256": "e1a305235542e9ee77bf5131aaf45170f6a018f85ee7545cb0e45e9a177fbf7f",
+      "source_versions": [
+        "pyiceberg 0.8.1 reference values",
+        "Apache Iceberg bucket/truncate transform semantics",
+        "Spark/Trino not required for offline transform-vector generation"
+      ]
+    },
+    {
+      "artifact": "timestamp_pruning_golden.json",
+      "generation_command": "python3 pkg/iceberg/metadata/testdata/generate_golden_vectors.py --write",
+      "generator": "pkg/iceberg/metadata/testdata/generate_golden_vectors.py",
+      "id": "timestamp-pruning",
+      "input_schemas": [
+        "timestamp without time zone microseconds",
+        "timestamptz UTC instant microseconds",
+        "session time zone +03:00"
+      ],
+      "sha256": "61ca032ffee25ab8cbabdb6fbc23774bd8db38bd05a0ec2bc672b4e304a292e2",
+      "source_versions": [
+        "Apache Iceberg table spec timestamp/timestamptz bound semantics",
+        "MatrixOne TIMESTAMP/DATETIME microsecond semantics",
+        "Spark/Trino cross-engine timestamp behavior is verified by Tier A/L5 reports"
+      ]
+    },
+    {
+      "artifact": "field_id_golden.json",
+      "generation_command": "python3 pkg/iceberg/metadata/testdata/generate_golden_vectors.py --write",
+      "generator": "pkg/iceberg/metadata/testdata/generate_golden_vectors.py",
+      "id": "field-id",
+      "input_schemas": [
+        "Tier A Spark table evolution.users",
+        "rename/reorder/add optional/type promotion schema evolution"
+      ],
+      "sha256": "d651fec381920a48ae8da9864ce209d894f179185ddac87f906afa402fccff8f",
+      "source_versions": [
+        "Spark 3.5 Iceberg runtime",
+        "Apache Iceberg schema field-id evolution semantics",
+        "Trino field-id consumption is verified by Tier A/L5 reports"
+      ]
+    },
+    {
+      "artifact": "row_ordinal_golden.json",
+      "generation_command": "python3 pkg/iceberg/metadata/testdata/generate_golden_vectors.py --write",
+      "generator": "pkg/iceberg/metadata/testdata/generate_golden_vectors.py",
+      "id": "row-ordinal",
+      "input_schemas": [
+        "Parquet data file with two row groups",
+        "Iceberg position delete physical row ordinal"
+      ],
+      "sha256": "903116fa07043e2506a3895a6a0ea37b11dac827a07bc43f6155dd5e2d4f7ee5",
+      "source_versions": [
+        "Apache Iceberg v2 position delete semantics",
+        "parquet-go row group metadata",
+        "Spark/Trino row-ordinal consumption is verified by Tier A/L5 delete-apply reports"
+      ]
+    }
+  ]
+}

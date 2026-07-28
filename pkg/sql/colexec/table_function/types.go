@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,13 +31,19 @@ var _ vm.Operator = new(TableFunction)
 type TableFunction struct {
 	ctr container
 
-	Rets        []*plan.ColDef
-	Args        []*plan.Expr
-	Attrs       []string
-	Params      []byte
-	FuncName    string
-	Limit       *plan.Expr
-	IsSingle    bool
+	Rets     []*plan.ColDef
+	Args     []*plan.Expr
+	Attrs    []string
+	Params   []byte
+	FuncName string
+	Limit    *plan.Expr
+	IsSingle bool
+
+	// probe side runtime filter specs
+	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+
+	IndexReaderParam *plan.IndexReaderParam
+
 	OffsetTotal [][2]int64
 	CanOpt      bool
 
@@ -99,21 +106,70 @@ type container struct {
 	state tvfState
 }
 
+// evalLimitExpression evaluates a LIMIT expression once during Prepare. The
+// executor is intentionally short-lived: LIMIT is constant for one execution,
+// and freeing it here avoids adding another resource to every table-function
+// state's Reset/Free lifecycle.
+func evalLimitExpression(proc *process.Process, expr *plan.Expr, defaultValue uint64) (uint64, error) {
+	if expr == nil {
+		return defaultValue, nil
+	}
+	if literal := expr.GetLit(); literal != nil {
+		if literal.Isnull {
+			return 0, moerr.NewInvalidInput(proc.Ctx, "LIMIT cannot be NULL")
+		}
+		if value, ok := literal.Value.(*plan.Literal_U64Val); ok {
+			return value.U64Val, nil
+		}
+		return 0, moerr.NewInvalidInputf(proc.Ctx, "LIMIT must evaluate to uint64, got %s", expr.Typ.String())
+	}
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	if err != nil {
+		return 0, err
+	}
+	defer executor.Free()
+
+	vec, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return 0, err
+	}
+	if vec == nil || vec.Length() == 0 || vec.IsNull(0) {
+		return 0, moerr.NewInvalidInput(proc.Ctx, "LIMIT cannot be NULL")
+	}
+	if vec.GetType().Oid != types.T_uint64 {
+		return 0, moerr.NewInvalidInputf(proc.Ctx, "LIMIT must evaluate to uint64, got %s", vec.GetType().String())
+	}
+	return vector.MustFixedColWithTypeCheck[uint64](vec)[0], nil
+}
+
 func (tableFunction *TableFunction) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if tableFunction == nil {
+		return
+	}
 	tableFunction.ctr.nextRow = 0
 	tableFunction.ctr.inputBatch = nil
+	tableFunction.ctr.isDone = false
 	for i := range tableFunction.ctr.executorsForArgs {
 		if tableFunction.ctr.executorsForArgs[i] != nil {
-			tableFunction.ctr.argVecs[i] = nil
+			if i < len(tableFunction.ctr.argVecs) {
+				tableFunction.ctr.argVecs[i] = nil
+			}
 			tableFunction.ctr.executorsForArgs[i].ResetForNextQuery()
 		}
 	}
-	tableFunction.ctr.state.reset(tableFunction, proc)
+	if tableFunction.ctr.state != nil {
+		tableFunction.ctr.state.reset(tableFunction, proc)
+	}
 }
 
 func (tableFunction *TableFunction) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if tableFunction == nil {
+		return
+	}
 	tableFunction.ctr.cleanExecutors()
-	tableFunction.ctr.state.free(tableFunction, proc, pipelineFailed, err)
+	if tableFunction.ctr.state != nil {
+		tableFunction.ctr.state.free(tableFunction, proc, pipelineFailed, err)
+	}
 }
 
 func (tableFunction *TableFunction) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -123,10 +179,13 @@ func (tableFunction *TableFunction) ExecProjection(proc *process.Process, input 
 func (ctr *container) cleanExecutors() {
 	for i := range ctr.executorsForArgs {
 		if ctr.executorsForArgs[i] != nil {
-			ctr.argVecs[i] = nil
+			if i < len(ctr.argVecs) {
+				ctr.argVecs[i] = nil
+			}
 			ctr.executorsForArgs[i].Free()
 		}
 	}
+	ctr.argVecs = nil
 	ctr.executorsForArgs = nil
 }
 

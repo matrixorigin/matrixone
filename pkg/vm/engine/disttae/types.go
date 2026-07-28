@@ -17,20 +17,19 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -53,9 +52,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"github.com/tidwall/btree"
+	"go.uber.org/zap"
 )
 
 const (
@@ -68,7 +72,8 @@ const (
 const (
 	INSERT = iota
 	DELETE
-	ALTER // alter command for TN. Update batches for mo_tables and mo_columns will fall into the category of INSERT and DELETE.
+	ALTER              // alter command for TN. Update batches for mo_tables and mo_columns will fall into the category of INSERT and DELETE.
+	SOFT_DELETE_OBJECT // soft delete object command for TN
 )
 
 type NoteLevel string
@@ -81,11 +86,22 @@ const (
 
 var (
 	typesNames = map[int]string{
-		INSERT: "insert",
-		DELETE: "delete",
-		ALTER:  "alter",
+		INSERT:             "insert",
+		DELETE:             "delete",
+		ALTER:              "alter",
+		SOFT_DELETE_OBJECT: "soft_delete_object",
 	}
 )
+
+// softDeleteObjectPrefix is used to encode soft-delete intent in the fileName field
+// of a write entry, since there is no dedicated field for this purpose.
+// Format: "soft_delete_object:<is_tombstone>"
+const softDeleteObjectPrefix = "soft_delete_object:"
+
+// makeSoftDeleteFileName encodes a soft-delete object intent into a fileName string.
+func makeSoftDeleteFileName(isTombstone bool) string {
+	return fmt.Sprintf("%s%v", softDeleteObjectPrefix, isTombstone)
+}
 
 func noteForCreate(id uint64, name string) string {
 	return fmt.Sprintf("create-%v-%v", id, name)
@@ -179,6 +195,12 @@ func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
 	}
 }
 
+func WithExtraWorkspaceThreshold(th uint64) EngineOptions {
+	return func(e *Engine) {
+		e.config.extraWorkspaceThreshold = th
+	}
+}
+
 func WithInsertEntryMaxCount(th int) EngineOptions {
 	return func(e *Engine) {
 		e.config.insertEntryMaxCount = th
@@ -188,6 +210,28 @@ func WithInsertEntryMaxCount(th int) EngineOptions {
 func WithCNTransferTxnLifespanThreshold(th time.Duration) EngineOptions {
 	return func(e *Engine) {
 		e.config.cnTransferTxnLifespanThreshold = th
+	}
+}
+
+func WithPrefetchOnSubscribed(th []string) EngineOptions {
+	return func(e *Engine) {
+		var (
+			err error
+		)
+
+		for i := range th {
+			r, err2 := regexp.Compile(th[i])
+			if err2 != nil {
+				err = errors.Join(err, err2)
+				continue
+			}
+			e.config.prefetchOnSubscribed = append(e.config.prefetchOnSubscribed, r)
+		}
+
+		logutil.Info("Set-Prefetch-On-Subscribed-By-TOML",
+			zap.Strings("patterns", th),
+			zap.Error(err),
+		)
 	}
 }
 
@@ -229,6 +273,9 @@ type Engine struct {
 		extraWorkspaceThreshold  uint64
 		quota                    atomic.Uint64
 
+		memThrottler rscthrottler.RSCThrottler
+
+		prefetchOnSubscribed           []*regexp.Regexp
 		cnTransferTxnLifespanThreshold time.Duration
 
 		ieFactory            func() ie.InternalExecutor
@@ -240,14 +287,9 @@ type Engine struct {
 	catalog atomic.Pointer[cache.CatalogCache]
 	//latest partitions which be protected by e.Lock().
 	partitions map[[2]uint64]*logtailreplay.Partition
-	//snapshot partitions
-	mu struct {
-		sync.Mutex
-		snapParts map[[2]uint64]*struct {
-			sync.Mutex
-			snaps []*logtailreplay.Partition
-		}
-	}
+
+	//snapshot partitions manager
+	snapshotMgr *SnapshotManager
 
 	packerPool *fileservice.Pool[*types.Packer]
 
@@ -263,19 +305,45 @@ type Engine struct {
 	//for message on multiCN, use uuid to get the messageBoard
 	messageCenter *message.MessageCenter
 
-	timeFixed             bool
-	moCatalogCreatedTime  *vector.Vector
-	moDatabaseCreatedTime *vector.Vector
-	moTablesCreatedTime   *vector.Vector
-	moColumnsCreatedTime  *vector.Vector
+	timeFixed bool
+	// sysTablesCreatedTime stores the created_time vectors for system tables.
+	// Index mapping:
+	//   0 - mo_catalog (database)
+	//   1 - mo_database (table in mo_tables)
+	//   2 - mo_tables (table in mo_tables)
+	//   3 - mo_columns (table in mo_tables)
+	//   4 - __mo_index_unique_mo_tables_logical_id (index table in mo_tables)
+	sysTablesCreatedTime []*vector.Vector
 
 	dynamicCtx
 	// for test only.
 	skipConsume bool
+
+	cloneTxnCache *CloneTxnCache
+
+	// ccprTxnCache tracks CCPR objects and their associated transactions
+	ccprTxnCache *CCPRTxnCache
+}
+
+func (e *Engine) getPrefetchOnSubscribed() []*regexp.Regexp {
+	if overridden, regs := engine.GetPrefetchOnSubscribed(); overridden {
+		return regs
+	}
+	return e.config.prefetchOnSubscribed
 }
 
 func (e *Engine) SetService(svr string) {
 	e.service = svr
+}
+
+func (e *Engine) ResetGCWorkerPool(pool *ants.Pool) {
+	e.gcPool.Release()
+	e.gcPool = pool
+}
+
+// GetCCPRTxnCache returns the CCPR transaction cache
+func (e *Engine) GetCCPRTxnCache() *CCPRTxnCache {
+	return e.ccprTxnCache
 }
 
 func (txn *Transaction) String() string {
@@ -306,8 +374,15 @@ type Transaction struct {
 	approximateInMemInsertCnt int
 	// the approximation of total row count for delete entries
 	approximateInMemDeleteCnt int
-	// the last snapshot write offset
-	snapshotWriteOffset int
+	// snapshotWriteOffset is the statement boundary of txn.writes: readers of
+	// this transaction iterate the [0, snapshotWriteOffset) prefix. It is
+	// advanced under txn.Lock at statement boundaries only (a new compile of
+	// a user statement), never by internal SQL, and mid-statement dumps only
+	// compact entries at or after the boundary; reading it is lock-free.
+	snapshotWriteOffset atomic.Int64
+	// the earliest write offset that Adjust must still consider for the current SQL
+	// after in-place workspace compaction shifts surviving writes to the left.
+	adjustWriteOffset int
 
 	tnStores []DNStore
 	proc     *process.Process
@@ -366,23 +441,211 @@ type Transaction struct {
 	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
-	syncCommittedTSCount uint64
 	pkCount              int
 
 	adjustCount int
 
-	haveDDL atomic.Bool
+	haveDDL             atomic.Bool
+	isCloneTxn          bool
+	loadFiles           map[int]map[string]struct{}
+	loadCleanupTimeout  time.Duration
+	isCCPRTxn           bool
+	ccprTaskID          string
+	syncProtectionJobID string
 
 	writeWorkspaceThreshold      uint64
 	commitWorkspaceThreshold     uint64
 	extraWriteWorkspaceThreshold uint64 // acquired from engine quota
 }
 
+func (txn *Transaction) SetCloneTxn(snapshot int64) {
+	txn.isCloneTxn = true
+	txn.engine.cloneTxnCache.AddTxn(txn.op.Txn().ID, snapshot)
+}
+
+// ProtectCloneFiles records pre-existing objects reused by a clone-like write.
+// Objects already referenced by this transaction remain txn-local: statement
+// rollback must preserve them for earlier statements, while transaction
+// rollback must still delete them. Other objects are owned by committed state
+// outside this transaction and must never be deleted by clone rollback.
+func (txn *Transaction) ProtectCloneFiles(names ...string) {
+	txn.Lock()
+	defer txn.Unlock()
+	txnID := txn.op.Txn().ID
+	liveNames := make(map[string]struct{}, len(names))
+	for _, entry := range txn.writes {
+		for _, stats := range collectObjectStatsFromEntry(entry) {
+			liveNames[stats.ObjectName().String()] = struct{}{}
+		}
+	}
+	for _, name := range names {
+		if _, ok := liveNames[name]; ok {
+			txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txnID, name)
+		} else {
+			txn.engine.cloneTxnCache.AddSharedFile(txnID, name)
+		}
+	}
+}
+
+// TrackLoadFiles records object files physically created by LOAD TABLE. They
+// are protected from the generic clone GC and synchronously removed by the
+// statement/transaction rollback path while LOAD's global install lock is
+// still held. This avoids both orphaning partial installs and deleting an
+// object that a concurrent LOAD has begun to reuse.
+func (txn *Transaction) TrackLoadFiles(names ...string) {
+	txn.Lock()
+	defer txn.Unlock()
+	if txn.loadFiles == nil {
+		txn.loadFiles = make(map[int]map[string]struct{})
+	}
+	files := txn.loadFiles[txn.statementID]
+	if files == nil {
+		files = make(map[string]struct{})
+		txn.loadFiles[txn.statementID] = files
+	}
+	txnID := txn.op.Txn().ID
+	for _, name := range names {
+		files[name] = struct{}{}
+		txn.engine.cloneTxnCache.AddSharedFile(txnID, name)
+	}
+}
+
+const (
+	defaultLoadFileCleanupTimeout = 2 * time.Minute
+	loadFileCleanupRetryAttempts  = 128
+)
+
+// deleteLoadFiles attempts physical cleanup after statement execution has
+// stopped. It never holds the transaction mutex across file-service I/O.
+// Retryable failures are retried within one bounded cleanup deadline while
+// LOAD's install lock still prevents another transaction from reusing a name.
+// Successfully deleted names are returned with their clone-GC protection still
+// installed; the caller removes that protection only after ordinary workspace
+// GC has inspected the same generation.
+func (txn *Transaction) deleteLoadFiles(
+	ctx context.Context,
+	statementID *int,
+) (deleted []string, err error) {
+	txn.Lock()
+	if len(txn.loadFiles) == 0 {
+		txn.Unlock()
+		return nil, nil
+	}
+	selectedIDs := make([]int, 0, len(txn.loadFiles))
+	nameSet := make(map[string]struct{})
+	for id, files := range txn.loadFiles {
+		if statementID != nil && id != *statementID {
+			continue
+		}
+		selectedIDs = append(selectedIDs, id)
+		for name := range files {
+			nameSet[name] = struct{}{}
+		}
+	}
+	txn.Unlock()
+
+	names := make([]string, 0, len(nameSet))
+	for name := range nameSet {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	// Rollback commonly runs after its request context has been canceled. Keep
+	// cleanup independent from that cancellation, but bounded so a failed file
+	// service cannot hold transaction locks forever.
+	timeout := txn.loadCleanupTimeout
+	if timeout <= 0 {
+		timeout = defaultLoadFileCleanupTimeout
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	for start := 0; start < len(names); start += GCBatchOfFileCount {
+		end := min(start+GCBatchOfFileCount, len(names))
+		_, err := fileservice.DoWithRetryContext(
+			cleanupCtx,
+			"delete LOAD TABLE objects",
+			func() (struct{}, error) {
+				return struct{}{}, txn.engine.fs.Delete(cleanupCtx, names[start:end]...)
+			},
+			loadFileCleanupRetryAttempts,
+			fileservice.IsRetryableError,
+		)
+		if err != nil {
+			return deleted, err
+		}
+		deleted = append(deleted, names[start:end]...)
+		txn.Lock()
+		for _, id := range selectedIDs {
+			files := txn.loadFiles[id]
+			for _, name := range names[start:end] {
+				delete(files, name)
+			}
+			if len(files) == 0 {
+				delete(txn.loadFiles, id)
+			}
+		}
+		txn.Unlock()
+	}
+	return deleted, nil
+}
+
+func (txn *Transaction) removeLoadFileProtectionsLocked(names []string) {
+	txnID := txn.op.Txn().ID
+	for _, name := range names {
+		stillTracked := false
+		for _, files := range txn.loadFiles {
+			if _, ok := files[name]; ok {
+				stillTracked = true
+				break
+			}
+		}
+		if !stillTracked {
+			txn.engine.cloneTxnCache.RemoveSharedFile(txnID, name)
+		}
+	}
+}
+
+// SetCCPRTxn marks this transaction as a CCPR transaction.
+// CCPR transactions will call CCPRTxnCache.OnTxnCommit/OnTxnRollback when committing/rolling back.
+func (txn *Transaction) SetCCPRTxn() {
+	txn.isCCPRTxn = true
+}
+
+// IsCCPRTxn returns true if this transaction is a CCPR transaction.
+func (txn *Transaction) IsCCPRTxn() bool {
+	return txn.isCCPRTxn
+}
+
+// SetCCPRTaskID sets the CCPR task ID for this transaction.
+// When a CCPR task ID is set, the transaction can bypass shared object read-only checks.
+func (txn *Transaction) SetCCPRTaskID(taskID string) {
+	txn.ccprTaskID = taskID
+}
+
+// GetCCPRTaskID returns the CCPR task ID for this transaction.
+// Returns empty string if no task ID is set.
+func (txn *Transaction) GetCCPRTaskID() string {
+	return txn.ccprTaskID
+}
+
+// SetSyncProtectionJobID sets the sync protection job ID for this transaction.
+// This is used to pass the job ID to TN for commit-time validation.
+func (txn *Transaction) SetSyncProtectionJobID(jobID string) {
+	txn.syncProtectionJobID = jobID
+}
+
+// GetSyncProtectionJobID returns the sync protection job ID for this transaction.
+// Returns empty string if no job ID is set.
+func (txn *Transaction) GetSyncProtectionJobID() string {
+	return txn.syncProtectionJobID
+}
+
 type Summary struct {
-	objBat    *batch.Batch
-	accountId uint32
-	tbName    string
-	dbName    string
+	objBat             *batch.Batch
+	accountId          uint32
+	tbName             string
+	dbName             string
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
 }
 
 // FIXME: The map inside this one will be accessed concurrently, using
@@ -393,6 +656,15 @@ type deletedBlocks struct {
 	// used to store cn block's deleted rows
 	// blockId => deletedOffsets
 	offsets map[types.Blockid][]int64
+}
+
+func (b *deletedBlocks) size() int {
+	if b == nil {
+		return 0
+	}
+	b.RLock()
+	defer b.RUnlock()
+	return len(b.offsets)
 }
 
 func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64) {
@@ -441,9 +713,8 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
-		cnObjsSummary:        map[types.Objectid]Summary{},
-		batchSelectList:      make(map[*batch.Batch][]int64),
-		syncCommittedTSCount: eng.cli.GetSyncLatestCommitTSTimes(),
+		cnObjsSummary:   map[types.Objectid]Summary{},
+		batchSelectList: make(map[*batch.Batch][]int64),
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 
 		commitWorkspaceThreshold: eng.config.commitWorkspaceThreshold,
@@ -501,7 +772,7 @@ func (txn *Transaction) PPString() string {
 		}),
 		stringifySyncMap(txn.tableCache),
 		txn.approximateInMemInsertCnt,
-		txn.snapshotWriteOffset,
+		txn.snapshotWriteOffset.Load(),
 		txn.rollbackCount,
 		txn.statementID,
 		stringifySlice(txn.offsets, func(a any) string { return fmt.Sprintf("%v", a) }),
@@ -573,6 +844,29 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	return nil
 }
 
+func (txn *Transaction) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	txn.op.EnterIncrStmt()
+	defer txn.op.ExitIncrStmt()
+
+	txn.Lock()
+	defer txn.Unlock()
+
+	if !txn.op.Txn().IsRCIsolation() {
+		return txn.advanceSnapshot(ctx, ts)
+	}
+
+	if txn.transfer.lastTransferred.IsEmpty() {
+		txn.start = time.Now()
+		txn.transfer.lastTransferred = types.TimestampToTS(txn.op.SnapshotTS())
+	}
+
+	if err := txn.advanceSnapshot(ctx, ts); err != nil {
+		return err
+	}
+
+	return txn.transferTombstones(ctx)
+}
+
 // writeOffset returns the offset of the first write in the workspace
 func (txn *Transaction) WriteOffset() uint64 {
 	txn.Lock()
@@ -642,6 +936,12 @@ func (txn *Transaction) traceWorkspaceLocked(commit bool) {
 func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 
 	if txn.statementID > 0 {
+		if txn.adjustWriteOffset < int(writeOffset) {
+			writeOffset = uint64(txn.adjustWriteOffset)
+		}
+		if writeOffset > uint64(len(txn.writes)) {
+			writeOffset = uint64(len(txn.writes))
+		}
 		slices.SortStableFunc(txn.writes[writeOffset:], func(a, b Entry) int {
 			// expected in descending order
 
@@ -690,9 +990,133 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 	//	return nil
 }
 
-func (txn *Transaction) gcObjs(start int) error {
+type cloneGCScope int
+
+const (
+	// Intermediate GC happens while the clone transaction is still alive, for
+	// example when replacing an earlier ALTER workspace with a later one. It
+	// must keep txn-local objects that a later clone/ALTER now references.
+	cloneGCIntermediate cloneGCScope = iota
+	// Transaction rollback is the final cleanup of the clone transaction. Only
+	// source files owned by committed state are protected; txn-local files must
+	// be removed because no committed table can reference them after rollback.
+	cloneGCTxnRollback
+)
+
+func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
+	if txn.isCloneTxn {
+		names = readutil.RemoveIf(names, func(name string) bool {
+			txnID := txn.op.Txn().ID
+			if txn.engine.cloneTxnCache.IsSharedFile(txnID, name) {
+				return true
+			}
+			return scope == cloneGCIntermediate &&
+				txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, name)
+		})
+	}
+
+	if len(names) == 0 {
+		return nil
+	}
+
+	//getCaller := func(depth int) (str []string) {
+	//	pc := make([]uintptr, depth)
+	//	n := runtime.Callers(2, pc)
+	//	frames := runtime.CallersFrames(pc[:n])
+	//
+	//	i := 0
+	//	for {
+	//		frame, more := frames.Next()
+	//		funcName := filepath.Base(frame.Function)
+	//		str = append(str, funcName)
+	//		i++
+	//		if !more || i >= depth {
+	//			break
+	//		}
+	//	}
+	//	return
+	//}
+
+	logutil.Info("GC-WORKSPACE-FILES",
+		zap.Strings("names", names),
+		zap.String("txn-info", txn.op.Txn().DebugString()),
+		//zap.String("stack", strings.Join(getCaller(5), "<-")),
+	)
+
+	//gc the objects asynchronously.
+	//TODO:: to handle the failure when CN is down.
+	step := GCBatchOfFileCount
+	if len(names) > 0 && len(names) < step {
+		if err := txn.engine.gcPool.Submit(func() {
+			if err := txn.engine.fs.Delete(context.Background(), names...); err != nil {
+				logutil.Warnf("failed to delete objects:%v, err:%v", names, err)
+			}
+		}); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	for i := 0; i < len(names); i += step {
+		if i+step > len(names) {
+			step = len(names) - i
+		}
+		start := i
+		end := i + step
+		if err := txn.engine.gcPool.Submit(func() {
+			//notice that the closure can't capture the loop variable i, so we need to use start and end.
+			if err := txn.engine.fs.Delete(context.Background(), names[start:end]...); err != nil {
+				logutil.Warnf("failed to delete objects:%v, err:%v", names[i:i+step], err)
+			}
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+
+}
+
+func (txn *Transaction) GCObjsByStats(sl ...objectio.ObjectStats) (err error) {
+	names := make([]string, 0, len(sl))
+
+	defer func() {
+		if err != nil {
+			logutil.Warn("gc objects by stats list failed",
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Strings("names", names),
+				zap.Error(err),
+			)
+		}
+	}()
+
+	for _, stats := range sl {
+		names = append(names, stats.ObjectName().String())
+	}
+
+	return gcFiles(txn, cloneGCIntermediate, names...)
+}
+
+// [start, end]
+func (txn *Transaction) GCObjsByIdxRange(start, end int) (err error) {
+	return txn.gcObjsByIdxRange(start, end, cloneGCIntermediate)
+}
+
+func (txn *Transaction) gcObjsByIdxRange(start, end int, scope cloneGCScope) (err error) {
 	var objsName []string
-	for i := start; i < len(txn.writes); i++ {
+
+	defer func() {
+		if err != nil {
+			logutil.Warn("gc objects by index range failed",
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Strings("names", objsName),
+				zap.Error(err),
+			)
+		}
+	}()
+
+	for i := start; i <= end; i++ {
 		if txn.writes[i].bat == nil ||
 			txn.writes[i].bat.RowCount() == 0 {
 			continue
@@ -700,7 +1124,7 @@ func (txn *Transaction) gcObjs(start int) error {
 		//1. Remove blocks from txn.cnObjsSummary lazily till txn commits or rollback.
 		//2. Remove the segments generated by this statement lazily till txn commits or rollback.
 		//3. Now, GC the s3 objects(data objects and tombstone objects) asynchronously.
-		if txn.writes[i].fileName != "" {
+		if txn.writes[i].fileName != "" && txn.writes[i].typ != SOFT_DELETE_OBJECT {
 			var vec *vector.Vector
 			//  [object_stats, pk]
 			if txn.writes[i].typ == DELETE {
@@ -720,62 +1144,29 @@ func (txn *Transaction) gcObjs(start int) error {
 		}
 	}
 
-	//gc the objects asynchronously.
-	//TODO:: to handle the failure when CN is down.
-	step := GCBatchOfFileCount
-	if len(objsName) > 0 && len(objsName) < step {
-		if err := txn.engine.gcPool.Submit(func() {
-			if err := txn.engine.fs.Delete(
-				context.Background(),
-				objsName...); err != nil {
-				logutil.Warnf("failed to delete objects:%v, err:%v",
-					objsName,
-					err)
-
-			}
-		}); err != nil {
-			return err
-		}
-		return nil
-	}
-	for i := 0; i < len(objsName); i += step {
-		if i+step > len(objsName) {
-			step = len(objsName) - i
-		}
-		start := i
-		end := i + step
-		if err := txn.engine.gcPool.Submit(func() {
-			//notice that the closure can't capture the loop variable i, so we need to use start and end.
-			if err := txn.engine.fs.Delete(
-				context.Background(),
-				objsName[start:end]...); err != nil {
-				logutil.Warnf("failed to delete objects:%v, err:%v",
-					objsName[i:i+step],
-					err)
-
-			}
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return gcFiles(txn, scope, objsName...)
 }
 
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
+	v2.TxnRollbackLastStatementCounter.Inc()
 	var (
 		beforeEntries int
 		afterEntries  int
 	)
 	defer func() {
-		logutil.Info(
-			"RollbackLastStatement",
-			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
-			zap.Int("before", beforeEntries),
-			zap.Int("after", afterEntries),
-		)
+		common.DoIfDebugEnabled(func() {
+			logutil.Debug(
+				"RollbackLastStatement",
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Int("before", beforeEntries),
+				zap.Int("after", afterEntries),
+			)
+		})
 	}()
+	deletedLoadFiles, loadCleanupErr := txn.deleteLoadFiles(ctx, &txn.statementID)
+
 	txn.Lock()
 	defer txn.Unlock()
 
@@ -788,8 +1179,11 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 		txn.statementID--
 		end := txn.offsets[txn.statementID]
-		if err := txn.gcObjs(end); err != nil {
-			panic("to gc objects generated by CN failed")
+		// Skip GC for CCPR transactions - CCPRTxnCache handles GC to avoid deleting shared objects
+		if !txn.isCCPRTxn {
+			if err := txn.GCObjsByIdxRange(end, len(txn.writes)-1); err != nil {
+				panic("to gc objects generated by CN failed")
+			}
 		}
 		for i := end; i < len(txn.writes); i++ {
 			if txn.writes[i].bat == nil {
@@ -829,7 +1223,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	// current statement has been rolled back, make can call IncrStatementID again.
 	txn.incrStatementCalled = false
-	return nil
+	txn.removeLoadFileProtectionsLocked(deletedLoadFiles)
+	return loadCleanupErr
 }
 
 func (txn *Transaction) IncrSQLCount() {
@@ -856,19 +1251,11 @@ func (txn *Transaction) advanceSnapshot(
 	return nil
 }
 
-// For RC isolation, update the snapshot TS of transaction for each statement.
-// only 2 cases need to reset snapshot
-// 1. cn sync latest commit ts from mo_ctl
-// 2. not first sql
+// For RC isolation, update the snapshot TS for every statement execution.
+// RC should observe the latest committed schema/data at statement start,
+// including the first statement in an explicit transaction.
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool, error) {
-	needResetSnapshot := false
-	newTimes := txn.proc.Base.TxnClient.GetSyncLatestCommitTSTimes()
-	if newTimes > txn.syncCommittedTSCount {
-		txn.syncCommittedTSCount = newTimes
-		needResetSnapshot = true
-	}
-
-	if !commit && (txn.GetSQLCount() > 0 || needResetSnapshot) {
+	if !commit {
 		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
 			txn.op, 0, "before execute")
 
@@ -896,6 +1283,21 @@ type Entry struct {
 	bat       *batch.Batch
 	tnStore   DNStore
 	pkChkByTN int8
+	// autoIncrEpoch is the allocator epoch used to plan this user-table write.
+	// autoIncrEpochKnown distinguishes a valid initial zero epoch from an
+	// old CN that did not send the dependency.
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
+
+	// skipTransfer indicates this entry should skip transfer processing
+	// Used by CCPR to avoid transfer errors for cross-cluster tombstones
+	skipTransfer bool
+
+	// pkCheckPos is the primary-key vector position resolved at write time.
+	// pkCheckReady indicates whether write-time resolution was reliable.
+	// When it is false, duplicate checks must fall back to legacy table-def lookup.
+	pkCheckPos   int
+	pkCheckReady bool
 }
 
 func (e *Entry) String() string {
@@ -928,6 +1330,7 @@ func (e *Entry) isCatalog() bool {
 
 // txnDatabase represents an opened database in a transaction
 type txnDatabase struct {
+	accountId         uint32
 	databaseId        uint64
 	databaseName      string
 	databaseType      string
@@ -941,6 +1344,14 @@ type tableKey struct {
 	databaseId uint64
 	dbName     string
 	name       string
+}
+
+// workspaceTableKey keeps batches planned against different table definitions
+// from being coalesced when the CN workspace is flushed to S3.
+type workspaceTableKey struct {
+	tableKey
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
 }
 
 func (k tableKey) String() string {
@@ -1002,6 +1413,7 @@ type txnTable struct {
 	createSql     string
 	constraint    []byte
 	extraInfo     *api.SchemaExtra
+	logicalId     uint64
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
@@ -1023,4 +1435,114 @@ type txnTable struct {
 type blockSortHelper struct {
 	blk *objectio.BlockInfo
 	zm  index.ZM
+}
+
+type CloneTxnCache struct {
+	items *btree.BTreeG[cloneTxnItem]
+}
+
+func newCloneTxnCache() *CloneTxnCache {
+	return &CloneTxnCache{
+		items: btree.NewBTreeG(cloneTxnItem.Less),
+	}
+}
+
+func (ctc CloneTxnCache) IsSharedFile(txnId []byte, name string) bool {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return false
+	}
+
+	_, exist = item.sharedFiles.Get(name)
+	return exist
+}
+
+func (ctc CloneTxnCache) IsTxnLocalSharedFile(txnId []byte, name string) bool {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return false
+	}
+
+	_, exist = item.txnLocalSharedFiles.Get(name)
+	return exist
+}
+
+func (ctc CloneTxnCache) DeleteTxn(txnId []byte) {
+	ctc.items.Delete(cloneTxnItem{txnID: txnId})
+}
+
+func (ctc CloneTxnCache) AddSharedFile(txnId []byte, name string) {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return
+	}
+
+	item.sharedFiles.Set(name)
+	ctc.items.Set(item)
+}
+
+func (ctc CloneTxnCache) RemoveSharedFile(txnId []byte, name string) {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return
+	}
+
+	item.sharedFiles.Delete(name)
+	ctc.items.Set(item)
+}
+
+func (ctc CloneTxnCache) AddTxnLocalSharedFile(txnId []byte, name string) {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return
+	}
+
+	item.txnLocalSharedFiles.Set(name)
+	ctc.items.Set(item)
+}
+
+func (ctc CloneTxnCache) RemoveTxnLocalSharedFile(txnId []byte, name string) {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return
+	}
+
+	item.txnLocalSharedFiles.Delete(name)
+	ctc.items.Set(item)
+}
+
+func (ctc CloneTxnCache) AddTxn(txnId []byte, snapshot int64) {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if exist {
+		if item.snapTS > snapshot {
+			item.snapTS = snapshot
+			ctc.items.Set(item)
+		}
+		return
+	}
+
+	item = cloneTxnItem{
+		txnID:               txnId,
+		snapTS:              snapshot,
+		sharedFiles:         btree.NewBTreeG(func(a, b string) bool { return a < b }),
+		txnLocalSharedFiles: btree.NewBTreeG(func(a, b string) bool { return a < b }),
+	}
+
+	ctc.items.Set(item)
+}
+
+type cloneTxnItem struct {
+	txnID  []byte
+	snapTS int64
+	// sharedFiles are cloned from committed pState and are owned outside this
+	// transaction, so clone GC must never delete them.
+	sharedFiles *btree.BTreeG[string]
+	// txnLocalSharedFiles are produced by this transaction and later reused by
+	// another clone/ALTER step in the same transaction. They are protected from
+	// intermediate cleanup, but rollback must still delete them.
+	txnLocalSharedFiles *btree.BTreeG[string]
+}
+
+func (cti cloneTxnItem) Less(other cloneTxnItem) bool {
+	return types.Uuid(cti.txnID).Lt(types.Uuid(other.txnID))
 }

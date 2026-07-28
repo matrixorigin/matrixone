@@ -16,9 +16,10 @@ package partitionprune
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,6 +43,7 @@ func TestPrunePartitionByExpr(t *testing.T) {
 		nil, // no hakeeper
 		nil, // no udf service
 		nil, // no auto increase
+		nil,
 	)
 	defer proc.Free()
 
@@ -154,6 +156,7 @@ func TestPrune(t *testing.T) {
 		nil, // no hakeeper
 		nil, // no udf service
 		nil, // no auto increase
+		nil,
 	)
 	defer proc.Free()
 
@@ -329,9 +332,27 @@ func TestPrune(t *testing.T) {
 			Partitions: []partition.Partition{},
 		}
 
-		result, err := Prune(proc, bat, metadata, -1)
-		require.NoError(t, err)
-		require.Equal(t, 0, batchCount(result))
+		_, err := Prune(proc, bat, metadata, -1)
+		require.Error(t, err)
+	})
+
+	t.Run("all rows miss partitions returns invalid input before empty result", func(t *testing.T) {
+		metadata := partition.PartitionMetadata{
+			Partitions: []partition.Partition{
+				{
+					Expr: &plan.Expr{
+						Typ: plan.Type{Id: int32(types.T_bool)},
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}},
+						},
+					},
+				},
+			},
+		}
+
+		_, err := Prune(proc, bat, metadata, -1)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Table has no partition for value from column_list")
 	})
 }
 

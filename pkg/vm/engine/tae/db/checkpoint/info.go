@@ -53,6 +53,7 @@ type RunnerReader interface {
 
 	MaxGlobalCheckpoint() *CheckpointEntry
 	MaxIncrementalCheckpoint() *CheckpointEntry
+	PendingIncrementalCheckpoint() *CheckpointEntry
 	MinIncrementalCheckpoint() *CheckpointEntry
 	GetDirtyCollector() logtail.Collector
 }
@@ -73,6 +74,7 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batc
 		bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(entry.ckpLSN, false)
 		bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(entry.truncateLSN, false)
 		bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Incremental), false)
+		bat.GetVectorByName(CheckpointAttr_TableIDLocation).Append([]byte(entry.tableIDLocation), false)
 	}
 	entries = r.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
@@ -88,6 +90,7 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batc
 		bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(entry.ckpLSN, false)
 		bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(entry.truncateLSN, false)
 		bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Global), false)
+		bat.GetVectorByName(CheckpointAttr_TableIDLocation).Append([]byte(entry.tableIDLocation), false)
 	}
 	return bat
 }
@@ -114,6 +117,10 @@ func (r *runner) MaxGlobalCheckpoint() *CheckpointEntry {
 
 func (r *runner) MaxIncrementalCheckpoint() *CheckpointEntry {
 	return r.store.MaxIncrementalCheckpoint()
+}
+
+func (r *runner) PendingIncrementalCheckpoint() *CheckpointEntry {
+	return r.store.GetICKPIntent()
 }
 
 func (r *runner) MinIncrementalCheckpoint() *CheckpointEntry {

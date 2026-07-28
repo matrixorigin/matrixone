@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,6 +49,9 @@ func TestBasicCluster(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
 
 	validCNCanWork(t, c, 0)
 	validCNCanWork(t, c, 1)
@@ -58,14 +62,15 @@ func TestBasicCluster(t *testing.T) {
 	v, err := c.GetService(cn.ServiceID())
 	require.NoError(t, err)
 	require.Equal(t, cn, v)
-
-	require.NoError(t, c.Close())
 }
 
 func TestSingleCNCluster(t *testing.T) {
 	c, err := NewCluster()
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
 	require.Error(t, c.Start())
 
 	validCNCanWork(t, c, 0)
@@ -75,14 +80,15 @@ func TestSingleCNCluster(t *testing.T) {
 
 	_, err = c.GetCNService(1)
 	require.Error(t, err)
-
-	require.NoError(t, c.Close())
 }
 
 func TestClusterCanStartNewCNServices(t *testing.T) {
 	c, err := NewCluster(WithCNCount(3))
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
 
 	validCNCanWork(t, c, 0)
 	validCNCanWork(t, c, 1)
@@ -90,8 +96,6 @@ func TestClusterCanStartNewCNServices(t *testing.T) {
 
 	require.NoError(t, c.StartNewCNService(1))
 	validCNCanWork(t, c, 3)
-
-	require.NoError(t, c.Close())
 }
 
 func TestMultiClusterCanWork(t *testing.T) {
@@ -99,6 +103,9 @@ func TestMultiClusterCanWork(t *testing.T) {
 		c, err := NewCluster(WithCNCount(3))
 		require.NoError(t, err)
 		require.NoError(t, c.Start())
+		t.Cleanup(func() {
+			require.NoError(t, c.Close())
+		})
 
 		validCNCanWork(t, c, 0)
 		validCNCanWork(t, c, 1)
@@ -106,11 +113,8 @@ func TestMultiClusterCanWork(t *testing.T) {
 		return c
 	}
 
-	c1 := new()
-	c2 := new()
-
-	require.NoError(t, c1.Close())
-	require.NoError(t, c2.Close())
+	new()
+	new()
 }
 
 func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
@@ -125,6 +129,9 @@ func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
 	c, err := NewCluster(WithCNCount(3))
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
 
 	validCNCanWork(t, c, 0)
 	validCNCanWork(t, c, 1)
@@ -180,6 +187,106 @@ func TestRunSQLWithFrontend(t *testing.T) {
 			require.NoError(t, err)
 		},
 	)
+}
+
+func TestRowCountOverMySQLProtocol(t *testing.T) {
+	require.NoError(t, RunBaseClusterTests(
+		func(c Cluster) {
+			cn0, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",
+				cn0.GetServiceConfig().CN.Frontend.Port,
+			)
+			db, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer db.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+
+			_, err = conn.ExecContext(ctx, "drop database if exists row_count_protocol_test")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create database row_count_protocol_test")
+			require.NoError(t, err)
+			defer conn.ExecContext(ctx, "drop database if exists row_count_protocol_test")
+			_, err = conn.ExecContext(ctx, "use row_count_protocol_test")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create table t (id int primary key)")
+			require.NoError(t, err)
+
+			_, err = conn.ExecContext(ctx, "insert into t values (1), (2)")
+			require.NoError(t, err)
+			stmt, err := conn.PrepareContext(ctx, "select row_count()")
+			require.NoError(t, err)
+			defer stmt.Close()
+
+			var rowCount int64
+			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&rowCount))
+			require.Equal(t, int64(2), rowCount)
+
+			result, err := conn.ExecContext(ctx, "insert into t values (3)")
+			require.NoError(t, err)
+			affectedRows, err := result.RowsAffected()
+			require.NoError(t, err)
+			require.Equal(t, int64(1), affectedRows)
+
+			_, err = conn.ExecContext(ctx, "create procedure insert_rows() 'begin insert into t values (4), (5); end'")
+			require.NoError(t, err)
+			result, err = conn.ExecContext(ctx, "call insert_rows()")
+			require.NoError(t, err)
+			affectedRows, err = result.RowsAffected()
+			require.NoError(t, err)
+			require.Equal(t, int64(2), affectedRows)
+			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&rowCount))
+			require.Equal(t, int64(2), rowCount)
+
+			_, err = conn.ExecContext(ctx, "create procedure caller_count() 'begin select row_count(); end'")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "insert into t values (6), (7), (8), (9), (10), (11)")
+			require.NoError(t, err)
+			func() {
+				rows, err := conn.QueryContext(ctx, "call caller_count()")
+				require.NoError(t, err)
+				defer rows.Close()
+				require.True(t, rows.Next())
+				require.NoError(t, rows.Scan(&rowCount))
+				require.NoError(t, rows.Err())
+				require.Equal(t, int64(6), rowCount)
+			}()
+
+			_, err = conn.ExecContext(ctx, "create procedure inner_results() 'begin select 20; select 21; end'")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create procedure outer_results() 'begin select 10; call inner_results(); select 30; end'")
+			require.NoError(t, err)
+			func() {
+				rows, err := conn.QueryContext(ctx, "call outer_results()")
+				require.NoError(t, err)
+				defer rows.Close()
+				var got []int64
+				for {
+					for rows.Next() {
+						var value int64
+						require.NoError(t, rows.Scan(&value))
+						got = append(got, value)
+					}
+					require.NoError(t, rows.Err())
+					if !rows.NextResultSet() {
+						break
+					}
+				}
+				require.Equal(t, []int64{10, 20, 21, 30}, got)
+			}()
+
+			_, err = conn.ExecContext(ctx, "insert into t values (1)")
+			require.Error(t, err)
+			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&rowCount))
+			require.Equal(t, int64(-1), rowCount)
+		},
+	))
 }
 
 func TestGetInitValue(t *testing.T) {
@@ -285,4 +392,71 @@ func TestCreateDB(t *testing.T) {
 			}
 		},
 	)
+}
+
+// TestDoStartLockedErrorPaths exercises the error-handling branches in
+// doStartLocked that are not reached by normal cluster startup tests.
+func TestDoStartLockedErrorPaths(t *testing.T) {
+	t.Run("non-CN service error returns immediately", func(t *testing.T) {
+		// A non-CN operator whose state is already 'started' will return
+		// an error from Start(), exercising the direct-return path at
+		// cluster.go line 119-121.
+		op := &operator{
+			serviceType: metadata.ServiceType_LOG,
+			state:       started, // forces Start() to return error
+		}
+		c := &cluster{
+			services: []*operator{op},
+		}
+		err := c.doStartLocked(0)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "already started")
+	})
+
+	t.Run("CN service error captured via atomic.Value", func(t *testing.T) {
+		// A CN operator whose state is already 'started' will return an
+		// error from Start(), exercising the goroutine error-capture path
+		// at cluster.go lines 128-133 and the error-return at 138-140.
+		op := &operator{
+			serviceType: metadata.ServiceType_CN,
+			state:       started,
+		}
+		c := &cluster{
+			services: []*operator{op},
+		}
+		err := c.doStartLocked(0)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "already started")
+	})
+
+	t.Run("Start propagates doStartLocked error", func(t *testing.T) {
+		// Exercises the error propagation in Start() at line 107-109.
+		op := &operator{
+			serviceType: metadata.ServiceType_LOG,
+			state:       started,
+		}
+		c := &cluster{
+			state:    stopped,
+			services: []*operator{op},
+		}
+		err := c.Start()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "already started")
+	})
+
+	t.Run("Start rejects double start", func(t *testing.T) {
+		c := &cluster{state: started}
+		err := c.Start()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "embed mo cluster already started")
+	})
+
+	t.Run("happy path with no services", func(t *testing.T) {
+		c := &cluster{
+			state:    stopped,
+			services: []*operator{},
+		}
+		err := c.doStartLocked(0)
+		assert.NoError(t, err)
+	})
 }

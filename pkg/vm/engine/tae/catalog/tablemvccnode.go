@@ -58,6 +58,10 @@ func (e *TableMVCCNode) Update(un *TableMVCCNode) {
 	e.TombstoneSchema = GetTombstoneSchema(un.Schema)
 }
 
+func (e *TableMVCCNode) ApproxSize() int64 {
+	return e.Schema.ApproxSize()
+}
+
 func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var schemaBuf []byte
 	if schemaBuf, err = e.Schema.Marshal(); err != nil {
@@ -88,6 +92,10 @@ func (node *TableNode) WriteTo(w io.Writer) (n int64, err error) {
 	// do not writeTo inherit from mvvcnode in replay phrase
 	// reference: function onReplayCreateTable and onReplayUpdateTable
 	return
+}
+
+func (node *TableNode) ApproxSize() int64 {
+	return 0
 }
 
 func (node *TableNode) ReadFrom(r io.Reader) (n int64, err error) {

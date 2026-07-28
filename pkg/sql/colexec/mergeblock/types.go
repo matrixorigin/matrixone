@@ -151,10 +151,10 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(
 		typs = append(typs, types.T_binary.ToType())
 	}
 
-	bat := batch.NewWithSize(len(attrs))
+	bat := batch.NewOffHeapWithSize(len(attrs))
 	bat.Attrs = attrs
 	for idx := 0; idx < len(attrs); idx++ {
-		bat.Vecs[idx] = vector.NewVec(typs[idx])
+		bat.Vecs[idx] = vector.NewOffHeapVecWithType(typs[idx])
 	}
 	mergeBlock.container.mp[0] = bat
 
@@ -213,12 +213,13 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 			// comes from old version cn
-			objStats, objDataMeta, err = disttae.ConstructObjStatsByLoadObjMeta(newCtx, blkInfo.MetaLocation(), fs)
+			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+				objStats, objDataMeta, err = disttae.ConstructObjStatsByLoadObjMeta(newCtx, blkInfo.MetaLocation(), fs)
+				return err
+			})
 			if err != nil {
 				return err
 			}
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddDiskIO(crs)
 
 			vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
 		} else {

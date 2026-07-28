@@ -26,11 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 /*
@@ -38,9 +39,9 @@ fuzzyCheck use to contains some info to run a background SQL when
 fuzzy filter can not draw a definite conclusion for duplicate check
 */
 
-func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
-	tblName := n.TableDef.GetName()
-	dbName := n.ObjRef.GetSchemaName()
+func newFuzzyCheck(node *plan.Node) (*fuzzyCheck, error) {
+	tblName := node.TableDef.GetName()
+	dbName := node.ObjRef.GetSchemaName()
 
 	if tblName == "" || dbName == "" {
 		return nil, moerr.NewInternalErrorNoCtx("fuzzyfilter failed to get the db/tbl name")
@@ -49,36 +50,36 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	f := reuse.Alloc[fuzzyCheck](nil)
 	f.tbl = tblName
 	f.db = dbName
-	f.attr = n.TableDef.Pkey.PkeyColName
+	f.attr = node.TableDef.Pkey.PkeyColName
 
-	for _, c := range n.TableDef.Cols {
-		if c.Name == n.TableDef.Pkey.PkeyColName {
+	for _, c := range node.TableDef.Cols {
+		if c.Name == node.TableDef.Pkey.PkeyColName {
 			f.col = c
 		}
 	}
 
 	// compound key could be primary key(a, b, c...) or unique key(a, b, c ...)
 	// for Decimal type, we need colDef to get the scale
-	if n.TableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+	if node.TableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		f.isCompound = true
-		f.compoundCols = f.sortColDef(n.TableDef.Pkey.Names, n.TableDef.Cols)
+		f.compoundCols = f.sortColDef(node.TableDef.Pkey.Names, node.TableDef.Cols)
 	}
 
 	// for the case like create unique index for existed table,
 	// We can only get the table definition of the hidden table.
 	// How the original table defines this unique index (for example, which columns are used and whether it is composite) can NOT be confirmed,
 	// that introduces some strange logic, and obscures the meaning of some fields, such as fuzzyCheck.isCompound
-	if catalog.IsHiddenTable(tblName) && n.Fuzzymessage == nil {
+	if catalog.IsHiddenTable(tblName) && node.Fuzzymessage == nil {
 		f.onlyInsertHidden = true
 	}
 
-	if n.Fuzzymessage != nil {
-		if len(n.Fuzzymessage.ParentUniqueCols) > 1 {
+	if node.Fuzzymessage != nil {
+		if len(node.Fuzzymessage.ParentUniqueCols) > 1 {
 			f.isCompound = true
-			f.tbl = n.Fuzzymessage.ParentTableName
-			f.compoundCols = n.Fuzzymessage.ParentUniqueCols
+			f.tbl = node.Fuzzymessage.ParentTableName
+			f.compoundCols = node.Fuzzymessage.ParentUniqueCols
 		} else {
-			f.col = n.Fuzzymessage.ParentUniqueCols[0]
+			f.col = node.Fuzzymessage.ParentUniqueCols[0]
 		}
 	}
 
@@ -139,6 +140,18 @@ func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
 	collision, err = f.genCollsionKeys(toCheck)
 	if err != nil {
 		return err
+	}
+
+	// Update cnt to reflect actual non-NULL collision keys.
+	// When all values are NULL, cnt becomes 0 and backgroundSQLCheck
+	// is skipped by the caller (compile.go checks f.cnt > 0).
+	if len(collision) > 0 {
+		f.cnt = len(collision[0])
+	} else {
+		f.cnt = 0
+	}
+	if f.cnt == 0 {
+		return nil
 	}
 
 	// generate codition used in background SQL
@@ -217,11 +230,18 @@ func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) e
 		if err != nil {
 			return err
 		}
-		for _, k := range pkey {
+		for i, k := range pkey {
+			// SQL standard: NULL != NULL, skip NULLs from duplicate check
+			if toCheck.GetNulls().Contains(uint64(i)) {
+				continue
+			}
 			kcnt[k]++
 		}
 	} else {
 		for i := 0; i < toCheck.Length(); i++ {
+			if toCheck.GetNulls().Contains(uint64(i)) {
+				continue
+			}
 			b := toCheck.GetRawBytesAt(i)
 			t, err := types.Unpack(b)
 			if err != nil {
@@ -269,19 +289,26 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 			if err != nil {
 				return nil, err
 			}
-			keys[0] = pkey
-		} else {
-			scales := make([]int32, len(f.compoundCols))
-			for i, c := range f.compoundCols {
-				scales[i] = c.Typ.Scale
+			// Skip NULL values - they cannot be duplicates per SQL standard
+			for i, k := range pkey {
+				if !toCheck.GetNulls().Contains(uint64(i)) {
+					keys[0] = append(keys[0], k)
+				}
 			}
+		} else {
 			for i := 0; i < toCheck.Length(); i++ {
+				if toCheck.GetNulls().Contains(uint64(i)) {
+					continue
+				}
 				b := toCheck.GetRawBytesAt(i)
 				t, err := types.Unpack(b)
 				if err != nil {
 					return nil, err
 				}
-				s := t.SQLStrings(scales)
+				s, err := f.formatCompoundCollisionKey(t)
+				if err != nil {
+					return nil, err
+				}
 				for j := 0; j < len(s); j++ {
 					keys[j] = append(keys[j], s[j])
 				}
@@ -296,6 +323,42 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 	}
 
 	return keys, nil
+}
+
+func (f *fuzzyCheck) formatCompoundCollisionKey(t types.Tuple) ([]string, error) {
+	if len(t) != len(f.compoundCols) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"compound key width %d does not match column count %d",
+			len(t), len(f.compoundCols),
+		)
+	}
+
+	scales := make([]int32, len(f.compoundCols))
+	for i, c := range f.compoundCols {
+		if c == nil {
+			return nil, moerr.NewInternalErrorNoCtx("compoundCols should not have nil element")
+		}
+		scales[i] = c.Typ.Scale
+	}
+
+	values := t.SQLStrings(scales)
+	for i, c := range f.compoundCols {
+		if fuzzyCheckSQLValueNeedsQuote(types.T(c.Typ.Id)) {
+			values[i] = sqlquote.String(values[i])
+		}
+	}
+	return values, nil
+}
+
+func fuzzyCheckSQLValueNeedsQuote(typ types.T) bool {
+	switch typ {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+		types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_text, types.T_blob, types.T_uuid, types.T_datalink:
+		return true
+	default:
+		return false
+	}
 }
 
 // backgroundSQLCheck launches a background SQL to check if there are any duplicates
@@ -317,7 +380,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 		duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
 	}
 
-	res, err := c.runSqlWithResult(duplicateCheckSql, NoAccountId)
+	res, err := c.runSqlWithResultAndOptions(duplicateCheckSql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		c.debugLogFor19288(err, duplicateCheckSql)
 		c.proc.Errorf(c.proc.Ctx, "The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)
@@ -404,16 +467,16 @@ func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 	// background SQL condition should be b='ab' instead of b=ab, as well as time types
 	switch typ.Oid {
 	// date and time
-	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year:
 		for i, str := range ss {
-			ss[i] = strconv.Quote(str)
+			ss[i] = sqlquote.String(str)
 		}
 		return ss, nil
 
 	// string family but not include binary
 	case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid, types.T_binary, types.T_datalink:
 		for i, str := range ss {
-			ss[i] = strconv.Quote(str)
+			ss[i] = sqlquote.String(str)
 		}
 		return ss, nil
 	default:
@@ -422,7 +485,7 @@ func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 }
 
 func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
-	if nulls.Any(vec.GetNulls()) {
+	if vec.GetNulls().Contains(uint64(rowIndex)) {
 		return "", nil
 	}
 	switch vec.GetType().Oid {
@@ -486,8 +549,11 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 	case types.T_datetime:
 		val := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIndex)
 		return val.String2(vec.GetType().Scale), nil
+	case types.T_year:
+		val := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIndex)
+		return val.String(), nil
 	case types.T_enum:
-		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[uint16](vec, rowIndex)), nil
+		return fmt.Sprintf("%v", vector.GetFixedAtNoTypeCheck[types.Enum](vec, rowIndex)), nil
 	default:
 		return "", moerr.NewInternalErrorNoCtxf("fuzzy filter can not parse correct string for type id : %d", vec.GetType().Oid)
 	}

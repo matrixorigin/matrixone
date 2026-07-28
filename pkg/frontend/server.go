@@ -17,9 +17,11 @@ package frontend
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,10 +29,15 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -41,16 +48,20 @@ var initConnectionID uint32 = 1000
 // ConnIDAllocKey is used get connection ID from HAKeeper.
 var ConnIDAllocKey = "____server_conn_id"
 
+const (
+	clientDisconnectProbeInterval = 5 * time.Second
+	clientDisconnectProbeGrace    = 30 * time.Second
+)
+
 // MOServer MatrixOne Server
 type MOServer struct {
-	addr        string
-	uaddr       string
-	rm          *RoutineManager
-	readTimeout time.Duration
-	handler     func(*Conn, []byte) error
-	mu          sync.RWMutex
-	wg          sync.WaitGroup
-	running     bool
+	addr    string
+	uaddr   string
+	rm      *RoutineManager
+	handler func(*Conn, []byte) error
+	mu      sync.RWMutex
+	wg      sync.WaitGroup
+	running bool
 
 	pu        *config.ParameterUnit
 	listeners []net.Listener
@@ -88,9 +99,31 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
 	mo.running = true
+	mo.startTempTableGC(24 * time.Hour)
+	mo.startConnectionLivenessMonitor()
 	mo.startListener()
 	setMoServerStarted(mo.service, true)
 	return nil
+}
+
+func (mo *MOServer) startConnectionLivenessMonitor() {
+	if mo == nil || mo.rm == nil || mo.rm.ctx == nil {
+		return
+	}
+	mo.wg.Add(1)
+	go func() {
+		defer mo.wg.Done()
+		ticker := time.NewTicker(clientDisconnectProbeInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-mo.rm.ctx.Done():
+				return
+			case now := <-ticker.C:
+				mo.rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, connectionPeerClosed)
+			}
+		}
+	}()
 }
 
 func (mo *MOServer) Stop() error {
@@ -102,24 +135,23 @@ func (mo *MOServer) Stop() error {
 	mo.running = false
 	mo.mu.Unlock()
 
-	var errors []error
+	var err error
 	for _, listener := range mo.listeners {
-		if err := listener.Close(); err != nil {
-			errors = append(errors, err)
-		}
-	}
-	if len(errors) > 0 {
-		return errors[0]
+		err = errors.Join(err, listener.Close())
 	}
 
 	logutil.Debug("application listener closed")
+
+	// Cancel context first to allow goroutines (like startTempTableGC) to exit,
+	// then wait for them to complete. This prevents deadlock where wg.Wait()
+	// blocks while goroutines wait for ctx.Done().
+	mo.rm.cancelCtx()
 	mo.wg.Wait()
 
-	mo.rm.cancelCtx()
 	mo.rm.killNetConns()
 
 	logutil.Debug("application stopped")
-	return nil
+	return err
 }
 
 func (mo *MOServer) IsRunning() bool {
@@ -177,15 +209,130 @@ func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 		go mo.handleConn(ctx, conn)
 	}
 }
+
+func (mo *MOServer) cleanOrphanTempTables() error {
+	if mo.pu == nil || mo.pu.StorageEngine == nil || mo.pu.TxnClient == nil {
+		return nil
+	}
+	if mo.rm == nil || mo.rm.sessionManager == nil {
+		return nil
+	}
+
+	var (
+		ctx    = mo.rm.ctx
+		cancel context.CancelFunc
+	)
+
+	if ctx == nil {
+		return nil
+	}
+
+	ctx, cancel = context.WithTimeoutCause(ctx, time.Second*60, context.DeadlineExceeded)
+	defer func() {
+		cancel()
+	}()
+
+	if _, ok := moruntime.ServiceRuntime(mo.service).GetGlobalVariables(moruntime.InternalSQLExecutor); !ok {
+		logutil.Warn("temp-table-cleanup: internal sql executor not ready")
+		return nil
+	}
+
+	candidates, err := mo.queryTempTables(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	activeSessions := mo.rm.sessionManager.GetAllSessions()
+	activeSet := make(map[string]struct{}, len(activeSessions))
+	for _, ss := range activeSessions {
+		// temp table names strip '-' from session UUID; normalize here as well.
+		activeSet[strings.ReplaceAll(ss.GetUUIDString(), "-", "")] = struct{}{}
+	}
+
+	for _, tbl := range candidates {
+		dbName, name := tbl.db, tbl.name
+		parts := strings.SplitN(strings.TrimPrefix(name, defines.TempTableNamePrefix), "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		if _, ok := activeSet[parts[0]]; ok {
+			continue
+		}
+		dropSQL := fmt.Sprintf("drop table if exists `%s`.`%s`", dbName, name)
+		res, err := iscp.ExecWithResult(ctx, dropSQL, mo.service, nil)
+		if err != nil {
+			logutil.Warnf("temp-table-cleanup: drop %s.%s failed: %v", dbName, name, err)
+			continue
+		}
+		res.Close()
+	}
+	return nil
+}
+
+type tempTableEntry struct {
+	db   string
+	name string
+}
+
+func (mo *MOServer) queryTempTables(ctx context.Context, txnOp client.TxnOperator) ([]tempTableEntry, error) {
+	sql := "select reldatabase, relname from mo_catalog.mo_tables where relkind = 'temporary_table'"
+	res, err := iscp.ExecWithResult(ctx, sql, mo.service, txnOp)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+
+	var entries []tempTableEntry
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		dbs := executor.GetStringRows(cols[0])
+		names := executor.GetStringRows(cols[1])
+		for i := range dbs {
+			name := names[i]
+			if !defines.IsTempTableName(name) {
+				continue
+			}
+			entries = append(entries, tempTableEntry{db: dbs[i], name: name})
+		}
+		return true
+	})
+	return entries, nil
+}
+
+func (mo *MOServer) startTempTableGC(interval time.Duration) {
+	if mo == nil || mo.rm == nil || mo.rm.ctx == nil {
+		logutil.Infof("temp table gc not started")
+		return
+	}
+	logutil.Infof("temp table gc started")
+	ctx := mo.rm.ctx
+	ticker := time.NewTicker(interval)
+	mo.wg.Add(1)
+	go func() {
+		defer mo.wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				_, _ = ExecuteFuncWithRecover(func() error {
+					if err := mo.cleanOrphanTempTables(); err != nil {
+						logutil.Warnf("temp table gc failed: %v", err)
+					}
+					return nil
+				})
+			}
+		}
+	}()
+}
+
 func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 	var rs *Conn
 	var err error
 	defer func() {
 		if rs != nil {
-			err = rs.Close()
-			if err != nil {
-				logutil.Error("Handle conn error", zap.Error(err))
-				return
+			if err := rs.Close(); err != nil {
+				logutil.LogConnectionCloseError("Close conn error", err)
 			}
 		}
 	}()
@@ -210,7 +357,7 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 
 func (mo *MOServer) handleLoop(ctx context.Context, rs *Conn) {
 	if err := mo.handleMessage(ctx, rs); err != nil {
-		logutil.Error("handle session failed", zap.Error(err))
+		logutil.LogConnectionCloseError("handle session failed", err)
 	}
 }
 
@@ -303,12 +450,13 @@ func (mo *MOServer) handshake(rs *Conn) error {
 				if err := protocol.Authenticate(tempCtx); err != nil {
 					return moerr.AttachCause(tempCtx, err)
 				}
+				mo.applyInteractiveWaitTimeout(tempCtx, ses, protocol)
 				protocol.SetBool(TLS_ESTABLISHED, true)
 				protocol.SetBool(ESTABLISHED, true)
 			}
 		} else {
 			ses.Debugf(tempCtx, "handleHandshake")
-			_, err = protocol.HandleHandshake(tempCtx, payload)
+			isTlsHeader, err = protocol.HandleHandshake(tempCtx, payload)
 			if err != nil {
 				err = moerr.AttachCause(tempCtx, err)
 				ses.Error(tempCtx,
@@ -316,10 +464,40 @@ func (mo *MOServer) handshake(rs *Conn) error {
 					zap.Error(err))
 				return err
 			}
-			if err = protocol.Authenticate(tempCtx); err != nil {
-				return moerr.AttachCause(tempCtx, err)
+			if isTlsHeader {
+				ts[TSUpgradeTLSStart] = time.Now()
+				ses.Debugf(tempCtx, "upgrade to TLS")
+				// do upgradeTls
+				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
+				ses.Debugf(tempCtx, "get TLS conn ok")
+				tlsCtx, cancelFun := context.WithTimeoutCause(tempCtx, 20*time.Second, moerr.CauseHandshake2)
+				if err = tlsConn.HandshakeContext(tlsCtx); err != nil {
+					err = moerr.AttachCause(tlsCtx, err)
+					ses.Error(tempCtx,
+						"Error occurred before cancel()",
+						zap.Error(err))
+					cancelFun()
+					ses.Error(tempCtx,
+						"Error occurred after cancel()",
+						zap.Error(err))
+					return err
+				}
+				cancelFun()
+				ses.Debugf(tempCtx, "TLS handshake ok")
+				rs.UseConn(tlsConn)
+				ses.Debugf(tempCtx, "TLS handshake finished")
+
+				// tls upgradeOk
+				protocol.SetBool(TLS_ESTABLISHED, true)
+				ts[TSUpgradeTLSEnd] = time.Now()
+				v2.UpgradeTLSDurationHistogram.Observe(ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).Seconds())
+			} else {
+				if err = protocol.Authenticate(tempCtx); err != nil {
+					return moerr.AttachCause(tempCtx, err)
+				}
+				mo.applyInteractiveWaitTimeout(tempCtx, ses, protocol)
+				protocol.SetBool(ESTABLISHED, true)
 			}
-			protocol.SetBool(ESTABLISHED, true)
 		}
 		ts[TSEstablishEnd] = time.Now()
 		v2.EstablishDurationHistogram.Observe(ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).Seconds())
@@ -398,12 +576,38 @@ func setPu(service string, pu *config.ParameterUnit) {
 	getServerLevelVars(service).Pu.Store(pu)
 }
 
+func publishPuIfAbsent(service string, pu *config.ParameterUnit) *config.ParameterUnit {
+	InitServerLevelVars(service)
+	vars := getServerLevelVars(service)
+	if vars.Pu.CompareAndSwap(nil, pu) {
+		return pu
+	}
+	return vars.Pu.Load().(*config.ParameterUnit)
+}
+
 func SetPUForExternalUT(service string, pu *config.ParameterUnit) {
 	setPu(service, pu)
 }
 
+func getPuIfPresent(service string) *config.ParameterUnit {
+	vars := getServerLevelVars(service)
+	if vars == nil {
+		return nil
+	}
+	value := vars.Pu.Load()
+	if value == nil {
+		return nil
+	}
+	pu, _ := value.(*config.ParameterUnit)
+	return pu
+}
+
 func getPu(service string) *config.ParameterUnit {
-	return getServerLevelVars(service).Pu.Load().(*config.ParameterUnit)
+	pu := getPuIfPresent(service)
+	if pu == nil {
+		panic("parameter unit is not initialized")
+	}
+	return pu
 }
 
 func setAicm(service string, aicm *defines.AutoIncrCacheManager) {
@@ -457,13 +661,12 @@ func NewMOServer(
 	// TODO asyncFlushBatch
 	unixAddr := pu.SV.GetUnixSocketAddress()
 	mo := &MOServer{
-		addr:        addr,
-		uaddr:       pu.SV.UnixSocketAddress,
-		rm:          rm,
-		readTimeout: pu.SV.SessionTimeout.Duration,
-		pu:          pu,
-		handler:     rm.Handler,
-		service:     service,
+		addr:    addr,
+		uaddr:   pu.SV.UnixSocketAddress,
+		rm:      rm,
+		pu:      pu,
+		handler: rm.Handler,
+		service: service,
 	}
 	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -498,8 +701,7 @@ func (mo *MOServer) handleMessage(ctx context.Context, rs *Conn) error {
 				return nil
 			}
 
-			logutil.Error("session read failed",
-				zap.Error(err))
+			logutil.LogConnectionCloseError("session read failed", err)
 			return err
 		}
 	}
@@ -513,14 +715,14 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 		return io.EOF
 	}
 
+	mo.applyIdleTimeout(rs)
 	msg, err = rs.Read()
 	if err != nil {
 		if err == io.EOF {
 			return err
 		}
 
-		logutil.Error("session read failed",
-			zap.Error(err))
+		logutil.LogConnectionCloseError("session read failed", err)
 		return err
 	}
 
@@ -529,9 +731,50 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 		if skipClientQuit(err.Error()) {
 			return nil
 		} else {
-			logutil.Error("session handle failed, close this session", zap.Error(err))
+			logutil.LogConnectionCloseError("session handle failed, close this session", err)
 		}
 		return err
 	}
 	return nil
+}
+
+func (mo *MOServer) applyIdleTimeout(rs *Conn) {
+	rm := mo.rm
+	if rm == nil {
+		return
+	}
+	routine := rm.getRoutine(rs)
+	if routine == nil {
+		return
+	}
+	ses := routine.getSession()
+	if ses == nil {
+		return
+	}
+	val, err := ses.GetSessionSysVar("wait_timeout")
+	if err != nil {
+		return
+	}
+	timeoutSec, ok := val.(int64)
+	if !ok {
+		return
+	}
+	if timeoutSec <= 0 {
+		rs.SetTimeout(0)
+		return
+	}
+	rs.SetTimeout(time.Duration(timeoutSec) * time.Second)
+}
+
+func (mo *MOServer) applyInteractiveWaitTimeout(ctx context.Context, ses *Session, protocol MysqlRrWr) {
+	if protocol.GetU32(CAPABILITY)&CLIENT_INTERACTIVE == 0 {
+		return
+	}
+	val, err := ses.GetSessionSysVar("interactive_timeout")
+	if err != nil {
+		return
+	}
+	if err = ses.SetSessionSysVar(ctx, "wait_timeout", val); err != nil {
+		ses.Errorf(ctx, "set wait_timeout from interactive_timeout failed: %v", err)
+	}
 }

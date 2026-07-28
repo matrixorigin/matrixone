@@ -229,7 +229,7 @@ func (b *bufferHolder) loopAggr() {
 		return
 	}
 	counter := v2.GetTraceMOLoggerAggrCounter(b.name)
-	logutil.Info("handle-aggr-start")
+	logutil.Info("logger.aggr.start")
 mainL:
 	for {
 		select {
@@ -245,9 +245,8 @@ mainL:
 			recordCnt += len(results)
 			if time.Since(lastPrintTime) > printInterval {
 				logutil.Info(
-					"handle-aggr",
-					zap.Int("records", recordCnt),
-					zap.Time("end", end),
+					"logger.aggr.handle.count",
+					zap.Int("count", recordCnt),
 				)
 				recordCnt = 0
 				lastPrintTime = time.Now()
@@ -256,14 +255,14 @@ mainL:
 
 		case <-b.bgCtx.Done():
 			// trigger by b.bgCancel
-			logger.Info("handle-aggr-bgctx-done")
+			logger.Info("logger.aggr.bgctx.done")
 			break mainL
 		case <-b.ctx.Done():
-			logutil.Info("handle-aggr-ctx-done")
+			logutil.Info("logger.aggr.ctx.done")
 			break mainL
 		}
 	}
-	logutil.Info("handle-aggr-exit")
+	logutil.Info("logger.aggr.exit")
 }
 
 var _ generateReq = (*bufferGenerateReq)(nil)
@@ -443,8 +442,6 @@ func NewMOCollector(
 	return c
 }
 
-const maxPercentValue = 1000
-
 // calculateDefaultWorker
 // totalNum = int( #cpu * 0.1 + 0.5 )
 // default collectorCntP : generatorCntP : exporterCntP = 10 : 20 : 80.
@@ -460,10 +457,16 @@ const maxPercentValue = 1000
 func (c *MOCollector) calculateDefaultWorker(numCpu int) {
 	var totalNum = math.Ceil(float64(numCpu) * 0.1)
 	unit := float64(totalNum) / (100.0)
-	// set default value if non-set
-	c.collectorCnt = int(math.Round(unit * float64(c.collectorCntP)))
-	c.generatorCnt = int(math.Round(unit * float64(c.generatorCntP)))
-	c.exporterCnt = int(math.Round(unit * float64(c.exporterCntP)))
+	// set default value if non-set; explicit cnt (set via WithCollectorCnt/etc.) wins.
+	if c.collectorCnt <= 0 {
+		c.collectorCnt = int(math.Round(unit * float64(c.collectorCntP)))
+	}
+	if c.generatorCnt <= 0 {
+		c.generatorCnt = int(math.Round(unit * float64(c.generatorCntP)))
+	}
+	if c.exporterCnt <= 0 {
+		c.exporterCnt = int(math.Round(unit * float64(c.exporterCntP)))
+	}
 	if c.collectorCnt <= 0 {
 		c.collectorCnt = 1
 	}
@@ -484,17 +487,6 @@ func (c *MOCollector) calculateDefaultWorker(numCpu int) {
 	if c.exporterCnt > numCpu {
 		c.exporterCnt = numCpu
 	}
-
-	// last check: disable calculation
-	if c.collectorCnt >= maxPercentValue {
-		c.collectorCnt = numCpu
-	}
-	if c.generatorCntP >= maxPercentValue {
-		c.generatorCnt = numCpu
-	}
-	if c.exporterCnt >= maxPercentValue {
-		c.generatorCnt = numCpu
-	}
 }
 
 func WithCollectorCntP(p int) MOCollectorOption {
@@ -505,6 +497,19 @@ func WithGeneratorCntP(p int) MOCollectorOption {
 }
 func WithExporterCntP(p int) MOCollectorOption {
 	return MOCollectorOption(func(c *MOCollector) { c.exporterCntP = p })
+}
+
+// WithCollectorCnt sets the collector worker count directly, bypassing the
+// percent-based calculation. Mainly useful for tests that need deterministic
+// worker counts independent of runtime.NumCPU().
+func WithCollectorCnt(n int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.collectorCnt = n })
+}
+func WithGeneratorCnt(n int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.generatorCnt = n })
+}
+func WithExporterCnt(n int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.exporterCnt = n })
 }
 
 func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {

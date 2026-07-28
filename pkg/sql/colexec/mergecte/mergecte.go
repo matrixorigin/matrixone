@@ -121,7 +121,15 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 					mergeCTE.ctr.last = true
 					mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
 					mergeCTE.ctr.recursiveLevel++
-					if mergeCTE.ctr.recursiveLevel > moDefaultRecursionMax {
+					maxRecursion := moDefaultRecursionMax
+					if resolveFunc := proc.GetResolveVariableFunc(); resolveFunc != nil {
+						if val, err := resolveFunc("cte_max_recursion_depth", true, false); err == nil {
+							if v, ok := val.(int64); ok {
+								maxRecursion = int(v)
+							}
+						}
+					}
+					if mergeCTE.ctr.recursiveLevel > maxRecursion {
 						result.Status = vm.ExecStop
 						return result, moerr.NewCheckRecursiveLevel(proc.Ctx)
 					}

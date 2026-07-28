@@ -120,6 +120,9 @@ message SyncLogTailResp {
 // tae/rpc/handle.go/HandlePreCommit function
 message PrecommitWriteCmd {
     repeated Entry entry_list = 1;
+    // Job ID for sync protection validation during CCPR commits.
+    // When non-empty, TN validates the sync protection is still valid at prepareTS.
+    string sync_protection_job_id = 2;
 };
 
 // CN--->TN, DDL
@@ -241,6 +244,11 @@ message Entry {
     Batch bat            = 7;
     // whether TN do the PK uniqueness check against txn's workspace or not.
     int32 pk_check_by_tn = 8;
+    // AUTO_INCREMENT epoch used by the CN when planning this write.
+    // Consult auto_incr_epoch_known because zero is a valid initial epoch.
+    uint32 auto_incr_epoch = 9;
+    // whether auto_incr_epoch was supplied by an epoch-aware CN.
+    bool auto_incr_epoch_known = 10;
 };
 
 // There are two kinds of checkpoint: delta checkpoint and base checkpoint,
@@ -293,6 +301,7 @@ enum AlterKind {
     AddPartition     = 7;
     RenameColumn     = 8;
     ReplaceDef       = 9;
+    UpdateAutoIncrement = 10;
 }
 
 message AlterTablePolicy {
@@ -337,6 +346,11 @@ message AlterTableDropColumn {
     uint32 sequence_num = 2;  // used to double check
 }
 
+message AlterTableAutoIncrement {
+    uint64 offset = 1;
+    uint32 epoch = 2;
+}
+
 message AlterTableReq {
     uint64 table_id = 1;
     uint64 db_id    = 2;
@@ -351,6 +365,7 @@ message AlterTableReq {
         AlterTablePolicy update_policy       = 9;
         AlterTableRenameCol rename_col       = 11;
         AlterTableReplaceDef replace_def     = 12;
+        AlterTableAutoIncrement update_auto_increment = 13;
     }
 }
 
@@ -380,6 +395,11 @@ message SchemaExtra {
     uint64 FeatureFlag = 12;
     repeated uint64 IndexTables = 13;
     uint64 ParentTableID = 14;
+    // mark if table is created by publication (CCPR), should skip merge
+    bool FromPublication = 15;
+    uint64 auto_incr_offset = 16;
+    // Advances only when AUTO_INCREMENT allocation is reset.
+    uint32 auto_incr_epoch = 17;
 }
 
 // Int64Map mainly used in unit test

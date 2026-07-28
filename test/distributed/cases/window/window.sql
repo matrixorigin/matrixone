@@ -69,7 +69,158 @@ select a, dense_rank() over () from t1;
 select a, b, c, dense_rank() over (partition by a, b order by c) from t1;
 select a, c, dense_rank() over(partition by a order by c rows current row) from t1;
 select a, c, rank() over(order by a), row_number() over(order by a), dense_rank() over(order by a) from t1;
+-- percent_rank tests
+select a, c, percent_rank() over (partition by a order by c) from t1;
+select a, percent_rank() over (partition by a) from t1;
+select a, percent_rank() over () from t1;
+select a, b, c, percent_rank() over (partition by a, b order by c) from t1;
+select a, c, percent_rank() over(order by a), rank() over(order by a), dense_rank() over(order by a) from t1;
+select a, c, percent_rank() over (order by c desc) from t1;
+select a, c, percent_rank() over (partition by a order by c desc) from t1;
+-- percent_rank: multi-column order by
+select a, b, c, percent_rank() over (order by a, c) from t1;
+-- percent_rank: expression in order by
+select a, b, percent_rank() over (order by a + b) from t1;
 drop table t1;
+
+-- percent_rank: NULL handling
+drop table if exists t2;
+create table t2 (a int, b int);
+insert into t2 values(1, 1), (2, NULL), (3, 2), (4, NULL), (5, 3);
+select a, b, percent_rank() over (order by b) from t2;
+select a, b, percent_rank() over (partition by b order by a) from t2;
+drop table t2;
+
+-- percent_rank: duplicate values
+drop table if exists t3;
+create table t3 (a int, b int);
+insert into t3 values(1, 1), (2, 1), (3, 1), (4, 2), (5, 2);
+select a, b, percent_rank() over (order by b) from t3;
+drop table t3;
+
+-- percent_rank: single row partition
+drop table if exists t4;
+create table t4 (a int, b int);
+insert into t4 values(1, 1), (2, 2), (3, 3);
+select a, b, percent_rank() over (partition by a order by b) from t4;
+drop table t4;
+
+-- percent_rank: empty table
+drop table if exists t5;
+create table t5 (a int, b int);
+select a, b, percent_rank() over (order by a) from t5;
+drop table t5;
+
+-- window function with ORDER BY on varchar
+drop table if exists window_order_by_name_case;
+create table window_order_by_name_case (id int, name varchar(20), score int);
+insert into window_order_by_name_case values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
+select id, name, percent_rank() over (order by name) from window_order_by_name_case;
+select id, name, rank() over (order by name) from window_order_by_name_case;
+select id, name, dense_rank() over (order by name) from window_order_by_name_case;
+select id, name, row_number() over (order by name) from window_order_by_name_case;
+select id, name, percent_rank() over (partition by score order by name) from window_order_by_name_case;
+select id, name, score, percent_rank() over (order by name, score) from window_order_by_name_case;
+drop table window_order_by_name_case;
+
+-- test cume_dist
+drop table if exists t1;
+create table t1 (a int, b int);
+insert into t1 values(1, 1), (1, 2), (2, 1), (2, 2), (2, 3);
+select a, b, cume_dist() over (order by a) from t1;
+select a, b, cume_dist() over (order by b) from t1;
+select a, b, cume_dist() over (partition by a order by b) from t1;
+select a, cume_dist() over () from t1;
+drop table t1;
+
+-- test cume_dist: edge cases
+drop table if exists t2;
+create table t2 (a int, b int);
+select a, b, cume_dist() over (order by a) from t2;
+insert into t2 values(1, 1);
+select a, b, cume_dist() over (order by a) from t2;
+insert into t2 values(1, 1), (1, 1), (1, 1);
+select a, b, cume_dist() over (order by a) from t2;
+drop table t2;
+
+-- test cume_dist: NULL handling
+drop table if exists t3;
+create table t3 (a int, b int);
+insert into t3 values(1, 1), (2, NULL), (3, 3), (NULL, 4), (5, NULL);
+select a, b, cume_dist() over (order by a) from t3;
+select a, b, cume_dist() over (order by b) from t3;
+select a, b, cume_dist() over (partition by a order by b) from t3;
+drop table t3;
+
+-- test cume_dist: string type
+drop table if exists t4;
+create table t4 (name varchar(20), score int);
+insert into t4 values('Alice', 90), ('Bob', 85), ('Charlie', 90), ('David', 75), ('Eve', 85);
+select name, score, cume_dist() over (order by name) from t4;
+select name, score, cume_dist() over (order by score) from t4;
+select name, score, cume_dist() over (partition by score order by name) from t4;
+drop table t4;
+
+-- test cume_dist: date type
+drop table if exists t5;
+create table t5 (id int, dt date);
+insert into t5 values(1, '2024-01-01'), (2, '2024-01-01'), (3, '2024-02-01'), (4, '2024-03-01'), (5, '2024-02-01');
+select id, dt, cume_dist() over (order by dt) from t5;
+select id, dt, cume_dist() over (partition by dt order by id) from t5;
+drop table t5;
+
+-- test cume_dist: DESC order
+drop table if exists t6;
+create table t6 (a int, b int);
+insert into t6 values(1, 10), (2, 20), (3, 30), (4, 20), (5, 10);
+select a, b, cume_dist() over (order by b desc) from t6;
+select a, b, cume_dist() over (partition by b order by a desc) from t6;
+drop table t6;
+
+-- test cume_dist: multiple columns order by
+drop table if exists t7;
+create table t7 (a int, b int, c int);
+insert into t7 values(1, 1, 1), (1, 2, 1), (1, 1, 2), (2, 1, 1), (2, 2, 2);
+select a, b, c, cume_dist() over (order by a, b) from t7;
+select a, b, c, cume_dist() over (order by a desc, b asc) from t7;
+select a, b, c, cume_dist() over (partition by a order by b, c) from t7;
+drop table t7;
+
+-- test cume_dist: with other window functions
+drop table if exists t8;
+create table t8 (a int, b int);
+insert into t8 values(1, 10), (1, 20), (2, 10), (2, 20), (2, 30);
+select a, b, 
+    row_number() over (order by b) as rn,
+    rank() over (order by b) as rnk,
+    dense_rank() over (order by b) as drnk,
+    cume_dist() over (order by b) as cdist
+from t8;
+select a, b,
+    rank() over (partition by a order by b) as rnk,
+    cume_dist() over (partition by a order by b) as cdist
+from t8;
+drop table t8;
+
+-- test cume_dist: larger dataset
+drop table if exists t9;
+create table t9 (id int, category int, value int);
+insert into t9 values
+(1, 1, 100), (2, 1, 200), (3, 1, 100), (4, 1, 300),
+(5, 2, 150), (6, 2, 150), (7, 2, 250), (8, 2, 150),
+(9, 3, 100), (10, 3, 200), (11, 3, 300), (12, 3, 400);
+select id, category, value, cume_dist() over (order by value) from t9;
+select id, category, value, cume_dist() over (partition by category order by value) from t9;
+drop table t9;
+
+-- test cume_dist: float type
+drop table if exists t10;
+create table t10 (a float, b double);
+insert into t10 values(1.1, 2.2), (1.1, 3.3), (2.2, 2.2), (3.3, 1.1);
+select a, b, cume_dist() over (order by a) from t10;
+select a, b, cume_dist() over (order by b) from t10;
+select a, b, cume_dist() over (partition by a order by b) from t10;
+drop table t10;
 
 drop table if exists t1;
 create table t1 (a int, b decimal(7, 2));
@@ -387,9 +538,7 @@ select * from decimal01;
 select max(d) over (partition by d order by d) from decimal01;
 select min(d) over (partition by d order by d) from decimal01;
 select avg(d) over (partition by d) from decimal01;
--- @bvt:issue#10043
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
--- @bvt:issue
 drop table decimal01;
 
 -- partition by and order by follows date
@@ -683,7 +832,7 @@ from dense_rank01 natural join dense_rank02;
 
 select id value,
        sum(id) over (partition by id order by id rows unbounded preceding)
-from dense_rank01 full join dense_rank02;
+from dense_rank01 `full` join dense_rank02;
 
 
 -- aggregate with group by in window's order by clause
@@ -989,8 +1138,12 @@ select count(*) from td;
 -- @bvt:issue#13008
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
 -- @bvt:issue
+-- @bvt:issue#23427
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
+-- @bvt:issue
+-- @bvt:issue#23427
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
+-- @bvt:issue
 drop table td;
 
 drop table if exists `c`;
@@ -1452,4 +1605,147 @@ select * from (select i_manufact_id, sum(ss_sales_price) sum_sales, avg(sum(ss_s
 
 -- information_schema is now a table which is compatible with mysql, it is now an empty table
 select group_concat(c.column_name order by ordinal_position) key_columns  from information_schema.key_column_usage c where c.table_schema='test1' and c.table_name='region' and constraint_name='PRIMARY';
+
+-- NTILE window function tests
+drop table if exists t_ntile;
+create table t_ntile (a int, b int, c int);
+insert into t_ntile values(1, 10, 100), (2, 20, 200), (3, 30, 300), (4, 40, 400), (5, 50, 500), (6, 60, 600), (7, 70, 700), (8, 80, 800), (9, 90, 900), (10, 100, 1000);
+
+-- Basic ntile with 3 buckets
+select a, ntile(3) over (order by a) as bucket from t_ntile;
+
+-- Ntile with partition
+select a, b, ntile(2) over (partition by a % 2 order by b) as bucket from t_ntile;
+
+-- Ntile with different bucket counts
+select a, ntile(1) over (order by a) as bucket from t_ntile;
+select a, ntile(4) over (order by a) as bucket from t_ntile;
+select a, ntile(10) over (order by a) as bucket from t_ntile;
+
+-- Ntile with uneven distribution
+select a, ntile(3) over (order by a) as bucket from t_ntile where a <= 5;
+select a, ntile(4) over (order by a) as bucket from t_ntile where a <= 9;
+
+-- Ntile combined with other window functions
+select a, ntile(3) over (order by a) as bucket, rank() over (order by a) as rnk, row_number() over (order by a) as rn from t_ntile;
+
+-- Ntile with multiple partitions
+select a % 3 as grp, a, ntile(2) over (partition by a % 3 order by a) as bucket from t_ntile;
+
+drop table t_ntile;
+
+-- percent_rank with blob column
+drop table if exists test_pr_blob;
+create table test_pr_blob (id int, val blob);
+insert into test_pr_blob values (1, 'abc'), (2, 'def'), (3, 'xyz');
+select id, percent_rank() over (order by val) as pct_rank from test_pr_blob order by val;
+select id, rank() over (order by val) as rnk from test_pr_blob order by val;
+drop table test_pr_blob;
+
+-- percent_rank with binary/varbinary column
+drop table if exists test_pr_binary;
+create table test_pr_binary (id int, val varbinary(20));
+insert into test_pr_binary values (1, 'abc'), (2, 'def'), (3, 'xyz');
+select id, percent_rank() over (order by val) as pct_rank from test_pr_binary order by val;
+drop table test_pr_binary;
+
+-- WIN_ORDER functions with varchar ORDER BY should succeed
+drop table if exists t_win_varchar;
+create table t_win_varchar (id int, name varchar(20), score int);
+insert into t_win_varchar values(1, 'Alice', 90), (2, 'Bob', 85), (3, 'Charlie', 90), (4, 'David', 75), (5, 'Eve', 85);
+select id, name, row_number() over (order by name) from t_win_varchar;
+select id, name, rank() over (order by name) from t_win_varchar;
+select id, name, dense_rank() over (order by name) from t_win_varchar;
+select id, name, rank() over (partition by score order by name) from t_win_varchar;
+
+-- aggregate window function + varchar ORDER BY should error (RANGE frame)
+select sum(score) over (order by name) from t_win_varchar;
+select avg(score) over (order by name range between unbounded preceding and current row) from t_win_varchar;
+
+drop table t_win_varchar;
+
+-- Test RANGE frame with NULL ORDER BY key: NULL rows should be treated as peers,
+-- and NULL-keyed rows should not be included in numeric range frames for non-NULL keys.
+-- See issue #25288
+create database if not exists test_range_null_order_key;
+use test_range_null_order_key;
+
+create table t_range_null(id int primary key, k int, v int);
+insert into t_range_null values
+  (1, null, 10),
+  (2, null, null),
+  (3, 1, 5),
+  (4, 2, null),
+  (5, 2, 7),
+  (6, 4, 11);
+
+-- verify NULL peers: both NULL rows should be in the same frame
+select id, if(k is null, 'NULL', cast(k as char)) as k_label, v,
+       count(*) over (order by k range between 1 preceding and current row) as cnt_all_rng,
+       count(v) over (order by k range between 1 preceding and current row) as cnt_v_rng,
+       sum(v) over (order by k range between 1 preceding and current row) as sum_v_rng,
+       min(v) over (order by k range between 1 preceding and current row) as min_v_rng,
+       max(v) over (order by k range between 1 preceding and current row) as max_v_rng
+from t_range_null
+order by k is not null, k, id;
+
+-- verify with UNBOUNDED PRECEDING range
+select id, if(k is null, 'NULL', cast(k as char)) as k_label, v,
+       count(*) over (order by k range between unbounded preceding and current row) as cnt
+from t_range_null
+order by k is not null, k, id;
+
+drop table t_range_null;
+drop database test_range_null_order_key;
+
+-- Test DESC RANGE frame with NULL ORDER BY key.
+-- DESC NULLS FIRST (default for DESC): NULLs at start, then [4, 2, 1].
+-- DESC NULLS LAST: [4, 2, 1] then NULLs at end.
+create database if not exists test_range_desc;
+use test_range_desc;
+
+create table t_desc(id int primary key, k int, v int);
+insert into t_desc values
+  (1, 4, 10),
+  (2, 2, 5),
+  (3, 2, 7),
+  (4, 1, 11),
+  (5, null, 20),
+  (6, null, 30);
+
+-- DESC default (NULLS FIRST): NULLs first, then 4,2,2,1
+select * from t_desc order by k desc;
+
+-- DESC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW (NULLS FIRST)
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+       count(*) over (order by k desc range between 1 preceding and current row) as cnt_rng,
+       sum(v) over (order by k desc range between 1 preceding and current row) as sum_rng
+from t_desc order by k desc, id;
+
+-- DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING (NULLS FIRST)
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+       count(*) over (order by k desc range between current row and 1 following) as cnt_rng,
+       sum(v) over (order by k desc range between current row and 1 following) as sum_rng
+from t_desc order by k desc, id;
+
+-- DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW (NULLS FIRST)
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+       count(*) over (order by k desc range between unbounded preceding and current row) as cnt_rng
+from t_desc order by k desc, id;
+
+-- DESC NULLS LAST
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+       count(*) over (order by k desc nulls last range between 1 preceding and current row) as cnt_rng,
+       sum(v) over (order by k desc nulls last range between 1 preceding and current row) as sum_rng
+from t_desc order by k desc nulls last, id;
+
+-- DESC NULLS LAST RANGE CURRENT ROW TO 1 FOLLOWING
+select id, ifnull(cast(k as char), 'NULL') as k_label, v,
+       count(*) over (order by k desc nulls last range between current row and 1 following) as cnt_rng,
+       sum(v) over (order by k desc nulls last range between current row and 1 following) as sum_rng
+from t_desc order by k desc nulls last, id;
+
+drop table t_desc;
+drop database test_range_desc;
+
 drop database test;

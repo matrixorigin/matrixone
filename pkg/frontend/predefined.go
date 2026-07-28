@@ -113,6 +113,7 @@ var (
 				character_set_client varchar(64),
 				collation_connection varchar(64),
 				database_collation varchar(64),
+				sql_mode varchar(1024) not null default 'PIPES_AS_CONCAT',
 				primary key(function_id)
 			)`
 
@@ -135,7 +136,8 @@ var (
 	        account_name varchar(300),
 			database_name varchar(5000),
 			table_name  varchar(5000),
-			obj_id bigint unsigned
+			obj_id bigint unsigned,
+    		kind varchar(32) not null default 'user'
 			)`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
 
 	MoCatalogMoPitrDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
@@ -154,6 +156,7 @@ var (
 			pitr_unit varchar(10),
 			pitr_status tinyint unsigned default 1 comment '1: active, 0: inactive',
 			pitr_status_changed_time bigint not null,
+    		kind varchar(32) not null default 'user',
 			primary key(pitr_name, create_account)
 			)`, catalog.MO_CATALOG, catalog.MO_PITR)
 
@@ -198,6 +201,7 @@ var (
 				args     text,
 				lang     text,
 				body     text,
+				sql_mode varchar(1024) not null default 'PIPES_AS_CONCAT',
 				db       varchar(100),
 				definer  varchar(50),
 				modified_time timestamp,
@@ -268,6 +272,70 @@ var (
     			primary key(account_id,task_id,db_name,table_name)
 			)`
 
+	MoCatalogMoISCPLogDDL = `CREATE TABLE mo_catalog.mo_iscp_log (
+				account_id INT UNSIGNED NOT NULL,
+				table_id BIGINT UNSIGNED NOT NULL,
+				job_name VARCHAR NOT NULL,
+				job_id BIGINT UNSIGNED NOT NULL,
+				job_spec JSON NOT NULL,
+				job_state TINYINT NOT NULL,
+				watermark VARCHAR NOT NULL,
+				job_status JSON NOT NULL,
+				create_at TIMESTAMP NOT NULL,
+				drop_at TIMESTAMP NULL, 
+				primary key(account_id, table_id, job_name, job_id)
+			)`
+
+	MoCatalogMoCcprLogDDL = `CREATE TABLE mo_catalog.mo_ccpr_log (
+				task_id UUID PRIMARY KEY,
+				subscription_name VARCHAR(5000) NOT NULL,
+				subscription_account_name VARCHAR(5000) NOT NULL,
+				sync_level VARCHAR(16) NOT NULL,
+				account_id INT UNSIGNED NOT NULL,
+				db_name VARCHAR(5000),
+				table_name VARCHAR(5000),
+				upstream_conn VARCHAR(5000) NOT NULL,
+				sync_config JSON NOT NULL,
+				state TINYINT NOT NULL DEFAULT 0,
+				iteration_state TINYINT NOT NULL DEFAULT 0,
+				iteration_lsn BIGINT DEFAULT 0,
+				watermark BIGINT DEFAULT 0,
+				context JSON,
+				cn_uuid VARCHAR(64),
+				error_message VARCHAR(5000),
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				drop_at TIMESTAMP
+			)`
+
+	MoCatalogMoCcprTablesDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
+				tableid BIGINT UNSIGNED PRIMARY KEY,
+				taskid UUID NOT NULL,
+				dbname VARCHAR(256) NOT NULL,
+				tablename VARCHAR(256) NOT NULL,
+				account_id INT UNSIGNED NOT NULL
+			)`, catalog.MO_CATALOG, catalog.MO_CCPR_TABLES)
+
+	MoCatalogMoCcprDbsDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
+				dbid BIGINT UNSIGNED PRIMARY KEY,
+				taskid UUID NOT NULL,
+				dbname VARCHAR(256) NOT NULL,
+				account_id INT UNSIGNED NOT NULL
+			)`, catalog.MO_CATALOG, catalog.MO_CCPR_DBS)
+
+	MoCatalogMoIndexUpdateDDL = `CREATE TABLE mo_catalog.mo_index_update (
+                                account_id INT UNSIGNED NOT NULL,
+                                table_id BIGINT UNSIGNED NOT NULL,
+				db_name VARCHAR NOT NULL,
+				table_name VARCHAR NOT NULL,
+				index_name VARCHAR NOT NULL,
+				action VARCHAR NOT NULL,
+				metadata JSON NOT NULL,
+				status JSON NOT NULL,
+                                create_at TIMESTAMP NOT NULL,
+                                last_update_at TIMESTAMP NULL, 
+                                primary key(account_id, table_id, index_name, action)
+                        )`
+
 	MoCatalogMoSessionsDDL       = `CREATE VIEW mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
 	MoCatalogMoConfigurationsDDL = `CREATE VIEW mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`
 	MoCatalogMoLocksDDL          = `CREATE VIEW mo_catalog.mo_locks AS SELECT cn_id, txn_id, table_id, lock_key, lock_content, lock_mode, lock_status, lock_wait FROM mo_locks() AS mo_locks_tmp`
@@ -314,6 +382,50 @@ var (
 		catalog.MO_MERGE_SETTINGS,
 		merge.MergeSettingsVersion_Curr,
 		merge.DefaultMergeSettings.String())
+
+	MoCatalogBranchMetadataDDL = fmt.Sprintf(`create table mo_catalog.%s(
+    	table_id bigint unsigned comment 'id of the table this branch points to',
+   	 	clone_ts bigint signed not null comment 'branch creation timestamp in nanoseconds',
+    	p_table_id bigint unsigned not null comment 'id of the parent table this branch is based on',
+    	creator bigint unsigned not null comment 'account id of the creator',
+    	level varchar not null,
+    	table_deleted bool not null default false,
+    	index(p_table_id),
+    	index(creator),
+    	primary key(table_id)
+	)`, catalog.MO_BRANCH_METADATA)
+
+	MoCatalogFeatureLimitDDL = fmt.Sprintf(`create table mo_catalog.%s(
+    	account_id bigint unsigned not null comment 'this limit applies on this account',
+    	feature_code varchar(50) NOT NULL comment 'snapshot/branch/...',
+		scope varchar(50) NOT NULL DEFAULT '' comment 'feature limit applies on this scope',
+    	quota bigint NOT NULL DEFAULT 100 comment '0: disabled this feature; -1 unlimited; >0: max allowed value',
+    	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    	primary key(account_id, feature_code, scope)
+	)`, catalog.MO_FEATURE_LIMIT)
+
+	MoCatalogFeatureRegistryDDL = fmt.Sprintf(`create table mo_catalog.%s(
+    	feature_code varchar(50) NOT NULL comment 'snapshot/branch/...',
+    	description varchar(1024) NOT NULL DEFAULT '',
+        scope_spec JSON NOT NULL comment 'allowed scope values',
+		enabled boolean NOT NULL DEFAULT TRUE,
+    	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    	primary key(feature_code)
+	)`, catalog.MO_FEATURE_REGISTRY)
+
+	MoCatalogFeatureRegistryInitData = fmt.Sprintf(`insert into mo_catalog.%s(feature_code, scope_spec) values 
+		('SNAPSHOT', '{"allowed_scope":["account","database","table"]}'),
+		('BRANCH', '{"allowed_scope":[]}')
+		on duplicate key update scope_spec = values(scope_spec);`, catalog.MO_FEATURE_REGISTRY)
+
+	MoCatalogMoRoleRuleDDL = fmt.Sprintf("create table %s.%s ("+
+		"role_id int signed,"+
+		"rule_name varchar(200),"+
+		"`rule` text,"+
+		"primary key(role_id, rule_name)"+
+		")", catalog.MO_CATALOG, catalog.MO_ROLE_RULE)
 )
 
 // `mo_catalog` database system tables
@@ -345,6 +457,7 @@ var (
 			ordinal_position    int unsigned  not null,
 			options             text,
 			index_table_name    varchar(5000),
+			included_columns    text,
 			primary key(id, column_name)
 		)`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 
@@ -475,8 +588,8 @@ var (
 		catalog.MOTaskDB)
 
 	MoTaskSysDaemonTaskDDL = fmt.Sprintf(`create table %s.sys_daemon_task (
-			task_id                     bigint primary key auto_increment,
-			task_metadata_id            varchar(50),
+				task_id                     bigint primary key auto_increment,
+				task_metadata_id            varchar(50),
 			task_metadata_executor      int,
 			task_metadata_context       blob,
 			task_metadata_option        varchar(1000),
@@ -488,8 +601,52 @@ var (
 			last_heartbeat              timestamp,
 			create_at                   timestamp not null,
 			update_at                   timestamp not null,
-			end_at                      timestamp,
-			last_run                    timestamp,
-			details                     blob)`,
+				end_at                      timestamp,
+				last_run                    timestamp,
+				details                     blob)`,
 		catalog.MOTaskDB)
+
+	MoTaskSQLTaskDDL = fmt.Sprintf(`create table %s.%s (
+				task_id                     bigint primary key auto_increment,
+				task_name                   varchar(128) not null,
+				account_id                  int unsigned not null,
+				database_name               varchar(128) not null default '',
+				cron_expr                   varchar(128) not null default '',
+				`+"`timezone`"+`                  varchar(64) not null default 'UTC',
+				sql_body                    text not null,
+				gate_condition              text not null default '',
+				retry_limit                 int not null default 0,
+				timeout_seconds             int not null default 0,
+				enabled                     tinyint not null default 1,
+				next_fire_time              bigint not null default 0,
+				trigger_count               bigint not null default 0,
+				creator                     varchar(128) not null default '',
+				creator_user_id             int unsigned not null default 0,
+				creator_role_id             int unsigned not null default 0,
+				created_at                  timestamp not null default current_timestamp,
+				updated_at                  timestamp not null default current_timestamp,
+				unique key uk_task_name_account (task_name, account_id))`,
+		catalog.MOTaskDB, catalog.MOSQLTask)
+
+	MoTaskSQLTaskRunDDL = fmt.Sprintf(`create table %s.%s (
+				run_id                      bigint primary key auto_increment,
+				task_id                     bigint not null,
+				task_name                   varchar(128) not null,
+				account_id                  int unsigned not null,
+				scheduled_at                timestamp null,
+				started_at                  timestamp null,
+				finished_at                 timestamp null,
+				duration_seconds            double not null default 0,
+				status                      varchar(20) not null default 'RUNNING',
+				trigger_type                varchar(20) not null default 'SCHEDULED',
+				attempt_number              int not null default 1,
+				rows_affected               bigint not null default 0,
+				error_code                  int not null default 0,
+				error_message               text,
+				gate_result                 tinyint not null default 1,
+				runner_cn                   varchar(128) not null default '',
+				index idx_task_id (task_id),
+				index idx_status (status),
+				index idx_started_at (started_at))`,
+		catalog.MOTaskDB, catalog.MOSQLTaskRun)
 )

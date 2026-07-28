@@ -83,7 +83,7 @@ select * from rs01;
 select count(*) from rs01 {snapshot = 'sp01'};
 select * from rs01 {snapshot = 'sp01'};
 
-restore account sys from snapshot sp01;
+restore account sys{snapshot="sp01"};
 select * from rs01;
 select count(*) from rs01;
 select count(*) from rs01 {snapshot = 'sp01'};

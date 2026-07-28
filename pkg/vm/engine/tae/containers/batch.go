@@ -20,9 +20,10 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -237,6 +238,10 @@ func (bat *Batch) PPString(num int) string {
 }
 
 func (bat *Batch) Close() {
+	if bat.DataRelease != nil {
+		bat.DataRelease()
+		bat.DataRelease = nil
+	}
 	for i, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Close()
@@ -309,7 +314,11 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 
 	// 2. Types and Names
 	for i, vec := range bat.Vecs {
-		if err = vector.AppendBytes(bufVec, []byte(bat.Attrs[i]), false, mp); err != nil {
+		// Use UnsafeStringToBytes to avoid allocation: string -> []byte conversion
+		// This is safe because:
+		// 1. bat.Attrs[i] is valid during Batch's lifetime
+		// 2. vector.AppendBytes copies data to vector, doesn't depend on buf's lifetime
+		if err = vector.AppendBytes(bufVec, util.UnsafeStringToBytes(bat.Attrs[i]), false, mp); err != nil {
 			return
 		}
 		vt := vec.GetType()
@@ -371,7 +380,11 @@ func (bat *Batch) WriteToV2(w io.Writer) (n int64, err error) {
 
 	// 2. Types and Names
 	for i, vec := range bat.Vecs {
-		if err = vector.AppendBytes(bufVec, []byte(bat.Attrs[i]), false, mp); err != nil {
+		// Use UnsafeStringToBytes to avoid allocation: string -> []byte conversion
+		// This is safe because:
+		// 1. bat.Attrs[i] is valid during Batch's lifetime
+		// 2. vector.AppendBytes copies data to vector, doesn't depend on buf's lifetime
+		if err = vector.AppendBytes(bufVec, util.UnsafeStringToBytes(bat.Attrs[i]), false, mp); err != nil {
 			return
 		}
 		vt := vec.GetType()

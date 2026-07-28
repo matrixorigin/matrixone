@@ -1,0 +1,46 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package colexec
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/common"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+)
+
+// ResolveSpillThreshold resolves the auto value (zero) using CN-local memory.
+func ResolveSpillThreshold(threshold int64) int64 {
+	if threshold != 0 {
+		return threshold
+	}
+	fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
+	mem := (int64(system.MemoryTotal()) - fileCacheMem) / int64(system.GoMaxProcs()) / 8
+	if mem < common.MiB*128 {
+		mem = common.MiB * 128
+	}
+	return mem
+}
+
+// ShouldSpill preserves the existing threshold convention: small values are
+// row counts, while larger values are byte limits.
+func ShouldSpill(memUsed, rowCount, threshold int64) bool {
+	if threshold <= 0 {
+		return false
+	}
+	if threshold <= 100000 {
+		return rowCount >= threshold
+	}
+	return memUsed > threshold
+}

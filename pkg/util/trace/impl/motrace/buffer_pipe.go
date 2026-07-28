@@ -65,7 +65,6 @@ func (t batchETLHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	switch name {
 	case MOStatementType, SingleStatementTable.GetName():
 	case MOErrorType:
-	case MOSpanType:
 	case MOLogType:
 	case MORawLogType:
 	default:
@@ -119,7 +118,6 @@ func (t batchETLHandler) NewAggregator(ctx context.Context, name string) table.A
 			)
 		}
 	case MOErrorType:
-	case MOSpanType:
 	case MOLogType:
 	case MORawLogType:
 	default:

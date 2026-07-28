@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 const (
@@ -38,10 +37,11 @@ type sortType interface {
 		~[]uint | ~[]uint8 | ~[]uint16 | ~[]uint32 | ~[]uint64 | ~[]uintptr |
 		~[]float32 | ~[]float64 |
 		~[]types.Date | ~[]types.Datetime | ~[]types.Timestamp |
-		~[]types.Time | ~[]types.Enum | ~[]types.TS |
-		~[]types.Decimal64 | ~[]types.Decimal128 |
+		~[]types.Time | ~[]types.Enum | ~[]types.MoYear | ~[]types.TS |
+		~[]types.Decimal64 | ~[]types.Decimal128 | ~[]types.Decimal256 |
 		~[]types.Rowid | ~[]types.Blockid | ~[]types.Uuid |
-		~[][]float32 | ~[][]float64
+		~[][]float32 | ~[][]float64 |
+		~[][]types.BF16 | ~[][]types.Float16 | ~[][]int8 | ~[][]uint8
 }
 
 type xorshift uint64
@@ -58,6 +58,8 @@ func BoolLess(a, b bool) bool { return !a && b }
 func Decimal64Less(a, b types.Decimal64) bool { return a.Lt(b) }
 
 func Decimal128Less(a, b types.Decimal128) bool { return a.Lt(b) }
+
+func Decimal256Less(a, b types.Decimal256) bool { return a.Less(b) }
 
 func UuidLess(a, b types.Uuid) bool {
 	return a.Lt(b)
@@ -226,6 +228,13 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, genericGreater[types.Enum])
 		}
+	case types.T_year:
+		col := vector.MustFixedColNoTypeCheck[types.MoYear](vec)
+		if !desc {
+			genericSort(col, os, genericLess[types.MoYear])
+		} else {
+			genericSort(col, os, genericGreater[types.MoYear])
+		}
 	case types.T_decimal64:
 		col := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 		if !desc {
@@ -239,6 +248,13 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 			genericSort(col, os, decimal128Less)
 		} else {
 			genericSort(col, os, decimal128Greater)
+		}
+	case types.T_decimal256:
+		col := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
+		if !desc {
+			genericSort(col, os, decimal256Less)
+		} else {
+			genericSort(col, os, decimal256Greater)
 		}
 	case types.T_uuid:
 		col := vector.MustFixedColNoTypeCheck[types.Uuid](vec)
@@ -271,6 +287,34 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 			genericSort(col, os, arrayLess[float64])
 		} else {
 			genericSort(col, os, arrayGreater[float64])
+		}
+	case types.T_array_bf16:
+		col := vector.MustArrayCol[types.BF16](vec)
+		if !desc {
+			genericSort(col, os, arrayElementLess[types.BF16])
+		} else {
+			genericSort(col, os, arrayElementGreater[types.BF16])
+		}
+	case types.T_array_float16:
+		col := vector.MustArrayCol[types.Float16](vec)
+		if !desc {
+			genericSort(col, os, arrayElementLess[types.Float16])
+		} else {
+			genericSort(col, os, arrayElementGreater[types.Float16])
+		}
+	case types.T_array_int8:
+		col := vector.MustArrayCol[int8](vec)
+		if !desc {
+			genericSort(col, os, arrayElementLess[int8])
+		} else {
+			genericSort(col, os, arrayElementGreater[int8])
+		}
+	case types.T_array_uint8:
+		col := vector.MustArrayCol[uint8](vec)
+		if !desc {
+			genericSort(col, os, arrayElementLess[uint8])
+		} else {
+			genericSort(col, os, arrayElementGreater[uint8])
 		}
 	case types.T_TS:
 		col := vector.MustFixedColNoTypeCheck[types.TS](vec)
@@ -331,6 +375,14 @@ func decimal128Greater(data []types.Decimal128, i, j int64) bool {
 	return data[i].Compare(data[j]) > 0
 }
 
+func decimal256Less(data []types.Decimal256, i, j int64) bool {
+	return data[i].Compare(data[j]) < 0
+}
+
+func decimal256Greater(data []types.Decimal256, i, j int64) bool {
+	return data[i].Compare(data[j]) > 0
+}
+
 func tsLess(data []types.TS, i, j int64) bool {
 	return data[i].LT(&data[j])
 }
@@ -360,7 +412,7 @@ func uuidLess(data []types.Uuid, i, j int64) bool {
 }
 
 func arrayLess[T types.RealNumbers](data [][]T, i, j int64) bool {
-	return moarray.Compare[T](data[i], data[j]) < 0
+	return types.ArrayCompare[T](data[i], data[j]) < 0
 }
 
 func uuidGreater(data []types.Uuid, i, j int64) bool {
@@ -368,7 +420,17 @@ func uuidGreater(data []types.Uuid, i, j int64) bool {
 }
 
 func arrayGreater[T types.RealNumbers](data [][]T, i, j int64) bool {
-	return moarray.Compare[T](data[i], data[j]) > 0
+	return types.ArrayCompare[T](data[i], data[j]) > 0
+}
+
+// Narrow vector element types (bf16/f16/int8) order through the float32 bridge
+// so bf16/f16 sign bits do not corrupt the ordering.
+func arrayElementLess[T types.ArrayElement](data [][]T, i, j int64) bool {
+	return types.ArrayElementCompare[T](data[i], data[j]) < 0
+}
+
+func arrayElementGreater[T types.ArrayElement](data [][]T, i, j int64) bool {
+	return types.ArrayElementCompare[T](data[i], data[j]) > 0
 }
 
 func genericLess[T types.OrderedT](data []T, i, j int64) bool {

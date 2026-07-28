@@ -5,7 +5,7 @@ b varchar(10)
 );
 insert into t1(b) values ('bbb');
 insert into t1 values (1, 'ccc');
-tae data: duplicate
+Duplicate entry '1' for key 'a'
 insert into t1 values (3, 'ccc');
 insert into t1(b) values ('bbb1111');
 select * from t1 order by a;

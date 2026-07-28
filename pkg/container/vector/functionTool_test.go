@@ -15,12 +15,41 @@
 package vector
 
 import (
+	"errors"
 	"testing"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+type testByteJsonEncoder struct {
+	value bytejson.ByteJson
+	size  uint32
+	write int
+	err   error
+}
+
+func (e testByteJsonEncoder) TypeCode() byte { return e.value.Type }
+
+func (e testByteJsonEncoder) DataSize() uint32 {
+	if e.size != 0 {
+		return e.size
+	}
+	return uint32(len(e.value.Data))
+}
+
+func (e testByteJsonEncoder) EncodeDataInto(dst []byte) (int, error) {
+	if e.write > 0 {
+		copy(dst, e.value.Data[:min(e.write, len(e.value.Data))])
+	}
+	if e.err != nil {
+		return 0, e.err
+	}
+	return copy(dst, e.value.Data), nil
+}
 
 func BenchmarkGetStrValue1(b *testing.B) {
 	mp := mpool.MustNewZeroNoFixed()
@@ -100,6 +129,99 @@ func TestPreExtendAndReset(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestAppendByteJsonEncoded(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(3))
+	result := MustFunctionResult[types.Varlena](wrapper)
+
+	inline, err := bytejson.ParseFromString(`null`)
+	require.NoError(t, err)
+	require.NoError(t, result.AppendByteJsonEncoded(testByteJsonEncoder{value: inline}))
+
+	nonInline, err := bytejson.ParseFromString(`{"long":"abcdefghijklmnopqrstuvwxyz"}`)
+	require.NoError(t, err)
+	require.NoError(t, result.AppendByteJsonEncoded(testByteJsonEncoder{value: nonInline}))
+
+	inlineStorage, err := inline.Marshal()
+	require.NoError(t, err)
+	nonInlineStorage, err := nonInline.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, inlineStorage, result.vec.GetBytesAt(0))
+	require.Equal(t, nonInlineStorage, result.vec.GetBytesAt(1))
+
+	oldLength := result.vec.Length()
+	oldAreaLength := len(result.vec.area)
+	oldAreaData := uintptr(unsafe.Pointer(&result.vec.area[0]))
+	values := toSliceOfLengthNoTypeCheck[types.Varlena](result.vec, oldLength+1)
+	var sentinel types.Varlena
+	sentinel[0] = 1
+	sentinel[1] = 0x7f
+	values[oldLength] = sentinel
+	result.vec.nsp.Add(uint64(oldLength))
+	err = result.AppendByteJsonEncoded(testByteJsonEncoder{
+		value: nonInline,
+		size:  uint32(cap(result.vec.area) + 1024),
+		write: 8,
+		err:   errors.New("encode failed"),
+	})
+	require.ErrorContains(t, err, "encode failed")
+	require.Equal(t, oldLength, result.vec.Length())
+	require.Equal(t, oldAreaLength, len(result.vec.area))
+	require.NotEqual(t, oldAreaData, uintptr(unsafe.Pointer(&result.vec.area[0])))
+	require.Equal(t, sentinel, values[oldLength])
+	require.True(t, result.vec.nsp.Contains(uint64(oldLength)))
+
+	err = result.AppendByteJsonEncoded(testByteJsonEncoder{
+		value: nonInline,
+		size:  uint32(len(nonInline.Data) + 1),
+	})
+	require.ErrorContains(t, err, "encoder size mismatch")
+	require.Equal(t, oldLength, result.vec.Length())
+	require.Equal(t, oldAreaLength, len(result.vec.area))
+	require.Equal(t, sentinel, values[oldLength])
+	require.True(t, result.vec.nsp.Contains(uint64(oldLength)))
+
+	require.NoError(t, result.AppendByteJsonEncoded(testByteJsonEncoder{value: nonInline}))
+	require.Equal(t, nonInlineStorage, result.vec.GetBytesAt(2))
+	require.False(t, result.vec.IsNull(uint64(oldLength)))
+
+	wrapper.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestAppendByteJsonEncodedConstResult(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(4))
+	result := MustFunctionResult[types.Varlena](wrapper)
+	result.vec.SetLength(4)
+	result.vec.ToConst()
+
+	value, err := bytejson.ParseFromString(`{"long":"abcdefghijklmnopqrstuvwxyz"}`)
+	require.NoError(t, err)
+	err = result.AppendByteJsonEncoded(testByteJsonEncoder{
+		value: value,
+		write: 8,
+		err:   errors.New("encode failed"),
+	})
+	require.ErrorContains(t, err, "encode failed")
+	require.True(t, result.vec.IsConst())
+	require.Equal(t, 4, result.vec.Length())
+	require.Empty(t, result.vec.area)
+
+	require.NoError(t, result.AppendByteJsonEncoded(testByteJsonEncoder{value: value}))
+	want, err := value.Marshal()
+	require.NoError(t, err)
+	require.True(t, result.vec.IsConst())
+	require.Equal(t, 4, result.vec.Length())
+	require.Equal(t, want, result.vec.GetBytesAt(0))
+	require.Equal(t, want, result.vec.GetBytesAt(3))
+
+	wrapper.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestReuseFunctionParameterStr(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	vec := NewVec(types.T_varchar.ToType())
@@ -127,9 +249,11 @@ func TestReuseFunctionParameterStr(t *testing.T) {
 	require.Equal(t, true, ok)
 
 	err = appendOneBytes(vec, []byte("x"), false, mp)
-	require.NoError(t, err)
+	require.Error(t, err)
+
 	ok = ReuseFunctionStrParameter(vec, g1)
-	require.Equal(t, false, ok)
+	require.Equal(t, true, ok)
+
 	g1 = GenerateFunctionStrParameter(vec)
 	ok = ReuseFunctionStrParameter(vec, g1)
 	require.Equal(t, true, ok)
@@ -163,9 +287,10 @@ func TestReuseFunctionParameterFixed(t *testing.T) {
 	require.Equal(t, true, ok)
 
 	err = appendOneFixed(vec1, int32(0), false, mp)
-	require.NoError(t, err)
+	require.Error(t, err)
+
 	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
-	require.Equal(t, false, ok)
+	require.Equal(t, true, ok)
 	g2 = GenerateFunctionFixedTypeParameter[int32](vec1)
 	ok = ReuseFunctionFixedTypeParameter(vec1, g2)
 	require.Equal(t, true, ok)

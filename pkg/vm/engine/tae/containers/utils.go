@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -60,10 +60,27 @@ func (bb *GeneralBatchBuffer) Len() int {
 func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
-	bat := batch.NewWithSchema(bb.offHeap, attrs, types)
 
-	// if no vectors in buffer, return a new batch
+	// Create the batch shell with nil vectors — we fill them below,
+	// either from the pool or by allocating fresh ones.  This avoids
+	// wasting vector allocations for positions that the pool can serve.
+	var bat *batch.Batch
+	if bb.offHeap {
+		bat = batch.NewOffHeapWithSize(len(types))
+	} else {
+		bat = batch.NewWithSize(len(types))
+	}
+	bat.Attrs = attrs
+
+	// if no vectors in buffer, allocate all fresh and return
 	if len(bb.fixedSizeVectors) == 0 && len(bb.varlenVectors) == 0 {
+		for i, t := range types {
+			if bb.offHeap {
+				bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
+			} else {
+				bat.Vecs[i] = vector.NewVec(t)
+			}
+		}
 		return bat
 	}
 
@@ -128,6 +145,18 @@ func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type
 			if len(bb.fixedSizeVectors)+len(bb.varlenVectors) == 0 || notReused.IsEmpty() {
 				break
 			}
+		}
+	}
+
+	// Allocate fresh vectors only for positions that were not served by the pool.
+	for i, t := range types {
+		if bat.Vecs[i] != nil {
+			continue
+		}
+		if bb.offHeap {
+			bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
+		} else {
+			bat.Vecs[i] = vector.NewVec(t)
 		}
 	}
 
@@ -447,6 +476,8 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		return vector.GetFixedAtNoTypeCheck[types.Timestamp](col, int(row))
 	case types.T_enum:
 		return vector.GetFixedAtNoTypeCheck[types.Enum](col, int(row))
+	case types.T_year:
+		return vector.GetFixedAtNoTypeCheck[types.MoYear](col, int(row))
 	case types.T_TS:
 		return vector.GetFixedAtNoTypeCheck[types.TS](col, int(row))
 	case types.T_Rowid:
@@ -454,7 +485,8 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 	case types.T_Blockid:
 		return vector.GetFixedAtNoTypeCheck[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink:
 		return col.GetBytesAt(int(row))
 	default:
 		//return vector.ErrVecTypeNotSupport
@@ -546,7 +578,8 @@ func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool
 		GenericUpdateFixedValue[types.Blockid](col, row, val, isNull, mp)
 	case types.T_varchar, types.T_char, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink:
 		GenericUpdateBytes(col, row, val, isNull, mp)
 	default:
 		panic(moerr.NewInternalErrorNoCtxf("%v not supported", col.GetType()))

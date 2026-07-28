@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 // FindFirstIndexInSortedSlice finds the first index of v in a sorted slice s
@@ -308,10 +307,10 @@ func ArrayGetMinMax[T types.RealNumbers](vec *Vector) (minv, maxv []T) {
 				minv, maxv = val, val
 				first = false
 			} else {
-				if moarray.Compare[T](minv, val) > 0 {
+				if types.ArrayCompare[T](minv, val) > 0 {
 					minv = val
 				}
-				if moarray.Compare[T](maxv, val) < 0 {
+				if types.ArrayCompare[T](maxv, val) < 0 {
 					maxv = val
 				}
 			}
@@ -321,12 +320,39 @@ func ArrayGetMinMax[T types.RealNumbers](vec *Vector) (minv, maxv []T) {
 		minv, maxv = val, val
 		for i, j := 1, vec.Length(); i < j; i++ {
 			val := types.GetArray[T](&col[i], area)
-			if moarray.Compare[T](minv, val) > 0 {
+			if types.ArrayCompare[T](minv, val) > 0 {
 				minv = val
 			}
-			if moarray.Compare[T](maxv, val) < 0 {
+			if types.ArrayCompare[T](maxv, val) < 0 {
 				maxv = val
 			}
+		}
+	}
+	return
+}
+
+// ArrayElementGetMinMax mirrors ArrayGetMinMax for the narrow vector element
+// types (bf16/f16/int8). Ordering goes through the float32 bridge via
+// ArrayElementCompare so that bf16/f16 sign bits don't corrupt the comparison.
+// The returned min/max are original stored values (no reconversion).
+func ArrayElementGetMinMax[T types.ArrayElement](vec *Vector) (minv, maxv []T) {
+	col, area := MustVarlenaRawData(vec)
+	first := true
+	for i, j := 0, vec.Length(); i < j; i++ {
+		if vec.HasNull() && vec.IsNull(uint64(i)) {
+			continue
+		}
+		val := types.GetArray[T](&col[i], area)
+		if first {
+			minv, maxv = val, val
+			first = false
+			continue
+		}
+		if types.ArrayElementCompare[T](minv, val) > 0 {
+			minv = val
+		}
+		if types.ArrayElementCompare[T](maxv, val) < 0 {
+			maxv = val
 		}
 	}
 	return
@@ -369,7 +395,9 @@ func typeCompatible[T any](typ types.Type) bool {
 	case types.Decimal64:
 		return typ.Oid == types.T_decimal64
 	case types.Decimal128:
-		return typ.Oid == types.T_decimal128
+		return typ.Oid == types.T_decimal128 || typ.Oid == types.T_decimal64
+	case types.Decimal256:
+		return typ.Oid == types.T_decimal256
 	case types.Uuid:
 		return typ.Oid == types.T_uuid
 	case types.Date:
@@ -388,6 +416,8 @@ func typeCompatible[T any](typ types.Type) bool {
 		return typ.Oid == types.T_Blockid
 	case types.Enum:
 		return typ.Oid == types.T_enum
+	case types.MoYear:
+		return typ.Oid == types.T_year
 	}
 	return false
 }

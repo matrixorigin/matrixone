@@ -143,6 +143,7 @@ func TestT_String(t *testing.T) {
 	require.Equal(t, "SMALLINT", T_int16.String())
 	require.Equal(t, "INT", T_int32.String())
 	require.Equal(t, "BIT", T_bit.String())
+	require.Equal(t, "GEOMETRY", T_geometry.String())
 }
 
 func TestT_OidString(t *testing.T) {
@@ -160,6 +161,30 @@ func TestT_OidString(t *testing.T) {
 	require.Equal(t, "T_float64", T_float64.OidString())
 
 	require.Equal(t, "T_bit", T_bit.OidString())
+	require.Equal(t, "T_geometry", T_geometry.OidString())
+}
+
+func TestT_GeometryVarlen(t *testing.T) {
+	typ := T_geometry.ToType()
+	require.Equal(t, int32(VarlenaSize), typ.Size)
+	require.Equal(t, VarlenaSize, T_geometry.TypeLen())
+	require.Equal(t, -24, T_geometry.FixedLength())
+	require.True(t, typ.IsVarlen())
+	require.Equal(t, uint8(1), CharsetType(T_geometry))
+	require.Equal(t, uint8(1), New(T_geometry, 0, 0).Charset)
+}
+
+func TestT_Geometry32Varlen(t *testing.T) {
+	typ := T_geometry32.ToType()
+	require.Equal(t, int32(VarlenaSize), typ.Size)
+	require.Equal(t, VarlenaSize, T_geometry32.TypeLen())
+	require.Equal(t, -24, T_geometry32.FixedLength())
+	require.True(t, typ.IsVarlen())
+	require.Equal(t, uint8(1), CharsetType(T_geometry32))
+	require.Equal(t, uint8(1), New(T_geometry32, 0, 0).Charset)
+	require.Equal(t, "GEOMETRY32", T_geometry32.String())
+	require.Equal(t, "T_geometry32", T_geometry32.OidString())
+	require.Equal(t, T_geometry32, Types["geometry32"])
 }
 
 func sliceCopy(a, b []float64) {
@@ -262,9 +287,25 @@ func TestType_DescString(t *testing.T) {
 	}.DescString(), "DECIMAL(20,10)")
 
 	require.Equal(t, Type{
+		Oid:   T_decimal256,
+		Width: 39,
+		Scale: 4,
+	}.DescString(), "DECIMAL(39,4)")
+
+	require.Equal(t, Type{
 		Oid:   T_bit,
 		Width: 10,
 	}.DescString(), "BIT(10)")
+
+	require.Equal(t, Type{
+		Oid:   T_array_float32,
+		Width: 10,
+	}.DescString(), "VECF32(10)")
+
+	require.Equal(t, Type{
+		Oid:   T_array_float64,
+		Width: 10,
+	}.DescString(), "VECF64(10)")
 }
 
 func TestTypeCompare(t *testing.T) {
@@ -381,4 +422,22 @@ func BenchmarkTypesCompare(b *testing.B) {
 			rowid_1_1291_1291.Compare(&rowid_1_1291_1036)
 		}
 	})
+}
+
+func TestArraySQLName(t *testing.T) {
+	// every array/vector type maps to its lowercase SQL name.
+	arrayTypes := []T{T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8}
+	wantNames := []string{"vecf32", "vecf64", "vecbf16", "vecf16", "vecint8", "vecuint8"}
+	for i, at := range arrayTypes {
+		require.Equal(t, wantNames[i], at.ArraySQLName())
+	}
+
+	// constants stay in sync with the method (and with the literal spellings).
+	require.Equal(t, ArrayFloat32SQLName, T_array_float32.ArraySQLName())
+	require.Equal(t, ArrayInt8SQLName, T_array_int8.ArraySQLName())
+	require.Equal(t, "vecbf16", ArrayBF16SQLName)
+
+	// non-array types -> "".
+	require.Equal(t, "", T_int32.ArraySQLName())
+	require.Equal(t, "", T_varchar.ArraySQLName())
 }

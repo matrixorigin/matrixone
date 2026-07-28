@@ -16,11 +16,13 @@ package gc
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -63,13 +65,16 @@ type CheckpointBasedGCJob struct {
 		coarseProbility    float64
 		canGCCacheSize     int
 	}
-	sourcer          engine.BaseReader
-	snapshotMeta     *logtail.SnapshotMeta
-	accountSnapshots map[uint32][]types.TS
-	pitr             *logtail.PitrInfo
-	ts               *types.TS
-	globalCkpLoc     objectio.Location
-	globalCkpVer     uint32
+	sourcer        engine.BaseReader
+	snapshotMeta   *logtail.SnapshotMeta
+	snapshots      *logtail.SnapshotInfo
+	iscpTables     map[uint64]types.TS
+	pitr           *logtail.PitrInfo
+	ts             *types.TS
+	globalCkpLoc   objectio.Location
+	globalCkpVer   uint32
+	checkpointCli  checkpoint.Runner      // Added to access catalog
+	syncProtection *SyncProtectionManager // Sync protection manager for cross-cluster sync
 
 	result struct {
 		vecToGC    *vector.Vector
@@ -83,8 +88,11 @@ func NewCheckpointBasedGCJob(
 	gckpVersion uint32,
 	sourcer engine.BaseReader,
 	pitr *logtail.PitrInfo,
-	accountSnapshots map[uint32][]types.TS,
+	snapshots *logtail.SnapshotInfo,
+	iscpTables map[uint64]types.TS,
 	snapshotMeta *logtail.SnapshotMeta,
+	checkpointCli checkpoint.Runner,
+	syncProtection *SyncProtectionManager,
 	buffer *containers.OneSchemaBatchBuffer,
 	isOwner bool,
 	mp *mpool.MPool,
@@ -93,13 +101,16 @@ func NewCheckpointBasedGCJob(
 	opts ...GCJobExecutorOption,
 ) *CheckpointBasedGCJob {
 	e := &CheckpointBasedGCJob{
-		sourcer:          sourcer,
-		snapshotMeta:     snapshotMeta,
-		accountSnapshots: accountSnapshots,
-		pitr:             pitr,
-		ts:               ts,
-		globalCkpLoc:     globalCkpLoc,
-		globalCkpVer:     gckpVersion,
+		sourcer:        sourcer,
+		snapshotMeta:   snapshotMeta,
+		snapshots:      snapshots,
+		pitr:           pitr,
+		ts:             ts,
+		globalCkpLoc:   globalCkpLoc,
+		globalCkpVer:   gckpVersion,
+		iscpTables:     iscpTables,
+		checkpointCli:  checkpointCli,
+		syncProtection: syncProtection,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -115,7 +126,7 @@ func (e *CheckpointBasedGCJob) Close() error {
 		e.sourcer = nil
 	}
 	e.snapshotMeta = nil
-	e.accountSnapshots = nil
+	e.snapshots = nil
 	e.pitr = nil
 	e.ts = nil
 	e.globalCkpLoc = nil
@@ -156,6 +167,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		e.globalCkpVer,
 		e.ts,
 		&transObjects,
+		e.syncProtection,
 		e.mp,
 		e.fs,
 	)
@@ -165,10 +177,12 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 
 	fineFilter, err := MakeSnapshotAndPitrFineFilter(
 		e.ts,
-		e.accountSnapshots,
+		e.snapshots,
 		e.pitr,
 		e.snapshotMeta,
 		transObjects,
+		e.iscpTables,
+		e.checkpointCli,
 	)
 	if err != nil {
 		return err
@@ -225,6 +239,7 @@ func MakeBloomfilterCoarseFilter(
 	ckpVersion uint32,
 	ts *types.TS,
 	transObjects *map[string]map[uint64]*ObjectEntry,
+	syncProtection *SyncProtectionManager,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (
@@ -276,16 +291,24 @@ func MakeBloomfilterCoarseFilter(
 					return
 				}
 
-				bm.Add(uint64(i))
 				createTS := createTSs[i]
 				dropTS := dropTSs[i]
 				if !createTS.LT(ts) || !dropTS.LT(ts) {
 					return
 				}
 
+				// Check if the object is protected by sync protection
+				// If protected, skip marking it for GC so it stays in filesNotGC
 				buf := bat.Vecs[0].GetRawBytesAt(i)
 				stats := (objectio.ObjectStats)(buf)
 				name := stats.ObjectName().UnsafeString()
+
+				if syncProtection != nil && syncProtection.IsProtected(name) {
+					// Protected file: don't mark for GC, it will stay in filesNotGC
+					return
+				}
+
+				bm.Add(uint64(i))
 				tid := tableIDs[i]
 				if (*transObjects)[name] == nil ||
 					(*transObjects)[name][tableIDs[i]] == nil {
@@ -313,18 +336,67 @@ func MakeBloomfilterCoarseFilter(
 	}, nil
 }
 
+// buildTableExistenceMap creates a combined map of table IDs from both snapshotMeta and catalog
+// This avoids the need for locking on every table existence check
+func buildTableExistenceMap(snapshotMeta *logtail.SnapshotMeta, checkpointCli checkpoint.Runner) (map[uint64]bool, error) {
+	// First, copy all table IDs from snapshotMeta
+	tableExistenceMap := snapshotMeta.GetAllTableIDs()
+	catalog := checkpointCli.GetCatalog()
+	count := len(tableExistenceMap)
+	defer func() {
+		logutil.Info("GC-TRACE-TABLE-LIST",
+			zap.Int("gc-table-count", count),
+			zap.Int("all-table-count", len(tableExistenceMap)))
+	}()
+	if catalog == nil {
+		return tableExistenceMap, nil
+	}
+	it := catalog.MakeDBIt(true)
+	for ; it.Valid(); it.Next() {
+		db := it.Get().GetPayload()
+
+		itTable := db.MakeTableIt(true)
+		for itTable.Valid() {
+			table := itTable.Get().GetPayload()
+			drop := table.GetDeleteAtLocked()
+			if drop.IsEmpty() {
+				tableID := table.GetID()
+				tableExistenceMap[tableID] = true
+			}
+			itTable.Next()
+		}
+	}
+
+	return tableExistenceMap, nil
+}
+
 func MakeSnapshotAndPitrFineFilter(
 	ts *types.TS,
-	accountSnapshots map[uint32][]types.TS,
+	snapshots *logtail.SnapshotInfo,
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
 	transObjects map[string]map[uint64]*ObjectEntry,
+	iscpTables map[uint64]types.TS,
+	checkpointCli checkpoint.Runner,
 ) (
 	filter FilterFn,
 	err error,
 ) {
+	filterStart := time.Now()
+	defer func() {
+		// Record filter duration
+		duration := time.Since(filterStart).Seconds()
+		v2.GCCheckpointFilterDurationHistogram.Observe(duration)
+		v2.GCSnapshotCollectDurationHistogram.Observe(duration)
+	}()
+	// Build combined table existence map from both snapshotMeta and catalog
+	tableExistenceMap, err := buildTableExistenceMap(snapshotMeta, checkpointCli)
+	if err != nil {
+		return nil, err
+	}
+
 	tableSnapshots, tablePitrs := snapshotMeta.AccountToTableSnapshots(
-		accountSnapshots,
+		snapshots,
 		pitrs,
 	)
 	return func(
@@ -344,16 +416,39 @@ func MakeSnapshotAndPitrFineFilter(
 			createTS := createTSs[i]
 			deleteTS := deleteTSs[i]
 
-			snapshots := tableSnapshots[tableID]
+			sp := tableSnapshots[tableID]
 			pitr := tablePitrs[tableID]
 
 			if transObjects[name] != nil {
 				tables := transObjects[name]
-				if entry := tables[tableID]; entry != nil {
+				if objectEntry := tables[tableID]; objectEntry != nil {
+					// Check if the table still exists using the combined map
+					ok := tableExistenceMap[tableID]
+					// The table has not been dropped, and the dropTS is empty, so it cannot be deleted.
+					if objectEntry.dropTS.IsEmpty() && ok {
+						continue
+					}
+
 					if !logtail.ObjectIsSnapshotRefers(
-						entry.stats, pitr, &entry.createTS, &entry.dropTS, snapshots,
+						objectEntry.stats, pitr, &objectEntry.createTS, &objectEntry.dropTS, sp,
 					) {
+						if iscpTables == nil {
+							bm.Add(uint64(i))
+							continue
+						}
+						if iscpTS, ok := iscpTables[objectEntry.table]; ok {
+							if objectEntry.stats.GetCNCreated() || objectEntry.stats.GetAppendable() {
+								if (!objectEntry.dropTS.IsEmpty() && objectEntry.dropTS.GT(&iscpTS)) ||
+									objectEntry.createTS.GT(&iscpTS) {
+									continue
+								}
+							}
+						}
 						bm.Add(uint64(i))
+						v2.GCObjectSkippedCounter.Inc()
+					} else {
+						v2.GCObjectProtectedCounter.Inc()
+						v2.GCTableProtectedCounter.Inc()
 					}
 					continue
 				}
@@ -368,9 +463,24 @@ func MakeSnapshotAndPitrFineFilter(
 				continue
 			}
 			if !logtail.ObjectIsSnapshotRefers(
-				&stats, pitr, &createTS, &deleteTS, snapshots,
+				&stats, pitr, &createTS, &deleteTS, sp,
 			) {
+				if iscpTables == nil {
+					bm.Add(uint64(i))
+					continue
+				}
+				if iscpTS, ok := iscpTables[tableID]; ok {
+					if stats.GetCNCreated() || stats.GetAppendable() {
+						if (!deleteTS.IsEmpty() && deleteTS.GT(&iscpTS)) ||
+							createTS.GT(&iscpTS) {
+							continue
+						}
+					}
+				}
 				bm.Add(uint64(i))
+				v2.GCObjectSkippedCounter.Inc()
+			} else {
+				v2.GCObjectProtectedCounter.Inc()
 			}
 		}
 		return nil

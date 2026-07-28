@@ -1,0 +1,466 @@
+SELECT TIMESTAMPADD(DAY, 1, '2020-02-28') AS leap_year_day;
+leap_year_day
+2020-02-29
+SELECT TIMESTAMPADD(DAY, 1, '2021-02-28') AS non_leap_year_day;
+non_leap_year_day
+2021-03-01
+SELECT TIMESTAMPADD(YEAR, 1, '2020-02-29') AS leap_to_non_leap;
+leap_to_non_leap
+2021-02-28
+SELECT TIMESTAMPADD(YEAR, 4, '2020-02-29') AS leap_to_leap;
+leap_to_leap
+2024-02-29
+SELECT TIMESTAMPADD(DAY, 1, '2020-02-29') AS leap_feb29_plus_day;
+leap_feb29_plus_day
+2020-03-01
+SELECT TIMESTAMPADD(MONTH, 1, '2024-01-31') AS month_overflow_jan_leap;
+month_overflow_jan_leap
+2024-02-29
+SELECT TIMESTAMPADD(MONTH, 1, '2023-01-31') AS month_overflow_jan_non_leap;
+month_overflow_jan_non_leap
+2023-02-28
+SELECT TIMESTAMPADD(MONTH, 1, '2024-03-31') AS month_overflow_mar;
+month_overflow_mar
+2024-04-30
+SELECT TIMESTAMPADD(MONTH, 1, '2024-05-31') AS month_overflow_may;
+month_overflow_may
+2024-06-30
+SELECT TIMESTAMPADD(MONTH, 1, '2024-07-31') AS month_overflow_jul;
+month_overflow_jul
+2024-08-31
+SELECT TIMESTAMPADD(MONTH, 1, '2024-08-31') AS month_overflow_aug;
+month_overflow_aug
+2024-09-30
+SELECT TIMESTAMPADD(MONTH, 1, '2024-10-31') AS month_overflow_oct;
+month_overflow_oct
+2024-11-30
+SELECT TIMESTAMPADD(MONTH, 1, '2024-12-31') AS month_overflow_dec;
+month_overflow_dec
+2025-01-31
+SELECT TIMESTAMPADD(MONTH, 3, '2024-01-31') AS month_overflow_quarter;
+month_overflow_quarter
+2024-04-30
+SELECT TIMESTAMPADD(QUARTER, 1, '2024-03-31') AS quarter_overflow_mar;
+quarter_overflow_mar
+2024-06-30
+SELECT TIMESTAMPADD(QUARTER, 1, '2024-05-31') AS quarter_overflow_may;
+quarter_overflow_may
+2024-08-31
+SELECT TIMESTAMPADD(QUARTER, 1, '2024-08-31') AS quarter_overflow_aug;
+quarter_overflow_aug
+2024-11-30
+SELECT TIMESTAMPADD(QUARTER, 1, '2024-11-30') AS quarter_overflow_nov;
+quarter_overflow_nov
+2025-02-28
+SELECT TIMESTAMPADD(DAY, 1, '2024-12-31') AS year_end_plus_day;
+year_end_plus_day
+2025-01-01
+SELECT TIMESTAMPADD(DAY, -1, '2024-01-01') AS year_start_minus_day;
+year_start_minus_day
+2023-12-31
+SELECT TIMESTAMPADD(DAY, 1, '9999-12-31') AS max_date_boundary;
+max_date_boundary
+null
+SELECT TIMESTAMPADD(DAY, -1, '0001-01-01') AS min_date_boundary;
+min_date_boundary
+null
+SELECT TIMESTAMPADD(SECOND, 1, '2024-12-20 23:59:59') AS time_max_boundary_second;
+time_max_boundary_second
+2024-12-21 00:00:00
+SELECT TIMESTAMPADD(MINUTE, 1, '2024-12-20 23:59:59') AS time_max_boundary_minute;
+time_max_boundary_minute
+2024-12-21 00:00:59
+SELECT TIMESTAMPADD(HOUR, 1, '2024-12-20 23:59:59') AS time_max_boundary_hour;
+time_max_boundary_hour
+2024-12-21 00:59:59
+SELECT TIMESTAMPADD(MICROSECOND, 1, '2024-12-20 23:59:59.999999') AS microsecond_max_boundary;
+microsecond_max_boundary
+2024-12-21 00:00:00
+SELECT TIMESTAMPADD(SECOND, -1, '2024-12-20 00:00:00') AS time_min_boundary_second;
+time_min_boundary_second
+2024-12-19 23:59:59
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-01-31'), ('2024-03-31'), ('2024-05-31');
+SELECT d, TIMESTAMPADD(MONTH, 1, d) AS next_month FROM t1;
+d    next_month
+2024-01-31    2024-02-29
+2024-03-31    2024-04-30
+2024-05-31    2024-06-30
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2020-02-28'), ('2021-02-28'), ('2020-02-29');
+SELECT d, TIMESTAMPADD(DAY, 1, d) AS next_day FROM t1;
+d    next_day
+2020-02-28    2020-02-29
+2021-02-28    2021-03-01
+2020-02-29    2020-03-01
+DROP TABLE t1;
+CREATE TABLE t1(dt DATETIME);
+INSERT INTO t1 VALUES ('2024-12-20 23:59:59'), ('2024-12-20 00:00:00');
+SELECT dt, TIMESTAMPADD(SECOND, 1, dt) AS next_second FROM t1;
+dt    next_second
+2024-12-20 23:59:59    2024-12-21 00:00:00
+2024-12-20 00:00:00    2024-12-20 00:00:01
+DROP TABLE t1;
+CREATE TABLE t1(dt DATETIME(6));
+INSERT INTO t1 VALUES ('2024-12-20 23:59:59.999999'), ('2024-12-20 10:30:45.123456');
+SELECT dt, TIMESTAMPADD(MICROSECOND, 1, dt) AS next_microsecond FROM t1;
+dt    next_microsecond
+2024-12-20 23:59:59.999999000    2024-12-21 00:00:00
+2024-12-20 10:30:45.123456000    2024-12-20 10:30:45.123457000
+DROP TABLE t1;
+SELECT TIMESTAMPADD(YEAR, 100, '2024-01-01') AS large_year_interval;
+large_year_interval
+2124-01-01
+SELECT TIMESTAMPADD(DAY, 10000, '2024-01-01') AS large_day_interval;
+large_day_interval
+2051-05-19
+SELECT TIMESTAMPADD(HOUR, 8760, '2024-01-01') AS large_hour_interval;
+large_hour_interval
+2024-12-31 00:00:00
+SELECT TIMESTAMPADD(MONTH, -1, '2024-01-31') AS negative_month_jan;
+negative_month_jan
+2023-12-31
+SELECT TIMESTAMPADD(YEAR, -1, '2024-02-29') AS negative_year_leap;
+negative_year_leap
+2023-02-28
+SELECT TIMESTAMPADD(DAY, -32, '2024-02-01') AS negative_day_feb;
+negative_day_feb
+2023-12-31
+SELECT TIMESTAMPADD(WEEK, 1, '2024-01-28') AS week_across_month;
+week_across_month
+2024-02-04
+SELECT TIMESTAMPADD(WEEK, 1, '2024-12-28') AS week_across_year;
+week_across_year
+2025-01-04
+SELECT TIMESTAMPADD(WEEK, 4, '2024-01-01') AS four_weeks;
+four_weeks
+2024-01-29
+SELECT TIMESTAMPADD(WEEK, -1, '2024-01-08') AS negative_week;
+negative_week
+2024-01-01
+SELECT TIMESTAMPADD(MICROSECOND, 1, '2024-12-20 10:30:45.000000') AS microsecond_scale_0;
+microsecond_scale_0
+2024-12-20 10:30:45.000001
+SELECT TIMESTAMPADD(MICROSECOND, 1, '2024-12-20 10:30:45.123456') AS microsecond_scale_6;
+microsecond_scale_6
+2024-12-20 10:30:45.123457
+SELECT TIMESTAMPADD(MICROSECOND, 999999, '2024-12-20 10:30:45.000000') AS microsecond_near_second;
+microsecond_near_second
+2024-12-20 10:30:45.999999
+SELECT TIMESTAMPADD(MICROSECOND, 1000000, '2024-12-20 10:30:45.000000') AS microsecond_one_second;
+microsecond_one_second
+2024-12-20 10:30:46
+SELECT TIMESTAMPADD(MICROSECOND, -1, '2024-12-20 10:30:45.000001') AS negative_microsecond;
+negative_microsecond
+2024-12-20 10:30:45
+SELECT TIMESTAMPADD(HOUR, 25, '2024-12-20') AS date_plus_hours;
+date_plus_hours
+2024-12-21 01:00:00
+SELECT TIMESTAMPADD(MINUTE, 1440, '2024-12-20') AS date_plus_minutes;
+date_plus_minutes
+2024-12-21 00:00:00
+SELECT TIMESTAMPADD(SECOND, 86400, '2024-12-20') AS date_plus_seconds;
+date_plus_seconds
+2024-12-21 00:00:00
+SELECT TIMESTAMPADD(MICROSECOND, 86400000000, '2024-12-20') AS date_plus_microseconds;
+date_plus_microseconds
+2024-12-21 00:00:00
+SELECT TIMESTAMPADD(DAY, 1, '2024-12-20') AS date_plus_day;
+date_plus_day
+2024-12-21
+SELECT TIMESTAMPADD(WEEK, 1, '2024-12-20') AS date_plus_week;
+date_plus_week
+2024-12-27
+SELECT TIMESTAMPADD(MONTH, 1, '2024-12-20') AS date_plus_month;
+date_plus_month
+2025-01-20
+SELECT TIMESTAMPADD(QUARTER, 1, '2024-12-20') AS date_plus_quarter;
+date_plus_quarter
+2025-03-20
+SELECT TIMESTAMPADD(YEAR, 1, '2024-12-20') AS date_plus_year;
+date_plus_year
+2025-12-20
+SELECT TIMESTAMPADD(DAY, 1, '2024-12-20') AS string_date_day;
+string_date_day
+2024-12-21
+SELECT TIMESTAMPADD(MONTH, 1, '2024-12-20') AS string_date_month;
+string_date_month
+2025-01-20
+SELECT TIMESTAMPADD(HOUR, 1, '2024-12-20') AS string_date_hour;
+string_date_hour
+2024-12-20 01:00:00
+SELECT TIMESTAMPADD(MINUTE, 30, '2024-12-20') AS string_date_minute;
+string_date_minute
+2024-12-20 00:30:00
+SELECT TIMESTAMPADD(DAY, 1, '2024-12-20 10:30:45') AS string_datetime_day;
+string_datetime_day
+2024-12-21 10:30:45
+SELECT TIMESTAMPADD(HOUR, 1, '2024-12-20 10:30:45') AS string_datetime_hour;
+string_datetime_hour
+2024-12-20 11:30:45
+SELECT TIMESTAMPADD(DAY, 0, '2024-12-20') AS zero_interval_day;
+zero_interval_day
+2024-12-20
+SELECT TIMESTAMPADD(MONTH, 0, '2024-12-20') AS zero_interval_month;
+zero_interval_month
+2024-12-20
+SELECT TIMESTAMPADD(YEAR, 0, '2024-12-20') AS zero_interval_year;
+zero_interval_year
+2024-12-20
+SELECT TIMESTAMPADD(YEAR, -100, '2024-01-01') AS large_negative_year;
+large_negative_year
+1924-01-01
+SELECT TIMESTAMPADD(MONTH, -1200, '2024-01-01') AS large_negative_month;
+large_negative_month
+1924-01-01
+SELECT TIMESTAMPADD(DAY, -36500, '2024-01-01') AS large_negative_day;
+large_negative_day
+1924-01-26
+SELECT TIMESTAMPADD(DAY, 1, '2020-02-28') AS feb28_to_feb29_leap;
+feb28_to_feb29_leap
+2020-02-29
+SELECT TIMESTAMPADD(DAY, 1, '2021-02-28') AS feb28_to_mar1_non_leap;
+feb28_to_mar1_non_leap
+2021-03-01
+SELECT TIMESTAMPADD(DAY, -1, '2020-03-01') AS mar1_to_feb29_leap;
+mar1_to_feb29_leap
+2020-02-29
+SELECT TIMESTAMPADD(DAY, -1, '2021-03-01') AS mar1_to_feb28_non_leap;
+mar1_to_feb28_non_leap
+2021-02-28
+SELECT TIMESTAMPADD(MONTH, 1, '2024-04-30') AS apr30_plus_month;
+apr30_plus_month
+2024-05-30
+SELECT TIMESTAMPADD(MONTH, 1, '2024-06-30') AS jun30_plus_month;
+jun30_plus_month
+2024-07-30
+SELECT TIMESTAMPADD(MONTH, 1, '2024-09-30') AS sep30_plus_month;
+sep30_plus_month
+2024-10-30
+CREATE TABLE t1(d DATE, dt DATETIME);
+INSERT INTO t1 VALUES
+('2024-01-31', '2024-12-20 23:59:59'),
+('2020-02-28', '2024-12-20 00:00:00'),
+('2024-12-31', '2024-12-20 12:30:45');
+SELECT d, TIMESTAMPADD(MONTH, 1, d) AS next_month,
+dt, TIMESTAMPADD(HOUR, 1, dt) AS next_hour
+FROM t1;
+d    next_month    dt    next_hour
+2024-01-31    2024-02-29    2024-12-20 23:59:59    2024-12-21 00:59:59
+2020-02-28    2020-03-28    2024-12-20 00:00:00    2024-12-20 01:00:00
+2024-12-31    2025-01-31    2024-12-20 12:30:45    2024-12-20 13:30:45
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-01-31'), ('2024-03-31'), ('2024-05-31'), ('2024-07-31');
+SELECT d, TIMESTAMPADD(MONTH, 1, d) AS next_month
+FROM t1
+WHERE TIMESTAMPADD(MONTH, 1, d) > '2024-02-01';
+d    next_month
+2024-01-31    2024-02-29
+2024-03-31    2024-04-30
+2024-05-31    2024-06-30
+2024-07-31    2024-08-31
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-31'), ('2024-01-01'), ('2024-06-15');
+SELECT d, TIMESTAMPADD(DAY, 1, d) AS next_day
+FROM t1
+ORDER BY TIMESTAMPADD(DAY, 1, d);
+d    next_day
+2024-01-01    2024-01-02
+2024-06-15    2024-06-16
+2024-12-31    2025-01-01
+DROP TABLE t1;
+SELECT TIMESTAMPADD(SECOND, 1, TIMESTAMP('2024-12-20 23:59:59')) AS timestamp_boundary;
+timestamp_boundary
+2024-12-21 00:00:00
+SELECT TIMESTAMPADD(DAY, 1, TIMESTAMP('2024-12-31 10:30:45')) AS timestamp_date_boundary;
+timestamp_date_boundary
+2025-01-01 10:30:45
+SELECT TIMESTAMPADD(MONTH, 1, TIMESTAMP('2024-01-31 10:30:45')) AS timestamp_month_overflow;
+timestamp_month_overflow
+2024-02-29 10:30:45
+SELECT TIMESTAMPADD(YEAR, 9999, '0001-01-01') AS max_year_interval;
+max_year_interval
+null
+SELECT TIMESTAMPADD(MONTH, 119988, '0001-01-01') AS max_month_interval;
+max_month_interval
+null
+SELECT TIMESTAMPADD(DAY, 3652059, '0001-01-01') AS max_day_interval;
+max_day_interval
+null
+SELECT TIMESTAMPADD(DAY, -1, '2024-01-01') AS first_day_minus_one;
+first_day_minus_one
+2023-12-31
+SELECT TIMESTAMPADD(DAY, 1, '2024-01-01') AS first_day_plus_one;
+first_day_plus_one
+2024-01-02
+SELECT TIMESTAMPADD(DAY, -1, '2024-12-31') AS last_day_minus_one;
+last_day_minus_one
+2024-12-30
+SELECT TIMESTAMPADD(DAY, 1, '2024-12-31') AS last_day_plus_one;
+last_day_plus_one
+2025-01-01
+SELECT TIMESTAMPADD(DAY, -1, '2024-02-01') AS feb_first_minus_one;
+feb_first_minus_one
+2024-01-31
+SELECT TIMESTAMPADD(DAY, 1, '2024-02-28') AS feb_last_plus_one;
+feb_last_plus_one
+2024-02-29
+SELECT TIMESTAMPADD(DAY, 1, '2024-02-29') AS feb29_plus_one_leap;
+feb29_plus_one_leap
+2024-03-01
+SELECT TIMESTAMPADD(DAY, 5, '2024-13-45') AS invalid_date_string;
+invalid input: invalid datetime value 2024-13-45
+SELECT TIMESTAMPADD(DAY, 5, 'not-a-date') AS invalid_date_format;
+invalid input: invalid datetime value not-a-date
+SELECT TIMESTAMPADD(DAY, 5, '2024-02-30') AS invalid_feb_date;
+invalid input: invalid datetime value 2024-02-30
+SELECT TIMESTAMPADD(DAY, 5, '2024-04-31') AS invalid_apr_date;
+invalid input: invalid datetime value 2024-04-31
+SELECT TIMESTAMPADD(DAY, 5, NULL) AS null_date;
+null_date
+null
+SELECT TIMESTAMPADD(DAY, NULL, '2024-12-20') AS null_interval;
+null_interval
+null
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT d, TIMESTAMPADD(DAY, 5, d) AS result_day FROM t1;
+d    result_day
+2024-12-20    2024-12-25
+SELECT d, TIMESTAMPADD(WEEK, 1, d) AS result_week FROM t1;
+d    result_week
+2024-12-20    2024-12-27
+SELECT d, TIMESTAMPADD(MONTH, 1, d) AS result_month FROM t1;
+d    result_month
+2024-12-20    2025-01-20
+SELECT d, TIMESTAMPADD(QUARTER, 1, d) AS result_quarter FROM t1;
+d    result_quarter
+2024-12-20    2025-03-20
+SELECT d, TIMESTAMPADD(YEAR, 1, d) AS result_year FROM t1;
+d    result_year
+2024-12-20    2025-12-20
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT d, TIMESTAMPADD(HOUR, 2, d) AS result_hour FROM t1;
+d    result_hour
+2024-12-20    2024-12-20 02:00:00
+SELECT d, TIMESTAMPADD(MINUTE, 30, d) AS result_minute FROM t1;
+d    result_minute
+2024-12-20    2024-12-20 00:30:00
+SELECT d, TIMESTAMPADD(SECOND, 45, d) AS result_second FROM t1;
+d    result_second
+2024-12-20    2024-12-20 00:00:45
+SELECT d, TIMESTAMPADD(MICROSECOND, 123456, d) AS result_microsecond FROM t1;
+d    result_microsecond
+2024-12-20    2024-12-20 00:00:00.123456000
+DROP TABLE t1;
+CREATE TABLE t1(id INT, d DATE);
+CREATE TABLE t2(id INT, interval_val INT);
+INSERT INTO t1 VALUES (1, '2024-01-31'), (2, '2024-03-31');
+INSERT INTO t2 VALUES (1, 1), (2, 2);
+SELECT t1.d, t2.interval_val, TIMESTAMPADD(MONTH, t2.interval_val, t1.d) AS result
+FROM t1 JOIN t2 ON t1.id = t2.id;
+d    interval_val    result
+2024-01-31    1    2024-02-29
+2024-03-31    2    2024-05-31
+DROP TABLE t1;
+DROP TABLE t2;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-01-31'), ('2024-03-31'), ('2024-05-31');
+SELECT d FROM t1 WHERE TIMESTAMPADD(MONTH, 1, d) > '2024-02-01';
+d
+2024-01-31
+2024-03-31
+2024-05-31
+DROP TABLE t1;
+CREATE TABLE t1(d DATE, category VARCHAR(10));
+INSERT INTO t1 VALUES ('2024-01-31', 'A'), ('2024-03-31', 'A'), ('2024-05-31', 'B');
+SELECT category, TIMESTAMPADD(MONTH, 1, MIN(d)) AS min_next_month
+FROM t1 GROUP BY category;
+category    min_next_month
+A    2024-02-29
+B    2024-06-30
+DROP TABLE t1;
+SELECT TIMESTAMPADD(DAY, 1, '2024-12-20') AS standard_date_format;
+standard_date_format
+2024-12-21
+SELECT TIMESTAMPADD(DAY, 1, '20241220') AS compact_date_format;
+compact_date_format
+2024-12-21
+SELECT TIMESTAMPADD(HOUR, 1, '2024-12-20 10:30:45') AS standard_datetime_format;
+standard_datetime_format
+2024-12-20 11:30:45
+SELECT TIMESTAMPADD(HOUR, 1, '2024-12-20T10:30:45') AS iso_datetime_format;
+iso_datetime_format
+2024-12-20 11:30:45
+CREATE TABLE t1(dt0 DATETIME(0), dt3 DATETIME(3), dt6 DATETIME(6));
+INSERT INTO t1 VALUES
+('2024-12-20 10:30:45', '2024-12-20 10:30:45.123', '2024-12-20 10:30:45.123456');
+SELECT dt0, TIMESTAMPADD(MICROSECOND, 1, dt0) AS dt0_result FROM t1;
+dt0    dt0_result
+2024-12-20 10:30:45    2024-12-20 10:30:45.000001000
+SELECT dt3, TIMESTAMPADD(MICROSECOND, 1, dt3) AS dt3_result FROM t1;
+dt3    dt3_result
+2024-12-20 10:30:45.123000000    2024-12-20 10:30:45.123001000
+SELECT dt6, TIMESTAMPADD(MICROSECOND, 1, dt6) AS dt6_result FROM t1;
+dt6    dt6_result
+2024-12-20 10:30:45.123456000    2024-12-20 10:30:45.123457000
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES ('2024-12-20');
+SELECT d, TIMESTAMPADD(DAY, 5, d) AS day_unit FROM t1;
+d    day_unit
+2024-12-20    2024-12-25
+SELECT d, TIMESTAMPADD(MONTH, 1, d) AS month_unit FROM t1;
+d    month_unit
+2024-12-20    2025-01-20
+SELECT d, TIMESTAMPADD(HOUR, 2, d) AS hour_unit FROM t1;
+d    hour_unit
+2024-12-20    2024-12-20 02:00:00
+DROP TABLE t1;
+CREATE TABLE t1(d DATE);
+INSERT INTO t1 VALUES
+('2024-01-31'), ('2024-03-31'), ('2024-05-31'), ('2024-07-31'), ('2024-08-31'),
+('2024-10-31'), ('2024-12-31'), ('2020-02-28'), ('2021-02-28'), ('2020-02-29');
+SELECT d, TIMESTAMPADD(MONTH, 1, d) AS next_month FROM t1 ORDER BY d;
+d    next_month
+2020-02-28    2020-03-28
+2020-02-29    2020-03-29
+2021-02-28    2021-03-28
+2024-01-31    2024-02-29
+2024-03-31    2024-04-30
+2024-05-31    2024-06-30
+2024-07-31    2024-08-31
+2024-08-31    2024-09-30
+2024-10-31    2024-11-30
+2024-12-31    2025-01-31
+DROP TABLE t1;
+CREATE TABLE t1(d DATE, dt DATETIME);
+INSERT INTO t1 VALUES ('2024-12-20', '2024-12-20 10:30:45');
+SELECT TIMESTAMPADD(DAY, 1, d) AS date_result,
+TIMESTAMPADD(DAY, 1, dt) AS datetime_result FROM t1;
+date_result    datetime_result
+2024-12-21    2024-12-21 10:30:45
+DROP TABLE t1;
+SELECT TIMESTAMPADD(YEAR, 1, '1999-12-31') AS y2k_boundary;
+y2k_boundary
+2000-12-31
+SELECT TIMESTAMPADD(DAY, 1, '2100-02-28') AS year2100_feb28;
+year2100_feb28
+2100-03-01
+SELECT TIMESTAMPADD(DAY, 1, '2400-02-28') AS year2400_feb28;
+year2400_feb28
+2400-02-29
+SELECT TIMESTAMPADD(YEAR, 1, '1899-12-31') AS century_19_to_20;
+century_19_to_20
+1900-12-31
+SELECT TIMESTAMPADD(YEAR, 1, '1999-12-31') AS century_20_to_21;
+century_20_to_21
+2000-12-31
+SELECT TIMESTAMPADD(YEAR, 1, '2099-12-31') AS century_21_to_22;
+century_21_to_22
+2100-12-31

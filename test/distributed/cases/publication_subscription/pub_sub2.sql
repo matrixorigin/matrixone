@@ -458,7 +458,6 @@ drop database db06;
 drop database if exists db08;
 create database db08;
 use db08;
--- @bvt:issue#16438
 drop table if exists employees;
 create table employees (
       emp_no      int             NOT NULL,
@@ -482,7 +481,6 @@ insert into employees values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12
                           (9005,'1981-09-28', 'MARTIN', 'SALESMAN', 'F','2003-09-28'),
                           (9006,'1981-05-01', 'BLAKE', 'MANAGER', 'M', '2003-05-01'),
                           (9007,'1981-06-09', 'CLARK', 'MANAGER', 'F', '2005-06-09');
--- @bvt:issue
 
 drop table if exists pri01;
 create table pri01(

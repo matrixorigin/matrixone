@@ -1,0 +1,54 @@
+SELECT MICROSECOND('15:30:45.123456') AS result1;
+result1
+123456
+SELECT MICROSECOND('15:30:45.123456') AS time_with_microseconds;
+time_with_microseconds
+123456
+SELECT MICROSECOND('00:00:00.000000') AS zero_microseconds;
+zero_microseconds
+0
+SELECT MICROSECOND('23:59:59.999999') AS max_microseconds;
+max_microseconds
+999999
+SELECT MICROSECOND('12:34:56.123') AS partial_microseconds;
+partial_microseconds
+123000
+SELECT MICROSECOND('2024-12-20 15:30:45.123456') AS datetime_with_microseconds;
+datetime_with_microseconds
+123456
+SELECT MICROSECOND('2024-12-20 00:00:00.000000') AS datetime_zero;
+datetime_zero
+0
+SELECT MICROSECOND('2024-12-20 23:59:59.999999') AS datetime_max;
+datetime_max
+999999
+SELECT MICROSECOND(TIMESTAMP('2024-12-20 15:30:45.123456')) AS timestamp_with_microseconds;
+timestamp_with_microseconds
+123456
+SELECT MICROSECOND(NULL) AS null_input;
+null_input
+null
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('15:30:45.123456'), ('00:00:00.000000'), ('23:59:59.999999');
+SELECT t, MICROSECOND(t) AS microsecond FROM t1;
+t    microsecond
+15:30:45    0
+00:00:00    0
+24:00:00    0
+DROP TABLE t1;
+CREATE TABLE t1(dt DATETIME);
+INSERT INTO t1 VALUES ('2024-12-20 15:30:45.123456'), ('2024-12-20 00:00:00.000000'), ('2024-12-20 23:59:59.999999');
+SELECT dt, MICROSECOND(dt) AS microsecond FROM t1;
+dt    microsecond
+2024-12-20 15:30:45    0
+2024-12-20 00:00:00    0
+2024-12-21 00:00:00    0
+DROP TABLE t1;
+CREATE TABLE t1(t TIME);
+INSERT INTO t1 VALUES ('15:30:45.123456'), ('00:00:00.000000'), ('23:59:59.999999');
+SELECT * FROM t1 WHERE MICROSECOND(t) > 100000;
+t
+DROP TABLE t1;
+SELECT MICROSECOND('15:30:45.123456') AS result1, MICROSECOND('15:30:45.000000') AS result2, MICROSECOND('15:30:45.999999') AS result3;
+result1    result2    result3
+123456    0    999999

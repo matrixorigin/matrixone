@@ -46,7 +46,7 @@ func main() {
 		panic(err)
 	}
 
-	st, err := cli.NewStream(addr, false)
+	st, err := cli.NewStream(context.Background(), addr, false)
 	if err != nil {
 		panic(err)
 	}

@@ -1,0 +1,46 @@
+# Basic test case from requirements
+SELECT OCTET_LENGTH('text') AS result1;
+
+# Additional test cases
+# Basic usage
+SELECT OCTET_LENGTH('text') AS octet_length_basic;
+SELECT OCTET_LENGTH('hello') AS octet_length_hello;
+SELECT OCTET_LENGTH('') AS octet_length_empty;
+
+# Compare with LENGTH (should be the same)
+SELECT OCTET_LENGTH('text') AS octet_len, LENGTH('text') AS len;
+
+# Different string types
+SELECT OCTET_LENGTH(CAST('text' AS CHAR(10))) AS octet_length_char;
+SELECT OCTET_LENGTH(CAST('text' AS VARCHAR(10))) AS octet_length_varchar;
+SELECT OCTET_LENGTH(CAST('text' AS TEXT)) AS octet_length_text;
+
+# Unicode strings (OCTET_LENGTH returns bytes, not characters)
+SELECT OCTET_LENGTH('你好') AS octet_length_unicode;
+SELECT OCTET_LENGTH('Hello世界') AS octet_length_mixed;
+
+# NULL handling
+SELECT OCTET_LENGTH(NULL) AS octet_length_null;
+
+# Table usage
+CREATE TABLE t1(s VARCHAR(100));
+INSERT INTO t1 VALUES ('hello'), ('world'), ('test'), ('');
+SELECT s, OCTET_LENGTH(s) AS octet_len FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(s VARCHAR(100));
+INSERT INTO t1 VALUES ('short'), ('medium length'), ('very long string');
+SELECT * FROM t1 WHERE OCTET_LENGTH(s) > 10;
+DROP TABLE t1;
+
+# With expressions
+SELECT OCTET_LENGTH(CONCAT('hello', 'world')) AS octet_length_concat;
+SELECT OCTET_LENGTH(SUBSTRING('hello world', 1, 5)) AS octet_length_substring;
+
+# Binary data
+SELECT OCTET_LENGTH(CAST('binary' AS BLOB)) AS octet_length_blob;
+
+# Long strings
+SELECT OCTET_LENGTH(REPEAT('a', 100)) AS octet_length_repeat;
+

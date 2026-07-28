@@ -15,355 +15,367 @@
 package plan
 
 import (
-	"encoding/json"
+	"fmt"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
-func (builder *QueryBuilder) checkValidHnswDistFn(nodeID int32, projNode, sortNode, scanNode *plan.Node,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, multiTableIndex *MultiTableIndex) bool {
-
-	if len(sortNode.OrderBy) != 1 {
-		return false
-	}
-
-	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
-	if distFnExpr == nil {
-		return false
-	}
-	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
-		return false
-	}
-
-	var limit *plan.Expr
-	if sortNode.Limit != nil {
-		limit = sortNode.Limit
-	} else if scanNode.Limit != nil {
-		limit = scanNode.Limit
-	} else if projNode.Limit != nil {
-		limit = projNode.Limit
-	}
-	if limit == nil {
-		return false
-	}
-
-	idxdef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
-
-	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
-	if err != nil {
-		return false
-	}
-
-	optype, ok := params[catalog.IndexAlgoParamOpType]
-	if !ok {
-		return false
-	}
-
-	if optype != metric.DistFuncOpTypes[distFnExpr.Func.ObjName] {
-		return false
-	}
-
-	_, value, ok := builder.getArgsFromDistFn(scanNode, distFnExpr, idxdef.Parts[0])
-	if !ok {
-		return false
-	}
-
-	if value.Typ.GetId() != int32(types.T_array_float32) {
-		return false
-	}
-
-	if value.GetF() != nil {
-		fnexpr := value.GetF()
-		if fnexpr.Func.ObjName != "cast" {
-			return false
-		}
-	} else {
-		return false
-	}
-
-	return true
+type hnswIndexContext struct {
+	vecCtx       *vectorSortContext
+	metaDef      *plan.IndexDef
+	idxDef       *plan.IndexDef
+	vecLitArg    *plan.Expr
+	origFuncName string
+	partPos      int32
+	pkPos        int32
+	pkType       plan.Type
+	params       string
+	nThread      int64
 }
 
-func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode, sortNode, scanNode *plan.Node,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, multiTableIndex *MultiTableIndex) (int32, error) {
+func buildHnswTableFuncArgs(tblCfgStr string, vecLitArg *plan.Expr) []*plan.Expr {
+	return []*plan.Expr{
+		{
+			Typ: plan.Type{
+				Id: int32(types.T_varchar),
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_Sval{
+						Sval: tblCfgStr,
+					},
+				},
+			},
+		},
+		DeepCopyExpr(vecLitArg),
+	}
+}
+
+func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*hnswIndexContext, error) {
+	if vecCtx == nil || multiTableIndex == nil {
+		return nil, nil
+	}
+	if vecCtx.distFnExpr == nil {
+		return nil, nil
+	}
+
+	// RankOption.Mode controls vector index behavior:
+	// - "force": Disable vector index, force full table scan (for debugging/comparison)
+	// - nil/other: Enable vector index with default behavior
+	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "force" {
+		return nil, nil
+	}
+
+	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
+	if err != nil || !rewriteAllowed {
+		return nil, err
+	}
+
+	metaDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
+	idxDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Storage]
+	if metaDef == nil || idxDef == nil {
+		return nil, nil
+	}
+
+	opTypeAst, err := sonic.Get([]byte(metaDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	if err != nil {
+		return nil, nil
+	}
+	opType, err := opTypeAst.StrictString()
+	if err != nil {
+		return nil, nil
+	}
+
+	origFuncName := vecCtx.distFnExpr.Func.ObjName
+	if opType != metric.DistFuncOpTypes[origFuncName] {
+		return nil, nil
+	}
+
+	if len(idxDef.Parts) == 0 {
+		return nil, nil
+	}
+	keyPart := idxDef.Parts[0]
+	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
+	var vecLitArg *plan.Expr
+	var found bool
+	if vecCtx.vecArgExpr != nil {
+		_, vecLitArg, found = builder.getArgsFromDistFnForJoin(
+			vecCtx.distFnExpr,
+			partPos,
+			vecCtx.scanNode.BindingTags[0],
+		)
+	} else {
+		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	}
+	if !found {
+		return nil, nil
+	}
+
+	pkPos := vecCtx.scanNode.TableDef.Name2ColIndex[vecCtx.scanNode.TableDef.Pkey.PkeyColName]
+	pkType := vecCtx.scanNode.TableDef.Cols[pkPos].Typ
+
+	nThread, err := builder.compCtx.ResolveVariable("hnsw_threads_search", true, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return &hnswIndexContext{
+		vecCtx:       vecCtx,
+		metaDef:      metaDef,
+		idxDef:       idxDef,
+		vecLitArg:    vecLitArg,
+		origFuncName: origFuncName,
+		partPos:      partPos,
+		pkPos:        pkPos,
+		pkType:       pkType,
+		params:       idxDef.IndexAlgoParams,
+		nThread:      nThread.(int64),
+	}, nil
+}
+
+func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (int32, error) {
+
+	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
+		return nodeID, nil
+	}
 
 	ctx := builder.ctxByNode[nodeID]
-	metadef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
-	idxdef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Storage]
-	pkPos := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
-	pkType := scanNode.TableDef.Cols[pkPos].Typ
-	keypart := idxdef.Parts[0]
-	partPos := scanNode.TableDef.Name2ColIndex[keypart]
-	partType := scanNode.TableDef.Cols[partPos].Typ
-	params := idxdef.IndexAlgoParams
+	projNode := vecCtx.projNode
+	scanNode := vecCtx.scanNode
+	childNode := vecCtx.childNode
+	orderExpr := vecCtx.orderExpr
+	limit := vecCtx.limit
 
-	var limit *plan.Expr
-	if sortNode.Limit != nil {
-		limit = sortNode.Limit
-	} else if scanNode.Limit != nil {
-		limit = scanNode.Limit
-	} else if projNode.Limit != nil {
-		limit = projNode.Limit
-	}
-
-	val, err := builder.compCtx.ResolveVariable("hnsw_threads_search", true, false)
-	if err != nil {
+	hnswCtx, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
+	if err != nil || hnswCtx == nil {
 		return nodeID, err
 	}
-	tblcfg := vectorindex.IndexTableConfig{DbName: scanNode.ObjRef.SchemaName,
-		SrcTable:      scanNode.TableDef.Name,
-		MetadataTable: metadef.IndexTableName,
-		IndexTable:    idxdef.IndexTableName,
-		ThreadsSearch: val.(int64)}
 
-	cfgbytes, err := json.Marshal(tblcfg)
-	if err != nil {
-		return nodeID, err
-	}
-	tblcfgstr := string(cfgbytes)
-
-	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
-	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
-
-	_, value, ok := builder.getArgsFromDistFn(scanNode, distFnExpr, keypart)
-	if !ok {
-		return nodeID, moerr.NewInternalErrorNoCtx("invalid distance function")
-	}
-
-	//distFnName := distFuncInternalDistFunc[distFnExpr.Func.ObjName]
-	// fp32vstr := distFnExpr.Args[1].GetLit().GetSval() // fp32vec
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s"}`,
+		scanNode.ObjRef.SchemaName,
+		scanNode.TableDef.Name,
+		hnswCtx.metaDef.IndexTableName,
+		hnswCtx.idxDef.IndexTableName,
+		hnswCtx.nThread,
+		hnswCtx.origFuncName)
 
 	// JOIN between source table and hnsw_search table function
-	var exprs tree.Exprs
-
-	exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-	exprs = append(exprs, tree.NewNumVal[string](tblcfgstr, tblcfgstr, false, tree.P_char))
-
-	fnexpr := value.GetF()
-	f32vec := fnexpr.Args[0].GetLit().GetSval()
-
-	valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](f32vec, f32vec, false, tree.P_char),
-		Type: &tree.T{InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING),
-			FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
-
-	exprs = append(exprs, valExpr)
-
-	hnsw_func := tree.NewCStr(hnsw_search_func_name, 1)
-	alias_name := "mo_hnsw_alias_0"
-	name := tree.NewUnresolvedName(hnsw_func)
-
-	tmpTableFunc := &tree.AliasedTableExpr{
-		Expr: &tree.TableFunction{
-			Func: &tree.FuncExpr{
-				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: hnsw_func,
-				Exprs:    exprs,
-				Type:     tree.FUNC_TYPE_TABLE,
+	tableFuncTag := builder.genNewBindTag()
+	tableFuncNode := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table", //test if ok
+			//Name:               tbl.String(),
+			TblFunc: &plan.TableFunction{
+				Name:  hnswplan.HNSWSearchFuncName,
+				Param: []byte(hnswCtx.params),
 			},
+			Cols: DeepCopyColDefList(hnswplan.HNSWSearchColDefs),
 		},
-		As: tree.AliasClause{
-			Alias: tree.Identifier(alias_name),
-		},
+		BindingTags:     []int32{tableFuncTag},
+		Children:        vectorSearchProviderChildren(vecCtx),
+		TblFuncExprList: buildHnswTableFuncArgs(tblCfgStr, hnswCtx.vecLitArg),
 	}
+	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
-	curr_node_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
+	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_hnsw_alias_0")}, ctx)
 	if err != nil {
-		return nodeID, err
+		return 0, err
 	}
 
-	curr_node := builder.qry.Nodes[curr_node_id]
+	// pushdown limit to Table Function
+	// When there are filters, over-fetch to get more candidates
+	// This ensures we have enough candidates after filtering
+	if len(scanNode.FilterList) > 0 {
+		// Over-fetch strategy: dynamically adjust factor based on limit size
+		// Smaller limits need more over-fetching due to higher variance
+		if limitConst := limit.GetLit(); limitConst != nil {
+			originalLimit := limitConst.GetU64Val()
 
-	curr_node_tag := curr_node.BindingTags[0]
+			// Use shared function to calculate over-fetch factor
+			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
 
-	curr_node_pkcol := &Expr{
-		Typ: pkType,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: curr_node_tag,
-				ColPos: 0,
-			},
-		},
-	}
-
-	// pushdown limit
-	if limit != nil {
-		curr_node.Limit = DeepCopyExpr(limit)
+			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
+			tableFuncNode.Limit = &Expr{
+				Typ: limit.Typ,
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Isnull: false,
+						Value: &plan.Literal_U64Val{
+							U64Val: newLimit,
+						},
+					},
+				},
+			}
+		} else {
+			// If limit is not a constant, just copy it
+			tableFuncNode.Limit = DeepCopyExpr(limit)
+		}
+	} else {
+		// No filters, use original limit
+		tableFuncNode.Limit = DeepCopyExpr(limit)
 	}
 
 	// oncond
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
-			Typ: pkType,
+			Typ: hnswCtx.pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
-					ColPos: pkPos, // tbl.pk
+					ColPos: hnswCtx.pkPos, // tbl.pk
 				},
 			},
 		},
 		{
-			Typ: pkType,
+			Typ: hnswCtx.pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: curr_node_pkcol.GetCol().RelPos, // last idxTbl (may be join) relPos
-					ColPos: 0,                               // idxTbl.pk
+					RelPos: tableFuncTag, // last idxTbl (may be join) relPos
+					ColPos: 0,            // idxTbl.pk
 				},
 			},
 		},
 	})
 
-	joinnodeID := builder.appendNode(&plan.Node{
+	joinNodeID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
-		Children: []int32{scanNode.NodeId, curr_node_id},
+		Children: []int32{scanNode.NodeId, tableFuncNodeID},
 		JoinType: plan.Node_INNER,
 		OnList:   []*Expr{wherePkEqPk},
-		Limit:    DeepCopyExpr(scanNode.Limit),
-		Offset:   DeepCopyExpr(scanNode.Offset),
+		// Don't set Limit/Offset on JOIN - they should be applied after SORT
 	}, ctx)
 
+	// Keep FilterList on scanNode so filters are applied during table scan
+	// Clear Limit/Offset from scanNode since they should be applied after SORT
 	scanNode.Limit = nil
 	scanNode.Offset = nil
 
 	// Create SortBy with distance column from table function
-	orderByScore := make([]*OrderBySpec, 0, 1)
-	orderByScore = append(orderByScore, &OrderBySpec{
-		Expr: &Expr{
-			Typ: curr_node.TableDef.Cols[1].Typ, // score column
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: curr_node.BindingTags[0],
-					ColPos: 1, // score column
+	orderByScore := []*OrderBySpec{
+		{
+			Expr: &Expr{
+				Typ: tableFuncNode.TableDef.Cols[1].Typ, // score column
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tableFuncTag,
+						ColPos: 1, // score column
+					},
 				},
 			},
+			Flag: vecCtx.sortDirection,
 		},
-		Flag: sortDirection,
-	})
+	}
+	resultLimit, resultOffset := vectorResultPagination(vecCtx)
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
-		Children: []int32{joinnodeID},
+		Children: []int32{joinNodeID},
 		OrderBy:  orderByScore,
+		Limit:    resultLimit,
+		Offset:   resultOffset,
+		SpillMem: builder.sortSpillMem,
 	}, ctx)
 
 	projNode.Children[0] = sortByID
 
-	/*
-		// check equal distFn and only compute once for equal function()
-		projids := builder.findEqualDistFnFromProject(projNode, distFnExpr)
-
-		// replace the project with ColRef (same distFn as the order by)
-		for _, id := range projids {
-			projNode.ProjectList[id] = &Expr{
-				Typ: curr_node.TableDef.Cols[1].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: curr_node.BindingTags[0],
-						ColPos: 1, // score
-					},
-				},
+	if childNode != nil {
+		sortIdx := orderExpr.GetCol().ColPos
+		projMap := make(map[[2]int32]*plan.Expr)
+		for i, proj := range childNode.ProjectList {
+			if i == int(sortIdx) {
+				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = DeepCopyExpr(orderByScore[0].Expr)
+			} else {
+				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = proj
 			}
 		}
-	*/
+
+		replaceColumnsForNode(projNode, projMap)
+	}
 
 	return nodeID, nil
 }
 
-func (builder *QueryBuilder) getArgsFromDistFn(scanNode *plan.Node, distfn *plan.Function, keypart string) (key *plan.Expr, value *plan.Expr, found bool) {
+func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPos int32) (key *plan.Expr, value *plan.Expr, found bool) {
 
-	found = false
-	keyid := -1
-	key = nil
-	value = nil
-
-	for i, a := range distfn.Args {
-		if a.GetCol() != nil {
-			colPosOrderBy := a.GetCol().ColPos
-			if colPosOrderBy == scanNode.TableDef.Name2ColIndex[keypart] {
-				found = true
-				keyid = i
-				break
-			}
-		}
+	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+		return
 	}
 
-	if found {
-		key = distfn.Args[keyid]
-		if keyid == 0 {
-			value = distfn.Args[1]
-		} else {
-			value = distfn.Args[0]
-		}
+	distFnArgs := distFnExpr.Args
+	// Accept any vector element type (f32/f64 and the narrow bf16/f16/int8/uint8),
+	// so a direct ivf index on a narrow-base column also pushes down rather than
+	// brute-forcing.
+	if !types.T(distFnArgs[0].Typ.GetId()).IsArrayRelate() {
+		return
 	}
 
-	return key, value, found
+	if distFnArgs[1].GetCol() != nil {
+		if distFnArgs[0].GetCol() != nil {
+			return
+		}
+
+		distFnArgs[0], distFnArgs[1] = distFnArgs[1], distFnArgs[0]
+	}
+
+	vecColArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[0], builder.compCtx.GetProcess(), false, true)
+	if vecColArg != nil {
+		distFnArgs[0] = vecColArg
+	}
+	vecLitArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[1], builder.compCtx.GetProcess(), false, true)
+	if vecLitArg != nil {
+		distFnArgs[1] = vecLitArg
+	}
+
+	if vecColArg.GetCol() == nil {
+		return
+	}
+	if !rule.IsConstant(vecLitArg, true) {
+		return
+	}
+
+	vecLitArg.Typ = vecColArg.Typ
+
+	if vecColArg.GetCol().ColPos != partPos {
+		return
+	}
+
+	return vecColArg, vecLitArg, true
 }
 
-/*
-func (builder *QueryBuilder) findPkFromProject(projNode *plan.Node, pkPos int32) []int32 {
-
-	projids := make([]int32, 0)
-	for i, expr := range projNode.ProjectList {
-		if expr.GetCol() != nil {
-			if expr.GetCol().ColPos == pkPos {
-				projids = append(projids, int32(i))
-			}
-		}
-	}
-	return projids
-}
-
-// e.g. SELECT a, L2_DISTANCE(b, '[0, ..]') FROM SRC ORDER BY L2_DISTANCE(b, '[0,..]') limit 4
-// the plan is 'project -> sort -> project -> tablescan'
-func (builder *QueryBuilder) findEqualDistFnFromProject(projNode *plan.Node, distfn *plan.Function) []int32 {
-
-	projids := make([]int32, 0)
-	optype := distfn.Func.ObjName
-
-	for i, expr := range projNode.ProjectList {
-		fn := expr.GetF()
-		if fn == nil {
-			continue
-		}
-
-		if fn.Func.ObjName != optype {
-			continue
-		}
-
-		// check args
-
-		equal := false
-		for j := range distfn.Args {
-			targ := distfn.Args[j]
-			arg := fn.Args[j]
-
-			if targ.GetCol() != nil && arg.GetCol() != nil && targ.GetCol().ColPos == arg.GetCol().ColPos {
-				equal = true
-				continue
-			}
-			if targ.GetF() != nil && arg.GetF() != nil && targ.GetF().Func.ObjName == "cast" && arg.GetF().Func.ObjName == "cast" {
-				tv32 := targ.GetF().Args[0].GetLit().GetSval()
-				v32 := arg.GetF().Args[0].GetLit().GetSval()
-				if tv32 == v32 {
-					equal = true
-					continue
-				}
-			}
-
-			equal = false
-		}
-
-		if equal {
-			projids = append(projids, int32(i))
-		}
+func (builder *QueryBuilder) getArgsFromDistFnForJoin(
+	distFnExpr *plan.Function,
+	partPos int32,
+	scanTag int32,
+) (key *plan.Expr, value *plan.Expr, found bool) {
+	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+		return
 	}
 
-	return projids
+	distFnArgs := distFnExpr.Args
+	// Accept any vector element type (f32/f64 and the narrow bf16/f16/int8/uint8),
+	// mirroring the direct-match getArgsFromDistFn, so IVFFLAT/HNSW vector JOINs on a
+	// narrow-base column also push down rather than brute-forcing.
+	if !types.T(distFnArgs[0].Typ.GetId()).IsArrayRelate() {
+		return
+	}
+
+	if col := distFnArgs[0].GetCol(); col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+		distFnArgs[1].Typ = distFnArgs[0].Typ
+		return distFnArgs[0], distFnArgs[1], true
+	}
+	if col := distFnArgs[1].GetCol(); col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+		distFnArgs[0].Typ = distFnArgs[1].Typ
+		return distFnArgs[1], distFnArgs[0], true
+	}
+	return
 }
-*/

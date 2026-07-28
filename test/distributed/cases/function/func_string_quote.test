@@ -1,0 +1,30 @@
+# Basic test case from requirements
+SELECT QUOTE('Don\'t') AS result1;
+
+# Additional test cases
+SELECT QUOTE('Hello') AS basic_string;
+SELECT QUOTE('It\'s') AS single_quote;
+SELECT QUOTE('C:\\path') AS backslash;
+SELECT QUOTE('line1\nline2') AS newline;
+SELECT QUOTE('tab\ttest') AS tab;
+SELECT QUOTE('') AS empty_string;
+
+# NULL handling
+SELECT QUOTE(NULL) AS null_input;
+
+# Table usage
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello'), ('Don\'t'), ('It\'s'), ('C:\\path');
+SELECT str, QUOTE(str) AS quoted FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello'), ('Don\'t'), ('It\'s');
+SELECT * FROM t1 WHERE QUOTE(str) = QUOTE('Hello');
+DROP TABLE t1;
+
+# Complex escaping
+SELECT QUOTE('test\x00null') AS with_null_byte;
+SELECT QUOTE('test\x1aend') AS with_ctrl_z;
+

@@ -157,7 +157,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
 				if fstr == "char" || fstr == "binary" {
 					width = 1
-				} else if fstr == "vecf32" || fstr == "vecf64" {
+				} else if fstr == types.ArrayFloat32SQLName || fstr == types.ArrayFloat64SQLName || fstr == types.ArrayBF16SQLName || fstr == types.ArrayFloat16SQLName || fstr == types.ArrayInt8SQLName || fstr == types.ArrayUint8SQLName {
 					width = types.MaxArrayDimension
 				} else {
 					width = types.MaxVarcharLen
@@ -168,7 +168,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
-			} else if fstr == "vecf32" || fstr == "vecf64" {
+			} else if fstr == types.ArrayFloat32SQLName || fstr == types.ArrayFloat64SQLName || fstr == types.ArrayBF16SQLName || fstr == types.ArrayFloat16SQLName || fstr == types.ArrayInt8SQLName || fstr == types.ArrayUint8SQLName {
 				if width > types.MaxArrayDimension {
 					return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
 				}
@@ -183,10 +183,18 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				return plan.Type{Id: int32(types.T_binary), Width: width}, nil
 			case "varchar":
 				return plan.Type{Id: int32(types.T_varchar), Width: width}, nil
-			case "vecf32":
+			case types.ArrayFloat32SQLName:
 				return plan.Type{Id: int32(types.T_array_float32), Width: width}, nil
-			case "vecf64":
+			case types.ArrayFloat64SQLName:
 				return plan.Type{Id: int32(types.T_array_float64), Width: width}, nil
+			case types.ArrayBF16SQLName:
+				return plan.Type{Id: int32(types.T_array_bf16), Width: width}, nil
+			case types.ArrayFloat16SQLName:
+				return plan.Type{Id: int32(types.T_array_float16), Width: width}, nil
+			case types.ArrayInt8SQLName:
+				return plan.Type{Id: int32(types.T_array_int8), Width: width}, nil
+			case types.ArrayUint8SQLName:
+				return plan.Type{Id: int32(types.T_array_uint8), Width: width}, nil
 			}
 			// varbinary
 			return plan.Type{Id: int32(types.T_varbinary), Width: width}, nil
@@ -199,7 +207,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_datetime), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			return plan.Type{Id: int32(types.T_timestamp), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+		case defines.MYSQL_TYPE_YEAR:
+			return plan.Type{Id: int32(types.T_year), Width: 4}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
+			if n.InternalType.DisplayWith > 38 {
+				return plan.Type{Id: int32(types.T_decimal256), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
+			}
 			if n.InternalType.DisplayWith > 16 {
 				return plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 			}
@@ -218,6 +231,39 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			return plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
 			return plan.Type{Id: int32(types.T_json)}, nil
+		case defines.MYSQL_TYPE_TYPED_ARRAY:
+			if n.InternalType.ArrayContents == nil {
+				return plan.Type{}, moerr.NewInternalError(ctx, "array type missing element type")
+			}
+			if _, err := getTypeFromAst(ctx, n.InternalType.ArrayContents); err != nil {
+				return plan.Type{}, err
+			}
+			if err := validateTypedArrayElementType(ctx, n.InternalType.ArrayContents); err != nil {
+				return plan.Type{}, err
+			}
+			arrayType := tree.String(&n.InternalType, dialect.MYSQL)
+			return plan.Type{Id: int32(types.T_json), Enumvalues: arrayType}, nil
+		case defines.MYSQL_TYPE_GEOMETRY:
+			fstr := strings.ToUpper(n.InternalType.FamilyString)
+			oid := types.T_geometry
+			srid := uint32(0)
+			sridDefined := false
+			if n.InternalType.GeoMetadata != nil {
+				srid = n.InternalType.GeoMetadata.SRID
+				sridDefined = n.InternalType.GeoMetadata.SRIDDefined
+				if n.InternalType.GeoMetadata.Float32 {
+					oid = types.T_geometry32
+				}
+			}
+			if sridDefined {
+				if err := validateGeometrySRID(int64(srid)); err != nil {
+					return plan.Type{}, err
+				}
+			}
+			typ := plan.Type{Id: int32(oid)}
+			typ.Scale = int32(geometrySubtypeEnum(fstr))
+			typ.Width = encodeGeometrySRIDWidth(srid, sridDefined)
+			return typ, nil
 		case defines.MYSQL_TYPE_UUID:
 			return plan.Type{Id: int32(types.T_uuid)}, nil
 		case defines.MYSQL_TYPE_TINY_BLOB:
@@ -235,11 +281,40 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			}
 
 			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+		case defines.MYSQL_TYPE_SET:
+			setValues, err := types.NormalizeSetValues(n.InternalType.EnumValues)
+			if err != nil {
+				return plan.Type{}, err
+			}
+
+			return plan.Type{Id: int32(types.T_uint64), Enumvalues: strings.Join(setValues, ",")}, nil
 		default:
 			return plan.Type{}, moerr.NewNYIf(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
 	}
 	return plan.Type{}, moerr.NewInternalError(ctx, "unknown data type")
+}
+
+func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs []tree.ColumnAttribute) error {
+	if !isGeometryPlanType(colType) {
+		for _, attr := range attrs {
+			if _, ok := attr.(*tree.AttributeSRID); ok {
+				return moerr.NewInvalidInputf(ctx, "SRID is only supported for GEOMETRY columns")
+			}
+		}
+		return nil
+	}
+	// Scale (subtype) is already set by getTypeFromAst; an SRID column attribute
+	// only overrides the SRID, which lives in Width.
+	srid, sridDefined := geometrySRIDValue(colType)
+	for _, attr := range attrs {
+		if sridAttr, ok := attr.(*tree.AttributeSRID); ok {
+			srid = sridAttr.Value
+			sridDefined = true
+		}
+	}
+	colType.Width = encodeGeometrySRIDWidth(srid, sridDefined)
+	return nil
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
@@ -259,13 +334,21 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		}
 	}
 
+	originExpr := expr
+	semanticExpr := unwrapParenExpr(expr)
+
 	colNameOrigin := col.Name.ColNameOrigin()
 	if typ.Id == int32(types.T_json) {
-		if expr != nil && !isNullAstExpr(expr) {
+		if semanticExpr != nil && !isNullAstExpr(semanticExpr) {
 			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("JSON column '%s' cannot have default value", colNameOrigin))
 		}
 	}
-	if !nullAbility && isNullAstExpr(expr) {
+	if isGeometryPlanType(&typ) {
+		if semanticExpr != nil && !isNullAstExpr(semanticExpr) {
+			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("GEOMETRY column '%s' cannot have default value", colNameOrigin))
+		}
+	}
+	if !nullAbility && isNullAstExpr(semanticExpr) {
 		return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 	}
 
@@ -276,20 +359,21 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 			OriginString: "",
 		}, nil
 	}
+	_, isExpressionDefault := originExpr.(*tree.ParenExpr)
 
 	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
-	planExpr, err := binder.BindExpr(expr, 0, false)
+	planExpr, err := binder.BindExpr(semanticExpr, 0, false)
 	if err != nil {
 		return nil, err
 	}
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
-		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" {
+		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" && !isExpressionDefault {
 			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
 		}
 	}
 
-	defaultExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	defaultExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -297,11 +381,11 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	if err != nil {
-		return nil, err
+		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, colNameOrigin, err)
 	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
-	fmtCtx.PrintExpr(expr, expr, false)
+	fmtCtx.PrintExpr(originExpr, originExpr, false)
 	return &plan.Default{
 		NullAbility:  nullAbility,
 		Expr:         newExpr,
@@ -329,7 +413,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		return nil, err
 	}
 
-	onUpdateExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	onUpdateExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +426,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	defer executor.Free()
 	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
-		return nil, err
+		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, col.Name.ColNameOrigin(), err)
 	}
 
 	ret := &plan.OnUpdate{
@@ -350,6 +434,334 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		OriginString: tree.String(expr, dialect.MYSQL),
 	}
 	return ret, nil
+}
+
+// buildGeneratedExpr builds the expression for a GENERATED ALWAYS AS column.
+// existingCols contains the columns defined before this generated column, used
+// to resolve column references in the expression.
+// getColumnNullAbility returns the nullability of a column based on its attributes.
+// Returns true if the column allows NULL (default), false if NOT NULL is specified.
+func getColumnNullAbility(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if s, ok := attr.(*tree.AttributeNull); ok {
+			return s.Is
+		}
+	}
+	return true
+}
+
+func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process) (*plan.GeneratedCol, error) {
+	var genAttr *tree.AttributeGeneratedAlways
+	for _, attr := range col.Attributes {
+		if ga, ok := attr.(*tree.AttributeGeneratedAlways); ok {
+			genAttr = ga
+			break
+		}
+	}
+	if genAttr == nil {
+		return nil, nil
+	}
+
+	colNameOrigin := col.Name.ColNameOrigin()
+
+	// Validate: generated column cannot have DEFAULT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeDefault); ok {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have a default value", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have ON UPDATE
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeOnUpdate); ok {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have ON UPDATE", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have AUTO_INCREMENT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have AUTO_INCREMENT", colNameOrigin)
+		}
+	}
+
+	// Collect column names and types from existing (non-generated or already-defined generated) columns
+	colNames := make([]string, len(existingCols))
+	colTypes := make([]plan.Type, len(existingCols))
+	for i, c := range existingCols {
+		colNames[i] = c.Name
+		colTypes[i] = c.Typ
+	}
+
+	binder := NewGeneratedColBinder(proc.Ctx, colNames, colTypes)
+	planExpr, err := binder.BindExpr(genAttr.Expr, 0, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate: generated column expression cannot contain non-deterministic functions
+	if err := checkExprForVolatileFunc(proc.Ctx, planExpr); err != nil {
+		return nil, err
+	}
+	if err := checkGeneratedExprReferences(proc.Ctx, planExpr, colNameOrigin, existingCols, make(map[int32]bool)); err != nil {
+		return nil, err
+	}
+
+	// Persist only stable function IDs in generated-column catalog metadata.
+	// DML plan construction rewrites this wrapper to cast_assign/cast_ignore
+	// when the active protocol supports those functions.
+	genExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
+	if err != nil {
+		return nil, err
+	}
+
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	fmtCtx.PrintExpr(genAttr.Expr, genAttr.Expr, false)
+	return &plan.GeneratedCol{
+		Expr:         genExpr,
+		OriginString: fmtCtx.String(),
+		IsStored:     genAttr.Stored,
+	}, nil
+}
+
+func mapDDLAssignmentCastError(ctx context.Context, typ plan.Type, colName string, err error) error {
+	if (typ.Id == int32(types.T_char) || typ.Id == int32(types.T_varchar)) &&
+		moerr.IsMoErrCode(err, moerr.ErrInternal) {
+		return moerr.NewErrInvalidDefault(ctx, colName)
+	}
+	return err
+}
+
+// checkGeneratedExprReferences rejects variable references and auto-increment
+// dependencies in generated-column expressions, including indirect references
+// through earlier generated columns.
+func checkGeneratedExprReferences(ctx context.Context, expr *plan.Expr, currentColName string, cols []*ColDef, visited map[int32]bool) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if int(e.Col.ColPos) >= len(cols) {
+			return nil
+		}
+		refCol := cols[e.Col.ColPos]
+		if refCol.Typ.AutoIncr {
+			return moerr.NewInvalidInputf(ctx, "generated column '%s' cannot refer to auto-increment column", currentColName)
+		}
+		if refCol.GeneratedCol != nil && refCol.GeneratedCol.Expr != nil && !visited[e.Col.ColPos] {
+			visited[e.Col.ColPos] = true
+			return checkGeneratedExprReferences(ctx, refCol.GeneratedCol.Expr, currentColName, cols, visited)
+		}
+	case *plan.Expr_V:
+		return moerr.NewInvalidInputf(ctx, "expression of generated column cannot refer to a variable")
+	case *plan.Expr_P:
+		return moerr.NewInvalidInputf(ctx, "expression of generated column cannot contain parameter marker")
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if err := checkGeneratedExprReferences(ctx, arg, currentColName, cols, visited); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := checkGeneratedExprReferences(ctx, item, currentColName, cols, visited); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkExprForVolatileFunc walks a plan expression tree and reports an error
+// if any function call is volatile or real-time related, which is not allowed
+// in generated column expressions.
+func checkExprForVolatileFunc(ctx context.Context, expr *plan.Expr) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		ov, exists := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+		if exists && (ov.CannotFold() || ov.IsRealTimeRelated()) {
+			return moerr.NewInvalidInputf(ctx,
+				"expression of generated column cannot refer to a non-deterministic function '%s'", e.F.Func.ObjName)
+		}
+		for _, arg := range e.F.Args {
+			if err := checkExprForVolatileFunc(ctx, arg); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := checkExprForVolatileFunc(ctx, item); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_Lit, *plan.Expr_Max, *plan.Expr_Vec:
+		// Leaf nodes – nothing to recurse into.
+	}
+	return nil
+}
+
+// validateNoForwardGenRef checks that a generated column expression does not
+// reference another generated column that is defined after it in the CREATE TABLE
+// statement. Forward references to base (non-generated) columns are allowed.
+func validateNoForwardGenRef(ctx context.Context, expr *plan.Expr, currentIdx int, allCols []*ColDef, isGenerated []bool) error {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		refIdx := int(e.Col.ColPos)
+		if refIdx > currentIdx && refIdx < len(isGenerated) && isGenerated[refIdx] {
+			return moerr.NewInvalidInputf(ctx,
+				"generated column '%s' cannot refer to generated column '%s' defined later",
+				allCols[currentIdx].Name, allCols[refIdx].Name)
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if err := validateNoForwardGenRef(ctx, arg, currentIdx, allCols, isGenerated); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := validateNoForwardGenRef(ctx, item, currentIdx, allCols, isGenerated); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_Lit, *plan.Expr_Max, *plan.Expr_Vec:
+		// Leaf nodes – nothing to recurse into.
+	}
+	return nil
+}
+
+// remapGeneratedColExpr rewrites ColRef positions in a generated column expression
+// for use in INSERT/UPDATE projections. The stored expression has ColRef(0, colIdx)
+// inlineGeneratedColExpr replaces ColRef(0, colIdx) in a generated column expression
+// with a deep copy of the corresponding expression from projList1.
+// colIdxToProjPos maps tableDef column index → projList1 position.
+// This is used in INSERT to compute the generated value in projList1 directly.
+func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, projList1 []*plan.Expr) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			if projPos, ok := colIdxToProjPos[e.Col.ColPos]; ok {
+				if int(projPos) < len(projList1) {
+					src := DeepCopyExpr(projList1[projPos])
+					expr.Expr = src.Expr
+					expr.Typ = src.Typ
+				}
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			inlineGeneratedColExpr(arg, colIdxToProjPos, projList1)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			inlineGeneratedColExpr(item, colIdxToProjPos, projList1)
+		}
+	}
+}
+
+// applyGeneratedColumnAssignmentCast upgrades persisted legacy cast_strict
+// wrappers to cast_assign and uses cast_ignore for INSERT/UPDATE IGNORE. This
+// keeps generated-column assignment semantics compatible across catalog
+// versions without rewriting catalog rows.
+func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr, isIgnore bool) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil ||
+		(f.Func.ObjName != "cast_assign" && f.Func.ObjName != "cast_strict") ||
+		len(f.Args) == 0 {
+		return expr
+	}
+	funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
+	assignmentCast, err := forceCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
+	if err != nil {
+		return expr
+	}
+	return assignmentCast
+}
+
+// substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression
+// with the actual expressions from projList at offset+colIdx. This is used in UPDATE
+// to inline referenced column values into the generated expression.
+func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int32) *plan.Expr {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			pos := offset + e.Col.ColPos
+			if int(pos) < len(projList) {
+				return DeepCopyExpr(projList[pos])
+			}
+		}
+		return expr
+	case *plan.Expr_F:
+		newArgs := make([]*plan.Expr, len(e.F.Args))
+		for i, arg := range e.F.Args {
+			newArgs[i] = substituteColRefsInExpr(arg, projList, offset)
+		}
+		return &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: e.F.Func,
+					Args: newArgs,
+				},
+			},
+		}
+	case *plan.Expr_List:
+		newItems := make([]*plan.Expr, len(e.List.List))
+		for i, item := range e.List.List {
+			newItems[i] = substituteColRefsInExpr(item, projList, offset)
+		}
+		return &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_List{
+				List: &plan.ExprList{List: newItems},
+			},
+		}
+	default:
+		return expr
+	}
+}
+
+// collectRefColPos returns the ColPos of every base-table column reference
+// (RelPos == 0) inside expr, e.g. the source columns of a generated column's
+// definition expression.
+func collectRefColPos(expr *plan.Expr) []int32 {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			return []int32{e.Col.ColPos}
+		}
+		return nil
+	case *plan.Expr_F:
+		var res []int32
+		for _, arg := range e.F.Args {
+			res = append(res, collectRefColPos(arg)...)
+		}
+		return res
+	case *plan.Expr_List:
+		var res []int32
+		for _, item := range e.List.List {
+			res = append(res, collectRefColPos(item)...)
+		}
+		return res
+	default:
+		return nil
+	}
 }
 
 func isNullExpr(expr *plan.Expr) bool {
@@ -692,8 +1104,163 @@ func genSqlsForCheckFKSelfRefer(ctx context.Context,
 	return ret, nil
 }
 
+// genPreCheckSqlsForReplaceFKSelfRefer generates pre-check SQLs that verify
+// no other row references the PK values being replaced (parent→child safety).
+// These run BEFORE the REPLACE execution to enforce RESTRICT semantics.
+func genPreCheckSqlsForReplaceFKSelfRefer(
+	ctx context.Context,
+	dbName, tblName string,
+	cols []*plan.ColDef,
+	fkeys []*plan.ForeignKeyDef,
+	stmt *tree.Replace,
+) ([]string, error) {
+	if stmt.Rows == nil {
+		return nil, nil
+	}
+	valuesClause, ok := stmt.Rows.Select.(*tree.ValuesClause)
+	if !ok {
+		return nil, nil
+	}
+
+	ret := make([]string, 0, len(fkeys))
+	for _, fkey := range fkeys {
+		if fkey.ForeignTbl != 0 {
+			continue
+		}
+		// Only RESTRICT / NO_ACTION need a parent→child pre-check.
+		// CASCADE / SET_NULL / SET_DEFAULT semantics allow the operation to
+		// proceed and let the cascading action handle the children, so a
+		// pre-check would incorrectly block valid REPLACEs.
+		if fkey.OnDelete != plan.ForeignKeyDef_RESTRICT &&
+			fkey.OnDelete != plan.ForeignKeyDef_NO_ACTION {
+			continue
+		}
+		fkCols, err := colIdsToNames(ctx, fkey.Cols, cols)
+		if err != nil {
+			return nil, err
+		}
+		referCols, err := colIdsToNames(ctx, fkey.ForeignCols, cols)
+		if err != nil {
+			return nil, err
+		}
+		if len(referCols) != 1 || len(fkCols) != 1 {
+			continue
+		}
+
+		// Build column name → position in the Replace column list.
+		// Names are stored lower-cased in ColDef.Name; the user-supplied
+		// AST identifiers may use any casing, so normalize both sides.
+		colNameToPos := make(map[string]int)
+		if len(stmt.Columns) > 0 {
+			for i, col := range stmt.Columns {
+				colNameToPos[strings.ToLower(string(col))] = i
+			}
+		} else {
+			// Implicit column list: same visible-column rule as
+			// getInsertColsFromStmt — skip hidden cols (e.g. composite PK
+			// helper, fake PK, cluster-by composite, Row_ID), since the
+			// user VALUES list never supplies them.
+			pos := 0
+			for _, col := range cols {
+				if col.Hidden {
+					continue
+				}
+				colNameToPos[col.Name] = pos
+				pos++
+			}
+		}
+
+		refPos, ok := colNameToPos[referCols[0]]
+		if !ok {
+			continue
+		}
+
+		// The pre-check SQL embeds referenced PK values directly into a
+		// background statement. That is only semantics-preserving for
+		// static literals (NumVal/StrVal, including NULL via NumVal
+		// P_null). Non-literals such as prepared-statement parameters
+		// (ParamExpr "?"), function calls (rand(), uuid(), now()),
+		// subqueries, arithmetic, etc. would be re-evaluated when the
+		// pre-check runs and may not match the value actually written
+		// by REPLACE — skip pre-check generation in those cases.
+		//
+		// Trade-off: prepared REPLACE on RESTRICT self-ref FK tables and
+		// REPLACE with non-literal PK expressions lose the parent-row
+		// safety check. The full fix needs to defer pre-check generation
+		// to compile time after parameters/expressions are evaluated,
+		// which is a larger change left for follow-up work.
+		isSimpleLiteralExpr := func(expr tree.Expr) bool {
+			switch expr.(type) {
+			case *tree.NumVal, *tree.StrVal:
+				return true
+			default:
+				return false
+			}
+		}
+
+		hasUnsafeRefExpr := false
+		var valStrs []string
+		for _, row := range valuesClause.Rows {
+			if refPos >= len(row) {
+				continue
+			}
+			if !isSimpleLiteralExpr(row[refPos]) {
+				hasUnsafeRefExpr = true
+				break
+			}
+			valStrs = append(valStrs, tree.String(row[refPos], dialect.MYSQL))
+		}
+		if hasUnsafeRefExpr || len(valStrs) == 0 {
+			continue
+		}
+
+		inList := strings.Join(valStrs, ",")
+		tableClause := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
+		sql := fmt.Sprintf(
+			"select count(*) = 0 from %s where `%s` in (%s) and `%s` is not null and `%s` not in (%s)",
+			tableClause, fkCols[0], inList, fkCols[0], referCols[0], inList,
+		)
+		ret = append(ret, sql)
+	}
+	return ret, nil
+}
+
 func cleanHint(originSql string) string {
 	re := regexp.MustCompile(`/\*[^!].*?\*/`)
 	cleanSQL := re.ReplaceAllString(originSql, "")
 	return cleanSQL
+}
+
+// RewriteCountNotNullColToStarcount rewrites count(not_null_col) to starcount (ObjName + Obj) on node.AggList
+// so that compile uses countStarExec instead of countColumnExec. tableDef must be the child's (e.g. TABLE_SCAN).
+func RewriteCountNotNullColToStarcount(node *plan.Node, tableDef *plan.TableDef) {
+	if node == nil || tableDef == nil || len(node.AggList) == 0 {
+		return
+	}
+	for i := range node.AggList {
+		agg := node.AggList[i].GetF()
+		if agg == nil || agg.Func == nil || agg.Func.ObjName != "count" {
+			continue
+		}
+		if uint64(agg.Func.Obj)&function.Distinct != 0 {
+			continue
+		}
+		if len(agg.Args) == 0 {
+			continue
+		}
+		arg := agg.Args[0]
+		col := arg.GetCol()
+		if col == nil {
+			continue
+		}
+		colPos := int(col.ColPos)
+		if colPos < 0 || colPos >= len(tableDef.Cols) {
+			continue
+		}
+		if !tableDef.Cols[colPos].Typ.NotNullable {
+			continue
+		}
+		agg.Func.ObjName = "starcount"
+		agg.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
+	}
 }

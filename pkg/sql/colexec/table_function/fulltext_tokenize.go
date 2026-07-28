@@ -15,8 +15,10 @@
 package table_function
 
 import (
+	"bytes"
 	"encoding/json"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -109,7 +111,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	if !u.inited {
 		if len(tf.Params) > 0 {
-			err := json.Unmarshal([]byte(tf.Params), &u.param)
+			err := sonic.Unmarshal([]byte(tf.Params), &u.param)
 			if err != nil {
 				return err
 			}
@@ -131,7 +133,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	vlen := len(tf.ctr.argVecs)
 
 	idVec := tf.ctr.argVecs[0]
-	id := vector.GetAny(idVec, nthRow)
+	id := vector.GetAny(idVec, nthRow, true)
 
 	isnull := false
 	for i := 1; i < vlen; i++ {
@@ -143,12 +145,12 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 
 	switch u.param.Parser {
-	case "", "ngram", "default":
+	case "", "ngram", "default", "gojieba":
 
-		var c string
+		var content bytes.Buffer
 		for i := 1; i < vlen; i++ {
 			if i > 1 {
-				c += "\n"
+				content.WriteByte('\n')
 			}
 			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
 
@@ -166,14 +168,29 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 					return err
 				}
 
-				c += string(b)
+				content.Write(b)
 			} else {
-				c += data
+				content.WriteString(data)
 			}
 		}
 
-		tok, _ := tokenizer.NewSimpleTokenizer([]byte(c))
-		for t := range tok.Tokenize() {
+		var tok tokenizer.Tokenizer
+		if u.param.Parser == "gojieba" {
+			// Build path uses HMM=false: dictionary-only segmentation
+			// gives stable tokens across runs and avoids HMM-discovered
+			// "new words" that wouldn't match a query-time tokenization.
+			jtok, jerr := tokenizer.SharedJiebaTokenizer(false)
+			if jerr != nil {
+				return jerr
+			}
+			tok = jtok
+		} else {
+			tok = tokenizer.NewSimpleTokenizer()
+		}
+		for t, err := range tok.Tokenize(content.Bytes()) {
+			if err != nil {
+				return err
+			}
 
 			slen := t.TokenBytes[0]
 			word := string(t.TokenBytes[1 : slen+1])
@@ -202,10 +219,12 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			voffset := int32(0)
 			for t := range bj.TokenizeValue(false) {
 				jslen := t.TokenBytes[0]
-				value := string(t.TokenBytes[1 : jslen+1])
 				// tokenize the value
-				tok, _ := tokenizer.NewSimpleTokenizer([]byte(value))
-				for tt := range tok.Tokenize() {
+				tok := tokenizer.NewSimpleTokenizer()
+				for tt, err := range tok.Tokenize(t.TokenBytes[1 : jslen+1]) {
+					if err != nil {
+						return err
+					}
 					tslen := tt.TokenBytes[0]
 					word := string(tt.TokenBytes[1 : tslen+1])
 					u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: word, Pos: joffset + voffset + tt.BytePos})
@@ -237,8 +256,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			voffset := int32(0)
 			for t := range bj.TokenizeValue(false) {
 				jslen := t.TokenBytes[0]
-				value := string(t.TokenBytes[1 : jslen+1])
-				u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: value, Pos: joffset + voffset})
+				u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: string(t.TokenBytes[1 : jslen+1]), Pos: joffset + voffset})
 				voffset += int32(jslen)
 			}
 

@@ -58,6 +58,7 @@ type CatalogCache struct {
 		start types.TS
 		end   types.TS
 	}
+	gcMu sync.Mutex
 	//tables and database is safe to be read concurrently.
 	tables    *tableCache
 	databases *databaseCache
@@ -140,6 +141,8 @@ type TableItem struct {
 	PrimarySeqnum int
 	// clusterBy key
 	ClusterByIdx int
+
+	LogicalId uint64
 }
 
 func (item *TableItem) IsDeleted() bool {
@@ -316,7 +319,8 @@ func copyTableItem(dst, src *TableItem) {
 	dst.ClusterByIdx = src.ClusterByIdx
 	dst.PrimarySeqnum = src.PrimarySeqnum
 	dst.Version = src.Version
-	dst.ExtraInfo = api.MustUnmarshalTblExtra(api.MustMarshalTblExtra(src.ExtraInfo))
+	dst.ExtraInfo = api.CloneExtra(src.ExtraInfo)
+	dst.LogicalId = src.LogicalId
 }
 
 func copyDatabaseItem(dest, src *DatabaseItem) {

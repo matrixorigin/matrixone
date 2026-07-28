@@ -16,11 +16,33 @@ package process
 
 import (
 	"context"
+	"reflect"
+	"slices"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
-	"reflect"
-	"time"
+)
+
+var (
+	// PipelineCleanupWaitTimeout bounds cleanup-only waits for terminal
+	// pipeline signals. Normal query execution does not use this timeout.
+	PipelineCleanupWaitTimeout = 30 * time.Second
+
+	// PipelineSignalSendTimeout bounds cleanup-only terminal signal sends.
+	PipelineSignalSendTimeout = 30 * time.Second
+
+	// ErrPipelineEndSignalDeliveryFailed marks a successful cleanup path that
+	// could not enqueue its normal End signal and had to fall back to abort.
+	ErrPipelineEndSignalDeliveryFailed = moerr.NewInternalErrorNoCtx("pipeline end signal delivery failed")
+
+	// ErrPipelineTerminalWithoutCause marks a failure/abort terminal event whose
+	// caller did not provide the original cause. Error and Abort terminal events
+	// must always carry a non-nil error so receivers cannot confuse failure with
+	// graceful End.
+	ErrPipelineTerminalWithoutCause = moerr.NewInternalErrorNoCtx("pipeline terminal event missing cause")
 )
 
 type PipelineActionType uint8
@@ -30,8 +52,51 @@ const (
 	GetDirectly
 )
 
+// PipelineEventType is the typed terminal event for pipeline edges.
+// It makes the termination protocol explicit instead of relying on nil-batch
+// conventions and NilBatchCnt counting.
+type PipelineEventType uint8
+
+const (
+	// EventData carries a normal data batch. Batch may be nil for empty
+	// intermediate results; nil alone is NOT a terminal signal.
+	EventData PipelineEventType = iota
+	// EventEnd signals graceful pipeline completion with no error.
+	EventEnd
+	// EventError signals pipeline completion due to an error.
+	EventError
+	// EventAbort signals forced pipeline teardown (cancellation, remote failure, etc.).
+	EventAbort
+)
+
+func (t PipelineEventType) IsTerminal() bool {
+	return t == EventEnd || t == EventError || t == EventAbort
+}
+
+func (t PipelineEventType) String() string {
+	switch t {
+	case EventData:
+		return "Data"
+	case EventEnd:
+		return "End"
+	case EventError:
+		return "Error"
+	case EventAbort:
+		return "Abort"
+	default:
+		return "Unknown"
+	}
+}
+
 type PipelineSignal struct {
 	typ PipelineActionType
+
+	// EventType is set for typed terminal events (EventEnd/EventError/EventAbort).
+	// When EventType != EventData, this signal carries a terminal event, not a data batch.
+	EventType PipelineEventType
+
+	// terminalErr carries the error for EventError and EventAbort.
+	terminalErr error
 
 	// for case: GetFromIndex
 	index  int
@@ -46,30 +111,206 @@ type PipelineSignal struct {
 // NewPipelineSignalToGetFromSpool return a signal indicate the receiver to get data from source by index.
 func NewPipelineSignalToGetFromSpool(source *pSpool.PipelineSpool, index int) PipelineSignal {
 	return PipelineSignal{
-		typ:      GetFromIndex,
-		source:   source,
-		index:    index,
-		mp:       nil,
-		directly: nil,
+		typ:       GetFromIndex,
+		EventType: EventData,
+		source:    source,
+		index:     index,
+		mp:        nil,
+		directly:  nil,
 	}
 }
 
 // NewPipelineSignalToDirectly return a signal indicates the receiver to get data from signal directly.
 func NewPipelineSignalToDirectly(data *batch.Batch, err error, mp *mpool.MPool) PipelineSignal {
 	return PipelineSignal{
-		typ:      GetDirectly,
-		source:   nil,
-		index:    0,
-		directly: data,
-		mp:       mp,
-		errInfo:  err,
+		typ:       GetDirectly,
+		EventType: EventData,
+		source:    nil,
+		index:     0,
+		directly:  data,
+		mp:        mp,
+		errInfo:   err,
+	}
+}
+
+// NewEndSignal returns a PipelineSignal carrying an explicit EventEnd.
+// It is idempotent: receivers must treat multiple End signals safely.
+func NewEndSignal() PipelineSignal {
+	return PipelineSignal{
+		typ:       GetDirectly,
+		EventType: EventEnd,
+	}
+}
+
+// NewErrorSignal returns a PipelineSignal carrying an explicit EventError.
+// It is idempotent: receivers must treat multiple Error signals safely.
+func NewErrorSignal(err error) PipelineSignal {
+	if err == nil {
+		err = ErrPipelineTerminalWithoutCause
+	}
+	return PipelineSignal{
+		typ:         GetDirectly,
+		EventType:   EventError,
+		terminalErr: err,
+	}
+}
+
+// NewAbortSignal returns a PipelineSignal carrying an explicit EventAbort.
+// It is idempotent: receivers must treat multiple Abort signals safely.
+func NewAbortSignal(err error) PipelineSignal {
+	if err == nil {
+		err = ErrPipelineTerminalWithoutCause
+	}
+	return PipelineSignal{
+		typ:         GetDirectly,
+		EventType:   EventAbort,
+		terminalErr: err,
+	}
+}
+
+func NormalizePipelineCleanupError(pipelineFailed bool, err error) error {
+	if err != nil {
+		return err
+	}
+	if pipelineFailed {
+		return ErrPipelineTerminalWithoutCause
+	}
+	return nil
+}
+
+// BuildCleanupSignal returns the appropriate terminal signal for pipeline cleanup.
+// EventError is used when pipelineFailed=true or err!=nil; EventEnd otherwise.
+func BuildCleanupSignal(pipelineFailed bool, err error) PipelineSignal {
+	if cleanupErr := NormalizePipelineCleanupError(pipelineFailed, err); cleanupErr != nil {
+		return NewErrorSignal(cleanupErr)
+	}
+	return NewEndSignal()
+}
+
+// IsTerminal returns true for End, Error, or Abort signals.
+func (signal PipelineSignal) IsTerminal() bool {
+	return signal.EventType.IsTerminal()
+}
+
+// TerminalErr returns the error carried by EventError or EventAbort.
+func (signal PipelineSignal) TerminalErr() error {
+	return signal.terminalErr
+}
+
+func SendPipelineSignalWithTimeout(reg *WaitRegister, signal PipelineSignal, timeout time.Duration) bool {
+	if reg == nil || reg.Ch2 == nil {
+		return false
+	}
+	if signal.EventType.IsTerminal() {
+		if timeout <= 0 {
+			return reg.sendTerminalWithContext(context.TODO(), signal)
+		}
+		ctx, cancel := context.WithTimeout(context.TODO(), timeout)
+		defer cancel()
+		return reg.sendTerminalWithContext(ctx, signal)
+	}
+	if timeout <= 0 {
+		reg.Ch2 <- signal
+		return true
+	}
+
+	ctx, cancel := context.WithTimeout(context.TODO(), timeout)
+	defer cancel()
+
+	return SendPipelineSignalWithContext(ctx, reg, signal)
+}
+
+func SendPipelineSignalWithContext(ctx context.Context, reg *WaitRegister, signal PipelineSignal) bool {
+	if reg == nil || reg.Ch2 == nil {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.TODO()
+	}
+	if signal.EventType.IsTerminal() {
+		return reg.sendTerminalWithContext(ctx, signal)
+	}
+	select {
+	case reg.Ch2 <- signal:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func TrySendPipelineSignal(reg *WaitRegister, signal PipelineSignal) bool {
+	if reg == nil || reg.Ch2 == nil {
+		return false
+	}
+	if signal.EventType.IsTerminal() {
+		return reg.trySendTerminal(signal)
+	}
+	select {
+	case reg.Ch2 <- signal:
+		return true
+	default:
+		return false
+	}
+}
+
+func WaitRegisterChannelState(reg *WaitRegister) (int, int) {
+	if reg == nil || reg.Ch2 == nil {
+		return 0, 0
+	}
+	return len(reg.Ch2), cap(reg.Ch2)
+}
+
+// WaitPipelineSignalCapacity blocks until the receiver channel has room for a
+// new signal. It is used by senders before pulling more input from upstream so
+// downstream backpressure can slow batch production before additional spool
+// memory is allocated.
+func WaitPipelineSignalCapacity(ctx context.Context, reg *WaitRegister) bool {
+	if reg == nil || reg.Ch2 == nil {
+		return false
+	}
+	if cap(reg.Ch2) == 0 {
+		return true
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	select {
+	case <-reg.Done():
+		return false
+	default:
+	}
+	if len(reg.Ch2) < cap(reg.Ch2) {
+		return true
+	}
+	if ctx == nil {
+		ctx = context.TODO()
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if len(reg.Ch2) < cap(reg.Ch2) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-reg.Done():
+			return false
+		case <-ticker.C:
+		}
 	}
 }
 
 // Action will get the input batch from one place according to which type this signal is.
 //
-// the result batch of this function is an READ-ONLY one.
+// For terminal events (EventEnd/EventError/EventAbort), nil batch is returned.
+// The result batch of this function is an READ-ONLY one.
 func (signal PipelineSignal) Action() (data *batch.Batch, info error) {
+	// Terminal events never carry data.
+	if signal.EventType.IsTerminal() {
+		return nil, signal.terminalErr
+	}
+
 	if signal.typ == GetFromIndex {
 		data, info = signal.source.ReceiveBatch(signal.index)
 		return data, info
@@ -81,21 +322,32 @@ func (signal PipelineSignal) Action() (data *batch.Batch, info error) {
 type PipelineSignalReceiver struct {
 	usrCtx context.Context
 	srcReg []*WaitRegister
+	doneCh []<-chan struct{}
 
 	alive int
 
-	// receive data channel, first reg is the monitor for runningCtx.
+	// reflect-select cases for receivers with more than eight inputs. The first
+	// case monitors usrCtx; each input then contributes a Ch2 case and a Done
+	// case.
 	regs []reflect.SelectCase
-	// how much nil batch should each reg wait. its length is 1 less than regs.
+	// how many terminal signals each srcReg still expects.
 	nbs []int
 
 	// currentSignal is the current signal this receiver was using.
 	currentSignal *PipelineSignal
 }
 
+type PipelineSignalReceiverState struct {
+	Alive      int
+	NilBatches []int
+	ChannelLen []int
+	ChannelCap []int
+}
+
 func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister) *PipelineSignalReceiver {
 	nbs := make([]int, len(regs))
 	srcRegs := make([]*WaitRegister, len(regs))
+	doneCh := make([]<-chan struct{}, len(regs))
 
 	for i, reg := range regs {
 		// 0 is default number, it takes a same effect as 1.
@@ -105,22 +357,25 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 			nbs[i] = reg.NilBatchCnt
 		}
 		srcRegs[i] = reg
+		doneCh[i] = reg.Done()
 	}
 
 	// if regs were not much, we will use an optimized method to receive msg.
 	// and there is no need to init the `reflect.SelectCase`.
 	var scs []reflect.SelectCase = nil
 	if len(regs) > 8 {
-		scs = make([]reflect.SelectCase, 0, len(regs)+1)
+		scs = make([]reflect.SelectCase, 0, len(regs)*2+1)
 		scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(runningCtx.Done())})
 		for i := range regs {
 			scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(regs[i].Ch2)})
+			scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(doneCh[i])})
 		}
 	}
 
 	return &PipelineSignalReceiver{
 		usrCtx:        runningCtx,
 		srcReg:        srcRegs,
+		doneCh:        doneCh,
 		alive:         len(regs),
 		regs:          scs,
 		nbs:           nbs,
@@ -134,6 +389,12 @@ func (receiver *PipelineSignalReceiver) setCurrent(current *PipelineSignal) {
 
 func (receiver *PipelineSignalReceiver) releaseCurrent() {
 	if receiver.currentSignal != nil {
+		// Terminal events (End/Error/Abort) don't carry batch data,
+		// so there is nothing to release.
+		if receiver.currentSignal.EventType.IsTerminal() {
+			receiver.currentSignal = nil
+			return
+		}
 		if receiver.currentSignal.typ == GetFromIndex {
 			receiver.currentSignal.source.ReleaseCurrent(
 				receiver.currentSignal.index)
@@ -174,10 +435,25 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 			}
 		}
 
+		// Handle typed terminal events: End, Error, Abort.
+		// Sender protocol guarantee: each sender sends exactly one terminal signal
+		// per edge (either typed or legacy nil-batch, never both). This prevents
+		// double-decrementing nbs[idx] in removeIdxReceiver.
+		if msg.EventType.IsTerminal() {
+			receiver.removeIdxReceiver(chosen)
+			if msg.EventType == EventEnd {
+				// Graceful end from one sender — continue draining others.
+				continue
+			}
+			// EventError or EventAbort: propagate the error.
+			return nil, msg.terminalErr
+		}
+
 		content, info = msg.Action()
 		if content == nil {
+			// Legacy nil-batch path: treat nil batch from GetFromIndex or
+			// GetDirectly as a per-sender end signal.
 			receiver.removeIdxReceiver(chosen)
-
 			if info != nil {
 				return nil, info
 			}
@@ -200,13 +476,36 @@ func (receiver *PipelineSignalReceiver) removeIdxReceiver(chosen int) {
 	if receiver.nbs[idx] == 0 {
 		// remove the unused channel.
 		receiver.srcReg = append(receiver.srcReg[:idx], receiver.srcReg[idx+1:]...)
+		receiver.doneCh = append(receiver.doneCh[:idx], receiver.doneCh[idx+1:]...)
 		receiver.nbs = append(receiver.nbs[:idx], receiver.nbs[idx+1:]...)
 
 		if len(receiver.regs) > 0 {
-			receiver.regs = append(receiver.regs[:chosen], receiver.regs[chosen+1:]...)
+			caseIdx := idx*2 + 1
+			receiver.regs = append(receiver.regs[:caseIdx], receiver.regs[caseIdx+2:]...)
 		}
 		receiver.alive--
 	}
+}
+
+func (receiver *PipelineSignalReceiver) State() PipelineSignalReceiverState {
+	if receiver == nil {
+		return PipelineSignalReceiverState{}
+	}
+
+	state := PipelineSignalReceiverState{
+		Alive:      receiver.alive,
+		NilBatches: slices.Clone(receiver.nbs),
+		ChannelLen: make([]int, len(receiver.srcReg)),
+		ChannelCap: make([]int, len(receiver.srcReg)),
+	}
+	for i, reg := range receiver.srcReg {
+		if reg == nil || reg.Ch2 == nil {
+			continue
+		}
+		state.ChannelLen[i] = len(reg.Ch2)
+		state.ChannelCap[i] = cap(reg.Ch2)
+	}
+	return state
 }
 
 func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
@@ -232,26 +531,84 @@ func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
 
 	// common case.
 	chosen, value, ok := reflect.Select(receiver.regs)
-	if !ok {
-		if chosen == 0 {
-			return 0, PipelineSignal{}
-		}
-		panic("unexpected sender close during GetNextBatch")
+	if chosen == 0 {
+		return 0, PipelineSignal{}
 	}
-	return chosen, value.Interface().(PipelineSignal)
+
+	idx := (chosen - 1) / 2
+	// Data cases occupy odd reflect indexes; Done cases occupy even indexes.
+	if chosen%2 == 1 {
+		if !ok {
+			panic("unexpected sender close during GetNextBatch")
+		}
+		return idx + 1, value.Interface().(PipelineSignal)
+	}
+	return receiver.receiveSignalOrTerminal(idx)
+}
+
+// receiveSignalOrTerminal handles an edge whose Done channel is ready. Ch2
+// remains the ordered source of truth: buffered data and successfully enqueued
+// terminal signals must be consumed before a terminal that failed to enqueue is
+// synthesized from the edge's durable terminal state.
+func (receiver *PipelineSignalReceiver) receiveSignalOrTerminal(idx int) (int, PipelineSignal) {
+	reg := receiver.srcReg[idx]
+	if signal, ok := tryReceivePipelineSignal(reg.Ch2); ok {
+		return idx + 1, signal
+	}
+
+	// Synchronize with an in-flight terminal sender. The sender closes Done
+	// before attempting a fatal enqueue, so it may enqueue after our first
+	// non-blocking receive. Recheck Ch2 after taking the snapshot to avoid
+	// synthesizing a duplicate terminal.
+	terminal := reg.terminalSignalSnapshot()
+	if signal, ok := tryReceivePipelineSignal(reg.Ch2); ok {
+		return idx + 1, signal
+	}
+	return idx + 1, terminal
+}
+
+func tryReceivePipelineSignal(ch <-chan PipelineSignal) (PipelineSignal, bool) {
+	select {
+	case signal, ok := <-ch:
+		if !ok {
+			panic("unexpected sender close during GetNextBatch")
+		}
+		return signal, true
+	default:
+		return PipelineSignal{}, false
+	}
 }
 
 func (receiver *PipelineSignalReceiver) WaitingEnd() {
+	receiver.WaitingEndWithTimeout(PipelineCleanupWaitTimeout)
+}
+
+// WaitingEndWithTimeout is cleanup-only. It intentionally uses a detached
+// cleanup context because Pipeline.Cleanup cancels the process context before
+// operator Reset runs, but cleanup still needs a bounded chance to drain
+// terminal pipeline signals and release spool references.
+func (receiver *PipelineSignalReceiver) WaitingEndWithTimeout(timeout time.Duration) bool {
+	cleanupCtx := context.TODO()
+	cancel := func() {}
+	if timeout > 0 {
+		cleanupCtx, cancel = context.WithTimeout(context.TODO(), timeout)
+	}
+	defer cancel()
+
 	if len(receiver.regs) > 0 {
-		receiver.regs[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(context.TODO().Done())}
+		receiver.regs[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(cleanupCtx.Done())}
 	}
 
-	receiver.usrCtx = context.TODO()
+	receiver.usrCtx = cleanupCtx
 	for {
 		if receiver.alive == 0 {
-			return
+			return true
 		}
 		_, _ = receiver.GetNextBatch(nil)
+		if cleanupCtx.Err() != nil {
+			receiver.releaseCurrent()
+			return false
+		}
 	}
 }
 
@@ -261,6 +618,8 @@ func (receiver *PipelineSignalReceiver) listenToSingleEntry() (chosen int, v Pip
 		return 0, v
 	case v = <-receiver.srcReg[0].Ch2:
 		return 1, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
 	}
 }
 
@@ -272,6 +631,10 @@ func (receiver *PipelineSignalReceiver) listenToTwoEntry() (chosen int, v Pipeli
 		return 1, v
 	case v = <-receiver.srcReg[1].Ch2:
 		return 2, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
 	}
 }
 
@@ -285,6 +648,12 @@ func (receiver *PipelineSignalReceiver) listenToThreeEntry() (chosen int, v Pipe
 		return 2, v
 	case v = <-receiver.srcReg[2].Ch2:
 		return 3, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
 	}
 }
 
@@ -300,6 +669,14 @@ func (receiver *PipelineSignalReceiver) listenToFourEntry() (chosen int, v Pipel
 		return 3, v
 	case v = <-receiver.srcReg[3].Ch2:
 		return 4, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
+	case <-receiver.doneCh[3]:
+		return receiver.receiveSignalOrTerminal(3)
 	}
 }
 
@@ -317,6 +694,16 @@ func (receiver *PipelineSignalReceiver) listenToFiveEntry() (chosen int, v Pipel
 		return 4, v
 	case v = <-receiver.srcReg[4].Ch2:
 		return 5, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
+	case <-receiver.doneCh[3]:
+		return receiver.receiveSignalOrTerminal(3)
+	case <-receiver.doneCh[4]:
+		return receiver.receiveSignalOrTerminal(4)
 	}
 }
 
@@ -336,6 +723,18 @@ func (receiver *PipelineSignalReceiver) listenToSixEntry() (chosen int, v Pipeli
 		return 5, v
 	case v = <-receiver.srcReg[5].Ch2:
 		return 6, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
+	case <-receiver.doneCh[3]:
+		return receiver.receiveSignalOrTerminal(3)
+	case <-receiver.doneCh[4]:
+		return receiver.receiveSignalOrTerminal(4)
+	case <-receiver.doneCh[5]:
+		return receiver.receiveSignalOrTerminal(5)
 	}
 }
 
@@ -357,6 +756,20 @@ func (receiver *PipelineSignalReceiver) listenToSevenEntry() (chosen int, v Pipe
 		return 6, v
 	case v = <-receiver.srcReg[6].Ch2:
 		return 7, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
+	case <-receiver.doneCh[3]:
+		return receiver.receiveSignalOrTerminal(3)
+	case <-receiver.doneCh[4]:
+		return receiver.receiveSignalOrTerminal(4)
+	case <-receiver.doneCh[5]:
+		return receiver.receiveSignalOrTerminal(5)
+	case <-receiver.doneCh[6]:
+		return receiver.receiveSignalOrTerminal(6)
 	}
 }
 
@@ -380,5 +793,21 @@ func (receiver *PipelineSignalReceiver) listenToEightEntry() (chosen int, v Pipe
 		return 7, v
 	case v = <-receiver.srcReg[7].Ch2:
 		return 8, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
+	case <-receiver.doneCh[3]:
+		return receiver.receiveSignalOrTerminal(3)
+	case <-receiver.doneCh[4]:
+		return receiver.receiveSignalOrTerminal(4)
+	case <-receiver.doneCh[5]:
+		return receiver.receiveSignalOrTerminal(5)
+	case <-receiver.doneCh[6]:
+		return receiver.receiveSignalOrTerminal(6)
+	case <-receiver.doneCh[7]:
+		return receiver.receiveSignalOrTerminal(7)
 	}
 }

@@ -173,6 +173,12 @@ func init() {
 		reuse.DefaultOptions[AttributeOnUpdate](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[AttributeSRID](
+		func() *AttributeSRID { return &AttributeSRID{} },
+		func(a *AttributeSRID) { a.reset() },
+		reuse.DefaultOptions[AttributeSRID](), //.
+	) //WithEnableChecker()
+
 	reuse.CreatePool[IndexOption](
 		func() *IndexOption { return &IndexOption{} },
 		func(i *IndexOption) { i.reset() },
@@ -713,6 +719,12 @@ func init() {
 		reuse.DefaultOptions[CreatePublication](), //.
 	) //WithEnableChecker()
 
+	reuse.CreatePool[CreateSubscription](
+		func() *CreateSubscription { return &CreateSubscription{} },
+		func(c *CreateSubscription) { c.reset() },
+		reuse.DefaultOptions[CreateSubscription](), //.
+	) //WithEnableChecker()
+
 	reuse.CreatePool[AttributeVisable](
 		func() *AttributeVisable { return &AttributeVisable{} },
 		func(a *AttributeVisable) { a.reset() },
@@ -930,6 +942,7 @@ type CreateTable struct {
 	PartitionOption    *PartitionOption
 	ClusterByOption    *ClusterByOption
 	Param              *ExternParam
+	IcebergParam       *IcebergTableParam
 	AsSource           *Select
 	IsDynamicTable     bool
 	DTOptions          []TableOption
@@ -951,7 +964,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.IsClusterTable {
 		ctx.WriteString(" cluster")
 	}
-	if node.Param != nil {
+	if node.Param != nil || node.IcebergParam != nil {
 		ctx.WriteString(" external")
 	}
 	if node.IsDynamicTable {
@@ -990,7 +1003,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		}
 	} else {
 
-		if !node.IsAsSelect {
+		if !node.IsAsSelect && !(node.IcebergParam != nil && len(node.Defs) == 0) {
 			ctx.WriteString(" (")
 			for i, def := range node.Defs {
 				if i != 0 {
@@ -1014,6 +1027,11 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 			ctx.WriteString(prefix)
 			t.Format(ctx)
 		}
+	}
+
+	if node.IcebergParam != nil {
+		ctx.WriteByte(' ')
+		node.IcebergParam.Format(ctx)
 	}
 
 	if node.PartitionOption != nil {
@@ -1374,6 +1392,8 @@ func (node *ColumnTableDef) reset() {
 				panic("currently not used")
 			case *AttributeOnUpdate:
 				opt.Free()
+			case *AttributeSRID:
+				opt.Free()
 			case *AttributeVisable:
 				opt.Free()
 			case *KeyPart:
@@ -1731,7 +1751,14 @@ type AttributeGeneratedAlways struct {
 }
 
 func (node *AttributeGeneratedAlways) Format(ctx *FmtCtx) {
+	ctx.WriteString("generated always as (")
 	node.Expr.Format(ctx)
+	ctx.WriteByte(')')
+	if node.Stored {
+		ctx.WriteString(" stored")
+	} else {
+		ctx.WriteString(" virtual")
+	}
 }
 
 func (node AttributeGeneratedAlways) TypeName() string { return "tree.AttributeGeneratedAlways" }
@@ -1994,6 +2021,32 @@ func NewAttributeOnUpdate(e Expr) *AttributeOnUpdate {
 	return ao
 }
 
+type AttributeSRID struct {
+	columnAttributeImpl
+	Value uint32
+}
+
+func (node *AttributeSRID) Format(ctx *FmtCtx) {
+	ctx.WriteString("srid ")
+	ctx.WriteString(strconv.FormatUint(uint64(node.Value), 10))
+}
+
+func (node AttributeSRID) TypeName() string { return "tree.AttributeSRID" }
+
+func (node *AttributeSRID) reset() {
+	*node = AttributeSRID{}
+}
+
+func (node *AttributeSRID) Free() {
+	reuse.Free[AttributeSRID](node, nil)
+}
+
+func NewAttributeSRID(v uint32) *AttributeSRID {
+	a := reuse.Alloc[AttributeSRID](nil)
+	a.Value = v
+	return a
+}
+
 type IndexType int
 
 func (it IndexType) ToString() string {
@@ -2016,6 +2069,10 @@ func (it IndexType) ToString() string {
 		return "fulltext"
 	case INDEX_TYPE_HNSW:
 		return "hnsw"
+	case INDEX_TYPE_CAGRA:
+		return "cagra"
+	case INDEX_TYPE_IVFPQ:
+		return "ivfpq"
 	case INDEX_TYPE_INVALID:
 		return ""
 	default:
@@ -2034,6 +2091,8 @@ const (
 	INDEX_TYPE_MASTER
 	INDEX_TYPE_FULLTEXT
 	INDEX_TYPE_HNSW
+	INDEX_TYPE_CAGRA
+	INDEX_TYPE_IVFPQ
 )
 
 type VisibleType int
@@ -2066,10 +2125,25 @@ type IndexOption struct {
 	SecondaryEngineAttribute string
 	AlgoParamList            int64
 	AlgoParamVectorOpType    string
-	HnswM                    int64
+	AlgoParamM               int64
 	HnswEfConstruction       int64
 	HnswEfSearch             int64
-	HnswQuantization         string
+	BitsPerCode              int64
+	Async                    bool
+	ForceSync                bool
+	AutoUpdate               bool
+	Day                      int64
+	Hour                     int64
+	IntermediateGraphDegree  int64
+	GraphDegree              int64
+	Quantization             string
+	DistributionMode         string
+	ITopkSize                int64
+	KmeansTrainPercent       int64
+	KmeansMaxIteration       int64
+	MaxIndexCapacity         int64
+	QuantizerTrainLimit      int64
+	IncludeColumns           []*UnresolvedName
 }
 
 // Must follow the following sequence when test
@@ -2077,8 +2151,15 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.KeyBlockSize != 0 || node.ParserName != "" ||
 		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
 		node.AlgoParamList != 0 || node.AlgoParamVectorOpType != "" ||
-		node.HnswM != 0 || node.HnswEfConstruction != 0 ||
-		node.HnswEfSearch != 0 || node.HnswQuantization != "" {
+		node.AlgoParamM != 0 || node.HnswEfConstruction != 0 ||
+		node.HnswEfSearch != 0 || node.AutoUpdate || node.Day != 0 ||
+		node.Hour != 0 ||
+		node.IntermediateGraphDegree != 0 || node.GraphDegree != 0 ||
+		node.Quantization != "" || node.DistributionMode != "" ||
+		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
+		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
+		node.MaxIndexCapacity != 0 || node.QuantizerTrainLimit != 0 ||
+		len(node.IncludeColumns) != 0 {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -2101,9 +2182,9 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		ctx.WriteString(strconv.FormatInt(node.AlgoParamList, 10))
 		ctx.WriteByte(' ')
 	}
-	if node.HnswM != 0 {
+	if node.AlgoParamM != 0 {
 		ctx.WriteString("M ")
-		ctx.WriteString(strconv.FormatInt(node.HnswM, 10))
+		ctx.WriteString(strconv.FormatInt(node.AlgoParamM, 10))
 		ctx.WriteByte(' ')
 	}
 	if node.HnswEfConstruction != 0 {
@@ -2116,11 +2197,6 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		ctx.WriteString(strconv.FormatInt(node.HnswEfSearch, 10))
 		ctx.WriteByte(' ')
 	}
-	if node.HnswQuantization != "" {
-		ctx.WriteString("QUANTIZATION ")
-		ctx.WriteString(node.HnswQuantization)
-		ctx.WriteByte(' ')
-	}
 	if node.AlgoParamVectorOpType != "" {
 		ctx.WriteString("OP_TYPE ")
 		ctx.WriteString(node.AlgoParamVectorOpType)
@@ -2129,6 +2205,86 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.Visible != VISIBLE_TYPE_INVALID {
 		ctx.WriteString(node.Visible.ToString())
 	}
+	if node.Async {
+		ctx.WriteString("ASYNC ")
+	}
+	if node.ForceSync {
+		ctx.WriteString("FORCE_SYNC ")
+	}
+	if node.AutoUpdate {
+		ctx.WriteString("AUTO_UPDATE=TRUE ")
+	}
+	if node.Day != 0 {
+		ctx.WriteString("DAY ")
+		ctx.WriteString(strconv.FormatInt(node.Day, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.Hour != 0 {
+		ctx.WriteString("HOUR ")
+		ctx.WriteString(strconv.FormatInt(node.Hour, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.IntermediateGraphDegree != 0 {
+		ctx.WriteString("INTERMEDIATE_GRAPH_DEGREE ")
+		ctx.WriteString(strconv.FormatInt(node.IntermediateGraphDegree, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.GraphDegree != 0 {
+		ctx.WriteString("GRAPH_DEGREE ")
+		ctx.WriteString(strconv.FormatInt(node.GraphDegree, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.Quantization != "" {
+		ctx.WriteString("QUANTIZATION ")
+		ctx.WriteString(node.Quantization)
+		ctx.WriteByte(' ')
+	}
+	if node.DistributionMode != "" {
+		ctx.WriteString("DISTRIBUTION_MODE ")
+		ctx.WriteString(node.DistributionMode)
+		ctx.WriteByte(' ')
+	}
+	if node.BitsPerCode != 0 {
+		ctx.WriteString("BITS_PER_CODE ")
+		ctx.WriteString(strconv.FormatInt(node.BitsPerCode, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.ITopkSize != 0 {
+		ctx.WriteString("ITOPK_SIZE ")
+		ctx.WriteString(strconv.FormatInt(node.ITopkSize, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.KmeansTrainPercent != 0 {
+		ctx.WriteString("KMEANS_TRAIN_PERCENT ")
+		ctx.WriteString(strconv.FormatInt(node.KmeansTrainPercent, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.KmeansMaxIteration != 0 {
+		ctx.WriteString("KMEANS_MAX_ITERATION ")
+		ctx.WriteString(strconv.FormatInt(node.KmeansMaxIteration, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.MaxIndexCapacity != 0 {
+		ctx.WriteString("MAX_INDEX_CAPACITY ")
+		ctx.WriteString(strconv.FormatInt(node.MaxIndexCapacity, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.QuantizerTrainLimit != 0 {
+		ctx.WriteString("QUANTIZER_TRAIN_LIMIT ")
+		ctx.WriteString(strconv.FormatInt(node.QuantizerTrainLimit, 10))
+		ctx.WriteByte(' ')
+	}
+	if len(node.IncludeColumns) != 0 {
+		ctx.WriteString("INCLUDE (")
+		for i, c := range node.IncludeColumns {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			c.Format(ctx)
+		}
+		ctx.WriteString(") ")
+	}
+
 }
 
 func (node IndexOption) TypeName() string { return "tree.IndexOption" }
@@ -3538,9 +3694,9 @@ type RangeType struct {
 }
 
 func (node *RangeType) Format(ctx *FmtCtx) {
-	ctx.WriteString("range")
+	ctx.WriteString("range ")
 	if node.ColumnList != nil {
-		prefix := " columns ("
+		prefix := "columns ("
 		for _, c := range node.ColumnList {
 			ctx.WriteString(prefix)
 			c.Format(ctx)
@@ -3581,9 +3737,9 @@ type ListType struct {
 }
 
 func (node *ListType) Format(ctx *FmtCtx) {
-	ctx.WriteString("list")
+	ctx.WriteString("list ")
 	if node.ColumnList != nil {
-		prefix := " columns ("
+		prefix := "columns ("
 		for _, c := range node.ColumnList {
 			ctx.WriteString(prefix)
 			c.Format(ctx)
@@ -3745,7 +3901,7 @@ type Partition struct {
 
 func (node *Partition) Format(ctx *FmtCtx) {
 	ctx.WriteString("partition ")
-	ctx.WriteString(string(node.Name))
+	ctx.WriteIdentifier(node.Name)
 	if node.Values != nil {
 		ctx.WriteByte(' ')
 		node.Values.Format(ctx)
@@ -3890,7 +4046,7 @@ type SubPartition struct {
 
 func (node *SubPartition) Format(ctx *FmtCtx) {
 	ctx.WriteString("subpartition ")
-	ctx.WriteString(string(node.Name))
+	ctx.WriteIdentifier(node.Name)
 
 	if node.Options != nil {
 		prefix := " "
@@ -5415,6 +5571,85 @@ func (node *CreatePublication) reset() {
 
 func (node *CreatePublication) Free() {
 	reuse.Free[CreatePublication](node, nil)
+}
+
+type CreateSubscription struct {
+	statementImpl
+	IsDatabase              bool
+	DbName                  Identifier
+	TableName               string
+	AccountName             string // For account-level subscription
+	IfNotExists             bool   // For account-level subscription
+	FromUri                 string
+	SubscriptionAccountName string // The account name for the subscription
+	PubName                 Identifier
+	SyncInterval            int64
+}
+
+func NewCreateSubscription(isDb bool, dbName Identifier, tableName string, fromUri string, subscriptionAccountName string, pubName Identifier, syncInterval int64) *CreateSubscription {
+	cs := reuse.Alloc[CreateSubscription](nil)
+	cs.IsDatabase = isDb
+	cs.DbName = dbName
+	cs.TableName = tableName
+	cs.FromUri = fromUri
+	cs.SubscriptionAccountName = subscriptionAccountName
+	cs.PubName = pubName
+	cs.SyncInterval = syncInterval
+	cs.AccountName = ""
+	cs.IfNotExists = false
+	return cs
+}
+
+func (node *CreateSubscription) SetAccountName(name string) {
+	node.AccountName = name
+}
+
+func (node *CreateSubscription) SetIfNotExists(ifNotExists bool) {
+	node.IfNotExists = ifNotExists
+}
+
+func (node *CreateSubscription) Format(ctx *FmtCtx) {
+	if node.IsDatabase && string(node.DbName) == "" {
+		// Account-level subscription
+		ctx.WriteString("create account")
+	} else if node.IsDatabase {
+		ctx.WriteString("create database ")
+		node.DbName.Format(ctx)
+	} else {
+		ctx.WriteString("create table ")
+		ctx.WriteString(node.TableName)
+	}
+	ctx.WriteString(" from ")
+	ctx.WriteString(fmt.Sprintf("'%s'", node.FromUri))
+	if node.SubscriptionAccountName != "" {
+		ctx.WriteString(" ")
+		ctx.WriteString(node.SubscriptionAccountName)
+	}
+	ctx.WriteString(" publication ")
+	node.PubName.Format(ctx)
+	if node.SyncInterval > 0 {
+		ctx.WriteString(fmt.Sprintf(" sync_interval = %d", node.SyncInterval))
+	}
+}
+
+func (node *CreateSubscription) GetStatementType() string { return "Create Subscription" }
+func (node *CreateSubscription) GetQueryType() string     { return QueryTypeDCL }
+
+func (node *CreateSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node CreateSubscription) TypeName() string { return "tree.CreateSubscription" }
+
+func (node *CreateSubscription) reset() {
+	*node = CreateSubscription{}
+	node.AccountName = ""
+	node.SubscriptionAccountName = ""
+	node.IfNotExists = false
+}
+
+func (node *CreateSubscription) Free() {
+	reuse.Free[CreateSubscription](node, nil)
 }
 
 type AttributeVisable struct {

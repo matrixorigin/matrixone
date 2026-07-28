@@ -23,9 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -178,15 +175,18 @@ func getTableInfosFromTS(ctx context.Context,
 		return nil, err
 	}
 
-	// only recreate snapshoted table need create sql
-	if ts > 0 {
-		for _, tblInfo := range tableInfos {
-			if tblInfo.createSql, err = getCreateTableSqlFromTS(newCtx, bh, dbName, tblInfo.tblName, ts, from, to); err != nil {
-				return nil, err
-			}
-		}
+	// only recreated snapshot tables need create sql
+	if ts <= 0 {
+		return tableInfos, nil
 	}
-	return tableInfos, nil
+	return fillTableCreateSQLsForRestore(
+		sid,
+		fmt.Sprintf("%d:%d", from, ts),
+		tableInfos,
+		func(tblInfo *tableInfo) (string, error) {
+			return getCreateTableSqlFromTS(newCtx, bh, tblInfo.dbName, tblInfo.tblName, ts, from, to)
+		},
+	)
 }
 
 func showFullTablesFromTS(ctx context.Context,
@@ -199,19 +199,11 @@ func showFullTablesFromTS(ctx context.Context,
 	to uint32) ([]*tableInfo, error) {
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to show full table `%s.%s`", from, ts, dbName, tblName))
 	newCtx := defines.AttachAccountId(ctx, from)
-	sql := fmt.Sprintf("show full tables from `%s`", dbName)
-
-	if len(tblName) > 0 {
-		sql += fmt.Sprintf(" like '%s'", tblName)
-	}
-
-	if ts > 0 {
-		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
-	}
+	sql := buildTableInfoListSQL(dbName, tblName, ts, from)
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] show full table `%s.%s` sql: %s", from, ts, dbName, tblName, sql))
-	// cols: table name, table type
-	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1)
+	// cols: table name, table type, relkind, view definition
+	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1, 2, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +214,8 @@ func showFullTablesFromTS(ctx context.Context,
 			dbName:  dbName,
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
+			relKind: cols[2],
+			viewDef: cols[3],
 		}
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] show full table `%s.%s`, get table number `%d`", from, ts, dbName, tblName, len(ans)))
@@ -465,6 +459,12 @@ func restoreDatabaseFromTS(
 			continue
 		}
 
+		// external table data is stored outside MO and cannot be restored by clone.
+		if shouldSkipRestoreTableInBulk(tblInfo) {
+			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore external table: %v.%v", restoreAccount, snapshotTs, tblInfo.dbName, tblInfo.tblName))
+			continue
+		}
+
 		// skip view
 		if tblInfo.typ == view {
 			viewMap[key] = tblInfo
@@ -525,6 +525,10 @@ func recreateTableFromTS(
 	restoreAccount uint32,
 	toAccountId uint32,
 ) (err error) {
+	if isExternalTable(tblInfo) {
+		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
+	}
+
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
@@ -640,7 +644,6 @@ func restoreViewsFromTS(
 	var (
 		err         error
 		snapshot    *plan.Snapshot
-		stmts       []tree.Statement
 		sortedViews []string
 		oldSnapshot *plan.Snapshot
 	)
@@ -662,7 +665,7 @@ func restoreViewsFromTS(
 	g := toposort{next: make(map[string][]string)}
 	for key, viewEntry := range viewMap {
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to restore view: %v", restoreAccount, snapshotTs, viewEntry.tblName))
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 1)
+		stmts, err := parseViewCreateSQLForRestore(ctx, viewEntry, 1)
 		if err != nil {
 			return err
 		}
@@ -670,10 +673,15 @@ func restoreViewsFromTS(
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
 		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
-			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
+			stmts, err = parseViewCreateSQLForRestore(ctx, viewEntry, 0)
+			if err != nil {
+				return err
+			}
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			freeStatements(stmts)
 			if err != nil {
 				return err
 			}
@@ -707,7 +715,7 @@ func restoreViewsFromTS(
 			}
 
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to create view: %v, create view sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
-			if err = bh.Exec(toCtx, tblInfo.createSql); err != nil {
+			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
 				return err
 			}
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] restore view: %v success", restoreAccount, snapshotTs, tblInfo.tblName))

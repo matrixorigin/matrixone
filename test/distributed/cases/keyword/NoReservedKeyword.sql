@@ -22,7 +22,7 @@ select 1 as events, 1 as exclusive, 1 as execute, 1 as expansion, 1 as expire, 1
 
 select 1 as file, 1 as filesystem, 1 as fill, 1 as first, 1 as fixed, 1 as float, 1 as following, 1 as force_quote, 1 as format;
 
-select 1 as full, 1 as geometry, 1 as geometrycollection, 1 as global, 1 as grant, 1 as grants, 1 as handler, 1 as hash;
+select 1 as geometry, 1 as geometrycollection, 1 as global, 1 as grant, 1 as grants, 1 as handler, 1 as hash;
 
 select 1 as header, 1 as history, 1 as hour, 1 as identified, 1 as import, 1 as increment, 1 as indexes, 1 as inline;
 
@@ -62,9 +62,9 @@ select 1 as secondary_engine_attribute, 1 as security, 1 as sequence, 1 as seque
 
 select 1 as shared, 1 as shutdown, 1 as signed, 1 as simple, 1 as slave, 1 as sliding, 1 as smallint, 1 as snapshot;
 
-select 1 as some, 1 as source, 1 as spatial, 1 as sql, 1 as sql_cache, 1 as sql_no_cache, 1 as sql_tsi_day, 1 as sql_tsi_hour, 1 as sql_tsi_minute;
+select 1 as some, 1 as source, 1 as spatial, 1 as sql, 1 as sql_cache, 1 as `sql_no_cache`, 1 as `sql_tsi_day`, 1 as `sql_tsi_hour`, 1 as `sql_tsi_minute`;
 
-select 1 as sql_tsi_second, 1 as sql_tsi_year, 1 as sql_tsi_quarter, 1 as sql_tsi_month, 1 as sql_tsi_week, 1 as stage, 1 as stageoption;
+select 1 as `sql_tsi_second`, 1 as `sql_tsi_year`, 1 as `sql_tsi_quarter`, 1 as `sql_tsi_month`, 1 as `sql_tsi_week`, 1 as stage, 1 as stageoption;
 
 select 1 as stages, 1 as start, 1 as stats_auto_recalc, 1 as stats_persistent, 1 as stats_sample_pages, 1 as status, 1 as storage, 1 as stream;
 

@@ -883,8 +883,8 @@ drop table insert01;
 -- cast date, datetime, timestamp, time to int
 drop table if exists time01;
 create table time01 (col1 date, col2 datetime, col3 timestamp, col4 time);
-insert into time01 values ('2020-01-01', '2000-10-10 12:12:12', '1970-01-01 12:23:59.323000', '01:01:29');
-insert into time01 values ('1997-01-13', null, '1989-01-01 23:23:59.100000', '23:23:59');
+insert into time01 values ('2020-01-01', '2000-10-10 12:12:12', '2020-01-01 12:23:59.323000', '01:01:29');
+insert into time01 values ('1997-01-13', null, '2020-01-01 23:23:59.100000', '23:23:59');
 insert into time01 (col1, col2, col3, col4) values ('2030-12-31', '2031-09-09 01:01:01', '2013-12-12 10:10:10.125000', '10:12:12');
 select * from time01;
 alter table time01 modify col1 int, modify col2 int first, modify col3 int after col1, modify col4 int;
@@ -896,8 +896,8 @@ drop table time01;
 -- cast date, datetime, timestamp, time to decimal
 drop table if exists time02;
 create table time02 (col2 datetime, col3 timestamp, col4 time);
-insert into time02 values ('2000-10-10 12:12:12', '1970-01-01 12:23:59.323000', '01:01:29');
-insert into time02 values ( null, '1889-01-01 23:23:59.125000', '23:23:59');
+insert into time02 values ('2000-10-10 12:12:12', '2020-01-01 12:23:59.323000', '01:01:29');
+insert into time02 values ( null, '2020-01-01 23:23:59.125000', '23:23:59');
 insert into time02 (col2, col3, col4) values ('2031-09-09 01:01:01', '2013-12-12 10:10:10.125000', '10:12:12');
 select * from time02;
 alter table time02 modify col2 decimal(20,10) first, modify col3 decimal after col2, modify col4 decimal(38,0);

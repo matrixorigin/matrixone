@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -119,7 +120,12 @@ func (o *CreateBlockOpt) WithBlkIdx(s uint16) *CreateBlockOpt {
 }
 
 func WriteString(str string, w io.Writer) (n int64, err error) {
-	buf := []byte(str)
+	// Use UnsafeStringToBytes to avoid allocation: string -> []byte conversion
+	// This is safe because:
+	// 1. str is valid during the function execution
+	// 2. w.Write() only reads from buf, doesn't modify it
+	// 3. w.Write() copies data to the writer, so it doesn't depend on buf's lifetime
+	buf := util.UnsafeStringToBytes(str)
 	size := uint32(len(buf))
 	if _, err = w.Write(types.EncodeUint32(&size)); err != nil {
 		return

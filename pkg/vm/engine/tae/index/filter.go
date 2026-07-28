@@ -16,8 +16,6 @@ package index
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 	"strconv"
 	"strings"
 
@@ -27,8 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/samber/lo"
+	"go.uber.org/zap"
 )
 
 const FuseFilterErrorMsg = "too many iterations"
@@ -66,13 +66,20 @@ type bloomFilter struct {
 	xorfilter.BinaryFuse8
 }
 
-func NewBloomFilter(vec containers.Vector) (StaticFilter, error) {
-	return NewBloomFilter2([]containers.Vector{vec})
+// NewBloomFilter builds a BinaryFuse8 bloom filter for a single vector.
+// buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
+// builder is an optional BinaryFuseBuilder; pass &myBuilder to reuse internal
+// buffers across filter builds.
+func NewBloomFilter(vec containers.Vector, buf *[]uint64, builder *xorfilter.BinaryFuseBuilder, alloc func(int) []byte) (StaticFilter, error) {
+	return NewBloomFilter2([]containers.Vector{vec}, buf, builder, alloc)
 }
 
-func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
-	var inners *xorfilter.BinaryFuse8
+func buildFuseFilterReuse(b *xorfilter.BinaryFuseBuilder, hashes []uint64, alloc func(int) []byte) (*bloomFilter, error) {
 	var err error
+	if b != nil {
+		return buildWithBuilder(b, hashes, alloc)
+	}
+	var inners *xorfilter.BinaryFuse8
 	if inners, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
 		logutil.Error("BuildFuseFilter",
 			zap.String("error", err.Error()))
@@ -97,11 +104,62 @@ func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
 	return sf, nil
 }
 
-func NewBloomFilter2(vectors []containers.Vector) (StaticFilter, error) {
-	hashes := make([]uint64, 0)
+func buildWithBuilder(b *xorfilter.BinaryFuseBuilder, hashes []uint64, alloc func(int) []byte) (*bloomFilter, error) {
+	filter, err := xorfilter.BuildBinaryFuse[uint8](b, hashes)
+	if err != nil {
+		logutil.Error("BuildFuseFilter",
+			zap.String("error", err.Error()))
+		if strings.Contains(err.Error(), FuseFilterErrorMsg) {
+			oldHashes := hashes
+			hashes = lo.Uniq(hashes)
+			logutil.Info("BuildFuseFilter",
+				zap.String("error", err.Error()),
+				zap.Uint64s("old hashes", oldHashes),
+				zap.Uint64s("hashes", hashes))
+			if filter, err = xorfilter.BuildBinaryFuse[uint8](b, hashes); err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
+	}
+	// Copy Fingerprints — the builder owns the underlying slice and
+	// will overwrite it on the next build.
+	var fp []uint8
+	if alloc != nil {
+		fp = alloc(len(filter.Fingerprints))
+	} else {
+		fp = make([]uint8, len(filter.Fingerprints))
+	}
+	copy(fp, filter.Fingerprints)
+	filter.Fingerprints = fp
+
+	sf := &bloomFilter{}
+	sf.BinaryFuse8 = xorfilter.BinaryFuse8(filter)
+	return sf, nil
+}
+
+// NewBloomFilter2 builds a BinaryFuse8 bloom filter over multiple vectors.
+// buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
+// builder is an optional BinaryFuseBuilder for reusing internal buffers.
+func NewBloomFilter2(vectors []containers.Vector, buf *[]uint64, builder *xorfilter.BinaryFuseBuilder, alloc func(int) []byte) (StaticFilter, error) {
+	totalLen := 0
+	for _, v := range vectors {
+		totalLen += v.Length()
+	}
+	var hashes []uint64
+	if buf != nil {
+		if cap(*buf) < totalLen {
+			*buf = make([]uint64, 0, totalLen)
+		} else {
+			*buf = (*buf)[:0]
+		}
+		hashes = *buf
+	} else {
+		hashes = make([]uint64, 0, totalLen)
+	}
 	op := func(v []byte, _ bool, _ int) error {
-		hash := hashV1(v)
-		hashes = append(hashes, hash)
+		hashes = append(hashes, hashV1(v))
 		return nil
 	}
 	var err error
@@ -110,7 +168,10 @@ func NewBloomFilter2(vectors []containers.Vector) (StaticFilter, error) {
 			return nil, err
 		}
 	}
-	return buildFuseFilter(hashes)
+	if buf != nil {
+		*buf = hashes
+	}
+	return buildFuseFilterReuse(builder, hashes, alloc)
 }
 
 func (filter *bloomFilter) MayContainsKey(key []byte) (bool, error) {

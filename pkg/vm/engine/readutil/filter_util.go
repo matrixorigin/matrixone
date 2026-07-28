@@ -230,11 +230,17 @@ func EncodePrimaryKey(v any, packer *types.Packer) []byte {
 	case types.Decimal128:
 		packer.EncodeDecimal128(v)
 
+	case types.Decimal256:
+		packer.EncodeDecimal256(v)
+
 	case types.Uuid:
 		packer.EncodeStringType(v[:])
 
 	case types.Enum:
 		packer.EncodeEnum(v)
+
+	case types.MoYear:
+		packer.EncodeMoYear(v)
 
 	case string:
 		packer.EncodeStringType([]byte(v))
@@ -395,6 +401,14 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 			packer.Reset()
 		}
 
+	case types.T_year:
+		s := vector.MustFixedColNoTypeCheck[types.MoYear](vec)
+		for _, v := range s {
+			packer.EncodeMoYear(v)
+			ret = append(ret, packer.Bytes())
+			packer.Reset()
+		}
+
 	case types.T_decimal64:
 		s := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 		for _, v := range s {
@@ -407,6 +421,14 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
 		for _, v := range s {
 			packer.EncodeDecimal128(v)
+			ret = append(ret, packer.Bytes())
+			packer.Reset()
+		}
+
+	case types.T_decimal256:
+		s := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
+		for _, v := range s {
+			packer.EncodeDecimal256(v)
 			ret = append(ret, packer.Bytes())
 			packer.Reset()
 		}

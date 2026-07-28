@@ -15,10 +15,9 @@
 package cnclient
 
 import (
-	"fmt"
+	"context"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -110,11 +109,8 @@ func NewPipelineClient(
 	return c, nil
 }
 
-func (c *pipelineClient) NewStream(backend string) (morpc.Stream, error) {
-	if backend == c.localServiceAddress {
-		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("remote run pipeline in local: %s", backend))
-	}
-	return c.client.NewStream(backend, true)
+func (c *pipelineClient) NewStream(ctx context.Context, backend string) (morpc.Stream, error) {
+	return c.client.NewStream(ctx, backend, true)
 }
 
 func (c *pipelineClient) Raw() morpc.RPCClient {

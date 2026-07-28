@@ -16,14 +16,36 @@ package taskservice
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/util"
 )
+
+type mockHAKeeperClientForDaemon struct {
+	state logservicepb.CheckerState
+	err   error
+}
+
+func (m *mockHAKeeperClientForDaemon) GetClusterDetails(context.Context) (logservicepb.ClusterDetails, error) {
+	return logservicepb.ClusterDetails{}, nil
+}
+
+func (m *mockHAKeeperClientForDaemon) GetClusterState(context.Context) (logservicepb.CheckerState, error) {
+	return m.state, m.err
+}
 
 type mockActiveRoutine struct {
 	pauseC  chan struct{}
@@ -56,6 +78,107 @@ func (r *mockActiveRoutine) Cancel() error {
 
 func (r *mockActiveRoutine) Restart() error {
 	return nil
+}
+
+type mockErrActiveRoutine struct {
+	pauseErr   error
+	resumeErr  error
+	cancelErr  error
+	restartErr error
+}
+
+func (r *mockErrActiveRoutine) Pause() error   { return r.pauseErr }
+func (r *mockErrActiveRoutine) Resume() error  { return r.resumeErr }
+func (r *mockErrActiveRoutine) Cancel() error  { return r.cancelErr }
+func (r *mockErrActiveRoutine) Restart() error { return r.restartErr }
+
+type serviceWithDaemonHook struct {
+	TaskService
+	mu         sync.RWMutex
+	queryErr   error
+	updateErr  error
+	queryCalls atomic.Int64
+}
+
+func (s *serviceWithDaemonHook) QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error) {
+	s.queryCalls.Add(1)
+	s.mu.RLock()
+	queryErr := s.queryErr
+	s.mu.RUnlock()
+	if queryErr != nil {
+		return nil, queryErr
+	}
+	return s.TaskService.QueryDaemonTask(ctx, conds...)
+}
+
+func (s *serviceWithDaemonHook) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
+	s.mu.RLock()
+	updateErr := s.updateErr
+	s.mu.RUnlock()
+	if updateErr != nil {
+		return 0, updateErr
+	}
+	return s.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
+}
+
+func (s *serviceWithDaemonHook) setQueryErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queryErr = err
+}
+
+func (s *serviceWithDaemonHook) setUpdateErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updateErr = err
+}
+
+func TestDaemonTaskPollResumesAfterTaskFrameworkReenabled(t *testing.T) {
+	wasDisabled := taskFrameworkDisabled()
+	DebugCtlTaskFramework(true)
+	t.Cleanup(func() {
+		DebugCtlTaskFramework(wasDisabled)
+	})
+
+	r, _ := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	timerC := make(chan time.Time)
+	resetC := make(chan struct{}, 2)
+	go func() {
+		defer close(done)
+		r.pollWithTimer(ctx, timerC, func() {
+			resetC <- struct{}{}
+		})
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("daemon poll did not stop after cancellation")
+		}
+	}()
+
+	timerC <- time.Now()
+	select {
+	case <-resetC:
+	case <-time.After(time.Second):
+		t.Fatal("disabled daemon poll did not reset its timer")
+	}
+	require.Zero(t, hook.queryCalls.Load())
+
+	DebugCtlTaskFramework(false)
+	timerC <- time.Now()
+	select {
+	case <-resetC:
+	case <-time.After(time.Second):
+		t.Fatal("enabled daemon poll did not reset its timer")
+	}
+	require.Positive(t, hook.queryCalls.Load())
 }
 
 func daemonTaskMetadata() task.TaskMetadata {
@@ -92,6 +215,337 @@ func newDaemonTaskForTest(id uint64, status task.TaskStatus, runner string) task
 		},
 	}
 	return t
+}
+
+func newDaemonHandleTestRunner(t *testing.T) (*taskRunner, TaskStorage) {
+	t.Helper()
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() {
+		require.NoError(t, s.Close())
+	})
+	r := NewTaskRunner("r1", s, func(string) bool { return true },
+		WithRunnerLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)),
+		WithRunnerFetchInterval(time.Millisecond)).(*taskRunner)
+	return r, store
+}
+
+func TestStartTaskHandleBranches(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+	dt.Metadata.ID = "start-1"
+	dt.LastHeartbeat = time.Now()
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	executed := atomic.Bool{}
+	start := newStartTask(r, &daemonTask{
+		task: dt,
+		executor: func(context.Context, task.Task) error {
+			executed.Store(true)
+			return errors.New("executor failed")
+		},
+	})
+
+	// last heartbeat is not timeout, local runner should skip starting
+	require.NoError(t, start.Handle(context.Background()))
+	require.False(t, executed.Load())
+
+	// force update error branch in startDaemonTask
+	hook.setUpdateErr(errors.New("update failed"))
+	dt2 := newDaemonTaskForTest(2, task.TaskStatus_Created, "")
+	dt2.Metadata.ID = "start-2"
+	dt2.LastHeartbeat = time.Time{}
+	mustAddTestDaemonTask(t, store, 1, dt2)
+	start2 := newStartTask(r, &daemonTask{
+		task: dt2,
+		executor: func(context.Context, task.Task) error {
+			return nil
+		},
+	})
+	require.NoError(t, start2.Handle(context.Background()))
+	hook.setUpdateErr(nil)
+
+	// run executor and hit setDaemonTaskError branch
+	dt3 := newDaemonTaskForTest(3, task.TaskStatus_Created, "")
+	dt3.Metadata.ID = "start-3"
+	mustAddTestDaemonTask(t, store, 1, dt3)
+	start3 := newStartTask(r, &daemonTask{
+		task: dt3,
+		executor: func(context.Context, task.Task) error {
+			executed.Store(true)
+			return errors.New("executor failed")
+		},
+	})
+	require.NoError(t, start3.Handle(context.Background()))
+	require.Eventually(t, func() bool {
+		return executed.Load()
+	}, time.Second, time.Millisecond*10)
+}
+
+func TestResumeTaskHandleBranchesDirect(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_ResumeRequested, r.runnerID)
+	dt.Metadata.ID = "resume-1"
+	mustAddTestDaemonTask(t, store, 1, dt)
+	h := newResumeTask(r, &daemonTask{task: dt})
+
+	hook.setQueryErr(errors.New("query failed"))
+	require.Error(t, h.Handle(context.Background()))
+	hook.setQueryErr(nil)
+
+	mustDeleteTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Error(t, h.Handle(context.Background()))
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	dt.TaskRunner = "r2"
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.Error(t, h.Handle(context.Background()))
+
+	dt.TaskRunner = r.runnerID
+	dt.TaskStatus = task.TaskStatus_Created
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.NoError(t, h.Handle(context.Background()))
+
+	dt.TaskStatus = task.TaskStatus_Running
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.NoError(t, h.Handle(context.Background()))
+
+	dt.TaskStatus = task.TaskStatus_ResumeRequested
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	hook.setUpdateErr(errors.New("update failed"))
+	require.Error(t, h.Handle(context.Background()))
+	hook.setUpdateErr(nil)
+
+	require.Error(t, h.Handle(context.Background()))
+}
+
+func TestRestartTaskHandleBranchesDirect(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, r.runnerID)
+	dt.Metadata.ID = "restart-1"
+	mustAddTestDaemonTask(t, store, 1, dt)
+	taskRef := &daemonTask{task: dt}
+	h := newRestartTask(r, taskRef)
+
+	hook.setQueryErr(errors.New("query failed"))
+	require.Error(t, h.Handle(context.Background()))
+	hook.setQueryErr(nil)
+
+	mustDeleteTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Error(t, h.Handle(context.Background()))
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	dt.TaskStatus = task.TaskStatus_Running
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.NoError(t, h.Handle(context.Background()))
+
+	dt.TaskStatus = task.TaskStatus_Created
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.NoError(t, h.Handle(context.Background()))
+
+	dt.TaskStatus = task.TaskStatus_RestartRequested
+	dt.TaskRunner = "r2"
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.Error(t, h.Handle(context.Background()))
+
+	dt.TaskRunner = r.runnerID
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	hook.setUpdateErr(errors.New("update failed"))
+	require.Error(t, h.Handle(context.Background()))
+	hook.setUpdateErr(nil)
+
+	require.Error(t, h.Handle(context.Background()))
+
+	restartErr := errors.New("restart failed")
+	ar := ActiveRoutine(&mockErrActiveRoutine{restartErr: restartErr})
+	taskRef.activeRoutine.Store(&ar)
+	dt.TaskStatus = task.TaskStatus_RestartRequested
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.ErrorContains(t, h.Handle(context.Background()), "restart failed")
+}
+
+func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, r.runnerID)
+	dt.Metadata.ID = "pause-cancel-1"
+	mustAddTestDaemonTask(t, store, 1, dt)
+	taskRef := &daemonTask{task: dt}
+	r.addDaemonTask(taskRef)
+
+	pauseH := newPauseTask(r, taskRef)
+	cancelH := newCancelTask(r, taskRef)
+
+	hook.setQueryErr(errors.New("query failed"))
+	require.Error(t, pauseH.Handle(context.Background()))
+	require.Error(t, cancelH.Handle(context.Background()))
+	hook.setQueryErr(nil)
+
+	mustDeleteTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Error(t, pauseH.Handle(context.Background()))
+	require.Error(t, cancelH.Handle(context.Background()))
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	dt.TaskStatus = task.TaskStatus_Running
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.NoError(t, pauseH.Handle(context.Background()))
+	require.NoError(t, cancelH.Handle(context.Background()))
+
+	dt.TaskStatus = task.TaskStatus_Paused
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.NoError(t, pauseH.Handle(context.Background()))
+
+	dt.TaskStatus = task.TaskStatus_Canceled
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.NoError(t, cancelH.Handle(context.Background()))
+
+	dt.TaskStatus = task.TaskStatus_PauseRequested
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	hook.setUpdateErr(errors.New("update failed"))
+	require.Error(t, pauseH.Handle(context.Background()))
+	hook.setUpdateErr(nil)
+	require.Error(t, pauseH.Handle(context.Background()))
+
+	dt.TaskStatus = task.TaskStatus_CancelRequested
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	hook.setUpdateErr(errors.New("update failed"))
+	require.Error(t, cancelH.Handle(context.Background()))
+	hook.setUpdateErr(nil)
+	require.Error(t, cancelH.Handle(context.Background()))
+
+	ar1 := ActiveRoutine(&mockErrActiveRoutine{pauseErr: errors.New("pause failed")})
+	taskRef.activeRoutine.Store(&ar1)
+	dt.TaskStatus = task.TaskStatus_PauseRequested
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.ErrorContains(t, pauseH.Handle(context.Background()), "pause failed")
+
+	ar2 := ActiveRoutine(&mockErrActiveRoutine{cancelErr: errors.New("cancel failed")})
+	taskRef.activeRoutine.Store(&ar2)
+	dt.TaskStatus = task.TaskStatus_CancelRequested
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	require.ErrorContains(t, cancelH.Handle(context.Background()), "cancel failed")
+}
+
+func TestPauseTaskHandleCallsCompleteHookForNonLocalTask(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	completed := make(chan task.DaemonTask, 1)
+	r.options.pauseTaskCompleted = func(ctx context.Context, tk task.DaemonTask) error {
+		completed <- tk
+		return nil
+	}
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, "r2")
+	dt.Metadata.ID = "pause-non-local-1"
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	pauseH := newPauseTask(r, &daemonTask{task: dt})
+	require.NoError(t, pauseH.Handle(context.Background()))
+
+	select {
+	case tk := <-completed:
+		require.Equal(t, dt.ID, tk.ID)
+		require.Equal(t, task.TaskStatus_Paused, tk.TaskStatus)
+	case <-time.After(time.Second):
+		t.Fatal("pause complete hook was not called")
+	}
+
+	tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Len(t, tasks, 1)
+	require.Equal(t, task.TaskStatus_Paused, tasks[0].TaskStatus)
+}
+
+func TestPauseTaskHandleKeepsPauseRequestedWhenActivePauseFails(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, r.runnerID)
+	dt.Metadata.ID = "pause-active-fail-1"
+	mustAddTestDaemonTask(t, store, 1, dt)
+	taskRef := &daemonTask{task: dt}
+	r.addDaemonTask(taskRef)
+
+	ar := ActiveRoutine(&mockErrActiveRoutine{pauseErr: errors.New("pause failed")})
+	taskRef.activeRoutine.Store(&ar)
+
+	pauseH := newPauseTask(r, taskRef)
+	require.ErrorContains(t, pauseH.Handle(context.Background()), "pause failed")
+
+	tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_PauseRequested, tasks[0].TaskStatus)
+}
+
+func TestPauseTasksRetriesPausedCDCFinalize(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	calls := atomic.Int32{}
+	r.options.pauseTaskCompleted = func(ctx context.Context, tk task.DaemonTask) error {
+		if calls.Add(1) == 1 {
+			return errors.New("finalize failed")
+		}
+		return nil
+	}
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, "r2")
+	dt.Metadata.ID = "pause-finalize-retry-1"
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	dt.LastHeartbeat = time.Time{}
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	pauseH := newPauseTask(r, &daemonTask{task: dt})
+	require.ErrorContains(t, pauseH.Handle(context.Background()), "finalize failed")
+	require.Equal(t, int32(1), calls.Load())
+
+	tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_Paused, tasks[0].TaskStatus)
+
+	retryTasks := r.pauseTasks(context.Background())
+	require.Len(t, retryTasks, 1)
+	require.Equal(t, dt.ID, retryTasks[0].ID)
+	require.Equal(t, task.TaskStatus_Paused, retryTasks[0].TaskStatus)
+
+	retryH := newPauseTask(r, &daemonTask{task: retryTasks[0]})
+	require.NoError(t, retryH.Handle(context.Background()))
+	require.Equal(t, int32(2), calls.Load())
+	require.Empty(t, r.pauseTasks(context.Background()))
+}
+
+func TestPauseCompletedTasksClearedByLifecycle(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	resumeDT := newDaemonTaskForTest(1, task.TaskStatus_ResumeRequested, r.runnerID)
+	resumeDT.Metadata.ID = "pause-completed-resume-1"
+	mustAddTestDaemonTask(t, store, 1, resumeDT)
+	resumeRef := &daemonTask{task: resumeDT}
+	resumeAR := ActiveRoutine(newMockActiveRoutine())
+	resumeRef.activeRoutine.Store(&resumeAR)
+	r.markPauseTaskCompleted(resumeDT.ID)
+	require.NoError(t, newResumeTask(r, resumeRef).Handle(context.Background()))
+	require.False(t, r.isPauseTaskCompleted(resumeDT.ID))
+
+	cancelDT := newDaemonTaskForTest(2, task.TaskStatus_CancelRequested, r.runnerID)
+	cancelDT.Metadata.ID = "pause-completed-cancel-1"
+	mustAddTestDaemonTask(t, store, 1, cancelDT)
+	r.markPauseTaskCompleted(cancelDT.ID)
+	require.NoError(t, newCancelTask(r, &daemonTask{task: cancelDT}).Handle(context.Background()))
+	require.False(t, r.isPauseTaskCompleted(cancelDT.ID))
+
+	removeDT := newDaemonTaskForTest(3, task.TaskStatus_Paused, r.runnerID)
+	removeDT.Metadata.ID = "pause-completed-remove-1"
+	r.addDaemonTask(&daemonTask{task: removeDT})
+	r.markPauseTaskCompleted(removeDT.ID)
+	r.removeDaemonTask(removeDT.ID)
+	require.False(t, r.isPauseTaskCompleted(removeDT.ID))
 }
 
 func TestRunDaemonTask(t *testing.T) {
@@ -184,6 +638,29 @@ func waitStarted(started *atomic.Bool, timeout time.Duration) {
 }
 
 func TestPauseResumeDaemonTask(t *testing.T) {
+	for _, code := range []task.TaskCode{
+		task.TaskCode_ConnectorKafkaSink,
+		task.TaskCode_ISCPExecutor,
+		task.TaskCode_PublicationExecutor,
+	} {
+		t.Run(code.String(), func(t *testing.T) {
+			runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+				dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
+				dt.Metadata.Executor = code
+				mustAddTestDaemonTask(t, store, 1, dt)
+				var started atomic.Bool
+				r.testRegisterExecutor(t, code, &started)
+				waitStarted(&started, time.Second*5)
+
+				expectTaskStatus(t, store, dt, task.TaskStatus_PauseRequested, task.TaskStatus_Paused)
+				expectTaskStatus(t, store, dt, task.TaskStatus_ResumeRequested, task.TaskStatus_Running)
+			}, WithRunnerParallelism(1),
+				WithRunnerFetchInterval(time.Millisecond))
+		})
+	}
+}
+
+func TestPauseTaskHandleIdempotent(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
@@ -191,8 +668,154 @@ func TestPauseResumeDaemonTask(t *testing.T) {
 		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
 		waitStarted(&started, time.Second*5)
 
-		expectTaskStatus(t, store, dt, task.TaskStatus_PauseRequested, task.TaskStatus_Paused)
-		expectTaskStatus(t, store, dt, task.TaskStatus_ResumeRequested, task.TaskStatus_Running)
+		localDT, ok := r.getDaemonTask(1)
+		require.True(t, ok)
+
+		h := newPauseTask(r, localDT)
+		require.NoError(t, h.Handle(context.Background()))
+		require.NoError(t, h.Handle(context.Background()))
+
+		done := make(chan error, 1)
+		go func() {
+			done <- h.Handle(context.Background())
+		}()
+
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("duplicate pause should not block")
+		}
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestTaskNameFromDetails(t *testing.T) {
+	require.Panics(t, func() {
+		_ = taskNameFromDetails(task.DaemonTask{})
+	})
+
+	tk := task.DaemonTask{Details: &task.Details{}}
+	require.Equal(t, "", taskNameFromDetails(tk))
+
+	tk.Details = &task.Details{
+		Details: &task.Details_Connector{
+			Connector: &task.ConnectorDetails{TableName: "d1.t1"},
+		},
+	}
+	require.Equal(t, "", taskNameFromDetails(tk))
+
+	tk.Details = &task.Details{
+		Details: &task.Details_CreateCdc{
+			CreateCdc: &task.CreateCdcDetails{TaskName: "cdc-task-1"},
+		},
+	}
+	require.Equal(t, "cdc-task-1", taskNameFromDetails(tk))
+}
+
+func TestNewStartTaskHandleWithUnknownExecutor(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		// No executor registered for this task code; newStartTask should return safely.
+		r.newStartTask(newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID))
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestSetDaemonTaskError(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		dt := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+		mustAddTestDaemonTask(t, store, 1, dt)
+
+		r.setDaemonTaskError(context.Background(), &daemonTask{task: dt}, errors.New("mock daemon error"))
+		tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, 1))
+		require.Len(t, tasks, 1)
+		require.Equal(t, "mock daemon error", tasks[0].Details.Error)
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestStartTasksWithNilHAKeeperClient(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
+		mustAddTestDaemonTask(t, store, 1, dt)
+
+		r.hakeeper.Lock()
+		r.hakeeper.getClient = func() util.HAKeeperClient { return nil }
+		r.hakeeper.Unlock()
+		tasks := r.startTasks(context.Background())
+		require.Len(t, tasks, 1)
+		require.Equal(t, uint64(1), tasks[0].ID)
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestStartTasksWithHAKeeperClientState(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
+		mustAddTestDaemonTask(t, store, 1, dt)
+
+		r.hakeeper.Lock()
+		r.hakeeper.cnUUID = "cn-1"
+		r.hakeeper.getClient = func() util.HAKeeperClient {
+			return &mockHAKeeperClientForDaemon{
+				state: logservicepb.CheckerState{
+					CNState: logservicepb.CNState{
+						Stores: map[string]logservicepb.CNStoreInfo{
+							"cn-1": {
+								Labels: map[string]metadata.LabelList{
+									"account": {Labels: []string{"sys"}},
+								},
+							},
+						},
+					},
+				},
+			}
+		}
+		r.hakeeper.Unlock()
+		tasks := r.startTasks(context.Background())
+		require.NotEmpty(t, tasks)
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestStartTasksWithHAKeeperClientError(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
+		mustAddTestDaemonTask(t, store, 1, dt)
+
+		r.hakeeper.Lock()
+		r.hakeeper.getClient = func() util.HAKeeperClient {
+			return &mockHAKeeperClientForDaemon{err: errors.New("hakeeper unavailable")}
+		}
+		r.hakeeper.Unlock()
+		tasks := r.startTasks(context.Background())
+		require.NotEmpty(t, tasks)
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestDispatchTaskHandleCoverBranches(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		r.RegisterExecutor(task.TaskCode_ConnectorKafkaSink, func(context.Context, task.Task) error { return nil })
+
+		t1 := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
+		t2 := newDaemonTaskForTest(2, task.TaskStatus_ResumeRequested, r.runnerID)
+		t3 := newDaemonTaskForTest(3, task.TaskStatus_RestartRequested, r.runnerID)
+		t4 := newDaemonTaskForTest(4, task.TaskStatus_PauseRequested, r.runnerID)
+		t5 := newDaemonTaskForTest(5, task.TaskStatus_CancelRequested, r.runnerID)
+		t1.Metadata.ID = "daemon-1"
+		t2.Metadata.ID = "daemon-2"
+		t3.Metadata.ID = "daemon-3"
+		t4.Metadata.ID = "daemon-4"
+		t5.Metadata.ID = "daemon-5"
+		mustAddTestDaemonTask(t, store, 5, t1, t2, t3, t4, t5)
+
+		r.daemonTasks.Lock()
+		r.daemonTasks.m[2] = &daemonTask{task: t2}
+		r.daemonTasks.m[4] = &daemonTask{task: t4}
+		r.daemonTasks.Unlock()
+
+		r.dispatchTaskHandle(context.Background())
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
 }
@@ -219,6 +842,32 @@ func TestRestartDaemonTask(t *testing.T) {
 		waitStarted(&started, time.Second*5)
 
 		expectTaskStatus(t, store, dt, task.TaskStatus_RestartRequested, task.TaskStatus_Running)
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+// TestRestartDaemonTaskWithEmptyRunner tests restart when TaskRunner is empty.
+// This covers the bug fix where tasks with empty TaskRunner couldn't be restarted.
+func TestRestartDaemonTaskWithEmptyRunner(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		// Create a task with empty TaskRunner (simulating newly created task)
+		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+		mustAddTestDaemonTask(t, store, 1, dt)
+		var started atomic.Bool
+		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
+		waitStarted(&started, time.Second*5)
+
+		// Update task status to RestartRequested (TaskRunner still empty)
+		dt.TaskStatus = task.TaskStatus_RestartRequested
+		mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+
+		// Wait for restart to complete
+		expectTaskStatus(t, store, dt, task.TaskStatus_RestartRequested, task.TaskStatus_Running)
+
+		// Verify TaskRunner was assigned
+		updatedTasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, 1))
+		assert.Len(t, updatedTasks, 1, "Should have exactly one task")
+		assert.Equal(t, r.runnerID, updatedTasks[0].TaskRunner, "TaskRunner should be assigned to current runner")
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
 }

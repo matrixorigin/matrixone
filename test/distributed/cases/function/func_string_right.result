@@ -1,0 +1,72 @@
+SELECT RIGHT('Hello World', 5) AS result1;
+result1
+World
+SELECT RIGHT('Hello', 10) AS result2;
+result2
+Hello
+SELECT RIGHT('Hello', 0) AS result3;
+result3
+
+SELECT RIGHT('abcde', 3) AS three_chars;
+three_chars
+cde
+SELECT RIGHT('abcde', -1) AS negative_len;
+negative_len
+
+SELECT RIGHT('abcde', 100) AS large_len;
+large_len
+abcde
+SELECT RIGHT('foobarbar', 5) AS five_chars;
+five_chars
+arbar
+SELECT RIGHT('', 5) AS empty_string;
+empty_string
+
+SELECT RIGHT('test', 4) AS full_string;
+full_string
+test
+SELECT RIGHT('test', 1) AS single_char;
+single_char
+t
+SELECT RIGHT(NULL, 5) AS null_str;
+null_str
+null
+SELECT RIGHT('Hello World', NULL) AS null_len;
+null_len
+null
+SELECT RIGHT('是都方式快递费', 3) AS unicode_chinese;
+unicode_chinese
+快递费
+SELECT RIGHT('ｱｲｳｴｵ', 3) AS unicode_katakana;
+unicode_katakana
+ｳｴｵ
+SELECT RIGHT('あいうえお', 3) AS unicode_hiragana;
+unicode_hiragana
+うえお
+CREATE TABLE t1(str VARCHAR(50), len INT);
+INSERT INTO t1 VALUES ('Hello World', 5), ('Hello', 10), ('Hello', 0), ('abcde', 3), ('test', 1);
+SELECT str, len, RIGHT(str, len) AS right_result FROM t1;
+str    len    right_result
+Hello World    5    World
+Hello    10    Hello
+Hello    0    
+abcde    3    cde
+test    1    t
+DROP TABLE t1;
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello World'), ('Hello'), ('test'), ('abcde');
+SELECT * FROM t1 WHERE RIGHT(str, 5) = 'World';
+str
+Hello World
+SELECT * FROM t1 WHERE RIGHT(str, 1) = 'o';
+str
+Hello
+DROP TABLE t1;
+CREATE TABLE t1(str VARCHAR(50));
+INSERT INTO t1 VALUES ('Hello World'), ('test'), ('abcde');
+SELECT str, LEFT(str, 5) AS left_result, RIGHT(str, 5) AS right_result FROM t1;
+str    left_result    right_result
+Hello World    Hello    World
+test    test    test
+abcde    abcde    abcde
+DROP TABLE t1;

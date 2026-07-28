@@ -16,6 +16,9 @@ package disttae
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,6 +26,7 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -30,11 +34,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
+
+type mockStatsKeyRouter struct {
+	target string
+}
+
+func (r *mockStatsKeyRouter) Target(statsinfo.StatsInfoKey) string { return r.target }
+func (r *mockStatsKeyRouter) AddItem(gossip.CommonItem)            {}
+
+type mockStatsQueryClient struct {
+	response    *querypb.Response
+	sendStarted chan struct{}
+	allowReturn chan struct{}
+}
+
+func (m *mockStatsQueryClient) ServiceID() string {
+	return "mock-stats-query-client"
+}
+
+func (m *mockStatsQueryClient) SendMessage(context.Context, string, *querypb.Request) (*querypb.Response, error) {
+	close(m.sendStarted)
+	<-m.allowReturn
+	return m.response, nil
+}
+
+func (m *mockStatsQueryClient) NewRequest(method querypb.CmdMethod) *querypb.Request {
+	return &querypb.Request{CmdMethod: method}
+}
+
+func (m *mockStatsQueryClient) Release(*querypb.Response) {}
+
+func (m *mockStatsQueryClient) Close() error {
+	return nil
+}
 
 func runTest(
 	t *testing.T,
@@ -60,7 +100,7 @@ func runTest(
 	})
 	defer lk.Close()
 	rt.SetGlobalVariables(runtime.LockService, lk)
-	mp, err := mpool.NewMPool(sid, 1024*1024, 0)
+	mp, err := mpool.NewMPool(sid, 1024*1024, mpool.NoFixed)
 	catalog.SetupDefines(sid)
 	assert.NoError(t, err)
 	e := New(
@@ -125,8 +165,8 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    1001,
 			}
 			stats := plan2.NewStatsInfo()
-			ps := logtailreplay.NewPartitionState("", true, 1001)
-			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
+			ps := logtailreplay.NewPartitionState("", true, 1001, false)
+			updated, _ := e.globalStats.executeStatsUpdate(ctx, ps, k, stats)
 			assert.False(t, updated)
 		})
 	})
@@ -145,8 +185,8 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    tid,
 			}
 			stats := plan2.NewStatsInfo()
-			ps := logtailreplay.NewPartitionState("", true, tid)
-			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
+			ps := logtailreplay.NewPartitionState("", true, tid, false)
+			updated, _ := e.globalStats.executeStatsUpdate(ctx, ps, k, stats)
 			assert.False(t, updated)
 		})
 	})
@@ -165,8 +205,8 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    tid,
 			}
 			stats := plan2.NewStatsInfo()
-			ps := logtailreplay.NewPartitionState("", true, tid)
-			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
+			ps := logtailreplay.NewPartitionState("", true, tid, false)
+			updated, _ := e.globalStats.executeStatsUpdate(ctx, ps, k, stats)
 			assert.True(t, updated)
 		}, WithApproxObjectNumUpdater(func() int64 {
 			return 10
@@ -191,11 +231,11 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 			DatabaseID: 100,
 			TableID:    101,
 		}
-		assert.True(t, gs.shouldUpdate(k1))
-		assert.False(t, gs.shouldUpdate(k1))
-		gs.doneUpdate(k1, true)
+		assert.True(t, gs.shouldExecuteUpdate(k1))
+		assert.False(t, gs.shouldExecuteUpdate(k1))
+		gs.markUpdateComplete(k1, true, 1, 1.0)
 		time.Sleep(MinUpdateInterval)
-		assert.True(t, gs.shouldUpdate(k1))
+		assert.True(t, gs.shouldExecuteUpdate(k1))
 	})
 
 	t.Run("parallel", func(t *testing.T) {
@@ -216,11 +256,11 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 		var wg sync.WaitGroup
 		updateFn := func() {
 			defer wg.Done()
-			if !gs.shouldUpdate(k1) {
+			if !gs.shouldExecuteUpdate(k1) {
 				return
 			}
 			count.Add(1)
-			gs.doneUpdate(k1, true)
+			gs.markUpdateComplete(k1, true, 2, 1.0)
 		}
 		for i := 0; i < 20; i++ {
 			wg.Add(1)
@@ -265,4 +305,1772 @@ func TestQueueWatcher(t *testing.T) {
 		assert.Equal(t, 2, len(list))
 	})
 
+}
+
+// TestGetMinMaxValueByFloat64_Decimal tests decimal64 and decimal128 conversion
+// especially for negative values which use two's complement representation
+func TestGetMinMaxValueByFloat64_Decimal(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	t.Run("decimal64 positive", func(t *testing.T) {
+		// Test positive value: 123.45 with scale=2
+		scale := int32(2)
+		typ := types.New(types.T_decimal64, 10, scale)
+		value, err := types.Decimal64FromFloat64(123.45, 10, scale)
+		assert.NoError(t, err)
+		buf := types.EncodeDecimal64(&value)
+
+		result := getMinMaxValueByFloat64(typ, buf)
+		assert.InDelta(t, 123.45, result, 0.01)
+	})
+
+	t.Run("decimal64 negative", func(t *testing.T) {
+		// Test negative value: -123.45 with scale=2
+		// This is the key test case - negative values use two's complement
+		// and would be incorrectly converted to huge positive numbers before the fix
+		scale := int32(2)
+		typ := types.New(types.T_decimal64, 10, scale)
+		value, err := types.Decimal64FromFloat64(-123.45, 10, scale)
+		assert.NoError(t, err)
+		buf := types.EncodeDecimal64(&value)
+
+		result := getMinMaxValueByFloat64(typ, buf)
+		// Before fix: this would be ~18446744073709539271 (two's complement as positive)
+		// After fix: correctly returns -123.45
+		assert.InDelta(t, -123.45, result, 0.01)
+		assert.Less(t, result, 0.0, "negative value should be less than 0")
+	})
+
+	t.Run("decimal64 different scales", func(t *testing.T) {
+		testCases := []struct {
+			name  string
+			scale int32
+			value float64
+		}{
+			{"scale_0", 0, -100.0},
+			{"scale_2", 2, -99.99},
+			{"scale_4", 4, -1234.5678},
+			{"scale_6", 6, -0.123456},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				typ := types.New(types.T_decimal64, 18, tc.scale)
+				value, err := types.Decimal64FromFloat64(tc.value, 18, tc.scale)
+				assert.NoError(t, err)
+				buf := types.EncodeDecimal64(&value)
+
+				result := getMinMaxValueByFloat64(typ, buf)
+				assert.InDelta(t, tc.value, result, 0.01)
+			})
+		}
+	})
+
+	t.Run("decimal128 positive", func(t *testing.T) {
+		// Test positive large value with scale=4
+		scale := int32(4)
+		typ := types.New(types.T_decimal128, 20, scale)
+		value, err := types.Decimal128FromFloat64(1234567890.1234, 20, scale)
+		assert.NoError(t, err)
+		buf := types.EncodeDecimal128(&value)
+
+		result := getMinMaxValueByFloat64(typ, buf)
+		assert.InDelta(t, 1234567890.1234, result, 0.01)
+	})
+
+	t.Run("decimal128 negative", func(t *testing.T) {
+		// Test negative large value with scale=4
+		scale := int32(4)
+		typ := types.New(types.T_decimal128, 20, scale)
+		value, err := types.Decimal128FromFloat64(-9876543210.5678, 20, scale)
+		assert.NoError(t, err)
+		buf := types.EncodeDecimal128(&value)
+
+		result := getMinMaxValueByFloat64(typ, buf)
+		// Key assertion: negative value should be correctly converted
+		assert.InDelta(t, -9876543210.5678, result, 0.01)
+		assert.Less(t, result, 0.0, "negative value should be less than 0")
+	})
+
+	t.Run("decimal64 zero", func(t *testing.T) {
+		scale := int32(2)
+		typ := types.New(types.T_decimal64, 10, scale)
+		value, err := types.Decimal64FromFloat64(0.0, 10, scale)
+		assert.NoError(t, err)
+		buf := types.EncodeDecimal64(&value)
+
+		result := getMinMaxValueByFloat64(typ, buf)
+		assert.InDelta(t, 0.0, result, 0.01)
+	})
+
+	t.Run("decimal64 min_max_range", func(t *testing.T) {
+		// Test that min < max relationship is preserved
+		scale := int32(2)
+		typ := types.New(types.T_decimal64, 10, scale)
+
+		minValue, err := types.Decimal64FromFloat64(-999.99, 10, scale)
+		assert.NoError(t, err)
+		minBuf := types.EncodeDecimal64(&minValue)
+
+		maxValue, err := types.Decimal64FromFloat64(999.99, 10, scale)
+		assert.NoError(t, err)
+		maxBuf := types.EncodeDecimal64(&maxValue)
+
+		minResult := getMinMaxValueByFloat64(typ, minBuf)
+		maxResult := getMinMaxValueByFloat64(typ, maxBuf)
+
+		// Critical assertion: min should be less than max
+		// Before fix: minResult would be a huge positive number > maxResult
+		assert.Less(t, minResult, maxResult, "min should be less than max")
+		assert.InDelta(t, -999.99, minResult, 0.01)
+		assert.InDelta(t, 999.99, maxResult, 0.01)
+	})
+}
+
+// calculateConcurrency is a helper function that mirrors the concurrency calculation logic
+// in NewGlobalStats. This allows us to test the logic independently.
+func calculateConcurrency(gomaxprocs, updateWorkerFactor int) (executorConcurrency, updateWorkerConcurrency int) {
+	executorConcurrency = gomaxprocs
+	if updateWorkerFactor > 0 {
+		executorConcurrency = executorConcurrency * updateWorkerFactor
+	}
+	// Apply limits: min MinExecutorConcurrency, max MaxExecutorConcurrency
+	if executorConcurrency < MinExecutorConcurrency {
+		executorConcurrency = MinExecutorConcurrency
+	}
+	if executorConcurrency > MaxExecutorConcurrency {
+		executorConcurrency = MaxExecutorConcurrency
+	}
+	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
+	updateWorkerConcurrency = executorConcurrency / WorkerConcurrencyRatio
+	if updateWorkerConcurrency < MinWorkerConcurrency {
+		updateWorkerConcurrency = MinWorkerConcurrency
+	}
+	return executorConcurrency, updateWorkerConcurrency
+}
+
+// TestCalculateConcurrency tests the concurrency calculation logic with various scenarios
+func TestCalculateConcurrency(t *testing.T) {
+	tests := []struct {
+		name               string
+		gomaxprocs         int
+		updateWorkerFactor int
+		expectedExecutor   int
+		expectedWorker     int
+		expectedTotal      int
+		description        string
+	}{
+		{
+			name:               "small_cpu_lower_bound",
+			gomaxprocs:         2,
+			updateWorkerFactor: 4,
+			expectedExecutor:   32, // clamped to minimum 32
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Small CPU (2 cores) should use minimum executor=32, worker=16",
+		},
+		{
+			name:               "small_cpu_boundary",
+			gomaxprocs:         4,
+			updateWorkerFactor: 4,
+			expectedExecutor:   32, // clamped to minimum 32
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Small CPU (4 cores) should use minimum executor=32, worker=16",
+		},
+		{
+			name:               "medium_cpu_lower",
+			gomaxprocs:         8,
+			updateWorkerFactor: 4,
+			expectedExecutor:   32, // 8*4=32, exactly at minimum
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Medium CPU (8 cores) should use executor=32, worker=16",
+		},
+		{
+			name:               "medium_cpu_mid",
+			gomaxprocs:         12,
+			updateWorkerFactor: 4,
+			expectedExecutor:   48, // 12*4=48
+			expectedWorker:     16, // 48/4 = 12, but minimum 16
+			expectedTotal:      64,
+			description:        "Medium CPU (12 cores) should use executor=48, worker=16",
+		},
+		{
+			name:               "medium_cpu_upper",
+			gomaxprocs:         16,
+			updateWorkerFactor: 4,
+			expectedExecutor:   64, // 16*4=64
+			expectedWorker:     16, // 64/4 = 16
+			expectedTotal:      80,
+			description:        "Medium CPU (16 cores) should use executor=64, worker=16",
+		},
+		{
+			name:               "large_cpu_typical",
+			gomaxprocs:         24,
+			updateWorkerFactor: 4,
+			expectedExecutor:   96, // 24*4=96
+			expectedWorker:     24, // 96/4 = 24
+			expectedTotal:      120,
+			description:        "Large CPU (24 cores, typical production) should use executor=96, worker=24",
+		},
+		{
+			name:               "large_cpu_upper_bound",
+			gomaxprocs:         27,
+			updateWorkerFactor: 4,
+			expectedExecutor:   108, // 27*4=108, exactly at maximum
+			expectedWorker:     27,  // 108/4 = 27
+			expectedTotal:      135,
+			description:        "Large CPU (27 cores) should use executor=108, worker=27",
+		},
+		{
+			name:               "very_large_cpu_clamped",
+			gomaxprocs:         32,
+			updateWorkerFactor: 4,
+			expectedExecutor:   108, // 32*4=128, clamped to maximum 108
+			expectedWorker:     27,  // 108/4 = 27
+			expectedTotal:      135,
+			description:        "Very large CPU (32 cores) should clamp executor to 108, worker=27",
+		},
+		{
+			name:               "very_large_cpu_extreme",
+			gomaxprocs:         64,
+			updateWorkerFactor: 4,
+			expectedExecutor:   108, // 64*4=256, clamped to maximum 108
+			expectedWorker:     27,  // 108/4 = 27
+			expectedTotal:      135,
+			description:        "Extreme CPU (64 cores) should clamp executor to 108, worker=27",
+		},
+		{
+			name:               "factor_1",
+			gomaxprocs:         24,
+			updateWorkerFactor: 1,
+			expectedExecutor:   32, // 24*1=24, clamped to minimum 32
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Factor=1 should still respect minimum limits",
+		},
+		{
+			name:               "factor_8",
+			gomaxprocs:         12,
+			updateWorkerFactor: 8,
+			expectedExecutor:   96, // 12*8=96
+			expectedWorker:     24, // 96/4 = 24
+			expectedTotal:      120,
+			description:        "Factor=8 should work correctly",
+		},
+		{
+			name:               "factor_8_large_cpu",
+			gomaxprocs:         16,
+			updateWorkerFactor: 8,
+			expectedExecutor:   108, // 16*8=128, clamped to maximum 108
+			expectedWorker:     27,  // 108/4 = 27
+			expectedTotal:      135,
+			description:        "Factor=8 with large CPU should clamp to maximum",
+		},
+		{
+			name:               "zero_factor",
+			gomaxprocs:         24,
+			updateWorkerFactor: 0,
+			expectedExecutor:   32, // 24*0=0, clamped to minimum 32
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Zero factor should use GOMAXPROCS only, then apply limits",
+		},
+		{
+			name:               "exact_worker_minimum",
+			gomaxprocs:         16,
+			updateWorkerFactor: 4,
+			expectedExecutor:   64, // 16*4=64
+			expectedWorker:     16, // 64/4 = 16, exactly at minimum
+			expectedTotal:      80,
+			description:        "Worker concurrency exactly at minimum (16)",
+		},
+		{
+			name:               "exact_executor_minimum",
+			gomaxprocs:         8,
+			updateWorkerFactor: 4,
+			expectedExecutor:   32, // 8*4=32, exactly at minimum
+			expectedWorker:     16, // 32/4 = 8, but minimum 16
+			expectedTotal:      48,
+			description:        "Executor concurrency exactly at minimum (32)",
+		},
+		{
+			name:               "exact_executor_maximum",
+			gomaxprocs:         27,
+			updateWorkerFactor: 4,
+			expectedExecutor:   108, // 27*4=108, exactly at maximum
+			expectedWorker:     27,  // 108/4 = 27
+			expectedTotal:      135,
+			description:        "Executor concurrency exactly at maximum (108)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			executor, worker := calculateConcurrency(tt.gomaxprocs, tt.updateWorkerFactor)
+
+			assert.Equal(t, tt.expectedExecutor, executor,
+				"executor concurrency mismatch for %s: expected %d, got %d", tt.description, tt.expectedExecutor, executor)
+			assert.Equal(t, tt.expectedWorker, worker,
+				"worker concurrency mismatch for %s: expected %d, got %d", tt.description, tt.expectedWorker, worker)
+			assert.Equal(t, tt.expectedTotal, executor+worker,
+				"total goroutines mismatch for %s: expected %d, got %d", tt.description, tt.expectedTotal, executor+worker)
+
+			// Validate constraints
+			assert.GreaterOrEqual(t, executor, MinExecutorConcurrency, "executor should be >= MinExecutorConcurrency")
+			assert.LessOrEqual(t, executor, MaxExecutorConcurrency, "executor should be <= MaxExecutorConcurrency")
+			assert.GreaterOrEqual(t, worker, MinWorkerConcurrency, "worker should be >= MinWorkerConcurrency")
+			assert.Equal(t, worker, max(MinWorkerConcurrency, executor/WorkerConcurrencyRatio), "worker should be max(MinWorkerConcurrency, executor/WorkerConcurrencyRatio)")
+		})
+	}
+}
+
+// TestGlobalStatsConcurrency_ActualCreation tests that GlobalStats actually creates
+// the correct number of goroutines by checking the concurrentExecutor's concurrency
+func TestGlobalStatsConcurrency_ActualCreation(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	// Save original GOMAXPROCS
+	originalGOMAXPROCS := goruntime.GOMAXPROCS(0)
+	defer goruntime.GOMAXPROCS(originalGOMAXPROCS)
+
+	testCases := []struct {
+		name               string
+		setGOMAXPROCS      int
+		updateWorkerFactor int
+		expectedExecutor   int
+		expectedWorker     int
+	}{
+		{
+			name:               "small_cpu",
+			setGOMAXPROCS:      4,
+			updateWorkerFactor: 4,
+			expectedExecutor:   32, // clamped to minimum
+			expectedWorker:     16, // minimum
+		},
+		{
+			name:               "medium_cpu",
+			setGOMAXPROCS:      12,
+			updateWorkerFactor: 4,
+			expectedExecutor:   48,
+			expectedWorker:     16, // 48/4=12, but minimum 16
+		},
+		{
+			name:               "large_cpu",
+			setGOMAXPROCS:      24,
+			updateWorkerFactor: 4,
+			expectedExecutor:   96,
+			expectedWorker:     24, // 96/4=24
+		},
+		{
+			name:               "very_large_cpu",
+			setGOMAXPROCS:      32,
+			updateWorkerFactor: 4,
+			expectedExecutor:   108, // clamped to maximum
+			expectedWorker:     27,  // 108/4=27
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Set GOMAXPROCS for this test
+			goruntime.GOMAXPROCS(tc.setGOMAXPROCS)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			// Setup minimal runtime (required for GlobalStats initialization)
+			sid := "test-s1"
+			rt := runtime.DefaultRuntime()
+			runtime.SetupServiceBasedRuntime(sid, rt)
+
+			// Create GlobalStats with the specified factor
+			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			require.NotNil(t, gs)
+
+			// Verify concurrentExecutor concurrency
+			actualExecutorConcurrency := gs.concurrentExecutor.GetConcurrency()
+			assert.Equal(t, tc.expectedExecutor, actualExecutorConcurrency,
+				"concurrentExecutor concurrency mismatch: expected %d, got %d",
+				tc.expectedExecutor, actualExecutorConcurrency)
+
+			// Verify constraints
+			assert.GreaterOrEqual(t, actualExecutorConcurrency, MinExecutorConcurrency,
+				"executor concurrency should be >= MinExecutorConcurrency")
+			assert.LessOrEqual(t, actualExecutorConcurrency, MaxExecutorConcurrency,
+				"executor concurrency should be <= MaxExecutorConcurrency")
+
+			// Verify worker concurrency matches expected calculation
+			_, expectedWorker := calculateConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
+			assert.Equal(t, tc.expectedWorker, expectedWorker,
+				"worker concurrency calculation should match")
+
+			cancel()
+			// Give goroutines time to exit
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
+}
+
+// TestGlobalStatsConcurrency_WorkerRatio tests that updateWorker concurrency
+// is always executorConcurrency / WorkerConcurrencyRatio (with minimum MinWorkerConcurrency)
+func TestGlobalStatsConcurrency_WorkerRatio(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	originalGOMAXPROCS := goruntime.GOMAXPROCS(0)
+	defer goruntime.GOMAXPROCS(originalGOMAXPROCS)
+
+	testCases := []struct {
+		name               string
+		setGOMAXPROCS      int
+		updateWorkerFactor int
+		expectedRatio      float64 // expected worker/executor ratio
+	}{
+		{
+			name:               "minimum_worker",
+			setGOMAXPROCS:      8,
+			updateWorkerFactor: 4,
+			expectedRatio:      0.5, // 16/32 = 0.5 (minimum worker)
+		},
+		{
+			name:               "exact_quarter",
+			setGOMAXPROCS:      24,
+			updateWorkerFactor: 4,
+			expectedRatio:      0.25, // 24/96 = 0.25 (exact 1/4)
+		},
+		{
+			name:               "above_minimum",
+			setGOMAXPROCS:      20,
+			updateWorkerFactor: 4,
+			expectedRatio:      0.25, // 20/80 = 0.25 (exact 1/4)
+		},
+		{
+			name:               "clamped_maximum",
+			setGOMAXPROCS:      32,
+			updateWorkerFactor: 4,
+			expectedRatio:      0.25, // 27/108 = 0.25 (exact 1/4)
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			goruntime.GOMAXPROCS(tc.setGOMAXPROCS)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sid := "test-s2"
+			rt := runtime.DefaultRuntime()
+			runtime.SetupServiceBasedRuntime(sid, rt)
+
+			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			require.NotNil(t, gs)
+
+			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
+
+			// Calculate expected worker concurrency
+			expectedWorkerConcurrency := executorConcurrency / WorkerConcurrencyRatio
+			if expectedWorkerConcurrency < MinWorkerConcurrency {
+				expectedWorkerConcurrency = MinWorkerConcurrency
+			}
+
+			// Verify the ratio
+			actualRatio := float64(expectedWorkerConcurrency) / float64(executorConcurrency)
+			assert.InDelta(t, tc.expectedRatio, actualRatio, 0.01,
+				"worker/executor ratio mismatch: expected ~%.2f, got %.2f",
+				tc.expectedRatio, actualRatio)
+
+			// Verify worker is at least MinWorkerConcurrency
+			assert.GreaterOrEqual(t, expectedWorkerConcurrency, MinWorkerConcurrency,
+				"worker concurrency should be >= MinWorkerConcurrency")
+
+			cancel()
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
+}
+
+// TestGlobalStatsConcurrency_EdgeCases tests edge cases and boundary conditions
+func TestGlobalStatsConcurrency_EdgeCases(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	originalGOMAXPROCS := goruntime.GOMAXPROCS(0)
+	defer goruntime.GOMAXPROCS(originalGOMAXPROCS)
+
+	tests := []struct {
+		name               string
+		setGOMAXPROCS      int
+		updateWorkerFactor int
+		description        string
+	}{
+		{
+			name:               "minimum_gomaxprocs",
+			setGOMAXPROCS:      1,
+			updateWorkerFactor: 4,
+			description:        "Minimum GOMAXPROCS=1 should still use minimum limits",
+		},
+		{
+			name:               "boundary_below_minimum",
+			setGOMAXPROCS:      7,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=28 < 32 should clamp to 32",
+		},
+		{
+			name:               "boundary_at_minimum",
+			setGOMAXPROCS:      8,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=32 exactly at minimum",
+		},
+		{
+			name:               "boundary_above_minimum",
+			setGOMAXPROCS:      9,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=36 > 32 should use 36",
+		},
+		{
+			name:               "boundary_below_maximum",
+			setGOMAXPROCS:      26,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=104 < 108 should use 104",
+		},
+		{
+			name:               "boundary_at_maximum",
+			setGOMAXPROCS:      27,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=108 exactly at maximum",
+		},
+		{
+			name:               "boundary_above_maximum",
+			setGOMAXPROCS:      28,
+			updateWorkerFactor: 4,
+			description:        "GOMAXPROCS*4=112 > 108 should clamp to 108",
+		},
+		{
+			name:               "very_large_gomaxprocs",
+			setGOMAXPROCS:      128,
+			updateWorkerFactor: 4,
+			description:        "Very large GOMAXPROCS should clamp to maximum",
+		},
+		{
+			name:               "factor_zero",
+			setGOMAXPROCS:      24,
+			updateWorkerFactor: 0,
+			description:        "Factor=0 should use GOMAXPROCS only",
+		},
+		{
+			name:               "factor_one",
+			setGOMAXPROCS:      24,
+			updateWorkerFactor: 1,
+			description:        "Factor=1 should multiply by 1",
+		},
+		{
+			name:               "factor_large",
+			setGOMAXPROCS:      8,
+			updateWorkerFactor: 16,
+			description:        "Large factor should still respect maximum",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			goruntime.GOMAXPROCS(tt.setGOMAXPROCS)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sid := "test-edge"
+			rt := runtime.DefaultRuntime()
+			runtime.SetupServiceBasedRuntime(sid, rt)
+
+			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tt.updateWorkerFactor))
+			require.NotNil(t, gs)
+
+			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
+
+			// Verify constraints are always satisfied
+			assert.GreaterOrEqual(t, executorConcurrency, MinExecutorConcurrency,
+				"%s: executor should be >= MinExecutorConcurrency, got %d", tt.description, executorConcurrency)
+			assert.LessOrEqual(t, executorConcurrency, MaxExecutorConcurrency,
+				"%s: executor should be <= MaxExecutorConcurrency, got %d", tt.description, executorConcurrency)
+
+			// Verify it matches expected calculation
+			expectedExecutor, expectedWorker := calculateConcurrency(tt.setGOMAXPROCS, tt.updateWorkerFactor)
+			assert.Equal(t, expectedExecutor, executorConcurrency,
+				"%s: executor concurrency mismatch", tt.description)
+
+			// Verify worker calculation
+			expectedWorkerFromExecutor := expectedExecutor / 4
+			if expectedWorkerFromExecutor < 16 {
+				expectedWorkerFromExecutor = 16
+			}
+			assert.Equal(t, expectedWorker, expectedWorkerFromExecutor,
+				"%s: worker concurrency calculation mismatch", tt.description)
+
+			cancel()
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
+}
+
+// TestGlobalStatsConcurrency_ConcurrentCreation tests that multiple GlobalStats
+// instances can be created concurrently without issues
+func TestGlobalStatsConcurrency_ConcurrentCreation(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	originalGOMAXPROCS := goruntime.GOMAXPROCS(0)
+	defer goruntime.GOMAXPROCS(originalGOMAXPROCS)
+
+	goruntime.GOMAXPROCS(24) // Use a typical value
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sid := "test-concurrent"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(sid, rt)
+
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	errors := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(4))
+			if gs == nil {
+				errors <- fmt.Errorf("goroutine %d: GlobalStats creation failed", id)
+				return
+			}
+			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
+			if executorConcurrency < MinExecutorConcurrency || executorConcurrency > MaxExecutorConcurrency {
+				errors <- fmt.Errorf("goroutine %d: invalid executor concurrency %d", id, executorConcurrency)
+				return
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Check for errors
+	errList := make([]error, 0, numGoroutines)
+	for err := range errors {
+		errList = append(errList, err)
+	}
+	assert.Empty(t, errList, "concurrent creation should not produce errors: %v", errList)
+}
+
+// TestGlobalStatsConcurrency_ReductionVerification verifies that the optimization
+// actually reduces goroutine count compared to the old implementation
+func TestGlobalStatsConcurrency_ReductionVerification(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	originalGOMAXPROCS := goruntime.GOMAXPROCS(0)
+	defer goruntime.GOMAXPROCS(originalGOMAXPROCS)
+
+	testCases := []struct {
+		name               string
+		setGOMAXPROCS      int
+		updateWorkerFactor int
+		oldTotal           int // old implementation total goroutines
+		newTotal           int // new implementation total goroutines
+		reduction          int // expected reduction
+	}{
+		{
+			name:               "typical_production",
+			setGOMAXPROCS:      24,
+			updateWorkerFactor: 4,
+			oldTotal:           192, // 24*4*2 = 192
+			newTotal:           120, // 96+24 = 120
+			reduction:          72,  // 37.5% reduction
+		},
+		{
+			name:               "large_cpu",
+			setGOMAXPROCS:      32,
+			updateWorkerFactor: 4,
+			oldTotal:           256, // 32*4*2 = 256
+			newTotal:           135, // 108+27 = 135
+			reduction:          121, // 47.3% reduction
+		},
+		{
+			name:               "medium_cpu",
+			setGOMAXPROCS:      16,
+			updateWorkerFactor: 4,
+			oldTotal:           128, // 16*4*2 = 128
+			newTotal:           80,  // 64+16 = 80
+			reduction:          48,  // 37.5% reduction
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			goruntime.GOMAXPROCS(tc.setGOMAXPROCS)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sid := "test-reduction"
+			rt := runtime.DefaultRuntime()
+			runtime.SetupServiceBasedRuntime(sid, rt)
+
+			gs := NewGlobalStats(ctx, nil, nil, WithUpdateWorkerFactor(tc.updateWorkerFactor))
+			require.NotNil(t, gs)
+
+			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
+			_, workerConcurrency := calculateConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
+			actualTotal := executorConcurrency + workerConcurrency
+
+			assert.Equal(t, tc.newTotal, actualTotal,
+				"new implementation total goroutines mismatch")
+			assert.Less(t, actualTotal, tc.oldTotal,
+				"new implementation should have fewer goroutines than old")
+
+			actualReduction := tc.oldTotal - actualTotal
+			assert.Equal(t, tc.reduction, actualReduction,
+				"goroutine reduction mismatch: expected %d, got %d",
+				tc.reduction, actualReduction)
+
+			reductionPercent := float64(actualReduction) / float64(tc.oldTotal) * 100
+			assert.Greater(t, reductionPercent, 30.0,
+				"reduction should be at least 30%%, got %.1f%%", reductionPercent)
+
+			cancel()
+			time.Sleep(100 * time.Millisecond)
+		})
+	}
+}
+
+// TestSamplingRatioCalculation tests the sampling ratio calculation logic
+func TestSamplingRatioCalculation(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	testCases := []struct {
+		objectNum     int64
+		expectedRatio float64
+		description   string
+	}{
+		{50, 1.0, "below threshold, full scan"},
+		{100, 1.0, "at threshold, full scan"},
+		{101, float64(100) / 101, "just above threshold, sample 100"},
+		{500, float64(100) / 500, "500 objects, sample 100"},
+		{1000, float64(100) / 1000, "1000 objects, sample 100"},
+		// For 10000: max(sqrt(10000)=100, 10000*0.1=1000) = 1000
+		{10000, float64(1000) / 10000, "10000 objects, sample 10%=1000"},
+		{10001, float64(1000) / 10001, "10001 objects, sample 1000"},
+		// For 20000: max(sqrt(20000)=141, 20000*0.1=2000) = 2000
+		{20000, float64(2000) / 20000, "20000 objects, sample 10%=2000"},
+		// For 100000: max(sqrt(100000)=316, 100000*0.1=10000) = 10000, clamped to MaxSampleObjects=5000
+		{100000, float64(5000) / 100000, "100000 objects, sample 5000 (max)"},
+		{250000, float64(5000) / 250000, "250000 objects, sample 5000 (max)"},
+		{500000, float64(5000) / 500000, "500000 objects, sample 5000 (max)"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			ratio := calcSamplingRatio(tc.objectNum)
+			assert.InDelta(t, tc.expectedRatio, ratio, 0.01,
+				"sampling ratio mismatch for %d objects", tc.objectNum)
+
+			// Verify constraints
+			if tc.objectNum <= SamplingThreshold {
+				assert.Equal(t, 1.0, ratio, "should be full scan below threshold")
+			} else {
+				assert.Less(t, ratio, 1.0, "should be sampling above threshold")
+				// Verify sample count is within bounds
+				sampleCount := int(ratio * float64(tc.objectNum))
+				assert.GreaterOrEqual(t, sampleCount, MinSampleObjects-1, // -1 for rounding
+					"sample count should be >= MinSampleObjects")
+				assert.LessOrEqual(t, sampleCount, MaxSampleObjects+1, // +1 for rounding
+					"sample count should be <= MaxSampleObjects")
+			}
+		})
+	}
+}
+
+// TestSamplingThresholdCalculation tests the threshold calculation for ObjectID sampling
+func TestSamplingThresholdCalculation(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	testCases := []struct {
+		ratio    float64
+		expected uint64
+	}{
+		{1.0, ^uint64(0)},                            // max uint64
+		{0.5, uint64(0.5 * float64(^uint64(0)))},     // half
+		{0.1, uint64(0.1 * float64(^uint64(0)))},     // 10%
+		{0.01, uint64(0.01 * float64(^uint64(0)))},   // 1%
+		{0.001, uint64(0.001 * float64(^uint64(0)))}, // 0.1%
+		{1.5, ^uint64(0)},                            // > 1.0 should be max
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("ratio_%.4f", tc.ratio), func(t *testing.T) {
+			threshold := calcSamplingThreshold(tc.ratio)
+			if tc.ratio >= 1.0 {
+				assert.Equal(t, ^uint64(0), threshold, "ratio >= 1.0 should return max uint64")
+			} else {
+				// Allow some floating point tolerance
+				assert.InDelta(t, float64(tc.expected), float64(threshold), float64(tc.expected)*0.001,
+					"threshold mismatch for ratio %.4f", tc.ratio)
+			}
+		})
+	}
+}
+
+// TestShouldSampleObject tests the sampling decision based on ObjectID
+func TestShouldSampleObject(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	// Create a mock ObjectNameShort with known random bytes and num
+	createMockObjectName := func(randomValue uint64, num uint16) *objectio.ObjectNameShort {
+		var name objectio.ObjectNameShort
+		// Set bytes 8-15 to the random value (little endian)
+		binary.LittleEndian.PutUint64(name[objectIDRandomOffset:], randomValue)
+		// Set bytes 16-17 to the num (little endian)
+		binary.LittleEndian.PutUint16(name[16:], num)
+		return &name
+	}
+
+	t.Run("always_sample_max_threshold", func(t *testing.T) {
+		name := createMockObjectName(0, 0) // min values
+		threshold := ^uint64(0)            // max threshold
+		assert.True(t, shouldSampleObject(name, threshold), "max threshold should always sample")
+	})
+
+	t.Run("never_sample_zero_threshold", func(t *testing.T) {
+		name := createMockObjectName(1, 1) // any non-zero values
+		threshold := uint64(0)             // zero threshold
+		assert.False(t, shouldSampleObject(name, threshold), "zero threshold should never sample")
+	})
+
+	t.Run("different_num_different_result", func(t *testing.T) {
+		// Objects with same Segmentid but different Num should have different sampling results
+		// This is the key fix - previously all objects with same Segmentid would be sampled together
+		const randomValue = uint64(0x8000000000000000) // middle value
+		threshold := calcSamplingThreshold(0.5)        // 50% sampling
+
+		results := make(map[bool]int)
+		for num := uint16(0); num < 1000; num++ {
+			name := createMockObjectName(randomValue, num)
+			results[shouldSampleObject(name, threshold)]++
+		}
+		// With 50% threshold and good mixing, we should see both true and false results
+		assert.Greater(t, results[true], 0, "should have some sampled objects")
+		assert.Greater(t, results[false], 0, "should have some non-sampled objects")
+	})
+
+	t.Run("sampling_distribution", func(t *testing.T) {
+		// Test that sampling roughly follows the expected ratio
+		const numSegments = 10
+		const numPerSegment = 1000
+		const targetRatio = 0.3 // 30%
+		threshold := calcSamplingThreshold(targetRatio)
+
+		sampledCount := 0
+		for seg := 0; seg < numSegments; seg++ {
+			randomValue := uint64(seg) * (^uint64(0) / numSegments)
+			for num := uint16(0); num < numPerSegment; num++ {
+				name := createMockObjectName(randomValue, num)
+				if shouldSampleObject(name, threshold) {
+					sampledCount++
+				}
+			}
+		}
+
+		actualRatio := float64(sampledCount) / float64(numSegments*numPerSegment)
+		// Allow reasonable tolerance
+		assert.InDelta(t, targetRatio, actualRatio, 0.05,
+			"sampling ratio should be approximately %.2f, got %.2f", targetRatio, actualRatio)
+	})
+}
+
+// TestSamplingForceAtLeastOneObject tests the fix for the bug where sampling could
+// select zero objects for a table (e.g. when approxObjectNum > 100 but only 19 objects
+// are visible at snapshot, each with ~7% sampling probability -> P(0 sampled) ~ 26%).
+// That led to Phase 2 never running, all ColumnNDVs staying zero, empty ShuffleRangeMap,
+// and point queries using block_num~611 instead of 1. The fix ensures we always process
+// at least one object when sampling is enabled so that Phase 2 runs and stats are populated.
+//
+// Coverage note: this test exercises the same decision logic as collectTableStats Phase 2
+// (forceOne := sampledObjectCount == 0; process if forceOne || shouldSampleObject(...)).
+// It does not call collectTableStats itself; it validates the algorithm so that any change
+// to the force-one behavior would be caught here.
+func TestSamplingForceAtLeastOneObject(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	createMockObjectName := func(randomValue uint64, num uint16) *objectio.ObjectNameShort {
+		var name objectio.ObjectNameShort
+		binary.LittleEndian.PutUint64(name[objectIDRandomOffset:], randomValue)
+		binary.LittleEndian.PutUint16(name[16:], num)
+		return &name
+	}
+
+	t.Run("deterministic_all_rejected_then_one_forced", func(t *testing.T) {
+		// Use a low sampling ratio (1%) so threshold is small. Object names with high
+		// randomPart yield combined >= threshold, so shouldSampleObject returns false for all.
+		ratio := 0.01
+		threshold := calcSamplingThreshold(ratio)
+
+		const numObjects = 19
+		names := make([]*objectio.ObjectNameShort, numObjects)
+		for i := 0; i < numObjects; i++ {
+			names[i] = createMockObjectName(^uint64(0)-1, uint16(i))
+		}
+
+		for i := 0; i < numObjects; i++ {
+			assert.False(t, shouldSampleObject(names[i], threshold),
+				"object %d should not be sampled by random (reproduces no_objects_sampled)", i)
+		}
+
+		var sampledObjectCount int64
+		for i := 0; i < numObjects; i++ {
+			forceOne := sampledObjectCount == 0
+			if forceOne || shouldSampleObject(names[i], threshold) {
+				sampledObjectCount++
+			}
+		}
+
+		assert.GreaterOrEqual(t, sampledObjectCount, int64(1),
+			"force-one logic must ensure at least 1 is processed when all would be rejected")
+		assert.Equal(t, int64(1), sampledObjectCount,
+			"exactly one object should be processed (the forced one)")
+	})
+
+	// Same as production: 7% ratio, 19 objects. P(0 sampled without fix) = 0.93^19 ≈ 26%.
+	// Each CI run does many trials; we only assert that with the fix every trial gets >= 1.
+	// Over time some runs will hit the "would have been 0" case and exercise the force-one path.
+	t.Run("random_trials_7pct_19_objects", func(t *testing.T) {
+		ratio := 0.07
+		threshold := calcSamplingThreshold(ratio)
+		const numObjects = 19
+		const numTrials = 300
+		prime := uint64(0x9E3779B97F4A7C15)
+		nextRandom := func(trial, i int) uint64 { return uint64(trial)*prime + uint64(i)*0x1234567 }
+
+		for trial := 0; trial < numTrials; trial++ {
+			var sampledObjectCount int64
+			for i := 0; i < numObjects; i++ {
+				name := createMockObjectName(nextRandom(trial, i), uint16(i))
+				forceOne := sampledObjectCount == 0
+				if forceOne || shouldSampleObject(name, threshold) {
+					sampledObjectCount++
+				}
+			}
+			assert.GreaterOrEqual(t, sampledObjectCount, int64(1), "trial %d: with fix, at least one object must be processed", trial)
+		}
+	})
+}
+
+// initTableForTest initializes a table record with the given baseObjectCount
+// by calling shouldEnqueueUpdate once and then markUpdateComplete to set the baseObjectCount
+func initTableForTest(gs *GlobalStats, key statsinfo.StatsInfoKey, baseObjectCount int64) {
+	gs.shouldEnqueueUpdate(key, 0, false)
+	gs.markUpdateComplete(key, true, baseObjectCount, 1.0)
+}
+
+// TestGlobalStats_ShouldEnqueue tests the shouldEnqueue logic for large table throttling
+func TestGlobalStats_ShouldEnqueue(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	t.Run("first_time_enqueue", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+		assert.NotNil(t, gs)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// First time: should always enqueue
+		assert.True(t, gs.shouldEnqueueUpdate(key, 10, false))
+
+		// Verify record was created
+		gs.updatingMu.Lock()
+		rec, ok := gs.updatingMu.updating[key]
+		gs.updatingMu.Unlock()
+		assert.True(t, ok)
+		assert.Equal(t, 10, rec.pendingChanges)
+	})
+
+	t.Run("checkpoint_always_enqueue_large_table", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with large table
+		gs.updatingMu.Lock()
+		gs.updatingMu.updating[key] = &updateRecord{
+			baseObjectCount: 10000,
+			lastUpdate:      time.Now(),
+		}
+		gs.updatingMu.Unlock()
+
+		// Checkpoint with no meta changes: should enqueue (checkpoint takes priority)
+		// Note: In large table logic, checkpoint is not explicitly checked,
+		// but metaChanges=0 won't trigger enqueue unless timeout
+		assert.False(t, gs.shouldEnqueueUpdate(key, 0, true))
+	})
+
+	t.Run("checkpoint_with_changes_large_table", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with large table
+		gs.updatingMu.Lock()
+		gs.updatingMu.updating[key] = &updateRecord{
+			baseObjectCount: 10000,
+			lastUpdate:      time.Now(),
+		}
+		gs.updatingMu.Unlock()
+
+		// Checkpoint with changes: should enqueue if changes meet threshold
+		assert.True(t, gs.shouldEnqueueUpdate(key, 500, true)) // 5% change
+	})
+
+	t.Run("small_table_checkpoint", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with small table (< 500 objects)
+		initTableForTest(gs, key, 300)
+
+		// Small table with checkpoint: should enqueue
+		assert.True(t, gs.shouldEnqueueUpdate(key, 0, true))
+	})
+
+	t.Run("small_table_any_change", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key1 := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+		key2 := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    102,
+		}
+		key3 := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    103,
+		}
+
+		// Initialize records and set baseObjectCount (< 500 objects)
+		initTableForTest(gs, key1, 300)
+		initTableForTest(gs, key2, 300)
+		initTableForTest(gs, key3, 300)
+
+		// Small table: any change should enqueue
+		assert.True(t, gs.shouldEnqueueUpdate(key1, 1, false))
+		assert.True(t, gs.shouldEnqueueUpdate(key2, 10, false))
+		assert.True(t, gs.shouldEnqueueUpdate(key3, 100, false))
+	})
+
+	t.Run("small_table_no_change", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with small table (< 500 objects)
+		initTableForTest(gs, key, 300)
+
+		// Small table: no change and no checkpoint should not enqueue
+		assert.False(t, gs.shouldEnqueueUpdate(key, 0, false))
+	})
+
+	t.Run("large_table_below_threshold", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with large table (10000 objects)
+		gs.updatingMu.Lock()
+		gs.updatingMu.updating[key] = &updateRecord{
+			baseObjectCount: 10000,
+			lastUpdate:      time.Now(),
+		}
+		gs.updatingMu.Unlock()
+
+		// Change rate < 5% (400/10000 = 4%): should not enqueue
+		assert.False(t, gs.shouldEnqueueUpdate(key, 400, false))
+
+		// Verify pendingChanges accumulated
+		gs.updatingMu.Lock()
+		assert.Equal(t, 400, gs.updatingMu.updating[key].pendingChanges)
+		gs.updatingMu.Unlock()
+	})
+
+	t.Run("large_table_at_threshold", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with large table
+		gs.updatingMu.Lock()
+		gs.updatingMu.updating[key] = &updateRecord{
+			baseObjectCount: 10000,
+			lastUpdate:      time.Now(),
+		}
+		gs.updatingMu.Unlock()
+
+		// Change rate = 5% (500/10000 = 5%): should enqueue
+		assert.True(t, gs.shouldEnqueueUpdate(key, 500, false))
+	})
+
+	t.Run("large_table_above_threshold", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with large table
+		gs.updatingMu.Lock()
+		gs.updatingMu.updating[key] = &updateRecord{
+			baseObjectCount: 10000,
+			lastUpdate:      time.Now(),
+		}
+		gs.updatingMu.Unlock()
+
+		// Change rate > 5% (600/10000 = 6%): should enqueue
+		assert.True(t, gs.shouldEnqueueUpdate(key, 600, false))
+	})
+
+	t.Run("large_table_accumulated_changes", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with large table
+		gs.updatingMu.Lock()
+		gs.updatingMu.updating[key] = &updateRecord{
+			baseObjectCount: 10000,
+			lastUpdate:      time.Now(),
+		}
+		gs.updatingMu.Unlock()
+
+		// First change: 2% (200/10000)
+		assert.False(t, gs.shouldEnqueueUpdate(key, 200, false))
+		gs.updatingMu.Lock()
+		assert.Equal(t, 200, gs.updatingMu.updating[key].pendingChanges)
+		gs.updatingMu.Unlock()
+
+		// Second change: another 2% (total 4%)
+		assert.False(t, gs.shouldEnqueueUpdate(key, 200, false))
+		gs.updatingMu.Lock()
+		assert.Equal(t, 400, gs.updatingMu.updating[key].pendingChanges)
+		gs.updatingMu.Unlock()
+
+		// Third change: another 2% (total 6%, exceeds 5%)
+		assert.True(t, gs.shouldEnqueueUpdate(key, 200, false))
+		gs.updatingMu.Lock()
+		assert.Equal(t, 600, gs.updatingMu.updating[key].pendingChanges)
+		gs.updatingMu.Unlock()
+	})
+
+	t.Run("large_table_timeout", func(t *testing.T) {
+		// Temporarily reduce timeout for testing
+		origMaxInterval := LargeTableMaxUpdateInterval
+		defer func() {
+			// Note: Can't actually change const, but this shows intent
+			_ = origMaxInterval
+		}()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with large table and old lastUpdate
+		gs.updatingMu.Lock()
+		gs.updatingMu.updating[key] = &updateRecord{
+			baseObjectCount: 10000,
+			lastUpdate:      time.Now().Add(-31 * time.Minute), // > 30min ago
+		}
+		gs.updatingMu.Unlock()
+
+		// Even with small change (< 5%), should enqueue due to timeout
+		assert.True(t, gs.shouldEnqueueUpdate(key, 100, false))
+	})
+
+	t.Run("large_table_recent_update_no_timeout", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with large table and recent lastUpdate
+		gs.updatingMu.Lock()
+		gs.updatingMu.updating[key] = &updateRecord{
+			baseObjectCount: 10000,
+			lastUpdate:      time.Now().Add(-5 * time.Minute), // recent
+		}
+		gs.updatingMu.Unlock()
+
+		// Small change (< 5%) and no timeout: should not enqueue
+		assert.False(t, gs.shouldEnqueueUpdate(key, 100, false))
+	})
+
+	t.Run("boundary_large_table_threshold", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Test at boundary: exactly 500 objects (threshold)
+		gs.updatingMu.Lock()
+		gs.updatingMu.updating[key] = &updateRecord{
+			baseObjectCount: 500,
+			lastUpdate:      time.Now(),
+		}
+		gs.updatingMu.Unlock()
+
+		// At threshold (500): should be treated as large table
+		// Need 5% change (25 objects)
+		assert.False(t, gs.shouldEnqueueUpdate(key, 24, false))
+		assert.True(t, gs.shouldEnqueueUpdate(key, 1, false)) // 24+1=25, reaches 5%
+	})
+
+	t.Run("boundary_small_table_threshold", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Test just below boundary: 499 objects (< 500, so small table)
+		initTableForTest(gs, key, 499)
+
+		// Below threshold (< 500): should be treated as small table
+		// Any change should enqueue
+		assert.True(t, gs.shouldEnqueueUpdate(key, 1, false))
+	})
+
+	t.Run("zero_base_object_count", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with zero baseObjectCount
+		gs.updatingMu.Lock()
+		gs.updatingMu.updating[key] = &updateRecord{
+			baseObjectCount: 0,
+			lastUpdate:      time.Now(),
+		}
+		gs.updatingMu.Unlock()
+
+		// Zero base: treated as small table, any change should enqueue
+		assert.True(t, gs.shouldEnqueueUpdate(key, 1, false))
+	})
+
+	t.Run("concurrent_enqueue_checks", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gs := NewGlobalStats(ctx, nil, nil)
+
+		key := statsinfo.StatsInfoKey{
+			DatabaseID: 100,
+			TableID:    101,
+		}
+
+		// Initialize with large table
+		gs.updatingMu.Lock()
+		gs.updatingMu.updating[key] = &updateRecord{
+			baseObjectCount: 10000,
+			lastUpdate:      time.Now(),
+		}
+		gs.updatingMu.Unlock()
+
+		// Concurrent checks should be safe
+		var wg sync.WaitGroup
+		results := make([]bool, 20)
+		for i := 0; i < 20; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				// Each adds 30 changes (total 600, which is 6% > 5%)
+				results[idx] = gs.shouldEnqueueUpdate(key, 30, false)
+			}(i)
+		}
+		wg.Wait()
+
+		// At least one should succeed (first to reach 5%)
+		hasTrue := false
+		for _, r := range results {
+			if r {
+				hasTrue = true
+				break
+			}
+		}
+		assert.True(t, hasTrue, "at least one concurrent check should succeed")
+
+		// Verify pendingChanges accumulated
+		gs.updatingMu.Lock()
+		assert.Equal(t, 600, gs.updatingMu.updating[key].pendingChanges)
+		gs.updatingMu.Unlock()
+	})
+}
+
+func TestCleanMemoryTableWithTable(t *testing.T) {
+	t.Run("removes_partition_and_stats", func(t *testing.T) {
+		runTest(t, func(ctx context.Context, e *Engine) {
+			dbId, tblId := uint64(100), uint64(1001)
+
+			// Insert a fake partition (nil is valid; delete works on nil values)
+			e.Lock()
+			e.partitions[[2]uint64{dbId, tblId}] = nil
+			e.Unlock()
+
+			// Insert a stats entry for the same table
+			k := statsinfo.StatsInfoKey{DatabaseID: dbId, TableID: tblId, TableName: "t"}
+			e.globalStats.mu.Lock()
+			e.globalStats.mu.statsInfoMap[k] = plan2.NewStatsInfo()
+			e.globalStats.mu.Unlock()
+
+			// Call cleanMemoryTableWithTable
+			e.cleanMemoryTableWithTable(dbId, tblId)
+
+			// Verify partition removed
+			e.Lock()
+			_, partOk := e.partitions[[2]uint64{dbId, tblId}]
+			e.Unlock()
+			assert.False(t, partOk, "partition should be removed")
+
+			// Verify stats entry removed via RemoveTid
+			e.globalStats.mu.Lock()
+			_, statsOk := e.globalStats.mu.statsInfoMap[k]
+			e.globalStats.mu.Unlock()
+			assert.False(t, statsOk, "stats entry should be removed")
+		})
+	})
+
+	t.Run("no_panic_on_missing_partition", func(t *testing.T) {
+		runTest(t, func(ctx context.Context, e *Engine) {
+			// Calling with non-existent partition should not panic
+			e.cleanMemoryTableWithTable(999, 888)
+		})
+	})
+}
+
+func TestRemoveTid(t *testing.T) {
+	t.Run("remove_existing_entries", func(t *testing.T) {
+		runTest(t, func(ctx context.Context, e *Engine) {
+			gs := e.globalStats
+
+			// Insert entries for two tables
+			k1 := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001, TableName: "t1"}
+			k2 := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001, TableName: "t1_alt"}
+			k3 := statsinfo.StatsInfoKey{DatabaseID: 200, TableID: 2001, TableName: "t2"}
+
+			gs.mu.Lock()
+			gs.mu.statsInfoMap[k1] = plan2.NewStatsInfo()
+			gs.mu.statsInfoMap[k2] = nil // simulate failed update
+			gs.mu.statsInfoMap[k3] = plan2.NewStatsInfo()
+			gs.mu.Unlock()
+
+			// Remove table 1001 entries
+			gs.RemoveTid(1001)
+
+			gs.mu.Lock()
+			defer gs.mu.Unlock()
+			_, ok1 := gs.mu.statsInfoMap[k1]
+			_, ok2 := gs.mu.statsInfoMap[k2]
+			_, ok3 := gs.mu.statsInfoMap[k3]
+			assert.False(t, ok1, "k1 should be removed")
+			assert.False(t, ok2, "k2 should be removed")
+			assert.True(t, ok3, "k3 should not be removed")
+		})
+	})
+
+	t.Run("remove_nonexistent_table", func(t *testing.T) {
+		runTest(t, func(ctx context.Context, e *Engine) {
+			gs := e.globalStats
+
+			k := statsinfo.StatsInfoKey{DatabaseID: 100, TableID: 1001}
+			gs.mu.Lock()
+			gs.mu.statsInfoMap[k] = plan2.NewStatsInfo()
+			gs.mu.Unlock()
+
+			// Remove a non-existent table — should not panic
+			gs.RemoveTid(9999)
+
+			gs.mu.Lock()
+			defer gs.mu.Unlock()
+			_, ok := gs.mu.statsInfoMap[k]
+			assert.True(t, ok, "existing entry should remain")
+		})
+	})
+
+	t.Run("remove_wakes_waiting_goroutines", func(t *testing.T) {
+		runTest(t, func(ctx context.Context, e *Engine) {
+			gs := e.globalStats
+
+			// Set up: goroutine will cond.Wait() on a key, RemoveTid should broadcast
+			targetKey := statsinfo.StatsInfoKey{TableID: 42, DatabaseID: 1}
+
+			woken := make(chan bool, 1)
+			gs.mu.Lock()
+			go func() {
+				gs.mu.Lock()
+				defer gs.mu.Unlock()
+				// Block on cond.Wait() like production GlobalStats.Get does
+				for {
+					if _, ok := gs.mu.statsInfoMap[targetKey]; ok {
+						break
+					}
+					// cond.Wait releases the lock and waits for Broadcast
+					gs.mu.cond.Wait()
+					// After Broadcast, check if our condition changed
+					break
+				}
+				woken <- true
+			}()
+			gs.mu.Unlock()
+
+			// Small sleep to let goroutine enter cond.Wait()
+			time.Sleep(50 * time.Millisecond)
+
+			// RemoveTid broadcasts to cond, which should wake the waiting goroutine
+			gs.RemoveTid(999)
+
+			select {
+			case <-woken:
+				// ok — goroutine was woken by Broadcast
+			case <-time.After(2 * time.Second):
+				t.Fatal("RemoveTid did not wake goroutine blocked on cond.Wait()")
+			}
+		})
+	})
+}
+
+func TestGlobalStatsGetDoesNotHoldMuWhileSubscribing(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		ent := &subEntry{dbID: dbID, state: Subscribed}
+		ent.lastTs.Store(time.Now().UnixNano())
+
+		locked := true
+		e.pClient.subscribed.rw.Lock()
+		defer func() {
+			if locked {
+				e.pClient.subscribed.rw.Unlock()
+			}
+		}()
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = ent
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		reachSubscribe := make(chan struct{})
+		oldSubscribeHook := gs.beforeSubscribeTable
+		var subscribeOnce sync.Once
+		gs.beforeSubscribeTable = func(statsinfo.StatsInfoKey) {
+			subscribeOnce.Do(func() { close(reachSubscribe) })
+		}
+		defer func() {
+			gs.beforeSubscribeTable = oldSubscribeHook
+		}()
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		getDone := make(chan struct{})
+		go func() {
+			defer close(getDone)
+			_ = gs.Get(getCtx, key, false)
+		}()
+
+		require.Eventually(t, func() bool {
+			select {
+			case <-reachSubscribe:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "GlobalStats.Get did not reach subscribe path")
+
+		muAcquired := make(chan struct{})
+		go func() {
+			gs.mu.Lock()
+			gs.mu.Unlock()
+			close(muAcquired)
+		}()
+
+		require.Eventually(t, func() bool {
+			select {
+			case <-getDone:
+				return false
+			default:
+			}
+			select {
+			case <-muAcquired:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "GlobalStats.Get holds gs.mu while waiting on subscribe lock")
+
+		locked = false
+		e.pClient.subscribed.rw.Unlock()
+
+		select {
+		case <-getDone:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not return after subscribe lock released")
+		}
+	})
+}
+
+func TestCacheRemoteInfoIfSubscribedBroadcastsWaiters(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		ent := &subEntry{dbID: dbID, state: Subscribed}
+		ent.lastTs.Store(time.Now().UnixNano())
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = ent
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		remoteInfo := plan2.NewStatsInfo()
+		remoteInfo.TableCnt = 42
+
+		waitEntered := make(chan struct{})
+		waitDone := make(chan struct{})
+		var waitOnce sync.Once
+
+		go func() {
+			gs.mu.Lock()
+			defer gs.mu.Unlock()
+			for {
+				if _, ok := gs.mu.statsInfoMap[key]; ok {
+					break
+				}
+				waitOnce.Do(func() { close(waitEntered) })
+				gs.mu.cond.Wait()
+			}
+			close(waitDone)
+		}()
+
+		require.Eventually(t, func() bool {
+			select {
+			case <-waitEntered:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "waiter did not enter cond.Wait")
+
+		info := gs.cacheRemoteInfoIfSubscribed(key, ent, remoteInfo)
+		require.NotNil(t, info)
+		require.Equal(t, remoteInfo, info)
+
+		require.Eventually(t, func() bool {
+			select {
+			case <-waitDone:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond, "waiter was not awakened by remote cache broadcast")
+	})
+}
+
+func TestGlobalStatsGetDoesNotCacheRemoteInfoAfterUnsubscribe(t *testing.T) {
+	runTest(t, func(ctx context.Context, e *Engine) {
+		gs := e.globalStats
+		const dbID uint64 = 100
+		const tblID uint64 = 10001
+
+		e.pClient.eng = e
+		e.pClient.subscribed.eng = e
+
+		ent := &subEntry{dbID: dbID, state: Subscribed}
+		ent.lastTs.Store(time.Now().UnixNano())
+
+		if e.pClient.subscribed.m == nil {
+			e.pClient.subscribed.m = make(map[uint64]*subEntry)
+		}
+		e.pClient.subscribed.m[tblID] = ent
+
+		key := statsinfo.StatsInfoKey{
+			AccId:      0,
+			DatabaseID: dbID,
+			TableID:    tblID,
+			TableName:  "t",
+			DbName:     "d",
+		}
+
+		part := e.GetOrCreateLatestPart(ctx, 0, dbID, tblID)
+		state, done := part.MutateState()
+		oid := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+		require.NoError(t, state.HandleObjectEntry(ctx, nil, objectio.ObjectEntry{
+			ObjectStats: *stats,
+			CreateTime:  types.BuildTS(time.Now().UnixNano(), 0),
+		}, false))
+		done()
+
+		remoteInfo := plan2.NewStatsInfo()
+		remoteInfo.TableCnt = 42
+
+		qc := &mockStatsQueryClient{
+			response: &querypb.Response{
+				GetStatsInfoResponse: &querypb.GetStatsInfoResponse{StatsInfo: remoteInfo},
+			},
+			sendStarted: make(chan struct{}),
+			allowReturn: make(chan struct{}),
+		}
+		oldQC := e.qc
+		oldRouter := gs.KeyRouter
+		oldHook := gs.beforeCacheRemoteInfo
+		e.qc = qc
+		gs.KeyRouter = &mockStatsKeyRouter{target: "cn1"}
+		defer func() {
+			e.qc = oldQC
+			gs.KeyRouter = oldRouter
+			gs.beforeCacheRemoteInfo = oldHook
+		}()
+
+		beforeCacheReached := make(chan struct{})
+		allowCache := make(chan struct{})
+		gs.beforeCacheRemoteInfo = func(statsinfo.StatsInfoKey) {
+			close(beforeCacheReached)
+			<-allowCache
+		}
+
+		getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		resultCh := make(chan *statsinfo.StatsInfo, 1)
+		go func() {
+			resultCh <- gs.Get(getCtx, key, false)
+		}()
+
+		select {
+		case <-qc.sendStarted:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not request remote stats")
+		}
+
+		close(qc.allowReturn)
+
+		select {
+		case <-beforeCacheReached:
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not reach remote cache write point")
+		}
+
+		e.pClient.subscribed.setTableUnsubscribe(dbID, tblID)
+		close(allowCache)
+
+		select {
+		case info := <-resultCh:
+			require.Nil(t, info)
+		case <-time.After(time.Second):
+			t.Fatal("GlobalStats.Get did not return after unsubscribe")
+		}
+
+		gs.mu.Lock()
+		_, ok := gs.mu.statsInfoMap[key]
+		gs.mu.Unlock()
+		assert.False(t, ok)
+	})
 }

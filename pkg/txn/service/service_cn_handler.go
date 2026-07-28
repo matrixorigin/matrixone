@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -31,18 +32,10 @@ import (
 )
 
 var (
-	rollbackIgnoreErrorCodes = map[uint16]struct{}{
-		moerr.ErrTxnNotFound: {},
-	}
-
-	prepareIgnoreErrorCodes = map[uint16]struct{}{
-		moerr.ErrTxnNotFound: {},
-	}
+	errMultiTNTransaction = "transactions spanning more than one TN shard are unsupported"
 )
 
 func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	s.waitRecoveryCompleted()
-
 	util.LogTxnHandleRequest(s.logger, request)
 	defer util.LogTxnHandleResult(s.logger, response)
 
@@ -53,7 +46,9 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 		return nil
 	}
 
-	s.waitClockTo(request.Txn.SnapshotTS)
+	if err := s.waitClockTo(ctx, request.Txn.SnapshotTS); err != nil {
+		return err
+	}
 
 	// We do not write transaction information to sync.Map during read operations because commit and abort
 	// for read-only transactions are not sent to the TN node, so there is no way to clean up the transaction
@@ -120,8 +115,6 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 }
 
 func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	s.waitRecoveryCompleted()
-
 	util.LogTxnHandleRequest(s.logger, request)
 	defer util.LogTxnHandleResult(s.logger, response)
 
@@ -175,8 +168,6 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		v2.TxnTNCommitDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	s.waitRecoveryCompleted()
-
 	st := time.Now()
 	defer func() {
 		cost := time.Since(st)
@@ -198,12 +189,39 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	if len(request.Txn.TNShards) == 0 {
 		s.logger.Fatal("commit with empty tn shards")
 	}
+	if len(request.Txn.TNShards) > 1 {
+		s.cleanupUnsupportedTxn(ctx, request.Txn)
+		response.TxnError = txn.WrapError(
+			moerr.NewNotSupported(ctx, errMultiTNTransaction),
+			0,
+		)
+		return nil
+	}
+	var commitMeta lockservice.CommitRequestMeta
+	if request.CommitRequest != nil {
+		commitMeta.DeadlineUnixNano = request.CommitRequest.DeadlineUnixNano
+		commitMeta.Sequence = request.CommitRequest.CommitSequence
+	}
+	// MORPC transports the timeout as a duration. A request delayed in a
+	// server queue would otherwise receive a fresh relative timeout when it is
+	// decoded. The absolute deadline is checked before lockservice admission so
+	// an expired Commit cannot be admitted after its unknown-result fence has
+	// been collected. The sender and TN have different wall clocks, so account
+	// for the configured HLC offset before declaring a request expired.
+	if commitRequestExpired(request, time.Now(), s.commitDeadlineClockOffset()) {
+		response.TxnError = txn.WrapError(
+			moerr.NewTxnNotActive(ctx, "commit request expired"),
+			0,
+		)
+		return nil
+	}
 
 	if len(request.Txn.LockTables) > 0 {
 		invalidBinds, err := s.allocator.Valid(
 			request.Txn.LockService,
 			request.Txn.ID,
 			request.Txn.LockTables,
+			commitMeta,
 		)
 		if err != nil {
 			response.TxnError = txn.WrapError(err, 0)
@@ -214,6 +232,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 			response.TxnError = txn.WrapError(moerr.NewLockTableBindChanged(ctx), 0)
 			return nil
 		}
+		defer s.allocator.FinishCommit(request.Txn.LockService, request.Txn.ID)
 	}
 
 	txnID := request.Txn.ID
@@ -236,13 +255,10 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		return nil
 	}
 
-	cleanTxnContext := true
 	defer func() {
 		// remove txnCtx, commit can only execute once.
 		s.removeTxn(txnID)
-		if cleanTxnContext {
-			s.releaseTxnContext(txnCtx)
-		}
+		s.releaseTxnContext(txnCtx)
 	}()
 
 	response.Txn = &newTxn
@@ -258,101 +274,41 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		txnCtx.changeStatusLocked(status)
 	}
 
-	// fast path: write in only one DNShard.
-	if len(newTxn.TNShards) == 1 {
-		util.LogTxnStart1PCCommit(s.logger, newTxn)
-
-		commitTS, err := s.storage.Commit(ctx, newTxn, response, request.CommitRequest)
-		v2.TxnTNCommitHandledCounter.Inc()
-		if err != nil {
-			util.LogTxnStart1PCCommitFailed(s.logger, newTxn, err)
-			response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
-			changeStatus(txn.TxnStatus_Aborted)
-		} else {
-			newTxn.CommitTS = commitTS
-			txnCtx.updateTxnLocked(newTxn)
-
-			changeStatus(txn.TxnStatus_Committed)
-			util.LogTxn1PCCommitCompleted(s.logger, newTxn)
-		}
-		return nil
-	}
-
-	util.LogTxnStart2PCCommit(s.logger, newTxn)
-
-	// slow path. 2pc transaction.
-	// 1. send prepare request to all DNShards.
-	// 2. start async commit task if all prepare succeed.
-	// 3. response to client txn committed.
-	for _, tn := range newTxn.TNShards {
-		txnCtx.mu.requests = append(txnCtx.mu.requests, txn.TxnRequest{
-			Txn:            newTxn,
-			Method:         txn.TxnMethod_Prepare,
-			PrepareRequest: &txn.TxnPrepareRequest{TNShard: tn},
-		})
-	}
-
-	// unlock and lock here, because the prepare request will be sent to the current TxnService, it
-	// will need to get the Lock when processing the Prepare.
-	txnCtx.mu.Unlock()
-	// FIXME: txnCtx.mu.requests without lock, is it safe?
-	util.LogTxnSendRequests(s.logger, txnCtx.mu.requests)
-	result, err := s.sender.Send(ctx, txnCtx.mu.requests)
-	txnCtx.mu.Lock()
+	util.LogTxnStart1PCCommit(s.logger, newTxn)
+	commitTS, err := s.storage.Commit(ctx, newTxn, response, request.CommitRequest)
+	v2.TxnTNCommitHandledCounter.Inc()
 	if err != nil {
-		util.LogTxnParallelPrepareFailed(s.logger, newTxn, err)
-
+		util.LogTxnStart1PCCommitFailed(s.logger, newTxn, err)
+		response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
 		changeStatus(txn.TxnStatus_Aborted)
-		response.TxnError = txn.WrapError(moerr.NewRpcError(ctx, err.Error()), 0)
-		s.startAsyncRollbackTask(newTxn)
-		return nil
+	} else {
+		newTxn.CommitTS = commitTS
+		txnCtx.updateTxnLocked(newTxn)
+		changeStatus(txn.TxnStatus_Committed)
+		util.LogTxn1PCCommitCompleted(s.logger, newTxn)
 	}
+	return nil
+}
 
-	defer result.Release()
-
-	// get latest txn metadata
-	newTxn = txnCtx.getTxnLocked()
-	newTxn.CommitTS = newTxn.PreparedTS
-
-	hasError := false
-	var txnErr *txn.TxnError
-	for idx, resp := range result.Responses {
-		if resp.TxnError != nil {
-			txnErr = resp.TxnError
-			hasError = true
-			util.LogTxnPrepareFailedOn(s.logger, newTxn, newTxn.TNShards[idx], txnErr)
-			continue
-		}
-
-		if resp.Txn.PreparedTS.IsEmpty() {
-			s.logger.Fatal("missing prepared timestamp",
-				zap.String("target-dn-shard", newTxn.TNShards[idx].DebugString()),
-				util.TxnIDFieldWithID(newTxn.ID))
-		}
-
-		util.LogTxnPrepareCompletedOn(s.logger, newTxn, newTxn.TNShards[idx], resp.Txn.PreparedTS)
-		if newTxn.CommitTS.Less(resp.Txn.PreparedTS) {
-			newTxn.CommitTS = resp.Txn.PreparedTS
-		}
+func (s *service) commitDeadlineClockOffset() time.Duration {
+	rt := runtime.ServiceRuntime(s.sid)
+	if rt == nil || rt.Clock() == nil {
+		return 0
 	}
-	if hasError {
-		changeStatus(txn.TxnStatus_Aborted)
-		response.TxnError = txnErr
-		s.startAsyncRollbackTask(newTxn)
-		return nil
-	}
+	return rt.Clock().MaxOffset()
+}
 
-	util.LogTxnParallelPrepareCompleted(s.logger, newTxn)
-
-	// All DNShards prepared means the transaction is committed
-	cleanTxnContext = false
-	txnCtx.updateTxnLocked(newTxn)
-	return s.startAsyncCommitTask(txnCtx)
+func commitRequestExpired(
+	request *txn.TxnRequest,
+	now time.Time,
+	clockOffset time.Duration,
+) bool {
+	return request.CommitRequest != nil &&
+		request.CommitRequest.DeadlineUnixNano > 0 &&
+		!now.Before(time.Unix(0, request.CommitRequest.DeadlineUnixNano).Add(clockOffset))
 }
 
 func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	s.waitRecoveryCompleted()
-
 	util.LogTxnHandleRequest(s.logger, request)
 	defer util.LogTxnHandleResult(s.logger, response)
 
@@ -365,6 +321,14 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 	if len(request.Txn.TNShards) == 0 {
 		s.logger.Fatal("rollback with empty tn shards")
 	}
+	if len(request.Txn.TNShards) > 1 {
+		s.cleanupUnsupportedTxn(ctx, request.Txn)
+		response.TxnError = txn.WrapError(
+			moerr.NewNotSupported(ctx, errMultiTNTransaction),
+			0,
+		)
+		return nil
+	}
 
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)
@@ -376,6 +340,10 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 
 	txnCtx.mu.Lock()
 	defer txnCtx.mu.Unlock()
+	defer func() {
+		s.removeTxn(txnID)
+		s.releaseTxnContext(txnCtx)
+	}()
 
 	newTxn := txnCtx.getTxnLocked()
 	if !bytes.Equal(newTxn.ID, txnID) {
@@ -386,33 +354,34 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 
 	response.Txn = &newTxn
 	newTxn.TNShards = request.Txn.TNShards
-	s.startAsyncRollbackTask(newTxn)
-
-	response.Txn.Status = txn.TxnStatus_Aborted
+	if err := s.storage.Rollback(ctx, newTxn); err != nil {
+		response.TxnError = txn.WrapError(err, moerr.ErrTAERollback)
+	}
+	newTxn.Status = txn.TxnStatus_Aborted
+	txnCtx.changeStatusLocked(txn.TxnStatus_Aborted)
+	response.Txn = &newTxn
 	return nil
 }
 
-func (s *service) startAsyncRollbackTask(txnMeta txn.TxnMeta) {
-	err := s.stopper.RunTask(func(ctx context.Context) {
-		util.LogTxnStartAsyncRollback(s.logger, txnMeta)
+func (s *service) cleanupUnsupportedTxn(ctx context.Context, txnMeta txn.TxnMeta) {
+	txnCtx := s.getTxnContext(txnMeta.ID)
+	if txnCtx == nil {
+		return
+	}
 
-		requests := make([]txn.TxnRequest, 0, len(txnMeta.TNShards))
-		for _, tn := range txnMeta.TNShards {
-			requests = append(requests, txn.TxnRequest{
-				Txn:                    txnMeta,
-				Method:                 txn.TxnMethod_RollbackTNShard,
-				RollbackTNShardRequest: &txn.TxnRollbackTNShardRequest{TNShard: tn},
-			})
-		}
-
-		s.parallelSendWithRetry(ctx, requests, rollbackIgnoreErrorCodes)
-		util.LogTxnRollbackCompleted(s.logger, txnMeta)
-	})
-	if err != nil {
-		s.logger.Error("start rollback task failed",
+	txnCtx.mu.Lock()
+	defer txnCtx.mu.Unlock()
+	current := txnCtx.getTxnLocked()
+	if !bytes.Equal(current.ID, txnMeta.ID) {
+		return
+	}
+	if err := s.storage.Rollback(ctx, current); err != nil {
+		s.logger.Error("rollback unsupported multi-TN transaction failed",
 			zap.Error(err),
 			util.TxnIDFieldWithID(txnMeta.ID))
 	}
+	s.removeTxn(txnMeta.ID)
+	s.releaseTxnContext(txnCtx)
 }
 
 func (s *service) Debug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
@@ -427,79 +396,28 @@ func (s *service) Debug(ctx context.Context, request *txn.TxnRequest, response *
 	return nil
 }
 
-func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
-	return s.stopper.RunTask(func(ctx context.Context) {
-		txnCtx.mu.Lock()
-		defer txnCtx.mu.Unlock()
-
-		txnMeta := txnCtx.getTxnLocked()
-		util.LogTxnStartAsyncCommit(s.logger, txnMeta)
-
-		if txnMeta.Status != txn.TxnStatus_Committing {
-			for {
-				err := s.storage.Committing(ctx, txnMeta)
-				if err == nil {
-					txnCtx.changeStatusLocked(txn.TxnStatus_Committing)
-					break
-				}
-				util.LogTxnCommittingFailed(s.logger, txnMeta, err)
-				// TODO: make config
-				time.Sleep(time.Second)
-			}
-		}
-
-		util.LogTxnCommittingCompleted(s.logger, txnMeta)
-
-		requests := make([]txn.TxnRequest, 0, len(txnMeta.TNShards)-1)
-		for _, tn := range txnMeta.TNShards[1:] {
-			requests = append(requests, txn.TxnRequest{
-				Txn:                  txnMeta,
-				Method:               txn.TxnMethod_CommitTNShard,
-				CommitTNShardRequest: &txn.TxnCommitTNShardRequest{TNShard: tn},
-			})
-		}
-
-		// no timeout, keep retry until TxnService.Close
-		ctx, cancel := context.WithTimeoutCause(ctx, time.Duration(math.MaxInt64), moerr.CauseStartAsyncCommitTask)
-		defer cancel()
-
-		if result := s.parallelSendWithRetry(ctx, requests, rollbackIgnoreErrorCodes); result != nil {
-			result.Release()
-			if s.logger.Enabled(zap.DebugLevel) {
-				s.logger.Debug("other dnshards committed",
-					util.TxnIDFieldWithID(txnMeta.ID))
-			}
-
-			if _, err := s.storage.Commit(ctx, txnMeta, nil, nil); err != nil {
-				err = moerr.AttachCause(ctx, err)
-				s.logger.Fatal("commit failed after prepared",
-					util.TxnIDFieldWithID(txnMeta.ID),
-					zap.Error(err))
-			}
-
-			if s.logger.Enabled(zap.DebugLevel) {
-				s.logger.Debug("coordinator dnshard committed, txn committed",
-					util.TxnIDFieldWithID(txnMeta.ID))
-			}
-
-			txnCtx.changeStatusLocked(txn.TxnStatus_Committed)
-			s.releaseTxnContext(txnCtx)
-		}
-	})
-}
-
 func (s *service) checkCNRequest(request *txn.TxnRequest) {
 	if request.CNRequest == nil {
 		s.logger.Fatal("missing CNRequest")
 	}
 }
 
-func (s *service) waitClockTo(ts timestamp.Timestamp) {
+func (s *service) waitClockTo(ctx context.Context, ts timestamp.Timestamp) error {
 	for {
 		now, _ := runtime.ServiceRuntime(s.sid).Clock().Now()
 		if now.GreaterEq(ts) {
-			return
+			return nil
 		}
-		time.Sleep(time.Duration(ts.PhysicalTime + 1 - now.PhysicalTime))
+		wait := time.Duration(ts.PhysicalTime - now.PhysicalTime)
+		if wait < time.Duration(math.MaxInt64) {
+			wait++
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return context.Cause(ctx)
+		case <-timer.C:
+		}
 	}
 }

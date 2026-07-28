@@ -53,6 +53,16 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 
 var NoDefaultCredentialsForETL = os.Getenv("MO_NO_DEFAULT_CREDENTIALS") != ""
 
+func etlParallelMode(ctx context.Context) ParallelMode {
+	if mode, ok := parallelModeFromContext(ctx); ok {
+		return mode
+	}
+	if mode, ok := parseParallelMode(strings.TrimSpace(os.Getenv("MO_ETL_PARALLEL_MODE"))); ok {
+		return mode
+	}
+	return ParallelOff
+}
+
 // GetForETL get or creates a FileService instance for ETL operations
 // if service part of path is empty, a LocalETLFS will be created
 // if service part of path is not empty, a ETLFileService typed instance will be extracted from fs argument
@@ -110,6 +120,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 					KeySecret:          accessSecret,
 					KeyPrefix:          keyPrefix,
 					Name:               name,
+					ParallelMode:       etlParallelMode(ctx),
 				},
 				DisabledCacheConfig,
 				nil,
@@ -143,6 +154,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 					Bucket:             bucket,
 					KeyPrefix:          keyPrefix,
 					Name:               name,
+					ParallelMode:       etlParallelMode(ctx),
 				},
 				DisabledCacheConfig,
 				nil,
@@ -157,6 +169,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 			}
 			args.NoBucketValidation = true
 			args.IsHDFS = fsPath.Service == "hdfs"
+			args.ParallelMode = etlParallelMode(ctx)
 			res, err = NewS3FS(
 				ctx,
 				args,
@@ -198,6 +211,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 					KeyPrefix:          keyPrefix,
 					Name:               name,
 					IsMinio:            true,
+					ParallelMode:       etlParallelMode(ctx),
 				},
 				DisabledCacheConfig,
 				nil,
@@ -226,20 +240,42 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 	return
 }
 
-// GetForBackup creates a FileService instance for backup operations
-// if service part of path is empty, a LocalFS will be created
+// LocalBackendOf returns the LocalFS backend ("DISK" or "DISK-V2") whose on-disk
+// format matches fs, for creating a local copy (e.g. a filesystem backup) in the
+// same framing. Raw services (DISK-V2 LocalFS, S3FS, ...) map to "DISK-V2"; only
+// the legacy CRC32-framed LocalFS maps to "DISK". This lets a backup follow the
+// cluster's data fileservice format (the .toml) so restore reads it correctly.
+func LocalBackendOf(fs FileService) string {
+	if lfs, ok := fs.(*LocalFS); ok && !lfs.noChecksum {
+		return diskFileServiceBackend
+	}
+	// Everything else exposes the raw (unframed) on-disk layout — a DISK-V2
+	// LocalFS, S3FS, MemoryFS, ErrorFS, … — so a local copy of their data must
+	// use the DISK-V2 (raw) backend. Only the legacy CRC32-framed LocalFS above
+	// maps to DISK.
+	return diskV2FileServiceBackend
+}
+
+// GetForBackup creates a FileService instance for backup operations.
+// if service part of path is empty, a LocalFS is created; backend selects its
+// on-disk format ("DISK-V2" for raw, anything else incl. "DISK"/empty for the
+// legacy CRC32-framed format). backend is ignored for argumented (s3-opts) specs.
 // if service part of path is argumented, a FileService instance will be created dynamically with those arguments
 // supported dynamic file service:
 // s3-opts,endpoint=<endpoint>,region=<region>,bucket=<bucket>,key=<key>,secret=<secret>,prefix=<prefix>,role-arn=<role arn>,external-id=<external id>,is-minio=<is-minio>
-func GetForBackup(ctx context.Context, spec string) (res FileService, err error) {
+func GetForBackup(ctx context.Context, spec string, backend string) (res FileService, err error) {
 	fsPath, err := ParsePath(spec)
 	if err != nil {
 		return nil, err
 	}
 
 	if fsPath.Service == "" {
-		// no service, create local fs
-		res, err = NewLocalFS(context.Background(), "backup", spec, DisabledCacheConfig, nil)
+		// no service, create local fs in the format matching the cluster data
+		if strings.EqualFold(backend, diskV2FileServiceBackend) {
+			res, err = NewLocalFS2(context.Background(), "backup", spec, DisabledCacheConfig, nil)
+		} else {
+			res, err = NewLocalFS(context.Background(), "backup", spec, DisabledCacheConfig, nil)
+		}
 		if err != nil {
 			return nil, err
 		}

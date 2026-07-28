@@ -23,7 +23,7 @@ import (
 	"os"
 	"path"
 	runtime2 "runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,6 +45,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+)
+
+const (
+	// Backup protection update interval
+	backupProtectionUpdateInterval = 5 * time.Minute
+	// mo_ctl command prefix for backup protection
+	backupProtectionCmdPrefix = "add_checker.backup."
+	backupProtectionRemoveCmd = "remove_checker.backup."
 )
 
 func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
@@ -81,6 +89,7 @@ func BackupData(
 	srcFs, dstFs fileservice.FileService,
 	dir string,
 	config *Config,
+	globalIndex *GlobalFileIndex,
 ) error {
 	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
@@ -105,8 +114,14 @@ func BackupData(
 	if err != nil {
 		return err
 	}
+
+	// Setup backup protection manager
+	//exec, opts = getSQLExecutor(sid)
+	protectionMgr := newBackupProtectionManager(ctx, exec, opts)
+	defer protectionMgr.cleanup()
+
 	count := config.Parallelism
-	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType, nil)
+	return execBackup(ctx, sid, srcFs, dstFs, fileName, int(count), config.BackupTs, config.BackupType, nil, protectionMgr, globalIndex)
 }
 
 func getParallelCount(count int) int {
@@ -271,9 +286,25 @@ func execBackup(
 	ts types.TS,
 	typ string,
 	filesList *[]*taeFile,
+	protectionMgr *backupProtectionManager, // Optional: nil for tests, non-nil for production
+	globalIndex *GlobalFileIndex, // Optional: global file index for checking if file already backed up
 ) error {
+	if len(names) < 2 {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"incomplete backup checkpoint response: expected backup time and checkpoint location, got %d field(s)",
+			len(names),
+		)
+	}
+	if names[0] == "" {
+		return moerr.NewInternalError(ctx, "incomplete backup checkpoint response: backup time is empty")
+	}
+	if names[1] == "" {
+		return moerr.NewInternalError(ctx, "incomplete backup checkpoint response: checkpoint location is empty")
+	}
+
 	backupTime := names[0]
-	trimInfo := names[1]
+	trimString := names[1]
 	names = names[1:]
 	files := make(map[string]*objectio.BackupObject, 0)
 	gcFileMap := make(map[string]string)
@@ -285,13 +316,14 @@ func execBackup(
 		common.AnyField("backup time", backupTime),
 		common.AnyField("checkpoint num", len(names)),
 		common.AnyField("parallel num", parallelNum))
+
 	defer func() {
 		logutil.Info("backup", common.OperationField("end backup"),
 			common.AnyField("load checkpoint cost", loadDuration),
 			common.AnyField("copy file cost", copyDuration),
 			common.AnyField("rewrite checkpoint cost", reWriteDuration))
 	}()
-	now := time.Now()
+	startTime := time.Now()
 	baseTS := ts
 	// When rewriting the checkpoint and trimming the aobject,
 	// you need to collect the atombstone in the last checkpoint
@@ -302,7 +334,7 @@ func execBackup(
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
-		if len(ckpStr) != 2 && i > 0 {
+		if (i == 0 && len(ckpStr) != 5) || (i > 0 && len(ckpStr) != 2) {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
 		metaLoc := ckpStr[0]
@@ -329,7 +361,7 @@ func execBackup(
 			lastData = data
 		}
 	}
-	loadDuration += time.Since(now)
+	loadDuration += time.Since(startTime)
 
 	dstObj, err := fileservice.SortedList(dstFs.List(ctx, ""))
 	dstHave := make(map[string]bool)
@@ -346,10 +378,15 @@ func execBackup(
 			dstHave[object] = true
 		}
 	}
-	now = time.Now()
+	startTime = time.Now()
 	for _, oName := range oNames {
 		objName := oName.Location.Name().String()
+		// Check if file already exists in current backup directory
 		if dstHave[objName] {
+			oName.NeedCopy = false
+		}
+		// Check if file exists in global index (already backed up in previous backups)
+		if globalIndex != nil && globalIndex.Has(objName) {
 			oName.NeedCopy = false
 		}
 		if files[objName] == nil {
@@ -361,9 +398,9 @@ func execBackup(
 	var cnLoc, mergeStart, mergeEnd string
 	var end, start types.TS
 	var version uint64
-	if trimInfo != "" {
+	if trimString != "" {
 		var err error
-		ckpStr := strings.Split(trimInfo, ":")
+		ckpStr := strings.Split(trimString, ":")
 		if len(ckpStr) != 5 {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
@@ -377,6 +414,22 @@ func execBackup(
 		if err != nil {
 			return err
 		}
+	}
+
+	// Set protectedTS to the backup time point
+	// This is the timestamp that should be protected from GC
+	// Use start if available (from trimString), otherwise use baseTS
+	var protectedTS types.TS
+	if !start.IsEmpty() {
+		protectedTS = start
+	} else if !baseTS.IsEmpty() {
+		protectedTS = baseTS
+	}
+
+	// Start backup protection if we have a valid timestamp and protection manager
+	// protectionMgr can be nil in test environments
+	if !protectedTS.IsEmpty() && protectionMgr != nil {
+		protectionMgr.start(protectedTS)
 	}
 
 	// copy data
@@ -395,10 +448,10 @@ func execBackup(
 	if err != nil {
 		return err
 	}
-	copyDuration += time.Since(now)
+	copyDuration += time.Since(startTime)
 	taeFileList = append(taeFileList, sizeList...)
-	now = time.Now()
-	if trimInfo != "" {
+	startTime = time.Now()
+	if trimString != "" {
 		cnLocation, err := objectio.StringToLocation(cnLoc)
 		if err != nil {
 			return err
@@ -439,7 +492,7 @@ func execBackup(
 			ts:       start,
 		})
 	}
-	reWriteDuration += time.Since(now)
+	reWriteDuration += time.Since(startTime)
 	for _, file := range taeFileList {
 		if dstHave[file.path] {
 			file.needCopy = true
@@ -467,23 +520,33 @@ func copyFileAndGetMetaFiles(
 	decoder func(string) ioutil.TSRangeFile,
 	doCopy bool,
 ) ([]*taeFile, []ioutil.TSRangeFile, []fileservice.DirEntry, error) {
-	files, err := fileservice.SortedList(srcFs.List(ctx, dir))
+	mFiles, err := fileservice.SortedList(srcFs.List(ctx, dir))
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	taeFileList := make([]*taeFile, 0, len(files))
+	taeFileList := make([]*taeFile, 0, len(mFiles))
 	metaFiles := make([]ioutil.TSRangeFile, 0)
 	var checksum []byte
-	for i, file := range files {
+	for i, file := range mFiles {
 		if file.IsDir {
 			panic("not support dir")
 		}
 		meta := decoder(file.Name)
 		meta.SetIdx(i)
 
-		if !backup.IsEmpty() && meta.GetStart().GE(&backup) {
-			logutil.Infof("[Backup] skip file %v", file.Name)
-			continue
+		if !backup.IsEmpty() {
+			start := meta.GetStart()
+			end := meta.GetEnd()
+			// Skip if end timestamp is greater than backup time point
+			if !end.IsEmpty() && end.GT(&backup) {
+				logutil.Infof("[Backup] skip file %v (end %v > backup %v)", file.Name, end.ToString(), backup.ToString())
+				continue
+			}
+			// Also check start timestamp (original logic)
+			if !start.IsEmpty() && start.GE(&backup) {
+				logutil.Infof("[Backup] skip file %v (start %v >= backup %v)", file.Name, start.ToString(), backup.ToString())
+				continue
+			}
 		}
 		if doCopy || meta.IsAcctExt() || meta.IsSnapshotExt() {
 			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, file.Name, dir)
@@ -505,13 +568,19 @@ func copyFileAndGetMetaFiles(
 	}
 
 	if len(metaFiles) == 0 {
-		return taeFileList, metaFiles, files, nil
+		return taeFileList, metaFiles, mFiles, nil
 	}
-	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
+	slices.SortFunc(metaFiles, func(a, b ioutil.TSRangeFile) int {
+		if a.GetEnd().LT(b.GetEnd()) {
+			return -1
+		}
+		if b.GetEnd().LT(a.GetEnd()) {
+			return 1
+		}
+		return 0
 	})
 
-	return taeFileList, metaFiles, files, nil
+	return taeFileList, metaFiles, mFiles, nil
 }
 
 func CopyGCDir(
@@ -522,7 +591,7 @@ func CopyGCDir(
 ) ([]*taeFile, error) {
 	var checksum []byte
 
-	taeFileList, metaFiles, files, err := copyFileAndGetMetaFiles(
+	taeFiles, metaFiles, files, err := copyFileAndGetMetaFiles(
 		ctx, srcFs, dstFs, dir, backup, ioutil.DecodeGCMetadataName, false,
 	)
 	if err != nil {
@@ -542,15 +611,20 @@ func CopyGCDir(
 		filesList := make([]*taeFile, 0)
 		needCopy := true
 		for _, object := range objects {
-			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, object.ObjectName().String(), "")
+			objectName := object.ObjectName().String()
+			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, objectName, "")
 			if err != nil {
-				logutil.Warnf("[Backup] copy file %v failed", object.ObjectName().String())
+				logutil.Warnf("[Backup] copy file %v failed", objectName)
 				needCopy = false
 				break
 			}
+			entry, err := dstFs.StatFile(ctx, objectName)
+			if err != nil {
+				return nil, err
+			}
 			filesList = append(filesList, &taeFile{
-				path:     object.ObjectName().String(),
-				size:     files[metaFile.GetIdx()].Size,
+				path:     objectName,
+				size:     entry.Size,
 				checksum: checksum,
 				needCopy: true,
 				ts:       backup,
@@ -558,13 +632,13 @@ func CopyGCDir(
 		}
 		if needCopy {
 			copyFiles = append(copyFiles, metaFile)
-			taeFileList = append(taeFileList, filesList...)
+			taeFiles = append(taeFiles, filesList...)
 		}
 	}
 
 	for i, metaFile := range copyFiles {
 		name := metaFile.GetName()
-		if i == len(metaFiles)-1 {
+		if i == len(copyFiles)-1 {
 			if !min.IsEmpty() && metaFile.GetEnd().LT(&min) {
 				// It means that the gc consumption is too slow, and the gc water level needs to be raised.
 				// Otherwise, the gc will not work after the cluster is restored because it cannot find the checkpoint.
@@ -577,7 +651,7 @@ func CopyGCDir(
 		if err != nil {
 			return nil, err
 		}
-		taeFileList = append(taeFileList, &taeFile{
+		taeFiles = append(taeFiles, &taeFile{
 			path:     dir + string(os.PathSeparator) + name,
 			size:     files[metaFile.GetIdx()].Size,
 			checksum: checksum,
@@ -585,7 +659,7 @@ func CopyGCDir(
 			ts:       backup,
 		})
 	}
-	return taeFileList, nil
+	return taeFiles, nil
 }
 
 func CopyCheckpointDir(
@@ -598,7 +672,7 @@ func CopyCheckpointDir(
 		meta.SetExt("")
 		return meta
 	}
-	taeFileList, metaFiles, _, err := copyFileAndGetMetaFiles(
+	taeFiles, metaFiles, _, err := copyFileAndGetMetaFiles(
 		ctx, srcFs, dstFs, dir, backup, decoder, true,
 	)
 	if err != nil {
@@ -614,7 +688,7 @@ func CopyCheckpointDir(
 			break
 		}
 	}
-	return taeFileList, minTs, nil
+	return taeFiles, minTs, nil
 }
 
 func CopyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService, name, dstDir string, newName ...string) ([]byte, error) {
@@ -678,4 +752,127 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 		return nil, err
 	}
 	return hasher.Sum(nil), nil
+}
+
+// getSQLExecutor tries to get SQL executor from runtime
+// Returns (executor, opts) if available, (nil, empty opts) otherwise
+//func getSQLExecutor(sid string) (executor.SQLExecutor, executor.Options) {
+//	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
+//	if !ok {
+//		return nil, executor.Options{}
+//	}
+//	return v.(executor.SQLExecutor), executor.Options{}
+//}
+
+// buildBackupProtectionSQL builds the SQL command for backup protection
+func buildBackupProtectionSQL(protectedTS types.TS) string {
+	tsValue := protectedTS.ToString()
+	return fmt.Sprintf("select mo_ctl('dn','DiskCleaner','%s%s')", backupProtectionCmdPrefix, tsValue)
+}
+
+// buildRemoveBackupProtectionSQL builds the SQL command to remove backup protection
+func buildRemoveBackupProtectionSQL() string {
+	return fmt.Sprintf("select mo_ctl('dn','DiskCleaner','%s')", backupProtectionRemoveCmd)
+}
+
+// backupProtectionManager manages backup protection lifecycle
+type backupProtectionManager struct {
+	ctx            context.Context
+	exec           executor.SQLExecutor
+	opts           executor.Options
+	protectedTS    types.TS
+	updateTicker   *time.Ticker
+	updateStopChan chan struct{}
+	protectionSet  bool
+}
+
+// newBackupProtectionManager creates a new backup protection manager
+func newBackupProtectionManager(ctx context.Context, exec executor.SQLExecutor, opts executor.Options) *backupProtectionManager {
+	return &backupProtectionManager{
+		ctx:            ctx,
+		exec:           exec,
+		opts:           opts,
+		updateStopChan: make(chan struct{}),
+	}
+}
+
+// start starts backup protection with the given timestamp
+func (mgr *backupProtectionManager) start(protectedTS types.TS) {
+	mgr.protectedTS = protectedTS
+
+	if mgr.exec == nil {
+		logutil.Warn("backup: SQL executor not available, backup protection will not be set")
+		return
+	}
+
+	// Set backup protection via mo_ctl
+	sql := buildBackupProtectionSQL(protectedTS)
+	_, err := mgr.exec.Exec(mgr.ctx, sql, mgr.opts)
+	if err != nil {
+		logutil.Errorf("backup: failed to set backup protection: %v", err)
+		// Continue backup even if protection setup fails, but log the error
+		return
+	}
+
+	mgr.protectionSet = true
+	logutil.Info("backup: backup protection set",
+		common.AnyField("protected-ts", protectedTS.ToString()))
+
+	// Start a ticker to update backup protection periodically
+	mgr.updateTicker = time.NewTicker(backupProtectionUpdateInterval)
+	go mgr.updateLoop()
+}
+
+// updateLoop runs in a goroutine to periodically update backup protection
+func (mgr *backupProtectionManager) updateLoop() {
+	for {
+		select {
+		case <-mgr.updateTicker.C:
+			mgr.updateProtection()
+		case <-mgr.updateStopChan:
+			return
+		case <-mgr.ctx.Done():
+			return
+		}
+	}
+}
+
+// updateProtection updates the backup protection timestamp
+func (mgr *backupProtectionManager) updateProtection() {
+	if mgr.exec == nil {
+		return
+	}
+	sql := buildBackupProtectionSQL(mgr.protectedTS)
+	_, err := mgr.exec.Exec(mgr.ctx, sql, mgr.opts)
+	if err != nil {
+		logutil.Errorf("backup: failed to update backup protection: %v", err)
+	} else {
+		logutil.Info("backup: backup protection updated")
+	}
+}
+
+// cleanup stops the update ticker and removes backup protection
+// IMPORTANT: Close the channel first to signal the goroutine to exit,
+// then stop the ticker. This prevents deadlock if exec.Exec is blocking
+// in the goroutine. If we stop the ticker first, the goroutine might be
+// stuck in exec.Exec and unable to check updateStopChan channel.
+func (mgr *backupProtectionManager) cleanup() {
+	// Stop the update ticker
+	if mgr.updateTicker != nil {
+		// Close channel first to signal goroutine to exit
+		close(mgr.updateStopChan)
+		// Then stop the ticker (this is safe even if goroutine is still running)
+		mgr.updateTicker.Stop()
+	}
+
+	// Remove backup protection if it was set
+	if mgr.protectionSet && mgr.exec != nil {
+		sql := buildRemoveBackupProtectionSQL()
+		_, err := mgr.exec.Exec(mgr.ctx, sql, mgr.opts)
+		if err != nil {
+			logutil.Errorf("backup: failed to remove backup protection: %v", err)
+		} else {
+			logutil.Info("backup: backup protection removed")
+		}
+	}
 }

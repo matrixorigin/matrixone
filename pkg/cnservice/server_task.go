@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -23,12 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
+	"github.com/matrixorigin/matrixone/pkg/publication"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -37,7 +40,9 @@ import (
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
 )
 
@@ -101,7 +106,9 @@ func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
 	if !ok {
 		panic("no task service is initialized")
 	}
-	s.pu.TaskService = ts
+	s.pu.SetTaskService(ts)
+	// register into service runtime for fallback retrievals
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables("task-service", ts)
 }
 
 func (s *service) initSqlWriterFactory() {
@@ -186,13 +193,25 @@ func (s *service) startTaskRunner() {
 	s.task.Lock()
 	defer s.task.Unlock()
 
+	if !s.task.runnerReady.Load() {
+		return
+	}
+
 	if s.task.runner != nil {
+		return
+	}
+
+	if s.task.holder == nil {
 		return
 	}
 
 	ts, ok := s.task.holder.Get()
 	if !ok {
-		panic("task service must created")
+		return
+	}
+
+	ieFactory := func() ie.InternalExecutor {
+		return frontend.NewInternalExecutor(s.cfg.UUID)
 	}
 
 	s.task.runner = taskservice.NewTaskRunner(s.cfg.UUID,
@@ -215,6 +234,9 @@ func (s *service) startTaskRunner() {
 				return client
 			}),
 		taskservice.WithCnUUID(s.cfg.UUID),
+		taskservice.WithRunnerPauseTaskCompleted(
+			frontend.CDCPauseTaskCompleteHook(ieFactory),
+		),
 	)
 
 	s.registerExecutorsLocked()
@@ -245,13 +267,11 @@ func (s *service) stopTask() error {
 		return nil
 	}
 
-	if err := s.task.holder.Close(); err != nil {
-		return err
-	}
+	err := s.task.holder.Close()
 	if s.task.runner != nil {
-		return s.task.runner.Stop()
+		err = errors.Join(err, s.task.runner.Stop())
 	}
-	return nil
+	return err
 }
 
 func (s *service) registerExecutorsLocked() {
@@ -323,5 +343,40 @@ func (s *service) registerExecutorsLocked() {
 			s._txnClient,
 			s.storeEngine,
 		),
+	)
+
+	s.task.runner.RegisterExecutor(task.TaskCode_ISCPExecutor,
+		iscp.ISCPTaskExecutorFactory(
+			s.storeEngine,
+			s._txnClient,
+			s.task.runner.Attach,
+			s.cfg.UUID,
+			common.ISCPAllocator,
+		),
+	)
+
+	s.task.runner.RegisterExecutor(task.TaskCode_PublicationExecutor,
+		publication.PublicationTaskExecutorFactory(
+			s.storeEngine,
+			s._txnClient,
+			s.task.runner.Attach,
+			s.cfg.UUID,
+			common.PublicationAllocator,
+			nil,
+			s.pu, // pass ParameterUnit from service
+		),
+	)
+	s.task.runner.RegisterExecutor(task.TaskCode_IndexUpdateTaskExecutor,
+		idxcron.IndexUpdateTaskExecutorFactory(
+			s.cfg.UUID,
+			s.storeEngine,
+			s._txnClient,
+			common.ISCPAllocator,
+		),
+	)
+
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_SQLTask,
+		taskservice.NewSQLTaskExecutor(ieFactory, ts, s.cfg.UUID).TaskExecutor(),
 	)
 }

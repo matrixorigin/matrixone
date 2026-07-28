@@ -1,0 +1,1001 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package hashjoin
+
+import (
+	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const opName = "hash_join"
+
+func (hashJoin *HashJoin) String(buf *bytes.Buffer) {
+	buf.WriteString(opName)
+	switch hashJoin.JoinType {
+	case plan.Node_INNER:
+		buf.WriteString(": inner join ")
+	case plan.Node_LEFT:
+		buf.WriteString(": left join ")
+	case plan.Node_RIGHT:
+		buf.WriteString(": right join ")
+	case plan.Node_SEMI:
+		if hashJoin.IsRightJoin {
+			buf.WriteString(": right semi join ")
+		} else {
+			buf.WriteString(": semi join ")
+		}
+	case plan.Node_ANTI:
+		if hashJoin.IsRightJoin {
+			buf.WriteString(": right anti join ")
+		} else {
+			buf.WriteString(": anti join ")
+		}
+	case plan.Node_SINGLE:
+		buf.WriteString(": single join ")
+	case plan.Node_MARK:
+		buf.WriteString(": hash mark join ")
+	case plan.Node_OUTER:
+		buf.WriteString(": full outer join ")
+	}
+}
+
+func (hashJoin *HashJoin) OpType() vm.OpType {
+	return vm.HashJoin
+}
+
+func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
+	if hashJoin.IsMark() {
+		if err := hashJoin.validateMarkJoin(proc); err != nil {
+			return err
+		}
+	}
+
+	if hashJoin.OpAnalyzer == nil {
+		hashJoin.OpAnalyzer = process.NewAnalyzer(hashJoin.GetIdx(), hashJoin.IsFirst, hashJoin.IsLast, opName)
+	} else {
+		hashJoin.OpAnalyzer.Reset()
+	}
+
+	ctr := &hashJoin.ctr
+	ctr.setSpillThreshold(hashJoin.SpillThreshold)
+
+	if hashJoin.NonEqCond != nil && len(ctr.joinBats) == 0 {
+		ctr.joinBats = make([]*batch.Batch, 2)
+	}
+
+	if len(ctr.eqCondVecs) == 0 {
+		eqCondExecs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, hashJoin.EqConds[0])
+		if err != nil {
+			return err
+		}
+
+		var nonEqCondExec colexec.ExpressionExecutor
+		if hashJoin.NonEqCond != nil {
+			nonEqCondExec, err = colexec.NewExpressionExecutor(proc, hashJoin.NonEqCond)
+			if err != nil {
+				for _, exec := range eqCondExecs {
+					exec.Free()
+				}
+				return err
+			}
+		}
+
+		ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.EqConds[0]))
+		ctr.eqCondExecs = eqCondExecs
+		ctr.nonEqCondExec = nonEqCondExec
+	}
+
+	return err
+}
+
+func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
+	if hashJoin.NonEqCond != nil {
+		return moerr.NewInternalError(proc.Ctx, "hash MARK join does not support residual conditions")
+	}
+	if len(hashJoin.EqConds) != 2 || len(hashJoin.EqConds[0]) == 0 || len(hashJoin.EqConds[0]) != len(hashJoin.EqConds[1]) {
+		return moerr.NewInternalError(proc.Ctx, "hash MARK join requires matching non-empty probe and build keys")
+	}
+	if len(hashJoin.EqConds[0]) > 1 {
+		for i := range hashJoin.EqConds[0] {
+			if !hashJoin.EqConds[0][i].Typ.NotNullable || !hashJoin.EqConds[1][i].Typ.NotNullable {
+				return moerr.NewInternalError(proc.Ctx, "hash MARK join requires composite keys to be not nullable")
+			}
+		}
+	}
+	for _, result := range hashJoin.ResultCols {
+		if result.Rel != 0 && result.Rel != -1 {
+			return moerr.NewInternalErrorf(proc.Ctx, "hash MARK join has unexpected result relation %d", result.Rel)
+		}
+	}
+	return nil
+}
+
+func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
+	analyzer := hashJoin.OpAnalyzer
+
+	ctr := &hashJoin.ctr
+	input := vm.NewCallResult()
+	result := vm.NewCallResult()
+	var err error
+
+	for {
+		switch ctr.state {
+		case Build:
+			err = hashJoin.build(analyzer, proc)
+			if err != nil {
+				return result, err
+			}
+
+			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() && !hashJoin.IsMark() {
+				// TODO: early terminate the probe side for shuffle join
+				if !hashJoin.IsShuffle {
+					ctr.state = End
+					continue
+				}
+			}
+
+			if hashJoin.CanSkipProbe && ctr.mp != nil && ctr.mp.PushedRuntimeFilterIn() && hashJoin.NonEqCond == nil {
+				ctr.skipProbe = true
+			}
+
+			ctr.state = Probe
+
+		case Probe:
+			if ctr.leftBat == nil {
+				input, err = hashJoin.getInputBatch(proc, analyzer)
+				if err != nil {
+					return result, err
+				}
+				bat := input.Batch
+
+				if bat == nil {
+					if hashJoin.EmitUnmatchedBuild() {
+						ctr.state = SyncBitmap
+					} else {
+						ctr.state = End
+					}
+
+					continue
+				}
+
+				if bat.Last() {
+					result.Batch = input.Batch
+					return result, nil
+				}
+
+				if bat.IsEmpty() {
+					continue
+				}
+
+				if ctr.mp == nil && !ctr.probeEmitUnmatched && !ctr.probeMark {
+					continue
+				}
+
+				ctr.leftBat = bat
+				ctr.lastIdx = 0
+			}
+
+			hashJoin.resetResultBat()
+			for i, rp := range hashJoin.ResultCols {
+				if rp.Rel == 0 {
+					ctr.resBat.Vecs[i].SetSorted(ctr.leftBat.Vecs[rp.Pos].GetSorted())
+				}
+			}
+
+			if ctr.skipProbe {
+				rowCount := ctr.leftBat.RowCount()
+				var srcVec *vector.Vector
+				var targetVec *vector.Vector
+
+				for i, rp := range hashJoin.ResultCols {
+					srcVec = ctr.leftBat.Vecs[rp.Pos]
+					targetVec = ctr.resBat.Vecs[i]
+					err = targetVec.UnionBatch(srcVec, 0, rowCount, nil, proc.Mp())
+					if err != nil {
+						return result, err
+					}
+				}
+
+				ctr.leftBat = nil
+				ctr.resBat.SetRowCount(rowCount)
+				result.Batch = ctr.resBat
+
+				return result, nil
+			}
+
+			startRow := ctr.lastIdx
+
+			if ctr.mp == nil {
+				err = ctr.emptyProbe(hashJoin, proc, &result)
+			} else {
+				err = ctr.probe(hashJoin, proc, &result)
+			}
+			if err != nil {
+				return result, err
+			}
+
+			if hashJoin.IsRightSemi() || hashJoin.IsRightAnti() {
+				continue
+			}
+
+			if ctr.lastIdx == startRow && ctr.leftBat != nil &&
+				(result.Batch == nil || result.Batch.IsEmpty()) {
+				return result, moerr.NewInternalErrorNoCtx("hash join hanging")
+			}
+
+			return result, nil
+
+		case SyncBitmap:
+			err := ctr.syncBitmap(hashJoin, proc)
+			if err != nil {
+				return result, err
+			}
+
+			// Only enter Finalize when syncBitmap ran to completion and set
+			// the iterator. It stays nil for non-merger workers, when there
+			// is no bitmap at all, or when the merger observed teardown (a
+			// worker sent a nil bitmap on Reset, or the context was
+			// canceled) — in all these cases there is nothing to finalize.
+			if ctr.rightMatchedIter == nil {
+				ctr.state = End
+			} else {
+				ctr.state = Finalize
+			}
+
+			continue
+
+		case Finalize:
+			err := ctr.finalize(hashJoin, proc, &result)
+			if err != nil {
+				return result, err
+			}
+
+			if result.Batch == nil {
+				ctr.state = End
+
+				// For spilled join, clean up current bucket and move to next
+				if (ctr.spillEngine != nil) && (ctr.spillEngine.HasMoreBuckets() || ctr.spillEngine.IsProbing()) {
+					ctr.rightRowsMatched = nil
+					ctr.cleanHashMap()
+					ctr.state = Probe
+				}
+				continue
+			}
+
+			return result, nil
+
+		default:
+			result.Batch = nil
+			result.Status = vm.ExecStop
+			return result, nil
+		}
+	}
+}
+
+func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
+	ctr := &hashJoin.ctr
+	dep, err := process.MeasureWait(analyzer, resource.WaitOther, func() (message.JoinMapResult, error) {
+		return message.ReceiveJoinMapResult(hashJoin.JoinMapTag, hashJoin.IsShuffle, hashJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	})
+	if err != nil {
+		return err
+	}
+	if buildErr := dep.BuildError(); buildErr != nil {
+		// A terminal BuildError is a failed dependency, never an empty build.
+		// Return before consuming probe input so no successful rows can escape.
+		return buildErr.AsMoErr()
+	}
+	ctr.mp = dep.JoinMap()
+
+	// Pre-compute per-query flags for the probe loop.
+	ctr.probeEmitUnmatched = hashJoin.EmitUnmatchedProbe()
+	ctr.probeRightSemiAnti = !hashJoin.IsRightSemi() && !hashJoin.IsAnti()
+	ctr.probeRightJoin = hashJoin.IsRightJoin
+	ctr.probeSingle = hashJoin.IsSingle()
+	ctr.probeLeftSingle = hashJoin.IsLeftSingle()
+	ctr.probeLeftSemi = hashJoin.IsLeftSemi()
+	ctr.probeLeftAnti = hashJoin.IsLeftAnti()
+	ctr.probeMark = hashJoin.IsMark()
+	ctr.buildHasNullKey = false
+	ctr.globalBuildRowCnt = 0
+
+	if ctr.mp != nil {
+		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
+		ctr.buildHasNullKey = ctr.mp.HasNullKey()
+		ctr.globalBuildRowCnt = ctr.mp.GetRowCount()
+
+		// Handle spilled build side
+		if ctr.mp.IsSpilled() {
+			files := ctr.mp.TakeSpillBuildFiles()
+			var budget *process.HashBuildBudgetGeneration
+			if files != nil {
+				var ok bool
+				budget, ok = ctr.mp.TakeSpillBudget().(*process.HashBuildBudgetGeneration)
+				if !ok || budget == nil {
+					for _, file := range files {
+						_ = file.Close()
+					}
+					return moerr.NewInternalError(proc.Ctx, "spilled join map is missing its producer budget generation")
+				}
+			} else {
+				budget, err = proc.GetHashBuildBudget()
+				if err != nil {
+					return err
+				}
+			}
+			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+				BuildKeyExprs:           hashJoin.EqConds[1],
+				ProbeKeyExprs:           hashJoin.EqConds[0],
+				SpillThreshold:          ctr.spillThreshold,
+				NeedsProbeForEmptyBuild: hashJoin.EmitUnmatchedProbe() || hashJoin.IsMark(),
+				NeedsBuildForEmptyProbe: hashJoin.EmitUnmatchedBuild(),
+				HashOnPK:                hashJoin.HashOnPK,
+				NeedAllocateSels:        !hashJoin.HashOnPK,
+				NeedBatches:             hashJoin.NeedBuildBatches(),
+				Budget:                  budget,
+			})
+			if files != nil {
+				engine.InitFromSpilledFiles(files)
+			} else {
+				engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			}
+			if err := engine.ScatterProbeTable(proc,
+				func() (*batch.Batch, error) {
+					input, err := vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
+					return input.Batch, err
+				},
+				analyzer,
+				func(bat *batch.Batch) ([]*vector.Vector, error) {
+					if err := ctr.evalJoinCondition(bat, proc); err != nil {
+						return nil, err
+					}
+					return ctr.eqCondVecs, nil
+				},
+			); err != nil {
+				ctr.mp.Free()
+				ctr.mp = nil
+				engine.Cleanup(proc)
+				return err
+			}
+			ctr.mp.Free()
+			ctr.spillEngine = engine
+			ctr.mp = nil
+			return nil
+		}
+	}
+
+	if ctr.mp == nil {
+		return
+	}
+	ctr.rightBats = ctr.mp.GetBatches()
+	ctr.rightRowCnt = ctr.mp.GetRowCount()
+	ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
+
+	if hashJoin.EmitUnmatchedBuild() {
+		if ctr.rightRowCnt > 0 {
+			ctr.rightRowsMatched = &bitmap.Bitmap{}
+			ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
+		}
+	}
+
+	return
+}
+
+func (hashJoin *HashJoin) getInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	if hashJoin.ctr.spillEngine == nil {
+		return vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
+	}
+	return hashJoin.getSpilledInputBatch(proc, analyzer)
+}
+
+func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	var result vm.CallResult
+	ctr := &hashJoin.ctr
+	engine := ctr.spillEngine
+
+	for {
+		// Read next probe batch from current bucket.
+		if ctr.probeBucketActive {
+			bat, err := engine.NextProbeBatch(proc)
+			if err != nil {
+				return result, err
+			}
+			if bat != nil {
+				result.Batch = bat
+				return result, nil
+			}
+			// EOF on probe file.
+			engine.FinishBucket()
+			ctr.probeBucketActive = false
+			if ctr.rightRowsMatched != nil {
+				return result, nil // trigger Finalize for unmatched right rows
+			}
+			ctr.cleanHashMap()
+		}
+
+		// Load next bucket via engine convenience method.
+		if ctr.mp == nil {
+			ok, err := engine.AdvanceToNextBucket(proc, analyzer,
+				func(jm *message.JoinMap, res spillutil.BucketResult) {
+					if res == spillutil.BucketReady {
+						ctr.mp = jm
+						ctr.rightBats = jm.GetBatches()
+						ctr.rightRowCnt = jm.GetRowCount()
+						ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
+						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
+							ctr.rightRowsMatched = &bitmap.Bitmap{}
+							ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
+							ctr.rightMatchedIter = nil
+						}
+					}
+				})
+			if err != nil {
+				return result, err
+			}
+			if !ok {
+				return result, nil
+			}
+			ctr.itr = nil
+			ctr.probeState = psNextBatch
+			ctr.lastIdx = 0
+			ctr.vsIdx = 0
+			ctr.probeBucketActive = true
+		}
+	}
+}
+
+func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
+	err := ctr.evalJoinCondition(ctr.leftBat, proc)
+	if err != nil {
+		return err
+	}
+
+	if hashJoin.NonEqCond != nil {
+		if ctr.joinBats[0] == nil {
+			ctr.joinBats[0], ctr.cfs1 = colexec.NewJoinBatch(ctr.leftBat, proc.Mp())
+		}
+		if ctr.joinBats[1] == nil && ctr.rightRowCnt > 0 {
+			ctr.joinBats[1], ctr.cfs2 = colexec.NewJoinBatch(ctr.rightBats[0], proc.Mp())
+		}
+	}
+
+	if ctr.itr == nil {
+		ctr.itr = ctr.mp.NewIterator()
+	}
+	leftRowCnt := ctr.leftBat.RowCount()
+	resRowCnt := 0
+
+	for {
+		switch ctr.probeState {
+		case psNextBatch:
+			if ctr.lastIdx < leftRowCnt {
+				hashBatch := min(leftRowCnt-ctr.lastIdx, hashmap.UnitLimit)
+				ctr.vs, ctr.zvs = ctr.itr.Find(ctr.lastIdx, hashBatch, ctr.eqCondVecs)
+				ctr.vsIdx = 0
+				ctr.probeState = psBatchRow
+			} else {
+				ctr.resBat.AddRowCount(resRowCnt)
+				result.Batch = ctr.resBat
+				ctr.lastIdx = 0
+				ctr.leftBat = nil
+				ctr.probeState = psNextBatch
+				return nil
+			}
+
+		case psBatchRow:
+			z, v := ctr.zvs[ctr.vsIdx], ctr.vs[ctr.vsIdx]
+			row := int64(ctr.lastIdx)
+			idx := int64(v) - 1
+			idx1 := idx / colexec.DefaultBatchSize
+			idx2 := idx % colexec.DefaultBatchSize
+
+			ctr.lastIdx++
+			ctr.vsIdx++
+
+			if ctr.probeMark {
+				markValue := z != 0 && v != 0
+				markNull := !markValue && (z == 0 || ctr.buildHasNullKey)
+				if err = ctr.appendOneMark(hashJoin, proc, row, markValue, markNull); err != nil {
+					return err
+				}
+				resRowCnt++
+
+				if ctr.vsIdx < len(ctr.vs) {
+					ctr.probeState = psBatchRow
+				} else {
+					ctr.probeState = psNextBatch
+				}
+
+				if resRowCnt >= colexec.DefaultBatchSize {
+					ctr.resBat.AddRowCount(resRowCnt)
+					result.Batch = ctr.resBat
+					return nil
+				}
+				continue
+			}
+
+			if z == 0 || v == 0 {
+				if ctr.probeEmitUnmatched {
+					ctr.appendOneNotMatch(hashJoin, proc, row)
+					resRowCnt++
+				}
+
+				if ctr.vsIdx >= len(ctr.vs) {
+					ctr.probeState = psNextBatch
+				}
+
+				if resRowCnt >= colexec.DefaultBatchSize {
+					ctr.resBat.AddRowCount(resRowCnt)
+					result.Batch = ctr.resBat
+					return nil
+				}
+
+				continue
+			}
+
+			if ctr.probeHashOnPK {
+				if hashJoin.NonEqCond == nil {
+					if ctr.probeRightSemiAnti {
+						err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
+						if err != nil {
+							return err
+						}
+
+						resRowCnt++
+					}
+
+					if ctr.probeRightJoin {
+						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
+						}
+
+						ctr.rightRowsMatched.Add(uint64(idx))
+					}
+				} else {
+					ok, err := ctr.evalNonEqCondition(ctr.leftBat, row, proc, idx1, idx2)
+					if err != nil {
+						return err
+					}
+
+					if ok {
+						if ctr.probeRightSemiAnti {
+							err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
+							if err != nil {
+								return err
+							}
+
+							resRowCnt++
+						}
+
+						if ctr.probeRightJoin {
+							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
+							}
+
+							ctr.rightRowsMatched.Add(uint64(idx))
+						}
+					} else if ctr.probeEmitUnmatched {
+						err = ctr.appendOneNotMatch(hashJoin, proc, row)
+						if err != nil {
+							return err
+						}
+						resRowCnt++
+					}
+				}
+			} else {
+				ctr.sels = ctr.mp.GetSels(uint64(idx))
+				ctr.leftRowMatched = false
+
+				if hashJoin.NonEqCond == nil {
+					if ctr.probeLeftSingle {
+						if len(ctr.sels) > 1 {
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
+						}
+					} else if ctr.probeLeftSemi {
+						ctr.appendOneNotMatch(hashJoin, proc, row)
+						resRowCnt++
+						ctr.sels = nil
+					} else if ctr.probeLeftAnti {
+						ctr.sels = nil
+					}
+				}
+			}
+
+			if len(ctr.sels) > 0 {
+				ctr.probeState = psSelsForOneRow
+			} else if ctr.vsIdx < len(ctr.vs) {
+				ctr.probeState = psBatchRow
+			} else {
+				ctr.probeState = psNextBatch
+			}
+
+			if resRowCnt >= colexec.DefaultBatchSize {
+				ctr.resBat.AddRowCount(resRowCnt)
+				result.Batch = ctr.resBat
+				return nil
+			}
+
+		case psSelsForOneRow:
+			row := int64(ctr.lastIdx - 1)
+			processCount := min(len(ctr.sels), colexec.DefaultBatchSize-resRowCnt)
+			sels := ctr.sels[:processCount]
+			// remove processed sels
+			ctr.sels = ctr.sels[processCount:]
+			if hashJoin.NonEqCond == nil {
+				if ctr.probeRightJoin {
+					for _, sel := range sels {
+						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
+						}
+
+						ctr.rightRowsMatched.Add(uint64(sel))
+					}
+				}
+
+				if ctr.probeRightSemiAnti {
+					for j, rp := range hashJoin.ResultCols {
+						if rp.Rel == 0 {
+							err = ctr.resBat.Vecs[j].UnionMulti(ctr.leftBat.Vecs[rp.Pos], row, processCount, proc.Mp())
+							if err != nil {
+								return err
+							}
+						} else {
+							for _, sel := range sels {
+								idx1 := sel / colexec.DefaultBatchSize
+								idx2 := sel % colexec.DefaultBatchSize
+								err = ctr.resBat.Vecs[j].UnionOne(ctr.rightBats[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp())
+								if err != nil {
+									return err
+								}
+							}
+						}
+					}
+				}
+
+				resRowCnt += processCount
+			} else {
+				for _, sel := range sels {
+					idx1 := int64(sel / colexec.DefaultBatchSize)
+					idx2 := int64(sel % colexec.DefaultBatchSize)
+					ok, err := ctr.evalNonEqCondition(ctr.leftBat, int64(row), proc, idx1, idx2)
+					if err != nil {
+						return err
+					}
+
+					if ok {
+						if ctr.probeRightJoin {
+							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
+							}
+
+							ctr.rightRowsMatched.Add(uint64(sel))
+						} else {
+							if ctr.probeSingle && ctr.leftRowMatched {
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
+							}
+						}
+
+						ctr.leftRowMatched = true
+
+						if ctr.probeRightSemiAnti {
+							ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2)
+							resRowCnt++
+						}
+
+						if ctr.probeLeftSemi {
+							ctr.sels = nil
+							break
+						}
+					}
+				}
+
+				if len(ctr.sels) == 0 &&
+					!ctr.leftRowMatched && ctr.probeEmitUnmatched {
+					ctr.appendOneNotMatch(hashJoin, proc, int64(row))
+					resRowCnt++
+				}
+			}
+
+			if len(ctr.sels) > 0 {
+				ctr.probeState = psSelsForOneRow
+			} else if ctr.vsIdx < len(ctr.vs) {
+				ctr.probeState = psBatchRow
+			} else {
+				ctr.probeState = psNextBatch
+			}
+
+			if resRowCnt >= colexec.DefaultBatchSize {
+				ctr.resBat.AddRowCount(resRowCnt)
+				result.Batch = ctr.resBat
+				return nil
+			}
+		}
+	}
+}
+
+func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
+	rowCnt := ctr.leftBat.RowCount()
+	for i, rp := range hashJoin.ResultCols {
+		if rp.Rel == 0 {
+			err := ctr.resBat.Vecs[i].UnionBatch(ctr.leftBat.Vecs[rp.Pos], 0, rowCnt, nil, proc.Mp())
+			if err != nil {
+				return err
+			}
+		} else if hashJoin.IsMark() {
+			if rp.Rel != -1 {
+				return moerr.NewInternalErrorNoCtxf("hash mark join has unexpected result relation %d", rp.Rel)
+			}
+			if err := ctr.appendMarkForEmptyBuildBucket(ctr.resBat.Vecs[i], proc, rowCnt); err != nil {
+				return err
+			}
+		} else {
+			if err := vector.SetConstNull(ctr.resBat.Vecs[i], rowCnt, proc.Mp()); err != nil {
+				return err
+			}
+		}
+	}
+	ctr.resBat.AddRowCount(rowCnt)
+	result.Batch = ctr.resBat
+	ctr.lastIdx = 0
+	ctr.leftBat = nil
+	return nil
+}
+
+// appendMarkForEmptyBuildBucket evaluates a MARK join when the current spill
+// bucket has no build rows. A local empty bucket does not imply a globally
+// empty build side: global build emptiness and global build NULLs still decide
+// the SQL three-valued result.
+func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc *process.Process, rowCnt int) error {
+	if ctr.globalBuildRowCnt == 0 {
+		return vector.SetConstFixed(marker, false, rowCnt, proc.Mp())
+	}
+	if ctr.buildHasNullKey {
+		return vector.SetConstNull(marker, rowCnt, proc.Mp())
+	}
+
+	if err := ctr.evalJoinCondition(ctr.leftBat, proc); err != nil {
+		return err
+	}
+	if err := vector.AppendMultiFixed(marker, false, false, rowCnt, proc.Mp()); err != nil {
+		return err
+	}
+	for _, vec := range ctr.eqCondVecs {
+		if vec.IsConstNull() {
+			marker.GetNulls().AddRange(0, uint64(rowCnt))
+			return nil
+		}
+		if !vec.GetNulls().Any() {
+			continue
+		}
+		nulls.Or(marker.GetNulls(), vec.GetNulls(), marker.GetNulls())
+	}
+	return nil
+}
+
+func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) error {
+	ctr.bitmapSynced = true
+
+	if ctr.rightRowsMatched == nil {
+		return nil
+	}
+
+	if hashJoin.NumCPU > 1 {
+		if !hashJoin.IsMerger {
+			hashJoin.Channel <- ctr.rightRowsMatched
+			return nil
+		} else {
+			matchedCnt := ctr.rightRowsMatched.Count()
+
+			for cnt := 1; cnt < int(hashJoin.NumCPU); cnt++ {
+				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, hashJoin.Channel)
+				if v == nil {
+					// A worker was torn down before syncing (its Reset sends
+					// nil) or the context was canceled. The merge is aborted,
+					// but keep draining this generation's remaining messages
+					// so no stale bitmap is left behind in the shared
+					// channel, then bail out without initializing the
+					// iterator — Call routes to End and nothing is finalized.
+					for cnt++; cnt < int(hashJoin.NumCPU); cnt++ {
+						colexec.ReceiveBitmapFromChannel(proc.Ctx, hashJoin.Channel)
+					}
+					return nil
+				}
+				matchedCnt += v.Count()
+				ctr.rightRowsMatched.Or(v)
+			}
+
+			if ctr.probeSingle && matchedCnt > ctr.rightRowsMatched.Count() {
+				return moerr.NewErrSubqueryNo1Row(proc.Ctx)
+			}
+
+			close(hashJoin.Channel)
+		}
+	}
+
+	if !hashJoin.IsSemi() {
+		ctr.rightRowsMatched.Negate()
+	}
+
+	ctr.rightMatchedIter = ctr.rightRowsMatched.Iterator()
+
+	return nil
+}
+
+func (ctr *container) finalize(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
+	hashJoin.resetResultBat()
+	rowCnt := 0
+
+	for ; rowCnt < colexec.DefaultBatchSize && ctr.rightMatchedIter.HasNext(); rowCnt++ {
+		row := ctr.rightMatchedIter.Next()
+		idx1, idx2 := row/colexec.DefaultBatchSize, row%colexec.DefaultBatchSize
+
+		for i, rp := range hashJoin.ResultCols {
+			if rp.Rel == 1 {
+				err := ctr.resBat.Vecs[i].UnionOne(ctr.rightBats[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp())
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	if rowCnt == 0 {
+		result.Batch = nil
+		return nil
+	}
+
+	for i, rp := range hashJoin.ResultCols {
+		if rp.Rel == 0 {
+			err := vector.AppendMultiFixed(ctr.resBat.Vecs[i], 0, true, rowCnt, proc.Mp())
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	ctr.resBat.AddRowCount(rowCnt)
+	result.Batch = ctr.resBat
+
+	return nil
+}
+
+func (ctr *container) appendOneNotMatch(hashJoin *HashJoin, proc *process.Process, row int64) error {
+	for j, rp := range hashJoin.ResultCols {
+		if rp.Rel == 0 {
+			err := ctr.resBat.Vecs[j].UnionOne(ctr.leftBat.Vecs[rp.Pos], row, proc.Mp())
+			if err != nil {
+				return err
+			}
+		} else {
+			err := ctr.resBat.Vecs[j].UnionNull(proc.Mp())
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (ctr *container) appendOneMatch(hashJoin *HashJoin, proc *process.Process, leftRow, rIdx1, rIdx2 int64) error {
+	for j, rp := range hashJoin.ResultCols {
+		if rp.Rel == 0 {
+			err := ctr.resBat.Vecs[j].UnionOne(ctr.leftBat.Vecs[rp.Pos], leftRow, proc.Mp())
+			if err != nil {
+				return err
+			}
+		} else {
+			err := ctr.resBat.Vecs[j].UnionOne(ctr.rightBats[rIdx1].Vecs[rp.Pos], rIdx2, proc.Mp())
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (ctr *container) appendOneMark(
+	hashJoin *HashJoin,
+	proc *process.Process,
+	leftRow int64,
+	value bool,
+	isNull bool,
+) error {
+	for i, rp := range hashJoin.ResultCols {
+		switch rp.Rel {
+		case 0:
+			if err := ctr.resBat.Vecs[i].UnionOne(ctr.leftBat.Vecs[rp.Pos], leftRow, proc.Mp()); err != nil {
+				return err
+			}
+		case -1:
+			if err := vector.AppendFixed(ctr.resBat.Vecs[i], value, isNull, proc.Mp()); err != nil {
+				return err
+			}
+		default:
+			return moerr.NewInternalErrorNoCtxf("hash mark join has unexpected result relation %d", rp.Rel)
+		}
+	}
+	return nil
+}
+
+func (ctr *container) evalNonEqCondition(bat *batch.Batch, row int64, proc *process.Process, idx1, idx2 int64) (bool, error) {
+	err := colexec.SetJoinBatchValues(ctr.joinBats[0], bat, row, 1, ctr.cfs1)
+	if err != nil {
+		return false, err
+	}
+
+	err = colexec.SetJoinBatchValues(ctr.joinBats[1], ctr.rightBats[idx1], idx2, 1, ctr.cfs2)
+	if err != nil {
+		return false, err
+	}
+
+	vec, err := ctr.nonEqCondExec.Eval(proc, ctr.joinBats, nil)
+	if err != nil {
+		return false, err
+	}
+
+	return !vec.IsConstNull() &&
+		!vec.GetNulls().Contains(0) &&
+		vector.MustFixedColWithTypeCheck[bool](vec)[0], nil
+}
+
+func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process) error {
+	bats := []*batch.Batch{bat}
+	for i := range ctr.eqCondExecs {
+		vec, err := ctr.eqCondExecs[i].Eval(proc, bats, nil)
+		if err != nil {
+			return err
+		}
+		ctr.eqCondVecs[i] = vec
+	}
+	return nil
+}
+
+func (hashJoin *HashJoin) resetResultBat() {
+	ctr := &hashJoin.ctr
+	if ctr.resBat != nil {
+		ctr.resBat.CleanOnlyData()
+		for i := range ctr.resBat.Vecs {
+			ctr.resBat.Vecs[i].SetClass(vector.FLAT)
+			ctr.resBat.Vecs[i].SetLength(0)
+		}
+	} else {
+		ctr.resBat = batch.NewOffHeapWithSize(len(hashJoin.ResultCols))
+
+		for i, rp := range hashJoin.ResultCols {
+			switch rp.Rel {
+			case 0:
+				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(hashJoin.LeftTypes[rp.Pos])
+			case 1:
+				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(hashJoin.RightTypes[rp.Pos])
+			case -1:
+				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+			}
+		}
+	}
+}

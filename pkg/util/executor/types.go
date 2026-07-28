@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -53,6 +54,7 @@ type Options struct {
 	txnOp                   client.TxnOperator
 	database                string
 	accountID               uint32
+	hasAccountID            bool
 	minCommittedTS          timestamp.Timestamp
 	innerTxn                bool
 	waitCommittedLogApplied bool
@@ -67,18 +69,39 @@ type Options struct {
 	sql                     string
 	forceRebuildPlan        bool
 	resolveVariableFunc     func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	adjustTableExtraFunc    func(*api.SchemaExtra) error
+	keepTxnAlive            bool
+	lockWaitTimeout         time.Duration
+	lockWaitTimeoutSet      bool
+	// isFrontend records whether the caller is a frontend
+	// session-bound invocation. Go zero value (false) means
+	// background: every caller of the internal SQL executor is
+	// treated as background by default. Frontend opts in via
+	// WithFrontend(true) at the two proc-construction sites that
+	// bind a session's resolver — mysql client query handler and
+	// the in-frontend back_exec. See
+	// pkg/util/executor/options.go::WithFrontend.
+	isFrontend bool
 }
 
 // StatementOption statement execute option.
 type StatementOption struct {
-	waitPolicy        lock.WaitPolicy
-	accountId         uint32
-	roleId            uint32
-	userId            uint32
-	disableLog        bool
-	ignoreForeignKey  bool
-	params            []string
-	alterCopyDedupOpt *plan.AlterCopyDedupOpt
+	waitPolicy               lock.WaitPolicy
+	accountId                uint32
+	hasAccountID             bool
+	roleId                   uint32
+	userId                   uint32
+	disableLog               bool
+	ignoreForeignKey         bool
+	ignorePublish            bool
+	ignoreCheckExperimental  bool
+	params                   []string
+	paramNulls               []bool
+	alterCopyOpt             *plan.AlterCopyOpt
+	disableDropAutoIncrement bool
+	keepAutoIncrement        uint64
+	keepLogicalId            uint64
+	disableLock              bool
 }
 
 // Result exec sql result

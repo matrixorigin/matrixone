@@ -20,7 +20,7 @@ func TestProfileAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewProfileAllocator(
 			newUpstreamAllocatorForTest(),
-			NewProfiler[HeapSampleValues](),
+			NewProfiler[HeapSampleValues]("test"),
 			1,
 		)
 	})
@@ -31,7 +31,7 @@ func BenchmarkProfileAllocator(b *testing.B) {
 		benchmarkAllocator(b, func() Allocator {
 			return NewProfileAllocator(
 				newUpstreamAllocatorForTest(),
-				NewProfiler[HeapSampleValues](),
+				NewProfiler[HeapSampleValues]("test"),
 				1,
 			)
 		}, n)
@@ -42,7 +42,7 @@ func FuzzProfileAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		return NewProfileAllocator(
 			newUpstreamAllocatorForTest(),
-			NewProfiler[HeapSampleValues](),
+			NewProfiler[HeapSampleValues]("test"),
 			1,
 		)
 	})

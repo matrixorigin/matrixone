@@ -149,7 +149,26 @@ func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int64, err
 		}
 	}
 	if isxxxMicrosecond {
-		if len(ret) == typeMaxLength {
+		// For microsecond types, the last number represents fractional seconds
+		// If we have fewer values than expected, we need to handle the fractional part
+		if len(ret) > 0 && len(ret) < typeMaxLength {
+			// The last value is a fractional part (e.g., "1.02" -> [1, 2] where 2 means 0.02)
+			// We need to convert it to microseconds and pad missing values with 0
+			lastIdx := len(ret) - 1
+			lastNumLength := 0
+			// Count digits in the last number by finding the last number in the string
+			for i := len(s) - 1; i >= 0; i-- {
+				if s[i] >= '0' && s[i] <= '9' {
+					lastNumLength++
+				} else if lastNumLength > 0 {
+					break
+				}
+			}
+			// Convert fractional part to microseconds (e.g., 2 -> 20000 for 0.02 seconds)
+			if lastNumLength > 0 {
+				ret[lastIdx] *= int64(math.Pow10(6 - lastNumLength))
+			}
+		} else if len(ret) == typeMaxLength {
 			ret[len(ret)-1] *= int64(math.Pow10(6 - numLength))
 		}
 	}
@@ -200,6 +219,36 @@ func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalTy
 	vals, err := parseInts(s, isxxxMicrosecondType(it), typeMaxLength(it))
 	if err != nil {
 		return
+	}
+
+	// For composite interval types, if we have fewer values than expected,
+	// pad with zeros. The interpretation depends on the interval type:
+	// - For microsecond types (Day_MicroSecond, Hour_MicroSecond, etc.):
+	//   If we have 2 values, the first is the second-to-last unit (e.g., second for day_microsecond),
+	//   and the last is the microsecond part.
+	// - For other types, pad from the left (missing higher-order units default to 0)
+	typeMaxLen := typeMaxLength(it)
+	if len(vals) < typeMaxLen && typeMaxLen > 1 {
+		padded := make([]int64, typeMaxLen)
+		if isxxxMicrosecondType(it) {
+			// For microsecond types, if we have exactly 2 values, they represent
+			// the second-to-last unit and the microsecond part
+			// e.g., '1.02' day_microsecond -> [1, 20000] -> [0, 0, 0, 1, 20000]
+			if len(vals) == 2 {
+				padded[typeMaxLen-2] = vals[0] // second-to-last position
+				padded[typeMaxLen-1] = vals[1] // last position (microsecond)
+			} else if len(vals) == 1 {
+				// Single value goes to the last position (microsecond)
+				padded[typeMaxLen-1] = vals[0]
+			} else {
+				// More than 2 values: pad from the left
+				copy(padded[typeMaxLen-len(vals):], vals)
+			}
+		} else {
+			// For non-microsecond types, pad from the left
+			copy(padded[typeMaxLen-len(vals):], vals)
+		}
+		vals = padded
 	}
 
 	switch it {

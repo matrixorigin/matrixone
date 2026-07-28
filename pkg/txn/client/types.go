@@ -72,18 +72,10 @@ type TxnClient interface {
 		options ...TxnOption,
 	) (TxnOperator, error)
 
-	// RestartTxn is similar to New, but it is used a closed (committed or aborted) Txn to restart to
-	// to avoid create a new txn.
-	RestartTxn(
-		ctx context.Context,
-		txnOp TxnOperator,
-		commitTS timestamp.Timestamp,
-		options ...TxnOption,
-	) (TxnOperator, error)
-
-	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
-	// be from a CN coordinator txn operator.
-	NewWithSnapshot(snapshot txn.CNTxnSnapshot) (TxnOperator, error)
+	// NewWithSnapshot creates a txn operator from a snapshot. The snapshot must
+	// be from a CN coordinator txn operator. Before returning, it waits until
+	// the local CN has applied every logtail visible to the snapshot.
+	NewWithSnapshot(ctx context.Context, snapshot txn.CNTxnSnapshot) (TxnOperator, error)
 	// Close closes client.sender
 	Close() error
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
@@ -92,6 +84,8 @@ type TxnClient interface {
 	CNBasedConsistencyEnabled() bool
 	// IterTxns iter all txns
 	IterTxns(func(TxnOverview) bool)
+	// IterTxnIDs iter all active and waiting txn IDs without building txn overviews.
+	IterTxnIDs(func([]byte) bool)
 	// GetState returns the current state of txn client.
 	GetState() TxnState
 }
@@ -108,9 +102,7 @@ type TxnState struct {
 	LatestTS timestamp.Timestamp
 }
 
-// TxnOperator operator for transaction clients, handling read and write
-// requests for transactions, and handling distributed transactions across DN
-// nodes.
+// TxnOperator handles transaction client read and write requests.
 // Note: For Error returned by Read/Write/WriteAndCommit/Commit/Rollback, need
 // to check if it is a moerr.ErrDNShardNotFound error, if so, the TN information
 // held is out of date and needs to be reloaded by HAKeeper.
@@ -143,6 +135,8 @@ type TxnOperator interface {
 	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// SnapshotTS returns the snapshot timestamp of the transaction.
 	SnapshotTS() timestamp.Timestamp
+	// SetSnapshotTS updates the snapshot timestamp of the transaction.
+	SetSnapshotTS(ts timestamp.Timestamp)
 	// CreateTS returns the creation timestamp of the txnOperator.
 	CreateTS() timestamp.Timestamp
 	// Status returns the current transaction status.
@@ -156,16 +150,15 @@ type TxnOperator interface {
 	// After use, SendResult needs to call the Release method
 	Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// Write transaction write operation, and the operator will record the DN
-	// nodes written by the current transaction, and when it finds that multiple
-	// TN nodes are written, it will start distributed transaction processing.
+	// nodes written by the current transaction.
 	// The transaction has been aborted if ErrTxnAborted returned.
 	// After use, SendResult needs to call the Release method
 	Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// WriteAndCommit is similar to Write, but commit the transaction after write.
 	// After use, SendResult needs to call the Release method
 	WriteAndCommit(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
-	// Commit the transaction. If data has been written to multiple TN nodes, a
-	// 2pc distributed transaction commit process is used.
+	// Commit the transaction. Transactions spanning multiple TN shards are not
+	// supported.
 	Commit(ctx context.Context) error
 	// Rollback the transaction.
 	Rollback(ctx context.Context) error
@@ -178,6 +171,8 @@ type TxnOperator interface {
 	AddLockTable(locktable lock.LockTable) error
 	// HasLockTable check if had locked table
 	HasLockTable(table uint64) bool
+	// CheckLockTableBinds checks held lock table binds without changing commit state.
+	CheckLockTableBinds(ctx context.Context) error
 	// AddWaitLock add wait lock for current txn
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
@@ -194,21 +189,56 @@ type TxnOperator interface {
 
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
-	AppendEventCallback(event EventType, callbacks ...func(TxnEvent))
+	AppendEventCallback(event EventType, callbacks ...TxnEventCallback)
 
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
 	NextSequence() uint64
-
-	EnterRunSql()
-	ExitRunSql()
+	// EnterRunSqlWithTokenAndSQL registers one SQL execution. The returned token
+	// is opaque, including zero, and must be passed to ExitRunSqlWithToken. Use
+	// TryEnterRunSqlWithTokenAndSQL when rejection reasons are required. This
+	// legacy signature is retained for source and behavioral compatibility with
+	// external TxnOperator implementations.
+	EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64
+	ExitRunSqlWithToken(token uint64)
 	EnterIncrStmt()
 	ExitIncrStmt()
 	EnterRollbackStmt()
 	ExitRollbackStmt()
 	SetFootPrints(id int, enter bool)
+
+	// txn based cache
+	Set(key string, value any)
+	Get(key string) (any, bool)
+	Delete(key string)
+}
+
+// RunSQLAdmissionOperator is an additive capability implemented by operators
+// that can report why a SQL execution was rejected. Keeping it separate from
+// TxnOperator preserves source compatibility for external implementations.
+type RunSQLAdmissionOperator interface {
+	TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error)
+}
+
+// TryEnterRunSqlWithTokenAndSQL admits one SQL execution using the richer
+// capability when available and preserves the legacy contract otherwise.
+// A legacy TxnOperator has no error channel and therefore cannot reject SQL
+// admission after close; implementations that require the sealed lifecycle
+// guarantee must implement RunSQLAdmissionOperator.
+func TryEnterRunSqlWithTokenAndSQL(
+	op TxnOperator,
+	cancel context.CancelFunc,
+	sql string,
+) (uint64, error) {
+	if admission, ok := op.(RunSQLAdmissionOperator); ok {
+		return admission.TryEnterRunSqlWithTokenAndSQL(cancel, sql)
+	}
+	// The legacy API has no error channel and never defined zero as rejection.
+	// Preserve its token verbatim; only RunSQLAdmissionOperator may reject an
+	// admission explicitly.
+	return op.EnterRunSqlWithTokenAndSQL(cancel, sql), nil
 }
 
 // TxnIDGenerator txn id generator
@@ -258,16 +288,34 @@ type Workspace interface {
 	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
 	// workspace will update snapshot data for later read request.
 	IncrStatementID(ctx context.Context, commit bool) error
+	// AdvanceSnapshot advances an RC transaction's snapshot and transfers its
+	// tombstones to the newly visible objects before returning.
+	AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
 
+	// UpdateSnapshotWriteOffset advances the statement boundary of the
+	// workspace to its current end. Only statement-boundary callers may use
+	// it (compiling a new user statement); internal sub-sql executions must
+	// not move the caller's boundary.
 	UpdateSnapshotWriteOffset()
+	// GetSnapshotWriteOffset returns the current statement boundary.
 	GetSnapshotWriteOffset() int
+	// WriteOffset returns the current end of the workspace write list. An
+	// internal sub-sql (DisableIncrStatement) compiles against this value to
+	// see everything its caller has written so far without touching the
+	// shared statement boundary.
+	WriteOffset() uint64
 
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
 	Adjust(writeOffset uint64) error
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
+	FinalizeCommit(ctx context.Context)
+	// FinalizeCommitWithUnknownResult releases CN-local resources after a Commit
+	// request may have reached TN but no final response was received. It must
+	// not perform rollback object GC, because TN may have committed.
+	FinalizeCommitWithUnknownResult(ctx context.Context)
 	Rollback(ctx context.Context) error
 
 	IncrSQLCount()
@@ -282,6 +330,31 @@ type Workspace interface {
 
 	// debug & test
 	PPString() string
+
+	SetCloneTxn(snapshot int64)
+
+	// SetCCPRTxn marks this transaction as a CCPR transaction.
+	// CCPR transactions will call CCPRTxnCache.OnTxnCommit/OnTxnRollback when committing/rolling back.
+	SetCCPRTxn()
+
+	// IsCCPRTxn returns true if this is a CCPR transaction.
+	IsCCPRTxn() bool
+
+	// SetCCPRTaskID sets the CCPR task ID for this transaction.
+	// When a CCPR task ID is set, the transaction can bypass shared object read-only checks.
+	SetCCPRTaskID(taskID string)
+
+	// GetCCPRTaskID returns the CCPR task ID for this transaction.
+	// Returns empty string if no task ID is set.
+	GetCCPRTaskID() string
+
+	// SetSyncProtectionJobID sets the sync protection job ID for this transaction.
+	// This is used to pass the job ID to TN for commit-time validation.
+	SetSyncProtectionJobID(jobID string)
+
+	// GetSyncProtectionJobID returns the sync protection job ID for this transaction.
+	// Returns empty string if no job ID is set.
+	GetSyncProtectionJobID() string
 }
 
 // TxnOverview txn overview include meta and status
@@ -323,4 +396,21 @@ func (e TxnEvent) Committed() bool {
 
 func (e TxnEvent) Aborted() bool {
 	return e.Txn.Status == txn.TxnStatus_Aborted
+}
+
+type TxnEventCallback struct {
+	Func  func(context.Context, TxnOperator, TxnEvent, any) error
+	Value any
+}
+
+func NewTxnEventCallback(f func(context.Context, TxnOperator, TxnEvent, any) error) TxnEventCallback {
+	return TxnEventCallback{
+		Func: f,
+	}
+}
+func NewTxnEventCallbackWithValue(f func(context.Context, TxnOperator, TxnEvent, any) error, v any) TxnEventCallback {
+	return TxnEventCallback{
+		Func:  f,
+		Value: v,
+	}
 }

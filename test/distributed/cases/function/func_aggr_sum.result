@@ -10,11 +10,11 @@ SELECT coalesce(e2,i1) nullif_c,
 IF(e2 IS NULL,i1,e2) if_c,
 SUM(d1) FROM t
 GROUP BY e2,i1 ORDER BY nullif_c, SUM(d1);
-nullif_c	if_c	SUM(d1)
-2.00	2.00	2.0
-3.33	3.33	null
-3.33	3.33	6.0
-3.33	3.33	9.0
+➤ nullif_c[3,12,2]  ¦  if_c[3,12,2]  ¦  SUM(d1)[8,54,0]  𝄀
+2.00  ¦  2.00  ¦  2.0  𝄀
+3.33  ¦  3.33  ¦  null  𝄀
+3.33  ¦  3.33  ¦  6.0  𝄀
+3.33  ¦  3.33  ¦  9.0
 DROP TABLE t;
 CREATE TABLE t1(a INT);
 CREATE TABLE t2(a INT);
@@ -22,11 +22,13 @@ INSERT INTO t1 VALUES (1),(2),(3),(4);
 INSERT INTO t2 VALUES (1),(2);
 SELECT t1.a, t2.a FROM t1 JOIN t2
 ON t1.a+t2.a = (SELECT COUNT(*) FROM t1);
-subquery in JOIN condition is not yet implemented
+➤ a[4,32,0]  ¦  a[4,32,0]  𝄀
+3  ¦  1  𝄀
+2  ¦  2
 SELECT a + (SELECT SUM(a) + (SELECT COUNT(a) FROM t1) FROM t1) AS cnt
 FROM t2;
-cnt
-15
+➤ cnt[-5,64,0]  𝄀
+15  𝄀
 16
 drop table t1;
 drop table t2;
@@ -38,14 +40,14 @@ drop table t1;
 create table t1 (a integer, b integer);
 insert into t1 values (1,4), (2,2),(2,2), (4,1),(4,1),(4,1),(4,1);
 select sum(b) from t1 group by a;
-sum(b)
-4
-4
+➤ sum(b)[-5,64,0]  𝄀
+4  𝄀
+4  𝄀
 4
 select sum(b) from (select a,b from t1) y group by a;
-sum(b)
-4
-4
+➤ sum(b)[-5,64,0]  𝄀
+4  𝄀
+4  𝄀
 4
 drop table t1;
 CREATE TABLE t1
@@ -70,31 +72,31 @@ GROUP BY a)
 SELECT t2.a, (SELECT MIN(c) FROM cte AS cte2 WHERE t2.d = cte2.b)
 FROM t2 LEFT JOIN cte AS cte1 ON t2.a = cte1.a
 LEFT JOIN t2 AS tx ON tx.e = cte1.c;
-a	(SELECT MIN(c) FROM cte AS cte2 WHERE t2.d = cte2.b)
-1	60
-1	60
-1	60
-2	60
-3	60
+➤ a[4,32,0]  ¦  (select MIN(c) from cte as cte2 where t2.d = cte2.b)[-5,64,0]  𝄀
+1  ¦  60  𝄀
+1  ¦  60  𝄀
+1  ¦  60  𝄀
+2  ¦  60  𝄀
+3  ¦  60
 drop table t1;
 drop table t2;
 create table t1 (num  double(12,2));
 insert into t1 values (144.54);
 select sum(if(num is null,0.00,num)) from t1;
-sum(if(num is null,0.00,num))
+➤ sum(if(num is null, 0.00, num))[8,54,0]  𝄀
 144.54
 drop table t1;
 CREATE TABLE t1(c0 INTEGER, c1 INTEGER, c2 INTEGER);
 INSERT INTO t1 VALUES(1, 1, 1), (1, 1, 1);
 SELECT CASE AVG (c0) WHEN any_value(c1) * any_value(c2) THEN 1 END FROM t1;
-CASE AVG (c0) WHEN any_value(c1) * any_value(c2) THEN 1 END
+➤ case AVG(c0) when any_value(c1) * any_value(c2) then 1 end[-5,64,0]  𝄀
 1
 SELECT CASE any_value(c1) * any_value(c2) WHEN SUM(c0) THEN 1 WHEN AVG(c0) THEN 2 END FROM t1;
-CASE any_value(c1) * any_value(c2) WHEN SUM(c0) THEN 1 WHEN AVG(c0) THEN 2 END
+➤ case any_value(c1) * any_value(c2) when SUM(c0) then 1 when AVG(c0) then 2 end[-5,64,0]  𝄀
 2
 SELECT CASE any_value(c1) WHEN any_value(c1) + 1 THEN 1 END, ABS(AVG(c0)) FROM t1;
-CASE any_value(c1) WHEN any_value(c1) + 1 THEN 1 END	ABS(AVG(c0))
-null	1.0000
+➤ case any_value(c1) when any_value(c1) + 1 then 1 end[-5,64,0]  ¦  ABS(AVG(c0))[8,54,0]  𝄀
+null  ¦  1.0
 DROP TABLE t1;
 CREATE TABLE t1(a varchar(255), b INT, c INT UNSIGNED, d DECIMAL(12,2), e REAL);
 INSERT INTO t1 VALUES('iynfj', 1, 1, 1, 1);
@@ -102,79 +104,79 @@ INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
 SELECT  SUM(  a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
 invalid argument aggregate function sum, bad value [VARCHAR]
 SELECT  SUM(  b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
-SUM(  b )
+➤ SUM(b)[-5,64,0]  𝄀
 1
 SELECT  SUM(  c ) FROM t1 GROUP BY c HAVING c IN ( AVG( 1 ), 1 + c);
-SUM(  c )
+➤ SUM(c)[-5,64,0]  𝄀
 1
 SELECT  SUM(  d ) FROM t1 GROUP BY d HAVING d IN ( AVG( 1 ), 1 + d);
-SUM(  d )
+➤ SUM(d)[3,38,2]  𝄀
 1.00
 SELECT  SUM(  e ) FROM t1 GROUP BY e HAVING e IN ( AVG( 1 ), 1 + e);
-SUM(  e )
+➤ SUM(e)[8,54,0]  𝄀
 1.0
 DROP TABLE t1;
 SELECT SUM(NULL);
-SUM(NULL)
+➤ SUM(null)[-5,64,0]  𝄀
 null
 select sum(1)>sum(0);
-sum(1)>sum(0)
-true
+➤ sum(1) > sum(0)[-7,1,0]  𝄀
+1
 create table t1(a bigint, b float, c double, d double, e varchar(1000));
 insert into t1 select 21474836471, 12412490231412.124124124124, 124141231249124124.1241241243124123, 12421512141241241241241241849912840129402.1241124124241241, space(1000);
 insert into t1 select 21474836471, 12412490231412.124124124124, 124141231249124124.1241241243124123, 12421512141241241241241241849912840129402.1241124124241241, space(1000);
 select sum(a), sum(b),sum(c),sum(d),sum(e) from t1;
 invalid argument aggregate function sum, bad value [VARCHAR]
 select sum(a), sum(b),sum(c),sum(d) from t1;
-sum(a)	sum(b)	sum(c)	sum(d)
-42949672942	2.4824980176896E13	2.48282462498248256E17	2.484302428248248E40
+➤ sum(a)[3,38,0]  ¦  sum(b)[8,54,0]  ¦  sum(c)[8,54,0]  ¦  sum(d)[8,54,0]  𝄀
+42949672942  ¦  2.4824980176896E13  ¦  2.48282462498248256E17  ¦  2.484302428248248E40
 drop table t1;
 create table t1 (num float(5,2),user char(20));
 insert into t1 values (10.3,'nem'),(20.53,'monty'),(30.23,'sinisa');
 insert into t1 values (30.13,'nem'),(20.98,'monty'),(10.45,'sinisa');
 insert into t1 values (5.2,'nem'),(8.64,'monty'),(11.12,'sinisa');
 select sum(num) from t1;
-sum(num)
-147.58
+➤ sum(num)[8,54,0]  𝄀
+147.57999897003174
 select sum(num) from t1 group by user;
-sum(num)
-45.63
-50.15
-51.8
+➤ sum(num)[8,54,0]  𝄀
+45.6299991607666  𝄀
+50.15000057220459  𝄀
+51.79999923706055
 drop table t1;
 create table t2 (ff double);
 insert into t2 values (2.2);
 select cast(sum( ff) as decimal(5,2)) from t2;
-cast(sum( ff) as decimal(5,2))
+➤ cast(sum(ff) as decimal(5, 2))[3,5,2]  𝄀
 2.20
 select cast(sum( ff) as signed) from t2;
-cast(sum( ff) as signed)
+➤ cast(sum(ff) as signed)[-5,64,0]  𝄀
 2
 select cast(variance(ff) as decimal(10,3)) from t2;
-cast(variance(ff) as decimal(10,3))
+➤ cast(variance(ff) as decimal(10, 3))[3,10,3]  𝄀
 0.000
 select cast(min(ff) as decimal(5,2)) from t2;
-cast(min(ff) as decimal(5,2))
+➤ cast(min(ff) as decimal(5, 2))[3,5,2]  𝄀
 2.20
 create table t1 (df decimal(5,1));
 insert into t1 values(1.1);
 insert into t1 values(2.2);
 select cast(sum( df) as signed) from t1;
-cast(sum( df) as signed)
+➤ cast(sum(df) as signed)[-5,64,0]  𝄀
 3
 select cast(min(df) as signed) from t1;
-cast(min(df) as signed)
+➤ cast(min(df) as signed)[-5,64,0]  𝄀
 1
 select 1e8 * sum( df) from t1;
-1e8 * sum( df)
+➤ 1e8 * sum(df)[8,54,0]  𝄀
 3.3E8
 select 1e8 * min(df) from t1;
-1e8 * min(df)
+➤ 1e8 * min(df)[8,54,0]  𝄀
 1.1000000000000001E8
 create table t3 (ifl int);
 insert into t3 values(1), (2);
 select cast(min(ifl) as decimal(5,2)) from t3;
-cast(min(ifl) as decimal(5,2))
+➤ cast(min(ifl) as decimal(5, 2))[3,5,2]  𝄀
 1.00
 drop table t1;
 drop table t2;
@@ -187,10 +189,72 @@ insert into t1 values (3,4,"E");
 insert into t1 values (3,5,"C");
 insert into t1 values (3,6,"D");
 select sum(distinct a),sum(distinct grp) from t1;
-sum(distinct a)	    sum(distinct grp)
-21	6
+➤ sum(distinct a)[3,38,0]  ¦  sum(distinct grp)[-5,64,0]  𝄀
+21  ¦  6
 insert into t1 values (null,null,'');
 select sum(distinct a),sum(distinct grp) from t1;
-sum(distinct a)	    sum(distinct grp)
-21	6
+➤ sum(distinct a)[3,38,0]  ¦  sum(distinct grp)[-5,64,0]  𝄀
+21  ¦  6
 drop table t1;
+drop table if exists t_bigint_sum_decimal128_state;
+create table t_bigint_sum_decimal128_state(id int, grp varchar(8), v bigint, u bigint unsigned);
+insert into t_bigint_sum_decimal128_state values
+(1,'P',9223372036854775807,1),
+(2,'P',1,18446744073709551615),
+(3,'P',-2,3),
+(4,'N',-9223372036854775807,4),
+(5,'N',-2,5),
+(6,'N',2,6);
+select 'plain_sum_int_pos' q, sum(v) v from t_bigint_sum_decimal128_state where grp = 'P';
+➤ q[12,-1,0]  ¦  v[3,38,0]  𝄀
+plain_sum_int_pos  ¦  9223372036854775806
+select 'plain_sum_int_neg' q, sum(v) v from t_bigint_sum_decimal128_state where grp = 'N';
+➤ q[12,-1,0]  ¦  v[3,38,0]  𝄀
+plain_sum_int_neg  ¦  -9223372036854775807
+select 'plain_sum_uint_pos' q, sum(u) v from t_bigint_sum_decimal128_state where grp = 'P';
+➤ q[12,-1,0]  ¦  v[3,38,0]  𝄀
+plain_sum_uint_pos  ¦  18446744073709551619
+select 'group_sum' q, grp, sum(v) sv, sum(u) su from t_bigint_sum_decimal128_state group by grp order by grp;
+➤ q[12,-1,0]  ¦  grp[12,-1,0]  ¦  sv[3,38,0]  ¦  su[3,38,0]  𝄀
+group_sum  ¦  N  ¦  -9223372036854775807  ¦  15  𝄀
+group_sum  ¦  P  ¦  9223372036854775806  ¦  18446744073709551619
+select 'window_sum_partition' q, id, grp,
+sum(v) over (partition by grp) sv,
+sum(u) over (partition by grp) su
+from t_bigint_sum_decimal128_state
+order by grp, id;
+➤ q[12,-1,0]  ¦  id[4,32,0]  ¦  grp[12,-1,0]  ¦  sv[3,38,0]  ¦  su[3,38,0]  𝄀
+window_sum_partition  ¦  4  ¦  N  ¦  -9223372036854775807  ¦  15  𝄀
+window_sum_partition  ¦  5  ¦  N  ¦  -9223372036854775807  ¦  15  𝄀
+window_sum_partition  ¦  6  ¦  N  ¦  -9223372036854775807  ¦  15  𝄀
+window_sum_partition  ¦  1  ¦  P  ¦  9223372036854775806  ¦  18446744073709551619  𝄀
+window_sum_partition  ¦  2  ¦  P  ¦  9223372036854775806  ¦  18446744073709551619  𝄀
+window_sum_partition  ¦  3  ¦  P  ¦  9223372036854775806  ¦  18446744073709551619
+select 'window_sum_running' q, id, grp,
+sum(v) over (
+partition by grp
+order by id
+rows between unbounded preceding and current row
+) sv,
+sum(u) over (
+partition by grp
+order by id
+rows between unbounded preceding and current row
+) su
+from t_bigint_sum_decimal128_state
+order by grp, id;
+➤ q[12,-1,0]  ¦  id[4,32,0]  ¦  grp[12,-1,0]  ¦  sv[3,38,0]  ¦  su[3,38,0]  𝄀
+window_sum_running  ¦  4  ¦  N  ¦  -9223372036854775807  ¦  4  𝄀
+window_sum_running  ¦  5  ¦  N  ¦  -9223372036854775809  ¦  9  𝄀
+window_sum_running  ¦  6  ¦  N  ¦  -9223372036854775807  ¦  15  𝄀
+window_sum_running  ¦  1  ¦  P  ¦  9223372036854775807  ¦  1  𝄀
+window_sum_running  ¦  2  ¦  P  ¦  9223372036854775808  ¦  18446744073709551616  𝄀
+window_sum_running  ¦  3  ¦  P  ¦  9223372036854775806  ¦  18446744073709551619
+insert into t_bigint_sum_decimal128_state values
+(7,'P',1,1),
+(8,'N',-2,4);
+select 'group_sum_distinct' q, grp, sum(distinct v) sv, sum(distinct u) su from t_bigint_sum_decimal128_state group by grp order by grp;
+➤ q[12,-1,0]  ¦  grp[12,-1,0]  ¦  sv[3,38,0]  ¦  su[3,38,0]  𝄀
+group_sum_distinct  ¦  N  ¦  -9223372036854775807  ¦  15  𝄀
+group_sum_distinct  ¦  P  ¦  9223372036854775806  ¦  18446744073709551619
+drop table t_bigint_sum_decimal128_state;

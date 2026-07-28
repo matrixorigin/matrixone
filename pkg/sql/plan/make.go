@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -64,22 +65,30 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 }
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
-	_, scale, err := types.Parse128(v)
-	if err != nil {
-		return nil, err
-	}
 	var typ plan.Type
-	if scale < 18 && len(v) < 18 {
+	_, scale, err := types.Parse128(v)
+	if err == nil && scale < 18 && len(v) < 18 {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal64),
 			Width:       18,
 			Scale:       scale,
 			NotNullable: true,
 		}
-	} else {
+	} else if err == nil {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal128),
 			Width:       38,
+			Scale:       scale,
+			NotNullable: true,
+		}
+	} else {
+		_, scale, err = types.Parse256(v)
+		if err != nil {
+			return nil, err
+		}
+		typ = plan.Type{
+			Id:          int32(types.T_decimal256),
+			Width:       65,
 			Scale:       scale,
 			NotNullable: true,
 		}
@@ -88,6 +97,10 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 }
 
 func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
+	return makePlan2DateConstNullExprWithScale(t, 0)
+}
+
+func makePlan2DateConstNullExprWithScale(t types.T, scale int32) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_Lit{
 			Lit: &Const{
@@ -96,6 +109,7 @@ func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
 		},
 		Typ: plan.Type{
 			Id:          int32(t),
+			Scale:       scale,
 			NotNullable: false,
 		},
 	}
@@ -341,6 +355,77 @@ func makePlan2Vecf32ConstExpr(v string) *plan.Expr_Lit {
 	}}
 }
 
+var MakePlan2Vecf64ConstExprWithType = makePlan2Vecf64ConstExprWithType
+
+// makePlan2Vecf64ConstExprWithType makes a vecf64 const expr.
+// usage: makePlan2Vecf64ConstExprWithType("[1,2,3]", 3)
+func makePlan2Vecf64ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_float64),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+var MakePlan2VecBf16ConstExprWithType = makePlan2VecBf16ConstExprWithType
+
+// makePlan2VecBf16ConstExprWithType makes a vecbf16 const expr.
+func makePlan2VecBf16ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_bf16),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+var MakePlan2VecF16ConstExprWithType = makePlan2VecF16ConstExprWithType
+
+// makePlan2VecF16ConstExprWithType makes a vecf16 const expr.
+func makePlan2VecF16ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_float16),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+var MakePlan2VecInt8ConstExprWithType = makePlan2VecInt8ConstExprWithType
+
+// makePlan2VecInt8ConstExprWithType makes a vecint8 const expr.
+func makePlan2VecInt8ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_int8),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+var MakePlan2VecUint8ConstExprWithType = makePlan2VecUint8ConstExprWithType
+
+// makePlan2VecUint8ConstExprWithType makes a vecuint8 const expr.
+func makePlan2VecUint8ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_uint8),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
 var MakePlan2StringVecExprWithType = makePlan2StringVecExprWithType
 
 func makePlan2StringVecExprWithType(mp *mpool.MPool, vals ...string) *plan.Expr {
@@ -529,6 +614,17 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 	}
 }
 
+func makePlan2VarBinaryConstExprWithType(v string) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2StringConstExpr(v, false),
+		Typ: plan.Type{
+			Id:          int32(types.T_varbinary),
+			NotNullable: true,
+			Width:       int32(len(v)),
+		},
+	}
+}
+
 func makePlan2NullTextConstExpr(v string) *plan.Expr_Lit {
 	c := &plan.Expr_Lit{Lit: &plan.Literal{
 		Isnull: true,
@@ -548,7 +644,27 @@ func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
 }
 
 func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	return makePlan2CastExprWithName(ctx, expr, targetType, "cast")
+}
+
+// makePlan2AssignmentCastExpr builds a cast used when validating/storing a value
+// against a real column type at the DDL layer (e.g. column DEFAULT / ON UPDATE).
+// It uses cast_strict for CHAR/VARCHAR width checks and temporal zero-date
+// preservation. DDL-specific error mapping is applied by the DDL validation
+// layer rather than changing cast_strict's execution contract.
+func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	funcName := "cast"
+	if useAssignmentStrictCast(targetType) {
+		funcName = "cast_strict"
+	}
+	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)
+}
+
+func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
 	var err error
+	if expr == nil {
+		return nil, moerr.NewInvalidInput(ctx, "nil expression in cast")
+	}
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
@@ -563,10 +679,40 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 		if err != nil {
 			return nil, err
 		}
+		if isSameColumnType(expr.Typ, targetType) {
+			return expr, nil
+		}
+	}
+	if isSetPlanType(&targetType) {
+		expr, err = funcCastForSetType(ctx, expr, targetType)
+		if err != nil {
+			return nil, err
+		}
+		if isSameColumnType(expr.Typ, targetType) {
+			return expr, nil
+		}
+	}
+	if isGeometryPlanType(&targetType) {
+		expr, err = funcCastForGeometryType(ctx, expr, targetType)
+		if err != nil {
+			return nil, err
+		}
+		if isSameColumnType(expr.Typ, targetType) {
+			return expr, nil
+		}
+	}
+	if isTypedArrayPlanType(&targetType) {
+		expr, err = funcCastForTypedArrayType(ctx, expr, targetType)
+		if err != nil {
+			return nil, err
+		}
+		if isSameColumnType(expr.Typ, targetType) {
+			return expr, nil
+		}
 	}
 
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
-	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}
@@ -579,7 +725,7 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: funcName},
 				Args: []*Expr{expr, t},
 			},
 		},
@@ -592,6 +738,7 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 	if targetType.Id != int32(types.T_enum) {
 		return expr, nil
 	}
+	sourceExpr := expr
 
 	astArgs := []tree.Expr{
 		tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
@@ -604,14 +751,14 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 		if idx == len(args)-1 {
 			continue
 		}
-		expr, err := binder.BindExpr(arg, 0, false)
+		argExpr, err := binder.BindExpr(arg, 0, false)
 		if err != nil {
 			return nil, err
 		}
-		args[idx] = expr
+		args[idx] = argExpr
 	}
-	args[len(args)-1] = expr
-	if 20 <= expr.Typ.Id && expr.Typ.Id <= 29 {
+	args[len(args)-1] = sourceExpr
+	if 20 <= sourceExpr.Typ.Id && sourceExpr.Typ.Id <= 29 {
 		expr, err = BindFuncExprImplByPlanExpr(ctx, moEnumCastIndexValueToIndexFun, args)
 		if err != nil {
 			return nil, err
@@ -622,6 +769,50 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 			return nil, err
 		}
 	}
+	expr.Typ = targetType
+	return expr, nil
+}
+
+func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	var err error
+	if !isSetPlanType(&targetType) {
+		return expr, nil
+	}
+	if isSetPlanType(&expr.Typ) && expr.Typ.Enumvalues == targetType.Enumvalues {
+		expr.Typ = targetType
+		return expr, nil
+	}
+	sourceExpr := expr
+
+	astArgs := []tree.Expr{
+		tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
+	}
+
+	args := make([]*Expr, len(astArgs)+1)
+	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+	for idx, arg := range astArgs {
+		if idx == len(args)-1 {
+			continue
+		}
+		argExpr, err := binder.BindExpr(arg, 0, false)
+		if err != nil {
+			return nil, err
+		}
+		args[idx] = argExpr
+	}
+	args[len(args)-1] = sourceExpr
+	if types.T(sourceExpr.Typ.Id).IsInteger() {
+		expr, err = BindFuncExprImplByPlanExpr(ctx, moSetCastIndexValueToIndexFun, args)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		expr, err = BindFuncExprImplByPlanExpr(ctx, moSetCastValueToIndexFun, args)
+		if err != nil {
+			return nil, err
+		}
+	}
+	expr.Typ = targetType
 	return expr, nil
 }
 
@@ -636,10 +827,22 @@ func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 		typ.Scale = 2
 		typ.Width = 6 // width
 	}
+	if typ.Id == int32(types.T_decimal256) && typ.Scale == 0 && typ.Width == 0 {
+		typ.Scale = 10
+		typ.Width = 65 // width
+	}
 	return typ
 }
 
 var MakePlan2Type = makePlan2Type
+
+func makeSimplePlan2Type(typT types.T) plan.Type {
+	return plan.Type{
+		Id:    int32(typT),
+		Width: 0,
+		Scale: 0,
+	}
+}
 
 func makePlan2Type(typ *types.Type) plan.Type {
 	return plan.Type{
@@ -711,10 +914,13 @@ func isSameColumnType(t1 Type, t2 Type) bool {
 	if t1.Id != t2.Id {
 		return false
 	}
+	if t1.Enumvalues != t2.Enumvalues {
+		return false
+	}
 	if t1.Width == t2.Width && t1.Scale == t2.Scale {
 		return true
 	}
-	return true
+	return false
 }
 
 // GetColDefFromTable Find the target column definition from the predefined

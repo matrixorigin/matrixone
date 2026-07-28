@@ -40,7 +40,11 @@ var packerAllocator = malloc.NewShardedAllocator(
 )
 
 func NewPacker() *Packer {
-	bs, dec, err := packerAllocator.Allocate(4096, malloc.NoClear)
+	return NewPackerWithSize(4096)
+}
+
+func NewPackerWithSize(size uint64) *Packer {
+	bs, dec, err := packerAllocator.Allocate(size, malloc.NoClear)
 	if err != nil {
 		panic(err)
 	}
@@ -51,16 +55,20 @@ func NewPacker() *Packer {
 }
 
 func NewPackerArray(length int) []*Packer {
+	return NewPackerArrayWithSize(length, 4096)
+}
+
+func NewPackerArrayWithSize(length int, size uint64) []*Packer {
 	ret := make([]*Packer, 0, length)
 	for i := 0; i < length; i++ {
-		ret = append(ret, NewPacker())
+		ret = append(ret, NewPackerWithSize(size))
 	}
 	return ret
 }
 
 func (p *Packer) Close() {
 	if p.bufferDeallocator != nil {
-		p.bufferDeallocator.Deallocate(malloc.NoHints)
+		p.bufferDeallocator.Deallocate()
 	}
 	*p = Packer{}
 }
@@ -84,7 +92,7 @@ func (p *Packer) ensureSizeSlow(n int) {
 	newBuffer = newBuffer[:len(p.buffer)]
 	copy(newBuffer, p.buffer)
 	if p.bufferDeallocator != nil {
-		p.bufferDeallocator.Deallocate(malloc.NoHints)
+		p.bufferDeallocator.Deallocate()
 	}
 	p.buffer = newBuffer
 	p.bufferDeallocator = newDec
@@ -254,6 +262,11 @@ func (p *Packer) EncodeEnum(e Enum) {
 	p.EncodeUint16(uint16(e))
 }
 
+func (p *Packer) EncodeMoYear(e MoYear) {
+	p.putByte(yearCode)
+	p.encodeInt(int64(e))
+}
+
 func (p *Packer) EncodeDecimal64(e Decimal64) {
 	p.putByte(decimal64Code)
 	b := *(*[8]byte)(unsafe.Pointer(&e))
@@ -268,6 +281,15 @@ func (p *Packer) EncodeDecimal128(e Decimal128) {
 	b := *(*[16]byte)(unsafe.Pointer(&e))
 	b[15] ^= 0x80
 	for i := 15; i >= 0; i-- {
+		p.putByte(b[i])
+	}
+}
+
+func (p *Packer) EncodeDecimal256(e Decimal256) {
+	p.putByte(decimal256Code)
+	b := *(*[32]byte)(unsafe.Pointer(&e))
+	b[31] ^= 0x80
+	for i := 31; i >= 0; i-- {
 		p.putByte(b[i])
 	}
 }

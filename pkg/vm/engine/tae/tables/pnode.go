@@ -17,6 +17,7 @@ package tables
 import (
 	"context"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +29,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
+
+type scanNoCopyKey struct{}
+
+// WithScanNoCopy signals the scan chain to use zero-copy mode (needCopy=false).
+// Vectors will wrap fileservice buffers directly; the caller must hold the
+// returned DataRelease on the batch until the data is fully consumed.
+func WithScanNoCopy(ctx context.Context) context.Context {
+	return context.WithValue(ctx, scanNoCopyKey{}, true)
+}
+
+func isScanNoCopy(ctx context.Context) bool {
+	v, _ := ctx.Value(scanNoCopyKey{}).(bool)
+	return v
+}
 
 var _ NodeT = (*persistedNode)(nil)
 
@@ -99,9 +114,17 @@ func (node *persistedNode) Scan(
 		ts := txn.GetStartTS()
 		tsForAppendable = &ts
 	}
-	vecs, deletes, err := LoadPersistedColumnDatas(
+	vecs, deletes, release, err := LoadPersistedColumnData(
 		ctx, readSchema, node.object.rt, id, colIdxes, location, mp, tsForAppendable,
+		!isScanNoCopy(ctx),
 	)
+	replaceCommitts := func(vecs []containers.Vector, i int) {
+		createTS := node.object.meta.Load().GetCreatedAt()
+		length := vecs[0].Length()
+		vecs[i].Close()
+		vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
+		vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, length, mp)
+	}
 	if err != nil {
 		return err
 	}
@@ -109,18 +132,27 @@ func (node *persistedNode) Scan(
 	if *bat == nil {
 		*bat = containers.NewBatch()
 		(*bat).Deletes = deletes
+		(*bat).DataRelease = release
 		for i, idx := range colIdxes {
 			var attr string
 			if idx == objectio.SEQNUM_COMMITTS {
 				attr = objectio.TombstoneAttr_CommitTs_Attr
-				if vecs[i].GetType().Oid != types.T_TS {
-					vecs[i].Close()
-					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
-					createTS := node.object.meta.Load().GetCreatedAt()
-					vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, vecs[0].Length(), mp)
+				if vecs[i].IsConstNull() {
+					replaceCommitts(vecs, i)
 				}
+				/// TODO: Read old version of nonappendable block?
 			} else {
 				attr = readSchema.ColDefs[idx].Name
+			}
+
+			// RelLogicalID COMPAT
+			if attr == pkgcatalog.SystemRelAttr_LogicalID && vecs[i].IsConstNull() {
+				dup, err := (*bat).GetVectorByName(pkgcatalog.SystemRelAttr_ID).GetDownstreamVector().Dup(mp)
+				if err != nil {
+					return err
+				}
+				vecs[i].Close()
+				vecs[i] = containers.ToTNVector(dup, mp)
 			}
 			(*bat).AddVector(attr, vecs[i])
 		}
@@ -133,21 +165,58 @@ func (node *persistedNode) Scan(
 			(*bat).Deletes.Add(i + uint64(len))
 			return true
 		})
+
+		// RelLogicalID COMPAT
+		var tidvec containers.Vector
 		for i, idx := range colIdxes {
 			var attr string
 			if idx == objectio.SEQNUM_COMMITTS {
 				attr = objectio.TombstoneAttr_CommitTs_Attr
-				if vecs[i].GetType().Oid != types.T_TS {
-					vecs[i].Close()
-					vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
-					createTS := node.object.meta.Load().GetCreatedAt()
-					vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, vecs[0].Length(), mp)
+				if vecs[i].IsConstNull() {
+					replaceCommitts(vecs, i)
 				}
 			} else {
 				attr = readSchema.ColDefs[idx].Name
 			}
+			// RelLogicalID COMPAT
+			if attr == pkgcatalog.SystemRelAttr_LogicalID && vecs[i].IsConstNull() {
+				vecs[i].Close()
+				vecs[i] = tidvec
+			}
+
+			// System table COMPAT: columns added in newer versions produce
+			// const null vectors when reading old data blocks. The batch
+			// vector from the first block may be const; convert it to a
+			// regular vector so Extend (which panics on const dest) works.
+			if destVec := (*bat).GetVectorByName(attr); destVec.IsConst() {
+				destIdx := (*bat).Nameidx[attr]
+				constInner := destVec.GetDownstreamVector()
+				length := constInner.Length()
+				newInner := vector.NewVec(*constInner.GetType())
+				if err = newInner.UnionBatch(constInner, 0, length, nil, mp); err != nil {
+					return
+				}
+				destVec.Close()
+				(*bat).Vecs[destIdx] = containers.ToTNVector(newInner, mp)
+			}
 			(*bat).GetVectorByName(attr).Extend(vecs[i])
+
+			// RelLogicalID COMPAT
+			if attr == pkgcatalog.SystemRelAttr_ID {
+				tidvec = vecs[i]
+				continue
+			}
 			vecs[i].Close()
+		}
+		// RelLogicalID COMPAT
+		if tidvec != nil {
+			tidvec.Close()
+		}
+		// In zero-copy mode (needCopy=false), release frees the IOVector backing.
+		// Data has been Extend()ed (copied) into the existing batch, so the
+		// IOVector is no longer needed.  In copy mode release is nil.
+		if release != nil {
+			release()
 		}
 	}
 	return
@@ -215,17 +284,13 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		if err != nil {
 			return err
 		}
-		vecs, _, err := LoadPersistedColumnDatas(
+		vecs, _, _, err := LoadPersistedColumnData(
 			ctx, readSchema, node.object.rt, id, colIdxes, location, mp, nil,
+			true,
 		)
 		if err != nil {
 			return err
 		}
-		defer func() {
-			for i := range vecs {
-				vecs[i].Close()
-			}
-		}()
 		var commitTSs []types.TS
 		if !persistedByCN {
 			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](vecs[2].GetDownstreamVector())
@@ -259,6 +324,9 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 				}
 			}
 		}
+		for i := range vecs {
+			vecs[i].Close()
+		}
 	}
 	return
 }
@@ -291,6 +359,7 @@ func (node *persistedNode) FillBlockTombstones(
 	); err != nil {
 		return err
 	}
+	colIdxs := []int{0}
 	for tombstoneBlkID := 0; tombstoneBlkID < node.object.meta.Load().BlockCnt(); tombstoneBlkID++ {
 		buf := bf.GetBloomFilter(uint32(tombstoneBlkID))
 		bfIndex := index.NewEmptyBloomFilterWithType(index.HBF)
@@ -309,28 +378,24 @@ func (node *persistedNode) FillBlockTombstones(
 		if err != nil {
 			return err
 		}
-		vecs, _, err := LoadPersistedColumnDatas(
-			ctx, readSchema, node.object.rt, id, []int{0}, location, mp, nil,
+		vecs, _, _, err := LoadPersistedColumnData(
+			ctx, readSchema, node.object.rt, id, colIdxs, location, mp, nil,
+			true,
 		)
 		if err != nil {
 			return err
 		}
-		defer func() {
-			for i := range vecs {
-				vecs[i].Close()
-			}
-		}()
 		var commitTSs []types.TS
 		var commitTSVec containers.Vector
 		if node.object.meta.Load().IsAppendable() {
 			commitTSVec, err = node.object.LoadPersistedCommitTS(uint16(tombstoneBlkID))
 			if err != nil {
+				for i := range vecs {
+					vecs[i].Close()
+				}
 				return err
 			}
 			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
-		}
-		if commitTSVec != nil {
-			defer commitTSVec.Close()
 		}
 		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 		// TODO: biselect, check visibility
@@ -348,6 +413,12 @@ func (node *persistedNode) FillBlockTombstones(
 				offset := rowID.GetRowOffset()
 				(*deletes).Add(uint64(offset) + deleteStartOffset)
 			}
+		}
+		if commitTSVec != nil {
+			commitTSVec.Close()
+		}
+		for i := range vecs {
+			vecs[i].Close()
 		}
 	}
 	return nil

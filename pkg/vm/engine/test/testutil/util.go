@@ -86,6 +86,11 @@ func WithDisttaeEngineQuota(v uint64) TestDisttaeEngineOptions {
 		e.quota = v
 	}
 }
+func WithDisttaeEngineExtraWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.extraWorkspaceThreshold = v
+	}
+}
 
 func CreateEngines(
 	ctx context.Context,
@@ -113,6 +118,7 @@ func CreateEngines(
 	rpcAgent = NewMockLogtailAgent()
 
 	rootDir := GetDefaultTestPath("engine_test", t)
+	os.RemoveAll(rootDir)
 
 	s3Op, err := getS3SharedFileServiceOption(ctx, rootDir)
 	require.NoError(t, err)
@@ -177,10 +183,63 @@ func EngineTableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
 			return nil, err
 		}
 
+		// If schema has PK but ConstraintDef doesn't contain PrimaryKeyDef, add it
+		// This happens when using fake PK (pkIdx == -1 in MockSchemaAll)
+		hasPKConstraint := false
+		for _, ct := range con.Cts {
+			if _, ok := ct.(*engine.PrimaryKeyDef); ok {
+				hasPKConstraint = true
+				break
+			}
+		}
+
+		if !hasPKConstraint {
+			if pkCol := schema.GetPrimaryKey(); pkCol != nil {
+				pkConstraint := &engine.PrimaryKeyDef{
+					Pkey: &plan.PrimaryKeyDef{
+						PkeyColName: pkCol.Name,
+						Names:       []string{pkCol.Name},
+					},
+				}
+				con.Cts = append(con.Cts, pkConstraint)
+			}
+		}
+
 		defs = append(defs, &con)
 	}
 
 	return defs, nil
+}
+
+func EngineDefAddIndex(defs []engine.TableDef, idxColName string) []engine.TableDef {
+	indexes := []*plan.IndexDef{
+		{
+			IndexName:          "hnsw_idx",
+			TableExist:         true,
+			IndexAlgo:          catalog2.MoIndexHnswAlgo.ToString(),
+			IndexAlgoTableType: catalog2.Hnsw_TblType_Metadata,
+			IndexTableName:     "meta_tbl",
+			Parts:              []string{idxColName},
+			IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,
+		},
+		{
+			IndexName:          "hnsw_idx",
+			TableExist:         true,
+			IndexAlgo:          catalog2.MoIndexHnswAlgo.ToString(),
+			IndexAlgoTableType: catalog2.Hnsw_TblType_Storage,
+			IndexTableName:     "storage_tbl",
+			Parts:              []string{idxColName},
+			IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,
+		},
+	}
+	for _, def := range defs {
+		if con, ok := def.(*engine.ConstraintDef); ok {
+			con.Cts = append(con.Cts, &engine.IndexDef{
+				Indexes: indexes,
+			})
+		}
+	}
+	return defs
 }
 
 func PlanTableDefBySchema(schema *catalog.Schema, tableId uint64, databaseName string) plan.TableDef {

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"go.uber.org/zap"
 )
 
 const (
@@ -315,7 +316,11 @@ var initAesKeyBySqlExecutor = func(
 		encryptedKey,
 		[]byte(getGlobalPuWrapper(service).SV.KeyEncryptionKey),
 	)
-	logutil.Infof("DEBUG-1: %v:%v", encryptedKey, err)
+	logutil.Debug(
+		"cdc.frontend.util.decrypt_key",
+		zap.String("encrypted-key", encryptedKey),
+		zap.Error(err),
+	)
 	return
 }
 

@@ -1,0 +1,135 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+create table t1(c1 int primary key);
+create table t2(c1 int primary key, c2 int, c3 int);
+create table t3(c1 int, c2 int, c3 int, primary key(c1,c2));
+insert into t1 select * from generate_series(10000) g;
+insert into t2 select c1, c1, c1 from t1;
+insert into t2 select c1+10000, c1+10000, c1+10000 from t1;
+insert into t3 select c1, c1, c1 from t1;
+insert into t3 select c1+10000, c1+10000, c1+10000 from t1;
+insert into t3 select c1+20000, c1+20000, c1+20000 from t1;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t1');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t2');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t3');
+-- @separator:table
+explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
+-- @separator:table
+explain select t1.c1,t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
+-- @separator:table
+explain select t3.c1 from t3 left join t1 on t1.c1 =t3.c1 and t1.c1 > t3.c2 where t3.c1<10;
+-- @separator:table
+explain select t1.c1,t3.c1 from t3 left join t1 on t1.c1 =t3.c1 where t3.c1<10;
+-- @separator:table
+explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c2;
+-- @separator:table
+explain select t3.c1 from t3 left join t2 on t3.c2=t2.c2;
+-- @separator:table
+explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1) v1 on t2.c1 =v1.c1 and t2.c2=v1.c2;
+-- @separator:table
+explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1 limit 5000) v1 on t2.c1 =v1.c1;
+drop table if exists parameters;
+CREATE TABLE `parameters` (
+`specific_catalog` VARCHAR(64) DEFAULT null,
+`specific_schema` VARCHAR(64) DEFAULT null,
+`specific_name` VARCHAR(64) DEFAULT null,
+`ordinal_position` BIGINT UNSIGNED DEFAULT null,
+`parameter_mode` VARCHAR(5) DEFAULT null,
+`parameter_name` VARCHAR(64) DEFAULT null,
+`data_type` TEXT DEFAULT null,
+`character_maximum_length` BIGINT DEFAULT null,
+`character_octet_length` BIGINT DEFAULT null,
+`numeric_precision` INT UNSIGNED DEFAULT null,
+`numeric_scale` BIGINT DEFAULT null,
+`datetime_precision` INT UNSIGNED DEFAULT null,
+`character_set_name` VARCHAR(64) DEFAULT null,
+`collation_name` VARCHAR(64) DEFAULT null,
+`dtd_identifier` TEXT DEFAULT null,
+`routine_type` VARCHAR(64) DEFAULT null
+);
+drop table if exists routines;
+CREATE TABLE `routines` (
+`specific_name` VARCHAR(64) DEFAULT null,
+`routine_catalog` VARCHAR(64) DEFAULT null,
+`routine_schema` VARCHAR(64) DEFAULT null,
+`routine_name` VARCHAR(64) DEFAULT null,
+`routine_type` VARCHAR(10) DEFAULT null,
+`data_type` TEXT DEFAULT null,
+`character_maximum_length` BIGINT DEFAULT null,
+`character_octet_length` BIGINT DEFAULT null,
+`numeric_precision` INT UNSIGNED DEFAULT null,
+`numeric_scale` INT UNSIGNED DEFAULT null,
+`datetime_precision` INT UNSIGNED DEFAULT null,
+`character_set_name` VARCHAR(64) DEFAULT null,
+`collation_name` VARCHAR(64) DEFAULT null,
+`dtd_identifier` TEXT DEFAULT null,
+`routine_body` VARCHAR(3) DEFAULT null,
+`routine_definition` TEXT DEFAULT null,
+`external_name` BINARY(0) DEFAULT null,
+`external_language` VARCHAR(64) DEFAULT null,
+`parameter_style` VARCHAR(3) DEFAULT null,
+`is_deterministic` VARCHAR(3) DEFAULT null,
+`sql_data_access` VARCHAR(10) DEFAULT null,
+`sql_path` VARCHAR(1000) DEFAULT null,
+`security_type` VARCHAR(10) DEFAULT null,
+`created` TIMESTAMP DEFAULT null,
+`last_altered` TIMESTAMP DEFAULT null,
+`sql_mode` VARCHAR(1000) DEFAULT null,
+`routine_comment` TEXT DEFAULT null,
+`definer` VARCHAR(288) DEFAULT null,
+`character_set_client` VARCHAR(64) DEFAULT null,
+`collation_connection` VARCHAR(64) DEFAULT null,
+`database_collation` VARCHAR(64) DEFAULT null
+);
+insert into parameters values('specific_name01','specific_name01','routine_name02',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr01');
+insert into parameters values('specific_name01','specific_name01','routine_name01',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr01');
+insert into parameters values('specific_name01','specific_name02','routine_name01',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr01');
+insert into parameters values('specific_name01','specific_name02','routine_name02',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr02');
+insert into parameters values('specific_name01','specific_name01','routine_name01',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr02');
+insert into parameters values('specific_name01','specific_name01','routine_name01',100,'a','parametername01','data_type01',1248483647,100,10,32,10,'character01','callation_name01','dtd_identifier01','rrr02');
+insert into routines values('specific_name01','routine_catalog01','specific_name01','routine_name02','rrr02','data',10,10,10,20,20,'character_set_name','collation_name01','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
+insert into routines values('specific_name01','routine_catalog01','specific_name01','routine_name02','rrr02','data',10,10,10,20,20,'character_set_name','collation_name01','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
+insert into routines values('specific_name01','routine_catalog01','specific_name01','routine_name01','rrr01','data',10,10,10,20,20,'character_set_name','collation','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
+insert into routines values('specific_name02','routine_catalog02','specific_name01','routine_name01','rrr01','data',10,10,10,20,20,'character_set_name','collation','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
+insert into routines values('specific_name01','routine_catalog01','specific_name02','routine_name02','rrr02','data',10,10,10,20,20,'character_set_name','collation','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
+
+SELECT DISTINCT ROUTINE_SCHEMA, ROUTINE_NAME, PARAMS.PARAMETER FROM ROUTINES LEFT JOIN ( SELECT SPECIFIC_SCHEMA, SPECIFIC_NAME, GROUP_CONCAT(CONCAT(DATA_TYPE, ' ', PARAMETER_NAME) ORDER BY ORDINAL_POSITION SEPARATOR ', ') PARAMETER, ROUTINE_TYPE FROM PARAMETERS GROUP BY SPECIFIC_SCHEMA, SPECIFIC_NAME, ROUTINE_TYPE ) PARAMS ON ROUTINES.ROUTINE_SCHEMA = PARAMS.SPECIFIC_SCHEMA AND ROUTINES.ROUTINE_NAME = PARAMS.SPECIFIC_NAME AND ROUTINES.ROUTINE_TYPE = PARAMS.ROUTINE_TYPE WHERE ROUTINE_SCHEMA = 'specific_name01' ORDER BY ROUTINE_SCHEMA;
+drop table routines;
+drop table parameters;
+
+create table x1 (a int, b int);
+insert into x1 values (1, 1), (2, 2), (3, 3);
+-- one row has 20000 matches
+insert into x1 select 42, result from generate_series(1,20000,1) g;
+insert into x1 values (10, 10), (20, 20);
+create table x2 as select * from x1 order by a limit 10;
+select count(*) from x2 left join x1 on x1.a = x2.a;
+select * from x2 left join x1 on x1.a = x2.a order by x1.a limit 10;
+drop table x1;
+drop table x2;
+
+-- Test case for remap error fix: o.id = CAST(d.id AS INT) in LEFT JOIN
+drop table if exists t_order;
+drop table if exists t_summary;
+drop table if exists t_mapping;
+create table t_order (id INT);
+create table t_summary (id INT);
+create table t_mapping (id INT);
+insert into t_order values (1);
+insert into t_summary values (1);
+insert into t_mapping values (1);
+-- @separator:table
+explain select o.id from t_order o join t_summary d on d.id = o.id left join (select distinct id from t_mapping) m on m.id = o.id where o.id = CAST(d.id AS INT);
+select o.id from t_order o join t_summary d on d.id = o.id left join (select distinct id from t_mapping) m on m.id = o.id where o.id = CAST(d.id AS INT);
+drop table t_order;
+drop table t_summary;
+drop table t_mapping;
+
+drop database if exists d1;

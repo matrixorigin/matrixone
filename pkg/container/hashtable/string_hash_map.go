@@ -19,8 +19,8 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -37,17 +37,17 @@ type StringHashMapCell struct {
 var StrKeyPadding [16]byte
 
 type StringHashMap struct {
-	allocator malloc.Allocator
+	mp *mpool.MPool
 
-	blockCellCnt    uint64
-	blockMaxElemCnt uint64
-	cellCntMask     uint64
+	blockCellCntBits uint8
+	cellCntMask      uint64
 
-	cellCnt             uint64
-	elemCnt             uint64
-	rawData             [][]byte
-	rawDataDeallocators []malloc.Deallocator
-	cells               [][]StringHashMapCell
+	cellCnt uint64
+	elemCnt uint64
+	cells   [][]StringHashMapCell
+
+	version uint64
+	admit   ResizeAdmission
 }
 
 var (
@@ -55,51 +55,70 @@ var (
 	maxStrCellCntPerBlock uint64
 )
 
+func StringHashMapInitialAllocationBytes() uint64 { return kInitialCellCnt * strCellSize }
+
 func init() {
 	strCellSize = uint64(unsafe.Sizeof(StringHashMapCell{}))
 	maxStrCellCntPerBlock = maxBlockSize / strCellSize
 }
 
-func (ht *StringHashMap) Free() {
-	for i, de := range ht.rawDataDeallocators {
-		if de != nil {
-			de.Deallocate(malloc.NoHints)
-		}
-		ht.rawData[i], ht.cells[i] = nil, nil
-	}
-	ht.rawData, ht.cells = nil, nil
+func (ht *StringHashMap) blockCellCnt() uint64 {
+	return uint64(1) << ht.blockCellCntBits
 }
 
-func (ht *StringHashMap) allocate(index int, size uint64) error {
-	if ht.rawDataDeallocators[index] != nil {
+func (ht *StringHashMap) cellAt(index uint64) *StringHashMapCell {
+	blockID := index >> ht.blockCellCntBits
+	cellID := index & (ht.blockCellCnt() - 1)
+	return &ht.cells[blockID][cellID]
+}
+
+func (ht *StringHashMap) Free() {
+	ht.freeCells(ht.cells)
+	ht.cells = nil
+}
+
+func (ht *StringHashMap) freeCells(cells [][]StringHashMapCell) {
+	for i, block := range cells {
+		mpool.FreeSlice(ht.mp, block)
+		cells[i] = nil
+	}
+}
+
+func (ht *StringHashMap) allocateCells(blockCount int, blockCellCnt uint64) ([][]StringHashMapCell, error) {
+	cells := make([][]StringHashMapCell, blockCount)
+	for i := range cells {
+		block, err := mpool.MakeSlice[StringHashMapCell](int(blockCellCnt), ht.mp, true)
+		if err != nil {
+			ht.freeCells(cells)
+			return nil, err
+		}
+		cells[i] = block
+	}
+	return cells, nil
+}
+
+func (ht *StringHashMap) allocate(index int, ncells int) error {
+	if ht.cells[index] != nil {
 		panic("overwriting")
 	}
-	bs, de, err := ht.allocator.Allocate(size, malloc.NoHints)
+	c, err := mpool.MakeSlice[StringHashMapCell](ncells, ht.mp, true)
 	if err != nil {
 		return err
 	}
-	ht.rawData[index] = bs
-	ht.rawDataDeallocators[index] = de
-	ht.cells[index] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[index][0])), ht.blockCellCnt)
+	ht.cells[index] = c
 	return nil
 }
 
-func (ht *StringHashMap) Init(allocator malloc.Allocator) (err error) {
-	if allocator == nil {
-		allocator = DefaultAllocator()
-	}
-	ht.allocator = allocator
-	ht.blockCellCnt = kInitialCellCnt
-	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt, strCellSize)
+func (ht *StringHashMap) Init(mp *mpool.MPool) (err error) {
+	ht.mp = mp
+	ht.blockCellCntBits = kInitialCellCntBits
 	ht.elemCnt = 0
 	ht.cellCnt = kInitialCellCnt
+	ht.version = 0
 	ht.cellCntMask = kInitialCellCnt - 1
 
-	ht.rawData = make([][]byte, 1)
-	ht.rawDataDeallocators = make([]malloc.Deallocator, 1)
 	ht.cells = make([][]StringHashMapCell, 1)
-
-	if err := ht.allocate(0, uint64(ht.blockCellCnt*strCellSize)); err != nil {
+	if err := ht.allocate(0, int(ht.blockCellCnt())); err != nil {
 		return err
 	}
 
@@ -107,6 +126,9 @@ func (ht *StringHashMap) Init(allocator malloc.Allocator) (err error) {
 }
 
 func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64) error {
+	if len(keys) == 0 {
+		return nil
+	}
 	if err := ht.ResizeOnDemand(uint64(len(keys))); err != nil {
 		return err
 	}
@@ -126,6 +148,9 @@ func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, va
 }
 
 func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64) error {
+	if len(keys) == 0 {
+		return nil
+	}
 	if err := ht.ResizeOnDemand(uint64(len(keys))); err != nil {
 		return err
 	}
@@ -159,9 +184,7 @@ func (ht *StringHashMap) FindStringBatch(states [][3]uint64, keys [][]byte, valu
 
 func (ht *StringHashMap) findCell(state *[3]uint64) *StringHashMapCell {
 	for idx := state[0] & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-		blockId := idx / ht.blockCellCnt
-		cellId := idx % ht.blockCellCnt
-		cell := &ht.cells[blockId][cellId]
+		cell := ht.cellAt(idx)
 		if cell.Mapped == 0 || cell.HashState == *state {
 			return cell
 		}
@@ -171,9 +194,7 @@ func (ht *StringHashMap) findCell(state *[3]uint64) *StringHashMapCell {
 
 func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 	for idx := state[0] & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-		blockId := idx / ht.blockCellCnt
-		cellId := idx % ht.blockCellCnt
-		cell := &ht.cells[blockId][cellId]
+		cell := ht.cellAt(idx)
 		if cell.Mapped == 0 {
 			return cell
 		}
@@ -181,125 +202,139 @@ func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 	return nil
 }
 
-func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
+func (ht *StringHashMap) rehashInPlace(oldCellCnt uint64) {
+	// Start immediately after an old empty slot, which is a linear-probing
+	// cluster boundary. The load factor guarantees at least one such slot.
+	emptyIndex := uint64(0)
+	for emptyIndex < oldCellCnt && ht.cellAt(emptyIndex).Mapped != 0 {
+		emptyIndex++
+	}
+	if emptyIndex == oldCellCnt {
+		panic("cannot grow a full string hash map")
+	}
 
-	targetCnt := ht.elemCnt + n
-	if targetCnt <= uint64(len(ht.rawData))*ht.blockMaxElemCnt {
+	var emptyCell StringHashMapCell
+	oldMask := oldCellCnt - 1
+	for offset := uint64(1); offset < oldCellCnt; offset++ {
+		index := (emptyIndex + offset) & oldMask
+		source := ht.cellAt(index)
+		if source.Mapped == 0 {
+			continue
+		}
+		cell := *source
+		*source = emptyCell
+		// Under the wider mask, a cell either moves into a newly allocated block
+		// or into a hole at/before its old position in this scan order. It cannot
+		// overwrite an unvisited old cell.
+		*ht.findEmptyCell(&cell.HashState) = cell
+	}
+}
+
+func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
+	if n == 0 {
+		return nil
+	}
+	return ht.ResizeWithPlan(ht.PlanResize(n))
+}
+
+// SetResizeAdmission installs an optional memory admission callback. The
+// callback is called once for each growth, before any allocation or mutation.
+func (ht *StringHashMap) SetResizeAdmission(admit ResizeAdmission) { ht.admit = admit }
+
+// PlanResize computes growth accounting without allocating or changing the map.
+func (ht *StringHashMap) PlanResize(n uint64) ResizePlan {
+	return newResizePlan(ht.elemCnt, n, ht.cellCnt, ht.blockCellCnt(),
+		uint64(len(ht.cells)), strCellSize,
+		maxStrCellCntPerBlock, ht.version)
+}
+
+// ResizeWithPlan applies a previously computed plan transactionally.
+func (ht *StringHashMap) ResizeWithPlan(plan ResizePlan) error {
+	if plan.Invalid {
+		return ErrInvalidResizePlan
+	}
+	if plan.Noop {
+		return nil
+	}
+	if !plan.matches(ht.version, ht.cellCnt, ht.blockCellCnt(), uint64(len(ht.cells))) {
+		return ErrStaleResizePlan
+	}
+	var reservation ResizeReservation
+	if ht.admit != nil {
+		var err error
+		if reservation, err = ht.admit(plan); err != nil {
+			return err
+		}
+	}
+	committed := false
+	defer func() {
+		if reservation != nil && !committed {
+			reservation.Rollback()
+		}
+	}()
+
+	if plan.ReuseCurrentBlocks {
+		newBlocks, err := ht.allocateCells(
+			int(plan.TargetBlockCount-plan.CurrentBlockCount),
+			plan.TargetBlockCellCount,
+		)
+		if err != nil {
+			return err
+		}
+		oldCellCnt := ht.cellCnt
+		ht.cells = append(ht.cells, newBlocks...)
+		ht.cellCnt = plan.TargetCellCount
+		ht.cellCntMask = ht.cellCnt - 1
+		ht.version++
+		ht.rehashInPlace(oldCellCnt)
+		if reservation != nil {
+			reservation.Commit(plan)
+		}
+		committed = true
 		return nil
 	}
 
-	newCellCnt := ht.cellCnt << 1
-	newMaxElemCnt := maxElemCnt(newCellCnt, strCellSize)
-	for newMaxElemCnt < targetCnt {
-		newCellCnt <<= 1
-		newMaxElemCnt = maxElemCnt(newCellCnt, strCellSize)
+	newCells, err := ht.allocateCells(int(plan.TargetBlockCount), plan.TargetBlockCellCount)
+	if err != nil {
+		return err
 	}
-
-	newAlloc := int(newCellCnt * strCellSize)
-	if ht.blockCellCnt == maxStrCellCntPerBlock {
-		// double the blocks
-		oldBlockNum := len(ht.rawData)
-		newBlockNum := newAlloc / maxBlockSize
-
-		ht.rawData = append(ht.rawData, make([][]byte, newBlockNum-oldBlockNum)...)
-		ht.rawDataDeallocators = append(ht.rawDataDeallocators, make([]malloc.Deallocator, newBlockNum-oldBlockNum)...)
-		ht.cells = append(ht.cells, make([][]StringHashMapCell, newBlockNum-oldBlockNum)...)
-		ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
-		ht.cellCntMask = ht.cellCnt - 1
-
-		for i := oldBlockNum; i < newBlockNum; i++ {
-			if err := ht.allocate(i, uint64(ht.blockCellCnt*strCellSize)); err != nil {
-				return err
+	newMask := plan.TargetCellCount - 1
+	newBlockBits := powerOfTwoBits(plan.TargetBlockCellCount)
+	for i := range ht.cells {
+		for j := range ht.cells[i] {
+			old := ht.cells[i][j]
+			if old.Mapped == 0 {
+				continue
 			}
-		}
-
-		// rearrange the cells
-		var block []StringHashMapCell
-		var emptyCell StringHashMapCell
-
-		for i := 0; i < oldBlockNum; i++ {
-			block = ht.cells[i]
-			for j := uint64(0); j < ht.blockCellCnt; j++ {
-				cell := &block[j]
+			for idx := old.HashState[0] & newMask; ; idx = (idx + 1) & newMask {
+				cell := &newCells[idx>>newBlockBits][idx&(plan.TargetBlockCellCount-1)]
 				if cell.Mapped == 0 {
-					continue
-				}
-				newCell := ht.findCell(&cell.HashState)
-				if newCell != cell {
-					*newCell = *cell
-					*cell = emptyCell
+					*cell = old
+					break
 				}
 			}
 		}
-
-		block = ht.cells[oldBlockNum]
-		for j := uint64(0); j < ht.blockCellCnt; j++ {
-			cell := &block[j]
-			if cell.Mapped == 0 {
-				break
-			}
-			newCell := ht.findCell(&cell.HashState)
-			if newCell != cell {
-				*newCell = *cell
-				*cell = emptyCell
-			}
-		}
-	} else {
-		oldCells0 := ht.cells[0]
-		oldDeallocator := ht.rawDataDeallocators[0]
-		ht.rawDataDeallocators[0] = nil
-		ht.cellCnt = newCellCnt
-		ht.cellCntMask = ht.cellCnt - 1
-
-		if newAlloc <= maxBlockSize {
-			ht.blockCellCnt = newCellCnt
-			ht.blockMaxElemCnt = newMaxElemCnt
-
-			if err := ht.allocate(0, uint64(newAlloc)); err != nil {
-				return err
-			}
-
-		} else {
-			ht.blockCellCnt = maxStrCellCntPerBlock
-			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt, strCellSize)
-
-			newBlockNum := newAlloc / maxBlockSize
-			ht.rawData = make([][]byte, newBlockNum)
-			ht.rawDataDeallocators = make([]malloc.Deallocator, newBlockNum)
-			ht.cells = make([][]StringHashMapCell, newBlockNum)
-			ht.cellCnt = ht.blockCellCnt * uint64(newBlockNum)
-			ht.cellCntMask = ht.cellCnt - 1
-
-			for i := 0; i < newBlockNum; i++ {
-				if err := ht.allocate(i, uint64(ht.blockCellCnt*strCellSize)); err != nil {
-					return err
-				}
-			}
-		}
-
-		// rearrange the cells
-		for i := range oldCells0 {
-			cell := &oldCells0[i]
-			if cell.Mapped != 0 {
-				newCell := ht.findEmptyCell(&cell.HashState)
-				*newCell = *cell
-			}
-		}
-
-		oldDeallocator.Deallocate(malloc.NoHints)
 	}
 
+	oldCells := ht.cells
+	ht.cells = newCells
+	ht.cellCnt = plan.TargetCellCount
+	ht.cellCntMask = newMask
+	ht.blockCellCntBits = newBlockBits
+	ht.version++
+	ht.freeCells(oldCells)
+	if reservation != nil {
+		reservation.Commit(plan)
+	}
+	committed = true
 	return nil
 }
 
 func (ht *StringHashMap) Size() int64 {
 	// 88 is the origin size of StringHashMaps
 	ret := int64(88)
-	for i := range ht.rawData {
-		ret += 24
-		ret += int64(len(ht.rawData[i]))
-		ret += 24
-		ret += int64(32 * len(ht.cells[i]))
+	for i := range ht.cells {
+		ret += int64(int(strCellSize) * len(ht.cells[i]))
 	}
 	return ret
 }
@@ -315,9 +350,7 @@ func (it *StringHashMapIterator) Init(ht *StringHashMap) {
 
 func (it *StringHashMapIterator) Next() (cell *StringHashMapCell, err error) {
 	for it.pos < it.table.cellCnt {
-		blockId := it.pos / it.table.blockCellCnt
-		cellId := it.pos % it.table.blockCellCnt
-		cell = &it.table.cells[blockId][cellId]
+		cell = it.table.cellAt(it.pos)
 		if cell.Mapped != 0 {
 			break
 		}
@@ -341,8 +374,8 @@ func (ht *StringHashMap) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (ht *StringHashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator) error {
-	_, err := ht.UnmarshalFrom(bytes.NewReader(data), allocator)
+func (ht *StringHashMap) UnmarshalBinary(data []byte, mp *mpool.MPool) error {
+	_, err := ht.UnmarshalFrom(bytes.NewReader(data), mp)
 	return err
 }
 
@@ -354,96 +387,59 @@ func (ht *StringHashMap) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += int64(wn)
 
-	if wn, err = w.Write(types.EncodeUint64(&ht.cellCnt)); err != nil {
-		return
-	}
-	n += int64(wn)
-
-	if wn, err = w.Write(types.EncodeUint64(&ht.blockCellCnt)); err != nil {
-		return
-	}
-	n += int64(wn)
-
-	if wn, err = w.Write(types.EncodeUint64(&ht.blockMaxElemCnt)); err != nil {
-		return
-	}
-	n += int64(wn)
-
-	if wn, err = w.Write(types.EncodeUint64(&ht.cellCntMask)); err != nil {
-		return
-	}
-	n += int64(wn)
-
 	// Write active cells
 	if ht.elemCnt > 0 {
-		for _, block := range ht.cells {
-			for i := range block {
-				if block[i].Mapped != 0 {
-					if wn, err = w.Write(types.EncodeUint64(&block[i].HashState[0])); err != nil {
-						return
-					}
-					n += int64(wn)
-					if wn, err = w.Write(types.EncodeUint64(&block[i].HashState[1])); err != nil {
-						return
-					}
-					n += int64(wn)
-					if wn, err = w.Write(types.EncodeUint64(&block[i].HashState[2])); err != nil {
-						return
-					}
-					n += int64(wn)
-					if wn, err = w.Write(types.EncodeUint64(&block[i].Mapped)); err != nil {
-						return
-					}
-					n += int64(wn)
-				}
+		it := &StringHashMapIterator{}
+		it.Init(ht)
+		for i := uint64(0); i < ht.elemCnt; i++ {
+			cell, errNext := it.Next()
+			if errNext != nil {
+				return n, errNext
 			}
+			if wn, err = w.Write(types.EncodeUint64(&cell.HashState[0])); err != nil {
+				return n, err
+			}
+			n += int64(wn)
+			if wn, err = w.Write(types.EncodeUint64(&cell.HashState[1])); err != nil {
+				return n, err
+			}
+			n += int64(wn)
+			if wn, err = w.Write(types.EncodeUint64(&cell.HashState[2])); err != nil {
+				return n, err
+			}
+			n += int64(wn)
+			if wn, err = w.Write(types.EncodeUint64(&cell.Mapped)); err != nil {
+				return n, err
+			}
+			n += int64(wn)
 		}
 	}
 
 	return
 }
 
-func (ht *StringHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (n int64, err error) {
+func (ht *StringHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (n int64, err error) {
 	var rn int
 
-	// Read basic metadata
-	buf := make([]byte, 8*5) // 5 uint64 fields
+	// Read element count
+	buf := make([]byte, 8)
 	if rn, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 	n += int64(rn)
+	elemCnt := types.DecodeUint64(buf)
 
-	ht.elemCnt = types.DecodeUint64(buf[0:8])
-	ht.cellCnt = types.DecodeUint64(buf[8:16])
-	ht.blockCellCnt = types.DecodeUint64(buf[16:24])
-	ht.blockMaxElemCnt = types.DecodeUint64(buf[24:32])
-	ht.cellCntMask = types.DecodeUint64(buf[32:40])
-
-	if allocator == nil {
-		allocator = DefaultAllocator()
-	}
-	ht.allocator = allocator
-
-	// Initialize blocks
-	if ht.cellCnt > 0 {
-		numBlocks := ht.cellCnt / ht.blockCellCnt
-		if ht.cellCnt%ht.blockCellCnt != 0 {
-			return n, moerr.NewInternalErrorNoCtx("invalid cellCnt and blockCellCnt combination")
-		}
-		ht.rawData = make([][]byte, numBlocks)
-		ht.rawDataDeallocators = make([]malloc.Deallocator, numBlocks)
-		ht.cells = make([][]StringHashMapCell, numBlocks)
-		for i := uint64(0); i < numBlocks; i++ {
-			if err = ht.allocate(int(i), ht.blockCellCnt*strCellSize); err != nil {
-				return
-			}
-		}
+	if err = ht.Init(mp); err != nil {
+		return
 	}
 
-	// Read and insert active cells
-	if ht.elemCnt > 0 {
+	if elemCnt > 0 {
+		if err = ht.ResizeOnDemand(elemCnt); err != nil {
+			return
+		}
+
 		cellBuf := make([]byte, 32) // HashState + Mapped
-		for i := uint64(0); i < ht.elemCnt; i++ {
+		for range elemCnt {
 			if rn, err = io.ReadFull(r, cellBuf); err != nil {
 				return
 			}
@@ -459,6 +455,19 @@ func (ht *StringHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) 
 			*newCell = cell
 		}
 	}
+	ht.elemCnt = elemCnt
 
 	return
+}
+
+func (ht *StringHashMap) FillGroupHashes(dst []uint64) []uint64 {
+	dst = dst[:ht.elemCnt]
+	for i := range ht.cells {
+		for _, c := range ht.cells[i] {
+			if c.Mapped != 0 {
+				dst[c.Mapped-1] = c.HashState[0]
+			}
+		}
+	}
+	return dst
 }

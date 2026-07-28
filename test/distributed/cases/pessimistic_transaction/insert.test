@@ -234,15 +234,21 @@ drop table t;
 create table t(a int primary key);
 insert into t select * from generate_series(1,200000) g;
 select count(*) from t;
+
 # abort,duplicate key
 -- @pattern
 insert into t select * from t;
+select count(*) from t;
+
 # transaction test
 begin;
+select count(*) from t;
 -- @pattern
 insert into t select * from t;
 select count(*) from t;
 commit;
+
+select count(*) from t;
 select count(*) from t;
 # not-null test
 insert into t select null;

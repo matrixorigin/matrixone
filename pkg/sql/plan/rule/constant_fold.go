@@ -43,16 +43,16 @@ func (r *ConstantFold) GetBatch() *batch.Batch {
 }
 
 // Match always true
-func (r *ConstantFold) Match(n *plan.Node) bool {
+func (r *ConstantFold) Match(node *plan.Node) bool {
 	return true
 }
 
-func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process) {
-	if n.Limit != nil {
-		n.Limit = r.constantFold(n.Limit, proc)
+func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Process) {
+	if node.Limit != nil {
+		node.Limit = r.constantFold(node.Limit, proc)
 	}
-	if n.Offset != nil {
-		n.Offset = r.constantFold(n.Offset, proc)
+	if node.Offset != nil {
+		node.Offset = r.constantFold(node.Offset, proc)
 	}
 	// if n.Interval != nil {
 	// 	n.Interval = r.constantFold(n.Interval, proc)
@@ -61,40 +61,53 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	// 	n.Sliding = r.constantFold(n.Sliding, proc)
 	// }
 
-	for i := range n.OnList {
-		n.OnList[i] = r.constantFold(n.OnList[i], proc)
+	for i := range node.OnList {
+		node.OnList[i] = r.constantFold(node.OnList[i], proc)
 	}
 
-	for i := range n.FilterList {
-		n.FilterList[i] = r.constantFold(n.FilterList[i], proc)
+	for i := range node.FilterList {
+		node.FilterList[i] = r.constantFold(node.FilterList[i], proc)
 	}
 
-	for i := range n.BlockFilterList {
-		n.BlockFilterList[i] = r.constantFold(n.BlockFilterList[i], proc)
+	for i := range node.BlockFilterList {
+		node.BlockFilterList[i] = r.constantFold(node.BlockFilterList[i], proc)
 	}
 
-	for i := range n.ProjectList {
-		n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc)
+	for i := range node.ProjectList {
+		node.ProjectList[i] = r.constantFold(node.ProjectList[i], proc)
 	}
 
-	for i := range n.GroupBy {
-		n.GroupBy[i] = r.constantFold(n.GroupBy[i], proc)
+	for i := range node.GroupBy {
+		node.GroupBy[i] = r.constantFold(node.GroupBy[i], proc)
 	}
 
 	// for i := range n.GroupingSet {
 	// 	n.GroupingSet[i] = r.constantFold(n.GroupingSet[i], proc)
 	// }
 
-	for i := range n.AggList {
-		n.AggList[i] = r.constantFold(n.AggList[i], proc)
+	for i := range node.AggList {
+		node.AggList[i] = r.constantFold(node.AggList[i], proc)
 	}
 
-	for i := range n.WinSpecList {
-		n.WinSpecList[i] = r.constantFold(n.WinSpecList[i], proc)
+	for i := range node.WinSpecList {
+		node.WinSpecList[i] = r.constantFold(node.WinSpecList[i], proc)
 	}
 
-	for _, orderBy := range n.OrderBy {
+	for _, orderBy := range node.OrderBy {
 		orderBy.Expr = r.constantFold(orderBy.Expr, proc)
+	}
+
+	if node.IndexReaderParam != nil {
+		for _, orderBy := range node.IndexReaderParam.OrderBy {
+			orderBy.Expr = r.constantFold(orderBy.Expr, proc)
+		}
+
+		node.IndexReaderParam.Limit = r.constantFold(node.IndexReaderParam.Limit, proc)
+
+		if distRange := node.IndexReaderParam.DistRange; distRange != nil {
+			distRange.LowerBound = r.constantFold(distRange.LowerBound, proc)
+			distRange.UpperBound = r.constantFold(distRange.UpperBound, proc)
+		}
 	}
 
 	// for i := range n.TblFuncExprList {
@@ -105,12 +118,16 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	// 	n.FillVal[i] = r.constantFold(n.FillVal[i], proc)
 	// }
 
-	for i := range n.OnUpdateExprs {
-		n.OnUpdateExprs[i] = r.constantFold(n.OnUpdateExprs[i], proc)
+	for i := range node.OnUpdateExprs {
+		node.OnUpdateExprs[i] = r.constantFold(node.OnUpdateExprs[i], proc)
 	}
 }
 
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+
 	if expr.Typ.Id == int32(types.T_interval) {
 		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
 	}
@@ -137,7 +154,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			}
 			defer vec.Free(proc.Mp())
 
-			vec.InplaceSortAndCompact()
+			// Nullable IN-lists must keep their null bitmap aligned with values.
+			if !vec.IsConstNull() && !vec.GetNulls().Any() {
+				vec.InplaceSortAndCompact()
+			}
 
 			data, err := vec.MarshalBinary()
 			if err != nil {
@@ -159,6 +179,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	}
 	overloadID := fn.Func.GetObj()
 	f, exists := function.GetFunctionByIdWithoutError(overloadID)
+
 	if !exists {
 		return expr
 	}
@@ -173,10 +194,19 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
 		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
+	if r.isPrepared && isSqlModeDependentTemporalCast(fn) {
+		return expr
+	}
 	if f.IsAgg() || f.IsWin() {
 		return expr
 	}
 	if !IsConstant(expr, false) {
+		return expr
+	}
+
+	// Skip constant folding for division/modulo by zero.
+	// This allows runtime to check sql_mode and statement type for proper error handling.
+	if IsDivisionByZeroConstant(fn) {
 		return expr
 	}
 
@@ -264,7 +294,13 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}
-	expr.Typ = plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+	// Preserve the original expr.Typ (from retType) instead of using vec.GetType()
+	// This ensures that expr.Typ matches the retType, preventing type mismatches
+	// when FunctionExpressionExecutor creates result wrapper using planExpr.Typ
+	// For example, TIMESTAMPADD with DATE input returns DATETIME type (from retType),
+	// but the actual vector type might be DATETIME (after TempSetType) or DATE (before TempSetType)
+	// We should preserve the retType (DATETIME) to ensure consistency
+	expr.Typ = plan.Type{Id: expr.Typ.Id, Scale: vec.GetType().Scale, Width: vec.GetType().Width}
 	expr.Expr = ec
 
 	return expr
@@ -348,7 +384,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 			},
 		}
 	case types.T_varchar, types.T_char,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink, types.T_geometry:
 		return &plan.Literal{
 			Value: &plan.Literal_Sval{
 				Sval: vec.GetStringAt(int(row)),
@@ -407,6 +443,14 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		decimalValue.A = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B0_63)
 		decimalValue.B = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B64_127)
 		return &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: decimalValue}}
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		data := vec.GetStringAt(int(row))
+		return &plan.Literal{
+			Value: &plan.Literal_VecVal{
+				VecVal: data,
+			},
+		}
 	default:
 		return nil
 	}
@@ -528,9 +572,19 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 				return false, err
 			}
 		case types.T_varchar, types.T_char, types.T_binary, types.T_varbinary, types.T_text,
-			types.T_blob, types.T_datalink, types.T_json, types.T_array_float32, types.T_array_float64:
+			types.T_blob, types.T_datalink, types.T_json, types.T_geometry:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Sval); ok {
 				val := val.Sval
+				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())
+				return true, err
+			} else {
+				err = vector.AppendBytes(vec, nil, false, proc.Mp())
+				return false, err
+			}
+		case types.T_array_float32, types.T_array_float64,
+			types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+			if val, ok := cExpr.Lit.Value.(*plan.Literal_VecVal); ok {
+				val := val.VecVal
 				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())
 				return true, err
 			} else {
@@ -609,11 +663,37 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 	}
 }
 
+func isSqlModeDependentTemporalCast(fn *plan.Function) bool {
+	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if functionID != function.CAST || len(fn.Args) != 2 {
+		return false
+	}
+
+	switch types.T(fn.Args[0].Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_blob, types.T_text, types.T_datalink:
+	default:
+		return false
+	}
+
+	switch types.T(fn.Args[1].Typ.Id) {
+	case types.T_date, types.T_datetime, types.T_timestamp:
+		return true
+	default:
+		return false
+	}
+}
+
 func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
-	switch ef := e.Expr.(type) {
+	switch ef := e.GetExpr().(type) {
 	case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
 		return true
 	case *plan.Expr_F:
+		// CASE expressions should always be evaluated at runtime to preserve
+		// branch semantics; treat them as non-constant.
+		if fid, _ := function.DecodeOverloadID(ef.F.Func.GetObj()); fid == function.CASE {
+			return false
+		}
 		overloadID := ef.F.Func.GetObj()
 		f, exists := function.GetFunctionByIdWithoutError(overloadID)
 		if !exists {
@@ -638,11 +718,68 @@ func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
 			}
 		}
 		return true
-	case *plan.Expr_P:
-		return varAndParamIsConst
-	case *plan.Expr_V:
+	case *plan.Expr_P, *plan.Expr_V:
 		return varAndParamIsConst
 	default:
 		return false
 	}
+}
+
+// IsDivisionByZeroConstant checks if the expression is a division/modulo operation
+// where the divisor is a constant zero or either operand is NULL.
+// We skip constant folding for such cases to allow runtime to properly handle them.
+func IsDivisionByZeroConstant(fn *plan.Function) bool {
+	fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if fid != function.DIV && fid != function.INTEGER_DIV && fid != function.MOD {
+		return false
+	}
+	if len(fn.Args) < 2 {
+		return false
+	}
+
+	// Check if either operand is NULL
+	for _, arg := range fn.Args {
+		lit := arg.GetLit()
+		if lit != nil && lit.GetIsnull() {
+			return true
+		}
+	}
+
+	divisor := fn.Args[1]
+	lit := divisor.GetLit()
+	if lit == nil {
+		return false
+	}
+	return isZeroLiteral(lit)
+}
+
+// isZeroLiteral checks if a literal value is zero
+func isZeroLiteral(lit *plan.Literal) bool {
+	switch v := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return v.I8Val == 0
+	case *plan.Literal_I16Val:
+		return v.I16Val == 0
+	case *plan.Literal_I32Val:
+		return v.I32Val == 0
+	case *plan.Literal_I64Val:
+		return v.I64Val == 0
+	case *plan.Literal_U8Val:
+		return v.U8Val == 0
+	case *plan.Literal_U16Val:
+		return v.U16Val == 0
+	case *plan.Literal_U32Val:
+		return v.U32Val == 0
+	case *plan.Literal_U64Val:
+		return v.U64Val == 0
+	case *plan.Literal_Fval:
+		return v.Fval == 0
+	case *plan.Literal_Dval:
+		return v.Dval == 0
+	case *plan.Literal_Decimal64Val:
+		return v.Decimal64Val.A == 0
+	case *plan.Literal_Decimal128Val:
+		return v.Decimal128Val.A == 0 && v.Decimal128Val.B == 0
+	}
+	return false
 }

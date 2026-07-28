@@ -68,6 +68,11 @@ func (e *MetadataMVCCNode) Update(un *MetadataMVCCNode) {
 		e.DeltaLoc = un.DeltaLoc
 	}
 }
+
+func (e *MetadataMVCCNode) ApproxSize() int64 {
+	return 2 * int64(objectio.LocationLen)
+}
+
 func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
 	if sn, err = objectio.WriteBytes(e.MetaLoc, w); err != nil {
@@ -96,6 +101,10 @@ func (e *MetadataMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64
 
 type ObjectMVCCNode struct {
 	objectio.ObjectStats
+}
+
+func (e *ObjectMVCCNode) ApproxSize() int64 {
+	return int64(objectio.ObjectStatsLen)
 }
 
 func NewEmptyObjectMVCCNode() *ObjectMVCCNode {
@@ -214,6 +223,10 @@ func (node *ObjectNode) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
+func (node *ObjectNode) ApproxSize() int64 {
+	return int64(unsafe.Sizeof(ObjectNode{}))
+}
+
 func (node *ObjectNode) WriteTo(w io.Writer) (n int64, err error) {
 	_, err = w.Write(types.EncodeBool(&node.IsLocal))
 	if err != nil {
@@ -247,6 +260,10 @@ func (node *BlockNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += BlockNodeSize
 	return
+}
+
+func (node *BlockNode) ApproxSize() int64 {
+	return int64(BlockNodeSize)
 }
 
 func (node *BlockNode) WriteTo(w io.Writer) (n int64, err error) {

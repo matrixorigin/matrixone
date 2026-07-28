@@ -1,0 +1,1037 @@
+// Copyright 2025 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package frontend
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"go.uber.org/zap"
+)
+
+var snapConditionRegex = regexp.MustCompile(`\{[^}]+}`)
+
+func containsDataBranchTempTableName(sqlLower string) bool {
+	return containsTempTableMarker(sqlLower, "__mo_diff_del_") ||
+		containsTempTableMarker(sqlLower, "__mo_diff_ins_")
+}
+
+func dataBranchTempSQLNeedsBackExec(sqlLower string) bool {
+	return containsDataBranchTempTableName(sqlLower)
+}
+
+func containsTempTableMarker(sqlLower, marker string) bool {
+	for idx := 0; idx < len(sqlLower); idx++ {
+		switch sqlLower[idx] {
+		case '\'', '"':
+			idx = skipSQLQuotedLiteral(sqlLower, idx, sqlLower[idx]) - 1
+			continue
+		case '-':
+			if idx+1 < len(sqlLower) && sqlLower[idx+1] == '-' {
+				idx = skipSQLLineComment(sqlLower, idx+2) - 1
+				continue
+			}
+		case '#':
+			idx = skipSQLLineComment(sqlLower, idx+1) - 1
+			continue
+		case '/':
+			if idx+1 < len(sqlLower) && sqlLower[idx+1] == '*' {
+				idx = skipSQLBlockComment(sqlLower, idx+2) - 1
+				continue
+			}
+		}
+		if strings.HasPrefix(sqlLower[idx:], marker) && isSQLIdentifierBoundary(sqlLower, idx) {
+			return true
+		}
+	}
+	return false
+}
+
+func skipSQLQuotedLiteral(sql string, start int, quote byte) int {
+	for idx := start + 1; idx < len(sql); idx++ {
+		if sql[idx] == '\\' {
+			idx++
+			continue
+		}
+		if sql[idx] == quote {
+			if idx+1 < len(sql) && sql[idx+1] == quote {
+				idx++
+				continue
+			}
+			return idx + 1
+		}
+	}
+	return len(sql)
+}
+
+func skipSQLLineComment(sql string, start int) int {
+	for idx := start; idx < len(sql); idx++ {
+		if sql[idx] == '\n' || sql[idx] == '\r' {
+			return idx + 1
+		}
+	}
+	return len(sql)
+}
+
+func skipSQLBlockComment(sql string, start int) int {
+	for idx := start; idx+1 < len(sql); idx++ {
+		if sql[idx] == '*' && sql[idx+1] == '/' {
+			return idx + 2
+		}
+	}
+	return len(sql)
+}
+
+func isSQLIdentifierBoundary(sql string, idx int) bool {
+	return idx == 0 || !isSQLIdentifierChar(sql[idx-1])
+}
+
+func isSQLIdentifierChar(ch byte) bool {
+	return ch == '_' ||
+		ch >= '0' && ch <= '9' ||
+		ch >= 'a' && ch <= 'z' ||
+		ch >= 'A' && ch <= 'Z'
+}
+
+func acquireBuffer(pool *sync.Pool) *bytes.Buffer {
+	if pool == nil {
+		return &bytes.Buffer{}
+	}
+	buf := pool.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+func releaseBuffer(pool *sync.Pool, buf *bytes.Buffer) {
+	if buf == nil {
+		return
+	}
+	buf.Reset()
+	if pool != nil {
+		pool.Put(buf)
+	}
+}
+
+func newEmitter(
+	ctx context.Context, stopCh <-chan struct{}, retCh chan batchWithKind,
+) emitFunc {
+	return func(wrapped batchWithKind) (bool, error) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-stopCh:
+			return true, nil
+		default:
+		}
+
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-stopCh:
+			return true, nil
+		case retCh <- wrapped:
+			return false, nil
+		}
+	}
+}
+
+func emitBatch(
+	emit emitFunc, wrapped batchWithKind, forTombstone bool, pool *retBatchList,
+) (bool, error) {
+	stop, err := emit(wrapped)
+	if stop || err != nil {
+		pool.releaseRetBatch(wrapped.batch, forTombstone)
+		return stop, err
+	}
+	return false, nil
+}
+
+func runSql(
+	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
+	streamChan chan executor.Result, errChan chan error,
+) (sqlRet executor.Result, err error) {
+	return runSqlWithMode(ctx, ses, bh, sql, streamChan, errChan, false)
+}
+
+func runSqlWithBackExec(
+	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
+) (sqlRet executor.Result, err error) {
+	// Locking reads must use the statement execution path so an RC snapshot
+	// refresh after a lock wait can retry within the caller's transaction.
+	return runSqlWithMode(ctx, ses, bh, sql, nil, nil, true)
+}
+
+func runSqlWithMode(
+	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
+	streamChan chan executor.Result, errChan chan error, forceBackExec bool,
+) (sqlRet executor.Result, err error) {
+
+	useBackExec := forceBackExec
+	trimmedLower := strings.ToLower(strings.TrimSpace(sql))
+	if !useBackExec && strings.HasPrefix(trimmedLower, "drop database") {
+		// Internal executor does not support DROP DATABASE (IsPublishing panics).
+		useBackExec = true
+	} else if !useBackExec && dataBranchTempSQLNeedsBackExec(trimmedLower) {
+		// Branch diff/merge/pick temp tables do repeated DDL/DML in one shared txn.
+		// The internal SQL fast path skips per-statement workspace increments and can
+		// hit ErrTxnNeedRetryWithDefChanged in RC mode while these temp definitions churn.
+		useBackExec = true
+	} else if !useBackExec && strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
+		// SQLExecutor cannot resolve snapshot by name.
+		useBackExec = true
+	}
+
+	var exec executor.SQLExecutor
+	if !useBackExec {
+		rt := moruntime.ServiceRuntime(ses.service)
+		if rt == nil {
+			useBackExec = true
+		} else {
+			val, exist := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			if !exist {
+				useBackExec = true
+			} else {
+				exec = val.(executor.SQLExecutor)
+			}
+		}
+	}
+
+	if useBackExec {
+		_, realBackExec := bh.(*backExec)
+		if forceBackExec && realBackExec {
+			bh.ClearExecResultBatches()
+		}
+		// export as CSV need this
+		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
+		//for range tblStuff.def.visibleIdxes {
+		//	bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
+		//}
+		if err = bh.Exec(ctx, sql); err != nil {
+			if forceBackExec && realBackExec {
+				bh.ClearExecResultBatches()
+			}
+			return
+		}
+		if realBackExec {
+			bh.ClearExecResultSet()
+			if !forceBackExec {
+				sqlRet.Mp = ses.proc.Mp()
+				sqlRet.Batches = bh.GetExecResultBatches()
+				return
+			}
+			return copyAndClearBackExecResult(ses, bh)
+		}
+
+		rs := bh.GetExecResultSet()
+		bh.ClearExecResultSet()
+		if len(rs) == 0 || rs[0] == nil {
+			return
+		}
+		mrs, ok := rs[0].(*MysqlResultSet)
+		if !ok {
+			return sqlRet, moerr.NewInternalError(ctx, "unexpected result set type")
+		}
+		if len(mrs.Columns) == 0 {
+			return
+		}
+		var bat *batch.Batch
+		bat, _, err = convertRowsIntoBatch(ses.proc.Mp(), mrs.Columns, mrs.Data)
+		if err != nil {
+			return sqlRet, err
+		}
+		sqlRet.Mp = ses.proc.Mp()
+		sqlRet.Batches = []*batch.Batch{bat}
+		return
+	}
+
+	// we do not use the bh.Exec here, it's too slow.
+	// use internal sql instead.
+
+	backSes := bh.(*backExec).backSes
+
+	opts := executor.Options{}.
+		WithDisableIncrStatement().
+		WithTxn(backSes.GetTxnHandler().GetTxn()).
+		WithKeepTxnAlive().
+		WithTimeZone(ses.GetTimeZone()).
+		WithDatabase(ses.GetDatabaseName())
+
+	if streamChan != nil && errChan != nil {
+		opts = opts.WithStreaming(streamChan, errChan)
+	}
+
+	if sqlRet, err = exec.Exec(ctx, sql, opts); err != nil {
+		logutil.Error(
+			"DataBranch-RunSQL-Error",
+			zap.Bool("use-back-exec", useBackExec),
+			zap.String("txn", backSes.GetTxnInfo()),
+			zap.String("sql", sql),
+			zap.Error(err),
+		)
+		return sqlRet, err
+	}
+
+	return sqlRet, nil
+}
+
+func copyAndClearBackExecResult(
+	ses *Session,
+	bh BackgroundExec,
+) (sqlRet executor.Result, err error) {
+	sqlRet.Mp = ses.proc.Mp()
+	defer bh.ClearExecResultBatches()
+
+	for _, bat := range bh.GetExecResultBatches() {
+		var copied *batch.Batch
+		if copied, err = bat.Dup(sqlRet.Mp); err != nil {
+			sqlRet.Close()
+			return executor.Result{}, err
+		}
+		sqlRet.Batches = append(sqlRet.Batches, copied)
+	}
+	return sqlRet, nil
+}
+
+// shouldUseLCAReaderFallback returns true only for recoverable snapshot-read
+// failures where an engine reader based fallback can preserve LCA semantics.
+// After GC, time travelling by account/db/table name can fail if no snapshot or
+// PITR history was created for the corresponding account/db/table and the
+// historical catalog can no longer resolve that name. In that case, branch diff
+// should fall back to table-id based readers.
+//
+// ErrParseError is included because the SQL compiler emits it as
+// "table X does not exist" when getRelation() returns nil after catalog
+// name lookup fails at an old snapshot (the original ErrNoSuchTable is
+// swallowed in sql_executor_context.getRelation).
+func shouldUseLCAReaderFallback(err error) bool {
+	if err == nil {
+		return false
+	}
+	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrStaleRead) ||
+		moerr.IsMoErrCode(err, moerr.ErrBadDB) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+		moerr.IsMoErrCode(err, moerr.ErrParseError)
+}
+
+// scanSnapshotRelationByID scans a relation at an explicit snapshot using its
+// stable table ID. Both the relation handle and its ranges must be resolved at
+// that snapshot: current catalog ranges no longer contain a table-definition
+// row after the table has been altered, dropped, or recreated.
+func scanSnapshotRelationByID(
+	ctx context.Context,
+	caller string,
+	ses *Session,
+	tableID uint64,
+	snapshotTS types.TS,
+	attrs []string,
+	colTypes []types.Type,
+	filterExpr *plan.Expr,
+	scanParallelism int,
+	onBatch func(*batch.Batch) error,
+) error {
+	if len(attrs) == 0 {
+		return nil
+	}
+	if len(attrs) != len(colTypes) {
+		return moerr.NewInternalErrorNoCtxf(
+			"scanSnapshotRelationByID: attrs/colTypes length mismatch, attrs=%d colTypes=%d",
+			len(attrs),
+			len(colTypes),
+		)
+	}
+
+	storage := ses.GetTxnHandler().GetStorage()
+	baseTxnOp := ses.GetTxnHandler().GetTxn()
+	rangeTxnOp := baseTxnOp
+	if !snapshotTS.IsEmpty() {
+		rangeTxnOp = baseTxnOp.CloneSnapshotOp(snapshotTS.ToTimestamp())
+	}
+	rangeTS := types.TimestampToTS(rangeTxnOp.SnapshotTS())
+	logutil.Info(
+		"DataBranch-SnapshotScan-Start",
+		zap.String("caller", caller),
+		zap.Uint64("table-id", tableID),
+		zap.String("range-ts", rangeTS.ToString()),
+		zap.String("snapshot-ts", snapshotTS.ToString()),
+		zap.Bool("has-filter-expr", filterExpr != nil),
+		zap.Int("attr-cnt", len(attrs)),
+		zap.Int("scan-parallelism", scanParallelism),
+	)
+
+	_, _, rangeRel, err := storage.GetRelationById(ctx, rangeTxnOp, tableID)
+	if err != nil {
+		return err
+	}
+	if rangeRel == nil {
+		return moerr.NewInternalErrorNoCtxf(
+			"scanSnapshotRelationByID: cannot resolve range relation by id %d at snapshot %s",
+			tableID, rangeTS.ToString(),
+		)
+	}
+
+	rangesParam := engine.DefaultRangesParam
+	if filterExpr != nil {
+		rangesParam.BlockFilters = []*plan.Expr{filterExpr}
+	}
+
+	relData, err := rangeRel.Ranges(ctx, rangesParam)
+	if err != nil {
+		logutil.Error(
+			"DataBranch-SnapshotScan-Ranges-Error",
+			zap.String("caller", caller),
+			zap.Uint64("table-id", tableID),
+			zap.String("snapshot-ts", snapshotTS.ToString()),
+			zap.Error(err),
+		)
+		return err
+	}
+	rangeBlocks := relData.GetBlockInfoSlice()
+	rangeBlockCnt := rangeBlocks.Len()
+	logutil.Info(
+		"DataBranch-SnapshotScan-Ranges-Done",
+		zap.String("caller", caller),
+		zap.Uint64("table-id", tableID),
+		zap.String("range-ts", rangeTS.ToString()),
+		zap.String("snapshot-ts", snapshotTS.ToString()),
+		zap.Int("rel-data-type", int(relData.GetType())),
+		zap.Int("range-data-cnt", relData.DataCnt()),
+		zap.Int("range-block-cnt", rangeBlockCnt),
+	)
+
+	var (
+		readBatchCnt atomic.Int64
+		readRowCnt   atomic.Int64
+	)
+
+	if err = disttae.ScanSnapshotWithCurrentRanges(
+		ctx,
+		caller,
+		rangeRel,
+		relData,
+		snapshotTS,
+		attrs,
+		colTypes,
+		filterExpr,
+		scanParallelism,
+		ses.proc.Mp(),
+		func(readBatch *batch.Batch) error {
+			readBatchCnt.Add(1)
+			readRowCnt.Add(int64(readBatch.RowCount()))
+			return onBatch(readBatch)
+		},
+	); err != nil {
+		logutil.Error(
+			"DataBranch-SnapshotScan-Reader-Error",
+			zap.String("caller", caller),
+			zap.Uint64("table-id", tableID),
+			zap.String("range-ts", rangeTS.ToString()),
+			zap.String("snapshot-ts", snapshotTS.ToString()),
+			zap.Int("range-data-cnt", relData.DataCnt()),
+			zap.Int("range-block-cnt", rangeBlockCnt),
+			zap.Int64("read-batch-cnt", readBatchCnt.Load()),
+			zap.Int64("read-row-cnt", readRowCnt.Load()),
+			zap.Error(err),
+		)
+		return err
+	}
+	logutil.Info(
+		"DataBranch-SnapshotScan-Done",
+		zap.String("caller", caller),
+		zap.Uint64("table-id", tableID),
+		zap.String("range-ts", rangeTS.ToString()),
+		zap.String("snapshot-ts", snapshotTS.ToString()),
+		zap.Int64("read-batch-cnt", readBatchCnt.Load()),
+		zap.Int64("read-row-cnt", readRowCnt.Load()),
+	)
+	return nil
+}
+
+func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer) error {
+	if val == nil {
+		buf.WriteString("NULL")
+		return nil
+	}
+
+	var scratch [64]byte
+
+	writeInt := func(v int64) {
+		buf.Write(strconv.AppendInt(scratch[:0], v, 10))
+	}
+
+	writeUint := func(v uint64) {
+		buf.Write(strconv.AppendUint(scratch[:0], v, 10))
+	}
+
+	writeFloat := func(v float64, bitSize int) {
+		buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
+	}
+
+	writeBool := func(v bool) {
+		buf.WriteString(strconv.FormatBool(v))
+	}
+
+	switch t.Oid {
+	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
+		T_varbinary, types.T_binary, types.T_blob:
+		if t.Oid == types.T_json {
+			var strVal string
+			switch x := val.(type) {
+			case bytejson.ByteJson:
+				strVal = x.String()
+			case *bytejson.ByteJson:
+				if x == nil {
+					return moerr.NewInternalErrorNoCtx("formatValIntoString: nil *bytejson.ByteJson")
+				}
+				strVal = x.String()
+			case []byte:
+				strVal = string(x)
+			case string:
+				strVal = x
+			default:
+				return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected json type %T", val)
+			}
+			jsonLiteral := escapeJSONControlBytes([]byte(strVal))
+			if !json.Valid(jsonLiteral) {
+				return moerr.NewInternalErrorNoCtxf("formatValIntoString: invalid json input %q", strVal)
+			}
+			writeEscapedSQLString(buf, jsonLiteral)
+			return nil
+		}
+		writeBytes := writeEscapedSQLString
+		if t.Oid == types.T_binary || t.Oid == types.T_varbinary || t.Oid == types.T_blob {
+			writeBytes = writeSQLHexLiteral
+		}
+		switch x := val.(type) {
+		case []byte:
+			writeBytes(buf, x)
+		case string:
+			writeBytes(buf, []byte(x))
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
+		}
+	case types.T_datalink:
+		buf.WriteString("cast(")
+		switch x := val.(type) {
+		case []byte:
+			writeEscapedSQLString(buf, x)
+		case string:
+			writeEscapedSQLString(buf, []byte(x))
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected datalink type %T", val)
+		}
+		buf.WriteString(" as datalink)")
+	case types.T_geometry, types.T_geometry32:
+		// Geometry cells hold bare WKB; an explicitly declared SRID is carried
+		// by the expression type in Width as srid+1. Reconstruct it with the
+		// two-argument constructor. Casting to generic geometry/geometry32 would
+		// replace that type with an unspecified-SRID type before INSERT.
+		buf.WriteString("st_geomfromtext(")
+		switch x := val.(type) {
+		case []byte:
+			writeEscapedSQLString(buf, x)
+		case string:
+			writeEscapedSQLString(buf, []byte(x))
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected geometry type %T", val)
+		}
+		if t.Width > 0 {
+			buf.WriteString(", ")
+			writeInt(int64(t.Width - 1))
+		}
+		buf.WriteByte(')')
+	case types.T_uuid:
+		var uuid string
+		switch x := val.(type) {
+		case types.Uuid:
+			uuid = x.String()
+		case string:
+			uuid = x
+		case []byte:
+			uuid = string(x)
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected uuid type %T", val)
+		}
+		writeEscapedSQLString(buf, []byte(uuid))
+	case types.T_enum:
+		writeUint(uint64(val.(types.Enum)))
+	case types.T_bit:
+		writeUint(val.(uint64))
+	case types.T_timestamp:
+		buf.WriteString("'")
+		buf.WriteString(val.(types.Timestamp).String2(ses.timeZone, t.Scale))
+		buf.WriteString("'")
+	case types.T_datetime:
+		buf.WriteString("'")
+		buf.WriteString(val.(types.Datetime).String2(t.Scale))
+		buf.WriteString("'")
+	case types.T_time:
+		buf.WriteString("'")
+		buf.WriteString(val.(types.Time).String2(t.Scale))
+		buf.WriteString("'")
+	case types.T_date:
+		buf.WriteString("'")
+		buf.WriteString(val.(types.Date).String())
+		buf.WriteString("'")
+	case types.T_year:
+		buf.WriteString(val.(types.MoYear).String())
+	case types.T_decimal64:
+		buf.WriteString(val.(types.Decimal64).Format(t.Scale))
+	case types.T_decimal128:
+		buf.WriteString(val.(types.Decimal128).Format(t.Scale))
+	case types.T_decimal256:
+		buf.WriteString(val.(types.Decimal256).Format(t.Scale))
+	case types.T_bool:
+		writeBool(val.(bool))
+	case types.T_uint8:
+		writeUint(uint64(val.(uint8)))
+	case types.T_uint16:
+		writeUint(uint64(val.(uint16)))
+	case types.T_uint32:
+		writeUint(uint64(val.(uint32)))
+	case types.T_uint64:
+		writeUint(val.(uint64))
+	case types.T_int8:
+		writeInt(int64(val.(int8)))
+	case types.T_int16:
+		writeInt(int64(val.(int16)))
+	case types.T_int32:
+		writeInt(int64(val.(int32)))
+	case types.T_int64:
+		writeInt(val.(int64))
+	case types.T_float32:
+		writeFloat(float64(val.(float32)), 32)
+	case types.T_float64:
+		writeFloat(val.(float64), 64)
+	case types.T_array_float32:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[float32](val.([]float32)))
+		buf.WriteString("'")
+	case types.T_array_float64:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[float64](val.([]float64)))
+		buf.WriteString("'")
+	case types.T_array_bf16:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[types.BF16](val.([]types.BF16)))
+		buf.WriteString("'")
+	case types.T_array_float16:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[types.Float16](val.([]types.Float16)))
+		buf.WriteString("'")
+	case types.T_array_int8:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[int8](val.([]int8)))
+		buf.WriteString("'")
+	case types.T_array_uint8:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[uint8](val.([]uint8)))
+		buf.WriteString("'")
+	default:
+		return moerr.NewNotSupportedNoCtxf("formatValIntoString: not support type %v", t.Oid)
+	}
+
+	return nil
+}
+
+func writeSQLHexLiteral(buf *bytes.Buffer, b []byte) {
+	const hexDigits = "0123456789abcdef"
+
+	// Hex literals preserve every byte; SQL string escapes are not reversible for all control bytes.
+	buf.Grow(2*len(b) + 3)
+	buf.WriteString("x'")
+	for _, c := range b {
+		buf.WriteByte(hexDigits[c>>4])
+		buf.WriteByte(hexDigits[c&0x0f])
+	}
+	buf.WriteByte('\'')
+}
+
+func extractDataBranchSQLRowValue(
+	ctx context.Context,
+	ses *Session,
+	vec *vector.Vector,
+	colIdx int,
+	row []any,
+	rowIdx int,
+) error {
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIdx)) {
+		row[colIdx] = nil
+		return nil
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_datetime, types.T_timestamp, types.T_decimal64,
+		types.T_decimal128, types.T_decimal256, types.T_time:
+		row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
+		return nil
+	case types.T_array_uint8:
+		row[colIdx] = vector.GetArrayAt[uint8](vec, rowIdx)
+		return nil
+	default:
+		return extractRowFromVector(ctx, ses, vec, colIdx, row, rowIdx, false)
+	}
+}
+
+// writeEscapedSQLString emits a SQL literal that MatrixOne's default MySQL
+// scanner reads byte-for-byte. It uses the scanner's named escapes where
+// available and leaves all other control bytes raw: the scanner has no \xNN
+// escape syntax.
+func writeEscapedSQLString(buf *bytes.Buffer, b []byte) {
+	buf.WriteByte('\'')
+	for _, c := range b {
+		switch c {
+		case '\'':
+			buf.WriteString("\\'")
+		//case '"':
+		//	buf.WriteString("\\\"")
+		case '\\':
+			buf.WriteString("\\\\")
+		case 0:
+			buf.WriteString("\\0")
+		case '\b':
+			buf.WriteString("\\b")
+		case '\n':
+			buf.WriteString("\\n")
+		case '\r':
+			buf.WriteString("\\r")
+		case '\t':
+			buf.WriteString("\\t")
+		case 0x1A:
+			buf.WriteString("\\Z")
+		default:
+			buf.WriteByte(c)
+		}
+	}
+	buf.WriteByte('\'')
+}
+
+// escapeJSONControlChars converts control characters to JSON-compliant \u00XX escapes.
+func escapeJSONControlBytes(b []byte) []byte {
+	var out []byte
+	hexDigits := "0123456789abcdef"
+
+	for i, c := range b {
+		if c < 0x20 || c == 0x7f {
+			if out == nil {
+				out = make([]byte, 0, len(b)+8)
+				out = append(out, b[:i]...)
+			}
+			out = append(out, '\\', 'u', '0', '0', hexDigits[c>>4], hexDigits[c&0xf])
+			continue
+		}
+		if out != nil {
+			out = append(out, c)
+		}
+	}
+
+	if out == nil {
+		return b
+	}
+	return out
+}
+
+func compareSingleValInVector(
+	ctx context.Context,
+	ses *Session,
+	rowIdx1 int,
+	rowIdx2 int,
+	vec1 *vector.Vector,
+	vec2 *vector.Vector,
+) (int, error) {
+
+	if !vec1.GetType().Eq(*vec2.GetType()) {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"type not matched: %v <-> %v",
+			vec1.GetType().String(), vec2.GetType().String(),
+		)
+	}
+
+	if vec1.IsConst() {
+		rowIdx1 = 0
+	}
+	if vec2.IsConst() {
+		rowIdx2 = 0
+	}
+
+	// Treat NULL as equal only when both sides are NULL.
+	if vec1.IsNull(uint64(rowIdx1)) || vec2.IsNull(uint64(rowIdx2)) {
+		if vec1.IsNull(uint64(rowIdx1)) && vec2.IsNull(uint64(rowIdx2)) {
+			return 0, nil
+		}
+		return 1, nil
+	}
+
+	left, err := compareValueFromVector(vec1, rowIdx1)
+	if err != nil {
+		return 0, err
+	}
+	right, err := compareValueFromVector(vec2, rowIdx2)
+	if err != nil {
+		return 0, err
+	}
+	return compareSingleValueByType(vec1.GetType().Oid, left, right)
+}
+
+func compareTupleValueWithVector(val any, vec *vector.Vector, rowIdx int) (int, error) {
+	if vec.IsConst() {
+		rowIdx = 0
+	}
+	if val == nil || vec.IsNull(uint64(rowIdx)) {
+		if val == nil && vec.IsNull(uint64(rowIdx)) {
+			return 0, nil
+		}
+		return 1, nil
+	}
+	left, err := normalizeCompareValue(*vec.GetType(), val)
+	if err != nil {
+		return 0, err
+	}
+	right, err := compareValueFromVector(vec, rowIdx)
+	if err != nil {
+		return 0, err
+	}
+	return compareSingleValueByType(vec.GetType().Oid, left, right)
+}
+
+func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
+	switch vec.GetType().Oid {
+	case types.T_json:
+		return types.DecodeJson(vec.GetBytesAt(rowIdx)), nil
+	case types.T_bool:
+		return vector.GetFixedAtNoTypeCheck[bool](vec, rowIdx), nil
+	case types.T_bit:
+		return vector.GetFixedAtNoTypeCheck[uint64](vec, rowIdx), nil
+	case types.T_int8:
+		return vector.GetFixedAtNoTypeCheck[int8](vec, rowIdx), nil
+	case types.T_uint8:
+		return vector.GetFixedAtNoTypeCheck[uint8](vec, rowIdx), nil
+	case types.T_int16:
+		return vector.GetFixedAtNoTypeCheck[int16](vec, rowIdx), nil
+	case types.T_uint16:
+		return vector.GetFixedAtNoTypeCheck[uint16](vec, rowIdx), nil
+	case types.T_int32:
+		return vector.GetFixedAtNoTypeCheck[int32](vec, rowIdx), nil
+	case types.T_uint32:
+		return vector.GetFixedAtNoTypeCheck[uint32](vec, rowIdx), nil
+	case types.T_int64:
+		return vector.GetFixedAtNoTypeCheck[int64](vec, rowIdx), nil
+	case types.T_uint64:
+		return vector.GetFixedAtNoTypeCheck[uint64](vec, rowIdx), nil
+	case types.T_float32:
+		return vector.GetFixedAtNoTypeCheck[float32](vec, rowIdx), nil
+	case types.T_float64:
+		return vector.GetFixedAtNoTypeCheck[float64](vec, rowIdx), nil
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
+		return vec.GetBytesAt(rowIdx), nil
+	case types.T_array_float32:
+		return vector.GetArrayAt[float32](vec, rowIdx), nil
+	case types.T_array_float64:
+		return vector.GetArrayAt[float64](vec, rowIdx), nil
+	case types.T_array_bf16:
+		return vector.GetArrayAt[types.BF16](vec, rowIdx), nil
+	case types.T_array_float16:
+		return vector.GetArrayAt[types.Float16](vec, rowIdx), nil
+	case types.T_array_int8:
+		return vector.GetArrayAt[int8](vec, rowIdx), nil
+	case types.T_array_uint8:
+		return vector.GetArrayAt[uint8](vec, rowIdx), nil
+	case types.T_date:
+		return vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx), nil
+	case types.T_datetime:
+		return vector.GetFixedAtNoTypeCheck[types.Datetime](vec, rowIdx), nil
+	case types.T_time:
+		return vector.GetFixedAtNoTypeCheck[types.Time](vec, rowIdx), nil
+	case types.T_timestamp:
+		return vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, rowIdx), nil
+	case types.T_year:
+		return vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIdx), nil
+	case types.T_decimal64:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIdx), nil
+	case types.T_decimal128:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIdx), nil
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, rowIdx), nil
+	case types.T_uuid:
+		return vector.GetFixedAtNoTypeCheck[types.Uuid](vec, rowIdx), nil
+	case types.T_Rowid:
+		return vector.GetFixedAtNoTypeCheck[types.Rowid](vec, rowIdx), nil
+	case types.T_Blockid:
+		return vector.GetFixedAtNoTypeCheck[types.Blockid](vec, rowIdx), nil
+	case types.T_TS:
+		return vector.GetFixedAtNoTypeCheck[types.TS](vec, rowIdx), nil
+	case types.T_enum:
+		return vector.GetFixedAtNoTypeCheck[types.Enum](vec, rowIdx), nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("compareSingleValInVector : unsupported type %d", vec.GetType().Oid)
+	}
+}
+
+func normalizeCompareValue(typ types.Type, val any) (any, error) {
+	switch typ.Oid {
+	case types.T_json:
+		switch v := val.(type) {
+		case bytejson.ByteJson:
+			return v, nil
+		case []byte:
+			return types.DecodeJson(v), nil
+		}
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
+		switch v := val.(type) {
+		case []byte:
+			return v, nil
+		case string:
+			return []byte(v), nil
+		}
+	case types.T_array_float32:
+		switch v := val.(type) {
+		case []float32:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[float32](v), nil
+		}
+	case types.T_array_float64:
+		switch v := val.(type) {
+		case []float64:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[float64](v), nil
+		}
+	case types.T_array_bf16:
+		switch v := val.(type) {
+		case []types.BF16:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[types.BF16](v), nil
+		}
+	case types.T_array_float16:
+		switch v := val.(type) {
+		case []types.Float16:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[types.Float16](v), nil
+		}
+	case types.T_array_int8:
+		switch v := val.(type) {
+		case []int8:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[int8](v), nil
+		}
+	case types.T_array_uint8:
+		// []uint8 IS []byte in Go, and for a uint8 vector the raw payload is
+		// already the element slice — so one case covers both spellings and
+		// BytesToArray would be a no-op reinterpretation.
+		if v, ok := val.([]byte); ok {
+			return v, nil
+		}
+	case types.T_decimal256:
+		return normalizeFixedCompareValue[types.Decimal256](typ, val)
+	case types.T_Rowid:
+		return normalizeFixedCompareValue[types.Rowid](typ, val)
+	case types.T_Blockid:
+		return normalizeFixedCompareValue[types.Blockid](typ, val)
+	case types.T_TS:
+		return normalizeFixedCompareValue[types.TS](typ, val)
+	case types.T_year:
+		return normalizeFixedCompareValue[types.MoYear](typ, val)
+	case types.T_enum:
+		switch v := val.(type) {
+		case types.Enum:
+			return v, nil
+		case uint16:
+			return types.Enum(v), nil
+		}
+	default:
+		return val, nil
+	}
+	return nil, moerr.NewInternalErrorNoCtxf(
+		"unexpected compare value type %T for column type %s",
+		val, typ.String(),
+	)
+}
+
+func normalizeFixedCompareValue[T types.FixedSizeT](typ types.Type, val any) (any, error) {
+	if typed, ok := val.(T); ok {
+		return typed, nil
+	}
+	if v, ok := val.([]byte); ok {
+		if len(v) == 0 {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"empty raw compare value for column type %s",
+				typ.String(),
+			)
+		}
+		return types.DecodeFixed[T](v), nil
+	}
+	return nil, moerr.NewInternalErrorNoCtxf(
+		"unexpected compare value type %T for column type %s",
+		val, typ.String(),
+	)
+}
+
+func compareSingleValueByType(typ types.T, left any, right any) (int, error) {
+	if left == nil || right == nil {
+		return types.CompareValue(left, right), nil
+	}
+	if reflect.TypeOf(left) != reflect.TypeOf(right) {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"compareSingleValInVector : unsupported or mismatched type %d (%T <-> %T)",
+			typ, left, right,
+		)
+	}
+
+	switch left.(type) {
+	case bool,
+		uint64,
+		int8, int16, int32, int64,
+		uint8, uint16, uint32,
+		float32, float64,
+		types.Decimal64, types.Decimal128, types.Decimal256,
+		types.Date, types.Time, types.Timestamp, types.Datetime, types.MoYear,
+		types.Uuid, types.TS, types.Blockid, types.Rowid,
+		[]byte, bytejson.ByteJson,
+		[]float32, []float64,
+		// narrow vector element slices — types.CompareValue handles these too.
+		// []uint8 is omitted deliberately: it is identical to []byte in Go and
+		// is already accepted above.
+		[]types.BF16, []types.Float16, []int8,
+		types.Enum, string:
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"compareSingleValInVector : unsupported or mismatched type %d (%T <-> %T)",
+			typ, left, right,
+		)
+	}
+	return types.CompareValue(left, right), nil
+}

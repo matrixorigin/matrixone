@@ -1,0 +1,805 @@
+drop database if exists temp_index;
+create database temp_index;
+use temp_index;
+create temporary table temp_idx1 (
+id int,
+name varchar(50),
+age int,
+index idx_name (name)
+);
+insert into temp_idx1 values (1, 'alice', 25);
+insert into temp_idx1 values (2, 'bob', 30);
+insert into temp_idx1 values (3, 'charlie', 25);
+select * from temp_idx1 where name = 'bob';
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+2  ¦  bob  ¦  30
+show index from temp_idx1;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_idx1  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name
+drop table temp_idx1;
+create temporary table temp_idx2 (
+id int,
+name varchar(50),
+age int
+);
+create index idx_name on temp_idx2(name);
+create index idx_age on temp_idx2(age);
+insert into temp_idx2 values (1, 'alice', 25);
+insert into temp_idx2 values (2, 'bob', 30);
+insert into temp_idx2 values (3, 'charlie', 25);
+select * from temp_idx2 where name = 'alice';
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  alice  ¦  25
+select * from temp_idx2 where age = 25;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  alice  ¦  25  𝄀
+3  ¦  charlie  ¦  25
+show index from temp_idx2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_idx2  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_idx2  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+drop table temp_idx2;
+create temporary table temp_unique (
+id int,
+email varchar(100)
+);
+create unique index idx_email on temp_unique(email);
+insert into temp_unique values (1, 'alice@example.com');
+insert into temp_unique values (2, 'bob@example.com');
+insert into temp_unique values (3, 'alice@example.com');
+-- @regex("Duplicate entry", true)
+Duplicate entry 'alice@example.com' for key 'email'
+select * from temp_unique;
+➤ id[4,32,0]  ¦  email[12,-1,0]  𝄀
+1  ¦  alice@example.com  𝄀
+2  ¦  bob@example.com
+drop table temp_unique;
+create temporary table temp_unique2 (
+id int,
+username varchar(50),
+unique index idx_username (username)
+);
+insert into temp_unique2 values (1, 'user1');
+insert into temp_unique2 values (2, 'user2');
+insert into temp_unique2 values (3, 'user1');  -- 应该失败
+-- @regex("Duplicate entry", true)
+Duplicate entry 'user1' for key 'username'
+select * from temp_unique2;
+➤ id[4,32,0]  ¦  username[12,-1,0]  𝄀
+1  ¦  user1  𝄀
+2  ¦  user2
+drop table temp_unique2;
+create temporary table temp_composite (
+id int,
+first_name varchar(50),
+last_name varchar(50),
+age int
+);
+create index idx_name on temp_composite(first_name, last_name);
+create index idx_name_age on temp_composite(first_name, last_name, age);
+insert into temp_composite values (1, 'john', 'doe', 30);
+insert into temp_composite values (2, 'jane', 'smith', 25);
+insert into temp_composite values (3, 'john', 'smith', 35);
+select * from temp_composite where first_name = 'john';
+➤ id[4,32,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  john  ¦  doe  ¦  30  𝄀
+3  ¦  john  ¦  smith  ¦  35
+select * from temp_composite where first_name = 'john' and last_name = 'doe';
+➤ id[4,32,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  john  ¦  doe  ¦  30
+select * from temp_composite where first_name = 'john' and last_name = 'smith' and age = 35;
+➤ id[4,32,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  age[4,32,0]  𝄀
+3  ¦  john  ¦  smith  ¦  35
+show index from temp_composite;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_composite  ¦  1  ¦  idx_name  ¦  1  ¦  first_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  first_name  𝄀
+temp_composite  ¦  1  ¦  idx_name  ¦  2  ¦  last_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  last_name  𝄀
+temp_composite  ¦  1  ¦  idx_name_age  ¦  1  ¦  first_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  first_name  𝄀
+temp_composite  ¦  1  ¦  idx_name_age  ¦  2  ¦  last_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  last_name  𝄀
+temp_composite  ¦  1  ¦  idx_name_age  ¦  3  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+drop table temp_composite;
+create temporary table temp_alter_idx (
+id int,
+name varchar(50),
+email varchar(100),
+age int
+);
+insert into temp_alter_idx values (1, 'alice', 'alice@example.com', 25);
+insert into temp_alter_idx values (2, 'bob', 'bob@example.com', 30);
+alter table temp_alter_idx add index idx_name (name);
+alter table temp_alter_idx add unique index idx_email (email);
+alter table temp_alter_idx add index idx_name_age (name, age);
+show index from temp_alter_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_alter_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_alter_idx  ¦  0  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email  𝄀
+temp_alter_idx  ¦  1  ¦  idx_name_age  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_alter_idx  ¦  1  ¦  idx_name_age  ¦  2  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+select * from temp_alter_idx where name = 'alice';
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  email[12,-1,0]  ¦  age[4,32,0]  𝄀
+1  ¦  alice  ¦  alice@example.com  ¦  25
+select * from temp_alter_idx where email = 'bob@example.com';
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  email[12,-1,0]  ¦  age[4,32,0]  𝄀
+2  ¦  bob  ¦  bob@example.com  ¦  30
+drop table temp_alter_idx;
+create temporary table temp_drop_idx (
+id int,
+name varchar(50),
+age int,
+index idx_name (name),
+index idx_age (age)
+);
+insert into temp_drop_idx values (1, 'alice', 25);
+insert into temp_drop_idx values (2, 'bob', 30);
+show index from temp_drop_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_drop_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_drop_idx  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+alter table temp_drop_idx drop index idx_name;
+show index from temp_drop_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_drop_idx  ¦  1  ¦  idx_age  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+alter table temp_drop_idx drop index idx_age;
+show index from temp_drop_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]
+drop table temp_drop_idx;
+create temporary table temp_drop_idx2 (
+id int,
+name varchar(50),
+email varchar(100)
+);
+create index idx_name on temp_drop_idx2(name);
+create index idx_email on temp_drop_idx2(email);
+show index from temp_drop_idx2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_drop_idx2  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+temp_drop_idx2  ¦  1  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email
+drop index idx_name on temp_drop_idx2;
+show index from temp_drop_idx2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_drop_idx2  ¦  1  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email
+drop index idx_email on temp_drop_idx2;
+show index from temp_drop_idx2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]
+drop table temp_drop_idx2;
+create temporary table temp_fulltext (
+id int primary key,
+title varchar(100),
+content text
+);
+create fulltext index idx_ft_title on temp_fulltext(title);
+create fulltext index idx_ft_content on temp_fulltext(content);
+insert into temp_fulltext values (1, 'introduction to matrixone', 'matrixone is a hyperconverged database');
+insert into temp_fulltext values (2, 'temporary tables guide', 'learn how to use temporary tables');
+insert into temp_fulltext values (3, 'index management', 'creating and managing indexes in matrixone');
+show index from temp_fulltext;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_fulltext  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_fulltext  ¦  1  ¦  idx_ft_title  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
+temp_fulltext  ¦  1  ¦  idx_ft_content  ¦  1  ¦  content  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  content
+drop table temp_fulltext;
+create temporary table temp_fulltext2 (
+id int primary key,
+title varchar(100),
+body text
+);
+create fulltext index idx_ft_multi on temp_fulltext2(title, body);
+insert into temp_fulltext2 values (1, 'database tutorial', 'learn about databases and sql');
+insert into temp_fulltext2 values (2, 'matrixone features', 'explore the features of matrixone');
+show index from temp_fulltext2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_fulltext2  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_fulltext2  ¦  1  ¦  idx_ft_multi  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
+temp_fulltext2  ¦  1  ¦  idx_ft_multi  ¦  2  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body
+drop table temp_fulltext2;
+set experimental_ivf_index = 1;
+create temporary table temp_vector (
+id int primary key,
+embedding vecf32(3)
+);
+create index idx_ivf using ivfflat on temp_vector(embedding) lists=1 op_type "vector_l2_ops";
+insert into temp_vector values (1, '[1.0, 2.0, 3.0]');
+insert into temp_vector values (2, '[4.0, 5.0, 6.0]');
+insert into temp_vector values (3, '[7.0, 8.0, 9.0]');
+show index from temp_vector;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_vector  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_vector  ¦  1  ¦  idx_ivf  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"1","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
+drop table temp_vector;
+create temporary table temp_vector2 (
+id int primary key,
+vec128 vecf32(128)
+);
+create index idx_vec128 using ivfflat on temp_vector2(vec128) lists=2 op_type "vector_l2_ops";
+show index from temp_vector2;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_vector2  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_vector2  ¦  1  ¦  idx_vec128  ¦  1  ¦  vec128  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  vec128
+drop table temp_vector2;
+set experimental_ivf_index = 0;
+create temporary table temp_multi_idx (
+id int primary key,
+username varchar(50),
+email varchar(100),
+age int,
+bio text,
+created_at timestamp
+);
+create index idx_username on temp_multi_idx(username);
+create unique index idx_email on temp_multi_idx(email);
+create index idx_age_created on temp_multi_idx(age, created_at);
+create fulltext index idx_bio on temp_multi_idx(bio);
+show index from temp_multi_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_multi_idx  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_multi_idx  ¦  1  ¦  idx_username  ¦  1  ¦  username  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  username  𝄀
+temp_multi_idx  ¦  0  ¦  idx_email  ¦  1  ¦  email  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  email  𝄀
+temp_multi_idx  ¦  1  ¦  idx_age_created  ¦  1  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age  𝄀
+temp_multi_idx  ¦  1  ¦  idx_age_created  ¦  2  ¦  created_at  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  created_at  𝄀
+temp_multi_idx  ¦  1  ¦  idx_bio  ¦  1  ¦  bio  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  bio
+insert into temp_multi_idx values
+(1, 'alice', 'alice@example.com', 25, 'software engineer', '2024-01-01 10:00:00'),
+(2, 'bob', 'bob@example.com', 30, 'data scientist', '2024-01-02 11:00:00'),
+(3, 'charlie', 'charlie@example.com', 25, 'product manager', '2024-01-03 12:00:00');
+select * from temp_multi_idx where username = 'alice';
+➤ id[4,32,0]  ¦  username[12,-1,0]  ¦  email[12,-1,0]  ¦  age[4,32,0]  ¦  bio[12,0,0]  ¦  created_at[93,64,0]  𝄀
+1  ¦  alice  ¦  alice@example.com  ¦  25  ¦  software engineer  ¦  2024-01-01 10:00:00
+select * from temp_multi_idx where email = 'bob@example.com';
+➤ id[4,32,0]  ¦  username[12,-1,0]  ¦  email[12,-1,0]  ¦  age[4,32,0]  ¦  bio[12,0,0]  ¦  created_at[93,64,0]  𝄀
+2  ¦  bob  ¦  bob@example.com  ¦  30  ¦  data scientist  ¦  2024-01-02 11:00:00
+select * from temp_multi_idx where age = 25;
+➤ id[4,32,0]  ¦  username[12,-1,0]  ¦  email[12,-1,0]  ¦  age[4,32,0]  ¦  bio[12,0,0]  ¦  created_at[93,64,0]  𝄀
+1  ¦  alice  ¦  alice@example.com  ¦  25  ¦  software engineer  ¦  2024-01-01 10:00:00  𝄀
+3  ¦  charlie  ¦  charlie@example.com  ¦  25  ¦  product manager  ¦  2024-01-03 12:00:00
+drop table temp_multi_idx;
+create temporary table temp_empty_idx (
+id int,
+name varchar(50)
+);
+create index idx_name on temp_empty_idx(name);
+show index from temp_empty_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_empty_idx  ¦  1  ¦  idx_name  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name
+insert into temp_empty_idx values (1, 'test');
+select * from temp_empty_idx where name = 'test';
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  test
+drop table temp_empty_idx;
+create temporary table temp_data_idx (
+id int,
+value varchar(50)
+);
+insert into temp_data_idx values (1, 'value1');
+insert into temp_data_idx values (2, 'value2');
+insert into temp_data_idx values (3, 'value3');
+create index idx_value on temp_data_idx(value);
+show index from temp_data_idx;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_data_idx  ¦  1  ¦  idx_value  ¦  1  ¦  value  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  value
+select * from temp_data_idx where value = 'value2';
+➤ id[4,32,0]  ¦  value[12,-1,0]  𝄀
+2  ¦  value2
+drop table temp_data_idx;
+create temporary table temp_no_idx (
+id int,
+name varchar(50)
+);
+drop index idx_nonexistent on temp_no_idx;  -- 应该失败
+internal error: not found index: idx_nonexistent
+drop table temp_no_idx;
+use temp_index;
+CREATE TEMPORARY TABLE temp_ft_basic (
+id INT PRIMARY KEY AUTO_INCREMENT,
+title VARCHAR(200),
+content TEXT,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE FULLTEXT INDEX idx_ft_title ON temp_ft_basic(title);
+INSERT INTO temp_ft_basic (title, content) VALUES
+('Introduction to MatrixOne Database', 'MatrixOne is a hyperconverged cloud and edge native database'),
+('Temporary Tables in MatrixOne', 'Learn how to create and manage temporary tables effectively'),
+('Full-Text Search Tutorial', 'Understanding full-text search capabilities in modern databases'),
+('Vector Database Features', 'Exploring vector search and similarity matching'),
+('MatrixOne Performance Optimization', 'Tips and tricks for optimizing query performance');
+SHOW INDEX FROM temp_ft_basic;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_ft_basic  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_ft_basic  ¦  1  ¦  idx_ft_title  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title
+SELECT id, title FROM temp_ft_basic
+WHERE MATCH(title) AGAINST('MatrixOne' IN NATURAL LANGUAGE MODE);
+➤ id[4,32,0]  ¦  title[12,-1,0]  𝄀
+1  ¦  Introduction to MatrixOne Database  𝄀
+2  ¦  Temporary Tables in MatrixOne  𝄀
+5  ¦  MatrixOne Performance Optimization
+DROP TABLE temp_ft_basic;
+CREATE TEMPORARY TABLE temp_ft_multi_column (
+doc_id INT PRIMARY KEY AUTO_INCREMENT,
+document_code VARCHAR(50) UNIQUE,
+title VARCHAR(200) NOT NULL,
+abstract TEXT,
+body TEXT,
+author VARCHAR(100),
+category VARCHAR(50),
+publish_date DATE,
+INDEX idx_category (category),
+INDEX idx_author (author)
+);
+CREATE FULLTEXT INDEX idx_ft_title_abstract ON temp_ft_multi_column(title, abstract);
+CREATE FULLTEXT INDEX idx_ft_body ON temp_ft_multi_column(body);
+INSERT INTO temp_ft_multi_column (document_code, title, abstract, body, author, category, publish_date) VALUES
+('DOC001', 'Advanced Database Systems',
+'This paper discusses advanced concepts in modern database systems including HTAP capabilities',
+'Database systems have evolved significantly. HTAP (Hybrid Transactional/Analytical Processing) represents a major advancement. MatrixOne implements HTAP architecture efficiently.',
+'John Smith', 'Database', '2024-01-15'),
+('DOC002', 'Cloud Native Architecture Patterns',
+'Exploring cloud native design patterns for scalable applications',
+'Cloud native applications require specific architectural patterns. Microservices, containers, and orchestration are key components. MatrixOne supports cloud native deployments.',
+'Jane Doe', 'Cloud', '2024-01-20'),
+('DOC003', 'Machine Learning in Databases',
+'Integration of machine learning capabilities within database systems',
+'Modern databases are incorporating ML features. Vector search enables similarity matching. MatrixOne provides vector index support for ML workloads.',
+'Bob Johnson', 'AI/ML', '2024-02-01');
+SHOW INDEX FROM temp_ft_multi_column;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_ft_multi_column  ¦  0  ¦  document_code  ¦  1  ¦  document_code  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  document_code  𝄀
+temp_ft_multi_column  ¦  1  ¦  idx_category  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_ft_multi_column  ¦  1  ¦  idx_author  ¦  1  ¦  author  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  author  𝄀
+temp_ft_multi_column  ¦  0  ¦  PRIMARY  ¦  1  ¦  doc_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  doc_id  𝄀
+temp_ft_multi_column  ¦  1  ¦  idx_ft_title_abstract  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
+temp_ft_multi_column  ¦  1  ¦  idx_ft_title_abstract  ¦  2  ¦  abstract  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  abstract  𝄀
+temp_ft_multi_column  ¦  1  ¦  idx_ft_body  ¦  1  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body
+SELECT doc_id, title, author FROM temp_ft_multi_column
+WHERE MATCH(title, abstract) AGAINST('database systems' IN NATURAL LANGUAGE MODE);
+➤ doc_id[4,32,0]  ¦  title[12,-1,0]  ¦  author[12,-1,0]  𝄀
+1  ¦  Advanced Database Systems  ¦  John Smith  𝄀
+3  ¦  Machine Learning in Databases  ¦  Bob Johnson
+SELECT doc_id, title FROM temp_ft_multi_column
+WHERE MATCH(body) AGAINST('MatrixOne' IN NATURAL LANGUAGE MODE);
+➤ doc_id[4,32,0]  ¦  title[12,-1,0]  𝄀
+1  ¦  Advanced Database Systems  𝄀
+2  ¦  Cloud Native Architecture Patterns  𝄀
+3  ¦  Machine Learning in Databases
+DROP TABLE temp_ft_multi_column;
+CREATE TEMPORARY TABLE temp_ft_composite_pk (
+article_id INT,
+language_code CHAR(2),
+title VARCHAR(300),
+subtitle VARCHAR(300),
+content TEXT,
+tags TEXT,
+author_id INT,
+category_id INT,
+view_count INT DEFAULT 0,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+PRIMARY KEY (article_id, language_code),
+INDEX idx_author (author_id),
+INDEX idx_category (category_id),
+INDEX idx_views (view_count),
+INDEX idx_created (created_at),
+INDEX idx_author_category (author_id, category_id)
+);
+CREATE FULLTEXT INDEX idx_ft_title_subtitle ON temp_ft_composite_pk(title, subtitle);
+CREATE FULLTEXT INDEX idx_ft_content ON temp_ft_composite_pk(content);
+CREATE FULLTEXT INDEX idx_ft_tags ON temp_ft_composite_pk(tags);
+INSERT INTO temp_ft_composite_pk (article_id, language_code, title, subtitle, content, tags, author_id, category_id, view_count) VALUES
+(1, 'en', 'Getting Started with MatrixOne', 'A comprehensive guide for beginners',
+'MatrixOne is a powerful hyperconverged database. This guide covers installation, configuration, and basic operations.',
+'database, tutorial, beginner, matrixone, guide', 101, 1, 1500),
+(1, 'zh', 'MatrixOne 入门指南', '面向初学者的综合指南',
+'MatrixOne 是一个强大的超融合数据库。本指南涵盖安装、配置和基本操作。',
+'数据库, 教程, 初学者, matrixone, 指南', 101, 1, 800),
+(2, 'en', 'Advanced Query Optimization', 'Techniques for improving query performance',
+'Query optimization is crucial for database performance. Learn about indexes, execution plans, and query rewriting.',
+'performance, optimization, query, advanced, indexes', 102, 2, 2300),
+(3, 'en', 'Temporary Tables Deep Dive', 'Understanding temporary table internals',
+'Temporary tables provide session-level data storage. They are automatically cleaned up when the session ends.',
+'temporary, tables, session, storage, cleanup', 103, 1, 950);
+SHOW INDEX FROM temp_ft_composite_pk;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_author  ¦  1  ¦  author_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  author_id  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_category  ¦  1  ¦  category_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category_id  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_views  ¦  1  ¦  view_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  view_count  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_created  ¦  1  ¦  created_at  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  created_at  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_author_category  ¦  1  ¦  author_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  author_id  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_author_category  ¦  2  ¦  category_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category_id  𝄀
+temp_ft_composite_pk  ¦  0  ¦  PRIMARY  ¦  1  ¦  article_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  article_id  𝄀
+temp_ft_composite_pk  ¦  0  ¦  PRIMARY  ¦  2  ¦  language_code  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  language_code  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_ft_title_subtitle  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_ft_title_subtitle  ¦  2  ¦  subtitle  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  subtitle  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_ft_content  ¦  1  ¦  content  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  content  𝄀
+temp_ft_composite_pk  ¦  1  ¦  idx_ft_tags  ¦  1  ¦  tags  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  tags
+SELECT article_id, language_code, title, view_count
+FROM temp_ft_composite_pk
+WHERE MATCH(title, subtitle) AGAINST('MatrixOne guide' IN NATURAL LANGUAGE MODE)
+ORDER BY view_count DESC;
+➤ article_id[4,32,0]  ¦  language_code[1,2,0]  ¦  title[12,-1,0]  ¦  view_count[4,32,0]
+SELECT article_id, language_code, title, author_id
+FROM temp_ft_composite_pk
+WHERE MATCH(content) AGAINST('database performance' IN NATURAL LANGUAGE MODE)
+AND author_id IN (101, 102)
+AND view_count > 1000;
+➤ article_id[4,32,0]  ¦  language_code[1,2,0]  ¦  title[12,-1,0]  ¦  author_id[4,32,0]  𝄀
+2  ¦  en  ¦  Advanced Query Optimization  ¦  102
+SELECT article_id, title, tags
+FROM temp_ft_composite_pk
+WHERE MATCH(tags) AGAINST('optimization indexes' IN NATURAL LANGUAGE MODE);
+➤ article_id[4,32,0]  ¦  title[12,-1,0]  ¦  tags[12,0,0]
+DROP TABLE temp_ft_composite_pk;
+CREATE TEMPORARY TABLE temp_ft_complex_indexes (
+product_id INT PRIMARY KEY AUTO_INCREMENT,
+sku VARCHAR(50) UNIQUE NOT NULL,
+barcode VARCHAR(100) UNIQUE,
+product_name VARCHAR(200) NOT NULL,
+description TEXT,
+specifications TEXT,
+search_keywords TEXT,
+brand VARCHAR(100),
+category VARCHAR(100),
+subcategory VARCHAR(100),
+price DECIMAL(10,2),
+stock_quantity INT,
+supplier_id INT,
+created_by INT,
+UNIQUE INDEX idx_sku_brand (sku, brand),
+INDEX idx_category_subcategory (category, subcategory),
+INDEX idx_price_stock (price, stock_quantity),
+INDEX idx_supplier (supplier_id),
+INDEX idx_brand_category (brand, category)
+);
+CREATE FULLTEXT INDEX idx_ft_name_desc ON temp_ft_complex_indexes(product_name, description);
+CREATE FULLTEXT INDEX idx_ft_specs ON temp_ft_complex_indexes(specifications);
+CREATE FULLTEXT INDEX idx_ft_keywords ON temp_ft_complex_indexes(search_keywords);
+INSERT INTO temp_ft_complex_indexes (sku, barcode, product_name, description, specifications, search_keywords, brand, category, subcategory, price, stock_quantity, supplier_id, created_by) VALUES
+('SKU-LAPTOP-001', '1234567890123', 'Professional Laptop 15.6 inch',
+'High-performance laptop with Intel i7 processor, 16GB RAM, and 512GB SSD. Perfect for developers and content creators.',
+'CPU: Intel Core i7-11800H, RAM: 16GB DDR4, Storage: 512GB NVMe SSD, Display: 15.6" FHD IPS, GPU: NVIDIA GTX 1650',
+'laptop, computer, notebook, intel, i7, gaming, professional, development, programming',
+'TechBrand', 'Electronics', 'Computers', 1299.99, 50, 1001, 1),
+('SKU-MOUSE-001', '1234567890124', 'Wireless Gaming Mouse RGB',
+'Ergonomic wireless gaming mouse with customizable RGB lighting and programmable buttons.',
+'Sensor: 16000 DPI, Buttons: 8 programmable, Battery: 70 hours, Connectivity: 2.4GHz wireless + Bluetooth',
+'mouse, gaming, wireless, rgb, ergonomic, programmable, peripheral',
+'GameGear', 'Electronics', 'Accessories', 79.99, 200, 1002, 1),
+('SKU-MONITOR-001', '1234567890125', '27 inch 4K UHD Monitor',
+'Professional 4K monitor with HDR support and wide color gamut for photo and video editing.',
+'Resolution: 3840x2160, Panel: IPS, Refresh Rate: 60Hz, HDR: HDR10, Color: 99% sRGB, Ports: HDMI 2.0, DisplayPort 1.4',
+'monitor, display, 4k, uhd, hdr, ips, professional, editing, design',
+'ViewPro', 'Electronics', 'Displays', 499.99, 30, 1003, 2);
+SHOW INDEX FROM temp_ft_complex_indexes;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_ft_complex_indexes  ¦  0  ¦  sku  ¦  1  ¦  sku  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  sku  𝄀
+temp_ft_complex_indexes  ¦  0  ¦  barcode  ¦  1  ¦  barcode  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  barcode  𝄀
+temp_ft_complex_indexes  ¦  0  ¦  idx_sku_brand  ¦  1  ¦  sku  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  sku  𝄀
+temp_ft_complex_indexes  ¦  0  ¦  idx_sku_brand  ¦  2  ¦  brand  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  brand  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_category_subcategory  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_category_subcategory  ¦  2  ¦  subcategory  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  subcategory  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_price_stock  ¦  1  ¦  price  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  price  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_price_stock  ¦  2  ¦  stock_quantity  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  stock_quantity  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_supplier  ¦  1  ¦  supplier_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  supplier_id  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_brand_category  ¦  1  ¦  brand  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  brand  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_brand_category  ¦  2  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_ft_complex_indexes  ¦  0  ¦  PRIMARY  ¦  1  ¦  product_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  product_id  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_ft_name_desc  ¦  1  ¦  product_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  product_name  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_ft_name_desc  ¦  2  ¦  description  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  description  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_ft_specs  ¦  1  ¦  specifications  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  specifications  𝄀
+temp_ft_complex_indexes  ¦  1  ¦  idx_ft_keywords  ¦  1  ¦  search_keywords  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  search_keywords
+SELECT product_id, sku, product_name, brand, price
+FROM temp_ft_complex_indexes
+WHERE MATCH(product_name, description) AGAINST('professional laptop' IN NATURAL LANGUAGE MODE)
+AND price BETWEEN 1000 AND 1500
+AND stock_quantity > 20;
+➤ product_id[4,32,0]  ¦  sku[12,-1,0]  ¦  product_name[12,-1,0]  ¦  brand[12,-1,0]  ¦  price[3,10,2]  𝄀
+1  ¦  SKU-LAPTOP-001  ¦  Professional Laptop 15.6 inch  ¦  TechBrand  ¦  1299.99
+SELECT product_id, product_name, specifications
+FROM temp_ft_complex_indexes
+WHERE MATCH(specifications) AGAINST('16GB SSD' IN NATURAL LANGUAGE MODE);
+➤ product_id[4,32,0]  ¦  product_name[12,-1,0]  ¦  specifications[12,0,0]
+SELECT product_id, product_name, category, subcategory, price
+FROM temp_ft_complex_indexes
+WHERE MATCH(search_keywords) AGAINST('gaming rgb' IN NATURAL LANGUAGE MODE)
+AND category = 'Electronics'
+ORDER BY price DESC;
+➤ product_id[4,32,0]  ¦  product_name[12,-1,0]  ¦  category[12,-1,0]  ¦  subcategory[12,-1,0]  ¦  price[3,10,2]
+SELECT product_id, product_name, brand, price
+FROM temp_ft_complex_indexes
+WHERE (MATCH(product_name, description) AGAINST('monitor 4k' IN NATURAL LANGUAGE MODE)
+OR MATCH(specifications) AGAINST('4K HDR' IN NATURAL LANGUAGE MODE))
+AND brand IN ('ViewPro', 'TechBrand');
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+DROP TABLE temp_ft_complex_indexes;
+SET experimental_ivf_index = 1;
+CREATE TEMPORARY TABLE temp_vec_basic (
+id INT PRIMARY KEY AUTO_INCREMENT,
+item_name VARCHAR(100),
+embedding vecf32(3),
+category VARCHAR(50),
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+INDEX idx_category (category)
+);
+CREATE INDEX idx_vec_embedding USING ivfflat
+ON temp_vec_basic(embedding) lists=2 op_type "vector_l2_ops";
+INSERT INTO temp_vec_basic (item_name, embedding, category) VALUES
+('Item A', '[1.0, 2.0, 3.0]', 'Category1'),
+('Item B', '[4.0, 5.0, 6.0]', 'Category1'),
+('Item C', '[7.0, 8.0, 9.0]', 'Category2'),
+('Item D', '[1.5, 2.5, 3.5]', 'Category2'),
+('Item E', '[10.0, 11.0, 12.0]', 'Category3');
+SHOW INDEX FROM temp_vec_basic;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_vec_basic  ¦  1  ¦  idx_category  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_vec_basic  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+temp_vec_basic  ¦  1  ¦  idx_vec_embedding  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
+SELECT id, item_name, category, embedding
+FROM temp_vec_basic
+ORDER BY l2_distance(embedding, '[1.0, 2.0, 3.0]')
+LIMIT 3;
+➤ id[4,32,0]  ¦  item_name[12,-1,0]  ¦  category[12,-1,0]  ¦  embedding[12,3,0]  𝄀
+1  ¦  Item A  ¦  Category1  ¦  [1, 2, 3]  𝄀
+4  ¦  Item D  ¦  Category2  ¦  [1.5, 2.5, 3.5]  𝄀
+2  ¦  Item B  ¦  Category1  ¦  [4, 5, 6]
+DROP TABLE temp_vec_basic;
+CREATE TEMPORARY TABLE temp_vec_multi_vectors (
+user_id INT,
+session_id INT,
+user_profile_vec vecf32(8),
+behavior_vec vecf32(8),
+preference_vec vecf32(8),
+user_name VARCHAR(100),
+user_type VARCHAR(50),
+registration_date DATE,
+last_active TIMESTAMP,
+total_interactions INT DEFAULT 0,
+PRIMARY KEY (user_id, session_id),
+INDEX idx_user_type (user_type),
+INDEX idx_registration (registration_date),
+INDEX idx_interactions (total_interactions)
+);
+CREATE INDEX idx_vec_profile USING ivfflat
+ON temp_vec_multi_vectors(user_profile_vec) lists=3 op_type "vector_l2_ops";
+CREATE INDEX idx_vec_behavior USING ivfflat
+ON temp_vec_multi_vectors(behavior_vec) lists=3 op_type "vector_l2_ops";
+CREATE INDEX idx_vec_preference USING ivfflat
+ON temp_vec_multi_vectors(preference_vec) lists=3 op_type "vector_l2_ops";
+INSERT INTO temp_vec_multi_vectors (user_id, session_id, user_profile_vec, behavior_vec, preference_vec, user_name, user_type, registration_date, total_interactions) VALUES
+(1001, 1, '[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]', '[0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]', '[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]', 'Alice Johnson', 'Premium', '2023-01-15', 1250),
+(1001, 2, '[0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85]', '[0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05]', '[0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6, 0.6]', 'Alice Johnson', 'Premium', '2023-01-15', 1250),
+(1002, 1, '[0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]', '[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]', '[0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4]', 'Bob Smith', 'Standard', '2023-03-20', 850),
+(1003, 1, '[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]', '[1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3]', '[0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7]', 'Charlie Brown', 'Premium', '2023-02-10', 2100),
+(1004, 1, '[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]', '[0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]', '[0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]', 'Diana Prince', 'Standard', '2023-04-05', 650);
+SHOW INDEX FROM temp_vec_multi_vectors;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_vec_multi_vectors  ¦  1  ¦  idx_user_type  ¦  1  ¦  user_type  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  user_type  𝄀
+temp_vec_multi_vectors  ¦  1  ¦  idx_registration  ¦  1  ¦  registration_date  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  registration_date  𝄀
+temp_vec_multi_vectors  ¦  1  ¦  idx_interactions  ¦  1  ¦  total_interactions  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  total_interactions  𝄀
+temp_vec_multi_vectors  ¦  0  ¦  PRIMARY  ¦  1  ¦  user_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  user_id  𝄀
+temp_vec_multi_vectors  ¦  0  ¦  PRIMARY  ¦  2  ¦  session_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  session_id  𝄀
+temp_vec_multi_vectors  ¦  1  ¦  idx_vec_profile  ¦  1  ¦  user_profile_vec  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  user_profile_vec  𝄀
+temp_vec_multi_vectors  ¦  1  ¦  idx_vec_behavior  ¦  1  ¦  behavior_vec  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  behavior_vec  𝄀
+temp_vec_multi_vectors  ¦  1  ¦  idx_vec_preference  ¦  1  ¦  preference_vec  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  preference_vec
+SELECT user_id, session_id, user_name, user_type
+FROM temp_vec_multi_vectors
+ORDER BY l2_distance(user_profile_vec, '[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]')
+LIMIT 3;
+➤ user_id[4,32,0]  ¦  session_id[4,32,0]  ¦  user_name[12,-1,0]  ¦  user_type[12,-1,0]  𝄀
+1001  ¦  1  ¦  Alice Johnson  ¦  Premium  𝄀
+1001  ¦  2  ¦  Alice Johnson  ¦  Premium  𝄀
+1004  ¦  1  ¦  Diana Prince  ¦  Standard
+SELECT user_id, user_name, user_type, total_interactions
+FROM temp_vec_multi_vectors
+WHERE user_type = 'Premium'
+ORDER BY l2_distance(behavior_vec, '[0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]')
+LIMIT 2;
+➤ user_id[4,32,0]  ¦  user_name[12,-1,0]  ¦  user_type[12,-1,0]  ¦  total_interactions[4,32,0]  𝄀
+1001  ¦  Alice Johnson  ¦  Premium  ¦  1250  𝄀
+1001  ¦  Alice Johnson  ¦  Premium  ¦  1250
+SELECT user_id, session_id, user_name, registration_date
+FROM temp_vec_multi_vectors
+WHERE total_interactions > 800
+AND registration_date >= '2023-02-01'
+ORDER BY l2_distance(preference_vec, '[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]')
+LIMIT 3;
+➤ user_id[4,32,0]  ¦  session_id[4,32,0]  ¦  user_name[12,-1,0]  ¦  registration_date[91,64,0]  𝄀
+1002  ¦  1  ¦  Bob Smith  ¦  2023-03-20  𝄀
+1003  ¦  1  ¦  Charlie Brown  ¦  2023-02-10
+DROP TABLE temp_vec_multi_vectors;
+CREATE TEMPORARY TABLE temp_vec_high_dim (
+image_id INT PRIMARY KEY AUTO_INCREMENT,
+image_name VARCHAR(200) NOT NULL,
+image_hash VARCHAR(64) UNIQUE,
+feature_vector vecf32(128),
+category VARCHAR(50),
+subcategory VARCHAR(50),
+tags VARCHAR(500),
+upload_user_id INT,
+upload_date DATE,
+file_size_kb INT,
+width INT,
+height INT,
+format VARCHAR(10),
+is_public BOOLEAN DEFAULT TRUE,
+view_count INT DEFAULT 0,
+INDEX idx_category_subcat (category, subcategory),
+INDEX idx_upload_user (upload_user_id),
+INDEX idx_upload_date (upload_date),
+INDEX idx_dimensions (width, height),
+INDEX idx_public_views (is_public, view_count)
+);
+CREATE INDEX idx_vec_features USING ivfflat
+ON temp_vec_high_dim(feature_vector) lists=5 op_type "vector_l2_ops";
+INSERT INTO temp_vec_high_dim (image_name, image_hash, feature_vector, category, subcategory, tags, upload_user_id, upload_date, file_size_kb, width, height, format, view_count) VALUES
+('sunset_beach.jpg', 'a1b2c3d4e5f6',
+'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]',
+'Nature', 'Landscape', 'sunset,beach,ocean,sky,beautiful', 2001, '2024-01-15', 2048, 1920, 1080, 'JPEG', 15000),
+('mountain_peak.jpg', 'b2c3d4e5f6g7',
+'[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]',
+'Nature', 'Landscape', 'mountain,peak,snow,hiking,adventure', 2002, '2024-01-18', 3072, 2560, 1440, 'JPEG', 12000),
+('city_night.jpg', 'c3d4e5f6g7h8',
+'[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]',
+'Urban', 'Cityscape', 'city,night,lights,buildings,urban', 2001, '2024-01-20', 2560, 1920, 1080, 'JPEG', 18000);
+SHOW INDEX FROM temp_vec_high_dim;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_vec_high_dim  ¦  0  ¦  image_hash  ¦  1  ¦  image_hash  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  image_hash  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_category_subcat  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_category_subcat  ¦  2  ¦  subcategory  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  subcategory  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_upload_user  ¦  1  ¦  upload_user_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  upload_user_id  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_upload_date  ¦  1  ¦  upload_date  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  upload_date  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_dimensions  ¦  1  ¦  width  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  width  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_dimensions  ¦  2  ¦  height  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  height  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_public_views  ¦  1  ¦  is_public  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  is_public  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_public_views  ¦  2  ¦  view_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  view_count  𝄀
+temp_vec_high_dim  ¦  0  ¦  PRIMARY  ¦  1  ¦  image_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  image_id  𝄀
+temp_vec_high_dim  ¦  1  ¦  idx_vec_features  ¦  1  ¦  feature_vector  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"5","op_type":"vector_l2_ops"}  ¦  YES  ¦  feature_vector
+SELECT image_id, image_name, category, view_count
+FROM temp_vec_high_dim
+ORDER BY l2_distance(feature_vector, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')
+LIMIT 2;
+➤ image_id[4,32,0]  ¦  image_name[12,-1,0]  ¦  category[12,-1,0]  ¦  view_count[4,32,0]  𝄀
+1  ¦  sunset_beach.jpg  ¦  Nature  ¦  15000  𝄀
+2  ¦  mountain_peak.jpg  ¦  Nature  ¦  12000
+SELECT image_id, image_name, subcategory, width, height
+FROM temp_vec_high_dim
+WHERE category = 'Nature' AND is_public = TRUE
+ORDER BY l2_distance(feature_vector, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]')
+LIMIT 2;
+➤ image_id[4,32,0]  ¦  image_name[12,-1,0]  ¦  subcategory[12,-1,0]  ¦  width[4,32,0]  ¦  height[4,32,0]  𝄀
+2  ¦  mountain_peak.jpg  ¦  Landscape  ¦  2560  ¦  1440  𝄀
+1  ¦  sunset_beach.jpg  ¦  Landscape  ¦  1920  ¦  1080
+SELECT image_id, image_name, upload_user_id, view_count
+FROM temp_vec_high_dim
+WHERE view_count > 10000
+AND upload_date >= '2024-01-15'
+AND width >= 1920
+ORDER BY l2_distance(feature_vector, '[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]')
+LIMIT 3;
+➤ image_id[4,32,0]  ¦  image_name[12,-1,0]  ¦  upload_user_id[4,32,0]  ¦  view_count[4,32,0]  𝄀
+3  ¦  city_night.jpg  ¦  2001  ¦  18000  𝄀
+1  ¦  sunset_beach.jpg  ¦  2001  ¦  15000  𝄀
+2  ¦  mountain_peak.jpg  ¦  2002  ¦  12000
+DROP TABLE temp_vec_high_dim;
+CREATE TEMPORARY TABLE temp_hybrid_search (
+doc_id INT,
+version INT,
+title VARCHAR(300) NOT NULL,
+abstract TEXT,
+full_text TEXT,
+keywords TEXT,
+embedding_title vecf32(64),
+embedding_content vecf32(64),
+author_id INT,
+author_name VARCHAR(100),
+category VARCHAR(50),
+subcategory VARCHAR(50),
+language VARCHAR(10),
+publish_date DATE,
+update_date DATE,
+citation_count INT DEFAULT 0,
+download_count INT DEFAULT 0,
+rating DECIMAL(3,2),
+is_featured BOOLEAN DEFAULT FALSE,
+PRIMARY KEY (doc_id, version),
+UNIQUE INDEX idx_doc_version (doc_id, version),
+INDEX idx_author (author_id, author_name),
+INDEX idx_category_subcat (category, subcategory),
+INDEX idx_publish_date (publish_date),
+INDEX idx_citations_downloads (citation_count, download_count),
+INDEX idx_rating (rating),
+INDEX idx_featured_rating (is_featured, rating)
+);
+CREATE FULLTEXT INDEX idx_ft_title ON temp_hybrid_search(title);
+CREATE FULLTEXT INDEX idx_ft_abstract ON temp_hybrid_search(abstract);
+CREATE FULLTEXT INDEX idx_ft_fulltext ON temp_hybrid_search(full_text);
+CREATE FULLTEXT INDEX idx_ft_keywords ON temp_hybrid_search(keywords);
+CREATE INDEX idx_vec_title USING ivfflat
+ON temp_hybrid_search(embedding_title) lists=4 op_type "vector_l2_ops";
+CREATE INDEX idx_vec_content USING ivfflat
+ON temp_hybrid_search(embedding_content) lists=4 op_type "vector_l2_ops";
+INSERT INTO temp_hybrid_search VALUES
+(1001, 1, 'Deep Learning for Natural Language Processing',
+'This paper presents novel approaches to NLP using deep learning techniques including transformers and attention mechanisms.',
+'Natural Language Processing has been revolutionized by deep learning. Transformer architectures, introduced in 2017, have become the foundation for modern NLP systems. BERT, GPT, and other models demonstrate remarkable performance across various tasks.',
+'deep learning, NLP, transformers, BERT, GPT, attention mechanism, neural networks',
+'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4]',
+'[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5]',
+3001, 'Dr. Sarah Chen', 'AI/ML', 'NLP', 'en', '2024-01-15', '2024-01-15', 150, 2500, 4.75, TRUE),
+(1002, 1, 'Vector Databases for Similarity Search',
+'An overview of vector database systems and their applications in similarity search and recommendation systems.',
+'Vector databases have emerged as essential infrastructure for AI applications. They enable efficient similarity search using techniques like approximate nearest neighbor search. Applications include recommendation systems, image search, and semantic search.',
+'vector database, similarity search, ANN, embeddings, recommendation, semantic search',
+'[0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6]',
+'[0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7]',
+3002, 'Prof. Michael Zhang', 'Database', 'Vector DB', 'en', '2024-01-20', '2024-01-20', 95, 1800, 4.60, TRUE),
+(1003, 1, 'HTAP Database Architecture Patterns',
+'Exploring hybrid transactional and analytical processing database architectures for modern applications.',
+'HTAP databases combine OLTP and OLAP capabilities in a single system. This architecture eliminates the need for separate systems and ETL processes. MatrixOne is an example of a modern HTAP database that provides real-time analytics on transactional data.',
+'HTAP, database architecture, OLTP, OLAP, real-time analytics, MatrixOne',
+'[0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]',
+'[0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]',
+3003, 'Dr. Emily Rodriguez', 'Database', 'Architecture', 'en', '2024-02-01', '2024-02-01', 120, 2200, 4.80, TRUE);
+SHOW INDEX FROM temp_hybrid_search;
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+temp_hybrid_search  ¦  0  ¦  idx_doc_version  ¦  1  ¦  doc_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  doc_id  𝄀
+temp_hybrid_search  ¦  0  ¦  idx_doc_version  ¦  2  ¦  version  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  version  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_author  ¦  1  ¦  author_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  author_id  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_author  ¦  2  ¦  author_name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  author_name  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_category_subcat  ¦  1  ¦  category  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  category  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_category_subcat  ¦  2  ¦  subcategory  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  subcategory  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_publish_date  ¦  1  ¦  publish_date  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  publish_date  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_citations_downloads  ¦  1  ¦  citation_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  citation_count  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_citations_downloads  ¦  2  ¦  download_count  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  download_count  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_rating  ¦  1  ¦  rating  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  rating  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_featured_rating  ¦  1  ¦  is_featured  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  is_featured  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_featured_rating  ¦  2  ¦  rating  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  rating  𝄀
+temp_hybrid_search  ¦  0  ¦  PRIMARY  ¦  1  ¦  doc_id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  doc_id  𝄀
+temp_hybrid_search  ¦  0  ¦  PRIMARY  ¦  2  ¦  version  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  version  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_ft_title  ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_ft_abstract  ¦  1  ¦  abstract  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  abstract  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_ft_fulltext  ¦  1  ¦  full_text  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  full_text  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_ft_keywords  ¦  1  ¦  keywords  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  keywords  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_vec_title  ¦  1  ¦  embedding_title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"4","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding_title  𝄀
+temp_hybrid_search  ¦  1  ¦  idx_vec_content  ¦  1  ¦  embedding_content  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"4","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding_content
+SELECT doc_id, title, author_name, citation_count
+FROM temp_hybrid_search
+WHERE MATCH(title, abstract) AGAINST('database vector search' IN NATURAL LANGUAGE MODE)
+ORDER BY citation_count DESC;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+SELECT doc_id, title, category, rating
+FROM temp_hybrid_search
+ORDER BY l2_distance(embedding_title, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4]')
+LIMIT 2;
+➤ doc_id[4,32,0]  ¦  title[12,-1,0]  ¦  category[12,-1,0]  ¦  rating[3,3,2]  𝄀
+1001  ¦  Deep Learning for Natural Language Processing  ¦  AI/ML  ¦  4.75  𝄀
+1002  ¦  Vector Databases for Similarity Search  ¦  Database  ¦  4.60
+SELECT doc_id, version, title, author_name, category, rating, citation_count
+FROM temp_hybrid_search
+WHERE MATCH(keywords) AGAINST('database architecture' IN NATURAL LANGUAGE MODE)
+AND category = 'Database'
+AND rating >= 4.5
+AND is_featured = TRUE
+ORDER BY l2_distance(embedding_content, '[0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7]')
+LIMIT 3;
+➤ doc_id[4,32,0]  ¦  version[4,32,0]  ¦  title[12,-1,0]  ¦  author_name[12,-1,0]  ¦  category[12,-1,0]  ¦  rating[3,3,2]  ¦  citation_count[4,32,0]  𝄀
+1003  ¦  1  ¦  HTAP Database Architecture Patterns  ¦  Dr. Emily Rodriguez  ¦  Database  ¦  4.80  ¦  120
+SELECT doc_id, title, author_name, category, subcategory,
+citation_count, download_count, rating
+FROM temp_hybrid_search
+WHERE (MATCH(title) AGAINST('deep learning NLP' IN NATURAL LANGUAGE MODE)
+OR MATCH(abstract) AGAINST('transformer attention' IN NATURAL LANGUAGE MODE))
+AND publish_date >= '2024-01-01'
+AND citation_count > 100
+ORDER BY l2_distance(embedding_title, '[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4]'),
+rating DESC
+LIMIT 5;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+SELECT doc_id, title, author_name, rating, download_count
+FROM temp_hybrid_search
+WHERE category IN ('Database', 'AI/ML')
+AND rating >= 4.0
+ORDER BY l2_distance(embedding_content, '[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,0.1,0.2,0.3,0.4,0.5]')
+LIMIT 3;
+➤ doc_id[4,32,0]  ¦  title[12,-1,0]  ¦  author_name[12,-1,0]  ¦  rating[3,3,2]  ¦  download_count[4,32,0]  𝄀
+1001  ¦  Deep Learning for Natural Language Processing  ¦  Dr. Sarah Chen  ¦  4.75  ¦  2500  𝄀
+1002  ¦  Vector Databases for Similarity Search  ¦  Prof. Michael Zhang  ¦  4.60  ¦  1800  𝄀
+1003  ¦  HTAP Database Architecture Patterns  ¦  Dr. Emily Rodriguez  ¦  4.80  ¦  2200
+DROP TABLE temp_hybrid_search;
+drop database temp_index;

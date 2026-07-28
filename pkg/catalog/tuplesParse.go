@@ -317,7 +317,11 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 
 	attr.Name = string(row[MO_COLUMNS_ATTNAME_IDX].([]byte))
 	attr.Alg = compress.Lz4
-	if err := types.Decode(row[MO_COLUMNS_ATTTYP_IDX].([]byte), &attr.Type); err != nil {
+	// Call the concrete Unmarshal method rather than types.Decode: passing
+	// &attr.Type through the encoding.BinaryUnmarshaler interface forces the
+	// whole attr local to escape to the heap. The direct method call avoids
+	// the extra standalone allocation per column.
+	if err := attr.Type.Unmarshal(row[MO_COLUMNS_ATTTYP_IDX].([]byte)); err != nil {
 		return nil, err
 	}
 	if row[MO_COLUMNS_ATTHASDEF_IDX].(int8) == 1 {
@@ -329,6 +333,12 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 	if row[MO_COLUMNS_ATT_HAS_UPDATE_IDX].(int8) == 1 {
 		attr.OnUpdate = new(plan.OnUpdate)
 		if err := types.Decode(row[MO_COLUMNS_ATT_UPDATE_IDX].([]byte), attr.OnUpdate); err != nil {
+			return nil, err
+		}
+	}
+	if row[MO_COLUMNS_ATT_HAS_GENERATED_IDX].(int8) == 1 {
+		attr.GeneratedCol = new(plan.GeneratedCol)
+		if err := types.Decode(row[MO_COLUMNS_ATT_GENERATED_IDX].([]byte), attr.GeneratedCol); err != nil {
 			return nil, err
 		}
 	}
@@ -465,7 +475,7 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_json, types.T_text, types.T_datalink:
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_json, types.T_text, types.T_datalink, types.T_geometry:
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = vec.GetBytesAt(j)
 			}

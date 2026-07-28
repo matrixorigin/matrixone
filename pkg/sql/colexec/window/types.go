@@ -18,11 +18,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -39,19 +38,22 @@ const (
 type container struct {
 	status int
 
-	bat *batch.Batch
+	bat     *batch.Batch
+	batAggs []aggexec.AggFuncExec
 
 	desc      []bool
 	nullsLast []bool
-	orderVecs []group.ExprEvalVector
+	orderVecs []colexec.ExprEvalVector
 	sels      []int64
 
 	ps      []int64 // index of partition by
 	os      []int64 // Sorted partitions
-	aggVecs []group.ExprEvalVector
+	aggVecs []colexec.ExprEvalVector
 
 	vec  *vector.Vector
 	rBat *batch.Batch
+
+	runtimeFrames []*plan.FrameClause
 }
 
 type Window struct {
@@ -60,8 +62,7 @@ type Window struct {
 	// sort and partition
 	Fs []*plan.OrderBySpec
 	// agg func
-	Types []types.Type
-	Aggs  []aggexec.AggFuncExecExpression
+	Aggs []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
 }
@@ -102,6 +103,11 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 
 	ctr.resetParam()
 	ctr.resetVectors()
+	// Release aggregators here too: on an error exit from Call the normal
+	// freeAggFun() at the end of the eval loop is skipped, so batAggs would
+	// otherwise keep their accumulated state (e.g. json payloads, distinct
+	// hashes) in the mpool until the next reuse.
+	ctr.freeAggFun()
 	if ctr.bat != nil {
 		ctr.bat.CleanOnlyData()
 	}
@@ -115,6 +121,10 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &window.ctr
 
+	ctr.runtimeFrames = nil
+	// Free aggregators before the batch so an error exit from Call (which skips
+	// the normal freeAggFun()) does not leak their mpool-held state.
+	ctr.freeAggFun()
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
@@ -131,6 +141,7 @@ func (ctr *container) resetParam() {
 	ctr.sels = nil
 	ctr.ps = nil
 	ctr.os = nil
+	ctr.runtimeFrames = nil
 }
 
 func (ctr *container) resetVectors() {
@@ -151,14 +162,13 @@ func (ctr *container) freeBatch(mp *mpool.MPool) {
 }
 
 func (ctr *container) freeAggFun() {
-	if ctr.bat != nil {
-		for _, a := range ctr.bat.Aggs {
-			if a != nil {
-				a.Free()
-			}
+	for i, a := range ctr.batAggs {
+		if a != nil {
+			a.Free()
+			ctr.batAggs[i] = nil
 		}
-		ctr.bat.Aggs = nil
 	}
+	ctr.batAggs = nil
 }
 
 func (ctr *container) freeExes() {

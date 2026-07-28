@@ -73,11 +73,8 @@ func (deletion *Deletion) Prepare(proc *process.Process) error {
 				return err
 			}
 			deletion.ctr.source = rel
-		} else {
-			err := deletion.ctr.source.Reset(proc.GetTxnOperator())
-			if err != nil {
-				return err
-			}
+		} else if err := deletion.ctr.source.Reset(proc.GetTxnOperator()); err != nil {
+			return err
 		}
 
 	}
@@ -247,14 +244,13 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 	if affectedRows > 0 {
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		err = deletion.ctr.source.Delete(newCtx, deletion.ctr.resBat, catalog.Row_ID)
+		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return deletion.ctr.source.Delete(newCtx, deletion.ctr.resBat, catalog.Row_ID)
+		})
 		if err != nil {
 			return result, err
 		}
 		analyzer.AddDeletedRows(int64(deletion.ctr.resBat.RowCount()))
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
 	}
 
 	if delCtx.AddAffectedRows {

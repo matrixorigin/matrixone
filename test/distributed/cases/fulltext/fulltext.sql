@@ -1,10 +1,9 @@
+-- Deprecated: experimental_fulltext_index is always enabled, kept for compatibility
+-- Test compatibility: setting the variable should not error
+SET experimental_fulltext_index = 1;
 SET experimental_fulltext_index = 0;
-create table fulltext_index_00(a bigint primary key, b varchar, c text, FULLTEXT(b));
 
 
--- TODO: run all tests with both experimental_fulltext_index = 0 and 1
--- TODO: GENERATE the test case to cover all combinations of types (varchar, char and text)
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
 
 create table src (id bigint primary key, body varchar, title text);
@@ -20,11 +19,23 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 
 create fulltext index ftidx on src (body, title);
 
+-- Regression for #25546: single-keyword NL/DEFAULT LIMIT queries must not
+-- run COUNT(*) OVER() over more than one aggregate result vector.
+create table fulltext_topk_tfidf_regression (id bigint primary key, body text);
+insert into fulltext_topk_tfidf_regression
+select result, case when result <= 10 then repeat('common ', 12 - result) else 'common' end
+from generate_series(1, 8193) g;
+insert into fulltext_topk_tfidf_regression
+select result, 'other' from generate_series(8194, 9000) g;
+create fulltext index ftidx_topk_tfidf_regression on fulltext_topk_tfidf_regression (body);
+select id from fulltext_topk_tfidf_regression where match(body) against('common' in natural language mode) limit 10;
+select id from fulltext_topk_tfidf_regression where match(body) against('common') limit 10;
+drop table fulltext_topk_tfidf_regression;
+
 -- check fulltext_match with index error
 create fulltext index ftidx02 on src (body, title);
 select * from src where match(body) against('red');
 select * from src where match(body,title) against('+]]]');
-select * from src where match(body,title) against('+I'm');
 
 select match(body) against('red') from src;
 
@@ -189,7 +200,7 @@ drop table src2;
 
 -- bytejson parser
 create table src (id bigint primary key, json1 json, json2 json);
-insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'), 
+insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
 
@@ -432,7 +443,7 @@ alter table articles drop column title;
 -- #21678
 drop table if exists src;
 create table src (id bigint primary key, body varchar, FULLTEXT(body));
-insert into src values (0, 'SGB11型号的检验报告在对素材文件进行搜索时'), (1, '读书会 提效 社群 案例 运营 因为现在生产'), 
+insert into src values (0, 'SGB11型号的检验报告在对素材文件进行搜索时'), (1, '读书会 提效 社群 案例 运营 因为现在生产'),
 (2, '使用全文索引会肥胖的原因都是因为摄入脂肪多导致的吗测试背景说明'),
 (3, '索引肥胖的原因都是因为摄入fat多导致的吗说明');
 
@@ -442,8 +453,57 @@ select id from src where match(body) against('肥胖的原因都是因为摄入�
 
 select id from src where match(body) against('+读书会 +提效 +社群 +案例 +运营' IN BOOLEAN MODE);
 
+prepare ft_stmt from 'select id from src where match(body) against(? IN BOOLEAN MODE) order by id';
+set @q = '+读书会 +提效 +社群 +案例 +运营';
+execute ft_stmt using @q;
+set @q = '';
+execute ft_stmt using @q;
+set @q = '+读书会';
+execute ft_stmt using @q;
+set @q = null;
+execute ft_stmt using @q;
+set @q = '+读书会 +提效 +社群 +案例 +运营';
+execute ft_stmt using @q;
+deallocate prepare ft_stmt;
+
+prepare ft_nl_stmt from 'select id from src where match(body) against(? IN NATURAL LANGUAGE MODE) order by id';
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_nl_stmt using @q;
+set @q = '';
+execute ft_nl_stmt using @q;
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_nl_stmt using @q;
+set @q = null;
+execute ft_nl_stmt using @q;
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_nl_stmt using @q;
+deallocate prepare ft_nl_stmt;
+
+prepare ft_qe_stmt from 'select id from src where match(body) against(? WITH QUERY EXPANSION) order by id';
+set @q = '肥胖的原因都是因为摄入脂肪多导致的吗';
+execute ft_qe_stmt using @q;
+deallocate prepare ft_qe_stmt;
+
+prepare ft_multi_stmt from 'select id from src where match(body) against(? IN BOOLEAN MODE) and match(body) against(? IN BOOLEAN MODE) order by id';
+set @q1 = '+读书会';
+set @q2 = '+社群';
+execute ft_multi_stmt using @q1, @q2;
+deallocate prepare ft_multi_stmt;
+
+prepare ft_mixed_stmt from 'select id from src where match(body) against(''+读书会'' IN BOOLEAN MODE) and match(body) against(? IN BOOLEAN MODE) order by id';
+set @q = '+运营';
+execute ft_mixed_stmt using @q;
+deallocate prepare ft_mixed_stmt;
+
 select id from src where match(body) against('肥胖的原因都是因为摄入fat多导致的吗' IN NATURAL LANGUAGE MODE);
 CREATE TABLE example_table (id INT PRIMARY KEY,english_text TEXT, chinese_text TEXT,json_data JSON);
 INSERT INTO example_table (id, english_text, chinese_text, json_data) VALUES(1, 'Hello, world!', '你好世界', '{"name": "Alice", "age": 30}'),(2, 'This is a test.', '这是一个测试', '{"name": "Bob", "age": 25}'),(3, 'Full-text search is powerful.', '全文搜索很强大', '{"name": "Charlie", "age": 35}');
 CREATE FULLTEXT INDEX idx_english_text ON example_table (english_text);
 (with t as (SELECT * FROM example_table WHERE MATCH(english_text) AGAINST('+test' IN BOOLEAN MODE)) select * from t) union all (with t as (SELECT * FROM example_table WHERE MATCH(english_text) AGAINST('+test' IN BOOLEAN MODE)) select * from t) ;
+
+create table empty_fulltext(a int primary key, b varchar, c varchar, fulltext `ftc` (c) WITH PARSER ngram);
+insert into empty_fulltext select result, 'so long',null from generate_series(1, 300000) g;
+insert into empty_fulltext values (300001, 'this is the end of our story', null);
+-- big enough to trigger remote delete
+delete from empty_fulltext where b like '%story%';
+drop table empty_fulltext;

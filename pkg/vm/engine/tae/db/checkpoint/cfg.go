@@ -17,6 +17,9 @@ package checkpoint
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type CheckpointCfg struct {
@@ -41,6 +44,11 @@ type CheckpointCfg struct {
 
 	// history duration to keep for a global checkpoint
 	GlobalHistoryDuration time.Duration
+
+	// history duration to keep for a table id
+	TableIDHistoryDuration time.Duration
+	// object size threshold to sink table id batch
+	TableIDSinkerThreshold int
 }
 
 func (cfg CheckpointCfg) String() string {
@@ -50,7 +58,7 @@ func (cfg CheckpointCfg) String() string {
 
 func (cfg *CheckpointCfg) FillDefaults() {
 	if cfg.IncrementalInterval <= 0 {
-		cfg.IncrementalInterval = time.Minute
+		cfg.IncrementalInterval = options.DefaultCheckpointIncrementalInterval
 	}
 	if cfg.MinCount <= 0 {
 		cfg.MinCount = 10000
@@ -60,5 +68,11 @@ func (cfg *CheckpointCfg) FillDefaults() {
 	}
 	if cfg.GlobalHistoryDuration < 0 {
 		cfg.GlobalHistoryDuration = 0
+	}
+	if cfg.TableIDHistoryDuration <= 0 {
+		cfg.TableIDHistoryDuration = time.Hour * 24
+	}
+	if cfg.TableIDSinkerThreshold <= 0 {
+		cfg.TableIDSinkerThreshold = 64 * mpool.MB
 	}
 }

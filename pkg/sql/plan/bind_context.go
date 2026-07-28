@@ -26,18 +26,22 @@ import (
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
-		groupByAst:     make(map[string]int32),
-		aggregateByAst: make(map[string]int32),
-		sampleByAst:    make(map[string]int32),
-		projectByExpr:  make(map[string]int32),
-		windowByAst:    make(map[string]int32),
-		timeByAst:      make(map[string]int32),
+		groupByAst:      make(map[string]int32),
+		groupByParamAst: make(map[string]int32),
+		aggregateByAst:  make(map[string]int32),
+		sampleByAst:     make(map[string]int32),
+		projectByExpr:   make(map[string]int32),
+		windowByAst:     make(map[string]int32),
+		timeByAst:       make(map[string]int32),
+
+		projectColByAst: make(map[string]int32),
+
 		aliasMap:       make(map[string]*aliasItem),
 		aliasFrequency: make(map[string]int),
 		bindingByTag:   make(map[int32]*Binding),
 		bindingByTable: make(map[string]*Binding),
 		bindingByCol:   make(map[string]*Binding),
-		lower:          1,
+		outerUsingCols: make(map[string][]string),
 		parent:         parent,
 		boundCtes:      make(map[string]*CTERef),
 		boundViews:     make(map[[2]string]*tree.CreateView),
@@ -55,13 +59,35 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 			bc.cteState = parent.cteState
 		}
 		bc.snapshot = parent.snapshot
+		bc.remapOption = parent.remapOption
+		bc.numericCteByName = parent.numericCteByName
+		if len(parent.viewChain) > 0 {
+			bc.viewChain = append([]string{}, parent.viewChain...)
+		}
+		bc.directView = parent.directView
 	}
 
 	return bc
 }
 
+// newCTEDeclarationContext records the name-resolution scope at a WITH
+// declaration without retaining bindings that the declaring query block adds
+// later while binding its FROM clause. The normal child-context constructor
+// carries default-database, snapshot, CTE-state, rewrite, and view metadata;
+// detaching the new context from ctx then leaves only the already-existing
+// outer query blocks available for correlation.
+func newCTEDeclarationContext(builder *QueryBuilder, ctx *BindContext) *BindContext {
+	declarationCtx := NewBindContext(builder, ctx)
+	declarationCtx.parent = ctx.parent
+	declarationCtx.cteByName = ctx.cteByName
+	for name, cteRef := range ctx.boundCtes {
+		declarationCtx.boundCtes[name] = cteRef
+	}
+	return declarationCtx
+}
+
 func (bc *BindContext) rootTag() int32 {
-	if bc.bindingRecurCte() {
+	if bc.bindingRecurCte() && bc.sinkTag > 0 {
 		return bc.sinkTag
 	} else if bc.resultTag > 0 {
 		return bc.resultTag
@@ -183,12 +209,61 @@ func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindConte
 		}
 	}
 
+	// Propagate outer-using coalesce lists upward so that resolution at
+	// this BindContext (or in an enclosing subquery) still emits coalesce
+	// for cols merged through inner FOJ-USING. addUsingCol below reads from
+	// the child contexts directly, so a second-overwrite here is safe; for
+	// cols that become ambiguous (both children expose them), bindingByCol
+	// is set to nil and the ambiguity error fires before outerUsingCols
+	// is consulted.
+	for col, list := range left.outerUsingCols {
+		bc.outerUsingCols[col] = list
+	}
+	for col, list := range right.outerUsingCols {
+		bc.outerUsingCols[col] = list
+	}
+
 	bc.bindingTree = &BindingTreeNode{
 		left:  left.bindingTree,
 		right: right.bindingTree,
 	}
 
 	return nil
+}
+
+// replaceBinding replaces one outward table binding without leaving its old
+// table or column names visible. The caller must finish validating the new
+// binding before calling this helper.
+func (bc *BindContext) replaceBinding(oldBinding, newBinding *Binding) {
+	for i, binding := range bc.bindings {
+		if binding == oldBinding {
+			bc.bindings[i] = newBinding
+			break
+		}
+	}
+
+	if bc.bindingByTag[oldBinding.tag] == oldBinding {
+		bc.bindingByTag[oldBinding.tag] = newBinding
+	}
+	if bc.bindingByTable[oldBinding.table] == oldBinding {
+		delete(bc.bindingByTable, oldBinding.table)
+	}
+	bc.bindingByTable[newBinding.table] = newBinding
+
+	for col, binding := range bc.bindingByCol {
+		if binding == oldBinding {
+			delete(bc.bindingByCol, col)
+		}
+	}
+	for _, col := range newBinding.cols {
+		if _, ok := bc.bindingByCol[col]; ok {
+			bc.bindingByCol[col] = nil
+		} else {
+			bc.bindingByCol[col] = newBinding
+		}
+	}
+
+	bc.bindingTree = &BindingTreeNode{binding: newBinding}
 }
 
 func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, right *BindContext) (*plan.Expr, error) {
@@ -208,44 +283,94 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 		return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "common column '%s' appears more than once in right table", col)
 	}
 
-	if typ != plan.Node_RIGHT {
-		bc.bindingByCol[col] = leftBinding
-		bc.bindingTree.using = append(bc.bindingTree.using, NameTuple{
-			table: leftBinding.table,
-			col:   col,
-		})
-	} else {
-		bc.bindingByCol[col] = rightBinding
-		bc.bindingTree.using = append(bc.bindingTree.using, NameTuple{
-			table: rightBinding.table,
-			col:   col,
-		})
+	leftCoalesce := left.outerUsingCols[col]
+	rightCoalesce := right.outerUsingCols[col]
+
+	chosen, chosenCoalesce := leftBinding, leftCoalesce
+	if typ == plan.Node_RIGHT {
+		chosen, chosenCoalesce = rightBinding, rightCoalesce
+	}
+	bc.bindingByCol[col] = chosen
+
+	var mergedArms []string
+	switch {
+	case typ == plan.Node_OUTER:
+		// FULL OUTER JOIN ... USING(col): merged value is
+		// COALESCE(<left arms>, <right arms>). Each side may itself already
+		// be a coalesce list from a nested FOJ-USING.
+		leftArms := leftCoalesce
+		if len(leftArms) == 0 {
+			leftArms = []string{leftBinding.table}
+		}
+		rightArms := rightCoalesce
+		if len(rightArms) == 0 {
+			rightArms = []string{rightBinding.table}
+		}
+		mergedArms = make([]string, 0, len(leftArms)+len(rightArms))
+		mergedArms = append(mergedArms, leftArms...)
+		mergedArms = append(mergedArms, rightArms...)
+		bc.outerUsingCols[col] = mergedArms
+	case len(chosenCoalesce) > 0:
+		// LEFT/INNER/RIGHT USING: merged column adopts the chosen side's
+		// value; preserve any prior coalesce list from a nested FOJ-USING.
+		mergedArms = chosenCoalesce
+		bc.outerUsingCols[col] = chosenCoalesce
+	default:
+		// Drop any list inherited from the unchosen side via mergeContexts.
+		delete(bc.outerUsingCols, col)
 	}
 
-	leftPos := leftBinding.colIdByName[col]
-	rightPos := rightBinding.colIdByName[col]
-	expr, err := BindFuncExprImplByPlanExpr(bc.binder.GetContext(), "=", []*plan.Expr{
-		{
-			Typ: *leftBinding.types[leftPos],
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: leftBinding.tag,
-					ColPos: leftPos,
-				},
-			},
-		},
-		{
-			Typ: *rightBinding.types[rightPos],
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: rightBinding.tag,
-					ColPos: rightPos,
-				},
-			},
-		},
+	bc.bindingTree.using = append(bc.bindingTree.using, NameTuple{
+		table:        chosen.table,
+		col:          col,
+		coalesceArms: mergedArms,
 	})
 
+	leftEq, err := bc.buildUsingEqOperand(col, leftBinding, leftCoalesce)
+	if err != nil {
+		return nil, err
+	}
+	rightEq, err := bc.buildUsingEqOperand(col, rightBinding, rightCoalesce)
+	if err != nil {
+		return nil, err
+	}
+	expr, err := BindFuncExprImplByPlanExpr(bc.binder.GetContext(), "=", []*plan.Expr{leftEq, rightEq})
+
 	return expr, err
+}
+
+// buildUsingEqOperand returns the operand for one side of a USING equality.
+// If the side has been merged through a prior FULL OUTER JOIN ... USING(col),
+// the operand is COALESCE(arm1.col, arm2.col, ...); otherwise it is just
+// binding.col.
+func (bc *BindContext) buildUsingEqOperand(col string, binding *Binding, coalesceArms []string) (*plan.Expr, error) {
+	if len(coalesceArms) < 2 {
+		colPos := binding.colIdByName[col]
+		return &plan.Expr{
+			Typ: *binding.types[colPos],
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: binding.tag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+	args := make([]*plan.Expr, 0, len(coalesceArms))
+	for _, t := range coalesceArms {
+		b := bc.bindingByTable[t]
+		colPos := b.colIdByName[col]
+		args = append(args, &plan.Expr{
+			Typ: *b.types[colPos],
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.tag,
+					ColPos: colPos,
+				},
+			},
+		})
+	}
+	return BindFuncExprImplByPlanExpr(bc.binder.GetContext(), "coalesce", args)
 }
 
 func (bc *BindContext) addUsingColForCrossL2(col string, typ plan.Node_JoinType, left, right *BindContext) (*plan.Expr, error) {
@@ -295,6 +420,11 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 			return nil, nil, moerr.NewInvalidInputf(ctx, "missing FROM-clause entry for table '%s'", table)
 		}
 
+		displayCols := binding.originCols
+		if len(displayCols) != len(binding.cols) {
+			displayCols = binding.cols
+		}
+
 		exprs := make([]tree.SelectExpr, 0)
 		names := make([]string, 0)
 
@@ -311,7 +441,7 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 			}
 			expr := tree.NewUnresolvedName(tree.NewCStr(table, bc.lower), tree.NewCStr(col, 1))
 			exprs = append(exprs, tree.SelectExpr{Expr: expr})
-			names = append(names, col)
+			names = append(names, displayCols[i])
 		}
 
 		return exprs, names, nil
@@ -323,6 +453,11 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 		return
 	}
 	if root.binding != nil {
+		displayCols := root.binding.originCols
+		if len(displayCols) != len(root.binding.cols) {
+			displayCols = root.binding.cols
+		}
+
 		for i, col := range root.binding.cols {
 			if root.binding.colIsHidden[i] {
 				continue
@@ -337,7 +472,7 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 			if !visitedUsingCols[col] {
 				expr := tree.NewUnresolvedName(tree.NewCStr(root.binding.table, bc.lower), tree.NewCStr(col, 1))
 				*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
-				*names = append(*names, col)
+				*names = append(*names, displayCols[i])
 			}
 		}
 
@@ -350,15 +485,24 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 		if catalog.ContainExternalHidenCol(using.col) {
 			continue
 		}
-		//the non-sys account skips the column account_id for the cluster table
-		if !isSysAccount && root.binding.isClusterTable && util.IsClusterTableAttribute(using.col) {
-			continue
+		//the non-sys account skips the column account_id for the cluster table.
+		//root.binding is nil at JOIN nodes, so look up the chosen-side
+		//binding via using.table (set in addUsingCol from chosen.table).
+		if !isSysAccount {
+			if b := bc.bindingByTable[using.table]; b != nil && b.isClusterTable && util.IsClusterTableAttribute(using.col) {
+				continue
+			}
 		}
 		if !visitedUsingCols[using.col] {
 			handledUsingCols = append(handledUsingCols, using.col)
 			visitedUsingCols[using.col] = true
 
-			expr := tree.NewUnresolvedName(tree.NewCStr(using.table, bc.lower), tree.NewCStr(using.col, 1))
+			var expr tree.Expr
+			if len(using.coalesceArms) >= 2 {
+				expr = makeCoalesceUsingExprFromList(using.coalesceArms, using.col, bc.lower)
+			} else {
+				expr = tree.NewUnresolvedName(tree.NewCStr(using.table, bc.lower), tree.NewCStr(using.col, 1))
+			}
 			*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
 			*names = append(*names, using.col)
 		}
@@ -453,27 +597,44 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 		exprImpl.To, err = bc.qualifyColumnNames(exprImpl.To, expandAlias)
 
 	case *tree.UnresolvedName:
+		if havingBinder, ok := bc.binder.(*HavingBinder); ok && havingBinder.rollupHaving &&
+			!exprImpl.Star && exprImpl.NumParts > 0 {
+			exprImpl.CStrParts[0] = tree.NewCStr(exprImpl.ColName(), 1)
+		}
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
 			col := exprImpl.ColName()
 			if expandAlias == AliasBeforeColumn {
 				if selectItem, ok := bc.aliasMap[col]; ok {
-					return selectItem.astExpr, nil
+					if selectItem.astExpr != nil {
+						return selectItem.astExpr, nil
+					}
+					// aliasMap entry exists but astExpr is nil (e.g., UNION context)
+					// Return the original expression unchanged - let the binder handle it
+					return astExpr, nil
 				}
 			}
 
 			if binding, ok := bc.bindingByCol[col]; ok {
 				if binding != nil {
+					if list := bc.outerUsingCols[col]; len(list) >= 2 {
+						return makeCoalesceUsingExprFromList(list, col, bc.lower), nil
+					}
 					exprImpl.NumParts = 2
 					exprImpl.CStrParts[1] = tree.NewCStr(binding.table, bc.lower)
 					return astExpr, nil
 				} else {
-					return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "ambiguouse column reference to '%s'", exprImpl.ColNameOrigin())
+					return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "ambiguous column reference to '%s'", exprImpl.ColNameOrigin())
 				}
 			}
 
 			if expandAlias == AliasAfterColumn {
 				if selectItem, ok := bc.aliasMap[col]; ok {
-					return selectItem.astExpr, nil
+					if selectItem.astExpr != nil {
+						return selectItem.astExpr, nil
+					}
+					// aliasMap entry exists but astExpr is nil (e.g., UNION context)
+					// Return the original expression unchanged - let the binder handle it
+					return astExpr, nil
 				}
 			}
 		}
@@ -525,4 +686,18 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 	}
 
 	return astExpr, err
+}
+
+// makeCoalesceUsingExprFromList builds an AST coalesce(t1.col, t2.col, ...)
+// from the ordered list of contributing leaf tables for a column merged
+// through one or more FULL OUTER JOIN ... USING(col) clauses.
+func makeCoalesceUsingExprFromList(tables []string, col string, lower int64) tree.Expr {
+	exprs := make(tree.Exprs, 0, len(tables))
+	for _, t := range tables {
+		exprs = append(exprs, tree.NewUnresolvedName(tree.NewCStr(t, lower), tree.NewCStr(col, 1)))
+	}
+	return &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("coalesce")),
+		Exprs: exprs,
+	}
 }

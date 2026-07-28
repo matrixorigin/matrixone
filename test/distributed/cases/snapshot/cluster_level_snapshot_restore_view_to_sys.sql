@@ -39,7 +39,7 @@ select * from v01;
 select * from v02;
 select * from v03;
 
-restore account sys from snapshot sp100;
+restore account sys{snapshot="sp100"};
 
 show create view v01;
 select * from v01;
@@ -108,7 +108,7 @@ select * from v05;
 select * from v04{snapshot = 'sp02'};
 select * from v05{snapshot = 'sp02'};
 
-restore account sys from snapshot sp02;
+restore account sys{snapshot="sp02"};
 
 select * from v04;
 select * from v05;
@@ -173,7 +173,7 @@ drop table Employees;
 select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
-restore account sys from snapshot sp05;
+restore account sys{snapshot="sp05"};
 select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
@@ -181,7 +181,7 @@ drop view EmployeeDepartmentView;
 select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
-restore account sys from snapshot sp05;
+restore account sys{snapshot="sp05"};
 select * from EmployeeDepartmentView;
 select * from EmployeeDepartmentView{snapshot = 'sp05'};
 
@@ -245,7 +245,7 @@ drop view department_view;
 select * from employee_with_department_view;
 select * from employee_with_department_view {snapshot = 'sp04'};
 
-restore account sys from snapshot sp04;
+restore account sys{snapshot="sp04"};
 
 select * from employee_view;
 select * from department_view;
@@ -257,7 +257,7 @@ truncate departments;
 select * from employee_view;
 select * from employee_view {snapshot = 'sp04'};
 
-restore account sys from snapshot sp04;
+restore account sys{snapshot="sp04"};
 
 select * from employee_view;
 select * from department_view;
@@ -274,7 +274,6 @@ drop table departments;
 
 
 -- view in partition table
--- @bvt:issue#16438
 drop table if exists partition01;
 create table partition01 (
                              emp_no      int             not null,
@@ -297,45 +296,34 @@ insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-
 drop view if exists view01;
 create view view01 as select * from partition01;
 select * from view01;
--- @bvt:issue
 
 drop snapshot if exists sp05;
 create snapshot sp05 for cluster;
 
--- @bvt:issue#16438
 insert into partition01 values (9003,'1999-02-20', 'BOB', 'DOCTOR', 'F', '2009-02-20');
 select * from view01;
 select * from view01{snapshot = 'sp05'};
--- @bvt:issue
 
 drop snapshot if exists sp06;
 create snapshot sp06 for cluster;
 
-restore account sys from snapshot sp05;
+restore account sys{snapshot="sp05"};
 
--- @bvt:issue#16438
 select * from view01;
 select * from view01{snapshot = 'sp05'};
 
 drop table partition01;
 select * from view01;
 select * from view01{snapshot = 'sp05'};
--- @bvt:issue
 
-restore account sys from snapshot sp06;
--- @bvt:issue#16438
+restore account sys{snapshot="sp06"};
 select * from view01;
 select * from view01{snapshot = 'sp06'};
--- @bvt:issue
 
--- @bvt:issue#16438
 drop view view01;
--- @bvt:issue
 drop snapshot sp06;
 drop snapshot sp05;
--- @bvt:issue#16438
 drop table partition01;
--- @bvt:issue
 drop database test;
 
 
@@ -375,7 +363,7 @@ drop database test01;
 select * from test01.EmployeeSalaryRanking;
 select * from test01.EmployeeSalaryRanking{snapshot = 'sp06'};
 
-restore account sys from snapshot sp06;
+restore account sys{snapshot="sp06"};
 select * from test01.EmployeeSalaryRanking{snapshot = 'sp06'};
 select * from test01.EmployeeSalaryRanking;
 drop snapshot sp06;
@@ -433,7 +421,7 @@ select * from test02.employees_view{snapshot = 'sp10'};
 select * from test02.employees_by_salary_view;
 select * from test02.employees_by_salary_view{snapshot = 'sp10'};
 
-restore account sys from snapshot sp10;
+restore account sys{snapshot="sp10"};
 select * from test02.employees_view;
 select * from test02.employees_view{snapshot = 'sp10'};
 select * from test02.employees_by_salary_view;
@@ -526,7 +514,7 @@ select * from test05.employee_with_department_view;
 select * from test04.employee_view {snapshot = 'sp100'};
 select * from test03.department_view {snapshot = 'sp100'};
 select * from test05.employee_with_department_view {snapshot = 'sp100'};
-restore account sys from snapshot sp100;
+restore account sys{snapshot="sp100"};
 select * from test04.employee_view;
 select * from test03.department_view;
 select * from test05.employee_with_department_view;

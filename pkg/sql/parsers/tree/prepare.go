@@ -28,6 +28,12 @@ func init() {
 		func(p *PrepareString) { p.reset() },
 		reuse.DefaultOptions[PrepareString](), //.
 	) //WithEnableChecker()
+
+	reuse.CreatePool[PrepareVar](
+		func() *PrepareVar { return &PrepareVar{} },
+		func(p *PrepareVar) { p.reset() },
+		reuse.DefaultOptions[PrepareVar](), //.
+	) //WithEnableChecker()
 }
 
 type Prepare interface {
@@ -94,6 +100,32 @@ func (node *PrepareString) reset() {
 
 func (node PrepareString) TypeName() string { return "tree.PrepareString" }
 
+type PrepareVar struct {
+	prepareImpl
+	Name Identifier
+	Var  string
+}
+
+func (node *PrepareVar) Format(ctx *FmtCtx) {
+	ctx.WriteString("prepare ")
+	node.Name.Format(ctx)
+	ctx.WriteString(" from @")
+	ctx.WriteString(node.Var)
+}
+
+func (node *PrepareVar) GetStatementType() string { return "Prepare" }
+func (node *PrepareVar) GetQueryType() string     { return QueryTypeOth }
+
+func (node *PrepareVar) reset() {
+	*node = PrepareVar{}
+}
+
+func (node *PrepareVar) Free() {
+	reuse.Free[PrepareVar](node, nil)
+}
+
+func (node PrepareVar) TypeName() string { return "tree.PrepareVar" }
+
 func NewPrepareStmt(name Identifier, statement Statement) *PrepareStmt {
 	preparestmt := reuse.Alloc[PrepareStmt](nil)
 	preparestmt.Name = name
@@ -105,5 +137,12 @@ func NewPrepareString(name Identifier, sql string) *PrepareString {
 	preparestmt := reuse.Alloc[PrepareString](nil)
 	preparestmt.Name = name
 	preparestmt.Sql = sql
+	return preparestmt
+}
+
+func NewPrepareVar(name Identifier, v *VarExpr) *PrepareVar {
+	preparestmt := reuse.Alloc[PrepareVar](nil)
+	preparestmt.Name = name
+	preparestmt.Var = v.Name
 	return preparestmt
 }

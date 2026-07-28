@@ -15,50 +15,75 @@
 package table_function
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	hnswrt "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
+
+// hnswCatalogHooks is the shared (stateless) catalog-hooks instance used for
+// plugin-declared type validation (see pkg/indexplugin/catalog).
+var hnswCatalogHooks = hnswrt.CatalogHooks{}
 
 var hnsw_runSql = sqlexec.RunSql
 
 type hnswCreateState struct {
-	inited bool
-	build  *hnsw.HnswBuild
-	param  vectorindex.HnswParam
-	tblcfg vectorindex.IndexTableConfig
-	idxcfg vectorindex.IndexConfig
-	offset int
+	inited   bool
+	buildf32 *hnsw.HnswBuild[float32]
+	buildf64 *hnsw.HnswBuild[float64]
+	param    vectorindex.HnswParam
+	tblcfg   vectorindex.IndexTableConfig
+	idxcfg   vectorindex.IndexConfig
+	offset   int
 
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
 
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
-	if u.build == nil {
-		return nil
-	}
 
-	sqls, err := u.build.ToInsertSql(time.Now().UnixMicro())
-	if err != nil {
-		return err
+	var (
+		sqls []string
+		err  error
+	)
+
+	switch u.idxcfg.Usearch.Quantization {
+	case usearch.F32:
+		if u.buildf32 == nil {
+			return nil
+		}
+		sqls, err = u.buildf32.ToInsertSql(time.Now().UnixMicro())
+		if err != nil {
+			return err
+		}
+	case usearch.F64:
+		if u.buildf64 == nil {
+			return nil
+		}
+		sqls, err = u.buildf64.ToInsertSql(time.Now().UnixMicro())
+		if err != nil {
+			return err
+		}
 	}
 
 	for _, s := range sqls {
-		res, err := hnsw_runSql(proc, s)
+		res, err := hnsw_runSql(sqlexec.NewSqlProcess(proc), s)
 		if err != nil {
 			return err
 		}
@@ -91,8 +116,11 @@ func (u *hnswCreateState) free(tf *TableFunction, proc *process.Process, pipelin
 		u.batch.Clean(proc.Mp())
 	}
 
-	if u.build != nil {
-		u.build.Destroy()
+	if u.buildf32 != nil {
+		u.buildf32.Destroy()
+	}
+	if u.buildf64 != nil {
+		u.buildf64.Destroy()
 	}
 }
 
@@ -114,17 +142,9 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 	if !u.inited {
 
 		if len(tf.Params) > 0 {
-			err = json.Unmarshal([]byte(tf.Params), &u.param)
+			err = sonic.Unmarshal([]byte(tf.Params), &u.param)
 			if err != nil {
 				return err
-			}
-		}
-
-		if len(u.param.Quantization) > 0 {
-			var ok bool
-			u.idxcfg.Usearch.Quantization, ok = vectorindex.QuantizationValid(u.param.Quantization)
-			if !ok {
-				return moerr.NewInternalError(proc.Ctx, "Invalid quantization value")
 			}
 		}
 
@@ -140,6 +160,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
 		}
+		u.idxcfg.OpType = u.param.OpType
 		u.idxcfg.Usearch.Metric = metrictype
 
 		if len(u.param.EfConstruction) > 0 {
@@ -171,36 +192,55 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		if len(cfgstr) == 0 {
 			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 		}
-		err = json.Unmarshal([]byte(cfgstr), &u.tblcfg)
+		err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg)
 		if err != nil {
 			return err
 		}
 
-		if u.tblcfg.IndexCapacity <= 0 {
+		// max_index_capacity: flat algo_params key (set in CREATE INDEX) wins;
+		// otherwise the session variable controls it, then the hardcoded
+		// default. Sourced only when the cfg didn't already carry one.
+		if u.idxcfg.IndexCapacity <= 0 {
+			u.idxcfg.IndexCapacity, err = indexplugin.AlgoParamInt(u.param.MaxIndexCapacity,
+				proc.GetResolveVariableFunc(), "hnsw_max_index_capacity", hnswrt.DefaultMaxIndexCapacity)
+			if err != nil {
+				return err
+			}
+		}
+
+		if u.idxcfg.IndexCapacity <= 0 {
 			return moerr.NewInvalidInput(proc.Ctx, "Index Capacity must be greater than 0")
 		}
 
 		idVec := tf.ctr.argVecs[1]
-		if idVec.GetType().Oid != types.T_int64 {
+		if !catalogplugin.SupportsPrimaryKeyType(hnswCatalogHooks, idVec.GetType().Oid) {
 			return moerr.NewInvalidInput(proc.Ctx, "Second argument (pkid must be a bigint")
 		}
 
-		f32aVec := tf.ctr.argVecs[2]
-		if f32aVec.GetType().Oid != types.T_array_float32 {
-			return moerr.NewInvalidInput(proc.Ctx, "Third argument (vector must be a vecfs32 type")
-		}
-		dimension := f32aVec.GetType().Width
-
-		// dimension
-		u.idxcfg.Usearch.Dimensions = uint(dimension)
-		u.idxcfg.Type = "hnsw"
-
-		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
-		u.build, err = hnsw.NewHnswBuild(proc, uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
+		faVec := tf.ctr.argVecs[2]
+		// quantization
+		u.idxcfg.Usearch.Quantization, err = hnsw.QuantizationToUsearch(int32(faVec.GetType().Oid))
 		if err != nil {
 			return err
 		}
 
+		// dimension
+		dimension := faVec.GetType().Width
+
+		u.idxcfg.Usearch.Dimensions = uint(dimension)
+		u.idxcfg.Type = vectorindex.HNSW
+
+		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
+
+		switch u.idxcfg.Usearch.Quantization {
+		case usearch.F32:
+			u.buildf32, err = hnsw.NewHnswBuild[float32](sqlexec.NewSqlProcess(proc), uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
+		case usearch.F64:
+			u.buildf64, err = hnsw.NewHnswBuild[float64](sqlexec.NewSqlProcess(proc), uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
+		}
+		if err != nil {
+			return err
+		}
 		u.batch = tf.createResultBatch()
 		u.inited = true
 	}
@@ -214,20 +254,38 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 	idVec := tf.ctr.argVecs[1]
 	id := vector.GetFixedAtNoTypeCheck[int64](idVec, nthRow)
 
-	f32aVec := tf.ctr.argVecs[2]
-	if f32aVec.IsNull(uint64(nthRow)) {
+	faVec := tf.ctr.argVecs[2]
+	if faVec.IsNull(uint64(nthRow)) {
 		return nil
 	}
 
-	f32a := types.BytesToArray[float32](f32aVec.GetBytesAt(nthRow))
+	switch u.idxcfg.Usearch.Quantization {
+	case usearch.F32:
+		f32a := types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
 
-	if uint(len(f32a)) != u.idxcfg.Usearch.Dimensions {
-		return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
-	}
+		if uint(len(f32a)) != u.idxcfg.Usearch.Dimensions {
+			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+		}
 
-	err = u.build.Add(id, f32a)
-	if err != nil {
-		return err
+		err = u.buildf32.Add(id, f32a)
+		if err != nil {
+			return err
+		}
+		return nil
+	case usearch.F64:
+		f64a := types.BytesToArray[float64](faVec.GetBytesAt(nthRow))
+
+		if uint(len(f64a)) != u.idxcfg.Usearch.Dimensions {
+			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+		}
+
+		err = u.buildf64.Add(id, f64a)
+		if err != nil {
+			return err
+		}
+		return nil
+	default:
+		// should not go here
+		panic("invalid quantization")
 	}
-	return nil
 }

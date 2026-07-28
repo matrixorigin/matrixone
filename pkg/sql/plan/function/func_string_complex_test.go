@@ -1,0 +1,1005 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package function
+
+import (
+	"math"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
+)
+
+// Test_BuiltInConcat tests the CONCAT function with multiple parameters
+// This is a complex function that calls many other string handling functions
+func Test_BuiltInConcat(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test concatenating 2 strings
+	{
+		tc := tcTemp{
+			info: "select concat(str1, str2)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello", "Good", "", "ABC"}, []bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"World", "Morning", "Test", "123"}, []bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"HelloWorld", "GoodMorning", "Test", "ABC123"}, []bool{false, false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInConcat)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test concatenating 3 strings
+	{
+		tc := tcTemp{
+			info: "select concat(str1, str2, str3)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"A", "Hello", ""}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"B", " ", "X"}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"C", "World", "Y"}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"ABC", "Hello World", "XY"}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInConcat)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test concat with NULL (any NULL makes result NULL)
+	{
+		tc := tcTemp{
+			info: "select concat(str1, str2) with NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello", "Good", ""}, []bool{false, false, true}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"World", "", "Test"}, []bool{false, true, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"HelloWorld", "", ""}, []bool{false, true, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInConcat)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test concat with 4 strings (testing multi-parameter handling)
+	{
+		tc := tcTemp{
+			info: "select concat(str1, str2, str3, str4)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"A", "Matrix"}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"B", "One"}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"C", " "}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"D", "Database"}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"ABCD", "MatrixOne Database"}, []bool{false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInConcat)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test concat with empty strings
+	{
+		tc := tcTemp{
+			info: "select concat with empty strings",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", "Hello", ""}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", "", "World"}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", "Hello", "World"}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInConcat)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+// Test_ConcatWs tests CONCAT_WS function (concat with separator)
+// This is a complex function with conditional logic for NULL handling
+func Test_ConcatWs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test concat_ws with 2 strings
+	{
+		tc := tcTemp{
+			info: "select concat_ws(sep, str1, str2)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{",", "-", " | "}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"A", "Hello", "X"}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"B", "World", "Y"}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A,B", "Hello-World", "X | Y"}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, ConcatWs)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test concat_ws with 3 strings
+	{
+		tc := tcTemp{
+			info: "select concat_ws(sep, str1, str2, str3)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{",", "-"}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"A", "a"}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"B", "b"}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"C", "c"}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A,B,C", "a-b-c"}, []bool{false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, ConcatWs)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test concat_ws with NULL separator (result is NULL)
+	{
+		tc := tcTemp{
+			info: "select concat_ws(NULL, str1, str2)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", ""}, []bool{true, true}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"A", "Hello"}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"B", "World"}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", ""}, []bool{true, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, ConcatWs)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test concat_ws skipping NULL values in strings (but not separator)
+	{
+		tc := tcTemp{
+			info: "select concat_ws(sep, str1, NULL, str2)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{",", "-"}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"A", "a"}, []bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", ""}, []bool{true, true}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"C", "c"}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				// NULL values are skipped, only non-NULL are concatenated
+				[]string{"A,C", "a-c"}, []bool{false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, ConcatWs)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test concat_ws with all NULL strings (result is empty string)
+	{
+		tc := tcTemp{
+			info: "select concat_ws(sep, NULL, NULL)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{","}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""}, []bool{true}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""}, []bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, ConcatWs)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+// Test_SubStringWith3Args tests SUBSTRING function with start and length
+// This is a complex function with different logic for positive/negative start positions
+func Test_SubStringWith3Args(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test substring with positive start position
+	{
+		tc := tcTemp{
+			info: "select substring(str, start, length) with positive start",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"HelloWorld", "MatrixOne", "Database"}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1, 1, 5}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5, 6, 4}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Hello", "Matrix", "base"}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, SubStringWith3Args)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test substring with negative start position (from end)
+	{
+		tc := tcTemp{
+			info: "select substring(str, start, length) with negative start",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"HelloWorld", "MatrixOne", "Database"}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-5, -3, -4}, []bool{false, false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5, 3, 4}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"World", "One", "base"}, []bool{false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, SubStringWith3Args)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test substring with start position 0 (returns empty string)
+	{
+		tc := tcTemp{
+			info: "select substring(str, 0, length)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"HelloWorld"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""}, []bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, SubStringWith3Args)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test substring with NULL values
+	{
+		tc := tcTemp{
+			info: "select substring(str, start, length) with NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello", "", "World"}, []bool{false, true, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1, 1, 0}, []bool{false, false, true}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{3, 5, 3}, []bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Hel", "", ""}, []bool{false, true, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, SubStringWith3Args)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test substring with length 0
+	{
+		tc := tcTemp{
+			info: "select substring(str, start, 0)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"HelloWorld"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""}, []bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, SubStringWith3Args)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test substring with very large length
+	{
+		tc := tcTemp{
+			info: "select substring(str, start, very_large_length)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Hello", "World"}, []bool{false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{2, 1}, []bool{false, false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{1000, 1000}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"ello", "World"}, []bool{false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, SubStringWith3Args)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+// Test_BuiltInDateDiff tests DATEDIFF function
+// This tests date arithmetic which calls many date handling functions
+func Test_BuiltInDateDiff(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	{
+		tc := tcTemp{
+			info: "select datediff(date1, date2)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{100, 200, 365, 1000}, []bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{90, 190, 365, 900}, []bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{10, 10, 0, 100}, []bool{false, false, false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInDateDiff)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test datediff with NULL
+	{
+		tc := tcTemp{
+			info: "select datediff(date1, date2) with NULL",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{100, 0, 0}, []bool{false, true, false}),
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{90, 200, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{10, 0, 0}, []bool{false, true, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInDateDiff)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test datediff with negative result
+	{
+		tc := tcTemp{
+			info: "select datediff where date1 < date2",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{100, 50}, []bool{false, false}),
+				NewFunctionTestInput(types.T_date.ToType(),
+					[]types.Date{200, 100}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{-100, -50}, []bool{false, false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInDateDiff)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+// Test_BuiltInChar tests CHAR function
+func Test_BuiltInChar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Test CHAR with basic ASCII codes (3 arguments)
+	{
+		tc := tcTemp{
+			info: "select char(65, 66, 67)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{65},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{66},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{67},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"ABC"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with single argument
+	{
+		tc := tcTemp{
+			info: "select char(65)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{65},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with multiple arguments (Hello)
+	{
+		tc := tcTemp{
+			info: "select char(72, 101, 108, 108, 111)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{72},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{101},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{108},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{108},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{111},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Hello"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with NULL (MySQL skips NULL arguments)
+	{
+		tc := tcTemp{
+			info: "select char(65, 66, NULL)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{65},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{66},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"AB"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with all NULL arguments (MySQL returns an empty, non-NULL string)
+	{
+		tc := tcTemp{
+			info: "select char(null, null)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with varchar arguments (MySQL truncates the numeric prefix)
+	{
+		tc := tcTemp{
+			info: "select char('77.3', '65', 'abc')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"77.3"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"65"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"abc"},
+					[]bool{false}),
+			},
+			// '77.3' -> 77 = 'M', '65' -> 65 = 'A', 'abc' -> 0 = '\x00'
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"MA\x00"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with leading numeric prefix (MySQL parses leading digits)
+	{
+		tc := tcTemp{
+			info: "select char('65xyz')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"65xyz"},
+					[]bool{false}),
+			},
+			// '65xyz' → 65 = 'A'
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with large integer string (avoids float64 precision loss)
+	{
+		tc := tcTemp{
+			info: "select char('9007199254740993')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"9007199254740993"},
+					[]bool{false}),
+			},
+			// 9007199254740993 & 0xFF = 1
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\x01"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with mixed alphanumeric string (only leading digits parsed)
+	{
+		tc := tcTemp{
+			info: "select char('77abc')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"77abc"},
+					[]bool{false}),
+			},
+			// '77abc' → 77 = 'M'
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"M"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with digits
+	{
+		tc := tcTemp{
+			info: "select char(48, 49, 50)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{48},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{49},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{50},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"012"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with UTF-8 multi-byte character (Chinese character "中")
+	{
+		tc := tcTemp{
+			info: "select char(228, 184, 173)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{228},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{184},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{173},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"中"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with NULL varchar argument (skipped like NULL integers)
+	{
+		tc := tcTemp{
+			info: "select char('65', NULL::varchar)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"65"},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with empty string argument (MySQL: CHAR('') → 0x00)
+	{
+		tc := tcTemp{
+			info: "select char('')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\x00"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with multi-byte expansion: 256 → 0x0100
+	{
+		tc := tcTemp{
+			info: "select char(256)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{256},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\x01\x00"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with larger multi-byte: 65536 → 0x010000
+	{
+		tc := tcTemp{
+			info: "select char(65536)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{65536},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\x01\x00\x00"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with negative integer: -1 → 0xFFFFFFFF
+	{
+		tc := tcTemp{
+			info: "select char(-1)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{-1},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\xff\xff\xff\xff"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with negative string: '-65' → 0xFFFFFFBF
+	{
+		tc := tcTemp{
+			info: "select char('-65')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"-65"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\xff\xff\xff\xbf"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with string '256' → 0x0100 (multi-byte from string arg)
+	{
+		tc := tcTemp{
+			info: "select char('256')",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"256"},
+					[]bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"\x01\x00"},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	// Test CHAR with single NULL (MySQL returns empty, non-NULL string)
+	{
+		tc := tcTemp{
+			info: "select char(null)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{""},
+				[]bool{false}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+// Test_EncodeCharBytes tests the helper used by CHAR to convert integer
+// values to MySQL's big-endian multi-byte encoding
+func Test_EncodeCharBytes(t *testing.T) {
+	cases := []struct {
+		input int64
+		want  []byte
+	}{
+		{0, []byte{0x00}},
+		{255, []byte{0xFF}},
+		{256, []byte{0x01, 0x00}},
+		{65536, []byte{0x01, 0x00, 0x00}},
+		{-1, []byte{0xFF, 0xFF, 0xFF, 0xFF}},
+		{-65, []byte{0xFF, 0xFF, 0xFF, 0xBF}},
+		{math.MaxInt64, []byte{0xFF, 0xFF, 0xFF, 0xFF}},
+		{math.MinInt64, []byte{0x00}},
+	}
+	for _, c := range cases {
+		got := encodeCharBytes(c.input)
+		require.Equal(t, c.want, got, "encodeCharBytes(%d)", c.input)
+	}
+}
+
+// Test_ParseLeadingInteger tests the helper used by CHAR to parse
+// the leading integer prefix of string arguments
+func Test_ParseLeadingInteger(t *testing.T) {
+	cases := []struct {
+		input  string
+		want   int64
+		wantOk bool
+	}{
+		{"", 0, false},
+		{"abc", 0, false},
+		{"+", 0, false},
+		{"-", 0, false},
+		{"65", 65, true},
+		{"+65", 65, true},
+		{"-65", -65, true},
+		{"65xyz", 65, true},
+		{"77.3", 77, true},
+		{"9007199254740993", 9007199254740993, true},
+		// overflow clamps to the int64 boundary
+		{"99999999999999999999", math.MaxInt64, true},
+		{"-99999999999999999999", math.MinInt64, true},
+	}
+	for _, c := range cases {
+		got, ok := parseLeadingInteger(c.input)
+		require.Equal(t, c.want, got, "parseLeadingInteger(%q)", c.input)
+		require.Equal(t, c.wantOk, ok, "parseLeadingInteger(%q) ok", c.input)
+	}
+}
+
+// Test_BuiltInCharCheck tests CHAR's type-check and cast planning
+func Test_BuiltInCharCheck(t *testing.T) {
+	// no arguments: failure
+	{
+		got := builtInCharCheck(nil, nil)
+		require.Equal(t, failedFunctionParametersWrong, got.status)
+	}
+
+	// all integer arguments: success without cast
+	{
+		got := builtInCharCheck(nil, []types.Type{
+			types.T_int64.ToType(), types.T_int32.ToType(),
+		})
+		require.Equal(t, succeedMatched, got.status)
+	}
+
+	// varchar arguments: success without cast
+	{
+		got := builtInCharCheck(nil, []types.Type{types.T_varchar.ToType()})
+		require.Equal(t, succeedMatched, got.status)
+	}
+
+	// other string types (char/text/blob): cast to varchar
+	{
+		got := builtInCharCheck(nil, []types.Type{
+			types.T_char.ToType(), types.T_text.ToType(), types.T_blob.ToType(),
+		})
+		require.Equal(t, succeedWithCast, got.status)
+		for _, ft := range got.finalType {
+			require.Equal(t, types.T_varchar, ft.Oid)
+		}
+	}
+
+	// numeric types (float/decimal): cast to int64
+	{
+		got := builtInCharCheck(nil, []types.Type{
+			types.T_float64.ToType(), types.T_decimal128.ToType(),
+		})
+		require.Equal(t, succeedWithCast, got.status)
+		for _, ft := range got.finalType {
+			require.Equal(t, types.T_int64, ft.Oid)
+		}
+	}
+}
+
+// Test_BuiltInCharIsBin tests CHAR with hex/bit literals (e.g. 0x41,
+// b'01000001'). They are bound as varchar constants carrying raw bytes with
+// IsBin set, and must be interpreted as big-endian integers, not parsed as
+// decimal text (MySQL: CHAR(0x41) = 'A', CHAR(0x0100) = 0x0100).
+func Test_BuiltInCharIsBin(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	cases := []struct {
+		info  string
+		input []byte
+		want  string
+	}{
+		{"char(0x41)", []byte{0x41}, "A"},
+		{"char(0x0100)", []byte{0x01, 0x00}, "\x01\x00"},
+		{"char(b'01000001')", []byte{0x41}, "A"},
+		// 8 bytes: uint64 truncated to uint32 (MySQL: 0x4141414141414141 -> 41414141)
+		{"char(0x4141414141414141)", []byte{0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41}, "AAAA"},
+		// 8 bytes all 0xFF: uint64 max -> uint32 0xFFFFFFFF
+		{"char(0xFFFFFFFFFFFFFFFF)", []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, "\xff\xff\xff\xff"},
+		// >8 bytes: MySQL truncates incorrect BINARY value -> 0 -> 0x00
+		{"char(0x414141414141414141)", []byte{0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41}, "\x00"},
+		// empty binary: value 0 -> 0x00 (MySQL: HEX(CHAR(x'')) = 00)
+		{"char(x'')", []byte{}, "\x00"},
+	}
+
+	for _, c := range cases {
+		input := testutil.MakeVarlenaVector([][]byte{c.input}, nil, types.T_varchar.ToType(), mp)
+		input.SetIsBin(true)
+
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+		require.NoError(t, result.PreExtendAndReset(1))
+
+		err := builtInChar([]*vector.Vector{input}, result, proc, 1, nil)
+		require.NoError(t, err, c.info)
+		got := vector.InefficientMustStrCol(result.GetResultVector())
+		require.Equal(t, []string{c.want}, got, c.info)
+
+		result.Free()
+		input.Free(mp)
+	}
+}
+
+// Test_BuiltInCharNotBin verifies that plain varchar (IsBin unset, i.e. real
+// string data such as column values) still goes through leading-integer
+// parsing even if the content happens to look like raw bytes.
+func Test_BuiltInCharNotBin(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	// "A" without IsBin: parseLeadingInteger fails -> 0 -> 0x00
+	input := testutil.MakeVarlenaVector([][]byte{[]byte("A")}, nil, types.T_varchar.ToType(), mp)
+	defer input.Free(mp)
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	require.NoError(t, builtInChar([]*vector.Vector{input}, result, proc, 1, nil))
+	got := vector.InefficientMustStrCol(result.GetResultVector())
+	require.Equal(t, []string{"\x00"}, got)
+}
+
+// Test_BuiltInCharIntTypes exercises every integer-type getter in builtInChar
+// (int8/int16/int32/uint8/uint16/uint32), which arrive as-is without cast.
+func Test_BuiltInCharIntTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tc := tcTemp{
+		info: "select char(int8, int16, int32, uint8, uint16, uint32)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int8.ToType(), []int8{65}, []bool{false}),
+			NewFunctionTestInput(types.T_int16.ToType(), []int16{66}, []bool{false}),
+			NewFunctionTestInput(types.T_int32.ToType(), []int32{67}, []bool{false}),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{68}, []bool{false}),
+			NewFunctionTestInput(types.T_uint16.ToType(), []uint16{69}, []bool{false}),
+			NewFunctionTestInput(types.T_uint32.ToType(), []uint32{70}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"ABCDEF"},
+			[]bool{false}),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInChar)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}

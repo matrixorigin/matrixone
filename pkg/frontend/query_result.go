@@ -712,7 +712,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	bats, closeCB, err := reader.LoadAllColumns(ctx, idxs, ses.GetMemPool())
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, moerr.NewResultFileNotFound(ctx, makeResultMetaPath(account.GetTenant(), queryId))
+			return nil, moerr.NewResultFileNotFound(ctx, queryId)
 		}
 		return nil, err
 	}
@@ -745,7 +745,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 		e, err := getPu(ses.GetService()).FileService.StatFile(ctx, file)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				return nil, moerr.NewResultFileNotFound(ctx, file)
+				return nil, moerr.NewResultFileNotFound(ctx, queryId)
 			}
 			return nil, err
 		}

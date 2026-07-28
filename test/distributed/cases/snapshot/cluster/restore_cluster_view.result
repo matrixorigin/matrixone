@@ -747,7 +747,7 @@ drop database if exists University;
 drop database if exists EducationSystem;
 drop database if exists School;
 drop database if exists University;
-restore cluster from snapshot cluster_sp;
+restore cluster{snapshot="cluster_sp"};
 select * from School.Students;
 studentid    name    grade
 1    Alice Smith    3.50

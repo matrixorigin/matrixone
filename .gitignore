@@ -1,10 +1,25 @@
 .idea/
+.kiro/
+.cursor/
+.claude/*
+!.claude/skills/
+!.claude/skills/*/
+!.claude/skills/*/SKILL.md
+!.claude/skills/*/references/
+!.claude/skills/*/references/*.md
+/CLAUDE.md
 *.o
 *.a
+*.so
 *.exe
 *.lib
 *.swp
 *.fatbin
+*.py
+!pkg/iceberg/metadata/testdata/generate_golden_vectors.py
+!optools/iceberg_external_runner.py
+*.sh
+!etc/launch-minio-local/tier-b/seed-nyc-tlc-iceberg.sh
 bin/
 y.go
 *.output
@@ -12,13 +27,25 @@ y.go
 **/cover.out
 .vscode
 .env
+config.env
 *.iml
 tags
 coverage.txt
 out.txt
+logs/
+test/iceberg/reports/
+**/derby.log
+**/metastore_db/
+prometheus-local-data/
+prometheus-data/
+grafana-local-data/
+grafana-data/
+sdk_demo/
 vendor/
+/.proto-vendor/
 gen_config
 main
+mo-tool
 /mo-server
 /mo-service
 /mo-debug
@@ -43,6 +70,9 @@ thirdparties/fp16/*
 thirdparties/install/*
 thirdparties/usearch-*/*
 **/lib
+# Staged at the repo root by `make jieba-dict`, alongside `lib/` from thirdparties.
+# Source-of-truth dict lives at pkg/monlp/tokenizer/dict and stays tracked.
+/dict
 
 # bvt generate files
 test/distributed/resources/into_outfile/outfile_*.csv
@@ -52,3 +82,21 @@ test/distributed/resources/json/export_*.csv
 
 # docker compose bvt generate files
 docker-compose-log/
+
+# docker-multi-cn-local-disk generated configuration files
+etc/docker-multi-cn-local-disk/*.toml
+!etc/docker-multi-cn-local-disk/launch.toml
+
+# Allow Python SDK files
+!clients/python/matrixone/**/*.py
+!clients/python/tests/**/*.py
+!clients/python/examples/**/*.py
+# python
+**/__pycache__/
+*.pyc
+.agents/*
+!.agents/skills/
+!.agents/skills/*/
+!.agents/skills/*/SKILL.md
+!.agents/skills/*/references/
+!.agents/skills/*/references/*.md

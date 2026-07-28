@@ -165,6 +165,9 @@ INSERT INTO group_concat_12 values (3, 3);
 SELECT group_concat(c) FROM group_concat_11;
 SELECT group_concat_12.a,group_concat_12.c FROM group_concat_12,group_concat_11 where group_concat_12.a=group_concat_11.a;
 SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc) as grp FROM group_concat_11;
+SELECT group_concat((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a) order by 1) as grp FROM group_concat_11;
+SELECT group_concat(coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '') order by 1) as grp FROM group_concat_11;
+SELECT group_concat(group_concat_11.c order by coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '')) as grp FROM group_concat_11;
 
 
 -- @suite
@@ -237,3 +240,19 @@ drop table if exists g18;
 create table g18 (a int);
 select group_concat(a order by a) from g18;
 drop table if exists g18;
+
+-- group_concat_max_len
+drop table if exists group_concat_max_len_01;
+create table group_concat_max_len_01 (id int primary key, s varchar(16));
+insert into group_concat_max_len_01 values (1, 'aa'), (2, 'bb'), (3, 'cc');
+set session group_concat_max_len = 1024;
+prepare group_concat_max_len_stmt from 'select group_concat(s order by s separator "") from group_concat_max_len_01';
+set session group_concat_max_len = 5;
+execute group_concat_max_len_stmt;
+set session group_concat_max_len = 1024;
+execute group_concat_max_len_stmt;
+deallocate prepare group_concat_max_len_stmt;
+set session group_concat_max_len = 5;
+select group_concat(s order by s separator '') from group_concat_max_len_01;
+set session group_concat_max_len = 1024;
+drop table group_concat_max_len_01;

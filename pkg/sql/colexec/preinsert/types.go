@@ -32,6 +32,10 @@ type container struct {
 	canFreeVecIdx     map[int]bool //auto incr & expand constant vecotr.need free
 	clusterByExecutor colexec.ExpressionExecutor
 	compPkExecutor    colexec.ExpressionExecutor
+	// tblId is a local copy of TableDef.TblId, refreshed by
+	// refreshAutoIncrementTableID.  Storing it here avoids mutating the
+	// shared *plan.TableDef that other operators may read concurrently.
+	tblId uint64
 }
 type PreInsert struct {
 	ctr container
@@ -44,16 +48,21 @@ type PreInsert struct {
 	// letter case: origin
 	Attrs []string
 
-	EstimatedRowCount int64
-	CompPkeyExpr      *plan.Expr
-	ClusterByExpr     *plan.Expr
-	ColOffset         int32
+	EstimatedRowCount  int64
+	CompPkeyExpr       *plan.Expr
+	ClusterByExpr      *plan.Expr
+	ColOffset          int32
+	RejectZeroTemporal bool
 
 	vm.OperatorBase
 }
 
 func (preInsert *PreInsert) GetOperatorBase() *vm.OperatorBase {
 	return &preInsert.OperatorBase
+}
+
+func (preInsert *PreInsert) SetRejectZeroTemporal(reject bool) {
+	preInsert.RejectZeroTemporal = reject
 }
 
 func init() {

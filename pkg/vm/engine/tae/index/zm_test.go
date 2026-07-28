@@ -252,7 +252,7 @@ func TestZMOp(t *testing.T) {
 }
 
 func TestVectorZM(t *testing.T) {
-	m := mpool.MustNewNoFixed(t.Name())
+	m := mpool.MustNew(t.Name())
 	zm := NewZM(types.T_uint32, 0)
 	zm.Update(uint32(12))
 	zm.Update(uint32(22))
@@ -319,6 +319,73 @@ func TestVectorZM(t *testing.T) {
 	require.Zero(t, m.CurrNB())
 }
 
+func TestZoneMapAnyInSkipsNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+
+	require.NoError(t, vector.AppendBytes(vec, []byte("aaa"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, []byte("key"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, []byte("keep"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+
+	zm := NewZM(types.T_varchar, 0)
+	UpdateZM(zm, []byte("key"))
+	UpdateZM(zm, []byte("keep"))
+
+	require.True(t, zm.AnyIn(vec))
+	lower, upper := zm.SubVecIn(vec)
+	require.Equal(t, 0, lower)
+	require.Equal(t, vec.Length(), upper)
+}
+
+func TestZoneMapAnyInSkipsNullsForFixedTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+
+	require.NoError(t, vector.AppendFixed(vec, int32(1), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, int32(2), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, int32(0), true, mp))
+
+	minVal, maxVal := int32(2), int32(4)
+	zm := NewZM(types.T_int32, 0)
+	UpdateZM(zm, types.EncodeInt32(&minVal))
+	UpdateZM(zm, types.EncodeInt32(&maxVal))
+
+	require.True(t, zm.AnyIn(vec))
+	lower, upper := zm.SubVecIn(vec)
+	require.Equal(t, 0, lower)
+	require.Equal(t, vec.Length(), upper)
+}
+
+func TestZoneMapAnyInAllNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+
+	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+
+	zm := NewZM(types.T_varchar, 0)
+	UpdateZM(zm, []byte("key"))
+
+	require.False(t, zm.AnyIn(vec))
+}
+
+func TestZoneMapAnyInConstNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewConstNull(types.T_varchar.ToType(), 1, mp)
+	defer vec.Free(mp)
+
+	zm := NewZM(types.T_varchar, 0)
+	UpdateZM(zm, []byte("key"))
+
+	require.False(t, zm.AnyIn(vec))
+	lower, upper := zm.SubVecIn(vec)
+	require.Equal(t, 0, lower)
+	require.Equal(t, 0, upper)
+}
+
 func TestZMArray(t *testing.T) {
 	zm := NewZM(types.T_array_float32, 0)
 	zm.Update(types.ArrayToBytes[float32]([]float32{1, 1, 1}))
@@ -351,6 +418,21 @@ func TestZMNull(t *testing.T) {
 	require.False(t, zm.Contains(int64(-1)))
 	require.False(t, zm.Contains(int64(0)))
 	require.False(t, zm.Contains(int64(1)))
+}
+
+func TestZMDecimal256IsSkipped(t *testing.T) {
+	zm := NewZM(types.T_decimal256, 4)
+	value, err := types.ParseDecimal256("12.3400", 65, 4)
+	require.NoError(t, err)
+
+	UpdateZM(zm, types.EncodeDecimal256(&value))
+	require.False(t, zm.IsInited())
+	require.Nil(t, zm.GetMin())
+	require.Nil(t, zm.GetMax())
+
+	zm.setInited()
+	require.Nil(t, zm.GetMin())
+	require.Nil(t, zm.GetMax())
 }
 
 func TestZmStringCompose(t *testing.T) {
@@ -458,6 +540,63 @@ func TestZM(t *testing.T) {
 		require.Equal(t, vMin, zm.GetMin())
 		require.Equal(t, vMax, zm.GetMax())
 	}
+}
+
+func TestPrefixInRange(t *testing.T) {
+	zm := BuildZM(types.T_varchar, []byte("bbb"))
+	UpdateZM(zm, []byte("ddd"))
+
+	// hint=0: [lb, ub] — same as PrefixBetween
+	require.True(t, zm.PrefixInRange([]byte("aaa"), []byte("eee"), 0))
+	require.True(t, zm.PrefixInRange([]byte("bbb"), []byte("ddd"), 0))
+	require.False(t, zm.PrefixInRange([]byte("eee"), []byte("fff"), 0))
+
+	// hint=1: (lb, ub] — max must be strictly > lb
+	require.True(t, zm.PrefixInRange([]byte("aaa"), []byte("ccc"), 1))
+	require.True(t, zm.PrefixInRange([]byte("bbb"), []byte("ddd"), 1))
+	require.False(t, zm.PrefixInRange([]byte("ddd"), []byte("fff"), 1))
+
+	// hint=2: [lb, ub) — min must be strictly < ub
+	require.True(t, zm.PrefixInRange([]byte("aaa"), []byte("eee"), 2))
+	require.True(t, zm.PrefixInRange([]byte("bbb"), []byte("ddd"), 2))
+	require.False(t, zm.PrefixInRange([]byte("aaa"), []byte("bbb"), 2))
+
+	// hint=3: (lb, ub) — both strict
+	require.True(t, zm.PrefixInRange([]byte("aaa"), []byte("eee"), 3))
+	require.False(t, zm.PrefixInRange([]byte("ddd"), []byte("fff"), 3))
+	require.False(t, zm.PrefixInRange([]byte("aaa"), []byte("bbb"), 3))
+}
+
+func TestInRangeZM(t *testing.T) {
+	v10 := int64(10)
+	v20 := int64(20)
+	zm := BuildZM(types.T_int64, types.EncodeInt64(&v10))
+	UpdateZMAny(zm, v20)
+
+	lb5 := types.EncodeInt64(&[]int64{5}[0])
+	ub25 := types.EncodeInt64(&[]int64{25}[0])
+	lb10 := types.EncodeInt64(&v10)
+	ub20 := types.EncodeInt64(&v20)
+
+	// hint=0: [lb, ub]
+	require.True(t, zm.InRange(lb5, ub25, 0))
+	require.True(t, zm.InRange(lb10, ub20, 0))
+
+	// hint=1: (lb, ub] — must have values > lb
+	require.True(t, zm.InRange(lb5, ub25, 1))
+	require.True(t, zm.InRange(lb10, ub20, 1))
+	ub10 := types.EncodeInt64(&v10)
+	lb20 := types.EncodeInt64(&v20)
+	require.False(t, zm.InRange(lb20, ub25, 1))
+
+	// hint=2: [lb, ub) — must have values < ub
+	require.True(t, zm.InRange(lb5, ub25, 2))
+	require.False(t, zm.InRange(lb5, ub10, 2))
+
+	// hint=3: (lb, ub) — both strict
+	require.True(t, zm.InRange(lb5, ub25, 3))
+	require.False(t, zm.InRange(lb20, ub25, 3))
+	require.False(t, zm.InRange(lb5, ub10, 3))
 }
 
 func TestZMSum(t *testing.T) {
@@ -568,4 +707,41 @@ func BenchmarkUpdateZMVector(b *testing.B) {
 			BatchUpdateZM(zm, vec)
 		}
 	})
+}
+
+// ZM.getValue enumerated only vecf32/vecf64 and PANICS on its default, so a
+// bf16/f16/int8/uint8 vector ZM crashed the process. The user-visible symptom
+// was mo_table_col_max panicking on a table that merely CONTAINED such a column.
+//
+// Array ZMs are not inited by the normal update path (see TestZMArray), so this
+// drives getValue through GetMin/GetMax on a ZM whose buffers are set directly —
+// the shape a persisted/legacy inited array ZM takes.
+func TestZMNarrowVectorGetValue(t *testing.T) {
+	check := func(name string, oid types.T, payload []byte, want any) {
+		t.Helper()
+		zm := NewZM(oid, 0)
+		// updateMinString/updateMaxString also write the length header byte;
+		// copying into GetMinBuf() alone is a no-op on a fresh ZM (its length
+		// starts at 0). Payloads here are <= 30 bytes so nothing is truncated.
+		require.LessOrEqual(t, len(payload), 30, name+" payload fits the ZM buffer")
+		zm.updateMinString(payload)
+		zm.updateMaxString(payload)
+		zm.setInited()
+		require.NotPanics(t, func() {
+			require.Equal(t, want, zm.GetMin(), name+" min")
+			require.Equal(t, want, zm.GetMax(), name+" max")
+		}, name)
+	}
+
+	bf := types.Float32ToBF16Slice([]float32{1, 2, 3})
+	check("bf16", types.T_array_bf16, types.ArrayToBytes[types.BF16](bf), bf)
+
+	f16 := types.Float32ToFloat16Slice([]float32{1, 2, 3})
+	check("f16", types.T_array_float16, types.ArrayToBytes[types.Float16](f16), f16)
+
+	i8 := []int8{-1, 0, 7}
+	check("int8", types.T_array_int8, types.ArrayToBytes[int8](i8), i8)
+
+	u8 := []uint8{1, 128, 255}
+	check("uint8", types.T_array_uint8, types.ArrayToBytes[uint8](u8), u8)
 }

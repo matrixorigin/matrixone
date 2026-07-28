@@ -23,12 +23,12 @@ show snapshots;
 drop database db1;
 select name, db from mo_catalog.mo_user_defined_function;
 
-restore account sys from snapshot snapshot1;
+restore account sys{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 select name, db from mo_catalog.mo_user_defined_function;
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 select name, db from mo_catalog.mo_user_defined_function;
@@ -50,7 +50,7 @@ CREATE STAGE my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2
 CREATE STAGE my_ext_stage2 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 SELECT stage_name, stage_status from mo_catalog.mo_stages;
 
-CREATE STAGE my_ext_stage3 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE;
+CREATE STAGE my_ext_stage3 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 SELECT stage_name, stage_status from mo_catalog.mo_stages;
 
 create snapshot snapshot1 for account;
@@ -74,12 +74,12 @@ DROP STAGE my_ext_stage1;
 DROP STAGE my_ext_stage2;
 DROP STAGE my_ext_stage3;
 
-restore account sys from snapshot snapshot1;
+restore account sys{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 SELECT stage_name from mo_catalog.mo_stages;
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 SELECT stage_name from mo_catalog.mo_stages;
@@ -114,10 +114,7 @@ insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
 
 select name from mo_catalog.mo_stored_procedure;
 drop procedure if exists test_if_hit_if;
--- @delimiter .
-create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
 select name from mo_catalog.mo_stored_procedure;
 
@@ -128,10 +125,7 @@ show snapshots;
 
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
--- @delimiter .
-create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_elseif_first_elseif();
 select name from mo_catalog.mo_stored_procedure;
 
@@ -139,13 +133,13 @@ create snapshot snapshot2 for account;
 -- @ignore:1
 show snapshots;
 
-restore account sys from snapshot snapshot1;
+restore account sys{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 select name from mo_catalog.mo_stored_procedure;
 call test_if_hit_if();
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 select name from mo_catalog.mo_stored_procedure;
@@ -185,7 +179,7 @@ create snapshot snapshot2 for account;
 -- @ignore:1
 show snapshots;
 
-restore account sys from snapshot snapshot1;
+restore account sys{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 
@@ -193,7 +187,7 @@ select user_name from mo_catalog.mo_user order by user_name asc;
 -- @ignore:0,1
 select role_id,user_id from mo_catalog.mo_user_grant;
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 
@@ -240,12 +234,12 @@ show snapshots;
 drop database db1;
 select name, db from mo_catalog.mo_user_defined_function;
 
-restore account acc01 from snapshot snapshot1;
+restore account acc01{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 select name, db from mo_catalog.mo_user_defined_function;
 
-restore account acc01 from snapshot snapshot2;
+restore account acc01{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 select name, db from mo_catalog.mo_user_defined_function;
@@ -267,7 +261,7 @@ CREATE STAGE my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2
 CREATE STAGE my_ext_stage2 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 SELECT stage_name, stage_status from mo_catalog.mo_stages;
 
-CREATE STAGE my_ext_stage3 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE;
+CREATE STAGE my_ext_stage3 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 SELECT stage_name, stage_status from mo_catalog.mo_stages;
 
 create snapshot snapshot1 for account acc01;
@@ -291,12 +285,12 @@ DROP STAGE my_ext_stage1;
 DROP STAGE my_ext_stage2;
 DROP STAGE my_ext_stage3;
 
-restore account acc01 from snapshot snapshot1;
+restore account acc01{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 SELECT stage_name from mo_catalog.mo_stages;
 
-restore account acc01 from snapshot snapshot2;
+restore account acc01{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 SELECT stage_name from mo_catalog.mo_stages;
@@ -331,10 +325,7 @@ insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
 
 select name from mo_catalog.mo_stored_procedure;
 drop procedure if exists test_if_hit_if;
--- @delimiter .
-create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
 select name from mo_catalog.mo_stored_procedure;
 
@@ -345,10 +336,7 @@ show snapshots;
 
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
--- @delimiter .
-create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_elseif_first_elseif();
 select name from mo_catalog.mo_stored_procedure;
 
@@ -356,13 +344,13 @@ create snapshot snapshot2 for account acc01;
 -- @ignore:1
 show snapshots;
 
-restore account acc01 from snapshot snapshot1;
+restore account acc01{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 select name from mo_catalog.mo_stored_procedure;
 call test_if_hit_if();
 
-restore account acc01 from snapshot snapshot2;
+restore account acc01{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 select name from mo_catalog.mo_stored_procedure;
@@ -396,13 +384,13 @@ create snapshot snapshot2 for account acc01;
 -- @ignore:1
 show snapshots;
 
-restore account acc01 from snapshot snapshot1;
+restore account acc01{snapshot="snapshot1"};
 -- @ignore:1
 show snapshots;
 -- @ignore:1
 select user_name,authentication_string from mo_catalog.mo_user order by user_name asc;
 
-restore account acc01 from snapshot snapshot2;
+restore account acc01{snapshot="snapshot2"};
 -- @ignore:1
 show snapshots;
 -- @ignore:1
@@ -447,7 +435,7 @@ CREATE STAGE my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2
 CREATE STAGE my_ext_stage2 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 SELECT stage_name, stage_status from mo_catalog.mo_stages;
 
-CREATE STAGE my_ext_stage3 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE;
+CREATE STAGE my_ext_stage3 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 SELECT stage_name, stage_status from mo_catalog.mo_stages;
 
 -- stored_procedure
@@ -466,10 +454,7 @@ insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
 
 select name from mo_catalog.mo_stored_procedure;
 drop procedure if exists test_if_hit_if;
--- @delimiter .
-create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
 select name from mo_catalog.mo_stored_procedure;
 
@@ -502,10 +487,7 @@ select stage_name from mo_catalog.mo_stages;
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
--- @delimiter .
-create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'
-.
--- @delimiter ;
+create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_elseif_first_elseif();
 select name from mo_catalog.mo_stored_procedure;
 
@@ -536,7 +518,7 @@ DROP STAGE my_ext_stage3;
 drop database if exists procedure_test;
 -- @session
 
-restore account acc01 from snapshot snapshot1 to account acc02;
+restore account acc01{snapshot="snapshot1"} to account acc02;
 -- @session:id=3&user=acc02:test_account&password=111
 -- udf
 select name, db from mo_catalog.mo_user_defined_function;
@@ -552,7 +534,7 @@ select name from mo_catalog.mo_stored_procedure;
 select user_name,authentication_string from mo_catalog.mo_user order by user_name asc;
 -- @session
 
-restore account acc01 from snapshot snapshot2 to account acc03;
+restore account acc01{snapshot="snapshot2"} to account acc03;
 -- @session:id=4&user=acc03:test_account&password=111
 -- udf
 select name, db from mo_catalog.mo_user_defined_function;
@@ -598,10 +580,10 @@ select * from cluster_table_2;
 
 create snapshot snapshot2 for account;
 
-restore account sys from snapshot snapshot1;
+restore account sys{snapshot="snapshot1"};
 select * from mo_catalog.cluster_table_1;
 
-restore account sys from snapshot snapshot2;
+restore account sys{snapshot="snapshot2"};
 select * from mo_catalog.cluster_table_2;
 
 drop snapshot snapshot1;

@@ -48,12 +48,12 @@ internal error: do not have privilege to execute the statement
 drop table use_db_1.use_table_2;
 internal error: do not have privilege to execute the statement
 set secondary role all;
-create table use_db_1.use_table_5(a int,b varchar(20),c double );
-insert into use_db_1.use_table_5 values(10,'yellow',99.99);
-select * from use_db_1.use_table_5;
+insert into use_db_1.use_table_2 values(20,'green',88.88);
+select * from use_db_1.use_table_2 order by a;
 a    b    c
 10    yellow    99.99
-drop table use_db_1.use_table_5;
+20    green    88.88
+34    kelly    90.3
 set role moadmin;
 internal error: the role moadmin has not be granted to the user use_user_1
 create user use_user_2 identified by '123456';
@@ -72,15 +72,21 @@ internal error: there is no role use_role_test
 drop role  use_role_test;
 internal error: do not have privilege to execute the statement
 set secondary role all;
-create table use_db_1.use_table_6(a int,b varchar(20),c double);
-insert into use_db_1.use_table_6 values(10,'yellow',99.99);
+insert into use_db_1.use_table_2 values(30,'blue',77.77);
+select * from use_db_1.use_table_2 order by a;
+a    b    c
+10    yellow    99.99
+20    green    88.88
+30    blue    77.77
+34    kelly    90.3
 create database use_db_test;
 internal error: do not have privilege to execute the statement
 drop database use_db_test;
 internal error: do not have privilege to execute the statement
 set secondary role none;
-insert into use_db_1.use_table_6 values (10, 'yellow', 99.99);
-drop table use_db_1.use_table_6;
+insert into use_db_1.use_table_2 values (40, 'red', 66.66);
+internal error: do not have privilege to execute the statement
+drop table use_db_1.use_table_2;
 internal error: do not have privilege to execute the statement
 create role if not exists use_role_test;
 internal error: do not have privilege to execute the statement
@@ -88,7 +94,7 @@ drop role use_role_test;
 internal error: do not have privilege to execute the statement
 set role use_role_5;
 internal error: the role use_role_5 has not be granted to the user use_user_1
-drop table use_db_1.use_table_6;
+drop table use_db_1.use_table_2;
 internal error: do not have privilege to execute the statement
 create database if not exists use_db_test;
 internal error: do not have privilege to execute the statement

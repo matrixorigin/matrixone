@@ -16,16 +16,18 @@ package frontend
 
 import (
 	"context"
+	"math/rand"
 	"testing"
-
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExtractRowFromVector(t *testing.T) {
@@ -40,6 +42,79 @@ func TestExtractRowFromVector(t *testing.T) {
 		err := extractRowFromVector(context.TODO(), nil, vec, columnIdx, row, rowIdx, false)
 		require.NoError(t, err)
 		require.Equal(t, row[columnIdx].(uint64), values[rowIdx])
+	}
+}
+
+// TestExtractRowFromVectorNarrowVec guards the row-based (GetValue) display path
+// for the narrow vector types. vecuint8 in particular must NOT be stored as
+// []uint8: that is the same Go type as a raw []byte (binary/varbinary) value once
+// the column is mapped to MYSQL_TYPE_VARCHAR, so every value-based consumer
+// (GetString, the legacy row encoders, CSV export) would emit raw bytes / corrupt
+// output. It is stored as its display string instead. bf16/f16/int8 stay as their
+// distinct slice types (GetString renders them via ArrayToString). Every type must
+// render as the human-readable "[1, 2, 3]" form, never raw bytes.
+func TestExtractRowFromVectorNarrowVec(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	f32 := []float32{1, 2, 3}
+	bf16 := types.Float32ToBF16Slice(f32)
+	f16 := types.Float32ToFloat16Slice(f32)
+	i8 := []int8{1, 2, 3}
+	u8 := []uint8{1, 2, 3}
+
+	cases := []struct {
+		name    string
+		oid     types.T
+		bytes   []byte
+		display string
+		assert  func(t *testing.T, v any)
+	}{
+		{
+			name: "bf16", oid: types.T_array_bf16,
+			bytes:   types.ArrayToBytes[types.BF16](bf16),
+			display: types.ArrayToString[types.BF16](bf16),
+			assert:  func(t *testing.T, v any) { _, ok := v.([]types.BF16); require.Truef(t, ok, "got %T", v) },
+		},
+		{
+			name: "f16", oid: types.T_array_float16,
+			bytes:   types.ArrayToBytes[types.Float16](f16),
+			display: types.ArrayToString[types.Float16](f16),
+			assert:  func(t *testing.T, v any) { _, ok := v.([]types.Float16); require.Truef(t, ok, "got %T", v) },
+		},
+		{
+			name: "int8", oid: types.T_array_int8,
+			bytes:   types.ArrayToBytes[int8](i8),
+			display: types.ArrayToString[int8](i8),
+			assert:  func(t *testing.T, v any) { _, ok := v.([]int8); require.Truef(t, ok, "got %T", v) },
+		},
+		{
+			name: "uint8", oid: types.T_array_uint8,
+			bytes:   types.ArrayToBytes[uint8](u8),
+			display: types.ArrayToString[uint8](u8),
+			assert: func(t *testing.T, v any) {
+				s, ok := v.(string)
+				require.Truef(t, ok, "vecuint8 must be stored as a string (not []uint8/[]byte), got %T", v)
+				require.Equal(t, types.ArrayToString[uint8](u8), s)
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			vec := vector.NewVec(c.oid.ToType())
+			require.NoError(t, vector.AppendAny(vec, c.bytes, false, mp))
+
+			row := make([]any, 1)
+			require.NoError(t, extractRowFromVector(context.TODO(), nil, vec, 0, row, 0, false))
+			c.assert(t, row[0])
+
+			mrs := &MysqlResultSet{}
+			mrs.Data = [][]any{{row[0]}}
+			mrs.Columns = make([]Column, 1)
+			got, err := mrs.GetString(context.TODO(), 0, 0)
+			require.NoError(t, err)
+			require.Equal(t, c.display, got)
+		})
 	}
 }
 
@@ -62,6 +137,81 @@ func BenchmarkName(b *testing.B) {
 			_ = extractRowFromVector2(context.TODO(), nil, vec, 0, row, j, false, colSlices)
 		}
 	}
+}
+
+func TestExtractRowFromVector2(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	colSlices := &ColumnSlices{
+		colIdx2SliceIdx: make([]int, 1),
+	}
+
+	t.Run("A", func(t *testing.T) {
+		var (
+			vecf32 [][]float32
+			vec    = vector.NewVec(types.T_array_float32.ToType())
+		)
+
+		for i := 0; i < 10; i++ {
+			vecf32 = append(vecf32, make([]float32, 10))
+			for j := 0; j < 10; j++ {
+				vecf32[i][j] = rand.Float32()
+			}
+			bb := types.ArrayToBytes[float32](vecf32[i])
+			err := vector.AppendAny(vec, bb, false, mp)
+			require.NoError(t, err)
+		}
+
+		err := convertVectorToSlice(context.TODO(), nil, vec, 0, colSlices)
+		require.NoError(t, err)
+		row := make([]any, 1)
+
+		for i := range 10 {
+			err = extractRowFromVector2(context.Background(), nil, vec, 0, row, i, false, colSlices)
+			require.NoError(t, err)
+
+			require.Equal(t, row[0].([]float32), vecf32[i])
+
+			err = extractRowFromVector2(context.Background(), nil, vec, 0, row, i, true, colSlices)
+			require.NoError(t, err)
+
+			require.Equal(t, row[0].([]float32), vecf32[i])
+		}
+	})
+
+	t.Run("B", func(t *testing.T) {
+		var (
+			vecf64 [][]float64
+			vec    = vector.NewVec(types.T_array_float64.ToType())
+		)
+
+		for i := 0; i < 10; i++ {
+			vecf64 = append(vecf64, make([]float64, 10))
+			for j := 0; j < 10; j++ {
+				vecf64[i][j] = rand.Float64()
+			}
+			bb := types.ArrayToBytes[float64](vecf64[i])
+			err := vector.AppendAny(vec, bb, false, mp)
+			require.NoError(t, err)
+		}
+
+		err := convertVectorToSlice(context.TODO(), nil, vec, 0, colSlices)
+		require.NoError(t, err)
+		row := make([]any, 1)
+
+		for i := range 10 {
+			err = extractRowFromVector2(context.Background(), nil, vec, 0, row, i, false, colSlices)
+			require.NoError(t, err)
+
+			require.Equal(t, row[0].([]float64), vecf64[i])
+
+			err = extractRowFromVector2(context.Background(), nil, vec, 0, row, i, true, colSlices)
+			require.NoError(t, err)
+
+			require.Equal(t, row[0].([]float64), vecf64[i])
+		}
+	})
+
 }
 
 func BenchmarkName2(b *testing.B) {
@@ -125,4 +275,277 @@ func Test_extractRowFromVector2(t *testing.T) {
 			fun()
 		}
 	})
+}
+
+// TestColumnSlicesGetDate tests GetDate function with comprehensive coverage
+func TestColumnSlicesGetDate(t *testing.T) {
+	ctx := context.TODO()
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	testCases := []struct {
+		name          string
+		setupFunc     func() (*ColumnSlices, *batch.Batch, uint64)
+		expectedDate  types.Date
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "Normal T_date type",
+			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_date, 0, 0))
+				date := types.Date(types.DateFromCalendar(2024, 1, 15))
+				vector.AppendFixed(bat.Vecs[0], date, false, mp)
+				bat.SetRowCount(1)
+
+				colSlices := &ColumnSlices{
+					ctx:             ctx,
+					colIdx2SliceIdx: make([]int, 1),
+					dataSet:         bat,
+				}
+				// Manually set up slices for T_date
+				colSlices.colIdx2SliceIdx[0] = 0
+				colSlices.arrDate = append(colSlices.arrDate, vector.ToSliceNoTypeCheck2[types.Date](bat.Vecs[0]))
+
+				return colSlices, bat, 0
+			},
+			expectedDate: types.Date(types.DateFromCalendar(2024, 1, 15)),
+			expectError:  false,
+		},
+		{
+			name: "Normal T_datetime type",
+			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0))
+				dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 0)
+				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
+				bat.SetRowCount(1)
+
+				colSlices := &ColumnSlices{
+					ctx:             ctx,
+					colIdx2SliceIdx: make([]int, 1),
+					dataSet:         bat,
+				}
+				// Manually set up slices for T_datetime
+				colSlices.colIdx2SliceIdx[0] = 0
+				colSlices.arrDatetime = append(colSlices.arrDatetime, vector.ToSliceNoTypeCheck2[types.Datetime](bat.Vecs[0]))
+
+				return colSlices, bat, 0
+			},
+			expectedDate: types.Date(types.DateFromCalendar(2024, 1, 15)),
+			expectError:  false,
+		},
+		{
+			name: "Const T_date type",
+			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
+				bat := batch.NewWithSize(1)
+				vec, err := vector.NewConstFixed(types.New(types.T_date, 0, 0), types.Date(types.DateFromCalendar(2024, 1, 15)), 1, mp)
+				require.NoError(t, err)
+				bat.Vecs[0] = vec
+				bat.SetRowCount(1)
+
+				colSlices := &ColumnSlices{
+					ctx:             ctx,
+					colIdx2SliceIdx: make([]int, 1),
+					dataSet:         bat,
+				}
+				// Manually set up slices for T_date
+				colSlices.colIdx2SliceIdx[0] = 0
+				colSlices.arrDate = append(colSlices.arrDate, vector.ToSliceNoTypeCheck2[types.Date](bat.Vecs[0]))
+
+				return colSlices, bat, 5 // Use row index 5, but should use 0 for const
+			},
+			expectedDate: types.Date(types.DateFromCalendar(2024, 1, 15)),
+			expectError:  false,
+		},
+		{
+			name: "Invalid type (default case)",
+			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+				vector.AppendFixed(bat.Vecs[0], int64(12345), false, mp)
+				bat.SetRowCount(1)
+
+				colSlices := &ColumnSlices{
+					ctx:             ctx,
+					colIdx2SliceIdx: make([]int, 1),
+					dataSet:         bat,
+				}
+				// Set up slices for T_int64
+				colSlices.colIdx2SliceIdx[0] = 0
+				colSlices.arrInt64 = append(colSlices.arrInt64, vector.ToSliceNoTypeCheck2[int64](bat.Vecs[0]))
+
+				return colSlices, bat, 0
+			},
+			expectError:   true,
+			errorContains: "invalid date slice",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			colSlices, bat, rowIdx := tc.setupFunc()
+			defer bat.Clean(mp)
+			defer colSlices.Close()
+
+			date, err := colSlices.GetDate(rowIdx, 0)
+
+			if tc.expectError {
+				require.Error(t, err)
+				if tc.errorContains != "" {
+					require.Contains(t, err.Error(), tc.errorContains)
+				}
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.expectedDate, date)
+			}
+		})
+	}
+}
+
+// TestColumnSlicesGetDatetime tests GetDatetime function with comprehensive coverage
+func TestColumnSlicesGetDatetime(t *testing.T) {
+	ctx := context.TODO()
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	testCases := []struct {
+		name          string
+		setupFunc     func() (*ColumnSlices, *batch.Batch, uint64)
+		expectedStr   string
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "Normal T_datetime type with scale 0",
+			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0))
+				dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 0)
+				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
+				bat.SetRowCount(1)
+
+				colSlices := &ColumnSlices{
+					ctx:             ctx,
+					colIdx2SliceIdx: make([]int, 1),
+					dataSet:         bat,
+				}
+				colSlices.colIdx2SliceIdx[0] = 0
+				colSlices.arrDatetime = append(colSlices.arrDatetime, vector.ToSliceNoTypeCheck2[types.Datetime](bat.Vecs[0]))
+
+				return colSlices, bat, 0
+			},
+			expectedStr: "2024-01-15 10:20:30",
+			expectError: false,
+		},
+		{
+			name: "Normal T_datetime type with scale > 0 and MicroSec == 0",
+			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+				dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 6)
+				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
+				bat.SetRowCount(1)
+
+				colSlices := &ColumnSlices{
+					ctx:             ctx,
+					colIdx2SliceIdx: make([]int, 1),
+					dataSet:         bat,
+				}
+				colSlices.colIdx2SliceIdx[0] = 0
+				colSlices.arrDatetime = append(colSlices.arrDatetime, vector.ToSliceNoTypeCheck2[types.Datetime](bat.Vecs[0]))
+
+				return colSlices, bat, 0
+			},
+			expectedStr: "2024-01-15 10:20:30", // Should format without fractional part when MicroSec == 0
+			expectError: false,
+		},
+		{
+			name: "Normal T_datetime type with scale > 0 and MicroSec != 0",
+			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+				dt, _ := types.ParseDatetime("2024-01-15 10:20:30.123456", 6)
+				vector.AppendFixed(bat.Vecs[0], dt, false, mp)
+				bat.SetRowCount(1)
+
+				colSlices := &ColumnSlices{
+					ctx:             ctx,
+					colIdx2SliceIdx: make([]int, 1),
+					dataSet:         bat,
+				}
+				colSlices.colIdx2SliceIdx[0] = 0
+				colSlices.arrDatetime = append(colSlices.arrDatetime, vector.ToSliceNoTypeCheck2[types.Datetime](bat.Vecs[0]))
+
+				return colSlices, bat, 0
+			},
+			expectedStr: "2024-01-15 10:20:30.123456",
+			expectError: false,
+		},
+		{
+			name: "Const T_datetime type",
+			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
+				bat := batch.NewWithSize(1)
+				dt, _ := types.ParseDatetime("2024-01-15 10:20:30", 0)
+				vec, err := vector.NewConstFixed(types.New(types.T_datetime, 0, 0), dt, 1, mp)
+				require.NoError(t, err)
+				bat.Vecs[0] = vec
+				bat.SetRowCount(1)
+
+				colSlices := &ColumnSlices{
+					ctx:             ctx,
+					colIdx2SliceIdx: make([]int, 1),
+					dataSet:         bat,
+				}
+				colSlices.colIdx2SliceIdx[0] = 0
+				colSlices.arrDatetime = append(colSlices.arrDatetime, vector.ToSliceNoTypeCheck2[types.Datetime](bat.Vecs[0]))
+
+				return colSlices, bat, 5 // Use row index 5, but should use 0 for const
+			},
+			expectedStr: "2024-01-15 10:20:30",
+			expectError: false,
+		},
+		{
+			name: "Invalid type (default case)",
+			setupFunc: func() (*ColumnSlices, *batch.Batch, uint64) {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+				vector.AppendFixed(bat.Vecs[0], int64(12345), false, mp)
+				bat.SetRowCount(1)
+
+				colSlices := &ColumnSlices{
+					ctx:             ctx,
+					colIdx2SliceIdx: make([]int, 1),
+					dataSet:         bat,
+				}
+				colSlices.colIdx2SliceIdx[0] = 0
+				colSlices.arrInt64 = append(colSlices.arrInt64, vector.ToSliceNoTypeCheck2[int64](bat.Vecs[0]))
+
+				return colSlices, bat, 0
+			},
+			expectError:   true,
+			errorContains: "invalid datetime slice",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			colSlices, bat, rowIdx := tc.setupFunc()
+			defer bat.Clean(mp)
+			defer colSlices.Close()
+
+			dtStr, err := colSlices.GetDatetime(rowIdx, 0)
+
+			if tc.expectError {
+				require.Error(t, err)
+				if tc.errorContains != "" {
+					require.Contains(t, err.Error(), tc.errorContains)
+				}
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.expectedStr, dtStr)
+			}
+		})
+	}
 }

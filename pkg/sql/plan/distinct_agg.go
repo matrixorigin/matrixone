@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -43,17 +44,30 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 			return
 		}
 
+		// Multi-arg COUNT(DISTINCT col1, col2, ...) cannot be optimized into a simple
+		// GROUP BY because the distinct combination spans multiple columns.
+		if len(aggFunc.Args) > 1 {
+			return
+		}
+
+		// COUNT(DISTINCT (col1, col2)) — tuple syntax; normalization to multi-arg
+		// form happens in HavingBinder.BindAggFunc. Just skip GROUP BY optimization.
+		if aggFunc.Args[0].Typ.Id == int32(types.T_tuple) {
+			return
+		}
+
 		oldGroupLen := len(node.GroupBy)
 		oldGroupBy := node.GroupBy
 		toCount := aggFunc.Args[0]
 
-		newGroupTag := builder.genNewTag()
-		newAggregateTag := builder.genNewTag()
+		newGroupTag := builder.genNewBindTag()
+		newAggregateTag := builder.genNewBindTag()
 		aggNodeID := builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_AGG,
 			Children:    []int32{node.Children[0]},
 			GroupBy:     append(oldGroupBy, toCount),
 			BindingTags: []int32{newGroupTag, newAggregateTag},
+			SpillMem:    builder.aggSpillMem,
 		}, builder.ctxByNode[node.Children[0]])
 
 		node.Children[0] = aggNodeID

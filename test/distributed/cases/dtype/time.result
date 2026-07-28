@@ -119,24 +119,24 @@ select cast('123.445' as time(6));
 cast(123.445 as time(26, 6))
 00:01:23.445000000
 select adddate(time'00:00:00', interval 1 hour);
-adddate(time(00:00:00), interval(1, hour))
+adddate(time(00:00:00), interval 1 hour)
 01:00:00
 select adddate(time'00:00:00', interval 1 minute);
-adddate(time(00:00:00), interval(1, minute))
+adddate(time(00:00:00), interval 1 minute)
 00:01:00
 select adddate(time'00:00:00', interval 1 second);
-adddate(time(00:00:00), interval(1, second))
+adddate(time(00:00:00), interval 1 second)
 00:00:01
 select adddate(time'800:00:00', interval 1 hour);
-adddate(time(800:00:00), interval(1, hour))
+adddate(time(800:00:00), interval 1 hour)
 801:00:00
 select adddate(time'2562047787:00:00', interval 1 hour);
 Data truncation: data out of range: data type time, 
 select adddate(time'100:00:00', interval -100 minute);
-adddate(time(100:00:00), interval(-100, minute))
+adddate(time(100:00:00), interval -100 minute)
 98:20:00
 select adddate(time'100:00:00', interval -1000 second);
-adddate(time(100:00:00), interval(-1000, second))
+adddate(time(100:00:00), interval -1000 second)
 99:43:20
 select cast(time("11:22:33") as BIGINT);
 cast(time(11:22:33) as bigint)

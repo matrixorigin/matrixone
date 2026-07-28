@@ -20,13 +20,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestLocalFSStatFileReturnsNonNotExistError(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "file"), []byte("data"), 0644))
+	fs, err := NewLocalFS(ctx, "local", root, DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	_, err = fs.StatFile(ctx, "file/child")
+	require.ErrorIs(t, err, syscall.ENOTDIR)
+}
 
 func TestLocalFS(t *testing.T) {
 
@@ -118,6 +134,38 @@ func TestLocalFS(t *testing.T) {
 		}
 	})
 
+}
+
+func TestLocalDirEntryInfoSkipsMissingEntries(t *testing.T) {
+	info, ok, err := localDirEntryInfo(fakeDirEntryInfo{
+		err: &os.PathError{Op: "lstat", Path: "/tmp/ccTEST.cdtor.c", Err: os.ErrNotExist},
+	})
+	assert.Nil(t, err)
+	assert.False(t, ok)
+	assert.Nil(t, info)
+
+	_, _, err = localDirEntryInfo(fakeDirEntryInfo{err: fs.ErrPermission})
+	assert.ErrorIs(t, err, fs.ErrPermission)
+}
+
+type fakeDirEntryInfo struct {
+	err error
+}
+
+func (f fakeDirEntryInfo) Name() string {
+	return "transient"
+}
+
+func (f fakeDirEntryInfo) IsDir() bool {
+	return false
+}
+
+func (f fakeDirEntryInfo) Type() fs.FileMode {
+	return 0
+}
+
+func (f fakeDirEntryInfo) Info() (fs.FileInfo, error) {
+	return nil, f.err
 }
 
 func BenchmarkLocalFS(b *testing.B) {
@@ -277,4 +325,61 @@ func TestLocalFSEmptyRootPath(t *testing.T) {
 	)
 	assert.Nil(t, err)
 	assert.NotNil(t, fs)
+}
+
+func TestLocalFSOpenFile(t *testing.T) {
+	ctx := context.Background()
+	var counter perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counter)
+	const (
+		n       = 32
+		dataLen = 32
+	)
+
+	// new fs
+	fs, err := NewLocalFS(
+		ctx,
+		"foo",
+		t.TempDir(),
+		CacheConfig{
+			DiskPath:                  ptrTo(t.TempDir()),
+			DiskCapacity:              ptrTo[toml.ByteSize](dataLen * n / 32),
+			enableDiskCacheForLocalFS: true,
+		},
+		nil,
+	)
+	assert.Nil(t, err)
+
+	f, err := fs.CreateFile(ctx, "aaa.txt")
+	assert.Nil(t, err)
+
+	f.Write([]byte("0123456789"))
+	f.Close()
+
+	f, err = fs.OpenFile(ctx, "aaa.txt")
+	assert.Nil(t, err)
+
+	buf := make([]byte, 10)
+	f.Read(buf)
+	assert.Equal(t, []byte("0123456789"), buf)
+	f.Close()
+
+	err = fs.RemoveFile(ctx, "aaa.txt")
+	assert.Nil(t, err)
+
+	// removed, open should fail.
+	f, err = fs.OpenFile(ctx, "aaa.txt")
+	assert.NotNil(t, err)
+
+	f2, err := fs.CreateAndRemoveFile(ctx, "aaa2.txt")
+	assert.Nil(t, err)
+	f2.Write([]byte("0123456789"))
+	nn, err := f2.ReadAt(buf, 0)
+	assert.Nil(t, err)
+	assert.Equal(t, 10, nn)
+	assert.Equal(t, []byte("0123456789"), buf)
+	f2.Close()
+
+	f2, err = fs.OpenFile(ctx, "aaa2.txt")
+	assert.NotNil(t, err)
 }

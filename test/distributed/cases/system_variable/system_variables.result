@@ -6,6 +6,12 @@ set max_allowed_packet = default;
 set wait_timeout = default;
 set tx_isolation = default;
 set tx_isolation = default;
+show variables like 'server_id';
+Variable_name    Value
+server_id    uuid
+select @@server_id;
+@@server_id
+uuid
 show variables like 'auto%';
 Variable_name    Value
 auto_generate_certs    on
@@ -37,10 +43,10 @@ Variable_name    Value
 init_connect    
 show variables like 'interactive%';
 Variable_name    Value
-interactive_timeout    28800
+interactive_timeout    86400
 show variables like 'interactive_timeout';
 Variable_name    Value
-interactive_timeout    28800
+interactive_timeout    86400
 set interactive_timeout = 36600;
 show variables like 'interactive_timeout';
 Variable_name    Value
@@ -49,10 +55,34 @@ set interactive_timeout = 30000+100;
 show variables like 'interactive_timeout';
 Variable_name    Value
 interactive_timeout    30100
+set global interactive_timeout = default;
+set @g_interactive_timeout_before = @@global.interactive_timeout;
 set global interactive_timeout = 30000+100;
-show variables like 'interactive_timeout';
+select @@global.interactive_timeout = @g_interactive_timeout_before;
+@@interactive_timeout = @g_interactive_timeout_before
+0
+show global variables like 'interactive_timeout';
 Variable_name    Value
 interactive_timeout    30100
+set global interactive_timeout = default;
+select @@session.interactive_timeout;
+@@interactive_timeout
+30100
+set interactive_timeout = 0;
+internal error: convert to the system variable int type failed
+set interactive_timeout = 1;
+show variables like 'interactive_timeout';
+Variable_name    Value
+interactive_timeout    1
+set interactive_timeout = 86400;
+show variables like 'interactive_timeout';
+Variable_name    Value
+interactive_timeout    86400
+set interactive_timeout = 86401;
+invalid input: interactive_timeout must be <= 86400
+show variables like 'interactive_timeout';
+Variable_name    Value
+interactive_timeout    86400
 show variables like 'lower%';
 Variable_name    Value
 lower_case_file_system    off
@@ -79,7 +109,7 @@ show variables where variable_name like 'system%' and variable_name != 'system_t
 Variable_name    Value
 select @@system_time_zone != '';
 @@system_time_zone != 
-true
+1
 show variables like 'trans%';
 Variable_name    Value
 transaction_alloc_block_size    8192
@@ -93,10 +123,10 @@ Variable_name    Value
 transaction_isolation    REPEATABLE-READ
 show variables like 'wait%';
 Variable_name    Value
-wait_timeout    28800
+wait_timeout    86400
 show variables like 'wait_timeout';
 Variable_name    Value
-wait_timeout    28800
+wait_timeout    86400
 set wait_timeout = 33600;
 show variables like 'wait_timeout';
 Variable_name    Value
@@ -105,6 +135,22 @@ set wait_timeout = 10;
 show variables like 'wait_timeout';
 Variable_name    Value
 wait_timeout    10
+set wait_timeout = 0;
+internal error: convert to the system variable int type failed
+set wait_timeout = 1;
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    1
+set wait_timeout = 86400;
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    86400
+set wait_timeout = 86401;
+invalid input: wait_timeout must be <= 86400
+show variables like 'wait_timeout';
+Variable_name    Value
+wait_timeout    86400
+set wait_timeout = 10;
 drop table if exists t;
 create table t(
 a int,
@@ -192,10 +238,10 @@ character_set_name    VARCHAR(4)    YES        null
 collation_name    VARCHAR(8)    YES        null        
 column_type    VARCHAR(65535)    YES        null        
 column_key    VARCHAR(3)    YES        null        
-extra    VARCHAR(14)    YES        null        
+extra    VARCHAR(24)    YES        null        
 privileges    VARCHAR(31)    NO        null        
 column_comment    VARCHAR(2048)    YES        null        
-generation_expression    VARCHAR(500)    NO        null        
+generation_expression    VARCHAR(500)    YES        null        
 srs_id    BIGINT(0)    YES        null        
 select table_name, column_name from columns where table_schema = 'mo_catalog' and column_name != '__mo_index_idx_col' and column_name != '__mo_index_pri_col' order by table_name, column_name limit 5;
 table_name    column_name
@@ -398,7 +444,7 @@ wait_timeout    10000
 set wait_timeout = default;
 show variables like 'wait_timeout';
 Variable_name    Value
-wait_timeout    28800
+wait_timeout    86400
 show variables like 'character_set_results';
 Variable_name    Value
 character_set_results    utf8

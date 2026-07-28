@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -42,6 +43,10 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	if node.DedupJoinCtx != nil {
 		increaseRefCntForColRefList(node.DedupJoinCtx.OldColList, 2, colRefCnt)
 		increaseRefCntForExprList(node.DedupJoinCtx.UpdateColExprList, 2, colRefCnt)
+		for _, cap := range node.DedupJoinCtx.OldColCaptureList {
+			colRefCnt[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}] += 2
+			colRefCnt[[2]int32{cap.ProbeSource.RelPos, cap.ProbeSource.ColPos}] += 2
+		}
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -80,7 +85,18 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			projMap[ref] = expr
 		}
 
+		origRightID := node.Children[1]
 		newChildID, childProjMap = builder.removeSimpleProjections(node.Children[1], plan.Node_JOIN, rightFlag, colRefCnt)
+		// When OldColCaptureList is set, the build-side (right child) PROJECT
+		// contains NULL placeholder slots that the DEDUP JOIN writes captured
+		// values into at runtime. Removing this PROJECT would lose those
+		// slots and leave OldColCaptureList.BuildPlaceholder references
+		// dangling (they point to Lit expressions that can't be remapped to
+		// column references). Keep the original PROJECT in the tree.
+		if node.DedupJoinCtx != nil && len(node.DedupJoinCtx.OldColCaptureList) > 0 && newChildID != origRightID {
+			newChildID = origRightID
+			childProjMap = nil
+		}
 		node.Children[1] = newChildID
 		for ref, expr := range childProjMap {
 			projMap[ref] = expr
@@ -120,7 +136,8 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		allColRef := true
 		tag := node.BindingTags[0]
 		for i, proj := range node.ProjectList {
-			if flag || colRefCnt[[2]int32{tag, int32(i)}] > 1 {
+			refCnt := colRefCnt[[2]int32{tag, int32(i)}]
+			if flag || refCnt > 1 {
 				if proj.GetCol() == nil && (proj.GetLit() == nil || flag) {
 					allColRef = false
 					break
@@ -183,9 +200,8 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK || parentType == plan.Node_PRE_INSERT_SK {
 		return false
 	}
-
-	for _, e := range node.ProjectList {
-		if !exprCanRemoveProject(e) {
+	for _, expr := range node.ProjectList {
+		if !exprCanRemoveProject(expr) {
 			return false
 		}
 	}
@@ -215,13 +231,34 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if ne.F.Func.ObjName == "sleep" {
+		overload, exists := function.GetFunctionByIdWithoutError(ne.F.Func.Obj)
+		if !exists || overload.CannotFold() || overload.IsRealTimeRelated() {
 			return false
 		}
 		for _, arg := range ne.F.GetArgs() {
 			canRemove := exprCanRemoveProject(arg)
 			if !canRemove {
 				return canRemove
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range ne.List.List {
+			if !exprCanRemoveProject(item) {
+				return false
+			}
+		}
+	case *plan.Expr_W:
+		if !exprCanRemoveProject(ne.W.WindowFunc) {
+			return false
+		}
+		for _, partitionBy := range ne.W.PartitionBy {
+			if !exprCanRemoveProject(partitionBy) {
+				return false
+			}
+		}
+		for _, orderBy := range ne.W.OrderBy {
+			if !exprCanRemoveProject(orderBy.Expr) {
+				return false
 			}
 		}
 	}
@@ -235,6 +272,7 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.GroupBy, projMap)
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
+	replaceColumnsForExprList(node.TimeWindowPartitionBy, projMap)
 
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)
@@ -243,6 +281,24 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	if node.DedupJoinCtx != nil {
 		replaceColumnsForColRefList(node.DedupJoinCtx.OldColList, projMap)
 		replaceColumnsForExprList(node.DedupJoinCtx.UpdateColExprList, projMap)
+		for i := range node.DedupJoinCtx.OldColCaptureList {
+			cap := &node.DedupJoinCtx.OldColCaptureList[i]
+			if projExpr, ok := projMap[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}]; ok {
+				if col := projExpr.GetCol(); col != nil {
+					cap.BuildPlaceholder.RelPos = col.RelPos
+					cap.BuildPlaceholder.ColPos = col.ColPos
+				}
+				// Lit expressions (NULL placeholders) are left unchanged —
+				// they will be resolved by the fullProjTag PROJECT which
+				// must not be removed (see removeSimpleProjections guard).
+			}
+			if projExpr, ok := projMap[[2]int32{cap.ProbeSource.RelPos, cap.ProbeSource.ColPos}]; ok {
+				if col := projExpr.GetCol(); col != nil {
+					cap.ProbeSource.RelPos = col.RelPos
+					cap.ProbeSource.ColPos = col.ColPos
+				}
+			}
+		}
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -328,47 +384,96 @@ func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
 	}
 }
 
-func (builder *QueryBuilder) remapHavingClause(expr *plan.Expr, groupTag, aggregateTag int32, groupSize int32) {
+func (builder *QueryBuilder) remapHavingClause(
+	expr *plan.Expr,
+	groupTag, aggregateTag int32,
+	groupSize, aggregateSize int32,
+	aggPos []int32,
+) error {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		if exprImpl.Col.RelPos == groupTag {
+			if exprImpl.Col.ColPos < 0 || exprImpl.Col.ColPos >= groupSize {
+				return moerr.NewInternalErrorf(
+					builder.GetContext(),
+					"invalid group column %d in HAVING during column pruning",
+					exprImpl.Col.ColPos,
+				)
+			}
 			exprImpl.Col.Name = builder.nameByColRef[[2]int32{groupTag, exprImpl.Col.ColPos}]
 			exprImpl.Col.RelPos = -1
-		} else {
-			exprImpl.Col.Name = builder.nameByColRef[[2]int32{aggregateTag, exprImpl.Col.ColPos}]
+		} else if exprImpl.Col.RelPos == aggregateTag {
+			oldPos := exprImpl.Col.ColPos
+			if oldPos < 0 || oldPos >= aggregateSize {
+				return moerr.NewInternalErrorf(
+					builder.GetContext(),
+					"invalid aggregate column %d in HAVING during column pruning",
+					oldPos,
+				)
+			}
+			newPos := oldPos
+			if aggPos != nil {
+				if int(oldPos) >= len(aggPos) || aggPos[oldPos] < 0 {
+					return moerr.NewInternalErrorf(
+						builder.GetContext(),
+						"invalid aggregate column %d in HAVING during column pruning",
+						oldPos,
+					)
+				}
+				newPos = aggPos[oldPos]
+			}
+			exprImpl.Col.Name = builder.nameByColRef[[2]int32{aggregateTag, oldPos}]
 			exprImpl.Col.RelPos = -2
-			exprImpl.Col.ColPos += groupSize
+			exprImpl.Col.ColPos = newPos + groupSize
+		} else {
+			return moerr.NewInternalErrorf(
+				builder.GetContext(),
+				"invalid relation tag %d in HAVING during column pruning",
+				exprImpl.Col.RelPos,
+			)
 		}
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			builder.remapHavingClause(arg, groupTag, aggregateTag, groupSize)
+			if err := builder.remapHavingClause(arg, groupTag, aggregateTag, groupSize, aggregateSize, aggPos); err != nil {
+				return err
+			}
+		}
+
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			if err := builder.remapHavingClause(item, groupTag, aggregateTag, groupSize, aggregateSize, aggPos); err != nil {
+				return err
+			}
 		}
 	}
+
+	return nil
 }
 
 func (builder *QueryBuilder) remapWindowClause(
 	expr *plan.Expr,
 	windowTag int32,
+	windowIdx int32,
 	projectionSize int32,
 	colMap map[[2]int32][2]int32,
 	remapInfo *RemapInfo,
 ) error {
-	// For window functions,
-	// a specific weight is required mapping
+	// Each Window node appends only its own window result after the child
+	// projection list. Earlier window results share the same windowTag but
+	// already belong to the child projection, so they must be remapped via
+	// the child column map instead of being treated as the current node's
+	// appended output.
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		// In the window function node,
-		// the filtering conditions also need to be remapped
-		if exprImpl.Col.RelPos == windowTag {
-			exprImpl.Col.Name = builder.nameByColRef[[2]int32{windowTag, exprImpl.Col.ColPos}]
+		if exprImpl.Col.RelPos == windowTag && exprImpl.Col.ColPos == windowIdx {
+			// Each Window node appends exactly one local output column, so the
+			// current window result always lands at projectionSize regardless of
+			// its global windowIdx under the shared windowTag.
+			exprImpl.Col.Name = builder.nameByColRef[[2]int32{windowTag, windowIdx}]
 			exprImpl.Col.RelPos = -1
-			exprImpl.Col.ColPos += projectionSize
+			exprImpl.Col.ColPos = projectionSize
 		} else {
-			// normal remap for other columns
-			// for example,
-			// where abs(sum(a) - avg(sum(a) over(partition by b))
-			// sum(a) need remap
 			err := builder.remapSingleColRef(exprImpl.Col, colMap, remapInfo)
 			if err != nil {
 				return err
@@ -376,15 +481,13 @@ func (builder *QueryBuilder) remapWindowClause(
 		}
 
 	case *plan.Expr_F:
-		// loop function parameters
 		for _, arg := range exprImpl.F.Args {
-			err := builder.remapWindowClause(arg, windowTag, projectionSize, colMap, remapInfo)
+			err := builder.remapWindowClause(arg, windowTag, windowIdx, projectionSize, colMap, remapInfo)
 			if err != nil {
 				return err
 			}
 		}
 	}
-	// return nil
 	return nil
 }
 
@@ -636,6 +739,12 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 			expr = condImpl.F.Args[1]
 			switch exprImpl := expr.Expr.(type) {
 			case *plan.Expr_Col:
+				//the nullable column ref is not primary key.
+				//can not use the hashOnPk.
+				//it assume build hashamp on right side.
+				if !expr.Typ.NotNullable {
+					return nil
+				}
 				exprRightCols[i] = (uint64(exprImpl.Col.RelPos) << 32) | uint64(exprImpl.Col.ColPos)
 			}
 		}
@@ -787,8 +896,9 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 	node.NodeType = plan.Node_AGG
 	node.GroupBy = project.ProjectList
 	node.BindingTags = project.BindingTags
-	node.BindingTags = append(node.BindingTags, builder.genNewTag())
+	node.BindingTags = append(node.BindingTags, builder.genNewBindTag())
 	node.Children[0] = project.Children[0]
+	node.SpillMem = builder.aggSpillMem
 }
 
 // reuse removeSimpleProjections to delete this plan node
@@ -806,7 +916,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
-	if scan.NodeType != plan.Node_TABLE_SCAN {
+	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil || scan.TableDef.Pkey == nil {
 		return
 	}
 	groupCol := make([]int32, 0)
@@ -1009,16 +1119,9 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 		}
 
 		if len(node.RuntimeFilterBuildList) > 0 {
-			switch node.JoinType {
-			case plan.Node_RIGHT:
-				if !node.Stats.HashmapStats.Shuffle {
-					force = true
-				}
-			case plan.Node_SEMI, plan.Node_ANTI:
-				if node.IsRightJoin && !node.Stats.HashmapStats.Shuffle {
-					force = true
-				}
-			case plan.Node_INDEX:
+			policy := analyzeRuntimeFilterJoinPolicy(node)
+			if policy.requiresLocalDelivery &&
+				(node.JoinType == plan.Node_INDEX || !node.Stats.HashmapStats.Shuffle) {
 				force = true
 			}
 		}
@@ -1080,6 +1183,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.execType = value
 	case "disableRightJoin":
 		builder.optimizerHints.disableRightJoin = value
+	case "disableRightSingleRF":
+		builder.optimizerHints.disableRightSingleRF = value
 	case "printShuffle":
 		builder.optimizerHints.printShuffle = value
 	case "skipDedup":
@@ -1107,11 +1212,16 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
 	ReCalcNodeStats(rootID, builder, true, true, true)
+	builder.rewriteInDomainNotInFilters(rootID)
+	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
 	builder.mergeFiltersOnCompositeKey(rootID)
+	builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)
 	builder.optimizeLikeExpr(rootID)
 	ReCalcNodeStats(rootID, builder, false, true, true)
+	builder.appendCompoundKeyBlockFilters(rootID)
+	builder.appendCompositePartBlockFilters(compositePartBlockFilters)
 	sortFilterListByStats(builder.GetContext(), rootID, builder)
 	return rootID
 }

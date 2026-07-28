@@ -31,3 +31,8 @@ select json_unquote(a) from t2;
 
 
 
+
+-- typed scalars (DATE/TIME/DATETIME/BLOB) via json_array
+select json_unquote(json_extract(json_array(cast('2021-02-01' as date)), '$[0]'));
+select json_unquote(json_extract(json_array(cast('11:11:11' as time)), '$[0]'));
+select json_unquote(json_extract(json_array(cast('2021-02-01 11:11:11' as datetime)), '$[0]'));

@@ -15,10 +15,11 @@
 package pSpool
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"sync"
 )
 
 type spoolBuffer struct {
@@ -77,12 +78,7 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 	bat.Vecs = bat.Vecs[:0]
 	bat.Attrs = bat.Attrs[:0]
 	bat.SetRowCount(0)
-
-	// we won't reuse the aggregation's memories now.
-	for i := range bat.Aggs {
-		bat.Aggs[i].Free()
-	}
-	bat.Aggs = nil
+	bat.ExtraBuf = nil
 
 	// put id into free list.
 	b.Lock()
@@ -106,5 +102,6 @@ func (b *spoolBuffer) clean(mp *mpool.MPool) {
 		for j := range b.bytesCache[i].bs {
 			mp.Free(b.bytesCache[i].bs[j])
 		}
+		b.bytesCache[i].bs = nil
 	}
 }

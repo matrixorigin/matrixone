@@ -18,12 +18,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -136,8 +139,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreInsert UniqueKey"
 	case plan.Node_PRE_INSERT_SK:
 		pname = "PreInsert SecondaryKey"
-	case plan.Node_ON_DUPLICATE_KEY:
-		pname = "On Duplicate Key"
 	case plan.Node_FUZZY_FILTER:
 		pname = "Fuzzy Filter for duplicate key"
 	case plan.Node_LOCK_OP:
@@ -242,31 +243,79 @@ func (ndesc *NodeDescribeImpl) GetActualAnalyzeInfo(ctx context.Context, options
 }
 
 func (ndesc *NodeDescribeImpl) GetTableDef(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "Table: "
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Table: ")
 	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN {
 		tableDef := ndesc.Node.TableDef
-		result += "'" + tableDef.Name + "' ("
+		buf.WriteString("'" + tableDef.Name + "' (")
 		first := true
 		for i, col := range tableDef.Cols {
 			if !first {
-				result += ", "
+				buf.WriteString(", ")
 			}
 			first = false
-			result += strconv.Itoa(i) + ":'" + col.Name + "'"
+			buf.WriteString(strconv.Itoa(i) + ":'" + col.Name + "'")
 		}
-		result += ")"
+		buf.WriteString(")")
+
+		if ndesc.Node.Stats.HashmapStats.Shuffle {
+			shuffleType := ndesc.Node.Stats.HashmapStats.ShuffleType
+			var firstSortColName string
+			if tableDef.ClusterBy != nil {
+				firstSortColName = util.GetClusterByFirstColumn(tableDef.ClusterBy.Name)
+			} else {
+				firstSortColName = tableDef.Pkey.Names[0]
+			}
+
+			if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+				buf.WriteString(" shuffle: REUSE")
+			} else {
+				if shuffleType == plan.ShuffleType_Hash {
+					buf.WriteString(" shuffle: hash(")
+					buf.WriteString(firstSortColName)
+					buf.WriteString(")")
+				} else {
+					buf.WriteString(" shuffle: range(")
+					buf.WriteString(firstSortColName)
+					buf.WriteString(")")
+				}
+
+				if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
+					buf.WriteString(" HYBRID ")
+				}
+			}
+		}
 	} else {
 		panic("implement me")
 	}
-	return result, nil
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
 	lines := make([]string, 0)
 
+	if ndesc.Node.NodeType == plan.Node_EXTERNAL_SCAN &&
+		ndesc.Node.GetExternScan() != nil &&
+		ndesc.Node.GetExternScan().GetIcebergScan() != nil {
+		icebergInfo, err := ndesc.GetIcebergScanInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, icebergInfo)
+	}
+
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
 		orderByInfo, err := ndesc.GetOrderByInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, orderByInfo)
+	}
+
+	// Get Sort list info
+	if ndesc.Node.IndexReaderParam != nil {
+		orderByInfo, err := ndesc.GetIndexReaderParamInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -432,16 +481,85 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if len(msg) > 0 {
 			lines = append(lines, msg)
 		}
+		msg, err = ndesc.GetIvfSearchInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		if len(msg) > 0 {
+			lines = append(lines, msg)
+		}
 	}
 	return lines, nil
 }
 
+func (ndesc *NodeDescribeImpl) GetIcebergScanInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	scan := ndesc.Node.GetExternScan().GetIcebergScan()
+	parts := []string{
+		"catalog_id=" + strconv.FormatUint(scan.GetCatalogId(), 10),
+	}
+	if scan.GetMappingId() != 0 {
+		parts = append(parts, "mapping_id="+strconv.FormatUint(scan.GetMappingId(), 10))
+	}
+	if scan.GetNamespace() != "" {
+		parts = append(parts, "namespace="+scan.GetNamespace())
+	}
+	if scan.GetTable() != "" {
+		parts = append(parts, "table="+scan.GetTable())
+	}
+	if scan.GetRef() != "" {
+		parts = append(parts, "ref="+scan.GetRef())
+	}
+	if scan.GetSnapshotId() != 0 {
+		parts = append(parts, "snapshot_id="+strconv.FormatInt(scan.GetSnapshotId(), 10))
+	}
+	if scan.GetTimestampAsOf() != 0 {
+		parts = append(parts, "timestamp_as_of_ms="+strconv.FormatInt(scan.GetTimestampAsOf(), 10))
+	}
+	if scan.GetReadMode() != "" {
+		parts = append(parts, "read_mode="+scan.GetReadMode())
+	}
+	if len(scan.GetProjectedFieldIds()) > 0 {
+		parts = append(parts, fmt.Sprintf("projected_field_ids=%v", scan.GetProjectedFieldIds()))
+	}
+	if scan.GetFilterDigest() != "" {
+		parts = append(parts, "filter_digest="+scan.GetFilterDigest())
+	}
+	parts = append(parts, fmt.Sprintf("residual_filter=%t", len(ndesc.Node.GetFilterList()) > 0 || scan.GetFilterDigest() != ""))
+	return "Iceberg: " + strings.Join(parts, ", "), nil
+}
+
 func (ndesc *NodeDescribeImpl) GetFullTextSql(ctx context.Context, options *ExplainOptions) (string, error) {
-	if options.Verbose && len(ndesc.Node.GetStats().Sql) > 0 {
-		result := "Sql: " + ndesc.Node.GetStats().Sql
+	if options.Verbose && ndesc.Node.Stats != nil && len(ndesc.Node.Stats.Sql) > 0 {
+		result := "Sql: " + ndesc.Node.Stats.Sql
 		return result, nil
 	}
 	return "", nil
+}
+
+func (ndesc *NodeDescribeImpl) GetIvfSearchInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	if ndesc.Node.NodeType != plan.Node_FUNCTION_SCAN ||
+		ndesc.Node.TableDef == nil ||
+		ndesc.Node.TableDef.TblFunc == nil ||
+		ndesc.Node.TableDef.TblFunc.Name != "ivf_search" ||
+		len(ndesc.Node.TblFuncExprList) < 3 {
+		return "", nil
+	}
+
+	filterExpr := ndesc.Node.TblFuncExprList[2]
+	litExpr, ok := filterExpr.Expr.(*plan.Expr_Lit)
+	if !ok || litExpr.Lit == nil {
+		return "", nil
+	}
+	rawFilter := litExpr.Lit.GetSval()
+	if strings.TrimSpace(rawFilter) == "" {
+		return "", nil
+	}
+	return "Filter Cond: " + rawFilter, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -457,10 +575,17 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Join Type: "
-	if ndesc.Node.IsRightJoin && ndesc.Node.JoinType != plan.Node_RIGHT {
-		result += "RIGHT " + ndesc.Node.JoinType.String()
-	} else {
-		result += ndesc.Node.JoinType.String()
+	switch ndesc.Node.JoinType {
+	case plan.Node_OUTER:
+		// FULL OUTER JOIN — IsRightJoin here is just an internal build-side flag
+		// (we always use the right side as hash build for FOJ), not a semantic swap.
+		result += "FULL OUTER"
+	default:
+		if ndesc.Node.IsRightJoin && ndesc.Node.JoinType != plan.Node_RIGHT {
+			result += "RIGHT " + ndesc.Node.JoinType.String()
+		} else {
+			result += ndesc.Node.JoinType.String()
+		}
 	}
 	if ndesc.Node.JoinType == plan.Node_DEDUP {
 		result += " (" + ndesc.Node.OnDuplicateAction.String() + ")"
@@ -623,6 +748,13 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, optio
 			if err != nil {
 				return "", err
 			}
+		}
+
+		// Add optimization hints for cast expressions
+		hint := getDecimalCastOptimizationHint(ndesc.Node.FilterList)
+		if hint != "" {
+			buf.WriteString("\n              ")
+			buf.WriteString(hint)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
@@ -961,6 +1093,72 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(ctx context.Context, options *Expl
 	return buf.String(), nil
 }
 
+func (ndesc *NodeDescribeImpl) GetIndexReaderParamInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	param := ndesc.Node.IndexReaderParam
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		buf.WriteString("Index Reader Param:")
+		if len(param.OrderBy) > 0 {
+			buf.WriteString("  Sort Key: ")
+			orderByDescImpl := NewOrderByDescribeImpl(param.OrderBy)
+			err := orderByDescImpl.GetDescription(ctx, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		if param.Limit != nil {
+			buf.WriteString("  Limit: ")
+			err := describeExpr(ctx, param.Limit, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		if param.DistRange != nil {
+			if param.DistRange.LowerBoundType != plan.BoundType_UNBOUNDED || param.DistRange.UpperBoundType != plan.BoundType_UNBOUNDED {
+				buf.WriteString("  DistRange: ")
+				if param.DistRange.LowerBoundType == plan.BoundType_UNBOUNDED {
+					buf.WriteString("(-Inf")
+				} else {
+					if param.DistRange.LowerBoundType == plan.BoundType_INCLUSIVE {
+						buf.WriteString("[")
+					} else {
+						buf.WriteString("(")
+					}
+
+					err := describeExpr(ctx, param.DistRange.LowerBound, options, buf)
+					if err != nil {
+						return "", err
+					}
+				}
+
+				buf.WriteString(",")
+
+				if param.DistRange.UpperBoundType == plan.BoundType_UNBOUNDED {
+					buf.WriteString("Inf)")
+				} else {
+					err := describeExpr(ctx, param.DistRange.UpperBound, options, buf)
+					if err != nil {
+						return "", err
+					}
+
+					if param.DistRange.UpperBoundType == plan.BoundType_INCLUSIVE {
+						buf.WriteString("]")
+					} else {
+						buf.WriteString(")")
+					}
+				}
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
 var _ NodeElemDescribe = (*CostDescribeImpl)(nil)
 var _ NodeElemDescribe = (*ExprListDescribeImpl)(nil)
 var _ NodeElemDescribe = (*OrderByDescribeImpl)(nil)
@@ -1003,9 +1201,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	majordop := len(a.AnalyzeInfo.TimeConsumedArrayMajor)
 	if majordop > 1 {
 		fmt.Fprintf(buf, " %v_time=[", majorStr)
-		sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMajor, func(i, j int) bool {
-			return a.AnalyzeInfo.TimeConsumedArrayMajor[i] < a.AnalyzeInfo.TimeConsumedArrayMajor[j]
-		})
+		slices.Sort(a.AnalyzeInfo.TimeConsumedArrayMajor)
 		if majordop > 4 {
 			var totalTime int64
 			for i := range a.AnalyzeInfo.TimeConsumedArrayMajor {
@@ -1039,9 +1235,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 			}
 
 			fmt.Fprintf(buf, " %v_time=[", minorStr)
-			sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMinor, func(i, j int) bool {
-				return a.AnalyzeInfo.TimeConsumedArrayMinor[i] < a.AnalyzeInfo.TimeConsumedArrayMinor[j]
-			})
+			slices.Sort(a.AnalyzeInfo.TimeConsumedArrayMinor)
 			if minordop > 4 {
 				var totalTime int64
 				for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {
@@ -1070,29 +1264,31 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 		fmt.Fprintf(buf, " inputBlocks=%d", a.AnalyzeInfo.InputBlocks)
 	}
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
-	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
-	if a.AnalyzeInfo.InputSize < MB {
-		fmt.Fprintf(buf, " InputSize=%dbytes", a.AnalyzeInfo.InputSize)
-	} else if a.AnalyzeInfo.InputSize < 10*GB {
-		fmt.Fprintf(buf, " InputSize=%dmb", a.AnalyzeInfo.InputSize/MB)
-	} else {
-		fmt.Fprintf(buf, " InputSize=%dgb", a.AnalyzeInfo.InputSize/GB)
-	}
+	fmt.Fprintf(buf, " outputRows=%d (min=%d, max=%d)",
+		a.AnalyzeInfo.OutputRows,
+		a.AnalyzeInfo.OutrowsMin,
+		a.AnalyzeInfo.OutrowsMax)
 
-	if a.AnalyzeInfo.OutputSize < MB {
-		fmt.Fprintf(buf, " OutputSize=%dbytes", a.AnalyzeInfo.OutputSize)
-	} else if a.AnalyzeInfo.OutputSize < 10*GB {
-		fmt.Fprintf(buf, " OutputSize=%dmb", a.AnalyzeInfo.OutputSize/MB)
-	} else {
-		fmt.Fprintf(buf, " OutputSize=%dgb", a.AnalyzeInfo.OutputSize/GB)
-	}
+	fmt.Fprintf(buf, " InputSize=%s", common.ConvertBytesToHumanReadable(a.AnalyzeInfo.InputSize))
+	fmt.Fprintf(buf, " OutputSize=%s", common.ConvertBytesToHumanReadable(a.AnalyzeInfo.OutputSize))
 
-	if a.AnalyzeInfo.MemorySize < MB {
-		fmt.Fprintf(buf, " MemorySize=%dbytes", a.AnalyzeInfo.MemorySize)
-	} else if a.AnalyzeInfo.MemorySize < 10*GB {
-		fmt.Fprintf(buf, " MemorySize=%dmb", a.AnalyzeInfo.MemorySize/MB)
-	} else {
-		fmt.Fprintf(buf, " MemorySize=%dgb", a.AnalyzeInfo.MemorySize/GB)
+	// ReadSize format: ReadSize=total|s3|disk
+	fmt.Fprintf(buf, " ReadSize=%s|%s|%s",
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.ReadSize),
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.S3ReadSize),
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.DiskReadSize))
+
+	fmt.Fprintf(buf, " MemorySize=%s (min=%s, max=%s)",
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemorySize),
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemoryMin),
+		common.ConvertBytesToHumanReadable(a.AnalyzeInfo.MemoryMax))
+
+	if a.AnalyzeInfo.SpillSize > 0 {
+		fmt.Fprintf(buf, " SpillRows=%d SpillSize=%s (min=%s, max=%s)",
+			a.AnalyzeInfo.SpillRows,
+			common.ConvertBytesToHumanReadable(a.AnalyzeInfo.SpillSize),
+			common.ConvertBytesToHumanReadable(a.AnalyzeInfo.SpillMin),
+			common.ConvertBytesToHumanReadable(a.AnalyzeInfo.SpillMax))
 	}
 
 	return nil
@@ -1114,11 +1310,15 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		if c.Stats.HashmapStats != nil && c.Stats.HashmapStats.HashmapSize > 1 {
 			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapStats.HashmapSize, 'f', 2, 64)
 		}
+		var rowsizeStr string
+		if c.Stats.Rowsize > 0 {
+			rowsizeStr = " rowsize=" + strconv.FormatFloat(c.Stats.Rowsize, 'f', 2, 64)
+		}
 		buf.WriteString(" (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
 			" selectivity=" + strconv.FormatFloat(c.Stats.Selectivity, 'f', 4, 64) +
 			" dop=" + strconv.FormatInt(int64(c.Stats.Dop), 10) +
-			blockNumStr + hashmapSizeStr + ")")
+			blockNumStr + hashmapSizeStr + rowsizeStr + ")")
 	}
 	return nil
 }
@@ -1219,4 +1419,102 @@ func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *Ex
 		buf.WriteString("\"*VALUES*\"." + col.Name)
 	}
 	return nil
+}
+
+// getDecimalCastOptimizationHint analyzes filter expressions and returns optimization hints
+func getDecimalCastOptimizationHint(filterList []*plan.Expr) string {
+	for _, expr := range filterList {
+		hint := analyzeExprForCastHint(expr)
+		if hint != "" {
+			return hint
+		}
+	}
+	return ""
+}
+
+// analyzeExprForCastHint recursively analyzes an expression for cast optimization hints
+func analyzeExprForCastHint(expr *plan.Expr) string {
+	if expr == nil {
+		return ""
+	}
+
+	// Check if this is a function expression
+	if funcExpr, ok := expr.Expr.(*plan.Expr_F); ok {
+		funcName := funcExpr.F.Func.ObjName
+
+		// Check for comparison functions with cast
+		if funcName == "=" || funcName == ">" || funcName == "<" ||
+			funcName == ">=" || funcName == "<=" || funcName == "!=" {
+			if len(funcExpr.F.Args) == 2 {
+				// Check if either side has a cast
+				leftHint := checkCastInComparison(funcExpr.F.Args[0], funcExpr.F.Args[1])
+				if leftHint != "" {
+					return leftHint
+				}
+				rightHint := checkCastInComparison(funcExpr.F.Args[1], funcExpr.F.Args[0])
+				if rightHint != "" {
+					return rightHint
+				}
+			}
+		}
+
+		// Recursively check arguments
+		for _, arg := range funcExpr.F.Args {
+			hint := analyzeExprForCastHint(arg)
+			if hint != "" {
+				return hint
+			}
+		}
+	}
+
+	return ""
+}
+
+// checkCastInComparison checks if an expression contains a cast and generates a hint
+func checkCastInComparison(expr *plan.Expr, otherExpr *plan.Expr) string {
+	if funcExpr, ok := expr.Expr.(*plan.Expr_F); ok {
+		if funcExpr.F.Func.ObjName == "cast" && len(funcExpr.F.Args) > 0 {
+			// This is a cast expression
+			castArg := funcExpr.F.Args[0]
+
+			// Check if casting a column reference
+			if colRef, ok := castArg.Expr.(*plan.Expr_Col); ok {
+				// Get column type
+				colType := castArg.Typ
+				castToType := expr.Typ
+
+				// Check if it's a decimal cast
+				if isDecimalType(colType.Id) && isDecimalType(castToType.Id) {
+					// Check if the other side is a literal
+					if isLiteral(otherExpr) {
+						constType := otherExpr.Typ
+						if isDecimalType(constType.Id) {
+							// Generate hint about precision mismatch
+							return fmt.Sprintf("-- HINT: Cast cannot be removed due to precision mismatch (column: %d,%d vs constant: %d,%d)",
+								colType.Width, colType.Scale, constType.Width, constType.Scale)
+						}
+					}
+				}
+
+				// Generic cast hint
+				_ = colRef // Use the variable
+				return "-- HINT: Cast expression may prevent index usage"
+			}
+		}
+	}
+	return ""
+}
+
+// isDecimalType checks if a type ID represents a decimal type
+func isDecimalType(typeId int32) bool {
+	return typeId == 19 || typeId == 20 // T_decimal64 = 19, T_decimal128 = 20
+}
+
+// isLiteral checks if an expression is a literal constant
+func isLiteral(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	_, ok := expr.Expr.(*plan.Expr_Lit)
+	return ok
 }

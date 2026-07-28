@@ -20,6 +20,8 @@ import (
 	"iter"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type objectStorageSemaphore struct {
@@ -41,14 +43,44 @@ func (o *objectStorageSemaphore) acquire() {
 	o.semaphore <- struct{}{}
 }
 
+func (o *objectStorageSemaphore) acquireContext(ctx context.Context) error {
+	select {
+	case o.semaphore <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (o *objectStorageSemaphore) release() {
 	<-o.semaphore
 }
 
 var _ ObjectStorage = new(objectStorageSemaphore)
+var _ ParallelMultipartWriter = new(objectStorageSemaphore)
+var _ objectStorageCopier = new(objectStorageSemaphore)
+
+func (o *objectStorageSemaphore) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	copier, ok := o.upstream.(objectStorageCopier)
+	if !ok {
+		return false, nil
+	}
+	if err := o.acquireContext(ctx); err != nil {
+		return false, err
+	}
+	defer o.release()
+	return copier.CopyObject(ctx, src, srcKey, dstKey)
+}
 
 func (o *objectStorageSemaphore) Delete(ctx context.Context, keys ...string) (err error) {
-	o.acquire()
+	if err := o.acquireContext(ctx); err != nil {
+		return err
+	}
 	defer o.release()
 	return o.upstream.Delete(ctx, keys...)
 }
@@ -106,4 +138,20 @@ func (o *objectStorageSemaphore) Write(ctx context.Context, key string, r io.Rea
 	o.acquire()
 	defer o.release()
 	return o.upstream.Write(ctx, key, r, sizeHint, expire)
+}
+
+func (o *objectStorageSemaphore) SupportsParallelMultipart() bool {
+	if p, ok := o.upstream.(ParallelMultipartWriter); ok {
+		return p.SupportsParallelMultipart()
+	}
+	return false
+}
+
+func (o *objectStorageSemaphore) WriteMultipartParallel(ctx context.Context, key string, r io.Reader, sizeHint *int64, opt *ParallelMultipartOption) (err error) {
+	o.acquire()
+	defer o.release()
+	if p, ok := o.upstream.(ParallelMultipartWriter); ok {
+		return p.WriteMultipartParallel(ctx, key, r, sizeHint, opt)
+	}
+	return moerr.NewNotSupportedNoCtx("parallel multipart upload")
 }

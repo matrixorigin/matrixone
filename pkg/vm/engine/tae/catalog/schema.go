@@ -16,11 +16,12 @@ package catalog
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +44,24 @@ func i82bool(v int8) bool {
 	return v == 1
 }
 
+func (def *ColDef) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += int64(len(def.Name))
+	size += 4 // idx
+	size += 2 // seqNum
+	size += int64(def.Type.ProtoSize())
+	size += 9 // hidden,phyAddr,NullAble,autoIncr,Primary,sortIdx,SortKey,clusterby,fakePk
+	size += int64(len(def.Comment))
+	size += int64(len(def.Default))
+	size += int64(len(def.OnUpdate))
+	size += int64(len(def.EnumValues))
+
+	return size
+}
+
 type ColDef struct {
 	// letter case: origin
 	Name          string
@@ -61,6 +80,7 @@ type ColDef struct {
 	FakePK        bool // TODO: use column.flag instead of column.fakepk
 	Default       []byte
 	OnUpdate      []byte
+	GeneratedCol  []byte
 	EnumValues    string
 }
 
@@ -99,7 +119,7 @@ func (cpk *SortKey) AddDef(def *ColDef) (ok bool) {
 		cpk.isPrimary = true
 	}
 	cpk.Defs = append(cpk.Defs, def)
-	sort.Slice(cpk.Defs, func(i, j int) bool { return cpk.Defs[i].SortIdx < cpk.Defs[j].SortIdx })
+	slices.SortFunc(cpk.Defs, func(a, b *ColDef) int { return cmp.Compare(a.SortIdx, b.SortIdx) })
 	cpk.search[def.Idx] = int(def.SortIdx)
 	return true
 }
@@ -137,6 +157,7 @@ type Schema struct {
 	PhyAddrKey *ColDef
 
 	isSecondaryIndexTable bool
+	FromPublication       bool // mark if table is created by publication, should skip merge
 }
 
 func NewEmptySchema(name string) *Schema {
@@ -184,6 +205,17 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Constraint = req.GetUpdateCstr().GetConstraints()
 	case apipb.AlterKind_UpdateComment:
 		s.Comment = req.GetUpdateComment().GetComment()
+	case apipb.AlterKind_UpdateAutoIncrement:
+		if s.Extra.AutoIncrEpoch == math.MaxUint32 ||
+			req.GetUpdateAutoIncrement().GetEpoch() != s.Extra.AutoIncrEpoch+1 {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid AUTO_INCREMENT epoch transition %d -> %d",
+				s.Extra.AutoIncrEpoch,
+				req.GetUpdateAutoIncrement().GetEpoch(),
+			)
+		}
+		s.Extra.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
+		s.Extra.AutoIncrEpoch = req.GetUpdateAutoIncrement().GetEpoch()
 	case apipb.AlterKind_RenameColumn:
 		rename := req.GetRenameCol()
 		var targetCol *ColDef
@@ -313,11 +345,17 @@ func (s *Schema) HasPKOrFakePK() bool {
 	if s.HasPK() {
 		return true
 	}
+	return s.HasFakePK()
+}
+
+func (s *Schema) HasFakePK() bool {
 	_, ok := s.NameMap[pkgcatalog.FakePrimaryKeyColName]
 	return ok
 }
 
 func (s *Schema) MustGetExtraBytes() []byte {
+	// Sync FromPublication to Extra before serialization
+	s.Extra.FromPublication = s.FromPublication
 	data, err := s.Extra.Marshal()
 	if err != nil {
 		panic(err)
@@ -330,6 +368,8 @@ func (s *Schema) MustRestoreExtra(data []byte) {
 	if err := s.Extra.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	// Sync FromPublication from Extra after deserialization
+	s.FromPublication = s.Extra.FromPublication
 }
 
 func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
@@ -471,6 +511,31 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 	}
 	err = s.Finalize(true)
 	return
+}
+
+func (s *Schema) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += 4 + 2 + 4 + 4 // max rows, max blocks, version, catalog version
+	size += int64(AccessInfoSize)
+	size += int64(len(s.Name))
+	size += int64(len(s.Comment))
+	size += 1 // partitioned
+	size += int64(len(s.Partition))
+	size += int64(len(s.Createsql))
+	size += int64(len(s.Relkind))
+	size += int64(len(s.View))
+	size += int64(len(s.Constraint))
+	size += int64(s.Extra.ProtoSize())
+	size += 2 // len of colDefs
+
+	for i := range s.ColDefs {
+		size += s.ColDefs[i].ApproxSize()
+	}
+
+	return size
 }
 
 func (s *Schema) Marshal() (buf []byte, err error) {
@@ -734,6 +799,9 @@ func colDefFromPlan(col *plan.ColDef, idx int, seqnum uint16) *ColDef {
 	if col.OnUpdate != nil {
 		newcol.OnUpdate, _ = types.Encode(col.OnUpdate)
 	}
+	if col.GeneratedCol != nil {
+		newcol.GeneratedCol, _ = types.Encode(col.GeneratedCol)
+	}
 	return newcol
 }
 
@@ -750,6 +818,7 @@ func ColDefFromAttribute(attr engine.Attribute) (*ColDef, error) {
 		ClusterBy:     attr.ClusterBy,
 		Default:       []byte(""),
 		OnUpdate:      []byte(""),
+		GeneratedCol:  []byte(""),
 		SeqNum:        attr.Seqnum,
 		EnumValues:    attr.EnumVlaues,
 	}
@@ -761,6 +830,11 @@ func ColDefFromAttribute(attr engine.Attribute) (*ColDef, error) {
 	}
 	if attr.OnUpdate != nil {
 		if def.OnUpdate, err = types.Encode(attr.OnUpdate); err != nil {
+			return nil, err
+		}
+	}
+	if attr.GeneratedCol != nil {
+		if def.GeneratedCol, err = types.Encode(attr.GeneratedCol); err != nil {
 			return nil, err
 		}
 	}
@@ -1093,10 +1167,10 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 			typ.Width = 8
 		case 18:
 			typ = types.T_array_float32.ToType()
-			typ.Width = 100
+			typ.Width = 2
 		case 19:
 			typ = types.T_array_float64.ToType()
-			typ.Width = 100
+			typ.Width = 2
 		}
 
 		if pkIdx == i {

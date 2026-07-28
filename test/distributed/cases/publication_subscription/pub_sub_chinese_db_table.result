@@ -1,0 +1,34 @@
+drop account if exists acc_cn_pub_bvt;
+create account acc_cn_pub_bvt admin_name = 'test_account' identified by '111';
+drop publication if exists pub_cn_table_bvt;
+drop database if exists `目标数据_bvt`;
+create database `目标数据_bvt`;
+use `目标数据_bvt`;
+create table resume_data (id int primary key, name varchar(20));
+create table extra_data (id int primary key, note varchar(20));
+create table hidden_data (id int primary key, note varchar(20));
+insert into resume_data values (1, 'alice'), (2, 'bob');
+insert into extra_data values (7, 'extra');
+insert into hidden_data values (99, 'hidden');
+create publication pub_cn_table_bvt database `目标数据_bvt` table resume_data account acc_cn_pub_bvt;
+alter publication pub_cn_table_bvt database `目标数据_bvt` table resume_data, extra_data;
+drop database if exists sub_cn_table_bvt;
+create database sub_cn_table_bvt from sys publication pub_cn_table_bvt;
+use sub_cn_table_bvt;
+show tables;
+➤ Tables_in_sub_cn_table_bvt[12,-1,0]  𝄀
+extra_data  𝄀
+resume_data
+select * from hidden_data;
+SQL parser error: table "hidden_data" does not exist
+select * from resume_data order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+1  ¦  alice  𝄀
+2  ¦  bob
+select * from extra_data order by id;
+➤ id[4,32,0]  ¦  note[12,-1,0]  𝄀
+7  ¦  extra
+drop database sub_cn_table_bvt;
+drop publication pub_cn_table_bvt;
+drop database `目标数据_bvt`;
+drop account acc_cn_pub_bvt;

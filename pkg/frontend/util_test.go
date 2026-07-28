@@ -17,7 +17,7 @@ package frontend
 import (
 	"container/list"
 	"context"
-	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -49,15 +50,183 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func init() {
 	testutil.SetupAutoIncrService("")
+}
+
+type accountingMysqlWriter struct {
+	testMysqlWriter
+	bytes         int64
+	packets       int64
+	calls         int
+	outputTracker *responseOutputWaitTracker
+}
+
+func (w *accountingMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) {
+	w.calls++
+	bytes, packets := w.bytes, w.packets
+	if reset {
+		w.bytes = 0
+		w.packets = 0
+	}
+	return bytes, packets
+}
+
+func (w *accountingMysqlWriter) setResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	w.outputTracker = tracker
+}
+
+func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	defer provider.SetEnable(wasEnabled)
+
+	ctx := context.Background()
+	writer := &accountingMysqlWriter{}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	root := resource.NewRoot(resource.ConnExternal)
+	ctx = resource.ContextWithRoot(ctx, root)
+	statsInfo := statistic.NewStatsInfo()
+	statsInfo.ParseStage.ParseDuration = 7 * time.Nanosecond
+	ctx = statistic.ContextWithStatsInfo(ctx, statsInfo)
+	require.True(t, root.MergeExecution(resource.ExecutionSummary{
+		Usage:        resource.Usage{ExclusiveActiveNS: 10},
+		AttemptCount: 1,
+	}))
+	stmt := motrace.NewStatementInfo()
+	stmt.RequestAt = time.Now()
+	stmt.SetResourceRoot(root)
+	memoryPool := mpool.MustNew("statement-resource-test")
+	defer mpool.DeleteMPool(memoryPool)
+	retained, allocErr := memoryPool.Alloc(32, true)
+	require.NoError(t, allocErr)
+	defer memoryPool.Free(retained)
+	stmt.SetResourceMemoryPoolEpoch(memoryPool, memoryPool.StartResourcePeakEpoch())
+	allocation, allocErr := memoryPool.Alloc(64, true)
+	require.NoError(t, allocErr)
+	memoryPool.Free(allocation)
+	ses.SetTStmt(stmt)
+
+	writer.bytes = 99
+	writer.packets = 9
+	ses.beginResponseAccounting()
+	require.Equal(t, 1, writer.calls)
+	require.NotNil(t, writer.outputTracker)
+	writer.outputTracker.totalNS.Add(13)
+	execErr := moerr.NewInternalErrorNoCtx("failed")
+	require.True(t, ses.deferStatementCompletion(execErr))
+	require.Same(t, stmt, ses.GetStmtInfo())
+
+	writer.bytes = 17
+	writer.packets = 1
+	ses.finishResponseAccounting(ctx, execErr, true)
+	require.Nil(t, ses.GetStmtInfo())
+	require.Equal(t, 2, writer.calls)
+	require.Nil(t, writer.outputTracker)
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(17), summary.Usage.ExclusiveActiveNS)
+	require.Equal(t, uint64(17), summary.Usage.ClientEgressBytes)
+	require.Equal(t, uint64(1), summary.OutputPacketCount)
+	require.Equal(t, uint64(13), summary.Usage.WaitNS[resource.WaitOutput])
+	require.Equal(t, uint64(96), summary.Memory.MaxDomainPeakLiveBytes)
+	require.Zero(t, summary.MissingMemoryDomainCount)
+	withoutCU := statistic.FromResourceSummary(summary, 0)
+	cuCfg := config.NewOBCUConfig()
+	cuCfg.SetDefaultValues()
+	projected := statistic.FromResourceSummary(
+		summary,
+		motrace.CalculateCUWithCfg(withoutCU, int64(stmt.Duration), cuCfg),
+	)
+	var persisted statistic.StatsArray
+	require.NoError(t, json.Unmarshal(projected.ToJsonString(), &persisted))
+	require.Equal(t, float64(statistic.StatsArrayVersion6), persisted.GetVersion())
+	require.Equal(t, float64(17), persisted.GetTimeConsumed())
+	require.Equal(t, float64(96), persisted.GetMemorySize())
+	require.Equal(t, float64(17), persisted.GetOutTrafficBytes())
+	require.Equal(t, float64(1), persisted.GetOutPacketCount())
+	require.Equal(t, float64(1), persisted.GetAttemptCount())
+	require.Zero(t, persisted.GetQualityFlags())
+	require.GreaterOrEqual(t, persisted.GetCU(), float64(0))
+}
+
+func TestStatementlessRequestConsumesResponseCounters(t *testing.T) {
+	writer := &accountingMysqlWriter{bytes: 23, packets: 2}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+
+	ses.beginResponseAccounting()
+	require.Equal(t, 1, writer.calls)
+	writer.bytes = 7
+	writer.packets = 1
+	ses.finishResponseAccounting(context.Background(), nil, false)
+
+	require.Equal(t, 2, writer.calls)
+	require.Nil(t, writer.outputTracker)
+	require.Zero(t, writer.bytes)
+	require.Zero(t, writer.packets)
+}
+
+func TestResponseOutputCounterRotatesAcrossStatements(t *testing.T) {
+	writer := &accountingMysqlWriter{}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	ses.beginResponseAccounting()
+
+	first := writer.outputTracker
+	require.NotNil(t, first)
+	first.totalNS.Add(11)
+	first.operatorNS.Add(3)
+	firstRoot := resource.NewRoot(resource.ConnExternal)
+	var operatorUsage resource.Usage
+	operatorUsage.WaitNS[resource.WaitOutput] = 3
+	require.True(t, firstRoot.MergeExecution(resource.ExecutionSummary{Usage: operatorUsage}))
+	firstCtx := resource.ContextWithRoot(context.Background(), firstRoot)
+	finishStatementAccounting(firstCtx, ses, nil)
+	require.Equal(t, uint64(11), firstRoot.PreResponseSummary().Usage.WaitNS[resource.WaitOutput])
+
+	second := writer.outputTracker
+	require.NotNil(t, second)
+	require.NotSame(t, first, second)
+	second.totalNS.Add(17)
+	secondRoot := resource.NewRoot(resource.ConnExternal)
+	secondCtx := resource.ContextWithRoot(context.Background(), secondRoot)
+	ses.finishResponseAccounting(secondCtx, nil, false)
+	require.Equal(t, uint64(17), secondRoot.PreResponseSummary().Usage.WaitNS[resource.WaitOutput])
+	require.Nil(t, writer.outputTracker)
+}
+
+func TestDerivedStatementLeavesParentResponseAccountingOpen(t *testing.T) {
+	writer := &accountingMysqlWriter{bytes: 23, packets: 2}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	ses.ReplaceDerivedStmt(true)
+
+	ctx := resource.ContextWithRoot(context.Background(), resource.NewRoot(resource.ConnExternal))
+	finishStatementAccounting(ctx, ses, nil)
+
+	require.Zero(t, writer.calls)
+	require.Equal(t, int64(23), writer.bytes)
+	require.Equal(t, int64(2), writer.packets)
+}
+
+type testColumnWithoutDecimalScale struct {
+	ColumnImpl
+	signed bool
+}
+
+func (c *testColumnWithoutDecimalScale) SetSigned(signed bool) {
+	c.signed = signed
+}
+
+func (c *testColumnWithoutDecimalScale) IsSigned() bool {
+	return c.signed
 }
 
 func Test_PathExists(t *testing.T) {
@@ -82,12 +251,7 @@ func Test_PathExists(t *testing.T) {
 	}
 }
 
-func Test_MinMax(t *testing.T) {
-	cvey.Convey("min", t, func() {
-		cvey.So(Min(10, 9), cvey.ShouldEqual, 9)
-		cvey.So(Min(9, 10), cvey.ShouldEqual, 9)
-	})
-
+func Test_Max(t *testing.T) {
 	cvey.Convey("max", t, func() {
 		cvey.So(Max(10, 9), cvey.ShouldEqual, 10)
 		cvey.So(Max(9, 10), cvey.ShouldEqual, 10)
@@ -101,17 +265,9 @@ func Test_routineid(t *testing.T) {
 	})
 }
 
-func Test_timeout(t *testing.T) {
-	cvey.Convey("timeout", t, func() {
-		to := NewTimeout(5*time.Second, true)
-		to.UpdateTime(time.Now())
-		cvey.So(to.isTimeout(), cvey.ShouldBeFalse)
-	})
-}
-
 func Test_substringFromBegin(t *testing.T) {
 	cvey.Convey("ssfb", t, func() {
-		cvey.So(SubStringFromBegin("abcdef", 3), cvey.ShouldEqual, "abc...")
+		cvey.So(commonutil.Abbreviate("abcdef", 3), cvey.ShouldEqual, "abc...")
 	})
 }
 
@@ -563,7 +719,7 @@ func TestGetExprValue(t *testing.T) {
 			{"set @@x=(select 127)", false, 127},
 			{"set @@x=(select -128)", false, -128},
 			{"set @@x=(select -2147483648)", false, -2147483648},
-			{"set @@x=(select -9223372036854775808)", false, "-9223372036854775808"},
+			{"set @@x=(select -9223372036854775808)", false, int64(-9223372036854775808)},
 			{"set @@x=(select 18446744073709551615)", false, uint64(math.MaxUint64)},
 			{"set @@x=(select 1.1754943508222875e-38)", false, float32(1.1754943508222875e-38)},
 			{"set @@x=(select 3.4028234663852886e+38)", false, float32(3.4028234663852886e+38)},
@@ -600,15 +756,7 @@ func TestGetExprValue(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(defs, nil).AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
 
-		var ranges memoryengine.ShardIdSlice
-		id := make([]byte, 8)
-		binary.LittleEndian.PutUint64(id, 1)
-		ranges.Append(id)
-
-		relData := &memoryengine.MemRelationData{
-			Shards: ranges,
-		}
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(readutil.BuildEmptyRelData(), nil).AnyTimes()
 		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
@@ -636,8 +784,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -651,9 +799,6 @@ func TestGetExprValue(t *testing.T) {
 		setPu("", pu)
 		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc(t).Mp())
 		ses.SetDatabaseName("db")
-		var c clock.Clock
-		err := ses.GetTxnHandler().CreateTempStorage(c)
-		assert.Nil(t, err)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.proc = testutil.NewProc(t)
 		ec.ses = ses
@@ -746,8 +891,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -760,9 +905,6 @@ func TestGetExprValue(t *testing.T) {
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setPu("", pu)
 		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc(t).Mp())
-		var c clock.Clock
-		err := ses.GetTxnHandler().CreateTempStorage(c)
-		assert.Nil(t, err)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.reqCtx = ctx
 		ses.txnCompileCtx.execCtx = ec
@@ -933,7 +1075,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 	defer mpool.DeleteMPool(mp)
 
-	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
+	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	params1 := vector.NewVec(types.T_text.ToType())
 	for i := 0; i < 3; i++ {
@@ -1076,11 +1218,28 @@ func (t testErr) Error() string {
 func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, false, isErrorRollbackWholeTxn(nil))
 	assert.Equal(t, false, isErrorRollbackWholeTxn(&testError{}))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockWaitTimeoutNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRetryForCNRollingRestart()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableBindChangedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableNotFoundNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadlockCheckBusyNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockConflictNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewRemoteLockWaitTimeoutNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewTxnUnknown(context.Background(), "test")))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendClosedNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewNoAvailableBackendNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendCannotConnectNoCtx("test")))
+}
+
+func TestNewErrorRollbackWholeTxnCoversEveryCode(t *testing.T) {
+	for code := range errCodeRollbackWholeTxn {
+		err := newErrorRollbackWholeTxn(code)
+		require.True(t, isErrorRollbackWholeTxn(err), "error code %d", code)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok, "error code %d returned %T", code, err)
+		require.Equal(t, code, moErr.ErrorCode())
+	}
 }
 
 func TestUserInput_getSqlSourceType(t *testing.T) {
@@ -1214,6 +1373,7 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 		defines.MYSQL_TYPE_ENUM,
 		defines.MYSQL_TYPE_TINY,
 		defines.MYSQL_TYPE_SHORT,
+		defines.MYSQL_TYPE_YEAR,
 		defines.MYSQL_TYPE_VARCHAR,
 		defines.MYSQL_TYPE_TEXT,
 	}
@@ -1238,6 +1398,8 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 				row[j] = "abc"
 			case defines.MYSQL_TYPE_SHORT:
 				row[j] = int16(math.MaxInt16)
+			case defines.MYSQL_TYPE_YEAR:
+				row[j] = types.MoYear(2024)
 			case defines.MYSQL_TYPE_LONG:
 				row[j] = int32(math.MaxInt32)
 			case defines.MYSQL_TYPE_LONGLONG:
@@ -1304,6 +1466,9 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			case types.T_enum:
 				assert.Equal(t, mrs.Data[i][j].(types.Enum), row[j])
 				continue
+			case types.T_year:
+				assert.Equal(t, mrs.Data[i][j].(types.MoYear), row[j])
+				continue
 			case types.T_text:
 				if j%2 == 0 {
 					row[j] = string(row[j].([]uint8))
@@ -1314,6 +1479,257 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			assert.Equal(t, mrs.Data[i][j], row[j])
 		}
 
+	}
+}
+
+func Test_convertRowsIntoBatchDecimal(t *testing.T) {
+	cases := []struct {
+		name      string
+		mysqlType defines.MysqlType
+		length    uint32
+		signed    bool
+		width     int32
+		scale     int32
+		value     any
+		oid       types.T
+		want      string
+	}{
+		{
+			name:      "signed decimal64 max precision string",
+			mysqlType: defines.MYSQL_TYPE_DECIMAL,
+			length:    20,
+			signed:    true,
+			width:     18,
+			scale:     2,
+			value:     "15.00",
+			oid:       types.T_decimal64,
+			want:      "15.00",
+		},
+		{
+			name:      "signed newdecimal decimal128 bytes",
+			mysqlType: defines.MYSQL_TYPE_NEWDECIMAL,
+			length:    22,
+			signed:    true,
+			width:     20,
+			scale:     3,
+			value:     []byte("12345678901234567.125"),
+			oid:       types.T_decimal128,
+			want:      "12345678901234567.125",
+		},
+		{
+			name:      "signed decimal256 string",
+			mysqlType: defines.MYSQL_TYPE_DECIMAL,
+			length:    52,
+			signed:    true,
+			width:     50,
+			scale:     4,
+			value:     "1234567890123456789012345678901234567890.1234",
+			oid:       types.T_decimal256,
+			want:      "1234567890123456789012345678901234567890.1234",
+		},
+		{
+			name:      "signed scale zero decimal128 from mysql display length",
+			mysqlType: defines.MYSQL_TYPE_NEWDECIMAL,
+			length:    20,
+			signed:    true,
+			width:     19,
+			scale:     0,
+			value:     "1234567890123456789",
+			oid:       types.T_decimal128,
+			want:      "1234567890123456789",
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			mrs := &MysqlResultSet{}
+			col := new(MysqlColumn)
+			col.SetName("d")
+			col.SetColumnType(tt.mysqlType)
+			col.SetSigned(tt.signed)
+			col.SetLength(tt.length)
+			col.SetDecimal(tt.scale)
+			mrs.AddColumn(col)
+			mrs.AddRow([]any{tt.value})
+			mrs.AddRow([]any{nil})
+
+			pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+			require.NoError(t, err)
+			require.NotNil(t, data)
+			defer data.Clean(pool)
+
+			require.Len(t, pColDefs.ResultCols, 1)
+			require.Equal(t, int32(tt.oid), pColDefs.ResultCols[0].Typ.Id)
+			require.Equal(t, tt.width, pColDefs.ResultCols[0].Typ.Width)
+			require.Equal(t, tt.scale, pColDefs.ResultCols[0].Typ.Scale)
+			require.Equal(t, tt.oid, data.Vecs[0].GetType().Oid)
+			require.Equal(t, tt.width, data.Vecs[0].GetType().Width)
+			require.Equal(t, tt.scale, data.Vecs[0].GetType().Scale)
+			require.True(t, data.Vecs[0].GetNulls().Contains(1))
+
+			switch tt.oid {
+			case types.T_decimal64:
+				got := vector.GetFixedAtNoTypeCheck[types.Decimal64](data.Vecs[0], 0)
+				require.Equal(t, tt.want, got.Format(tt.scale))
+			case types.T_decimal128:
+				got := vector.GetFixedAtNoTypeCheck[types.Decimal128](data.Vecs[0], 0)
+				require.Equal(t, tt.want, got.Format(tt.scale))
+			case types.T_decimal256:
+				got := vector.GetFixedAtNoTypeCheck[types.Decimal256](data.Vecs[0], 0)
+				require.Equal(t, tt.want, got.Format(tt.scale))
+			default:
+				t.Fatalf("unexpected decimal type %s", tt.oid)
+			}
+		})
+	}
+}
+
+func Test_decimalRowValueHelpers(t *testing.T) {
+	typ64 := types.New(types.T_decimal64, 10, 2)
+	dec64, err := types.ParseDecimal64("12.34", typ64.Width, typ64.Scale)
+	require.NoError(t, err)
+	got64, err := getDecimal64FromRowValue(dec64, typ64)
+	require.NoError(t, err)
+	require.Equal(t, dec64, got64)
+	got64, err = getDecimal64FromRowValue([]byte("56.78"), typ64)
+	require.NoError(t, err)
+	require.Equal(t, "56.78", got64.Format(typ64.Scale))
+	_, err = getDecimal64FromRowValue("invalid", typ64)
+	require.Error(t, err)
+	_, err = getDecimal64FromRowValue(int64(1), typ64)
+	require.Error(t, err)
+
+	typ128 := types.New(types.T_decimal128, 20, 3)
+	dec128, err := types.ParseDecimal128("12345678901234567.125", typ128.Width, typ128.Scale)
+	require.NoError(t, err)
+	got128, err := getDecimal128FromRowValue(dec128, typ128)
+	require.NoError(t, err)
+	require.Equal(t, dec128, got128)
+	got128, err = getDecimal128FromRowValue("12345678901234567.125", typ128)
+	require.NoError(t, err)
+	require.Equal(t, "12345678901234567.125", got128.Format(typ128.Scale))
+	_, err = getDecimal128FromRowValue("invalid", typ128)
+	require.Error(t, err)
+	_, err = getDecimal128FromRowValue(int64(1), typ128)
+	require.Error(t, err)
+
+	typ256 := types.New(types.T_decimal256, 50, 4)
+	dec256, err := types.ParseDecimal256("1234567890123456789012345678901234567890.1234", typ256.Width, typ256.Scale)
+	require.NoError(t, err)
+	got256, err := getDecimal256FromRowValue(dec256, typ256)
+	require.NoError(t, err)
+	require.Equal(t, dec256, got256)
+	got256, err = getDecimal256FromRowValue([]byte("1234567890123456789012345678901234567890.1234"), typ256)
+	require.NoError(t, err)
+	require.Equal(t, "1234567890123456789012345678901234567890.1234", got256.Format(typ256.Scale))
+	_, err = getDecimal256FromRowValue("invalid", typ256)
+	require.Error(t, err)
+	_, err = getDecimal256FromRowValue(int64(1), typ256)
+	require.Error(t, err)
+}
+
+func Test_mysqlDecimalColTypeMissingPrecision(t *testing.T) {
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	col.SetLength(0)
+
+	_, err := mysqlDecimalColType(col)
+	require.Error(t, err)
+}
+
+func Test_mysqlDecimalColTypeRequiresScaleMetadata(t *testing.T) {
+	col := new(testColumnWithoutDecimalScale)
+	col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	col.SetLength(12)
+
+	_, err := mysqlDecimalColType(col)
+	require.Error(t, err)
+}
+
+func Test_mysqlDecimalColTypePrecisionBoundary(t *testing.T) {
+	cases := []struct {
+		name   string
+		length uint32
+		signed bool
+		width  int32
+		scale  int32
+		want   types.T
+	}{
+		{name: "signed decimal64 below boundary", length: 17, signed: true, width: 16, scale: 0, want: types.T_decimal64},
+		{name: "signed decimal64 precision 18 scale 0", length: 19, signed: true, width: 18, scale: 0, want: types.T_decimal64},
+		{name: "signed decimal128 precision 19 scale 0", length: 20, signed: true, width: 19, scale: 0, want: types.T_decimal128},
+		{name: "unsigned decimal64 precision 18 scale 3", length: 19, signed: false, width: 18, scale: 3, want: types.T_decimal64},
+		{name: "unsigned decimal128 precision 19 scale 0", length: 19, signed: false, width: 19, scale: 0, want: types.T_decimal128},
+		{name: "signed decimal128 max precision", length: 40, signed: true, width: 38, scale: 3, want: types.T_decimal128},
+		{name: "signed decimal256 precision 39", length: 41, signed: true, width: 39, scale: 1, want: types.T_decimal256},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			col.SetColumnType(defines.MYSQL_TYPE_NEWDECIMAL)
+			col.SetSigned(tt.signed)
+			col.SetLength(tt.length)
+			col.SetDecimal(tt.scale)
+
+			got, err := mysqlDecimalColType(col)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got.Oid)
+			require.Equal(t, tt.width, got.Width)
+			require.Equal(t, tt.scale, got.Scale)
+		})
+	}
+}
+
+func Test_mysqlDecimalColTypeInvalidScalePrecision(t *testing.T) {
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_NEWDECIMAL)
+	col.SetLength(3)
+	col.SetDecimal(2)
+
+	_, err := mysqlDecimalColType(col)
+	require.Error(t, err)
+}
+
+func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
+	cases := []struct {
+		name   string
+		typ    types.Type
+		signed bool
+		length uint32
+	}{
+		{
+			name:   "signed scale zero",
+			typ:    types.New(types.T_decimal128, 19, 0),
+			signed: true,
+			length: 20,
+		},
+		{
+			name:   "signed fractional",
+			typ:    types.New(types.T_decimal128, 20, 3),
+			signed: true,
+			length: 22,
+		},
+		{
+			name:   "unsigned fractional",
+			typ:    types.New(types.T_decimal128, 20, 3),
+			signed: false,
+			length: 21,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			col.SetSigned(tt.signed)
+
+			setMysqlColumnTypeMetadata(col, tt.typ)
+
+			require.Equal(t, tt.length, col.Length())
+			require.Equal(t, uint8(tt.typ.Scale), col.Decimal())
+		})
 	}
 }
 
@@ -1716,5 +2132,232 @@ func Test_extractTableDefColumns(t *testing.T) {
 		er := newTestExecResult()
 		_, err := extractTableDefColumns([]ExecResult{er}, ctx, "test", "test")
 		assert.NotNil(t, err)
+	})
+}
+
+// Test_parseCmdGetSnapshotTs_GoodPath tests the good path of parseCmdGetSnapshotTs
+func Test_parseCmdGetSnapshotTs_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdGetSnapshotTs good path", t, func() {
+		// Test valid command
+		sql := makeGetSnapshotTsSql("test_snapshot", "pub_account", "test_pub")
+		cmd, err := parseCmdGetSnapshotTs(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.accountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+	})
+
+	convey.Convey("parseCmdGetSnapshotTs invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdGetSnapshotTs(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the GET_SNAPSHOT_TS command")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdGetSnapshotTs(ctx, cmdGetSnapshotTsSql+" snapshot_only")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdGetDatabases_GoodPath tests the good path of parseCmdGetDatabases
+func Test_parseCmdGetDatabases_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdGetDatabases good path", t, func() {
+		// Test valid command
+		sql := makeGetDatabasesSql("test_snapshot", "pub_account", "test_pub", "database", "test_db", "-")
+		cmd, err := parseCmdGetDatabases(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.accountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+		convey.So(cmd.level, convey.ShouldEqual, "database")
+		convey.So(cmd.dbName, convey.ShouldEqual, "test_db")
+		convey.So(cmd.tableName, convey.ShouldEqual, "-")
+	})
+
+	convey.Convey("parseCmdGetDatabases invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdGetDatabases(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the GET_DATABASES command")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdGetDatabases(ctx, cmdGetDatabasesSql+" snapshot_only account pub")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdGetMoIndexes_GoodPath tests the good path of parseCmdGetMoIndexes
+func Test_parseCmdGetMoIndexes_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdGetMoIndexes good path", t, func() {
+		// Test valid command
+		sql := makeGetMoIndexesSql(12345, "pub_account", "test_pub", "test_snapshot")
+		cmd, err := parseCmdGetMoIndexes(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.tableId, convey.ShouldEqual, uint64(12345))
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+	})
+
+	convey.Convey("parseCmdGetMoIndexes invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdGetMoIndexes(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the GET_MO_INDEXES command")
+
+		// Test invalid command - invalid tableId
+		_, err = parseCmdGetMoIndexes(ctx, cmdGetMoIndexesSql+" not_a_number pub_account test_pub snapshot")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid tableId")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdGetMoIndexes(ctx, cmdGetMoIndexesSql+" 12345")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdGetDdl_GoodPath tests the good path of parseCmdGetDdl
+func Test_parseCmdGetDdl_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdGetDdl good path", t, func() {
+		// Test valid command
+		sql := makeGetDdlSql("test_snapshot", "pub_account", "test_pub", "table", "test_db", "test_table")
+		cmd, err := parseCmdGetDdl(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+		convey.So(cmd.level, convey.ShouldEqual, "table")
+		convey.So(cmd.dbName, convey.ShouldEqual, "test_db")
+		convey.So(cmd.tableName, convey.ShouldEqual, "test_table")
+	})
+
+	convey.Convey("parseCmdGetDdl invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdGetDdl(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the GET_DDL command")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdGetDdl(ctx, cmdGetDdlSql+" snapshot account pub")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdGetObject_GoodPath tests the good path of parseCmdGetObject
+func Test_parseCmdGetObject_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdGetObject good path", t, func() {
+		// Test valid command
+		sql := makeGetObjectSql("pub_account", "test_pub", "object_name.dat", 5)
+		cmd, err := parseCmdGetObject(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+		convey.So(cmd.objectName, convey.ShouldEqual, "object_name.dat")
+		convey.So(cmd.chunkIndex, convey.ShouldEqual, int64(5))
+	})
+
+	convey.Convey("parseCmdGetObject invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdGetObject(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the GET_OBJECT command")
+
+		// Test invalid command - invalid chunkIndex
+		_, err = parseCmdGetObject(ctx, cmdGetObjectSql+" pub_account test_pub object_name not_a_number")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid chunkIndex")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdGetObject(ctx, cmdGetObjectSql+" pub_account")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdObjectList_GoodPath tests the good path of parseCmdObjectList
+func Test_parseCmdObjectList_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdObjectList good path - with against snapshot", t, func() {
+		// Test valid command with against snapshot
+		sql := makeObjectListSql("test_snapshot", "against_snapshot", "pub_account", "test_pub")
+		cmd, err := parseCmdObjectList(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.againstSnapshotName, convey.ShouldEqual, "against_snapshot")
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+	})
+
+	convey.Convey("parseCmdObjectList good path - without against snapshot", t, func() {
+		// Test valid command without against snapshot (using "-")
+		sql := makeObjectListSql("test_snapshot", "-", "pub_account", "test_pub")
+		cmd, err := parseCmdObjectList(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.againstSnapshotName, convey.ShouldEqual, "") // "-" should be converted to empty string
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+	})
+
+	convey.Convey("parseCmdObjectList invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdObjectList(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the OBJECT_LIST command")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdObjectList(ctx, cmdObjectListSql+" snapshot_only")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
+	})
+}
+
+// Test_parseCmdCheckSnapshotFlushed_GoodPath tests the good path of parseCmdCheckSnapshotFlushed
+func Test_parseCmdCheckSnapshotFlushed_GoodPath(t *testing.T) {
+	ctx := context.Background()
+
+	convey.Convey("parseCmdCheckSnapshotFlushed good path", t, func() {
+		// Test valid command
+		sql := makeCheckSnapshotFlushedSql("test_snapshot", "pub_account", "test_pub")
+		cmd, err := parseCmdCheckSnapshotFlushed(ctx, sql)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(cmd, convey.ShouldNotBeNil)
+		convey.So(cmd.snapshotName, convey.ShouldEqual, "test_snapshot")
+		convey.So(cmd.subscriptionAccountName, convey.ShouldEqual, "pub_account")
+		convey.So(cmd.publicationName, convey.ShouldEqual, "test_pub")
+	})
+
+	convey.Convey("parseCmdCheckSnapshotFlushed invalid format", t, func() {
+		// Test invalid command - wrong prefix
+		_, err := parseCmdCheckSnapshotFlushed(ctx, "SELECT * FROM table")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "not the CHECK_SNAPSHOT_FLUSHED command")
+
+		// Test invalid command - missing parameters
+		_, err = parseCmdCheckSnapshotFlushed(ctx, cmdCheckSnapshotFlushedSql+" snapshot_only")
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
 	})
 }

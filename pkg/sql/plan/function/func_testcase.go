@@ -15,16 +15,45 @@
 package function
 
 import (
+	"bytes"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// geometryComparisonWKT normalizes a geometry payload (WKB or legacy WKT/EWKT
+// text) to canonical WKT so geometry test expectations written as WKT compare
+// equal to WKB-encoded results.
+func geometryComparisonWKT(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	var (
+		g   geo.Geometry
+		err error
+	)
+	if payloadIsWKB(b) {
+		g, err = geo.ReadWKB(b)
+		if err != nil {
+			// float32-coordinate WKB (GEOMETRY32)
+			g, err = geo.ReadWKBFloat32(b)
+		}
+	} else {
+		s, _, _ := stripEWKTSRID(strings.TrimSpace(string(b)))
+		g, err = geo.ParseWKT(s)
+	}
+	if err != nil {
+		return string(b)
+	}
+	return geo.WriteWKT(g)
+}
 
 type fEvalFn func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error
 
@@ -472,6 +501,27 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, want, get)
 			}
 		}
+	case types.T_decimal256:
+		r := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](v)
+		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](vExpected)
+		for i := uint64(0); i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetValue(i)
+			get, null2 := r.GetValue(i)
+			if null1 {
+				if null2 {
+					continue
+				} else {
+					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
+			if want != get {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
+					i+1, want, get)
+			}
+		}
 	case types.T_date:
 		r := vector.GenerateFunctionFixedTypeParameter[types.Date](v)
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](vExpected)
@@ -577,6 +627,30 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, want, get)
 			}
 		}
+	case types.T_geometry, types.T_geometry32:
+		// Geometry values are stored as WKB; expectations are written as WKT.
+		// Canonicalize both sides to WKT before comparing.
+		r := vector.GenerateFunctionStrParameter(v)
+		s := vector.GenerateFunctionStrParameter(vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetStrValue(i)
+			get, null2 := r.GetStrValue(i)
+			if null1 {
+				if null2 {
+					continue
+				}
+				return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, geometryComparisonWKT(want))
+			}
+			wantWKT := geometryComparisonWKT(want)
+			getWKT := geometryComparisonWKT(get)
+			if wantWKT != getWKT {
+				return false, fmt.Sprintf("the %dth row expected %s, but get %s", i+1, wantWKT, getWKT)
+			}
+		}
+
 	case types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		r := vector.GenerateFunctionStrParameter(v)
@@ -616,7 +690,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
 			}
-			if moarray.Compare[float32](types.BytesToArray[float32](want), types.BytesToArray[float32](get)) != 0 {
+			if types.ArrayCompare[float32](types.BytesToArray[float32](want), types.BytesToArray[float32](get)) != 0 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, types.BytesToArray[float32](want), types.BytesToArray[float32](get))
 			}
@@ -640,6 +714,27 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if !assertx.InEpsilonF64Slice(types.BytesToArray[float64](want), types.BytesToArray[float64](get)) {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, types.BytesToArray[float64](want), types.BytesToArray[float64](get))
+			}
+		}
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		// Narrow vector types compare byte-exact (their stored representation is
+		// the comparison ground truth; ArrayCompare only covers float32/float64).
+		r := vector.GenerateFunctionStrParameter(v)
+		s := vector.GenerateFunctionStrParameter(vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetStrValue(i)
+			get, null2 := r.GetStrValue(i)
+			if null1 {
+				if null2 {
+					continue
+				}
+				return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
+			if !bytes.Equal(want, get) {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v", i+1, want, get)
 			}
 		}
 	case types.T_uuid:
@@ -820,6 +915,9 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_decimal128:
 		values := val.([]types.Decimal128)
 		vector.AppendFixedList(vec, values, nil, mp)
+	case types.T_decimal256:
+		values := val.([]types.Decimal256)
+		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_date:
 		values := val.([]types.Date)
 		vector.AppendFixedList(vec, values, nil, mp)
@@ -832,7 +930,7 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_timestamp:
 		values := val.([]types.Timestamp)
 		vector.AppendFixedList(vec, values, nil, mp)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		values := val.([]string)
 		vector.AppendStringList(vec, values, nil, mp)
 	case types.T_array_float32:
@@ -841,6 +939,18 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_array_float64:
 		values := val.([][]float64)
 		vector.AppendArrayList[float64](vec, values, nil, mp)
+	case types.T_array_bf16:
+		values := val.([][]types.BF16)
+		vector.AppendArrayList[types.BF16](vec, values, nil, mp)
+	case types.T_array_float16:
+		values := val.([][]types.Float16)
+		vector.AppendArrayList[types.Float16](vec, values, nil, mp)
+	case types.T_array_int8:
+		values := val.([][]int8)
+		vector.AppendArrayList[int8](vec, values, nil, mp)
+	case types.T_array_uint8:
+		values := val.([][]uint8)
+		vector.AppendArrayList[uint8](vec, values, nil, mp)
 	case types.T_uuid:
 		values := val.([]types.Uuid)
 		vector.AppendFixedList(vec, values, nil, mp)
@@ -858,6 +968,9 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 		vector.AppendStringList(vec, values, nil, mp)
 	case types.T_enum:
 		values := val.([]types.Enum)
+		vector.AppendFixedList(vec, values, nil, mp)
+	case types.T_year:
+		values := val.([]types.MoYear)
 		vector.AppendFixedList(vec, values, nil, mp)
 	default:
 		panic(fmt.Sprintf("function test framework do not support typ %s", typ))

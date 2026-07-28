@@ -1,0 +1,37 @@
+//go:build !gpu
+
+// Copyright 2023 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package device
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/balanced"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+)
+
+// NewKMeans: gpuMode is accepted-but-ignored in non-gpu builds — CPU
+// (balanced kmeans) is the only option here. The signature matches
+// the gpu.go variant so callers pass the flag uniformly.
+func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
+	maxIterations int, deltaThreshold float64,
+	distanceType metric.MetricType, _ kmeans.InitType,
+	spherical bool,
+	nworker int,
+	_ bool,
+) (kmeans.Clusterer, error) {
+	return balanced.NewKMeans(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, spherical, nworker)
+}

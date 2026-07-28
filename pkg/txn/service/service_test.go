@@ -16,129 +16,34 @@ package service
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/stretchr/testify/assert"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/stretchr/testify/require"
 )
 
-func TestGCZombie(t *testing.T) {
-	sender := NewTestSender()
-	defer func() {
-		assert.NoError(t, sender.Close())
-	}()
-
-	zombie := time.Millisecond * 100
-	s := NewTestTxnServiceWithLogAndZombie(t, 1, sender, NewTestClock(1), nil, zombie).(*service)
-	assert.NoError(t, s.Start())
-	defer func() {
-		assert.NoError(t, s.Close(false))
-	}()
-
-	sender.AddTxnService(s)
-
-	wTxn := NewTestTxn(1, 1, 1)
-	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
-
-	w1 := addTestWaiter(t, s, wTxn, txn.TxnStatus_Aborted)
-	defer w1.close()
-
-	checkWaiter(t, w1, txn.TxnStatus_Aborted)
-	checkData(t, wTxn, s, 0, 0, false)
+type closeTrackingSender struct {
+	closed atomic.Int32
 }
 
-func TestGCZombieWithDistributedTxn(t *testing.T) {
-	sender := NewTestSender()
-	defer func() {
-		assert.NoError(t, sender.Close())
-	}()
-
-	zombie := time.Millisecond * 100
-	s1 := NewTestTxnServiceWithLogAndZombie(t, 1, sender, NewTestClock(1), nil, zombie).(*service)
-	assert.NoError(t, s1.Start())
-	defer func() {
-		assert.NoError(t, s1.Close(false))
-	}()
-
-	s2 := NewTestTxnServiceWithLogAndZombie(t, 2, sender, NewTestClock(1), nil, zombie).(*service)
-	assert.NoError(t, s2.Start())
-	defer func() {
-		assert.NoError(t, s2.Close(false))
-	}()
-
-	sender.AddTxnService(s1)
-	sender.AddTxnService(s2)
-
-	// 1 is coordinator
-	wTxn := NewTestTxn(1, 1, 1, 2)
-	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
-	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
-
-	w1 := addTestWaiter(t, s1, wTxn, txn.TxnStatus_Aborted)
-	defer w1.close()
-
-	w2 := addTestWaiter(t, s2, wTxn, txn.TxnStatus_Aborted)
-	defer w2.close()
-
-	checkWaiter(t, w1, txn.TxnStatus_Aborted)
-	checkWaiter(t, w2, txn.TxnStatus_Aborted)
-
-	checkData(t, wTxn, s1, 0, 0, false)
-	checkData(t, wTxn, s2, 0, 0, false)
+func (s *closeTrackingSender) Send(
+	context.Context,
+	[]txn.TxnRequest,
+) (*rpc.SendResult, error) {
+	return &rpc.SendResult{}, nil
 }
 
-func TestGCZombieNonCoordinatorTxn(t *testing.T) {
-	sender := NewTestSender()
-	defer func() {
-		assert.NoError(t, sender.Close())
-	}()
-
-	zombie := time.Millisecond * 100
-	s := NewTestTxnServiceWithLogAndZombie(t, 1, sender, NewTestClock(1), nil, zombie).(*service)
-	assert.NoError(t, s.Start())
-	defer func() {
-		assert.NoError(t, s.Close(false))
-	}()
-
-	sender.AddTxnService(s)
-
-	wTxn := NewTestTxn(1, 1, 1)
-	wTxn.TNShards = append(wTxn.TNShards, NewTestTNShard(2))
-	// make shard 2 is coordinator
-	wTxn.TNShards[0], wTxn.TNShards[1] = wTxn.TNShards[1], wTxn.TNShards[0]
-
-	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
-
-	w1 := addTestWaiter(t, s, wTxn, txn.TxnStatus_Aborted)
-	defer w1.close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), zombie*5)
-	defer cancel()
-	_, err := w1.wait(ctx)
-	assert.Error(t, err)
-	assert.Equal(t, moerr.ConvertGoError(ctx, ctx.Err()), err)
+func (s *closeTrackingSender) Close() error {
+	s.closed.Add(1)
+	return nil
 }
 
-func Test_parallelSendWithRetry(t *testing.T) {
-	sender := NewTestSender()
-	defer func() {
-		assert.NoError(t, sender.Close())
-	}()
-
-	zombie := time.Millisecond * 3
-	s := NewTestTxnServiceWithLogAndZombie(t, 1, sender, NewTestClock(1), nil, zombie).(*service)
-	assert.NoError(t, s.Start())
-	defer func() {
-		assert.NoError(t, s.Close(false))
-	}()
-
-	sender.AddTxnService(s)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sender.action = "return_err_and_reset"
-	s.parallelSendWithRetry(ctx, nil, nil)
+func TestTxnServiceDoesNotCloseBorrowedSender(t *testing.T) {
+	sender := new(closeTrackingSender)
+	service := NewTestTxnService(t, 1, sender, NewTestClock(1))
+	require.NoError(t, service.Start())
+	require.NoError(t, service.Close(false))
+	require.Zero(t, sender.closed.Load())
 }

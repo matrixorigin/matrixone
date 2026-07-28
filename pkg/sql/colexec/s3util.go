@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,29 +40,37 @@ import (
 const (
 	// WriteS3Threshold when batches'  size of table reaches this, we will
 	// trigger write s3
-	WriteS3Threshold         uint64 = 128 * mpool.MB
-	FaultInjectedS3Threshold uint64 = 512 * mpool.KB
+	WriteS3Threshold         = 128 * mpool.MB
+	FaultInjectedS3Threshold = 512 * mpool.KB
 )
 
 type CNS3Writer struct {
-	sinker       *ioutil.Sinker
-	written      []objectio.ObjectStats
-	blockInfoBat *batch.Batch
-
-	hold                   []*batch.Batch
-	holdFlushUntilSyncCall bool
-
-	isTombstone bool
-	mp          *mpool.MPool
+	sinker              *ioutil.Sinker
+	isTombstone         bool
+	blockInfoBat        *batch.Batch
+	memorySizeThreshold int
 }
 
 func (w *CNS3Writer) String() string {
 	buf := bytes.NewBuffer(nil)
 	buf.WriteString(fmt.Sprintf("Sinker: %s\n", w.sinker.String()))
+	inMemoryThreshold := w.sinker.GetInMemoryThreshold()
+	flushOnSync := inMemoryThreshold == math.MaxInt
+	var flushOnSyncBatches []*batch.Batch
+	if flushOnSync {
+		flushOnSyncBatches = w.sinker.GetInMemoryData()
+	}
+
+	result, _ := w.sinker.GetResult()
+
 	buf.WriteString(fmt.Sprintf(
-		"Others: {written=%d, isTombstone=%v, holdFlushUntilSyncCall=%v, hold=%v, blockInfoBat=%v}",
-		len(w.written), w.isTombstone, w.holdFlushUntilSyncCall, len(w.hold),
-		common.MoBatchToString(w.blockInfoBat, w.blockInfoBat.RowCount())))
+		"Others: {result_len=%d, isTombstone=%v, flushOnSync=%v, flushOnSyncBatches_len=%d, blockInfoBat=%v}",
+		len(result),
+		w.isTombstone,
+		flushOnSync,
+		len(flushOnSyncBatches),
+		common.MoBatchToString(w.blockInfoBat, w.blockInfoBat.RowCount())),
+	)
 
 	return buf.String()
 }
@@ -70,15 +79,19 @@ func NewCNS3TombstoneWriter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	pkType types.Type,
+	memoryThreshold int,
 	opts ...ioutil.SinkerOption,
 ) *CNS3Writer {
 
 	writer := &CNS3Writer{
-		mp:          mp,
 		isTombstone: true,
 	}
 
-	opts = append(opts, ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)))
+	if memoryThreshold < 0 {
+		memoryThreshold = WriteS3Threshold
+	}
+
+	opts = append(opts, ioutil.WithMemorySizeThreshold(memoryThreshold))
 	opts = append(opts, ioutil.WithTailSizeCap(0))
 
 	writer.sinker = ioutil.NewTombstoneSinker(
@@ -147,40 +160,50 @@ func GetSequmsAttrsSortKeyIdxFromTableDef(
 	return sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey
 }
 
+// `flushOnSync` true means memoryThreshold is math.MaxInt
+// `memoryThreshold`
+// 1. only effect when `flushOnSync` is false
+// 2. < 0 use default threshold
 func NewCNS3DataWriter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	tableDef *plan.TableDef,
-	holdFlushUntilSyncCall bool,
+	memoryThreshold int,
+	flushOnSync bool,
 	sinkerOpts ...ioutil.SinkerOption,
 ) *CNS3Writer {
 
-	writer := &CNS3Writer{
-		holdFlushUntilSyncCall: holdFlushUntilSyncCall,
-		mp:                     mp,
-	}
+	writer := new(CNS3Writer)
 
 	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
 
 	factor := ioutil.NewFSinkerImplFactory(sequms, sortKeyIdx, isPrimaryKey, false, tableDef.Version)
+	if memoryThreshold < 0 {
+		memoryThreshold = WriteS3Threshold
+	}
 
-	threshold := WriteS3Threshold
 	if faultInjected, _ := objectio.LogCNFlushSmallObjsInjected(
 		tableDef.DbName, tableDef.Name,
 	); faultInjected {
-		threshold = FaultInjectedS3Threshold
+		memoryThreshold = FaultInjectedS3Threshold
 	}
+	if flushOnSync {
+		// do not flush on sync, so the threshold is the max int
+		memoryThreshold = math.MaxInt
+	}
+	writer.memorySizeThreshold = memoryThreshold
 
-	opts := []ioutil.SinkerOption{
-		ioutil.WithTailSizeCap(0),
-		ioutil.WithMemorySizeThreshold(int(threshold)),
-		ioutil.WithOffHeap(),
-	}
-	opts = append(opts, sinkerOpts...)
+	sinkerOpts = append(sinkerOpts, ioutil.WithMemorySizeThreshold(memoryThreshold))
+	sinkerOpts = append(sinkerOpts, ioutil.WithTailSizeCap(0))
+	sinkerOpts = append(sinkerOpts, ioutil.WithOffHeap())
 	writer.sinker = ioutil.NewSinker(
-		sortKeyIdx, attrs, attrTypes,
-		factor, mp, fs,
-		opts...,
+		sortKeyIdx,
+		attrs,
+		attrTypes,
+		factor,
+		mp,
+		fs,
+		sinkerOpts...,
 	)
 
 	writer.ResetBlockInfoBat()
@@ -189,67 +212,80 @@ func NewCNS3DataWriter(
 }
 
 func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
-	if w.holdFlushUntilSyncCall {
-		copied, err := bat.Dup(w.mp)
-		if err != nil {
-			return err
-		}
-		w.hold = append(w.hold, copied)
-	} else {
-		return w.sinker.Write(ctx, bat)
-	}
-	return nil
+	return w.sinker.Write(ctx, bat)
 }
 
-func (w *CNS3Writer) Sync(ctx context.Context) ([]objectio.ObjectStats, error) {
-	defer func() {
-		for _, bat := range w.hold {
-			bat.Clean(w.mp)
-		}
-		w.hold = nil
-	}()
+func (w *CNS3Writer) MemorySizeThreshold() int {
+	return w.memorySizeThreshold
+}
 
-	if len(w.hold) != 0 {
-		for _, bat := range w.hold {
-			if err := w.sinker.Write(ctx, bat); err != nil {
-				return nil, err
-			}
-		}
+func (w *CNS3Writer) WriteOwned(ctx context.Context, bat *batch.Batch) (bool, error) {
+	return w.sinker.WriteOwned(ctx, bat)
+}
+
+func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, err error) {
+	if err = w.sinker.Sync(ctx); err != nil {
+		return
 	}
 
-	if err := w.sinker.Sync(ctx); err != nil {
+	stats, _ = w.sinker.GetResult()
+	return
+}
+
+func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch, error) {
+	stats, _, err := w.sinker.SyncAndTakeResults(ctx)
+	if err != nil {
 		return nil, err
 	}
 
-	w.written, _ = w.sinker.GetResult()
+	w.ResetBlockInfoBat()
+	if len(stats) == 0 {
+		return w.blockInfoBat, nil
+	}
 
-	return w.written, nil
+	if err = ExpandObjectStatsToBatch(
+		w.sinker.GetMPool(),
+		w.isTombstone,
+		w.blockInfoBat,
+		true,
+		stats...,
+	); err != nil {
+		return nil, err
+	}
+
+	return w.blockInfoBat, nil
 }
 
-func (w *CNS3Writer) Close() error {
+func (w *CNS3Writer) Close() (err error) {
+	var mp *mpool.MPool
 	if w.sinker != nil {
-		if err := w.sinker.Close(); err != nil {
-			return err
+		mp = w.sinker.GetMPool()
+		if err = w.sinker.Close(); err != nil {
+			return
 		}
 		w.sinker = nil
 	}
 
-	if len(w.hold) != 0 {
-		for _, bat := range w.hold {
-			bat.Clean(w.mp)
-		}
-		w.hold = nil
-		w.holdFlushUntilSyncCall = false
-	}
-
 	if w.blockInfoBat != nil {
-		w.blockInfoBat.Clean(w.mp)
+		w.blockInfoBat.Clean(mp)
 		w.blockInfoBat = nil
 	}
 
-	w.written = nil
-
 	return nil
+}
+
+// Reset discards any buffered or staged data accumulated since the last
+// Sync, without tearing down the underlying sinker. Call this when the
+// enclosing pipeline execution is being reset so that stale data is not
+// carried into the next execution. The sinker's buffer pool and arena
+// are kept alive for efficient reuse.
+func (w *CNS3Writer) Reset() {
+	if w.sinker != nil {
+		w.sinker.Reset()
+	}
+	if w.blockInfoBat != nil {
+		w.blockInfoBat.CleanOnlyData()
+	}
 }
 
 func ExpandObjectStatsToBatch(
@@ -303,14 +339,25 @@ func ExpandObjectStatsToBatch(
 
 func (w *CNS3Writer) FillBlockInfoBat() (*batch.Batch, error) {
 
-	err := ExpandObjectStatsToBatch(w.mp, w.isTombstone, w.blockInfoBat, true, w.written...)
+	w.ResetBlockInfoBat()
 
-	return w.blockInfoBat, err
+	result, _ := w.sinker.GetResult()
+
+	if err := ExpandObjectStatsToBatch(
+		w.sinker.GetMPool(),
+		w.isTombstone,
+		w.blockInfoBat,
+		true,
+		result...,
+	); err != nil {
+		return nil, err
+	}
+
+	return w.blockInfoBat, nil
 }
 
 func AllocCNS3ResultBat(
 	isTombstone bool,
-	isMemoryTable bool,
 ) *batch.Batch {
 
 	var (
@@ -320,10 +367,7 @@ func AllocCNS3ResultBat(
 		blockInfoBat *batch.Batch
 	)
 
-	if isMemoryTable {
-		attrs = []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-		attrTypes = []types.Type{types.T_int16.ToType(), types.T_text.ToType(), types.T_binary.ToType()}
-	} else if !isTombstone {
+	if !isTombstone {
 		attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 		attrTypes = []types.Type{types.T_text.ToType(), types.T_binary.ToType()}
 	} else {
@@ -345,9 +389,9 @@ func (w *CNS3Writer) ResetBlockInfoBat() {
 
 	if w.blockInfoBat != nil {
 		w.blockInfoBat.CleanOnlyData()
+	} else {
+		w.blockInfoBat = AllocCNS3ResultBat(w.isTombstone)
 	}
-
-	w.blockInfoBat = AllocCNS3ResultBat(w.isTombstone, false)
 }
 
 // reference to pkg/sql/colexec/order/order.go logic
@@ -370,9 +414,9 @@ func SortByKey(
 		}
 	}
 	rowCount := int64(bat.RowCount())
-	sels := proc.GetMPool().GetSels()
+	sels := vector.GetSels()
 	defer func() {
-		proc.GetMPool().PutSels(sels)
+		vector.PutSels(sels)
 	}()
 	for i := int64(0); i < rowCount; i++ {
 		sels = append(sels, i)
@@ -395,39 +439,5 @@ func SortByKey(
 	if needSort {
 		return bat.Shuffle(sels, m)
 	}
-	return nil
-}
-
-func (w *CNS3Writer) OutputRawData(
-	proc *process.Process,
-	result *batch.Batch,
-) error {
-	defer func() {
-		if len(w.hold) > 0 {
-			for _, bat := range w.hold {
-				bat.Clean(proc.Mp())
-			}
-			w.hold = nil
-		}
-	}()
-
-	for _, bat := range w.hold {
-		if err := vector.AppendFixed(
-			result.Vecs[0], int16(-1), false, proc.Mp()); err != nil {
-			return err
-		}
-
-		bytes, err := bat.MarshalBinary()
-		if err != nil {
-			return err
-		}
-		if err = vector.AppendBytes(
-			result.Vecs[1], bytes, false, proc.Mp()); err != nil {
-			return err
-		}
-	}
-
-	result.SetRowCount(result.Vecs[0].Length())
-
 	return nil
 }

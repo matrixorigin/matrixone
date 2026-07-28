@@ -26,10 +26,10 @@ type FmtCtx struct {
 	*strings.Builder
 	dialectType dialect.DialectType
 	// quoteString string
-	quoteString             bool
-	singleQuoteString       bool
-	escapeSingleQuoteString bool
-	quoteIdentifier         bool
+	quoteString       bool
+	singleQuoteString bool
+	quoteIdentifier   bool
+	paramExprOffset   bool
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -61,15 +61,18 @@ func WithSingleQuoteString() FmtCtxOption {
 	})
 }
 
-func WithEscapeSingleQuoteString() FmtCtxOption {
-	return FmtCtxOption(func(ctx *FmtCtx) {
-		ctx.escapeSingleQuoteString = true
-	})
-}
-
 func WithQuoteIdentifier() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.quoteIdentifier = true
+	})
+}
+
+// WithParamExprOffset includes a parameter's parser-assigned offset in its
+// formatted form. It is intended for internal semantic keys; SQL restored for
+// users must keep the default placeholder-only representation.
+func WithParamExprOffset() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.paramExprOffset = true
 	})
 }
 
@@ -154,10 +157,7 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 		}
 	}
 	if ctx.singleQuoteString && t == P_char {
-		return ctx.WriteString(fmt.Sprintf("'%s'", v))
-	}
-	if ctx.escapeSingleQuoteString && t == P_char {
-		return ctx.WriteString(fmt.Sprintf("\\'%s\\'", v))
+		return ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
 	}
 	return ctx.WriteString(v)
 }

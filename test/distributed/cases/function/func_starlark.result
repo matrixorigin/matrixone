@@ -1,6 +1,6 @@
-select 'Test will fail if code depends on space/formatting.   #22165';
-Test will fail if code depends on space/formatting.   #22165
-Test will fail if code depends on space/formatting.   #22165
+select 'Test will fail if code depends on space/formatting.   keep spaces';
+Test will fail if code depends on space/formatting.   keep spaces
+Test will fail if code depends on space/formatting.   keep spaces
 select starlark(
 $$
 def main(args):

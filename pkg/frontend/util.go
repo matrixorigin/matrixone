@@ -19,9 +19,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"math/rand"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,15 +30,15 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
-	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -53,8 +53,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 type CloseFlag struct {
@@ -84,14 +85,6 @@ func (cf *CloseFlag) IsOpened() bool {
 	return atomic.LoadUint32(&cf.closed) == 0
 }
 
-func Min(a int, b int) int {
-	if a < b {
-		return a
-	} else {
-		return b
-	}
-}
-
 func Max(a int, b int) int {
 	if a < b {
 		return b
@@ -100,82 +93,9 @@ func Max(a int, b int) int {
 	}
 }
 
-const (
-	invalidGoroutineId = math.MaxInt64
-)
-
 // GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
-	id := goid.Get()
-	if id == 0 {
-		id = invalidGoroutineId
-	}
-	return uint64(id)
-}
-
-type Timeout struct {
-	//last record of the time
-	lastTime atomic.Value //time.Time
-
-	//period
-	timeGap time.Duration
-
-	//auto update
-	autoUpdate bool
-}
-
-func NewTimeout(tg time.Duration, autoUpdateWhenChecked bool) *Timeout {
-	ret := &Timeout{
-		timeGap:    tg,
-		autoUpdate: autoUpdateWhenChecked,
-	}
-	ret.lastTime.Store(time.Now())
-	return ret
-}
-
-func (t *Timeout) UpdateTime(tn time.Time) {
-	t.lastTime.Store(tn)
-}
-
-/*
-----------+---------+------------------+--------
-
-	lastTime     Now         lastTime + timeGap
-
-return true  :  is timeout. the lastTime has been updated.
-return false :  is not timeout. the lastTime has not been updated.
-*/
-func (t *Timeout) isTimeout() bool {
-	if time.Since(t.lastTime.Load().(time.Time)) <= t.timeGap {
-		return false
-	}
-
-	if t.autoUpdate {
-		t.lastTime.Store(time.Now())
-	}
-	return true
-}
-
-/*
-length:
--1, complete string.
-0, empty string
->0 , length of characters at the header of the string.
-*/
-func SubStringFromBegin(str string, length int) string {
-	if length == 0 || length < -1 {
-		return ""
-	}
-
-	if length == -1 {
-		return str
-	}
-
-	l := Min(len(str), length)
-	if l != len(str) {
-		return str[:l] + "..."
-	}
-	return str[:l]
+	return goroutine.GetRoutineId()
 }
 
 /*
@@ -265,7 +185,7 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // getExprValue executes the expression and returns the value.
-func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, error) {
+func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -275,6 +195,9 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
+		if len(isBin) > 0 {
+			*isBin[0] = false
+		}
 		return v.ColName(), nil
 	}
 
@@ -352,7 +275,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 	//!!!NOTE: the type here may be different from the one in the result vector.
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
-	if oid == types.T_decimal64 || oid == types.T_decimal128 {
+	if oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256 {
 		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
@@ -362,6 +285,9 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 		}
 	}
 
+	if len(isBin) > 0 {
+		*isBin[0] = resultVec.GetIsBin()
+	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 }
 
@@ -434,11 +360,22 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return vector.GetArrayAt[float32](vec, 0), nil
 	case types.T_array_float64:
 		return vector.GetArrayAt[float64](vec, 0), nil
+	case types.T_array_bf16:
+		return vector.GetArrayAt[types.BF16](vec, 0), nil
+	case types.T_array_float16:
+		return vector.GetArrayAt[types.Float16](vec, 0), nil
+	case types.T_array_int8:
+		return vector.GetArrayAt[int8](vec, 0), nil
+	case types.T_array_uint8:
+		return vector.GetArrayAt[uint8](vec, 0), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
 	case types.T_decimal128:
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0)
+		return val.Format(expr.Typ.Scale), nil
+	case types.T_decimal256:
+		val := vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
 	case types.T_json:
 		val := vec.GetBytesAt(0)
@@ -459,6 +396,9 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 	case types.T_timestamp:
 		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
 		return val.String2(feSes.GetTimeZone(), vec.GetType().Scale), nil
+	case types.T_year:
+		val := vector.MustFixedColNoTypeCheck[types.MoYear](vec)[0]
+		return val.String(), nil
 	case types.T_enum:
 		return vector.MustFixedColNoTypeCheck[types.Enum](vec)[0], nil
 	default:
@@ -484,15 +424,27 @@ func (s statementStatus) String() string {
 }
 
 // logStatementStatus prints the status of the statement into the log.
-func logStatementStatus(ctx context.Context, ses FeSession, stmt tree.Statement, status statementStatus, err error) {
+func logStatementStatus(
+	ctx context.Context,
+	ses FeSession,
+	_ tree.Statement,
+	status statementStatus,
+	err error,
+) {
 	logStatementStringStatus(ctx, ses, "", status, err)
 }
 
 // logStatementStringStatus
-// if stmtStr == "", get the query statement from FeSession or motrace.StatementInfo (which migrate from logStatementStatus).
+// if stmtStr == "", get the query statement from FeSession or motrace.StatementInfo
+// (which migrate from logStatementStatus).
 // This op is aim to avoid string copy in 'status == success' case.
-func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string, status statementStatus, err error) {
-	var outBytes, outPacket int64
+func logStatementStringStatus(
+	ctx context.Context,
+	ses FeSession,
+	stmtStr string,
+	status statementStatus,
+	err error,
+) {
 	var getFormatedSqlStr = func() string {
 		var str = stmtStr
 		if len(stmtStr) == 0 {
@@ -503,15 +455,9 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 				str = stm.CopyStatementInfo()
 			}
 		}
-		str = SubStringFromBegin(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
+		str = commonutil.Abbreviate(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		return str
 	}
-	switch resper := ses.GetResponser().(type) {
-	case *MysqlResp:
-		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
-	default:
-	}
-
 	if status == success {
 		if ses.LogDebug() {
 			str := getFormatedSqlStr()
@@ -529,7 +475,29 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 			logutil.TxnInfoField(ses.GetStaticTxnInfo()),
 		)
 	}
+	if status == fail {
+		if concrete, ok := ses.(*Session); ok && concrete.deferStatementCompletion(err) {
+			return
+		}
+	}
+	finishStatementAccounting(ctx, ses, err)
+}
 
+func finishStatementAccounting(ctx context.Context, ses FeSession, err error) {
+	// A same-session derived statement without its own StatementInfo belongs to
+	// the enclosing client statement. The outer request owns both its terminal
+	// accounting and protocol counters.
+	if ses.IsDerivedStmt() && ses.GetStmtInfo() == nil && resource.RootFromContext(ctx) != nil {
+		return
+	}
+	if concrete, ok := ses.(*Session); ok {
+		concrete.rotateResponseOutputWait(ctx)
+	}
+	var outBytes, outPacket int64
+	switch resper := ses.GetResponser().(type) {
+	case *MysqlResp:
+		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
+	}
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
 	if !ses.IsBackgroundSession() {
 		if stmt := ses.GetStmtInfo(); stmt != nil {
@@ -538,6 +506,93 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	}
 	// need just below EndStatement
 	ses.SetTStmt(nil)
+}
+
+func (ses *Session) beginResponseAccounting() {
+	// Requests are serialized per session, so reset at the request boundary.
+	// This prevents handshake and statement-less responses from leaking into the
+	// next SQL statement's protocol counters.
+	if resper, ok := ses.GetResponser().(*MysqlResp); ok {
+		resper.mysqlRrWr.CalculateOutTrafficBytes(true)
+	}
+	ses.responseAccounting = true
+	ses.pendingStatementFailed = false
+	ses.pendingStatementError = nil
+	ses.installResponseOutputWaitTracker(new(responseOutputWaitTracker))
+}
+
+type responseOutputWaitTrackerInstaller interface {
+	setResponseOutputWaitTracker(*responseOutputWaitTracker)
+}
+
+func (ses *Session) installResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	ses.responseOutputWait = tracker
+	if resper, ok := ses.GetResponser().(*MysqlResp); ok {
+		if installer, ok := resper.mysqlRrWr.(responseOutputWaitTrackerInstaller); ok {
+			installer.setResponseOutputWaitTracker(tracker)
+		}
+	}
+}
+
+func (ses *Session) rotateResponseOutputWait(ctx context.Context) {
+	tracker := ses.responseOutputWait
+	var next *responseOutputWaitTracker
+	if ses.responseAccounting {
+		next = new(responseOutputWaitTracker)
+	}
+	ses.installResponseOutputWaitTracker(next)
+	if tracker == nil {
+		return
+	}
+	totalNS := tracker.totalNS.Load()
+	operatorNS := tracker.operatorNS.Load()
+	root := resource.RootFromContext(ctx)
+	if totalNS < 0 || operatorNS < 0 || operatorNS > totalNS {
+		if root != nil {
+			root.AddLocal(resource.Delta{Quality: resource.QualityInvariantFailure})
+		}
+		return
+	}
+	// Immediate writes inside Output.Call are already classified by its
+	// analyzer and subtracted from active time. Add only writes that happened
+	// later (buffer flush, EOF/OK, or an error response) at the statement root.
+	unclassifiedNS := totalNS - operatorNS
+	if unclassifiedNS > 0 && root != nil {
+		var usage resource.Usage
+		usage.WaitNS[resource.WaitOutput] = uint64(unclassifiedNS)
+		root.MergeExecution(resource.ExecutionSummary{Usage: usage})
+	}
+}
+
+func (ses *Session) deferStatementCompletion(err error) bool {
+	if !ses.responseAccounting {
+		return false
+	}
+	ses.pendingStatementFailed = true
+	if ses.pendingStatementError == nil {
+		ses.pendingStatementError = err
+	}
+	return true
+}
+
+func (ses *Session) finishResponseAccounting(ctx context.Context, responseErr error, responseFailed bool) {
+	if !ses.responseAccounting {
+		return
+	}
+	ses.responseAccounting = false
+	err := ses.pendingStatementError
+	failed := ses.pendingStatementFailed
+	ses.pendingStatementFailed = false
+	ses.pendingStatementError = nil
+	if err == nil && (failed || responseFailed) {
+		err = responseErr
+	}
+	if err == nil && failed {
+		err = moerr.NewInternalError(ctx, "statement failed")
+	}
+	// Always consume the request counters, including requests that did not
+	// create a StatementInfo (PING, rewrite sidecars, and similar commands).
+	finishStatementAccounting(ctx, ses, err)
 }
 
 func getLogger(sid string) *log.MOLogger {
@@ -589,6 +644,252 @@ func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, 
 	return &InternalCmdFieldList{tableName: tableName}, nil
 }
 
+// isCmdGetSnapshotTsSql checks the sql is the cmdGetSnapshotTsSql or not.
+func isCmdGetSnapshotTsSql(sql string) bool {
+	if len(sql) < cmdGetSnapshotTsSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetSnapshotTsSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetSnapshotTsSql) == 0
+}
+
+// makeGetSnapshotTsSql makes the internal getsnapshotts sql
+func makeGetSnapshotTsSql(snapshotName, accountName, publicationName string) string {
+	return fmt.Sprintf("%s %s %s %s", cmdGetSnapshotTsSql, snapshotName, accountName, publicationName)
+}
+
+// parseCmdGetSnapshotTs parses the internal cmd getsnapshotts
+// format: getsnapshotts <snapshotName> <accountName> <publicationName>
+func parseCmdGetSnapshotTs(ctx context.Context, sql string) (*InternalCmdGetSnapshotTs, error) {
+	if !isCmdGetSnapshotTsSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_SNAPSHOT_TS command")
+	}
+	params := strings.TrimSpace(sql[cmdGetSnapshotTsSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return nil, moerr.NewInternalError(ctx, "invalid getsnapshotts command format, expected: getsnapshotts <snapshotName> <accountName> <publicationName>")
+	}
+	return &InternalCmdGetSnapshotTs{
+		snapshotName:    parts[0],
+		accountName:     parts[1],
+		publicationName: parts[2],
+	}, nil
+}
+
+// isCmdGetDatabasesSql checks the sql is the cmdGetDatabasesSql or not.
+func isCmdGetDatabasesSql(sql string) bool {
+	if len(sql) < cmdGetDatabasesSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetDatabasesSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetDatabasesSql) == 0
+}
+
+// makeGetDatabasesSql makes the internal getdatabases sql
+func makeGetDatabasesSql(snapshotName, accountName, publicationName, level, dbName, tableName string) string {
+	return fmt.Sprintf("%s %s %s %s %s %s %s", cmdGetDatabasesSql, snapshotName, accountName, publicationName, level, dbName, tableName)
+}
+
+// parseCmdGetDatabases parses the internal cmd getdatabases
+// format: getdatabases <snapshotName> <accountName> <publicationName> <level> <dbName> <tableName>
+func parseCmdGetDatabases(ctx context.Context, sql string) (*InternalCmdGetDatabases, error) {
+	if !isCmdGetDatabasesSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_DATABASES command")
+	}
+	params := strings.TrimSpace(sql[cmdGetDatabasesSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 6 {
+		return nil, moerr.NewInternalError(ctx, "invalid getdatabases command format, expected: getdatabases <snapshotName> <accountName> <publicationName> <level> <dbName> <tableName>")
+	}
+	return &InternalCmdGetDatabases{
+		snapshotName:    parts[0],
+		accountName:     parts[1],
+		publicationName: parts[2],
+		level:           parts[3],
+		dbName:          parts[4],
+		tableName:       parts[5],
+	}, nil
+}
+
+// isCmdGetMoIndexesSql checks the sql is the cmdGetMoIndexesSql or not.
+func isCmdGetMoIndexesSql(sql string) bool {
+	if len(sql) < cmdGetMoIndexesSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetMoIndexesSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetMoIndexesSql) == 0
+}
+
+// makeGetMoIndexesSql makes the internal getmoindexes sql
+func makeGetMoIndexesSql(tableId uint64, subscriptionAccountName, publicationName, snapshotName string) string {
+	return fmt.Sprintf("%s %d %s %s %s", cmdGetMoIndexesSql, tableId, subscriptionAccountName, publicationName, snapshotName)
+}
+
+// parseCmdGetMoIndexes parses the internal cmd getmoindexes
+// format: getmoindexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>
+func parseCmdGetMoIndexes(ctx context.Context, sql string) (*InternalCmdGetMoIndexes, error) {
+	if !isCmdGetMoIndexesSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_MO_INDEXES command")
+	}
+	params := strings.TrimSpace(sql[cmdGetMoIndexesSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return nil, moerr.NewInternalError(ctx, "invalid getmoindexes command format, expected: getmoindexes <tableId> <subscriptionAccountName> <publicationName> <snapshotName>")
+	}
+	tableId, err := strconv.ParseUint(parts[0], 10, 64)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid tableId: %s", parts[0])
+	}
+	return &InternalCmdGetMoIndexes{
+		tableId:                 tableId,
+		subscriptionAccountName: parts[1],
+		publicationName:         parts[2],
+		snapshotName:            parts[3],
+	}, nil
+}
+
+// isCmdGetDdlSql checks the sql is the cmdGetDdlSql or not.
+func isCmdGetDdlSql(sql string) bool {
+	if len(sql) < cmdGetDdlSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetDdlSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetDdlSql) == 0
+}
+
+// makeGetDdlSql makes the internal getddl sql
+func makeGetDdlSql(snapshotName, subscriptionAccountName, publicationName, level, dbName, tableName string) string {
+	return fmt.Sprintf("%s %s %s %s %s %s %s", cmdGetDdlSql, snapshotName, subscriptionAccountName, publicationName, level, dbName, tableName)
+}
+
+// parseCmdGetDdl parses the internal cmd getddl
+// format: getddl <snapshotName> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>
+func parseCmdGetDdl(ctx context.Context, sql string) (*InternalCmdGetDdl, error) {
+	if !isCmdGetDdlSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_DDL command")
+	}
+	params := strings.TrimSpace(sql[cmdGetDdlSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 6 {
+		return nil, moerr.NewInternalError(ctx, "invalid getddl command format, expected: getddl <snapshotName> <subscriptionAccountName> <publicationName> <level> <dbName> <tableName>")
+	}
+	return &InternalCmdGetDdl{
+		snapshotName:            parts[0],
+		subscriptionAccountName: parts[1],
+		publicationName:         parts[2],
+		level:                   parts[3],
+		dbName:                  parts[4],
+		tableName:               parts[5],
+	}, nil
+}
+
+// isCmdGetObjectSql checks the sql is the cmdGetObjectSql or not.
+func isCmdGetObjectSql(sql string) bool {
+	if len(sql) < cmdGetObjectSqlLen {
+		return false
+	}
+	prefix := sql[:cmdGetObjectSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdGetObjectSql) == 0
+}
+
+// makeGetObjectSql makes the internal getobject sql
+func makeGetObjectSql(subscriptionAccountName, publicationName, objectName string, chunkIndex int64) string {
+	return fmt.Sprintf("%s %s %s %s %d", cmdGetObjectSql, subscriptionAccountName, publicationName, objectName, chunkIndex)
+}
+
+// parseCmdGetObject parses the internal cmd getobject
+// format: getobject <subscriptionAccountName> <publicationName> <objectName> <chunkIndex>
+func parseCmdGetObject(ctx context.Context, sql string) (*InternalCmdGetObject, error) {
+	if !isCmdGetObjectSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the GET_OBJECT command")
+	}
+	params := strings.TrimSpace(sql[cmdGetObjectSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return nil, moerr.NewInternalError(ctx, "invalid getobject command format, expected: getobject <subscriptionAccountName> <publicationName> <objectName> <chunkIndex>")
+	}
+	chunkIndex, err := strconv.ParseInt(parts[3], 10, 64)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid chunkIndex: %s", parts[3])
+	}
+	return &InternalCmdGetObject{
+		subscriptionAccountName: parts[0],
+		publicationName:         parts[1],
+		objectName:              parts[2],
+		chunkIndex:              chunkIndex,
+	}, nil
+}
+
+// isCmdObjectListSql checks the sql is the cmdObjectListSql or not.
+func isCmdObjectListSql(sql string) bool {
+	if len(sql) < cmdObjectListSqlLen {
+		return false
+	}
+	prefix := sql[:cmdObjectListSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdObjectListSql) == 0
+}
+
+// makeObjectListSql makes the internal objectlist sql
+func makeObjectListSql(snapshotName, againstSnapshotName, subscriptionAccountName, publicationName string) string {
+	return fmt.Sprintf("%s %s %s %s %s", cmdObjectListSql, snapshotName, againstSnapshotName, subscriptionAccountName, publicationName)
+}
+
+// parseCmdObjectList parses the internal cmd objectlist
+// format: objectlist <snapshotName> <againstSnapshotName> <subscriptionAccountName> <publicationName>
+// Note: againstSnapshotName can be "-" to indicate empty
+func parseCmdObjectList(ctx context.Context, sql string) (*InternalCmdObjectList, error) {
+	if !isCmdObjectListSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the OBJECT_LIST command")
+	}
+	params := strings.TrimSpace(sql[cmdObjectListSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 4 {
+		return nil, moerr.NewInternalError(ctx, "invalid objectlist command format, expected: objectlist <snapshotName> <againstSnapshotName> <subscriptionAccountName> <publicationName>")
+	}
+	againstSnapshotName := parts[1]
+	if againstSnapshotName == "-" {
+		againstSnapshotName = ""
+	}
+	return &InternalCmdObjectList{
+		snapshotName:            parts[0],
+		againstSnapshotName:     againstSnapshotName,
+		subscriptionAccountName: parts[2],
+		publicationName:         parts[3],
+	}, nil
+}
+
+// isCmdCheckSnapshotFlushedSql checks the sql is the cmdCheckSnapshotFlushedSql or not.
+func isCmdCheckSnapshotFlushedSql(sql string) bool {
+	if len(sql) < cmdCheckSnapshotFlushedSqlLen {
+		return false
+	}
+	prefix := sql[:cmdCheckSnapshotFlushedSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdCheckSnapshotFlushedSql) == 0
+}
+
+// makeCheckSnapshotFlushedSql makes the internal checksnapshotflushed sql
+func makeCheckSnapshotFlushedSql(snapshotName, subscriptionAccountName, publicationName string) string {
+	return fmt.Sprintf("%s %s %s %s", cmdCheckSnapshotFlushedSql, snapshotName, subscriptionAccountName, publicationName)
+}
+
+// parseCmdCheckSnapshotFlushed parses the internal cmd checksnapshotflushed
+// format: checksnapshotflushed <snapshotName> <subscriptionAccountName> <publicationName>
+func parseCmdCheckSnapshotFlushed(ctx context.Context, sql string) (*InternalCmdCheckSnapshotFlushed, error) {
+	if !isCmdCheckSnapshotFlushedSql(sql) {
+		return nil, moerr.NewInternalError(ctx, "it is not the CHECK_SNAPSHOT_FLUSHED command")
+	}
+	params := strings.TrimSpace(sql[cmdCheckSnapshotFlushedSqlLen:])
+	parts := strings.Fields(params)
+	if len(parts) != 3 {
+		return nil, moerr.NewInternalError(ctx, "invalid checksnapshotflushed command format, expected: checksnapshotflushed <snapshotName> <subscriptionAccountName> <publicationName>")
+	}
+	return &InternalCmdCheckSnapshotFlushed{
+		snapshotName:            parts[0],
+		subscriptionAccountName: parts[1],
+		publicationName:         parts[2],
+	}, nil
+}
+
 func getVariableValue(varDefault interface{}) string {
 	switch val := varDefault.(type) {
 	case int64:
@@ -614,19 +915,6 @@ func getVariableValue(varDefault interface{}) string {
 
 func makeServerVersion(pu *mo_config.ParameterUnit, version string) string {
 	return pu.SV.ServerVersionPrefix + version
-}
-
-func copyBytes(src []byte, needCopy bool) []byte {
-	if needCopy {
-		if len(src) > 0 {
-			dst := make([]byte, len(src))
-			copy(dst, src)
-			return dst
-		} else {
-			return []byte{}
-		}
-	}
-	return src
 }
 
 // getUserProfile returns the account, user, role of the account
@@ -851,6 +1139,20 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					return nil, nil, err
 				}
 			}
+		case types.T_year:
+			for rowIdx, row := range rows {
+				var val types.MoYear
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else {
+					val = row[colIndex].(types.MoYear)
+				}
+
+				err := vector.AppendFixed[types.MoYear](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
 		case types.T_int32:
 			for rowIdx, row := range rows {
 				var val int32
@@ -973,6 +1275,48 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					return nil, nil, err
 				}
 			}
+		case types.T_decimal64:
+			for rowIdx, row := range rows {
+				var val types.Decimal64
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else if val, err = getDecimal64FromRowValue(row[colIndex], typ); err != nil {
+					return nil, nil, err
+				}
+
+				err := vector.AppendFixed[types.Decimal64](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_decimal128:
+			for rowIdx, row := range rows {
+				var val types.Decimal128
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else if val, err = getDecimal128FromRowValue(row[colIndex], typ); err != nil {
+					return nil, nil, err
+				}
+
+				err := vector.AppendFixed[types.Decimal128](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_decimal256:
+			for rowIdx, row := range rows {
+				var val types.Decimal256
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else if val, err = getDecimal256FromRowValue(row[colIndex], typ); err != nil {
+					return nil, nil, err
+				}
+
+				err := vector.AppendFixed[types.Decimal256](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
 		case types.T_enum:
 			for rowIdx, row := range rows {
 				var val types.Enum
@@ -994,6 +1338,45 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		bat.Vecs[colIndex].SetNulls(nsp)
 	}
 	return bat, planColDefs, nil
+}
+
+func getDecimal64FromRowValue(v any, typ types.Type) (types.Decimal64, error) {
+	switch val := v.(type) {
+	case types.Decimal64:
+		return val, nil
+	case string:
+		return types.ParseDecimal64(val, typ.Width, typ.Scale)
+	case []byte:
+		return types.ParseDecimal64(string(val), typ.Width, typ.Scale)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to decimal64 type", v)
+	}
+}
+
+func getDecimal128FromRowValue(v any, typ types.Type) (types.Decimal128, error) {
+	switch val := v.(type) {
+	case types.Decimal128:
+		return val, nil
+	case string:
+		return types.ParseDecimal128(val, typ.Width, typ.Scale)
+	case []byte:
+		return types.ParseDecimal128(string(val), typ.Width, typ.Scale)
+	default:
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtxf("%v can't convert to decimal128 type", v)
+	}
+}
+
+func getDecimal256FromRowValue(v any, typ types.Type) (types.Decimal256, error) {
+	switch val := v.(type) {
+	case types.Decimal256:
+		return val, nil
+	case string:
+		return types.ParseDecimal256(val, typ.Width, typ.Scale)
+	case []byte:
+		return types.ParseDecimal256(string(val), typ.Width, typ.Scale)
+	default:
+		return types.Decimal256{}, moerr.NewInternalErrorNoCtxf("%v can't convert to decimal256 type", v)
+	}
 }
 
 func cleanBatch(pool *mpool.MPool, data ...*batch.Batch) {
@@ -1040,6 +1423,12 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_int16),
 			}
 			tType = types.New(types.T_int16, 0, 0)
+		case defines.MYSQL_TYPE_YEAR:
+			pType = plan.Type{
+				Id:    int32(types.T_year),
+				Width: 4,
+			}
+			tType = types.T_year.ToType()
 		case defines.MYSQL_TYPE_LONG:
 			pType = plan.Type{
 				Id: int32(types.T_int32),
@@ -1085,6 +1474,17 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_enum),
 			}
 			tType = types.New(types.T_enum, 0, 0)
+		case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+			var err error
+			tType, err = mysqlDecimalColType(col)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			pType = plan.Type{
+				Id:    int32(tType.Oid),
+				Width: tType.Width,
+				Scale: tType.Scale,
+			}
 		default:
 			return nil, nil, nil, moerr.NewInternalErrorNoCtxf("unsupported mysql type %d", col.ColumnType())
 		}
@@ -1096,14 +1496,119 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 	}, resultColTypes, resultColNames, nil
 }
 
+const mysqlDecimalExtraLength uint32 = 1
+
+type mysqlDecimalColumn interface {
+	Column
+	Decimal() uint8
+}
+
+func mysqlDecimalColType(col Column) (types.Type, error) {
+	decimalCol, ok := col.(mysqlDecimalColumn)
+	if !ok {
+		return types.Type{}, moerr.NewInternalErrorNoCtxf("missing decimal scale for mysql type %d", col.ColumnType())
+	}
+
+	scale := int32(decimalCol.Decimal())
+	precision, err := mysqlDecimalPrecisionFromColumn(col, scale)
+	if err != nil {
+		return types.Type{}, err
+	}
+
+	return mysqlDecimalType(precision, scale), nil
+}
+
+func mysqlDecimalPrecisionFromColumn(col Column, scale int32) (int32, error) {
+	length := col.Length()
+	if length == 0 {
+		return 0, moerr.NewInternalErrorNoCtxf("missing decimal precision for mysql type %d", col.ColumnType())
+	}
+
+	// MySQL DECIMAL display length includes the sign and decimal point when present.
+	metadataExtraLength := uint32(0)
+	if scale > 0 {
+		metadataExtraLength += mysqlDecimalExtraLength
+	}
+	if col.IsSigned() {
+		metadataExtraLength += mysqlDecimalExtraLength
+	}
+
+	if length <= metadataExtraLength {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid decimal metadata length %d scale %d for mysql type %d", length, scale, col.ColumnType())
+	}
+
+	precision := length - metadataExtraLength
+	if precision < uint32(scale) {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid decimal precision %d scale %d for mysql type %d", precision, scale, col.ColumnType())
+	}
+	if precision > uint32(types.T_decimal256.ToType().Width) {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid decimal precision %d for mysql type %d", precision, col.ColumnType())
+	}
+
+	return int32(precision), nil
+}
+
+func mysqlDecimalDisplayLength(precision, scale int32, signed bool) uint32 {
+	length := uint32(precision)
+	if scale > 0 {
+		length += mysqlDecimalExtraLength
+	}
+	if signed && precision > 0 {
+		length += mysqlDecimalExtraLength
+	}
+	if length == 0 {
+		return 1
+	}
+	return length
+}
+
+func mysqlDecimalType(precision, scale int32) types.Type {
+	switch {
+	case precision > types.T_decimal128.ToType().Width:
+		return types.New(types.T_decimal256, precision, scale)
+	case precision > types.T_decimal64.ToType().Width:
+		return types.New(types.T_decimal128, precision, scale)
+	default:
+		return types.New(types.T_decimal64, precision, scale)
+	}
+}
+
+func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColumn) error {
+	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
+		return err
+	}
+	setMysqlColumnTypeMetadata(col, typ)
+	return nil
+}
+
+func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
+	if typ.IsDecimal() {
+		// DECIMAL display length depends on scale and signedness, not just precision.
+		col.SetLength(mysqlDecimalDisplayLength(typ.Width, typ.Scale, col.IsSigned()))
+	} else if typ.Oid == types.T_year {
+		// Keep YEAR metadata consistent with regular query result columns.
+		col.SetLength(uint32(types.MaxVarcharLen))
+	} else {
+		setColLength(col, typ.Width)
+	}
+	col.SetDecimal(typ.Scale)
+}
+
 // errCodeRollbackWholeTxn denotes that the error code
 // that should rollback the whole txn
 var errCodeRollbackWholeTxn = map[uint16]bool{
-	moerr.ErrDeadLockDetected:     false,
-	moerr.ErrLockTableBindChanged: false,
-	moerr.ErrLockTableNotFound:    false,
-	moerr.ErrDeadlockCheckBusy:    false,
-	moerr.ErrLockConflict:         false,
+	moerr.ErrRetryForCNRollingRestart: false,
+	moerr.ErrDeadLockDetected:         false,
+	moerr.ErrLockTableBindChanged:     false,
+	moerr.ErrLockTableNotFound:        false,
+	moerr.ErrDeadlockCheckBusy:        false,
+	moerr.ErrLockConflict:             false,
+	moerr.ErrRemoteLockWaitTimeout:    false,
+	moerr.ErrLockWaitTimeout:          false,
+	moerr.ErrTxnUnknown:               false,
+	moerr.ErrBackendClosed:            false,
+	moerr.ErrNoAvailableBackend:       false,
+	moerr.ErrBackendCannotConnect:     false,
 }
 
 func isErrorRollbackWholeTxn(inputErr error) bool {
@@ -1122,13 +1627,21 @@ func isErrorRollbackWholeTxn(inputErr error) bool {
 }
 
 func getRandomErrorRollbackWholeTxn() error {
-	rand.NewSource(time.Now().UnixNano())
 	x := rand.Intn(len(errCodeRollbackWholeTxn))
 	arr := make([]uint16, 0, len(errCodeRollbackWholeTxn))
 	for k := range errCodeRollbackWholeTxn {
 		arr = append(arr, k)
 	}
-	switch arr[x] {
+	return newErrorRollbackWholeTxn(arr[x])
+}
+
+// newErrorRollbackWholeTxn keeps the test error factory in sync with
+// errCodeRollbackWholeTxn. Its deterministic input lets tests cover every map
+// entry instead of relying on getRandomErrorRollbackWholeTxn to select it.
+func newErrorRollbackWholeTxn(code uint16) error {
+	switch code {
+	case moerr.ErrRetryForCNRollingRestart:
+		return moerr.NewRetryForCNRollingRestart()
 	case moerr.ErrDeadLockDetected:
 		return moerr.NewDeadLockDetectedNoCtx()
 	case moerr.ErrLockTableBindChanged:
@@ -1139,8 +1652,20 @@ func getRandomErrorRollbackWholeTxn() error {
 		return moerr.NewDeadlockCheckBusyNoCtx()
 	case moerr.ErrLockConflict:
 		return moerr.NewLockConflictNoCtx()
+	case moerr.ErrRemoteLockWaitTimeout:
+		return moerr.NewRemoteLockWaitTimeoutNoCtx()
+	case moerr.ErrLockWaitTimeout:
+		return moerr.NewLockWaitTimeoutNoCtx()
+	case moerr.ErrTxnUnknown:
+		return moerr.NewTxnUnknown(context.Background(), "test")
+	case moerr.ErrBackendClosed:
+		return moerr.NewBackendClosedNoCtx()
+	case moerr.ErrNoAvailableBackend:
+		return moerr.NewNoAvailableBackendNoCtx()
+	case moerr.ErrBackendCannotConnect:
+		return moerr.NewBackendCannotConnectNoCtx("test")
 	default:
-		panic(fmt.Sprintf("usp error code %d", arr[x]))
+		panic(fmt.Sprintf("unsupported error code %d", code))
 	}
 }
 
@@ -1153,14 +1678,21 @@ func skipClientQuit(info string) bool {
 // for some special statement, like 'set_var', we need to use the stmt.
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
-	sql                 string
-	hashedSql           string
-	stmtName            string
-	stmt                tree.Statement
-	preparePlan         *plan.Plan // binary protocol execute
-	sqlSourceType       []string
-	isRestore           bool
-	isBinaryProtExecute bool
+	sql              string
+	hashedSql        string
+	stmtName         string
+	stmt             tree.Statement
+	parserSQLMode    string
+	useParserSQLMode bool
+	rewritePolicy    *rewritePolicySnapshot
+	// rewritePolicyMaterialized means sql already carries the frozen policy as
+	// a leading hint. Nested ANALYZE queries use it to enable hint decoding
+	// without injecting the same rules a second time.
+	rewritePolicyMaterialized bool
+	preparePlan               *plan.Plan // binary protocol execute
+	sqlSourceType             []string
+	isRestore                 bool
+	isBinaryProtExecute       bool
 	// isInternalInput mark this UserInput is come from mo internal.
 	// replace old logic: (stmt != nil)
 	// cc isInternal()
@@ -1170,6 +1702,10 @@ type UserInput struct {
 	isRestoreByTs bool
 	opAccount     uint32
 	toAccount     uint32
+	// remapDb carries the policy captured when a prepared statement was built.
+	// EXECUTE text has no original rewrite hint, so the policy must be restored
+	// explicitly before authorization and planning.
+	remapDb map[string]string
 }
 
 func (ui *UserInput) getSql() string {
@@ -1350,24 +1886,14 @@ func attachValue(ctx context.Context, key, val any) context.Context {
 	return context.WithValue(ctx, key, val)
 }
 
-func updateTempEngine(storage engine.Engine, te *memoryengine.Engine) {
-	if ee, ok := storage.(*engine.EntireEngine); ok && ee != nil {
-		ee.TempEngine = te
-	}
-}
-
-const KeySep = "#"
+const KeySep = objectkey.Separator
 
 func genKey(dbName, tblName string) string {
-	return fmt.Sprintf("%s%s%s", dbName, KeySep, tblName)
+	return objectkey.Encode(dbName, tblName)
 }
 
 func splitKey(key string) (string, string) {
-	parts := strings.Split(key, KeySep)
-	if len(parts) >= 2 {
-		return parts[0], parts[1]
-	}
-	return parts[0], ""
+	return objectkey.Decode(key)
 }
 
 type toposort struct {
@@ -1468,7 +1994,7 @@ func Copy[T any](src []T) []T {
 
 func hashString(s string) string {
 	hash := sha256.New()
-	hash.Write(util.UnsafeStringToBytes(s))
+	hash.Write(commonutil.UnsafeStringToBytes(s))
 	hashBytes := hash.Sum(nil)
 	return hex.EncodeToString(hashBytes)
 }
@@ -1482,12 +2008,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	c.SetOrgTable(col.TblName)
 	c.SetAutoIncr(col.Typ.AutoIncr)
 	c.SetSchema(col.DbName)
-	err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
-	if err != nil {
+	typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
 	setColFlag(c)
-	setColLength(c, col.Typ.Width)
 	setCharacter(c)
 
 	// For binary/varbinary with mysql_type_varchar.Change the charset.
@@ -1496,6 +2021,13 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	}
 
 	c.SetDecimal(col.Typ.Scale)
+
+	// For TIMESTAMPADD function compatibility with MySQL:
+	// GetResultColumnsFromPlan sets the return type based on input type and unit:
+	// - DATE input + date unit → DATE type (MYSQL_TYPE_DATE)
+	// - DATE input + time unit → DATETIME type (MYSQL_TYPE_DATETIME)
+	// - DATETIME input → DATETIME type (MYSQL_TYPE_DATETIME)
+
 	convertMysqlTextTypeToBlobType(c)
 	return c, nil
 }

@@ -16,13 +16,15 @@ package table_function
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"go.uber.org/zap"
+
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -71,7 +73,7 @@ func getIndexTableNameByIndexName(proc *process.Process, dbname, tablename, inde
 	logutil.Info("relID", zap.Uint64("value", tableid))
 
 	sql := fmt.Sprintf("SELECT distinct(index_table_name) FROM mo_catalog.mo_indexes WHERE table_id = '%d' AND name = '%s'", tableid, indexname)
-	result, err := sqlexec.RunSql(proc, sql)
+	result, err := sqlexec.RunSql(sqlexec.NewSqlProcess(proc), sql)
 	if err != nil {
 		return "", err
 	}
@@ -139,13 +141,12 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	metaInfos, err := rel.GetColumMetadataScanInfo(newCtx, colname, visitTombstone)
+	metaInfos, err := process.MeasureFilesystemWait(analyzer, func() ([]*plan.MetadataScanInfo, error) {
+		return rel.GetColumMetadataScanInfo(newCtx, colname, visitTombstone)
+	})
 	if err != nil {
 		return err
 	}
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
 
 	for i := range metaInfos {
 		err = fillMetadataInfoBat(s.batch, proc, tf, metaInfos[i])
@@ -256,6 +257,9 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc *process.Process, tableFunctio
 
 		case plan.MetadataScanInfo_SUM: // TODO: find a way to show this info
 			vector.AppendBytes(opBat.Vecs[i], zm.GetSumBuf(), zmNull, mp)
+
+		case plan.MetadataScanInfo_LEVEL:
+			vector.AppendFixed(opBat.Vecs[i], info.Level, false, mp)
 
 		default:
 		}

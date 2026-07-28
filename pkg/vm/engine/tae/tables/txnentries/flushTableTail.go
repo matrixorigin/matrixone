@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type flushTableTailEntry struct {
@@ -134,6 +135,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked(false).HasPK()
 	ioVector := model.InitTransferPageIO()
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings))
+	var marshalBufs []*bytes.Buffer
 	var duration time.Duration
 	var start time.Time
 	bts := time.Now().Add(time.Hour)
@@ -156,7 +158,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 		page.Train(m)
 
 		start = time.Now()
-		err := model.AddTransferPage(page, ioVector)
+		err := model.AddTransferPage(page, ioVector, &marshalBufs)
 		if err != nil {
 			return err
 		}
@@ -169,11 +171,17 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	model.WriteTransferPage(ctx, transferFS, pages, *ioVector)
 	now := time.Now()
+	writeErr := model.WriteTransferPage(ctx, transferFS, pages, *ioVector, marshalBufs)
+	if writeErr != nil {
+		logutil.Warnf("[FlushTableTail] persist transfer page failed (page count %d), keeping in-memory pages: %v",
+			len(pages), writeErr)
+	}
 	for _, page := range pages {
-		if page.BornTS() != bts {
-			page.SetBornTS(now.Add(time.Minute))
+		if writeErr != nil {
+			// Extend bornTS so in-memory hashmap survives the full diskTTL
+			// window instead of being evicted after the short ttl (5s).
+			page.SetBornTS(now.Add(model.GetDiskTTL() - model.GetTTL()))
 		} else {
 			page.SetBornTS(now)
 		}
@@ -189,6 +197,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 func (entry *flushTableTailEntry) collectDelsAndTransfer(
 	ctx context.Context, from, to types.TS,
 ) (transCnt int, err error) {
+	scanStart := from.Next()
 	if len(entry.aobjHandles) == 0 {
 		return
 	}
@@ -218,7 +227,7 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 			ctx,
 			entry.tableEntry,
 			*obj.ID(),
-			from.Next(), // NOTE HERE
+			scanStart, // NOTE HERE
 			to,
 			common.MergeAllocator,
 			entry.rt.VectorPool.Small,
@@ -237,11 +246,11 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 		transCnt += count
 		for i := 0; i < count; i++ {
 			row := rowid[i].GetRowOffset()
-			destpos, ok := mapping[row]
-			if !ok {
+			if uint32(len(mapping)) <= row || mapping[row].ObjIdx == api.NoTransfer {
 				err = moerr.NewInternalErrorNoCtxf("%s find no transfer mapping for row %d", obj.ID().String(), row)
 				return
 			}
+			destpos := mapping[row]
 			blkID := objectio.NewBlockidWithObjectID(entry.createdObjHandle.GetID(), destpos.BlkIdx)
 			entry.delTbls[destpos.BlkIdx] = &blkID
 			entry.rt.TransferDelsMap.SetDelsForBlk(blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
@@ -277,7 +286,12 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		return nil
 	}
 	ctx := context.Background()
-	trans, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, entry.txn.GetPrepareTS().Prev())
+	txnStart := entry.txn.GetStartTS()
+	flushScanStart := txnStart.Next()
+	commitScanStart := entry.collectTs.Next()
+	prepareTS := entry.txn.GetPrepareTS()
+	preparePrev := prepareTS.Prev()
+	trans, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, preparePrev)
 	if err != nil {
 		return err
 	}
@@ -286,7 +300,14 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		logutil.Info(
 			"[FLUSH-PREPARE-COMMIT]",
 			zap.String("task", entry.taskName),
-			zap.String("commit-ts", entry.txn.GetPrepareTS().ToString()),
+			zap.String("commit-ts", prepareTS.ToString()),
+			zap.String("transfer-split-ts", entry.collectTs.ToString()),
+			zap.String("flush-range-from", txnStart.ToString()),
+			zap.String("flush-range-scan-start", flushScanStart.ToString()),
+			zap.String("flush-range-to", entry.collectTs.ToString()),
+			zap.String("commit-range-from", entry.collectTs.ToString()),
+			zap.String("commit-range-scan-start", commitScanStart.ToString()),
+			zap.String("commit-range-to", preparePrev.ToString()),
 			zap.Int("ablks", aconflictCnt),
 			zap.Int("transfer-rows", totalTrans),
 			zap.Int("in-queue-transfers", trans),
@@ -391,6 +412,10 @@ func (entry *flushTableTailEntry) IsAborted() bool { return false }
 
 type flushTableTailCmd struct{}
 
+func (cmd *flushTableTailCmd) ApproxSize() int64 {
+	return 4
+}
+
 func (cmd *flushTableTailCmd) GetType() uint16 { return IOET_WALTxnCommand_FlushTableTail }
 func (cmd *flushTableTailCmd) WriteTo(w io.Writer) (n int64, err error) {
 	typ := IOET_WALTxnCommand_FlushTableTail
@@ -405,13 +430,35 @@ func (cmd *flushTableTailCmd) WriteTo(w io.Writer) (n int64, err error) {
 	n = 2
 	return
 }
+
+func (cmd *flushTableTailCmd) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
+	_, err := cmd.WriteTo(buf)
+	return err
+}
+
 func (cmd *flushTableTailCmd) MarshalBinary() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = cmd.WriteTo(&bbuf); err != nil {
-		return
+	poolBuf := txnbase.GetMarshalBuffer()
+
+	err = cmd.MarshalBinaryWithBuffer(poolBuf)
+	if err != nil {
+		txnbase.PutMarshalBuffer(poolBuf) // Return buffer on error
+		return nil, err
 	}
-	buf = bbuf.Bytes()
-	return
+
+	data := poolBuf.Bytes()
+
+	// Optimization: if buffer capacity exceeds MaxPooledBufSize, it won't be returned to pool.
+	// In this case, we can directly return the underlying array without copy.
+	if poolBuf.Cap() > txnbase.MaxPooledBufSize {
+		txnbase.PutMarshalBuffer(poolBuf) // Will discard, but safe to call
+		return data, nil
+	}
+
+	// Small buffer will be returned to pool and Reset, so we must copy
+	result := make([]byte, len(data))
+	copy(result, data)
+	txnbase.PutMarshalBuffer(poolBuf)
+	return result, nil
 }
 func (cmd *flushTableTailCmd) ReadFrom(r io.Reader) (n int64, err error) { return }
 func (cmd *flushTableTailCmd) UnmarshalBinary(buf []byte) (err error)    { return }

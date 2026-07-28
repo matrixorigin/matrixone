@@ -15,6 +15,9 @@
 package function
 
 import (
+	"strings"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -360,17 +363,30 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 }
 
 type templateDec interface {
-	types.Decimal64 | types.Decimal128
+	types.Decimal64 | types.Decimal128 | types.Decimal256
 }
 
-func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	arithFn func(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error, selectList *FunctionSelectList) error {
+type templateDecOut interface {
+	types.Decimal64 | types.Decimal128 | types.Decimal256 | int64
+}
+
+// decimalBatchArith is the batch arithmetic framework for all Decimal types.
+// It passes entire slices to the kernel function for batch processing with
+// minimal per-element overhead.
+//
+// TIn is the input element type, TOut is the output element type.
+// For same-type ops (add/sub): TIn == TOut. For D64×D64→D128 multiply: TIn=D64, TOut=D128.
+// For integer division (DIV): TIn=Decimal, TOut=int64.
+// The kernel receives (v1, v2, rs) slices where len==1 indicates a constant.
+// Scale values and null bitmap are provided for kernels that need them.
+func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
+	arithFn func(v1, v2 []TIn, rs []TOut, scale1, scale2 int32, rsnull *nulls.Nulls) error, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
-	rs := vector.MustFunctionResult[types.Decimal128](result)
-	p1 := vector.OptGetParamFromWrapper[types.Decimal128](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[types.Decimal128](rs, 1, parameters[1])
+	rs := vector.MustFunctionResult[TOut](result)
+	p1 := vector.OptGetParamFromWrapper[TIn](rs, 0, parameters[0])
+	p2 := vector.OptGetParamFromWrapper[TIn](rs, 1, parameters[1])
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[types.Decimal128](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[TOut](rsVec)
 	scale1 := p1.GetType().Scale
 	scale2 := p2.GetType().Scale
 
@@ -401,332 +417,42 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
 			}
 		}
 	}
+	if !hasEvaluableRows(rsNull, length) {
+		return nil
+	}
 
-	v1 := vector.MustFixedColNoTypeCheck[types.Decimal128](p1.GetSourceVector())
-	v2 := vector.MustFixedColNoTypeCheck[types.Decimal128](p2.GetSourceVector())
+	var v1, v2 []TIn
+	if c1 {
+		val, _ := p1.GetValue(0)
+		v1 = []TIn{val}
+	} else {
+		v1 = p1.UnSafeGetAllValue()
+	}
+	if c2 {
+		val, _ := p2.GetValue(0)
+		v2 = []TIn{val}
+	} else {
+		v2 = p2.UnSafeGetAllValue()
+	}
 	err := arithFn(v1, v2, rss, scale1, scale2, rsNull)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+			return moerr.NewOutOfRange(proc.Ctx, "DECIMAL", err.Error())
+		}
 		return err
 	}
-	return nil
-}
-
-func decimalArith[T templateDec](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	arithFn func(v1, v2 T, scale1, scale2 int32) (T, error), selectList *FunctionSelectList) error {
-	result.UseOptFunctionParamFrame(2)
-	rs := vector.MustFunctionResult[T](result)
-	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[T](rs, 1, parameters[1])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[T](rsVec)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if c1 && c2 {
-		v1, null1 := p1.GetValue(0)
-		v2, null2 := p2.GetValue(0)
-		ifNull := null1 || null2
-		if ifNull {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			r, err := arithFn(v1, v2, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = r
-			}
-		}
-		return nil
-	}
-
-	if c1 {
-		v1, null1 := p1.GetValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			if p2.WithAnyNullValue() || rsAnyNull {
-				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					if rsNull.Contains(i) {
-						continue
-					}
-					v2, _ := p2.GetValue(i)
-					r, err := arithFn(v1, v2, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			} else {
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					v2, _ := p2.GetValue(i)
-					r, err := arithFn(v1, v2, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			}
-		}
-		return nil
-	}
-
-	if c2 {
-		v2, null2 := p2.GetValue(0)
-		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			if p1.WithAnyNullValue() || rsAnyNull {
-				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					if rsNull.Contains(i) {
-						continue
-					}
-					v1, _ := p1.GetValue(i)
-					r, err := arithFn(v1, v2, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			} else {
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					v1, _ := p1.GetValue(i)
-					r, err := arithFn(v1, v2, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			}
-		}
-		return nil
-	}
-
-	// basic case.
-	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				continue
-			}
-			v1, _ := p1.GetValue(i)
-			v2, _ := p2.GetValue(i)
-			r, err := arithFn(v1, v2, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			rss[i] = r
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetValue(i)
-		v2, _ := p2.GetValue(i)
-		r, err := arithFn(v1, v2, scale1, scale2)
-		if err != nil {
-			return err
-		}
-		rss[i] = r
-	}
-	return nil
-}
-
-// XXX For decimal64 / decimal64, decimal64 * decimal64
-func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	arithFn func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error), selectList *FunctionSelectList) error {
-	result.UseOptFunctionParamFrame(2)
-	rs := vector.MustFunctionResult[types.Decimal128](result)
-	p1 := vector.OptGetParamFromWrapper[types.Decimal64](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[types.Decimal64](rs, 1, parameters[1])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[types.Decimal128](rsVec)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if c1 && c2 {
-		v1, null1 := p1.GetValue(0)
-		v2, null2 := p2.GetValue(0)
-		if null1 || null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			x, y := functionUtil.ConvertD64ToD128(v1), functionUtil.ConvertD64ToD128(v2)
-			r, err := arithFn(x, y, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = r
-			}
-		}
-		return nil
-	}
-
-	if c1 {
-		v1, null1 := p1.GetValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			if p2.WithAnyNullValue() || rsAnyNull {
-				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-				x := functionUtil.ConvertD64ToD128(v1)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					if rsNull.Contains(i) {
-						continue
-					}
-					v2, _ := p2.GetValue(i)
-					y := functionUtil.ConvertD64ToD128(v2)
-					r, err := arithFn(x, y, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			} else {
-				x := functionUtil.ConvertD64ToD128(v1)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					v2, _ := p2.GetValue(i)
-					y := functionUtil.ConvertD64ToD128(v2)
-					r, err := arithFn(x, y, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			}
-		}
-		return nil
-	}
-
-	if c2 {
-		v2, null2 := p2.GetValue(0)
-		if null2 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			if p1.WithAnyNullValue() {
-				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-				y := functionUtil.ConvertD64ToD128(v2)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					if rsNull.Contains(i) {
-						continue
-					}
-					v1, _ := p1.GetValue(i)
-					x := functionUtil.ConvertD64ToD128(v1)
-					r, err := arithFn(x, y, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			} else {
-				y := functionUtil.ConvertD64ToD128(v2)
-				rowCount := uint64(length)
-				for i := uint64(0); i < rowCount; i++ {
-					v1, _ := p1.GetValue(i)
-					x := functionUtil.ConvertD64ToD128(v1)
-					r, err := arithFn(x, y, scale1, scale2)
-					if err != nil {
-						return err
-					}
-					rss[i] = r
-				}
-			}
-		}
-		return nil
-	}
-
-	// basic case.
-	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
-
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				continue
-			}
-			v1, _ := p1.GetValue(i)
-			v2, _ := p2.GetValue(i)
-			x, y := functionUtil.ConvertD64ToD128(v1), functionUtil.ConvertD64ToD128(v2)
-			r, err := arithFn(x, y, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			rss[i] = r
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetValue(i)
-		v2, _ := p2.GetValue(i)
-		x, y := functionUtil.ConvertD64ToD128(v1), functionUtil.ConvertD64ToD128(v2)
-		r, err := arithFn(x, y, scale1, scale2)
-		if err != nil {
-			return err
-		}
-		rss[i] = r
+	// Only reset rsNull if the kernel didn't add any nulls (e.g., div-by-zero).
+	if rsNull.IsEmpty() &&
+		(parameters[0].GetNulls() == nil || parameters[0].GetNulls().IsEmpty()) &&
+		(parameters[1].GetNulls() == nil || parameters[1].GetNulls().IsEmpty()) {
+		rsNull.Reset()
 	}
 	return nil
 }
@@ -757,7 +483,7 @@ func opBinaryFixedFixedToFixed[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -880,7 +606,7 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -1001,6 +727,163 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 		r, err := resultFn(v1, v2)
 		if err != nil {
 			return err
+		}
+		rss[i] = r
+	}
+	return nil
+}
+
+func opBinaryFixedFixedToFixedWithNullOnError[
+	T1 types.FixedSizeTExceptStrType,
+	T2 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v1 T1, v2 T2) (Tr, error), selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[Tr](result)
+	p1 := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
+	p2 := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+	if c1 && c2 {
+		v1, null1 := p1.GetValue(0)
+		v2, null2 := p2.GetValue(0)
+		ifNull := null1 || null2
+		if ifNull {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			r, err := resultFn(v1, v2)
+			if err != nil {
+				nulls.AddRange(rsNull, 0, uint64(length))
+			} else {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			if p2.WithAnyNullValue() || rsAnyNull {
+				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					if rsNull.Contains(i) {
+						continue
+					}
+					v2, _ := p2.GetValue(i)
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						rsNull.Add(i)
+						continue
+					}
+					rss[i] = r
+				}
+			} else {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					v2, _ := p2.GetValue(i)
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						rsNull.Add(i)
+						continue
+					}
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetValue(0)
+		if null2 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			if p1.WithAnyNullValue() || rsAnyNull {
+				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					if rsNull.Contains(i) {
+						continue
+					}
+					v1, _ := p1.GetValue(i)
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						rsNull.Add(i)
+						continue
+					}
+					rss[i] = r
+				}
+			} else {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					v1, _ := p1.GetValue(i)
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						rsNull.Add(i)
+						continue
+					}
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetValue(i)
+			v2, _ := p2.GetValue(i)
+			r, err := resultFn(v1, v2)
+			if err != nil {
+				rsNull.Add(i)
+				continue
+			}
+			rss[i] = r
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetValue(i)
+		v2, _ := p2.GetValue(i)
+		r, err := resultFn(v1, v2)
+		if err != nil {
+			rsNull.Add(i)
+			continue
 		}
 		rss[i] = r
 	}
@@ -1472,7 +1355,7 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 }
 
 func specialTemplateForModFunction[
-	T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	modFn func(v1, v2 T) T, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T](result)
@@ -1492,7 +1375,7 @@ func specialTemplateForModFunction[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -1503,7 +1386,12 @@ func specialTemplateForModFunction[
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
 		ifNull := null1 || null2
-		if ifNull || v2 == 0 {
+		if ifNull {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else if v2 == 0 {
+			if checkDivisionByZeroBehavior(proc, selectList) {
+				return moerr.NewDivByZeroNoCtx()
+			}
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
 			r := modFn(v1, v2)
@@ -1520,6 +1408,7 @@ func specialTemplateForModFunction[
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
+			shouldError := checkDivisionByZeroBehavior(proc, selectList)
 			if p2.WithAnyNullValue() || rsAnyNull {
 				nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
 				rowCount := uint64(length)
@@ -1529,6 +1418,9 @@ func specialTemplateForModFunction[
 					}
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
 						rsVec.GetNulls().Add(i)
 					} else {
 						rss[i] = modFn(v1, v2)
@@ -1542,6 +1434,9 @@ func specialTemplateForModFunction[
 				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
+						if shouldError {
+							return moerr.NewDivByZeroNoCtx()
+						}
 						rsVec.GetNulls().Add(i)
 					} else {
 						rss[i] = modFn(v1, v2)
@@ -1554,11 +1449,23 @@ func specialTemplateForModFunction[
 
 	if c2 {
 		v2, null2 := p2.GetValue(0)
-		if null2 || v2 == 0 {
+		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			if p1.WithAnyNullValue() || rsAnyNull {
+			if p1.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+			}
+			if !hasEvaluableRows(rsNull, length) {
+				return nil
+			}
+			if v2 == 0 {
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
+			if p1.WithAnyNullValue() || rsAnyNull {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
@@ -1579,6 +1486,7 @@ func specialTemplateForModFunction[
 	}
 
 	// basic case.
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() || rsAnyNull {
 		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
@@ -1590,6 +1498,9 @@ func specialTemplateForModFunction[
 			v1, _ := p1.GetValue(i)
 			v2, _ := p2.GetValue(i)
 			if v2 == 0 {
+				if shouldError {
+					return moerr.NewDivByZeroNoCtx()
+				}
 				rsVec.GetNulls().Add(i)
 			} else {
 				rss[i] = modFn(v1, v2)
@@ -1606,6 +1517,9 @@ func specialTemplateForModFunction[
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		if v2 == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
 			rsVec.GetNulls().Add(i)
 		} else {
 			rss[i] = modFn(v1, v2)
@@ -1614,9 +1528,107 @@ func specialTemplateForModFunction[
 	return nil
 }
 
+// checkDivisionByZeroBehavior checks if division by zero should raise an error.
+// Returns true if should raise error, false if should return NULL.
+// According to MySQL 8.0:
+// - In SELECT: always return NULL (never raise error)
+// - In INSERT/UPDATE: raise error if strict mode + ERROR_FOR_DIVISION_BY_ZERO are enabled
+// - In INSERT IGNORE: always return NULL (never raise error, even in strict mode)
+// checkDivisionByZeroBehavior checks if division by zero should raise an error.
+// Returns true if should raise error, false if should return NULL.
+func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSelectList) (shouldError bool) {
+	if proc == nil {
+		return false
+	}
+
+	// Check cached value first (atomic read for thread safety)
+	cached := atomic.LoadInt32(&proc.Base.DivByZeroErrorMode)
+	if cached == 0 {
+		return false
+	}
+	if cached == 1 {
+		return true
+	}
+
+	// Not cached (-1), need to compute
+	stmtProfile := proc.GetStmtProfile()
+	if stmtProfile == nil {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+		return false
+	}
+	stmtType, queryType, ignore := stmtProfile.GetDivByZeroRuntimeProfile()
+	stmtTypeUpper := strings.ToUpper(strings.TrimSpace(stmtType))
+	queryTypeUpper := strings.ToUpper(strings.TrimSpace(queryType))
+
+	// In SELECT: always return NULL (MySQL 8.0 behavior)
+	isInsertOrUpdate := stmtTypeUpper == "INSERT" || stmtTypeUpper == "UPDATE" || queryTypeUpper == "DML"
+	if !isInsertOrUpdate {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+		return false
+	}
+
+	// In INSERT/UPDATE: check sql_mode
+	resolveFunc := proc.GetResolveVariableFunc()
+	if resolveFunc == nil {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+		return false
+	}
+
+	mode, err := resolveFunc("sql_mode", true, false)
+	if err != nil || mode == nil {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+		return false
+	}
+
+	modeStr, ok := mode.(string)
+	if !ok {
+		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+		return false
+	}
+
+	modeStr = strings.ToUpper(modeStr)
+	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
+	hasErrorForDivByZero := strings.Contains(modeStr, "ERROR_FOR_DIVISION_BY_ZERO")
+
+	// Error only if both strict mode AND ERROR_FOR_DIVISION_BY_ZERO are enabled.
+	// INSERT IGNORE is handled through the statement ignore flag.
+	if hasStrictMode && hasErrorForDivByZero {
+		if ignore {
+			atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+			return false
+		} else {
+			atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
+			return true
+		}
+	}
+
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	return false
+}
+
+// hasEvaluableRows reports whether at least one row in the current batch may
+// execute the arithmetic kernel. Input NULLs and selectList-masked rows must
+// already be merged into rsNull before calling it. The bitmap can retain bits
+// outside [0, length) when an expression executor is reused with a smaller
+// batch, so its total cardinality must not be used here.
+func hasEvaluableRows(rsNull *nulls.Nulls, length int) bool {
+	if length <= 0 {
+		return false
+	}
+	if rsNull.IsEmpty() {
+		return true
+	}
+	for i := 0; i < length; i++ {
+		if !rsNull.Contains(uint64(i)) {
+			return true
+		}
+	}
+	return false
+}
+
 func specialTemplateForDivFunction[
-	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	divFn func(v1, v2 T) T2, selectList *FunctionSelectList) error {
+	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
+	divFn func(v1, v2 T) (T2, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T2](result)
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
@@ -1635,7 +1647,7 @@ func specialTemplateForDivFunction[
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
-			for i := range selectList.SelectList {
+			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
 				}
@@ -1650,9 +1662,17 @@ func specialTemplateForDivFunction[
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
 			if v2 == 0 {
-				return moerr.NewDivByZeroNoCtx()
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior: SELECT always returns NULL, INSERT/UPDATE returns NULL if not strict+ERROR_FOR_DIVISION_BY_ZERO)
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
 			}
-			r := divFn(v1, v2)
+			r, err := divFn(v1, v2)
+			if err != nil {
+				return err
+			}
 			rowCount := uint64(length)
 			for i := uint64(0); i < rowCount; i++ {
 				rss[i] = r
@@ -1675,9 +1695,17 @@ func specialTemplateForDivFunction[
 					}
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
-						return moerr.NewDivByZeroNoCtx()
+						if checkDivisionByZeroBehavior(proc, selectList) {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						// Return NULL (MySQL 8.0 behavior)
+						rsNull.Add(i)
 					} else {
-						rss[i] = divFn(v1, v2)
+						r, err := divFn(v1, v2)
+						if err != nil {
+							return err
+						}
+						rss[i] = r
 					}
 				}
 			} else {
@@ -1685,9 +1713,17 @@ func specialTemplateForDivFunction[
 				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
-						return moerr.NewDivByZeroNoCtx()
+						if checkDivisionByZeroBehavior(proc, selectList) {
+							return moerr.NewDivByZeroNoCtx()
+						}
+						// Return NULL (MySQL 8.0 behavior)
+						rsNull.Add(i)
 					} else {
-						rss[i] = divFn(v1, v2)
+						r, err := divFn(v1, v2)
+						if err != nil {
+							return err
+						}
+						rss[i] = r
 					}
 				}
 			}
@@ -1700,24 +1736,42 @@ func specialTemplateForDivFunction[
 		if null2 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			if v2 == 0 {
-				return moerr.NewDivByZeroNoCtx()
-			}
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+			}
+			if !hasEvaluableRows(rsNull, length) {
+				return nil
+			}
+			if v2 == 0 {
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior)
+				nulls.AddRange(rsNull, 0, uint64(length))
+				return nil
+			}
+			if p1.WithAnyNullValue() || rsAnyNull {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					if rsNull.Contains(i) {
 						continue
 					}
 					v1, _ := p1.GetValue(i)
-					rss[i] = divFn(v1, v2)
+					r, err := divFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
 				}
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					v1, _ := p1.GetValue(i)
-					rss[i] = divFn(v1, v2)
+					r, err := divFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
 				}
 			}
 		}
@@ -1736,22 +1790,38 @@ func specialTemplateForDivFunction[
 			v1, _ := p1.GetValue(i)
 			v2, _ := p2.GetValue(i)
 			if v2 == 0 {
-				return moerr.NewDivByZeroNoCtx()
+				if checkDivisionByZeroBehavior(proc, selectList) {
+					return moerr.NewDivByZeroNoCtx()
+				}
+				// Return NULL (MySQL 8.0 behavior)
+				rsNull.Add(i)
 			} else {
-				rss[i] = divFn(v1, v2)
+				r, err := divFn(v1, v2)
+				if err != nil {
+					return err
+				}
+				rss[i] = r
 			}
 		}
 		return nil
 	}
 
 	rowCount := uint64(length)
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		if v2 == 0 {
-			return moerr.NewDivByZeroNoCtx()
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			rsNull.Add(i)
 		} else {
-			rss[i] = divFn(v1, v2)
+			r, err := divFn(v1, v2)
+			if err != nil {
+				return err
+			}
+			rss[i] = r
 		}
 	}
 	return nil
@@ -2999,6 +3069,69 @@ func opUnaryFixedToStr[
 	return nil
 }
 
+func opUnaryFixedToStrWithNullOnError[
+	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v T) (string, error), selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+
+	var constValue []byte
+	constNull := false
+	if parameters[0].IsConst() {
+		v, null := p1.GetValue(0)
+		if null {
+			constNull = true
+		} else {
+			r, err := resultFn(v)
+			if err != nil {
+				constNull = true
+			} else {
+				constValue = functionUtil.QuickStrToBytes(r)
+			}
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(i)) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if parameters[0].IsConst() {
+			if constNull {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+			} else if err := rs.AppendMustBytesValue(constValue); err != nil {
+				return err
+			}
+			continue
+		}
+
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+		r, err := resultFn(v)
+		if err != nil {
+			if err = rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func opUnaryFixedToStrWithErrorCheck[
 	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) (string, error), selectList *FunctionSelectList) error {
@@ -3251,6 +3384,95 @@ func opUnaryBytesToBytesWithErrorCheck(
 	return nil
 }
 
+func opUnaryBytesToBytesWithNullOnError(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) ([]byte, error), selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			r, err := resultFn(v1)
+			if err != nil {
+				nulls.AddRange(rsNull, 0, uint64(length))
+			} else {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					if err = rs.AppendMustBytesValue(r); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			r, err := resultFn(v1)
+			if err != nil {
+				if err = rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			if err = rs.AppendMustBytesValue(r); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetStrValue(i)
+		r, err := resultFn(v1)
+		if err != nil {
+			if err = rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.AppendMustBytesValue(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func opUnaryBytesToStrWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) (string, error), selectList *FunctionSelectList) error {
@@ -3406,6 +3628,83 @@ func opUnaryFixedToFixedWithErrorCheck[
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func opUnaryFixedToFixedWithNullOnError[
+	T types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v T) (Tr, error), selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[Tr](result)
+	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
+
+	c1 := parameters[0].IsConst()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		} else {
+			r, err := resultFn(v1)
+			if err != nil {
+				nulls.AddRange(rsNull, 0, uint64(length))
+			} else {
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+		rowCount := uint64(length)
+		for i := uint64(0); i < rowCount; i++ {
+			if rsNull.Contains(i) {
+				continue
+			}
+			v1, _ := p1.GetValue(i)
+			r, err := resultFn(v1)
+			if err != nil {
+				rsNull.Add(i)
+				continue
+			}
+			rss[i] = r
+		}
+		return nil
+	}
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		v1, _ := p1.GetValue(i)
+		r, err := resultFn(v1)
+		if err != nil {
+			rsNull.Add(i)
+			continue
+		}
+		rss[i] = r
 	}
 	return nil
 }

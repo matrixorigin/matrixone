@@ -192,6 +192,18 @@ func (node *DropPublication) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *DropCcprSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ResumeCcprSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *PauseCcprSubscription) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *ShowSubscriptions) StmtKind() StmtKind {
 	return compositeResRowType
 }
@@ -205,6 +217,10 @@ func (node *DropStage) StmtKind() StmtKind {
 }
 
 func (node *AlterStage) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *RemoveStageFiles) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
@@ -233,6 +249,10 @@ func (node *DropUser) StmtKind() StmtKind {
 }
 
 func (node *AlterUser) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *AlterRole) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
@@ -322,6 +342,10 @@ func (node *Deallocate) StmtKind() StmtKind {
 }
 
 func (node *Update) StmtKind() StmtKind {
+	return defaultStatusTyp
+}
+
+func (node *Merge) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
@@ -442,6 +466,14 @@ func (node *ShowPublications) StmtKind() StmtKind {
 	return compositeResRowType
 }
 
+func (node *ShowPublicationCoverage) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *ShowCcprSubscriptions) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
 func (node *ShowTableSize) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
@@ -464,6 +496,18 @@ func (node *ShowLogserviceStores) StmtKind() StmtKind {
 
 func (node *ShowLogserviceSettings) StmtKind() StmtKind {
 	return compositeResRowType
+}
+
+func (node *ShowRules) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *AlterRoleAddRule) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *AlterRoleDropRule) StmtKind() StmtKind {
+	return frontendStatusTyp
 }
 
 func (node *AlterTable) StmtKind() StmtKind {
@@ -527,7 +571,7 @@ func (node *DropIndex) StmtKind() StmtKind {
 }
 
 func (node *AnalyzeStmt) StmtKind() StmtKind {
-	return frontendStatusTyp
+	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_BY_SITUATION, EXEC_IN_FRONTEND)
 }
 
 func (node *SetRole) StmtKind() StmtKind {
@@ -584,6 +628,30 @@ func (node *CancelDaemonTask) StmtKind() StmtKind {
 
 func (node *PauseDaemonTask) StmtKind() StmtKind {
 	return frontendStatusTyp
+}
+
+func (node *CreateSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *AlterSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *DropSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ExecuteSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ShowSQLTasks) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *ShowSQLTaskRuns) StmtKind() StmtKind {
+	return compositeResRowType
 }
 
 func (node *PrepareString) StmtKind() StmtKind {
@@ -680,7 +748,12 @@ func (node *ShowRecoveryWindow) StmtKind() StmtKind {
 	return compositeResRowType
 }
 
-func (node *CreateCDC) StmtKind() StmtKind { return frontendStatusTyp }
+func (node *CreateCDC) StmtKind() StmtKind {
+	if node.Internal {
+		return defaultStatusTyp
+	}
+	return frontendStatusTyp
+}
 
 func (node *ShowCDC) StmtKind() StmtKind {
 	return compositeResRowType
@@ -691,6 +764,9 @@ func (node *PauseCDC) StmtKind() StmtKind {
 }
 
 func (node *DropCDC) StmtKind() StmtKind {
+	if node.Internal {
+		return defaultStatusTyp
+	}
 	return frontendStatusTyp
 }
 

@@ -31,7 +31,13 @@ var (
 	CauseAsyncUpgradeTask       = NewInternalError(context.Background(), "asyncUpgradeTask")
 	CauseAsyncUpgradeTenantTask = NewInternalError(context.Background(), "asyncUpgradeTenantTask")
 	//pkg/cdc
-	CauseFinishTxnOp = NewInternalError(context.Background(), "finishTxnOp")
+	CauseFinishTxnOp           = NewInternalError(context.Background(), "finishTxnOp")
+	CauseTableDetectorScan     = NewInternalError(context.Background(), "table detector scan")
+	CauseWatermarkRead         = NewInternalError(context.Background(), "watermark read")
+	CauseWatermarkUpdate       = NewInternalError(context.Background(), "watermark update")
+	CauseWatermarkUpdateErrMsg = NewInternalError(context.Background(), "watermark update err msg")
+	CauseWatermarkAdd          = NewInternalError(context.Background(), "watermark add")
+	CauseGetTableDef           = NewInternalError(context.Background(), "get table def")
 	//pkg/clusterservice
 	CauseDebugUpdateCNLabel     = NewInternalError(context.Background(), "debugUpdateCNLabel")
 	CauseDebugUpdateCNWorkState = NewInternalError(context.Background(), "debugUpdateCNWorkState")
@@ -46,6 +52,7 @@ var (
 	CauseHeartbeat          = NewInternalError(context.Background(), "cn service heartbeat")
 	CauseCanClaimDaemonTask = NewInternalError(context.Background(), "canClaimDaemonTask")
 	CauseMergeObject        = NewInternalError(context.Background(), "merge object")
+	CauseRSSCacheEvict      = NewInternalError(context.Background(), "rss cache evict")
 	//pkg/common/morpc
 	CauseDeadlineContextCodec = NewInternalError(context.Background(), "morpc deadlineContextCodec")
 	CausePingPongMain         = NewInternalError(context.Background(), "morpc ping pong main")
@@ -69,6 +76,16 @@ var (
 	CauseNewAwsSDKv2     = NewInternalError(context.Background(), "fileservice newAwsSDKv2")
 	CauseReadCache       = NewInternalError(context.Background(), "fileservice read cache")
 	CauseRemoteCacheRead = NewInternalError(context.Background(), "fileservice remote cache read")
+	//pkg/iceberg
+	CauseIcebergConfig     = NewInternalError(context.Background(), "iceberg config")
+	CauseIcebergCatalog    = NewInternalError(context.Background(), "iceberg catalog")
+	CauseIcebergMetadata   = NewInternalError(context.Background(), "iceberg metadata")
+	CauseIcebergPlanning   = NewInternalError(context.Background(), "iceberg planning")
+	CauseIcebergCredential = NewInternalError(context.Background(), "iceberg credential")
+	CauseIcebergResidency  = NewInternalError(context.Background(), "iceberg residency")
+	CauseIcebergInternal   = NewInternalError(context.Background(), "iceberg internal")
+	//pkg/vm/engine/disttae
+	CauseWorkspaceRSSCacheEvict = NewInternalError(context.Background(), "workspace rss cache evict")
 	//pkg/frontend
 	CauseRegisterCdc           = NewInternalError(context.Background(), "register cdc")
 	CauseInternalExecutorExec  = NewInternalError(context.Background(), "internal executor exec")
@@ -87,10 +104,11 @@ var (
 	CauseAllocateTasks = NewInternalError(context.Background(), "allocateTask")
 	CauseTruncateTasks = NewInternalError(context.Background(), "truncateTasks")
 	//pkg/incrservice
-	CauseDoAllocate    = NewInternalError(context.Background(), "doAllocate")
-	CauseDoUpdate      = NewInternalError(context.Background(), "doUpdate")
-	CauseDestroyTables = NewInternalError(context.Background(), "destroyTables")
-	CauseAllocate      = NewInternalError(context.Background(), "allocate")
+	CauseDoAllocate       = NewInternalError(context.Background(), "doAllocate")
+	CauseDoUpdate         = NewInternalError(context.Background(), "doUpdate")
+	CauseDoForceSetOffset = NewInternalError(context.Background(), "doForceSetOffset")
+	CauseDestroyTables    = NewInternalError(context.Background(), "destroyTables")
+	CauseAllocate         = NewInternalError(context.Background(), "allocate")
 	//pkg/lockservice
 	CauseCleanCommitState          = NewInternalError(context.Background(), "cleanCommitState")
 	CauseValidateService           = NewInternalError(context.Background(), "validateService")
@@ -100,6 +118,7 @@ var (
 	CauseDoGetLock                 = NewInternalError(context.Background(), "doGetLock")
 	CauseInitRemote1               = NewInternalError(context.Background(), "initRemote 1")
 	CauseInitRemote2               = NewInternalError(context.Background(), "initRemote 2")
+	CauseResetLockServiceBackend   = NewInternalError(context.Background(), "resetLockServiceBackend")
 	CauseGetTxnWaitingListOnRemote = NewInternalError(context.Background(), "getTxnWaitingListOnRemote")
 	CauseGetLockTableBind          = NewInternalError(context.Background(), "getLockTableBind")
 	CauseAbortRemoteDeadlockTxn    = NewInternalError(context.Background(), "abortRemoteDeadlockTxn")
@@ -242,8 +261,6 @@ var (
 	CauseShardingLocalReader           = NewInternalError(context.Background(), "ShardingLocalReader Close")
 	CauseHakeeperIDGeneratorNew        = NewInternalError(context.Background(), "HakeeperIDGenerator New")
 	CauseHakeeperIDGeneratorNewIDByKey = NewInternalError(context.Background(), "HakeeperIDGenerator NewIDByKey")
-	//pkg/vm/engine/memoryengine
-	CauseDoTxnRequest = NewInternalError(context.Background(), "DoTxnRequest")
 	//pkg/vm/engine/tae/common
 	CauseRetryWithIntervalAndTimeout = NewInternalError(context.Background(), "RetryWithIntervalAndTimeout")
 	//pkg/vm/engine/tae/db/merge

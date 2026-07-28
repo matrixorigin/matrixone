@@ -23,119 +23,323 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
 	ModuleName = "TAETXN"
 )
 
-// 1. 30 concurrency
-// 2. 10000 node
-// 3. 512K buffer
-// 4. 1K(30%), 4K(25%), 8K(%20), 16K(%15), 32K(%10)
+type noopReplayObserver struct{}
 
-//func getNodes() int {
-//	v := rand.Intn(100)
-//	if v < 30 {
-//		return 1 * 2
-//	} else if v < 55 {
-//		return 2 * 2
-//	} else if v < 75 {
-//		return 3 * 2
-//	} else if v < 90 {
-//		return 4 * 2
-//	}
-//	return 5 * 2
-//}
+func (noopReplayObserver) OnTimeStamp(types.TS) {}
 
-//func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) *txnTable {
-//	mgr := buffer.NewNodeManager(bufSize, nil)
-//	driver := wal.NewDriverWithBatchStore(dir, "store", nil)
-//	id := common.NextGlobalSeqNum()
-//	schema := catalog.MockSchemaAll(colCnt, pkIdx)
-//	rel := mockTestRelation(id, schema)
-//	txn := txnbase.NewTxn(nil, nil, common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), nil)
-//	store := newStore(nil, driver, nil, mgr, nil)
-//	store.BindTxn(txn)
-//	return newTxnTable(store, rel.GetMeta().(*catalog.TableEntry))
-//}
+type dedupErrorObjectData struct {
+	data.Object
+	err error
+}
 
-//func TestInsertNode(t *testing.T) {
-//	defer testutils.AfterTest(t)()
-//	testutils.EnsureNoLeak(t)
-//	dir := testutils.InitTestEnv(ModuleName, t)
-//	tbl := makeTable(t, dir, 2, 1, mpool.KB*6)
-//	defer tbl.store.driver.Close()
-//	bat := catalog.MockBatch(tbl.GetSchema(), int(mpool.KB))
-//	defer bat.Close()
-//	p, _ := ants.NewPool(5)
-//	defer p.Release()
-//
-//	var wg sync.WaitGroup
-//	var all uint64
-//
-//	worker := func(id uint64) func() {
-//		return func() {
-//			defer wg.Done()
-//			cnt := getNodes()
-//			nodes := make([]*anode, cnt)
-//			for i := 0; i < cnt; i++ {
-//				var cid common.ID
-//				cid.BlockID = id
-//				cid.Idx = uint16(i)
-//				n := NewANodeWithID(tbl, tbl.store.nodesMgr, &cid, tbl.store.driver)
-//				nodes[i] = n
-//				h := tbl.store.nodesMgr.Pin(n.storage.mnode)
-//				var err error
-//				if err = n.storage.mnode.Expand(mpool.KB*1, func() error {
-//					_, err := n.Append(context.Background(), bat, 0)
-//					return err
-//				}); err != nil {
-//					err = n.storage.mnode.Expand(mpool.KB*1, func() error {
-//						_, err := n.Append(context.Background(), bat, 0)
-//						return err
-//					})
-//				}
-//				if err != nil {
-//					assert.NotNil(t, err)
-//				}
-//				h.Close()
-//			}
-//			for _, n := range nodes {
-//				// n.ToTransient()
-//				n.Close()
-//			}
-//			atomic.AddUint64(&all, uint64(len(nodes)))
-//		}
-//	}
-//	idAlloc := common.NewIdAllocator(1)
-//	for {
-//		id := idAlloc.Alloc()
-//		if id > 10 {
-//			break
-//		}
-//		wg.Add(1)
-//		err := p.Submit(worker(id))
-//		assert.Nil(t, err)
-//	}
-//	wg.Wait()
-//	t.Log(all)
-//	t.Log(tbl.store.nodesMgr.String())
-//}
+func (data *dedupErrorObjectData) GetDuplicatedRows(
+	context.Context,
+	txnif.TxnReader,
+	containers.Vector,
+	index.ZM,
+	types.TS,
+	types.TS,
+	containers.Vector,
+	*mpool.MPool,
+) error {
+	return data.err
+}
+
+func TestIncrementalGetRowsByPKReleasesResultOnError(t *testing.T) {
+	schema := catalog.MockSchemaAll(3, 2)
+	entry := catalog.MockStaloneTableEntry(1, schema)
+	from := types.BuildTS(2, 0)
+	to := types.BuildTS(3, 0)
+	dedupErr := moerr.NewInternalErrorNoCtx("dedup read")
+
+	objectID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+	objectio.WithCNCreated()(stats)
+	object := catalog.MockObjectEntry(
+		entry,
+		stats,
+		false,
+		func(*catalog.ObjectEntry) data.Object {
+			return &dedupErrorObjectData{err: dedupErr}
+		},
+		from,
+	)
+	entry.AddEntryLocked(object)
+
+	pool := containers.NewVectorPool(t.Name(), 4)
+	defer pool.Destory()
+	txn := txnbase.MockTxnReaderWithStartTS(from.Prev())
+	txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	table := newBaseTable(schema, false, &txnTable{
+		entry: entry,
+		store: &txnStore{
+			txn: txn,
+			rt: dbutils.NewRuntime(
+				dbutils.WithRuntimeSmallPool(pool),
+			),
+		},
+	})
+	pks := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+	defer pks.Close()
+	pks.Append(int64(1), false)
+
+	rowIDs, err := table.incrementalGetRowsByPK(
+		context.Background(),
+		pks,
+		from,
+		to,
+		true,
+	)
+	if rowIDs != nil {
+		defer rowIDs.Close()
+	}
+	require.ErrorIs(t, err, dedupErr)
+	require.Nil(t, rowIDs)
+	used, _ := pool.Used(false)
+	require.Zero(t, used)
+}
+
+func newPreparingEpochTestTxn(t *testing.T, id string, start, prepare types.TS) *txnbase.Txn {
+	t.Helper()
+	txn := txnbase.NewTxn(nil, nil, []byte(id), start, types.TS{})
+	txn.Lock()
+	assert.NoError(t, txn.ToPreparingLocked(prepare))
+	txn.Unlock()
+	return txn
+}
+
+func TestAutoIncrementAlterDetectsAcceptedDMLAfterSnapshot(t *testing.T) {
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	var wg sync.WaitGroup
+	for _, ts := range []types.TS{types.BuildTS(5, 0), types.BuildTS(3, 0), types.BuildTS(7, 0)} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			entry.RecordKnownDMLPrepare(ts)
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, types.BuildTS(7, 0), entry.GetLatestKnownDMLPrepare())
+
+	unsafeTxn := newPreparingEpochTestTxn(t, "alter-retry", types.BuildTS(6, 0), types.BuildTS(8, 0))
+	unsafe := &txnTable{store: &txnStore{txn: unsafeTxn}, entry: entry, autoIncrementAlter: true}
+	err := unsafe.validateAutoIncrementDMLOrder()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+
+	safeTxn := newPreparingEpochTestTxn(t, "alter-safe", types.BuildTS(7, 0), types.BuildTS(8, 0))
+	safe := &txnTable{store: &txnStore{txn: safeTxn}, entry: entry, autoIncrementAlter: true}
+	assert.NoError(t, safe.validateAutoIncrementDMLOrder())
+}
+
+func TestReplayOnePCRebuildsAutoIncrementDMLWatermark(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	mgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(c), catalog.MockTxnFactory(c), types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+
+	setupTxn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	dbEntry, err := c.CreateDBEntry("replay_1pc", "", "", setupTxn)
+	assert.NoError(t, err)
+	tableEntry, err := dbEntry.CreateTableEntry(catalog.MockSchemaAll(3, 1), setupTxn, nil)
+	assert.NoError(t, err)
+	assert.NoError(t, setupTxn.Commit(context.Background()))
+
+	startTS := types.BuildTS(10, 0)
+	prepareTS := types.BuildTS(11, 0)
+	commitTS := types.BuildTS(12, 0)
+	replayTxn := newPreparingEpochTestTxn(t, "replay-1pc", startTS, prepareTS)
+	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID)
+	assert.NoError(t, replayTxn.SetCommitTS(commitTS))
+	store := &replayTxnStore{Cmd: &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}, Observer: noopReplayObserver{}, catalog: c}
+
+	assert.NoError(t, store.prepareCommit(replayTxn))
+	assert.True(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS.Prev()))
+	assert.NoError(t, store.applyCommit(replayTxn))
+	assert.Equal(t, commitTS, tableEntry.GetLatestKnownDMLPrepare())
+}
+
+type waitingSchemaTxn struct {
+	txnif.TxnReader
+	prepareTS types.TS
+	waited    chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
+func (txn *waitingSchemaTxn) GetPrepareTS() types.TS { return txn.prepareTS }
+func (txn *waitingSchemaTxn) GetCommitTS() types.TS  { return txn.prepareTS }
+func (txn *waitingSchemaTxn) GetTxnState(wait bool) txnif.TxnState {
+	if !wait {
+		return txnif.TxnStatePreparing
+	}
+	txn.once.Do(func() { close(txn.waited) })
+	<-txn.release
+	return txnif.TxnStateCommitted
+}
+
+func TestAutoIncrEpochFenceWaitsForEarlierSchemaPrepare(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		rollback bool
+	}{
+		{name: "commit retries"},
+		{name: "rollback continues", rollback: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			schema := catalog.MockSchemaAll(3, 1)
+			schema.Version = 7
+			schema.Extra.AutoIncrEpoch = 7
+			entry := catalog.MockTableEntryWithDB(nil, 42)
+			entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
+				Schema:          schema,
+				TombstoneSchema: catalog.GetTombstoneSchema(schema),
+			})
+
+			alterBase := txnbase.NewTxn(nil, nil, []byte("alter"), types.BuildTS(2, 0), types.TS{})
+			alterTxn := &waitingSchemaTxn{
+				TxnReader: alterBase,
+				prepareTS: types.BuildTS(3, 0),
+				waited:    make(chan struct{}),
+				release:   make(chan struct{}),
+			}
+			_, _, err := entry.AlterTable(context.Background(), alterTxn,
+				apipb.NewUpdateAutoIncrementReq(0, 42, 20, 8))
+			assert.NoError(t, err)
+
+			dmlTxn := txnbase.NewTxn(nil, nil, []byte("dml"), types.BuildTS(2, 1), types.TS{})
+			dmlTxn.Lock()
+			assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(4, 0)))
+			dmlTxn.Unlock()
+			tbl := &txnTable{
+				store:                  &txnStore{txn: dmlTxn},
+				entry:                  entry,
+				expectedAutoIncrEpochs: map[uint32]struct{}{7: {}},
+			}
+
+			result := make(chan error, 1)
+			go func() { result <- tbl.validateAutoIncrEpoch() }()
+			select {
+			case <-alterTxn.waited:
+			case <-time.After(5 * time.Second):
+				t.Fatal("version fence did not wait for earlier schema prepare")
+			}
+
+			if tc.rollback {
+				_, err = entry.BaseEntryImpl.PrepareRollback()
+				assert.NoError(t, err)
+			} else {
+				assert.NoError(t, entry.BaseEntryImpl.PrepareCommit())
+				assert.NoError(t, entry.BaseEntryImpl.ApplyCommit(alterTxn.GetID()))
+			}
+			close(alterTxn.release)
+
+			select {
+			case err = <-result:
+			case <-time.After(5 * time.Second):
+				t.Fatal("version fence did not resume after schema transaction finished")
+			}
+			if tc.rollback {
+				assert.NoError(t, err)
+			} else {
+				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+			}
+		})
+	}
+}
+
+func TestAutoIncrEpochDependencyRecordsMultipleExpectations(t *testing.T) {
+	tbl := new(txnTable)
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(0))
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(7))
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(7))
+	assert.NoError(t, tbl.setExpectedAutoIncrEpoch(8))
+	assert.Equal(t, map[uint32]struct{}{0: {}, 7: {}, 8: {}}, tbl.expectedAutoIncrEpochs)
+}
+
+func TestAutoIncrEpochFenceUsesPrepareOrderForCommittedSchema(t *testing.T) {
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Version = 7
+	schema.Extra.AutoIncrEpoch = 7
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
+		Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
+	})
+
+	alterBase := txnbase.NewTxn(nil, nil, []byte("later-alter"), types.BuildTS(2, 0), types.TS{})
+	alterTxn := &waitingSchemaTxn{
+		TxnReader: alterBase,
+		prepareTS: types.BuildTS(5, 0),
+		waited:    make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	_, _, err := entry.AlterTable(context.Background(), alterTxn,
+		apipb.NewUpdateAutoIncrementReq(0, 42, 20, 8))
+	assert.NoError(t, err)
+	assert.NoError(t, entry.BaseEntryImpl.PrepareCommit())
+	assert.NoError(t, entry.BaseEntryImpl.ApplyCommit(alterTxn.GetID()))
+
+	dmlTxn := txnbase.NewTxn(nil, nil, []byte("earlier-dml"), types.BuildTS(2, 1), types.TS{})
+	dmlTxn.Lock()
+	assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(4, 0)))
+	dmlTxn.Unlock()
+	tbl := &txnTable{
+		store:                  &txnStore{txn: dmlTxn},
+		entry:                  entry,
+		expectedAutoIncrEpochs: map[uint32]struct{}{7: {}},
+	}
+	assert.NoError(t, tbl.validateAutoIncrEpoch())
+}
+
+func TestAutoIncrEpochFenceRejectsMultipleEpochsWithoutLocalAlter(t *testing.T) {
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Version = 7
+	schema.Extra.AutoIncrEpoch = 7
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	entry.CreateWithTSLocked(types.BuildTS(1, 0), &catalog.TableMVCCNode{
+		Schema: schema, TombstoneSchema: catalog.GetTombstoneSchema(schema),
+	})
+
+	dmlTxn := txnbase.NewTxn(nil, nil, []byte("dml"), types.BuildTS(2, 0), types.TS{})
+	dmlTxn.Lock()
+	assert.NoError(t, dmlTxn.ToPreparingLocked(types.BuildTS(3, 0)))
+	dmlTxn.Unlock()
+	tbl := &txnTable{
+		store:                  &txnStore{txn: dmlTxn},
+		entry:                  entry,
+		expectedAutoIncrEpochs: map[uint32]struct{}{7: {}, 8: {}},
+	}
+	err := tbl.validateAutoIncrEpoch()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+}
 
 func TestTable(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -302,6 +506,152 @@ func TestIndex(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestDedupOpDuplicateEntry(t *testing.T) {
+	colType := types.T_int64.ToType()
+	tree := map[any]uint32{int64(7): 1}
+
+	err := DedupOp(&colType, "pk", []int64{3, 7}, tree)
+	assert.Error(t, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+}
+
+func TestInsertOpDuplicateEntry(t *testing.T) {
+	t.Run("dedup input", func(t *testing.T) {
+		colType := types.T_int64.ToType()
+		tree := make(map[any]uint32)
+
+		err := InsertOp(&colType, "pk", []int64{5, 5}, 0, 2, 0, true, tree)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+		assert.Len(t, tree, 0)
+	})
+
+	t.Run("tree conflict", func(t *testing.T) {
+		colType := types.T_int64.ToType()
+		tree := map[any]uint32{int64(9): 2}
+
+		err := InsertOp(&colType, "pk", []int64{9, 10}, 0, 2, 0, false, tree)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+}
+
+func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
+	t.Run("string batch insert dedup input", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		vec := makeWorkspaceVector(types.T_varchar.ToType())
+		defer vec.Close()
+		vec.Append([]byte("dup"), false)
+		vec.Append([]byte("dup"), false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("string batch insert tree conflict", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		idx.tree["dup"] = 1
+		vec := makeWorkspaceVector(types.T_varchar.ToType())
+		defer vec.Close()
+		vec.Append([]byte("dup"), false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("string batch dedup", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		idx.tree["dup"] = 1
+		vec := makeWorkspaceVector(types.T_varchar.ToType())
+		defer vec.Close()
+		vec.Append([]byte("dup"), false)
+
+		err := idx.BatchDedup("pk", vec)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array32 batch insert dedup input", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		vec := makeWorkspaceVector(types.T_array_float32.ToType())
+		defer vec.Close()
+		val := types.ArrayToBytes([]float32{1, 2})
+		vec.Append(val, false)
+		vec.Append(val, false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array32 batch insert tree conflict", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		key := types.ArrayToString([]float32{1, 2})
+		idx.tree[key] = 1
+		vec := makeWorkspaceVector(types.T_array_float32.ToType())
+		defer vec.Close()
+		vec.Append(types.ArrayToBytes([]float32{1, 2}), false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array32 batch dedup", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		key := types.ArrayToString([]float32{1, 2})
+		idx.tree[key] = 1
+		vec := makeWorkspaceVector(types.T_array_float32.ToType())
+		defer vec.Close()
+		vec.Append(types.ArrayToBytes([]float32{1, 2}), false)
+
+		err := idx.BatchDedup("pk", vec)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array64 batch insert dedup input", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		vec := makeWorkspaceVector(types.T_array_float64.ToType())
+		defer vec.Close()
+		val := types.ArrayToBytes([]float64{1, 2})
+		vec.Append(val, false)
+		vec.Append(val, false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, true)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array64 batch insert tree conflict", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		key := types.ArrayToString([]float64{1, 2})
+		idx.tree[key] = 1
+		vec := makeWorkspaceVector(types.T_array_float64.ToType())
+		defer vec.Close()
+		vec.Append(types.ArrayToBytes([]float64{1, 2}), false)
+
+		err := idx.BatchInsert("pk", vec, 0, vec.Length(), 0, false)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+
+	t.Run("array64 batch dedup", func(t *testing.T) {
+		idx := NewSimpleTableIndex()
+		key := types.ArrayToString([]float64{1, 2})
+		idx.tree[key] = 1
+		vec := makeWorkspaceVector(types.T_array_float64.ToType())
+		defer vec.Close()
+		vec.Append(types.ArrayToBytes([]float64{1, 2}), false)
+
+		err := idx.BatchDedup("pk", vec)
+		assert.Error(t, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	})
+}
+
 func TestLoad(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
@@ -381,7 +731,7 @@ func TestNodeCommand(t *testing.T) {
 func TestTxnManager1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), nil, nil, nil, 0),
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), nil, nil, nil),
 		TxnFactory(nil), types.NewMockHLCClock(1))
 	mgr.Start(context.Background())
 	txn, _ := mgr.StartTxn(nil)
@@ -442,7 +792,7 @@ func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Ca
 	factory := tables.NewDataFactory(rt, dir)
 	c := catalog.MockCatalog(factory)
 	driver := wal.NewLocalHandle(dir, "store", nil)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt, 0),
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	rt.Now = mgr.Now
 	mgr.Start(context.Background())
@@ -636,7 +986,7 @@ func TestObject1(t *testing.T) {
 		t.Log(iobj.String())
 		cnt++
 	}
-	assert.Equal(t, 2, cnt)
+	assert.Equal(t, 1, cnt)
 
 	txn3, _ := mgr.StartTxn(nil)
 	db, _ = txn3.GetDatabase(name)
@@ -648,7 +998,7 @@ func TestObject1(t *testing.T) {
 		t.Log(iobj.String())
 		cnt++
 	}
-	assert.Equal(t, 1, cnt)
+	assert.Equal(t, 2, cnt)
 
 	err = txn2.Commit(context.Background())
 	assert.Nil(t, err)
@@ -660,7 +1010,7 @@ func TestObject1(t *testing.T) {
 		t.Log(iobj.String())
 		cnt++
 	}
-	assert.Equal(t, 1, cnt)
+	assert.Equal(t, 2, cnt)
 }
 
 func TestObject2(t *testing.T) {
@@ -683,16 +1033,93 @@ func TestObject2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
+	err := txn1.Commit(context.Background())
+	assert.Nil(t, err)
+
+	txn2, _ := mgr.StartTxn(nil)
+	db, _ = txn2.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
 	it := rel.MakeObjectIt(false)
 	cnt := 0
 	for it.Next() {
 		cnt++
-		// iobj := it.GetObject()
 	}
 	assert.Equal(t, objCnt, cnt)
-	// err := txn1.Commit()
-	// assert.Nil(t, err)
+	assert.Nil(t, txn2.Commit(context.Background()))
 	t.Log(c.SimplePPString(common.PPL1))
+}
+
+func TestIsEmptyDroppedAppendableObject(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchema(1, 0)
+	txn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := txn.CreateDatabase("db", "", "")
+	require.NoError(t, err)
+	_, err = db.CreateRelation(schema)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctx))
+
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	txn, err = mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	require.NoError(t, err)
+	rel, err := db.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	require.NoError(t, rel.Append(ctx, bat))
+	require.NoError(t, txn.Commit(ctx))
+
+	txn, err = mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	require.NoError(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	it := rel.MakeObjectIt(false)
+	require.True(t, it.Next())
+	dataObjectID := *it.GetObject().GetID()
+	it.Close()
+	emptyObject, err := rel.CreateObject(false)
+	require.NoError(t, err)
+	emptyObjectID := *emptyObject.GetID()
+	require.NoError(t, emptyObject.Close())
+	require.NoError(t, txn.Commit(ctx))
+
+	txn, err = mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	require.NoError(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	require.NoError(t, rel.SoftDeleteObject(&dataObjectID, false))
+	require.NoError(t, rel.SoftDeleteObject(&emptyObjectID, false))
+	require.NoError(t, txn.Commit(ctx))
+
+	table := rel.GetMeta().(*catalog.TableEntry)
+	dataObject, err := table.GetObjectByID(&dataObjectID, false)
+	require.NoError(t, err)
+	require.True(t, dataObject.HasDropCommitted())
+	require.Zero(t, dataObject.GetObjectStats().Rows())
+	rows, err := dataObject.GetObjectData().Rows()
+	require.NoError(t, err)
+	require.Equal(t, 1, rows)
+	require.False(t, isEmptyDroppedAppendableObject(dataObject))
+
+	emptyObjectMeta, err := table.GetObjectByID(&emptyObjectID, false)
+	require.NoError(t, err)
+	require.True(t, emptyObjectMeta.HasDropCommitted())
+	require.True(t, isEmptyDroppedAppendableObject(emptyObjectMeta))
 }
 
 func TestDedup1(t *testing.T) {
@@ -778,4 +1205,237 @@ func TestDedup1(t *testing.T) {
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 	}
 	t.Log(c.SimplePPString(common.PPL1))
+}
+func TestCreateAppendableObjectWithOptions(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchema(1, 0)
+	txn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db", "", "")
+	assert.NoError(t, err)
+	_, err = db.CreateRelation(schema)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+
+	txn, err = mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.NoError(t, err)
+	rel, err := db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
+
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, true, false, false)
+	obj, err := rel.CreateObjectWithOpt(false, &objectio.CreateObjOpt{Stats: stats})
+	assert.NoError(t, err)
+	assert.True(t, obj.GetMeta().(*catalog.ObjectEntry).IsAppendable())
+	assert.Equal(t, id, *obj.GetID())
+
+	store := txn.GetStore().(*txnStore)
+	txnDB, err := store.getOrSetDB(db.GetID())
+	assert.NoError(t, err)
+	txnTable, err := txnDB.getOrSetTable(rel.ID())
+	assert.NoError(t, err)
+	assert.Zero(t, txnTable.txnEntries.Len())
+	assert.NoError(t, txn.Commit(ctx))
+
+	txn, err = mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.NoError(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
+	_, err = rel.GetObject(&id, false)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+}
+
+func TestCreateAppendableObjectWithOptionsRejectsInvalidOptions(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	txn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db", "", "")
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(catalog.MockSchema(1, 0))
+	assert.NoError(t, err)
+
+	_, err = rel.CreateObjectWithOpt(false, nil)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+
+	_, err = rel.CreateObjectWithOpt(false, &objectio.CreateObjOpt{})
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+	_, err = rel.CreateObjectWithOpt(false, &objectio.CreateObjOpt{Stats: stats})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "only supports appendable object")
+	assert.NoError(t, txn.Rollback(ctx))
+}
+
+func TestCreateAppendableObjectWithOptionsErrors(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	txn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db", "", "")
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(catalog.MockSchema(1, 0))
+	assert.NoError(t, err)
+
+	store := txn.GetStore().(*txnStore)
+	newOpt := func() *objectio.CreateObjOpt {
+		id := objectio.NewObjectid()
+		return &objectio.CreateObjOpt{
+			Stats: objectio.NewObjectStatsWithObjectID(&id, true, false, false),
+		}
+	}
+
+	_, err = store.CreateObjectWithOpt(db.GetID()+1, rel.ID(), false, newOpt())
+	assert.Error(t, err)
+
+	txnDB, err := store.getOrSetDB(db.GetID())
+	assert.NoError(t, err)
+	_, err = store.CreateObjectWithOpt(db.GetID(), rel.ID(), false, nil)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	_, err = txnDB.CreateObjectWithOpt(rel.ID(), nil, false)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	_, err = txnDB.CreateObjectWithOpt(rel.ID()+1, newOpt(), false)
+	assert.Error(t, err)
+
+	store.isOffline = true
+	_, err = store.CreateObjectWithOpt(db.GetID(), rel.ID(), false, newOpt())
+	assert.Error(t, err)
+	_, err = txnDB.CreateObjectWithOpt(rel.ID(), newOpt(), false)
+	assert.Error(t, err)
+	store.isOffline = false
+	assert.NoError(t, txn.Rollback(ctx))
+}
+
+type replayAObjectCreateRecorder struct {
+	created []replayAObjectCreateRecord
+}
+
+type replayAObjectCreateRecord struct {
+	id          common.ID
+	isTombstone bool
+	ts          types.TS
+}
+
+func (*replayAObjectCreateRecorder) OnTimeStamp(types.TS) {}
+
+func (r *replayAObjectCreateRecorder) RecordReplayAObjectCreate(
+	id *common.ID,
+	isTombstone bool,
+	ts types.TS,
+) {
+	r.created = append(r.created, replayAObjectCreateRecord{*id, isTombstone, ts})
+}
+
+func TestEnsureReplayAObject(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	txn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db", "", "")
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(catalog.MockSchema(1, 0))
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctx))
+
+	database, err := c.GetDatabaseByID(db.GetID())
+	assert.NoError(t, err)
+	table, err := database.GetTableEntryByID(rel.ID())
+	assert.NoError(t, err)
+	id := table.AsCommonID()
+	objectID := objectio.NewObjectid()
+	id.SetObjectID(&objectID)
+
+	createTS := mgr.Now()
+	recorder := new(replayAObjectCreateRecorder)
+	store := &replayTxnStore{catalog: c}
+	obj, created, err := store.ensureReplayAObject(id, false, createTS, recorder)
+	assert.NoError(t, err)
+	assert.True(t, created)
+	assert.True(t, obj.IsAppendable())
+	assert.Equal(t, createTS, obj.GetCreatedAt())
+	assert.Len(t, recorder.created, 1)
+	assert.Equal(t, *id, recorder.created[0].id)
+	assert.Equal(t, createTS, recorder.created[0].ts)
+
+	obj, created, err = store.ensureReplayAObject(id, false, mgr.Now(), recorder)
+	assert.NoError(t, err)
+	assert.False(t, created)
+	assert.True(t, obj.IsAppendable())
+	assert.Len(t, recorder.created, 1)
+
+	tombstoneID := table.AsCommonID()
+	objectID = objectio.NewObjectid()
+	tombstoneID.SetObjectID(&objectID)
+	obj, created, err = store.ensureReplayAObject(tombstoneID, true, mgr.Now(), nil)
+	assert.NoError(t, err)
+	assert.True(t, created)
+	assert.True(t, obj.IsTombstone)
+
+	missingDB := *id
+	missingDB.DbID++
+	_, _, err = store.ensureReplayAObject(&missingDB, false, mgr.Now(), recorder)
+	assert.Error(t, err)
+
+	missingTable := *id
+	missingTable.TableID++
+	_, _, err = store.ensureReplayAObject(&missingTable, false, mgr.Now(), recorder)
+	assert.Error(t, err)
+}
+
+func TestReplayAppendNodeCreateTS(t *testing.T) {
+	prepareTS := types.BuildTS(10, 0)
+	commitTS := types.BuildTS(20, 0)
+	node := updates.NewEmptyAppendNode()
+	node.TxnMVCCNode.Prepare = prepareTS
+	node.TxnMVCCNode.End = commitTS
+	assert.Equal(t, commitTS, replayAppendNodeCreateTS(node))
+
+	txn := txnbase.NewTxn(nil, &txnbase.NoopTxnStore{}, []byte("txn"), prepareTS, prepareTS)
+	assert.NoError(t, txn.SetCommitTS(types.BuildTS(30, 0)))
+	node.TxnMVCCNode.Txn = txn
+	assert.Equal(t, types.BuildTS(30, 0), replayAppendNodeCreateTS(node))
+
+	node.TxnMVCCNode.Txn = nil
+	node.TxnMVCCNode.End = types.TS{}
+	assert.Equal(t, prepareTS, replayAppendNodeCreateTS(node))
 }

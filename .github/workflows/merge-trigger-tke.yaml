@@ -12,7 +12,16 @@ on:
       - 'test/distributed/**'
 
 jobs:
+  # 非 3.0-dev 分支使用 @main
   mo-checkin-regression:
     name: MO Checkin Regression On TKE
+    if: ${{ github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/merge-trigger-tke.yaml@main
+    secrets: inherit
+
+  # 3.0-dev 分支使用 @release/3.0-dev
+  mo-checkin-regression-30:
+    name: MO Checkin Regression On TKE (3.0)
+    if: ${{ github.base_ref == '3.0-dev' }}
+    uses: matrixorigin/CI/.github/workflows/merge-trigger-tke.yaml@release/3.0-dev
     secrets: inherit

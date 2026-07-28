@@ -24,8 +24,14 @@ type errorAfterNWriter struct {
 var _ io.Writer = new(errorAfterNWriter)
 
 func (e *errorAfterNWriter) Write(p []byte) (n int, err error) {
-	if e.N < 0 {
-		return 0, io.ErrUnexpectedEOF
+	if e.N < len(p) {
+		if e.N < 0 {
+			return 0, io.ErrUnexpectedEOF
+		}
+		n = e.N
+		e.N = -1
+		err = io.ErrShortWrite
+		return
 	}
 	e.N -= len(p)
 	return len(p), nil

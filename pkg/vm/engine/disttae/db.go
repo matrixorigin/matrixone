@@ -18,8 +18,9 @@ import (
 	"context"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -40,8 +42,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// tryAdjustThreeTablesCreatedTime analyzes the mo_tables batch and tries to adjust the created time of the three tables.
-func (e *Engine) tryAdjustThreeTablesCreatedTimeWithBatch(b *batch.Batch) {
+// tryAdjustSysTablesCreatedTimeWithBatch analyzes the mo_tables batch and tries to adjust the created time of the system tables.
+func (e *Engine) tryAdjustSysTablesCreatedTimeWithBatch(b *batch.Batch) {
 	if e.timeFixed {
 		return
 	}
@@ -54,33 +56,38 @@ func (e *Engine) tryAdjustThreeTablesCreatedTimeWithBatch(b *batch.Batch) {
 		tname := b.Vecs[tnameIdx].GetStringAt(i)
 		if aid == 0 && tname == "mo_user" {
 			ts := vector.GetFixedAtWithTypeCheck[types.Timestamp](b.Vecs[createdTsIdx], i)
-			vector.SetFixedAtWithTypeCheck(e.moDatabaseCreatedTime, 0, ts)
-			vector.SetFixedAtWithTypeCheck(e.moTablesCreatedTime, 0, ts)
-			vector.SetFixedAtWithTypeCheck(e.moColumnsCreatedTime, 0, ts)
-			vector.SetFixedAtWithTypeCheck(e.moCatalogCreatedTime, 0, ts)
+			// Update all system tables' created time
+			for _, vec := range e.sysTablesCreatedTime {
+				vector.SetFixedAtWithTypeCheck(vec, 0, ts)
+			}
 			e.timeFixed = true
 			return
 		}
 	}
 }
 
+// sysTableCreatedTimeIdx defines the index mapping for sysTablesCreatedTime slice
+const (
+	sysTableCreatedTimeIdxCatalog  = 0 // mo_catalog (database)
+	sysTableCreatedTimeIdxDatabase = 1 // mo_database (table in mo_tables)
+	sysTableCreatedTimeIdxTables   = 2 // mo_tables (table in mo_tables)
+	sysTableCreatedTimeIdxColumns  = 3 // mo_columns (table in mo_tables)
+	sysTableCreatedTimeIdxIndexTbl = 4 // __mo_index_unique_mo_tables_logical_id (index table)
+	sysTableCreatedTimeSliceLen    = 5
+)
+
 func initSysTable(
 	ctx context.Context,
-	//e *Engine,
 	service string,
 	mp *mpool.MPool,
 	packerPool *fileservice.Pool[*types.Packer],
-	moCatalogCreatedTime **vector.Vector,
-	moDatabaseCreatedTime **vector.Vector,
-	moTablesCreatedTime **vector.Vector,
-	moColumnsCreatedTime **vector.Vector,
+	sysTablesCreatedTime []*vector.Vector, // slice to store created_time vectors
 	part *logtailreplay.Partition,
 	cc *cache.CatalogCache,
 	tid uint64,
 	initCatalog bool) error {
 
 	m := mp
-	//part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, tid}]
 
 	var packer *types.Packer
 	put := packerPool.Get(&packer)
@@ -101,8 +108,8 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		if moCatalogCreatedTime != nil {
-			*moCatalogCreatedTime = bat.Vecs[catalog.MO_DATABASE_CREATED_TIME_IDX]
+		if sysTablesCreatedTime != nil {
+			sysTablesCreatedTime[sysTableCreatedTimeIdxCatalog] = bat.Vecs[catalog.MO_DATABASE_CREATED_TIME_IDX]
 		}
 		ibat, err := fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
@@ -132,8 +139,8 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		if moDatabaseCreatedTime != nil {
-			*moDatabaseCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
+		if sysTablesCreatedTime != nil {
+			sysTablesCreatedTime[sysTableCreatedTimeIdxDatabase] = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
 		ibat, err := fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
@@ -162,8 +169,8 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		if moTablesCreatedTime != nil {
-			*moTablesCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
+		if sysTablesCreatedTime != nil {
+			sysTablesCreatedTime[sysTableCreatedTimeIdxTables] = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
 		ibat, err = fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
@@ -191,8 +198,8 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		if moColumnsCreatedTime != nil {
-			*moColumnsCreatedTime = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
+		if sysTablesCreatedTime != nil {
+			sysTablesCreatedTime[sysTableCreatedTimeIdxColumns] = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
 		ibat, err = fillRandomRowidAndZeroTs(bat, m)
 		if err != nil {
@@ -202,6 +209,34 @@ func initSysTable(
 		state.HandleRowsInsert(ctx, ibat, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
 		if initCatalog {
 			cc.InsertTable(bat)
+		}
+		// Create index table metadata entry (insert into mo_tables)
+		indexTbl := catalog.Table{
+			AccountId:    0,
+			UserId:       0,
+			RoleId:       0,
+			DatabaseId:   catalog.MO_CATALOG_ID,
+			DatabaseName: catalog.MO_CATALOG,
+			TableId:      catalog.MO_TABLES_LOGICAL_ID_INDEX_ID,
+			TableName:    catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME,
+			Constraint:   catalog.GetDefines(service).MoTablesLogicalIdIndexConstraint,
+			Kind:         catalog.SystemOrdinaryRel,
+		}
+		indexBat, err := catalog.GenCreateTableTuple(indexTbl, m, packer)
+		if err != nil {
+			return err
+		}
+		if sysTablesCreatedTime != nil {
+			sysTablesCreatedTime[sysTableCreatedTimeIdxIndexTbl] = indexBat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
+		}
+		indexIbat, err := fillRandomRowidAndZeroTs(indexBat, m)
+		if err != nil {
+			indexBat.Clean(m)
+			return err
+		}
+		state.HandleRowsInsert(ctx, indexIbat, catalog.MO_TABLES_CPKEY_IDX, packer, mp)
+		if initCatalog {
+			cc.InsertTable(indexBat)
 		}
 		done()
 	case catalog.MO_COLUMNS_ID:
@@ -281,6 +316,32 @@ func initSysTable(
 		if initCatalog {
 			cc.InsertColumns(bat)
 		}
+
+		// put mo_tables_logical_id_index into mo_columns
+		cols, err = catalog.GenColumnsFromDefs(
+			0,
+			catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME,
+			catalog.MO_CATALOG,
+			catalog.MO_TABLES_LOGICAL_ID_INDEX_ID,
+			catalog.MO_CATALOG_ID,
+			catalog.GetDefines(service).MoTablesLogicalIdIndexTableDefs)
+		if err != nil {
+			return err
+		}
+
+		bat, err = catalog.GenCreateColumnTuples(cols, m, packer)
+		if err != nil {
+			return err
+		}
+		ibat, err = fillRandomRowidAndZeroTs(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		state.HandleRowsInsert(ctx, ibat, catalog.MO_COLUMNS_ATT_CPKEY_IDX, packer, mp)
+		if initCatalog {
+			cc.InsertColumns(bat)
+		}
 		done()
 	}
 	return nil
@@ -296,22 +357,25 @@ func (e *Engine) init(ctx context.Context) error {
 
 	{
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] =
-			logtailreplay.NewPartition(e.service, 1)
+			logtailreplay.NewPartition(e.service, nil, 0, 1, 1, nil)
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] =
-			logtailreplay.NewPartition(e.service, 2)
+			logtailreplay.NewPartition(e.service, nil, 0, 1, 2, nil)
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] =
-			logtailreplay.NewPartition(e.service, 3)
+			logtailreplay.NewPartition(e.service, nil, 0, 1, 3, nil)
+		// Add partition for index table
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID}] =
+			logtailreplay.NewPartition(e.service, nil, 0, 1, 4, nil)
 	}
+
+	// Initialize the sysTablesCreatedTime slice
+	e.sysTablesCreatedTime = make([]*vector.Vector, sysTableCreatedTimeSliceLen)
 
 	err := initSysTable(
 		ctx,
 		e.service,
 		e.mp,
 		e.packerPool,
-		&e.moCatalogCreatedTime,
-		&e.moDatabaseCreatedTime,
-		&e.moTablesCreatedTime,
-		&e.moColumnsCreatedTime,
+		e.sysTablesCreatedTime,
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}],
 		newcache,
 		catalog.MO_DATABASE_ID,
@@ -325,10 +389,7 @@ func (e *Engine) init(ctx context.Context) error {
 		e.service,
 		e.mp,
 		e.packerPool,
-		&e.moCatalogCreatedTime,
-		&e.moDatabaseCreatedTime,
-		&e.moTablesCreatedTime,
-		&e.moColumnsCreatedTime,
+		e.sysTablesCreatedTime,
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}],
 		newcache,
 		catalog.MO_TABLES_ID,
@@ -343,10 +404,7 @@ func (e *Engine) init(ctx context.Context) error {
 		e.service,
 		e.mp,
 		e.packerPool,
-		&e.moCatalogCreatedTime,
-		&e.moDatabaseCreatedTime,
-		&e.moTablesCreatedTime,
-		&e.moColumnsCreatedTime,
+		e.sysTablesCreatedTime,
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}],
 		newcache,
 		catalog.MO_COLUMNS_ID,
@@ -363,7 +421,39 @@ func (e *Engine) GetLatestCatalogCache() *cache.CatalogCache {
 	return e.catalog.Load()
 }
 
-func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {
+func GetSnapshotReadFnWithHandler(
+	handleFn func(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *cmd_util.SnapshotReadReq,
+		resp *cmd_util.SnapshotReadResp,
+	) (func(), error),
+) func(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {
+	return func(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {
+		req := &cmd_util.SnapshotReadReq{}
+		payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
+			ts := snapshot.ToTimestamp()
+			req.Snapshot = &ts
+
+			return req.MarshalBinary()
+		}
+		tableProc := tbl.proc.Load()
+		proc := process.NewTopProcess(ctx, tableProc.GetMPool(),
+			tableProc.Base.TxnClient, tableProc.GetTxnOperator(),
+			tableProc.Base.FileService, tableProc.Base.LockService,
+			tableProc.Base.QueryClient, tableProc.Base.Hakeeper,
+			tableProc.Base.UdfService, tableProc.Base.Aicm,
+			tableProc.Base.TaskService,
+		)
+		resp = &cmd_util.SnapshotReadResp{}
+		payload(0, "", proc)
+		handleFn(ctx, txn.TxnMeta{}, req, resp.(*cmd_util.SnapshotReadResp))
+		return
+
+	}
+}
+
+var RequestSnapshotRead = func(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 		req := cmd_util.SnapshotReadReq{}
@@ -386,6 +476,7 @@ func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS)
 		tableProc.Base.FileService, tableProc.Base.LockService,
 		tableProc.Base.QueryClient, tableProc.Base.Hakeeper,
 		tableProc.Base.UdfService, tableProc.Base.Aicm,
+		tableProc.Base.TaskService,
 	)
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpSnapshotRead, whichTN, payload, responseUnmarshaler)
 	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
@@ -412,7 +503,7 @@ func (e *Engine) getOrCreateSnapPartBy(
 	ctx context.Context,
 	tbl *txnTable,
 	ts types.TS) (*logtailreplay.PartitionState, error) {
-	response, err := requestSnapshotRead(ctx, tbl, &ts)
+	response, err := RequestSnapshotRead(ctx, tbl, &ts)
 	if err != nil {
 		return nil, err
 	}
@@ -452,29 +543,17 @@ func (e *Engine) getOrCreateSnapPartBy(
 			tbl.tableId,
 			tbl.db.op.Txn().DebugString())
 	}
-
-	//check whether the snapshot partitions are available for reuse.
-	e.mu.Lock()
-	tblSnaps, ok := e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}]
-	if !ok {
-		e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}] = &struct {
-			sync.Mutex
-			snaps []*logtailreplay.Partition
-		}{}
-		tblSnaps = e.mu.snapParts[[2]uint64{tbl.db.databaseId, tbl.tableId}]
-	}
-	e.mu.Unlock()
-
-	tblSnaps.Lock()
-	defer tblSnaps.Unlock()
-	for _, snap := range tblSnaps.snaps {
-		if snap.Snapshot().CanServe(ts) {
-			return snap.Snapshot(), nil
-		}
+	// Try to find existing snapshot that can serve this timestamp
+	if ps := e.snapshotMgr.Find(tbl.db.databaseId, tbl.tableId, ts); ps != nil {
+		return ps, nil
 	}
 
 	//new snapshot partition and apply checkpoints into it.
-	snap := logtailreplay.NewPartition(e.service, tbl.tableId)
+	snap := logtailreplay.NewPartition(
+		e.service, e.GetLatestCatalogCache(),
+		uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId,
+		e.getPrefetchOnSubscribed(),
+	)
 	if tbl.tableId == catalog.MO_TABLES_ID ||
 		tbl.tableId == catalog.MO_DATABASE_ID ||
 		tbl.tableId == catalog.MO_COLUMNS_ID {
@@ -483,10 +562,7 @@ func (e *Engine) getOrCreateSnapPartBy(
 			e.service,
 			e.mp,
 			e.packerPool,
-			nil,
-			nil,
-			nil,
-			nil,
+			nil, // sysTablesCreatedTime not needed for snapshot
 			snap,
 			nil,
 			tbl.tableId,
@@ -521,24 +597,52 @@ func (e *Engine) getOrCreateSnapPartBy(
 		return nil
 	})
 	if err != nil {
-		logutil.Infof("Snapshot consumeSnapCkps failed, err:%v", err)
+		logutil.Error("Snapshot consumeSnapCkps failed", zap.Error(err))
 		return nil, err
 	}
-	if snap.Snapshot().CanServe(ts) {
-		tblSnaps.snaps = append(tblSnaps.snaps, snap)
-		return snap.Snapshot(), nil
+	if !snap.Snapshot().CanServe(ts) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"snapshot partition cannot serve ts after consuming checkpoints, ts:%s, table:%s",
+			ts.ToString(), tbl.tableName)
 	}
-	panic("impossible path")
+	// Add the new snapshot with LRU eviction
+	ps := e.snapshotMgr.Add(
+		tbl.db.databaseId,
+		tbl.tableId,
+		snap,
+		tbl.tableName,
+		ts,
+	)
+
+	// Log total snapshots
+	metrics := e.snapshotMgr.GetMetrics()
+	logutil.Info(
+		"Snapshot-Added",
+		zap.Int64("total-snaps-global", metrics.TotalSnapshots.Load()),
+	)
+
+	// Trigger GC check if needed
+	e.snapshotMgr.MaybeStartGC()
+
+	return ps, nil
 }
 
 func (e *Engine) GetOrCreateLatestPart(
+	ctx context.Context,
+	accId uint64,
 	databaseId,
-	tableId uint64) *logtailreplay.Partition {
+	tableId uint64,
+) *logtailreplay.Partition {
+
 	e.Lock()
 	defer e.Unlock()
 	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		partition = logtailreplay.NewPartition(e.service, tableId)
+		partition = logtailreplay.NewPartition(
+			e.service, e.GetLatestCatalogCache(),
+			accId, databaseId, tableId,
+			e.getPrefetchOnSubscribed(),
+		)
 		e.partitions[[2]uint64{databaseId, tableId}] = partition
 	}
 	return partition
@@ -546,12 +650,13 @@ func (e *Engine) GetOrCreateLatestPart(
 
 func (e *Engine) LazyLoadLatestCkp(
 	ctx context.Context,
+	accId uint64,
 	tableID uint64,
 	tableName string,
 	dbID uint64,
 	dbName string) (*logtailreplay.Partition, error) {
 
-	part := e.GetOrCreateLatestPart(dbID, tableID)
+	part := e.GetOrCreateLatestPart(ctx, accId, dbID, tableID)
 
 	if err := part.ConsumeCheckpoints(
 		ctx,

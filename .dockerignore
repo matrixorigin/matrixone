@@ -1,36 +1,56 @@
-# https://docs.docker.com/engine/reference/builder/#dockerignore-file
-
-# macOS
-.DS_Store
-
-# Visual Studio Code
-.vscode/
-.devcontainer/
-
-# JetBrains
-.idea/
-
-# generate files
-mo-service
-mo-server
-gen_config
-store/
+# Ignore build artifacts
 mo-data/
-**/scratch/
-ut-report/
+logs/
+*.log
 
-# cgo compiler files linked system lib, so ignore it
-**/*.o
-**/*.a
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# go 
+# Ignore documentation
+*.md
+!README.md
+
+# Ignore test files
+test/
+report/
+
+# Ignore temporary files
+*.tmp
+*.temp
+cov.out
+coverage*.out
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Ignore build artifacts
+cgo/*.o
+cgo/*.a
+cgo/*.so
+cgo/*.dylib
+/lib/
+/dict/
+/mo-service
 vendor/
+.proto-vendor/
 
-# bvt generate files
-test/distributed/resources/into_outfile/outfile_*.csv
-test/distributed/resources/into_outfile_2/outfile_*.csv
-test/distributed/resources/json/export_*.csv
+# Keep what we need
+!etc/
+!proto/
+!pkg/
+!cmd/
+!go.mod
+!go.sum
+!Makefile
+!thirdparties/
 
-#make compose bvt generate files
-docker-compose-log/
-
+# Never send locally generated native artifacts back into a container build.
+thirdparties/install/

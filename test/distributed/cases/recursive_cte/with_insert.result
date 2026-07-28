@@ -1,0 +1,94 @@
+DROP DATABASE IF EXISTS test_with_insert;
+CREATE DATABASE test_with_insert;
+USE test_with_insert;
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+name VARCHAR(50),
+value INT
+);
+INSERT INTO t1 VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30);
+WITH cte AS (SELECT * FROM t1 WHERE id = 1)
+INSERT INTO t1 SELECT id + 10, name, value FROM cte;
+SELECT * FROM t1 ORDER BY id;
+id    name    value
+1    a    10
+2    b    20
+3    c    30
+11    a    10
+WITH cte AS (SELECT * FROM t1 WHERE value > 15)
+INSERT INTO t1 SELECT id + 20, name, value * 2 FROM cte;
+SELECT * FROM t1 ORDER BY id;
+id    name    value
+1    a    10
+2    b    20
+3    c    30
+11    a    10
+22    b    40
+23    c    60
+CREATE TABLE t2 (id INT, category VARCHAR(20));
+INSERT INTO t2 VALUES (1, 'cat1'), (2, 'cat2'), (3, 'cat3');
+WITH cte AS (
+SELECT t1.id, t1.name, t1.value, t2.category
+FROM t1 JOIN t2 ON t1.id = t2.id
+WHERE t1.id <= 3
+)
+INSERT INTO t1 SELECT id + 30, name, value FROM cte;
+SELECT * FROM t1 ORDER BY id;
+id    name    value
+1    a    10
+2    b    20
+3    c    30
+11    a    10
+22    b    40
+23    c    60
+31    a    10
+32    b    20
+33    c    30
+WITH
+cte1 AS (SELECT * FROM t1 WHERE id = 1),
+cte2 AS (SELECT * FROM cte1 WHERE value = 10)
+INSERT INTO t1 SELECT id + 40, name, value FROM cte2;
+SELECT * FROM t1 ORDER BY id;
+id    name    value
+1    a    10
+2    b    20
+3    c    30
+11    a    10
+22    b    40
+23    c    60
+31    a    10
+32    b    20
+33    c    30
+41    a    10
+WITH cte AS (SELECT id, name FROM t1 WHERE id = 2)
+INSERT INTO t1 (id, name, value) SELECT id + 50, name, 999 FROM cte;
+SELECT * FROM t1 WHERE id > 50 ORDER BY id;
+id    name    value
+52    b    999
+WITH cte AS (SELECT id FROM t1 WHERE id > 40)
+DELETE FROM t1 WHERE id IN (SELECT id FROM cte);
+SELECT * FROM t1 ORDER BY id;
+id    name    value
+1    a    10
+2    b    20
+3    c    30
+11    a    10
+22    b    40
+23    c    60
+31    a    10
+32    b    20
+33    c    30
+WITH cte AS (SELECT id FROM t1 WHERE id < 15)
+UPDATE t1 SET value = value + 100 WHERE id IN (SELECT id FROM cte);
+SELECT * FROM t1 ORDER BY id;
+id    name    value
+1    a    110
+2    b    120
+3    c    130
+11    a    110
+22    b    40
+23    c    60
+31    a    10
+32    b    20
+33    c    30
+DROP DATABASE test_with_insert;

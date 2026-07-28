@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -31,6 +32,20 @@ import (
 const (
 	Rows = 10
 )
+
+func TestCatalogCacheConcurrentGC(t *testing.T) {
+	cc := NewCatalog()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(ts int64) {
+			defer wg.Done()
+			cc.GC(timestamp.Timestamp{PhysicalTime: ts})
+		}(int64(i + 1))
+	}
+	wg.Wait()
+}
 
 func TestCrossDBGet(t *testing.T) {
 	cc := NewCatalog()
@@ -87,6 +102,31 @@ func TestCrossAccGet(t *testing.T) {
 		AccountId: 1,
 		Name:      "ssb_1g",
 		Ts:        timestamp.Timestamp{PhysicalTime: 200},
+	}))
+}
+
+func TestHasNewerVersion(t *testing.T) {
+	cc := NewCatalog()
+	cc.tables.data.Set(&TableItem{
+		AccountId:  1,
+		DatabaseId: 2,
+		Name:       "t",
+		Id:         3,
+		Version:    2,
+		Ts:         timestamp.Timestamp{PhysicalTime: 200},
+	})
+
+	require.True(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 2, Name: "t", TableId: 3, Version: 1,
+		Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 2, Name: "t", TableId: 3, Version: 2,
+		Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 2, Name: "t", TableId: 3, Version: 1,
+		Ts: timestamp.Timestamp{PhysicalTime: 300},
 	}))
 }
 
@@ -357,6 +397,18 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 				vec = vector.NewVec(typ)
 				for k := 0; k < Rows; k++ {
 					err := vector.AppendFixed(vec, int8(0), false, mp)
+					require.NoError(t, err)
+				}
+			case catalog.MO_COLUMNS_ATT_HAS_GENERATED_IDX + MO_OFF:
+				vec = vector.NewVec(typ)
+				for k := 0; k < Rows; k++ {
+					err := vector.AppendFixed(vec, int8(0), false, mp)
+					require.NoError(t, err)
+				}
+			case catalog.MO_COLUMNS_ATT_GENERATED_IDX + MO_OFF:
+				vec = vector.NewVec(typ)
+				for k := 0; k < Rows; k++ {
+					err := vector.AppendBytes(vec, []byte(""), false, mp)
 					require.NoError(t, err)
 				}
 			default:

@@ -41,7 +41,7 @@ func TestSizeBoundedAllocator(t *testing.T) {
 		assert.Nil(t, err)
 		_, _, err = allocator.Allocate(12, NoHints)
 		assert.ErrorContains(t, err, "out of space")
-		d1.Deallocate(NoHints)
+		d1.Deallocate()
 		_, _, err = allocator.Allocate(12, NoHints)
 		assert.Nil(t, err)
 	})

@@ -49,6 +49,8 @@ type CheckpointCfg struct {
 	GCCheckpointInterval      time.Duration
 	DisableGCCheckpoint       bool
 	ReservedWALEntryCount     uint64
+	TableIDHistoryDuration    time.Duration `toml:"table-id-history-duration"`
+	TableIDSinkerThreshold    int           `toml:"table-id-sinker-threshold"`
 
 	// only for test
 	// it is used to control the block rows of the checkpoint
@@ -64,10 +66,12 @@ type GCCfg struct {
 	CheckGC           bool          `toml:"check-gc"`
 	CacheSize         int           `toml:"cache-size"`
 	GCMergeCount      int           `toml:"gc-merge-count"`
+	GCScanCount       int           `toml:"gc-scan-count"`
 	GCestimateRows    int           `toml:"gc-estimate-rows"`
 	GCProbility       float64       `toml:"gc-probility"`
 	GCDeleteTimeout   time.Duration `toml:"gc-delete-timeout"`
 	GCDeleteBatchSize int           `toml:"gc-delete-batch-size"`
+	GCDeleteWorkerNum int           `toml:"gc-delete-worker-num"`
 }
 
 type CatalogCfg struct {

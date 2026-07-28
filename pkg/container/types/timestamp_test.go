@@ -125,9 +125,23 @@ func TestParseTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(62009366402000000), int64(a))
 
+	// 3-digit seconds with leading zero (MySQL compat) — delegates to ParseDatetime which handles it
+	a, err = ParseTimestamp(time.UTC, "1998-01-01 00:00:009", 6)
+	require.NoError(t, err)
+	b, err2 := ParseTimestamp(time.UTC, "1998-01-01 00:00:09", 6)
+	require.NoError(t, err2)
+	require.Equal(t, int64(a), int64(b))
+
 	//ts, err := ParseTimestamp(time.UTC, "9999-12-31 23:59:59.5", 0)
 	//fmt.Println(int64(ts))
 	//require.Error(t, err)
+}
+
+func TestValidTimestampColumnLowerBound(t *testing.T) {
+	require.True(t, ValidTimestamp(ZeroTimestamp))
+	require.True(t, ValidTimestamp(TimestampMinValue))
+	require.True(t, ValidTimestamp(TimestampMinValue+1))
+	require.False(t, ValidTimestamp(TimestampMinValue-1))
 }
 
 func TestLocation(t *testing.T) {
@@ -139,4 +153,87 @@ func TestLocation(t *testing.T) {
 	require.NoError(t, err)
 	locPtr = (*unsafeLoc)(unsafe.Pointer(loc))
 	require.Greater(t, len(locPtr.zone), 1)
+}
+
+func TestTimestamp_TruncateToScale(t *testing.T) {
+	// Test timestamp with full microsecond precision: 1970-01-01 00:00:01.123456
+	ts := TimestampMinValue + 123456
+
+	// Test scale 0 (seconds, no fractional part)
+	truncated := ts.TruncateToScale(0)
+	require.Equal(t, int64(TimestampMinValue), int64(truncated))
+
+	// Test scale 3 (milliseconds) - should truncate to .123000
+	truncated = ts.TruncateToScale(3)
+	require.Equal(t, int64(TimestampMinValue+123000), int64(truncated))
+
+	// Test scale 6 (microseconds) - should not change
+	truncated = ts.TruncateToScale(6)
+	require.Equal(t, int64(ts), int64(truncated))
+
+	// Test rounding up: 1970-01-01 00:00:01.123500 with scale 3 should round to .124000
+	ts2 := TimestampMinValue + 123500
+	truncated = ts2.TruncateToScale(3)
+	require.Equal(t, int64(TimestampMinValue+124000), int64(truncated))
+
+	// Test rounding up to next second: 1970-01-01 00:00:01.999999 with scale 0 should round to 2 seconds
+	ts3 := TimestampMinValue + 999999
+	truncated = ts3.TruncateToScale(0)
+	require.Equal(t, int64(TimestampMinValue+MicroSecsPerSec), int64(truncated))
+
+	// Test scale 1 (0.1 seconds)
+	ts4 := TimestampMinValue + 156789
+	truncated = ts4.TruncateToScale(1)
+	require.Equal(t, int64(TimestampMinValue+200000), int64(truncated)) // rounds up to .2
+
+	// Test scale 2 (0.01 seconds)
+	ts5 := TimestampMinValue + 125678
+	truncated = ts5.TruncateToScale(2)
+	require.Equal(t, int64(TimestampMinValue+130000), int64(truncated)) // rounds up to .13
+}
+
+// TestTimestamp_String2_NoNewline tests that String2 output does not contain newline characters
+// This test ensures the fix for the String2 formatting bug (removing newline from %06d\n)
+func TestTimestamp_String2_NoNewline(t *testing.T) {
+	loc := time.UTC
+	testCases := []struct {
+		name      string
+		timestamp Timestamp
+		scale     int32
+	}{
+		{
+			name:      "scale 0",
+			timestamp: TimestampMinValue,
+			scale:     0,
+		},
+		{
+			name:      "scale 1",
+			timestamp: TimestampMinValue + 123456,
+			scale:     1,
+		},
+		{
+			name:      "scale 3",
+			timestamp: TimestampMinValue + 123456,
+			scale:     3,
+		},
+		{
+			name:      "scale 6",
+			timestamp: TimestampMinValue + 123456,
+			scale:     6,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.timestamp.String2(loc, tc.scale)
+			// Ensure no newline character in the output
+			require.NotContains(t, result, "\n", "String2 output should not contain newline")
+			require.NotContains(t, result, "\r", "String2 output should not contain carriage return")
+
+			// Verify the format is correct
+			if tc.scale > 0 {
+				require.Contains(t, result, ".", "String2 with scale > 0 should contain decimal point")
+			}
+		})
+	}
 }

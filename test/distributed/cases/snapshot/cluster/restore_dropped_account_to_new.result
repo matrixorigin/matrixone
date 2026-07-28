@@ -18,7 +18,7 @@ drop account if exists acc01;
 select * from db01.t01{snapshot='snapshot_acc01_dropped'};
 a
 1
-restore account acc01 from snapshot snapshot_acc01_dropped to account acc02;
+restore account acc01{snapshot="snapshot_acc01_dropped"} to account acc02;
 select * from db01.t01;
 a
 1

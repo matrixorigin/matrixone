@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -34,27 +35,44 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
 
 type sqlExecutor struct {
-	addr      string
-	eng       engine.Engine
-	mp        *mpool.MPool
-	txnClient client.TxnClient
-	fs        fileservice.FileService
-	ls        lockservice.LockService
-	qc        qclient.QueryClient
-	hakeeper  logservice.CNHAKeeperClient
-	us        udf.Service
-	buf       *buffer.Buffer
+	addr        string
+	eng         engine.Engine
+	mp          *mpool.MPool
+	txnClient   client.TxnClient
+	fs          fileservice.FileService
+	ls          lockservice.LockService
+	qc          qclient.QueryClient
+	hakeeper    logservice.CNHAKeeperClient
+	us          udf.Service
+	buf         *buffer.Buffer
+	taskservice taskservice.TaskService
+}
+
+func ensureExecutorContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func newInternalStatementContext(parent context.Context) context.Context {
+	return statistic.ContextWithStatsInfo(
+		ensureExecutorContext(parent),
+		statistic.NewStatsInfo())
 }
 
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
@@ -67,26 +85,29 @@ func NewSQLExecutor(
 	qc qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	us udf.Service,
+	taskService taskservice.TaskService,
 ) executor.SQLExecutor {
 	v, ok := runtime.ServiceRuntime(qc.ServiceID()).GetGlobalVariables(runtime.LockService)
 	if !ok {
 		panic("missing lock service")
 	}
 	return &sqlExecutor{
-		addr:      addr,
-		eng:       eng,
-		txnClient: txnClient,
-		fs:        fs,
-		ls:        v.(lockservice.LockService),
-		qc:        qc,
-		hakeeper:  hakeeper,
-		us:        us,
-		mp:        mp,
-		buf:       buffer.New(),
+		addr:        addr,
+		eng:         eng,
+		txnClient:   txnClient,
+		fs:          fs,
+		ls:          v.(lockservice.LockService),
+		qc:          qc,
+		hakeeper:    hakeeper,
+		us:          us,
+		mp:          mp,
+		buf:         buffer.New(),
+		taskservice: taskService,
 	}
 }
 
 func (s *sqlExecutor) NewTxnOperator(ctx context.Context) client.TxnOperator {
+	ctx = ensureExecutorContext(ctx)
 	var opts executor.Options
 
 	ctx, opts, err := s.adjustOptions(ctx, opts)
@@ -108,20 +129,40 @@ func (s *sqlExecutor) Exec(
 	sql string,
 	opts executor.Options,
 ) (executor.Result, error) {
+	ctx = ensureExecutorContext(ctx)
 	ctx = perfcounter.AttachTxnExecutorKey(ctx)
-	var res executor.Result
-	err := s.ExecTxn(
-		ctx,
-		func(exec executor.TxnExecutor) error {
-			v, err := exec.Exec(sql, opts.StatementOption())
-			res = v
-			return err
-		},
-		opts.WithSQL(sql))
-	if err != nil {
-		return executor.Result{}, err
+
+	var (
+		res executor.Result
+	)
+
+	// use an outer txn to execute this sql and DO NOT
+	// commit or rollback after this execution finished.
+	if opts.ExistsTxn() && opts.KeepTxnAlive() {
+		var (
+			err  error
+			exec *txnExecutor
+		)
+
+		if exec, err = newTxnExecutor(ctx, s, opts); err != nil {
+			return res, err
+		}
+
+		return exec.Exec(sql, opts.StatementOption())
+	} else {
+		err := s.ExecTxn(
+			ctx,
+			func(exec executor.TxnExecutor) error {
+				v, err := exec.Exec(sql, opts.StatementOption())
+				res = v
+				return err
+			},
+			opts.WithSQL(sql))
+		if err != nil {
+			return executor.Result{}, err
+		}
+		return res, nil
 	}
-	return res, nil
 }
 
 func (s *sqlExecutor) ExecTxn(
@@ -129,6 +170,7 @@ func (s *sqlExecutor) ExecTxn(
 	execFunc func(executor.TxnExecutor) error,
 	opts executor.Options,
 ) error {
+	ctx = ensureExecutorContext(ctx)
 	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	exec, err := newTxnExecutor(ctx, s, opts)
 	if err != nil {
@@ -138,7 +180,7 @@ func (s *sqlExecutor) ExecTxn(
 	if err != nil {
 		logutil.Error("internal sql executor error",
 			zap.Error(err),
-			zap.String("sql", opts.SQL()),
+			zap.String("sql", commonutil.Abbreviate(opts.SQL(), 500)),
 			zap.String("txn", exec.Txn().Txn().DebugString()),
 		)
 		return exec.rollback(err)
@@ -165,28 +207,33 @@ func (s *sqlExecutor) getCompileContext(
 	proc *process.Process,
 	db string,
 	lower int64) *compilerContext {
-	return &compilerContext{
+	cc := &compilerContext{
 		ctx:       ctx,
 		defaultDB: db,
 		engine:    s.eng,
 		proc:      proc,
 		lower:     lower,
 	}
+	return cc
 }
 
 func (s *sqlExecutor) adjustOptions(
 	ctx context.Context,
-	opts executor.Options) (context.Context, executor.Options, error) {
+	opts executor.Options,
+) (context.Context, executor.Options, error) {
+	ctx = ensureExecutorContext(ctx)
+	if ctx.Value(defines.TenantIDKey{}) == nil {
+		ctx = context.WithValue(
+			ctx,
+			defines.TenantIDKey{},
+			uint32(0))
+	}
+
 	if opts.HasAccountID() {
 		ctx = context.WithValue(
 			ctx,
 			defines.TenantIDKey{},
 			opts.AccountID())
-	} else if ctx.Value(defines.TenantIDKey{}) == nil {
-		ctx = context.WithValue(
-			ctx,
-			defines.TenantIDKey{},
-			uint32(0))
 	}
 
 	if !opts.HasExistsTxn() {
@@ -222,6 +269,7 @@ func newTxnExecutor(
 	s *sqlExecutor,
 	opts executor.Options,
 ) (*txnExecutor, error) {
+	ctx = ensureExecutorContext(ctx)
 	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	ctx, opts, err := s.adjustOptions(ctx, opts)
 	if err != nil {
@@ -243,6 +291,14 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
+	parentCtx := exec.ctx
+	exec.ctx = newInternalStatementContext(parentCtx)
+	defer func() {
+		// The fresh StatsInfo is statement-owned. Do not retain it in a
+		// long-lived transaction executor or build an unbounded context chain.
+		exec.ctx = parentCtx
+	}()
+
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
 	// so that it can be restored to its original state after completing the task.
 	var originCtx context.Context
@@ -271,7 +327,23 @@ func (exec *txnExecutor) Exec(
 
 	if v := statementOption.AlterCopyDedupOpt(); v != nil {
 		exec.ctx = context.WithValue(exec.ctx,
-			defines.AlterCopyDedupOpt{}, v)
+			defines.AlterCopyOpt{}, v)
+	}
+
+	if logicalId := statementOption.KeepLogicalId(); logicalId != 0 {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.LogicalIdKey{},
+			logicalId)
+	}
+
+	// Keep historical behavior for internal SQL: bypass frontend privilege checks.
+	// Some callers (e.g. CTAS follow-up SQL) opt in to real auth via context flag.
+	if !needInternalExecutorPrivilegeCheck(exec.ctx) {
+		exec.ctx = context.WithValue(
+			exec.ctx,
+			defines.InternalExecutorKey{},
+			true,
+		)
 	}
 
 	receiveAt := time.Now()
@@ -312,12 +384,33 @@ func (exec *txnExecutor) Exec(
 		exec.s.hakeeper,
 		exec.s.us,
 		nil,
+		exec.s.taskservice,
 	)
+	// Attach original frontend session to support session-scoped metadata
+	// (e.g. temporary-table alias mapping) in internal SQL compilation.
+	proc.Session = getInternalExecutorSession(exec.ctx)
+	// A DisableIncrStatement execution runs on the caller's transaction
+	// without opening a statement, so its compile must not advance the
+	// workspace snapshot write offset (the statement boundary).
+	proc.SetIncrStatementDisabled(exec.opts.DisableIncrStatement())
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
 	if exec.opts.ResolveVariableFunc() != nil {
 		proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 	}
+
+	// Propagate the "is this frontend?" signal onto the proc — same
+	// pattern as ResolveVariableFunc above. The Options default is
+	// IsFrontend=false (background) so every caller of the internal
+	// SQL executor that doesn't explicitly opt in is treated as
+	// background; frontend code that runs session-bound internal SQL
+	// opts in via opts.WithFrontend(true). Detection sites (e.g.
+	// IdxcronMetadata) consult proc.Base.IsFrontend rather than
+	// inferring from resolver behaviour, which is unreliable because
+	// background paths set resolvers too (idxcron's task.Metadata,
+	// ProcessInitSQL's executor.DefaultResolveVariable).
+	proc.Base.IsFrontend = exec.opts.IsFrontend()
+	applyExecutorLockWaitTimeout(proc, exec.opts)
 
 	prepared := false
 	if statementOption.HasParams() {
@@ -339,11 +432,34 @@ func (exec *txnExecutor) Exec(
 	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
 	compileContext.SetRootSql(sql)
 
-	pn, err := plan.BuildPlan(compileContext, stmts[0], prepared)
+	var pn *plan.Plan
+
+	switch stmt := stmts[0].(type) {
+	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
+		//*tree.Update, *tree.Delete, *tree.Insert,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
+		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+
+		opt := plan.NewBaseOptimizer(compileContext)
+		optimized, err := opt.Optimize(stmt, prepared)
+		if err == nil {
+			pn = &plan.Plan{
+				Plan: &plan.Plan_Query{
+					Query: optimized,
+				},
+			}
+		} else {
+			return executor.Result{}, err
+		}
+	default:
+		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
+	}
 
 	if err != nil {
 		return executor.Result{}, err
 	}
+
 	if prepared {
 		_, _, err := plan.ResetPreparePlan(compileContext, pn)
 		if err != nil {
@@ -365,8 +481,15 @@ func (exec *txnExecutor) Exec(
 		receiveAt,
 	)
 	c.SetOriginSQL(sql)
-	defer c.Release()
+	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
+	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
+	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
 	c.disableRetry = exec.opts.DisableIncrStatement()
+	c.ignorePublish = statementOption.IgnorePublish()
+	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
+	c.disableLock = statementOption.DisableLock()
+
+	defer c.Release()
 
 	if prepared {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
@@ -394,9 +517,6 @@ func (exec *txnExecutor) Exec(
 	result := executor.NewResult(exec.s.mp)
 
 	stream_chan, err_chan, streaming := exec.opts.Streaming()
-	if streaming {
-		defer close(stream_chan)
-	}
 
 	if exec.opts.ForceRebuildPlan() {
 		pn, err = c.buildPlanFunc(proc.Ctx)
@@ -414,7 +534,7 @@ func (exec *txnExecutor) Exec(
 				// the bat is valid only in current method. So we need copy data.
 				// FIXME: add a custom streaming apply handler to consume readed data. Now
 				// our current internal sql will never read too much data.
-				rows, err := bat.Dup(exec.s.mp)
+				rows, err := bat.Clone(exec.s.mp, streaming)
 				if err != nil {
 					return err
 				}
@@ -425,6 +545,9 @@ func (exec *txnExecutor) Exec(
 						case <-proc.Ctx.Done():
 							err_chan <- moerr.NewInternalError(proc.Ctx, "context cancelled")
 							return moerr.NewInternalError(proc.Ctx, "context cancelled")
+						case <-exec.ctx.Done():
+							err_chan <- exec.ctx.Err()
+							return exec.ctx.Err()
 						default:
 							time.Sleep(1 * time.Millisecond)
 						}
@@ -459,12 +582,8 @@ func (exec *txnExecutor) Exec(
 	}
 
 	if !statementOption.DisableLog() {
-		printSql := sql
-		if len(printSql) > 1000 {
-			printSql = printSql[:1000] + "..."
-		}
 		logutil.Info("sql_executor exec",
-			zap.String("sql", printSql),
+			zap.String("sql", commonutil.Abbreviate(sql, 500)),
 			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
 			zap.Duration("duration", time.Since(receiveAt)),
 			zap.Int("BatchSize", len(batches)),
@@ -503,13 +622,38 @@ func (exec *txnExecutor) LockTable(table string) error {
 		exec.s.hakeeper,
 		exec.s.us,
 		nil,
+		exec.s.taskservice,
 	)
+	proc.Base.IsFrontend = exec.opts.IsFrontend()
+	applyExecutorLockWaitTimeout(proc, exec.opts)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
 		proc.Free()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
+}
+
+// applyExecutorLockWaitTimeout copies a per-execution background budget into
+// SessionInfo, whose background lock-timeout precedence is above the default
+// variable resolver. LockWaitTimeoutSet preserves an explicit zero so reusing
+// a transaction does not resurrect its stale timeout. SessionInfo stores whole
+// seconds, so positive fractions are rounded up rather than becoming zero.
+func applyExecutorLockWaitTimeout(proc *process.Process, opts executor.Options) {
+	if proc == nil || !opts.HasLockWaitTimeout() {
+		return
+	}
+	timeout := opts.LockWaitTimeout()
+	proc.Base.SessionInfo.LockWaitTimeoutSet = true
+	if timeout <= 0 {
+		proc.Base.SessionInfo.LockWaitTimeout = 0
+		return
+	}
+	seconds := int64(timeout / time.Second)
+	if timeout%time.Second != 0 {
+		seconds++
+	}
+	proc.Base.SessionInfo.LockWaitTimeout = seconds
 }
 
 func (exec *txnExecutor) Txn() client.TxnOperator {

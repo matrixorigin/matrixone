@@ -32,6 +32,7 @@ alter table dis_table_02 rename column a to newA;
 use ww_conflict;
 begin;
 -- @wait:0:commit
+-- @regex("invalid input: column ('dis_table_02\.a'|a) does not exist",true)
 update dis_table_02 set b='dpqweoe' where a>1;
 update dis_table_02 set b='dpqweoe' where newA>1;
 commit;
@@ -39,7 +40,6 @@ select * from dis_table_02;
 -- @session}
 select * from dis_table_02;
 drop table dis_table_02;
-
 ---------------------------------------------------
 -- alter table add primary key
 drop table if exists dis_table_02;
@@ -77,7 +77,6 @@ select * from dis_table_02;
 -- @session}
 select * from dis_table_02;
 drop table dis_table_02;
-
 
 create table t1 (a int);
 insert into t1 values (1), (2), (3);

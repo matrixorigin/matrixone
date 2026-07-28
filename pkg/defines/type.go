@@ -168,7 +168,20 @@ const (
 type TenantIDKey struct{}
 type UserIDKey struct{}
 type RoleIDKey struct{}
+type DDLOwnerRoleIDKey struct{}
 type NodeIDKey struct{}
+type InternalExecutorKey struct{}
+
+func IsInternalExecutor(ctx context.Context) bool {
+	if v := ctx.Value(InternalExecutorKey{}); v != nil {
+		return v.(bool)
+	}
+	return false
+}
+
+type DDLOwnerRoleIDProvider interface {
+	GetDDLOwnerRoleID() uint32
+}
 
 func GetAccountId(ctx context.Context) (uint32, error) {
 	if v := ctx.Value(TenantIDKey{}); v != nil {
@@ -194,6 +207,18 @@ func GetRoleId(ctx context.Context) uint32 {
 	return 0
 }
 
+func GetDDLOwnerRoleId(ctx context.Context) (uint32, bool) {
+	switch v := ctx.Value(DDLOwnerRoleIDKey{}).(type) {
+	case uint32:
+		return v, true
+	case DDLOwnerRoleIDProvider:
+		if roleId := v.GetDDLOwnerRoleID(); roleId != 0 {
+			return roleId, true
+		}
+	}
+	return 0, false
+}
+
 func AttachAccount(ctx context.Context, accId uint32, userId uint32, roleId uint32) context.Context {
 	return AttachRoleId(AttachUserId(AttachAccountId(ctx, accId), userId), roleId)
 }
@@ -210,6 +235,14 @@ func AttachRoleId(ctx context.Context, roleId uint32) context.Context {
 	return context.WithValue(ctx, RoleIDKey{}, roleId)
 }
 
+func AttachDDLOwnerRoleId(ctx context.Context, roleId uint32) context.Context {
+	return context.WithValue(ctx, DDLOwnerRoleIDKey{}, roleId)
+}
+
+func AttachDDLOwnerRoleIDProvider(ctx context.Context, provider DDLOwnerRoleIDProvider) context.Context {
+	return context.WithValue(ctx, DDLOwnerRoleIDKey{}, provider)
+}
+
 // EngineKey use EngineKey{} to get engine from Context
 type EngineKey struct{}
 
@@ -217,12 +250,10 @@ type EngineKey struct{}
 type SqlKey struct{}
 type DatTypKey struct{}
 type TableIDKey struct{}
+type LogicalIdKey struct{}
 
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
-
-// TemporaryTN use TemporaryTN to get temporary storage from Context
-type TemporaryTN struct{}
 
 type IsMoLogger struct{}
 
@@ -230,7 +261,7 @@ type SourceScanResKey struct{}
 
 type IgnoreForeignKey struct{}
 
-type AlterCopyDedupOpt struct{}
+type AlterCopyOpt struct{}
 
 // Determine if now is a bg sql.
 type BgKey struct{}
@@ -241,8 +272,29 @@ type VarScopeKey struct{}
 // Determine if it is a stored procedure
 type InSp struct{}
 
+// IvfMembershipFilter carries doc_id membership-filter bytes (tagged docfilter
+// payload) for the ivf entries scan in the internal SQL executor.
+// This key is set on context when invoking internal SQL from ivf_search.
+type IvfMembershipFilter struct{}
+
+// FulltextMembershipFilter carries doc_id membership-filter bytes (tagged
+// docfilter payload) for the fulltext index scan in the internal SQL executor.
+// This key is set on context when invoking internal SQL from fulltext_index_match.
+type FulltextMembershipFilter struct{}
+
+// IvfReaderParam carries DistRange for ivf entries scan in internal SQL executor.
+// This key is set on context when invoking internal SQL from ivf_search.
+type IvfReaderParam struct{}
+
+// RemoteRunContext marks a pipeline executing through remote-run RPC.
+type RemoteRunContext struct{}
+
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}
+
+// SkipTransferKey is used to indicate that the delete operation should skip transfer processing.
+// Used by CCPR for cross-cluster tombstones.
+type SkipTransferKey struct{}
 
 // StartTS is the start timestamp of a statement.
 type StartTS struct{}

@@ -17,7 +17,12 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -44,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"go.uber.org/zap"
 )
@@ -51,6 +58,20 @@ import (
 const (
 	DefaultTimeout = time.Minute * 3 / 2
 )
+
+func contextForBackupCheckpoint(
+	ctx context.Context,
+	timeout time.Duration,
+) (context.Context, context.CancelFunc) {
+	// The time needed to flush a backup checkpoint depends on the amount of
+	// dirty data. Do not impose the short timeout used by interactive debug
+	// commands when the caller did not request one. The request context still
+	// provides cancellation and the session-level deadline.
+	if timeout == 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
+}
 
 ///
 ///
@@ -95,6 +116,12 @@ func (h *Handle) HandleSnapshotRead(
 	maxCheckpoint := h.db.BGCheckpointRunner.MaxIncrementalCheckpoint()
 	if maxCheckpoint != nil {
 		maxEnd = maxCheckpoint.GetEnd()
+	}
+	if maxEnd.IsEmpty() {
+		maxGlobal := h.db.BGCheckpointRunner.MaxGlobalCheckpoint()
+		if maxGlobal != nil {
+			maxEnd = maxGlobal.GetEnd()
+		}
 	}
 	snapshot := types.TimestampToTS(*req.Snapshot)
 	if snapshot.GT(&maxEnd) {
@@ -218,7 +245,8 @@ func getChangedListFromCheckpoints(
 	to types.TS,
 	h *Handle,
 	isTheTblIWant func(exists []uint64, tblId uint64, ts types.TS) bool,
-) (accIds, dbIds, tblIds []uint64, err error) {
+	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
+) (accIds, dbIds, tblIds []uint64, oldest types.TS, err error) {
 
 	var (
 		dbEntry *catalog2.DBEntry
@@ -230,7 +258,41 @@ func getChangedListFromCheckpoints(
 			zap.String("hint", hint))
 	}
 
+	var ckp *checkpoint.CheckpointEntry
+	maxICKP := h.GetDB().BGCheckpointRunner.MaxIncrementalCheckpoint()
+	maxGCKP := h.GetDB().BGCheckpointRunner.MaxGlobalCheckpoint()
+	if maxICKP == nil && maxGCKP == nil {
+		return
+	}
+	if maxICKP == nil {
+		ckp = maxGCKP
+	}
+	if maxGCKP == nil {
+		ckp = maxICKP
+	}
+	if maxICKP != nil && maxGCKP != nil {
+		gckpEnd := maxGCKP.GetEnd()
+		ickpEnd := maxICKP.GetEnd()
+		if ickpEnd.GT(&gckpEnd) {
+			ckp = maxICKP
+		} else {
+			ckp = maxGCKP
+		}
+	}
+
+	tableIDLocation := ckp.GetTableIDLocation()
+	accIds, dbIds, tblIds, oldest, ok := tryGetChangedListFromTableIDBatch(
+		ctx, from, to, tableIDLocation, h, isTheTblIWantWithTimeRange,
+	)
+	// for ckp with old version,
+	// tableIDLocation is empty,
+	// read all incremental checkpoints instead
+	if ok {
+		return
+	}
+
 	ckps := h.GetDB().BGCheckpointRunner.GetAllCheckpoints()
+
 	tblIds = make([]uint64, 0)
 	readers := make([]*logtail.CKPReader, len(ckps))
 	for i := 0; i < len(ckps); i++ {
@@ -240,6 +302,12 @@ func getChangedListFromCheckpoints(
 		}
 		if !ckps[i].HasOverlap(from, to) {
 			continue
+		}
+		if ckps[i].IsIncremental() {
+			ckpStart := ckps[i].GetStart()
+			if oldest.GT(&ckpStart) {
+				oldest = ckpStart
+			}
 		}
 		ioutil.Prefetch(
 			h.GetDB().Runtime.SID(),
@@ -307,6 +375,76 @@ func getChangedListFromCheckpoints(
 	return
 }
 
+func tryGetChangedListFromTableIDBatch(
+	ctx context.Context,
+	from types.TS,
+	to types.TS,
+	tableIDLocations objectio.LocationSlice,
+	h *Handle,
+	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
+) (accIds, dbIds, tblIds []uint64, oldest types.TS, ok bool) {
+	oldest = types.MaxTs()
+	if tableIDLocations.Len() == 0 {
+		return
+	}
+
+	reader, err := logtail.NewSyncTableIDReader(tableIDLocations, common.CheckpointAllocator, h.GetDB().Runtime.Fs)
+	if err != nil {
+		return
+	}
+
+	consumeFn := func(bat *batch.Batch, release func()) {
+
+		defer release()
+		accounts := vector.MustFixedColNoTypeCheck[uint32](bat.Vecs[0])
+		dbids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[1])
+		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+
+		var start types.TS
+		for i := 0; i < bat.RowCount(); i++ {
+			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
+				start = starts[i]
+				break
+			}
+		}
+		if start.GT(&from) {
+			return
+		}
+		ok = true
+		oldest = start
+
+		tblIds = make([]uint64, 0)
+		accIds = make([]uint64, 0)
+		dbIds = make([]uint64, 0)
+		for i := 0; i < bat.RowCount(); i++ {
+			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
+				continue
+			}
+			if !isTheTblIWantWithTimeRange(tblIds, tids[i], starts[i], ends[i]) {
+				continue
+			}
+			tblIds = append(tblIds, tids[i])
+			accIds = append(accIds, uint64(accounts[i]))
+			dbIds = append(dbIds, dbids[i])
+		}
+
+	}
+
+	for {
+		release, bat, isEnd, err := reader.Read(ctx)
+		if err != nil {
+			return
+		}
+		if isEnd {
+			break
+		}
+		consumeFn(bat, release)
+	}
+	return
+}
+
 func getChangedListFromDirtyTree(
 	ctx context.Context,
 	from types.TS,
@@ -369,12 +507,18 @@ func (h *Handle) HandleGetChangedTableList(
 	}()
 
 	if len(req.TableIds) == 0 && len(req.TS) == 0 {
-		to = types.BuildTS(time.Now().UnixNano(), 0)
+		// Use the engine's HLC clock, not wall-clock. HLC can be ahead of
+		// wall clock (e.g. on startup after replaying logtail entries with
+		// future-dated timestamps); wall-clock-derived `to` would produce
+		// an inverted (from, to] window and the dirty-tree query returns
+		// nothing. Same issue HandleForceCheckpoint already avoids by using
+		// h.db.TxnMgr.Now(). See pkg/iscp post-REINDEX CDC stall.
+		to = h.db.TxnMgr.Now()
 		return nil, nil
 	}
 
 	if req.Type == cmd_util.CheckChanged {
-		to = types.BuildTS(time.Now().UnixNano(), 0)
+		to = h.db.TxnMgr.Now()
 		minFrom := slices.MinFunc(req.TS, func(a, b *timestamp.Timestamp) int {
 			return a.Compare(*b)
 		})
@@ -423,10 +567,44 @@ func (h *Handle) HandleGetChangedTableList(
 		return false
 	}
 
-	accIds, dbIds, tblIds, err = getChangedListFromCheckpoints(ctx, from, to, h, isTheTblIWant)
+	isTheTblIWantWithTimeRange := func(innerExist []uint64, tblId uint64, start, end types.TS) bool {
+		if slices.Index(tblIds, tblId) != -1 || slices.Index(innerExist, tblId) != -1 {
+			// already exist
+			return false
+		}
+
+		if req.Type == cmd_util.CheckChanged {
+			if idx := slices.Index(req.TableIds, tblId); idx == -1 {
+				// not the tbl I want to check
+				return false
+			} else {
+				ts := types.TimestampToTS(*req.TS[idx])
+				if end.LT(&ts) {
+					return false
+				}
+			}
+
+			return true
+
+		} else if req.Type == cmd_util.CollectChanged {
+			if start.GT(&to) {
+				return false
+			}
+			if end.LT(&start) {
+				return false
+			}
+			return true
+		}
+
+		return false
+	}
+
+	accIds, dbIds, tblIds, oldest, err := getChangedListFromCheckpoints(ctx, from, to, h, isTheTblIWant, isTheTblIWantWithTimeRange)
 	if err != nil {
 		return nil, err
 	}
+	oldestTimestamp := oldest.ToTimestamp()
+	resp.Oldest = &oldestTimestamp
 
 	accIds2, dbIds2, tblIds2, err := getChangedListFromDirtyTree(ctx, from, to, h, isTheTblIWant)
 	if err != nil {
@@ -520,19 +698,21 @@ func (h *Handle) HandleBackup(
 	resp *api.SyncLogTailResp,
 ) (cb func(), err error) {
 	var (
-		timeout    = req.FlushDuration
+		// Use the engine's HLC clock for the checkpoint TS, not wall-clock.
+		// HLC can be ahead of wall clock (e.g. after replaying logtail entries
+		// with future-dated timestamps); a wall-clock currTs could fall behind
+		// the latest committed data and back up a stale snapshot. This matches
+		// HandleForceCheckpoint, which uses h.db.TxnMgr.Now(). backupTime stays
+		// wall-clock only for the human-readable location label.
 		backupTime = time.Now().UTC()
-		currTs     = types.BuildTS(backupTime.UnixNano(), 0)
+		currTs     = h.db.TxnMgr.Now()
 		locations  string
 		location   string
 	)
 
 	locations += backupTime.Format(time.DateTime) + ";"
 
-	if timeout == 0 {
-		timeout = DefaultTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := contextForBackupCheckpoint(ctx, req.FlushDuration)
 	defer cancel()
 
 	if location, err = h.db.ForceCheckpointForBackup(ctx, currTs); err != nil {
@@ -552,23 +732,177 @@ func (h *Handle) HandleBackup(
 	return
 }
 
+// ttlChecker returns a disk-cleaner checker that protects checkpoints whose
+// endTS is within ttl of the engine's HLC clock and marks older ones
+// consumable. endTS is an HLC timestamp, so the cutoff is derived from the HLC
+// clock (h.db.TxnMgr.Now()), not wall-clock — HLC can be ahead of wall clock,
+// and a wall-clock cutoff would skew the comparison and keep checkpoints that
+// are actually older than the TTL. Now() is read per call so the cutoff slides
+// with current time.
+func (h *Handle) ttlChecker(ttl time.Duration) func(item any) bool {
+	return func(item any) bool {
+		ckp := item.(*checkpoint.CheckpointEntry)
+		ts := types.BuildTS(h.db.TxnMgr.Now().Physical()-int64(ttl), 0)
+		endTS := ckp.GetEnd()
+		return !endTS.GE(&ts)
+	}
+}
+
 func (h *Handle) HandleDiskCleaner(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.DiskCleaner,
-	resp *api.SyncLogTailResp,
+	resp *api.TNStringResponse,
 ) (cb func(), err error) {
 	op := req.Op
 	key := req.Key
 	value := req.Value
+	defer func() {
+		if err != nil {
+			resp.ReturnStr += err.Error()
+		} else if resp.ReturnStr == "" {
+			resp.ReturnStr += "OK"
+		}
+	}()
 	switch op {
 	case cmd_util.RemoveChecker:
+		if key == cmd_util.CheckerKeyBackup {
+			// Remove backup protection
+			h.db.DiskCleaner.GetCleaner().RemoveBackupProtection()
+			return nil, nil
+		}
 		return nil, h.db.DiskCleaner.GetCleaner().RemoveChecker(key)
 	case cmd_util.StopGC:
 		err = h.db.Controller.SwitchTxnMode(ctx, 3, "")
 		return
 	case cmd_util.StartGC:
 		err = h.db.Controller.SwitchTxnMode(ctx, 4, "")
+		return
+	case cmd_util.ForceGC:
+		selector := clusterservice.NewSelectAll()
+		client := h.client
+		maxTS := types.MaxTs()
+		minTS := maxTS
+		var reqError error
+		clusterservice.GetMOCluster(client.ServiceID()).GetCNService(
+			selector,
+			func(cn metadata.CNService) bool {
+				mintsReq := client.NewRequest(querypb.CmdMethod_MinTimestamp)
+				mintsCtx, cancel := context.WithTimeoutCause(ctx, time.Second*10,
+					moerr.NewInternalError(ctx, "Get MinTimestamp"))
+				defer cancel()
+
+				mintsResp, mintsErr := client.SendMessage(mintsCtx, cn.QueryAddress, mintsReq)
+				if mintsErr != nil {
+					reqError = moerr.AttachCause(mintsCtx, mintsErr)
+					return false
+				}
+				ts := types.BuildTS(mintsResp.MinTimestampResponse.MinTimestamp.PhysicalTime,
+					mintsResp.MinTimestampResponse.MinTimestamp.LogicalTime)
+				if !ts.IsEmpty() && ts.LT(&maxTS) && ts.LT(&minTS) {
+					minTS = ts
+				}
+				return false
+			})
+		if reqError != nil {
+			err = reqError
+			return
+		}
+		if minTS.Equal(&maxTS) {
+			return
+		}
+		histroyRetention := time.Now().UTC().UnixNano() - minTS.Physical()
+		err = h.db.ForceGlobalCheckpoint(ctx, minTS, time.Duration(histroyRetention))
+		if err != nil {
+			return
+		}
+		err = h.db.DiskCleaner.ForceGC(ctx, &minTS)
+		return
+	case cmd_util.GCDetails:
+		var tables map[uint32]*gc.TableStats
+		tables, err = h.db.DiskCleaner.GetDetails(ctx)
+		if err != nil {
+			return
+		}
+		resp.ReturnStr = "{"
+		for accountID, stats := range tables {
+			resp.ReturnStr += "{"
+			resp.ReturnStr += fmt.Sprintf("'acount': %v, ", accountID)
+			resp.ReturnStr += fmt.Sprintf("'sharedCnt': %v, ", stats.SharedCnt)
+			resp.ReturnStr += fmt.Sprintf("'sharedSize': %v, ", stats.SharedSize)
+			resp.ReturnStr += fmt.Sprintf("'totalCnt': %v, ", stats.TotalCnt)
+			resp.ReturnStr += fmt.Sprintf("'totalSize': %v, ", stats.TotalSize)
+			resp.ReturnStr += "}"
+		}
+		resp.ReturnStr += "}"
+		return
+	case cmd_util.GCVerify:
+		resp.ReturnStr = h.db.DiskCleaner.Verify(ctx)
+		return
+	case cmd_util.RegisterSyncProtection:
+		// Register sync protection for cross-cluster sync
+		// value format: JSON {"job_id": "xxx", "bf": "base64_encoded_bloomfilter", "valid_ts": 1234567890}
+		if value == "" {
+			return nil, moerr.NewInvalidArgNoCtx(op, "empty value")
+		}
+
+		var req cmd_util.SyncProtection
+		if err = json.Unmarshal([]byte(value), &req); err != nil {
+			logutil.Error(
+				"GC-Sync-Protection-Register-Parse-Error",
+				zap.String("value", value),
+				zap.Error(err),
+			)
+			return nil, moerr.NewInvalidArgNoCtx(op, value)
+		}
+
+		syncMgr := h.db.DiskCleaner.GetCleaner().GetSyncProtectionManager()
+		if err = syncMgr.RegisterSyncProtection(req.JobID, req.BF, req.ValidTS, req.TaskID); err != nil {
+			return nil, err
+		}
+		resp.ReturnStr = `{"status": "ok"}`
+		return
+	case cmd_util.RenewSyncProtection:
+		// Renew sync protection valid timestamp
+		// value format: JSON {"job_id": "xxx", "valid_ts": 1234567890}
+		if value == "" {
+			return nil, moerr.NewInvalidArgNoCtx(op, "empty value")
+		}
+		var req cmd_util.SyncProtection
+		if err = json.Unmarshal([]byte(value), &req); err != nil {
+			logutil.Error(
+				"GC-Sync-Protection-Renew-Parse-Error",
+				zap.String("value", value),
+				zap.Error(err),
+			)
+			return nil, moerr.NewInvalidArgNoCtx(op, value)
+		}
+		syncMgr := h.db.DiskCleaner.GetCleaner().GetSyncProtectionManager()
+		if err = syncMgr.RenewSyncProtection(req.JobID, req.ValidTS); err != nil {
+			return nil, err
+		}
+		resp.ReturnStr = `{"status": "ok"}`
+		return
+	case cmd_util.UnregisterSyncProtection:
+		// Unregister (soft delete) sync protection
+		// value format: JSON {"job_id": "xxx"}
+		if value == "" {
+			return nil, moerr.NewInvalidArgNoCtx(op, "empty value")
+		}
+		var req cmd_util.SyncProtection
+		if err = json.Unmarshal([]byte(value), &req); err != nil {
+			logutil.Error(
+				"GC-Sync-Protection-Unregister-Parse-Error",
+				zap.String("value", value),
+				zap.Error(err),
+			)
+			return nil, moerr.NewInvalidArgNoCtx(op, value)
+		}
+		syncMgr := h.db.DiskCleaner.GetCleaner().GetSyncProtectionManager()
+		if err = syncMgr.UnregisterSyncProtection(req.JobID); err != nil {
+			return nil, err
+		}
+		resp.ReturnStr = `{"status": "ok"}`
 		return
 	case cmd_util.AddChecker:
 		break
@@ -589,12 +923,7 @@ func (h *Handle) HandleDiskCleaner(
 			return nil, moerr.NewInvalidArgNoCtx(key, value)
 		}
 		h.db.DiskCleaner.GetCleaner().AddChecker(
-			func(item any) bool {
-				checkpoint := item.(*checkpoint.CheckpointEntry)
-				ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(ttl), 0)
-				endTS := checkpoint.GetEnd()
-				return !endTS.GE(&ts)
-			}, cmd_util.CheckerKeyTTL)
+			h.ttlChecker(ttl), cmd_util.CheckerKeyTTL)
 		return
 	case cmd_util.CheckerKeyMinTS:
 		// Set a minTS, checkpoints whose endTS is less than this minTS can be consumed
@@ -622,6 +951,25 @@ func (h *Handle) HandleDiskCleaner(
 				end := ckp.GetEnd()
 				return !end.GE(&ts)
 			}, cmd_util.CheckerKeyMinTS)
+		return
+	case cmd_util.CheckerKeyBackup:
+		// Set or update backup protection timestamp
+		// value format: timestamp string that can be parsed by types.StringToTS
+		var ts types.TS
+		if value == "" {
+			return nil, moerr.NewInvalidArgNoCtx(key, value)
+		}
+		ts = types.StringToTS(value)
+		if ts.IsEmpty() {
+			return nil, moerr.NewInvalidArgNoCtx(key, value)
+		}
+		cleaner := h.db.DiskCleaner.GetCleaner()
+		_, _, isActive := cleaner.GetBackupProtection()
+		if isActive {
+			cleaner.UpdateBackupProtection(ts)
+		} else {
+			cleaner.SetBackupProtection(ts)
+		}
 		return
 	default:
 		return nil, moerr.NewInvalidArgNoCtx(key, value)
@@ -716,7 +1064,7 @@ func (h *Handle) HandleCommitMerge(
 	if err != nil {
 		return err
 	}
-	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, transferMaps, h.db.Runtime, false)
+	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, mergesort.NewTransferTableFromMaps(transferMaps), h.db.Runtime, false)
 	if err != nil {
 		return
 	}
@@ -772,7 +1120,16 @@ func marshalTransferMaps(
 		booking := make(api.TransferMaps, blkCnt)
 		for i := range blkCnt {
 			rowCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[i+1]))
-			booking[i] = make(api.TransferMap, rowCnt)
+			if rowCnt == 0 {
+				// fully-deleted block: leave booking[i] == nil so downstream
+				// mapping == nil checks correctly identify it as all-deleted.
+				continue
+			}
+			tm := make(api.TransferMap, rowCnt)
+			for j := range tm {
+				tm[j].ObjIdx = api.NoTransfer
+			}
+			booking[i] = tm
 		}
 		req.BookingLoc = req.BookingLoc[blkCnt+1:]
 		locations := req.BookingLoc
@@ -807,17 +1164,32 @@ func marshalTransferMaps(
 		return booking, nil
 	} else if req.Booking != nil {
 		booking := make(api.TransferMaps, len(req.Booking.Mappings))
-		for i := range booking {
-			booking[i] = make(api.TransferMap, len(req.Booking.Mappings[i].M))
-		}
 		for i, m := range req.Booking.Mappings {
+			// Find the maximum source row key to size the dense slice correctly.
+			maxKey := int32(-1)
+			for r := range m.M {
+				if r > maxKey {
+					maxKey = r
+				}
+			}
+			if maxKey < 0 {
+				// fully-deleted block: leave booking[i] == nil so downstream
+				// mapping == nil checks correctly identify it as all-deleted.
+				continue
+			}
+			sliceLen := int(maxKey) + 1
+			tm := make(api.TransferMap, sliceLen)
+			for j := range tm {
+				tm[j].ObjIdx = api.NoTransfer
+			}
 			for r, pos := range m.M {
-				booking[i][uint32(r)] = api.TransferDestPos{
+				tm[uint32(r)] = api.TransferDestPos{
 					ObjIdx: uint8(pos.ObjIdx),
 					BlkIdx: uint16(pos.BlkIdx),
 					RowIdx: uint32(pos.RowIdx),
 				}
 			}
+			booking[i] = tm
 		}
 		return booking, nil
 	}

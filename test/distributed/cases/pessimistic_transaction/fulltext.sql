@@ -5,8 +5,7 @@ create table t0 (
   c varchar(20),
   primary key(a, b)
 );
-insert into t0 select result, result, result || 'test' from generate_series(1, 100) g;
-set experimental_fulltext_index=1;
+insert into t0 select result, result, concat(result, 'test') from generate_series(1, 100) g;
 create fulltext index ftidx on t0 (c);
 drop table if exists t1;
 create table t1 (

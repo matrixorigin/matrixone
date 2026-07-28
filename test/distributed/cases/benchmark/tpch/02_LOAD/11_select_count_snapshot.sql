@@ -59,7 +59,7 @@ select count(*) from supplier {snapshot = 'tpch_snapshot'};
 select count(*) from supplier {snapshot = 'tpch_snapshot'};
 
 -- restore
-restore account sys database tpch from snapshot tpch_snapshot;
+restore database sys.tpch{snapshot="tpch_snapshot"};
 select count(*) from customer;
 select count(*) from customer;
 select count(*) from customer;
@@ -132,7 +132,7 @@ select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.supplier {snapshot = 'tpch_snapshot'};
 
-restore account sys database tpch from snapshot tpch_snapshot;
+restore database sys.tpch{snapshot="tpch_snapshot"};
 
 select count(*) from tpch.customer;
 select count(*) from tpch.customer;

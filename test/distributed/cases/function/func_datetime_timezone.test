@@ -1,0 +1,193 @@
+-- @suite
+-- @setup
+-- Test timezone setting and querying
+set time_zone = '+00:00';
+-- @ignore:0
+select now(), @@session.time_zone;
+
+-- @case
+-- @desc:test for timezone setting
+set time_zone = '+08:00';
+-- @ignore:0
+select now(), @@session.time_zone;
+
+set time_zone = '-05:00';
+-- @ignore:0
+select now(), @@session.time_zone;
+
+-- @case
+-- @desc:test for timezone with named timezones (if supported)
+-- set time_zone = 'Asia/Shanghai';
+-- select now(), @@session.time_zone;
+-- 
+-- set time_zone = 'America/New_York';
+-- select now(), @@session.time_zone;
+
+-- Reset to UTC for next tests
+set time_zone = '+00:00';
+
+-- @suite
+-- @setup
+drop table if exists t_tz_test;
+create table t_tz_test (
+    id int,
+    ts timestamp(6)
+);
+
+set time_zone = 'UTC';
+insert into t_tz_test values (1, '2022-07-01 11:11:11.123456');
+
+-- @case
+-- @desc:test for TIMESTAMP type timezone conversion
+-- Query in UTC
+set time_zone = 'UTC';
+select ts from t_tz_test;  -- should show: 2022-07-01 11:11:11.123456
+
+-- Query in UTC+8
+set time_zone = '+08:00';  -- UTC+8
+select ts from t_tz_test;  -- should show: 2022-07-01 19:11:11.123456 (add 8 hours)
+
+-- Query in UTC-5
+set time_zone = '-05:00';  -- UTC-5
+select ts from t_tz_test;  -- should show: 2022-07-01 06:11:11.123456 (subtract 5 hours)
+
+-- @teardown
+drop table if exists t_tz_test;
+set time_zone = '+00:00';
+
+-- @suite
+-- @setup
+drop table if exists t_dt_ts;
+create table t_dt_ts (
+    id int,
+    dt datetime(6),
+    ts timestamp(6)
+);
+
+set time_zone = 'UTC';
+insert into t_dt_ts values (1, '2022-07-01 11:11:11.123456', '2022-07-01 11:11:11.123456');
+
+-- @case
+-- @desc:test for DATETIME vs TIMESTAMP timezone behavior
+-- DATETIME should not be affected by timezone, TIMESTAMP should be affected
+set time_zone = '+08:00';
+select dt, ts from t_dt_ts;
+-- Expected:
+-- dt: '2022-07-01 11:11:11.123456' (unchanged)
+-- ts: '2022-07-01 19:11:11.123456' (converted, scale should remain 6)
+
+-- @case
+-- @desc:test for scale consistency after timezone conversion
+-- Verify that scale (6 digits) is preserved after timezone conversion
+set time_zone = 'UTC';
+select ts from t_dt_ts;  -- should have 6 digits: .123456
+
+set time_zone = '+08:00';
+select ts from t_dt_ts;  -- should still have 6 digits: .123456 (not 9 digits)
+
+-- @teardown
+drop table if exists t_dt_ts;
+set time_zone = '+00:00';
+
+-- @suite
+-- @case
+-- @desc:test for UTC_TIMESTAMP format pattern verification - show original values and verify format patterns
+-- @ignore:0,1,2,3
+select 
+    value_no_scale,
+    value_scale_0,
+    value_scale_3,
+    value_scale_6,
+    locate('.', value_no_scale) as has_dot_no_scale,
+    locate('.', value_scale_0) as has_dot_scale_0,
+    locate('.', value_scale_3) as dot_pos_scale_3,
+    locate('.', value_scale_6) as dot_pos_scale_6,
+    char_length(value_no_scale) as len_no_scale,
+    char_length(value_scale_0) as len_scale_0,
+    char_length(value_scale_3) - locate('.', value_scale_3) as decimal_digits_scale_3,
+    char_length(value_scale_6) - locate('.', value_scale_6) as decimal_digits_scale_6,
+    substring(value_scale_3, locate('.', value_scale_3) + 4) as last_6_digits_scale_3,
+    substring(value_scale_6, locate('.', value_scale_6) + 7) as last_3_digits_scale_6
+from (
+    select 
+        utc_timestamp() as value_no_scale,
+        utc_timestamp(0) as value_scale_0,
+        utc_timestamp(3) as value_scale_3,
+        utc_timestamp(6) as value_scale_6
+) as t;
+
+-- @case
+-- @desc:test for UTC_TIMESTAMP format pattern verification - all scales 0-6
+-- @ignore:0,1,2,3,4,5,6
+select 
+    value_scale_0,
+    value_scale_1,
+    value_scale_2,
+    value_scale_3,
+    value_scale_4,
+    value_scale_5,
+    value_scale_6,
+    locate('.', value_scale_0) as dot_scale_0,
+    locate('.', value_scale_1) as dot_scale_1,
+    locate('.', value_scale_2) as dot_scale_2,
+    locate('.', value_scale_3) as dot_scale_3,
+    locate('.', value_scale_4) as dot_scale_4,
+    locate('.', value_scale_5) as dot_scale_5,
+    locate('.', value_scale_6) as dot_scale_6,
+    char_length(value_scale_1) - locate('.', value_scale_1) as decimal_digits_scale_1,
+    char_length(value_scale_2) - locate('.', value_scale_2) as decimal_digits_scale_2,
+    char_length(value_scale_3) - locate('.', value_scale_3) as decimal_digits_scale_3,
+    char_length(value_scale_4) - locate('.', value_scale_4) as decimal_digits_scale_4,
+    char_length(value_scale_5) - locate('.', value_scale_5) as decimal_digits_scale_5,
+    char_length(value_scale_6) - locate('.', value_scale_6) as decimal_digits_scale_6,
+    substring(value_scale_1, locate('.', value_scale_1) + 2) as last_8_digits_scale_1,
+    substring(value_scale_2, locate('.', value_scale_2) + 3) as last_7_digits_scale_2,
+    substring(value_scale_3, locate('.', value_scale_3) + 4) as last_6_digits_scale_3,
+    substring(value_scale_4, locate('.', value_scale_4) + 5) as last_5_digits_scale_4,
+    substring(value_scale_5, locate('.', value_scale_5) + 6) as last_4_digits_scale_5,
+    substring(value_scale_6, locate('.', value_scale_6) + 7) as last_3_digits_scale_6
+from (
+    select 
+        utc_timestamp(0) as value_scale_0,
+        utc_timestamp(1) as value_scale_1,
+        utc_timestamp(2) as value_scale_2,
+        utc_timestamp(3) as value_scale_3,
+        utc_timestamp(4) as value_scale_4,
+        utc_timestamp(5) as value_scale_5,
+        utc_timestamp(6) as value_scale_6
+) as t;
+
+-- @case
+-- @desc:test for NOW() and CURRENT_TIMESTAMP() format pattern verification with timezone
+set time_zone = 'UTC';
+-- @ignore:0,1
+select 
+    value_now,
+    value_current_timestamp,
+    locate('.', value_now) as dot_pos_now,
+    locate('.', value_current_timestamp) as dot_pos_current_timestamp,
+    char_length(value_now) - locate('.', value_now) as decimal_digits_now,
+    char_length(value_current_timestamp) - locate('.', value_current_timestamp) as decimal_digits_current_timestamp,
+    substring(value_now, locate('.', value_now) + 7) as last_3_digits_now,
+    substring(value_current_timestamp, locate('.', value_current_timestamp) + 7) as last_3_digits_current_timestamp
+from (
+    select now(6) as value_now, current_timestamp(6) as value_current_timestamp
+) as t;
+
+set time_zone = '+08:00';
+-- @ignore:0,1
+select 
+    value_now,
+    value_current_timestamp,
+    locate('.', value_now) as dot_pos_now,
+    locate('.', value_current_timestamp) as dot_pos_current_timestamp,
+    char_length(value_now) - locate('.', value_now) as decimal_digits_now,
+    char_length(value_current_timestamp) - locate('.', value_current_timestamp) as decimal_digits_current_timestamp,
+    substring(value_now, locate('.', value_now) + 7) as last_3_digits_now,
+    substring(value_current_timestamp, locate('.', value_current_timestamp) + 7) as last_3_digits_current_timestamp
+from (
+    select now(6) as value_now, current_timestamp(6) as value_current_timestamp
+) as t;
+
+set time_zone = '+00:00';
+

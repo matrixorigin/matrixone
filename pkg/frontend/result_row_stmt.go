@@ -16,16 +16,81 @@ package frontend
 
 import (
 	"bufio"
+	"context"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 )
+
+func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
+	cols := []*plan2.ColDef{
+		{
+			Typ:        plan2.Type{Id: int32(types.T_varchar)},
+			Name:       strings.ToLower(explainColName),
+			OriginName: explainColName,
+		},
+	}
+	columns := make([]interface{}, len(cols))
+	var err error = nil
+	for i, col := range cols {
+		c, err := colDef2MysqlColumn(ctx, col)
+		if err != nil {
+			return nil, nil, err
+		}
+		columns[i] = c
+	}
+	return cols, columns, err
+}
+
+func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDef {
+	dcPrepare := stmt.PreparePlan.GetDcl().GetPrepare()
+	if _, ok := stmt.PrepareStmt.(*tree.ExplainStmt); ok {
+		if query := dcPrepare.GetPlan().GetQuery(); query != nil {
+			title := plan2.GetPlanTitle(query, txnHaveDDL)
+			return []*plan2.ColDef{{
+				Typ:        plan2.Type{Id: int32(types.T_varchar)},
+				Name:       title,
+				OriginName: title,
+			}}
+		}
+	}
+	return plan2.GetResultColumnsFromPlan(dcPrepare.GetPlan())
+}
+
+func sessionTxnHaveDDL(ses FeSession) bool {
+	if ses == nil || ses.GetProc() == nil {
+		return false
+	}
+	txnOperator := ses.GetProc().GetTxnOperator()
+	if txnOperator == nil {
+		return false
+	}
+	workspace := txnOperator.GetWorkspace()
+	return workspace != nil && workspace.GetHaveDDL()
+}
+
+func getSelectColumnsAndResultColumns(ctx context.Context, cw ComputationWrapper) ([]interface{}, []*plan2.ColDef, error) {
+	if txnCW, ok := cw.(*TxnComputationWrapper); ok {
+		if _, ok = txnCW.GetAst().(*tree.Select); ok {
+			return txnCW.getColumnsWithResultColumns(ctx)
+		}
+	}
+
+	columns, err := cw.GetColumns(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return columns, plan2.GetResultColumnsFromPlan(cw.Plan()), nil
+}
 
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
@@ -36,7 +101,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
-		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
+		columns, colDefs, err = getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
 		if err != nil {
 			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from computation handler",
@@ -44,7 +109,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 
-		ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())}
+		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 
 		ses.EnterFPrint(FPResultRowStmtSelect1)
 		defer ses.ExitFPrint(FPResultRowStmtSelect1)
@@ -70,15 +135,23 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
-	case *tree.ExplainAnalyze:
-		queryPlan := execCtx.cw.Plan()
-		txnHaveDDL := false
+	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+		query := execCtx.cw.Plan().GetQuery()
+		var reqCtx = execCtx.reqCtx
+		var txnHaveDDL bool
 		ws := ses.proc.GetTxnOperator().GetWorkspace()
 		if ws != nil {
 			txnHaveDDL = ws.GetHaveDDL()
 		}
-		explainColName := plan2.GetPlanTitle(queryPlan.GetQuery(), txnHaveDDL)
-		colDefs, columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
+
+		var explainColName string
+		if _, ok := statement.(*tree.ExplainAnalyze); ok {
+			explainColName = plan2.GetPlanTitle(query, txnHaveDDL)
+		} else {
+			explainColName = plan2.GetPhyPlanTitle(query, txnHaveDDL)
+		}
+
+		colDefs, columns, err = GetExplainColumn(reqCtx, explainColName)
 		if err != nil {
 			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from ExplainColumns handler",
@@ -86,47 +159,9 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 
-		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
-
-		ses.EnterFPrint(FPResultRowStmtExplainAnalyze1)
-		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze1)
-		err = execCtx.resper.RespPreMeta(execCtx, columns)
-		if err != nil {
-			return
+		ses.rs = &plan.ResultColDef{
+			ResultCols: colDefs,
 		}
-
-		ses.EnterFPrint(FPResultRowStmtExplainAnalyze2)
-		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze2)
-		runBegin := time.Now()
-		/*
-			Step 1: Start
-		*/
-		if _, err = execCtx.runner.Run(0); err != nil {
-			return
-		}
-
-		// only log if run time is longer than 1s
-		if time.Since(runBegin) > time.Second {
-			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
-		}
-		//----------------------------------------------------------------------------------------------------------------------
-	case *tree.ExplainPhyPlan:
-		queryPlan := execCtx.cw.Plan()
-		txnHaveDDL := false
-		ws := ses.proc.GetTxnOperator().GetWorkspace()
-		if ws != nil {
-			txnHaveDDL = ws.GetHaveDDL()
-		}
-		explainColName := plan2.GetPhyPlanTitle(queryPlan.GetQuery(), txnHaveDDL)
-		colDefs, columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
-		if err != nil {
-			ses.Error(execCtx.reqCtx,
-				"Failed to get columns from ExplainColumns handler",
-				zap.Error(err))
-			return
-		}
-
-		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 
 		ses.EnterFPrint(FPResultRowStmtExplainAnalyze1)
 		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze1)
@@ -302,6 +337,7 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 		if err != nil {
 			return
 		}
+		appendSchedulingExplain(buffer, schedulingTraceForExplain(ses, execCtx.cw))
 
 		err = buildMoExplainQuery(execCtx, explainColName, buffer, ses, getDataFromPipeline)
 		if err != nil {
@@ -324,7 +360,14 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 
 		txnCompileWrapper := execCtx.cw.(*TxnComputationWrapper)
 		reader := bufio.NewReader(txnCompileWrapper.explainBuffer)
-		err = buildMoExplainPhyPlan(execCtx, explainColName, reader, ses, getDataFromPipeline)
+		err = buildMoExplainPhyPlan(
+			execCtx,
+			explainColName,
+			reader,
+			ses,
+			getDataFromPipeline,
+			schedulingTraceForExplain(ses, execCtx.cw),
+		)
 		if err != nil {
 			return
 		}
@@ -343,6 +386,20 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	}
 
 	return
+}
+
+func schedulingTraceFromComputationWrapper(cw ComputationWrapper) schedule.Trace {
+	if provider, ok := cw.(interface{ SchedulingTrace() schedule.Trace }); ok {
+		return provider.SchedulingTrace()
+	}
+	return schedule.Trace{}
+}
+
+func schedulingTraceForExplain(ses *Session, cw ComputationWrapper) schedule.Trace {
+	if !explainSchedulingEnabled(ses) {
+		return schedule.Trace{}
+	}
+	return schedulingTraceFromComputationWrapper(cw)
 }
 
 func (resper *MysqlResp) respPrebuildResultRow(ses *Session,
@@ -390,15 +447,31 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	defer func() {
 		execCtx.results = nil
 	}()
-	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
 	if len(execCtx.results) == 0 {
+		var affectedRows uint64
+		if execCtx.runResult != nil {
+			affectedRows = execCtx.runResult.AffectRows
+		}
+		resp := setResponse(ses, execCtx.isLastStmt, affectedRows)
 		if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 			return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 		}
 	} else {
+		_, isCall := execCtx.stmt.(*tree.CallStmt)
 		for i, result := range execCtx.results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
-			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i == len(execCtx.results)-1)
+			isLastResult := i == len(execCtx.results)-1 && execCtx.isLastStmt && !isCall
+			resp := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, isLastResult)
+			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
+				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
+			}
+		}
+		if isCall {
+			var affectedRows uint64
+			if execCtx.runResult != nil {
+				affectedRows = execCtx.runResult.AffectRows
+			}
+			resp := setResponse(ses, execCtx.isLastStmt, affectedRows)
 			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 			}

@@ -1,4 +1,4 @@
-sion:id=0&user=dump&password=111
+-- @session:id=0&user=dump&password=111
 -- Test cases for Group 0
 create user user1_group0 identified by '1234';
 -- Clean up Group 0
@@ -50,9 +50,7 @@ show variables like "%validate_password%";
 -- Test cases
 create user user1_group2 identified by '12345678'; -- Expected failure
 create user user2_group2 identified by 'abcdefgH'; -- Expected failure
--- @bvt:issue#4511
 create user useR32Go identified by 'oG23Resu'; -- Expected failure
--- @bvt:issue
 create user user4_group2 identified by 'AbCLq56%'; -- Expected success
 
 -- Verify results

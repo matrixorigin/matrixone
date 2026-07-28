@@ -136,8 +136,9 @@ func (m *FaultPoint) UnmarshalBinary(data []byte) error {
 type EntryType int32
 
 const (
-	EntryInsert EntryType = 0
-	EntryDelete EntryType = 1
+	EntryInsert           EntryType = 0
+	EntryDelete           EntryType = 1
+	EntrySoftDeleteObject EntryType = 2
 )
 
 type PKCheckType int32
@@ -148,6 +149,8 @@ const (
 	//FullSkipWorkspaceDedup do not check uniqueness of PK against txn's workspace.
 	FullSkipWorkspaceDedup PKCheckType = 1
 	FullDedup              PKCheckType = 2
+	//SkipAllDedup skip all deduplication checks including workspace, committed data, and persisted source.
+	SkipAllDedup PKCheckType = 3
 )
 
 type LocationKey struct{}
@@ -159,8 +162,13 @@ type WriteReq struct {
 	TableID      uint64
 	DatabaseName string
 	TableName    string
-	Schema       *catalog2.Schema
-	Batch        *batch.Batch
+	// AutoIncrEpoch is the allocator epoch used by CN to plan the write.
+	// AutoIncrEpochKnown distinguishes a valid initial zero epoch from an
+	// old CN that did not send the dependency.
+	AutoIncrEpoch      uint32
+	AutoIncrEpochKnown bool
+	Schema             *catalog2.Schema
+	Batch              *batch.Batch
 	//[IncrementalDedup|FullSkipWorkspaceDedup|FullDedup], default is IncrementalDedup.
 	//If incremental-dedup in dn.toml is false, IncrementalDedup will be treated as FullSkipWorkspaceDedup.
 	//IncrementalDedup do not check uniqueness of PK before txn's snapshot TS.
@@ -172,6 +180,10 @@ type WriteReq struct {
 	DataObjectStats []objectio.ObjectStats
 	//for delete on S3
 	TombstoneStats []objectio.ObjectStats
+	//for soft delete object: object ID to delete
+	ObjectID *objectio.ObjectId
+	//for soft delete object: whether it's a tombstone object
+	IsTombstone bool
 	//tasks for loading primary keys or deleted row ids
 	Jobs []*tasks.Job
 	//loaded sorted primary keys or deleted row ids.
@@ -198,6 +210,8 @@ func (m *InspectResp) ConsoleString() string {
 	switch m.Typ {
 	case InspectNormal:
 		return fmt.Sprintf("\nmsg: %s\n\n%v", m.Message, string(m.Payload))
+	case InspectJSON:
+		return string(m.Payload)
 	default:
 		return fmt.Sprintf("\nmsg: %s\n\n unhandled resp type %v", m.Message, m.Typ)
 	}
@@ -206,6 +220,7 @@ func (m *InspectResp) ConsoleString() string {
 const (
 	InspectNormal = 0
 	InspectCata   = 1
+	InspectJSON   = 2
 )
 
 func (m *InspectResp) GetResponse() any {
@@ -399,6 +414,7 @@ type GetChangedTableListResp struct {
 	DatabaseIds []uint64
 	TableIds    []uint64
 	Extra       []byte
+	Oldest      *timestamp.Timestamp
 }
 
 func (tlreq *GetChangedTableListReq) MarshalBinary() ([]byte, error) { return tlreq.Marshal() }
@@ -422,4 +438,13 @@ func (f *FaultInjectReq) MarshalBinary() ([]byte, error) {
 
 func (f *FaultInjectReq) UnmarshalBinary(data []byte) error {
 	return f.Unmarshal(data)
+}
+
+// SyncProtection is the request for sync protection operations
+type SyncProtection struct {
+	JobID      string `json:"job_id"`      // Sync job ID
+	BF         string `json:"bf"`          // Base64 encoded BloomFilter data (for register)
+	ValidTS    int64  `json:"valid_ts"`    // Valid timestamp in nanoseconds (for register and renew)
+	TestObject string `json:"test_object"` // Test object name for debugging (optional)
+	TaskID     string `json:"task_id"`     // CCPR iteration task ID with LSN (e.g., "taskID-123")
 }

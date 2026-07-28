@@ -27,6 +27,24 @@ func init() {
 		reuse.DefaultOptions[AlterUser](), //.
 	) // WithEnableChecker()
 
+	reuse.CreatePool[AlterRole](
+		func() *AlterRole { return &AlterRole{} },
+		func(a *AlterRole) { a.reset() },
+		reuse.DefaultOptions[AlterRole](), //.
+	) // WithEnableChecker()
+
+	reuse.CreatePool[AlterRoleAddRule](
+		func() *AlterRoleAddRule { return &AlterRoleAddRule{} },
+		func(a *AlterRoleAddRule) { a.reset() },
+		reuse.DefaultOptions[AlterRoleAddRule](), //.
+	) // WithEnableChecker()
+
+	reuse.CreatePool[AlterRoleDropRule](
+		func() *AlterRoleDropRule { return &AlterRoleDropRule{} },
+		func(a *AlterRoleDropRule) { a.reset() },
+		reuse.DefaultOptions[AlterRoleDropRule](), //.
+	) // WithEnableChecker()
+
 	reuse.CreatePool[AlterAccount](
 		func() *AlterAccount { return &AlterAccount{} },
 		func(a *AlterAccount) { a.reset() },
@@ -68,6 +86,24 @@ func init() {
 		func(a *AlterOptionAlterCheck) { a.reset() },
 		reuse.DefaultOptions[AlterOptionAlterCheck](), //.
 	) // WithEnableChecker()
+
+	reuse.CreatePool[AlterOptionAlterAutoUpdate](
+		func() *AlterOptionAlterAutoUpdate { return &AlterOptionAlterAutoUpdate{} },
+		func(a *AlterOptionAlterAutoUpdate) { a.reset() },
+		reuse.DefaultOptions[AlterOptionAlterAutoUpdate](), //.
+	) // WithEnableChecker()
+
+	reuse.CreatePool[AlterOptionAlgorithm](
+		func() *AlterOptionAlgorithm { return &AlterOptionAlgorithm{} },
+		func(a *AlterOptionAlgorithm) { a.reset() },
+		reuse.DefaultOptions[AlterOptionAlgorithm](),
+	)
+
+	reuse.CreatePool[AlterOptionLock](
+		func() *AlterOptionLock { return &AlterOptionLock{} },
+		func(a *AlterOptionLock) { a.reset() },
+		reuse.DefaultOptions[AlterOptionLock](),
+	)
 
 	reuse.CreatePool[AlterOptionAdd](
 		func() *AlterOptionAdd { return &AlterOptionAdd{} },
@@ -294,6 +330,121 @@ func (node *AlterUser) reset() {
 func (node *AlterUser) GetStatementType() string { return "Alter User" }
 func (node *AlterUser) GetQueryType() string     { return QueryTypeDCL }
 
+type AlterRole struct {
+	statementImpl
+	IfExists bool
+	OldName  string
+	NewName  string
+}
+
+func NewAlterRole(ifExists bool, oldName string, newName string) *AlterRole {
+	alter := reuse.Alloc[AlterRole](nil)
+	alter.IfExists = ifExists
+	alter.OldName = oldName
+	alter.NewName = newName
+	return alter
+}
+
+func (node *AlterRole) Free() { reuse.Free[AlterRole](node, nil) }
+
+func (node *AlterRole) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter role")
+	if node.IfExists {
+		ctx.WriteString(" if exists")
+	}
+	ctx.WriteString(" ")
+	ctx.WriteString(node.OldName)
+	ctx.WriteString(" rename to ")
+	ctx.WriteString(node.NewName)
+}
+
+func (node AlterRole) TypeName() string { return "tree.AlterRole" }
+
+func (node *AlterRole) reset() {
+	*node = AlterRole{}
+}
+
+func (node *AlterRole) GetStatementType() string { return "Alter Role" }
+func (node *AlterRole) GetQueryType() string     { return QueryTypeDCL }
+
+// AlterRoleAddRule represents ALTER ROLE <role> ADD RULE <rule_sql> ON TABLE <db>.<tbl>
+type AlterRoleAddRule struct {
+	statementImpl
+	RoleName string
+	RuleName string // 规则名称，字符串字面量
+	RuleSQL  string // 改写 SQL，字符串字面量
+	DbName   string // 目标数据库名
+	TblName  string // 目标表名
+}
+
+func NewAlterRoleAddRule(roleName, ruleName, ruleSQL, dbName, tblName string) *AlterRoleAddRule {
+	node := reuse.Alloc[AlterRoleAddRule](nil)
+	node.RoleName = roleName
+	node.RuleName = ruleName
+	node.RuleSQL = ruleSQL
+	node.DbName = dbName
+	node.TblName = tblName
+	return node
+}
+
+func (node *AlterRoleAddRule) Free() { reuse.Free[AlterRoleAddRule](node, nil) }
+
+func (node *AlterRoleAddRule) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter role ")
+	ctx.WriteString(node.RoleName)
+	ctx.WriteString(" add rule ")
+	ctx.WriteString(fmt.Sprintf("'%s'", node.RuleSQL))
+	ctx.WriteString(" on table ")
+	ctx.WriteString(node.DbName)
+	ctx.WriteString(".")
+	ctx.WriteString(node.TblName)
+}
+
+func (node AlterRoleAddRule) TypeName() string { return "tree.AlterRoleAddRule" }
+
+func (node *AlterRoleAddRule) reset() {
+	*node = AlterRoleAddRule{}
+}
+
+func (node *AlterRoleAddRule) GetStatementType() string { return "Alter Role Add Rule" }
+func (node *AlterRoleAddRule) GetQueryType() string     { return QueryTypeDCL }
+
+// AlterRoleDropRule represents ALTER ROLE <role> DROP RULE ON TABLE <db>.<tbl>
+type AlterRoleDropRule struct {
+	statementImpl
+	RoleName string
+	DbName   string
+	TblName  string
+}
+
+func NewAlterRoleDropRule(roleName, dbName, tblName string) *AlterRoleDropRule {
+	node := reuse.Alloc[AlterRoleDropRule](nil)
+	node.RoleName = roleName
+	node.DbName = dbName
+	node.TblName = tblName
+	return node
+}
+
+func (node *AlterRoleDropRule) Free() { reuse.Free[AlterRoleDropRule](node, nil) }
+
+func (node *AlterRoleDropRule) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter role ")
+	ctx.WriteString(node.RoleName)
+	ctx.WriteString(" drop rule on table ")
+	ctx.WriteString(node.DbName)
+	ctx.WriteString(".")
+	ctx.WriteString(node.TblName)
+}
+
+func (node AlterRoleDropRule) TypeName() string { return "tree.AlterRoleDropRule" }
+
+func (node *AlterRoleDropRule) reset() {
+	*node = AlterRoleDropRule{}
+}
+
+func (node *AlterRoleDropRule) GetStatementType() string { return "Alter Role Drop Rule" }
+func (node *AlterRoleDropRule) GetQueryType() string     { return QueryTypeDCL }
+
 type AlterAccountAuthOption struct {
 	Exist          bool
 	Equal          string
@@ -495,7 +646,7 @@ func NewAlterTable(table *TableName) *AlterTable {
 }
 
 func (node *AlterTable) Free() {
-	reuse.Free[AlterTable](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *AlterTable) Format(ctx *FmtCtx) {
@@ -532,6 +683,8 @@ func (node *AlterTable) reset() {
 			case *AlterOptionAlterIndex:
 				opt.Free()
 			case *AlterOptionAlterReIndex:
+				opt.Free()
+			case *AlterOptionAlterAutoUpdate:
 				opt.Free()
 			case *AlterOptionAlterCheck:
 				opt.Free()
@@ -618,6 +771,10 @@ func (node *AlterTable) reset() {
 			case *TableOptionUnion:
 				opt.Free()
 			case *TableOptionEncryption:
+				opt.Free()
+			case *AlterOptionAlgorithm:
+				opt.Free()
+			case *AlterOptionLock:
 				opt.Free()
 			default:
 				if opt != nil {
@@ -736,16 +893,74 @@ func (node *AlterOptionAlterIndex) reset() {
 
 type AlterOptionAlterReIndex struct {
 	alterOptionImpl
-	Name          Identifier
-	KeyType       IndexType
-	AlgoParamList int64
+	Name    Identifier
+	KeyType IndexType
+	// Mirrors tree.IndexOption (create.go): the REINDEX rule shares
+	// index_option_list with CREATE INDEX, so all options parse. They are carried
+	// here (not dropped) so the compile phase can read the full set off the parse
+	// tree and each algorithm's Compile.ValidateReindexParams hook can merge the
+	// options it honors on a rebuild and reject the rest, instead of silently
+	// dropping them.
+	KeyBlockSize             uint64
+	ParserName               string
+	Comment                  string
+	Visible                  VisibleType
+	EngineAttribute          string
+	SecondaryEngineAttribute string
+	AlgoParamList            int64
+	AlgoParamVectorOpType    string
+	AlgoParamM               int64
+	HnswEfConstruction       int64
+	HnswEfSearch             int64
+	BitsPerCode              int64
+	Async                    bool
+	ForceSync                bool
+	AutoUpdate               bool
+	Day                      int64
+	Hour                     int64
+	IntermediateGraphDegree  int64
+	GraphDegree              int64
+	Quantization             string
+	DistributionMode         string
+	ITopkSize                int64
+	KmeansTrainPercent       int64
+	KmeansMaxIteration       int64
+	MaxIndexCapacity         int64
+	QuantizerTrainLimit      int64
+	IncludeColumns           []*UnresolvedName
 }
 
-func NewAlterOptionAlterReIndex(name Identifier, keyType IndexType, algoParamList int64) *AlterOptionAlterReIndex {
+func NewAlterOptionAlterReIndex(name Identifier, option *IndexOption) *AlterOptionAlterReIndex {
 	a := reuse.Alloc[AlterOptionAlterReIndex](nil)
 	a.Name = name
-	a.KeyType = keyType
-	a.AlgoParamList = algoParamList
+	a.KeyType = option.IType
+	a.KeyBlockSize = option.KeyBlockSize
+	a.ParserName = option.ParserName
+	a.Comment = option.Comment
+	a.Visible = option.Visible
+	a.EngineAttribute = option.EngineAttribute
+	a.SecondaryEngineAttribute = option.SecondaryEngineAttribute
+	a.AlgoParamList = option.AlgoParamList
+	a.AlgoParamVectorOpType = option.AlgoParamVectorOpType
+	a.AlgoParamM = option.AlgoParamM
+	a.HnswEfConstruction = option.HnswEfConstruction
+	a.HnswEfSearch = option.HnswEfSearch
+	a.BitsPerCode = option.BitsPerCode
+	a.Async = option.Async
+	a.ForceSync = option.ForceSync
+	a.AutoUpdate = option.AutoUpdate
+	a.Day = option.Day
+	a.Hour = option.Hour
+	a.IntermediateGraphDegree = option.IntermediateGraphDegree
+	a.GraphDegree = option.GraphDegree
+	a.Quantization = option.Quantization
+	a.DistributionMode = option.DistributionMode
+	a.ITopkSize = option.ITopkSize
+	a.KmeansTrainPercent = option.KmeansTrainPercent
+	a.KmeansMaxIteration = option.KmeansMaxIteration
+	a.MaxIndexCapacity = option.MaxIndexCapacity
+	a.QuantizerTrainLimit = option.QuantizerTrainLimit
+	a.IncludeColumns = option.IncludeColumns
 	return a
 }
 
@@ -758,8 +973,53 @@ func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 		ctx.WriteString(" ")
 		ctx.WriteString(node.KeyType.ToString())
 	}
-	if node.AlgoParamList != 0 {
-		ctx.WriteString(fmt.Sprintf(" lists = %d", node.AlgoParamList))
+	// The REINDEX rule shares index_option_list with CREATE INDEX, so the parse
+	// tree carries the build options the user wrote (mirroring tree.IndexOption).
+	// Emit them lowercase — ints as `key = N`, string values quoted as the
+	// grammar requires (OP_TYPE / QUANTIZATION / DISTRIBUTION_MODE take a STRING)
+	// — with force_sync last, so a REINDEX statement re-serializes to parseable
+	// SQL (e.g. for restore / SQL regeneration) and the common forms round-trip
+	// as `... lists = N force_sync`. The non-build index_option meta fields
+	// (comment / parser / key_block_size / visibility / engine attributes) are
+	// not reproduced — reindex only carries build params. Which options each
+	// algorithm honors is validated later at compile (Compile.ValidateReindexParams).
+	writeInt := func(key string, v int64) {
+		if v != 0 {
+			ctx.WriteString(fmt.Sprintf(" %s = %d", key, v))
+		}
+	}
+	writeStr := func(key, v string) {
+		if v != "" {
+			ctx.WriteString(fmt.Sprintf(" %s '%s'", key, v))
+		}
+	}
+	writeInt("lists", node.AlgoParamList)
+	writeInt("m", node.AlgoParamM)
+	writeInt("ef_construction", node.HnswEfConstruction)
+	writeInt("ef_search", node.HnswEfSearch)
+	writeStr("op_type", node.AlgoParamVectorOpType)
+	writeInt("intermediate_graph_degree", node.IntermediateGraphDegree)
+	writeInt("graph_degree", node.GraphDegree)
+	writeStr("quantization", node.Quantization)
+	writeStr("distribution_mode", node.DistributionMode)
+	writeInt("bits_per_code", node.BitsPerCode)
+	writeInt("itopk_size", node.ITopkSize)
+	writeInt("kmeans_train_percent", node.KmeansTrainPercent)
+	writeInt("kmeans_max_iteration", node.KmeansMaxIteration)
+	writeInt("max_index_capacity", node.MaxIndexCapacity)
+	writeInt("quantizer_train_limit", node.QuantizerTrainLimit)
+	if len(node.IncludeColumns) != 0 {
+		ctx.WriteString(" include (")
+		for i, c := range node.IncludeColumns {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			c.Format(ctx)
+		}
+		ctx.WriteString(")")
+	}
+	if node.ForceSync {
+		ctx.WriteString(" force_sync")
 	}
 }
 
@@ -767,6 +1027,52 @@ func (node AlterOptionAlterReIndex) TypeName() string { return "tree.AlterOption
 
 func (node *AlterOptionAlterReIndex) reset() {
 	*node = AlterOptionAlterReIndex{}
+}
+
+type AlterOptionAlterAutoUpdate struct {
+	alterOptionImpl
+	Name       Identifier
+	KeyType    IndexType
+	AutoUpdate bool
+	Day        int64
+	Hour       int64
+}
+
+func NewAlterOptionAlterAutoUpdate(name Identifier, option *IndexOption) *AlterOptionAlterAutoUpdate {
+	a := reuse.Alloc[AlterOptionAlterAutoUpdate](nil)
+	a.Name = name
+	a.KeyType = option.IType
+	a.AutoUpdate = option.AutoUpdate
+	a.Day = option.Day
+	a.Hour = option.Hour
+	return a
+}
+
+func (node *AlterOptionAlterAutoUpdate) Free() { reuse.Free[AlterOptionAlterAutoUpdate](node, nil) }
+
+func (node *AlterOptionAlterAutoUpdate) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter index ")
+	node.Name.Format(ctx)
+	if node.KeyType != INDEX_TYPE_INVALID {
+		ctx.WriteString(" ")
+		ctx.WriteString(node.KeyType.ToString())
+	}
+
+	ctx.WriteString(fmt.Sprintf(" auto_update = %v", node.AutoUpdate))
+
+	if node.Day != 0 {
+		ctx.WriteString(fmt.Sprintf(" day = %d", node.Day))
+	}
+	if node.Hour != 0 {
+		ctx.WriteString(fmt.Sprintf(" hour = %d", node.Hour))
+	}
+
+}
+
+func (node AlterOptionAlterAutoUpdate) TypeName() string { return "tree.AlterOptionAlterAutoUpdate" }
+
+func (node *AlterOptionAlterAutoUpdate) reset() {
+	*node = AlterOptionAlterAutoUpdate{}
 }
 
 type AlterOptionAlterCheck struct {
@@ -798,6 +1104,54 @@ func (node AlterOptionAlterCheck) TypeName() string { return "tree.AlterOptionAl
 
 func (node *AlterOptionAlterCheck) reset() {
 	*node = AlterOptionAlterCheck{}
+}
+
+type AlterOptionAlgorithm struct {
+	alterOptionImpl
+	Type string // DEFAULT, INSTANT, INPLACE, COPY
+}
+
+func NewAlterOptionAlgorithm(t string) *AlterOptionAlgorithm {
+	a := reuse.Alloc[AlterOptionAlgorithm](nil)
+	a.Type = t
+	return a
+}
+
+func (node *AlterOptionAlgorithm) Free() { reuse.Free[AlterOptionAlgorithm](node, nil) }
+
+func (node *AlterOptionAlgorithm) Format(ctx *FmtCtx) {
+	ctx.WriteString("algorithm = ")
+	ctx.WriteString(node.Type)
+}
+
+func (node AlterOptionAlgorithm) TypeName() string { return "tree.AlterOptionAlgorithm" }
+
+func (node *AlterOptionAlgorithm) reset() {
+	*node = AlterOptionAlgorithm{}
+}
+
+type AlterOptionLock struct {
+	alterOptionImpl
+	Type string // DEFAULT, NONE, SHARED, EXCLUSIVE
+}
+
+func NewAlterOptionLock(t string) *AlterOptionLock {
+	a := reuse.Alloc[AlterOptionLock](nil)
+	a.Type = t
+	return a
+}
+
+func (node *AlterOptionLock) Free() { reuse.Free[AlterOptionLock](node, nil) }
+
+func (node *AlterOptionLock) Format(ctx *FmtCtx) {
+	ctx.WriteString("lock = ")
+	ctx.WriteString(node.Type)
+}
+
+func (node AlterOptionLock) TypeName() string { return "tree.AlterOptionLock" }
+
+func (node *AlterOptionLock) reset() {
+	*node = AlterOptionLock{}
 }
 
 type AlterOptionAdd struct {
@@ -1471,7 +1825,7 @@ func NewAlterPartitionRedefinePartitionClause(typ AlterPartitionOptionType, part
 }
 
 func (node *AlterPartitionRedefinePartitionClause) Free() {
-	reuse.Free[AlterPartitionRedefinePartitionClause](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *AlterPartitionRedefinePartitionClause) Format(ctx *FmtCtx) {
@@ -1504,7 +1858,7 @@ func NewAlterPartitionAddPartitionClause(typ AlterPartitionOptionType, partition
 }
 
 func (node *AlterPartitionAddPartitionClause) Free() {
-	reuse.Free[AlterPartitionAddPartitionClause](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *AlterPartitionAddPartitionClause) Format(ctx *FmtCtx) {
@@ -1550,7 +1904,7 @@ func NewAlterPartitionDropPartitionClause(typ AlterPartitionOptionType, partitio
 }
 
 func (node *AlterPartitionDropPartitionClause) Free() {
-	reuse.Free[AlterPartitionDropPartitionClause](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *AlterPartitionDropPartitionClause) Format(ctx *FmtCtx) {
@@ -1581,7 +1935,7 @@ func NewAlterPartitionTruncatePartitionClause(typ AlterPartitionOptionType, part
 }
 
 func (node *AlterPartitionTruncatePartitionClause) Free() {
-	reuse.Free[AlterPartitionTruncatePartitionClause](node, nil)
+	reuse.Free(node, nil)
 }
 
 func (node *AlterPartitionTruncatePartitionClause) Format(ctx *FmtCtx) {

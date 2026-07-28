@@ -13,7 +13,6 @@
 // limitations under the License.
 
 //go:build linux
-// +build linux
 
 package system
 
@@ -98,11 +97,15 @@ func runWatchCgroupConfig(stopper *stopper.Stopper) {
 				}
 				switch int(rawEvent.Wd) {
 				case cpuFd:
-					logutil.Info("got cpu.max changed")
-					refreshQuotaConfig()
+					if shouldRefreshQuotaConfig() {
+						logutil.Info("got cpu.max changed")
+						refreshQuotaConfig()
+					}
 				case memFd:
-					logutil.Info("got memory.max changed")
-					refreshQuotaConfig()
+					if shouldRefreshQuotaConfig() {
+						logutil.Info("got memory.max changed")
+						refreshQuotaConfig()
+					}
 				}
 			}
 		}

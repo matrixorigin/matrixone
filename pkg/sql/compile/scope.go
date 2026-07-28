@@ -16,33 +16,39 @@ package compile
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"net"
 	"slices"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -91,12 +97,106 @@ func (s *Scope) release() {
 }
 
 func (s *Scope) Reset(c *Compile) error {
+	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(c.proc)
+	if err != nil {
+		return err
+	}
+	return s.reset(c, rejectZeroTemporal)
+}
+
+func (s *Scope) reset(c *Compile, rejectZeroTemporal bool) error {
+	if err := refreshZeroTemporalWritePolicy(s.RootOp, rejectZeroTemporal); err != nil {
+		return err
+	}
 	err := s.resetForReuse(c)
 	if err != nil {
 		return err
 	}
 	for _, scope := range s.PreScopes {
-		if err = scope.Reset(c); err != nil {
+		if err = scope.reset(c, rejectZeroTemporal); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type zeroTemporalWritePolicySetter interface {
+	SetRejectZeroTemporal(bool)
+}
+
+func refreshZeroTemporalWritePolicy(root vm.Operator, reject bool) error {
+	if root == nil {
+		return nil
+	}
+	return vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		if setter, ok := op.(zeroTemporalWritePolicySetter); ok {
+			setter.SetRejectZeroTemporal(reject)
+		}
+		return nil
+	})
+}
+
+func refreshGroupConcatMaxLen(scopes []*Scope, proc *process.Process) error {
+	var maxLen uint64
+	resolved := false
+	visited := make(map[*Scope]struct{})
+
+	var refreshScope func(*Scope) error
+	refreshScope = func(scope *Scope) error {
+		if scope == nil {
+			return nil
+		}
+		if _, ok := visited[scope]; ok {
+			return nil
+		}
+		visited[scope] = struct{}{}
+
+		if err := vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			var aggs []aggexec.AggFuncExecExpression
+			switch arg := op.(type) {
+			case *group.Group:
+				aggs = arg.Aggs
+			case *group.MergeGroup:
+				aggs = arg.Aggs
+			case *window.Window:
+				aggs = arg.Aggs
+			}
+
+			for i := range aggs {
+				if aggs[i].GetAggID() != aggexec.AggIdOfGroupConcat {
+					continue
+				}
+				if !resolved {
+					value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
+					if err != nil {
+						return err
+					}
+					sessionMaxLen, ok := value.(int64)
+					if !ok || sessionMaxLen < 0 {
+						return moerr.NewInternalErrorNoCtxf(
+							"group_concat_max_len has invalid value %v", value)
+					}
+					maxLen = uint64(sessionMaxLen)
+					resolved = true
+				}
+				aggs[i].SetExtraConfig(aggexec.RefreshGroupConcatConfigMaxLen(
+					aggs[i].GetExtraConfig(), maxLen))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		for _, preScope := range scope.PreScopes {
+			if err := refreshScope(preScope); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, scope := range scopes {
+		if err := refreshScope(scope); err != nil {
 			return err
 		}
 	}
@@ -104,6 +204,8 @@ func (s *Scope) Reset(c *Compile) error {
 }
 
 func (s *Scope) resetForReuse(c *Compile) (err error) {
+	s.resourceExecutedLocally = false
+
 	if err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
 			op.(*output.Output).Func = c.fill
@@ -117,8 +219,26 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 		s.DataSource.R = nil
 	}
 
+	// The previous execution's cleanup delivered terminal signals into this
+	// scope's pipeline edges and marked them done (doneClosed/endDelivered).
+	// A done edge silently rejects both data and End signals, so a reused
+	// pipeline would leave its receivers waiting forever. Clear the terminal
+	// state so the edges can carry the next execution's signals.
+	// See: https://github.com/matrixorigin/matrixone/issues/25614
+	if s.Proc != nil {
+		for _, reg := range s.Proc.Reg.MergeReceivers {
+			reg.ResetTerminalStateForReuse()
+		}
+	}
+
 	if s.ScopeAnalyzer != nil {
 		s.ScopeAnalyzer.Reset()
+	}
+
+	// Reset StarCount cache so next run re-executes StarCount with new snapshot.
+	s.StarCountOnly = false
+	if s.StarCountMergeGroup != nil {
+		s.StarCountMergeGroup.PartialResults = nil
 	}
 
 	return nil
@@ -146,7 +266,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 			c.proc.Error(c.proc.Ctx, "panic in scope run",
-				zap.String("sql", c.sql),
+				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
 		if p != nil {
@@ -180,13 +300,14 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 				buildStart := time.Now()
 				readers, err := s.buildReaders(c)
-				stats.AddBuidReaderTimeConsumption(time.Since(buildStart))
+				stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 				if err != nil {
 					return err
 				}
 
 				s.DataSource.R = readers[0]
 				s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
+				s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
 			}
 
 			var tag int32
@@ -269,10 +390,10 @@ func (s *Scope) MergeRun(c *Compile) error {
 		for i := len(s.PreScopes) - 1; i >= 0; i-- {
 			err := s.PreScopes[i].MergeRun(c)
 			if err != nil {
-				return err
+				return s.cancelMergeSiblingsOnError(err)
 			}
 		}
-		return s.ParallelRun(c)
+		return s.cancelMergeSiblingsOnError(s.ParallelRun(c))
 	}
 
 	// Merge Run normally.
@@ -287,26 +408,30 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 		submitPreScope := ants.Submit(
 			func() {
+				defer wg.Done()
+
+				var err error
 				switch scope.Magic {
 				case Normal:
-					preScopeResultReceiveChan <- scope.Run(c)
+					err = scope.Run(c)
 				case Merge, MergeInsert:
-					preScopeResultReceiveChan <- scope.MergeRun(c)
+					err = scope.MergeRun(c)
 				case Remote:
-					preScopeResultReceiveChan <- scope.RemoteRun(c)
+					err = scope.RemoteRun(c)
 				default:
-					err := moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
+					err = moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
-					preScopeResultReceiveChan <- err
 				}
-				wg.Done()
+				s.cancelMergeSiblingsOnError(err)
+				preScopeResultReceiveChan <- err
 			})
 
 		// build routine failed.
 		if submitPreScope != nil {
+			wg.Done() // this is necessary, because the submitPreScope may panic.
 			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
+			s.cancelMergeSiblingsOnError(submitPreScope)
 			preScopeResultReceiveChan <- submitPreScope
-			wg.Done()
 		}
 	}
 
@@ -340,7 +465,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	err := s.ParallelRun(c)
 	if err != nil {
-		return err
+		return s.cancelMergeSiblingsOnError(err)
 	}
 
 	// receive and check error from pre-scopes and remote scopes.
@@ -357,14 +482,14 @@ func (s *Scope) MergeRun(c *Compile) error {
 		select {
 		case err := <-preScopeResultReceiveChan:
 			if err != nil {
-				return err
+				return s.cancelMergeSiblingsOnError(err)
 			}
 			preScopeCount--
 
 		case result := <-notifyMessageResultReceiveChan:
 			result.clean(s.Proc)
 			if result.err != nil {
-				return result.err
+				return s.cancelMergeSiblingsOnError(result.err)
 			}
 			remoteScopeCount--
 		}
@@ -375,6 +500,16 @@ func (s *Scope) MergeRun(c *Compile) error {
 	}
 }
 
+// cancelMergeSiblingsOnError breaks the wait-for cycle between a failed
+// pipeline, its sibling goroutines, and remote receiver registration. It must
+// run before MergeRun waits for those siblings to exit.
+func (s *Scope) cancelMergeSiblingsOnError(err error) error {
+	if err != nil && s != nil && s.Proc != nil && s.Proc.Cancel != nil {
+		s.Proc.Cancel(err)
+	}
+	return err
+}
+
 // cleanPipelineWitchStartFail is used to clean up the pipelines that has failed to start due to a certain reasons.
 func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 	p := pipeline.New(0, nil, sp.RootOp)
@@ -383,33 +518,28 @@ func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
+	s.resourceExecutedLocally = false
+
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
+	if err := validateRemoteRunAddress(s.NodeInfo.Addr, c.addr); err != nil {
+		return s.failRemoteRunBeforeStart(c, err)
+	}
 	if s.ipAddrMatch(c.addr) {
 		return s.MergeRun(c)
 	}
 	if err := s.holdAnyCannotRemoteOperator(); err != nil {
-		return err
+		return s.failRemoteRunBeforeStart(c, err)
 	}
 
-	// In fact, it's not a safe way to convert this pipeline to run at local.
-	//
-	// Just image this case,
-	// pipelineA holds an operator `dispatch d1`, d1 want to send data to pipelineB at node1.
-	// for this operator `d1`, it takes a remote-receiver (the pipelineB), and it will call a rpc for sending.
-	// but now, the pipelineB is not a remote-receiver but in local, the rpc will fail and the B cannot receive anything.
-	// This will cause a hung.
-	//
-	// we should avoid to generate this format pipeline, or do a suitable conversion for the dispatch operator,
-	// or refactor the dispatch operator for no need to know a receiver is local or remote.
 	if !checkPipelineStandaloneExecutableAtRemote(s) {
-		return s.MergeRun(c)
+		return s.failRemoteRunBeforeStart(c, moerr.NewInternalErrorNoCtxf(
+			"remote pipeline for CN %q is not standalone executable", s.NodeInfo.Addr))
 	}
-
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
@@ -419,18 +549,52 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	sender, err := s.remoteRun(c)
 
 	runErr := err
-	if s.Proc.Ctx.Err() != nil {
-		runErr = nil
+	runErr = suppressRemoteRunCancelError(s.Proc.Ctx, runErr)
+	if err != nil && s.Proc.Cancel != nil {
+		cancelErr := runErr
+		if cancelErr == nil {
+			cancelErr = err
+		}
+		s.Proc.Cancel(cancelErr)
 	}
 	// this clean-up action shouldn't be called before context check.
 	// because the clean-up action will cancel the context, and error will be suppressed.
-	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, err)
+	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, runErr)
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
+		if err == nil {
+			sender.prepareForLocalCleanup()
+		}
 		sender.close()
 	}
 	return runErr
+}
+
+func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
+	if c != nil && c.proc != nil && c.proc.Cancel != nil {
+		c.proc.Cancel(err)
+	}
+	cleanPipelineWitchStartFail(s, err, c.isPrepare)
+	return err
+}
+
+func validateRemoteRunAddress(scopeAddr, localAddr string) error {
+	if scopeAddr == "" || scopeAddr == localAddr {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(scopeAddr)
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: %v", scopeAddr, err)
+	}
+	if host == "" {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: host is empty", scopeAddr)
+	}
+	portNumber, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || portNumber == 0 {
+		return moerr.NewInternalErrorNoCtxf("malformed remote CN address %q: invalid port %q", scopeAddr, port)
+	}
+	return nil
 }
 
 // ParallelRun run a pipeline in parallel.
@@ -444,7 +608,7 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 			c.proc.Error(c.proc.Ctx, "panic in scope run",
-				zap.String("sql", c.sql),
+				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
 
@@ -522,7 +686,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 	buildStart := time.Now()
 	defer func() {
-		stats.AddBuidReaderTimeConsumption(time.Since(buildStart))
+		stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 	}()
 	readers, err := s.buildReaders(c)
 	if err != nil {
@@ -532,12 +696,9 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	if s.NodeInfo.Mcpu == 1 {
 		s.DataSource.R = readers[0]
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
+		s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
 		return s, nil
 	}
-
-	//if len(s.DataSource.OrderBy) > 0 {
-	//	return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
-	//}
 
 	ms, ss := newParallelScope(s)
 	for i := range ss {
@@ -547,6 +708,9 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 				recvMsgList[j].MsgTag += int32(i) << 16
 			}
 		}
+
+		readers[i].SetOrderBy(s.DataSource.OrderBy)
+		readers[i].SetIndexParam(s.DataSource.IndexReaderParam)
 
 		ss[i].DataSource = &Source{
 			R:            readers[i],
@@ -596,43 +760,21 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	}
 
 	//need to shuffle blocks when cncnt>1
-	var commited engine.RelData
 	rsp := &engine.RangesShuffleParam{
-		Node:  s.DataSource.node,
-		CNCNT: s.NodeInfo.CNCNT,
-		CNIDX: s.NodeInfo.CNIDX,
-		Init:  false,
+		Node:              s.DataSource.node,
+		CNCNT:             s.NodeInfo.CNCNT,
+		CNIDX:             s.NodeInfo.CNIDX,
+		ShuffleByObjectID: plan2.IsIvfSearchEntriesInternalScan(s.DataSource.node),
+		Init:              false,
 	}
 	if !s.IsRemote { // this is local CN
 		rsp.IsLocalCN = true
 	}
 
-	commited, err = c.expandRanges(
-		s.DataSource.node,
-		rel,
-		db,
-		ctx,
-		blockExprList,
-		engine.Policy_CollectCommittedPersistedData,
-		rsp)
-	if err != nil {
-		return err
-	}
+	policyForLocal := localRangesPolicy(s.DataSource.node, s.NodeInfo.CNIDX)
+	policyForRemote := engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData)
 
-	average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
-	if commited.DataCnt() < int(average*0.8) ||
-		commited.DataCnt() > int(average*1.2) {
-		logutil.Warnf(
-			"workload table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
-			s.DataSource.TableDef.Name,
-			s.DataSource.node.Stats.BlockNum,
-			s.NodeInfo.CNCNT,
-			s.NodeInfo.CNIDX,
-			average,
-			commited.DataCnt())
-	}
-
-	//collect uncommited data if it's local cn
+	// local
 	if !s.IsRemote {
 		s.NodeInfo.Data, err = c.expandRanges(
 			s.DataSource.node,
@@ -640,25 +782,47 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 			db,
 			ctx,
 			blockExprList,
-			engine.Policy_CollectUncommittedData|
-				engine.Policy_CollectCommittedInmemData,
-			nil)
-		if err != nil {
-			return err
-		}
+			policyForLocal,
+			rsp,
+		)
+		return err
+	}
 
-		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
-	} else {
+	// remote
+	var commited engine.RelData
+	commited, err = c.expandRanges(
+		s.DataSource.node,
+		rel,
+		db,
+		ctx,
+		blockExprList,
+		policyForRemote,
+		rsp,
+	)
+
+	if err == nil {
 		tombstones := s.NodeInfo.Data.GetTombstones()
 		commited.AttachTombstones(tombstones)
 		s.NodeInfo.Data = commited
-
 	}
-	return nil
+
+	return err
 }
 
-func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
-	var runtimeInExprList []*plan.Expr
+func localRangesPolicy(node *plan.Node, cnidx int32) engine.DataCollectPolicy {
+	if plan2.IsIvfSearchEntriesInternalScan(node) && cnidx > 0 {
+		return engine.Policy_CollectCommittedPersistedData
+	}
+	return engine.Policy_CollectAllData
+}
+
+type receivedRuntimeFilter struct {
+	spec *plan.RuntimeFilterSpec
+	expr *plan.Expr
+}
+
+func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool, error) {
+	var runtimeFilters []receivedRuntimeFilter
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
@@ -682,7 +846,7 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
 					return nil, true, nil
 				case message.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
-					runtimeInExprList = append(runtimeInExprList, inExpr)
+					runtimeFilters = append(runtimeFilters, receivedRuntimeFilter{spec: spec, expr: inExpr})
 
 					// TODO: implement BETWEEN expression
 				}
@@ -690,38 +854,41 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
 		}
 	}
 
-	return runtimeInExprList, false, nil
+	return runtimeFilters, false, nil
 }
 
-func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
+func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntimeFilter) ([]*plan.Expr, error) {
+	runtimeInExprList := make([]*plan.Expr, 0, len(runtimeFilters)+len(s.DataSource.BlockFilterList))
 	var nonPkFilters, pkFilters []*plan.Expr
 
-	rfSpecs := s.DataSource.RuntimeFilterSpecs
-	for i := range runtimeInExprList {
-		fn := runtimeInExprList[i].GetF()
+	for _, runtimeFilter := range runtimeFilters {
+		runtimeInExprList = append(runtimeInExprList, runtimeFilter.expr)
+		fn := runtimeFilter.expr.GetF()
 		col := fn.Args[0].GetCol()
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
-		if rfSpecs[i].NotOnPk {
-			nonPkFilters = append(nonPkFilters, runtimeInExprList[i])
+		if runtimeFilter.spec.NotOnPk {
+			nonPkFilters = append(nonPkFilters, runtimeFilter.expr)
 		} else {
-			pkFilters = append(pkFilters, runtimeInExprList[i])
+			pkFilters = append(pkFilters, runtimeFilter.expr)
 		}
 	}
 
 	// reset filter
 	if len(nonPkFilters) > 0 {
-		// put expr in filter instruction
-		op := vm.GetLeafOp(s.RootOp)
-		if _, ok := op.(*table_scan.TableScan); ok {
-			op = vm.GetLeafOpParent(nil, s.RootOp)
+		// Phase 2: if the leaf op is TableScan (inline filter path), set RuntimeFilterExprs directly.
+		// Otherwise fall back to the legacy Filter operator path.
+		leafOp := vm.GetLeafOp(s.RootOp)
+		if ts, ok := leafOp.(*table_scan.TableScan); ok {
+			ts.RuntimeFilterExprs = nonPkFilters
+		} else {
+			arg, ok := leafOp.(*filter.Filter)
+			if !ok {
+				panic("missing instruction for runtime filter!")
+			}
+			arg.RuntimeFilterExprs = nonPkFilters
 		}
-		arg, ok := op.(*filter.Filter)
-		if !ok {
-			panic("missing instruction for runtime filter!")
-		}
-		arg.RuntimeFilterExprs = nonPkFilters
 	}
 
 	// reset datasource
@@ -739,6 +906,9 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr)
 		}
 	}
 
+	if len(runtimeInExprList) == 0 && len(s.DataSource.BlockFilterList) == 0 {
+		return nil, nil
+	}
 	return append(runtimeInExprList, s.DataSource.BlockFilterList...), nil
 }
 
@@ -766,13 +936,14 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 	rs.Proc = s.Proc.NewContextChildProc(0)
 
 	parallelScopes := make([]*Scope, s.NodeInfo.Mcpu)
+	dupCtx := newOperatorDupContext()
 	for i := 0; i < s.NodeInfo.Mcpu; i++ {
 		parallelScopes[i] = newScope(Normal)
 		parallelScopes[i].NodeInfo = s.NodeInfo
 		parallelScopes[i].NodeInfo.Mcpu = 1
 		parallelScopes[i].Proc = rs.Proc.NewContextChildProc(0)
 		parallelScopes[i].TxnOffset = s.TxnOffset
-		parallelScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, s.NodeInfo.Mcpu))
+		parallelScopes[i].setRootOperator(dupOperatorRecursivelyWithContext(s.RootOp, i, s.NodeInfo.Mcpu, dupCtx))
 	}
 
 	rs.PreScopes = parallelScopes
@@ -808,9 +979,25 @@ type notifyMessageResult struct {
 	err    error
 }
 
+const (
+	notifyMessageRetryInitialInterval = 100 * time.Millisecond
+	notifyMessageRetryMaxInterval     = time.Second
+)
+
+type notifyMessageSenderFactory func(
+	ctx context.Context,
+	sid string,
+	toAddr string,
+	mp *mpool.MPool,
+	analyzeModule *AnalyzeModule,
+) (*messageSenderOnClient, error)
+
 // clean do final work for a notifyMessageResult.
 func (r *notifyMessageResult) clean(proc *process.Process) {
 	if r.sender != nil {
+		if r.err == nil {
+			r.sender.prepareForLocalCleanup()
+		}
 		r.sender.close()
 	}
 	if r.err != nil {
@@ -821,16 +1008,75 @@ func (r *notifyMessageResult) clean(proc *process.Process) {
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
 // and keep receiving the data until the query was done or data is ended.
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
+	s.sendNotifyMessageWithFactory(wg, resultChan, newMessageSenderOnClient)
+}
+
+func (s *Scope) sendNotifyMessageWithFactory(
+	wg *sync.WaitGroup,
+	resultChan chan notifyMessageResult,
+	newSender notifyMessageSenderFactory,
+) {
+	s.sendNotifyMessageWithFactoryAndWait(
+		wg,
+		resultChan,
+		newSender,
+		waitRemoteDispatchRetry,
+	)
+}
+
+type notifyMessageRetryWait func(context.Context, int, uuid.UUID) error
+
+func waitRemoteDispatchRetry(
+	ctx context.Context,
+	attempt int,
+	uid uuid.UUID,
+) error {
+	delay := notifyMessageRetryDelay(attempt, uid)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return remoteRegistrationContextError(ctx)
+	case <-timer.C:
+		return nil
+	}
+}
+
+func notifyMessageRetryDelay(attempt int, uid uuid.UUID) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	delay := notifyMessageRetryInitialInterval
+	for i := 0; i < attempt && delay < notifyMessageRetryMaxInterval; i++ {
+		delay *= 2
+	}
+	if delay > notifyMessageRetryMaxInterval {
+		delay = notifyMessageRetryMaxInterval
+	}
+
+	// Stable per-receiver jitter avoids synchronizing thousands of legacy-peer
+	// compatibility retries while keeping tests and behavior deterministic.
+	seed := uint32(uid[12])<<24 |
+		uint32(uid[13])<<16 |
+		uint32(uid[14])<<8 |
+		uint32(uid[15])
+	seed ^= uint32(attempt+1) * 0x9e3779b9
+	jitterPercent := int(seed%41) - 20 // [-20%, +20%]
+	return delay + time.Duration(int64(delay)*int64(jitterPercent)/100)
+}
+
+func (s *Scope) sendNotifyMessageWithFactoryAndWait(
+	wg *sync.WaitGroup,
+	resultChan chan notifyMessageResult,
+	newSender notifyMessageSenderFactory,
+	waitRetry notifyMessageRetryWait,
+) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, s.Proc.Mp())
-
-		select {
-		case <-s.Proc.Ctx.Done():
-			resultChan <- notifyMessageResult{err: nil, sender: sender}
-		default:
-			resultChan <- notifyMessageResult{err: err, sender: sender}
-		}
+		err = suppressRemoteNotifyCancelError(s.Proc.Ctx, err)
+		s.cancelMergeSiblingsOnError(err)
+		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
+		resultChan <- notifyMessageResult{err: err, sender: sender}
 		wg.Done()
 	}
 
@@ -849,34 +1095,51 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 
 		errSubmit := ants.Submit(
 			func() {
+				attempt := 0
+				for {
+					sender, err := newSender(
+						s.Proc.Ctx,
+						s.Proc.GetService(),
+						fromAddr,
+						s.Proc.Mp(),
+						nil,
+					)
+					if err != nil {
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						return
+					}
+					message := cnclient.AcquireMessage()
+					message.SetID(sender.streamSender.ID())
+					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
+					if sender.requestFinishAck {
+						message.RequestedTeardownMode = pbpipeline.StreamTeardownMode_FinishAck
+					}
+					message.NeedNotReply = false
+					message.Uuid = uuid
 
-				sender, err := newMessageSenderOnClient(
-					s.Proc.Ctx,
-					s.Proc.GetService(),
-					fromAddr,
-					s.Proc.Mp(),
-					nil,
-				)
-				if err != nil {
-					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
-					return
+					if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
+						closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+						return
+					}
+					sender.markStreamActive(pbpipeline.Method_PrepareDoneNotifyMessage)
+
+					err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
+					if !isRemoteDispatchNotRegisteredYetError(err) {
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+						return
+					}
+					// "not registered yet" is an expected retry response. The
+					// negotiated terminal response proves the old attempt can use
+					// FIN/ACK after its server cleanup barrier.
+					sender.prepareForLocalCleanup()
+					sender.close()
+					metricv2.PipelineRemoteNotifyRetryCounter.Inc()
+					if err = waitRetry(s.Proc.Ctx, attempt, op.Uuid); err != nil {
+						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+						return
+					}
+					attempt++
 				}
-
-				message := cnclient.AcquireMessage()
-				message.SetID(sender.streamSender.ID())
-				message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
-				message.NeedNotReply = false
-				message.Uuid = uuid
-
-				if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
-					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
-					return
-				}
-				sender.safeToClose = false
-				sender.alreadyClose = false
-
-				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx].Ch2)
-				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
 
@@ -886,64 +1149,151 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 	}
 }
 
-func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.PipelineSignal) error {
+func sendRemoteNotifyCleanupTerminal(proc *process.Process, reg *process.WaitRegister, err error) bool {
+	terminalSignal := process.BuildCleanupSignal(false, err)
+	signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
+	defer signalCancel()
+
+	if process.SendPipelineSignalWithContext(signalCtx, reg, terminalSignal) {
+		return true
+	}
+	logRemoteNotifyCleanupSendFailure(
+		proc,
+		reg,
+		terminalSignal,
+		"remote_notify_cleanup_send_terminal_signal",
+		"remote notify cleanup timed out sending terminal %s signal: timeout=%s channel_len=%d channel_cap=%d err=%v",
+		err)
+
+	if terminalSignal.EventType != process.EventEnd {
+		return false
+	}
+
+	fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
+	fallbackSignal := process.NewAbortSignal(fallbackErr)
+	if process.SendPipelineSignalWithContext(signalCtx, reg, fallbackSignal) {
+		return false
+	}
+	logRemoteNotifyCleanupSendFailure(
+		proc,
+		reg,
+		fallbackSignal,
+		"remote_notify_cleanup_send_fallback_abort_signal",
+		"remote notify cleanup timed out sending fallback %s signal after end delivery failure: timeout=%s channel_len=%d channel_cap=%d err=%v",
+		fallbackErr)
+	return false
+}
+
+func logRemoteNotifyCleanupSendFailure(
+	proc *process.Process,
+	reg *process.WaitRegister,
+	signal process.PipelineSignal,
+	key string,
+	format string,
+	err error,
+) {
+	chLen, chCap := process.WaitRegisterChannelState(reg)
+	process.WarnPipelineCleanupf(
+		proc,
+		key,
+		format,
+		signal.EventType.String(),
+		process.PipelineSignalSendTimeout,
+		chLen,
+		chCap,
+		err)
+}
+
+func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if procCtx != nil && procCtx.Err() != nil &&
+		(moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) || errors.Is(err, context.Canceled)) {
+		return nil
+	}
+	return err
+}
+
+func suppressRemoteNotifyCancelError(procCtx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if procCtx != nil && procCtx.Err() != nil && moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
+		return nil
+	}
+	return err
+}
+
+func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.WaitRegister) error {
 	for {
 		bat, end, err := sender.receiveBatch()
 		if err != nil || end || bat == nil {
 			return err
 		}
 
-		forwardCh <- process.NewPipelineSignalToDirectly(bat, nil, sender.mp)
-	}
-}
-
-func (s *Scope) replace(c *Compile) error {
-	dbName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.DbName
-	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
-	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
-	rewriteFromOnDuplicateKey := s.Plan.GetQuery().Nodes[0].ReplaceCtx.RewriteFromOnDuplicateKey
-
-	delAffectedRows := uint64(0)
-	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from `%s`.`%s` where %s", dbName, tblName, deleteCond), NoAccountId)
-		if err != nil {
+		var receiverDone bool
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil || receiverDone {
 			return err
 		}
-		delAffectedRows = result.AffectedRows
 	}
-	var sql string
-	if rewriteFromOnDuplicateKey {
-		idx := strings.Index(strings.ToLower(c.sql), "on duplicate key update")
-		sql = c.sql[:idx]
-	} else {
-		removed := removeStringBetween(c.sql, "/*", "*/")
-		sql = "insert " + strings.TrimSpace(removed)[7:]
-	}
-	result, err := c.runSqlWithResult(sql, NoAccountId)
-	if err != nil {
-		return err
-	}
-	c.addAffectedRows(result.AffectedRows + delAffectedRows)
-	return nil
 }
 
-func removeStringBetween(s, start, end string) string {
-	startIndex := strings.Index(s, start)
-	for startIndex != -1 {
-		endIndex := strings.Index(s, end)
-		if endIndex == -1 || startIndex > endIndex {
-			return s
-		}
+// defaultStarCountTombstoneThreshold: when estimated tombstone rows exceed this, skip StarCount
+// and use per-block aggOptimize (only scan blocks with tombstones). Avoids CollectTombstoneStats
+// Merge path taking seconds for large tombstone sets.
+const defaultStarCountTombstoneThreshold = 5000000
 
-		s = s[:startIndex] + s[endIndex+len(end):]
-		startIndex = strings.Index(s, start)
+// isSingleStarCountNoFilterNoGroupBy returns true if node has exactly one agg and it is starcount, with no filter and no groupby.
+func isSingleStarCountNoFilterNoGroupBy(node *plan.Node) bool {
+	if node == nil || len(node.AggList) != 1 || len(node.FilterList) != 0 || len(node.GroupBy) != 0 {
+		return false
 	}
-	return s
+	agg, ok := node.AggList[0].Expr.(*plan.Expr_F)
+	return ok && agg.F.Func.ObjName == "starcount"
 }
 
 func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
 	node := s.DataSource.node
 	if node != nil && len(node.AggList) > 0 {
+		// Fast path: single starcount without filter/groupby — only call rel.StarCount(), no scan.
+		if isSingleStarCountNoFilterNoGroupBy(node) {
+			estimatedTombstoneRows, err := rel.EstimateCommittedTombstoneCount(ctx)
+			if err != nil {
+				return err
+			}
+			metricv2.StarcountEstimateTombstoneRowsHistogram.Observe(float64(estimatedTombstoneRows))
+
+			if estimatedTombstoneRows > defaultStarCountTombstoneThreshold {
+				metricv2.StarcountPathPerBlockCounter.Inc()
+				// Fall through to per-block aggOptimize (only scan blocks with tombstones)
+			} else {
+				metricv2.StarcountPathFastCounter.Inc()
+				fastStart := time.Now()
+				totalRows, err := rel.StarCount(ctx)
+				if err != nil {
+					return err
+				}
+				metricv2.StarcountDurationHistogram.Observe(time.Since(fastStart).Seconds())
+				metricv2.StarcountResultRowsHistogram.Observe(float64(totalRows))
+
+				newRelData := s.NodeInfo.Data.BuildEmptyRelData(0)
+				s.NodeInfo.Data = newRelData
+				partialResults := []any{int64(totalRows)}
+				partialResultTypes := []types.T{types.T_int64}
+				mergeGroup := findMergeGroup(s.RootOp)
+				if mergeGroup != nil {
+					mergeGroup.PartialResults = partialResults
+					mergeGroup.PartialResultTypes = partialResultTypes
+					s.StarCountMergeGroup = mergeGroup
+				} else {
+					panic("can't find merge group operator for agg optimize!")
+				}
+				s.StarCountOnly = true
+				return nil
+			}
+		}
+
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(node)
 		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
 			//append first empty block
@@ -1000,25 +1350,43 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 }
 
 // find scan->group->mergegroup
-func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
+func findMergeGroup(op vm.Operator) *group.MergeGroup {
 	if op == nil {
 		return nil
 	}
-	if mergeGroup, ok := op.(*mergegroup.MergeGroup); ok {
-		child := op.GetOperatorBase().GetChildren(0)
+	base := op.GetOperatorBase()
+	if base == nil || base.NumChildren() == 0 {
+		return nil
+	}
+	if mergeGroup, ok := op.(*group.MergeGroup); ok {
+		child := base.GetChildren(0)
 		if _, ok = child.(*group.Group); ok {
-			child = child.GetOperatorBase().GetChildren(0)
-			if _, ok = child.(*table_scan.TableScan); ok {
-				return mergeGroup
+			childBase := child.GetOperatorBase()
+			if childBase != nil && childBase.NumChildren() > 0 {
+				child = childBase.GetChildren(0)
+				if _, ok = child.(*table_scan.TableScan); ok {
+					return mergeGroup
+				}
 			}
 		}
 	}
-	return findMergeGroup(op.GetOperatorBase().GetChildren(0))
+	return findMergeGroup(base.GetChildren(0))
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
+	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
+	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
+	if s.StarCountOnly {
+		readers = make([]engine.Reader, s.NodeInfo.Mcpu)
+		for i := range readers {
+			readers[i] = new(readutil.EmptyReader)
+		}
+		return readers, nil
+	}
+
 	// receive runtime filter and optimize the datasource.
-	var runtimeFilterList, blockFilterList []*plan.Expr
+	var runtimeFilterList []receivedRuntimeFilter
+	var blockFilterList []*plan.Expr
 	var emptyScan bool
 	runtimeFilterList, emptyScan, err = s.waitForRuntimeFilters(c)
 	if err != nil {
@@ -1071,6 +1439,28 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
+		hint := engine.FilterHint{}
+		// Pass runtime membership filter bytes to reader via FilterHint (only for ivf entries table).
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+			if len(s.DataSource.MembershipFilterBytes) > 0 {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.MembershipFilterBytes = bf
+				}
+			}
+		}
+		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.MembershipFilterBytes = bf
+				}
+			}
+		}
+
 		readers, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
 			c.proc,
@@ -1080,7 +1470,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
-			engine.FilterHint{},
+			hint,
 		)
 
 		stats.AddScopePrepareS3Request(statistic.S3Request{
@@ -1134,6 +1524,27 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
+		hint := engine.FilterHint{}
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+			if len(s.DataSource.MembershipFilterBytes) > 0 {
+				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.MembershipFilterBytes = bf
+				}
+			}
+		}
+		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
+		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
+			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
+			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
+				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
+					hint.MembershipFilterBytes = bf
+				}
+			}
+		}
+
 		mainRds, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
 			c.proc,
@@ -1143,7 +1554,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.TxnOffset,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
-			engine.FilterHint{},
+			hint,
 		)
 		if err != nil {
 			return

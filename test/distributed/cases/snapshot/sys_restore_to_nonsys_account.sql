@@ -1,4 +1,3 @@
-set experimental_fulltext_index=1;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 
@@ -29,7 +28,7 @@ select count(*) from s3t;
 select * from s3t where col1 = 23;
 -- @session
 
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -53,7 +52,7 @@ select avg(col1) from s3t;
 delete from s3t where col1 > 30000;
 -- @session
 
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 select count(*) from s3t where col1 > 2000;
@@ -62,7 +61,7 @@ select avg(col1) from s3t;
 show create table s3t;
 -- @session
 
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -140,13 +139,15 @@ create table table02 (col1 int unique key, col2 varchar(20));
 insert into table02 (col1, col2) values (133, 'database');
 create table table03(a INT primary key AUTO_INCREMENT, b INT, c INT);
 create table table04(a INT primary key AUTO_INCREMENT, b INT, c INT);
+set @old_sql_mode = @@sql_mode;
+set sql_mode = concat_ws(',', @@sql_mode, 'NO_AUTO_VALUE_ON_ZERO');
 insert into table03 values (1,1,1), (2,2,2);
 insert into table04 values (0,1,2), (2,3,4);
+set sql_mode = @old_sql_mode;
 
 drop database if exists acc_test04;
 create database acc_test04;
 use acc_test04;
--- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
                          emp_no      int             not null,
@@ -165,7 +166,6 @@ create table index03 (
 
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
                            (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
--- @bvt:issue
 
 select count(*) from acc_test02.pri01;
 select count(*) from acc_test02.aff01;
@@ -180,10 +180,8 @@ show create table acc_test03.table01;
 show create table acc_test03.table02;
 show create table acc_test03.table03;
 show create table acc_test03.table04;
--- @bvt:issue#16438
 select count(*) from acc_test04.index03;
 show create table acc_test04.index03;
--- @bvt:issue
 -- @session
 
 drop snapshot if exists sp04;
@@ -196,20 +194,16 @@ truncate table acc_test03.table01;
 drop table acc_test03.table02;
 delete from acc_test03.table03 where col1 = 1;
 update acc_test03.table04 set col1 = 1000;
--- @bvt:issue#16438
 alter table acc_test04.index03 drop primary key;
--- @bvt:issue
 select count(*) from acc_test02.pri01;
 select count(*) from acc_test02.aff01;
 select * from acc_test03.table01;
 select count(*) from acc_test03.table03;
 select * from acc_test03.table04;
--- @bvt:issue#16438
 show create table acc_test04.index03;
--- @bvt:issue
 -- @session
 
-restore account acc01 from snapshot sp04;
+restore account acc01{snapshot="sp04"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;
@@ -261,7 +255,7 @@ create table table03 (col1 int);
 insert into table03 values (1),(2);
 -- @session
 
-restore account acc01 from snapshot sp07;
+restore account acc01{snapshot="sp07"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test01;
@@ -270,7 +264,7 @@ select * from table01;
 select * from table02;
 -- @session
 
-restore account acc01 from snapshot sp08;
+restore account acc01{snapshot="sp08"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test01;
@@ -321,7 +315,7 @@ insert into table02 values(139, 'database', null);
 alter table table02 drop column new;
 -- @session
 
-restore account acc01 from snapshot sp10;
+restore account acc01{snapshot="sp10"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 use test02;
@@ -368,7 +362,7 @@ insert into rs01 values (10, -1, null);
 select count(*) from rs01;
 -- @session
 
-restore account acc01 from snapshot sp03 to account sys;
+restore account acc01{snapshot="sp03"} to account sys;
 drop snapshot sp03;
 
 -- @session:id=1&user=acc01:test_account&password=111
@@ -382,9 +376,7 @@ drop database if exists fulltext_acc01;
 create database fulltext_acc01;
 use fulltext_acc01;
 drop table if exists src;
-set experimental_fulltext_index=1;
 create table src (id bigint primary key, json1 text, json2 varchar, fulltext(json1) with parser json);
-set experimental_fulltext_index=0;
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
@@ -397,7 +389,7 @@ create snapshot full_sp_acc01 for account acc01;
 drop database fulltext_acc01;
 -- @session
 
-restore account acc01 from snapshot full_sp_acc01;
+restore account acc01{snapshot="full_sp_acc01"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 show databases;

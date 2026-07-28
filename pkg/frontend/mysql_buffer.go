@@ -19,18 +19,18 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 const (
@@ -56,6 +56,43 @@ var _ Allocator = new(BufferAllocator)
 
 type BufferAllocator struct {
 	allocator Allocator
+}
+
+// IOSessionOption customizes the memory retained by an IOSession. Options are
+// intentionally applied only by NewIOSessionWithOptions so existing frontend
+// callers keep the historical defaults.
+type IOSessionOption func(*ioSessionOptions)
+
+type ioSessionOptions struct {
+	bufferSize        int
+	allowedPacketSize int
+	allocator         Allocator
+}
+
+// WithIOSessionBufferSize sets the size of the buffer retained for the whole
+// session lifetime. Packets larger than this buffer continue to use the
+// existing dynamic read/write paths.
+func WithIOSessionBufferSize(size int) IOSessionOption {
+	return func(opts *ioSessionOptions) {
+		opts.bufferSize = size
+	}
+}
+
+// WithIOSessionAllowedPacketSize bounds a single logical MySQL packet. This is
+// useful for protocol endpoints, such as a Proxy login path, that never need
+// the frontend server's general-purpose packet maximum.
+func WithIOSessionAllowedPacketSize(size int) IOSessionOption {
+	return func(opts *ioSessionOptions) {
+		opts.allowedPacketSize = size
+	}
+}
+
+// WithIOSessionAllocator uses allocator for all buffers owned by the session.
+// The allocator must be safe for concurrent use when shared by sessions.
+func WithIOSessionAllocator(allocator Allocator) IOSessionOption {
+	return func(opts *ioSessionOptions) {
+		opts.allocator = allocator
+	}
 }
 
 func (ba *BufferAllocator) Alloc(size int) ([]byte, error) {
@@ -104,7 +141,7 @@ func (block *MemBlock) ResetIndices() {
 
 // IsFull check read buf full or not
 func (block *MemBlock) IsFull() bool {
-	return block.writeIndex == fixBufferSize
+	return block.writeIndex >= len(block.data)
 }
 
 func (block *MemBlock) BufferLen() int {
@@ -170,6 +207,10 @@ type Conn struct {
 	header                [4]byte
 	// static buffer block for read & write in general cases
 	fixBuf MemBlock
+	// bufferSize is the allocation unit for the fixed and dynamic write
+	// buffers. It is configurable for lightweight protocol users such as the
+	// Proxy, while regular frontend sessions keep fixBufferSize.
+	bufferSize int
 	// dynamic write buffer block is organized by a list
 	dynamicWrBuf *list.List
 	// just for load local read
@@ -187,25 +228,103 @@ type Conn struct {
 	packetInBuf       int
 	allowedPacketSize int
 	timeout           time.Duration
-	allocator         *BufferAllocator
-	ses               atomic.Pointer[holder[*Session]]
-	closeFunc         sync.Once
-	service           string
+	readTimeout       time.Duration
+	writeTimeout      time.Duration
+	outputHeader      [HeaderLengthOfTheProtocol]byte
+	outputHeaderBytes int
+	outputPayloadLeft int
+	// loadLocalReadTimeout is the timeout for reading data from client during LOAD DATA LOCAL operations
+	loadLocalReadTimeout time.Duration
+	// loadLocalWriteTimeout is the timeout for writing data to client during LOAD DATA LOCAL operations
+	loadLocalWriteTimeout time.Duration
+	allocator             *BufferAllocator
+	ses                   atomic.Pointer[holder[*Session]]
+	closeFunc             sync.Once
+	service               string
+	outputCounter         atomic.Pointer[perfcounter.CounterSet]
+	responseOutputWait    atomic.Pointer[responseOutputWaitTracker]
+}
+
+type responseOutputWaitTracker struct {
+	// totalNS covers every physical write in the statement response. operatorNS
+	// is the subset already published by an operator analyzer, so finalization
+	// can add only the delayed flush/terminal-response remainder.
+	totalNS    atomic.Int64
+	operatorNS atomic.Int64
+}
+
+func (c *Conn) withOutputCounter(counter *perfcounter.CounterSet, fn func() error) error {
+	// MysqlProtocolImpl serializes these scopes with its protocol mutex. The
+	// request tracker remains installed independently across buffered flushes.
+	previous := c.outputCounter.Swap(counter)
+	defer c.outputCounter.Store(previous)
+	return fn()
+}
+
+func (c *Conn) setResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	c.responseOutputWait.Store(tracker)
+}
+
+// SetTimeout updates the read timeout used by ReadFromConn.
+func (c *Conn) SetTimeout(d time.Duration) {
+	c.timeout = d
 }
 
 // NewIOSession create a new io session
 func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *Conn, err error) {
-	c := &Conn{
-		conn:              conn,
-		localAddr:         conn.LocalAddr().String(),
-		remoteAddr:        conn.RemoteAddr().String(),
-		fixBuf:            MemBlock{},
-		dynamicWrBuf:      list.New(),
-		allocator:         &BufferAllocator{allocator: getSessionAlloc(service)},
-		timeout:           pu.SV.SessionTimeout.Duration,
-		maxBytesToFlush:   int(pu.SV.MaxBytesInOutbufToFlush * 1024),
+	return NewIOSessionWithOptions(conn, pu, service)
+}
+
+// NewIOSessionWithOptions creates an IO session with optional buffer and
+// allocator overrides. The default behavior is identical to NewIOSession.
+func NewIOSessionWithOptions(
+	conn net.Conn,
+	pu *config.ParameterUnit,
+	service string,
+	options ...IOSessionOption,
+) (_ *Conn, err error) {
+	opts := ioSessionOptions{
+		bufferSize:        fixBufferSize,
 		allowedPacketSize: int(MaxPayloadSize),
-		service:           service,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(&opts)
+		}
+	}
+	if opts.bufferSize < HeaderLengthOfTheProtocol {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"invalid IO session buffer size %d, must be at least %d",
+			opts.bufferSize,
+			HeaderLengthOfTheProtocol,
+		)
+	}
+	if opts.allowedPacketSize < 1 {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"invalid IO session allowed packet size %d, must be positive",
+			opts.allowedPacketSize,
+		)
+	}
+	if opts.allocator == nil {
+		opts.allocator = getSessionAlloc(service)
+	}
+
+	c := &Conn{
+		conn:                  conn,
+		localAddr:             conn.LocalAddr().String(),
+		remoteAddr:            conn.RemoteAddr().String(),
+		fixBuf:                MemBlock{},
+		bufferSize:            opts.bufferSize,
+		dynamicWrBuf:          list.New(),
+		allocator:             &BufferAllocator{allocator: opts.allocator},
+		timeout:               pu.SV.SessionTimeout.Duration,
+		readTimeout:           pu.SV.NetReadTimeout.Duration,
+		writeTimeout:          pu.SV.NetWriteTimeout.Duration,
+		loadLocalReadTimeout:  pu.SV.LoadLocalReadTimeout.Duration,
+		loadLocalWriteTimeout: pu.SV.LoadLocalWriteTimeout.Duration,
+		maxBytesToFlush:       int(pu.SV.MaxBytesInOutbufToFlush * 1024),
+		allowedPacketSize:     opts.allowedPacketSize,
+		service:               service,
 	}
 
 	defer func() {
@@ -214,7 +333,7 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *C
 		}
 	}()
 
-	c.fixBuf.data, err = c.allocator.Alloc(fixBufferSize)
+	c.fixBuf.data, err = c.allocator.Alloc(c.bufferSize)
 	if err != nil {
 		return nil, err
 	}
@@ -230,6 +349,11 @@ func (c *Conn) ID() uint64 {
 
 func (c *Conn) RawConn() net.Conn {
 	return c.conn
+}
+
+// GetSequenceID returns the sequence expected for the next MySQL packet.
+func (c *Conn) GetSequenceID() uint8 {
+	return c.sequenceId
 }
 
 func (c *Conn) UseConn(conn net.Conn) {
@@ -274,7 +398,7 @@ func (c *Conn) Close() error {
 
 		err = c.closeConn()
 		if err != nil {
-			logutil.Error("close conn error", zap.Error(err))
+			logutil.LogConnectionCloseError("close conn error", err)
 		}
 		c.ses.Store(&holder[*Session]{})
 		rm := getRtMgr(c.service)
@@ -314,13 +438,16 @@ func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
 			c.FreeLoadLocal()
 		}
 	}()
-	err = c.ReadNBytesIntoBuf(c.header[:], HeaderLengthOfTheProtocol)
+	err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, c.loadLocalReadTimeout)
 	if err != nil {
 		return
 	}
 	packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
 	sequenceId := c.header[3]
 	c.sequenceId = sequenceId + 1
+	if err = c.CheckAllowedPacketSize(packetLength); err != nil {
+		return
+	}
 
 	if c.loadLocalBuf.data == nil {
 		c.loadLocalBuf.data, err = c.allocator.Alloc(packetLength)
@@ -335,11 +462,27 @@ func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
 		}
 	}
 
-	err = c.ReadNBytesIntoBuf(c.loadLocalBuf.data, packetLength)
+	err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, packetLength, c.loadLocalReadTimeout)
 	if err != nil {
 		return
 	}
 	return c.loadLocalBuf.data[:packetLength], err
+}
+
+// ReadNBytesIntoBufWithTimeout reads specified bytes from the network with a timeout.
+// This is used for LOAD DATA LOCAL operations.
+func (c *Conn) ReadNBytesIntoBufWithTimeout(buf []byte, n int, timeout time.Duration) error {
+	var err error
+	var read int
+	var readLength int
+	for readLength < n {
+		read, err = c.ReadFromConnWithTimeout(buf[readLength:n], timeout)
+		if err != nil {
+			return err
+		}
+		readLength += read
+	}
+	return err
 }
 
 func (c *Conn) FreeLoadLocal() {
@@ -571,6 +714,23 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 	return c.conn.Read(buf)
 }
 
+// ReadFromConnWithTimeout reads from the network with a specific timeout.
+// This is used for LOAD DATA LOCAL operations where we need timeout detection.
+func (c *Conn) ReadFromConnWithTimeout(buf []byte, timeout time.Duration) (int, error) {
+	var err error
+	if timeout > 0 {
+		err = c.conn.SetReadDeadline(time.Now().Add(timeout))
+		if err != nil {
+			return 0, err
+		}
+		// Clear the deadline after reading
+		defer func() {
+			_ = c.conn.SetReadDeadline(time.Time{})
+		}()
+	}
+	return c.conn.Read(buf)
+}
+
 // Append Add bytes to buffer
 func (c *Conn) Append(elems ...byte) (err error) {
 	defer func() {
@@ -582,7 +742,7 @@ func (c *Conn) Append(elems ...byte) (err error) {
 	for cutIndex < len(elems) {
 		// if bufferLength > 16MB, split packet
 		remainPacketSpace := int(MaxPayloadSize) - c.packetLength
-		writeLength := Min(remainPacketSpace, len(elems[cutIndex:]))
+		writeLength := min(remainPacketSpace, len(elems[cutIndex:]))
 		err = AppendPart(c, elems[cutIndex:cutIndex+writeLength])
 		if err != nil {
 			return err
@@ -621,9 +781,9 @@ func (c *Conn) AppendPart(elems []byte) error {
 		}
 		curElemsRemainSpace := len(elems) - curBufRemainSpace
 
-		allocLength := Max(fixBufferSize, curElemsRemainSpace)
-		if allocLength%fixBufferSize != 0 {
-			allocLength += fixBufferSize - allocLength%fixBufferSize
+		allocLength := Max(c.bufferSize, curElemsRemainSpace)
+		if allocLength%c.bufferSize != 0 {
+			allocLength += c.bufferSize - allocLength%c.bufferSize
 		}
 
 		err = AllocNewBlock(c, allocLength)
@@ -682,7 +842,7 @@ var BeginPacket = func(c *Conn) error {
 // BeginPacket Reserve Header in the buffer
 func (c *Conn) BeginPacket() error {
 	if c.curBuf.AvailableSpaceLen() < HeaderLengthOfTheProtocol {
-		err := AllocNewBlock(c, fixBufferSize)
+		err := AllocNewBlock(c, c.bufferSize)
 		if err != nil {
 			return err
 		}
@@ -733,7 +893,6 @@ func (c *Conn) Flush() error {
 	}
 	var err error
 	defer c.Reset()
-	c.CountFlushPackage(1)
 	err = c.WriteToConn(c.fixBuf.AvailableData())
 	if err != nil {
 		return err
@@ -772,6 +931,7 @@ func (c *Conn) Write(payload []byte) error {
 	if err != nil {
 		return err
 	}
+	c.packetInBuf++
 	err = c.Flush()
 	if err != nil {
 		return err
@@ -783,14 +943,60 @@ func (c *Conn) Write(payload []byte) error {
 func (c *Conn) WriteToConn(buf []byte) error {
 	sendLength := 0
 	for sendLength < len(buf) {
+		tracker := c.responseOutputWait.Load()
+		operatorCounter := c.outputCounter.Load()
+		start := time.Now()
 		n, err := c.conn.Write(buf[sendLength:])
+		elapsedNS := time.Since(start).Nanoseconds()
+		if tracker != nil {
+			tracker.totalNS.Add(elapsedNS)
+		}
+		if operatorCounter != nil {
+			operatorCounter.ProtocolOutputWaitNS.Add(elapsedNS)
+			if tracker != nil {
+				tracker.operatorNS.Add(elapsedNS)
+			}
+		}
+		if n > 0 {
+			sendLength += n
+			c.CountOutputBytes(n)
+			c.countCompletedOutputPackets(buf[sendLength-n : sendLength])
+		}
 		if err != nil {
 			return err
 		}
-		sendLength += n
-		c.CountOutputBytes(n)
+		if n == 0 {
+			return io.ErrNoProgress
+		}
 	}
 	return nil
+}
+
+func (c *Conn) countCompletedOutputPackets(written []byte) {
+	for len(written) > 0 {
+		if c.outputPayloadLeft > 0 {
+			n := min(c.outputPayloadLeft, len(written))
+			c.outputPayloadLeft -= n
+			written = written[n:]
+			if c.outputPayloadLeft == 0 {
+				c.CountFlushPackage(1)
+			}
+			continue
+		}
+		n := min(HeaderLengthOfTheProtocol-c.outputHeaderBytes, len(written))
+		copy(c.outputHeader[c.outputHeaderBytes:], written[:n])
+		c.outputHeaderBytes += n
+		written = written[n:]
+		if c.outputHeaderBytes == HeaderLengthOfTheProtocol {
+			c.outputPayloadLeft = int(c.outputHeader[0]) |
+				int(c.outputHeader[1])<<8 |
+				int(c.outputHeader[2])<<16
+			c.outputHeaderBytes = 0
+			if c.outputPayloadLeft == 0 {
+				c.CountFlushPackage(1)
+			}
+		}
+	}
 }
 
 func (c *Conn) RemoteAddress() string {
@@ -805,6 +1011,15 @@ func (c *Conn) closeConn() error {
 		}
 	}
 	return err
+}
+
+// Disconnect closes the underlying network connection without full cleanup.
+// This is used to forcefully disconnect the client (e.g., on timeout during LOAD DATA).
+func (c *Conn) Disconnect() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
 }
 
 // Reset does not release fix buffer but release dynamical buffer

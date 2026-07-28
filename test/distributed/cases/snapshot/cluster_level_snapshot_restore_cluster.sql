@@ -11,7 +11,6 @@ create account acc04 admin_name = 'test_account' identified by '111';
 drop database if exists db01;
 create database db01;
 use db01;
--- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
                          emp_no      int             not null,
@@ -32,7 +31,6 @@ insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-1
                            (9003,'1991-02-20', 'Bob', 'TEACHER', 'M', '2008-02-20'),
                            (9004,'1999-02-20', 'MARY', 'PROGRAMMER', 'M', '2008-02-20');
 select * from index03;
--- @bvt:issue
 
 drop database if exists db02;
 create database db02;
@@ -227,7 +225,7 @@ call test_if_hit_elseif_first_elseif();
 drop procedure if exists test_if_hit_if;
 create procedure test_if_hit_if() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
--- @ignore:0,8,9
+-- @ignore:0,9,10
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 
@@ -384,7 +382,7 @@ drop database repub02;
 use procedure_test;
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
--- @ignore:0,8,9
+-- @ignore:0,9,10
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 
@@ -421,7 +419,7 @@ revoke role_r1 from role_r2;
 select operation_role_id,operation_user_id from mo_catalog.mo_role_grant;
 -- @session
 
-restore cluster from snapshot cluster_level_snapshot;
+restore cluster{snapshot="cluster_level_snapshot"};
 
 use db02;
 select * from departments;
@@ -442,7 +440,7 @@ drop table t1;
 -- @session:id=1&user=acc01:test_account&password=111
 select * from repub02.aff01;
 select * from repub02.pri01;
--- @ignore:0,8,9
+-- @ignore:0,9,10
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 
@@ -484,7 +482,7 @@ drop database t1;
 drop procedure test_if_hit_elseif_first_elseif;
 drop procedure test_if_hit_if;
 drop database procedure_test;
--- @ignore:0,8,9
+-- @ignore:0,9,10
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 

@@ -123,7 +123,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		} else {
 			if sels == nil {
-				sels = proc.Mp().GetSels()
+				sels = vector.GetSels()
 			}
 			sels = sels[:0]
 
@@ -153,7 +153,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if sels != nil {
-		proc.Mp().PutSels(sels)
+		vector.PutSels(sels)
 	}
 
 	// bad design here. should compile a pipeline like `-> restrict -> output (just do clean work or memory reuse) -> `

@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -41,13 +40,37 @@ import (
 var _ client.Workspace = (*testWorkspace)(nil)
 
 type testWorkspace struct {
-	start      bool
-	incr       bool
-	mu         sync.Mutex
-	stack      []uint64
-	stmtId     uint64
-	reportErr1 bool
+	start               bool
+	incr                bool
+	mu                  sync.Mutex
+	stack               []uint64
+	stmtId              uint64
+	reportErr1          bool
+	protectedCloneFiles []string
+	trackedLoadFiles    []string
 }
+
+func (txn *testWorkspace) ProtectCloneFiles(names ...string) {
+	txn.protectedCloneFiles = append(txn.protectedCloneFiles, names...)
+}
+
+func (txn *testWorkspace) TrackLoadFiles(names ...string) {
+	txn.trackedLoadFiles = append(txn.trackedLoadFiles, names...)
+}
+
+func (txn *testWorkspace) SetCloneTxn(snapshot int64) {}
+
+func (txn *testWorkspace) SetCCPRTxn() {}
+
+func (txn *testWorkspace) IsCCPRTxn() bool { return false }
+
+func (txn *testWorkspace) SetCCPRTaskID(taskID string) {}
+
+func (txn *testWorkspace) GetCCPRTaskID() string { return "" }
+
+func (txn *testWorkspace) SetSyncProtectionJobID(jobID string) {}
+
+func (txn *testWorkspace) GetSyncProtectionJobID() string { return "" }
 
 func (txn *testWorkspace) Readonly() bool {
 	panic("implement me")
@@ -108,6 +131,10 @@ func (txn *testWorkspace) IncrStatementID(ctx context.Context, commit bool) erro
 	return nil
 }
 
+func (txn *testWorkspace) AdvanceSnapshot(context.Context, timestamp.Timestamp) error {
+	return nil
+}
+
 func (txn *testWorkspace) RollbackLastStatement(ctx context.Context) error {
 	txn.mu.Lock()
 	defer txn.mu.Unlock()
@@ -139,6 +166,12 @@ func (t *testWorkspace) Adjust(writeOffset uint64) error {
 func (t *testWorkspace) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (t *testWorkspace) FinalizeCommit(ctx context.Context) {
+}
+
+func (t *testWorkspace) FinalizeCommitWithUnknownResult(ctx context.Context) {
 }
 
 func (t *testWorkspace) Rollback(ctx context.Context) error {
@@ -264,8 +297,8 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(moerr.NewInternalError(ctx, "throw error")).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+			txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 			wsp := newTestWorkspace()
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
 			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
@@ -281,8 +314,7 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 	getPu("").TxnClient = txnClient
 	getPu("").StorageEngine = eng
 	ses.txnHandler.storage = eng
-	var c clock.Clock
-	_ = ses.GetTxnHandler().CreateTempStorage(c)
+
 	return ses
 }
 
@@ -295,8 +327,8 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+			txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
@@ -314,8 +346,6 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 	getPu("").StorageEngine = eng
 	ses.txnHandler.storage = eng
 
-	var c clock.Clock
-	_ = ses.GetTxnHandler().CreateTempStorage(c)
 	return ses
 }
 
@@ -330,8 +360,8 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(moerr.NewInternalError(ctx, "r-w conflicts")).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+			txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
@@ -349,18 +379,14 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 	getPu("").StorageEngine = eng
 	ses.txnHandler.storage = eng
 
-	var c clock.Clock
-	_ = ses.GetTxnHandler().CreateTempStorage(c)
 	return ses
 }
 
 func newMockErrSession4(t *testing.T, ctx context.Context, ctrl *gomock.Controller,
 	newFunc func(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error),
-	restartTxnFunc func(ctx context.Context, txnOp TxnOperator, commitTS any, options ...any) (client.TxnOperator, error),
 ) *Session {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(newFunc).AnyTimes()
-	txnClient.EXPECT().RestartTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(restartTxnFunc).AnyTimes()
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Hints().Return(engine.Hints{
@@ -371,8 +397,7 @@ func newMockErrSession4(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 	getPu("").TxnClient = txnClient
 	getPu("").StorageEngine = eng
 	ses.txnHandler.storage = eng
-	var c clock.Clock
-	_ = ses.GetTxnHandler().CreateTempStorage(c)
+
 	return ses
 }
 
@@ -386,12 +411,6 @@ func Test_rollbackStatement(t *testing.T) {
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 			func(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error) {
 				return newTestTxnOp(), nil
-			}).AnyTimes()
-		txnClient.EXPECT().RestartTxn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-			func(ctx context.Context, txnOp TxnOperator, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error) {
-				tTxnOp := txnOp.(*testTxnOp)
-				tTxnOp.meta.Status = txn.TxnStatus_Active
-				return txnOp, nil
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -536,12 +555,7 @@ func Test_rollbackStatement(t *testing.T) {
 			txnOp.mod = modRollbackError
 			return txnOp, nil
 		}
-		restartTxnFunc := func(ctx context.Context, txnOp TxnOperator, commitTS any, options ...any) (client.TxnOperator, error) {
-			tTxnOp := txnOp.(*testTxnOp)
-			tTxnOp.meta.Status = txn.TxnStatus_Active
-			return txnOp, nil
-		}
-		ses := newMockErrSession4(t, ctx, ctrl, newFunc, restartTxnFunc)
+		ses := newMockErrSession4(t, ctx, ctrl, newFunc)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.ses = ses
 		//case1. autocommit && not_begin. Insert Stmt (need not to be committed in the active txn)
@@ -786,6 +800,43 @@ func Test_commit(t *testing.T) {
 	})
 }
 
+func TestCommitTxnUnknownInvalidatesTxnOperator(t *testing.T) {
+	convey.Convey("commit ErrTxnUnknown invalidates the frontend txn operator", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		ses.txnHandler.storage = eng
+
+		txnOp := newTestTxnOp()
+		txnOp.meta = txn.TxnMeta{
+			ID:     []byte{1, 2, 3, 4},
+			Status: txn.TxnStatus_Active,
+		}
+		txnOp.commitErr = moerr.NewTxnUnknown(ctx, "test")
+		ses.txnHandler.txnOp = txnOp
+		ses.txnHandler.txnCtx = ctx
+		ses.txnHandler.shareTxn = false
+
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
+		ec.stmt = &tree.Insert{}
+		ec.txnOpt = FeTxnOption{autoCommit: true}
+
+		err := finishTxnFunc(ses, nil, ec)
+		convey.So(moerr.IsMoErrCode(err, moerr.ErrTxnUnknown), convey.ShouldBeTrue)
+		convey.So(txnOp.commitCalls, convey.ShouldEqual, 1)
+		convey.So(txnOp.rollbackCalls, convey.ShouldEqual, 0)
+		convey.So(ses.GetTxnHandler().GetTxn(), convey.ShouldBeNil)
+		convey.So(ses.GetTxnHandler().InActiveTxn(), convey.ShouldBeFalse)
+	})
+}
+
 var _ TxnOperator = new(testTxnOp)
 
 const (
@@ -793,9 +844,14 @@ const (
 )
 
 type testTxnOp struct {
-	meta txn.TxnMeta
-	wp   *testWorkspace
-	mod  int
+	meta                 txn.TxnMeta
+	wp                   *testWorkspace
+	mod                  int
+	commitErr            error
+	commitCalls          int
+	rollbackCalls        int
+	checkLockTableBinds  func(context.Context) error
+	checkLockTableChecks int
 }
 
 func newTestTxnOp() *testTxnOp {
@@ -848,6 +904,11 @@ func (txnop *testTxnOp) SnapshotTS() timestamp.Timestamp {
 	panic("implement me")
 }
 
+func (txnop *testTxnOp) SetSnapshotTS(ts timestamp.Timestamp) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (txnop *testTxnOp) CreateTS() timestamp.Timestamp {
 	//TODO implement me
 	panic("implement me")
@@ -878,11 +939,16 @@ func (txnop *testTxnOp) WriteAndCommit(ctx context.Context, ops []txn.TxnRequest
 }
 
 func (txnop *testTxnOp) Commit(ctx context.Context) error {
+	txnop.commitCalls++
+	if txnop.commitErr != nil {
+		return txnop.commitErr
+	}
 	txnop.meta.Status = txn.TxnStatus_Committed
 	return nil
 }
 
 func (txnop *testTxnOp) Rollback(ctx context.Context) error {
+	txnop.rollbackCalls++
 	if txnop.mod == modRollbackError {
 		return moerr.NewInternalErrorNoCtx("throw error")
 	}
@@ -898,6 +964,14 @@ func (txnop *testTxnOp) AddLockTable(locktable lock.LockTable) error {
 func (txnop *testTxnOp) HasLockTable(table uint64) bool {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (txnop *testTxnOp) CheckLockTableBinds(ctx context.Context) error {
+	txnop.checkLockTableChecks++
+	if txnop.checkLockTableBinds != nil {
+		return txnop.checkLockTableBinds(ctx)
+	}
+	return nil
 }
 
 func (txnop *testTxnOp) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
@@ -929,7 +1003,7 @@ func (txnop *testTxnOp) GetWorkspace() client.Workspace {
 	return txnop.wp
 }
 
-func (txnop *testTxnOp) AppendEventCallback(event client.EventType, callbacks ...func(client.TxnEvent)) {
+func (txnop *testTxnOp) AppendEventCallback(event client.EventType, callbacks ...client.TxnEventCallback) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -943,10 +1017,11 @@ func (txnop *testTxnOp) NextSequence() uint64 {
 	return 0
 }
 
-func (txnop *testTxnOp) EnterRunSql() {
+func (txnop *testTxnOp) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
+	return 1
 }
 
-func (txnop *testTxnOp) ExitRunSql() {
+func (txnop *testTxnOp) ExitRunSqlWithToken(_ uint64) {
 }
 
 func (txnop *testTxnOp) EnterIncrStmt() {
@@ -971,4 +1046,418 @@ func (txnop *testTxnOp) ExitRollbackStmt() {
 
 func (txnop *testTxnOp) SetFootPrints(id int, enter bool) {
 
+}
+
+func (txnop *testTxnOp) Set(string, any) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (txnop *testTxnOp) Get(string) (any, bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (txnop *testTxnOp) Delete(string) {
+	//TODO implement me
+	panic("implement me")
+}
+
+// TestAutocommitStatusSync tests that autocommit status is correctly preserved
+// after transaction commit/rollback. This is the fix for the issue where
+// SET autocommit=0 changes were being overwritten by invalidateTxnUnsafe.
+func TestAutocommitStatusSync(t *testing.T) {
+	convey.Convey("autocommit status sync after SET autocommit=0", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error) {
+				return newTestTxnOp(), nil
+			}).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+
+		ses := newTestSession(t, ctrl)
+		getPu("").TxnClient = txnClient
+		ses.txnHandler.storage = eng
+
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
+
+		// Case 1: SET autocommit=0 should preserve status after commit
+		// This is the main bug case - autocommit status was being reset to ON
+		convey.Convey("SET autocommit=0 preserves status after commit", func() {
+			// Start with autocommit=true (default)
+			ec.txnOpt = FeTxnOption{autoCommit: true}
+			err := ses.GetTxnHandler().Create(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify initial state: autocommit is ON
+			serverStatus := ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, SERVER_STATUS_AUTOCOMMIT)
+
+			// Execute SET autocommit=0 (on -> off)
+			err = ses.GetTxnHandler().SetAutocommit(ec, true, false)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify: autocommit should be OFF in serverStatus
+			serverStatus = ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, uint16(0))
+			convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
+			convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT), convey.ShouldBeFalse)
+
+			// The fix ensures that after SetAutocommit commits the txn,
+			// invalidateTxnUnsafe preserves the autocommit=OFF status
+			// Before the fix: serverStatus would be reset to 0x0002 (AUTOCOMMIT=ON)
+			// After the fix: serverStatus should remain 0x0000 (AUTOCOMMIT=OFF)
+			serverStatus = ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, uint16(0))
+		})
+	})
+
+	convey.Convey("autocommit status sync after SET autocommit=1", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error) {
+				return newTestTxnOp(), nil
+			}).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+
+		ses := newTestSession(t, ctrl)
+		getPu("").TxnClient = txnClient
+		ses.txnHandler.storage = eng
+
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
+
+		// Case 2: SET autocommit=1 (off -> on) should work correctly
+		convey.Convey("SET autocommit=1 from OFF state", func() {
+			// Start with autocommit=false
+			ec.txnOpt = FeTxnOption{autoCommit: false}
+			err := ses.GetTxnHandler().Create(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify: autocommit is OFF
+			serverStatus := ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, uint16(0))
+
+			// Execute SET autocommit=1 (off -> on)
+			err = ses.GetTxnHandler().SetAutocommit(ec, false, true)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify: autocommit should be ON
+			serverStatus = ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, SERVER_STATUS_AUTOCOMMIT)
+			convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeFalse)
+		})
+	})
+
+	convey.Convey("autocommit status multiple transitions", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error) {
+				return newTestTxnOp(), nil
+			}).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+
+		ses := newTestSession(t, ctrl)
+		getPu("").TxnClient = txnClient
+		ses.txnHandler.storage = eng
+
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
+
+		// Case 3: Multiple transitions ON -> OFF -> ON
+		convey.Convey("ON -> OFF -> ON transitions", func() {
+			// Start with autocommit=true
+			ec.txnOpt = FeTxnOption{autoCommit: true}
+			err := ses.GetTxnHandler().Create(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify initial: autocommit ON
+			serverStatus := ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, SERVER_STATUS_AUTOCOMMIT)
+
+			// Transition 1: ON -> OFF
+			err = ses.GetTxnHandler().SetAutocommit(ec, true, false)
+			convey.So(err, convey.ShouldBeNil)
+			serverStatus = ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, uint16(0))
+
+			// Create a new transaction with autocommit=false
+			ec.txnOpt = FeTxnOption{autoCommit: false}
+			err = ses.GetTxnHandler().Create(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify: still OFF after new txn creation
+			serverStatus = ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, uint16(0))
+
+			// Transition 2: OFF -> ON
+			err = ses.GetTxnHandler().SetAutocommit(ec, false, true)
+			convey.So(err, convey.ShouldBeNil)
+			serverStatus = ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, SERVER_STATUS_AUTOCOMMIT)
+		})
+	})
+}
+
+// TestInvalidateTxnUnsafePreservesAutocommit tests that invalidateTxnUnsafe
+// correctly preserves autocommit-related flags while clearing transaction flags.
+func TestInvalidateTxnUnsafePreservesAutocommit(t *testing.T) {
+	convey.Convey("invalidateTxnUnsafe preserves autocommit flags", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error) {
+				return newTestTxnOp(), nil
+			}).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+
+		ses := newTestSession(t, ctrl)
+		getPu("").TxnClient = txnClient
+		ses.txnHandler.storage = eng
+
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
+
+		// Test case: After commit, SERVER_STATUS_IN_TRANS should be cleared
+		// but SERVER_STATUS_AUTOCOMMIT should be preserved based on session setting
+		convey.Convey("commit clears IN_TRANS but preserves AUTOCOMMIT=OFF", func() {
+			// Create txn with autocommit=false
+			ec.txnOpt = FeTxnOption{autoCommit: false}
+			err := ses.GetTxnHandler().Create(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify: IN_TRANS is set, AUTOCOMMIT is not set
+			serverStatus := ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_IN_TRANS, convey.ShouldEqual, SERVER_STATUS_IN_TRANS)
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, uint16(0))
+
+			// Commit the transaction using byCommit flag (simulates COMMIT statement)
+			ec.txnOpt.byCommit = true
+			err = ses.GetTxnHandler().Commit(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// After commit: IN_TRANS should be cleared, AUTOCOMMIT should still be OFF
+			serverStatus = ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_IN_TRANS, convey.ShouldEqual, uint16(0))
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, uint16(0))
+		})
+
+		convey.Convey("commit clears IN_TRANS but preserves AUTOCOMMIT=ON", func() {
+			// Create txn with autocommit=true (single-statement mode)
+			ec.txnOpt = FeTxnOption{autoCommit: true}
+			err := ses.GetTxnHandler().Create(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify: IN_TRANS is set, AUTOCOMMIT is set
+			serverStatus := ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_IN_TRANS, convey.ShouldEqual, SERVER_STATUS_IN_TRANS)
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, SERVER_STATUS_AUTOCOMMIT)
+
+			// Commit the transaction (in single-statement mode, any statement commits)
+			ec.stmt = &tree.Select{}
+			err = ses.GetTxnHandler().Commit(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// After commit: IN_TRANS should be cleared, AUTOCOMMIT should still be ON
+			serverStatus = ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_IN_TRANS, convey.ShouldEqual, uint16(0))
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, SERVER_STATUS_AUTOCOMMIT)
+		})
+
+		convey.Convey("rollback clears IN_TRANS but preserves AUTOCOMMIT=OFF", func() {
+			// Create txn with autocommit=false
+			ec.txnOpt = FeTxnOption{autoCommit: false}
+			err := ses.GetTxnHandler().Create(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify: IN_TRANS is set, AUTOCOMMIT is not set
+			serverStatus := ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_IN_TRANS, convey.ShouldEqual, SERVER_STATUS_IN_TRANS)
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, uint16(0))
+
+			// Rollback the transaction using byRollback flag (simulates ROLLBACK statement)
+			ec.txnOpt.byRollback = true
+			err = ses.GetTxnHandler().Rollback(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// After rollback: IN_TRANS should be cleared, AUTOCOMMIT should still be OFF
+			serverStatus = ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_IN_TRANS, convey.ShouldEqual, uint16(0))
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, uint16(0))
+		})
+	})
+}
+
+// TestOptionBitsPreservedAfterInvalidate tests that OPTION_AUTOCOMMIT and
+// OPTION_NOT_AUTOCOMMIT are preserved after transaction invalidation,
+// while OPTION_BEGIN is correctly cleared.
+func TestOptionBitsPreservedAfterInvalidate(t *testing.T) {
+	convey.Convey("option bits preserved after invalidate", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error) {
+				return newTestTxnOp(), nil
+			}).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+
+		ses := newTestSession(t, ctrl)
+		getPu("").TxnClient = txnClient
+		ses.txnHandler.storage = eng
+
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
+
+		convey.Convey("OPTION_BEGIN is cleared but OPTION_NOT_AUTOCOMMIT preserved after commit", func() {
+			// Create txn with BEGIN and autocommit=false
+			ec.txnOpt = FeTxnOption{autoCommit: false, byBegin: true}
+			err := ses.GetTxnHandler().Create(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify: OPTION_BEGIN and OPTION_NOT_AUTOCOMMIT are set
+			convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
+			convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
+
+			// Commit by COMMIT statement
+			ec.txnOpt.byCommit = true
+			err = ses.GetTxnHandler().Commit(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// After commit: OPTION_BEGIN should be cleared, OPTION_NOT_AUTOCOMMIT should be preserved
+			convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
+			convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
+		})
+
+		convey.Convey("OPTION_AUTOCOMMIT preserved after commit with autocommit=true", func() {
+			// Create txn with BEGIN and autocommit=true
+			ec.txnOpt = FeTxnOption{autoCommit: true, byBegin: true}
+			err := ses.GetTxnHandler().Create(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify: OPTION_BEGIN is set, OPTION_AUTOCOMMIT should be default
+			convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
+
+			// Commit by COMMIT statement
+			ec.txnOpt.byCommit = true
+			err = ses.GetTxnHandler().Commit(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// After commit: OPTION_BEGIN should be cleared
+			convey.So(ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeFalse)
+		})
+	})
+}
+
+// TestSetAutocommitStatusInResponse verifies that the server status returned
+// to the client correctly reflects the autocommit state after SET autocommit.
+// This tests the end-to-end scenario described in the bug report.
+func TestSetAutocommitStatusInResponse(t *testing.T) {
+	convey.Convey("server status in response reflects autocommit state", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (client.TxnOperator, error) {
+				return newTestTxnOp(), nil
+			}).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+
+		ses := newTestSession(t, ctrl)
+		getPu("").TxnClient = txnClient
+		ses.txnHandler.storage = eng
+
+		ec := newTestExecCtx(ctx, ctrl)
+		ec.ses = ses
+
+		// Simulate the bug scenario:
+		// 1. Connection starts with autocommit=true
+		// 2. Execute SET autocommit=0
+		// 3. The server status returned should have AUTOCOMMIT=false
+		convey.Convey("SET autocommit=0 returns correct server status", func() {
+			// Start with autocommit=true
+			ec.txnOpt = FeTxnOption{autoCommit: true}
+			err := ses.GetTxnHandler().Create(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Execute SET autocommit=0
+			err = ses.GetTxnHandler().SetAutocommit(ec, true, false)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Get the server status (this is what would be sent to the client)
+			serverStatus := ses.GetTxnHandler().GetServerStatus()
+
+			// Bug scenario: Before fix, serverStatus would have AUTOCOMMIT bit set (0x0002)
+			// After fix, serverStatus should NOT have AUTOCOMMIT bit set
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, uint16(0))
+
+			// Note: We don't check IN_TRANS here because after SetAutocommit commits the
+			// current transaction, a new one may be started depending on the session state
+		})
+
+		convey.Convey("SET autocommit=1 returns correct server status", func() {
+			// Start with autocommit=false
+			ec.txnOpt = FeTxnOption{autoCommit: false}
+			err := ses.GetTxnHandler().Create(ec)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Verify autocommit is OFF
+			serverStatus := ses.GetTxnHandler().GetServerStatus()
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, uint16(0))
+
+			// Execute SET autocommit=1
+			err = ses.GetTxnHandler().SetAutocommit(ec, false, true)
+			convey.So(err, convey.ShouldBeNil)
+
+			// Get the server status
+			serverStatus = ses.GetTxnHandler().GetServerStatus()
+
+			// serverStatus should have AUTOCOMMIT bit set
+			convey.So(serverStatus&SERVER_STATUS_AUTOCOMMIT, convey.ShouldEqual, SERVER_STATUS_AUTOCOMMIT)
+		})
+	})
 }

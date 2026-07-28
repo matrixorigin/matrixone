@@ -70,7 +70,11 @@ func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColum
 	}
 
 	if len(secondaryColumnPos) == 1 {
-		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(*bat.Vecs[secondaryColumnPos[0]].GetType())
+		ukType := preInsertSecIdx.PreInsertCtx.UkType
+		keyType := types.T(ukType.Id).ToType()
+		keyType.Width = ukType.Width
+		keyType.Scale = ukType.Scale
+		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(keyType)
 	} else {
 		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	}
@@ -111,7 +115,7 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 		for vIdx, pIdx := range secondaryColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		bitMap, err = util.SerialWithoutCompacted(vs, preInsertSecIdx.ctr.buf.Vecs[indexColPos], proc, &preInsertSecIdx.packers)
+		bitMap, err = util.SerialWithoutCompacted(vs, preInsertSecIdx.ctr.buf.Vecs[indexColPos], proc, &preInsertSecIdx.packers, util.DefaultPackerSize)
 		if err != nil {
 			return result, err
 		}

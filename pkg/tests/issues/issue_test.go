@@ -17,13 +17,16 @@ package issues
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -46,6 +49,146 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIssue23861FulltextSnapshotRestore(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
+			defer cancel()
+
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			port := cn.GetServiceConfig().CN.Frontend.Port
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?multiStatements=true", port)
+			sqlDB, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer sqlDB.Close()
+			sqlDB.SetMaxOpenConns(4)
+			execSQLRequire(t, ctx, sqlDB, "set role moadmin")
+
+			dbName := strings.ToLower(testutils.GetDatabaseName(t))
+			tableName := "ft_test"
+			snapshotName1 := fmt.Sprintf("snap_23861_a_%d", time.Now().UnixNano())
+			snapshotName2 := fmt.Sprintf("snap_23861_b_%d", time.Now().UnixNano())
+
+			defer execSQLMaybe(t, ctx, sqlDB, fmt.Sprintf("drop database if exists `%s`", dbName))
+
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("drop database if exists `%s`", dbName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf(
+				"create table `%s`.`%s` (id int primary key, content text, fulltext index ft_content (content) with parser ngram)",
+				dbName,
+				tableName,
+			))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("insert into `%s`.`%s` values (1, 'hello')", dbName, tableName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("create snapshot %s for account sys", snapshotName1))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("delete from `%s`.`%s`", dbName, tableName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("insert into `%s`.`%s` values (2, 'world')", dbName, tableName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("create snapshot %s for account sys", snapshotName2))
+
+			conn1, err := sqlDB.Conn(ctx)
+			require.NoError(t, err)
+			defer conn1.Close()
+
+			conn2, err := sqlDB.Conn(ctx)
+			require.NoError(t, err)
+			defer conn2.Close()
+
+			restoreSQL1 := fmt.Sprintf(
+				"delete from `%s`.`%s`; insert into `%s`.`%s` select * from `%s`.`%s` {SNAPSHOT='%s'};",
+				dbName,
+				tableName,
+				dbName,
+				tableName,
+				dbName,
+				tableName,
+				snapshotName1,
+			)
+			restoreSQL2 := fmt.Sprintf(
+				"delete from `%s`.`%s`; insert into `%s`.`%s` select * from `%s`.`%s` {SNAPSHOT='%s'};",
+				dbName,
+				tableName,
+				dbName,
+				tableName,
+				dbName,
+				tableName,
+				snapshotName2,
+			)
+
+			for round := 0; round < 20; round++ {
+				runConcurrentRestoreRound(t, ctx, restoreSQL1, restoreSQL2, conn1, conn2, round)
+			}
+
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("delete from `%s`.`%s`", dbName, tableName))
+			execSQLRequire(t, ctx, sqlDB, fmt.Sprintf("insert into `%s`.`%s` values (3, 'world-again')", dbName, tableName))
+
+			rows, err := sqlDB.QueryContext(ctx, fmt.Sprintf("select id, content from `%s`.`%s` order by id", dbName, tableName))
+			require.NoError(t, err)
+			defer rows.Close()
+
+			type row struct {
+				id      int
+				content string
+			}
+			var got []row
+			for rows.Next() {
+				var r row
+				require.NoError(t, rows.Scan(&r.id, &r.content))
+				got = append(got, r)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, []row{
+				{id: 3, content: "world-again"},
+			}, got)
+		},
+	)
+}
+
+func runConcurrentRestoreRound(
+	t *testing.T,
+	ctx context.Context,
+	restoreSQL1 string,
+	restoreSQL2 string,
+	conn1 *sql.Conn,
+	conn2 *sql.Conn,
+	round int,
+) {
+	t.Helper()
+
+	start := make(chan struct{})
+	errC := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	run := func(conn *sql.Conn, restoreSQL string) {
+		defer wg.Done()
+		<-start
+		_, err := conn.ExecContext(ctx, restoreSQL)
+		errC <- err
+	}
+
+	go run(conn1, restoreSQL1)
+	go run(conn2, restoreSQL2)
+	close(start)
+	wg.Wait()
+	close(errC)
+
+	for err := range errC {
+		require.NoErrorf(t, err, "concurrent fulltext snapshot restore failed at round %d", round)
+	}
+}
+
+func execSQLRequire(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, statement)
+	require.NoErrorf(t, err, "exec failed: %s", statement)
+}
+
+func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
+	t.Helper()
+	_, _ = db.ExecContext(ctx, statement)
+}
 
 func TestWWConflict(t *testing.T) {
 	embed.RunBaseClusterTests(
@@ -321,6 +464,12 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 			exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 			require.NotNil(t, exec)
+			rowCount := 512 * 1024
+			if testing.Short() {
+				// A rowid plus its primary key still crosses the 1 MiB flush
+				// threshold at this size, without making PR CI process 512K rows.
+				rowCount = 64 * 1024
+			}
 
 			{
 				_, err := exec.Exec(ctx, "create database a;", executor.Options{})
@@ -334,7 +483,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 					executor.Options{}.WithDatabase("a"))
 				require.NoError(t, err)
 
-				_, err = exec.Exec(ctx, "insert into t1 select *,'yep' from generate_series(1,512*1024)g;",
+				_, err = exec.Exec(ctx, fmt.Sprintf("insert into t1 select *,'yep' from generate_series(1,%d)g;", rowCount),
 					executor.Options{}.WithDatabase("a"))
 				require.NoError(t, err)
 
@@ -344,13 +493,13 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 				resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
 					cnt := vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
-					require.Equal(t, int64(512*1024), cnt)
+					require.Equal(t, int64(rowCount), cnt)
 					return true
 				})
 			}
 
 			deletion.SetCNFlushDeletesThreshold(1)
-			defer deletion.SetCNFlushDeletesThreshold(32)
+			defer deletion.SetCNFlushDeletesThreshold(5)
 
 			{
 				_, err := exec.Exec(ctx, "delete from t1 where a > 1;", executor.Options{}.WithDatabase("a"))
@@ -647,29 +796,36 @@ func TestIssue19551(t *testing.T) {
 
 			// workflow:
 			// start txn1, txn2 on cn1
+			// txn1, txn2 both do insert before CN is marked invalid
 			// mark cn1 invalid
-			// commit txn1
-			// wait abort active txn completed
-			// commit txn2
+			// txn1 commits first, gets ErrCannotCommitOnInvalidCN, triggers markAllActiveTxnAborted
+			// wait abort active txn completed (service resume)
+			// txn2 commits, gets ErrTxnClosed (already marked aborted)
 			// start txn3 and commit will success
+			//
+			// Note: txn1 may also get ErrTxnClosed if a background task (e.g. mo_table_stats)
+			// commits while CN is invalid and triggers markAllActiveTxnAborted before txn1.
 
 			var wg sync.WaitGroup
 			wg.Add(2)
 
 			txn1StartedC := make(chan struct{})
 			txn2StartedC := make(chan struct{})
+			txn1InsertedC := make(chan struct{})
+			txn2InsertedC := make(chan struct{})
 			invalidMarkedC := make(chan struct{})
+			txn1CommittedC := make(chan struct{})
 
 			// txn1
 			exec := testutils.GetSQLExecutor(cn1)
 			go func() {
 				defer wg.Done()
+				defer close(txn1CommittedC)
 
 				err := exec.ExecTxn(
 					ctx,
 					func(txn executor.TxnExecutor) error {
 						close(txn1StartedC)
-						<-invalidMarkedC
 
 						res, err := txn.Exec(
 							"insert into "+table+" values (1, 1)",
@@ -679,14 +835,23 @@ func TestIssue19551(t *testing.T) {
 							return err
 						}
 						res.Close()
+
+						close(txn1InsertedC)
+						// wait until CN is marked invalid, then return to trigger commit
+						<-invalidMarkedC
 						return nil
 					},
 					executor.Options{}.WithDatabase(db),
 				)
 				require.Error(t, err)
+				// txn1 gets ErrCannotCommitOnInvalidCN when its commit reaches TN validation.
+				// However, if a background task (e.g. mo_table_stats) commits while CN is invalid
+				// before txn1, it triggers markAllActiveTxnAborted first, marking txn1 as aborted,
+				// in which case txn1 gets ErrTxnClosed instead.
 				require.Truef(
 					t,
-					moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN),
+					moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN) ||
+						moerr.IsMoErrCode(err, moerr.ErrTxnClosed),
 					fmt.Sprintf("got: %v", err))
 			}()
 
@@ -707,7 +872,11 @@ func TestIssue19551(t *testing.T) {
 						}
 						res.Close()
 
-						// wait valid service resume, means all active in txn client is marked aborted
+						close(txn2InsertedC)
+						// wait txn1 committed first, which triggers markAllActiveTxnAborted
+						<-txn1CommittedC
+
+						// wait service resume, which means markAllActiveTxnAborted + Resume completed
 						for {
 							if !allocator.HasInvalidService(lockSID) {
 								break
@@ -728,6 +897,11 @@ func TestIssue19551(t *testing.T) {
 
 			<-txn1StartedC
 			<-txn2StartedC
+			// wait both txns to finish insert before marking CN invalid,
+			// so that commit happens immediately after invalidMarkedC is closed,
+			// minimizing the window for background tasks to interfere.
+			<-txn1InsertedC
+			<-txn2InsertedC
 
 			// mark cn1 invalid
 			allocator.AddInvalidService(lockSID)
@@ -780,28 +954,33 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 	op, err := c.GetCNService(0)
 	require.NoError(t, err)
 
-	waitC := make(chan struct{})
+	waitC := make(chan struct{}, 1)
 	cn := op.RawService().(cnservice.Service)
 	eng := cn.GetEngine().(*disttae.Engine)
 	logtailClient := eng.PushClient()
 	logtailClient.SetReconnectHandler(func() {
-		waitC <- struct{}{}
+		select {
+		case waitC <- struct{}{}:
+		default:
+		}
 	})
 
 	c1 := make(chan struct{})
 	c2 := make(chan struct{})
 	actionC := make(chan struct{})
+	errC := make(chan error, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
+	defer cancel()
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	taskservice.DebugCtlTaskFramework(true)
+	defer taskservice.DebugCtlTaskFramework(false)
 
 	// active will commit failed
 	go func() {
 		defer wg.Done()
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
-		defer cancel()
 		exec := cn.GetSQLExecutor()
 		err := exec.ExecTxn(
 			ctx,
@@ -810,60 +989,94 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 					"create database TestSpeedupAbortAllTxn",
 					executor.StatementOption{},
 				)
-				require.NoError(t, err)
+				if err != nil {
+					return err
+				}
 				res.Close()
 				close(c1)
 
 				// wait txn in active
-				<-c2
+				select {
+				case <-c2:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 				close(actionC)
 
-				<-waitC
+				select {
+				case <-waitC:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+
+				// Wait for push client to be fully ready before returning.
+				// reconnectHandler is called before push client is fully recovered,
+				// so we need to wait here to avoid committing when push client is not ready.
+				for !eng.PushClient().IsSubscriberReady() {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(time.Millisecond * 10):
+					}
+				}
 
 				return nil
 			},
 			executor.Options{}.WithDatabase("mo_catalog").WithUserTxn(),
 		)
-		require.NoError(t, err)
+		errC <- err
 	}()
 
 	// wait active txn will canceled
 	go func() {
 		defer wg.Done()
 
-		<-c1
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
-		defer cancel()
+		select {
+		case <-c1:
+		case <-ctx.Done():
+			errC <- ctx.Err()
+			return
+		}
 
 		tc := cn.GetTxnClient()
+		var notifyActive sync.Once
 		_, err := tc.New(
 			ctx,
 			timestamp.Timestamp{},
 			client.WithUserTxn(),
 			client.WithWaitActiveHandle(
 				func() {
-					close(c2)
+					notifyActive.Do(func() {
+						close(c2)
+					})
 				},
 			),
 		)
-		require.NoError(t, err)
+		errC <- err
 	}()
 
-	<-actionC
+	select {
+	case <-actionC:
+	case <-ctx.Done():
+		require.NoError(t, ctx.Err())
+	}
 	require.NoError(t, logtailClient.Disconnect())
-	waitLogtailResume(cn)
+	require.NoError(t, waitLogtailResume(ctx, cn))
 
 	wg.Wait()
+	close(errC)
+	for err := range errC {
+		require.NoError(t, err)
+	}
 }
 
-func waitLogtailResume(cn cnservice.Service) {
+func waitLogtailResume(ctx context.Context, cn cnservice.Service) error {
 	exec := cn.GetSQLExecutor()
 	fn := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 		res, err := exec.Exec(
-			ctx,
+			execCtx,
 			"select * from mo_tables",
 			executor.Options{}.WithDatabase("mo_catalog"),
 		)
@@ -874,12 +1087,61 @@ func waitLogtailResume(cn cnservice.Service) {
 		return nil
 	}
 
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
 		if err := fn(); err == nil {
-			return
+			return nil
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
+}
+
+// #15087
+func TestLikePatternPlus(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			exec := testutils.GetSQLExecutor(cn)
+			require.NotNil(t, exec)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+
+			cases := []struct {
+				sql      string
+				expected bool
+			}{
+				{sql: "select '__++' like '__++%';", expected: true},
+				{sql: "select '__++__' like '__\\\\+';", expected: false},
+				{sql: "select '__++__' like '__+';", expected: false},
+			}
+
+			for _, c := range cases {
+				res, err := exec.Exec(ctx, c.sql, executor.Options{})
+				require.NoError(t, err, c.sql)
+
+				var got bool
+				res.ReadRows(
+					func(rows int, cols []*vector.Vector) bool {
+						got = executor.GetFixedRows[bool](cols[0])[0]
+						return true
+					},
+				)
+				res.Close()
+
+				require.Equal(t, c.expected, got, c.sql)
+			}
+		},
+	)
 }
 
 func TestFaultInjection(t *testing.T) {

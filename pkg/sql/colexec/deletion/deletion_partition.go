@@ -16,6 +16,7 @@ package deletion
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
@@ -108,12 +109,10 @@ func (op *PartitionDelete) Call(
 		panic("Prune result is empty")
 	}
 
-	ref := op.raw.DeleteCtx.Ref
+	// Use a local copy of the ObjRef to avoid mutating the shared plan
+	// object that may be read concurrently by other operators.
+	localRef := *op.raw.DeleteCtx.Ref
 	eng := op.raw.DeleteCtx.Engine
-	oldName := ref.ObjName
-	defer func() {
-		ref.ObjName = oldName
-	}()
 
 	var rel engine.Relation
 	res.Iter(
@@ -121,12 +120,12 @@ func (op *PartitionDelete) Call(
 			partition partition.Partition,
 			bat *batch.Batch,
 		) bool {
-			ref.ObjName = partition.PartitionTableName
+			localRef.ObjName = partition.PartitionTableName
 			rel, err = colexec.GetRelAndPartitionRelsByObjRef(
 				proc.Ctx,
 				proc,
 				eng,
-				ref,
+				&localRef,
 			)
 			if err != nil {
 				return false
@@ -160,7 +159,6 @@ func (op *PartitionDelete) Free(
 	err error,
 ) {
 	op.raw.Free(proc, pipelineFailed, err)
-	*op = PartitionDelete{}
 }
 
 func (op *PartitionDelete) Release() {

@@ -15,6 +15,9 @@
 package plan
 
 import (
+	"context"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -36,7 +39,7 @@ func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 }
 
 func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
-	astStr := tree.String(astExpr, dialect.MYSQL)
+	astStr := windowExprAstKey(astExpr)
 
 	if !b.insideAgg {
 		if colPos, ok := b.ctx.groupByAst[astStr]; ok {
@@ -74,6 +77,18 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.sampleTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
+	if colPos, ok := b.ctx.windowByAst[astStr]; ok {
+		return &plan.Expr{
+			Typ: b.ctx.windows[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.windowTag,
 					ColPos: colPos,
 				},
 			},
@@ -118,8 +133,48 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			},
 		}, nil
 	} else {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
+		if expr, err := b.baseBindColRef(astExpr, depth, isRoot); err == nil {
+			if corr, ok := expr.Expr.(*plan.Expr_Corr); ok &&
+				(b.corrColRefTargetsCurrentGroup(corr.Corr) || b.corrColRefTargetsGroup(corr.Corr)) {
+				return expr, nil
+			}
+		}
+		return nil, b.newGroupByColumnError(astExpr)
 	}
+}
+
+func (b *HavingBinder) newGroupByColumnError(astExpr *tree.UnresolvedName) error {
+	return moerr.NewSyntaxErrorf(b.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
+}
+
+// validateCountArgs validates COUNT function arguments against MySQL semantics.
+//   - COUNT(*), COUNT(expr): always valid
+//   - COUNT(expr1, expr2, ...): only valid with DISTINCT
+//   - COUNT((expr1, expr2, ...)): only valid with DISTINCT
+//
+// Call this from every binder path that constructs a COUNT aggregate or window
+// function (HavingBinder.BindAggFunc, bindWindowFuncExpr) before the call to
+// bindFuncExprImplByAstExpr.
+func validateCountArgs(ctx context.Context, funcName string, astExpr *tree.FuncExpr) error {
+	if funcName != "count" {
+		return nil
+	}
+	if len(astExpr.Exprs) == 0 {
+		// COUNT(*)
+		return nil
+	}
+	// COUNT((a, b, ...)) — tuple-as-single-arg, only valid with DISTINCT.
+	if len(astExpr.Exprs) == 1 {
+		if _, ok := astExpr.Exprs[0].(*tree.Tuple); ok && astExpr.Type != tree.FUNC_TYPE_DISTINCT {
+			return moerr.NewSyntaxErrorf(ctx, "Incorrect arguments to COUNT")
+		}
+		return nil
+	}
+	// COUNT(a, b, ...) — multiple separate args, only valid with DISTINCT.
+	if astExpr.Type != tree.FUNC_TYPE_DISTINCT {
+		return moerr.NewSyntaxErrorf(ctx, "Incorrect arguments to COUNT")
+	}
+	return nil
 }
 
 func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
@@ -134,11 +189,37 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		}
 	}
 
+	if err := validateCountArgs(b.GetContext(), funcName, astExpr); err != nil {
+		return nil, err
+	}
+
 	b.insideAgg = true
 	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 	if err != nil {
 		return nil, err
 	}
+
+	// Normalize COUNT(DISTINCT (a, b)) → COUNT(DISTINCT a, b) by expanding
+	// the tuple arg into separate args. This must happen for every aggregate
+	// expression (not just inside optimizeDistinctAgg), otherwise the executor
+	// cannot build a correct multi-column distinct key from a single T_tuple vector.
+	//
+	// Only an AST tuple binds to Expr_List and can be expanded. A multi-column
+	// row subquery — e.g. COUNT(DISTINCT (SELECT a, b ...)) — also carries
+	// Typ.Id == T_tuple but is an Expr_Sub: GetList() is nil there, and leaving
+	// it unexpanded would let downstream either nil-deref, error as NYI, or
+	// silently collapse to the subquery's first column. Reject it explicitly.
+	f := expr.GetF()
+	if funcName == "count" && astExpr.Type == tree.FUNC_TYPE_DISTINCT &&
+		len(f.Args) == 1 && f.Args[0].Typ.Id == int32(types.T_tuple) {
+		list := f.Args[0].GetList()
+		if list == nil {
+			return nil, moerr.NewNotSupported(b.GetContext(),
+				"COUNT(DISTINCT ...) with a multi-column subquery argument")
+		}
+		f.Args = list.List
+	}
+
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		if funcName != "max" && funcName != "min" && funcName != "any_value" {
 			expr.GetF().Func.Obj = int64(uint64(expr.GetF().Func.Obj) | function.Distinct)
@@ -154,7 +235,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}
 
 	colPos := int32(len(b.ctx.aggregates))
-	astStr := tree.String(astExpr, dialect.MYSQL)
+	astStr := semanticAstKey(astExpr)
 	b.ctx.aggregateByAst[astStr] = colPos
 	b.ctx.aggregates = append(b.ctx.aggregates, expr)
 
@@ -194,6 +275,18 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 
 	funcId, _ := function.DecodeOverloadID(obj.Obj)
 	switch funcId {
+	case function.SUM:
+		arg := expr.GetF().Args[0]
+		typ := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+		fGet, err := function.GetFunctionByName(b.GetContext(), "sum", []types.Type{typ})
+		if err != nil {
+			return nil, err
+		}
+		obj.Obj = fGet.GetEncodedOverloadID()
+		obj.ObjName = "sum"
+		expr.Typ.Id = int32(fGet.GetReturnType().Oid)
+		expr.Typ.Width = fGet.GetReturnType().Width
+		expr.Typ.Scale = fGet.GetReturnType().Scale
 	case function.COUNT:
 		fGet, err := function.GetFunctionByName(b.GetContext(), "sum", []types.Type{types.T_int64.ToType()})
 		if err != nil {
@@ -201,6 +294,9 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 		}
 		obj.Obj = fGet.GetEncodedOverloadID()
 		obj.ObjName = "sum"
+		expr.Typ.Id = int32(fGet.GetReturnType().Oid)
+		expr.Typ.Width = fGet.GetReturnType().Width
+		expr.Typ.Scale = fGet.GetReturnType().Scale
 	case function.AVG_TW_CACHE:
 		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
 		fGet, err := function.GetFunctionByName(b.GetContext(), "avg_tw_result", []types.Type{typ})
@@ -216,26 +312,42 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 	return expr, nil
 }
 
-func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) error {
+func makeTimeWindowProjectionExpr(ctx context.Context, bindCtx *BindContext, astExpr tree.Expr, colPos int32) (*plan.Expr, error) {
+	expr := &plan.Expr{
+		Typ: bindCtx.times[colPos].Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: bindCtx.timeTag,
+				ColPos: colPos,
+			},
+		},
+	}
+	if bindCtx.sliding && isCountFuncExpr(astExpr) && types.T(expr.Typ.Id) != types.T_int64 {
+		int64Type := types.T_int64.ToType()
+		return appendCastBeforeExpr(ctx, expr, makePlan2Type(&int64Type))
+	}
+	return expr, nil
+}
 
+func isCountFuncExpr(astExpr tree.Expr) bool {
+	funcExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok {
+		return false
+	}
+	funcRef, ok := funcExpr.Func.FunctionReference.(*tree.UnresolvedName)
+	return ok && strings.EqualFold(funcRef.ColName(), "count")
+}
+
+// processGroupConcatOrderBy processes the ORDER BY clause in group_concat.
+// Instead of converting to window function, it records the order by specs
+// so that a Sort node can be inserted before the Agg node.
+// This allows batch processing instead of requiring all data in memory.
+func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) error {
 	if len(astExpr.OrderBy) < 1 {
 		return nil
 	}
-	b.ctx.forceWindows = true
-	b.ctx.isDistinct = true
 
-	w := &plan.WindowSpec{}
-	ws := &tree.WindowSpec{}
-
-	// window function
-	w.Name = funcName
-
-	// partition by
-	w.PartitionBy = DeepCopyExprList(b.ctx.groups)
-
-	//order by
-	w.OrderBy = make([]*plan.OrderBySpec, 0, len(astExpr.OrderBy))
-
+	// Parse ORDER BY expressions and add to groupConcatOrderBys
 	for _, order := range astExpr.OrderBy {
 		orderExpr := order.Expr
 		if numVal, ok := order.Expr.(*tree.NumVal); ok {
@@ -243,7 +355,7 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			case tree.Int:
 				colPos, _ := numVal.Int64()
 				if numVal.Negative() {
-					moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is negative", colPos)
+					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is negative", colPos)
 				}
 				if colPos < 1 || int(colPos) > len(astExpr.Exprs)-1 {
 					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
@@ -252,10 +364,9 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			default:
 				return moerr.NewSyntaxError(b.GetContext(), "non-integer constant in ORDER BY")
 			}
-
 		}
 
-		if _, ok := order.Expr.(*tree.Subquery); ok {
+		if _, ok := orderExpr.(*tree.Subquery); ok {
 			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
 
@@ -265,6 +376,9 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 
 		if err != nil {
 			return err
+		}
+		if hasSubquery(expr) {
+			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
 
 		orderBy := &plan.OrderBySpec{
@@ -286,57 +400,26 @@ func (b *HavingBinder) processForceWindows(funcName string, astExpr *tree.FuncEx
 			orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 		}
 
-		w.OrderBy = append(w.OrderBy, orderBy)
+		// Add to groupConcatOrderBys for Sort node generation
+		b.ctx.groupConcatOrderBys = append(b.ctx.groupConcatOrderBys, orderBy)
 	}
-
-	w.Frame = getFrame(ws)
-
-	// append
-	b.ctx.windows = append(b.ctx.windows, &plan.Expr{
-		Expr: &plan.Expr_W{W: w},
-	})
 
 	return nil
-}
-
-func getFrame(ws *tree.WindowSpec) *plan.FrameClause {
-
-	f := &tree.FrameClause{Type: tree.Range}
-
-	if ws.OrderBy == nil {
-		f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
-		f.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
-	} else {
-		f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
-		f.End = &tree.FrameBound{Type: tree.CurrentRow}
-	}
-
-	ws.HasFrame = false
-	ws.Frame = f
-
-	return &plan.FrameClause{
-		Type: plan.FrameClause_FrameType(ws.Frame.Type),
-		Start: &plan.FrameBound{
-			Type:      plan.FrameBound_BoundType(ws.Frame.Start.Type),
-			UnBounded: ws.Frame.Start.UnBounded,
-		},
-		End: &plan.FrameBound{
-			Type:      plan.FrameBound_BoundType(ws.Frame.End.Type),
-			UnBounded: ws.Frame.End.UnBounded,
-		},
-	}
 }
 
 func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, moerr.NewSyntaxError(b.GetContext(), "aggregate function calls cannot contain window function calls")
-	} else {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "window %s functions not allowed in having clause", funcName)
 	}
+	return bindWindowFuncExpr(b, b.ctx, funcName, astExpr, depth, isRoot)
 }
 
 func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindSubquery(astExpr, isRoot)
+}
+
+func (b *HavingBinder) makeFrameConstValue(expr tree.Expr, typ *plan.Type) (*plan.Expr, error) {
+	return makeWindowFrameConstValue(b.baseBindExpr, b.builder.compCtx.GetProcess(), b.GetContext(), expr, typ)
 }
 
 func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
@@ -380,16 +463,8 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 	}
 	b.ctx.times = append(b.ctx.times, expr)
 
-	astStr := tree.String(astExpr, dialect.MYSQL)
+	astStr := semanticAstKey(astExpr)
 	b.ctx.timeByAst[astStr] = colPos
 
-	return &plan.Expr{
-		Typ: expr.Typ,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: b.ctx.timeTag,
-				ColPos: colPos,
-			},
-		},
-	}, nil
+	return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
 }

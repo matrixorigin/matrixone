@@ -17,6 +17,7 @@ package cache
 import (
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -24,7 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 /*
@@ -56,8 +57,12 @@ var (
 
 // Various vector index algorithm wants to share with VectorIndexCache need to implement VectorIndexSearchIf interface (see HnswSearch)
 type VectorIndexSearchIf interface {
-	Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error)
-	Load(*process.Process) error
+	Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error)
+	// SearchFloat32 writes results into caller-provided slices to avoid heap allocation.
+	// outKeys and outDists must be pre-allocated to nQueries*rt.Limit elements.
+	// GPU implementations write float32 distances directly; CPU implementations convert on write.
+	SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error
+	Load(*sqlexec.SqlProcess) error
 	UpdateConfig(VectorIndexSearchIf) error
 	Destroy()
 }
@@ -84,14 +89,14 @@ func (s *VectorIndexSearch) Destroy() {
 	s.Status.Store(STATUS_DESTROYED)
 }
 
-func (s *VectorIndexSearch) Load(proc *process.Process) error {
+func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 	s.Mutex.Lock()
 	defer func() {
 		s.Mutex.Unlock()
 		s.Cond.Broadcast()
 	}()
 
-	err := s.Algo.Load(proc)
+	err := s.Algo.Load(sqlproc)
 	if err != nil {
 		// load error
 		s.Status.Store(STATUS_ERROR)
@@ -121,7 +126,7 @@ func (s *VectorIndexSearch) extend(update bool) {
 	s.ExpireAt.Store(ts)
 }
 
-func (s *VectorIndexSearch) Search(proc *process.Process, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 
 	s.Cond.L.Lock()
 	defer s.Cond.L.Unlock()
@@ -146,7 +151,7 @@ func (s *VectorIndexSearch) Search(proc *process.Process, newalgo VectorIndexSea
 	}
 
 	s.extend(false)
-	return s.Algo.Search(proc, query, rt)
+	return s.Algo.Search(sqlproc, query, rt)
 }
 
 // implementation of VectorIndexCache
@@ -248,7 +253,7 @@ func (c *VectorIndexCache) Destroy() {
 }
 
 // Get index from cache and return VectorIndexSearchIf interface
-func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo VectorIndexSearchIf,
+func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	for {
 		s := &VectorIndexSearch{Algo: newalgo}
@@ -258,13 +263,13 @@ func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo Vec
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
 			// load model from database and if error during loading, remove the entry from gIndexMap
-			err := algo.Load(proc)
+			err := algo.Load(sqlproc)
 			if err != nil {
 				c.IndexMap.Delete(key)
 				return nil, nil, err
 			}
 		}
-		keys, distances, err = algo.Search(proc, newalgo, query, rt)
+		keys, distances, err = algo.Search(sqlproc, newalgo, query, rt)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
 				// index destroyed by Remove() or HouseKeeping.  Retry!
@@ -284,5 +289,26 @@ func (c *VectorIndexCache) Remove(key string) {
 		algo := value.(*VectorIndexSearch)
 		algo.Destroy()
 		algo = nil
+	}
+}
+
+// RemovePrefix removes every cached index whose key starts with prefix.
+//
+// Algorithms that qualify their cache key with mutable state cannot name the
+// live key from the DDL path: IVF-FLAT caches under "<indexTable>:<version>"
+// (plus "/<cnIdx>/<cnCnt>" when the read is split across CNs), and the version
+// comes from the meta table at search time, so a DROP that guessed ":0" evicted
+// nothing once the index had been rebuilt. Such callers pass "<indexTable>:"
+// and drop every generation at once.
+func (c *VectorIndexCache) RemovePrefix(prefix string) {
+	keys := make([]string, 0, 4)
+	c.IndexMap.Range(func(key, value any) bool {
+		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+		return true
+	})
+	for _, k := range keys {
+		c.Remove(k)
 	}
 }

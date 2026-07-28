@@ -148,6 +148,26 @@ DELETE t1,t5 FROM t1,t5 WHERE t1.a = t5.a AND t1.a = 4;
 SELECT * FROM t1;
 SELECT * FROM t5;
 
+-- Test: single-target DELETE with JOIN, condition in ON clause only (no WHERE)
+create table tj_a (id int, n int);
+create table tj_b (id int);
+insert into tj_a values (1, 10), (2, 20);
+insert into tj_b values (1);
+delete a from tj_a a join tj_b b on a.id = b.id;
+select count(*) from tj_a;
+drop table tj_a;
+drop table tj_b;
+
+-- Test: duplicate matches on right side — each target row deleted once
+create table tj_c (id int, n int);
+create table tj_d (id int);
+insert into tj_c values (1, 10), (2, 20);
+insert into tj_d values (1), (1), (1);
+delete c from tj_c c join tj_d d on c.id = d.id;
+select count(*) from tj_c;
+drop table tj_c;
+drop table tj_d;
+
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
@@ -168,4 +188,26 @@ SELECT * FROM t1;
 
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS temp;
+
+-- Test: partitioned DELETE with JOIN -- duplicate matches on right side
+-- Each target row should be deleted exactly once (not over-counted)
+create table tj_part_c (
+	id int,
+	n int,
+	primary key (id, n)
+) partition by hash(n) partitions 3;
+
+create table tj_part_d (id int);
+
+insert into tj_part_c values (1, 10), (2, 20), (3, 30);
+insert into tj_part_d values (1), (1), (1), (2), (2);
+
+-- tj_part_c (id=1) matches 3 rows in tj_part_d
+-- tj_part_c (id=2) matches 2 rows in tj_part_d
+-- Expect: each target row deleted once; count = 1 remaining
+delete c from tj_part_c c join tj_part_d d on c.id = d.id;
+select count(*) from tj_part_c;
+
+drop table tj_part_c;
+drop table tj_part_d;
 

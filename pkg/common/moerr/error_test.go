@@ -91,6 +91,28 @@ func TestNew_MyErrorCode(t *testing.T) {
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 }
 
+func TestLockWaitTimeoutMySQLError(t *testing.T) {
+	err := NewLockWaitTimeout(context.Background())
+	require.Equal(t, ErrLockWaitTimeout, err.ErrorCode())
+	require.Equal(t, ER_LOCK_WAIT_TIMEOUT, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Lock wait timeout exceeded; try restarting transaction", err.Error())
+
+	noCtxErr := NewLockWaitTimeoutNoCtx()
+	require.Equal(t, ErrLockWaitTimeout, noCtxErr.ErrorCode())
+	require.Equal(t, ER_LOCK_WAIT_TIMEOUT, noCtxErr.MySQLCode())
+}
+
+func TestMaxPreparedStmtCountReachedMySQLError(t *testing.T) {
+	err := NewMaxPreparedStmtCountReached(context.Background(), 2)
+	require.Equal(t, ErrMaxPreparedStmtCountReached, err.ErrorCode())
+	require.Equal(t, ER_MAX_PREPARED_STMT_COUNT_REACHED, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t,
+		"Can't create more than max_prepared_stmt_count statements (current value: 2)",
+		err.Error())
+}
+
 func TestIsMoErrCode(t *testing.T) {
 	err := NewDivByZero(context.TODO())
 	require.True(t, IsMoErrCode(err, ErrDivByZero))
@@ -109,6 +131,21 @@ func TestEncoding(t *testing.T) {
 	err = e2.UnmarshalBinary(data)
 	require.Nil(t, err)
 	require.Equal(t, e, e2)
+}
+
+func TestErrSubqueryNo1RowContract(t *testing.T) {
+	err := NewErrSubqueryNo1Row(context.Background())
+	require.Equal(t, ErrSubqueryNo1Row, err.ErrorCode())
+	require.Equal(t, ER_SUBQUERY_NO_1_ROW, err.MySQLCode())
+	require.Equal(t, "21000", err.SqlState())
+	require.Equal(t, "Subquery returns more than 1 row", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
 }
 
 type fakeErr struct {
@@ -159,4 +196,115 @@ func TestIsSameMoErr(t *testing.T) {
 
 	b = GetOkExpectedEOB()
 	require.True(t, IsSameMoErr(a, b))
+}
+
+// TestNewErrTooBigPrecision tests the NewErrTooBigPrecision error constructor
+func TestNewErrTooBigPrecision(t *testing.T) {
+	ctx := context.TODO()
+
+	// Test with function name "now"
+	err := NewErrTooBigPrecision(ctx, 7, "now", 6)
+	require.NotNil(t, err)
+	require.Equal(t, ErrTooBigPrecision, err.ErrorCode())
+	require.Equal(t, ER_TOO_BIG_PRECISION, err.MySQLCode())
+	require.Contains(t, err.Error(), "Too-big precision 7 specified for 'now'")
+	require.Contains(t, err.Error(), "Maximum is 6")
+
+	// Test with function name "sysdate"
+	err = NewErrTooBigPrecision(ctx, -1, "sysdate", 6)
+	require.NotNil(t, err)
+	require.Equal(t, ErrTooBigPrecision, err.ErrorCode())
+	require.Contains(t, err.Error(), "Too-big precision -1 specified for 'sysdate'")
+	require.Contains(t, err.Error(), "Maximum is 6")
+
+	// Test with type name "TIMESTAMP"
+	err = NewErrTooBigPrecision(ctx, 10, "TIMESTAMP", 6)
+	require.NotNil(t, err)
+	require.Equal(t, ErrTooBigPrecision, err.ErrorCode())
+	require.Contains(t, err.Error(), "Too-big precision 10 specified for 'TIMESTAMP'")
+	require.Contains(t, err.Error(), "Maximum is 6")
+
+	// Verify error code
+	code, ok := GetMoErrCode(err)
+	require.True(t, ok)
+	require.Equal(t, ErrTooBigPrecision, code)
+}
+
+func Test_ForCoverage(t *testing.T) {
+	ctx := context.Background()
+	err := NewDataTruncatedf(ctx, "test", "test")
+	require.True(t, IsMoErrCode(err, ErrDataTruncated))
+
+	err = NewConstraintViolationf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrConstraintViolation))
+
+	err = NewTxnWriteConflictf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTxnWriteConflict))
+
+	err = NewTxnErrorf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTxnError))
+
+	err = NewTAEErrorf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTAEError))
+
+	err = NewDragonboatTimeoutf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatTimeout))
+
+	err = NewDragonboatTimeoutTooSmallf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatTimeoutTooSmall))
+
+	err = NewDragonboatInvalidDeadlinef(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatInvalidDeadline))
+
+	err = NewDragonboatRejectedf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatRejected))
+
+	err = NewDragonboatInvalidPayloadSizef(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatInvalidPayloadSize))
+
+	err = NewDragonboatShardNotReadyf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatShardNotReady))
+
+	err = NewDragonboatSystemClosedf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatSystemClosed))
+
+	err = NewDragonboatInvalidRangef(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatInvalidRange))
+
+	err = NewDragonboatShardNotFoundf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatShardNotFound))
+
+	err = NewDragonboatOtherSystemErrorf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrDragonboatOtherSystemError))
+
+	err = NewTAECommitf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTAECommit))
+
+	err = NewTAERollbackf(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTAERollback))
+
+	err = NewTAEPreparef(ctx, "test")
+	require.True(t, IsMoErrCode(err, ErrTAEPrepare))
+
+	err = NewTxnStaleNoCtxf("test")
+	require.True(t, IsMoErrCode(err, ErrTxnStale))
+}
+
+// TestNewErrCastWidthExceeded verifies the cast width-violation error carries the
+// ErrCastWidthExceeded code and maps to MySQL ER_DATA_TOO_LONG (1406) — the
+// correct protocol code for an over-length write. The message template is bare
+// "%s" (no "internal error:" prefix); the JDBC driver then wraps it as
+// java.sql.DataTruncation, which the BVT result files reflect.
+func TestNewErrCastWidthExceeded(t *testing.T) {
+	ctx := context.Background()
+	err := NewErrCastWidthExceeded(ctx, "Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3")
+
+	require.Equal(t, ErrCastWidthExceeded, err.ErrorCode())
+	require.Equal(t, uint16(ER_DATA_TOO_LONG), err.MySQLCode())
+	require.Equal(t, "22001", err.SqlState())
+	require.True(t, IsMoErrCode(err, ErrCastWidthExceeded))
+	// Bare "%s" template: the diagnostic message is carried verbatim.
+	require.Equal(t,
+		"Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3",
+		err.Error())
 }

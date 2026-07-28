@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -23,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -133,8 +133,7 @@ var (
 
 type Cleaner interface {
 	Replay(context.Context) error
-	Process(context.Context) error
-	TryGC(context.Context) error
+	Process(context.Context, func(*checkpoint.CheckpointEntry) bool) error
 	AddChecker(checker func(item any) bool, key string) int
 	RemoveChecker(key string) error
 	GetScanWaterMark() *checkpoint.CheckpointEntry
@@ -149,7 +148,19 @@ type Cleaner interface {
 	DisableGC()
 	GCEnabled() bool
 	GetMPool() *mpool.MPool
-	GetSnapshots() (map[uint32]containers.Vector, error)
+	GetSnapshots() (*logtail.SnapshotInfo, error)
+	GetDetails(ctx context.Context) (map[uint32]*TableStats, error)
+	Verify(ctx context.Context) string
+	ISCPTables() (map[uint64]types.TS, error)
+
+	// Backup protection methods
+	SetBackupProtection(protectedTS types.TS)
+	UpdateBackupProtection(protectedTS types.TS)
+	RemoveBackupProtection()
+	GetBackupProtection() (protectedTS types.TS, lastUpdateTime time.Time, isActive bool)
+
+	// Sync protection methods (for cross-cluster sync)
+	GetSyncProtectionManager() *SyncProtectionManager
 
 	// For testing
 	GetTablePK(tableId uint64) string

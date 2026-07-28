@@ -1,0 +1,6 @@
+#c1,c2
+1,alice
+REMx,REMy
+2,bob
+"#quoted",enc
+3,#midhash

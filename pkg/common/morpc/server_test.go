@@ -17,12 +17,17 @@ package morpc
 import (
 	"context"
 	"io"
+	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,10 +101,13 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		defer cancel()
 
 		c := newTestClient(t)
+		handlerDone := make(chan error, 1)
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
 			assert.NoError(t, c.Close())
+			// The peer may still accept a write briefly after the client closes;
+			// transport buffering does not guarantee an immediate write error.
 			err := cs.Write(ctx, request.Message)
-			assert.Error(t, err)
+			handlerDone <- err
 			return err
 		})
 
@@ -109,8 +117,13 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 
 		defer f.Close()
 		resp, err := f.Get()
-		assert.Error(t, ctx.Err(), err)
+		assert.ErrorIs(t, err, backendClosed)
 		assert.Nil(t, resp)
+		select {
+		case <-handlerDone:
+		case <-ctx.Done():
+			t.Fatal("server handler did not finish after client close")
+		}
 	})
 }
 
@@ -139,6 +152,198 @@ func TestHandleServerWriteWithClosedClientSession(t *testing.T) {
 	})
 }
 
+func TestClientSessionWriteReturnsWhenSendQueueFullAndContextExpires(t *testing.T) {
+	released := 0
+	cs := newClientSession(
+		newServerMetrics("test"),
+		nil,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		func(Message) { released++ },
+	)
+	cs.c = make(chan *Future, 1)
+	cs.c <- newFuture(nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cs.Write(ctx, newTestMessage(1))
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Equal(t, 1, released)
+	case <-time.After(time.Second):
+		t.Fatal("write blocked after context deadline")
+	}
+}
+
+func TestClientSessionCleanSendReleasesQueuedMessages(t *testing.T) {
+	released := 0
+	futureReleased := 0
+	cs := newClientSession(
+		newServerMetrics("test"),
+		nil,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		func(Message) { released++ },
+	)
+
+	f := newFuture(func(*Future) { futureReleased++ })
+	f.init(RPCMessage{
+		Ctx:     context.Background(),
+		Message: newTestMessage(1),
+		oneWay:  true,
+	})
+	cs.c <- f
+
+	cs.cleanSend()
+	require.Equal(t, 1, released)
+	require.Equal(t, 1, futureReleased)
+}
+
+func TestStartWriteLoopClosesOneWayFuturesOnWriteFailures(t *testing.T) {
+	run := func(t *testing.T, conn *testIOSession) {
+		var futureReleased atomic.Int32
+		s := &server{
+			name:     "test",
+			metrics:  newServerMetrics("test"),
+			logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+			stopper:  stopper.NewStopper("test"),
+			sessions: &sync.Map{},
+		}
+		s.adjust()
+		s.options.batchSendSize = 1
+
+		cs := newClientSession(
+			s.metrics,
+			conn,
+			newTestCodec(),
+			func() *Future { return newFuture(nil) },
+			nil,
+		)
+
+		f := newFuture(func(*Future) { futureReleased.Add(1) })
+		f.init(RPCMessage{
+			Ctx:     context.Background(),
+			Message: newTestMessage(1),
+			oneWay:  true,
+		})
+		cs.c <- f
+
+		require.NoError(t, s.startWriteLoop(cs))
+		require.Eventually(t, func() bool {
+			return futureReleased.Load() == 1
+		}, time.Second, time.Millisecond*10)
+		s.stopper.Stop()
+	}
+
+	t.Run("write error", func(t *testing.T) {
+		run(t, newTestIOSession(goetty.ErrIllegalState, nil))
+	})
+	t.Run("flush error", func(t *testing.T) {
+		run(t, newTestIOSession(nil, io.ErrClosedPipe))
+	})
+}
+
+func TestStartWriteLoopCompletesBatchOnWriteFailure(t *testing.T) {
+	var released atomic.Int32
+	s := &server{
+		name:     "test",
+		metrics:  newServerMetrics("test"),
+		logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		stopper:  stopper.NewStopper("test"),
+		sessions: &sync.Map{},
+	}
+	s.adjust()
+	s.options.batchSendSize = 3
+	defer s.stopper.Stop()
+
+	cs := newClientSession(
+		s.metrics,
+		newTestIOSessionWithWriteErrorAt(2, goetty.ErrIllegalState, nil),
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		func(Message) { released.Add(1) },
+	)
+
+	newSyncFuture := func(id uint64) *Future {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		t.Cleanup(cancel)
+		f := newFuture(nil)
+		f.init(RPCMessage{
+			Ctx:     ctx,
+			Message: newTestMessage(id),
+		})
+		f.ref()
+		t.Cleanup(f.Close)
+		return f
+	}
+	f1 := newSyncFuture(1)
+	f2 := newSyncFuture(2)
+	f3 := newSyncFuture(3)
+	cs.c <- f1
+	cs.c <- f2
+	cs.c <- f3
+
+	require.NoError(t, s.startWriteLoop(cs))
+	for _, f := range []*Future{f1, f2, f3} {
+		select {
+		case err := <-f.writtenC:
+			require.ErrorIs(t, err, goetty.ErrIllegalState)
+		case <-time.After(time.Second):
+			t.Fatalf("future %d was not completed after batch write failure", f.getSendMessageID())
+		}
+	}
+	require.Equal(t, int32(2), released.Load())
+}
+
+func TestStartWriteLoopUsesEarliestBatchDeadline(t *testing.T) {
+	s := &server{
+		name:     "test",
+		metrics:  newServerMetrics("test"),
+		logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		stopper:  stopper.NewStopper("test"),
+		sessions: &sync.Map{},
+	}
+	s.adjust()
+	s.options.batchSendSize = 2
+	defer s.stopper.Stop()
+
+	conn := newTestIOSession(nil, nil)
+	cs := newClientSession(
+		s.metrics,
+		conn,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		nil,
+	)
+
+	newResponse := func(id uint64, timeout time.Duration) *Future {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		t.Cleanup(cancel)
+		f := newFuture(nil)
+		f.init(RPCMessage{Ctx: ctx, Message: newTestMessage(id)})
+		f.ref()
+		t.Cleanup(f.Close)
+		return f
+	}
+	cs.c <- newResponse(1, 3*time.Second)
+	cs.c <- newResponse(2, time.Second)
+
+	require.NoError(t, s.startWriteLoop(cs))
+	select {
+	case timeout := <-conn.flushC:
+		require.Positive(t, timeout)
+		require.LessOrEqual(t, timeout, time.Second)
+	case <-time.After(time.Second):
+		t.Fatal("server writer did not flush the queued batch")
+	}
+}
+
 func TestStreamServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
@@ -162,7 +367,7 @@ func TestStreamServer(t *testing.T) {
 			return nil
 		})
 
-		st, err := c.NewStream(testAddr, false)
+		st, err := c.NewStream(context.Background(), testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close(false))
@@ -180,6 +385,58 @@ func TestStreamServer(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+type testIOSession struct {
+	out        *buf.ByteBuf
+	writeErr   error
+	writeErrAt int32
+	writeCount atomic.Int32
+	flushErr   error
+	flushC     chan time.Duration
+}
+
+func newTestIOSession(writeErr, flushErr error) *testIOSession {
+	writeErrAt := int32(0)
+	if writeErr != nil {
+		writeErrAt = 1
+	}
+	return newTestIOSessionWithWriteErrorAt(writeErrAt, writeErr, flushErr)
+}
+
+func newTestIOSessionWithWriteErrorAt(writeErrAt int32, writeErr, flushErr error) *testIOSession {
+	return &testIOSession{
+		out:        buf.NewByteBuf(1),
+		writeErr:   writeErr,
+		writeErrAt: writeErrAt,
+		flushErr:   flushErr,
+		flushC:     make(chan time.Duration, 1),
+	}
+}
+
+func (s *testIOSession) ID() uint64                           { return 1 }
+func (s *testIOSession) Connect(string, time.Duration) error  { return nil }
+func (s *testIOSession) Connected() bool                      { return true }
+func (s *testIOSession) Disconnect() error                    { return nil }
+func (s *testIOSession) Close() error                         { s.out.Close(); return nil }
+func (s *testIOSession) Ref()                                 {}
+func (s *testIOSession) Read(goetty.ReadOptions) (any, error) { return nil, io.EOF }
+func (s *testIOSession) Write(any, goetty.WriteOptions) error {
+	if s.writeErr != nil && s.writeCount.Add(1) == s.writeErrAt {
+		return s.writeErr
+	}
+	return nil
+}
+func (s *testIOSession) Flush(timeout time.Duration) error {
+	select {
+	case s.flushC <- timeout:
+	default:
+	}
+	return s.flushErr
+}
+func (s *testIOSession) RemoteAddress() string { return "" }
+func (s *testIOSession) RawConn() net.Conn     { return nil }
+func (s *testIOSession) UseConn(net.Conn)      {}
+func (s *testIOSession) OutBuf() *buf.ByteBuf  { return s.out }
 
 func TestStreamServerWithCache(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
@@ -219,7 +476,7 @@ func TestStreamServerWithCache(t *testing.T) {
 			return nil
 		})
 
-		st, err := c.NewStream(testAddr, false)
+		st, err := c.NewStream(context.Background(), testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close(false))
@@ -245,6 +502,240 @@ func TestStreamServerWithCache(t *testing.T) {
 	})
 }
 
+func TestFinishStreamFlushesAckAndRetiresSequenceState(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var requestCount atomic.Int32
+		retired := make(chan *clientSession, 1)
+		rs.RegisterRequestHandler(func(ctx context.Context, msg RPCMessage, _ uint64, session ClientSession) error {
+			cs := session.(*clientSession)
+			if requestCount.Add(1) == 1 {
+				return cs.Write(ctx, newTestMessage(msg.Message.GetID()))
+			}
+			token, ok := StreamTerminalTokenFromContext(ctx)
+			if !ok {
+				return moerr.NewInternalErrorNoCtx("missing terminal token")
+			}
+			if err := cs.FinishStream(ctx, token, newTestMessage(msg.Message.GetID())); err != nil {
+				return err
+			}
+			retired <- cs
+			return nil
+		})
+
+		client := newTestClient(t)
+		defer func() { require.NoError(t, client.Close()) }()
+		stream, err := client.NewStream(ctx, testAddr, false)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close(false)) }()
+		responses, err := stream.Receive()
+		require.NoError(t, err)
+
+		require.NoError(t, stream.Send(ctx, newTestMessage(stream.ID())))
+		select {
+		case <-responses:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		require.NoError(t, stream.Send(ctx, newTestMessage(stream.ID())))
+		select {
+		case <-responses:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+
+		select {
+		case cs := <-retired:
+			cs.streamStateMu.Lock()
+			_, receivedExists := cs.receivedStreamSequences[stream.ID()]
+			cs.streamStateMu.Unlock()
+			sentExists := cs.sentStreams.contains(stream.ID())
+			require.False(t, receivedExists)
+			require.False(t, sentExists)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	})
+}
+
+func TestCanceledStreamResponseDoesNotCreateSequenceGap(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		canceledWriteResult := make(chan error, 1)
+
+		rs.RegisterRequestHandler(func(_ context.Context, msg RPCMessage, _ uint64, session ClientSession) error {
+			canceledCtx, cancelWrite := context.WithTimeout(context.Background(), time.Second)
+			cancelWrite()
+			canceledWriteResult <- session.Write(canceledCtx, newTestMessage(msg.Message.GetID()))
+			return session.Write(ctx, newTestMessage(msg.Message.GetID()))
+		})
+
+		client := newTestClient(t)
+		defer func() { require.NoError(t, client.Close()) }()
+		stream, err := client.NewStream(ctx, testAddr, false)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close(false)) }()
+		responses, err := stream.Receive()
+		require.NoError(t, err)
+
+		require.NoError(t, stream.Send(ctx, newTestMessage(stream.ID())))
+		select {
+		case response := <-responses:
+			require.NotNil(t, response)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		require.Error(t, <-canceledWriteResult)
+	})
+}
+
+func TestAssignStreamSequenceProgressesWhileCloseWaitsOnFullQueue(t *testing.T) {
+	cs := newClientSession(
+		newServerMetrics("test"),
+		newTestIOSession(nil, nil),
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		nil,
+	)
+	cs.c = make(chan *Future, 1)
+	require.True(t, cs.sentStreams.start(11))
+
+	queued := newFuture(nil)
+	queued.init(RPCMessage{
+		Ctx:     context.Background(),
+		Message: newTestMessage(10),
+		oneWay:  true,
+	})
+	cs.c <- queued
+
+	senderDone := make(chan error, 1)
+	go func() {
+		senderDone <- cs.AsyncWrite(newTestMessage(12))
+	}()
+	senderBlocked := assert.Eventually(t, func() bool {
+		if cs.mu.TryLock() {
+			cs.mu.Unlock()
+			return false
+		}
+		return true
+	}, time.Second, time.Millisecond)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- cs.Close()
+	}()
+	closeWaiting := assert.Eventually(t, func() bool {
+		if cs.mu.TryRLock() {
+			cs.mu.RUnlock()
+			return false
+		}
+		return true
+	}, time.Second, time.Millisecond)
+
+	msg := RPCMessage{Message: newTestMessage(11)}
+	assigned := make(chan bool, 1)
+	go func() {
+		assigned <- cs.assignStreamSequence(&msg)
+	}()
+	var assignProgressed bool
+	select {
+	case assignProgressed = <-assigned:
+	case <-time.After(time.Second):
+	}
+
+	if f, ok := <-cs.c; ok && f != nil {
+		f.Close()
+	}
+
+	var senderErr, closeErr error
+	select {
+	case senderErr = <-senderDone:
+	case <-time.After(time.Second):
+		t.Fatal("blocked sender did not finish")
+	}
+	select {
+	case closeErr = <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("session close did not finish")
+	}
+
+	require.True(t, senderBlocked)
+	require.True(t, closeWaiting)
+	require.True(t, assignProgressed)
+	require.True(t, msg.stream)
+	require.Equal(t, uint32(1), msg.streamSequence)
+	require.NoError(t, senderErr)
+	require.NoError(t, closeErr)
+
+	late := RPCMessage{Message: newTestMessage(11)}
+	require.False(t, cs.assignStreamSequence(&late))
+	require.False(t, late.stream)
+	require.False(t, cs.sentStreams.contains(11))
+}
+
+func TestFinishStreamPoisonsSessionWithPendingCache(t *testing.T) {
+	cs := newClientSession(nil, newTestIOSession(nil, nil), nil, func() *Future { return &Future{} }, nil)
+	cs.receivedStreamSequences[11] = 2
+	require.True(t, cs.sentStreams.start(11))
+	_, stream, open := cs.sentStreams.next(11)
+	require.True(t, open)
+	require.True(t, stream)
+	_, err := cs.CreateCache(context.Background(), 11)
+	require.NoError(t, err)
+	token := StreamTerminalToken{owner: cs, streamID: 11, sequence: 2}
+	err = cs.FinishStream(context.Background(), token, newTestMessage(11))
+	require.Error(t, err)
+	cs.mu.RLock()
+	require.True(t, cs.mu.closed)
+	cs.mu.RUnlock()
+}
+
+func TestFinishStreamRacesWithSessionClose(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		done := make(chan struct{})
+		rs.RegisterRequestHandler(func(ctx context.Context, msg RPCMessage, _ uint64, session ClientSession) error {
+			cs := session.(*clientSession)
+			token, ok := StreamTerminalTokenFromContext(ctx)
+			if !ok {
+				return moerr.NewInternalErrorNoCtx("missing terminal token")
+			}
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				<-start
+				_ = cs.FinishStream(ctx, token, newTestMessage(msg.Message.GetID()))
+			}()
+			go func() {
+				defer wg.Done()
+				<-start
+				_ = cs.Close()
+			}()
+			close(start)
+			wg.Wait()
+			close(done)
+			return nil
+		})
+
+		client := newTestClient(t)
+		defer func() { require.NoError(t, client.Close()) }()
+		stream, err := client.NewStream(ctx, testAddr, false)
+		require.NoError(t, err)
+		require.NoError(t, stream.Send(ctx, newTestMessage(stream.ID())))
+		select {
+		case <-done:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	})
+}
+
 func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
@@ -255,25 +746,26 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 
-		cc := make(chan struct{})
+		cc := make(chan MessageCache, 1)
 		rs.RegisterRequestHandler(func(ctx context.Context, msg RPCMessage, seq uint64, cs ClientSession) error {
 			request := msg.Message
 			cache, err := cs.CreateCache(ctx, request.GetID())
 			if err != nil {
 				return err
 			}
-			close(cc)
+			cc <- cache
 			return cache.Add(request)
 		})
 
-		st, err := c.NewStream(testAddr, false)
+		st, err := c.NewStream(context.Background(), testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close(false))
 		}()
 
-		assert.NoError(t, st.Send(ctx, newTestMessage(1)))
-		<-cc
+		// Stream.Send requires request.GetID() == stream.ID(); stream id is assigned by backend at NewStream().
+		assert.NoError(t, st.Send(ctx, newTestMessage(st.ID())))
+		cache := <-cc
 		v, ok := rs.sessions.Load(uint64(1))
 		if ok {
 			cs := v.(*clientSession)
@@ -281,6 +773,8 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 				cs.mu.RLock()
 				if len(cs.mu.caches) == 0 {
 					cs.mu.RUnlock()
+					_, err := cache.Len()
+					require.Error(t, err, "expired cache must be closed before removal")
 					return
 				}
 				cs.mu.RUnlock()
@@ -303,22 +797,27 @@ func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 			return cs.Write(ctx, request.Message)
 		})
 
-		v, err := c.NewStream(testAddr, false)
-		assert.NoError(t, err)
+		v, err := c.NewStream(context.Background(), testAddr, false)
+		require.NoError(t, err)
 		st := v.(*stream)
 		defer func() {
 			assert.NoError(t, st.Close(false))
 		}()
 
+		rc, err := st.Receive()
+		require.NoError(t, err)
+		require.NotNil(t, rc)
+
 		st.sequence = 2
 		req := newTestMessage(st.ID())
-		assert.NoError(t, st.Send(ctx, req))
+		require.NoError(t, st.Send(ctx, req))
 
-		rc, err := st.Receive()
-		assert.NoError(t, err)
-		assert.NotNil(t, rc)
-		resp := <-rc
-		assert.Nil(t, resp)
+		select {
+		case resp := <-rc:
+			assert.Nil(t, resp)
+		case <-ctx.Done():
+			t.Fatal("stream receiver was not terminated after sequence mismatch")
+		}
 	})
 }
 
@@ -336,7 +835,7 @@ func TestStreamReadCannotBlockWrite(t *testing.T) {
 			return cs.Write(ctx, request.Message)
 		})
 
-		st, err := c.NewStream(testAddr, false)
+		st, err := c.NewStream(context.Background(), testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close(false))
@@ -380,12 +879,65 @@ func TestCannotGetClosedBackend(t *testing.T) {
 			return cs.Write(ctx, request.Message)
 		})
 
-		st, err := c.NewStream(testAddr, true)
+		st, err := c.NewStream(context.Background(), testAddr, true)
 		require.NoError(t, err)
 		require.NoError(t, st.Close(true))
 
 		require.NoError(t, c.Ping(ctx, testAddr))
 	})
+}
+
+func TestCloseStreamWithCloseConnNotifiesReceiver(t *testing.T) {
+	testRPCServer(t, func(_ *server) {
+		c := newTestClient(t)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		st, err := c.NewStream(context.Background(), testAddr, true)
+		require.NoError(t, err)
+		recv, err := st.Receive()
+		require.NoError(t, err)
+
+		// Do not start the receiver before Close. This deterministically covers
+		// the race where the backend's first nil notification is still buffered
+		// and stream.Close used to drain it without publishing another one.
+		require.NoError(t, st.Close(true))
+		select {
+		case message := <-recv:
+			require.Nil(t, message)
+		case <-time.After(time.Second):
+			t.Fatal("stream receiver was not notified after closing the connection")
+		}
+	})
+}
+
+func TestCloseStreamUnregistersWithoutStreamLock(t *testing.T) {
+	c := make(chan Message, 1)
+	s := newStream(
+		nil,
+		c,
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		func(st *stream) {
+			// Backend cancellation enters stream from rb.mu. Requiring the stream
+			// lock here proves Close does not keep the inverse s.mu -> rb.mu order
+			// across unregister.
+			st.mu.RLock()
+			st.mu.RUnlock()
+		},
+		func() {},
+	)
+	s.init(1, false)
+
+	done := make(chan error, 1)
+	go func() { done <- s.Close(false) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("stream close held the stream lock while unregistering")
+	}
 }
 
 func TestPingError(t *testing.T) {
@@ -457,10 +1009,13 @@ func testRPCServer(t assert.TestingT, testFunc func(*server), options ...ServerO
 
 func newTestClient(t assert.TestingT, options ...ClientOption) RPCClient {
 	bf := NewGoettyBasedBackendFactory(newTestCodec())
+	// Add auto-create by default for tests
+	defaultOptions := []ClientOption{WithClientEnableAutoCreateBackend()}
+	defaultOptions = append(defaultOptions, options...)
 	c, err := NewClient(
 		"",
 		bf,
-		options...)
+		defaultOptions...)
 	assert.NoError(t, err)
 	return c
 }

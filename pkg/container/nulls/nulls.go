@@ -280,7 +280,7 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 	}
 }
 
-func FilterByMask(nsp *Nulls, sels bitmap.Mask, negate bool) {
+func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 	if nsp.np.EmptyByFlag() {
 		return
 	}

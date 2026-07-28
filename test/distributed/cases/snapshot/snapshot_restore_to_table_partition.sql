@@ -1,4 +1,3 @@
--- @skip:issue#16438
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop account if exists acc02;
@@ -41,8 +40,8 @@ show create table acc_test04.index03;
 -- @session
 
 --sys
-restore account acc01 database acc_test04 table index03 from snapshot sp04;
-restore account acc01 from snapshot sp04 to account acc02;
+restore table acc_test04.index03{snapshot="sp04"};
+restore account acc01{snapshot="sp04"} to account acc02;
 
 
 -- @session:id=3&user=acc01:test_account&password=111
@@ -122,8 +121,11 @@ create table table02 (col1 int unique key, col2 varchar(20));
 insert into table02 (col1, col2) values (133, 'database');
 create table table03(a INT primary key AUTO_INCREMENT, b INT, c INT);
 create table table04(a INT primary key AUTO_INCREMENT, b INT, c INT);
+set @old_sql_mode = @@sql_mode;
+set sql_mode = concat_ws(',', @@sql_mode, 'NO_AUTO_VALUE_ON_ZERO');
 insert into table03 values (1,1,1), (2,2,2);
 insert into table04 values (0,1,2), (2,3,4);
+set sql_mode = @old_sql_mode;
 select count(*) from table01;
 select count(*) from table02;
 select count(*) from table03;
@@ -187,7 +189,7 @@ select * from acc_test03.table04;
 show create table acc_test04.index03;
 -- @session
 
-restore account acc01 from snapshot sp04 to account acc02;
+restore account acc01{snapshot="sp04"} to account acc02;
 
 -- @session:id=7&user=acc02:test_account&password=111
 show databases;

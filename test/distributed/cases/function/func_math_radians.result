@@ -1,0 +1,69 @@
+SELECT RADIANS(180) AS result1;
+result1
+3.141592653589793
+SELECT RADIANS(0) AS zero_degrees;
+zero_degrees
+0.0
+SELECT RADIANS(180) AS one_eighty_degrees;
+one_eighty_degrees
+3.141592653589793
+SELECT RADIANS(90) AS ninety_degrees;
+ninety_degrees
+1.5707963267948966
+SELECT RADIANS(45) AS forty_five_degrees;
+forty_five_degrees
+0.7853981633974483
+SELECT RADIANS(360) AS three_sixty_degrees;
+three_sixty_degrees
+6.283185307179586
+SELECT RADIANS(-180) AS negative_one_eighty;
+negative_one_eighty
+-3.141592653589793
+SELECT RADIANS(0) AS zero_radians;
+zero_radians
+0.0
+SELECT RADIANS(30) AS thirty_degrees;
+thirty_degrees
+0.5235987755982988
+SELECT RADIANS(45) AS forty_five_degrees;
+forty_five_degrees
+0.7853981633974483
+SELECT RADIANS(60) AS sixty_degrees;
+sixty_degrees
+1.0471975511965976
+SELECT RADIANS(90) AS ninety_degrees;
+ninety_degrees
+1.5707963267948966
+SELECT RADIANS(180) AS one_eighty_degrees;
+one_eighty_degrees
+3.141592653589793
+SELECT RADIANS(360) AS three_sixty_degrees;
+three_sixty_degrees
+6.283185307179586
+SELECT RADIANS(NULL) AS null_input;
+null_input
+null
+CREATE TABLE t1(degrees FLOAT);
+INSERT INTO t1 VALUES (0), (90), (180), (360), (-180);
+SELECT degrees, RADIANS(degrees) AS radians FROM t1;
+degrees    radians
+0.0    0.0
+90.0    1.5707963267948966
+180.0    3.141592653589793
+360.0    6.283185307179586
+-180.0    -3.141592653589793
+DROP TABLE t1;
+CREATE TABLE t1(degrees FLOAT);
+INSERT INTO t1 VALUES (0), (90), (180), (360), (-180);
+SELECT * FROM t1 WHERE RADIANS(degrees) > 0;
+degrees
+90.0
+180.0
+360.0
+DROP TABLE t1;
+SELECT RADIANS(DEGREES(PI())) AS should_be_pi;
+should_be_pi
+3.141592653589793
+SELECT DEGREES(RADIANS(180)) AS should_be_180;
+should_be_180
+180.0

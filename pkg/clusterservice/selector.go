@@ -57,6 +57,11 @@ func (s Selector) SelectByLabel(labels map[string]string, op Op) Selector {
 
 // SelectWithoutLabel updates the selector by removing the labels.
 func (s Selector) SelectWithoutLabel(labels map[string]string) Selector {
+	cloned := make(map[string]string, len(s.labels))
+	for labelKey, labelValue := range s.labels {
+		cloned[labelKey] = labelValue
+	}
+	s.labels = cloned
 	for labelKey, labelValue := range s.labels {
 		v, ok := labels[labelKey]
 		if ok && v == labelValue {
@@ -128,6 +133,27 @@ func (s Selector) Match(labels map[string]metadata.LabelList) bool {
 		}
 	}
 	return true
+}
+
+// MatchCN reports whether a CN satisfies every selector dimension, including
+// service identity and labels.
+func (s Selector) MatchCN(cn metadata.CNService) bool {
+	return s.filterCN(cn)
+}
+
+// MatchCN reports whether a CN matches the selector while reusing glob
+// patterns across repeated matches in the same snapshot.
+func (m *SelectorMatcher) MatchCN(selector Selector, cn metadata.CNService) bool {
+	if m == nil {
+		return selector.filterCN(cn)
+	}
+	if selector.labelOp == EQ_Globbing {
+		m.once.Do(func() {
+			m.regexpCache = newRegexCache(0)
+		})
+		selector.regexpCache = m.regexpCache
+	}
+	return selector.filterCN(cn)
 }
 
 func (s Selector) emptyLabel() bool {

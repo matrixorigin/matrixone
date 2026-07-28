@@ -24,19 +24,33 @@ func init() {
 	) //WithEnableChecker()
 }
 
-// Use statement
-type AnalyzeStmt struct {
-	statementImpl
+// AnalyzeTableEntry represents a single table entry in ANALYZE TABLE statement.
+type AnalyzeTableEntry struct {
 	Table *TableName
 	Cols  IdentifierList
 }
 
+// Use statement
+type AnalyzeStmt struct {
+	statementImpl
+	Entries []*AnalyzeTableEntry
+}
+
 func (node *AnalyzeStmt) Format(ctx *FmtCtx) {
 	ctx.WriteString("analyze table ")
-	node.Table.Format(ctx)
-	ctx.WriteString("(")
-	node.Cols.Format(ctx)
-	ctx.WriteString(")")
+	for i, entry := range node.Entries {
+		if i > 0 {
+			ctx.WriteString(", ")
+		}
+		if entry.Table != nil {
+			entry.Table.Format(ctx)
+		}
+		if len(entry.Cols) > 0 {
+			ctx.WriteString("(")
+			entry.Cols.Format(ctx)
+			ctx.WriteString(")")
+		}
+	}
 }
 
 func (node *AnalyzeStmt) GetStatementType() string { return "Analyze Table" }
@@ -49,15 +63,11 @@ func (node *AnalyzeStmt) Free() {
 func (node AnalyzeStmt) TypeName() string { return "tree.AnalyzeStmt" }
 
 func (node *AnalyzeStmt) reset() {
-	// if node.Table != nil {
-	// node.Table.Free()
-	// }
 	*node = AnalyzeStmt{}
 }
 
-func NewAnalyzeStmt(tbl *TableName, cols IdentifierList) *AnalyzeStmt {
+func NewAnalyzeStmt(entries []*AnalyzeTableEntry) *AnalyzeStmt {
 	analyzestmt := reuse.Alloc[AnalyzeStmt](nil)
-	analyzestmt.Table = tbl
-	analyzestmt.Cols = cols
+	analyzestmt.Entries = entries
 	return analyzestmt
 }

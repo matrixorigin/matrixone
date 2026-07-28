@@ -15,40 +15,41 @@
 package elkans
 
 import (
-	"math/rand"
+	"context"
+	"math/rand/v2"
 	"runtime"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 type Initializer interface {
-	InitCentroids(vectors any, k int) (centroids any, err error)
+	InitCentroids(ctx context.Context, vectors any, k int) (centroids any, err error)
 }
 
 // var _ Initializer = (*Random)(nil)
 
 // Random initializes the centroids with random centroids from the vector list.
 type Random struct {
-	rand rand.Rand
 }
 
 func NewRandomInitializer() Initializer {
-	return &Random{
-		rand: *rand.New(rand.NewSource(kmeans.DefaultRandSeed)),
-	}
+	return &Random{}
 }
 
-func (r *Random) InitCentroids(vectors any, k int) (_centroids any, _err error) {
+func (r *Random) InitCentroids(ctx context.Context, vectors any, k int) (_centroids any, _err error) {
+	rnd := rand.New(rand.NewPCG(uint64(kmeans.DefaultRandSeed), 0))
 
 	switch _vecs := vectors.(type) {
 	case [][]float32:
 		centroids := make([][]float32, k)
 		for i := 0; i < k; i++ {
-			randIdx := r.rand.Intn(len(_vecs))
+			randIdx := rnd.IntN(len(_vecs))
 			centroids[i] = _vecs[randIdx]
 		}
 		return centroids, nil
@@ -56,13 +57,15 @@ func (r *Random) InitCentroids(vectors any, k int) (_centroids any, _err error) 
 	case [][]float64:
 		centroids := make([][]float64, k)
 		for i := 0; i < k; i++ {
-			randIdx := r.rand.Intn(len(_vecs))
+			randIdx := rnd.IntN(len(_vecs))
 			centroids[i] = _vecs[randIdx]
 		}
 		return centroids, nil
 
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("InitCentroids type not supported")
+		err := moerr.NewInternalErrorNoCtx("InitCentroids type not supported")
+		logutil.Errorf("kmeans InitCentroids type error: %v", err)
+		return nil, err
 	}
 }
 
@@ -74,29 +77,37 @@ func (r *Random) InitCentroids(vectors any, k int) (_centroids any, _err error) 
 // Using random, we could get 3 centroids: 1&2 which are close to each other and part of cluster 1. 3 is in the middle of 2&3.
 // Using kmeans++, we are sure that 3 centroids are farther away from each other.
 type KMeansPlusPlus[T types.RealNumbers] struct {
-	rand   rand.Rand
 	distFn metric.DistanceFunction[T]
 }
 
 func NewKMeansPlusPlusInitializer[T types.RealNumbers](distFn metric.DistanceFunction[T]) Initializer {
 	return &KMeansPlusPlus[T]{
-		rand:   *rand.New(rand.NewSource(kmeans.DefaultRandSeed)),
 		distFn: distFn,
 	}
 }
 
-func (kpp *KMeansPlusPlus[T]) InitCentroids(_vectors any, k int) (_centroids any, _err error) {
+func (kpp *KMeansPlusPlus[T]) InitCentroids(ctx context.Context, _vectors any, k int) (_centroids any, _err error) {
 
 	vectors, ok := _vectors.([][]T)
 	if !ok {
-		panic("KmeanPlusPlus InitCentroids type not supported")
+		err := moerr.NewInternalErrorNoCtx("KmeanPlusPlus InitCentroids type not supported")
+		logutil.Errorf("kmeans KMeansPlusPlus.InitCentroids type error: %v", err)
+		return nil, err
+	}
+
+	if k <= 0 {
+		err := moerr.NewInternalErrorNoCtxf("k must be greater than 0, got %d", k)
+		logutil.Errorf("kmeans KMeansPlusPlus.InitCentroids k error: %v", err)
+		return nil, err
 	}
 
 	numSamples := len(vectors)
 	centroids := make([][]T, k)
 
+	rnd := rand.New(rand.NewPCG(uint64(kmeans.DefaultRandSeed), 0))
+
 	// 1. start with a random center
-	centroids[0] = vectors[kpp.rand.Intn(numSamples)]
+	centroids[0] = vectors[rnd.IntN(numSamples)]
 
 	distances := make([]T, numSamples)
 	for j := range distances {
@@ -108,59 +119,64 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(_vectors any, k int) (_centroids any
 		ncpu = numSamples
 	}
 
-	errs := make(chan error, ncpu)
 	for nextCentroidIdx := 1; nextCentroidIdx < k; nextCentroidIdx++ {
 
 		// 2. for each data point, compute the min distance to the existing centers
 		var totalDistToExistingCenters T
-		var wg sync.WaitGroup
 		var mutex sync.Mutex
 
-		for n := 0; n < ncpu; n++ {
-			wg.Add(1)
+		exec := concurrent.NewThreadPoolExecutor(ncpu)
+		err := exec.Execute(
+			ctx,
+			len(vectors),
+			func(ctx context.Context, thread_id int, start, end int) (err2 error) {
+				subvec := vectors[start:end:end]
+				subdist := distances[start:end:end]
 
-			go func(tid int) {
-				defer wg.Done()
+				var localDist T
+				for i := range subvec {
 
-				for vecIdx := range vectors {
-
-					if vecIdx%ncpu != tid {
-						continue
+					if i%100 == 0 && ctx.Err() != nil {
+						err := ctx.Err()
+						logutil.Errorf("kmeans KMeansPlusPlus context error: %v", err)
+						return err
 					}
 
 					// this is a deviation from standard kmeans.here we are not using minDistance to all the existing centers.
 					// This code was very slow: https://github.com/matrixorigin/matrixone/blob/77ff1452bd56cd93a10e3327632adebdbaf279cb/pkg/sql/plan/function/functionAgg/algos/kmeans/elkans/initializer.go#L81-L86
 					// but instead we are using the distance to the last center that was chosen.
-					distance, err := kpp.distFn(vectors[vecIdx], centroids[nextCentroidIdx-1])
-					if err != nil {
-						errs <- err
-						return
+					distance, err2 := kpp.distFn(subvec[i], centroids[nextCentroidIdx-1])
+					if err2 != nil {
+						return err2
 					}
 
 					distance *= distance
-					mutex.Lock()
-					if distance < distances[vecIdx] {
-						distances[vecIdx] = distance
+					if distance < subdist[i] {
+						subdist[i] = distance
 					}
-					totalDistToExistingCenters += distances[vecIdx]
-					mutex.Unlock()
+					localDist += subdist[i]
 				}
-			}(n)
+
+				mutex.Lock()
+				totalDistToExistingCenters += localDist
+				mutex.Unlock()
+
+				return
+			})
+
+		if err != nil {
+			logutil.Errorf("kmeans KMeansPlusPlus exec error: %v", err)
+			return nil, err
 		}
-
-		wg.Wait()
-
-		if len(errs) > 0 {
-			return nil, <-errs
-		}
-
 		// 3. choose the next random center, using a weighted probability distribution
 		// where it is chosen with probability proportional to D(x)^2
 		// Ref: https://en.wikipedia.org/wiki/K-means%2B%2B#Improved_initialization_algorithm
-		target := T(kpp.rand.Float32()) * totalDistToExistingCenters
+		target := T(rnd.Float32()) * totalDistToExistingCenters
 		for idx, distance := range distances {
 			target -= distance
-			if target <= 0 {
+			// due to floating point inaccuracies, target may be > 0 even after subtracting all distances.
+			// if so, pick the last vector.
+			if target <= 0 || idx == len(distances)-1 {
 				centroids[nextCentroidIdx] = vectors[idx]
 				break
 			}

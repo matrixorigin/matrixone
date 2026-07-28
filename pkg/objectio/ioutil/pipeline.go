@@ -31,9 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
+	"github.com/panjf2000/ants/v2"
 )
 
 var (
+	pipelineLifecycleMu sync.Mutex
+
 	_jobPool = sync.Pool{
 		New: func() any {
 			return new(tasks.Job)
@@ -116,9 +119,12 @@ func putReader(reader *objectio.ObjectReader) {
 type IOJobFactory func(context.Context, fetchParams) *tasks.Job
 
 func Start(sid string) {
+	pipelineLifecycleMu.Lock()
+	defer pipelineLifecycleMu.Unlock()
+
 	r := rt.ServiceRuntime(sid)
-	_, ok := r.GetGlobalVariables("blockio")
-	if ok {
+	value, ok := r.GetGlobalVariables("blockio")
+	if ok && value.(*IoPipeline).active.Load() {
 		return
 	}
 
@@ -130,27 +136,22 @@ func Start(sid string) {
 }
 
 func Stop(sid string) {
-	v, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
+	pipelineLifecycleMu.Lock()
+	defer pipelineLifecycleMu.Unlock()
+
+	val, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
 	if !ok {
 		return
 	}
-	v.(*IoPipeline).Stop()
+	val.(*IoPipeline).Stop()
 }
 
 func MustGetPipeline(sid string) *IoPipeline {
-	v, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
+	val, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
 	if !ok {
 		panic("blockio not started for " + sid)
 	}
-	return v.(*IoPipeline)
-}
-
-func GetPipeline(sid string) *IoPipeline {
-	v, ok := rt.ServiceRuntime(sid).GetGlobalVariables("blockio")
-	if !ok {
-		return nil
-	}
-	return v.(*IoPipeline)
+	return val.(*IoPipeline)
 }
 
 func makeName(location string) string {
@@ -270,6 +271,8 @@ type IoPipeline struct {
 		prefetchDropStats stats.Counter
 	}
 	printer *stopper.Stopper
+
+	pool *ants.Pool
 }
 
 func NewIOPipeline(
@@ -300,6 +303,8 @@ func NewIOPipeline(
 	p.prefetchFunc = noopPrefetch
 
 	p.printer = stopper.NewStopper("IOPrinter")
+
+	p.pool, _ = ants.NewPool(p.options.fetchParallism)
 	return p
 }
 
@@ -333,16 +338,24 @@ func (p *IoPipeline) Start() {
 
 func (p *IoPipeline) Stop() {
 	p.onceStop.Do(func() {
-		p.printer.Stop()
+		// 1. First mark as inactive to stop accepting new tasks
 		p.active.Store(false)
 
+		// 2. Stop the printer
+		p.printer.Stop()
+
+		// 3. Stop queues (they will drain remaining items)
 		p.prefetch.queue.Stop()
 		p.fetch.queue.Stop()
+		p.waitQ.Stop()
 
+		// 4. Release the pools after queues are stopped
 		p.prefetch.scheduler.Stop()
 		p.fetch.scheduler.Stop()
 
-		p.waitQ.Stop()
+		if p.pool != nil {
+			p.pool.ReleaseTimeout(time.Second)
+		}
 	})
 }
 
@@ -396,8 +409,8 @@ func (p *IoPipeline) doPrefetch(params PrefetchParams) (err error) {
 }
 
 func (p *IoPipeline) onFetch(jobs ...any) {
-	for _, j := range jobs {
-		job := j.(*tasks.Job)
+	for _, item := range jobs {
+		job := item.(*tasks.Job)
 		if err := p.fetch.scheduler.Schedule(job); err != nil {
 			job.DoneWithErr(err)
 		}
@@ -453,23 +466,45 @@ func (p *IoPipeline) onPrefetch(items ...any) {
 		processes []PrefetchParams,
 		onJob func(context.Context, PrefetchParams) *tasks.Job,
 	) {
+		// check active again before scheduling
+		if !p.active.Load() {
+			return
+		}
 		merged := mergePrefetch(processes)
 		for _, option := range merged {
+			if !p.active.Load() {
+				return
+			}
 			job := onJob(context.Background(), option)
 			p.schedulerPrefetch(job)
 		}
 	}
-	if len(metaProcesses) > 0 {
-		go schedulerJobs(metaProcesses, prefetchMetaJob)
+
+	// check if pool is closed before submitting
+	if p.pool == nil || p.pool.IsClosed() {
+		return
 	}
+
+	if len(metaProcesses) > 0 {
+		if err := p.pool.Submit(func() {
+			schedulerJobs(metaProcesses, prefetchMetaJob)
+		}); err != nil {
+			logutil.Debugf("submit meta prefetch job failed: %v", err)
+		}
+	}
+
 	if len(filesProcesses) > 0 {
-		go schedulerJobs(filesProcesses, prefetchJob)
+		if err := p.pool.Submit(func() {
+			schedulerJobs(filesProcesses, prefetchJob)
+		}); err != nil {
+			logutil.Debugf("submit file prefetch job failed: %v", err)
+		}
 	}
 }
 
 func (p *IoPipeline) onWait(jobs ...any) {
-	for _, j := range jobs {
-		job := j.(*tasks.Job)
+	for _, item := range jobs {
+		job := item.(*tasks.Job)
 		res := job.WaitDone()
 		if res == nil {
 			logutil.Infof("job is %v", job.String())

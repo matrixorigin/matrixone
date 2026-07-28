@@ -13,403 +13,403 @@ insert into t1 values (8,'BerkAuthor','Cool.Berkly.the.book');
 insert into t1 values (9,null,null);
 insert into t1 values (10,'','');
 select SUBSTRING(c,1),SUBSTR(vc,1) from t1;
-SUBSTRING(c,1)	SUBSTR(vc,1)
-Daffy	Aducklife
-Daffy	Aducklife
-Bugs	Arabbitlife
-Cowboy	Lifeontherange
-Anonymous	Wannabuythisbook?
-BestSeller	OneHeckuvabook
-BestSeller	OneHeckuvabook
-EveryoneBu	Thisverybook
-SanFran	Itisasanfranlifetyle
-BerkAuthor	Cool.Berkly.the.book
-null	null
-
+➤ SUBSTRING(c, 1)[1,255,0]  ¦  SUBSTR(vc, 1)[12,-1,0]  𝄀
+Daffy  ¦  Aducklife  𝄀
+Daffy  ¦  Aducklife  𝄀
+Bugs  ¦  Arabbitlife  𝄀
+Cowboy  ¦  Lifeontherange  𝄀
+Anonymous  ¦  Wannabuythisbook?  𝄀
+BestSeller  ¦  OneHeckuvabook  𝄀
+BestSeller  ¦  OneHeckuvabook  𝄀
+EveryoneBu  ¦  Thisverybook  𝄀
+SanFran  ¦  Itisasanfranlifetyle  𝄀
+BerkAuthor  ¦  Cool.Berkly.the.book  𝄀
+null  ¦  null  𝄀
+  ¦  
 select SUBSTRING(c,2),SUBSTR(vc,2) from t1;
-SUBSTRING(c,2)	SUBSTR(vc,2)
-affy	ducklife
-affy	ducklife
-ugs	rabbitlife
-owboy	ifeontherange
-nonymous	annabuythisbook?
-estSeller	neHeckuvabook
-estSeller	neHeckuvabook
-veryoneBu	hisverybook
-anFran	tisasanfranlifetyle
-erkAuthor	ool.Berkly.the.book
-null	null
-
+➤ SUBSTRING(c, 2)[1,255,0]  ¦  SUBSTR(vc, 2)[12,-1,0]  𝄀
+affy  ¦  ducklife  𝄀
+affy  ¦  ducklife  𝄀
+ugs  ¦  rabbitlife  𝄀
+owboy  ¦  ifeontherange  𝄀
+nonymous  ¦  annabuythisbook?  𝄀
+estSeller  ¦  neHeckuvabook  𝄀
+estSeller  ¦  neHeckuvabook  𝄀
+veryoneBu  ¦  hisverybook  𝄀
+anFran  ¦  tisasanfranlifetyle  𝄀
+erkAuthor  ¦  ool.Berkly.the.book  𝄀
+null  ¦  null  𝄀
+  ¦  
 select SUBSTRING(c,5),SUBSTR(vc,9) from t1 where id = 1 ;
-SUBSTRING(c,5)	SUBSTR(vc,9)
-y	e
-y	e
+➤ SUBSTRING(c, 5)[1,255,0]  ¦  SUBSTR(vc, 9)[12,-1,0]  𝄀
+y  ¦  e  𝄀
+y  ¦  e
 select substring(c,11),substr(vc,13) from t1 where id = 6 ;
-substring(c,11)	substr(vc,13)
-
+➤ substring(c, 11)[1,255,0]  ¦  substr(vc, 13)[12,-1,0]  𝄀
+  ¦  
 select SUBSTRING(c,-1),SUBSTR(vc,-1) from t1;
-SUBSTRING(c,-1)	SUBSTR(vc,-1)
-y	e
-y	e
-s	e
-y	e
-s	?
-r	k
-r	k
-u	k
-n	e
-r	k
-null	null
-
+➤ SUBSTRING(c, -1)[1,255,0]  ¦  SUBSTR(vc, -1)[12,-1,0]  𝄀
+y  ¦  e  𝄀
+y  ¦  e  𝄀
+s  ¦  e  𝄀
+y  ¦  e  𝄀
+s  ¦  ?  𝄀
+r  ¦  k  𝄀
+r  ¦  k  𝄀
+u  ¦  k  𝄀
+n  ¦  e  𝄀
+r  ¦  k  𝄀
+null  ¦  null  𝄀
+  ¦  
 select SUBSTRING(c,-2),SUBSTR(vc,-2) from t1;
-SUBSTRING(c,-2)	SUBSTR(vc,-2)
-fy	fe
-fy	fe
-gs	fe
-oy	ge
-us	k?
-er	ok
-er	ok
-Bu	ok
-an	le
-or	ok
-null	null
-
+➤ SUBSTRING(c, -2)[1,255,0]  ¦  SUBSTR(vc, -2)[12,-1,0]  𝄀
+fy  ¦  fe  𝄀
+fy  ¦  fe  𝄀
+gs  ¦  fe  𝄀
+oy  ¦  ge  𝄀
+us  ¦  k?  𝄀
+er  ¦  ok  𝄀
+er  ¦  ok  𝄀
+Bu  ¦  ok  𝄀
+an  ¦  le  𝄀
+or  ¦  ok  𝄀
+null  ¦  null  𝄀
+  ¦  
 select SUBSTRING(c,-5),SUBSTR(vc,-9) from t1 where id = 1 ;
-SUBSTRING(c,-5)	SUBSTR(vc,-9)
-Daffy	Aducklife
-Daffy	Aducklife
+➤ SUBSTRING(c, -5)[1,255,0]  ¦  SUBSTR(vc, -9)[12,-1,0]  𝄀
+Daffy  ¦  Aducklife  𝄀
+Daffy  ¦  Aducklife
 select substring(c,-11),substr(vc,-13) from t1 where id = 6 ;
-substring(c,-11)	substr(vc,-13)
-
+➤ substring(c, -11)[1,255,0]  ¦  substr(vc, -13)[12,-1,0]  𝄀
+  ¦  
 select SUBSTRING(c,1,1),SUBSTR(vc,1,1) from t1 where id = 1 ;
-SUBSTRING(c,1,1)	SUBSTR(vc,1,1)
-D	A
-D	A
+➤ SUBSTRING(c, 1, 1)[1,255,0]  ¦  SUBSTR(vc, 1, 1)[12,-1,0]  𝄀
+D  ¦  A  𝄀
+D  ¦  A
 select SUBSTRING(c,2,2),SUBSTR(vc,3,3) from t1 where id = 1 ;
-SUBSTRING(c,2,2)	SUBSTR(vc,3,3)
-af	uck
-af	uck
+➤ SUBSTRING(c, 2, 2)[1,255,0]  ¦  SUBSTR(vc, 3, 3)[12,-1,0]  𝄀
+af  ¦  uck  𝄀
+af  ¦  uck
 select SUBSTRING(c,2,5),SUBSTR(vc,3,9) from t1 where id = 1 ;
-SUBSTRING(c,2,5)	SUBSTR(vc,3,9)
-affy	ucklife
-affy	ucklife
+➤ SUBSTRING(c, 2, 5)[1,255,0]  ¦  SUBSTR(vc, 3, 9)[12,-1,0]  𝄀
+affy  ¦  ucklife  𝄀
+affy  ¦  ucklife
 select substring(c,2,9),substr(vc,3,17) from t1 where id = 4 ;
-substring(c,2,9)	substr(vc,3,17)
-nonymous	nnabuythisbook?
+➤ substring(c, 2, 9)[1,255,0]  ¦  substr(vc, 3, 17)[12,-1,0]  𝄀
+nonymous  ¦  nnabuythisbook?
 select substring(c,2,10),substr(vc,3,18) from t1 where id = 4 ;
-substring(c,2,10)	substr(vc,3,18)
-nonymous	nnabuythisbook?
+➤ substring(c, 2, 10)[1,255,0]  ¦  substr(vc, 3, 18)[12,-1,0]  𝄀
+nonymous  ¦  nnabuythisbook?
 select substring(c,5,4),substr(vc,5,4) from t1 where id = 4 ;
-substring(c,5,4)	substr(vc,5,4)
-ymou	abuy
+➤ substring(c, 5, 4)[1,255,0]  ¦  substr(vc, 5, 4)[12,-1,0]  𝄀
+ymou  ¦  abuy
 select substring(c,10,10),substr(vc,18,18) from t1 where id = 4 ;
-substring(c,10,10)	substr(vc,18,18)
-
+➤ substring(c, 10, 10)[1,255,0]  ¦  substr(vc, 18, 18)[12,-1,0]  𝄀
+  ¦  
 select substring(c,2,-1),substr(vc,3,-1) from t1 where id = 4 ;
-substring(c,2,-1)	substr(vc,3,-1)
-
+➤ substring(c, 2, -1)[1,255,0]  ¦  substr(vc, 3, -1)[12,-1,0]  𝄀
+  ¦  
 select SUBSTRING(c,-1,1),SUBSTR(vc,1,1) from t1 where id = 1 ;
-SUBSTRING(c,-1,1)	SUBSTR(vc,1,1)
-y	A
-y	A
+➤ SUBSTRING(c, -1, 1)[1,255,0]  ¦  SUBSTR(vc, 1, 1)[12,-1,0]  𝄀
+y  ¦  A  𝄀
+y  ¦  A
 select SUBSTRING(c,-2,2),SUBSTR(vc,3,3) from t1 where id = 1 ;
-SUBSTRING(c,-2,2)	SUBSTR(vc,3,3)
-fy	uck
-fy	uck
+➤ SUBSTRING(c, -2, 2)[1,255,0]  ¦  SUBSTR(vc, 3, 3)[12,-1,0]  𝄀
+fy  ¦  uck  𝄀
+fy  ¦  uck
 select SUBSTRING(c,-2,5),SUBSTR(vc,3,9) from t1 where id = 1 ;
-SUBSTRING(c,-2,5)	SUBSTR(vc,3,9)
-fy	ucklife
-fy	ucklife
+➤ SUBSTRING(c, -2, 5)[1,255,0]  ¦  SUBSTR(vc, 3, 9)[12,-1,0]  𝄀
+fy  ¦  ucklife  𝄀
+fy  ¦  ucklife
 select substring(c,-2,9),substr(vc,3,17) from t1 where id = 4 ;
-substring(c,-2,9)	substr(vc,3,17)
-us	nnabuythisbook?
+➤ substring(c, -2, 9)[1,255,0]  ¦  substr(vc, 3, 17)[12,-1,0]  𝄀
+us  ¦  nnabuythisbook?
 select substring(c,-2,10),substr(vc,3,18) from t1 where id = 4 ;
-substring(c,-2,10)	substr(vc,3,18)
-us	nnabuythisbook?
+➤ substring(c, -2, 10)[1,255,0]  ¦  substr(vc, 3, 18)[12,-1,0]  𝄀
+us  ¦  nnabuythisbook?
 select substring(c,1,-1),substr(vc,3,-2) from t1 where id = 4 ;
-substring(c,1,-1)	substr(vc,3,-2)
-
+➤ substring(c, 1, -1)[1,255,0]  ¦  substr(vc, 3, -2)[12,-1,0]  𝄀
+  ¦  
 select substring(c,1,a),substr(vc,3,1) from t1 where id = 4 ;
 invalid input: column a does not exist
 select substring(c,1,2),substr(vc,a,1) from t1 where id = 4 ;
 invalid input: column a does not exist
 select max(substr(c,2)) from t1;
-max(substr(c,2))
+➤ max(substr(c, 2))[1,255,0]  𝄀
 veryoneBu
 select min(substr(c,2)) from t1;
-min(substr(c,2))
+➤ min(substr(c, 2))[1,255,0]  𝄀
 
 select * from t1 where substr(c,2) = 'affy';
-id	c	vc
-1	Daffy	Aducklife
-1	Daffy	Aducklife
+➤ id[4,32,0]  ¦  c[1,10,0]  ¦  vc[12,-1,0]  𝄀
+1  ¦  Daffy  ¦  Aducklife  𝄀
+1  ¦  Daffy  ¦  Aducklife
 select * from t1 where substr(c,2) <> 'affy';
-id	c	vc
-2	Bugs	Arabbitlife
-3	Cowboy	Lifeontherange
-4	Anonymous	Wannabuythisbook?
-5	BestSeller	OneHeckuvabook
-5	BestSeller	OneHeckuvabook
-6	EveryoneBu	Thisverybook
-7	SanFran	Itisasanfranlifetyle
-8	BerkAuthor	Cool.Berkly.the.book
-10
+➤ id[4,32,0]  ¦  c[1,10,0]  ¦  vc[12,-1,0]  𝄀
+2  ¦  Bugs  ¦  Arabbitlife  𝄀
+3  ¦  Cowboy  ¦  Lifeontherange  𝄀
+4  ¦  Anonymous  ¦  Wannabuythisbook?  𝄀
+5  ¦  BestSeller  ¦  OneHeckuvabook  𝄀
+5  ¦  BestSeller  ¦  OneHeckuvabook  𝄀
+6  ¦  EveryoneBu  ¦  Thisverybook  𝄀
+7  ¦  SanFran  ¦  Itisasanfranlifetyle  𝄀
+8  ¦  BerkAuthor  ¦  Cool.Berkly.the.book  𝄀
+10  ¦    ¦  
 select * from t1 where substr(c,2) > 'affy';
-id	c	vc
-2	Bugs	Arabbitlife
-3	Cowboy	Lifeontherange
-4	Anonymous	Wannabuythisbook?
-5	BestSeller	OneHeckuvabook
-5	BestSeller	OneHeckuvabook
-6	EveryoneBu	Thisverybook
-7	SanFran	Itisasanfranlifetyle
-8	BerkAuthor	Cool.Berkly.the.book
+➤ id[4,32,0]  ¦  c[1,10,0]  ¦  vc[12,-1,0]  𝄀
+2  ¦  Bugs  ¦  Arabbitlife  𝄀
+3  ¦  Cowboy  ¦  Lifeontherange  𝄀
+4  ¦  Anonymous  ¦  Wannabuythisbook?  𝄀
+5  ¦  BestSeller  ¦  OneHeckuvabook  𝄀
+5  ¦  BestSeller  ¦  OneHeckuvabook  𝄀
+6  ¦  EveryoneBu  ¦  Thisverybook  𝄀
+7  ¦  SanFran  ¦  Itisasanfranlifetyle  𝄀
+8  ¦  BerkAuthor  ¦  Cool.Berkly.the.book
 select * from t1 where substr(c,2) > substring('fdasfsad',2);
-id	c	vc
-2	Bugs	Arabbitlife
-3	Cowboy	Lifeontherange
-4	Anonymous	Wannabuythisbook?
-5	BestSeller	OneHeckuvabook
-5	BestSeller	OneHeckuvabook
-6	EveryoneBu	Thisverybook
-8	BerkAuthor	Cool.Berkly.the.book
+➤ id[4,32,0]  ¦  c[1,10,0]  ¦  vc[12,-1,0]  𝄀
+2  ¦  Bugs  ¦  Arabbitlife  𝄀
+3  ¦  Cowboy  ¦  Lifeontherange  𝄀
+4  ¦  Anonymous  ¦  Wannabuythisbook?  𝄀
+5  ¦  BestSeller  ¦  OneHeckuvabook  𝄀
+5  ¦  BestSeller  ¦  OneHeckuvabook  𝄀
+6  ¦  EveryoneBu  ¦  Thisverybook  𝄀
+8  ¦  BerkAuthor  ¦  Cool.Berkly.the.book
 select distinct(substr(c,2)) from t1 order by 1;
-(substr(c,2))
-null
-
-affy
-anFran
-erkAuthor
-estSeller
-nonymous
-owboy
-ugs
+➤ substr(c, 2)[1,255,0]  𝄀
+null  𝄀
+  𝄀
+affy  𝄀
+anFran  𝄀
+erkAuthor  𝄀
+estSeller  𝄀
+nonymous  𝄀
+owboy  𝄀
+ugs  𝄀
 veryoneBu
 select distinct(substr(vc,3)) from t1 order by 1;
-(substr(vc,3))
-null
-
-abbitlife
-eHeckuvabook
-feontherange
-isasanfranlifetyle
-isverybook
-nnabuythisbook?
-ol.Berkly.the.book
+➤ substr(vc, 3)[12,-1,0]  𝄀
+null  𝄀
+  𝄀
+abbitlife  𝄀
+eHeckuvabook  𝄀
+feontherange  𝄀
+isasanfranlifetyle  𝄀
+isverybook  𝄀
+nnabuythisbook?  𝄀
+ol.Berkly.the.book  𝄀
 ucklife
 select endswith(c,'a'),endswith(vc,'a') from t1;
-endswith(c, a)	endswith(vc, a)
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-null	null
-false	false
+➤ endswith(c, a)[-7,1,0]  ¦  endswith(vc, a)[-7,1,0]  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+null  ¦  null  𝄀
+0  ¦  0
 select endswith(c,'y'),endswith(vc,'e') from t1;
-endswith(c, y)	endswith(vc, e)
-true	true
-true	true
-false	true
-true	true
-false	false
-false	false
-false	false
-false	false
-false	true
-false	false
-null	null
-false	false
+➤ endswith(c, y)[-7,1,0]  ¦  endswith(vc, e)[-7,1,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+0  ¦  1  𝄀
+1  ¦  1  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  1  𝄀
+0  ¦  0  𝄀
+null  ¦  null  𝄀
+0  ¦  0
 select * from t1 where endswith(c,'y');
-id	c	vc
-1	Daffy	Aducklife
-1	Daffy	Aducklife
-3	Cowboy	Lifeontherange
+➤ id[4,32,0]  ¦  c[1,10,0]  ¦  vc[12,-1,0]  𝄀
+1  ¦  Daffy  ¦  Aducklife  𝄀
+1  ¦  Daffy  ¦  Aducklife  𝄀
+3  ¦  Cowboy  ¦  Lifeontherange
 select * from t1 where endswith(c,'y') and endswith(vc,'ge');
-id	c	vc
-3	Cowboy	Lifeontherange
+➤ id[4,32,0]  ¦  c[1,10,0]  ¦  vc[12,-1,0]  𝄀
+3  ¦  Cowboy  ¦  Lifeontherange
 select startswith(c,'B'),startswith(vc,'A') from t1;
-startswith(c, B)	startswith(vc, A)
-false	true
-false	true
-true	true
-false	false
-false	false
-true	false
-true	false
-false	false
-false	false
-true	false
-null	null
-false	false
+➤ startswith(c, B)[-7,1,0]  ¦  startswith(vc, A)[-7,1,0]  𝄀
+0  ¦  1  𝄀
+0  ¦  1  𝄀
+1  ¦  1  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+1  ¦  0  𝄀
+1  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+1  ¦  0  𝄀
+null  ¦  null  𝄀
+0  ¦  0
 select startswith(c,'y'),startswith(vc,'e') from t1;
-startswith(c, y)	startswith(vc, e)
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-false	false
-null	null
-false	false
+➤ startswith(c, y)[-7,1,0]  ¦  startswith(vc, e)[-7,1,0]  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+0  ¦  0  𝄀
+null  ¦  null  𝄀
+0  ¦  0
 select * from t1 where startswith(c,'B');
-id	c	vc
-2	Bugs	Arabbitlife
-5	BestSeller	OneHeckuvabook
-5	BestSeller	OneHeckuvabook
-8	BerkAuthor	Cool.Berkly.the.book
+➤ id[4,32,0]  ¦  c[1,10,0]  ¦  vc[12,-1,0]  𝄀
+2  ¦  Bugs  ¦  Arabbitlife  𝄀
+5  ¦  BestSeller  ¦  OneHeckuvabook  𝄀
+5  ¦  BestSeller  ¦  OneHeckuvabook  𝄀
+8  ¦  BerkAuthor  ¦  Cool.Berkly.the.book
 select * from t1 where startswith(c,'B') and startswith(vc,'A');
-id	c	vc
-2	Bugs	Arabbitlife
+➤ id[4,32,0]  ¦  c[1,10,0]  ¦  vc[12,-1,0]  𝄀
+2  ¦  Bugs  ¦  Arabbitlife
 select lpad(c,0,'*') from t1;
-lpad(c,0,'*')
-
-
-
-
-
-
-
-
-
-
-null
+➤ lpad(c, 0, *)[12,-1,0]  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+null  𝄀
 
 select lpad(c,1,'*') from t1;
-lpad(c,1,'*')
-D
-D
-B
-C
-A
-B
-B
-E
-S
-B
-null
+➤ lpad(c, 1, *)[12,-1,0]  𝄀
+D  𝄀
+D  𝄀
+B  𝄀
+C  𝄀
+A  𝄀
+B  𝄀
+B  𝄀
+E  𝄀
+S  𝄀
+B  𝄀
+null  𝄀
 *
 select lpad(c,5,'*') from t1;
-lpad(c,5,'*')
-Daffy
-Daffy
-*Bugs
-Cowbo
-Anony
-BestS
-BestS
-Every
-SanFr
-BerkA
-null
+➤ lpad(c, 5, *)[12,-1,0]  𝄀
+Daffy  𝄀
+Daffy  𝄀
+*Bugs  𝄀
+Cowbo  𝄀
+Anony  𝄀
+BestS  𝄀
+BestS  𝄀
+Every  𝄀
+SanFr  𝄀
+BerkA  𝄀
+null  𝄀
 *****
 select lpad(c,10,'*') from t1;
-lpad(c,10,'*')
-*****Daffy
-*****Daffy
-******Bugs
-****Cowboy
-*Anonymous
-BestSeller
-BestSeller
-EveryoneBu
-***SanFran
-BerkAuthor
-null
+➤ lpad(c, 10, *)[12,-1,0]  𝄀
+*****Daffy  𝄀
+*****Daffy  𝄀
+******Bugs  𝄀
+****Cowboy  𝄀
+*Anonymous  𝄀
+BestSeller  𝄀
+BestSeller  𝄀
+EveryoneBu  𝄀
+***SanFran  𝄀
+BerkAuthor  𝄀
+null  𝄀
 **********
 select rpad(c,'1','*') from t1;
-rpad(c,'1','*')
-D
-D
-B
-C
-A
-B
-B
-E
-S
-B
-null
+➤ rpad(c, 1, *)[12,-1,0]  𝄀
+D  𝄀
+D  𝄀
+B  𝄀
+C  𝄀
+A  𝄀
+B  𝄀
+B  𝄀
+E  𝄀
+S  𝄀
+B  𝄀
+null  𝄀
 *
 select rpad(c,0,'*') from t1;
-rpad(c,0,'*')
-
-
-
-
-
-
-
-
-
-
-null
+➤ rpad(c, 0, *)[12,-1,0]  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+  𝄀
+null  𝄀
 
 select rpad(c,1,'*') from t1;
-rpad(c,1,'*')
-D
-D
-B
-C
-A
-B
-B
-E
-S
-B
-null
+➤ rpad(c, 1, *)[12,-1,0]  𝄀
+D  𝄀
+D  𝄀
+B  𝄀
+C  𝄀
+A  𝄀
+B  𝄀
+B  𝄀
+E  𝄀
+S  𝄀
+B  𝄀
+null  𝄀
 *
 select rpad(c,5,'*') from t1;
-rpad(c,5,'*')
-Daffy
-Daffy
-Bugs*
-Cowbo
-Anony
-BestS
-BestS
-Every
-SanFr
-BerkA
-null
+➤ rpad(c, 5, *)[12,-1,0]  𝄀
+Daffy  𝄀
+Daffy  𝄀
+Bugs*  𝄀
+Cowbo  𝄀
+Anony  𝄀
+BestS  𝄀
+BestS  𝄀
+Every  𝄀
+SanFr  𝄀
+BerkA  𝄀
+null  𝄀
 *****
 select rpad(c,10,'*') from t1;
-rpad(c,10,'*')
-Daffy*****
-Daffy*****
-Bugs******
-Cowboy****
-Anonymous*
-BestSeller
-BestSeller
-EveryoneBu
-SanFran***
-BerkAuthor
-null
+➤ rpad(c, 10, *)[12,-1,0]  𝄀
+Daffy*****  𝄀
+Daffy*****  𝄀
+Bugs******  𝄀
+Cowboy****  𝄀
+Anonymous*  𝄀
+BestSeller  𝄀
+BestSeller  𝄀
+EveryoneBu  𝄀
+SanFran***  𝄀
+BerkAuthor  𝄀
+null  𝄀
 **********
 select rpad(c,'1','*') from t1;
-rpad(c,'1','*')
-D
-D
-B
-C
-A
-B
-B
-E
-S
-B
-null
+➤ rpad(c, 1, *)[12,-1,0]  𝄀
+D  𝄀
+D  𝄀
+B  𝄀
+C  𝄀
+A  𝄀
+B  𝄀
+B  𝄀
+E  𝄀
+S  𝄀
+B  𝄀
+null  𝄀
 *
 drop table if exists t1;
 create table t1 ( id int, c char(20),vc varchar(50));
@@ -426,66 +426,66 @@ insert into t1 values (8,' BerkAuthor','  Cool.Berkly.the.book ');
 insert into t1 values (9,null,null);
 insert into t1 values (10,'','');
 select ltrim(c),ltrim(vc) from t1;
-ltrim(c)	ltrim(vc)
-Daffy  	Aducklife
-Daffy  	Aducklife 
-Bugs	Arabbitlife 
-Cowboy	Lifeontherange
-Anonymous  	Wannabuythisbook?  
-BestSeller	OneHeckuvabook 
-BestSeller	OneHeckuvabook 
-EveryoneBu	Thisverybook 
-SanFran	Itisasanfranlifetyle 
-BerkAuthor	Cool.Berkly.the.book 
-null	null
-
+➤ ltrim(c)[12,-1,0]  ¦  ltrim(vc)[12,-1,0]  𝄀
+Daffy    ¦  Aducklife  𝄀
+Daffy    ¦  Aducklife   𝄀
+Bugs  ¦  Arabbitlife   𝄀
+Cowboy  ¦  Lifeontherange  𝄀
+Anonymous    ¦  Wannabuythisbook?    𝄀
+BestSeller  ¦  OneHeckuvabook   𝄀
+BestSeller  ¦  OneHeckuvabook   𝄀
+EveryoneBu  ¦  Thisverybook   𝄀
+SanFran  ¦  Itisasanfranlifetyle   𝄀
+BerkAuthor  ¦  Cool.Berkly.the.book   𝄀
+null  ¦  null  𝄀
+  ¦  
 select rtrim(c),rtrim(vc) from t1;
-rtrim(c)	rtrim(vc)
-Daffy	  Aducklife
-  Daffy	Aducklife
- Bugs	 Arabbitlife
-    Cowboy	 Lifeontherange
- Anonymous	 Wannabuythisbook?
-  BestSeller	 OneHeckuvabook
-  BestSeller	OneHeckuvabook
- EveryoneBu	 Thisverybook
- SanFran	 Itisasanfranlifetyle
- BerkAuthor	  Cool.Berkly.the.book
-null	null
-
+➤ rtrim(c)[12,-1,0]  ¦  rtrim(vc)[12,-1,0]  𝄀
+Daffy  ¦    Aducklife  𝄀
+  Daffy  ¦  Aducklife  𝄀
+ Bugs  ¦   Arabbitlife  𝄀
+    Cowboy  ¦   Lifeontherange  𝄀
+ Anonymous  ¦   Wannabuythisbook?  𝄀
+  BestSeller  ¦   OneHeckuvabook  𝄀
+  BestSeller  ¦  OneHeckuvabook  𝄀
+ EveryoneBu  ¦   Thisverybook  𝄀
+ SanFran  ¦   Itisasanfranlifetyle  𝄀
+ BerkAuthor  ¦    Cool.Berkly.the.book  𝄀
+null  ¦  null  𝄀
+  ¦  
 select ltrim(rtrim(c)),rtrim(ltrim(vc)) from t1;
-ltrim(rtrim(c))	rtrim(ltrim(vc))
-Daffy	Aducklife
-Daffy	Aducklife
-Bugs	Arabbitlife
-Cowboy	Lifeontherange
-Anonymous	Wannabuythisbook?
-BestSeller	OneHeckuvabook
-BestSeller	OneHeckuvabook
-EveryoneBu	Thisverybook
-SanFran	Itisasanfranlifetyle
-BerkAuthor	Cool.Berkly.the.book
-null	null
-
+➤ ltrim(rtrim(c))[12,-1,0]  ¦  rtrim(ltrim(vc))[12,-1,0]  𝄀
+Daffy  ¦  Aducklife  𝄀
+Daffy  ¦  Aducklife  𝄀
+Bugs  ¦  Arabbitlife  𝄀
+Cowboy  ¦  Lifeontherange  𝄀
+Anonymous  ¦  Wannabuythisbook?  𝄀
+BestSeller  ¦  OneHeckuvabook  𝄀
+BestSeller  ¦  OneHeckuvabook  𝄀
+EveryoneBu  ¦  Thisverybook  𝄀
+SanFran  ¦  Itisasanfranlifetyle  𝄀
+BerkAuthor  ¦  Cool.Berkly.the.book  𝄀
+null  ¦  null  𝄀
+  ¦  
 select * from t1 where ltrim(c) = 'BestSeller';
-id	c	vc
-5	  BestSeller	 OneHeckuvabook 
-5	  BestSeller	OneHeckuvabook 
+➤ id[4,32,0]  ¦  c[1,20,0]  ¦  vc[12,-1,0]  𝄀
+5  ¦    BestSeller  ¦   OneHeckuvabook   𝄀
+5  ¦    BestSeller  ¦  OneHeckuvabook 
 select * from t1 where ltrim(c) = 'BestSeller' and rtrim(vc) = 'OneHeckuvabook';
-id	c	vc
-5	  BestSeller	OneHeckuvabook 
+➤ id[4,32,0]  ¦  c[1,20,0]  ¦  vc[12,-1,0]  𝄀
+5  ¦    BestSeller  ¦  OneHeckuvabook 
 drop table if exists t1;
 create table t1 ( d int);
 insert into t1 values(0),(-1),(2),(10);
 select space(d) from t1 where d <> -1;
-space(d)
-
-  
+➤ space(d)[12,-1,0]  𝄀
+  𝄀
+    𝄀
           
 select space(d) from t1;
-space(d)
-
-
-  
+➤ space(d)[12,-1,0]  𝄀
+  𝄀
+  𝄀
+    𝄀
           
 drop table t1;

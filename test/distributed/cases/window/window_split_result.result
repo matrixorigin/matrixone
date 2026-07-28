@@ -1,0 +1,53 @@
+drop database if exists window_split_result;
+create database window_split_result;
+use window_split_result;
+create table t_win_split (
+id bigint,
+g int,
+v decimal(20, 2)
+);
+insert into t_win_split
+select result, 1, cast(result as decimal(20, 2))
+from generate_series(1, 9000, 1) g;
+select current_sum
+from (
+select sum(v) over (rows between current row and current row) as current_sum
+from t_win_split
+) w
+where current_sum in (1, 8192, 8193, 9000)
+order by current_sum;
+current_sum
+1.00
+8192.00
+8193.00
+9000.00
+select id, current_sum, rn
+from (
+select id,
+sum(v) over (partition by g rows between current row and current row) as current_sum,
+row_number() over (partition by g order by id) as rn
+from t_win_split
+) w
+where rn in (1, 8192, 8193, 9000)
+order by rn;
+id    current_sum    rn
+1    1.00    1
+8192    8192.00    8192
+8193    8193.00    8193
+9000    9000.00    9000
+select count(*) as row_count,
+min(rn) as min_rn,
+max(rn) as max_rn,
+sum(rn) as rn_checksum,
+sum(current_sum) as value_checksum,
+sum(abs(id - rn)) as row_alignment_checksum,
+sum(abs(cast(id as decimal(20, 2)) - current_sum)) as value_alignment_checksum
+from (
+select id,
+sum(v) over (partition by g rows between current row and current row) as current_sum,
+row_number() over (partition by g order by id) as rn
+from t_win_split
+) w;
+row_count    min_rn    max_rn    rn_checksum    value_checksum    row_alignment_checksum    value_alignment_checksum
+9000    1    9000    40504500    40504500.00    0    0.00
+drop database window_split_result;

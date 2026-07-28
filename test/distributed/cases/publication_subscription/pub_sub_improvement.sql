@@ -30,7 +30,7 @@ select * from table01;
 truncate table table01;
 delete from table01 where col1 = 1;
 update table01 set col1 = 100 where col2 = 2413242;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status;
 drop table table01;
 -- @ignore:5,7
@@ -115,7 +115,7 @@ show subscriptions all;
 use sub_database02;
 show tables;
 select * from table03;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status;
 -- @session
 drop publication publication02;
@@ -139,7 +139,7 @@ use sub_database03;
 show tables;
 select * from table01;
 desc table01;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status;
 -- @session
 

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -124,21 +125,179 @@ func TestRunTaskWithRetry(t *testing.T) {
 		c := make(chan struct{})
 		n := atomic.Uint32{}
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
-			if n.Add(1) == 1 {
+			count := n.Add(1)
+			if count == 1 {
 				return moerr.NewInternalError(context.TODO(), "error")
 			}
-			close(c)
+			if count == 2 {
+				close(c)
+			}
 			return nil
 		})
 		v := newTestAsyncTask("t1")
 		v.Metadata.Options.MaxRetryTimes = 1
 		mustAddTestAsyncTask(t, store, 1, v)
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
-		<-c
-		assert.Equal(t, uint32(2), n.Load())
-	}, WithRunnerParallelism(2),
+		select {
+		case <-c:
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "timeout waiting for retry task to execute")
+		}
+		require.Equal(t, uint32(2), n.Load())
+		require.Eventually(t, func() bool {
+			v := mustGetTestAsyncTask(t, store, 1)[0]
+			return v.Status == task.TaskStatus_Completed &&
+				v.ExecuteResult != nil &&
+				v.ExecuteResult.Code == task.ResultCode_Success
+		}, 5*time.Second, 10*time.Millisecond)
+		require.Eventually(t, func() bool {
+			r.retryTasks.Lock()
+			defer r.retryTasks.Unlock()
+			return len(r.retryTasks.s) == 0
+		}, 5*time.Second, 10*time.Millisecond)
+		require.Equal(t, 0, len(r.parallelismC))
+	}, WithRunnerParallelism(1),
 		WithRunnerHeartbeatInterval(time.Millisecond),
 		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestRetryDrainsAllDueTasks(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	r := NewTaskRunner("r1", s, func(string) bool {
+		return true
+	}, WithRunnerParallelism(1),
+		WithRunnerLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel))).(*taskRunner)
+	defer r.stopper.Stop()
+
+	executed := make(chan struct{}, 1)
+	n := atomic.Uint32{}
+	r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
+		if n.Add(1) == 1 {
+			executed <- struct{}{}
+		}
+		return nil
+	})
+
+	taskCtx, taskCancel := context.WithCancelCause(context.Background())
+	defer taskCancel(nil)
+	r.parallelismC <- struct{}{}
+	r.retryTasks.s = append(r.retryTasks.s, runningTask{
+		task: task.AsyncTask{
+			ID: 1,
+		},
+		ctx:    taskCtx,
+		cancel: taskCancel,
+		// All entries in the queue are due. This used to leave the slice
+		// unchanged because no future retryAt entry was found.
+		retryAt: time.Now().Add(-time.Second),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	retryDone := make(chan struct{})
+	go func() {
+		defer close(retryDone)
+		r.retry(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-retryDone
+	}()
+
+	select {
+	case <-executed:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for retry task to execute")
+	}
+
+	require.Eventually(t, func() bool {
+		r.retryTasks.Lock()
+		defer r.retryTasks.Unlock()
+		return len(r.retryTasks.s) == 0
+	}, 5*time.Second, 10*time.Millisecond)
+
+	time.Sleep(250 * time.Millisecond)
+	require.Equal(t, uint32(1), n.Load())
+	require.Equal(t, 0, len(r.parallelismC))
+}
+
+func TestRetryPreservesFutureTasks(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	r := NewTaskRunner("r1", s, func(string) bool {
+		return true
+	}, WithRunnerParallelism(2),
+		WithRunnerLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel))).(*taskRunner)
+	defer r.stopper.Stop()
+
+	executed := make(chan struct{}, 1)
+	n := atomic.Uint32{}
+	r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
+		if n.Add(1) == 1 {
+			executed <- struct{}{}
+		}
+		return nil
+	})
+
+	dueCtx, dueCancel := context.WithCancelCause(context.Background())
+	defer dueCancel(nil)
+	futureCtx, futureCancel := context.WithCancelCause(context.Background())
+	defer futureCancel(nil)
+	r.parallelismC <- struct{}{}
+	r.parallelismC <- struct{}{}
+	r.retryTasks.s = append(r.retryTasks.s,
+		runningTask{
+			task: task.AsyncTask{
+				ID: 1,
+			},
+			ctx:     dueCtx,
+			cancel:  dueCancel,
+			retryAt: time.Now().Add(-time.Second),
+		},
+		runningTask{
+			task: task.AsyncTask{
+				ID: 2,
+			},
+			ctx:     futureCtx,
+			cancel:  futureCancel,
+			retryAt: time.Now().Add(time.Hour),
+		},
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	retryDone := make(chan struct{})
+	go func() {
+		defer close(retryDone)
+		r.retry(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-retryDone
+	}()
+
+	select {
+	case <-executed:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for due retry task to execute")
+	}
+
+	require.Eventually(t, func() bool {
+		r.retryTasks.Lock()
+		defer r.retryTasks.Unlock()
+		return len(r.retryTasks.s) == 1 && r.retryTasks.s[0].task.ID == 2
+	}, 5*time.Second, 10*time.Millisecond)
+
+	time.Sleep(250 * time.Millisecond)
+	require.Equal(t, uint32(1), n.Load())
+	require.Equal(t, 1, len(r.parallelismC))
 }
 
 func TestRunTaskWithDisableRetry(t *testing.T) {
@@ -282,6 +441,91 @@ func TestRemoveRunningTaskNotExists(t *testing.T) {
 		assert.True(t, completed, "non-existent task should be added to completedTasks")
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Hour))
+}
+
+func TestRunnerOptionSetters(t *testing.T) {
+	r := &taskRunner{}
+	getClient := func() util.HAKeeperClient { return nil }
+
+	WithRunnerFetchLimit(11)(r)
+	WithRunnerParallelism(3)(r)
+	WithRunnerMaxWaitTasks(9)(r)
+	WithRunnerFetchInterval(2 * time.Second)(r)
+	WithRunnerFetchTimeout(3 * time.Second)(r)
+	WithRunnerRetryInterval(4 * time.Second)(r)
+	WithRunnerHeartbeatInterval(5 * time.Second)(r)
+	WithRunnerHeartbeatTimeout(6 * time.Second)(r)
+	WithHaKeeperClient(getClient)(r)
+	WithCnUUID("cn-1")(r)
+
+	require.Equal(t, 11, r.options.queryLimit)
+	require.Equal(t, 3, r.options.parallelism)
+	require.Equal(t, 9, r.options.maxWaitTasks)
+	require.Equal(t, 2*time.Second, r.options.fetchInterval)
+	require.Equal(t, 3*time.Second, r.options.fetchTimeout)
+	require.Equal(t, 4*time.Second, r.options.retryInterval)
+	require.Equal(t, 5*time.Second, r.options.heartbeatInterval)
+	require.Equal(t, 6*time.Second, r.options.heartbeatTimeout)
+	require.NotNil(t, r.hakeeper.getClient)
+	require.Nil(t, r.hakeeper.getClient())
+	require.Equal(t, "cn-1", r.hakeeper.cnUUID)
+}
+
+func TestRunnerWithOptionsSetter(t *testing.T) {
+	r := &taskRunner{}
+	WithOptions(
+		13,
+		7,
+		17,
+		8*time.Second,
+		9*time.Second,
+		10*time.Second,
+		11*time.Second,
+		12*time.Second,
+	)(r)
+
+	require.Equal(t, 13, r.options.queryLimit)
+	require.Equal(t, 7, r.options.parallelism)
+	require.Equal(t, 17, r.options.maxWaitTasks)
+	require.Equal(t, 8*time.Second, r.options.fetchInterval)
+	require.Equal(t, 9*time.Second, r.options.fetchTimeout)
+	require.Equal(t, 10*time.Second, r.options.retryInterval)
+	require.Equal(t, 11*time.Second, r.options.heartbeatInterval)
+	require.Equal(t, 12*time.Second, r.options.heartbeatTimeout)
+}
+
+func TestTaskRunnerAccessorsAndIdempotentStartStop(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	r := NewTaskRunner("runner-test", s, func(string) bool { return true }, WithRunnerParallelism(2)).(*taskRunner)
+
+	require.Equal(t, "runner-test", r.ID())
+	require.Equal(t, 2, r.Parallelism())
+	require.Nil(t, r.GetExecutor(task.TaskCode_TestOnly))
+
+	r.RegisterExecutor(task.TaskCode_TestOnly, func(context.Context, task.Task) error { return nil })
+	require.NotNil(t, r.GetExecutor(task.TaskCode_TestOnly))
+
+	require.NoError(t, r.Start())
+	require.NoError(t, r.Start())
+	require.NoError(t, r.Stop())
+	require.NoError(t, r.Stop())
+	require.NoError(t, s.Close())
+}
+
+func TestReleaseParallelPanicAndSuccess(t *testing.T) {
+	r := &taskRunner{
+		parallelismC: make(chan struct{}, 1),
+	}
+
+	require.Panics(t, func() {
+		r.releaseParallel()
+	})
+
+	r.parallelismC <- struct{}{}
+	require.NotPanics(t, func() {
+		r.releaseParallel()
+	})
 }
 
 func runTaskRunnerTest(t *testing.T,

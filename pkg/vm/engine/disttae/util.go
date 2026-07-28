@@ -146,6 +146,11 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		for _, v := range vs {
 			mp[v] = true
 		}
+	case types.T_year:
+		vs := vector.MustFixedColNoTypeCheck[types.MoYear](pk)
+		for _, v := range vs {
+			mp[v] = true
+		}
 	case types.T_TS:
 		vs := vector.MustFixedColNoTypeCheck[types.TS](pk)
 		for _, v := range vs {
@@ -184,6 +189,26 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 	case types.T_array_float64:
 		for i := 0; i < pk.Length(); i++ {
 			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
+			mp[v] = true
+		}
+	case types.T_array_bf16:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[types.BF16](vector.GetArrayAt[types.BF16](pk, i))
+			mp[v] = true
+		}
+	case types.T_array_float16:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[types.Float16](vector.GetArrayAt[types.Float16](pk, i))
+			mp[v] = true
+		}
+	case types.T_array_int8:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[int8](vector.GetArrayAt[int8](pk, i))
+			mp[v] = true
+		}
+	case types.T_array_uint8:
+		for i := 0; i < pk.Length(); i++ {
+			v := types.ArrayToString[uint8](vector.GetArrayAt[uint8](pk, i))
 			mp[v] = true
 		}
 	default:
@@ -333,6 +358,13 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 					sels = append(sels, int64(i))
 				}
 			}
+		case types.T_year:
+			vs := vector.MustFixedColNoTypeCheck[types.MoYear](vec)
+			for i, v := range vs {
+				if mp[v] {
+					sels = append(sels, int64(i))
+				}
+			}
 		case types.T_TS:
 			vs := vector.MustFixedColNoTypeCheck[types.TS](vec)
 			for i, v := range vs {
@@ -356,16 +388,16 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 			}
 		case types.T_char, types.T_varchar, types.T_json,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-			if pk.IsConst() {
-				for i := 0; i < pk.Length(); i++ {
-					v := pk.UnsafeGetStringAt(i)
+			if vec.IsConst() {
+				for i := 0; i < vec.Length(); i++ {
+					v := vec.UnsafeGetStringAt(i)
 					if mp[v] {
 						sels = append(sels, int64(i))
 					}
 				}
 			} else {
-				vs := vector.MustFixedColNoTypeCheck[types.Varlena](pk)
-				area := pk.GetArea()
+				vs := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
+				area := vec.GetArea()
 				for i := 0; i < len(vs); i++ {
 					v := vs[i].UnsafeGetString(area)
 					if mp[v] {
@@ -383,6 +415,34 @@ func LinearSearchOffsetByValFactory(pk *vector.Vector) func(*vector.Vector) []in
 		case types.T_array_float64:
 			for i := 0; i < vec.Length(); i++ {
 				v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
+				if mp[v] {
+					sels = append(sels, int64(i))
+				}
+			}
+		case types.T_array_bf16:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[types.BF16](vector.GetArrayAt[types.BF16](vec, i))
+				if mp[v] {
+					sels = append(sels, int64(i))
+				}
+			}
+		case types.T_array_float16:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[types.Float16](vector.GetArrayAt[types.Float16](vec, i))
+				if mp[v] {
+					sels = append(sels, int64(i))
+				}
+			}
+		case types.T_array_int8:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[int8](vector.GetArrayAt[int8](vec, i))
+				if mp[v] {
+					sels = append(sels, int64(i))
+				}
+			}
+		case types.T_array_uint8:
+			for i := 0; i < vec.Length(); i++ {
+				v := types.ArrayToString[uint8](vector.GetArrayAt[uint8](vec, i))
 				if mp[v] {
 					sels = append(sels, int64(i))
 				}
@@ -655,7 +715,12 @@ func stringifyMap(req any, f func(any, any) string) string {
 	return buf.String()
 }
 
-func execReadSql(ctx context.Context, op client.TxnOperator, sql string, disableLog bool) (executor.Result, error) {
+func execReadSql(
+	ctx context.Context,
+	op client.TxnOperator,
+	sql string,
+	disableLog bool,
+) (executor.Result, error) {
 	// copy from compile.go runSqlWithResult
 	service := op.GetWorkspace().(*Transaction).proc.GetService()
 	v, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.InternalSQLExecutor)

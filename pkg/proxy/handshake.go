@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
 
@@ -33,59 +34,218 @@ func (c *clientConn) writeInitialHandshake() error {
 
 // handleHandshakeResp receives login information from client and saves it
 // in proxy end.
-func (c *clientConn) handleHandshakeResp() error {
-	// The proxy reads login request from client.
-	pack, err := c.readPacket()
-	if err != nil {
-		return err
-	}
-	c.mysqlProto.AddSequenceId(1)
-	// Save the login packet in client connection, it will be used
-	// in the future.
-	c.handshakePack = pack
-
-	// Parse the login information and returns whether ssl is needed.
-	// Also, we can get connection attributes from client if it sets
-	// some.
-	ssl, err := c.mysqlProto.HandleHandshake(c.ctx, pack.Payload)
-	if err != nil {
-		return err
-	}
-	if ssl {
-		if err = c.upgradeToTLS(); err != nil {
-			return err
+func (c *clientConn) handleHandshakeResp(ctx context.Context) (*protocolMemoryLease, error) {
+	if ctx == nil {
+		ctx = c.ctx
+		if ctx == nil {
+			ctx = context.Background()
 		}
-		return c.handleHandshakeResp()
+	}
+	deadline := time.Now().Add(c.clientHandshakeTimeout)
+	transientBytes := uint64(0)
+	if c.protocolMemoryLimiter != nil {
+		transientBytes = c.protocolMemoryLimiter.budget.initialBytes
+	}
+	// Admission must precede the first read. SQLCodec and clientConn each copy
+	// the login payload before the Goetty input backing can be released, so
+	// acquiring after parsing would leave the actual peak outside the limiter.
+	lease, err := acquireProtocolMemoryBefore(
+		ctx,
+		c.protocolMemoryLimiter,
+		transientBytes,
+		deadline,
+	)
+	if err != nil {
+		return nil, err
+	}
+	leaseOwned := true
+	defer func() {
+		if leaseOwned {
+			lease.release()
+		}
+	}()
+	if cause := operationContextCause(ctx); cause != nil {
+		return nil, cause
 	}
 
-	// parse tenant information from client login request.
-	if err := c.clientInfo.parse(c.mysqlProto.GetUserName()); err != nil {
-		return err
+	rawConn := c.conn.RawConn()
+	deadlineConn := newAbsoluteReadDeadlineConn(rawConn, deadline)
+	c.conn.UseConn(deadlineConn)
+	c.mysqlProto.UseConn(deadlineConn)
+	defer func() {
+		deadlineConn.disable()
+		// A non-TLS handshake still uses deadlineConn directly, so remove the
+		// now-disabled wrapper instead of retaining one object per connection.
+		// After a TLS upgrade, tls.Conn owns the wrapped transport and the
+		// disabled wrapper remains a transparent part of that stack.
+		if c.conn.RawConn() == deadlineConn {
+			c.conn.UseConn(rawConn)
+			c.mysqlProto.UseConn(rawConn)
+		}
+	}()
+	// The client transport is phase-owned until this function succeeds. Closing
+	// it is the only reliable way to interrupt both Goetty reads and TLS I/O;
+	// joining the callback before success prevents a late cancel from closing a
+	// connection after ownership has moved to the tunnel.
+	joinInterrupt := interruptConnectionOnDone(ctx, rawConn)
+	defer joinInterrupt()
+	if err := c.handleHandshakeRespBefore(ctx, deadline); err != nil {
+		return nil, err
+	}
+	if err := c.handoffHandshakeBuffer(lease); err != nil {
+		return nil, err
+	}
+	joinInterrupt()
+	if cause := operationContextCause(ctx); cause != nil {
+		return nil, cause
+	}
+	leaseOwned = false
+	return lease, nil
+}
+
+// handoffHandshakeBuffer closes the phase-owned goetty input buffer without
+// dropping bytes that were read past the final login packet. This applies to
+// both plaintext and TLS: for TLS, the same ByteBuf is also referenced by the
+// transport's BufferedConn and must be drained and reset before it is freed.
+func (c *clientConn) handoffHandshakeBuffer(lease *protocolMemoryLease) error {
+	session, ok := c.conn.(goetty.BufferedIOSession)
+	if !ok {
+		return nil
+	}
+	input := session.InBuf()
+	if input == nil {
+		return nil
 	}
 
-	li := &c.clientInfo.labelInfo
-	c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, li.Labels)
+	readable := input.Readable()
+	if readable == 0 {
+		input.Reset()
+		input.Close()
+		return nil
+	}
+	if readable > c.clientHandshakePacketLimit {
+		return frontend.ErrPacketTooLarge
+	}
 
-	c.clientInfo.hash, err = c.clientInfo.getHash()
+	conn, err := newHandshakeBufferedConn(
+		c.conn.RawConn(),
+		input.PeekN(0, readable),
+		c.sessionAllocator,
+		lease,
+	)
 	if err != nil {
 		return err
 	}
+
+	// Ownership moves to conn before the tunnel can observe it. Resetting the
+	// indices is required because a TLS BufferedConn still holds this ByteBuf;
+	// a closed buffer with stale non-zero indices would panic on its next Read.
+	input.Skip(readable)
+	input.Reset()
+	input.Close()
+	c.conn.UseConn(conn)
+	c.mysqlProto.UseConn(conn)
 	return nil
 }
 
+func (c *clientConn) handleHandshakeRespBefore(ctx context.Context, deadline time.Time) error {
+	if c.handshakePack != nil {
+		return moerr.NewInvalidInputNoCtx("client handshake has already been processed")
+	}
+	tlsEstablished := false
+	for {
+		// The proxy reads a protocol phase packet from the client. The first
+		// packet may be an SSLRequest; the terminal packet must be a login.
+		pack, err := c.readPacketBefore(deadline)
+		if err != nil {
+			if cause := operationContextCause(ctx); cause != nil {
+				return cause
+			}
+			return err
+		}
+		c.mysqlProto.AddSequenceId(1)
+
+		// SQLCodec copies the decoded payload out of goetty's input buffer. Move
+		// the one lifetime-retained copy into the Proxy's shared bounded allocator
+		// so ProtocolMemoryLimit covers established connections as well as the
+		// fixed client/backend IO buffers.
+		payload, err := c.sessionAllocator.Alloc(len(pack.Payload))
+		if err != nil {
+			return err
+		}
+		payloadView := payload[:len(pack.Payload)]
+		copy(payloadView, pack.Payload)
+		ownedPack := &frontend.Packet{
+			Length:     pack.Length,
+			SequenceID: pack.SequenceID,
+			Payload:    payloadView,
+		}
+
+		// Parse the phase packet and determine whether it requests TLS.
+		ssl, err := c.mysqlProto.HandleHandshake(ctx, ownedPack.Payload)
+		if err != nil {
+			// HandleHandshake may retain a slice of the payload before a later
+			// validation fails. Keep clientConn as the cleanup owner until Close.
+			c.handshakePack = ownedPack
+			c.handshakePayloadAllocation = payload
+			return err
+		}
+		if ssl {
+			// An SSLRequest contains no authentication state and is superseded by
+			// the login sent inside TLS, so it must not cross the phase.
+			c.sessionAllocator.Free(payload)
+			if tlsEstablished {
+				return moerr.NewInvalidInputNoCtx("duplicate TLS request during client handshake")
+			}
+			if err = c.upgradeToTLS(ctx, deadline); err != nil {
+				return err
+			}
+			tlsEstablished = true
+			continue
+		}
+
+		// Ownership transfers only for the final login packet. It is used to
+		// authenticate fresh backend connections during migration.
+		c.handshakePack = ownedPack
+		c.handshakePayloadAllocation = payload
+
+		// Parse tenant information from the final login request.
+		if err := c.clientInfo.parse(c.mysqlProto.GetUserName()); err != nil {
+			return err
+		}
+		li := &c.clientInfo.labelInfo
+		c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, li.Labels)
+
+		c.clientInfo.hash, err = c.clientInfo.getHash()
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+}
+
 // upgradeToTLS upgrades the connection to TLS connection.
-func (c *clientConn) upgradeToTLS() error {
+func (c *clientConn) upgradeToTLS(ctx context.Context, handshakeDeadline time.Time) error {
 	if c.tlsConfig == nil {
 		return moerr.NewInternalErrorNoCtx("TLS config is invalid")
 	}
+	remaining := time.Until(handshakeDeadline)
+	if remaining <= 0 {
+		return context.DeadlineExceeded
+	}
+	timeout := min(c.tlsConnectTimeout, remaining)
 	// TLS handshake packet from client might have been read into the buffer, use a wrapped conn to
 	// avoid losing handshake packets.
 	tlsConn := tls.Server(c.conn.(goetty.BufferedIOSession).BufferedConn(), c.tlsConfig)
-	ctx, cancel := context.WithTimeoutCause(context.Background(), c.tlsConnectTimeout, moerr.CauseUpgradeToTLS)
+	parentCtx := ctx
+	ctx, cancel := context.WithTimeoutCause(parentCtx, timeout, moerr.CauseUpgradeToTLS)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		if cause := operationContextCause(parentCtx); cause != nil {
+			return cause
+		}
 		err = moerr.AttachCause(ctx, err)
-		return moerr.NewInternalErrorf(ctx, "TSL handshake error: %v", err)
+		return moerr.NewInternalErrorf(ctx, "TLS handshake error: %v", err)
 	}
 	c.conn.UseConn(tlsConn)
 	c.mysqlProto.UseConn(tlsConn)
@@ -120,6 +280,9 @@ func (s *serverConn) readInitialHandshake() error {
 	if err != nil {
 		return err
 	}
+	if len(r.Payload) > proxyBackendAuthResponseLimit {
+		return frontend.ErrPacketTooLarge
+	}
 	if err := s.parseConnID(r); err != nil {
 		return err
 	}
@@ -136,6 +299,9 @@ func (s *serverConn) writeHandshakeResp(handshakeResp *frontend.Packet) (*fronte
 	data, err := s.readPacket()
 	if err != nil {
 		return nil, err
+	}
+	if len(data.Payload) > proxyBackendAuthResponseLimit {
+		return nil, frontend.ErrPacketTooLarge
 	}
 	return data, nil
 }

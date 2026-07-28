@@ -59,11 +59,18 @@ func (l *MOLogger) Named(name string) *MOLogger {
 }
 
 func (l *MOLogger) WithContext(ctx context.Context) *MOLogger {
-	if ctx == nil || ctx == context.TODO() || ctx == context.Background() {
-		panic("nil, context.TODO() and context.Background() are not supported")
+	if ctx == nil {
+		panic("nil context is not supported")
 	}
-	if sc := trace.SpanFromContext(ctx).SpanContext(); trace.IsEnable() && sc.IsEmpty() {
-		panic("context with empty SpanContext are not supported")
+	// When tracing is enabled, context.TODO() and context.Background() are not allowed
+	// because they don't have trace information. When tracing is disabled, they are allowed.
+	if trace.IsEnable() {
+		if ctx == context.TODO() || ctx == context.Background() {
+			panic("context.TODO() and context.Background() are not supported when tracing is enabled")
+		}
+		if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsEmpty() {
+			panic("context with empty SpanContext are not supported when tracing is enabled")
+		}
 	}
 	return newMOLogger(l.logger, ctx)
 }
@@ -202,9 +209,15 @@ func wrapWithContext(logger *zap.Logger, ctx context.Context) *MOLogger {
 	if logger == nil {
 		panic("zap logger is nil")
 	}
-	if ctx != nil &&
-		(ctx == context.TODO() || ctx == context.Background()) {
-		panic("TODO and Background are not supported")
+	// When tracing is enabled, context.TODO() and context.Background() are not allowed
+	// because they don't have trace information. When tracing is disabled, they are allowed.
+	if ctx != nil && trace.IsEnable() {
+		if ctx == context.TODO() || ctx == context.Background() {
+			panic("TODO and Background are not supported when tracing is enabled")
+		}
+		if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsEmpty() {
+			panic("context with empty SpanContext are not supported when tracing is enabled")
+		}
 	}
 
 	return newMOLogger(
@@ -225,11 +238,15 @@ func (opts LogOptions) WithContext(ctx context.Context) LogOptions {
 	if ctx == nil {
 		panic("context is nil")
 	}
-	if ctx == context.TODO() || ctx == context.Background() {
-		panic("TODO and Background contexts are not supported")
-	}
-	if sc := trace.SpanFromContext(ctx).SpanContext(); trace.IsEnable() && sc.IsEmpty() {
-		panic("context with empty SpanContext are not supported")
+	// When tracing is enabled, context.TODO() and context.Background() are not allowed
+	// because they don't have trace information. When tracing is disabled, they are allowed.
+	if trace.IsEnable() {
+		if ctx == context.TODO() || ctx == context.Background() {
+			panic("TODO and Background contexts are not supported when tracing is enabled")
+		}
+		if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsEmpty() {
+			panic("context with empty SpanContext are not supported when tracing is enabled")
+		}
 	}
 
 	opts.ctx = ctx

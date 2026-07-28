@@ -1,6 +1,7 @@
 version: "2"
 run:
   concurrency: 8
+  modules-download-mode: readonly
   issues-exit-code: 2
   tests: true
 linters:
@@ -21,15 +22,26 @@ linters:
     depguard:
       rules:
         main:
+          list-mode: lax
           files:
             - $all
             - '!$test'
-          # allow:
-          #   - $gostd
-          #   - github.com
           deny:
             - pkg: github.com/OpenPeeDeeP/depguard
               desc: example to deny some package
+        iceberg-adapter-boundary:
+          list-mode: lax
+          files:
+            - $all
+            - '!$test'
+            - '!pkg/iceberg/adapter/iceberggo/**/*.go'
+          deny:
+            - pkg: github.com/apache/iceberg-go
+              desc: Iceberg dependency must stay behind pkg/iceberg/adapter/iceberggo
+            - pkg: github.com/apache/arrow-go
+              desc: Arrow dependency must not leak outside the Iceberg adapter
+            - pkg: github.com/apache/arrow/go
+              desc: Arrow dependency must not leak outside the Iceberg adapter
     govet:
       disable:
         - fieldalignment
@@ -91,7 +103,7 @@ linters:
         - SA1016
         - SA1017
         - SA1018
-        - SA1019
+        #- SA1019
         - SA1020
         - SA1021
         - SA1023

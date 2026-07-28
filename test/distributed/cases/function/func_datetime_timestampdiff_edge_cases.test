@@ -1,0 +1,210 @@
+# TIMESTAMPDIFF Edge Cases and Boundary Conditions Tests
+# Testing MySQL compatibility for edge cases
+
+# ============================================
+# 1. Same Date/Time Tests (should return 0)
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', '2024-12-20') AS same_date;
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 10:30:45', '2024-12-20 10:30:45') AS same_datetime;
+SELECT TIMESTAMPDIFF(MINUTE, '2024-12-20 10:30:45', '2024-12-20 10:30:45') AS same_minute;
+SELECT TIMESTAMPDIFF(SECOND, '2024-12-20 10:30:45', '2024-12-20 10:30:45') AS same_second;
+SELECT TIMESTAMPDIFF(MICROSECOND, '2024-12-20 10:30:45.123456', '2024-12-20 10:30:45.123456') AS same_microsecond;
+SELECT TIMESTAMPDIFF(MONTH, '2024-12-20', '2024-12-20') AS same_month;
+SELECT TIMESTAMPDIFF(YEAR, '2024-12-20', '2024-12-20') AS same_year;
+
+# ============================================
+# 2. Exactly One Unit Difference Tests
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20 00:00:00', '2024-12-21 00:00:00') AS exactly_one_day;
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20 23:59:59', '2024-12-21 00:00:00') AS almost_one_day;
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 10:00:00', '2024-12-20 11:00:00') AS exactly_one_hour;
+SELECT TIMESTAMPDIFF(MINUTE, '2024-12-20 10:30:00', '2024-12-20 10:31:00') AS exactly_one_minute;
+SELECT TIMESTAMPDIFF(SECOND, '2024-12-20 10:30:45', '2024-12-20 10:30:46') AS exactly_one_second;
+SELECT TIMESTAMPDIFF(MICROSECOND, '2024-12-20 10:30:45.000000', '2024-12-20 10:30:45.000001') AS exactly_one_microsecond;
+SELECT TIMESTAMPDIFF(WEEK, '2024-12-20', '2024-12-27') AS exactly_one_week;
+SELECT TIMESTAMPDIFF(MONTH, '2024-01-01', '2024-02-01') AS exactly_one_month;
+SELECT TIMESTAMPDIFF(QUARTER, '2024-01-01', '2024-04-01') AS exactly_one_quarter;
+SELECT TIMESTAMPDIFF(YEAR, '2024-01-01', '2025-01-01') AS exactly_one_year;
+
+# ============================================
+# 3. Cross Year Boundary Tests
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, '2023-12-31 23:59:59', '2024-01-01 00:00:00') AS cross_year_day;
+SELECT TIMESTAMPDIFF(HOUR, '2023-12-31 23:00:00', '2024-01-01 00:00:00') AS cross_year_hour;
+SELECT TIMESTAMPDIFF(MINUTE, '2023-12-31 23:59:00', '2024-01-01 00:00:00') AS cross_year_minute;
+SELECT TIMESTAMPDIFF(SECOND, '2023-12-31 23:59:59', '2024-01-01 00:00:00') AS cross_year_second;
+SELECT TIMESTAMPDIFF(YEAR, '2023-12-31', '2024-01-01') AS cross_year_boundary;
+SELECT TIMESTAMPDIFF(YEAR, '2023-01-01', '2024-12-31') AS same_year_span;
+SELECT TIMESTAMPDIFF(YEAR, '2023-12-31', '2024-01-01') AS cross_year_one_day;
+SELECT TIMESTAMPDIFF(YEAR, '2020-12-31', '2024-01-01') AS cross_multiple_years;
+
+# ============================================
+# 4. Cross Month Boundary Tests
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, '2024-01-31 23:59:59', '2024-02-01 00:00:00') AS cross_month;
+SELECT TIMESTAMPDIFF(MONTH, '2024-01-31', '2024-02-01') AS cross_month_boundary;
+SELECT TIMESTAMPDIFF(MONTH, '2024-01-01', '2024-02-28') AS jan_to_feb;
+SELECT TIMESTAMPDIFF(MONTH, '2024-01-31', '2024-02-29') AS jan31_to_feb29_leap;
+SELECT TIMESTAMPDIFF(MONTH, '2024-01-31', '2024-03-01') AS jan31_to_mar1;
+SELECT TIMESTAMPDIFF(QUARTER, '2024-01-31', '2024-04-01') AS cross_quarter;
+
+# ============================================
+# 5. Leap Year Tests
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, '2020-02-28', '2020-03-01') AS leap_year_feb_to_mar;
+SELECT TIMESTAMPDIFF(DAY, '2021-02-28', '2021-03-01') AS non_leap_year_feb_to_mar;
+SELECT TIMESTAMPDIFF(DAY, '2020-02-29', '2020-03-01') AS leap_day_to_mar;
+SELECT TIMESTAMPDIFF(YEAR, '2020-02-29', '2021-02-28') AS leap_to_non_leap_year;
+SELECT TIMESTAMPDIFF(YEAR, '2020-02-29', '2021-03-01') AS leap_to_non_leap_year_plus;
+SELECT TIMESTAMPDIFF(DAY, '2020-01-01', '2020-12-31') AS leap_year_full_year;
+SELECT TIMESTAMPDIFF(DAY, '2021-01-01', '2021-12-31') AS non_leap_year_full_year;
+SELECT TIMESTAMPDIFF(DAY, '2024-02-29', '2024-03-01') AS leap_2024_feb29_to_mar;
+
+# ============================================
+# 6. Microsecond Precision Tests
+# ============================================
+SELECT TIMESTAMPDIFF(MICROSECOND, '2024-12-20 10:30:45.000000', '2024-12-20 10:30:45.000001') AS one_microsecond;
+SELECT TIMESTAMPDIFF(MICROSECOND, '2024-12-20 10:30:45.123456', '2024-12-20 10:30:45.654321') AS microsecond_diff;
+SELECT TIMESTAMPDIFF(MICROSECOND, '2024-12-20 10:30:45.000000', '2024-12-20 10:30:45.999999') AS max_microsecond_diff;
+SELECT TIMESTAMPDIFF(MICROSECOND, '2024-12-20 10:30:45.123456', '2024-12-20 10:30:46.123455') AS microsecond_carry;
+SELECT TIMESTAMPDIFF(SECOND, '2024-12-20 10:30:45', '2024-12-20 10:30:45.123456') AS datetime_scale_diff;
+SELECT TIMESTAMPDIFF(MICROSECOND, '2024-12-20 10:30:45.000000', '2024-12-20 10:30:46.000000') AS one_second_in_microseconds;
+
+# ============================================
+# 7. Time Part Difference Tests
+# ============================================
+SELECT TIMESTAMPDIFF(SECOND, '2024-12-20 00:00:00', '2024-12-20 23:59:59') AS full_day_seconds;
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 00:00:00', '2024-12-20 23:59:59') AS full_day_hours;
+SELECT TIMESTAMPDIFF(MINUTE, '2024-12-20 00:00:00', '2024-12-20 23:59:59') AS full_day_minutes;
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20 00:00:00', '2024-12-20 23:59:59') AS same_day_with_time;
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20 23:59:59', '2024-12-21 00:00:01') AS cross_midnight;
+
+# ============================================
+# 8. Mixed Type Tests (DATE vs DATETIME)
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, DATE('2024-12-20'), '2024-12-21 12:00:00') AS date_vs_datetime;
+SELECT TIMESTAMPDIFF(HOUR, DATE('2024-12-20'), '2024-12-20 12:00:00') AS date_vs_datetime_hours;
+SELECT TIMESTAMPDIFF(DAY, TIMESTAMP('2024-12-20 10:30:45'), DATE('2024-12-21')) AS timestamp_vs_date;
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', DATE('2024-12-21')) AS string_vs_date;
+SELECT TIMESTAMPDIFF(DAY, DATE('2024-12-20'), '2024-12-21 10:30:45') AS date_vs_string_datetime;
+SELECT TIMESTAMPDIFF(HOUR, DATE('2024-12-20'), TIMESTAMP('2024-12-20 12:00:00')) AS date_vs_timestamp;
+
+# ============================================
+# 9. Negative Difference Tests
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, '2024-12-21', '2024-12-20') AS negative_day;
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 12:00:00', '2024-12-20 10:00:00') AS negative_hour;
+SELECT TIMESTAMPDIFF(MONTH, '2024-02-01', '2024-01-01') AS negative_month;
+SELECT TIMESTAMPDIFF(YEAR, '2025-01-01', '2024-01-01') AS negative_year;
+SELECT TIMESTAMPDIFF(MICROSECOND, '2024-12-20 10:30:45.654321', '2024-12-20 10:30:45.123456') AS negative_microsecond;
+
+# ============================================
+# 10. Date Boundary Tests (Max/Min Dates)
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, '9999-12-31', '9999-12-31') AS max_date_same;
+SELECT TIMESTAMPDIFF(DAY, '9999-12-30', '9999-12-31') AS max_date_one_day;
+SELECT TIMESTAMPDIFF(DAY, '0001-01-01', '0001-01-01') AS min_date_same;
+SELECT TIMESTAMPDIFF(DAY, '0001-01-01', '0001-01-02') AS min_date_one_day;
+SELECT TIMESTAMPDIFF(YEAR, '0001-01-01', '9999-12-31') AS min_to_max_year;
+SELECT TIMESTAMPDIFF(DAY, '0001-01-01', '9999-12-31') AS min_to_max_day;
+SELECT TIMESTAMPDIFF(MONTH, '0001-01-01', '9999-12-31') AS min_to_max_month;
+
+# ============================================
+# 11. Large Interval Tests
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, '2024-01-01', '2024-12-31') AS full_year_days;
+SELECT TIMESTAMPDIFF(MONTH, '2024-01-01', '2024-12-31') AS full_year_months;
+SELECT TIMESTAMPDIFF(YEAR, '2000-01-01', '2100-01-01') AS century_span;
+SELECT TIMESTAMPDIFF(QUARTER, '2024-01-01', '2024-12-31') AS full_year_quarters;
+SELECT TIMESTAMPDIFF(WEEK, '2024-01-01', '2024-12-31') AS full_year_weeks;
+
+# ============================================
+# 12. NULL Handling Tests
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, NULL, '2024-12-21') AS null_first;
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', NULL) AS null_second;
+SELECT TIMESTAMPDIFF(DAY, NULL, NULL) AS null_both;
+SELECT TIMESTAMPDIFF(HOUR, NULL, '2024-12-20 12:00:00') AS null_first_hour;
+SELECT TIMESTAMPDIFF(MONTH, '2024-01-01', NULL) AS null_second_month;
+
+# ============================================
+# 13. Complex Query Scenarios
+# ============================================
+# JOIN usage
+CREATE TABLE t1(id INT, d1 DATE);
+CREATE TABLE t2(id INT, d2 DATE);
+INSERT INTO t1 VALUES (1, '2024-01-01'), (2, '2024-06-01');
+INSERT INTO t2 VALUES (1, '2024-12-31'), (2, '2024-12-31');
+SELECT t1.d1, t2.d2, TIMESTAMPDIFF(DAY, t1.d1, t2.d2) AS diff_days
+FROM t1 JOIN t2 ON t1.id = t2.id;
+DROP TABLE t1;
+DROP TABLE t2;
+
+# Subquery usage
+SELECT * FROM (
+    SELECT TIMESTAMPDIFF(DAY, '2024-01-01', '2024-12-31') AS days_in_year
+) AS subquery;
+
+# GROUP BY usage
+CREATE TABLE t1(d1 DATE, d2 DATE, category VARCHAR(10));
+INSERT INTO t1 VALUES ('2024-01-01', '2024-12-31', 'A'),
+                      ('2024-06-01', '2024-12-31', 'A'),
+                      ('2024-01-01', '2024-06-30', 'B');
+SELECT category, AVG(TIMESTAMPDIFF(DAY, d1, d2)) AS avg_diff_days FROM t1 GROUP BY category;
+DROP TABLE t1;
+
+# ORDER BY usage
+CREATE TABLE t1(d1 DATE, d2 DATE);
+INSERT INTO t1 VALUES ('2024-12-20', '2024-12-25'), ('2024-01-01', '2024-12-31'), ('2024-06-15', '2024-06-20');
+SELECT d1, d2, TIMESTAMPDIFF(DAY, d1, d2) AS d_diff FROM t1 ORDER BY TIMESTAMPDIFF(DAY, d1, d2);
+DROP TABLE t1;
+
+# ============================================
+# 14. Special Calendar Scenarios
+# ============================================
+# Century boundaries
+SELECT TIMESTAMPDIFF(YEAR, '1999-12-31', '2000-01-01') AS century_boundary;
+SELECT TIMESTAMPDIFF(DAY, '1999-12-31', '2000-01-01') AS century_boundary_day;
+SELECT TIMESTAMPDIFF(YEAR, '1899-12-31', '1900-01-01') AS previous_century;
+
+# Y2K
+SELECT TIMESTAMPDIFF(DAY, '1999-12-31', '2000-01-01') AS y2k_day;
+SELECT TIMESTAMPDIFF(YEAR, '1999-01-01', '2000-01-01') AS y2k_year;
+
+# Year 2100 (not a leap year)
+SELECT TIMESTAMPDIFF(DAY, '2100-02-28', '2100-03-01') AS year_2100_feb_to_mar;
+SELECT TIMESTAMPDIFF(YEAR, '2099-12-31', '2100-01-01') AS year_2100_boundary;
+
+# Year 2400 (leap year)
+SELECT TIMESTAMPDIFF(DAY, '2400-02-28', '2400-03-01') AS year_2400_feb_to_mar;
+SELECT TIMESTAMPDIFF(DAY, '2400-02-29', '2400-03-01') AS year_2400_leap_day;
+
+# ============================================
+# 15. Week Boundary Tests
+# ============================================
+SELECT TIMESTAMPDIFF(WEEK, '2024-12-16', '2024-12-23') AS exactly_one_week;
+SELECT TIMESTAMPDIFF(WEEK, '2024-12-16', '2024-12-30') AS two_weeks;
+SELECT TIMESTAMPDIFF(DAY, '2024-12-16', '2024-12-23') AS one_week_in_days;
+SELECT TIMESTAMPDIFF(WEEK, '2024-01-01', '2024-01-08') AS week_start_of_year;
+
+# ============================================
+# 16. Quarter Boundary Tests
+# ============================================
+SELECT TIMESTAMPDIFF(QUARTER, '2024-01-01', '2024-04-01') AS q1_to_q2;
+SELECT TIMESTAMPDIFF(QUARTER, '2024-03-31', '2024-04-01') AS q1_to_q2_boundary;
+SELECT TIMESTAMPDIFF(QUARTER, '2024-01-01', '2024-12-31') AS full_year_quarters;
+SELECT TIMESTAMPDIFF(QUARTER, '2024-01-01', '2025-01-01') AS cross_year_quarter;
+
+# ============================================
+# 17. ISO 8601 Format Tests
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20T10:30:45', '2024-12-21T10:30:45') AS iso_format_day;
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20T10:30:45', '2024-12-20T11:30:45') AS iso_format_hour;
+SELECT TIMESTAMPDIFF(MICROSECOND, '2024-12-20T10:30:45.123456', '2024-12-20T10:30:45.654321') AS iso_format_microsecond;
+
+# ============================================
+# 18. String Input Format Tests
+# ============================================
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20', '2024-12-21') AS date_string_format;
+SELECT TIMESTAMPDIFF(DAY, '2024-12-20 10:30:45', '2024-12-21 10:30:45') AS datetime_string_format;
+SELECT TIMESTAMPDIFF(HOUR, '2024-12-20 10:00:00', '2024-12-20 12:00:00') AS time_part_only;

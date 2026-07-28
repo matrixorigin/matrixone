@@ -93,6 +93,9 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.mu.closed {
+		return ErrNotReady
+	}
 	if h.mu.service != nil {
 		return nil
 	}
@@ -110,7 +113,7 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 func (h *taskServiceHolder) Get() (TaskService, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	if h.mu.service == nil {
+	if h.mu.closed || h.mu.service == nil {
 		return nil, false
 	}
 	return h.mu.service, true
@@ -365,6 +368,193 @@ func (s *refreshableTaskStorage) QueryDaemonTask(ctx context.Context, conditions
 	return v, err
 }
 
+func (s *refreshableTaskStorage) AddSQLTask(ctx context.Context, tasks ...SQLTask) (int, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.AddSQLTask(ctx, tasks...)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) UpdateSQLTask(ctx context.Context, tasks []SQLTask, conditions ...Condition) (int, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.UpdateSQLTask(ctx, tasks, conditions...)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) DeleteSQLTask(ctx context.Context, conditions ...Condition) (int, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.DeleteSQLTask(ctx, conditions...)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) QuerySQLTask(ctx context.Context, conditions ...Condition) ([]SQLTask, error) {
+	var v []SQLTask
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.QuerySQLTask(ctx, conditions...)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) AddSQLTaskRun(ctx context.Context, runs ...SQLTaskRun) (int, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.AddSQLTaskRun(ctx, runs...)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) UpdateSQLTaskRun(ctx context.Context, runs []SQLTaskRun, conditions ...Condition) (int, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.UpdateSQLTaskRun(ctx, runs, conditions...)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) QuerySQLTaskRun(ctx context.Context, conditions ...Condition) ([]SQLTaskRun, error) {
+	var v []SQLTaskRun
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.QuerySQLTaskRun(ctx, conditions...)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) QueryLatestSQLTaskRun(ctx context.Context, accountID uint32, taskIDs []uint64) ([]SQLTaskRun, error) {
+	var v []SQLTaskRun
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.QueryLatestSQLTaskRun(ctx, accountID, taskIDs)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) AcquireSQLTaskRun(ctx context.Context, sqlTask SQLTask, run SQLTaskRun) (uint64, error) {
+	var v uint64
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.AcquireSQLTaskRun(ctx, sqlTask, run)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) CompleteSQLTaskRun(ctx context.Context, run SQLTaskRun) (int, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.CompleteSQLTaskRun(ctx, run)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
+func (s *refreshableTaskStorage) TriggerSQLTask(ctx context.Context, sqlTask SQLTask, asyncTask task.AsyncTask) (int, error) {
+	var v int
+	var err error
+	s.mu.RLock()
+	lastAddress := s.mu.lastAddress
+	if s.mu.store == nil {
+		err = ErrNotReady
+	} else if err = s.mu.store.PingContext(ctx); err == nil {
+		v, err = s.mu.store.TriggerSQLTask(ctx, sqlTask, asyncTask)
+	}
+	s.mu.RUnlock()
+	if err != nil {
+		s.maybeRefresh(lastAddress)
+	}
+	return v, err
+}
+
 func (s *refreshableTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task.DaemonTask) (int, error) {
 	var v int
 	var err error
@@ -477,22 +667,31 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 	}
 	connectAddress, err := s.addressFactory(ctx, true)
 	if err != nil {
-		s.rt.Logger().Error("failed to refresh task storage",
+		s.rt.Logger().Error(
+			"taskservice.holder.refresh.failed",
+			zap.String("address", lastAddress),
 			zap.Error(err))
 		return
 	}
 
 	s.mu.lastAddress = connectAddress
-	s.rt.Logger().Debug("trying to refresh task storage", zap.String("address", connectAddress))
+	s.rt.Logger().Debug(
+		"taskservice.holder.refresh.trying",
+		zap.String("address", connectAddress),
+	)
 	store, err := s.storeFactory.Create(connectAddress)
 	if err != nil {
-		s.rt.Logger().Error("failed to refresh task storage",
+		s.rt.Logger().Error(
+			"taskservice.holder.refresh.failed",
 			zap.String("address", connectAddress),
 			zap.Error(err))
 		return
 	}
 	s.mu.store = store
-	s.rt.Logger().Debug("refresh task storage completed", zap.String("sql-address", connectAddress))
+	s.rt.Logger().Debug(
+		"taskservice.holder.refresh.completed",
+		zap.String("sql-address", connectAddress),
+	)
 }
 
 type mysqlBasedStorageFactory struct {

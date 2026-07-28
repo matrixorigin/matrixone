@@ -49,14 +49,12 @@ drop view atomic_view_2;
 commit ;
 drop view atomic_view_2;
 -- load data
--- @bvt:issue#16438
 create table atomic_table_3a(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text,primary key(col1))partition by hash(col1)partitions 4;
--- @bvt:issue
 -- @bvt:issue#5941
 begin;
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  atomic_table_3a fields terminated by ',';
 select col1,col2 from atomic_table_3a;
-update atomic_table_3a set col1=400;
+update atomic_table_3a set col1=40;
 rollback;
 select col1 from atomic_table_3a;
 -- @bvt:issue
@@ -89,7 +87,6 @@ select num_col1  from  atomic_ex_table;
 show create table atomic_ex_table;
 desc atomic_ex_table;
 
--- @bvt:issue#9124
 create TEMPORARY TABLE atomic_temp(a int);
 begin;
 insert into atomic_temp values (5);
@@ -110,7 +107,6 @@ create TEMPORARY TABLE atomic_temp(a int);
 insert into atomic_temp values (5);
 commit ;
 select * from atomic_temp;
--- @bvt:issue
 
 CREATE TABLE `t_code_rule` (
   `code_id` bigint(20) NOT NULL AUTO_INCREMENT,
@@ -123,13 +119,11 @@ CREATE TABLE `t_code_rule` (
   KEY `code_no` (`code_no`),
   KEY `org_no` (`org_no`)
 );
--- @bvt:issue#6949
 start transaction ;
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',10);
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',20);
 commit ;
 select * from t_code_rule;
--- @bvt:issue
 
 begin;
 -- @bvt:issue#7133
@@ -169,15 +163,3 @@ drop table t_code_rule;
 drop database atomic_1;
 drop role role1,role2;
 commit;
-
-
-
-
-
-
-
-
-
-
-
-

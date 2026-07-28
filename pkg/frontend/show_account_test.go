@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,32 +30,125 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func normalizeSQL(sql string) string {
+	return strings.Join(strings.Fields(sql), " ")
+}
+
 func Test_getSqlForAccountInfo(t *testing.T) {
 	type arg struct {
-		s    string
-		want string
+		name            string
+		s               string
+		accID           int64
+		needObjectCount bool
+		wantContains    []string
+		wantNotContains []string
 	}
 	args := []arg{
 		{
-			s:    "show accounts;",
-			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tCAST(0 AS DOUBLE) AS snapshot_size,\t\tma.comments\t\t\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\t   )SELECT * FROM final_result;",
+			name:  "all accounts",
+			s:     "show accounts;",
+			accID: -1,
+			wantContains: []string{
+				"WITH db_counts AS (",
+				"COUNT(DISTINCT md.dat_id) AS db_count",
+				"tbl_counts AS (",
+				"COUNT(DISTINCT mt.rel_id) AS tbl_count",
+				"JOIN db_counts ON ma.account_id = db_counts.account_id",
+				"JOIN tbl_counts ON ma.account_id = tbl_counts.account_id",
+			},
+			wantNotContains: []string{
+				"mo_catalog.mo_tables AS mt JOIN mo_catalog.mo_database AS md",
+				"db_tbl_counts",
+				"LEFT JOIN",
+			},
 		},
 		{
-			s:    "show accounts like '%abc';",
-			want: "WITH db_tbl_counts AS (\tSELECT\t\tCAST(mt.account_id AS BIGINT) AS account_id,\t\tCOUNT(DISTINCT md.dat_id) AS db_count,\t\tCOUNT(DISTINCT mt.rel_id) AS tbl_count\tFROM\t\tmo_catalog.mo_tables AS mt\tJOIN\t\tmo_catalog.mo_database AS md\tON \t\tmt.account_id = md.account_id AND\t\tmt.relkind IN ('v','e','r','cluster') \tGROUP BY\t\tmt.account_id),final_result AS (\tSELECT\t\tCAST(ma.account_id AS BIGINT) AS account_id,\t\tma.account_name,\t\tma.admin_name,\t\tma.created_time,\t\tma.status,\t\tma.suspended_time,\t\tdb_tbl_counts.db_count,\t\tdb_tbl_counts.tbl_count,\t\tCAST(0 AS DOUBLE) AS size,\t\tCAST(0 AS DOUBLE) AS snapshot_size,\t\tma.comments\t\t\tFROM\t\tdb_tbl_counts\tJOIN\t\tmo_catalog.mo_account AS ma \tON \t\tdb_tbl_counts.account_id = ma.account_id \t\twhere ma.account_name like '%abc'  )SELECT * FROM final_result;",
+			name:  "like filter",
+			s:     "show accounts like '%abc';",
+			accID: -1,
+			wantContains: []string{
+				"where ma.account_name like '%abc'",
+			},
+		},
+		{
+			name:  "like filter with quote",
+			s:     "show accounts like 'ab''cd';",
+			accID: -1,
+			wantContains: []string{
+				"where ma.account_name like 'ab''cd'",
+			},
+		},
+		{
+			name:  "like filter with backslash",
+			s:     "show accounts like 'ab\\_cd';",
+			accID: -1,
+			wantContains: []string{
+				"where ma.account_name like 'ab\\\\_cd'",
+			},
+		},
+		{
+			name:  "exact account filter",
+			s:     "show accounts;",
+			accID: 100,
+			wantContains: []string{
+				"WHERE md.account_id = 100",
+				"AND mt.account_id = 100",
+				"where ma.account_id = 100",
+			},
+		},
+		{
+			name:  "like and exact account filter",
+			s:     "show accounts like '%abc';",
+			accID: 100,
+			wantContains: []string{
+				"where ma.account_name like '%abc' and ma.account_id = 100",
+				"WHERE md.account_id = 100",
+				"AND mt.account_id = 100",
+			},
+		},
+		{
+			name:            "object count",
+			s:               "show accounts;",
+			accID:           -1,
+			needObjectCount: true,
+			wantContains: []string{
+				"CAST(0 AS BIGINT) AS object_count",
+			},
+		},
+		{
+			name:            "object count with exact account filter",
+			s:               "show accounts;",
+			accID:           100,
+			needObjectCount: true,
+			wantContains: []string{
+				"CAST(0 AS BIGINT) AS object_count",
+				"WHERE md.account_id = 100",
+				"AND mt.account_id = 100",
+				"where ma.account_id = 100",
+			},
 		},
 	}
 
 	for _, a := range args {
-		one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, a.s, 1)
-		assert.NoError(t, err)
-		sa1 := one.(*tree.ShowAccounts)
-		r1 := getSqlForAccountInfo(sa1.Like, -1, false)
-		assert.Equal(t, a.want, r1)
+		t.Run(a.name, func(t *testing.T) {
+			one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, a.s, 1)
+			require.NoError(t, err)
+			sa1 := one.(*tree.ShowAccounts)
+			got := normalizeSQL(getSqlForAccountInfo(sa1.Like, a.accID, a.needObjectCount))
+			for _, fragment := range a.wantContains {
+				assert.Contains(t, got, normalizeSQL(fragment))
+			}
+			for _, fragment := range a.wantNotContains {
+				assert.NotContains(t, got, normalizeSQL(fragment))
+			}
+			_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, got, 1)
+			require.NoError(t, err)
+		})
 	}
 }
 
@@ -127,6 +221,13 @@ func Test_updateStorageUsageCache(t *testing.T) {
 }
 
 func Test_checkStorageUsageCache_V2(t *testing.T) {
+	origCache := cnUsageCache
+	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
+	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
+	t.Cleanup(func() {
+		cnUsageCache = origCache
+	})
+
 	rep := cmd_util.StorageUsageResp_V2{}
 
 	for i := 0; i < 10; i++ {
@@ -145,12 +246,20 @@ func Test_checkStorageUsageCache_V2(t *testing.T) {
 		require.Equal(t, rep.Sizes[i], usages[int64(i)][0])
 	}
 
-	time.Sleep(time.Second * 6)
-	_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
-	require.False(t, ok)
+	require.Eventually(t, func() bool {
+		_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
+		return !ok
+	}, time.Second+200*time.Millisecond, 10*time.Millisecond)
 }
 
 func Test_checkStorageUsageCache(t *testing.T) {
+	origCache := cnUsageCache
+	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
+	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
+	t.Cleanup(func() {
+		cnUsageCache = origCache
+	})
+
 	rep := cmd_util.StorageUsageResp_V3{}
 
 	for i := 0; i < 10; i++ {
@@ -171,9 +280,10 @@ func Test_checkStorageUsageCache(t *testing.T) {
 		require.Equal(t, rep.SnapshotSizes[i], usages[int64(i)][1])
 	}
 
-	time.Sleep(time.Second * 6)
-	_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
-	require.False(t, ok)
+	require.Eventually(t, func() bool {
+		_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
+		return !ok
+	}, time.Second+200*time.Millisecond, 10*time.Millisecond)
 }
 
 func Test_GetObjectCount_V2(t *testing.T) {

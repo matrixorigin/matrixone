@@ -356,7 +356,7 @@ func (t testBytes) SizeInSpool() int64 {
 }
 
 func (t testBytes) SpoolFree() {
-	t.deallocator.Deallocate(malloc.NoHints)
+	t.deallocator.Deallocate()
 }
 
 func TestBytes(t *testing.T) {

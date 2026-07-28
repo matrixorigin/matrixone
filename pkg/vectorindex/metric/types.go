@@ -26,41 +26,92 @@ type MetricType uint16
 
 const (
 	OpType_L2Distance     = "vector_l2_ops"
+	OpType_L2sqDistance   = "vector_l2sq_ops"
 	OpType_InnerProduct   = "vector_ip_ops"
 	OpType_CosineDistance = "vector_cosine_ops"
 	OpType_L1Distance     = "vector_l1_ops"
 
 	DistFn_L2Distance     = "l2_distance"
+	DistFn_L2sqDistance   = "l2_distance_sq"
 	DistFn_InnerProduct   = "inner_product"
 	DistFn_CosineDistance = "cosine_distance"
+	DistFn_L1Distance     = "l1_distance"
 
 	DistIntFn_L2Distance     = "l2_distance_sq"
 	DistIntFn_InnerProduct   = "inner_product"
 	DistIntFn_CosineDistance = "cosine_distance"
+	DistIntFn_L1Distance     = "l1_distance"
 )
 
 const (
 	Metric_L2Distance MetricType = iota
+	Metric_L2sqDistance
 	Metric_InnerProduct
 	Metric_CosineDistance
 	Metric_L1Distance
 	Metric_TypeCount
 )
 
+type QuantizationType uint16
+
+const (
+	Quantization_F32 QuantizationType = iota
+	Quantization_F16
+	Quantization_INT8
+	Quantization_UINT8
+	Quantization_F64
+)
+
+const (
+	Quantization_F32_Str   = "float32"
+	Quantization_F16_Str   = "float16"
+	Quantization_BF16_Str  = "bf16"
+	Quantization_INT8_Str  = "int8"
+	Quantization_UINT8_Str = "uint8"
+	Quantization_F64_Str   = "float64"
+)
+
+// UsearchQuantizationNameToType maps a SQL quantization name to its
+// enum value for the usearch (HNSW) backend, which supports float32,
+// float16, float64, int8, and uint8.
+var UsearchQuantizationNameToType = map[string]QuantizationType{
+	Quantization_F32_Str:   Quantization_F32,
+	Quantization_F16_Str:   Quantization_F16,
+	Quantization_F64_Str:   Quantization_F64,
+	Quantization_INT8_Str:  Quantization_INT8,
+	Quantization_UINT8_Str: Quantization_UINT8,
+}
+
+// CuvsQuantizationNameToType is the analogous map for the cuvs
+// (CAGRA / IVF-PQ) backend. cuvs does NOT support float64, so f64
+// is intentionally omitted; including it here would let CREATE INDEX
+// pass the validator and then fail downstream in the GPU code path.
+var CuvsQuantizationNameToType = map[string]QuantizationType{
+	Quantization_F32_Str:   Quantization_F32,
+	Quantization_F16_Str:   Quantization_F16,
+	Quantization_INT8_Str:  Quantization_INT8,
+	Quantization_UINT8_Str: Quantization_UINT8,
+}
+
+// ValidQuantization gates the QUANTIZATION='X' option in CREATE INDEX
+// for CAGRA / IVF-PQ — both cuvs-backed, so the cuvs map is the
+// source of truth. See pkg/catalog/secondary_index_utils.go.
+func ValidQuantization(val string) bool {
+	_, ok := CuvsQuantizationNameToType[val]
+	return ok
+}
+
 var (
 	DistFuncOpTypes = map[string]string{
 		DistFn_L2Distance:     OpType_L2Distance,
+		DistFn_L2sqDistance:   OpType_L2Distance,
 		DistFn_InnerProduct:   OpType_InnerProduct,
 		DistFn_CosineDistance: OpType_CosineDistance,
 	}
-	DistFuncInternalDistFunc = map[string]string{
-		DistFn_L2Distance:     DistIntFn_L2Distance,
-		DistFn_InnerProduct:   DistIntFn_InnerProduct,
-		DistFn_CosineDistance: DistIntFn_CosineDistance,
-	}
 
 	OpTypeToIvfMetric = map[string]MetricType{
-		OpType_L2Distance:     Metric_L2Distance,
+		OpType_L2Distance:     Metric_L2sqDistance,
+		OpType_L2sqDistance:   Metric_L2sqDistance,
 		OpType_InnerProduct:   Metric_InnerProduct,
 		OpType_CosineDistance: Metric_CosineDistance,
 		OpType_L1Distance:     Metric_L1Distance,
@@ -68,6 +119,7 @@ var (
 
 	OpTypeToUsearchMetric = map[string]usearch.Metric{
 		OpType_L2Distance:     usearch.L2sq,
+		OpType_L2sqDistance:   usearch.L2sq,
 		OpType_InnerProduct:   usearch.InnerProduct,
 		OpType_CosineDistance: usearch.Cosine,
 		/*
@@ -78,6 +130,29 @@ var (
 			"vector_tanimoto_ops":   usearch.Tanimoto,
 			"vector_sorensen_ops":   usearch.Sorensen,
 		*/
+	}
+
+	MetricTypeToUsearchMetric = map[MetricType]usearch.Metric{
+		Metric_L2Distance:     usearch.L2sq,
+		Metric_L2sqDistance:   usearch.L2sq,
+		Metric_InnerProduct:   usearch.InnerProduct,
+		Metric_CosineDistance: usearch.Cosine,
+	}
+
+	MetricTypeToDistFuncName = map[MetricType]string{
+		Metric_L2Distance:     DistFn_L2Distance,
+		Metric_L2sqDistance:   DistFn_L2sqDistance,
+		Metric_InnerProduct:   DistFn_InnerProduct,
+		Metric_CosineDistance: DistFn_CosineDistance,
+		Metric_L1Distance:     DistFn_L1Distance,
+	}
+
+	DistFuncNameToMetricType = map[string]MetricType{
+		DistFn_L2Distance:     Metric_L2Distance,
+		DistFn_L2sqDistance:   Metric_L2sqDistance,
+		DistFn_InnerProduct:   Metric_InnerProduct,
+		DistFn_CosineDistance: Metric_CosineDistance,
+		DistFn_L1Distance:     Metric_L1Distance,
 	}
 )
 
@@ -91,7 +166,7 @@ func MaxFloat[T types.RealNumbers]() T {
 	typ := reflect.TypeFor[T]()
 	switch typ.Kind() {
 	case reflect.Float32:
-		return math.MaxFloat32
+		return T(math.MaxFloat32)
 	case reflect.Float64:
 		v := math.MaxFloat64
 		val := reflect.ValueOf(v).Convert(typ)
@@ -99,4 +174,20 @@ func MaxFloat[T types.RealNumbers]() T {
 	default:
 		panic("MaxFloat: type not supported")
 	}
+}
+
+func DistanceTransformHnsw(dist float64, origMetricType MetricType, metricType usearch.Metric) float64 {
+	if origMetricType == Metric_L2Distance && metricType == usearch.L2sq {
+		// metric is l2sq but origin is l2_distance
+		return math.Sqrt(dist)
+	}
+	return dist
+}
+
+func DistanceTransformIvfflat(dist float64, origMetricType, metricType MetricType) float64 {
+	if origMetricType == Metric_L2Distance && metricType == Metric_L2sqDistance {
+		// metric is l2sq but origin is l2_distance
+		return math.Sqrt(dist)
+	}
+	return dist
 }

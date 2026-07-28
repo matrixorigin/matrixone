@@ -15,7 +15,8 @@
 package plan
 
 import (
-	"sort"
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -157,18 +158,20 @@ func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 // Can only be used after optimizer!!!
 func IsEquiJoin2(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !IsEqualFunc(e.F.Func.GetObj()) {
-				continue
-			}
-			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				continue
-			}
+		if isEquiCond2(expr) {
 			return true
 		}
 	}
 	return false
+}
+
+func isEquiCond2(expr *plan.Expr) bool {
+	e, ok := expr.Expr.(*plan.Expr_F)
+	if !ok || !IsEqualFunc(e.F.Func.GetObj()) {
+		return false
+	}
+	lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
+	return lpos != -1 && rpos != -1 && lpos != rpos
 }
 
 func IsEqualFunc(id int64) bool {
@@ -204,6 +207,7 @@ func HasColExpr(expr *plan.Expr, pos int32) int32 {
 }
 
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
+	originalNodeID := nodeID
 	if builder.optimizerHints != nil && builder.optimizerHints.joinOrdering != 0 {
 		return nodeID
 	}
@@ -223,6 +227,9 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	}
 
 	leaves, conds := builder.gatherJoinLeavesAndConds(node, nil, nil)
+	// Record middle: gathered leaves and conditions
+	builder.optimizationHistory = append(builder.optimizationHistory,
+		fmt.Sprintf("determineJoinOrder:middle (nodeID: %d, leaves: %d, conds: %d)", nodeID, len(leaves), len(conds)))
 	newConds := deduceNewOnList(conds)
 	conds = append(conds, newConds...)
 	vertices := builder.getJoinGraph(leaves, conds)
@@ -241,7 +248,9 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		}
 	}
 
-	sort.Slice(subTrees, func(i, j int) bool { return compareStats(subTrees[i].Stats, subTrees[j].Stats) })
+	slices.SortFunc(subTrees, func(a, b *plan.Node) int {
+		return compareStats(a.Stats, b.Stats)
+	})
 
 	leafByTag := make(map[int32]int32)
 
@@ -302,6 +311,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				NodeType: plan.Node_JOIN,
 				Children: children,
 				JoinType: plan.Node_INNER,
+				SpillMem: builder.joinSpillMem,
 			}, nil)
 
 			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
@@ -319,6 +329,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 					NodeType: plan.Node_JOIN,
 					Children: children,
 					JoinType: plan.Node_INNER,
+					SpillMem: builder.joinSpillMem,
 				}, nil)
 			}
 		}
@@ -335,6 +346,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				NodeType: plan.Node_JOIN,
 				Children: children,
 				JoinType: plan.Node_INNER,
+				SpillMem: builder.joinSpillMem,
 			}, nil)
 		}
 	}
@@ -346,6 +358,14 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			Children:   []int32{nodeID},
 			FilterList: conds,
 		}, nil)
+	}
+	// Record after determineJoinOrder
+	if nodeID != originalNodeID {
+		builder.optimizationHistory = append(builder.optimizationHistory,
+			fmt.Sprintf("determineJoinOrder:after (nodeID: %d -> %d, remainingConds: %d)", originalNodeID, nodeID, len(conds)))
+	} else {
+		builder.optimizationHistory = append(builder.optimizationHistory,
+			fmt.Sprintf("determineJoinOrder:after (nodeID: %d, no change, remainingConds: %d)", nodeID, len(conds)))
 	}
 	return nodeID
 }
@@ -452,7 +472,10 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 }
 
 func setParent(child, parent int32, vertices []*joinVertex) {
-	if child == -1 || parent == -1 {
+	if child == -1 || parent == -1 || child == parent {
+		return
+	}
+	if findParent(parent, child, vertices) {
 		return
 	}
 	unsetParent(child, vertices[child].parent, vertices)
@@ -471,11 +494,22 @@ func unsetParent(child, parent int32, vertices []*joinVertex) {
 }
 
 func findSelectivityInChildren(self int32, vertices []*joinVertex) bool {
+	return findSelectivityInChildrenWithVisited(self, vertices, make([]bool, len(vertices)))
+}
+
+func findSelectivityInChildrenWithVisited(self int32, vertices []*joinVertex, visited []bool) bool {
+	if !validVertex(self, vertices) {
+		return false
+	}
+	if visited[self] {
+		return false
+	}
+	visited[self] = true
 	if vertices[self].node.Stats.Selectivity < 0.9 {
 		return true
 	}
 	for child := range vertices[self].children {
-		if findSelectivityInChildren(child, vertices) {
+		if findSelectivityInChildrenWithVisited(child, vertices, visited) {
 			return true
 		}
 	}
@@ -483,13 +517,27 @@ func findSelectivityInChildren(self int32, vertices []*joinVertex) bool {
 }
 
 func findParent(self, target int32, vertices []*joinVertex) bool {
-	parent := vertices[self].parent
-	if parent == target {
-		return true
-	} else if parent != -1 {
-		return findParent(parent, target, vertices)
+	visited := make([]bool, len(vertices))
+	for self != -1 {
+		if !validVertex(self, vertices) {
+			return false
+		}
+		if visited[self] {
+			return false
+		}
+		visited[self] = true
+
+		parent := vertices[self].parent
+		if parent == target {
+			return true
+		}
+		self = parent
 	}
 	return false
+}
+
+func validVertex(id int32, vertices []*joinVertex) bool {
+	return id >= 0 && int(id) < len(vertices)
 }
 
 func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinVertex) bool {
@@ -515,7 +563,7 @@ func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinV
 		}
 	}
 	// self is the biggest node
-	return compareStats(nextParentStats, currentParentStats)
+	return compareStats(nextParentStats, currentParentStats) < 0
 }
 
 // buildSubJoinTree build sub- join tree for a fact table and all its dimension tables
@@ -535,7 +583,9 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		builder.buildSubJoinTree(vertices, child)
 		dimensions = append(dimensions, vertices[child])
 	}
-	sort.Slice(dimensions, func(i, j int) bool { return compareStats(dimensions[i].node.Stats, dimensions[j].node.Stats) })
+	slices.SortFunc(dimensions, func(a, b *joinVertex) int {
+		return compareStats(a.node.Stats, b.node.Stats)
+	})
 
 	for _, child := range dimensions {
 
@@ -544,6 +594,7 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 			NodeType: plan.Node_JOIN,
 			Children: children,
 			JoinType: plan.Node_INNER,
+			SpillMem: builder.joinSpillMem,
 		}, nil)
 
 		vertex.node = builder.qry.Nodes[nodeID]

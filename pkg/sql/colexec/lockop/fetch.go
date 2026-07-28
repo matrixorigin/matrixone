@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -75,6 +76,8 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 		return fetchFloat64Rows
 	case types.T_date:
 		return fetchDateRows
+	case types.T_year:
+		return fetchYearRows
 	case types.T_time:
 		return fetchTimeRows
 	case types.T_datetime:
@@ -85,6 +88,8 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 		return fetchDecimal64Rows
 	case types.T_decimal128:
 		return fetchDecimal128Rows
+	case types.T_decimal256:
+		return fetchDecimal256Rows
 	case types.T_uuid:
 		return fetchUUIDRows
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
@@ -411,6 +416,33 @@ func fetchDateRows(
 		filterCols)
 }
 
+func fetchYearRows(
+	vec *vector.Vector,
+	parker *types.Packer,
+	tp types.Type,
+	max int,
+	lockTable bool,
+	filter RowsFilter,
+	filterCols []int32) (bool, [][]byte, lock.Granularity) {
+	fn := func(v types.MoYear) []byte {
+		parker.Reset()
+		parker.EncodeMoYear(v)
+		return parker.Bytes()
+	}
+	if lockTable {
+		min := fn(math.MinInt16)
+		max := fn(math.MaxInt16)
+		return true, [][]byte{min, max},
+			lock.Granularity_Range
+	}
+	return fetchFixedRows(
+		vec,
+		max,
+		fn,
+		filter,
+		filterCols)
+}
+
 func fetchTimeRows(
 	vec *vector.Vector,
 	parker *types.Packer,
@@ -577,6 +609,46 @@ func fetchDecimal128Rows(
 		filter,
 		filterCols,
 	)
+}
+
+func fetchDecimal256Rows(
+	vec *vector.Vector,
+	parker *types.Packer,
+	tp types.Type,
+	max int,
+	lockTable bool,
+	filter RowsFilter,
+	filterCols []int32) (bool, [][]byte, lock.Granularity) {
+	fn := func(v types.Decimal256) []byte {
+		parker.Reset()
+		parker.EncodeDecimal256(v)
+		return parker.Bytes()
+	}
+	if lockTable {
+		maxDecimal256 := maxDecimal256Value()
+		min := fn(maxDecimal256.Minus())
+		max := fn(maxDecimal256)
+		return true, [][]byte{min, max},
+			lock.Granularity_Range
+	}
+	return fetchFixedRowsWithCompare(
+		vec,
+		max,
+		fn,
+		func(v1, v2 types.Decimal256) int {
+			return v1.Compare(v2)
+		},
+		filter,
+		filterCols,
+	)
+}
+
+func maxDecimal256Value() types.Decimal256 {
+	maxDecimal256, _, err := types.Parse256(strings.Repeat("9", int(types.T_decimal256.ToType().Width)))
+	if err != nil {
+		panic(fmt.Sprintf("failed to build decimal256 lock range: %v", err))
+	}
+	return maxDecimal256
 }
 
 func fetchUUIDRows(

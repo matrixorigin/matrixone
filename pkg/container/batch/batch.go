@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
 func New(attrs []string) *Batch {
@@ -97,73 +97,26 @@ func SetLength(bat *Batch, n int) {
 	bat.rowCount = n
 }
 
-func (bat *Batch) Slice(from, to int) *Batch {
-	return &Batch{
-		Attrs:    bat.Attrs[from:to],
-		Vecs:     bat.Vecs[from:to],
-		rowCount: bat.rowCount,
+func (bat *Batch) CheckLength() error {
+	for _, vec := range bat.Vecs {
+		if vec.Length() != bat.rowCount {
+			return moerr.NewInternalErrorNoCtx("vec.Length() != bat.rowCount")
+		}
 	}
-
+	return nil
 }
 
 func (bat *Batch) MarshalBinary() ([]byte, error) {
-	// --------------------------------------------------------------------
-	// | len | Zs... | len | Vecs... | len | Attrs... | len | AggInfos... |
-	// --------------------------------------------------------------------
 	var w bytes.Buffer
-
-	// row count.
-	rl := int64(bat.rowCount)
-	w.Write(types.EncodeInt64(&rl))
-
-	// Vecs
-	l := int32(len(bat.Vecs))
-	w.Write(types.EncodeInt32(&l))
-	for i := 0; i < int(l); i++ {
-		data, err := bat.Vecs[i].MarshalBinary()
-		if err != nil {
-			return nil, err
-		}
-		size := int32(len(data))
-		w.Write(types.EncodeInt32(&size))
-		w.Write(data)
-	}
-
-	// Attrs
-	l = int32(len(bat.Attrs))
-	w.Write(types.EncodeInt32(&l))
-	for i := 0; i < int(l); i++ {
-		size := int32(len(bat.Attrs[i]))
-		w.Write(types.EncodeInt32(&size))
-		w.WriteString(bat.Attrs[i])
-	}
-
-	// AggInfos
-	aggInfos := make([][]byte, len(bat.Aggs))
-	for i, exec := range bat.Aggs {
-		data, err := aggexec.MarshalAggFuncExec(exec)
-		if err != nil {
-			return nil, err
-		}
-		aggInfos[i] = data
-	}
-
-	l = int32(len(aggInfos))
-	w.Write(types.EncodeInt32(&l))
-	for i := 0; i < int(l); i++ {
-		size := int32(len(aggInfos[i]))
-		w.Write(types.EncodeInt32(&size))
-		w.Write(aggInfos[i])
-	}
-
-	w.Write(types.EncodeInt32(&bat.Recursive))
-	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
-
-	return w.Bytes(), nil
+	return bat.MarshalBinaryWithBuffer(&w, false)
 }
 
-func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer) ([]byte, error) {
-	w.Reset()
+func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, error) {
+	// reset the buffer if caller wants to.
+	if reset {
+		w.Reset()
+	}
+
 	// row count.
 	rl := int64(bat.rowCount)
 	w.Write(types.EncodeInt64(&rl))
@@ -196,23 +149,8 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer) ([]byte, error) {
 		}
 	}
 
-	// AggInfos
-	aggInfos := make([][]byte, len(bat.Aggs))
-	for i, exec := range bat.Aggs {
-		data, err := aggexec.MarshalAggFuncExec(exec)
-		if err != nil {
-			return nil, err
-		}
-		aggInfos[i] = data
-	}
-
-	l = int32(len(aggInfos))
-	w.Write(types.EncodeInt32(&l))
-	for i := 0; i < int(l); i++ {
-		size := int32(len(aggInfos[i]))
-		w.Write(types.EncodeInt32(&size))
-		w.Write(aggInfos[i])
-	}
+	// ExtraBuf
+	types.WriteSizeBytes(bat.ExtraBuf, w)
 
 	w.Write(types.EncodeInt32(&bat.Recursive))
 	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
@@ -229,11 +167,18 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	data = data[8:]
 
 	l := types.DecodeInt32(data[:4])
-	if int(l) != len(bat.Vecs) {
-		if len(bat.Vecs) > 0 {
+	// Fix for bug #23156: Handle Vecs length changes (from d4b79f12) while maintaining revert version's firstTime logic
+	firstTime := bat.Vecs == nil
+	vecsLen := int(l)
+	vecsLenChanged := !firstTime && vecsLen != len(bat.Vecs)
+
+	// CRITICAL FIX: When batch is reused (not firstTime), always reallocate Vecs if length changed
+	// This ensures Vecs are properly reset and prevents stale data from previous unmarshal operations
+	if firstTime || vecsLenChanged {
+		if vecsLenChanged && len(bat.Vecs) > 0 {
 			bat.Clean(mp)
 		}
-		bat.Vecs = make([]*vector.Vector, l)
+		bat.Vecs = make([]*vector.Vector, vecsLen)
 		for i := range bat.Vecs {
 			if bat.offHeap {
 				bat.Vecs[i] = vector.NewOffHeapVec()
@@ -246,7 +191,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	vecs := bat.Vecs
 	data = data[4:]
 
-	for i := 0; i < int(l); i++ {
+	for i := 0; i < vecsLen; i++ {
 		size := types.DecodeInt32(data[:4])
 		data = data[4:]
 
@@ -258,57 +203,159 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	}
 
 	l = types.DecodeInt32(data[:4])
-	if int(l) != len(bat.Attrs) {
-		bat.Attrs = make([]string, l)
+	// Fix for bug #23156: Attrs length MUST always match Vecs length
+	// Vecs length (vecsLen) is authoritative - it's already allocated and deserialized
+	// If serialized Attrs length differs from Vecs length, we use Vecs length as the source of truth
+	// This handles cases where serialized data has inconsistent lengths (which can occur in practice)
+	serializedAttrsLen := int(l)
+	// CRITICAL FIX: Always reallocate Attrs to ensure clean state for batch reuse
+	// This prevents stale Attrs values from previous unmarshal operations
+	// Special case: if vecsLen == 0 but serializedAttrsLen > 0, use serializedAttrsLen
+	// This handles cases where Vecs are empty but Attrs are preserved (e.g., in tests)
+	attrsLen := vecsLen
+	if vecsLen == 0 && serializedAttrsLen > 0 {
+		attrsLen = serializedAttrsLen
+	}
+	if attrsLen != len(bat.Attrs) {
+		if attrsLen == 0 {
+			// If attrsLen is 0, keep Attrs as nil (not empty array) for consistency
+			bat.Attrs = nil
+		} else {
+			bat.Attrs = make([]string, attrsLen)
+		}
+	} else if !firstTime {
+		// When batch is reused and lengths match, still clear Attrs to prevent stale values
+		// This is critical for UPDATE operations where batch is reused multiple times
+		// Performance note: This is O(n) where n is typically small (dozens of columns)
+		// The cost is acceptable compared to data corruption issues
+		for i := range bat.Attrs {
+			bat.Attrs[i] = ""
+		}
 	}
 	data = data[4:]
 
-	for i := 0; i < int(l); i++ {
+	// Read serialized Attrs, but only up to min(serializedAttrsLen, attrsLen)
+	// If serialized length > attrsLen: ignore excess (data inconsistency, attrsLen is authoritative)
+	// If serialized length < attrsLen: read what's available (remaining will be empty strings, should not happen normally)
+	attrsToRead := serializedAttrsLen
+	if attrsToRead > attrsLen {
+		attrsToRead = attrsLen
+	}
+	for i := 0; i < attrsToRead; i++ {
 		size := types.DecodeInt32(data[:4])
 		data = data[4:]
 		bat.Attrs[i] = string(data[:size])
 		data = data[size:]
 	}
-
-	l = types.DecodeInt32(data[:4])
-	aggs := make([][]byte, l)
-
-	data = data[4:]
-	for i := 0; i < int(l); i++ {
+	// CRITICAL FIX: Clear remaining Attrs to prevent stale values when serializedAttrsLen < attrsLen
+	// This is essential for batch reuse scenarios (e.g., UPDATE operations with IVF index)
+	for i := attrsToRead; i < attrsLen; i++ {
+		bat.Attrs[i] = ""
+	}
+	// If serialized Attrs length > vecsLen, skip the excess data
+	for i := attrsToRead; i < serializedAttrsLen; i++ {
 		size := types.DecodeInt32(data[:4])
 		data = data[4:]
-		aggs[i] = data[:size]
 		data = data[size:]
 	}
+
+	// ExtraBuf
+	l = types.DecodeInt32(data[:4])
+	data = data[4:]
+	bat.ExtraBuf = nil
+	bat.ExtraBuf = append(bat.ExtraBuf, data[:l]...)
+	data = data[l:]
 
 	bat.Recursive = types.DecodeInt32(data[:4])
 	data = data[4:]
 	bat.ShuffleIDX = types.DecodeInt32(data[:4])
+	return nil
+}
 
-	if len(aggs) > 0 {
-		bat.Aggs = make([]aggexec.AggFuncExec, len(aggs))
-		var aggMemoryManager aggexec.AggMemoryManager = nil
-		if mp != nil {
-			aggMemoryManager = aggexec.NewSimpleAggMemoryManager(mp)
+func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) {
+	i64, err := types.ReadInt64(r)
+	if err != nil {
+		return err
+	}
+	bat.rowCount = int(i64)
+
+	l, err := types.ReadInt32AsInt(r)
+	if err != nil {
+		return err
+	}
+	if l != len(bat.Vecs) {
+		if len(bat.Vecs) > 0 {
+			bat.Clean(mp)
 		}
-		for i, info := range aggs {
-			if bat.Aggs[i], err = aggexec.UnmarshalAggFuncExec(aggMemoryManager, info); err != nil {
-				return err
+		bat.Vecs = make([]*vector.Vector, l)
+		for i := range bat.Vecs {
+			if bat.offHeap {
+				bat.Vecs[i] = vector.NewOffHeapVec()
+			} else {
+				bat.Vecs[i] = vector.NewVecFromReuse()
 			}
 		}
+	}
+	vecs := bat.Vecs
+
+	for i := 0; i < l; i++ {
+		vecL, err := types.ReadUint32(r)
+		if err != nil {
+			return err
+		}
+		limitedReader := io.LimitReader(r, int64(vecL))
+		if err := vecs[i].UnmarshalWithReader(limitedReader, mp); err != nil {
+			return err
+		}
+		// Ensure the vector consumed exactly the bytes allocated by its length prefix.
+		// Any leftover bytes indicate a serialization mismatch and would corrupt
+		// subsequent reads from the underlying reader.
+		if n, _ := io.Copy(io.Discard, limitedReader); n > 0 {
+			return moerr.NewInternalErrorNoCtxf("vector unmarshal did not consume all bytes: %d remaining", n)
+		}
+	}
+
+	l, err = types.ReadInt32AsInt(r)
+	if err != nil {
+		return err
+	}
+	if l != len(bat.Attrs) {
+		bat.Attrs = make([]string, l)
+	}
+
+	for i := 0; i < int(l); i++ {
+		_, bs, err := types.ReadSizeBytes(r)
+		if err != nil {
+			return err
+		}
+		bat.Attrs[i] = string(bs)
+	}
+
+	// ExtraBuf
+	if _, bat.ExtraBuf, err = types.ReadSizeBytes(r); err != nil {
+		return err
+	}
+
+	if bat.Recursive, err = types.ReadInt32(r); err != nil {
+		return err
+	}
+	if bat.ShuffleIDX, err = types.ReadInt32(r); err != nil {
+		return err
 	}
 	return nil
 }
 
-func (bat *Batch) ShrinkByMask(sels bitmap.Mask, negate bool, offset uint64) {
+func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 	if !negate {
 		if sels.Count() == bat.rowCount {
 			return
 		}
 	}
+
 	for _, vec := range bat.Vecs {
 		vec.ShrinkByMask(sels, negate, offset)
 	}
+
 	if negate {
 		bat.rowCount -= sels.Count()
 		return
@@ -378,6 +425,9 @@ func (bat *Batch) InsertVector(
 	bat.Vecs = append(bat.Vecs, nil)
 	copy(bat.Vecs[pos+1:], bat.Vecs[pos:])
 	bat.Vecs[pos] = vec
+	if vec != nil {
+		vec.SetOffHeap(bat.offHeap)
+	}
 	bat.Attrs = append(bat.Attrs, "")
 	copy(bat.Attrs[pos+1:], bat.Attrs[pos:])
 	bat.Attrs[pos] = attr
@@ -404,7 +454,11 @@ func (bat *Batch) CloneSelectedColumns(
 	cloned.offHeap = bat.offHeap
 	var typ types.Type
 	for idx := range selectCols {
-		cloned.Vecs[idx] = vector.NewVec(typ)
+		if bat.offHeap {
+			cloned.Vecs[idx] = vector.NewOffHeapVecWithType(typ)
+		} else {
+			cloned.Vecs[idx] = vector.NewVec(typ)
+		}
 	}
 	if err = bat.CloneSelectedColumnsTo(selectCols, cloned, mp); err != nil {
 		cloned.Clean(mp)
@@ -432,6 +486,10 @@ func (bat *Batch) CloneSelectedColumnsTo(
 			return
 		}
 		toVec.SetSorted(bat.Vecs[sourceIdx].GetSorted())
+
+		if toVec.Length() != bat.rowCount {
+			return moerr.NewInternalErrorNoCtx("toVec.Length() != bat.rowCount")
+		}
 	}
 	toBat.rowCount = bat.rowCount
 	return nil
@@ -460,14 +518,10 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 			vec.Free(m)
 		}
 	}
-	for _, agg := range bat.Aggs {
-		if agg != nil {
-			agg.Free()
-		}
-	}
-	bat.Aggs = nil
+
 	bat.Vecs = nil
 	bat.Attrs = nil
+	bat.ExtraBuf = nil
 	bat.SetRowCount(0)
 }
 
@@ -591,9 +645,9 @@ func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
 	return nil
 }
 
-func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
+func (bat *Batch) PreExtend(mp *mpool.MPool, rows int) error {
 	for i := range bat.Vecs {
-		if err := bat.Vecs[i].PreExtend(rows, m); err != nil {
+		if err := bat.Vecs[i].PreExtend(rows, mp); err != nil {
 			return err
 		}
 	}
@@ -603,9 +657,9 @@ func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
 // AppendWithCopy is used to append data from batch `b` to another batch `bat`. The function
 // ensures that the batch structure is consistent and copies all vector data to the target batch.
 // WARING: this function will cause a memory allocation.
-func (bat *Batch) AppendWithCopy(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
+func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
-		return b.Dup(mh)
+		return b.Dup(mp)
 	}
 	if len(bat.Vecs) != len(b.Vecs) {
 		return nil, moerr.NewInternalError(ctx, "unexpected error happens in batch append")
@@ -615,7 +669,7 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mh *mpool.MPool, b *Batch)
 	}
 
 	for i := range bat.Vecs {
-		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
+		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
 			return bat, err
 		}
 		bat.Vecs[i].SetSorted(false)
@@ -624,7 +678,7 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mh *mpool.MPool, b *Batch)
 	return bat, nil
 }
 
-func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
+func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b, nil
 	}
@@ -636,7 +690,7 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 	}
 
 	for i := range bat.Vecs {
-		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
+		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mp); err != nil {
 			return bat, err
 		}
 		bat.Vecs[i].SetSorted(false)
@@ -662,7 +716,7 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector, st
 }
 
 func (bat *Batch) IsEmpty() bool {
-	return bat.rowCount == 0 && len(bat.Aggs) == 0
+	return bat.rowCount == 0
 }
 
 func (bat *Batch) IsDone() bool {

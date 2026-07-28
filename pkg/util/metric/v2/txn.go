@@ -42,8 +42,9 @@ var (
 			Name:      "statement_total",
 			Help:      "Total number of txn statement executed.",
 		}, []string{"type"})
-	TxnStatementTotalCounter = txnStatementCounter.WithLabelValues("total")
-	TxnStatementRetryCounter = txnStatementCounter.WithLabelValues("retry")
+	TxnStatementTotalCounter               = txnStatementCounter.WithLabelValues("total")
+	TxnStatementRetryCounter               = txnStatementCounter.WithLabelValues("retry")
+	TxnStatementInsertS3FlushBypassCounter = txnStatementCounter.WithLabelValues("insert-s3-flush-bypass")
 
 	txnCommitCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -64,6 +65,22 @@ var (
 			Help:      "Total number of txn rollback handled.",
 		})
 
+	TxnUserRollbackCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "user_rollback_total",
+			Help:      "Total number of user-initiated txn rollback handled.",
+		})
+
+	TxnRollbackLastStatementCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "rollback_last_statement_total",
+			Help:      "Total number of rollback last statement handled.",
+		})
+
 	txnLockCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -74,6 +91,50 @@ var (
 	TxnLockTotalCounter       = txnLockCounter.WithLabelValues("total")
 	TxnLocalLockTotalCounter  = txnLockCounter.WithLabelValues("local")
 	TxnRemoteLockTotalCounter = txnLockCounter.WithLabelValues("remote")
+	// TxnLockWaitTimeoutCeilingClampedCounter counts positive caller budgets
+	// reduced by the lockservice safety ceiling; zero-value injection is normal
+	// fallback behavior and is intentionally excluded.
+	TxnLockWaitTimeoutCeilingClampedCounter = txnLockCounter.WithLabelValues("wait-timeout-ceiling-clamped")
+
+	TxnDeadlockDetectorEnqueueCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "deadlock_detector_enqueue_total",
+			Help:      "Total number of lockservice deadlock detector enqueue attempts.",
+		}, []string{"result"})
+
+	TxnDeadlockOwnerLocalCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "deadlock_owner_local_total",
+			Help:      "Total number of owner-local deadlock fast path results.",
+		}, []string{"result"})
+
+	TxnRemoteLockOwnerTimeoutCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "remote_lock_owner_timeout_total",
+			Help:      "Total number of remote lock owner-side wait timeouts.",
+		}, []string{"granularity", "mode"})
+
+	TxnLockActiveTxnRecoveryCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "active_txn_recovery_total",
+			Help:      "Total number of active transaction recovery events.",
+		}, []string{"result"})
+
+	TxnLockRPCQueueRejectCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "rpc_queue_rejected_total",
+			Help:      "Total number of lockservice RPC requests rejected before worker admission.",
+		}, []string{"reason"})
 
 	txnPKChangeCheckCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -85,6 +146,19 @@ var (
 	TxnPKChangeCheckTotalCounter   = txnPKChangeCheckCounter.WithLabelValues("total")
 	TxnPKChangeCheckChangedCounter = txnPKChangeCheckCounter.WithLabelValues("changed")
 	TxnPKChangeCheckIOCounter      = txnPKChangeCheckCounter.WithLabelValues("io")
+	TxnPKChangeCheckBailoutCounter = txnPKChangeCheckCounter.WithLabelValues("bailout")
+
+	txnPKMayBeChangedCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pk_may_be_changed_total",
+			Help:      "Total number of pk may be changed check.",
+		}, []string{"type"})
+	TxnPKMayBeChangedTotalCounter         = txnPKMayBeChangedCounter.WithLabelValues("total")
+	TxnPKMayBeChangedMemHitCounter        = txnPKMayBeChangedCounter.WithLabelValues("mem_hit")
+	TxnPKMayBeChangedMemNotFlushedCounter = txnPKMayBeChangedCounter.WithLabelValues("mem_not_flushed")
+	TxnPKMayBeChangedPersistedCounter     = txnPKMayBeChangedCounter.WithLabelValues("persisted")
 )
 
 var (
@@ -99,6 +173,14 @@ var (
 	TxnWaitActiveQueueSizeGauge = txnQueueSizeGauge.WithLabelValues("wait-active")
 	TxnActiveQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("active")
 	TxnLockRPCQueueSizeGauge    = txnQueueSizeGauge.WithLabelValues("lock-rpc")
+
+	TxnDeadlockDetectorQueueDepthGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "deadlock_detector_queue_depth",
+			Help:      "Current depth of the lockservice deadlock detector queue.",
+		})
 
 	txnCNCommittedLocationQuantityGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -252,6 +334,33 @@ var (
 			Buckets:   getDurationBuckets(),
 		})
 
+	TxnPKMayBeChangedDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pk_may_be_changed_duration_seconds",
+			Help:      "Bucketed histogram of txn pk may be changed check duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
+	TxnLazyLoadCkpDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "lazy_load_ckp_duration_seconds",
+			Help:      "Bucketed histogram of txn lazy load checkpoint duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
+	TxnPKExistInMemDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pk_exist_in_mem_duration_seconds",
+			Help:      "Bucketed histogram of txn pk exist in memory check duration.",
+			Buckets:   getDurationBuckets(),
+		})
+
 	txnTableRangeTotalHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -320,6 +429,15 @@ var (
 
 	TxnTNAppendDeduplicateDurationHistogram     = txnTNDeduplicateDurationHistogram.WithLabelValues("append_deduplicate")
 	TxnTNPrePrepareDeduplicateDurationHistogram = txnTNDeduplicateDurationHistogram.WithLabelValues("prePrepare_deduplicate")
+
+	TxnTNLogServiceAppendDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_logservice_append_duration_seconds",
+			Help:      "Bucketed histogram of txn tn logservice append duration.",
+			Buckets:   getDurationBuckets(),
+		})
 
 	txnMpoolDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -416,5 +534,139 @@ var (
 			Subsystem: "txn",
 			Name:      "extra_workspace_quota",
 			Help:      "Extra workspace quota for txn.",
+		})
+)
+
+// selectivity metrics for read filter and column
+var (
+	txnSelectivityHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "selectivity",
+			Help:      "Bucketed histogram of selectivity for read filter and column.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 15),
+		}, []string{"type"})
+
+	// Read filter metrics: track filter effectiveness
+	// Total: total number of filter operations per read (observe 1.0 for each operation)
+	// Filtered: number of operations where all rows were filtered out (observe 1.0 when len(sels) == 0)
+	TxnSelReadFilterTotal    = txnSelectivityHistogram.WithLabelValues("readfilter_total")
+	TxnSelReadFilterFiltered = txnSelectivityHistogram.WithLabelValues("readfilter_filtered")
+)
+
+// Column read histogram metrics: track per-read column counts
+var (
+	txnColumnReadHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "column_read_count",
+			Help:      "Bucketed histogram of column read count per read operation.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 15),
+		}, []string{"type"})
+
+	// Column read count: number of columns actually read per operation
+	TxnColumnReadCountHistogram = txnColumnReadHistogram.WithLabelValues("read")
+	// Column total count: total number of columns in table per operation
+	TxnColumnTotalCountHistogram = txnColumnReadHistogram.WithLabelValues("total")
+)
+
+// Read size histogram metrics: track per-read operation read sizes
+var (
+	txnReadSizeHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "read_size_bytes",
+			Help:      "Bucketed histogram of read size per read operation (bytes).",
+			Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20), // 1KB to ~1GB
+		}, []string{"type"})
+
+	// Total read size: actual bytes read from storage layer (excluding rowid tombstone)
+	TxnReadSizeHistogram = txnReadSizeHistogram.WithLabelValues("total")
+	// S3 read size: actual bytes read from S3 (excluding rowid tombstone)
+	TxnS3ReadSizeHistogram = txnReadSizeHistogram.WithLabelValues("s3")
+	// Disk read size: actual bytes read from disk cache (excluding rowid tombstone)
+	TxnDiskReadSizeHistogram = txnReadSizeHistogram.WithLabelValues("disk")
+)
+
+// StarCount (SELECT COUNT(*) optimization) metrics
+var (
+	starcountPathCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_path_total",
+			Help:      "Total number of StarCount path taken: fast (metadata only) or per_block (scan blocks with tombstones).",
+		}, []string{"path"})
+	StarcountPathFastCounter     = starcountPathCounter.WithLabelValues("fast")
+	StarcountPathPerBlockCounter = starcountPathCounter.WithLabelValues("per_block")
+
+	// StarCount total duration (rel.StarCount() on fast path)
+	StarcountDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_duration_seconds",
+			Help:      "Duration of StarCount() on fast path (metadata only, no block scan).",
+			Buckets:   getDurationBuckets(),
+		})
+
+	// StarCount result: visible row count (per fast-path call)
+	StarcountResultRowsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_result_rows",
+			Help:      "StarCount result: total visible row count (per fast-path call).",
+			Buckets:   prometheus.ExponentialBuckets(1, 10, 14), // 1 to 1e13
+		})
+
+	// Estimated tombstone stats (upper bound, no dedup) when deciding path
+	StarcountEstimateTombstoneRowsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_estimate_tombstone_rows",
+			Help:      "Estimated committed tombstone row count when deciding StarCount path (upper bound, no dedup).",
+			Buckets:   prometheus.ExponentialBuckets(1, 10, 12), // 1 to 1e11
+		})
+
+	StarcountEstimateTombstoneObjectsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_estimate_tombstone_objects",
+			Help:      "Number of committed tombstone objects when estimating (used for StarCount path decision).",
+			Buckets:   prometheus.ExponentialBuckets(1, 5, 10), // 1 to ~2e6
+		})
+
+	// Ratio estimate/actual when both are available (e.g. in CountRows). High ratio = estimate much larger than actual (bad signal).
+	StarcountEstimateOverActualRatioHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_estimate_over_actual_ratio",
+			Help:      "Ratio of estimated tombstone rows over actual (dedup) tombstone rows. High ratio (e.g. 100x) means estimate is loose.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 14), // 1, 2, 4, ..., 8192
+		})
+
+	// Appendable data object scan (S3 I/O) when counting visible rows by commit_ts
+	StarcountAppendableScanDurationSecondsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_appendable_scan_duration_seconds",
+			Help:      "Duration of scanning appendable data objects (S3 I/O) to count rows by commit_ts. Use for monitoring StarCount appendable path cost.",
+			Buckets:   getDurationBuckets(),
+		})
+	StarcountAppendableObjectsScannedHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "starcount_appendable_objects_scanned",
+			Help:      "Number of appendable data objects scanned (S3 I/O) per CollectDataStats call. Use for monitoring appendable scan volume.",
+			Buckets:   prometheus.ExponentialBuckets(1, 5, 10), // 1 to ~2e6
 		})
 )

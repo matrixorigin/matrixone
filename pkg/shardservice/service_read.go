@@ -18,11 +18,59 @@ import (
 	"context"
 	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/version"
 )
+
+func hasBinaryPrepareParam(param pb.ReadParam) bool {
+	for _, isBin := range param.Process.PrepareParams.IsBin {
+		if isBin {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *service) validateRemoteReadCompatibility(
+	ctx context.Context,
+	shard pb.TableShard,
+	param pb.ReadParam,
+) error {
+	if !hasBinaryPrepareParam(param) {
+		return nil
+	}
+
+	target := shard.Replicas[0].CN
+	found := false
+	compatible := false
+	err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+		ctx,
+		s.remote.cluster,
+		clusterservice.NewServiceIDSelector(target),
+		func(cn metadata.CNService) bool {
+			found = true
+			compatible = cn.CommitID == version.CommitID
+			return false
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if found && compatible {
+		return nil
+	}
+	return moerr.NewInternalErrorf(
+		ctx,
+		"cannot send binary prepared parameters to shard replica %s with an incompatible or unknown commit",
+		target,
+	)
+}
 
 func (s *service) Read(
 	ctx context.Context,
@@ -82,7 +130,9 @@ func (s *service) Read(
 
 		local := 0
 		remote := 0
-		for i, shard := range selected.values {
+		remoteShards := make([]int, 0, len(selected.values))
+		for i := range selected.values {
+			shard := &selected.values[i]
 			if s.isLocalReplica(shard.Replicas[0]) {
 				selected.local = append(selected.local, i)
 				local++
@@ -90,9 +140,17 @@ func (s *service) Read(
 			}
 
 			remote++
+			remoteShards = append(remoteShards, i)
 			if opts.adjust != nil {
-				opts.adjust(&shard)
+				opts.adjust(shard)
 			}
+			if e := s.validateRemoteReadCompatibility(ctx, *shard, req.Param); e != nil {
+				return false, e
+			}
+		}
+
+		for _, i := range remoteShards {
+			shard := selected.values[i]
 			f, e := s.remote.client.AsyncSend(
 				ctx,
 				s.newReadRequest(

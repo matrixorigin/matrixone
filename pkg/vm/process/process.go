@@ -20,7 +20,11 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -56,7 +60,7 @@ func (proc *Process) SetQueryId(id string) {
 // plan.ConstantFold -> colexec.EvalExpr, busted.
 // hack in a fall back mpool.  This is by design a Zero MP so that there
 // will not be real leaks, except we leak counters in globalStats
-var xxxProcMp = mpool.MustNewNoFixed("fallback_proc_mp")
+var xxxProcMp = mpool.MustNew("fallback_proc_mp")
 
 func (proc *Process) GetMPool() *mpool.MPool {
 	if proc == nil {
@@ -89,6 +93,26 @@ func (proc *Process) GetQueryClient() qclient.QueryClient {
 
 func (proc *Process) GetFileService() fileservice.FileService {
 	return proc.Base.FileService
+}
+
+func (proc *Process) GetTaskService() taskservice.TaskService {
+	if proc == nil {
+		return nil
+	}
+	if proc.Base.TaskService != nil {
+		return proc.Base.TaskService
+	}
+	// best-effort fallback: try to fetch from service runtime if available
+	sid := proc.GetService()
+	if sid != "" {
+		if v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables("task-service"); ok {
+			if ts, ok2 := v.(taskservice.TaskService); ok2 {
+				proc.Base.TaskService = ts
+				return ts
+			}
+		}
+	}
+	return nil
 }
 
 func (proc *Process) GetUnixTime() int64 {
@@ -127,8 +151,60 @@ func (proc *Process) GetPrepareParams() *vector.Vector {
 	return proc.Base.prepareParams
 }
 
+// SetPrepareParams borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
+	proc.setPrepareParams(prepareParams, nil, false)
+}
+
+// SetPrepareParamsWithIsBin borrows prepareParams. The caller remains responsible for releasing it.
+func (proc *Process) SetPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
+	proc.setPrepareParams(prepareParams, isBin, false)
+}
+
+// SetOwnedPrepareParamsWithIsBin transfers prepareParams to proc. Replacing or freeing proc releases it.
+func (proc *Process) SetOwnedPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
+	proc.setPrepareParams(prepareParams, isBin, true)
+}
+
+func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool, owned bool) {
+	if proc.Base.prepareParams == prepareParams && proc.Base.prepareParamsOwned {
+		owned = true
+	}
+	if proc.Base.prepareParamsOwned && proc.Base.prepareParams != nil && proc.Base.prepareParams != prepareParams {
+		proc.Base.prepareParams.Free(proc.Mp())
+	}
 	proc.Base.prepareParams = prepareParams
+	proc.Base.prepareParamsIsBin = isBin
+	proc.Base.prepareParamsOwned = owned && prepareParams != nil
+}
+
+// PrepareParamsState keeps the complete prepare-parameter state while a
+// Compile that shares the Process is being released.
+type PrepareParamsState struct {
+	prepareParams *vector.Vector
+	isBin         []bool
+	owned         bool
+}
+
+// DetachPrepareParams removes the prepare-parameter state without releasing
+// the owned vector. The caller must restore the returned state so a later
+// Process.Free can release it.
+func (proc *Process) DetachPrepareParams() PrepareParamsState {
+	state := PrepareParamsState{
+		prepareParams: proc.Base.prepareParams,
+		isBin:         proc.Base.prepareParamsIsBin,
+		owned:         proc.Base.prepareParamsOwned,
+	}
+	proc.Base.prepareParams = nil
+	proc.Base.prepareParamsIsBin = nil
+	proc.Base.prepareParamsOwned = false
+	return state
+}
+
+// RestorePrepareParams restores state previously returned by
+// DetachPrepareParams.
+func (proc *Process) RestorePrepareParams(state PrepareParamsState) {
+	proc.setPrepareParams(state.prepareParams, state.isBin, state.owned)
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {
@@ -248,5 +324,15 @@ func (proc *Process) GetSpillFileService() (fileservice.MutableFileService, erro
 	if err != nil {
 		return nil, err
 	}
-	return fileservice.SubPath(local, defines.SpillFileServiceName).(fileservice.MutableFileService), nil
+
+	if err := local.EnsureDir(proc.Ctx, defines.SpillFileServiceName); err != nil {
+		return nil, err
+	}
+
+	subPathFS := fileservice.SubPath(local, defines.SpillFileServiceName)
+	mutablefs, ok := subPathFS.(fileservice.MutableFileService)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("subPathFS is not a MutableFileService")
+	}
+	return mutablefs, nil
 }

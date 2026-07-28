@@ -18,29 +18,66 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
 
-func TestHandlePrecommitWriteError(t *testing.T) {
+type closeErrorQueryClient struct {
+	client.QueryClient
+	err        error
+	closeCalls int
+	closed     bool
+}
+
+func (c *closeErrorQueryClient) Close() error {
+	c.closeCalls++
+	c.closed = true
+	return c.err
+}
+
+func TestHandlePrecommitWrite_Deprecated(t *testing.T) {
 	h := mockTAEHandle(context.Background(), t, &options.Options{})
 
-	list := []*apipb.Entry{
-		{
-			EntryType: apipb.Entry_Insert,
-			Bat:       &apipb.Batch{Vecs: []apipb.Vector{{Type: types.NewProtoType(types.T_char)}}},
-		},
-		{
-			EntryType:  apipb.Entry_Insert,
-			DatabaseId: 1,
-			TableId:    3,
-			Bat:        &apipb.Batch{Vecs: []apipb.Vector{{Type: types.NewProtoType(types.T_char)}}},
-		},
-	}
+	// HandlePreCommitWrite is deprecated and does nothing
+	err := h.HandlePreCommitWrite(context.Background(), txn.TxnMeta{}, &apipb.PrecommitWriteCmd{}, &apipb.TNStringResponse{})
+	require.NoError(t, err)
+}
 
-	err := h.HandlePreCommitWrite(context.Background(), txn.TxnMeta{}, &apipb.PrecommitWriteCmd{EntryList: list}, &apipb.TNStringResponse{})
-	require.Error(t, err)
+func TestNewTAEHandleReturnsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	h, err := NewTAEHandle(ctx, t.TempDir(), nil, &options.Options{})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, h)
+}
+
+func TestHandleCloseKeepsCallerOwnedQueryClientOpen(t *testing.T) {
+	c := &closeErrorQueryClient{}
+	h, err := NewTAEHandle(context.Background(), t.TempDir(), c, &options.Options{})
+	require.NoError(t, err)
+
+	require.NoError(t, h.HandleClose(context.Background()))
+	require.Equal(t, 0, c.closeCalls)
+	require.False(t, c.closed)
+	require.NotNil(t, h.db.Closed.Load())
+}
+
+func TestHandleCloseKeepsSharedQueryClientOpen(t *testing.T) {
+	sharedClient := &closeErrorQueryClient{}
+	existing, err := NewTAEHandle(
+		context.Background(), t.TempDir(), sharedClient, &options.Options{})
+	require.NoError(t, err)
+	canceled, err := NewTAEHandle(
+		context.Background(), t.TempDir(), sharedClient, &options.Options{})
+	require.NoError(t, err)
+
+	require.NoError(t, canceled.HandleClose(context.Background()))
+	require.Equal(t, 0, sharedClient.closeCalls)
+	require.False(t, sharedClient.closed)
+
+	require.NoError(t, existing.HandleClose(context.Background()))
 }

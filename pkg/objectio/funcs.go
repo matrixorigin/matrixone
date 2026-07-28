@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 func ReleaseIOVector(vector *fileservice.IOVector) {
@@ -55,6 +56,7 @@ func ReadExtent(
 		ToCacheData: factory(int64(extent.OriginSize()), extent.Alg()),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
+		ioVec.ReleaseReadResultOnError()
 		return
 	}
 	if ioVec.Entries[0].CachedData == nil {
@@ -145,40 +147,66 @@ func ReadOneBlockWithMeta(
 		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
 		Policy:   policy,
 	}
+	var generatedIOVec fileservice.IOVector
+	defer func() {
+		if err != nil {
+			ioVec.ReleaseReadResultOnError()
+			generatedIOVec.ReleaseReadResultOnError()
+			ioVec = fileservice.IOVector{}
+		}
+	}()
 
 	var filledEntries []fileservice.IOEntry
+	putFillHolder := func(i int, seqnum uint16) {
+		if filledEntries == nil {
+			filledEntries = make([]fileservice.IOEntry, len(seqnums))
+		}
+		filledEntries[i] = fileservice.IOEntry{
+			Size: int64(seqnum) + 1, // a marker, it must not be zero
+		}
+	}
+
 	blkmeta := meta.GetBlockMeta(uint32(blk))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
 	for i, seqnum := range seqnums {
 		// special columns
 		if seqnum >= SEQNUM_UPPER {
 			metaColCnt := blkmeta.GetMetaColumnCount()
-			// read appendable block file, the last columns is commits and abort
-			if seqnum == SEQNUM_COMMITTS {
+			switch seqnum {
+			case SEQNUM_COMMITTS:
+				if metaColCnt == 0 {
+					putFillHolder(i, 0)
+					continue
+				}
 				seqnum = metaColCnt - 1
-			} else if seqnum == SEQNUM_ABORT {
+			case SEQNUM_ABORT:
 				panic("not support")
-			} else {
+			default:
 				panic(fmt.Sprintf("bad path to read special column %d", seqnum))
 			}
+			// Type alone is insufficient: the last user column may itself be
+			// T_TS. A hidden commit-TS column must sit beyond MaxSeqnum.
+			// If the last column is not commits, do not read it:
+			//  1. created by cn
+			//  2. old version tn nonappendable block
 			col := blkmeta.ColumnMeta(seqnum)
-			ext := col.Location()
-			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-				Offset:      int64(ext.Offset()),
-				Size:        int64(ext.Length()),
-				ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
-			})
+			hasHiddenColumn := metaColCnt > maxSeqnum+1
+			if !hasHiddenColumn || col.DataType() != uint8(types.T_TS) {
+				putFillHolder(i, seqnum)
+			} else {
+				ext := col.Location()
+				ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
+					Offset:      int64(ext.Offset()),
+					Size:        int64(ext.Length()),
+					ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
+				})
+			}
 			continue
 		}
 
 		// need fill vector
 		if seqnum > maxSeqnum || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
-			if filledEntries == nil {
-				filledEntries = make([]fileservice.IOEntry, len(seqnums))
-			}
-			filledEntries[i] = fileservice.IOEntry{
-				Size: int64(seqnum), // a marker, it can not be zero
-			}
+			putFillHolder(i, seqnum)
 			continue
 		}
 
@@ -196,6 +224,21 @@ func ReadOneBlockWithMeta(
 		if err != nil {
 			return
 		}
+
+		// Record actual bytes read from storage layer (excluding rowid, which is generated, not loaded)
+		var totalReadSize int64
+		for _, entry := range ioVec.Entries {
+			totalReadSize += entry.Size
+		}
+
+		// Record actual bytes read from storage layer using CounterSet
+		// Note: S3 and Disk read sizes are recorded in filesystem layer (S3FS/LocalFS)
+		// where we can accurately determine the data source
+		if totalReadSize > 0 {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.ReadSize.Add(totalReadSize)
+			})
+		}
 		//TODO when to call ioVec.Release?
 	}
 
@@ -211,8 +254,6 @@ func ReadOneBlockWithMeta(
 				filledEntries[i] = readed[0]
 				readed = readed[1:]
 			} else {
-				logutil.Infof("block %s generate seqnum %d %v",
-					meta.BlockHeader().BlockID().String(), filledEntries[i].Size, typs[i])
 				buf := &bytes.Buffer{}
 				buf.Write(EncodeIOEntryHeader(&IOEntryHeader{Type: IOET_ColData, Version: IOET_ColumnData_CurrVer}))
 				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
@@ -220,6 +261,9 @@ func ReadOneBlockWithMeta(
 				}
 				cacheData := fileservice.DefaultCacheDataAllocator().CopyToCacheData(ctx, buf.Bytes())
 				filledEntries[i].CachedData = cacheData
+				generatedIOVec.Entries = append(generatedIOVec.Entries, fileservice.IOEntry{
+					CachedData: cacheData,
+				})
 			}
 		}
 		ioVec.Entries = filledEntries
@@ -263,6 +307,11 @@ func ReadAllBlocksWithMeta(
 	}
 
 	err = fs.Read(ctx, &ioVec)
+	if err != nil {
+		ioVec.ReleaseReadResultOnError()
+		ioVec = fileservice.IOVector{}
+		return
+	}
 	//TODO when to call ioVec.Release?
 	return
 }
@@ -295,6 +344,7 @@ func ReadOneBlockAllColumns(
 
 	err = fs.Read(ctx, ioVec)
 	if err != nil {
+		ioVec.ReleaseReadResultOnError()
 		return nil, err
 	}
 	defer ioVec.Release()

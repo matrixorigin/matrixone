@@ -44,9 +44,9 @@ use syssub1;
 show tables;
 -- @ignore:5,7
 show subscriptions all;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status;
--- @ignore:3,5,10,11,12
+-- @ignore:3,4,5,7,9,10,11,12
 show table status like 't1';
 desc t1;
 show create table t1;

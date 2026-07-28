@@ -325,7 +325,7 @@ create account acc03 admin_name = 'test_account' identified by '123';
 -- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 
-restore cluster from snapshot snapshot_01;
+restore cluster{snapshot="snapshot_01"};
 
 -- @ignore:2,3,4,5,6,7,8,9
 show accounts;

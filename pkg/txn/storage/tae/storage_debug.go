@@ -32,7 +32,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 	data []byte) ([]byte, error) {
 	switch opCode {
 	case uint32(api.OpCode_OpPing):
-		return s.handlePing(data), nil
+		return s.handlePing(data)
 	case uint32(api.OpCode_OpFlush):
 		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleFlushTable)
 		if err != nil {
@@ -93,9 +93,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 	case uint32(api.OpCode_OpBackup):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleBackup)
 		if err != nil {
-			return types.Encode(&api.SyncLogTailResp{
-				CkpLocation: "Failed",
-			})
+			return nil, err
 		}
 		return resp.Read()
 	case uint32(api.OpCode_OpTraceSpan):
@@ -107,7 +105,10 @@ func (s *taeStorage) Debug(ctx context.Context,
 		return []byte(ret), nil
 
 	case uint32(api.OpCode_OpStorageUsage):
-		resp, _ := handleRead(ctx, txnMeta, data, s.taeHandler.HandleStorageUsage)
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleStorageUsage)
+		if err != nil {
+			return nil, err
+		}
 		return resp.Read()
 	case uint32(api.OpCode_OpSnapshotRead):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleSnapshotRead)
@@ -126,17 +127,11 @@ func (s *taeStorage) Debug(ctx context.Context,
 		}
 		return resp.Read()
 	case uint32(api.OpCode_OpDiskDiskCleaner):
-		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleDiskCleaner)
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleDiskCleaner)
 		if err != nil {
-			resp := protoc.MustMarshal(&api.TNStringResponse{
-				ReturnStr: "Failed!" + err.Error(),
-			})
-			return resp, err
+			return nil, err
 		}
-		resp := protoc.MustMarshal(&api.TNStringResponse{
-			ReturnStr: "OK",
-		})
-		return resp, nil
+		return resp.Read()
 	case uint32(api.OpCode_OpGetLatestCheckpoint):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleGetLatestCheckpoint)
 		if err != nil {
@@ -160,14 +155,16 @@ func (s *taeStorage) Debug(ctx context.Context,
 	}
 }
 
-func (s *taeStorage) handlePing(data []byte) []byte {
+func (s *taeStorage) handlePing(data []byte) ([]byte, error) {
 	req := api.TNPingRequest{}
-	protoc.MustUnmarshal(&req, data)
+	if err := req.Unmarshal(data); err != nil {
+		return nil, err
+	}
 
-	return protoc.MustMarshal(&api.TNPingResponse{
+	return (&api.TNPingResponse{
 		ShardID:        s.shard.ShardID,
 		ReplicaID:      s.shard.ReplicaID,
 		LogShardID:     s.shard.LogShardID,
 		ServiceAddress: s.shard.Address,
-	})
+	}).Marshal()
 }

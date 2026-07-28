@@ -42,7 +42,7 @@ create snapshot sp01_restore_lower for account acc01;
 drop database test;
 -- @session
 
-restore account acc01 from snapshot sp01_restore_lower;
+restore account acc01{snapshot="sp01_restore_lower"};
 
 -- @session:id=2&user=acc01:test_account&password=111
 use test;
@@ -57,7 +57,7 @@ select * from Tt;
 select * from tT;
 -- @session
 
-restore account acc01 from snapshot sp01_restore_lower to account acc02;
+restore account acc01{snapshot="sp01_restore_lower"} to account acc02;
 
 -- @session:id=3&user=acc02:test_account&password=111
 use test;
@@ -131,7 +131,7 @@ select @@lower_case_table_names;
 drop database test02;
 -- @session
 
-restore account acc01 from snapshot sp02_restore_lower;
+restore account acc01{snapshot="sp02_restore_lower"};
 
 -- @session:id=2&user=acc01:test_account&password=111
 use test02;
@@ -139,7 +139,7 @@ show tables;
 show create table EmployeeDepartmentView;
 -- @session
 
-restore account acc01 from snapshot sp02_restore_lower to account acc04;
+restore account acc01{snapshot="sp02_restore_lower"} to account acc04;
 
 -- @session:id=4&user=acc04:test_account&password=111
 use test02;

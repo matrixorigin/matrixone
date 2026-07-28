@@ -15,27 +15,31 @@
 package table_function
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/elkans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans/device"
+	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/rand"
 )
 
 const (
@@ -47,9 +51,11 @@ const (
 )
 
 var (
-	ClusterCentersSupportTypes = []types.T{
-		types.T_array_float32, types.T_array_float64,
-	}
+	// ivfflatCatalogHooks is the shared (stateless) catalog-hooks instance used
+	// for plugin-declared vector-type validation (see pkg/indexplugin/catalog).
+	// It replaces the former ClusterCentersSupportTypes list so the supported
+	// vector types live in one place — the IVF-FLAT plugin's catalog hooks.
+	ivfflatCatalogHooks = ivfflatrt.CatalogHooks{}
 
 	ivf_runSql = sqlexec.RunSql
 )
@@ -61,7 +67,6 @@ type ivfCreateState struct {
 	idxcfg       vectorindex.IndexConfig
 	data32       [][]float32
 	data64       [][]float64
-	rand         *rand.Rand
 	nsample      uint
 	sample_ratio float64
 	offset       int
@@ -76,29 +81,43 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	var err error
 	var ok bool
 
-	version, err := ivfflat.GetVersion(proc, u.tblcfg)
+	version, err := ivfflat.GetVersion(sqlexec.NewSqlProcess(proc), u.tblcfg)
 	if err != nil {
 		return err
 	}
 
 	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
 
+	logutil.Infof("IVFFLAT START: Kmeans clustering CREATE")
 	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
 	var centers [][]T
-	if clusterer, err = elkans.NewKMeans[T](
+	gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
+	if clusterer, err = device.NewKMeans(
 		data, int(u.idxcfg.Ivfflat.Lists),
-		int(u.tblcfg.KmeansMaxIteration),
+		int(u.idxcfg.Ivfflat.KmeansMaxIteration),
 		defaultKmeansDeltaThreshold,
 		metric.MetricType(u.idxcfg.Ivfflat.Metric),
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
 		u.idxcfg.Ivfflat.Spherical, // For dense vector, spherical kmeans is false.
-		int(nworker)); err != nil {
+		int(nworker),
+		gpuMode); err != nil {
 		return err
 	}
-	anycenters, err := clusterer.Cluster()
+	logutil.Infof("IVFFLAT END: Kmeans clustering CREATE")
+	defer func() {
+		if clusterer != nil {
+			logutil.Infof("IVFFLAT START: Kmeans clustering Closed")
+			clusterer.Close()
+			logutil.Infof("IVFFLAT END: Kmeans clustering Closed")
+		}
+	}()
+
+	logutil.Infof("IVFFLAT START: Kmeans clustering RUN")
+	anycenters, err := clusterer.Cluster(proc.Ctx)
 	if err != nil {
 		return err
 	}
+	logutil.Infof("IVFFLAT END: Kmeans clustering RUN")
 
 	centers, ok = anycenters.([][]T)
 	if !ok {
@@ -108,7 +127,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	// insert into centroid table
 	values := make([]string, 0, len(centers))
 	for i, c := range centers {
-		s := types.ArrayToString[T](c)
+		s := types.ArrayToString(c)
 		values = append(values, fmt.Sprintf("(%d, %d, '%s')", version, i, s))
 	}
 
@@ -116,6 +135,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 		return moerr.NewInternalError(proc.Ctx, "output centroids is empty")
 	}
 
+	logutil.Infof("IVFFLAT START: After Kmeans clustering, insert centroids to table")
 	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES %s", u.tblcfg.DbName, u.tblcfg.IndexTable,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
@@ -126,11 +146,38 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 
 	sqls := []string{sql}
 	for _, s := range sqls {
-		res, err := ivf_runSql(proc, s)
+		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), s)
 		if err != nil {
 			return err
 		}
 		res.Close()
+	}
+	logutil.Infof("IVFFLAT END: After Kmeans clustering, insert centroids to table")
+
+	// int8/uint8 QUANTIZATION (cuVS-style asymmetric scalar quantizer): train
+	// [min,max] over the sample and persist them in the metadata table. Entries
+	// (build) and the query (search) map [min,max] onto the full int8 range
+	// [-128,127] (or uint8 [0,255]) with the same q(x)=round(x*mul+add). Using both
+	// bounds (not a symmetric scale) uses the whole range for offset data. The
+	// percentile bound-training is identical for int8 and uint8 (only the target
+	// range differs, applied later by compile/search). (bf16/float16 are float
+	// formats and need none.)
+	if qt, ok := quantizer.ToVectorType(u.param.Quantization); ok && (qt == types.T_array_int8 || qt == types.T_array_uint8) {
+		qmin, qmax := quantizer.TrainInt8(data)
+		insSQL := fmt.Sprintf(
+			"INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES ('%s', '%.9g'), ('%s', '%.9g') "+
+				"ON DUPLICATE KEY UPDATE `%s` = VALUES(`%s`)",
+			u.tblcfg.DbName, u.tblcfg.MetadataTable,
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin, qmin,
+			catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax, qmax,
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, catalog.SystemSI_IVFFLAT_TblCol_Metadata_val)
+		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), insSQL)
+		if err != nil {
+			return err
+		}
+		res.Close()
+		logutil.Infof("IVFFLAT: int8 quantizer min=%g max=%g stored", qmin, qmax)
 	}
 
 	return nil
@@ -143,9 +190,9 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 	}
 
 	if u.data32 != nil {
-		return clustering[float32](u, tf, proc, u.data32)
+		return clustering(u, tf, proc, u.data32)
 	} else {
-		return clustering[float64](u, tf, proc, u.data64)
+		return clustering(u, tf, proc, u.data64)
 	}
 }
 
@@ -194,7 +241,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 	if !u.inited {
 		if len(tf.Params) > 0 {
-			err = json.Unmarshal([]byte(tf.Params), &u.param)
+			err = sonic.Unmarshal([]byte(tf.Params), &u.param)
 			if err != nil {
 				return err
 			}
@@ -217,6 +264,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "invalid optype")
 		}
+		u.idxcfg.OpType = u.param.OpType
 		u.idxcfg.Ivfflat.Metric = uint16(metrictype)
 		u.idxcfg.Ivfflat.Spherical = false // For Dense vector, spherical = false
 
@@ -232,31 +280,30 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		if len(cfgstr) == 0 {
 			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 		}
-		err := json.Unmarshal([]byte(cfgstr), &u.tblcfg)
+		err := sonic.Unmarshal([]byte(cfgstr), &u.tblcfg)
 		if err != nil {
 			return err
 		}
 
-		// support both vecf32 and vecf64
-		f32aVec := tf.ctr.argVecs[1]
-		supported := false
-		for _, t := range ClusterCentersSupportTypes {
-			if f32aVec.GetType().Oid == t {
-				supported = true
-				break
-			}
-		}
-		if !supported {
-			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
-		}
-		dimension := f32aVec.GetType().Width
+		u.idxcfg.Type = vectorindex.IVFFLAT
 
-		// dimension
-		u.idxcfg.Ivfflat.Dimensions = uint(dimension)
-		u.idxcfg.Type = "ivfflat"
+		// kmeans_train_percent / kmeans_max_iteration: the flat algo_params key
+		// (u.param, present only when set in CREATE INDEX) wins; otherwise the
+		// session variable controls the build, then the hardcoded default.
+		resolve := proc.GetResolveVariableFunc()
+		u.idxcfg.Ivfflat.KmeansTrainPercent, err = indexplugin.AlgoParamFloat(
+			u.param.KmeansTrainPercent, resolve, "kmeans_train_percent", ivfflatrt.DefaultKmeansTrainPercent)
+		if err != nil {
+			return err
+		}
+		u.idxcfg.Ivfflat.KmeansMaxIteration, err = indexplugin.AlgoParamInt(
+			u.param.KmeansMaxIteration, resolve, "kmeans_max_iteration", ivfflatrt.DefaultKmeansMaxIteration)
+		if err != nil {
+			return err
+		}
 
 		u.nsample = u.idxcfg.Ivfflat.Lists * 50
-		train_percent := float64(u.tblcfg.KmeansTrainPercent) / float64(100)
+		train_percent := u.idxcfg.Ivfflat.KmeansTrainPercent / float64(100)
 		if u.tblcfg.DataSize > 0 {
 			ns := uint(train_percent * float64(u.tblcfg.DataSize))
 			if u.nsample > ns {
@@ -268,12 +315,6 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 			u.nsample = min_nsample
 		}
 
-		if f32aVec.GetType().Oid == types.T_array_float32 {
-			u.data32 = make([][]float32, 0, u.nsample)
-		} else {
-			u.data64 = make([][]float64, 0, u.nsample)
-		}
-
 		u.sample_ratio = train_percent
 		if u.tblcfg.DataSize > 0 {
 			u.sample_ratio = float64(u.nsample) / float64(u.tblcfg.DataSize)
@@ -282,51 +323,92 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 			}
 		}
 
-		u.rand = rand.New(rand.NewSource(uint64(time.Now().UnixMicro())))
+		if u.sample_ratio > 1.0 {
+			u.sample_ratio = 1.0
+		}
+
+		// run SQL
+		sql := fmt.Sprintf("SELECT SAMPLE(`%s`, %f PERCENT) FROM `%s`.`%s` WHERE `%s` IS NOT NULL LIMIT %d",
+			u.tblcfg.KeyPart,
+			u.sample_ratio*100,
+			u.tblcfg.DbName,
+			u.tblcfg.SrcTable,
+			u.tblcfg.KeyPart,
+			u.nsample)
+
+		logutil.Infof("IVFFLAT START: pick sample. %s", sql)
+
+		res, err := ivf_runSql(sqlexec.NewSqlProcess(proc), sql)
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+		logutil.Infof("IVFFLAT END: pick sample")
+
+		if len(res.Batches) == 0 {
+			u.batch = tf.createResultBatch()
+			u.inited = true
+			return nil
+		}
+
+		embedvec := res.Batches[0].Vecs[0]
+		if !catalogplugin.SupportsVectorType(ivfflatCatalogHooks, embedvec.GetType().Oid) {
+			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
+		}
+
+		// kmeans always clusters in float32 (or float64). Narrow input types
+		// (bf16/f16/int8) decode to float32 -> data32; only native float64 uses data64.
+		if embedvec.GetType().Oid == types.T_array_float64 {
+			u.data64 = make([][]float64, 0, u.nsample)
+		} else {
+			u.data32 = make([][]float32, 0, u.nsample)
+		}
+
+		// dimension
+		dimension := embedvec.GetType().Width
+		u.idxcfg.Ivfflat.Dimensions = uint(dimension)
+		//elemsz := res.Batches[0].Vecs[0].GetType().GetArrayElementSize()
+
+		for _, bat := range res.Batches {
+			evec := bat.Vecs[0]
+			for i := 0; i < bat.RowCount(); i++ {
+				var f32a []float32
+				switch evec.GetType().Oid {
+				case types.T_array_float32:
+					f32a = types.BytesToArray[float32](evec.GetBytesAt(i))
+				case types.T_array_float64:
+					f64a := types.BytesToArray[float64](evec.GetBytesAt(i))
+					if uint(len(f64a)) != u.idxcfg.Ivfflat.Dimensions {
+						return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+					}
+					u.data64 = append(u.data64, append(make([]float64, 0, len(f64a)), f64a...))
+					continue
+				case types.T_array_bf16:
+					f32a = types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](evec.GetBytesAt(i)))
+				case types.T_array_float16:
+					f32a = types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](evec.GetBytesAt(i)))
+				case types.T_array_int8:
+					f32a = types.Int8ToFloat32Slice(types.BytesToArray[int8](evec.GetBytesAt(i)))
+				case types.T_array_uint8:
+					f32a = types.Uint8ToFloat32Slice(types.BytesToArray[uint8](evec.GetBytesAt(i)))
+				default:
+					return moerr.NewInternalError(proc.Ctx, "unsupported ivfflat vector type")
+				}
+				if uint(len(f32a)) != u.idxcfg.Ivfflat.Dimensions {
+					return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
+				}
+				u.data32 = append(u.data32, append(make([]float32, 0, len(f32a)), f32a...))
+			}
+		}
+
+		// reset slice
+		u.offset = 0
+
 		u.batch = tf.createResultBatch()
 		u.inited = true
-		//os.Stderr.WriteString(fmt.Sprintf("nsample %d, train_percent %f, iter %d\n", u.nsample, train_percent, u.tblcfg.KmeansMaxIteration))
-	}
-
-	// reset slice
-	u.offset = 0
-
-	// cleanup the batch
-	u.batch.CleanOnlyData()
-
-	datasz := 0
-	if u.data32 != nil {
-		datasz = len(u.data32)
-	} else {
-		datasz = len(u.data64)
-	}
-	if uint(datasz) >= u.nsample {
-		// enough sample data
-		return nil
-	}
-
-	fpaVec := tf.ctr.argVecs[1]
-	if fpaVec.IsNull(uint64(nthRow)) {
-		return nil
-	}
-
-	if u.sample_ratio < u.rand.Float64() {
-		// skip the sample
-		return nil
-	}
-
-	if fpaVec.GetType().Oid == types.T_array_float32 {
-		f32a := types.BytesToArray[float32](fpaVec.GetBytesAt(nthRow))
-		if uint(len(f32a)) != u.idxcfg.Ivfflat.Dimensions {
-			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
-		}
-		u.data32 = append(u.data32, append(make([]float32, 0, len(f32a)), f32a...))
-	} else {
-		f64a := types.BytesToArray[float64](fpaVec.GetBytesAt(nthRow))
-		if uint(len(f64a)) != u.idxcfg.Ivfflat.Dimensions {
-			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
-		}
-		u.data64 = append(u.data64, append(make([]float64, 0, len(f64a)), f64a...))
+		//os.Stderr.WriteString(fmt.Sprintf("nsample %d, train_percent %f, iter %d\n", u.nsample, train_percent, u.idxcfg.Ivfflat.KmeansMaxIteration))
+		// cleanup the batch
+		u.batch.CleanOnlyData()
 	}
 
 	return nil

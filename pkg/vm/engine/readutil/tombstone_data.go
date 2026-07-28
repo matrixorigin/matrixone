@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -292,8 +293,8 @@ func (tomb *tombstoneData) ApplyPersistedTombstones(
 }
 
 func (tomb *tombstoneData) SortInMemory() {
-	sort.Slice(tomb.rowids, func(i, j int) bool {
-		return tomb.rowids[i].LT(&tomb.rowids[j])
+	slices.SortFunc(tomb.rowids, func(a, b types.Rowid) int {
+		return a.Compare(&b)
 	})
 }
 

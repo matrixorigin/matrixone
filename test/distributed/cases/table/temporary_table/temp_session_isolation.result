@@ -1,0 +1,14 @@
+drop database if exists tmp_session_iso;
+create database tmp_session_iso;
+use tmp_session_iso;
+use tmp_session_iso;
+create temporary table t(a int);
+insert into t values (1);
+select * from t;
+a
+1
+use tmp_session_iso;
+select * from t;
+SQL parser error: table "t" does not exist
+drop database if exists tmp_session_iso;
+

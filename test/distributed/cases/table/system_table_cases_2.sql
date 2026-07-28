@@ -11,9 +11,8 @@ SELECT COUNT(0) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM statement_info LIMIT 10) AS temp;
 
--- @bvt:issue#5895
-(SELECT * FROM statement_info LIMIT 1) UNION ALL (SELECT * FROM statement_info LIMIT 1);
--- @bvt:issue
+-- @ignore:0
+(SELECT count(*) FROM statement_info LIMIT 1) UNION ALL (SELECT count(*) FROM statement_info LIMIT 1);
 
 -- rawlog
 SELECT COUNT(*) FROM (SELECT * FROM rawlog LIMIT 10) AS temp;
@@ -28,12 +27,10 @@ SELECT COUNT(0) FROM (SELECT * FROM log_info LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM log_info LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM log_info LIMIT 10) AS temp;
 
--- @bvt:issue#5901
 SELECT COUNT(*) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
--- @bvt:issue
 
 -- span_info
 -- issue 11,947

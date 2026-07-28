@@ -21,12 +21,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -117,6 +119,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	}
 
 	vars["foreign_key_checks"] = int64(1)
+	vars["sort_spill_mem"] = int64(0)
 
 	if result, ok := vars[varName]; ok {
 		return result, nil
@@ -161,6 +164,17 @@ type Schema struct {
 	tblId     int64
 	isView    bool
 	viewCfg   ViewCfg
+	// tableType overrides TableType when non-empty; used to mock index tables
+	// carrying an algo-specific type (e.g. ivfflat "metadata").
+	tableType string
+	// onUpdateCols maps column index → ON UPDATE expression string (e.g. "current_timestamp()").
+	// When non-empty, the ColDef.OnUpdate.Expr will be set to a non-nil expression.
+	onUpdateCols map[int]string
+	// genCols maps a generated column index → the source column index its
+	// definition expression references (i.e. the mock column is `col AS (src)`).
+	// Used to test that generated columns derived from ON UPDATE columns are
+	// excluded from the ODKU no-op filter.
+	genCols map[int]int
 }
 
 type ViewCfg struct {
@@ -408,6 +422,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"att_attr_is_clusterby", types.T_int8, false, 0, 0},
 			{"attr_seqnum", types.T_int8, false, 0, 0},
 			{"attr_enum", types.T_varchar, false, 2048, 0},
+			{"attr_has_generated", types.T_int8, false, 0, 0},
+			{"attr_generated", types.T_varchar, false, 2048, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},
@@ -463,6 +479,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"character_set_client", types.T_varchar, false, 64, 0},
 			{"collation_connection", types.T_varchar, false, 64, 0},
 			{"database_collation", types.T_varchar, false, 64, 0},
+			{"sql_mode", types.T_varchar, false, 1024, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},
@@ -520,6 +537,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"database_name", types.T_varchar, false, 50, 0},
 			{"table_name", types.T_varchar, false, 50, 0},
 			{"obj_id", types.T_uint64, false, 100, 0},
+			{"kind", types.T_varchar, false, 32, 0},
 		},
 		pks: []int{0},
 	}
@@ -565,8 +583,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"job", types.T_varchar, true, 10, 0},
 			{"mgr", types.T_uint32, true, 32, 0},
 			{"hiredate", types.T_date, true, 0, 0},
-			{"sal", types.T_decimal64, true, 7, 0},
-			{"comm", types.T_decimal64, true, 7, 0},
+			{"sal", types.T_decimal64, true, 7, 2},
+			{"comm", types.T_decimal64, true, 7, 2},
 			{"deptno", types.T_uint32, true, 32, 0},
 			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
 		},
@@ -624,6 +642,45 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		pks:    []int{0},
 		outcnt: 13,
+	}
+
+	/*
+		create table single_idx_t(
+			id int primary key,
+			val int,
+			index idx_val(val)
+		);
+	*/
+	constraintTestSchema["single_idx_t"] = &Schema{
+		tblId: 88900,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"val", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "idx_val",
+				tableName: catalog.SecondaryIndexTableNamePrefix + "single-idx-t-idx-val",
+				parts:     []string{"val"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+				},
+				tableExist: true,
+				unique:     false,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.SecondaryIndexTableNamePrefix+"single-idx-t-idx-val"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+			{catalog.IndexTablePrimaryColName, types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
 	}
 
 	/*
@@ -688,6 +745,301 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		pks:    []int{0},
 		outcnt: 4,
 	}
+
+	/*
+		create table dept_composite_uk(
+			deptno int unsigned auto_increment,
+			dname varchar(15),
+			loc varchar(50),
+			primary key(deptno),
+			unique key uk_dname_loc(dname, loc)
+		);
+	*/
+	constraintTestSchema["dept_composite_uk"] = &Schema{
+		tblId: 88889,
+		cols: []col{
+			{"deptno", types.T_uint32, true, 32, 0},
+			{"dname", types.T_varchar, true, 15, 0},
+			{"loc", types.T_varchar, true, 50, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "uk_dname_loc",
+				tableName: catalog.UniqueIndexTableNamePrefix + "dept-composite-uk-idx",
+				parts:     []string{"dname", "loc"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"dept-composite-uk-idx"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		create table dept_ck(
+			deptno int primary key,
+			dname varchar(15),
+			loc varchar(50),
+			note varchar(20),
+			unique key uk_dname_loc(dname, loc)
+		);
+		-- real PK + composite unique key + a free (non-key) column, for testing
+		-- real-PK ON DUPLICATE KEY UPDATE composite unique-key conflict resolution.
+	*/
+	constraintTestSchema["dept_ck"] = &Schema{
+		tblId: 88890,
+		cols: []col{
+			{"deptno", types.T_int32, true, 32, 0},
+			{"dname", types.T_varchar, true, 15, 0},
+			{"loc", types.T_varchar, true, 50, 0},
+			{"note", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks: []int{0},
+		idxs: []index{
+			{
+				indexName: "uk_dname_loc",
+				tableName: catalog.UniqueIndexTableNamePrefix + "dept-ck-idx",
+				parts:     []string{"dname", "loc"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"dept-ck-idx"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		The index metadata table that ivfflat/hnsw/cagra maintenance upserts a
+		version counter into via ON DUPLICATE KEY UPDATE. It is a plain real-PK
+		key/value table whose name carries the secondary-index prefix (so
+		canSkipDedup is true) and whose TableType is the algo-specific "metadata"
+		type (so it is neither SystemOrdinaryRel nor SystemIndexRel). Used to test
+		that such an ODKU is handled by the modern path instead of being rejected.
+	*/
+	constraintTestSchema[catalog.SecondaryIndexTableNamePrefix+"meta"] = &Schema{
+		tblId: 88891,
+		cols: []col{
+			{catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, types.T_varchar, true, 255, 0},
+			{catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, types.T_varchar, true, 255, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:       []int{0},
+		outcnt:    1,
+		tableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+	}
+
+	/*
+		create table fake_pk_t (
+			a int,
+			b varchar(64),
+			unique key(a)
+		);
+		-- table with no real PK, only a unique key ("fake PK" table)
+	*/
+	constraintTestSchema["fake_pk_t"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, true, 32, 0},
+			{"b", types.T_varchar, true, 64, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{2}, // fake PK column
+		idxs: []index{
+			{
+				indexName: "uk_a",
+				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-t-uk-a",
+				parts:     []string{"a"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"fake-pk-t-uk-a"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint64, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		create table fake_pk_comp (
+			a int,
+			b int,
+			c varchar(64),
+			unique key uk_ab(a, b)
+		);
+		-- fake-PK table (no real PK) with a COMPOSITE unique key(a, b). Used to test
+		-- that a REPLACE whose composite unique key serializes to NULL (a statically
+		-- NULL part, e.g. column a omitted/defaulting to NULL) is planned insert-only
+		-- rather than delete-capable.
+	*/
+	constraintTestSchema["fake_pk_comp"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, true, 32, 0},
+			{"b", types.T_int32, true, 32, 0},
+			{"c", types.T_varchar, true, 64, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{3}, // fake PK column
+		idxs: []index{
+			{
+				indexName: "uk_ab",
+				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-comp-uk-ab",
+				parts:     []string{"a", "b"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"fake-pk-comp-uk-ab"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint64, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		create table fake_pk_composite_t (
+			a int,
+			b int,
+			c varchar(64),
+			unique key(a, b)
+		);
+		-- table with no real PK, only a composite unique key ("fake PK" table)
+	*/
+	constraintTestSchema["fake_pk_composite_t"] = &Schema{
+		cols: []col{
+			{"a", types.T_int32, true, 32, 0},
+			{"b", types.T_int32, true, 32, 0},
+			{"c", types.T_varchar, true, 64, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{3}, // fake PK column
+		idxs: []index{
+			{
+				indexName: "uk_a_b",
+				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-composite-t-uk-a-b",
+				parts:     []string{"a", "b"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+				},
+				tableExist: true,
+				unique:     true,
+			},
+		},
+		outcnt: 5,
+	}
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"fake-pk-composite-t-uk-a-b"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint64, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 4,
+	}
+
+	/*
+		create table self_ref (
+			id int primary key,
+			parent_id int,
+			name varchar(64),
+			foreign key (parent_id) references self_ref(id) on delete restrict on update restrict
+		);
+		-- self-referencing FK table for testing REPLACE FK constraint checks
+	*/
+	constraintTestSchema["self_ref"] = &Schema{
+		tblId: 99999,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},            // ColId=0
+			{"parent_id", types.T_int32, true, 32, 0},     // ColId=1
+			{"name", types.T_varchar, true, 64, 0},        // ColId=2
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0}, // ColId=3
+		},
+		pks: []int{0}, // primary key "id"
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_self_parent",
+				Cols:        []uint64{1}, // parent_id (ColId=1)
+				ForeignTbl:  0,           // 0 = self-referencing
+				ForeignCols: []uint64{0}, // id (ColId=0)
+				OnDelete:    plan.ForeignKeyDef_RESTRICT,
+				OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+			},
+		},
+		outcnt: 10,
+	}
+
+	/*
+		create table self_ref_cascade (
+			id int primary key,
+			parent_id int,
+			foreign key (parent_id) references self_ref_cascade(id) on delete cascade
+		);
+		-- self-referencing FK with CASCADE (should NOT generate assert checks)
+	*/
+	constraintTestSchema["self_ref_cascade"] = &Schema{
+		tblId: 99998,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"parent_id", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_self_cascade",
+				Cols:        []uint64{1},
+				ForeignTbl:  0,
+				ForeignCols: []uint64{0},
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+		},
+		outcnt: 10,
+	}
+
 	/*
 		create table products (
 			pid int not null,
@@ -730,8 +1082,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"job", types.T_varchar, true, 10, 0},
 			{"mgr", types.T_uint32, true, 32, 0},
 			{"hiredate", types.T_date, true, 0, 0},
-			{"sal", types.T_decimal64, true, 7, 0},
-			{"comm", types.T_decimal64, true, 7, 0},
+			{"sal", types.T_decimal64, true, 7, 2},
+			{"comm", types.T_decimal64, true, 7, 2},
 			{"deptno", types.T_uint32, true, 32, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
@@ -768,6 +1120,46 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		pks:    []int{0},
 		outcnt: 4,
+	}
+
+	// Table with ON UPDATE CURRENT_TIMESTAMP column for testing
+	// no-op FILTER exclusion of implicit auto-update columns.
+	constraintTestSchema["t_on_update"] = &Schema{
+		tblId: 88901,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"val", types.T_int32, true, 32, 0},
+			{"updated_at", types.T_timestamp, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:    []int{0},
+		outcnt: 10,
+		onUpdateCols: map[int]string{
+			2: "current_timestamp()",
+		},
+	}
+
+	// t_on_update_gen adds a stored generated column g derived from the
+	// implicit ON UPDATE column updated_at, to test that generated columns
+	// depending on an auto-update column are also excluded from the ODKU
+	// no-op filter.
+	constraintTestSchema["t_on_update_gen"] = &Schema{
+		tblId: 88902,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"val", types.T_int32, true, 32, 0},
+			{"updated_at", types.T_timestamp, true, 0, 0},
+			{"g", types.T_timestamp, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:    []int{0},
+		outcnt: 10,
+		onUpdateCols: map[int]string{
+			2: "current_timestamp()",
+		},
+		genCols: map[int]int{
+			3: 2, // g AS (updated_at)
+		},
 	}
 
 	cteTestSchema["t1"] = &Schema{
@@ -1008,23 +1400,55 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			colDefs := make([]*ColDef, 0, len(table.cols))
 
 			for idx, col := range table.cols {
-				colDefs = append(colDefs, &ColDef{
+				isFakePK := col.Name == catalog.FakePrimaryKeyColName
+				colDef := &ColDef{
 					ColId: uint64(idx),
 					Typ: plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
 						Width:       col.Width,
 						Scale:       col.Scale,
+						AutoIncr:    isFakePK,
 					},
 					Name:       strings.ToLower(col.Name),
 					OriginName: col.Name,
 					Primary:    idx == 0,
-					Hidden:     col.Name == catalog.Row_ID || col.Name == catalog.CPrimaryKeyColName,
+					Hidden:     col.Name == catalog.Row_ID || col.Name == catalog.CPrimaryKeyColName || isFakePK,
 					Pkidx:      1,
 					Default: &plan.Default{
 						NullAbility: col.Nullable,
 					},
-				})
+				}
+				if onUpdateExpr, ok := table.onUpdateCols[idx]; ok {
+					colDef.OnUpdate = &plan.OnUpdate{
+						Expr: &plan.Expr{
+							Expr: &plan.Expr_F{
+								F: &plan.Function{
+									Func: &plan.ObjectRef{ObjName: "current_timestamp"},
+								},
+							},
+						},
+						OriginString: onUpdateExpr,
+					}
+				}
+				if srcIdx, ok := table.genCols[idx]; ok {
+					srcCol := table.cols[srcIdx]
+					colDef.GeneratedCol = &plan.GeneratedCol{
+						Expr: &plan.Expr{
+							Typ: plan.Type{Id: int32(srcCol.Id)},
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{
+									RelPos: 0,
+									ColPos: int32(srcIdx),
+									Name:   strings.ToLower(srcCol.Name),
+								},
+							},
+						},
+						IsStored:     true,
+						OriginString: strings.ToLower(srcCol.Name),
+					}
+				}
+				colDefs = append(colDefs, colDef)
 			}
 
 			objects[tableName] = &ObjectRef{
@@ -1038,8 +1462,12 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				ObjName:    tableName,
 			}
 
+			tableType := catalog.SystemOrdinaryRel
+			if table.tableType != "" {
+				tableType = table.tableType
+			}
 			tableDef := &TableDef{
-				TableType: catalog.SystemOrdinaryRel,
+				TableType: tableType,
 				TblId:     uint64(tblId),
 				Name:      tableName,
 				Cols:      colDefs,
@@ -1129,6 +1557,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				viewData, _ := json.Marshal(ViewData{
 					Stmt:            table.viewCfg.sql,
 					DefaultDatabase: table.viewCfg.db,
+					SecurityType:    "DEFINER",
 				})
 				tableDef.ViewSql = &plan.ViewDef{
 					View: string(viewData),
@@ -1273,7 +1702,14 @@ func (m *MockCompilerContext) SetContext(ctx context.Context) {
 }
 
 func (m *MockCompilerContext) GetProcess() *process.Process {
-	return testutil.NewProc(nil)
+	proc := testutil.NewProc(nil)
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			return executor.Result{}, nil
+		}),
+	)
+	return proc
 }
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {

@@ -17,7 +17,6 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -33,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -77,11 +75,7 @@ func TestMergeCommand(t *testing.T) {
 	vector := containers.NewVector(types.T_varchar.ToType())
 	{
 		id := objectio.NewObjectid()
-		stats := objectio.NewObjectStatsWithObjectID(&id, true, true, false)
-		vector.Append(stats.Marshal(), false)
-
-		id = objectio.NewObjectid()
-		stats = objectio.NewObjectStatsWithObjectID(&id, false, true, false)
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, true, false)
 		zm := index.NewZM(types.T_int32, 0)
 		v1 := int32(1)
 		v2 := int32(2)
@@ -155,6 +149,22 @@ func TestMergeCommand(t *testing.T) {
 	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind tombstone")
 	require.NoError(t, err)
 
+	// Test merge trigger --kind objects
+	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind objects --objects 018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "no enough objects")
+
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind objects --objects 018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0,018f27b6-c6e1-7bef-a1e8-0f639ddedeef_1")
+	require.NoError(t, err)
+
+	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind objects --objects invalid-uuid_0,018f27b6-c6e1-7bef-a1e8-0f639ddedeef_1")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "invalid uuid")
+
+	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind objects --objects 018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0,018f27b6-c6e1-7bef-a1e8-0f639ddedeef_1 --objects-level 8")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "invalid objects level")
+
 	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind xx")
 	require.NoError(t, err)
 	require.Contains(t, resp.Message, "invalid input")
@@ -213,6 +223,7 @@ func Test_storageCkpStatArg(t *testing.T) {
 	arg := new(storageCkpStatArg)
 	err := arg.FromCommand(cmd)
 	require.NoError(t, err)
+	arg.local = true // offline format must be stated explicitly (--local/--s3/--local2)
 	arg.dir = "ckp/"
 	arg.name = "xxx"
 	err = arg.Run()
@@ -277,6 +288,7 @@ func Test_storageCkpListArg(t *testing.T) {
 	arg := new(storageCkpListArg)
 	err := arg.FromCommand(cmd)
 	require.NoError(t, err)
+	arg.local = true // offline format must be stated explicitly (--local/--s3/--local2)
 	arg.dir = "ckp/"
 	arg.name = "xxx"
 	err = arg.Run()
@@ -309,6 +321,7 @@ func Test_storageCkpListArg(t *testing.T) {
 
 func Test_inspectArgs(t *testing.T) {
 	arg := new(moObjStatArg)
+	arg.s3 = true // offline format must be stated explicitly (--local/--s3/--local2)
 	err := arg.InitReader(context.Background(), "xxx")
 	require.NoError(t, err)
 
@@ -336,7 +349,6 @@ func TestApplyTableData(t *testing.T) {
 	mh.Handle = &Handle{
 		db: tae.DB,
 	}
-	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
 
 	colCount := 2
 	schema := catalog.MockSchema(colCount, -1)
@@ -393,7 +405,6 @@ func TestApplyTableDataError(t *testing.T) {
 	mh.Handle = &Handle{
 		db: tae.DB,
 	}
-	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
 
 	colCount := 2
 	schema := catalog.MockSchema(colCount, -1)
@@ -455,4 +466,96 @@ func TestApplyTableDataError(t *testing.T) {
 	resp, err = mh.runInspectCmd(applyTableCmd)
 	assert.True(t, strings.Contains(resp.Message, "table already exists"))
 	require.NoError(t, err)
+}
+
+func TestParseObjectsToMergeTasks(t *testing.T) {
+	tests := []struct {
+		name        string
+		objects     []string
+		expectError bool
+		errContains string
+		expectCount int
+	}{
+		{
+			name: "valid objects",
+			objects: []string{
+				"018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0",
+				"018f27b6-c6e1-7bef-a1e8-0f639ddedeef_1",
+			},
+			expectError: false,
+			expectCount: 2,
+		},
+		{
+			name: "valid objects with spaces",
+			objects: []string{
+				"  018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0  ",
+				"018f27b6-c6e1-7bef-a1e8-0f639ddedeef_1",
+			},
+			expectError: false,
+			expectCount: 2,
+		},
+		{
+			name: "invalid format - missing underscore",
+			objects: []string{
+				"018f27b6-c6e1-7bef-a1e8-0f639ddedeef0",
+			},
+			expectError: true,
+			errContains: "invalid object name format",
+		},
+		{
+			name: "invalid format - too many parts",
+			objects: []string{
+				"018f27b6-c6e1-7bef-a1e8-0f639ddedeef_0_extra",
+			},
+			expectError: true,
+			errContains: "invalid object name format",
+		},
+		{
+			name: "invalid uuid",
+			objects: []string{
+				"invalid-uuid_0",
+			},
+			expectError: true,
+			errContains: "invalid uuid",
+		},
+		{
+			name: "invalid num - not a number",
+			objects: []string{
+				"018f27b6-c6e1-7bef-a1e8-0f639ddedeef_abc",
+			},
+			expectError: true,
+			errContains: "invalid num",
+		},
+		{
+			name:        "empty objects",
+			objects:     []string{},
+			expectError: false,
+			expectCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arg := &mergeTriggerArg{
+				objects: tt.objects,
+			}
+
+			result, err := arg.parseObjectsToMergeTasks()
+
+			if tt.expectError {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errContains)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, result, tt.expectCount)
+
+				// Verify the object stats are correctly created
+				for i, stat := range result {
+					objName := stat.ObjectName()
+					require.NotNil(t, objName)
+					t.Logf("Object %d: %s", i, objName.String())
+				}
+			}
+		})
+	}
 }

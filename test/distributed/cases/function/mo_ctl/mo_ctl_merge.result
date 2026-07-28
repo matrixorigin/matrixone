@@ -243,3 +243,7 @@ rows_cnt
 select mo_ctl('dn', 'inspect', 'merge switch on');
 mo_ctl(dn, inspect, merge switch on)
 \nmsg: merge is enabled for table (*)\n\nauto merge is enabled
+begin;
+select mo_ctl('cn', 'mergeobjects', 't:mo_ctl_merge.p_table_01');
+internal error: cannot execute MERGEOBJECTS within an explicit transaction
+commit ;

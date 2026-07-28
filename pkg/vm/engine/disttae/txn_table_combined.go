@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -94,6 +95,31 @@ func (t *combinedTxnTable) BuildReaders(
 	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
 	var readers []engine.Reader
+	if relData == nil {
+		tables, err := t.tablesFunc()
+		if err != nil {
+			return nil, err
+		}
+		for _, rel := range tables {
+			r, err := rel.BuildReaders(
+				ctx,
+				proc,
+				expr,
+				nil,
+				num,
+				txnOffset,
+				orderBy,
+				policy,
+				filterHint,
+			)
+			if err != nil {
+				return nil, err
+			}
+			readers = append(readers, r...)
+		}
+		return readers, nil
+	}
+
 	r := relData.(*CombinedRelData)
 	for idx, data := range r.tables {
 		rel := r.relations[idx]
@@ -218,11 +244,55 @@ func (t *combinedTxnTable) CollectTombstones(
 	return tombstone, nil
 }
 
+func (t *combinedTxnTable) StarCount(ctx context.Context) (uint64, error) {
+	tables, err := t.tablesFunc()
+	if err != nil {
+		return 0, err
+	}
+
+	var total uint64
+	for _, rel := range tables {
+		count, err := rel.StarCount(ctx)
+		if err != nil {
+			return 0, err
+		}
+		total += count
+	}
+	return total, nil
+}
+
+func (t *combinedTxnTable) EstimateCommittedTombstoneCount(ctx context.Context) (int, error) {
+	tables, err := t.tablesFunc()
+	if err != nil {
+		return 0, err
+	}
+
+	var total int
+	for _, rel := range tables {
+		count, err := rel.EstimateCommittedTombstoneCount(ctx)
+		if err != nil {
+			return 0, err
+		}
+		total += count
+	}
+	return total, nil
+}
+
 func (t *combinedTxnTable) CollectChanges(
 	ctx context.Context,
 	from, to types.TS,
+	_ bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
+	panic("not implemented")
+}
+
+func (t *combinedTxnTable) CollectObjectList(
+	ctx context.Context,
+	from, to types.TS,
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) error {
 	panic("not implemented")
 }
 
@@ -398,11 +468,39 @@ func (t *combinedTxnTable) PrimaryKeysMayBeUpserted(
 	bat *batch.Batch,
 	pkIndex int32,
 ) (bool, error) {
-	panic("BUG: cannot upsert primary keys in partition primary table")
+	relations, err := t.prunePKFunc(bat, -1)
+	if err != nil {
+		return false, err
+	}
+
+	changed := false
+	for _, rel := range relations {
+		v, e := rel.PrimaryKeysMayBeUpserted(
+			ctx,
+			from,
+			to,
+			bat,
+			pkIndex,
+		)
+		if e != nil {
+			return false, e
+		}
+		if v {
+			changed = true
+			break
+		}
+	}
+	return changed, err
 }
 
 func (t *combinedTxnTable) Reset(op client.TxnOperator) error {
-	return t.primary.Reset(op)
+	return moerr.NewInternalErrorNoCtx("cannot reset a shared combined relation")
+}
+
+func (t *combinedTxnTable) GetFlushTS(
+	ctx context.Context,
+) (types.TS, error) {
+	return t.primary.GetFlushTS(ctx)
 }
 
 func (t *combinedTxnTable) GetExtraInfo() *api.SchemaExtra {
@@ -485,22 +583,6 @@ func (r *CombinedRelData) GetTombstones() engine.Tombstoner {
 }
 
 func (r *CombinedRelData) DataSlice(begin, end int) engine.RelData {
-	panic("not implemented")
-}
-
-func (r *CombinedRelData) GetShardIDList() []uint64 {
-	panic("not implemented")
-}
-
-func (r *CombinedRelData) GetShardID(i int) uint64 {
-	panic("not implemented")
-}
-
-func (r *CombinedRelData) SetShardID(i int, id uint64) {
-	panic("not implemented")
-}
-
-func (r *CombinedRelData) AppendShardID(id uint64) {
 	panic("not implemented")
 }
 

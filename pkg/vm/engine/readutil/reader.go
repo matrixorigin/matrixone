@@ -22,13 +22,12 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -37,12 +36,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -50,6 +50,14 @@ import (
 // -----------------------------------------------------------------
 
 func (mixin *withFilterMixin) reset() {
+	// Cleanup reusableTempVec and other resources before resetting filter
+	if mixin.filterState.filter.Cleanup != nil {
+		mixin.filterState.filter.Cleanup()
+	}
+	if mixin.filterHint.BF != nil {
+		mixin.filterHint.BF.Free()
+		mixin.filterHint.BF = nil
+	}
 	mixin.filterState.filter = objectio.BlockReadFilter{}
 	mixin.filterState.memFilter = MemPKFilter{}
 	mixin.columns.indexOfFirstSortedColumn = -1
@@ -93,9 +101,10 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 
 	// record the column selectivity
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
-	v2.TaskSelColumnTotal.Add(float64(ctotal))
+	// record per-read column counts for histogram metrics
 	if ctotal >= chit {
-		v2.TaskSelColumnHit.Add(float64(ctotal - chit))
+		v2.TxnColumnReadCountHistogram.Observe(float64(chit))
+		v2.TxnColumnTotalCountHistogram.Observe(float64(ctotal))
 	}
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
@@ -118,6 +127,9 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 			mixin.columns.phyAddrPos = i
+		} else if strings.EqualFold(column, objectio.DefaultCommitTS_Attr) {
+			mixin.columns.seqnums[i] = objectio.SEQNUM_COMMITTS
+			mixin.columns.colTypes[i] = types.T_TS.ToType()
 		} else {
 			if plan2.GetSortOrderByName(mixin.tableDef, column) == 0 {
 				mixin.columns.indexOfFirstSortedColumn = i
@@ -137,12 +149,66 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	}
 
 	if pkPos != -1 {
-		// here we will select the primary key column from the vectors, and
-		// use the search function to find the offset of the primary key.
-		// it returns the offset of the primary key in the pk vector.
-		// if the primary key is not found, it returns empty slice
-		mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
-		mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
+		// For composite primary key, optimize BloomFilter filtering by using __mo_index_pri_col directly
+		// if all conditions are met (IVF entries table, has BF, last PK col is __mo_index_pri_col, query includes it).
+		if mixin.tableDef.Pkey != nil && len(mixin.tableDef.Pkey.Names) > 1 {
+			// Composite primary key: check optimization conditions.
+			lastPKColName := strings.ToLower(mixin.tableDef.Pkey.Names[len(mixin.tableDef.Pkey.Names)-1])
+
+			// Check all conditions for optimization (must all be satisfied):
+			// 1. Table type is IVF entries table.
+			isIVFEntriesTable := mixin.tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries
+			// 2. Has bloom filter.
+			hasBF := mixin.filterState.hasBF
+			// 3. Last PK column is __mo_index_pri_col.
+			isLastColPriCol := lastPKColName == strings.ToLower(catalog.IndexTablePrimaryColName)
+			// 4. Query includes __mo_index_pri_col.
+			lastPKColPos := -1
+			for i, col := range cols {
+				if strings.ToLower(col) == lastPKColName {
+					lastPKColPos = i
+					break
+				}
+			}
+
+			if isIVFEntriesTable && hasBF && isLastColPriCol && lastPKColPos != -1 {
+				// All conditions met: use both PK column and __mo_index_pri_col for filtering.
+				// cacheVectors[0] will be used for PK filtering.
+				// cacheVectors[1] will be used for BF filtering (directly, no unpacking needed).
+				mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos], mixin.columns.seqnums[lastPKColPos]}
+				mixin.filterState.colTypes = []types.Type{mixin.columns.colTypes[pkPos], mixin.columns.colTypes[lastPKColPos]}
+			} else {
+				// Conditions not met: use composite PK column only.
+				mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
+				mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
+			}
+		} else {
+			// Single primary key or non-composite: use the primary key column directly.
+			mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[pkPos]}
+			mixin.filterState.colTypes = mixin.columns.colTypes[pkPos : pkPos+1]
+		}
+	}
+
+	// For fulltext index table with BloomFilter, use doc_id column for BF filtering.
+	// The fulltext index table's PK is __mo_fake_pk_col (auto-increment), but the BF
+	// contains source table PK values which correspond to the doc_id column.
+	// Internal SQL queries only select doc_id/pos/word columns (not __mo_fake_pk_col),
+	// so this must be handled independently of pkPos.
+	if mixin.filterState.hasBF &&
+		catalog.IsFullTextIndexTableType(mixin.tableDef.TableType, mixin.tableDef.Name) {
+		docIdColName := strings.ToLower(catalog.FullTextIndex_TabCol_Id)
+		docIdPos := -1
+		for i, col := range cols {
+			if strings.ToLower(col) == docIdColName {
+				docIdPos = i
+				break
+			}
+		}
+		if docIdPos != -1 {
+			// Use doc_id as the only filter column for BF search.
+			mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[docIdPos]}
+			mixin.filterState.colTypes = []types.Type{mixin.columns.colTypes[docIdPos]}
+		}
 	}
 
 	if mixin.tableDef.Pkey != nil {
@@ -164,6 +230,9 @@ func (r *EmptyReader) GetOrderBy() []*plan.OrderBySpec {
 }
 
 func (r *EmptyReader) SetOrderBy([]*plan.OrderBySpec) {
+}
+
+func (r *EmptyReader) SetIndexParam(param *plan.IndexReaderParam) {
 }
 
 func (r *EmptyReader) Close() error {
@@ -229,7 +298,11 @@ type withFilterMixin struct {
 		seqnums   []uint16 // seqnums of the columns in the filter
 		pkSeqNum  int32
 		colTypes  []types.Type
+		hasBF     bool // whether bloom filter is available
 	}
+
+	orderByLimit *objectio.IndexReaderTopOp
+	filterHint   engine.FilterHint
 }
 
 type reader struct {
@@ -278,6 +351,12 @@ func (r *mergeReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	}
 }
 
+func (r *mergeReader) SetIndexParam(param *plan.IndexReaderParam) {
+	for i := range r.rds {
+		r.rds[i].SetIndexParam(param)
+	}
+}
+
 func (r *mergeReader) Close() error {
 	return nil
 }
@@ -309,7 +388,7 @@ func (r *mergeReader) Read(
 			r.rds = r.rds[1:]
 		} else {
 			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-				logutil.Debug(testutil.OperatorCatchBatch("merge reader", outBatch))
+				logutil.Debug("merge reader catch batch")
 			}
 			return false, nil
 		}
@@ -349,12 +428,14 @@ func NewReader(
 		filterHint,
 	)
 	if err != nil {
+		baseFilter.Cleanup()
 		return nil, err
 	}
 
 	blockFilter, err := ConstructBlockPKFilter(
 		catalog.IsFakePkName(tableDef.Pkey.PkeyColName),
 		baseFilter,
+		filterHint.BF,
 	)
 	if err != nil {
 		return nil, err
@@ -362,10 +443,11 @@ func NewReader(
 
 	r := &reader{
 		withFilterMixin: withFilterMixin{
-			fs:       fs,
-			ts:       ts,
-			tableDef: tableDef,
-			name:     tableDef.Name,
+			fs:         fs,
+			ts:         ts,
+			tableDef:   tableDef,
+			name:       tableDef.Name,
+			filterHint: filterHint,
 		},
 		source: source,
 	}
@@ -373,6 +455,7 @@ func NewReader(
 	r.filterState.expr = expr
 	r.filterState.filter = blockFilter
 	r.filterState.memFilter = memFilter
+	r.filterState.hasBF = filterHint.BF != nil && filterHint.BF.Valid()
 	r.threshHold = threshHold
 	return r, nil
 }
@@ -389,6 +472,121 @@ func (r *reader) Close() error {
 
 func (r *reader) SetOrderBy(orderby []*plan.OrderBySpec) {
 	r.source.SetOrderBy(orderby)
+}
+
+func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
+	r.orderByLimit = nil
+	if param == nil || len(param.OrderBy) == 0 || param.OrderBy[0] == nil ||
+		param.OrderBy[0].Expr == nil || param.Limit == nil {
+		return
+	}
+	limitLiteral := param.Limit.GetLit()
+	if limitLiteral == nil || limitLiteral.Isnull {
+		return
+	}
+	limitValue, ok := limitLiteral.Value.(*plan.Literal_U64Val)
+	if !ok || limitValue.U64Val == 0 || limitValue.U64Val > uint64(^uint(0)>>1) {
+		return
+	}
+
+	if col := param.OrderBy[0].Expr.GetCol(); col != nil {
+		r.orderByLimit = &objectio.IndexReaderTopOp{
+			Typ:          types.T(param.OrderBy[0].Expr.Typ.Id),
+			ColPos:       col.ColPos,
+			Limit:        limitValue.U64Val,
+			OrderedLimit: true,
+			Desc:         param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0,
+		}
+		return
+	}
+
+	orderFunc := param.OrderBy[0].Expr.GetF()
+	if orderFunc == nil || len(orderFunc.Args) != 2 {
+		return
+	}
+
+	col := orderFunc.Args[0].GetCol()
+	if col == nil {
+		return
+	}
+
+	vecLiteral := orderFunc.Args[1].GetLit()
+	if vecLiteral == nil {
+		return
+	}
+	numVec := vecLiteral.GetVecVal()
+	if len(numVec) == 0 {
+		return
+	}
+
+	metricType, ok := metric.DistFuncNameToMetricType[orderFunc.GetFunc().GetObjName()]
+	if !ok {
+		return
+	}
+
+	indexTop := &objectio.IndexReaderTopOp{
+		Typ:          types.T(orderFunc.Args[0].Typ.Id),
+		MetricType:   metricType,
+		ColPos:       col.ColPos,
+		NumVec:       []byte(numVec),
+		Limit:        limitValue.U64Val,
+		OrderedLimit: false,
+		Desc:         param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0,
+	}
+
+	if param.DistRange != nil {
+		indexTop.LowerBoundType = param.DistRange.LowerBoundType
+		indexTop.UpperBoundType = param.DistRange.UpperBoundType
+		if !validBoundType(indexTop.LowerBoundType) || !validBoundType(indexTop.UpperBoundType) {
+			return
+		}
+		if indexTop.LowerBoundType != plan.BoundType_UNBOUNDED {
+			var valid bool
+			indexTop.LowerBound, valid = getLiteralFloat64(param.DistRange.LowerBound)
+			if !valid {
+				return
+			}
+		}
+		if indexTop.UpperBoundType != plan.BoundType_UNBOUNDED {
+			var valid bool
+			indexTop.UpperBound, valid = getLiteralFloat64(param.DistRange.UpperBound)
+			if !valid {
+				return
+			}
+		}
+
+		if param.OrigFuncName == metric.DistFn_L2Distance {
+			if indexTop.LowerBoundType != plan.BoundType_UNBOUNDED {
+				if indexTop.LowerBound < 0 {
+					// L2 distance is non-negative, so a negative lower bound
+					// cannot exclude any row.
+					indexTop.LowerBoundType = plan.BoundType_UNBOUNDED
+					indexTop.LowerBound = 0
+				} else {
+					indexTop.LowerBound *= indexTop.LowerBound
+				}
+			}
+			if indexTop.UpperBoundType != plan.BoundType_UNBOUNDED && indexTop.UpperBound >= 0 {
+				indexTop.UpperBound *= indexTop.UpperBound
+			}
+		}
+	}
+
+	// Avoid eager O(limit) allocation; blockio grows the heap as rows are accepted.
+	indexTop.DistHeap = nil
+	r.orderByLimit = indexTop
+}
+
+func validBoundType(boundType plan.BoundType) bool {
+	return boundType == plan.BoundType_UNBOUNDED ||
+		boundType == plan.BoundType_INCLUSIVE ||
+		boundType == plan.BoundType_EXCLUSIVE
+}
+
+// getLiteralFloat64 delegates to plan.GetLiteralFloat64 (the single owner of the
+// literal->float64 decode) so plan-time and runtime bound handling can't drift.
+func getLiteralFloat64(expr *plan.Expr) (float64, bool) {
+	return plan.GetLiteralFloat64(expr)
 }
 
 func (r *reader) GetOrderBy() []*plan.OrderBySpec {
@@ -482,6 +680,35 @@ func (r *reader) Read(
 
 	r.tryUpdateColumns(cols)
 
+	// source.Next() expects outBatch.Vecs to be aligned with cols/seqnums.
+	// For vector TopN pushdown we may have an extra distVec appended in the previous
+	// Read(), so detach it before source.Next() to avoid seqNums out-of-range panic in
+	// InMem paths. We keep one float64 distVec for reuse to avoid repeated allocations.
+	var detachedDistVec *vector.Vector
+	if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit && len(outBatch.Vecs) > len(cols) {
+		if candidate := outBatch.Vecs[len(cols)]; candidate != nil &&
+			candidate.GetType().Oid == types.T_float64 {
+			candidate.CleanOnlyData()
+			detachedDistVec = candidate
+		}
+		for i := len(cols); i < len(outBatch.Vecs); i++ {
+			vec := outBatch.Vecs[i]
+			if vec != nil && vec != detachedDistVec {
+				vec.Free(mp)
+			}
+			// Clear references in the backing array so detached vectors can be reused/freed
+			// explicitly instead of being retained implicitly by slice capacity.
+			outBatch.Vecs[i] = nil
+		}
+		outBatch.Vecs = outBatch.Vecs[:len(cols)]
+	}
+	// If Read() exits early (error/end) before re-attaching the detached distVec, release it.
+	defer func() {
+		if detachedDistVec != nil {
+			detachedDistVec.Free(mp)
+		}
+	}()
+
 	blkInfo, state, err := r.source.Next(
 		ctx,
 		cols,
@@ -501,6 +728,33 @@ func (r *reader) Read(
 		return true, nil
 	}
 	if state == engine.InMem {
+		if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit {
+			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndex(ctx, nil, outBatch.Vecs[r.orderByLimit.ColPos], r.orderByLimit)
+			if err != nil {
+				return false, err
+			}
+
+			// Keep batch cardinality consistent with pushed-down vector TopN result.
+			// When sels is empty, batch.Shuffle is a no-op, so we must clear outBatch
+			// explicitly; otherwise rowCount can stay > 0 while distVec is empty.
+			if len(sels) == 0 {
+				outBatch.CleanOnlyData()
+			} else if err := outBatch.Shuffle(sels, mp); err != nil {
+				return false, err
+			}
+
+			// Reuse the detached distVec when possible to avoid per-batch allocation.
+			distVec := detachedDistVec
+			if distVec == nil {
+				distVec = vector.NewVec(types.T_float64.ToType())
+			}
+			detachedDistVec = nil
+			if err := vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
+				return false, err
+			}
+			outBatch.Vecs = append(outBatch.Vecs, distVec)
+		}
+
 		return false, nil
 	}
 	//read block
@@ -523,6 +777,11 @@ func (r *reader) Read(
 	if len(r.cacheVectors) == 0 {
 		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
 	}
+	if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit && detachedDistVec != nil {
+		// Re-attach the detached distVec so BlockDataRead can take its fast reuse branch.
+		outBatch.Vecs = append(outBatch.Vecs, detachedDistVec)
+		detachedDistVec = nil
+	}
 
 	err = blockio.BlockDataRead(
 		statsCtx,
@@ -535,6 +794,7 @@ func (r *reader) Read(
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
+		r.orderByLimit,
 		policy,
 		r.name,
 		outBatch,

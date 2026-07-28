@@ -73,3 +73,19 @@ func TestTestClient(t *testing.T) {
 	client4 := NewStandbyClientWithRetry(ctx, "", ccfg)
 	assert.Nil(t, client4)
 }
+
+func TestNewTestServicesUseIndependentPorts(t *testing.T) {
+	service1, ccfg1, err := NewTestService(vfs.NewStrictMem())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, service1.Close())
+	})
+
+	service2, ccfg2, err := NewTestService(vfs.NewStrictMem())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, service2.Close())
+	})
+
+	require.NotEqual(t, ccfg1.ServiceAddresses, ccfg2.ServiceAddresses)
+}

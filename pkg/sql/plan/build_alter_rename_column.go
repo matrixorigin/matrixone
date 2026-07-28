@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -86,6 +87,11 @@ func updateRenameColumnInTableDef(
 		return nil, nil
 	}
 
+	// Renaming a referenced column would leave dependent generated expressions stale.
+	if err := checkColumnWithGeneratedDependency(ctx.GetContext(), tableDef, oldColName); err != nil {
+		return nil, err
+	}
+
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	if err := checkColumnNameValid(ctx.GetContext(), newColName); err != nil {
 		return nil, err
@@ -116,11 +122,17 @@ func updateRenameColumnInTableDef(
 	if indexAffected {
 		sqls = append(sqls, fmt.Sprintf(
 			indexFmt,
-			newColNameOrigin,
+			sqlquote.EscapeString(newColNameOrigin),
 			tableDef.TblId,
-			oldColNameOrigin,
+			sqlquote.EscapeString(oldColNameOrigin),
 		))
 	}
+
+	pluginAlterSQLs, err := handleAlterRenameColumnWithPluginHooks(tableDef, oldColName, newColName)
+	if err != nil {
+		return nil, err
+	}
+	sqls = append(sqls, pluginAlterSQLs...)
 
 	// update primary key
 	primaryKeyDef := tableDef.Pkey
@@ -139,9 +151,9 @@ func updateRenameColumnInTableDef(
 	if primaryKeyAffected {
 		sqls = append(sqls, fmt.Sprintf(
 			indexFmt,
-			catalog.CreateAlias(newColName),
+			sqlquote.EscapeString(catalog.CreateAlias(newColName)),
 			tableDef.TblId,
-			catalog.CreateAlias(oldColName),
+			sqlquote.EscapeString(catalog.CreateAlias(oldColName)),
 		))
 	}
 
@@ -204,7 +216,13 @@ func addRenameContextToAlterCtx(
 
 // AlterColumn ALTER ... SET DEFAULT or ALTER ... DROP DEFAULT specify a new default value for a column or remove the old default value, respectively.
 // If the old default is removed and the column can be NULL, the new default is NULL. If the column cannot be NULL, MySQL assigns a default value
-func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.AlterTableAlterColumnClause, alterCtx *AlterTableContext) error {
+func AlterColumn(
+	ctx CompilerContext,
+	alterPlan *plan.AlterTable,
+	spec *tree.AlterTableAlterColumnClause,
+	alterCtx *AlterTableContext,
+) (bool, error) {
+
 	tableDef := alterPlan.CopyTableDef
 
 	// get the original column name
@@ -213,7 +231,7 @@ func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alt
 	// Check whether original column has existed.
 	originalCol := FindColumn(tableDef.Cols, originalColName)
 	if originalCol == nil || originalCol.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), spec.ColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
+		return false, moerr.NewBadFieldError(ctx.GetContext(), spec.ColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
 	}
 
 	for i, col := range tableDef.Cols {
@@ -226,7 +244,7 @@ func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alt
 				}()
 				defaultValue, err := buildDefaultExpr(tmpColumnDef, colDef.Typ, ctx.GetProcess())
 				if err != nil {
-					return err
+					return false, err
 				}
 				defaultValue.NullAbility = colDef.Default.NullAbility
 				colDef.Default = defaultValue
@@ -238,7 +256,7 @@ func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alt
 			break
 		}
 	}
-	return nil
+	return originalCol.Primary, nil
 }
 
 // OrderByColumn Currently, Mo only performs semantic checks on alter table order by

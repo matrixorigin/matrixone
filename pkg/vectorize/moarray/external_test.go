@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func TestAdd(t *testing.T) {
@@ -45,6 +46,11 @@ func TestAdd(t *testing.T) {
 			name:    "Test2 - float64",
 			args:    args{leftArgF64: []float64{1, 2, 3}, rightArgF64: []float64{2, 3, 4}},
 			wantF64: []float64{3, 5, 7},
+		},
+		{
+			name:    "Test3 - float64",
+			args:    args{leftArgF64: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, rightArgF64: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
+			wantF64: []float64{3, 5, 7, 9, 11, 13, 15, 17, 19, 21},
 		},
 	}
 	for _, tt := range tests {
@@ -88,6 +94,11 @@ func TestSubtract(t *testing.T) {
 			name:    "Test2 - float64",
 			args:    args{leftArgF64: []float64{1, 4, 3}, rightArgF64: []float64{1, 3, 4}},
 			wantF64: []float64{0, 1, -1},
+		},
+		{
+			name:    "Test3 - float64",
+			args:    args{leftArgF64: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, rightArgF64: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
+			wantF64: []float64{-1, -1, -1, -1, -1, -1, -1, -1, -1, -1},
 		},
 	}
 	for _, tt := range tests {
@@ -136,6 +147,11 @@ func TestMultiply(t *testing.T) {
 			name:    "Test3 - float64",
 			args:    args{leftArgF64: []float64{0.66616553}, rightArgF64: []float64{0.66616553}},
 			wantF64: []float64{0.4437765133601809},
+		},
+		{
+			name:    "Test4 - float64",
+			args:    args{leftArgF64: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, rightArgF64: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
+			wantF64: []float64{2, 6, 12, 20, 30, 42, 56, 72, 90, 110},
 		},
 	}
 	for _, tt := range tests {
@@ -195,6 +211,11 @@ func TestDivide(t *testing.T) {
 			name:    "Test5 - float64 - dimension mismatch",
 			args:    args{leftArgF64: []float64{1, 4}, rightArgF64: []float64{1, 1, 4}},
 			wantErr: true,
+		},
+		{
+			name:    "Test6 - float64",
+			args:    args{leftArgF64: []float64{20, 30, 40, 50, 60, 70, 80, 90, 100, 110}, rightArgF64: []float64{2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
+			wantF64: []float64{10, 10, 10, 10, 10, 10, 10, 10, 10, 10},
 		},
 	}
 	for _, tt := range tests {
@@ -272,7 +293,7 @@ func TestCompare(t *testing.T) {
 			want: -1,
 		},
 		{
-			name: "Test7 - float64 difference dims",
+			name: "Test8 - float64 difference dims",
 			args: args{leftArgF64: []float64{3, 2, 3}, rightArgF64: []float64{3, 2}},
 			want: 1,
 		},
@@ -281,12 +302,12 @@ func TestCompare(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.rightArgF32 != nil {
-				if gotRes := Compare[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes := types.ArrayCompare[float32](tt.args.leftArgF32, tt.args.rightArgF32); !reflect.DeepEqual(gotRes, tt.want) {
 					t.Errorf("CompareArray() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes := Compare[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes := types.ArrayCompare[float64](tt.args.leftArgF64, tt.args.rightArgF64); !reflect.DeepEqual(gotRes, tt.want) {
 					t.Errorf("CompareArray() = %v, want %v", gotRes, tt.want)
 				}
 			}

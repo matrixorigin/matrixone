@@ -17,51 +17,82 @@ package aggexec
 import (
 	"bytes"
 	io "io"
-	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// vectorAppendWildly is a more efficient version of vector.AppendFixed.
-// It ignores the const and null flags check, and uses a wilder way to append (avoiding the overhead of appending one by one).
-func vectorAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v *vector.Vector, mp *mpool.MPool, value T) error {
-	oldLen := v.Length()
-	if oldLen == v.Capacity() {
-		if err := v.PreExtend(10, mp); err != nil {
-			return err
-		}
+// MergeSplitResult turns the physical chunks returned by AggFuncExec.Flush
+// into one logical result vector. It consumes every input vector on all paths:
+// on success the caller owns only the returned vector, and on failure all input
+// vectors have been freed.
+//
+// The common single-chunk path is zero-copy. For multiple chunks, the first
+// vector is reused and grown once before the remaining chunks are appended in
+// order. UnionBatch's full-vector path preserves nulls and copies varlen areas
+// in bulk.
+func MergeSplitResult(vecs []*vector.Vector, mp *mpool.MPool) (*vector.Vector, error) {
+	if len(vecs) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("aggregate returned no result vectors")
 	}
-	v.SetLength(oldLen + 1)
 
-	var vs []T
-	vector.ToSlice(v, &vs)
-	vs[oldLen] = value
-	return nil
+	result := vecs[0]
+	if len(vecs) == 1 {
+		if result == nil {
+			return nil, moerr.NewInternalErrorNoCtx("aggregate returned a nil result vector")
+		}
+		return result, nil
+	}
+	if result == nil {
+		freeAggResultVectors(vecs, mp)
+		return nil, moerr.NewInternalErrorNoCtx("aggregate returned a nil result vector")
+	}
+
+	additionalRows, additionalArea := 0, 0
+	resultType := *result.GetType()
+	for i := 1; i < len(vecs); i++ {
+		if vecs[i] == nil {
+			freeAggResultVectors(vecs, mp)
+			return nil, moerr.NewInternalErrorNoCtxf("aggregate returned a nil result vector at chunk %d", i)
+		}
+		if !resultType.Eq(*vecs[i].GetType()) {
+			err := moerr.NewInternalErrorNoCtxf(
+				"aggregate returned inconsistent result types %s and %s",
+				resultType.String(), vecs[i].GetType().String())
+			freeAggResultVectors(vecs, mp)
+			return nil, err
+		}
+		additionalRows += vecs[i].Length()
+		additionalArea += len(vecs[i].GetArea())
+	}
+
+	if err := result.PreExtendWithArea(additionalRows, additionalArea, mp); err != nil {
+		freeAggResultVectors(vecs, mp)
+		return nil, err
+	}
+	for i := 1; i < len(vecs); i++ {
+		source := vecs[i]
+		if err := result.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			result.Free(mp)
+			for j := i; j < len(vecs); j++ {
+				vecs[j].Free(mp)
+			}
+			return nil, err
+		}
+		source.Free(mp)
+	}
+	return result, nil
 }
 
-/*
-func vectorAppendBytesWildly(v *vector.Vector, mp *mpool.MPool, value []byte) error {
-	var va types.Varlena
-	if err := vector.BuildVarlenaFromByteSlice(v, &va, &value, mp); err != nil {
-		return err
-	}
-
-	oldLen := v.Length()
-	if oldLen == v.Capacity() {
-		if err := v.PreExtend(10, mp); err != nil {
-			return err
+func freeAggResultVectors(vecs []*vector.Vector, mp *mpool.MPool) {
+	for _, vec := range vecs {
+		if vec != nil {
+			vec.Free(mp)
 		}
 	}
-	v.SetLength(oldLen + 1)
-
-	var vs []types.Varlena
-	vector.ToSliceNoTypeCheck(v, &vs)
-	vs[oldLen] = va
-	return nil
 }
-*/
 
 // vectorUnmarshal is instead of vector.UnmarshalBinary.
 // it will check if mp is nil first.
@@ -90,29 +121,6 @@ func modifyChunkSizeOfAggregator(a AggFuncExec, n int) {
 	}
 }
 
-func getChunkSizeOfAggregator(a AggFuncExec) int {
-	r := a.GetOptResult()
-	if r != nil {
-		return r.getChunkSize()
-	}
-	return math.MaxInt64
-}
-
-func GetMinAggregatorsChunkSize(outer []*vector.Vector, as []AggFuncExec) (minLimit int) {
-	minLimit = math.MaxInt64
-	for _, o := range outer {
-		if s := GetChunkSizeFromType(*o.GetType()); s < minLimit {
-			minLimit = s
-		}
-	}
-	for _, a := range as {
-		if s := getChunkSizeOfAggregator(a); s < minLimit {
-			minLimit = s
-		}
-	}
-	return minLimit
-}
-
 func SyncAggregatorsToChunkSize(as []AggFuncExec, syncLimit int) {
 	for _, a := range as {
 		modifyChunkSizeOfAggregator(a, syncLimit)
@@ -128,12 +136,8 @@ const (
 )
 
 func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type) *Vectors[T] {
-	vec := vector.NewVec(typ)
+	vec := vector.NewOffHeapVecWithType(typ)
 	return &Vectors[T]{vecs: []*vector.Vector{vec}}
-}
-
-func NewEmptyVectors[T numeric | types.Decimal64 | types.Decimal128]() *Vectors[T] {
-	return &Vectors[T]{vecs: make([]*vector.Vector, 0)}
 }
 
 func (vs *Vectors[T]) MarshalBinary() ([]byte, error) {
@@ -167,8 +171,31 @@ func (vs *Vectors[T]) Unmarshal(data []byte, typ types.Type, mp *mpool.MPool) er
 		if buf, _, err = ReadBytes(bbuf); err != nil {
 			return err
 		}
-		vec := vector.NewVec(typ)
+		vec := vector.NewOffHeapVecWithType(typ)
 		if err := vectorUnmarshal(vec, buf, mp); err != nil {
+			return err
+		}
+		vs.vecs = append(vs.vecs, vec)
+	}
+	return nil
+}
+
+func (vs *Vectors[T]) UnmarshalFromReader(r io.Reader, typ types.Type, mp *mpool.MPool) error {
+	length := int64(0)
+	if _, err := io.ReadFull(r, types.EncodeInt64(&length)); err != nil {
+		return err
+	}
+	for i := int64(0); i < length; i++ {
+		sz, err := types.ReadUint32(r)
+		if err != nil {
+			return err
+		}
+		lr := io.LimitReader(r, int64(sz))
+		vec := vector.NewOffHeapVecWithType(typ)
+		if err := vec.UnmarshalWithReader(lr, mp); err != nil {
+			return err
+		}
+		if _, err := io.Copy(io.Discard, lr); err != nil {
 			return err
 		}
 		vs.vecs = append(vs.vecs, vec)
@@ -187,7 +214,7 @@ func (vs *Vectors[T]) Length() int {
 func (vs *Vectors[T]) getAppendableVector() *vector.Vector {
 	vec := vs.vecs[len(vs.vecs)-1]
 	if vec.Length() >= MaxVectorLength {
-		vec = vector.NewVec(*vec.GetType())
+		vec = vector.NewOffHeapVecWithType(*vec.GetType())
 		vs.vecs = append(vs.vecs, vec)
 	}
 	return vec
@@ -236,181 +263,6 @@ func (vs *Vectors[T]) Size() int64 {
 	// 8 is the size of a pointer.
 	size += int64(cap(vs.vecs)) * 8
 	return size
-}
-
-func MedianDecimal64[T numeric | types.Decimal64 | types.Decimal128](vs *Vectors[T]) (types.Decimal128, error) {
-	vals := make([]types.Decimal64, 0)
-	for _, vec := range vs.vecs {
-		vals = append(vals, vector.MustFixedColWithTypeCheck[types.Decimal64](vec)...)
-	}
-	lessFnFactory := func(nums []types.Decimal64) func(a, b int) bool {
-		return func(i, j int) bool {
-			return nums[i].Compare(nums[j]) < 0
-		}
-	}
-	rows := len(vals)
-	if rows&1 == 1 {
-		val := quickSelect(
-			vals,
-			lessFnFactory,
-			rows>>1,
-		)
-		return FromD64ToD128(val).Scale(1)
-	} else {
-		decimal1 := quickSelect(
-			vals,
-			lessFnFactory,
-			rows>>1-1,
-		)
-		decimal2 := quickSelect(
-			vals,
-			lessFnFactory,
-			rows>>1,
-		)
-
-		v1, v2 := FromD64ToD128(decimal1), FromD64ToD128(decimal2)
-		var ret types.Decimal128
-		var err error
-		if ret, err = v1.Add128(v2); err != nil {
-			return types.Decimal128{}, err
-		}
-		if ret.Sign() {
-			// scale(1) here because we set the result scale to be arg.Scale+1
-			if ret, err = ret.Minus().Scale(1); err != nil {
-				return types.Decimal128{}, err
-			}
-			ret = ret.Right(1).Minus()
-		} else {
-			if ret, err = ret.Scale(1); err != nil {
-				return types.Decimal128{}, err
-			}
-			ret = ret.Right(1)
-		}
-		return ret, nil
-	}
-}
-
-func MedianDecimal128[T numeric | types.Decimal64 | types.Decimal128](vs *Vectors[T]) (types.Decimal128, error) {
-	vals := make([]types.Decimal128, 0)
-	for _, vec := range vs.vecs {
-		vals = append(vals, vector.MustFixedColWithTypeCheck[types.Decimal128](vec)...)
-	}
-
-	lessFnFactory := func(nums []types.Decimal128) func(a, b int) bool {
-		return func(i, j int) bool {
-			return nums[i].Compare(nums[j]) < 0
-		}
-	}
-	rows := len(vals)
-	if rows&1 == 1 {
-		ret := quickSelect(
-			vals,
-			lessFnFactory,
-			rows>>1,
-		)
-		var err error
-		if ret, err = ret.Scale(1); err != nil {
-			return types.Decimal128{}, err
-		}
-		return ret, nil
-	} else {
-		v1 := quickSelect(
-			vals,
-			lessFnFactory,
-			rows>>1-1,
-		)
-		v2 := quickSelect(
-			vals,
-			lessFnFactory,
-			rows>>1,
-		)
-		var ret types.Decimal128
-		var err error
-		if ret, err = v1.Add128(v2); err != nil {
-			return types.Decimal128{}, err
-		}
-		if ret.Sign() {
-			// scale(1) here because we set the result scale to be arg.Scale+1
-			if ret, err = ret.Minus().Scale(1); err != nil {
-				return types.Decimal128{}, err
-			}
-			ret = ret.Right(1).Minus()
-		} else {
-			if ret, err = ret.Scale(1); err != nil {
-				return types.Decimal128{}, err
-			}
-			ret = ret.Right(1)
-		}
-		return ret, nil
-	}
-}
-
-func MedianNumeric[T numeric](vs *Vectors[T]) (float64, error) {
-	vals := make([]T, 0)
-	for _, vec := range vs.vecs {
-		vals = append(vals, vector.MustFixedColWithTypeCheck[T](vec)...)
-	}
-	lessFnFactory := func(nums []T) func(a, b int) bool {
-		return func(i, j int) bool {
-			return nums[i] < nums[j]
-		}
-	}
-	rows := len(vals)
-	if rows&1 == 1 {
-		return float64(quickSelect(
-			vals,
-			lessFnFactory,
-			rows>>1,
-		)), nil
-	} else {
-		v1 := quickSelect(
-			vals,
-			lessFnFactory,
-			rows>>1-1,
-		)
-		v2 := quickSelect(
-			vals,
-			lessFnFactory,
-			rows>>1,
-		)
-		return float64(v1+v2) / 2, nil
-	}
-}
-
-func quickSelect[T numeric | types.Decimal64 | types.Decimal128](nums []T, lessFnFactory func([]T) func(a, b int) bool, k int) T {
-	if len(nums) == 1 {
-		return nums[0]
-	}
-	pivotIndex := len(nums) / 2
-	lows := []T{}
-	highs := []T{}
-	pivots := []T{}
-	lessFn := lessFnFactory(nums)
-	for i, v := range nums {
-		switch {
-		case lessFn(i, pivotIndex):
-			lows = append(lows, v)
-		case lessFn(pivotIndex, i):
-			highs = append(highs, v)
-		default:
-			pivots = append(pivots, v)
-		}
-	}
-	switch {
-	case k < len(lows):
-		return quickSelect[T](lows, lessFnFactory, k)
-	case k < len(lows)+len(pivots):
-		return pivots[0]
-	default:
-		return quickSelect(highs, lessFnFactory, k-len(lows)-len(pivots))
-	}
-}
-
-// vectorAppendWildly is a more efficient version of vector.AppendFixed.
-// It ignores the const and null flags check, and uses a wilder way to append (avoiding the overhead of appending one by one).
-func vectorsAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v *Vectors[T], mp *mpool.MPool, value T) error {
-	vec := v.getAppendableVector()
-	return vectorAppendWildly(vec, mp, value)
 }
 
 func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vectors[T], vals T, isNull bool, cnt int, mp *mpool.MPool) error {

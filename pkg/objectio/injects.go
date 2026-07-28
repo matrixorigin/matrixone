@@ -54,13 +54,67 @@ const (
 	FJ_CronJobsOpen = "fj/cronjobs/open"
 	FJ_CDCRecordTxn = "fj/cdc/recordtxn"
 
+	FJ_CDCExecutor  = "fj/cdc/executor"
+	FJ_CDCScanTable = "fj/cdc/scantable"
+
+	FJ_ISCPIndexSendError     = "fj/iscp/index/send/error"
+	FJ_ISCPIndexSendBlock     = "fj/iscp/index/send/block"
+	FJ_ISCPIndexExecError     = "fj/iscp/index/exec/error"
+	FJ_ISCPIndexWatermarkErr  = "fj/iscp/index/watermark/error"
+	FJ_ISCPIndexCloseBlock    = "fj/iscp/index/close/block"
+	FJ_ISCPIndexHnswUpdateErr = "fj/iscp/index/hnsw/update/error"
+	FJ_ISCPIndexHnswSaveErr   = "fj/iscp/index/hnsw/save/error"
+	FJ_ISCPIndexCuvsAppendErr = "fj/iscp/index/cuvs/append/error"
+	FJ_ISCPIndexCuvsSaveErr   = "fj/iscp/index/cuvs/save/error"
+
+	FJ_ISCPCancelAfterSubmit           = "fj/iscp/cancel/after-submit"
+	FJ_ISCPCancelAfterRegisterConsumer = "fj/iscp/cancel/after-register-consumer"
+	FJ_ISCPCancelFanoutBeforeSend      = "fj/iscp/cancel/fanout-before-send"
+	FJ_ISCPCancelHnswBeforeSave        = "fj/iscp/cancel/hnsw-before-save"
+	FJ_ISCPCancelBeforeUpdateWatermark = "fj/iscp/cancel/before-update-watermark"
+	FJ_ISCPCancelLongBeforeSend        = "fj/iscp/cancel/long/before-send"
+	FJ_ISCPCancelLongBeforeExec        = "fj/iscp/cancel/long/before-exec"
+	FJ_ISCPCancelLongHnswBeforeUpdate  = "fj/iscp/cancel/long/hnsw-before-update"
+	FJ_ISCPCancelLongHnswBeforeSave    = "fj/iscp/cancel/long/hnsw-before-save"
+	FJ_ISCPCancelLongBeforeWatermark   = "fj/iscp/cancel/long/before-watermark"
+	FJ_ISCPCancelExecutorNotReady      = "fj/iscp/cancel/executor-not-ready"
+	FJ_ISCPCancelForceRemote           = "fj/iscp/cancel/force-remote"
+	FJ_ISCPCancelRemoveFenceError      = "fj/iscp/cancel/remove-fence-error"
+	FJ_ISCPCancelRollbackFenceTTL      = "fj/iscp/cancel/rollback-fence-ttl"
+
+	FJ_PublicationSnapshotFinished = "fj/publication/snapshot/finished"
+
+	FJ_UpstreamSQLHelper = "fj/publication/upstream/sqlhelper"
+
+	FJ_WALReplayFailed = "fj/wal/replay/failed"
+
 	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
 	FJ_CDCHandleErr              = "fj/cdc/handleerr"
 	FJ_CDCScanTableErr           = "fj/cdc/scantableerr"
 	FJ_CDCAddExecErr             = "fj/cdc/addexecerr"
 	FJ_CDCAddExecConsumeTruncate = "fj/cdc/addexecconsumetruncate"
 
-	FJ_CNFlushSmallObjs = "fj/cn/flush_small_objs"
+	FJ_CNFlushSmallObjs      = "fj/cn/flush_small_objs"
+	FJ_CNSubscribeTableFail  = "fj/cn/subscribe_table_fail"
+	FJ_CNWorkspaceForceFlush = "fj/cn/workspace_force_flush"
+
+	FJ_CNCLONEFailed                    = "fj/cn/clone_fails"
+	FJ_CNCommitAfterWorkspaceDumpFailed = "fj/cn/commit_after_workspace_dump_fails"
+	FJ_CNNeedRetryError                 = "fj/cn/need_retry_error"
+
+	// FJ_CNReenterSnapshotOffsetOnGetTable is a test-only fault that makes
+	// Transaction.getTable reenter UpdateSnapshotWriteOffset, deterministically
+	// simulating the internal-SQL leg of the issue #25557 deadlock:
+	// getTable -> Engine.Database -> loadDatabaseFromStorage -> execReadSql
+	// -> NewCompile -> UpdateSnapshotWriteOffset.
+	FJ_CNReenterSnapshotOffsetOnGetTable = "fj/cn/reenter_snapshot_offset_on_get_table"
+
+	// FJ_CNDumpResolveWindowWait is a test-only orchestration point inside the
+	// unlocked table-resolution window of a workspace dump. Armed with the
+	// WAIT action, it parks the dumping goroutine right before the transaction
+	// lock is re-acquired, so a test can deterministically mutate the
+	// workspace from another goroutine while the window is open.
+	FJ_CNDumpResolveWindowWait = "fj/cn/dump_resolve_window_wait"
 )
 
 const (
@@ -184,6 +238,42 @@ func LogCNFlushSmallObjsInjected(args ...string) (bool, int) {
 	return ok, level
 }
 
+func CNWorkspaceForceFlushInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CNWorkspaceForceFlush)
+	return injected
+}
+
+func CNCommitAfterWorkspaceDumpFailedInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CNCommitAfterWorkspaceDumpFailed)
+	return sarg, injected
+}
+
+func LogCNNeedRetryErrorInjected(args ...string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_CNNeedRetryError)
+	if !injected {
+		return false, 0
+	}
+	return checkLoggingArgs(int(iarg), sarg, args...)
+}
+
+func LogCNCloneFailedInjected(args ...string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_CNCLONEFailed)
+	if !injected {
+		return false, 0
+	}
+	return checkLoggingArgs(int(iarg), sarg, args...)
+}
+
+func LogCNSubscribeTableFailInjected(args ...string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_CNSubscribeTableFail)
+	if !injected {
+		return false, 0
+	}
+
+	ok, level := checkLoggingArgs(int(iarg), sarg, args...)
+	return ok, level
+}
+
 func InjectLogPartitionState(
 	databaseName string,
 	tableName string,
@@ -261,6 +351,32 @@ func SimpleInjected(key string) bool {
 	return injected
 }
 
+// CNReenterSnapshotOffsetOnGetTableInjected reports whether the
+// FJ_CNReenterSnapshotOffsetOnGetTable fault is active. When it is,
+// Transaction.getTable simulates the internal-SQL leg of the issue #25557
+// deadlock chain (taking the transaction lock and capturing the workspace
+// write offset). The iarg selects the variant:
+//
+//	0 (the SimpleInject default): fail with an injected error afterwards;
+//	1: continue the normal lookup;
+//	2: additionally call UpdateSnapshotWriteOffset — a rogue boundary
+//	   advance that the fixed internal SQL never performs — then fail with
+//	   the injected error.
+func CNReenterSnapshotOffsetOnGetTableInjected() (injected bool, rogueUpdate bool, errorOut bool) {
+	iarg, _, injected := fault.TriggerFault(FJ_CNReenterSnapshotOffsetOnGetTable)
+	if !injected {
+		return false, false, false
+	}
+	return true, iarg == 2, iarg != 1
+}
+
+// CNDumpResolveWindowWait triggers FJ_CNDumpResolveWindowWait. With the WAIT
+// action armed it blocks until a test notifies the fault point; when the
+// fault is not registered it is a no-op.
+func CNDumpResolveWindowWait() {
+	fault.TriggerFault(FJ_CNDumpResolveWindowWait)
+}
+
 // inject log reader and partition state
 // `name` is the table name
 func InjectLog1(
@@ -335,12 +451,73 @@ func GCDumpTableInjected() (string, bool) {
 	return sarg, injected
 }
 
-func WaitInjected(key string) {
-	fault.TriggerFault(key)
+func WaitInjected(key string) bool {
+	_, _, injected := fault.TriggerFault(key)
+	return injected
+}
+
+func WaitInjectedCtx(ctx context.Context, key string) bool {
+	_, _, injected := fault.TriggerFaultWithContext(ctx, key)
+	return injected
 }
 
 func NotifyInjected(key string) {
 	fault.TriggerFault(key)
+}
+
+func ISCPExecutorInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CDCExecutor)
+	return sarg, injected
+}
+
+func CDCScanTableInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CDCScanTable)
+	return sarg, injected
+}
+
+func ISCPIndexSendErrorInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexSendError)
+	return injected
+}
+
+func ISCPIndexSendBlockInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexSendBlock)
+	return injected
+}
+
+func ISCPIndexExecErrorInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexExecError)
+	return injected
+}
+
+func ISCPIndexWatermarkErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexWatermarkErr)
+	return injected
+}
+
+func ISCPIndexCloseBlockInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexCloseBlock)
+	return injected
+}
+
+func ISCPIndexHnswUpdateErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexHnswUpdateErr)
+	return injected
+}
+
+func ISCPIndexHnswSaveErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexHnswSaveErr)
+	return injected
+}
+
+func ISCPIndexCuvsAppendErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexCuvsAppendErr)
+	return injected
+}
+
+func ISCPIndexCuvsSaveErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexCuvsSaveErr)
+	return injected
 }
 
 func InjectWait(key string) (rmFault func(), err error) {
@@ -448,6 +625,42 @@ func InjectGCDumpTable(msg string) (rmFault func() (bool, error), err error) {
 	}
 	rmFault = func() (ok bool, err error) {
 		return fault.RemoveFaultPoint(context.Background(), FJ_CNGCDumpTable)
+	}
+	return
+}
+
+func InjectCDCExecutor(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CDCExecutor,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CDCExecutor)
+	}
+	return
+}
+
+func InjectCDCScanTable(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CDCScanTable,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CDCScanTable)
 	}
 	return
 }
@@ -588,4 +801,73 @@ func CDCAddExecErrInjected() bool {
 func CDCAddExecConsumeTruncateInjected() bool {
 	_, _, injected := fault.TriggerFault(FJ_CDCAddExecConsumeTruncate)
 	return injected
+}
+
+func WALReplayFailedExecutorInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_WALReplayFailed)
+	return sarg, injected
+}
+
+func InjectWALReplayFailed(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_WALReplayFailed,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_WALReplayFailed)
+	}
+	return
+}
+
+func InjectPublicationSnapshotFinished(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_PublicationSnapshotFinished,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_PublicationSnapshotFinished)
+	}
+	return
+}
+
+func PublicationSnapshotFinishedInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_PublicationSnapshotFinished)
+	return sarg, injected
+}
+
+func InjectUpstreamSQLHelper(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_UpstreamSQLHelper,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_UpstreamSQLHelper)
+	}
+	return
+}
+
+func UpstreamSQLHelperInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_UpstreamSQLHelper)
+	return sarg, injected
 }

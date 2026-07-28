@@ -21,7 +21,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -32,8 +31,7 @@ import (
 )
 
 const (
-	origin    = "origin"
-	temporary = "temporary"
+	origin = "origin"
 )
 
 // There is no way to know the control flow of EntireEngine directly through the Engine method
@@ -41,9 +39,7 @@ const (
 // So we need sth to mark the transition of states
 // The following enumeration shows all the possible states of the EntireEngine
 const (
-	first_engine_then_tempengine = -2
-	only_tempengine              = 0
-	only_engine                  = 2
+	only_engine = 2
 )
 
 type testEntireEngine struct {
@@ -90,43 +86,31 @@ func (o *testOperator) SetFootPrints(id int, enter bool) {
 func TestEntireEngineNew(t *testing.T) {
 	ctx := context.TODO()
 	op := newtestOperator()
-	ee := buildEntireEngineWithoutTempEngine()
+	ee := buildTestEntireEngine()
 	ee.New(ctx, op)
 	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
-	ee.New(ctx, op)
-	assert.Equal(t, first_engine_then_tempengine, ee.state)
 }
 
 func TestEntireEngineDelete(t *testing.T) {
 	ctx := context.TODO()
 	op := newtestOperator()
-	ee := buildEntireEngineWithoutTempEngine()
+	ee := buildTestEntireEngine()
 	ee.Delete(ctx, "bar", op)
-	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
-	ee.Delete(ctx, "foo", op)
 	assert.Equal(t, only_engine, ee.state)
 }
 
 func TestEntireEngineCreate(t *testing.T) {
 	ctx := context.TODO()
 	op := newtestOperator()
-	ee := buildEntireEngineWithoutTempEngine()
+	ee := buildTestEntireEngine()
 	ee.Create(ctx, "bar", op)
-	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
-	ee.Create(ctx, "foo", op)
 	assert.Equal(t, only_engine, ee.state)
 }
 
 func TestEntireEngineDatabases(t *testing.T) {
 	ctx := context.TODO()
 	op := newtestOperator()
-	ee := buildEntireEngineWithoutTempEngine()
-	ee.Databases(ctx, op)
-	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
+	ee := buildTestEntireEngine()
 	ee.Databases(ctx, op)
 	assert.Equal(t, only_engine, ee.state)
 }
@@ -134,60 +118,26 @@ func TestEntireEngineDatabases(t *testing.T) {
 func TestEntireEngineDatabase(t *testing.T) {
 	ctx := context.TODO()
 	op := newtestOperator()
-	ee := buildEntireEngineWithoutTempEngine()
+	ee := buildTestEntireEngine()
 	ee.Database(ctx, "foo", op)
 	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
-	ee.Database(ctx, defines.TEMPORARY_DBNAME, op)
-	assert.Equal(t, only_tempengine, ee.state)
 
 }
 
 func TestEntireEngineNodes(t *testing.T) {
-	ee := buildEntireEngineWithoutTempEngine()
-	ee.Nodes(false, "", "", nil)
-	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
+	ee := buildTestEntireEngine()
 	ee.Nodes(false, "", "", nil)
 	assert.Equal(t, only_engine, ee.state)
 }
 
 func TestEntireEngineHints(t *testing.T) {
-	ee := buildEntireEngineWithoutTempEngine()
-	ee.Hints()
-	assert.Equal(t, only_engine, ee.state)
-	ee = buildEntireEngineWithTempEngine()
+	ee := buildTestEntireEngine()
 	ee.Hints()
 	assert.Equal(t, only_engine, ee.state)
 
 }
 
-//func TestEntireEngineNewBlockReader(t *testing.T) {
-//	ctx := context.TODO()
-//	ee := buildEntireEngineWithoutTempEngine()
-//	proc := testutil.NewProcess()
-//	//ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil, nil)
-//	ee.BuildBlockReaders(ctx, proc, timestamp.Timestamp{}, nil, nil, nil, 1)
-//	assert.Equal(t, only_engine, ee.state)
-//	ee = buildEntireEngineWithTempEngine()
-//	//ee.NewBlockReader(ctx, 1, timestamp.Timestamp{}, nil, nil, nil, nil, nil)
-//	ee.BuildBlockReaders(ctx, proc, timestamp.Timestamp{}, nil, nil, nil, 1)
-//	assert.Equal(t, only_engine, ee.state)
-//}
-
-func buildEntireEngineWithTempEngine() *testEntireEngine {
-	ee := new(testEntireEngine)
-	ee.state = 1
-
-	e := newtestEngine(origin, ee)
-	te := newtestEngine(temporary, ee)
-
-	ee.Engine = e
-	ee.TempEngine = te
-	return ee
-}
-
-func buildEntireEngineWithoutTempEngine() *testEntireEngine {
+func buildTestEntireEngine() *testEntireEngine {
 	ee := new(testEntireEngine)
 	ee.state = 1
 
@@ -310,10 +260,6 @@ func (e *testEngine) Hints() (h Hints) {
 	return
 }
 
-func (e *testEngine) HasTempEngine() bool {
-	return false
-}
-
 func (e *testEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
 	return "", "", nil
 }
@@ -326,11 +272,11 @@ func (e *testEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, e
 	return 0, nil
 }
 
-func (e *testEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64, dbName, tblName string) error {
+func (e *testEngine) TryToSubscribeTable(ctx context.Context, accId, dbID, tbID uint64, dbName, tblName string) error {
 	return nil
 }
 
-func (e *testEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+func (e *testEngine) UnsubscribeTable(ctx context.Context, accId, dbID, tbID uint64) error {
 	return nil
 }
 
@@ -417,6 +363,10 @@ func (o *testOperator) SnapshotTS() timestamp.Timestamp {
 	panic("should not call")
 }
 
+func (o *testOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	panic("should not call")
+}
+
 func (o *testOperator) CreateTS() timestamp.Timestamp {
 	panic("should not call")
 }
@@ -441,6 +391,10 @@ func (o *testOperator) HasLockTable(table uint64) bool {
 	return true
 }
 
+func (o *testOperator) CheckLockTableBinds(ctx context.Context) error {
+	return nil
+}
+
 func (o *testOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("should not call")
 }
@@ -461,7 +415,7 @@ func (o *testOperator) IsOpenLog() bool {
 	panic("unimplemented")
 }
 
-func (o *testOperator) AppendEventCallback(event client.EventType, callbacks ...func(event client.TxnEvent)) {
+func (o *testOperator) AppendEventCallback(event client.EventType, callbacks ...client.TxnEventCallback) {
 	panic("unimplemented")
 }
 
@@ -493,10 +447,27 @@ func (o *testOperator) NextSequence() uint64 {
 	panic("should not call")
 }
 
-func (o *testOperator) EnterRunSql() {}
+func (o *testOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
+	return 1
+}
 
-func (o *testOperator) ExitRunSql() {}
+func (o *testOperator) ExitRunSqlWithToken(_ uint64) {}
 
 func (o *testOperator) GetWaitActiveCost() time.Duration {
 	return time.Duration(0)
+}
+
+func (o *testOperator) Set(string, any) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o *testOperator) Get(string) (any, bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o *testOperator) Delete(string) {
+	//TODO implement me
+	panic("implement me")
 }

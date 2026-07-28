@@ -1,6 +1,4 @@
--- TODO: run all tests with both experimental_fulltext_index = 0 and 1
 -- TODO: GENERATE the test case to cover all combinations of types (varchar, char and text)
-set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="BM25";
 
 create table src (id bigint primary key, body varchar, title text);
@@ -16,11 +14,23 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 
 create fulltext index ftidx on src (body, title);
 
+-- Regression for #25546: single-keyword NL/DEFAULT LIMIT queries must not
+-- run COUNT(*) OVER() over more than one aggregate result vector.
+create table fulltext_topk_regression (id bigint primary key, body text);
+insert into fulltext_topk_regression
+select result, case when result <= 10 then repeat('common ', 12 - result) else 'common' end
+from generate_series(1, 8193) g;
+insert into fulltext_topk_regression
+select result, 'other' from generate_series(8194, 9000) g;
+create fulltext index ftidx_topk_regression on fulltext_topk_regression (body);
+select id from fulltext_topk_regression where match(body) against('common' in natural language mode) limit 10;
+select id from fulltext_topk_regression where match(body) against('common') limit 10;
+drop table fulltext_topk_regression;
+
 -- check fulltext_match with index error
 create fulltext index ftidx02 on src (body, title);
 select * from src where match(body) against('red');
 select * from src where match(body,title) against('+]]]');
-select * from src where match(body,title) against('+I'm');
 
 select match(body) against('red') from src;
 
@@ -185,7 +195,7 @@ drop table src2;
 
 -- bytejson parser
 create table src (id bigint primary key, json1 json, json2 json);
-insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'), 
+insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
 

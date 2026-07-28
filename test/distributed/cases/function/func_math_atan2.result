@@ -1,0 +1,60 @@
+SELECT ATAN2(1, 1) AS result1;
+result1
+0.7853981633974483
+SELECT ATAN2(1, 0) AS y_positive_x_zero;
+y_positive_x_zero
+1.5707963267948966
+SELECT ATAN2(0, 1) AS y_zero_x_positive;
+y_zero_x_positive
+0.0
+SELECT ATAN2(-1, 1) AS y_negative_x_positive;
+y_negative_x_positive
+-0.7853981633974483
+SELECT ATAN2(1, -1) AS y_positive_x_negative;
+y_positive_x_negative
+2.356194490192345
+SELECT ATAN2(-1, -1) AS both_negative;
+both_negative
+-2.356194490192345
+SELECT ATAN2(0, 0) AS both_zero;
+both_zero
+0.0
+SELECT ATAN2(0.0, 1.0) AS zero_float;
+zero_float
+0.0
+SELECT ATAN2(1.0, 0.0) AS pi_over_2;
+pi_over_2
+1.5707963267948966
+SELECT ATAN2(-1.0, 0.0) AS minus_pi_over_2;
+minus_pi_over_2
+-1.5707963267948966
+SELECT ATAN2(NULL, 1) AS null_y;
+null_y
+null
+SELECT ATAN2(1, NULL) AS null_x;
+null_x
+null
+SELECT ATAN2(NULL, NULL) AS both_null;
+both_null
+null
+CREATE TABLE t1(y FLOAT, x FLOAT);
+INSERT INTO t1 VALUES (1, 1), (1, 0), (0, 1), (-1, 1), (1, -1);
+SELECT y, x, ATAN2(y, x) AS atan2_value FROM t1;
+y    x    atan2_value
+1.0    1.0    0.7853981633974483
+1.0    0.0    1.5707963267948966
+0.0    1.0    0.0
+-1.0    1.0    -0.7853981633974483
+1.0    -1.0    2.356194490192345
+DROP TABLE t1;
+CREATE TABLE t1(y FLOAT, x FLOAT);
+INSERT INTO t1 VALUES (1, 1), (1, 0), (0, 1), (-1, 1), (1, -1);
+SELECT * FROM t1 WHERE ATAN2(y, x) > 0;
+y    x
+1.0    1.0
+1.0    0.0
+1.0    -1.0
+DROP TABLE t1;
+SELECT ATAN2(1, 1) AS atan2_result, ATAN(1/1) AS atan_result;
+atan2_result    atan_result
+0.7853981633974483    0.7853981633974483

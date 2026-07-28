@@ -24,23 +24,96 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
 
-// Mo's extremely simple memory pool.
+// debugPoisonOnFree, when enabled, fills freed memory with 0xDD bytes before
+// releasing it to the C allocator. This makes use-after-free bugs deterministically
+// visible in tests instead of silently reading stale-but-valid data.
+var debugPoisonOnFree atomic.Bool
 
+func EnableDebugPoisonOnFree()  { debugPoisonOnFree.Store(true) }
+func DisableDebugPoisonOnFree() { debugPoisonOnFree.Store(false) }
+
+// Mo's extremely simple memory pool.
 // Stats
 type MPoolStats struct {
-	NumAlloc      atomic.Int64 // number of allocations
-	NumFree       atomic.Int64 // number of frees
-	NumAllocBytes atomic.Int64 // number of bytes allocated
-	NumFreeBytes  atomic.Int64 // number of bytes freed
-	NumCurrBytes  atomic.Int64 // current number of bytes
-	HighWaterMark atomic.Int64 // high water mark
+	NumAlloc         atomic.Int64 // number of allocations
+	NumFree          atomic.Int64 // number of frees
+	NumAllocBytes    atomic.Int64 // number of bytes allocated
+	NumFreeBytes     atomic.Int64 // number of bytes freed
+	NumCurrBytes     atomic.Int64 // current number of bytes
+	NumCrossPoolFree atomic.Int64 // number of cross pool free
+	HighWaterMark    atomic.Int64 // high water mark
+
+	// xpool frees are really bugs.  we always record them for debugging.
+	mu        sync.Mutex
+	xpoolFree map[string]detailInfo
+}
+
+// ResourcePeakEpoch is an opaque, statement-scoped observation token.  Its
+// peak remains readable after the epoch is ended, but allocations are only
+// published while the token is the pool's current epoch.
+type ResourcePeakEpoch struct {
+	owner *MPool
+	peak  atomic.Int64
+	ended atomic.Bool
+}
+
+// resourceMemoryStats observes successful off-heap allocation ownership only.
+// It is deliberately separate from MPoolStats: the latter preserves legacy
+// admission behavior and may temporarily record a reservation that is later
+// compensated when an allocation exceeds a cap.
+type resourceMemoryStats struct {
+	allocated     atomic.Int64
+	freed         atomic.Int64
+	live          atomic.Int64
+	peak          atomic.Int64
+	crossPoolFree atomic.Int64
+}
+
+func (s *resourceMemoryStats) recordAlloc(sz int64) int64 {
+	s.allocated.Add(sz)
+	curr := s.live.Add(sz)
+	for {
+		peak := s.peak.Load()
+		if curr <= peak || s.peak.CompareAndSwap(peak, curr) {
+			return curr
+		}
+	}
+}
+
+func (s *resourceMemoryStats) recordFree(sz int64) {
+	s.freed.Add(sz)
+	s.live.Add(-sz)
+}
+
+func (e *ResourcePeakEpoch) recordPeak(curr int64) {
+	if e == nil || curr < 0 || e.ended.Load() {
+		return
+	}
+	for {
+		peak := e.peak.Load()
+		if curr <= peak {
+			return
+		}
+		if e.ended.Load() {
+			return
+		}
+		if e.peak.CompareAndSwap(peak, curr) {
+			return
+		}
+	}
+}
+
+func (s *MPoolStats) Init() {
+	s.xpoolFree = make(map[string]detailInfo)
 }
 
 func (s *MPoolStats) Report(tab string) string {
@@ -55,6 +128,7 @@ func (s *MPoolStats) Report(tab string) string {
 	ret += fmt.Sprintf("%s alloc bytes : %d\n", tab, s.NumAllocBytes.Load())
 	ret += fmt.Sprintf("%s free bytes : %d\n", tab, s.NumFreeBytes.Load())
 	ret += fmt.Sprintf("%s current bytes : %d\n", tab, s.NumCurrBytes.Load())
+	ret += fmt.Sprintf("%s cross pool frees : %d\n", tab, s.NumCrossPoolFree.Load())
 	ret += fmt.Sprintf("%s high water mark : %d\n", tab, s.HighWaterMark.Load())
 	return ret
 }
@@ -63,12 +137,14 @@ func (s *MPoolStats) ReportJson() string {
 	if s.HighWaterMark.Load() == 0 {
 		return ""
 	}
+
 	ret := "{"
 	ret += fmt.Sprintf("\"alloc\": %d,", s.NumAlloc.Load())
 	ret += fmt.Sprintf("\"free\": %d,", s.NumFree.Load())
 	ret += fmt.Sprintf("\"allocBytes\": %d,", s.NumAllocBytes.Load())
 	ret += fmt.Sprintf("\"freeBytes\": %d,", s.NumFreeBytes.Load())
 	ret += fmt.Sprintf("\"currBytes\": %d,", s.NumCurrBytes.Load())
+	ret += fmt.Sprintf("\"crossPoolFrees\": %d,", s.NumCrossPoolFree.Load())
 	ret += fmt.Sprintf("\"highWaterMark\": %d", s.HighWaterMark.Load())
 	ret += "}"
 	return ret
@@ -80,11 +156,14 @@ func (s *MPoolStats) RecordAlloc(tag string, sz int64) int64 {
 	s.NumAllocBytes.Add(sz)
 	curr := s.NumCurrBytes.Add(sz)
 	hwm := s.HighWaterMark.Load()
-	if curr > hwm {
-		swapped := s.HighWaterMark.CompareAndSwap(hwm, curr)
-		if swapped && curr/GB != hwm/GB {
-			logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
+	for curr > hwm {
+		if s.HighWaterMark.CompareAndSwap(hwm, curr) {
+			if curr/GB != hwm/GB {
+				logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
+			}
+			break
 		}
+		hwm = s.HighWaterMark.Load()
 	}
 	return curr
 }
@@ -105,6 +184,17 @@ func (s *MPoolStats) RecordFree(tag string, sz int64) int64 {
 	return curr
 }
 
+func (s *MPoolStats) RecordXPoolFree(detail string, nb int64) {
+	s.NumCrossPoolFree.Add(1)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	info := s.xpoolFree[detail]
+	info.cnt += 1
+	info.bytes += nb
+	s.xpoolFree[detail] = info
+}
+
 func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 	if sz < 0 {
 		logutil.Errorf("Mpool %s free bug, stats: %s", tag, s.Report("    "))
@@ -121,27 +211,24 @@ func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 }
 
 const (
-	NumFixedPool = 5
-	kMemHdrSz    = 24
-	kStripeSize  = 128
-	B            = 1
-	KB           = 1024
-	MB           = 1024 * KB
-	GB           = 1024 * MB
-	TB           = 1024 * GB
-	PB           = 1024 * TB
+	kMemHdrSz = 16
 )
 
-// Pool emement size
-var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
+const (
+	B  = 1
+	KB = 1024
+	MB = 1024 * KB
+	GB = 1024 * MB
+	TB = 1024 * GB
+	PB = 1024 * TB
+)
 
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
-	poolId       int64
-	allocSz      int32
-	fixedPoolIdx int8
-	guard        [3]uint8
-	offHeap      bool
+	poolId  int64
+	allocSz int32
+	guard   [3]uint8
+	offHeap bool
 }
 
 func init() {
@@ -158,105 +245,6 @@ func (pHdr *memHdr) SetGuard() {
 
 func (pHdr *memHdr) CheckGuard() bool {
 	return pHdr.guard[0] == 0xDE && pHdr.guard[1] == 0xAD && pHdr.guard[2] == 0xBF
-}
-
-func (pHdr *memHdr) ToSlice(sz, cap int) []byte {
-	ptr := unsafe.Add(unsafe.Pointer(pHdr), kMemHdrSz)
-	bs := unsafe.Slice((*byte)(ptr), cap)
-	return bs[:sz]
-}
-
-// pool for fixed elements.  Note that we preconfigure the pool size.
-// We should consider implement some kind of growing logic.
-type fixedPool struct {
-	m      sync.Mutex
-	noLock bool
-	fpIdx  int8
-	poolId int64
-	eleSz  int32
-	// holds buffers allocated, it is not really used in alloc/free
-	// but hold here for bookkeeping.
-	buf   [][]byte
-	flist unsafe.Pointer
-}
-
-// Initaialze a fixed pool
-func (fp *fixedPool) initPool(tag string, poolid int64, idx int, noLock bool) {
-	eleSz := PoolElemSize[idx]
-	fp.poolId = poolid
-	fp.fpIdx = int8(idx)
-	fp.noLock = noLock
-	fp.eleSz = eleSz
-}
-
-func (fp *fixedPool) nextPtr(ptr unsafe.Pointer) unsafe.Pointer {
-	iptr := *(*unsafe.Pointer)(unsafe.Add(ptr, kMemHdrSz))
-	return iptr
-}
-func (fp *fixedPool) setNextPtr(ptr unsafe.Pointer, next unsafe.Pointer) {
-	iptr := (*unsafe.Pointer)(unsafe.Add(ptr, kMemHdrSz))
-	*iptr = next
-}
-
-func (fp *fixedPool) alloc(sz int32) *memHdr {
-	if !fp.noLock {
-		fp.m.Lock()
-		defer fp.m.Unlock()
-	}
-
-	if fp.flist == nil {
-		buf := make([]byte, kStripeSize*(fp.eleSz+kMemHdrSz))
-		fp.buf = append(fp.buf, buf)
-		// return the first one
-		ret := (unsafe.Pointer)(&buf[0])
-		pHdr := (*memHdr)(ret)
-		pHdr.poolId = fp.poolId
-		pHdr.allocSz = sz
-		pHdr.fixedPoolIdx = fp.fpIdx
-		pHdr.SetGuard()
-
-		ptr := unsafe.Add(ret, fp.eleSz+kMemHdrSz)
-		// and thread the rest
-		for i := 1; i < kStripeSize; i++ {
-			pHdr := (*memHdr)(ptr)
-			pHdr.poolId = fp.poolId
-			pHdr.allocSz = -1
-			pHdr.fixedPoolIdx = fp.fpIdx
-			pHdr.SetGuard()
-			fp.setNextPtr(ptr, fp.flist)
-			fp.flist = ptr
-			ptr = unsafe.Add(ptr, fp.eleSz+kMemHdrSz)
-		}
-		return (*memHdr)(ret)
-	} else {
-		ret := fp.flist
-		fp.flist = fp.nextPtr(fp.flist)
-		pHdr := (*memHdr)(ret)
-		pHdr.allocSz = sz
-		// Zero slice.  Go requires slice to be zeroed.
-		bs := unsafe.Slice((*byte)(unsafe.Add(ret, kMemHdrSz)), fp.eleSz)
-		// the compiler will optimize this loop to memclr
-		for i := range bs {
-			bs[i] = 0
-		}
-		return pHdr
-	}
-}
-
-func (fp *fixedPool) free(hdr *memHdr) {
-	if hdr.poolId != fp.poolId || hdr.fixedPoolIdx != fp.fpIdx ||
-		hdr.allocSz < 0 || hdr.allocSz > fp.eleSz ||
-		!hdr.CheckGuard() {
-		panic(moerr.NewInternalErrorNoCtx("mpool fixed pool hdr corruption.   Possible double free"))
-	}
-
-	if !fp.noLock {
-		fp.m.Lock()
-		defer fp.m.Unlock()
-	}
-	ptr := unsafe.Pointer(hdr)
-	fp.setNextPtr(ptr, fp.flist)
-	fp.flist = ptr
 }
 
 type detailInfo struct {
@@ -276,10 +264,12 @@ func newMpoolDetails() *mpoolDetails {
 	return &mpd
 }
 
-func (d *mpoolDetails) recordAlloc(nb int64) {
-	f := stack.Caller(2)
-	k := fmt.Sprintf("%v", f)
+func (d *mpoolDetails) recordAlloc(k string, nb int64) {
+	if d == nil {
+		return
+	}
 	d.mu.Lock()
+
 	defer d.mu.Unlock()
 
 	info := d.alloc[k]
@@ -288,9 +278,10 @@ func (d *mpoolDetails) recordAlloc(nb int64) {
 	d.alloc[k] = info
 }
 
-func (d *mpoolDetails) recordFree(nb int64) {
-	f := stack.Caller(2)
-	k := fmt.Sprintf("%v", f)
+func (d *mpoolDetails) recordFree(k string, nb int64) {
+	if d == nil {
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -323,19 +314,16 @@ func (d *mpoolDetails) reportJson() string {
 
 // The memory pool.
 type MPool struct {
-	id         int64      // mpool generated, used to look up the MPool
-	tag        string     // user supplied, for debug/inspect
-	cap        int64      // pool capacity
-	stats      MPoolStats // stats
-	noFixed    bool
-	noLock     bool
-	available  int32 // 0: available, 1: unavailable
-	inUseCount int32 // number of in use call
-	pools      [NumFixedPool]fixedPool
-	details    *mpoolDetails
+	id       int64      // mpool generated, used to look up the MPool
+	tag      string     // user supplied, for debug/inspect
+	cap      int64      // pool capacity
+	stats    MPoolStats // stats
+	resource resourceMemoryStats
+	epoch    atomic.Pointer[ResourcePeakEpoch]
+	details  *mpoolDetails
 
-	// To remove: this thing is highly unlikely to be of any good use.
-	sels *sync.Pool
+	noLock bool
+	ptrs   map[unsafe.Pointer]memHdr
 }
 
 const (
@@ -343,17 +331,46 @@ const (
 	NoLock
 )
 
-const (
-	Available = iota
-	Unavailable
-)
-
-func (mp *MPool) PutSels(sels []int64) {
-	mp.sels.Put(&sels)
+func (mp *MPool) recordPtrHdr(ptr unsafe.Pointer, pHdr memHdr) error {
+	if !mp.noLock {
+		return gRecordPtr(ptr, pHdr)
+	} else {
+		_, ok := mp.ptrs[ptr]
+		if ok {
+			return moerr.NewInternalErrorNoCtx("ptr already recorded")
+		}
+		mp.ptrs[ptr] = pHdr
+		return nil
+	}
 }
-func (mp *MPool) GetSels() []int64 {
-	ss := mp.sels.Get().(*[]int64)
-	return (*ss)[:0]
+
+func (mp *MPool) getPtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
+	if !mp.noLock {
+		return gGetPtr(ptr)
+	}
+	hdr, ok := mp.ptrs[ptr]
+	return hdr, ok
+}
+
+func (mp *MPool) removePtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
+	if !mp.noLock {
+		return gRemovePtr(ptr)
+	} else {
+		hdr, ok := mp.ptrs[ptr]
+		delete(mp.ptrs, ptr)
+		return hdr, ok
+	}
+}
+
+func (mp *MPool) deallocateAllPtrs() {
+	for ptr, hdr := range mp.ptrs {
+		if hdr.offHeap {
+			sz := int(hdr.allocSz)
+			profileRecordFree(uintptr(ptr), int64(sz))
+			simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
+		}
+	}
+	mp.ptrs = nil
 }
 
 func (mp *MPool) EnableDetailRecording() {
@@ -366,40 +383,53 @@ func (mp *MPool) DisableDetailRecording() {
 	mp.details = nil
 }
 
+func (mp *MPool) getDetailK() string {
+	if mp == nil || mp.details == nil {
+		return ""
+	}
+	f := stack.Caller(2)
+	k := fmt.Sprintf("%v:%n", f, f)
+	return k
+}
+
 func (mp *MPool) Stats() *MPoolStats {
 	return &mp.stats
 }
 
 func (mp *MPool) Cap() int64 {
 	if mp.cap == 0 {
-		return PB
+		return common.PiB
 	}
 	return mp.cap
 }
 
-func (mp *MPool) destroy() (succeed bool) {
-	if !atomic.CompareAndSwapInt32(&mp.available, Available, Unavailable) {
-		logutil.Errorf("Mpool %s double destroy", mp.tag)
-		return false
-	}
-	if atomic.LoadInt32(&mp.inUseCount) != 0 {
-		logutil.Errorf("Mpool %s was still in use", mp.tag)
-		atomic.StoreInt32(&mp.available, Available)
-		return false
-	}
+const (
+	xxxIWouldRatherUseAfterFreeCrashLaterThanLeak = true
+)
+
+func (mp *MPool) destroy() {
 	if mp.stats.NumAlloc.Load() < mp.stats.NumFree.Load() {
+		// this is a memory leak,
 		logutil.Errorf("mp error: %s", mp.stats.Report(""))
+
+		// here we MUST free all the memories allocated by this mpool.
+		// otherwise it is a memory leak.  Whoever still holds
+		// a pointer of this mpool is a bug (the cross pool case).
+		//
+		// We are so messed up because the cross pool free.
+		// If a pointer is handed out to someone else and we free here
+		// it will be a use after free.   We risk a crash or a leak.
+		// Eitherway we are screwed.
+		if xxxIWouldRatherUseAfterFreeCrashLaterThanLeak {
+			mp.deallocateAllPtrs()
+		}
 	}
 
-	// We do not call each individual fixedPool's destroy
-	// because they recorded pooled elements alloc/frees.
-	// Those are not reflected in globalStats.
 	// Here we just compensate whatever left over in mp.stats
 	// into globalStats.
 	globalStats.RecordManyFrees(mp.tag,
 		mp.stats.NumAlloc.Load()-mp.stats.NumFree.Load(),
 		mp.stats.NumCurrBytes.Load())
-	return true
 }
 
 // New a MPool.   Tag is user supplied, used for debugging/diagnostics.
@@ -419,35 +449,31 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 		}
 	}
 
+	noLock := flag&NoLock != 0
+
 	id := atomic.AddInt64(&nextPool, 1)
 	var mp MPool
 	mp.id = id
 	mp.tag = tag
 	mp.cap = cap
+	mp.noLock = noLock
 
-	mp.noFixed = (flag & NoFixed) != 0
-	mp.noLock = (flag & NoFixed) != 0
-
-	if !mp.noFixed {
-		for i := 0; i < NumFixedPool; i++ {
-			mp.pools[i].initPool(mp.tag, mp.id, i, mp.noLock)
-		}
-	}
-
-	mp.sels = &sync.Pool{
-		New: func() any {
-			ss := make([]int64, 0, 16)
-			return &ss
-		},
-	}
-
+	mp.stats.Init()
+	mp.ptrs = make(map[unsafe.Pointer]memHdr)
 	globalPools.Store(id, &mp)
-	// logutil.Infof("creating mpool %s, cap %d, fixed size %v", tag, cap, sz)
 	return &mp, nil
 }
 
 func MustNew(tag string) *MPool {
-	mp, err := NewMPool(tag, 0, 0)
+	mp, err := NewMPool(tag, 0, NoFixed)
+	if err != nil {
+		panic(err)
+	}
+	return mp
+}
+
+func MustNewNoLock(tag string) *MPool {
+	mp, err := NewMPool(tag, 0, NoLock)
 	if err != nil {
 		panic(err)
 	}
@@ -458,16 +484,12 @@ func MustNewZero() *MPool {
 	return MustNew("must_new_zero")
 }
 
-func MustNewNoFixed(tag string) *MPool {
-	mp, err := NewMPool(tag, 0, NoFixed)
-	if err != nil {
-		panic(err)
-	}
-	return mp
+func MustNewNoFixed() *MPool {
+	return MustNew("must_new_no_fixed")
 }
 
 func MustNewZeroNoFixed() *MPool {
-	return MustNewNoFixed("must_new_zero_no_fixed")
+	return MustNew("must_new_zero_no_fixed")
 }
 
 func (mp *MPool) ReportJson() string {
@@ -488,6 +510,100 @@ func (mp *MPool) CurrNB() int64 {
 	return mp.stats.NumCurrBytes.Load()
 }
 
+// ResourcePeakLiveBytes returns the peak observed by token.  Ended tokens
+// remain readable so the owner can seal the statement after workers quiesce;
+// a token belonging to another open epoch is rejected.
+func (mp *MPool) ResourcePeakLiveBytes(token *ResourcePeakEpoch) (uint64, bool) {
+	if mp == nil || token == nil || token.owner != mp {
+		return 0, false
+	}
+	if !token.ended.Load() && mp.epoch.Load() != token {
+		return 0, false
+	}
+	peak := token.peak.Load()
+	if peak < 0 {
+		return 0, false
+	}
+	return uint64(peak), true
+}
+
+// ResourceSnapshot returns exact allocator-domain facts for a quiescent MPool
+// epoch. Negative counters are flagged instead of being converted to uint64.
+func (mp *MPool) ResourceSnapshot() (resource.MemoryDomainSummary, resource.QualityFlags) {
+	allocated := mp.resource.allocated.Load()
+	freed := mp.resource.freed.Load()
+	peak := mp.resource.peak.Load()
+	live := mp.resource.live.Load()
+	cross := mp.resource.crossPoolFree.Load()
+	if allocated < 0 || freed < 0 || peak < 0 || live < 0 || cross < 0 {
+		return resource.MemoryDomainSummary{}, resource.QualityInvariantFailure
+	}
+	summary := resource.MemoryDomainSummary{
+		AllocatedBytes:     uint64(allocated),
+		FreedBytes:         uint64(freed),
+		PeakLiveBytes:      uint64(peak),
+		LiveBytesAtSeal:    uint64(live),
+		CrossPoolFreeCount: uint64(cross),
+	}
+	return summary, summary.Validate()
+}
+
+// StartResourcePeakEpoch starts a peak-occupancy observation at the current
+// live-byte baseline. Only one observation may be open on a pool at a time.
+// The lifetime high-water mark is deliberately left untouched.
+func (mp *MPool) StartResourcePeakEpoch() *ResourcePeakEpoch {
+	if mp == nil {
+		return nil
+	}
+	if mp.resource.live.Load() < 0 {
+		return nil
+	}
+	token := &ResourcePeakEpoch{owner: mp}
+	if !mp.epoch.CompareAndSwap(nil, token) {
+		return nil
+	}
+	// Publish the baseline after claiming ownership. Allocations racing the
+	// claim update the token and recordPeak keeps the larger value.
+	token.recordPeak(mp.resource.live.Load())
+	return token
+}
+
+// EndResourcePeakEpoch closes exactly token and returns its final peak.  A
+// wrong, stale, or already-ended token cannot clear a newer epoch.
+func (mp *MPool) EndResourcePeakEpoch(token *ResourcePeakEpoch) (uint64, bool) {
+	if mp == nil || token == nil || token.owner != mp {
+		return 0, false
+	}
+	// Validate ownership before changing the token so passing a token to the
+	// wrong pool does not poison the epoch owned by its original pool.
+	if mp.epoch.Load() != token {
+		return 0, false
+	}
+	if !token.ended.CompareAndSwap(false, true) {
+		return 0, false
+	}
+	if !mp.epoch.CompareAndSwap(token, nil) {
+		// This should only be reachable for a malformed caller racing pool
+		// teardown. Preserve the token's ended state and report failure.
+		return 0, false
+	}
+	peak := token.peak.Load()
+	if peak < 0 {
+		return 0, false
+	}
+	return uint64(peak), true
+}
+
+func (mp *MPool) recordResourcePeak(curr int64) {
+	if mp == nil || curr < 0 {
+		return
+	}
+	token := mp.epoch.Load()
+	if token != nil {
+		token.recordPeak(curr)
+	}
+}
+
 func DeleteMPool(mp *MPool) {
 	start := time.Now()
 	defer func() {
@@ -499,16 +615,35 @@ func DeleteMPool(mp *MPool) {
 	}
 
 	// logutil.Infof("destroy mpool %s, cap %d, stats\n%s", mp.tag, mp.cap, mp.Report())
-	if mp.destroy() {
-		globalPools.Delete(mp.id)
-	}
+	mp.destroy()
+	globalPools.Delete(mp.id)
 }
 
 var nextPool int64
 var globalCap atomic.Int64
 var globalStats MPoolStats
 var globalPools sync.Map
-var crossPoolFreeCounter atomic.Int64
+
+// Sharded pointer map to reduce lock contention
+const numPtrShards = 128
+
+type ptrShard struct {
+	mu sync.Mutex
+	m  map[unsafe.Pointer]memHdr
+}
+
+var globalPtrShards [numPtrShards]ptrShard
+
+func getPtrShard(ptr unsafe.Pointer) *ptrShard {
+	hash := uintptr(ptr) >> 4
+	// Better hash mixing to distribute load evenly
+	hash ^= hash >> 17
+	hash *= 0x85ebca6b
+	hash ^= hash >> 13
+	hash *= 0xc2b2ae35
+	hash ^= hash >> 16
+	return &globalPtrShards[hash%numPtrShards]
+}
 
 func InitCap(cap int64) {
 	if cap < GB {
@@ -516,10 +651,6 @@ func InitCap(cap int64) {
 	} else {
 		globalCap.Store(cap)
 	}
-}
-
-func TotalCrossPoolFreeCounter() int64 {
-	return crossPoolFreeCounter.Load()
 }
 
 func GlobalStats() *MPoolStats {
@@ -534,211 +665,167 @@ func GlobalCap() int64 {
 	return n
 }
 
-func sizeToIdx(size int) int {
-	for i, sz := range PoolElemSize {
-		if int32(size) <= sz {
-			return i
-		}
-	}
-	return NumFixedPool
-}
-
 var CapLimit = math.MaxInt32 // 2GB - 1
 
 func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
-	// reject unexpected alloc size.
+	detailk := mp.getDetailK()
+	return mp.allocWithDetailK(detailk, int64(sz), offHeap)
+}
 
-	if sz < 0 || sz > CapLimit {
+func (mp *MPool) allocWithDetailK(detailk string, sz int64, offHeap bool) ([]byte, error) {
+	// reject unexpected alloc size.
+	if sz < 0 || sz > int64(CapLimit)-kMemHdrSz {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
 		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}
-
 	if sz == 0 {
 		return nil, nil
 	}
+	return mp.alloc(detailk, sz, offHeap)
+}
 
-	if atomic.LoadInt32(&mp.available) == Unavailable {
-		return nil, moerr.NewInternalErrorNoCtxf("mpool %s unavailable for alloc", mp.tag)
+func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
+	var bs []byte
+	var err error
+
+	hdr := memHdr{
+		poolId:  mp.id,
+		allocSz: int32(sz),
+		offHeap: offHeap,
 	}
+	hdr.SetGuard()
 
-	// update in use count
-	atomic.AddInt32(&mp.inUseCount, 1)
-	defer atomic.AddInt32(&mp.inUseCount, -1)
-
-	idx := NumFixedPool
-	requiredSpaceWithoutHeader := sz
-	if !mp.noFixed {
-		idx = sizeToIdx(requiredSpaceWithoutHeader)
-		if idx < NumFixedPool {
-			requiredSpaceWithoutHeader = int(mp.pools[idx].eleSz)
+	if offHeap {
+		gcurr := globalStats.RecordAlloc("global", sz)
+		if gcurr > GlobalCap() {
+			// compensate global
+			globalStats.RecordFree("global", sz)
+			return nil, moerr.NewOOMNoCtx()
 		}
-	}
-
-	tempSize := int64(requiredSpaceWithoutHeader + kMemHdrSz)
-	gcurr := globalStats.RecordAlloc("global", tempSize)
-	if gcurr > GlobalCap() {
-		globalStats.RecordFree("global", tempSize)
-		return nil, moerr.NewOOMNoCtx()
-	}
-	mycurr := mp.stats.RecordAlloc(mp.tag, tempSize)
-	if mycurr > mp.Cap() {
-		mp.stats.RecordFree(mp.tag, tempSize)
-		globalStats.RecordFree("global", tempSize)
-		return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
-	}
-
-	// from fixed pool
-	if idx < NumFixedPool {
-		bs := mp.pools[idx].alloc(int32(requiredSpaceWithoutHeader))
+		mycurr := mp.stats.RecordAlloc(mp.tag, sz)
+		if mycurr > mp.Cap() {
+			// compensate both global and my
+			mp.stats.RecordFree(mp.tag, sz)
+			globalStats.RecordFree("global", sz)
+			return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
+		}
+		bs, err = simpleCAllocator().Allocate(uint64(sz))
+		if err != nil {
+			panic(err)
+		}
+		mp.recordResourcePeak(mp.resource.recordAlloc(sz))
 		if mp.details != nil {
-			mp.details.recordAlloc(int64(bs.allocSz))
+			mp.details.recordAlloc(detailk, sz)
 		}
-		return bs.ToSlice(sz, int(mp.pools[idx].eleSz)), nil
+	} else {
+		bs = make([]byte, sz)
 	}
 
-	return alloc(sz, requiredSpaceWithoutHeader, mp, offHeap), nil
+	// always record the ptr, offHeap or not.
+	mp.recordPtrHdr(unsafe.Pointer(&bs[0]), hdr)
+	if offHeap {
+		profileRecordAlloc(3, uintptr(unsafe.Pointer(&bs[0])), sz)
+	}
+	return bs, nil
 }
 
 func (mp *MPool) Free(bs []byte) {
+	detailk := mp.getDetailK()
+	mp.freeWithDetailK(detailk, bs)
+}
+
+func (mp *MPool) freeWithDetailK(detailk string, bs []byte) {
 	if bs == nil || cap(bs) == 0 {
 		return
 	}
 	bs = bs[:1]
-	hdr := unsafe.Add((unsafe.Pointer)(&bs[0]), -kMemHdrSz)
-	pHdr := (*memHdr)(hdr)
+	ptr := unsafe.Pointer(&bs[0])
+	mp.freePtr(detailk, ptr)
+}
 
-	if !pHdr.CheckGuard() {
-		panic(moerr.NewInternalErrorNoCtx("invalid free, mp header corruption"))
-	}
-	if atomic.LoadInt32(&mp.available) == Unavailable {
-		panic(moerr.NewInternalErrorNoCtxf("mpool %s unavailable for free", mp.tag))
+func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
+	hdr, ok := mp.removePtrHdr(ptr)
+	if !ok {
+		// this is a double free.
+		panic(moerr.NewInternalErrorNoCtx("invalid ptr, double free"))
 	}
 
-	// if cross pool free.
-	if pHdr.poolId != mp.id {
-		crossPoolFreeCounter.Add(1)
-		otherPool, ok := globalPools.Load(pHdr.poolId)
+	if hdr.poolId != mp.id {
+		// Cross-pool free: delegate to the original pool
+		mp.stats.RecordXPoolFree(detailk, int64(hdr.allocSz))
+		globalStats.RecordXPoolFree(detailk, int64(hdr.allocSz))
+		otherPool, ok := globalPools.Load(hdr.poolId)
 		if !ok {
-			panic(moerr.NewInternalErrorNoCtxf("invalid mpool id %d", pHdr.poolId))
+			logutil.Errorf("invalid mpool id %d", hdr.poolId)
+			// Pool already deleted, we still need to free the memory.
+			// Call profileRecordFree and the full globalStats.RecordFree
+			// (not just NumCurrBytes.Add) so NumFree/NumFreeBytes stay
+			// consistent with freePtrInternal.
+			if hdr.offHeap {
+				sz := int64(hdr.allocSz)
+				profileRecordFree(uintptr(ptr), sz)
+				globalStats.RecordFree("global", sz)
+				simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
+			}
+		} else {
+			owner := otherPool.(*MPool)
+			owner.resource.crossPoolFree.Add(1)
+			owner.freePtrInternal(detailk, ptr, hdr)
 		}
-		(otherPool.(*MPool)).Free(bs)
 		return
 	}
 
-	atomic.AddInt32(&mp.inUseCount, 1)
-	defer atomic.AddInt32(&mp.inUseCount, -1)
-	// double free check
-	if atomic.LoadInt32(&pHdr.allocSz) == -1 {
-		panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
-	}
-
-	recordSize := int64(pHdr.allocSz) + kMemHdrSz
-	mp.stats.RecordFree(mp.tag, recordSize)
-	globalStats.RecordFree("global", recordSize)
-	if mp.details != nil {
-		mp.details.recordFree(int64(pHdr.allocSz))
-	}
-
-	// free from fixed pool
-	if pHdr.fixedPoolIdx < NumFixedPool {
-		mp.pools[pHdr.fixedPoolIdx].free(pHdr)
-	} else {
-		// non fixed pool just mark it freed
-		if !atomic.CompareAndSwapInt32(&pHdr.allocSz, pHdr.allocSz, -1) {
-			panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
-		}
-		if pHdr.offHeap {
-			allocator().Deallocate(
-				unsafe.Slice((*byte)(hdr), 1),
-				// issue: https://github.com/matrixorigin/matrixone/issues/19758
-				malloc.IgnoreMunmapError,
-			)
-		}
-	}
+	mp.freePtrInternal(detailk, ptr, hdr)
 }
 
-func (mp *MPool) reAlloc(old []byte, sz int, offHeap bool) ([]byte, error) {
-	if sz <= cap(old) {
+func (mp *MPool) freePtrInternal(detailk string, ptr unsafe.Pointer, hdr memHdr) {
+	if !hdr.offHeap {
+		return
+	}
+	sz := int64(hdr.allocSz)
+	if debugPoisonOnFree.Load() {
+		bs := unsafe.Slice((*byte)(ptr), sz)
+		for i := range bs {
+			bs[i] = 0xDD
+		}
+	}
+	profileRecordFree(uintptr(ptr), sz)
+	mp.stats.RecordFree(mp.tag, sz)
+	globalStats.RecordFree("global", sz)
+	mp.resource.recordFree(sz)
+	if mp.details != nil {
+		mp.details.recordFree(detailk, sz)
+	}
+
+	simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
+}
+
+func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHeap bool, bufferMore bool) ([]byte, error) {
+	if sz <= int64(cap(old)) {
 		return old[:sz], nil
 	}
-	ret, err := mp.Alloc(sz, offHeap)
+
+	newSz := sz
+	if bufferMore {
+		var ok bool
+		newSz, ok = GrowCapacity(int64(cap(old)), sz)
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("invalid mpool grow capacity, old %d, required %d", cap(old), sz)
+		}
+	}
+
+	ret, err := mp.allocWithDetailK(detailk, int64(newSz), offHeap)
 	if err != nil {
 		return nil, err
 	}
 	copy(ret, old)
-	mp.Free(old)
-	return ret, nil
-}
-
-// alignUp rounds n up to a multiple of a. a must be a power of 2.
-func alignUp(n, a int) int {
-	return (n + a - 1) &^ (a - 1)
-}
-
-// divRoundUp returns ceil(n / a).
-func divRoundUp(n, a int) int {
-	// a is generally a power of two. This will get inlined and
-	// the compiler will optimize the division.
-	return (n + a - 1) / a
-}
-
-// Returns size of the memory block that mallocgc will allocate if you ask for the size.
-func roundupsize(size int) int {
-	if size < _MaxSmallSize {
-		if size <= smallSizeMax-8 {
-			return int(class_to_size[size_to_class8[divRoundUp(size, smallSizeDiv)]])
-		} else {
-			return int(class_to_size[size_to_class128[divRoundUp(size-smallSizeMax, largeSizeDiv)]])
-		}
-	}
-	if size+_PageSize < size {
-		return size
-	}
-	return alignUp(size, _PageSize)
-}
-
-// Grow is like reAlloc, but we try to be a little bit more aggressive on growing
-// the slice.
-func (mp *MPool) Grow(old []byte, sz int, offHeap bool) ([]byte, error) {
-	if sz < len(old) {
-		return nil, moerr.NewInternalErrorNoCtxf("mpool grow actually shrinks, %d, %d", len(old), sz)
-	}
-	if sz <= cap(old) {
-		return old[:sz], nil
-	}
-	newCap := calculateNewCap(cap(old), sz)
-
-	ret, err := mp.reAlloc(old, newCap, offHeap)
-	if err != nil {
-		return old, err
-	}
+	mp.freeWithDetailK(detailk, old)
 	return ret[:sz], nil
 }
 
-// copy-paste from go slice grow strategy.
-func calculateNewCap(oldCap int, requiredSize int) int {
-	newcap := oldCap
-	doublecap := newcap + newcap
-	if requiredSize > doublecap {
-		newcap = requiredSize
-	} else {
-		const threshold = 256
-		if newcap < threshold {
-			newcap = doublecap
-		} else {
-			for 0 < newcap && newcap < requiredSize {
-				newcap += (newcap + 3*threshold) / 4
-			}
-			if newcap <= 0 {
-				newcap = requiredSize
-			}
-		}
-	}
-	newcap = roundupsize(newcap)
-	if newcap > CapLimit && requiredSize <= CapLimit {
-		newcap = CapLimit
-	}
-	return newcap
+func (mp *MPool) Grow(old []byte, sz int, offHeap bool) ([]byte, error) {
+	detailk := mp.getDetailK()
+	return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, true)
 }
 
 func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, error) {
@@ -747,7 +834,8 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 	if sz < len1+len2 {
 		return nil, moerr.NewInternalErrorNoCtxf("mpool grow2 actually shrinks, %d+%d, %d", len1, len2, sz)
 	}
-	ret, err := mp.Grow(old, sz, offHeap)
+	detailk := mp.getDetailK()
+	ret, err := mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, true)
 	if err != nil {
 		return nil, err
 	}
@@ -756,33 +844,139 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 	return ret, nil
 }
 
-/*
-func (mp *MPool) Increase(nb int64) error {
-	gcurr := globalStats.RecordAlloc("global", nb)
-	if gcurr > GlobalCap() {
-		globalStats.RecordFree(mp.tag, nb)
-		return moerr.NewOOMNoCtx()
+// ReallocZero is like Realloc, but it clears the memory.
+func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
+	detailk := mp.getDetailK()
+	if sz < 0 || sz > CapLimit-kMemHdrSz {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"mpool memory allocation exceed limit with requested size %d",
+			sz,
+		)
 	}
 
-	// check if it is under my cap
-	mycurr := mp.stats.RecordAlloc(mp.tag, nb)
-	if mycurr > mp.Cap() {
-		mp.stats.RecordFree(mp.tag, nb)
-		return moerr.NewInternalErrorNoCtx("mpool out of space, alloc %d bytes, cap %d", nb, mp.cap)
+	// Resizing within the caller-visible capacity cannot change allocator
+	// provenance or ownership, so keep this common path lock-free.
+	if cap(old) > 0 {
+		oldLength := len(old)
+		if sz <= oldLength {
+			return old[:sz], nil
+		}
+		if sz <= cap(old) {
+			resized := old[:sz]
+			clear(resized[oldLength:])
+			return resized, nil
+		}
 	}
-	return nil
+
+	oldptr := unsafe.Pointer(unsafe.SliceData(old))
+	var hdr memHdr
+	var ok bool
+	if oldptr != nil {
+		hdr, ok = mp.getPtrHdr(oldptr)
+	}
+	if !ok {
+		if len(old) != 0 || cap(old) != 0 {
+			return nil, moerr.NewInternalErrorNoCtx(
+				"invalid realloc pointer: allocation metadata not found",
+			)
+		}
+		return mp.allocWithDetailK(detailk, int64(sz), offHeap)
+	}
+
+	if !hdr.CheckGuard() || hdr.allocSz <= 0 {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"invalid realloc pointer: corrupt allocation metadata",
+		)
+	}
+
+	oldSize := int(hdr.allocSz)
+	if len(old) > oldSize || cap(old) > oldSize {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"realloc view exceeds recorded allocation size, len %d, cap %d, recorded %d",
+			len(old),
+			cap(old),
+			oldSize,
+		)
+	}
+
+	// Reconstruct the full allocation from stable mpool metadata. Callers such
+	// as PtrLen intentionally retain only a pointer and logical length, so their
+	// slice capacity is not allocator provenance and may be smaller than the
+	// backing allocation.
+	fullAllocation := unsafe.Slice((*byte)(oldptr), oldSize)
+	oldLength := len(old)
+	if sz <= oldSize {
+		resized := fullAllocation[:sz]
+		if sz > oldLength {
+			clear(resized[oldLength:])
+		}
+		return resized, nil
+	}
+
+	// Only resize in place when the source and destination are off-heap and
+	// owned by this pool. Other provenance/ownership transitions use the normal
+	// allocate-copy-free path so accounting and cross-pool cleanup stay correct.
+	if !hdr.offHeap || !offHeap || hdr.poolId != mp.id {
+		return mp.reAllocWithDetailK(
+			detailk,
+			fullAllocation[:oldLength],
+			int64(sz),
+			offHeap,
+			false,
+		)
+	}
+
+	// C realloc may allocate the replacement before releasing the old block.
+	// Admit the complete temporary peak before entering the allocator, then
+	// retain the new-size charge and release only the old-size charge on success.
+	if globalStats.RecordAlloc("global", int64(sz)) > GlobalCap() {
+		globalStats.RecordFree("global", int64(sz))
+		return nil, moerr.NewOOMNoCtx()
+	}
+	if mp.stats.RecordAlloc(mp.tag, int64(sz)) > mp.Cap() {
+		mp.stats.RecordFree(mp.tag, int64(sz))
+		globalStats.RecordFree("global", int64(sz))
+		return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, realloc %d bytes, cap %d", sz, mp.cap)
+	}
+
+	newbs, err := simpleCAllocator().ReallocZero(
+		fullAllocation[:oldLength],
+		uint64(oldSize),
+		uint64(sz),
+	)
+	if err != nil {
+		mp.stats.RecordFree(mp.tag, int64(sz))
+		globalStats.RecordFree("global", int64(sz))
+		return nil, err
+	}
+	newptr := unsafe.Pointer(&newbs[0])
+	removedHdr, removed := mp.removePtrHdr(oldptr)
+	if !removed || removedHdr != hdr {
+		panic(moerr.NewInternalErrorNoCtx(
+			"allocation metadata changed during realloc",
+		))
+	}
+	newHdr := memHdr{
+		poolId:  hdr.poolId,
+		allocSz: int32(sz),
+		offHeap: true,
+	}
+	newHdr.SetGuard()
+	if err := mp.recordPtrHdr(newptr, newHdr); err != nil {
+		panic(err)
+	}
+	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldSize), int64(sz))
+	globalStats.RecordFree("global", int64(oldSize))
+	mp.stats.RecordFree(mp.tag, int64(oldSize))
+	mp.resource.recordFree(int64(oldSize))
+	mp.recordResourcePeak(mp.resource.recordAlloc(int64(sz)))
+	return newbs, nil
 }
 
-func (mp *MPool) Decrease(nb int64) {
-	mp.stats.RecordFree(mp.tag, nb)
-	globalStats.RecordFree("global", nb)
-}
-*/
-
-func MakeSliceWithCap[T any](n, cap int, mp *MPool, offHeap bool) ([]T, error) {
+func makeSliceWithCapWithDetailK[T any](detailk string, n, cap int, mp *MPool, offHeap bool) ([]T, error) {
 	var t T
 	tsz := unsafe.Sizeof(t)
-	bs, err := mp.Alloc(int(tsz)*cap, offHeap)
+	bs, err := mp.allocWithDetailK(detailk, int64(tsz)*int64(cap), offHeap)
 	if err != nil {
 		return nil, err
 	}
@@ -793,16 +987,26 @@ func MakeSliceWithCap[T any](n, cap int, mp *MPool, offHeap bool) ([]T, error) {
 }
 
 func MakeSlice[T any](n int, mp *MPool, offHeap bool) ([]T, error) {
-	return MakeSliceWithCap[T](n, n, mp, offHeap)
+	detailk := mp.getDetailK()
+	return makeSliceWithCapWithDetailK[T](detailk, n, n, mp, offHeap)
 }
 
 func MakeSliceArgs[T any](mp *MPool, offHeap bool, args ...T) ([]T, error) {
-	ret, err := MakeSlice[T](len(args), mp, offHeap)
+	detailk := mp.getDetailK()
+	ret, err := makeSliceWithCapWithDetailK[T](detailk, len(args), len(args), mp, offHeap)
 	if err != nil {
 		return ret, err
 	}
 	copy(ret, args)
 	return ret, nil
+}
+
+func FreeSlice[T any](mp *MPool, bs []T) {
+	if cap(bs) == 0 {
+		return
+	}
+	detailk := mp.getDetailK()
+	mp.freePtr(detailk, unsafe.Pointer(&bs[0]))
 }
 
 // Report memory usage in json.
@@ -849,4 +1053,130 @@ func MPoolControl(tag string, cmd string) string {
 
 	globalPools.Range(cmdFunc)
 	return "ok"
+}
+
+var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
+	sca := malloc.NewSimpleCAllocator(
+		v2.MallocCounter.WithLabelValues("mpool-allocate"),
+		v2.MallocGauge.WithLabelValues("mpool-inuse"),
+		v2.MallocCounter.WithLabelValues("mpool-allocate-objects"),
+		v2.MallocGauge.WithLabelValues("mpool-inuse-objects"),
+		v2.OffHeapInuseGauge.WithLabelValues("mpool"),
+	)
+	sca.EnableMmapCache(
+		func() uint64 {
+			// Cached mappings are reclaimable and short-lived, but keep their
+			// virtual address space bounded relative to the configured memory
+			// limit. One GiB covers the large hash-table working set without
+			// allowing libc-style unbounded arena retention.
+			return uint64(min(GlobalCap()/4, GB))
+		},
+		v2.OffHeapInuseGauge.WithLabelValues("mpool-cache"),
+	)
+	return sca
+})
+
+func init() {
+	globalStats.Init()
+	for i := 0; i < numPtrShards; i++ {
+		globalPtrShards[i].m = make(map[unsafe.Pointer]memHdr)
+	}
+}
+
+func gRecordPtr(ptr unsafe.Pointer, hdr memHdr) error {
+	shard := getPtrShard(ptr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	_, ok := shard.m[ptr]
+	if ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
+	}
+	shard.m[ptr] = hdr
+	return nil
+}
+
+func gGetPtr(ptr unsafe.Pointer) (memHdr, bool) {
+	shard := getPtrShard(ptr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	hdr, ok := shard.m[ptr]
+	return hdr, ok
+}
+
+func gRemovePtr(ptr unsafe.Pointer) (memHdr, bool) {
+	shard := getPtrShard(ptr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	hdr, ok := shard.m[ptr]
+	delete(shard.m, ptr)
+	return hdr, ok
+}
+
+// alignUp rounds n up to a multiple of a. a must be a power of 2.
+func alignUp(n, a int64) int64 {
+	return (n + a - 1) &^ (a - 1)
+}
+
+// divRoundUp returns ceil(n / a).
+func divRoundUp(n, a int64) int64 {
+	// a is generally a power of two. This will get inlined and
+	// the compiler will optimize the division.
+	return (n + a - 1) / a
+}
+
+// Returns size of the memory block that mallocgc will allocate if you ask for the size.
+func roundupsize(size int64) int64 {
+	if size < _MaxSmallSize {
+		if size <= smallSizeMax-8 {
+			return int64(class_to_size[size_to_class8[divRoundUp(size, smallSizeDiv)]])
+		} else {
+			return int64(class_to_size[size_to_class128[divRoundUp(size-smallSizeMax, largeSizeDiv)]])
+		}
+	}
+	if size+_PageSize < size {
+		return size
+	}
+	return alignUp(size, _PageSize)
+}
+
+// copy-paste from go slice grow strategy.
+// GrowCapacity returns the capacity that Grow and Grow2 will allocate for a
+// request. Callers which must reserve memory before growing a slice use this
+// helper so admission and allocation share the same growth calculation.
+func GrowCapacity(oldCap int64, requiredSize int64) (int64, bool) {
+	if oldCap < 0 || requiredSize < 0 {
+		return 0, false
+	}
+	if requiredSize <= oldCap {
+		return oldCap, true
+	}
+	newcap := oldCap
+	doublecap := newcap + newcap
+	if doublecap < newcap {
+		doublecap = requiredSize
+	}
+	if requiredSize > doublecap {
+		newcap = requiredSize
+	} else {
+		// performance: use a larger threshold (256 -> 4096)
+		const threshold = 4096
+		if newcap < threshold {
+			newcap = doublecap
+		} else {
+			for 0 < newcap && newcap < requiredSize {
+				newcap += (newcap + 3*threshold) / 4
+			}
+			if newcap <= 0 {
+				newcap = requiredSize
+			}
+		}
+	}
+	newcap = roundupsize(newcap)
+	if newcap < requiredSize {
+		return 0, false
+	}
+	if newcap > int64(CapLimit) && requiredSize <= int64(CapLimit) {
+		newcap = int64(CapLimit)
+	}
+	return newcap, true
 }

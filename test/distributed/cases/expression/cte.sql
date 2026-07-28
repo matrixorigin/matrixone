@@ -145,7 +145,13 @@ SELECT (WITH qn AS (SELECT t2.a*a as a FROM t1),
 FROM t1 as t2;
 -- @bvt:issue
 
-WITH qn AS (SELECT b as a FROM t1)
+
+-- @case
+-- @desc:scalar subquery returns more than 1 row
+-- @label:bvt
+drop table if exists qn;
+create table qn(a int);
+insert into qn values (1), (2), (3);
 SELECT (WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0)
         SELECT qn2.a FROM qn2) FROM qn;
 

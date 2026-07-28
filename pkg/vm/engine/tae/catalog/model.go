@@ -35,6 +35,7 @@ const (
 var SystemDBSchema *Schema
 var SystemTableSchema *Schema
 var SystemColumnSchema *Schema
+var SystemIndexTableSchema *Schema
 
 const (
 	ModelSchemaName   = "_ModelSchema"
@@ -64,6 +65,11 @@ func init() {
 	}
 
 	SystemColumnSchema, err = DefsToSchema(pkgcatalog.MO_COLUMNS, defs.MoColumnsTableDefs)
+	if err != nil {
+		panic(err)
+	}
+
+	SystemIndexTableSchema, err = DefsToSchema(pkgcatalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME, defs.MoTablesLogicalIdIndexTableDefs)
 	if err != nil {
 		panic(err)
 	}
@@ -111,6 +117,12 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *Schema, err erro
 					schema.Createsql = property.Value
 				case pkgcatalog.PropSchemaExtra:
 					schema.Extra = api.MustUnmarshalTblExtra([]byte(property.Value))
+				case pkgcatalog.PropFromPublication:
+					// Check if table is created by publication
+					// Property value should be "true" (case-insensitive)
+					if strings.ToLower(property.Value) == "true" {
+						schema.FromPublication = true
+					}
 				default:
 				}
 			}
@@ -130,6 +142,10 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *Schema, err erro
 		default:
 			// We will not deal with other cases for the time being
 		}
+	}
+	// Read FromPublication from Extra if set (stored via extraInfo in mo_tables)
+	if schema.Extra != nil && schema.Extra.FromPublication {
+		schema.FromPublication = true
 	}
 	if err = schema.Finalize(false); err != nil {
 		return
@@ -186,6 +202,12 @@ func SchemaToDefs(schema *Schema) (defs []engine.TableDef, err error) {
 			Value: schema.Createsql,
 		})
 	}
+	if schema.FromPublication {
+		pro.Properties = append(pro.Properties, engine.Property{
+			Key:   pkgcatalog.PropFromPublication,
+			Value: "true",
+		})
+	}
 	pro.Properties = append(pro.Properties, engine.Property{
 		Key:   pkgcatalog.PropSchemaExtra,
 		Value: string(api.MustMarshalTblExtra(schema.Extra)),
@@ -212,6 +234,14 @@ func AttrFromColDef(col *ColDef) (attrs *engine.Attribute, err error) {
 		}
 	}
 
+	var generatedCol *plan.GeneratedCol
+	if len(col.GeneratedCol) > 0 {
+		generatedCol = new(plan.GeneratedCol)
+		if err := types.Decode(col.GeneratedCol, generatedCol); err != nil {
+			return nil, err
+		}
+	}
+
 	attr := &engine.Attribute{
 		Name:          col.Name,
 		Type:          col.Type,
@@ -221,6 +251,7 @@ func AttrFromColDef(col *ColDef) (attrs *engine.Attribute, err error) {
 		Comment:       col.Comment,
 		Default:       defaultVal,
 		OnUpdate:      onUpdate,
+		GeneratedCol:  generatedCol,
 		AutoIncrement: col.IsAutoIncrement(),
 		ClusterBy:     col.IsClusterBy(),
 	}

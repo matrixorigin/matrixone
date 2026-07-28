@@ -16,6 +16,9 @@ package readutil
 
 import (
 	"context"
+	"slices"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"slices"
-	"sort"
 )
 
 const (
@@ -189,7 +190,6 @@ func (rs *RemoteDataSource) GetTombstones(
 }
 
 func (rs *RemoteDataSource) SetOrderBy(_ []*plan.OrderBySpec) {
-
 }
 
 func (rs *RemoteDataSource) GetOrderBy() []*plan.OrderBySpec {
@@ -207,11 +207,40 @@ func NewRemoteDataSource(
 	relData engine.RelData,
 ) (source *RemoteDataSource) {
 	return &RemoteDataSource{
-		data: relData,
+		data: stripFirstEmptyBlock(relData),
 		ctx:  ctx,
 		fs:   fs,
 		ts:   types.TimestampToTS(snapshotTS),
 	}
+}
+
+func stripFirstEmptyBlock(relData engine.RelData) engine.RelData {
+	if relData == nil {
+		return relData
+	}
+	switch rd := relData.(type) {
+	case *ObjListRelData:
+		if rd == nil {
+			return nil
+		}
+		rd.expand()
+		relData = &rd.blocklistRelData
+	case *BlockListRelData:
+		if rd == nil {
+			return nil
+		}
+		relData = rd
+	default:
+		return relData
+	}
+	if relData.DataCnt() == 0 {
+		return relData
+	}
+	blk := relData.GetBlockInfo(0)
+	if blk.IsMemBlk() {
+		return relData.DataSlice(1, relData.DataCnt())
+	}
+	return relData
 }
 
 // --------------------------------------------------------------------------------

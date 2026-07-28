@@ -1,0 +1,8 @@
+# MinIO data directory
+minio-data/
+
+# MatrixOne data directory (if created in this directory)
+mo-data/
+
+# Generated local Iceberg profile environments
+*.generated.env

@@ -19,10 +19,12 @@ import (
 	"context"
 	"fmt"
 	"runtime/trace"
-	"sort"
+	"slices"
+	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -47,13 +48,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 )
 
 const (
-	TransferSinkerBufferSize          = common.Const1MBytes * 5
 	TransferSinkerMemorySizeThreshold = common.Const1MBytes * 50
 )
+
+// debugSkipFreezePhaseTransfer is a test-only flag. When enabled,
+// TransferDeletes is skipped during the Freeze phase so that the
+// PrePrepare phase is the only transfer pass. This makes vector
+// reallocation bugs observable in a single-pass transfer.
+var debugSkipFreezePhaseTransfer atomic.Bool
+
+func EnableDebugSkipFreezePhaseTransfer()  { debugSkipFreezePhaseTransfer.Store(true) }
+func DisableDebugSkipFreezePhaseTransfer() { debugSkipFreezePhaseTransfer.Store(false) }
 
 type txnEntries struct {
 	entries []txnif.TxnEntry
@@ -109,6 +119,85 @@ type txnTable struct {
 	dedupTS types.TS
 
 	idx int
+
+	// expectedAutoIncrEpochs are the known CN allocator epochs this
+	// transaction's user-table writes were planned against. A transaction can
+	// legitimately use both the committed version and the version created by
+	// its own ALTER TABLE.
+	expectedAutoIncrEpochs map[uint32]struct{}
+	autoIncrementAlter     bool
+}
+
+func (tbl *txnTable) validateAutoIncrementDMLOrder() error {
+	if tbl.autoIncrementAlter {
+		if tbl.entry.ShouldRetryAutoIncrementAlter(tbl.store.txn.GetStartTS()) {
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		return nil
+	}
+	if len(tbl.expectedAutoIncrEpochs) > 0 {
+		tbl.entry.RecordKnownDMLPrepare(tbl.store.txn.GetPrepareTS())
+	}
+	return nil
+}
+
+func (tbl *txnTable) setExpectedAutoIncrEpoch(epoch uint32) error {
+	if tbl.expectedAutoIncrEpochs == nil {
+		tbl.expectedAutoIncrEpochs = make(map[uint32]struct{}, 2)
+	}
+	tbl.expectedAutoIncrEpochs[epoch] = struct{}{}
+	return nil
+}
+
+func (tbl *txnTable) validateAutoIncrEpoch() error {
+	if len(tbl.expectedAutoIncrEpochs) == 0 {
+		return nil
+	}
+
+	prepareTS := tbl.store.txn.GetPrepareTS()
+	for {
+		tbl.entry.RLock()
+		latest := tbl.entry.GetLatestNodeLocked()
+		if latest != nil && !latest.IsSameTxn(tbl.store.txn) {
+			if needWait, txnToWait := latest.NeedWaitCommitting(prepareTS); needWait {
+				tbl.entry.RUnlock()
+				txnToWait.GetTxnState(true)
+				continue
+			}
+		}
+
+		baseEpoch := uint32(0)
+		localEpoch := uint32(0)
+		hasLocalEpoch := false
+		tbl.entry.LoopChainLocked(func(node *catalog.MVCCNode[*catalog.TableMVCCNode]) bool {
+			// A same-transaction ALTER is unordered with the transaction's DML.
+			// Keep scanning for the committed base version as both are valid.
+			if node.IsSameTxn(tbl.store.txn) {
+				localEpoch = node.BaseNode.Schema.Extra.AutoIncrEpoch
+				hasLocalEpoch = true
+				return true
+			}
+			if node.IsActive() || node.IsCommitting() || node.IsAborted() {
+				return true
+			}
+			// A schema committed with a later prepare timestamp is ordered after
+			// this DML and must not invalidate it.
+			nodePrepareTS := node.GetPrepare()
+			if nodePrepareTS.GT(&prepareTS) {
+				return true
+			}
+			baseEpoch = node.BaseNode.Schema.Extra.AutoIncrEpoch
+			return false
+		})
+		tbl.entry.RUnlock()
+
+		for expected := range tbl.expectedAutoIncrEpochs {
+			if expected != baseEpoch && (!hasLocalEpoch || expected != localEpoch) {
+				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+		}
+		return nil
+	}
 }
 
 func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) {
@@ -139,6 +228,9 @@ func (tbl *txnTable) getBaseTable(isTombstone bool) *baseTable {
 func (tbl *txnTable) PrePreareTransfer(
 	ctx context.Context, phase string, ts types.TS,
 ) (err error) {
+	if debugSkipFreezePhaseTransfer.Load() && phase == txnif.FreezePhase {
+		return
+	}
 	err = tbl.TransferDeletes(ctx, ts, phase)
 	tbl.transferedTS = ts
 	return
@@ -257,8 +349,11 @@ func (tbl *txnTable) TransferDeletes(
 			}
 		}
 		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(startTS, ts)
-		sort.Slice(softDeleteObjects, func(i, j int) bool {
-			return softDeleteObjects[i].CreatedAt.LE(&softDeleteObjects[j].CreatedAt)
+		// Stable sort with a strict comparator: objects created at the same
+		// timestamp keep their original relative order (the tie-breaker), instead
+		// of sort.Slice's unspecified tie ordering.
+		slices.SortStableFunc(softDeleteObjects, func(a, b *catalog.ObjectEntry) int {
+			return a.CreatedAt.Compare(&b.CreatedAt)
 		})
 		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
 		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))
@@ -367,7 +462,6 @@ func (tbl *txnTable) TransferDeletes(
 						*pkType,
 						common.WorkspaceAllocator,
 						tbl.store.rt.Fs,
-						ioutil.WithBufferSizeCap(TransferSinkerBufferSize),
 						ioutil.WithMemorySizeThreshold(TransferSinkerMemorySizeThreshold))
 				}
 				sinker.Write(ctx, containers.ToCNBatch(currentTransferBatch))
@@ -404,8 +498,9 @@ func (tbl *txnTable) TransferDeletes(
 	}
 	deletes := tbl.tombstoneTable.tableSpace.node.data
 	pkVec := deletes.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
+	rowidVec := deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr)
 	rowids := vector.MustFixedColNoTypeCheck[types.Rowid](
-		deletes.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
+		rowidVec.GetDownstreamVector(),
 	)
 	var pkType *types.Type
 	for i, end := 0, len(rowids); i < end; i++ {
@@ -445,6 +540,12 @@ func (tbl *txnTable) TransferDeletes(
 		if _, err = tbl.TransferDeleteRows(id, rowOffset, pk, pkType, phase, ts); err != nil {
 			return
 		}
+		// TransferDeleteRows may append to the same anode, which can
+		// trigger mpool.Grow and reallocate the underlying buffer.
+		// Refresh the rowids slice to avoid reading freed memory.
+		rowids = vector.MustFixedColNoTypeCheck[types.Rowid](
+			rowidVec.GetDownstreamVector(),
+		)
 	}
 	if transferd.IsEmpty() {
 		return
@@ -689,9 +790,6 @@ func (tbl *txnTable) SoftDeleteObject(id *types.Objectid, isTombstone bool) (err
 }
 
 func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err error) {
-	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Object.Create.Add(1)
-	})
 	sorted := isTombstone
 	noid := objectio.NewObjectid()
 	stats := objectio.NewObjectStatsWithObjectID(
@@ -700,18 +798,62 @@ func (tbl *txnTable) CreateObject(isTombstone bool) (obj handle.Object, err erro
 		sorted,
 		false,
 	)
-	return tbl.createObject(
+	return tbl.createCommittedAppendableObject(
 		&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone},
 	)
 }
 
+func (tbl *txnTable) CreateObjectWithOpt(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	return tbl.createCommittedAppendableObject(opts)
+}
+
 func (tbl *txnTable) CreateNonAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
-	perfcounter.Update(
-		tbl.store.ctx,
-		func(counter *perfcounter.CounterSet) {
-			counter.TAE.Object.CreateNonAppendable.Add(1)
-		})
 	return tbl.createObject(opts)
+}
+
+func (tbl *txnTable) createCommittedAppendableObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	if !opts.Stats.GetAppendable() {
+		return nil, moerr.NewInternalErrorNoCtx("CreateObject outside txn only supports appendable object")
+	}
+	txn := tbl.store.txn
+	baseTxn, ok := tbl.store.txn.GetBase().(*txnbase.Txn)
+	if !ok || baseTxn.Mgr == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing txn manager for appendable object create")
+	}
+	var factory catalog.ObjectDataFactory
+	if tbl.store.catalog.DataFactory != nil {
+		factory = tbl.store.catalog.DataFactory.MakeObjectFactory()
+	}
+	var meta *catalog.ObjectEntry
+	if txn.GetTxnState(false) == txnif.TxnStatePreparing {
+		// This is a deliberate exception to the normal atomic timestamp
+		// allocation and catalog publication below. Flush and merge may transfer
+		// deletes after the parent has entered PrepareCommit, and each new
+		// appendable object is only a carrier for rows still owned by that parent
+		// transaction. A fresh object timestamp would split rewritten data from
+		// its tombstones. Use the parent's visibility boundary instead.
+		// Correctness scan paths that cross it wait on the parent's rewritten
+		// data/append MVCC before snapshotting the transfer tombstones, and WAL
+		// replay reconstructs the carrier from its append at the same timestamp.
+		//
+		// Do not use this branch for independently committed object state: such
+		// state must retain AllocateAndPublishCommitTS ordering.
+		meta, err = tbl.entry.CreateCommittedObject(txn.GetPrepareTS(), opts, factory)
+		if err != nil {
+			return
+		}
+		obj = newObject(tbl, meta)
+		return
+	}
+	_, err = baseTxn.Mgr.AllocateAndPublishCommitTS(func(createTS types.TS) error {
+		meta, err = tbl.entry.CreateCommittedObject(createTS, opts, factory)
+		return err
+	})
+	if err != nil {
+		return
+	}
+	obj = newObject(tbl, meta)
+	return
 }
 
 func (tbl *txnTable) createObject(opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
@@ -996,7 +1138,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 		apipb.AlterKind_RenameTable,
 		apipb.AlterKind_UpdatePolicy,
 		apipb.AlterKind_AddPartition,
-		apipb.AlterKind_RenameColumn:
+		apipb.AlterKind_RenameColumn,
+		apipb.AlterKind_UpdateAutoIncrement:
 	case apipb.AlterKind_ReplaceDef:
 		return nil
 	default:
@@ -1022,13 +1165,16 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 			return err
 		}
 	}
+	if req.Kind == apipb.AlterKind_UpdateAutoIncrement {
+		tbl.autoIncrementAlter = true
+	}
 
 	tbl.dataTable.schema = newSchema // update new schema to txn local schema
 	//TODO(aptend): handle written data in localobj, keep the batch aligned with the new schema
 	return err
 }
 
-// PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
+// PrePrepareDedup performs deduplication during the shared pre-commit prepare phase.
 func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phase string, ts types.TS) (err error) {
 	baseTable := tbl.getBaseTable(isTombstone)
 	if baseTable == nil || baseTable.tableSpace == nil || !baseTable.schema.HasPK() || baseTable.schema.IsSecondaryIndexTable() {
@@ -1043,6 +1189,14 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 				return
 			}
 		}
+	}
+
+	// DoPrecommitDedupByPK checks for data committed by other transactions
+	// between the txn start and prepare timestamp. When SkipTargetAllCommitted
+	// is set (e.g. CCPR SkipAllDedup), skip this check to be consistent with
+	// the write-time dedup() which also skips all committed data checks.
+	if dedupType.SkipTargetAllCommitted() {
+		return
 	}
 
 	if baseTable.tableSpace.node == nil {
@@ -1107,7 +1261,13 @@ func (tbl *txnTable) DedupSnapByPK(
 				zap.String("pk", keys.PPString(keys.Length())),
 				zap.String("rowids", rowIDs.PPString(rowIDs.Length())),
 			)
-			entry := common.TypeStringValue(*keys.GetType(), keys.Get(i), false)
+			var entry string
+			if strings.HasPrefix(colName, "__mo") {
+				// try to unpack the key, it doesn't matter if it is not a composite key
+				entry = common.TypeStringValue(*keys.GetType(), keys.Get(i), false, common.WithIsComposite{})
+			} else {
+				entry = common.TypeStringValue(*keys.GetType(), keys.Get(i), false)
+			}
 			return moerr.NewDuplicateEntryNoCtx(entry, colName)
 		}
 	}
@@ -1136,33 +1296,7 @@ func (tbl *txnTable) findDeletes(
 	tbl.entry.WaitTombstoneObjectCommitted(to)
 	it := tbl.entry.MakeTombstoneObjectIt()
 	defer it.Release()
-	var earlybreak bool
-	for ok := it.Last(); ok; ok = it.Prev() {
-		if earlybreak {
-			break
-		}
-		obj := it.Item()
-
-		if obj.CreatedAt.GT(&to) {
-			continue
-		}
-
-		if obj.IsAppendable() {
-			if !obj.HasDropIntent() && obj.CreatedAt.LT(&from) {
-				earlybreak = true
-			}
-		} else if obj.CreatedAt.LT(&from) {
-			continue
-		}
-
-		// only keep the category-a + category-c for candidates.
-		if obj.GetPrevVersion() == nil && obj.GetNextVersion() != nil {
-			continue
-		}
-
-		if !obj.VisibleByTS(to) {
-			continue
-		}
+	return foreachIncrementalObject(&it, from, to, func(obj *catalog.ObjectEntry) error {
 		objData := obj.GetObjectData()
 		if objData == nil {
 			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
@@ -1172,24 +1306,20 @@ func (tbl *txnTable) findDeletes(
 		if obj.Rows() != 0 {
 			var skip bool
 			if skip, err = quickSkipThisObject(ctx, keysZM, obj); err != nil {
-				return
+				return err
 			} else if skip {
-				continue
+				return nil
 			}
 		}
 
-		if err = objData.Contains(
+		return objData.Contains(
 			ctx,
 			tbl.store.txn,
 			rowIDs,
 			keysZM,
 			common.WorkspaceAllocator,
-		); err != nil {
-			// logutil.Infof("%s, %s, %v", obj.String(), rowmask, err)
-			return
-		}
-	}
-	return
+		)
+	})
 }
 
 // DoPrecommitDedupByPK 1. it do deduplication by traversing all the Objects/blocks, and
@@ -1291,7 +1421,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 		if tbl.dedupTS.IsEmpty() {
 			tbl.dedupTS = tbl.store.txn.GetStartTS()
 		}
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS, now, true)
+		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS.Next(), now, true)
 		if err != nil {
 			return
 		}
@@ -1419,10 +1549,19 @@ func (tbl *txnTable) dumpCore(errMsg string) {
 }
 
 func (tbl *txnTable) PrepareCommit() (err error) {
+	if err = tbl.validateAutoIncrEpoch(); err != nil {
+		return err
+	}
+	if err = tbl.validateAutoIncrementDMLOrder(); err != nil {
+		return err
+	}
 	nodeCount := len(tbl.txnEntries.entries)
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
+		}
+		if isAppendableObjectCreateEntry(node) {
+			panic("appendable object create entry must not be committed through txn")
 		}
 		if err = node.PrepareCommit(); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
@@ -1452,6 +1591,9 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 			if tbl.txnEntries.IsDeleted(idx) {
 				continue
 			}
+			if isAppendableObjectCreateEntry(tbl.txnEntries.entries[idx]) {
+				panic("appendable object create entry must not be committed through txn")
+			}
 			if err = tbl.txnEntries.entries[idx].PrepareCommit(); err != nil {
 				break
 			}
@@ -1469,6 +1611,9 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
+		}
+		if isAppendableObjectCreateEntry(node) {
+			panic("appendable object create entry must not be committed through txn")
 		}
 		if err = node.ApplyCommit(tbl.store.txn.GetID()); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) {
@@ -1508,6 +1653,11 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 		csn++
 	}
 	return
+}
+
+func isAppendableObjectCreateEntry(entry txnif.TxnEntry) bool {
+	obj, ok := entry.(*catalog.ObjectEntry)
+	return ok && obj.ObjectState == catalog.ObjectState_Create_Active && obj.IsAppendable()
 }
 
 func (tbl *txnTable) ApplyRollback() (err error) {

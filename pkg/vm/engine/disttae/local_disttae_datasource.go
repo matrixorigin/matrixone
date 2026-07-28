@@ -19,9 +19,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
-
-	"go.uber.org/zap"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"go.uber.org/zap"
 )
 
 func NewLocalDataSource(
@@ -134,10 +133,25 @@ type LocalDisttaeDataSource struct {
 	blockZMS []index.ZM
 	sorted   bool // blks need to be sorted by zonemap
 	OrderBy  []*plan.OrderBySpec
+	Limit    uint64
 
 	filterZM        objectio.ZoneMap
 	tombstonePolicy engine.TombstoneApplyPolicy
+
+	workspaceDeletes struct {
+		initialized bool
+		txnOffset   int
+		entries     []workspaceDeleteEntry
+		byBlock     map[objectio.Blockid][]workspaceDeleteEntry
+	}
 }
+
+type workspaceDeleteEntry struct {
+	rowIds []objectio.Rowid
+	sorted bool
+}
+
+const mergeWorkspaceDeleteEntriesThreshold = 1024
 
 func (ls *LocalDisttaeDataSource) String() string {
 	blks := make([]*objectio.BlockInfo, ls.rangeSlice.Len())
@@ -193,7 +207,105 @@ func (ls *LocalDisttaeDataSource) getBlockZMs() {
 	orderByCol, _ := ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col)
 
 	def := ls.table.tableDef
-	orderByColIDX := int(def.Cols[int(orderByCol.Col.ColPos)].Seqnum)
+
+	// Find the column by name instead of using ColPos directly.
+	// In JOIN scenarios, ColPos points to the projection list position,
+	// not the table column position. We need to find the column by name.
+	var orderByColIDX int = -1
+	orderByColName := strings.ToLower(orderByCol.Col.Name)
+
+	// Extract column name from qualified name format (e.g., "db.table.column" -> "column")
+	// Use LastIndex to handle cases where column name itself might contain dots
+	if idx := strings.LastIndex(orderByColName, "."); idx >= 0 {
+		orderByColName = orderByColName[idx+1:]
+	}
+
+	// Validate RelPos: In JOIN scenarios, RelPos indicates which table the column belongs to.
+	// For LocalDisttaeDataSource, we typically only handle one table (RelPos=0 or -1).
+	// If RelPos > 0, it might indicate the column is from a joined table, which we can't handle here.
+	// However, in practice, ORDER BY columns from joined tables might still be processed,
+	// so we'll proceed but log a warning if RelPos seems inconsistent.
+	relPos := orderByCol.Col.RelPos
+	if relPos > 0 {
+		// This might be a column from a joined table, but we'll still try to find it
+		// in the current table definition as the column might have been projected.
+		logutil.Debug("getBlockZMs: ORDER BY column has RelPos > 0, might be from joined table",
+			zap.String("column", orderByCol.Col.Name),
+			zap.Int32("RelPos", relPos))
+	}
+
+	// First try to use Name2ColIndex if available (O(1) lookup)
+	// Note: Name2ColIndex keys should be lowercase according to proto definition
+	if def.Name2ColIndex != nil {
+		if colIdx, ok := def.Name2ColIndex[orderByColName]; ok {
+			if int(colIdx) < len(def.Cols) {
+				// Verify the found column's type matches the ORDER BY expression type
+				foundCol := def.Cols[colIdx]
+				if foundCol.Typ.Id == ls.OrderBy[0].Expr.Typ.Id {
+					orderByColIDX = int(foundCol.Seqnum)
+				} else {
+					logutil.Warn("getBlockZMs: type mismatch in Name2ColIndex lookup",
+						zap.String("column", orderByColName),
+						zap.Int32("foundType", foundCol.Typ.Id),
+						zap.Int32("expectedType", ls.OrderBy[0].Expr.Typ.Id))
+				}
+			}
+		}
+	}
+
+	// If Name2ColIndex is not available or lookup failed, search by name
+	if orderByColIDX == -1 {
+		for _, col := range def.Cols {
+			if strings.ToLower(col.Name) == orderByColName {
+				// Verify type match before using this column
+				if col.Typ.Id == ls.OrderBy[0].Expr.Typ.Id {
+					orderByColIDX = int(col.Seqnum)
+					break
+				} else {
+					logutil.Debug("getBlockZMs: found column by name but type mismatch, continuing search",
+						zap.String("column", orderByColName),
+						zap.Int32("foundType", col.Typ.Id),
+						zap.Int32("expectedType", ls.OrderBy[0].Expr.Typ.Id))
+				}
+			}
+		}
+	}
+
+	// Fallback to ColPos only if:
+	// 1. Name lookup completely failed
+	// 2. RelPos is 0 or -1 (indicating it's from the current table, not a joined table)
+	// 3. ColPos is within valid bounds
+	// This fallback is risky in JOIN scenarios, so we add extra validation
+	if orderByColIDX == -1 {
+		if relPos <= 0 && int(orderByCol.Col.ColPos) < len(def.Cols) {
+			fallbackCol := def.Cols[int(orderByCol.Col.ColPos)]
+			// Verify type match before using fallback
+			if fallbackCol.Typ.Id == ls.OrderBy[0].Expr.Typ.Id {
+				orderByColIDX = int(fallbackCol.Seqnum)
+				logutil.Debug("getBlockZMs: using ColPos fallback",
+					zap.String("column", orderByCol.Col.Name),
+					zap.Int32("ColPos", orderByCol.Col.ColPos),
+					zap.String("foundColumn", fallbackCol.Name))
+			} else {
+				logutil.Warn("getBlockZMs: ColPos fallback type mismatch",
+					zap.String("column", orderByCol.Col.Name),
+					zap.Int32("ColPos", orderByCol.Col.ColPos),
+					zap.Int32("foundType", fallbackCol.Typ.Id),
+					zap.Int32("expectedType", ls.OrderBy[0].Expr.Typ.Id))
+			}
+		}
+	}
+
+	// If we still haven't found the column, panic with detailed error information
+	if orderByColIDX == -1 {
+		var availableCols []string
+		for _, col := range def.Cols {
+			availableCols = append(availableCols, fmt.Sprintf("%s(type=%d)", col.Name, col.Typ.Id))
+		}
+		panic(fmt.Sprintf(
+			"getBlockZMs: cannot find column for ORDER BY: name=%s, ColPos=%d, RelPos=%d, expectedType=%d, tableColsCount=%d, availableCols=%v",
+			orderByCol.Col.Name, orderByCol.Col.ColPos, relPos, ls.OrderBy[0].Expr.Typ.Id, len(def.Cols), availableCols))
+	}
 
 	sliceLen := ls.rangeSlice.Len()
 	ls.blockZMS = make([]index.ZM, sliceLen)
@@ -224,29 +336,37 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 	}
 	ls.rangeSlice = make(objectio.BlockInfoSlice, ls.rangeSlice.Size())
 
+	// compareInit orders uninitialized zone maps before initialized ones and
+	// treats two uninitialized zone maps as equal, so the comparator is a valid
+	// strict weak ordering (unlike a bare min/max compare, which is undefined for
+	// uninitialized zone maps). It returns (result, done): done is false only when
+	// both zone maps are initialized and the caller must compare values.
+	compareInit := func(a, b *blockSortHelper) (int, bool) {
+		ai, bi := a.zm.IsInited(), b.zm.IsInited()
+		if ai && bi {
+			return 0, false
+		}
+		if ai == bi {
+			return 0, true // both uninitialized: equal
+		}
+		if !ai {
+			return -1, true // uninitialized sorts first
+		}
+		return 1, true
+	}
 	if ls.desc {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
-			if !zm1.IsInited() {
-				return true
+		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+			if r, done := compareInit(a, b); done {
+				return r
 			}
-			zm2 := helper[j].zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMax(zm2) > 0
+			return b.zm.CompareMax(a.zm) // descending by max
 		})
 	} else {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
-			if !zm1.IsInited() {
-				return true
+		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+			if r, done := compareInit(a, b); done {
+				return r
 			}
-			zm2 := helper[j].zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMin(zm2) < 0
+			return a.zm.CompareMin(b.zm) // ascending by min
 		})
 	}
 
@@ -385,7 +505,7 @@ func (ls *LocalDisttaeDataSource) Next(
 
 func (ls *LocalDisttaeDataSource) handleOrderBy() {
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
-	if len(ls.OrderBy) > 0 {
+	if len(ls.OrderBy) > 0 && ls.Limit == 0 {
 		if !ls.sorted {
 			ls.desc = ls.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 			ls.getBlockZMs()
@@ -548,11 +668,6 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			break
 		}
 
-		if writes[ls.wsCursor].bat == nil || writes[ls.wsCursor].bat.RowCount() == 0 {
-			ls.wsCursor++
-			continue
-		}
-
 		entry := writes[ls.wsCursor]
 
 		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
@@ -570,6 +685,19 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			put := ls.table.db.getEng().packerPool.Get(&packer)
 			ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
 			put.Put()
+		}
+
+		// apply bf filter on workspace entries
+		if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
+			if skipMask.IsEmpty() {
+				skipMask = objectio.GetReusableBitmap()
+			}
+			bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
+			ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
+				if !exist {
+					skipMask.Add(uint64(row))
+				}
+			})
 		}
 
 		offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
@@ -647,10 +775,9 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		if !ls.memPKFilter.Valid() {
 			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		} else {
-			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIter(
+			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIterWithFilters(
 				ls.memPKFilter.TS,
-				ls.memPKFilter.Op(),
-				ls.memPKFilter.Keys())
+				ls.memPKFilter.Specs())
 		}
 		if summaryBuf != nil {
 			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
@@ -682,11 +809,16 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		minTS            = types.MaxTs()
 		inputRowCnt      = outBatch.RowCount()
 		applyOffset      = 0
+		iterKind         = "rows"
 	)
+	if ls.memPKFilter.Valid() {
+		iterKind = "primary-key"
+	}
 
 	var (
 		scan      int
 		inserted  int
+		bfSkipped int
 		delInFile int
 	)
 
@@ -710,6 +842,19 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				continue
 			}
 
+			// apply bf filter on committed entries
+			if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
+				bfColVec := entry.Batch.Vecs[2+ls.memPKFilter.BFSeqNum] // 2 for rowid and commits
+				if bfColVec.IsNull(uint64(entry.Offset)) {
+					bfSkipped++
+					continue
+				}
+				if !ls.memPKFilter.FilterHint.BF.Test(bfColVec.GetRawBytesAt(int(entry.Offset))) {
+					bfSkipped++
+					continue
+				}
+			}
+
 			if minTS.GT(&entry.Time) {
 				minTS = entry.Time
 			}
@@ -722,12 +867,21 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			); err != nil {
 				return err
 			}
-
 			for i := range outBatch.Attrs {
 				if i == physicalColumnPos {
 					continue
 				}
-				idx := 2 /*rowid and commits*/ + seqNums[i]
+
+				var idx uint16
+				switch seqNums[i] {
+				case objectio.SEQNUM_COMMITTS:
+					// in-memory committed row batch layout:
+					// [0]=rowid, [1]=commitTS, [2+seq]=user columns
+					idx = 1
+				default:
+					idx = 2 /*rowid and commits*/ + seqNums[i]
+				}
+
 				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 					entry.Batch.Attrs[idx] == "" /*drop column*/ {
 					err = vector.AppendAny(
@@ -737,7 +891,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 						mp)
 				} else {
 					err = outBatch.Vecs[i].UnionOne(
-						entry.Batch.Vecs[int(2+seqNums[i])],
+						entry.Batch.Vecs[int(idx)],
 						entry.Offset,
 						mp,
 					)
@@ -785,6 +939,17 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		// found one row in InMemCommitted for the pk equal, record it
 		ls.memPKFilter.RecordExactHit()
 	}
+	logPKFilterInMemSummary(
+		ctx,
+		"local-committed-inserts",
+		ls.memPKFilter,
+		iterKind,
+		scan,
+		inserted,
+		bfSkipped,
+		delInFile,
+		outBatch.RowCount()-inputRowCnt,
+	)
 
 	return nil
 }
@@ -929,18 +1094,8 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 		defer ls.table.getTxn().Unlock()
 	}
 
-	//done := false
-	writes := ls.table.getTxn().writes[:ls.txnOffset]
-
-	for idx := range writes {
-		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
-			continue
-		}
-
-		sorted := writes[idx].bat.Vecs[0].GetSorted()
-		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
-
-		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, rowIds, sorted)
+	for _, entry := range ls.workspaceDeleteEntriesForBlockLocked(bid) {
+		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, entry.rowIds, entry.sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
 			break
@@ -948,6 +1103,99 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 	}
 
 	return leftRows
+}
+
+func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
+	bid *objectio.Blockid,
+) []workspaceDeleteEntry {
+	entries := ls.workspaceDeleteEntriesLocked()
+	if len(entries) == 0 {
+		return nil
+	}
+	if ls.workspaceDeletes.byBlock == nil {
+		ls.workspaceDeletes.byBlock = make(map[objectio.Blockid][]workspaceDeleteEntry)
+		for idx := range entries {
+			ls.addWorkspaceDeleteEntryByBlock(entries[idx])
+		}
+	}
+	return ls.workspaceDeletes.byBlock[*bid]
+}
+
+func (ls *LocalDisttaeDataSource) addWorkspaceDeleteEntryByBlock(entry workspaceDeleteEntry) {
+	if len(entry.rowIds) == 0 {
+		return
+	}
+	// workspaceDeleteEntriesLocked normalizes every cached entry to sorted rowids,
+	// so equal block ids are contiguous and can be indexed by slicing.
+	start := 0
+	current := entry.rowIds[0].CloneBlockID()
+	for idx := 1; idx < len(entry.rowIds); idx++ {
+		blockID := entry.rowIds[idx].CloneBlockID()
+		if blockID == current {
+			continue
+		}
+		ls.workspaceDeletes.byBlock[current] = append(
+			ls.workspaceDeletes.byBlock[current],
+			workspaceDeleteEntry{rowIds: entry.rowIds[start:idx], sorted: true})
+		start = idx
+		current = blockID
+	}
+	ls.workspaceDeletes.byBlock[current] = append(
+		ls.workspaceDeletes.byBlock[current],
+		workspaceDeleteEntry{rowIds: entry.rowIds[start:], sorted: true})
+}
+
+func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDeleteEntry {
+	if ls.workspaceDeletes.initialized && ls.workspaceDeletes.txnOffset == ls.txnOffset {
+		return ls.workspaceDeletes.entries
+	}
+
+	entries := ls.workspaceDeletes.entries[:0]
+	writes := ls.table.getTxn().writes[:ls.txnOffset]
+	for idx := range writes {
+		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
+			continue
+		}
+
+		entryRowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
+		sorted := writes[idx].bat.Vecs[0].GetSorted()
+		if !sorted {
+			if len(entryRowIds) <= 1 {
+				sorted = true
+			} else {
+				entryRowIds = slices.Clone(entryRowIds)
+				slices.SortFunc(entryRowIds, func(a, b objectio.Rowid) int { return a.Compare(&b) })
+				sorted = true
+			}
+		}
+		entries = append(entries, workspaceDeleteEntry{
+			rowIds: entryRowIds,
+			sorted: sorted,
+		})
+	}
+
+	if len(entries) > mergeWorkspaceDeleteEntriesThreshold {
+		totalRows := 0
+		for _, entry := range entries {
+			totalRows += len(entry.rowIds)
+		}
+		rowIds := make([]objectio.Rowid, 0, totalRows)
+		for _, entry := range entries {
+			rowIds = append(rowIds, entry.rowIds...)
+		}
+		slices.SortFunc(rowIds, func(a, b objectio.Rowid) int { return a.Compare(&b) })
+		entries = entries[:0]
+		entries = append(entries, workspaceDeleteEntry{
+			rowIds: rowIds,
+			sorted: true,
+		})
+	}
+
+	ls.workspaceDeletes.initialized = true
+	ls.workspaceDeletes.txnOffset = ls.txnOffset
+	ls.workspaceDeletes.entries = entries
+	ls.workspaceDeletes.byBlock = nil
+	return entries
 }
 
 func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
@@ -1038,6 +1286,14 @@ func (ls *LocalDisttaeDataSource) getInMemDelIter(
 		ls.memPKFilter == nil || !ls.memPKFilter.Valid() {
 		return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
 	}
+	filterSpecs := ls.memPKFilter.Specs()
+	if len(filterSpecs) > 1 {
+		return ls.pState.NewPrimaryKeyDelIterWithFilters(
+			&ls.memPKFilter.TS,
+			bid,
+			filterSpecs,
+		), false
+	}
 
 	inValCnt, ok := ls.memPKFilter.InKind()
 	if !ok {
@@ -1100,10 +1356,10 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 		// stack allocation
 		deletedOffsets = make([]int64, 0, stepCnt)
 	} else {
-		deletedOffsets = common.DefaultAllocator.GetSels()
+		deletedOffsets = vector.GetSels()
 		defer func() {
 			if deletedOffsets != nil {
-				common.DefaultAllocator.PutSels(deletedOffsets)
+				vector.PutSels(deletedOffsets)
 			}
 		}()
 	}
@@ -1299,7 +1555,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
 			if _, release, err = ioutil.ReadDeletes(
-				ls.ctx, location, ls.fs, obj.GetCNCreated(), cacheVectors,
+				ls.ctx, location, ls.fs, obj.GetCNCreated(), cacheVectors, nil,
 			); err != nil {
 				return err
 			}

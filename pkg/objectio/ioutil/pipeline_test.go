@@ -21,12 +21,14 @@ import (
 	"testing"
 	"time"
 
+	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func makeIOPipelineOptions(depth int) Option {
@@ -97,6 +99,24 @@ func TestNewIOPipeline(t *testing.T) {
 	// step 4: close pipeline
 	p.Stop()
 
+}
+
+func TestStartAfterStopCreatesActivePipeline(t *testing.T) {
+	const sid = "pipeline-restart"
+	rt.SetupServiceBasedRuntime(sid, rt.DefaultRuntime())
+
+	Start(sid)
+	first := MustGetPipeline(sid)
+	require.True(t, first.active.Load())
+
+	Stop(sid)
+	require.False(t, first.active.Load())
+
+	Start(sid)
+	second := MustGetPipeline(sid)
+	t.Cleanup(func() { Stop(sid) })
+	require.NotSame(t, first, second)
+	require.True(t, second.active.Load())
 }
 
 func TestIoPipeline_Prefetch(t *testing.T) {

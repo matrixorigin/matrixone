@@ -45,9 +45,14 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	} else {
 		update.OpAnalyzer.Reset()
 	}
-
 	if update.ctr.sources == nil {
 		update.ctr.sources = make(map[uint64]engine.Relation)
+	} else {
+		for _, source := range update.ctr.sources {
+			if err := source.Reset(proc.GetTxnOperator()); err != nil {
+				return err
+			}
+		}
 	}
 
 	if update.ctr.updateCtxInfos == nil {
@@ -71,10 +76,10 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 				tableType = UpdateSecondaryIndexTable
 			}
 			info.tableType = tableType
+			info.isContiguous = isContiguousMapping(updateCtx.InsertCols)
 			update.ctr.updateCtxInfos[updateCtx.TableDef.Name] = info
 		}
 	}
-
 	for _, updateCtx := range update.MultiUpdateCtx {
 		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
 		if update.Action != UpdateWriteS3 {
@@ -84,11 +89,8 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 					return err
 				}
 				info.Source = rel
-			} else {
-				err := info.Source.Reset(proc.GetTxnOperator())
-				if err != nil {
-					return err
-				}
+			} else if err := info.Source.Reset(proc.GetTxnOperator()); err != nil {
+				return err
 			}
 		}
 	}
@@ -109,25 +111,21 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	switch update.Action {
 	case UpdateWriteS3:
 		if update.ctr.s3Writer == nil {
-			writer, err := newS3Writer(update)
+			writer, err := newS3Writer(proc.GetService(), update)
 			if err != nil {
 				return err
 			}
-			if svc := colexec.Get(); svc != nil {
-				writer.segmentMap = svc.GetCnSegmentMap()
-			}
+			writer.segmentMap = colexec.MustGetServer(proc.GetService()).GetCnSegmentMap()
 			update.ctr.s3Writer = writer
 		}
 
 	case UpdateFlushS3Info:
 		//resort updateCtxs
-		writer, err := newS3Writer(update)
+		writer, err := newS3Writer(proc.GetService(), update)
 		if err != nil {
 			return err
 		}
-		if svc := colexec.Get(); svc != nil {
-			writer.segmentMap = svc.GetCnSegmentMap()
-		}
+		writer.segmentMap = colexec.MustGetServer(proc.GetService()).GetCnSegmentMap()
 		update.MultiUpdateCtx = writer.updateCtxs
 
 		err = writer.free(proc)
@@ -195,7 +193,7 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 			return result, nil
 		}
 
-		w, err := update.getS3WriterFunc(update.mainTable)
+		w, err := update.getS3WriterFunc(proc.GetService(), update.mainTable)
 		if err != nil {
 			return vm.CancelResult, err
 		}
@@ -311,19 +309,22 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err := batBufs[actionDelete].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
 				return input, err
 			}
-			update.addDeleteAffectRows(tableType, rowCounts[i])
+			// For REPLACE INTO, we don't count DELETE rows in affected rows
+			// REPLACE INTO should only return the number of INSERT rows
 			name := nameData[i].UnsafeGetString(nameArea)
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-			err = source.Delete(newCtx, batBufs[actionDelete], name)
+			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+				return source.Delete(newCtx, batBufs[actionDelete], name)
+			})
 			if err != nil {
 				return input, err
 			}
+			if tableType == UpdateMainTable {
+				update.addDeleteAffectRows(tableType, rowCounts[i])
+			}
 			analyzer.AddDeletedRows(int64(batBufs[actionDelete].RowCount()))
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
 
 		case actionInsert:
 			if batBufs[actionInsert] == nil {
@@ -335,18 +336,21 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 				return input, err
 			}
 
-			update.addInsertAffectRows(tableType, rowCounts[i])
+			// For REPLACE INTO, we need to count INSERT rows based on the actual action
+			// Always count INSERT rows for main table, regardless of update.ctr.action
+			if tableType == UpdateMainTable {
+				update.addAffectedRowsFunc(rowCounts[i])
+			}
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-			err = source.Write(newCtx, batBufs[actionInsert])
+			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+				return source.Write(newCtx, batBufs[actionInsert])
+			})
 			if err != nil {
 				return input, err
 			}
 			analyzer.AddWrittenRows(int64(batBufs[actionInsert].RowCount()))
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
 
 		case actionUpdate:
 			if batBufs[actionUpdate] == nil {
@@ -402,9 +406,7 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 }
 
 func (update *MultiUpdate) resetMultiUpdateCtxs() {
-	for k := range update.ctr.updateCtxInfos {
-		delete(update.ctr.updateCtxInfos, k)
-	}
+	update.ctr.updateCtxInfos = make(map[string]*updateCtxInfo, len(update.MultiUpdateCtx))
 
 	for _, updateCtx := range update.MultiUpdateCtx {
 		info := new(updateCtxInfo)
@@ -456,7 +458,7 @@ func (update *MultiUpdate) getInput(
 	return update.input, nil
 }
 
-func (update *MultiUpdate) getS3Writer(id uint64) (*s3WriterDelegate, error) {
+func (update *MultiUpdate) getS3Writer(sid string, id uint64) (*s3WriterDelegate, error) {
 	return update.ctr.s3Writer, nil
 }
 
@@ -487,6 +489,7 @@ func (update *MultiUpdate) getSourceByID(
 		return nil, err
 	}
 
+	r = engine.NewRelationHandle(r)
 	update.ctr.sources[id] = r
 	return r, nil
 }

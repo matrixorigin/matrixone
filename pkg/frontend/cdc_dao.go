@@ -22,13 +22,18 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 const (
@@ -55,6 +60,12 @@ type CDCDao struct {
 	ts          taskservice.TaskService
 	bgExecutor  BackgroundExec
 	sqlExecutor taskservice.SqlExecutor
+}
+
+type DeleteCDCArtifactsResult struct {
+	TaskRows       int64
+	WatermarkRows  int64
+	LocalTxnOpened bool
 }
 
 func NewCDCDao(
@@ -112,10 +123,20 @@ func (t *CDCDao) CreateTask(
 
 	var (
 		details *task.Details
+		ts      taskservice.TaskService
 	)
 	if details, err = opts.BuildTaskDetails(); err != nil {
 		return
 	}
+
+	// Get TaskService - handle nil case gracefully instead of panicking
+	if t.ts == nil && t.ses != nil {
+		t.ts = getPu(t.ses.GetService()).TaskService
+	}
+	if t.ts == nil {
+		return moerr.NewInternalError(ctx, "TaskService is not available. CDC task creation requires TaskService to be initialized.")
+	}
+	ts = t.ts
 
 	creatTaskJob := func(
 		ctx context.Context,
@@ -134,7 +155,7 @@ func (t *CDCDao) CreateTask(
 		return int(rowsAffected), nil
 	}
 
-	_, err = t.MustGetTaskService().AddCDCTask(
+	_, err = ts.AddCDCTask(
 		ctx, opts.BuildTaskMetadata(), details, creatTaskJob,
 	)
 	return
@@ -183,7 +204,10 @@ func (t *CDCDao) ShowTasks(
 
 	snapTS = txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
 	startTS := types.TimestampToTS(txnOp.SnapshotTS())
-	logutil.Infof("XXX-DEBUG-21848-show-task-snap-ts: %s", startTS.ToString())
+	logutil.Debug(
+		"cdc.frontend.dao.show_tasks_snapshot",
+		zap.String("snapshot-ts", startTS.ToString()),
+	)
 	sql := cdc.CDCSQLBuilder.ShowTaskSQL(
 		uint64(t.ses.GetTenantInfo().GetTenantID()),
 		req.Option.All,
@@ -199,9 +223,15 @@ func (t *CDCDao) ShowTasks(
 		return
 	}
 
-	logutil.Infof("XXX-DEBUG-21848-show-task-result length %d", len(execResultSet))
+	logutil.Debug(
+		"cdc.frontend.dao.show_tasks_result_length",
+		zap.Int("result-set-length", len(execResultSet)),
+	)
 	for _, result := range execResultSet {
-		logutil.Infof("XXX-DEBUG-21848-show-task-result row count %d", result.GetRowCount())
+		logutil.Debug(
+			"cdc.frontend.dao.show_tasks_row_count",
+			zap.Int("row-count", int(result.GetRowCount())),
+		)
 		for rowIdx, rowCnt := uint64(0), result.GetRowCount(); rowIdx < rowCnt; rowIdx++ {
 			for colIdx, colName := range queryAttrs {
 				switch colName {
@@ -350,6 +380,12 @@ func (t *CDCDao) DeleteManyWatermark(
 			key.AccountId,
 			key.TaskId,
 		)
+		logutil.Debug(
+			"cdc.dao.delete_watermark_sql",
+			zap.Uint64("account-id", key.AccountId),
+			zap.String("task-id", key.TaskId),
+			zap.String("sql", sql),
+		)
 		if cnt, err = ExecuteAndGetRowsAffected(ctx, executor, sql); err != nil {
 			return
 		}
@@ -373,11 +409,53 @@ func (t *CDCDao) DeleteTaskByName(
 	return
 }
 
+func (t *CDCDao) DeleteTaskAndWatermark(
+	ctx context.Context,
+	accountId uint64,
+	taskName string,
+	keys map[taskservice.CDCTaskKey]struct{},
+) (res DeleteCDCArtifactsResult, err error) {
+	var (
+		executor = t.MustGetSQLExecutor(ctx)
+	)
+
+	_, isTxn := executor.(*sql.Tx)
+	res.LocalTxnOpened = false
+
+	logutil.Debug(
+		"cdc.dao.delete_task_and_watermark.begin",
+		zap.Uint64("account-id", accountId),
+		zap.String("task-name", taskName),
+		zap.Int("key-count", len(keys)),
+		zap.Bool("executor-is-tx", isTxn),
+	)
+
+	if res.TaskRows, err = t.DeleteTaskByName(ctx, accountId, taskName); err != nil {
+		return
+	}
+
+	if res.WatermarkRows, err = t.DeleteManyWatermark(ctx, keys); err != nil {
+		return
+	}
+
+	logutil.Debug(
+		"cdc.dao.delete_task_and_watermark.done",
+		zap.Uint64("account-id", accountId),
+		zap.String("task-name", taskName),
+		zap.Int64("task-rows", res.TaskRows),
+		zap.Int64("watermark-rows", res.WatermarkRows),
+		zap.Bool("executor-is-tx", isTxn),
+	)
+
+	return
+}
+
 func (t *CDCDao) GetTaskKeys(
 	ctx context.Context,
 	accountId uint64,
 	taskName string,
 	keys map[taskservice.CDCTaskKey]struct{},
+	ifExists bool,
 ) (cnt int64, err error) {
 	var (
 		executor = t.MustGetSQLExecutor(ctx)
@@ -401,7 +479,7 @@ func (t *CDCDao) GetTaskKeys(
 	); err != nil {
 		return
 	}
-	if cnt == 0 && taskName != "" {
+	if cnt == 0 && taskName != "" && !ifExists {
 		err = moerr.NewInternalErrorf(
 			ctx,
 			"no cdc task found, accountId: %d, taskName: %s",
@@ -436,6 +514,76 @@ func (t *CDCDao) PrepareUpdateTask(
 	affectedRows, err = result.RowsAffected()
 
 	return
+}
+
+func (t *CDCDao) syncCommitTimestamp(ctx context.Context) error {
+	if t.ses == nil || t.ses.proc == nil || t.ses.proc.Base == nil {
+		return moerr.NewInternalError(ctx, "session or process is nil")
+	}
+	base := t.ses.proc.Base
+	qc := base.QueryClient
+	if qc == nil {
+		return moerr.NewInternalError(ctx, "query client is nil")
+	}
+	txnClient := base.TxnClient
+	if txnClient == nil {
+		return moerr.NewInternalError(ctx, "txn client is nil")
+	}
+
+	cluster := clusterservice.GetMOCluster(qc.ServiceID())
+	if cluster == nil {
+		return moerr.NewInternalError(ctx, "cluster service is nil")
+	}
+
+	addresses := make([]string, 0, 4)
+	cluster.GetCNService(
+		clusterservice.NewSelectAll(),
+		func(cn metadata.CNService) bool {
+			if addr := cn.QueryAddress; addr != "" {
+				addresses = append(addresses, addr)
+			}
+			return true
+		},
+	)
+	if len(addresses) == 0 {
+		return nil
+	}
+
+	var (
+		maxCommitTS timestamp.Timestamp
+		hasTS       bool
+	)
+
+	for _, addr := range addresses {
+		req := qc.NewRequest(querypb.CmdMethod_GetCommit)
+		ctxReq, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseSyncLatestCommitT)
+		resp, err := qc.SendMessage(ctxReq, addr, req)
+		cancel()
+		if err != nil {
+			logutil.Warn(
+				"cdc.syncCommitTimestamp: send get commit failed",
+				zap.String("address", addr),
+				zap.Error(err),
+			)
+			continue
+		}
+		if resp != nil {
+			if commitResp := resp.GetCommit; commitResp != nil {
+				if !hasTS || maxCommitTS.Less(commitResp.CurrentCommitTS) {
+					maxCommitTS = commitResp.CurrentCommitTS
+					hasTS = true
+				}
+			}
+			qc.Release(resp)
+		}
+	}
+
+	if !hasTS {
+		return nil
+	}
+
+	txnClient.SyncLatestCommitTS(maxCommitTS)
+	return nil
 }
 
 var ForeachQueriedRow = func(

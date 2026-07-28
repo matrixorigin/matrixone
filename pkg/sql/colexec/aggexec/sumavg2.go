@@ -1,0 +1,1330 @@
+// Copyright 2021 - 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package aggexec
+
+import (
+	"slices"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
+
+// XXX:
+//
+// This returned type thing definitely belongs to plan, function.
+// However, exec cannot import plan, function due to circular dependency.
+// Also this is the reason for all those RegisterAgg crap.   This is the
+// weirdest thing I've ever seen.  We need to untangle all this mess.
+//
+// See list_agg.go, we need to remove dependency of plan on exec.
+//
+
+func AvgReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_int64, types.T_uint64:
+		//matrixone does define the default digits before. just let it same mysql now.
+		//4 digits.
+		return types.New(types.T_decimal128, 38, 4)
+	case types.T_decimal64:
+		s := int32(12)
+		if s < typs[0].Scale {
+			s = typs[0].Scale
+		}
+		if s > typs[0].Scale+6 {
+			s = typs[0].Scale + 6
+		}
+		return types.New(types.T_decimal128, 38, s)
+	case types.T_decimal128:
+		s := int32(12)
+		if s < typs[0].Scale {
+			s = typs[0].Scale
+		}
+		if s > typs[0].Scale+6 {
+			s = typs[0].Scale + 6
+		}
+		return types.New(types.T_decimal128, 38, s)
+	case types.T_decimal256:
+		s := int32(12)
+		if s < typs[0].Scale {
+			s = typs[0].Scale
+		}
+		if s > typs[0].Scale+6 {
+			s = typs[0].Scale + 6
+		}
+		return types.New(types.T_decimal256, 65, s)
+	default:
+		return types.T_float64.ToType()
+	}
+}
+
+func SumReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_float32, types.T_float64:
+		return types.T_float64.ToType()
+	case types.T_int8, types.T_int16, types.T_int32, types.T_year:
+		return types.T_int64.ToType()
+	case types.T_int64:
+		return types.New(types.T_decimal128, 38, 0)
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_bit:
+		return types.T_uint64.ToType()
+	case types.T_uint64:
+		return types.New(types.T_decimal128, 38, 0)
+	case types.T_decimal64:
+		return types.New(types.T_decimal128, 38, typs[0].Scale)
+	case types.T_decimal128:
+		return types.New(types.T_decimal128, 38, typs[0].Scale)
+	case types.T_decimal256:
+		return types.New(types.T_decimal256, 65, typs[0].Scale)
+	}
+	panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum", typs[0]))
+}
+
+func int64OfCheck(v1, v2, sum int64) error {
+	if (v1 > 0 && v2 > 0 && sum <= 0) || (v1 < 0 && v2 < 0 && sum >= 0) {
+		return moerr.NewOutOfRangeNoCtxf("int64", "(%d + %d)", v1, v2)
+	}
+	return nil
+}
+
+func uint64OfCheck(v1, v2, sum uint64) error {
+	if sum < v1 || sum < v2 {
+		return moerr.NewOutOfRangeNoCtxf("uint64", "(%d + %d)", v1, v2)
+	}
+	return nil
+}
+
+func float64OfCheck(v1, v2, sum float64) error {
+	// MySQL behavior: SUM() aggregation allows overflow to +Infinity without error
+	// This matches MySQL 8.0 where SUM() silently returns +Infinity on overflow
+	return nil
+}
+
+type sumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.Floats] struct {
+	aggExec
+	isSum   bool
+	ofCheck func(T, T, T) error
+}
+
+func (exec *sumAvgExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+}
+
+func (exec *sumAvgExec[T, A]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	if exec.IsDistinct() {
+		return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	}
+	if exec.isSum {
+		return exec.bulkFillSumSingleGroup(groupIndex, vectors)
+	}
+	return exec.bulkFillAvgSingleGroup(groupIndex, vectors)
+}
+
+func (exec *sumAvgExec[T, A]) bulkFillSumSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	vals := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+	hasNull := vec.HasNull()
+
+	g := uint64(groupIndex)
+	x := int(g >> aggBatchSizeShift)
+	y := g & aggBatchSizeMask
+	sums := chunkArr[T](exec.state[x].vecs[0])
+	sumVec := exec.state[x].vecs[0]
+
+	var localSum T
+	filled := false
+	for i := 0; i < n; i++ {
+		row := i
+		if isConst {
+			row = 0
+		}
+		if hasNull && vec.IsNull(uint64(row)) {
+			continue
+		}
+
+		val := T(vals[row])
+		if !filled {
+			localSum = val
+			filled = true
+			continue
+		}
+		result := localSum + val
+		if err := exec.ofCheck(localSum, val, result); err != nil {
+			return err
+		}
+		localSum = result
+	}
+	if !filled {
+		return nil
+	}
+
+	old := sums[y]
+	result := old + localSum
+	if err := exec.ofCheck(old, localSum, result); err != nil {
+		return err
+	}
+	sums[y] = result
+	if sumVec.IsNull(y) {
+		sumVec.UnsetNull(y)
+	}
+	return nil
+}
+
+func (exec *sumAvgExec[T, A]) bulkFillAvgSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	vals := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+	hasNull := vec.HasNull()
+
+	g := uint64(groupIndex)
+	x := int(g >> aggBatchSizeShift)
+	y := g & aggBatchSizeMask
+	sums := chunkArr[T](exec.state[x].vecs[0])
+	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+
+	var localSum T
+	var localCnt int64
+	for i := 0; i < n; i++ {
+		row := i
+		if isConst {
+			row = 0
+		}
+		if hasNull && vec.IsNull(uint64(row)) {
+			continue
+		}
+
+		val := T(vals[row])
+		if localCnt == 0 {
+			localSum = val
+			localCnt = 1
+			continue
+		}
+		result := localSum + val
+		if err := exec.ofCheck(localSum, val, result); err != nil {
+			return err
+		}
+		localSum = result
+		localCnt++
+	}
+	if localCnt == 0 {
+		return nil
+	}
+
+	old := sums[y]
+	result := old + localSum
+	if err := exec.ofCheck(old, localSum, result); err != nil {
+		return err
+	}
+	sums[y] = result
+	cnts[y] += localCnt
+	return nil
+}
+
+func (exec *sumAvgExec[T, A]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if exec.IsDistinct() {
+		return exec.batchFillArgs(offset, groups, vectors, true)
+	}
+	if exec.isSum {
+		return exec.batchFillSum(offset, groups, vectors)
+	}
+	return exec.batchFillAvg(offset, groups, vectors)
+}
+
+func (exec *sumAvgExec[T, A]) batchFillSum(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := len(groups)
+	if n == 0 {
+		return nil
+	}
+	vals := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+
+	const slotEmpty = 0xFF
+	const maxSlots = 255
+	var slotOf [256]uint8
+	var localSums [maxSlots]T
+	var localGrps [maxSlots]uint64
+	nSlots := 0
+
+	for i := range slotOf {
+		slotOf[i] = slotEmpty
+	}
+
+	hasNull := vec.HasNull()
+	for i := 0; i < n; i++ {
+		grp := groups[i]
+		if grp == GroupNotMatched {
+			continue
+		}
+		if hasNull && vec.IsNull(uint64(i)+uint64(offset)) {
+			continue
+		}
+
+		g := grp - 1
+		var val T
+		if isConst {
+			val = T(vals[0])
+		} else {
+			val = T(vals[i+offset])
+		}
+
+		h := uint8(g) ^ uint8(g>>8)
+		for {
+			s := slotOf[h]
+			if s == slotEmpty {
+				if nSlots >= maxSlots {
+					// Local table full — direct scatter for this row.
+					x := int(g >> aggBatchSizeShift)
+					y := g & aggBatchSizeMask
+					sums := chunkArr[T](exec.state[x].vecs[0])
+					old := sums[y]
+					result := old + val
+					if err := exec.ofCheck(old, val, result); err != nil {
+						return err
+					}
+					sums[y] = result
+					if exec.state[x].vecs[0].IsNull(y) {
+						exec.state[x].vecs[0].UnsetNull(y)
+					}
+					break
+				}
+				s = uint8(nSlots)
+				slotOf[h] = s
+				localGrps[nSlots] = g
+				localSums[nSlots] = val
+				nSlots++
+				break
+			}
+			if localGrps[s] == g {
+				old := localSums[s]
+				result := old + val
+				if err := exec.ofCheck(old, val, result); err != nil {
+					return err
+				}
+				localSums[s] = result
+				break
+			}
+			h++
+		}
+	}
+
+	lastX := -1
+	var sums *[AggBatchSize]T
+	var sumVec *vector.Vector
+	for s := 0; s < nSlots; s++ {
+		g := localGrps[s]
+		x := int(g >> aggBatchSizeShift)
+		if x != lastX {
+			lastX = x
+			sums = chunkArr[T](exec.state[x].vecs[0])
+			sumVec = exec.state[x].vecs[0]
+		}
+		y := g & aggBatchSizeMask
+		old := sums[y]
+		add := localSums[s]
+		result := old + add
+		if err := exec.ofCheck(old, add, result); err != nil {
+			return err
+		}
+		sums[y] = result
+
+		if sumVec.IsNull(y) {
+			sumVec.UnsetNull(y)
+		}
+	}
+	return nil
+}
+
+func (exec *sumAvgExec[T, A]) batchFillAvg(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := len(groups)
+	if n == 0 {
+		return nil
+	}
+	vals := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+
+	const slotEmpty = 0xFF
+	const maxSlots = 255
+	var slotOf [256]uint8
+	var localSums [maxSlots]T
+	var localCnts [maxSlots]int64
+	var localGrps [maxSlots]uint64
+	nSlots := 0
+
+	for i := range slotOf {
+		slotOf[i] = slotEmpty
+	}
+
+	hasNull := vec.HasNull()
+	for i := 0; i < n; i++ {
+		grp := groups[i]
+		if grp == GroupNotMatched {
+			continue
+		}
+		if hasNull && vec.IsNull(uint64(i)+uint64(offset)) {
+			continue
+		}
+
+		g := grp - 1
+		var val T
+		if isConst {
+			val = T(vals[0])
+		} else {
+			val = T(vals[i+offset])
+		}
+
+		h := uint8(g) ^ uint8(g>>8)
+		for {
+			s := slotOf[h]
+			if s == slotEmpty {
+				if nSlots >= maxSlots {
+					x := int(g >> aggBatchSizeShift)
+					y := g & aggBatchSizeMask
+					sums := chunkArr[T](exec.state[x].vecs[0])
+					old := sums[y]
+					result := old + val
+					if err := exec.ofCheck(old, val, result); err != nil {
+						return err
+					}
+					sums[y] = result
+					cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+					cnts[y]++
+					break
+				}
+				s = uint8(nSlots)
+				slotOf[h] = s
+				localGrps[nSlots] = g
+				localSums[nSlots] = val
+				localCnts[nSlots] = 1
+				nSlots++
+				break
+			}
+			if localGrps[s] == g {
+				old := localSums[s]
+				result := old + val
+				if err := exec.ofCheck(old, val, result); err != nil {
+					return err
+				}
+				localSums[s] = result
+				localCnts[s]++
+				break
+			}
+			h++
+		}
+	}
+
+	lastX := -1
+	var sums *[AggBatchSize]T
+	var cnts []int64
+	for s := 0; s < nSlots; s++ {
+		g := localGrps[s]
+		x := int(g >> aggBatchSizeShift)
+		if x != lastX {
+			lastX = x
+			sums = chunkArr[T](exec.state[x].vecs[0])
+			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+		}
+		y := g & aggBatchSizeMask
+		old := sums[y]
+		add := localSums[s]
+		result := old + add
+		if err := exec.ofCheck(old, add, result); err != nil {
+			return err
+		}
+		sums[y] = result
+		cnts[y] += localCnts[s]
+	}
+	return nil
+}
+
+func (exec *sumAvgExec[T, A]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
+}
+
+func (exec *sumAvgExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*sumAvgExec[T, A])
+	if exec.IsDistinct() {
+		return exec.batchMergeArgs(&other.aggExec, offset, groups, true)
+	}
+
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
+			continue
+		}
+
+		g1 := grp - 1
+		g2 := uint64(offset + i)
+		x1 := int(g1 >> aggBatchSizeShift)
+		y1 := g1 & aggBatchSizeMask
+		x2 := int(g2 >> aggBatchSizeShift)
+		y2 := g2 & aggBatchSizeMask
+
+		sums1 := chunkArr[T](exec.state[x1].vecs[0])
+		sums2 := chunkArr[T](other.state[x2].vecs[0])
+
+		if exec.isSum {
+			if other.state[x2].vecs[0].IsNull(y2) {
+				continue
+			} else if exec.state[x1].vecs[0].IsNull(y1) {
+				exec.state[x1].vecs[0].UnsetNull(y1)
+				sums1[y1] = sums2[y2]
+			} else {
+				result := sums1[y1] + sums2[y2]
+				if err := exec.ofCheck(sums1[y1], sums2[y2], result); err != nil {
+					return err
+				}
+				sums1[y1] = result
+			}
+		} else {
+			result := sums1[y1] + sums2[y2]
+			if err := exec.ofCheck(sums1[y1], sums2[y2], result); err != nil {
+				return err
+			}
+			sums1[y1] = result
+			cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])
+			cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
+			cnts1[y1] += cnts2[y2]
+		}
+	}
+	return nil
+}
+
+func (exec *sumAvgExec[T, A]) SetExtraInformation(partialResult any, _ int) error {
+	return nil
+}
+
+func (exec *sumAvgExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
+	resultType := exec.aggInfo.retType
+	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
+
+	if exec.IsDistinct() {
+		for i := range vecs {
+			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
+				return nil, err
+			}
+		}
+		for i := range vecs {
+			for j := 0; j < int(exec.state[i].length); j++ {
+				if exec.state[i].argCnt[j] == 0 {
+					if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
+						return nil, err
+					}
+					continue
+				} else {
+					sum := T(0)
+					xcnt := 0
+					err := exec.state[i].iter(uint16(j), func(k []byte) error {
+						ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+						tmp := sum + T(*ptr)
+						if err := exec.ofCheck(sum, T(*ptr), tmp); err != nil {
+							return err
+						}
+						sum = tmp
+						xcnt++
+						return nil
+					})
+
+					if err != nil {
+						return nil, err
+					}
+					if int(exec.state[i].argCnt[j]) != xcnt {
+						panic(moerr.NewInternalErrorNoCtxf("invalid count: %d for y: %d, expected: %d", xcnt, j, exec.state[i].argCnt[j]))
+					}
+
+					if exec.isSum {
+						if err := vector.AppendFixed(vecs[i], sum, false, exec.mp); err != nil {
+							return nil, err
+						}
+					} else {
+						if err := vector.AppendFixed(vecs[i], float64(sum)/float64(exec.state[i].argCnt[j]), false, exec.mp); err != nil {
+							return nil, err
+						}
+					}
+				}
+			}
+		}
+	} else {
+		for i := range vecs {
+			sumVec := exec.state[i].vecs[0]
+			sums := vector.MustFixedColNoTypeCheck[T](sumVec)
+
+			// transfer sumVec
+			vecs[i] = sumVec
+			exec.state[i].vecs[0] = nil
+
+			if !exec.isSum {
+				// hack: avgs will reuse sums slice, float64 and int64 are the same size.
+				avgs := util.UnsafeSliceCast[float64](sums)
+				cntVec := exec.state[i].vecs[1]
+				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+				for j, cnt := range cnts {
+					if cnt == 0 {
+						sumVec.SetNull(uint64(j))
+					} else {
+						avg := float64(sums[j]) / float64(cnt)
+						avgs[j] = avg
+					}
+				}
+				// free cntVec
+				cntVec.Free(exec.mp)
+				exec.state[i].vecs[1] = nil
+			}
+
+			// Fix result type.   note that for avg, the result type is
+			// float64, for any int/uint type, the sum type is int64/uint64.
+			// they are different types but SAME SIZE.   Let's just fix the
+			// result type and be happy.
+			*sumVec.GetType() = resultType
+
+			// done transfer,
+			exec.state[i].length = 0
+			exec.state[i].capacity = 0
+		}
+	}
+	return vecs, nil
+}
+
+type sumAvgDecimalArg interface {
+	int64 | uint64 | types.Decimal64 | types.Decimal128 | types.Decimal256
+}
+
+type sumAvgDecimalState interface {
+	types.Decimal128 | types.Decimal256
+}
+
+func decimalStateFromArg[A sumAvgDecimalArg, S sumAvgDecimalState](v A, argScale int32) S {
+	var state S
+	switch any(state).(type) {
+	case types.Decimal128:
+		switch value := any(v).(type) {
+		case int64:
+			return any(types.Decimal128FromInt64(value)).(S)
+		case uint64:
+			return any(types.Decimal128{B0_63: value, B64_127: 0}).(S)
+		case types.Decimal64:
+			return any(types.Decimal128FromDecimal64(value, argScale)).(S)
+		case types.Decimal128:
+			return any(value).(S)
+		}
+	case types.Decimal256:
+		switch value := any(v).(type) {
+		case int64:
+			return any(types.Decimal256FromInt64(value)).(S)
+		case uint64:
+			return any(types.Decimal256{B0_63: value}).(S)
+		case types.Decimal64:
+			return any(types.Decimal256FromDecimal128(types.Decimal128FromDecimal64(value, argScale))).(S)
+		case types.Decimal128:
+			return any(types.Decimal256FromDecimal128(value)).(S)
+		case types.Decimal256:
+			return any(value).(S)
+		}
+	}
+	panic(moerr.NewInternalErrorNoCtxf("unsupported decimal conversion from %T", v))
+}
+
+func decimalStateAdd[S sumAvgDecimalState](left, right S) (S, error) {
+	switch value := any(left).(type) {
+	case types.Decimal128:
+		result, err := value.Add128(any(right).(types.Decimal128))
+		return any(result).(S), err
+	case types.Decimal256:
+		result, err := value.Add256(any(right).(types.Decimal256))
+		return any(result).(S), err
+	}
+	panic(moerr.NewInternalErrorNoCtxf("unsupported decimal state type %T", left))
+}
+
+func decimalStateAddUnchecked[S sumAvgDecimalState](left, right S) S {
+	switch value := any(left).(type) {
+	case types.Decimal128:
+		return any(value.Add128Unchecked(any(right).(types.Decimal128))).(S)
+	case types.Decimal256:
+		result, _ := value.Add256(any(right).(types.Decimal256))
+		return any(result).(S)
+	}
+	panic("unreachable")
+}
+
+type sumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState] struct {
+	aggExec
+	isSum        bool
+	localAddSafe bool // true when state type is wider than arg type (overflow impossible in local buffer)
+}
+
+func (exec *sumAvgDecExec[A, S]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	if exec.IsDistinct() {
+		return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	}
+	if exec.isSum {
+		return exec.bulkFillSumSingleGroup(groupIndex, vectors)
+	}
+	return exec.bulkFillAvgSingleGroup(groupIndex, vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) bulkFillSumSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	argScale := exec.aggInfo.argTypes[0].Scale
+	args := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+	hasNull := vec.HasNull()
+
+	g := uint64(groupIndex)
+	x := int(g >> aggBatchSizeShift)
+	y := g & aggBatchSizeMask
+	sums := chunkArr[S](exec.state[x].vecs[0])
+	sumVec := exec.state[x].vecs[0]
+
+	var localSum S
+	filled := false
+	for i := 0; i < n; i++ {
+		row := i
+		if isConst {
+			row = 0
+		}
+		if hasNull && vec.IsNull(uint64(row)) {
+			continue
+		}
+
+		val := decimalStateFromArg[A, S](args[row], argScale)
+		if !filled {
+			localSum = val
+			filled = true
+			continue
+		}
+		if exec.localAddSafe {
+			localSum = decimalStateAddUnchecked(localSum, val)
+		} else {
+			var err error
+			if localSum, err = decimalStateAdd(localSum, val); err != nil {
+				return err
+			}
+		}
+	}
+	if !filled {
+		return nil
+	}
+
+	if sumVec.IsNull(y) {
+		sumVec.UnsetNull(y)
+		sums[y] = localSum
+		return nil
+	}
+	var err error
+	if sums[y], err = decimalStateAdd(sums[y], localSum); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (exec *sumAvgDecExec[A, S]) bulkFillAvgSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	argScale := exec.aggInfo.argTypes[0].Scale
+	args := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+	hasNull := vec.HasNull()
+
+	g := uint64(groupIndex)
+	x := int(g >> aggBatchSizeShift)
+	y := g & aggBatchSizeMask
+	sums := chunkArr[S](exec.state[x].vecs[0])
+	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+
+	var localSum S
+	var localCnt int64
+	for i := 0; i < n; i++ {
+		row := i
+		if isConst {
+			row = 0
+		}
+		if hasNull && vec.IsNull(uint64(row)) {
+			continue
+		}
+
+		val := decimalStateFromArg[A, S](args[row], argScale)
+		if localCnt == 0 {
+			localSum = val
+			localCnt = 1
+			continue
+		}
+		if exec.localAddSafe {
+			localSum = decimalStateAddUnchecked(localSum, val)
+		} else {
+			var err error
+			if localSum, err = decimalStateAdd(localSum, val); err != nil {
+				return err
+			}
+		}
+		localCnt++
+	}
+	if localCnt == 0 {
+		return nil
+	}
+
+	var err error
+	if sums[y], err = decimalStateAdd(sums[y], localSum); err != nil {
+		return err
+	}
+	cnts[y] += localCnt
+	return nil
+}
+
+func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if exec.IsDistinct() {
+		return exec.batchFillArgs(offset, groups, vectors, true)
+	}
+	if exec.isSum {
+		return exec.batchFillSum(offset, groups, vectors)
+	}
+	return exec.batchFillAvg(offset, groups, vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) batchFillSum(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := len(groups)
+	if n == 0 {
+		return nil
+	}
+	argScale := exec.aggInfo.argTypes[0].Scale
+	args := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+
+	const slotEmpty = 0xFF
+	const maxSlots = 255
+	var slotOf [256]uint8
+	var localSums [maxSlots]S
+	var localGrps [maxSlots]uint64
+	nSlots := 0
+
+	for i := range slotOf {
+		slotOf[i] = slotEmpty
+	}
+
+	hasNull := vec.HasNull()
+	for i := 0; i < n; i++ {
+		grp := groups[i]
+		if grp == GroupNotMatched {
+			continue
+		}
+		if hasNull && vec.IsNull(uint64(i)+uint64(offset)) {
+			continue
+		}
+
+		g := grp - 1
+		var raw A
+		if isConst {
+			raw = args[0]
+		} else {
+			raw = args[i+offset]
+		}
+		val := decimalStateFromArg[A, S](raw, argScale)
+		h := uint8(g) ^ uint8(g>>8)
+		for {
+			s := slotOf[h]
+			if s == slotEmpty {
+				if nSlots >= maxSlots {
+					x := int(g >> aggBatchSizeShift)
+					y := g & aggBatchSizeMask
+					sums := chunkArr[S](exec.state[x].vecs[0])
+					sumVec := exec.state[x].vecs[0]
+					if sumVec.IsNull(y) {
+						sumVec.UnsetNull(y)
+						sums[y] = val
+					} else {
+						var err error
+						if sums[y], err = decimalStateAdd(sums[y], val); err != nil {
+							return err
+						}
+					}
+					break
+				}
+				s = uint8(nSlots)
+				slotOf[h] = s
+				localGrps[nSlots] = g
+				localSums[nSlots] = val
+				nSlots++
+				break
+			}
+			if localGrps[s] == g {
+				if exec.localAddSafe {
+					localSums[s] = decimalStateAddUnchecked(localSums[s], val)
+				} else {
+					var err error
+					if localSums[s], err = decimalStateAdd(localSums[s], val); err != nil {
+						return err
+					}
+				}
+				break
+			}
+			h++
+		}
+	}
+
+	lastX := -1
+	var sums *[AggBatchSize]S
+	var sumVec *vector.Vector
+	for s := 0; s < nSlots; s++ {
+		g := localGrps[s]
+		x := int(g >> aggBatchSizeShift)
+		if x != lastX {
+			lastX = x
+			sums = chunkArr[S](exec.state[x].vecs[0])
+			sumVec = exec.state[x].vecs[0]
+		}
+		y := g & aggBatchSizeMask
+		if sumVec.IsNull(y) {
+			sumVec.UnsetNull(y)
+			sums[y] = localSums[s]
+		} else {
+			var err error
+			if sums[y], err = decimalStateAdd(sums[y], localSums[s]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (exec *sumAvgDecExec[A, S]) batchFillAvg(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := len(groups)
+	if n == 0 {
+		return nil
+	}
+	argScale := exec.aggInfo.argTypes[0].Scale
+	args := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+
+	const slotEmpty = 0xFF
+	const maxSlots = 255
+	var slotOf [256]uint8
+	var localSums [maxSlots]S
+	var localCnts [maxSlots]int64
+	var localGrps [maxSlots]uint64
+	nSlots := 0
+
+	for i := range slotOf {
+		slotOf[i] = slotEmpty
+	}
+
+	hasNull := vec.HasNull()
+	for i := 0; i < n; i++ {
+		grp := groups[i]
+		if grp == GroupNotMatched {
+			continue
+		}
+		if hasNull && vec.IsNull(uint64(i)+uint64(offset)) {
+			continue
+		}
+
+		g := grp - 1
+		var raw A
+		if isConst {
+			raw = args[0]
+		} else {
+			raw = args[i+offset]
+		}
+		val := decimalStateFromArg[A, S](raw, argScale)
+		h := uint8(g) ^ uint8(g>>8)
+		for {
+			s := slotOf[h]
+			if s == slotEmpty {
+				if nSlots >= maxSlots {
+					x := int(g >> aggBatchSizeShift)
+					y := g & aggBatchSizeMask
+					sums := chunkArr[S](exec.state[x].vecs[0])
+					var err error
+					if sums[y], err = decimalStateAdd(sums[y], val); err != nil {
+						return err
+					}
+					cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+					cnts[y]++
+					break
+				}
+				s = uint8(nSlots)
+				slotOf[h] = s
+				localGrps[nSlots] = g
+				localSums[nSlots] = val
+				localCnts[nSlots] = 1
+				nSlots++
+				break
+			}
+			if localGrps[s] == g {
+				if exec.localAddSafe {
+					localSums[s] = decimalStateAddUnchecked(localSums[s], val)
+				} else {
+					var err error
+					if localSums[s], err = decimalStateAdd(localSums[s], val); err != nil {
+						return err
+					}
+				}
+				localCnts[s]++
+				break
+			}
+			h++
+		}
+	}
+
+	lastX := -1
+	var sums *[AggBatchSize]S
+	var cnts []int64
+	for s := 0; s < nSlots; s++ {
+		g := localGrps[s]
+		x := int(g >> aggBatchSizeShift)
+		if x != lastX {
+			lastX = x
+			sums = chunkArr[S](exec.state[x].vecs[0])
+			cnts = vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+		}
+		y := g & aggBatchSizeMask
+		var err error
+		if sums[y], err = decimalStateAdd(sums[y], localSums[s]); err != nil {
+			return err
+		}
+		cnts[y] += localCnts[s]
+	}
+	return nil
+}
+
+func (exec *sumAvgDecExec[A, S]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
+}
+
+func (exec *sumAvgDecExec[A, S]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	var err error
+	other := next.(*sumAvgDecExec[A, S])
+	if exec.IsDistinct() {
+		return exec.batchMergeArgs(&other.aggExec, offset, groups, true)
+	}
+
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
+			continue
+		}
+
+		g1 := grp - 1
+		g2 := uint64(offset + i)
+		x1 := int(g1 >> aggBatchSizeShift)
+		y1 := g1 & aggBatchSizeMask
+		x2 := int(g2 >> aggBatchSizeShift)
+		y2 := g2 & aggBatchSizeMask
+
+		sums1 := chunkArr[S](exec.state[x1].vecs[0])
+		sums2 := chunkArr[S](other.state[x2].vecs[0])
+
+		if exec.isSum {
+			if other.state[x2].vecs[0].IsNull(y2) {
+				continue
+			} else if exec.state[x1].vecs[0].IsNull(y1) {
+				exec.state[x1].vecs[0].UnsetNull(y1)
+				sums1[y1] = sums2[y2]
+			} else {
+				if sums1[y1], err = decimalStateAdd(sums1[y1], sums2[y2]); err != nil {
+					return err
+				}
+			}
+		} else {
+			if sums1[y1], err = decimalStateAdd(sums1[y1], sums2[y2]); err != nil {
+				return err
+			}
+			cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])
+			cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
+			cnts1[y1] += cnts2[y2]
+		}
+	}
+	return nil
+}
+
+func (exec *sumAvgDecExec[A, S]) SetExtraInformation(partialResult any, _ int) error {
+	return nil
+}
+
+func decAvg[S sumAvgDecimalState](sum S, count int64, argScale, resultScale int32) S {
+	switch value := any(sum).(type) {
+	case types.Decimal128:
+		cnt128 := types.Decimal128FromInt64(count)
+		avg, scale, _ := value.Div(cnt128, argScale, 0)
+		avg, _ = avg.Scale(resultScale - scale)
+		return any(avg).(S)
+	case types.Decimal256:
+		cnt256 := types.Decimal256FromInt64(count)
+		avg, scale, _ := value.Div(cnt256, argScale, 0)
+		avg, _ = avg.Scale(resultScale - scale)
+		return any(avg).(S)
+	}
+	panic(moerr.NewInternalErrorNoCtxf("unsupported decimal avg state type %T", sum))
+}
+
+func sumAvgDecimalArgScale(typ types.Type) int32 {
+	switch typ.Oid {
+	case types.T_int64, types.T_uint64:
+		return 0
+	default:
+		return typ.Scale
+	}
+}
+
+func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
+	var err error
+	resultType := exec.aggInfo.retType
+	vecs := make([]*vector.Vector, len(exec.state))
+	defer func() {
+		if retErr != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(exec.mp)
+				}
+			}
+		}
+	}()
+
+	if exec.IsDistinct() {
+		for i := range vecs {
+			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
+				return nil, err
+			}
+		}
+
+		for i := range vecs {
+			for j := 0; j < int(exec.state[i].length); j++ {
+				if exec.state[i].argCnt[j] == 0 {
+					if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
+						return nil, err
+					}
+					continue
+				} else {
+					var sum S
+					xcnt := 0
+
+					err = exec.state[i].iter(uint16(j), func(k []byte) error {
+						ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+						val := decimalStateFromArg[A, S](*ptr, exec.aggInfo.argTypes[0].Scale)
+						var fnerr error
+						if sum, fnerr = decimalStateAdd[S](sum, val); fnerr != nil {
+							return fnerr
+						}
+						xcnt++
+						return nil
+					})
+
+					if err != nil {
+						return nil, err
+					}
+					if int(exec.state[i].argCnt[j]) != xcnt {
+						panic(moerr.NewInternalErrorNoCtxf("invalid count: %d for y: %d, expected: %d", xcnt, j, exec.state[i].argCnt[j]))
+					}
+
+					if exec.isSum {
+						if err := vector.AppendFixed(vecs[i], sum, false, exec.mp); err != nil {
+							return nil, err
+						}
+					} else {
+						avg := decAvg(sum, int64(exec.state[i].argCnt[j]), sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]), resultType.Scale)
+						if err := vector.AppendFixed(vecs[i], avg, false, exec.mp); err != nil {
+							return nil, err
+						}
+					}
+				}
+			}
+		}
+	} else {
+		for i := range vecs {
+			sumVec := exec.state[i].vecs[0]
+			sums := vector.MustFixedColNoTypeCheck[S](sumVec)
+
+			if !exec.isSum {
+				cntVec := exec.state[i].vecs[1]
+				cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+				for j, cnt := range cnts {
+					if cnt == 0 {
+						sumVec.SetNull(uint64(j))
+					} else {
+						avg := decAvg(sums[j], cnt, sumAvgDecimalArgScale(exec.aggInfo.argTypes[0]), resultType.Scale)
+						vector.SetFixedAtNoTypeCheck(sumVec, j, avg)
+					}
+				}
+				cntVec.Free(exec.mp)
+				exec.state[i].vecs[1] = nil
+			}
+
+			// Fix resulit scale
+			sumVec.GetType().Scale = resultType.Scale
+
+			// transfer sumVec
+			vecs[i] = sumVec
+			exec.state[i].vecs[0] = nil
+			exec.state[i].length = 0
+			exec.state[i].capacity = 0
+		}
+	}
+	return vecs, nil
+}
+
+func makeSumAvgExec(
+	mp *mpool.MPool, isSum bool,
+	aggID int64, isDistinct bool,
+	param types.Type) AggFuncExec {
+
+	switch param.Oid {
+	case types.T_int8:
+		return newSumAvgExec[int64, int8](mp, int64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_int16:
+		return newSumAvgExec[int64, int16](mp, int64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_year:
+		return newSumAvgExec[int64, int16](mp, int64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_int32:
+		return newSumAvgExec[int64, int32](mp, int64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_int64:
+		return newSumAvgDecExec[int64, types.Decimal128](mp, isSum, aggID, isDistinct, param)
+	case types.T_uint8:
+		return newSumAvgExec[uint64, uint8](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_uint16:
+		return newSumAvgExec[uint64, uint16](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_uint32:
+		return newSumAvgExec[uint64, uint32](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_uint64:
+		return newSumAvgDecExec[uint64, types.Decimal128](mp, isSum, aggID, isDistinct, param)
+	case types.T_bit:
+		return newSumAvgExec[uint64, uint64](mp, uint64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_float32:
+		return newSumAvgExec[float64, float32](mp, float64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_float64:
+		return newSumAvgExec[float64, float64](mp, float64OfCheck, isSum, aggID, isDistinct, param)
+	case types.T_decimal64:
+		return newSumDecimal64FastExec(mp, isSum, aggID, isDistinct, param)
+	case types.T_decimal128:
+		return newSumDecimal128FastExec(mp, isSum, aggID, isDistinct, param)
+	case types.T_decimal256:
+		return newSumAvgDecExec[types.Decimal256, types.Decimal256](mp, isSum, aggID, isDistinct, param)
+	default:
+		panic(moerr.NewInternalErrorNoCtxf("unsupported type '%v' for sum/avg", param.Oid))
+	}
+}
+
+func newSumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.Floats](mp *mpool.MPool, ofCheck func(T, T, T) error, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
+	var exec sumAvgExec[T, A]
+	exec.mp = mp
+	exec.isSum = isSum
+	exec.ofCheck = ofCheck
+	var rt types.Type
+	sumTyp := SumReturnType([]types.Type{param})
+	avgTyp := AvgReturnType([]types.Type{param})
+	if isSum {
+		rt = sumTyp
+	} else {
+		rt = avgTyp
+	}
+	exec.aggInfo = aggInfo{
+		aggId:      aggID,
+		isDistinct: isDistinct,
+		argTypes:   []types.Type{param},
+		retType:    rt,
+		emptyNull:  isSum,
+		saveArg:    isDistinct,
+	}
+
+	if isSum {
+		exec.aggInfo.stateTypes = []types.Type{sumTyp}
+	} else {
+		exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
+	}
+	return &exec
+}
+
+func newSumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState](mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
+	var exec sumAvgDecExec[A, S]
+	exec.mp = mp
+	exec.isSum = isSum
+	// Local buffer overflow is impossible when sizeof(S) > sizeof(A):
+	//   Int64/Uint64→Decimal128: 255 × 10^20 < 10^38 ✓
+	//   Decimal64→Decimal128: 255 × 10^18 < 10^38 ✓
+	//   Decimal128→Decimal256: 255 × 10^38 < 10^76 ✓
+	//   Decimal256→Decimal256: 255 × 10^76 > 10^76 ✗
+	// Valid instantiations: [Int64,Decimal128], [Uint64,Decimal128],
+	// [Decimal64,Decimal128], [Decimal128,Decimal256], [Decimal256,Decimal256].
+	// If a [Decimal128,Decimal128] instantiation is ever added, this must be updated.
+	var a A
+	switch any(a).(type) {
+	case int64, uint64, types.Decimal64, types.Decimal128:
+		exec.localAddSafe = true
+	default:
+		exec.localAddSafe = false
+	}
+
+	var rt types.Type
+	sumTyp := SumReturnType([]types.Type{param})
+	avgTyp := AvgReturnType([]types.Type{param})
+	if isSum {
+		rt = sumTyp
+	} else {
+		rt = avgTyp
+	}
+
+	exec.aggInfo = aggInfo{
+		aggId:      aggID,
+		isDistinct: isDistinct,
+		argTypes:   []types.Type{param},
+		retType:    rt,
+		emptyNull:  isSum,
+		saveArg:    isDistinct,
+	}
+
+	if isSum {
+		exec.aggInfo.stateTypes = []types.Type{sumTyp}
+	} else {
+		exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
+	}
+
+	return &exec
+}

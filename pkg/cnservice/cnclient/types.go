@@ -15,6 +15,7 @@
 package cnclient
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -56,7 +57,7 @@ type PipelineConfig struct {
 
 // PipelineClient pipeline client
 type PipelineClient interface {
-	NewStream(backend string) (morpc.Stream, error)
+	NewStream(ctx context.Context, backend string) (morpc.Stream, error)
 	Raw() morpc.RPCClient
 	Close() error
 }

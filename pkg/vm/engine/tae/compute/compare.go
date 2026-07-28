@@ -21,7 +21,6 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 func CompareOrdered[T types.OrderedT](a, b T) int {
@@ -42,7 +41,7 @@ func CompareBytes(a, b []byte) int {
 }
 
 func compareArrayFromBytes[T types.RealNumbers](a, b []byte) int {
-	return moarray.Compare[T](types.BytesToArray[T](a), types.BytesToArray[T](b))
+	return types.ArrayCompare[T](types.BytesToArray[T](a), types.BytesToArray[T](b))
 }
 
 func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
@@ -87,6 +86,8 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 		return CompareOrdered(types.DecodeDatetime(a), types.DecodeDatetime(b))
 	case types.T_enum:
 		return CompareOrdered(types.DecodeEnum(a), types.DecodeEnum(b))
+	case types.T_year:
+		return CompareOrdered(types.DecodeMoYear(a), types.DecodeMoYear(b))
 	case types.T_TS:
 		aa := (*types.TS)(unsafe.Pointer(&a[0]))
 		bb := (*types.TS)(unsafe.Pointer(&b[0]))
@@ -121,6 +122,18 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 		return compareArrayFromBytes[float32](a, b)
 	case types.T_array_float64:
 		return compareArrayFromBytes[float64](a, b)
+	// Narrow vector element types. compareArrayFromBytes is constrained to
+	// RealNumbers, so these use the shared element-generic comparator. Without
+	// them a bf16/f16/int8/uint8 vector reaching this switch hits the panic
+	// below, where the same value as vecf32 merely compares.
+	case types.T_array_bf16:
+		return types.CompareArrayElementFromBytes[types.BF16](a, b, false)
+	case types.T_array_float16:
+		return types.CompareArrayElementFromBytes[types.Float16](a, b, false)
+	case types.T_array_int8:
+		return types.CompareArrayElementFromBytes[int8](a, b, false)
+	case types.T_array_uint8:
+		return types.CompareArrayElementFromBytes[uint8](a, b, false)
 	case types.T_any:
 		return 0
 	default:
@@ -170,6 +183,8 @@ func CompareGeneric(a, b any, t types.T) int {
 		return CompareOrdered(a.(types.Datetime), b.(types.Datetime))
 	case types.T_enum:
 		return CompareOrdered(a.(types.Enum), b.(types.Enum))
+	case types.T_year:
+		return CompareOrdered(a.(types.MoYear), b.(types.MoYear))
 	case types.T_TS:
 		ts1 := a.(types.TS)
 		ts2 := b.(types.TS)
@@ -192,6 +207,15 @@ func CompareGeneric(a, b any, t types.T) int {
 		return compareArrayFromBytes[float32](a.([]byte), b.([]byte))
 	case types.T_array_float64:
 		return compareArrayFromBytes[float64](a.([]byte), b.([]byte))
+	// Narrow vector element types — see the note in Compare above.
+	case types.T_array_bf16:
+		return types.CompareArrayElementFromBytes[types.BF16](a.([]byte), b.([]byte), false)
+	case types.T_array_float16:
+		return types.CompareArrayElementFromBytes[types.Float16](a.([]byte), b.([]byte), false)
+	case types.T_array_int8:
+		return types.CompareArrayElementFromBytes[int8](a.([]byte), b.([]byte), false)
+	case types.T_array_uint8:
+		return types.CompareArrayElementFromBytes[uint8](a.([]byte), b.([]byte), false)
 	case types.T_any:
 		return 0
 	default:

@@ -225,9 +225,7 @@ func NewFlushTableTailTask(
 	task.doTransfer = !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
 	if task.doTransfer {
 		task.transMappings = make(api.TransferMaps, len(task.aObjHandles))
-		for i := range len(task.aObjHandles) {
-			task.transMappings[i] = make(api.TransferMap)
-		}
+		// entries populated lazily by AddSortPhaseMapping per source block
 	}
 
 	task.createAt = time.Now()
@@ -481,6 +479,13 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 func (task *flushTableTailTask) prepareAObjSortedData(
 	ctx context.Context, objIdx int, idxs []int, sortKeyPos int, isTombstone bool,
 ) (bat *containers.Batch, empty bool, err error) {
+	defer func() {
+		if err != nil && bat != nil {
+			bat.Close()
+			bat = nil
+		}
+	}()
+
 	if len(idxs) <= 0 {
 		logutil.Info(
 			"NO-MERGEABLE-COLUMNS",
@@ -499,6 +504,10 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	}
 
 	if err != nil {
+		return
+	}
+	if bat == nil {
+		empty = true
 		return
 	}
 	for i := range idxs {
@@ -534,7 +543,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		return
 	}
 	if task.doTransfer {
-		mergesort.AddSortPhaseMapping(task.transMappings[objIdx], totalRowCnt, sortMapping)
+		mergesort.AddSortPhaseMapping(task.transMappings, objIdx, totalRowCnt, sortMapping)
 	}
 	return
 }
@@ -579,10 +588,8 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		}
 		seqnums = append(seqnums, def.SeqNum)
 	}
-	if isTombstone {
-		readColIdxs = append(readColIdxs, objectio.SEQNUM_COMMITTS)
-		seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
-	}
+	readColIdxs = append(readColIdxs, objectio.SEQNUM_COMMITTS)
+	seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
 
 	// read from aobjects
 	readedBats := make([]*containers.Batch, 0, len(objHandles))
@@ -644,7 +651,8 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 			}
 		}
 		if !isTombstone && task.doTransfer {
-			mergesort.CleanTransMapping(task.transMappings)
+			mergesort.ReleaseTransferMaps(task.transMappings)
+			task.transMappings = nil
 		}
 		return nil
 	}
@@ -680,14 +688,21 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	}
 
 	// write!
+	arena := objectio.GetArena(objectio.ArenaSmall)
+	defer func() {
+		arena.Reset()
+		objectio.PutArena(arena)
+	}()
+
 	objID := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(&objID)
-	writer, err := ioutil.NewBlockWriterNew(
+	writer, err := ioutil.NewBlockWriterWithArena(
 		task.rt.Fs,
 		name,
 		schema.Version,
 		seqnums,
 		isTombstone,
+		arena,
 	)
 	if err != nil {
 		return err
@@ -707,6 +722,9 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		}
 	} else if schema.HasSortKey() {
 		writer.SetSortKey(uint16(schema.GetSingleSortKeyIdx()))
+	}
+	if !isTombstone && schema.HasFakePK() {
+		writer.SetFakePK(uint16(schema.GetPrimaryKey().Idx))
 	}
 	for _, bat := range writtenBatches {
 		_, err = writer.WriteBatch(bat)
@@ -846,10 +864,10 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 			dataVer.Batch,
 			task.Name(),
 		)
+		subtasks[i] = aobjectTask
 		if err = task.rt.Scheduler.Schedule(aobjectTask); err != nil {
 			return
 		}
-		subtasks[i] = aobjectTask
 	}
 	return
 }
@@ -871,7 +889,6 @@ func (task *flushTableTailTask) waitFlushAObjForSnapshot(ctx context.Context, su
 		if err = subtask.WaitDone(ictx); err != nil {
 			return moerr.AttachCause(ictx, err)
 		}
-		subtask.done = true
 		stat := subtask.stat.Clone()
 		if err = handles[i].UpdateStats(*stat); err != nil {
 			return

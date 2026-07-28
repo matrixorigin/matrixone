@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	goruntime "runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -96,7 +98,26 @@ func main() {
 	if *heapProfilePathFlag != "" {
 		defer writeHeapProfile()
 	}
+	// Enable block profiling if requested
+	// SetBlockProfileRate(n) records blocking events that last at least n nanoseconds.
+	// Recommended values:
+	//   - Production: 100-1000 (only record blocking events >= 100ns-1us)
+	//   - Debugging: 1 (record all blocking events)
+	if *blockProfileRate > 0 {
+		goruntime.SetBlockProfileRate(*blockProfileRate)
+		logutil.Infof("Block profiling enabled with rate: %d", *blockProfileRate)
+	}
+	// Enable mutex profiling if requested
+	// SetMutexProfileFraction(n) samples 1 in every n mutex contention events.
+	// Recommended values:
+	//   - Production: 100-1000 (sample 1 in 100-1000 contention events)
+	//   - Debugging: 1 (sample all contention events)
+	if *mutexProfileFraction > 0 {
+		goruntime.SetMutexProfileFraction(*mutexProfileFraction)
+		logutil.Infof("Mutex profiling enabled with fraction: %d", *mutexProfileFraction)
+	}
 	if *httpListenAddr != "" {
+		frontend.SetDebugHTTPAddr(*httpListenAddr)
 		go func() {
 			http.ListenAndServe(*httpListenAddr, nil)
 		}()
@@ -142,6 +163,16 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 		//dump goroutine before stopping services
 		routineProfilePath := saveProfile(profile.GOROUTINE)
 		detail += " routine profile: " + routineProfilePath
+		//dump block profile before stopping services if enabled
+		if *blockProfileRate > 0 {
+			blockProfilePath := saveProfile(profile.BLOCK)
+			detail += " block profile: " + blockProfilePath
+		}
+		//dump mutex profile before stopping services if enabled
+		if *mutexProfileFraction > 0 {
+			mutexProfilePath := saveProfile(profile.MUTEX)
+			detail += " mutex profile: " + mutexProfilePath
+		}
 	case <-shutdownC:
 		// waiting, give a chance let all log stores and tn stores to get
 		// shutdown cmd from ha keeper
@@ -180,6 +211,9 @@ func startService(
 	setupServiceRuntime(cfg, stopper)
 
 	malloc.SetDefaultConfig(cfg.Malloc)
+	if cfg.Malloc.MpoolProfiling != nil && *cfg.Malloc.MpoolProfiling {
+		mpool.EnableProfiling()
+	}
 
 	setupStatusServer(runtime.ServiceRuntime(cfg.mustGetServiceUUID()))
 

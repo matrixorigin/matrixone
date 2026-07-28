@@ -539,13 +539,9 @@ select * from su_04;
 
 drop table if exists su_04;
 
--- @bvt:issue#16438
 create table su_05(c1 int not null primary key,c2 varchar(25),c3 decimal(6,2))partition by key(c1)partitions 4;;
 insert into  su_05 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
-select * from `%!%p0%!%su_05`;
-select * from `%!%p1%!%su_05`;
-select * from `%!%p2%!%su_05`;
-select * from `%!%p3%!%su_05`;
+
 -- ddl partition, pk ,more rows lock
 begin;
 select * from su_05 where c1>3 for update;
@@ -603,7 +599,6 @@ select * from su_05;
 -- @session}
 commit;
 drop table su_05;
--- @bvt:issue
 
 -- @bvt:issue#11009
 create table su_05_1(c1 int auto_increment primary key,c2 varchar(25),c3 decimal(6,2))partition by key(c1)partitions 4;;
@@ -791,3 +786,217 @@ prepare s1 from select a from t1 where b = ? order by b limit 1 for update;
 set @b=2;
 execute s1 using @b;
 deallocate prepare s1;
+
+-- select ... for update with join tables
+drop table if exists su_join_t1;
+drop table if exists su_join_t2;
+drop table if exists su_join_t3;
+create table su_join_t1(id int primary key, name varchar(25), tid int);
+create table su_join_t2(id int primary key, val int);
+create table su_join_t3(id int primary key, tag varchar(10));
+insert into su_join_t1 values(1,'alice',10),(2,'bob',20),(3,'carol',30);
+insert into su_join_t2 values(10,100),(20,200),(30,300);
+insert into su_join_t3 values(1,'x'),(2,'y'),(3,'z');
+
+-- inner join for update
+begin;
+select su_join_t1.id, su_join_t1.name, su_join_t2.val from su_join_t1 join su_join_t2 on su_join_t1.tid = su_join_t2.id where su_join_t1.id <= 2 for update;
+-- @session:id=1{
+use select_for_update;
+select * from su_join_t1 where id=1;
+select * from su_join_t2 where id=10;
+-- @session}
+commit;
+
+-- left join for update
+begin;
+select a.id, b.val from su_join_t1 a left join su_join_t2 b on a.tid = b.id for update;
+commit;
+
+-- three table join for update
+begin;
+select a.id, a.name, b.val, c.tag from su_join_t1 a join su_join_t2 b on a.tid = b.id join su_join_t3 c on a.id = c.id where a.id = 1 for update;
+commit;
+
+-- join for update with update in same transaction
+begin;
+select su_join_t1.id, su_join_t2.val from su_join_t1 join su_join_t2 on su_join_t1.tid = su_join_t2.id where su_join_t1.id = 1 for update;
+update su_join_t2 set val = 999 where id = 10;
+commit;
+select * from su_join_t2 where id = 10;
+
+-- join for update with alias
+begin;
+select a.id, b.val from su_join_t1 a inner join su_join_t2 b on a.tid = b.id for update;
+commit;
+
+-- natural join for update (no common columns, acts as cross join)
+drop table if exists su_join_nat1;
+drop table if exists su_join_nat2;
+create table su_join_nat1(c1 int primary key, c2 int);
+create table su_join_nat2(c1 int primary key, c2 int);
+insert into su_join_nat1 values(1,10),(2,20);
+insert into su_join_nat2 values(1,10),(2,20);
+begin;
+select * from su_join_nat1 natural join su_join_nat2 for update;
+commit;
+
+-- cleanup
+drop table if exists su_join_t1;
+drop table if exists su_join_t2;
+drop table if exists su_join_t3;
+drop table if exists su_join_nat1;
+drop table if exists su_join_nat2;
+
+-- =====================================================================
+-- FOR UPDATE with CTE, derived tables, EXISTS/IN subqueries and aggregates
+-- =====================================================================
+
+drop table if exists su_fu_main;
+drop table if exists su_fu_ref;
+create table su_fu_main(id int primary key, company_id int, status int);
+create table su_fu_ref(id int primary key, province varchar(32));
+insert into su_fu_main values(1,10,1),(2,20,1),(3,30,1),(4,40,1),(5,50,1);
+insert into su_fu_ref values(10,'p1'),(20,'p2'),(30,'p3'),(40,'p4'),(50,'p5');
+
+-- cte + join + for update
+begin;
+with target as (select id, company_id from su_fu_main order by id limit 3)
+select t.id, t.company_id from su_fu_main t join target on t.id = target.id for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 99 where id = 1;
+-- @session}
+commit;
+select * from su_fu_main where id = 1;
+
+-- derived table + for update
+begin;
+select * from (select id, company_id from su_fu_main order by id limit 3) t for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 88 where id = 2;
+-- @session}
+commit;
+select * from su_fu_main where id = 2;
+
+-- derived table joined to a base table + for update; both base tables must be locked
+begin;
+select m.id, m.company_id, r.province from su_fu_main m
+  join (select id, province from su_fu_ref where id < 40) r on m.company_id = r.id
+  for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 33 where id = 1;
+-- @session}
+commit;
+select * from su_fu_main where id = 1;
+
+-- exists subquery + for update
+-- outer table (su_fu_main) is locked; subquery table (su_fu_ref) must NOT be locked
+begin;
+select id, company_id from su_fu_main t
+  where exists (select 1 from su_fu_ref r where r.id = t.company_id)
+  for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_ref set province = 'updated_ref' where id = 10;
+-- @wait:0:commit
+update su_fu_main set status = 77 where id = 3;
+-- @session}
+commit;
+select * from su_fu_main where id = 3;
+select * from su_fu_ref where id = 10;
+
+-- in subquery + for update; the subquery actually reads su_fu_ref ids 10/20/30/40/50,
+-- and even one of those rows must not be locked, while the outer su_fu_main rows must be
+begin;
+select id from su_fu_main where company_id in (select id from su_fu_ref) for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_ref set province = 'in_test' where id = 20;
+-- @wait:0:commit
+update su_fu_main set status = 22 where id = 2;
+-- @session}
+commit;
+select * from su_fu_ref where id = 20;
+select * from su_fu_main where id = 2;
+
+-- aggregate + for update; outer table must be locked
+begin;
+select company_id, count(*) from su_fu_main group by company_id for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 66 where id = 4;
+-- @session}
+commit;
+select * from su_fu_main where id = 4;
+
+-- aggregate + group by + having + for update; outer table must be locked
+begin;
+select company_id, count(*) c from su_fu_main group by company_id having c >= 1 for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 67 where id = 5;
+-- @session}
+commit;
+select * from su_fu_main where id = 5;
+
+-- subquery in select list + for update; the scalar subquery actually reads
+-- su_fu_ref ids 10 (when m.id=1) and 20 (when m.id=2). Concurrently updating
+-- id=10 proves that even rows the subquery actually fetched are not locked.
+begin;
+select id, (select province from su_fu_ref r where r.id = m.company_id) p
+  from su_fu_main m where id <= 2 for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_ref set province = 'scalar_test' where id = 10;
+-- @session}
+commit;
+select * from su_fu_ref where id = 10;
+
+-- cte + join + for update; LIMIT scope must not over-lock rows outside the cte result set
+begin;
+with target as (select id from su_fu_main order by id limit 2)
+select t.id from su_fu_main t join target on t.id = target.id for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_main set status = 55 where id = 5;
+-- @session}
+commit;
+select * from su_fu_main where id = 5;
+
+-- recursive cte + for update is rejected: the body emits SINK_SCAN and the
+-- outer LOCK_OP cannot reach the underlying base tables, so a silent missing
+-- lock is worse than a clean error.
+drop table if exists su_fu_rec;
+create table su_fu_rec(id int primary key, parent int);
+insert into su_fu_rec values(1,0),(2,1),(3,2);
+with recursive walk as (
+  select id, parent from su_fu_rec where id = 1
+  union all
+  select s.id, s.parent from su_fu_rec s join walk on s.parent = walk.id
+) select * from walk for update;
+drop table if exists su_fu_rec;
+
+-- view + for update; view body must not inherit FOR UPDATE state and over-lock
+drop view if exists su_fu_view;
+create view su_fu_view as select id, company_id from su_fu_main order by id limit 2;
+begin;
+select * from su_fu_view for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_main set status = 44 where id = 5;
+-- @session}
+commit;
+select * from su_fu_main where id = 5;
+drop view if exists su_fu_view;
+
+-- cleanup
+drop table if exists su_fu_main;
+drop table if exists su_fu_ref;

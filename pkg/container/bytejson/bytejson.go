@@ -38,7 +38,11 @@ func (bj ByteJson) String() string {
 }
 
 func (bj ByteJson) Unquote() (string, error) {
-	if bj.Type != TpCodeString {
+	if bj.Type != TpCodeString &&
+		bj.Type != TpCodeDate &&
+		bj.Type != TpCodeTime &&
+		bj.Type != TpCodeDatetime &&
+		bj.Type != TpCodeBlob {
 		return bj.String(), nil
 	}
 	str := bj.GetString()
@@ -109,6 +113,16 @@ func (bj *ByteJson) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (bj *ByteJson) unmarshalJSONWithDepthLimit(data []byte, maxDepth int) error {
+	bs, err := parseJsonByte(data, maxDepth)
+	if err != nil {
+		return err
+	}
+	bj.Data = bs[1:]
+	bj.Type = TpCode(bs[0])
+	return nil
+}
+
 func (bj ByteJson) IsNull() bool {
 	return bj.Type == TpCodeLiteral && bj.Data[0] == LiteralNull
 }
@@ -126,7 +140,14 @@ func (bj ByteJson) GetUint64() uint64 {
 }
 
 func (bj ByteJson) GetFloat64() float64 {
-	return math.Float64frombits(bj.GetUint64())
+	switch bj.Type {
+	case TpCodeInt64:
+		return float64(bj.GetInt64())
+	case TpCodeUint64:
+		return float64(bj.GetUint64())
+	default:
+		return math.Float64frombits(bj.GetUint64())
+	}
 }
 
 func (bj ByteJson) GetString() []byte {
@@ -151,6 +172,14 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 		buf, err = bj.toFloat64(buf)
 	case TpCodeString:
 		buf, err = bj.toString(buf)
+	case TpCodeDecimal:
+		data := bj.GetString()
+		buf = append(buf, data...)
+	case TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+		buf = append(buf, '"')
+		data := bj.GetString()
+		buf = append(buf, data...)
+		buf = append(buf, '"')
 	default:
 		err = moerr.NewInvalidInputNoCtxf("invalid json type '%v'", bj.Type)
 	}
@@ -247,6 +276,22 @@ func (bj ByteJson) getObjectKey(i int) []byte {
 	return bj.Data[keyOff : keyOff+keyLen]
 }
 
+// GetObjectKey returns the key at index i of a JSON object.
+// Keys are stored in sorted order (binary search is used for lookups).
+func (bj ByteJson) GetObjectKey(i int) []byte {
+	return bj.getObjectKey(i)
+}
+
+// GetObjectVal returns the value at index i of a JSON object.
+func (bj ByteJson) GetObjectVal(i int) ByteJson {
+	return bj.getObjectVal(i)
+}
+
+// GetArrayElem returns the element at index i of a JSON array.
+func (bj ByteJson) GetArrayElem(i int) ByteJson {
+	return bj.getArrayElem(i)
+}
+
 func (bj ByteJson) getArrayElem(i int) ByteJson {
 	return bj.getValEntry(headerSize + i*valEntrySize)
 }
@@ -264,7 +309,7 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 		return ByteJson{Type: TpCodeLiteral, Data: bj.Data[off+valTypeSize : off+valTypeSize+1]}
 	case TpCodeUint64, TpCodeInt64, TpCodeFloat64:
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+numberSize]}
-	case TpCodeString:
+	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
 		num, length := calStrLen(bj.Data[valOff:])
 		totalLen := uint32(num) + uint32(length)
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+totalLen]}
@@ -274,6 +319,14 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 }
 
 func (bj ByteJson) queryValByKey(key []byte) ByteJson {
+	val, ok := bj.queryValByKeyExists(key)
+	if !ok {
+		return Null
+	}
+	return val
+}
+
+func (bj ByteJson) queryValByKeyExists(key []byte) (ByteJson, bool) {
 	cnt := bj.GetElemCnt()
 	var idx int
 	if cnt < binarySearchCutoff {
@@ -292,9 +345,9 @@ func (bj ByteJson) queryValByKey(key []byte) ByteJson {
 	}
 
 	if idx >= cnt || !bytes.Equal(bj.getObjectKey(idx), key) {
-		return Null
+		return Null, false
 	}
-	return bj.getObjectVal(idx)
+	return bj.getObjectVal(idx), true
 }
 
 func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
@@ -328,19 +381,18 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 				cur = bj.query(cur, &nPath)
 			}
 		case subPathRange:
-			se := sub.iRange.genRange(bj.GetElemCnt())
-			if se[0] == 0 {
+			if sub.iRange.matchesIndex(0, 1) {
 				cur = bj.query(cur, &nPath)
 			}
 		case subPathKey:
-			cnt := bj.GetElemCnt()
-			if sub.key == "*" {
-				for i := 0; i < cnt; i++ {
-					cur = bj.getObjectVal(i).query(cur, &nPath)
-				}
-			} else {
-				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
+			tmp, exists := bj.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+			if exists {
 				cur = tmp.query(cur, &nPath)
+			}
+		case subPathKeyWildcard:
+			cnt := bj.GetElemCnt()
+			for i := 0; i < cnt; i++ {
+				cur = bj.getObjectVal(i).query(cur, &nPath)
 			}
 		}
 		return cur
@@ -352,8 +404,6 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		case subPathIdx:
 			idx, _, last := sub.idx.genIndex(cnt)
 			if last && idx < 0 || cnt <= idx {
-				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
-				cur = append(cur, tmp)
 				return cur
 			}
 			if idx == subPathIdxALL {
@@ -364,45 +414,163 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 				cur = bj.getArrayElem(idx).query(cur, &nPath)
 			}
 		case subPathRange:
+			if cnt == 0 {
+				return cur
+			}
 			se := sub.iRange.genRange(cnt)
-			if se[0] == subPathIdxErr {
-				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
-				cur = append(cur, tmp)
+			if se[0] < 0 || se[1] < 0 {
 				return cur
 			}
 			for i := se[0]; i <= se[1]; i++ {
 				cur = bj.getArrayElem(i).query(cur, &nPath)
 			}
 		}
+		return cur
+	}
+	if sub.tp == subPathIdx {
+		idx, _, _ := sub.idx.genIndex(1)
+		if idx == 0 {
+			return bj.query(cur, &nPath)
+		}
+	}
+	if sub.tp == subPathRange && sub.iRange.matchesIndex(0, 1) {
+		return bj.query(cur, &nPath)
 	}
 	return cur
 }
 
 func (bj ByteJson) Query(paths []*Path) ByteJson {
+	result, _ := bj.QueryWithExists(paths)
+	return result
+}
+
+// QueryWithExists returns the selected JSON value and whether any path matched.
+// A matched JSON literal null is a value and therefore returns exists=true.
+func (bj ByteJson) QueryWithExists(paths []*Path) (ByteJson, bool) {
 	out := make([]ByteJson, 0, len(paths))
 	for _, path := range paths {
 		tmp := bj.query(nil, path)
 		if len(tmp) > 0 {
-			allNull := checkAllNull(tmp)
-			if !allNull {
-				out = append(out, tmp...)
-			}
+			out = append(out, tmp...)
 		}
 	}
 	if len(out) == 0 {
-		return ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+		return Null, false
 	}
-	if len(out) == 1 && len(paths) == 1 {
-		return out[0]
+	if len(out) == 1 && len(paths) == 1 && !paths[0].mayReturnMultiple() {
+		return out[0], true
 	}
-	allNull := checkAllNull(out)
-	if allNull {
-		return ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+	return mergeToArray(out), true
+}
+
+// PathExists reports whether path selects at least one JSON value. A selected
+// JSON literal null counts as an existing path. Array index zero autowraps
+// non-array values to match JSON_CONTAINS_PATH semantics.
+func (bj ByteJson) PathExists(path *Path) bool {
+	return bj.pathExists(path)
+}
+
+func (bj ByteJson) pathExists(path *Path) bool {
+	if path.empty() {
+		return true
 	}
-	return mergeToArray(out)
+
+	sub, nextPath := path.step()
+	if sub.tp == subPathDoubleStar {
+		if bj.pathExists(&nextPath) {
+			return true
+		}
+		if bj.Type == TpCodeObject {
+			for i := 0; i < bj.GetElemCnt(); i++ {
+				if bj.getObjectVal(i).pathExists(path) {
+					return true
+				}
+			}
+		} else if bj.Type == TpCodeArray {
+			for i := 0; i < bj.GetElemCnt(); i++ {
+				if bj.getArrayElem(i).pathExists(path) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	switch bj.Type {
+	case TpCodeObject:
+		switch sub.tp {
+		case subPathIdx:
+			idx, _, _ := sub.idx.genIndex(1)
+			return idx == 0 && bj.pathExists(&nextPath)
+		case subPathRange:
+			return sub.iRange.matchesIndex(0, 1) && bj.pathExists(&nextPath)
+		case subPathKey:
+			value, ok := bj.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+			return ok && value.pathExists(&nextPath)
+		case subPathKeyWildcard:
+			for i := 0; i < bj.GetElemCnt(); i++ {
+				if bj.getObjectVal(i).pathExists(&nextPath) {
+					return true
+				}
+			}
+		}
+	case TpCodeArray:
+		count := bj.GetElemCnt()
+		switch sub.tp {
+		case subPathIdx:
+			idx, _, last := sub.idx.genIndex(count)
+			if (last && idx < 0) || count <= idx {
+				return false
+			}
+			if idx == subPathIdxALL {
+				for i := 0; i < count; i++ {
+					if bj.getArrayElem(i).pathExists(&nextPath) {
+						return true
+					}
+				}
+				return false
+			}
+			return bj.getArrayElem(idx).pathExists(&nextPath)
+		case subPathRange:
+			for i := 0; i < count; i++ {
+				if sub.iRange.matchesIndex(i, count) && bj.getArrayElem(i).pathExists(&nextPath) {
+					return true
+				}
+			}
+		}
+	default:
+		if sub.tp == subPathIdx {
+			idx, _, _ := sub.idx.genIndex(1)
+			return idx == 0 && bj.pathExists(&nextPath)
+		}
+		if sub.tp == subPathRange {
+			return sub.iRange.matchesIndex(0, 1) && bj.pathExists(&nextPath)
+		}
+	}
+
+	return false
 }
 
 func (bj ByteJson) querySimple(path *Path) ByteJson {
+	val, ok := bj.querySimpleExist(path, false)
+	if !ok {
+		return Null
+	}
+	return val
+}
+
+// QuerySimpleExist returns the value at a simple path and whether the path exists.
+func (bj ByteJson) QuerySimpleExist(path *Path) (ByteJson, bool) {
+	return bj.querySimpleExist(path, false)
+}
+
+// QuerySimpleContainPath returns the value at a simple path using JSON_CONTAINS
+// scalar-[0] autowrap semantics for scalar array-index access.
+func (bj ByteJson) QuerySimpleContainPath(path *Path) (ByteJson, bool) {
+	return bj.querySimpleExist(path, true)
+}
+
+func (bj ByteJson) querySimpleExist(path *Path, autowrapScalarIndex bool) (ByteJson, bool) {
 	cur := bj
 	// don't go through th step(), recursive call route.  We know
 	// we have a simple path, each step will bring us to ONE SINGLE next value.
@@ -411,23 +579,23 @@ func (bj ByteJson) querySimple(path *Path) ByteJson {
 		if cur.Type == TpCodeObject {
 			switch sub.tp {
 			case subPathIdx:
+				// obj[0] is itself, continue
 				start, _, _ := sub.idx.genIndex(1)
 				if start != 0 {
-					return Null
+					return Null, false
 				}
-				// obj[0] is itself, continue
 			case subPathKey:
-				if sub.key == "*" {
-					panic("bytejson simple path should not contain *")
-				} else {
-					cur = cur.queryValByKey(util.UnsafeStringToBytes(sub.key))
+				var ok bool
+				cur, ok = cur.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+				if !ok {
+					return Null, false
 				}
 			default:
-				return Null
+				return Null, false
 			}
 		} else if cur.Type == TpCodeArray {
 			if sub.tp != subPathIdx {
-				return Null
+				return Null, false
 			}
 			cnt := cur.GetElemCnt()
 			idx, _, _ := sub.idx.genIndex(cnt)
@@ -436,39 +604,49 @@ func (bj ByteJson) querySimple(path *Path) ByteJson {
 			// if (last && idx < 0) || cnt <= idx {
 			if idx < 0 || cnt <= idx {
 				// out of range
-				return Null
+				return Null, false
 			} else {
 				cur = cur.getArrayElem(idx)
 			}
 		} else {
-			return Null
+			if autowrapScalarIndex && sub.tp == subPathIdx {
+				idx, _, _ := sub.idx.genIndex(1)
+				if idx == 0 {
+					continue
+				}
+			}
+			return Null, false
 		}
 	}
-	return cur
+	return cur, true
 }
 
 func (bj ByteJson) QuerySimple(paths []*Path) ByteJson {
+	result, _ := bj.QuerySimpleWithExists(paths)
+	return result
+}
+
+// QuerySimpleWithExists is the simple-path variant of QueryWithExists.
+func (bj ByteJson) QuerySimpleWithExists(paths []*Path) (ByteJson, bool) {
 	if len(paths) == 0 {
 		// not retrieve anything
-		return Null
+		return Null, false
 	} else if len(paths) == 1 {
 		// only retrieve one path
-		return bj.querySimple(paths[0])
+		return bj.querySimpleExist(paths[0], true)
 	} else {
 		// retrieve multiple paths, merge them into an array
 		out := make([]ByteJson, 0, len(paths))
 		for _, path := range paths {
-			tmp := bj.querySimple(path)
-			// strange behavior, skipping Null value.
-			if !tmp.IsNull() {
+			tmp, exists := bj.querySimpleExist(path, true)
+			if exists {
 				out = append(out, tmp)
 			}
 		}
-		// strange behavior, we actually return Null instead of an array of nulls.
-		if checkAllNull(out) {
-			return Null
+		if len(out) == 0 {
+			return Null, false
 		}
-		return mergeToArray(out)
+		return mergeToArray(out), true
 	}
 }
 
@@ -483,6 +661,12 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 
 	if len(pathList) == 0 {
 		return bj, nil
+	}
+
+	for _, path := range pathList {
+		if path == nil || !path.IsSimple() {
+			return Null, moerr.NewInvalidInputNoCtx("path expression is not simple")
+		}
 	}
 
 	for i := 0; i < len(pathList); i++ {
@@ -502,6 +686,28 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 			return Null, moerr.NewInvalidInputNoCtx("invalid modify type")
 		}
 
+		if err != nil {
+			return Null, err
+		}
+	}
+	return bj, nil
+}
+
+func (bj ByteJson) Remove(pathList []*Path) (ByteJson, error) {
+	if len(pathList) == 0 {
+		return bj, nil
+	}
+
+	for _, path := range pathList {
+		if path == nil || path.empty() || !path.IsSimple() {
+			return Null, moerr.NewInvalidInputNoCtx("path expression is not simple")
+		}
+	}
+
+	var err error
+	for _, path := range pathList {
+		modifier := &bytejsonModifier{bj: bj}
+		bj, err = modifier.remove(path)
 		if err != nil {
 			return Null, err
 		}
@@ -553,15 +759,13 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 				keys, vals = bj.queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
 		case subPathKey:
-			if sub.key == "*" {
-				for i := 0; i < cnt; i++ {
-					newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
-					keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
-				}
-			} else {
-				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
-				newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
-				keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
+			tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
+			newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
+			keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
+		case subPathKeyWildcard:
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
+				keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
 		}
 	}
@@ -720,7 +924,11 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 }
 
 func ParseJsonByte(data []byte) ([]byte, error) {
-	n, err := ParseNode(data)
+	return parseJsonByte(data, 0)
+}
+
+func parseJsonByte(data []byte, maxDepth int) ([]byte, error) {
+	n, err := parseNode(data, maxDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -740,16 +948,22 @@ func ParseNodeString(s string) (Node, error) {
 }
 
 func ParseNode(data []byte) (Node, error) {
-	p := parser{src: data}
+	return parseNode(data, 0)
+}
+
+func parseNode(data []byte, maxDepth int) (Node, error) {
+	p := parser{src: data, maxDepth: maxDepth}
 	return p.do()
 }
 
 type parser struct {
-	src   []byte
-	stack []*Group
-	tz    *json2.Tokenizer
-	state func(*parser) int
-	top   Node
+	src      []byte
+	stack    []*Group
+	tz       *json2.Tokenizer
+	state    func(*parser) int
+	top      Node
+	maxDepth int
+	depthErr error
 }
 
 func (p *parser) do() (Node, error) {
@@ -769,6 +983,9 @@ func (p *parser) do() (Node, error) {
 			for _, g := range p.stack {
 				g.free()
 			}
+			if p.depthErr != nil {
+				return z, p.depthErr
+			}
 			if errors.Is(p.tz.Err, io.EOF) {
 				return z, io.ErrUnexpectedEOF
 			}
@@ -780,9 +997,12 @@ func (p *parser) do() (Node, error) {
 		case scanEnd:
 			if p.tz.Next() {
 				p.top.Free()
+				p.top = Node{}
 				return z, moerr.NewInvalidInputNoCtxf("invalid json: %s", p.src)
 			}
 			if p.tz.Err != nil {
+				p.top.Free()
+				p.top = Node{}
 				return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
 			}
 			return p.top, nil
@@ -801,11 +1021,15 @@ func (p *parser) stateBeginValue() int {
 
 	switch k.Class() {
 	case json2.Array:
-		p.openGroup(k)
+		if !p.openGroup(k) {
+			return scanError
+		}
 		p.state = (*parser).stateBeginValueOrEmpty
 		return scanContinue
 	case json2.Object:
-		p.openGroup(k)
+		if !p.openGroup(k) {
+			return scanError
+		}
 		p.state = (*parser).stateObjectKeyOrEmpty
 		return scanContinue
 	}
@@ -897,10 +1121,16 @@ func (p *parser) stateEndValue() int {
 	return scanError
 }
 
-func (p *parser) openGroup(k json2.Kind) {
+func (p *parser) openGroup(k json2.Kind) bool {
+	if p.maxDepth > 0 && len(p.stack) >= p.maxDepth {
+		p.depthErr = newJSONDocumentDepthError(p.maxDepth)
+		p.tz.Err = p.depthErr
+		return false
+	}
 	g := reuse.Alloc[Group](nil)
 	g.Obj = k == json2.Object
 	p.stack = append(p.stack, g)
+	return true
 }
 
 func (p *parser) closeGroup() {

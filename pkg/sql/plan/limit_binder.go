@@ -16,25 +16,40 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewLimitBinder(builder *QueryBuilder, ctx *BindContext) *LimitBinder {
+func NewLimitBinder(builder *QueryBuilder, ctx *BindContext, isOffset bool) *LimitBinder {
 	lb := &LimitBinder{}
 	lb.sysCtx = builder.GetContext()
 	lb.builder = builder
 	lb.ctx = ctx
 	lb.impl = lb
+	lb.isOffset = isOffset
 	return lb
 }
 
 func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	switch astExpr.(type) {
 	case *tree.UnqualifiedStar:
-		// need check other expr
 		return nil, moerr.NewSyntaxError(b.GetContext(), "unsupported expr in limit clause")
+	}
+
+	// Handle LIMIT -N / OFFSET -N: unary minus applied to a numeric literal.
+	// The parser produces tree.UnaryExpr{UNARY_MINUS, NumVal}, and baseBindExpr
+	// does not fold this into a negative literal, so we must intercept it here.
+	if unary, ok := astExpr.(*tree.UnaryExpr); ok && unary.Op == tree.UNARY_MINUS {
+		if _, ok := unary.Expr.(*tree.NumVal); ok {
+			clause := "LIMIT"
+			if b.isOffset {
+				clause = "OFFSET"
+			}
+			return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+				"%s must be a non-negative integer", clause)
+		}
 	}
 
 	expr, err := b.baseBindExpr(astExpr, depth, isRoot)
@@ -42,16 +57,30 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		return nil, err
 	}
 
+	// NULL check: reject NULL in LIMIT/OFFSET with a clear message.
+	if cExpr, ok := expr.Expr.(*plan.Expr_Lit); ok && cExpr.Lit != nil && cExpr.Lit.GetIsnull() {
+		clause := "LIMIT"
+		if b.isOffset {
+			clause = "OFFSET"
+		}
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "%s cannot be NULL", clause)
+	}
+
 	if expr.Typ.Id != int32(types.T_uint64) {
 		if expr.Typ.Id == int32(types.T_int64) {
 			if cExpr, ok := expr.Expr.(*plan.Expr_Lit); ok {
 				if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 					if c.I64Val < 0 {
-						return nil, moerr.NewSyntaxError(b.GetContext(), "offset value must be nonnegative")
+						clause := "LIMIT"
+						if b.isOffset {
+							clause = "OFFSET"
+						}
+						return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+							"%s must be a non-negative integer", clause)
 					}
-					//convert to uint64 instead of CAST
+					// convert to uint64 instead of CAST
 					expr = makePlan2Uint64ConstExprWithType(uint64(c.I64Val))
-					return expr, nil
+					return b.foldConstant(expr)
 				}
 			}
 		}
@@ -68,11 +97,12 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		} else if expr.GetP() != nil {
 			targetType := types.T_uint64.ToType()
 			planTargetType := makePlan2Type(&targetType)
-			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
+			if err != nil {
+				return nil, err
+			}
 		} else if expr.GetV() != nil {
 			// SELECT IFNULL(CAST(@var AS BIGINT), 1) => CASE( ISNULL(@var), 1, CAST(@var AS BIGINT))
-
-			//ISNULL(@var)
 			arg0, err := BindFuncExprImplByPlanExpr(b.GetContext(), "isnull", []*plan.Expr{
 				expr,
 			})
@@ -80,10 +110,8 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				return nil, err
 			}
 
-			// CAST( 1 AS BIGINT UNSIGNED)
 			arg1 := makePlan2Uint64ConstExprWithType(1)
 
-			// CAST(@var AS BIGINT UNSIGNED)
 			targetType := types.T_uint64.ToType()
 			planTargetType := makePlan2Type(&targetType)
 			arg2, err := appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
@@ -91,17 +119,40 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				return nil, err
 			}
 
-			return BindFuncExprImplByPlanExpr(b.GetContext(), "case", []*plan.Expr{
+			expr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "case", []*plan.Expr{
 				arg0,
 				arg1,
 				arg2,
 			})
+			if err != nil {
+				return nil, err
+			}
 		} else {
-			return nil, moerr.NewSyntaxError(b.GetContext(), "only uint64 support in limit/offset clause")
+			clause := "LIMIT"
+			if b.isOffset {
+				clause = "OFFSET"
+			}
+			return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+				"only uint64 support in %s clause", clause)
 		}
 	}
 
-	return expr, nil
+	return b.foldConstant(expr)
+}
+
+func (b *LimitBinder) foldConstant(expr *plan.Expr) (*plan.Expr, error) {
+	proc := b.builder.compCtx.GetProcess()
+	if proc == nil || expr == nil || expr.GetF() == nil || containsDynamicParam(expr) {
+		return expr, nil
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
+	if err != nil {
+		return nil, err
+	}
+	if folded == nil {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "invalid LIMIT/OFFSET expression")
+	}
+	return folded, nil
 }
 
 func (b *LimitBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {

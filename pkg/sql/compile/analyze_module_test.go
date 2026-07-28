@@ -19,6 +19,11 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -85,6 +90,7 @@ func Test_processPhyScope(t *testing.T) {
 		TimeConsumed:     5000,
 		WaitTimeConsumed: 2000,
 		MemorySize:       1024,
+		SpillSize:        1024,
 		InputRows:        1000,
 		OutputRows:       950,
 		InputSize:        2048,
@@ -372,6 +378,7 @@ func Test_explainResourceOverview(t *testing.T) {
 		TimeConsumed:     5000,
 		WaitTimeConsumed: 2000,
 		MemorySize:       1024,
+		SpillSize:        1024,
 		InputRows:        1000,
 		OutputRows:       950,
 		InputSize:        2048,
@@ -652,6 +659,7 @@ func Test_UpdatePreparePhyScope(t *testing.T) {
 		TimeConsumed:     5000,
 		WaitTimeConsumed: 2000,
 		MemorySize:       1024,
+		SpillSize:        1024,
 		InputRows:        1000,
 		OutputRows:       950,
 		InputSize:        2048,
@@ -724,4 +732,252 @@ func Test_UpdatePreparePhyScope(t *testing.T) {
 		[]vm.OpType{vm.TableScan, vm.Projection, vm.Connector})
 	res := UpdatePreparePhyScope(s2, phyScope1)
 	require.Equal(t, false, res)
+}
+
+func Test_UpdatePreparePhyScopePreScopeShapeMismatch(t *testing.T) {
+	scope := &Scope{
+		PreScopes: []*Scope{{}},
+	}
+	phyScope := models.PhyScope{}
+
+	require.False(t, UpdatePreparePhyScope(scope, phyScope))
+}
+
+func Test_UpdatePreparePhyPlanLocalScopeShapeMismatch(t *testing.T) {
+	c := &Compile{
+		anal: &AnalyzeModule{
+			phyPlan: models.NewPhyPlan(),
+		},
+	}
+	runC := &Compile{
+		anal:   &AnalyzeModule{},
+		scopes: []*Scope{{}},
+	}
+
+	require.False(t, c.UpdatePreparePhyPlan(runC))
+}
+
+func TestHandleTailNodeReceiver(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	mp := make(map[*process.WaitRegister]int)
+	reg := process.WaitRegister{}
+	mp[&reg] = 0
+	{
+		buf.Reset()
+		node := &connector.Connector{
+			Reg: &reg,
+		}
+		hanldeTailNodeReceiver(node, mp, buf)
+		require.Equal(t, " to MergeReceiver [0]", buf.String())
+	}
+
+	{
+		buf.Reset()
+		node := &dispatch.Dispatch{
+			LocalRegs: []*process.WaitRegister{&reg},
+			FuncId:    dispatch.ShuffleToAllFunc,
+			RemoteRegs: []colexec.ReceiveInfo{
+				{
+					NodeAddr: "127.0.0.1:1234",
+				},
+				{
+					NodeAddr: "127.0.0.1:1235",
+				},
+			},
+		}
+		hanldeTailNodeReceiver(node, mp, buf)
+		require.Equal(t,
+			" shuffle to all of MergeReceiver [0] cross-cn receiver info: "+
+				"[addr: 127.0.0.1:1234, uuid: 00000000-0000-0000-0000-000000000000], "+
+				"[addr: 127.0.0.1:1235, uuid: 00000000-0000-0000-0000-000000000000]",
+			buf.String())
+	}
+
+	{
+		buf.Reset()
+		node := &dispatch.Dispatch{
+			LocalRegs: []*process.WaitRegister{&reg},
+			FuncId:    dispatch.SendToAllFunc,
+		}
+		hanldeTailNodeReceiver(node, mp, buf)
+		require.Equal(t,
+			" to all of MergeReceiver [0]",
+			buf.String())
+	}
+
+	{
+		buf.Reset()
+		node := &dispatch.Dispatch{
+			LocalRegs: []*process.WaitRegister{&reg},
+			FuncId:    dispatch.SendToAnyLocalFunc,
+		}
+		hanldeTailNodeReceiver(node, mp, buf)
+		require.Equal(t,
+			" to any of MergeReceiver [0]",
+			buf.String())
+	}
+
+	{
+		buf.Reset()
+		node := &dispatch.Dispatch{
+			LocalRegs: []*process.WaitRegister{&reg},
+			FuncId:    dispatch.SendToAnyFunc,
+		}
+		hanldeTailNodeReceiver(node, mp, buf)
+		require.Equal(t,
+			" unknow type dispatch [0]",
+			buf.String())
+	}
+}
+
+func TestShowPipelineTree(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	mp := make(map[*process.WaitRegister]int)
+	reg := process.WaitRegister{}
+	mp[&reg] = 0
+
+	op := dupOperator(
+		insert.NewPartitionInsert(
+			&insert.Insert{},
+			1,
+		),
+		0,
+		0,
+	)
+
+	op.GetOperatorBase().OpAnalyzer = process.NewAnalyzer(
+		op.GetOperatorBase().Idx,
+		op.GetOperatorBase().IsFirst,
+		op.GetOperatorBase().IsLast,
+		"partition_insert",
+	)
+
+	{
+		buf.Reset()
+		ShowPipelineTree(op, "", true, true, mp, AnalyzeLevel, buf)
+		require.Contains(t, buf.String(), "Pipeline: └── unknown")
+		require.Contains(t, buf.String(), "TimeCost:0ns")
+	}
+
+	{
+		buf.Reset()
+		ShowPipelineTree(op, "", false, true, mp, VerboseLevel, buf)
+		require.Contains(t, buf.String(), "└── unknown")
+	}
+
+	{
+		buf.Reset()
+		ShowPipelineTree(op, "", false, false, mp, VerboseLevel, buf)
+		require.Contains(t, buf.String(), "├── unknown")
+	}
+
+}
+
+func TestShowPipelineTreeTableClone(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	ShowPipelineTree(&table_clone.TableClone{}, "", true, true, nil, NormalLevel, buf)
+	require.Contains(t, buf.String(), "Pipeline: └── table clone")
+}
+
+func TestApplyOpStatsToNode_ReadSize(t *testing.T) {
+	// Create a query with nodes
+	qry := &plan.Query{
+		Nodes: []*plan.Node{
+			{
+				NodeId: 0,
+			},
+			{
+				NodeId: 1,
+			},
+		},
+	}
+
+	// Create operator stats with ReadSize, S3ReadSize, DiskReadSize
+	opStats1 := &process.OperatorStats{
+		MemorySize:   111,
+		ReadSize:     1024 * 1024, // 1MB
+		S3ReadSize:   512 * 1024,  // 0.5MB
+		DiskReadSize: 256 * 1024,  // 0.25MB
+		ScanBytes:    2048 * 1024, // 2MB
+		NetworkIO:    100 * 1024,  // 100KB
+		InputBlocks:  10,
+	}
+
+	opStats2 := &process.OperatorStats{
+		MemorySize:   222,
+		ReadSize:     2048 * 1024, // 2MB
+		S3ReadSize:   1536 * 1024, // 1.5MB
+		DiskReadSize: 512 * 1024,  // 0.5MB
+		ScanBytes:    4096 * 1024, // 4MB
+		NetworkIO:    200 * 1024,  // 200KB
+		InputBlocks:  20,
+	}
+
+	// Create phy operators
+	phyOp1 := &models.PhyOperator{
+		OpName:  "TableScan",
+		NodeIdx: 0,
+		Status:  isFirstFalse | isLastFalse,
+		OpStats: opStats1,
+	}
+
+	phyOp2 := &models.PhyOperator{
+		OpName:  "TableScan",
+		NodeIdx: 0,
+		Status:  isFirstFalse | isLastFalse,
+		OpStats: opStats2,
+	}
+
+	// Initialize AnalyzeInfo for nodes
+	qry.Nodes[0].AnalyzeInfo = &plan.AnalyzeInfo{}
+
+	// Create ParallelScopeInfo
+	parallelInfo := NewParallelScopeInfo()
+
+	// Apply stats from first operator
+	applyOpStatsToNode(phyOp1, qry, qry.Nodes, parallelInfo)
+
+	// Verify first aggregation
+	require.Equal(t, int64(1024*1024), qry.Nodes[0].AnalyzeInfo.ReadSize, "ReadSize should be aggregated")
+	require.Equal(t, int64(512*1024), qry.Nodes[0].AnalyzeInfo.S3ReadSize, "S3ReadSize should be aggregated")
+	require.Equal(t, int64(256*1024), qry.Nodes[0].AnalyzeInfo.DiskReadSize, "DiskReadSize should be aggregated")
+	require.Equal(t, int64(2048*1024), qry.Nodes[0].AnalyzeInfo.ScanBytes, "ScanBytes should be aggregated")
+	require.Equal(t, int64(100*1024), qry.Nodes[0].AnalyzeInfo.NetworkIO, "NetworkIO should be aggregated")
+	require.Equal(t, int64(10), qry.Nodes[0].AnalyzeInfo.InputBlocks, "InputBlocks should be aggregated")
+	require.Equal(t, int64(111), qry.Nodes[0].AnalyzeInfo.MemorySize)
+	require.Zero(t, qry.Nodes[0].AnalyzeInfo.MemoryMin)
+	require.Equal(t, int64(111), qry.Nodes[0].AnalyzeInfo.MemoryMax)
+
+	// Apply stats from second operator (accumulation)
+	applyOpStatsToNode(phyOp2, qry, qry.Nodes, parallelInfo)
+
+	// Verify accumulation
+	require.Equal(t, int64(3072*1024), qry.Nodes[0].AnalyzeInfo.ReadSize, "ReadSize should accumulate")
+	require.Equal(t, int64(2048*1024), qry.Nodes[0].AnalyzeInfo.S3ReadSize, "S3ReadSize should accumulate")
+	require.Equal(t, int64(768*1024), qry.Nodes[0].AnalyzeInfo.DiskReadSize, "DiskReadSize should accumulate")
+	require.Equal(t, int64(6144*1024), qry.Nodes[0].AnalyzeInfo.ScanBytes, "ScanBytes should accumulate")
+	require.Equal(t, int64(300*1024), qry.Nodes[0].AnalyzeInfo.NetworkIO, "NetworkIO should accumulate")
+	require.Equal(t, int64(30), qry.Nodes[0].AnalyzeInfo.InputBlocks, "InputBlocks should accumulate")
+	require.Equal(t, int64(333), qry.Nodes[0].AnalyzeInfo.MemorySize)
+	require.Zero(t, qry.Nodes[0].AnalyzeInfo.MemoryMin)
+	require.Equal(t, int64(222), qry.Nodes[0].AnalyzeInfo.MemoryMax)
+
+	// Test with a different node
+	phyOp3 := &models.PhyOperator{
+		OpName:  "TableScan",
+		NodeIdx: 1,
+		Status:  isFirstFalse | isLastFalse,
+		OpStats: opStats1,
+	}
+
+	qry.Nodes[1].AnalyzeInfo = &plan.AnalyzeInfo{}
+	applyOpStatsToNode(phyOp3, qry, qry.Nodes, parallelInfo)
+
+	// Verify node 1 has its own stats
+	require.Equal(t, int64(1024*1024), qry.Nodes[1].AnalyzeInfo.ReadSize, "Node 1 ReadSize should be separate")
+	require.Equal(t, int64(512*1024), qry.Nodes[1].AnalyzeInfo.S3ReadSize, "Node 1 S3ReadSize should be separate")
+	require.Equal(t, int64(256*1024), qry.Nodes[1].AnalyzeInfo.DiskReadSize, "Node 1 DiskReadSize should be separate")
+
+	// Verify node 0 stats are unchanged
+	require.Equal(t, int64(3072*1024), qry.Nodes[0].AnalyzeInfo.ReadSize, "Node 0 ReadSize should remain unchanged")
 }

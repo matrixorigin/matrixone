@@ -16,6 +16,7 @@ package tree
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -27,9 +28,11 @@ type SelectStatement interface {
 type Select struct {
 	statementImpl
 	Select         SelectStatement
+	RewriteOption  *RewriteOption
 	TimeWindow     *TimeWindow
 	OrderBy        OrderBy
 	Limit          *Limit
+	RankOption     *RankOption
 	With           *With
 	Ep             *ExportParam
 	SelectLockInfo *SelectLockInfo
@@ -53,6 +56,10 @@ func (node *Select) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Limit.Format(ctx)
 	}
+	if node.RankOption != nil {
+		ctx.WriteByte(' ')
+		node.RankOption.Format(ctx)
+	}
 	if node.Ep != nil {
 		ctx.WriteByte(' ')
 		node.Ep.Format(ctx)
@@ -72,6 +79,28 @@ func NewSelect(s SelectStatement, o OrderBy, l *Limit) *Select {
 		OrderBy: o,
 		Limit:   l,
 	}
+}
+
+type RewriteOption struct {
+	// key: db.table or table.
+	// Each key maps to an ordered chain of rewrites applied as stacked views:
+	// element 0 is the innermost layer (closest to the base table) and the last
+	// element is the outermost layer (what the query's table reference resolves
+	// to). A reference to the same table inside one layer's body resolves to the
+	// next inner layer; once the chain is exhausted it resolves to the base
+	// table.
+	Rewrites map[string][]*Rewrite
+	// RemapDb maps a source database name to a target database name. It is
+	// applied before the table Rewrites: a reference to <src>.t (or an
+	// unqualified table when the current database is <src>) is resolved against
+	// <dst> instead.
+	RemapDb map[string]string
+}
+
+type Rewrite struct {
+	TableName string
+	DbName    string
+	Stmt      Statement
 }
 
 type TimeWindow struct {
@@ -281,6 +310,38 @@ func NewLimit(o, c Expr) *Limit {
 	}
 }
 
+type RankOption struct {
+	Option map[string]string
+}
+
+func (node *RankOption) Format(ctx *FmtCtx) {
+	if node == nil {
+		return
+	}
+
+	ctx.WriteString("by rank")
+	if len(node.Option) == 0 {
+		return
+	}
+
+	ctx.WriteString(" with option ")
+	keys := make([]string, 0, len(node.Option))
+	for key := range node.Option {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for idx, key := range keys {
+		if idx > 0 {
+			ctx.WriteString(", ")
+		}
+		ctx.WriteByte('\'')
+		ctx.WriteString(key)
+		ctx.WriteString("=")
+		ctx.WriteString(node.Option[key])
+		ctx.WriteByte('\'')
+	}
+}
+
 // the parenthesized SELECT/UNION/VALUES statement.
 type ParenSelect struct {
 	SelectStatement
@@ -433,7 +494,7 @@ func (node *SelectExpr) Format(ctx *FmtCtx) {
 	node.Expr.Format(ctx)
 	if node.As != nil && !node.As.Empty() {
 		ctx.WriteString(" as ")
-		ctx.WriteString(node.As.Origin())
+		ctx.WriteIdentifier(Identifier(node.As.Origin()))
 	}
 }
 
@@ -473,6 +534,7 @@ const (
 	JOIN_TYPE_NATURAL       = "NATURAL"
 	JOIN_TYPE_NATURAL_LEFT  = "NATURAL LEFT"
 	JOIN_TYPE_NATURAL_RIGHT = "NATURAL RIGHT"
+	JOIN_TYPE_NATURAL_FULL  = "NATURAL FULL"
 	JOIN_TYPE_CENTROIDX     = "CENTROIDX"
 	JOIN_TYPE_DEDUP         = "DEDUP"
 )
@@ -630,7 +692,7 @@ type AliasClause struct {
 
 func (node *AliasClause) Format(ctx *FmtCtx) {
 	if node.Alias != "" {
-		ctx.WriteString(string(node.Alias))
+		ctx.WriteIdentifier(node.Alias)
 	}
 	if node.Cols != nil {
 		ctx.WriteByte('(')
@@ -765,7 +827,7 @@ func (node *IndexHint) Format(ctx *FmtCtx) {
 			if i > 0 {
 				ctx.WriteString(", ")
 			}
-			ctx.WriteString(value)
+			ctx.WriteIdentifier(Identifier(value))
 		}
 	}
 	ctx.WriteString(")")

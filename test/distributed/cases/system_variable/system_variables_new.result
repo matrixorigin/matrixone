@@ -86,13 +86,13 @@ select @@global.lower_case_table_names;
 1
 show global variables like 'interactive_timeout';
 Variable_name    Value
-interactive_timeout    28800
+interactive_timeout    86400
 show global variables like 'net_write_timeout';
 Variable_name    Value
 net_write_timeout    60
 show global variables like 'wait_timeout';
 Variable_name    Value
-wait_timeout    28800
+wait_timeout    86400
 show global variables like 'sql_select_limit';
 Variable_name    Value
 sql_select_limit    18446744073709551615
@@ -128,7 +128,7 @@ Variable_name    Value
 net_write_timeout    60
 show global variables like 'wait_timeout';
 Variable_name    Value
-wait_timeout    28800
+wait_timeout    86400
 show global variables like 'sql_select_limit';
 Variable_name    Value
 sql_select_limit    18446744073709551615
@@ -213,13 +213,13 @@ select @@lower_case_table_names;
 1
 SELECT @@interactive_timeout;
 @@interactive_timeout
-28800
+86400
 SELECT @@net_write_timeout;
 @@net_write_timeout
 60
 SELECT @@wait_timeout;
 @@wait_timeout
-28800
+86400
 SELECT @@sql_select_limit;
 @@sql_select_limit
 18446744073709551615
@@ -255,13 +255,13 @@ select @@lower_case_table_names;
 1
 SELECT @@interactive_timeout;
 @@interactive_timeout
-28800
+86400
 SELECT @@net_write_timeout;
 @@net_write_timeout
 60
 SELECT @@wait_timeout;
 @@wait_timeout
-28800
+86400
 SELECT @@sql_select_limit;
 @@sql_select_limit
 18446744073709551615
@@ -300,7 +300,7 @@ SELECT @@net_write_timeout;
 60
 SELECT @@wait_timeout;
 @@wait_timeout
-28800
+86400
 SELECT @@sql_select_limit;
 @@sql_select_limit
 18446744073709551615

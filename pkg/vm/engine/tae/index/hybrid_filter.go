@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/FastFilter/xorfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -33,39 +34,63 @@ type hybridFilter struct {
 	bloomFilter  bloomFilter
 }
 
+// NewHybridBloomFilter builds three BinaryFuse8 filters (full-key, level-1 prefix,
+// level-2 prefix) in a single ForeachWindowBytes pass.
+// buf is an optional scratch buffer; pass &mySlice to reuse it across calls.
+// When provided, the buffer is grown to 3×n capacity and partitioned into three
+// non-overlapping sub-slices — one allocation for all three hash arrays.
+// builder is an optional BinaryFuseBuilder for reusing internal buffers.
 func NewHybridBloomFilter(
 	data containers.Vector,
 	level1PrefixFnId uint8,
 	level1Prefix func([]byte) []byte,
 	level2PrefixFnId uint8,
 	level2Prefix func([]byte) []byte,
+	buf *[]uint64,
+	builder *xorfilter.BinaryFuseBuilder,
+	alloc func(int) []byte,
 ) (StaticFilter, error) {
-	hashes := make([]uint64, 0)
-	level1Hashes := make([]uint64, 0)
-	level2Hashes := make([]uint64, 0)
+	n := data.Length()
+	var hashes, level1Hashes, level2Hashes []uint64
+	if buf != nil {
+		need := 3 * n
+		if cap(*buf) < need {
+			*buf = make([]uint64, 0, need)
+		}
+		// Extend len to need so we can sub-slice the three regions.
+		// For slices, s[:high] is valid when high <= cap(s).
+		raw := (*buf)[:need]
+		hashes = raw[:0:n]
+		level1Hashes = raw[n : n : 2*n]
+		level2Hashes = raw[2*n : 2*n : 3*n]
+	} else {
+		hashes = make([]uint64, 0, n)
+		level1Hashes = make([]uint64, 0, n)
+		level2Hashes = make([]uint64, 0, n)
+	}
 	op := func(v []byte, _ bool, _ int) error {
-		level1Hash := hashV1(level1Prefix(v))
-		level2Hash := hashV1(level2Prefix(v))
-		hash := hashV1(v)
-		hashes = append(hashes, hash)
-		level1Hashes = append(level1Hashes, level1Hash)
-		level2Hashes = append(level2Hashes, level2Hash)
+		hashes = append(hashes, hashV1(v))
+		level1Hashes = append(level1Hashes, hashV1(level1Prefix(v)))
+		level2Hashes = append(level2Hashes, hashV1(level2Prefix(v)))
 		return nil
 	}
 	if err := containers.ForeachWindowBytes(
-		data.GetDownstreamVector(), 0, data.Length(), op, nil,
+		data.GetDownstreamVector(), 0, n, op, nil,
 	); err != nil {
 		return nil, err
 	}
-	bf, err := buildFuseFilter(hashes)
+	if buf != nil {
+		*buf = (*buf)[:3*n]
+	}
+	bf, err := buildFuseFilterReuse(builder, hashes, alloc)
 	if err != nil {
 		return nil, err
 	}
-	lvl1, err := buildFuseFilter(level1Hashes)
+	lvl1, err := buildFuseFilterReuse(builder, level1Hashes, alloc)
 	if err != nil {
 		return nil, err
 	}
-	lvl2, err := buildFuseFilter(level2Hashes)
+	lvl2, err := buildFuseFilterReuse(builder, level2Hashes, alloc)
 	if err != nil {
 		return nil, err
 	}
@@ -82,38 +107,42 @@ func NewHybridBloomFilter(
 	}, nil
 }
 
-func (bf *hybridFilter) Marshal() ([]byte, error) {
-	var (
-		err              error
-		w                bytes.Buffer
-		len1, len2, len3 uint32
-	)
-	if _, err = w.Write(types.EncodeUint32(&len1)); err != nil {
-		return nil, err
+func (bf *hybridFilter) MarshalWithBuffer(w *bytes.Buffer) error {
+	startOff := w.Len()
+	var zero uint32
+	for i := 0; i < 3; i++ {
+		if _, err := w.Write(types.EncodeUint32(&zero)); err != nil {
+			return err
+		}
 	}
-	if _, err = w.Write(types.EncodeUint32(&len2)); err != nil {
-		return nil, err
+	if err := bf.prefixLevel1.MarshalWithBuffer(w); err != nil {
+		return err
 	}
-	if _, err = w.Write(types.EncodeUint32(&len3)); err != nil {
-		return nil, err
+	off1 := w.Len()
+	if err := bf.prefixLevel2.MarshalWithBuffer(w); err != nil {
+		return err
 	}
-	if err = bf.prefixLevel1.MarshalWithBuffer(&w); err != nil {
-		return nil, err
+	off2 := w.Len()
+	if err := bf.bloomFilter.MarshalWithBuffer(w); err != nil {
+		return err
 	}
-	len1 = uint32(w.Len()) - uint32(3*unsafe.Sizeof(len1))
-	if err = bf.prefixLevel2.MarshalWithBuffer(&w); err != nil {
-		return nil, err
-	}
-	len2 = uint32(w.Len()) - len1 - uint32(3*unsafe.Sizeof(len1))
-	if err = bf.bloomFilter.MarshalWithBuffer(&w); err != nil {
-		return nil, err
-	}
-	len3 = uint32(w.Len()) - len1 - len2 - uint32(3*unsafe.Sizeof(len1))
-	buf := w.Bytes()
+	off3 := w.Len()
+	buf := w.Bytes()[startOff:]
+	len1 := uint32(off1 - startOff - 12)
+	len2 := uint32(off2 - off1)
+	len3 := uint32(off3 - off2)
 	copy(buf[0:], types.EncodeUint32(&len1))
-	copy(buf[unsafe.Sizeof(len1):], types.EncodeUint32(&len2))
-	copy(buf[2*unsafe.Sizeof(len1):], types.EncodeUint32(&len3))
-	return buf, nil
+	copy(buf[4:], types.EncodeUint32(&len2))
+	copy(buf[8:], types.EncodeUint32(&len3))
+	return nil
+}
+
+func (bf *hybridFilter) Marshal() ([]byte, error) {
+	var w bytes.Buffer
+	if err := bf.MarshalWithBuffer(&w); err != nil {
+		return nil, err
+	}
+	return w.Bytes(), nil
 }
 
 func (bf *hybridFilter) Unmarshal(data []byte) error {

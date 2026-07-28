@@ -15,9 +15,10 @@
 package logtail
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -356,7 +357,7 @@ func readMetaForV12(
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
 				str := loc.Name().String()
-				data[str] = loc
+				data[str] = loc.Clone()
 			}
 		}
 		tombstoneLocations := BlockLocations(tombstoneLocationsVec.GetDownstreamVector().GetBytesAt(i))
@@ -365,7 +366,7 @@ func readMetaForV12(
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
 				str := loc.Name().String()
-				tombstone[str] = loc
+				tombstone[str] = loc.Clone()
 			}
 		}
 	}
@@ -413,7 +414,7 @@ func readMetaForV12WithTableID(
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
 				str := loc.Name().String()
-				data[str] = loc
+				data[str] = loc.Clone()
 			}
 		}
 		tombstoneLocations := BlockLocations(tombstoneLocationsVec.GetDownstreamVector().GetBytesAt(i))
@@ -422,7 +423,7 @@ func readMetaForV12WithTableID(
 			loc := it.Next().GetLocation()
 			if !loc.IsEmpty() {
 				str := loc.Name().String()
-				tombstone[str] = loc
+				tombstone[str] = loc.Clone()
 			}
 		}
 	}
@@ -436,7 +437,7 @@ func readMetaBatch(
 	fs fileservice.FileService,
 ) (metaBatch *batch.Batch, release func(), err error) {
 	metaVecs := containers.NewVectors(len(ckputil.MetaAttrs))
-	if _, release, err = ioutil.LoadColumnsData(
+	if _, release, _, err = ioutil.LoadColumnsData(
 		ctx,
 		ckputil.MetaSeqnums,
 		ckputil.MetaTypes,
@@ -687,7 +688,7 @@ func (reader *CKPReader) ForEachRow(
 
 func (reader *CKPReader) ConsumeCheckpointWithTableID(
 	ctx context.Context,
-	forEachObject func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error),
+	forEachObject func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error),
 ) (err error) {
 	if !reader.withTableID {
 		panic("not support")
@@ -730,7 +731,7 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 				default:
 					panic(fmt.Sprintf("invalid object type %d", objectTypes[i]))
 				}
-				if err = forEachObject(ctx, obj, isTombstone); err != nil {
+				if err = forEachObject(ctx, reader.fs, obj, isTombstone); err != nil {
 					return
 				}
 			}
@@ -744,7 +745,7 @@ func (reader *CKPReader) ConsumeCheckpointWithTableID(
 
 func consumeCheckpointWithTableID(
 	ctx context.Context,
-	forEachObject func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error),
+	forEachObject func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error),
 	dataRanges, tombstoneRanges []ckputil.TableRange,
 	tableID uint64,
 	mp *mpool.MPool,
@@ -753,9 +754,16 @@ func consumeCheckpointWithTableID(
 	if len(dataRanges) != 0 {
 		iter := ckputil.NewObjectIter(ctx, dataRanges, mp, fs)
 		defer iter.Close()
-		for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
+		for {
+			ok, err := iter.Next()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				break
+			}
 			entry := iter.Entry()
-			if err := forEachObject(ctx, entry, false); err != nil {
+			if err := forEachObject(ctx, fs, entry, false); err != nil {
 				return err
 			}
 		}
@@ -763,9 +771,16 @@ func consumeCheckpointWithTableID(
 	if tombstoneRanges != nil {
 		iter := ckputil.NewObjectIter(ctx, tombstoneRanges, mp, fs)
 		defer iter.Close()
-		for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
+		for {
+			ok, err := iter.Next()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				break
+			}
 			entry := iter.Entry()
-			if err := forEachObject(ctx, entry, true); err != nil {
+			if err := forEachObject(ctx, fs, entry, true); err != nil {
 				return err
 			}
 		}
@@ -860,8 +875,8 @@ func getMetaInfo(
 		objectCount += count.delete
 		deleteCount += count.delete
 	}
-	sort.Slice(tableinfos, func(i, j int) bool {
-		return tableinfos[i].add > tableinfos[j].add
+	slices.SortFunc(tableinfos, func(a, b *tableinfo) int {
+		return cmp.Compare(b.add, a.add)
 	})
 	tableJsons := make([]TableInfoJson, 0, objBatchLength)
 	tables := make(map[uint64]int)
@@ -884,8 +899,8 @@ func getMetaInfo(
 		objectCount2 += count.add
 		addCount2 += count.add
 	}
-	sort.Slice(tableinfos2, func(i, j int) bool {
-		return tableinfos2[i].add > tableinfos2[j].add
+	slices.SortFunc(tableinfos2, func(a, b *tableinfo) int {
+		return cmp.Compare(b.add, a.add)
 	})
 
 	for i := range len(tableinfos2) {
@@ -991,7 +1006,7 @@ func ConsumeCheckpointEntries(
 	tableName string,
 	dbID uint64,
 	dbName string,
-	forEachObject func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error),
+	forEachObject func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error),
 	mp *mpool.MPool,
 	fs fileservice.FileService) (err error) {
 	if metaLoc == "" {
@@ -1059,5 +1074,65 @@ func ConsumeCheckpointEntries(
 			return err
 		}
 	}
+	return
+}
+
+type SyncTableIDReader struct {
+	locations    objectio.LocationSlice
+	blkOffset    int
+	objectOffset int
+
+	cp *mpool.MPool
+	fs fileservice.FileService
+}
+
+func NewSyncTableIDReader(
+	locations objectio.LocationSlice,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (reader *SyncTableIDReader, err error) {
+	reader = &SyncTableIDReader{
+		locations:    locations,
+		blkOffset:    0,
+		objectOffset: 0,
+		cp:           mp,
+		fs:           fs,
+	}
+	return
+}
+
+func (reader *SyncTableIDReader) Read(ctx context.Context) (release func(), bat *batch.Batch, isEnd bool, err error) {
+	if reader.objectOffset >= reader.locations.Len() {
+		isEnd = true
+		return
+	}
+	objectLocation := reader.locations.Get(reader.objectOffset)
+	blkLocation := objectLocation.Clone()
+	blkLocation.SetID(uint16(reader.blkOffset))
+
+	reader.blkOffset++
+	if reader.blkOffset == int(objectLocation.ID()) {
+		reader.blkOffset = 0
+		reader.objectOffset++
+	}
+
+	preTableIDVecs := containers.NewVectors(len(TableIDAttrs))
+	if _, release, _, err = ioutil.LoadColumnsData(
+		ctx,
+		TableIDSeqnums,
+		TableIDTypes,
+		reader.fs,
+		blkLocation,
+		preTableIDVecs,
+		reader.cp,
+		0,
+	); err != nil {
+		return
+	}
+	bat = batch.New(TableIDAttrs)
+	for i, vec := range preTableIDVecs {
+		bat.Vecs[i] = &vec
+	}
+	bat.SetRowCount(preTableIDVecs.Rows())
 	return
 }

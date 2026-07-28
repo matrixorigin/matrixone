@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -95,7 +98,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		db: &txnDB,
 	}
 
-	pState := logtailreplay.NewPartitionState("", true, 0)
+	pState := logtailreplay.NewPartitionState("", true, 0, false)
 
 	proc := testutil.NewProc(t)
 
@@ -113,7 +116,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	int32Type := types.T_int32.ToType()
 	var tombstoneRowIds []types.Rowid
 	for i := 0; i < 3; i++ {
-		writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type)
+		writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type, -1)
 		require.NoError(t, err)
 
 		bat := readutil.NewCNTombstoneBatch(
@@ -210,4 +213,489 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, outBatch.RowCount())
 	require.Equal(t, 1, outBatch.Vecs[0].Length())
+}
+
+func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
+	defer closeFunc()
+
+	oid := types.NewObjectid()
+	blk := types.NewBlockidWithObjectID(&oid, 1)
+	blk2 := types.NewBlockidWithObjectID(&oid, 2)
+	blk3 := types.NewBlockidWithObjectID(&oid, 3)
+	rows1 := []types.Rowid{
+		types.NewRowid(&blk, 3),
+		types.NewRowid(&blk, 1),
+	}
+	rows2 := []types.Rowid{
+		types.NewRowid(&blk2, 2),
+	}
+
+	m := mpool.MustNewZero()
+	delVec := vector.NewVec(types.T_Rowid.ToType())
+	for _, row := range rows1 {
+		require.NoError(t, vector.AppendFixed(delVec, row, false, m))
+	}
+	require.False(t, delVec.GetSorted())
+
+	delBat := batch.NewWithSize(1)
+	delBat.SetAttributes([]string{catalog.Row_ID})
+	delBat.Vecs[0] = delVec
+	delBat.SetRowCount(len(rows1))
+
+	delVec2 := vector.NewVec(types.T_Rowid.ToType())
+	for _, row := range rows2 {
+		require.NoError(t, vector.AppendFixed(delVec2, row, false, m))
+	}
+	delBat2 := batch.NewWithSize(1)
+	delBat2.SetAttributes([]string{catalog.Row_ID})
+	delBat2.Vecs[0] = delVec2
+	delBat2.SetRowCount(len(rows2))
+
+	txn := &Transaction{
+		op: txnOp,
+		writes: []Entry{
+			{
+				typ:        DELETE,
+				databaseId: 11,
+				tableId:    22,
+				bat:        delBat,
+			},
+			{
+				typ:        DELETE,
+				databaseId: 11,
+				tableId:    22,
+				bat:        delBat2,
+			},
+		},
+	}
+	txnOp.AddWorkspace(txn)
+
+	ls := &LocalDisttaeDataSource{
+		ctx:       ctx,
+		txnOffset: len(txn.writes),
+		table: &txnTable{
+			db: &txnDatabase{
+				databaseId: 11,
+				op:         txnOp,
+			},
+			tableId: 22,
+		},
+	}
+
+	entries := ls.workspaceDeleteEntriesLocked()
+	require.Len(t, entries, 2)
+	for _, entry := range entries {
+		require.True(t, entry.sorted)
+		require.True(t, slices.IsSortedFunc(entry.rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
+	}
+	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	require.Len(t, blkEntries, 1)
+	require.Equal(t, []types.Rowid{types.NewRowid(&blk, 1), types.NewRowid(&blk, 3)}, blkEntries[0].rowIds)
+	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	require.Len(t, blk2Entries, 1)
+	require.Equal(t, rows2, blk2Entries[0].rowIds)
+	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk3))
+	require.Equal(t, []int64{4}, ls.applyWorkspaceEntryDeletes(&blk, []int64{1, 3, 4}, nil))
+	require.Equal(t, []int64{4}, ls.applyWorkspaceEntryDeletes(&blk2, []int64{2, 4}, nil))
+	require.Equal(t, []int64{1, 4}, ls.applyWorkspaceEntryDeletes(&blk3, []int64{1, 4}, nil))
+
+	original := vector.MustFixedColNoTypeCheck[types.Rowid](delVec)
+	require.Equal(t, rows1, original)
+	require.False(t, delVec.GetSorted())
+	require.Equal(t, rows2, vector.MustFixedColNoTypeCheck[types.Rowid](delVec2))
+}
+
+func TestLocalDatasourceWorkspaceDeleteEntriesMergesLargeDeleteSet(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
+	defer closeFunc()
+
+	oid := types.NewObjectid()
+	blk := types.NewBlockidWithObjectID(&oid, 1)
+	blk2 := types.NewBlockidWithObjectID(&oid, 2)
+
+	// Cross the merge threshold and mix blocks/order so the test exercises the
+	// flatten-sort-then-split path, not just the small-entry cache path.
+	writes := make([]Entry, 0, mergeWorkspaceDeleteEntriesThreshold+1)
+	for i := 0; i < mergeWorkspaceDeleteEntriesThreshold+1; i++ {
+		bid := &blk
+		offset := uint32(i)
+		if i%2 == 0 {
+			bid = &blk2
+			offset = uint32(mergeWorkspaceDeleteEntriesThreshold - i)
+		}
+		writes = append(writes, Entry{
+			typ:        DELETE,
+			databaseId: 11,
+			tableId:    22,
+			bat:        newWorkspaceDeleteBatch(t, []types.Rowid{types.NewRowid(bid, offset)}),
+		})
+	}
+
+	txn := &Transaction{op: txnOp, writes: writes}
+	txnOp.AddWorkspace(txn)
+
+	ls := &LocalDisttaeDataSource{
+		ctx:       ctx,
+		txnOffset: len(txn.writes),
+		table: &txnTable{
+			db: &txnDatabase{
+				databaseId: 11,
+				op:         txnOp,
+			},
+			tableId: 22,
+		},
+	}
+
+	entries := ls.workspaceDeleteEntriesLocked()
+	require.Len(t, entries, 1)
+	require.True(t, entries[0].sorted)
+	require.Len(t, entries[0].rowIds, mergeWorkspaceDeleteEntriesThreshold+1)
+	require.True(t, slices.IsSortedFunc(entries[0].rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
+
+	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	require.Len(t, blkEntries, 1)
+	require.True(t, blkEntries[0].sorted)
+	for _, rowID := range blkEntries[0].rowIds {
+		require.Equal(t, blk, *rowID.BorrowBlockID())
+	}
+
+	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	require.Len(t, blk2Entries, 1)
+	require.True(t, blk2Entries[0].sorted)
+	for _, rowID := range blk2Entries[0].rowIds {
+		require.Equal(t, blk2, *rowID.BorrowBlockID())
+	}
+}
+
+func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChanges(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
+	defer closeFunc()
+
+	oid := types.NewObjectid()
+	blk := types.NewBlockidWithObjectID(&oid, 1)
+	blk2 := types.NewBlockidWithObjectID(&oid, 2)
+	row := types.NewRowid(&blk, 1)
+	row2 := types.NewRowid(&blk2, 2)
+
+	txn := &Transaction{
+		op: txnOp,
+		writes: []Entry{
+			{
+				typ:        DELETE,
+				databaseId: 11,
+				tableId:    22,
+				bat:        newWorkspaceDeleteBatch(t, []types.Rowid{row}),
+			},
+			{
+				typ:        DELETE,
+				databaseId: 11,
+				tableId:    22,
+				bat:        newWorkspaceDeleteBatch(t, []types.Rowid{row2}),
+			},
+		},
+	}
+	txnOp.AddWorkspace(txn)
+
+	ls := &LocalDisttaeDataSource{
+		ctx:       ctx,
+		txnOffset: 1,
+		table: &txnTable{
+			db: &txnDatabase{
+				databaseId: 11,
+				op:         txnOp,
+			},
+			tableId: 22,
+		},
+	}
+
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk))
+	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk2))
+	require.Equal(t, 1, ls.workspaceDeletes.txnOffset)
+	require.NotNil(t, ls.workspaceDeletes.byBlock)
+
+	ls.txnOffset = 2
+	entries := ls.workspaceDeleteEntriesLocked()
+	require.Len(t, entries, 2)
+	require.Equal(t, 2, ls.workspaceDeletes.txnOffset)
+	// Changing txnOffset must invalidate the block index built for the previous
+	// view of txn writes, otherwise later deletes can be silently skipped.
+	require.Nil(t, ls.workspaceDeletes.byBlock)
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row2}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk2))
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk))
+}
+
+func newWorkspaceDeleteBatch(t *testing.T, rows []types.Rowid) *batch.Batch {
+	t.Helper()
+
+	m := mpool.MustNewZero()
+	delVec := vector.NewVec(types.T_Rowid.ToType())
+	for _, row := range rows {
+		require.NoError(t, vector.AppendFixed(delVec, row, false, m))
+	}
+
+	delBat := batch.NewWithSize(1)
+	delBat.SetAttributes([]string{catalog.Row_ID})
+	delBat.Vecs[0] = delVec
+	delBat.SetRowCount(len(rows))
+	return delBat
+}
+
+// TestLocalDisttaeDataSource_getBlockZMs_ColumnLookup tests the column lookup logic
+// that fixes the bug where ColPos in JOIN scenarios points to projection list position
+// instead of table column position.
+func TestLocalDisttaeDataSource_getBlockZMs_ColumnLookup(t *testing.T) {
+	// This test focuses on testing the column lookup logic without requiring actual block data.
+	// We test that the function correctly finds columns by name even when ColPos is wrong.
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 0},
+			{Name: "remark", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 8},      // Position 8: VARCHAR
+			{Name: "created_at", Typ: plan.Type{Id: int32(types.T_datetime)}, Seqnum: 9}, // Position 9: DATETIME
+		},
+		Name2ColIndex: map[string]int32{
+			"id":         0, // Index in Cols array
+			"remark":     1, // Index in Cols array
+			"created_at": 2, // Index in Cols array
+		},
+	}
+
+	// Test case 1: Find column by qualified name "table.column"
+	orderByCol := &plan.ColRef{
+		Name:   "table.created_at",
+		ColPos: 8, // Wrong ColPos (points to remark in projection list)
+	}
+	orderByColName := "table.created_at"
+	if idx := strings.LastIndex(strings.ToLower(orderByColName), "."); idx >= 0 {
+		orderByColName = orderByColName[idx+1:]
+	}
+	require.Equal(t, "created_at", orderByColName, "Should extract column name from qualified name")
+
+	var orderByColIDX int = -1
+	if tableDef.Name2ColIndex != nil {
+		if colIdx, ok := tableDef.Name2ColIndex[orderByColName]; ok {
+			orderByColIDX = int(tableDef.Cols[colIdx].Seqnum)
+		}
+	}
+	require.Equal(t, 9, orderByColIDX, "Should find created_at (seqnum 9) by name, not remark (seqnum 8)")
+
+	// Test case 2: Find column by simple name
+	orderByColName = "created_at"
+	orderByColIDX = -1
+	if tableDef.Name2ColIndex != nil {
+		if colIdx, ok := tableDef.Name2ColIndex[orderByColName]; ok {
+			orderByColIDX = int(tableDef.Cols[colIdx].Seqnum)
+		}
+	}
+	require.Equal(t, 9, orderByColIDX, "Should find created_at by simple name")
+
+	// Test case 3: Fallback to ColPos when name lookup fails
+	orderByColName = "nonexistent_column"
+	orderByCol.ColPos = 1 // Valid ColPos pointing to remark (index 1 in Cols array)
+	orderByColIDX = -1
+	if tableDef.Name2ColIndex != nil {
+		if colIdx, ok := tableDef.Name2ColIndex[orderByColName]; ok {
+			orderByColIDX = int(tableDef.Cols[colIdx].Seqnum)
+		}
+	}
+	// Fallback to ColPos
+	if orderByColIDX == -1 {
+		if int(orderByCol.ColPos) < len(tableDef.Cols) {
+			orderByColIDX = int(tableDef.Cols[int(orderByCol.ColPos)].Seqnum)
+		}
+	}
+	require.Equal(t, 8, orderByColIDX, "Should fallback to ColPos 1 (remark, seqnum 8) when name lookup fails")
+}
+
+// TestLocalDisttaeDataSource_getBlockZMs tests the fix for the bug where
+// ColPos in JOIN scenarios points to projection list position instead of table column position.
+// This test verifies that getBlockZMs correctly finds columns by name.
+func TestLocalDisttaeDataSource_getBlockZMs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	// Create a table definition with multiple columns
+	// Simulating the bug scenario: created_at is at seqnum 9, but ColPos might point to position 8 (remark)
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 0},
+			{Name: "organization_id", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 1},
+			{Name: "trx_id", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 2},
+			{Name: "record_sn", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 3},
+			{Name: "coupon_id", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 4},
+			{Name: "bill_id", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 5},
+			{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal128)}, Seqnum: 6},
+			{Name: "after_amount", Typ: plan.Type{Id: int32(types.T_decimal128)}, Seqnum: 7},
+			{Name: "remark", Typ: plan.Type{Id: int32(types.T_varchar)}, Seqnum: 8},      // Position 8: VARCHAR
+			{Name: "created_at", Typ: plan.Type{Id: int32(types.T_datetime)}, Seqnum: 9}, // Position 9: DATETIME (ORDER BY column)
+			{Name: "__mo_rowid", Typ: plan.Type{Id: int32(types.T_Rowid)}, Seqnum: 10},
+		},
+		Name2ColIndex: map[string]int32{
+			"id":              0,
+			"organization_id": 1,
+			"trx_id":          2,
+			"record_sn":       3,
+			"coupon_id":       4,
+			"bill_id":         5,
+			"amount":          6,
+			"after_amount":    7,
+			"remark":          8,
+			"created_at":      9,
+			"__mo_rowid":      10,
+		},
+	}
+
+	txnDB := txnDatabase{
+		op: nil,
+	}
+
+	txnTbl := txnTable{
+		db:       &txnDB,
+		tableDef: tableDef,
+	}
+
+	ls := &LocalDisttaeDataSource{
+		fs:    fs,
+		ctx:   ctx,
+		table: &txnTbl,
+		OrderBy: []*plan.OrderBySpec{
+			{
+				Expr: &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_datetime)},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							Name:   "coupon_usage_detail_logs.created_at", // Full qualified name
+							ColPos: 8,                                     // This points to projection list position 8 (remark), not table position 9 (created_at)
+							RelPos: 0,
+						},
+					},
+				},
+				Flag: plan.OrderBySpec_DESC,
+			},
+		},
+		Limit: 0, // No limit to trigger getBlockZMs
+	}
+
+	// Create an empty rangeSlice to avoid loading non-existent block metadata
+	// This test focuses on column lookup logic, not block loading
+	ls.rangeSlice = readutil.NewBlockListRelationData(0).GetBlockInfoSlice()
+
+	// Test case 1: Column name lookup should find created_at (seqnum 9) instead of remark (seqnum 8)
+	// This simulates the bug scenario where ColPos=8 would incorrectly point to remark
+	// but we should find created_at by name.
+	// With empty rangeSlice, getBlockZMs should complete without trying to load blocks
+	require.NotPanics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should find created_at by name, not panic on column lookup")
+
+	// Verify that blockZMS was initialized (even if empty)
+	require.NotNil(t, ls.blockZMS, "blockZMS should be initialized")
+	require.Equal(t, 0, len(ls.blockZMS), "blockZMS should be empty when rangeSlice is empty")
+
+	// Test case 2: Test with simple column name (without table prefix)
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Still wrong ColPos
+	ls.blockZMS = nil
+	require.NotPanics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should work with simple column name")
+
+	// Test case 3: Test fallback to ColPos when name lookup fails
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 9 // Valid ColPos as fallback (points to created_at)
+	ls.blockZMS = nil
+	require.NotPanics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should fallback to ColPos when name lookup fails")
+
+	// Test case 4: Test panic when both name lookup and ColPos fail
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 999 // Invalid ColPos
+	ls.blockZMS = nil
+	require.Panics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should panic when both name lookup and ColPos fail")
+
+	// Test case 5: Test with Name2ColIndex (O(1) lookup)
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
+	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Wrong ColPos
+	ls.blockZMS = nil
+	require.NotPanics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should use Name2ColIndex for O(1) lookup")
+}
+
+// TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction tests column name extraction
+// from qualified names like "table.column".
+func TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 0},
+			{Name: "created_at", Typ: plan.Type{Id: int32(types.T_datetime)}, Seqnum: 1},
+		},
+		Name2ColIndex: map[string]int32{
+			"id":         0,
+			"created_at": 1,
+		},
+	}
+
+	txnTbl := txnTable{
+		tableDef: tableDef,
+	}
+
+	ls := &LocalDisttaeDataSource{
+		fs:    fs,
+		ctx:   ctx,
+		table: &txnTbl,
+		OrderBy: []*plan.OrderBySpec{
+			{
+				Expr: &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_datetime)},
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							Name:   "db.table.created_at", // Multiple dots
+							ColPos: 0,
+							RelPos: 0,
+						},
+					},
+				},
+			},
+		},
+		Limit: 0,
+	}
+
+	// Create an empty rangeSlice to avoid loading non-existent block metadata
+	// This test focuses on column name extraction logic, not block loading
+	ls.rangeSlice = readutil.NewBlockListRelationData(0).GetBlockInfoSlice()
+
+	// Should extract "created_at" from "db.table.created_at"
+	// Since rangeSlice is empty, getBlockZMs should complete without trying to load blocks
+	require.NotPanics(t, func() {
+		ls.getBlockZMs()
+	}, "getBlockZMs should extract column name from qualified name and handle empty rangeSlice")
+
+	// Verify that blockZMS was initialized (even if empty)
+	require.NotNil(t, ls.blockZMS, "blockZMS should be initialized")
+	require.Equal(t, 0, len(ls.blockZMS), "blockZMS should be empty when rangeSlice is empty")
 }

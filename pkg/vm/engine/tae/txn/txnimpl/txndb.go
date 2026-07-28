@@ -212,6 +212,9 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16, skipCheckDel
 }
 
 func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
+	if err = db.store.WantWrite("CreateRelation"); err != nil {
+		return
+	}
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory
 	if db.store.catalog.DataFactory != nil {
@@ -231,6 +234,9 @@ func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 }
 
 func (db *txnDB) CreateRelationWithTableId(tableId uint64, def any) (relation handle.Relation, err error) {
+	if err = db.store.WantWrite("CreateRelationWithTableId"); err != nil {
+		return
+	}
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory
 	if db.store.catalog.DataFactory != nil {
@@ -329,13 +335,45 @@ func (db *txnDB) GetObject(id *common.ID, isTombstone bool) (obj handle.Object, 
 }
 
 func (db *txnDB) CreateObject(tid uint64, isTombstone bool) (obj handle.Object, err error) {
+	if err = db.store.WantWrite("CreateObject"); err != nil {
+		return
+	}
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
 	return table.CreateObject(isTombstone)
 }
+
+func validateCreateObjectOpt(opt *objectio.CreateObjOpt) error {
+	if opt == nil {
+		return moerr.NewInvalidInputNoCtx("CreateObjectWithOpt requires non-nil options")
+	}
+	if opt.Stats == nil {
+		return moerr.NewInvalidInputNoCtx("CreateObjectWithOpt requires object stats")
+	}
+	return nil
+}
+
+func (db *txnDB) CreateObjectWithOpt(tid uint64, opt *objectio.CreateObjOpt, isTombstone bool) (obj handle.Object, err error) {
+	if err = validateCreateObjectOpt(opt); err != nil {
+		return
+	}
+	if err = db.store.WantWrite("CreateObjectWithOpt"); err != nil {
+		return
+	}
+	var table *txnTable
+	if table, err = db.getOrSetTable(tid); err != nil {
+		return
+	}
+	opt.WithIsTombstone(isTombstone)
+	return table.CreateObjectWithOpt(opt)
+}
+
 func (db *txnDB) CreateNonAppendableObject(tid uint64, opt *objectio.CreateObjOpt, isTombstone bool) (obj handle.Object, err error) {
+	if err = db.store.WantWrite("CreateNonAppendableObject"); err != nil {
+		return
+	}
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
@@ -410,7 +448,7 @@ func (db *txnDB) ApplyRollback() (err error) {
 	return
 }
 
-func (db *txnDB) WaitPrepared() (err error) {
+func (db *txnDB) WaitWal() (err error) {
 	for _, table := range db.tables {
 		table.WaitSynced()
 	}

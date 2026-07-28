@@ -31,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	logtailservice "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 var (
@@ -50,7 +52,6 @@ var (
 
 	defaultFlushInterval         = time.Second * 60
 	defaultScanInterval          = time.Second * 5
-	defaultIncrementalInterval   = time.Minute
 	defaultGlobalMinCount        = int64(40)
 	defaultMinCount              = int64(100)
 	defaultReservedWALEntryCount = uint64(5000)
@@ -126,15 +127,19 @@ type Config struct {
 	}
 
 	GCCfg struct {
-		GCTTL          toml.Duration `toml:"gc-ttl"`
-		GCInMemoryTTL  toml.Duration `toml:"gc-in-memory-ttl"`
-		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
-		DisableGC      bool          `toml:"disable-gc"`
-		CheckGC        bool          `toml:"check-gc"`
-		CacheSize      int           `toml:"cache-size"`
-		GCMergeCount   int           `toml:"gc-merge-count"`
-		GCestimateRows int           `toml:"gc-estimate-rows"`
-		GCProbility    float64       `toml:"gc-probility"`
+		GCTTL             toml.Duration `toml:"gc-ttl"`
+		GCInMemoryTTL     toml.Duration `toml:"gc-in-memory-ttl"`
+		ScanGCInterval    toml.Duration `toml:"scan-gc-interval"`
+		DisableGC         bool          `toml:"disable-gc"`
+		CheckGC           bool          `toml:"check-gc"`
+		CacheSize         int           `toml:"cache-size"`
+		GCMergeCount      int           `toml:"gc-merge-count"`
+		GCScanCount       int           `toml:"gc-scan-count"`
+		GCestimateRows    int           `toml:"gc-estimate-rows"`
+		GCProbility       float64       `toml:"gc-probility"`
+		GCDeleteTimeout   toml.Duration `toml:"gc-delete-timeout"`
+		GCDeleteBatchSize int           `toml:"gc-delete-batch-size"`
+		GCDeleteWorkerNum int           `toml:"gc-delete-worker-num"`
 	}
 
 	Merge struct {
@@ -177,7 +182,7 @@ type Config struct {
 		Storage struct {
 			// dataDir data dir used to store the data
 			dataDir string `toml:"-"`
-			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
+			// Backend txn storage backend implementation. [TAE|MEMKV], default TAE.
 			Backend StorageType `toml:"backend"`
 		}
 
@@ -260,7 +265,7 @@ func (c *Config) Validate() error {
 		c.Ckp.MinCount = defaultMinCount
 	}
 	if c.Ckp.IncrementalInterval.Duration == 0 {
-		c.Ckp.IncrementalInterval.Duration = defaultIncrementalInterval
+		c.Ckp.IncrementalInterval.Duration = options.DefaultCheckpointIncrementalInterval
 	}
 	if c.Ckp.GlobalMinCount == 0 {
 		c.Ckp.GlobalMinCount = defaultGlobalMinCount
@@ -277,6 +282,10 @@ func (c *Config) Validate() error {
 	}
 	if c.LogtailServer.RpcMaxMessageSize <= 0 {
 		c.LogtailServer.RpcMaxMessageSize = toml.ByteSize(defaultRpcMaxMsgSize)
+	}
+	if err := logtailservice.ValidateRPCMaxMessageSize(
+		int64(c.LogtailServer.RpcMaxMessageSize)); err != nil {
+		return err
 	}
 	if c.LogtailServer.LogtailRPCStreamPoisonTime.Duration <= 0 {
 		c.LogtailServer.LogtailRPCStreamPoisonTime.Duration = defaultRPCStreamPoisonTime
@@ -376,7 +385,7 @@ func (c *Config) SetDefaultValue() {
 		c.Ckp.MinCount = defaultMinCount
 	}
 	if c.Ckp.IncrementalInterval.Duration == 0 {
-		c.Ckp.IncrementalInterval.Duration = defaultIncrementalInterval
+		c.Ckp.IncrementalInterval.Duration = options.DefaultCheckpointIncrementalInterval
 	}
 	if c.Ckp.GlobalMinCount == 0 {
 		c.Ckp.GlobalMinCount = defaultGlobalMinCount

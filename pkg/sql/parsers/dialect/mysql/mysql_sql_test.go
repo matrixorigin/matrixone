@@ -16,10 +16,13 @@ package mysql
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -57,6 +60,239 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestSQLModeParserModes(t *testing.T) {
+	t.Run("ansi quotes changes double quoted token from string to identifier", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(context.Background(), `select "abc"`, 1, "")
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.IsType(t, &tree.NumVal{}, firstSelectExpr(t, stmt))
+
+		stmt, err = ParseOneWithSQLMode(context.Background(), `select "abc"`, 1, "ANSI_QUOTES")
+		require.NoError(t, err)
+		defer stmt.Free()
+		name, ok := firstSelectExpr(t, stmt).(*tree.UnresolvedName)
+		require.True(t, ok)
+		require.Equal(t, "abc", name.ColName())
+	})
+
+	t.Run("pipes default to logical or unless PIPES_AS_CONCAT is set", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(context.Background(), `select 'a'||'b'`, 1, "")
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.IsType(t, &tree.OrExpr{}, firstSelectExpr(t, stmt))
+
+		stmt, err = ParseOneWithSQLMode(context.Background(), `select 'a'||'b'`, 1, "PIPES_AS_CONCAT")
+		require.NoError(t, err)
+		defer stmt.Free()
+		fn, ok := firstSelectExpr(t, stmt).(*tree.FuncExpr)
+		require.True(t, ok)
+		require.Equal(t, "concat", fn.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+	})
+
+	t.Run("default pipes preserve logical OR precedence in comparisons", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(context.Background(), `select id < 4 || id > 5`, 1, "")
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		orExpr, ok := firstSelectExpr(t, stmt).(*tree.OrExpr)
+		require.True(t, ok)
+		_, ok = orExpr.Left.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		_, ok = orExpr.Right.(*tree.ComparisonExpr)
+		require.True(t, ok)
+	})
+
+	t.Run("PIPES_AS_CONCAT has concat precedence, not or precedence", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(context.Background(), `select true or 'a'||'b'`, 1, "PIPES_AS_CONCAT")
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		orExpr, ok := firstSelectExpr(t, stmt).(*tree.OrExpr)
+		require.True(t, ok)
+		fn, ok := orExpr.Right.(*tree.FuncExpr)
+		require.True(t, ok)
+		require.Equal(t, "concat", fn.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+	})
+
+	t.Run("PIPES_AS_CONCAT binds between bit xor and unary", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(context.Background(), `select 1^2||-3`, 1, "PIPES_AS_CONCAT")
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		xorExpr, ok := firstSelectExpr(t, stmt).(*tree.BinaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.BIT_XOR, xorExpr.Op)
+		fn, ok := xorExpr.Right.(*tree.FuncExpr)
+		require.True(t, ok)
+		require.Equal(t, "concat", fn.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+		require.Len(t, fn.Exprs, 2)
+		_, ok = fn.Exprs[1].(*tree.UnaryExpr)
+		require.True(t, ok)
+	})
+
+	t.Run("session parser mode does not inject PIPES_AS_CONCAT", func(t *testing.T) {
+		sqlMode := SessionSQLModeForParser("ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES")
+		require.NotContains(t, sqlMode, "PIPES_AS_CONCAT")
+
+		stmt, err := ParseOneWithSQLMode(context.Background(), `select 'a'||'b'`, 1, sqlMode)
+		require.NoError(t, err)
+		defer stmt.Free()
+		orExpr, ok := firstSelectExpr(t, stmt).(*tree.OrExpr)
+		require.True(t, ok)
+		require.NotNil(t, orExpr.Left)
+		require.NotNil(t, orExpr.Right)
+	})
+
+	t.Run("NO_BACKSLASH_ESCAPES keeps backslash as ordinary character", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(context.Background(), `select 'a\nb'`, 1, "")
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.Equal(t, "a\nb", firstSelectExpr(t, stmt).(*tree.NumVal).String())
+
+		stmt, err = ParseOneWithSQLMode(context.Background(), `select 'a\nb'`, 1, "NO_BACKSLASH_ESCAPES")
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.Equal(t, `a\nb`, firstSelectExpr(t, stmt).(*tree.NumVal).String())
+	})
+
+	t.Run("REAL_AS_FLOAT changes REAL column type", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(context.Background(), `create table t (r real)`, 1, "")
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.Equal(t, uint32(defines.MYSQL_TYPE_DOUBLE), firstColumnType(t, stmt).Oid)
+		require.Equal(t, int32(64), firstColumnType(t, stmt).Width)
+
+		stmt, err = ParseOneWithSQLMode(context.Background(), `create table t (r real)`, 1, "REAL_AS_FLOAT")
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.Equal(t, uint32(defines.MYSQL_TYPE_FLOAT), firstColumnType(t, stmt).Oid)
+		require.Equal(t, int32(32), firstColumnType(t, stmt).Width)
+	})
+}
+
+func TestParseFirstWithSQLMode(t *testing.T) {
+	ctx := context.Background()
+	parser := &MySQLParser{}
+
+	tests := []struct {
+		name    string
+		sql     string
+		sqlMode string
+		first   string
+	}{
+		{name: "simple statement", sql: "select 1; select 2", first: "select 1;"},
+		{name: "leading empty statements", sql: ";; select 1; select 2", first: ";; select 1;"},
+		{
+			name:  "nested compound statement",
+			sql:   "begin select 1; begin select 2; end; end; select 3",
+			first: "begin select 1; begin select 2; end; end;",
+		},
+		{
+			name:    "mode-sensitive string",
+			sql:     `select 'a\'; select 2`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			first:   `select 'a\';`,
+		},
+		{
+			name:  "statement without delimiter",
+			sql:   "select 1 /* trailing comment */",
+			first: "select 1 /* trailing comment */",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, end, err := parser.ParseFirstWithSQLMode(ctx, test.sql, 1, test.sqlMode)
+			require.NoError(t, err)
+			require.NotNil(t, stmt)
+			defer stmt.Free()
+			require.Equal(t, test.first, test.sql[:end])
+		})
+	}
+}
+
+func TestParseCompoundStatementList(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "begin select 1; end;", 1)
+	require.NoError(t, err)
+	stmt.Free()
+
+	stmts, err := Parse(context.Background(), "begin select 1; end; select 2", 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	require.Len(t, stmts, 2)
+	require.IsType(t, &tree.CompoundStmt{}, stmts[0])
+	require.IsType(t, &tree.Select{}, stmts[1])
+}
+
+func BenchmarkParseFirstCompoundStatement(b *testing.B) {
+	for _, statementCount := range []int{10, 100, 1000} {
+		b.Run(strconv.Itoa(statementCount), func(b *testing.B) {
+			var sql strings.Builder
+			sql.WriteString("begin ")
+			for i := 0; i < statementCount; i++ {
+				sql.WriteString("select 1;")
+			}
+			sql.WriteString("end; select 2")
+			input := sql.String()
+			ctx := context.Background()
+			parser := &MySQLParser{}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				stmt, _, err := parser.ParseFirstWithSQLMode(ctx, input, 1, "")
+				if err != nil {
+					b.Fatal(err)
+				}
+				stmt.Free()
+			}
+		})
+	}
+}
+
+func firstSelectExpr(t *testing.T, stmt tree.Statement) tree.Expr {
+	t.Helper()
+	sel, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+	clause, ok := sel.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, clause.Exprs, 1)
+	return clause.Exprs[0].Expr
+}
+
+func extractFirstWindowSpec(t *testing.T, stmt tree.Statement) *tree.WindowSpec {
+	t.Helper()
+	window, ok := firstSelectExpr(t, stmt).(*tree.FuncExpr)
+	require.True(t, ok)
+	require.NotNil(t, window.WindowSpec)
+	return window.WindowSpec
+}
+
+func TestPreparedWindowFrameMarkers(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"select sum(n_nationkey) over (order by n_nationkey rows between ? preceding and ? following) from nation",
+		1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	window := extractFirstWindowSpec(t, stmt)
+	require.IsType(t, &tree.ParamExpr{}, window.Frame.Start.Expr)
+	require.IsType(t, &tree.ParamExpr{}, window.Frame.End.Expr)
+}
+
+func firstColumnType(t *testing.T, stmt tree.Statement) tree.InternalType {
+	t.Helper()
+	createTable, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	require.Len(t, createTable.Defs, 1)
+	col, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+	require.True(t, ok)
+	return col.Type.(*tree.T).InternalType
+}
+
 var (
 	orginSQL = struct {
 		input  string
@@ -83,6 +319,314 @@ func TestOriginSQL(t *testing.T) {
 	}
 }
 
+func TestPositionFunctionSyntax(t *testing.T) {
+	tests := []string{
+		"select position('y' in 'xyz')",
+		"select position(substr in str) from t1",
+	}
+	for _, sql := range tests {
+		_, err := ParseOne(context.TODO(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestOuterJoinRequiresCondition(t *testing.T) {
+	for _, sql := range []string{
+		"select * from t1 left join t2",
+		"select * from t1 left outer join t2 where t1.id = 1",
+		"select * from t1 right join (select * from t2) as sub",
+		"select * from t1 right outer join t2 order by t1.id",
+		"select * from t1 full join t2",
+		"select * from t1 full outer join t2 limit 1",
+		"select * from t1 left join t2 join t3",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.ErrorContains(t, err, "outer join requires ON/USING clause")
+		})
+	}
+
+	for _, sql := range []string{
+		"select * from t1 left join t2 on t1.id = t2.id",
+		"select * from t1 right outer join t2 using (id)",
+		"select * from t1 full join t2 on true",
+		"select * from t1 natural left join t2",
+		"select * from t1 join t2",
+		"select * from t1 inner join t2",
+		"select * from t1 cross join t2",
+		"select * from t1 straight_join t2",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestMySQLJoinSyntaxVariants(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "ODBC outer join escape",
+			in:   "select * from { OJ a left outer join b on a.id = b.id }",
+			want: "select * from a left join b on a.id = b.id",
+		},
+		{
+			name: "ODBC escape is case insensitive",
+			in:   "select * from { oj a right join b using (id) }",
+			want: "select * from a right join b using (id)",
+		},
+		{
+			name: "straight join using",
+			in:   "select * from a straight_join b using(id)",
+			want: "select * from a straight_join b using (id)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.in, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+
+	_, err := ParseOne(context.Background(), "select * from { not_oj a join b on a.id = b.id }", 1)
+	require.ErrorContains(t, err, "expected OJ in table reference escape")
+}
+
+func TestBinaryIntroducedHexLiteralHasDistinctType(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "select X'3132', _binary X'3132', _binary '1'", 1)
+	require.NoError(t, err)
+
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, clause.Exprs, 3)
+
+	plainHex, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, tree.P_hexnum, plainHex.ValType)
+
+	binaryHex, ok := clause.Exprs[1].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, tree.P_ScoreBinaryHexnum, binaryHex.ValType)
+
+	binaryString, ok := clause.Exprs[2].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, tree.P_ScoreBinary, binaryString.ValType)
+}
+
+func TestCreateSourceWithOptionsFree(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `create source src1(a varchar) with (
+		"type"='kafka',
+		"topic"='t1',
+		"partition"='0',
+		"value"='json',
+		"bootstrap.servers"='127.0.0.1:9092'
+	)`, 1)
+	require.NoError(t, err)
+	require.NotPanics(t, stmt.Free)
+}
+
+func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create temporary table if not exists dst clone src copy grants to account acc",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.True(t, cloneStmt.CreateTable.Temporary)
+	require.True(t, cloneStmt.CreateTable.IfNotExists)
+	require.Equal(t, tree.Identifier("dst"), cloneStmt.CreateTable.Table.ObjectName)
+	require.Equal(t, tree.Identifier("src"), cloneStmt.SrcTable.ObjectName)
+	require.True(t, cloneStmt.CopyGrants)
+	require.NotNil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, tree.Identifier("acc"), cloneStmt.ToAccountOpt.AccountName)
+
+	require.Equal(
+		t,
+		"create temporary table if not exists `dst` clone `src` copy grants to account `acc`",
+		tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()),
+	)
+}
+
+func TestCloneTableParseCopyGrantsWithoutToAccount(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create table dst clone src copy grants",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.True(t, cloneStmt.CopyGrants)
+	require.Nil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, "create table `dst` clone `src` copy grants", tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()))
+}
+
+func TestCloneTableParseFormattedMoTimestamp(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create table dst clone src{MO_TS = 123}",
+		1,
+	)
+	require.NoError(t, err)
+
+	cloneStmt, ok := stmt.(*tree.CloneTable)
+	require.True(t, ok)
+	require.NotNil(t, cloneStmt.SrcTable.AtTsExpr)
+	require.Equal(t, tree.ATMOTIMESTAMP, cloneStmt.SrcTable.AtTsExpr.Type)
+}
+
+func TestTableDumpAndLoadParse(t *testing.T) {
+	tests := []struct {
+		sql   string
+		check func(*testing.T, tree.Statement)
+	}{
+		{
+			sql: "dump table db1.t1 to '/tmp/t1'",
+			check: func(t *testing.T, stmt tree.Statement) {
+				dump, ok := stmt.(*tree.DumpTable)
+				require.True(t, ok)
+				require.Equal(t, tree.Identifier("db1"), dump.Table.Schema())
+				require.Equal(t, tree.Identifier("t1"), dump.Table.Name())
+				require.Equal(t, "/tmp/t1", dump.Path)
+				require.False(t, dump.MetadataOnly)
+				require.Equal(t, "dump table db1.t1 to '/tmp/t1'", tree.String(dump, dialect.MYSQL))
+				require.Equal(t, "dump table", dump.GetStatementType())
+				require.Equal(t, tree.QueryTypeOth, dump.GetQueryType())
+				require.Equal(t, "tree.DumpTable", dump.TypeName())
+				require.Equal(t, "dump table", dump.String())
+				dump.Free()
+			},
+		},
+		{
+			sql: "dump table t1 to 'file:///tmp/t1' metadata only",
+			check: func(t *testing.T, stmt tree.Statement) {
+				dump, ok := stmt.(*tree.DumpTable)
+				require.True(t, ok)
+				require.True(t, dump.MetadataOnly)
+			},
+		},
+		{
+			sql: "load table db2.t1 from '/tmp/t1'",
+			check: func(t *testing.T, stmt tree.Statement) {
+				load, ok := stmt.(*tree.LoadTable)
+				require.True(t, ok)
+				require.Equal(t, tree.Identifier("db2"), load.Table.Schema())
+				require.Equal(t, tree.Identifier("t1"), load.Table.Name())
+				require.Equal(t, "/tmp/t1", load.Path)
+				require.Equal(t, "load table db2.t1 from '/tmp/t1'", tree.String(load, dialect.MYSQL))
+				require.Equal(t, "load table", load.GetStatementType())
+				require.Equal(t, tree.QueryTypeDML, load.GetQueryType())
+				require.Equal(t, "tree.LoadTable", load.TypeName())
+				require.Equal(t, "load table", load.String())
+				load.Free()
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			test.check(t, stmt)
+		})
+	}
+}
+
+func TestDataBranchCreateTableParsesWithLeadingComment(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"/* cloud_user */\n  data branch create table dst from src",
+		1,
+	)
+	require.NoError(t, err)
+
+	branchStmt, ok := stmt.(*tree.DataBranchCreateTable)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("dst"), branchStmt.CreateTable.Table.ObjectName)
+	require.Equal(t, tree.Identifier("src"), branchStmt.SrcTable.ObjectName)
+}
+
+func TestDataBranchDiffOutputModes(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
+	require.NoError(t, err)
+
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.True(t, diffStmt.OutputOpt.Summary)
+	require.False(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
+
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 output count", 1)
+	require.NoError(t, err)
+
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.False(t, diffStmt.OutputOpt.Summary)
+	require.True(t, diffStmt.OutputOpt.Count)
+	require.Nil(t, diffStmt.Columns)
+}
+
+func TestDataBranchDiffColumns(t *testing.T) {
+	// COLUMNS with no output opt
+	stmt, err := ParseOne(context.TODO(), "data branch diff t1 against t2 columns (id, name)", 1)
+	require.NoError(t, err)
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("id"), tree.Identifier("name")}, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
+
+	// COLUMNS with output limit
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 columns (a, b, c) output limit 10", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("a"), tree.Identifier("b"), tree.Identifier("c")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.NotNil(t, diffStmt.OutputOpt.Limit)
+	require.Equal(t, int64(10), *diffStmt.OutputOpt.Limit)
+
+	// COLUMNS with OUTPUT AS preserves both the projection and qualified result table.
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 columns (name, id) output as out_db.diff_out", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("name"), tree.Identifier("id")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.Equal(t, tree.Identifier("out_db"), diffStmt.OutputOpt.As.SchemaName)
+	require.Equal(t, tree.Identifier("diff_out"), diffStmt.OutputOpt.As.ObjectName)
+
+	// COLUMNS with snapshot and output file
+	stmt, err = ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} columns (x) output file '/tmp/'`, 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("x")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.Equal(t, "/tmp/", diffStmt.OutputOpt.DirPath)
+
+	// No COLUMNS (backward compatible)
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Nil(t, diffStmt.Columns)
+	require.Nil(t, diffStmt.OutputOpt)
+}
+
 var (
 	partitionSQL = struct {
 		input  string
@@ -105,6 +649,57 @@ func TestQuoteIdentifer(t *testing.T) {
 	out := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier())
 	if partitionSQL.output != out {
 		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", partitionSQL.output, out)
+	}
+}
+
+func TestQuoteSelectAlias(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "reserved table alias",
+			sql:  "select `order`.col from tbl as `order`",
+			want: "select `order`.`col` from `tbl` as `order`",
+		},
+		{
+			name: "cte name and column aliases",
+			sql:  "with `select` (`from`, `中文 列`) as (select col1, col2 from tbl) select `from` from `select`",
+			want: "with `select`(`from`, `中文 列`) as (select `col1`, `col2` from `tbl`) select `from` from `select`",
+		},
+		{
+			name: "derived alias columns and join using",
+			sql:  "select `left`.`a b` from (select col as `a b` from tbl) as `left` (`a b`) join other as `right` using (`a b`)",
+			want: "select `left`.`a b` from (select `col` as `a b` from `tbl`) as `left`(`a b`) inner join `other` as `right` using (`a b`)",
+		},
+		{
+			name: "embedded backticks",
+			sql:  "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
+			want: "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
+		},
+		{
+			name: "quoted index hints",
+			sql:  "select * from tbl force index (`select`, `a b`, `x``y`)",
+			want: "select * from `tbl` force index(`select`, `a b`, `x``y`)",
+		},
+		{
+			name: "quoted user variables",
+			sql:  "select @`a b`, @`select`, @`x``y`, @@global.autocommit, @@session.autocommit, @@autocommit",
+			want: "select @`a b`, @`select`, @`x``y`, @@global.autocommit, @@autocommit, @@autocommit",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.sql, 1)
+			require.NoError(t, err)
+			require.Equal(
+				t,
+				test.want,
+				tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier()),
+			)
+		})
 	}
 }
 
@@ -179,8 +774,58 @@ var (
 		input:  "select cluster_centers(a kmeans '5,vector_cosine_ops,random,true') from t1;",
 		output: "select cluster_centers(a, 5,vector_cosine_ops,random,true) from t1",
 	}, {
-		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 5",
-		output: "alter table t1 alter reindex idx1 ivfflat lists = 5",
+		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 5 force_sync",
+		output: "alter table t1 alter reindex idx1 ivfflat lists = 5 force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 IVFFLAT force_sync",
+		output: "alter table t1 alter reindex idx1 ivfflat force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 IVFPQ force_sync",
+		output: "alter table t1 alter reindex idx1 ivfpq force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 IVFPQ lists = 4 force_sync",
+		output: "alter table t1 alter reindex idx1 ivfpq lists = 4 force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 CAGRA",
+		output: "alter table t1 alter reindex idx1 cagra",
+	}, {
+		input:  "alter table t1 alter reindex idx1 CAGRA force_sync",
+		output: "alter table t1 alter reindex idx1 cagra force_sync",
+	}, {
+		// The REINDEX rule shares index_option_list with CREATE INDEX, so the
+		// AST node carries the full option set and Format now reproduces it
+		// (lowercase) for a lossless round-trip — the graph-degree options are
+		// emitted, not dropped. force_sync is emitted last.
+		input:  "alter table t1 alter reindex idx1 CAGRA intermediate_graph_degree = 8 graph_degree = 4 force_sync",
+		output: "alter table t1 alter reindex idx1 cagra intermediate_graph_degree = 8 graph_degree = 4 force_sync",
+	}, {
+		input:  "alter table t1 alter reindex idx1 HNSW",
+		output: "alter table t1 alter reindex idx1 hnsw",
+	}, {
+		// HNSW's REINDEX rule now takes an index_option_list (mysql_sql.y:
+		// REINDEX ident HNSW index_option_list) so restore's RestoreInitSQL
+		// can carry FORCE_SYNC, matching cagra/ivfpq/ivfflat.
+		input:  "alter table t1 alter reindex idx1 HNSW force_sync",
+		output: "alter table t1 alter reindex idx1 hnsw force_sync",
+	}, {
+		// Lossless round-trip of the per-index build options merged on reindex.
+		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 4 kmeans_train_percent = 80 kmeans_max_iteration = 50",
+		output: "alter table t1 alter reindex idx1 ivfflat lists = 4 kmeans_train_percent = 80 kmeans_max_iteration = 50",
+	}, {
+		input:  "alter table t1 alter reindex idx1 HNSW m = 32 ef_construction = 128 ef_search = 100 max_index_capacity = 100000",
+		output: "alter table t1 alter reindex idx1 hnsw m = 32 ef_construction = 128 ef_search = 100 max_index_capacity = 100000",
+	}, {
+		// String options must round-trip quoted (the grammar takes a STRING);
+		// op_type itself is rejected at compile for reindex, but Format stays
+		// re-parseable. (Parses, formats, re-parses to the same tree.)
+		input:  "alter table t1 alter reindex idx1 IVFFLAT op_type 'vector_l2_ops'",
+		output: "alter table t1 alter reindex idx1 ivfflat op_type 'vector_l2_ops'",
+	}, {
+		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = true day = 33 hour = 12",
+		output: "alter table t1 alter index idx1 ivfflat auto_update = true day = 33 hour = 12",
+	}, {
+		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = false",
+		output: "alter table t1 alter index idx1 ivfflat auto_update = false",
 	}, {
 		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
@@ -216,7 +861,7 @@ var (
 		output: "select day_key, day_date, day, month, quarter, year, week, day_of_week from bi_date where 1 = 2",
 	}, {
 		input:  "select sum(a) over(partition by a range between interval 1 day preceding and interval 2 day following) from t1",
-		output: "select sum(a) over (partition by a range between interval(1, day) preceding and interval(2, day) following) from t1",
+		output: "select sum(a) over (partition by a range between INTERVAL 1 day preceding and INTERVAL 2 day following) from t1",
 	}, {
 		input:  "select rank() over(partition by a range between 1 preceding and current row) from t1",
 		output: "select rank() over (partition by a range between 1 preceding and current row) from t1",
@@ -226,6 +871,21 @@ var (
 	}, {
 		input:  "select rank() over(partition by a order by b desc) from t1",
 		output: "select rank() over (partition by a order by b desc) from t1",
+	}, {
+		input:  "select json_arrayagg(status) over (partition by customer_id order by id) from orders",
+		output: "select json_arrayagg(status) over (partition by customer_id order by id) from orders",
+	}, {
+		input:  "select json_arrayagg(status) from orders",
+		output: "select json_arrayagg(status) from orders",
+	}, {
+		input:  "select json_objectagg(k, v) over (partition by c order by id) from t1",
+		output: "select json_objectagg(k, v) over (partition by c order by id) from t1",
+	}, {
+		input:  "select json_objectagg(k, v) from t1",
+		output: "select json_objectagg(k, v) from t1",
+	}, {
+		input:  "select json_arrayagg, json_objectagg from t1",
+		output: "select json_arrayagg, json_objectagg from t1",
 	}, {
 		input:  "load data url s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'} into table hx3.t2 fields terminated by ',' enclosed by '\\\"' lines terminated by '\\n';\n",
 		output: "load data url s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'} into table hx3.t2 fields terminated by , enclosed by \" lines terminated by \n",
@@ -253,6 +913,9 @@ var (
 	}, {
 		input:  "show variables like 'sql_mode'",
 		output: "show variables like sql_mode",
+	}, {
+		input:  "show global variables like 'interactive_timeout'",
+		output: "show global variables like interactive_timeout",
 	}, {
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
@@ -311,6 +974,14 @@ var (
 	}, {
 		input:  "CREATE TABLE new_t1 LIKE test.t1",
 		output: "create table new_t1 like test.t1",
+	}, {
+		// issue #25119: the IF NOT EXISTS clause must be preserved for the
+		// CREATE TABLE ... LIKE form (it was previously dropped by the parser).
+		input:  "CREATE TABLE IF NOT EXISTS new_t1 LIKE t1",
+		output: "create table if not exists new_t1 like t1",
+	}, {
+		input:  "CREATE TEMPORARY TABLE IF NOT EXISTS new_t1 LIKE t1",
+		output: "create temporary table if not exists new_t1 like t1",
 	}, {
 		input: "show privileges",
 	}, {
@@ -421,6 +1092,45 @@ var (
 			input:  "UPDATE items,(SELECT id FROM items WHERE id IN (SELECT id FROM items WHERE retail / wholesale >= 1.3 AND quantity < 100)) AS discounted SET items.retail = items.retail * 0.9 WHERE items.id = discounted.id",
 			output: "update items cross join (select id from items where id in (select id from items where retail / wholesale >= 1.3 and quantity < 100)) as discounted set items.retail = items.retail * 0.9 where items.id = discounted.id",
 		}, {
+			input:  "UPDATE IGNORE t SET a = 1 WHERE id = 2",
+			output: "update ignore t set a = 1 where id = 2",
+		}, {
+			input:  "UPDATE t SET remark = c.province FROM company c WHERE c.id = t.company_id",
+			output: "update t set remark = c.province from company as c where c.id = t.company_id",
+		}, {
+			input:  "UPDATE vec_join_case t SET remark = CONCAT('hot-', c.province) FROM company c WHERE c.id = t.company_id AND l2_distance(embedding, \"[0.2,0.2,0.3,0.3]\") < 0.35",
+			output: "update vec_join_case as t set remark = CONCAT(hot-, c.province) from company as c where c.id = t.company_id and l2_distance(embedding, [0.2,0.2,0.3,0.3]) < 0.35",
+		}, {
+			input:  "UPDATE t SET a = b.x FROM b, c WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set a = b.x from b cross join c where t.id = b.id and b.k = c.k",
+		}, {
+			input:  "WITH cc AS (SELECT * FROM company) UPDATE t SET remark = c.province FROM cc c WHERE c.id = t.company_id",
+			output: "with cc as (select * from company) update t set remark = c.province from cc as c where c.id = t.company_id",
+		}, {
+			input:  "UPDATE t1 JOIN t2 ON t1.k = t2.k SET t1.v = t2.v FROM t3 WHERE t3.id = t1.id",
+			output: "update t1 inner join t2 on t1.k = t2.k set t1.v = t2.v from t3 where t3.id = t1.id",
+		}, {
+			// FROM b JOIN c ON ... — the FROM-clause join tree must keep its
+			// grouping after Format so round-tripping does not change the
+			// associativity. (Cross-joining target+source previously dropped
+			// the parens and re-parsed as (t CROSS b) JOIN c.)
+			input:  "UPDATE t SET v = c.v FROM b JOIN c ON b.k = c.k WHERE t.id = b.id",
+			output: "update t set v = c.v from b inner join c on b.k = c.k where t.id = b.id",
+		}, {
+			input:  "UPDATE t SET v = c.v FROM b LEFT JOIN c ON b.k = c.k WHERE t.id = b.id",
+			output: "update t set v = c.v from b left join c on b.k = c.k where t.id = b.id",
+		}, {
+			// FROM "b, c JOIN d ON ..." parses to b CROSS (c INNER d). Without
+			// the right-operand paren the round-trip would re-parse as
+			// (b CROSS c) INNER d, changing the ON's binding.
+			input:  "UPDATE t SET v = d.v FROM b, c JOIN d ON c.k = d.k WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set v = d.v from b cross join (c inner join d on c.k = d.k) where t.id = b.id and b.k = c.k",
+		}, {
+			// Same shape but the inner join is LEFT, where the associativity
+			// change is also a semantic change (which side is preserved).
+			input:  "UPDATE t SET v = d.v FROM b, c LEFT JOIN d ON c.k = d.k WHERE t.id = b.id AND b.k = c.k",
+			output: "update t set v = d.v from b cross join (c left join d on c.k = d.k) where t.id = b.id and b.k = c.k",
+		}, {
 			input:  "with t2 as (select * from t1) DELETE FROM a1, a2 USING t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.id=a2.id;",
 			output: "with t2 as (select * from t1) delete from a1, a2 using t1 as a1 inner join t2 as a2 where a1.id = a2.id",
 		}, {
@@ -448,6 +1158,9 @@ var (
 			input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 			output: "select cast(2022-01-01 01:23:34 as varchar)",
 		}, {
+			input:  "select 1.2::int;",
+			output: "select cast(1.2 as int)",
+		}, {
 			input:  "select serial_extract(col, 1 as varchar(3)) from t1",
 			output: "select serial_extract(col, 1 as varchar(3)) from t1",
 		}, {
@@ -460,13 +1173,13 @@ var (
 			input: "select role from t1",
 		}, {
 			input:  "select a || 'hello' || 'world' from t1;",
-			output: "select concat(concat(a, hello), world) from t1",
+			output: "select a or hello or world from t1",
 		}, {
 			input:  "select col || 'bar'",
-			output: "select concat(col, bar)",
+			output: "select col or bar",
 		}, {
 			input:  "select 'foo' || 'bar'",
-			output: "select concat(foo, bar)",
+			output: "select foo or bar",
 		}, {
 			input:  "select 'a\\'b'",
 			output: "select a'b",
@@ -479,6 +1192,16 @@ var (
 		}, {
 			input:  "select CAST('10 ' as unsigned integer);",
 			output: "select cast(10  as integer unsigned)",
+		}, {
+			// issue #25131: `cast(<col> as unsigned)` must render a stable
+			// target type. A preceding column reference must not leak into the
+			// cast's target type (previously rendered "as <col> unsigned"),
+			// otherwise GROUP BY / ORDER BY fail to match the same expression.
+			input:  "select cast(vgpos as unsigned) from t group by cast(vgpos as unsigned) order by cast(vgpos as unsigned)",
+			output: "select cast(vgpos as unsigned) from t group by cast(vgpos as unsigned) order by cast(vgpos as unsigned)",
+		}, {
+			input:  "select cast(vgpos as signed) from t group by cast(vgpos as signed)",
+			output: "select cast(vgpos as signed) from t group by cast(vgpos as signed)",
 		}, {
 			input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
 			output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
@@ -609,13 +1332,16 @@ var (
 			output: "select FROM_UNIXTIME(2147483647) as c1, FROM_UNIXTIME(2147483648) as c2, FROM_UNIXTIME(2147483647.9999999) as c3, FROM_UNIXTIME(32536771199) as c4, FROM_UNIXTIME(32536771199.9999999) as c5",
 		}, {
 			input:  "select date_add(\"1997-12-31 23:59:59\",INTERVAL -100000 YEAR);",
-			output: "select date_add(1997-12-31 23:59:59, INTERVAL(-100000, year))",
+			output: "select date_add(1997-12-31 23:59:59, INTERVAL -100000 year)",
 		}, {
 			input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
-			output: "select ADDDATE(DATE(2021-01-01), INTERVAL(1, day))",
+			output: "select ADDDATE(DATE(2021-01-01), INTERVAL 1 day)",
+		}, {
+			input:  "SELECT DATE_ADD('2025-12-01', INTERVAL ((5*11)%180) DAY);",
+			output: "select DATE_ADD(2025-12-01, INTERVAL ((5 * 11) % 180) day)",
 		}, {
 			input:  "select '2007-01-01' + interval a day from t1;",
-			output: "select 2007-01-01 + interval(a, day) from t1",
+			output: "select 2007-01-01 + INTERVAL a day from t1",
 		}, {
 			input:  "SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;",
 			output: "select cast(COALESCE(t0.c0, -1) as unsigned) is true from t0",
@@ -676,13 +1402,34 @@ var (
 			output: "select sum(all a), count(all a), avg(all a), std(all a), variance(all a), bit_or(all a), bit_and(all a), min(all a), max(all a), min(all c), max(all c) from t",
 		}, {
 			input:  "insert into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-			output: "insert into t1 values (date_add(null, INTERVAL(1, day)))",
+			output: "insert into t1 values (date_add(null, INTERVAL 1 day))",
 		}, {
 			input:  "replace into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-			output: "replace into t1 values (date_add(null, INTERVAL(1, day)))",
+			output: "replace into t1 values (date_add(null, INTERVAL 1 day))",
+		}, {
+			input:  "replace into t_table_dst table t_table_src;",
+			output: "replace into t_table_dst select * from t_table_src",
+		}, {
+			input:  "replace into t_table_dst (id, v) table t_table_src;",
+			output: "replace into t_table_dst (id, v) select * from t_table_src",
+		}, {
+			input:  "replace into t_table_dst table t_table_src order by id desc limit 1;",
+			output: "replace into t_table_dst select * from t_table_src order by id desc limit 1",
+		}, {
+			input:  "replace into t_table_dst (id, v) table t_table_src order by id limit 1 offset 1;",
+			output: "replace into t_table_dst (id, v) select * from t_table_src order by id limit 1 offset 1",
+		}, {
+			input:  "replace low_priority into t_mod values(1, 20);",
+			output: "replace into t_mod values (1, 20)",
+		}, {
+			input:  "replace delayed into t_mod values(1, 30);",
+			output: "replace into t_mod values (1, 30)",
+		}, {
+			input:  "replace low_priority into t_table_dst table t_table_src;",
+			output: "replace into t_table_dst select * from t_table_src",
 		}, {
 			input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
-			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL(1, second)) as 1 second later",
+			output: "select DATE_ADD(2022-02-28 23:59:59.9999, INTERVAL 1 second) as 1 second later",
 		}, {
 			input:  "SELECT sum(a) as 'hello' from t1;",
 			output: "select sum(a) as hello from t1",
@@ -691,7 +1438,7 @@ var (
 			output: "select stream from t1",
 		}, {
 			input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
-			output: "select DATE_ADD(2017-06-15, INTERVAL(-10, month))",
+			output: "select DATE_ADD(2017-06-15, INTERVAL -10 month)",
 		}, {
 			input:  "create table t1 (a varchar)",
 			output: "create table t1 (a varchar)",
@@ -706,13 +1453,13 @@ var (
 			output: "select cast(19999999999999999999 as signed)",
 		}, {
 			input:  "select date_sub(now(), interval 1 day) from t1;",
-			output: "select date_sub(now(), interval(1, day)) from t1",
+			output: "select date_sub(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "select date_sub(now(), interval '1' day) from t1;",
-			output: "select date_sub(now(), interval(1, day)) from t1",
+			output: "select date_sub(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "select date_add(now(), interval '1' day) from t1;",
-			output: "select date_add(now(), interval(1, day)) from t1",
+			output: "select date_add(now(), INTERVAL 1 day) from t1",
 		}, {
 			input:  "SELECT md.datname as `Database` FROM TT md",
 			output: "select md.datname as Database from tt as md",
@@ -758,11 +1505,13 @@ var (
 			output: "select extract(year, l_shipdate) as l_year from t",
 		}, {
 			input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
-			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - interval(112, day)",
+			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - INTERVAL 112 day",
 		}, {
 			input: "create table deci_table (a decimal(10, 5))",
 		}, {
 			input: "create table deci_table (a decimal(20, 5))",
+		}, {
+			input: "create table deci_table (a decimal(65, 30))",
 		}, {
 			input:  "create table deci_table (a decimal)",
 			output: "create table deci_table (a decimal(38))",
@@ -808,10 +1557,10 @@ var (
 			output: "select @@tx_isolation",
 		}, {
 			input:  "select @@global.tx_isolation",
-			output: "select @@tx_isolation",
+			output: "select @@global.tx_isolation",
 		}, {
 			input:  "select @@GLOBAL.tx_isolation",
-			output: "select @@tx_isolation",
+			output: "select @@global.tx_isolation",
 		}, {
 			input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 			output: "show variables",
@@ -871,7 +1620,8 @@ var (
 		}, {
 			input: "create table t (a int, b char, index if not exists idx (a, b))",
 		}, {
-			input: "create table t (a int, b char, fulltext idx (a, b))",
+			input:  "create table t (a int, b char, fulltext idx (a, b) async)",
+			output: "create table t (a int, b char, fulltext idx (a, b) ASYNC )",
 		}, {
 			input:  "create table t (a int, b char, constraint p1 primary key idx using hash (a, b))",
 			output: "create table t (a int, b char, constraint p1 primary key idx using none (a, b))",
@@ -937,16 +1687,16 @@ var (
 			output: "load data local infile data replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 lines",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
+			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
 			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
@@ -1038,12 +1788,12 @@ var (
 			output: "show tables from test01 where tables_in_test01 like %t2%",
 		}, {
 			input:  "select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score",
-			output: "select userID, MAX(score) as max_score from t1 where concat(userID < 2, userID > 3) group by userID order by max_score",
+			output: "select userID, MAX(score) as max_score from t1 where userID < 2 or userID > 3 group by userID order by max_score",
 		}, {
 			input: "select c1, -c2 from t2 order by -c1 desc",
 		}, {
 			input:  "select * from t1 where spID>2 AND userID <2 || userID >=2 OR userID < 2 limit 3",
-			output: "select * from t1 where concat(spID > 2 and userID < 2, userID >= 2) or userID < 2 limit 3",
+			output: "select * from t1 where spID > 2 and userID < 2 or userID >= 2 or userID < 2 limit 3",
 		}, {
 			input:  "select * from t10 where (b='ba' or b='cb') and (c='dc' or c='ed');",
 			output: "select * from t10 where (b = ba or b = cb) and (c = dc or c = ed)",
@@ -1179,7 +1929,7 @@ var (
 			input: "select sum(distinct s) from tbl where 1",
 		}, {
 			input:  "select u.a, interval 1 second from t",
-			output: "select u.a, interval(1, second) from t",
+			output: "select u.a, INTERVAL 1 second from t",
 		}, {
 			input:  "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",
 			output: "select u.a, (select t.a from sa.t cross join u) from t where (u.a, u.b, u.c) in (select * from t)",
@@ -1231,7 +1981,7 @@ var (
 		}, {
 			input: "create table a (a int) partition by range columns (a, b, db.t.c)",
 		}, {
-			input: "create table a (a int) partition by range(1 + 21)",
+			input: "create table a (a int) partition by range (1 + 21)",
 		}, {
 			input: "create table a (a int storage disk constraint cx check (b + c) enforced)",
 		}, {
@@ -1301,7 +2051,7 @@ var (
 					PARTITION p2 VALUES LESS THAN (2001),
 					PARTITION p3 VALUES LESS THAN MAXVALUE
 				);`,
-			output: `create table tp13 (id int not null, fname varchar(30), lname varchar(30), hired date not null default 1970-01-01, separated date not null default 9999-12-31, job_code int, store_id int) partition by range(YEAR(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))`,
+			output: `create table tp13 (id int not null, fname varchar(30), lname varchar(30), hired date not null default 1970-01-01, separated date not null default 9999-12-31, job_code int, store_id int) partition by range (YEAR(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))`,
 		},
 		{
 			input: `CREATE TABLE tp14 (
@@ -1328,7 +2078,7 @@ var (
 					PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
 					PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 				);`,
-			output: `create table tp15 (id int primary key, name varchar(35), age int unsigned) partition by list(id) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))`,
+			output: `create table tp15 (id int primary key, name varchar(35), age int unsigned) partition by list (id) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))`,
 		},
 		{
 			input: `CREATE TABLE tp16 (
@@ -1355,7 +2105,7 @@ var (
 					PARTITION p2 VALUES LESS THAN (16),
 					PARTITION p3 VALUES LESS THAN (21)
 				);`,
-			output: `create table tp17 (id int not null primary key, fname varchar(30), lname varchar(30)) partition by range(id) (partition p0 values less than (6), partition p1 values less than (11), partition p2 values less than (16), partition p3 values less than (21))`,
+			output: `create table tp17 (id int not null primary key, fname varchar(30), lname varchar(30)) partition by range (id) (partition p0 values less than (6), partition p1 values less than (11), partition p2 values less than (16), partition p3 values less than (21))`,
 		},
 		{
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
@@ -1560,6 +2310,15 @@ var (
 			input:  "create role 'admin', 'developer'",
 			output: "create role admin, developer",
 		}, {
+			input:  "alter role old_role rename to new_role",
+			output: "alter role old_role rename to new_role",
+		}, {
+			input:  "alter role if exists old_role rename to new_role",
+			output: "alter role if exists old_role rename to new_role",
+		}, {
+			input:  "alter role 'old_role' rename to 'new_role'",
+			output: "alter role old_role rename to new_role",
+		}, {
 			input:  "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {
@@ -1569,8 +2328,35 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10",
 			output: "create index idx using ivfflat on a (a) LISTS 10 ",
 		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 AUTO_UPDATE=TRUE DAY 10 HOUR 23",
+			output: "create index idx using ivfflat on a (a) LISTS 10 AUTO_UPDATE=TRUE DAY 10 HOUR 23 ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 AUTO_UPDATE=FALSE",
+			output: "create index idx using ivfflat on a (a) LISTS 10 ",
+		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops'",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 INCLUDE (b, c)",
+			output: "create index idx using ivfflat on a (a) LISTS 10 INCLUDE (b, c) ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' INCLUDE (b, c)",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops INCLUDE (b, c) ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' async",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ASYNC ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 30",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
+		}, {
+			input:  "create index idx using ivfpq on A (a) LISTS 10 op_type 'vector_l2_ops' quantization 'int8' quantizer_train_limit 5000",
+			output: "create index idx using ivfpq on a (a) LISTS 10 OP_TYPE vector_l2_ops QUANTIZATION int8 QUANTIZER_TRAIN_LIMIT 5000 ",
+		}, {
+			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
+			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",
+		}, {
+			input:  "create index idx using ivfpq on A (a) LISTS 8 kmeans_train_percent 7 max_index_capacity 2000",
+			output: "create index idx using ivfpq on a (a) LISTS 8 KMEANS_TRAIN_PERCENT 7 MAX_INDEX_CAPACITY 2000 ",
 		}, {
 			input: "create index idx1 on a (a)",
 		}, {
@@ -1747,10 +2533,16 @@ var (
 		}, {
 			input: "prepare stmt_name1 from select * from t1",
 		}, {
+			input: "prepare stmt_name1 from @user_var_name",
+		}, {
 			input:  "prepare stmt_name1 from 'select * from t1'",
 			output: "prepare stmt_name1 from select * from t1",
 		}, {
 			input: "prepare stmt_name1 from select * from t1 where a > ? or abs(b) < ?",
+		}, {
+			input: "prepare stmt_name1 from replace into t1 values (?, ?)",
+		}, {
+			input: "prepare stmt_name1 from replace into t1 (a, b) select a, b from t2 where a > ?",
 		}, {
 			input:  "create account if not exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
 			output: "create account if not exists nihao admin_name 'admin' identified by '******' open comment 'new account'",
@@ -1918,6 +2710,21 @@ var (
 		}, {
 			input: "drop role role1",
 		}, {
+			input: "alter role role1 rename to role2",
+		}, {
+			input: "alter role if exists role1 rename to role2",
+		}, {
+			input:  "alter role 'role1' rename to 'role2'",
+			output: "alter role role1 rename to role2",
+		}, {
+			input:  `alter role role_name add rule "SELECT * FROM db1.tbl1 WHERE age > 28" on table db1.tbl1`,
+			output: "alter role role_name add rule 'SELECT * FROM db1.tbl1 WHERE age > 28' on table db1.tbl1",
+		}, {
+			input:  `alter role role_name drop rule on table db1.tbl1`,
+			output: "alter role role_name drop rule on table db1.tbl1",
+		}, {
+			input: "show rules on role role_name",
+		}, {
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
 		}, {
 			input: "grant all, all(a, b) on table *.* to u1, u2 with grant option",
@@ -1967,6 +2774,18 @@ var (
 		}, {
 			input:  `select json_extract(a, '$.b') from t`,
 			output: `select json_extract(a, $.b) from t`,
+		}, {
+			input:  `select JSON_OBJECT('key', 'value') -> '$.key' AS result1`,
+			output: `select json_extract(JSON_OBJECT(key, value), $.key) as result1`,
+		}, {
+			input:  `select a -> '$.b' from t`,
+			output: `select json_extract(a, $.b) from t`,
+		}, {
+			input:  `select JSON_OBJECT('key', 'value') ->> '$.key' AS result1`,
+			output: `select json_unquote(json_extract(JSON_OBJECT(key, value), $.key)) as result1`,
+		}, {
+			input:  `select a ->> '$.b' from t`,
+			output: `select json_unquote(json_extract(a, $.b)) from t`,
 		}, {
 			input: `create table t1 (a int, b uuid)`,
 		}, {
@@ -2494,8 +3313,8 @@ var (
 			output: "alter table t1 truncate partition all",
 		},
 		{
-			input:  "ALTER TABLE titles partition by range(to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')), partition p03 values less than (to_days('1987-12-31')))",
-			output: "alter table titles partition by range(to_days(from_date)) (partition p01 values less than (to_days(1985-12-31)), partition p02 values less than (to_days(1986-12-31)), partition p03 values less than (to_days(1987-12-31)))",
+			input:  "ALTER TABLE titles partition by range (to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')), partition p03 values less than (to_days('1987-12-31')))",
+			output: "alter table titles partition by range (to_days(from_date)) (partition p01 values less than (to_days(1985-12-31)), partition p02 values less than (to_days(1986-12-31)), partition p03 values less than (to_days(1987-12-31)))",
 		},
 		{
 			input:  "Alter table nation rename to nations",
@@ -2510,8 +3329,8 @@ var (
 			output: "rename table rename_table_01 rename to rename01, rename_table_02 rename to rename02, rename_table_03 rename to rename03, rename_table_04 rename to rename04, rename_table_05 rename to rename05",
 		},
 		{
-			input:  "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment 'p1 comment', partition p2 values less than maxvalue comment 'p3 comment')",
-			output: "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment = 'p1 comment', partition p2 values less than (MAXVALUE) comment = 'p3 comment')",
+			input:  "create table pt2 (id int, date_column date) partition by range (year(date_column)) (partition p1 values less than (2010) comment 'p1 comment', partition p2 values less than maxvalue comment 'p3 comment')",
+			output: "create table pt2 (id int, date_column date) partition by range (year(date_column)) (partition p1 values less than (2010) comment = 'p1 comment', partition p2 values less than (MAXVALUE) comment = 'p3 comment')",
 		},
 		{
 			input: "create publication pub1 database db1 account all",
@@ -2548,6 +3367,12 @@ var (
 			output: "create publication pub1 database db1 table t1, t2 account all comment 'test'",
 		},
 		{
+			input: "create publication pub1 database * account all",
+		},
+		{
+			input: "create publication pub1 database * account acc0, acc1 comment 'account level publication'",
+		},
+		{
 			input:  "CREATE STAGE my_ext_stage URL='s3://load/files/'",
 			output: "create stage my_ext_stage url='s3://load/files/'",
 		},
@@ -2566,6 +3391,10 @@ var (
 		{
 			input:  "DROP STAGE if exists my_ext_stage1",
 			output: "drop stage if not exists my_ext_stage1",
+		},
+		{
+			input:  "REMOVE FILES FROM STAGE IF EXISTS 'stage://mystage/data_*.csv'",
+			output: "remove files from stage if exists 'stage://mystage/data_*.csv'",
 		},
 		{
 			input:  "ALTER STAGE my_ext_stage SET URL='s3://loading/files/new/'",
@@ -2641,26 +3470,42 @@ var (
 			output: "create table t1 as select * from t2{as of timestamp 2019-01-01 00:00:00}",
 		},
 		{
-			input: "restore cluster from snapshot snapshot_01",
+			input:  `restore cluster{snapshot="snapshot_01"}`,
+			output: "restore cluster{snapshot=snapshot_01}",
 		},
 		{
-			input: "restore account account_01 from snapshot snapshot_01",
+			input:  "restore account account_01{snapshot=\"snapshot_01\"}",
+			output: "restore account account_01{snapshot=snapshot_01}",
 		},
 		{
-			input: "restore account account_01 database db1 from snapshot snapshot_01",
+			input:  "restore database account_01.db1{snapshot='snapshot_01'}",
+			output: "restore database account_01.db1{snapshot=snapshot_01}",
 		},
 		{
-			input: "restore account account_01 database db1 table t1 from snapshot snapshot_01",
+			input:  "restore database account_01.db1{snapshot=\"snapshot_01\"}",
+			output: "restore database account_01.db1{snapshot=snapshot_01}",
 		},
 		{
-			input:  "restore account account_01 from snapshot snapshot_01 to account account_02",
-			output: "restore account account_01 from snapshot snapshot_01 to account account_02",
+			input:  "restore database account_01.db1{snapshot=\"snapshot_01\"} to account account_02",
+			output: "restore database account_01.db1{snapshot=snapshot_01} to account account_02",
 		},
 		{
-			input: `create cdc test_create_task 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0',};`,
+			input:  "restore table account_01.db1.t1{snapshot=\"snapshot_01\"}",
+			output: "restore table account_01.db1.t1{snapshot=snapshot_01}",
+		},
+		{
+			input:  "restore account account_01{snapshot=\"snapshot_01\"} to account account_02",
+			output: "restore account account_01{snapshot=snapshot_01} to account account_02",
+		},
+		{
+			input: `create cdc test_create_task 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0'}`,
 		},
 		{
 			input: `show cdc all;`,
+		},
+		{
+			input:  `show cdc;`,
+			output: `show cdc all;`,
 		},
 		{
 			input: `show cdc task t1;`,
@@ -2670,6 +3515,21 @@ var (
 		},
 		{
 			input: `drop cdc task t1;`,
+		},
+		{
+			input: `drop cdc task internal;`,
+		},
+		{
+			input:  `drop cdc t1;`,
+			output: `drop cdc task t1;`,
+		},
+		{
+			input:  `drop cdc internal;`,
+			output: `drop cdc task internal;`,
+		},
+		{
+			input:  `drop cdc if exists t1;`,
+			output: `drop cdc if exists task t1;`,
 		},
 		{
 			input: `pause cdc all;`,
@@ -2724,7 +3584,7 @@ var (
 		},
 		{
 			input:  "select $1 + $q$\\n\\t\\r\\b\\0\\_\\%\\\\$q$",
-			output: "select $1 + \\n\\t\\r\\b\\0\\_\\%\\\\",
+			output: "select $1 + \\\\n\\\\t\\\\r\\\\b\\\\0\\_\\%\\\\\\\\",
 		},
 		{
 			input:  "show table_size from test",
@@ -2874,16 +3734,16 @@ var (
 			output: "create database if not exists ucl360_demo_v3 default character set utf8mb4 collate utf8mb4_0900_ai_ci encryption N",
 		}, {
 			input:  "alter table t1 algorithm = DEFAULT",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = DEFAULT",
 		}, {
 			input:  "alter table t1 algorithm = INSTANT",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = INSTANT",
 		}, {
 			input:  "alter table t1 algorithm = INPLACE",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = INPLACE",
 		}, {
 			input:  "alter table t1 algorithm = COPY",
-			output: "alter table t1 alter algorithm not enforce",
+			output: "alter table t1 algorithm = COPY",
 		}, {
 			input:  "alter table t1 default CHARACTER SET = a COLLATE = b",
 			output: "alter table t1 charset = a",
@@ -2907,16 +3767,16 @@ var (
 			output: "alter table t1 charset = FORCE",
 		}, {
 			input:  "alter table t1 LOCK = DEFAULT",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = DEFAULT",
 		}, {
 			input:  "alter table t1 LOCK = NONE",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = NONE",
 		}, {
 			input:  "alter table t1 LOCK = SHARED",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = SHARED",
 		}, {
 			input:  "alter table t1 LOCK = EXCLUSIVE",
-			output: "alter table t1 charset = LOCK",
+			output: "alter table t1 lock = EXCLUSIVE",
 		}, {
 			input:  "alter table t1 WITHOUT VALIDATION",
 			output: "alter table t1 charset = WITHOUT",
@@ -2943,7 +3803,7 @@ var (
 			output: "create view t2 as select * from t1",
 		}, {
 			input:  "insert into t1 values(_binary 0x123)",
-			output: "insert into t1 values (123)",
+			output: "insert into t1 values (0x123)",
 		}, {
 			input:  "backup '123' filesystem '/home/abc' parallelism '1'",
 			output: "backup 123 filesystem /home/abc parallelism 1",
@@ -3018,6 +3878,54 @@ var (
 		{
 			input:  "create table t1(a vecf32(3), b vecf64(3), c int)",
 			output: "create table t1 (a vecf32(3), b vecf64(3), c int)",
+		},
+		{
+			input:  "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
+			output: "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
+		},
+		{
+			input:  "create table t1(a vecbf16(3), b vecf16(3), c vecint8(3))",
+			output: "create table t1 (a vecbf16(3), b vecf16(3), c vecint8(3))",
+		},
+		{
+			input:  "create table t1(a vecbf16(128), b vecf16(65535), c vecint8(1))",
+			output: "create table t1 (a vecbf16(128), b vecf16(65535), c vecint8(1))",
+		},
+		{
+			input:  "create table t1(a vecuint8(3))",
+			output: "create table t1 (a vecuint8(3))",
+		},
+		{
+			input:  "create table t1(a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
+			output: "create table t1 (a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecbf16(3))",
+			output: "select cast([1,2,3] as vecbf16(3))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecf16(3))",
+			output: "select cast([1,2,3] as vecf16(3))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecint8(3))",
+			output: "select cast([1,2,3] as vecint8(3))",
+		},
+		{
+			input:  "select cast(b as vecint8(3)) from t1",
+			output: "select cast(b as vecint8(3)) from t1",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecuint8(3))",
+			output: "select cast([1,2,3] as vecuint8(3))",
+		},
+		{
+			input:  "select cast(b as vecuint8(3)) from t1",
+			output: "select cast(b as vecuint8(3)) from t1",
+		},
+		{
+			input:  "select l2_distance(a, b) from t1",
+			output: "select l2_distance(a, b) from t1",
 		},
 		{
 			input:  "alter table tbl1 drop constraint fk_name",
@@ -3115,8 +4023,16 @@ var (
 			output: "restore database db01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
 		{
+			input:  "restore account acc01 database db01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore account acc01 database db01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
 			input:  "restore database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
 			output: "restore database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input:  "restore account acc01 database db01 table t01 from pitr pitr01 '2021-01-01 00:00:00'",
+			output: "restore account acc01 database db01 table t01 from pitr pitr01 timestamp = 2021-01-01 00:00:00",
 		},
 		{
 			input:  "restore account acc01 from pitr pitr01 '2021-01-01 00:00:00'",
@@ -3188,6 +4104,10 @@ var (
 			output: "select MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
 		},
 		{
+			input:  "prepare st from 'select id from ft where MATCH (t) AGAINST (? IN BOOLEAN MODE)'",
+			output: "prepare st from select id from ft where MATCH (t) AGAINST (? IN BOOLEAN MODE)",
+		},
+		{
 			input:  "alter user user1 unlock",
 			output: "alter user user1 unlock",
 		},
@@ -3254,12 +4174,16 @@ var (
 			output: "use",
 		},
 		{
-			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 ef_search 32 QUANTIZATION 'BF16' OP_TYPE 'VECTOR_L2_OPS'",
-			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 QUANTIZATION BF16 OP_TYPE VECTOR_L2_OPS ",
+			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 ef_search 32 OP_TYPE 'VECTOR_L2_OPS'",
+			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 OP_TYPE VECTOR_L2_OPS ",
 		},
 		{
-			input:  "CREATE TABLE `vector_index_01` ( `a` bigint NOT NULL, `b` vecf32(128) DEFAULT NULL, PRIMARY KEY (`a`), KEY `idx01` USING hnsw (`b`) m = 4  ef_search = 64 ef_construction = 100  quantization 'bf16'  op_type 'vector_l2_ops' )",
-			output: "create table vector_index_01 (a bigint not null, b vecf32(128) default null, primary key (a), index idx01 using hnsw (b)  M 4 EF_CONSTRUCTION 100 EF_SEARCH 64 QUANTIZATION bf16 OP_TYPE vector_l2_ops )",
+			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 ef_search 32 OP_TYPE 'VECTOR_L2_OPS' ASYNC",
+			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 OP_TYPE VECTOR_L2_OPS ASYNC ",
+		},
+		{
+			input:  "CREATE TABLE `vector_index_01` ( `a` bigint NOT NULL, `b` vecf32(128) DEFAULT NULL, PRIMARY KEY (`a`), KEY `idx01` USING hnsw (`b`) m = 4  ef_search = 64 ef_construction = 100  op_type 'vector_l2_ops' )",
+			output: "create table vector_index_01 (a bigint not null, b vecf32(128) default null, primary key (a), index idx01 using hnsw (b)  M 4 EF_CONSTRUCTION 100 EF_SEARCH 64 OP_TYPE vector_l2_ops )",
 		},
 		{
 			input:  "alter table t1 alter reindex idx1 hnsw",
@@ -3275,7 +4199,101 @@ var (
 		{
 			input: "create table t1 (a bigint(20) unsigned)",
 		},
-	}
+		{
+			input:  "create cdc cdc_tpcc 'mysql://sys#dump:111@127.0.0.1:6001' 'matrixone' 'mysql://sys#dump:111@127.0.0.1:6001' 'test_cdc:t1' {'Level'='database'} internal;",
+			output: "create cdc cdc_tpcc 'mysql://sys#dump:111@127.0.0.1:6001' 'matrixone' 'mysql://sys#dump:111@127.0.0.1:6001' 'test_cdc:t1' { \"Level\"='database'} internal",
+		},
+		{
+			input:  "select get_format(date, 'USA')",
+			output: "select get_format(DATE, USA)",
+		},
+		{
+			input:  "select get_format(time, 'EUR')",
+			output: "select get_format(TIME, EUR)",
+		},
+		{
+			input:  "select get_format(datetime, 'JIS')",
+			output: "select get_format(DATETIME, JIS)",
+		},
+		{
+			input:  "select get_format(timestamp, 'ISO')",
+			output: "select get_format(TIMESTAMP, ISO)",
+		},
+		{
+			input:  "create index idx using cagra on A (a) intermediate_graph_degree = 4 graph_degree = 100 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'F16' DISTRIBUTION_MODE 'SINGLE_GPU' itopk_size = 512",
+			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INTERMEDIATE_GRAPH_DEGREE 4 GRAPH_DEGREE 100 QUANTIZATION F16 DISTRIBUTION_MODE SINGLE_GPU ITOPK_SIZE 512 ",
+		},
+		{
+			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 OP_TYPE 'VECTOR_L2_OPS' QUANTIZATION 'INT8' M 4",
+			output: "create index idx using ivfpq on a (a) LISTS 4 M 4 OP_TYPE VECTOR_L2_OPS QUANTIZATION INT8 BITS_PER_CODE 8 ",
+		},
+		{
+			input:  "create index idx using cagra on A (a) INCLUDE (price)",
+			output: "create index idx using cagra on a (a) INCLUDE (price) ",
+		},
+		{
+			input:  "create index idx using cagra on A (a) INCLUDE (price, category_id)",
+			output: "create index idx using cagra on a (a) INCLUDE (price, category_id) ",
+		},
+		{
+			input:  "create index idx using cagra on A (a) OP_TYPE 'VECTOR_L2_OPS' INCLUDE (price, category_id)",
+			output: "create index idx using cagra on a (a) OP_TYPE VECTOR_L2_OPS INCLUDE (price, category_id) ",
+		},
+		{
+			input:  "create index idx using ivfpq on A (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price)",
+			output: "create index idx using ivfpq on a (a) LISTS 4 BITS_PER_CODE 8 INCLUDE (price) ",
+		},
+		// Issue #23122: ANALYZE TABLE multi-table
+		{
+			input:  "analyze table t1 (a, b), t2 (c, d)",
+			output: "analyze table t1(a, b), t2(c, d)",
+		},
+		{
+			input:  "analyze table company, company_patent",
+			output: "analyze table company, company_patent",
+		},
+		{
+			input:  "analyze table t1",
+			output: "analyze table t1",
+		},
+		// Issue #23122: CHECK TABLE
+		{
+			input:  "check table t1",
+			output: "check table t1",
+		},
+		{
+			input:  "check table t1 extended",
+			output: "check table t1 extended",
+		},
+		{
+			input:  "check table t1, t2",
+			output: "check table t1, t2",
+		},
+		{
+			input:  "check table t1 for upgrade",
+			output: "check table t1 for upgrade",
+		},
+		// Issue #23122: SHOW PROFILE
+		{
+			input:  "show profile",
+			output: "show profile",
+		},
+		{
+			input:  "show profile for query 2",
+			output: "show profile for query 2",
+		},
+		{
+			input:  "show profile limit 10",
+			output: "show profile limit 10",
+		},
+		{
+			input:  "show profile for query 2 limit 10",
+			output: "show profile for query 2 limit 10",
+		},
+		{
+			input:  "show profile for query 2 limit 10 offset 5",
+			output: "show profile for query 2 limit 10 offset 5",
+		}}
 )
 
 func TestValid(t *testing.T) {
@@ -3297,22 +4315,63 @@ func TestValid(t *testing.T) {
 	}
 }
 
+func TestQuotedUnicodeIdentifierAliases(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT 1 AS `الكمية`",
+		"SELECT 1 AS `数量`",
+		"SELECT 1 AS `\xe9`",
+		"SELECT 1 AS `\xe9``name`",
+		"SELECT 1 AS `\xf0\x9f\x98\x80`",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestShowVariablesGlobalFlag(t *testing.T) {
+	ctx := context.TODO()
+	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)
+	require.NoError(t, err)
+
+	sv, ok := stmt.(*tree.ShowVariables)
+	require.True(t, ok)
+	require.True(t, sv.Global)
+}
+
 var (
 	validStrSQL = []struct {
 		input  string
 		output string
 	}{
 		{
-			input:  "create table pt1 (id int, category varchar(50)) partition by list columns(category) (partition p1 values in ('A', 'B') comment 'Category A and B', partition p2 values in ('C', 'D') comment 'Category C and D')",
+			input:  "select count(*) from t",
+			output: "select count(*) from t",
+		},
+		{
+			input:  "select count(*) as cnt, sum(a) from t group by b having count(*) > 1",
+			output: "select count(*) as cnt, sum(a) from t group by b having count(*) > 1",
+		},
+		{
+			input:  "select approx_count(*) from t",
+			output: "select approx_count(*) from t",
+		},
+		{
+			input:  "create table pt1 (id int, category varchar(50)) partition by list columns (category) (partition p1 values in ('A', 'B') comment 'Category A and B', partition p2 values in ('C', 'D') comment 'Category C and D')",
 			output: "create table pt1 (id int, category varchar(50)) partition by list columns (category) (partition p1 values in ('A', 'B') comment = 'Category A and B', partition p2 values in ('C', 'D') comment = 'Category C and D')",
 		},
 		{
-			input:  "create table titles (emp_no int not null, title varchar(50) not null, from_date date not null, to_date date, primary key (emp_no, title, from_date)) partition by range(to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')))",
-			output: "create table titles (emp_no int not null, title varchar(50) not null, from_date date not null, to_date date, primary key (emp_no, title, from_date)) partition by range(to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')))",
+			input:  "create table titles (emp_no int not null, title varchar(50) not null, from_date date not null, to_date date, primary key (emp_no, title, from_date)) partition by range (to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')))",
+			output: "create table titles (emp_no int not null, title varchar(50) not null, from_date date not null, to_date date, primary key (emp_no, title, from_date)) partition by range (to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')))",
 		},
 		{
-			input:  "create table pt2 (id int, date_column date, value int) partition by range(year(date_column)) (partition p1 values less than (2010) comment 'Before 2010', partition p2 values less than (2020) comment '2010 - 2019', partition p3 values less than (MAXVALUE) comment '2020 and Beyond')",
-			output: "create table pt2 (id int, date_column date, value int) partition by range(year(date_column)) (partition p1 values less than (2010) comment = 'Before 2010', partition p2 values less than (2020) comment = '2010 - 2019', partition p3 values less than (MAXVALUE) comment = '2020 and Beyond')",
+			input:  "create table pt2 (id int, date_column date, value int) partition by range (year(date_column)) (partition p1 values less than (2010) comment 'Before 2010', partition p2 values less than (2020) comment '2010 - 2019', partition p3 values less than (MAXVALUE) comment '2020 and Beyond')",
+			output: "create table pt2 (id int, date_column date, value int) partition by range (year(date_column)) (partition p1 values less than (2010) comment = 'Before 2010', partition p2 values less than (2020) comment = '2010 - 2019', partition p3 values less than (MAXVALUE) comment = '2020 and Beyond')",
+		},
+		{
+			input:  "select 'O''Brien'",
+			output: "select 'O''Brien'",
 		},
 	}
 )
@@ -3334,6 +4393,115 @@ func TestSQLStringFmt(t *testing.T) {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
 	}
+}
+
+func TestTaskKeywordIsNonReservedForIdentifiers(t *testing.T) {
+	for _, sql := range []string{
+		"create table task (task int, id int)",
+		"create table tasks (tasks int, id int)",
+	} {
+		stmt, err := ParseOne(context.TODO(), sql, 1)
+		require.NoError(t, err, sql)
+
+		createStmt, ok := stmt.(*tree.CreateTable)
+		require.True(t, ok, sql)
+		require.Len(t, createStmt.Defs, 2, sql)
+	}
+}
+
+func TestCreateSQLTaskPreservesQuotedStrings(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_quotes when ('gate' = 'gate') as begin insert into gate_sink select 'gate-ok'; select case when 1 = 1 then 'PASS' else 'FAIL' end; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.GateCondition, "'gate'")
+	require.Contains(t, createStmt.SQLBody, "'gate-ok'")
+	require.Contains(t, createStmt.SQLBody, "'PASS'")
+	require.Contains(t, createStmt.SQLBody, "'FAIL'")
+
+	formatted := tree.String(createStmt, dialect.MYSQL)
+	require.Contains(t, formatted, "'gate'")
+	require.Contains(t, formatted, "'gate-ok'")
+	require.Contains(t, formatted, "'PASS'")
+	require.Contains(t, formatted, "'FAIL'")
+}
+
+func TestCreateSQLTaskCanonicalizesANSIQuotedIdentifiers(t *testing.T) {
+	stmt, err := ParseOneWithSQLMode(
+		context.Background(),
+		`create task task_ansi as begin select "select" from "table"; end`,
+		1,
+		"ANSI_QUOTES",
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Equal(t, "select `select` from `table`", createStmt.SQLBody)
+
+	bodyStmt, err := ParseOne(context.Background(), createStmt.SQLBody, 1)
+	require.NoError(t, err)
+	bodyStmt.Free()
+}
+
+func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "create task task_time as begin select timestampdiff(hour, current_timestamp(), current_timestamp()); select extract(hour from current_timestamp()); select interval 1 hour; end", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "extract(hour, current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "INTERVAL 1 hour")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.Contains(t, formatted, "timestampdiff(hour, current_timestamp(), current_timestamp())")
+	require.Contains(t, formatted, "extract(hour, current_timestamp())")
+	require.Contains(t, formatted, "INTERVAL 1 hour")
+}
+
+func TestCreateSQLTaskPreservesComplexTimestampUnits(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), `create task task_time_complex as begin
+insert into silver_fiix_offline_tracker
+select
+    work_order_id,
+    hp_pump_code,
+    min(offline_start) as offline_start,
+    max(offline_end) as offline_end,
+    timestampdiff(hour, min(offline_start), max(offline_end)) as downtime_hours
+from t
+group by work_order_id, hp_pump_code;
+
+insert into gold_off_session_wo_match
+with proximity_match as (
+    select
+        row_number() over (
+            partition by s.pump, s.session_id
+            order by abs(timestampdiff(minute, s.session_start, wo.dtm_date_created))
+        ) as rn
+    from t
+    where abs(timestampdiff(hour, s.session_start, wo.dtm_date_created)) <= 4
+)
+select * from proximity_match;
+end`, 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateSQLTask)
+	require.True(t, ok)
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('hour'")
+	require.NotContains(t, createStmt.SQLBody, "timestampdiff('minute'")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, min(`offline_start`), max(`offline_end`))")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(minute, `s`.`session_start`, `wo`.`dtm_date_created`)")
+	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, `s`.`session_start`, `wo`.`dtm_date_created`)")
+
+	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	require.NotContains(t, formatted, "timestampdiff('hour'")
+	require.NotContains(t, formatted, "timestampdiff('minute'")
+	require.Contains(t, formatted, "timestampdiff(hour, min(`offline_start`), max(`offline_end`))")
+	require.Contains(t, formatted, "timestampdiff(minute, `s`.`session_start`, `wo`.`dtm_date_created`)")
+	require.Contains(t, formatted, "timestampdiff(hour, `s`.`session_start`, `wo`.`dtm_date_created`)")
 }
 
 var (
@@ -3483,6 +4651,10 @@ var (
 		{
 			input: "ALTER TABLE t1 ADD PARTITION (PARTITION p5 VALUES IN (15, 17)",
 		},
+		{
+			// MySQL REPLACE does not allow HIGH_PRIORITY (only LOW_PRIORITY | DELAYED).
+			input: "replace high_priority into t_mod values (1, 40)",
+		},
 	}
 )
 
@@ -3494,5 +4666,255 @@ func TestFaultTolerance(t *testing.T) {
 			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
 			continue
 		}
+	}
+}
+
+func TestLimitByRank(t *testing.T) {
+	ctx := context.TODO()
+	testCases := []struct {
+		input   string
+		output  string // expected output from tree.String
+		checkFn func(*testing.T, tree.Statement)
+	}{
+		{
+			input:  "SELECT a, b, c FROM T LIMIT 20 BY RANK WITH OPTION 'fudge_factor=3.0', 'nprobe=10'",
+			output: "select a, b, c from t limit 20 by rank with option 'fudge_factor=3.0', 'nprobe=10'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "3.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "10", selectStmt.RankOption.Option["nprobe"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=2.5', 'mode=pre'",
+			output: "select * from t limit 10 by rank with option 'fudge_factor=2.5', 'mode=pre'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "2.5", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "pre", selectStmt.RankOption.Option["mode"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 BY RANK WITH OPTION 'fudge_factor=1.0', 'mode=post'",
+			output: "select * from t limit 10 by rank with option 'fudge_factor=1.0', 'mode=post'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "1.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.Equal(t, "post", selectStmt.RankOption.Option["mode"])
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 5, 10 BY RANK WITH OPTION 'nprobe=20'",
+			output: "select * from t limit 10 offset 5 by rank with option 'nprobe=20'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "20", selectStmt.RankOption.Option["nprobe"])
+				require.NotNil(t, selectStmt.Limit.Offset)
+			},
+		},
+		{
+			input:  "SELECT * FROM T LIMIT 10 OFFSET 5 BY RANK WITH OPTION 'fudge_factor=4.0'",
+			output: "select * from t limit 10 offset 5 by rank with option 'fudge_factor=4.0'",
+			checkFn: func(t *testing.T, stmt tree.Statement) {
+				selectStmt, ok := stmt.(*tree.Select)
+				require.True(t, ok)
+				require.NotNil(t, selectStmt.Limit)
+				require.NotNil(t, selectStmt.RankOption)
+				require.NotNil(t, selectStmt.RankOption.Option)
+				require.Equal(t, "4.0", selectStmt.RankOption.Option["fudge_factor"])
+				require.NotNil(t, selectStmt.Limit.Offset)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			ast, err := ParseOne(ctx, tc.input, 1)
+			require.NoError(t, err, "Failed to parse: %s", tc.input)
+			if tc.checkFn != nil {
+				tc.checkFn(t, ast)
+			}
+			// Test tree.String conversion
+			if tc.output != "" {
+				out := tree.String(ast, dialect.MYSQL)
+				require.Equal(t, tc.output, out, "tree.String output mismatch for input: %s", tc.input)
+			}
+		})
+	}
+}
+
+// Test WITH clause support for INSERT statement (Issue #22583)
+func TestWithInsert(t *testing.T) {
+	tests := []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "WITH cte AS (SELECT * FROM t1) INSERT INTO t2 SELECT * FROM cte",
+			output: "with cte as (select * from t1) insert into t2 select * from cte",
+		},
+		{
+			input:  "WITH cte AS (SELECT id, name FROM t1 WHERE id > 10) INSERT INTO t2 SELECT * FROM cte",
+			output: "with cte as (select id, name from t1 where id > 10) insert into t2 select * from cte",
+		},
+		{
+			input:  "WITH cte1 AS (SELECT * FROM t1), cte2 AS (SELECT * FROM cte1) INSERT INTO t2 SELECT * FROM cte2",
+			output: "with cte1 as (select * from t1), cte2 as (select * from cte1) insert into t2 select * from cte2",
+		},
+		{
+			input:  "WITH RECURSIVE cte AS (SELECT 1 AS n UNION ALL SELECT n+1 FROM cte WHERE n < 10) INSERT INTO t SELECT * FROM cte",
+			output: "with recursive cte as (select 1 as n union all select n + 1 from cte where n < 10) insert into t select * from cte",
+		},
+		{
+			input:  "WITH cte AS (SELECT * FROM t1) INSERT INTO t2 (id, name) SELECT id, name FROM cte",
+			output: "with cte as (select * from t1) insert into t2 (id, name) select id, name from cte",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.input, 1)
+			require.NoError(t, err)
+			require.NotNil(t, ast)
+
+			// Verify it's an INSERT statement
+			ins, ok := ast.(*tree.Insert)
+			require.True(t, ok, "Expected *tree.Insert, got %T", ast)
+
+			// Verify WITH clause is present
+			require.NotNil(t, ins.With, "INSERT.With should not be nil")
+			require.Greater(t, len(ins.With.CTEs), 0, "WITH clause should have at least one CTE")
+
+			// Verify the statement can be formatted back
+			output := tree.String(ast, dialect.MYSQL)
+			require.Equal(t, test.output, output)
+		})
+	}
+}
+
+// Test that WITH clause is properly passed to SELECT in INSERT
+func TestWithInsertCTEPropagation(t *testing.T) {
+	sql := "WITH cte AS (SELECT * FROM t1) INSERT INTO t2 SELECT * FROM cte"
+	ast, err := ParseOne(context.TODO(), sql, 1)
+	require.NoError(t, err)
+
+	ins, ok := ast.(*tree.Insert)
+	require.True(t, ok)
+	require.NotNil(t, ins.With)
+	require.Equal(t, 1, len(ins.With.CTEs))
+	require.Equal(t, "cte", string(ins.With.CTEs[0].Name.Alias))
+
+	// Verify Rows is a SELECT statement
+	require.NotNil(t, ins.Rows)
+	require.NotNil(t, ins.Rows.Select)
+}
+
+func TestSpatialColumnTypes(t *testing.T) {
+	tests := []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create table t (g geometry)",
+			output: "create table t (g geometry)",
+		},
+		{
+			input:  "create table t (g point)",
+			output: "create table t (g point)",
+		},
+		{
+			input:  "create table t (g linestring)",
+			output: "create table t (g linestring)",
+		},
+		{
+			input:  "create table t (g polygon)",
+			output: "create table t (g polygon)",
+		},
+		{
+			input:  "create table t (g geometrycollection)",
+			output: "create table t (g geometrycollection)",
+		},
+		{
+			input:  "create table t (g multipoint)",
+			output: "create table t (g multipoint)",
+		},
+		{
+			input:  "create table t (g multilinestring)",
+			output: "create table t (g multilinestring)",
+		},
+		{
+			input:  "create table t (g multipolygon)",
+			output: "create table t (g multipolygon)",
+		},
+		{
+			input:  "create table t (g point srid 4326)",
+			output: "create table t (g point srid 4326)",
+		},
+		{
+			input:  "create table t (g point not null srid 4326)",
+			output: "create table t (g point not null srid 4326)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.input, 1)
+			require.NoError(t, err)
+			require.NotNil(t, ast)
+			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}
+
+func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
+	tests := []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create table t (a int srid 4326)",
+			output: "create table t (a int srid 4326)",
+		},
+		{
+			input:  "create table t (a varchar(20) srid 4326)",
+			output: "create table t (a varchar(20) srid 4326)",
+		},
+		{
+			input:  "create table t (a decimal(10,2) srid 4326)",
+			output: "create table t (a decimal(10, 2) srid 4326)",
+		},
+		{
+			input:  "alter table t add column a int srid 4326",
+			output: "alter table t add column a int srid 4326",
+		},
+		{
+			input:  "alter table t modify column a int srid 4326",
+			output: "alter table t modify column a int srid 4326",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.input, 1)
+			require.NoError(t, err)
+			require.NotNil(t, ast)
+			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
 	}
 }

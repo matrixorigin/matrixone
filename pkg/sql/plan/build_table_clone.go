@@ -15,7 +15,16 @@
 package plan
 
 import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -26,15 +35,9 @@ func buildCloneTable(
 ) (*Plan, error) {
 
 	var (
-		err error
-
-		id int32
-
+		err       error
 		srcTblDef *TableDef
-
-		srcObj *ObjectRef
-
-		query *Query
+		srcObj    *ObjectRef
 
 		createTablePlan *Plan
 
@@ -76,50 +79,210 @@ func buildCloneTable(
 		builder.compCtx.SetSnapshot(bindCtx.snapshot)
 	}
 
-	srcTableName := stmt.SrcTable.Name()
-	srcDatabaseName := stmt.SrcTable.Schema()
 	if srcObj, srcTblDef, err = builder.compCtx.Resolve(
-		srcDatabaseName.String(), srcTableName.String(), bindCtx.snapshot,
+		string(stmt.SrcTable.Schema()), string(stmt.SrcTable.Name()), bindCtx.snapshot,
 	); err != nil {
 		return nil, err
-	} else if srcTblDef == nil {
+	} else if srcTblDef == nil || srcObj == nil {
 		return nil, moerr.NewParseErrorf(builder.GetContext(),
-			"table %v-%v does not exist", srcDatabaseName.String(), srcTableName.String())
+			"table %v-%v does not exist", stmt.SrcTable.Schema(), stmt.SrcTable.Name())
 	}
 
-	dstTblDef := DeepCopyTableDef(srcTblDef, true)
-	dstTblDef.Name = stmt.CreateTable.Table.ObjectName.String()
-	dstTblDef.DbName = stmt.CreateTable.Table.SchemaName.String()
+	var (
+		dstTableName    string
+		dstDatabaseName string
+	)
 
-	if dstTblDef.DbName == "" {
-		dstTblDef.DbName = ctx.DefaultDatabase()
+	dstTableName = stmt.CreateTable.Table.ObjectName.String()
+	dstDatabaseName = stmt.CreateTable.Table.SchemaName.String()
+
+	if dstDatabaseName == "" {
+		dstDatabaseName = ctx.DefaultDatabase()
 	}
 
-	id = builder.appendNode(&plan.Node{
-		ObjRef:       srcObj,
-		NodeType:     plan.Node_TABLE_CLONE,
-		TableDef:     srcTblDef,
-		ScanSnapshot: bindCtx.snapshot,
-		InsertCtx: &plan.InsertCtx{
-			TableDef: dstTblDef,
+	var (
+		opAccount  uint32
+		dstAccount uint32
+		srcAccount uint32
+	)
+
+	if opAccount, err = ctx.GetAccountId(); err != nil {
+		return nil, err
+	}
+
+	dstAccount = opAccount
+	srcAccount = opAccount
+
+	if stmt.IsRestoreByTS {
+		dstAccount = stmt.ToAccountId
+		srcAccount = stmt.FromAccount
+	}
+
+	if bindCtx.snapshot != nil && bindCtx.snapshot.Tenant != nil {
+		srcAccount = bindCtx.snapshot.Tenant.TenantID
+	}
+
+	var subMeta *plan.SubscriptionMeta
+	if srcObj.PubInfo != nil {
+		if subMeta, err = ctx.GetSubscriptionMeta(
+			string(stmt.SrcTable.SchemaName), bindCtx.snapshot,
+		); err != nil {
+			return nil, err
+		}
+		stmt.SrcTable.ObjectName = tree.Identifier(srcTblDef.Name)
+		stmt.SrcTable.SchemaName = tree.Identifier(srcTblDef.DbName)
+	}
+
+	stmt.StmtType = tree.DecideCloneStmtType(
+		ctx.GetContext(), stmt,
+		srcTblDef.DbName, dstDatabaseName,
+		dstAccount, srcAccount, subMeta,
+	)
+
+	if err = checkPrivilege(
+		ctx.GetContext(),
+		opAccount, srcAccount, subMeta,
+		srcTblDef, dstDatabaseName,
+		bindCtx.snapshot, stmt.StmtType,
+	); err != nil {
+		return nil, err
+	}
+
+	if createTablePlan, err = buildCreateTable(ctx, &stmt.CreateTable, stmt, false); err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_TABLE_WITH_CLONE,
+				Definition: &plan.DataDefinition_CloneTable{
+					CloneTable: &plan.CloneTable{
+						SrcTableDef:     srcTblDef,
+						SrcObjDef:       srcObj,
+						DstDatabaseName: dstDatabaseName,
+						DstTableName:    dstTableName,
+						CreateTable:     createTablePlan,
+						ScanSnapshot:    bindCtx.snapshot,
+					},
+				},
+			},
 		},
-		BindingTags: []int32{builder.genNewTag()},
-	}, bindCtx)
+	}, nil
+}
 
-	builder.qry.Steps = append(builder.qry.Steps, id)
-	builder.qry.Nodes[0].Stats.ForceOneCN = true
-	builder.skipStats = true
+func checkPrivilege(
+	ctx context.Context,
+	opAccount uint32,
+	srcAccount uint32,
+	subMeta *plan.SubscriptionMeta,
+	srcTblDef *TableDef,
+	dstDatabaseName string,
+	scanSnapshot *Snapshot,
+	cloneType tree.CloneStmtType,
+) (err error) {
 
-	if createTablePlan, err = buildCreateTable(&stmt.CreateTable, ctx); err != nil {
-		return nil, err
+	var (
+		misMsg string
+
+		snapshotMisMatch = false
+	)
+
+	if scanSnapshot != nil && scanSnapshot.ExtraInfo != nil {
+		switch scanSnapshot.ExtraInfo.Level {
+		case tree.SNAPSHOTLEVELCLUSTER.String():
+		case tree.SNAPSHOTLEVELACCOUNT.String():
+			if scanSnapshot.ExtraInfo.ObjId != uint64(srcAccount) {
+				misMsg = fmt.Sprintf(
+					"account-level snapshot(%s) does not belong to the account(%d)",
+					scanSnapshot.ExtraInfo.Name, srcAccount,
+				)
+				snapshotMisMatch = true
+			}
+		case tree.SNAPSHOTLEVELDATABASE.String():
+			if cloneType == tree.CloneCluster || cloneType == tree.CloneAccount {
+				snapshotMisMatch = true
+				misMsg = "cannot use a database-level snapshot to clone cluster/account"
+			} else if scanSnapshot.ExtraInfo.ObjId != uint64(srcTblDef.DbId) {
+				snapshotMisMatch = true
+				misMsg = fmt.Sprintf(
+					"database-level snapshot(%s) does not belong to the database(%s)",
+					scanSnapshot.ExtraInfo.Name, srcTblDef.DbName,
+				)
+			}
+		case tree.SNAPSHOTLEVELTABLE.String():
+			if cloneType == tree.CloneCluster || cloneType == tree.CloneAccount ||
+				cloneType == tree.WithinAccCloneDB || cloneType == tree.BetweenAccCloneDB {
+				snapshotMisMatch = true
+				misMsg = "cannot use a table-level snapshot to clone cluster/account/database"
+			} else if scanSnapshot.ExtraInfo.ObjId != uint64(srcTblDef.TblId) {
+				misMsg = fmt.Sprintf(
+					"table-level snapshot(%s) does not belong to the table(%s-%s)",
+					scanSnapshot.ExtraInfo.Name, srcTblDef.DbName, srcTblDef.Name,
+				)
+				snapshotMisMatch = true
+			}
+		}
 	}
 
-	if query, err = builder.createQuery(); err != nil {
-		return nil, err
+	if snapshotMisMatch {
+		logutil.Error(
+			"SNAPSHOT-MISMATCH",
+			zap.String("snapshot",
+				fmt.Sprintf("%s-%s-%d",
+					scanSnapshot.ExtraInfo.Name,
+					scanSnapshot.ExtraInfo.Level,
+					scanSnapshot.ExtraInfo.ObjId)),
+			zap.String("table",
+				fmt.Sprintf("%s(%d)-%s(%d)",
+					srcTblDef.DbName,
+					srcTblDef.DbId,
+					srcTblDef.Name,
+					srcTblDef.TblId)),
+		)
+
+		return moerr.NewInternalErrorNoCtx(misMsg)
 	}
 
-	createTablePlan.Plan.(*plan.Plan_Ddl).Ddl.Query = query
-	createTablePlan.Plan.(*plan.Plan_Ddl).Ddl.DdlType = plan.DataDefinition_CREATE_TABLE_WITH_CLONE
+	// 1. only sys can clone from system databases
+	// 2. sys and non-sys both cannot clone to system database
+	// 3. if this is a restore clone stmt, skip this check
 
-	return createTablePlan, nil
+	if val := ctx.Value(tree.CloneLevelCtxKey{}); val != nil {
+		switch val.(tree.CloneLevelType) {
+		case tree.RestoreCloneLevelAccount,
+			tree.RestoreCloneLevelCluster,
+			tree.RestoreCloneLevelDatabase,
+			tree.RestoreCloneLevelTable:
+			// skip this check
+			return nil
+		default:
+		}
+	}
+
+	var (
+		typ int
+	)
+
+	if slices.Index(
+		catalog.SystemDatabases, strings.ToLower(srcTblDef.DbName),
+	) != -1 {
+		// clone from system databases
+		typ = 1
+	} else if slices.Index(
+		catalog.SystemDatabases, strings.ToLower(dstDatabaseName),
+	) != -1 {
+		// clone to a system database
+		typ = 2
+	}
+
+	if typ == 2 {
+		return moerr.NewInternalErrorNoCtx("cannot clone data into system database")
+	} else if typ == 1 {
+		if opAccount != catalog.System_Account {
+			return moerr.NewInternalErrorNoCtx("non-sys account cannot clone data from system database")
+		}
+	}
+
+	return nil
 }

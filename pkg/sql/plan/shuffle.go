@@ -19,6 +19,7 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -96,6 +97,13 @@ func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(h) % upperLimit
 }
 
+// IVFObjectIDHashToRange maps the complete physical ObjectID to an IVF owner.
+// xxHash64 is deterministic across processes and provides uniform mixing for
+// production UUIDv7 ObjectIDs, whose timestamp prefix changes slowly.
+func IVFObjectIDHashToRange(objectID types.Objectid, upperLimit uint64) uint64 {
+	return xxhash.Sum64(objectID[:]) % upperLimit
+}
+
 func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
@@ -161,6 +169,10 @@ func CalcRangeShuffleIDXForObj(rsp *engine.RangesShuffleParam, objstats *objecti
 func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats) bool {
 	if rsp == nil || rsp.CNCNT <= 1 || rsp.Node == nil {
 		return false
+	}
+	if rsp.ShuffleByObjectID {
+		objID := objstats.ObjectLocation().ObjectId()
+		return IVFObjectIDHashToRange(objID, uint64(rsp.CNCNT)) != uint64(rsp.CNIDX)
 	}
 	if objstats.GetAppendable() {
 		//aobj always shuffle to local CN
@@ -367,7 +379,10 @@ func GetRangeShuffleIndexUnsignedSlice(val []uint64, currentVal uint64) uint64 {
 func GetHashColumn(expr *plan.Expr) (*plan.ColRef, int32) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		//do not support shuffle on expr for now. will improve this in the future
+		// support shuffle on serial_full/serial function expressions used in secondary index joins
+		if exprImpl.F.Func.ObjName == "serial_full" || exprImpl.F.Func.ObjName == "serial" {
+			return nil, expr.Typ.Id
+		}
 		return nil, -1
 	case *plan.Expr_Col:
 		return exprImpl.Col, expr.Typ.Id
@@ -446,49 +461,68 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 	}
 
 	w := builder.getStatsInfoByTableID(tableDef.TblId)
-	if w == nil {
+	if w == nil || w.GetStats() == nil {
 		return
 	}
+	s := w.GetStats()
 	if node.NodeType == plan.Node_AGG {
-		if shouldUseHashShuffle(w.Stats.ShuffleRangeMap[colName]) {
+		if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
 			return
 		}
 	}
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-	node.Stats.HashmapStats.ShuffleColMin = int64(w.Stats.MinValMap[colName])
-	node.Stats.HashmapStats.ShuffleColMax = int64(w.Stats.MaxValMap[colName])
-	node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(w.Stats.ShuffleRangeMap[colName], colName)
-	node.Stats.HashmapStats.Nullcnt = int64(w.Stats.NullCntMap[colName])
+	node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
+	node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
+	node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName], colName)
+	node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
 }
 
 // to determine if join need to go shuffle
 func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
+	determineShuffleForJoinWithColRefMode(node, builder, false)
+}
+
+// determineShuffleForJoinWithColRefMode plans join shuffle either before or
+// after column remapping. Normal optimizer plans use binding tags to identify
+// the two join sides. Late DML/index-maintenance plans are appended after
+// createQuery has remapped column references to local RelPos 0/1, so they must
+// use the positional form instead.
+func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilder, afterRemap bool) {
 	// do not shuffle by default
 	node.Stats.HashmapStats.ShuffleColIdx = -1
 	if node.NodeType != plan.Node_JOIN {
 		return
 	}
+
 	switch node.JoinType {
 	case plan.Node_DEDUP:
-		if node.OnDuplicateAction == plan.Node_FAIL && len(node.GetDedupJoinCtx().GetOldColList()) > 0 {
+		dedupJoinCtx := node.GetDedupJoinCtx()
+		if len(dedupJoinCtx.GetOldColCaptureList()) > 0 {
+			return
+		}
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(dedupJoinCtx.GetOldColList()) > 0 {
 			return
 		}
 
 		if node.IsRightJoin {
-			break
+			leftChild := builder.qry.Nodes[node.Children[0]]
+			if leftChild.Stats.Outcnt <= 200000 {
+				return
+			}
+		} else {
+			rightChild := builder.qry.Nodes[node.Children[1]]
+			if rightChild.Stats.Outcnt > 320000 && !dedupJoinUsesUnsupportedFloatShuffle(node) {
+				// Large DEDUP joins normally use hash shuffle. FLOAT hash shuffle is
+				// not supported yet, so those joins stay single-CN and spill locally.
+				node.Stats.HashmapStats.Shuffle = true
+				node.Stats.HashmapStats.ShuffleColIdx = 0
+				node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+			}
+
+			return
 		}
 
-		rightChild := builder.qry.Nodes[node.Children[1]]
-		if rightChild.Stats.Outcnt > 320000 {
-			//dedup join always go hash shuffle, optimize this in the future
-			node.Stats.HashmapStats.Shuffle = true
-			node.Stats.HashmapStats.ShuffleColIdx = 0
-			node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
-		}
-
-		return
-
-	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT:
+	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_OUTER:
 
 	default:
 		return
@@ -500,7 +534,13 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	}
 
 	idx := 0
-	if !builder.IsEquiJoin(node) {
+	isEquiJoin := false
+	if afterRemap {
+		isEquiJoin = IsEquiJoin2(node.OnList)
+	} else {
+		isEquiJoin = builder.IsEquiJoin(node)
+	}
+	if !isEquiJoin {
 		return
 	}
 	leftTags := make(map[int32]bool)
@@ -513,12 +553,15 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	}
 	// for now ,only support the first join condition
 	for i := range node.OnList {
-		if isEquiCond(node.OnList[i], leftTags, rightTags) {
+		isEqui := isEquiCond(node.OnList[i], leftTags, rightTags)
+		if afterRemap {
+			isEqui = isEquiCond2(node.OnList[i])
+		}
+		if isEqui {
 			idx = i
 			break
 		}
 	}
-
 	if node.IsRightJoin {
 		if node.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
 			return
@@ -542,19 +585,32 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	}
 
 	leftHashCol, typ := GetHashColumn(expr0)
-	if leftHashCol == nil {
+	if leftHashCol == nil && typ == -1 {
 		return
 	}
-	rightHashCol, _ := GetHashColumn(expr1)
-	if rightHashCol == nil {
+	rightHashCol, rightTyp := GetHashColumn(expr1)
+	if rightHashCol == nil && rightTyp == -1 {
 		return
 	}
+
 	//for now ,only support integer and string type
+	isExprBasedShuffle := leftHashCol == nil || rightHashCol == nil
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		node.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		node.Stats.HashmapStats.Shuffle = true
-		determineShuffleType(leftHashCol, node, builder)
+		if leftHashCol != nil && !isExprBasedShuffle {
+			determineShuffleType(leftHashCol, node, builder)
+		}
+		// For expression-based shuffle (serial_full/serial in join condition):
+		// Force hash shuffle because range shuffle depends on column stats (min/max/ranges)
+		// which don't apply to expression results. Hash shuffle works universally.
+		if isExprBasedShuffle {
+			node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+			if node.OnList[idx].Ndv < 0 {
+				node.OnList[idx].Ndv = node.Stats.HashmapStats.HashmapSize
+			}
+		}
 	}
 
 	//recheck shuffle plan
@@ -562,12 +618,17 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
 			node.Stats.HashmapStats.Shuffle = false
 		}
+
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range && node.Stats.HashmapStats.Ranges == nil && node.Stats.HashmapStats.ShuffleColMax-node.Stats.HashmapStats.ShuffleColMin < 100000 {
 			node.Stats.HashmapStats.Shuffle = false
 		}
 		if node.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
 			highestNDV := node.OnList[idx].Ndv
-			if highestNDV < ShuffleThreshHoldOfNDV {
+			// A negative NDV means that statistics are unavailable.  Do not treat
+			// unknown cardinality as low cardinality: for a large build side that
+			// would turn a valid shuffle plan back into a broadcast hash build and
+			// can concentrate the entire hash table on one CN.
+			if highestNDV >= 0 && highestNDV < ShuffleThreshHoldOfNDV {
 				node.Stats.HashmapStats.Shuffle = false
 			}
 		}
@@ -575,7 +636,28 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
 			node.Stats.HashmapStats.Shuffle = false
 		}
+
+		if node.JoinType == plan.Node_DEDUP && node.IsRightJoin && node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+			rightChild := builder.qry.Nodes[node.Children[1]]
+			rightChild.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+			rightChild.Stats.HashmapStats.ShuffleColIdx = node.Stats.HashmapStats.ShuffleColIdx
+			rightChild.Stats.HashmapStats.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
+			rightChild.Stats.HashmapStats.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
+			rightChild.Stats.HashmapStats.Ranges = node.Stats.HashmapStats.Ranges
+		}
 	}
+}
+
+func dedupJoinUsesUnsupportedFloatShuffle(node *plan.Node) bool {
+	if len(node.OnList) == 0 {
+		return false
+	}
+	condition := node.OnList[0].GetF()
+	if condition == nil || len(condition.Args) == 0 {
+		return false
+	}
+	keyType := types.T(condition.Args[0].Typ.Id)
+	return keyType == types.T_float32 || keyType == types.T_float64
 }
 
 // find mergegroup or mergegroup->filter node
@@ -653,7 +735,7 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 				case *plan.Expr_F:
 					for _, arg := range exprImpl.F.Args {
 						joinHashCol, _ := GetHashColumn(arg)
-						if groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
+						if joinHashCol != nil && groupHashCol != nil && groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
 							node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
 							return
 						}
@@ -663,43 +745,6 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		}
 	}
 
-}
-
-func getShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
-	if ncpu <= 4 {
-		ncpu = 4
-	}
-	maxret := ncpu * 4
-	// these magic number comes from hashmap resize factor. see hashtable/common.go, in maxElemCnt function
-	ret1 := int(hashmapSize/float64(lencn)/12800000) + 1
-	if ret1 >= maxret {
-		return maxret
-	}
-
-	ret2 := int(hashmapSize/float64(lencn)/6000000) + 1
-	if ret2 >= maxret {
-		return ret1
-	}
-	ret3 := int(hashmapSize/float64(lencn)/320000) + 1
-	if ret3 <= ncpu/2 {
-		return ncpu
-	}
-	if ret3 >= maxret-1 {
-		return maxret
-	}
-	if ret3 <= ncpu {
-		if ncpu*2 > maxret {
-			return maxret
-		} else {
-			return ncpu * 2
-		}
-	}
-	ret4 := (ret3/ncpu + 1) * ncpu
-	if ret4 > maxret {
-		return maxret
-	} else {
-		return ret4
-	}
 }
 
 // default shuffle type for scan is hash
@@ -712,7 +757,7 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 		return
 	}
 	w := builder.getStatsInfoByTableID(node.TableDef.TblId)
-	if w == nil {
+	if w == nil || w.GetStats() == nil {
 		return
 	}
 
@@ -725,7 +770,8 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 		firstSortColName = node.TableDef.Pkey.Names[0]
 	}
 
-	if w.Stats.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
+	s := w.GetStats()
+	if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
 		return
 	}
 	firstSortColID, ok := node.TableDef.Name2ColIndex[firstSortColName]
@@ -737,21 +783,29 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 		types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 		node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 		node.Stats.HashmapStats.ShuffleColIdx = node.TableDef.Cols[firstSortColID].Typ.Id // actually this is specially used for sort key column type
-		node.Stats.HashmapStats.ShuffleColMin = int64(w.Stats.MinValMap[firstSortColName])
-		node.Stats.HashmapStats.ShuffleColMax = int64(w.Stats.MaxValMap[firstSortColName])
-		node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(w.Stats.ShuffleRangeMap[firstSortColName], firstSortColName)
-		node.Stats.HashmapStats.Nullcnt = int64(w.Stats.NullCntMap[firstSortColName])
+		node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
+		node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstSortColName])
+		node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName], firstSortColName)
+		node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[firstSortColName])
 	}
 }
 
 func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
+	determineShuffleMethodWithColRefMode(nodeID, builder, false)
+}
+
+func determineShuffleMethodAfterRemap(nodeID int32, builder *QueryBuilder) {
+	determineShuffleMethodWithColRefMode(nodeID, builder, true)
+}
+
+func determineShuffleMethodWithColRefMode(nodeID int32, builder *QueryBuilder, afterRemap bool) {
 	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 1 {
 		return
 	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			determineShuffleMethod(child, builder)
+			determineShuffleMethodWithColRefMode(child, builder, afterRemap)
 		}
 	}
 	switch node.NodeType {
@@ -760,7 +814,7 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	case plan.Node_TABLE_SCAN:
 		determineShuffleForScan(node, builder)
 	case plan.Node_JOIN:
-		determineShuffleForJoin(node, builder)
+		determineShuffleForJoinWithColRefMode(node, builder, afterRemap)
 	default:
 	}
 }

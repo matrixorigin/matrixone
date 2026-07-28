@@ -18,27 +18,12 @@ import (
 	"container/heap"
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"os"
-	"strings"
 	"sync"
-
-	usearch "github.com/unum-cloud/usearch/golang"
 )
-
-/*
-quantization := map[string]usearch.Quantization{"BF16": usearch.BF16, "F16": usearch.F16,
-
-	"F32": usearch.F32, "F64": usearch.F64, "I8": usearch.I8, "B1": usearch.B1}
-*/
-func QuantizationValid(a string) (usearch.Quantization, bool) {
-	q := strings.ToUpper(a)
-	// we can only support below quantization
-	quantization := map[string]usearch.Quantization{"F16": usearch.F16,
-		"F32": usearch.F32, "I8": usearch.I8}
-	r, ok := quantization[q]
-	return r, ok
-}
 
 // get the checksum of the file
 func CheckSum(path string) (string, error) {
@@ -55,6 +40,11 @@ func CheckSum(path string) (string, error) {
 	chksum := hex.EncodeToString(h.Sum(nil))
 
 	return chksum, nil
+}
+
+func CheckSumFromBuffer(b []byte) string {
+	chksum := fmt.Sprintf("%x", md5.Sum(b))
+	return chksum
 }
 
 // Priority Queue/Heap structure for getting N-Best results from multiple mini-indexes
@@ -106,15 +96,58 @@ func (h *SearchResultHeap) Pop() any {
 	return item
 }
 
-// Thread-safe Heap struct
-type SearchResultSafeHeap struct {
-	mutex   sync.Mutex
-	resheap SearchResultHeap
+type SearchResultMaxHeap []SearchResultIf
+
+func (h SearchResultMaxHeap) Len() int { return len(h) }
+
+func (h SearchResultMaxHeap) Less(i, j int) bool {
+	return h[i].GetDistance() > h[j].GetDistance()
 }
 
-func NewSearchResultSafeHeap(size int) *SearchResultSafeHeap {
-	h := &SearchResultSafeHeap{}
-	h.resheap = make(SearchResultHeap, 0, size)
+func (h SearchResultMaxHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *SearchResultMaxHeap) Push(x any) {
+	item := x.(SearchResultIf)
+	*h = append(*h, item)
+}
+
+func (h *SearchResultMaxHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil
+	*h = old[0 : n-1]
+	return item
+}
+
+// Thread-safe Heap struct
+// maxHeapPrealloc caps the heap's INITIAL allocation so a very large limit does not
+// preallocate a huge slice up front; the heap still grows on demand up to its limit.
+const maxHeapPrealloc = 1 << 20
+
+// SearchResultSafeHeap is a concurrency-safe BOUNDED top-K heap: it retains only the
+// `limit` smallest-distance results, evicting the current worst once full. This bounds
+// peak merge memory to O(limit) even when many index shards each contribute up to `limit`
+// candidates, instead of O(shard_count * limit) (#25637). It is a max-heap internally, so
+// the root is the worst (largest distance) of the retained set and is evicted in O(log k).
+type SearchResultSafeHeap struct {
+	mutex   sync.Mutex
+	limit   int
+	resheap SearchResultMaxHeap
+}
+
+func NewSearchResultSafeHeap(limit int) *SearchResultSafeHeap {
+	prealloc := limit
+	if prealloc > maxHeapPrealloc {
+		prealloc = maxHeapPrealloc
+	}
+	if prealloc < 0 {
+		prealloc = 0
+	}
+	h := &SearchResultSafeHeap{limit: limit}
+	h.resheap = make(SearchResultMaxHeap, 0, prealloc)
 	heap.Init(&h.resheap)
 	return h
 }
@@ -125,16 +158,157 @@ func (h *SearchResultSafeHeap) Len() int {
 	return h.resheap.Len()
 }
 
+// Push retains srif only if the heap is not yet full, or srif is closer (smaller distance)
+// than the current worst retained result — in which case it evicts that worst. Otherwise
+// srif is discarded. Safe for concurrent callers.
 func (h *SearchResultSafeHeap) Push(srif SearchResultIf) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
-	heap.Push(&h.resheap, srif)
+	if h.limit <= 0 {
+		return
+	}
+	if h.resheap.Len() < h.limit {
+		heap.Push(&h.resheap, srif)
+		return
+	}
+	// Full: replace the worst (root of the max-heap) iff srif is strictly better.
+	if srif.GetDistance() < h.resheap[0].GetDistance() {
+		h.resheap[0] = srif
+		heap.Fix(&h.resheap, 0)
+	}
 }
 
+// Pop removes and returns the current WORST (largest distance) retained result. Callers
+// draining for ascending (nearest-first) output should fill their result buffer back-to-front.
 func (h *SearchResultSafeHeap) Pop() SearchResultIf {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 	x := heap.Pop(&h.resheap).(SearchResultIf)
 	return x
+}
+
+// HeapKeyType is the constraint for keys stored in FastMaxHeap.
+type HeapKeyType interface {
+	int64 | uint32 | int32
+}
+
+// FastMaxHeap is a highly optimized, generic bounded max-heap designed specifically for
+// vector search Top-K operations.
+//
+// Benefits over standard container/heap:
+//  1. Zero Interface Boxing: By using generics and specific array layouts, it completely avoids
+//     the heap-escape "boxing" allocations caused by passing interface{} around.
+//  2. Struct of Arrays (SoA): Uses independent slices for keys and distances rather than an
+//     Array of Structs (AoS). This dramatically improves CPU cache locality during distance
+//     comparisons.
+//  3. Inline Array Reuse: Requires passing pre-allocated backing buffers to ensure zero
+//     allocations inside tight loops.
+//  4. Bounded Logic: Natively handles "Limit/K" bounded sizing directly during the push step,
+//     reducing structural overhead.
+type FastMaxHeap[T types.RealNumbers, K HeapKeyType] struct {
+	keys      []K
+	distances []T
+	size      int
+	limit     int
+}
+
+// NewFastMaxHeap initializes the FastMaxHeap using caller-provided buffer slices
+// to guarantee zero-allocation operations during tight query loops.
+func NewFastMaxHeap[T types.RealNumbers, K HeapKeyType](limit int, keysBuf []K, distsBuf []T) *FastMaxHeap[T, K] {
+	return &FastMaxHeap[T, K]{
+		keys:      keysBuf,
+		distances: distsBuf,
+		size:      0,
+		limit:     limit,
+	}
+}
+
+func (h *FastMaxHeap[T, K]) siftUp(j int) {
+	for {
+		i := (j - 1) / 2 // parent
+		if i == j || h.distances[j] <= h.distances[i] {
+			break
+		}
+		h.distances[i], h.distances[j] = h.distances[j], h.distances[i]
+		h.keys[i], h.keys[j] = h.keys[j], h.keys[i]
+		j = i
+	}
+}
+
+func (h *FastMaxHeap[T, K]) siftDown(i0, n int) {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 { // j1 < 0 after int overflow
+			break
+		}
+		j := j1 // left child
+		if j2 := j1 + 1; j2 < n && h.distances[j2] > h.distances[j1] {
+			j = j2 // right child
+		}
+		if h.distances[j] <= h.distances[i] {
+			break
+		}
+		h.distances[i], h.distances[j] = h.distances[j], h.distances[i]
+		h.keys[i], h.keys[j] = h.keys[j], h.keys[i]
+		i = j
+	}
+}
+
+// Push inserts a new element into the max-heap. If the heap is at its limit,
+// it replaces the maximum (root) element if the new distance is smaller.
+func (h *FastMaxHeap[T, K]) Push(key K, dist T) {
+	if h.size < h.limit {
+		h.distances[h.size] = dist
+		h.keys[h.size] = key
+		h.siftUp(h.size)
+		h.size++
+	} else if dist < h.distances[0] {
+		h.distances[0] = dist
+		h.keys[0] = key
+		h.siftDown(0, h.limit)
+	}
+}
+
+// Pop extracts the element with the largest distance from the max-heap.
+func (h *FastMaxHeap[T, K]) Pop() (K, T, bool) {
+	if h.size == 0 {
+		var zero K
+		return zero, 0, false
+	}
+	h.size--
+	key := h.keys[0]
+	dist := h.distances[0]
+
+	h.keys[0] = h.keys[h.size]
+	h.distances[0] = h.distances[h.size]
+	h.siftDown(0, h.size)
+
+	return key, dist, true
+}
+
+// Thread-safe wrapper for FastMaxHeap
+type FastMaxHeapSafe[T types.RealNumbers, K HeapKeyType] struct {
+	mutex sync.Mutex
+	heap  *FastMaxHeap[T, K]
+}
+
+// NewFastMaxHeapSafe creates a thread-safe FastMaxHeap
+func NewFastMaxHeapSafe[T types.RealNumbers, K HeapKeyType](limit int, keysBuf []K, distsBuf []T) *FastMaxHeapSafe[T, K] {
+	return &FastMaxHeapSafe[T, K]{
+		heap: NewFastMaxHeap[T, K](limit, keysBuf, distsBuf),
+	}
+}
+
+func (s *FastMaxHeapSafe[T, K]) Push(key K, dist T) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.heap.Push(key, dist)
+}
+
+func (s *FastMaxHeapSafe[T, K]) Pop() (K, T, bool) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.heap.Pop()
 }

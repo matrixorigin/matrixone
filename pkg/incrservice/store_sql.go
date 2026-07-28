@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -42,7 +43,7 @@ func (c AutoColumn) getInsertSQL() string {
 		values(%d, '%s', %d, %d, %d)`,
 		incrTableName,
 		c.TableID,
-		c.ColName,
+		sqlquote.EscapeString(c.ColName),
 		c.ColIndex,
 		c.Offset,
 		c.Step)
@@ -106,7 +107,7 @@ func (s *sqlStore) Allocate(
 	fetchSQL := fmt.Sprintf(`select offset, step from %s where table_id = %d and col_name = '%s' for update`,
 		incrTableName,
 		tableID,
-		colName)
+		sqlquote.EscapeString(colName))
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp).
@@ -127,7 +128,9 @@ func (s *sqlStore) Allocate(
 		}
 	}
 	retry := false
+	retryCnt := 3
 	for {
+		retry = false
 		err := s.exec.ExecTxn(
 			ctx,
 			func(te executor.TxnExecutor) error {
@@ -137,13 +140,8 @@ func (s *sqlStore) Allocate(
 				if err != nil {
 					return err
 				}
-				rows := 0
-				res.ReadRows(func(_ int, cols []*vector.Vector) bool {
-					current = executor.GetFixedRows[uint64](cols[0])[0]
-					step = executor.GetFixedRows[uint64](cols[1])[0]
-					rows++
-					return true
-				})
+				var rows int
+				current, step, rows = readSingleOffsetStep(res)
 				res.Close()
 
 				if rows != 1 {
@@ -152,14 +150,26 @@ func (s *sqlStore) Allocate(
 						return err
 					}
 					trace.GetService(s.ls.GetConfig().ServiceID).Sync()
-					getLogger(s.ls.GetConfig().ServiceID).Fatal("BUG: read incr record invalid",
-						zap.String("fetch-sql", fetchSQL),
+					if ctxDone() {
+						return ctx.Err()
+					}
+
+					fields := []zap.Field{zap.String("fetch-sql", fetchSQL),
 						zap.Any("account", accountID),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Int("rows", rows),
 						zap.Duration("cost", time.Since(start)),
-						zap.Bool("ctx-done", ctxDone()))
+						zap.Bool("ctx-done", ctxDone())}
+
+					retry = true
+					if retryCnt > 0 {
+						retryCnt--
+						getLogger(s.ls.GetConfig().ServiceID).Error("read incr record invalid", fields...)
+						return moerr.NewTxnNeedRetryNoCtx()
+					} else {
+						getLogger(s.ls.GetConfig().ServiceID).Fatal("BUG: read incr record invalid", fields...)
+					}
 				}
 
 				next = getNext(current, count, int(step))
@@ -168,7 +178,7 @@ func (s *sqlStore) Allocate(
 					incrTableName,
 					next,
 					tableID,
-					colName,
+					sqlquote.EscapeString(colName),
 					current)
 				start = time.Now()
 				res, err = te.Exec(sql, executor.StatementOption{}.WithDisableLog())
@@ -226,7 +236,37 @@ func (s *sqlStore) Allocate(
 
 	from, to := getNextRange(current, next, int(step))
 	commitTs := txnOp.GetOverview().Meta.CommitTS
+	// Fix: When the transaction has not committed yet (e.g., during CREATE TABLE),
+	// CommitTS is zero. Use SnapshotTS as a fallback to avoid setting lastAllocateAt to zero,
+	// which would cause PrimaryKeysMayBeUpserted to scan an excessively large time range.
+	if commitTs.IsEmpty() {
+		snapshotTs := txnOp.SnapshotTS()
+		getLogger(s.ls.GetConfig().ServiceID).Debug("auto-increment allocate: CommitTS is empty, using SnapshotTS as fallback",
+			zap.Uint64("table-id", tableID),
+			zap.String("col-name", colName),
+			zap.Uint64("from", from),
+			zap.Uint64("to", to),
+			zap.String("snapshot-ts", snapshotTs.DebugString()))
+		commitTs = snapshotTs
+	}
 	return from, to, commitTs, nil
+}
+
+func readSingleOffsetStep(res executor.Result) (current, step uint64, rows int) {
+	res.ReadRows(func(batchRows int, cols []*vector.Vector) bool {
+		if batchRows == 0 {
+			return true
+		}
+		offsets := executor.GetFixedRows[uint64](cols[0])
+		steps := executor.GetFixedRows[uint64](cols[1])
+		if rows == 0 {
+			current = offsets[0]
+			step = steps[0]
+		}
+		rows += batchRows
+		return rows < 2
+	})
+	return
 }
 
 func (s *sqlStore) UpdateMinValue(
@@ -257,9 +297,80 @@ func (s *sqlStore) UpdateMinValue(
 			incrTableName,
 			minValue,
 			tableID,
-			col,
+			sqlquote.EscapeString(col),
 			minValue),
 		opts)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	return nil
+}
+
+func (s *sqlStore) SetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+	if txnOp == nil {
+		opts = opts.
+			WithWaitCommittedLogApplied().
+			WithEnableTrace().
+			WithDisableWaitPaused().
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	} else {
+		opts = opts.WithDisableIncrStatement()
+	}
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
+			"update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
+			incrTableName, offset, tableID, sqlquote.EscapeString(colName), offset,
+		),
+		opts,
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	return nil
+}
+
+// ForceSetOffset sets the offset of an auto-increment column to any value,
+// bypassing the monotonic guard. Only called from service.SetOffset during
+// ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
+func (s *sqlStore) ForceSetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+	if txnOp == nil {
+		opts = opts.
+			WithWaitCommittedLogApplied().
+			WithEnableTrace().
+			WithDisableWaitPaused().
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	} else {
+		opts = opts.WithDisableIncrStatement()
+	}
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
+			"update %s set offset = %d where table_id = %d and col_name = '%s'",
+			incrTableName, offset, tableID, sqlquote.EscapeString(colName),
+		),
+		opts,
+	)
 	if err != nil {
 		return err
 	}

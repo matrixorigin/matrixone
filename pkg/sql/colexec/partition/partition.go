@@ -30,6 +30,18 @@ import (
 
 const opName = "partition"
 
+const cancellationCheckInterval = 1024
+
+func checkCanceled(proc *process.Process, iteration int) error {
+	if iteration&(cancellationCheckInterval-1) != 0 {
+		return nil
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
+	return nil
+}
+
 func (partition *Partition) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
 	buf.WriteString(": partition([")
@@ -178,9 +190,9 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	} else {
-		ctr.buf = batch.NewWithSize(ctr.batchList[0].VectorCount())
+		ctr.buf = batch.NewOffHeapWithSize(ctr.batchList[0].VectorCount())
 		for i := range ctr.buf.Vecs {
-			ctr.buf.Vecs[i] = vector.NewVec(*ctr.batchList[0].Vecs[i].GetType())
+			ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.batchList[0].Vecs[i].GetType())
 		}
 	}
 	mp := proc.Mp()
@@ -191,6 +203,9 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	var cols []*vector.Vector
 	fromRemoveBatch := false
 	for {
+		if err = checkCanceled(proc, wholeLength); err != nil {
+			return false, err
+		}
 		if wholeLength == 0 || fromRemoveBatch {
 			choice = ctr.pickFirstRow()
 		} else {

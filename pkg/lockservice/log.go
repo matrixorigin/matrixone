@@ -388,20 +388,60 @@ func logLockTableCreated(
 	)
 }
 
+// closeReason represents the reason why a lock table is closed
+type closeReason int
+
+const (
+	// closeReasonBindChanged lock table closed due to bind changed
+	closeReasonBindChanged closeReason = iota
+	// closeReasonServiceClose lock table closed due to service shutdown
+	closeReasonServiceClose
+	// closeReasonKeeperFailed lock table closed due to keeper heartbeat failed
+	closeReasonKeeperFailed
+	// closeReasonKeepBindFailed lock table closed due to keep bind failed
+	closeReasonKeepBindFailed
+)
+
+func (r closeReason) String() string {
+	switch r {
+	case closeReasonBindChanged:
+		return "bind-changed"
+	case closeReasonServiceClose:
+		return "service-close"
+	case closeReasonKeeperFailed:
+		return "keeper-failed"
+	case closeReasonKeepBindFailed:
+		return "keep-bind-failed"
+	default:
+		return "unknown"
+	}
+}
+
 func logLockTableClosed(
 	logger *log.MOLogger,
 	bind pb.LockTable,
 	remote bool,
+	reason closeReason,
 ) {
 	if logger == nil {
 		return
 	}
 
+	// Service close is a normal expected behavior, use Debug level to avoid log flood
+	logLevel := zap.InfoLevel
+	if reason == closeReasonServiceClose {
+		logLevel = zap.DebugLevel
+		if !logger.Enabled(logLevel) {
+			return
+		}
+	}
+
 	logger.Log(
 		"bind closed",
-		getLogOptions(zap.InfoLevel),
+		getLogOptions(logLevel),
 		zap.Bool("remote", remote),
 		zap.String("bind", bind.DebugString()),
+		zap.String("reason", reason.String()),
 	)
 }
 
@@ -473,6 +513,46 @@ func logLockAllocatorStartSucc(
 	)
 }
 
+func logAllocatorEpochChanged(
+	logger *log.MOLogger,
+	source string,
+	oldVersion uint64,
+	newVersion uint64,
+	removed int,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"lock allocator epoch changed",
+		getLogOptions(zap.InfoLevel),
+		zap.String("source", source),
+		zap.Uint64("old-version", oldVersion),
+		zap.Uint64("new-version", newVersion),
+		zap.Int("removed", removed),
+	)
+}
+
+func logAllocatorEpochRegression(
+	logger *log.MOLogger,
+	source string,
+	oldVersion uint64,
+	observedVersion uint64,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"lock allocator epoch regression observed",
+		getLogOptions(zap.WarnLevel),
+		zap.String("source", source),
+		zap.Uint64("old-version", oldVersion),
+		zap.Uint64("observed-version", observedVersion),
+	)
+}
+
 func logCheckDeadLockFailed(
 	logger *log.MOLogger,
 	waitingTxn, txn pb.WaitTxn,
@@ -510,6 +590,7 @@ func logKeepRemoteLocksFailed(
 	logger *log.MOLogger,
 	bind pb.LockTable,
 	err error,
+	count int,
 ) {
 	if logger == nil {
 		return
@@ -518,7 +599,8 @@ func logKeepRemoteLocksFailed(
 	logger.Log(
 		"failed to keep remote locks",
 		getLogOptions(zap.ErrorLevel),
-		zap.String("bind", bind.DebugString()),
+		zap.Int("count", count),
+		zap.String("first-bind", bind.DebugString()),
 		zap.Error(err),
 	)
 }
@@ -698,11 +780,12 @@ func logUnlockTableOnRemote(
 	}
 }
 
-func logUnlockTableOnRemoteFailed(
+func logUnlockTableOnRemoteFailedWithCount(
 	logger *log.MOLogger,
 	txn *activeTxn,
 	bind pb.LockTable,
 	err error,
+	retryCount int,
 ) {
 	if logger == nil {
 		return
@@ -713,6 +796,7 @@ func logUnlockTableOnRemoteFailed(
 		getLogOptions(zap.ErrorLevel),
 		txnField(txn),
 		zap.String("bind", bind.DebugString()),
+		zap.Int("retry-count", retryCount),
 		zap.Error(err),
 	)
 }

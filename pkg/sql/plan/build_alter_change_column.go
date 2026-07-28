@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -34,7 +35,7 @@ func ChangeColumn(
 	alterPlan *plan.AlterTable,
 	spec *tree.AlterTableChangeColumnClause,
 	alterCtx *AlterTableContext,
-) error {
+) (bool, error) {
 	tableDef := alterPlan.CopyTableDef
 
 	ctx := cctx.GetContext()
@@ -50,7 +51,7 @@ func ChangeColumn(
 	// Check whether original column has existed.
 	oCol := FindColumn(tableDef.Cols, oldColName)
 	if oCol == nil || oCol.Hidden {
-		return moerr.NewBadFieldError(
+		return false, moerr.NewBadFieldError(
 			ctx,
 			oldColNameOrigin,
 			alterPlan.TableDef.Name,
@@ -61,7 +62,14 @@ func ChangeColumn(
 	// you need to first check if the new name already exists.
 	if newColName != oldColName &&
 		FindColumn(tableDef.Cols, newColName) != nil {
-		return moerr.NewErrDupFieldName(ctx, newColName)
+		return false, moerr.NewErrDupFieldName(ctx, newColName)
+	}
+
+	// If renaming the column, check if any generated column depends on it
+	if newColName != oldColName {
+		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
+			return false, err
+		}
 	}
 
 	//change the name of the column in the foreign key constraint
@@ -73,11 +81,19 @@ func ChangeColumn(
 				newColNameOrigin)...)
 	}
 
-	err := updateNewColumnInTableDef(
+	pkAffected, err := updateNewColumnInTableDef(
 		cctx, tableDef, oCol, specNewColumn, spec.Position,
 	)
 	if err != nil {
-		return err
+		return false, err
+	}
+
+	if oldColName != newColName {
+		sqls, err := handleAlterRenameColumnWithPluginHooks(tableDef, oldColName, newColName)
+		if err != nil {
+			return false, err
+		}
+		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls, sqls...)
 	}
 
 	updateClusterByInTableDef(ctx, tableDef, newColName, oldColName)
@@ -92,7 +108,7 @@ func ChangeColumn(
 		tmpCol.Name = newColName
 		tmpCol.OriginName = newColNameOrigin
 	}
-	return nil
+	return pkAffected, nil
 }
 
 // buildColumnAndConstraint Build the changed new column definition, and check its column level integrity constraints,
@@ -204,19 +220,47 @@ func buildColumnAndConstraint(
 				return nil, err
 			}
 			newCol.OnUpdate = onUpdateExpr
+		case *tree.AttributeGeneratedAlways:
+			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, targetTableDef.Cols, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			// Check for circular dependency (includes self-reference)
+			if err := checkGeneratedColCycle(ctx.GetContext(), targetTableDef, oldCol.Name, generatedCol.Expr); err != nil {
+				return nil, err
+			}
+			newCol.GeneratedCol = generatedCol
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
 	}
-	if auto_incr && hasDefaultValue {
-		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
-	}
-	if !hasDefaultValue {
-		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
-		if err != nil {
-			return nil, err
+	if newCol.GeneratedCol != nil {
+		// Reject VIRTUAL generated columns as PRIMARY KEY
+		if newCol.Primary && !newCol.GeneratedCol.IsStored {
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(),
+				"defining a virtual generated column '%s' as primary key", newColNameOrigin)
 		}
-		newCol.Default = defaultValue
+		// Generated columns preserve declared nullability but use no default expr for storage layer compatibility
+		newCol.Default = &plan.Default{
+			NullAbility:  getColumnNullAbility(specNewColumn),
+			Expr:         nil,
+			OriginString: "",
+		}
+	} else {
+		if auto_incr && hasDefaultValue {
+			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
+		}
+		if !hasDefaultValue {
+			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			newCol.Default = defaultValue
+		}
+	}
+
+	if err = checkIndexedColumnTypeChange(ctx.GetContext(), targetTableDef, oldCol, newCol); err != nil {
+		return nil, err
 	}
 
 	// If the column name of the table changes, it is necessary to check if it is associated
@@ -255,6 +299,44 @@ func buildColumnAndConstraint(
 	}
 
 	return newCol, nil
+}
+
+func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, oldCol, newCol *ColDef) error {
+	if oldCol == nil || newCol == nil || oldCol.Name == "" || oldCol.Typ.Id == newCol.Typ.Id {
+		return nil
+	}
+
+	if tableDef != nil && tableDef.Pkey != nil {
+		for _, partCol := range tableDef.Pkey.Names {
+			if partCol == oldCol.Name || partCol == newCol.Name {
+				if err := checkPrimaryKeyPartType(ctx, newCol.Typ, newCol.OriginName); err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
+
+	if tableDef != nil {
+		for _, indexInfo := range tableDef.Indexes {
+			for _, partCol := range indexInfo.Parts {
+				partCol = catalog.ResolveAlias(partCol)
+				if partCol != oldCol.Name && partCol != newCol.Name {
+					continue
+				}
+
+				if indexInfo.Unique {
+					return checkUniqueKeyPartType(ctx, newCol.Typ, newCol.OriginName)
+				}
+				if isGeometryPlanType(&newCol.Typ) {
+					return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in index", newCol.OriginName))
+				}
+				break
+			}
+		}
+	}
+
+	return nil
 }
 
 // Check if the column name is valid and conflicts with internal hidden columns

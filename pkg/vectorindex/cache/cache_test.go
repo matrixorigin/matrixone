@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -35,7 +35,7 @@ type MockSearch struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearch) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (m *MockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	//time.Sleep(2 * time.Millisecond)
 	return []int64{1}, []float64{2.0}, nil
 }
@@ -43,8 +43,12 @@ func (m *MockSearch) Search(proc *process.Process, query any, rt vectorindex.Run
 func (m *MockSearch) Destroy() {
 }
 
-func (m *MockSearch) Load(*process.Process) error {
+func (m *MockSearch) Load(*sqlexec.SqlProcess) error {
 	//time.Sleep(6 * time.Second)
+	return nil
+}
+
+func (m *MockSearch) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	return nil
 }
 
@@ -57,7 +61,7 @@ type MockAnySearch struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockAnySearch) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (m *MockAnySearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	//time.Sleep(2 * time.Millisecond)
 	return []any{any(1)}, []float64{2.0}, nil
 }
@@ -65,8 +69,12 @@ func (m *MockAnySearch) Search(proc *process.Process, query any, rt vectorindex.
 func (m *MockAnySearch) Destroy() {
 }
 
-func (m *MockAnySearch) Load(*process.Process) error {
+func (m *MockAnySearch) Load(*sqlexec.SqlProcess) error {
 	//time.Sleep(6 * time.Second)
+	return nil
+}
+
+func (m *MockAnySearch) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	return nil
 }
 
@@ -80,7 +88,7 @@ type MockSearchLoadError struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearchLoadError) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (m *MockSearchLoadError) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	return []int64{1}, []float64{2.0}, nil
 }
 
@@ -88,8 +96,12 @@ func (m *MockSearchLoadError) Destroy() {
 
 }
 
-func (m *MockSearchLoadError) Load(*process.Process) error {
+func (m *MockSearchLoadError) Load(*sqlexec.SqlProcess) error {
 	return moerr.NewInternalErrorNoCtx("Load from database error")
+}
+
+func (m *MockSearchLoadError) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	return nil
 }
 
 func (m *MockSearchLoadError) UpdateConfig(newalgo VectorIndexSearchIf) error {
@@ -102,7 +114,7 @@ type MockSearchSearchError struct {
 	Tblcfg vectorindex.IndexTableConfig
 }
 
-func (m *MockSearchSearchError) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (m *MockSearchSearchError) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	return nil, nil, moerr.NewInternalErrorNoCtx("Search error")
 }
 
@@ -110,7 +122,11 @@ func (m *MockSearchSearchError) Destroy() {
 
 }
 
-func (m *MockSearchSearchError) Load(*process.Process) error {
+func (m *MockSearchSearchError) Load(*sqlexec.SqlProcess) error {
+	return nil
+}
+
+func (m *MockSearchSearchError) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
 	return nil
 }
 
@@ -118,8 +134,59 @@ func (m *MockSearchSearchError) UpdateConfig(newalgo VectorIndexSearchIf) error 
 	return nil
 }
 
+type runtimeSearchCall struct {
+	RequestedIncludeColumns []string
+	PushdownFilterSQL       string
+	SearchCursor            *vectorindex.IvfSearchCursor
+}
+
+type MockRuntimeSearch struct {
+	loads       int
+	searchCalls []runtimeSearchCall
+}
+
+func (m *MockRuntimeSearch) Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	m.searchCalls = append(m.searchCalls, runtimeSearchCall{
+		RequestedIncludeColumns: append([]string(nil), rt.RequestedIncludeColumns...),
+		PushdownFilterSQL:       rt.PushdownFilterSQL,
+		SearchCursor:            rt.SearchCursor,
+	})
+	if rt.SearchCursor != nil {
+		rt.SearchCursor.Round = uint(len(m.searchCalls))
+	}
+	return []int64{1}, []float64{2.0}, nil
+}
+
+func (m *MockRuntimeSearch) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
+	keys, distances, err := m.Search(proc, query, rt)
+	if err != nil {
+		return err
+	}
+	if typedKeys, ok := keys.([]int64); ok {
+		for i, key := range typedKeys {
+			outKeys[i] = key
+		}
+	}
+	for i, dist := range distances {
+		outDists[i] = float32(dist)
+	}
+	return nil
+}
+
+func (m *MockRuntimeSearch) Destroy() {}
+
+func (m *MockRuntimeSearch) Load(*sqlexec.SqlProcess) error {
+	m.loads++
+	return nil
+}
+
+func (m *MockRuntimeSearch) UpdateConfig(newalgo VectorIndexSearchIf) error {
+	return nil
+}
+
 func TestCacheServe(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
 	Cache = NewVectorIndexCache()
 	Cache.serve()
 	Cache.serve()
@@ -128,7 +195,7 @@ func TestCacheServe(t *testing.T) {
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 	m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	anykeys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	anykeys, distances, err := Cache.Search(sqlproc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 	require.Nil(t, err)
 	if keys, ok := anykeys.([]int64); ok {
 		require.Equal(t, len(keys), 1)
@@ -141,8 +208,51 @@ func TestCacheServe(t *testing.T) {
 	Cache.Destroy()
 }
 
+// IVF-FLAT keys its cache entries "<indexTable>:<version>" (plus a
+// "/cnIdx/cnCnt" suffix when the read is split across CNs), so DROP INDEX /
+// DROP TABLE cannot name the live key — it evicts by prefix. Every generation
+// of the dropped index must go, and no other index table may be touched.
+func TestCacheRemovePrefix(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	Cache = NewVectorIndexCache()
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+
+	// two generations of the dropped index + one split-read entry, and one
+	// entry of a different index table that shares no prefix.
+	keys := []string{
+		"__secondary_index:0",
+		"__secondary_index:7",
+		"__secondary_index:7/1/2",
+		"__other_index:0",
+	}
+	for _, k := range keys {
+		m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
+		_, _, err := Cache.Search(sqlproc, k, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+		require.Nil(t, err)
+	}
+
+	Cache.RemovePrefix("__secondary_index:")
+
+	for _, k := range keys[:3] {
+		_, ok := Cache.IndexMap.Load(k)
+		require.False(t, ok, "key %s should have been evicted", k)
+	}
+	_, ok := Cache.IndexMap.Load("__other_index:0")
+	require.True(t, ok, "unrelated index table must not be evicted")
+
+	// removing a prefix with no match is a no-op, not a panic
+	Cache.RemovePrefix("__no_such_index:")
+
+	Cache.Destroy()
+}
+
 func TestCacheAny(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
 	Cache = NewVectorIndexCache()
 	Cache.serve()
 	Cache.serve()
@@ -151,7 +261,7 @@ func TestCacheAny(t *testing.T) {
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 	m := &MockAnySearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	anykeys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	anykeys, distances, err := Cache.Search(sqlproc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 	require.Nil(t, err)
 	keys, ok := anykeys.([]any)
 	require.True(t, ok)
@@ -166,6 +276,7 @@ func TestCacheAny(t *testing.T) {
 
 func TestCache(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	VectorIndexCacheTTL = 5 * time.Second
 	VectorIndexCacheTTL = 5 * time.Second
@@ -185,7 +296,7 @@ func TestCache(t *testing.T) {
 	m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	os.Stderr.WriteString("cache search\n")
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	anykeys1, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	anykeys1, distances, err := Cache.Search(sqlproc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 	require.Nil(t, err)
 	if keys1, ok := anykeys1.([]int64); ok {
 		require.Equal(t, len(keys1), 1)
@@ -200,7 +311,7 @@ func TestCache(t *testing.T) {
 
 	// new search
 	m3 := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
-	anykeys2, distances, err := Cache.Search(proc, tblcfg.IndexTable, m3, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	anykeys2, distances, err := Cache.Search(sqlproc, tblcfg.IndexTable, m3, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 	require.Nil(t, err)
 	if keys2, ok := anykeys2.([]int64); ok {
 		require.Equal(t, len(keys2), 1)
@@ -216,6 +327,7 @@ func TestCache(t *testing.T) {
 
 func TestCacheConcurrent(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	VectorIndexCacheTTL = 2 * time.Second
 	VectorIndexCacheTTL = 2 * time.Second
@@ -243,7 +355,7 @@ func TestCacheConcurrent(t *testing.T) {
 				m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 				//os.Stderr.WriteString("cache search\n")
 				fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-				anykeys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := Cache.Search(sqlproc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
 				if keys, ok := anykeys.([]int64); ok {
 					require.Equal(t, len(keys), 1)
@@ -265,6 +377,7 @@ func TestCacheConcurrent(t *testing.T) {
 
 func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	VectorIndexCacheTTL = 2 * time.Second
 	VectorIndexCacheTTL = 2 * time.Second
@@ -292,7 +405,7 @@ func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
 				m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 				//os.Stderr.WriteString("cache search\n")
 				fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-				anykeys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := Cache.Search(sqlproc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
 				if keys, ok := anykeys.([]int64); ok {
 					require.Equal(t, len(keys), 1)
@@ -321,6 +434,7 @@ func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
 
 func TestCacheLoadError(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	VectorIndexCacheTTL = 5 * time.Second
 	Cache = NewVectorIndexCache()
@@ -338,7 +452,7 @@ func TestCacheLoadError(t *testing.T) {
 	os.Stderr.WriteString("cache getindex\n")
 	m1 := &MockSearchLoadError{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	_, _, err := Cache.Search(proc, tblcfg.IndexTable, m1, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	_, _, err := Cache.Search(sqlproc, tblcfg.IndexTable, m1, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 	require.NotNil(t, err)
 
 	os.Stderr.WriteString(fmt.Sprintf("error : %v\n", err))
@@ -350,6 +464,7 @@ func TestCacheLoadError(t *testing.T) {
 
 func TestCacheSearchError(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	VectorIndexCacheTTL = 5 * time.Second
 	Cache = NewVectorIndexCache()
@@ -367,7 +482,7 @@ func TestCacheSearchError(t *testing.T) {
 	os.Stderr.WriteString("cache getindex\n")
 	m1 := &MockSearchSearchError{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	_, _, err := Cache.Search(proc, tblcfg.IndexTable, m1, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	_, _, err := Cache.Search(sqlproc, tblcfg.IndexTable, m1, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 	require.NotNil(t, err)
 
 	os.Stderr.WriteString(fmt.Sprintf("error : %v\n", err))
@@ -375,4 +490,44 @@ func TestCacheSearchError(t *testing.T) {
 	Cache.Destroy()
 	os.Stderr.WriteString("cache.Destroy end\n")
 	Cache = nil
+}
+
+func TestCacheReuseKeepsRuntimeConfigQueryScoped(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	Cache = NewVectorIndexCache()
+	Cache.Once()
+	defer func() {
+		Cache.Destroy()
+		Cache = nil
+	}()
+
+	cachedAlgo := &MockRuntimeSearch{}
+	_, _, err := Cache.Search(sqlproc, "__ivf_entries", cachedAlgo, []float32{1, 2, 3}, vectorindex.RuntimeConfig{
+		Limit:                   4,
+		RequestedIncludeColumns: []string{"title"},
+		PushdownFilterSQL:       "`__mo_index_include_title` = 'alpha'",
+		SearchCursor:            &vectorindex.IvfSearchCursor{},
+	})
+	require.NoError(t, err)
+
+	freshAlgo := &MockRuntimeSearch{}
+	_, _, err = Cache.Search(sqlproc, "__ivf_entries", freshAlgo, []float32{1, 2, 3}, vectorindex.RuntimeConfig{
+		Limit:                   4,
+		RequestedIncludeColumns: []string{"category"},
+		PushdownFilterSQL:       "",
+		SearchCursor:            &vectorindex.IvfSearchCursor{},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, cachedAlgo.loads)
+	require.Zero(t, freshAlgo.loads)
+	require.Len(t, cachedAlgo.searchCalls, 2)
+	require.Equal(t, []string{"title"}, cachedAlgo.searchCalls[0].RequestedIncludeColumns)
+	require.Equal(t, "`__mo_index_include_title` = 'alpha'", cachedAlgo.searchCalls[0].PushdownFilterSQL)
+	require.Equal(t, uint(1), cachedAlgo.searchCalls[0].SearchCursor.Round)
+	require.Equal(t, []string{"category"}, cachedAlgo.searchCalls[1].RequestedIncludeColumns)
+	require.Empty(t, cachedAlgo.searchCalls[1].PushdownFilterSQL)
+	require.Equal(t, uint(2), cachedAlgo.searchCalls[1].SearchCursor.Round)
 }

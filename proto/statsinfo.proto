@@ -49,6 +49,7 @@ message ShuffleRange {
   double Overlap = 12;
   double Uniform = 13;
   repeated double Result = 14;
+  double SampleRatio = 15;
 }
 
 message StatsInfo {

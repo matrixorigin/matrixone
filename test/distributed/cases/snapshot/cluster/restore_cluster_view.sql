@@ -679,7 +679,7 @@ drop database if exists School;
 drop database if exists University;
 -- @session
 
-restore cluster from snapshot cluster_sp;
+restore cluster{snapshot="cluster_sp"};
 
 
 select * from School.Students;

@@ -27,6 +27,10 @@ import (
 
 const eofChar = 0x100
 
+// maxPoolSQLSize is the size threshold beyond which a scanner will not be kept
+// in the pool and large fields will be cleared to release memory.
+const maxPoolSQLSize = 1 << 20 // 1 MiB
+
 var scannerPool = sync.Pool{
 	New: func() any {
 		return &Scanner{}
@@ -38,31 +42,56 @@ type Scanner struct {
 	LastError           error
 	posVarIndex         int
 	dialectType         dialect.DialectType
+	sqlMode             SQLModeFlags
 	MysqlSpecialComment *Scanner
 
-	CommentFlag bool
-	Pos         int
-	Line        int
-	Col         int
-	PrePos      int
-	buf         string
+	CommentFlag          bool
+	Pos                  int
+	Line                 int
+	Col                  int
+	PrePos               int
+	buf                  string
+	executableCommentEnd int
 
 	strBuilder bytes.Buffer
+}
+
+func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
+	// Reset light-weight state shared by both setSql and PutScanner
+	s.LastToken = ""
+	s.LastError = nil
+	s.posVarIndex = 0
+	s.MysqlSpecialComment = nil
+	s.CommentFlag = false
+	s.Pos = 0
+	s.Line = 0
+	s.Col = 0
+	s.PrePos = 0
+	s.executableCommentEnd = 0
+	s.sqlMode = 0
+
+	if clearLargeOnly {
+		if oversized {
+			// Oversized by SQL size: drop both to avoid retaining huge memory.
+			s.buf = ""
+			s.strBuilder = bytes.Buffer{}
+		}
+	}
 }
 
 func (s *Scanner) setSql(sql string) {
 	// This is a mysql scanner, so we set the dialect type to mysql
 	s.dialectType = dialect.MYSQL
-	s.LastToken = ""
-	s.LastError = nil
-	s.posVarIndex = 0
-	s.MysqlSpecialComment = nil
-	s.Pos = 0
-	s.Line = 0
-	s.Col = 0
-	s.PrePos = 0
+	// Reset transient fields but do not aggressively clear buffers here so that
+	// small capacities can be reused.
+	s.reset(false, false)
 	s.buf = sql
+	// Reset length to 0; this keeps capacity for small cases.
 	s.strBuilder.Reset()
+}
+
+func (s *Scanner) setSQLMode(mode SQLModeFlags) {
+	s.sqlMode = mode
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
@@ -71,7 +100,19 @@ func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
 	return scanner
 }
 
+func NewScannerWithSQLMode(dialectType dialect.DialectType, sql string, sqlMode SQLModeFlags) *Scanner {
+	scanner := NewScanner(dialectType, sql)
+	scanner.setSQLMode(sqlMode)
+	return scanner
+}
+
 func PutScanner(scanner *Scanner) {
+	oversized := len(scanner.buf) > maxPoolSQLSize
+	// Reset shared state. Only clear buffers/strings when oversized.
+	scanner.reset(true, oversized)
+	if oversized {
+		return
+	}
 	scannerPool.Put(scanner)
 }
 
@@ -165,6 +206,10 @@ func (s *Scanner) Scan() (int, string) {
 			s.incN(2)
 			return ASSIGNMENT, ""
 		}
+		if s.peek(1) == ':' {
+			s.incN(2)
+			return TYPECAST, ""
+		}
 
 		// Like mysql -h ::1 ?
 		id, str := s.scanBindVar()
@@ -223,6 +268,9 @@ func (s *Scanner) Scan() (int, string) {
 		case '/':
 			s.CommentFlag = false
 			s.inc()
+			if s.executableCommentEnd == 0 {
+				s.executableCommentEnd = s.Pos
+			}
 			return s.Scan()
 		default:
 			return s.stepBackOneChar(ch)
@@ -264,6 +312,14 @@ func (s *Scanner) Scan() (int, string) {
 	default:
 		return s.stepBackOneChar(ch)
 	}
+}
+
+// TakeExecutableCommentEnd returns the byte offset immediately after the first
+// executable-comment terminator scanned since the previous call.
+func (s *Scanner) TakeExecutableCommentEnd() int {
+	end := s.executableCommentEnd
+	s.executableCommentEnd = 0
+	return end
 }
 
 func (s *Scanner) isCollate() bool {
@@ -339,7 +395,10 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 	case '|':
 		if s.cur() == '|' {
 			s.inc()
-			return PIPE_CONCAT, ""
+			if s.sqlMode.Has(SQLModePipesAsConcat) {
+				return PIPE_CONCAT, ""
+			}
+			return OR, ""
 		}
 		return int(ch), ""
 	case '?':
@@ -367,6 +426,10 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 			}
 		case '>':
 			s.inc()
+			if s.cur() == '>' {
+				s.inc()
+				return LONG_ARROW, ""
+			}
 			return ARROW, ""
 		}
 		return int(ch), ""
@@ -407,7 +470,12 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 			return NE, ""
 		}
 		return int(ch), ""
-	case '\'', '"':
+	case '\'':
+		return s.scanString(ch, STRING)
+	case '"':
+		if s.sqlMode.Has(SQLModeANSIQuotes) {
+			return s.scanLiteralIdentifierWithDelim('"')
+		}
 		return s.scanString(ch, STRING)
 	case '`':
 		return s.scanLiteralIdentifier()
@@ -433,7 +501,7 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 			if s.cur() != delim {
 				return typ, buf.String()
 			}
-		} else if ch == '\\' {
+		} else if ch == '\\' && delim != '$' && !s.sqlMode.Has(SQLModeNoBackslashEscapes) {
 			ch = handleEscape(s, buf)
 			if ch == eofChar {
 				break
@@ -466,7 +534,7 @@ func (s *Scanner) scanStringAddPlus(delim uint16, typ int) (int, string) {
 			if s.cur() != delim {
 				return typ, buf.String()
 			}
-		} else if ch == '\\' {
+		} else if ch == '\\' && delim != '$' && !s.sqlMode.Has(SQLModeNoBackslashEscapes) {
 			ch = handleEscape(s, buf)
 			if ch == eofChar {
 				break
@@ -507,11 +575,15 @@ func handleEscape(s *Scanner, buf *bytes.Buffer) uint16 {
 // is a simple literal, it'll be returned as a slice of the input buffer. If the identifier
 // contains escape sequences, this function will fall back to scanLiteralIdentifierSlow
 func (s *Scanner) scanLiteralIdentifier() (int, string) {
+	return s.scanLiteralIdentifierWithDelim('`')
+}
+
+func (s *Scanner) scanLiteralIdentifierWithDelim(delim uint16) (int, string) {
 	start := s.Pos
 	for {
 		switch s.cur() {
-		case '`':
-			if s.peek(1) != '`' {
+		case delim:
+			if s.peek(1) != delim {
 				if s.Pos == start {
 					return LEX_ERROR, ""
 				}
@@ -522,7 +594,7 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 			var buf strings.Builder
 			buf.WriteString(s.buf[start:s.Pos])
 			s.inc()
-			return s.scanLiteralIdentifierSlow(&buf)
+			return s.scanLiteralIdentifierSlow(&buf, delim)
 		case eofChar:
 			// Premature EOF.
 			return LEX_ERROR, s.buf[start:s.Pos]
@@ -537,22 +609,22 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 // scanLiteralIdentifier once the first escape sequence is found in the identifier.
 // The provided `buf` contains the contents of the identifier that have been scanned
 // so far.
-func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder) (int, string) {
-	backTickSeen := true
+func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder, delim uint16) (int, string) {
+	delimSeen := true
 	for {
-		if backTickSeen {
-			if s.cur() != '`' {
+		if delimSeen {
+			if s.cur() != delim {
 				break
 			}
-			backTickSeen = false
-			buf.WriteByte('`')
+			delimSeen = false
+			buf.WriteByte(byte(delim))
 			s.inc()
 			continue
 		}
-		// The previous char was not a backtick.
+		// The previous char was not the identifier delimiter.
 		switch s.cur() {
-		case '`':
-			backTickSeen = true
+		case delim:
+			delimSeen = true
 		case eofChar:
 			// Premature EOF.
 			return LEX_ERROR, buf.String()

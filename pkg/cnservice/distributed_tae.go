@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -53,8 +52,6 @@ func (s *service) initDistributedTAE(
 	if err != nil {
 		return err
 	}
-	colexec.NewServer(hakeeper)
-
 	// start I/O pipeline
 	ioutil.Start(s.cfg.UUID)
 
@@ -79,7 +76,11 @@ func (s *service) initDistributedTAE(
 		s.cfg.LogtailUpdateWorkerFactor,
 
 		disttae.WithCNTransferTxnLifespanThreshold(
-			s.cfg.Engine.CNTransferTxnLifespanThreshold),
+			s.cfg.Engine.CNTransferTxnLifespanThreshold,
+		),
+		disttae.WithPrefetchOnSubscribed(
+			s.cfg.Engine.PrefetchOnSubscribed,
+		),
 		disttae.WithMoTableStatsConf(s.cfg.Engine.Stats),
 		disttae.WithSQLExecFunc(internalExecutorFactory),
 		disttae.WithMoServerStateChecker(func() bool {
@@ -99,6 +100,9 @@ func (s *service) initDistributedTAE(
 	if err != nil {
 		return err
 	}
+
+	// Start unified GC scheduler
+	go cnEngine.RunGCScheduler(ctx)
 
 	ss, ok := runtime.ServiceRuntime(s.cfg.UUID).GetGlobalVariables(runtime.StatusServer)
 	if ok {

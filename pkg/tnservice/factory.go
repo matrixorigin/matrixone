@@ -16,10 +16,8 @@ package tnservice
 
 import (
 	"context"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -27,18 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"go.uber.org/zap"
 )
 
 var (
 	supportTxnStorageBackends = map[StorageType]struct{}{
 		StorageMEMKV: {},
-		StorageMEM:   {},
 		StorageTAE:   {},
 	}
 )
@@ -48,29 +42,9 @@ func (s *store) createTxnStorage(
 	shard metadata.TNShard,
 	txnServer rpc.TxnServer,
 ) (storage.TxnStorage, error) {
-
-	factory := s.createLogServiceClientFactroy(shard)
-	closeLogClientFn := func(logClient logservice.Client) {
-		if err := logClient.Close(); err != nil {
-			s.rt.Logger().Error("close log client failed",
-				zap.Error(err))
-		}
-	}
-
 	switch s.cfg.Txn.Storage.Backend {
-	case StorageMEM:
-		logClient, err := factory()
-		if err != nil {
-			return nil, err
-		}
-		ts, err := s.newMemTxnStorage(shard, logClient, s.hakeeperClient)
-		if err != nil {
-			closeLogClientFn(logClient)
-			return nil, err
-		}
-		return ts, nil
-
 	case StorageMEMKV:
+		factory := s.createLogServiceClientFactroy(shard)
 		logClient, err := factory()
 		if err != nil {
 			return nil, err
@@ -78,6 +52,7 @@ func (s *store) createTxnStorage(
 		return s.newMemKVStorage(shard, logClient)
 
 	case StorageTAE:
+		factory := s.createLogServiceClientFactroy(shard)
 		ts, err := s.newTAEStorage(ctx, shard, factory, txnServer)
 		if err != nil {
 			return nil, err
@@ -116,24 +91,6 @@ func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, 
 		return nil, moerr.AttachCause(ctx, err)
 	}
 	return client, nil
-}
-
-func (s *store) newMemTxnStorage(
-	shard metadata.TNShard,
-	logClient logservice.Client,
-	hakeeper logservice.TNHAKeeperClient,
-) (storage.TxnStorage, error) {
-	// should it be no fixed or a certain size?
-	mp, err := mpool.NewMPool("mem_txn_storge", 0, mpool.NoFixed)
-	if err != nil {
-		return nil, err
-	}
-	return memorystorage.NewMemoryStorage(
-		s.cfg.UUID,
-		mp,
-		s.rt.Clock(),
-		memoryengine.NewHakeeperIDGenerator(hakeeper),
-	)
 }
 
 func (s *store) newMemKVStorage(shard metadata.TNShard, logClient logservice.Client) (storage.TxnStorage, error) {
@@ -178,15 +135,19 @@ func (s *store) newTAEStorage(
 	}
 
 	gcCfg := &options.GCCfg{
-		GCTTL:          s.cfg.GCCfg.GCTTL.Duration,
-		GCInMemoryTTL:  s.cfg.GCCfg.GCInMemoryTTL.Duration,
-		ScanGCInterval: s.cfg.GCCfg.ScanGCInterval.Duration,
-		DisableGC:      s.cfg.GCCfg.DisableGC,
-		CheckGC:        s.cfg.GCCfg.CheckGC,
-		CacheSize:      s.cfg.GCCfg.CacheSize,
-		GCMergeCount:   s.cfg.GCCfg.GCMergeCount,
-		GCestimateRows: s.cfg.GCCfg.GCestimateRows,
-		GCProbility:    s.cfg.GCCfg.GCProbility,
+		GCTTL:             s.cfg.GCCfg.GCTTL.Duration,
+		GCInMemoryTTL:     s.cfg.GCCfg.GCInMemoryTTL.Duration,
+		ScanGCInterval:    s.cfg.GCCfg.ScanGCInterval.Duration,
+		DisableGC:         s.cfg.GCCfg.DisableGC,
+		CheckGC:           s.cfg.GCCfg.CheckGC,
+		CacheSize:         s.cfg.GCCfg.CacheSize,
+		GCMergeCount:      s.cfg.GCCfg.GCMergeCount,
+		GCScanCount:       s.cfg.GCCfg.GCScanCount,
+		GCestimateRows:    s.cfg.GCCfg.GCestimateRows,
+		GCProbility:       s.cfg.GCCfg.GCProbility,
+		GCDeleteTimeout:   s.cfg.GCCfg.GCDeleteTimeout.Duration,
+		GCDeleteBatchSize: s.cfg.GCCfg.GCDeleteBatchSize,
+		GCDeleteWorkerNum: s.cfg.GCCfg.GCDeleteWorkerNum,
 	}
 
 	mergeCfg := &options.MergeConfig{
@@ -207,11 +168,6 @@ func (s *store) newTAEStorage(
 		PullWorkerPoolSize:     int64(s.cfg.LogtailServer.PullWorkerPoolSize),
 	}
 
-	// the previous values
-	//max2LogServiceMsgSizeLimit := s.cfg.RPC.MaxMessageSize
-	// unlimited, divided by 2 to avoid overflow
-	max2LogServiceMsgSizeLimit := uint64(math.MaxUint64 / 2)
-
 	opt := &options.Options{
 		Clock:                s.rt.Clock(),
 		Fs:                   fs,
@@ -225,12 +181,10 @@ func (s *store) newTAEStorage(
 		IncrementalDedup:     s.cfg.Txn.IncrementalDedup == "true",
 		IsStandalone:         s.cfg.InStandalone,
 		Ctx:                  ctx,
-		MaxMessageSize:       max2LogServiceMsgSizeLimit,
 		TaskServiceGetter:    s.GetTaskService,
 		SID:                  s.cfg.UUID,
 		EnableApplyTableData: s.cfg.Txn.DebugMode,
 	}
-
 	return taestorage.NewTAEStorage(
 		ctx,
 		s.cfg.Txn.Storage.dataDir,
@@ -240,5 +194,6 @@ func (s *store) newTAEStorage(
 		logtailServerAddr,
 		logtailServerCfg,
 		txnServer,
+		s.queryClient,
 	)
 }

@@ -134,7 +134,6 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 			return true, err
 		}
 		analyzer.Alloc(int64(bat.Size()))
-		defer bat.Clean(proc.Mp())
 
 		ctr.n = len(bat.Vecs)
 		ctr.poses = ctr.poses[:0]
@@ -145,6 +144,7 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 			} else {
 				vec, err := ctr.executorsForOrderList[i].EvalWithoutResultReusing(proc, []*batch.Batch{bat}, nil)
 				if err != nil {
+					bat.Clean(proc.Mp())
 					return false, err
 				}
 				ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
@@ -160,9 +160,9 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 			}
 
 			if ctr.bat == nil {
-				ctr.bat = batch.NewWithSize(len(bat.Vecs))
+				ctr.bat = batch.NewOffHeapWithSize(len(bat.Vecs))
 				for i, vec := range bat.Vecs {
-					ctr.bat.Vecs[i] = vector.NewVec(*vec.GetType())
+					ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
 				}
 			}
 
@@ -187,35 +187,41 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 		}
 
 		if err := ctr.processBatch(ap.ctr.limit, bat, proc); err != nil {
+			bat.Clean(proc.Mp())
 			return false, err
 		}
+		bat.Clean(proc.Mp())
 	}
 }
 
 func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process.Process) error {
-	var start int64
+	rowCount := bat.RowCount()
+	processCount := rowsToFill(limit, len(ctr.sels), rowCount)
 
-	length := int64(bat.RowCount())
-	if n := uint64(len(ctr.sels)); n < limit {
-		start = int64(limit - n)
-		if start > length {
-			start = length
-		}
-		for i := int64(0); i < start; i++ {
-			for j, vec := range ctr.bat.Vecs {
-				if err := vec.UnionOne(bat.Vecs[j], i, proc.Mp()); err != nil {
-					return err
-				}
+	if processCount > 0 {
+		for j, vec := range ctr.bat.Vecs {
+			if err := vec.UnionBatch(
+				bat.Vecs[j],
+				0,
+				processCount,
+				nil,
+				proc.Mp(),
+			); err != nil {
+				return err
 			}
-			ctr.sels = append(ctr.sels, int64(n))
-			n++
 		}
-		ctr.bat.AddRowCount(bat.RowCount())
-		if n == limit {
+		baseSel := int64(len(ctr.sels))
+		for i := range processCount {
+			ctr.sels = append(ctr.sels, baseSel+int64(i))
+		}
+		ctr.bat.AddRowCount(processCount)
+
+		if uint64(len(ctr.sels)) == limit {
 			ctr.sort()
 		}
 	}
-	if start == length {
+
+	if processCount == rowCount {
 		return nil
 	}
 
@@ -223,10 +229,11 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 	for i, cmp := range ctr.cmps {
 		cmp.Set(1, bat.Vecs[i])
 	}
-	for i, j := start, length; i < j; i++ {
-		if ctr.compare(1, 0, i, ctr.sels[0]) < 0 {
+	for i, j := processCount, rowCount; i < j; i++ {
+		rowIdx := int64(i)
+		if ctr.compare(1, 0, rowIdx, ctr.sels[0]) < 0 {
 			for _, cmp := range ctr.cmps {
-				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
+				if err := cmp.Copy(1, 0, rowIdx, ctr.sels[0], proc); err != nil {
 					return err
 				}
 			}
@@ -234,6 +241,17 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 		}
 	}
 	return nil
+}
+
+func rowsToFill(limit uint64, currentRows int, batchRows int) int {
+	if uint64(currentRows) >= limit {
+		return 0
+	}
+	remaining := limit - uint64(currentRows)
+	if remaining >= uint64(batchRows) {
+		return batchRows
+	}
+	return int(remaining)
 }
 
 func (ctr *container) eval(limit uint64, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {

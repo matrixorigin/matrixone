@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -24,9 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -57,7 +58,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, moerr.NewNYIf(ctx.GetContext(), "insert stream %s", tblName)
 	}
 
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +77,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	// }
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
-	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
+	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
+	// CHAR/VARCHAR writes to truncation instead of rejection.
+	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
 	if stmt.IsRestore {
 		builder.isRestore = true
 		if stmt.IsRestoreByTs {
@@ -95,13 +98,49 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 
 	bindCtx := NewBindContext(builder, nil)
+
+	// Pass WITH clause from INSERT to SELECT if present
+	if stmt.With != nil && stmt.Rows != nil {
+		stmt.Rows.With = stmt.With
+	}
+
 	ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
+	isIcebergMapping := false
+	if tableDef.TableType == catalog.SystemExternalRel {
+		isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+		if err != nil {
+			return nil, err
+		}
+		if isIceberg {
+			isIcebergMapping = true
+		} else if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); !ok {
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "insert into read-only external table %s", tblName)
+		}
+		if len(stmt.OnDuplicateUpdate) > 0 {
+			if isIcebergMapping {
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "ON DUPLICATE KEY UPDATE on Iceberg table mapping")
+			}
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "ON DUPLICATE KEY UPDATE on external table")
+		}
+		if stmt.Overwrite && !isIcebergMapping {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT OVERWRITE on non-Iceberg external table")
+		}
+	} else if stmt.Overwrite {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT OVERWRITE currently supports Iceberg table mappings")
+	}
+	if stmt.Overwrite && len(stmt.PartitionNames) > 0 {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "Iceberg INSERT OVERWRITE PARTITION name syntax cannot express an Iceberg partition tuple")
+	}
+	if len(stmt.PartitionValues) > 0 && (!stmt.Overwrite || !isIcebergMapping) {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT PARTITION value syntax currently supports Iceberg INSERT OVERWRITE only")
+	}
+
 	replaceStmt := getRewriteToReplaceStmt(tableDef, stmt, rewriteInfo, isPrepareStmt)
 	if replaceStmt != nil {
-		return buildReplace(replaceStmt, ctx, isPrepareStmt, true)
+		return bindAndOptimizeReplaceQuery(ctx, replaceStmt, isPrepareStmt, false)
 	}
 	lastNodeId := rewriteInfo.rootId
 	sourceStep := builder.appendStep(lastNodeId)
@@ -113,203 +152,29 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 	objRef := tblInfo.objRef[0]
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
-		// append on duplicate key node
-		tableDef = DeepCopyTableDef(tableDef, true)
-		if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			tableDef.Cols = append(tableDef.Cols, tableDef.Pkey.CompPkeyCol)
-		}
-		if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			tableDef.Cols = append(tableDef.Cols, tableDef.ClusterBy.CompCbkeyCol)
-		}
-
-		dupProjection := getProjectionByLastNode(builder, lastNodeId)
-		// if table have pk & unique key. we need append an agg node before on_duplicate_key
-		if rewriteInfo.onDuplicateNeedAgg {
-			colLen := len(tableDef.Cols)
-			aggGroupBy := make([]*Expr, 0, colLen)
-			aggList := make([]*Expr, 0, len(dupProjection)-colLen)
-			aggProject := make([]*Expr, 0, len(dupProjection))
-			for i := 0; i < len(dupProjection); i++ {
-				if i < colLen {
-					aggGroupBy = append(aggGroupBy, &Expr{
-						Typ: dupProjection[i].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								ColPos: int32(i),
-							},
-						},
-					})
-					aggProject = append(aggProject, &Expr{
-						Typ: dupProjection[i].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								RelPos: -1,
-								ColPos: int32(i),
-							},
-						},
-					})
-				} else {
-					aggExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*Expr{
-						{
-							Typ: dupProjection[i].Typ,
-							Expr: &plan.Expr_Col{
-								Col: &ColRef{
-									ColPos: int32(i),
-								},
-							},
-						},
-					})
-					if err != nil {
-						return nil, err
-					}
-					aggList = append(aggList, aggExpr)
-					aggProject = append(aggProject, &Expr{
-						Typ: dupProjection[i].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								RelPos: -2,
-								ColPos: int32(i),
-							},
-						},
-					})
+		// ON DUPLICATE KEY UPDATE is fully handled by the modern insert path
+		// and must never reach the legacy builder.
+		return nil, moerr.NewInternalError(ctx.GetContext(), "ON DUPLICATE KEY UPDATE should be handled by the modern insert path")
+	}
+	if tableDef.TableType == catalog.SystemExternalRel {
+		if isIcebergMapping {
+			extraOptions := ""
+			if stmt.Overwrite {
+				extraOptions, err = icebergOverwritePlanExtraOptions(ctx.GetContext(), stmt)
+				if err != nil {
+					return nil, err
 				}
 			}
-
-			aggNode := &Node{
-				NodeType:    plan.Node_AGG,
-				Children:    []int32{lastNodeId},
-				GroupBy:     aggGroupBy,
-				AggList:     aggList,
-				ProjectList: aggProject,
+			if err = appendIcebergInsertPlan(builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, extraOptions); err != nil {
+				return nil, err
 			}
-			lastNodeId = builder.appendNode(aggNode, bindCtx)
-		}
-		// construct the attrs and insertColCount for on_duplicate_key node
-		attrs := make([]string, 0)
-		insertColCount := int32(0)
-		for _, col := range tableDef.Cols {
-			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-				continue
-			}
-			attrs = append(attrs, col.GetOriginCaseName())
-			insertColCount++
-		}
-		for _, col := range tableDef.Cols {
-			attrs = append(attrs, col.GetOriginCaseName())
-		}
-		attrs = append(attrs, catalog.Row_ID)
-		uniqueColWithIdx, _ := GetUniqueColAndIdxFromTableDef(tableDef)
-		uniqueColCheckExpr, err := GenUniqueColCheckExpr(ctx.GetContext(), tableDef, uniqueColWithIdx, int(insertColCount))
-		if err != nil {
-			return nil, err
-		}
-		uniqueCol := make([]string, len(uniqueColWithIdx))
-		for i := range uniqueColWithIdx {
-			keys := make([]string, 0)
-			for k := range uniqueColWithIdx[i] {
-				keys = append(keys, k)
-			}
-			uniqueCol[i] = strings.Join(keys, ",")
-		}
-		onDuplicateKeyNode := &Node{
-			NodeType:    plan.Node_ON_DUPLICATE_KEY,
-			Children:    []int32{lastNodeId},
-			ProjectList: dupProjection,
-			OnDuplicateKey: &plan.OnDuplicateKeyCtx{
-				Attrs:              attrs,
-				InsertColCount:     insertColCount,
-				UniqueColCheckExpr: uniqueColCheckExpr,
-				UniqueCols:         uniqueCol,
-				OnDuplicateIdx:     rewriteInfo.onDuplicateIdx,
-				OnDuplicateExpr:    rewriteInfo.onDuplicateExpr,
-				IsIgnore:           rewriteInfo.onDuplicateIsIgnore,
-				TableName:          tableDef.Name,
-				TableId:            tableDef.TblId,
-				TableVersion:       tableDef.Version,
-			},
-		}
-		lastNodeId = builder.appendNode(onDuplicateKeyNode, bindCtx)
-
-		// append project node to make batch like update logic, not insert
-		updateColLength := 0
-		updateColPosMap := make(map[string]int)
-		updatePkCol := false
-		var insertColPos []int
-		var projectProjection []*Expr
-		tableDef = DeepCopyTableDef(tableDef, true)
-		tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
-		colLength := len(tableDef.Cols)
-		rowIdPos := colLength - 1
-		if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
-			for _, name := range tableDef.Pkey.Names {
-				if _, ok := rewriteInfo.onDuplicateExpr[name]; ok {
-					updatePkCol = true
-				}
+		} else {
+			// Writable external table: minimal plan, no preinsert/lock/pk-dedup/index.
+			if err = appendExternalInsertPlan(builder, bindCtx, objRef, tableDef, rewriteInfo.rootId); err != nil {
+				return nil, err
 			}
 		}
-		for _, col := range tableDef.Cols {
-			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
-				continue
-			}
-			updateColLength++
-		}
-		for i, col := range tableDef.Cols {
-			projectProjection = append(projectProjection, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(i + updateColLength),
-						Name:   col.Name,
-					},
-				},
-			})
-		}
-		for i := 0; i < updateColLength; i++ {
-			col := tableDef.Cols[i]
-			projectProjection = append(projectProjection, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(i),
-						Name:   col.Name,
-					},
-				},
-			})
-			updateColPosMap[col.Name] = colLength + i
-			insertColPos = append(insertColPos, colLength+i)
-		}
-		projectNode := &Node{
-			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{lastNodeId},
-			ProjectList: projectProjection,
-		}
-		lastNodeId = builder.appendNode(projectNode, bindCtx)
-
-		// append sink node
-		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-		sourceStep = builder.appendStep(lastNodeId)
-
-		// append plans like update
-		updateBindCtx := NewBindContext(builder, nil)
-		upPlanCtx := getDmlPlanCtx()
-		upPlanCtx.objRef = objRef
-		upPlanCtx.tableDef = tableDef
-		upPlanCtx.beginIdx = 0
-		upPlanCtx.sourceStep = sourceStep
-		upPlanCtx.isMulti = false
-		upPlanCtx.updateColLength = updateColLength
-		upPlanCtx.rowIdPos = rowIdPos
-		upPlanCtx.insertColPos = insertColPos
-		upPlanCtx.updateColPosMap = updateColPosMap
-		upPlanCtx.updatePkCol = updatePkCol
-
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
-		if err != nil {
-			return nil, err
-		}
-		putDmlPlanCtx(upPlanCtx)
-
-		query.StmtType = plan.Query_UPDATE
+		query.StmtType = plan.Query_INSERT
 	} else {
 		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap)
 		if err != nil {
@@ -332,6 +197,119 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			Query: query,
 		},
 	}, err
+}
+
+func icebergOverwritePlanExtraOptions(ctx context.Context, stmt *tree.Insert) (string, error) {
+	if stmt == nil || len(stmt.PartitionValues) == 0 {
+		return icebergapi.DMLOverwritePlanExtraOptions, nil
+	}
+	partition, err := icebergStaticPartitionTuple(ctx, stmt.PartitionValues)
+	if err != nil {
+		return "", err
+	}
+	return icebergapi.EncodeDMLOverwritePartitionPlanExtraOptions(partition)
+}
+
+func icebergStaticPartitionTuple(ctx context.Context, values tree.PartitionValues) (map[string]any, error) {
+	partition := make(map[string]any, len(values))
+	for _, value := range values {
+		name := strings.TrimSpace(string(value.Name))
+		if name == "" {
+			return nil, moerr.NewInvalidInput(ctx, "Iceberg INSERT OVERWRITE PARTITION requires a non-empty partition field name")
+		}
+		key := strings.ToLower(name)
+		if _, found := partition[key]; found {
+			return nil, moerr.NewInvalidInputf(ctx, "duplicate Iceberg INSERT OVERWRITE PARTITION field: %s", name)
+		}
+		literal, err := icebergStaticPartitionValue(ctx, value.Expr)
+		if err != nil {
+			return nil, err
+		}
+		partition[key] = literal
+	}
+	return partition, nil
+}
+
+func icebergStaticPartitionValue(ctx context.Context, expr tree.Expr) (any, error) {
+	switch v := expr.(type) {
+	case nil:
+		return nil, moerr.NewInvalidInput(ctx, "Iceberg INSERT OVERWRITE PARTITION requires a literal value")
+	case *tree.NumVal:
+		switch v.ValType {
+		case tree.P_null:
+			return nil, nil
+		case tree.P_bool:
+			return v.Bool(), nil
+		case tree.P_int64:
+			i, _ := v.Int64()
+			return i, nil
+		case tree.P_uint64:
+			u, _ := v.Uint64()
+			return u, nil
+		case tree.P_float64:
+			f, _ := v.Float64()
+			return f, nil
+		default:
+			return v.String(), nil
+		}
+	case *tree.StrVal:
+		return v.String(), nil
+	case tree.Datum:
+		if v == tree.DNull {
+			return nil, nil
+		}
+	}
+	return nil, moerr.NewNotSupported(ctx, "Iceberg INSERT OVERWRITE PARTITION requires static literal values")
+}
+
+// appendIcebergInsertPlan appends the dedicated append-write intent for an
+// Iceberg persistent mapping. The TableDef carries the Iceberg envelope in
+// Createsql; compile detects that envelope and dispatches to icebergwrite
+// instead of the writable-external ToExternal path.
+func appendIcebergInsertPlan(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, extraOptions string) error {
+	return appendExternalInsertPlanWithExtraOptions(builder, bindCtx, objRef, tableDef, lastNodeId, extraOptions)
+}
+
+// getExternParamFromTableDef deserializes the external-table ExternParam stored
+// in the catalog (TableDef.Createsql) for an external table. Returns an empty
+// param if there is nothing to parse.
+func getExternParamFromTableDef(tableDef *TableDef) *tree.ExternParam {
+	param := &tree.ExternParam{}
+	if tableDef == nil {
+		return param
+	}
+	_ = json.Unmarshal([]byte(tableDef.Createsql), param)
+	return param
+}
+
+// appendExternalInsertPlan appends a minimal INSERT node for a writable external
+// table. The source (lastNodeId) has already been bound, cast to the table
+// column types and projected by initInsertStmt, so we only attach the INSERT.
+func appendExternalInsertPlan(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, lastNodeId int32) error {
+	return appendExternalInsertPlanWithExtraOptions(builder, bindCtx, objRef, tableDef, lastNodeId, "")
+}
+
+func appendExternalInsertPlanWithExtraOptions(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, extraOptions string) error {
+	insertProjection := getProjectionByLastNode(builder, lastNodeId)
+	if len(insertProjection) > len(tableDef.Cols) {
+		insertProjection = insertProjection[:len(tableDef.Cols)]
+	}
+	insertNode := &Node{
+		NodeType: plan.Node_INSERT,
+		Children: []int32{lastNodeId},
+		ObjRef:   objRef,
+		TableDef: tableDef,
+		InsertCtx: &plan.InsertCtx{
+			Ref:             objRef,
+			AddAffectedRows: true,
+			TableDef:        tableDef,
+		},
+		ProjectList:  insertProjection,
+		ExtraOptions: extraOptions,
+	}
+	lastNodeId = builder.appendNode(insertNode, bindCtx)
+	builder.appendStep(lastNodeId)
+	return nil
 }
 
 // ------------------- pk filter relatived -------------------
@@ -581,7 +559,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 		for i, data := range node.RowsetData.Cols[idx].Data {
 			rowExpr := DeepCopyExpr(data.Expr)
-			e, err := forceCastExpr(builder.GetContext(), rowExpr, col.Typ)
+			e, err := builder.forceAssignmentCastExpr(rowExpr, col.Typ, builder.isInsertIgnore)
 			if err != nil {
 				return nil, err
 			}

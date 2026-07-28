@@ -48,7 +48,8 @@ func canDeleteRewriteToTruncate(ctx CompilerContext, dmlCtx *DMLContext) (bool, 
 		if enabled && len(tableDef.RefChildTbls) > 0 ||
 			tableDef.ViewSql != nil ||
 			(dmlCtx.isClusterTable[i] && accountId != catalog.System_Account) ||
-			dmlCtx.objRefs[i].PubInfo != nil {
+			dmlCtx.objRefs[i].PubInfo != nil ||
+			tableDef.Partition != nil {
 			return false, nil
 		}
 	}
@@ -72,7 +73,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	//FIXME: optimize truncate table?
-	if stmt.Where == nil && stmt.Limit == nil {
+	if stmt.Where == nil && stmt.Limit == nil && len(stmt.TableRefs) == 0 {
 		var cantrucate bool
 		cantrucate, err = canDeleteRewriteToTruncate(ctx, dmlCtx)
 		if err != nil {
@@ -139,8 +140,30 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	selectNode := builder.qry.Nodes[lastNodeID]
-	if selectNode.NodeType != plan.Node_PROJECT {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "malformed select node")
+	selectNodeTag := selectNode.BindingTags[0]
+
+	// When DELETE has joins, duplicate target rows may be produced if the
+	// right side has multiple matches. A DISTINCT node above the select
+	// eliminates them — the select projects only target-table columns
+	// including the unique Row_ID, so exact-duplicate rows are guaranteed
+	// to be the same physical row.
+	if len(stmt.TableRefs) > 0 {
+		lastNodeID = builder.appendDistinctNode(selectCtx, lastNodeID)
+	}
+
+	makeDeleteIndexPartExpr := func(colPos int32, partName string, prefixLengths map[string]int) (*plan.Expr, error) {
+		partName = catalog.ResolveAlias(partName)
+		inputExpr := &plan.Expr{
+			Typ: selectNode.ProjectList[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: colPos,
+					Name:   partName,
+				},
+			},
+		}
+		return builder.makeIndexPartExprFromInputExpr(inputExpr, partName, prefixLengths)
 	}
 
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
@@ -166,7 +189,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 					idxTableDef.Name2ColIndex[col.Name] = int32(colIdx)
 				}
 			}
-			idxTag := builder.genNewTag()
+			idxTag := builder.genNewBindTag()
 			builder.addNameByColRef(idxTag, idxTableDef)
 
 			idxScanNodes[i][j] = &plan.Node{
@@ -178,7 +201,8 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			}
 			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], bindCtx)
 
-			rightPkPos := idxTableDef.Name2ColIndex[catalog.IndexTableIndexColName]
+			lookupColName := indexLookupColumnName(idxDef)
+			rightPkPos := idxTableDef.Name2ColIndex[lookupColName]
 			pkTyp := idxTableDef.Cols[rightPkPos].Typ
 
 			rightExpr := &plan.Expr{
@@ -194,33 +218,48 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			var leftExpr *plan.Expr
 
 			argsLen := len(idxDef.Parts)
-			if argsLen == 1 {
+			if isSpatialIndexDef(idxDef) {
+				pkPos := colName2Idx[i][tableDef.Pkey.PkeyColName]
 				leftExpr = &plan.Expr{
 					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
-							RelPos: selectNode.BindingTags[0],
-							ColPos: int32(colName2Idx[i][idxDef.Parts[0]]),
+							RelPos: selectNodeTag,
+							ColPos: int32(pkPos),
 						},
 					},
 				}
+			} else if !indexTableStoresSerializedKey(idxDef) {
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return 0, err
+				}
+				partName := indexPrimaryPartName(idxDef)
+				colPos, ok := colName2Idx[i][partName]
+				if !ok {
+					return 0, moerr.NewInternalErrorf(builder.GetContext(), "bind delete err, can not find colName = %s", partName)
+				}
+				leftExpr, err = makeDeleteIndexPartExpr(colPos, partName, prefixLengths)
+				if err != nil {
+					return 0, err
+				}
 			} else {
 				args := make([]*plan.Expr, argsLen)
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return 0, err
+				}
 				var colPos int32
 				var ok bool
 				for k, colName := range idxDef.Parts {
-					if colPos, ok = colName2Idx[i][catalog.ResolveAlias(colName)]; !ok {
+					colName = catalog.ResolveAlias(colName)
+					if colPos, ok = colName2Idx[i][colName]; !ok {
 						errMsg := fmt.Sprintf("bind delete err, can not find colName = %s", colName)
 						return 0, moerr.NewInternalError(builder.GetContext(), errMsg)
 					}
-					args[k] = &plan.Expr{
-						Typ: selectNode.ProjectList[colPos].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: selectNode.BindingTags[0],
-								ColPos: colPos,
-							},
-						},
+					args[k], err = makeDeleteIndexPartExpr(colPos, colName, prefixLengths)
+					if err != nil {
+						return 0, err
 					}
 				}
 
@@ -237,7 +276,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			})
 
 			joinType := plan.Node_INNER
-			if idxDef.Unique {
+			if idxDef.Unique || isSpatialIndexDef(idxDef) {
 				joinType = plan.Node_LEFT
 			}
 
@@ -252,9 +291,8 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 	dmlNode := &plan.Node{
 		NodeType:    plan.Node_MULTI_UPDATE,
-		BindingTags: []int32{builder.genNewTag()},
+		BindingTags: []int32{builder.genNewBindTag()},
 	}
-	selectNodeTag := selectNode.BindingTags[0]
 	var lockTargets []*plan.LockTarget
 
 	for i, tableDef := range dmlCtx.tableDefs {
@@ -266,7 +304,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			partitionPos = colName2Idx[i][colName]
 		}
 		updateCtx := &plan.UpdateCtx{
-			TableDef: DeepCopyTableDef(tableDef, true),
+			TableDef: CloneTableDefForPlan(tableDef, true),
 			ObjRef:   DeepCopyObjectRef(dmlCtx.objRefs[i]),
 		}
 
@@ -334,7 +372,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			}
 
 			dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
-				TableDef: DeepCopyTableDef(idxNode.TableDef, true),
+				TableDef: CloneTableDefForPlan(idxNode.TableDef, true),
 				ObjRef:   DeepCopyObjectRef(idxNode.ObjRef),
 				DeleteCols: []plan.ColRef{
 					{
@@ -355,7 +393,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			NodeType:    plan.Node_LOCK_OP,
 			Children:    []int32{lastNodeID},
 			TableDef:    dmlCtx.tableDefs[0],
-			BindingTags: []int32{builder.genNewTag()},
+			BindingTags: []int32{builder.genNewBindTag()},
 			LockTargets: lockTargets,
 		}, bindCtx)
 

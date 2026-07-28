@@ -1,4 +1,3 @@
--- @skip:issue#16438
 drop database if exists tpcc;
 create database tpcc;
 use tpcc;

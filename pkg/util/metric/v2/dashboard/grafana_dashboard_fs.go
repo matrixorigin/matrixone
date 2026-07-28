@@ -36,6 +36,7 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 		c.withRowOptions(
 			c.initFSOverviewRow(),
 			c.initFSCacheRow(),
+			c.initFSCacheEvictErrorRow(),
 			c.initFSObjectStorageRow(),
 			c.initFSIOMergerDurationRow(),
 			c.initFSReadWriteDurationRow(),
@@ -156,42 +157,143 @@ func (c *DashboardCreator) initFSCacheRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initFSReadWriteBytesRow() dashboard.Option {
+func (c *DashboardCreator) initFSCacheEvictErrorRow() dashboard.Option {
 	return dashboard.Row(
-		"FileService read write bytes",
-		c.getMultiHistogram(
+		"FileService Cache Evict & Error",
+		c.withMultiGraph(
+			"Disk Cache Evict Rate",
+			6,
 			[]string{
-				c.getMetricWithFilter(`mo_fs_s3_io_bytes_bucket`, `type="read"`),
-				c.getMetricWithFilter(`mo_fs_s3_io_bytes_bucket`, `type="write"`),
-				c.getMetricWithFilter(`mo_fs_local_io_bytes_bucket`, `type="read"`),
-				c.getMetricWithFilter(`mo_fs_local_io_bytes_bucket`, `type="write"`),
+				`sum(rate(` + c.getMetricWithFilter("mo_fs_disk_cache_evict_total", "") + `[$interval]))`,
 			},
 			[]string{
-				"s3-read",
-				"s3-write",
-				"local-read",
-				"local-write",
+				"evict",
 			},
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			axis.Unit("bytes"),
-			axis.Min(0))...,
+			axis.Unit("short"),
+			axis.Min(0),
+		),
+		c.withMultiGraph(
+			"Disk Cache Error Rate",
+			6,
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_fs_disk_cache_error_total", "") + `[$interval]))`,
+			},
+			[]string{
+				"error",
+			},
+			axis.Unit("short"),
+			axis.Min(0),
+		),
 	)
 }
 
+// initFSReadWriteBytesRow initializes the FileService read/write bytes metrics row.
+// It displays throughput (bytes per second) for S3 and local IO operations.
+//
+// Metric Definition:
+// The histogram metrics (s3_io_bytes, local_io_bytes) record the bytes transferred per IO operation.
+// Each Observe() call records one IO operation with its byte size.
+//
+// Prometheus Histogram Structure:
+// Prometheus automatically generates three series for each histogram:
+// - _bucket: cumulative counters for each bucket boundary (used for percentile calculations)
+// - _sum: total sum of all observed values (used for throughput calculation)
+// - _count: total count of observations (used for operation rate calculations)
+//
+// Dashboard Panel:
+// Throughput Panel: sum(rate(..._sum[$interval]))
+//   - Calculates average bytes transferred per second over the time window
+//   - Formula: rate(_sum[$interval]) = (sum of all bytes) / time_window_seconds
+//   - This is the most important metric for understanding actual data transfer performance
+//   - Represents the actual bandwidth utilization (bytes/sec)
+//
+// Note: Percentile panels (P50/P80/P90/P99) for IO operation sizes are not included
+// because the histogram bucket configuration (ExponentialBuckets(1, 2.0, 10)) has a
+// maximum bucket of 512B. Since most IO operations are larger than 256B, all percentiles
+// would show as 512B, providing no useful information. The throughput metric is the
+// primary and most useful metric for understanding IO performance.
+func (c *DashboardCreator) initFSReadWriteBytesRow() dashboard.Option {
+	// Throughput queries: Calculate bytes per second using _sum metric
+	// rate(_sum[$interval]) computes the average rate of increase of the sum over the time window
+	// This gives us the actual data transfer rate in bytes per second
+	throughputQueries := []string{
+		// S3 read throughput: average bytes read from S3 per second over [$interval]
+		// Represents the actual read bandwidth from S3 storage
+		`sum(rate(` + c.getMetricWithFilter(`mo_fs_s3_io_bytes_sum`, `type="read"`) + `[$interval]))`,
+
+		// S3 write throughput: average bytes written to S3 per second over [$interval]
+		// Represents the actual write bandwidth to S3 storage
+		`sum(rate(` + c.getMetricWithFilter(`mo_fs_s3_io_bytes_sum`, `type="write"`) + `[$interval]))`,
+
+		// Local read throughput: average bytes read from local storage per second over [$interval]
+		// Represents the actual read bandwidth from local disk
+		`sum(rate(` + c.getMetricWithFilter(`mo_fs_local_io_bytes_sum`, `type="read"`) + `[$interval]))`,
+
+		// Local write throughput: average bytes written to local storage per second over [$interval]
+		// Represents the actual write bandwidth to local disk
+		`sum(rate(` + c.getMetricWithFilter(`mo_fs_local_io_bytes_sum`, `type="write"`) + `[$interval]))`,
+	}
+
+	throughputLegends := []string{
+		"s3-read",
+		"s3-write",
+		"local-read",
+		"local-write",
+	}
+
+	// Note: Percentile panels (P50/P80/P90/P99) for IO operation sizes are not included
+	// because the histogram bucket configuration (ExponentialBuckets(1, 2.0, 10)) has a
+	// maximum bucket of 512B. Since most IO operations are larger than 256B, all percentiles
+	// would show as 512B, providing no useful information. The throughput panel (bytes/sec)
+	// is the primary and most useful metric for understanding IO performance.
+
+	return dashboard.Row(
+		"FileService IO Throughput",
+		c.withMultiGraph(
+			"Throughput (bytes/sec)",
+			12,
+			throughputQueries,
+			throughputLegends,
+			axis.Unit("bytes"), // Grafana will auto-format as bytes/s for rate() queries
+			axis.Min(0),
+		),
+	)
+}
+
+// initFSS3ConnOverviewRow initializes the S3 connection overview row.
+// It displays connection establishment rates and current connection pool state.
 func (c *DashboardCreator) initFSS3ConnOverviewRow() dashboard.Option {
 	return dashboard.Row(
 		"FileService S3 connection overview",
-		c.withGraph(
-			"Connect",
+		// Connection establishment rate: new TCP connections per second
+		c.withTimeSeries(
+			"TCP Connections/sec",
+			3,
+			[]string{`sum(rate(` + c.getMetricWithFilter("mo_fs_s3_conn_duration_seconds_count", `type="connect"`) + `[$interval]))`},
+			[]string{"connections/sec"},
+			timeseries.Axis(tsaxis.Unit("short")), // connections per second
+			timeseries.FillOpacity(0),
+		),
+		// DNS resolution rate: DNS lookups per second
+		c.withTimeSeries(
+			"DNS Resolutions/sec",
+			3,
+			[]string{`sum(rate(` + c.getMetricWithFilter("mo_fs_s3_conn_duration_seconds_count", `type="dns-resolve"`) + `[$interval]))`},
+			[]string{"resolutions/sec"},
+			timeseries.Axis(tsaxis.Unit("short")), // resolutions per second
+			timeseries.FillOpacity(0),
+		),
+		// Active connections: current number of connections currently in use for HTTP requests
+		// This is tracked accurately via GotConn callback in httptrace
+		// Higher values indicate more concurrent requests to S3
+		c.withTimeSeries(
+			"Active Connections",
 			6,
-			`sum(rate(`+c.getMetricWithFilter("mo_fs_s3_conn_duration_seconds_count", `type="connect"`)+`[$interval]))`,
-			""),
-		c.withGraph(
-			"DNS Resolve",
-			6,
-			`sum(rate(`+c.getMetricWithFilter("mo_fs_s3_conn_duration_seconds_count", `type="dns-resolve"`)+`[$interval]))`,
-			""),
+			[]string{c.getMetricWithFilter("mo_fs_s3_conn_active", "")},
+			[]string{"active"},
+			timeseries.Axis(tsaxis.Unit("short")), // connection count
+			timeseries.FillOpacity(0),
+		),
 	)
 }
 
@@ -340,7 +442,15 @@ func (c *DashboardCreator) initFSObjectStorageRow() dashboard.Option {
 	)
 }
 
+// initFSHTTPTraceRow initializes the HTTP trace metrics row for FileService.
+// It displays connection-related metrics including connection acquisition, reuse, and connection establishment phases.
+// All metrics are shown as rates (per second) for better observability.
 func (c *DashboardCreator) initFSHTTPTraceRow() dashboard.Option {
+	gotConnRate := `sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConn"`) + `[$interval]))`
+	gotConnReusedRate := `sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnReused"`) + `[$interval]))`
+	gotConnIdleRate := `sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnIdle"`) + `[$interval]))`
+	getConnRate := `sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GetConn"`) + `[$interval]))`
+
 	return dashboard.Row(
 		"HTTP Trace",
 
@@ -348,23 +458,78 @@ func (c *DashboardCreator) initFSHTTPTraceRow() dashboard.Option {
 			"trace",
 			4,
 			[]string{
-				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GetConn"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConn"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnReused"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="GotConnIdle"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="DNSStart"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="ConnectStart"`) + `)`,
-				`sum(` + c.getMetricWithFilter("mo_fs_http_trace", `op="TSLHandshakeStart"`) + `)`,
+				// GotConn: Average rate of successfully obtained connections per second over the time window.
+				// rate() calculates the per-second average rate of increase over [$interval] time range.
+				// This represents the number of connections successfully acquired from the pool or newly established.
+				gotConnRate,
+
+				// GotConnReused: Average rate of reused connections per second over the time window.
+				// This indicates how many connections were reused (either from active pool or idle pool).
+				// Higher values indicate better connection pool efficiency.
+				gotConnReusedRate,
+
+				// GotConnIdle: Average rate of connections obtained from idle pool per second over the time window.
+				// This is a subset of GotConnReused, showing connections that were retrieved from the idle connection pool.
+				gotConnIdleRate,
+
+				// GetConnFailed: Average rate of failed connection attempts per second over the time window.
+				// Calculated as rate(GetConn) - rate(GotConn), representing connection acquisition failures.
+				// Non-zero values indicate connection establishment issues that need investigation.
+				getConnRate + ` - ` + gotConnRate,
+
+				// DNSStart: Average rate of DNS resolution attempts per second over the time window.
+				// Only triggered for new connections that require DNS lookup.
+				`sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="DNSStart"`) + `[$interval]))`,
+
+				// ConnectStart: Average rate of TCP connection attempts per second over the time window.
+				// Only triggered for new connections that require TCP handshake.
+				`sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="ConnectStart"`) + `[$interval]))`,
+
+				// TLSHandshakeStart: Average rate of TLS handshake attempts per second over the time window.
+				// Only triggered for new HTTPS connections that require TLS negotiation.
+				`sum(rate(` + c.getMetricWithFilter("mo_fs_http_trace", `op="TSLHandshakeStart"`) + `[$interval]))`,
 			},
 			[]string{
-				"GetConn",
 				"GotConn",
 				"GotConnReused",
 				"GotConnIdle",
+				"GetConnFailed",
 				"DNSStart",
 				"ConnectStart",
 				"TLSHandshakeStart",
 			},
+		),
+
+		// Connection ratio metrics: shows percentages of connection reuse, idle pool usage, and failure rates
+		// Grafana will automatically handle NaN values (from division by zero) by not displaying them
+		c.withTimeSeries(
+			"Connection Ratios (%)",
+			4,
+			[]string{
+				// Connection reuse rate: percentage of connections that were reused
+				// Higher values indicate better connection pool efficiency
+				`( ` + gotConnReusedRate + ` / ` + gotConnRate + ` ) * 100`,
+
+				// Idle pool reuse rate: percentage of connections obtained from idle pool
+				// This is a subset of reused connections, showing idle pool effectiveness
+				`( ` + gotConnIdleRate + ` / ` + gotConnRate + ` ) * 100`,
+
+				// New connection rate: percentage of connections that were newly established
+				// Lower values indicate better connection reuse
+				`( ( ` + gotConnRate + ` - ` + gotConnReusedRate + ` ) / ` + gotConnRate + ` ) * 100`,
+
+				// Connection failure rate: percentage of connection attempts that failed
+				// Non-zero values indicate connection establishment issues
+				`( ( ` + getConnRate + ` - ` + gotConnRate + ` ) / ` + getConnRate + ` ) * 100`,
+			},
+			[]string{
+				"Reuse Rate",
+				"Idle Pool Rate",
+				"New Connection Rate",
+				"Failure Rate",
+			},
+			timeseries.Axis(tsaxis.Unit("percent")), // percentage unit
+			timeseries.FillOpacity(20),              // slight fill for better visualization (0-100 range)
 		),
 	)
 }

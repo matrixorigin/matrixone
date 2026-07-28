@@ -31,6 +31,14 @@ func Acos(v float64) (float64, error) {
 	}
 }
 
+func Asin(v float64) (float64, error) {
+	if v < -1 || v > 1 {
+		return 0, moerr.NewInvalidArgNoCtx("asin", v)
+	} else {
+		return math.Asin(v), nil
+	}
+}
+
 func Atan(v float64) (float64, error) {
 	return math.Atan(v), nil
 }
@@ -48,7 +56,11 @@ func Cot(v float64) (float64, error) {
 }
 
 func Exp(v float64) (float64, error) {
-	return math.Exp(v), nil
+	r := math.Exp(v)
+	if math.IsInf(r, 0) {
+		return 0, moerr.NewOutOfRangeNoCtxf("float64", "DOUBLE value is out of range in 'exp(%v)'", v)
+	}
+	return r, nil
 }
 
 func Sqrt(v float64) (float64, error) {

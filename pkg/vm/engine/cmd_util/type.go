@@ -19,12 +19,23 @@ import "time"
 const AllowPruneDuration = 24 * time.Hour
 
 const (
-	CheckerKeyTTL   = "ttl"
-	CheckerKeyMinTS = "min_ts"
+	CheckerKeyTTL    = "ttl"
+	CheckerKeyMinTS  = "min_ts"
+	CheckerKeyBackup = "backup"
 
 	AddChecker    = "add_checker"
 	RemoveChecker = "remove_checker"
 
 	StopGC  = "stop_gc"
 	StartGC = "start_gc"
+
+	ForceGC = "force_gc"
+
+	GCDetails = "details"
+	GCVerify  = "verify"
+
+	// Sync protection operations for cross-cluster sync
+	RegisterSyncProtection   = "register_sync_protection"
+	RenewSyncProtection      = "renew_sync_protection"
+	UnregisterSyncProtection = "unregister_sync_protection"
 )

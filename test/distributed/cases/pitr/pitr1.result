@@ -6,38 +6,38 @@ show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
 p_01    2025-01-16 15:57:56    2025-01-16 15:57:56    account    sys    *    *    1    d
 select * from mo_catalog.mo_pitr Where pitr_name = 'p_01';
-pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time
-01946e1e-72f2-7294-afca-fe8b9c3286be    p_01    0    2025-01-16 07:57:56    2025-01-16 07:57:56    account    0    sys            0    1    d    1    2025-01-16 07:52:03
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time    kind
+019b3102-e508-7e15-8d19-9948b76699ed    p_01    0    1766053831945050000    1766053831945050000    account    0    sys            0    1    d    1    1766053831945050000    user
 alter pitr p_01 range 100 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
 p_01    2025-01-16 15:57:56    2025-01-16 15:57:56    account    sys    *    *    100    d
 select * from mo_catalog.mo_pitr Where pitr_name = 'p_01';
-pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time
-01946e1e-72f2-7294-afca-fe8b9c3286be    p_01    0    2025-01-16 07:57:56    2025-01-16 07:57:56    account    0    sys            0    100    d    1    2025-01-16 07:52:03
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time    kind
+01946e1e-72f2-7294-afca-fe8b9c3286be    p_01    0    2025-01-16 07:57:56    2025-01-16 07:57:56    account    0    sys            0    100    d    1    2025-01-16 07:52:03    user
 drop pitr p_01;
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
 select * from mo_catalog.mo_pitr Where pitr_name = 'p_01';
-pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time    kind
 drop pitr if exists `select`;
 create pitr `select` range 10 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
 select    2025-01-16 15:57:56    2025-01-16 15:57:56    account    acc01    *    *    10    d
 select * from mo_catalog.mo_pitr Where pitr_name = 'select';
-pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time
-01946e1e-7370-7825-9e3e-bd50ee1ee09a    select    1    2025-01-16 07:57:56    2025-01-16 07:57:56    account    1    acc01            1    10    d    1    2025-01-16 07:52:03
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time    kind
+01946e1e-7370-7825-9e3e-bd50ee1ee09a    select    1    2025-01-16 07:57:56    2025-01-16 07:57:56    account    1    acc01            1    10    d    1    2025-01-16 07:52:03    user
 alter pitr `select` range 30 'd';
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT
 select    2025-01-16 15:57:56    2025-01-16 15:57:57    account    acc01    *    *    30    d
 select * from mo_catalog.mo_pitr Where pitr_name = 'select';
-pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time
-01946e1e-7370-7825-9e3e-bd50ee1ee09a    select    1    2025-01-16 07:57:56    2025-01-16 07:57:57    account    1    acc01            1    30    d    1    2025-01-16 07:52:03
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time    kind
+01946e1e-7370-7825-9e3e-bd50ee1ee09a    select    1    2025-01-16 07:57:56    2025-01-16 07:57:57    account    1    acc01            1    30    d    1    2025-01-16 07:52:03    user
 drop pitr `select`;
 select * from mo_catalog.mo_pitr Where pitr_name = 'select';
-pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time
+pitr_id    pitr_name    create_account    create_time    modified_time    level    account_id    account_name    database_name    table_name    obj_id    pitr_length    pitr_unit    pitr_status    pitr_status_changed_time    kind
 drop account acc01;
 show pitr;
 PITR_NAME    CREATED_TIME    MODIFIED_TIME    PITR_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME    PITR_LENGTH    PITR_UNIT

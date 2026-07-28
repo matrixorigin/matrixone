@@ -17,9 +17,10 @@ package plan
 import (
 	"context"
 	"encoding/json"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -34,6 +35,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
+
+type rootSQLCompilerContext struct {
+	*MockCompilerContext
+	rootSQL string
+	calls   int
+}
+
+func (c *rootSQLCompilerContext) GetRootSql() string {
+	c.calls++
+	return c.rootSQL
+}
+
+func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
+	const rootSQL = "create view v as select 1"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, ctx.calls)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Equal(t, rootSQL, viewData.Stmt)
+
+	var createSQL string
+	for _, def := range tableDef.GetDefs() {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.GetKey() == catalog.SystemRelAttr_CreateSQL {
+				createSQL = property.GetValue()
+			}
+		}
+	}
+	require.Equal(t, rootSQL, createSQL)
+}
 
 func TestBuildAlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -51,8 +94,9 @@ func TestBuildAlterView(t *testing.T) {
 	store := make(map[string]arg)
 
 	vData, err := json.Marshal(ViewData{
-		"create view v as select a from a",
-		"db",
+		Stmt:            "create view v as select a from a",
+		DefaultDatabase: "db",
+		SecurityType:    "DEFINER",
 	})
 	assert.NoError(t, err)
 
@@ -65,8 +109,9 @@ func TestBuildAlterView(t *testing.T) {
 	}
 
 	vxData, err := json.Marshal(ViewData{
-		"create view vx as select a from v",
-		"db",
+		Stmt:            "create view vx as select a from v",
+		DefaultDatabase: "db",
+		SecurityType:    "DEFINER",
 	})
 	assert.NoError(t, err)
 	store["db.vx"] = arg{&plan.ObjectRef{},
@@ -430,6 +475,55 @@ func TestBuildAlterTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCreateIndexOnExternalTableError(t *testing.T) {
+	mock := NewEmptyMockOptimizer()
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.objects["ext_idx"] = &plan.ObjectRef{
+		SchemaName: "tpch",
+		ObjName:    "ext_idx",
+	}
+	ctx.tables["ext_idx"] = &plan.TableDef{
+		Name:      "ext_idx",
+		TableType: catalog.SystemExternalRel,
+		Cols: []*plan.ColDef{
+			{Name: "col_int32", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "col_varchar", Typ: plan.Type{Id: int32(types.T_varchar), Width: 100}},
+			{Name: "part_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+	}
+
+	sqls := []string{
+		"CREATE INDEX idx_ext ON ext_idx(col_int32);",
+		"CREATE UNIQUE INDEX uidx_ext ON ext_idx(col_int32);",
+		"CREATE FULLTEXT INDEX fidx_ext ON ext_idx(col_varchar);",
+		"ALTER TABLE ext_idx ADD INDEX idx_ext2 (col_int32);",
+		"ALTER TABLE ext_idx ADD UNIQUE (col_varchar);",
+		"ALTER TABLE ext_idx ADD FULLTEXT INDEX fidx_ext2 (col_varchar);",
+	}
+	for _, sql := range sqls {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "cannot create index on external table", sql)
+	}
+}
+
+func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE EXTERNAL TABLE ext_inline_col_key (id INT KEY) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_col_unique (id INT UNIQUE) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_col_pk (id INT PRIMARY KEY) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_key (id INT, KEY (id)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_unique (id INT, UNIQUE KEY uk_id (id)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_fulltext (doc VARCHAR(100), FULLTEXT ft_doc (doc)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+	}
+	for _, sql := range sqls {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "cannot create index on external table", sql)
+	}
+}
+
 func TestBuildAlterTableError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// should pass
@@ -439,6 +533,127 @@ func TestBuildAlterTableError(t *testing.T) {
 		"ALTER TABLE emp ADD UNIQUE INDEX idx1 ((empno+20), (sal*30));",
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestBuildIndexAllowsEnumAndTextBlobPrefix(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE enum_idx_ok1 (id VARCHAR(191) PRIMARY KEY, role ENUM('a','b','c'), INDEX idx_role(role));",
+		"CREATE TABLE enum_idx_ok2 (id VARCHAR(191) PRIMARY KEY, role ENUM('a','b','c'), UNIQUE INDEX uq_role(role));",
+		"CREATE TABLE enum_idx_ok3 (id VARCHAR(191) PRIMARY KEY, name VARCHAR(191), role ENUM('a','b','c'), INDEX idx_name_role(name, role));",
+		"CREATE TABLE text_prefix_ok1 (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t(100)));",
+		"CREATE TABLE text_prefix_ok2 (id INT PRIMARY KEY, t TEXT, UNIQUE INDEX uq_t(t(100)));",
+		"CREATE TABLE blob_prefix_ok1 (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b(100)));",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestBuildIndexRejectsTextBlobPlainIndex(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqlerrs := []string{
+		"CREATE TABLE text_plain_err1 (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t));",
+		"CREATE TABLE text_plain_err2 (id INT PRIMARY KEY, t TEXT, UNIQUE INDEX uq_t(t));",
+		"CREATE TABLE text_comp_pk_err (id INT, t TEXT, PRIMARY KEY(id, t));",
+		"CREATE TABLE blob_plain_err1 (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b));",
+		"CREATE TABLE blob_comp_pk_err (b BLOB, id INT, PRIMARY KEY(b, id));",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
+func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name   string
+		sql    string
+		column string
+		length int
+	}{
+		{
+			name:   "text",
+			sql:    "CREATE TABLE text_prefix_secondary_ok (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t(100)));",
+			column: "t",
+			length: 100,
+		},
+		{
+			name:   "blob",
+			sql:    "CREATE TABLE blob_prefix_secondary_ok (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b(100)));",
+			column: "b",
+			length: 100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+
+			createTable := logicPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			require.Len(t, createTable.GetTableDef().GetIndexes(), 1)
+
+			indexDef := createTable.GetTableDef().GetIndexes()[0]
+			prefixLengths := catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams)
+			require.Equal(t, tt.length, prefixLengths[tt.column])
+		})
+	}
+}
+
+func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE vec_idx_ok1 (id INT PRIMARY KEY, embedding VECF32(3), KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops');",
+		"CREATE TABLE vec_idx_ok2 (id INT PRIMARY KEY, embedding VECF64(3), KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops');",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	sqlerrs := []string{
+		"CREATE TABLE vec_idx_err1 (id INT PRIMARY KEY, embedding VECF32(3), KEY idx_emb (embedding));",
+		"CREATE TABLE vec_idx_err2 (id INT PRIMARY KEY, embedding VECF64(3), KEY idx_emb (embedding));",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
+func TestBuildIndexAllowsRTreeGeometry(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE geo_spatial_ok (id INT PRIMARY KEY, g POINT NOT NULL, KEY idx_g USING RTREE (g));",
+		"CREATE TABLE geo_spatial_nullable_ok (id INT PRIMARY KEY, g POINT, KEY idx_g USING RTREE (g));",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
+
+	sqlerrs := []string{
+		"CREATE TABLE geo_default_err (g GEOMETRY DEFAULT 'POINT(1 1)');",
+		"CREATE TABLE geo_pk_err (g GEOMETRY PRIMARY KEY);",
+		"CREATE TABLE geo_uk_err (g GEOMETRY UNIQUE KEY);",
+		"CREATE TABLE geo_idx_err (g GEOMETRY, KEY(g));",
+		"ALTER TABLE emp ADD COLUMN g GEOMETRY UNIQUE KEY;",
+		"ALTER TABLE emp ADD COLUMN g GEOMETRY PRIMARY KEY;",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
+func TestGeometryColumnValidationSQLPaths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
+
+	sqls := []string{
+		"CREATE TABLE geo_point_ok (g POINT);",
+		"CREATE TABLE geo_any_ok (g GEOMETRY);",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
 }
 
 func TestCreateSingleTable(t *testing.T) {
@@ -455,6 +670,132 @@ func TestCreateTableAsSelect(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	prepared, err := runOneStmt(mock, t, "prepare stmt_ctas from 'create table ctas_p as select ? as a, ? as b'")
+	require.NoError(t, err)
+	prepare := prepared.GetDcl().GetPrepare()
+	require.Len(t, prepare.GetParamTypes(), 2)
+	require.NotNil(t, prepare.GetPlan().GetDdl().GetQuery())
+	require.Empty(t, GetResultColumnsFromPlan(prepare.GetPlan()))
+
+	prepared, err = runOneStmt(mock, t, "prepare stmt_ctas_where from 'create table ctas_where as select N_NAME from NATION where N_REGIONKEY = ?'")
+	require.NoError(t, err)
+	prepare = prepared.GetDcl().GetPrepare()
+	require.Len(t, prepare.GetParamTypes(), 1)
+	require.NotEmpty(t, prepare.GetSchemas())
+
+	_, err = runOneStmt(mock, t, "create table ctas_unprepared as select ? as a")
+	require.ErrorContains(t, err, "only prepare statement can use ? expr")
+}
+
+func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "non-ASCII select alias",
+			sql:  "CREATE TABLE ctas_alias AS SELECT N_NAME AS `中文别名` FROM NATION",
+			want: "insert into `tpch`.`ctas_alias` select * from (select `nation`.`N_NAME` as `中文别名` from `nation`)",
+		},
+		{
+			name: "reserved table alias",
+			sql:  "CREATE TABLE ctas_alias AS SELECT `order`.N_NAME AS `select` FROM NATION AS `order`",
+			want: "insert into `tpch`.`ctas_alias` select * from (select `order`.`N_NAME` as `select` from `nation` as `order`)",
+		},
+		{
+			name: "embedded backtick in target name",
+			sql:  "CREATE TABLE `ctas``alias` AS SELECT N_NAME FROM NATION",
+			want: "insert into `tpch`.`ctas``alias` select * from (select `nation`.`N_NAME` from `nation`)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			createTable := logicPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			require.Equal(t, test.want, createTable.GetCreateAsSelectSql())
+		})
+	}
+}
+
+func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "interval expressions",
+			sql:  "select date_add(col2, interval(45, day)), date_sub(col2, interval(5, day)) from time01",
+			want: "select date_add(col2, interval 45 day), date_sub(col2, interval 5 day) from time01",
+		},
+		{
+			name: "interval text in identifier",
+			sql:  "select `interval(x,day)` from src as `interval(y,month)`",
+			want: "select `interval(x,day)` from src as `interval(y,month)`",
+		},
+		{
+			name: "doubled backtick in identifier",
+			sql:  "select `a``interval(x,day)` from src",
+			want: "select `a``interval(x,day)` from src",
+		},
+		{
+			name: "unclosed backtick",
+			sql:  "select `interval(x,day)",
+			want: "select `interval(x,day)",
+		},
+		{
+			name: "quoted interval operand",
+			sql:  "select date_add(col2, interval(`a,b)`, day)) from src",
+			want: "select date_add(col2, interval `a,b)` day) from src",
+		},
+		{
+			name: "single quoted string",
+			sql:  "select 'interval(1,day)' as c",
+			want: "select 'interval(1,day)' as c",
+		},
+		{
+			name: "double quoted string",
+			sql:  `select "interval(1,day)" as c`,
+			want: `select "interval(1,day)" as c`,
+		},
+		{
+			name: "doubled quote in string",
+			sql:  "select 'a''interval(1,day)' as c",
+			want: "select 'a''interval(1,day)' as c",
+		},
+		{
+			name: "backslash escaped quote in string",
+			sql:  `select 'a\'interval(1,day)' as c`,
+			want: `select 'a\'interval(1,day)' as c`,
+		},
+		{
+			name: "unclosed quoted string",
+			sql:  "select 'interval(1,day)",
+			want: "select 'interval(1,day)",
+		},
+		{
+			name: "identifier prefix",
+			sql:  "select myinterval(1, day), $interval(2, day), 中文interval(3, day)",
+			want: "select myinterval(1, day), $interval(2, day), 中文interval(3, day)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, restoreIntervalSyntaxForCTAS(test.sql))
+		})
+	}
 }
 
 func TestParseDuration(t *testing.T) {
@@ -675,4 +1016,170 @@ func TestBuildCreatePitr(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, plan)
 	})
+}
+
+func TestConstructAddedPartitionDefsErrors(t *testing.T) {
+	ctx := NewEmptyCompilerContext()
+	ctx.SetContext(context.Background())
+
+	makeTableDef := func() *plan.TableDef {
+		return &plan.TableDef{
+			Name: "t1",
+			Cols: []*plan.ColDef{
+				{
+					Name: "a",
+					Typ:  plan.Type{Id: int32(types.T_int32)},
+					Default: &plan.Default{
+						NullAbility: true,
+					},
+				},
+			},
+		}
+	}
+
+	newClause := func(parts ...*tree.Partition) *tree.AlterPartitionAddPartitionClause {
+		return tree.NewAlterPartitionAddPartitionClause(tree.AlterPartitionAddPartition, parts)
+	}
+
+	t.Run("parse error on invalid createsql", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = "$$$"
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause())
+		assert.Error(t, err)
+	})
+
+	t.Run("not a create table in createsql", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = "create view v as select 1"
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported ADD PARTITION not in create table")
+	})
+
+	t.Run("table without partition option", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = "create table t1 (a int)"
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "Partition management on a not partitioned table is not possible")
+	})
+
+	t.Run("unsupported method: HASH", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = "create table t1 (a int) partition by hash(a) partitions 2"
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported partition method in ADD PARTITION")
+	})
+
+	// RANGE cases (create table has existing one partition p0 < 10)
+	rangeCreate := "create table t1 (a int) partition by range (a) (partition p0 values less than (10))"
+
+	t.Run("RANGE: more than one value in values less than", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = rangeCreate
+		v1 := tree.NewNumVal[int64](20, "20", false, tree.P_int64)
+		v2 := tree.NewNumVal[int64](30, "30", false, tree.P_int64)
+		p1 := &tree.Partition{Name: tree.Identifier("p1"), Values: tree.NewValuesLessThan(tree.Exprs{v1, v2})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(p1))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "RANGE PARTITIONING can only have one parameter")
+	})
+
+	t.Run("RANGE: MAXVALUE must be last", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = rangeCreate
+		max := tree.NewMaxValue()
+		pMax := &tree.Partition{Name: tree.Identifier("pmax"), Values: tree.NewValuesLessThan(tree.Exprs{max})}
+		p2 := &tree.Partition{Name: tree.Identifier("p2"), Values: tree.NewValuesLessThan(tree.Exprs{tree.NewNumVal[int64](20, "20", false, tree.P_int64)})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(pMax, p2))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "MAXVALUE must be the last RANGE partition")
+	})
+
+	t.Run("RANGE: values less than must be strictly increasing", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = rangeCreate
+		p1 := &tree.Partition{Name: tree.Identifier("p1"), Values: tree.NewValuesLessThan(tree.Exprs{tree.NewNumVal[int64](5, "5", false, tree.P_int64)})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(p1))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "VALUES LESS THAN value must be strictly increasing")
+	})
+
+	// LIST cases
+	listCreate := "create table t1 (a int) partition by list (a) (partition p0 values in (1))"
+
+	t.Run("LIST: empty values", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = listCreate
+		p1 := &tree.Partition{Name: tree.Identifier("p1"), Values: tree.NewValuesIn(tree.Exprs{})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(p1))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "LIST PARTITIONING must have at least one value")
+	})
+
+	t.Run("LIST: duplicate within same partition", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = listCreate
+		v := tree.NewNumVal[int64](2, "2", false, tree.P_int64)
+		p1 := &tree.Partition{Name: tree.Identifier("p1"), Values: tree.NewValuesIn(tree.Exprs{v, v})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(p1))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate values within the same LIST partition are not allowed")
+	})
+
+	t.Run("LIST: duplicate across partitions", func(t *testing.T) {
+		tdef := makeTableDef()
+		tdef.Createsql = listCreate
+		v := tree.NewNumVal[int64](1, "1", false, tree.P_int64)
+		p1 := &tree.Partition{Name: tree.Identifier("p1"), Values: tree.NewValuesIn(tree.Exprs{v})}
+		_, err := constructAddedPartitionDefs(ctx, tdef, newClause(p1))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "LIST PARTITIONING values must be unique across partitions")
+	})
+}
+
+func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
+	ctx := &sqlModeMockCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		sqlMode:             "ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+	}
+	const createSQL = `create table "partition_mode" ("category" varchar(20)) partition by list columns ("category") (partition "select" values in ('A\\B')) cluster by ("category")`
+	stmt, err := parsers.ParseOneWithSQLMode(context.Background(), dialect.MYSQL, createSQL, 1, ctx.sqlMode)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	createTablePlan := p.GetDdl().GetCreateTable()
+	tableDef := createTablePlan.GetTableDef()
+	require.NotNil(t, tableDef)
+	for _, def := range tableDef.Defs {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.Key == catalog.SystemRelAttr_CreateSQL {
+				tableDef.Createsql = property.Value
+			}
+		}
+	}
+	require.Contains(t, tableDef.Createsql, "`partition_mode`")
+	require.Contains(t, tableDef.Createsql, "`category`")
+	require.Contains(t, tableDef.Createsql, "partition `select`")
+	require.Contains(t, tableDef.Createsql, "cluster by (`category`)")
+	require.Contains(t, tableDef.Createsql, `'A\\\\B'`)
+	require.NotContains(t, tableDef.Createsql, `"`)
+	require.Equal(t, tableDef.Createsql, createTablePlan.RawSQL)
+
+	newValue := tree.NewNumVal("C\\D", "C\\D", false, tree.P_char)
+	clause := tree.NewAlterPartitionAddPartitionClause(
+		tree.AlterPartitionAddPartition,
+		[]*tree.Partition{{
+			Name:   tree.Identifier("p1"),
+			Values: tree.NewValuesIn(tree.Exprs{newValue}),
+		}},
+	)
+	defer clause.Free()
+
+	defs, err := constructAddedPartitionDefs(ctx, tableDef, clause)
+	require.NoError(t, err)
+	require.Len(t, defs, 1)
 }

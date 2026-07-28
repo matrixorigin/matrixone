@@ -60,7 +60,8 @@ func IsDDL(stmt tree.Statement) bool {
 	case *tree.CreateTable, *tree.DropTable,
 		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.RenameTable,
 		*tree.CreateDatabase, *tree.DropDatabase, *tree.CreateSequence, *tree.DropSequence,
-		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
+		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable,
+		*tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
 		return true
 	}
 	return false
@@ -69,7 +70,7 @@ func IsDDL(stmt tree.Statement) bool {
 // IsDropStatement checks the statement is the drop statement.
 func IsDropStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.DropDatabase, *tree.DropTable, *tree.DropView, *tree.DropIndex, *tree.DropSequence:
+	case *tree.DropDatabase, *tree.DropTable, *tree.DropView, *tree.DropIndex, *tree.DropSequence, *tree.DropIcebergCatalog:
 		return true
 	}
 	return false
@@ -103,7 +104,15 @@ func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}
-	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt)
+	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt) || isLockTableStatement(stmt)
+}
+
+func isLockTableStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.LockTableStmt:
+		return true
+	}
+	return false
 }
 
 /*
@@ -137,17 +146,20 @@ func statementCanBeExecutedInUncommittedTransaction(
 
 	switch st := stmt.(type) {
 	//ddl statement
-	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
-		if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
-			return false, nil
-		}
+	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable,
+		*tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
+		// CTAS is allowed in explicit transactions now because its internal
+		// INSERT ... SELECT is executed in the same txn as CREATE TABLE.
+		//if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
+		//	return false, nil
+		//}
 		return true, nil
 	case *tree.CreateDatabase, *tree.DropDatabase:
 		return true, nil
 	case *tree.CreateSequence: //Case1, Case3 above
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement, *tree.Replace:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.DumpTable, *tree.LoadTable, *tree.ValuesStatement, *tree.Replace:
 		return true, nil
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
@@ -179,17 +191,22 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.ShowAccounts,
 		*tree.ShowPublications,
 		*tree.ShowSubscriptions,
+		*tree.ShowCcprSubscriptions,
 		*tree.ShowCreatePublications,
+		*tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers,
 		*tree.ShowAccountUpgrade,
 		*tree.ShowConnectors,
+		*tree.ShowIcebergCatalogs,
+		*tree.ShowIcebergNamespaces,
+		*tree.ShowIcebergTables,
 		*tree.ShowLogserviceReplicas,
 		*tree.ShowLogserviceStores,
 		*tree.ShowLogserviceSettings,
 		*tree.SetLogserviceSettings:
 		return true, nil
 		//others
-	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
+	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
 		return true, nil
 	case *tree.PrepareStmt:
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, st.Stmt)
@@ -198,13 +215,11 @@ func statementCanBeExecutedInUncommittedTransaction(
 		if err != nil {
 			v = int64(1)
 		}
-		preStmt, err := mysql.ParseOne(ctx, st.Sql, v.(int64))
-		defer func() {
-			preStmt.Free()
-		}()
+		preStmt, err := mysql.ParseOneWithSQLMode(ctx, st.Sql, v.(int64), sessionSQLModeForParser(ses))
 		if err != nil {
 			return false, err
 		}
+		defer preStmt.Free()
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt)
 	case *tree.Execute:
 		preName := string(st.Name)
@@ -214,6 +229,8 @@ func statementCanBeExecutedInUncommittedTransaction(
 		}
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt.PrepareStmt)
 	case *tree.Deallocate, *tree.Reset:
+		return true, nil
+	case *tree.LockTableStmt, *tree.UnLockTableStmt:
 		return true, nil
 	case *tree.Use:
 		/*
@@ -229,11 +246,34 @@ func statementCanBeExecutedInUncommittedTransaction(
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 	case *tree.SetVar:
 		return true, nil
-	case *tree.CloneTable:
+	case *tree.CloneTable,
+		*tree.CloneDatabase,
+		*tree.DataBranchCreateTable,
+		*tree.DataBranchCreateDatabase,
+		*tree.DataBranchDeleteTable,
+		*tree.DataBranchDeleteDatabase,
+		*tree.DataBranchDiff:
 		return true, nil
+	case *tree.DataBranchMerge:
+		// MERGE reuses an explicit BEGIN transaction, but cannot run inside an
+		// implicit autocommit=0 transaction because that path would manage and
+		// commit a separate background transaction.
+		return ses.IsBackgroundSession() || ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
+	case *tree.DataBranchPick:
+		// PICK manages its own transaction and cannot follow an outer user
+		// transaction. Background sessions reuse the caller's shared transaction.
+		return ses.IsBackgroundSession(), nil
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.
+		return true, nil
+	case *tree.AnalyzeStmt:
+		// ANALYZE TABLE rewrites to a derived SELECT, so it follows the same
+		// transaction policy as SELECT.
+		return true, nil
+	case *tree.CheckTableStmt, *tree.ShowProfileStmt:
+		// These are not supported, but we let them reach the NotSupported handler
+		// instead of the generic unclassified-transaction error.
 		return true, nil
 	}
 

@@ -16,13 +16,15 @@ package loopjoin
 
 import (
 	"bytes"
-	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -33,18 +35,20 @@ const opName = "loop_join"
 func (loopJoin *LoopJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
 	switch loopJoin.JoinType {
-	case LoopInner:
+	case plan.Node_INNER:
 		buf.WriteString(": loop inner join ")
-	case LoopAnti:
+	case plan.Node_ANTI:
 		buf.WriteString(": loop anti join ")
-	case LoopLeft:
+	case plan.Node_LEFT:
 		buf.WriteString(": loop left join ")
-	case LoopMark:
+	case plan.Node_MARK:
 		buf.WriteString(": loop mark join ")
-	case LoopSemi:
+	case plan.Node_SEMI:
 		buf.WriteString(": loop semi join ")
-	case LoopSingle:
+	case plan.Node_SINGLE:
 		buf.WriteString(": loop single join ")
+	case plan.Node_OUTER:
+		buf.WriteString(": loop full outer join ")
 	}
 }
 
@@ -55,13 +59,13 @@ func (loopJoin *LoopJoin) OpType() vm.OpType {
 func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	var err error
 	if loopJoin.OpAnalyzer == nil {
-		loopJoin.OpAnalyzer = process.NewAnalyzer(loopJoin.GetIdx(), loopJoin.IsFirst, loopJoin.IsLast, "loop_join")
+		loopJoin.OpAnalyzer = process.NewAnalyzer(loopJoin.GetIdx(), loopJoin.IsFirst, loopJoin.IsLast, opName)
 	} else {
 		loopJoin.OpAnalyzer.Reset()
 	}
 
-	if loopJoin.Cond != nil && loopJoin.ctr.expr == nil {
-		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.Cond)
+	if loopJoin.NonEqCond != nil && loopJoin.ctr.expr == nil {
+		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.NonEqCond)
 		if err != nil {
 			return err
 		}
@@ -82,50 +86,43 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = loopJoin.build(proc, analyzer); err != nil {
 				return result, err
 			}
-			if ctr.mp == nil && (loopJoin.JoinType == LoopInner || loopJoin.JoinType == LoopSemi) {
+			if ctr.mp == nil && (loopJoin.JoinType == plan.Node_INNER || loopJoin.JoinType == plan.Node_SEMI) {
 				ctr.state = End
 			} else {
+				if loopJoin.JoinType == plan.Node_OUTER && ctr.mp != nil {
+					ctr.initRightMatchedBitmap()
+				}
 				ctr.state = Probe
 			}
 
 		case Probe:
-			if ctr.inbat == nil {
+			if ctr.inBat == nil {
 				input, err = vm.ChildrenCall(loopJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
 					return result, err
 				}
 				if input.Batch == nil {
+					if loopJoin.JoinType == plan.Node_OUTER && ctr.rightRowsMatched != nil {
+						ctr.rightRowsMatched.Negate()
+						ctr.rightMatchedIter = ctr.rightRowsMatched.Iterator()
+						ctr.state = Finalize
+						continue
+					}
 					ctr.state = End
 					continue
 				}
 				if input.Batch.IsEmpty() {
 					continue
 				}
-				ctr.inbat = input.Batch
+				ctr.inBat = input.Batch
 				ctr.probeIdx = 0
 				ctr.batIdx = 0
 			}
 
-			if ctr.rbat == nil {
-				ctr.rbat = batch.NewWithSize(len(loopJoin.Result))
-				for i, rp := range loopJoin.Result {
-					if rp.Rel == 0 {
-						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inbat.Vecs[rp.Pos].GetType())
-						ctr.rbat.Vecs[i].SetSorted(ctr.inbat.Vecs[rp.Pos].GetSorted())
-					} else {
-						if loopJoin.JoinType != LoopMark {
-							ctr.rbat.Vecs[i] = vector.NewVec(loopJoin.Typs[rp.Pos])
-						} else {
-							ctr.rbat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
-						}
-					}
-				}
-			} else {
-				ctr.rbat.CleanOnlyData()
-				for i, rp := range loopJoin.Result {
-					if rp.Rel == 0 {
-						ctr.rbat.Vecs[i].SetSorted(ctr.inbat.Vecs[rp.Pos].GetSorted())
-					}
+			loopJoin.resetResultBat()
+			for i, rp := range loopJoin.ResultCols {
+				if rp.Rel == 0 {
+					ctr.resBat.Vecs[i].SetSorted(ctr.inBat.Vecs[rp.Pos].GetSorted())
 				}
 			}
 
@@ -140,6 +137,15 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			return result, err
+		case Finalize:
+			if err = ctr.finalize(loopJoin, proc, &result); err != nil {
+				return result, err
+			}
+			if result.Batch == nil {
+				ctr.state = End
+				continue
+			}
+			return result, nil
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
@@ -149,38 +155,41 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer) (err error) {
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-	loopJoin.ctr.mp, err = message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	loopJoin.ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	})
 	return err
 }
 
 func (ctr *container) emptyProbe(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {
-	for i, rp := range ap.Result {
+	for i, rp := range ap.ResultCols {
 		if rp.Rel == 0 {
-			if err := vector.GetUnionAllFunction(*ctr.rbat.Vecs[i].GetType(), proc.Mp())(ctr.rbat.Vecs[i], ctr.inbat.Vecs[rp.Pos]); err != nil {
+			if err := vector.GetUnionAllFunction(*ctr.resBat.Vecs[i].GetType(), proc.Mp())(ctr.resBat.Vecs[i], ctr.inBat.Vecs[rp.Pos]); err != nil {
 				return err
 			}
 		} else {
-			if ap.JoinType == LoopLeft || ap.JoinType == LoopSingle {
-				ctr.rbat.Vecs[i].SetClass(vector.CONSTANT)
-				ctr.rbat.Vecs[i].SetLength(ctr.inbat.RowCount())
-			} else if ap.JoinType == LoopMark {
-				err := vector.SetConstFixed(ctr.rbat.Vecs[i], false, ctr.inbat.RowCount(), proc.Mp())
+			switch ap.JoinType {
+			case plan.Node_LEFT, plan.Node_SINGLE, plan.Node_OUTER:
+				if err := vector.SetConstNull(ctr.resBat.Vecs[i], ctr.inBat.RowCount(), proc.Mp()); err != nil {
+					return err
+				}
+
+			case plan.Node_MARK:
+				err := vector.SetConstFixed(ctr.resBat.Vecs[i], false, ctr.inBat.RowCount(), proc.Mp())
 				if err != nil {
 					return err
 				}
 			}
 		}
 	}
-	ctr.rbat.AddRowCount(ctr.inbat.RowCount())
-	result.Batch = ctr.rbat
-	ctr.inbat = nil
+	ctr.resBat.AddRowCount(ctr.inBat.RowCount())
+	result.Batch = ctr.resBat
+	ctr.inBat = nil
 	return nil
 }
 
 func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {
-	inbat := ctr.inbat
+	inbat := ctr.inBat
 	mpbat := ctr.mp.GetBatches()
 	count := inbat.RowCount()
 	if ctr.joinBat == nil {
@@ -189,124 +198,172 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 
 	rowCountIncrease := 0
 	for i := ctr.probeIdx; i < count; i++ {
-		matched := false
-		if ctr.batIdx != 0 {
-			matched = true
-		}
-		for idx := ctr.batIdx; idx < len(mpbat); idx++ {
+		if ap.JoinType == plan.Node_MARK && ctr.expr != nil {
 			if rowCountIncrease >= colexec.DefaultBatchSize {
-				result.Batch = ctr.rbat
-				ctr.rbat.SetRowCount(rowCountIncrease)
+				result.Batch = ctr.resBat
+				ctr.resBat.SetRowCount(rowCountIncrease)
 				ctr.probeIdx = i
-				ctr.batIdx = idx
+				ctr.batIdx = 0
 				return nil
 			}
-			bat := mpbat[idx]
-			if ctr.expr != nil {
+
+			hasTrue := false
+			hasNull := false
+			for idx := 0; idx < len(mpbat); idx++ {
+				bat := mpbat[idx]
 				if err := colexec.SetJoinBatchValues(ctr.joinBat, inbat, int64(i),
 					bat.RowCount(), ctr.cfs); err != nil {
 					return err
 				}
+
 				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, bat}, nil)
 				if err != nil {
 					return err
 				}
 
 				rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
-				if ap.JoinType != LoopMark {
-					l := uint64(bat.RowCount())
-					for j := uint64(0); j < l; j++ {
-						b, null := rs.GetValue(j)
-						if !null && b {
-							if ap.JoinType == LoopSingle && matched {
-								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
-							}
-							matched = true
-							if ap.JoinType == LoopAnti {
-								continue
-							}
-							for k, rp := range ap.Result {
-								if rp.Rel == 0 {
-									if err = ctr.rbat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-										return err
-									}
-								} else {
-									if err = ctr.rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-										return err
-									}
-								}
-							}
-							rowCountIncrease++
-							if ap.JoinType == LoopSemi {
-								break
-							}
-						}
+				if vec.IsConst() {
+					v, null := rs.GetValue(0)
+					if null {
+						hasNull = true
+					} else if v {
+						hasTrue = true
+						break
 					}
 				} else {
-					hasTrue := false
-					hasNull := false
-					if vec.IsConst() {
-						v, null := rs.GetValue(0)
+					for j := uint64(0); j < uint64(vec.Length()); j++ {
+						val, null := rs.GetValue(j)
 						if null {
 							hasNull = true
-						} else {
-							hasTrue = v
-						}
-					} else {
-						for j := uint64(0); j < uint64(vec.Length()); j++ {
-							val, null := rs.GetValue(j)
-							if null {
-								hasNull = true
-							} else if val {
-								hasTrue = true
-							}
+						} else if val {
+							hasTrue = true
+							break
 						}
 					}
-					for j := range ap.Result {
-						if ap.Result[j].Rel == 0 {
-							if err = ctr.rbat.Vecs[j].UnionOne(inbat.Vecs[ap.Result[j].Pos], int64(i), proc.Mp()); err != nil {
-								return err
-							}
-						} else {
-							if hasTrue {
-								err = vector.AppendFixed(ctr.rbat.Vecs[j], true, false, proc.Mp())
-							} else if hasNull {
-								err = vector.AppendFixed(ctr.rbat.Vecs[j], false, true, proc.Mp())
+					if hasTrue {
+						break
+					}
+				}
+			}
+
+			var err error
+			for k, rp := range ap.ResultCols {
+				if rp.Rel == 0 {
+					if err = ctr.resBat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+						return err
+					}
+				} else {
+					if hasTrue {
+						err = vector.AppendFixed(ctr.resBat.Vecs[k], true, false, proc.Mp())
+					} else if hasNull {
+						err = vector.AppendFixed(ctr.resBat.Vecs[k], false, true, proc.Mp())
+					} else {
+						err = vector.AppendFixed(ctr.resBat.Vecs[k], false, false, proc.Mp())
+					}
+					if err != nil {
+						return err
+					}
+				}
+			}
+			rowCountIncrease++
+			ctr.batIdx = 0
+			continue
+		}
+
+		matched := false
+		if ctr.batIdx != 0 {
+			matched = true
+		}
+		for idx := ctr.batIdx; idx < len(mpbat); idx++ {
+			if rowCountIncrease >= colexec.DefaultBatchSize {
+				result.Batch = ctr.resBat
+				ctr.resBat.SetRowCount(rowCountIncrease)
+				ctr.probeIdx = i
+				ctr.batIdx = idx
+				return nil
+			}
+
+			bat := mpbat[idx]
+
+			if ctr.expr != nil {
+				if err := colexec.SetJoinBatchValues(ctr.joinBat, inbat, int64(i),
+					bat.RowCount(), ctr.cfs); err != nil {
+					return err
+				}
+
+				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, bat}, nil)
+				if err != nil {
+					return err
+				}
+
+				rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+				l := uint64(bat.RowCount())
+				for j := uint64(0); j < l; j++ {
+					b, null := rs.GetValue(j)
+					if !null && b {
+						if ap.JoinType == plan.Node_SINGLE && matched {
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
+						}
+
+						matched = true
+
+						if ap.JoinType == plan.Node_ANTI {
+							continue
+						}
+
+						if ap.JoinType == plan.Node_OUTER {
+							ctr.rightRowsMatched.Add(ctr.rightBatchOffset[idx] + j)
+						}
+
+						for k, rp := range ap.ResultCols {
+							if rp.Rel == 0 {
+								if err = ctr.resBat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+									return err
+								}
 							} else {
-								err = vector.AppendFixed(ctr.rbat.Vecs[j], false, false, proc.Mp())
+								if err = ctr.resBat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
+									return err
+								}
 							}
-							if err != nil {
-								return err
-							}
-							rowCountIncrease++
+						}
+						rowCountIncrease++
+
+						if ap.JoinType == plan.Node_SEMI {
+							break
 						}
 					}
 				}
 			} else {
 				matched = true
-				if ap.JoinType == LoopLeft {
-					for k, rp := range ap.Result {
+				switch ap.JoinType {
+				case plan.Node_LEFT, plan.Node_OUTER:
+					for k, rp := range ap.ResultCols {
 						if rp.Rel == 0 {
-							if err := ctr.rbat.Vecs[k].UnionMulti(ctr.inbat.Vecs[rp.Pos], int64(i), bat.RowCount(), proc.Mp()); err != nil {
+							if err := ctr.resBat.Vecs[k].UnionMulti(ctr.inBat.Vecs[rp.Pos], int64(i), bat.RowCount(), proc.Mp()); err != nil {
 								return err
 							}
 						} else {
-							if err := ctr.rbat.Vecs[k].UnionBatch(bat.Vecs[rp.Pos], 0, bat.RowCount(), nil, proc.Mp()); err != nil {
+							if err := ctr.resBat.Vecs[k].UnionBatch(bat.Vecs[rp.Pos], 0, bat.RowCount(), nil, proc.Mp()); err != nil {
 								return err
 							}
 						}
 					}
 					rowCountIncrease += bat.RowCount()
-				} else if ap.JoinType == LoopSingle {
+					if ap.JoinType == plan.Node_OUTER {
+						base := ctr.rightBatchOffset[idx]
+						ctr.rightRowsMatched.AddRange(base, base+uint64(bat.RowCount()))
+					}
+
+				case plan.Node_SINGLE:
 					if bat.RowCount() == 1 {
-						for k, rp := range ap.Result {
+						for k, rp := range ap.ResultCols {
 							if rp.Rel == 0 {
-								err := ctr.rbat.Vecs[k].UnionOne(ctr.inbat.Vecs[rp.Pos], int64(i), proc.Mp())
+								err := ctr.resBat.Vecs[k].UnionOne(ctr.inBat.Vecs[rp.Pos], int64(i), proc.Mp())
 								if err != nil {
 									return err
 								}
 							} else {
-								err := ctr.rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], 0, proc.Mp())
+								err := ctr.resBat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], 0, proc.Mp())
 								if err != nil {
 									return err
 								}
@@ -314,22 +371,44 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 						}
 						rowCountIncrease++
 					} else {
-						return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+						return moerr.NewErrSubqueryNo1Row(proc.Ctx)
+					}
+
+				case plan.Node_SEMI:
+					if bat.RowCount() > 0 {
+						for k, rp := range ap.ResultCols {
+							if err := ctr.resBat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+								return err
+							}
+						}
+						rowCountIncrease++
+					}
+
+				case plan.Node_ANTI:
+					if bat.RowCount() == 0 {
+						for k, rp := range ap.ResultCols {
+							if err := ctr.resBat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+								return err
+							}
+						}
+						rowCountIncrease++
 					}
 				}
 			}
-			if ap.JoinType == LoopSemi && matched {
+
+			if ap.JoinType == plan.Node_SEMI && matched {
 				break
 			}
 		}
-		if (ap.JoinType == LoopAnti || ap.JoinType == LoopLeft || ap.JoinType == LoopSingle) && !matched {
-			for k, rp := range ap.Result {
+
+		if !matched && (ap.JoinType == plan.Node_ANTI || ap.JoinType == plan.Node_LEFT || ap.JoinType == plan.Node_SINGLE || ap.JoinType == plan.Node_OUTER) {
+			for k, rp := range ap.ResultCols {
 				if rp.Rel == 0 {
-					if err := ctr.rbat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+					if err := ctr.resBat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
 						return err
 					}
 				} else {
-					if err := ctr.rbat.Vecs[k].UnionNull(proc.Mp()); err != nil {
+					if err := ctr.resBat.Vecs[k].UnionNull(proc.Mp()); err != nil {
 						return err
 					}
 				}
@@ -339,8 +418,102 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 		ctr.batIdx = 0
 	}
 
-	ctr.inbat = nil
-	ctr.rbat.SetRowCount(rowCountIncrease)
-	result.Batch = ctr.rbat
+	ctr.inBat = nil
+	ctr.resBat.SetRowCount(rowCountIncrease)
+	result.Batch = ctr.resBat
+	return nil
+}
+
+func (loopJoin *LoopJoin) resetResultBat() {
+	ctr := &loopJoin.ctr
+	if ctr.resBat != nil {
+		ctr.resBat.CleanOnlyData()
+		for i := range ctr.resBat.Vecs {
+			ctr.resBat.Vecs[i].SetClass(vector.FLAT)
+			ctr.resBat.Vecs[i].SetLength(0)
+		}
+	} else {
+		ctr.resBat = batch.NewWithSize(len(loopJoin.ResultCols))
+
+		for i, rp := range loopJoin.ResultCols {
+			switch rp.Rel {
+			case 0:
+				ctr.resBat.Vecs[i] = vector.NewVec(*ctr.inBat.Vecs[rp.Pos].GetType())
+
+			case 1:
+				ctr.resBat.Vecs[i] = vector.NewVec(loopJoin.RightTypes[rp.Pos])
+
+			case -1:
+				ctr.resBat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+			}
+		}
+	}
+}
+
+// initRightMatchedBitmap allocates the per-build-row matched bitmap.
+func (ctr *container) initRightMatchedBitmap() {
+	bats := ctr.mp.GetBatches()
+	ctr.rightBatchOffset = make([]uint64, len(bats))
+	var total uint64
+	for i, b := range bats {
+		ctr.rightBatchOffset[i] = total
+		total += uint64(b.RowCount())
+	}
+	ctr.rightRowsMatched = &bitmap.Bitmap{}
+	ctr.rightRowsMatched.InitWithSize(int64(total))
+}
+
+// finalize emits one batch worth of unmatched build rows with NULL probe
+// columns. Iterator is monotonic, so rightMatchedBat only advances.
+func (ctr *container) finalize(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {
+	bats := ctr.mp.GetBatches()
+	if ctr.resBat == nil {
+		ctr.resBat = batch.NewWithSize(len(ap.ResultCols))
+		for i, rp := range ap.ResultCols {
+			switch rp.Rel {
+			case 0:
+				ctr.resBat.Vecs[i] = vector.NewVec(ap.LeftTypes[rp.Pos])
+			case 1:
+				ctr.resBat.Vecs[i] = vector.NewVec(ap.RightTypes[rp.Pos])
+			default:
+				ctr.resBat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+			}
+		}
+	} else {
+		ctr.resBat.CleanOnlyData()
+		for i := range ctr.resBat.Vecs {
+			ctr.resBat.Vecs[i].SetClass(vector.FLAT)
+			ctr.resBat.Vecs[i].SetLength(0)
+		}
+	}
+
+	rowCnt := 0
+	for ; rowCnt < colexec.DefaultBatchSize && ctr.rightMatchedIter.HasNext(); rowCnt++ {
+		row := ctr.rightMatchedIter.Next()
+		for ctr.rightMatchedBat+1 < len(ctr.rightBatchOffset) && ctr.rightBatchOffset[ctr.rightMatchedBat+1] <= row {
+			ctr.rightMatchedBat++
+		}
+		j := int64(row - ctr.rightBatchOffset[ctr.rightMatchedBat])
+		for i, rp := range ap.ResultCols {
+			if rp.Rel == 1 {
+				if err := ctr.resBat.Vecs[i].UnionOne(bats[ctr.rightMatchedBat].Vecs[rp.Pos], j, proc.Mp()); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if rowCnt == 0 {
+		result.Batch = nil
+		return nil
+	}
+	for i, rp := range ap.ResultCols {
+		if rp.Rel != 1 {
+			if err := vector.AppendMultiFixed(ctr.resBat.Vecs[i], 0, true, rowCnt, proc.Mp()); err != nil {
+				return err
+			}
+		}
+	}
+	ctr.resBat.AddRowCount(rowCnt)
+	result.Batch = ctr.resBat
 	return nil
 }

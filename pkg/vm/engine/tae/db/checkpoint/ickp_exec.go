@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 )
@@ -250,8 +249,5 @@ func (executor *checkpointExecutor) doIncrementalCheckpoint(
 	files = append(files, location.Name().String())
 	entry.SetLocation(location, location)
 
-	perfcounter.Update(executor.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
-	})
 	return
 }

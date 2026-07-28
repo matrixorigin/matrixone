@@ -145,6 +145,11 @@ func (ts TS) ToString() string {
 	return fmt.Sprintf("%d-%d", ts.Physical(), ts.Logical())
 }
 
+// format interface
+func (ts TS) String() string {
+	return ts.ToString()
+}
+
 func (ts TS) Valid() bool {
 	return ts.Physical() >= 0
 }

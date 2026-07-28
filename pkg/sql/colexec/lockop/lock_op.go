@@ -17,20 +17,24 @@ package lockop
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -39,15 +43,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var (
-	retryError               = moerr.NewTxnNeedRetryNoCtx()
-	retryWithDefChangedError = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	retryError                 = moerr.NewTxnNeedRetryNoCtx()
+	retryWithDefChangedError   = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	defaultWaitTimeOnRetryLock = time.Second
+	// Keep backend/CN-restart retries bounded so abnormal txns fail instead of
+	// holding CN resources for hours while the outer statement context is still alive.
+	defaultMaxWaitTimeOnRetryBackendLock = 10 * time.Second
+	lockRetryMemoryBackoff               = 5 * time.Second
+	lockRetryHighMemoryPercent           = uint64(80)
+	lockRetryCriticalMemoryPercent       = uint64(90)
+	getLockRetryMemoryPressureLevel      = defaultLockRetryMemoryPressureLevel
+	lockRetryHighMemorySlots             = make(chan struct{}, 16)
 )
 
 const opName = "lock_op"
@@ -89,26 +104,26 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 	}
 	if len(lockOp.ctr.relations) == 0 {
 		lockOp.ctr.relations = make([]engine.Relation, len(lockOp.targets))
-		for i, target := range lockOp.targets {
-			if target.objRef != nil {
-				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
-				if err != nil {
-					return err
-				}
-				lockOp.ctr.relations[i] = rel
-			}
+	}
+	for i, target := range lockOp.targets {
+		if target.objRef == nil {
+			continue
 		}
-	} else {
-		for i, target := range lockOp.targets {
-			if target.objRef != nil {
-				err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator())
-				if err != nil {
-					return err
-				}
+		if lockOp.ctr.relations[i] == nil {
+			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
+			if err != nil {
+				return err
 			}
+			lockOp.ctr.relations[i] = rel
+		} else if err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator()); err != nil {
+			return err
 		}
 	}
-	lockOp.ctr.parker = types.NewPacker()
+	if lockOp.ctr.parker == nil {
+		lockOp.ctr.parker = types.NewPacker()
+	} else {
+		lockOp.ctr.parker.Reset()
+	}
 	return nil
 }
 
@@ -165,7 +180,7 @@ func callNonBlocking(
 func getVec(proc *process.Process, vec *vector.Vector) (*vector.Vector, error) {
 	if vec.HasNull() {
 		nulls := vec.GetNulls()
-		newVec := vector.NewVec(*vec.GetType())
+		newVec := vector.NewOffHeapVecWithType(*vec.GetType())
 		for i := 0; i < vec.Length(); i++ {
 			if !nulls.Contains(uint64(i)) {
 				if err := vector.AppendBytes(newVec, nil, true, proc.Mp()); err != nil {
@@ -300,6 +315,19 @@ func LockTable(
 	tableID uint64,
 	pkType types.Type,
 	changeDef bool) error {
+	return LockTableWithContext(proc.Ctx, eng, proc, tableID, pkType, changeDef)
+}
+
+// LockTableWithContext locks a table using the caller-owned statement context.
+// Self-handled statements do not build a pipeline, so proc.Ctx may still refer
+// to an already-finished pipeline from the preceding statement.
+func LockTableWithContext(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	changeDef bool) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -307,7 +335,7 @@ func LockTable(
 	parker := types.NewPacker()
 	defer parker.Close()
 
-	stats := statistic.StatsInfoFromContext(proc.Ctx)
+	stats := statistic.StatsInfoFromContext(ctx)
 	analyzer := process.NewTempAnalyzer()
 	defer func() {
 		waitLockTime := analyzer.GetOpStats().GetMetricByKey(process.OpWaitLockTime)
@@ -326,7 +354,7 @@ func LockTable(
 		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
-		proc.Ctx,
+		ctx,
 		eng,
 		analyzer,
 		nil,
@@ -367,6 +395,12 @@ func LockRows(
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
+	}
+
+	if faultInjected, _ := objectio.LogCNNeedRetryErrorInjected(
+		rel.GetTableDef(proc.Ctx).DbName, rel.GetTableName(),
+	); faultInjected {
+		return retryWithDefChangedError
 	}
 
 	parker := types.NewPacker()
@@ -503,6 +537,10 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	if g == lock.Granularity_Row && len(rows) > 1 {
+		rows = dedupLockRows(rows)
+	}
+
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
 		Granularity:     g,
@@ -522,6 +560,15 @@ func doLock(
 		// FIXME: in launch model, multi-cn will use same process level runtime. So lockservice will be wrong.
 		if txn.LockService != lockService.GetServiceID() {
 			lockService = lockservice.GetLockServiceByServiceID(txn.LockService)
+		}
+	}
+
+	// Attach the current statement/session lock_wait_timeout to the lock options.
+	if d := lockWaitTimeout(proc, txnOp); d > 0 {
+		options.LockWaitDeadline = time.Now().Add(d).UnixNano()
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
 		}
 	}
 
@@ -550,6 +597,7 @@ func doLock(
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
+
 	// Record lock waiting time
 	analyzeLockWaitTime(analyzer, start)
 
@@ -595,19 +643,17 @@ func doLock(
 	// if has no conflict, lockedTS means the latest commit ts of this table
 	lockedTS := result.Timestamp
 
-	// if no conflict, maybe data has been updated in [snapshotTS, lockedTS]. So wen need check here
-	if result.NewLockAdd && // only check when new lock added, reentrant lock can skip check
+	// Normal path: NewLockAdd=true, no conflict - original check
+	if result.NewLockAdd &&
 		!result.HasConflict &&
-		snapshotTS.LessEq(lockedTS) && // only retry when snapshotTS <= lockedTS, means lost some update in rc mode.
+		snapshotTS.LessEq(lockedTS) &&
 		txnOp.Txn().IsRCIsolation() {
 
 		start = time.Now()
-		// wait last committed logtail applied, (IO wait not related to FileService)
 		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
-		// Record logtail waiting time
 		analyzeLockWaitTime(analyzer, start)
 
 		fn := opts.hasNewVersionInRangeFunc
@@ -615,7 +661,6 @@ func doLock(
 			fn = hasNewVersionInRange
 		}
 
-		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
 		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
@@ -634,44 +679,195 @@ func doLock(
 		}
 	}
 
-	// no conflict or has conflict, but all prev txn all aborted
-	// current txn can read and write normally
-	if !result.HasConflict ||
-		!result.HasPrevCommit {
-		return true, false, timestamp.Timestamp{}, nil
-	} else if lockedTS.Less(snapshotTS) {
+	// CRITICAL FIX for low-frequency anomalous cases:
+	//
+	// The lock service can return stale/incorrect flags in certain scenarios:
+	// 1. NewLockAdd=false when it should be true: Remote lock failed with network timeout
+	//    but txn.lockAdded() was still called (lock_table_remote.go:119). Retry succeeds
+	//    with NewLockAdd=false because the lock was already "added" for cleanup.
+	// 2. HasPrevCommit=false when it should be true: Lock service doesn't have accurate
+	//    commit status due to network partitions.
+	//
+	// Detection strategy:
+	// - Case A (!NewLockAdd && !HasConflict): Could be normal reentrant lock OR
+	//   failed-then-retried. We can't distinguish, so we check defensively.
+	// - Case B (HasConflict && !HasPrevCommit): Could be legitimate "conflict aborted"
+	//   OR stale commit status. We check defensively.
+	//
+	// Performance: These checks are cheap (in-memory logtail lookup) and only run
+	// in the already-rare cases above. Normal path (NewLockAdd=true) is unchanged.
+	//
+	needsExtraCheck := false
+
+	if !result.NewLockAdd && !result.HasConflict {
+		// Case A: reentrant lock without conflict
+		// This includes both normal reentrant locks and failed-then-retried locks.
+		// We check defensively since we can't distinguish them.
+		needsExtraCheck = true
+	} else if result.HasConflict && !result.HasPrevCommit {
+		// Case B: conflict but no prev commit
+		// Could be legitimate (conflict aborted) or stale (commit not yet visible).
+		// We check defensively since we can't distinguish them.
+		needsExtraCheck = true
+	}
+
+	if needsExtraCheck && snapshotTS.LessEq(lockedTS) && txnOp.Txn().IsRCIsolation() {
+		start = time.Now()
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		analyzeLockWaitTime(analyzer, start)
+
+		fn := opts.hasNewVersionInRangeFunc
+		if fn == nil {
+			fn = hasNewVersionInRange
+		}
+
+		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+
+		if changed {
+			trace.GetService(proc.GetService()).TxnConflictChanged(
+				proc.GetTxnOperator(),
+				tableID,
+				newSnapshotTS)
+			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
+				return false, false, timestamp.Timestamp{}, err
+			}
+			return true, result.TableDefChanged, newSnapshotTS, nil
+		}
+	}
+
+	// No conflict or conflict with all prev txn aborted - can proceed
+	if !result.HasConflict || !result.HasPrevCommit {
 		return true, false, timestamp.Timestamp{}, nil
 	}
 
-	// Arriving here means that at least one of the conflicting
-	// transactions has committed.
-	//
-	// For the RC schema we need some retries between
-	// [txn.snapshot ts, prev.commit ts] (de-duplication for insert, re-query for
-	// update and delete).
-	//
-	// For the SI schema the current transaction needs to be abort (TODO: later
-	// we can consider recording the ReadSet of the transaction and check if data
-	// is modified between [snapshotTS,prev.commits] and raise the SnapshotTS of
-	// the SI transaction to eliminate conflicts)
+	// lockedTS < snapshotTS means snapshot is already ahead
+	if lockedTS.Less(snapshotTS) {
+		return true, false, timestamp.Timestamp{}, nil
+	}
+
+	// SI isolation with conflict - not supported
 	if !txnOp.Txn().IsRCIsolation() {
 		return false, false, timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx, tableID, "SI not support retry")
 	}
 
-	// forward rc's snapshot ts
-	snapshotTS = result.Timestamp.Next()
+	// HasConflict=true, HasPrevCommit=true, RC isolation - check hasNewVersionInRange
+	start = time.Now()
+	newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+	if err != nil {
+		return false, false, timestamp.Timestamp{}, err
+	}
+	analyzeLockWaitTime(analyzer, start)
 
+	fn := opts.hasNewVersionInRangeFunc
+	if fn == nil {
+		fn = hasNewVersionInRange
+	}
+
+	changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
+	if err != nil {
+		return false, false, timestamp.Timestamp{}, err
+	}
+
+	if changed {
+		trace.GetService(proc.GetService()).TxnConflictChanged(
+			proc.GetTxnOperator(),
+			tableID,
+			newSnapshotTS)
+		if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		return true, result.TableDefChanged, newSnapshotTS, nil
+	}
+
+	// Target rows were NOT modified, forward snapshot and continue
+	newTS := result.Timestamp.Next()
 	trace.GetService(proc.GetService()).TxnConflictChanged(
 		proc.GetTxnOperator(),
 		tableID,
-		snapshotTS)
-	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
+		newTS)
+	if err := txnOp.UpdateSnapshot(ctx, newTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
-	return true, result.TableDefChanged, snapshotTS, nil
+	return true, result.TableDefChanged, newTS, nil
 }
 
-const defaultWaitTimeOnRetryLock = time.Second
+type lockRetryState struct {
+	backendRetryDeadline time.Time
+	useMemoryRetrySlot   bool
+}
+
+func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
+	txnTimeout := client.LockWaitTimeoutFromTxn(txnOp)
+	var explicitProcessTimeout bool
+	// Background/internal execution may carry a per-execution value in the
+	// process or txn options while its resolver only exposes compiled global
+	// defaults. Prefer the caller-owned budget in that case. Frontend execution
+	// keeps resolver-first semantics so SET SESSION and statement overrides are
+	// observed even after a transaction has started.
+	if proc != nil && proc.Base != nil && !proc.Base.IsFrontend {
+		if proc.GetSessionInfo() != nil {
+			explicitProcessTimeout = proc.GetSessionInfo().LockWaitTimeoutSet
+			if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+				return time.Duration(seconds) * time.Second
+			}
+		}
+		if !explicitProcessTimeout && txnTimeout > 0 {
+			return txnTimeout
+		}
+	}
+	if proc != nil && proc.GetResolveVariableFunc() != nil {
+		if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
+			switch n := v.(type) {
+			case int64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case int:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case uint64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			}
+		}
+	}
+	if proc != nil && proc.GetSessionInfo() != nil {
+		if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	if explicitProcessTimeout {
+		// Explicit zero means "clear this execution's override", not
+		// "wait forever". Use the shared product fallback when no resolver is
+		// installed. This also matches the positive legacy value serialized for
+		// old pipeline peers that do not understand LockWaitTimeoutSet.
+		return time.Duration(defines.DefaultLockWaitTimeoutSeconds) * time.Second
+	}
+	return txnTimeout
+}
+
+func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) {
+	if options.LockWaitDeadline <= 0 {
+		return options, nil
+	}
+	remaining := time.Until(time.Unix(0, options.LockWaitDeadline))
+	if remaining <= 0 {
+		return options, lockservice.ErrLockTimeout
+	}
+	options.LockWaitTimeout = int64(math.Ceil(remaining.Seconds()))
+	if options.LockWaitTimeout <= 0 {
+		options.LockWaitTimeout = 1
+	}
+	return options, nil
+}
 
 func lockWithRetry(
 	ctx context.Context,
@@ -688,20 +884,27 @@ func lockWithRetry(
 ) (lock.Result, error) {
 	var result lock.Result
 	var err error
+	retryState := lockRetryState{}
 
-	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
-	if !canRetryLock(tableID, txnOp, err) {
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
 		return result, err
+	}
+	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
+	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
+		return result, getLockRetryExitError(ctx, err)
 	}
 
 	for {
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return result, err
+		}
 		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
-		if !canRetryLock(tableID, txnOp, err) {
-			break
+		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
+			return result, getLockRetryExitError(ctx, err)
 		}
 	}
-
-	return result, err
 }
 
 func LockWithMayUpgrade(
@@ -716,6 +919,11 @@ func LockWithMayUpgrade(
 	opts LockOptions,
 	pkType types.Type,
 ) (lock.Result, error) {
+	var err error
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
 	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
 		return result, err
@@ -734,29 +942,210 @@ func LockWithMayUpgrade(
 		opts.filterCols,
 	)
 	options.Granularity = ng
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	return lockService.Lock(ctx, tableID, nrows, txnID, options)
 }
 
-func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
-	if moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
-		time.Sleep(defaultWaitTimeOnRetryLock)
-		return true
-	}
-	if txn.HasLockTable(table) {
+func canRetryLock(
+	ctx context.Context,
+	table uint64,
+	txn client.TxnOperator,
+	err error,
+	retryState *lockRetryState,
+) bool {
+	if ctx.Err() != nil || !isRetryLockError(err) {
 		return false
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
-		time.Sleep(defaultWaitTimeOnRetryLock)
-		return true
+	if !shouldBypassHeldLockTableCheck(err) &&
+		txn.HasLockTable(table) {
+		// Once this CN already recorded the lock table, backend availability errors
+		// or bind changes should fail fast and let whole-txn rollback tear the txn
+		// down. Continuing to retry here only extends the lifetime of an already
+		// broken explicit txn.
+		return false
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+
+	wait, ok := getRetryWaitDuration(err, retryState)
+	if !ok {
+		logLockRetryBudgetStop(err, table, txn, *retryState)
+		return false
+	}
+	return waitToRetryLock(ctx, wait, retryState)
+}
+
+func waitToRetryLock(ctx context.Context, wait time.Duration, retryState *lockRetryState) bool {
+	if retryState.useMemoryRetrySlot {
+		if !retryState.backendRetryDeadline.IsZero() {
+			remaining := time.Until(retryState.backendRetryDeadline)
+			if remaining <= 0 {
+				return false
+			}
+			deadlineTimer := time.NewTimer(remaining)
+			defer deadlineTimer.Stop()
+			select {
+			case lockRetryHighMemorySlots <- struct{}{}:
+				defer func() { <-lockRetryHighMemorySlots }()
+			case <-ctx.Done():
+				return false
+			case <-deadlineTimer.C:
+				return false
+			}
+
+			remaining = time.Until(retryState.backendRetryDeadline)
+			if remaining <= 0 {
+				return false
+			}
+			if remaining < wait {
+				wait = remaining
+			}
+		} else {
+			select {
+			case lockRetryHighMemorySlots <- struct{}{}:
+				defer func() { <-lockRetryHighMemorySlots }()
+			case <-ctx.Done():
+				return false
+			}
+		}
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		// Honor cancellation that races with timer delivery so we stop retrying a
+		// txn that is already doomed to exit.
+		return ctx.Err() == nil
+	}
+}
+
+func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration, bool) {
+	retryState.useMemoryRetrySlot = false
+	if defaultMaxWaitTimeOnRetryBackendLock <= 0 {
+		return 0, false
+	}
+
+	now := time.Now()
+	if isBoundedRetryLockError(err) && retryState.backendRetryDeadline.IsZero() {
+		retryState.backendRetryDeadline = now.Add(defaultMaxWaitTimeOnRetryBackendLock)
+	}
+	if retryState.backendRetryDeadline.IsZero() {
+		return defaultWaitTimeOnRetryLock, true
+	}
+	if !retryState.backendRetryDeadline.After(now) {
+		return 0, false
+	}
+
+	remaining := time.Until(retryState.backendRetryDeadline)
+	switch getLockRetryMemoryPressureLevel() {
+	case lockRetryMemoryPressureCritical:
+		logLockRetryMemoryPressureStop(err, *retryState)
+		return 0, false
+	case lockRetryMemoryPressureHigh:
+		retryState.useMemoryRetrySlot = true
+		if remaining < lockRetryMemoryBackoff {
+			return remaining, true
+		}
+		return lockRetryMemoryBackoff, true
+	}
+	if remaining < defaultWaitTimeOnRetryLock {
+		return remaining, true
+	}
+	return defaultWaitTimeOnRetryLock, true
+}
+
+func getLockRetryExitError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil && isRetryLockError(err) {
+		if isBoundedRetryLockError(err) {
+			// Preserve the backend failure so explicit txns do not survive on a raw
+			// context error after backend retry has already proven the path unhealthy.
+			return err
+		}
+		return ctxErr
+	}
+	return err
+}
+
+func isRetryLockError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
+		isBoundedRetryLockError(err)
+}
+
+func shouldBypassHeldLockTableCheck(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart)
+}
+
+func isBoundedRetryLockError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) {
-		time.Sleep(defaultWaitTimeOnRetryLock)
-		return true
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)
+}
+
+type lockRetryMemoryPressureLevel int
+
+const (
+	lockRetryMemoryPressureNormal lockRetryMemoryPressureLevel = iota
+	lockRetryMemoryPressureHigh
+	lockRetryMemoryPressureCritical
+)
+
+func defaultLockRetryMemoryPressureLevel() lockRetryMemoryPressureLevel {
+	total := system.MemoryTotal()
+	if total == 0 {
+		return lockRetryMemoryPressureNormal
 	}
-	return false
+	used := system.MemoryUsed()
+	if used >= total*lockRetryCriticalMemoryPercent/100 {
+		return lockRetryMemoryPressureCritical
+	}
+	if used >= total*lockRetryHighMemoryPercent/100 {
+		return lockRetryMemoryPressureHigh
+	}
+	return lockRetryMemoryPressureNormal
+}
+
+func logLockRetryBudgetStop(
+	err error,
+	table uint64,
+	txn client.TxnOperator,
+	retryState lockRetryState,
+) {
+	fields := []zap.Field{
+		zap.Uint64("table-id", table),
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendLock),
+	}
+	if txn != nil {
+		fields = append(fields, zap.String("txn-id", hex.EncodeToString(txn.Txn().ID)))
+	}
+	if defaultMaxWaitTimeOnRetryBackendLock <= 0 || retryState.backendRetryDeadline.IsZero() {
+		logutil.Warn("lock retry disabled by non-positive backend retry budget", fields...)
+		return
+	}
+	fields = append(fields, zap.Time("retry-deadline", retryState.backendRetryDeadline))
+	logutil.Warn("lock retry budget exhausted for backend availability error", fields...)
+}
+
+func logLockRetryMemoryPressureStop(
+	err error,
+	retryState lockRetryState,
+) {
+	fields := []zap.Field{
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendLock),
+	}
+	if !retryState.backendRetryDeadline.IsZero() {
+		fields = append(fields, zap.Time("retry-deadline", retryState.backendRetryDeadline))
+	}
+	logutil.Warn("lock retry stopped under memory pressure", fields...)
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to
@@ -838,20 +1227,48 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 	targets := make([]*pipeline.LockTarget, len(lockOp.targets))
 	for i, target := range lockOp.targets {
 		targets[i] = &pipeline.LockTarget{
-			TableId:            target.tableID,
-			PrimaryColIdxInBat: target.primaryColumnIndexInBatch,
-			PrimaryColTyp:      plan.MakePlan2Type(&target.primaryColumnType),
-			RefreshTsIdxInBat:  target.refreshTimestampIndexInBatch,
-			FilterColIdxInBat:  target.filterColIndexInBatch,
-			LockTable:          target.lockTable,
-			ChangeDef:          target.changeDef,
-			Mode:               target.mode,
-			LockRows:           plan.DeepCopyExpr(target.lockRows),
-			LockTableAtTheEnd:  target.lockTableAtTheEnd,
-			ObjRef:             plan.DeepCopyObjectRef(target.objRef),
+			TableId:              target.tableID,
+			PrimaryColIdxInBat:   target.primaryColumnIndexInBatch,
+			PrimaryColTyp:        plan.MakePlan2Type(&target.primaryColumnType),
+			RefreshTsIdxInBat:    target.refreshTimestampIndexInBatch,
+			FilterColIdxInBat:    target.filterColIndexInBatch,
+			LockTable:            target.lockTable,
+			ChangeDef:            target.changeDef,
+			Mode:                 target.mode,
+			LockRows:             plan.DeepCopyExpr(target.lockRows),
+			LockTableAtTheEnd:    target.lockTableAtTheEnd,
+			ObjRef:               plan.DeepCopyObjectRef(target.objRef),
+			PartitionColIdxInBat: target.partitionColumnIndexInBatch,
 		}
 	}
 	return targets
+}
+
+// CopyTargetsFrom creates a deep copy of targets from another LockOp.
+// This is used by dupOperator to avoid sharing targets slice during parallel execution.
+func (lockOp *LockOp) CopyTargetsFrom(src *LockOp) {
+	if len(src.targets) == 0 {
+		lockOp.targets = nil
+		return
+	}
+	lockOp.targets = make([]lockTarget, len(src.targets))
+	for i, t := range src.targets {
+		lockOp.targets[i] = lockTarget{
+			tableID:                      t.tableID,
+			objRef:                       plan.DeepCopyObjectRef(t.objRef),
+			primaryColumnIndexInBatch:    t.primaryColumnIndexInBatch,
+			refreshTimestampIndexInBatch: t.refreshTimestampIndexInBatch,
+			primaryColumnType:            t.primaryColumnType,
+			partitionColumnIndexInBatch:  t.partitionColumnIndexInBatch,
+			filter:                       t.filter, // function pointer, safe to copy
+			filterColIndexInBatch:        t.filterColIndexInBatch,
+			lockTable:                    t.lockTable,
+			changeDef:                    t.changeDef,
+			mode:                         t.mode,
+			lockRows:                     plan.DeepCopyExpr(t.lockRows),
+			lockTableAtTheEnd:            t.lockTableAtTheEnd,
+		}
+	}
 }
 
 // AddLockTarget add lock target, LockMode_Exclusive will used
@@ -899,6 +1316,39 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 		partitionColumnIndexInBatch:  partitionColIndexInBatch,
 	})
 	return lockOp
+}
+
+func (lockOp *LockOp) GetLockRowsExpressions() []*plan.Expr {
+	exprs := make([]*plan.Expr, 0, len(lockOp.targets))
+	for i := range lockOp.targets {
+		if lockOp.targets[i].lockRows != nil {
+			exprs = append(exprs, lockOp.targets[i].lockRows)
+		}
+	}
+	return exprs
+}
+
+func (lockOp *LockOp) RewriteLockRowsExpressions(rewrite func(*plan.Expr) (*plan.Expr, bool, error)) (bool, error) {
+	folded := false
+	targets := make([]lockTarget, len(lockOp.targets))
+	copy(targets, lockOp.targets)
+	for i := range targets {
+		if targets[i].lockRows == nil {
+			continue
+		}
+		expr, exprFolded, err := rewrite(targets[i].lockRows)
+		if err != nil {
+			return false, err
+		}
+		if exprFolded {
+			targets[i].lockRows = expr
+			folded = true
+		}
+	}
+	if folded {
+		lockOp.targets = targets
+	}
+	return folded, nil
 }
 
 // LockTable lock all table, used for delete, truncate and drop table
@@ -1004,6 +1454,7 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
+	lockOp.ctr.lockCount = 0
 }
 
 // Free free mem
@@ -1027,6 +1478,22 @@ func (lockOp *LockOp) cleanParker() {
 		lockOp.ctr.parker.Close()
 		lockOp.ctr.parker = nil
 	}
+}
+
+func dedupLockRows(rows [][]byte) [][]byte {
+	if len(rows) <= 1 {
+		return rows
+	}
+	slices.SortFunc(rows, func(a, b []byte) int {
+		return bytes.Compare(a, b)
+	})
+	deduped := rows[:1]
+	for i := 1; i < len(rows); i++ {
+		if !bytes.Equal(rows[i], rows[i-1]) {
+			deduped = append(deduped, rows[i])
+		}
+	}
+	return deduped
 }
 
 func getRowsFilter(
@@ -1071,22 +1538,20 @@ func hasNewVersionInRange(
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	defer func() {
-		if analyzer != nil {
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
-		}
-	}()
 
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
-	return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+
+	changed, err := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
+		return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+	})
+
+	return changed, err
 }
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
 	if analyzer != nil {
-		analyzer.WaitStop(start)
+		process.StopAnalyzerWait(analyzer, start, resource.WaitLock)
 		analyzer.AddWaitLockTime(start)
 	}
 }
@@ -1102,22 +1567,7 @@ func lockTalbeIfLockCountIsZero(
 	for idx := 0; idx < len(lockOp.targets); idx++ {
 		target := lockOp.targets[idx]
 		if target.lockRows != nil {
-			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, target.lockRows)
-			if err != nil {
-				return err
-			}
-			defer func() {
-				free()
-			}()
-
-			bat := batch.NewWithSize(int(target.primaryColumnIndexInBatch) + 1)
-			bat.Vecs[target.primaryColumnIndexInBatch] = vec
-			bat.SetRowCount(vec.Length())
-
-			anal := lockOp.OpAnalyzer
-			anal.Start()
-			defer anal.Stop()
-			err = performLock(bat, proc, lockOp, anal, idx)
+			err := lockTargetWithRows(proc, lockOp, idx, target)
 			if err != nil {
 				return err
 			}
@@ -1134,4 +1584,23 @@ func lockTalbeIfLockCountIsZero(
 	ctr.lockCount = 1
 
 	return nil
+}
+
+func lockTargetWithRows(
+	proc *process.Process,
+	lockOp *LockOp,
+	idx int,
+	target lockTarget,
+) error {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, target.lockRows)
+	if err != nil {
+		return err
+	}
+	defer free()
+
+	bat := batch.NewWithSize(int(target.primaryColumnIndexInBatch) + 1)
+	bat.Vecs[target.primaryColumnIndexInBatch] = vec
+	bat.SetRowCount(vec.Length())
+
+	return performLock(bat, proc, lockOp, lockOp.OpAnalyzer, idx)
 }

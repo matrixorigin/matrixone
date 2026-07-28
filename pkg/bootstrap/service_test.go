@@ -92,6 +92,11 @@ func (tTxnOp *testTxnOperator) SnapshotTS() timestamp.Timestamp {
 	panic("implement me")
 }
 
+func (tTxnOp *testTxnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (tTxnOp *testTxnOperator) CreateTS() timestamp.Timestamp {
 	//TODO implement me
 	panic("implement me")
@@ -142,6 +147,10 @@ func (tTxnOp *testTxnOperator) HasLockTable(table uint64) bool {
 	panic("implement me")
 }
 
+func (tTxnOp *testTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	return nil
+}
+
 func (tTxnOp *testTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
 	//TODO implement me
 	panic("implement me")
@@ -177,7 +186,7 @@ func (tTxnOp *testTxnOperator) GetWorkspace() client.Workspace {
 	panic("implement me")
 }
 
-func (tTxnOp *testTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(client.TxnEvent)) {
+func (tTxnOp *testTxnOperator) AppendEventCallback(event client.EventType, callbacks ...client.TxnEventCallback) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -192,12 +201,12 @@ func (tTxnOp *testTxnOperator) NextSequence() uint64 {
 	panic("implement me")
 }
 
-func (tTxnOp *testTxnOperator) EnterRunSql() {
+func (tTxnOp *testTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	//TODO implement me
-	panic("implement me")
+	return 1
 }
 
-func (tTxnOp *testTxnOperator) ExitRunSql() {
+func (tTxnOp *testTxnOperator) ExitRunSqlWithToken(_ uint64) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -227,6 +236,21 @@ func (tTxnOp *testTxnOperator) SetFootPrints(id int, enter bool) {
 	panic("implement me")
 }
 
+func (tTxnOp *testTxnOperator) Set(string, any) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tTxnOp *testTxnOperator) Get(string) (any, bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tTxnOp *testTxnOperator) Delete(string) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -236,12 +260,10 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 				if sql == "show databases" {
 					n++
-					memRes := executor.NewMemResult(
-						[]types.Type{types.New(types.T_varchar, 2, 0)},
-						mpool.MustNewZero())
-					memRes.NewBatch()
-					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
-					return memRes.GetResult(), nil
+					return newBootstrapStringResult(bootstrappedCheckerDB), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(allBootstrappedCheckerTables()...), nil
 				}
 				return executor.Result{}, nil
 			})
@@ -269,15 +291,15 @@ func TestBootstrapWithWait(t *testing.T) {
 		func(rt runtime.Runtime) {
 			var n atomic.Uint32
 			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-				if sql == "show databases" && n.Load() == 1 {
-					memRes := executor.NewMemResult(
-						[]types.Type{types.New(types.T_varchar, 2, 0)},
-						mpool.MustNewZero())
-					memRes.NewBatch()
-					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
-					return memRes.GetResult(), nil
+				if sql == "show databases" {
+					if n.Add(1) >= 2 {
+						return newBootstrapStringResult(bootstrappedCheckerDB), nil
+					}
+					return executor.Result{}, nil
 				}
-				n.Add(1)
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(allBootstrappedCheckerTables()...), nil
+				}
 				return executor.Result{}, nil
 			})
 
@@ -297,6 +319,102 @@ func TestBootstrapWithWait(t *testing.T) {
 			assert.True(t, n.Load() > 0)
 		},
 	)
+}
+
+func TestBootstrapMissingSQLTaskTablesIsNotBootstrapped(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if sql == "show databases" {
+					return newBootstrapStringResult(bootstrappedCheckerDB), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(
+						catalog.MOSysAsyncTask,
+						"sys_cron_task",
+						catalog.MOSysDaemonTask,
+					), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedVersionCheckerDB) {
+					return newBootstrapStringResult(), nil
+				}
+				return executor.Result{}, nil
+			})
+
+			b := NewService(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				exec,
+			).(*service)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			ok, err := b.checkAlreadyBootstrapped(ctx)
+			require.NoError(t, err)
+			require.False(t, ok)
+		},
+	)
+}
+
+func TestBootstrapMissingSQLTaskTablesWithUpgradeFrameworkIsBootstrapped(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if sql == "show databases" {
+					return newBootstrapStringResult(bootstrappedCheckerDB), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedCheckerDB) {
+					return newBootstrapStringResult(
+						catalog.MOSysAsyncTask,
+						"sys_cron_task",
+						catalog.MOSysDaemonTask,
+					), nil
+				}
+				if sql == fmt.Sprintf("show tables from %s", bootstrappedVersionCheckerDB) {
+					return newBootstrapStringResult(catalog.MOVersionTable), nil
+				}
+				return executor.Result{}, nil
+			})
+
+			b := NewService(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				exec,
+			).(*service)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			ok, err := b.checkAlreadyBootstrapped(ctx)
+			require.NoError(t, err)
+			require.True(t, ok)
+		},
+	)
+}
+
+func allBootstrappedCheckerTables() []string {
+	tables := make([]string, 0, len(bootstrappedCheckerTables)+len(upgradeManagedBootstrapTables))
+	tables = append(tables, bootstrappedCheckerTables...)
+	tables = append(tables, upgradeManagedBootstrapTables...)
+	return tables
+}
+
+func newBootstrapStringResult(values ...string) executor.Result {
+	memRes := executor.NewMemResult(
+		[]types.Type{types.New(types.T_varchar, 2, 0)},
+		mpool.MustNewZero())
+	memRes.NewBatchWithRowCount(len(values))
+	executor.AppendStringRows(memRes, 0, values)
+	return memRes.GetResult()
 }
 
 type memLocker struct {
@@ -337,7 +455,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 					memRes := executor.NewMemResult(
 						[]types.Type{types.New(types.T_varchar, 2, 0)},
 						mpool.MustNewZero())
-					memRes.NewBatch()
+					memRes.NewBatchWithRowCount(1)
 					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
 					return memRes.GetResult(), nil
 				}
@@ -352,7 +470,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 					memRes := executor.NewMemResult(
 						typs,
 						mpool.MustNewZero())
-					memRes.NewBatch()
+					memRes.NewBatchWithRowCount(1)
 					executor.AppendStringRows(memRes, 0, []string{"1.2.3"})
 					executor.AppendFixedRows(memRes, 1, []uint32{10})
 					executor.AppendFixedRows(memRes, 2, []int32{0})
@@ -399,7 +517,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 					memRes := executor.NewMemResult(
 						[]types.Type{types.New(types.T_varchar, 2, 0)},
 						mpool.MustNewZero())
-					memRes.NewBatch()
+					memRes.NewBatchWithRowCount(1)
 					executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
 					return memRes.GetResult(), nil
 				}
@@ -414,7 +532,7 @@ func TestDoCheckUpgrade(t *testing.T) {
 					memRes := executor.NewMemResult(
 						typs,
 						mpool.MustNewZero())
-					memRes.NewBatch()
+					memRes.NewBatchWithRowCount(1)
 					executor.AppendStringRows(memRes, 0, []string{"2.0.0"})
 					executor.AppendFixedRows(memRes, 1, []uint32{1})
 					executor.AppendFixedRows(memRes, 2, []int32{0})
@@ -497,6 +615,58 @@ func TestDoUpgrade(t *testing.T) {
 
 			_, err := b.doUpgrade(ctx, versionUpg, txnExecutor)
 			assert.NoError(t, err)
+		},
+	)
+}
+
+func TestPerformUpgradeReturnsWhenTenantUpgradeInProgress(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			b := newServiceForTest(
+				sid,
+				&memLocker{},
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+					return executor.Result{}, nil
+				}),
+				func(s *service) {
+					s.handles = append(s.handles, newTestVersionHandler("3.0.1", "3.0.0", versions.Yes, versions.Yes, 2))
+				},
+			)
+
+			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+
+			txnExecutor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "select state from mo_version") &&
+					strings.Contains(sql, "version = '3.0.1'") &&
+					strings.Contains(sql, "version_offset = 2") &&
+					strings.Contains(sql, "for update"):
+					memRes := executor.NewMemResult(
+						[]types.Type{types.New(types.T_int32, 32, 0)},
+						mpool.MustNewZero(),
+					)
+					memRes.NewBatchWithRowCount(1)
+					executor.AppendFixedRows(memRes, 0, []int32{versions.StateCreated})
+					return memRes.GetResult(), nil
+				case strings.Contains(sql, "from mo_upgrade") &&
+					strings.Contains(sql, "final_version = '3.0.1'") &&
+					strings.Contains(sql, "final_version_offset = 2") &&
+					strings.Contains(sql, "order by upgrade_order asc") &&
+					strings.Contains(sql, "for update"):
+					return buildUpgradeVersionResult(100, versions.StateUpgradingTenant, "3.0.0", "3.0.1", 2, 0, versions.Yes, versions.Yes, 3, 1), nil
+				default:
+					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+				}
+			}, txnOperator)
+
+			completed, err := b.performUpgrade(context.Background(), txnExecutor)
+			require.NoError(t, err)
+			require.False(t, completed)
 		},
 	)
 }

@@ -16,7 +16,7 @@ package frontend
 
 import (
 	"context"
-	"math"
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -25,6 +25,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,12 +39,69 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+type legacyZeroRunSQLTxnOperator struct {
+	client.TxnOperator
+	exited chan uint64
+}
+
+func (op *legacyZeroRunSQLTxnOperator) EnterRunSqlWithTokenAndSQL(context.CancelFunc, string) uint64 {
+	return 0
+}
+
+func (op *legacyZeroRunSQLTxnOperator) ExitRunSqlWithToken(token uint64) {
+	op.exited <- token
+}
+
+func TestEnterFrontendRunSQLRejectsSealedTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	expectedErr := moerr.NewTxnClosedNoCtx([]byte("sealed"))
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), "select 1").
+		Return(uint64(0), expectedErr)
+
+	ses := &Session{}
+	ses.txnHandler = InitTxnHandler("", nil, ctx, txnOperator)
+	defer ses.txnHandler.txnCtxCancel()
+	finish, err := enterFrontendRunSQL(ses, &ExecCtx{
+		reqCtx:    ctx,
+		sqlOfStmt: "select 1",
+	})
+
+	assert.ErrorIs(t, err, expectedErr)
+	assert.NotNil(t, finish)
+	assert.Empty(t, ses.runSQLTokens)
+}
+
+func TestEnterFrontendRunSQLPreservesLegacyZeroToken(t *testing.T) {
+	ctx := context.Background()
+	op := &legacyZeroRunSQLTxnOperator{exited: make(chan uint64, 1)}
+	ses := &Session{}
+	ses.txnHandler = InitTxnHandler("", nil, ctx, op)
+	defer ses.txnHandler.txnCtxCancel()
+
+	finish, err := enterFrontendRunSQL(ses, &ExecCtx{
+		reqCtx:    ctx,
+		sqlOfStmt: "select 1",
+	})
+	require.NoError(t, err)
+	require.Empty(t, ses.runSQLTokens)
+	finish()
+	select {
+	case token := <-op.exited:
+		require.Zero(t, token)
+	case <-time.After(time.Second):
+		t.Fatal("legacy zero token was not returned to ExitRunSqlWithToken")
+	}
+	require.Empty(t, ses.runSQLTokens)
+}
 
 func TestTxnHandler_NewTxn(t *testing.T) {
 	convey.Convey("new txn", t, func() {
@@ -57,8 +115,8 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		cnt := 0
@@ -93,9 +151,6 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 		ec.ses = &Session{}
 		txn := InitTxnHandler("", eng, ctx, nil)
 
-		var c clock.Clock
-		err = txn.CreateTempStorage(c)
-		convey.So(err, convey.ShouldBeNil)
 		err = txn.Create(ec)
 		convey.So(err, convey.ShouldBeNil)
 		txn1 := txn.GetTxn()
@@ -131,8 +186,8 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 			}).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -161,8 +216,6 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 		ec.ses = &Session{}
 		catalog2.SetupDefines("")
 		txn := InitTxnHandler("", eng, ctx, nil)
-		var c clock.Clock
-		_ = txn.CreateTempStorage(c)
 		err = txn.Create(ec)
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.Commit(ec)
@@ -200,8 +253,8 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 			}).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		wp := mock_frontend.NewMockWorkspace(ctrl)
 		wp.EXPECT().RollbackLastStatement(gomock.Any()).Return(moerr.NewInternalError(ctx, "rollback last stmt")).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(wp).AnyTimes()
@@ -223,8 +276,6 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 		ec.reqCtx = ctx
 		ec.ses = &Session{}
 		catalog2.SetupDefines("")
-		var c clock.Clock
-		_ = txn.CreateTempStorage(c)
 		ec.txnOpt = FeTxnOption{autoCommit: true}
 		err = txn.Create(ec)
 		convey.So(err, convey.ShouldBeNil)
@@ -260,8 +311,8 @@ func TestSession_TxnBegin(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(&testWorkspace{}).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -273,8 +324,6 @@ func TestSession_TxnBegin(t *testing.T) {
 		getPu("").StorageEngine = eng
 		session := NewSession(ctx, "", proto, nil)
 
-		var c clock.Clock
-		_ = session.GetTxnHandler().CreateTempStorage(c)
 		return session
 	}
 	convey.Convey("new session", t, func() {
@@ -335,8 +384,8 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -399,64 +448,63 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 	})
 }
 
-var genSession1 = func(t *testing.T, ctrl *gomock.Controller, pu *config.ParameterUnit) *Session {
-	sv, err := getSystemVariables("test/system_vars_config.toml")
-	if err != nil {
-		t.Error(err)
-	}
-	ioses, err := NewIOSession(&testConn{}, pu, "")
-	if err != nil {
-		t.Error(err)
-	}
-	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
-	session := NewSession(context.Background(), "", proto, nil)
-	return session
-}
+func TestSession_ResolveTempIndexTable(t *testing.T) {
+	convey.Convey("test resolve temp index table", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
 
-func TestSession_GetTempTableStorage(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	eng := mock_frontend.NewMockEngine(ctrl)
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-	setPu("", pu)
-	setSessionAlloc("", NewLeakCheckAllocator())
-	ses := genSession1(t, ctrl, pu)
-	assert.Panics(t, func() {
-		_ = ses.GetTxnHandler().GetTempStorage()
+		ctx := context.TODO()
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+
+		db := mock_frontend.NewMockDatabase(ctrl)
+		db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewNoSuchTable(ctx, "db1", "index_table")).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
+		setPu("", pu)
+		setSessionAlloc("", NewLeakCheckAllocator())
+
+		// Setup session
+		sv, _ := getSystemVariables("test/system_vars_config.toml")
+		ioses, _ := NewIOSession(&testConn{}, pu, "")
+		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+		ses := NewSession(ctx, "", proto, nil)
+		ses.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, ses: ses}
+
+		// Mock scenario:
+		// 1. "temp_t1" is a temp table, registered in session
+		ses.AddTempTable("db1", "temp_t1", "mo_temp_t1_real")
+
+		// 2. We try to resolve an index table "index_table" for "temp_t1"
+		// The issue is that the index table is NOT registered in session, so ResolveIndexTableByRef will fail to find it as a temp table
+		// and try to look it up as a regular table (which fails in this mock because we didn't mock the regular table lookup to succeed for it)
+
+		tcc := ses.GetTxnCompileCtx()
+		ref := &plan.ObjectRef{SchemaName: "db1"}
+
+		// Expectation: This should fail or panic if not handled because GetTempTable returns false
+		// and getRelation returns (nil, nil, nil) or error for non-existent regular table.
+
+		// In the current bug state, the code in ResolveIndexTableByRef (after my previous fix) handles nil table but throws NoSuchTable.
+		// To reproduce the original panic (if we reverted) or the "no such table" error:
+
+		_, _, err := tcc.ResolveIndexTableByRef(ref, "index_table", &plan2.Snapshot{})
+
+		// If the index was correctly registered, we would mock it:
+		// ses.AddTempTable("db1", "index_table", "mo_index_table_real")
+
+		// Assert that it fails with NoSuchTable because it's not in temp tables
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), convey.ShouldBeTrue)
 	})
-}
-
-func TestIfInitedTempEngine(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	eng := mock_frontend.NewMockEngine(ctrl)
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-	setPu("", pu)
-	setSessionAlloc("", NewLeakCheckAllocator())
-	ses := genSession1(t, ctrl, pu)
-	assert.False(t, ses.GetTxnHandler().HasTempEngine())
-}
-
-func TestSetTempTableStorage(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	eng := mock_frontend.NewMockEngine(ctrl)
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-	setPu("", pu)
-	setSessionAlloc("", NewLeakCheckAllocator())
-	ses := genSession1(t, ctrl, pu)
-
-	ck := clock.NewHLCClock(func() int64 {
-		return time.Now().Unix()
-	}, math.MaxInt)
-	catalog2.SetupDefines("")
-	_ = ses.GetTxnHandler().CreateTempStorage(ck)
-	tnStore := ses.GetTxnHandler().GetTempTNService()
-
-	assert.Equal(t, defines.TEMPORARY_TABLE_TN_ADDR, tnStore.TxnServiceAddress)
 }
 
 func TestSession_updateTimeZone(t *testing.T) {
@@ -465,32 +513,98 @@ func TestSession_updateTimeZone(t *testing.T) {
 
 	ses := newSes(nil, ctrl)
 	ctx := context.Background()
-	/*
-		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "system")
+
+	// Test offset timezones
+	t.Run("offset timezones", func(t *testing.T) {
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+00:00")
 		assert.NoError(t, err)
-		assert.Equal(t, "Local", ses.GetTimeZone().String())
-	*/
+		assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+		val := ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "+00:00", val)
 
-	err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+00:00")
-	assert.NoError(t, err)
-	assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+08:00")
+		assert.NoError(t, err)
+		assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+		val = ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "+08:00", val)
 
-	err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+08:00")
-	assert.NoError(t, err)
-	assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "-08:00")
+		assert.NoError(t, err)
+		assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+		val = ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "-08:00", val)
+	})
 
-	err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "-08:00")
-	assert.NoError(t, err)
-	assert.Equal(t, ses.GetTimeZone().String(), "FixedZone")
+	// Test UTC special handling (case-insensitive, no timezone database dependency)
+	t.Run("UTC special handling", func(t *testing.T) {
+		// Test "UTC" (uppercase)
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "UTC")
+		assert.NoError(t, err)
+		assert.Equal(t, time.UTC, ses.GetTimeZone())
+		val := ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "UTC", val)
 
-	//ci fails the case
-	//err = updateTimeZone(ses, ses.GetSysVars(), "time_zone", "UTC")
-	//assert.NoError(t, err)
-	//assert.Equal(t, ses.GetTimeZone().String(), "utc")
+		// Test "utc" (lowercase) - should also work and use time.UTC directly
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "utc")
+		assert.NoError(t, err)
+		assert.Equal(t, time.UTC, ses.GetTimeZone())
+		val = ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "UTC", val)
 
-	err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "")
-	assert.NoError(t, err)
-	assert.Equal(t, ses.GetTimeZone().String(), "UTC")
+		// Test "Utc" (mixed case)
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "Utc")
+		assert.NoError(t, err)
+		assert.Equal(t, time.UTC, ses.GetTimeZone())
+		val = ses.GetSessionSysVars().Get("time_zone")
+		assert.Equal(t, "UTC", val)
+	})
+
+	// Test IANA timezone names (case-sensitive)
+	t.Run("IANA timezone names case-sensitive", func(t *testing.T) {
+		// Test correct case: "Asia/Shanghai"
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "Asia/Shanghai")
+		if err == nil {
+			// Only test if timezone database is available
+			assert.NotNil(t, ses.GetTimeZone())
+			val := ses.GetSessionSysVars().Get("time_zone")
+			// Should preserve original case
+			assert.Equal(t, "Asia/Shanghai", val)
+		}
+
+		// Test correct case: "America/New_York"
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "America/New_York")
+		if err == nil {
+			assert.NotNil(t, ses.GetTimeZone())
+			val := ses.GetSessionSysVars().Get("time_zone")
+			// Should preserve original case
+			assert.Equal(t, "America/New_York", val)
+		}
+	})
+
+	// Test empty string handling
+	t.Run("empty string handling", func(t *testing.T) {
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "")
+		// Empty string gets converted to lowercase, then tries to load as location
+		// This may fail if timezone database is not available, which is expected
+		if err == nil {
+			assert.NotNil(t, ses.GetTimeZone())
+		}
+	})
+
+	// Test invalid timezone
+	t.Run("invalid timezone", func(t *testing.T) {
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "Invalid/Timezone")
+		assert.Error(t, err)
+	})
+
+	// Test invalid offset format
+	t.Run("invalid offset format", func(t *testing.T) {
+		err := updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+25:00")
+		assert.Error(t, err)
+
+		err = updateTimeZone(ctx, ses, ses.GetSessionSysVars(), "time_zone", "+08:60")
+		assert.Error(t, err)
+	})
 }
 
 func TestSession_Migrate(t *testing.T) {
@@ -508,8 +622,8 @@ func TestSession_Migrate(t *testing.T) {
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(any, any, ...any) (TxnOperator, error) {
@@ -521,8 +635,8 @@ func TestSession_Migrate(t *testing.T) {
 			txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-			txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
-			txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
+			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+			txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 			return txnOperator, nil
 		}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -579,16 +693,68 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
-		err := Migrate(s, &query.MigrateConnToRequest{
-			DB: "d1",
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+			DB:               "d1",
+			LastAffectedRows: 7,
 			PrepareStmts: []*query.PrepareStmt{
 				{Name: "p1", SQL: `select ?`},
 				{Name: "p2", SQL: `select ?`},
+				{Name: "a-b", SQL: `select ?`},
+				{Name: "select", SQL: `select ?`},
+				{Name: "a`b", SQL: `select ?`},
+				{Name: "from", SQL: `select ?`},
 			},
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, "d1", s.GetDatabaseName())
-		assert.Equal(t, 2, len(s.prepareStmts))
+		assert.Len(t, s.prepareStmts, 6)
+		for _, name := range []string{"a-b", "select", "a`b", "from"} {
+			assert.Contains(t, s.prepareStmts, name)
+		}
+		assert.Equal(t, int64(7), s.GetLastAffectedRows())
+		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
+
+		execCtx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ec := &ExecCtx{reqCtx: execCtx, ses: s}
+		resp, err := ExecRequest(s, ec, &Request{cmd: COM_STMT_PREPARE, data: []byte("select row_count()")})
+		assert.NoError(t, err)
+		assert.Nil(t, resp)
+		assert.Equal(t, int64(7), s.GetLastAffectedRows())
+		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
+
+		stmtID := s.GetLastStmtId()
+		data := make([]byte, 4)
+		binary.LittleEndian.PutUint32(data, stmtID)
+		resp, err = ExecRequest(s, ec, &Request{cmd: COM_STMT_RESET, data: data})
+		assert.NoError(t, err)
+		assert.Nil(t, resp)
+		assert.Equal(t, int64(0), s.GetLastAffectedRows())
+		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
+	})
+
+	t.Run("reject user-level locks", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+			ConnID: 88,
+			DB:     "d1",
+			UserLevelLocks: []*query.UserLevelLock{
+				{Name: "restored_lock", Count: 2},
+			},
+		})
+		assert.ErrorContains(t, err, "cannot migrate connection while user-level locks are held")
+		assert.Empty(t, function.UserLevelLocksForMigration(s.proc))
 	})
 
 	t.Run("db dropped", func(t *testing.T) {
@@ -605,9 +771,26 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d2", context.Canceled)
-		err := Migrate(s, &query.MigrateConnToRequest{DB: "d2"})
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d2"})
 		assert.Equal(t, "", s.GetDatabaseName())
 		assert.NoError(t, err)
+	})
+
+	t.Run("caller canceled", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d3", nil)
+		s.SetLastAffectedRows(9)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := Migrate(ctx, s, &query.MigrateConnToRequest{DB: "d3", LastAffectedRows: 3})
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, int64(9), s.GetLastAffectedRows())
 	})
 }
 
@@ -797,4 +980,102 @@ func TestReserveConnAndClose(t *testing.T) {
 
 	ses.ReserveConnAndClose()
 	assert.Equal(t, 0, len(rm.sessionManager.GetAllSessions()))
+}
+
+func TestSessionTempTableMap(t *testing.T) {
+	ses := &Session{
+		tempTables:    make(map[string]string),
+		tempTablesRev: make(map[string]string),
+	}
+
+	assert.Equal(t, uint64(0), ses.GetTempTableVersion())
+	ses.AddTempTable("db1", "alias", "real")
+	assert.Equal(t, uint64(1), ses.GetTempTableVersion())
+
+	// Replacing a mapping changes name resolution and removes the stale reverse
+	// mapping.
+	ses.AddTempTable("db1", "alias", "real2")
+	assert.Equal(t, uint64(2), ses.GetTempTableVersion())
+	ses.RemoveTempTableByRealName("real")
+	assert.Equal(t, uint64(2), ses.GetTempTableVersion())
+
+	name, ok := ses.GetTempTable("db1", "alias")
+	assert.True(t, ok)
+	assert.Equal(t, "real2", name)
+
+	// Re-registering the same mapping does not change name resolution.
+	ses.AddTempTable("db1", "alias", "real2")
+	assert.Equal(t, uint64(2), ses.GetTempTableVersion())
+
+	ses.RemoveTempTableByRealName("real2")
+	assert.Equal(t, uint64(3), ses.GetTempTableVersion())
+	_, ok = ses.GetTempTable("db1", "alias")
+	assert.False(t, ok)
+
+	// Removing an absent mapping does not change name resolution.
+	ses.RemoveTempTableByRealName("real2")
+	ses.RemoveTempTable("db1", "alias")
+	assert.Equal(t, uint64(3), ses.GetTempTableVersion())
+
+	ses.AddTempTable("db1", "alias", "real3")
+	assert.Equal(t, uint64(4), ses.GetTempTableVersion())
+	ses.RemoveTempTable("db1", "alias")
+	assert.Equal(t, uint64(5), ses.GetTempTableVersion())
+}
+
+func TestRemoveAllPrepareStmts(t *testing.T) {
+	ses := &Session{}
+	ses.prepareStmts = map[string]*PrepareStmt{
+		"s1": {Name: "s1"},
+		"s2": {Name: "s2"},
+		"s3": {Name: "s3"},
+	}
+
+	ses.RemoveAllPrepareStmts()
+	assert.Equal(t, 0, len(ses.prepareStmts))
+	assert.NotNil(t, ses.prepareStmts)
+
+	// safe to call again on an already-empty session
+	ses.RemoveAllPrepareStmts()
+	assert.Equal(t, 0, len(ses.prepareStmts))
+}
+
+func TestSession_Cleanup(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	tz := time.Local
+	ses := &Session{}
+	ses.timeZone = tz
+	ses.txnHandler = &TxnHandler{}
+
+	// 1. Test getCleanupContext with nil txnCtx
+	ctx := ses.getCleanupContext()
+	assert.NotNil(t, ctx)
+	assert.Equal(t, context.Background(), ctx)
+
+	// 2. Test getCleanupContext with valid txnCtx
+	ses.txnHandler.txnCtx = context.WithValue(context.Background(), "test", "value")
+	ctx2 := ses.getCleanupContext()
+	assert.Equal(t, ses.txnHandler.txnCtx, ctx2)
+
+	// 3. Test the code path in reset (manual execution to ensure coverage)
+	prev := &Session{}
+	prev.txnHandler = &TxnHandler{}
+	tempExecCtx := ExecCtx{
+		reqCtx: prev.getCleanupContext(),
+		ses:    prev,
+		txnOpt: FeTxnOption{byRollback: true},
+	}
+	assert.NotNil(t, tempExecCtx.reqCtx)
+
+	// 4. Test backSession getCleanupContext
+	bses := &backSession{}
+	bses.txnHandler = &TxnHandler{}
+	ctx3 := bses.getCleanupContext()
+	assert.NotNil(t, ctx3)
+
+	// 5. Test Routine getCleanupContext
+	rt := &Routine{}
+	rt.ses = ses
+	ctx4 := rt.getCleanupContext()
+	assert.Equal(t, ses.txnHandler.txnCtx, ctx4)
 }

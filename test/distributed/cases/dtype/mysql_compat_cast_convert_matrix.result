@@ -1,0 +1,115 @@
+drop database if exists mysql_compat_cast_convert_matrix;
+create database mysql_compat_cast_convert_matrix;
+use mysql_compat_cast_convert_matrix;
+set time_zone = '+00:00';
+select cast('  -12' as signed) as signed_ws,
+cast('0012' as unsigned) as unsigned_leading_zero,
+cast('12.75' as decimal(6,2)) as decimal_scale,
+cast('12.75' as double) as double_value,
+cast('-12.75' as float) as float_value;
+signed_ws    unsigned_leading_zero    decimal_scale    double_value    float_value
+-12    12    12.75    12.75    -12.75
+select cast('12.344' as decimal(6,2)) as decimal_round_down,
+cast('12.345' as decimal(6,2)) as decimal_round_up,
+cast('-12.345' as decimal(6,2)) as decimal_negative_round,
+cast('7e0' as double) as double_exp,
+cast('7e0' as float) as float_exp,
+cast('1e-3' as decimal(8,4)) as decimal_exp;
+decimal_round_down    decimal_round_up    decimal_negative_round    double_exp    float_exp    decimal_exp
+12.34    12.35    -12.35    7    7    0.0010
+select convert('42', signed) as convert_signed,
+convert('42', unsigned) as convert_unsigned,
+convert('42.50', decimal(6,2)) as convert_decimal;
+convert_signed    convert_unsigned    convert_decimal
+42    42    42.50
+select convert('AZ', char(2)) as convert_char_explicit,
+length(convert('AZ', char(2))) as convert_char_len,
+convert(12345, char(5)) as convert_int_char,
+length(convert(12345, char(5))) as convert_int_char_len;
+convert_char_explicit    convert_char_len    convert_int_char    convert_int_char_len
+AZ    2    12345    5
+select hex(convert('AZ', binary(4))) as convert_binary_fixed_hex,
+length(convert('AZ', binary(4))) as convert_binary_fixed_len;
+convert_binary_fixed_hex    convert_binary_fixed_len
+415A0000    4
+select cast(12345 as char) as int_to_char,
+cast(-12.50 as char) as decimal_to_char,
+hex(cast('AZ' as binary)) as binary_hex,
+length(cast('AZ' as binary)) as binary_len;
+int_to_char    decimal_to_char    binary_hex    binary_len
+12345    -12.50    415A    2
+select hex(cast('AZ' as binary(4))) as binary_fixed_hex,
+length(cast('AZ' as binary(4))) as binary_fixed_len;
+binary_fixed_hex    binary_fixed_len
+415A0000    4
+select cast(_binary X'4142' as char) as binary_literal_to_char,
+hex(cast(_binary X'4142' as binary(4))) as binary_literal_to_fixed_binary;
+binary_literal_to_char    binary_literal_to_fixed_binary
+AB    41420000
+select cast(b'1010' as unsigned) as bit_literal_unsigned,
+cast(b'1010' as signed) as bit_literal_signed,
+cast(true as signed) as bool_true_signed,
+cast(false as unsigned) as bool_false_unsigned;
+bit_literal_unsigned    bit_literal_signed    bool_true_signed    bool_false_unsigned
+10    10    1    0
+select cast('2024-01-02' as date) as cast_date,
+cast('2024-01-02 03:04:05.123456' as datetime(6)) as cast_datetime6,
+cast('03:04:05.123456' as time(6)) as cast_time6;
+cast_date    cast_datetime6    cast_time6
+2024-01-02    2024-01-02 03:04:05.123456000    03:04:05.123456000
+select cast('20240102' as date) as compact_date,
+cast('20240102030405' as datetime) as compact_datetime,
+cast('030405' as time) as compact_time,
+cast('34:05' as time) as hour_minute_time;
+compact_date    compact_datetime    compact_time    hour_minute_time
+2024-01-02    2024-01-02 03:04:05    03:04:05    34:05:00
+select convert('20240102', date) as convert_compact_date,
+convert('20240102030405', datetime) as convert_compact_datetime,
+convert('030405', time) as convert_compact_time,
+convert('34:05', time) as convert_hour_minute_time;
+convert_compact_date    convert_compact_datetime    convert_compact_time    convert_hour_minute_time
+2024-01-02    2024-01-02 03:04:05    03:04:05    34:05:00
+select cast(cast('2024-01-02' as date) as char) as date_to_char,
+cast(cast('2024-01-02 03:04:05.123456' as datetime(6)) as char) as datetime_to_char,
+cast(cast('03:04:05.123456' as time(6)) as char) as time_to_char;
+date_to_char    datetime_to_char    time_to_char
+2024-01-02    2024-01-02 03:04:05.123456    03:04:05.123456
+select json_extract(cast('{"a": 1, "b": "2"}' as json), '$.a') as json_a,
+json_unquote(json_extract(cast('{"a": 1, "b": "2"}' as json), '$.b')) as json_b;
+json_a    json_b
+1    2
+select json_type(cast('[1, "2", null]' as json)) as json_array_type,
+json_extract(cast('[1, "2", null]' as json), '$[1]') as json_array_value,
+json_type(cast('true' as json)) as json_bool_type,
+json_type(cast('null' as json)) as json_null_type;
+json_array_type    json_array_value    json_bool_type    json_null_type
+ARRAY    "2"    BOOLEAN    null
+select cast(null as signed) as null_signed,
+cast(null as unsigned) as null_unsigned,
+cast(null as decimal(6,2)) as null_decimal,
+cast(null as char) as null_char,
+cast(null as date) as null_date,
+cast(null as datetime(6)) as null_datetime,
+cast(null as time(6)) as null_time;
+null_signed    null_unsigned    null_decimal    null_char    null_date    null_datetime    null_time
+null    null    null    null    null    null    null
+select cast('-0' as signed) as signed_neg_zero,
+cast('  +0' as signed) as signed_plus_zero_ws,
+cast('000.00' as decimal(6,2)) as decimal_zero_padded;
+signed_neg_zero    signed_plus_zero_ws    decimal_zero_padded
+0    0    0.00
+select cast(9223372036854775807 as signed) as signed_max,
+cast(18446744073709551615 as unsigned) as unsigned_max,
+cast('18446744073709551615' as unsigned) as unsigned_string_max;
+signed_max    unsigned_max    unsigned_string_max
+9223372036854775807    18446744073709551615    18446744073709551615
+select cast('0000-00-00' as date) as zero_date,
+cast('00:00:00' as time) as zero_time;
+zero_date    zero_time
+null    00:00:00
+select convert(null, signed) as convert_null_signed,
+convert(null, unsigned) as convert_null_unsigned,
+convert(null, decimal(6,2)) as convert_null_decimal;
+convert_null_signed    convert_null_unsigned    convert_null_decimal
+null    null    null
+drop database mysql_compat_cast_convert_matrix;

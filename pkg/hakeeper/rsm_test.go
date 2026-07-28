@@ -49,6 +49,8 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	tsm2 := NewStateMachine(0, 2).(*stateMachine)
 	tsm1.state.NextID = 12345
+	tsm1.state.LogServiceRecoveryPending = true
+	tsm1.state.IDWatermarkRestoreGeneration = 7
 	tsm1.state.LogShards["test1"] = 23456
 	tsm1.state.LogShards["test2"] = 34567
 
@@ -57,6 +59,8 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	assert.Nil(t, tsm2.RecoverFromSnapshot(buf, nil, nil))
 	assert.Equal(t, tsm1.state.NextID, tsm2.state.NextID)
 	assert.Equal(t, tsm1.state.LogShards, tsm2.state.LogShards)
+	assert.True(t, tsm2.state.LogServiceRecoveryPending)
+	assert.Equal(t, uint64(7), tsm2.state.IDWatermarkRestoreGeneration)
 	assert.True(t, tsm1.replicaID != tsm2.replicaID)
 }
 
@@ -209,6 +213,25 @@ func TestGetIDCmd(t *testing.T) {
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 	assert.Equal(t, sm.Result{Value: 202}, result)
+}
+
+func TestGetIDCmdRejectedDuringBootstrapCommandsReceived(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	tsm1.state.State = pb.HAKeeperBootstrapCommandsReceived
+	tsm1.state.NextID = 50000000
+	tsm1.state.NextIDByKey["____server_conn_id"] = 900
+
+	cmd := GetAllocateIDCmd(pb.CNAllocateID{Batch: 100})
+	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Equal(t, uint64(50000000), tsm1.state.NextID)
+
+	cmd = GetAllocateIDCmd(pb.CNAllocateID{Key: "____server_conn_id", Batch: 100})
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Equal(t, uint64(900), tsm1.state.NextIDByKey["____server_conn_id"])
 }
 
 func TestAllocateIDByKeyCmd(t *testing.T) {
@@ -572,6 +595,36 @@ func TestSetState(t *testing.T) {
 	}
 }
 
+func TestRecoveryPendingRejectsRunningStateAndIDAllocation(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.State = pb.HAKeeperBootstrapCommandsReceived
+	rsm.state.NextID = 5000
+	rsm.state.NextIDByKey["index_key"] = 200
+	rsm.state.LogServiceRecoveryPending = true
+
+	result, err := rsm.Update(sm.Entry{Cmd: GetSetStateCmd(pb.HAKeeperRunning)})
+	require.NoError(t, err)
+	require.Len(t, result.Data, headerSize)
+	assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived,
+		pb.HAKeeperState(binaryEnc.Uint32(result.Data)))
+	assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, rsm.state.State)
+
+	rsm.state.State = pb.HAKeeperBootstrapping
+	result, err = rsm.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Batch: 100})})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Equal(t, uint64(5000), rsm.state.NextID)
+
+	rsm.state.State = pb.HAKeeperRunning
+	result, err = rsm.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{
+		Key:   "index_key",
+		Batch: 100,
+	})})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Equal(t, uint64(200), rsm.state.NextIDByKey["index_key"])
+}
+
 func TestSetTaskSchedulerState(t *testing.T) {
 	tests := []struct {
 		initialState pb.TaskSchedulerState
@@ -661,6 +714,208 @@ func TestHandleInitialClusterRequestCmd(t *testing.T) {
 	assert.Equal(t, pb.HAKeeperBootstrapping, rsm.state.State)
 	assert.Equal(t, K8SIDRangeEnd+10, rsm.state.NextID)
 	assert.Equal(t, nextIDByKey, rsm.state.NextIDByKey)
+}
+
+func TestLogServiceRecoveryBlocksIDsAndSchedulesUntilPrepared(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	result, err := rsm.Update(sm.Entry{Cmd: GetInitialClusterRequestCmdWithRecovery(
+		1, 1, 3, 0, nil, nil, true,
+	)})
+	require.NoError(t, err)
+	require.Equal(t, sm.Result{Value: uint64(pb.HAKeeperCreated)}, result)
+	require.Equal(t, pb.HAKeeperBootstrapping, rsm.state.State)
+	require.True(t, rsm.state.LogServiceRecoveryPending)
+	require.False(t, rsm.state.LogServiceRecoveryPrepared)
+	require.False(t, rsm.state.LogServiceRecoveryCompleted)
+
+	nextID := rsm.state.NextID
+	result, err = rsm.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Batch: 100})})
+	require.NoError(t, err)
+	require.Equal(t, sm.Result{}, result)
+	require.Equal(t, nextID, rsm.state.NextID)
+
+	result, err = rsm.Update(sm.Entry{Cmd: GetUpdateCommandsCmd(1, nil)})
+	require.NoError(t, err)
+	require.Equal(t, []byte{1}, result.Data)
+	require.Zero(t, rsm.state.Term)
+	result, err = rsm.Update(sm.Entry{Cmd: GetCompleteLogServiceRecoveryCmd()})
+	require.NoError(t, err)
+	require.Equal(t, []byte{1}, result.Data)
+	require.True(t, rsm.state.LogServiceRecoveryPending)
+	require.False(t, rsm.state.LogServiceRecoveryCompleted)
+
+	result, err = rsm.Update(sm.Entry{Cmd: GetRestoreIDWatermarkCmd(
+		K8SIDRangeEnd+100,
+		map[string]uint64{"index_key": 200},
+		true,
+	)})
+	require.NoError(t, err)
+	require.Empty(t, result.Data)
+	require.True(t, rsm.state.LogServiceRecoveryPrepared)
+	require.Equal(t, K8SIDRangeEnd+100, rsm.state.NextID)
+	require.Equal(t, uint64(200), rsm.state.NextIDByKey["index_key"])
+	require.Equal(t, uint64(1), rsm.state.IDWatermarkRestoreGeneration)
+
+	result, err = rsm.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Batch: 1})})
+	require.NoError(t, err)
+	require.Equal(t, K8SIDRangeEnd+101, result.Value)
+	result, err = rsm.Update(sm.Entry{Cmd: GetUpdateCommandsCmd(1, nil)})
+	require.NoError(t, err)
+	require.Empty(t, result.Data)
+	require.Equal(t, uint64(1), rsm.state.Term)
+
+	result, err = rsm.Update(sm.Entry{Cmd: GetCompleteLogServiceRecoveryCmd()})
+	require.NoError(t, err)
+	require.Empty(t, result.Data)
+	require.False(t, rsm.state.LogServiceRecoveryPending)
+	require.False(t, rsm.state.LogServiceRecoveryPrepared)
+	require.True(t, rsm.state.LogServiceRecoveryCompleted)
+	result, err = rsm.Update(sm.Entry{Cmd: GetCompleteLogServiceRecoveryCmd()})
+	require.NoError(t, err)
+	require.Empty(t, result.Data)
+	require.True(t, rsm.state.LogServiceRecoveryCompleted)
+}
+
+func TestInitialClusterRecoveryAppliesWatermarksAtomically(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	result, err := rsm.Update(sm.Entry{Cmd: GetInitialClusterRequestCmdWithRecovery(
+		1,
+		1,
+		3,
+		K8SIDRangeEnd+100,
+		map[string]uint64{"index_key": 200},
+		nil,
+		true,
+	)})
+	require.NoError(t, err)
+	require.Equal(t, sm.Result{Value: uint64(pb.HAKeeperCreated)}, result)
+	require.True(t, rsm.state.LogServiceRecoveryPending)
+	require.True(t, rsm.state.LogServiceRecoveryPrepared)
+	require.False(t, rsm.state.LogServiceRecoveryCompleted)
+	require.Equal(t, K8SIDRangeEnd+100, rsm.state.NextID)
+	require.Equal(t, uint64(200), rsm.state.NextIDByKey["index_key"])
+	require.Equal(t, uint64(1), rsm.state.IDWatermarkRestoreGeneration)
+}
+
+func TestRestoreIDWatermarkRequiresReplicatedRecoveryIntent(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	result, err := rsm.Update(sm.Entry{Cmd: GetInitialClusterRequestCmd(
+		1, 1, 3, K8SIDRangeEnd+10, map[string]uint64{"existing": 10}, nil,
+	)})
+	require.NoError(t, err)
+	require.Equal(t, sm.Result{Value: uint64(pb.HAKeeperCreated)}, result)
+
+	result, err = rsm.Update(sm.Entry{Cmd: GetRestoreIDWatermarkCmd(
+		K8SIDRangeEnd+100, map[string]uint64{"restored": 20}, false,
+	)})
+	require.NoError(t, err)
+	require.Equal(t, []byte{1}, result.Data)
+	require.Equal(t, K8SIDRangeEnd+10, rsm.state.NextID)
+	require.Equal(t, uint64(10), rsm.state.NextIDByKey["existing"])
+	require.Zero(t, rsm.state.NextIDByKey["restored"])
+}
+
+func TestHandleRestoreIDWatermarkCmdRejectsLateLogServiceRecovery(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.State = pb.HAKeeperRunning
+	rsm.state.NextID = 1000
+	rsm.state.NextIDByKey = map[string]uint64{
+		"index_key":          100,
+		"____server_conn_id": 900,
+	}
+	rsm.state.ClusterInfo = pb.ClusterInfo{
+		LogShards: []metadata.LogShardRecord{
+			{
+				ShardID:          10,
+				NumberOfReplicas: 3,
+			},
+		},
+	}
+
+	cmd := GetRestoreIDWatermarkCmd(
+		5000,
+		map[string]uint64{
+			"index_key":          200,
+			"____server_conn_id": 800,
+			"_mo_bootstrap":      1,
+		},
+		true,
+	)
+	assert.Equal(t, pb.RestoreIDWatermarkUpdate, parseCmdTag(cmd))
+	result, err := rsm.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+
+	assert.Equal(t, sm.Result{Value: uint64(pb.HAKeeperRunning), Data: []byte{1}}, result)
+	assert.Equal(t, pb.HAKeeperRunning, rsm.state.State)
+	assert.Equal(t, uint64(1000), rsm.state.NextID)
+	assert.Equal(t, uint64(100), rsm.state.NextIDByKey["index_key"])
+	assert.Equal(t, uint64(900), rsm.state.NextIDByKey["____server_conn_id"])
+	assert.False(t, rsm.state.LogServiceRecoveryPending)
+	assert.Zero(t, rsm.state.IDWatermarkRestoreGeneration)
+	rsm.state.State = pb.HAKeeperBootstrapFailed
+	result, err = rsm.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: uint64(pb.HAKeeperBootstrapFailed), Data: []byte{1}}, result)
+	assert.Equal(t, uint64(1000), rsm.state.NextID)
+	assert.False(t, rsm.state.LogServiceRecoveryPending)
+	rsm.state.State = pb.HAKeeperRunning
+
+	// ID-only restoration is also rejected after bootstrap. Managed clients
+	// can already hold allocated batches once HAKeeper is Running.
+	result, err = rsm.Update(sm.Entry{Cmd: GetRestoreIDWatermarkCmd(
+		5000,
+		map[string]uint64{
+			"index_key":          200,
+			"____server_conn_id": 800,
+			"_mo_bootstrap":      1,
+		},
+		false,
+	)})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: uint64(pb.HAKeeperRunning), Data: []byte{1}}, result)
+	assert.Equal(t, uint64(1000), rsm.state.NextID)
+	assert.Equal(t, uint64(100), rsm.state.NextIDByKey["index_key"])
+	assert.Equal(t, uint64(900), rsm.state.NextIDByKey["____server_conn_id"])
+	assert.Zero(t, rsm.state.NextIDByKey["_mo_bootstrap"])
+	assert.False(t, rsm.state.LogServiceRecoveryPending)
+	assert.Zero(t, rsm.state.IDWatermarkRestoreGeneration)
+	assert.Equal(t, uint64(10), rsm.state.ClusterInfo.LogShards[0].ShardID)
+
+	// A normal duplicate initial-cluster request remains a no-op, even when
+	// its ID fields are higher than the live state.
+	cmd = GetInitialClusterRequestCmd(
+		1,
+		1,
+		3,
+		9000,
+		map[string]uint64{"index_key": 9000},
+		nil,
+	)
+	_, err = rsm.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1000), rsm.state.NextID)
+	assert.Equal(t, uint64(100), rsm.state.NextIDByKey["index_key"])
+}
+
+func TestRestoreIDWatermarkCannotInitializeHAKeeper(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	result, err := rsm.Update(sm.Entry{Cmd: GetRestoreIDWatermarkCmd(
+		5000,
+		map[string]uint64{"index_key": 200},
+		true,
+	)})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: uint64(pb.HAKeeperCreated)}, result)
+	assert.Equal(t, pb.HAKeeperCreated, rsm.state.State)
+	assert.Equal(t, uint64(0), rsm.state.NextID)
+	assert.Equal(t, uint64(0), rsm.state.NextIDByKey["index_key"])
+	assert.False(t, rsm.state.LogServiceRecoveryPending)
+	assert.Zero(t, rsm.state.IDWatermarkRestoreGeneration)
+	result, err = rsm.Update(sm.Entry{Cmd: GetCompleteLogServiceRecoveryCmd()})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: uint64(pb.HAKeeperCreated), Data: []byte{1}}, result)
+	assert.False(t, rsm.state.LogServiceRecoveryPending)
+	assert.False(t, rsm.state.LogServiceRecoveryCompleted)
 }
 
 func TestGetCommandBatch(t *testing.T) {

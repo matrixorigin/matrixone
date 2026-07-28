@@ -18,19 +18,28 @@ import (
 	"context"
 	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
 func reshape(ctx context.Context, host MergeTaskHost) error {
+	var table *TransferTable
+	var slab []api.TransferDestPos
+	var blockActive []bool
+	var stride int
 	if host.DoTransfer() {
 		objBlkCnts := host.GetBlkCnts()
 		totalBlkCnt := 0
 		for _, cnt := range objBlkCnts {
 			totalBlkCnt += cnt
 		}
-		host.InitTransferMaps(totalBlkCnt)
+		stride = int(host.GetBlockMaxRows())
+		slab = getTransferSlab(totalBlkCnt * stride)
+		blockActive = make([]bool, totalBlkCnt)
+		table = &TransferTable{Slab: slab, Stride: stride, BlockActive: blockActive}
 	}
 	stats := mergeStats{
 		targetObjSize: host.GetTargetObjSize(),
@@ -40,7 +49,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	originalObjCnt := host.GetObjectCnt()
 	maxRowCnt := host.GetBlockMaxRows()
 	accObjBlkCnts := host.GetAccBlkCnts()
-	transferMaps := host.GetTransferMaps()
+	mp := host.GetMPool()
 
 	var writer *ioutil.BlockWriter
 	var buffer *batch.Batch
@@ -49,12 +58,25 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		if releaseF != nil {
 			releaseF()
 		}
+		// Return slab to pool if ownership was not transferred to host.
+		if slab != nil {
+			putTransferSlab(slab)
+			slab = nil
+		}
 	}()
 
 	var nextBatch *batch.Batch
+	var nextReleaseF func()
+	defer func() {
+		if nextReleaseF != nil {
+			nextReleaseF()
+		}
+	}()
 	for i := 0; i < originalObjCnt; i++ {
 		loadedBlkCnt := 0
-		nextBatch, del, nextReleaseF, err := host.LoadNextBatch(ctx, uint32(i), nextBatch)
+		var del *nulls.Nulls
+		var err error
+		nextBatch, del, nextReleaseF, err = host.LoadNextBatch(ctx, uint32(i), nextBatch)
 		for err == nil {
 			if buffer == nil {
 				buffer, releaseF = getSimilarBatch(nextBatch, int(maxRowCnt), host)
@@ -66,14 +88,21 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 				}
 
 				for i := range buffer.Vecs {
-					err := buffer.Vecs[i].UnionOne(nextBatch.Vecs[i], int64(j), host.GetMPool())
+					err := buffer.Vecs[i].UnionOne(nextBatch.Vecs[i], int64(j), mp)
 					if err != nil {
 						return err
 					}
 				}
 
 				if host.DoTransfer() {
-					transferMaps[accObjBlkCnts[i]+loadedBlkCnt-1][uint32(j)] = api.TransferDestPos{
+					if stats.objCnt >= int(api.NoTransfer) {
+						return moerr.NewInternalErrorNoCtxf(
+							"merge output exceeds %d objects: ObjIdx would collide with NoTransfer sentinel (0x%02X)",
+							api.NoTransfer, api.NoTransfer)
+					}
+					idx := accObjBlkCnts[i] + loadedBlkCnt - 1
+					blockActive[idx] = true
+					slab[idx*stride+int(j)] = api.TransferDestPos{
 						ObjIdx: uint8(stats.objCnt),
 						BlkIdx: uint16(stats.objBlkCnt),
 						RowIdx: uint32(stats.blkRowCnt),
@@ -82,7 +111,6 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 
 				stats.blkRowCnt++
 				stats.objRowCnt++
-				stats.mergedRowCnt++
 
 				if stats.blkRowCnt == int(maxRowCnt) {
 					if writer == nil {
@@ -100,7 +128,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 					buffer.CleanOnlyData()
 
 					if stats.needNewObject() {
-						if err := syncObject(ctx, writer, host.GetCommitEntry()); err != nil {
+						if err := syncObject(ctx, writer, host); err != nil {
 							return err
 						}
 						writer = nil
@@ -132,16 +160,25 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		buffer.CleanOnlyData()
 	}
 	if stats.objBlkCnt > 0 {
-		if err := syncObject(ctx, writer, host.GetCommitEntry()); err != nil {
+		if err := syncObject(ctx, writer, host); err != nil {
 			return err
 		}
 		writer = nil
 	}
 
+	if table != nil {
+		host.SetTransferTable(table)
+		slab = nil // ownership transferred; prevent defer from returning to pool
+	}
+
 	return nil
 }
 
-func syncObject(ctx context.Context, writer *ioutil.BlockWriter, commitEntry *api.MergeCommitEntry) error {
+func syncObject(ctx context.Context, writer *ioutil.BlockWriter, host MergeTaskHost) error {
+	if host.HasBigDelEvent() {
+		return moerr.NewInternalErrorNoCtxf("LockMerge give up in syncObject %v", host.Name())
+	}
+	commitEntry := host.GetCommitEntry()
 	if _, _, err := writer.Sync(ctx); err != nil {
 		return err
 	}

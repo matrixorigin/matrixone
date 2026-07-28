@@ -1,0 +1,438 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package iscp
+
+import (
+	"context"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/stretchr/testify/require"
+)
+
+type ivfflatIncludeColSpec struct {
+	name  string
+	typ   types.T
+	width int32
+}
+
+func newTestIvfflatTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32, includeCols ...ivfflatIncludeColSpec) *plan.TableDef {
+	name2ColIndex := map[string]int32{
+		pkName:     0,
+		vecColName: 1,
+		"dummy":    2, // Add another col to make sure pk/vec col indices are used
+	}
+	cols := []*plan.ColDef{
+		{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
+		{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
+		{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
+	}
+	includedColumns := make([]string, 0, len(includeCols))
+	for _, includeCol := range includeCols {
+		name2ColIndex[includeCol.name] = int32(len(cols))
+		cols = append(cols, &plan.ColDef{Name: includeCol.name, Typ: plan.Type{Id: int32(includeCol.typ), Width: includeCol.width}})
+		includedColumns = append(includedColumns, includeCol.name)
+	}
+
+	tableDef := &plan.TableDef{
+		Name:          "test_orig_tbl",
+		Name2ColIndex: name2ColIndex,
+		Cols:          cols,
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{pkName},
+			PkeyColName: pkName,
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:          "ivfidx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+				IndexTableName:     "meta_tbl",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+			{
+				IndexName:          "ivfidx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+				IndexTableName:     "centroids_tbl",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+			{
+				IndexName:          "ivfidx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+				IndexTableName:     "entries_tbl",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+		},
+		DbName: "mydb",
+	}
+	for _, indexDef := range tableDef.Indexes {
+		indexDef.IncludedColumns = append([]string(nil), includedColumns...)
+	}
+	return tableDef
+}
+
+func newTestFulltextTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
+	return &plan.TableDef{
+		Name: "test_orig_tbl",
+		Name2ColIndex: map[string]int32{
+			pkName:     0,
+			vecColName: 1,
+			"dummy":    2, // Add another col to make sure pk/vec col indices are used
+		},
+		Cols: []*plan.ColDef{
+			{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
+			{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
+			{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{pkName},
+			PkeyColName: pkName,
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:          "fulltext_idx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MOIndexFullTextAlgo.ToString(),
+				IndexAlgoTableType: "",
+				IndexTableName:     "fulltext_tbl",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"parser":"ngram"}`,
+			},
+		},
+		DbName: "mydb",
+	}
+}
+
+func newTestFulltextTableDef2Parts(pkName string, pkType types.T, vecColName string, vecColName2 string, vecType types.T, vecWidth int32) *plan.TableDef {
+	return &plan.TableDef{
+		Name: "test_orig_tbl",
+		Name2ColIndex: map[string]int32{
+			pkName:      0,
+			vecColName:  1,
+			vecColName2: 2,
+			"dummy":     3, // Add another col to make sure pk/vec col indices are used
+		},
+		Cols: []*plan.ColDef{
+			{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
+			{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
+			{Name: vecColName2, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
+			{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{pkName},
+			PkeyColName: pkName,
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:          "fulltext_idx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MOIndexFullTextAlgo.ToString(),
+				IndexAlgoTableType: "",
+				IndexTableName:     "fulltext_tbl",
+				Parts:              []string{vecColName, vecColName2},
+				IndexAlgoParams:    `{"parser":"ngram"}`,
+			},
+		},
+		DbName: "mydb",
+	}
+}
+
+func TestNewFulltextSqlWriterUpsert(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestFulltextTableDef("id", types.T_int64, "body", types.T_varchar, 256)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewFulltextSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+
+	row := []any{int64(1000), []uint8("hello world"), nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), nil, nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256))))) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 23, id, body) as f", string(bytes))
+}
+
+func TestNewFulltextSqlWriterInsert(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestFulltextTableDef("id", types.T_int64, "body", types.T_varchar, 256)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewFulltextSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+
+	row := []any{int64(1000), []uint8("hello world"), nil}
+	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), nil, nil}
+	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256))))) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 23, id, body) as f", string(bytes))
+}
+
+func TestNewFulltextSqlWriterDelete(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestFulltextTableDef("id", types.T_int64, "body", types.T_varchar, 256)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewFulltextSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+
+	row := []any{int64(1000), []uint8("hello world"), nil}
+	err = writer.Delete(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), nil, nil}
+	err = writer.Delete(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	require.Equal(t, "DELETE FROM `test_db`.`fulltext_tbl` WHERE `doc_id` IN (1000,2000)", string(bytes))
+}
+
+func TestNewFulltextSqlWriterCPkey(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestFulltextTableDef2Parts("__mo_cpkey", types.T_varbinary, "body", "title", types.T_varchar, 256)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewFulltextSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+
+	row := []any{[]uint8("abcdef12"), []uint8("hello world"), []uint8("one title"), nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{[]uint8("abc"), []uint8("hello world"), []uint8("two title"), nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as VARBINARY(0)) as `__mo_cpkey`, CAST(column_1 as VARCHAR(256)) as `body`, CAST(column_2 as VARCHAR(256)) as `title` FROM (VALUES ROW(x'6162636465663132','hello world','one title'),ROW(x'616263','hello world','two title'))) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 65, __mo_cpkey, body, title) as f", string(bytes))
+}
+
+func TestNewHnswSqlWriter(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 3)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewHnswSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+	row := []any{int64(1000), []float32{1, 2, 3}, nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), []float32{5, 6, 7}, nil}
+	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(3000), []float32{5, 6, 7}, nil}
+	err = writer.Delete(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	require.JSONEq(t, `{"cdc":[{"t":"U","pk":1000,"v":[1,2,3]},{"t":"I","pk":2000,"v":[5,6,7]},{"t":"D","pk":3000}]}`, string(bytes))
+}
+
+func TestNewIvfflatSqlWriterInsert(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float64, 3)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewIvfflatSqlWriter("ivfflat", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+	row := []any{int64(1000), []float64{1, 2, 3}, nil}
+	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), []float64{5, 6, 7}, nil}
+	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(3000), []float64{5, 6, 7}, nil}
+	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3))))) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
+}
+
+func TestNewIvfflatSqlWriterUpsert(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float64, 3)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewIvfflatSqlWriter("ivfflat", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+	row := []any{int64(1000), []float64{1, 2, 3}, nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), []float64{5, 6, 7}, nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(3000), []float64{5, 6, 7}, nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3))))) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
+}
+
+func TestNewIvfflatSqlWriterUpsertWithIncludeColumns(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestIvfflatTableDef(
+		"pk",
+		types.T_int64,
+		"vec",
+		types.T_array_float64,
+		3,
+		ivfflatIncludeColSpec{name: "title", typ: types.T_varchar, width: 64},
+		ivfflatIncludeColSpec{name: "rank", typ: types.T_int32},
+	)
+	// Catalog-loaded definitions do not carry the runtime-only proto field. IVF
+	// INCLUDE metadata must therefore remain recoverable from algo_params.
+	for _, indexDef := range tabledef.Indexes {
+		indexDef.IncludedColumns = nil
+		indexDef.IndexAlgoParams = `{"included_columns":"title,rank","lists":"16","op_type":"vector_l2_ops"}`
+	}
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewIvfflatSqlWriter("ivfflat", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.NoError(t, err)
+
+	err = writer.Upsert(ctx, []any{int64(1000), []float64{1, 2, 3}, nil, []byte("news"), int32(7)})
+	require.NoError(t, err)
+	err = writer.Upsert(ctx, []any{int64(2000), []float64{5, 6, 7}, nil, nil, int32(9)})
+	require.NoError(t, err)
+
+	bytes, err := writer.ToSql()
+	require.NoError(t, err)
+	sql := string(bytes)
+	require.Contains(t, sql, "`__mo_index_include_title`, `__mo_index_include_rank`")
+	require.Contains(t, sql, "CAST(column_2 as VARCHAR")
+	require.Contains(t, sql, "CAST(column_3 as INT")
+	require.Contains(t, sql, "src0, src1, src2, src3")
+	require.Contains(t, sql, "'news'")
+	require.Contains(t, sql, "CAST(NULL as")
+}
+
+func TestNewIvfflatSqlWriterAsyncReloadPreservesIncludeColumns(t *testing.T) {
+	includeColumns := []string{"title, label", " rank "}
+	tabledef := newTestIvfflatTableDef(
+		"pk",
+		types.T_int64,
+		"vec",
+		types.T_array_float64,
+		3,
+		ivfflatIncludeColSpec{name: includeColumns[0], typ: types.T_varchar, width: 64},
+		ivfflatIncludeColSpec{name: includeColumns[1], typ: types.T_int32},
+	)
+	encoded, err := catalog.MarshalIncludeColumnsValue(includeColumns)
+	require.NoError(t, err)
+	algoParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IncludedColumns:      encoded,
+		catalog.IndexAlgoParamLists:  "16",
+		catalog.IndexAlgoParamOpType: "vector_l2_ops",
+	})
+	require.NoError(t, err)
+	for _, indexDef := range tabledef.Indexes {
+		// ISCP reconstructs its async DML writer from catalog metadata, where the
+		// runtime-only proto field is absent.
+		indexDef.IncludedColumns = nil
+		indexDef.IndexAlgoParams = algoParams
+	}
+
+	writer, err := NewIvfflatSqlWriter(
+		"ivfflat", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
+	require.NoError(t, err)
+	require.Equal(t, includeColumns, writer.(*IvfflatSqlWriter).includeCols)
+
+	err = writer.Upsert(context.Background(), []any{
+		int64(1000), []float64{1, 2, 3}, nil, []byte("news"), int32(7),
+	})
+	require.NoError(t, err)
+	bytes, err := writer.ToSql()
+	require.NoError(t, err)
+	sql := string(bytes)
+	require.Contains(t, sql, "`__mo_index_include_title, label`, `__mo_index_include_ rank `")
+	require.Contains(t, sql, "'news'")
+}
+
+func TestNewIvfflatSqlWriterDelete(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float64, 3)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewIvfflatSqlWriter("ivfflat", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+	row := []any{int64(1000), []float64{1, 2, 3}, nil}
+	err = writer.Delete(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), []float64{5, 6, 7}, nil}
+	err = writer.Delete(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(3000), []float64{5, 6, 7}, nil}
+	err = writer.Delete(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	require.Equal(t, "DELETE FROM `test_db`.`entries_tbl` WHERE `__mo_index_pri_col` IN (1000,2000,3000)", string(bytes))
+}

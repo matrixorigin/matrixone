@@ -8,7 +8,7 @@ insert into clu01 values(1,2);
 drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 insert into clu01 values(2,3);
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 select * from clu01;
 col1    col2
 1    2
@@ -62,7 +62,7 @@ col2
 col3
 __mo_fake_pk_col
 __mo_rowid
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 select count(*) from rs01;
 count(*)
 6
@@ -155,7 +155,7 @@ count(*)
 select count(*) from rs03{snapshot = 'sp02'};
 count(*)
 5
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 show databases;
 Database
 information_schema
@@ -301,7 +301,7 @@ deptno    dname    loc
 select count(*) from test03.aff01{snapshot = 'sp04'};
 count(*)
 14
-restore account acc01 from snapshot sp04;
+restore account acc01{snapshot="sp04"};
 use test03;
 show create table aff01;
 Table    Create Table
@@ -401,7 +401,7 @@ Unknown database test01
 select count(*) from test03.t3;
 count(*)
 3
-restore account acc01 from snapshot snap01;
+restore account acc01{snapshot="snap01"};
 show databases;
 Database
 information_schema
@@ -452,7 +452,7 @@ drop snapshot snap01;
 drop snapshot if exists sp05;
 create snapshot sp05 for account acc01;
 create database db01;
-restore account acc01 FROM snapshot sp05;
+restore account acc01{snapshot="sp05"};
 show databases;
 Database
 information_schema
@@ -481,7 +481,7 @@ show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 sp08    2025-07-19 05:50:34.848103    account    acc01        
 sp07    2025-07-19 05:50:34.821081    account    acc01        
-restore account acc01 from snapshot sp08;
+restore account acc01{snapshot="sp08"};
 select * from table02;
 col1    col2
 133    database
@@ -491,7 +491,7 @@ SQL parser error: table "table01" does not exist
 select count(*) from table02;
 count(*)
 2
-restore account acc01 from snapshot sp07;
+restore account acc01{snapshot="sp07"};
 select * from table01;
 col1    col2    col3    col4    col5    col6
 1    2    a    23eiojf    r23v324r23rer    3923.324
@@ -528,7 +528,7 @@ show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 sp10    2025-07-19 05:50:35.204953    account    acc01        
 sp09    2025-07-19 05:50:35.184931    account    acc01        
-restore account acc01 from snapshot sp09;
+restore account acc01{snapshot="sp09"};
 select * from table02;
 col1    col2
 133    database
@@ -542,7 +542,7 @@ count(*)
 select count(*) from table01;
 count(*)
 2
-restore account acc01 from snapshot sp10;
+restore account acc01{snapshot="sp10"};
 select * from db02.table01;
 SQL parser error: table "table01" does not exist
 select count(*) from table01;
@@ -664,7 +664,7 @@ count(*)
 select count(*) from tm2;
 count(*)
 2
-restore account acc01 from snapshot sp11;
+restore account acc01{snapshot="sp11"};
 show databases;
 Database
 db03
@@ -693,7 +693,7 @@ ti2    CREATE TABLE `ti2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAU
 show create table db03.tm2;
 Table    Create Table
 tm2    CREATE TABLE `tm2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
-restore account acc01 from snapshot sp14;
+restore account acc01{snapshot="sp14"};
 show databases;
 Database
 db03
@@ -783,7 +783,7 @@ drop snapshot if exists sp13;
 create snapshot sp13 for account acc01;
 insert into db04.table01 values (200);
 insert into db05.table01 values (400);
-restore account acc01 database db04 from snapshot sp13;
+restore database db04{snapshot="sp13"};
 show databases;
 Database
 db04
@@ -857,8 +857,8 @@ show create table table02 {snapshot = 'sp14'};
 Table    Create Table
 table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 drop database db08;
-restore account acc01 database db07 from snapshot sp14;
-restore account acc01 database db08 from snapshot sp14;
+restore database db07{snapshot="sp14"};
+restore database db08{snapshot="sp14"};
 show databases;
 Database
 db07
@@ -885,8 +885,8 @@ col1    col2
 2    b
 drop snapshot if exists sp15;
 create snapshot sp15 for account acc01;
-restore account acc01 database db07 from snapshot sp15;
-restore account acc01 database db08 from snapshot sp15;
+restore database db07{snapshot="sp15"};
+restore database db08{snapshot="sp15"};
 use db08;
 show tables;
 Tables_in_db08
@@ -924,7 +924,7 @@ insert into db08 values(1), (100), (20000);
 drop snapshot if exists sp15;
 create snapshot sp15 for account acc01;
 insert into db08 (col1) values (3000);
-restore account acc01 database db from snapshot sp15;
+restore database db{snapshot="sp15"};
 Unknown database db
 drop snapshot sp15;
 drop database db08;
@@ -1003,9 +1003,9 @@ truncate index03;
 
 select * from index03;
 emp_no    birth_date    first_name    last_name    gender    hire_date
-restore account acc01 database db09 table index01 from snapshot sp16;
+restore table db09.index01{snapshot="sp16"};
 
-restore account acc01 database db10 table index03 from snapshot sp16;
+restore table db10.index03{snapshot="sp16"};
 
 use db09;
 
@@ -1056,7 +1056,7 @@ insert into pri01 values (23423, 32432543.3242);
 insert into pri01 values (234222, -3923.2342342);
 drop snapshot if exists sp18;
 create snapshot sp18 for account acc01;
-restore account acc01 database db11 table pri01 from snapshot sp18;
+restore table db11.pri01{snapshot="sp18"};
 show create table pri01;
 Table    Create Table
 pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
@@ -1069,7 +1069,7 @@ col1    col2
 select count(*) from pri01;
 count(*)
 4
-restore account acc01 database db11 table pri01 from snapshot sp17;
+restore table db11.pri01{snapshot="sp17"};
 show create table pri01;
 Table    Create Table
 pri01    CREATE TABLE `pri01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
@@ -1080,7 +1080,7 @@ col1    col2
 select count(*) from pri01;
 count(*)
 2
-restore account acc01 database db11 table pri01 from snapshot sp18;
+restore table db11.pri01{snapshot="sp18"};
 show create table pri01;
 Table    Create Table
 pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
@@ -1132,10 +1132,10 @@ insert into table01 values (1);
 insert into table02 values ('1');
 insert into table03 values ('3');
 insert into table04 values ('1');
-restore account acc01 database db12 table table01 from snapshot sp19;
-restore account acc01 database db12 table table02 from snapshot sp19;
-restore account acc01 database db12 table table03 from snapshot sp19;
-restore account acc01 database db12 table table04 from snapshot sp19;
+restore table db12.table01{snapshot="sp19"};
+restore table db12.table02{snapshot="sp19"};
+restore table db12.table03{snapshot="sp19"};
+restore table db12.table04{snapshot="sp19"};
 select * from table01;
 col
 select * from table02;

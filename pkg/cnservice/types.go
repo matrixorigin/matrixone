@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -45,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -89,9 +91,7 @@ type Service interface {
 type EngineType string
 
 const (
-	EngineDistributedTAE       EngineType = "distributed-tae"
-	EngineMemory               EngineType = "memory"
-	EngineNonDistributedMemory EngineType = "non-distributed-memory"
+	EngineDistributedTAE EngineType = "distributed-tae"
 	// ReservedTasks equals how many task must run background.
 	// 1 for metric StorageUsage
 	// 1 for trace ETLMerge
@@ -129,6 +129,13 @@ type Config struct {
 	Engine struct {
 		Type EngineType `toml:"type"`
 
+		// only prefetch the matched dbname.tablename
+		//	'^mo_catalog\.mo_tables$',
+		//	'^mysql\..*$',
+		//	'^test1\..*$',
+		//	'^test2\.t1$'
+		PrefetchOnSubscribed []string `toml:"prefetch-on-subscribed"`
+
 		MoTableStatsUseOldImpl         bool          `toml:"mo-table-stats-use-old-impl"`
 		CNTransferTxnLifespanThreshold time.Duration `toml:"cn-transfer-txn-lifespan-threshold"`
 
@@ -149,6 +156,9 @@ type Config struct {
 		BatchRows int64 `toml:"batch-rows"`
 		// BatchSize is the memory limit for one batch
 		BatchSize int64 `toml:"batch-size"`
+		// DisableStreamReuse is an emergency rollback gate for negotiated
+		// FIN/FIN_ACK pipeline teardown. It is enabled by default when false.
+		DisableStreamReuse bool `toml:"disable-stream-reuse"`
 	}
 
 	// Frontend parameters for the frontend
@@ -346,6 +356,9 @@ func (c *Config) Validate() error {
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
 	}
+	if c.Engine.Type != EngineDistributedTAE {
+		return moerr.NewBadConfigNoCtx("unsupported CN engine: " + string(c.Engine.Type))
+	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
@@ -399,7 +412,7 @@ func (c *Config) Validate() error {
 		c.Txn.MaxActiveAges.Duration = time.Minute * 2
 	}
 	if c.Txn.MaxActive == 0 {
-		c.Txn.MaxActive = runtime.NumCPU() * 4
+		c.Txn.MaxActive = runtime.NumCPU() * 10
 	}
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
@@ -444,6 +457,10 @@ func (c *Config) Validate() error {
 	moruntime.ServiceRuntime(c.UUID).SetGlobalVariables(
 		moruntime.EnableCheckInvalidRCErrors,
 		c.Txn.EnableCheckRCInvalidError,
+	)
+	moruntime.ServiceRuntime(c.UUID).SetGlobalVariables(
+		moruntime.EnablePipelineStreamReuse,
+		!c.Pipeline.DisableStreamReuse,
 	)
 	return nil
 }
@@ -547,7 +564,7 @@ func (c *Config) SetDefaultValue() {
 		c.Txn.MaxActiveAges.Duration = time.Minute * 2
 	}
 	if c.Txn.MaxActive == 0 {
-		c.Txn.MaxActive = runtime.NumCPU() * 4
+		c.Txn.MaxActive = runtime.NumCPU() * 10
 	}
 	c.Txn.NormalStateNoWait = false
 	c.LockService.ServiceID = c.UUID
@@ -585,9 +602,7 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 			return
 		}
 
-		tc.IterTxns(func(to client.TxnOverview) bool {
-			return f(to.Meta.ID)
-		})
+		tc.IterTxnIDs(f)
 	}
 	return s.cfg.LockService
 }
@@ -634,6 +649,7 @@ type service struct {
 	_txnClient             client.TxnClient
 	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
+	colexecServer          *colexec.Server
 	distributeTaeMp        *mpool.MPool
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService
@@ -661,6 +677,7 @@ type service struct {
 		sync.RWMutex
 		holder         taskservice.TaskServiceHolder
 		runner         taskservice.TaskRunner
+		runnerReady    atomic.Bool
 		storageFactory taskservice.TaskStorageFactory
 	}
 
@@ -680,6 +697,8 @@ type service struct {
 		counter atomic.Int64
 		client  cnclient.PipelineClient
 	}
+
+	CNMemoryThrottler rscthrottler.RSCThrottler
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {

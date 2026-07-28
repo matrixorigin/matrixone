@@ -1,0 +1,41 @@
+# Basic test cases from requirements
+SELECT SIGN(5) AS result1;
+SELECT SIGN(0) AS result2;
+SELECT SIGN(-5) AS result3;
+SELECT SIGN(0.5) AS result4;
+
+# Additional test cases
+SELECT SIGN(100) AS positive;
+SELECT SIGN(-100) AS negative;
+SELECT SIGN(1) AS one;
+SELECT SIGN(-1) AS minus_one;
+
+# NULL handling
+SELECT SIGN(NULL) AS null_result;
+
+# Different numeric types
+SELECT SIGN(CAST(5 AS INT)) AS int_sign;
+SELECT SIGN(CAST(5 AS BIGINT)) AS bigint_sign;
+SELECT SIGN(CAST(5.5 AS FLOAT)) AS float_sign;
+SELECT SIGN(CAST(5.5 AS DOUBLE)) AS double_sign;
+
+# Decimal values
+SELECT SIGN(0.1) AS small_positive;
+SELECT SIGN(-0.1) AS small_negative;
+SELECT SIGN(100.5) AS decimal_positive;
+SELECT SIGN(-100.5) AS decimal_negative;
+
+# Table usage
+CREATE TABLE t1(a INT, b DOUBLE);
+INSERT INTO t1 VALUES (5, 5.5), (0, 0.0), (-5, -5.5), (100, 100.5), (-100, -100.5);
+SELECT a, SIGN(a) AS sign_a, b, SIGN(b) AS sign_b FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(a INT);
+INSERT INTO t1 VALUES (5), (0), (-5), (10), (-10);
+SELECT * FROM t1 WHERE SIGN(a) = 1;
+SELECT * FROM t1 WHERE SIGN(a) = -1;
+SELECT * FROM t1 WHERE SIGN(a) = 0;
+DROP TABLE t1;
+

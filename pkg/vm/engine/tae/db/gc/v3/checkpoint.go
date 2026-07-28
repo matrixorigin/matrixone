@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -93,6 +94,7 @@ type checkpointCleaner struct {
 	config struct {
 		canGCCacheSize          int
 		maxMergeCheckpointCount int
+		maxScanCheckpointCount  int
 		estimateRows            int
 		probility               float64
 	}
@@ -102,6 +104,20 @@ type checkpointCleaner struct {
 		sync.RWMutex
 		extras map[string]func(item any) bool
 	}
+
+	// backup protection mechanism
+	backupProtection struct {
+		sync.RWMutex
+		// protectedTS is the timestamp that should be protected from GC
+		protectedTS types.TS
+		// lastUpdateTime is the last time the protection was updated
+		lastUpdateTime time.Time
+		// isActive indicates if backup protection is active
+		isActive bool
+	}
+
+	// syncProtection is the sync protection manager for cross-cluster sync
+	syncProtection *SyncProtectionManager
 
 	mutation struct {
 		sync.Mutex
@@ -114,7 +130,34 @@ type checkpointCleaner struct {
 		metaFiles    map[string]ioutil.TSRangeFile
 		snapshotMeta *logtail.SnapshotMeta
 		replayDone   bool
+		// backupProtectionSnapshot is a snapshot of backup protection state at the start of GC
+		// This ensures GC consistency: once GC starts, it uses this snapshot and ignores
+		// any changes to backup protection during GC execution
+		backupProtectionSnapshot struct {
+			protectedTS types.TS
+			isActive    bool
+		}
 	}
+
+	// iscpTablesFunc is an optional function to provide the ISCP tables for testing.
+	iscpTablesFunc func() (map[uint64]types.TS, error)
+}
+
+func (c *checkpointCleaner) deleteFilesWithPolicy(
+	ctx context.Context,
+	taskName string,
+	files []string,
+) error {
+	if len(files) == 0 {
+		return nil
+	}
+	if taskName == "" {
+		taskName = "checkpoint-cleaner-delete"
+	}
+	if c.deleter != nil {
+		return c.deleter.DeleteMany(ctx, taskName, files)
+	}
+	return c.fs.Delete(ctx, files...)
 }
 
 func WithCanGCCacheSize(
@@ -130,6 +173,14 @@ func WithMaxMergeCheckpointCount(
 ) CheckpointCleanerOption {
 	return func(e *checkpointCleaner) {
 		e.config.maxMergeCheckpointCount = count
+	}
+}
+
+func WithMaxScanCheckpointCount(
+	count int,
+) CheckpointCleanerOption {
+	return func(e *checkpointCleaner) {
+		e.config.maxScanCheckpointCount = count
 	}
 }
 
@@ -188,7 +239,14 @@ func NewCheckpointCleaner(
 	cleaner.checker.extras = make(map[string]func(item any) bool)
 	cleaner.mutation.metaFiles = make(map[string]ioutil.TSRangeFile)
 	cleaner.mutation.snapshotMeta = logtail.NewSnapshotMeta()
+	cleaner.backupProtection.isActive = false
+	cleaner.syncProtection = NewSyncProtectionManager()
 	return cleaner
+}
+
+// GetSyncProtectionManager returns the sync protection manager
+func (c *checkpointCleaner) GetSyncProtectionManager() *SyncProtectionManager {
+	return c.syncProtection
 }
 
 func (c *checkpointCleaner) Stop() {
@@ -413,7 +471,7 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			)
 			return
 		}
-		var snapshots map[uint32]containers.Vector
+		var snapshots *logtail.SnapshotInfo
 		var pitrs *logtail.PitrInfo
 		pitrs, err = c.GetPITRsLocked(ctx)
 		if err != nil {
@@ -426,7 +484,14 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			)
 			return
 		}
-		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
+		// Get backup protection TS from snapshot (taken at GC start)
+		var extraTS types.TS
+		protectedTS, isActive := c.getBackupProtectionSnapshot()
+		if isActive {
+			extraTS = protectedTS
+		}
+
+		snapshots, err = c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp, extraTS)
 		if err != nil {
 			logutil.Error(
 				"GC-REPLAY-GET-SNAPSHOT_ERROR",
@@ -437,8 +502,6 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			)
 			return
 		}
-		accountSnapshots := TransformToTSList(snapshots)
-		logtail.CloseSnapshotList(snapshots)
 		_, sarg, _ := fault.TriggerFault("replay error UT")
 		if sarg != "" {
 			err = moerr.NewInternalErrorNoCtxf("GC-REPLAY-GET-CHECKPOINT-DATA-ERROR %s", sarg)
@@ -461,13 +524,12 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
 			ckpBatch,
 			c.mutation.snapshotMeta,
-			accountSnapshots,
+			snapshots,
 			pitrs,
 			0)
 		logutil.Info(
 			"GC-REPLAY-COLLECT-SNAPSHOT-SIZE",
 			zap.String("task", c.TaskNameLocked()),
-			zap.Int("size", len(accountSnapshots)),
 			zap.Duration("duration", time.Since(start)),
 			zap.String("checkpoint", compacted.String()),
 			zap.Int("count", ckpBatch.RowCount()),
@@ -581,8 +643,11 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 					zap.String("new-max-file", newMaxFile),
 					zap.String("new-max-ts", newMaxTS.ToString()),
 				)
+				v2.GCErrorIOErrorCounter.Inc()
 				return
 			}
+			// Record snapshot file deletion
+			v2.GCSnapshotFileDeletionCounter.Inc()
 			logutil.Info(
 				"GC-TRACE-DELETE-SNAPSHOT-FILE",
 				zap.String("task", c.TaskNameLocked()),
@@ -604,6 +669,10 @@ func (c *checkpointCleaner) deleteStaleSnapshotFilesLocked() error {
 				zap.String("max-file", maxFile),
 				zap.String("max-ts", maxTS.ToString()),
 			)
+			v2.GCErrorIOErrorCounter.Inc()
+		} else {
+			// Record snapshot file deletion
+			v2.GCSnapshotFileDeletionCounter.Inc()
 		}
 		logutil.Info(
 			"GC-TRACE-DELETE-SNAPSHOT-FILE",
@@ -698,14 +767,24 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 	}
 
 	// TODO: if file is not found, it should be ignored
-	if err = c.fs.Delete(c.ctx, filesToDelete...); err != nil {
+	if err = c.deleteFilesWithPolicy(
+		c.ctx,
+		c.TaskNameLocked()+"-delete-stale-ckp-meta",
+		filesToDelete,
+	); err != nil {
 		logutil.Error(
 			"GC-DELETE-CKP-FILES-ERROR",
 			zap.Error(err),
 			zap.Strings("files", filesToDelete),
 			zap.String("task", c.TaskNameLocked()),
 		)
+		v2.GCErrorIOErrorCounter.Inc()
 		return
+	}
+
+	// Record meta file deletion metrics
+	if len(filesToDelete) > 0 {
+		v2.GCMetaFileDeletionCounter.Add(float64(len(filesToDelete)))
 	}
 	return c.mutSetNewMetaFilesLocked(metaFiles)
 }
@@ -774,10 +853,22 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	ctx context.Context,
 	checkpointLowWaterMark *types.TS,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
-	accountSnapshots map[uint32][]types.TS,
+	snapshots *logtail.SnapshotInfo,
 	pitrs *logtail.PitrInfo,
 	gcFileCount int,
 ) (err error) {
+	mergeStart := time.Now()
+	defer func() {
+		duration := time.Since(mergeStart).Seconds()
+		v2.TaskGCMergeCheckpointDurationHistogram.Observe(duration)
+		v2.GCMergeTotalDurationHistogram.Observe(duration)
+		if err != nil {
+			v2.GCMergeExecutionErrorCounter.Inc()
+		} else {
+			v2.GCMergeExecutionCounter.Inc()
+		}
+	}()
+
 	// checkpointLowWaterMark is empty only in the following cases:
 	// 1. no incremental and no gloabl checkpoint
 	// 2. one incremental checkpoint with empty start
@@ -841,6 +932,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	); err != nil {
 		return
 	}
+
 	if len(toMergeCheckpoint) == 0 {
 		return
 	}
@@ -880,12 +972,16 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		extraErrMsg = "MergeCheckpoint failed"
 		return err
 	}
+
+	// Record checkpoint merge metrics
+	v2.GCCheckpointMergedCounter.Add(float64(len(toMergeCheckpoint)))
+
 	logtail.FillUsageBatOfCompacted(
 		ctx,
 		c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
 		newCkpData,
 		c.mutation.snapshotMeta,
-		accountSnapshots,
+		snapshots,
 		pitrs,
 		gcFileCount)
 	if newCkp == nil {
@@ -893,11 +989,17 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			zap.String("task", c.TaskNameLocked()))
 		return
 	}
+
+	// Record checkpoint row count metrics
+	if newCkpData != nil {
+		v2.GCCheckpointRowsMergedCounter.Add(float64(newCkpData.RowCount()))
+	}
 	newFiles := tmpNewFiles
 	for _, stats := range c.GetScannedWindowLocked().files {
 		newFiles = append(newFiles, stats.ObjectName().String())
 	}
 
+	writeStart := time.Now()
 	if err = c.appendFilesToWAL(newFiles...); err != nil {
 		logutil.Error(
 			"GC-TRACE-MERGE-CHECKPOINT-FILES",
@@ -905,8 +1007,11 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			zap.Int("file len", len(newFiles)),
 			zap.Error(err),
 		)
+		v2.GCErrorIOErrorCounter.Inc()
 		return
 	}
+	// Record write duration
+	v2.GCMergeWriteDurationHistogram.Observe(time.Since(writeStart).Seconds())
 
 	// SJW TODO: need to handle not updated scenario
 	c.checkpointCli.UpdateCompacted(newCkp)
@@ -915,8 +1020,8 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	newWaterMark := newCkp.GetEnd()
 	c.updateCheckpointGCWaterMark(&newWaterMark)
 
-	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
-	for _, ckp := range gckps {
+	gCkps := c.checkpointCli.GetAllGlobalCheckpoints()
+	for _, ckp := range gCkps {
 		end := ckp.GetEnd()
 		logutil.Info(
 			"GC-TRACE-GLOBAL-CHECKPOINT-FILE",
@@ -932,13 +1037,39 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 				zap.String("task", c.TaskNameLocked()),
 				zap.String("gckp", nameMeta),
 			)
+
 			deleteFiles = append(deleteFiles, nameMeta)
+			// fix gckp files leak
+			var files []string
+			files, err = getCheckpointLocation(ctx, ckp, c.fs)
+			if err != nil {
+				extraErrMsg = "getCheckpointLocation failed"
+				return err
+			}
+			if len(files) > 0 {
+				deleteFiles = append(deleteFiles, files...)
+			}
+
 		}
 	}
 	if c.GCCheckpointEnabled() {
-		if err = c.fs.Delete(ctx, deleteFiles...); err != nil {
+		if err = c.deleteFilesWithPolicy(
+			ctx,
+			c.TaskNameLocked()+"-merge-checkpoint-delete",
+			deleteFiles,
+		); err != nil {
 			extraErrMsg = "DelFiles failed"
 			return err
+		}
+
+		// Record checkpoint file deletion metrics
+		if len(deleteFiles) > 0 {
+			v2.GCCheckpointFileDeletionCounter.Add(float64(len(deleteFiles)))
+		}
+
+		// Record deleted checkpoint count (each merged checkpoint is deleted)
+		if len(toMergeCheckpoint) > 0 {
+			v2.GCCheckpointDeletedCounter.Add(float64(len(toMergeCheckpoint)))
 		}
 	}
 
@@ -977,36 +1108,6 @@ func (c *checkpointCleaner) GetPITRsLocked(ctx context.Context) (*logtail.PitrIn
 	return c.mutation.snapshotMeta.GetPITR(ctx, c.sid, ts, c.fs, c.mp)
 }
 
-func (c *checkpointCleaner) TryGC(inputCtx context.Context) (err error) {
-	now := time.Now()
-	c.StartMutationTask("gc-try-gc")
-	defer c.StopMutationTask()
-	defer func() {
-		logutil.Info(
-			"GC-TRACE-TRY-GC",
-			zap.String("task", c.TaskNameLocked()),
-			zap.Duration("duration", time.Since(now)),
-			zap.Error(err),
-		)
-	}()
-	ctx, cancel := context.WithCancelCause(inputCtx)
-	defer cancel(nil)
-	go func() {
-		select {
-		case <-c.ctx.Done():
-			cancel(context.Cause(c.ctx))
-		case <-inputCtx.Done():
-			cancel(context.Cause(inputCtx))
-		case <-ctx.Done():
-		}
-	}()
-
-	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
-	defer memoryBuffer.Close(c.mp)
-	err = c.tryGCLocked(ctx, memoryBuffer)
-	return
-}
-
 // (no incremental checkpoint scan)
 // `tryGCLocked` will update
 // `mutation.scanned` and `mutation.metaFiles` and `mutation.snapshotMeta`
@@ -1016,6 +1117,18 @@ func (c *checkpointCleaner) tryGCLocked(
 	ctx context.Context,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) (err error) {
+	gcStart := time.Now()
+	defer func() {
+		duration := time.Since(gcStart).Seconds()
+		v2.TaskGCDurationHistogram.Observe(duration)
+		v2.GCSnapshotTotalDurationHistogram.Observe(duration)
+		if err != nil {
+			v2.GCSnapshotExecutionErrorCounter.Inc()
+		} else {
+			v2.GCSnapshotExecutionCounter.Inc()
+		}
+	}()
+
 	// 1. Quick check if GC is needed
 	// 1.1. If there is no global checkpoint, no need to do GC
 	var maxGlobalCKP *checkpoint.CheckpointEntry
@@ -1070,7 +1183,6 @@ func (c *checkpointCleaner) tryGCLocked(
 			zap.String("checkpoint", maxGlobalCKP.String()),
 		)
 	}
-
 	return
 }
 
@@ -1085,10 +1197,9 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) (err error) {
 	now := time.Now()
-	var snapshots map[uint32]containers.Vector
+	var snapshots *logtail.SnapshotInfo
 	var extraErrMsg string
 	defer func() {
-		logtail.CloseSnapshotList(snapshots)
 		logutil.Info(
 			"GC-TRACE-TRY-GC-AGAINST-GCKP",
 			zap.String("task", c.TaskNameLocked()),
@@ -1103,29 +1214,52 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		extraErrMsg = "GetPITRs failed"
 		return
 	}
-	snapshots, err = c.mutation.snapshotMeta.GetSnapshot(ctx, c.sid, c.fs, c.mp)
+
+	// Use snapshot taken at GC start to ensure consistency
+	var extraTS types.TS
+	protectedTS, isActive := c.getBackupProtectionSnapshot()
+	if isActive {
+		extraTS = protectedTS
+	}
+
+	snapshots, err = c.mutation.snapshotMeta.GetSnapshot(ctx, c.sid, c.fs, c.mp, extraTS)
 	if err != nil {
 		extraErrMsg = "GetSnapshot failed"
 		return
 	}
-	accountSnapshots := TransformToTSList(snapshots)
 	filesToGC, err := c.doGCAgainstGlobalCheckpointLocked(
-		ctx, gckp, accountSnapshots, pitrs, memoryBuffer,
+		ctx, gckp, snapshots, pitrs, memoryBuffer,
 	)
 	if err != nil {
 		extraErrMsg = "doGCAgainstGlobalCheckpointLocked failed"
 		return
 	}
+
 	// Delete files after doGCAgainstGlobalCheckpointLocked
 	// TODO:Requires Physical Removal Policy
+	// Note: Data files are GC'ed normally even when backup protection is active.
+	// Only checkpoint metadata merge/delete is skipped (handled in mergeCheckpointFilesLocked).
 	if err = c.deleter.DeleteMany(
 		ctx,
 		c.TaskNameLocked(),
 		filesToGC,
 	); err != nil {
 		extraErrMsg = fmt.Sprintf("ExecDelete %v failed", filesToGC)
+		// record GC file delete errors
+		v2.GCErrorIOErrorCounter.Inc()
 		return
 	}
+
+	// Record file deletion metrics
+	if len(filesToGC) > 0 {
+		deleteStart := time.Now()
+		v2.GCDataFileDeletionCounter.Add(float64(len(filesToGC)))
+		v2.GCObjectDeletedCounter.Add(float64(len(filesToGC)))
+		// Record delete duration
+		v2.GCCheckpointDeleteDurationHistogram.Observe(time.Since(deleteStart).Seconds())
+		v2.GCSnapshotDeleteDurationHistogram.Observe(time.Since(deleteStart).Seconds())
+	}
+
 	if c.GetGCWaterMark() == nil {
 		return nil
 	}
@@ -1148,7 +1282,7 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 		waterMark = scanMark
 	}
 	err = c.mergeCheckpointFilesLocked(
-		ctx, &waterMark, memoryBuffer, accountSnapshots, pitrs, len(filesToGC),
+		ctx, &waterMark, memoryBuffer, snapshots, pitrs, len(filesToGC),
 	)
 	if err != nil {
 		extraErrMsg = fmt.Sprintf("mergeCheckpointFilesLocked %v failed", waterMark.ToString())
@@ -1161,7 +1295,7 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 	ctx context.Context,
 	gckp *checkpoint.CheckpointEntry,
-	accountSnapshots map[uint32][]types.TS,
+	snapshots *logtail.SnapshotInfo,
 	pitrs *logtail.PitrInfo,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) ([]string, error) {
@@ -1173,6 +1307,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		err                         error
 		softDuration, mergeDuration time.Duration
 		extraErrMsg                 string
+		iscp                        map[uint64]types.TS
 	)
 
 	defer func() {
@@ -1197,12 +1332,19 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 	// [t100, t400] [f10, f11]
 	// Also, it will update the GC metadata
 	scannedWindow := c.GetScannedWindowLocked()
+	iscp, err = c.ISCPTables()
+	if err != nil {
+		return nil, err
+	}
 	if filesToGC, metafile, err = scannedWindow.ExecuteGlobalCheckpointBasedGC(
 		ctx,
 		gckp,
-		accountSnapshots,
+		snapshots,
 		pitrs,
 		c.mutation.snapshotMeta,
+		iscp,
+		c.checkpointCli,
+		c.syncProtection,
 		memoryBuffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1222,6 +1364,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 			zap.String("task", c.TaskNameLocked()),
 			zap.String("metafile", metafile),
 			zap.Error(err))
+		v2.GCErrorIOErrorCounter.Inc()
 		return nil, err
 	}
 	c.mutAddMetaFileLocked(metafile, ioutil.NewTSRangeFile(
@@ -1231,6 +1374,8 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		scannedWindow.tsRange.end,
 	))
 	softDuration = time.Since(now)
+	// Record GC filter duration
+	v2.GCCheckpointFilterDurationHistogram.Observe(softDuration.Seconds())
 
 	// update gc watermark and refresh snapshot meta with the latest gc result
 	// gcWaterMark will be updated to the end of the global checkpoint after each GC
@@ -1241,8 +1386,10 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 	now = time.Now()
 	// TODO:
 	c.updateGCWaterMark(gckp)
-	c.mutation.snapshotMeta.MergeTableInfo(accountSnapshots, pitrs)
+	c.mutation.snapshotMeta.MergeTableInfo(snapshots, pitrs)
 	mergeDuration = time.Since(now)
+	// Record merge table duration (different from merge checkpoint duration)
+	v2.GCMergeTableDurationHistogram.Observe(mergeDuration.Seconds())
 	return filesToGC, nil
 }
 
@@ -1258,6 +1405,15 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 		window = nil
 	}
 	return
+}
+
+func (c *checkpointCleaner) Verify(ctx context.Context) string {
+	c.StartMutationTask("gc-verify")
+	defer c.StopMutationTask()
+	checker := &gcChecker{
+		cleaner: c,
+	}
+	return checker.Verify(ctx, c.mp)
 }
 
 func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
@@ -1324,7 +1480,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		// TODO
 		return err
 	}
-	var snapshots map[uint32]containers.Vector
+	var snapshots *logtail.SnapshotInfo
 	snapshots, err = c.GetSnapshotsLocked()
 	if err != nil {
 		logutil.Error(
@@ -1334,7 +1490,6 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		)
 		return err
 	}
-	defer logtail.CloseSnapshotList(snapshots)
 	var pitr *logtail.PitrInfo
 	pitr, err = c.GetPITRsLocked(c.ctx)
 	if err != nil {
@@ -1348,19 +1503,24 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 
 	mergeWindow := c.GetScannedWindowLocked().Clone()
 	defer mergeWindow.Close()
-
-	accoutSnapshots := TransformToTSList(snapshots)
 	logutil.Info(
 		"GC-TRACE-MERGE-WINDOW",
 		zap.String("task", c.TaskNameLocked()),
 		zap.Int("files-count", len(mergeWindow.files)),
 	)
+	iscp, err := c.ISCPTables()
+	if err != nil {
+		return err
+	}
 	if _, _, err = mergeWindow.ExecuteGlobalCheckpointBasedGC(
 		c.ctx,
 		gCkp,
-		accoutSnapshots,
+		snapshots,
 		pitr,
 		c.mutation.snapshotMeta,
+		iscp,
+		c.checkpointCli,
+		c.syncProtection,
 		buffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1380,9 +1540,12 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	if _, _, err = debugWindow.ExecuteGlobalCheckpointBasedGC(
 		c.ctx,
 		gCkp,
-		accoutSnapshots,
+		snapshots,
 		pitr,
 		c.mutation.snapshotMeta,
+		iscp,
+		c.checkpointCli,
+		c.syncProtection,
 		buffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1460,7 +1623,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	}
 	collectObjectsFromCheckpointData(c.ctx, ckpReader, cptCkpObjects)
 
-	tList, pList := c.mutation.snapshotMeta.AccountToTableSnapshots(accoutSnapshots, pitr)
+	tList, pList := c.mutation.snapshotMeta.AccountToTableSnapshots(snapshots, pitr)
 	for name, tables := range ickpObjects {
 		for _, entry := range tables {
 			if cptCkpObjects[name] != nil {
@@ -1487,21 +1650,82 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	return nil
 }
 
-func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
+func (c *checkpointCleaner) Process(
+	inputCtx context.Context,
+	checker func(*checkpoint.CheckpointEntry) bool) (err error) {
 	if !c.GCEnabled() {
 		return
 	}
 	now := time.Now()
 
+	// Start mutation task first to acquire the lock
+	// This ensures backup protection operations wait for GC to complete
 	c.StartMutationTask("gc-process")
 	defer c.StopMutationTask()
 
+	// Set GC running state for sync protection
+	// This prevents new sync protections from being registered during GC
+	c.syncProtection.SetGCRunning(true)
+	defer c.syncProtection.SetGCRunning(false)
+
+	// Cleanup expired sync protections (TTL exceeded, handles crashed sync jobs)
+	c.syncProtection.CleanupExpired()
+
+	// Check backup protection state and create a snapshot at the start of GC
+	// This snapshot will be used throughout the GC process to ensure consistency
+	c.backupProtection.Lock()
+	if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) > 20*time.Minute {
+		logutil.Warn(
+			"GC-Backup-Protection-Expired-Remove",
+			zap.Duration("time-since-update", time.Since(c.backupProtection.lastUpdateTime)),
+		)
+		c.backupProtection.isActive = false
+		c.backupProtection.protectedTS = types.TS{}
+	}
+	// Create snapshot of backup protection state
+	c.mutation.backupProtectionSnapshot.protectedTS = c.backupProtection.protectedTS
+	c.mutation.backupProtectionSnapshot.isActive = c.backupProtection.isActive
+	isBackupActive := c.backupProtection.isActive
+	protectedTS := c.backupProtection.protectedTS
+	c.backupProtection.Unlock()
+
+	// If backup protection is active, skip all GC operations
+	if isBackupActive {
+		logutil.Info(
+			"GC-Backup-Protection-Skip-All-GC",
+			zap.String("task", c.TaskNameLocked()),
+			zap.String("protected-ts", protectedTS.ToString()),
+		)
+		return nil
+	}
+
 	startScanWaterMark := c.GetScanWaterMark()
 	startGCWaterMark := c.GetGCWaterMark()
+	var memoryBuffer *containers.OneSchemaBatchBuffer
 
 	defer func() {
 		endScanWaterMark := c.GetScanWaterMark()
 		endGCWaterMark := c.GetGCWaterMark()
+
+		// Record GC execution metrics
+		if err != nil {
+			v2.GCCheckpointExecutionErrorCounter.Inc()
+		} else {
+			v2.GCCheckpointExecutionCounter.Inc()
+		}
+		v2.GCCheckpointTotalDurationHistogram.Observe(time.Since(now).Seconds())
+
+		// Record memory usage metrics
+		if memoryBuffer != nil {
+			bufferSize := float64(memoryBuffer.Len())
+			v2.GCMemoryBufferGauge.Set(bufferSize)
+		}
+
+		// Record queue metrics (simplified - pending tasks)
+		v2.GCQueuePendingGauge.Set(0)    // Reset after processing
+		v2.GCQueueProcessingGauge.Set(0) // Reset after processing
+		v2.GCQueueCompletedGauge.Set(1)  // Mark as completed
+
 		logutil.Info(
 			"GC-TRACE-PROCESS",
 			zap.String("task", c.TaskNameLocked()),
@@ -1532,11 +1756,11 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 	default:
 	}
 
-	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
+	memoryBuffer = MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 
 	var tryGC bool
-	if err, tryGC = c.tryScanLocked(ctx, memoryBuffer); err != nil {
+	if err, tryGC = c.tryScanLocked(ctx, memoryBuffer, checker); err != nil {
 		return
 	}
 	if !tryGC {
@@ -1553,7 +1777,12 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 func (c *checkpointCleaner) tryScanLocked(
 	ctx context.Context,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
+	checker func(*checkpoint.CheckpointEntry) bool,
 ) (err error, tryGC bool) {
+	scanStart := time.Now()
+	defer func() {
+		v2.TaskGCScanDurationHistogram.Observe(time.Since(scanStart).Seconds())
+	}()
 
 	tryGC = true
 	// get the max scanned timestamp
@@ -1591,8 +1820,8 @@ func (c *checkpointCleaner) tryScanLocked(
 		}
 	}
 
-	// get up to maxMergeCheckpointCount incremental checkpoints starting from the max scanned timestamp
-	ckps := c.checkpointCli.ICKPSeekLT(maxScannedTS, c.config.maxMergeCheckpointCount)
+	// get up to maxScanCheckpointCount incremental checkpoints starting from the max scanned timestamp
+	ckps := c.checkpointCli.ICKPSeekLT(maxScannedTS, c.config.maxScanCheckpointCount)
 
 	// quick return if there is no incremental checkpoint
 	if len(ckps) == 0 && len(candidates) == 0 {
@@ -1601,8 +1830,14 @@ func (c *checkpointCleaner) tryScanLocked(
 
 	// filter out the incremental checkpoints that do not meet the requirements
 	for _, ckp := range ckps {
-		if !c.checkExtras(ckp) {
-			continue
+		if checker != nil {
+			if !checker(ckp) {
+				continue
+			}
+		} else {
+			if !c.checkExtras(ckp) {
+				continue
+			}
 		}
 		candidates = append(candidates, ckp)
 	}
@@ -1635,7 +1870,16 @@ func (c *checkpointCleaner) tryScanLocked(
 			zap.String("task", c.TaskNameLocked()),
 			zap.Error(err),
 		)
+		v2.GCErrorIOErrorCounter.Inc()
 		return
+	}
+
+	// Cleanup soft-deleted sync protections when checkpoint watermark > validTS
+	// This ensures protections are only removed after the checkpoint has recorded the commit
+	scanWaterMarkEntry := c.GetScanWaterMark()
+	if scanWaterMarkEntry != nil {
+		checkpointWatermark := scanWaterMarkEntry.GetEnd().ToTimestamp().PhysicalTime
+		c.syncProtection.CleanupSoftDeleted(checkpointWatermark)
 	}
 	return
 }
@@ -1656,6 +1900,11 @@ func (c *checkpointCleaner) mutAddMetaFileLocked(
 }
 
 func (c *checkpointCleaner) checkExtras(item any) bool {
+	// First check backup protection
+	if !c.checkBackupProtection(item) {
+		return false
+	}
+
 	c.checker.RLock()
 	defer c.checker.RUnlock()
 	for _, checker := range c.checker.extras {
@@ -1684,6 +1933,109 @@ func (c *checkpointCleaner) RemoveChecker(key string) error {
 	}
 	delete(c.checker.extras, key)
 	return nil
+}
+
+// SetBackupProtection sets the backup protection timestamp
+// protectedTS is the timestamp that should be protected from GC
+// This method only acquires the backupProtection lock, not the mutation lock.
+// GC consistency is ensured by Process() which creates a snapshot of protection
+// state at GC start, so ongoing GC won't be affected by protection changes.
+func (c *checkpointCleaner) SetBackupProtection(protectedTS types.TS) {
+	c.backupProtection.Lock()
+	defer c.backupProtection.Unlock()
+	c.backupProtection.protectedTS = protectedTS
+	c.backupProtection.lastUpdateTime = time.Now()
+	c.backupProtection.isActive = true
+	logutil.Info(
+		"GC-Backup-Protection-Set",
+		zap.String("protected-ts", protectedTS.ToString()),
+		zap.Time("last-update-time", c.backupProtection.lastUpdateTime),
+	)
+}
+
+// UpdateBackupProtection updates the backup protection timestamp
+// This method only acquires the backupProtection lock, not the mutation lock.
+// GC consistency is ensured by Process() which creates a snapshot of protection
+// state at GC start, so ongoing GC won't be affected by protection changes.
+func (c *checkpointCleaner) UpdateBackupProtection(protectedTS types.TS) {
+	c.backupProtection.Lock()
+	defer c.backupProtection.Unlock()
+	if !c.backupProtection.isActive {
+		logutil.Warn("GC-Backup-Protection-Update-Not-Active")
+		return
+	}
+	c.backupProtection.protectedTS = protectedTS
+	c.backupProtection.lastUpdateTime = time.Now()
+	logutil.Info(
+		"GC-Backup-Protection-Updated",
+		zap.String("protected-ts", protectedTS.ToString()),
+		zap.Time("last-update-time", c.backupProtection.lastUpdateTime),
+	)
+}
+
+// RemoveBackupProtection removes the backup protection
+func (c *checkpointCleaner) RemoveBackupProtection() {
+	c.backupProtection.Lock()
+	defer c.backupProtection.Unlock()
+	c.backupProtection.isActive = false
+	c.backupProtection.protectedTS = types.TS{}
+	logutil.Info("GC-Backup-Protection-Removed")
+}
+
+// GetBackupProtection returns the backup protection info
+func (c *checkpointCleaner) GetBackupProtection() (protectedTS types.TS, lastUpdateTime time.Time, isActive bool) {
+	c.backupProtection.RLock()
+	defer c.backupProtection.RUnlock()
+	return c.backupProtection.protectedTS, c.backupProtection.lastUpdateTime, c.backupProtection.isActive
+}
+
+// getBackupProtectionSnapshot returns the backup protection snapshot taken at the start of GC
+// This ensures GC consistency: once GC starts, it uses this snapshot and ignores
+// any changes to backup protection during GC execution
+func (c *checkpointCleaner) getBackupProtectionSnapshot() (protectedTS types.TS, isActive bool) {
+	// Use snapshot from mutation (taken at GC start)
+	// No lock needed as mutation is already locked during GC execution
+	return c.mutation.backupProtectionSnapshot.protectedTS, c.mutation.backupProtectionSnapshot.isActive
+}
+
+// checkBackupProtection checks if the checkpoint should be protected from GC
+// Returns true if the checkpoint can be GC'ed, false if it should be protected
+// This function uses the snapshot taken at GC start to ensure consistency
+func (c *checkpointCleaner) checkBackupProtection(item any) bool {
+	// Use snapshot from mutation (taken at GC start)
+	protectedTS, isActive := c.getBackupProtectionSnapshot()
+
+	// If backup protection is not active, allow GC
+	if !isActive {
+		return true
+	}
+
+	// Check if the item is a checkpoint entry
+	ckp, ok := item.(*checkpoint.CheckpointEntry)
+	if !ok {
+		// For non-checkpoint items, allow GC (metadata files are checked separately in deleteStaleSnapshotFilesLocked)
+		return true
+	}
+
+	// For checkpoint entries, check if the end timestamp is less than or equal to protected timestamp
+	// We protect checkpoints whose end timestamp is <= protected timestamp
+	// This means we protect all checkpoints up to and including the backup time point
+	endTS := ckp.GetEnd()
+	// Empty/invalid timestamps should not be protected (allow GC)
+	if endTS.IsEmpty() {
+		return true
+	}
+	if endTS.LE(&protectedTS) {
+		logutil.Info(
+			"GC-Backup-Protection-Block-Checkpoint",
+			zap.String("checkpoint-end-ts", endTS.ToString()),
+			zap.String("protected-ts", protectedTS.ToString()),
+			zap.String("checkpoint", ckp.String()),
+		)
+		return false
+	}
+
+	return true
 }
 
 // appendFilesToWAL append the GC meta files to WAL.
@@ -1717,6 +2069,42 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 		snapSize, tableSize uint32
 	)
 	defer func() {
+		// Record scan metrics
+		duration := time.Since(now).Seconds()
+		v2.TaskGCScanDurationHistogram.Observe(duration)
+		v2.GCCheckpointScanDurationHistogram.Observe(duration)
+		v2.GCSnapshotScanDurationHistogram.Observe(duration)
+		v2.GCObjectScannedCounter.Add(float64(len(ckps)))
+		// Record table statistics
+		v2.GCTableScannedCounter.Add(float64(tableSize))
+
+		// Record scanned checkpoint count (approximate row count)
+		// Note: This is an approximation - we record checkpoint count as scanned rows
+		// since exact row count per checkpoint requires reading all checkpoint data
+		if len(ckps) > 0 {
+			v2.GCCheckpointRowsScannedCounter.Add(float64(len(ckps)))
+		}
+
+		// Record collect duration for snapshot processing
+		collectStart := time.Now()
+		//if snapshots, err := c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp); err == nil {
+		//	if len(snapshots.Cluster) > 0 {
+		//		v2.GCSnapshotClusterCounter.Add(float64(len(snapshots.Cluster)))
+		//	}
+		//	if len(snapshots.Account) > 0 {
+		//		v2.GCSnapshotAccountCounter.Add(float64(len(snapshots.Account)))
+		//	}
+		//	if len(snapshots.Database) > 0 {
+		//		v2.GCSnapshotDatabaseCounter.Add(float64(len(snapshots.Database)))
+		//	}
+		//	if len(snapshots.Tables) > 0 {
+		//		v2.GCSnapshotTableCounter.Add(float64(len(snapshots.Tables)))
+		//	}
+		//}
+		// Record collect duration
+		v2.GCMergeCollectDurationHistogram.Observe(time.Since(collectStart).Seconds())
+		v2.GCSnapshotCollectDurationHistogram.Observe(time.Since(collectStart).Seconds())
+
 		logutil.Info(
 			"GC-TRACE-SCAN",
 			zap.String("task", c.TaskNameLocked()),
@@ -1823,16 +2211,74 @@ func (c *checkpointCleaner) mutUpdateSnapshotMetaLocked(
 	)
 }
 
-func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
+// checkGCDelitionAlert checks if GC has not deleted any files in 4 hours
+// removed: checkGCDelitionAlert
+
+// checkGCAlertPeriodically checks if GC has not deleted any files in 4 hours
+// This should be called periodically even when no files are deleted
+// removed: checkGCAlertPeriodically
+
+func (c *checkpointCleaner) GetSnapshots() (*logtail.SnapshotInfo, error) {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
-	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
+
+	// Use snapshot if GC is running, otherwise use current protection state
+	var extraTS types.TS
+	// Check if we're in a GC task (mutation task is active)
+	if c.mutation.taskState.name != "" {
+		// GC is running, use snapshot
+		protectedTS, isActive := c.getBackupProtectionSnapshot()
+		if isActive {
+			extraTS = protectedTS
+		}
+	} else {
+		// Not in GC, use current protection state
+		c.backupProtection.RLock()
+		if c.backupProtection.isActive && time.Since(c.backupProtection.lastUpdateTime) <= 20*time.Minute {
+			extraTS = c.backupProtection.protectedTS
+		}
+		c.backupProtection.RUnlock()
+	}
+
+	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp, extraTS)
 }
-func (c *checkpointCleaner) GetSnapshotsLocked() (map[uint32]containers.Vector, error) {
+
+func (c *checkpointCleaner) GetSnapshotsLocked() (*logtail.SnapshotInfo, error) {
+	// Use snapshot taken at GC start to ensure consistency
+	var extraTS types.TS
+	protectedTS, isActive := c.getBackupProtectionSnapshot()
+	if isActive {
+		extraTS = protectedTS
+		logutil.Info(
+			"GC-Backup-Protection-Add-Fake-Snapshot",
+			zap.String("protected-ts", extraTS.ToString()),
+		)
+	}
+
+	// Pass the protected TS to GetSnapshot, which will add it to cluster snapshots
+	if !extraTS.IsEmpty() {
+		return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp, extraTS)
+	}
 	return c.mutation.snapshotMeta.GetSnapshot(c.ctx, c.sid, c.fs, c.mp)
 }
 func (c *checkpointCleaner) GetTablePK(tid uint64) string {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
 	return c.mutation.snapshotMeta.GetTablePK(tid)
+}
+
+func (c *checkpointCleaner) ISCPTables() (map[uint64]types.TS, error) {
+	if c.iscpTablesFunc != nil {
+		return c.iscpTablesFunc()
+	}
+	return c.mutation.snapshotMeta.GetISCP(c.ctx, c.sid, c.fs, c.mp)
+}
+
+func (c *checkpointCleaner) GetDetails(ctx context.Context) (map[uint32]*TableStats, error) {
+	scan := c.GetScannedWindow()
+	if scan == nil {
+		return nil, nil
+	}
+	window := scan.Clone()
+	return window.Details(ctx, c.mutation.snapshotMeta, c.mp)
 }

@@ -82,14 +82,31 @@ create index xx ON t11(a) comment 'xx';
 show create table t11;
 drop table t11;
 
-create table t12(a text);
+create table t12(a text, b int);
 create unique index x on t12(a);
 create index x2 on t12(a);
+create index x3 on t12(a(100));
+create unique index x4 on t12(a(100));
+show create table t12;
+insert into t12 values ('alpha',1),('beta',2);
+select * from t12 where a = 'alpha';
+update t12 set b = 3 where a = 'alpha';
+select * from t12 where a = 'alpha';
+delete from t12 where b = 2;
+select count(*) from t12 where a = 'beta';
 drop table t12;
 
-create table t13(a blob);
+create table t13(a blob, b int);
 create unique index x on t13(a);
 create index x2 on t13(a);
+create index x3 on t13(a(100));
+show create table t13;
+insert into t13 values ('alpha',1),('beta',2);
+select * from t13 where a = 'alpha';
+update t13 set b = 3 where a = 'alpha';
+select * from t13 where a = 'alpha';
+delete from t13 where b = 2;
+select count(*) from t13 where a = 'beta';
 drop table t13;
 
 create table t14(a json);
@@ -126,3 +143,22 @@ INSERT INTO t15 VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 create unique index idx_1 on t15(col1,col2,col3,col6);
 select * from t15;
 drop table t15;
+
+
+create table aerr (uid varchar(120), email varchar(20), lmethod varchar(100));
+
+insert into aerr values ("user1", 'xx@yeah.net', 'basic'),('user2', 'xx@mo.cn','basic'),('user3', '11@tt.cn', 'basic');
+
+select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
+
+create unique index mail_method_idx on aerr(email,lmethod);
+alter table aerr add primary key (uid);
+
+select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
+
+set @idxsql = concat("select count(*) from `", (SELECT index_table_name FROM mo_catalog.mo_indexes WHERE column_name = 'lmethod'), "`");
+prepare err1 from @novar;
+prepare s1 from @idxsql;
+execute s1;
+drop prepare s1;
+drop table aerr;

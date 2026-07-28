@@ -20,7 +20,6 @@ import (
 
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
-	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/timeseries"
 	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
 )
@@ -36,12 +35,13 @@ func (c *DashboardCreator) initTaskDashboard() error {
 		c.withRowOptions(
 			c.initTaskFlushTableTailRow(),
 			c.initTaskMergeRow(),
+			c.initTaskMergeOOMRow(),
 			c.initTaskMergeTransferPageRow(),
 			c.initTaskCheckpointRow(),
-			c.initTaskSelectivityRow(),
 			c.initTaskStorageUsageRow(),
 			c.initMoTableStatsTaskDurationRow(),
 			c.initMoTableStatsTaskCountingRow(),
+			c.initTaskGCRow(),
 		)...)
 
 	if err != nil {
@@ -86,13 +86,6 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 			timeseries.Span(3),
 		),
 		c.getPercentHist(
-			"Transfer duration since born",
-			c.getMetricWithFilter(`mo_task_transfer_duration_bucket`, `type="page_since_born_duration"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			SpanNulls(true),
-			timeseries.Span(3),
-		),
-		c.getPercentHist(
 			"Transfer memory latency",
 			c.getMetricWithFilter(`mo_task_transfer_short_duration_bucket`, `type="mem_latency"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
@@ -119,6 +112,33 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			SpanNulls(true),
 			timeseries.Span(3),
+		),
+	)
+}
+
+func (c *DashboardCreator) initTaskMergeOOMRow() dashboard.Option {
+	return dashboard.Row(
+		"Merge OOM Governor",
+		c.getTimeSeries(
+			"OOM Pause Count",
+			[]string{fmt.Sprintf(
+				"sum (increase(%s[$interval])) by (%s)",
+				c.getMetricWithFilter(`mo_task_merge_oom_pause_total`, ""),
+				c.by,
+			)},
+			[]string{"{{ " + c.by + " }}"},
+			timeseries.Span(6),
+		),
+		c.getTimeSeries(
+			"Available Memory",
+			[]string{fmt.Sprintf(
+				"sum (%s) by (%s)",
+				c.getMetricWithFilter(`mo_task_merge_available_memory_bytes`, ""),
+				c.by,
+			)},
+			[]string{"{{ " + c.by + " }}"},
+			timeseries.Span(6),
+			timeseries.Axis(tsaxis.Unit("decbytes")),
 		),
 	)
 }
@@ -293,52 +313,6 @@ func (c *DashboardCreator) initTaskStorageUsageRow() dashboard.Option {
 
 }
 
-func (c *DashboardCreator) initTaskSelectivityRow() dashboard.Option {
-
-	hitRateFunc := func(title, metricType string) row.Option {
-		return c.getTimeSeries(
-			title,
-			[]string{
-				fmt.Sprintf(
-					"sum(%s) by (%s) / on(%s) sum(%s) by (%s)",
-					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_hit"`), c.by, c.by,
-					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_total"`), c.by),
-			},
-			[]string{fmt.Sprintf("filterout-{{ %s }}", c.by)},
-			timeseries.Span(4),
-		)
-	}
-	counterRateFunc := func(title, metricType string) row.Option {
-		return c.getTimeSeries(
-			title,
-			[]string{
-				fmt.Sprintf(
-					"sum(rate(%s[$interval])) by (%s)",
-					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_total"`), c.by),
-			},
-			[]string{fmt.Sprintf("req-{{ %s }}", c.by)},
-			timeseries.Span(4),
-		)
-	}
-	return dashboard.Row(
-		"Read Selectivity",
-		hitRateFunc("Read filter rate", "readfilter"),
-		hitRateFunc("Block range filter rate", "block"),
-		hitRateFunc("Column update filter rate", "column"),
-		counterRateFunc("Read filter request", "readfilter"),
-		counterRateFunc("Block range request", "block"),
-		counterRateFunc("Column update request", "column"),
-		c.getPercentHist(
-			"Iterate deletes rows count per block",
-			c.getMetricWithFilter(`mo_task_hist_total_bucket`, `type="load_mem_deletes_per_block"`),
-			[]float64{0.5, 0.7, 0.8, 0.9},
-			timeseries.Axis(tsaxis.Unit("")),
-			timeseries.Span(4),
-			SpanNulls(true),
-		),
-	)
-}
-
 func (c *DashboardCreator) initMoTableStatsTaskDurationRow() dashboard.Option {
 	return dashboard.Row(
 		"Mo Table Stats Task Duration",
@@ -398,4 +372,31 @@ func (c *DashboardCreator) initMoTableStatsTaskCountingRow() dashboard.Option {
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
 			axis.Min(0))...)
+}
+
+func (c *DashboardCreator) initTaskGCRow() dashboard.Option {
+	return dashboard.Row(
+		"GC Task Metrics",
+		c.getPercentHist(
+			"GC Total Duration",
+			c.getMetricWithFilter(`mo_task_long_duration_bucket`, `type="gc_total"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
+		c.getPercentHist(
+			"GC Scan Duration",
+			c.getMetricWithFilter(`mo_task_long_duration_bucket`, `type="gc_scan"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
+		c.getPercentHist(
+			"GC Delete Duration",
+			c.getMetricWithFilter(`mo_task_long_duration_bucket`, `type="gc_delete"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
+	)
 }

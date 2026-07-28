@@ -7,9 +7,9 @@ insert into fk_01 values ('90',5983),('100',734),('190',50);
 insert into fk_02(col2,col3) values ('90',5),('90',4),('100',0),(NULL,80);
 select * from fk_01;
 col1    col2
+90    5983
 100    734
 190    50
-90    5983
 select * from fk_02;
 col1    col2    col3
 null    90    5
@@ -27,8 +27,8 @@ internal error: Cannot delete or update a parent row: a foreign key constraint f
 delete from fk_01 where col1='190';
 select * from fk_01;
 col1    col2
-100    734
 90    5983
+100    734
 select * from fk_02;
 col1    col2    col3
 null    90    5
@@ -39,8 +39,8 @@ update fk_01 set col2=500 where col2=734;
 delete from fk_02 where col2='100';
 select * from fk_01;
 col1    col2
-100    500
 90    5983
+100    500
 select * from fk_02;
 col1    col2    col3
 null    90    5
@@ -58,9 +58,9 @@ truncate table fk_01;
 internal error: can not truncate table 'fk_01' referenced by some foreign key constraint
 select * from fk_01;
 col1    col2
+90    5983
 100    734
 190    50
-90    5983
 select * from fk_02;
 col1    col2    col3
 null    90    5
@@ -92,9 +92,9 @@ update fk_02 set col1=10 where col3=4;
 select * from fk_02;
 col1    col2    col3
 2    score    1
-10    student    4
 10    goods    2
 null    null    null
+10    student    4
 update fk_02 set col1=20 where col3=4;
 internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into fk_02 values(15,'ssss',10);
@@ -107,9 +107,9 @@ col1    col2    col3
 select * from fk_02;
 col1    col2    col3
 2    score    1
-10    student    4
 10    goods    2
 null    null    null
+10    student    4
 update fk_01 set col3=110 where col1=10;
 delete from fk_01 where col1=2;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
@@ -130,9 +130,9 @@ insert into fk_02 values(20,'score',1),(12,'apple',4),(1,'yellow',2);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3
-1    opppo    51
-2    apple    50
 2    yellow    20
+2    apple    50
+1    opppo    51
 select * from fk_02;
 col1    col2    col3
 2    apple    1
@@ -148,9 +148,9 @@ update fk_01 set col1=1 where col1=2;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3
-1    opppo    51
-2    apple    50
 2    yellow    20
+2    apple    50
+1    opppo    51
 select * from fk_02;
 col1    col2    col3
 2    apple    1
@@ -161,9 +161,9 @@ internal error: Cannot delete or update a parent row: a foreign key constraint f
 delete from fk_02;
 select * from fk_01;
 col1    col2    col3
-1    opppo    51
-2    apple    50
 2    yellow    20
+2    apple    50
+1    opppo    51
 select * from fk_02;
 col1    col2    col3
 drop table fk_02;
@@ -219,8 +219,8 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3    col4
 23.100000000000000000    a    20    2022-10-01
-23.100000000000000000    a    20    2022-10-02
 23.100000000000000000    a    21    2022-10-01
+23.100000000000000000    a    20    2022-10-02
 select * from fk_02;
 col1    col2    col3    col4
 23.100000000000000000    a    20    2022-10-01
@@ -234,8 +234,8 @@ col1    col2    col3    col4
 23.100000000000000000    a    21    2022-10-01
 select * from fk_02;
 col1    col2    col3    col4
-null    a    null    null
 23.100000000000000000    a    21    2022-10-01
+null    a    null    null
 null    a    null    null
 update fk_01 set col3=19 where col2='a';
 select * from fk_01;
@@ -344,10 +344,10 @@ delete from fk_01 where col1=3;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3
-1    window    deli
 2    safer    prow
 3    ultra    strong
 4    aaa    bbb
+1    window    deli
 select * from fk_02;
 col1    col2    col3    col4
 1    aa    bb    2
@@ -425,14 +425,14 @@ update fk_03 set book_id=3 where book_id=2;
 select * from fk_03;
 id    book_id    author_id
 1    1    2
-2    3    2
 3    3    1
+2    3    2
 update fk_01 set id=5 where title='self';
 select * from fk_03;
 id    book_id    author_id
-1    5    2
-2    3    2
 3    3    1
+2    3    2
+1    5    2
 select * from fk_01;
 id    title
 2    method
@@ -444,8 +444,8 @@ id    name
 2    wulan
 select * from fk_03;
 id    book_id    author_id
-1    5    2
 2    3    2
+1    5    2
 delete from fk_03;
 drop table fk_01;
 internal error: can not drop table 'fk_01' referenced by some foreign key constraint
@@ -507,7 +507,7 @@ a    f_a    f_b    f_c    f_d
 drop table c1;
 create table c1 (a int primary key, f_a int, f_b int, f_c int, f_d int, constraint ck foreign key(f_a,f_b) REFERENCES f1(a,b));
 drop table c1;
-create table c1 (a int primary key, f_a int, f_b int, f_c int, f_d int, constraint ck foreign key(f_a,f_c) REFERENCES f1(a,c)); 
+create table c1 (a int primary key, f_a int, f_b int, f_c int, f_d int, constraint ck foreign key(f_a,f_c) REFERENCES f1(a,c));
 internal error: failed to add the foreign key constraint
 create table c1 (a int primary key, f_a int, f_b int, f_c int, f_d int, constraint ck foreign key(f_c,f_d) REFERENCES f1(c,d));
 create table fk_01(col1 decimal(38,3),col2 char(25),col3 int,col4 date,primary key(col1,col3,col4));
@@ -521,8 +521,8 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3    col4
 23.100    a    20    2022-10-01
-23.100    a    20    2022-10-02
 23.100    a    21    2022-10-01
+23.100    a    20    2022-10-02
 select * from fk_02;
 col1    col2    col3    col4
 23.100    a    20    2022-10-01
@@ -531,8 +531,8 @@ col1    col2    col3    col4
 update fk_02 set col3=19 where col3=20;
 select * from fk_02;
 col1    col2    col3    col4
-23.100    a    19    2022-10-01
 23.100    a    21    2022-10-01
+23.100    a    19    2022-10-01
 23.100    a    19    2022-10-02
 delete from fk_01 where col3=20;
 select * from fk_01;
@@ -540,9 +540,9 @@ col1    col2    col3    col4
 23.100    a    21    2022-10-01
 select * from fk_02;
 col1    col2    col3    col4
-NULL    a    19    2022-10-01
-NULL    a    21    2022-10-01
-NULL    a    19    2022-10-02
+null    a    21    2022-10-01
+null    a    19    2022-10-01
+null    a    19    2022-10-02
 drop table if exists c1;
 drop table if exists f1;
 create table f1(a int, b int, c int, primary key(a,b));
@@ -582,8 +582,8 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3    col4
 23.100    a    20    2022-10-01
-23.100    a    20    2022-10-02
 23.100    a    21    2022-10-01
+23.100    a    20    2022-10-02
 select * from fk_02;
 col1    col2    col3    col4
 23.100    a    20    2022-10-01
@@ -592,19 +592,19 @@ col1    col2    col3    col4
 update fk_02 set col3=19 where col3=20;
 select * from fk_02;
 col1    col2    col3    col4
-23.100    a    19    2022-10-01
 23.100    a    21    2022-10-01
+23.100    a    19    2022-10-01
 23.100    a    19    2022-10-02
 delete from fk_01  where col3=19;
 select * from fk_01;
 col1    col2    col3    col4
 23.100    a    20    2022-10-01
-23.100    a    20    2022-10-02
 23.100    a    21    2022-10-01
+23.100    a    20    2022-10-02
 select * from fk_02;
 col1    col2    col3    col4
-23.100    a    19    2022-10-01
 23.100    a    21    2022-10-01
+23.100    a    19    2022-10-01
 23.100    a    19    2022-10-02
 drop table fk_02;
 drop table fk_01;
@@ -635,16 +635,16 @@ update fk_02 set col1=6.0 where col3=21;
 select * from fk_02;
 col1    col2    col3    col4
 8.900    a    20    2022-10-01
-6.000    a    21    2022-10-01
 6.000    a    20    2022-10-02
 8.900    c    20    2022-10-01
+6.000    a    21    2022-10-01
 6.000    a    21    2022-10-01
 update fk_01 set col2='d' where col1=6.0;
 select * from fk_01;
 col1    col2    col3    col4
 8.900    a    20    2022-10-01
-6.000    d    21    2022-10-01
 4.300    c    20    2022-10-02
+6.000    d    21    2022-10-01
 select * from fk_02;
 col1    col2    col3    col4
 8.900    a    20    2022-10-01
@@ -665,3 +665,14 @@ drop table if exists fk_02;
 drop table if exists f1;
 drop table if exists fk_01;
 set autocommit=1;
+drop database if exists issue_23344;
+create database issue_23344;
+use issue_23344;
+create table parent (id int primary key);
+create table child (
+id int primary key,
+parent_id int,
+constraint fk_parent foreign key (parent_id) references parent(id) on delete set null on update restrict
+);
+alter table child modify parent_id int null;
+drop database issue_23344;

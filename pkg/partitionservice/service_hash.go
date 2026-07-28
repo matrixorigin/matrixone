@@ -16,6 +16,7 @@ package partitionservice
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -31,9 +32,9 @@ func (s *Service) getMetadataByHashType(
 	ctx := tree.NewFmtCtx(
 		dialect.MYSQL,
 		tree.WithQuoteIdentifier(),
-		tree.WithEscapeSingleQuoteString(),
+		tree.WithSingleQuoteString(),
 	)
-	method.Expr.Format(ctx)
+	method.Format(ctx)
 
 	pm := partition.PartitionMethod_Hash
 	if method.Linear {
@@ -55,7 +56,7 @@ func (s *Service) getMetadataByHashType(
 			metadata.Partitions,
 			partition.Partition{
 				Name:               name,
-				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, name),
+				PartitionTableName: GetPartitionTableName(def.Name, name),
 				Position:           uint32(i),
 				Expr:               def.Partition.PartitionDefs[i].Def,
 			},

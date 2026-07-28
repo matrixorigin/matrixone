@@ -47,25 +47,52 @@ var (
 )
 
 const (
-	// ZeroDatetime is the zero value for date Time '0000-01-01 00:00:00'.
-	ZeroDatetime = Datetime(0)
+	// DatetimeEpoch is the internal epoch for 0001-01-01 00:00:00.
+	DatetimeEpoch = Datetime(0)
+	// ZeroDatetime represents MySQL's 0000-00-00 00:00:00 value.
+	ZeroDatetime = Datetime(-1)
 )
 
 // The Datetime type holds number of microseconds since January 1, year 1 in Gregorian calendar
 
 func (dt Datetime) String() string {
+	if dt == ZeroDatetime {
+		return "0000-00-00 00:00:00"
+	}
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
 }
 
 func (dt Datetime) String2(scale int32) string {
+	if dt == ZeroDatetime {
+		if scale > 0 {
+			return "0000-00-00 00:00:00." + strings.Repeat("0", int(scale))
+		}
+		return "0000-00-00 00:00:00"
+	}
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
+
 	if scale > 0 {
 		msec := int64(dt) % MicroSecsPerSec
-		msecInstr := fmt.Sprintf("%06d\n", msec)
-		msecInstr = msecInstr[:scale]
+		// Format microseconds as 6 digits (max precision we store)
+		msecInstr := fmt.Sprintf("%06d", msec)
+		// For scale > 6, pad with zeros to the right (e.g., scale 9: "000001" -> "000001000")
+		if scale > 6 {
+			// Pad to 9 digits by appending zeros
+			for len(msecInstr) < 9 {
+				msecInstr = msecInstr + "0"
+			}
+			// Truncate to requested scale (max 9)
+			if scale > 9 {
+				scale = 9
+			}
+			msecInstr = msecInstr[:scale]
+		} else {
+			// For scale <= 6, truncate from the right
+			msecInstr = msecInstr[:scale]
+		}
 
 		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d"+"."+msecInstr, y, m, d, hour, minute, sec)
 	}
@@ -89,6 +116,9 @@ func (dt Datetime) String2(scale int32) string {
 //	"1999-09-09 11:11:"             "1999-09-09 11:11:00.000"
 func ParseDatetime(s string, scale int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
+	if isZeroDatetimeString(s) {
+		return ZeroDatetime, nil
+	}
 	if len(s) < 14 {
 		if d, err := ParseDateCast(s); err == nil {
 			return d.ToDatetime(), nil
@@ -101,77 +131,155 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 	var carry uint32 = 0
 	var err error
 
-	if s[4] == '-' || s[4] == '/' {
-		var num int64
+	if s[4] == '-' || s[4] == '/' || s[4] == ':' {
 		var unum uint64
-		strArr := strings.Split(s, " ")
-		if len(strArr) != 2 {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		// solve year/month/day
-		front := strings.Split(strArr[0], s[4:5])
-		if len(front) != 3 {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		num, err = strconv.ParseInt(front[0], 10, 32)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		year = int32(num)
-		unum, err = strconv.ParseUint(front[1], 10, 8)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		month = uint8(unum)
-		unum, err = strconv.ParseUint(front[2], 10, 8)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		day = uint8(unum)
+		dateSep := s[4]
 
-		if !ValidDate(year, month, day) {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-
-		middleAndBack := strings.Split(strArr[1], ".")
-		// solve hour/minute/second
-		middle := strings.Split(middleAndBack[0], ":")
-		if len(middle) != 3 {
-			if len(middle) == 2 {
-				middle = append(middle, "00")
-			} else {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-			}
-		}
-		if len(middle) == 3 && middle[2] == "" {
-			middle[2] = "00"
-		}
-		unum, err = strconv.ParseUint(middle[0], 10, 8)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		hour = uint8(unum)
-		unum, err = strconv.ParseUint(middle[1], 10, 8)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		minute = uint8(unum)
-		unum, err = strconv.ParseUint(middle[2], 10, 8)
-		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		second = uint8(unum)
-		if !ValidTimeInDay(hour, minute, second) {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
-		}
-		// solve microsecond
-		if len(middleAndBack) == 2 {
-			msec, carry, err = getMsec(middleAndBack[1], scale)
+		// Fast path: standard zero-padded format "yyyy-mm-dd hh:mm:ss[.f...]"
+		// or ISO 8601 "yyyy-mm-ddThh:mm:ss[.f...]" with fixed-width fields.
+		// Separators at known positions; no slice allocations needed.
+		if len(s) >= 19 && s[7] == dateSep && (s[10] == ' ' || s[10] == 'T') &&
+			s[13] == ':' && s[16] == ':' && (len(s) == 19 || s[19] == '.') {
+			var num int64
+			num, err = strconv.ParseInt(s[0:4], 10, 32)
 			if err != nil {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 			}
-		} else if len(middleAndBack) > 2 {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			year = int32(num)
+			unum, err = strconv.ParseUint(s[5:7], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			month = uint8(unum)
+			unum, err = strconv.ParseUint(s[8:10], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			day = uint8(unum)
+			if !ValidDate(year, month, day) {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			unum, err = strconv.ParseUint(s[11:13], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			hour = uint8(unum)
+			unum, err = strconv.ParseUint(s[14:16], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			minute = uint8(unum)
+			unum, err = strconv.ParseUint(s[17:19], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			second = uint8(unum)
+			if !ValidTimeInDay(hour, minute, second) {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			if len(s) == 19 {
+				// nothing
+			} else if s[19] == '.' {
+				msec, carry, err = getMsec(s[20:], scale)
+				if err != nil {
+					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				}
+			} else {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+		} else {
+			// Slow path: variable-width fields. Use IndexByte instead of
+			// strings.Split to avoid []string allocations.
+			dtSepIdx := strings.IndexByte(s, ' ')
+			if dtSepIdx < 0 {
+				dtSepIdx = strings.IndexByte(s, 'T')
+			}
+			if dtSepIdx < 0 || dtSepIdx == len(s)-1 {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			dateStr := s[:dtSepIdx]
+			timeStr := s[dtSepIdx+1:]
+
+			// Parse date: find second occurrence of dateSep
+			p2 := 5 + strings.IndexByte(dateStr[5:], dateSep)
+			if p2 < 5 || p2 >= len(dateStr)-1 {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			var num int64
+			num, err = strconv.ParseInt(dateStr[:4], 10, 32)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			year = int32(num)
+			unum, err = strconv.ParseUint(dateStr[5:p2], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			month = uint8(unum)
+			unum, err = strconv.ParseUint(dateStr[p2+1:], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			day = uint8(unum)
+			if !ValidDate(year, month, day) {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+
+			// Parse time: split off microseconds
+			dotIdx := strings.IndexByte(timeStr, '.')
+			hmsStr := timeStr
+			if dotIdx >= 0 {
+				hmsStr = timeStr[:dotIdx]
+			}
+			c1 := strings.IndexByte(hmsStr, ':')
+			if c1 < 0 {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			c2 := c1 + 1 + strings.IndexByte(hmsStr[c1+1:], ':')
+			var secStr string
+			if c2 <= c1 {
+				// only h:mm — treat seconds as "00"
+				if len(hmsStr)-c1-1 == 0 {
+					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				}
+				secStr = "00"
+			} else {
+				secStr = hmsStr[c2+1:]
+				if secStr == "" {
+					secStr = "00"
+				}
+			}
+			unum, err = strconv.ParseUint(hmsStr[:c1], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			hour = uint8(unum)
+			end := c2
+			if c2 <= c1 {
+				end = len(hmsStr)
+			}
+			unum, err = strconv.ParseUint(hmsStr[c1+1:end], 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			minute = uint8(unum)
+			unum, err = strconv.ParseUint(secStr, 10, 8)
+			if err != nil {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			second = uint8(unum)
+			if !ValidTimeInDay(hour, minute, second) {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
+			if dotIdx >= 0 {
+				if dotIdx == len(timeStr)-1 {
+					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				}
+				msec, carry, err = getMsec(timeStr[dotIdx+1:], scale)
+				if err != nil {
+					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				}
+			}
 		}
 	} else {
 		year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
@@ -203,6 +311,28 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 	return result, nil
 }
 
+func isZeroDatetimeString(s string) bool {
+	base := s
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		base = s[:dot]
+		fraction := s[dot+1:]
+		if fraction == "" || !isAllDigit(fraction) {
+			return false
+		}
+		for i := range fraction {
+			if fraction[i] != '0' {
+				return false
+			}
+		}
+	}
+	switch base {
+	case "0000-00-00", "00000000", "0000-00-00 00:00:00", "0000-00-00T00:00:00", "00000000000000":
+		return true
+	default:
+		return false
+	}
+}
+
 // validTimeInDay return true if hour, minute and second can be a time during a day
 func ValidTimeInDay(h, m, s uint8) bool {
 	if h < minHourInDay || h > maxHourInDay {
@@ -218,6 +348,9 @@ func ValidTimeInDay(h, m, s uint8) bool {
 }
 
 func (dt Datetime) UnixTimestamp(loc *time.Location) int64 {
+	if dt == ZeroDatetime {
+		return -1
+	}
 	return dt.ConvertToGoTime(loc).Unix()
 }
 
@@ -245,28 +378,86 @@ func UTC() Datetime {
 }
 
 func (dt Datetime) ToDate() Date {
+	if dt == ZeroDatetime {
+		return ZeroDate
+	}
 	return Date(dt.sec() / SecsPerDay)
 }
 
 // We need to truncate the part after scale position when cast
 // between different scale.
 func (dt Datetime) ToTime(scale int32) Time {
-	if scale == 6 {
-		return Time(dt % microSecsPerDay)
+	// Get today's date (the base date used when converting TIME to DATETIME)
+	todayDate := Today(time.UTC)
+	todayDatetime := todayDate.ToDatetime()
+
+	// Get the date portion of the datetime
+	datePart := dt.ToDate()
+	baseDatetime := datePart.ToDatetime()
+
+	// Calculate time difference from the base date
+	// If the datetime's date is today or tomorrow (within 1 day), use today as base
+	// This preserves times > 24 hours that came from ADDTIME with TIME inputs
+	var timeDiff int64
+	dateDiff := int64(datePart) - int64(todayDate)
+	if dateDiff >= 0 && dateDiff <= 1 {
+		// Date is today or tomorrow, calculate from today's date
+		timeDiff = int64(dt) - int64(todayDatetime)
+	} else {
+		// Date is far from today, use the date portion of the datetime
+		timeDiff = int64(dt) - int64(baseDatetime)
 	}
 
-	// truncate the date part
-	ms := dt % microSecsPerDay
+	// Time type only supports up to 6 digits of microsecond precision
+	// For scale > 6, use scale 6 (full microsecond precision)
+	if scale >= 6 {
+		return Time(timeDiff)
+	}
 
-	base := ms / scaleVal[scale]
-	if ms%scaleVal[scale]/scaleVal[scale+1] >= 5 { // check carry
+	// truncate the time part
+	scaleValInt := int64(scaleVal[scale])
+	base := timeDiff / scaleValInt
+	if scale < 6 && timeDiff%scaleValInt/int64(scaleVal[scale+1]) >= 5 { // check carry
 		base += 1
 	}
 
-	return Time(base * scaleVal[scale])
+	return Time(base * scaleValInt)
+}
+
+// TruncateToScale truncates a datetime to the given scale (0-6).
+// Scale represents fractional seconds precision:
+//   - 0: seconds (no fractional part)
+//   - 1-5: fractional seconds with corresponding precision
+//   - 6: microseconds (full precision, no truncation)
+//   - >6: treated as scale 6 (full precision)
+func (dt Datetime) TruncateToScale(scale int32) Datetime {
+	if dt == ZeroDatetime {
+		return ZeroDatetime
+	}
+	// For scale >= 6, return full precision (no truncation)
+	if scale >= 6 {
+		return dt
+	}
+
+	// Get the date part (seconds since epoch)
+	secPart := (dt / MicroSecsPerSec) * MicroSecsPerSec
+	// Get the fractional part (microseconds within the second)
+	microPart := dt % MicroSecsPerSec
+
+	divisor := scaleVal[scale]
+	base := microPart / divisor
+	// Round up if the next digit >= 5
+	if scale < 6 && microPart%divisor/scaleVal[scale+1] >= 5 {
+		base += 1
+	}
+
+	return secPart + base*divisor
 }
 
 func (dt Datetime) Clock() (hour, minute, sec int8) {
+	if dt == ZeroDatetime {
+		return 0, 0, 0
+	}
 	t := dt.sec() % SecsPerDay
 	hour = int8(t / SecsPerHour)
 	minute = int8(t % SecsPerHour / SecsPerMinute)
@@ -347,6 +538,12 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
 	var addMonth, addYear int64
 	switch its {
+	case MicroSecond:
+		// nums is already in microseconds, no conversion needed
+		// For time units (MicroSecond, Second, Minute, Hour), the addition won't change the date part
+		// so we can directly return the result without ValidDatetime check
+		newDate := dt + Datetime(nums)
+		return newDate, true
 	case Second:
 		nums *= MicroSecsPerSec
 	case Minute:
@@ -365,6 +562,11 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	case Year:
 		addYear = nums
+		return dt.AddDateTime(addMonth, addYear, timeType)
+	case Year_Month:
+		// Year_Month should be treated as Month (nums already represents months after NormalizeInterval)
+		// This handles the case where Year_Month type is directly passed without NormalizeInterval conversion
+		addMonth = nums
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	}
 
@@ -417,6 +619,9 @@ func (dt Datetime) ConvertToMonth(secondDt Datetime) int64 {
 }
 
 func (dt Datetime) MicroSec() int64 {
+	if dt == ZeroDatetime {
+		return 0
+	}
 	return int64(dt) % MicroSecsPerSec
 }
 
@@ -462,6 +667,9 @@ func (dt Datetime) YearWeek(mode int) (year int, week int) {
 }
 
 func (dt Datetime) ToTimestamp(loc *time.Location) Timestamp {
+	if dt == ZeroDatetime {
+		return ZeroTimestamp
+	}
 	return Timestamp(dt.ConvertToGoTime(loc).UnixMicro() + unixEpochMicroSecs)
 }
 

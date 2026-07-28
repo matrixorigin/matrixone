@@ -118,8 +118,8 @@ func applyAggPushdown(agg, join, leftChild *plan.Node, builder *QueryBuilder) {
 	//newGroupBy := DeepCopyExprList(agg.GroupBy)
 	newGroupBy := []*plan.Expr{DeepCopyExpr(filterTag(join.OnList[0], leftChildTag))}
 
-	newGroupTag := builder.genNewTag()
-	newAggTag := builder.genNewTag()
+	newGroupTag := builder.genNewBindTag()
+	newAggTag := builder.genNewBindTag()
 	newNodeID := builder.appendNode(
 		&plan.Node{
 			NodeType:    plan.Node_AGG,
@@ -127,6 +127,7 @@ func applyAggPushdown(agg, join, leftChild *plan.Node, builder *QueryBuilder) {
 			GroupBy:     newGroupBy,
 			AggList:     newAggList,
 			BindingTags: []int32{newGroupTag, newAggTag},
+			SpillMem:    builder.aggSpillMem,
 		},
 		builder.ctxByNode[join.NodeId])
 

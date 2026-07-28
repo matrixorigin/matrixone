@@ -19,12 +19,14 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 const (
 	CDCWatermarkErrMsgMaxLen = 256
 
 	CDCState_Running = "running"
+	CDCState_Pausing = "pausing"
 	CDCState_Paused  = "paused"
 	CDCState_Failed  = "failed"
 )
@@ -98,6 +100,11 @@ const (
 		"FROM `mo_catalog`.`mo_cdc_task` " +
 		"WHERE 1=1 AND account_id = %d"
 
+	CDCGetCdcTaskStateSqlTemplate = "SELECT " +
+		"state " +
+		"FROM `mo_catalog`.`mo_cdc_task` " +
+		"WHERE 1=1 AND account_id = %d AND task_id = '%s'"
+
 	CDCDeleteTaskSqlTemplate = "DELETE " +
 		"FROM " +
 		"`mo_catalog`.`mo_cdc_task` " +
@@ -116,6 +123,24 @@ const (
 		"WHERE " +
 		"1=1 AND account_id = %d AND task_id = '%s'"
 
+	CDCUpdateTaskStateAndErrMsgByStateSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = '%s', err_msg = '%s' " +
+		"WHERE " +
+		"1=1 AND account_id = %d AND task_id = '%s' AND state = '%s'"
+
+	CDCUpdateTaskStateByTaskIdSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = '%s' " +
+		"WHERE " +
+		"1=1 AND account_id = %d AND task_id = '%s'"
+
+	CDCUpdateTaskStateByTaskIdAndStateSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = '%s' " +
+		"WHERE " +
+		"1=1 AND account_id = %d AND task_id = '%s' AND state = '%s'"
+
 	CDCGetDataKeySqlTemplate = "SELECT " +
 		"encrypted_key " +
 		"FROM mo_catalog.mo_data_key " +
@@ -131,6 +156,12 @@ const (
 		"WHERE " +
 		"account_id = %d AND " +
 		"task_id = '%s'"
+
+	CDCDeleteOrphanWatermarkSqlTemplate = "DELETE w FROM " +
+		"`mo_catalog`.`mo_cdc_watermark` AS w " +
+		"LEFT JOIN `mo_catalog`.`mo_cdc_task` AS t " +
+		"ON t.account_id = w.account_id AND t.task_id = w.task_id " +
+		"WHERE w.account_id IN (%s) AND t.task_id IS NULL"
 
 	CDCGetTableWatermarkSqlTemplate = "SELECT " +
 		"watermark " +
@@ -152,6 +183,24 @@ const (
 		"WHERE " +
 		"account_id = %d AND " +
 		"task_id = '%s'"
+
+	CDCGetTableErrMsgSqlTemplate = "SELECT " +
+		"err_msg " +
+		"FROM " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"WHERE " +
+		"account_id = %d AND " +
+		"task_id = '%s' AND " +
+		"db_name = '%s' AND " +
+		"table_name = '%s'"
+
+	CDCClearTaskTableErrorsSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"SET err_msg = '' " +
+		"WHERE " +
+		"account_id = %d AND " +
+		"task_id = '%s' AND " +
+		"err_msg != ''"
 
 	CDCGetWatermarkWhereSqlTemplate = "SELECT " +
 		"%s " +
@@ -199,19 +248,83 @@ const (
 		"table_name = '%s'"
 
 	CDCCollectTableInfoSqlTemplate = "SELECT " +
-		" rel_id, " +
-		" relname, " +
-		" reldatabase_id, " +
-		" reldatabase, " +
-		" rel_createsql, " +
-		" account_id " +
+		" tbl.rel_id, " +
+		" tbl.relname, " +
+		" tbl.reldatabase_id, " +
+		" tbl.reldatabase, " +
+		" tbl.rel_createsql, " +
+		" tbl.account_id, " +
+		" tbl.`constraint` " +
+		"FROM `mo_catalog`.`mo_tables` tbl " +
+		"WHERE " +
+		" tbl.account_id IN (%s) " +
+		"%s" +
+		"%s" +
+		" AND tbl.relkind = '%s' " +
+		" AND tbl.reldatabase NOT IN (%s)"
+	CDCInsertMOISCPLogSqlTemplate = `REPLACE INTO mo_catalog.mo_iscp_log (` +
+		`account_id,` +
+		`table_id,` +
+		`job_name,` +
+		`job_id,` +
+		`job_spec,` +
+		`job_state,` +
+		`watermark,` +
+		`job_status,` +
+		`create_at,` +
+		`drop_at` +
+		`) VALUES (` +
+		`%d,` + // account_id
+		`%d,` + // table_id
+		`'%s',` + // job_name
+		`%d,` + // job_id
+		`'%s',` + // job_spec
+		`'%d',` + // job_state
+		`'%s',` + // watermark
+		`'%s',` + // job_status
+		`now(),` + // create_at
+		`null` + // drop_at
+		`)`
+	CDCUpdateMOISCPLogSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
+		`job_state = %d,` +
+		`watermark = '%s',` +
+		`job_status = '%s'` +
+		`WHERE` +
+		` account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'` +
+		`AND job_id = %d ` +
+		`AND job_state != 4 ` +
+		`AND  JSON_EXTRACT(job_status, '$.LSN') = '%d'`
+	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
+		`job_spec = '%s'` +
+		`WHERE` +
+		` account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'` +
+		`AND job_id = %d`
+	CDCUpdateMOISCPLogDropAtSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
+		`drop_at = now()` +
+		`WHERE` +
+		` account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'` +
+		`AND job_id = %d`
+	CDCDeleteMOISCPLogSqlTemplate = `DELETE FROM mo_catalog.mo_iscp_log WHERE ` +
+		`drop_at < '%s'`
+	CDCSelectMOISCPLogSqlTemplate        = `SELECT * from mo_catalog.mo_iscp_log`
+	CDCSelectMOISCPLogByTableSqlTemplate = `SELECT drop_at, job_id from mo_catalog.mo_iscp_log WHERE ` +
+		`account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'`
+	CDCGetTableIDTemplate = "SELECT " +
+		"rel_id, " +
+		"reldatabase_id " +
 		"FROM `mo_catalog`.`mo_tables` " +
 		"WHERE " +
-		" account_id IN (%s) " +
-		"%s" +
-		"%s" +
-		" AND relkind = '%s' " +
-		" AND reldatabase NOT IN (%s)"
+		" account_id = %d " +
+		" AND reldatabase = '%s' " +
+		" AND relname = '%s' "
 )
 
 const (
@@ -225,17 +338,32 @@ const (
 	CDCInsertWatermarkSqlTemplate_Idx               = 7
 	CDCGetWatermarkSqlTemplate_Idx                  = 8
 	CDCGetTableWatermarkSQL_Idx                     = 9
-	CDCUpdateWatermarkSQL_Idx                       = 10
-	CDCUpdateWatermarkErrMsgSQL_Idx                 = 11
-	CDCDeleteWatermarkSqlTemplate_Idx               = 12
-	CDCDeleteWatermarkByTableSqlTemplate_Idx        = 13
-	CDCGetDataKeySQL_Idx                            = 14
-	CDCCollectTableInfoSqlTemplate_Idx              = 15
-	CDCGetWatermarkWhereSqlTemplate_Idx             = 16
-	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 17
-	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 18
+	CDCGetTableErrMsgSQL_Idx                        = 10
+	CDCUpdateWatermarkSQL_Idx                       = 11
+	CDCUpdateWatermarkErrMsgSQL_Idx                 = 12
+	CDCDeleteWatermarkSqlTemplate_Idx               = 13
+	CDCDeleteWatermarkByTableSqlTemplate_Idx        = 14
+	CDCDeleteOrphanWatermarkSqlTemplate_Idx         = 15
+	CDCGetDataKeySQL_Idx                            = 16
+	CDCCollectTableInfoSqlTemplate_Idx              = 17
+	CDCGetWatermarkWhereSqlTemplate_Idx             = 18
+	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 19
+	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 20
+	CDCClearTaskTableErrorsSQL_Idx                  = 21
+	CDCInsertMOISCPLogSqlTemplate_Idx               = 22
+	CDCUpdateMOISCPLogSqlTemplate_Idx               = 23
+	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx         = 24
+	CDCDeleteMOISCPLogSqlTemplate_Idx               = 25
+	CDCSelectMOISCPLogSqlTemplate_Idx               = 26
+	CDCSelectMOISCPLogByTableSqlTemplate_Idx        = 27
+	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx        = 28
+	CDCGetTableIDTemplate_Idx                       = 29
+	CDCUpdateTaskStateByTaskIdSQL_Idx               = 30
+	CDCUpdateTaskStateByTaskIdAndStateSQL_Idx       = 31
+	CDCUpdateTaskStateAndErrMsgByStateSQL_Idx       = 32
+	CDCGetTaskStateSqlTemplate_Idx                  = 33
 
-	CDCSqlTemplateCount = 19
+	CDCSqlTemplateCount = 34
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -283,6 +411,19 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	CDCUpdateTaskStateAndErrMsgSQL_Idx: {
 		SQL: CDCUpdateTaskStateAndErrMsgSqlTemplate,
 	},
+	CDCUpdateTaskStateAndErrMsgByStateSQL_Idx: {
+		SQL: CDCUpdateTaskStateAndErrMsgByStateSqlTemplate,
+	},
+	CDCUpdateTaskStateByTaskIdSQL_Idx: {
+		SQL: CDCUpdateTaskStateByTaskIdSqlTemplate,
+	},
+	CDCUpdateTaskStateByTaskIdAndStateSQL_Idx: {
+		SQL: CDCUpdateTaskStateByTaskIdAndStateSqlTemplate,
+	},
+	CDCGetTaskStateSqlTemplate_Idx: {
+		SQL:         CDCGetCdcTaskStateSqlTemplate,
+		OutputAttrs: []string{"state"},
+	},
 	CDCInsertWatermarkSqlTemplate_Idx: {
 		SQL: CDCInsertWatermarkSqlTemplate,
 	},
@@ -301,6 +442,12 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"watermark",
 		},
 	},
+	CDCGetTableErrMsgSQL_Idx: {
+		SQL: CDCGetTableErrMsgSqlTemplate,
+		OutputAttrs: []string{
+			"err_msg",
+		},
+	},
 	CDCUpdateWatermarkSQL_Idx: {
 		SQL: CDCUpdateWatermarkSqlTemplate,
 	},
@@ -309,6 +456,9 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCDeleteWatermarkSqlTemplate_Idx: {
 		SQL: CDCDeleteWatermarkSqlTemplate,
+	},
+	CDCDeleteOrphanWatermarkSqlTemplate_Idx: {
+		SQL: CDCDeleteOrphanWatermarkSqlTemplate,
 	},
 	CDCDeleteWatermarkByTableSqlTemplate_Idx: {
 		SQL: CDCDeleteWatermarkByTableSqlTemplate,
@@ -326,6 +476,7 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"reldatabase",
 			"rel_createsql",
 			"account_id",
+			"constraint",
 		},
 	},
 	CDCGetWatermarkWhereSqlTemplate_Idx: {
@@ -336,6 +487,53 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx: {
 		SQL: CDCOnDuplicateUpdateWatermarkErrMsgTemplate,
+	},
+	CDCClearTaskTableErrorsSQL_Idx: {
+		SQL: CDCClearTaskTableErrorsSqlTemplate,
+	},
+	CDCInsertMOISCPLogSqlTemplate_Idx: {
+		SQL: CDCInsertMOISCPLogSqlTemplate,
+	},
+	CDCUpdateMOISCPLogSqlTemplate_Idx: {
+		SQL: CDCUpdateMOISCPLogSqlTemplate,
+	},
+	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx: {
+		SQL: CDCUpdateMOISCPLogDropAtSqlTemplate,
+	},
+	CDCDeleteMOISCPLogSqlTemplate_Idx: {
+		SQL: CDCDeleteMOISCPLogSqlTemplate,
+	},
+	CDCSelectMOISCPLogSqlTemplate_Idx: {
+		SQL: CDCSelectMOISCPLogSqlTemplate,
+		OutputAttrs: []string{
+			"account_id",
+			"table_id",
+			"job_name",
+			"job_id",
+			"job_spec",
+			"job_state",
+			"watermark",
+			"job_status",
+			"create_at",
+			"drop_at",
+		},
+	},
+	CDCSelectMOISCPLogByTableSqlTemplate_Idx: {
+		SQL: CDCSelectMOISCPLogByTableSqlTemplate,
+		OutputAttrs: []string{
+			"drop_at",
+			"job_id",
+		},
+	},
+	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx: {
+		SQL: CDCUpdateMOISCPLogJobSpecSqlTemplate,
+	},
+	CDCGetTableIDTemplate_Idx: {
+		SQL: CDCGetTableIDTemplate,
+		OutputAttrs: []string{
+			"rel_id",
+			"reldatabase_id",
+		},
 	},
 }
 
@@ -473,10 +671,55 @@ func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgSQL(
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCUpdateTaskStateAndErrMsgSQL_Idx].SQL,
+		escapeSQLString(state),
+		escapeSQLString(errMsg),
+		accountId,
+		escapeSQLString(taskId),
+	)
+}
+
+func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgByStateSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+	errMsg string,
+	currentState string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateTaskStateAndErrMsgByStateSQL_Idx].SQL,
+		escapeSQLString(state),
+		escapeSQLString(errMsg),
+		accountId,
+		escapeSQLString(taskId),
+		escapeSQLString(currentState),
+	)
+}
+
+func (b cdcSQLBuilder) UpdateTaskStateByTaskIdSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateTaskStateByTaskIdSQL_Idx].SQL,
 		state,
-		errMsg,
 		accountId,
 		taskId,
+	)
+}
+
+func (b cdcSQLBuilder) UpdateTaskStateByTaskIdAndStateSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+	currentState string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateTaskStateByTaskIdAndStateSQL_Idx].SQL,
+		state,
+		accountId,
+		taskId,
+		currentState,
 	)
 }
 
@@ -495,6 +738,29 @@ func (b cdcSQLBuilder) GetTaskIdSQL(
 		)
 	}
 	return sql
+}
+
+func (b cdcSQLBuilder) GetTaskStateSQL(
+	accountId uint64,
+	taskId string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCGetTaskStateSqlTemplate_Idx].SQL,
+		accountId,
+		escapeSQLString(taskId),
+	)
+}
+
+// ClearTaskTableErrorsSQL generates SQL to clear error messages for all tables in a task
+func (b cdcSQLBuilder) ClearTaskTableErrorsSQL(
+	accountId uint64,
+	taskId string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCClearTaskTableErrorsSQL_Idx].SQL,
+		accountId,
+		escapeSQLString(taskId),
+	)
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -542,7 +808,25 @@ func (b cdcSQLBuilder) DeleteWatermarkSQL(
 	)
 }
 
+func (b cdcSQLBuilder) DeleteOrphanWatermarkSQL() string {
+	return "DELETE w FROM `mo_catalog`.`mo_cdc_watermark` AS w " +
+		"LEFT JOIN `mo_catalog`.`mo_cdc_task` AS t " +
+		"ON t.account_id = w.account_id AND t.task_id = w.task_id " +
+		"WHERE t.task_id IS NULL"
+}
+
 func (b cdcSQLBuilder) GetWatermarkSQL(
+	accountId uint64,
+	taskId string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCGetWatermarkSqlTemplate_Idx].SQL,
+		accountId,
+		taskId,
+	)
+}
+
+func (b cdcSQLBuilder) GetTaskWatermarksSQL(
 	accountId uint64,
 	taskId string,
 ) string {
@@ -572,6 +856,21 @@ func (b cdcSQLBuilder) GetTableWatermarkSQL(
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCGetTableWatermarkSQL_Idx].SQL,
+		accountId,
+		taskId,
+		dbName,
+		tableName,
+	)
+}
+
+func (b cdcSQLBuilder) GetTableErrMsgSQL(
+	accountId uint64,
+	taskId string,
+	dbName string,
+	tableName string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCGetTableErrMsgSQL_Idx].SQL,
 		accountId,
 		taskId,
 		dbName,
@@ -658,6 +957,112 @@ func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkErrMsgSQL(
 }
 
 // ------------------------------------------------------------------------------------------------
+// Intra-System Change Propagation Log SQL
+// ------------------------------------------------------------------------------------------------
+
+func (b cdcSQLBuilder) ISCPLogInsertSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	jobSpec string,
+	jobState int8,
+	watermark types.TS,
+	jobStatus string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCInsertMOISCPLogSqlTemplate_Idx].SQL,
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+		jobSpec,
+		jobState,
+		watermark.ToString(),
+		jobStatus,
+	)
+}
+
+func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	newWatermark types.TS,
+	jobStatus string,
+	jobState int8,
+	expectPrevLSN uint64,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateMOISCPLogSqlTemplate_Idx].SQL,
+		jobState,
+		newWatermark.ToString(),
+		jobStatus,
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+		expectPrevLSN,
+	)
+}
+
+func (b cdcSQLBuilder) ISCPLogUpdateDropAtSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateMOISCPLogDropAtSqlTemplate_Idx].SQL,
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+	)
+}
+
+func (b cdcSQLBuilder) ISCPLogUpdateJobSpecSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	jobSpec string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx].SQL,
+		jobSpec,
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+	)
+}
+
+func (b cdcSQLBuilder) ISCPLogGCSQL(t time.Time) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCDeleteMOISCPLogSqlTemplate_Idx].SQL,
+		t.Format(time.DateTime),
+	)
+}
+
+func (b cdcSQLBuilder) ISCPLogSelectSQL() string {
+	return CDCSQLTemplates[CDCSelectMOISCPLogSqlTemplate_Idx].SQL
+}
+
+func (b cdcSQLBuilder) ISCPLogSelectByTableSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCSelectMOISCPLogByTableSqlTemplate_Idx].SQL,
+		accountID,
+		tableID,
+		jobName,
+	)
+}
+
+// ------------------------------------------------------------------------------------------------
 // Table Info SQL
 // ------------------------------------------------------------------------------------------------
 func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, tableNames string) string {
@@ -668,15 +1073,28 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 			if dbNames == "*" {
 				return ""
 			}
-			return " AND reldatabase IN (" + dbNames + ") "
+			return " AND tbl.reldatabase IN (" + dbNames + ") "
 		}(),
 		func() string {
 			if tableNames == "*" {
 				return ""
 			}
-			return " AND relname IN (" + tableNames + ") "
+			return " AND tbl.relname IN (" + tableNames + ") "
 		}(),
 		catalog.SystemOrdinaryRel,
 		AddSingleQuotesJoin(catalog.SystemDatabases),
+	)
+}
+
+func (b cdcSQLBuilder) GetTableIDSQL(
+	accountID uint32,
+	dbName string,
+	tableName string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCGetTableIDTemplate_Idx].SQL,
+		accountID,
+		dbName,
+		tableName,
 	)
 }

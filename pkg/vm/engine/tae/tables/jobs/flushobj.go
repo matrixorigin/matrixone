@@ -17,14 +17,13 @@ package jobs
 import (
 	"context"
 	"math/rand"
+	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -47,8 +46,7 @@ type flushObjTask struct {
 	createAt    time.Time
 	partentTask string
 
-	stats objectio.ObjectStats
-	done  bool
+	mu sync.Mutex
 }
 
 func NewFlushObjTask(
@@ -88,6 +86,20 @@ func NewFlushObjTask(
 func (task *flushObjTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushObjTask) Execute(ctx context.Context) (err error) {
+	task.mu.Lock()
+	data := task.data
+	task.data = nil
+	task.mu.Unlock()
+	if data == nil {
+		// Parent aborted this task before it started.
+		return nil
+	}
+	defer func() {
+		if data != nil {
+			data.Close()
+		}
+	}()
+
 	if v := ctx.Value(TestFlushBailoutPos1{}); v != nil {
 		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
 	}
@@ -95,12 +107,19 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	seg := task.meta.ID().Segment()
 	name := objectio.BuildObjectName(seg, 0)
 	task.name = name
-	writer, err := ioutil.NewBlockWriterNew(
+	cnBatch := containers.ToCNBatch(data)
+	arena := objectio.GetArena(objectio.ArenaSmall)
+	defer func() {
+		arena.Reset()
+		objectio.PutArena(arena)
+	}()
+	writer, err := ioutil.NewBlockWriterWithArena(
 		task.fs,
 		name,
 		task.schemaVer,
 		task.seqnums,
 		task.meta.IsTombstone,
+		arena,
 	)
 	if err != nil {
 		return err
@@ -120,21 +139,19 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 		} else if task.meta.GetSchema().HasSortKey() {
 			writer.SetSortKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 		}
-	}
-
-	cnBatch := containers.ToCNBatch(task.data)
-	for _, vec := range cnBatch.Vecs {
-		if vec == nil {
-			// this task has been canceled
-			return nil
+		if task.meta.GetSchema().HasFakePK() {
+			writer.SetFakePK(uint16(task.meta.GetSchema().GetPrimaryKey().Idx))
 		}
 	}
+
 	dataRows := cnBatch.RowCount()
 	inst := time.Now()
 	_, err = writer.WriteBatch(cnBatch)
 	if err != nil {
 		return err
 	}
+	data.Close()
+	data = nil
 	copyT := time.Since(inst)
 	inst = time.Now()
 	task.blocks, _, err = writer.Sync(ctx)
@@ -153,11 +170,6 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			common.AnyField("data-rows", dataRows),
 		)
 	}
-	task.stats = writer.GetObjectStats()
-
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Block.Flush.Add(1)
-	})
 	task.stat = writer.Stats()
 	return err
 }
@@ -166,17 +178,12 @@ func (task *flushObjTask) release() {
 	if task == nil {
 		return
 	}
-	if !task.done {
-		ctx, cancel := context.WithTimeoutCause(
-			context.Background(),
-			10*time.Second,
-			moerr.CauseReleaseFlushObjTasks,
-		)
-		defer cancel()
-		task.WaitDone(ctx)
-	}
-
-	if task.data != nil {
-		task.data.Close()
+	task.mu.Lock()
+	data := task.data
+	task.data = nil
+	task.mu.Unlock()
+	if data != nil {
+		// Only pending data can be released here; running tasks own their data.
+		data.Close()
 	}
 }

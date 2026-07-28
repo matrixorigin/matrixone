@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"os"
 	"path"
 	"strings"
 )
@@ -42,6 +43,7 @@ func SubPath(upstream FileService, path string) FileService {
 }
 
 var _ FileService = new(subPathFS)
+var _ ObjectCopier = new(subPathFS)
 
 func (s *subPathFS) Name() string {
 	return s.name
@@ -143,7 +145,36 @@ func (s *subPathFS) Cost() *CostAttr {
 	return s.upstream.Cost()
 }
 
+func (s *subPathFS) CopyObject(
+	ctx context.Context,
+	srcFS FileService,
+	srcPath string,
+	dstPath string,
+) (bool, error) {
+	dst, err := s.toUpstreamPath(dstPath)
+	if err != nil {
+		return false, err
+	}
+	copier, ok := s.upstream.(ObjectCopier)
+	if !ok {
+		return false, nil
+	}
+	return copier.CopyObject(ctx, srcFS, srcPath, dst)
+}
+
 var _ MutableFileService = new(subPathFS)
+
+func (s *subPathFS) EnsureDir(ctx context.Context, filePath string) error {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return err
+	}
+	fs, ok := s.upstream.(MutableFileService)
+	if !ok {
+		panic(fmt.Sprintf("%T does not implement MutableFileService", s.upstream))
+	}
+	return fs.EnsureDir(ctx, p)
+}
 
 func (s *subPathFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
 	p, err := s.toUpstreamPath(filePath)
@@ -155,4 +186,60 @@ func (s *subPathFS) NewMutator(ctx context.Context, filePath string) (Mutator, e
 		panic(fmt.Sprintf("%T does not implement MutableFileService", s.upstream))
 	}
 	return fs.NewMutator(ctx, p)
+}
+
+func (s *subPathFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	fs, ok := s.upstream.(MutableFileService)
+	if !ok {
+		panic(fmt.Sprintf("%T does not implement MutableFileService", s.upstream))
+	}
+
+	return fs.OpenFile(ctx, p)
+}
+
+func (s *subPathFS) CreateFile(ctx context.Context, filePath string) (*os.File, error) {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	fs, ok := s.upstream.(MutableFileService)
+	if !ok {
+		panic(fmt.Sprintf("%T does not implement MutableFileService", s.upstream))
+	}
+
+	return fs.CreateFile(ctx, p)
+}
+
+func (s *subPathFS) RemoveFile(ctx context.Context, filePath string) error {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return err
+	}
+
+	fs, ok := s.upstream.(MutableFileService)
+	if !ok {
+		panic(fmt.Sprintf("%T does not implement MutableFileService", s.upstream))
+	}
+
+	return fs.RemoveFile(ctx, p)
+}
+
+func (s *subPathFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	fs, ok := s.upstream.(MutableFileService)
+	if !ok {
+		panic(fmt.Sprintf("%T does not implement MutableFileService", s.upstream))
+	}
+
+	return fs.CreateAndRemoveFile(ctx, p)
 }

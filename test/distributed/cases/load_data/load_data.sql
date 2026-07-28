@@ -206,8 +206,11 @@ col5 varchar(255),
 col6 text,
 PRIMARY KEY (`col1`)
 );
+set @old_sql_mode = @@sql_mode;
+set sql_mode = concat_ws(',', @@sql_mode, 'NO_AUTO_VALUE_ON_ZERO');
 load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
 select * from test_table;
+set sql_mode = @old_sql_mode;
 drop table test_table;
 drop database ssb;
 -- @session
@@ -295,10 +298,10 @@ drop table if exists test06;
 create table test06(col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test06;
-load data local infile '$resources_local/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+load data local infile '$resources/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test06;
 delete from test06;
-load data local infile {"filepath"="$resources_local/load_data/test_enclosed_by01.csv", "compression"='', "format"='csv'}  into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+load data local infile {"filepath"="$resources/load_data/test_enclosed_by01.csv", "compression"='', "format"='csv'}  into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test06;
 drop table test06;
 
@@ -402,34 +405,34 @@ drop table load_data_t4;
 
 drop table if exists load_data_t5;
 create table load_data_t5(col1 int, col2 int, col3 int);
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
+LOAD DATA local infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (@col1, col2);
 select * from load_data_t5;
 delete from load_data_t5;
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, col2);
+LOAD DATA local infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' (col1, col2);
 select * from load_data_t5;
 delete from load_data_t5;
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+LOAD DATA local infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
 select * from load_data_t5;
 delete from load_data_t5;
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(col1, @col2);
+LOAD DATA local infile '$resources/load_data/test_columnlist_04.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(col1, @col2);
 select * from load_data_t5;
 delete from load_data_t5;
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+LOAD DATA local infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
 select * from load_data_t5;
 delete from load_data_t5;
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(@col1, col2);
+LOAD DATA local infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t5 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'(@col1, col2);
 select * from load_data_t5;
 drop table load_data_t5;
 
 drop table if exists load_data_t6;
 create table load_data_t6(col1 int);
-LOAD DATA local infile '$resources_local/load_data/test_columnlist_03.csv' into table load_data_t6 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+LOAD DATA local infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t6 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
 select * from load_data_t6;
 drop table load_data_t6;
 
 drop table if exists load_data_t7;
 create table load_data_t7 (col1 varchar(20), col2 varchar(20), col3 varchar(20));
-load data local infile '$resources_local/load_data/test_escaped_by03.csv' into table load_data_t7 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+load data local infile '$resources/load_data/test_escaped_by03.csv' into table load_data_t7 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from load_data_t7;
 delete from load_data_t7;
 load data infile '$resources/load_data/test_escaped_by03.csv' into table load_data_t7 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
@@ -455,6 +458,12 @@ drop database test_load_db;
 
 -- @session
 drop account test_load;
+
+-- These historical LOAD fixtures intentionally load values wider than the target
+-- CHAR/VARCHAR columns and rely on the legacy lenient (truncating) behavior. Run
+-- them under non-strict sql_mode so strict-mode width rejection does not change
+-- their expected results.
+set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY";
 
 drop table if exists load_data_t9;
 create table load_data_t9(col1 int, col2 varchar(100), col3 varchar(100));
@@ -607,3 +616,36 @@ delete from load_data_0303;
 LOAD DATA INFILE '$resources/load_data/test_parse_newline.csv' INTO TABLE load_data_0303 FIELDS TERMINATED BY ',';
 select count(*) from load_data_0303;
 drop table load_data_0303;
+set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
+
+drop database if exists test;
+create database test;
+use test;
+
+create table t1(a bigint primary key, b vecf32(3), c varchar(10), d double);
+
+insert into t1 values(1, "[-1,-1,-1]", "aaaa", 1.213);
+insert into t1 values(2, "[-1, -1, 0]", "bbbb", 11.213);
+insert into t1 values(3, "[1,1,1]", "cccc", 111.213);
+
+select count(*) from t1;
+
+select * from t1 into outfile '$resources/into_outfile/load_data/t1.csv';
+truncate table t1;
+load data infile '$resources/into_outfile/load_data/t1.csv' into table t1 ignore 1 lines;
+select count(*) from t1;
+
+
+create table t2 (a int primary key, b json);
+
+insert into t2 values(1, '{"key1":"你好\\t不\\r好\\f呀\\n\\\\"}');
+insert into t2 values(2, '{"key2":"谢谢\\t你，\\r我非常\\f好\\n\\\\"}');
+select * from t2 order by a asc;
+
+select * from t2 into outfile '$resources/into_outfile/load_data/t2.csv';
+truncate table t2;
+
+load data infile '$resources/into_outfile/load_data/t2.csv' into table t2 ignore 1 lines;
+select * from t2 order by a asc;
+
+drop database test;

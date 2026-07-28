@@ -35,8 +35,12 @@ drop table t1;
 #EXTREME VALUE
 create table t1(a int);
 select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
+explain analyze select count(*) from t1;
+
 insert into t1 values(null),(null),(null),(null);
 select count(*) from t1;
+select count(a) from t1;
 drop table t1;
 
 
@@ -95,6 +99,12 @@ select count(*) from t1 where a >= 10;
 select count(a) from t1 where a = 1;
 select count(a) from t1 where a = 100;
 select count(a) from t1 where a >= 10;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
+explain analyze select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)",true)
+explain analyze select count(a) from t1;
+-- @regex("(?s)Table Scan.*Filter Cond",true)
+explain analyze select count(a) from t1 where a = 1;
 
 
 
@@ -109,7 +119,7 @@ CREATE TABLE t1 (d DATETIME, i INT);
 #INSERT INTO t1 SELECT NOW(), 1;
 INSERT INTO t1 SELECT "2021-10-23 10:01:01", 1;
 SELECT COUNT(i), i, COUNT(i)*i FROM t1 GROUP BY i;
-SELECT COUNT(i), (i+0), COUNT(i)*(i+0) FROM t1 GROUP BY i; 
+SELECT COUNT(i), (i+0), COUNT(i)*(i+0) FROM t1 GROUP BY i;
 DROP TABLE t1;
 
 
@@ -125,6 +135,11 @@ insert into t1 values (2,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
 insert into t1 values (3,1);
 select a,count(b), sum(b), avg(b), std(b), min(b), max(b), bit_and(b), bit_or(b) from t1 group by a;
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\(t1\.b\)",true)
+explain analyze select count(b) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
+explain analyze select count(*) from t1;
+
 drop table t1;
 
 
@@ -233,14 +248,58 @@ SELECT a, AVG( b) AS average FROM t1 GROUP BY a HAVING average > 50;
 SELECT a,COUNT(DISTINCT b) FROM t1 GROUP BY a HAVING COUNT(DISTINCT b) > 50;
 SELECT DISTINCT a, SUM( b) FROM t1 GROUP BY a HAVING SUM( b) > 50;
 SELECT DISTINCT a, AVG( b) FROM t1 GROUP BY a HAVING AVG( b) > 50;
+select count(distinct(a, b)) from t1;
 DROP TABLE t1;
 
 CREATE TABLE t1 (a INT);
 INSERT INTO t1 SELECT result FROM generate_series(1,100000) g;
 SELECT COUNT(*) FROM t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
+explain analyze SELECT COUNT(*) FROM t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\(t1\.a\)",true)
+explain analyze SELECT COUNT(a) FROM t1;
+
 DELETE FROM t1 WHERE a>50000;
 SELECT COUNT(*) FROM t1;
 SELECT COUNT(a) FROM t1;
 DELETE FROM t1 WHERE a%2=1;
 SELECT COUNT(*) FROM t1;
 DROP TABLE t1;
+
+# COUNT(DISTINCT expr1, expr2) — multi-column distinct count
+create table t_count_distinct_multi(g int, v int, txt varchar(8));
+insert into t_count_distinct_multi values
+  (null, null, 'n1'),
+  (null, 10,   'n2'),
+  (1,    null, 'a'),
+  (1,    5,    'b'),
+  (1,    5,    null),
+  (2,    null, null),
+  (2,    7,    'c'),
+  (3,    null, null);
+
+select count(distinct g, v) as cnt_g_v,
+       count(distinct g, txt) as cnt_g_txt
+from t_count_distinct_multi;
+
+select count(distinct g, v) as cnt_g_v
+from t_count_distinct_multi
+where g = 1;
+
+# Tuple syntax with multiple aggregates (regression: tuple must be expanded in binder, not just in optimizeDistinctAgg)
+select count(distinct (g, v)), count(*) from t_count_distinct_multi;
+select txt, count(distinct (g, v)), count(*) from t_count_distinct_multi group by txt order by txt;
+select count(distinct (g, v)), count(distinct g, v) from t_count_distinct_multi;
+
+# NULL literal argument: a row with any NULL column is skipped, so all count to 0
+select count(distinct null, 1) as c1, count(distinct 1, null) as c2, count(distinct null, null) as c3;
+
+# Multi-arg / tuple COUNT is only valid with DISTINCT; these must fail
+select count((g, v)) from t_count_distinct_multi;
+select count(g, v) over () from t_count_distinct_multi;
+select count((g, v)) over () from t_count_distinct_multi;
+
+# A multi-column row subquery is not a valid distinct key; reject, do not silently drop columns
+select count(distinct (select g, v from t_count_distinct_multi limit 1)) from t_count_distinct_multi;
+
+drop table t_count_distinct_multi;

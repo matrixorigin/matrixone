@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"iter"
 	"os"
@@ -80,9 +81,11 @@ func (d *diskObjectStorage) Delete(ctx context.Context, keys ...string) (err err
 
 	for _, key := range keys {
 		path := filepath.Join(d.path, key)
-		_ = os.Remove(path)
+		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+			err = errors.Join(err, removeErr)
+		}
 	}
-	return nil
+	return err
 }
 
 func (d *diskObjectStorage) Exists(ctx context.Context, key string) (bool, error) {
@@ -176,6 +179,7 @@ func (d *diskObjectStorage) Read(ctx context.Context, key string, min *int64, ma
 		}
 		return nil, err
 	}
+	defer closeOnError(&err, f)
 
 	var reader io.Reader
 	reader = f
@@ -201,9 +205,21 @@ func (d *diskObjectStorage) Read(ctx context.Context, key string, min *int64, ma
 		reader = io.LimitReader(reader, limit)
 	}
 
+	adviseOffset := int64(0)
+	adviseLength := int64(0)
+	if min != nil {
+		adviseOffset = *min
+	}
+	if max != nil {
+		adviseLength = *max - adviseOffset
+	}
+
 	return &readCloser{
-		r:         reader,
-		closeFunc: f.Close,
+		r: reader,
+		closeFunc: func() error {
+			fadviseDontNeed(f, adviseOffset, adviseLength)
+			return f.Close()
+		},
 	}, nil
 }
 
@@ -243,6 +259,23 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 	if err != nil {
 		return err
 	}
+	tempPath := tempFile.Name()
+	tempClosed := false
+	tempRenamed := false
+	defer func() {
+		var cleanupErr error
+		if !tempClosed {
+			cleanupErr = tempFile.Close()
+		}
+		if !tempRenamed {
+			if removeErr := os.Remove(tempPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				cleanupErr = errors.Join(cleanupErr, removeErr)
+			}
+		}
+		if cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
 
 	n, err := io.Copy(
 		tempFile,
@@ -256,6 +289,11 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 		return moerr.NewSizeNotMatchNoCtx(key)
 	}
 
+	if err := tempFile.Sync(); err != nil {
+		return err
+	}
+	fadviseDontNeed(tempFile, 0, 0)
+	tempClosed = true
 	if err := tempFile.Close(); err != nil {
 		return err
 	}
@@ -271,6 +309,7 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 	if err := os.Rename(tempFile.Name(), path); err != nil {
 		return err
 	}
+	tempRenamed = true
 
 	return nil
 }

@@ -66,6 +66,7 @@ const (
 	T_datetime  T = 52
 	T_timestamp T = 53
 	T_interval  T = 54
+	T_year      T = 55
 
 	// string family
 	T_char      T = 60
@@ -75,6 +76,10 @@ const (
 	T_binary    T = 64
 	T_varbinary T = 65
 	T_enum      T = 66
+	T_geometry  T = 67
+	// T_geometry32 stores geometry as float32-coordinate WKB (the GEOMETRY32
+	// type); T_geometry uses float64. Both are varlena, binary-charset types.
+	T_geometry32 T = 68
 
 	// blobs
 	T_blob     T = 70
@@ -93,9 +98,46 @@ const (
 	// Array/Vector family
 	T_array_float32 T = 224 // In SQL , it is vecf32
 	T_array_float64 T = 225 // In SQL , it is vecf64
+	T_array_bf16    T = 226 // In SQL , it is vecbf16 (bfloat16)
+	T_array_float16 T = 227 // In SQL , it is vecf16  (IEEE fp16/half)
+	T_array_int8    T = 228 // In SQL , it is vecint8  (int8)
+	T_array_uint8   T = 229 // In SQL , it is vecuint8 (uint8)
 
 	//note: max value of uint8 is 255
 )
+
+// Canonical lowercase SQL type names for the array/vector types — the spelling
+// used in DDL and CAST (`col vecf32(4)`, `cast(x as vecint8(4))`) and recognized
+// by the parser keyword table. T.String() returns the uppercase display form;
+// these are the single source of truth for the lowercase SQL spelling.
+const (
+	ArrayFloat32SQLName = "vecf32"
+	ArrayFloat64SQLName = "vecf64"
+	ArrayBF16SQLName    = "vecbf16"
+	ArrayFloat16SQLName = "vecf16"
+	ArrayInt8SQLName    = "vecint8"
+	ArrayUint8SQLName   = "vecuint8"
+)
+
+// ArraySQLName returns the lowercase SQL type name for an array element type
+// (e.g. T_array_float32 -> "vecf32"), or "" if t is not an array/vector type.
+func (t T) ArraySQLName() string {
+	switch t {
+	case T_array_float32:
+		return ArrayFloat32SQLName
+	case T_array_float64:
+		return ArrayFloat64SQLName
+	case T_array_bf16:
+		return ArrayBF16SQLName
+	case T_array_float16:
+		return ArrayFloat16SQLName
+	case T_array_int8:
+		return ArrayInt8SQLName
+	case T_array_uint8:
+		return ArrayUint8SQLName
+	}
+	return ""
+}
 
 const (
 	TxnTsSize     = 12
@@ -330,7 +372,7 @@ type BuiltinNumber interface {
 }
 
 type Times interface {
-	Date | Time | Datetime | Timestamp
+	Date | Time | Datetime | Timestamp | MoYear
 }
 
 type OrderedT interface {
@@ -342,7 +384,7 @@ type Decimal interface {
 }
 
 type DecimalWithFormat interface {
-	Decimal64 | Decimal128
+	Decimal64 | Decimal128 | Decimal256
 	Format(scale int32) string
 }
 
@@ -358,6 +400,16 @@ type FixedSizeT interface {
 
 type RealNumbers interface {
 	constraints.Float
+}
+
+// ArrayElement is the set of element types that can back a vector column.
+// It is used ONLY by the storage / serialization / accessor / display /
+// cast-plumbing layer (pure byte reinterpretation + formatting). All math
+// kernels stay on RealNumbers; narrow types reach them via a float32 bridge.
+// Do NOT widen RealNumbers to include these — int8 is not a float and
+// BF16/Float16 have no native arithmetic.
+type ArrayElement interface {
+	~float32 | ~float64 | BF16 | Float16 | int8 | uint8
 }
 
 type FixedSizeTExceptStrType interface {
@@ -397,6 +449,7 @@ var Types = map[string]T{
 	"time":      T_time,
 	"timestamp": T_timestamp,
 	"interval":  T_interval,
+	"year":      T_year,
 
 	"char":    T_char,
 	"varchar": T_varchar,
@@ -406,11 +459,13 @@ var Types = map[string]T{
 
 	"enum": T_enum,
 
-	"json":     T_json,
-	"text":     T_text,
-	"datalink": T_datalink,
-	"blob":     T_blob,
-	"uuid":     T_uuid,
+	"json":       T_json,
+	"geometry":   T_geometry,
+	"geometry32": T_geometry32,
+	"text":       T_text,
+	"datalink":   T_datalink,
+	"blob":       T_blob,
+	"uuid":       T_uuid,
 
 	"transaction timestamp": T_TS,
 	"rowid":                 T_Rowid,
@@ -418,6 +473,10 @@ var Types = map[string]T{
 
 	"array float32": T_array_float32,
 	"array float64": T_array_float64,
+	"array bf16":    T_array_bf16,
+	"array float16": T_array_float16,
+	"array int8":    T_array_int8,
+	"array uint8":   T_array_uint8,
 }
 
 func New(oid T, width, scale int32) Type {
@@ -432,7 +491,7 @@ func New(oid T, width, scale int32) Type {
 
 func CharsetType(oid T) uint8 {
 	switch oid {
-	case T_blob, T_varbinary, T_binary:
+	case T_blob, T_varbinary, T_binary, T_geometry, T_geometry32:
 		// binary charset
 		return 1
 	default:
@@ -527,7 +586,7 @@ func (t Type) IsNumeric() bool {
 
 func (t Type) IsTemporal() bool {
 	switch t.Oid {
-	case T_date, T_time, T_datetime, T_timestamp, T_interval:
+	case T_date, T_time, T_datetime, T_timestamp, T_interval, T_year:
 		return true
 	}
 	return false
@@ -557,8 +616,40 @@ func (t Type) DescString() string {
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	case T_decimal128:
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
+	case T_decimal256:
+		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
+	case T_array_float32:
+		return fmt.Sprintf("VECF32(%d)", t.Width)
+	case T_array_float64:
+		return fmt.Sprintf("VECF64(%d)", t.Width)
+	case T_array_bf16:
+		return fmt.Sprintf("VECBF16(%d)", t.Width)
+	case T_array_float16:
+		return fmt.Sprintf("VECF16(%d)", t.Width)
+	case T_array_int8:
+		return fmt.Sprintf("VECINT8(%d)", t.Width)
+	case T_array_uint8:
+		return fmt.Sprintf("VECUINT8(%d)", t.Width)
 	}
 	return t.Oid.String()
+}
+
+func (t Type) GetArrayElementSize() int {
+	switch t.Oid {
+	case T_array_float32:
+		return 4
+	case T_array_float64:
+		return 8
+	case T_array_bf16:
+		return 2
+	case T_array_float16:
+		return 2
+	case T_array_int8:
+		return 1
+	case T_array_uint8:
+		return 1
+	}
+	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown array type %d", t)))
 }
 
 func (t Type) Eq(b Type) bool {
@@ -589,6 +680,9 @@ func (t T) ToType() Type {
 		typ.Size = 4
 	case T_int64, T_datetime, T_time, T_timestamp:
 		typ.Size = 8
+	case T_year:
+		typ.Size = 2
+		typ.Width = 4
 	case T_uint8:
 		typ.Size = 1
 	case T_uint16:
@@ -618,7 +712,7 @@ func (t T) ToType() Type {
 		typ.Size = RowidSize
 	case T_Blockid:
 		typ.Size = BlockidSize
-	case T_json, T_blob, T_text, T_datalink:
+	case T_json, T_blob, T_text, T_datalink, T_geometry, T_geometry32:
 		typ.Size = VarlenaSize
 	case T_char:
 		typ.Size = VarlenaSize
@@ -626,7 +720,7 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
-	case T_array_float32, T_array_float64:
+	case T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8:
 		typ.Size = VarlenaSize
 		typ.Width = MaxArrayDimension
 	case T_binary:
@@ -698,6 +792,10 @@ func (t T) String() string {
 		return "VARBINARY"
 	case T_json:
 		return "JSON"
+	case T_geometry:
+		return "GEOMETRY"
+	case T_geometry32:
+		return "GEOMETRY32"
 	case T_tuple:
 		return "TUPLE"
 	case T_decimal64:
@@ -724,10 +822,20 @@ func (t T) String() string {
 		return "BLOCKID"
 	case T_interval:
 		return "INTERVAL"
+	case T_year:
+		return "YEAR"
 	case T_array_float32:
 		return "VECF32"
 	case T_array_float64:
 		return "VECF64"
+	case T_array_bf16:
+		return "VECBF16"
+	case T_array_float16:
+		return "VECF16"
+	case T_array_int8:
+		return "VECINT8"
+	case T_array_uint8:
+		return "VECUINT8"
 	case T_enum:
 		return "ENUM"
 	}
@@ -741,6 +849,10 @@ func (t T) OidString() string {
 		return "T_uuid"
 	case T_json:
 		return "T_json"
+	case T_geometry:
+		return "T_geometry"
+	case T_geometry32:
+		return "T_geometry32"
 	case T_bool:
 		return "T_bool"
 	case T_bit:
@@ -801,12 +913,22 @@ func (t T) OidString() string {
 		return "T_Blockid"
 	case T_interval:
 		return "T_interval"
+	case T_year:
+		return "T_year"
 	case T_enum:
 		return "T_enum"
 	case T_array_float32:
 		return "T_array_float32"
 	case T_array_float64:
 		return "T_array_float64"
+	case T_array_bf16:
+		return "T_array_bf16"
+	case T_array_float16:
+		return "T_array_float16"
+	case T_array_int8:
+		return "T_array_int8"
+	case T_array_uint8:
+		return "T_array_uint8"
 	}
 	return "unknown_type"
 }
@@ -826,6 +948,8 @@ func (t T) TypeLen() int {
 		return 4
 	case T_int64, T_datetime, T_time, T_timestamp:
 		return 8
+	case T_year:
+		return 2
 	case T_uint8:
 		return 1
 	case T_uint16:
@@ -838,7 +962,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -873,6 +997,8 @@ func (t T) FixedLength() int {
 		return 1
 	case T_int16, T_uint16:
 		return 2
+	case T_year:
+		return 2
 	case T_int32, T_uint32, T_date, T_float32:
 		return 4
 	case T_int64, T_uint64, T_datetime, T_time, T_float64, T_timestamp:
@@ -891,7 +1017,7 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
 		return -24
 	case T_enum:
 		return 2
@@ -908,7 +1034,7 @@ func (t T) IsOrdered() bool {
 	case T_int8, T_int16, T_int32, T_int64,
 		T_uint8, T_uint16, T_uint32, T_uint64,
 		T_float32, T_float64,
-		T_date, T_time, T_datetime, T_timestamp,
+		T_date, T_time, T_datetime, T_timestamp, T_year,
 		T_bit:
 		return true
 	default:
@@ -965,14 +1091,15 @@ func (t T) IsMySQLString() bool {
 }
 
 func (t T) IsDateRelate() bool {
-	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time {
+	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time || t == T_year {
 		return true
 	}
 	return false
 }
 
 func (t T) IsArrayRelate() bool {
-	if t == T_array_float32 || t == T_array_float64 {
+	if t == T_array_float32 || t == T_array_float64 ||
+		t == T_array_bf16 || t == T_array_float16 || t == T_array_int8 || t == T_array_uint8 {
 		return true
 	}
 	return false

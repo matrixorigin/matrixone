@@ -1,0 +1,1182 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package publication
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
+)
+
+const (
+	SubmitRetryTimes    = 1000
+	SubmitRetryDuration = time.Hour
+
+	StatsPrintInterval = 10 * time.Second
+)
+
+// GetChunkJobDuration holds duration info for a GetChunk job
+type GetChunkJobDuration struct {
+	ObjectName string
+	ChunkIndex int64
+	Duration   time.Duration
+}
+
+// WriteObjectJobDuration holds duration info for a WriteObject job
+type WriteObjectJobDuration struct {
+	ObjectName string
+	Size       int64
+	Duration   time.Duration
+}
+
+// JobStats holds statistics for job tracking using atomic counters for thread safety
+type JobStats struct {
+	FilterObjectPending   atomic.Int64
+	FilterObjectRunning   atomic.Int64
+	FilterObjectCompleted atomic.Int64
+
+	GetChunkPending   atomic.Int64
+	GetChunkRunning   atomic.Int64
+	GetChunkCompleted atomic.Int64
+
+	GetMetaPending   atomic.Int64
+	GetMetaRunning   atomic.Int64
+	GetMetaCompleted atomic.Int64
+
+	WriteObjectPending   atomic.Int64
+	WriteObjectRunning   atomic.Int64
+	WriteObjectCompleted atomic.Int64
+
+	// Top 3 longest GetChunk jobs
+	getChunkDurationMu   sync.Mutex
+	getChunkTopDurations []*GetChunkJobDuration
+
+	// Top 3 longest WriteObject jobs
+	writeObjectDurationMu   sync.Mutex
+	writeObjectTopDurations []*WriteObjectJobDuration
+}
+
+// Global job stats instance
+var globalJobStats = &JobStats{}
+
+// GetJobStats returns the global job stats
+func GetJobStats() *JobStats {
+	return globalJobStats
+}
+
+// IncrementFilterObjectPending increments the filter object pending counter
+func (s *JobStats) IncrementFilterObjectPending() {
+	s.FilterObjectPending.Add(1)
+}
+
+// IncrementFilterObjectRunning increments the filter object running counter and decrements pending
+func (s *JobStats) IncrementFilterObjectRunning() {
+	s.FilterObjectPending.Add(-1)
+	s.FilterObjectRunning.Add(1)
+}
+
+// DecrementFilterObjectRunning decrements the filter object running counter
+func (s *JobStats) DecrementFilterObjectRunning() {
+	s.FilterObjectRunning.Add(-1)
+	s.FilterObjectCompleted.Add(1)
+}
+
+// IncrementGetChunkPending increments the get chunk pending counter
+func (s *JobStats) IncrementGetChunkPending() {
+	s.GetChunkPending.Add(1)
+}
+
+// IncrementGetChunkRunning increments the get chunk running counter and decrements pending
+func (s *JobStats) IncrementGetChunkRunning() {
+	s.GetChunkPending.Add(-1)
+	s.GetChunkRunning.Add(1)
+}
+
+// DecrementGetChunkRunning decrements the get chunk running counter
+func (s *JobStats) DecrementGetChunkRunning() {
+	s.GetChunkRunning.Add(-1)
+	s.GetChunkCompleted.Add(1)
+}
+
+// IncrementGetMetaPending increments the get meta pending counter
+func (s *JobStats) IncrementGetMetaPending() {
+	s.GetMetaPending.Add(1)
+}
+
+// IncrementGetMetaRunning increments the get meta running counter and decrements pending
+func (s *JobStats) IncrementGetMetaRunning() {
+	s.GetMetaPending.Add(-1)
+	s.GetMetaRunning.Add(1)
+}
+
+// DecrementGetMetaRunning decrements the get meta running counter
+func (s *JobStats) DecrementGetMetaRunning() {
+	s.GetMetaRunning.Add(-1)
+	s.GetMetaCompleted.Add(1)
+}
+
+// IncrementWriteObjectPending increments the write object pending counter
+func (s *JobStats) IncrementWriteObjectPending() {
+	s.WriteObjectPending.Add(1)
+}
+
+// IncrementWriteObjectRunning increments the write object running counter and decrements pending
+func (s *JobStats) IncrementWriteObjectRunning() {
+	s.WriteObjectPending.Add(-1)
+	s.WriteObjectRunning.Add(1)
+}
+
+// DecrementWriteObjectRunning decrements the write object running counter
+func (s *JobStats) DecrementWriteObjectRunning() {
+	s.WriteObjectRunning.Add(-1)
+	s.WriteObjectCompleted.Add(1)
+}
+
+// RecordGetChunkDuration records a GetChunk job duration and keeps top 3 longest
+func (s *JobStats) RecordGetChunkDuration(objectName string, chunkIndex int64, duration time.Duration) {
+	s.getChunkDurationMu.Lock()
+	defer s.getChunkDurationMu.Unlock()
+
+	newEntry := &GetChunkJobDuration{
+		ObjectName: objectName,
+		ChunkIndex: chunkIndex,
+		Duration:   duration,
+	}
+
+	// Add new entry
+	s.getChunkTopDurations = append(s.getChunkTopDurations, newEntry)
+
+	// Sort by duration descending
+	for i := len(s.getChunkTopDurations) - 1; i > 0; i-- {
+		if s.getChunkTopDurations[i].Duration > s.getChunkTopDurations[i-1].Duration {
+			s.getChunkTopDurations[i], s.getChunkTopDurations[i-1] = s.getChunkTopDurations[i-1], s.getChunkTopDurations[i]
+		} else {
+			break
+		}
+	}
+
+	// Keep only top 3
+	if len(s.getChunkTopDurations) > 3 {
+		s.getChunkTopDurations = s.getChunkTopDurations[:3]
+	}
+}
+
+// GetTopGetChunkDurations returns a copy of top 3 longest GetChunk job durations
+func (s *JobStats) GetTopGetChunkDurations() []*GetChunkJobDuration {
+	s.getChunkDurationMu.Lock()
+	defer s.getChunkDurationMu.Unlock()
+
+	result := make([]*GetChunkJobDuration, len(s.getChunkTopDurations))
+	copy(result, s.getChunkTopDurations)
+	return result
+}
+
+// ResetTopGetChunkDurations resets the top durations (called after printing)
+func (s *JobStats) ResetTopGetChunkDurations() {
+	s.getChunkDurationMu.Lock()
+	defer s.getChunkDurationMu.Unlock()
+	s.getChunkTopDurations = nil
+}
+
+// RecordWriteObjectDuration records a WriteObject job duration and keeps top 3 longest
+func (s *JobStats) RecordWriteObjectDuration(objectName string, size int64, duration time.Duration) {
+	s.writeObjectDurationMu.Lock()
+	defer s.writeObjectDurationMu.Unlock()
+
+	newEntry := &WriteObjectJobDuration{
+		ObjectName: objectName,
+		Size:       size,
+		Duration:   duration,
+	}
+
+	// Add new entry
+	s.writeObjectTopDurations = append(s.writeObjectTopDurations, newEntry)
+
+	// Sort by duration descending
+	for i := len(s.writeObjectTopDurations) - 1; i > 0; i-- {
+		if s.writeObjectTopDurations[i].Duration > s.writeObjectTopDurations[i-1].Duration {
+			s.writeObjectTopDurations[i], s.writeObjectTopDurations[i-1] = s.writeObjectTopDurations[i-1], s.writeObjectTopDurations[i]
+		} else {
+			break
+		}
+	}
+
+	// Keep only top 3
+	if len(s.writeObjectTopDurations) > 3 {
+		s.writeObjectTopDurations = s.writeObjectTopDurations[:3]
+	}
+}
+
+// GetTopWriteObjectDurations returns a copy of top 3 longest WriteObject job durations
+func (s *JobStats) GetTopWriteObjectDurations() []*WriteObjectJobDuration {
+	s.writeObjectDurationMu.Lock()
+	defer s.writeObjectDurationMu.Unlock()
+
+	result := make([]*WriteObjectJobDuration, len(s.writeObjectTopDurations))
+	copy(result, s.writeObjectTopDurations)
+	return result
+}
+
+// ResetTopWriteObjectDurations resets the top durations (called after printing)
+func (s *JobStats) ResetTopWriteObjectDurations() {
+	s.writeObjectDurationMu.Lock()
+	defer s.writeObjectDurationMu.Unlock()
+	s.writeObjectTopDurations = nil
+}
+
+type Worker interface {
+	Submit(taskID string, lsn uint64, state int8) error
+	// Stop cancels running work and discards work that has not started.
+	Stop()
+	// RegisterSyncProtection registers a sync protection job for keepalive
+	RegisterSyncProtection(jobID string, ttlExpireTS int64)
+	// UnregisterSyncProtection unregisters a sync protection job
+	UnregisterSyncProtection(jobID string)
+	// GetSyncProtectionTTL returns the current TTL expiration timestamp for a job
+	GetSyncProtectionTTL(jobID string) int64
+}
+
+// FilterObjectWorker is the interface for filter object worker pool
+type FilterObjectWorker interface {
+	SubmitFilterObject(job Job) error
+	// Stop is cancel-and-drain, not graceful completion of queued jobs.
+	Stop()
+}
+
+// GetChunkWorker is the interface for get upstream chunk worker pool
+type GetChunkWorker interface {
+	SubmitGetChunk(job Job) error
+	// Stop is cancel-and-drain, not graceful completion of queued jobs.
+	Stop()
+}
+
+// WriteObjectWorker is the interface for write object worker pool
+type WriteObjectWorker interface {
+	SubmitWriteObject(job Job) error
+	// Stop is cancel-and-drain, not graceful completion of queued jobs.
+	Stop()
+}
+
+// GetChunkJobInfo is the interface for jobs that have object name and chunk index
+type GetChunkJobInfo interface {
+	GetObjectName() string
+	GetChunkIndex() int64
+}
+
+// WriteObjectJobInfo is the interface for jobs that have object name and size
+type WriteObjectJobInfo interface {
+	GetObjectName() string
+	GetObjectSize() int64
+}
+
+// syncProtectionEntry represents a registered sync protection job
+type syncProtectionEntry struct {
+	jobID       string
+	ttlExpireTS atomic.Int64
+}
+
+type worker struct {
+	cnUUID                   string
+	cnEngine                 engine.Engine
+	cnTxnClient              client.TxnClient
+	mp                       *mpool.MPool
+	upstreamSQLHelperFactory UpstreamSQLHelperFactory
+	taskChan                 chan *TaskContext
+	wg                       sync.WaitGroup
+	cancel                   context.CancelFunc
+	ctx                      context.Context
+	closed                   atomic.Bool
+	stopOnce                 sync.Once
+	admissions               workerAdmissionGate
+	filterObjectWorker       FilterObjectWorker
+	getChunkWorker           GetChunkWorker
+	writeObjectWorker        WriteObjectWorker
+
+	// Sync protection keepalive management
+	syncProtectionMu   sync.RWMutex
+	syncProtectionJobs map[string]*syncProtectionEntry
+}
+
+type TaskContext struct {
+	TaskID string
+	LSN    uint64
+}
+
+type workerAdmissionGate struct {
+	mu sync.RWMutex
+	wg sync.WaitGroup
+}
+
+// enter registers a sender before it can block. seal excludes new senders,
+// cancels blocked ones, and waits until no sender can arrive after draining.
+func (g *workerAdmissionGate) enter(closed *atomic.Bool) bool {
+	if closed.Load() {
+		return false
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if closed.Load() {
+		return false
+	}
+	g.wg.Add(1)
+	return true
+}
+
+func (g *workerAdmissionGate) leave() {
+	g.wg.Done()
+}
+
+func (g *workerAdmissionGate) seal(cancel context.CancelFunc) {
+	g.mu.Lock()
+	cancel()
+	g.mu.Unlock()
+	g.wg.Wait()
+}
+
+func doneChan(ctx context.Context) <-chan struct{} {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Done()
+}
+
+func rejectJob(job Job, workerName string) error {
+	err := moerr.NewInternalErrorNoCtxf("%s is closed", workerName)
+	if job, ok := job.(TerminalJob); ok {
+		job.Fail(err)
+	}
+	return err
+}
+
+func validateTerminalJob(job Job, workerName string) error {
+	if _, ok := job.(TerminalJob); !ok {
+		return moerr.NewInternalErrorNoCtxf(
+			"%s requires a job with terminal failure completion", workerName,
+		)
+	}
+	return nil
+}
+
+func failAcceptedJob(job Job, err error) {
+	// Submit validates this contract before the job can enter a queue.
+	job.(TerminalJob).Fail(err)
+}
+
+func NewWorker(
+	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	mp *mpool.MPool,
+	upstreamSQLHelperFactory UpstreamSQLHelperFactory,
+) Worker {
+	worker := &worker{
+		cnUUID:                   cnUUID,
+		cnEngine:                 cnEngine,
+		cnTxnClient:              cnTxnClient,
+		taskChan:                 make(chan *TaskContext, 10000),
+		mp:                       mp,
+		upstreamSQLHelperFactory: upstreamSQLHelperFactory,
+		filterObjectWorker:       NewFilterObjectWorker(),
+		getChunkWorker:           NewGetChunkWorker(),
+		writeObjectWorker:        NewWriteObjectWorker(),
+		syncProtectionJobs:       make(map[string]*syncProtectionEntry),
+	}
+	worker.ctx, worker.cancel = context.WithCancel(context.Background())
+	worker.start()
+	return worker
+}
+
+// start seals this worker generation before NewWorker publishes it. Every
+// goroutine that Stop owns is registered before any of them can outlive Stop.
+func (w *worker) start() {
+	workerThreads := GetPublicationWorkerThread()
+	w.wg.Add(workerThreads + 2)
+	for i := 0; i < workerThreads; i++ {
+		go func() {
+			defer w.wg.Done()
+			for {
+				select {
+				case <-w.ctx.Done():
+					return
+				case task := <-w.taskChan:
+					// Do not admit queued work after this generation is canceled.
+					select {
+					case <-w.ctx.Done():
+						return
+					default:
+					}
+					w.onItem(task)
+				}
+			}
+		}()
+	}
+	go func() {
+		defer w.wg.Done()
+		w.RunStatsPrinter()
+	}()
+	go func() {
+		defer w.wg.Done()
+		w.RunSyncProtectionKeepAlive()
+	}()
+}
+
+// RunStatsPrinter prints job stats every 10 seconds
+func (w *worker) RunStatsPrinter() {
+	ticker := time.NewTicker(StatsPrintInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-ticker.C:
+			stats := GetJobStats()
+			logutil.Info("ccpr-worker-stats",
+				zap.Int64("filter_object_pending", stats.FilterObjectPending.Load()),
+				zap.Int64("filter_object_running", stats.FilterObjectRunning.Load()),
+				zap.Int64("filter_object_completed", stats.FilterObjectCompleted.Load()),
+				zap.Int64("get_chunk_pending", stats.GetChunkPending.Load()),
+				zap.Int64("get_chunk_running", stats.GetChunkRunning.Load()),
+				zap.Int64("get_chunk_completed", stats.GetChunkCompleted.Load()),
+				zap.Int64("get_meta_pending", stats.GetMetaPending.Load()),
+				zap.Int64("get_meta_running", stats.GetMetaRunning.Load()),
+				zap.Int64("get_meta_completed", stats.GetMetaCompleted.Load()),
+				zap.Int64("write_object_pending", stats.WriteObjectPending.Load()),
+				zap.Int64("write_object_running", stats.WriteObjectRunning.Load()),
+				zap.Int64("write_object_completed", stats.WriteObjectCompleted.Load()),
+			)
+
+			// Print top 3 longest GetChunk jobs
+			topDurations := stats.GetTopGetChunkDurations()
+			if len(topDurations) > 0 {
+				fields := make([]zap.Field, 0, len(topDurations)*3)
+				for i, d := range topDurations {
+					idx := i + 1
+					fields = append(fields,
+						zap.String(fmt.Sprintf("object_name_%d", idx), d.ObjectName),
+						zap.Int64(fmt.Sprintf("chunk_index_%d", idx), d.ChunkIndex),
+						zap.Duration(fmt.Sprintf("duration_%d", idx), d.Duration),
+					)
+				}
+				logutil.Info("ccpr-worker-stats-top3-get-chunk-duration", fields...)
+			}
+
+			// Print top 3 longest WriteObject jobs
+			topWriteDurations := stats.GetTopWriteObjectDurations()
+			if len(topWriteDurations) > 0 {
+				fields := make([]zap.Field, 0, len(topWriteDurations)*3)
+				for i, d := range topWriteDurations {
+					idx := i + 1
+					fields = append(fields,
+						zap.String(fmt.Sprintf("object_name_%d", idx), d.ObjectName),
+						zap.Int64(fmt.Sprintf("size_%d", idx), d.Size),
+						zap.Duration(fmt.Sprintf("duration_%d", idx), d.Duration),
+					)
+				}
+				logutil.Info("ccpr-worker-stats-top3-write-object-duration", fields...)
+			}
+
+			// Reset top durations for next interval
+			stats.ResetTopGetChunkDurations()
+			stats.ResetTopWriteObjectDurations()
+		}
+	}
+}
+
+func (w *worker) Submit(taskID string, lsn uint64, state int8) error {
+	if !w.admissions.enter(&w.closed) {
+		return moerr.NewInternalErrorNoCtx("Publication-Worker is closed")
+	}
+	defer w.admissions.leave()
+	task := &TaskContext{
+		TaskID: taskID,
+		LSN:    lsn,
+	}
+	select {
+	case w.taskChan <- task:
+		return nil
+	case <-doneChan(w.ctx):
+		return moerr.NewInternalErrorNoCtx("Publication-Worker is closed")
+	}
+}
+
+func (w *worker) onItem(taskCtx *TaskContext) {
+	// Create retry option for executor operations
+	executorRetryOpt := &ExecutorRetryOption{
+		RetryTimes:    SubmitRetryTimes,
+		RetryInterval: GetRetryInterval(),
+		RetryDuration: SubmitRetryDuration,
+	}
+
+	err := retryPublication(
+		w.ctx,
+		func() error {
+			// Ensure ccpr state is set to pending before executing iteration
+			if err := w.updateIterationState(w.ctx, taskCtx.TaskID, IterationStateRunning); err != nil {
+				return err
+			}
+			return nil
+		},
+		executorRetryOpt,
+	)
+	if err != nil {
+		logutil.Error(
+			"Publication-Task update iteration state to running failed",
+			zap.String("taskID", taskCtx.TaskID),
+			zap.Uint64("lsn", taskCtx.LSN),
+			zap.Error(err),
+		)
+		return
+	}
+	err = ExecuteIteration(
+		w.ctx,
+		w.cnUUID,
+		w.cnEngine,
+		w.cnTxnClient,
+		taskCtx.TaskID,
+		taskCtx.LSN,
+		w.upstreamSQLHelperFactory,
+		w.mp,
+		nil, // utHelper
+		0,   // snapshotFlushInterval (use default 1min)
+		w.filterObjectWorker,
+		w.getChunkWorker,
+		w.writeObjectWorker,
+		w,   // syncProtectionWorker (pass worker itself for keepalive management)
+		nil, // syncProtectionRetryOpt (use default: 1s initial, x2 backoff, 5min max)
+		nil, // sqlExecutorRetryOpt (use default)
+	)
+	// Task failure is usually caused by CN UUID or LSN validation errors.
+	// The state will be reset by another CN node.
+	if err != nil {
+		logutil.Error(
+			"Publication-Task execute iteration failed",
+			zap.String("taskID", taskCtx.TaskID),
+			zap.Uint64("lsn", taskCtx.LSN),
+			zap.Error(err),
+		)
+	}
+}
+
+func (w *worker) Stop() {
+	w.stopOnce.Do(func() {
+		w.closed.Store(true)
+		w.admissions.seal(w.cancel)
+		// Stop leaf pools before their callers. A running filter job can wait on
+		// get-chunk/write jobs, and a top-level iteration can wait on a filter job.
+		if w.getChunkWorker != nil {
+			w.getChunkWorker.Stop()
+		}
+		if w.writeObjectWorker != nil {
+			w.writeObjectWorker.Stop()
+		}
+		if w.filterObjectWorker != nil {
+			w.filterObjectWorker.Stop()
+		}
+		w.wg.Wait()
+		w.drainPending()
+		w.syncProtectionMu.Lock()
+		clear(w.syncProtectionJobs)
+		w.syncProtectionMu.Unlock()
+	})
+}
+
+func (w *worker) drainPending() {
+	for {
+		select {
+		case <-w.taskChan:
+		default:
+			return
+		}
+	}
+}
+
+// ============================================================================
+// Sync Protection Management
+// ============================================================================
+
+// RegisterSyncProtection registers a sync protection job for keepalive
+func (w *worker) RegisterSyncProtection(jobID string, ttlExpireTS int64) {
+	w.syncProtectionMu.Lock()
+	defer w.syncProtectionMu.Unlock()
+	if w.closed.Load() {
+		return
+	}
+
+	entry := &syncProtectionEntry{
+		jobID: jobID,
+	}
+	entry.ttlExpireTS.Store(ttlExpireTS)
+	w.syncProtectionJobs[jobID] = entry
+
+	logutil.Info("ccpr-worker registered sync protection",
+		zap.String("job_id", jobID),
+		zap.Int64("ttl_expire_ts", ttlExpireTS),
+	)
+}
+
+// UnregisterSyncProtection unregisters a sync protection job
+func (w *worker) UnregisterSyncProtection(jobID string) {
+	w.syncProtectionMu.Lock()
+	defer w.syncProtectionMu.Unlock()
+
+	delete(w.syncProtectionJobs, jobID)
+
+	logutil.Info("ccpr-worker unregistered sync protection",
+		zap.String("job_id", jobID),
+	)
+}
+
+// GetSyncProtectionTTL returns the current TTL expiration timestamp for a job
+func (w *worker) GetSyncProtectionTTL(jobID string) int64 {
+	w.syncProtectionMu.RLock()
+	defer w.syncProtectionMu.RUnlock()
+
+	if entry, exists := w.syncProtectionJobs[jobID]; exists {
+		return entry.ttlExpireTS.Load()
+	}
+	return 0
+}
+
+// RunSyncProtectionKeepAlive runs a background goroutine that periodically renews
+// all registered sync protection jobs to prevent TTL expiration
+func (w *worker) RunSyncProtectionKeepAlive() {
+	renewInterval := GetSyncProtectionRenewInterval()
+	ticker := time.NewTicker(renewInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-ticker.C:
+			w.renewAllSyncProtections()
+		}
+	}
+}
+
+// renewAllSyncProtections renews all registered sync protection jobs
+func (w *worker) renewAllSyncProtections() {
+	w.syncProtectionMu.RLock()
+	jobs := make([]string, 0, len(w.syncProtectionJobs))
+	for jobID := range w.syncProtectionJobs {
+		jobs = append(jobs, jobID)
+	}
+	w.syncProtectionMu.RUnlock()
+
+	if len(jobs) == 0 {
+		return
+	}
+
+	// Create executor for renewal
+	executor, err := NewInternalSQLExecutor(
+		w.cnUUID,
+		w.cnTxnClient,
+		w.cnEngine,
+		catalog.System_Account,
+		&SQLExecutorRetryOption{
+			MaxRetries:    DefaultSQLExecutorRetryOption().MaxRetries,
+			RetryInterval: DefaultSQLExecutorRetryOption().RetryInterval,
+			Classifier:    NewDownstreamConnectionClassifier(),
+		},
+		true,
+	)
+	if err != nil {
+		logutil.Warn("ccpr-worker failed to create executor for sync protection renewal",
+			zap.Error(err),
+		)
+		return
+	}
+
+	newTTLExpireTS := time.Now().Add(GetSyncProtectionTTLDuration()).UnixNano()
+
+	for _, jobID := range jobs {
+		// Check if job still exists (might have been unregistered)
+		w.syncProtectionMu.RLock()
+		entry, exists := w.syncProtectionJobs[jobID]
+		w.syncProtectionMu.RUnlock()
+		if !exists {
+			continue
+		}
+
+		// Renew the sync protection
+		ctx, cancel := context.WithTimeout(w.ctx, time.Minute)
+		err := RenewSyncProtection(ctx, executor, jobID, newTTLExpireTS)
+		cancel()
+
+		if err != nil {
+			logutil.Warn("ccpr-worker failed to renew sync protection",
+				zap.String("job_id", jobID),
+				zap.Error(err),
+			)
+			// Don't update TTL on failure - the job might have been unregistered
+			continue
+		}
+
+		// Update the TTL in our tracking
+		entry.ttlExpireTS.Store(newTTLExpireTS)
+		logutil.Debug("ccpr-worker renewed sync protection",
+			zap.String("job_id", jobID),
+			zap.Int64("new_ttl_expire_ts", newTTLExpireTS),
+		)
+	}
+}
+
+func (w *worker) updateIterationState(ctx context.Context, taskID string, iterationState int8) error {
+	executor, err := NewInternalSQLExecutor(
+		w.cnUUID,
+		w.cnTxnClient,
+		w.cnEngine,
+		catalog.System_Account,
+		&SQLExecutorRetryOption{
+			MaxRetries:    DefaultSQLExecutorRetryOption().MaxRetries,
+			RetryInterval: DefaultSQLExecutorRetryOption().RetryInterval,
+			Classifier:    NewDownstreamCommitClassifier(),
+		},
+		true,
+	)
+	if err != nil {
+		return err
+	}
+
+	updateSQL := PublicationSQLBuilder.UpdateMoCcprLogIterationStateAndCnUuidSQL(
+		taskID,
+		iterationState,
+		w.cnUUID,
+	)
+
+	systemCtx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	result, cancel, err := executor.ExecSQL(systemCtx, nil, catalog.System_Account, updateSQL, false, false, time.Minute)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx, "failed to update iteration state to pending: %v", err)
+	}
+	if result != nil {
+		defer result.Close()
+	}
+	cancel()
+
+	return nil
+}
+
+// ============================================================================
+// FilterObjectWorker implementation
+// ============================================================================
+
+type filterObjectWorker struct {
+	jobChan    chan Job
+	wg         sync.WaitGroup
+	cancel     context.CancelFunc
+	ctx        context.Context
+	closed     atomic.Bool
+	stopOnce   sync.Once
+	admissions workerAdmissionGate
+}
+
+// NewFilterObjectWorker creates a new filter object worker pool
+func NewFilterObjectWorker() FilterObjectWorker {
+	w := &filterObjectWorker{
+		jobChan: make(chan Job, 10000),
+	}
+	w.ctx, w.cancel = context.WithCancel(context.Background())
+	w.start()
+	return w
+}
+
+func (w *filterObjectWorker) start() {
+	workerThreads := GetFilterObjectWorkerThread()
+	w.wg.Add(workerThreads)
+	for i := 0; i < workerThreads; i++ {
+		go func() {
+			defer w.wg.Done()
+			for {
+				select {
+				case <-w.ctx.Done():
+					return
+				case job := <-w.jobChan:
+					select {
+					case <-w.ctx.Done():
+						w.cancelPending()
+						failAcceptedJob(job, moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed"))
+						return
+					default:
+					}
+					globalJobStats.IncrementFilterObjectRunning()
+					v2.CCPRFilterObjectQueueSizeGauge.Dec()
+					v2.CCPRRunningFilterObjectJobsGauge.Inc()
+					startTime := time.Now()
+					job.Execute()
+					duration := time.Since(startTime)
+					v2.CCPRRunningFilterObjectJobsGauge.Dec()
+					v2.CCPRFilterObjectJobDurationHistogram.Observe(duration.Seconds())
+					v2.CCPRFilterObjectJobCompletedCounter.Inc()
+					globalJobStats.DecrementFilterObjectRunning()
+				}
+			}
+		}()
+	}
+}
+
+func (w *filterObjectWorker) cancelPending() {
+	globalJobStats.FilterObjectPending.Add(-1)
+	v2.CCPRFilterObjectQueueSizeGauge.Dec()
+}
+
+func (w *filterObjectWorker) SubmitFilterObject(job Job) error {
+	if !w.admissions.enter(&w.closed) {
+		return rejectJob(job, "FilterObjectWorker")
+	}
+	defer w.admissions.leave()
+	if job == nil {
+		return moerr.NewInternalErrorNoCtx("cannot submit a nil filter object job")
+	}
+	if err := validateTerminalJob(job, "FilterObjectWorker"); err != nil {
+		return err
+	}
+	globalJobStats.IncrementFilterObjectPending()
+	v2.CCPRFilterObjectQueueSizeGauge.Inc()
+	select {
+	case w.jobChan <- job:
+		return nil
+	case <-doneChan(w.ctx):
+		w.cancelPending()
+		return rejectJob(job, "FilterObjectWorker")
+	}
+}
+
+func (w *filterObjectWorker) Stop() {
+	w.stopOnce.Do(func() {
+		w.closed.Store(true)
+		w.admissions.seal(w.cancel)
+		w.wg.Wait()
+		for {
+			select {
+			case job := <-w.jobChan:
+				w.cancelPending()
+				failAcceptedJob(job, moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed"))
+			default:
+				return
+			}
+		}
+	})
+}
+
+// ============================================================================
+// GetChunkWorker implementation
+// ============================================================================
+
+type getChunkWorker struct {
+	jobChan    chan Job
+	wg         sync.WaitGroup
+	cancel     context.CancelFunc
+	ctx        context.Context
+	closed     atomic.Bool
+	stopOnce   sync.Once
+	admissions workerAdmissionGate
+}
+
+// NewGetChunkWorker creates a new get chunk worker pool
+func NewGetChunkWorker() GetChunkWorker {
+	w := &getChunkWorker{
+		jobChan: make(chan Job, 10000),
+	}
+	w.ctx, w.cancel = context.WithCancel(context.Background())
+	w.start()
+	return w
+}
+
+func (w *getChunkWorker) start() {
+	workerThreadCount := GetGetChunkWorkerThread()
+	w.wg.Add(workerThreadCount)
+	for i := 0; i < workerThreadCount; i++ {
+		go func() {
+			defer w.wg.Done()
+			for {
+				select {
+				case <-w.ctx.Done():
+					return
+				case job := <-w.jobChan:
+					jobType := job.GetType()
+					select {
+					case <-w.ctx.Done():
+						w.cancelPending(jobType)
+						failAcceptedJob(job, moerr.NewInternalErrorNoCtx("GetChunkWorker is closed"))
+						return
+					default:
+					}
+					switch jobType {
+					case JobTypeGetMeta:
+						globalJobStats.IncrementGetMetaRunning()
+						job.Execute()
+						globalJobStats.DecrementGetMetaRunning()
+					default:
+						// JobTypeGetChunk
+						globalJobStats.IncrementGetChunkRunning()
+						startTime := time.Now()
+						job.Execute()
+						duration := time.Since(startTime)
+						globalJobStats.DecrementGetChunkRunning()
+
+						// Record duration for GetChunk jobs
+						if chunkJobInfo, ok := job.(GetChunkJobInfo); ok {
+							globalJobStats.RecordGetChunkDuration(
+								chunkJobInfo.GetObjectName(),
+								chunkJobInfo.GetChunkIndex(),
+								duration,
+							)
+						}
+					}
+				}
+			}
+		}()
+	}
+}
+
+func (w *getChunkWorker) cancelPending(jobType int8) {
+	switch jobType {
+	case JobTypeGetMeta:
+		globalJobStats.GetMetaPending.Add(-1)
+	default:
+		globalJobStats.GetChunkPending.Add(-1)
+	}
+}
+
+func (w *getChunkWorker) SubmitGetChunk(job Job) error {
+	if !w.admissions.enter(&w.closed) {
+		return rejectJob(job, "GetChunkWorker")
+	}
+	defer w.admissions.leave()
+	if job == nil {
+		return moerr.NewInternalErrorNoCtx("cannot submit a nil get chunk job")
+	}
+	if err := validateTerminalJob(job, "GetChunkWorker"); err != nil {
+		return err
+	}
+	jobType := job.GetType()
+	switch jobType {
+	case JobTypeGetMeta:
+		globalJobStats.IncrementGetMetaPending()
+	default:
+		globalJobStats.IncrementGetChunkPending()
+	}
+	select {
+	case w.jobChan <- job:
+		return nil
+	case <-doneChan(w.ctx):
+		w.cancelPending(jobType)
+		return rejectJob(job, "GetChunkWorker")
+	}
+}
+
+func (w *getChunkWorker) Stop() {
+	w.stopOnce.Do(func() {
+		w.closed.Store(true)
+		w.admissions.seal(w.cancel)
+		w.wg.Wait()
+		for {
+			select {
+			case job := <-w.jobChan:
+				w.cancelPending(job.GetType())
+				failAcceptedJob(job, moerr.NewInternalErrorNoCtx("GetChunkWorker is closed"))
+			default:
+				return
+			}
+		}
+	})
+}
+
+// ============================================================================
+// simpleJobWorker - generic worker implementation for reuse
+// ============================================================================
+
+type simpleJobWorker struct {
+	name              string
+	jobChan           chan Job
+	wg                sync.WaitGroup
+	cancel            context.CancelFunc
+	ctx               context.Context
+	closed            atomic.Bool
+	stopOnce          sync.Once
+	admissions        workerAdmissionGate
+	onPending         func()
+	onPendingCanceled func()
+	onRunningStart    func()
+	onRunningFinish   func()
+	onRecordDuration  func(job Job, duration time.Duration)
+}
+
+// newSimpleJobWorker creates a new simple job worker pool
+func newSimpleJobWorker(
+	name string,
+	threadCount int,
+	onPending func(),
+	onPendingCanceled func(),
+	onRunningStart func(),
+	onRunningFinish func(),
+	onRecordDuration func(job Job, duration time.Duration),
+) *simpleJobWorker {
+	w := &simpleJobWorker{
+		name:              name,
+		jobChan:           make(chan Job, 10000),
+		onPending:         onPending,
+		onPendingCanceled: onPendingCanceled,
+		onRunningStart:    onRunningStart,
+		onRunningFinish:   onRunningFinish,
+		onRecordDuration:  onRecordDuration,
+	}
+	w.ctx, w.cancel = context.WithCancel(context.Background())
+	w.start(threadCount)
+	return w
+}
+
+func (w *simpleJobWorker) start(threadCount int) {
+	w.wg.Add(threadCount)
+	for i := 0; i < threadCount; i++ {
+		go func() {
+			defer w.wg.Done()
+			for {
+				select {
+				case <-w.ctx.Done():
+					return
+				case job := <-w.jobChan:
+					select {
+					case <-w.ctx.Done():
+						w.cancelPending()
+						failAcceptedJob(job, moerr.NewInternalErrorNoCtxf("%s is closed", w.name))
+						return
+					default:
+					}
+					w.onRunningStart()
+					startTime := time.Now()
+					job.Execute()
+					duration := time.Since(startTime)
+					w.onRunningFinish()
+					if w.onRecordDuration != nil {
+						w.onRecordDuration(job, duration)
+					}
+				}
+			}
+		}()
+	}
+}
+
+func (w *simpleJobWorker) cancelPending() {
+	if w.onPendingCanceled != nil {
+		w.onPendingCanceled()
+	}
+}
+
+func (w *simpleJobWorker) submit(job Job) error {
+	if !w.admissions.enter(&w.closed) {
+		return rejectJob(job, w.name)
+	}
+	defer w.admissions.leave()
+	if job == nil {
+		return moerr.NewInternalErrorf(context.Background(), "cannot submit a nil job to %s", w.name)
+	}
+	if err := validateTerminalJob(job, w.name); err != nil {
+		return err
+	}
+	w.onPending()
+	select {
+	case w.jobChan <- job:
+		return nil
+	case <-doneChan(w.ctx):
+		w.cancelPending()
+		return rejectJob(job, w.name)
+	}
+}
+
+func (w *simpleJobWorker) stop() {
+	w.stopOnce.Do(func() {
+		w.closed.Store(true)
+		w.admissions.seal(w.cancel)
+		w.wg.Wait()
+		for {
+			select {
+			case job := <-w.jobChan:
+				w.cancelPending()
+				failAcceptedJob(job, moerr.NewInternalErrorNoCtxf("%s is closed", w.name))
+			default:
+				return
+			}
+		}
+	})
+}
+
+// ============================================================================
+// WriteObjectWorker implementation using simpleJobWorker
+// ============================================================================
+
+type writeObjectWorker struct {
+	*simpleJobWorker
+}
+
+// NewWriteObjectWorker creates a new write object worker pool
+func NewWriteObjectWorker() WriteObjectWorker {
+	return &writeObjectWorker{
+		simpleJobWorker: newSimpleJobWorker(
+			"WriteObjectWorker",
+			GetWriteObjectWorkerThread(),
+			func() {
+				globalJobStats.IncrementWriteObjectPending()
+				v2.CCPRWriteObjectQueueSizeGauge.Inc()
+			},
+			func() {
+				globalJobStats.WriteObjectPending.Add(-1)
+				v2.CCPRWriteObjectQueueSizeGauge.Dec()
+			},
+			func() {
+				globalJobStats.IncrementWriteObjectRunning()
+				v2.CCPRWriteObjectQueueSizeGauge.Dec()
+				v2.CCPRRunningWriteObjectJobsGauge.Inc()
+			},
+			func() {
+				globalJobStats.DecrementWriteObjectRunning()
+				v2.CCPRRunningWriteObjectJobsGauge.Dec()
+				v2.CCPRWriteObjectJobCompletedCounter.Inc()
+			},
+			func(job Job, duration time.Duration) {
+				v2.CCPRWriteObjectJobDurationHistogram.Observe(duration.Seconds())
+				if writeJobInfo, ok := job.(WriteObjectJobInfo); ok {
+					globalJobStats.RecordWriteObjectDuration(
+						writeJobInfo.GetObjectName(),
+						writeJobInfo.GetObjectSize(),
+						duration,
+					)
+					v2.CCPRObjectSizeBytesHistogram.Observe(float64(writeJobInfo.GetObjectSize()))
+				}
+			},
+		),
+	}
+}
+
+func (w *writeObjectWorker) SubmitWriteObject(job Job) error {
+	return w.submit(job)
+}
+
+func (w *writeObjectWorker) Stop() {
+	w.stop()
+}

@@ -25,23 +25,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func TestNewAtomicBatch(t *testing.T) {
-	actual := NewAtomicBatch(testutil.TestUtilMp)
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	actual := NewAtomicBatch(mp)
 	assert.NotNil(t, actual.Rows)
 	assert.Equal(t, 0, actual.Rows.Len())
 }
 
 func TestAtomicBatch_Append(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	atomicBat := &AtomicBatch{
 		Batches: []*batch.Batch{},
 		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
 	}
 	bat := batch.New([]string{"pk", "ts"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
-	bat.Vecs[1] = testutil.MakeTSVector([]types.TS{types.BuildTS(1, 1)}, nil)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
+	bat.Vecs[1] = testutil.MakeTSVector([]types.TS{types.BuildTS(1, 1)}, nil, mp)
 
 	atomicBat.Append(types.NewPacker(), bat, 1, 0)
 	assert.Equal(t, 1, len(atomicBat.Batches))
@@ -49,8 +55,11 @@ func TestAtomicBatch_Append(t *testing.T) {
 }
 
 func TestAtomicBatch_Close(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bat := batch.New([]string{"attr1"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
 
 	type fields struct {
 		Mp      *mpool.MPool
@@ -63,7 +72,7 @@ func TestAtomicBatch_Close(t *testing.T) {
 	}{
 		{
 			fields: fields{
-				Mp:      testutil.TestUtilMp,
+				Mp:      mp,
 				Batches: []*batch.Batch{bat},
 				Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
 			},
@@ -174,8 +183,11 @@ func Test_atomicBatchRowIter(t *testing.T) {
 	rows.Set(row2)
 	rows.Set(row3)
 
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	bat := batch.New([]string{"attr1"})
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mp)
 
 	// at init position (before the first row)
 	iter := &atomicBatchRowIter{
@@ -201,6 +213,30 @@ func Test_atomicBatchRowIter(t *testing.T) {
 
 	assert.False(t, iter.Next())
 	iter.Close()
+}
+
+func TestAtomicBatch_RowCountDeduplicates(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	bat := NewAtomicBatch(mp)
+	ts := types.BuildTS(10, 2)
+
+	createBatch := func(pk int32) *batch.Batch {
+		b := batch.New([]string{"pk", "ts"})
+		b.Vecs[0] = testutil.MakeInt32Vector([]int32{pk}, nil, mp)
+		b.Vecs[1] = testutil.MakeTSVector([]types.TS{ts}, nil, mp)
+		return b
+	}
+
+	bat.Append(types.NewPacker(), createBatch(42), 1, 0)
+	bat.Append(types.NewPacker(), createBatch(42), 1, 0) // duplicate pk+ts
+	bat.Append(types.NewPacker(), createBatch(43), 1, 0) // unique pk
+
+	assert.Equal(t, 2, bat.RowCount())
+	assert.Equal(t, 3, bat.TotalRows())
+	assert.Equal(t, 1, bat.DuplicateRows())
+	assert.Equal(t, 2, bat.Rows.Len())
 }
 
 func TestDbTableInfo_String(t *testing.T) {
@@ -365,29 +401,12 @@ func TestDbTableInfo_OnlyDiffinTblId(t *testing.T) {
 }
 
 func TestJsonDecode(t *testing.T) {
-	// TODO
-	//type args struct {
-	//	jbytes string
-	//	value  any
-	//}
-	//tests := []struct {
-	//	name      string
-	//	args      args
-	//	wantValue any
-	//	wantErr   assert.ErrorAssertionFunc
-	//}{
-	//	{
-	//		args:      args{jbytes: "7b2261223a317d"},
-	//		wantValue: map[string]int{"a": 1},
-	//		wantErr:   assert.NoError,
-	//	},
-	//}
-	//for _, tt := range tests {
-	//	t.Run(tt.name, func(t *testing.T) {
-	//		tt.wantErr(t, JsonDecode(tt.args.jbytes, tt.args.value), fmt.Sprintf("JsonDecode(%v, %v)", tt.args.jbytes, tt.args.value))
-	//		assert.Equal(t, tt.wantValue, tt.args.value)
-	//	})
-	//}
+	var got map[string]int
+	assert.NoError(t, JsonDecode("7b2261223a317d", &got))
+	assert.Equal(t, map[string]int{"a": 1}, got)
+
+	assert.Error(t, JsonDecode("not-hex", &got))
+	assert.Error(t, JsonDecode("7b", &got))
 }
 
 func TestJsonEncode(t *testing.T) {
@@ -687,6 +706,65 @@ func TestUriInfo_String(t *testing.T) {
 			assert.Equalf(t, tt.want, info.String(), "String()")
 		})
 	}
+}
+
+func TestDecoderOutput_Close(t *testing.T) {
+	mp, err := mpool.NewMPool("test_decoder_output_close", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	t.Run("NilReceiver", func(t *testing.T) {
+		var d *DecoderOutput
+		assert.NotPanics(t, func() { d.Close() })
+	})
+
+	t.Run("EmptyOutput", func(t *testing.T) {
+		d := &DecoderOutput{}
+		assert.NotPanics(t, func() { d.Close() })
+	})
+
+	t.Run("WithCheckpointBat", func(t *testing.T) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.NewInt32Vector(3, types.T_int32.ToType(), mp, false, nil, []int32{1, 2, 3})
+		bat.SetRowCount(3)
+		d := &DecoderOutput{
+			checkpointBat: bat,
+			mp:            mp,
+		}
+		d.Close()
+		assert.Nil(t, d.checkpointBat)
+		assert.Nil(t, d.mp)
+	})
+
+	t.Run("WithCheckpointBatNoMp", func(t *testing.T) {
+		bat := &batch.Batch{Vecs: make([]*vector.Vector, 0)}
+		d := &DecoderOutput{
+			checkpointBat: bat,
+			mp:            nil,
+		}
+		d.Close()
+		assert.Nil(t, d.checkpointBat)
+	})
+
+	t.Run("WithAtomicBatches", func(t *testing.T) {
+		insertBatch := NewAtomicBatch(mp)
+		deleteBatch := NewAtomicBatch(mp)
+		d := &DecoderOutput{
+			insertAtmBatch: insertBatch,
+			deleteAtmBatch: deleteBatch,
+		}
+		d.Close()
+		assert.Nil(t, d.insertAtmBatch)
+		assert.Nil(t, d.deleteAtmBatch)
+	})
+
+	t.Run("Idempotent", func(t *testing.T) {
+		d := &DecoderOutput{
+			insertAtmBatch: NewAtomicBatch(mp),
+		}
+		d.Close()
+		assert.NotPanics(t, func() { d.Close() })
+	})
 }
 
 func TestActiveRoutine_ClosePause(t *testing.T) {

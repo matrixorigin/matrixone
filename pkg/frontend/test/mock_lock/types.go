@@ -261,6 +261,37 @@ func (mr *MockLockServiceMockRecorder) GetLockTableBind(group, tableID any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLockTableBind", reflect.TypeOf((*MockLockService)(nil).GetLockTableBind), group, tableID)
 }
 
+// GetLatestLockTableBind mocks base method.
+func (m *MockLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLatestLockTableBind", bind)
+	ret0, _ := ret[0].(lock.LockTable)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetLatestLockTableBind indicates an expected call of GetLatestLockTableBind.
+func (mr *MockLockServiceMockRecorder) GetLatestLockTableBind(bind any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLatestLockTableBind", reflect.TypeOf((*MockLockService)(nil).GetLatestLockTableBind), bind)
+}
+
+// GetLockHolder mocks base method.
+func (m *MockLockService) GetLockHolder(ctx context.Context, tableID uint64, row []byte, options lock.LockOptions) (lock.WaitTxn, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLockHolder", ctx, tableID, row, options)
+	ret0, _ := ret[0].(lock.WaitTxn)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetLockHolder indicates an expected call of GetLockHolder.
+func (mr *MockLockServiceMockRecorder) GetLockHolder(ctx, tableID, row, options any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLockHolder", reflect.TypeOf((*MockLockService)(nil).GetLockHolder), ctx, tableID, row, options)
+}
+
 // GetServiceID mocks base method.
 func (m *MockLockService) GetServiceID() string {
 	m.ctrl.T.Helper()
@@ -403,6 +434,18 @@ func (mr *MockLockTableAllocatorMockRecorder) Close() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockLockTableAllocator)(nil).Close))
 }
 
+// FinishCommit mocks base method.
+func (m *MockLockTableAllocator) FinishCommit(serviceID string, txnID []byte) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "FinishCommit", serviceID, txnID)
+}
+
+// FinishCommit indicates an expected call of FinishCommit.
+func (mr *MockLockTableAllocatorMockRecorder) FinishCommit(serviceID, txnID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinishCommit", reflect.TypeOf((*MockLockTableAllocator)(nil).FinishCommit), serviceID, txnID)
+}
+
 // Get mocks base method.
 func (m *MockLockTableAllocator) Get(serviceID string, group uint32, tableID, originTableID uint64, sharding lock.Sharding) lock.LockTable {
 	m.ctrl.T.Helper()
@@ -460,18 +503,31 @@ func (mr *MockLockTableAllocatorMockRecorder) KeepLockTableBind(serviceID any) *
 }
 
 // Valid mocks base method.
-func (m *MockLockTableAllocator) Valid(serviceID string, txnID []byte, binds []lock.LockTable) ([]uint64, error) {
+func (m *MockLockTableAllocator) Valid(
+	serviceID string,
+	txnID []byte,
+	binds []lock.LockTable,
+	commitMeta ...lockservice.CommitRequestMeta,
+) ([]uint64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Valid", serviceID, txnID, binds)
+	varargs := []any{serviceID, txnID, binds}
+	for _, meta := range commitMeta {
+		varargs = append(varargs, meta)
+	}
+	ret := m.ctrl.Call(m, "Valid", varargs...)
 	ret0, _ := ret[0].([]uint64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Valid indicates an expected call of Valid.
-func (mr *MockLockTableAllocatorMockRecorder) Valid(serviceID, txnID, binds any) *gomock.Call {
+func (mr *MockLockTableAllocatorMockRecorder) Valid(
+	serviceID, txnID, binds any,
+	commitMeta ...any,
+) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Valid", reflect.TypeOf((*MockLockTableAllocator)(nil).Valid), serviceID, txnID, binds)
+	varargs := append([]any{serviceID, txnID, binds}, commitMeta...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Valid", reflect.TypeOf((*MockLockTableAllocator)(nil).Valid), varargs...)
 }
 
 // MockLockTableKeeper is a mock of LockTableKeeper interface.

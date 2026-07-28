@@ -174,3 +174,52 @@ func TestLocalETLFSWithBadSymlink(t *testing.T) {
 	_, err = SortedList(fs.List(ctx, ""))
 	assert.Nil(t, err)
 }
+
+func TestLocalETLFSSymlinkRootPath(t *testing.T) {
+	// Test that NewLocalETLFS resolves symlinks in the rootPath
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// Create a real directory
+	realDir := filepath.Join(dir, "real")
+	err := os.Mkdir(realDir, 0755)
+	assert.Nil(t, err)
+
+	// Create a symlink to the real directory
+	symlinkDir := filepath.Join(dir, "symlink")
+	err = os.Symlink(realDir, symlinkDir)
+	assert.Nil(t, err)
+
+	// Create a file in the real directory
+	testFile := filepath.Join(realDir, "test.txt")
+	err = os.WriteFile(testFile, []byte("test content"), 0644)
+	assert.Nil(t, err)
+
+	// Create LocalETLFS with the symlink path
+	fs, err := NewLocalETLFS("test", symlinkDir)
+	assert.Nil(t, err)
+
+	// The rootPath should be resolved to the real directory
+	realDirResolved, err := filepath.EvalSymlinks(realDir)
+	assert.Nil(t, err)
+	assert.Equal(t, realDirResolved, fs.rootPath)
+
+	// List should work correctly
+	entries, err := SortedList(fs.List(ctx, ""))
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(entries))
+	assert.Equal(t, "test.txt", entries[0].Name)
+
+	// Reading the file should work
+	vec := IOVector{
+		FilePath: "test.txt",
+		Entries: []IOEntry{
+			{
+				Size: -1,
+			},
+		},
+	}
+	err = fs.Read(ctx, &vec)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("test content"), vec.Entries[0].Data)
+}

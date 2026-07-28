@@ -19,6 +19,7 @@ import (
 	"math"
 	"math/rand"
 	"strconv"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -47,6 +48,37 @@ func (p *MockDataProvider) GetColumnProvider(colIdx int) Vector {
 		return nil
 	}
 	return p.providers[colIdx]
+}
+
+func appendMockFloats[T ~float32 | ~float64](
+	vec Vector,
+	rows int,
+	unique bool,
+	next func() T,
+) {
+	const maxConsecutiveCollisions = 1024
+
+	var seen map[T]struct{}
+	if unique && rows > 0 {
+		seen = make(map[T]struct{}, rows)
+	}
+	consecutiveCollisions := 0
+	for appended := 0; appended < rows; {
+		value := next()
+		if unique {
+			if _, ok := seen[value]; ok {
+				consecutiveCollisions++
+				if consecutiveCollisions == maxConsecutiveCollisions {
+					panic("failed to generate a unique mock float")
+				}
+				continue
+			}
+			seen[value] = struct{}{}
+			consecutiveCollisions = 0
+		}
+		vec.Append(value, false)
+		appended++
+	}
 }
 
 func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vector) {
@@ -171,17 +203,17 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 			}
 		}
 	case types.T_float32:
-		for i := 0; i < rows; i++ {
+		appendMockFloats(vec, rows, unique, func() float32 {
 			v1 := rand.Intn(math.MaxInt32)
 			v2 := rand.Intn(math.MaxInt32) + 1
-			vec.Append(float32(v1)/float32(v2), false)
-		}
+			return float32(v1) / float32(v2)
+		})
 	case types.T_float64:
-		for i := 0; i < rows; i++ {
+		appendMockFloats(vec, rows, unique, func() float64 {
 			v1 := rand.Intn(math.MaxInt32)
 			v2 := rand.Intn(math.MaxInt32) + 1
-			vec.Append(float64(v1)/float64(v2), false)
-		}
+			return float64(v1) / float64(v2)
+		})
 	case types.T_varchar, types.T_char, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		if unique {
 			for i := 0; i < rows; i++ {
@@ -207,8 +239,18 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 			vec.Append(types.TimeFromClock(false, 1, 1, 1, 1), false)
 		}
 	case types.T_timestamp:
-		for i := int32(1); i <= int32(rows); i++ {
-			vec.Append(types.Timestamp(common.NextGlobalSeqNum()), false)
+		if unique {
+			for i := int32(1); i <= int32(rows); i++ {
+				vec.Append(types.Timestamp(common.NextGlobalSeqNum()), false)
+			}
+		} else {
+			for i := int32(1); i <= int32(rows); i++ {
+				ts, err := types.ParseTimestamp(time.UTC, time.Now().Format(time.DateTime), t.Scale)
+				if err != nil {
+					panic(err)
+				}
+				vec.Append(ts, false)
+			}
 		}
 	case types.T_decimal64:
 		for i := int32(1); i <= int32(rows); i++ {

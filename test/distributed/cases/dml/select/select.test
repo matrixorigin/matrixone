@@ -212,6 +212,13 @@ insert into t1 values (1, 2, 3);
 select count(*) from t1;
 select count(*) from t1 where b=2;
 select count(*) from t1 where a=2;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
+explain analyze select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)",true)
+explain analyze select count(a) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\(t1\.b\)",true)
+explain analyze select count(b) from t1;
+
 drop table if exists t1;
 create table t1 (a int(11) unsigned);
 insert into t1 values (1), (2);
@@ -231,6 +238,13 @@ create table t1 (a int,b int, primary key(a,b));
 insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5);
 select count(*) from t1 where a is null;
 select count(*) from t1 where a = null;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
+explain analyze select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)",true)
+explain analyze select count(a) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.b\)",true)
+explain analyze select count(b) from t1;
+
 -- @separator:table
 select mo_ctl('dn', 'flush', 'db1.t1');
 select count(*) from t1 where a is null;
@@ -242,13 +256,20 @@ create table t1 (a int,b int, primary key(a));
 insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5);
 select count(*) from t1 where a is null;
 select count(*) from t1 where a = null;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
+explain analyze select count(*) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t1\.a\)",true)
+explain analyze select count(a) from t1;
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\(t1\.b\)",true)
+explain analyze select count(b) from t1;
+
 -- @separator:table
 select mo_ctl('dn', 'flush', 'db1.t1');
 select count(*) from t1 where a is null;
 select count(*) from t1 where a = null;
 select 1 > 0;
 
-SELECT TABLE_SCHEMA AS TABLE_CAT, NULL AS TABLE_SCHEM, TABLE_NAME, CASE WHEN TABLE_TYPE='BASE TABLE' THEN CASE WHEN TABLE_SCHEMA = 'mysql' OR TABLE_SCHEMA = 'performance_schema' THEN 'SYSTEM TABLE' ELSE 'TABLE' END WHEN TABLE_TYPE='TEMPORARY' THEN 'LOCAL_TEMPORARY' ELSE TABLE_TYPE END AS TABLE_TYPE, TABLE_COMMENT AS REMARKS, NULL AS TYPE_CAT, NULL AS TYPE_SCHEM, NULL AS TYPE_NAME, NULL AS SELF_REFERENCING_COL_NAME, NULL AS REF_GENERATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'abc' group by null HAVING TABLE_TYPE IN ('LOCAL TEMPORARY','TABLE','VIEW',null,null) ORDER BY TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME;
+select count(*) from t1 group by null;
 
 use db1;
 drop table if exists t11;
@@ -256,6 +277,12 @@ create table t11 (a int, b int, primary key (a));
 insert into t11 (select *,* from generate_series(1, 50000, 1)g);
 select count(*) from t11 where a=20000;
 select count(*) from t11 where a in (1,20000);
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(1\)",true)
+explain analyze select count(*) from t11;
+-- @regex("(?s)Table Scan.*Aggregate Functions: starcount\(t11\.a\)",true)
+explain analyze select count(a) from t11;
+-- @regex("(?s)Table Scan.*Aggregate Functions: count\(t11\.b\)",true)
+explain analyze select count(b) from t11;
 
 drop table if exists t1;
 create table t1(a int primary key, b int);
@@ -266,12 +293,12 @@ select * from t1 where a in (3,3,3,2,1);
 
 drop table if exists t1;
 create table t1 (a int, b varchar, c int, primary key (c,a), key idx_b(b));
-insert into t1 select result, result || "_a",result+100000000 from generate_series(1,10000) g;
+insert into t1 select result, concat(result, '_a'),result+100000000 from generate_series(1,10000) g;
 select * from t1 where b in ("11_a","21_a");
 
 drop table if exists t1;
 create table t1(a int primary key, b int, c varchar(200));
-insert into t1 select result, result, "aabbccddeeffgghhii_"||result from generate_series (1, 100000)g;
+insert into t1 select result, result, concat('aabbccddeeffgghhii_', result) from generate_series (1, 100000)g;
 select a from t1 where c in ("123456789012345678901234567890","123456789012345678901234567890","aabbccddeeffgghhii_100000");
 
 drop table if exists t1;
@@ -283,3 +310,10 @@ drop table if exists t1;
 create table t1(a int primary key, b vecf64(10));
 insert into t1 select result, "[0.11,0.22,0.33,0.44,0.55,0.66,0.77,0.88,0.99,0.101]" from generate_series (1, 100000)g;
 select a from t1 where b in ("[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.101]","[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.102]");
+
+drop table if exists test_bigint;
+create table test_bigint (a bigint unsigned);
+insert into test_bigint values (0xFFFFFFFFFFFFFFFD);
+insert into test_bigint values (0xFFFFFFFFFFFFFFFE);
+select * from test_bigint where a -1 > 1;
+select * from test_bigint where a > 1;

@@ -16,8 +16,9 @@ package options
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -36,22 +37,25 @@ const (
 	DefaultBlockMaxRows    = objectio.BlockMaxRows
 	DefaultBlocksPerObject = uint16(256)
 
-	DefaultScannerInterval              = time.Second * 5
-	DefaultCheckpointFlushInterval      = time.Minute
-	DefaultCheckpointTransferInterval   = time.Second * 5
-	DefaultCheckpointMinCount           = int64(100)
-	DefaultCheckpointIncremetalInterval = time.Minute
-	DefaultCheckpointGlobalMinCount     = 10
-	DefaultGlobalVersionInterval        = time.Hour
-	DefaultGCCheckpointInterval         = time.Minute
-	DefaultOverallFlushMemControl       = common.Const1GBytes
+	DefaultScannerInterval               = time.Second * 5
+	DefaultCheckpointFlushInterval       = time.Minute
+	DefaultCheckpointTransferInterval    = time.Second * 5
+	DefaultCheckpointMinCount            = int64(100)
+	DefaultCheckpointIncrementalInterval = time.Minute * 5
+	DefaultCheckpointIncremetalInterval  = DefaultCheckpointIncrementalInterval
+	DefaultCheckpointGlobalMinCount      = 10
+	DefaultGlobalVersionInterval         = time.Hour
+	DefaultGCCheckpointInterval          = time.Minute
+	DefaultOverallFlushMemControl        = common.Const1GBytes
 
 	DefaultScanGCInterval    = time.Minute * 30
 	DefaultGCTTL             = time.Hour
 	DefaultGCInMemoryTTL     = time.Hour
 	DefaultGCMergeCount      = 40
+	DefaultGCScanCount       = 10
 	DefaultGCDeleteBatchSize = 1000
 	DefaultGCDeleteTimeout   = time.Minute * 10
+	DefaultGCDeleteWorkerNum = 4
 
 	DefaultCatalogGCInterval = time.Minute * 3
 
@@ -71,13 +75,11 @@ type Options struct {
 	CatalogCfg    *CatalogCfg
 
 	BulkTomestoneTxnThreshold uint64
-	// MaxMessageSize is the size of max message which is sent to log-service.
-	MaxMessageSize       uint64
-	TransferTableTTL     time.Duration
-	IncrementalDedup     bool
-	IsStandalone         bool
-	EnableApplyTableData bool
-	GCTimeCheckerFactory func(any) func(*types.TS) bool
+	TransferTableTTL          time.Duration
+	IncrementalDedup          bool
+	IsStandalone              bool
+	EnableApplyTableData      bool
+	GCTimeCheckerFactory      func(any) func(*types.TS) bool
 
 	Fs                fileservice.FileService                  `toml:"-"`
 	LocalFs           fileservice.FileService                  `toml:"-"`

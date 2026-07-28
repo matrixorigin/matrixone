@@ -276,6 +276,103 @@ func TestParseDatetime(t *testing.T) {
 			want:    "",
 			wantErr: true,
 		},
+		// 5. colon separator format (MySQL compatible)
+		{
+			name: "colon separator yyyy:mm:dd hh:mm:ss",
+			args: "2000:01:01 00:00:00",
+			want: "2000-01-01 00:00:00.000000",
+		},
+		{
+			name: "colon separator with microseconds",
+			args: "2000:01:01 00:00:00.000001",
+			want: "2000-01-01 00:00:00.000001",
+		},
+		{
+			name: "colon separator with milliseconds",
+			args: "2000:01:01 12:34:56.123456",
+			want: "2000-01-01 12:34:56.123456",
+		},
+		// 6. ISO 8601 format (yyyy-mm-ddThh:mm:ss)
+		{
+			name: "ISO 8601 format yyyy-mm-ddThh:mm:ss",
+			args: "2024-12-20T10:30:45",
+			want: "2024-12-20 10:30:45.000000",
+		},
+		{
+			name: "ISO 8601 format with microseconds",
+			args: "2024-12-20T10:30:45.123456",
+			want: "2024-12-20 10:30:45.123456",
+		},
+		{
+			name: "ISO 8601 format with milliseconds",
+			args: "2024-12-20T10:30:45.123",
+			want: "2024-12-20 10:30:45.123000",
+		},
+		{
+			name: "ISO 8601 format with single digit microseconds",
+			args: "2024-12-20T10:30:45.1",
+			want: "2024-12-20 10:30:45.100000",
+		},
+		{
+			name: "ISO 8601 format midnight",
+			args: "2024-12-20T00:00:00",
+			want: "2024-12-20 00:00:00.000000",
+		},
+		{
+			name: "ISO 8601 format end of day",
+			args: "2024-12-20T23:59:59",
+			want: "2024-12-20 23:59:59.000000",
+		},
+		// 7. leading-zero seconds field wider than 2 digits (MySQL compat)
+		// Fast path only matches len==19 or s[19]=='.'; wider second fields fall to slow path.
+		{
+			name: "3-digit seconds with leading zero",
+			args: "1998-01-01 00:00:009",
+			want: "1998-01-01 00:00:09.000000",
+		},
+		{
+			name: "3-digit seconds with leading zero and microseconds",
+			args: "1998-01-01 00:00:009.5",
+			want: "1998-01-01 00:00:09.500000",
+		},
+		{
+			name: "3-digit seconds ISO T separator",
+			args: "1998-01-01T00:00:009",
+			want: "1998-01-01 00:00:09.000000",
+		},
+		// 8. slash date separator
+		{
+			name: "slash separator yyyy/mm/dd hh:mm:ss",
+			args: "2000/01/01 12:30:45",
+			want: "2000-01-01 12:30:45.000000",
+		},
+		{
+			name: "slash separator with microseconds",
+			args: "2000/06/15 08:00:00.123456",
+			want: "2000-06-15 08:00:00.123456",
+		},
+		// 9. variable-width fields (slow path)
+		{
+			name: "1-digit month and day",
+			args: "2000-1-2 3:4:5",
+			want: "2000-01-02 03:04:05.000000",
+		},
+		{
+			name: "trailing colon in time",
+			args: "2022-09-01 23:11:",
+			want: "2022-09-01 23:11:00.000000",
+		},
+		// 10. microsecond carry across second boundary
+		{
+			name: "microsecond carry to next microsecond",
+			args: "2022-01-01 00:00:00.0000006",
+			want: "2022-01-01 00:00:00.000001",
+		},
+		{
+			name: "microsecond carry to next second",
+			args: "2000-01-01 00:00:00.9999999",
+			want: "2000-01-01 00:00:01.000000",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -347,5 +444,240 @@ func TestDatetime_DayOfYear(t *testing.T) {
 			dayOfWeek := datetime.DayOfWeek()
 			t.Logf("dayOfWeek:%+v \n", dayOfWeek)
 		})
+	}
+}
+
+func TestDatetime_TruncateToScale(t *testing.T) {
+	// Test datetime with full microsecond precision: 2024-01-15 10:20:30.123456
+	dt := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456)
+
+	// Test scale 0 (seconds, no fractional part)
+	truncated := dt.TruncateToScale(0)
+	expected := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 0)
+	require.Equal(t, expected, truncated, "scale 0 should truncate to seconds")
+
+	// Test scale 3 (milliseconds) - should truncate to .123000
+	truncated = dt.TruncateToScale(3)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123000)
+	require.Equal(t, expected, truncated, "scale 3 should truncate to milliseconds")
+
+	// Test scale 6 (microseconds) - should not change
+	truncated = dt.TruncateToScale(6)
+	require.Equal(t, dt, truncated, "scale 6 should not change")
+
+	// Test rounding up: .123500 with scale 3 should round to .124000
+	dt2 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123500)
+	truncated = dt2.TruncateToScale(3)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 124000)
+	require.Equal(t, expected, truncated, "scale 3 should round .123500 up to .124000")
+
+	// Test rounding up to next second: .999999 with scale 0 should round to next second
+	dt3 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 999999)
+	truncated = dt3.TruncateToScale(0)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 31, 0)
+	require.Equal(t, expected, truncated, "scale 0 should round .999999 to next second")
+
+	// Test scale 1 (0.1 seconds): .156789 should round to .200000
+	dt4 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 156789)
+	truncated = dt4.TruncateToScale(1)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 200000)
+	require.Equal(t, expected, truncated, "scale 1 should round .156789 to .200000")
+
+	// Test scale 2 (0.01 seconds): .125678 should round to .130000
+	dt5 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 125678)
+	truncated = dt5.TruncateToScale(2)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 130000)
+	require.Equal(t, expected, truncated, "scale 2 should round .125678 to .130000")
+
+	// Test scale 4: .123456 should truncate to .123500 (rounds up from .123456)
+	dt6 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456)
+	truncated = dt6.TruncateToScale(4)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123500)
+	require.Equal(t, expected, truncated, "scale 4 should round .123456 to .123500")
+
+	// Test scale 5: .123456 should truncate to .123460
+	dt7 := DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456)
+	truncated = dt7.TruncateToScale(5)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123460)
+	require.Equal(t, expected, truncated, "scale 5 should round .123456 to .123460")
+
+	// Edge case: Test rounding at minute boundary
+	dt8 := DatetimeFromClock(2024, 1, 15, 10, 20, 59, 999999)
+	truncated = dt8.TruncateToScale(0)
+	expected = DatetimeFromClock(2024, 1, 15, 10, 21, 0, 0)
+	require.Equal(t, expected, truncated, "scale 0 should round 59.999999 to next minute")
+
+	// Edge case: Test rounding at hour boundary
+	dt9 := DatetimeFromClock(2024, 1, 15, 10, 59, 59, 999999)
+	truncated = dt9.TruncateToScale(0)
+	expected = DatetimeFromClock(2024, 1, 15, 11, 0, 0, 0)
+	require.Equal(t, expected, truncated, "scale 0 should round to next hour")
+
+	// Edge case: Test rounding at day boundary
+	dt10 := DatetimeFromClock(2024, 1, 15, 23, 59, 59, 999999)
+	truncated = dt10.TruncateToScale(0)
+	expected = DatetimeFromClock(2024, 1, 16, 0, 0, 0, 0)
+	require.Equal(t, expected, truncated, "scale 0 should round to next day")
+}
+
+// TestDatetime_String2_NoNewline tests that String2 output does not contain newline characters
+// This test ensures the fix for the String2 formatting bug (removing newline from %06d\n)
+func TestDatetime_String2_NoNewline(t *testing.T) {
+	testCases := []struct {
+		name     string
+		datetime Datetime
+		scale    int32
+	}{
+		{
+			name:     "scale 0",
+			datetime: DatetimeFromClock(2024, 1, 15, 10, 20, 30, 0),
+			scale:    0,
+		},
+		{
+			name:     "scale 1",
+			datetime: DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456),
+			scale:    1,
+		},
+		{
+			name:     "scale 3",
+			datetime: DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456),
+			scale:    3,
+		},
+		{
+			name:     "scale 6",
+			datetime: DatetimeFromClock(2024, 1, 15, 10, 20, 30, 123456),
+			scale:    6,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.datetime.String2(tc.scale)
+			// Ensure no newline character in the output
+			require.NotContains(t, result, "\n", "String2 output should not contain newline")
+			require.NotContains(t, result, "\r", "String2 output should not contain carriage return")
+
+			// Verify the format is correct
+			if tc.scale > 0 {
+				require.Contains(t, result, ".", "String2 with scale > 0 should contain decimal point")
+			}
+		})
+	}
+}
+
+// TestDatetime_ToTime tests the ToTime method with various scales, including edge cases
+// This test ensures that ToTime handles scale > 6 correctly without array bounds issues
+func TestDatetime_ToTime(t *testing.T) {
+	// Test datetime: 2007-12-31 23:59:59.123456
+	dt := DatetimeFromClock(2007, 12, 31, 23, 59, 59, 123456)
+
+	testCases := []struct {
+		name     string
+		datetime Datetime
+		scale    int32
+		expected string // Expected time string representation
+	}{
+		{
+			name:     "scale 0 - seconds only",
+			datetime: dt,
+			scale:    0,
+			expected: "23:59:59",
+		},
+		{
+			name:     "scale 1 - 0.1 seconds",
+			datetime: dt,
+			scale:    1,
+			expected: "23:59:59.1",
+		},
+		{
+			name:     "scale 3 - milliseconds",
+			datetime: dt,
+			scale:    3,
+			expected: "23:59:59.123",
+		},
+		{
+			name:     "scale 6 - microseconds",
+			datetime: dt,
+			scale:    6,
+			expected: "23:59:59.123456",
+		},
+		{
+			name:     "scale 7 - should use scale 6 (no panic)",
+			datetime: dt,
+			scale:    7,
+			expected: "23:59:59.1234560", // String2 now supports scale > 6 with padding
+		},
+		{
+			name:     "scale 9 - should use scale 6 (no panic)",
+			datetime: dt,
+			scale:    9,
+			expected: "23:59:59.123456000", // String2 now supports scale > 6 with padding
+		},
+		{
+			name: "scale 9 with ADDTIME result - should not panic",
+			// Simulate ADDTIME result with scale 9
+			datetime: DatetimeFromClock(2008, 1, 2, 1, 1, 1, 1),
+			scale:    9,
+			expected: "01:01:01.000001000", // String2 now supports scale > 6 with padding
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// This should not panic even with scale > 6
+			result := tc.datetime.ToTime(tc.scale)
+			actual := result.String2(tc.scale)
+			require.Equal(t, tc.expected, actual, "ToTime(%d) should produce correct time string", tc.scale)
+		})
+	}
+
+	// Test the exact case that caused the panic: TIME(ADDTIME(...))
+	// ADDTIME('12:30:45', '01:15:30') produces a datetime with scale 9
+	time1, _ := ParseTime("12:30:45", 6)
+	time2, _ := ParseTime("01:15:30", 6)
+	// Simulate ADDTIME result: convert time to datetime and add
+	dt1 := time1.ToDatetime(9) // This creates a datetime with scale 9
+	dt2 := time2.ToDatetime(9)
+	resultDt := Datetime(int64(dt1) + int64(dt2))
+	// Convert back to TIME - this should not panic
+	resultTime := resultDt.ToTime(9)
+	require.Equal(t, "13:46:15.000000", resultTime.String2(6), "TIME(ADDTIME(...)) should work correctly")
+}
+
+// TestAddIntervalMicrosecond tests AddInterval with MicroSecond unit
+// This test verifies the fix for TIMESTAMPADD(MICROSECOND, 1000000, DATE('2024-12-20'))
+func TestAddIntervalMicrosecond(t *testing.T) {
+	// Test case: DATE('2024-12-20') + 1000000 microseconds = 2024-12-20 00:00:01.000000
+	date, _ := ParseDateCast("2024-12-20")
+	dt := date.ToDatetime()
+
+	// Add 1000000 microseconds (1 second)
+	result, success := dt.AddInterval(1000000, MicroSecond, DateTimeType)
+	require.True(t, success, "AddInterval should succeed for MicroSecond")
+	require.NotEqual(t, Datetime(0), result, "Result should not be zero")
+
+	// Verify the result is 2024-12-20 00:00:01.000000
+	expected, _ := ParseDatetime("2024-12-20 00:00:01.000000", 6)
+	require.Equal(t, expected, result, "DATE + 1000000 microseconds should equal 2024-12-20 00:00:01.000000")
+
+	// Verify the string representation
+	require.Equal(t, "2024-12-20 00:00:01.000000", result.String2(6), "String representation should match")
+
+	// Test with different microsecond values
+	testCases := []struct {
+		microseconds int64
+		expected     string
+	}{
+		{1000000, "2024-12-20 00:00:01.000000"}, // 1 second
+		{500000, "2024-12-20 00:00:00.500000"},  // 0.5 seconds
+		{123456, "2024-12-20 00:00:00.123456"},  // 123456 microseconds
+		{2000000, "2024-12-20 00:00:02.000000"}, // 2 seconds
+	}
+
+	for _, tc := range testCases {
+		result, success := dt.AddInterval(tc.microseconds, MicroSecond, DateTimeType)
+		require.True(t, success, "AddInterval should succeed for %d microseconds", tc.microseconds)
+		require.NotEqual(t, Datetime(0), result, "Result should not be zero for %d microseconds", tc.microseconds)
+		require.Equal(t, tc.expected, result.String2(6), "Result should match expected for %d microseconds", tc.microseconds)
 	}
 }

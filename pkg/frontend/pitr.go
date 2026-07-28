@@ -29,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -82,8 +80,8 @@ type pitrRecord struct {
 	pitrId        string
 	pitrName      string
 	createAccount uint64
-	createTime    string
-	modifiedTime  string
+	createTime    int64
+	modifiedTime  int64
 	level         string
 	accountId     uint64
 	accountName   string
@@ -982,7 +980,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, err
 	}
 
-	if len(accountName) > 0 {
+	if stmt.Level == tree.RESTORELEVELACCOUNT && len(accountName) > 0 {
 		restoreOtherAccount := func() (rtnErr error) {
 			fromAccount := string(stmt.SrcAccountName)
 			var (
@@ -1049,6 +1047,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			}
 
 			// check account exists or not
+			ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
 			rtnErr = restoreAccountUsingClusterSnapshotToNew(
 				ctx,
 				ses,
@@ -1113,6 +1112,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	// restore according the restore level
 	switch restoreLevel {
 	case tree.RESTORELEVELCLUSTER:
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
 		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore); err != nil {
 			return
@@ -1128,14 +1128,17 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		}
 		return
 	case tree.RESTORELEVELACCOUNT:
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
 		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
 	case tree.RESTORELEVELDATABASE:
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 		if err = restoreToDatabaseWithPitr(ctx, ses.GetService(), bh, pitrName, ts, dbName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
 	case tree.RESTORELEVELTABLE:
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelTable)
 		if err = restoreToTableWithPitr(ctx, ses.service, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
@@ -1414,6 +1417,15 @@ func restoreToDatabaseOrTableWithPitr(
 			continue
 		}
 
+		// external table data is stored outside MO and cannot be restored by clone.
+		if shouldSkipRestoreTableInBulk(tblInfo) {
+			if restoreToTbl {
+				return newExternalTableRestoreError(ctx, tblInfo, "pitr")
+			}
+			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore external table: %v.%v", pitrName, tblInfo.dbName, tblInfo.tblName))
+			continue
+		}
+
 		// skip view
 		if tblInfo.typ == view {
 			viewMap[key] = tblInfo
@@ -1452,6 +1464,10 @@ func reCreateTableWithPitr(
 	pitrName string,
 	ts int64,
 	tblInfo *tableInfo) (err error) {
+	if isExternalTable(tblInfo) {
+		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
+	}
+
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
 
 	var isMasterTable bool
@@ -1519,13 +1535,14 @@ func getTableInfoWithPitr(
 		return nil, err
 	}
 
-	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSqlWithTs(ctx, bh, ts, dbName, tblInfo.tblName); err != nil {
-			return nil, err
-		}
-	}
-
-	return tableInfos, nil
+	return fillTableCreateSQLsForRestore(
+		sid,
+		pitrName,
+		tableInfos,
+		func(tblInfo *tableInfo) (string, error) {
+			return getCreateTableSqlWithTs(ctx, bh, ts, tblInfo.dbName, tblInfo.tblName)
+		},
+	)
 }
 
 func showFullTablesWitsTs(
@@ -1536,16 +1553,14 @@ func showFullTablesWitsTs(
 	ts int64,
 	dbName string,
 	tblName string) ([]*tableInfo, error) {
-	sql := fmt.Sprintf("show full tables from `%s`", dbName)
-	if len(tblName) > 0 {
-		sql += fmt.Sprintf(" like '%s'", tblName)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if ts > 0 {
-		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
-	}
+	sql := buildTableInfoListSQL(dbName, tblName, ts, accountId)
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s` sql: %s ", pitrName, dbName, tblName, sql))
-	// cols: table name, table type
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	// cols: table name, table type, relkind, view definition
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -1556,6 +1571,8 @@ func showFullTablesWitsTs(
 			dbName:  dbName,
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
+			relKind: cols[2],
+			viewDef: cols[3],
 		}
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", pitrName, dbName, tblName, len(ans)))
@@ -1711,7 +1728,6 @@ func restoreViewsWithPitr(
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore views", pitrName))
 	var (
 		err         error
-		stmts       []tree.Statement
 		sortedViews []string
 		snapshot    *pbplan.Snapshot
 		oldSnapshot *pbplan.Snapshot
@@ -1734,7 +1750,7 @@ func restoreViewsWithPitr(
 	g := toposort{next: make(map[string][]string)}
 	for key, viewEntry := range viewMap {
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore view: %v", pitrName, viewEntry.tblName))
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 1)
+		stmts, err := parseViewCreateSQLForRestore(ctx, viewEntry, 1)
 		if err != nil {
 			return err
 		}
@@ -1742,9 +1758,14 @@ func restoreViewsWithPitr(
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
 		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		freeStatements(stmts)
 		if err != nil {
-			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
+			stmts, err = parseViewCreateSQLForRestore(ctx, viewEntry, 0)
+			if err != nil {
+				return err
+			}
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			freeStatements(stmts)
 			if err != nil {
 				return err
 			}
@@ -1777,7 +1798,7 @@ func restoreViewsWithPitr(
 				return err
 			}
 
-			if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+			if err = executeViewCreateSQLForRestore(ctx, bh, tblInfo); err != nil {
 				return err
 			}
 		}
@@ -1856,10 +1877,10 @@ func getPitrRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*pitr
 				if record.createAccount, err = er.GetUint64(ctx, row, 2); err != nil {
 					return nil, err
 				}
-				if record.createTime, err = er.GetString(ctx, row, 3); err != nil {
+				if record.createTime, err = er.GetInt64(ctx, row, 3); err != nil {
 					return nil, err
 				}
-				if record.modifiedTime, err = er.GetString(ctx, row, 4); err != nil {
+				if record.modifiedTime, err = er.GetInt64(ctx, row, 4); err != nil {
 					return nil, err
 				}
 				var level string
@@ -1946,15 +1967,11 @@ func nanoTimeFormat(ts int64) string {
 func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 	// if the timestamp time less than the pitrRecord create time, then return error
 	// create time is utc time string, ts is coverted to utc too
-	createTimeStr := pitrRecord.createTime
-	// parse createTimeStr to utc time
-	t, err := time.ParseInLocation("2006-01-02 15:04:05", createTimeStr, time.UTC)
-	if err != nil {
-		return
-	}
-	utcNano := t.UTC().UnixNano()
-	if ts <= utcNano {
-		return moerr.NewInternalErrorNoCtxf("input timestamp %v is less than the pitr valid time %v", nanoTimeFormat(ts), nanoTimeFormat(utcNano))
+	if ts <= pitrRecord.createTime {
+		return moerr.NewInternalErrorNoCtxf(
+			"input timestamp %v is less than the pitr valid time %v",
+			nanoTimeFormat(ts), nanoTimeFormat(pitrRecord.createTime),
+		)
 	}
 
 	// use utc time now sub pitr during time get the minest time
@@ -2075,6 +2092,9 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		if pitrRecord.level == tree.PITRLEVELTABLE.String() {
 			return moerr.NewInternalErrorNoCtxf("restore level %v is not allowed for database restore", pitrRecord.level)
 		}
+		if len(stmt.AccountName) > 0 && string(stmt.AccountName) != tenantInfo.GetTenant() {
+			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore database %v", string(stmt.AccountName), string(stmt.DatabaseName))
+		}
 		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName))
 		}
@@ -2085,6 +2105,9 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		// check the level
 		if pitrRecord.level == tree.PITRLEVELCLUSTER.String() {
 			return moerr.NewInternalErrorNoCtxf("cluster level pitr `%v` is not allowed for table restore", pitrRecord.level)
+		}
+		if len(stmt.AccountName) > 0 && string(stmt.AccountName) != tenantInfo.GetTenant() {
+			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore table %v.%v", string(stmt.AccountName), string(stmt.DatabaseName), string(stmt.TableName))
 		}
 		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v table %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName), string(stmt.TableName))

@@ -1,0 +1,300 @@
+// Copyright 2025 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package databranchutils
+
+type DataBranchMetadata struct {
+	TableID      uint64
+	CloneTS      int64
+	PTableID     uint64
+	TableDeleted bool
+}
+
+type dagNode struct {
+	TableID  uint64
+	CloneTS  int64
+	ParentID uint64
+
+	Parent *dagNode
+	Depth  int
+}
+
+type DataBranchDAG struct {
+	nodes map[uint64]*dagNode
+}
+
+func NewDAG(rows []DataBranchMetadata) *DataBranchDAG {
+	dag := &DataBranchDAG{
+		nodes: make(map[uint64]*dagNode, len(rows)),
+	}
+
+	// --- Pass 1: Create all Node objects ---
+	// Iterate through each row and create a corresponding Node object.
+	// We store them in the map but do not link them yet, as parent nodes may not have been processed.
+	for _, row := range rows {
+		var (
+			ok    bool
+			node1 *dagNode
+			node2 *dagNode
+		)
+
+		if node1, ok = dag.nodes[row.TableID]; !ok {
+			node1 = &dagNode{
+				TableID: row.TableID,
+				Depth:   -1, // Initialize depth as -1 to mark it as "not calculated".
+			}
+			dag.nodes[node1.TableID] = node1
+		}
+
+		node1.CloneTS = row.CloneTS
+		node1.ParentID = row.PTableID
+
+		if _, ok = dag.nodes[row.PTableID]; !ok {
+			node2 = &dagNode{
+				TableID: row.PTableID,
+				Depth:   -1, // Initialize depth as -1 to mark it as "not calculated".
+			}
+			dag.nodes[row.PTableID] = node2
+		}
+	}
+
+	// --- Pass 2: Link Parent pointers ---
+	// Now that all nodes exist in the map, we can iterate through them again
+	// and set the `Parent` pointer based on the `ParentID`.
+	for _, node := range dag.nodes {
+		if node.ParentID != 0 {
+			if parentNode, ok := dag.nodes[node.ParentID]; ok {
+				node.Parent = parentNode
+			}
+		}
+	}
+
+	// --- Pass 3: Calculate the depth for every node ---
+	// Depth is crucial for an efficient LCA algorithm. We calculate it once during setup.
+	for _, node := range dag.nodes {
+		dag.calculateDepth(node)
+	}
+
+	return dag
+}
+
+// calculateDepth computes node depth iteratively. If the parent walk reaches a
+// cycle, every node in that cycle is detached and treated as a root. The
+// remaining acyclic prefix can then retain its parent relations and receive a
+// bounded depth.
+func (d *DataBranchDAG) calculateDepth(node *dagNode) int {
+	if node.Depth != -1 {
+		return node.Depth
+	}
+
+	path := make([]*dagNode, 0, 8)
+	pathIndex := make(map[*dagNode]int)
+	current := node
+	baseDepth := -1
+	for current != nil {
+		if current.Depth != -1 {
+			baseDepth = current.Depth
+			break
+		}
+		if cycleStart, ok := pathIndex[current]; ok {
+			for _, cycleNode := range path[cycleStart:] {
+				cycleNode.Parent = nil
+				cycleNode.ParentID = 0
+				cycleNode.Depth = 0
+			}
+			path = path[:cycleStart]
+			baseDepth = 0
+			break
+		}
+		pathIndex[current] = len(path)
+		path = append(path, current)
+		current = current.Parent
+	}
+
+	for i := len(path) - 1; i >= 0; i-- {
+		baseDepth++
+		path[i].Depth = baseDepth
+	}
+	return node.Depth
+}
+
+func (d *DataBranchDAG) Exists(tableID uint64) bool {
+	_, ok := d.nodes[tableID]
+	return ok
+}
+
+func (d *DataBranchDAG) HasParent(tableID uint64) bool {
+	node, ok := d.nodes[tableID]
+	if !ok {
+		return false
+	}
+
+	return node.Parent != nil
+}
+
+// FindLCA finds the Lowest Common Ancestor (LCA) for two given table IDs.
+// It returns:
+// 1. lcaTableID: The table_id of the common ancestor.
+// 2. childTableID1: The direct child table of the LCA that is on the path to tableID1.
+// 3. childTableID2: The direct child table of the LCA that is on the path to tableID2.
+// 4. ok: A boolean indicating if a common ancestor was found.
+func (d *DataBranchDAG) FindLCA(tableID1, tableID2 uint64) (lcaTableID uint64, childTableID1 uint64, childTableID2 uint64, ok bool) {
+	node1, exists1 := d.nodes[tableID1]
+	node2, exists2 := d.nodes[tableID2]
+
+	// Ensure both nodes exist in our DAG.
+	if !exists1 || !exists2 {
+		return 0, 0, 0, false
+	}
+
+	// If it's the same node, it is its own LCA.
+	// Both child table IDs collapse to the node itself.
+	if tableID1 == tableID2 {
+		return tableID1, node1.TableID, node1.TableID, true
+	}
+
+	// Keep references to the original nodes for the final step of finding branch timestamps.
+	originalNode1 := node1
+	originalNode2 := node2
+
+	// --- Step 1: Bring both nodes to the same depth ---
+	// Move the deeper node up the tree until it is at the same depth as the shallower node.
+	if node1.Depth < node2.Depth {
+		for node2.Depth > node1.Depth {
+			node2 = node2.Parent
+		}
+	} else if node2.Depth < node1.Depth {
+		for node1.Depth > node2.Depth {
+			node1 = node1.Parent
+		}
+	}
+
+	// --- Step 2: Move both nodes up in lockstep until they meet ---
+	// Now that they are at the same depth, we move them up one parent at a time.
+	// The first node they both share is the LCA.
+	for node1 != node2 {
+		// If either path hits a root before they meet, they are in different trees.
+		if node1.Parent == nil || node2.Parent == nil {
+			return 0, 0, 0, false
+		}
+		node1 = node1.Parent
+		node2 = node2.Parent
+	}
+
+	lcaNode := node1
+	if lcaNode == nil {
+		// Should not happen if they are in the same tree and not both nil roots.
+		return 0, 0, 0, false
+	}
+
+	lcaTableID = lcaNode.TableID
+
+	// --- Step 3: Find the specific children of the LCA that lead to the original nodes ---
+
+	// Find the direct child table on the path to tableID1.
+	child1 := originalNode1
+	if child1 != lcaNode { // If the original node is not the LCA itself
+		for child1 != nil && child1.Parent != lcaNode {
+			child1 = child1.Parent
+		}
+		childTableID1 = child1.TableID
+	} else { // If the original node IS the LCA (ancestor case)
+		childTableID1 = lcaNode.TableID
+	}
+
+	// Find the direct child table on the path to tableID2.
+	child2 := originalNode2
+	if child2 != lcaNode { // If the original node is not the LCA itself
+		for child2 != nil && child2.Parent != lcaNode {
+			child2 = child2.Parent
+		}
+		childTableID2 = child2.TableID
+	} else { // If the original node IS the LCA (ancestor case)
+		childTableID2 = lcaNode.TableID
+	}
+
+	ok = true
+	return
+}
+
+func (d *DataBranchDAG) GetCloneTS(tableID uint64) (int64, bool) {
+	node, ok := d.nodes[tableID]
+	if !ok {
+		return 0, false
+	}
+	return node.CloneTS, true
+}
+
+// maxBranchDAGDepth bounds PathFromAncestor's walk so a corrupted
+// DAG with a Parent-pointer cycle cannot drive an infinite loop.
+// In practice user-visible chains never approach this limit; deep
+// real-world trees have been seen to ~16 levels.
+const maxBranchDAGDepth = 1024
+
+// PathFromAncestor returns the table IDs and clone timestamps along the
+// chain from ancestorID (inclusive) down to descendantID (inclusive).
+// Entries are ordered top-down: result[0] is ancestorID, result[len-1]
+// is descendantID. Returns ok=false if descendantID is not a (possibly
+// transitive) descendant of ancestorID, or if the walk exceeds
+// maxBranchDAGDepth (a defense-in-depth guard against a corrupted DAG
+// with a cycle in Parent pointers).
+//
+// cloneTSes[0] is ancestorID's own CloneTS (or 0 if ancestorID is a
+// root); cloneTSes[i] for i>0 is the CloneTS of result[i] (i.e. the
+// moment result[i] was forked off result[i-1]).
+//
+// Used by `data branch diff` to walk every ancestor between the LCA
+// and each endpoint — supporting arbitrary tree depths uniformly.
+//
+// Example. With the tree
+//
+//	       t0
+//	    /   |   \
+//	  t1   t2   t3
+//	  |     |
+//	 t4    t6
+//	 /
+//	t9
+//
+// PathFromAncestor(t9, t0) = ([t0, t1, t4, t9], [<cts>, <cts>, <cts>, <cts>], true)
+// PathFromAncestor(t6, t0) = ([t0, t2, t6], ..., true)
+// PathFromAncestor(t9, t1) = ([t1, t4, t9], ..., true)
+// PathFromAncestor(t9, t6) = (nil, nil, false)              // not on the chain
+func (d *DataBranchDAG) PathFromAncestor(descendantID, ancestorID uint64) (
+	tableIDs []uint64,
+	cloneTSes []int64,
+	ok bool,
+) {
+	node, exists := d.nodes[descendantID]
+	if !exists {
+		return nil, nil, false
+	}
+	// Walk up from descendant collecting nodes; stop when we reach
+	// ancestor (inclusive), run off the top, or exceed the depth
+	// guard.
+	for steps := 0; node != nil && steps < maxBranchDAGDepth; steps++ {
+		tableIDs = append(tableIDs, node.TableID)
+		cloneTSes = append(cloneTSes, node.CloneTS)
+		if node.TableID == ancestorID {
+			// Reverse into top-down order (ancestor first).
+			for i, j := 0, len(tableIDs)-1; i < j; i, j = i+1, j-1 {
+				tableIDs[i], tableIDs[j] = tableIDs[j], tableIDs[i]
+				cloneTSes[i], cloneTSes[j] = cloneTSes[j], cloneTSes[i]
+			}
+			return tableIDs, cloneTSes, true
+		}
+		node = node.Parent
+	}
+	return nil, nil, false
+}

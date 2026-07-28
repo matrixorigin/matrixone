@@ -257,8 +257,8 @@ const (
 	LOAD_FILE = 227
 	SAVE_FILE = 228
 
-	//information functions
-	//Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
+	// information functions
+	// Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
 	DATABASE             = 229
 	USER                 = 230
 	CONNECTION_ID        = 231
@@ -360,7 +360,7 @@ const (
 	// be used: show pitr
 	CAST_RANGE_VALUE_UNIT = 309
 
-	//Sequence function
+	// Sequence function
 	NEXTVAL = 310
 	SETVAL  = 311
 	CURRVAL = 312
@@ -372,11 +372,11 @@ const (
 	L2_NORM           = 316 // L2 NORMALIZATION
 	INNER_PRODUCT     = 317
 	COSINE_SIMILARITY = 318
-	VECTOR_DIMS       = 319 //VECTOR DIMENSIONS
-	NORMALIZE_L2      = 320 //NORMALIZE L2
-	L2_DISTANCE       = 321 //L2_DISTANCE
-	L2_DISTANCE_SQ    = 322 //L2_DISTANCE_SQ
-	COSINE_DISTANCE   = 323 //COSINE_DISTANCE
+	VECTOR_DIMS       = 319 // VECTOR DIMENSIONS
+	NORMALIZE_L2      = 320 // NORMALIZE L2
+	L2_DISTANCE       = 321 // L2_DISTANCE
+	L2_DISTANCE_SQ    = 322 // L2_DISTANCE_SQ
+	COSINE_DISTANCE   = 323 // COSINE_DISTANCE
 	CLUSTER_CENTERS   = 324 // CLUSTER_CENTERS
 	SUB_VECTOR        = 325 // SUB_VECTOR
 
@@ -414,68 +414,452 @@ const (
 	STARLARK     = 345
 	TRY_STARLARK = 346
 
+	LLM_CHAT      = 347
+	LLM_EMBEDDING = 348
+
+	// hash partition function
+	HASH_PARTITION = 349
+
+	// mo_tuple_expr function
+	MO_TUPLE_EXPR = 350
+
+	// function `current_time`, `curtime`
+	CURRENT_TIME = 351
+
+	// function `truncate`
+	TRUNCATE = 352
+
+	// function `char`
+	CHAR = 353
+
+	// function `insert`
+	INSERT = 354
+
+	// function `ord`
+	ORD = 355
+
+	// function `quote`
+	QUOTE = 356
+
+	// function `soundex`
+	SOUNDEX = 357
+
+	// function `degrees`
+	DEGREES = 358
+
+	// function `radians`
+	RADIANS = 359
+
+	// function `dayofweek`
+	DAYOFWEEK = 360
+
+	// function `microsecond`
+	MICROSECOND = 361
+
+	// function `quarter`
+	QUARTER = 362
+
+	// function `time_format`
+	TIME_FORMAT = 363
+
+	// function `timestampadd`
+	TIMESTAMPADD = 364
+
+	// function `json_array`
+	JSON_ARRAY = 365
+
+	// function `json_object`
+	JSON_OBJECT = 366
+
+	// function `conv`
+	CONV = 367
+
+	// function `dayname`
+	DAYNAME = 368
+
+	// function `dayofmonth`
+	DAYOFMONTH = 369
+
+	// function `from_days`
+	FROM_DAYS = 370
+
+	// function `get_format`
+	GET_FORMAT = 371
+
+	// function `localtime`
+	LOCALTIME = 372
+
+	// function `maketime`
+	MAKETIME = 373
+
+	// function `monthname`
+	MONTHNAME = 374
+
+	// function `period_add`
+	PERIOD_ADD = 375
+
+	// function `period_diff`
+	PERIOD_DIFF = 376
+
+	// function `sec_to_time`
+	SEC_TO_TIME = 377
+
+	// function `subtime`
+	SUBTIME = 378
+
+	// function `time_to_sec`
+	TIME_TO_SEC = 379
+
+	// function `utc_date`
+	UTC_DATE = 380
+
+	// function `utc_time`
+	UTC_TIME = 381
+
+	// function `weekofyear`
+	WEEKOFYEAR = 382
+
+	// function `yearweek`
+	YEARWEEK = 383
+
+	// function `elt`
+	ELT = 384
+
+	// function `export_set`
+	EXPORT_SET = 385
+
+	// function `make_set`
+	MAKE_SET = 386
+
+	// function `compress`
+	COMPRESS = 387
+
+	// function `uncompress`
+	UNCOMPRESS = 388
+
+	// function `uncompressed_length`
+	UNCOMPRESSED_LENGTH = 389
+
+	// function `random_bytes`
+	RANDOM_BYTES = 390
+
+	// function `validate_password_strength`
+	VALIDATE_PASSWORD_STRENGTH = 391
+
+	// function `inet6_aton`
+	INET6_ATON = 392
+
+	// function `inet6_ntoa`
+	INET6_NTOA = 393
+
+	// function `inet_aton`
+	INET_ATON = 394
+
+	// function `inet_ntoa`
+	INET_NTOA = 395
+
+	// function `is_ipv4`
+	IS_IPV4 = 396
+
+	// function `is_ipv6`
+	IS_IPV6 = 397
+
+	// function `is_ipv4_compat`
+	IS_IPV4_COMPAT = 398
+
+	// function `is_ipv4_mapped`
+	IS_IPV4_MAPPED = 399
+
+	// function `json_arrayagg`
+	JSON_ARRAYAGG = 400
+
+	// function `json_objectagg`
+	JSON_OBJECTAGG = 401
+
+	// function `mo_feature_registry_upsert`
+	MO_FEATURE_REGISTRY_UPSERT = 402
+
+	// function `mo_feature_limit_upsert`
+	MO_FEATURE_LIMIT_UPSERT = 403
+
+	IN_RANGE        = 404
+	PREFIX_IN_RANGE = 405
+	NULL_SAFE_EQUAL = 406
+
+	CAST_INDEX_TO_SET_VALUE       = 407
+	CAST_SET_VALUE_TO_INDEX       = 408
+	CAST_SET_INDEX_VALUE_TO_INDEX = 409
+
+	VECF32_FROM_BASE64       = 410
+	VECF64_FROM_BASE64       = 411
+	CAST_GEOMETRY_TO_SUBTYPE = 412
+	ST_ASTEXT                = 413
+	ST_GEOMFROMTEXT          = 414
+	ST_GEOMETRYTYPE          = 415
+	ST_X                     = 416
+	ST_Y                     = 417
+	ST_NUMGEOMETRIES         = 418
+	ST_GEOMETRYN             = 419
+	ST_ISEMPTY               = 420
+	ST_DISTANCE              = 421
+	ST_SRID                  = 422
+	ST_LENGTH                = 423
+	ST_AREA                  = 424
+	ST_CONTAINS              = 425
+	ST_WITHIN                = 426
+	ST_STARTPOINT            = 427
+	ST_ENDPOINT              = 428
+	ST_POINTN                = 429
+	ST_EXTERIORRING          = 430
+	ST_NUMINTERIORRINGS      = 431
+	ST_INTERIORRINGN         = 432
+	ST_NUMPOINTS             = 433
+	ST_ISCLOSED              = 434
+	ST_ISCOLLECTION          = 435
+	ST_DIMENSION             = 436
+	ST_ISSIMPLE              = 437
+	ST_ISRING                = 438
+	ST_ENVELOPE              = 439
+	ST_CENTROID              = 440
+	ST_BOUNDARY              = 441
+	ST_ISVALID               = 442
+	ST_POINTONSURFACE        = 443
+	ST_INTERSECTS            = 444
+	ST_DISJOINT              = 445
+	ST_TOUCHES               = 446
+	ST_CROSSES               = 447
+	ST_OVERLAPS              = 448
+	ST_EQUALS                = 449
+	ST_COVERS                = 450
+	ST_COVEREDBY             = 451
+	JSON_LENGTH              = 452
+	HLL_ADD_AGG              = 453
+	HLL_MERGE_AGG            = 454
+	HLL_CARDINALITY          = 455
+	JSON_TYPE                = 456
+	JSON_VALID               = 457
+	JSON_KEYS                = 458
+	JSON_PRETTY              = 459
+	JSON_SCHEMA_VALID        = 460
+	JSON_SCHEMA_VALID_REPORT = 461
+	JSON_VALUE               = 462
+
+	// GIS binary I/O
+	ST_ASWKB       = 463
+	ST_GEOMFROMWKB = 464
+
+	// GIS typed text constructors
+	ST_POINTFROMTEXT    = 465
+	ST_LINEFROMTEXT     = 466
+	ST_POLYFROMTEXT     = 467
+	ST_MPOINTFROMTEXT   = 468
+	ST_MLINEFROMTEXT    = 469
+	ST_MPOLYFROMTEXT    = 470
+	ST_GEOMCOLLFROMTEXT = 471
+
+	// GIS typed WKB constructors
+	ST_POINTFROMWKB    = 472
+	ST_LINEFROMWKB     = 473
+	ST_POLYFROMWKB     = 474
+	ST_MPOINTFROMWKB   = 475
+	ST_MLINEFROMWKB    = 476
+	ST_MPOLYFROMWKB    = 477
+	ST_GEOMCOLLFROMWKB = 478
+
+	// GIS point/misc
+	ST_LONGITUDE       = 479
+	ST_LATITUDE        = 480
+	ST_SWAPXY          = 481
+	ST_VALIDATE        = 482
+	ST_MAKEENVELOPE    = 483
+	ST_DISTANCE_SPHERE = 484
+
+	// GIS GeoHash
+	ST_GEOHASH          = 485
+	ST_LATFROMGEOHASH   = 486
+	ST_LONGFROMGEOHASH  = 487
+	ST_POINTFROMGEOHASH = 488
+
+	// GIS MBR (minimum bounding rectangle) predicates
+	MBRCONTAINS   = 489
+	MBRCOVEREDBY  = 490
+	MBRCOVERS     = 491
+	MBRDISJOINT   = 492
+	MBREQUALS     = 493
+	MBRINTERSECTS = 494
+	MBROVERLAPS   = 495
+	MBRTOUCHES    = 496
+	MBRWITHIN     = 497
+
+	// GIS GeoJSON
+	ST_ASGEOJSON       = 498
+	ST_GEOMFROMGEOJSON = 499
+
+	// GIS constructive operations
+	ST_CONVEXHULL = 500
+	ST_SIMPLIFY   = 501
+	ST_COLLECT    = 502
+
+	// GIS linear referencing
+	ST_LINEINTERPOLATEPOINT  = 503
+	ST_LINEINTERPOLATEPOINTS = 504
+	ST_POINTATDISTANCE       = 505
+
+	// GIS discrete curve distances
+	ST_FRECHETDISTANCE   = 506
+	ST_HAUSDORFFDISTANCE = 507
+
+	// GIS Boolean overlay operations
+	ST_UNION         = 508
+	ST_INTERSECTION  = 509
+	ST_DIFFERENCE    = 510
+	ST_SYMDIFFERENCE = 511
+
+	// GIS buffer
+	ST_BUFFER = 512
+
+	// merged from upstream/main (renumbered to avoid colliding with the GIS block above)
+	CAST_JSON_TO_ARRAY = 513
+
+	BIT_COUNT         = 514
+	IS_UUID           = 515
+	UUID_TO_BIN       = 516
+	BIN_TO_UUID       = 517
+	NAME_CONST        = 518
+	GET_LOCK          = 519
+	RELEASE_LOCK      = 520
+	IS_FREE_LOCK      = 521
+	IS_USED_LOCK      = 522
+	RELEASE_ALL_LOCKS = 523
+
+	// S2 geometry (github.com/golang/geo/s2) cell functions. A CellId is a
+	// BIGINT UNSIGNED (uint64). See docs/design/s2h3_funcs.md.
+	S2_CELLID               = 524
+	S2_CELLID_LEVEL         = 525
+	S2_CELLID_CENTER        = 526
+	S2_CELLID_AREA          = 527
+	S2_CELLID_PARENT        = 528
+	S2_CELLID_EDGENEIGHBORS = 529
+	S2_CELLID_ALLNEIGHBORS  = 530
+	S2_CELLID_ARENEIGHBORS  = 531
+
+	// H3 hierarchical hexagonal index (github.com/uber/h3-go) functions. An
+	// H3Index is a BIGINT UNSIGNED (uint64). See docs/design/s2h3_funcs.md.
+	H3_H3INDEX              = 532
+	H3_H3INDEX_RESOLUTION   = 533
+	H3_H3INDEX_CENTER       = 534
+	H3_H3INDEX_BOUNDARY     = 535
+	H3_H3INDEX_PARENT       = 536
+	H3_H3INDEX_NEIGHBORS    = 537
+	H3_H3INDEX_ARENEIGHBORS = 538
+
+	// GIS numeric point constructors: ST_Point(x, y) -> GEOMETRY (POINT),
+	// ST_Point32(x, y) -> GEOMETRY32 (POINT), where x is longitude/X and y is
+	// latitude/Y.
+	ST_POINT   = 539
+	ST_POINT32 = 540
+
+	// function `cast_strict`
+	CAST_STRICT                  = 541
+	DATE_TRUNC                   = 542
+	JSON_CONTAINS                = 543
+	JSON_REMOVE                  = 544
+	JSON_CONTAINS_PATH           = 545
+	INTERNAL_JSON_ORDERING_PARAM = 546
+	JSON_MERGE_PATCH             = 547
+	JSON_MERGE_PRESERVE          = 548
+	JSON_OVERLAPS                = 549
+
+	// vec{bf16,f16,int8}_from_base64: decode a base64 payload of the narrow type's
+	// raw bytes into that narrow vector type — the narrow siblings of
+	// vecf32_from_base64 / vecf64_from_base64. Used by the ivfflat narrow re-rank,
+	// where the query must be a constant narrow vec literal matching the narrow
+	// entries (a cast of vecf32_from_base64 does not constant-fold, breaking the
+	// ORDER BY index pushdown).
+	// Renumbered after the main merge, which took 524-548 for the S2/H3/ST_POINT/
+	// CAST_STRICT/DATE_TRUNC/JSON_CONTAINS/JSON_REMOVE and the new JSON_CONTAINS_PATH/
+	// INTERNAL_JSON_ORDERING_PARAM/JSON_MERGE_PATCH/JSON_MERGE_PRESERVE functions (545-548).
+	// These IDs are referenced by name only (name map + list_builtIn registration), so
+	// renumbering is safe.
+	VECBF16_FROM_BASE64  = 550
+	VECF16_FROM_BASE64   = 551
+	VECINT8_FROM_BASE64  = 552
+	VECUINT8_FROM_BASE64 = 553
+
+	// function `cast_assign`
+	CAST_ASSIGN = 554
+	// function `cast_ignore`
+	CAST_IGNORE = 555
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 347
+	FUNCTION_END_NUMBER = 556
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
 	// operators
-	"=":              EQUAL,
-	">":              GREAT_THAN,
-	">=":             GREAT_EQUAL,
-	"<":              LESS_THAN,
-	"<=":             LESS_EQUAL,
-	"<>":             NOT_EQUAL,
-	"!=":             NOT_EQUAL,
-	"not":            NOT,
-	"and":            AND,
-	"or":             OR,
-	"xor":            XOR,
-	"like":           LIKE,
-	"between":        BETWEEN,
-	"in":             IN,
-	"not_in":         NOT_IN,
-	"+":              PLUS,
-	"-":              MINUS,
-	"*":              MULTI,
-	"/":              DIV,
-	"div":            INTEGER_DIV,
-	"%":              MOD,
-	"mod":            MOD,
-	"unary_plus":     UNARY_PLUS,
-	"unary_minus":    UNARY_MINUS,
-	"unary_tilde":    UNARY_TILDE,
-	"unary_mark":     NOT,
-	"case":           CASE,
-	"coalesce":       COALESCE,
-	"cast":           CAST,
-	"bit_cast":       BIT_CAST,
-	"is":             IS,
-	"is_not":         ISNOT,
-	"isnot":          ISNOT,
-	"is_null":        ISNULL,
-	"isnull":         ISNULL,
-	"ifnull":         ISNULL,
-	"ilike":          ILIKE,
-	"is_not_null":    ISNOTNULL,
-	"isnotnull":      ISNOTNULL,
-	"isunknown":      ISNULL,
-	"isnotunknown":   ISNOTNULL,
-	"istrue":         ISTRUE,
-	"isnottrue":      ISNOTTRUE,
-	"isfalse":        ISFALSE,
-	"isnotfalse":     ISNOTFALSE,
-	"&":              OP_BIT_AND,
-	"|":              OP_BIT_OR,
-	"^":              OP_BIT_XOR,
-	"<<":             OP_BIT_SHIFT_LEFT,
-	">>":             OP_BIT_SHIFT_RIGHT,
-	"decode":         DECODE,
-	"prefix_eq":      PREFIX_EQ,
-	"prefix_in":      PREFIX_IN,
-	"prefix_between": PREFIX_BETWEEN,
+	"=":            EQUAL,
+	"<=>":          NULL_SAFE_EQUAL,
+	">":            GREAT_THAN,
+	">=":           GREAT_EQUAL,
+	"<":            LESS_THAN,
+	"<=":           LESS_EQUAL,
+	"<>":           NOT_EQUAL,
+	"!=":           NOT_EQUAL,
+	"not":          NOT,
+	"and":          AND,
+	"or":           OR,
+	"xor":          XOR,
+	"like":         LIKE,
+	"between":      BETWEEN,
+	"in":           IN,
+	"not_in":       NOT_IN,
+	"in_range":     IN_RANGE,
+	"+":            PLUS,
+	"-":            MINUS,
+	"*":            MULTI,
+	"/":            DIV,
+	"div":          INTEGER_DIV,
+	"%":            MOD,
+	"mod":          MOD,
+	"unary_plus":   UNARY_PLUS,
+	"unary_minus":  UNARY_MINUS,
+	"unary_tilde":  UNARY_TILDE,
+	"unary_mark":   NOT,
+	"case":         CASE,
+	"coalesce":     COALESCE,
+	"cast":         CAST,
+	"cast_strict":  CAST_STRICT,
+	"cast_assign":  CAST_ASSIGN,
+	"cast_ignore":  CAST_IGNORE,
+	"bit_cast":     BIT_CAST,
+	"is":           IS,
+	"is_not":       ISNOT,
+	"isnot":        ISNOT,
+	"is_null":      ISNULL,
+	"isnull":       ISNULL,
+	"ifnull":       ISNULL,
+	"ilike":        ILIKE,
+	"is_not_null":  ISNOTNULL,
+	"isnotnull":    ISNOTNULL,
+	"isunknown":    ISNULL,
+	"isnotunknown": ISNOTNULL,
+	"istrue":       ISTRUE,
+	"isnottrue":    ISNOTTRUE,
+	"isfalse":      ISFALSE,
+	"isnotfalse":   ISNOTFALSE,
+	"&":            OP_BIT_AND,
+	"|":            OP_BIT_OR,
+	"^":            OP_BIT_XOR,
+	"<<":           OP_BIT_SHIFT_LEFT,
+	">>":           OP_BIT_SHIFT_RIGHT,
+	"decode":       DECODE,
+
+	"prefix_eq":       PREFIX_EQ,
+	"prefix_in":       PREFIX_IN,
+	"prefix_between":  PREFIX_BETWEEN,
+	"prefix_in_range": PREFIX_IN_RANGE,
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,
@@ -490,24 +874,42 @@ var functionIdRegister = map[string]int32{
 	"bit_or":                BIT_OR,
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
+	"bit_count":             BIT_COUNT,
 	"cluster_centers":       CLUSTER_CENTERS,
 	"subvector":             SUB_VECTOR,
 	"std":                   STDDEV_POP,
+	"stddev":                STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
+	"stddev_samp":           STDDEV_SAMPLE,
 	"variance":              VAR_POP,
 	"var_pop":               VAR_POP,
+	"var_samp":              VAR_SAMPLE,
 	"approx_count":          APPROX_COUNT,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
+	"hll_add_agg":           HLL_ADD_AGG,
+	"hll_merge_agg":         HLL_MERGE_AGG,
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
 	// count window
-	"rank": RANK,
+	"rank":         RANK,
+	"row_number":   ROW_NUMBER,
+	"dense_rank":   DENSE_RANK,
+	"ntile":        NTILE,
+	"cume_dist":    CUME_DIST,
+	"percent_rank": PERCENT_RANK,
+	// value window functions
+	"lag":         LAG,
+	"lead":        LEAD,
+	"first_value": FIRST_VALUE,
+	"last_value":  LAST_VALUE,
+	"nth_value":   NTH_VALUE,
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
 	"endswith":    ENDSWITH,
 	"findinset":   FINDINSET,
 	"find_in_set": FINDINSET,
+	"pow":         POW,
 	"power":       POW,
 	"startswith":  STARTSWITH,
 	"to_date":     STR_TO_DATE,
@@ -518,16 +920,24 @@ var functionIdRegister = map[string]int32{
 	// variadic functions
 	"ceil":              CEIL,
 	"ceiling":           CEIL,
+	"char":              CHAR,
 	"concat_ws":         CONCAT_WS,
 	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
+	"localtime":         LOCALTIME,
+	"localtimestamp":    LOCALTIME,
+	"current_time":      CURRENT_TIME,
+	"curtime":           CURRENT_TIME,
 	"sysdate":           SYSDATE,
 	"floor":             FLOOR,
 	"lpad":              LPAD,
 	"pi":                PI,
+	"position":          POSITION,
+	"quote":             QUOTE,
 	"round":             ROUND,
 	"rpad":              RPAD,
+	"soundex":           SOUNDEX,
 	"strcmp":            STRCMP,
 	"substr":            SUBSTRING,
 	"substring":         SUBSTRING,
@@ -535,27 +945,57 @@ var functionIdRegister = map[string]int32{
 	"encode":            ENCODE,
 	"utc_timestamp":     UTC_TIMESTAMP,
 	"unix_timestamp":    UNIX_TIMESTAMP,
+	"from_days":         FROM_DAYS,
 	"from_unixtime":     FROM_UNIXTIME,
+	"get_format":        GET_FORMAT,
+	"interval":          INTERVAL,
 	"left":              LEFT,
+	"right":             RIGHT,
 	// unary functions
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	"abs":                            ABS,
 	"acos":                           ACOS,
+	"aes_decrypt":                    AES_DECRYPT,
+	"aes_encrypt":                    AES_ENCRYPT,
+	"addtime":                        ADDTIME,
+	"compress":                       COMPRESS,
+	"uncompress":                     UNCOMPRESS,
+	"uncompressed_length":            UNCOMPRESSED_LENGTH,
+	"random_bytes":                   RANDOM_BYTES,
+	"validate_password_strength":     VALIDATE_PASSWORD_STRENGTH,
+	"inet6_aton":                     INET6_ATON,
+	"inet6_ntoa":                     INET6_NTOA,
+	"inet_aton":                      INET_ATON,
+	"inet_ntoa":                      INET_NTOA,
+	"is_ipv4":                        IS_IPV4,
+	"is_ipv6":                        IS_IPV6,
+	"is_ipv4_compat":                 IS_IPV4_COMPAT,
+	"is_ipv4_mapped":                 IS_IPV4_MAPPED,
+	"asin":                           ASIN,
 	"assert":                         ASSERT,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,
+	"time_format":                    TIME_FORMAT,
+	"timestampadd":                   TIMESTAMPADD,
 	"hour":                           HOUR,
+	"microsecond":                    MICROSECOND,
 	"minute":                         MINUTE,
+	"quarter":                        QUARTER,
 	"second":                         SECOND,
 	"sqrt":                           SQRT,
 	"to_seconds":                     TO_SECONDS,
 	"day":                            DAY,
 	"to_days":                        TO_DAYS,
+	"dayofweek":                      DAYOFWEEK,
+	"dayname":                        DAYNAME,
+	"dayofmonth":                     DAYOFMONTH,
+	"monthname":                      MONTHNAME,
 	"dayofyear":                      DAYOFYEAR,
 	"exp":                            EXP,
 	"empty":                          EMPTY,
 	"length":                         LENGTH,
+	"octet_length":                   LENGTH,
 	"lengthutf8":                     LENGTH_UTF8,
 	"char_length":                    LENGTH_UTF8,
 	"ln":                             LN,
@@ -566,9 +1006,11 @@ var functionIdRegister = map[string]int32{
 	"month":                          MONTH,
 	"not_in_rows":                    NOT_IN_ROWS,
 	"oct":                            OCT,
+	"radians":                        RADIANS,
 	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
 	"rtrim":                          RTRIM,
+	"sign":                           SIGN,
 	"sin":                            SIN,
 	"sinh":                           SINH,
 	"space":                          SPACE,
@@ -582,7 +1024,9 @@ var functionIdRegister = map[string]int32{
 	"isempty":                        ISEMPTY,
 	"date_add":                       DATE_ADD,
 	"date_sub":                       DATE_SUB,
+	"degrees":                        DEGREES,
 	"atan":                           ATAN,
+	"atan2":                          ATAN2,
 	"cos":                            COS,
 	"cot":                            COT,
 	"crc32":                          CRC32,
@@ -597,6 +1041,7 @@ var functionIdRegister = map[string]int32{
 	"charset":                        CHARSET,
 	"convert":                        CONVERT,
 	"convert_tz":                     CONVERT_TZ,
+	"conv":                           CONV,
 	"current_account_id":             CURRENT_ACCOUNT_ID,
 	"current_account_name":           CURRENT_ACCOUNT_NAME,
 	"current_role":                   CURRENT_ROLE,
@@ -605,37 +1050,60 @@ var functionIdRegister = map[string]int32{
 	"current_user_id":                CURRENT_USER_ID,
 	"current_user_name":              CURRENT_USER_NAME,
 	"found_rows":                     FOUND_ROWS,
+	"greatest":                       GREATEST,
 	"icu_version":                    ICULIBVERSION,
 	"last_insert_id":                 LAST_INSERT_ID,
 	"last_query_id":                  LAST_QUERY_ID,
 	"last_uuid":                      LAST_QUERY_ID,
+	"least":                          LEAST,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
-	"row_number":                     ROW_NUMBER,
 	"version":                        VERSION,
 	"collation":                      COLLATION,
+	"json_array":                     JSON_ARRAY,
 	"json_extract":                   JSON_EXTRACT,
 	"json_extract_string":            JSON_EXTRACT_STRING,
 	"json_extract_float64":           JSON_EXTRACT_FLOAT64,
+	"json_object":                    JSON_OBJECT,
+	"json_arrayagg":                  JSON_ARRAYAGG,
+	"json_objectagg":                 JSON_OBJECTAGG,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
+	JsonOrderingParamFunctionName:    INTERNAL_JSON_ORDERING_PARAM,
 	"json_row":                       JSON_ROW,
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
+	"json_remove":                    JSON_REMOVE,
+	"hll_cardinality":                HLL_CARDINALITY,
+	"json_type":                      JSON_TYPE,
+	"json_valid":                     JSON_VALID,
+	"json_length":                    JSON_LENGTH,
+	"json_contains":                  JSON_CONTAINS,
+	"json_contains_path":             JSON_CONTAINS_PATH,
+	"json_merge_patch":               JSON_MERGE_PATCH,
+	"json_merge_preserve":            JSON_MERGE_PRESERVE,
+	"json_overlaps":                  JSON_OVERLAPS,
+	"json_keys":                      JSON_KEYS,
+	"json_pretty":                    JSON_PRETTY,
+	"json_schema_valid":              JSON_SCHEMA_VALID,
+	"json_schema_validation_report":  JSON_SCHEMA_VALID_REPORT,
+	"json_value":                     JSON_VALUE,
 	"jq":                             JQ,
 	"try_jq":                         TRY_JQ,
 	"moplugin":                       WASM,
 	"try_moplugin":                   TRY_WASM,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
-	"dense_rank":                     DENSE_RANK,
 	"mo_win_divisor":                 MO_WIN_DIVISOR,
 	"add_fault_point":                ADD_FAULT_POINT,
 	"remove_fault_point":             REMOVE_FAULT_POINT,
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"mo_win_truncate":                MO_WIN_TRUNCATE,
 	"uuid":                           UUID,
+	"is_uuid":                        IS_UUID,
+	"uuid_to_bin":                    UUID_TO_BIN,
+	"bin_to_uuid":                    BIN_TO_UUID,
 	"load_file":                      LOAD_FILE,
 	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
@@ -643,16 +1111,30 @@ var functionIdRegister = map[string]int32{
 	"md5":                            MD5,
 	"to_base64":                      TO_BASE64,
 	"from_base64":                    FROM_BASE64,
+	"vecf32_from_base64":             VECF32_FROM_BASE64,
+	"vecf64_from_base64":             VECF64_FROM_BASE64,
+	"vecbf16_from_base64":            VECBF16_FROM_BASE64,
+	"vecf16_from_base64":             VECF16_FROM_BASE64,
+	"vecint8_from_base64":            VECINT8_FROM_BASE64,
+	"vecuint8_from_base64":           VECUINT8_FROM_BASE64,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,
 	"hash_value":                     HASH,
+	"hash_partition":                 HASH_PARTITION,
+	"mo_tuple_expr":                  MO_TUPLE_EXPR,
 	"bin":                            BIN,
 	"datediff":                       DATEDIFF,
 	"timestampdiff":                  TIMESTAMPDIFF,
 	"timediff":                       TIMEDIFF,
 	"last_day":                       LAST_DAY,
 	"makedate":                       MAKEDATE,
+	"maketime":                       MAKETIME,
+	"period_add":                     PERIOD_ADD,
+	"period_diff":                    PERIOD_DIFF,
+	"sec_to_time":                    SEC_TO_TIME,
+	"subtime":                        SUBTIME,
+	"time_to_sec":                    TIME_TO_SEC,
 	"reg_match":                      REG_MATCH,
 	"not_reg_match":                  NOT_REG_MATCH,
 	"regexp_instr":                   REGEXP_INSTR,
@@ -671,17 +1153,32 @@ var functionIdRegister = map[string]int32{
 	"field":                          FIELD,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
+	"get_lock":                       GET_LOCK,
+	"release_lock":                   RELEASE_LOCK,
+	"is_free_lock":                   IS_FREE_LOCK,
+	"is_used_lock":                   IS_USED_LOCK,
+	"release_all_locks":              RELEASE_ALL_LOCKS,
 	"split_part":                     SPLIT_PART,
+	"insert":                         INSERT,
 	"instr":                          INSTR,
+	"ord":                            ORD,
 	"locate":                         LOCATE,
 	"curdate":                        CURRENT_DATE,
 	"current_date":                   CURRENT_DATE,
+	"utc_date":                       UTC_DATE,
+	"utc_time":                       UTC_TIME,
+	"weekofyear":                     WEEKOFYEAR,
+	"yearweek":                       YEARWEEK,
+	"elt":                            ELT,
+	"export_set":                     EXPORT_SET,
+	"make_set":                       MAKE_SET,
 	"ascii":                          ASCII,
 	"replace":                        REPLACE,
 	"mo_table_rows":                  MO_TABLE_ROWS,
 	"mo_table_size":                  MO_TABLE_SIZE,
 	"mo_table_col_max":               MO_TABLE_COL_MAX,
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
+	"truncate":                       TRUNCATE,
 	"trim":                           TRIM,
 	"sha2":                           SHA2,
 	"mo_log_date":                    MO_LOG_DATE,
@@ -692,6 +1189,7 @@ var functionIdRegister = map[string]int32{
 	"mo_explain_phy":                 MO_EXPLAIN_PHY,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
+	"name_const":                     NAME_CONST,
 	"values":                         VALUES,
 	"binary":                         BINARY,
 	"internal_char_length":           INTERNAL_CHAR_LENGTH,
@@ -708,6 +1206,141 @@ var functionIdRegister = map[string]int32{
 	"cast_index_to_value":            CAST_INDEX_TO_VALUE,
 	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
 	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
+	"cast_index_to_set_value":        CAST_INDEX_TO_SET_VALUE,
+	"cast_set_value_to_index":        CAST_SET_VALUE_TO_INDEX,
+	"cast_set_index_value_to_index":  CAST_SET_INDEX_VALUE_TO_INDEX,
+	"cast_geometry_to_subtype":       CAST_GEOMETRY_TO_SUBTYPE,
+	"cast_json_to_array":             CAST_JSON_TO_ARRAY,
+	"st_astext":                      ST_ASTEXT,
+	"st_aswkt":                       ST_ASTEXT,
+	"st_aswkb":                       ST_ASWKB,
+	"st_asbinary":                    ST_ASWKB,
+	"st_geomfromtext":                ST_GEOMFROMTEXT,
+	"st_geometryfromtext":            ST_GEOMFROMTEXT,
+	"st_geomfromwkb":                 ST_GEOMFROMWKB,
+	"st_geomfrombinary":              ST_GEOMFROMWKB,
+	"st_point":                       ST_POINT,
+	"st_point32":                     ST_POINT32,
+	"st_pointfromtext":               ST_POINTFROMTEXT,
+	"st_linefromtext":                ST_LINEFROMTEXT,
+	"st_linestringfromtext":          ST_LINEFROMTEXT,
+	"st_polyfromtext":                ST_POLYFROMTEXT,
+	"st_polygonfromtext":             ST_POLYFROMTEXT,
+	"st_mpointfromtext":              ST_MPOINTFROMTEXT,
+	"st_multipointfromtext":          ST_MPOINTFROMTEXT,
+	"st_mlinefromtext":               ST_MLINEFROMTEXT,
+	"st_multilinestringfromtext":     ST_MLINEFROMTEXT,
+	"st_mpolyfromtext":               ST_MPOLYFROMTEXT,
+	"st_multipolygonfromtext":        ST_MPOLYFROMTEXT,
+	"st_geomcollfromtext":            ST_GEOMCOLLFROMTEXT,
+	"st_geomcollfromtxt":             ST_GEOMCOLLFROMTEXT,
+	"st_geometrycollectionfromtext":  ST_GEOMCOLLFROMTEXT,
+	"st_geometryfromwkb":             ST_GEOMFROMWKB,
+	"st_pointfromwkb":                ST_POINTFROMWKB,
+	"st_linefromwkb":                 ST_LINEFROMWKB,
+	"st_linestringfromwkb":           ST_LINEFROMWKB,
+	"st_polyfromwkb":                 ST_POLYFROMWKB,
+	"st_polygonfromwkb":              ST_POLYFROMWKB,
+	"st_mpointfromwkb":               ST_MPOINTFROMWKB,
+	"st_multipointfromwkb":           ST_MPOINTFROMWKB,
+	"st_mlinefromwkb":                ST_MLINEFROMWKB,
+	"st_multilinestringfromwkb":      ST_MLINEFROMWKB,
+	"st_mpolyfromwkb":                ST_MPOLYFROMWKB,
+	"st_multipolygonfromwkb":         ST_MPOLYFROMWKB,
+	"st_geomcollfromwkb":             ST_GEOMCOLLFROMWKB,
+	"st_geometrycollectionfromwkb":   ST_GEOMCOLLFROMWKB,
+	"st_longitude":                   ST_LONGITUDE,
+	"st_latitude":                    ST_LATITUDE,
+	"st_swapxy":                      ST_SWAPXY,
+	"st_validate":                    ST_VALIDATE,
+	"st_makeenvelope":                ST_MAKEENVELOPE,
+	"st_distance_sphere":             ST_DISTANCE_SPHERE,
+	"st_geohash":                     ST_GEOHASH,
+	"st_latfromgeohash":              ST_LATFROMGEOHASH,
+	"st_longfromgeohash":             ST_LONGFROMGEOHASH,
+	"st_pointfromgeohash":            ST_POINTFROMGEOHASH,
+	"mbrcontains":                    MBRCONTAINS,
+	"mbrcoveredby":                   MBRCOVEREDBY,
+	"mbrcovers":                      MBRCOVERS,
+	"mbrdisjoint":                    MBRDISJOINT,
+	"mbrequals":                      MBREQUALS,
+	"mbrintersects":                  MBRINTERSECTS,
+	"mbroverlaps":                    MBROVERLAPS,
+	"mbrtouches":                     MBRTOUCHES,
+	"mbrwithin":                      MBRWITHIN,
+	"st_asgeojson":                   ST_ASGEOJSON,
+	"st_geomfromgeojson":             ST_GEOMFROMGEOJSON,
+	"st_convexhull":                  ST_CONVEXHULL,
+	"st_simplify":                    ST_SIMPLIFY,
+	"st_collect":                     ST_COLLECT,
+	"st_lineinterpolatepoint":        ST_LINEINTERPOLATEPOINT,
+	"st_lineinterpolatepoints":       ST_LINEINTERPOLATEPOINTS,
+	"st_pointatdistance":             ST_POINTATDISTANCE,
+	"st_frechetdistance":             ST_FRECHETDISTANCE,
+	"st_hausdorffdistance":           ST_HAUSDORFFDISTANCE,
+	"st_union":                       ST_UNION,
+	"st_intersection":                ST_INTERSECTION,
+	"st_difference":                  ST_DIFFERENCE,
+	"st_symdifference":               ST_SYMDIFFERENCE,
+	"st_buffer":                      ST_BUFFER,
+	"s2_cellid":                      S2_CELLID,
+	"s2_cellid_level":                S2_CELLID_LEVEL,
+	"s2_cellid_center":               S2_CELLID_CENTER,
+	"s2_cellid_area":                 S2_CELLID_AREA,
+	"s2_cellid_parent":               S2_CELLID_PARENT,
+	"s2_cellid_edgeneighbours":       S2_CELLID_EDGENEIGHBORS,
+	"s2_cellid_edgeneighbors":        S2_CELLID_EDGENEIGHBORS,
+	"s2_cellid_allneighbours":        S2_CELLID_ALLNEIGHBORS,
+	"s2_cellid_allneighbors":         S2_CELLID_ALLNEIGHBORS,
+	"s2_cellid_areneighbours":        S2_CELLID_ARENEIGHBORS,
+	"s2_cellid_areneighbors":         S2_CELLID_ARENEIGHBORS,
+	"h3_h3index":                     H3_H3INDEX,
+	"h3_h3index_resolution":          H3_H3INDEX_RESOLUTION,
+	"h3_h3index_center":              H3_H3INDEX_CENTER,
+	"h3_h3index_boundary":            H3_H3INDEX_BOUNDARY,
+	"h3_h3index_parent":              H3_H3INDEX_PARENT,
+	"h3_h3index_neighbours":          H3_H3INDEX_NEIGHBORS,
+	"h3_h3index_neighbors":           H3_H3INDEX_NEIGHBORS,
+	"h3_h3index_areneighbours":       H3_H3INDEX_ARENEIGHBORS,
+	"h3_h3index_areneighbors":        H3_H3INDEX_ARENEIGHBORS,
+	"st_geometrytype":                ST_GEOMETRYTYPE,
+	"st_x":                           ST_X,
+	"st_y":                           ST_Y,
+	"st_numgeometries":               ST_NUMGEOMETRIES,
+	"st_geometryn":                   ST_GEOMETRYN,
+	"st_isempty":                     ST_ISEMPTY,
+	"st_distance":                    ST_DISTANCE,
+	"st_srid":                        ST_SRID,
+	"st_length":                      ST_LENGTH,
+	"st_area":                        ST_AREA,
+	"st_contains":                    ST_CONTAINS,
+	"st_within":                      ST_WITHIN,
+	"st_intersects":                  ST_INTERSECTS,
+	"st_disjoint":                    ST_DISJOINT,
+	"st_touches":                     ST_TOUCHES,
+	"st_crosses":                     ST_CROSSES,
+	"st_overlaps":                    ST_OVERLAPS,
+	"st_equals":                      ST_EQUALS,
+	"st_covers":                      ST_COVERS,
+	"st_coveredby":                   ST_COVEREDBY,
+	"st_startpoint":                  ST_STARTPOINT,
+	"st_endpoint":                    ST_ENDPOINT,
+	"st_pointn":                      ST_POINTN,
+	"st_exteriorring":                ST_EXTERIORRING,
+	"st_numinteriorrings":            ST_NUMINTERIORRINGS,
+	"st_numinteriorring":             ST_NUMINTERIORRINGS,
+	"st_interiorringn":               ST_INTERIORRINGN,
+	"st_numpoints":                   ST_NUMPOINTS,
+	"st_isclosed":                    ST_ISCLOSED,
+	"st_iscollection":                ST_ISCOLLECTION,
+	"st_dimension":                   ST_DIMENSION,
+	"st_issimple":                    ST_ISSIMPLE,
+	"st_isring":                      ST_ISRING,
+	"st_envelope":                    ST_ENVELOPE,
+	"st_centroid":                    ST_CENTROID,
+	"st_boundary":                    ST_BOUNDARY,
+	"st_isvalid":                     ST_ISVALID,
+	"st_pointonsurface":              ST_POINTONSURFACE,
 	"cast_nano_to_timestamp":         CAST_NANO_TO_TIMESTAMP,
 	"cast_range_value_unit":          CAST_RANGE_VALUE_UNIT,
 	"to_upper":                       UPPER,
@@ -734,6 +1367,9 @@ var functionIdRegister = map[string]int32{
 
 	"python_user_defined_function": PYTHON_UDF,
 
+	"mo_feature_registry_upsert": MO_FEATURE_REGISTRY_UPSERT,
+	"mo_feature_limit_upsert":    MO_FEATURE_LIMIT_UPSERT,
+
 	"mo_cpu":      MO_CPU,
 	"mo_memory":   MO_MEMORY,
 	"mo_cpu_dump": MO_CPU_DUMP,
@@ -752,6 +1388,13 @@ var functionIdRegister = map[string]int32{
 	"starlark":     STARLARK,
 	"try_starlark": TRY_STARLARK,
 
+	// llm function
+	"llm_chat":      LLM_CHAT,
+	"llm_embedding": LLM_EMBEDDING,
+
 	// fault inject function
 	"fault_inject": FAULT_INJECT,
+
+	// date_trunc function
+	"date_trunc": DATE_TRUNC,
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -74,7 +75,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 	}
 
-	sqlStr := "select \"%s\" as `Database`, \"%s\" as `Create Database`"
+	sqlStr := "SELECT \"%s\" AS `Database`, \"%s\" AS `Create Database`"
 	createSql := fmt.Sprintf("CREATE DATABASE `%s`", name)
 	sqlStr = fmt.Sprintf(sqlStr, name, createSql)
 
@@ -133,7 +134,15 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return buildShowCreateView(newStmt, ctx)
 	}
 
-	ddlStr, _, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false)
+	if tableDef.IsTemporary {
+		// If it is a temporary table, we need to show the original table name.
+		// We copy the tableDef to avoid modifying the cache.
+		newTableDef := *tableDef
+		newTableDef.Name = tblName
+		tableDef = &newTableDef
+	}
+
+	ddlStr, _, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +157,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		buf.WriteRune(ch)
 	}
-	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
+	sql := "SELECT \"%s\" AS `Table`, \"%s\" AS `Create Table`"
 	sql = fmt.Sprintf(sql, tblName, buf.String())
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
@@ -231,7 +240,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 	// Any account should show database MO_CATALOG_DB_NAME
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
-	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, snapshotSpec, accountClause, catalog.SystemDBAttr_Name)
+	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s WHERE (%s) ORDER BY %s", MO_CATALOG_DB_NAME, snapshotSpec, accountClause, catalog.SystemDBAttr_Name)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -256,7 +265,7 @@ func buildShowSequences(stmt *tree.ShowSequences, ctx CompilerContext) (*Plan, e
 
 	ddlType := plan.DataDefinition_SHOW_SEQUENCES
 
-	sql := fmt.Sprintf("select %s.mo_tables.relname as `Names`, mo_show_visible_bin(%s.mo_columns.atttyp, 2) as 'Data Type' from %s.mo_tables left join %s.mo_columns on %s.mo_tables.rel_id = %s.mo_columns.att_relname_id where %s.mo_tables.relkind = '%s' and %s.mo_tables.reldatabase = '%s' and %s.mo_columns.attname = '%s'", MO_CATALOG_DB_NAME,
+	sql := fmt.Sprintf("SELECT %s.mo_tables.relname AS `Names`, mo_show_visible_bin(%s.mo_columns.atttyp, 2) AS 'Data Type' FROM %s.mo_tables LEFT JOIN %s.mo_columns ON %s.mo_tables.rel_id = %s.mo_columns.att_relname_id WHERE %s.mo_tables.relkind = '%s' AND %s.mo_tables.reldatabase = '%s' AND %s.mo_columns.attname = '%s'", MO_CATALOG_DB_NAME,
 		MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, catalog.SystemSequenceRel, MO_CATALOG_DB_NAME, dbName, MO_CATALOG_DB_NAME, Sequence_cols_name[0])
 
 	if stmt.Where != nil {
@@ -324,7 +333,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relname != '%s' and relkind != '%s' and (%s)",
+	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relname not like '__mo_tmp_%%' and relname != '%s' and relkind != '%s' and (%s)",
 		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
 
 	// Do not show views in sub-db
@@ -620,15 +629,15 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			clusterTable = fmt.Sprintf(" or col.att_relname = '%s'", tblName)
 		}
 		accountClause := fmt.Sprintf("col.account_id = %v or (col.account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
+		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, null `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, null `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN tbl.relkind = 'r' and col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND (%s) AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 	} else {
-		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
+		sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,  col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		if stmt.Full {
-			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, null `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
+			sql = "SELECT col.attname `Field`, CASE WHEN LENGTH(col.attr_enum) > 0 THEN mo_show_visible_bin_enum(col.atttyp, col.attr_enum) ELSE mo_show_visible_bin(col.atttyp, 3) END AS `Type`, null `Collation`, iff(col.attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(col.att_default, 4) `Default`, CASE WHEN col.att_is_auto_increment = 1 THEN 'auto_increment' WHEN col.attr_has_generated = 1 THEN mo_show_visible_bin(col.attr_generated, 6) ELSE '' END AS `Extra`,'select,insert,update,references' `Privileges`, col.att_comment `Comment` FROM %s.mo_columns col left join %s.mo_tables tbl ON col.att_relname_id = tbl.rel_id WHERE col.att_database = '%s' AND col.att_relname = '%s' AND col.att_is_hidden = 0 ORDER BY col.attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
@@ -680,6 +689,11 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
+	// Subscription DB: skip internal_auto_increment and other heavy lookups, use 0 for Auto_increment and stats.
+	autoIncrExpr := "if(relkind = 'v', NULL, coalesce(internal_auto_increment(reldatabase, relname), 0))"
+	if sub != nil {
+		autoIncrExpr = "0"
+	}
 	sql := `select
 				relname as 'Name',
 				'Tae' as 'Engine',
@@ -690,7 +704,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				0 as 'Max_data_length',
 				0 as 'Index_length',
 				'NULL' as 'Data_free',
-				0 as 'Auto_increment',
+				%s as 'Auto_increment',
 				created_time as 'Create_time',
 				'NULL' as 'Update_time',
 				'NULL' as 'Check_time',
@@ -709,7 +723,7 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				and relname not like '%s'
 				and relname != '%s'
 				and (%s)`
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, accountClause)
+	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, accountClause)
 
 	// Do not show views in sub-db
 	if sub != nil {
@@ -847,8 +861,8 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	}
 
 	sql := "select " +
-		"`tcl`.`att_relname` as `Table`, " +
-		"if(`idx`.`type` = 'MULTIPLE', 1, 0) as `Non_unique`, " +
+		"'%s' as `Table`, " +
+		"if(`idx`.`type` IN ('PRIMARY', 'UNIQUE'), 0, 1) as `Non_unique`, " +
 		"`idx`.`name` as `Key_name`, " +
 		"`idx`.`ordinal_position` as `Seq_in_index`, " +
 		"`idx`.`column_name` as `Column_name`, " +
@@ -894,7 +908,11 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"`idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, `idx`.`comment`, " +
 		"`idx`.`algo_params`, `idx`.`is_visible`"
 
-	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, catalog.AliasPrefix+"%")
+	displayTblName := tblName
+	if tableDef.IsTemporary {
+		tblName = tableDef.Name
+	}
+	showIndexSql := fmt.Sprintf(sql, displayTblName, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, catalog.AliasPrefix+"%")
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, showIndexSql, stmt.Where, ddlType)
@@ -940,7 +958,7 @@ func buildShowRoles(stmt *tree.ShowRolesStmt, ctx CompilerContext) (*Plan, error
 
 func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := fmt.Sprintf("SELECT stage_name as `STAGE_NAME`, url as `URL`, case stage_status when 'enabled' then 'ENABLED' else 'DISABLED' end as `STATUS`,  comment as `COMMENT` FROM %s.mo_stages;", MO_CATALOG_DB_NAME)
+	sql := fmt.Sprintf("SELECT stage_name as `STAGE_NAME`, url as `URL`, stage_status as `STATUS`,  comment as `COMMENT` FROM %s.mo_stages;", MO_CATALOG_DB_NAME)
 
 	if stmt.Like != nil {
 		// append filter [AND mo_stages.stage_name like stmt.Like] to WHERE clause
@@ -954,7 +972,15 @@ func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) 
 
 func buildShowSnapShots(stmt *tree.ShowSnapShots, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := fmt.Sprintf("SELECT sname as `SNAPSHOT_NAME`, CAST_NANO_TO_TIMESTAMP(ts) as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME` FROM %s.mo_snapshots ORDER BY ts DESC", MO_CATALOG_DB_NAME)
+	// Filter out ccpr snapshots (snapshots with names starting with 'ccpr_')
+	// and branch-managed snapshots (mo_snapshots.kind = 'branch', inserted
+	// by `DATA BRANCH CREATE` to protect LCA-side history — they are an
+	// implementation detail and must stay invisible to users; see
+	// docs/design/data_branch_protect_snapshot.md §7.1).
+	sql := fmt.Sprintf(
+		"SELECT sname as `SNAPSHOT_NAME`, CAST_NANO_TO_TIMESTAMP(ts) as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, account_name as `ACCOUNT_NAME`, database_name as `DATABASE_NAME`, table_name as `TABLE_NAME` FROM %s.mo_snapshots WHERE sname NOT LIKE 'ccpr_%%' AND kind != '%s' ORDER BY ts DESC",
+		MO_CATALOG_DB_NAME, databranchutils.BranchSnapshotKind,
+	)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -1071,7 +1097,16 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 	if err != nil {
 		return nil, err
 	}
-	sql := fmt.Sprintf("select pub_name as Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || case table_list when '*' then '' else ' TABLE ' || table_list end || ' ACCOUNT ' || account_list as 'Create Publication' from mo_catalog.mo_pubs where account_id = %d and pub_name='%s';", accountId, stmt.Name)
+	sql := fmt.Sprintf("SELECT pub_name AS Publication, concat('CREATE PUBLICATION ', pub_name, ' DATABASE ', database_name, CASE table_list WHEN '*' THEN '' ELSE concat(' TABLE ', table_list) END, ' ACCOUNT ', account_list) AS 'Create Publication' FROM mo_catalog.mo_pubs WHERE account_id = %d AND pub_name='%s';", accountId, stmt.Name)
+	ctx.SetContext(defines.AttachAccountId(ctx.GetContext(), catalog.System_Account))
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowPublicationCoverage(stmt *tree.ShowPublicationCoverage, ctx CompilerContext) (*Plan, error) {
+	// This will be handled in frontend, return a placeholder plan
+	// The actual implementation will be in doShowPublicationCoverage
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := fmt.Sprintf("SELECT database_name as `Database`, table_name as `Table` FROM mo_catalog.mo_pubs WHERE pub_name = '%s' LIMIT 0", stmt.Name)
 	ctx.SetContext(defines.AttachAccountId(ctx.GetContext(), catalog.System_Account))
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
@@ -1079,10 +1114,10 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
-	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
+	defer newStmt.Free()
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 

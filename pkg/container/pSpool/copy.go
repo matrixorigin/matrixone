@@ -15,10 +15,11 @@
 package pSpool
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"math"
 )
 
 // cachedBatch is just like the cachedVectorPool in the original code,
@@ -104,7 +105,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 
 		if vec.IsConst() {
 			if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
-				dst.Clean(cb.mp)
+				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
 
@@ -115,7 +116,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 			if err = vector.GetUnionAllFunction(typ, cb.mp)(
 				dst.Vecs[i],
 				vec); err != nil {
-				dst.Clean(cb.mp)
+				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
 
@@ -131,8 +132,8 @@ func (cb *cachedBatch) GetCopiedBatch(
 		}
 	}
 
-	dst.Aggs = src.Aggs
-	src.Aggs = nil
+	dst.ExtraBuf = src.ExtraBuf
+	src.ExtraBuf = nil
 
 	// set row count.
 	dst.SetRowCount(src.RowCount())

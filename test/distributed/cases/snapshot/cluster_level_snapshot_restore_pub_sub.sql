@@ -73,7 +73,7 @@ drop database sub01;
 show subscriptions;
 -- @session
 
-restore account acc01 from snapshot sp01;
+restore account acc01{snapshot="sp01"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:5,7
@@ -156,7 +156,7 @@ drop publication pub02;
 show subscriptions;
 -- @session
 
-restore account acc01 from snapshot sp02;
+restore account acc01{snapshot="sp02"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:5,7
@@ -203,7 +203,7 @@ create database sub06 from acc01 publication pub06;
 show subscriptions;
 -- @session
 
-restore account acc01 from snapshot sp06;
+restore account acc01{snapshot="sp06"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:5,6
@@ -284,7 +284,7 @@ alter publication pub06 account acc02 database test07;
 show subscriptions;
 -- @session
 
-restore account sys from snapshot sp06;
+restore account sys{snapshot="sp06"};
 
 -- @session:id=1&user=acc01:test_account&password=111
 -- @ignore:5,7

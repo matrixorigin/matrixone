@@ -36,7 +36,6 @@ desc pri04;
 drop table pri03;
 drop table pri04;
 
--- @bvt:issue#16438
 -- partition by
 drop table if exists test03;
 create table test03 (
@@ -66,7 +65,6 @@ select * from test03;
 select * from test04;
 drop table test03;
 drop table test04;
--- @bvt:issue
 
 -- unique key
 drop table if exists test07;
@@ -83,7 +81,7 @@ select * from test08;
 drop table test07;
 drop table test08;
 
--- @bvt:issue#7889
+
 drop table if exists test07;
 create temporary table test07(col1 int unique key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double, unique index(col1, col2));
 insert into test07 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
@@ -99,7 +97,7 @@ select * from test07;
 select * from test08;
 drop table test07;
 drop table test08;
--- @bvt:issue
+
 
 -- table with foreign key, then create table like
 drop table if exists foreign01;

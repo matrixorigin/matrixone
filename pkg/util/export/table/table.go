@@ -632,6 +632,10 @@ func Uint64Field(val uint64) ColumnField {
 	return ColumnField{Type: TUint64, Integer: int64(val)}
 }
 
+func Uint32Field(val uint32) ColumnField {
+	return ColumnField{Type: TUint32, Integer: int64(val)}
+}
+
 func Int64Field(val int64) ColumnField {
 	return ColumnField{Type: TInt64, Integer: val}
 }
@@ -732,6 +736,8 @@ func (r *Row) Reset() {
 			r.Columns[idx] = Uint64Field(0)
 		case types.T_int64:
 			r.Columns[idx] = Int64Field(0)
+		case types.T_uint32:
+			r.Columns[idx] = Uint32Field(0)
 		case types.T_uint64:
 			r.Columns[idx] = Uint64Field(0)
 		case types.T_float64:
@@ -788,6 +794,8 @@ func (r *Row) ToStrings() []string {
 			col[idx] = fmt.Sprintf("%d", uint64(r.Columns[idx].Integer))
 		case types.T_int64:
 			col[idx] = fmt.Sprintf("%d", r.Columns[idx].Integer)
+		case types.T_uint32:
+			col[idx] = fmt.Sprintf("%d", uint32(r.Columns[idx].Integer))
 		case types.T_uint64:
 			col[idx] = fmt.Sprintf("%d", uint64(r.Columns[idx].Integer))
 		case types.T_float64:
@@ -888,6 +896,8 @@ func (r *Row) Size() (size int64) {
 			size += 8
 		case types.T_int64:
 			size += 8
+		case types.T_uint32:
+			size += 4
 		case types.T_uint64:
 			size += 8
 		case types.T_float64:

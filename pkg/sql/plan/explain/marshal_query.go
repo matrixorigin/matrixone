@@ -190,8 +190,6 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "recursive_scan", nil
 	case plan.Node_RECURSIVE_CTE:
 		return "cte_scan", nil
-	case plan.Node_ON_DUPLICATE_KEY:
-		return "on_duplicate_key", nil
 	case plan.Node_LOCK_OP:
 		return "lock_op", nil
 	case plan.Node_ASSERT:
@@ -202,8 +200,6 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "split", nil
 	case plan.Node_GATHER:
 		return "gather", nil
-	case plan.Node_REPLACE:
-		return "replace", nil
 	case plan.Node_TIME_WINDOW:
 		return "time_window", nil
 	case plan.Node_FILL:
@@ -577,11 +573,6 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Assert,
 			Value: []string{},
 		})
-	case plan.Node_ON_DUPLICATE_KEY:
-		labels = append(labels, models.Label{
-			Name:  Label_On_Duplicate_Key,
-			Value: []string{},
-		})
 	case plan.Node_FUZZY_FILTER:
 		labels = append(labels, models.Label{
 			Name:  Label_Fuzzy_Filter,
@@ -620,11 +611,6 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_UNIQUE:
 		labels = append(labels, models.Label{
 			Name:  Label_Unique,
-			Value: []string{},
-		})
-	case plan.Node_REPLACE:
-		labels = append(labels, models.Label{
-			Name:  Label_Replace,
 			Value: []string{},
 		})
 	case plan.Node_UNKNOWN:
@@ -718,6 +704,9 @@ const OutputSize = "Output Size"
 const MemorySize = "Memory Size"
 const DiskIO = "Disk IO"
 const ScanBytes = "Scan Bytes"
+const ReadSize = "Read Size"
+const S3ReadSize = "S3 Read Size"
+const DiskReadSize = "Disk Read Size"
 const Network = "Network"
 const S3List = "S3 List Count"
 const S3Head = "S3 Head Count"
@@ -734,13 +723,14 @@ const FSCacheDiskHit = "FileService Cache Disk Hit"
 const FSCacheRemoteRead = "FileService Cache Remote Read"
 const FSCacheRemoteHit = "FileService Cache Remote Hit"
 
+// GetStatistic4Trace returns the legacy per-operator diagnostic projection.
+// Authoritative statement billing is derived from the terminal resource root.
 func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOptions) (s statistic.StatsArray) {
 	s.Reset()
 	if options.Analyze && node.AnalyzeInfo != nil {
 		analyzeInfo := node.AnalyzeInfo
 		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
 			WithMemorySize(float64(analyzeInfo.MemorySize)).
-			// cc https://github.com/matrixorigin/MO-Cloud/issues/4175#issuecomment-2375813480
 			WithS3IOInputCount(float64(analyzeInfo.S3Put) + objectio.EstimateS3Input(analyzeInfo.WrittenRows) + objectio.EstimateS3Input(analyzeInfo.DeletedRows)).
 			WithS3IOOutputCount(float64(analyzeInfo.S3Head + analyzeInfo.S3Get)).
 			WithS3IOListCount(float64(analyzeInfo.S3List)).
@@ -821,7 +811,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			{
 				Name:  MemorySize,
 				Value: analyzeInfo.MemorySize,
-				Unit:  Statistic_Unit_byte, //"byte",
+				Unit:  Statistic_Unit_byte,
 			},
 		}
 
@@ -834,6 +824,21 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			{
 				Name:  ScanBytes,
 				Value: analyzeInfo.ScanBytes,
+				Unit:  Statistic_Unit_byte, //"byte",
+			},
+			{
+				Name:  ReadSize,
+				Value: analyzeInfo.ReadSize,
+				Unit:  Statistic_Unit_byte, //"byte",
+			},
+			{
+				Name:  S3ReadSize,
+				Value: analyzeInfo.S3ReadSize,
+				Unit:  Statistic_Unit_byte, //"byte",
+			},
+			{
+				Name:  DiskReadSize,
+				Value: analyzeInfo.DiskReadSize,
 				Unit:  Statistic_Unit_byte, //"byte",
 			},
 			{

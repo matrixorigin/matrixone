@@ -100,7 +100,7 @@ func TestCalculateStorageUsage(t *testing.T) {
 	err = mometric.CalculateStorageUsage(ctx, "", ieFactory)
 	require.Nil(t, err)
 
-	s := metric.StorageUsage("sys")
+	s := metric.StorageUsage("sys", 0)
 	dm := &dto.Metric{}
 	s.Write(dm)
 	logutil.Infof("size: %f", dm.GetGauge().GetValue())

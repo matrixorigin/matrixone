@@ -20,12 +20,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type distinctHash struct {
+	mp   *mpool.MPool
 	maps []*hashmap.StrHashMap
 	itrs []hashmap.Iterator
 
@@ -34,8 +35,9 @@ type distinctHash struct {
 	bs1 []bool
 }
 
-func newDistinctHash() distinctHash {
+func newDistinctHash(mp *mpool.MPool) distinctHash {
 	return distinctHash{
+		mp:   mp,
 		maps: nil,
 		itrs: nil,
 	}
@@ -48,7 +50,7 @@ func (d *distinctHash) grows(more int) error {
 
 	var err error
 	for i := oldLen; i < newLen; i++ {
-		if d.maps[i], err = hashmap.NewStrHashMap(true); err != nil {
+		if d.maps[i], err = hashmap.NewStrHashMap(true, d.mp); err != nil {
 			return err
 		}
 		d.itrs[i] = d.maps[i].NewIterator()
@@ -60,74 +62,6 @@ func (d *distinctHash) grows(more int) error {
 // return true if this is a new value.
 func (d *distinctHash) fill(group int, vs []*vector.Vector, row int) (bool, error) {
 	return d.itrs[group].DetectDup(vs, row)
-}
-
-func (d *distinctHash) bulkFill(group int, vs []*vector.Vector) ([]bool, error) {
-	rowCount := vs[0].Length()
-
-	if cap(d.bs) < rowCount {
-		d.bs = make([]bool, rowCount)
-	}
-	if cap(d.bs1) < hashmap.UnitLimit {
-		d.bs1 = make([]bool, hashmap.UnitLimit)
-	}
-	d.bs = d.bs[:rowCount]
-	d.bs1 = d.bs1[:hashmap.UnitLimit]
-
-	iterator := d.itrs[group]
-
-	for i := 0; i < rowCount; i += hashmap.UnitLimit {
-		n := rowCount - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-		for j := 0; j < n; j++ {
-			d.bs1[j] = false
-		}
-
-		oldLen := d.maps[group].GroupCount()
-		indexOffset := oldLen + 1
-
-		values, _, err := iterator.Insert(i, n, vs)
-		if err != nil {
-			return nil, err
-		}
-
-		dd := d.bs[i:]
-		for k, v := range values {
-			if v > oldLen && !d.bs1[v-indexOffset] {
-				d.bs1[v-indexOffset] = true
-				dd[k] = true
-			} else {
-				dd[k] = false
-			}
-		}
-	}
-	return d.bs, nil
-}
-
-func (d *distinctHash) batchFill(vs []*vector.Vector, offset int, groups []uint64) ([]bool, error) {
-	rowCount := len(groups)
-
-	if cap(d.bs) < rowCount {
-		d.bs = make([]bool, rowCount)
-	}
-	d.bs = d.bs[:0]
-
-	for _, group := range groups {
-		if group != GroupNotMatched {
-			ok, err := d.fill(int(group-1), vs, offset)
-			if err != nil {
-				return nil, err
-			}
-			d.bs = append(d.bs, ok)
-		} else {
-			d.bs = append(d.bs, false)
-		}
-		offset++
-	}
-
-	return d.bs, nil
 }
 
 // merge was the method to merge two groups of distinct agg.
@@ -157,6 +91,7 @@ func (d *distinctHash) free() {
 			m.Free()
 		}
 	}
+
 }
 
 func (d *distinctHash) Size() int64 {
@@ -175,39 +110,30 @@ func (d *distinctHash) Size() int64 {
 	return size
 }
 
-func (d *distinctHash) marshal() ([]byte, error) {
-	if len(d.maps) == 0 {
-		return nil, nil
+func (d *distinctHash) marshalToBuffers(flags []uint8, buf *bytes.Buffer) error {
+	var cnt int64
+	if flags == nil {
+		cnt = int64(len(d.maps))
+	} else {
+		for _, f := range flags {
+			if f != 0 {
+				cnt += 1
+			}
+		}
 	}
 
-	var buf bytes.Buffer
-	n := uint64(len(d.maps))
-	if _, err := buf.Write(types.EncodeUint64(&n)); err != nil {
-		return nil, err
-	}
-
-	for _, m := range d.maps {
-		data, err := m.MarshalBinary()
-		if err != nil {
-			return nil, err
-		}
-		l := uint64(len(data))
-		if _, err := buf.Write(types.EncodeUint64(&l)); err != nil {
-			return nil, err
-		}
-		if _, err := buf.Write(data); err != nil {
-			return nil, err
+	types.WriteInt64(buf, cnt)
+	for i := range d.maps {
+		if flags != nil && flags[i] != 0 {
+			if _, err := d.maps[i].WriteTo(buf); err != nil {
+				return err
+			}
 		}
 	}
-	return buf.Bytes(), nil
+	return nil
 }
 
-func (d *distinctHash) unmarshal(data []byte) error {
-	if len(data) == 0 {
-		return nil
-	}
-	buf := bytes.NewBuffer(data)
-
+func (d *distinctHash) unmarshalFromReader(buf io.Reader, mp *mpool.MPool) error {
 	var n uint64
 	if _, err := buf.Read(types.EncodeUint64(&n)); err != nil {
 		return err
@@ -225,7 +151,7 @@ func (d *distinctHash) unmarshal(data []byte) error {
 			return err
 		}
 		d.maps[i] = &hashmap.StrHashMap{}
-		if err := d.maps[i].UnmarshalBinary(mapData, hashtable.DefaultAllocator()); err != nil {
+		if err := d.maps[i].UnmarshalBinary(mapData, mp); err != nil {
 			return err
 		}
 		d.itrs[i] = d.maps[i].NewIterator()

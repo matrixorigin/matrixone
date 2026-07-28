@@ -19,15 +19,12 @@ import (
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -38,7 +35,12 @@ var (
 	ErrTxnNeedRetry  = moerr.NewTAENeedRetryNoCtx()
 )
 
-type Txn2PC interface {
+const (
+	TailCollecting = iota
+	WalPreparing
+)
+
+type TxnLifecycle interface {
 	Freeze(ctx context.Context) error
 	PrepareRollback() error
 	ApplyRollback() error
@@ -54,7 +56,6 @@ type TxnReader interface {
 	RLock()
 	RUnlock()
 	IsReplay() bool
-	Is2PC() bool
 	GetDedupType() DedupPolicy
 	GetID() string
 	GetCtx() []byte
@@ -63,7 +64,6 @@ type TxnReader interface {
 	GetContext() context.Context
 
 	GetPrepareTS() types.TS
-	GetParticipants() []uint64
 	GetSnapshotTS() types.TS
 	SetSnapshotTS(types.TS)
 	SetStartTS(types.TS)
@@ -80,6 +80,9 @@ type TxnReader interface {
 	SameTxn(txn TxnReader) bool
 	CommitBefore(startTs types.TS) bool
 	CommitAfter(startTs types.TS) bool
+
+	// GetSyncProtectionJobID returns the sync protection job ID for this transaction
+	GetSyncProtectionJobID() string
 }
 
 type TxnHandle interface {
@@ -103,34 +106,28 @@ type TxnChanger interface {
 	RUnlock()
 	ToCommittedLocked() error
 	ToPreparingLocked(ts types.TS) error
-	ToPrepared() error
-	ToPreparedLocked() error
 	ToRollbackedLocked() error
 
 	ToRollbacking(ts types.TS) error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
-	Prepare(ctx context.Context) (types.TS, error)
-	Committing() error
 	Commit(ctx context.Context) error
 	Rollback(ctx context.Context) error
 	SetCommitTS(cts types.TS) error
 	SetDedupType(skip DedupPolicy)
-	SetParticipants(ids []uint64) error
 	SetError(error)
 
-	CommittingInRecovery() error
-	CommitInRecovery(ctx context.Context) error
+	// SetSyncProtectionJobID sets the sync protection job ID for this transaction
+	SetSyncProtectionJobID(jobID string)
 }
 
 type TxnWriter interface {
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readedObject, readedTombstone []*common.ID) error
-	LogTxnState(sync bool) (entry.Entry, error)
 }
 
 type TxnAsyncer interface {
-	WaitDone(error, bool) error
-	WaitPrepared(ctx context.Context) error
+	DoneApply(error, bool) error
+	WaitWalAndTail(ctx context.Context) error
 }
 
 type TxnTest interface {
@@ -160,7 +157,7 @@ type BaseTxn interface {
 type AsyncTxn interface {
 	TxnUnsafe
 	TxnTest
-	Txn2PC
+	TxnLifecycle
 	TxnHandle
 	TxnAsyncer
 	TxnReader
@@ -254,9 +251,8 @@ type Tracer interface {
 type TxnStore interface {
 	io.Closer
 	Tracer
-	Txn2PC
+	TxnLifecycle
 	TxnUnsafe
-	WaitPrepared(ctx context.Context) error
 	BindTxn(AsyncTxn, bool)
 	GetLSN() uint64
 	GetContext() context.Context
@@ -297,13 +293,13 @@ type TxnStore interface {
 
 	GetObject(id *common.ID, isTombstone bool) (handle.Object, error)
 	CreateObject(dbId, tid uint64, isTombstone bool) (handle.Object, error)
+	CreateObjectWithOpt(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (handle.Object, error)
 	CreateNonAppendableObject(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (handle.Object, error)
 	SoftDeleteObject(isTombstone bool, id *common.ID) error
 
 	AddTxnEntry(TxnEntry)
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readedObject, readedTombstone []*common.ID) error
-	LogTxnState(sync bool) (entry.Entry, error)
 	DoneWaitEvent(cnt int)
 	AddWaitEvent(cnt int)
 
@@ -311,6 +307,7 @@ type TxnStore interface {
 	// Offline txn is created when TxnMgr is in Recovery mode
 	// Offline txn is not writable and all offline txns are ReadOnly
 	IsOffline() bool
+	WantWrite(string) error
 	IncreateWriteCnt(string) error
 	ObserveTxn(
 		visitDatabase func(db any),
@@ -321,6 +318,11 @@ type TxnStore interface {
 	IsHeartbeat() bool
 	UpdateObjectStats(*common.ID, *objectio.ObjectStats, bool) error
 	FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error
+
+	WaitWalAndTail(ctx context.Context) error
+	DoneEvent(typ int)
+	AddEvent(typ int)
+	WaitEvent(typ int)
 }
 
 type TxnEntry interface {

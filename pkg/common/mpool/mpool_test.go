@@ -15,14 +15,19 @@
 package mpool
 
 import (
+	"bytes"
+	"fmt"
+	"math"
 	"sync"
 	"testing"
+	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMPoolLimitExceed(t *testing.T) {
-	m, err := NewMPool("test-mpool-small", 0, 0)
+	m, err := NewMPool("test-mpool-small", 0, NoFixed)
 	require.Nil(t, err)
 
 	_, err = m.Alloc(7775731712, false)
@@ -30,11 +35,10 @@ func TestMPoolLimitExceed(t *testing.T) {
 }
 
 func TestMPool(t *testing.T) {
-	m, err := NewMPool("test-mpool-small", 0, 0)
+	m, err := NewMPool("test-mpool-small", 0, NoFixed)
 	require.True(t, err == nil, "new mpool failed %v", err)
 
 	nb0 := m.CurrNB()
-	hw0 := m.Stats().HighWaterMark.Load()
 	nalloc0 := m.Stats().NumAlloc.Load()
 	nfree0 := m.Stats().NumFree.Load()
 
@@ -42,13 +46,13 @@ func TestMPool(t *testing.T) {
 	require.True(t, nfree0 == 0, "bad nfree")
 
 	for i := 1; i <= 10000; i++ {
-		a, err := m.Alloc(i*10, false)
+		a, err := m.Alloc(i*10, true)
 		require.True(t, err == nil, "alloc failure, %v", err)
 		require.True(t, len(a) == i*10, "allocation i size error")
 		a[0] = 0xF0
 		require.True(t, a[1] == 0, "allocation result not zeroed.")
 		a[i*10-1] = 0xBA
-		a, err = m.reAlloc(a, i*20, false)
+		a, err = m.reAllocWithDetailK(m.getDetailK(), a, int64(i*20), true, true)
 		require.True(t, err == nil, "realloc failure %v", err)
 		require.True(t, len(a) == i*20, "allocation i size error")
 		require.True(t, a[0] == 0xF0, "reallocation not copied")
@@ -59,17 +63,13 @@ func TestMPool(t *testing.T) {
 	}
 
 	require.True(t, nb0 == m.CurrNB(), "leak")
-	// 30 -- we realloc, need alloc first, then copy.
-	// therefore, (10 + 20) * max(i) and 2 header size (old and new), is the high water.
-	require.True(t, (hw0+10000*30+2*kMemHdrSz) == m.Stats().HighWaterMark.Load(), "hw")
-	// >, because some alloc is absorbed by fixed pool
-	require.True(t, nalloc0+10000*2 > m.Stats().NumAlloc.Load(), "alloc")
+	require.True(t, nalloc0+10000*2 == m.Stats().NumAlloc.Load(), "alloc")
 	require.True(t, nalloc0-nfree0 == m.Stats().NumAlloc.Load()-m.Stats().NumFree.Load(), "free")
 }
 
 func TestReportMemUsage(t *testing.T) {
 	// Just test a mid sized
-	m, err := NewMPool("testjson", 0, 0)
+	m, err := NewMPool("testjson", 0, NoFixed)
 	m.EnableDetailRecording()
 
 	require.True(t, err == nil, "new mpool failed %v", err)
@@ -101,7 +101,7 @@ func TestReportMemUsage(t *testing.T) {
 }
 
 func TestMP(t *testing.T) {
-	pool, err := NewMPool("default", 0, 0)
+	pool, err := NewMPool("default", 0, NoFixed)
 	if err != nil {
 		panic(err)
 	}
@@ -124,34 +124,190 @@ func TestMP(t *testing.T) {
 
 }
 
+func TestMPoolFailedAllocationDoesNotAdvanceResourcePeak(t *testing.T) {
+	mp, err := NewMPool("failed-allocation-peak", 1<<20, NoFixed)
+	require.NoError(t, err)
+	defer DeleteMPool(mp)
+
+	_, err = mp.Alloc(2<<20, true)
+	require.Error(t, err)
+	summary, flags := mp.ResourceSnapshot()
+	require.Zero(t, flags)
+	require.Zero(t, summary.AllocatedBytes)
+	require.Zero(t, summary.FreedBytes)
+	require.Zero(t, summary.PeakLiveBytes)
+	require.Zero(t, summary.LiveBytesAtSeal)
+}
+
+func TestMPoolResourcePeakEpochKeepsRetainedBaseline(t *testing.T) {
+	mp := MustNew("resource-epoch")
+	defer DeleteMPool(mp)
+
+	first, err := mp.Alloc(100, true)
+	require.NoError(t, err)
+	second, err := mp.Alloc(200, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(300), mp.Stats().HighWaterMark.Load())
+
+	summary, flags := mp.ResourceSnapshot()
+	require.Equal(t, resource.QualityNonZeroLiveAtSeal, flags)
+	require.Equal(t, uint64(300), summary.AllocatedBytes)
+	require.Equal(t, uint64(300), summary.PeakLiveBytes)
+	require.Equal(t, uint64(300), summary.LiveBytesAtSeal)
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	peak, exact := mp.ResourcePeakLiveBytes(epoch)
+	require.True(t, exact)
+	require.Equal(t, uint64(300), peak)
+	third, err := mp.Alloc(50, true)
+	require.NoError(t, err)
+	peak, exact = mp.ResourcePeakLiveBytes(epoch)
+	require.True(t, exact)
+	require.Equal(t, uint64(350), peak)
+	mp.Free(third)
+
+	mp.Free(first)
+	mp.Free(second)
+	summary, flags = mp.ResourceSnapshot()
+	require.Zero(t, flags)
+	require.Equal(t, uint64(350), summary.AllocatedBytes)
+	require.Equal(t, uint64(350), summary.FreedBytes)
+	require.Equal(t, uint64(350), summary.PeakLiveBytes)
+	require.Zero(t, summary.LiveBytesAtSeal)
+	endedPeak, ended := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+	require.Equal(t, uint64(350), endedPeak)
+	peak, exact = mp.ResourcePeakLiveBytes(epoch)
+	require.True(t, exact)
+	require.Equal(t, endedPeak, peak)
+	epoch = mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	peak, exact = mp.ResourcePeakLiveBytes(epoch)
+	require.True(t, exact)
+	require.Zero(t, peak)
+	_, ended = mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+}
+
+func TestMPoolResourcePeakEpochRejectsOverlapAndStaleEnd(t *testing.T) {
+	mp := MustNew("resource-epoch-overlap")
+	defer DeleteMPool(mp)
+	other := MustNew("resource-epoch-other")
+	defer DeleteMPool(other)
+
+	first := mp.StartResourcePeakEpoch()
+	require.NotNil(t, first)
+	require.Nil(t, mp.StartResourcePeakEpoch())
+	wrong := &ResourcePeakEpoch{}
+	_, ok := mp.EndResourcePeakEpoch(wrong)
+	require.False(t, ok)
+	otherEpoch := other.StartResourcePeakEpoch()
+	require.NotNil(t, otherEpoch)
+	_, ok = mp.EndResourcePeakEpoch(otherEpoch)
+	require.False(t, ok)
+	_, ok = other.EndResourcePeakEpoch(otherEpoch)
+	require.True(t, ok)
+	peak, ok := mp.EndResourcePeakEpoch(first)
+	require.True(t, ok)
+	require.Zero(t, peak)
+	_, ok = mp.EndResourcePeakEpoch(first)
+	require.False(t, ok)
+
+	second := mp.StartResourcePeakEpoch()
+	require.NotNil(t, second)
+	_, ok = mp.EndResourcePeakEpoch(first)
+	require.False(t, ok)
+	_, ok = mp.EndResourcePeakEpoch(second)
+	require.True(t, ok)
+}
+
+func TestMPoolResourcePeakEpochLifetimeHighWaterNeverDecreases(t *testing.T) {
+	mp := MustNew("resource-epoch-lifetime")
+	defer DeleteMPool(mp)
+
+	buf, err := mp.Alloc(128, true)
+	require.NoError(t, err)
+	initial := mp.Stats().HighWaterMark.Load()
+	require.Equal(t, int64(128), initial)
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	mp.Free(buf)
+	peak, ok := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ok)
+	require.Equal(t, uint64(128), peak)
+	require.Equal(t, initial, mp.Stats().HighWaterMark.Load())
+}
+
+func TestMPoolResourcePeakEpochConcurrentAllocations(t *testing.T) {
+	mp := MustNew("resource-epoch-concurrent")
+	defer DeleteMPool(mp)
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+
+	const workers = 16
+	const allocationSize = 1024
+	var wg sync.WaitGroup
+	release := make(chan struct{})
+	results := make(chan error, workers)
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			buf, err := mp.Alloc(allocationSize, true)
+			results <- err
+			if err != nil {
+				return
+			}
+			<-release
+			mp.Free(buf)
+		}()
+	}
+
+	var allocErr error
+	for i := 0; i < workers; i++ {
+		if err := <-results; err != nil && allocErr == nil {
+			allocErr = err
+		}
+	}
+	close(release)
+	wg.Wait()
+	require.NoError(t, allocErr)
+
+	peak, ok := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ok)
+	expected := uint64(workers * allocationSize)
+	require.Equal(t, expected, peak)
+	require.Equal(t, expected, uint64(mp.Stats().HighWaterMark.Load()))
+}
+
 func TestMpoolReAllocate(t *testing.T) {
 	m := MustNewZero()
-	d1, err := m.Alloc(1023, false)
+	d1, err := m.Alloc(1023, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(cap(d1)+kMemHdrSz), m.CurrNB())
+	require.Equal(t, int64(cap(d1)), m.CurrNB())
 
-	d2, err := m.reAlloc(d1, cap(d1)-1, false)
+	d2, err := m.reAllocWithDetailK(m.getDetailK(), d1, int64(cap(d1)-1), true, true)
 	require.NoError(t, err)
 	require.Equal(t, cap(d1), cap(d2))
-	require.Equal(t, int64(cap(d1)+kMemHdrSz), m.CurrNB())
+	require.Equal(t, int64(cap(d1)), m.CurrNB())
 
-	d3, err := m.reAlloc(d2, cap(d2)+1025, false)
+	d3, err := m.reAllocWithDetailK(m.getDetailK(), d2, int64(cap(d2)+1025), true, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(cap(d3)+kMemHdrSz), m.CurrNB())
+	require.Equal(t, int64(cap(d3)), m.CurrNB())
 
 	if cap(d3) > 5 {
 		d3 = d3[:cap(d3)-4]
 		var d3_1 []byte
-		d3_1, err = m.Grow(d3, cap(d3)-2, false)
+		d3_1, err = m.Grow(d3, cap(d3)-2, true)
 		require.NoError(t, err)
 		require.Equal(t, cap(d3), cap(d3_1))
-		require.Equal(t, int64(cap(d3)+kMemHdrSz), m.CurrNB())
+		require.Equal(t, int64(cap(d3)), m.CurrNB())
 		d3 = d3_1
 	}
 
-	d4, err := m.Grow(d3, cap(d3)+10, false)
+	d4, err := m.Grow(d3, cap(d3)+10, true)
 	require.NoError(t, err)
-	require.Equal(t, int64(cap(d4)+kMemHdrSz), m.CurrNB())
+	require.Equal(t, int64(cap(d4)), m.CurrNB())
 
 	if cap(d4) > 0 {
 		d4 = d4[:cap(d4)-1]
@@ -160,10 +316,522 @@ func TestMpoolReAllocate(t *testing.T) {
 	require.Equal(t, int64(0), m.CurrNB())
 }
 
+func TestGrowCapacityMatchesGrow(t *testing.T) {
+	tests := []struct {
+		oldCap   int
+		required int
+	}{
+		{0, 1},
+		{1, 2},
+		{8, 9},
+		{63, 64},
+		{64, 65},
+		{1024, 2049},
+		{4095, 4096},
+		{4096, 4097},
+		{8192, 8193},
+		{32768, 65537},
+		{1 << 20, 1<<20 + 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%d_to_%d", tt.oldCap, tt.required), func(t *testing.T) {
+			predicted, ok := GrowCapacity(int64(tt.oldCap), int64(tt.required))
+			require.True(t, ok)
+
+			m := MustNewZero()
+			var old []byte
+			var err error
+			if tt.oldCap > 0 {
+				old, err = m.Alloc(tt.oldCap, false)
+				require.NoError(t, err)
+			}
+			grown, err := m.Grow(old, tt.required, false)
+			require.NoError(t, err)
+			require.Equal(t, predicted, int64(cap(grown)))
+			m.Free(grown)
+			require.Zero(t, m.CurrNB())
+		})
+	}
+}
+
+func TestGrowCapacityMatchesGrow2(t *testing.T) {
+	m := MustNewZero()
+	old, err := m.Alloc(4096, false)
+	require.NoError(t, err)
+	source := bytes.Repeat([]byte{0x5a}, 257)
+	required := len(old) + len(source)
+	predicted, ok := GrowCapacity(int64(cap(old)), int64(required))
+	require.True(t, ok)
+
+	grown, err := m.Grow2(old, source, required, false)
+	require.NoError(t, err)
+	require.Equal(t, predicted, int64(cap(grown)))
+	require.Equal(t, source, grown[len(old):required])
+	m.Free(grown)
+	require.Zero(t, m.CurrNB())
+}
+
+func TestGrowCapacityValidation(t *testing.T) {
+	_, ok := GrowCapacity(-1, 1)
+	require.False(t, ok)
+	_, ok = GrowCapacity(1, -1)
+	require.False(t, ok)
+
+	capacity, ok := GrowCapacity(128, 64)
+	require.True(t, ok)
+	require.Equal(t, int64(128), capacity)
+}
+
 func TestUseMalloc(t *testing.T) {
 	pool, err := NewMPool("test", 1<<20, NoFixed)
 	require.Nil(t, err)
 	bs, err := pool.Alloc(8, true)
 	require.Nil(t, err)
 	pool.Free(bs)
+}
+
+func TestMPoolNoLock(t *testing.T) {
+	mp1 := MustNewNoLock("test-nolock-1")
+	mp2 := MustNewNoLock("test-nolock-2")
+
+	bs1, err := mp1.Alloc(100, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(100), mp1.CurrNB())
+
+	bs1, err = mp1.ReallocZero(bs1, 200, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(200), mp1.CurrNB())
+
+	mp1.Free(bs1)
+	require.Equal(t, int64(0), mp1.CurrNB())
+
+	bs2, err := mp2.Alloc(100, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(100), mp2.CurrNB())
+
+	bs22, err := mp2.ReallocZero(bs2, 2000000, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(2000000), mp2.CurrNB())
+
+	// should not free bs1, because it is Reallocated.
+
+	// cross pool free is not allowed for no lock mpool.
+	// mp1.Free(bs22)
+	bs22, err = mp2.ReallocZero(bs22, 100, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(2000000), mp2.CurrNB())
+
+	mp2.Free(bs22)
+	require.Equal(t, int64(0), mp2.CurrNB())
+}
+
+func TestReallocZeroHonorsPoolCapBeforeMutation(t *testing.T) {
+	const poolCap = 1 * MB
+	const oldSize = 400 * KB
+
+	t.Run("exact temporary peak is admitted", func(t *testing.T) {
+		mp, err := NewMPool("realloc-zero-exact-cap", poolCap, NoLock)
+		require.NoError(t, err)
+		defer DeleteMPool(mp)
+
+		old, err := mp.Alloc(oldSize, true)
+		require.NoError(t, err)
+		for i := range old {
+			old[i] = 0x5a
+		}
+
+		resized, err := mp.ReallocZero(old, poolCap-oldSize, true)
+		require.NoError(t, err)
+		require.Equal(t, int64(poolCap-oldSize), mp.CurrNB())
+		require.Equal(t, byte(0x5a), resized[oldSize-1])
+		require.Zero(t, resized[oldSize])
+		mp.Free(resized)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	t.Run("limit plus one rejects and preserves old allocation", func(t *testing.T) {
+		mp, err := NewMPool("realloc-zero-over-cap", poolCap, NoLock)
+		require.NoError(t, err)
+		defer DeleteMPool(mp)
+
+		old, err := mp.Alloc(oldSize, true)
+		require.NoError(t, err)
+		old[0] = 0x5a
+		before := mp.CurrNB()
+
+		resized, err := mp.ReallocZero(old, poolCap-oldSize+1, true)
+		require.Error(t, err)
+		require.Nil(t, resized)
+		require.Equal(t, before, mp.CurrNB())
+		require.Equal(t, byte(0x5a), old[0])
+		mp.Free(old)
+		require.Zero(t, mp.CurrNB())
+	})
+}
+
+func TestReallocZeroRejectsOverflowSize(t *testing.T) {
+	mp := MustNewNoLock("realloc-zero-overflow")
+	defer DeleteMPool(mp)
+	old, err := mp.Alloc(8, true)
+	require.NoError(t, err)
+	before := mp.CurrNB()
+
+	resized, err := mp.ReallocZero(old, math.MaxInt, true)
+	require.Error(t, err)
+	require.Nil(t, resized)
+	require.Equal(t, before, mp.CurrNB())
+	mp.Free(old)
+}
+
+// TestCrossPoolFreeOffHeap tests that cross-pool free correctly deallocates offHeap memory.
+// This catches the bug where cross-pool free only recorded stats but didn't actually free memory.
+func TestCrossPoolFreeOffHeap(t *testing.T) {
+	mp1 := MustNew("cross-pool-test-1")
+	mp2 := MustNew("cross-pool-test-2")
+
+	// Allocate from mp1
+	bs, err := mp1.Alloc(1024, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(1024), mp1.CurrNB())
+
+	globalBefore := GlobalStats().NumCurrBytes.Load()
+
+	// Free from mp2 (cross-pool free)
+	mp2.Free(bs)
+
+	// Verify cross-pool free count was recorded (NumCrossPoolFree counts occurrences, not bytes)
+	require.Equal(t, int64(1), mp2.Stats().NumCrossPoolFree.Load())
+	summary, flags := mp1.ResourceSnapshot()
+	require.Equal(t, uint64(1), summary.CrossPoolFreeCount)
+	require.NotZero(t, flags&resource.QualityCrossPoolFree)
+	require.NotZero(t, flags&resource.QualityInvariantFailure)
+
+	// Verify global stats decreased (memory was actually freed)
+	globalAfter := GlobalStats().NumCurrBytes.Load()
+	require.Equal(t, globalBefore-1024, globalAfter, "offHeap memory should be deallocated on cross-pool free")
+
+	DeleteMPool(mp1)
+	DeleteMPool(mp2)
+}
+
+// TestCrossPoolFreeOnHeap tests that cross-pool free works correctly for on-heap memory.
+func TestCrossPoolFreeOnHeap(t *testing.T) {
+	mp1 := MustNew("cross-pool-onheap-1")
+	mp2 := MustNew("cross-pool-onheap-2")
+
+	// Allocate on-heap from mp1
+	bs, err := mp1.Alloc(1024, false)
+	require.NoError(t, err)
+
+	// Free from mp2 (cross-pool free) - should not panic
+	mp2.Free(bs)
+
+	// On-heap cross-pool free: no stats recorded since offHeap=false returns early
+	// This is expected behavior - on-heap memory is managed by Go GC
+
+	DeleteMPool(mp1)
+	DeleteMPool(mp2)
+}
+
+// TestDoubleFree tests that double free is detected and panics.
+func TestDoubleFree(t *testing.T) {
+	mp := MustNew("double-free-test")
+
+	bs, err := mp.Alloc(1024, true)
+	require.NoError(t, err)
+
+	mp.Free(bs)
+
+	// Second free should panic
+	require.Panics(t, func() {
+		mp.Free(bs)
+	}, "double free should panic")
+
+	DeleteMPool(mp)
+}
+
+// TestConcurrentAllocFree tests concurrent allocation and free with sharded locks.
+func TestConcurrentAllocFree(t *testing.T) {
+	mp := MustNew("concurrent-test")
+	var wg sync.WaitGroup
+
+	numGoroutines := 100
+	numOps := 1000
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < numOps; j++ {
+				bs, err := mp.Alloc(64, true)
+				if err != nil {
+					t.Errorf("alloc failed: %v", err)
+					return
+				}
+				mp.Free(bs)
+			}
+		}()
+	}
+
+	wg.Wait()
+	require.Equal(t, int64(0), mp.CurrNB(), "all memory should be freed")
+	DeleteMPool(mp)
+}
+
+// TestConcurrentCrossPoolFree tests concurrent cross-pool free operations.
+func TestConcurrentCrossPoolFree(t *testing.T) {
+	mp1 := MustNew("concurrent-cross-1")
+	mp2 := MustNew("concurrent-cross-2")
+	var wg sync.WaitGroup
+
+	numGoroutines := 50
+	numOps := 100
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < numOps; j++ {
+				// Allocate from mp1
+				bs, err := mp1.Alloc(64, true)
+				if err != nil {
+					t.Errorf("alloc failed: %v", err)
+					return
+				}
+				// Free from mp2 (cross-pool)
+				mp2.Free(bs)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	totalCrossPoolFrees := mp2.Stats().NumCrossPoolFree.Load()
+	require.Equal(t, int64(numGoroutines*numOps), totalCrossPoolFrees)
+
+	DeleteMPool(mp1)
+	DeleteMPool(mp2)
+}
+
+// TestAllocZeroSize tests allocation of zero size.
+func TestAllocZeroSize(t *testing.T) {
+	mp := MustNew("zero-size-test")
+
+	bs, err := mp.Alloc(0, true)
+	require.NoError(t, err)
+	require.Nil(t, bs)
+
+	bs, err = mp.Alloc(0, false)
+	require.NoError(t, err)
+	require.Nil(t, bs)
+
+	DeleteMPool(mp)
+}
+
+// TestFreeNil tests that freeing nil slice doesn't panic.
+func TestFreeNil(t *testing.T) {
+	mp := MustNew("free-nil-test")
+
+	// Should not panic
+	mp.Free(nil)
+
+	var emptySlice []byte
+	mp.Free(emptySlice)
+
+	DeleteMPool(mp)
+}
+
+// TestShardDistribution tests that pointer sharding distributes load.
+func TestShardDistribution(t *testing.T) {
+	mp := MustNew("shard-dist-test")
+
+	numAllocs := 10000
+	ptrs := make([][]byte, numAllocs)
+
+	for i := 0; i < numAllocs; i++ {
+		bs, err := mp.Alloc(64, true)
+		require.NoError(t, err)
+		ptrs[i] = bs
+	}
+
+	// Free all
+	for _, bs := range ptrs {
+		mp.Free(bs)
+	}
+
+	require.Equal(t, int64(0), mp.CurrNB())
+	DeleteMPool(mp)
+}
+
+func TestPtrLenReplace(t *testing.T) {
+	mp := MustNewZero()
+	p := &PtrLen{}
+
+	require.NoError(t, p.Replace(mp, []byte{1, 2}))
+	require.Equal(t, int32(2), p.len)
+	require.Equal(t, []byte{1, 2}, p.ToByteSlice())
+
+	require.NoError(t, p.Replace(mp, []byte{3, 4}))
+	require.Equal(t, int32(2), p.len)
+	require.Equal(t, []byte{3, 4}, p.ToByteSlice())
+
+	require.NoError(t, p.Replace(mp, []byte{5, 6, 7, 8, 9, 10}))
+	require.Equal(t, int32(6), p.len)
+	require.Equal(t, []byte{5, 6, 7, 8, 9, 10}, p.ToByteSlice())
+
+	require.NoError(t, p.Replace(mp, []byte{1, 2, 3}))
+	require.Equal(t, int32(3), p.len)
+	require.Equal(t, []byte{1, 2, 3}, p.ToByteSlice())
+
+	require.NoError(t, p.Replace(mp, nil))
+	require.Equal(t, int32(0), p.len)
+
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestPtrLenAppendUsesRecordedAllocationSize(t *testing.T) {
+	const (
+		initialSize  = 256 << 10
+		shrunkSize   = 64 << 10
+		firstAppend  = 96 << 10
+		secondAppend = 160 << 10
+	)
+
+	mp := MustNewZero()
+	p := &PtrLen{}
+	t.Cleanup(func() {
+		p.Free(mp)
+		DeleteMPool(mp)
+	})
+
+	require.NoError(t, p.Replace(mp, bytes.Repeat([]byte{0x11}, initialSize)))
+	originalPtr := p.Ptr()
+	require.Equal(t, int64(initialSize), mp.CurrNB())
+
+	// PtrLen intentionally retains only the base pointer and logical length.
+	// Shrinking therefore produces a reduced-capacity view on the next append.
+	require.NoError(t, p.Replace(mp, bytes.Repeat([]byte{0x22}, shrunkSize)))
+	require.Equal(t, originalPtr, p.Ptr())
+	require.Equal(t, int64(initialSize), mp.CurrNB())
+
+	require.NoError(t, p.AppendRawBytes(mp, bytes.Repeat([]byte{0x33}, firstAppend)))
+	require.Equal(t, originalPtr, p.Ptr(), "growth within the recorded allocation should reuse it")
+	require.Equal(t, int64(initialSize), mp.CurrNB())
+	require.Equal(t, bytes.Repeat([]byte{0x22}, shrunkSize), p.ToByteSlice()[:shrunkSize])
+	require.Equal(
+		t,
+		bytes.Repeat([]byte{0x33}, firstAppend),
+		p.ToByteSlice()[shrunkSize:shrunkSize+firstAppend],
+	)
+
+	require.NoError(t, p.AppendRawBytes(mp, bytes.Repeat([]byte{0x44}, secondAppend)))
+	require.Equal(t, int64(shrunkSize+firstAppend+secondAppend), mp.CurrNB())
+	require.Equal(
+		t,
+		bytes.Repeat([]byte{0x44}, secondAppend),
+		p.ToByteSlice()[shrunkSize+firstAppend:],
+	)
+
+	p.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMPoolReallocZeroTrackedZeroCapacityView(t *testing.T) {
+	const (
+		allocationSize = 256 << 10
+		newSize        = 64 << 10
+	)
+
+	mp := MustNewZero()
+	t.Cleanup(func() {
+		DeleteMPool(mp)
+	})
+
+	old, err := mp.Alloc(allocationSize, true)
+	require.NoError(t, err)
+	originalPtr := unsafe.Pointer(unsafe.SliceData(old))
+
+	resized, err := mp.ReallocZero(old[:0:0], newSize, true)
+	require.NoError(t, err)
+	require.Equal(t, originalPtr, unsafe.Pointer(unsafe.SliceData(resized)))
+	require.Len(t, resized, newSize)
+	require.Equal(t, allocationSize, cap(resized))
+	require.Equal(t, make([]byte, newSize), resized)
+	require.Equal(t, int64(allocationSize), mp.CurrNB())
+
+	mp.Free(resized)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMPoolReallocZeroUsesRecordedSourceProvenance(t *testing.T) {
+	const (
+		oldSize       = 64 << 10
+		logicalLength = 32 << 10
+		newSize       = 256 << 10
+	)
+
+	testCases := []struct {
+		name          string
+		sourceOffHeap bool
+		targetOffHeap bool
+	}{
+		{
+			name:          "on-heap-to-off-heap",
+			sourceOffHeap: false,
+			targetOffHeap: true,
+		},
+		{
+			name:          "off-heap-to-on-heap",
+			sourceOffHeap: true,
+			targetOffHeap: false,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			mp := MustNewZero()
+			t.Cleanup(func() {
+				DeleteMPool(mp)
+			})
+
+			old, err := mp.Alloc(oldSize, testCase.sourceOffHeap)
+			require.NoError(t, err)
+			for i := 0; i < logicalLength; i++ {
+				old[i] = 0x5a
+			}
+
+			resized, err := mp.ReallocZero(
+				old[:logicalLength:logicalLength],
+				newSize,
+				testCase.targetOffHeap,
+			)
+			require.NoError(t, err)
+			require.Equal(t, bytes.Repeat([]byte{0x5a}, logicalLength), resized[:logicalLength])
+			require.Equal(t, make([]byte, newSize-logicalLength), resized[logicalLength:])
+
+			hdr, ok := mp.getPtrHdr(unsafe.Pointer(unsafe.SliceData(resized)))
+			require.True(t, ok)
+			require.Equal(t, testCase.targetOffHeap, hdr.offHeap)
+			require.Equal(t, int32(newSize), hdr.allocSz)
+
+			mp.Free(resized)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func BenchmarkMPoolAtomicMax(b *testing.B) {
+	mp, err := NewMPool("benchmark-resource-peak", 0, NoFixed)
+	require.NoError(b, err)
+	defer DeleteMPool(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		buf, allocErr := mp.Alloc(64, true)
+		if allocErr != nil {
+			b.Fatal(allocErr)
+		}
+		mp.Free(buf)
+	}
 }

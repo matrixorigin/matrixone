@@ -149,6 +149,7 @@ select coalesce(null);
 
 #EXTRME VALUE
 SELECT COALESCE(NULL, NULL, NULL, 'W3Schools.com', NULL, 'Example.com');
+SELECT COALESCE(NULL, 1, 'string', 1.5);
 
 #算术操作
 SELECT COALESCE(1)+COALESCE(1);

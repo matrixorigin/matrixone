@@ -17,6 +17,8 @@ package moerr
 import (
 	"encoding/hex"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 func NewInfoNoCtx(msg string) *Error {
@@ -57,6 +59,10 @@ func NewOOMNoCtx() *Error {
 
 func NewDivByZeroNoCtx() *Error {
 	return newError(Context(), ErrDivByZero)
+}
+
+func NewRegexpIllegalArgumentNoCtx() *Error {
+	return newError(Context(), ErrRegexpIllegalArgument)
 }
 
 func NewOutOfRangeNoCtxf(typ string, format string, args ...any) *Error {
@@ -178,11 +184,11 @@ func NewInvalidServiceIndexNoCtx(idx int) *Error {
 }
 
 func NewBadDBNoCtx(name string) *Error {
-	return newError(Context(), ErrBadDB, name)
+	return newError(NoReportContext(), ErrBadDB, name)
 }
 
 func NewNoDBNoCtx() *Error {
-	return newError(Context(), ErrNoDB)
+	return newError(NoReportContext(), ErrNoDB)
 }
 
 func NewNoWorkingStoreNoCtx() *Error {
@@ -202,30 +208,52 @@ func NewWrongServiceNoCtx(exp, got string) *Error {
 }
 
 func NewNoSuchTableNoCtx(db, tbl string) *Error {
-	return newError(Context(), ErrNoSuchTable, db, tbl)
+	return newError(NoReportContext(), ErrNoSuchTable, db, tbl)
 }
 
+// NewClientClosedNoCtx creates a client closed error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewClientClosedNoCtx() *Error {
-	return newError(Context(), ErrClientClosed)
+	return newError(NoReportContext(), ErrClientClosed)
 }
 
+// NewBackendClosedNoCtx creates a backend closed error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewBackendClosedNoCtx() *Error {
-	return newError(Context(), ErrBackendClosed)
+	return newError(NoReportContext(), ErrBackendClosed)
 }
 
+// NewStreamClosedNoCtx creates a stream closed error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewStreamClosedNoCtx() *Error {
-	return newError(Context(), ErrStreamClosed)
+	return newError(NoReportContext(), ErrStreamClosed)
 }
 
+// NewNoAvailableBackendNoCtx creates a no available backend error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewNoAvailableBackendNoCtx() *Error {
-	return newError(Context(), ErrNoAvailableBackend)
+	return newError(NoReportContext(), ErrNoAvailableBackend)
 }
 
+// NewBackendCannotConnectNoCtx creates a backend connection error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewBackendCannotConnectNoCtx(args ...any) *Error {
 	if len(args) == 0 {
-		return newError(Context(), ErrBackendCannotConnect, "none")
+		return newError(NoReportContext(), ErrBackendCannotConnect, "none")
 	}
-	return newError(Context(), ErrBackendCannotConnect, args...)
+	return newError(NoReportContext(), ErrBackendCannotConnect, args...)
+}
+
+// NewServiceUnavailableNoCtx creates a service unavailable error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
+func NewServiceUnavailableNoCtx(reason string) *Error {
+	return newError(NoReportContext(), ErrServiceUnavailable, reason)
+}
+
+// NewConnectionResetNoCtx creates a connection reset error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
+func NewConnectionResetNoCtx() *Error {
+	return newError(NoReportContext(), ErrConnectionReset)
 }
 
 func NewTxnClosedNoCtx(txnID []byte) *Error {
@@ -314,8 +342,12 @@ func NewTAENeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTAENeedRetry)
 }
 
-func NewTxnStaleNoCtx(msg string) *Error {
-	return newError(Context(), ErrTxnStale, msg)
+func NewTxnStaleNoCtxf(
+	format string, args ...any,
+) *Error {
+	msg := fmt.Sprintf(format, args...)
+	ctx := errutil.ContextWithNoReport(Context(), true)
+	return newError(ctx, ErrTxnStale, msg)
 }
 
 func NewRetryForCNRollingRestart() *Error {
@@ -402,6 +434,14 @@ func NewLockConflictNoCtx() *Error {
 	return newError(Context(), ErrLockConflict)
 }
 
+func NewRemoteLockWaitTimeoutNoCtx() *Error {
+	return newError(Context(), ErrRemoteLockWaitTimeout)
+}
+
+func NewLockWaitTimeoutNoCtx() *Error {
+	return newError(Context(), ErrLockWaitTimeout)
+}
+
 func NewLockNeedUpgradeNoCtx() *Error {
 	return newError(Context(), ErrLockNeedUpgrade)
 }
@@ -430,8 +470,10 @@ func NewTxnCannotRetryNoCtx() *Error {
 	return newError(Context(), ErrTxnCannotRetry)
 }
 
+// NewRPCTimeoutNoCtx creates an RPC timeout error without logging.
+// RPC errors use NoReportContext() to avoid log storms in retry loops.
 func NewRPCTimeoutNoCtx() *Error {
-	return newError(Context(), ErrRPCTimeout)
+	return newError(NoReportContext(), ErrRPCTimeout)
 }
 
 func NewKeyAlreadyExistsNoCtx() *Error {
@@ -464,4 +506,41 @@ func NewReplicaNotMatch(current, received string) *Error {
 
 func NewCantCompileForPrepareNoCtx() *Error {
 	return newError(Context(), ErrCantCompileForPrepare)
+}
+
+func NewSchedulerClosedNoCtx() *Error {
+	return newError(Context(), ErrSchedulerClosed)
+}
+
+func NewVectorNeedRetryWithPreModeNoCtx() *Error {
+	return newError(Context(), ErrVectorNeedRetryWithPreMode)
+}
+
+// GC sync protection errors
+func NewGCIsRunningNoCtx() *Error {
+	return newError(Context(), ErrGCIsRunning)
+}
+
+func NewSyncProtectionNotFoundNoCtx(jobID string) *Error {
+	return newError(Context(), ErrSyncProtectionNotFound, jobID)
+}
+
+func NewSyncProtectionExistsNoCtx(jobID string) *Error {
+	return newError(Context(), ErrSyncProtectionExists, jobID)
+}
+
+func NewSyncProtectionMaxCountNoCtx(maxCount int) *Error {
+	return newError(Context(), ErrSyncProtectionMaxCount, maxCount)
+}
+
+func NewSyncProtectionSoftDeleteNoCtx(jobID string) *Error {
+	return newError(Context(), ErrSyncProtectionSoftDelete, jobID)
+}
+
+func NewSyncProtectionInvalidNoCtx() *Error {
+	return newError(Context(), ErrSyncProtectionInvalid)
+}
+
+func NewSyncProtectionExpiredNoCtx(jobID string, validTS, prepareTS int64) *Error {
+	return newError(Context(), ErrSyncProtectionExpired, jobID, validTS, prepareTS)
 }

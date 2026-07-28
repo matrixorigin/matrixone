@@ -23,13 +23,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -52,11 +56,13 @@ const (
 	CreateDatabase
 	CreateTable
 	CreatePitr
+	CreateCDC
 	CreateView
 	CreateIndex
 	DropDatabase
 	DropTable
 	DropPitr
+	DropCDC
 	DropIndex
 	TruncateTable
 	AlterView
@@ -138,7 +144,10 @@ type Source struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	OrderBy            []*plan.OrderBySpec // for ordered scan
 
-	RecvMsgList []plan.MsgHeader
+	IndexReaderParam *plan.IndexReaderParam
+
+	RecvMsgList           []plan.MsgHeader
+	MembershipFilterBytes []byte
 }
 
 // Col is the information of attribute
@@ -169,6 +178,11 @@ type Scope struct {
 	IsTbFunc bool
 
 	HasPartialResults bool
+	// StarCountOnly: when true, aggOptimize took the single-starcount fast path.
+	// buildReaders should return EmptyReaders and no data should flow.
+	StarCountOnly bool
+	// StarCountMergeGroup: set when StarCountOnly is true; resetForReuse clears its PartialResults.
+	StarCountMergeGroup *group.MergeGroup
 
 	Plan *plan.Plan
 	// DataSource stores information about data source.
@@ -187,17 +201,25 @@ type Scope struct {
 
 	ScopeAnalyzer *ScopeAnalyzer
 
+	// resourceExecutedLocally distinguishes a planned remote scope that fell
+	// back to MergeRun from a scope that was actually dispatched. It is
+	// execution-local state and must be cleared before scope reuse.
+	resourceExecutedLocally bool
+
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 }
 
-// ipAddrMatch return true if the node-addr of the scope matches to local address.
-//
-// once node-addr is just empty, it means local.
+// ipAddrMatch returns true if the scope should run on the local CN. Historically
+// an empty scope address means local; non-empty malformed addresses must not be
+// silently treated as local.
 func (s *Scope) ipAddrMatch(local string) bool {
 	if len(s.NodeInfo.Addr) == 0 {
 		return true
 	}
-	return isSameCN(s.NodeInfo.Addr, local)
+	if len(local) == 0 {
+		return false
+	}
+	return sameExecutionAddr(s.NodeInfo.Addr, local)
 }
 
 // holdAnyCannotRemoteOperator returns error message
@@ -264,12 +286,18 @@ type Compile struct {
 
 	// proc stores the execution context.
 	proc *process.Process
+	// runSqlToken tracks the current statement in txn operator coordination.
+	runSqlToken uint64
 	// TxnOffset read starting offset position within the transaction during the execute current statement
 	TxnOffset int
 
 	MessageBoard *message.MessageBoard
 
-	cnList engine.Nodes
+	cnList                engine.Nodes
+	queryPlacement        schedule.QueryDecision
+	querySchedulingIntent schedule.SchedulingIntent
+	schedulingTrace       *schedule.TraceRecorder
+	schedulingAttempt     schedule.TraceAttemptID
 	// ast
 	stmt tree.Statement
 
@@ -291,15 +319,33 @@ type Compile struct {
 
 	filterExprExes []colexec.ExpressionExecutor
 
+	// compiledRightSingleNodes records semantic right-SINGLE nodes actually
+	// visited by compilePlanScope. It is statement-local and remains empty for
+	// queries without right-SINGLE joins.
+	compiledRightSingleNodes []int32
+
 	needLockMeta bool
 	needBlock    bool
 	isPrepare    bool
 	disableRetry bool
 	isInternal   bool
-	hasMergeOp   bool
+	// resourceAttemptOwnerEligible is set only for the top-level statement
+	// Compile. The statement root still arbitrates the single actual owner.
+	resourceAttemptOwnerEligible bool
+	hasMergeOp                   bool
 
 	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
 	ncpu int
+
+	adjustTableExtraFunc     func(*api.SchemaExtra) error
+	disableDropAutoIncrement bool
+	keepAutoIncrement        uint64
+	ignorePublish            bool
+	ignoreCheckExperimental  bool
+	disableLock              bool
+
+	icebergScanPlanner icebergapi.ScanPlanner
+	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan
 }
 
 type RemoteReceivRegInfo struct {
@@ -329,6 +375,8 @@ type fuzzyCheck struct {
 
 type MultiTableIndex struct {
 	IndexAlgo string
+	// Compile DDL/ALTER paths keep physical index defs grouped by table type.
+	// They should not infer logical INCLUDE metadata from one physical def.
 	IndexDefs map[string]*plan.IndexDef
 }
 

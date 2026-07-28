@@ -79,6 +79,7 @@ func ReshapeBatches(batches []*containers.Batch, toLayout []uint32, vpool Dispos
 			for idx := range ret[retIdx].Vecs {
 				err := ret[retIdx].Vecs[idx].UnionOne(cnBat.Vecs[idx], int64(row), vpool.GetMPool())
 				if err != nil {
+					releaseF()
 					return nil, nil, nil, err
 				}
 			}

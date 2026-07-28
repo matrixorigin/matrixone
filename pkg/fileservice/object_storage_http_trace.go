@@ -21,6 +21,7 @@ import (
 	"net/http/httptrace"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
@@ -35,6 +36,24 @@ func newObjectStorageHTTPTrace(upstream ObjectStorage) *objectStorageHTTPTrace {
 }
 
 var _ ObjectStorage = new(objectStorageHTTPTrace)
+var _ ParallelMultipartWriter = new(objectStorageHTTPTrace)
+var _ objectStorageCopier = new(objectStorageHTTPTrace)
+
+func (o *objectStorageHTTPTrace) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	copier, ok := o.upstream.(objectStorageCopier)
+	if !ok {
+		return false, nil
+	}
+	traceInfo := o.newTraceInfo()
+	defer o.closeTraceInfo(traceInfo)
+	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	return copier.CopyObject(ctx, src, srcKey, dstKey)
+}
 
 func (o *objectStorageHTTPTrace) Delete(ctx context.Context, keys ...string) (err error) {
 	traceInfo := o.newTraceInfo()
@@ -76,6 +95,23 @@ func (o *objectStorageHTTPTrace) Write(ctx context.Context, key string, r io.Rea
 	defer o.closeTraceInfo(traceInfo)
 	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
 	return o.upstream.Write(ctx, key, r, sizeHint, expire)
+}
+
+func (o *objectStorageHTTPTrace) SupportsParallelMultipart() bool {
+	if p, ok := o.upstream.(ParallelMultipartWriter); ok {
+		return p.SupportsParallelMultipart()
+	}
+	return false
+}
+
+func (o *objectStorageHTTPTrace) WriteMultipartParallel(ctx context.Context, key string, r io.Reader, sizeHint *int64, opt *ParallelMultipartOption) (err error) {
+	traceInfo := o.newTraceInfo()
+	defer o.closeTraceInfo(traceInfo)
+	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	if p, ok := o.upstream.(ParallelMultipartWriter); ok {
+		return p.WriteMultipartParallel(ctx, key, r, sizeHint, opt)
+	}
+	return moerr.NewNotSupportedNoCtx("parallel multipart upload")
 }
 
 func (o *objectStorageHTTPTrace) newTraceInfo() *traceInfo {

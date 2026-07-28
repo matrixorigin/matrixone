@@ -225,6 +225,11 @@ func MakeBlockInfoSlice(cnt int) BlockInfoSlice {
 }
 
 func PreAllocBlockInfoSlice(preAllocBlocks int) BlockInfoSlice {
+	if preAllocBlocks < 0 {
+		preAllocBlocks = 0
+	} else if preAllocBlocks > 2000000 {
+		preAllocBlocks = 2000000
+	}
 	return make([]byte, 0, preAllocBlocks*BlockInfoSize)
 }
 

@@ -245,6 +245,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 	hb := s.store.getHeartbeatMessage()
 	hb.TaskServiceCreated = s.taskServiceCreated()
 	hb.ConfigData = s.config.GetData()
+	s.addWALRecoveryStatus(&hb)
 
 	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
 	if err != nil {

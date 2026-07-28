@@ -16,10 +16,10 @@ package gc
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
@@ -65,7 +65,7 @@ func (c *MockCleaner) Replay(ctx context.Context) error {
 	return nil
 }
 
-func (c *MockCleaner) Process(ctx context.Context) error {
+func (c *MockCleaner) Process(ctx context.Context, _ func(*checkpoint.CheckpointEntry) bool) error {
 	if c.processFunc != nil {
 		return c.processFunc(ctx)
 	}
@@ -139,10 +139,39 @@ func (c *MockCleaner) GetMPool() *mpool.MPool {
 	return nil
 }
 
-func (c *MockCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
+func (c *MockCleaner) GetSnapshots() (*logtail.SnapshotInfo, error) {
 	return nil, nil
 }
 
 func (c *MockCleaner) GetTablePK(tableId uint64) string {
 	return ""
+}
+
+func (c *MockCleaner) GetDetails(ctx context.Context) (map[uint32]*TableStats, error) {
+	return nil, nil
+}
+
+func (c *MockCleaner) Verify(ctx context.Context) string {
+	return ""
+}
+
+func (c *MockCleaner) ISCPTables() (map[uint64]types.TS, error) {
+	return nil, nil
+}
+
+func (c *MockCleaner) SetBackupProtection(protectedTS types.TS) {
+}
+
+func (c *MockCleaner) UpdateBackupProtection(protectedTS types.TS) {
+}
+
+func (c *MockCleaner) RemoveBackupProtection() {
+}
+
+func (c *MockCleaner) GetBackupProtection() (protectedTS types.TS, lastUpdateTime time.Time, isActive bool) {
+	return types.TS{}, time.Time{}, false
+}
+
+func (c *MockCleaner) GetSyncProtectionManager() *SyncProtectionManager {
+	return nil
 }

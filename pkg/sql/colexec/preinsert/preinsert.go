@@ -16,20 +16,25 @@ package preinsert
 
 import (
 	"bytes"
+	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
+	"golang.org/x/exp/constraints"
 )
 
 const opName = "preinsert"
@@ -65,7 +70,40 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 			return
 		}
 	}
+	if preInsert.HasAutoCol {
+		preInsert.ctr.tblId = preInsert.TableDef.TblId
+		if err = preInsert.refreshAutoIncrementTableID(proc); err != nil {
+			return
+		}
+	}
 	return
+}
+
+func (preInsert *PreInsert) refreshAutoIncrementTableID(proc *proc) error {
+	if preInsert.TableDef == nil || preInsert.TableDef.Name == "" || preInsert.SchemaName == "" {
+		return nil
+	}
+	if preInsert.TableDef.IsTemporary {
+		return nil
+	}
+	if proc.Base.SessionInfo.StorageEngine == nil || proc.Base.TxnOperator == nil {
+		return nil
+	}
+
+	db, err := proc.Base.SessionInfo.StorageEngine.Database(proc.Ctx, preInsert.SchemaName, proc.Base.TxnOperator)
+	if err != nil {
+		return err
+	}
+	rel, err := db.Relation(proc.Ctx, preInsert.TableDef.Name, nil)
+	if err != nil {
+		return err
+	}
+	preInsert.ctr.tblId = rel.GetTableID(proc.Ctx)
+	return nil
+}
+
+func (preInsert *PreInsert) retryWithDefChanged() error {
+	return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 }
 
 func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first bool) (err error) {
@@ -76,9 +114,9 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 			}
 		}
 		if preInsert.IsNewUpdate {
-			preInsert.ctr.buf = batch.NewWithSize(len(bat.Vecs))
+			preInsert.ctr.buf = batch.NewOffHeapWithSize(len(bat.Vecs))
 		} else {
-			preInsert.ctr.buf = batch.NewWithSize(len(preInsert.Attrs))
+			preInsert.ctr.buf = batch.NewOffHeapWithSize(len(preInsert.Attrs))
 			preInsert.ctr.buf.Attrs = slices.Clone(preInsert.Attrs)
 		}
 	} else {
@@ -96,9 +134,13 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 			if preInsert.ctr.buf.Vecs[idx] != nil {
 				preInsert.ctr.buf.Vecs[idx].CleanOnlyData()
 			} else {
-				preInsert.ctr.buf.Vecs[idx] = vector.NewVec(*typ)
+				preInsert.ctr.buf.Vecs[idx] = vector.NewOffHeapVecWithType(*typ)
 			}
-			if err = vector.GetUnionAllFunction(*typ, proc.Mp())(preInsert.ctr.buf.Vecs[idx], bat.Vecs[idx]); err != nil {
+			cnt := bat.Vecs[idx].Length()
+			if bat.Vecs[idx].IsConst() {
+				cnt = bat.RowCount()
+			}
+			if err = preInsert.ctr.buf.Vecs[idx].UnionBatch(bat.Vecs[idx], 0, cnt, nil, proc.Mp()); err != nil {
 				return err
 			}
 		} else {
@@ -106,8 +148,9 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 				preInsert.ctr.canFreeVecIdx[idx] = true
 				//expland const vector
 				typ := bat.Vecs[idx].GetType()
-				tmpVec := vector.NewVec(*typ)
-				if err = vector.GetUnionAllFunction(*typ, proc.Mp())(tmpVec, bat.Vecs[idx]); err != nil {
+				tmpVec := vector.NewOffHeapVecWithType(*typ)
+				if err = tmpVec.UnionBatch(bat.Vecs[idx], 0, bat.RowCount(), nil, proc.Mp()); err != nil {
+					tmpVec.Free(proc.Mp())
 					return err
 				}
 				preInsert.ctr.buf.Vecs[idx] = tmpVec
@@ -142,7 +185,7 @@ func (preInsert *PreInsert) constructHiddenColBuf(proc *proc, bat *batch.Batch, 
 		if preInsert.IsOldUpdate {
 			rowIdIdx := len(bat.Vecs) - 1
 			preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, catalog.Row_ID)
-			rowIdVec := vector.NewVec(*bat.GetVector(int32(rowIdIdx)).GetType())
+			rowIdVec := vector.NewOffHeapVecWithType(*bat.GetVector(int32(rowIdIdx)).GetType())
 			err = rowIdVec.UnionBatch(bat.Vecs[rowIdIdx], 0, bat.Vecs[rowIdIdx].Length(), nil, proc.Mp())
 			if err != nil {
 				rowIdVec.Free(proc.Mp())
@@ -201,11 +244,17 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
+	if err = checkZeroTemporalInStrictMode(preInsert, preInsert.ctr.buf, proc); err != nil {
+		return result, err
+	}
 	// keep shuffleIDX unchanged
 	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
 	if preInsert.HasAutoCol {
+		if shouldConvertZeroToNull(preInsert, proc) {
+			convertZeroToNull(preInsert.ctr.buf, preInsert)
+		}
 		start := time.Now()
 		err = genAutoIncrCol(preInsert.ctr.buf, proc, preInsert)
 		if err != nil {
@@ -228,6 +277,124 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	return result, nil
 }
 
+func shouldTreatZeroAsAutoIncr(proc *proc) bool {
+	if proc != nil {
+		if ses := proc.GetSession(); ses != nil {
+			if hasNoAutoValueOnZero, ok := ses.GetSqlModeNoAutoValueOnZero(); ok {
+				return !hasNoAutoValueOnZero
+			}
+		}
+	}
+	resolve := proc.GetResolveVariableFunc()
+	if resolve == nil {
+		return false
+	}
+	value, err := resolve("sql_mode", true, false)
+	if err != nil {
+		return false
+	}
+	mode, ok := value.(string)
+	if !ok {
+		return false
+	}
+	return !strings.Contains(strings.ToUpper(mode), "NO_AUTO_VALUE_ON_ZERO")
+}
+
+func shouldConvertZeroToNull(preInsert *PreInsert, proc *proc) bool {
+	if preInsert.IsOldUpdate || preInsert.IsNewUpdate {
+		return false
+	}
+	return shouldTreatZeroAsAutoIncr(proc)
+}
+
+// checkZeroTemporalInStrictMode covers expression-produced values that bypass
+// literal conversion. It also enforces the unconditional TIMESTAMP lower bound.
+func checkZeroTemporalInStrictMode(preInsert *PreInsert, bat *batch.Batch, proc *proc) error {
+	if preInsert == nil || bat == nil || proc == nil {
+		return nil
+	}
+
+	for idx := range preInsert.Attrs {
+		vecIdx := int(preInsert.ColOffset) + idx
+		if vecIdx >= len(bat.Vecs) || bat.Vecs[vecIdx] == nil {
+			continue
+		}
+		vec := bat.Vecs[vecIdx]
+		switch vec.GetType().Oid {
+		case types.T_timestamp:
+		case types.T_date, types.T_datetime:
+			if !preInsert.RejectZeroTemporal {
+				continue
+			}
+		default:
+			continue
+		}
+		for row := 0; row < vec.Length(); row++ {
+			if vec.IsNull(uint64(row)) {
+				continue
+			}
+			switch vec.GetType().Oid {
+			case types.T_date:
+				if preInsert.RejectZeroTemporal && vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
+				}
+			case types.T_datetime:
+				if preInsert.RejectZeroTemporal && vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			case types.T_timestamp:
+				timestamp := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
+				if !types.ValidTimestamp(timestamp) {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", fmt.Sprintf("%d", int64(timestamp)), "value", row+1)
+				}
+				if preInsert.RejectZeroTemporal && timestamp == types.ZeroTimestamp {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func convertZeroToNull(bat *batch.Batch, preInsert *PreInsert) {
+	for i, col := range preInsert.TableDef.Cols {
+		if !col.Typ.AutoIncr {
+			continue
+		}
+		idx := preInsert.ColOffset + int32(i)
+		vec := bat.GetVector(idx)
+		if vec == nil || vec.Length() == 0 {
+			continue
+		}
+		switch vec.GetType().Oid {
+		case types.T_int8:
+			convertZeroToNullFixed(vector.MustFixedColWithTypeCheck[int8](vec), vec.GetNulls())
+		case types.T_int16:
+			convertZeroToNullFixed(vector.MustFixedColWithTypeCheck[int16](vec), vec.GetNulls())
+		case types.T_int32:
+			convertZeroToNullFixed(vector.MustFixedColWithTypeCheck[int32](vec), vec.GetNulls())
+		case types.T_int64:
+			convertZeroToNullFixed(vector.MustFixedColWithTypeCheck[int64](vec), vec.GetNulls())
+		case types.T_uint8:
+			convertZeroToNullFixed(vector.MustFixedColWithTypeCheck[uint8](vec), vec.GetNulls())
+		case types.T_uint16:
+			convertZeroToNullFixed(vector.MustFixedColWithTypeCheck[uint16](vec), vec.GetNulls())
+		case types.T_uint32:
+			convertZeroToNullFixed(vector.MustFixedColWithTypeCheck[uint32](vec), vec.GetNulls())
+		case types.T_uint64:
+			convertZeroToNullFixed(vector.MustFixedColWithTypeCheck[uint64](vec), vec.GetNulls())
+		}
+	}
+}
+
+func convertZeroToNullFixed[T constraints.Integer](vals []T, nsp *nulls.Nulls) {
+	for i, v := range vals {
+		if v == 0 {
+			nulls.Add(nsp, uint64(i))
+		}
+	}
+}
+
 // Need to checks if the value generated by incrservice has been manually inserted by the user before, if not sure, it needs to be regenerated
 // Otherwise, the SQL executed by the user may have an unexplained Duplicate error
 // when the unique detection is optimized away, there may even be a correctness problem
@@ -237,8 +404,8 @@ func checkIfNeedReGenAutoIncrCol(bat *batch.Batch, preInsert *PreInsert) map[str
 
 	var pkSet map[string]bool
 	if preInsert.TableDef.IsTemporary || preInsert.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		// 1. currently temporary table is supported by memory engine, this distinction should be removed after refactoring
-		// 2. for __mo_fake_pk_col, user can not specify the value for this column, so no need to check
+		// Temporary tables and internal fake primary keys skip the persistent duplicate probe.
+		// Users cannot provide values for __mo_fake_pk_col.
 	} else {
 		pkSet = make(map[string]bool)
 		for _, n := range preInsert.TableDef.Pkey.Names {
@@ -257,22 +424,55 @@ func checkIfNeedReGenAutoIncrCol(bat *batch.Batch, preInsert *PreInsert) map[str
 }
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
-	tableID := preInsert.TableDef.TblId
 	eng := proc.Base.SessionInfo.StorageEngine
 	currentTxn := proc.Base.TxnOperator
+	retriedWithFreshTableID := false
 
+retryInsertValues:
+	tableID := preInsert.ctr.tblId
 	needReCheck := checkIfNeedReGenAutoIncrCol(bat, preInsert)
+
+	// Capture the oldest active range's allocation timestamp before InsertValues.
+	// InsertValues may consume that range and advance the cache to a newer one,
+	// but conflict detection must still cover every value generated for this batch.
+	lastAllocateTSMap := make(map[string]timestamp.Timestamp)
+	for col := range needReCheck {
+		ts, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, preInsert.TableDef.AutoIncrEpoch, currentTxn, col)
+		if err != nil {
+			return err
+		}
+		lastAllocateTSMap[col] = ts
+	}
+
 	lastInsertValue, err := proc.GetIncrService().InsertValues(
 		proc.Ctx,
 		tableID,
+		preInsert.TableDef.AutoIncrEpoch,
+		currentTxn,
 		bat.Vecs[preInsert.ColOffset:int(preInsert.ColOffset)+len(preInsert.Attrs)],
 		bat.RowCount(),
 		preInsert.EstimatedRowCount,
 	)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			if preInsert.TableDef.IsTemporary {
+				logutil.Error("insert auto increment column failed", zap.Error(err))
+				return moerr.NewNoSuchTableNoCtx(preInsert.SchemaName, preInsert.TableDef.Name)
+			}
+			if !retriedWithFreshTableID {
+				retriedWithFreshTableID = true
+				if refreshErr := preInsert.refreshAutoIncrementTableID(proc); refreshErr != nil {
+					if moerr.IsMoErrCode(refreshErr, moerr.ErrNoSuchTable) {
+						return preInsert.retryWithDefChanged()
+					}
+					return refreshErr
+				}
+				if preInsert.ctr.tblId != tableID {
+					goto retryInsertValues
+				}
+			}
 			logutil.Error("insert auto increment column failed", zap.Error(err))
-			return moerr.NewNoSuchTableNoCtx(preInsert.SchemaName, preInsert.TableDef.Name)
+			return preInsert.retryWithDefChanged()
 		}
 		return err
 	}
@@ -294,16 +494,12 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 			return err
 		}
 
+		// Use the captured lastAllocateAt timestamps (before InsertValues)
 		for col, idx := range needReCheck {
-			from, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
-			if err != nil {
-				return err
-			}
-			fromTs := types.TimestampToTS(from)
+			fromTs := types.TimestampToTS(lastAllocateTSMap[col])
 			toTs := types.TimestampToTS(proc.Base.TxnOperator.SnapshotTS())
 			if mayChanged, err := rel.PrimaryKeysMayBeUpserted(proc.Ctx, fromTs, toTs, bat, preInsert.ColOffset+int32(idx)); err == nil {
 				if mayChanged {
-					logutil.Debugf("user may have manually specified the value to be inserted into the auto pk col before this transaction.")
 					return moerr.NewTxnNeedRetry(proc.Ctx)
 				}
 			} else {

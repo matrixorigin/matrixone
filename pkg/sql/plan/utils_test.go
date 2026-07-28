@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,244 +16,1587 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func Test_removeIf(t *testing.T) {
-	strs := []string{"abc", "bc", "def"}
-
-	del1 := make(map[string]struct{})
-	del1["abc"] = struct{}{}
-	res1 := RemoveIf[string](strs, func(t string) bool {
-		return Find[string](del1, t)
-	})
-	assert.Equal(t, []string{"bc", "def"}, res1)
-
-	del2 := make(map[string]struct{})
-	for _, str := range strs {
-		del2[str] = struct{}{}
-	}
-	res2 := RemoveIf[string](strs, func(t string) bool {
-		return Find[string](del2, t)
-	})
-	assert.Equal(t, []string{}, res2)
-
-	assert.Equal(t, []string(nil), RemoveIf[string](nil, nil))
-}
-
-func TestOffsetToString(t *testing.T) {
+func TestHasTrailingZeros(t *testing.T) {
 	tests := []struct {
-		offset int
-		want   string
-	}{
-		{3600, "+01:00"},
-		{7200, "+02:00"},
-		{-3600, "-01:00"},
-		{-7200, "-02:00"},
-		{0, "+00:00"},
-		{3660, "+01:01"},
-		{-3660, "-01:01"},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("offset %d", tt.offset), func(t *testing.T) {
-			if got := offsetToString(tt.offset); got != tt.want {
-				t.Errorf("offsetToString(%d) = %v, want %v", tt.offset, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestInitStageS3Param(t *testing.T) {
-	param := &tree.ExternParam{}
-	u, err := url.Parse("s3://bucket/path?offset=0")
-	require.Nil(t, err)
-	s := stage.StageDef{Url: u}
-	err = InitStageS3Param(param, s)
-	require.NotNil(t, err)
-
-	param = &tree.ExternParam{}
-	u, err = url.Parse("https://bucket/path?offset=0")
-	require.Nil(t, err)
-	s = stage.StageDef{Url: u}
-	err = InitStageS3Param(param, s)
-	require.NotNil(t, err)
-
-	param = &tree.ExternParam{}
-	u, err = url.Parse("s3://bucket/path")
-	require.Nil(t, err)
-	s = stage.StageDef{Url: u,
-		Credentials: map[string]string{"aws_key_id": "abc", "aws_secret_key": "secret", "aws_region": "region", "endpoint": "endpoint", "provider": "amazon"},
-		Name:        "mystage",
-		Id:          1000}
-	err = InitStageS3Param(param, s)
-	require.Nil(t, err)
-}
-
-func TestHandleOptimizerHints(t *testing.T) {
-	builder := &QueryBuilder{}
-	handleOptimizerHints("skipDedup=1", builder)
-	require.Equal(t, 1, builder.optimizerHints.skipDedup)
-}
-
-func TestMakeCPKEYRuntimeFilter(t *testing.T) {
-	name2colidx := make(map[string]int32, 0)
-	name2colidx[catalog.CPrimaryKeyColName] = 0
-	typ := plan.Type{
-		Id: int32(types.T_varchar),
-	}
-	tableDef := &plan.TableDef{
-		Cols: []*plan.ColDef{
-			{
-				Name: "catalog.CPrimaryKeyColName",
-				Typ:  typ,
-			},
-		},
-		Name2ColIndex: name2colidx,
-	}
-	expr := GetColExpr(typ, 0, 0)
-	MakeCPKEYRuntimeFilter(0, 0, expr, tableDef, false)
-}
-
-func TestDbNameOfObjRef(t *testing.T) {
-	type args struct {
-		objRef *ObjectRef
-	}
-	tests := []struct {
-		name string
-		args args
-		want string
+		name         string
+		value        string
+		constScale   int32
+		columnScale  int32
+		expectResult bool
 	}{
 		{
-			name: "case 1",
-			args: args{
-				objRef: &ObjectRef{
-					SchemaName: "db",
-				},
-			},
-			want: "db",
+			name:         "99.990000000 scale=9 to scale=2 - has trailing zeros",
+			value:        "99.990000000",
+			constScale:   9,
+			columnScale:  2,
+			expectResult: true,
 		},
 		{
-			name: "case 2",
-			args: args{
-				objRef: &ObjectRef{
-					SchemaName:       "whatever",
-					SubscriptionName: "sub",
-				},
-			},
-			want: "sub",
+			name:         "99.991234567 scale=9 to scale=2 - no trailing zeros",
+			value:        "99.991234567",
+			constScale:   9,
+			columnScale:  2,
+			expectResult: false,
+		},
+		{
+			name:         "100.000000000 scale=9 to scale=0 - has trailing zeros",
+			value:        "100.000000000",
+			constScale:   9,
+			columnScale:  0,
+			expectResult: true,
+		},
+		{
+			name:         "12.340000000 scale=9 to scale=5 - has trailing zeros",
+			value:        "12.340000000",
+			constScale:   9,
+			columnScale:  5,
+			expectResult: true,
+		},
+		{
+			name:         "12.340000001 scale=9 to scale=5 - no trailing zeros",
+			value:        "12.340000001",
+			constScale:   9,
+			columnScale:  5,
+			expectResult: false,
+		},
+		{
+			name:         "12.34567 scale=5 to scale=5 - exact match",
+			value:        "12.34567",
+			constScale:   5,
+			columnScale:  5,
+			expectResult: false, // constScale <= columnScale, returns false
+		},
+		{
+			name:         "12.34567 scale=5 to scale=10 - column has higher scale",
+			value:        "12.34567",
+			constScale:   5,
+			columnScale:  10,
+			expectResult: false, // constScale <= columnScale, returns false
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, DbNameOfObjRef(tt.args.objRef), "DbNameOfObjRef(%v)", tt.args.objRef)
-		})
-	}
-}
+			// Parse the decimal value
+			dec, _, err := types.Parse128(tt.value)
+			require.NoError(t, err)
 
-func TestDoResolveTimeStamp(t *testing.T) {
-	tests := []struct {
-		timeStamp string
-		expected  int64
-		expectErr bool
-	}{
-		//{"2023-10-01 12:00:00", 1696132800000000000, false},
-		{"", 0, true},
-		{"2023-10-01", 0, true},
-		{"invalid-timestamp", 0, true},
-		{"2023-10-01 25:00:00", 0, true}, // Invalid hour
-	}
-
-	for _, test := range tests {
-		result, err := doResolveTimeStamp(test.timeStamp)
-		if test.expectErr {
-			if err == nil {
-				t.Errorf("expected an error for timestamp %s, got none", test.timeStamp)
-			}
-		} else {
-			if err != nil {
-				t.Errorf("did not expect an error for timestamp %s, got %v", test.timeStamp, err)
-			}
-			if result != test.expected {
-				t.Errorf("for timestamp %s, expected %d, got %d", test.timeStamp, test.expected, result)
-			}
-		}
-	}
-}
-
-func TestReplaceParamVals(t *testing.T) {
-	// Setup test cases
-	tests := []struct {
-		name      string
-		plan      *Plan
-		paramVals []any
-		wantErr   bool
-	}{
-		{
-			name: "empty param values",
-			plan: &Plan{
-				Plan: &plan.Plan_Tcl{},
-			},
-			paramVals: []any{},
-			wantErr:   false,
-		},
-		{
-			name: "multiple param values",
-			plan: &Plan{
-				Plan: &plan.Plan_Tcl{},
-			},
-			paramVals: []any{42, "string", 3.14, true, time.Now(), nil},
-			wantErr:   false,
-		},
-		{
-			name: "complex plan with params",
-			plan: &Plan{
-				Plan: &plan.Plan_Query{
-					Query: &plan.Query{
-						Nodes: []*plan.Node{
-							{
-								ProjectList: []*plan.Expr{
-									{
-										Expr: &plan.Expr_P{
-											P: &plan.ParamRef{
-												Pos: 0,
-											},
-										},
-									},
-								},
+			// Create constant expression
+			constExpr := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(types.T_decimal128),
+					Width: 38,
+					Scale: tt.constScale,
+				},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Isnull: false,
+						Value: &plan.Literal_Decimal128Val{
+							Decimal128Val: &plan.Decimal128{
+								A: int64(dec.B0_63),
+								B: int64(dec.B64_127),
 							},
 						},
 					},
 				},
-			},
-			paramVals: []any{"value1", 123},
-			wantErr:   false,
+			}
+
+			constType := types.Type{
+				Oid:   types.T_decimal128,
+				Width: 38,
+				Scale: tt.constScale,
+			}
+
+			// Test hasTrailingZeros
+			result := hasTrailingZeros(constExpr, constType, tt.columnScale)
+
+			t.Logf("Value: %s, ConstScale: %d, ColumnScale: %d", tt.value, tt.constScale, tt.columnScale)
+			t.Logf("Decimal128: A=%d, B=%d", dec.B0_63, dec.B64_127)
+			t.Logf("Expected: %v, Got: %v", tt.expectResult, result)
+
+			require.Equal(t, tt.expectResult, result, "hasTrailingZeros result mismatch")
+		})
+	}
+}
+
+func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
+	source := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
+	binaryLiteral := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_Sval{Sval: "AB\x00\x00"},
+		IsBin: true,
+		Src:   source,
+	}}}
+	queryPlan := &plan.Plan{
+		Plan: &plan.Plan_Query{Query: &plan.Query{
+			Steps: []int32{0},
+			Nodes: []*plan.Node{{
+				NodeType: plan.Node_VALUE_SCAN,
+				Limit:    &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+				Offset:   binaryLiteral,
+			}},
+		}},
+	}
+
+	tests := []struct {
+		value string
+		isBin bool
+	}{
+		{value: "AB\x00\x00", isBin: true},
+		{value: "text", isBin: false},
+		{value: "CD\x00\x00", isBin: true},
+	}
+	for _, test := range tests {
+		filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
+			ParamValue{Value: test.value, IsBin: test.isBin},
+		})
+		require.NoError(t, err)
+		literal := filled.GetQuery().Nodes[0].Limit.GetLit()
+		require.NotNil(t, literal)
+		require.Equal(t, test.isBin, literal.GetIsBin())
+		require.Equal(t, test.value, literal.GetSval())
+		require.NotSame(t, queryPlan, filled)
+		require.NotNil(t, queryPlan.GetQuery().Nodes[0].Limit.GetP())
+		copiedLiteral := filled.GetQuery().Nodes[0].Offset.GetLit()
+		require.True(t, copiedLiteral.GetIsBin())
+		require.Equal(t, "AB\x00\x00", copiedLiteral.GetSval())
+		require.NotSame(t, source, copiedLiteral.GetSrc())
+		require.NotNil(t, binaryLiteral.GetLit().GetSrc().GetP())
+	}
+}
+
+func TestFillValuesOfParamsInPlanRejectsControlStatements(t *testing.T) {
+	_, err := FillValuesOfParamsInPlan(context.Background(), &plan.Plan{
+		Plan: &plan.Plan_Tcl{Tcl: &plan.TransationControl{}},
+	}, nil)
+	require.Error(t, err)
+
+	_, err = FillValuesOfParamsInPlan(context.Background(), &plan.Plan{
+		Plan: &plan.Plan_Dcl{Dcl: &plan.DataControl{}},
+	}, nil)
+	require.Error(t, err)
+}
+
+func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
+	tests := []struct {
+		name         string
+		constValue   string
+		constScale   int32
+		columnScale  int32
+		expectResult bool
+	}{
+		{
+			name:         "trailing zeros - should not need cast",
+			constValue:   "99.990000000",
+			constScale:   9,
+			columnScale:  2,
+			expectResult: true,
+		},
+		{
+			name:         "no trailing zeros - should need cast",
+			constValue:   "99.991234567",
+			constScale:   9,
+			columnScale:  2,
+			expectResult: false,
+		},
+		{
+			name:         "exact scale match - should not need cast",
+			constValue:   "99.99",
+			constScale:   2,
+			columnScale:  2,
+			expectResult: true,
+		},
+		{
+			name:         "column scale higher - should not need cast",
+			constValue:   "99.99",
+			constScale:   2,
+			columnScale:  5,
+			expectResult: true,
 		},
 	}
 
-	// Run tests
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			err := replaceParamVals(ctx, tt.plan, tt.paramVals)
+			// Parse the decimal value
+			dec, _, err := types.Parse128(tt.constValue)
+			require.NoError(t, err)
 
-			if tt.wantErr {
-				assert.Error(t, err)
+			// Create constant expression
+			constExpr := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(types.T_decimal128),
+					Width: 38,
+					Scale: tt.constScale,
+				},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Isnull: false,
+						Value: &plan.Literal_Decimal128Val{
+							Decimal128Val: &plan.Decimal128{
+								A: int64(dec.B0_63),
+								B: int64(dec.B64_127),
+							},
+						},
+					},
+				},
+			}
+
+			constType := types.Type{
+				Oid:   types.T_decimal128,
+				Width: 38,
+				Scale: tt.constScale,
+			}
+
+			columnType := types.Type{
+				Oid:   types.T_decimal128,
+				Width: 38,
+				Scale: tt.columnScale,
+			}
+
+			// Test checkNoNeedCast
+			result := checkNoNeedCast(constType, columnType, constExpr)
+
+			t.Logf("ConstValue: %s, ConstScale: %d, ColumnScale: %d", tt.constValue, tt.constScale, tt.columnScale)
+			t.Logf("Expected: %v, Got: %v", tt.expectResult, result)
+
+			require.Equal(t, tt.expectResult, result, "checkNoNeedCast result mismatch")
+		})
+	}
+}
+
+func TestBindFuncExprWithTrailingZeros(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name             string
+		colScale         int32
+		constValue       string
+		constScale       int32
+		shouldUseColType bool
+		description      string
+	}{
+		{
+			name:             "trailing zeros - should use col type",
+			colScale:         2,
+			constValue:       "99.990000000",
+			constScale:       9,
+			shouldUseColType: true,
+			description:      "99.990000000 has trailing zeros, should use column scale 2",
+		},
+		// Note: Removed "no trailing zeros - should NOT use col type" test case
+		// because it triggers early false detection optimization which returns FALSE directly.
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Logf("Test: %s", tt.description)
+
+			// Create column expression
+			colExpr := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(types.T_decimal128),
+					Width: 38,
+					Scale: tt.colScale,
+				},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+					},
+				},
+			}
+
+			// Parse the constant value
+			dec, _, err := types.Parse128(tt.constValue)
+			require.NoError(t, err)
+
+			// Create constant expression
+			constExpr := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(types.T_decimal128),
+					Width: 38,
+					Scale: tt.constScale,
+				},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Isnull: false,
+						Value: &plan.Literal_Decimal128Val{
+							Decimal128Val: &plan.Decimal128{
+								A: int64(dec.B0_63),
+								B: int64(dec.B64_127),
+							},
+						},
+					},
+				},
+			}
+
+			// Call BindFuncExprImplByPlanExpr
+			result, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{colExpr, constExpr})
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			funcExpr := result.GetF()
+			require.NotNil(t, funcExpr)
+
+			// Check the scale of the arguments
+			leftScale := funcExpr.Args[0].Typ.Scale
+			rightScale := funcExpr.Args[1].Typ.Scale
+
+			t.Logf("Input: colScale=%d, constValue=%s, constScale=%d", tt.colScale, tt.constValue, tt.constScale)
+			t.Logf("Result: leftScale=%d, rightScale=%d", leftScale, rightScale)
+
+			// Check if cast is present
+			leftHasCast := funcExpr.Args[0].GetF() != nil && funcExpr.Args[0].GetF().Func.GetObjName() == "cast"
+			rightHasCast := funcExpr.Args[1].GetF() != nil && funcExpr.Args[1].GetF().Func.GetObjName() == "cast"
+			t.Logf("Left has cast: %v, Right has cast: %v", leftHasCast, rightHasCast)
+
+			if tt.shouldUseColType {
+				// Both should have column's scale (optimization applied)
+				require.Equal(t, tt.colScale, leftScale, "Left arg should have col scale")
+				require.Equal(t, tt.colScale, rightScale, "Right arg should have col scale")
+				t.Logf("✓ Optimization applied: using column scale %d", tt.colScale)
 			} else {
-				assert.NoError(t, err)
+				// Should use higher scale (no optimization)
+				expectedScale := tt.constScale
+				if tt.colScale > tt.constScale {
+					expectedScale = tt.colScale
+				}
+				require.Equal(t, expectedScale, leftScale, "Left arg should have higher scale")
+				require.Equal(t, expectedScale, rightScale, "Right arg should have higher scale")
+				t.Logf("✓ No optimization: using higher scale %d", expectedScale)
 			}
 		})
 	}
 }
+
+// TestDecimal128HasTrailingZeros tests the decimal128HasTrailingZeros function
+// specifically for large values that use the high 64 bits
+func TestDecimal128HasTrailingZeros(t *testing.T) {
+	tests := []struct {
+		name           string
+		value          string
+		constScale     int32
+		columnScale    int32
+		expectTrailing bool
+		description    string
+	}{
+		{
+			name:           "Large value with trailing zeros",
+			value:          "12345678901234567890.000000",
+			constScale:     6,
+			columnScale:    0,
+			expectTrailing: true,
+			description:    "20-digit integer with 6 trailing zeros",
+		},
+		{
+			name:           "Large value without trailing zeros",
+			value:          "12345678901234567890.123456",
+			constScale:     6,
+			columnScale:    0,
+			expectTrailing: false,
+			description:    "20-digit value with non-zero fractional part",
+		},
+		{
+			name:           "Large value partial trailing zeros",
+			value:          "12345678901234567890.123000",
+			constScale:     6,
+			columnScale:    3,
+			expectTrailing: true,
+			description:    "20-digit value with 3 trailing zeros (scale 6 to 3)",
+		},
+		{
+			name:           "Large value partial no trailing zeros",
+			value:          "12345678901234567890.123456",
+			constScale:     6,
+			columnScale:    3,
+			expectTrailing: false,
+			description:    "20-digit value without trailing zeros (scale 6 to 3)",
+		},
+		{
+			name:           "Max Decimal128 range with trailing zeros",
+			value:          "99999999999999999999999999999999.00000",
+			constScale:     5,
+			columnScale:    0,
+			expectTrailing: true,
+			description:    "Near max value with trailing zeros",
+		},
+		{
+			name:           "Small value high bits zero",
+			value:          "123.000000",
+			constScale:     6,
+			columnScale:    0,
+			expectTrailing: true,
+			description:    "Small value (high bits = 0) with trailing zeros",
+		},
+		{
+			name:           "Small value high bits zero no trailing",
+			value:          "123.456789",
+			constScale:     6,
+			columnScale:    0,
+			expectTrailing: false,
+			description:    "Small value (high bits = 0) without trailing zeros",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dec, _, err := types.Parse128(tt.value)
+			require.NoError(t, err)
+
+			t.Logf("Value: %s", tt.value)
+			t.Logf("Decimal128: low=%d, high=%d", dec.B0_63, dec.B64_127)
+			t.Logf("ConstScale: %d, ColumnScale: %d", tt.constScale, tt.columnScale)
+
+			// Test decimal128HasTrailingZeros directly
+			trailingDigits := tt.constScale - tt.columnScale
+			result := decimal128HasTrailingZeros(int64(dec.B0_63), int64(dec.B64_127), trailingDigits)
+
+			t.Logf("TrailingDigits: %d, Expected: %v, Got: %v", trailingDigits, tt.expectTrailing, result)
+			require.Equal(t, tt.expectTrailing, result, tt.description)
+
+			// Also test through hasTrailingZeros wrapper
+			constExpr := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(types.T_decimal128),
+					Width: 38,
+					Scale: tt.constScale,
+				},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Isnull: false,
+						Value: &plan.Literal_Decimal128Val{
+							Decimal128Val: &plan.Decimal128{
+								A: int64(dec.B0_63),
+								B: int64(dec.B64_127),
+							},
+						},
+					},
+				},
+			}
+
+			constType := types.Type{
+				Oid:   types.T_decimal128,
+				Width: 38,
+				Scale: tt.constScale,
+			}
+
+			wrapperResult := hasTrailingZeros(constExpr, constType, tt.columnScale)
+			require.Equal(t, tt.expectTrailing, wrapperResult, "hasTrailingZeros wrapper result mismatch")
+		})
+	}
+}
+
+// TestParseHiveOptionKV verifies hive key parsing via Init*Param helper.
+// Covers legacy-JSON fallback where Option[] still carries hive_partitioning /
+// hive_partition_columns (stripHiveOptionKeys did not run). The key behavior:
+// each key's skip-if-set guard must only inspect its own field; otherwise a
+// reversed option order silently drops hive_partitioning=true.
+func TestParseHiveOptionKV(t *testing.T) {
+	t.Run("canonical order applies both", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Option = []string{
+			"hive_partitioning", "true",
+			"hive_partition_columns", "year,month",
+		}
+		for i := 0; i < len(param.Option); i += 2 {
+			handled, err := parseHiveOptionKV(param, param.Option[i], param.Option[i+1])
+			require.True(t, handled)
+			require.NoError(t, err)
+		}
+		assert.True(t, param.HivePartitioning)
+		assert.Equal(t, []string{"year", "month"}, param.HivePartitionCols)
+	})
+
+	// Each key's skip-if-set guard must inspect only its own field. A coupled
+	// guard that treats non-empty HivePartitionCols as "already handled" would
+	// silently drop hive_partitioning=true when cols appeared first in Option[],
+	// leaving the table mis-classified as non-hive. Keep this case as a
+	// regression for that contract.
+	t.Run("reversed order still applies both", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Option = []string{
+			"hive_partition_columns", "year,month",
+			"hive_partitioning", "true",
+		}
+		for i := 0; i < len(param.Option); i += 2 {
+			handled, err := parseHiveOptionKV(param, param.Option[i], param.Option[i+1])
+			require.True(t, handled, "key=%s", param.Option[i])
+			require.NoError(t, err)
+		}
+		assert.True(t, param.HivePartitioning,
+			"hive_partitioning must not be dropped when cols appeared first in Option[]")
+		assert.Equal(t, []string{"year", "month"}, param.HivePartitionCols)
+	})
+
+	t.Run("pre-populated HivePartitioning is not overwritten", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.HivePartitioning = true
+		handled, err := parseHiveOptionKV(param, "hive_partitioning", "false")
+		require.True(t, handled)
+		require.NoError(t, err)
+		assert.True(t, param.HivePartitioning, "skip-if-set must not flip true→false")
+	})
+
+	t.Run("pre-populated HivePartitionCols is not overwritten", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.HivePartitionCols = []string{"year"}
+		handled, err := parseHiveOptionKV(param, "hive_partition_columns", "month,day")
+		require.True(t, handled)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"year"}, param.HivePartitionCols)
+	})
+
+	t.Run("invalid bool value reports error", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		handled, err := parseHiveOptionKV(param, "hive_partitioning", "yes")
+		require.True(t, handled)
+		require.Error(t, err)
+	})
+
+	t.Run("non-hive key returns not-handled", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		handled, err := parseHiveOptionKV(param, "filepath", "/data/")
+		assert.False(t, handled)
+		assert.NoError(t, err)
+	})
+
+	t.Run("false value", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		handled, err := parseHiveOptionKV(param, "hive_partitioning", "false")
+		require.True(t, handled)
+		require.NoError(t, err)
+		assert.False(t, param.HivePartitioning)
+	})
+
+	t.Run("cols lowercased and trimmed", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		handled, err := parseHiveOptionKV(param, "hive_partition_columns", "  Year ,  MONTH  , , Day ")
+		require.True(t, handled)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"year", "month", "day"}, param.HivePartitionCols)
+	})
+}
+
+// -------------------------------------------------------------------------
+// Init*Param legacy-JSON hive branches and plain happy paths.
+// -------------------------------------------------------------------------
+
+// TestInitInfileParam_Plain exercises the normal option pass-through with
+// filepath/format/compression/jsondata so the non-hive arms are covered too.
+func TestInitInfileParam_Plain(t *testing.T) {
+	param := &tree.ExternParam{}
+	param.Option = []string{
+		"filepath", "/data/x",
+		"compression", "gzip",
+		"format", "parquet",
+	}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, "/data/x", param.Filepath)
+	assert.Equal(t, "gzip", param.CompressType)
+	assert.Equal(t, "parquet", param.Format)
+
+	// jsonline/jsondata branch
+	param = &tree.ExternParam{}
+	param.Option = []string{"filepath", "/f", "jsondata", "object"}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, "object", param.JsonData)
+	assert.Equal(t, "jsonline", param.Format)
+
+	// csv default
+	param = &tree.ExternParam{}
+	param.Option = []string{"filepath", "/csv"}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, "csv", param.Format)
+
+	// the write_file_pattern and comment keys are accepted (no-op on the read
+	// init) and the comment value remains retrievable from Option.
+	param = &tree.ExternParam{}
+	param.Option = []string{"filepath", "/csv", "comment", "REM", "write_file_pattern", "stage://s/p-%U.csv"}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, "csv", param.Format)
+	assert.Equal(t, "REM", GetCSVComment(param))
+}
+
+// TestGetCSVComment covers the COMMENT option accessor.
+func TestGetCSVComment(t *testing.T) {
+	assert.Equal(t, "", GetCSVComment(nil))
+	assert.Equal(t, "", GetCSVComment(&tree.ExternParam{}))
+
+	p := &tree.ExternParam{}
+	p.Option = []string{"format", "csv", "comment", "#"}
+	assert.Equal(t, "#", GetCSVComment(p))
+
+	// case-insensitive key, multi-char value
+	p = &tree.ExternParam{}
+	p.Option = []string{"COMMENT", "REM"}
+	assert.Equal(t, "REM", GetCSVComment(p))
+
+	// absent -> empty (no comment marker)
+	p = &tree.ExternParam{}
+	p.Option = []string{"format", "csv"}
+	assert.Equal(t, "", GetCSVComment(p))
+}
+
+// TestInitInfileParam_HiveLegacyOption exercises parseHiveOptionKV via
+// InitInfileParam when Option[] still contains hive keys (simulating JSON
+// that predates stripHiveOptionKeys).
+func TestInitInfileParam_HiveLegacyOption(t *testing.T) {
+	param := &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{
+		"filepath", "/data/",
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "year,month",
+	}
+	require.NoError(t, InitInfileParam(param))
+	assert.True(t, param.HivePartitioning)
+	assert.Equal(t, []string{"year", "month"}, param.HivePartitionCols)
+}
+
+func TestInitInfileParam_Errors(t *testing.T) {
+	param := &tree.ExternParam{}
+	param.Ctx = context.Background()
+	// Unknown format
+	param.Option = []string{"filepath", "/x", "format", "orc"}
+	require.Error(t, InitInfileParam(param))
+
+	// Unknown jsondata
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{"filepath", "/x", "jsondata", "ndjson"}
+	require.Error(t, InitInfileParam(param))
+
+	// Missing filepath
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{"format", "parquet"}
+	require.Error(t, InitInfileParam(param))
+
+	// jsonline without jsondata
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{"filepath", "/x", "format", "jsonline"}
+	require.Error(t, InitInfileParam(param))
+
+	// Unknown keyword
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{"unknown", "val", "filepath", "/x"}
+	require.Error(t, InitInfileParam(param))
+
+	// Invalid hive_partitioning value
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{"filepath", "/x", "format", "parquet", "hive_partitioning", "yes"}
+	require.Error(t, InitInfileParam(param))
+
+	// Columns with hive_partitioning disabled are rejected after legacy parsing.
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{
+		"filepath", "/x",
+		"format", "parquet",
+		"hive_partitioning", "false",
+		"hive_partition_columns", "year",
+	}
+	err := InitInfileParam(param)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
+}
+
+// TestInitS3Param_Plain exercises the S3 arm with normal options.
+func TestInitS3Param_Plain(t *testing.T) {
+	param := &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{
+		"endpoint", "https://s3.example.com",
+		"region", "us-west-2",
+		"access_key_id", "AK",
+		"secret_access_key", "SK",
+		"bucket", "my-bucket",
+		"filepath", "sales/",
+		"compression", "none",
+		"provider", "minio",
+		"role_arn", "arn:aws:iam::111:role/R",
+		"external_id", "ext",
+		"format", "parquet",
+	}
+	require.NoError(t, InitS3Param(param))
+	assert.Equal(t, "https://s3.example.com", param.S3Param.Endpoint)
+	assert.Equal(t, "my-bucket", param.S3Param.Bucket)
+	assert.Equal(t, "sales/", param.Filepath)
+	assert.Equal(t, "parquet", param.Format)
+
+	// jsondata jsonline path
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{"bucket", "b", "jsondata", "array"}
+	require.NoError(t, InitS3Param(param))
+	assert.Equal(t, "jsonline", param.Format)
+}
+
+func TestInitS3Param_HiveLegacyOption(t *testing.T) {
+	param := &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{
+		"bucket", "b",
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "year",
+	}
+	require.NoError(t, InitS3Param(param))
+	assert.True(t, param.HivePartitioning)
+	assert.Equal(t, []string{"year"}, param.HivePartitionCols)
+}
+
+func TestInitS3Param_Errors(t *testing.T) {
+	param := &tree.ExternParam{}
+	param.Ctx = context.Background()
+	// Bad format
+	param.Option = []string{"bucket", "b", "format", "orc"}
+	require.Error(t, InitS3Param(param))
+
+	// Bad jsondata
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{"bucket", "b", "jsondata", "bad"}
+	require.Error(t, InitS3Param(param))
+
+	// jsonline without jsondata
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{"bucket", "b", "format", "jsonline"}
+	require.Error(t, InitS3Param(param))
+
+	// Unknown key
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{"bogus", "x"}
+	require.Error(t, InitS3Param(param))
+
+	// Invalid hive_partitioning boolean
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{"bucket", "b", "format", "parquet", "hive_partitioning", "maybe"}
+	require.Error(t, InitS3Param(param))
+
+	// Columns with hive_partitioning disabled are rejected after legacy parsing.
+	param = &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{
+		"bucket", "b",
+		"format", "parquet",
+		"hive_partitioning", "false",
+		"hive_partition_columns", "year",
+	}
+	err := InitS3Param(param)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
+}
+
+// -------------------------------------------------------------------------
+// build_ddl.go hive DDL helpers.
+// -------------------------------------------------------------------------
+
+func TestParseHiveOptionsFromRawOptions_AllPaths(t *testing.T) {
+	ctx := context.Background()
+
+	// Absent → (false, nil, nil)
+	en, cols, err := parseHiveOptionsFromRawOptions(ctx, []string{"filepath", "/x"})
+	require.NoError(t, err)
+	assert.False(t, en)
+	assert.Nil(t, cols)
+
+	// Explicit false → (false, nil, nil)
+	en, cols, err = parseHiveOptionsFromRawOptions(ctx, []string{"hive_partitioning", "false"})
+	require.NoError(t, err)
+	assert.False(t, en)
+	assert.Nil(t, cols)
+
+	// Columns without an enabled hive_partitioning flag are inconsistent.
+	_, _, err = parseHiveOptionsFromRawOptions(ctx, []string{"hive_partition_columns", "year"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
+
+	_, _, err = parseHiveOptionsFromRawOptions(ctx,
+		[]string{"hive_partitioning", "false", "hive_partition_columns", "year"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
+
+	// Invalid value → error
+	_, _, err = parseHiveOptionsFromRawOptions(ctx, []string{"hive_partitioning", "yes"})
+	require.Error(t, err)
+
+	// true + empty cols → (true, nil, nil)  (caller enforces non-empty)
+	en, cols, err = parseHiveOptionsFromRawOptions(ctx, []string{"hive_partitioning", "true"})
+	require.NoError(t, err)
+	assert.True(t, en)
+	assert.Nil(t, cols)
+
+	// true + cols — trimmed split
+	en, cols, err = parseHiveOptionsFromRawOptions(ctx,
+		[]string{"hive_partitioning", "TRUE", "hive_partition_columns", " year ,, month "})
+	require.NoError(t, err)
+	assert.True(t, en)
+	assert.Equal(t, []string{"year", "month"}, cols)
+}
+
+func TestRejectDuplicateKeys(t *testing.T) {
+	ctx := context.Background()
+	// No duplicates → nil.
+	err := rejectDuplicateKeys(ctx,
+		[]string{"format", "parquet", "filepath", "/x"},
+		[]string{"format", "filepath"})
+	assert.NoError(t, err)
+
+	// Key not in list is tolerated.
+	err = rejectDuplicateKeys(ctx,
+		[]string{"compression", "gzip", "compression", "none"},
+		[]string{"format"})
+	assert.NoError(t, err)
+
+	// Duplicate of a watched key → error.
+	err = rejectDuplicateKeys(ctx,
+		[]string{"format", "parquet", "format", "csv"},
+		[]string{"format"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate option key 'format'")
+}
+
+func TestGetRawOption(t *testing.T) {
+	opts := []string{"Filepath", "/x", "format", "parquet"}
+	assert.Equal(t, "/x", getRawOption(opts, "filepath"))
+	assert.Equal(t, "parquet", getRawOption(opts, "format"))
+	assert.Equal(t, "", getRawOption(opts, "bucket"))
+}
+
+func TestStripHiveOptionKeys(t *testing.T) {
+	in := []string{
+		"filepath", "/x",
+		"hive_partitioning", "true",
+		"format", "parquet",
+		"hive_partition_columns", "year,month",
+		"compression", "gzip",
+	}
+	out := stripHiveOptionKeys(in)
+	assert.Equal(t, []string{
+		"filepath", "/x",
+		"format", "parquet",
+		"compression", "gzip",
+	}, out)
+
+	// Idempotent / no hive keys
+	in2 := []string{"filepath", "/x", "format", "parquet"}
+	assert.Equal(t, in2, stripHiveOptionKeys(in2))
+
+	// All hive keys
+	in3 := []string{"hive_partitioning", "true", "hive_partition_columns", "y"}
+	assert.Equal(t, []string{}, stripHiveOptionKeys(in3))
+}
+
+func TestFindColInTableDefCaseInsensitive(t *testing.T) {
+	td := []*plan.ColDef{
+		{Name: "year"},
+		{Name: "Month"},
+		{Name: "Day"},
+	}
+	got := findColInTableDefCaseInsensitive(td, "YEAR")
+	require.NotNil(t, got)
+	assert.Equal(t, "year", got.Name)
+
+	got = findColInTableDefCaseInsensitive(td, "month")
+	require.NotNil(t, got)
+	assert.Equal(t, "Month", got.Name)
+
+	assert.Nil(t, findColInTableDefCaseInsensitive(td, "nonexistent"))
+}
+
+// -------------------------------------------------------------------------
+// validateAndSetHivePartitionOptions — every branch (happy + negative).
+// -------------------------------------------------------------------------
+
+// makeHivePlan builds a minimal plan.CreateTable with the given columns for
+// validateAndSetHivePartitionOptions testing.
+func makeHivePlan(cols ...*plan.ColDef) *plan.CreateTable {
+	return &plan.CreateTable{
+		TableDef: &plan.TableDef{Cols: cols},
+	}
+}
+
+func makeHiveMemoryFS(t *testing.T, paths ...string) fileservice.FileService {
+	t.Helper()
+	fs, err := fileservice.NewMemoryFS("memory", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	for _, p := range paths {
+		require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
+			FilePath: fileservice.JoinPath(fs.Name(), p),
+			Entries: []fileservice.IOEntry{{
+				Offset: 0,
+				Size:   1,
+				Data:   []byte("x"),
+			}},
+		}))
+	}
+	return fs
+}
+
+func TestValidateAndSetHivePartitionOptions_Disabled(t *testing.T) {
+	// hive_partitioning absent → returns nil, does not touch stmt.Param.
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{"filepath", "/x", "format", "parquet"}
+	ct := makeHivePlan(&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}})
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	assert.False(t, stmt.Param.HivePartitioning)
+}
+
+func TestValidateAndSetHivePartitionOptions_DisabledWithColumnsRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		opts []string
+	}{
+		{
+			name: "columns without hive_partitioning",
+			opts: []string{"filepath", "/x", "format", "parquet", "hive_partition_columns", "year"},
+		},
+		{
+			name: "columns with hive_partitioning false",
+			opts: []string{
+				"filepath", "/x",
+				"format", "parquet",
+				"hive_partitioning", "false",
+				"hive_partition_columns", "year",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+			stmt.Param.Option = tc.opts
+			ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+			err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
+		})
+	}
+}
+
+func TestValidateAndSetHivePartitionOptions_HappyPath(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"filepath", "/data/",
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "Year",
+	}
+	ct := makeHivePlan(
+		&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		&plan.ColDef{
+			Name:    "year",
+			Typ:     plan.Type{Id: int32(types.T_int32)},
+			Default: &plan.Default{NullAbility: true},
+		},
+	)
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	assert.True(t, stmt.Param.HivePartitioning)
+	assert.Equal(t, []string{"year"}, stmt.Param.HivePartitionCols)
+	require.Equal(t, 1, len(stmt.Param.HivePartitionColTypes))
+	assert.Equal(t, int32(types.T_int32), stmt.Param.HivePartitionColTypes[0].Id)
+	assert.True(t, stmt.Param.HivePartitionColTypes[0].NullAbility)
+	// Option[] should be stripped of hive keys.
+	for i := 0; i < len(stmt.Param.Option); i += 2 {
+		assert.NotEqual(t, "hive_partitioning", stmt.Param.Option[i])
+		assert.NotEqual(t, "hive_partition_columns", stmt.Param.Option[i])
+	}
+}
+
+func TestValidateAndSetHivePartitionOptions_MissingColsAutoInferenceNoHiveDirs(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t, "data/plain/file.parquet")
+	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
+	ct := makeHivePlan()
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auto inference found no hive-style partition directories")
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInference(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t,
+		"data/year=2024/month=01/f.parquet",
+		"data/year=2025/month=02/f.parquet",
+		"data/_SUCCESS",
+	)
+	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
+	ct := makeHivePlan(
+		&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}},
+		&plan.ColDef{Name: "month", Typ: plan.Type{Id: int32(types.T_int32)}},
+	)
+
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	assert.True(t, stmt.Param.HivePartitioning)
+	assert.Equal(t, []string{"year", "month"}, stmt.Param.HivePartitionCols)
+	require.Equal(t, 2, len(stmt.Param.HivePartitionColTypes))
+	assert.Equal(t, int32(types.T_int32), stmt.Param.HivePartitionColTypes[0].Id)
+	for i := 0; i < len(stmt.Param.Option); i += 2 {
+		assert.NotEqual(t, "hive_partitioning", stmt.Param.Option[i])
+		assert.NotEqual(t, "hive_partition_columns", stmt.Param.Option[i])
+	}
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInferenceFromRawFilepath(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "year=2024"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "year=2024", "f.parquet"), []byte("x"), 0644))
+
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{"filepath", dir, "format", "parquet", "hive_partitioning", "true"}
+	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	assert.Equal(t, dir, stmt.Param.Filepath)
+	assert.Equal(t, []string{"year"}, stmt.Param.HivePartitionCols)
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInferenceExplicitAuto(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t, "data/Year=2024/f.parquet")
+	stmt.Param.Option = []string{
+		"filepath", stmt.Param.Filepath,
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "auto",
+	}
+	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	assert.Equal(t, []string{"year"}, stmt.Param.HivePartitionCols)
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInferenceMixedKeys(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t,
+		"data/year=2024/f.parquet",
+		"data/dt=2025/f.parquet",
+	)
+	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
+	ct := makeHivePlan(
+		&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}},
+		&plan.ColDef{Name: "dt", Typ: plan.Type{Id: int32(types.T_int32)}},
+	)
+
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mixed keys")
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInferenceUndeclaredColumn(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t, "data/year=2024/f.parquet")
+	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
+	ct := makeHivePlan(&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}})
+
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "partition column 'year' not found")
+}
+
+func TestValidateAndSetHivePartitionOptions_AutoInferenceMaxListCalls(t *testing.T) {
+	paths := make([]string, 0, hivePartitionInferMaxSampleDirs)
+	for i := 0; i < hivePartitionInferMaxSampleDirs; i++ {
+		paths = append(paths, fmt.Sprintf("data/year=%04d/month=01/f.parquet", i))
+	}
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Filepath = fileservice.JoinPath("memory", "data")
+	stmt.Param.FileService = makeHiveMemoryFS(t, paths...)
+	stmt.Param.Option = []string{"filepath", stmt.Param.Filepath, "format", "parquet", "hive_partitioning", "true"}
+	ct := makeHivePlan(
+		&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}},
+		&plan.ColDef{Name: "month", Typ: plan.Type{Id: int32(types.T_int32)}},
+	)
+
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auto inference exceeded")
+	assert.Contains(t, err.Error(), "specify hive_partition_columns explicitly")
+}
+
+func TestPrepareHiveInferenceParamS3Backfill(t *testing.T) {
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.S3}}
+	options := []string{
+		"filepath", "s3://bucket/prefix/",
+		"format", "PARQUET",
+		"endpoint", "https://s3.example.com",
+		"region", "us-west-2",
+		"access_key_id", "ak",
+		"secret_access_key", "sk",
+		"bucket", "bucket",
+		"provider", "minio",
+		"role_arn", "role",
+		"external_id", "external",
+	}
+
+	prepareHiveInferenceParam(param, options)
+
+	assert.Equal(t, "s3://bucket/prefix/", param.Filepath)
+	assert.Equal(t, "parquet", param.Format)
+	require.NotNil(t, param.S3Param)
+	assert.Equal(t, "https://s3.example.com", param.S3Param.Endpoint)
+	assert.Equal(t, "us-west-2", param.S3Param.Region)
+	assert.Equal(t, "ak", param.S3Param.APIKey)
+	assert.Equal(t, "sk", param.S3Param.APISecret)
+	assert.Equal(t, "bucket", param.S3Param.Bucket)
+	assert.Equal(t, "minio", param.S3Param.Provider)
+	assert.Equal(t, "role", param.S3Param.RoleArn)
+	assert.Equal(t, "external", param.S3Param.ExternalId)
+
+	prepareHiveInferenceParam(param, []string{
+		"filepath", "other",
+		"format", "csv",
+		"endpoint", "changed",
+		"region", "changed",
+		"access_key_id", "changed",
+		"secret_access_key", "changed",
+		"bucket", "changed",
+		"provider", "changed",
+		"role_arn", "changed",
+		"external_id", "changed",
+	})
+	assert.Equal(t, "s3://bucket/prefix/", param.Filepath)
+	assert.Equal(t, "parquet", param.Format)
+	assert.Equal(t, "https://s3.example.com", param.S3Param.Endpoint)
+	assert.Equal(t, "ak", param.S3Param.APIKey)
+
+	local := &tree.ExternParam{}
+	prepareHiveInferenceParam(local, []string{"filepath", "/data", "format", "PARQUET"})
+	assert.Equal(t, "/data", local.Filepath)
+	assert.Equal(t, "parquet", local.Format)
+	assert.Nil(t, local.S3Param)
+}
+
+func TestHiveInferencePathHelpersCoverage(t *testing.T) {
+	assert.Equal(t, "etl:/tmp/data", normalizeHiveInferPath(" etl:/tmp/data/ "))
+	assert.Equal(t, "svc:arg/data", normalizeHiveInferPath("svc:arg/data"))
+	assert.Equal(t, "/warehouse/table", normalizeHiveInferPath("warehouse/table"))
+
+	assert.Equal(t, "root", deriveHiveInferReadPath("/warehouse/table", "root", "/warehouse/table"))
+	assert.Equal(t, "/outside", deriveHiveInferReadPath("/warehouse/table", "root", "/outside"))
+	assert.Equal(t, "year=2024", deriveHiveInferReadPath("/warehouse/table", ".", "/warehouse/table/year=2024"))
+	assert.Equal(t, "root/year=2024/month=01", deriveHiveInferReadPath("/warehouse/table", "root", "/warehouse/table/year=2024/month=01"))
+	assert.Equal(t, "year=2024", deriveHiveInferReadPath("/warehouse/table", "", "/warehouse/table/year=2024"))
+
+	key, isHive, err := parseHiveInferSegmentKey("Year=2024")
+	require.NoError(t, err)
+	assert.True(t, isHive)
+	assert.Equal(t, "year", key)
+
+	key, isHive, err = parseHiveInferSegmentKey("plain")
+	require.NoError(t, err)
+	assert.False(t, isHive)
+	assert.Empty(t, key)
+
+	for _, segment := range []string{".=x", "..=x", "bad-key=x"} {
+		_, isHive, err = parseHiveInferSegmentKey(segment)
+		require.Error(t, err)
+		assert.True(t, isHive)
+	}
+
+	assert.True(t, isHiveInferHidden(".spark"))
+	assert.True(t, isHiveInferHidden("_temporary"))
+	assert.False(t, isHiveInferHidden("year=2024"))
+}
+
+func TestHivePartitionCatalogRoundTripUsesPersistedInference(t *testing.T) {
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType:          tree.INFILE,
+			Filepath:          "/unreachable/external/root",
+			Format:            "parquet",
+			HivePartitioning:  true,
+			HivePartitionCols: []string{"year", "month"},
+			HivePartitionColTypes: []tree.HivePartColType{
+				{Id: int32(types.T_int32), NullAbility: true},
+				{Id: int32(types.T_varchar), Width: 2, NullAbility: true},
+			},
+		},
+	}
+
+	data, err := json.Marshal(param)
+	require.NoError(t, err)
+	var restored tree.ExternParam
+	require.NoError(t, json.Unmarshal(data, &restored))
+
+	assert.True(t, restored.HivePartitioning)
+	assert.Equal(t, []string{"year", "month"}, restored.HivePartitionCols)
+	require.Len(t, restored.HivePartitionColTypes, 2)
+	assert.Equal(t, int32(types.T_int32), restored.HivePartitionColTypes[0].Id)
+	assert.Equal(t, int32(types.T_varchar), restored.HivePartitionColTypes[1].Id)
+	assert.Equal(t, int32(2), restored.HivePartitionColTypes[1].Width)
+}
+
+func TestValidateAndSetHivePartitionOptions_DuplicateHiveKey(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"hive_partitioning", "true",
+		"hive_partitioning", "false",
+		"hive_partition_columns", "year",
+	}
+	ct := makeHivePlan()
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate option key")
+}
+
+func TestValidateAndSetHivePartitionOptions_DuplicateFormat(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"format", "parquet",
+		"format", "csv",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "year",
+	}
+	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate option key 'format'")
+}
+
+func TestValidateAndSetHivePartitionOptions_NonParquetFormat(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"format", "csv",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "year",
+	}
+	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only supports format='parquet'")
+}
+
+func TestValidateAndSetHivePartitionOptions_StageFilepath(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"filepath", "stage://mystage/data/",
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "year",
+	}
+	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not support stage external tables")
+}
+
+func TestValidateAndSetHivePartitionOptions_StageNameSet(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.StageName = "mystage"
+	stmt.Param.Option = []string{
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "year",
+	}
+	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not support stage external tables")
+}
+
+func TestValidateAndSetHivePartitionOptions_ColumnNotFound(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "year",
+	}
+	ct := makeHivePlan(&plan.ColDef{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}})
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in table columns")
+}
+
+func TestValidateAndSetHivePartitionOptions_HiddenColumn(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "year",
+	}
+	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}, Hidden: true})
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be a hidden column")
+}
+
+func TestValidateAndSetHivePartitionOptions_GeneratedColumn(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "year",
+	}
+	ct := makeHivePlan(&plan.ColDef{
+		Name:         "year",
+		Typ:          plan.Type{Id: int32(types.T_int32)},
+		GeneratedCol: &plan.GeneratedCol{},
+	})
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be a generated column")
+}
+
+func TestValidateAndSetHivePartitionOptions_VectorType(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "emb",
+	}
+	ct := makeHivePlan(&plan.ColDef{Name: "emb", Typ: plan.Type{Id: int32(types.T_array_float32)}})
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be a VECTOR type")
+
+	ct = makeHivePlan(&plan.ColDef{Name: "emb", Typ: plan.Type{Id: int32(types.T_array_float64)}})
+	err = validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be a VECTOR type")
+}
+
+func TestValidateAndSetHivePartitionOptions_DuplicatePartitionColumn(t *testing.T) {
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "year,year",
+	}
+	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate partition column")
+}
+
+func TestValidateAndSetHivePartitionOptions_MultiLevelAndNullability(t *testing.T) {
+	// Multi-level partition columns; mixing with/without Default to exercise
+	// NullAbility default.
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"filepath", "/data/",
+		"format", "parquet",
+		"hive_partitioning", "true",
+		"hive_partition_columns", "year,month",
+	}
+	ct := makeHivePlan(
+		// year: NOT NULL (Default.NullAbility=false)
+		&plan.ColDef{
+			Name:    "year",
+			Typ:     plan.Type{Id: int32(types.T_int32)},
+			Default: &plan.Default{NullAbility: false},
+		},
+		// month: no Default → treated as nullable (default true)
+		&plan.ColDef{Name: "month", Typ: plan.Type{Id: int32(types.T_varchar), Width: 2}},
+	)
+	require.NoError(t, validateAndSetHivePartitionOptions(context.Background(), stmt, ct))
+	require.Len(t, stmt.Param.HivePartitionColTypes, 2)
+	assert.False(t, stmt.Param.HivePartitionColTypes[0].NullAbility, "year declared NOT NULL")
+	assert.True(t, stmt.Param.HivePartitionColTypes[1].NullAbility, "month default nullable when Default is nil")
+	assert.Equal(t, int32(2), stmt.Param.HivePartitionColTypes[1].Width)
+}
+
+func TestValidateAndSetHivePartitionOptions_InvalidHiveValue(t *testing.T) {
+	// parseHiveOptionsFromRawOptions returns an error path.
+	stmt := &tree.CreateTable{Param: &tree.ExternParam{}}
+	stmt.Param.Option = []string{
+		"format", "parquet",
+		"hive_partitioning", "maybe",
+		"hive_partition_columns", "year",
+	}
+	ct := makeHivePlan(&plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}})
+	err := validateAndSetHivePartitionOptions(context.Background(), stmt, ct)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be 'true' or 'false'")
+}
+
+// -------------------------------------------------------------------------
+// InitStageS3Param — happy path + credential-missing error paths.
+// -------------------------------------------------------------------------
+
+func TestInitStageS3Param_HappyAndErrors(t *testing.T) {
+	parse := func(raw string) *url.URL {
+		u, err := url.Parse(raw)
+		require.NoError(t, err)
+		return u
+	}
+
+	baseCreds := map[string]string{
+		stage.PARAMKEY_AWS_KEY_ID:     "AK",
+		stage.PARAMKEY_AWS_SECRET_KEY: "SK",
+		stage.PARAMKEY_AWS_REGION:     "us-west-2",
+		stage.PARAMKEY_ENDPOINT:       "https://s3.example.com",
+	}
+
+	t.Run("happy_path", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		sd := stage.StageDef{
+			Url:         parse("s3://my-bucket/prefix/"),
+			Credentials: baseCreds,
+		}
+		require.NoError(t, InitStageS3Param(param, sd))
+		assert.Equal(t, tree.S3, param.ScanType)
+		assert.Equal(t, "my-bucket", param.S3Param.Bucket)
+		assert.Equal(t, "AK", param.S3Param.APIKey)
+		assert.Equal(t, "SK", param.S3Param.APISecret)
+		assert.Equal(t, "us-west-2", param.S3Param.Region)
+	})
+
+	t.Run("bad_protocol", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		sd := stage.StageDef{Url: parse("http://x/")}
+		require.Error(t, InitStageS3Param(param, sd))
+	})
+
+	t.Run("raw_query_rejected", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		sd := stage.StageDef{Url: parse("s3://b/p/?q=1")}
+		require.Error(t, InitStageS3Param(param, sd))
+	})
+
+	// Each missing-cred path.
+	for _, k := range []string{
+		stage.PARAMKEY_AWS_KEY_ID, stage.PARAMKEY_AWS_SECRET_KEY,
+		stage.PARAMKEY_AWS_REGION, stage.PARAMKEY_ENDPOINT,
+	} {
+		t.Run("missing_"+k, func(t *testing.T) {
+			creds := map[string]string{}
+			for kk, vv := range baseCreds {
+				if kk != k {
+					creds[kk] = vv
+				}
+			}
+			param := &tree.ExternParam{}
+			param.Ctx = context.Background()
+			sd := stage.StageDef{
+				Url:         parse("s3://b/p/"),
+				Credentials: creds,
+			}
+			err := InitStageS3Param(param, sd)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), k)
+		})
+	}
+
+	t.Run("option_format_csv_invalid", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		param.Option = []string{"format", "orc"}
+		sd := stage.StageDef{
+			Url:         parse("s3://b/p/"),
+			Credentials: baseCreds,
+		}
+		require.Error(t, InitStageS3Param(param, sd))
+	})
+
+	t.Run("option_unknown_key", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		param.Option = []string{"unknown", "x"}
+		sd := stage.StageDef{
+			Url:         parse("s3://b/p/"),
+			Credentials: baseCreds,
+		}
+		require.Error(t, InitStageS3Param(param, sd))
+	})
+
+	t.Run("stage_filepath_option_ignored", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		param.Option = []string{"filepath", "stage://pq_stage/data.parquet", "format", "parquet"}
+		sd := stage.StageDef{
+			Url:         parse("s3://b/prefix/data.parquet"),
+			Credentials: baseCreds,
+		}
+		require.NoError(t, InitStageS3Param(param, sd))
+		assert.Equal(t, tree.S3, param.ScanType)
+		assert.Equal(t, "parquet", param.Format)
+		assert.Equal(t, "b", param.S3Param.Bucket)
+		assert.Equal(t, "/prefix/data.parquet", param.Filepath)
+	})
+
+	t.Run("jsonline_without_jsondata", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		param.Option = []string{"format", "jsonline"}
+		sd := stage.StageDef{
+			Url:         parse("s3://b/p/"),
+			Credentials: baseCreds,
+		}
+		require.Error(t, InitStageS3Param(param, sd))
+	})
+
+	t.Run("hive_legacy_option_under_stage", func(t *testing.T) {
+		// The defense-in-depth hive branch under InitStageS3Param.
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		param.Option = []string{"hive_partitioning", "true", "hive_partition_columns", "year"}
+		sd := stage.StageDef{
+			Url:         parse("s3://b/p/"),
+			Credentials: baseCreds,
+		}
+		require.NoError(t, InitStageS3Param(param, sd))
+		assert.True(t, param.HivePartitioning)
+	})
+
+	t.Run("hive_legacy_columns_disabled_under_stage", func(t *testing.T) {
+		param := &tree.ExternParam{}
+		param.Ctx = context.Background()
+		param.Option = []string{"hive_partitioning", "false", "hive_partition_columns", "year"}
+		sd := stage.StageDef{
+			Url:         parse("s3://b/p/"),
+			Credentials: baseCreds,
+		}
+		err := InitStageS3Param(param, sd)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "requires hive_partitioning='true'")
+	})
+}
+
+// -------------------------------------------------------------------------
+// InitInfileOrStageParam — non-stage pass-through.
+// -------------------------------------------------------------------------
+
+func TestInitInfileOrStageParam_NonStageFallsThrough(t *testing.T) {
+	param := &tree.ExternParam{}
+	param.Ctx = context.Background()
+	param.Option = []string{"filepath", "/data/x", "format", "parquet"}
+	// proc is unused for the non-stage branch.
+	require.NoError(t, InitInfileOrStageParam(param, nil))
+	assert.Equal(t, "/data/x", param.Filepath)
+	assert.Equal(t, "parquet", param.Format)
+}
+
+// Avoid unused import warning when some branches of types are not directly referenced.
+var _ = types.T_int32

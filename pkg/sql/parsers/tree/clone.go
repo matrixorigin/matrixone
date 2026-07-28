@@ -15,8 +15,10 @@
 package tree
 
 import (
-	"fmt"
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func init() {
@@ -39,40 +41,99 @@ func init() {
 	) //WithEnableChecker()
 }
 
+type CloneLevelCtxKey struct{}
+type CloneLevelType uint64
+type CloneStmtType int
+
+const (
+	NormalCloneLevelTable CloneLevelType = 1 << iota
+	NormalCloneLevelDatabase
+	NormalCloneLevelAccount
+	NormalCloneLevelCluster
+
+	RestoreCloneLevelTable
+	RestoreCloneLevelDatabase
+	RestoreCloneLevelAccount
+	RestoreCloneLevelCluster
+)
+
+const (
+	NoClone CloneStmtType = iota
+	CloneCluster
+	CloneAccount
+	WithinAccCloneDB
+	BetweenAccCloneDB
+	WithinDBCloneTable
+	WithinAccBetweenDBCloneTable
+	BetweenAccCloneTable
+)
+
+type ToAccountOpt struct {
+	AccountName Identifier
+}
+
+func (node *ToAccountOpt) Format(ctx *FmtCtx) {
+	ctx.WriteString("to account ")
+	ctx.WriteIdentifier(node.AccountName)
+}
+
 type CloneTable struct {
 	statementImpl
 
 	SrcTable    TableName
 	CreateTable CreateTable
+	CopyGrants  bool
 
 	IsRestore     bool
 	IsRestoreByTS bool
 	FromAccount   uint32
 
-	ToAccountName Identifier
-	ToAccountId   uint32
+	ToAccountOpt *ToAccountOpt
+	ToAccountId  uint32
 
-	Sql string
+	Sql      string
+	StmtType CloneStmtType
+
+	stmtKind StmtKind
 }
 
 func (node *CloneTable) StmtKind() StmtKind {
-	if len(string(node.ToAccountName)) != 0 {
-		return frontendStatusTyp
-	}
+	return node.stmtKind
+}
 
-	return defaultStatusTyp
+func (node *CloneTable) FlipStmtKind() {
+	node.stmtKind = defaultStatusTyp
 }
 
 func (node *CloneTable) Format(ctx *FmtCtx) {
-	ctx.WriteString("clone table: ")
-	node.CreateTable.Format(ctx)
+	ctx.WriteString("create")
+	if node.CreateTable.Temporary {
+		ctx.WriteString(" temporary")
+	}
+	ctx.WriteString(" table")
+	if node.CreateTable.IfNotExists {
+		ctx.WriteString(" if not exists")
+	}
+	ctx.WriteByte(' ')
+	node.CreateTable.Table.Format(ctx)
+	ctx.WriteString(" clone ")
+	node.SrcTable.Format(ctx)
+	if node.CopyGrants {
+		ctx.WriteString(" copy grants")
+	}
+	if node.ToAccountOpt != nil {
+		ctx.WriteByte(' ')
+		node.ToAccountOpt.Format(ctx)
+	}
 }
 
 func (node *CloneTable) GetStatementType() string { return "CREATE TABLE CLONE" }
 func (node *CloneTable) GetQueryType() string     { return QueryTypeOth }
 
 func NewCloneTable() *CloneTable {
-	return reuse.Alloc[CloneTable](nil)
+	clone := reuse.Alloc[CloneTable](nil)
+	clone.stmtKind = frontendStatusTyp
+	return clone
 }
 
 func (node *CloneTable) TypeName() string { return "tree.CloneTable" }
@@ -90,10 +151,10 @@ func (node *CloneTable) reset() {
 
 type CloneDatabase struct {
 	statementImpl
-	SrcDatabase   Identifier
-	DstDatabase   Identifier
-	AtTsExpr      *AtTimeStamp
-	ToAccountName Identifier
+	SrcDatabase  Identifier
+	DstDatabase  Identifier
+	AtTsExpr     *AtTimeStamp
+	ToAccountOpt *ToAccountOpt
 }
 
 func (node *CloneDatabase) Free() {
@@ -111,9 +172,17 @@ func (node *CloneDatabase) StmtKind() StmtKind {
 }
 
 func (node *CloneDatabase) Format(ctx *FmtCtx) {
-	ctx.WriteString(fmt.Sprintf(
-		"create database %s clone %s",
-		node.SrcDatabase.String(), node.DstDatabase.String()))
+	ctx.WriteString("create database ")
+	ctx.WriteIdentifier(node.DstDatabase)
+	ctx.WriteString(" clone ")
+	ctx.WriteIdentifier(node.SrcDatabase)
+	if node.AtTsExpr != nil {
+		node.AtTsExpr.Format(ctx)
+	}
+	if node.ToAccountOpt != nil {
+		ctx.WriteByte(' ')
+		node.ToAccountOpt.Format(ctx)
+	}
 }
 
 func NewCloneDatabase() *CloneDatabase {
@@ -123,3 +192,54 @@ func NewCloneDatabase() *CloneDatabase {
 func (node *CloneDatabase) GetStatementType() string { return "CREATE DATABASE CLONE" }
 
 func (node *CloneDatabase) GetQueryType() string { return QueryTypeOth }
+
+func DecideCloneStmtType(
+	ctx context.Context,
+	stmt *CloneTable,
+	srcDbName string,
+	dstDbName string,
+	toAccount uint32,
+	srcAccount uint32,
+	subMeta *plan2.SubscriptionMeta,
+) (cloneType CloneStmtType) {
+
+	if stmt.StmtType != NoClone {
+		return stmt.StmtType
+	}
+
+	if subMeta != nil {
+		srcAccount = uint32(subMeta.AccountId)
+	}
+
+	var (
+		level = NormalCloneLevelTable
+	)
+
+	if val := ctx.Value(CloneLevelCtxKey{}); val != nil {
+		level = val.(CloneLevelType)
+	}
+
+	switch level {
+	case NormalCloneLevelCluster, RestoreCloneLevelCluster:
+		return CloneCluster
+	case NormalCloneLevelAccount, RestoreCloneLevelAccount:
+		return CloneAccount
+	case NormalCloneLevelDatabase, RestoreCloneLevelDatabase:
+		if srcAccount == toAccount {
+			return WithinAccCloneDB
+		}
+		return BetweenAccCloneDB
+
+	case NormalCloneLevelTable, RestoreCloneLevelTable:
+		if srcAccount == toAccount {
+			if srcDbName == dstDbName {
+				return WithinDBCloneTable
+			}
+			return WithinAccBetweenDBCloneTable
+		}
+		return BetweenAccCloneTable
+
+	default:
+		return NoClone
+	}
+}

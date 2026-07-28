@@ -34,7 +34,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 )
+
+const checkpointIntentOldAge = 2 * time.Minute
 
 type timeBasedPolicy struct {
 	interval time.Duration
@@ -215,7 +218,7 @@ func NewRunner(
 	cfg = r.GetCfg()
 
 	// Note: we can't change the global history interval in runtime
-	r.store = newRunnerStore(r.rt.SID(), cfg.GlobalHistoryDuration, time.Minute*2)
+	r.store = newRunnerStore(r.rt.SID(), cfg.GlobalHistoryDuration, checkpointIntentOldAge)
 
 	r.gcCheckpointQueue = sm.NewSafeQueue(100, 100, r.onGCCheckpointEntries)
 	r.postCheckpointQueue = sm.NewSafeQueue(1000, 1, r.onPostCheckpointEntries)
@@ -440,6 +443,11 @@ func (r *runner) onPostCheckpointEntries(entries ...any) {
 
 		logutil.Debugf("Post %s", entry.String())
 	}
+
+	// Schedule a debounced arena drain.  The timer resets on each
+	// checkpoint, so during active operation the pools stay warm.
+	objectio.ScheduleArenaDrain()
+	mergesort.DrainTransferSlabPool()
 }
 
 func (r *runner) onGCCheckpointEntries(items ...any) {

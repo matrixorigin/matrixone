@@ -195,7 +195,7 @@ SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END;
 select 'case+union+tet' union
 SELECT CASE '1' WHEN '1' THEN 'BUG' ELSE 'nobug' END;
 
-SELECT 1, 2 UNION SELECT 'a', 'b';
+SELECT 1, 2 UNION SELECT 'a', 'b' ORDER BY 1;
 
 
 -- test union and concat function

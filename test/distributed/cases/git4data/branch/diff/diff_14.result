@@ -1,0 +1,131 @@
+drop database if exists diff_test;
+create database diff_test;
+use diff_test;
+create table orders (id int primary key, price decimal(10,2), status varchar(20));
+insert into orders values (1, 100.00, 'pending'), (2, 200.00, 'pending'), (3, 300.00, 'pending'), (4, 400.00, 'pending'), (5, 500.00, 'pending');
+create snapshot sp_case1 for table diff_test orders;
+data branch create table orders_cloned from orders{snapshot="sp_case1"};
+update orders set price = 999.99 where id in (1, 2, 3);
+data branch diff orders against orders_cloned;
+➤ diff orders against orders_cloned[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  price[3,-1,0]  ¦  status[12,0,0]  𝄀
+orders  ¦  UPDATE  ¦  1  ¦  999.99  ¦  pending  𝄀
+orders  ¦  UPDATE  ¦  2  ¦  999.99  ¦  pending  𝄀
+orders  ¦  UPDATE  ¦  3  ¦  999.99  ¦  pending
+data branch diff orders_cloned against orders;
+➤ diff orders_cloned against orders[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  price[3,-1,0]  ¦  status[12,0,0]  𝄀
+orders  ¦  UPDATE  ¦  1  ¦  999.99  ¦  pending  𝄀
+orders  ¦  UPDATE  ¦  2  ¦  999.99  ¦  pending  𝄀
+orders  ¦  UPDATE  ¦  3  ¦  999.99  ¦  pending
+update orders set price = 100.00 where id = 1;
+update orders set price = 200.00 where id = 2;
+update orders set price = 300.00 where id = 3;
+data branch diff orders against orders_cloned;
+➤ diff orders against orders_cloned[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  price[3,-1,0]  ¦  status[12,0,0]
+data branch diff orders_cloned against orders;
+➤ diff orders_cloned against orders[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  price[3,-1,0]  ¦  status[12,0,0]
+select * from orders order by id;
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  status[12,-1,0]  𝄀
+1  ¦  100.00  ¦  pending  𝄀
+2  ¦  200.00  ¦  pending  𝄀
+3  ¦  300.00  ¦  pending  𝄀
+4  ¦  400.00  ¦  pending  𝄀
+5  ¦  500.00  ¦  pending
+select * from orders{snapshot="sp_case1"} order by id;
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  status[12,-1,0]  𝄀
+1  ¦  100.00  ¦  pending  𝄀
+2  ¦  200.00  ¦  pending  𝄀
+3  ¦  300.00  ¦  pending  𝄀
+4  ¦  400.00  ¦  pending  𝄀
+5  ¦  500.00  ¦  pending
+drop snapshot sp_case1;
+drop table orders;
+drop table orders_cloned;
+create table orders (id int primary key, price decimal(10,2), status varchar(20));
+insert into orders values (1, 100.00, 'pending'), (2, 200.00, 'pending'), (3, 300.00, 'pending'), (4, 400.00, 'pending'), (5, 500.00, 'pending');
+create snapshot sp_case4 for table diff_test orders;
+data branch create table orders_cloned from orders{snapshot="sp_case4"};
+update orders set price = 999.99 where id in (1, 2, 3);
+update orders_cloned set status = 'branch_only' where id = 4;
+data branch diff orders_cloned against orders;
+➤ diff orders_cloned against orders[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  price[3,-1,0]  ¦  status[12,0,0]  𝄀
+orders  ¦  UPDATE  ¦  1  ¦  999.99  ¦  pending  𝄀
+orders  ¦  UPDATE  ¦  2  ¦  999.99  ¦  pending  𝄀
+orders  ¦  UPDATE  ¦  3  ¦  999.99  ¦  pending  𝄀
+orders_cloned  ¦  UPDATE  ¦  4  ¦  400.00  ¦  branch_only
+data branch merge orders_cloned into orders;
+data branch diff orders_cloned against orders;
+➤ diff orders_cloned against orders[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  price[3,-1,0]  ¦  status[12,0,0]  𝄀
+orders  ¦  UPDATE  ¦  1  ¦  999.99  ¦  pending  𝄀
+orders  ¦  UPDATE  ¦  2  ¦  999.99  ¦  pending  𝄀
+orders  ¦  UPDATE  ¦  3  ¦  999.99  ¦  pending
+select * from orders order by id;
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  status[12,-1,0]  𝄀
+1  ¦  999.99  ¦  pending  𝄀
+2  ¦  999.99  ¦  pending  𝄀
+3  ¦  999.99  ¦  pending  𝄀
+4  ¦  400.00  ¦  branch_only  𝄀
+5  ¦  500.00  ¦  pending
+select * from orders_cloned order by id;
+➤ id[4,32,0]  ¦  price[3,10,2]  ¦  status[12,-1,0]  𝄀
+1  ¦  100.00  ¦  pending  𝄀
+2  ¦  200.00  ¦  pending  𝄀
+3  ¦  300.00  ¦  pending  𝄀
+4  ¦  400.00  ¦  branch_only  𝄀
+5  ¦  500.00  ¦  pending
+drop snapshot sp_case4;
+drop table orders;
+drop table orders_cloned;
+create table products (id int primary key, name varchar(50), stock int);
+insert into products values (1, 'widget', 100), (2, 'gadget', 200), (3, 'gizmo', 300), (4, 'tool', 400);
+create snapshot sp_case2 for table diff_test products;
+update products set stock = 0 where id in (1, 2);
+data branch diff products against products{snapshot="sp_case2"};
+➤ diff products against products[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  name[12,0,0]  ¦  stock[4,0,0]  𝄀
+products  ¦  UPDATE  ¦  1  ¦  widget  ¦  0  𝄀
+products  ¦  UPDATE  ¦  2  ¦  gadget  ¦  0
+update products set stock = 100 where id = 1;
+update products set stock = 200 where id = 2;
+data branch diff products against products{snapshot="sp_case2"};
+➤ diff products against products[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  name[12,0,0]  ¦  stock[4,0,0]
+select * from products order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  stock[4,32,0]  𝄀
+1  ¦  widget  ¦  100  𝄀
+2  ¦  gadget  ¦  200  𝄀
+3  ¦  gizmo  ¦  300  𝄀
+4  ¦  tool  ¦  400
+select * from products{snapshot="sp_case2"} order by id;
+➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  stock[4,32,0]  𝄀
+1  ¦  widget  ¦  100  𝄀
+2  ¦  gadget  ¦  200  𝄀
+3  ¦  gizmo  ¦  300  𝄀
+4  ¦  tool  ¦  400
+drop snapshot sp_case2;
+drop table products;
+create table inventory (id int primary key, sku varchar(20), qty int, location varchar(20));
+insert into inventory values (1, 'A001', 50, 'east'), (2, 'A002', 60, 'west'), (3, 'A003', 70, 'north'), (4, 'A004', 80, 'south');
+create snapshot sp_case3 for table diff_test inventory;
+update inventory set qty = 999 where id in (1, 2);
+data branch diff inventory{snapshot="sp_case3"} against inventory;
+➤ diff inventory against inventory[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  sku[12,0,0]  ¦  qty[4,0,0]  ¦  location[12,0,0]  𝄀
+inventory  ¦  UPDATE  ¦  1  ¦  A001  ¦  999  ¦  east  𝄀
+inventory  ¦  UPDATE  ¦  2  ¦  A002  ¦  999  ¦  west
+data branch merge inventory{snapshot="sp_case3"} into inventory;
+data branch diff inventory{snapshot="sp_case3"} against inventory;
+➤ diff inventory against inventory[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,0,0]  ¦  sku[12,0,0]  ¦  qty[4,0,0]  ¦  location[12,0,0]  𝄀
+inventory  ¦  UPDATE  ¦  1  ¦  A001  ¦  999  ¦  east  𝄀
+inventory  ¦  UPDATE  ¦  2  ¦  A002  ¦  999  ¦  west
+select * from inventory order by id;
+➤ id[4,32,0]  ¦  sku[12,-1,0]  ¦  qty[4,32,0]  ¦  location[12,-1,0]  𝄀
+1  ¦  A001  ¦  999  ¦  east  𝄀
+2  ¦  A002  ¦  999  ¦  west  𝄀
+3  ¦  A003  ¦  70  ¦  north  𝄀
+4  ¦  A004  ¦  80  ¦  south
+select * from inventory{snapshot="sp_case3"} order by id;
+➤ id[4,32,0]  ¦  sku[12,-1,0]  ¦  qty[4,32,0]  ¦  location[12,-1,0]  𝄀
+1  ¦  A001  ¦  50  ¦  east  𝄀
+2  ¦  A002  ¦  60  ¦  west  𝄀
+3  ¦  A003  ¦  70  ¦  north  𝄀
+4  ¦  A004  ¦  80  ¦  south
+drop snapshot sp_case3;
+drop table inventory;
+drop database diff_test;

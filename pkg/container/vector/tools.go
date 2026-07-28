@@ -25,10 +25,10 @@ import (
 )
 
 func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
-	ToSliceNoTypeCheck(v, ret)
 	if v.class == CONSTANT {
-		*ret = (*ret)[:1]
+		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
+		ToSliceNoTypeCheck(v, ret)
 		*ret = (*ret)[:v.length]
 	}
 }
@@ -39,10 +39,10 @@ func ToFixedCol[T any](v *Vector, ret *[]T) {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return
 	}
-	ToSlice(v, ret)
 	if v.class == CONSTANT {
-		*ret = (*ret)[:1]
+		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
+		ToSlice(v, ret)
 		*ret = (*ret)[:v.length]
 	}
 }
@@ -50,6 +50,14 @@ func ToFixedCol[T any](v *Vector, ret *[]T) {
 func MustFixedColNoTypeCheck[T any](v *Vector) (ret []T) {
 	ToFixedColNoTypeCheck(v, &ret)
 	return
+}
+
+// MustFixedColAsSlice returns the vector's backing data reinterpreted as a []T
+// with length n, ignoring the vector's logical length. The caller must ensure
+// n does not exceed the allocated capacity. Used by aggregation executors for
+// bounds-check-eliminated array access via (*[N]T)(slice) conversion.
+func MustFixedColAsSlice[T any](v *Vector, n int) []T {
+	return unsafe.Slice((*T)(unsafe.Pointer(unsafe.SliceData(v.data))), n)
 }
 
 func MustFixedColWithTypeCheck[T any](v *Vector) (ret []T) {
@@ -114,7 +122,7 @@ func InefficientMustStrCol(v *Vector) []string {
 }
 
 // MustArrayCol  Converts Vector<[]T> to [][]T
-func MustArrayCol[T types.RealNumbers](v *Vector) [][]T {
+func MustArrayCol[T types.ArrayElement](v *Vector) [][]T {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
 	}
@@ -193,77 +201,23 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
-	if tgtCap := v.length + rows; tgtCap > v.capacity {
-		sz := v.typ.TypeSize()
-		ndata, err := m.Grow(v.data, tgtCap*sz, v.offHeap)
+	if rows <= 0 {
+		// we will at least extent by 1.
+		// This is a pure hack to
+		rows = 1
+	}
+
+	tgtLen := v.length + rows
+	tgtDataCap := tgtLen * v.typ.TypeSize()
+	if tgtDataCap > cap(v.data) {
+		ndata, err := m.Grow(v.data, tgtDataCap, v.offHeap)
 		if err != nil {
 			return err
 		}
-		v.data = ndata[:cap(ndata)]
-		v.setupFromData()
+		v.data = ndata
 	}
+	v.data = v.data[:cap(v.data)]
 	return nil
-}
-
-func (v *Vector) setupFromData() {
-	if v.GetType().IsVarlen() {
-		v.col.setFromVector(v)
-	} else {
-		// The followng switch attach the correct type to v.col
-		// even though v.col is only an interface.
-		switch v.typ.Oid {
-		case types.T_bool:
-			v.col.setFromVector(v)
-		case types.T_bit:
-			v.col.setFromVector(v)
-		case types.T_int8:
-			v.col.setFromVector(v)
-		case types.T_int16:
-			v.col.setFromVector(v)
-		case types.T_int32:
-			v.col.setFromVector(v)
-		case types.T_int64:
-			v.col.setFromVector(v)
-		case types.T_uint8:
-			v.col.setFromVector(v)
-		case types.T_uint16:
-			v.col.setFromVector(v)
-		case types.T_uint32:
-			v.col.setFromVector(v)
-		case types.T_uint64:
-			v.col.setFromVector(v)
-		case types.T_float32:
-			v.col.setFromVector(v)
-		case types.T_float64:
-			v.col.setFromVector(v)
-		case types.T_decimal64:
-			v.col.setFromVector(v)
-		case types.T_decimal128:
-			v.col.setFromVector(v)
-		case types.T_uuid:
-			v.col.setFromVector(v)
-		case types.T_date:
-			v.col.setFromVector(v)
-		case types.T_time:
-			v.col.setFromVector(v)
-		case types.T_datetime:
-			v.col.setFromVector(v)
-		case types.T_timestamp:
-			v.col.setFromVector(v)
-		case types.T_TS:
-			v.col.setFromVector(v)
-		case types.T_Rowid:
-			v.col.setFromVector(v)
-		case types.T_Blockid:
-			v.col.setFromVector(v)
-		case types.T_enum:
-			v.col.setFromVector(v)
-		default:
-			panic(fmt.Sprintf("unknown type %s", v.typ.Oid))
-		}
-	}
-	tlen := v.GetType().TypeSize()
-	v.capacity = cap(v.data) / tlen
 }
 
 func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
@@ -304,7 +258,6 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 		return rvec, nil
 	}
 	rvec.data = vec.Data
-	rvec.setupFromData()
 	return rvec, nil
 }
 
@@ -373,6 +326,8 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Decimal64](vec)
 	case types.T_decimal128:
 		return appendBytesToFixSized[types.Decimal128](vec)
+	case types.T_decimal256:
+		return appendBytesToFixSized[types.Decimal256](vec)
 	case types.T_uuid:
 		return appendBytesToFixSized[types.Uuid](vec)
 	case types.T_TS:
@@ -381,6 +336,8 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Rowid](vec)
 	case types.T_Blockid:
 		return appendBytesToFixSized[types.Blockid](vec)
+	case types.T_year:
+		return appendBytesToFixSized[types.MoYear](vec)
 	}
 	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
 }

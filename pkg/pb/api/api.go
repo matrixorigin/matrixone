@@ -57,6 +57,41 @@ func MustUnmarshalTblExtra(data []byte) *SchemaExtra {
 	return info
 }
 
+func CloneExtra(info *SchemaExtra) *SchemaExtra {
+	if info == nil {
+		return nil
+	}
+	return &SchemaExtra{
+		NextColSeqnum:     info.NextColSeqnum,
+		DroppedAttrs:      append([]string{}, info.DroppedAttrs...),
+		ColumnChanged:     info.ColumnChanged,
+		OldName:           info.OldName,
+		MinOsizeQuailifed: info.MinOsizeQuailifed,
+		MaxObjOnerun:      info.MaxObjOnerun,
+		MaxOsizeMergedObj: info.MaxOsizeMergedObj,
+		Hints:             append([]MergeHint{}, info.Hints...),
+		MinCnMergeSize:    info.MinCnMergeSize,
+		BlockMaxRows:      info.BlockMaxRows,
+		ObjectMaxBlocks:   info.ObjectMaxBlocks,
+		FeatureFlag:       info.FeatureFlag,
+		IndexTables:       append([]uint64{}, info.IndexTables...),
+		ParentTableID:     info.ParentTableID,
+		AutoIncrOffset:    info.AutoIncrOffset,
+		AutoIncrEpoch:     info.AutoIncrEpoch,
+	}
+}
+
+func NewUpdateAutoIncrementReq(did, tid, offset uint64, epoch uint32) *AlterTableReq {
+	return &AlterTableReq{
+		DbId:    did,
+		TableId: tid,
+		Kind:    AlterKind_UpdateAutoIncrement,
+		Operation: &AlterTableReq_UpdateAutoIncrement{
+			UpdateAutoIncrement: &AlterTableAutoIncrement{Offset: offset, Epoch: epoch},
+		},
+	}
+}
+
 func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,
@@ -206,7 +241,16 @@ func (m *CheckpointResp) UnmarshalBinary(data []byte) error {
 // To reduce memory consumption
 
 type TransferMaps []TransferMap
-type TransferMap map[uint32]TransferDestPos
+
+// TransferMap is a dense slice indexed by the original row index within its source block.
+// Entries where ObjIdx == NoTransfer are sentinel values meaning the row was deleted and
+// has no transfer destination.  Valid ObjIdx values are always < NoTransfer because the
+// number of output objects produced by a single merge is far below 255.
+type TransferMap []TransferDestPos
+
+// NoTransfer is the sentinel ObjIdx value that marks a deleted (non-transferred) row.
+const NoTransfer = uint8(0xFF)
+
 type TransferDestPos struct {
 	ObjIdx uint8
 	BlkIdx uint16

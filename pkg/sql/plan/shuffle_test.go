@@ -16,12 +16,14 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"testing"
 	"unsafe"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -203,69 +205,6 @@ func TestRangeShuffleSlice(t *testing.T) {
 	require.Equal(t, GetRangeShuffleIndexUnsignedSlice([]uint64{30, 50, 60, 90, 120}, 61), uint64(3))
 }
 
-func TestGetShuffleDop(t *testing.T) {
-	n := getShuffleDop(1, 1, 100)
-	require.Equal(t, 4, n)
-	n = getShuffleDop(4, 2, 100000000000)
-	require.Equal(t, 16, n)
-	n = getShuffleDop(64, 1, 10000000000000)
-	require.Equal(t, 256, n)
-
-	n = getShuffleDop(16, 3, 1500000000)
-	require.Equal(t, 40, n)
-	n = getShuffleDop(16, 3, 150000000)
-	require.Equal(t, 64, n)
-	n = getShuffleDop(16, 3, 15000000)
-	require.Equal(t, 32, n)
-	n = getShuffleDop(16, 3, 1500000)
-	require.Equal(t, 16, n)
-
-	n = getShuffleDop(16, 4, 1500000000)
-	require.Equal(t, 64, n)
-	n = getShuffleDop(16, 4, 150000000)
-	require.Equal(t, 64, n)
-	n = getShuffleDop(16, 4, 15000000)
-	require.Equal(t, 32, n)
-	n = getShuffleDop(16, 4, 1500000)
-	require.Equal(t, 16, n)
-
-	n = getShuffleDop(16, 3, 300000000)
-	require.Equal(t, 64, n)
-	n = getShuffleDop(16, 3, 30000000)
-	require.Equal(t, 48, n)
-	n = getShuffleDop(16, 3, 3000000)
-	require.Equal(t, 16, n)
-	n = getShuffleDop(16, 3, 300000)
-	require.Equal(t, 16, n)
-
-	n = getShuffleDop(16, 4, 300000000)
-	require.Equal(t, 64, n)
-	n = getShuffleDop(16, 4, 30000000)
-	require.Equal(t, 32, n)
-	n = getShuffleDop(16, 4, 3000000)
-	require.Equal(t, 16, n)
-	n = getShuffleDop(16, 4, 300000)
-	require.Equal(t, 16, n)
-
-	n = getShuffleDop(64, 1, 1500000000)
-	require.Equal(t, 256, n)
-	n = getShuffleDop(64, 1, 150000000)
-	require.Equal(t, 256, n)
-	n = getShuffleDop(64, 1, 15000000)
-	require.Equal(t, 128, n)
-	n = getShuffleDop(64, 1, 1500000)
-	require.Equal(t, 64, n)
-
-	n = getShuffleDop(16, 1, 1500000000)
-	require.Equal(t, 64, n)
-	n = getShuffleDop(16, 1, 150000000)
-	require.Equal(t, 64, n)
-	n = getShuffleDop(16, 1, 15000000)
-	require.Equal(t, 48, n)
-	n = getShuffleDop(16, 1, 1500000)
-	require.Equal(t, 16, n)
-}
-
 func TestShouldSkipObjByShuffle(t *testing.T) {
 	row := types.RandomRowid()
 	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), false, false, true)
@@ -305,13 +244,355 @@ func TestShouldSkipObjByShuffle(t *testing.T) {
 	ShouldSkipObjByShuffle(rsp, stats)
 }
 
+func TestShouldSkipAppendableObjByShuffleKeepsDefaultLocalBehavior(t *testing.T) {
+	row := types.RandomRowid()
+	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), true, false, true)
+	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
+
+	for cnidx := int32(0); cnidx < 3; cnidx++ {
+		rsp := &engine.RangesShuffleParam{Node: node, CNCNT: 3, CNIDX: cnidx}
+		require.True(t, ShouldSkipObjByShuffle(rsp, stats))
+		rsp.IsLocalCN = true
+		require.False(t, ShouldSkipObjByShuffle(rsp, stats))
+	}
+}
+
+func TestShouldSkipAppendableObjByShuffleCanAssignUniqueObjectOwner(t *testing.T) {
+	row := types.RandomRowid()
+	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), true, false, true)
+	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
+	owners := 0
+
+	for cnidx := int32(0); cnidx < 3; cnidx++ {
+		rsp := &engine.RangesShuffleParam{
+			Node:              node,
+			CNCNT:             3,
+			CNIDX:             cnidx,
+			ShuffleByObjectID: true,
+		}
+		if !ShouldSkipObjByShuffle(rsp, stats) {
+			owners++
+		}
+	}
+	require.Equal(t, 1, owners)
+}
+
+func productionShapedObjectID(rng *rand.Rand, sequence uint64) types.Objectid {
+	var objectID types.Objectid
+
+	// Object IDs use a UUIDv7 segment ID followed by a uint16 object number.
+	// Model slowly changing UUIDv7 timestamps plus an object-number suffix;
+	// the UUIDv7 random bits still vary for every generated ObjectID.
+	timestamp := uint64(1_752_422_400_000) + sequence/4
+	var encodedTimestamp [8]byte
+	binary.BigEndian.PutUint64(encodedTimestamp[:], timestamp)
+	copy(objectID[:6], encodedTimestamp[2:])
+	_, _ = rng.Read(objectID[6:types.UuidSize])
+	objectID[6] = objectID[6]&0x0f | 0x70 // UUID version 7
+	objectID[8] = objectID[8]&0x3f | 0x80 // RFC 4122 variant
+	binary.LittleEndian.PutUint16(objectID[types.UuidSize:], uint16(sequence%4))
+	return objectID
+}
+
+func TestIVFObjectIDHashUsesCompleteObjectIDAndIsDeterministic(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	first := productionShapedObjectID(rng, 17)
+	second := first
+	second[2]++ // SimpleCharHashToRange does not sample this byte.
+
+	const cnCount = uint64(1 << 32)
+	require.Equal(t, xxhash.Sum64(first[:])%cnCount, IVFObjectIDHashToRange(first, cnCount))
+	require.Equal(t, IVFObjectIDHashToRange(first, cnCount), IVFObjectIDHashToRange(first, cnCount))
+	require.NotEqual(t, IVFObjectIDHashToRange(first, cnCount), IVFObjectIDHashToRange(second, cnCount))
+}
+
+func TestIVFObjectIDShuffleAssignsExactlyOneOwner(t *testing.T) {
+	rng := rand.New(rand.NewSource(43))
+	objectID := productionShapedObjectID(rng, 23)
+	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
+
+	owners := 0
+	for cnidx := int32(0); cnidx < 8; cnidx++ {
+		rsp := &engine.RangesShuffleParam{
+			Node:              node,
+			CNCNT:             8,
+			CNIDX:             cnidx,
+			ShuffleByObjectID: true,
+		}
+		stats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, true)
+		if !ShouldSkipObjByShuffle(rsp, stats) {
+			owners++
+		}
+	}
+	require.Equal(t, 1, owners)
+}
+
+func TestIVFObjectIDShuffleUsesSameOwnerForPersistedAndAppendable(t *testing.T) {
+	rng := rand.New(rand.NewSource(44))
+	objectID := productionShapedObjectID(rng, 29)
+	persisted := objectio.NewObjectStatsWithObjectID(&objectID, false, false, true)
+	appendable := objectio.NewObjectStatsWithObjectID(&objectID, true, false, true)
+	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+
+	for cnidx := int32(0); cnidx < 4; cnidx++ {
+		rsp := &engine.RangesShuffleParam{
+			Node:              node,
+			CNCNT:             4,
+			CNIDX:             cnidx,
+			ShuffleByObjectID: true,
+		}
+		require.Equal(t,
+			ShouldSkipObjByShuffle(rsp, persisted),
+			ShouldSkipObjByShuffle(rsp, appendable),
+		)
+	}
+}
+
+func TestIVFObjectIDShuffleDoesNotChangeOrdinaryOwnership(t *testing.T) {
+	objectID := types.Objectid{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}
+	stats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, true)
+	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
+	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+
+	const cnCount = int32(4)
+	wantOwner := int32(SimpleCharHashToRange(objectID[:], uint64(cnCount)))
+	for cnidx := int32(0); cnidx < cnCount; cnidx++ {
+		rsp := &engine.RangesShuffleParam{Node: node, CNCNT: cnCount, CNIDX: cnidx}
+		require.Equal(t, cnidx != wantOwner, ShouldSkipObjByShuffle(rsp, stats))
+	}
+}
+
+func TestIVFObjectIDHashUUIDv7Distribution(t *testing.T) {
+	const objectCount = 16_384
+	rng := rand.New(rand.NewSource(45))
+	objectIDs := make([]types.Objectid, objectCount)
+	for i := range objectIDs {
+		objectIDs[i] = productionShapedObjectID(rng, uint64(i))
+	}
+
+	for _, cnCount := range []uint64{2, 3, 4, 8} {
+		t.Run(fmt.Sprintf("%d-cns", cnCount), func(t *testing.T) {
+			counts := make([]int, cnCount)
+			for _, objectID := range objectIDs {
+				counts[IVFObjectIDHashToRange(objectID, cnCount)]++
+			}
+
+			expected := float64(objectCount) / float64(cnCount)
+			for cnidx, count := range counts {
+				deviation := float64(count)/expected - 1
+				require.InDeltaf(t, 0, deviation, 0.0625,
+					"CN %d owns %d objects; counts=%v", cnidx, count, counts)
+			}
+		})
+	}
+}
+
+func TestDetermineShuffleForDedupJoin(t *testing.T) {
+	cases := []struct {
+		name              string
+		dedupCtx          *plan.DedupJoinCtx
+		onDuplicateAction plan.Node_OnDuplicateAction
+		keyType           types.T
+		wantShuffle       bool
+	}{
+		{
+			name:        "plain_dedup_join_large_build_side_can_shuffle",
+			dedupCtx:    &plan.DedupJoinCtx{},
+			keyType:     types.T_int64,
+			wantShuffle: true,
+		},
+		{
+			name:     "float32_key_stays_unshuffled",
+			dedupCtx: &plan.DedupJoinCtx{},
+			keyType:  types.T_float32,
+		},
+		{
+			name:     "float64_key_stays_unshuffled",
+			dedupCtx: &plan.DedupJoinCtx{},
+			keyType:  types.T_float64,
+		},
+		{
+			name: "old_col_list_disables_shuffle",
+			dedupCtx: &plan.DedupJoinCtx{
+				OldColList: []plan.ColRef{{RelPos: 1, ColPos: 0}},
+			},
+			keyType: types.T_int64,
+		},
+		{
+			name: "ignore_old_col_list_disables_shuffle",
+			dedupCtx: &plan.DedupJoinCtx{
+				OldColList: []plan.ColRef{{RelPos: 1, ColPos: 0}},
+			},
+			onDuplicateAction: plan.Node_IGNORE,
+			keyType:           types.T_int64,
+		},
+		{
+			name: "old_col_capture_list_disables_shuffle",
+			dedupCtx: &plan.DedupJoinCtx{
+				OldColCaptureList: []plan.OldColCapture{
+					{
+						BuildPlaceholder: plan.ColRef{RelPos: 1, ColPos: 0},
+						ProbeSource:      plan.ColRef{RelPos: 2, ColPos: 0},
+					},
+				},
+			},
+			keyType: types.T_int64,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			builder := &QueryBuilder{
+				qry: &plan.Query{
+					Nodes: []*plan.Node{
+						{Stats: DefaultStats()},
+						{Stats: &plan.Stats{Outcnt: 320001, HashmapStats: &plan.HashMapStats{}}},
+					},
+				},
+			}
+			node := &plan.Node{
+				NodeType:          plan.Node_JOIN,
+				JoinType:          plan.Node_DEDUP,
+				Children:          []int32{0, 1},
+				OnList:            []*plan.Expr{makeRightDedupEquality(c.keyType)},
+				OnDuplicateAction: c.onDuplicateAction,
+				DedupJoinCtx:      c.dedupCtx,
+				Stats:             DefaultStats(),
+			}
+
+			determineShuffleForJoin(node, builder)
+
+			require.Equal(t, c.wantShuffle, node.Stats.HashmapStats.Shuffle)
+			if c.wantShuffle {
+				require.Equal(t, int32(0), node.Stats.HashmapStats.ShuffleColIdx)
+				require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
+			} else {
+				require.Equal(t, int32(-1), node.Stats.HashmapStats.ShuffleColIdx)
+			}
+		})
+	}
+}
+
+func TestDetermineShuffleForJoinNDVGuard(t *testing.T) {
+	left := &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{1},
+		Stats:       &plan.Stats{Outcnt: 1000, HashmapStats: &plan.HashMapStats{}},
+	}
+	right := &plan.Node{
+		NodeType:    plan.Node_SINK_SCAN,
+		BindingTags: []int32{2},
+		Stats:       &plan.Stats{Outcnt: 10_000_000, HashmapStats: &plan.HashMapStats{}},
+	}
+	leftKey := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+	}
+	rightKey := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 0}},
+	}
+	cond, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{leftKey, rightKey})
+	require.NoError(t, err)
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{left, right}}}
+	newJoin := func(ndv float64) *plan.Node {
+		joinCond := DeepCopyExpr(cond)
+		joinCond.Ndv = ndv
+		return &plan.Node{
+			NodeType: plan.Node_JOIN,
+			JoinType: plan.Node_INNER,
+			Children: []int32{0, 1},
+			OnList:   []*plan.Expr{joinCond},
+			Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+				HashmapSize: 10_000_000,
+			}},
+		}
+	}
+
+	unknownNDVJoin := newJoin(-1)
+	determineShuffleForJoin(unknownNDVJoin, builder)
+	require.True(t, unknownNDVJoin.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(0), unknownNDVJoin.Stats.HashmapStats.ShuffleColIdx)
+	require.Equal(t, plan.ShuffleType_Hash, unknownNDVJoin.Stats.HashmapStats.ShuffleType)
+
+	lowNDVJoin := newJoin(10)
+	determineShuffleForJoin(lowNDVJoin, builder)
+	require.False(t, lowNDVJoin.Stats.HashmapStats.Shuffle)
+}
+
+func TestDetermineShuffleForLatePlanStep(t *testing.T) {
+	// IVF maintenance also contains internal scans without binding tags. The
+	// post-createQuery shuffle pass must recognize its local RelPos 0/1 join
+	// condition while tolerating unrelated untagged scans.
+	ivfScanWithoutBindingTag := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		}},
+		Stats: &plan.Stats{Outcnt: 1000, HashmapStats: &plan.HashMapStats{}},
+	}
+	left := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{},
+		Stats:    &plan.Stats{Outcnt: 1000, HashmapStats: &plan.HashMapStats{}},
+	}
+	right := &plan.Node{
+		NodeType: plan.Node_SINK_SCAN,
+		Stats:    &plan.Stats{Outcnt: 10_000_000, HashmapStats: &plan.HashMapStats{}},
+	}
+	cond, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}}},
+	})
+	require.NoError(t, err)
+	cond.Ndv = -1
+	join := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_INNER,
+		Children: []int32{0, 1},
+		OnList:   []*plan.Expr{cond},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			HashmapSize: 10_000_000,
+		}},
+	}
+	builder := NewQueryBuilder(plan.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder.qry = &plan.Query{
+		Nodes: []*plan.Node{left, right, join, ivfScanWithoutBindingTag},
+		Steps: []int32{3, 2},
+	}
+
+	builder.determineShuffleForDMLSteps()
+
+	require.True(t, join.Stats.HashmapStats.Shuffle)
+	require.Len(t, join.RuntimeFilterProbeList, 1)
+	require.Len(t, join.RuntimeFilterBuildList, 1)
+	require.Equal(t, join.RuntimeFilterProbeList[0].Tag, join.RuntimeFilterBuildList[0].Tag)
+	require.Nil(t, join.RuntimeFilterProbeList[0].Expr)
+	require.Nil(t, join.RuntimeFilterBuildList[0].Expr)
+
+	// A same-side equality remains non-equi for join planning after remapping.
+	sameSideCond, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+	})
+	require.NoError(t, err)
+	join.OnList = []*plan.Expr{sameSideCond}
+	join.Stats.HashmapStats.Shuffle = false
+	join.RuntimeFilterProbeList = nil
+	join.RuntimeFilterBuildList = nil
+	builder.determineShuffleForDMLSteps()
+	require.False(t, join.Stats.HashmapStats.Shuffle)
+	require.Empty(t, join.RuntimeFilterProbeList)
+	require.Empty(t, join.RuntimeFilterBuildList)
+}
+
 func TestGetRangeShuffleIndexForZM(t *testing.T) {
 	zm := index2.NewZM(types.T_datetime, 0)
-	defer func() {
-		r := recover()
-		fmt.Println("panic recover", r)
-	}()
-	GetRangeShuffleIndexForZM(0, 1000, zm, 4)
+	require.PanicsWithValue(t, "unsupported shuffle type!", func() {
+		GetRangeShuffleIndexForZM(0, 1000, zm, 4)
+	})
 }
 
 func TestShuffleByZonemap(t *testing.T) {

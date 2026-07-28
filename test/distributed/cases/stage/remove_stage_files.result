@@ -1,0 +1,24 @@
+create stage remove_stage_files_stage url = 'file://$resources/into_outfile/';
+select save_file(cast('stage://remove_stage_files_stage/remove_stage_files/remove_case_1.txt' as datalink), 'alpha');
+➤ save_file(cast(stage://remove_stage_files_stage/remove_stage_files/remove_case_1.txt as datalink), alpha)[-5,64,0]  𝄀
+5
+select save_file(cast('stage://remove_stage_files_stage/remove_stage_files/remove_case_2.txt' as datalink), 'beta');
+➤ save_file(cast(stage://remove_stage_files_stage/remove_stage_files/remove_case_2.txt as datalink), beta)[-5,64,0]  𝄀
+4
+select save_file(cast('stage://remove_stage_files_stage/remove_stage_files/remove_keep.log' as datalink), 'keep');
+➤ save_file(cast(stage://remove_stage_files_stage/remove_stage_files/remove_keep.log as datalink), keep)[-5,64,0]  𝄀
+4
+remove files from stage 'stage://remove_stage_files_stage/remove_stage_files/remove_case_1.txt';
+select load_file(cast('stage://remove_stage_files_stage/remove_stage_files/remove_case_1.txt' as datalink));
+file remove_case_1.txt is not found
+remove files from stage 'stage://remove_stage_files_stage/remove_stage_files/remove_case_*.txt';
+select load_file(cast('stage://remove_stage_files_stage/remove_stage_files/remove_case_2.txt' as datalink));
+file remove_case_2.txt is not found
+select load_file(cast('stage://remove_stage_files_stage/remove_stage_files/remove_keep.log' as datalink));
+➤ load_file(cast(stage://remove_stage_files_stage/remove_stage_files/remove_keep.log as datalink))[12,0,0]  𝄀
+keep
+remove files from stage if exists 'stage://remove_stage_files_stage/remove_stage_files/no_match_*.txt';
+remove files from stage 'stage://remove_stage_files_stage/remove_stage_files/no_match_*.txt';
+file stage://remove_stage_files_stage/remove_stage_files/no_match_*.txt is not found
+remove files from stage if exists 'stage://remove_stage_files_stage/remove_stage_files/remove_keep.log';
+drop stage remove_stage_files_stage;

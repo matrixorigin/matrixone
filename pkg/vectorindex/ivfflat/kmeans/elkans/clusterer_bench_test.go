@@ -15,7 +15,8 @@
 package elkans
 
 import (
-	"math/rand"
+	"context"
+	"math/rand/v2"
 	"strconv"
 	"testing"
 
@@ -39,6 +40,7 @@ func Benchmark_kmeans(b *testing.B) {
 	//	Level:  "debug",
 	//	Format: "console",
 	//})
+	ctx := context.Background()
 
 	rowCnt := 1000_000
 	k := 1000
@@ -53,7 +55,7 @@ func Benchmark_kmeans(b *testing.B) {
 		clusterRand, _ := NewKMeans(data, k,
 			500, 0.01,
 			metric.Metric_L2Distance, kmeans.Random, true, 0)
-		_, err := clusterRand.Cluster()
+		_, err := clusterRand.Cluster(ctx)
 		if err != nil {
 			panic(err)
 		}
@@ -71,7 +73,7 @@ func Benchmark_kmeans(b *testing.B) {
 		kmeansPlusPlus, _ := NewKMeans(data, k,
 			500, 0.01,
 			metric.Metric_L2Distance, kmeans.KmeansPlusPlus, true, 0)
-		_, err := kmeansPlusPlus.Cluster()
+		_, err := kmeansPlusPlus.Cluster(ctx)
 		if err != nil {
 			panic(err)
 		}
@@ -85,7 +87,7 @@ func Benchmark_kmeans(b *testing.B) {
 }
 
 func populateRandData(rowCnt int, dim int, vecs [][]float64) {
-	random := rand.New(rand.NewSource(kmeans.DefaultRandSeed))
+	random := rand.New(rand.NewPCG(uint64(kmeans.DefaultRandSeed), 0))
 	for r := 0; r < rowCnt; r++ {
 		vecs[r] = make([]float64, dim)
 		for c := 0; c < dim; c++ {

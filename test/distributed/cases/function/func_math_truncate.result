@@ -1,0 +1,73 @@
+SELECT TRUNCATE(4.567, 2) AS result1;
+result1
+4.560
+SELECT TRUNCATE(4.567, 0) AS result2;
+result2
+4.000
+SELECT TRUNCATE(-4.567, 2) AS result3;
+result3
+-4.560
+SELECT TRUNCATE(4.567, 1) AS one_decimal;
+one_decimal
+4.500
+SELECT TRUNCATE(4.567, 3) AS three_decimal;
+three_decimal
+4.567
+SELECT TRUNCATE(-4.567, 0) AS negative_zero;
+negative_zero
+-4.000
+SELECT TRUNCATE(-4.567, 1) AS negative_one;
+negative_one
+-4.500
+SELECT TRUNCATE(0.5, 0) AS zero_point_five;
+zero_point_five
+0.0
+SELECT TRUNCATE(-0.5, 0) AS negative_zero_point_five;
+negative_zero_point_five
+0.0
+SELECT TRUNCATE(1.999, 2) AS one_nine_nine;
+one_nine_nine
+1.990
+SELECT TRUNCATE(-1.999, 2) AS negative_one_nine_nine;
+negative_one_nine_nine
+-1.990
+SELECT TRUNCATE(10.123456, 3) AS large_number;
+large_number
+10.123000
+SELECT TRUNCATE(-10.123456, 3) AS negative_large_number;
+negative_large_number
+-10.123000
+SELECT TRUNCATE(NULL, 2) AS null_result;
+null_result
+null
+SELECT TRUNCATE(4.567, NULL) AS null_digits;
+invalid argument the second argument of the truncate, bad value not const
+SELECT TRUNCATE(CAST(4.567 AS FLOAT), 2) AS float_truncate;
+float_truncate
+4.56
+SELECT TRUNCATE(CAST(4.567 AS DOUBLE), 2) AS double_truncate;
+double_truncate
+4.56
+CREATE TABLE t1(a DOUBLE, b INT);
+INSERT INTO t1 VALUES (4.567, 2), (4.567, 0), (-4.567, 2), (10.123456, 3), (-10.123456, 3);
+SELECT a, b, TRUNCATE(a, b) AS truncated FROM t1;
+invalid argument the second argument of the truncate, bad value not const
+DROP TABLE t1;
+CREATE TABLE t1(a DOUBLE);
+INSERT INTO t1 VALUES (4.567), (4.123), (-4.567), (10.999);
+SELECT * FROM t1 WHERE TRUNCATE(a, 0) = 4;
+a
+4.567
+4.123
+SELECT * FROM t1 WHERE TRUNCATE(a, 1) > 4.5;
+a
+10.999
+DROP TABLE t1;
+CREATE TABLE t1(a DOUBLE);
+INSERT INTO t1 VALUES (4.567), (4.123), (-4.567);
+SELECT a, TRUNCATE(a, 2) AS truncated, ROUND(a, 2) AS rounded FROM t1;
+a    truncated    rounded
+4.567    4.56    4.57
+4.123    4.12    4.12
+-4.567    -4.56    -4.57
+DROP TABLE t1;

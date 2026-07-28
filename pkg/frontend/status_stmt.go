@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"go.uber.org/zap"
@@ -51,6 +50,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			// open new file
 			ep.DefaultBufSize = getPu(ses.GetService()).SV.ExportDataDefaultFlushSize
 			initExportFileParam(ep, mrs)
+			ep.mrs = mrs
+			ep.ctx = execCtx.reqCtx
+			ep.service = ses.GetService()
 			if err = openNewFile(execCtx.reqCtx, ep, mrs); err != nil {
 				return
 			}
@@ -62,7 +64,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				Producing the data row and sending the data row
 			*/
 			// todo: add trace
-			if _, err = execCtx.runner.Run(0); err != nil {
+			// Keep runResult so ROW_COUNT()/the OK packet report this statement's
+			// affected rows instead of leaking the previous statement's value.
+			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
 			}
 
@@ -75,8 +79,12 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				return
 			}
 
-			if err = Close(ep); err != nil {
-				return
+			// For parquet format, file is written in exportAllDataFromBatches
+			// No need to close pipe-based writer
+			if ep.getExportFormat() != "parquet" {
+				if err = Close(ep); err != nil {
+					return
+				}
 			}
 
 		} else {
@@ -90,13 +98,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
 			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
-		}
-
-		// execute insert sql if this is a `create table as select` stmt
-		if st.IsAsSelect {
-			insertSql := execCtx.cw.Plan().GetDdl().GetDefinition().(*plan.DataDefinition_CreateTable).CreateTable.CreateAsSelectSql
-			ses.createAsSelectSql = insertSql
-			return
 		}
 
 		// Start the dynamic table daemon task
@@ -119,7 +120,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		case *tree.DropTable, *tree.DropDatabase:
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st); err != nil {
+				return
+			}
 
 		case *tree.DropIndex, *tree.DropView, *tree.DropSequence,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
@@ -191,7 +194,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		rspLen = execCtx.runResult.AffectRows
 	}
 
-	switch st := execCtx.stmt.(type) {
+	switch execCtx.stmt.(type) {
 	case *tree.Select:
 		//select ... into ...
 		if len(execCtx.proc.GetSessionInfo().SeqAddValues) != 0 {
@@ -232,10 +235,6 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			}
 		}
 	case *tree.CreateTable:
-		// skip create table as select
-		if st.IsAsSelect {
-			return nil
-		}
 		res := setResponse(ses, execCtx.isLastStmt, rspLen)
 		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
@@ -257,6 +256,10 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}
+		if len(execCtx.proc.GetSessionInfo().SeqAddValues) != 0 {
+			ses.AddSeqValues(execCtx.proc)
+		}
+		ses.SetSeqLastValue(execCtx.proc)
 
 		isIssue3482 := false
 		localFileName := ""

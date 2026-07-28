@@ -17,14 +17,17 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -41,6 +44,8 @@ import (
 // MaxRpcTime is a default timeout time to rpc context if user never set this deadline.
 // this is just a number I casually wrote, the purpose of doing this is that any message sent through rpc need a clear deadline.
 const MaxRpcTime = time.Hour * 24
+
+var pipelineStreamFinishClientTimeout = 30 * time.Second
 
 // remoteRun sends a scope to remote node for running.
 // and keep receiving the back results.
@@ -63,10 +68,16 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
-	var withoutOutput bool
-	scopeEncodeData, withoutOutput, processEncodeData, err = prepareRemoteRunSendingData(c.sql, s)
+	var withoutOutput, folded bool
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(c.sql, s, c.proc)
 	if err != nil {
 		return nil, err
+	}
+	if folded {
+		getLogger(s.Proc.GetService()).
+			Debug("fold variable expressions before remote run",
+				zap.String("local-address", c.addr),
+				zap.String("remote-address", s.NodeInfo.Addr))
 	}
 
 	// generate a new sender to do send work.
@@ -95,8 +106,6 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return sender, err
 	}
 
-	sender.safeToClose = false
-	sender.alreadyClose = false
 	err = receiveMessageFromCnServer(s, withoutOutput, sender)
 	return sender, err
 }
@@ -145,7 +154,7 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 					if _, ok := regs[t.LocalRegs[i]]; !ok {
 						s.Proc.Infof(
 							s.Proc.Ctx,
-							"txn id : %s, the pipeline %p convert to execute locally because it holds a dispatch operator will send data to other local pipeline tree.",
+							"txn id : %s, the pipeline %p cannot execute remotely because its dispatch operator targets another local pipeline tree.",
 							s.Proc.GetTxnOperator().Txn().ID, s)
 
 						return false
@@ -158,7 +167,7 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 				if _, ok := regs[t.Reg]; !ok {
 					s.Proc.Infof(
 						s.Proc.Ctx,
-						"txn id : %s, the pipeline %p convert to execute locally because it holds a connector operator will send data to other local pipeline tree.",
+						"txn id : %s, the pipeline %p cannot execute remotely because its connector targets another local pipeline tree.",
 						s.Proc.GetTxnOperator().Txn().ID, s)
 
 					return false
@@ -171,41 +180,24 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 	return true
 }
 
-func prepareRemoteRunSendingData(sqlStr string, s *Scope) (scopeData []byte, withoutOutput bool, processData []byte, err error) {
-	// if simpleRun is true, it indicates that this pipeline will not produce any output.
-	withoutOutput = true
-
-	// if the last operator is a sender operator, we need to keep it in local for sending batch to its receivers correctly.
-	if lastOpType := s.RootOp.OpType(); lastOpType == vm.Connector || lastOpType == vm.Dispatch {
-		withoutOutput = false
-
-		originRoot := s.RootOp
-		if originRoot.GetOperatorBase().NumChildren() == 0 {
-			s.RootOp = nil
-		} else {
-			s.RootOp = originRoot.GetOperatorBase().GetChildren(0)
-		}
-
-		// todo: the following code to set children to nil must be a bug.
-		// 		but I kept it here because there will be an operator release twice bug once I remove this code.
-		//		I cannot find it why, maybe two scopes hold the same operator list pointer.
-		originRoot.GetOperatorBase().SetChildren(nil)
-		defer func() {
-			s.doSetRootOperator(originRoot)
-		}()
+func prepareRemoteRunSendingData(sqlStr string, s *Scope, proc *process.Process) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
+	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
+	encodedScope, folded, err = foldVarExprsInRemoteRunScope(encodedScope, proc)
+	if err != nil {
+		return nil, false, nil, false, err
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeScope(s); err != nil {
-		return nil, false, nil, err
+	if scopeData, err = encodeScope(encodedScope); err != nil {
+		return nil, false, nil, false, err
 	}
 
 	// Encode the Process related information.
 	if processData, err = encodeProcessInfo(s.Proc, sqlStr); err != nil {
-		return nil, false, nil, err
+		return nil, false, nil, false, err
 	}
 
-	return scopeData, withoutOutput, processData, nil
+	return scopeData, withoutOutput, processData, folded, nil
 }
 
 func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSenderOnClient) error {
@@ -260,7 +252,7 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		connectorOperator.GetIdx(), connectorOperator.IsFirst, connectorOperator.IsLast, "connector")
 
 	mp := s.Proc.Mp()
-	nextChannel := s.RootOp.(*connector.Connector).Reg.Ch2
+	nextReg := s.RootOp.(*connector.Connector).Reg
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
@@ -268,7 +260,10 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		}
 		connectorAnalyze.Network(bat)
 
-		nextChannel <- process.NewPipelineSignalToDirectly(bat, nil, mp)
+		var receiverDone bool
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil || receiverDone {
+			return err
+		}
 	}
 }
 
@@ -282,20 +277,20 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	if err = fakeValueScanOperator.Prepare(s.Proc); err != nil {
 		return err
 	}
-
-	oldChildren := arg.Children
-	arg.Children = nil
-	arg.AppendChild(fakeValueScanOperator)
+	dispatchRunner := buildRemoteDispatchReceiverRoot(arg, fakeValueScanOperator)
+	dispatchRunner.AdoptCleanupState(arg)
 	defer func() {
-		arg.Children = oldChildren
+		arg.AdoptCleanupState(dispatchRunner)
+		dispatchRunner.Release()
+		fakeValueScanOperator.Free(s.Proc, err != nil, err)
 		fakeValueScanOperator.Batchs = nil
 		fakeValueScanOperator.Release()
 	}()
 
-	if err = s.RootOp.Prepare(s.Proc); err != nil {
+	if err = dispatchRunner.Prepare(s.Proc); err != nil {
 		return err
 	}
-	dispatchAnalyze := s.RootOp.GetOperatorBase().OpAnalyzer
+	dispatchAnalyze := dispatchRunner.GetOperatorBase().OpAnalyzer
 
 	mp := s.Proc.Mp()
 	for {
@@ -307,7 +302,7 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 		dispatchAnalyze.Network(bat)
 		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
-		result, errCall := vm.Exec(s.RootOp, s.Proc)
+		result, errCall := vm.Exec(dispatchRunner, s.Proc)
 		bat.Clean(mp)
 		if errCall != nil || result.Status == vm.ExecStop {
 			return errCall
@@ -315,13 +310,49 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	}
 }
 
+func getScopeForRemoteRunEncoding(s *Scope) (*Scope, bool) {
+	withoutOutput := true
+	if s.RootOp == nil {
+		return s, withoutOutput
+	}
+
+	if lastOpType := s.RootOp.OpType(); lastOpType == vm.Connector || lastOpType == vm.Dispatch {
+		withoutOutput = false
+		copied := *s
+		if s.RootOp.GetOperatorBase().NumChildren() == 0 {
+			copied.RootOp = nil
+		} else {
+			copied.RootOp = s.RootOp.GetOperatorBase().GetChildren(0)
+		}
+		return &copied, withoutOutput
+	}
+	return s, withoutOutput
+}
+
+func buildRemoteDispatchReceiverRoot(arg *dispatch.Dispatch, child vm.Operator) *dispatch.Dispatch {
+	copied := dispatch.NewArgument()
+	copied.IsSink = arg.IsSink
+	copied.RecSink = arg.RecSink
+	copied.RecCTE = arg.RecCTE
+	copied.ShuffleType = arg.ShuffleType
+	copied.FuncId = arg.FuncId
+	copied.LocalRegs = arg.LocalRegs
+	copied.RemoteRegs = arg.RemoteRegs
+	copied.ShuffleRegIdxLocal = arg.ShuffleRegIdxLocal
+	copied.ShuffleRegIdxRemote = arg.ShuffleRegIdxRemote
+	copied.OperatorBase.OperatorInfo = arg.OperatorBase.OperatorInfo
+	copied.AppendChild(child)
+	return copied
+}
+
 // messageSenderOnClient support a series of methods
 // to do sending message and receiving its returns.
 type messageSenderOnClient struct {
 	// sender's context
 	// and cancel function (it exists if this context was recreated by us).
-	ctx       context.Context
-	ctxCancel context.CancelFunc
+	ctx                context.Context
+	ctxCancel          context.CancelFunc
+	useInternalTimeout bool
 
 	mp *mpool.MPool
 
@@ -339,8 +370,26 @@ type messageSenderOnClient struct {
 	// or
 	// 2. we have never sent a message in succeed.
 	safeToClose bool
-	// alreadyClose should be true once we get a stream closed signal.
-	alreadyClose bool
+	// receiveClosed records a terminal signal from the receive channel. It
+	// poisons backend reuse, but does not release the locally owned morpc Stream;
+	// close must still call Stream.Close.
+	receiveClosed      bool
+	reuseEligible      bool
+	terminalNegotiated bool
+	expectedEnd        pipeline.Method
+	stateMu            sync.Mutex
+	closeOnce          sync.Once
+	requestFinishAck   bool
+	// allowCleanupCancellation is set after successful local cleanup. Pipeline
+	// and query contexts may be intentionally cancelled by that cleanup; FIN
+	// then runs on its own bounded context. Cancellation before this transition
+	// still poisons reuse.
+	allowCleanupCancellation bool
+
+	// gaugeDecOnce ensures PipelineMessageSenderGauge.Dec() is called at most once when close() runs.
+	gaugeDecOnce sync.Once
+	terminalMu   sync.Mutex
+	terminalSeen bool
 }
 
 func newMessageSenderOnClient(
@@ -350,31 +399,79 @@ func newMessageSenderOnClient(
 	mp *mpool.MPool,
 	analyzeModule *AnalyzeModule,
 ) (*messageSenderOnClient, error) {
-	streamSender, err := cnclient.GetPipelineClient(sid).NewStream(toAddr)
+	streamCtx := ctx
+	var streamCtxCancel context.CancelFunc
+	useInternalTimeout := false
+	if _, ok := ctx.Deadline(); !ok {
+		streamCtx, streamCtxCancel = context.WithTimeoutCause(ctx, MaxRpcTime, moerr.CauseNewMessageSenderOnClient)
+		useInternalTimeout = true
+	}
+	cleanupStreamCtx := func() {
+		if streamCtxCancel != nil {
+			streamCtxCancel()
+		}
+	}
+
+	if moruntime.ServiceRuntime(sid) == nil {
+		cleanupStreamCtx()
+		return nil, moerr.NewInternalErrorNoCtx("service runtime is not initialized")
+	}
+	pipelineClient := cnclient.GetPipelineClient(sid)
+	if pipelineClient == nil {
+		cleanupStreamCtx()
+		return nil, moerr.NewInternalErrorNoCtx("pipeline client is not initialized")
+	}
+
+	streamSender, err := pipelineClient.NewStream(streamCtx, toAddr)
 	if err != nil {
+		err = moerr.AttachCause(streamCtx, err)
+		cleanupStreamCtx()
 		return nil, err
+	}
+	if streamSender == nil {
+		cleanupStreamCtx()
+		return nil, moerr.NewInternalErrorNoCtx("pipeline stream is not initialized")
 	}
 
 	sender := &messageSenderOnClient{
-		safeToClose:  true,
-		alreadyClose: false,
-		mp:           mp,
-		anal:         analyzeModule,
-		streamSender: streamSender,
-	}
-
-	if _, ok := ctx.Deadline(); !ok {
-		sender.ctx, sender.ctxCancel = context.WithTimeoutCause(ctx, MaxRpcTime, moerr.CauseNewMessageSenderOnClient)
-	} else {
-		sender.ctx = ctx
+		ctx:                streamCtx,
+		ctxCancel:          streamCtxCancel,
+		useInternalTimeout: useInternalTimeout,
+		safeToClose:        true,
+		receiveClosed:      false,
+		mp:                 mp,
+		anal:               analyzeModule,
+		streamSender:       streamSender,
+		requestFinishAck:   pipelineStreamReuseEnabled(sid),
 	}
 
 	if sender.receiveCh == nil {
 		sender.receiveCh, err = sender.streamSender.Receive()
 	}
 
-	v2.PipelineMessageSenderCounter.Inc()
-	return sender, moerr.AttachCause(ctx, err)
+	// Only Inc() when we return a valid sender that the caller will eventually close();
+	// when Receive() fails, close the stream here because remoteRun returns nil and never calls close().
+	if err != nil {
+		err = moerr.AttachCause(streamCtx, err)
+		cleanupStreamCtx()
+		_ = streamSender.Close(true)
+		return nil, err
+	}
+	v2.PipelineMessageSenderGauge.Inc()
+	return sender, nil
+}
+
+func pipelineStreamReuseEnabled(serviceID string) bool {
+	runtime := moruntime.ServiceRuntime(serviceID)
+	if runtime == nil {
+		return true
+	}
+	value, ok := runtime.GetGlobalVariables(moruntime.EnablePipelineStreamReuse)
+	if !ok {
+		return true
+	}
+	enabled, ok := value.(bool)
+	return ok && enabled
 }
 
 func (sender *messageSenderOnClient) sendPipeline(
@@ -388,8 +485,15 @@ func (sender *messageSenderOnClient) sendPipeline(
 		message.SetData(scopeData)
 		message.SetProcData(procData)
 		message.SetSid(pipeline.Status_Last)
+		if sender.requestFinishAck {
+			message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
+		}
 		message.NeedNotReply = noDataBack
-		return sender.streamSender.Send(sender.ctx, message)
+		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
+			return err
+		}
+		sender.markStreamActive(pipeline.Method_PipelineMessage)
+		return nil
 	}
 
 	start := 0
@@ -409,13 +513,56 @@ func (sender *messageSenderOnClient) sendPipeline(
 			message.SetSid(pipeline.Status_WaitingNext)
 		}
 		message.NeedNotReply = noDataBack
+		if sender.requestFinishAck {
+			message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
+		}
 
 		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
 		}
 		start = end
 	}
+	sender.markStreamActive(pipeline.Method_PipelineMessage)
 	return nil
+}
+
+func (sender *messageSenderOnClient) markStreamActive(method pipeline.Method) {
+	sender.stateMu.Lock()
+	defer sender.stateMu.Unlock()
+	sender.safeToClose = false
+	sender.receiveClosed = false
+	sender.reuseEligible = false
+	sender.terminalNegotiated = false
+	sender.allowCleanupCancellation = false
+	sender.expectedEnd = method
+}
+
+func (sender *messageSenderOnClient) markReceiveClosed() {
+	sender.stateMu.Lock()
+	defer sender.stateMu.Unlock()
+	sender.safeToClose = true
+	sender.receiveClosed = true
+	sender.reuseEligible = false
+	sender.terminalNegotiated = false
+}
+
+func (sender *messageSenderOnClient) markTerminal(message *pipeline.Message, successful bool) {
+	sender.stateMu.Lock()
+	defer sender.stateMu.Unlock()
+	sender.safeToClose = true
+	sender.terminalNegotiated = message.GetCmd() == sender.expectedEnd &&
+		message.GetAcceptedTeardownMode() == pipeline.StreamTeardownMode_FinishAck
+	sender.reuseEligible = sender.terminalNegotiated &&
+		(successful || sender.allowCleanupCancellation)
+}
+
+func (sender *messageSenderOnClient) prepareForLocalCleanup() {
+	sender.stateMu.Lock()
+	defer sender.stateMu.Unlock()
+	sender.allowCleanupCancellation = true
+	if sender.terminalNegotiated {
+		sender.reuseEligible = true
+	}
 }
 
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
@@ -425,8 +572,7 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
-			sender.safeToClose = true
-			sender.alreadyClose = true
+			sender.markReceiveClosed()
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
 		return val, nil
@@ -444,27 +590,24 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			return nil, false, err
 		}
 		if val == nil {
+			if ctxErr := sender.contextDoneError(); ctxErr != nil {
+				return nil, false, ctxErr
+			}
 			return nil, true, nil
 		}
 
 		m = val.(*pipeline.Message)
+		if m.IsEndMessage() && len(m.GetAnalyse()) > 0 {
+			if err = sender.dealRemoteTerminal(m.GetAnalyse()); err != nil {
+				return nil, false, err
+			}
+		}
 		if info, get := m.TryToGetMoErr(); get {
-			sender.safeToClose = true
+			sender.markTerminal(m, false)
 			return nil, false, info
 		}
 		if m.IsEndMessage() {
-			sender.safeToClose = true
-
-			anaData := m.GetAnalyse()
-			if len(anaData) > 0 {
-				var p models.PhyPlan
-				err = json.Unmarshal(anaData, &p)
-				if err != nil {
-					return nil, false, err
-				}
-
-				sender.dealRemoteAnalysis(p)
-			}
+			sender.markTerminal(m, true)
 			return nil, true, nil
 		}
 
@@ -488,9 +631,56 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 	}
 }
 
+func (sender *messageSenderOnClient) contextDoneError() error {
+	if sender.ctx == nil {
+		return nil
+	}
+	err := sender.ctx.Err()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) && sender.useInternalTimeout {
+		return moerr.NewRPCTimeout(sender.ctx)
+	}
+	return moerr.NewQueryInterrupted(sender.ctx)
+}
+
+func forwardRemoteBatchWithContext(
+	sender *messageSenderOnClient,
+	nextReg *process.WaitRegister,
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) (receiverDone bool, err error) {
+	if nextReg == nil || nextReg.Ch2 == nil {
+		bat.Clean(mp)
+		return true, moerr.NewInternalErrorNoCtx("remote batch forward target is nil")
+	}
+
+	ctx := context.TODO()
+	if sender == nil || sender.ctx == nil {
+		if nextReg.SendDataDirect(ctx, bat, mp) {
+			return false, nil
+		}
+		bat.Clean(mp)
+		return true, nil
+	}
+
+	if nextReg.SendDataDirect(sender.ctx, bat, mp) {
+		return false, nil
+	}
+	bat.Clean(mp)
+	if err := sender.contextDoneError(); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 // no matter how we stop the remote-run, we should get the final remote cost here.
 func (sender *messageSenderOnClient) waitingTheStopResponse() {
-	if sender.alreadyClose || sender.safeToClose {
+	sender.stateMu.Lock()
+	receiveClosed, safeToClose := sender.receiveClosed, sender.safeToClose
+	sender.stateMu.Unlock()
+	if receiveClosed || safeToClose {
 		return
 	}
 
@@ -510,15 +700,21 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 		select {
 		case val, ok := <-sender.receiveCh:
 			if !ok || val == nil {
-				sender.safeToClose = true
-				sender.alreadyClose = true
+				sender.markReceiveClosed()
 				return
 			}
 
 			message := val.(*pipeline.Message)
 
 			if message.IsEndMessage() || len(message.GetErr()) > 0 {
-				sender.safeToClose = true
+				if len(message.GetAnalyse()) > 0 {
+					_ = sender.dealRemoteTerminal(message.GetAnalyse())
+				}
+				// StopSending is also a clean teardown when the original server
+				// worker answers with its negotiated terminal response. The later FIN
+				// still waits for the same server cleanup barrier. Unnegotiated or
+				// mismatched terminal responses remain poisoned.
+				sender.markTerminal(message, message.IsEndMessage())
 				// in fact, we should deal the cost analysis information here.
 				return
 			}
@@ -526,6 +722,54 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 		case <-maxWaitingTime.Done():
 			return
 		}
+	}
+}
+
+func generatePipelineStreamFinishMessage(streamID uint64) *pipeline.Message {
+	message := cnclient.AcquireMessage()
+	message.SetMessageType(pipeline.Method_PipelineStreamFinish)
+	message.SetSid(pipeline.Status_Last)
+	message.SetID(streamID)
+	message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
+	return message
+}
+
+func (sender *messageSenderOnClient) finishStreamForReuse() bool {
+	var senderDone <-chan struct{}
+	sender.stateMu.Lock()
+	allowCleanupCancellation := sender.allowCleanupCancellation
+	sender.stateMu.Unlock()
+	cancelCtx := sender.ctx
+	if allowCleanupCancellation {
+		cancelCtx = nil
+	}
+	if cancelCtx != nil && cancelCtx.Err() != nil {
+		return false
+	}
+	if cancelCtx != nil {
+		senderDone = cancelCtx.Done()
+	}
+	finishCtx, cancel := context.WithTimeout(context.Background(), pipelineStreamFinishClientTimeout)
+	defer cancel()
+	streamID := sender.streamSender.ID()
+	if err := sender.streamSender.Send(finishCtx, generatePipelineStreamFinishMessage(streamID)); err != nil {
+		return false
+	}
+	select {
+	case value, ok := <-sender.receiveCh:
+		if !ok || value == nil {
+			sender.markReceiveClosed()
+			return false
+		}
+		message, ok := value.(*pipeline.Message)
+		return ok && message.GetID() == streamID &&
+			message.GetCmd() == pipeline.Method_PipelineStreamFinishAck &&
+			message.GetSid() == pipeline.Status_MessageEnd && len(message.GetErr()) == 0 &&
+			message.GetAcceptedTeardownMode() == pipeline.StreamTeardownMode_FinishAck
+	case <-finishCtx.Done():
+		return false
+	case <-senderDone:
+		return false
 	}
 }
 
@@ -544,16 +788,58 @@ func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 	sender.anal.AppendRemotePhyPlan(p)
 }
 
+func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
+	sender.terminalMu.Lock()
+	defer sender.terminalMu.Unlock()
+	if sender.terminalSeen {
+		return nil
+	}
+	var envelope remoteTerminalEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	if len(envelope.LocalScope) > 0 {
+		sender.dealRemoteAnalysis(envelope.PhyPlan)
+	}
+	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
+		sender.anal.appendRemoteResource(
+			envelope.Delta,
+			envelope.Memory,
+			envelope.MissingFragmentCount,
+			envelope.MissingMemoryDomainCount,
+		)
+	}
+	sender.terminalSeen = true
+	return nil
+}
+
 func (sender *messageSenderOnClient) close() {
-	sender.waitingTheStopResponse()
+	sender.closeOnce.Do(func() {
+		// Ensure Gauge is decremented exactly once when this sender is torn down.
+		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
 
-	if sender.ctxCancel != nil {
-		sender.ctxCancel()
-	}
-	if sender.alreadyClose {
-		return
-	}
-	_ = sender.streamSender.Close(true)
-
-	v2.PipelineMessageSenderCounter.Desc()
+		sender.waitingTheStopResponse()
+		sender.stateMu.Lock()
+		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
+		sender.stateMu.Unlock()
+		if !receiveClosed && reuseEligible && sender.finishStreamForReuse() {
+			v2.PipelineStreamTeardownCounter.WithLabelValues("client_reuse").Inc()
+			if sender.ctxCancel != nil {
+				sender.ctxCancel()
+			}
+			if err := sender.streamSender.Close(false); err != nil {
+				_ = sender.streamSender.Close(true)
+			}
+			return
+		}
+		if reuseEligible {
+			v2.PipelineStreamTeardownCounter.WithLabelValues("client_fin_failed_close").Inc()
+		} else {
+			v2.PipelineStreamTeardownCounter.WithLabelValues("client_legacy_or_poisoned_close").Inc()
+		}
+		if sender.ctxCancel != nil {
+			sender.ctxCancel()
+		}
+		_ = sender.streamSender.Close(true)
+	})
 }

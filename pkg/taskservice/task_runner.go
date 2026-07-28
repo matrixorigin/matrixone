@@ -17,7 +17,7 @@ package taskservice
 import (
 	"context"
 	"runtime"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +33,9 @@ import (
 
 // RunnerOption option for create task runner
 type RunnerOption func(*taskRunner)
+
+// PauseTaskCompletedHook is called after a daemon task pause has been completed.
+type PauseTaskCompletedHook func(context.Context, task.DaemonTask) error
 
 // WithRunnerLogger set logger
 func WithRunnerLogger(logger *zap.Logger) RunnerOption {
@@ -121,15 +124,21 @@ func WithRunnerRetryInterval(interval time.Duration) RunnerOption {
 	}
 }
 
+func WithRunnerPauseTaskCompleted(hook PauseTaskCompletedHook) RunnerOption {
+	return func(r *taskRunner) {
+		r.options.pauseTaskCompleted = hook
+	}
+}
+
 func WithHaKeeperClient(getClient func() util.HAKeeperClient) RunnerOption {
 	return func(r *taskRunner) {
-		r.getClient = getClient
+		r.hakeeper.getClient = getClient
 	}
 }
 
 func WithCnUUID(uuid string) RunnerOption {
 	return func(r *taskRunner) {
-		r.cnUUID = uuid
+		r.hakeeper.cnUUID = uuid
 	}
 }
 
@@ -171,19 +180,28 @@ type taskRunner struct {
 		m map[uint64]*daemonTask
 	}
 
-	options struct {
-		queryLimit        int
-		parallelism       int
-		maxWaitTasks      int
-		fetchInterval     time.Duration
-		fetchTimeout      time.Duration
-		retryInterval     time.Duration
-		heartbeatInterval time.Duration
-		heartbeatTimeout  time.Duration
+	pauseCompletedTasks struct {
+		sync.Mutex
+		m map[uint64]struct{}
 	}
 
-	getClient func() util.HAKeeperClient
-	cnUUID    string
+	options struct {
+		queryLimit         int
+		parallelism        int
+		maxWaitTasks       int
+		fetchInterval      time.Duration
+		fetchTimeout       time.Duration
+		retryInterval      time.Duration
+		heartbeatInterval  time.Duration
+		heartbeatTimeout   time.Duration
+		pauseTaskCompleted PauseTaskCompletedHook
+	}
+
+	hakeeper struct {
+		sync.RWMutex
+		getClient func() util.HAKeeperClient
+		cnUUID    string
+	}
 }
 
 // NewTaskRunner new task runner. The TaskRunner can be created by CN nodes and pull tasks from TaskService to
@@ -210,6 +228,7 @@ func NewTaskRunner(runnerID string, service TaskService, claimFn func(string) bo
 	r.runningTasks.completedTasks = make(map[uint64]struct{})
 	r.pendingTaskHandle = make(chan TaskHandler, 20)
 	r.daemonTasks.m = make(map[uint64]*daemonTask)
+	r.pauseCompletedTasks.m = make(map[uint64]struct{})
 	return r
 }
 
@@ -447,16 +466,21 @@ func (r *taskRunner) retry(ctx context.Context) {
 			}
 			needRetryTasks = needRetryTasks[:0]
 			r.retryTasks.Lock()
-			for i, rt := range r.retryTasks.s {
-				if rt.retryAt.After(time.Now()) {
-					r.retryTasks.s = r.retryTasks.s[:copy(r.retryTasks.s, r.retryTasks.s[i:])]
+			now := time.Now()
+			next := 0
+			for ; next < len(r.retryTasks.s); next++ {
+				rt := r.retryTasks.s[next]
+				if rt.retryAt.After(now) {
 					break
 				}
 				needRetryTasks = append(needRetryTasks, rt)
 			}
+			remaining := copy(r.retryTasks.s, r.retryTasks.s[next:])
+			clear(r.retryTasks.s[remaining:])
+			r.retryTasks.s = r.retryTasks.s[:remaining]
 			r.retryTasks.Unlock()
 			for _, rt := range needRetryTasks {
-				r.runTask(ctx, rt)
+				r.run(rt)
 			}
 		}
 	}
@@ -535,8 +559,8 @@ func (r *taskRunner) addRetryTask(task runningTask) bool {
 	}
 
 	r.retryTasks.s = append(r.retryTasks.s, task)
-	sort.Slice(r.retryTasks.s, func(i, j int) bool {
-		return r.retryTasks.s[i].retryAt.Before(r.retryTasks.s[j].retryAt)
+	slices.SortFunc(r.retryTasks.s, func(a, b runningTask) int {
+		return a.retryAt.Compare(b.retryAt)
 	})
 	return true
 }

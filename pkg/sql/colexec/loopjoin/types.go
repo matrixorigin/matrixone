@@ -15,6 +15,7 @@
 package loopjoin
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,37 +33,40 @@ var _ vm.Operator = new(LoopJoin)
 const (
 	Build = iota
 	Probe
+	Finalize
 	End
-)
-
-const (
-	LoopInner = iota
-	LoopAnti
-	LoopLeft
-	LoopMark
-	LoopSemi
-	LoopSingle
 )
 
 type container struct {
 	state    int
 	probeIdx int
 	batIdx   int
-	inbat    *batch.Batch
-	rbat     *batch.Batch
+	inBat    *batch.Batch
+	resBat   *batch.Batch
 	joinBat  *batch.Batch
 	expr     colexec.ExpressionExecutor
 	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
 	mp       *message.JoinMap
+
+	// FULL OUTER JOIN bookkeeping. rightRowsMatched is a flat bitmap over
+	// all build rows; bit i is set when build row i matched at least one
+	// probe row. rightBatchOffset[k] is the flat index of build batch k's
+	// first row. After probe drains, Negate() makes set bits = unmatched
+	// build rows; finalize() walks the iterator to emit them.
+	rightRowsMatched *bitmap.Bitmap
+	rightBatchOffset []uint64
+	rightMatchedIter bitmap.Iterator
+	rightMatchedBat  int // monotonically advancing batIdx during finalize
 }
 
 type LoopJoin struct {
 	ctr        container
-	Typs       []types.Type
-	Cond       *plan.Expr
-	Result     []colexec.ResultPos
+	LeftTypes  []types.Type
+	RightTypes []types.Type
+	NonEqCond  *plan.Expr
+	ResultCols []colexec.ResultPos
 	JoinMapTag int32
-	JoinType   int
+	JoinType   plan.Node_JoinType
 	MarkPos    int
 
 	vm.OperatorBase
@@ -102,17 +106,21 @@ func (loopJoin *LoopJoin) Release() {
 func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &loopJoin.ctr
 
-	ctr.resetExprExecutor()
+	ctr.resetNonEqCondExecutor()
 	ctr.cleanHashMap()
 	ctr.state = Build
-	ctr.inbat = nil
+	ctr.inBat = nil
+	ctr.rightRowsMatched = nil
+	ctr.rightBatchOffset = nil
+	ctr.rightMatchedIter = nil
+	ctr.rightMatchedBat = 0
 }
 
 func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &loopJoin.ctr
 
 	ctr.cleanBatch(proc.Mp())
-	ctr.cleanExprExecutor()
+	ctr.cleanNonEqCondExecutor()
 
 }
 
@@ -121,9 +129,9 @@ func (loopJoin *LoopJoin) ExecProjection(proc *process.Process, input *batch.Bat
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.rbat != nil {
-		ctr.rbat.Clean(mp)
-		ctr.rbat = nil
+	if ctr.resBat != nil {
+		ctr.resBat.Clean(mp)
+		ctr.resBat = nil
 	}
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
@@ -131,13 +139,13 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 }
 
-func (ctr *container) resetExprExecutor() {
+func (ctr *container) resetNonEqCondExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.ResetForNextQuery()
 	}
 }
 
-func (ctr *container) cleanExprExecutor() {
+func (ctr *container) cleanNonEqCondExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
 		ctr.expr = nil

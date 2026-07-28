@@ -214,3 +214,4 @@ select * from EmployeeDepartmentView;
 -- @session
 
 drop account a1;
+drop database if exists test02;

@@ -298,7 +298,7 @@ func (n *Bitmap) IsSame(b *Bitmap) bool {
 func (n *Bitmap) Or(b *Bitmap) {
 	n.TryExpand(b)
 	size := (int(b.len) + 63) / 64
-	for i := 0; i < size; i++ {
+	for i := range size {
 		cnt := bits.OnesCount64(n.data[i])
 		n.data[i] |= b.data[i]
 		n.count += int64(bits.OnesCount64(n.data[i]) - cnt)
@@ -307,30 +307,28 @@ func (n *Bitmap) Or(b *Bitmap) {
 
 func (n *Bitmap) And(b *Bitmap) {
 	n.TryExpand(b)
+	n.count = 0
 	size := (int(b.len) + 63) / 64
-	for i := 0; i < size; i++ {
-		cnt := bits.OnesCount64(n.data[i])
+	for i := range size {
 		n.data[i] &= b.data[i]
-		n.count += int64(bits.OnesCount64(n.data[i]) - cnt)
+		n.count += int64(bits.OnesCount64(n.data[i]))
 	}
 	for i := size; i < len(n.data); i++ {
-		n.count -= int64(bits.OnesCount64(n.data[i]))
 		n.data[i] = 0
 	}
 }
 
 func (n *Bitmap) Negate() {
 	nBlock, nTail := int(n.len)/64, int(n.len)%64
-	for i := 0; i < nBlock; i++ {
+	n.count = 0
+	for i := range nBlock {
 		n.data[i] = ^n.data[i]
-		cnt := bits.OnesCount64(n.data[i])
-		n.count += int64(cnt - (64 - cnt))
+		n.count += int64(bits.OnesCount64(n.data[i]))
 	}
 	if nTail > 0 {
 		mask := (uint64(1) << nTail) - 1
 		n.data[nBlock] ^= mask
-		cnt := bits.OnesCount64(n.data[nBlock] & mask)
-		n.count += int64(cnt - (nTail - cnt))
+		n.count += int64(bits.OnesCount64(n.data[nBlock]))
 	}
 }
 

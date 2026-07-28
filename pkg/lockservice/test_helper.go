@@ -15,11 +15,13 @@
 package lockservice
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -109,7 +111,7 @@ func WaitWaiters(
 	key []byte,
 	waitersCount int) error {
 	s := ls.(*service)
-	v, err := s.getLockTable(group, table)
+	v, err := s.getLockTable(context.Background(), group, table)
 	if err != nil {
 		return err
 	}
@@ -121,6 +123,15 @@ func waitLocalWaiters(
 	lt *localLockTable,
 	key []byte,
 	waitersCount int) error {
+	return waitLocalWaitersWithTimeout(lt, key, waitersCount, 10*time.Second)
+}
+
+func waitLocalWaitersWithTimeout(
+	lt *localLockTable,
+	key []byte,
+	waitersCount int,
+	waitTimeout time.Duration) error {
+	observedWaiters := 0
 	fn := func() bool {
 		lt.mu.Lock()
 		defer lt.mu.Unlock()
@@ -131,22 +142,34 @@ func waitLocalWaiters(
 		}
 
 		if !ok {
+			observedWaiters = 0
 			return false
 		}
 
-		waiters := make([]*waiter, 0)
-		lock.waiters.iter(func(w *waiter) bool {
-			waiters = append(waiters, w)
+		observedWaiters = 0
+		lock.waiters.iter(func(*waiter) bool {
+			observedWaiters++
 			return true
 		})
-		return len(waiters) == waitersCount
+		return observedWaiters == waitersCount
 	}
 
+	timeout := time.NewTimer(waitTimeout)
+	defer timeout.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		if fn() {
 			return nil
 		}
-		time.Sleep(time.Millisecond * 10)
+		select {
+		case <-timeout.C:
+			return moerr.NewInternalErrorNoCtxf(
+				"timed out waiting for %d local lock waiters, observed %d",
+				waitersCount,
+				observedWaiters)
+		case <-ticker.C:
+		}
 	}
 }
 

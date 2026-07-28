@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -80,13 +81,34 @@ func GetInitialClusterRequestCmd(
 	nextIDByKey map[string]uint64,
 	nonVotingLocality map[string]string,
 ) []byte {
+	return GetInitialClusterRequestCmdWithRecovery(
+		numOfLogShards,
+		numOfTNShards,
+		numOfLogReplicas,
+		nextID,
+		nextIDByKey,
+		nonVotingLocality,
+		false,
+	)
+}
+
+func GetInitialClusterRequestCmdWithRecovery(
+	numOfLogShards uint64,
+	numOfTNShards uint64,
+	numOfLogReplicas uint64,
+	nextID uint64,
+	nextIDByKey map[string]uint64,
+	nonVotingLocality map[string]string,
+	logServiceRecovery bool,
+) []byte {
 	req := pb.InitialClusterRequest{
-		NumOfLogShards:    numOfLogShards,
-		NumOfTNShards:     numOfTNShards,
-		NumOfLogReplicas:  numOfLogReplicas,
-		NextID:            nextID,
-		NextIDByKey:       nextIDByKey,
-		NonVotingLocality: nonVotingLocality,
+		NumOfLogShards:     numOfLogShards,
+		NumOfTNShards:      numOfTNShards,
+		NumOfLogReplicas:   numOfLogReplicas,
+		NextID:             nextID,
+		NextIDByKey:        nextIDByKey,
+		NonVotingLocality:  nonVotingLocality,
+		LogServiceRecovery: logServiceRecovery,
 	}
 	payload, err := req.Marshal()
 	if err != nil {
@@ -95,6 +117,31 @@ func GetInitialClusterRequestCmd(
 	cmd := make([]byte, headerSize+len(payload))
 	binaryEnc.PutUint32(cmd, uint32(pb.InitialClusterUpdate))
 	copy(cmd[headerSize:], payload)
+	return cmd
+}
+
+// GetRestoreIDWatermarkCmd returns an explicit, idempotent restore request.
+func GetRestoreIDWatermarkCmd(
+	nextID uint64,
+	nextIDByKey map[string]uint64,
+	logServiceRecovery bool,
+) []byte {
+	req := pb.RestoreIDWatermarkRequest{
+		NextID:             nextID,
+		NextIDByKey:        nextIDByKey,
+		LogServiceRecovery: logServiceRecovery,
+	}
+	cmd := make([]byte, headerSize+req.ProtoSize())
+	binaryEnc.PutUint32(cmd, uint32(pb.RestoreIDWatermarkUpdate))
+	if _, err := req.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GetCompleteLogServiceRecoveryCmd() []byte {
+	cmd := make([]byte, headerSize)
+	binaryEnc.PutUint32(cmd, uint32(pb.CompleteLogServiceRecoveryUpdate))
 	return cmd
 }
 
@@ -396,6 +443,11 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	if s.state.Term > b.Term {
 		return sm.Result{}
 	}
+	if s.state.LogServiceRecoveryPending && !s.state.LogServiceRecoveryPrepared {
+		// Initial cluster recovery has not installed its ID watermarks yet.
+		// Reject every command batch so stale replica IDs cannot escape.
+		return sm.Result{Data: []byte{1}}
+	}
 
 	for _, c := range b.Commands {
 		if c.Bootstrapping {
@@ -523,6 +575,9 @@ func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
 		return re()
 	case pb.HAKeeperBootstrapCommandsReceived:
 		if state == pb.HAKeeperBootstrapFailed || state == pb.HAKeeperRunning {
+			if state == pb.HAKeeperRunning && s.state.LogServiceRecoveryPending {
+				return re()
+			}
 			s.state.State = state
 			return sm.Result{}
 		}
@@ -738,9 +793,93 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 	}
 
 	s.state.NonVotingLocality.Value = req.NonVotingLocality
+	if req.LogServiceRecovery {
+		s.state.LogServiceRecoveryPending = true
+		s.state.LogServiceRecoveryCompleted = false
+		if req.NextID != 0 || len(req.NextIDByKey) != 0 {
+			s.state.LogServiceRecoveryPrepared = true
+			if s.state.IDWatermarkRestoreGeneration < math.MaxUint64 {
+				s.state.IDWatermarkRestoreGeneration++
+			}
+		}
+	}
 
 	plog.Infof("initial cluster set, HAKeeper is in BOOTSTRAPPING state")
 	s.state.State = pb.HAKeeperBootstrapping
+	return result
+}
+
+func (s *stateMachine) handleRestoreIDWatermarkCmd(cmd []byte) sm.Result {
+	result := sm.Result{Value: uint64(s.state.State)}
+	if parseCmdTag(cmd) != pb.RestoreIDWatermarkUpdate {
+		panic("not a restore ID watermark update")
+	}
+	var req pb.RestoreIDWatermarkRequest
+	if err := req.Unmarshal(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	if s.state.State == pb.HAKeeperCreated {
+		return result
+	}
+	// Watermark restore is only valid while a fresh cluster is bootstrapping.
+	// Once Running, managed clients may hold ID batches that cannot be revoked.
+	if s.state.State != pb.HAKeeperBootstrapping &&
+		s.state.State != pb.HAKeeperBootstrapCommandsReceived {
+		result.Data = []byte{1}
+		return result
+	}
+	if !s.state.LogServiceRecoveryPending {
+		// Recovery intent must be part of InitialClusterUpdate on every initial
+		// HAKeeper member. A late request cannot safely retract IDs or bootstrap
+		// commands that may already have escaped.
+		result.Data = []byte{1}
+		return result
+	}
+
+	updated := false
+	if req.NextID > s.state.NextID {
+		s.state.NextID = req.NextID
+		updated = true
+	}
+	if len(req.NextIDByKey) > 0 {
+		if s.state.NextIDByKey == nil {
+			s.state.NextIDByKey = make(map[string]uint64)
+		}
+		for key, nextID := range req.NextIDByKey {
+			if nextID > s.state.NextIDByKey[key] {
+				s.state.NextIDByKey[key] = nextID
+				updated = true
+			}
+		}
+	}
+	if updated {
+		plog.Infof("patched HAKeeper ID watermarks from restore data, next-id %d, next-id-by-key %v",
+			s.state.NextID, s.state.NextIDByKey)
+	}
+	prepareRecovery := req.LogServiceRecovery && !s.state.LogServiceRecoveryPrepared
+	if req.LogServiceRecovery {
+		s.state.LogServiceRecoveryPrepared = true
+	}
+	if (updated || prepareRecovery) && s.state.IDWatermarkRestoreGeneration < math.MaxUint64 {
+		s.state.IDWatermarkRestoreGeneration++
+	}
+	return result
+}
+
+func (s *stateMachine) handleCompleteLogServiceRecoveryCmd() sm.Result {
+	result := sm.Result{Value: uint64(s.state.State)}
+	if s.state.LogServiceRecoveryCompleted {
+		return result
+	}
+	if s.state.State == pb.HAKeeperCreated ||
+		!s.state.LogServiceRecoveryPending ||
+		!s.state.LogServiceRecoveryPrepared {
+		result.Data = []byte{1}
+		return result
+	}
+	s.state.LogServiceRecoveryPending = false
+	s.state.LogServiceRecoveryPrepared = false
+	s.state.LogServiceRecoveryCompleted = true
 	return result
 }
 
@@ -765,7 +904,13 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.TickUpdate:
 		return s.handleTick(cmd), nil
 	case pb.GetIDUpdate:
-		s.assertState()
+		if (s.state.LogServiceRecoveryPending && !s.state.LogServiceRecoveryPrepared) ||
+			(s.state.State != pb.HAKeeperRunning && s.state.State != pb.HAKeeperBootstrapping) {
+			// ID allocation is an external request. Reject it deterministically
+			// while bootstrap commands are being applied instead of panicking the
+			// replicated state machine.
+			return sm.Result{}, nil
+		}
 		return s.handleGetIDCmd(cmd), nil
 	case pb.ScheduleCommandUpdate:
 		return s.handleUpdateCommandsCmd(cmd), nil
@@ -776,6 +921,10 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleSetTaskSchedulerStateUpdateCmd(cmd), nil
 	case pb.InitialClusterUpdate:
 		return s.handleInitialClusterRequestCmd(cmd), nil
+	case pb.RestoreIDWatermarkUpdate:
+		return s.handleRestoreIDWatermarkCmd(cmd), nil
+	case pb.CompleteLogServiceRecoveryUpdate:
+		return s.handleCompleteLogServiceRecoveryCmd(), nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -802,19 +951,23 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 
 func (s *stateMachine) handleStateQuery() interface{} {
 	internal := &pb.CheckerState{
-		Tick:                s.state.Tick,
-		ClusterInfo:         s.state.ClusterInfo,
-		TNState:             s.state.TNState,
-		LogState:            s.state.LogState,
-		CNState:             s.state.CNState,
-		ProxyState:          s.state.ProxyState,
-		State:               s.state.State,
-		TaskSchedulerState:  s.state.TaskSchedulerState,
-		TaskTableUser:       s.state.TaskTableUser,
-		NextId:              s.state.NextID,
-		NextIDByKey:         s.state.NextIDByKey,
-		NonVotingReplicaNum: s.state.NonVotingReplicaNum,
-		NonVotingLocality:   s.state.NonVotingLocality,
+		Tick:                         s.state.Tick,
+		ClusterInfo:                  s.state.ClusterInfo,
+		TNState:                      s.state.TNState,
+		LogState:                     s.state.LogState,
+		CNState:                      s.state.CNState,
+		ProxyState:                   s.state.ProxyState,
+		State:                        s.state.State,
+		TaskSchedulerState:           s.state.TaskSchedulerState,
+		TaskTableUser:                s.state.TaskTableUser,
+		NextId:                       s.state.NextID,
+		NextIDByKey:                  s.state.NextIDByKey,
+		NonVotingReplicaNum:          s.state.NonVotingReplicaNum,
+		NonVotingLocality:            s.state.NonVotingLocality,
+		LogServiceRecoveryPending:    s.state.LogServiceRecoveryPending,
+		IDWatermarkRestoreGeneration: s.state.IDWatermarkRestoreGeneration,
+		LogServiceRecoveryPrepared:   s.state.LogServiceRecoveryPrepared,
+		LogServiceRecoveryCompleted:  s.state.LogServiceRecoveryCompleted,
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)

@@ -1078,6 +1078,92 @@ func TestFetchDecimal128RowsWithFilterAll(t *testing.T) {
 	)
 }
 
+func TestFetchDecimal256Rows(t *testing.T) {
+	max := maxDecimal256Value()
+	min := max.Minus()
+	values := []types.Decimal256{
+		{B0_63: 1, B64_127: 1, B128_191: 1, B192_255: 1},
+		{B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0},
+	}
+	expectRangeValues := []types.Decimal256{
+		{B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0},
+		{B0_63: 1, B64_127: 1, B128_191: 1, B192_255: 1},
+	}
+	runFetchRowsTest(
+		t,
+		types.New(types.T_decimal256, 0, 0),
+		values,
+		lock.Granularity_Row,
+		values,
+		expectRangeValues,
+		[]types.Decimal256{min, max},
+		func(packer *types.Packer, v types.Decimal256) {
+			packer.EncodeDecimal256(v)
+		},
+		nil,
+		nil,
+		false,
+	)
+}
+
+func TestFetchDecimal256RowsWithFilter(t *testing.T) {
+	max := maxDecimal256Value()
+	min := max.Minus()
+	values := []types.Decimal256{
+		{B0_63: 1, B64_127: 1, B128_191: 1, B192_255: 1},
+		{B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0},
+		{B0_63: 2, B64_127: 2, B128_191: 2, B192_255: 2},
+	}
+	expectRangeValues := []types.Decimal256{
+		{B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0},
+		{B0_63: 1, B64_127: 1, B128_191: 1, B192_255: 1},
+	}
+	runFetchRowsTest(
+		t,
+		types.New(types.T_decimal256, 0, 0),
+		values,
+		lock.Granularity_Row,
+		values[:2],
+		expectRangeValues,
+		[]types.Decimal256{min, max},
+		func(packer *types.Packer, v types.Decimal256) {
+			packer.EncodeDecimal256(v)
+		},
+		getRowsFilter(1, []uint64{1, 2}),
+		[]int32{0, 0, 1},
+		false,
+	)
+}
+
+func TestFetchDecimal256RowsWithFilterAll(t *testing.T) {
+	max := maxDecimal256Value()
+	min := max.Minus()
+	values := []types.Decimal256{
+		{B0_63: 1, B64_127: 1, B128_191: 1, B192_255: 1},
+		{B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0},
+		{B0_63: 2, B64_127: 2, B128_191: 2, B192_255: 2},
+	}
+	expectRangeValues := []types.Decimal256{
+		{B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0},
+		{B0_63: 1, B64_127: 1, B128_191: 1, B192_255: 1},
+	}
+	runFetchRowsTest(
+		t,
+		types.New(types.T_decimal256, 0, 0),
+		values,
+		lock.Granularity_Row,
+		values[:2],
+		expectRangeValues,
+		[]types.Decimal256{min, max},
+		func(packer *types.Packer, v types.Decimal256) {
+			packer.EncodeDecimal256(v)
+		},
+		getRowsFilter(1, []uint64{1, 2}),
+		[]int32{1, 1, 1},
+		true,
+	)
+}
+
 func TestFetchUUIDRows(t *testing.T) {
 	values := []types.Uuid{[16]byte{1}, [16]byte{}}
 	expectRangeValues := []types.Uuid{[16]byte{}, [16]byte{1}}
@@ -1384,4 +1470,17 @@ func TestDecimal128(t *testing.T) {
 	minDecimal128 := decimal128Fn(max128.Minus())
 	maxDecimal128 := decimal128Fn(max128)
 	assert.True(t, bytes.Compare(minDecimal128, maxDecimal128) < 0)
+}
+
+func TestDecimal256(t *testing.T) {
+	packer := types.NewPacker()
+	decimal256Fn := func(v types.Decimal256) []byte {
+		packer.Reset()
+		packer.EncodeDecimal256(v)
+		return packer.Bytes()
+	}
+	max256 := maxDecimal256Value()
+	minDecimal256 := decimal256Fn(max256.Minus())
+	maxDecimal256 := decimal256Fn(max256)
+	assert.True(t, bytes.Compare(minDecimal256, maxDecimal256) < 0)
 }

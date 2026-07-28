@@ -15,12 +15,14 @@
 package disttae
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"fmt"
 	"math"
 	"runtime"
-	"sort"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,6 +95,37 @@ func (txn *Transaction) WriteBatch(
 	tableName string,
 	bat *batch.Batch,
 	tnStore DNStore) (genRowidVec *vector.Vector, err error) {
+	return txn.writeBatchWithAutoIncrEpochKnown(typ, note, accountId, databaseId, tableId,
+		databaseName, tableName, bat, tnStore, 0, false)
+}
+
+func (txn *Transaction) writeBatchWithAutoIncrEpoch(
+	typ int, note string,
+	accountId uint32,
+	databaseId uint64,
+	tableId uint64,
+	databaseName string,
+	tableName string,
+	bat *batch.Batch,
+	tnStore DNStore,
+	autoIncrEpoch uint32,
+) (genRowidVec *vector.Vector, err error) {
+	return txn.writeBatchWithAutoIncrEpochKnown(typ, note, accountId, databaseId, tableId,
+		databaseName, tableName, bat, tnStore, autoIncrEpoch, true)
+}
+
+func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
+	typ int, note string,
+	accountId uint32,
+	databaseId uint64,
+	tableId uint64,
+	databaseName string,
+	tableName string,
+	bat *batch.Batch,
+	tnStore DNStore,
+	autoIncrEpoch uint32,
+	autoIncrEpochKnown bool,
+) (genRowidVec *vector.Vector, err error) {
 	start := time.Now()
 	seq := txn.op.NextSequence()
 	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
@@ -113,6 +146,30 @@ func (txn *Transaction) WriteBatch(
 	}()
 
 	txn.readOnly.Store(false)
+
+	pkCheckPos := -1
+	pkCheckReady := false
+	if typ == INSERT || typ == DELETE {
+		// resolvePKCheckPosForWrite may reach Engine.Database, which can craft an
+		// internal SQL on the current txn and reenter txn.Lock via
+		// UpdateSnapshotWriteOffset. Resolve the PK position before taking txn.Lock.
+		pkCheckPos, pkCheckReady, err = txn.resolvePKCheckPosForWrite(
+			typ,
+			accountId,
+			databaseName,
+			tableName,
+			tableId,
+			bat,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if typ == INSERT && pkCheckPos >= 0 {
+			// WriteBatch prepends rowid at attr 0 for inserts after this metadata lookup.
+			pkCheckPos++
+		}
+	}
+
 	txn.Lock()
 	defer txn.Unlock()
 	// generate rowid for insert
@@ -210,15 +267,19 @@ func (txn *Transaction) WriteBatch(
 	}
 
 	e := Entry{
-		typ:          typ,
-		accountId:    accountId,
-		bat:          bat,
-		tableId:      tableId,
-		databaseId:   databaseId,
-		tableName:    tableName,
-		databaseName: databaseName,
-		tnStore:      tnStore,
-		note:         note,
+		typ:                typ,
+		accountId:          accountId,
+		bat:                bat,
+		tableId:            tableId,
+		databaseId:         databaseId,
+		tableName:          tableName,
+		databaseName:       databaseName,
+		tnStore:            tnStore,
+		autoIncrEpoch:      autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
+		note:               note,
+		pkCheckPos:         pkCheckPos,
+		pkCheckReady:       pkCheckReady,
 	}
 	txn.writes = append(txn.writes, e)
 	txn.pkCount += bat.RowCount()
@@ -237,11 +298,43 @@ func (txn *Transaction) dumpBatch(ctx context.Context, offset int) error {
 func checkPKDupGeneric[T comparable](
 	mp map[any]bool,
 	t *types.Type,
+	pk *vector.Vector,
 	vals []T,
 	start, count int) (bool, string) {
-	for _, v := range vals[start : start+count] {
+	nsp := pk.GetNulls()
+	for i, v := range vals[start : start+count] {
+		// SQL standard: NULL != NULL, skip NULLs from duplicate check
+		if nsp.Contains(uint64(start + i)) {
+			continue
+		}
 		if _, ok := mp[v]; ok {
 			entry := common.TypeStringValue(*t, v, false)
+			return true, entry
+		}
+		mp[v] = true
+	}
+	return false, ""
+}
+
+// checkPKDupArray de-duplicates a narrow vector (bf16/f16/int8/uint8) primary-key
+// column by its textual form, mirroring the T_array_float32/float64 cases. Vector
+// columns are rejected as primary keys at DDL admission (build_ddl.go inline,
+// checkPrimaryKeyPartType for ALTER, build_index_util.go for table-level), so this
+// is defense-in-depth: it keeps checkPKDup from reaching its default panic if a
+// narrow-vector pk ever arrives here.
+func checkPKDupArray[T types.ArrayElement](
+	mp map[any]bool,
+	t *types.Type,
+	pk *vector.Vector,
+	start, count int) (bool, string) {
+	nsp := pk.GetNulls()
+	for i := start; i < start+count; i++ {
+		if nsp.Contains(uint64(i)) {
+			continue
+		}
+		v := types.ArrayToString[T](vector.GetArrayAt[T](pk, i))
+		if _, ok := mp[v]; ok {
+			entry := common.TypeStringValue(*t, pk.GetBytesAt(i), false)
 			return true, entry
 		}
 		mp[v] = true
@@ -257,76 +350,80 @@ func checkPKDup(
 	switch colType.Oid {
 	case types.T_bool:
 		vs := vector.MustFixedColNoTypeCheck[bool](pk)
-		return checkPKDupGeneric[bool](mp, colType, vs, start, count)
+		return checkPKDupGeneric[bool](mp, colType, pk, vs, start, count)
 	case types.T_bit:
 		vs := vector.MustFixedColNoTypeCheck[uint64](pk)
-		return checkPKDupGeneric[uint64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint64](mp, colType, pk, vs, start, count)
 	case types.T_int8:
 		vs := vector.MustFixedColNoTypeCheck[int8](pk)
-		return checkPKDupGeneric[int8](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int8](mp, colType, pk, vs, start, count)
 	case types.T_int16:
 		vs := vector.MustFixedColNoTypeCheck[int16](pk)
-		return checkPKDupGeneric[int16](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int16](mp, colType, pk, vs, start, count)
 	case types.T_int32:
 		vs := vector.MustFixedColNoTypeCheck[int32](pk)
-		return checkPKDupGeneric[int32](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int32](mp, colType, pk, vs, start, count)
 	case types.T_int64:
 		vs := vector.MustFixedColNoTypeCheck[int64](pk)
-		return checkPKDupGeneric[int64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[int64](mp, colType, pk, vs, start, count)
 	case types.T_uint8:
 		vs := vector.MustFixedColNoTypeCheck[uint8](pk)
-		return checkPKDupGeneric[uint8](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint8](mp, colType, pk, vs, start, count)
 	case types.T_uint16:
 		vs := vector.MustFixedColNoTypeCheck[uint16](pk)
-		return checkPKDupGeneric[uint16](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint16](mp, colType, pk, vs, start, count)
 	case types.T_uint32:
 		vs := vector.MustFixedColNoTypeCheck[uint32](pk)
-		return checkPKDupGeneric[uint32](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint32](mp, colType, pk, vs, start, count)
 	case types.T_uint64:
 		vs := vector.MustFixedColNoTypeCheck[uint64](pk)
-		return checkPKDupGeneric[uint64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[uint64](mp, colType, pk, vs, start, count)
 	case types.T_decimal64:
 		vs := vector.MustFixedColNoTypeCheck[types.Decimal64](pk)
-		return checkPKDupGeneric[types.Decimal64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Decimal64](mp, colType, pk, vs, start, count)
 	case types.T_decimal128:
 		vs := vector.MustFixedColNoTypeCheck[types.Decimal128](pk)
-		return checkPKDupGeneric[types.Decimal128](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Decimal128](mp, colType, pk, vs, start, count)
 	case types.T_uuid:
 		vs := vector.MustFixedColNoTypeCheck[types.Uuid](pk)
-		return checkPKDupGeneric[types.Uuid](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Uuid](mp, colType, pk, vs, start, count)
 	case types.T_float32:
 		vs := vector.MustFixedColNoTypeCheck[float32](pk)
-		return checkPKDupGeneric[float32](mp, colType, vs, start, count)
+		return checkPKDupGeneric[float32](mp, colType, pk, vs, start, count)
 	case types.T_float64:
 		vs := vector.MustFixedColNoTypeCheck[float64](pk)
-		return checkPKDupGeneric[float64](mp, colType, vs, start, count)
+		return checkPKDupGeneric[float64](mp, colType, pk, vs, start, count)
 	case types.T_date:
 		vs := vector.MustFixedColNoTypeCheck[types.Date](pk)
-		return checkPKDupGeneric[types.Date](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Date](mp, colType, pk, vs, start, count)
 	case types.T_timestamp:
 		vs := vector.MustFixedColNoTypeCheck[types.Timestamp](pk)
-		return checkPKDupGeneric[types.Timestamp](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Timestamp](mp, colType, pk, vs, start, count)
 	case types.T_time:
 		vs := vector.MustFixedColNoTypeCheck[types.Time](pk)
-		return checkPKDupGeneric[types.Time](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Time](mp, colType, pk, vs, start, count)
 	case types.T_datetime:
 		vs := vector.MustFixedColNoTypeCheck[types.Datetime](pk)
-		return checkPKDupGeneric[types.Datetime](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Datetime](mp, colType, pk, vs, start, count)
 	case types.T_enum:
 		vs := vector.MustFixedColNoTypeCheck[types.Enum](pk)
-		return checkPKDupGeneric[types.Enum](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Enum](mp, colType, pk, vs, start, count)
 	case types.T_TS:
 		vs := vector.MustFixedColNoTypeCheck[types.TS](pk)
-		return checkPKDupGeneric[types.TS](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.TS](mp, colType, pk, vs, start, count)
 	case types.T_Rowid:
 		vs := vector.MustFixedColNoTypeCheck[types.Rowid](pk)
-		return checkPKDupGeneric[types.Rowid](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Rowid](mp, colType, pk, vs, start, count)
 	case types.T_Blockid:
 		vs := vector.MustFixedColNoTypeCheck[types.Blockid](pk)
-		return checkPKDupGeneric[types.Blockid](mp, colType, vs, start, count)
+		return checkPKDupGeneric[types.Blockid](mp, colType, pk, vs, start, count)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		nsp := pk.GetNulls()
 		for i := start; i < start+count; i++ {
+			if nsp.Contains(uint64(i)) {
+				continue
+			}
 			v := pk.UnsafeGetStringAt(i)
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
@@ -335,7 +432,11 @@ func checkPKDup(
 			mp[v] = true
 		}
 	case types.T_array_float32:
+		nsp := pk.GetNulls()
 		for i := start; i < start+count; i++ {
+			if nsp.Contains(uint64(i)) {
+				continue
+			}
 			v := types.ArrayToString[float32](vector.GetArrayAt[float32](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
@@ -344,13 +445,33 @@ func checkPKDup(
 			mp[v] = true
 		}
 	case types.T_array_float64:
+		nsp := pk.GetNulls()
 		for i := start; i < start+count; i++ {
+			if nsp.Contains(uint64(i)) {
+				continue
+			}
 			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
 				return true, entry
 			}
 			mp[v] = true
+		}
+	case types.T_array_bf16:
+		if found, entry := checkPKDupArray[types.BF16](mp, colType, pk, start, count); found {
+			return true, entry
+		}
+	case types.T_array_float16:
+		if found, entry := checkPKDupArray[types.Float16](mp, colType, pk, start, count); found {
+			return true, entry
+		}
+	case types.T_array_int8:
+		if found, entry := checkPKDupArray[int8](mp, colType, pk, start, count); found {
+			return true, entry
+		}
+	case types.T_array_uint8:
+		if found, entry := checkPKDupArray[uint8](mp, colType, pk, start, count); found {
+			return true, entry
 		}
 	default:
 		panic(moerr.NewInternalErrorNoCtxf("%s not supported", pk.GetType().String()))
@@ -364,11 +485,40 @@ func (txn *Transaction) checkDup() error {
 	defer func() {
 		v2.TxnCheckPKDupDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-	//table id is global unique
+
+	// Legacy fallback metadata path for entries that do not carry write-time PK info.
 	tablesDef := make(map[uint64]*plan.TableDef)
 	pkIndex := make(map[uint64]int)
+
 	insertPks := make(map[uint64]map[any]bool)
 	delPks := make(map[uint64]map[any]bool)
+
+	legacyPKIndex := func(e Entry) (int, error) {
+		if idx, ok := pkIndex[e.tableId]; ok {
+			return idx, nil
+		}
+		if _, ok := tablesDef[e.tableId]; !ok {
+			tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
+			if err != nil {
+				return -1, err
+			}
+			tablesDef[e.tableId] = tbl.GetTableDef(txn.proc.Ctx)
+		}
+		tableDef := tablesDef[e.tableId]
+		pkIndex[e.tableId] = -1
+		if tableDef != nil && tableDef.Pkey != nil {
+			for idx, colDef := range tableDef.Cols {
+				if colDef.Name == tableDef.Pkey.PkeyColName {
+					if colDef.Name != catalog.FakePrimaryKeyColName &&
+						colDef.Name != catalog.CPrimaryKeyColName {
+						pkIndex[e.tableId] = idx
+					}
+					break
+				}
+			}
+		}
+		return pkIndex[e.tableId], nil
+	}
 
 	for _, e := range txn.writes {
 		if e.bat == nil || e.bat.RowCount() == 0 {
@@ -390,32 +540,48 @@ func (txn *Transaction) checkDup() error {
 		if txn.tableOps.existAndDeleted(tableKey) {
 			continue
 		}
-		//build pk index for tables.
-		if _, ok := tablesDef[e.tableId]; !ok {
-			tbl, err := txn.getTable(e.accountId, e.databaseName, e.tableName)
+
+		if e.typ == INSERT {
+			fallbackToLegacy := !e.pkCheckReady
+			if e.pkCheckReady {
+				index := e.pkCheckPos
+				if index >= 0 {
+					if index >= len(e.bat.Vecs) || index >= len(e.bat.Attrs) {
+						logutil.Warnf("pk check pos out of range, database:%s, table:%s, pos:%d, attrs:%v",
+							e.databaseName, e.tableName, index, e.bat.Attrs)
+						fallbackToLegacy = true
+					} else {
+						if _, ok := insertPks[e.tableId]; !ok {
+							insertPks[e.tableId] = make(map[any]bool)
+						}
+						if dup, pk := checkPKDup(
+							insertPks[e.tableId],
+							e.bat.Vecs[index],
+							0,
+							e.bat.RowCount()); dup {
+							logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
+								hex.EncodeToString(txn.op.Txn().ID),
+								pk,
+								e.databaseId,
+								e.tableId,
+								e.databaseName,
+								e.tableName,
+								"write-entry")
+							return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+						}
+					}
+				}
+				if !fallbackToLegacy {
+					continue
+				}
+			}
+
+			bat := e.bat
+			index, err := legacyPKIndex(e)
 			if err != nil {
 				return err
 			}
-			tablesDef[e.tableId] = tbl.GetTableDef(txn.proc.Ctx)
-		}
-		tableDef := tablesDef[e.tableId]
-		if _, ok := pkIndex[e.tableId]; !ok {
-			for idx, colDef := range tableDef.Cols {
-				if colDef.Name == tableDef.Pkey.PkeyColName {
-					if colDef.Name == catalog.FakePrimaryKeyColName ||
-						colDef.Name == catalog.CPrimaryKeyColName {
-						pkIndex[e.tableId] = -1
-					} else {
-						pkIndex[e.tableId] = idx
-					}
-					break
-				}
-			}
-		}
-
-		if e.typ == INSERT {
-			bat := e.bat
-			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
+			if index != -1 {
 				if *bat.Vecs[0].GetType() == types.T_Rowid.ToType() {
 					bat2 := batch.NewWithSize(len(bat.Vecs) - 1)
 					bat2.SetAttributes(bat.Attrs[1:])
@@ -431,13 +597,14 @@ func (txn *Transaction) checkDup() error {
 					bat.Vecs[index],
 					0,
 					bat.RowCount()); dup {
-					logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s]",
+					logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
 						hex.EncodeToString(txn.op.Txn().ID),
 						pk,
 						e.databaseId,
 						e.tableId,
 						e.databaseName,
-						e.tableName)
+						e.tableName,
+						"legacy-tabledef")
 					return moerr.NewDuplicateEntryNoCtx(pk, bat.Attrs[index])
 				}
 			}
@@ -445,12 +612,50 @@ func (txn *Transaction) checkDup() error {
 		}
 		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
 		if e.typ == DELETE {
+			fallbackToLegacy := !e.pkCheckReady
+			if e.pkCheckReady {
+				index := e.pkCheckPos
+				if index >= 0 {
+					if index >= len(e.bat.Vecs) || index >= len(e.bat.Attrs) {
+						logutil.Warnf("pk check pos out of range, database:%s, table:%s, pos:%d, attrs:%v",
+							e.databaseName, e.tableName, index, e.bat.Attrs)
+						fallbackToLegacy = true
+					} else {
+						if _, ok := delPks[e.tableId]; !ok {
+							delPks[e.tableId] = make(map[any]bool)
+						}
+						if dup, pk := checkPKDup(
+							delPks[e.tableId],
+							e.bat.Vecs[index],
+							0,
+							e.bat.RowCount()); dup {
+							logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
+								hex.EncodeToString(txn.op.Txn().ID),
+								pk,
+								e.databaseId,
+								e.tableId,
+								e.databaseName,
+								e.tableName,
+								"write-entry")
+							return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[index])
+						}
+					}
+				}
+				if !fallbackToLegacy {
+					continue
+				}
+			}
+
 			if len(e.bat.Vecs) < 2 {
 				logutil.Warnf("delete has no pk, database:%s, table:%s",
 					e.databaseName, e.tableName)
 				continue
 			}
-			if index, ok := pkIndex[e.tableId]; ok && index != -1 {
+			index, err := legacyPKIndex(e)
+			if err != nil {
+				return err
+			}
+			if index != -1 {
 				if _, ok := delPks[e.tableId]; !ok {
 					delPks[e.tableId] = make(map[any]bool)
 				}
@@ -459,13 +664,14 @@ func (txn *Transaction) checkDup() error {
 					e.bat.Vecs[1],
 					0,
 					e.bat.RowCount()); dup {
-					logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s]",
+					logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s], mode:%s",
 						hex.EncodeToString(txn.op.Txn().ID),
 						pk,
 						e.databaseId,
 						e.tableId,
 						e.databaseName,
-						e.tableName)
+						e.tableName,
+						"legacy-tabledef")
 					return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[1])
 				}
 			}
@@ -477,19 +683,39 @@ func (txn *Transaction) checkDup() error {
 // dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
 // start from write offset.   Pass in offset -1 to dump all.   Note that dump all will
 // modify txn.writes, so it can only be called right before txn.commit.
+// scanInMemInsertSize sums the in-memory INSERT batch sizes in writes[from:].
+func (txn *Transaction) scanInMemInsertSize(from int) uint64 {
+	var size uint64
+	for i := from; i < len(txn.writes); i++ {
+		if txn.writes[i].isCatalog() {
+			continue
+		}
+		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+			continue
+		}
+		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+			size += uint64(txn.writes[i].bat.Size())
+		}
+	}
+	return size
+}
+
 func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	var size uint64
 	var pkCount int
 
+	// Check fault injection first - if enabled, force flush
+	forceFlush := objectio.CNWorkspaceForceFlushInjected()
+
 	//offset < 0 indicates commit.
 	if offset < 0 {
-		if txn.approximateInMemInsertSize < txn.commitWorkspaceThreshold &&
+		if !forceFlush && txn.approximateInMemInsertSize < txn.commitWorkspaceThreshold &&
 			txn.approximateInMemInsertCnt < txn.engine.config.insertEntryMaxCount &&
 			txn.approximateInMemDeleteCnt < txn.engine.config.insertEntryMaxCount {
 			return nil
 		}
 	} else {
-		if txn.approximateInMemInsertSize < txn.writeWorkspaceThreshold {
+		if !forceFlush && txn.approximateInMemInsertSize < txn.writeWorkspaceThreshold {
 			return nil
 		}
 	}
@@ -499,32 +725,47 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		offset = 0
 	}
 
-	if !dumpAll {
-		for i := offset; i < len(txn.writes); i++ {
-			if txn.writes[i].isCatalog() {
-				continue
-			}
-			if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-				continue
-			}
-			if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-				size += uint64(txn.writes[i].bat.Size())
-			}
-		}
+	if !dumpAll && !forceFlush {
+		forceDump := false
+		size = txn.scanInMemInsertSize(offset)
 		if size < txn.writeWorkspaceThreshold {
-			return nil
+			// Safety valve: even though the current statement's writes are small,
+			// the global workspace may have accumulated too much data (e.g., when
+			// IncrStatementID is disabled during HNSW index creation via RunSql).
+			// In that case, rescan from the current statement's start to dump all
+			// accumulated data within this statement. We use the statement boundary
+			// (not 0) to avoid compacting prior statements' entries, which would
+			// break offsets[] used by RollbackLastStatement.
+			if txn.approximateInMemInsertSize >= txn.engine.config.extraWorkspaceThreshold {
+				stmtStart := 0
+				if txn.statementID > 0 {
+					stmtStart = txn.offsets[txn.statementID-1]
+				}
+				logutil.Info(
+					"WORKSPACE-FORCE-DUMP",
+					zap.Uint64("approximateInMemInsertSize", txn.approximateInMemInsertSize),
+					zap.Uint64("extraWorkspaceThreshold", txn.engine.config.extraWorkspaceThreshold),
+					zap.Int("stmtStart", stmtStart),
+					zap.String("txn", txn.op.Txn().DebugString()),
+				)
+				offset = stmtStart
+				size = txn.scanInMemInsertSize(stmtStart)
+				forceDump = true
+			} else {
+				return nil
+			}
 		}
 
-		if size < txn.engine.config.extraWorkspaceThreshold {
+		if !forceDump && size < txn.engine.config.extraWorkspaceThreshold {
 			// try to increase the write threshold from quota, if failed, then dump all
 			// acquire 5M more than we need
 			quota := size - txn.writeWorkspaceThreshold + txn.engine.config.writeWorkspaceThreshold
-			remaining, acquired := txn.engine.AcquireQuota(quota)
+			remaining, acquired := txn.engine.AcquireQuota(int64(quota))
 			if acquired {
 				logutil.Info(
 					"WORKSPACE-QUOTA-ACQUIRE",
 					zap.Uint64("quota", quota),
-					zap.Uint64("remaining", remaining),
+					zap.Uint64("remaining", uint64(remaining)),
 					zap.String("txn", txn.op.Txn().DebugString()),
 				)
 				txn.writeWorkspaceThreshold += quota
@@ -533,6 +774,9 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 			}
 		}
 		size = 0
+	}
+	if offset < txn.adjustWriteOffset {
+		txn.adjustWriteOffset = offset
 	}
 	txn.hasS3Op.Store(true)
 
@@ -550,7 +794,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	}
 	// release the extra quota
 	if txn.extraWriteWorkspaceThreshold > 0 {
-		remaining := txn.engine.ReleaseQuota(txn.extraWriteWorkspaceThreshold)
+		remaining := txn.engine.ReleaseQuota(int64(txn.extraWriteWorkspaceThreshold))
 		logutil.Info(
 			"WORKSPACE-QUOTA-RELEASE",
 			zap.Uint64("quota", txn.extraWriteWorkspaceThreshold),
@@ -600,6 +844,9 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	pkCount *int,
 ) error {
 
+	// Check if force flush is enabled
+	forceFlush := objectio.CNWorkspaceForceFlushInjected()
+
 	tbSize := make(map[uint64]int)
 	tbCount := make(map[uint64]int)
 	skipTable := make(map[uint64]bool)
@@ -621,24 +868,39 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	for k := range tbSize {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		return tbSize[keys[i]] < tbSize[keys[j]]
+	slices.SortFunc(keys, func(a, b uint64) int {
+		return cmp.Compare(tbSize[a], tbSize[b])
 	})
-	sum := 0
-	for _, k := range keys {
-		if tbCount[k] >= txn.engine.config.insertEntryMaxCount {
-			continue
+
+	// Skip the skipTable logic if force flush is enabled
+	if !forceFlush {
+		sum := 0
+		for _, k := range keys {
+			if tbCount[k] >= txn.engine.config.insertEntryMaxCount {
+				continue
+			}
+			if uint64(sum+tbSize[k]) >= txn.commitWorkspaceThreshold {
+				break
+			}
+			sum += tbSize[k]
+			skipTable[k] = true
 		}
-		if uint64(sum+tbSize[k]) >= txn.commitWorkspaceThreshold {
-			break
-		}
-		sum += tbSize[k]
-		skipTable[k] = true
+	}
+
+	// Resolve every table that will be flushed BEFORE mutating txn.writes:
+	// getTable must never run while this goroutine holds the lock. See
+	// resolveDumpTablesLocked for the window contract.
+	tables, ok, err := txn.resolveDumpTablesLocked(offset, skipTable, INSERT)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
 	}
 
 	lastWriteIndex := offset
 	writes := txn.writes
-	mp := make(map[tableKey][]*batch.Batch)
+	mp := make(map[workspaceTableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if skipTable[txn.writes[i].tableId] {
 			writes[lastWriteIndex] = writes[i]
@@ -658,24 +920,34 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 		keepElement := true
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			tbKey := tableKey{
-				accountId:  txn.writes[i].accountId,
-				databaseId: txn.writes[i].databaseId,
-				dbName:     txn.writes[i].databaseName,
-				name:       txn.writes[i].tableName,
+			tbKey := workspaceTableKey{
+				tableKey: tableKey{
+					accountId:  txn.writes[i].accountId,
+					databaseId: txn.writes[i].databaseId,
+					dbName:     txn.writes[i].databaseName,
+					name:       txn.writes[i].tableName,
+				},
+				autoIncrEpoch:      txn.writes[i].autoIncrEpoch,
+				autoIncrEpochKnown: txn.writes[i].autoIncrEpochKnown,
 			}
-			bat := txn.writes[i].bat
-			*size += uint64(bat.Size())
-			*pkCount += bat.RowCount()
-			// skip rowid
-			newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
-			newBatch.SetAttributes(bat.Attrs[1:])
-			newBatch.Vecs = bat.Vecs[1:]
-			newBatch.SetRowCount(bat.Vecs[0].Length())
-			mp[tbKey] = append(mp[tbKey], newBatch)
-			defer bat.Clean(txn.proc.GetMPool())
+			// Tables not resolved in the pre-resolution pass were appended
+			// to the workspace while the lock was released; keep them in
+			// memory for the next dump instead of calling getTable with
+			// the lock held.
+			if _, ok := tables[tbKey.tableKey]; ok {
+				bat := txn.writes[i].bat
+				*size += uint64(bat.Size())
+				*pkCount += bat.RowCount()
+				// skip rowid
+				newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
+				newBatch.SetAttributes(bat.Attrs[1:])
+				newBatch.Vecs = bat.Vecs[1:]
+				newBatch.SetRowCount(bat.Vecs[0].Length())
+				mp[tbKey] = append(mp[tbKey], newBatch)
+				defer bat.Clean(txn.proc.GetMPool())
 
-			keepElement = false
+				keepElement = false
+			}
 		}
 
 		if keepElement {
@@ -701,13 +973,12 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
-		tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
-		if err != nil {
-			return err
-		}
+		tbl := tables[tbKey.tableKey]
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
-		s3Writer = colexec.NewCNS3DataWriter(txn.proc.GetMPool(), fs, tableDef, false)
+		s3Writer = colexec.NewCNS3DataWriter(
+			txn.proc.GetMPool(), fs, tableDef, -1, false,
+		)
 
 		for _, bat = range mp[tbKey] {
 			if err = s3Writer.Write(txn.proc.Ctx, bat); err != nil {
@@ -731,7 +1002,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			table = tbl.(*txnTable)
 		}
 
-		if err = table.getTxn().WriteFileLocked(
+		if err = table.getTxn().writeFileLockedWithAutoIncrEpochKnown(
 			INSERT,
 			table.accountId,
 			table.db.databaseId,
@@ -741,6 +1012,8 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			fileName,
 			bat,
 			table.getTxn().tnStores[0],
+			tbKey.autoIncrEpoch,
+			tbKey.autoIncrEpochKnown,
 		); err != nil {
 			return err
 		}
@@ -760,10 +1033,20 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 	size *uint64,
 ) error {
 
+	// See the comment in dumpInsertBatchLocked: tables must be resolved
+	// while txn.writes is still consistent, with the lock released.
+	tables, ok, err := txn.resolveDumpTablesLocked(offset, nil, DELETE)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+
 	deleteCnt := 0
 	lastWriteIndex := offset
 	writes := txn.writes
-	mp := make(map[tableKey][]*batch.Batch)
+	mp := make(map[workspaceTableKey][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].isCatalog() {
 			writes[lastWriteIndex] = writes[i]
@@ -778,25 +1061,35 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 		keepElement := true
 		if txn.writes[i].typ == DELETE && txn.writes[i].fileName == "" {
-			tbKey := tableKey{
-				accountId:  txn.writes[i].accountId,
-				databaseId: txn.writes[i].databaseId,
-				dbName:     txn.writes[i].databaseName,
-				name:       txn.writes[i].tableName,
+			tbKey := workspaceTableKey{
+				tableKey: tableKey{
+					accountId:  txn.writes[i].accountId,
+					databaseId: txn.writes[i].databaseId,
+					dbName:     txn.writes[i].databaseName,
+					name:       txn.writes[i].tableName,
+				},
+				autoIncrEpoch:      txn.writes[i].autoIncrEpoch,
+				autoIncrEpochKnown: txn.writes[i].autoIncrEpochKnown,
 			}
-			bat := txn.writes[i].bat
-			deleteCnt += bat.RowCount()
-			*size += uint64(bat.Size())
+			// Tables not resolved in the pre-resolution pass were appended
+			// to the workspace while the lock was released; keep them in
+			// memory for the next dump instead of calling getTable with
+			// the lock held.
+			if _, ok := tables[tbKey.tableKey]; ok {
+				bat := txn.writes[i].bat
+				deleteCnt += bat.RowCount()
+				*size += uint64(bat.Size())
 
-			newBat := batch.NewWithSize(len(bat.Vecs))
-			newBat.SetAttributes(bat.Attrs)
-			newBat.Vecs = bat.Vecs
-			newBat.SetRowCount(bat.Vecs[0].Length())
+				newBat := batch.NewWithSize(len(bat.Vecs))
+				newBat.SetAttributes(bat.Attrs)
+				newBat.Vecs = bat.Vecs
+				newBat.SetRowCount(bat.Vecs[0].Length())
 
-			mp[tbKey] = append(mp[tbKey], newBat)
-			defer bat.Clean(txn.proc.GetMPool())
+				mp[tbKey] = append(mp[tbKey], newBat)
+				defer bat.Clean(txn.proc.GetMPool())
 
-			keepElement = false
+				keepElement = false
+			}
 		}
 
 		if keepElement {
@@ -824,14 +1117,12 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
-		tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
-		if err != nil {
-			return err
-		}
+		tbl := tables[tbKey.tableKey]
 
 		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
 		s3Writer = colexec.NewCNS3TombstoneWriter(
-			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ))
+			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ), -1,
+		)
 
 		for i := 0; i < len(mp[tbKey]); i++ {
 			if err = s3Writer.Write(txn.proc.Ctx, mp[tbKey][i]); err != nil {
@@ -856,7 +1147,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			table = tbl.(*txnTable)
 		}
 
-		if err = table.getTxn().WriteFileLocked(
+		if err = table.getTxn().writeFileLockedWithAutoIncrEpochKnown(
 			DELETE,
 			table.accountId,
 			table.db.databaseId,
@@ -866,6 +1157,8 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			fileName,
 			bat,
 			table.getTxn().tnStores[0],
+			tbKey.autoIncrEpoch,
+			tbKey.autoIncrEpochKnown,
 		); err != nil {
 			return err
 		}
@@ -878,18 +1171,126 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 	return nil
 }
 
+// resolveDumpTablesLocked resolves the engine.Relation of every table whose
+// workspace entries (of the given type, not yet flushed to a file) a dump is
+// about to flush. It must run BEFORE the dump mutates txn.writes: getTable
+// may run internal SQL (Engine.Database -> execReadSql -> NewCompile) whose
+// read pipeline locks the workspace, so the lock is released around the
+// getTable calls, and that is only safe while the workspace is still
+// consistent. The lock is re-acquired before returning, also on error.
+//
+// While the lock is released other goroutines may mutate the workspace. The
+// caller must therefore treat the resolved map as the complete allowlist of
+// what this dump may flush (entries of unresolved tables stay raw), and must
+// give up when ok is false: a rollback truncated txn.writes below the dump
+// offset during the window, so there is nothing left this dump round may
+// safely touch.
+func (txn *Transaction) resolveDumpTablesLocked(
+	offset int,
+	skipTable map[uint64]bool,
+	typ int,
+) (tables map[tableKey]engine.Relation, ok bool, err error) {
+	var keys []tableKey
+	seen := make(map[tableKey]bool)
+	for i := offset; i < len(txn.writes); i++ {
+		e := &txn.writes[i]
+		if skipTable != nil && skipTable[e.tableId] {
+			continue
+		}
+		if e.isCatalog() {
+			continue
+		}
+		if e.bat == nil || e.bat.RowCount() == 0 {
+			continue
+		}
+		if e.typ != typ || e.fileName != "" {
+			continue
+		}
+		k := tableKey{
+			accountId:  e.accountId,
+			databaseId: e.databaseId,
+			dbName:     e.databaseName,
+			name:       e.tableName,
+		}
+		if !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+
+	tables = make(map[tableKey]engine.Relation, len(keys))
+	if len(keys) == 0 {
+		return tables, true, nil
+	}
+
+	txn.Unlock()
+	for _, k := range keys {
+		tbl, terr := txn.getTable(k.accountId, k.dbName, k.name)
+		if terr != nil {
+			txn.Lock()
+			return nil, false, terr
+		}
+		tables[k] = tbl
+	}
+	// Test-only orchestration: park here (lock released) so a test can mutate
+	// the workspace while the resolution window is open.
+	objectio.CNDumpResolveWindowWait()
+	txn.Lock()
+
+	if offset > len(txn.writes) {
+		// the workspace was truncated below the dump offset while the lock
+		// was released (statement rollback): nothing to dump this round
+		return nil, false, nil
+	}
+	return tables, true, nil
+}
+
 func (txn *Transaction) getTable(
 	id uint32,
 	dbName string,
 	tbName string,
 ) (engine.Relation, error) {
+	if txn.engine == nil {
+		return nil, moerr.NewInternalErrorNoCtx("disttae txn engine is nil")
+	}
+
+	if injected, rogueUpdate, errorOut := objectio.CNReenterSnapshotOffsetOnGetTableInjected(); injected {
+		// Test-only fault: deterministically simulate the internal-SQL leg
+		// of the issue #25557 deadlock (getTable -> Engine.Database ->
+		// loadDatabaseFromStorage -> execReadSql -> NewCompile) without
+		// requiring a catalog cache miss. The internal SQL's compile captures
+		// the workspace write offset — WriteOffset takes txn.Lock, so this
+		// self-deadlocks (and the test times out) whenever getTable is
+		// reached with the lock held.
+		_ = txn.WriteOffset()
+		if rogueUpdate {
+			// simulate a rogue statement-boundary advance that internal SQL
+			// must never perform; kept to pin down the damage it would cause
+			txn.UpdateSnapshotWriteOffset()
+		}
+		if errorOut {
+			return nil, moerr.NewInternalErrorNoCtx(
+				"fault injection: reenter snapshot write offset on getTable")
+		}
+	}
+
+	var txnOp client.TxnOperator
+	if txn.op != nil {
+		txnOp = txn.op
+	} else if txn.proc != nil {
+		txnOp = txn.proc.GetTxnOperator()
+	}
+	if txnOp == nil {
+		return nil, moerr.NewInternalErrorNoCtx("disttae txn operator is nil")
+	}
+
 	ctx := context.WithValue(
 		context.Background(),
 		defines.TenantIDKey{},
 		id,
 	)
 
-	database, err := txn.engine.Database(ctx, dbName, txn.proc.GetTxnOperator())
+	database, err := txn.engine.Database(ctx, dbName, txnOp)
 	if err != nil {
 		return nil, err
 	}
@@ -900,6 +1301,74 @@ func (txn *Transaction) getTable(
 	return tbl, nil
 }
 
+func (txn *Transaction) resolvePKCheckPosForWrite(
+	typ int,
+	accountId uint32,
+	databaseName, tableName string,
+	tableId uint64,
+	bat *batch.Batch,
+) (int, bool, error) {
+	if bat == nil || bat.RowCount() == 0 {
+		return -1, true, nil
+	}
+
+	if typ != INSERT && typ != DELETE {
+		return -1, true, nil
+	}
+
+	if tableId == catalog.MO_TABLES_ID ||
+		tableId == catalog.MO_COLUMNS_ID ||
+		tableId == catalog.MO_DATABASE_ID {
+		return -1, true, nil
+	}
+	if txn.engine == nil {
+		return -1, false, nil
+	}
+
+	tbl, err := txn.getTable(accountId, databaseName, tableName)
+	if err != nil {
+		return -1, false, err
+	}
+	tableDefCtx := context.Background()
+	if txn.proc != nil && txn.proc.Ctx != nil {
+		tableDefCtx = txn.proc.Ctx
+	}
+	tableDef := tbl.GetTableDef(tableDefCtx)
+	if tableDef == nil || tableDef.Pkey == nil {
+		return -1, true, nil
+	}
+
+	pkName := tableDef.Pkey.PkeyColName
+	if pkName == "" ||
+		pkName == catalog.FakePrimaryKeyColName ||
+		pkName == catalog.CPrimaryKeyColName {
+		return -1, true, nil
+	}
+
+	if typ == DELETE {
+		if len(bat.Vecs) < 2 {
+			logutil.Warnf("delete has no pk vector, database:%s, table:%s", databaseName, tableName)
+			return -1, false, nil
+		}
+		return 1, true, nil
+	}
+
+	for i, attr := range bat.Attrs {
+		if attr == pkName {
+			return i, true, nil
+		}
+	}
+	for i, attr := range bat.Attrs {
+		if strings.EqualFold(attr, pkName) {
+			return i, true, nil
+		}
+	}
+
+	logutil.Warnf("pk column %s not found in write attrs, database:%s, table:%s, attrs:%v",
+		pkName, databaseName, tableName, bat.Attrs)
+	return -1, false, nil
+}
+
 // vec contains block infos.
 func (txn *Transaction) registerCNObjects(
 	objId types.Objectid,
@@ -907,12 +1376,16 @@ func (txn *Transaction) registerCNObjects(
 	objBat *batch.Batch,
 	dbName string,
 	tbName string,
+	autoIncrEpoch uint32,
+	autoIncrEpochKnown bool,
 ) {
 	txn.cnObjsSummary[objId] = Summary{
-		objBat:    objBat,
-		accountId: accountId,
-		dbName:    dbName,
-		tbName:    tbName,
+		objBat:             objBat,
+		accountId:          accountId,
+		dbName:             dbName,
+		tbName:             tbName,
+		autoIncrEpoch:      autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
 	}
 }
 
@@ -927,6 +1400,39 @@ func (txn *Transaction) WriteFileLocked(
 	inputBat *batch.Batch,
 	tnStore DNStore,
 ) (err error) {
+	return txn.writeFileLockedWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, inputBat, tnStore, 0, false)
+}
+
+func (txn *Transaction) writeFileLockedWithAutoIncrEpoch(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	inputBat *batch.Batch,
+	tnStore DNStore,
+	autoIncrEpoch uint32,
+) (err error) {
+	return txn.writeFileLockedWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, inputBat, tnStore, autoIncrEpoch, true)
+}
+
+func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	inputBat *batch.Batch,
+	tnStore DNStore,
+	autoIncrEpoch uint32,
+	autoIncrEpochKnown bool,
+) (err error) {
 
 	txn.hasS3Op.Store(true)
 
@@ -939,14 +1445,15 @@ func (txn *Transaction) WriteFileLocked(
 	}
 
 	if typ == INSERT {
+		server := colexec.MustGetServer(txn.engine.service)
 		col, area := vector.MustVarlenaRawData(copied.Vecs[1])
 		for i := range col {
 			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
 			oid := stats.ObjectName().ObjectId()
 			sid := oid.Segment()
 
-			colexec.RecordTxnUnCommitSegment(sid)
-			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName)
+			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
+			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
 		}
 	}
 
@@ -962,15 +1469,120 @@ func (txn *Transaction) WriteFileLocked(
 	}
 
 	entry := Entry{
-		typ:          typ,
-		accountId:    accountId,
-		tableId:      tableId,
-		databaseId:   databaseId,
-		tableName:    tableName,
-		databaseName: databaseName,
-		fileName:     fileName,
-		bat:          copied,
-		tnStore:      tnStore,
+		typ:                typ,
+		accountId:          accountId,
+		tableId:            tableId,
+		databaseId:         databaseId,
+		tableName:          tableName,
+		databaseName:       databaseName,
+		fileName:           fileName,
+		bat:                copied,
+		tnStore:            tnStore,
+		pkCheckPos:         -1,
+		pkCheckReady:       true,
+		autoIncrEpoch:      autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
+	}
+
+	txn.writes = append(txn.writes, entry)
+
+	return nil
+}
+
+// WriteFileLockedSkipTransfer is similar to WriteFileLocked but marks the entry
+// to skip transfer processing. Used by CCPR for cross-cluster tombstones.
+func (txn *Transaction) WriteFileLockedSkipTransfer(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	inputBat *batch.Batch,
+	tnStore DNStore,
+) (err error) {
+	return txn.writeFileLockedSkipTransferWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, inputBat, tnStore, 0, false)
+}
+
+func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpoch(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	inputBat *batch.Batch,
+	tnStore DNStore,
+	autoIncrEpoch uint32,
+) (err error) {
+	return txn.writeFileLockedSkipTransferWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, inputBat, tnStore, autoIncrEpoch, true)
+}
+
+func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	inputBat *batch.Batch,
+	tnStore DNStore,
+	autoIncrEpoch uint32,
+	autoIncrEpochKnown bool,
+) (err error) {
+
+	txn.hasS3Op.Store(true)
+
+	var (
+		copied *batch.Batch
+	)
+
+	if copied, err = inputBat.Dup(txn.proc.Mp()); err != nil {
+		return err
+	}
+
+	if typ == INSERT {
+		server := colexec.MustGetServer(txn.engine.service)
+		col, area := vector.MustVarlenaRawData(copied.Vecs[1])
+		for i := range col {
+			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+			oid := stats.ObjectName().ObjectId()
+			sid := oid.Segment()
+
+			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
+			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
+		}
+	}
+
+	txn.readOnly.Store(false)
+	txn.workspaceSize += uint64(copied.Size())
+
+	if typ == DELETE {
+		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
+		for i := range col {
+			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+			txn.StashFlushedTombstones(stats)
+		}
+	}
+
+	entry := Entry{
+		typ:                typ,
+		accountId:          accountId,
+		tableId:            tableId,
+		databaseId:         databaseId,
+		tableName:          tableName,
+		databaseName:       databaseName,
+		fileName:           fileName,
+		bat:                copied,
+		tnStore:            tnStore,
+		skipTransfer:       true,
+		autoIncrEpoch:      autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
 	}
 
 	txn.writes = append(txn.writes, entry)
@@ -991,11 +1603,44 @@ func (txn *Transaction) WriteFile(
 	bat *batch.Batch,
 	tnStore DNStore,
 ) error {
+	return txn.writeFileWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, bat, tnStore, 0, false)
+}
+
+func (txn *Transaction) writeFileWithAutoIncrEpoch(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	bat *batch.Batch,
+	tnStore DNStore,
+	autoIncrEpoch uint32,
+) error {
+	return txn.writeFileWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, bat, tnStore, autoIncrEpoch, true)
+}
+
+func (txn *Transaction) writeFileWithAutoIncrEpochKnown(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	bat *batch.Batch,
+	tnStore DNStore,
+	autoIncrEpoch uint32,
+	autoIncrEpochKnown bool,
+) error {
 
 	txn.Lock()
 	defer txn.Unlock()
 
-	return txn.WriteFileLocked(
+	return txn.writeFileLockedWithAutoIncrEpochKnown(
 		typ,
 		accountId,
 		databaseId,
@@ -1005,6 +1650,8 @@ func (txn *Transaction) WriteFile(
 		fileName,
 		bat,
 		tnStore,
+		autoIncrEpoch,
+		autoIncrEpochKnown,
 	)
 }
 
@@ -1041,6 +1688,7 @@ func (txn *Transaction) deleteBatch(
 		max1           = uint32(0)
 		cnRowIdOffsets = make([]int64, 0, len(rowids))
 	)
+	server := colexec.MustGetServer(txn.engine.service)
 
 	for i, rowid := range rowids {
 
@@ -1049,7 +1697,7 @@ func (txn *Transaction) deleteBatch(
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
 
-		if colexec.IsDeletionOnTxnUnCommitPersisted(nil, rowid.BorrowSegmentID()) {
+		if server.GetCnSegmentType(rowid.BorrowSegmentID(), tableId, txn.op.Txn().ID) == colexec.TxnWorkspaceUnCommitType {
 			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
@@ -1069,7 +1717,7 @@ func (txn *Transaction) deleteBatch(
 	if bat.RowCount() == 0 {
 		return bat
 	}
-	sels := txn.proc.Mp().GetSels()
+	sels := vector.GetSels()
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
 
 	sels = sels[:0]
@@ -1081,7 +1729,7 @@ func (txn *Transaction) deleteBatch(
 		}
 	}
 	bat.Shrink(sels, true)
-	txn.proc.Mp().PutSels(sels)
+	vector.PutSels(sels)
 	return bat
 }
 
@@ -1102,45 +1750,47 @@ func (txn *Transaction) deleteTableWrites(
 	// 3.CN block Meta batch(record block meta generated by cn insert write s3)
 	// 4.DN delete Block Meta batch(record block meta generated by cn delete write s3)
 	for _, entry := range txn.writes {
+		if entry.tableId != tableId || entry.databaseId != databaseId {
+			continue
+		}
+		if entry.typ == ALTER || entry.typ == DELETE {
+			continue
+		}
 		// nil batch will generated by comapction or dumpBatch
 		if entry.bat == nil || entry.bat.RowCount() == 0 {
 			continue
 		}
 
-		// skip ALTER, DELETE, BlockMeta
-		if entry.typ == ALTER ||
-			entry.typ == DELETE ||
-			entry.bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
+		// skip BlockMeta
+		if entry.bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
 			continue
 		}
 
 		sels = sels[:0]
-		if entry.tableId == tableId && entry.databaseId == databaseId {
-			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
-			if len(rowids) == 0 {
-				continue
-			}
+		rowids := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
+		if len(rowids) == 0 {
+			continue
+		}
 
-			// Now, e.bat is uncommitted raw data batch which belongs to only one block allocated by CN.
-			// so if e.bat is not to be deleted,skip it.
-			if !deleteBlkId[rowids[0].CloneBlockID()] {
-				continue
+		// Now, e.bat is uncommitted raw data batch which belongs to only one block allocated by CN.
+		// so if e.bat is not to be deleted,skip it.
+		if !deleteBlkId[rowids[0].CloneBlockID()] {
+			continue
+		}
+		min2 := rowids[0].GetRowOffset()
+		max2 := rowids[len(rowids)-1].GetRowOffset()
+		if min > max2 || max < min2 {
+			continue
+		}
+		for k, v := range rowids {
+			if _, ok := mp[v]; ok {
+				// if the v will be deleted, then add its index into the sels.
+				sels = append(sels, int64(k))
+				mp[v]++
 			}
-			min2 := rowids[0].GetRowOffset()
-			max2 := rowids[len(rowids)-1].GetRowOffset()
-			if min > max2 || max < min2 {
-				continue
-			}
-			for k, v := range rowids {
-				if _, ok := mp[v]; ok {
-					// if the v will be deleted, then add its index into the sels.
-					sels = append(sels, int64(k))
-					mp[v]++
-				}
-			}
-			if len(sels) > 0 {
-				txn.batchSelectList[entry.bat] = append(txn.batchSelectList[entry.bat], sels...)
-			}
+		}
+		if len(sels) > 0 {
+			txn.batchSelectList[entry.bat] = append(txn.batchSelectList[entry.bat], sels...)
 		}
 	}
 }
@@ -1207,17 +1857,29 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
 				txn.approximateInMemInsertCnt -= len(sels)
-				sort.Slice(sels, func(i, j int) bool {
-					return sels[i] < (sels[j])
-				})
+				slices.Sort(sels)
 				shrinkBatchWithRowids(e.bat, sels)
 				delete(txn.batchSelectList, e.bat)
 			}
 		}
 	}
+
 	if len(txn.tablesInVain) > 0 {
+		ignoreTablesInVain := func(entry Entry) bool {
+			_, ok := txn.tablesInVain[entry.tableId]
+			return ok
+		}
 		for i, e := range txn.writes {
 			if _, ok := txn.tablesInVain[e.tableId]; e.bat != nil && ok {
+				// if the entry contains objects, need to clean it from the disk.
+				// Skip GC for CCPR transactions - CCPRTxnCache handles GC to avoid deleting shared objects
+				if len(e.fileName) != 0 && !txn.isCCPRTxn {
+					txn.unprotectUnreferencedTxnLocalSharedFilesLocked(
+						collectObjectStatsFromEntry(e),
+						ignoreTablesInVain,
+					)
+					_ = txn.GCObjsByIdxRange(i, i)
+				}
 				e.bat.Clean(txn.proc.GetMPool())
 				txn.writes[i].bat = nil
 			}
@@ -1312,9 +1974,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 
 	// this threshold may have a bad effect on the performance
 	if inserts.Count()+deletes.Count() >= 30 {
-		arr := common.DefaultAllocator.GetSels()
+		arr := vector.GetSels()
 		defer func() {
-			common.DefaultAllocator.PutSels(arr)
+			vector.PutSels(arr)
 		}()
 
 		ins := inserts.ToI64Array(&arr)
@@ -1327,22 +1989,23 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			return err
 		}
 
-		i, j := 0, len(txn.writes)-1
-		for i <= j {
+		n := 0
+		for i := range txn.writes {
 			if txn.writes[i].bat == nil {
-				txn.writes[i], txn.writes[j] = txn.writes[j], txn.writes[i]
-				j--
-			} else {
-				i++
+				continue
 			}
+			txn.writes[n] = txn.writes[i]
+			n++
 		}
 
-		txn.writes = txn.writes[:i]
+		txn.writes = txn.writes[:n]
 
-		for i = range txn.writes {
+		var sortBuf []int64
+		var shuffleBuf []byte
+		for i := range txn.writes {
 			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
-				if err := mergeutil.SortColumnsByIndex(
-					txn.writes[i].bat.Vecs, 0, txn.proc.Mp()); err != nil {
+				if err := mergeutil.SortColumnsByIndexWithBuf(
+					txn.writes[i].bat.Vecs, 0, txn.proc.Mp(), &sortBuf, &shuffleBuf); err != nil {
 					return err
 				}
 			}
@@ -1352,16 +2015,73 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	return nil
 }
 
+// resolveCompactTablesLocked resolves the engine.Relation of every table
+// that object-deletion compaction will rewrite. The compaction workers must
+// never call getTable themselves: they run while this goroutine holds
+// txn.Lock and waits for them, and getTable may run internal SQL whose read
+// pipeline locks the workspace — the worker would then wait for the lock
+// owner that waits for the worker. So all tables are resolved up front, with
+// the lock released around the getTable calls (same contract as
+// resolveDumpTablesLocked). Because other goroutines may add deletions while
+// the lock is released, the scan-resolve cycle repeats until every table
+// referenced by txn.deletedBlocks is resolved.
+func (txn *Transaction) resolveCompactTablesLocked() (map[tableKey]engine.Relation, error) {
+	tables := make(map[tableKey]engine.Relation)
+	for {
+		var missing []tableKey
+		seen := make(map[tableKey]bool)
+		txn.deletedBlocks.iter(
+			func(blkId *types.Blockid, offsets []int64) bool {
+				summary := txn.cnObjsSummary[*blkId.Object()]
+				k := tableKey{
+					accountId: summary.accountId,
+					dbName:    summary.dbName,
+					name:      summary.tbName,
+				}
+				if _, ok := tables[k]; !ok && !seen[k] {
+					seen[k] = true
+					missing = append(missing, k)
+				}
+				return true
+			})
+		if len(missing) == 0 {
+			return tables, nil
+		}
+
+		txn.Unlock()
+		for _, k := range missing {
+			tbl, err := txn.getTable(k.accountId, k.dbName, k.name)
+			if err != nil {
+				txn.Lock()
+				return nil, err
+			}
+			tables[k] = tbl
+		}
+		txn.Lock()
+	}
+}
+
 // CN blocks compaction for txn
 func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
-	if txn.deletedBlocks == nil {
+	if txn.deletedBlocks.size() == 0 {
+		return nil
+	}
+
+	// resolve every affected table BEFORE building the compaction state and
+	// spawning workers; workers must not call getTable (see
+	// resolveCompactTablesLocked)
+	tables, err := txn.resolveCompactTablesLocked()
+	if err != nil {
+		return err
+	}
+	if txn.deletedBlocks.size() == 0 {
 		return nil
 	}
 
 	// object --> blk id --> deletion
 	objBlkDeletion := make(map[objectio.ObjectId]map[objectio.Blockid][]int64)
-	objTables := make(map[objectio.ObjectId]tableKey)
+	objTables := make(map[objectio.ObjectId]workspaceTableKey)
 
 	affectedBats := make(map[*batch.Batch]struct{})
 
@@ -1384,10 +2104,14 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			blkDel[*blkId] = offsets
 
 			if _, ok := objTables[*blkId.Object()]; !ok {
-				objTables[*blkId.Object()] = tableKey{
-					accountId: summary.accountId,
-					dbName:    summary.dbName,
-					name:      summary.tbName,
+				objTables[*blkId.Object()] = workspaceTableKey{
+					tableKey: tableKey{
+						accountId: summary.accountId,
+						dbName:    summary.dbName,
+						name:      summary.tbName,
+					},
+					autoIncrEpoch:      summary.autoIncrEpoch,
+					autoIncrEpochKnown: summary.autoIncrEpochKnown,
 				}
 			}
 
@@ -1418,9 +2142,12 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			)
 		}
 
-		rel, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
-		if err != nil {
-			panicWhenFailed(err, "get table failed")
+		// resolveCompactTablesLocked guarantees every table referenced by
+		// txn.deletedBlocks is in the map
+		rel, ok := tables[tbKey.tableKey]
+		if !ok {
+			panicWhenFailed(moerr.NewInternalErrorNoCtx(
+				"table not pre-resolved for object compaction"), "get table failed")
 		}
 
 		tbl, ok := rel.(*txnTable)
@@ -1440,7 +2167,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 		locker.Lock()
 		defer locker.Unlock()
-		if err = txn.WriteFileLocked(
+		if err = txn.writeFileLockedWithAutoIncrEpochKnown(
 			INSERT,
 			tbl.accountId,
 			tbl.db.databaseId,
@@ -1450,6 +2177,8 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			fileName,
 			bat,
 			txn.tnStores[0],
+			tbKey.autoIncrEpoch,
+			tbKey.autoIncrEpochKnown,
 		); err != nil {
 			bat.Clean(txn.proc.Mp())
 			panicWhenFailed(err, "write txn file failed")
@@ -1485,7 +2214,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 			if objBlkDeletion[*stats.ObjectName().ObjectId()] == nil {
 				// clean object, no deletion on it
-				bat := colexec.AllocCNS3ResultBat(false, false)
+				bat := colexec.AllocCNS3ResultBat(false)
 				if err := bat.Vecs[0].UnionBatch(entry.bat.Vecs[0],
 					int64(offset), int(stats.BlkCnt()), nil, txn.proc.Mp()); err != nil {
 					return err
@@ -1497,7 +2226,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 				bat.SetRowCount(bat.Vecs[0].Length())
 
-				if err := txn.WriteFileLocked(
+				if err := txn.writeFileLockedWithAutoIncrEpochKnown(
 					INSERT,
 					entry.accountId,
 					entry.databaseId,
@@ -1507,10 +2236,14 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 					stats.ObjectName().String(),
 					bat,
 					entry.tnStore,
+					entry.autoIncrEpoch,
+					entry.autoIncrEpochKnown,
 				); err != nil {
 					bat.Clean(txn.proc.Mp())
 					return err
 				}
+
+				//_ = txn.GCObjsByStats(stats)
 				bat.Clean(txn.proc.Mp())
 
 			} else {
@@ -1540,8 +2273,77 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	}
 
 	waiter.Wait()
+	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(dirtyObject, nil)
+	_ = txn.GCObjsByStats(dirtyObject...)
 
 	return nil
+}
+
+func (txn *Transaction) unprotectUnreferencedTxnLocalSharedFilesLocked(
+	statsList []objectio.ObjectStats,
+	ignoreEntry func(Entry) bool,
+) {
+	if !txn.isCloneTxn ||
+		txn.op == nil ||
+		txn.engine == nil ||
+		txn.engine.cloneTxnCache == nil {
+		return
+	}
+
+	txnID := txn.op.Txn().ID
+	for i := range statsList {
+		name := statsList[i].ObjectName().String()
+		if txn.hasLiveObjectStatsRefLocked(name, ignoreEntry) {
+			continue
+		}
+		txn.engine.cloneTxnCache.RemoveTxnLocalSharedFile(txnID, name)
+	}
+}
+
+func (txn *Transaction) hasLiveObjectStatsRefLocked(
+	name string,
+	ignoreEntry func(Entry) bool,
+) bool {
+	for _, entry := range txn.writes {
+		if ignoreEntry != nil && ignoreEntry(entry) {
+			continue
+		}
+		if entry.bat == nil || entry.bat.IsEmpty() {
+			continue
+		}
+
+		for _, stats := range collectObjectStatsFromEntry(entry) {
+			if stats.ObjectName().String() == name {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func collectObjectStatsFromEntry(entry Entry) []objectio.ObjectStats {
+	if entry.bat == nil || entry.bat.IsEmpty() {
+		return nil
+	}
+
+	statsIdx := -1
+	for i, attr := range entry.bat.Attrs {
+		if attr == catalog.ObjectMeta_ObjectStats {
+			statsIdx = i
+			break
+		}
+	}
+	if statsIdx == -1 {
+		return nil
+	}
+
+	vec := entry.bat.Vecs[statsIdx]
+	statsList := make([]objectio.ObjectStats, 0, vec.Length())
+	for i := range vec.Length() {
+		statsList = append(statsList, objectio.ObjectStats(vec.GetBytesAt(i)))
+	}
+	return statsList
 }
 
 // TODO::remove it after workspace refactor.
@@ -1566,7 +2368,8 @@ func (txn *Transaction) forEachTableHasDeletesLocked(
 	for i := 0; i < len(txn.writes); i++ {
 		e := txn.writes[i]
 		if e.typ != DELETE || e.bat == nil || e.bat.RowCount() == 0 ||
-			(!isObject && e.fileName != "" || isObject && e.fileName == "") {
+			(!isObject && e.fileName != "" || isObject && e.fileName == "") ||
+			e.skipTransfer {
 			continue
 		}
 
@@ -1606,7 +2409,9 @@ func (txn *Transaction) forEachTableHasDeletesLocked(
 func (txn *Transaction) ForEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
-	for i := 0; i < offset; i++ {
+	// defensive: an offset captured before a workspace compaction may exceed
+	// the current length; never index past the end
+	for i := 0; i < offset && i < len(txn.writes); i++ {
 		e := txn.writes[i]
 		if e.databaseId != databaseId {
 			continue
@@ -1622,11 +2427,19 @@ func (txn *Transaction) ForEachTableWrites(databaseId uint64, tableId uint64, of
 // Before it gets the cached table, it checks whether the table is deleted by another
 // transaction by go through the delete tables slice, and advance its cachedIndex.
 func (txn *Transaction) getCachedTable(
-	_ context.Context,
+	ctx context.Context,
 	k tableKey,
 ) *txnTableDelegate {
+	return txn.getCachedTableByKey(ctx, k, k)
+}
+
+func (txn *Transaction) getCachedTableByKey(
+	_ context.Context,
+	k tableKey,
+	cacheKey any,
+) *txnTableDelegate {
 	var tbl *txnTableDelegate
-	if v, ok := txn.tableCache.Load(k); ok {
+	if v, ok := txn.tableCache.Load(cacheKey); ok {
 		tbl = v.(*txnTableDelegate)
 
 		if txn.op.IsSnapOp() || !txn.op.Txn().IsRCIsolation() {
@@ -1651,7 +2464,7 @@ func (txn *Transaction) getCachedTable(
 	return tbl
 }
 
-func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
+func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err error) {
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.Commit",
@@ -1659,7 +2472,6 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		)
 	})
 
-	defer txn.delTransaction()
 	if txn.readOnly.Load() {
 		return nil, nil
 	}
@@ -1672,11 +2484,26 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, err
 	}
 
+	// mergeTxnWorkspaceLocked (and the compactDeletionOnObjsLocked call
+	// inside it) mutates txn.writes and may release/re-acquire the lock
+	// around metadata resolution, so it must run with the lock held — same
+	// as the IncrStatementID path.
+	txn.Lock()
 	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
+		txn.Unlock()
 		return nil, err
 	}
 	if err := txn.dumpBatchLocked(ctx, -1); err != nil {
+		txn.Unlock()
 		return nil, err
+	}
+	txn.Unlock()
+
+	if msg, injected := objectio.CNCommitAfterWorkspaceDumpFailedInjected(); injected {
+		if msg == "" {
+			msg = "injected commit failure after workspace dump"
+		}
+		return nil, moerr.NewInternalError(ctx, msg)
 	}
 
 	txn.traceWorkspaceLocked(true)
@@ -1711,11 +2538,29 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 			return nil, err
 		}
 	}
-	reqs, err := genWriteReqs(ctx, txn)
+	reqs, err = genWriteReqs(ctx, txn)
 	if err != nil {
 		return nil, err
 	}
+
 	return reqs, nil
+}
+
+func (txn *Transaction) FinalizeCommit(context.Context) {
+	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
+		txn.engine.ccprTxnCache.OnTxnCommit(txn.op.Txn().ID)
+	}
+	txn.delTransaction()
+}
+
+func (txn *Transaction) FinalizeCommitWithUnknownResult(context.Context) {
+	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
+		txn.engine.ccprTxnCache.OnTxnUnknownResult(txn.op.Txn().ID)
+	}
+	// The Commit may have reached TN. delTransaction releases only CN-local
+	// state and intentionally does not run gcObjsByIdxRange or delete shared
+	// object-storage data.
+	txn.delTransaction()
 }
 
 func (txn *Transaction) transferTombstonesByStatement(
@@ -1802,24 +2647,41 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
 		)
 	}
-	//to gc the s3 objs
-	if err := txn.gcObjs(0); err != nil {
-		panic("Rollback txn failed: to gc objects generated by CN failed")
+	_, loadCleanupErr := txn.deleteLoadFiles(ctx, nil)
+
+	// For CCPR transactions, call OnTxnRollback to clean up the cache and GC objects
+	// Skip normal GCObjsByIdxRange for CCPR transactions because:
+	// 1. CCPR objects may be shared across transactions
+	// 2. CCPRTxnCache.OnTxnRollback handles GC properly (only deletes when no other txn references the object)
+	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
+		txn.engine.ccprTxnCache.OnTxnRollback(txn.op.Txn().ID)
+	} else {
+		//to gc the s3 objs
+		if err := txn.gcObjsByIdxRange(0, len(txn.writes)-1, cloneGCTxnRollback); err != nil {
+			panic("Rollback txn failed: to gc objects generated by CN failed")
+		}
 	}
 	txn.delTransaction()
-	return nil
+	return loadCleanupErr
 }
 
 func (txn *Transaction) delTransaction() {
 	if txn.removed {
 		return
 	}
+
+	if txn.isCloneTxn {
+		txn.engine.cloneTxnCache.DeleteTxn(txn.op.Txn().ID)
+		txn.isCloneTxn = false
+	}
+
 	for i := range txn.writes {
 		if txn.writes[i].bat == nil {
 			continue
 		}
 		txn.writes[i].bat.Clean(txn.proc.Mp())
 	}
+
 	txn.tableCache = nil
 	txn.tableOps = nil
 	txn.databaseOps = nil
@@ -1827,12 +2689,9 @@ func (txn *Transaction) delTransaction() {
 	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
-	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnObjsSummary)+1)
-	for blkId := range txn.cnObjsSummary {
-		segmentnames = append(segmentnames, *blkId.Segment())
-	}
-	colexec.Get().DeleteTxnSegmentIds(segmentnames)
+	colexec.MustGetServer(txn.engine.service).DeleteTxnSegmentIds(txn.op.Txn().ID)
 	txn.cnObjsSummary = nil
+	txn.loadFiles = nil
 	txn.hasS3Op.Store(false)
 	txn.removed = true
 
@@ -1846,7 +2705,7 @@ func (txn *Transaction) delTransaction() {
 	}
 
 	if txn.extraWriteWorkspaceThreshold > 0 {
-		remaining := txn.engine.ReleaseQuota(txn.extraWriteWorkspaceThreshold)
+		remaining := txn.engine.ReleaseQuota(int64(txn.extraWriteWorkspaceThreshold))
 		logutil.Info(
 			"WORKSPACE-QUOTA-RELEASE",
 			zap.Uint64("quota", txn.extraWriteWorkspaceThreshold),
@@ -1874,16 +2733,31 @@ func (txn *Transaction) clearTableCache() {
 	})
 }
 
+// GetSnapshotWriteOffset returns the current statement boundary of
+// txn.writes. It is lock-free on purpose: internal SQL spawned while the
+// transaction lock is held (e.g. a catalog read inside a workspace dump)
+// reads the boundary without re-entering the lock.
 func (txn *Transaction) GetSnapshotWriteOffset() int {
-	txn.Lock()
-	defer txn.Unlock()
-	return txn.snapshotWriteOffset
+	return int(txn.snapshotWriteOffset.Load())
 }
 
+// UpdateSnapshotWriteOffset advances the statement boundary to the current
+// end of txn.writes. Only statement-boundary callers may use it (a new
+// compile of a user statement); internal SQL must never advance the
+// boundary, or a mid-statement dump can compact entries covered by it.
 func (txn *Transaction) UpdateSnapshotWriteOffset() {
 	txn.Lock()
 	defer txn.Unlock()
-	txn.snapshotWriteOffset = len(txn.writes)
+	txn.snapshotWriteOffset.Store(int64(len(txn.writes)))
+	txn.adjustWriteOffset = len(txn.writes)
+}
+
+// ApproximateInMemInsertSize returns the approximate total size of in-memory
+// insert entries in the workspace. Intended for testing and diagnostics.
+func (txn *Transaction) ApproximateInMemInsertSize() uint64 {
+	txn.Lock()
+	defer txn.Unlock()
+	return txn.approximateInMemInsertSize
 }
 
 func (txn *Transaction) CloneSnapshotWS() client.Workspace {

@@ -21,6 +21,7 @@ import (
 	"github.com/fagongzi/util/format"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -81,12 +82,17 @@ func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
 	defer res.Close()
 
 	var version Version
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+	loaded, rows := readSingleRow(res, func(cols []*vector.Vector) {
 		version.Version = cols[0].GetStringAt(0)
 		version.VersionOffset = vector.GetFixedAtWithTypeCheck[uint32](cols[1], 0)
 		version.State = vector.GetFixedAtWithTypeCheck[int32](cols[2], 0)
-		return true
 	})
+	if rows > 1 {
+		return Version{}, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
+	}
+	if !loaded {
+		return Version{}, nil
+	}
 	return version, nil
 }
 
@@ -101,10 +107,15 @@ func GetLatestUpgradeVersion(txn executor.TxnExecutor) (Version, error) {
 	defer res.Close()
 
 	var version Version
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+	loaded, rows := readSingleRow(res, func(cols []*vector.Vector) {
 		version.Version = cols[0].GetStringAt(0)
-		return true
 	})
+	if rows > 1 {
+		return Version{}, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
+	}
+	if !loaded {
+		return Version{}, nil
+	}
 	return version, nil
 }
 
@@ -123,10 +134,12 @@ func MustGetLatestReadyVersion(
 	defer res.Close()
 
 	version := ""
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+	_, rows := readSingleRow(res, func(cols []*vector.Vector) {
 		version = cols[0].GetStringAt(0)
-		return true
 	})
+	if rows > 1 {
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
+	}
 	if version == "" {
 		getLogger(txn.Txn().TxnOptions().CN).Fatal("missing latest ready version")
 	}
@@ -155,16 +168,11 @@ func GetVersionState(
 	defer res.Close()
 
 	state := int32(0)
-	loaded := false
-	n := 0
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+	loaded, rows := readSingleRow(res, func(cols []*vector.Vector) {
 		state = vector.GetFixedAtWithTypeCheck[int32](cols[0], 0)
-		loaded = true
-		n++
-		return true
 	})
-	if loaded && n > 1 {
-		getLogger(txn.Txn().TxnOptions().CN).Fatal("BUG: missing version " + version)
+	if rows > 1 {
+		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: duplicate version state for %s, rows=%d", version, rows))
 	}
 	return state, loaded, nil
 }
@@ -185,6 +193,22 @@ func UpdateVersionState(
 	}
 	res.Close()
 	return nil
+}
+
+func readSingleRow(res executor.Result, onRow func(cols []*vector.Vector)) (loaded bool, totalRows int) {
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		totalRows += rows
+		if totalRows > 1 {
+			return false
+		}
+		onRow(cols)
+		loaded = true
+		return true
+	})
+	return
 }
 
 func Compare(v1, v2 string) int {

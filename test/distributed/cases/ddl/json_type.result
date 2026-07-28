@@ -245,7 +245,7 @@ json_extract(j1, $.*)
 ["DT_GOODS", "试用规格", 214748, 0, 20768330, "BUY", 1607481718000, 0, 1607481719000, 1608825600000, "market_order", "0CD53B341284A223363FD8E4ACIHWBU98283"]
 select  json_extract(j1,'$**.itemName') from json_table_71;
 json_extract(j1, $**.itemName)
-"试用规格"
+["试用规格"]
 select  json_extract(j1,'$[*]') from json_table_71;
 json_extract(j1, $[*])
 null
@@ -260,7 +260,7 @@ json_extract(j1, $.itemName[2])
 null
 select json_extract(j1,'$**.minOfPeople') from json_table_71;
 json_extract(j1, $**.minOfPeople)
-0
+[0]
 select json_extract(' {"a": [1, "2", {"aa": "bb"}]} ','$.a[2].aa');
 json_extract( {"a": [1, "2", {"aa": "bb"}]} , $.a[2].aa)
 "bb"

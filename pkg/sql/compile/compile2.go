@@ -17,13 +17,16 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	"math"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -38,6 +41,14 @@ import (
 	"go.uber.org/zap"
 )
 
+type runSQLCoordinator interface {
+	CancelAndWaitRunningSQL(ctx context.Context, keepToken uint64) error
+}
+
+type runSQLCoordinatorWithSQL interface {
+	CancelAndWaitRunningSQLWithSQL(ctx context.Context, keepToken uint64, currentSQL string) error
+}
+
 // I create this file to store the two most important entry functions for the Compile struct and their helper functions.
 // These functions are used to build the pipeline from the query plan and execute the pipeline respectively.
 //
@@ -51,6 +62,8 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	c.beginSchedulingTraceAttempt()
+
 	// clear the last query context to avoid process reuse.
 	c.proc.ResetQueryContext()
 
@@ -64,7 +77,7 @@ func (c *Compile) Compile(
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(execTopContext, e)
 			c.proc.Error(execTopContext, "panic in compile",
-				zap.String("sql", c.sql),
+				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
 		task.End()
@@ -118,11 +131,8 @@ func (c *Compile) Compile(
 	c.fill = resultWriteBack
 	c.pn = queryPlan
 
-	// replace the original top context with the input one to avoid any value modification.
-	c.proc.ReplaceTopCtx(execTopContext)
-
-	// with values.
-	topContext := c.proc.SaveToTopContext(defines.EngineKey{}, c.e)
+	// combine top context with some values and replace.
+	topContext := context.WithValue(execTopContext, defines.EngineKey{}, c.e)
 	topContext = perfcounter.WithCounterSet(topContext, c.counterSet)
 	c.proc.ReplaceTopCtx(topContext)
 
@@ -149,7 +159,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	c.InitPipelineContextToExecuteQuery()
 
 	// record this query to compile service.
-	MarkQueryRunning(c, txnOperator)
+	if err = TryMarkQueryRunning(c, txnOperator); err != nil {
+		return nil, err
+	}
 	defer func() {
 		MarkQueryDone(c, txnOperator)
 	}()
@@ -187,7 +199,11 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// update the top context with some trace information and values.
 	execTopContext, span := trace.Start(c.proc.GetTopContext(), "Compile.Run", trace.WithKind(trace.SpanKindStatement))
-	c.proc.ReplaceTopCtx(execTopContext)
+	resourceRecorder := newExecutionResourceRecorder(
+		execTopContext,
+		c.resourceAttemptOwnerEligible,
+	)
+	defer resourceRecorder.publish()
 
 	// statistical information record and trace.
 	runStart := time.Now()
@@ -201,8 +217,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		stats.ExecutionStart()
 	}
 
-	crs := new(perfcounter.CounterSet)
-	execTopContext = perfcounter.AttachExecPipelineKey(execTopContext, crs)
+	c.counterSet.Reset()
+	execTopContext = perfcounter.AttachExecPipelineKey(execTopContext, c.counterSet)
+	c.proc.ReplaceTopCtx(execTopContext)
 	txnTrace.GetService(c.proc.GetService()).TxnStatementStart(txnOperator, executeSQL, sequence)
 	defer func() {
 		task.End()
@@ -233,27 +250,71 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	var retryTimes = 0
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
+	attemptStart := time.Now()
+	attemptOpen := true
+	var attemptPreRunWall time.Duration
+	var attemptRemoteWait time.Duration
+	attemptScopes := runC.scopes
+	attemptAnal := runC.anal
+	var coordinatorPhaseStart time.Time
+	var coordinatorPhaseBase time.Duration
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if attemptOpen {
+				if !coordinatorPhaseStart.IsZero() {
+					attemptPreRunWall = coordinatorPhaseBase + time.Since(coordinatorPhaseStart)
+				} else if attemptPreRunWall == 0 {
+					attemptPreRunWall = time.Since(attemptStart)
+				}
+				resourceRecorder.finishAttempt(
+					uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+					attemptScopes, attemptAnal, c.addr, false,
+				)
+				attemptOpen = false
+			}
+			panic(recovered)
+		}
+	}()
+	var carriedPreRunWall time.Duration
+	resetStatsInfoPreRun(stats, isInExecutor)
 	for {
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
 		// Record the time from the beginning of Run to just before runOnce().
 		preRunOnceStart := time.Now()
+		coordinatorPhaseStart = preRunOnceStart
+		coordinatorPhaseBase = carriedPreRunWall
+		var preRunWall time.Duration
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
-		resetStatsInfoPreRun(stats, isInExecutor)
 
 		// running.
 		if err = runC.prePipelineInitializer(); err == nil {
+			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
+			attemptPreRunWall = preRunWall
 			runC.MessageBoard.BeforeRunonce()
 			// Calculate time spent between the start and runOnce execution
 			if !isInExecutor {
 				stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
 			}
+			coordinatorPhaseStart = time.Time{}
+			coordinatorPhaseBase = 0
 
 			if err = runC.runOnce(); err == nil {
+				err = runC.proc.GetQueryContextError()
+			}
+			if err == nil {
 				if runC.anal != nil {
 					runC.anal.retryTimes = retryTimes
 				}
 				break
 			}
 		}
+		if preRunWall == 0 {
+			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
+		}
+		attemptPreRunWall = preRunWall
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
@@ -276,70 +337,409 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 					err = moerr.NewCannotCommitOrphan(execTopContext)
 				}
 			}
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, preRunWall, attemptRemoteWait, stats,
+				attemptScopes, attemptAnal, c.addr, false,
+			)
+			attemptOpen = false
 			return nil, err
+		}
+		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
+		forcePreMode := moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode)
+		if forcePreMode {
+			// NOTE: This in-place modification of the AST will persist if the statement
+			// is part of a prepared statement. This is generally desirable as it
+			// avoids re-triggering adaptive mode logic on subsequent executions.
+			updated := rewriteAutoModeToPre(c.stmt)
+			if !updated {
+				// If no explicit 'auto' was rewritten, but we got a retry request,
+				// it means it was implicit auto mode (from session variable).
+				// We force the AST to 'pre' mode to rebuild the plan correctly.
+				if !forceModePre(c.stmt) {
+					logutil.Warnf("Failed to force 'pre' mode on AST during retry: SQL=%s", c.sql)
+				}
+			}
+			// Force rebuild of physical plan for explain analyze after rewrite.
+			if c.anal != nil {
+				c.anal.phyPlan = nil
+				c.anal.remotePhyPlans = nil
+				c.anal.explainPhyBuffer = nil
+			}
 		}
 
-		retryTimes++
-		if runC != c {
-			runC.Release()
-		}
-		c.retryTimes = retryTimes
-		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
-		if runC, err = c.prepareRetry(defChanged); err != nil {
+		retryTransitionStart := time.Now()
+		coordinatorPhaseStart = retryTransitionStart
+		coordinatorPhaseBase = preRunWall
+		transitionErr := c.prepareRetryTransition(&attemptRemoteWait)
+		transitionWall := time.Since(retryTransitionStart)
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
+		attemptPreRunWall = preRunWall + transitionWall
+		if transitionErr != nil {
+			err = transitionErr
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+				attemptScopes, attemptAnal, c.addr, false,
+			)
+			attemptOpen = false
 			return nil, err
 		}
+		resourceRecorder.finishAttempt(
+			uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+			attemptScopes, attemptAnal, c.addr, true,
+		)
+		attemptOpen = false
+		if runC != c {
+			releaseRetryCompile(runC)
+		}
+		runC = c
+
+		retryTimes++
+		c.retryTimes = retryTimes
+		attemptStart = time.Now()
+		attemptOpen = true
+		attemptPreRunWall = 0
+		attemptRemoteWait = 0
+		attemptScopes = nil
+		attemptAnal = nil
+		coordinatorPhaseStart = attemptStart
+		coordinatorPhaseBase = 0
+		stats.ResetRetryAttemptResource()
+		resetStatsInfoPreRun(stats, isInExecutor)
+
+		nextRunC, buildErr := c.buildRetryCompile(defChanged || forcePreMode)
+		carriedPreRunWall = time.Since(attemptStart)
+		attemptPreRunWall = carriedPreRunWall
+		if buildErr != nil {
+			err = buildErr
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+				attemptScopes, attemptAnal, c.addr, false,
+			)
+			attemptOpen = false
+			return nil, err
+		}
+		runC = nextRunC
+		attemptScopes = runC.scopes
+		attemptAnal = runC.anal
 
 		// rebuild context for the retry.
 		runC.InitPipelineContextToRetryQuery()
-	}
-
-	if err = runC.proc.GetQueryContextError(); err != nil {
-		return nil, err
+		carriedPreRunWall = time.Since(attemptStart)
+		attemptPreRunWall = carriedPreRunWall
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
-	if c.uid != "mo_logger" && strings.Contains(strings.ToLower(c.sql), "insert") && (strings.Contains(c.sql, "{MO_TS =") || strings.Contains(c.sql, "{SNAPSHOT =")) {
-		getLogger(c.proc.GetService()).Info("insert into with snapshot", zap.String("sql", c.sql), zap.Uint64("affectRows", queryResult.AffectRows))
+	if c.uid != "mo_logger" &&
+		strings.Contains(strings.ToLower(c.sql), "insert") &&
+		(strings.Contains(c.sql, "{MO_TS =") ||
+			strings.Contains(c.sql, "{SNAPSHOT =")) {
+		getLogger(c.proc.GetService()).Info(
+			"insert into with snapshot",
+			zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
+			zap.Uint64("affectRows", queryResult.AffectRows),
+		)
 	}
 	if txnOperator != nil {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 
-	//if !isInExecutor {
+	// Keep the attempt open through plan analysis. Adjust can fail and analysis
+	// can panic, so neither path may inherit a prematurely sealed success
+	// outcome. The panic defer above remains the single terminal owner until
+	// this call returns.
 	c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
-	//}
+
+	resourceRecorder.finishAttempt(
+		uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+		attemptScopes, attemptAnal, c.addr, false,
+	)
+	attemptOpen = false
+	resourceRecorder.publish()
+	// AnalyzeExecPlan builds the physical plan before execution resources are
+	// published. Refresh its live snapshot after publication; the frontend
+	// replaces this with the terminal sealed summary before persistence.
+	if c.anal != nil {
+		c.attachResourceSummary(c.anal.phyPlan)
+	}
+	if isExplainPhyPlan {
+		c.refreshExplainPhyPlanBuffer(runC, queryResult, option)
+	}
 
 	return queryResult, err
 }
 
-// prepareRetry rebuild a new Compile object for retrying the query.
-func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
+func releaseRetryCompile(c *Compile) {
+	proc := c.proc
+	prepareParams := proc.DetachPrepareParams()
+	defer proc.RestorePrepareParams(prepareParams)
+	c.Release()
+}
+
+// rewriteAutoModeToPre recursively traverses the AST and rewrites 'mode=auto' to 'mode=pre'
+// in the RankOption of vector search queries.
+// NOTE: RankOption is configured at the top-level SQL, so deep traversal here is defensive.
+//
+// This function is called when the adaptive mode (auto) determines that post-filter mode
+// returns empty results and a retry with pre-filter mode is needed.
+//
+// The rewrite is performed in-place on the AST, so the same statement can be re-compiled
+// with the updated mode setting.
+//
+// Parameters:
+//   - stmt: The SQL statement AST to rewrite
+//
+// Returns:
+//   - true if any 'mode=auto' was found and rewritten to 'mode=pre'
+//   - false if no rewrite was performed (no explicit 'auto' mode found)
+func rewriteAutoModeToPre(stmt tree.Statement) bool {
+	switch s := stmt.(type) {
+	case *tree.Select:
+		return rewriteAutoModeInSelect(s)
+	case *tree.ExplainStmt:
+		return rewriteAutoModeToPre(s.Statement)
+	case *tree.ExplainAnalyze:
+		return rewriteAutoModeToPre(s.Statement)
+	case *tree.ExplainPhyPlan:
+		return rewriteAutoModeToPre(s.Statement)
+	case *tree.ExplainFor:
+		return rewriteAutoModeToPre(s.Statement)
+	case *tree.Insert:
+		return rewriteAutoModeInSelect(s.Rows)
+	case *tree.Replace:
+		return rewriteAutoModeInSelect(s.Rows)
+	default:
+		return false
+	}
+}
+
+// forceModePre forces the AST to use 'pre' mode even when no explicit mode was specified.
+//
+// This function is called when auto mode was enabled via session variable (implicit)
+// rather than explicit SQL option, and we need to rebuild the plan with pre-filter mode.
+// Unlike rewriteAutoModeToPre, this function will set 'mode=pre' regardless of the
+// current mode value, creating the RankOption structure if it doesn't exist.
+//
+// Parameters:
+//   - stmt: The SQL statement AST to modify
+//
+// Returns:
+//   - true if the mode was successfully set to 'pre'
+//   - false if the statement type doesn't support RankOption
+func forceModePre(stmt tree.Statement) bool {
+	var sel *tree.Select
+	switch s := stmt.(type) {
+	case *tree.Select:
+		sel = s
+	case *tree.ExplainStmt:
+		return forceModePre(s.Statement)
+	case *tree.ExplainAnalyze:
+		return forceModePre(s.Statement)
+	case *tree.ExplainPhyPlan:
+		return forceModePre(s.Statement)
+	case *tree.ExplainFor:
+		return forceModePre(s.Statement)
+	case *tree.Insert:
+		sel = s.Rows
+	case *tree.Replace:
+		sel = s.Rows
+	default:
+		return false
+	}
+
+	if sel == nil {
+		return false
+	}
+	if sel.RankOption == nil {
+		sel.RankOption = &tree.RankOption{
+			Option: map[string]string{"mode": "pre"},
+		}
+	} else {
+		if sel.RankOption.Option == nil {
+			sel.RankOption.Option = map[string]string{"mode": "pre"}
+		} else {
+			sel.RankOption.Option["mode"] = "pre"
+		}
+	}
+	return true
+}
+
+// rewriteAutoModeInSelect rewrites 'mode=auto' to 'mode=pre' in a Select statement.
+// It checks both the top-level RankOption and recursively processes nested subqueries.
+func rewriteAutoModeInSelect(sel *tree.Select) bool {
+	if sel == nil {
+		return false
+	}
+	updated := false
+	// Check and rewrite the RankOption at the current Select level
+	if sel.RankOption != nil && sel.RankOption.Option != nil {
+		if mode, ok := sel.RankOption.Option["mode"]; ok && strings.EqualFold(mode, "auto") {
+			sel.RankOption.Option["mode"] = "pre"
+			updated = true
+		}
+	}
+	// Recursively process nested select statements (subqueries)
+	if sel.Select != nil {
+		if rewriteAutoModeInSelectStatement(sel.Select) {
+			updated = true
+		}
+	}
+	return updated
+}
+
+// rewriteAutoModeInSelectStatement recursively processes different types of SelectStatement nodes.
+// This handles Select, ParenSelect (parenthesized selects), UnionClause, and SelectClause.
+func rewriteAutoModeInSelectStatement(stmt tree.SelectStatement) bool {
+	switch s := stmt.(type) {
+	case *tree.Select:
+		return rewriteAutoModeInSelect(s)
+	case *tree.ParenSelect:
+		return rewriteAutoModeInSelect(s.Select)
+	case *tree.UnionClause:
+		// Process both sides of UNION/INTERSECT/EXCEPT
+		updated := rewriteAutoModeInSelectStatement(s.Left)
+		if rewriteAutoModeInSelectStatement(s.Right) {
+			updated = true
+		}
+		return updated
+	case *tree.SelectClause:
+		return rewriteAutoModeInSelectClause(s)
+	default:
+		return false
+	}
+}
+
+// rewriteAutoModeInSelectClause processes a SelectClause by checking its FROM clause
+// for subqueries that may contain vector search with auto mode.
+func rewriteAutoModeInSelectClause(clause *tree.SelectClause) bool {
+	if clause == nil || clause.From == nil {
+		return false
+	}
+	updated := false
+	for _, tbl := range clause.From.Tables {
+		if rewriteAutoModeInTableExpr(tbl) {
+			updated = true
+		}
+	}
+	return updated
+}
+
+// rewriteAutoModeInTableExpr recursively processes table expressions to find subqueries.
+// This handles Subquery, JoinTableExpr, ApplyTableExpr, ParenTableExpr, AliasedTableExpr,
+// and StatementSource (for derived tables).
+func rewriteAutoModeInTableExpr(expr tree.TableExpr) bool {
+	switch t := expr.(type) {
+	case *tree.Subquery:
+		return rewriteAutoModeInSelectStatement(t.Select)
+	case *tree.JoinTableExpr:
+		updated := false
+		if t.Left != nil {
+			updated = rewriteAutoModeInTableExpr(t.Left)
+		}
+		if t.Right != nil {
+			updated = rewriteAutoModeInTableExpr(t.Right) || updated
+		}
+		return updated
+	case *tree.ApplyTableExpr:
+		updated := false
+		if t.Left != nil {
+			updated = rewriteAutoModeInTableExpr(t.Left)
+		}
+		if t.Right != nil {
+			updated = rewriteAutoModeInTableExpr(t.Right) || updated
+		}
+		return updated
+	case *tree.ParenTableExpr:
+		return rewriteAutoModeInTableExpr(t.Expr)
+	case *tree.AliasedTableExpr:
+		return rewriteAutoModeInTableExpr(t.Expr)
+	case *tree.StatementSource:
+		return rewriteAutoModeToPre(t.Statement)
+	default:
+		return false
+	}
+}
+
+// prepareRetryTransition quiesces the failed generation and advances its
+// transaction workspace. It is charged to the attempt that requested retry.
+func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	v2.TxnStatementRetryCounter.Inc()
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
 	topContext := c.proc.GetTopContext()
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		if coordinator, ok := txnOp.(runSQLCoordinatorWithSQL); ok {
+			sqlText := c.originSQL
+			if sqlText == "" {
+				sqlText = c.sql
+			}
+			if err := measureRetryRemoteWait(remoteWait, func() error {
+				return coordinator.CancelAndWaitRunningSQLWithSQL(topContext, c.runSqlToken, sqlText)
+			}); err != nil {
+				return err
+			}
+		} else if coordinator, ok := txnOp.(runSQLCoordinator); ok {
+			if err := measureRetryRemoteWait(remoteWait, func() error {
+				return coordinator.CancelAndWaitRunningSQL(topContext, c.runSqlToken)
+			}); err != nil {
+				return err
+			}
+		}
+	}
 
 	// clear the workspace of the failed statement
 	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(topContext); e != nil {
-		return nil, e
+		return e
 	}
 
 	// increase the statement id
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
-		return nil, e
+		return e
 	}
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()
 	// clear stage cache
 	c.proc.GetStageCache().Clear()
+	return nil
+}
+
+func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error) {
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		if total == nil || elapsed <= 0 {
+			return
+		}
+		if *total > time.Duration(math.MaxInt64)-elapsed {
+			*total = time.Duration(math.MaxInt64)
+			return
+		}
+		*total += elapsed
+	}()
+	return wait()
+}
+
+// buildRetryCompile starts the next generation. A build or compile failure is
+// therefore a terminal outcome of that new attempt instead of disappearing
+// into the previous attempt's closing phase.
+func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
+	topContext := c.proc.GetTopContext()
 
 	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 	// improved to refresh expression in the future.
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
+	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {
+		if recovered := recover(); recovered != nil {
+			runC.Release()
+			panic(recovered)
+		}
 		if e != nil {
 			runC.Release()
 		}
@@ -351,6 +751,11 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 			return nil, e
 		}
 		c.pn = pn
+		// Update c.anal.qry to point to the new plan's Query
+		// This ensures fillPlanNodeAnalyzeInfo uses the correct nodes
+		if qry, ok := pn.Plan.(*plan.Plan_Query); ok && c.anal != nil {
+			c.anal.qry = qry.Query
+		}
 	}
 	if e = runC.Compile(topContext, c.pn, c.fill); e != nil {
 		return nil, e
@@ -429,11 +834,9 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 }
 
 func (c *Compile) AnalyzeExecPlan(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
-	switch planType := c.pn.Plan.(type) {
+	switch c.pn.Plan.(type) {
 	case *plan.Plan_Query:
-		if planType.Query.StmtType != plan.Query_REPLACE {
-			c.handleQueryPlanAnalyze(runC, queryResult, stats, isExplainPhy, option)
-		}
+		c.handleQueryPlanAnalyze(runC, stats)
 	case *plan.Plan_Ddl:
 		handleDdlPlanAnalyze(runC, stats)
 	}
@@ -449,19 +852,24 @@ func handleDdlPlanAnalyze(runC *Compile, stats *statistic.StatsInfo) {
 	}
 }
 
-func (c *Compile) handleQueryPlanAnalyze(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
+func (c *Compile) handleQueryPlanAnalyze(runC *Compile, stats *statistic.StatsInfo) {
 	if c.anal.phyPlan == nil || !c.UpdatePreparePhyPlan(runC) {
 		c.GenPhyPlan(runC)
 	}
 
 	c.fillPlanNodeAnalyzeInfo(stats)
 
-	if isExplainPhy {
-		topContext := c.proc.GetTopContext()
+}
 
-		statsInfo := statistic.StatsInfoFromContext(topContext)
-		scopeInfo := makeExplainPhyPlanBuffer(c.scopes, queryResult, statsInfo, c.anal, option)
-
+func (c *Compile) refreshExplainPhyPlanBuffer(runC *Compile, queryResult *util2.RunResult, option *ExplainOption) {
+	statsInfo := statistic.StatsInfoFromContext(c.proc.GetTopContext())
+	scopes := c.scopes
+	if runC != nil && runC != c && len(runC.scopes) > 0 {
+		scopes = runC.scopes
+	}
+	scopeInfo := makeExplainPhyPlanBuffer(scopes, queryResult, statsInfo, c.anal, option)
+	c.anal.explainPhyBuffer = scopeInfo
+	if runC != nil && runC.anal != nil && runC != c {
 		runC.anal.explainPhyBuffer = scopeInfo
 	}
 }

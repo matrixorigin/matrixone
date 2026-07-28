@@ -1,0 +1,69 @@
+# IS_IPV6 function
+# Basic test case
+SELECT IS_IPV6('::1') AS result1;
+
+# Valid IPv6 addresses (should return 1)
+SELECT IS_IPV6('::1') AS valid_ipv6_1;
+SELECT IS_IPV6('2001:0db8:85a3:0000:0000:8a2e:0370:7334') AS valid_ipv6_2;
+SELECT IS_IPV6('2001:db8:85a3::8a2e:370:7334') AS valid_ipv6_3;
+SELECT IS_IPV6('2001:db8::1') AS valid_ipv6_4;
+SELECT IS_IPV6('::') AS valid_ipv6_5;
+SELECT IS_IPV6('::ffff:192.168.1.1') AS valid_ipv6_6;  -- IPv4-mapped IPv6
+
+# Invalid addresses (should return 0)
+SELECT IS_IPV6('invalid') AS invalid1;
+SELECT IS_IPV6('192.168.1.1') AS invalid2;  -- IPv4 address
+SELECT IS_IPV6('10.0.0.1') AS invalid3;  -- IPv4 address
+SELECT IS_IPV6('2001::gggg::1') AS invalid4;  -- Invalid hex
+SELECT IS_IPV6('2001::1::1') AS invalid5;  -- Multiple :: 
+SELECT IS_IPV6('') AS invalid6;  -- Empty string
+SELECT IS_IPV6('2001:db8:1') AS invalid7;  -- Incomplete
+SELECT IS_IPV6('2001:db8:1:2:3:4:5:6:7') AS invalid8;  -- Too many segments
+
+# NULL handling (should return NULL)
+SELECT IS_IPV6(NULL) AS null_input;
+
+# Table usage
+CREATE TABLE t1(id INT, ip_str VARCHAR(50));
+INSERT INTO t1 VALUES (1, '::1');
+INSERT INTO t1 VALUES (2, '2001:db8::1');
+INSERT INTO t1 VALUES (3, '192.168.1.1');
+INSERT INTO t1 VALUES (4, 'invalid');
+INSERT INTO t1 VALUES (5, NULL);
+INSERT INTO t1 VALUES (6, '127.0.0.1');
+
+SELECT id, ip_str, IS_IPV6(ip_str) AS is_valid FROM t1;
+DROP TABLE t1;
+
+# WHERE clause
+CREATE TABLE t1(id INT, ip_str VARCHAR(50));
+INSERT INTO t1 VALUES (1, '::1'), (2, '192.168.1.1'), (3, '2001:db8::1'), (4, 'invalid');
+SELECT id, ip_str FROM t1 WHERE IS_IPV6(ip_str) = 1;
+SELECT id, ip_str FROM t1 WHERE IS_IPV6(ip_str) = 0;
+DROP TABLE t1;
+
+# Multiple function calls
+SELECT IS_IPV6('::1') AS ip1, IS_IPV6('192.168.1.1') AS ip2, IS_IPV6('2001:db8::1') AS ip3;
+
+# Comparison
+SELECT IS_IPV6('::1') = 1 AS is_valid_ipv6;
+SELECT IS_IPV6('192.168.1.1') = 0 AS is_not_ipv6;
+
+# Edge cases
+SELECT IS_IPV6('::') AS zero_ipv6;
+SELECT IS_IPV6('2001:db8::') AS compressed_ipv6;
+SELECT IS_IPV6('::ffff:192.168.1.1') AS ipv4_mapped;
+SELECT IS_IPV6('fe80::1%lo0') AS ipv6_with_zone;  -- May or may not be valid depending on implementation
+
+# Combined with other functions
+SELECT IS_IPV6('::1') AND IS_IPV6('2001:db8::1') AS both_valid;
+SELECT IS_IPV6('::1') OR IS_IPV6('192.168.1.1') AS one_valid;
+SELECT IS_IPV4('192.168.1.1') AS is_ipv4, IS_IPV6('192.168.1.1') AS is_ipv6;
+SELECT IS_IPV4('::1') AS is_ipv4, IS_IPV6('::1') AS is_ipv6;
+
+# Subquery usage
+CREATE TABLE t1(id INT, ip_str VARCHAR(50));
+INSERT INTO t1 VALUES (1, '::1'), (2, '192.168.1.1');
+SELECT (SELECT IS_IPV6(ip_str) FROM t1 WHERE id = 1) AS subquery_result;
+DROP TABLE t1;
+

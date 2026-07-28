@@ -86,15 +86,13 @@ func (c *fakeClock) Until(t time.Time) time.Duration {
 // region: resource controller
 
 type simRscController struct {
-	sync.Mutex
 	limit    atomic.Int64
-	reserved int64
+	reserved atomic.Int64
 }
 
 func newSimRscController(initLimit int64) *simRscController {
 	c := &simRscController{
-		limit:    atomic.Int64{},
-		reserved: 0,
+		limit: atomic.Int64{},
 	}
 	c.setMemLimit(initLimit)
 	return c
@@ -105,33 +103,39 @@ func (c *simRscController) setMemLimit(limit int64) {
 	c.limit.Store(limit)
 }
 
-func (c *simRscController) refresh() {}
+func (c *simRscController) Refresh() {}
 
-func (c *simRscController) printMemUsage() {}
+func (c *simRscController) PrintUsage() {}
 
-func (c *simRscController) reserveResources(estMem int64) {
-	c.reserved += estMem
+func (c *simRscController) Acquire(estMem int64) (int64, bool) {
+	c.reserved.Add(estMem)
+	return c.Available(), true
 }
 
-func (c *simRscController) releaseResources(estMem int64) {
-	c.reserved -= estMem
-	if c.reserved < 0 {
-		c.reserved = 0
-		logutil.Warnf("simRscController: releaseResources: %d", estMem)
+func (c *simRscController) Release(estMem int64) int64 {
+	for {
+		reserved := c.reserved.Load()
+		next := reserved - estMem
+		if next < 0 {
+			next = 0
+		}
+		if c.reserved.CompareAndSwap(reserved, next) {
+			if reserved < estMem {
+				logutil.Warnf("simRscController: releaseResources: %d", estMem)
+			}
+			break
+		}
 	}
+
+	return c.Available()
 }
 
-func (c *simRscController) availableMem() int64 {
-	avail := c.limit.Load() - c.reserved
+func (c *simRscController) Available() int64 {
+	avail := c.limit.Load() - c.reserved.Load()
 	if avail < 0 {
 		avail = 0
 	}
 	return avail
-}
-
-func (c *simRscController) resourceAvailable(estMem int64) bool {
-	mem := min(c.availableMem(), constMaxMemCap)
-	return estMem <= 2*mem/3
 }
 
 // endregion: resource controller
@@ -472,7 +476,7 @@ func (e *SExecutor) ExecuteFor(target catalog.MergeTable, task mergeTask) bool {
 
 	e.clock.AfterFunc(taskCost, func() {
 		if task.doneCB != nil {
-			task.doneCB.f()
+			task.doneCB.OnExecDone(nil)
 		}
 		for range newObjCount {
 			e.scatalog.mergeSched.OnCreateNonAppendObject(target)
@@ -770,6 +774,8 @@ func (t *STable) HasDropCommitted() bool { return false }
 
 func (t *STable) IsSpecialBigTable() bool { return false }
 
+func (t *STable) IsFromPublication() bool { return false }
+
 func (t *STable) AddDataLocked(data SData) {
 	stats := data.GetObjectStats()
 	lv := stats.GetLevel()
@@ -896,6 +902,7 @@ func NewSimPlayer() *SimPlayer {
 		sexecutor,
 		sclock,
 	)
+	scatalog.SetMergeNotifier(sched)
 	sched.PatchTestRscController(srsc)
 
 	return &SimPlayer{

@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"runtime/debug"
@@ -36,6 +37,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type failOpenFS struct {
+	vfs.FS
+	path string
+	err  error
+}
+
+func (f *failOpenFS) Open(name string, opts ...vfs.OpenOption) (vfs.File, error) {
+	if name == f.path {
+		return nil, f.err
+	}
+	return f.FS.Open(name, opts...)
+}
 
 func runServiceTest(t *testing.T,
 	hakeeper bool, startReplica bool, fn func(*testing.T, *Service)) {
@@ -103,6 +117,65 @@ func TestNewService(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.NoError(t, service.Close())
+}
+
+func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getServiceTestConfig()
+	fs := cfg.FS
+	defer vfs.ReportLeakedFD(fs, t)
+
+	md := metadata.LogStore{UUID: cfg.UUID}
+	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, fs))
+
+	injectedErr := errors.New("injected metadata open failure")
+	cfg.FS = &failOpenFS{
+		FS:   fs,
+		path: fs.PathJoin(cfg.DataDir, logMetadataFilename),
+		err:  injectedErr,
+	}
+	service, err := NewService(cfg, newFS(), nil)
+	require.Nil(t, service)
+	require.ErrorIs(t, err, injectedErr)
+
+	// Reopening the same NodeHost proves that constructor failure released its
+	// directory lock, network listeners, and background workers.
+	cfg.FS = fs
+	service, err = NewService(cfg, newFS(), nil)
+	require.NoError(t, err)
+	require.NoError(t, service.Close())
+}
+
+func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getServiceTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+
+	service, err := NewService(cfg, newFS(), nil)
+	require.NoError(t, err)
+	members := map[uint64]dragonboat.Target{1: service.ID()}
+	require.NoError(t, service.store.startReplica(1, 1, members, false))
+	require.NoError(t, service.Close())
+
+	record := metadata.LogShard{
+		LogShardRecord: metadata.LogShardRecord{ShardID: 1},
+		ReplicaID:      1,
+	}
+	md := metadata.LogStore{
+		UUID:   cfg.UUID,
+		Shards: []metadata.LogShard{record, record},
+	}
+	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
+
+	service, err = NewService(cfg, newFS(), nil)
+	require.Nil(t, service)
+	require.ErrorIs(t, err, dragonboat.ErrShardAlreadyExist)
+
+	md.Shards = md.Shards[:1]
+	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
+	service, err = NewService(cfg, newFS(), nil)
+	require.NoError(t, err)
+	require.NoError(t, service.Close())
 }
 
 func TestNewServiceRetry(t *testing.T) {
@@ -613,7 +686,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 			// see whether gossip can finish syncing in 6 seconds time. also added some
 			// logging to get collect more details
 			for i := 0; i < 6000; i++ {
-				si1, ok := service1.getShardInfo(1)
+				si1, ok := service1.getShardInfo(context.Background(), 1, false, false)
 				if !ok || si1.LeaderID != 1 {
 					testLogger.Error("shard 1 info missing on service 1")
 					time.Sleep(time.Millisecond)
@@ -626,7 +699,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 				assert.Equal(t, nhID1, ri.UUID)
 				assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
 
-				si2, ok := service1.getShardInfo(2)
+				si2, ok := service1.getShardInfo(context.Background(), 2, false, false)
 				if !ok || si2.LeaderID != 1 {
 					testLogger.Error("shard 2 info missing on service 1")
 					time.Sleep(time.Millisecond)
@@ -639,7 +712,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 				assert.Equal(t, nhID2, ri.UUID)
 				assert.Equal(t, cfg2.LogServiceServiceAddr(), ri.ServiceAddress)
 
-				si1, ok = service2.getShardInfo(1)
+				si1, ok = service2.getShardInfo(context.Background(), 1, false, false)
 				if !ok || si1.LeaderID != 1 {
 					testLogger.Error("shard 1 info missing on service 2")
 					time.Sleep(time.Millisecond)
@@ -652,7 +725,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 				assert.Equal(t, nhID1, ri.UUID)
 				assert.Equal(t, cfg1.LogServiceServiceAddr(), ri.ServiceAddress)
 
-				si2, ok = service2.getShardInfo(2)
+				si2, ok = service2.getShardInfo(context.Background(), 2, false, false)
 				if !ok || si2.LeaderID != 1 {
 					testLogger.Error("shard 2 info missing on service 2")
 					time.Sleep(time.Millisecond)
@@ -768,10 +841,9 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				for i := 0; i < nodeCount; i++ {
 					shardID := uint64(i/3 + 1)
 					service := services[i]
-					info, ok := service.getShardInfo(shardID)
+					info, ok := service.getShardInfo(context.Background(), shardID, false, false)
 					if !ok || info.LeaderID == 0 {
 						notReady++
-						wait()
 						continue
 					}
 					if shardID == 1 && info.Epoch != 0 {
@@ -782,6 +854,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 			require.True(t, cci != 0)
 			// all good now, add a replica to shard 1
@@ -793,7 +866,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					break
 				} else if err == dragonboat.ErrTimeout || err == dragonboat.ErrSystemBusy ||
 					err == dragonboat.ErrInvalidDeadline || err == dragonboat.ErrTimeoutTooSmall {
-					info, ok := services[0].getShardInfo(1)
+					info, ok := services[0].getShardInfo(context.Background(), 1, false, false)
 					if ok && info.LeaderID != 0 && len(info.Replicas) == 4 {
 						break
 					}
@@ -810,10 +883,9 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				notReady := 0
 				for i := 0; i < nodeCount; i++ {
 					service := services[i]
-					info, ok := service.getShardInfo(1)
+					info, ok := service.getShardInfo(context.Background(), 1, false, false)
 					if !ok || info.LeaderID == 0 || len(info.Replicas) != 4 {
 						notReady++
-						wait()
 						continue
 					}
 				}
@@ -821,6 +893,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 			// restart a service, watch how long will it take to get all required
 			// shard info
@@ -842,10 +915,9 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				notReady := 0
 				for i := uint64(0); i < uint64(shardCount); i++ {
 					shardID := i + 1
-					info, ok := service.getShardInfo(shardID)
+					info, ok := service.getShardInfo(context.Background(), shardID, false, false)
 					if !ok || info.LeaderID == 0 {
 						notReady++
-						wait()
 						continue
 					}
 				}
@@ -853,6 +925,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 		},
 	)

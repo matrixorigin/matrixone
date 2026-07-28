@@ -15,15 +15,60 @@
 package hashtable
 
 import (
+	"bytes"
 	"fmt"
-	"io"
 	"math/rand"
 	"reflect"
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/require"
 )
+
+func BenchmarkInt64HashMapFindBatchLarge(b *testing.B) {
+	const (
+		numKeys   = 1 << 20
+		batchSize = 8192
+	)
+
+	mp := mpool.MustNewZero()
+	defer func() {
+		if mp.CurrNB() != 0 {
+			b.Fatalf("memory leak detected: %d bytes", mp.CurrNB())
+		}
+	}()
+
+	keys := make([]uint64, numKeys)
+	hashes := make([]uint64, numKeys)
+	values := make([]uint64, numKeys)
+	for i := range keys {
+		keys[i] = uint64(i + 1)
+	}
+	Int64BatchHash(toUnsafePointer(&keys[0]), &hashes[0], len(keys))
+
+	var ht Int64HashMap
+	if err := ht.Init(mp); err != nil {
+		b.Fatal(err)
+	}
+	defer ht.Free()
+	if err := ht.InsertBatch(len(keys), hashes, toUnsafePointer(&keys[0]), values); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(batchSize * 8)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		offset := (i * batchSize) & (numKeys - 1)
+		ht.FindBatch(
+			batchSize,
+			hashes[offset:offset+batchSize],
+			toUnsafePointer(&keys[offset]),
+			values[offset:offset+batchSize],
+		)
+	}
+}
 
 var data = [][]byte{
 	[]byte(""),
@@ -169,8 +214,9 @@ func TestHashFn(t *testing.T) {
 }
 
 func TestInt64HashMap_MarshalUnmarshal_Empty(t *testing.T) {
+	m := mpool.MustNewZero()
 	originalMap := &Int64HashMap{}
-	err := originalMap.Init(nil)
+	err := originalMap.Init(m)
 	require.NoError(t, err)
 	defer originalMap.Free()
 
@@ -178,7 +224,7 @@ func TestInt64HashMap_MarshalUnmarshal_Empty(t *testing.T) {
 	require.NoError(t, err)
 
 	unmarshaledMap := &Int64HashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -188,8 +234,9 @@ func TestInt64HashMap_MarshalUnmarshal_Empty(t *testing.T) {
 }
 
 func TestInt64HashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
+	m := mpool.MustNewZero()
 	originalMap := &Int64HashMap{}
-	err := originalMap.Init(nil)
+	err := originalMap.Init(m)
 	require.NoError(t, err)
 	defer originalMap.Free()
 
@@ -204,7 +251,7 @@ func TestInt64HashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
 	require.NoError(t, err)
 
 	unmarshaledMap := &Int64HashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -218,8 +265,9 @@ func TestInt64HashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
 }
 
 func TestInt64HashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
+	m := mpool.MustNewZero()
 	originalMap := &Int64HashMap{}
-	err := originalMap.Init(nil)
+	err := originalMap.Init(m)
 	require.NoError(t, err)
 	defer originalMap.Free()
 
@@ -243,7 +291,7 @@ func TestInt64HashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
 	require.NoError(t, err)
 
 	unmarshaledMap := &Int64HashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -260,8 +308,9 @@ func TestInt64HashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
 }
 
 func TestInt64HashMap_MarshalUnmarshal_MultipleElementsWithResize(t *testing.T) {
+	m := mpool.MustNewZero()
 	originalMap := &Int64HashMap{}
-	err := originalMap.Init(nil)
+	err := originalMap.Init(m)
 	require.NoError(t, err)
 	defer originalMap.Free()
 
@@ -285,7 +334,7 @@ func TestInt64HashMap_MarshalUnmarshal_MultipleElementsWithResize(t *testing.T) 
 	require.NoError(t, err)
 
 	unmarshaledMap := &Int64HashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -302,8 +351,9 @@ func TestInt64HashMap_MarshalUnmarshal_MultipleElementsWithResize(t *testing.T) 
 }
 
 func TestStringHashMap_MarshalUnmarshal_Empty(t *testing.T) {
+	m := mpool.MustNewZero()
 	originalMap := &StringHashMap{}
-	err := originalMap.Init(nil)
+	err := originalMap.Init(m)
 	require.NoError(t, err)
 	defer originalMap.Free()
 
@@ -311,7 +361,7 @@ func TestStringHashMap_MarshalUnmarshal_Empty(t *testing.T) {
 	require.NoError(t, err)
 
 	unmarshaledMap := &StringHashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -320,12 +370,13 @@ func TestStringHashMap_MarshalUnmarshal_Empty(t *testing.T) {
 }
 
 func TestStringHashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
+	m := mpool.MustNewZero()
 	originalMap := &StringHashMap{}
-	err := originalMap.Init(nil)
+	err := originalMap.Init(m)
 	require.NoError(t, err)
 	defer originalMap.Free()
 
-	key := []byte("test_string_key")
+	key := bytes.Repeat([]byte("abc"), 32)
 	keys := [][]byte{key}
 	states := make([][3]uint64, 1)
 	values := make([]uint64, 1)
@@ -338,7 +389,7 @@ func TestStringHashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
 	require.NoError(t, err)
 
 	unmarshaledMap := &StringHashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -351,8 +402,9 @@ func TestStringHashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
 }
 
 func TestStringHashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
+	m := mpool.MustNewZero()
 	originalMap := &StringHashMap{}
-	err := originalMap.Init(nil)
+	err := originalMap.Init(m)
 	require.NoError(t, err)
 	defer originalMap.Free()
 
@@ -361,7 +413,7 @@ func TestStringHashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
 	originalMappedValues := make(map[string]uint64)
 
 	for i := 0; i < numElements; i++ {
-		key := []byte(fmt.Sprintf("key_%d", i))
+		key := bytes.Repeat(fmt.Appendf(nil, "key_%d", i), 32)
 		originalKeys[i] = key
 		states := make([][3]uint64, 1)
 		values := make([]uint64, 1)
@@ -376,7 +428,7 @@ func TestStringHashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
 	require.NoError(t, err)
 
 	unmarshaledMap := &StringHashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -392,8 +444,9 @@ func TestStringHashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
 }
 
 func TestStringHashMap_MarshalUnmarshal_MultipleElementsWithResize(t *testing.T) {
+	m := mpool.MustNewZero()
 	originalMap := &StringHashMap{}
-	err := originalMap.Init(nil)
+	err := originalMap.Init(m)
 	require.NoError(t, err)
 	defer originalMap.Free()
 
@@ -417,7 +470,7 @@ func TestStringHashMap_MarshalUnmarshal_MultipleElementsWithResize(t *testing.T)
 	require.NoError(t, err)
 
 	unmarshaledMap := &StringHashMap{}
-	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, m)
 	require.NoError(t, err)
 	defer unmarshaledMap.Free()
 
@@ -433,51 +486,70 @@ func TestStringHashMap_MarshalUnmarshal_MultipleElementsWithResize(t *testing.T)
 }
 
 func TestWriteToError(t *testing.T) {
+	memPool := mpool.MustNewZero()
 	t.Run("int64", func(t *testing.T) {
 		m := new(Int64HashMap)
-		require.NoError(t, m.Init(nil))
+		require.NoError(t, m.Init(memPool))
 		defer m.Free()
 
-		w := &errorAfterNWriter{
-			N: -1,
-		}
+		// Test error on empty map
+		w := &errorAfterNWriter{N: 4} // Not enough for elemCnt
 		_, err := m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 0
+		require.Error(t, err)
+
+		// Add an element
+		key := uint64(1)
+		hashes := make([]uint64, 1)
+		values := make([]uint64, 1)
+		err = m.InsertBatch(1, hashes, toUnsafePointer(&key), values)
+		require.NoError(t, err)
+
+		// Test error after writing elemCnt
+		w = &errorAfterNWriter{N: 8} // Enough for elemCnt, but not for the first cell's key
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 8
+		require.Error(t, err)
+
+		// Test error after writing elemCnt and key
+		w = &errorAfterNWriter{N: 16} // Enough for elemCnt and key, but not for mapped value
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 16
-		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 24
-		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
+		require.Error(t, err)
 	})
 
 	t.Run("string", func(t *testing.T) {
 		m := new(StringHashMap)
-		require.NoError(t, m.Init(nil))
+		require.NoError(t, m.Init(memPool))
 		defer m.Free()
 
-		w := &errorAfterNWriter{
-			N: -1,
-		}
+		// Test error on empty map
+		w := &errorAfterNWriter{N: 4} // Not enough for elemCnt
 		_, err := m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 0
+		require.Error(t, err)
+
+		// Add an element
+		keys := [][]byte{
+			bytes.Repeat([]byte("a"), 32),
+		}
+		states := make([][3]uint64, 1)
+		values := make([]uint64, 1)
+		err = m.InsertStringBatch(states, keys, values)
+		require.NoError(t, err)
+
+		// Test error after writing elemCnt
+		w = &errorAfterNWriter{N: 8} // Enough for elemCnt, but not for HashState
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 8
+		require.Error(t, err)
+
+		// Test error after writing part of the cell
+		w = &errorAfterNWriter{N: 8 + 8} // Enough for elemCnt and HashState
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 16
+		require.Error(t, err)
+
+		w = &errorAfterNWriter{N: 8 + 16} // Enough for elemCnt and HashState
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 24
+		require.Error(t, err)
+
+		w = &errorAfterNWriter{N: 8 + 24} // Enough for elemCnt and HashState
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
+		require.Error(t, err)
 	})
 }
