@@ -77,7 +77,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 	}
 
 	idxID, filter_node_ids, proj_node_ids, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		internalLimit, internalOffset, filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
+		internalLimit, internalOffset, sortNode == nil, filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
 	}
@@ -188,7 +188,7 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	eqmap := make(map[int32]int32)
 
 	idxID, _, _, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
+		scanNode.Limit, scanNode.Offset, false, filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
 	}
@@ -205,6 +205,7 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
 	paginationLimit, paginationOffset *plan.Expr,
+	allowFilterOnlyFastPath bool,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
 	projids []int32, proj_indexDefs []*plan.IndexDef, eqmap map[int32]int32,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32, error) {
@@ -260,6 +261,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	if len(scanNode.FilterList) == 0 && len(ft_filters) == 1 {
 		limitExpr, _ = buildCandidateLimit(paginationLimit, paginationOffset)
 	}
+	filterOnlyFastPath := allowFilterOnlyFastPath && limitExpr != nil && len(ft_filters) == 1 &&
+		len(filterids) == 1 && len(scanNode.FilterList) == 0 &&
+		scanNode.TableDef.Pkey != nil && len(scanNode.TableDef.Pkey.Names) == 1
 
 	// buildFullTextIndexScan
 	var last_node_id int32
@@ -272,6 +276,20 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
 		fn := ftidxscan.GetF()
 		params := idxdef.IndexAlgoParams
+		if filterOnlyFastPath && i == 0 {
+			_, scoreProjected := ret_proj_node_ids_map[0]
+			async, asyncErr := catalog.IsIndexAsync(params)
+			if asyncErr != nil {
+				return -1, nil, nil, asyncErr
+			}
+			if !scoreProjected && !async {
+				markedParams, markErr := markFullTextFilterOnly(params)
+				if markErr != nil {
+					return -1, nil, nil, markErr
+				}
+				params = markedParams
+			}
+		}
 		aliasName := fmt.Sprintf("mo_fulltext_alias_%d", i)
 
 		modeLit := fn.Args[1].GetLit()
@@ -666,6 +684,7 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 		scanNode,
 		scanNode.Limit,
 		scanNode.Offset,
+		false,
 		filterids,
 		filterIndexDefs,
 		nil,

@@ -24,6 +24,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+func markFullTextFilterOnly(params string) (string, error) {
+	param := make(map[string]json.RawMessage)
+	if len(params) > 0 {
+		if err := json.Unmarshal([]byte(params), &param); err != nil {
+			return "", err
+		}
+	}
+	param["filter_only"] = json.RawMessage("true")
+	encoded, err := json.Marshal(param)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
 // coldef shall copy index type
 var (
 	fulltext_index_scan_func_name     = "fulltext_index_scan"

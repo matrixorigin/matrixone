@@ -392,6 +392,80 @@ func TestRunCountStarUsesCountOnlyForTFIDF(t *testing.T) {
 	require.Zero(t, s.AvgDocLen)
 }
 
+func TestFilterOnlyBooleanAndBoundsCandidatesAndSkipsCount(t *testing.T) {
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, 2)
+	ut.arg.Params = []byte(`{"filter_only":true}`)
+	ut.arg.Args = makeConstInputExprsFTWithPattern("+Matrix +Origin", int64(tree.FULLTEXT_BOOLEAN))
+	inbat := makeBatchFT(ut.proc)
+
+	err := ut.arg.Prepare(ut.proc)
+	require.NoError(t, err)
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.NoError(t, err)
+	}
+
+	prevRunSQL := ft_runSql
+	prevRunStreaming := ft_runSql_streaming
+	defer func() {
+		ft_runSql = prevRunSQL
+		ft_runSql_streaming = prevRunStreaming
+	}()
+
+	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "count SQL must not run: %s", sql)
+	}
+	var streamingSQL string
+	ft_runSql_streaming = func(
+		ctx context.Context,
+		sqlproc *sqlexec.SqlProcess,
+		sql string,
+		ch chan executor.Result,
+		errChan chan error,
+	) (executor.Result, error) {
+		streamingSQL = sql
+		ch <- executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeSmallTextBatchFT(sqlproc.Proc)}}
+		return executor.Result{}, nil
+	}
+
+	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
+	require.NoError(t, err)
+	require.True(t, strings.HasSuffix(streamingSQL, " LIMIT 2"), streamingSQL)
+
+	state := ut.arg.ctr.state.(*fulltextState)
+	require.True(t, state.filterOnlyAnd)
+	require.Nil(t, state.mpool)
+	require.Nil(t, state.agghtab)
+	require.Nil(t, state.aggcnt)
+	require.Len(t, state.resbuf, 2)
+
+	result, err := state.call(ut.arg, ut.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, 2, result.Batch.RowCount())
+	for i := 0; i < result.Batch.RowCount(); i++ {
+		require.Zero(t, vector.GetFixedAtWithTypeCheck[float32](result.Batch.Vecs[1], i))
+	}
+
+	result, err = state.call(ut.arg, ut.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	requireStateFreeReturns(t, state, ut.arg, ut.proc)
+}
+
+func TestCanUseFilterOnlyBooleanAndBounds(t *testing.T) {
+	s, err := fulltext.NewSearchAccum("src", "index", "+Matrix +Origin", int64(tree.FULLTEXT_BOOLEAN), "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+	param := fulltext.FullTextParserParam{FilterOnly: true}
+
+	require.True(t, canUseFilterOnlyBooleanAnd(param, maxFilterOnlyBooleanAndCandidates, fulltext.ALGO_TFIDF, s))
+	require.False(t, canUseFilterOnlyBooleanAnd(param, maxFilterOnlyBooleanAndCandidates+1, fulltext.ALGO_TFIDF, s))
+	require.False(t, canUseFilterOnlyBooleanAnd(param, 0, fulltext.ALGO_TFIDF, s))
+	require.False(t, canUseFilterOnlyBooleanAnd(param, 100, fulltext.ALGO_BM25, s))
+	param.FilterOnly = false
+	require.False(t, canUseFilterOnlyBooleanAnd(param, 100, fulltext.ALGO_TFIDF, s))
+}
+
 func TestRunCountStarUsesDedupedDocLenForBM25(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	s := &fulltext.SearchAccum{TblName: "idx_table", ScoreAlgo: fulltext.ALGO_BM25}

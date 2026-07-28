@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"reflect"
 	"slices"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -1405,6 +1407,45 @@ func TestFullTextCandidateLimitIncludesOffset(t *testing.T) {
 	require.Equal(t, uint64(5), builder.qry.Nodes[newID].Offset.GetLit().GetU64Val())
 	require.Nil(t, scan.Limit)
 	require.Nil(t, scan.Offset)
+}
+
+func TestFullTextProjectionMarksBoundedFilterOnlyScan(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+	tableDef := makeFullTextJoinTestTableDef("docs", true)
+	tag := builder.genNewBindTag()
+	match := makeFullTextMatchExpr("+Matrix +Origin", int64(tree.FULLTEXT_BOOLEAN), tableDef, tag, []int32{2, 3})
+	scanID := builder.appendNode(makeFullTextJoinTestScan(tableDef, tag, []*planpb.Expr{match}), ctx)
+	projectID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{scanID},
+		ProjectList: []*planpb.Expr{ftjColExpr(tableDef, tag, 0)},
+		Limit:       makePlan2Uint64ConstExprWithType(100),
+	}, ctx)
+	project := builder.qry.Nodes[projectID]
+	scan := builder.qry.Nodes[scanID]
+
+	filterIDs, indexDefs := builder.getFullTextMatchFiltersFromScanNode(scan)
+	_, err := builder.applyIndicesForProjectionUsingFullTextIndex(
+		projectID,
+		project,
+		nil,
+		scan,
+		filterIDs,
+		indexDefs,
+		nil,
+		nil,
+		map[[2]int32]int{},
+		map[[2]int32]*planpb.Expr{},
+	)
+	require.NoError(t, err)
+
+	functions := collectFullTextFunctionScans(builder, projectID)
+	require.Len(t, functions, 1)
+	require.Equal(t, uint64(100), functions[0].Limit.GetLit().GetU64Val())
+	var params fulltext.FullTextParserParam
+	require.NoError(t, json.Unmarshal(functions[0].TableDef.TblFunc.Param, &params))
+	require.True(t, params.FilterOnly)
 }
 
 func TestFullTextDoesNotLimitIndependentIntersectionInputs(t *testing.T) {

@@ -106,6 +106,29 @@ func (s *SearchAccum) PatternAnyPlus() bool {
 	return s.AnyPlus
 }
 
+// IsPureBooleanAnd reports whether the parsed pattern is the strict Boolean
+// conjunction produced for "+term +term ...".  In the classic fulltext
+// implementation a JOIN pattern has one result slot for the whole
+// conjunction, so every matching document receives the same TF-IDF score.
+// Keep this deliberately narrow: prefix, phrase, group, negative and weighted
+// forms must retain the general scoring path.
+func (s *SearchAccum) IsPureBooleanAnd() bool {
+	if s.Mode != int64(tree.FULLTEXT_BOOLEAN) || len(s.Pattern) != 1 {
+		return false
+	}
+
+	root := s.Pattern[0]
+	if root.Operator != JOIN || len(root.Children) < 2 {
+		return false
+	}
+	for _, child := range root.Children {
+		if child.Operator != PLUS || len(child.Children) != 1 || child.Children[0].Operator != TEXT {
+			return false
+		}
+	}
+	return true
+}
+
 func hasPatternAnyPlus(ps []*Pattern) bool {
 	for _, p := range ps {
 		if p.Operator == PLUS || p.Operator == JOIN {

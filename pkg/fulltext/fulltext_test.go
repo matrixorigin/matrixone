@@ -659,6 +659,29 @@ func TestFullText2(t *testing.T) {
 
 }
 
+func TestSearchAccumIsPureBooleanAnd(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		want    bool
+	}{
+		{name: "strict and", pattern: "+Matrix +Origin", want: true},
+		{name: "single required term", pattern: "+Matrix", want: false},
+		{name: "optional term", pattern: "+Matrix Origin", want: false},
+		{name: "negative term", pattern: "+Matrix -Origin", want: false},
+		{name: "prefix term", pattern: "+Matrix* +Origin", want: false},
+		{name: "required group", pattern: "+Matrix +(Origin One)", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := NewSearchAccum("src", "index", tc.pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, s.IsPureBooleanAnd())
+		})
+	}
+}
+
 func TestFullText3(t *testing.T) {
 
 	pattern := "+we -aRe -so -Happy"

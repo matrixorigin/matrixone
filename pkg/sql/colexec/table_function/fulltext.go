@@ -38,8 +38,9 @@ import (
 )
 
 const (
-	countstar_sql     = "SELECT COUNT(*) from %s where word = '%s'"
-	countstar_avg_sql = "SELECT COUNT(*), AVG(pos) from (SELECT doc_id, MAX(pos) AS pos from %s where word = '%s' GROUP BY doc_id) doc_len"
+	countstar_sql                     = "SELECT COUNT(*) from %s where word = '%s'"
+	countstar_avg_sql                 = "SELECT COUNT(*), AVG(pos) from (SELECT doc_id, MAX(pos) AS pos from %s where word = '%s' GROUP BY doc_id) doc_len"
+	maxFilterOnlyBooleanAndCandidates = uint64(1 << 20)
 )
 
 var ft_runSql = sqlexec.RunSql
@@ -64,6 +65,7 @@ type fulltextState struct {
 	minheap          vectorindex.SearchResultHeap
 	resbuf           []*vectorindex.SearchResultAnyKey
 	ranking          bool
+	filterOnlyAnd    bool
 
 	// Serialized membership-filter (docfilter) bytes for reader-level doc_id filtering
 	fulltextMembershipFilter []byte
@@ -103,6 +105,7 @@ func (u *fulltextState) resetRowState(proc *process.Process) {
 	u.docIDMap = make(map[any]any)
 	u.minheap = nil
 	u.resbuf = nil
+	u.filterOnlyAnd = false
 }
 
 func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
@@ -383,6 +386,9 @@ func runWordStats(
 	); err != nil {
 		return
 	}
+	if u.filterOnlyAnd {
+		sql = fmt.Sprintf("%s LIMIT %d", sql, u.limit)
+	}
 
 	sqlProc := sqlexec.NewSqlProcess(proc)
 	// Attach the membership filter for reader-level doc_id filtering on the fulltext index table.
@@ -393,6 +399,45 @@ func runWordStats(
 	result, err = ft_runSql_streaming(ctx, sqlProc, sql, u.streamCh, u.errCh)
 
 	return
+}
+
+// collectFilterOnlyAnd consumes the already-deduplicated output of the strict
+// Boolean-AND SQL. The planner only enables this path when the score is not
+// user-visible. All candidates tie under the classic JOIN-pattern TF-IDF
+// semantics, so retaining at most LIMIT+OFFSET document IDs is sufficient and
+// avoids the general per-document aggregation maps.
+func collectFilterOnlyAnd(u *fulltextState, proc *process.Process) (streamClosed bool, err error) {
+	var res executor.Result
+	var ok bool
+
+	select {
+	case res, ok = <-u.streamCh:
+		if !ok {
+			return true, nil
+		}
+	case err = <-u.errCh:
+		return false, err
+	case <-proc.Ctx.Done():
+		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+	}
+	defer res.Close()
+
+	for _, bat := range res.Batches {
+		if len(bat.Vecs) < 1 {
+			return false, moerr.NewInternalError(proc.Ctx, "output vector columns not match")
+		}
+		for i := 0; i < bat.RowCount(); i++ {
+			if uint64(len(u.resbuf)) >= u.limit {
+				return false, moerr.NewInternalError(proc.Ctx, "filter-only fulltext result exceeds pushed limit")
+			}
+			docID := vector.GetAny(bat.Vecs[0], i, false)
+			if bytes, isBytes := docID.([]byte); isBytes {
+				docID = append([]byte(nil), bytes...)
+			}
+			u.resbuf = append(u.resbuf, &vectorindex.SearchResultAnyKey{Id: docID, Distance: 0})
+		}
+	}
+	return false, nil
 }
 
 // evaluate the score for all document vectors in Agg hashtable.
@@ -699,6 +744,11 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (executor.Resu
 	return res, nil
 }
 
+func canUseFilterOnlyBooleanAnd(param fulltext.FullTextParserParam, limit uint64, scoreAlgo fulltext.FullTextScoreAlgo, s *fulltext.SearchAccum) bool {
+	return param.FilterOnly && limit > 0 && limit <= maxFilterOnlyBooleanAndCandidates &&
+		scoreAlgo == fulltext.ALGO_TFIDF && s.IsPureBooleanAnd()
+}
+
 func fulltextIndexMatch(
 	u *fulltextState,
 	proc *process.Process,
@@ -729,19 +779,26 @@ func fulltextIndexMatch(
 			return err
 		}
 
-		u.mpool = fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0)
-		u.agghtab = make(map[any]uint64, 1024)
-		u.aggcnt = make([]int64, s.Nkeywords)
+		u.filterOnlyAnd = canUseFilterOnlyBooleanAnd(u.param, u.limit, scoreAlgo, s)
 
-		// count(*) to get number of records in source table
-		res, err := runCountStar(proc, s)
-		if err != nil {
-			return err
+		var res executor.Result
+		if !u.filterOnlyAnd {
+			u.mpool = fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0)
+			u.agghtab = make(map[any]uint64, 1024)
+			u.aggcnt = make([]int64, s.Nkeywords)
+
+			// count(*) to get number of records in source table
+			res, err = runCountStar(proc, s)
+			if err != nil {
+				return err
+			}
 		}
 
 		u.sacc = s
 
-		opStats.BackgroundQueries = append(opStats.BackgroundQueries, res.LogicalPlan)
+		if !u.filterOnlyAnd {
+			opStats.BackgroundQueries = append(opStats.BackgroundQueries, res.LogicalPlan)
+		}
 
 	}
 
@@ -776,7 +833,12 @@ func fulltextIndexMatch(
 	// get batch from SQL executor
 	sql_closed := false
 	for !sql_closed {
-		if sql_closed, err = groupby(u, proc, u.sacc); err != nil {
+		if u.filterOnlyAnd {
+			sql_closed, err = collectFilterOnlyAnd(u, proc)
+		} else {
+			sql_closed, err = groupby(u, proc, u.sacc)
+		}
+		if err != nil {
 			// notify the producer to stop the sql streaming
 			cancel(err)
 			break

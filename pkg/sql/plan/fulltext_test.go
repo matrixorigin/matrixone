@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,6 +24,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMarkFullTextFilterOnly(t *testing.T) {
+	params, err := markFullTextFilterOnly(`{"parser":"gojieba","async":"false","future":{"enabled":true}}`)
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(params), &got))
+	require.Equal(t, "gojieba", got["parser"])
+	require.Equal(t, "false", got["async"])
+	require.Equal(t, true, got["filter_only"])
+	require.Equal(t, map[string]any{"enabled": true}, got["future"])
+
+	_, err = markFullTextFilterOnly("{")
+	require.Error(t, err)
+}
 
 func TestBuildFullTextIndexScanBuildsSqlForLiteralPattern(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
