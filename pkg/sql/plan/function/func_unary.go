@@ -7263,6 +7263,8 @@ var userLevelLocks = struct {
 	retainedCloseCleanups  map[string]retainedUserLevelLockCloseCleanup
 	cleanupReservations    map[detachedUserLevelLockCleanupKey]uint64
 	retainedCleanupStarted bool
+	retainedCleanupGen     uint64
+	retainedCleanupDone    chan struct{}
 }{
 	counts:                make(map[userLevelLockKey]uint64),
 	byOwner:               make(map[string]map[string]struct{}),
@@ -8108,17 +8110,39 @@ func startRetainedUserLevelLockCleanupWorkerLocked() {
 		return
 	}
 	userLevelLocks.retainedCleanupStarted = true
-	go runRetainedUserLevelLockCleanupWorker()
+	generation := userLevelLocks.retainedCleanupGen
+	done := make(chan struct{})
+	userLevelLocks.retainedCleanupDone = done
+	go runRetainedUserLevelLockCleanupWorker(generation, done)
 }
 
-func runRetainedUserLevelLockCleanupWorker() {
+func retainedUserLevelLockCleanupGenerationActive(generation uint64) bool {
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+	return userLevelLocks.retainedCleanupStarted &&
+		userLevelLocks.retainedCleanupGen == generation
+}
+
+func runRetainedUserLevelLockCleanupWorker(generation uint64, done chan struct{}) {
+	defer close(done)
 	backoff := userLevelLockDetachedCleanupInitialBackoff
 	for {
-		progress, remaining := runRetainedUserLevelLockCleanupPass()
+		if !retainedUserLevelLockCleanupGenerationActive(generation) {
+			return
+		}
+		progress, remaining := runRetainedUserLevelLockCleanupPassForGeneration(&generation)
+		if !retainedUserLevelLockCleanupGenerationActive(generation) {
+			return
+		}
 		if !remaining {
 			userLevelLocks.Lock()
-			if len(userLevelLocks.pendingCleanups) == 0 && len(userLevelLocks.retainedCloseCleanups) == 0 {
+			if userLevelLocks.retainedCleanupGen == generation &&
+				len(userLevelLocks.pendingCleanups) == 0 &&
+				len(userLevelLocks.retainedCloseCleanups) == 0 {
 				userLevelLocks.retainedCleanupStarted = false
+				if userLevelLocks.retainedCleanupDone == done {
+					userLevelLocks.retainedCleanupDone = nil
+				}
 				userLevelLocks.Unlock()
 				return
 			}
@@ -8139,10 +8163,18 @@ func runRetainedUserLevelLockCleanupWorker() {
 }
 
 func runRetainedUserLevelLockCleanupPass() (bool, bool) {
+	return runRetainedUserLevelLockCleanupPassForGeneration(nil)
+}
+
+func runRetainedUserLevelLockCleanupPassForGeneration(generation *uint64) (bool, bool) {
 	progress := false
 	remaining := false
 
 	userLevelLocks.Lock()
+	if generation != nil && userLevelLocks.retainedCleanupGen != *generation {
+		userLevelLocks.Unlock()
+		return false, false
+	}
 	pending := make([]detachedUserLevelLockCleanupRequest, 0, len(userLevelLocks.pendingCleanups))
 	for _, req := range userLevelLocks.pendingCleanups {
 		pending = append(pending, detachedUserLevelLockCleanupRequest{
@@ -8164,6 +8196,9 @@ func runRetainedUserLevelLockCleanupPass() (bool, bool) {
 	userLevelLocks.Unlock()
 
 	for _, req := range pending {
+		if generation != nil && !retainedUserLevelLockCleanupGenerationActive(*generation) {
+			return progress, false
+		}
 		attemptCtx, cancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupAttemptTimeout)
 		err := unlockUserLevelLockTxnIDs(attemptCtx, req.ls, req.txnIDs)
 		cancel()
@@ -8188,6 +8223,9 @@ func runRetainedUserLevelLockCleanupPass() (bool, bool) {
 	}
 
 	for _, retained := range closeCleanups {
+		if generation != nil && !retainedUserLevelLockCleanupGenerationActive(*generation) {
+			return progress, false
+		}
 		states := userLevelLocksForOwnerSession(retained.owner, retained.sessionID)
 		if len(states) == 0 {
 			userLevelLocks.Lock()

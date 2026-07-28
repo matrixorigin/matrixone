@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -91,6 +92,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		LogLevel:                            zap.WarnLevel,
 		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
 		ExplicitZeroTemporalCastReturnsNull: true,
+		SqlMode:                             "STRICT_TRANS_TABLES",
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -141,6 +143,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 			LockWaitTimeoutSet:                  true,
 			MatrixoneNativeMode:                 true,
 			ExplicitZeroTemporalCastReturnsNull: true,
+			SqlMode:                             "STRICT_ALL_TABLES",
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
@@ -148,6 +151,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.True(t, info.MatrixOneNativeMode)
 		require.True(t, info.LockWaitTimeoutSet)
 		require.True(t, info.ExplicitZeroTemporalCastReturnsNull)
+		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
@@ -192,6 +196,40 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, defines.DefaultLockWaitTimeoutSeconds, resolveLockWaitTimeoutSeconds(proc),
 			"the legacy wire field must remain positive when an explicit clear is sent to an old peer")
 	})
+
+	t.Run("sql mode resolution", func(t *testing.T) {
+		require.Equal(t, "", resolveSqlMode(nil))
+
+		// Resolver present: its value wins.
+		proc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_ALL_TABLES"}}}
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return "STRICT_TRANS_TABLES", nil
+		})
+		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(proc))
+
+		// Resolver returns explicit empty string -> sentinel (explicitly non-strict).
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return "", nil
+		})
+		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(proc))
+
+		// Resolver error / non-string -> fall back to captured SessionInfo.SqlMode.
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return nil, moerr.NewInternalErrorNoCtx("boom")
+		})
+		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+
+		// Resolver is nil (remote CN): fall back to SessionInfo.SqlMode so a second
+		// forward preserves the upstream mode instead of defaulting to strict.
+		strictProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_TRANS_TABLES"}}}
+		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(strictProc))
+
+		sentinelProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: EmptySqlModeSentinel}}}
+		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(sentinelProc))
+
+		emptyProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
+		require.Equal(t, "", resolveSqlMode(emptyProc))
+	})
 }
 
 func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
@@ -209,6 +247,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
 	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
@@ -257,6 +296,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
 	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
