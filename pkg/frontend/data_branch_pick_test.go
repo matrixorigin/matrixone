@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -38,6 +39,71 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateBetweenSnapshotRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		from    *types.TS
+		to      *types.TS
+		wantErr string
+	}{
+		{
+			name: "forward physical range",
+			from: types.BuildTSForTest(1, 0),
+			to:   types.BuildTSForTest(2, 0),
+		},
+		{
+			name: "equal range",
+			from: types.BuildTSForTest(1, 1),
+			to:   types.BuildTSForTest(1, 1),
+		},
+		{
+			name:    "reversed physical range",
+			from:    types.BuildTSForTest(2, 0),
+			to:      types.BuildTSForTest(1, 0),
+			wantErr: "start snapshot 'from' is later than end snapshot 'to'",
+		},
+		{
+			name:    "reversed logical range",
+			from:    types.BuildTSForTest(1, 2),
+			to:      types.BuildTSForTest(1, 1),
+			wantErr: "start snapshot 'from' is later than end snapshot 'to'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBetweenSnapshotRange("from", "to", tt.from, tt.to)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestResolveBetweenSnapshotsReversedRange(t *testing.T) {
+	earlyTS := types.BuildTSForTest(1, 0).ToTimestamp()
+	lateTS := types.BuildTSForTest(2, 0).ToTimestamp()
+	snapshots := map[string]*pbplan.Snapshot{
+		"early": {TS: &earlyTS},
+		"late":  {TS: &lateTS},
+	}
+	originalResolver := resolveSnapshotForBetween
+	resolveSnapshotForBetween = func(_ *Session, atTs *tree.AtTimeStamp) (*pbplan.Snapshot, error) {
+		return snapshots[atTs.SnapshotName], nil
+	}
+	t.Cleanup(func() {
+		resolveSnapshotForBetween = originalResolver
+	})
+
+	from, to, err := resolveBetweenSnapshots(nil, "late", "early")
+
+	require.Nil(t, from)
+	require.Nil(t, to)
+	require.ErrorContains(t, err, "start snapshot 'late' is later than end snapshot 'early'")
+}
 
 func TestSegmentBuilder_SingleValue(t *testing.T) {
 	pkType := types.T_int32.ToType()

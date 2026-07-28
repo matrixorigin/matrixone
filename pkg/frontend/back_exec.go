@@ -867,7 +867,13 @@ func executeSQLInBackgroundSession(reqCtx context.Context, bh BackgroundExec, sq
 // executeStmtInSameSession executes the statement in the same session.
 // To be clear, only for the select statement derived from the set_var statement
 // in an independent transaction
-func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCtx, stmt tree.Statement) error {
+func executeStmtInSameSession(
+	ctx context.Context,
+	ses *Session,
+	execCtx *ExecCtx,
+	stmt tree.Statement,
+	preparedExpression bool,
+) error {
 	ses.EnterFPrint(FPExecStmtInSameSession)
 	defer ses.ExitFPrint(FPExecStmtInSameSession)
 	switch stmt.(type) {
@@ -916,7 +922,12 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	ses.Debug(ctx, "query trace(ExecStmtInSameSession)",
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
-	return doComQuery(ses, execCtx, &UserInput{stmt: stmt, isInternalInput: true})
+	return doComQuery(ses, execCtx, &UserInput{
+		stmt:                 stmt,
+		isInternalInput:      true,
+		isSetExpression:      true,
+		isPreparedExpression: preparedExpression,
+	})
 }
 
 // fakeDataSetFetcher2 gets the result set from the pipeline and save it in the session.
@@ -1227,8 +1238,8 @@ func (backSes *backSession) GetLastInsertID() uint64 {
 func (backSes *backSession) SetShowStmtType(statement ShowStatementType) {
 }
 
-func (backSes *backSession) RemovePrepareStmt(name string) {
-
+func (backSes *backSession) RemovePrepareStmt(name string) bool {
+	return false
 }
 
 func (backSes *backSession) CountPayload(i int) {

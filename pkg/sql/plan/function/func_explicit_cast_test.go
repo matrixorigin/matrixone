@@ -63,6 +63,47 @@ func TestExplicitCastStringIntegerOverflow(t *testing.T) {
 	}
 }
 
+func TestExplicitCastStringIntegerPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name   string
+		target types.Type
+		zero   any
+		expect any
+	}{
+		{
+			name:   "signed",
+			target: types.T_int64.ToType(),
+			zero:   []int64{},
+			expect: []int64{7, 7, 1, -10, 0, 0, 0},
+		},
+		{
+			name:   "unsigned",
+			target: types.T_uint64.ToType(),
+			zero:   []uint64{},
+			expect: []uint64{7, 7, 1, math.MaxUint64 - 9, 0, 0, 0},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"7e0", "7e+2", "1.5e0", "  -10suffix  ", ".5e0", "-.5e0", "+.5e+2"}, nil),
+				NewFunctionTestInput(test.target, test.zero, nil),
+			}
+			expect := NewFunctionTestResult(test.target, false, test.expect, nil)
+			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	_, err := parseSignedExplicitCastString("0x", 64)
+	require.Error(t, err)
+	_, err = parseUnsignedExplicitCastString("-0b", 64)
+	require.Error(t, err)
+}
+
 func TestExplicitCastFloatToUnsigned(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
