@@ -217,8 +217,13 @@ func TestCTELazyBindingKeepsRootContextOwnership(t *testing.T) {
 	mock := &cteViewTrackingOptimizer{ctx: ctx}
 
 	_, err := runOneStmt(mock, t, `
-		with qn as (select * from cte_test.v2)
+	with qn as (select * from cte_test.v2)
 		select * from qn`)
 	require.NoError(t, err)
-	require.Contains(t, ctx.views, "cte_test#v2")
+	require.Len(t, ctx.views, 1)
+	databaseName, viewName, snapshot, err := ParseViewDependencyKey(ctx.views[0])
+	require.NoError(t, err)
+	require.Equal(t, "cte_test", databaseName)
+	require.Equal(t, "v2", viewName)
+	require.Nil(t, snapshot)
 }

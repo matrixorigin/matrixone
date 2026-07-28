@@ -106,7 +106,7 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	if err != nil {
 		return nil, nil, err
 	}
-	updateHashTableRows(itr.mp, vs, zvs)
+	updateHashTableRows(&itr.mp.rows, itr.mp.hasNull, vs, zvs)
 	return vs, zvs, err
 }
 
@@ -157,7 +157,7 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	if err != nil {
 		return nil, nil, err
 	}
-	updateHashTableRows(itr.mp, vs, zvs)
+	updateHashTableRows(&itr.mp.rows, itr.mp.hasNull, vs, zvs)
 	return vs, zvs, err
 }
 
@@ -188,9 +188,9 @@ func (itr *intHashMapIterator) ensureCapacity(count int) {
 	itr.hashes = make([]uint64, count)
 }
 
-func updateHashTableRows(hashMap HashMap, vs []uint64, zvs []int64) {
-	groupCount := hashMap.GroupCount()
-	if hashMap.HasNull() {
+func updateHashTableRows(rows *uint64, hasNull bool, vs []uint64, zvs []int64) {
+	groupCount := *rows
+	if hasNull {
 		for _, v := range vs {
 			if v > groupCount {
 				groupCount++
@@ -206,6 +206,5 @@ func updateHashTableRows(hashMap HashMap, vs []uint64, zvs []int64) {
 			}
 		}
 	}
-	count := groupCount - hashMap.GroupCount()
-	hashMap.AddGroups(count)
+	*rows = groupCount
 }

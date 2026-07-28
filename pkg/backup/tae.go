@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -704,6 +705,18 @@ func CopyCheckpointDir(
 	return taeFiles, minTs, nil
 }
 
+type copiedObjectChecksumError struct {
+	err error
+}
+
+func (e *copiedObjectChecksumError) Error() string {
+	return "checksum copied backup object: " + e.err.Error()
+}
+
+func (e *copiedObjectChecksumError) Unwrap() error {
+	return e.err
+}
+
 func CopyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService, name, dstDir string, newName ...string) ([]byte, error) {
 	return fileservice.DoWithRetry(
 		"CopyFile",
@@ -711,7 +724,10 @@ func CopyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService
 			return CopyFile(ctx, srcFs, dstFs, name, dstDir, newName...)
 		},
 		64,
-		fileservice.IsRetryableError,
+		func(err error) bool {
+			var checksumErr *copiedObjectChecksumError
+			return !errors.As(err, &checksumErr) && fileservice.IsRetryableError(err)
+		},
 	)
 }
 
@@ -727,6 +743,73 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 		}
 	}
 
+	if copier, ok := dstFs.(fileservice.ObjectCopier); ok {
+		copied, err := copier.CopyObject(ctx, srcFs, name, newName)
+		if err != nil {
+			return nil, err
+		}
+		if copied {
+			// Hash the copied object itself. Provider-side copy avoids opening a
+			// source response in CN while the destination operation needs an
+			// HTTP connection, and the checksum still describes the bytes that
+			// were actually written to the backup.
+			checksum, err := fileservice.DoWithRetryContext(
+				ctx,
+				"ChecksumCopiedBackupObject",
+				func() ([]byte, error) {
+					return checksumFile(ctx, dstFs, newName)
+				},
+				64,
+				fileservice.IsRetryableError,
+			)
+			if err != nil {
+				// CopyFileWithRetry must not repeat a successful provider copy:
+				// the destination now exists, so retry only this checksum phase.
+				return nil, &copiedObjectChecksumError{err: err}
+			}
+			return checksum, nil
+		}
+	}
+
+	return streamCopyFile(ctx, srcFs, dstFs, name, newName)
+}
+
+func checksumFile(ctx context.Context, fs fileservice.FileService, name string) (checksum []byte, err error) {
+	var reader io.ReadCloser
+	ioVec := &fileservice.IOVector{
+		FilePath: name,
+		Entries: []fileservice.IOEntry{
+			{
+				ReadCloserForRead: &reader,
+				Offset:            0,
+				Size:              -1,
+			},
+		},
+		Policy: fileservice.SkipAllCache,
+	}
+
+	err = fs.Read(ctx, ioVec)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := reader.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+
+	hasher := sha256.New()
+	if _, err = io.Copy(hasher, reader); err != nil {
+		return nil, err
+	}
+	return hasher.Sum(nil), nil
+}
+
+func streamCopyFile(
+	ctx context.Context,
+	srcFs, dstFs fileservice.FileService,
+	name, newName string,
+) ([]byte, error) {
 	var reader io.ReadCloser
 	ioVec := &fileservice.IOVector{
 		FilePath: name,
@@ -745,7 +828,7 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 		return nil, err
 	}
 	defer reader.Close()
-	// hash
+
 	hasher := sha256.New()
 	hashingReader := io.TeeReader(reader, hasher)
 	dstIoVec := fileservice.IOVector{

@@ -59,6 +59,20 @@ func TestBranchRequirementToPrivilegeCopiesLightPrivilegeFields(t *testing.T) {
 	}
 }
 
+func TestLockDataBranchTargetAccount(t *testing.T) {
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	require.NoError(t, lockDataBranchTargetAccount(context.Background(), bh, nil))
+	require.Empty(t, bh.executedSQLs)
+
+	toAccount := &tree.ToAccountOpt{AccountName: tree.Identifier("target_account")}
+	expectedSQL, err := getSqlForLockMoAccountNameFormat(context.Background(), toAccount.AccountName.String())
+	require.NoError(t, err)
+	require.NoError(t, lockDataBranchTargetAccount(context.Background(), bh, toAccount))
+	require.Equal(t, []string{expectedSQL}, bh.executedSQLs)
+}
+
 func TestBranchDeleteDatabaseTableIDsSQLReusesCloneObjectFilter(t *testing.T) {
 	const (
 		accountID uint32 = 42
