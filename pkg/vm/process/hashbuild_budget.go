@@ -43,6 +43,14 @@ var (
 	hashBuildGenerationSequence atomic.Uint64
 	hashBuildCNBudgets          sync.Map // service ID -> *HashBuildBudget
 	hashBuildBudgetObservers    = newHashBuildBudgetObservers()
+	// HashBuild treats physical process memory as a startup contract. Keeping
+	// this snapshot local to HashBuild avoids cgroup filesystem reads on query
+	// admission without changing the live CgroupMemoryLimit API used by other
+	// subsystems such as remote compile.
+	hashBuildProcessMemoryInputs = HashBuildCeilingInputs{
+		CgroupMemoryMax: system.CgroupMemoryLimit(),
+		HostMemTotal:    system.MemoryTotal(),
+	}
 )
 
 type hashBuildBudgetMetricKey struct {
@@ -668,14 +676,13 @@ func (b *HashBuildBudget) publishLiveCNCapInputs() {
 	b.liveCapInputsSnapshot.Store(&snapshot)
 }
 
-// sampleCNCap is invoked only while refreshMu is held. A source helper reports
-// unavailable/read-failed as zero, so retain the last finite value rather than
+// sampleCNCap is invoked only while refreshMu is held. Physical process memory
+// remains fixed at the package-start snapshot; only runtime mpool and
+// file-cache inputs are sampled here. A runtime source reports unavailable as
+// zero, so resolveCNCapSample retains its last finite value rather than
 // interpreting a transient disappearance as extra memory.
 func (b *HashBuildBudget) sampleCNCap() (uint64, error) {
-	current := HashBuildCeilingInputs{
-		CgroupMemoryMax: system.CgroupMemoryLimit(),
-		HostMemTotal:    system.MemoryTotal(),
-	}
+	current := hashBuildProcessMemoryInputs
 	if cap := mpool.GlobalCap(); cap > 0 && cap < mpool.PB {
 		current.GlobalMpoolCap = uint64(cap)
 	}
@@ -1744,13 +1751,10 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 	if hint := fileservice.GlobalMemoryCacheSizeHint.Load(); hint > 0 {
 		fileCacheHint = uint64(hint)
 	}
-	initialInputs := HashBuildCeilingInputs{
-		CgroupMemoryMax:       system.CgroupMemoryLimit(),
-		HostMemTotal:          system.MemoryTotal(),
-		GlobalMpoolCap:        globalCap,
-		FileCacheHint:         fileCacheHint,
-		ProcessLimitationSize: queryLimit,
-	}
+	initialInputs := hashBuildProcessMemoryInputs
+	initialInputs.GlobalMpoolCap = globalCap
+	initialInputs.FileCacheHint = fileCacheHint
+	initialInputs.ProcessLimitationSize = queryLimit
 	ceiling, err := ResolveHashBuildCeiling(initialInputs)
 	if err != nil {
 		return nil, err

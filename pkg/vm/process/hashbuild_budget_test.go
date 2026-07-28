@@ -477,6 +477,35 @@ func TestHashBuildBudgetUnchangedObservationSkipsRefreshGate(t *testing.T) {
 	}
 }
 
+func TestHashBuildBudgetCNProviderKeepsProcessMemorySnapshot(t *testing.T) {
+	previousInputs := hashBuildProcessMemoryInputs
+	previousCap := commonmpool.GlobalCap()
+	previousHint := fileservice.GlobalMemoryCacheSizeHint.Swap(0)
+	t.Cleanup(func() {
+		hashBuildProcessMemoryInputs = previousInputs
+		commonmpool.InitCap(previousCap)
+		fileservice.GlobalMemoryCacheSizeHint.Store(previousHint)
+	})
+
+	hashBuildProcessMemoryInputs = HashBuildCeilingInputs{
+		CgroupMemoryMax: 8 << 30,
+		HostMemTotal:    16 << 30,
+	}
+	commonmpool.InitCap(commonmpool.PB)
+
+	b := MustNewHashBuildBudget(4<<30, 4<<30)
+	b.installCNCapProvider(HashBuildCeilingInputs{
+		CgroupMemoryMax: 4 << 30,
+		HostMemTotal:    8 << 30,
+	})
+	if _, err := b.sampleCNCap(); err != nil {
+		t.Fatal(err)
+	}
+	if b.liveCapInputs.CgroupMemoryMax != 8<<30 || b.liveCapInputs.HostMemTotal != 16<<30 {
+		t.Fatalf("physical snapshot changed: %+v", b.liveCapInputs)
+	}
+}
+
 func TestHashBuildBudgetCapProviderGrowthOnAggregateReject(t *testing.T) {
 	b := MustNewHashBuildBudget(10, 10)
 	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
