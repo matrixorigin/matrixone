@@ -794,48 +794,85 @@ func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 }
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
-	// read class
-	v.class = int(data[0])
-	data = data[1:]
-
-	// read typ
-	v.typ = types.DecodeType(data[:types.TSize])
-	data = data[types.TSize:]
-
-	// read length
-	v.length = int(types.DecodeUint32(data[:4]))
-	data = data[4:]
-
-	// read data
-	dataLen := types.DecodeUint32(data[:4])
-	data = data[4:]
-	if dataLen > 0 {
-		v.data = data[:dataLen]
-		data = data[dataLen:]
+	read := func(size int) ([]byte, error) {
+		if size < 0 || size > len(data) {
+			return nil, io.ErrUnexpectedEOF
+		}
+		value := data[:size]
+		data = data[size:]
+		return value, nil
+	}
+	readUint32 := func() (uint32, error) {
+		value, err := read(4)
+		if err != nil {
+			return 0, err
+		}
+		return types.DecodeUint32(value), nil
 	}
 
-	// read area
-	areaLen := types.DecodeUint32(data[:4])
-	data = data[4:]
-	if areaLen > 0 {
-		v.area = data[:areaLen]
-		data = data[areaLen:]
+	class, err := read(1)
+	if err != nil {
+		return err
+	}
+	typ, err := read(types.TSize)
+	if err != nil {
+		return err
+	}
+	length, err := readUint32()
+	if err != nil {
+		return err
+	}
+	dataLen, err := readUint32()
+	if err != nil {
+		return err
+	}
+	vecData, err := read(int(dataLen))
+	if err != nil {
+		return err
+	}
+	areaLen, err := readUint32()
+	if err != nil {
+		return err
+	}
+	area, err := read(int(areaLen))
+	if err != nil {
+		return err
+	}
+	nspLen, err := readUint32()
+	if err != nil {
+		return err
+	}
+	nspData, err := read(int(nspLen))
+	if err != nil {
+		return err
+	}
+	if len(nspData) > 0 {
+		if len(nspData) < 24 {
+			return io.ErrUnexpectedEOF
+		}
+		bitmapDataLen := types.DecodeUint64(nspData[16:24])
+		if bitmapDataLen > uint64(len(nspData)-24) || bitmapDataLen%8 != 0 {
+			return io.ErrUnexpectedEOF
+		}
+	}
+	sorted, err := read(1)
+	if err != nil {
+		return err
 	}
 
-	// read nsp
-	nspLen := types.DecodeUint32(data[:4])
-	data = data[4:]
-	if nspLen > 0 {
-		if err := v.nsp.ReadNoCopy(data[:nspLen]); err != nil {
+	var nsp nulls.Nulls
+	if len(nspData) > 0 {
+		if err := nsp.ReadNoCopy(nspData); err != nil {
 			return err
 		}
-		data = data[nspLen:]
-	} else {
-		v.nsp.Reset()
 	}
-
-	v.sorted = types.DecodeBool(data[:1])
-	//data = data[1:]
+	v.class = int(class[0])
+	v.typ = types.DecodeType(typ)
+	v.length = int(length)
+	v.data = vecData
+	v.area = area
+	v.nsp = nsp
+	v.sorted = types.DecodeBool(sorted)
 
 	v.cantFreeData = true
 	v.cantFreeArea = true

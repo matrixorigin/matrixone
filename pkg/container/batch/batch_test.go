@@ -131,6 +131,30 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 
 	vectorEnd := 16 + int(types.DecodeUint32(data[12:16]))
+	t.Run("malformed_vector_framing", func(t *testing.T) {
+		for _, mutate := range []func([]byte){
+			func(corrupted []byte) {
+				zero := uint32(0)
+				copy(corrupted[12:16], types.EncodeUint32(&zero))
+			},
+			func(corrupted []byte) {
+				oversized := uint32(len(data))
+				dataLenOffset := 16 + 1 + types.TSize + 4
+				copy(corrupted[dataLenOffset:dataLenOffset+4], types.EncodeUint32(&oversized))
+			},
+		} {
+			corrupted := append([]byte(nil), data...)
+			mutate(corrupted)
+			target := NewOffHeapEmpty()
+			var unmarshalErr error
+			require.NotPanics(t, func() {
+				unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+			})
+			require.Error(t, unmarshalErr)
+			target.Clean(mp)
+			require.Equal(t, int64(0), mp.CurrNB())
+		}
+	})
 	t.Run("preallocated_nil_vector", func(t *testing.T) {
 		target := NewWithSize(1)
 		var unmarshalErr error
