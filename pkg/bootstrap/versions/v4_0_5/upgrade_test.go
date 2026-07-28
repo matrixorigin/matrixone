@@ -15,10 +15,14 @@
 package v4_0_5
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/prashantv/gostub"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
@@ -65,6 +69,57 @@ func TestInformationSchemaTablesTenantUpgradeEntry(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(entry.PreSql), "drop view if exists information_schema.tables") {
 		t.Fatalf("TABLES upgrade is missing its drop-view precondition: %s", entry.PreSql)
+	}
+}
+
+func TestInformationSchemaTablesTenantUpgradeCheckFunc(t *testing.T) {
+	checkErr := errors.New("check view definition")
+	tests := []struct {
+		name       string
+		exists     bool
+		definition string
+		checkErr   error
+		wantOK     bool
+	}{
+		{
+			name:       "matching view",
+			exists:     true,
+			definition: sysview.InformationSchemaTablesDDL,
+			wantOK:     true,
+		},
+		{
+			name:       "mismatched view",
+			exists:     true,
+			definition: "old view definition",
+		},
+		{
+			name:       "missing view",
+			definition: sysview.InformationSchemaTablesDDL,
+		},
+		{
+			name:     "check error",
+			checkErr: checkErr,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+				if txn != nil || accountID != 42 || schema != sysview.InformationDBConst || viewName != "TABLES" {
+					t.Fatalf("unexpected view check arguments: txn=%v accountID=%d schema=%q view=%q", txn, accountID, schema, viewName)
+				}
+				return test.exists, test.definition, test.checkErr
+			})
+			defer stubs.Reset()
+
+			ok, err := tenantUpgEntries[4].CheckFunc(nil, 42)
+			if ok != test.wantOK {
+				t.Fatalf("unexpected check result: got %v, want %v", ok, test.wantOK)
+			}
+			if !errors.Is(err, test.checkErr) {
+				t.Fatalf("unexpected check error: got %v, want %v", err, test.checkErr)
+			}
+		})
 	}
 }
 
