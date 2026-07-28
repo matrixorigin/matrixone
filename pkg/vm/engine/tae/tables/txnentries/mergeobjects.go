@@ -348,6 +348,11 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 	}
 	if rowIDVec != nil {
 		err = entry.relation.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_MergeCompact)
+		if err == nil {
+			if _, sarg, injected := fault.TriggerFault(objectio.FJ_TransferErrorAfterTransfer); injected {
+				err = moerr.NewInternalErrorNoCtx(sarg)
+			}
+		}
 	}
 	return
 }
