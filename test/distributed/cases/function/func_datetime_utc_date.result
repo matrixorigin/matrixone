@@ -9,8 +9,11 @@ SELECT UTC_DATE AS current_utc_date_no_parens;
 2026-07-28
 CREATE TABLE t1(id INT);
 INSERT INTO t1 VALUES (1), (2), (3);
-SELECT id, UTC_DATE() AS utc_date FROM t1;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 33 near " utc_date FROM t1;";
+SELECT id, UTC_DATE() AS utc_date_value FROM t1;
+➤ id[4,32,0]  ¦  utc_date_value[91,64,0]  𝄀
+1  ¦  2026-07-28  𝄀
+2  ¦  2026-07-28  𝄀
+3  ¦  2026-07-28
 DROP TABLE t1;
 CREATE TABLE t1(d DATE);
 INSERT INTO t1 VALUES ('2024-01-01'), ('2024-12-31');
@@ -24,6 +27,9 @@ SELECT UTC_DATE() IS NOT NULL AS not_null_check;
 1
 SELECT DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') = CAST(UTC_DATE() AS CHAR) AS utc_date_is_date;
 ➤ utc_date_is_date[-7,1,0]  𝄀
+1
+SELECT UTC_DATE() = CAST(UTC_TIMESTAMP() AS DATE) AS utc_date_matches_utc_timestamp_date;
+➤ utc_date_matches_utc_timestamp_date[-7,1,0]  𝄀
 1
 SELECT UTC_DATE() + INTERVAL 1 DAY AS tomorrow;
 ➤ tomorrow[91,64,0]  𝄀
