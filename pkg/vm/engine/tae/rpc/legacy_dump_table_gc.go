@@ -16,7 +16,6 @@ package rpc
 
 import (
 	"context"
-	"fmt"
 	"path"
 	"strconv"
 	"strings"
@@ -45,24 +44,30 @@ func init() {
 func decodeLegacyDumpTableDir(dir string) (time.Time, error) {
 	parts := strings.Split(dir, "_")
 	if len(parts) != 3 {
-		return time.Time{}, fmt.Errorf("invalid legacy dump table directory %q", dir)
+		return time.Time{}, moerr.NewInternalErrorNoCtxf(
+			"invalid legacy dump table directory %q", dir)
 	}
 	if _, err := strconv.ParseUint(parts[0], 10, 64); err != nil {
-		return time.Time{}, fmt.Errorf("invalid legacy dump table id in %q: %w", dir, err)
+		return time.Time{}, moerr.NewInternalErrorNoCtxf(
+			"invalid legacy dump table id in %q: %v", dir, err)
 	}
 	createTime, err := time.Parse(legacyDumpTableTimeLayout, parts[1])
 	if err != nil {
-		return time.Time{}, fmt.Errorf("invalid legacy dump table creation time in %q: %w", dir, err)
+		return time.Time{}, moerr.NewInternalErrorNoCtxf(
+			"invalid legacy dump table creation time in %q: %v", dir, err)
 	}
 	ts := strings.Split(parts[2], "-")
 	if len(ts) != 2 {
-		return time.Time{}, fmt.Errorf("invalid legacy dump table snapshot in %q", dir)
+		return time.Time{}, moerr.NewInternalErrorNoCtxf(
+			"invalid legacy dump table snapshot in %q", dir)
 	}
 	if _, err := strconv.ParseInt(ts[0], 10, 64); err != nil {
-		return time.Time{}, fmt.Errorf("invalid legacy dump table snapshot physical time in %q: %w", dir, err)
+		return time.Time{}, moerr.NewInternalErrorNoCtxf(
+			"invalid legacy dump table snapshot physical time in %q: %v", dir, err)
 	}
 	if _, err := strconv.ParseUint(ts[1], 10, 32); err != nil {
-		return time.Time{}, fmt.Errorf("invalid legacy dump table snapshot logical time in %q: %w", dir, err)
+		return time.Time{}, moerr.NewInternalErrorNoCtxf(
+			"invalid legacy dump table snapshot logical time in %q: %v", dir, err)
 	}
 	return createTime, nil
 }
