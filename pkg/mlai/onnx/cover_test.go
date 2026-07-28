@@ -15,6 +15,7 @@
 package onnx
 
 import (
+	"context"
 	"math"
 	"testing"
 
@@ -263,6 +264,37 @@ func TestSequenceModelLoopRejected(t *testing.T) {
 	s2, err := NewSession(sdLoop)
 	require.NoError(t, err)
 	require.NoError(t, s2.Close())
+}
+
+// TestSequenceModelLargeBatchRejected: a ZipMap-style sequence output has one
+// member per input ROW with no Loop/Scan involved, and the binding materializes
+// every member eagerly inside Run — so for sequence/map-output models the input
+// element count must be bounded BEFORE Run. A batch over the limit fails fast
+// with a clean error instead of reaching the eager-materialization peak.
+func TestSequenceModelLargeBatchRejected(t *testing.T) {
+	skipIfNoRuntime(t)
+	sess, err := NewSession(mustModel(t, "sklearn_randomforest.onnx"))
+	require.NoError(t, err)
+	defer sess.Close()
+	require.True(t, sess.hasSeqOutput)
+
+	// [20000,4] = 80000 elements > MaxSequenceInputElements (64K): rejected before
+	// any input parsing or ORT call — the tiny input json is never even validated.
+	big := &Shape{Dim: []int64{20000, 4}, Dtype: DTFloat32}
+	_, err = sess.Run(context.Background(), []byte(`[1]`), big, nil)
+	require.ErrorContains(t, err, "sequence/map outputs")
+
+	// A batch within the limit still works end to end.
+	small := &Shape{Dim: []int64{1, 4}, Dtype: DTFloat32}
+	out, err := sess.Run(context.Background(), []byte(`[5.9,3.0,5.1,1.8]`), small, nil)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// Tensor-only-output models are not subject to the input bound.
+	sd, err := NewSession(mustModel(t, "sum_and_difference.onnx"))
+	require.NoError(t, err)
+	defer sd.Close()
+	require.False(t, sd.hasSeqOutput)
 }
 
 // TestScalarNormalization covers the float normalization edge cases.

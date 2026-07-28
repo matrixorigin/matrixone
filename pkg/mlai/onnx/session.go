@@ -28,7 +28,22 @@ type Session struct {
 	s           *ort.DynamicAdvancedSession
 	inputNames  []string
 	outputNames []string
+	// hasSeqOutput: at least one output is a sequence or map. Such outputs are
+	// materialized EAGERLY by the binding inside Run, so their size must be
+	// bounded BEFORE Run — see the input-element guard in Session.Run.
+	hasSeqOutput bool
 }
+
+// MaxSequenceInputElements caps the input tensor's element count for models with
+// sequence/map outputs. A ZipMap-style output emits one sequence member per input
+// ROW with no Loop/Scan involved, so the sequence length is input-sized; the
+// binding then eagerly materializes per-member Go/C objects (roughly a KB each,
+// NOT arena-bounded payload) inside Run, before resultBudget can act. Bounding the
+// input elements bounds the member count (members <= rows <= elements), keeping
+// the eager-conversion peak in the tens of MB. 64K elements is generous for
+// classical-ML batches (the sklearn BVT uses 24) while an 8M-element input would
+// otherwise admit millions of members.
+const MaxSequenceInputElements = 64 << 10
 
 // NewSession builds a session from raw model bytes (varbinary or the content
 // of a datalink). Input and output names are discovered from the model so the
@@ -64,8 +79,10 @@ func NewSession(modelBytes []byte) (*Session, error) {
 	// \x22\x04Loop / \x22\x04Scan); a false positive (e.g. an attribute string with the
 	// same bytes) fails conservatively with a clean error. Tensor-only-output models are
 	// unaffected: their conversion peak is payload bytes, bounded by the capped arena.
+	hasSeqOutput := false
 	for _, o := range outInfo {
 		if o.OrtValueType == ort.ONNXTypeSequence || o.OrtValueType == ort.ONNXTypeMap {
+			hasSeqOutput = true
 			if containsLoopOp(modelBytes) {
 				return nil, moerr.NewNotSupportedNoCtx(
 					"onnx: models with sequence or map outputs may not contain Loop/Scan operators")
@@ -90,7 +107,12 @@ func NewSession(modelBytes []byte) (*Session, error) {
 	if err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("onnx: cannot load model: %v", err)
 	}
-	return &Session{s: s, inputNames: inNames, outputNames: outNames}, nil
+	return &Session{
+		s:            s,
+		inputNames:   inNames,
+		outputNames:  outNames,
+		hasSeqOutput: hasSeqOutput,
+	}, nil
 }
 
 // containsLoopOp reports whether the serialized model contains a node whose
@@ -171,6 +193,20 @@ func (s *Session) Run(ctx context.Context, inputJSON []byte, inShape, outShape *
 		return nil, moerr.NewNotSupportedNoCtxf(
 			"onnx: model has %d inputs, only single-input models are supported",
 			len(s.inputNames))
+	}
+	// Sequence/map outputs are input-sized (e.g. ZipMap emits one member per input
+	// row) and the binding materializes every member eagerly inside Run, before
+	// resultBudget exists. Bound the member count BEFORE Run by bounding the input
+	// elements (members <= rows <= elements) — the only pre-materialization handle
+	// this binding offers. Checked first so an oversized request fails fast.
+	if s.hasSeqOutput {
+		if n, err := inShape.NumElements(); err != nil {
+			return nil, err
+		} else if n > MaxSequenceInputElements {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"onnx: input of %d elements exceeds the %d-element limit for models with sequence/map outputs (their outputs are materialized per input row)",
+				n, MaxSequenceInputElements)
+		}
 	}
 	inTensor, err := buildInputTensor(inputJSON, inShape)
 	if err != nil {
