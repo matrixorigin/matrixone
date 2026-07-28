@@ -366,6 +366,10 @@ func (s *tempStat) String() string {
 func (entry *mergeObjectsEntry) collectDelsAndTransfer(
 	ctx context.Context, from, to types.TS,
 ) (transCnt int, stat tempStat, err error) {
+	if _, sarg, injected := fault.TriggerFault(objectio.FJ_TransferError); injected {
+		err = moerr.NewInternalErrorNoCtx(sarg)
+		return
+	}
 	if len(entry.createdObjs) == 0 {
 		return
 	}
@@ -461,7 +465,7 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	ctx := context.Background()
 	transCnt, stat, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, entry.txn.GetPrepareTS().Prev())
 	if err != nil {
-		return nil
+		return err
 	}
 
 	inst1 := time.Now()
