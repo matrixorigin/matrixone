@@ -111,6 +111,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
@@ -257,6 +258,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		wp := mock_frontend.NewMockWorkspace(ctrl)
 		wp.EXPECT().RollbackLastStatement(gomock.Any()).Return(moerr.NewInternalError(ctx, "rollback last stmt")).AnyTimes()
+		wp.EXPECT().GetHaveDDL().Return(false).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(wp).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -629,6 +631,7 @@ func TestSession_Migrate(t *testing.T) {
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(any, any, ...any) (TxnOperator, error) {
 			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+			txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
@@ -1038,6 +1041,23 @@ func TestRemoveAllPrepareStmts(t *testing.T) {
 	// safe to call again on an already-empty session
 	ses.RemoveAllPrepareStmts()
 	assert.Equal(t, 0, len(ses.prepareStmts))
+}
+
+func TestRemovePrepareStmt(t *testing.T) {
+	ses := &Session{
+		prepareStmts: map[string]*PrepareStmt{
+			"s1": {Name: "s1"},
+			"s2": {Name: "s2"},
+		},
+	}
+
+	assert.True(t, ses.RemovePrepareStmt("s1"))
+	assert.NotContains(t, ses.prepareStmts, "s1")
+	assert.Contains(t, ses.prepareStmts, "s2")
+
+	assert.False(t, ses.RemovePrepareStmt("s1"))
+	assert.False(t, ses.RemovePrepareStmt("missing"))
+	assert.Contains(t, ses.prepareStmts, "s2")
 }
 
 func TestSession_Cleanup(t *testing.T) {

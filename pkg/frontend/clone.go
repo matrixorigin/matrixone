@@ -213,6 +213,12 @@ func getOpAndToAccountId(
 	return opAccountId, toAccountId, snapshot, nil
 }
 
+type cloneAccountResolution struct {
+	opAccountId uint32
+	toAccountId uint32
+	snapshot    *plan2.Snapshot
+}
+
 // create table x.y clone r.s {MO_TS, SNAPSHOT}
 // create table x.y clone r.s {MO_TS, SNAPSHOT} to account t
 func handleCloneTable(
@@ -220,6 +226,7 @@ func handleCloneTable(
 	ses *Session,
 	stmt *tree.CloneTable,
 	bh BackgroundExec,
+	resolvedAccounts *cloneAccountResolution,
 ) (receipt cloneReceipt, err error) {
 
 	var (
@@ -258,10 +265,16 @@ func handleCloneTable(
 		}()
 	}
 
-	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
-		reqCtx, ses, bh, stmt.ToAccountOpt, stmt.SrcTable.AtTsExpr,
-	); err != nil {
-		return
+	if resolvedAccounts != nil {
+		opAccountId = resolvedAccounts.opAccountId
+		toAccountId = resolvedAccounts.toAccountId
+		snapshot = resolvedAccounts.snapshot
+	} else {
+		if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
+			reqCtx, ses, bh, stmt.ToAccountOpt, stmt.SrcTable.AtTsExpr,
+		); err != nil {
+			return
+		}
 	}
 
 	if stmt.CopyGrants && stmt.ToAccountOpt != nil {
@@ -499,9 +512,17 @@ func handleCloneDatabaseWithSource(
 				reqCtx: reqCtx,
 			}
 		)
+		tableSnapshot, resolveErr := resolveSnapshot(ses, cloneStmt.SrcTable.AtTsExpr)
+		if resolveErr != nil {
+			return resolveErr
+		}
 
 		if receipt, err = handleCloneTable(
-			tempExecCtx, ses, cloneStmt, bh,
+			tempExecCtx, ses, cloneStmt, bh, &cloneAccountResolution{
+				opAccountId: source.opAccountId,
+				toAccountId: source.toAccountId,
+				snapshot:    tableSnapshot,
+			},
 		); err != nil {
 			return err
 		}
@@ -766,7 +787,7 @@ func updateBranchMetaTable(
 		dstTblDef.TblId,
 		receipt.snapshotTS,
 		srcTblDef.TblId,
-		receipt.opAccount,
+		receipt.toAccount,
 		level,
 	)
 

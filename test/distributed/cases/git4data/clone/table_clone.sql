@@ -92,6 +92,8 @@ insert into db1.t8(content) values ("this is a test for clone fulltext table 3")
 
 create table db1.t8_copy clone db1.t8;
 select * from db1.t8_copy order by id asc;
+insert into db1.t8_copy(content) values ("this is a test for clone fulltext table 4");
+select content from db1.t8_copy where content = "this is a test for clone fulltext table 4";
 
 
 create table db1.t9(a int primary key, b vecf32(3));

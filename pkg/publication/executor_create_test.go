@@ -84,7 +84,7 @@ func TestCreateUpstreamExecutor_ExternalConn_EmptyUser(t *testing.T) {
 
 func TestRetryPublication_Success(t *testing.T) {
 	called := 0
-	err := retryPublication(context.Background(), func() error {
+	err := retryPublication(context.Background(), "test", func() error {
 		called++
 		return nil
 	}, DefaultExecutorRetryOption())
@@ -93,7 +93,7 @@ func TestRetryPublication_Success(t *testing.T) {
 }
 
 func TestRetryPublication_NilOption(t *testing.T) {
-	err := retryPublication(context.Background(), func() error {
+	err := retryPublication(context.Background(), "test", func() error {
 		return nil
 	}, nil)
 	assert.NoError(t, err)
@@ -102,7 +102,7 @@ func TestRetryPublication_NilOption(t *testing.T) {
 func TestRetryPublication_NoRetryOnNonClassified(t *testing.T) {
 	// retryPublication creates Policy with Classifier: nil → never retries
 	attempt := 0
-	err := retryPublication(context.Background(), func() error {
+	err := retryPublication(context.Background(), "test", func() error {
 		attempt++
 		return moerr.NewInternalErrorNoCtx("fail")
 	}, &ExecutorRetryOption{
@@ -117,7 +117,7 @@ func TestRetryPublication_NoRetryOnNonClassified(t *testing.T) {
 func TestRetryPublication_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := retryPublication(ctx, func() error {
+	err := retryPublication(ctx, "test", func() error {
 		return moerr.NewInternalErrorNoCtx("fail")
 	}, &ExecutorRetryOption{
 		RetryTimes:    10,
@@ -129,7 +129,7 @@ func TestRetryPublication_ContextCancelled(t *testing.T) {
 
 func TestRetryPublication_ErrNonRetryable(t *testing.T) {
 	attempt := 0
-	err := retryPublication(context.Background(), func() error {
+	err := retryPublication(context.Background(), "test", func() error {
 		attempt++
 		if attempt > 1 {
 			return ErrNonRetryable
