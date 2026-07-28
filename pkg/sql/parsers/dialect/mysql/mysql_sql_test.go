@@ -363,6 +363,42 @@ func TestOuterJoinRequiresCondition(t *testing.T) {
 	}
 }
 
+func TestMySQLJoinSyntaxVariants(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "ODBC outer join escape",
+			in:   "select * from { OJ a left outer join b on a.id = b.id }",
+			want: "select * from a left join b on a.id = b.id",
+		},
+		{
+			name: "ODBC escape is case insensitive",
+			in:   "select * from { oj a right join b using (id) }",
+			want: "select * from a right join b using (id)",
+		},
+		{
+			name: "straight join using",
+			in:   "select * from a straight_join b using(id)",
+			want: "select * from a straight_join b using (id)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.in, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+
+	_, err := ParseOne(context.Background(), "select * from { not_oj a join b on a.id = b.id }", 1)
+	require.ErrorContains(t, err, "expected OJ in table reference escape")
+}
+
 func TestBinaryIntroducedHexLiteralHasDistinctType(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), "select X'3132', _binary X'3132', _binary '1'", 1)
 	require.NoError(t, err)
@@ -2300,6 +2336,12 @@ var (
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops'",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 INCLUDE (b, c)",
+			output: "create index idx using ivfflat on a (a) LISTS 10 INCLUDE (b, c) ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' INCLUDE (b, c)",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops INCLUDE (b, c) ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' async",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ASYNC ",
