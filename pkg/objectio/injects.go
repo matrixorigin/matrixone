@@ -27,12 +27,14 @@ const (
 )
 
 const (
-	FJ_CommitDelete  = "fj/commit/delete"
-	FJ_CommitSlowLog = "fj/commit/slowlog"
-	FJ_CommitWait    = "fj/commit/wait"
-	FJ_TransferSlow  = "fj/transfer/slow"
-	FJ_FlushTimeout  = "fj/flush/timeout"
-	FJ_FlushEntry    = "fj/flush/entry"
+	FJ_CommitDelete               = "fj/commit/delete"
+	FJ_CommitSlowLog              = "fj/commit/slowlog"
+	FJ_CommitWait                 = "fj/commit/wait"
+	FJ_TransferSlow               = "fj/transfer/slow"
+	FJ_TransferError              = "fj/transfer/error"
+	FJ_TransferErrorAfterTransfer = "fj/transfer/error-after-transfer"
+	FJ_FlushTimeout               = "fj/flush/timeout"
+	FJ_FlushEntry                 = "fj/flush/entry"
 
 	FJ_CheckpointSave = "fj/checkpoint/save"
 	FJ_GCKPWait1      = "fj/gckp/wait1"
