@@ -1335,7 +1335,7 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		return int64(1), nil
 	case "sql_mode":
 		return "", nil
-	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
+	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
 	return nil, nil
