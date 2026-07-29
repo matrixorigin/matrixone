@@ -54,7 +54,9 @@ const (
 	embeddedIcebergSnapshotCurrent      int64 = 202
 	embeddedIcebergTimestampCutoff            = int64(1767312000000) // 2026-01-02T00:00:00Z in ms.
 	embeddedIcebergAccountRetryInterval       = 100 * time.Millisecond
-	embeddedIcebergAccountCreateTimeout       = 10 * time.Second
+	// CREATE ACCOUNT initializes all tenant system tables, so it can legitimately
+	// take longer than a regular SQL statement on a loaded integration runner.
+	embeddedIcebergAccountCreateTimeout = 30 * time.Second
 )
 
 type embeddedIcebergSQLExecer interface {
