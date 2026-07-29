@@ -38,21 +38,21 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestAutoIncrEpochFenceCommitRequiresV6(t *testing.T) {
+func TestAutoIncrEpochFenceCommitRequiresV7(t *testing.T) {
 	rt := newTestRuntime(newTestClock(), zap.NewNop())
 	req := &txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
 	require.Error(t, checkMethodVersion(context.Background(), rt, req))
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion7)
 	require.NoError(t, checkMethodVersion(context.Background(), rt, req))
 
 	legacyMethods := map[txn.TxnMethod]int64{txn.TxnMethod_Commit: defines.MORPCVersion1}
 	require.Error(t, runtime.CheckMethodVersionWithRuntime(context.Background(), rt, legacyMethods, req))
 }
 
-func TestAutoIncrEpochFenceCommitNetworkDispatchRequiresV6(t *testing.T) {
+func TestAutoIncrEpochFenceCommitNetworkDispatchRequiresV7(t *testing.T) {
 	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		var calls atomic.Int32
 		s.RegisterMethodHandler(txn.TxnMethod_CommitAutoIncrEpochFence, func(
@@ -64,22 +64,22 @@ func TestAutoIncrEpochFenceCommitNetworkDispatchRequiresV6(t *testing.T) {
 			return nil
 		})
 
-		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
-		v5Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
+		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
+		v6Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
 		require.Error(t, s.onMessage(
 			context.Background(),
-			v5Message,
+			v6Message,
 			1,
 			newTestClientSession(make(chan morpc.Message, 1)),
 		))
-		require.Zero(t, calls.Load(), "V5 must reject before invoking the handler")
+		require.Zero(t, calls.Load(), "V6 must reject before invoking the handler")
 
-		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
-		v6Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
-		defer v6Message.Cancel()
+		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion7)
+		v7Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
+		defer v7Message.Cancel()
 		require.NoError(t, s.onMessage(
 			context.Background(),
-			v6Message,
+			v7Message,
 			2,
 			newTestClientSession(make(chan morpc.Message, 1)),
 		))

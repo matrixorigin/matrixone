@@ -35,6 +35,31 @@ func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
 	require.Equal(t, int64(2), source.branchTableCount())
 }
 
+func TestCloneFkTableOrder(t *testing.T) {
+	t.Run("acyclic dependencies retain topological order", func(t *testing.T) {
+		parent := genKey("db", "parent")
+		child := genKey("db", "child")
+		order, hasCycle := cloneFkTableOrder(map[string][]string{
+			child: {parent},
+		})
+
+		require.False(t, hasCycle)
+		require.Equal(t, []string{parent, child}, order)
+	})
+
+	t.Run("cyclic dependencies use deterministic forward-reference order", func(t *testing.T) {
+		a := genKey("db", "a")
+		b := genKey("db", "b")
+		order, hasCycle := cloneFkTableOrder(map[string][]string{
+			a: {b},
+			b: {a},
+		})
+
+		require.True(t, hasCycle)
+		require.Equal(t, []string{a, b}, order)
+	})
+}
+
 func TestCloneSnapshotTxnOperator(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	outerTxn := mock_frontend.NewMockTxnOperator(ctrl)

@@ -63,6 +63,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestHasOrderedGroupConcat(t *testing.T) {
+	ordered := &plan.Node{
+		AggList: []*plan.Expr{{
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func:          &plan.ObjectRef{ObjName: "group_concat"},
+				AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+			}},
+		}},
+	}
+	require.True(t, hasOrderedGroupConcat(ordered))
+
+	ordered.GroupBy = []*plan.Expr{{}}
+	require.True(t, hasOrderedGroupConcat(ordered))
+	ordered.GroupBy = nil
+	ordered.AggList[0].GetF().AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
+	require.False(t, hasOrderedGroupConcat(ordered))
+}
+
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
@@ -614,6 +632,69 @@ func TestCompileShuffleGroupUsesDistributedPathWhenScopeMcpuDiffersFromDop(t *te
 	}
 	require.Len(t, result[0].PreScopes, 1)
 	require.IsType(t, &shuffle.Shuffle{}, result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
+}
+
+func TestCompileShuffleGroupSupportsOrderedGroupConcat(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	c.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return int64(1024), nil
+	})
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NameGroupConcat,
+			},
+			AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		}},
+	}}
+	scope := newShuffleGroupInputScope(t, 1)
+
+	require.True(t, hasOrderedGroupConcat(aggNode))
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 16)
+	for _, resultScope := range result {
+		groupOp, ok := resultScope.RootOp.(*group.Group)
+		require.True(t, ok)
+		require.True(t, groupOp.NeedEval)
+	}
+	require.IsType(t, &shuffle.Shuffle{}, result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
+}
+
+func TestCompileShuffleGroupGatesOrderedAggregateByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NameGroupConcat,
+			},
+			AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		}},
+	}}
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
+	require.False(t, c.supportsRemoteOrderedAggregates())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"mixed-version clusters must keep the final ordered aggregate local")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
+	require.True(t, c.supportsRemoteOrderedAggregates())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"rollback must disable the v6 pipeline field before contacting old CNs")
+
+	aggNode.AggList = nil
+	require.True(t, c.canCompileShuffleGroup(aggNode),
+		"legacy shuffle aggregates remain safe on protocol v5")
 }
 
 func TestCompileShuffleGroupUsesDistributedPathWhenInputScopesNotSingle(t *testing.T) {

@@ -435,7 +435,7 @@ func TestCommit(t *testing.T) {
 	})
 }
 
-func TestAutoIncrEpochFenceUsesV6CommitMethod(t *testing.T) {
+func TestAutoIncrEpochFenceUsesGuardedCommitMethod(t *testing.T) {
 	t.Run("commit", func(t *testing.T) {
 		runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 			tc.RequireAutoIncrEpochFenceCommit()

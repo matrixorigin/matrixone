@@ -223,13 +223,13 @@ type RunSQLAdmissionOperator interface {
 }
 
 // AutoIncrEpochFenceCommitter is an additive transaction capability used by
-// epoch-aware workspaces to require the V6-only terminal commit method.
+// epoch-aware workspaces to require the V7-only terminal commit method.
 type AutoIncrEpochFenceCommitter interface {
 	RequireAutoIncrEpochFenceCommit()
 }
 
 // RequireAutoIncrEpochFenceCommit marks the transaction and reports whether
-// the operator can provide the V6 terminal-commit contract.
+// the operator can provide the V7 terminal-commit contract.
 func RequireAutoIncrEpochFenceCommit(op TxnOperator) bool {
 	if committer, ok := op.(AutoIncrEpochFenceCommitter); ok {
 		committer.RequireAutoIncrEpochFenceCommit()

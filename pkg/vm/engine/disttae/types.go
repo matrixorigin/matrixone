@@ -729,7 +729,7 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 
 // SupportsAutoIncrEpochFence reports the capability of the exact TN snapshot
 // captured by this transaction. Missing or legacy targets fail closed. The
-// V6-only terminal commit remains the authoritative mixed-version boundary.
+// V7-only terminal commit remains the authoritative mixed-version boundary.
 func (txn *Transaction) SupportsAutoIncrEpochFence() bool {
 	if len(txn.tnStores) == 0 {
 		return false
