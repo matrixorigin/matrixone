@@ -922,6 +922,13 @@ func TestGetCommandBatch(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	cb := pb.CommandBatch{
 		Term: 12345,
+		Commands: []pb.ScheduleCommand{{
+			UUID:        "uuid1",
+			ServiceType: pb.LogService,
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.AddReplica,
+			},
+		}},
 	}
 	rsm.state.ScheduleCommands["uuid1"] = cb
 	result := rsm.getCommandBatch("uuid1")
@@ -930,6 +937,92 @@ func TestGetCommandBatch(t *testing.T) {
 	assert.Equal(t, cb, ncb)
 	_, ok := rsm.state.ScheduleCommands["uuid1"]
 	assert.False(t, ok)
+}
+
+func TestBootstrapReplicaCommandsRetriedUntilHeartbeatAcknowledges(t *testing.T) {
+	const (
+		storeID   = "store-1"
+		shardID   = uint64(1)
+		replicaID = uint64(2)
+	)
+
+	run := func(
+		t *testing.T,
+		serviceType pb.ServiceType,
+		heartbeat func(reported bool) []byte,
+	) {
+		t.Helper()
+
+		rsm := NewStateMachine(0, 1).(*stateMachine)
+		rsm.state.State = pb.HAKeeperBootstrapping
+		command := pb.ScheduleCommand{
+			UUID:          storeID,
+			Bootstrapping: true,
+			ServiceType:   serviceType,
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					UUID:      storeID,
+					ShardID:   shardID,
+					ReplicaID: replicaID,
+				},
+				ChangeType: pb.StartReplica,
+			},
+		}
+		_, err := rsm.Update(sm.Entry{
+			Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{command}),
+		})
+		require.NoError(t, err)
+		require.Equal(t, pb.HAKeeperBootstrapCommandsReceived, rsm.state.State)
+
+		// Model a heartbeat whose proposal commits but whose response is lost:
+		// ignoring the first result must not consume the bootstrap command.
+		_, err = rsm.Update(sm.Entry{Cmd: heartbeat(false)})
+		require.NoError(t, err)
+
+		result, err := rsm.Update(sm.Entry{Cmd: heartbeat(false)})
+		require.NoError(t, err)
+		var batch pb.CommandBatch
+		require.NoError(t, batch.Unmarshal(result.Data))
+		require.Equal(t, []pb.ScheduleCommand{command}, batch.Commands)
+		_, ok := rsm.state.ScheduleCommands[storeID]
+		require.True(t, ok)
+
+		result, err = rsm.Update(sm.Entry{Cmd: heartbeat(true)})
+		require.NoError(t, err)
+		require.Empty(t, result.Data)
+		_, ok = rsm.state.ScheduleCommands[storeID]
+		require.False(t, ok)
+	}
+
+	t.Run("log-service", func(t *testing.T) {
+		run(t, pb.LogService, func(reported bool) []byte {
+			hb := pb.LogStoreHeartbeat{UUID: storeID}
+			if reported {
+				hb.Replicas = []pb.LogReplicaInfo{{
+					LogShardInfo: pb.LogShardInfo{ShardID: shardID},
+					ReplicaID:    replicaID,
+				}}
+			}
+			data, err := hb.Marshal()
+			require.NoError(t, err)
+			return GetLogStoreHeartbeatCmd(data)
+		})
+	})
+
+	t.Run("tn-service", func(t *testing.T) {
+		run(t, pb.TNService, func(reported bool) []byte {
+			hb := pb.TNStoreHeartbeat{UUID: storeID}
+			if reported {
+				hb.Shards = []pb.TNShardInfo{{
+					ShardID:   shardID,
+					ReplicaID: replicaID,
+				}}
+			}
+			data, err := hb.Marshal()
+			require.NoError(t, err)
+			return GetTNStoreHeartbeatCmd(data)
+		})
+	})
 }
 
 func TestHandleUpdateCNLabel(t *testing.T) {
