@@ -52,6 +52,26 @@ func TestRemapAggToTimeWindowResultAggUsesRegularSumForPartialSums(t *testing.T)
 	}
 }
 
+func TestGroupConcatOrderKeyUsesEnumAndSetStorageValue(t *testing.T) {
+	for _, name := range []string{moEnumCastIndexToValueFun, moSetCastIndexToValueFun} {
+		t.Run(name, func(t *testing.T) {
+			raw := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_uint16)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}},
+			}
+			display := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: name},
+					Args: []*plan.Expr{{}, raw},
+				}},
+			}
+
+			require.Same(t, raw, groupConcatOrderKey(display))
+		})
+	}
+}
+
 func TestRemapAggToTimeWindowResultAggUsesRegularSumForCountCache(t *testing.T) {
 	countFn, err := function.GetFunctionByName(context.Background(), "count", []types.Type{types.T_int64.ToType()})
 	require.NoError(t, err)
@@ -97,6 +117,8 @@ func TestBindTimeWindowFuncCastsCountProjectionAfterDecimalCache(t *testing.T) {
 				Args: []*plan.Expr{{
 					Typ: plan.Type{Id: int32(types.T_int64), Width: 64},
 				}},
+				AggConfig:     []byte{1, 2, 3},
+				AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
 			},
 		},
 	}}
@@ -113,9 +135,34 @@ func TestBindTimeWindowFuncCastsCountProjectionAfterDecimalCache(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ctx.times, 1)
 	require.Equal(t, int32(types.T_decimal128), ctx.times[0].Typ.Id)
+	require.Nil(t, ctx.times[0].GetF().AggConfig)
+	require.Equal(
+		t,
+		plan.AggregateConfigType_AGG_CONFIG_NONE,
+		ctx.times[0].GetF().AggConfigType,
+	)
 	require.Equal(t, int32(types.T_int64), got.Typ.Id)
 	require.Equal(t, "cast", got.GetF().Func.ObjName)
 	require.Equal(t, int32(types.T_decimal128), got.GetF().Args[0].Typ.Id)
 	require.Equal(t, int32(ctx.timeTag), got.GetF().Args[0].GetCol().RelPos)
 	require.Equal(t, int32(0), got.GetF().Args[0].GetCol().ColPos)
+}
+
+func TestBindTimeWindowFuncRejectsOrderedGroupConcatInSlidingWindow(t *testing.T) {
+	ctx := NewBindContext(nil, nil)
+	ctx.sliding = true
+	binder := &HavingBinder{
+		baseBinder: baseBinder{sysCtx: context.Background(), ctx: ctx},
+	}
+	ast := &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(NameGroupConcat)),
+		Exprs: tree.Exprs{tree.NewUnresolvedColName("v")},
+		OrderBy: tree.OrderBy{&tree.Order{
+			Expr: tree.NewUnresolvedColName("x"),
+		}},
+	}
+
+	_, err := binder.BindTimeWindowFunc(NameGroupConcat, ast, 0, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ordered group_concat in sliding time window")
 }

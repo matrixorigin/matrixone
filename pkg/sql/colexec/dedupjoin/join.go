@@ -34,17 +34,67 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// receiveWorkerMsg blocks until the channel yields a message or the context
-// is canceled. Returns nil on close or cancellation.
-func receiveWorkerMsg(ctx context.Context, ch chan *WorkerJoinMsg) *WorkerJoinMsg {
+// receiveWorkerMsg blocks until the mailbox yields a complete worker status or
+// the context is canceled. Channel closure and legacy nil messages are invalid:
+// this protocol requires exactly one explicit status from every non-merger.
+func receiveWorkerMsg(ctx context.Context, mailbox *WorkerJoinMailbox) (*WorkerJoinMsg, error) {
+	if mailbox == nil {
+		return nil, moerr.NewInternalErrorNoCtx("dedup join worker mailbox is not initialized")
+	}
+	if err := context.Cause(ctx); err != nil {
+		// Prefer an already-published terminal status. It may carry the
+		// worker's original error, which is more useful than a generic parent
+		// cancellation. Never wait for one after cancellation.
+		select {
+		case msg, ok := <-mailbox.ch:
+			if ok && msg != nil {
+				return msg, nil
+			}
+		default:
+		}
+		return nil, err
+	}
+	roundDone, stopped := mailbox.receiveState()
+	if stopped {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"dedup join worker mailbox is stopped before all workers finalized",
+		)
+	}
 	select {
 	case <-ctx.Done():
-		return nil
-	case msg, ok := <-ch:
-		if !ok {
-			return nil
+		select {
+		case msg, ok := <-mailbox.ch:
+			if ok && msg != nil {
+				return msg, nil
+			}
+		default:
 		}
-		return msg
+		return nil, context.Cause(ctx)
+	case <-roundDone:
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewInternalErrorNoCtx(
+			"dedup join worker mailbox stopped before all workers finalized",
+		)
+	case msg, ok := <-mailbox.ch:
+		if !ok {
+			if err := context.Cause(ctx); err != nil {
+				return nil, err
+			}
+			return nil, moerr.NewInternalErrorNoCtx(
+				"dedup join worker channel closed before all workers finalized",
+			)
+		}
+		if msg == nil {
+			if err := context.Cause(ctx); err != nil {
+				return nil, err
+			}
+			return nil, moerr.NewInternalErrorNoCtx(
+				"dedup join worker returned an empty finalize status",
+			)
+		}
+		return msg, nil
 	}
 }
 
@@ -188,6 +238,9 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				err := ctr.finalize(dedupJoin, proc)
 				if err != nil {
 					return result, err
+				}
+				if ctr.state == End {
+					continue
 				}
 			}
 			if dedupJoin.ctr.lastPos >= len(dedupJoin.ctr.buf) {
@@ -382,44 +435,95 @@ func (ctr *container) initCaptureBuffers(ap *DedupJoin, proc *process.Process) e
 	return nil
 }
 func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
+	if ap.needsFinalizeMerge() {
+		if !ap.IsMerger {
+			if ap.Mailbox == nil {
+				return moerr.NewInternalErrorNoCtx("dedup join worker mailbox is not initialized")
+			}
+			msg := &WorkerJoinMsg{matched: ctr.matched}
+			if len(ap.OldColCapturePlaceholderIdxList) > 0 {
+				msg.captured = ctr.captured
+				msg.capturedVecs = ctr.capturedVecs
+			}
+			if err := context.Cause(proc.Ctx); err != nil {
+				return err
+			}
+			sent, stopped, roundDone := ap.Mailbox.trySend(msg)
+			if stopped {
+				// The merger already terminated this generation. Ownership
+				// remains local and Free will release the capture vectors.
+				ctr.handledLast = true
+				ctr.state = End
+				return nil
+			}
+			if !sent {
+				return moerr.NewInternalErrorNoCtx(
+					"dedup join worker mailbox is unexpectedly full",
+				)
+			}
+			// Ownership transfers only after trySend succeeds. Before that
+			// point Reset/Free still owns and releases these vectors.
+			ctr.captured = nil
+			ctr.capturedVecs = nil
+			// Publication, not acknowledgement, is the worker's single status
+			// for this round. Mark it before waiting so concurrent cancellation
+			// cannot make Reset enqueue a duplicate abort status.
+			ctr.handledLast = true
+			select {
+			case <-roundDone:
+			case <-proc.Ctx.Done():
+				return context.Cause(proc.Ctx)
+			}
+			return nil
+		}
+
+		for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
+			msg, err := receiveWorkerMsg(proc.Ctx, ap.Mailbox)
+			if err != nil {
+				freeWorkerJoinMsg(msg, proc)
+				ap.Mailbox.stopAndDrain(proc)
+				return err
+			}
+
+			if msg.aborted {
+				freeWorkerJoinMsg(msg, proc)
+				ap.Mailbox.stopAndDrain(proc)
+				if msg.err != nil {
+					return msg.err
+				}
+				if err := context.Cause(proc.Ctx); err != nil {
+					return err
+				}
+				// A normal upper-operator early stop is not a query error, but
+				// no partial unmatched-build output may escape.
+				ctr.state = End
+				return nil
+			}
+			if ctr.matched != nil && msg.matched != nil {
+				ctr.matched.Or(msg.matched)
+			}
+			var mergeErr error
+			if len(ap.OldColCapturePlaceholderIdxList) > 0 && msg.captured != nil {
+				mergeErr = ctr.mergeCaptured(ap, msg, proc)
+			}
+			freeWorkerJoinMsg(msg, proc)
+			if mergeErr != nil {
+				ap.Mailbox.stopAndDrain(proc)
+				return mergeErr
+			}
+		}
+		if err := context.Cause(proc.Ctx); err != nil {
+			ap.Mailbox.stopAndDrain(proc)
+			return err
+		}
+		// Do not release a fast worker into the next spill bucket until every
+		// worker's status for this bucket has been collected.
+		ap.Mailbox.completeRound()
+	}
+
 	ctr.handledLast = true
 	if ctr.matched == nil {
 		return nil
-	}
-	if ap.needsFinalizeMerge() {
-		if !ap.IsMerger {
-			msg := &WorkerJoinMsg{matched: ctr.matched}
-			if len(ap.OldColCapturePlaceholderIdxList) > 0 {
-				// Transfer ownership of capture state to the merger; clear
-				// our references so cleanCaptured() does not double-free.
-				msg.captured = ctr.captured
-				msg.capturedVecs = ctr.capturedVecs
-				ctr.captured = nil
-				ctr.capturedVecs = nil
-			}
-			ap.Channel <- msg
-			return nil
-		}
-		for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
-			msg := receiveWorkerMsg(proc.Ctx, ap.Channel)
-			if msg == nil {
-				return nil
-			}
-			if msg.matched != nil {
-				ctr.matched.Or(msg.matched)
-			}
-			if len(ap.OldColCapturePlaceholderIdxList) > 0 && msg.captured != nil {
-				if err := ctr.mergeCaptured(ap, msg, proc); err != nil {
-					freeCapturedVecs(msg.capturedVecs, proc)
-					return err
-				}
-				freeCapturedVecs(msg.capturedVecs, proc)
-			}
-		}
-		// Only close the channel on the last spill bucket (or non-spill).
-		if ctr.spillEngine == nil || !ctr.spillEngine.HasMoreBuckets() {
-			close(ap.Channel)
-		}
 	}
 	if ap.OnDuplicateAction != plan.Node_UPDATE || ctr.mp.HashOnUnique() {
 		if ctr.matched.Count() == 0 {

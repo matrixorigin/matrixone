@@ -1220,6 +1220,25 @@ a	b	ga	gb
 2	null	0	1
 null	null	1	1
 drop table grouping_not_null;
+select
+coalesce(region, '<null>') as display_region,
+coalesce(product, '<null>') as display_product,
+sum(amount) as total_amount,
+grouping(region) as grouping_region,
+grouping(product) as grouping_product
+from grouping_order
+group by region, product with rollup
+order by grouping(region), region, grouping(product), product;
+display_region	display_product	total_amount	grouping_region	grouping_product
+<null>	tea	30	0	0
+<null>	<null>	30	0	1
+east	<null>	5	0	0
+east	coffee	7	0	0
+east	tea	null	0	0
+east	<null>	12	0	1
+west	tea	3	0	0
+west	<null>	3	0	1
+<null>	<null>	45	1	1
 drop table grouping_order;
 create table rollup_window_sales(region varchar(20), product varchar(20), qty int);
 insert into rollup_window_sales values
