@@ -350,6 +350,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Partial = t.Partial
 		op.StartIDX = t.StartIDX
 		op.EndIDX = t.EndIDX
+		op.MaterializedSource = t.MaterializedSource
+		op.MaterializedReaderID = t.MaterializedReaderID
 		op.SetInfo(&info)
 		return op
 	case vm.MergeRecursive:
@@ -462,6 +464,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ShuffleRegIdxLocal = sourceArg.ShuffleRegIdxLocal
 		op.ShuffleRegIdxRemote = sourceArg.ShuffleRegIdxRemote
 		op.FuncId = sourceArg.FuncId
+		op.MaterializedSource = sourceArg.MaterializedSource
 		op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
 		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
 		for j := range op.LocalRegs {
@@ -1618,9 +1621,10 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
+		configType := f.F.AggConfigType
 		args, cfg := constructAggregateConfig(f.F, proc)
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-			functionID, isDistinct, args, cfg)
+			functionID, isDistinct, args, cfg, configType)
 	}
 	arg := window.NewArgument()
 	arg.Aggs = aggregationExpressions
@@ -1655,10 +1659,11 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 			isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
+			configType := f.F.AggConfigType
 			args, cfg := constructAggregateConfig(f.F, proc)
 
 			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-				functionID, isDistinct, args, cfg)
+				functionID, isDistinct, args, cfg, configType)
 		}
 	}
 
@@ -1680,11 +1685,6 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 	args := f.Args
 	switch f.Func.ObjName {
 	case plan2.NameGroupConcat:
-		separator := ","
-		if len(args) > 1 {
-			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
-			args = args[:len(args)-1]
-		}
 		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
 		if err != nil {
 			panic(err)
@@ -1693,6 +1693,14 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		if !ok || maxLen < 0 {
 			panic(moerr.NewInternalErrorNoCtxf(
 				"group_concat_max_len has invalid value %v", value))
+		}
+		if f.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, uint64(maxLen))
+		}
+		separator := ","
+		if len(args) > 1 {
+			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
+			args = args[:len(args)-1]
 		}
 		return args, aggexec.EncodeGroupConcatConfig(separator, uint64(maxLen))
 
