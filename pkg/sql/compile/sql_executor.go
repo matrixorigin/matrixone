@@ -355,10 +355,7 @@ func (exec *txnExecutor) Exec(
 		}
 	}()
 	if err != nil {
-		if exec.ctx.Value(defines.ViewMetadataRefreshKey{}) != nil {
-			err = &viewMetadataRefreshPlanError{err: err}
-		}
-		return executor.Result{}, err
+		return executor.Result{}, wrapViewMetadataRefreshPlanError(exec.ctx, err)
 	}
 
 	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
@@ -453,20 +450,20 @@ func (exec *txnExecutor) Exec(
 				},
 			}
 		} else {
-			return executor.Result{}, err
+			return executor.Result{}, wrapViewMetadataRefreshPlanError(exec.ctx, err)
 		}
 	default:
 		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
 	}
 
 	if err != nil {
-		return executor.Result{}, err
+		return executor.Result{}, wrapViewMetadataRefreshPlanError(exec.ctx, err)
 	}
 
 	if prepared {
 		_, _, err := plan.ResetPreparePlan(compileContext, pn)
 		if err != nil {
-			return executor.Result{}, err
+			return executor.Result{}, wrapViewMetadataRefreshPlanError(exec.ctx, err)
 		}
 	}
 
@@ -524,7 +521,7 @@ func (exec *txnExecutor) Exec(
 	if exec.opts.ForceRebuildPlan() {
 		pn, err = c.buildPlanFunc(proc.Ctx)
 		if err != nil {
-			return executor.Result{}, err
+			return executor.Result{}, wrapViewMetadataRefreshPlanError(exec.ctx, err)
 		}
 	}
 

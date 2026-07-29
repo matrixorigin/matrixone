@@ -27,6 +27,7 @@ create table ambiguity_right (b int);
 create view ambiguity_view as
 select a from ambiguity_left, ambiguity_right;
 alter table ambiguity_right rename column b to a;
+-- @ignore:5,6
 desc ambiguity_right;
 alter table ambiguity_right rename column a to b;
 -- @ignore:5,6
@@ -89,3 +90,41 @@ desc view_alter_column_metadata.ctas_view;
 
 drop database view_alter_column_metadata;
 drop database view_alter_column_metadata_cross;
+
+drop account if exists view_alter_pub;
+drop account if exists view_alter_sub;
+create account view_alter_pub admin_name = 'admin' identified by '111';
+create account view_alter_sub admin_name = 'admin' identified by '111';
+
+-- @session:id=1&user=view_alter_pub:admin&password=111
+create database pubdb;
+use pubdb;
+create table source_t (a int, b int);
+create publication pub database pubdb account view_alter_sub;
+-- @session
+
+-- @session:id=2&user=view_alter_sub:admin&password=111
+create database subdb from view_alter_pub publication pub;
+create database localdb;
+use localdb;
+create view v as select a from subdb.source_t;
+-- @session
+
+-- @session:id=1&user=view_alter_pub:admin&password=111
+alter table pubdb.source_t modify column a bigint;
+-- @session
+
+-- @session:id=2&user=view_alter_sub:admin&password=111
+-- @ignore:5,6
+desc localdb.v;
+drop database localdb;
+drop database subdb;
+-- @session
+
+-- @session:id=1&user=view_alter_pub:admin&password=111
+drop publication pub;
+drop database pubdb;
+-- @session
+
+drop account view_alter_pub;
+drop account view_alter_sub;

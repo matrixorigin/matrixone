@@ -146,6 +146,8 @@ func TestBuildViewMetadataRefreshQueryEscapesLegacyTableName(t *testing.T) {
 	require.Contains(t, formatted, "order by")
 	require.Contains(t, formatted, "limit 128")
 	require.Contains(t, query, `x\\'')) OR 1=1 -- x`)
+	require.Contains(t, query, `\"logical_id\":24,`)
+	require.Contains(t, query, `\"table_id\":42,`)
 }
 
 func TestViewUsesSnapshot(t *testing.T) {
@@ -158,6 +160,28 @@ func TestViewUsesSnapshot(t *testing.T) {
 	require.False(t, viewUsesSnapshot(plan.ViewData{
 		Stmt: "create view v as select * from t",
 	}))
+}
+
+func TestPersistedViewSubscriptionResolver(t *testing.T) {
+	resolver := persistedViewSubscriptionResolver{dependencies: []plan.ViewDependency{{
+		AccountID:      9,
+		AccountIDSet:   true,
+		Subscription:   true,
+		SubscriptionDB: "subdb",
+		PublisherDB:    "pubdb",
+	}}}
+
+	meta, err := resolver.GetSubscriptionMeta("subdb")
+
+	require.NoError(t, err)
+	require.Equal(t, int32(9), meta.GetAccountId())
+	require.Equal(t, "pubdb", meta.GetDbName())
+	require.Equal(t, "subdb", meta.GetSubName())
+	require.Equal(t, "*", meta.GetTables())
+
+	meta, err = resolver.GetSubscriptionMeta("localdb")
+	require.NoError(t, err)
+	require.Nil(t, meta)
 }
 
 func TestCheckViewMetadataRefreshLimit(t *testing.T) {
@@ -238,7 +262,8 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 		"and reldatabase not in ('mo_catalog', 'information_schema') and rel_id > 0 " +
 		"and ((account_id = 7 and viewdef not like '%\\\"dependencies\\\":%' " +
 		"and instr(viewdef, 'source_t') > 0) " +
-		"or (viewdef like '%\\\"account_id\\\":7,%' and viewdef like '%\\\"logical_id\\\":24,%') " +
+		"or (viewdef like '%\\\"account_id\\\":7,%' and (viewdef like '%\\\"logical_id\\\":24,%' " +
+		"or viewdef like '%\\\"table_id\\\":42,%')) " +
 		"or (account_id = 7 and viewdef like '%\\\"table_id\\\":42,%' " +
 		"and viewdef not like '%\\\"logical_id\\\":%')) order by rel_id limit 128"
 	nextQuery := strings.Replace(query, "rel_id > 0", "rel_id > 2", 1)

@@ -1179,12 +1179,47 @@ type viewMetadataRefreshPlanError struct {
 	err error
 }
 
+type viewMetadataSubscriptionResolverKey struct{}
+
+type viewMetadataSubscriptionResolver interface {
+	GetSubscriptionMeta(string) (*plan2.SubscriptionMeta, error)
+}
+
+type persistedViewSubscriptionResolver struct {
+	dependencies []plan2.ViewDependency
+}
+
+func (r persistedViewSubscriptionResolver) GetSubscriptionMeta(
+	database string,
+) (*plan2.SubscriptionMeta, error) {
+	for _, dependency := range r.dependencies {
+		if dependency.Subscription &&
+			dependency.SubscriptionDB == database &&
+			dependency.PublisherDB != "" {
+			return &plan2.SubscriptionMeta{
+				AccountId: int32(dependency.AccountID),
+				DbName:    dependency.PublisherDB,
+				SubName:   dependency.SubscriptionDB,
+				Tables:    "*",
+			}, nil
+		}
+	}
+	return nil, nil
+}
+
 func (e *viewMetadataRefreshPlanError) Error() string {
 	return e.err.Error()
 }
 
 func (e *viewMetadataRefreshPlanError) Unwrap() error {
 	return e.err
+}
+
+func wrapViewMetadataRefreshPlanError(ctx context.Context, err error) error {
+	if err == nil || ctx.Value(defines.ViewMetadataRefreshKey{}) == nil {
+		return err
+	}
+	return &viewMetadataRefreshPlanError{err: err}
 }
 
 const maxViewsPerMetadataRefresh = 1024
@@ -1364,7 +1399,8 @@ func buildViewMetadataRefreshQuery(
 			"and ((account_id = %d and viewdef not like '%%\\\"dependencies\\\":%%' "+
 			"and instr(viewdef, %s) > 0) "+
 			"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
-			"and viewdef like '%%\\\"logical_id\\\":%d,%%') "+
+			"and (viewdef like '%%\\\"logical_id\\\":%d,%%' "+
+			"or viewdef like '%%\\\"table_id\\\":%d,%%')) "+
 			"or (account_id = %d "+
 			"and viewdef like '%%\\\"table_id\\\":%d,%%' "+
 			"and viewdef not like '%%\\\"logical_id\\\":%%')) order by rel_id limit %d",
@@ -1377,6 +1413,7 @@ func buildViewMetadataRefreshQuery(
 		legacyCandidate,
 		sourceAccountID,
 		sourceLogicalID,
+		sourceTableID,
 		sourceAccountID,
 		sourceTableID,
 		pageSize,
@@ -1394,6 +1431,7 @@ func viewUsesSnapshot(viewData plan2.ViewData) bool {
 
 func runViewMetadataRefreshSQL(c *Compile, sql string, viewData plan2.ViewData) error {
 	oldDatabase := c.db
+	oldCtx := c.proc.Ctx
 	oldResolveVariable := c.proc.GetResolveVariableFunc()
 	oldSQLMode := c.proc.GetSessionInfo().SqlMode
 	lower := c.getLower()
@@ -1403,6 +1441,17 @@ func runViewMetadataRefreshSQL(c *Compile, sql string, viewData plan2.ViewData) 
 	}
 	c.db = viewData.DefaultDatabase
 	c.proc.GetSessionInfo().SqlMode = sqlMode
+	if slices.ContainsFunc(viewData.Dependencies, func(dependency plan2.ViewDependency) bool {
+		return dependency.Subscription && dependency.PublisherDB != ""
+	}) {
+		c.proc.Ctx = context.WithValue(
+			c.proc.Ctx,
+			viewMetadataSubscriptionResolverKey{},
+			viewMetadataSubscriptionResolver(persistedViewSubscriptionResolver{
+				dependencies: viewData.Dependencies,
+			}),
+		)
+	}
 	c.proc.SetResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (any, error) {
 		if isSystemVar && !isGlobalVar && strings.EqualFold(name, "sql_mode") {
 			return sqlMode, nil
@@ -1417,6 +1466,7 @@ func runViewMetadataRefreshSQL(c *Compile, sql string, viewData plan2.ViewData) 
 	})
 	defer func() {
 		c.db = oldDatabase
+		c.proc.Ctx = oldCtx
 		c.proc.GetSessionInfo().SqlMode = oldSQLMode
 		c.proc.SetResolveVariableFunc(oldResolveVariable)
 	}()

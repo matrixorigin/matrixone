@@ -30,6 +30,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
+type testSubscriptionResolver struct {
+	meta *plan.SubscriptionMeta
+}
+
+func (r testSubscriptionResolver) GetSubscriptionMeta(string) (*plan.SubscriptionMeta, error) {
+	return r.meta, nil
+}
+
 func TestNewInternalStatementContextPreservesRootAndClaimsStatsOnce(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)
 	parentStats := statistic.NewStatsInfo()
@@ -96,6 +104,24 @@ func TestCompilerContextQueryingSubscription(t *testing.T) {
 	c.SetQueryingSubscription(meta)
 
 	require.Same(t, meta, c.GetQueryingSubscription())
+}
+
+func TestCompilerContextUsesRefreshSubscriptionResolver(t *testing.T) {
+	meta := &plan.SubscriptionMeta{SubName: "subdb"}
+	ctx := context.WithValue(
+		context.Background(),
+		viewMetadataSubscriptionResolverKey{},
+		viewMetadataSubscriptionResolver(testSubscriptionResolver{meta: meta}),
+	)
+	c := &compilerContext{
+		ctx:  ctx,
+		proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+	}
+
+	actual, err := c.GetSubscriptionMeta("subdb", nil)
+
+	require.NoError(t, err)
+	require.Same(t, meta, actual)
 }
 
 func TestCompilerContext_Database(t *testing.T) {

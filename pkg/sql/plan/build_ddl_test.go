@@ -138,6 +138,14 @@ func TestGenViewTableDefCapturesDependencyIdentity(t *testing.T) {
 	require.False(t, dependency.Subscription)
 }
 
+func TestIsSharedSystemTable(t *testing.T) {
+	require.True(t, isSharedSystemTable(catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC))
+	require.True(t, isSharedSystemTable(catalog.MO_SYSTEM_METRICS, catalog.MO_SQL_STMT_CU))
+	require.True(t, isSharedSystemTable(catalog.MO_SYSTEM, catalog.MO_STATEMENT))
+	require.False(t, isSharedSystemTable(catalog.MO_SYSTEM_METRICS, "tenant_table"))
+	require.False(t, isSharedSystemTable("tenant_db", catalog.MO_METRIC))
+}
+
 func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 	t.Run("applies explicit names", func(t *testing.T) {
 		const rootSQL = "create view v (`alias#one`, alias_two) as select 1, 2"

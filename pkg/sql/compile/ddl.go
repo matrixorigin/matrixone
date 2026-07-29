@@ -522,7 +522,8 @@ func viewDependsOnTable(
 		}
 		if dependency.AccountIDSet &&
 			dependency.AccountID == refresh.sourceAccountID &&
-			dependency.LogicalID == refresh.sourceLogicalID {
+			(dependency.LogicalID == refresh.sourceLogicalID ||
+				dependency.TableID == refresh.currentSourceTableID) {
 			return true
 		}
 		if !dependency.AccountIDSet && dependency.TableID == refresh.currentSourceTableID {
@@ -2462,9 +2463,10 @@ func lockAndValidateViewDependencies(c *Compile, viewDef *plan.ViewDef) error {
 			accountID = currentAccountID
 		}
 		oldCtx := c.proc.Ctx
-		c.proc.Ctx = defines.AttachAccountId(oldCtx, accountID)
+		dependencyCtx := defines.AttachAccountId(oldCtx, accountID)
+		c.proc.Ctx = dependencyCtx
 		dbName, tableName, _, err := c.e.GetRelationById(
-			c.proc.Ctx,
+			dependencyCtx,
 			c.proc.GetTxnOperator(),
 			dependency.TableID,
 		)
@@ -2477,15 +2479,17 @@ func lockAndValidateViewDependencies(c *Compile, viewDef *plan.ViewDef) error {
 			return err
 		}
 		_, _, rel, err := c.e.GetRelationById(
-			c.proc.Ctx,
+			dependencyCtx,
 			c.proc.GetTxnOperator(),
 			dependency.TableID,
 		)
-		c.proc.Ctx = oldCtx
 		if err != nil {
+			c.proc.Ctx = oldCtx
 			return err
 		}
-		if rel.GetTableDef(c.proc.Ctx).GetVersion() != dependency.Version {
+		version := rel.GetTableDef(dependencyCtx).GetVersion()
+		c.proc.Ctx = oldCtx
+		if version != dependency.Version {
 			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 	}

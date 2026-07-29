@@ -124,6 +124,7 @@ type stubRelation struct {
 	collectTombstonesErr  error
 	collectTombstonesCall int
 	tableDef              *plan.TableDef
+	getTableDef           func(context.Context) *plan.TableDef
 	alterReqs             []*api.AlterTableReq
 	alterErr              error
 }
@@ -145,6 +146,9 @@ func (r *stubRelation) TableDefs(ctx context.Context) ([]engine.TableDef, error)
 }
 
 func (r *stubRelation) GetTableDef(ctx context.Context) *plan.TableDef {
+	if r.getTableDef != nil {
+		return r.getTableDef(ctx)
+	}
 	if r.tableDef != nil {
 		return r.tableDef
 	}

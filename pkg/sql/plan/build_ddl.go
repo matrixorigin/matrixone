@@ -206,7 +206,9 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 			dependency.AccountID = uint32(objRef.GetPubInfo().GetTenantId())
 			dependency.Subscription = true
 			dependency.SubscriptionDB = objRef.GetSubscriptionName()
-		} else if util.TableIsClusterTable(tableDef.GetTableType()) {
+			dependency.PublisherDB = objRef.GetSchemaName()
+		} else if util.TableIsClusterTable(tableDef.GetTableType()) ||
+			isSharedSystemTable(objRef.GetSchemaName(), objRef.GetObjName()) {
 			dependency.AccountID = catalog.System_Account
 		}
 		snapshot := node.GetScanSnapshot()
@@ -311,6 +313,12 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	})
 
 	return &tableDef, nil
+}
+
+func isSharedSystemTable(database, table string) bool {
+	return (database == catalog.MO_SYSTEM_METRICS &&
+		(table == catalog.MO_METRIC || table == catalog.MO_SQL_STMT_CU)) ||
+		(database == catalog.MO_SYSTEM && table == catalog.MO_STATEMENT)
 }
 
 func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) ([]*ColDef, *Query, error) {

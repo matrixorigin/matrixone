@@ -90,7 +90,7 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 			Name: "a",
 			Typ:  plan2.Type{Id: int32(types.T_int64)},
 		}},
-		ViewSql: &plan2.ViewDef{View: `{"Stmt":"alter view v as select cast(a as bigint) from t","dependencies":[{"account_id":7,"account_id_set":true,"table_id":1,"logical_id":9,"version":1}]}`},
+		ViewSql: &plan2.ViewDef{View: `{"Stmt":"alter view v as select cast(a as bigint) from t","dependencies":[{"account_id":7,"account_id_set":true,"table_id":1,"logical_id":10,"version":1}]}`},
 	}
 
 	eng := newStubEngine()
@@ -133,7 +133,7 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 		AccountID:    7,
 		AccountIDSet: true,
 		TableID:      1,
-		LogicalID:    9,
+		LogicalID:    10,
 		Version:      1,
 	}}, replacedViewData.Dependencies)
 
@@ -181,6 +181,12 @@ func TestLockAndValidateViewDependencies(t *testing.T) {
 	second.tableDef = &plan2.TableDef{TblId: 22, Version: 7}
 	cluster := newStubRelation("metric")
 	cluster.tableDef = &plan2.TableDef{TblId: 33, Version: 4}
+	cluster.getTableDef = func(ctx context.Context) *plan2.TableDef {
+		accountID, err := defines.GetAccountId(ctx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(0), accountID)
+		return cluster.tableDef
+	}
 	eng.relationsByID[11] = stubRelationByID{database: "db", table: "first", relation: first}
 	eng.relationsByID[22] = stubRelationByID{database: "other", table: "second", relation: second}
 	eng.relationsByID[33] = stubRelationByID{database: "system_metrics", table: "metric", relation: cluster}

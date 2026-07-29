@@ -128,3 +128,25 @@ qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 price  ¦  DECIMAL(20,5)  ¦  NO  ¦    ¦  null  ¦    ¦
 drop database view_alter_column_metadata;
 drop database view_alter_column_metadata_cross;
+drop account if exists view_alter_pub;
+drop account if exists view_alter_sub;
+create account view_alter_pub admin_name = 'admin' identified by '111';
+create account view_alter_sub admin_name = 'admin' identified by '111';
+create database pubdb;
+use pubdb;
+create table source_t (a int, b int);
+create publication pub database pubdb account view_alter_sub;
+create database subdb from view_alter_pub publication pub;
+create database localdb;
+use localdb;
+create view v as select a from subdb.source_t;
+alter table pubdb.source_t modify column a bigint;
+desc localdb.v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+drop database localdb;
+drop database subdb;
+drop publication pub;
+drop database pubdb;
+drop account view_alter_pub;
+drop account view_alter_sub;

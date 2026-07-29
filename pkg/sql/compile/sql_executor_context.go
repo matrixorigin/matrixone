@@ -161,7 +161,14 @@ func (c *compilerContext) doStatsHeavyWork(obj *plan.ObjectRef, snapshot *plan.S
 	if err != nil {
 		return nil, err
 	}
-	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
+	var sub *plan.SubscriptionMeta
+	if obj.GetPubInfo() != nil {
+		sub = &plan.SubscriptionMeta{
+			AccountId: obj.GetPubInfo().GetTenantId(),
+			DbName:    dbName,
+		}
+	}
+	ctx, table, err := c.getRelation(dbName, tableName, snapshot, sub)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +198,10 @@ func (c *compilerContext) GetStatsCache() *plan.StatsCache {
 
 func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snapshot) (*plan.SubscriptionMeta, error) {
 	if plan.IsSnapshotValid(snapshot) {
-		return nil, moerr.NewNYI(c.ctx, "subscription metadata at snapshot in internal sql executor")
+		return nil, nil
+	}
+	if resolver, ok := c.ctx.Value(viewMetadataSubscriptionResolverKey{}).(viewMetadataSubscriptionResolver); ok {
+		return resolver.GetSubscriptionMeta(dbName)
 	}
 	helper := c.proc.GetSessionInfo().SqlHelper
 	if helper == nil {
@@ -349,7 +359,11 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 		}
 	}
 
-	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
+	sub, err := c.GetSubscriptionMeta(dbName, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, table, err := c.getRelation(dbName, tableName, snapshot, sub)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -367,6 +381,11 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 		SchemaName: dbName,
 		ObjName:    tableName,
 		Obj:        tableID,
+	}
+	if sub != nil {
+		obj.SchemaName = sub.GetDbName()
+		obj.SubscriptionName = sub.GetSubName()
+		obj.PubInfo = &planpb.PubInfo{TenantId: sub.GetAccountId()}
 	}
 	return obj, tableDef, nil
 }
@@ -403,6 +422,7 @@ func (c *compilerContext) getRelation(
 	dbName string,
 	tableName string,
 	snapshot *plan.Snapshot,
+	sub *plan.SubscriptionMeta,
 ) (context.Context, engine.Relation, error) {
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
@@ -411,6 +431,10 @@ func (c *compilerContext) getRelation(
 
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
+	if sub != nil {
+		ctx = defines.AttachAccountId(ctx, uint32(sub.GetAccountId()))
+		dbName = sub.GetDbName()
+	}
 
 	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)

@@ -243,6 +243,7 @@ type ViewDependency struct {
 	Snapshot       bool   `json:"snapshot,omitempty"`
 	Subscription   bool   `json:"subscription,omitempty"`
 	SubscriptionDB string `json:"subscription_db,omitempty"`
+	PublisherDB    string `json:"publisher_db,omitempty"`
 }
 
 type QueryBuilder struct {
