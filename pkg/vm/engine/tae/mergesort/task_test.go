@@ -38,6 +38,32 @@ func TestGetTransferSlabReturnsAllocationError(t *testing.T) {
 	require.Nil(t, slab)
 }
 
+func TestGetTransferSlabReturnsFreshAndPooledSlabs(t *testing.T) {
+	DrainTransferSlabPool()
+	bucket := &transferSlabBuckets[transferSlabSmall]
+	oldSize, oldMaxIdle := bucket.size, bucket.maxIdle
+	bucket.size, bucket.maxIdle = 1, 1
+	t.Cleanup(func() {
+		DrainTransferSlabPool()
+		bucket.size, bucket.maxIdle = oldSize, oldMaxIdle
+	})
+
+	fresh, err := getTransferSlab(1)
+	require.NoError(t, err)
+	require.Len(t, fresh, 1)
+	require.Equal(t, api.NoTransfer, fresh[0].ObjIdx)
+
+	fresh[0].ObjIdx = 0
+	putTransferSlab(fresh)
+
+	pooled, err := getTransferSlab(1)
+	require.NoError(t, err)
+	require.Len(t, pooled, 1)
+	require.True(t, &fresh[0] == &pooled[0])
+	require.Equal(t, api.NoTransfer, pooled[0].ObjIdx)
+	putTransferSlab(pooled)
+}
+
 func TestDoMergeAndWriteReturnsTransferSlabAllocationError(t *testing.T) {
 	for _, test := range []struct {
 		name       string
