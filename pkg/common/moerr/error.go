@@ -94,7 +94,8 @@ const (
 	ErrSubqueryNo1Row       uint16 = 20315
 	ErrInvalidTypeForJSON   uint16 = 20316
 	ErrUnknownStmtHandler   uint16 = 20317
-	ErrWrongArguments       uint16 = 20318
+	ErrViewWrongList        uint16 = 20318
+	ErrWrongArguments       uint16 = 20319
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -415,6 +416,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrSubqueryNo1Row:       {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
 	ErrInvalidTypeForJSON:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
 	ErrUnknownStmtHandler:   {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
+	ErrViewWrongList:        {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
 	ErrWrongArguments:       {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
 
 	// Group 4: unexpected state or file io error
@@ -1457,6 +1459,10 @@ func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 
 func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 	return newError(ctx, ErrWrongValueCountOnRow, row)
+}
+
+func NewViewWrongList(ctx context.Context) *Error {
+	return newError(ctx, ErrViewWrongList)
 }
 
 func NewOperandColumns(ctx context.Context, columns int) *Error {
