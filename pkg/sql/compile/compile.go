@@ -1222,10 +1222,17 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-		if node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
+		orderedGroupConcat := hasOrderedGroupConcat(node)
+		if c.canCompileShuffleGroup(node) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
-		} else if c.IsSingleScope(ss) {
+		}
+		if orderedGroupConcat {
+			ss = c.compileOrderedGroupConcat(node, ss, nodes)
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+			return ss, nil
+		}
+		if c.IsSingleScope(ss) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
 			return ss, nil
 		} else {
@@ -4888,6 +4895,55 @@ func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Nod
 
 		return []*Scope{rs}
 	}
+}
+
+func (c *Compile) compileOrderedGroupConcat(
+	node *plan.Node,
+	ss []*Scope,
+	ns []*plan.Node,
+) []*Scope {
+	ss = c.mergeShuffleScopesIfNeeded(ss, false)
+	rs := c.newMergeScope(ss)
+	currentFirstFlag := c.anal.isFirst
+	op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], true, 0, c.proc)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	rs.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{rs}
+}
+
+func hasOrderedGroupConcat(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil &&
+			fn.Func.ObjName == plan2.NameGroupConcat &&
+			fn.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Compile) supportsRemoteOrderedAggregates() bool {
+	return supportsRemoteOrderedAggregates(c.proc.GetService())
+}
+
+func supportsRemoteOrderedAggregates(service string) bool {
+	// MOProtocolVersion is the cluster-wide negotiated floor. It reaches v6
+	// only after every pipeline receiver understands Aggregate.config_type,
+	// and is lowered again before a rollback introduces a v5 receiver.
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion6
+}
+
+func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
+	return node.Stats.HashmapStats != nil &&
+		node.Stats.HashmapStats.Shuffle &&
+		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
