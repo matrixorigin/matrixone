@@ -6815,7 +6815,7 @@ func groupingSetOrderMatchesSelectExpr(
 	}
 	orderKey := tree.String(unwrapParenExpr(qualifiedOrder), dialect.MYSQL)
 	for _, selectExpr := range selectList {
-		if strings.EqualFold(orderKey, tree.String(unwrapParenExpr(selectExpr.Expr), dialect.MYSQL)) {
+		if orderKey == tree.String(unwrapParenExpr(selectExpr.Expr), dialect.MYSQL) {
 			return true, nil
 		}
 	}
@@ -6839,6 +6839,11 @@ func groupingSetOrderNeedsHiddenProject(selectList tree.SelectExprs, astExpr tre
 	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
 		switch typedExpr := expr.(type) {
 		case *tree.Subquery:
+			// A scalar subquery may contain correlated references to grouping
+			// columns. Those bindings exist in each generated grouping-set
+			// branch, but not above the UNION, so materialize the complete
+			// subquery while its outer source scope is still available.
+			needsHidden = true
 			return false
 		case *tree.UnresolvedName:
 			if typedExpr.Star {

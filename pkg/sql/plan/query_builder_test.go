@@ -901,6 +901,62 @@ func TestQueryBuilderBuildRollupOrderByWrappedGroupingColumnResolution(t *testin
 	}
 }
 
+func TestQueryBuilderBuildRollupOrderByLiteralCaseDifference(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select concat(cast(a as char), 'X') as marker, a, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by concat(cast(a as char), 'x')`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	var sortNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.Equal(t, int32(3), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, queryPlan.GetQuery().Nodes[sortNode.Children[0]].ProjectList, 4)
+}
+
+func TestQueryBuilderBuildRollupOrderByCorrelatedScalarSubquery(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select coalesce(a, -1), count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by (select a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	var sortNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.Equal(t, int32(2), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, queryPlan.GetQuery().Nodes[sortNode.Children[0]].ProjectList, 3)
+}
+
 func TestQueryBuilderBuildGroupingSetOrderByWrappedGroupingColumns(t *testing.T) {
 	for _, groupBy := range []string{
 		"a, b with rollup",
