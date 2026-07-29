@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/bits"
 	"slices"
 	"sort"
 	"time"
@@ -846,38 +847,20 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if len(nspData) > 0 {
-		if len(nspData) < 24 {
-			return io.ErrUnexpectedEOF
-		}
-		bitmapDataLen := types.DecodeUint64(nspData[16:24])
-		if bitmapDataLen > uint64(len(nspData)-24) || bitmapDataLen%8 != 0 {
-			return io.ErrUnexpectedEOF
-		}
-	}
 	sorted, err := read(1)
 	if err != nil {
 		return err
 	}
 
+	decodedType := types.DecodeType(typ)
+	if err := validateVectorBinary(class[0], decodedType, length, vecData, area, nspData); err != nil {
+		return err
+	}
 	var nsp nulls.Nulls
 	if len(nspData) > 0 {
 		if err := nsp.ReadNoCopy(nspData); err != nil {
 			return err
 		}
-	}
-	decodedType := types.DecodeType(typ)
-	typeSize, err := canonicalVectorTypeSize(decodedType)
-	if err != nil {
-		return err
-	}
-	if class[0] != CONSTANT {
-		expectedDataLen := uint64(length) * uint64(typeSize)
-		if uint64(len(vecData)) < expectedDataLen {
-			return io.ErrUnexpectedEOF
-		}
-	} else if len(vecData) > 0 && len(vecData) < typeSize {
-		return io.ErrUnexpectedEOF
 	}
 	v.class = int(class[0])
 	v.typ = decodedType
@@ -890,6 +873,66 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	v.cantFreeData = true
 	v.cantFreeArea = true
 
+	return nil
+}
+
+func validateVectorBinary(class byte, typ types.Type, length uint32, data, area, nspData []byte) error {
+	if class > DIST {
+		return moerr.NewInvalidInputNoCtx("invalid vector class")
+	}
+	typeSize, err := canonicalVectorTypeSize(typ)
+	if err != nil {
+		return err
+	}
+	if class == CONSTANT {
+		if len(data) != 0 && len(data) != typeSize {
+			return moerr.NewInvalidInputNoCtx("invalid constant vector data size")
+		}
+	} else if uint64(len(data)) != uint64(length)*uint64(typeSize) {
+		return moerr.NewInvalidInputNoCtx("invalid vector data size")
+	}
+	if typ.IsVarlen() {
+		values := types.DecodeSlice[types.Varlena](data)
+		for i := range values {
+			if values[i].IsSmall() {
+				continue
+			}
+			offset, size := values[i].OffsetLen()
+			if uint64(offset) > uint64(len(area)) || uint64(size) > uint64(len(area))-uint64(offset) {
+				return moerr.NewInvalidInputNoCtx("invalid vector varlen offset")
+			}
+		}
+	}
+	return validateVectorNullBitmap(nspData, length)
+}
+
+func validateVectorNullBitmap(data []byte, length uint32) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if len(data) < 24 {
+		return io.ErrUnexpectedEOF
+	}
+	count := types.DecodeInt64(data[:8])
+	bitmapLen := types.DecodeUint64(data[8:16])
+	bitmapDataLen := types.DecodeUint64(data[16:24])
+	if count < 0 || bitmapLen > uint64(length) || bitmapDataLen%8 != 0 || bitmapDataLen != uint64(len(data)-24) {
+		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap")
+	}
+	if bitmapDataLen != ((bitmapLen+63)/64)*8 {
+		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap size")
+	}
+	words := types.DecodeSlice[uint64](data[24:])
+	actualCount := int64(0)
+	for i, word := range words {
+		if i == len(words)-1 && bitmapLen%64 != 0 && word>>uint(bitmapLen%64) != 0 {
+			return moerr.NewInvalidInputNoCtx("invalid vector null bitmap bits")
+		}
+		actualCount += int64(bits.OnesCount64(word))
+	}
+	if actualCount != count {
+		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap count")
+	}
 	return nil
 }
 

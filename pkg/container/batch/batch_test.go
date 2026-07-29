@@ -192,6 +192,72 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 		target.Clean(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	})
+	t.Run("row_count_must_not_exceed_vector_length", func(t *testing.T) {
+		corrupted := append([]byte(nil), data...)
+		rowCount := int64(2)
+		copy(corrupted[:8], types.EncodeInt64(&rowCount))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+	t.Run("invalid_null_bitmap_metadata", func(t *testing.T) {
+		source := NewWithSize(1)
+		source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(0), true, mp))
+		source.SetRowCount(1)
+		corrupted, err := source.MarshalBinary()
+		require.NoError(t, err)
+		source.Clean(mp)
+
+		vectorDataOffset := 16
+		dataLenOffset := vectorDataOffset + 1 + types.TSize + 4
+		dataLen := int(types.DecodeUint32(corrupted[dataLenOffset : dataLenOffset+4]))
+		areaLenOffset := dataLenOffset + 4 + dataLen
+		areaLen := int(types.DecodeUint32(corrupted[areaLenOffset : areaLenOffset+4]))
+		nspDataOffset := areaLenOffset + 4 + areaLen + 4
+		bitmapLen := uint64(64)
+		bitmapDataLen := uint64(0)
+		copy(corrupted[nspDataOffset+8:nspDataOffset+16], types.EncodeUint64(&bitmapLen))
+		copy(corrupted[nspDataOffset+16:nspDataOffset+24], types.EncodeUint64(&bitmapDataLen))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+	t.Run("varlen_offsets_must_stay_within_area", func(t *testing.T) {
+		source := NewWithSize(1)
+		source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(source.Vecs[0], bytes.Repeat([]byte("x"), types.VarlenaInlineSize+1), false, mp))
+		source.SetRowCount(1)
+		corrupted, err := source.MarshalBinary()
+		require.NoError(t, err)
+		source.Clean(mp)
+
+		vectorDataOffset := 16
+		varlenaOffset := vectorDataOffset + 1 + types.TSize + 4 + 4
+		invalidAreaOffset := uint32(len(corrupted))
+		copy(corrupted[varlenaOffset+4:varlenaOffset+8], types.EncodeUint32(&invalidAreaOffset))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
 	t.Run("preallocated_nil_vector", func(t *testing.T) {
 		target := NewWithSize(1)
 		var unmarshalErr error
