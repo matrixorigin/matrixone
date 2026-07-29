@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -713,8 +714,10 @@ func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int3
 			Typ: expr.Typ,
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
-					Func: e.F.Func,
-					Args: newArgs,
+					Func:          e.F.Func,
+					Args:          newArgs,
+					AggConfig:     bytes.Clone(e.F.AggConfig),
+					AggConfigType: e.F.AggConfigType,
 				},
 			},
 		}
