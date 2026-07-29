@@ -15,8 +15,12 @@
 package dedupjoin
 
 import (
+	"context"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,13 +47,118 @@ const (
 // the REPLACE INTO merged main-table scan path (OldColCapture) additionally
 // populates captured and capturedVecs.
 //
-// Ownership: once a non-merger worker sends this message on the channel, it
-// must relinquish its references to captured / capturedVecs so that the
-// merger is the sole owner and is responsible for Free'ing capturedVecs.
+// Ownership: once a non-merger successfully publishes this message to the
+// mailbox, it must relinquish captured / capturedVecs. The merger then becomes
+// the sole owner and is responsible for Free'ing capturedVecs.
 type WorkerJoinMsg struct {
 	matched      *bitmap.Bitmap
 	captured     *bitmap.Bitmap
 	capturedVecs []*vector.Vector
+	aborted      bool
+	err          error
+}
+
+// WorkerJoinMailbox coordinates the single finalize status emitted by each
+// non-merger worker. stopAndDrain and trySend share one lock so ownership
+// cannot transfer into the mailbox after the merger has stopped consuming.
+//
+// A stopped mailbox is reopened only after every parallel operator has Reset.
+// That generation barrier prevents a late sender from the failed execution
+// from being mistaken for a worker in a reused prepared pipeline. The lock is
+// taken once per worker per finalize bucket and once per Reset, never per row.
+type WorkerJoinMailbox struct {
+	mu           sync.Mutex
+	ch           chan *WorkerJoinMsg
+	participants int
+	resetCount   int
+	stopped      bool
+}
+
+func NewWorkerJoinMailbox(participants int) *WorkerJoinMailbox {
+	if participants < 1 {
+		participants = 1
+	}
+	return &WorkerJoinMailbox{
+		ch:           make(chan *WorkerJoinMsg, participants),
+		participants: participants,
+	}
+}
+
+func (m *WorkerJoinMailbox) trySend(msg *WorkerJoinMsg) (sent, stopped bool) {
+	if m == nil {
+		return false, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopped {
+		return false, true
+	}
+	select {
+	case m.ch <- msg:
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+func (m *WorkerJoinMailbox) isStopped() bool {
+	if m == nil {
+		return true
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stopped
+}
+
+func (m *WorkerJoinMailbox) stopAndDrain(proc *process.Process) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stopped = true
+	m.drainLocked(proc)
+}
+
+func (m *WorkerJoinMailbox) drain(proc *process.Process) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.drainLocked(proc)
+}
+
+func (m *WorkerJoinMailbox) drainLocked(proc *process.Process) {
+	for {
+		select {
+		case msg, ok := <-m.ch:
+			if !ok {
+				return
+			}
+			freeWorkerJoinMsg(msg, proc)
+		default:
+			return
+		}
+	}
+}
+
+// resetParticipant closes one participant's use of the current generation.
+// The last Reset drains any residual status and reopens a clean mailbox for a
+// prepared pipeline's next execution.
+func (m *WorkerJoinMailbox) resetParticipant(proc *process.Process) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetCount++
+	if m.resetCount < m.participants {
+		return
+	}
+	m.drainLocked(proc)
+	m.resetCount = 0
+	m.stopped = false
 }
 
 // freeCapturedVecs releases vectors owned by a WorkerJoinMsg. Intended to be
@@ -60,6 +169,12 @@ func freeCapturedVecs(vecs []*vector.Vector, proc *process.Process) {
 		if v != nil {
 			v.Free(proc.GetMPool())
 		}
+	}
+}
+
+func freeWorkerJoinMsg(msg *WorkerJoinMsg, proc *process.Process) {
+	if msg != nil {
+		freeCapturedVecs(msg.capturedVecs, proc)
 	}
 }
 
@@ -126,7 +241,7 @@ type DedupJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 
-	Channel  chan *WorkerJoinMsg
+	Mailbox  *WorkerJoinMailbox
 	NumCPU   uint64
 	IsMerger bool
 
@@ -194,8 +309,27 @@ func (dedupJoin *DedupJoin) needsFinalizeMerge() bool {
 
 func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &dedupJoin.ctr
-	if !ctr.handledLast && dedupJoin.needsFinalizeMerge() && !dedupJoin.IsMerger {
-		dedupJoin.Channel <- nil
+	if dedupJoin.needsFinalizeMerge() {
+		if dedupJoin.IsMerger {
+			// Reset follows process cancellation. Stop before cleaning merger
+			// state so no late worker can transfer capture ownership to an
+			// execution that no longer has a consumer.
+			dedupJoin.Mailbox.stopAndDrain(proc)
+		} else if !ctr.handledLast {
+			if pipelineFailed && err == nil {
+				err = context.Cause(proc.Ctx)
+				if err == nil {
+					err = moerr.NewInternalErrorNoCtx("dedup join worker failed without an error")
+				}
+			}
+			// trySend never waits. If the merger has already stopped, this
+			// worker retains and releases its local capture state below.
+			dedupJoin.Mailbox.trySend(&WorkerJoinMsg{
+				aborted: true,
+				err:     err,
+			})
+		}
+		dedupJoin.Mailbox.resetParticipant(proc)
 	}
 	if dedupJoin.OpAnalyzer != nil {
 		dedupJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
@@ -217,6 +351,11 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &dedupJoin.ctr
+	if dedupJoin.IsMerger && dedupJoin.needsFinalizeMerge() {
+		// Pipeline cleanup always calls Reset first. Do not leave a newly
+		// reopened prepared-pipeline generation stopped from Free.
+		dedupJoin.Mailbox.drain(proc)
+	}
 	ctr.cleanBuf(proc)
 	ctr.cleanBucketState(proc)
 	ctr.cleanBatch(proc)
