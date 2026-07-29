@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
@@ -882,6 +883,28 @@ func fulltextIndexMatch(
 		s, err := fulltext.NewSearchAccum(srctbl, tblname, pattern, mode, string(tableFunction.Params), scoreAlgo)
 		if err != nil {
 			return err
+		}
+
+		terms, strictAnd, err := s.StrictBooleanAndTerms(u.param.Parser)
+		if err != nil {
+			return err
+		}
+		filterOnlyAnd := u.param.FilterOnlyAnd && strictAnd && scoreAlgo == fulltext.ALGO_TFIDF &&
+			u.limit > 0 && u.limit <= maxFulltextAndTopK
+		if filterOnlyAnd {
+			started := time.Now()
+			ordered, driverRows, fallback, estimateErr := ftEstimateAndOrderFulltextTerms(proc, tableFunction.OpAnalyzer, tblname, terms)
+			stats := opStats
+			stats.AddExtraStat("FulltextTermsCount", int64(len(terms)))
+			stats.AddExtraStat("FulltextEstimatorTimeNanos", time.Since(started).Nanoseconds())
+			stats.AddExtraStat("FulltextEstimatorFallbackCount", fallback)
+			if estimateErr != nil {
+				return estimateErr
+			}
+			stats.AddExtraStat("FulltextEstimatedDriverRows", int64(driverRows))
+			if err = s.OrderStrictBooleanAnd(ordered, u.param.Parser); err != nil {
+				return err
+			}
 		}
 
 		u.mpool = fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0)

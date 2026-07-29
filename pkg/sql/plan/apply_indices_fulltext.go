@@ -77,7 +77,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 	}
 
 	idxID, filter_node_ids, proj_node_ids, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		internalLimit, internalOffset, filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
+		internalLimit, internalOffset, sortNode == nil, filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
 	}
@@ -188,7 +188,7 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	eqmap := make(map[int32]int32)
 
 	idxID, _, _, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
+		scanNode.Limit, scanNode.Offset, false, filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
 	}
@@ -205,6 +205,7 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
 	paginationLimit, paginationOffset *plan.Expr,
+	allowFilterOnlyAnd bool,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
 	projids []int32, proj_indexDefs []*plan.IndexDef, eqmap map[int32]int32,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32, error) {
@@ -260,6 +261,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	if len(scanNode.FilterList) == 0 && len(ft_filters) == 1 {
 		limitExpr, _ = buildCandidateLimit(paginationLimit, paginationOffset)
 	}
+	filterOnlyAnd := allowFilterOnlyAnd && limitExpr != nil && len(filterids) == 1 &&
+		len(ft_filters) == 1 && len(scanNode.FilterList) == 0 &&
+		isSingleIntegerPrimaryKey(scanNode.TableDef) && projectsOnlyPrimaryKey(projNode, scanNode)
 
 	// buildFullTextIndexScan
 	var last_node_id int32
@@ -272,6 +276,13 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
 		fn := ftidxscan.GetF()
 		params := idxdef.IndexAlgoParams
+		if filterOnlyAnd && i == 0 {
+			var err error
+			params, err = markFullTextFilterOnlyAnd(params)
+			if err != nil {
+				return -1, nil, nil, err
+			}
+		}
 		aliasName := fmt.Sprintf("mo_fulltext_alias_%d", i)
 
 		modeLit := fn.Args[1].GetLit()
@@ -666,6 +677,7 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 		scanNode,
 		scanNode.Limit,
 		scanNode.Offset,
+		false,
 		filterids,
 		filterIndexDefs,
 		nil,
@@ -684,6 +696,37 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 	scanNode.Offset = nil
 
 	return newNodeID, true, nil
+}
+
+func isSingleIntegerPrimaryKey(tableDef *plan.TableDef) bool {
+	if tableDef == nil || tableDef.Pkey == nil || len(tableDef.Pkey.Names) != 1 {
+		return false
+	}
+	pos, ok := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+	if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) {
+		return false
+	}
+	colType := tableDef.Cols[pos].Typ
+	switch types.T(colType.Id) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return true
+	default:
+		return false
+	}
+}
+
+func projectsOnlyPrimaryKey(projNode, scanNode *plan.Node) bool {
+	if projNode == nil || scanNode == nil || scanNode.TableDef == nil ||
+		len(projNode.ProjectList) != 1 || len(scanNode.BindingTags) != 1 {
+		return false
+	}
+	pkPos, ok := scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
+	if !ok {
+		return false
+	}
+	col := projNode.ProjectList[0].GetCol()
+	return col != nil && col.RelPos == scanNode.BindingTags[0] && col.ColPos == pkPos
 }
 
 func (builder *QueryBuilder) fullTextRewriteContextNodeID(preferredNodeID int32, scanNode *plan.Node) int32 {

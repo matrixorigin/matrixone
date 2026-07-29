@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -104,6 +105,72 @@ func findValuePattern(ps []*Pattern) []*Pattern {
 
 func (s *SearchAccum) PatternAnyPlus() bool {
 	return s.AnyPlus
+}
+
+// StrictBooleanAndTerms returns the unique exact tokens of a pure
+// "+term +term ..." Boolean query. Runtime validation is required even when
+// the planner marked a candidate because parser-specific tokenization can turn
+// a syntactic term into a phrase or another unsupported expression.
+func (s *SearchAccum) StrictBooleanAndTerms(parser string) ([]string, bool, error) {
+	if s.Mode != int64(tree.FULLTEXT_BOOLEAN) || len(s.Pattern) != 1 {
+		return nil, false, nil
+	}
+	root := s.Pattern[0]
+	if root.Operator != JOIN || len(root.Children) < 2 {
+		return nil, false, nil
+	}
+	terms := make([]string, 0, len(root.Children))
+	seen := make(map[string]struct{}, len(root.Children))
+	for _, required := range root.Children {
+		if required.Operator != PLUS || len(required.Children) != 1 || required.Children[0].Operator != TEXT {
+			return nil, false, nil
+		}
+		tokens, err := ParsePatternInNLMode(required.Children[0].Text, parser)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(tokens) != 1 || tokens[0].Operator != TEXT {
+			return nil, false, nil
+		}
+		term := tokens[0].Text
+		if _, ok := seen[term]; ok {
+			continue
+		}
+		seen[term] = struct{}{}
+		terms = append(terms, term)
+	}
+	return terms, len(terms) >= 2, nil
+}
+
+// OrderStrictBooleanAnd rewrites only the commutative JOIN child order. Pattern
+// indexes and leaves are preserved, so the legacy SQL and scoring semantics do
+// not change.
+func (s *SearchAccum) OrderStrictBooleanAnd(ordered []string, parser string) error {
+	if len(s.Pattern) != 1 || len(ordered) == 0 {
+		return nil
+	}
+	rank := make(map[string]int, len(ordered))
+	for i, term := range ordered {
+		rank[term] = i
+	}
+	root := s.Pattern[0]
+	type rankedChild struct {
+		child *Pattern
+		rank  int
+	}
+	children := make([]rankedChild, 0, len(root.Children))
+	for _, child := range root.Children {
+		tokens, err := ParsePatternInNLMode(child.Children[0].Text, parser)
+		if err != nil {
+			return err
+		}
+		children = append(children, rankedChild{child: child, rank: rank[tokens[0].Text]})
+	}
+	sort.SliceStable(children, func(i, j int) bool { return children[i].rank < children[j].rank })
+	for i := range children {
+		root.Children[i] = children[i].child
+	}
+	return nil
 }
 
 func hasPatternAnyPlus(ps []*Pattern) bool {

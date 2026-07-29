@@ -123,6 +123,26 @@ func TestPatternBoolean(t *testing.T) {
 	}
 }
 
+func TestStrictBooleanAndTermsAndOrdering(t *testing.T) {
+	s, err := NewSearchAccum("src", "idx", "+common +rare +common", int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+	require.NoError(t, err)
+	terms, ok, err := s.StrictBooleanAndTerms("")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []string{"common", "rare"}, terms)
+	require.NoError(t, s.OrderStrictBooleanAnd([]string{"rare", "common"}, ""))
+	require.Equal(t, "rare", s.Pattern[0].Children[0].Children[0].Text)
+	require.Equal(t, "common", s.Pattern[0].Children[1].Children[0].Text)
+
+	for _, pattern := range []string{"+one", "+one -two", "+one +two*", `+"one two" +three`} {
+		candidate, candidateErr := NewSearchAccum("src", "idx", pattern, int64(tree.FULLTEXT_BOOLEAN), "", ALGO_TFIDF)
+		require.NoError(t, candidateErr)
+		_, eligible, eligibleErr := candidate.StrictBooleanAndTerms("")
+		require.NoError(t, eligibleErr)
+		require.False(t, eligible, pattern)
+	}
+}
+
 func TestPatternNL(t *testing.T) {
 
 	tests := []TestCase{

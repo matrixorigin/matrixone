@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -51,6 +52,19 @@ func TestBuildFullTextIndexScanBuildsSqlForLiteralPattern(t *testing.T) {
 	require.NotEmpty(t, node.Stats.Sql)
 	require.True(t, strings.Contains(node.Stats.Sql, "`test`.`__mo_fts_idx`"))
 	require.True(t, strings.Contains(node.Stats.Sql, "matrix"))
+}
+
+func TestMarkFullTextFilterOnlyAndPreservesIndexParams(t *testing.T) {
+	params, err := markFullTextFilterOnlyAnd(`{"parser":"gojieba","async":"true","future":{"enabled":true}}`)
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(params), &got))
+	require.Equal(t, "gojieba", got["parser"])
+	require.Equal(t, "true", got["async"])
+	require.Equal(t, true, got["filter_only_and"])
+	require.Equal(t, map[string]any{"enabled": true}, got["future"])
+	_, err = markFullTextFilterOnlyAnd("{")
+	require.Error(t, err)
 }
 
 func TestGetFullTextSqlSkipsPreparedPattern(t *testing.T) {

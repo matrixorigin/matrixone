@@ -107,6 +107,16 @@ func TestPatternToSqlGojiebaBoolean(t *testing.T) {
 		"sql should not contain ngram bigram 清华大: %s", sql)
 }
 
+func TestStrictBooleanAndTermsGojieba(t *testing.T) {
+	s, err := NewSearchAccum("src", "idx", "+清华大学 +北京 +北京",
+		int64(tree.FULLTEXT_BOOLEAN), `{"parser":"gojieba"}`, ALGO_TFIDF)
+	require.NoError(t, err)
+	terms, ok, err := s.StrictBooleanAndTerms("gojieba")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []string{"清华大学", "北京"}, terms)
+}
+
 // TestParsePhraseJieba verifies that BOOLEAN-MODE phrase queries are
 // segmented through gojieba and not just split on whitespace. With the old
 // behavior, "我来到北京" (no spaces) collapsed to a single TEXT pattern

@@ -101,8 +101,9 @@ Run Eval() to get final answer and score
 
 // Parser parameters
 type FullTextParserParam struct {
-	Parser string `json:"parser"`
-	Async  string `json:"async"`
+	Parser        string `json:"parser"`
+	Async         string `json:"async"`
+	FilterOnlyAnd bool   `json:"filter_only_and,omitempty"`
 }
 
 // Search accumulator is to parse the search string into list of pattern and each pattern will associate with WordAccum by pattern.Text

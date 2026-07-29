@@ -16,6 +16,7 @@ package plan
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,6 +24,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func markFullTextFilterOnlyAnd(params string) (string, error) {
+	param := make(map[string]json.RawMessage)
+	if strings.TrimSpace(params) != "" {
+		if err := json.Unmarshal([]byte(params), &param); err != nil {
+			return "", err
+		}
+	}
+	param["filter_only_and"] = json.RawMessage("true")
+	encoded, err := json.Marshal(param)
+	return string(encoded), err
+}
 
 // coldef shall copy index type
 var (
