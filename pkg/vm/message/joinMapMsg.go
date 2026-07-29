@@ -17,8 +17,6 @@ package message
 import (
 	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"strconv"
 	"sync"
@@ -26,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
@@ -177,13 +176,13 @@ type JoinMap struct {
 }
 
 var (
-	ErrSpillBuildPayloadEmpty = errors.New("spill build payload is empty")
-	ErrSpillBuildPayloadMixed = errors.New("spill build payload mixes accounted files and legacy descriptors")
-	ErrSpillBuildBudgetRef    = errors.New("accounted spill build payload is missing its budget reference")
-	ErrSpillBuildLegacyBudget = errors.New("legacy spill build payload must not carry a budget reference")
-	ErrSpillBuildPayloadSet   = errors.New("spill build payload is already set")
-	ErrSpillBuildPayloadTaken = errors.New("spill build payload is already taken")
-	ErrSpillBuildShared       = errors.New("spill build payload requires exactly one consumer")
+	ErrSpillBuildPayloadEmpty = moerr.NewInternalErrorNoCtx("spill build payload is empty")
+	ErrSpillBuildPayloadMixed = moerr.NewInternalErrorNoCtx("spill build payload mixes accounted files and legacy descriptors")
+	ErrSpillBuildBudgetRef    = moerr.NewInternalErrorNoCtx("accounted spill build payload is missing its budget reference")
+	ErrSpillBuildLegacyBudget = moerr.NewInternalErrorNoCtx("legacy spill build payload must not carry a budget reference")
+	ErrSpillBuildPayloadSet   = moerr.NewInternalErrorNoCtx("spill build payload is already set")
+	ErrSpillBuildPayloadTaken = moerr.NewInternalErrorNoCtx("spill build payload is already taken")
+	ErrSpillBuildShared       = moerr.NewInternalErrorNoCtx("spill build payload requires exactly one consumer")
 )
 
 // SpillBuildPayload is the complete move-only build-side spill dependency.
@@ -429,7 +428,7 @@ func (jm *JoinMap) SetSpillBuildPayload(payload SpillBuildPayload) error {
 	}
 	consumers := jm.GetRefCount()
 	if consumers != 1 {
-		return fmt.Errorf("%w: got %d", ErrSpillBuildShared, consumers)
+		return ErrSpillBuildShared
 	}
 	jm.spilled.Store(true)
 	jm.spillPayload = payload
