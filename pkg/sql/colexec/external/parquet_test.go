@@ -91,6 +91,61 @@ func TestParquetDecimalMappingRegression(t *testing.T) {
 	}, got)
 }
 
+func TestParquetDecimalSameScalePrecisionOverflow(t *testing.T) {
+	proc := testutil.NewProc(t)
+	ctx := context.Background()
+	encodings := []struct {
+		name       string
+		dictionary bool
+	}{
+		{name: "plain"},
+		{name: "dictionary", dictionary: true},
+	}
+	targets := []struct {
+		name            string
+		oid             types.T
+		targetPrecision int32
+		sourcePrecision int
+		byteWidth       int
+	}{
+		{name: "decimal64", oid: types.T_decimal64, targetPrecision: 4, sourcePrecision: 5, byteWidth: 8},
+		{name: "decimal128", oid: types.T_decimal128, targetPrecision: 19, sourcePrecision: 20, byteWidth: 16},
+		{name: "decimal256", oid: types.T_decimal256, targetPrecision: 39, sourcePrecision: 40, byteWidth: 32},
+	}
+
+	for _, encoding := range encodings {
+		for _, target := range targets {
+			t.Run(encoding.name+"/"+target.name, func(t *testing.T) {
+				overflow := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(target.targetPrecision)), nil)
+				encoded, err := bigIntToTwosComplementBytes(ctx, overflow, target.byteWidth)
+				require.NoError(t, err)
+				node := parquet.Decimal(2, target.sourcePrecision, parquet.FixedLenByteArrayType(target.byteWidth))
+				if encoding.dictionary {
+					node = parquet.Encoded(node, &parquet.RLEDictionary)
+				}
+				f, page := writeDictAndGetPage(t, node, []parquet.Value{
+					parquet.FixedLenByteArrayValue(encoded),
+				})
+				if encoding.dictionary {
+					require.NotNil(t, page.Dictionary())
+				}
+
+				vec := vector.NewVec(types.New(target.oid, target.targetPrecision, 2))
+				var h ParquetHandler
+				mp := h.getMapper(f.Root().Column("c"), plan.Type{
+					Id:          int32(target.oid),
+					Width:       target.targetPrecision,
+					Scale:       2,
+					NotNullable: true,
+				})
+				require.NotNil(t, mp)
+				err = mp.mapping(page, proc, vec)
+				require.ErrorContains(t, err, fmt.Sprintf("DECIMAL(%d,2)", target.targetPrecision))
+			})
+		}
+	}
+}
+
 func TestParquetDecimalScaleConversion(t *testing.T) {
 	proc := testutil.NewProc(t)
 	ctx := context.Background()
@@ -1701,6 +1756,9 @@ func TestParquetCrossTypeHelperCoverage(t *testing.T) {
 	require.True(t, useRawIntegerDecimalMapping(parquet.Int32Type, 0, 0))
 	require.False(t, useRawIntegerDecimalMapping(parquet.BooleanType, 0, 0))
 	require.False(t, useRawIntegerDecimalMapping(decimalInt32, 0, 0))
+	require.True(t, canUseRawDecimalMapping(decimalInt32, 9, 2))
+	require.False(t, canUseRawDecimalMapping(decimalInt32, 8, 2))
+	require.False(t, canUseRawDecimalMapping(decimalInt32, 9, 3))
 
 	boolVal, err := parquetValueToBool(ctx, decimalInt32, parquet.Int32Value(100))
 	require.NoError(t, err)
