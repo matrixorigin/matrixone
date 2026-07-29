@@ -115,7 +115,10 @@ func Test_rewriteCloneViewInfos(t *testing.T) {
 		genKey("pub_db", "v1"),
 	}
 
-	rewrittenViewMap, rewrittenViews := rewriteCloneViewInfos(viewMap, sortedViews, "pub_db", "clone_db")
+	rewrittenViewMap, rewrittenViews, err := rewriteCloneViewInfos(
+		context.Background(), 1, viewMap, sortedViews, "pub_db", "clone_db",
+	)
+	require.NoError(t, err)
 	require.Equal(t, []string{
 		genKey("other_db", "dep_v"),
 		"clone_db#",
@@ -136,4 +139,57 @@ func Test_rewriteCloneViewInfos(t *testing.T) {
 	require.Equal(t, "create view `pub_db`.`v1` as select * from `pub_db`.`t1`", viewMap[genKey("pub_db", "v1")].createSql)
 	require.Equal(t, "pub_db", viewMap[fallbackKey].dbName)
 	require.Equal(t, "create view `pub_db`.`legacy_v` as select 1", viewMap[fallbackKey].createSql)
+}
+
+func Test_rewriteCloneViewInfosOnlyRemapsDatabaseQualifiers(t *testing.T) {
+	viewMap := map[string]*tableInfo{
+		genKey("sales", "v"): {
+			dbName:  "sales",
+			tblName: "v",
+			typ:     view,
+			createSql: "create view `sales`.`v` as " +
+				"select 'sales' as marker, sales.sales_data.id as sales_alias " +
+				"from `sales`.`sales_data`",
+		},
+	}
+
+	rewrittenViewMap, rewrittenViews, err := rewriteCloneViewInfos(
+		context.Background(),
+		1,
+		viewMap,
+		[]string{genKey("sales", "v")},
+		"sales",
+		"staging",
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{genKey("staging", "v")}, rewrittenViews)
+
+	info := rewrittenViewMap[genKey("staging", "v")]
+	require.NotNil(t, info)
+	require.Equal(t,
+		"create view `staging`.`v` as select 'sales' as `marker`, "+
+			"`staging`.`sales_data`.`id` as `sales_alias` from `staging`.`sales_data`",
+		info.createSql,
+	)
+}
+
+func Test_rewriteCloneViewInfosRejectsInvalidCreateSQL(t *testing.T) {
+	viewMap := map[string]*tableInfo{
+		genKey("sales", "v"): {
+			dbName:    "sales",
+			tblName:   "v",
+			typ:       view,
+			createSql: "not a create view statement",
+		},
+	}
+
+	_, _, err := rewriteCloneViewInfos(
+		context.Background(),
+		1,
+		viewMap,
+		[]string{genKey("sales", "v")},
+		"sales",
+		"staging",
+	)
+	require.Error(t, err)
 }

@@ -29,13 +29,14 @@ import (
 // sources, INSERT ... SELECT bodies and CTE bodies), table-level DDL, and
 // ANALYZE TABLE.
 //
-// Only QUALIFIED references are rewritten. An unqualified name may be a CTE or
-// derived-table alias rather than a base table, so attaching a database to it
-// could change its meaning. USE is intentionally not remapped; unqualified
-// names are resolved through TxnCompilerContext.DefaultDatabase(), which applies
-// the active database remap. Sub-selects nested in expressions (e.g. WHERE id
-// IN (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections,
-// GROUP/HAVING) are also walked so their qualified references are remapped.
+// Only QUALIFIED references are rewritten. This includes both table references
+// (db.table) and column references (db.table.column). An unqualified name may
+// be a CTE or derived-table alias rather than a base table, so attaching a
+// database to it could change its meaning. USE is intentionally not remapped;
+// unqualified names are resolved through TxnCompilerContext.DefaultDatabase(),
+// which applies the active database remap. Sub-selects nested in expressions
+// (e.g. WHERE id IN (SELECT ... FROM dbx.t), EXISTS (...), join ON,
+// projections, GROUP/HAVING) are also walked.
 func applyRemapDb(stmts []tree.Statement, remap map[string]string) {
 	if len(remap) == 0 {
 		return
@@ -241,6 +242,8 @@ func remapDbInExpr(expr tree.Expr, remap map[string]string) {
 	switch e := expr.(type) {
 	case nil:
 		return
+	case *tree.UnresolvedName:
+		remapQualifiedColumnName(e, remap)
 	case *tree.Subquery:
 		remapDbInSelectStatement(e.Select, remap)
 	case *tree.ParenExpr:
@@ -275,6 +278,19 @@ func remapDbInExpr(expr tree.Expr, remap map[string]string) {
 		remapDbInExprs(e.Exprs, remap)
 	case *tree.Tuple:
 		remapDbInExprs(e.Exprs, remap)
+	}
+}
+
+func remapQualifiedColumnName(name *tree.UnresolvedName, remap map[string]string) {
+	if name == nil || name.NumParts < 3 {
+		return
+	}
+	dbName := name.CStrParts[2]
+	if dbName == nil {
+		return
+	}
+	if target, ok := remap[dbName.Compare()]; ok {
+		name.CStrParts[2] = tree.NewCStr(target, 1)
 	}
 }
 
