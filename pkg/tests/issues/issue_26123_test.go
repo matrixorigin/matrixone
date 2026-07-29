@@ -88,13 +88,14 @@ func TestIssue26123DatabaseCopiesKeepLikeMetacharacterFKTables(t *testing.T) {
 					execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`parent_t` (id int primary key)")
 					if tc.collisionTable != "" {
 						execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`."+tc.collisionTable+" (id int primary key)")
+						execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`."+tc.collisionTable+" values (22)")
 					}
 					execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`."+tc.tableNameSQL+" (id int primary key, parent_id int, foreign key (parent_id) references `"+sourceDB+"`.`parent_t`(id))")
 					execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`.`parent_t` values (1)")
 					execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`."+tc.tableNameSQL+" values (11, 1)")
 
 					execSQLRequire(t, ctx, db, mode.copy(sourceDB, targetDB))
-					assertIssue26123CopiedFKTable(t, ctx, db, targetDB, tc.tableName, tc.tableNameSQL)
+					assertIssue26123CopiedFKTable(t, ctx, db, sourceDB, targetDB, tc.tableName, tc.tableNameSQL, tc.collisionTable)
 				})
 			}
 		}
@@ -105,9 +106,11 @@ func assertIssue26123CopiedFKTable(
 	t *testing.T,
 	ctx context.Context,
 	db *sql.DB,
+	sourceDatabaseName string,
 	databaseName string,
 	tableName string,
 	tableNameSQL string,
+	collisionTableSQL string,
 ) {
 	t.Helper()
 
@@ -116,6 +119,11 @@ func assertIssue26123CopiedFKTable(
 		"select id, parent_id from `"+databaseName+"`."+tableNameSQL).Scan(&id, &parentID))
 	require.Equal(t, 11, id)
 	require.Equal(t, 1, parentID)
+	if collisionTableSQL != "" {
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select id from `"+databaseName+"`."+collisionTableSQL).Scan(&id))
+		require.Equal(t, 22, id)
+	}
 
 	var count int
 	require.NoError(t, db.QueryRowContext(ctx,
@@ -126,6 +134,14 @@ func assertIssue26123CopiedFKTable(
 		"select count(*) from mo_catalog.mo_foreign_keys where db_name = ? and refer_db_name = ? and refer_table_name = 'parent_t'",
 		databaseName, databaseName).Scan(&count))
 	require.Equal(t, 1, count)
+	var sourceFKTableName, targetFKTableName string
+	require.NoError(t, db.QueryRowContext(ctx,
+		"select table_name from mo_catalog.mo_foreign_keys where db_name = ? and refer_db_name = ? and refer_table_name = 'parent_t'",
+		sourceDatabaseName, sourceDatabaseName).Scan(&sourceFKTableName))
+	require.NoError(t, db.QueryRowContext(ctx,
+		"select table_name from mo_catalog.mo_foreign_keys where db_name = ? and refer_db_name = ? and refer_table_name = 'parent_t'",
+		databaseName, databaseName).Scan(&targetFKTableName))
+	require.Equal(t, sourceFKTableName, targetFKTableName)
 
 	_, err := db.ExecContext(ctx,
 		"insert into `"+databaseName+"`."+tableNameSQL+" values (?, ?)", 111, 999)
