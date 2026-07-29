@@ -56,7 +56,10 @@ const (
 	embeddedIcebergAccountRetryInterval       = 100 * time.Millisecond
 	// CREATE ACCOUNT initializes all tenant system tables, so it can legitimately
 	// take longer than a regular SQL statement on a loaded integration runner.
-	embeddedIcebergAccountCreateTimeout = 30 * time.Second
+	// Keep an outer setup budget separate from each attempt so a slow or lost
+	// response cannot consume the retry budget it is supposed to trigger.
+	embeddedIcebergAccountAttemptTimeout = 10 * time.Second
+	embeddedIcebergAccountCreateTimeout  = 30 * time.Second
 )
 
 type embeddedIcebergSQLExecer interface {
@@ -86,6 +89,28 @@ func TestCreateEmbeddedIcebergTenantAccountRetriesConnectionErrors(t *testing.T)
 	require.NoError(t, createEmbeddedIcebergTenantAccount(ctx, execer, "iceacc_retry"))
 	require.Equal(t, 2, calls)
 	require.Equal(t, "create account if not exists iceacc_retry admin_name 'admin' identified by '111'", statement)
+}
+
+func TestCreateEmbeddedIcebergTenantAccountRetriesExpiredAttempt(t *testing.T) {
+	var calls int
+	execer := embeddedIcebergSQLExecerFunc(func(ctx context.Context, _ string, _ ...any) (sql.Result, error) {
+		calls++
+		if calls == 1 {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return nil, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, createEmbeddedIcebergTenantAccountWithAttemptTimeout(
+		ctx,
+		execer,
+		"iceacc_slow_attempt",
+		10*time.Millisecond,
+	))
+	require.Equal(t, 2, calls)
 }
 
 func TestCreateEmbeddedIcebergTenantAccountRejectsNonConnectionErrors(t *testing.T) {
@@ -704,11 +729,34 @@ func openIcebergTenantTestSQL(t *testing.T, c Cluster, rootDB *sql.DB) *embedded
 }
 
 func createEmbeddedIcebergTenantAccount(ctx context.Context, db embeddedIcebergSQLExecer, accountName string) error {
+	return createEmbeddedIcebergTenantAccountWithAttemptTimeout(
+		ctx,
+		db,
+		accountName,
+		embeddedIcebergAccountAttemptTimeout,
+	)
+}
+
+func createEmbeddedIcebergTenantAccountWithAttemptTimeout(
+	ctx context.Context,
+	db embeddedIcebergSQLExecer,
+	accountName string,
+	attemptTimeout time.Duration,
+) error {
+	if attemptTimeout <= 0 {
+		return fmt.Errorf("create embedded Iceberg tenant account: attempt timeout must be positive")
+	}
+
 	stmt := fmt.Sprintf("create account if not exists %s admin_name 'admin' identified by '111'", accountName)
 	for {
-		_, err := db.ExecContext(ctx, stmt)
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		_, err := db.ExecContext(attemptCtx, stmt)
+		cancel()
 		if err == nil {
 			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("create embedded Iceberg tenant account: %w (last connection error: %v)", ctxErr, err)
 		}
 		if !morpc.IsConnectionError(err) {
 			return err
