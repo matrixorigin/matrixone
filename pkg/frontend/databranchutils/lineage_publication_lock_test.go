@@ -24,7 +24,7 @@ import (
 
 func TestLineageOwnerPublicationLockSQLUsesStableCatalogWrite(t *testing.T) {
 	require.Equal(t,
-		"update mo_catalog.mo_database set dat_id = dat_id where dat_id = 1",
+		"update mo_catalog.mo_database set dat_type = dat_type where dat_id = 1",
 		LineageOwnerPublicationLockSQL(),
 	)
 }

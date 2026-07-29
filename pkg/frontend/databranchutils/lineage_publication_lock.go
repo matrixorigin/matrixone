@@ -27,7 +27,7 @@ import (
 // here because optimistic transactions do not take that locking path.
 func LineageOwnerPublicationLockSQL() string {
 	return fmt.Sprintf(
-		"update %s.%s set dat_id = dat_id where dat_id = %d",
+		"update %s.%s set dat_type = dat_type where dat_id = %d",
 		catalog.MO_CATALOG, catalog.MO_DATABASE, catalog.MO_CATALOG_ID,
 	)
 }
