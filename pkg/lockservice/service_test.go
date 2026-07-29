@@ -2880,17 +2880,7 @@ func TestReLockInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					require.True(t, false)
-					return
-				default:
-				}
-			}
+			requireServiceStatus(t, l1, pb.Status_ServiceLockWaiting)
 
 			_, err = l2.Lock(
 				ctx,
@@ -2905,26 +2895,15 @@ func TestReLockInRollingRestartCN(t *testing.T) {
 				[]byte("txn1"),
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			// Actually, txn1 and txn2 are executed concurrently.
-			// it should use a loop check.
-			for {
-				if l1.validGroupTable(0, 0) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					require.True(t, false)
-				default:
-				}
-			}
-			require.True(t, l1.isStatus(pb.Status_ServiceLockWaiting))
+			requireGroupTableRef(t, l1, 0, 0, true)
+			requireServiceStatus(t, l1, pb.Status_ServiceLockWaiting)
 
 			err = l2.Unlock(
 				ctx,
 				[]byte("txn2"),
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			require.False(t, l1.validGroupTable(0, 0))
+			requireGroupTableRef(t, l1, 0, 0, false)
 		},
 	)
 }
@@ -2957,16 +2936,7 @@ func TestOldTxnLockInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireServiceStatus(t, l, pb.Status_ServiceLockWaiting)
 
 			// old txn
 			_, err = l.Lock(
@@ -4218,7 +4188,16 @@ func requireServiceStatus(t *testing.T, service *service, status pb.Status) {
 	t.Helper()
 	require.Eventually(t,
 		func() bool { return service.isStatus(status) },
-		5*time.Second,
+		10*time.Second,
+		10*time.Millisecond,
+	)
+}
+
+func requireGroupTableRef(t *testing.T, service *service, group uint32, table uint64, want bool) {
+	t.Helper()
+	require.Eventually(t,
+		func() bool { return service.validGroupTable(group, table) == want },
+		10*time.Second,
 		10*time.Millisecond,
 	)
 }

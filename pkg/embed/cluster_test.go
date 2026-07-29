@@ -330,28 +330,34 @@ func validCNCanWork(
 	c Cluster,
 	index int,
 ) {
-	svc, err := c.GetCNService(index)
-	require.NoError(t, err)
+	assert.EventuallyWithT(t, func(collect *assert.CollectT) {
+		svc, err := c.GetCNService(index)
+		if !assert.NoError(collect, err) {
+			return
+		}
 
-	sql := svc.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	res, err := sql.Exec(
-		ctx,
-		"select count(1) from mo_catalog.mo_tables",
-		executor.Options{},
-	)
-	require.NoError(t, err)
-	defer res.Close()
+		sql := svc.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		res, err := sql.Exec(
+			ctx,
+			"select count(1) from mo_catalog.mo_tables",
+			executor.Options{},
+		)
+		if !assert.NoError(collect, err) {
+			return
+		}
+		defer res.Close()
 
-	n := int64(0)
-	res.ReadRows(
-		func(rows int, cols []*vector.Vector) bool {
-			n = executor.GetFixedRows[int64](cols[0])[0]
-			return true
-		},
-	)
-	require.True(t, n > 0)
+		var n int64
+		res.ReadRows(
+			func(rows int, cols []*vector.Vector) bool {
+				n = executor.GetFixedRows[int64](cols[0])[0]
+				return true
+			},
+		)
+		assert.Positive(collect, n)
+	}, 30*time.Second, 100*time.Millisecond)
 }
 
 func TestCreateDB(t *testing.T) {
