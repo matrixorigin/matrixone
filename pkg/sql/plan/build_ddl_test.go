@@ -471,6 +471,10 @@ func TestBuildCreateTable(t *testing.T) {
 					UNIQUE KEY (col1, col3)
 				);`,
 
+		`CREATE TABLE set_auto_increment (
+			id SET('one', 'two') AUTO_INCREMENT
+		);`,
+
 		`CREATE TABLE t1 (
 			col1 INT NOT NULL,
 			col2 DATE NOT NULL,
@@ -553,6 +557,10 @@ func TestBuildCreateTableError(t *testing.T) {
 			col3 INT NOT NULL,
 			col4 INT NOT NULL,
 			UNIQUE KEY uk1 ((col1 + col3))
+		);`,
+
+		`CREATE TABLE enum_auto_increment (
+			id ENUM('one', 'two') AUTO_INCREMENT
 		);`,
 	}
 	runTestShouldError(mock, t, sqlerrs)
