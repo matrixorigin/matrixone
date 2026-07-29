@@ -4248,6 +4248,35 @@ func TestStringTimeExtractZeroDateAndISOSeparator(t *testing.T) {
 	}
 }
 
+func TestStringTimeExtractIncompleteDatetimeAndZeroYearCalendar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"2024-12-20 12:34",
+			"0000-02-31 12:34:56",
+			"0000-04-31 12:34:56",
+			"1900-02-29 12:34:56",
+			"2000-02-29 01:02:03",
+		}, nil),
+	}
+
+	for _, tc := range []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{12, 0, 0, 0, 1}, []bool{false, true, true, true, false}), StringToHour},
+		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{34, 0, 0, 0, 2}, []bool{false, true, true, true, false}), StringToMinute},
+		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0, 0, 0, 3}, []bool{false, true, true, true, false}), StringToSecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestStringTimeExtractWhitespace(t *testing.T) {
 	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text} {
 		t.Run(typ.String(), func(t *testing.T) {

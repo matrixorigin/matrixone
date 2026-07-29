@@ -4800,16 +4800,22 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	}
 	pos++
 	minute, _, ok := mysqlVariableDigitsForExtract(str, &pos)
-	if !ok || pos >= len(str) || str[pos] != ':' {
+	if !ok {
 		return result
 	}
-	pos++
 	second := uint64(0)
-	if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
-		second, _, ok = mysqlVariableDigitsForExtract(str, &pos)
-		if !ok {
-			return result
+	// MySQL accepts a DATETIME whose clock ends after the minute and supplies
+	// the omitted seconds as zero.
+	if pos < len(str) && str[pos] == ':' {
+		pos++
+		if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+			second, _, ok = mysqlVariableDigitsForExtract(str, &pos)
+			if !ok {
+				return result
+			}
 		}
+	} else if pos < len(str) {
+		return result
 	}
 	if !mysqlDatetimeDateForExtract(year, month, day) || hour > 23 || minute > 59 || second > 59 {
 		return result
@@ -4825,13 +4831,30 @@ func mysqlDatetimeDateForExtract(year, month, day uint64) bool {
 	if year > 9999 || month > 12 || day > 31 {
 		return false
 	}
-	// String-to-TIME coercion retains a valid clock even when the date has a
-	// zero component. The calendar is incomplete, but HOUR/MINUTE/SECOND do
-	// not need to reconstruct it. Fully specified dates still need validation.
-	if year == 0 || month == 0 || day == 0 {
+	// A zero month or day is an incomplete calendar value; string-to-TIME
+	// coercion can still extract its clock. Once both are nonzero, retain
+	// calendar validation even when the year is zero.
+	if month == 0 || day == 0 {
 		return true
 	}
+	if year == 0 {
+		return day <= mysqlDaysInMonthForExtract(year, month)
+	}
 	return types.ValidDate(int32(year), uint8(month), uint8(day))
+}
+
+func mysqlDaysInMonthForExtract(year, month uint64) uint64 {
+	switch month {
+	case 4, 6, 9, 11:
+		return 30
+	case 2:
+		if year%4 == 0 && (year%100 != 0 || year%400 == 0) {
+			return 29
+		}
+		return 28
+	default:
+		return 31
+	}
 }
 
 func mysqlDateSeparatorForExtract(c byte) bool {
