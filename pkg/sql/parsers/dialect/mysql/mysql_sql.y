@@ -5443,11 +5443,13 @@ drop_index_stmt:
     }
 
 drop_table_stmt:
-    DROP TABLE temporary_opt exists_opt table_name_list drop_table_opt
+    DROP temporary_opt TABLE exists_opt table_name_list drop_table_opt
     {
         var ifExists = $4
         var names = $5
-        $$ = tree.NewDropTable(ifExists, names)
+        var stmt = tree.NewDropTable(ifExists, names)
+        stmt.Temporary = $2
+        $$ = stmt
     }
 |   DROP SOURCE exists_opt table_name_list
     {
@@ -6519,11 +6521,11 @@ nulls_first_last_opt:
     }
 |   NULLS FIRST
     {
-        $$ = tree.NullsFirst
+        yylex.Error("NULLS FIRST is not supported in MySQL syntax"); return 1
     }
 |   NULLS LAST
     {
-        $$ = tree.NullsLast
+        yylex.Error("NULLS LAST is not supported in MySQL syntax"); return 1
     }
 
 select_lock_opt:
@@ -10391,7 +10393,7 @@ table_option:
     }
 |   AUTO_INCREMENT equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionAutoIncrement(uint64($3.(int64)))
+        $$ = tree.NewTableOptionAutoIncrement(integralToUint64($3))
     }
 |   AVG_ROW_LENGTH equal_opt INTEGRAL
     {
@@ -12028,6 +12030,18 @@ mo_cast_type:
 
 mysql_cast_type:
     decimal_type
+|   JSON
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family:       tree.JsonFamily,
+                FamilyString: $1,
+                Locale:       &locale,
+                Oid:          uint32(defines.MYSQL_TYPE_JSON),
+            },
+        }
+    }
 |   BINARY length_option_opt
     {
         locale := ""

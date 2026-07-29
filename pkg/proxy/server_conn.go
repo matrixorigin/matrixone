@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/url"
@@ -33,15 +34,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 // serverBaseConnID is the base connection ID for server.
 var serverBaseConnID uint32 = 1000
 
-var (
-	eventProxyBackendHandshakeTimeout = logutil.Event{Name: "proxy.backend.handshake-timeout", Message: "backend handshake timed out"}
-	eventProxyBackendDialFailed       = logutil.Event{Name: "proxy.backend.dial-failed", Message: "failed to connect to backend CN"}
-)
+var eventProxyBackendDialFailed = logutil.Event{
+	Name:    "proxy.backend.dial-failed",
+	Message: "failed to connect to backend CN",
+}
 
 // ServerConn is the connection to the backend server.
 type ServerConn interface {
@@ -102,6 +104,12 @@ type serverConn struct {
 	createTime time.Time
 	// closeOnce only close the connection once.
 	closeOnce sync.Once
+	// diagnosticLogger is shared by all connections owned by one proxy so
+	// failures for the same CN and stage are aggregated.
+	diagnosticLogger *logutil.RateLimitedLogger
+	// handshakeTracker is embedded so a handshake does not allocate diagnostic
+	// state in addition to its existing worker and result channel.
+	handshakeTracker backendHandshakeTracker
 }
 
 var _ ServerConn = (*serverConn)(nil)
@@ -154,6 +162,73 @@ const (
 	// CN cannot turn the transient packet allowance into steady memory.
 	proxyBackendAuthResponseLimit     = 1024
 	proxyBackendRetainedResponseLimit = proxyBackendAuthResponseLimit + frontend.PacketHeaderLength
+	// CN waits 200ms for the ExtraInfo preface before falling back to a direct
+	// MySQL handshake. Surface writes that consume a meaningful part of that
+	// budget without logging every successful backend connection.
+	slowBackendExtraInfoWriteThreshold = 100 * time.Millisecond
+)
+
+type backendHandshakeStage uint32
+
+const (
+	backendHandshakeStageReadInitial backendHandshakeStage = iota + 1
+	backendHandshakeStageWriteAuth
+	backendHandshakeStageReadAuthResponse
+)
+
+const backendHandshakeTimestampMask = uint64(1<<56 - 1)
+
+type backendHandshakeTracker struct {
+	// The high byte stores the stage and the low 56 bits store Unix
+	// microseconds. One atomic value gives diagnostics a consistent snapshot
+	// without allocating a state object for each successful stage transition.
+	state atomic.Uint64
+}
+
+func (t *backendHandshakeTracker) enter(stage backendHandshakeStage) {
+	startedAt := uint64(time.Now().UnixMicro()) & backendHandshakeTimestampMask
+	t.state.Store(uint64(stage)<<56 | startedAt)
+}
+
+func (t *backendHandshakeTracker) snapshot() (backendHandshakeStage, time.Duration) {
+	state := t.state.Load()
+	stage := backendHandshakeStage(state >> 56)
+	startedAt := state & backendHandshakeTimestampMask
+	if stage == 0 || startedAt == 0 {
+		return stage, 0
+	}
+	now := uint64(time.Now().UnixMicro()) & backendHandshakeTimestampMask
+	if now < startedAt {
+		return stage, 0
+	}
+	return stage, time.Duration(now-startedAt) * time.Microsecond
+}
+
+func (s backendHandshakeStage) String() string {
+	switch s {
+	case backendHandshakeStageReadInitial:
+		return "read-initial-handshake"
+	case backendHandshakeStageWriteAuth:
+		return "write-auth-request"
+	case backendHandshakeStageReadAuthResponse:
+		return "read-auth-response"
+	default:
+		return "unknown"
+	}
+}
+
+type backendHandshakeResult struct {
+	resp *frontend.Packet
+	err  error
+}
+
+const (
+	backendDiagnosticHandshakeTimeout  = "handshake-timeout"
+	backendDiagnosticHandshakeCanceled = "handshake-canceled"
+	backendDiagnosticHandshakeFailure  = "handshake-failure"
+	backendDiagnosticExtraInfoFailure  = "extra-info-write-failure"
+	backendDiagnosticExtraInfoSlow     = "extra-info-write-slow"
+	backendDiagnosticExtraInfoStage    = "write-extra-info"
 )
 
 // newServerConn creates a connection to CN server.
@@ -178,10 +253,17 @@ func newServerConnContext(
 	allocators ...frontend.Allocator,
 ) (ServerConn, error) {
 	var logger *zap.Logger
+	var diagnosticLogger *logutil.RateLimitedLogger
 	if r != nil && r.logger != nil {
 		logger = r.logger.RawLogger()
 	}
-	c, err := cn.ConnectContext(ctx, logger, timeout)
+	if r != nil {
+		diagnosticLogger = r.diagnosticLogger
+	}
+	if diagnosticLogger == nil {
+		diagnosticLogger = logutil.NewRateLimitedLogger(logutil.Adjust(logger))
+	}
+	c, err := cn.connectContext(ctx, diagnosticLogger, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -192,11 +274,12 @@ func newServerConnContext(
 		}
 	}()
 	s := &serverConn{
-		cnServer:   cn,
-		conn:       c,
-		connID:     nextServerConnID(),
-		rebalancer: r,
-		createTime: time.Now(),
+		cnServer:         cn,
+		conn:             c,
+		connID:           nextServerConnID(),
+		rebalancer:       r,
+		createTime:       time.Now(),
+		diagnosticLogger: diagnosticLogger,
 	}
 	s.tunnelOwner.tun = tun
 	fp := config.FrontendParameters{}
@@ -378,35 +461,38 @@ func (s *serverConn) HandleHandshakeContext(
 	joinInterrupt := interruptConnectionOnDone(ctx, raw)
 	defer joinInterrupt()
 
-	type result struct {
-		resp *frontend.Packet
-		err  error
-	}
+	tracker := &s.handshakeTracker
 	// Buffered so a worker that finishes after the caller has timed out can
 	// still publish its result and exit, rather than blocking forever on send.
-	resultC := make(chan result, 1)
+	resultC := make(chan backendHandshakeResult, 1)
+	tracker.enter(backendHandshakeStageReadInitial)
 	go func() {
 		// Step 1, read initial handshake from CN server.
 		if err := s.readInitialHandshake(); err != nil {
-			resultC <- result{err: err}
+			resultC <- backendHandshakeResult{err: err}
 			return
 		}
 		// Step 2, write the handshake response to CN server, which is
 		// received from client earlier.
-		resp, err := s.writeHandshakeResp(handshakeResp)
-		resultC <- result{resp: resp, err: err}
+		tracker.enter(backendHandshakeStageWriteAuth)
+		resp, err := s.writeHandshakeResp(handshakeResp, tracker)
+		resultC <- backendHandshakeResult{resp: resp, err: err}
 	}()
 
+	return s.awaitBackendHandshake(ctx, raw, resultC, joinInterrupt, tracker, timeout)
+}
+
+func (s *serverConn) awaitBackendHandshake(
+	ctx context.Context,
+	raw net.Conn,
+	resultC <-chan backendHandshakeResult,
+	joinInterrupt func(),
+	tracker *backendHandshakeTracker,
+	timeout time.Duration,
+) (*frontend.Packet, error) {
+	var ret backendHandshakeResult
 	select {
-	case ret := <-resultC:
-		// Join cancellation before accepting success. If cancellation won the
-		// race, the transport may already be closed and cannot enter the tunnel.
-		joinInterrupt()
-		if cause := operationContextCause(ctx); cause != nil {
-			_ = raw.Close()
-			return nil, newTimeoutConnectErr(errors.Join(ret.err, cause))
-		}
-		return ret.resp, ret.err
+	case ret = <-resultC:
 	case <-ctx.Done():
 		// A caller may release or reuse handshakeResp as soon as this method
 		// returns. Close only the transport first, then join the worker before
@@ -414,15 +500,90 @@ func (s *serverConn) HandleHandshakeContext(
 		// the worker may still be using them. net.Conn.Close unblocks both the
 		// goetty read and frontend write paths.
 		_ = raw.Close()
-		<-resultC
-		joinInterrupt()
-		eventProxyBackendHandshakeTimeout.ErrorLazy(func() []zap.Field {
-			fields := logutil.StringFingerprintFields("backend-address", s.cnServer.addr)
-			return append(fields, zap.Duration("timeout", timeout), zap.Uint32("connection-id", s.connID))
-		})
-		// Return a retryable error with timeout flag set.
-		return nil, newTimeoutConnectErr(moerr.AttachCause(ctx, context.Cause(ctx)))
+		ret = <-resultC
 	}
+
+	// Join cancellation before accepting any result. The context and worker can
+	// become ready together; classifying and logging after the select makes the
+	// diagnostic independent of which ready branch the runtime selected.
+	joinInterrupt()
+	if cause := operationContextCause(ctx); cause != nil {
+		_ = raw.Close()
+		err := newTimeoutConnectErr(errors.Join(ret.err, cause))
+		event := backendDiagnosticHandshakeTimeout
+		message := "backend handshake timeout"
+		if errors.Is(ctx.Err(), context.Canceled) {
+			event = backendDiagnosticHandshakeCanceled
+			message = "backend handshake canceled"
+		}
+		s.logBackendHandshakeEvent(
+			event,
+			message,
+			tracker,
+			true,
+			zap.Duration("timeout", timeout),
+			zap.Error(err),
+		)
+		return nil, err
+	}
+	if ret.err != nil {
+		s.logBackendHandshakeEvent(
+			backendDiagnosticHandshakeFailure,
+			"backend handshake failed",
+			tracker,
+			false,
+			zap.Error(ret.err),
+		)
+	}
+	return ret.resp, ret.err
+}
+
+func (s *serverConn) logBackendHandshakeEvent(
+	event string,
+	message string,
+	tracker *backendHandshakeTracker,
+	errorLevel bool,
+	extraFields ...zap.Field,
+) {
+	if s == nil {
+		return
+	}
+	stage, stageDuration := tracker.snapshot()
+	stageName := stage.String()
+	cn := ""
+	if s.cnServer != nil {
+		cn = s.cnServer.addr
+	}
+	fields := []zap.Field{
+		zap.String("cn", cn),
+		zap.Uint32("connection_id", s.connID),
+		zap.String("stage", stageName),
+		zap.Duration("stage_duration", stageDuration),
+	}
+	if s.conn != nil {
+		if local := s.conn.LocalAddr(); local != nil {
+			fields = append(fields, zap.String("local", local.String()))
+		}
+		if remote := s.conn.RemoteAddr(); remote != nil {
+			fields = append(fields, zap.String("remote", remote.String()))
+		}
+	}
+	fields = append(fields, extraFields...)
+	v2.ProxyBackendHandshakeEventCounter.WithLabelValues(event, stageName).Inc()
+	logger := s.diagnosticLogger
+	if logger == nil {
+		logger = logutil.NewRateLimitedLogger(logutil.GetGlobalLogger())
+	}
+	key := backendDiagnosticLogKey(cn, event, stageName)
+	if errorLevel {
+		logger.Error(key, message, fields...)
+	} else {
+		logger.Warn(key, message, fields...)
+	}
+}
+
+func backendDiagnosticLogKey(cn string, event string, stage string) string {
+	return fmt.Sprintf("%s\x00%s\x00%s", cn, event, stage)
 }
 
 func operationContextCause(ctx context.Context) error {
@@ -625,7 +786,19 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (net.Conn,
 
 func (s *CNServer) ConnectContext(
 	parent context.Context,
-	_ *zap.Logger,
+	logger *zap.Logger,
+	timeout time.Duration,
+) (net.Conn, error) {
+	return s.connectContext(
+		parent,
+		logutil.NewRateLimitedLogger(logutil.Adjust(logger)),
+		timeout,
+	)
+}
+
+func (s *CNServer) connectContext(
+	parent context.Context,
+	diagnosticLogger *logutil.RateLimitedLogger,
 	timeout time.Duration,
 ) (net.Conn, error) {
 	if parent == nil {
@@ -681,12 +854,31 @@ func (s *CNServer) ConnectContext(
 	}
 	// When build connection with backend server, proxy send its salt, request
 	// labels and other information to the backend server.
+	writeStartedAt := time.Now()
 	if err := writeAll(raw, data); err != nil {
+		duration := time.Since(writeStartedAt)
+		s.logExtraInfoWriteEvent(
+			diagnosticLogger,
+			backendDiagnosticExtraInfoFailure,
+			"failed to write proxy extra info",
+			raw,
+			zap.Int("bytes", len(data)),
+			zap.Duration("duration", duration),
+			zap.Error(err))
 		joinInterrupt()
 		if cause := operationContextCause(ctx); cause != nil {
 			return nil, newTimeoutConnectErr(errors.Join(err, cause))
 		}
 		return nil, err
+	}
+	if duration := time.Since(writeStartedAt); duration >= slowBackendExtraInfoWriteThreshold {
+		s.logExtraInfoWriteEvent(
+			diagnosticLogger,
+			backendDiagnosticExtraInfoSlow,
+			"slow proxy extra info write",
+			raw,
+			zap.Int("bytes", len(data)),
+			zap.Duration("duration", duration))
 	}
 	joinInterrupt()
 	if cause := operationContextCause(ctx); cause != nil {
@@ -694,6 +886,38 @@ func (s *CNServer) ConnectContext(
 	}
 	owned = false
 	return raw, nil
+}
+
+func (s *CNServer) logExtraInfoWriteEvent(
+	logger *logutil.RateLimitedLogger,
+	event string,
+	message string,
+	conn net.Conn,
+	extraFields ...zap.Field,
+) {
+	v2.ProxyBackendHandshakeEventCounter.WithLabelValues(
+		event,
+		backendDiagnosticExtraInfoStage,
+	).Inc()
+	fields := make([]zap.Field, 0, len(extraFields)+3)
+	fields = append(fields, zap.String("cn", s.addr))
+	if conn != nil {
+		if local := conn.LocalAddr(); local != nil {
+			fields = append(fields, zap.String("local", local.String()))
+		}
+		if remote := conn.RemoteAddr(); remote != nil {
+			fields = append(fields, zap.String("remote", remote.String()))
+		}
+	}
+	fields = append(fields, extraFields...)
+	if logger == nil {
+		logger = logutil.NewRateLimitedLogger(logutil.GetGlobalLogger())
+	}
+	logger.Warn(
+		backendDiagnosticLogKey(s.addr, event, backendDiagnosticExtraInfoStage),
+		message,
+		fields...,
+	)
 }
 
 func writeAll(conn net.Conn, data []byte) error {

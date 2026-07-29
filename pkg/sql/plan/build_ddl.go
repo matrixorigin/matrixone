@@ -822,8 +822,8 @@ func buildCreateTable(
 		var err error
 		oldTable := stmt.LikeTableName
 		newTable := stmt.Table
-		tblName := formatStr(string(oldTable.ObjectName))
-		dbName := formatStr(string(oldTable.SchemaName))
+		tblName := string(oldTable.ObjectName)
+		dbName := string(oldTable.SchemaName)
 
 		snapshot := ctx.GetSnapshot()
 
@@ -1548,6 +1548,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString("*")
 
 		// from
+		// The generated INSERT ... SELECT is re-parsed by the internal SQL
+		// executor, which always parses in DEFAULT sql_mode (parsers.Parse
+		// passes an empty mode) regardless of the session's mode. So string
+		// literals here must be default-escaped: a backslash stored literally
+		// under a NO_BACKSLASH_ESCAPES session is emitted doubled and the
+		// default-mode reparse reduces it back to the original literal. Do
+		// NOT make this formatting session-mode-aware unless the internal
+		// executor's parse becomes session-mode-aware too (#24823).
 		fmtCtx := tree.NewFmtCtx(
 			dialect.MYSQL,
 			tree.WithQuoteString(true),
@@ -2812,7 +2820,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 
 func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	if len(stmt.Names) == 1 {
-		dropTable, err := buildDropTableSingle(stmt.IfExists, stmt.Names[0], ctx)
+		dropTable, err := buildDropTableSingle(stmt.IfExists, stmt.Temporary, stmt.Names[0], ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -2833,7 +2841,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		Tables:   make([]*plan.DropTable, 0, len(stmt.Names)),
 	}
 	for _, name := range stmt.Names {
-		entry, err := buildDropTableSingle(stmt.IfExists, name, ctx)
+		entry, err := buildDropTableSingle(stmt.IfExists, stmt.Temporary, name, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -2851,7 +2859,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerContext) (*plan.DropTable, error) {
+func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, ctx CompilerContext) (*plan.DropTable, error) {
 	dropTable := &plan.DropTable{
 		IfExists: ifExists,
 	}
@@ -2873,7 +2881,10 @@ func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerConte
 		return nil, err
 	}
 
-	if tableDef == nil {
+	// DROP TEMPORARY TABLE must never fall through to a same-named permanent
+	// table. Resolve prefers a session temporary table when one exists, so a
+	// non-temporary result means that the requested temporary table is absent.
+	if tableDef == nil || (temporary && !tableDef.IsTemporary) {
 		if !dropTable.IfExists {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
@@ -2969,7 +2980,9 @@ func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerConte
 	}
 
 	dropTable.TableDef = tableDef
-	dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
+	if !tableDef.IsTemporary {
+		dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
+	}
 	return dropTable, nil
 }
 
