@@ -496,4 +496,21 @@ select hex(case when 0 then _binary 'a' else '中文' end) as case_utf8_hex;
 ➤ case_utf8_hex[12,-1,0]  𝄀
 E4B8ADE69687
 drop view v_case_binary_utf8;
+drop view if exists v_case_binary_null;
+create view v_case_binary_null as
+select case when 1 then null else cast('a' as binary(4)) end as fixed_leading_null,
+case when 1 then cast('a' as binary(4)) else null end as fixed_trailing_null,
+case when 0 then cast('a' as binary(4)) when 1 then null else cast('b' as binary(4)) end as fixed_middle_null,
+case when 1 then null else cast('a' as varbinary(4)) end as var_leading_null,
+case when 1 then cast('a' as varbinary(4)) else null end as var_trailing_null,
+case when 0 then cast('a' as varbinary(4)) when 1 then null else cast('b' as varbinary(4)) end as var_middle_null;
+desc v_case_binary_null;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+fixed_leading_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+fixed_trailing_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+fixed_middle_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_leading_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_trailing_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_middle_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+drop view v_case_binary_null;
 drop table t_flow_metadata;

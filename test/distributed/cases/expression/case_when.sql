@@ -383,4 +383,18 @@ desc v_case_binary_utf8;
 select hex(case when 0 then _binary 'a' else '中文' end) as case_utf8_hex;
 drop view v_case_binary_utf8;
 
+-- @case
+-- @desc:test CASE binary metadata with NULL value branches
+-- @label:bvt
+drop view if exists v_case_binary_null;
+create view v_case_binary_null as
+select case when 1 then null else cast('a' as binary(4)) end as fixed_leading_null,
+       case when 1 then cast('a' as binary(4)) else null end as fixed_trailing_null,
+       case when 0 then cast('a' as binary(4)) when 1 then null else cast('b' as binary(4)) end as fixed_middle_null,
+       case when 1 then null else cast('a' as varbinary(4)) end as var_leading_null,
+       case when 1 then cast('a' as varbinary(4)) else null end as var_trailing_null,
+       case when 0 then cast('a' as varbinary(4)) when 1 then null else cast('b' as varbinary(4)) end as var_middle_null;
+desc v_case_binary_null;
+drop view v_case_binary_null;
+
 drop table t_flow_metadata;

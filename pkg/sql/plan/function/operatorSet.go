@@ -90,15 +90,22 @@ func signedUnsignedIntegerCommonType(source []types.Type) (types.Type, bool) {
 
 func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	hasBinary := false
-	sameFixedBinary := len(source) > 0
+	sameFixedBinary := true
+	hasFixedBinary := false
 	fixedBinaryWidth := int32(0)
 	width := int32(0)
-	for i, typ := range source {
+	for _, typ := range source {
 		switch typ.Oid {
+		case types.T_any:
+			// NULL has no concrete binary representation. It affects result
+			// nullability, but must not change the common type of the value
+			// branches.
+			continue
 		case types.T_binary:
 			hasBinary = true
-			if i == 0 {
+			if !hasFixedBinary {
 				fixedBinaryWidth = typ.Width
+				hasFixedBinary = true
 			} else if typ.Width != fixedBinaryWidth {
 				sameFixedBinary = false
 			}

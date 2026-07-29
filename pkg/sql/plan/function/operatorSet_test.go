@@ -823,6 +823,7 @@ func TestBinaryStringCommonTypePreservesSameFixedBinary(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		source    []types.Type
+		wantOK    bool
 		wantOid   types.T
 		wantWidth int32
 	}{
@@ -832,6 +833,7 @@ func TestBinaryStringCommonTypePreservesSameFixedBinary(t *testing.T) {
 				types.New(types.T_binary, 4, 0),
 				types.New(types.T_binary, 4, 0),
 			},
+			wantOK:    true,
 			wantOid:   types.T_binary,
 			wantWidth: 4,
 		},
@@ -841,13 +843,84 @@ func TestBinaryStringCommonTypePreservesSameFixedBinary(t *testing.T) {
 				types.New(types.T_binary, 4, 0),
 				types.New(types.T_binary, 8, 0),
 			},
+			wantOK:    true,
 			wantOid:   types.T_varbinary,
 			wantWidth: 8,
+		},
+		{
+			name: "leading null fixed binary",
+			source: []types.Type{
+				types.T_any.ToType(),
+				types.New(types.T_binary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "trailing null fixed binary",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.T_any.ToType(),
+			},
+			wantOK:    true,
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "middle null fixed binary",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.T_any.ToType(),
+				types.New(types.T_binary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "leading null varbinary",
+			source: []types.Type{
+				types.T_any.ToType(),
+				types.New(types.T_varbinary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: 4,
+		},
+		{
+			name: "trailing null varbinary",
+			source: []types.Type{
+				types.New(types.T_varbinary, 4, 0),
+				types.T_any.ToType(),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: 4,
+		},
+		{
+			name: "middle null varbinary",
+			source: []types.Type{
+				types.New(types.T_varbinary, 4, 0),
+				types.T_any.ToType(),
+				types.New(types.T_varbinary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: 4,
+		},
+		{
+			name:   "only null is not binary",
+			source: []types.Type{types.T_any.ToType()},
+			wantOK: false,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			result, ok := binaryStringCommonType(test.source)
-			require.True(t, ok)
+			require.Equal(t, test.wantOK, ok)
+			if !test.wantOK {
+				return
+			}
 			require.Equal(t, test.wantOid, result.Oid)
 			require.Equal(t, test.wantWidth, result.Width)
 		})

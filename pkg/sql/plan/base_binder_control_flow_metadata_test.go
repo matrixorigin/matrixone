@@ -215,6 +215,59 @@ func TestBuildCaseSameFixedBinaryMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildCaseBinaryMetadataWithNullBranches(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		oid  types.T
+	}{
+		{
+			name: "leading null fixed binary",
+			sql:  `select case when true then null else cast('a' as binary(4)) end`,
+			oid:  types.T_binary,
+		},
+		{
+			name: "trailing null fixed binary",
+			sql:  `select case when true then cast('a' as binary(4)) else null end`,
+			oid:  types.T_binary,
+		},
+		{
+			name: "middle null fixed binary",
+			sql:  `select case when false then cast('a' as binary(4)) when true then null else cast('b' as binary(4)) end`,
+			oid:  types.T_binary,
+		},
+		{
+			name: "leading null varbinary",
+			sql:  `select case when true then null else cast('a' as varbinary(4)) end`,
+			oid:  types.T_varbinary,
+		},
+		{
+			name: "trailing null varbinary",
+			sql:  `select case when true then cast('a' as varbinary(4)) else null end`,
+			oid:  types.T_varbinary,
+		},
+		{
+			name: "middle null varbinary",
+			sql:  `select case when false then cast('a' as varbinary(4)) when true then null else cast('b' as varbinary(4)) end`,
+			oid:  types.T_varbinary,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(test.oid), projectList[0].Typ.Id)
+			require.Equal(t, int32(4), projectList[0].Typ.Width)
+			require.False(t, projectList[0].Typ.NotNullable)
+		})
+	}
+}
+
 func TestDecimalDisplayWidth(t *testing.T) {
 	for _, test := range []struct {
 		name  string
