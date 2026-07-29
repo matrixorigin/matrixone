@@ -435,6 +435,43 @@ func TestCommit(t *testing.T) {
 	})
 }
 
+func TestAutoIncrEpochFenceUsesV6CommitMethod(t *testing.T) {
+	t.Run("commit", func(t *testing.T) {
+		runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+			tc.RequireAutoIncrEpochFenceCommit()
+			tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
+			require.NoError(t, tc.Commit(ctx))
+			requests := ts.getLastRequests()
+			require.Len(t, requests, 1)
+			require.Equal(t, txn.TxnMethod_CommitAutoIncrEpochFence, requests[0].Method)
+		})
+	})
+
+	t.Run("write and commit", func(t *testing.T) {
+		runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+			tc.RequireAutoIncrEpochFenceCommit()
+			result, err := tc.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+			require.NoError(t, err)
+			if result != nil {
+				result.Release()
+			}
+			requests := ts.getLastRequests()
+			require.Equal(t, txn.TxnMethod_CommitAutoIncrEpochFence, requests[len(requests)-1].Method)
+		})
+	})
+
+	t.Run("cached write", func(t *testing.T) {
+		runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+			_, err := tc.Write(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+			require.NoError(t, err)
+			tc.RequireAutoIncrEpochFenceCommit()
+			require.NoError(t, tc.Commit(ctx))
+			requests := ts.getLastRequests()
+			require.Equal(t, txn.TxnMethod_CommitAutoIncrEpochFence, requests[len(requests)-1].Method)
+		}, WithTxnCacheWrite())
+	})
+}
+
 func TestCommitFinalizesPreparedWorkspaceAfterCommitSuccess(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		ws := &trackingWorkspace{
@@ -966,6 +1003,13 @@ func TestApplySnapshotTxnOperator(t *testing.T) {
 		snapshot.LockTables = append(snapshot.LockTables, lock.LockTable{Table: 1})
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
 		assert.Equal(t, 1, len(tc.mu.lockTables))
+
+		snapshot.Txn.RequireAutoIncrEpochFenceCommit = true
+		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
+		assert.True(t, tc.mu.txn.RequireAutoIncrEpochFenceCommit)
+		snapshot.Txn.RequireAutoIncrEpochFenceCommit = false
+		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
+		assert.True(t, tc.mu.txn.RequireAutoIncrEpochFenceCommit)
 	})
 }
 

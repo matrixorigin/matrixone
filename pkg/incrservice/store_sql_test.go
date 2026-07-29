@@ -176,7 +176,12 @@ type testTxnOperator struct {
 	// If empty, Allocate should fallback to use SnapshotTS
 	commitTS timestamp.Timestamp
 	// snapshotTS is used to simulate transaction snapshot timestamp
-	snapshotTS timestamp.Timestamp
+	snapshotTS                      timestamp.Timestamp
+	requireAutoIncrEpochFenceCommit bool
+}
+
+func (tTxnOp *testTxnOperator) RequireAutoIncrEpochFenceCommit() {
+	tTxnOp.requireAutoIncrEpochFenceCommit = true
 }
 
 func (tTxnOp *testTxnOperator) GetOverview() client.TxnOverview {

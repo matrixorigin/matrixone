@@ -926,12 +926,6 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 		); err != nil {
 			return err
 		}
-		if !engine.TxnSupportsAutoIncrEpochFence(c.proc.GetTxnOperator()) {
-			return moerr.NewNotSupported(
-				c.proc.Ctx,
-				"AUTO_INCREMENT allocator reset requires epoch fencing on every TN service",
-			)
-		}
 		if err := svc.SetOffset(
 			c.proc.Ctx,
 			tableID,

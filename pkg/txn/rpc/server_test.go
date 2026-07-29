@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -36,6 +37,20 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestAutoIncrEpochFenceCommitRequiresV6(t *testing.T) {
+	rt := newTestRuntime(newTestClock(), zap.NewNop())
+	req := &txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
+	require.Error(t, checkMethodVersion(context.Background(), rt, req))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
+	require.NoError(t, checkMethodVersion(context.Background(), rt, req))
+
+	legacyMethods := map[txn.TxnMethod]int64{txn.TxnMethod_Commit: defines.MORPCVersion1}
+	require.Error(t, runtime.CheckMethodVersionWithRuntime(context.Background(), rt, legacyMethods, req))
+}
 
 func TestHandleMessageWithSender(t *testing.T) {
 	runTestTxnServer(t, testTN1Addr, func(s *server) {

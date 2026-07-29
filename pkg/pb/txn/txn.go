@@ -29,6 +29,11 @@ const (
 	SkipResponseFlag uint32 = 1
 )
 
+// IsCommit reports whether the method is a terminal commit variant.
+func (m TxnMethod) IsCommit() bool {
+	return m == TxnMethod_Commit || m == TxnMethod_CommitAutoIncrEpochFence
+}
+
 // NewTxnRequest create TxnRequest by CNOpRequest
 func NewTxnRequest(request *CNOpRequest) TxnRequest {
 	return TxnRequest{CNRequest: request}
@@ -158,7 +163,7 @@ func (m TxnRequest) GetTargetTN() metadata.TNShard {
 	switch m.Method {
 	case TxnMethod_Read, TxnMethod_Write, TxnMethod_DEBUG:
 		return m.CNRequest.Target
-	case TxnMethod_Commit:
+	case TxnMethod_Commit, TxnMethod_CommitAutoIncrEpochFence:
 		return m.Txn.TNShards[0]
 	case TxnMethod_Rollback:
 		return m.Txn.TNShards[0]
@@ -171,7 +176,7 @@ func (m *TxnRequest) ResetTargetTN(shard metadata.TNShard) {
 	switch m.Method {
 	case TxnMethod_Read, TxnMethod_Write, TxnMethod_DEBUG:
 		m.CNRequest.Target = shard
-	case TxnMethod_Commit:
+	case TxnMethod_Commit, TxnMethod_CommitAutoIncrEpochFence:
 		m.Txn.TNShards[0] = shard
 	case TxnMethod_Rollback:
 		m.Txn.TNShards[0] = shard

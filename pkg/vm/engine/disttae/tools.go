@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 )
 
@@ -83,6 +84,13 @@ func genWriteReqs(
 		entries = append(entries, pe)
 	}
 
+	requireAutoIncrEpochFence := requiresAutoIncrEpochFenceCommit(entries)
+	if requireAutoIncrEpochFence {
+		if !client.RequireAutoIncrEpochFenceCommit(txnCommit.op) {
+			return nil, moerr.NewNotSupported(ctx, "transaction operator cannot enforce AUTO_INCREMENT epochs")
+		}
+	}
+
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -118,6 +126,15 @@ func genWriteReqs(
 		})
 	}
 	return reqs, nil
+}
+
+func requiresAutoIncrEpochFenceCommit(entries []*api.Entry) bool {
+	for _, entry := range entries {
+		if entry.AutoIncrEpochKnown && entry.AutoIncrEpoch > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func toPBEntry(e Entry) (*api.Entry, error) {

@@ -227,7 +227,6 @@ func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 	storeInfo.QueryAddress = hb.QueryAddress
 	storeInfo.ReplayedLsn = hb.ReplayedLsn
 	storeInfo.AutoIncrEpochFenceSupported = hb.AutoIncrEpochFenceSupported
-	storeInfo.AutoIncrEpochFenceGeneration = hb.AutoIncrEpochFenceGeneration
 	s.Stores[hb.UUID] = storeInfo
 }
 

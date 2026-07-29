@@ -230,13 +230,9 @@ type alterCopyInsertSpyExecutor struct {
 type alterCopyAutoIncrEpochWorkspace struct {
 	client.Workspace
 	supported bool
-	support   func() bool
 }
 
 func (w alterCopyAutoIncrEpochWorkspace) SupportsAutoIncrEpochFence() bool {
-	if w.support != nil {
-		return w.support()
-	}
 	return w.supported
 }
 
@@ -317,49 +313,6 @@ func TestReconcileAlterCopyAutoIncrementRejectsLegacyTN(t *testing.T) {
 	)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
 	require.Empty(t, spyExec.executedSQLs)
-}
-
-func TestReconcileAlterCopyAutoIncrementRejectsDowngradeBeforeSetOffset(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	resultMP := mpool.MustNewZero()
-	idMaxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
-	seqMaxSQL := "select cast(coalesce(max(case when `seq` > 0 then `seq` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
-	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
-		idMaxSQL:  newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{40}),
-		seqMaxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{50}),
-	}}
-	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
-
-	checks := 0
-	workspace := alterCopyAutoIncrEpochWorkspace{support: func() bool {
-		checks++
-		return checks <= 2
-	}}
-	txnCli, txnOp := newTestTxnClientAndOp(ctrl, workspace)
-	c.proc.Base.TxnClient = txnCli
-	c.proc.Base.TxnOperator = txnOp
-
-	copyDef := &plan.TableDef{
-		TblId: 2,
-		Name:  "dept_copy",
-		Cols: []*plan.ColDef{
-			{Name: "id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
-			{Name: "seq", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
-		},
-	}
-	copyRel := mock_frontend.NewMockRelation(ctrl)
-	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
-	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
-	autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, "id", uint64(40), c.proc.GetTxnOperator())
-	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
-
-	err := c.reconcileAlterCopyAutoIncrement(
-		"test", &plan.TableDef{}, copyDef, copyRel, newAlterCopyAutoIncrementCleanup(c),
-	)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
-	require.Equal(t, 3, checks)
-	require.Equal(t, []string{idMaxSQL, seqMaxSQL}, spyExec.executedSQLs)
-	require.Zero(t, resultMP.CurrNB())
 }
 
 func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t *testing.T) {

@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -101,20 +100,19 @@ func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 }
 
 type store struct {
-	cfg                          *Config
-	rt                           runtime.Runtime
-	sender                       rpc.TxnSender
-	server                       rpc.TxnServer
-	hakeeperClient               logservice.TNHAKeeperClient
-	fileService                  fileservice.FileService
-	metadataFileService          fileservice.ReplaceableFileService
-	lockTableAllocator           lockservice.LockTableAllocator
-	shardServer                  shardservice.ShardServer
-	moCluster                    clusterservice.MOCluster
-	replicas                     *sync.Map
-	stopper                      *stopper.Stopper
-	shutdownC                    chan struct{}
-	autoIncrEpochFenceGeneration string
+	cfg                 *Config
+	rt                  runtime.Runtime
+	sender              rpc.TxnSender
+	server              rpc.TxnServer
+	hakeeperClient      logservice.TNHAKeeperClient
+	fileService         fileservice.FileService
+	metadataFileService fileservice.ReplaceableFileService
+	lockTableAllocator  lockservice.LockTableAllocator
+	shardServer         shardservice.ShardServer
+	moCluster           clusterservice.MOCluster
+	replicas            *sync.Map
+	stopper             *stopper.Stopper
+	shutdownC           chan struct{}
 
 	options struct {
 		logServiceClientFactory func(metadata.TNShard) (logservice.Client, error)
@@ -171,13 +169,12 @@ func NewService(
 	ioutil.Start(cfg.UUID)
 
 	s := &store{
-		cfg:                          cfg,
-		rt:                           rt,
-		fileService:                  fileService,
-		metadataFileService:          metadataFS,
-		shutdownC:                    shutdownC,
-		autoIncrEpochFenceGeneration: uuid.NewString(),
-		addressMgr:                   address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
+		cfg:                 cfg,
+		rt:                  rt,
+		fileService:         fileService,
+		metadataFileService: metadataFS,
+		shutdownC:           shutdownC,
+		addressMgr:          address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 	}
 	for _, opt := range opts {
 		opt(s)

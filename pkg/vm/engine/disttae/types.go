@@ -727,47 +727,15 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 	return txn
 }
 
-// SupportsAutoIncrEpochFence reports whether the exact TN process generations
-// captured by this transaction still advertise the capability. Missing,
-// legacy, restarted, and downgraded targets fail closed.
+// SupportsAutoIncrEpochFence reports the capability of the exact TN snapshot
+// captured by this transaction. Missing or legacy targets fail closed. The
+// V6-only terminal commit remains the authoritative mixed-version boundary.
 func (txn *Transaction) SupportsAutoIncrEpochFence() bool {
-	if txn.engine == nil {
+	if len(txn.tnStores) == 0 {
 		return false
 	}
-	return supportsAutoIncrEpochFence(txn.tnStores, txn.engine.GetTNServices())
-}
-
-func supportsAutoIncrEpochFence(captured, current []DNStore) bool {
-	if len(captured) == 0 || len(captured) != len(current) {
-		return false
-	}
-
-	currentByID := make(map[string]DNStore, len(current))
-	for _, store := range current {
-		if store.ServiceID == "" ||
-			!store.AutoIncrEpochFenceSupported ||
-			store.AutoIncrEpochFenceGeneration == "" {
-			return false
-		}
-		if _, exists := currentByID[store.ServiceID]; exists {
-			return false
-		}
-		currentByID[store.ServiceID] = store
-	}
-
-	capturedIDs := make(map[string]struct{}, len(captured))
-	for _, store := range captured {
-		if store.ServiceID == "" ||
-			!store.AutoIncrEpochFenceSupported ||
-			store.AutoIncrEpochFenceGeneration == "" {
-			return false
-		}
-		if _, exists := capturedIDs[store.ServiceID]; exists {
-			return false
-		}
-		capturedIDs[store.ServiceID] = struct{}{}
-		live, ok := currentByID[store.ServiceID]
-		if !ok || live.AutoIncrEpochFenceGeneration != store.AutoIncrEpochFenceGeneration {
+	for _, store := range txn.tnStores {
+		if !store.AutoIncrEpochFenceSupported {
 			return false
 		}
 	}

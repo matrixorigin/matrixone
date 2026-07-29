@@ -145,7 +145,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 			if handler != nil {
 				requests[idx].RequestID = 0
 				s.handleLocalRequest(ctx, handler, &requests[idx], sr, idx)
-				if requests[idx].Method == txn.TxnMethod_Commit {
+				if requests[idx].Method.IsCommit() {
 					commitResponsesPending++
 					commitTxnID = requests[idx].Txn.ID
 				}
@@ -167,7 +167,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		requests[idx].RequestID = st.ID()
 		if err := st.Send(ctx, &requests[idx]); err != nil {
 			sr.Release()
-			if requests[idx].Method == txn.TxnMethod_Commit {
+			if requests[idx].Method.IsCommit() {
 				// Stream.Send waits for the backend write/flush completion. A
 				// failure here can therefore be reported after part or all of the
 				// Commit reached TN; it is not proof that Commit was not sent.
@@ -175,7 +175,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 			}
 			return nil, err
 		}
-		if requests[idx].Method == txn.TxnMethod_Commit {
+		if requests[idx].Method.IsCommit() {
 			commitResponsesPending++
 			commitTxnID = requests[idx].Txn.ID
 		}
@@ -183,7 +183,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 
 	for idx := range requests {
 		if sr.localHandlers[requests[idx].GetTargetTN().ShardID] != nil {
-			if requests[idx].Method == txn.TxnMethod_Commit {
+			if requests[idx].Method.IsCommit() {
 				commitResponsesPending--
 			}
 			continue
@@ -213,7 +213,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		resp := v.(*txn.TxnResponse)
 		sr.setResponse(resp, idx)
 		s.releaseResponse(resp)
-		if requests[idx].Method == txn.TxnMethod_Commit {
+		if requests[idx].Method.IsCommit() {
 			commitResponsesPending--
 		}
 	}
@@ -303,7 +303,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		// Once morpc accepted a Commit and returned a Future, a transport or
 		// response-wait error cannot prove whether TN applied it. This includes a
 		// context deadline after the request was written, not only EOF/reset.
-		if request.Method == txn.TxnMethod_Commit {
+		if request.Method.IsCommit() {
 			return txn.TxnResponse{}, newTxnUnknownError(ctx, request.Txn.ID)
 		}
 		// if the error is io.EOF or "connection is reset by peer",

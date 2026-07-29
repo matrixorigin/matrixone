@@ -531,12 +531,6 @@ func updateRelationAutoIncrement(
 		if err := incrservice.ValidateAutoColumnOffset(ctx, typs[col.ColIndex].Oid, offset); err != nil {
 			return err
 		}
-		if !engine.TxnSupportsAutoIncrEpochFence(proc.GetTxnOperator()) {
-			return moerr.NewNotSupported(
-				ctx,
-				"AUTO_INCREMENT allocator reset requires epoch fencing on every TN service",
-			)
-		}
 		return proc.GetIncrService().SetOffset(
 			ctx,
 			tableID,

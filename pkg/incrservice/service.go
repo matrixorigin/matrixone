@@ -332,6 +332,9 @@ func (s *service) SetOffset(
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
+	if txnOp != nil && !client.RequireAutoIncrEpochFenceCommit(txnOp) {
+		return moerr.NewNotSupported(ctx, "transaction operator cannot enforce AUTO_INCREMENT epochs")
+	}
 	var (
 		txnKey           string
 		ownedCreate      bool

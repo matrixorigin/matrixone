@@ -222,6 +222,22 @@ type RunSQLAdmissionOperator interface {
 	TryEnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) (uint64, error)
 }
 
+// AutoIncrEpochFenceCommitter is an additive transaction capability used by
+// epoch-aware workspaces to require the V6-only terminal commit method.
+type AutoIncrEpochFenceCommitter interface {
+	RequireAutoIncrEpochFenceCommit()
+}
+
+// RequireAutoIncrEpochFenceCommit marks the transaction and reports whether
+// the operator can provide the V6 terminal-commit contract.
+func RequireAutoIncrEpochFenceCommit(op TxnOperator) bool {
+	if committer, ok := op.(AutoIncrEpochFenceCommitter); ok {
+		committer.RequireAutoIncrEpochFenceCommit()
+		return true
+	}
+	return false
+}
+
 // TryEnterRunSqlWithTokenAndSQL admits one SQL execution using the richer
 // capability when available and preserves the legacy contract otherwise.
 // A legacy TxnOperator has no error channel and therefore cannot reject SQL
