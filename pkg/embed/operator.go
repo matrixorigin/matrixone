@@ -417,17 +417,26 @@ func (op *operator) setupGossip() error {
 func (op *operator) waitClusterConditionLocked(
 	waitFunc func(logservice.CNHAKeeperClient) error,
 ) error {
-	client, err := op.waitHAKeeperReadyLocked()
+	return op.waitClusterConditionWithClientFactory(
+		op.waitHAKeeperReadyLocked,
+		waitFunc,
+	)
+}
+
+func (op *operator) waitClusterConditionWithClientFactory(
+	getClient func() (logservice.CNHAKeeperClient, error),
+	waitFunc func(logservice.CNHAKeeperClient) error,
+) error {
+	client, err := getClient()
 	if err != nil {
 		return err
 	}
-	if err := waitFunc(client); err != nil {
-		return err
-	}
-	if err := client.Close(); err != nil {
-		op.reset.logger.Error("close hakeeper client failed", zap.Error(err))
-	}
-	return nil
+	defer func() {
+		if err := client.Close(); err != nil {
+			op.reset.logger.Error("close hakeeper client failed", zap.Error(err))
+		}
+	}()
+	return waitFunc(client)
 }
 
 func (op *operator) waitHAKeeperRunningLocked(
