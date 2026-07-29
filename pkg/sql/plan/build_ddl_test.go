@@ -158,9 +158,9 @@ func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
 	require.NotNil(t, createTable)
 	require.NotEmpty(t, createTable.IndexTables)
 
-	tableDefs := append([]*plan.TableDef{createTable.TableDef}, createTable.IndexTables...)
-	for _, tableDef := range tableDefs {
-		requireTemporaryCatalogRelkind(t, tableDef)
+	requireTemporaryCatalogRelkind(t, createTable.TableDef)
+	for _, tableDef := range createTable.IndexTables {
+		requireIndexCatalogRelkind(t, tableDef)
 	}
 
 	var createSQL string
@@ -174,7 +174,7 @@ func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
 	require.Equal(t, rootSQL, createSQL)
 }
 
-func TestBuildTemporaryTableIndexDDLMarksCatalogRelkind(t *testing.T) {
+func TestBuildTemporaryTableIndexDDLKeepsIndexRelkind(t *testing.T) {
 	tests := []struct {
 		name        string
 		sql         string
@@ -211,10 +211,27 @@ func TestBuildTemporaryTableIndexDDLMarksCatalogRelkind(t *testing.T) {
 			indexTables := test.indexTables(p)
 			require.NotEmpty(t, indexTables)
 			for _, tableDef := range indexTables {
-				requireTemporaryCatalogRelkind(t, tableDef)
+				requireIndexCatalogRelkind(t, tableDef)
 			}
 		})
 	}
+}
+
+func requireIndexCatalogRelkind(t *testing.T, tableDef *plan.TableDef) {
+	t.Helper()
+	require.NotEqual(t, catalog.SystemTemporaryTable, tableDef.TableType)
+	require.False(t, tableDef.IsTemporary)
+
+	kindCount := 0
+	for _, def := range tableDef.Defs {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.Key == catalog.SystemRelAttr_Kind {
+				kindCount++
+				require.Equal(t, catalog.SystemIndexRel, property.Value)
+			}
+		}
+	}
+	require.Equal(t, 1, kindCount)
 }
 
 func requireTemporaryCatalogRelkind(t *testing.T, tableDef *plan.TableDef) {

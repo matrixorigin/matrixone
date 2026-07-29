@@ -1166,7 +1166,6 @@ func buildCreateTable(
 
 	if stmt.Temporary {
 		catalog.MarkTableDefTemporary(createTable.TableDef)
-		markTemporaryIndexTables(createTable.TableDef, createTable)
 	}
 	if !isPrepareStmt {
 		asSelectQuery = nil
@@ -2117,15 +2116,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 	}
 	return nil
-}
-
-func markTemporaryIndexTables(parent *plan.TableDef, indexInfo *plan.CreateTable) {
-	if parent == nil || indexInfo == nil || (!parent.IsTemporary && parent.TableType != catalog.SystemTemporaryTable) {
-		return
-	}
-	for _, tableDef := range indexInfo.IndexTables {
-		catalog.MarkTableDefTemporary(tableDef)
-	}
 }
 
 // buildIndexAlgoParams converts the parsed CREATE INDEX options into the
@@ -3241,7 +3231,6 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	createIndex.Index = indexInfo
 	createIndex.Table = tableName
 	createIndex.TableDef = tableDef
-	markTemporaryIndexTables(tableDef, indexInfo)
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -3769,7 +3758,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				); err != nil {
 					return nil, err
 				}
-				markTemporaryIndexTables(tableDef, indexInfo)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
@@ -3827,7 +3815,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				); err != nil {
 					return nil, err
 				}
-				markTemporaryIndexTables(tableDef, indexInfo)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
@@ -3887,7 +3874,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				); err != nil {
 					return nil, err
 				}
-				markTemporaryIndexTables(tableDef, indexInfo)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{

@@ -15,6 +15,8 @@
 package catalog
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -141,7 +143,7 @@ func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 
 			require.Contains(t, got, test.relKind+" = '"+SystemTemporaryTable+"'")
 			require.Contains(t, got, test.relKind+" = '"+SystemOrdinaryRel+"'")
-			require.Contains(t, got, "lower(ltrim(coalesce("+test.createSQL+", ''))) like 'create temporary table%'")
+			require.Contains(t, got, "lower(coalesce("+test.createSQL+", '')) regexp '"+legacyTemporaryTableCreateSQLRegexp+"'")
 			require.Contains(t, got, "coalesce("+test.relKind+", '') not in (")
 			for _, kind := range []string{
 				SystemOrdinaryRel,
@@ -156,6 +158,28 @@ func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 				require.Contains(t, got, "'"+kind+"'")
 			}
 			require.Contains(t, got, test.relName+" regexp '"+legacyTemporaryTableNameRegexp+"'")
+		})
+	}
+}
+
+func TestLegacyTemporaryTableCreateSQLRegexp(t *testing.T) {
+	pattern := regexp.MustCompile(legacyTemporaryTableCreateSQLRegexp)
+	tests := []struct {
+		name      string
+		createSQL string
+		wantMatch bool
+	}{
+		{name: "canonical", createSQL: "CREATE TEMPORARY TABLE t (id int)", wantMatch: true},
+		{name: "newline between keywords", createSQL: "CREATE TEMPORARY\nTABLE t (id int)", wantMatch: true},
+		{name: "multiple spaces", createSQL: "CREATE  TEMPORARY   TABLE t (id int)", wantMatch: true},
+		{name: "tabs and leading whitespace", createSQL: "\t\nCREATE\tTEMPORARY \tTABLE t (id int)", wantMatch: true},
+		{name: "ordinary table", createSQL: "CREATE TABLE __mo_tmp_customer (id int)"},
+		{name: "temporary tables token", createSQL: "CREATE TEMPORARY TABLES t (id int)"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.wantMatch, pattern.MatchString(strings.ToLower(test.createSQL)))
 		})
 	}
 }

@@ -458,7 +458,7 @@ func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
 	if !strings.Contains(sql, "relkind = 'temporary_table'") {
 		t.Fatalf("temporary tables were not filtered by catalog marker: %s", sql)
 	}
-	if !strings.Contains(sql, "lower(ltrim(coalesce(rel_createsql, ''))) like 'create temporary table%'") {
+	if !strings.Contains(sql, "lower(coalesce(rel_createsql, '')) regexp '^[[:space:]]*create[[:space:]]+temporary[[:space:]]+table([[:space:]]|$)'") {
 		t.Fatalf("legacy temporary base tables were not filtered by CREATE SQL: %s", sql)
 	}
 	if !strings.Contains(sql, "coalesce(relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and relname regexp '^__mo_tmp_[0-9a-f]{32}_'") {

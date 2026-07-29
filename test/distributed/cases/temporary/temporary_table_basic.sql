@@ -377,14 +377,16 @@ from information_schema.tables
 where table_schema = database()
 order by table_name;
 
--- 临时对象必须使用持久化的 catalog 标记；普通前缀表仍保持 ordinary relkind
+-- 临时基表必须使用持久化的 catalog 标记；内部索引保留 index relkind；普通前缀表仍保持 ordinary relkind
 select relname, relkind
 from mo_catalog.mo_tables
 where reldatabase = database()
   and relname in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
 order by relname;
 select count(*) > 0 as has_temp_objects,
-	   count(*) = sum(if(relkind = 'temporary_table', 1, 0)) as all_temp_objects_marked
+	   sum(if(relkind = 'temporary_table', 1, 0)) = 1 as temp_base_marked,
+	   sum(if(relkind = 'i', 1, 0)) > 0 as temp_indexes_keep_relkind,
+	   count(*) = sum(if(relkind in ('temporary_table', 'i'), 1, 0)) as all_temp_objects_classified
 from mo_catalog.mo_tables
 where reldatabase = database()
   and left(relname, 9) = '__mo_tmp_'

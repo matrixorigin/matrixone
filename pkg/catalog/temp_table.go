@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	legacyTemporaryTableNameRegexp = `^__mo_tmp_[0-9a-f]{32}_`
-	userVisibleRelationKindsSQL    = "'" + SystemOrdinaryRel + "', '" + SystemViewRel + "', '" + SystemExternalRel + "', '" + SystemMaterializedRel + "', '" + SystemSourceRel + "', '" + SystemClusterRel + "', '" + SystemPartitionRel + "', '" + SystemSequenceRel + "'"
+	legacyTemporaryTableNameRegexp      = `^__mo_tmp_[0-9a-f]{32}_`
+	legacyTemporaryTableCreateSQLRegexp = `^[[:space:]]*create[[:space:]]+temporary[[:space:]]+table([[:space:]]|$)`
+	userVisibleRelationKindsSQL         = "'" + SystemOrdinaryRel + "', '" + SystemViewRel + "', '" + SystemExternalRel + "', '" + SystemMaterializedRel + "', '" + SystemSourceRel + "', '" + SystemClusterRel + "', '" + SystemPartitionRel + "', '" + SystemSequenceRel + "'"
 )
 
 // NonTemporaryTableSQLPredicate returns the catalog predicate used to exclude
@@ -47,12 +48,13 @@ func NonTemporaryTableSQLPredicate(alias string) string {
 	createSQL := prefix + SystemRelAttr_CreateSQL
 
 	return fmt.Sprintf(
-		"not (%s = '%s' or (%s = '%s' and lower(ltrim(coalesce(%s, ''))) like 'create temporary table%%') or (coalesce(%s, '') not in (%s) and %s regexp '%s'))",
+		"not (%s = '%s' or (%s = '%s' and lower(coalesce(%s, '')) regexp '%s') or (coalesce(%s, '') not in (%s) and %s regexp '%s'))",
 		relKind,
 		SystemTemporaryTable,
 		relKind,
 		SystemOrdinaryRel,
 		createSQL,
+		legacyTemporaryTableCreateSQLRegexp,
 		relKind,
 		userVisibleRelationKindsSQL,
 		relName,

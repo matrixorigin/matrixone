@@ -33,24 +33,11 @@ const (
 	Rows = 10
 )
 
-func TestGetTableDefRestoresTemporaryFlag(t *testing.T) {
-	tests := []struct {
-		name          string
-		kind          string
-		wantTemporary bool
-	}{
-		{name: "temporary", kind: catalog.SystemTemporaryTable, wantTemporary: true},
-		{name: "ordinary", kind: catalog.SystemOrdinaryRel},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			tableDef, _ := getTableDef(&TableItem{Kind: test.kind}, nil)
-			require.NotNil(t, tableDef)
-			require.Equal(t, test.kind, tableDef.TableType)
-			require.Equal(t, test.wantTemporary, tableDef.IsTemporary)
-		})
-	}
+func TestGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
+	tableDef, _ := getTableDef(&TableItem{Kind: catalog.SystemTemporaryTable}, nil)
+	require.NotNil(t, tableDef)
+	require.Equal(t, catalog.SystemTemporaryTable, tableDef.TableType)
+	require.False(t, tableDef.IsTemporary)
 }
 
 func TestCatalogCacheConcurrentGC(t *testing.T) {

@@ -318,13 +318,15 @@ order by relname;
 __mo_tmp_0123456789abcdef0123456789abcdef_customer  ¦  r  𝄀
 __mo_tmp_customer  ¦  r
 select count(*) > 0 as has_temp_objects,
-count(*) = sum(if(relkind = 'temporary_table', 1, 0)) as all_temp_objects_marked
+sum(if(relkind = 'temporary_table', 1, 0)) = 1 as temp_base_marked,
+sum(if(relkind = 'i', 1, 0)) > 0 as temp_indexes_keep_relkind,
+count(*) = sum(if(relkind in ('temporary_table', 'i'), 1, 0)) as all_temp_objects_classified
 from mo_catalog.mo_tables
 where reldatabase = database()
 and left(relname, 9) = '__mo_tmp_'
 and relname not in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer');
-➤ has_temp_objects[-7,1,0]  ¦  all_temp_objects_marked[-7,1,0]  𝄀
-1  ¦  1
+➤ has_temp_objects[-7,1,0]  ¦  temp_base_marked[-7,1,0]  ¦  temp_indexes_keep_relkind[-7,1,0]  ¦  all_temp_objects_classified[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
 select distinct table_name from information_schema.columns
 where table_schema = database()
 and table_name in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
