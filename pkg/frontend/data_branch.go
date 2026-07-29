@@ -759,6 +759,8 @@ func diffMergeAgency(
 		}
 	}
 
+	defer tblStuff.worker.Release()
+
 	if dagInfo, err = decideLCABranchTSFromBranchDAG(
 		ctx, ses, bh, tblStuff,
 	); err != nil {
