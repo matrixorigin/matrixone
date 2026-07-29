@@ -49,6 +49,7 @@ type compilerContext struct {
 	dbOfView, nameOfView string
 	sql                  string
 	mu                   sync.Mutex
+	sub                  *plan.SubscriptionMeta
 
 	lower int64
 }
@@ -100,11 +101,15 @@ func (c *compilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 }
 
 func (c *compilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
-	panic("not supported in internal sql executor")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sub = meta
 }
 
 func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
-	return nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sub
 }
 
 func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
@@ -185,7 +190,14 @@ func (c *compilerContext) GetStatsCache() *plan.StatsCache {
 }
 
 func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snapshot) (*plan.SubscriptionMeta, error) {
-	return nil, nil
+	if plan.IsSnapshotValid(snapshot) {
+		return nil, moerr.NewNYI(c.ctx, "subscription metadata at snapshot in internal sql executor")
+	}
+	helper := c.proc.GetSessionInfo().SqlHelper
+	if helper == nil {
+		return nil, nil
+	}
+	return helper.GetSubscriptionMeta(dbName)
 }
 
 func (c *compilerContext) GetProcess() *process.Process {

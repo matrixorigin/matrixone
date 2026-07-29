@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1098,8 +1099,15 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 
 func (s *Scope) doAlterTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	sourceAccountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	sourceLogicalID := qry.GetTableDef().GetLogicalId()
+	if sourceLogicalID == 0 {
+		sourceLogicalID = qry.GetTableDef().GetTblId()
+	}
 
-	var err error
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		// COPY ALTER transfers mo_foreign_keys around the source-table drop,
 		// so its catalog statements are executed inside AlterTableCopy.
@@ -1120,6 +1128,8 @@ func (s *Scope) doAlterTable(c *Compile) error {
 		}
 		return refreshViewMetadataAfterAlter(
 			c,
+			sourceAccountID,
+			sourceLogicalID,
 			qry.GetTableDef().GetTblId(),
 			relation.GetTableID(c.proc.Ctx),
 			qry.GetTableDef().GetName(),
@@ -1140,38 +1150,68 @@ func (s *Scope) doAlterTable(c *Compile) error {
 			}
 		}
 	}
-	return nil
+	return refreshViewMetadataAfterAlter(
+		c,
+		sourceAccountID,
+		sourceLogicalID,
+		qry.GetTableDef().GetTblId(),
+		qry.GetTableDef().GetTblId(),
+		qry.GetTableDef().GetName(),
+	)
 }
 
 type viewMetadataRefresh struct {
-	id       uint64
-	database string
-	name     string
-	viewData plan2.ViewData
+	accountID uint32
+	id        uint64
+	database  string
+	name      string
+	viewData  plan2.ViewData
+	skip      bool
 }
 
 type viewMetadataRefreshContext struct {
+	sourceAccountID      uint32
+	sourceLogicalID      uint64
 	currentSourceTableID uint64
 }
+
+type viewMetadataRefreshPlanError struct {
+	err error
+}
+
+func (e *viewMetadataRefreshPlanError) Error() string {
+	return e.err.Error()
+}
+
+func (e *viewMetadataRefreshPlanError) Unwrap() error {
+	return e.err
+}
+
+const maxViewsPerMetadataRefresh = 1024
 
 func isViewMetadataRefresh(ctx context.Context) bool {
 	if ctx == nil {
 		return false
 	}
 	refresh, _ := ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext)
-	return refresh.currentSourceTableID != 0
+	return refresh.sourceLogicalID != 0 || refresh.currentSourceTableID != 0
 }
 
 func refreshViewMetadataAfterAlter(
 	c *Compile,
+	sourceAccountID uint32,
+	sourceLogicalID uint64,
 	previousSourceTableID uint64,
 	currentSourceTableID uint64,
 	sourceTable string,
 ) error {
 	var afterViewID uint64
+	var refreshedViews int
 	for {
 		views, err := loadViewMetadataRefreshPage(
 			c,
+			sourceAccountID,
+			sourceLogicalID,
 			previousSourceTableID,
 			sourceTable,
 			afterViewID,
@@ -1184,6 +1224,13 @@ func refreshViewMetadataAfterAlter(
 		}
 		for _, view := range views {
 			afterViewID = view.id
+			if view.skip {
+				continue
+			}
+			refreshedViews++
+			if err := checkViewMetadataRefreshLimit(c.proc.Ctx, refreshedViews); err != nil {
+				return err
+			}
 			sql, err := buildRefreshViewSQL(c.proc.Ctx, c.getLower(), view)
 			if err != nil {
 				logutil.Warn("skip refreshing view that cannot be parsed",
@@ -1203,8 +1250,13 @@ func refreshViewMetadataAfterAlter(
 			c.proc.Ctx = context.WithValue(
 				refreshCtx,
 				defines.ViewMetadataRefreshKey{},
-				viewMetadataRefreshContext{currentSourceTableID: currentSourceTableID},
+				viewMetadataRefreshContext{
+					sourceAccountID:      sourceAccountID,
+					sourceLogicalID:      sourceLogicalID,
+					currentSourceTableID: currentSourceTableID,
+				},
 			)
+			c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, view.accountID)
 			err = runViewMetadataRefreshSQL(c, sql, view.viewData)
 			c.proc.Ctx = oldCtx
 			if err != nil {
@@ -1220,32 +1272,37 @@ func refreshViewMetadataAfterAlter(
 	}
 }
 
+func checkViewMetadataRefreshLimit(ctx context.Context, count int) error {
+	if count <= maxViewsPerMetadataRefresh {
+		return nil
+	}
+	return moerr.NewInvalidInputf(
+		ctx,
+		"alter table affects more than %d dependent views",
+		maxViewsPerMetadataRefresh,
+	)
+}
+
 func loadViewMetadataRefreshPage(
 	c *Compile,
+	sourceAccountID uint32,
+	sourceLogicalID uint64,
 	sourceTableID uint64,
 	sourceTable string,
 	afterViewID uint64,
 ) ([]viewMetadataRefresh, error) {
 	const pageSize = 128
-	legacyCandidate := strings.ReplaceAll(sourceTable, "'", "''")
-	sql := fmt.Sprintf(
-		"select rel_id, reldatabase, relname, viewdef from %s.mo_tables "+
-			"where account_id = current_account_id() and relkind = '%s' "+
-			"and reldatabase not in ('%s', '%s') and rel_id > %d "+
-			"and ((viewdef not like '%%\\\"dependencies\\\":%%' and viewdef like '%%%s%%') "+
-			"or viewdef like '%%\\\"table_id\\\":%d,%%') order by rel_id limit %d",
-		catalog.MO_CATALOG,
-		catalog.SystemViewRel,
-		catalog.MO_CATALOG,
-		"information_schema",
-		afterViewID,
-		legacyCandidate,
+	sql := buildViewMetadataRefreshQuery(
+		sourceAccountID,
+		sourceLogicalID,
 		sourceTableID,
+		sourceTable,
+		afterViewID,
 		pageSize,
 	)
 	result, err := c.runSqlWithResultAndOptions(
 		sql,
-		NoAccountId,
+		int32(catalog.System_Account),
 		executor.StatementOption{}.WithDisableLog(),
 	)
 	if err != nil {
@@ -1256,10 +1313,11 @@ func loadViewMetadataRefreshPage(
 
 	views := make([]viewMetadataRefresh, 0, pageSize)
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		ids := executor.GetFixedRows[uint64](cols[0])
-		databases := executor.GetStringRows(cols[1])
-		names := executor.GetStringRows(cols[2])
-		definitions := executor.GetStringRows(cols[3])
+		accountIDs := executor.GetFixedRows[uint32](cols[0])
+		ids := executor.GetFixedRows[uint64](cols[1])
+		databases := executor.GetStringRows(cols[2])
+		names := executor.GetStringRows(cols[3])
+		definitions := executor.GetStringRows(cols[4])
 		for i := 0; i < rows; i++ {
 			var viewData plan2.ViewData
 			if err := json.Unmarshal([]byte(definitions[i]), &viewData); err != nil {
@@ -1268,22 +1326,70 @@ func loadViewMetadataRefreshPage(
 					zap.String("view", names[i]),
 					zap.Error(err))
 				views = append(views, viewMetadataRefresh{
-					id:       ids[i],
-					database: databases[i],
-					name:     names[i],
+					accountID: accountIDs[i],
+					id:        ids[i],
+					database:  databases[i],
+					name:      names[i],
+					skip:      true,
 				})
 				continue
 			}
 			views = append(views, viewMetadataRefresh{
-				id:       ids[i],
-				database: databases[i],
-				name:     names[i],
-				viewData: viewData,
+				accountID: accountIDs[i],
+				id:        ids[i],
+				database:  databases[i],
+				name:      names[i],
+				viewData:  viewData,
+				skip:      viewUsesSnapshot(viewData),
 			})
 		}
 		return true
 	})
 	return views, nil
+}
+
+func buildViewMetadataRefreshQuery(
+	sourceAccountID uint32,
+	sourceLogicalID uint64,
+	sourceTableID uint64,
+	sourceTable string,
+	afterViewID uint64,
+	pageSize int,
+) string {
+	legacyCandidate := sqlquote.String(sourceTable)
+	return fmt.Sprintf(
+		"select account_id, rel_id, reldatabase, relname, viewdef from %s.mo_tables "+
+			"where relkind = '%s' "+
+			"and reldatabase not in ('%s', '%s') and rel_id > %d "+
+			"and ((account_id = %d and viewdef not like '%%\\\"dependencies\\\":%%' "+
+			"and instr(viewdef, %s) > 0) "+
+			"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
+			"and viewdef like '%%\\\"logical_id\\\":%d,%%') "+
+			"or (account_id = %d "+
+			"and viewdef like '%%\\\"table_id\\\":%d,%%' "+
+			"and viewdef not like '%%\\\"logical_id\\\":%%')) order by rel_id limit %d",
+		catalog.MO_CATALOG,
+		catalog.SystemViewRel,
+		catalog.MO_CATALOG,
+		"information_schema",
+		afterViewID,
+		sourceAccountID,
+		legacyCandidate,
+		sourceAccountID,
+		sourceLogicalID,
+		sourceAccountID,
+		sourceTableID,
+		pageSize,
+	)
+}
+
+func viewUsesSnapshot(viewData plan2.ViewData) bool {
+	for _, dependency := range viewData.Dependencies {
+		if dependency.Snapshot {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(viewData.Stmt), "{snapshot")
 }
 
 func runViewMetadataRefreshSQL(c *Compile, sql string, viewData plan2.ViewData) error {
@@ -1318,12 +1424,18 @@ func runViewMetadataRefreshSQL(c *Compile, sql string, viewData plan2.ViewData) 
 }
 
 func canSkipViewMetadataRefreshError(err error) bool {
-	code, ok := moerr.GetMoErrCode(err)
+	var planErr *viewMetadataRefreshPlanError
+	if !errors.As(err, &planErr) {
+		return false
+	}
+	code, ok := moerr.GetMoErrCode(planErr.err)
 	if !ok {
 		return false
 	}
 	switch code {
-	case moerr.ErrParseError,
+	case moerr.ErrInvalidInput,
+		moerr.ErrConstraintViolation,
+		moerr.ErrParseError,
 		moerr.ErrBadFieldError,
 		moerr.ErrOperandColumns,
 		moerr.ErrViewWrongList,

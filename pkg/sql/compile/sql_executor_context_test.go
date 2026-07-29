@@ -75,11 +75,6 @@ func Test_panic(t *testing.T) {
 
 	func() {
 		defer r()
-		c.SetQueryingSubscription(nil)
-	}()
-
-	func() {
-		defer r()
 		_, _ = c.ResolveUdf("", nil)
 	}()
 
@@ -92,6 +87,15 @@ func Test_panic(t *testing.T) {
 		defer r()
 		_, _, _ = c.GetQueryResultMeta("")
 	}()
+}
+
+func TestCompilerContextQueryingSubscription(t *testing.T) {
+	c := &compilerContext{}
+	meta := &plan.SubscriptionMeta{}
+
+	c.SetQueryingSubscription(meta)
+
+	require.Same(t, meta, c.GetQueryingSubscription())
 }
 
 func TestCompilerContext_Database(t *testing.T) {

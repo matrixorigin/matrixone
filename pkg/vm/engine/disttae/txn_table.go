@@ -1802,7 +1802,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	//------------------------------------------------------------------------------------------------------------------
 	// 1. delete old table metadata
 	var preservedIdentity preservedTableIdentity
-	if hasReplaceDef && tbl.relKind == catalog.SystemViewRel {
+	preserveViewIdentity := hasReplaceDef &&
+		tbl.relKind == catalog.SystemViewRel &&
+		ctx.Value(defines.ViewMetadataRefreshKey{}) != nil
+	if preserveViewIdentity {
 		sql := fmt.Sprintf(
 			"select created_time, creator, owner from %s.%s where account_id = %d and rel_id = %d",
 			catalog.MO_CATALOG,
@@ -1833,7 +1836,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	tbl.RefeshTableDef(ctx)
 
 	ctx = context.WithValue(ctx, defines.LogicalIdKey{}, tbl.logicalId)
-	if hasReplaceDef && tbl.relKind == catalog.SystemViewRel {
+	if preserveViewIdentity {
 		ctx = context.WithValue(ctx, preservedTableIdentityKey{}, preservedIdentity)
 	}
 

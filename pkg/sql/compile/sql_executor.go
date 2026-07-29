@@ -355,6 +355,9 @@ func (exec *txnExecutor) Exec(
 		}
 	}()
 	if err != nil {
+		if exec.ctx.Value(defines.ViewMetadataRefreshKey{}) != nil {
+			err = &viewMetadataRefreshPlanError{err: err}
+		}
 		return executor.Result{}, err
 	}
 

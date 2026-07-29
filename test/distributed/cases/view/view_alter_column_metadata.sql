@@ -8,9 +8,10 @@ create table source_t (
     id int primary key,
     code varchar(5) not null unique,
     qty int not null default 1,
-    price decimal(10, 2) not null
+    price decimal(10, 2) not null,
+    unused_col int
 );
-insert into source_t values (1, 'short', 2, 1.25);
+insert into source_t values (1, 'short', 2, 1.25, 1);
 
 create view v_source_t as
 select id, code, qty, price, qty * price as total from source_t;
@@ -20,6 +21,17 @@ select code, price from source_t;
 create table invalid_source (a int);
 create view invalid_view as select a from invalid_source;
 drop table invalid_source;
+
+create table ambiguity_left (a int);
+create table ambiguity_right (b int);
+create view ambiguity_view as
+select a from ambiguity_left, ambiguity_right;
+alter table ambiguity_right rename column b to a;
+desc ambiguity_right;
+alter table ambiguity_right rename column a to b;
+-- @ignore:5,6
+desc ambiguity_view;
+
 create table original_view_metadata as
 select relname, rel_id, creator, owner, created_time
 from mo_catalog.mo_tables
@@ -27,12 +39,19 @@ where reldatabase in ('view_alter_column_metadata', 'view_alter_column_metadata_
   and relname in ('v_source_t', 'v_nested', 'v_cross');
 
 use view_alter_column_metadata_cross;
+alter table view_alter_column_metadata.source_t modify column unused_col bigint;
 alter table view_alter_column_metadata.source_t modify column code varchar(60) not null;
+-- @ignore:5,6
+desc view_alter_column_metadata.v_source_t;
 alter table view_alter_column_metadata.source_t change column qty qty bigint not null default 1;
+-- @ignore:5,6
+desc view_alter_column_metadata.v_source_t;
 alter table view_alter_column_metadata.source_t modify column price decimal(20, 5) not null;
+-- @ignore:5,6
+desc view_alter_column_metadata.v_source_t;
 
 insert into view_alter_column_metadata.source_t values
-    (2, 'this-code-is-longer-than-five-characters', 5000000000, 12345.67891);
+    (2, 'this-code-is-longer-than-five-characters', 5000000000, 12345.67891, 2);
 
 select id, code, qty, price, total from view_alter_column_metadata.v_source_t order by id;
 -- @ignore:5,6

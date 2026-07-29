@@ -7,9 +7,10 @@ create table source_t (
 id int primary key,
 code varchar(5) not null unique,
 qty int not null default 1,
-price decimal(10, 2) not null
+price decimal(10, 2) not null,
+unused_col int
 );
-insert into source_t values (1, 'short', 2, 1.25);
+insert into source_t values (1, 'short', 2, 1.25, 1);
 create view v_source_t as
 select id, code, qty, price, qty * price as total from source_t;
 create view v_nested as select code, qty, total from v_source_t;
@@ -18,17 +19,51 @@ select code, price from source_t;
 create table invalid_source (a int);
 create view invalid_view as select a from invalid_source;
 drop table invalid_source;
+create table ambiguity_left (a int);
+create table ambiguity_right (b int);
+create view ambiguity_view as
+select a from ambiguity_left, ambiguity_right;
+alter table ambiguity_right rename column b to a;
+desc ambiguity_right;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
+alter table ambiguity_right rename column a to b;
+desc ambiguity_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 create table original_view_metadata as
 select relname, rel_id, creator, owner, created_time
 from mo_catalog.mo_tables
 where reldatabase in ('view_alter_column_metadata', 'view_alter_column_metadata_cross')
 and relname in ('v_source_t', 'v_nested', 'v_cross');
 use view_alter_column_metadata_cross;
+alter table view_alter_column_metadata.source_t modify column unused_col bigint;
 alter table view_alter_column_metadata.source_t modify column code varchar(60) not null;
+desc view_alter_column_metadata.v_source_t;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+qty  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+price  ¦  DECIMAL(10,2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+total  ¦  DECIMAL(38,2)  ¦  NO  ¦    ¦  null  ¦    ¦
 alter table view_alter_column_metadata.source_t change column qty qty bigint not null default 1;
+desc view_alter_column_metadata.v_source_t;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+price  ¦  DECIMAL(10,2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+total  ¦  DECIMAL(38,2)  ¦  NO  ¦    ¦  null  ¦    ¦
 alter table view_alter_column_metadata.source_t modify column price decimal(20, 5) not null;
+desc view_alter_column_metadata.v_source_t;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+price  ¦  DECIMAL(20,5)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+total  ¦  DECIMAL(38,5)  ¦  NO  ¦    ¦  null  ¦    ¦
 insert into view_alter_column_metadata.source_t values
-(2, 'this-code-is-longer-than-five-characters', 5000000000, 12345.67891);
+(2, 'this-code-is-longer-than-five-characters', 5000000000, 12345.67891, 2);
 select id, code, qty, price, total from view_alter_column_metadata.v_source_t order by id;
 ➤ id[4,32,0]  ¦  code[12,-1,0]  ¦  qty[-5,64,0]  ¦  price[3,20,5]  ¦  total[3,38,5]  𝄀
 1  ¦  short  ¦  2  ¦  1.25000  ¦  2.50000  𝄀

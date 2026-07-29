@@ -235,8 +235,14 @@ type ViewData struct {
 }
 
 type ViewDependency struct {
-	TableID uint64 `json:"table_id"`
-	Version uint32 `json:"version"`
+	AccountID      uint32 `json:"account_id"`
+	AccountIDSet   bool   `json:"account_id_set,omitempty"`
+	TableID        uint64 `json:"table_id"`
+	LogicalID      uint64 `json:"logical_id,omitempty"`
+	Version        uint32 `json:"version"`
+	Snapshot       bool   `json:"snapshot,omitempty"`
+	Subscription   bool   `json:"subscription,omitempty"`
+	SubscriptionDB string `json:"subscription_db,omitempty"`
 }
 
 type QueryBuilder struct {

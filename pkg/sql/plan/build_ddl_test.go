@@ -104,6 +104,40 @@ func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
 	require.Equal(t, rootSQL, createSQL)
 }
 
+func TestGenViewTableDefCapturesDependencyIdentity(t *testing.T) {
+	const rootSQL = "create view tpch.v_dep as select n_name from tpch.nation"
+	mockCtx := NewMockCompilerContext(false)
+	mockCtx.GetAccountIdFunc = func() (uint32, error) {
+		return 7, nil
+	}
+	mockCtx.objects["nation"].Obj = 42
+	mockCtx.tables["nation"].TblId = 42
+	mockCtx.tables["nation"].LogicalId = 41
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: mockCtx,
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(p.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()),
+		&viewData,
+	))
+	require.Len(t, viewData.Dependencies, 1)
+	dependency := viewData.Dependencies[0]
+	require.Equal(t, uint32(7), dependency.AccountID)
+	require.True(t, dependency.AccountIDSet)
+	require.NotZero(t, dependency.TableID)
+	require.NotZero(t, dependency.LogicalID)
+	require.False(t, dependency.Snapshot)
+	require.False(t, dependency.Subscription)
+}
+
 func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 	t.Run("applies explicit names", func(t *testing.T) {
 		const rootSQL = "create view v (`alias#one`, alias_two) as select 1, 2"

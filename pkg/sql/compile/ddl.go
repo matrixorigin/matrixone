@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -465,25 +464,35 @@ func (s *Scope) AlterView(c *Compile) error {
 		var refreshedViewData plan2.ViewData
 		if replaceDef.GetViewSql() == nil ||
 			json.Unmarshal([]byte(replaceDef.GetViewSql().GetView()), &refreshedViewData) != nil ||
-			!viewDependsOnTable(refreshedViewData.Dependencies, refresh.currentSourceTableID) {
+			!viewDependsOnTable(refreshedViewData.Dependencies, refresh) {
 			return nil
 		}
 		currentDef := rel.GetTableDef(c.proc.Ctx)
-		if viewColumnsEqual(currentDef.GetCols(), replaceDef.GetCols()) {
-			return nil
-		}
+		columnsChanged := !viewColumnsEqual(currentDef.GetCols(), replaceDef.GetCols())
 		replaceDef = plan2.DeepCopyTableDef(currentDef, true)
-		replaceDef.Cols = qry.GetTableDef().GetCols()
-		replaceDef.Name2ColIndex = nil
+		if columnsChanged {
+			replaceDef.Cols = qry.GetTableDef().GetCols()
+			replaceDef.Name2ColIndex = nil
+		}
+		dependenciesChanged := false
 		if currentDef.GetViewSql() != nil && qry.GetTableDef().GetViewSql() != nil {
 			var currentViewData plan2.ViewData
 			if json.Unmarshal([]byte(currentDef.GetViewSql().GetView()), &currentViewData) == nil &&
 				len(refreshedViewData.Dependencies) > 0 {
-				currentViewData.Dependencies = refreshedViewData.Dependencies
-				if encoded, err := json.Marshal(currentViewData); err == nil {
-					replaceDef.ViewSql = &plan.ViewDef{View: string(encoded)}
+				dependenciesChanged = !slices.Equal(
+					currentViewData.Dependencies,
+					refreshedViewData.Dependencies,
+				)
+				if dependenciesChanged {
+					currentViewData.Dependencies = refreshedViewData.Dependencies
+					if encoded, err := json.Marshal(currentViewData); err == nil {
+						replaceDef.ViewSql = &plan.ViewDef{View: string(encoded)}
+					}
 				}
 			}
+		}
+		if !columnsChanged && !dependenciesChanged {
+			return nil
 		}
 	}
 	databaseID, err := strconv.ParseUint(dbSource.GetDatabaseId(c.proc.Ctx), 10, 64)
@@ -503,15 +512,24 @@ func (s *Scope) AlterView(c *Compile) error {
 	)
 }
 
-func viewDependsOnTable(dependencies []plan2.ViewDependency, tableID uint64) bool {
-	_, found := slices.BinarySearchFunc(
-		dependencies,
-		tableID,
-		func(dependency plan2.ViewDependency, target uint64) int {
-			return cmp.Compare(dependency.TableID, target)
-		},
-	)
-	return found
+func viewDependsOnTable(
+	dependencies []plan2.ViewDependency,
+	refresh viewMetadataRefreshContext,
+) bool {
+	for _, dependency := range dependencies {
+		if dependency.Snapshot {
+			continue
+		}
+		if dependency.AccountIDSet &&
+			dependency.AccountID == refresh.sourceAccountID &&
+			dependency.LogicalID == refresh.sourceLogicalID {
+			return true
+		}
+		if !dependency.AccountIDSet && dependency.TableID == refresh.currentSourceTableID {
+			return true
+		}
+	}
+	return false
 }
 
 func viewColumnsEqual(current, refreshed []*plan.ColDef) bool {
@@ -2431,16 +2449,31 @@ func lockAndValidateViewDependencies(c *Compile, viewDef *plan.ViewDef) error {
 	if err := json.Unmarshal([]byte(viewDef.GetView()), &viewData); err != nil {
 		return err
 	}
+	currentAccountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
 	for _, dependency := range viewData.Dependencies {
+		if dependency.Snapshot {
+			continue
+		}
+		accountID := dependency.AccountID
+		if !dependency.AccountIDSet {
+			accountID = currentAccountID
+		}
+		oldCtx := c.proc.Ctx
+		c.proc.Ctx = defines.AttachAccountId(oldCtx, accountID)
 		dbName, tableName, _, err := c.e.GetRelationById(
 			c.proc.Ctx,
 			c.proc.GetTxnOperator(),
 			dependency.TableID,
 		)
 		if err != nil {
+			c.proc.Ctx = oldCtx
 			return err
 		}
 		if err = lockMoTable(c, dbName, tableName, lock.LockMode_Shared); err != nil {
+			c.proc.Ctx = oldCtx
 			return err
 		}
 		_, _, rel, err := c.e.GetRelationById(
@@ -2448,6 +2481,7 @@ func lockAndValidateViewDependencies(c *Compile, viewDef *plan.ViewDef) error {
 			c.proc.GetTxnOperator(),
 			dependency.TableID,
 		)
+		c.proc.Ctx = oldCtx
 		if err != nil {
 			return err
 		}

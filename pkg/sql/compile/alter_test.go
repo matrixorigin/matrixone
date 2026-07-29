@@ -44,6 +44,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -122,6 +125,54 @@ func TestBuildRefreshViewSQL(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestBuildViewMetadataRefreshQueryEscapesLegacyTableName(t *testing.T) {
+	query := buildViewMetadataRefreshQuery(
+		7,
+		24,
+		42,
+		`x\')) OR 1=1 -- x`,
+		128,
+		128,
+	)
+	stmts, err := mysql.Parse(context.Background(), query, 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	require.Len(t, stmts, 1)
+	formatted := tree.String(stmts[0], dialect.MYSQL)
+	require.Contains(t, formatted, "order by")
+	require.Contains(t, formatted, "limit 128")
+	require.Contains(t, query, `x\\'')) OR 1=1 -- x`)
+}
+
+func TestViewUsesSnapshot(t *testing.T) {
+	require.True(t, viewUsesSnapshot(plan.ViewData{
+		Dependencies: []plan.ViewDependency{{Snapshot: true}},
+	}))
+	require.True(t, viewUsesSnapshot(plan.ViewData{
+		Stmt: "create view v as select * from t {snapshot = 'sn'}",
+	}))
+	require.False(t, viewUsesSnapshot(plan.ViewData{
+		Stmt: "create view v as select * from t",
+	}))
+}
+
+func TestCheckViewMetadataRefreshLimit(t *testing.T) {
+	require.NoError(t, checkViewMetadataRefreshLimit(
+		context.Background(),
+		maxViewsPerMetadataRefresh,
+	))
+	err := checkViewMetadataRefreshLimit(
+		context.Background(),
+		maxViewsPerMetadataRefresh+1,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+}
+
 func TestViewColumnsEqual(t *testing.T) {
 	col := func(name string, typ plan2.Type) *plan2.ColDef {
 		return &plan2.ColDef{Name: name, Typ: typ}
@@ -148,17 +199,26 @@ func TestViewColumnsEqual(t *testing.T) {
 
 func TestCanSkipViewMetadataRefreshError(t *testing.T) {
 	ctx := context.Background()
+	planError := func(err error) error {
+		return &viewMetadataRefreshPlanError{err: err}
+	}
 	require.True(t, canSkipViewMetadataRefreshError(
-		moerr.NewBadFieldError(ctx, "missing_column", "field list"),
+		planError(moerr.NewBadFieldError(ctx, "missing_column", "field list")),
 	))
 	require.True(t, canSkipViewMetadataRefreshError(
-		moerr.NewNoSuchTable(ctx, "db", "missing_table"),
+		planError(moerr.NewNoSuchTable(ctx, "db", "missing_table")),
 	))
 	require.True(t, canSkipViewMetadataRefreshError(
-		moerr.NewViewWrongList(ctx),
+		planError(moerr.NewViewWrongList(ctx)),
+	))
+	require.True(t, canSkipViewMetadataRefreshError(
+		planError(moerr.NewInvalidInput(ctx, "ambiguous column reference")),
+	))
+	require.True(t, canSkipViewMetadataRefreshError(
+		planError(moerr.NewConstraintViolation(ctx, "invalid view")),
 	))
 	require.False(t, canSkipViewMetadataRefreshError(
-		moerr.NewTxnNeedRetry(ctx),
+		planError(moerr.NewTxnNeedRetry(ctx)),
 	))
 	require.False(t, canSkipViewMetadataRefreshError(
 		moerr.NewDuplicateEntry(ctx, "duplicate", "key"),
@@ -172,40 +232,49 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	mp := mpool.MustNewZero()
 	const sourceTableID = 42
-	query := "select rel_id, reldatabase, relname, viewdef from mo_catalog.mo_tables " +
-		"where account_id = current_account_id() and relkind = 'v' " +
+	const sourceLogicalID = 24
+	query := "select account_id, rel_id, reldatabase, relname, viewdef from mo_catalog.mo_tables " +
+		"where relkind = 'v' " +
 		"and reldatabase not in ('mo_catalog', 'information_schema') and rel_id > 0 " +
-		"and ((viewdef not like '%\\\"dependencies\\\":%' and viewdef like '%source_t%') " +
-		"or viewdef like '%\\\"table_id\\\":42,%') " +
-		"order by rel_id limit 128"
+		"and ((account_id = 7 and viewdef not like '%\\\"dependencies\\\":%' " +
+		"and instr(viewdef, 'source_t') > 0) " +
+		"or (viewdef like '%\\\"account_id\\\":7,%' and viewdef like '%\\\"logical_id\\\":24,%') " +
+		"or (account_id = 7 and viewdef like '%\\\"table_id\\\":42,%' " +
+		"and viewdef not like '%\\\"logical_id\\\":%')) order by rel_id limit 128"
 	nextQuery := strings.Replace(query, "rel_id > 0", "rel_id > 2", 1)
 
-	bat := batch.NewWithSize(4)
+	bat := batch.NewWithSize(5)
 	bat.SetRowCount(2)
-	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
-	require.NoError(t, vector.AppendFixed(bat.Vecs[0], uint64(1), false, mp))
-	require.NoError(t, vector.AppendFixed(bat.Vecs[0], uint64(2), false, mp))
-	for i := 1; i < len(bat.Vecs); i++ {
+	bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], uint32(7), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], uint32(7), false, mp))
+	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(2), false, mp))
+	for i := 2; i < len(bat.Vecs); i++ {
 		bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
 	}
-	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("db"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("v"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("db"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[3], []byte("v"), false, mp))
 	require.NoError(t, vector.AppendBytes(
-		bat.Vecs[3],
-		[]byte(`{"Stmt":"create view v as select a from t","DefaultDatabase":"db","dependencies":[{"table_id":42,"version":1}]}`),
+		bat.Vecs[4],
+		[]byte(`{"Stmt":"create view v as select a from t","DefaultDatabase":"db","dependencies":[{"account_id":7,"account_id_set":true,"table_id":42,"logical_id":24,"version":1}]}`),
 		false,
 		mp,
 	))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("db"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("invalid_v"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[3], []byte("not-json"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("db"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[3], []byte("invalid_v"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("not-json"), false, mp))
 
 	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
 		query:     {Mp: mp, Batches: []*batch.Batch{bat}},
 		nextQuery: {},
 	}}
 	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
-	require.NoError(t, refreshViewMetadataAfterAlter(c, sourceTableID, sourceTableID, "source_t"))
+	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
+	require.NoError(t, refreshViewMetadataAfterAlter(
+		c, 7, sourceLogicalID, sourceTableID, sourceTableID, "source_t",
+	))
 	require.Equal(t, []string{
 		query,
 		"alter view `db`.`v` as select `a` from `t`",
@@ -218,7 +287,7 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 		context.WithValue(
 			context.Background(),
 			defines.ViewMetadataRefreshKey{},
-			viewMetadataRefreshContext{currentSourceTableID: sourceTableID},
+			viewMetadataRefreshContext{sourceLogicalID: sourceLogicalID},
 		),
 	))
 }

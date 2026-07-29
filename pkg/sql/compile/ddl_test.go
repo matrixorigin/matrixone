@@ -90,7 +90,7 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 			Name: "a",
 			Typ:  plan2.Type{Id: int32(types.T_int64)},
 		}},
-		ViewSql: &plan2.ViewDef{View: `{"Stmt":"alter view v as select cast(a as bigint) from t","dependencies":[{"table_id":1,"version":1}]}`},
+		ViewSql: &plan2.ViewDef{View: `{"Stmt":"alter view v as select cast(a as bigint) from t","dependencies":[{"account_id":7,"account_id_set":true,"table_id":1,"logical_id":9,"version":1}]}`},
 	}
 
 	eng := newStubEngine()
@@ -104,8 +104,13 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	proc.Ctx = context.WithValue(
 		context.Background(),
 		defines.ViewMetadataRefreshKey{},
-		viewMetadataRefreshContext{currentSourceTableID: 1},
+		viewMetadataRefreshContext{
+			sourceAccountID:      7,
+			sourceLogicalID:      9,
+			currentSourceTableID: 1,
+		},
 	)
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	c := NewCompile("test", "default_db", "alter view other_db.v as select a from t", "", "", eng, proc, nil, false, nil, time.Now())
 	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
 		Definition: &plan2.DataDefinition_AlterView{
@@ -124,7 +129,13 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	var replacedViewData plan.ViewData
 	require.NoError(t, json.Unmarshal([]byte(replaced.GetViewSql().GetView()), &replacedViewData))
 	require.Equal(t, "create view v as select a from t", replacedViewData.Stmt)
-	require.Equal(t, []plan.ViewDependency{{TableID: 1, Version: 1}}, replacedViewData.Dependencies)
+	require.Equal(t, []plan.ViewDependency{{
+		AccountID:    7,
+		AccountIDSet: true,
+		TableID:      1,
+		LogicalID:    9,
+		Version:      1,
+	}}, replacedViewData.Dependencies)
 
 	rel.alterReqs = nil
 	rel.tableDef = replaced
@@ -150,13 +161,15 @@ func TestLockAndValidateViewDependencies(t *testing.T) {
 
 	var locked []string
 	lockStub := gostub.Stub(&lockMoTable, func(
-		_ *Compile,
+		c *Compile,
 		dbName string,
 		tableName string,
 		mode lock.LockMode,
 	) error {
 		require.Equal(t, lock.LockMode_Shared, mode)
-		locked = append(locked, dbName+"."+tableName)
+		accountID, err := defines.GetAccountId(c.proc.Ctx)
+		require.NoError(t, err)
+		locked = append(locked, fmt.Sprintf("%d:%s.%s", accountID, dbName, tableName))
 		return nil
 	})
 	defer lockStub.Reset()
@@ -166,24 +179,29 @@ func TestLockAndValidateViewDependencies(t *testing.T) {
 	first.tableDef = &plan2.TableDef{TblId: 11, Version: 3}
 	second := newStubRelation("second")
 	second.tableDef = &plan2.TableDef{TblId: 22, Version: 7}
+	cluster := newStubRelation("metric")
+	cluster.tableDef = &plan2.TableDef{TblId: 33, Version: 4}
 	eng.relationsByID[11] = stubRelationByID{database: "db", table: "first", relation: first}
 	eng.relationsByID[22] = stubRelationByID{database: "other", table: "second", relation: second}
+	eng.relationsByID[33] = stubRelationByID{database: "system_metrics", table: "metric", relation: cluster}
 
 	proc := testutil.NewProcess(t)
-	proc.Ctx = context.Background()
+	proc.Ctx = defines.AttachAccountId(context.Background(), 7)
 	c := NewCompile("test", "db", "create view v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
 	require.NoError(t, lockAndValidateViewDependencies(c, &plan2.ViewDef{}))
 	require.Error(t, lockAndValidateViewDependencies(c, &plan2.ViewDef{View: "not-json"}))
 
 	viewData, err := json.Marshal(plan.ViewData{Dependencies: []plan.ViewDependency{
 		{TableID: 11, Version: 3},
-		{TableID: 22, Version: 7},
+		{AccountID: 9, AccountIDSet: true, TableID: 22, Version: 7},
+		{AccountID: 0, AccountIDSet: true, TableID: 33, Version: 4},
+		{AccountID: 8, AccountIDSet: true, TableID: 44, Version: 1, Snapshot: true},
 	}})
 	require.NoError(t, err)
 	viewDef := &plan2.ViewDef{View: string(viewData)}
 
 	require.NoError(t, lockAndValidateViewDependencies(c, viewDef))
-	require.Equal(t, []string{"db.first", "other.second"}, locked)
+	require.Equal(t, []string{"7:db.first", "9:other.second", "0:system_metrics.metric"}, locked)
 
 	second.tableDef.Version++
 	err = lockAndValidateViewDependencies(c, viewDef)
