@@ -94,3 +94,10 @@ SELECT SECOND('24-12-20 15:30:45') AS two_digit_year_second,
        SECOND('99999990000') AS uint32_overflow_second,
        SECOND('- 12:34:56') AS signed_space_time_second,
        SECOND('12:34:56.') AS trailing_dot_time_second;
+
+-- Zero date components retain the clock; ISO-T uses DATE-prefix TIME coercion.
+SELECT SECOND('0000-01-01 12:34:56') AS zero_year_datetime_second,
+       SECOND('2024-00-01 11:22:33') AS zero_month_datetime_second,
+       SECOND('2024-01-00 10:20:30') AS zero_day_datetime_second,
+       SECOND('0000-00-00 09:08:07') AS zero_date_datetime_second,
+       SECOND('2024-12-20T15:30:45.123456') AS iso_t_datetime_second;

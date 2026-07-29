@@ -93,7 +93,7 @@ SECOND('2024-12-20T15:30:45.123456') AS t_datetime_second,
 SECOND('  12:34:56  ') AS trimmed_time_second,
 SECOND('foo12:34:56') AS malformed_time_second;
 ➤ fractional_time_second[-6,8,0]  ¦  day_fractional_time_second[-6,8,0]  ¦  negative_fractional_time_second[-6,8,0]  ¦  negative_day_fractional_time_second[-6,8,0]  ¦  overflow_time_second[-6,8,0]  ¦  negative_overflow_time_second[-6,8,0]  ¦  invalid_minute_second[-6,8,0]  ¦  invalid_second_second[-6,8,0]  ¦  compact_time_second[-6,8,0]  ¦  compact_datetime_fractional_second[-6,8,0]  ¦  invalid_compact_datetime_second[-6,8,0]  ¦  date_only_time_second[-6,8,0]  ¦  t_datetime_second[-6,8,0]  ¦  trimmed_time_second[-6,8,0]  ¦  malformed_time_second[-6,8,0]  𝄀
-56  ¦  5  ¦  56  ¦  5  ¦  59  ¦  59  ¦  null  ¦  null  ¦  45  ¦  45  ¦  null  ¦  24  ¦  45  ¦  56  ¦  null
+56  ¦  5  ¦  56  ¦  5  ¦  59  ¦  59  ¦  null  ¦  null  ¦  45  ¦  45  ¦  null  ¦  24  ¦  24  ¦  56  ¦  null
 SELECT SECOND('-2024-12-20 15:30:45') AS negative_datetime_second,
 SECOND('-20241220153045') AS negative_compact_datetime_second,
 SECOND('20240230010203') AS invalid_calendar_compact_datetime_second,
@@ -111,3 +111,10 @@ SECOND('- 12:34:56') AS signed_space_time_second,
 SECOND('12:34:56.') AS trailing_dot_time_second;
 ➤ two_digit_year_second[-6,8,0]  ¦  colon_datetime_second[-6,8,0]  ¦  wide_second_datetime_second[-6,8,0]  ¦  invalid_wide_second_datetime_second[-6,8,0]  ¦  incomplete_datetime_second[-6,8,0]  ¦  uint32_overflow_second[-6,8,0]  ¦  signed_space_time_second[-6,8,0]  ¦  trailing_dot_time_second[-6,8,0]  𝄀
 45  ¦  56  ¦  9  ¦  null  ¦  3  ¦  null  ¦  56  ¦  56
+SELECT SECOND('0000-01-01 12:34:56') AS zero_year_datetime_second,
+SECOND('2024-00-01 11:22:33') AS zero_month_datetime_second,
+SECOND('2024-01-00 10:20:30') AS zero_day_datetime_second,
+SECOND('0000-00-00 09:08:07') AS zero_date_datetime_second,
+SECOND('2024-12-20T15:30:45.123456') AS iso_t_datetime_second;
+➤ zero_year_datetime_second[-6,8,0]  ¦  zero_month_datetime_second[-6,8,0]  ¦  zero_day_datetime_second[-6,8,0]  ¦  zero_date_datetime_second[-6,8,0]  ¦  iso_t_datetime_second[-6,8,0]  𝄀
+56  ¦  33  ¦  30  ¦  7  ¦  24

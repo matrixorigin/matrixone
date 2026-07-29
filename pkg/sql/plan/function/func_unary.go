@@ -4680,9 +4680,15 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 }
 
 // timeStringToClockForExtract follows MySQL's string-to-TIME coercion for
-// HOUR, MINUTE, and SECOND. It deliberately parses only the bounded prefix
-// needed for the clock fields: the general temporal parsers accept different
-// grammars and must not receive arbitrary TIME-shaped user input here.
+// HOUR, MINUTE, and SECOND. Its input contract is deliberately narrow:
+//
+//   - TIME and space-separated DATETIME strings return their clock fields.
+//   - Date-only and ISO-T date prefixes coerce as compact TIME (00:MM:YY).
+//   - Zero date components do not discard an otherwise valid clock.
+//   - Other malformed date-looking strings return NULL.
+//
+// The general temporal parsers accept different grammars and must not receive
+// arbitrary TIME-shaped user input here.
 func timeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
 	if str[0] == '-' {
 		str = str[1:]
@@ -4712,9 +4718,11 @@ func mysqlTimeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
 	}
 
 	// MySQL coerces a complete date-only string through its leading year field:
-	// "2024-12-20" becomes the compact TIME 00:20:24. Do not apply this to
-	// malformed date-looking input, or invalid clocks would acquire a value.
-	if mysqlDateOnlyStringForExtract(str) {
+	// "2024-12-20" becomes the compact TIME 00:20:24. An ISO-T suffix does
+	// not make it a DATETIME for this TIME coercion, so it follows the same
+	// date-prefix rule. Do not apply this to other malformed date-looking input,
+	// or invalid clocks would acquire a value.
+	if mysqlDatePrefixTimeStringForExtract(str) {
 		if hour, minute, second, ok := mysqlTimePrefixClockForExtract(str[:4]); ok {
 			return hour, minute, second, true
 		}
@@ -4725,6 +4733,11 @@ func mysqlTimeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
 func mysqlDateOnlyStringForExtract(str string) bool {
 	return len(str) == 10 && asciiDigits(str[:4]) && asciiDigits(str[5:7]) &&
 		asciiDigits(str[8:10]) && (str[4] == '-' || str[4] == '/') && str[7] == str[4]
+}
+
+func mysqlDatePrefixTimeStringForExtract(str string) bool {
+	return mysqlDateOnlyStringForExtract(str) ||
+		(len(str) > 10 && str[10] == 'T' && mysqlDateOnlyStringForExtract(str[:10]))
 }
 
 func mysqlLeadingDigitsExceedUint32(str string) bool {
@@ -4771,17 +4784,13 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	}
 	pos++
 	day, _, ok := mysqlVariableDigitsForExtract(str, &pos)
-	if !ok || pos >= len(str) || (str[pos] != ' ' && str[pos] != 'T') {
+	if !ok || pos >= len(str) || str[pos] != ' ' {
 		// A complete date without a clock is still handled by the TIME path.
 		return timeExtractParseResult{}
 	}
 	result := timeExtractParseResult{matched: true}
-	if str[pos] == 'T' {
+	for pos < len(str) && str[pos] == ' ' {
 		pos++
-	} else {
-		for pos < len(str) && str[pos] == ' ' {
-			pos++
-		}
 	}
 	hour, _, ok := mysqlVariableDigitsForExtract(str, &pos)
 	if !ok || pos >= len(str) || str[pos] != ':' {
@@ -4814,11 +4823,11 @@ func mysqlDatetimeDateForExtract(year, month, day uint64) bool {
 	if year > 9999 || month > 12 || day > 31 {
 		return false
 	}
-	if month == 0 || day == 0 {
-		return year != 0 || (month == 0 && day == 0)
-	}
-	if year == 0 {
-		return false
+	// String-to-TIME coercion retains a valid clock even when the date has a
+	// zero component. The calendar is incomplete, but HOUR/MINUTE/SECOND do
+	// not need to reconstruct it. Fully specified dates still need validation.
+	if year == 0 || month == 0 || day == 0 {
+		return true
 	}
 	return types.ValidDate(int32(year), uint8(month), uint8(day))
 }

@@ -4184,7 +4184,7 @@ func TestStringTimeExtract(t *testing.T) {
 			name: "hour",
 			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
 				[]uint32{12, 272, 272, 51, 12, 15, 15, 15, 0, 15, 15, 0, 0, 0, 0, 0,
-					51, 12, 272, 272, 51, 838, 838, 838, 0, 0, 15, 12},
+					51, 12, 272, 272, 51, 838, 838, 838, 0, 0, 0, 12},
 				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true,
 					false, false, false, false, false, false, false, false, true, true, false, false}),
 			fn: StringToHour,
@@ -4193,7 +4193,7 @@ func TestStringTimeExtract(t *testing.T) {
 			name: "minute",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{30, 59, 59, 4, 30, 30, 30, 30, 20, 30, 30, 0, 0, 0, 0, 0,
-					4, 30, 59, 59, 4, 59, 59, 59, 0, 0, 30, 34},
+					4, 30, 59, 59, 4, 59, 59, 59, 0, 0, 20, 34},
 				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true,
 					false, false, false, false, false, false, false, false, true, true, false, false}),
 			fn: StringToMinute,
@@ -4202,7 +4202,7 @@ func TestStringTimeExtract(t *testing.T) {
 			name: "second",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
 				[]uint8{45, 59, 59, 5, 45, 45, 45, 45, 24, 45, 45, 0, 0, 0, 0, 0,
-					5, 45, 59, 59, 5, 59, 59, 59, 0, 0, 45, 56},
+					5, 45, 59, 59, 5, 59, 59, 59, 0, 0, 24, 56},
 				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true,
 					false, false, false, false, false, false, false, false, true, true, false, false}),
 			fn: StringToSecond,
@@ -4217,6 +4217,35 @@ func TestStringTimeExtract(t *testing.T) {
 		})
 	}
 
+}
+
+func TestStringTimeExtractZeroDateAndISOSeparator(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"0000-01-01 12:34:56",
+			"2024-00-01 11:22:33",
+			"2024-01-00 10:20:30",
+			"0000-00-00 09:08:07",
+			"2024-12-20T15:30:45.123456",
+		}, nil),
+	}
+
+	for _, tc := range []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{12, 11, 10, 9, 0}, nil), StringToHour},
+		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{34, 22, 20, 8, 20}, nil), StringToMinute},
+		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{56, 33, 30, 7, 24}, nil), StringToSecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
 func TestStringTimeExtractWhitespace(t *testing.T) {
