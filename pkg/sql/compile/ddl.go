@@ -4822,6 +4822,31 @@ func (s *Scope) CreatePitr(c *Compile) error {
 		return err
 	}
 
+	// INTERNAL PITR creation bypasses the frontend path. Cross the same stable
+	// publication barrier as frontend snapshot/PITR creation before refreshing
+	// the target object ID, and retain the write until the PITR row commits.
+	// This prevents COPY ALTER from swapping the table generation between
+	// planning and publication.
+	pitrObjectID, err := preparePitrPublication(
+		c.lockDataBranchLineageOwnerPublication,
+		func() error {
+			txnMeta := c.proc.GetTxnOperator().Txn()
+			if shouldAdvanceAlterDataBranchLineageSnapshot(
+				txnMeta.IsPessimistic(), txnMeta.IsRCIsolation(),
+			) {
+				_, err := c.advanceAlterDataBranchLineageSnapshot()
+				return err
+			}
+			return nil
+		},
+		func() (uint64, error) {
+			return c.resolveCurrentPitrObjectID(createPitr)
+		},
+	)
+	if err != nil {
+		return err
+	}
+
 	// check pitr if exists（pitr_name + create_account）
 	checkExistSql := getSqlForCheckPitrExists(pitrName, accountId)
 	existRes, err := c.runSqlWithResultAndOptions(checkExistSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
@@ -4881,7 +4906,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 		createPitr.GetAccountName(),
 		createPitr.GetDatabaseName(),
 		createPitr.GetTableName(),
-		getPitrObjectId(createPitr),
+		pitrObjectID,
 		createPitr.GetPitrValue(),
 		createPitr.GetPitrUnit(),
 		now,
@@ -4976,6 +5001,56 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	// --- End sys_mo_catalog_pitr logic ---
 
 	return nil
+}
+
+func preparePitrPublication(
+	lock func() error,
+	refreshSnapshot func() error,
+	resolveObjectID func() (uint64, error),
+) (uint64, error) {
+	if err := lock(); err != nil {
+		return 0, err
+	}
+	if err := refreshSnapshot(); err != nil {
+		return 0, err
+	}
+	return resolveObjectID()
+}
+
+func (c *Compile) resolveCurrentPitrObjectID(createPitr *plan.CreatePitr) (uint64, error) {
+	ctx := c.proc.Ctx
+	switch tree.PitrLevel(createPitr.GetLevel()) {
+	case tree.PITRLEVELCLUSTER:
+		return math.MaxUint64, nil
+	case tree.PITRLEVELACCOUNT:
+		return uint64(createPitr.GetAccountId()), nil
+	case tree.PITRLEVELDATABASE:
+		db, err := c.e.Database(ctx, createPitr.GetDatabaseName(), c.proc.GetTxnOperator())
+		if err != nil {
+			return 0, err
+		}
+		databaseID, err := strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
+		if err != nil {
+			return 0, moerr.NewInternalErrorf(
+				ctx,
+				"The databaseid of '%s' is not a valid number",
+				createPitr.GetDatabaseName(),
+			)
+		}
+		return databaseID, nil
+	case tree.PITRLEVELTABLE:
+		db, err := c.e.Database(ctx, createPitr.GetDatabaseName(), c.proc.GetTxnOperator())
+		if err != nil {
+			return 0, err
+		}
+		rel, err := db.Relation(ctx, createPitr.GetTableName(), nil)
+		if err != nil {
+			return 0, err
+		}
+		return rel.GetTableID(ctx), nil
+	default:
+		return 0, moerr.NewInternalErrorf(ctx, "invalid pitr level %d", createPitr.GetLevel())
+	}
 }
 
 // addTimeSpan returns the UTC time that is 'length' units before now, where unit is one of "h", "d", "mo", "y"
@@ -5093,22 +5168,6 @@ func getSqlForCheckPitrDup(
 
 func getSqlForCheckDupPitrFormat(accountId uint32, objId uint64) string {
 	return fmt.Sprintf(`SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND obj_id = %d;`, accountId, objId)
-}
-
-func getPitrObjectId(createPitr *plan.CreatePitr) uint64 {
-	var objectId uint64
-	pitrLevel := tree.PitrLevel(createPitr.GetLevel())
-	switch pitrLevel {
-	case tree.PITRLEVELCLUSTER:
-		objectId = math.MaxUint64
-	case tree.PITRLEVELACCOUNT:
-		objectId = uint64(createPitr.AccountId)
-	case tree.PITRLEVELDATABASE:
-		objectId = createPitr.DatabaseId
-	case tree.PITRLEVELTABLE:
-		objectId = createPitr.TableId
-	}
-	return objectId
 }
 
 // CheckSysMoCatalogPitrResult parses the sys_mo_catalog_pitr query result and determines whether to insert or update.
