@@ -214,6 +214,23 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 		})
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 	})
+
+	t.Run("TemporaryPlanDoesNotFallThroughToPermanentTable", func(t *testing.T) {
+		c := newCompileWithStubEngine(t, newStubEngine(), "drop temporary table t2")
+		c.proc.Session = &testInternalExecutorSession{}
+		s := &Scope{}
+		qry := &plan2.DropTable{
+			Database: "db1",
+			Table:    "t2",
+			TableDef: &plan2.TableDef{IsTemporary: true},
+		}
+
+		err := s.dropTableSingle(c, qry)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+
+		qry.IfExists = true
+		require.NoError(t, s.dropTableSingle(c, qry))
+	})
 }
 func Test_lockIndexTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
