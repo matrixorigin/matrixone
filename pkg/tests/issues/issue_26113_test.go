@@ -77,6 +77,7 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 		require.Equal(t, 1, count)
 		exec("drop table " + dbName + ".baseline")
 		exec("create snapshot " + snapshotName + " for table " + dbName + " src")
+		exec("insert into " + dbName + ".src values (2, 'after snapshot')")
 
 		exec("begin")
 		exec("create table " + dbName + ".snapshot_clone clone " + dbName + ".src {snapshot='" + snapshotName + "'}")
@@ -84,10 +85,10 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 		require.Equal(t, 1, count)
 		exec("create table " + dbName + ".c1 clone " + dbName + ".src")
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".c1").Scan(&count))
-		require.Equal(t, 1, count)
+		require.Equal(t, 2, count)
 		exec("create table " + dbName + ".c2 clone " + dbName + ".c1")
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".c2").Scan(&count))
-		require.Equal(t, 1, count)
+		require.Equal(t, 2, count)
 		exec("rollback")
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select count(*) from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname in ('snapshot_clone', 'c1', 'c2')").Scan(&count))
@@ -115,13 +116,13 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 		exec("begin")
 		exec("data branch create table " + dbName + ".b1 from " + dbName + ".src")
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".b1").Scan(&count))
-		require.Equal(t, 1, count)
+		require.Equal(t, 2, count)
 		exec("data branch create table " + dbName + ".b2 from " + dbName + ".b1")
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".b2").Scan(&count))
-		require.Equal(t, 1, count)
+		require.Equal(t, 2, count)
 		exec("data branch create table " + dbName + ".b3 from " + dbName + ".b2")
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".b3").Scan(&count))
-		require.Equal(t, 1, count)
+		require.Equal(t, 2, count)
 		exec("commit")
 
 		require.NoError(t, conn.QueryRowContext(ctx,
@@ -153,25 +154,30 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 		require.Zero(t, count)
 
 		exec("begin")
+		exec("create table " + dbName + ".cgs clone " + dbName + ".src {snapshot='" + snapshotName + "'} copy grants")
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".cgs").Scan(&count))
+		require.Equal(t, 1, count)
 		exec("create table " + dbName + ".cg1 clone " + dbName + ".src copy grants")
 		exec("create table " + dbName + ".cg2 clone " + dbName + ".cg1 copy grants")
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".cg2").Scan(&count))
-		require.Equal(t, 1, count)
-		var cg1ID, cg2ID uint64
+		require.Equal(t, 2, count)
+		var cgsID, cg1ID, cg2ID uint64
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname = 'cgs'").Scan(&cgsID))
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select rel_id from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname = 'cg1'").Scan(&cg1ID))
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select rel_id from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname = 'cg2'").Scan(&cg2ID))
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select count(*) from mo_catalog.mo_role_privs where role_name = '"+roleName+"' "+
-				fmt.Sprintf("and obj_id = %d and privilege_name = 'select' and with_grant_option = true", cg2ID)).Scan(&count))
-		require.Equal(t, 1, count)
+				fmt.Sprintf("and obj_id in (%d, %d) and privilege_name = 'select' and with_grant_option = true", cgsID, cg2ID)).Scan(&count))
+		require.Equal(t, 2, count)
 		exec("rollback")
 		require.NoError(t, conn.QueryRowContext(ctx,
-			"select count(*) from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname in ('cg1', 'cg2')").Scan(&count))
+			"select count(*) from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname in ('cgs', 'cg1', 'cg2')").Scan(&count))
 		require.Zero(t, count)
 		require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
-			"select count(*) from mo_catalog.mo_role_privs where obj_id in (%d, %d)", cg1ID, cg2ID)).Scan(&count))
+			"select count(*) from mo_catalog.mo_role_privs where obj_id in (%d, %d, %d)", cgsID, cg1ID, cg2ID)).Scan(&count))
 		require.Zero(t, count)
 	})
 }
