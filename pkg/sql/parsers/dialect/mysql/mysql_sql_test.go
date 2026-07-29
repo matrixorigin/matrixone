@@ -2389,6 +2389,8 @@ var (
 		}, {
 			input: "drop table if exists t1, t2, db.t",
 		}, {
+			input: "drop temporary table if exists t1, t2, db.t",
+		}, {
 			input: "drop table db.t",
 		}, {
 			input: "drop table if exists t",
