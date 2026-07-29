@@ -921,9 +921,7 @@ func (ctr *container) flushSpillBuffers(proc *process.Process, files []*os.File,
 			file = files[bucket]
 		}
 		if file == nil {
-			if firstErr == nil {
-				firstErr = process.ErrHashBuildBudgetInvalid
-			}
+			firstErr = process.ErrHashBuildBudgetInvalid
 			ctr.spillBucketWriteBufs[bucket].Reset()
 			ctr.spillBucketWriteRows[bucket] = 0
 			continue
