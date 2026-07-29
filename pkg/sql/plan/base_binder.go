@@ -156,6 +156,16 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
+		if b.builder != nil {
+			var rewritten bool
+			expr, rewritten, err = b.builder.rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, expr, typ)
+			if err != nil {
+				return
+			}
+			if rewritten {
+				return
+			}
+		}
 		if useExplicitCastOverload(exprImpl.Type) {
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		} else {
@@ -3629,6 +3639,17 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
 					continue
 				}
+				// A direct BIT-to-text cast preserves the BIT payload bytes. In the
+				// LEAST/GREATEST type lattice BIT is numeric, so stringify its
+				// unsigned value instead when the comparison target is text.
+				if (name == "least" || name == "greatest") && argsType[idx].Oid == types.T_bit &&
+					(castType.Oid == types.T_char || castType.Oid == types.T_varchar || castType.Oid == types.T_text) {
+					uint64Type := types.T_uint64.ToType()
+					args[idx], err = appendCastBeforeExpr(ctx, args[idx], makePlan2Type(&uint64Type))
+					if err != nil {
+						return nil, err
+					}
+				}
 				typ := makePlan2Type(&castType)
 				args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
 				if err != nil {
@@ -3988,6 +4009,13 @@ func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) 
 func appendCastBeforeExprWithOverload(
 	ctx context.Context, expr *Expr, toType Type, overloadID int32, isBin ...bool,
 ) (*Expr, error) {
+	expr, rewritten, err := rewriteEnumDisplayValueToJSONCast(ctx, expr, toType)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
+		return expr, nil
+	}
 	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
@@ -4019,6 +4047,38 @@ func appendCastBeforeExprWithOverload(
 		},
 		Typ: typ,
 	}, nil
+}
+
+func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType Type) (*Expr, bool, error) {
+	if toType.Id != int32(types.T_json) {
+		return expr, false, nil
+	}
+	if expr.Typ.Id == int32(types.T_enum) {
+		return nil, false, moerr.NewInvalidArg(ctx, "operator cast", "[ENUM JSON]")
+	}
+	if isEnumOrSetDisplayValueExpr(expr) {
+		quoted, err := quoteEnumOrSetDisplayValueAsJSON(ctx, expr)
+		return quoted, err == nil, err
+	}
+	return expr, false, nil
+}
+
+func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil &&
+		(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun)
+}
+
+func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {
+	quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{expr})
+	if err != nil {
+		return nil, err
+	}
+	quoted.Typ.NotNullable = expr.Typ.NotNullable
+	return quoted, nil
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {

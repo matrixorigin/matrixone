@@ -6519,11 +6519,11 @@ nulls_first_last_opt:
     }
 |   NULLS FIRST
     {
-        $$ = tree.NullsFirst
+        yylex.Error("NULLS FIRST is not supported in MySQL syntax"); return 1
     }
 |   NULLS LAST
     {
-        $$ = tree.NullsLast
+        yylex.Error("NULLS LAST is not supported in MySQL syntax"); return 1
     }
 
 select_lock_opt:
@@ -12028,6 +12028,18 @@ mo_cast_type:
 
 mysql_cast_type:
     decimal_type
+|   JSON
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family:       tree.JsonFamily,
+                FamilyString: $1,
+                Locale:       &locale,
+                Oid:          uint32(defines.MYSQL_TYPE_JSON),
+            },
+        }
+    }
 |   BINARY length_option_opt
     {
         locale := ""

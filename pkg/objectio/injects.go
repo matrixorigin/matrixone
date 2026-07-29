@@ -27,12 +27,14 @@ const (
 )
 
 const (
-	FJ_CommitDelete  = "fj/commit/delete"
-	FJ_CommitSlowLog = "fj/commit/slowlog"
-	FJ_CommitWait    = "fj/commit/wait"
-	FJ_TransferSlow  = "fj/transfer/slow"
-	FJ_FlushTimeout  = "fj/flush/timeout"
-	FJ_FlushEntry    = "fj/flush/entry"
+	FJ_CommitDelete               = "fj/commit/delete"
+	FJ_CommitSlowLog              = "fj/commit/slowlog"
+	FJ_CommitWait                 = "fj/commit/wait"
+	FJ_TransferSlow               = "fj/transfer/slow"
+	FJ_TransferError              = "fj/transfer/error"
+	FJ_TransferErrorAfterTransfer = "fj/transfer/error-after-transfer"
+	FJ_FlushTimeout               = "fj/flush/timeout"
+	FJ_FlushEntry                 = "fj/flush/entry"
 
 	FJ_CheckpointSave = "fj/checkpoint/save"
 	FJ_GCKPWait1      = "fj/gckp/wait1"
@@ -46,7 +48,6 @@ const (
 	FJ_CNRecvErr        = "fj/cn/recv/err"
 	FJ_CNSubSysErr      = "fj/cn/recv/subsyserr"
 	FJ_CNReplayCacheErr = "fj/cn/recv/rcacheerr"
-	FJ_CNGCDumpTable    = "fj/cn/gc/dumptable"
 
 	FJ_LogReader    = "fj/log/reader"
 	FJ_LogWorkspace = "fj/log/workspace"
@@ -446,11 +447,6 @@ func CommitWaitInjected() (string, bool) {
 	return sarg, injected
 }
 
-func GCDumpTableInjected() (string, bool) {
-	_, sarg, injected := fault.TriggerFault(FJ_CNGCDumpTable)
-	return sarg, injected
-}
-
 func WaitInjected(key string) bool {
 	_, _, injected := fault.TriggerFault(key)
 	return injected
@@ -607,24 +603,6 @@ func InjectCommitWait(msg string) (rmFault func() (bool, error), err error) {
 	}
 	rmFault = func() (ok bool, err error) {
 		return fault.RemoveFaultPoint(context.Background(), FJ_CommitWait)
-	}
-	return
-}
-
-func InjectGCDumpTable(msg string) (rmFault func() (bool, error), err error) {
-	if err = fault.AddFaultPoint(
-		context.Background(),
-		FJ_CNGCDumpTable,
-		":::",
-		"echo",
-		0,
-		msg,
-		false,
-	); err != nil {
-		return
-	}
-	rmFault = func() (ok bool, err error) {
-		return fault.RemoveFaultPoint(context.Background(), FJ_CNGCDumpTable)
 	}
 	return
 }
