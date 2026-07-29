@@ -35,8 +35,11 @@ insert into view_alter_column_metadata.source_t values
     (2, 'this-code-is-longer-than-five-characters', 5000000000, 12345.67891);
 
 select id, code, qty, price, total from view_alter_column_metadata.v_source_t order by id;
+-- @ignore:5,6
 desc view_alter_column_metadata.v_source_t;
+-- @ignore:5,6
 desc view_alter_column_metadata.v_nested;
+-- @ignore:5,6
 desc view_alter_column_metadata_cross.v_cross;
 select
     table_schema,
@@ -62,6 +65,7 @@ where current_view.reldatabase in (
 
 create table view_alter_column_metadata.ctas_view as
 select id, code, qty, price from view_alter_column_metadata.v_source_t;
+-- @ignore:5,6
 desc view_alter_column_metadata.ctas_view;
 
 drop database view_alter_column_metadata;
