@@ -217,6 +217,9 @@ func NewService(
 	// replicas already known to the local store
 	if err := server.Start(); err != nil {
 		service.runtime.SubLogger(runtime.SystemInit).Error("failed to start the server", zap.Error(err))
+		if closeErr := server.Close(); closeErr != nil {
+			service.runtime.SubLogger(runtime.SystemInit).Error("failed to close the server", zap.Error(closeErr))
+		}
 		if err := store.close(); err != nil {
 			service.runtime.SubLogger(runtime.SystemInit).Error("failed to close the store", zap.Error(err))
 		}

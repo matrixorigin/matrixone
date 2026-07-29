@@ -154,6 +154,40 @@ func TestNewServiceWithRetryStopsAfterMaxAttempts(t *testing.T) {
 	require.Equal(t, serviceStartMaxAttempts, attempts)
 }
 
+func TestNewServiceWithRetryClosesRPCServerOnBindFailure(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, listener.Close())
+	})
+
+	cfg := getServiceTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	cfg.LogServicePort = 0
+	cfg.ServiceAddress = listener.Addr().String()
+	cfg.ServiceListenAddress = listener.Addr().String()
+	setTestHAKeeperClientConfig(&cfg)
+
+	attempts := 0
+	service, err := NewServiceWithRetry(
+		func() Config {
+			attempts++
+			return cfg
+		},
+		newFS(),
+		nil,
+	)
+
+	if service != nil {
+		require.NoError(t, service.Close())
+	}
+	require.Nil(t, service)
+	require.Error(t, err)
+	require.ErrorIs(t, err, syscall.EADDRINUSE)
+	require.Equal(t, serviceStartMaxAttempts, attempts)
+}
+
 func TestNewServiceWithRetryStopsOnConfigError(t *testing.T) {
 	expected := errors.New("generate config")
 	attempts := 0
