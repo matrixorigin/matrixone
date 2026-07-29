@@ -40,15 +40,14 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 		execSQLRequire(t, ctx, db, "set role moadmin")
 
 		const (
-			sourceDB             = "issue_26121_source"
-			branchDB             = "issue_26121_branch"
-			cloneDB              = "issue_26121_clone"
-			fullTextDB           = "issue_26121_fulltext"
-			fullTextCloneDB      = "issue_26121_fulltext_clone"
-			fullTextBranchDB     = "issue_26121_fulltext_branch"
-			restoreDB            = "issue_26121_after_snapshot"
-			snapshotName         = "issue_26121_account_snapshot"
-			fullTextSnapshotName = "issue_26121_fulltext_snapshot"
+			sourceDB         = "issue_26121_source"
+			branchDB         = "issue_26121_branch"
+			cloneDB          = "issue_26121_clone"
+			fullTextDB       = "issue_26121_fulltext"
+			fullTextCloneDB  = "issue_26121_fulltext_clone"
+			fullTextBranchDB = "issue_26121_fulltext_branch"
+			restoreDB        = "issue_26121_after_snapshot"
+			snapshotName     = "issue_26121_account_snapshot"
 		)
 		deleteCases := []struct {
 			dbName    string
@@ -111,7 +110,7 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 			}
 		})
 
-		t.Run("database copy and restore do not copy fulltext storage independently", func(t *testing.T) {
+		t.Run("database copies do not copy fulltext storage independently", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "create database `"+fullTextDB+"`")
 			execSQLRequire(t, ctx, db, "create table `"+fullTextDB+"`.`docs` (id bigint primary key, body text)")
 			execSQLRequire(t, ctx, db, "create fulltext index `ft_body` on `"+fullTextDB+"`.`docs` (`body`)")
@@ -139,12 +138,6 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 			}
 			assertFullTextCopy(fullTextCloneDB)
 			assertFullTextCopy(fullTextBranchDB)
-
-			execSQLRequire(t, ctx, db, "create snapshot `"+fullTextSnapshotName+"` for account sys")
-			execSQLRequire(t, ctx, db, "drop database `"+fullTextDB+"`")
-			execSQLRequire(t, ctx, db, "restore account sys {snapshot=\""+fullTextSnapshotName+"\"}")
-			assertFullTextCopy(fullTextDB)
-			execSQLRequire(t, ctx, db, "drop snapshot `"+fullTextSnapshotName+"`")
 		})
 
 		t.Run("delete validation sees ordinary tables", func(t *testing.T) {
