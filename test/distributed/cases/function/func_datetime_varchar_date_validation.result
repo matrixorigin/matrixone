@@ -68,3 +68,21 @@ QUARTER('2024:01:15T12:34:56') AS colon_quarter,
 WEEKOFYEAR('2024:01:15T12:34:56') AS colon_weekofyear;
 ➤ colon_dayofmonth[-6,8,0]  ¦  colon_dayname[12,-1,0]  ¦  colon_monthname[12,-1,0]  ¦  colon_quarter[-6,8,0]  ¦  colon_weekofyear[-5,64,0]  𝄀
 15  ¦  Monday  ¦  January  ¦  1  ¦  3
+SELECT DAYOFMONTH('10:11:12') AS yy10_dayofmonth,
+DAYNAME('10:11:12') AS yy10_dayname,
+MONTHNAME('10:11:12') AS yy10_monthname,
+QUARTER('10:11:12') AS yy10_quarter,
+WEEKOFYEAR('10:11:12') AS yy10_weekofyear;
+➤ yy10_dayofmonth[-6,8,0]  ¦  yy10_dayname[12,-1,0]  ¦  yy10_monthname[12,-1,0]  ¦  yy10_quarter[-6,8,0]  ¦  yy10_weekofyear[-5,64,0]  𝄀
+12  ¦  Friday  ¦  November  ¦  4  ¦  45
+SELECT DAYNAME('69:01:01') AS yy69_dayname,
+DAYNAME('70:01:01') AS yy70_dayname;
+➤ yy69_dayname[12,-1,0]  ¦  yy70_dayname[12,-1,0]  𝄀
+Tuesday  ¦  Thursday
+SELECT DAYOFMONTH('2024/01/15 12*34*56') AS punct_time_dayofmonth,
+DAYNAME('2024/01/15 12*34*56') AS punct_time_dayname,
+MONTHNAME('2024/01/15 12*34*56') AS punct_time_monthname,
+QUARTER('2024/01/15 12*34*56') AS punct_time_quarter,
+WEEKOFYEAR('2024/01/15 12*34*56') AS punct_time_weekofyear;
+➤ punct_time_dayofmonth[-6,8,0]  ¦  punct_time_dayname[12,-1,0]  ¦  punct_time_monthname[12,-1,0]  ¦  punct_time_quarter[-6,8,0]  ¦  punct_time_weekofyear[-5,64,0]  𝄀
+15  ¦  Monday  ¦  January  ¦  1  ¦  3

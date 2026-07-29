@@ -90,6 +90,55 @@ func TestDateExtractFunctionsAcceptVarchar(t *testing.T) {
 	require.True(t, success, info)
 }
 
+func TestDateExtractFunctionsAcceptRelaxedDateDelimiters(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"10:11:12", "69:01:01", "70:01:01", "2024/01/15 12*34*56"}, nil)
+
+	for _, tc := range []struct {
+		name   string
+		fn     fEvalFn
+		expect FunctionTestResult
+	}{
+		{
+			name: "dayofmonth",
+			fn:   DateStringToDay,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{12, 1, 1, 15}, nil),
+		},
+		{
+			name: "dayname",
+			fn:   DateStringToDayName,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"Friday", "Tuesday", "Thursday", "Monday"}, nil),
+		},
+		{
+			name: "monthname",
+			fn:   DateStringToMonthName,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"November", "January", "January", "January"}, nil),
+		},
+		{
+			name: "quarter",
+			fn:   DateStringToQuarter,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{4, 1, 1, 1}, nil),
+		},
+		{
+			name: "weekofyear",
+			fn:   DateStringToWeekOfYear,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{45, 1, 1, 3}, nil),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+			success, info := ftc.Run()
+			require.True(t, success, info)
+		})
+	}
+}
+
 func TestDateExtractFunctionsIncompleteDateVarchar(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"2001-11-00"}, nil)

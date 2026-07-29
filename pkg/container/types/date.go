@@ -148,9 +148,7 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 					}
 					year = year*10 + int64(s[i]-'0')
 					yearLen++
-				} else if isDateDelimiter(s[i]) && (s[i] != ':' || yearLen == 4) {
-					// ':' also separates TIME fields. Only a four-digit prefix is
-					// unambiguously a MySQL punctuation-delimited date year.
+				} else if isDateDelimiter(s[i]) {
 					state = monthState
 					if yearLen == 0 {
 						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
@@ -205,7 +203,7 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 					hour = hour*10 + uint8(s[i]-'0')
-				} else if s[i] == ':' {
+				} else if isTimeDelimiter(s[i]) {
 					if hourLen == 0 {
 						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
@@ -223,7 +221,7 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 					if i == len(s)-1 {
 						s += ":00"
 					}
-				} else if s[i] == ':' {
+				} else if isTimeDelimiter(s[i]) {
 					if minuteLen == 0 {
 						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
@@ -264,6 +262,7 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 		if state != end {
 			return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 		}
+		year = normalizeDateCastYear(year, yearLen)
 		if hasTime && !ValidTimeInDay(hour, minute, second) {
 			return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 		}
@@ -278,6 +277,21 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 func isDateDelimiter(c byte) bool {
 	return c >= '!' && c <= '/' || c >= ':' && c <= '@' ||
 		c >= '[' && c <= '`' || c >= '{' && c <= '~'
+}
+
+// isTimeDelimiter matches MySQL's relaxed punctuation-delimited time fields.
+func isTimeDelimiter(c byte) bool {
+	return isDateDelimiter(c)
+}
+
+func normalizeDateCastYear(year int64, length int) int64 {
+	if length != 2 {
+		return year
+	}
+	if year <= 69 {
+		return year + 2000
+	}
+	return year + 1900
 }
 
 func parseFixedDateCast(s string) (Date, bool) {

@@ -61,3 +61,20 @@ SELECT DAYOFMONTH('2024:01:15T12:34:56') AS colon_dayofmonth,
        MONTHNAME('2024:01:15T12:34:56') AS colon_monthname,
        QUARTER('2024:01:15T12:34:56') AS colon_quarter,
        WEEKOFYEAR('2024:01:15T12:34:56') AS colon_weekofyear;
+
+-- Two-digit years use MySQL's 00-69 / 70-99 mapping, including ':' dates.
+SELECT DAYOFMONTH('10:11:12') AS yy10_dayofmonth,
+       DAYNAME('10:11:12') AS yy10_dayname,
+       MONTHNAME('10:11:12') AS yy10_monthname,
+       QUARTER('10:11:12') AS yy10_quarter,
+       WEEKOFYEAR('10:11:12') AS yy10_weekofyear;
+
+SELECT DAYNAME('69:01:01') AS yy69_dayname,
+       DAYNAME('70:01:01') AS yy70_dayname;
+
+-- Time fields accept the same relaxed punctuation-delimiter category.
+SELECT DAYOFMONTH('2024/01/15 12*34*56') AS punct_time_dayofmonth,
+       DAYNAME('2024/01/15 12*34*56') AS punct_time_dayname,
+       MONTHNAME('2024/01/15 12*34*56') AS punct_time_monthname,
+       QUARTER('2024/01/15 12*34*56') AS punct_time_quarter,
+       WEEKOFYEAR('2024/01/15 12*34*56') AS punct_time_weekofyear;
