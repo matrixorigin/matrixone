@@ -35,3 +35,29 @@ SELECT DAYOFMONTH('2024-01-01T') AS dangling_iso_dayofmonth,
        MONTHNAME('2024-01-01T') AS dangling_iso_monthname,
        QUARTER('2024-01-01T') AS dangling_iso_quarter,
        WEEKOFYEAR('2024-01-01T') AS dangling_iso_weekofyear;
+
+-- MySQL accepts year 0 calendar dates but does not treat year 0 as a leap year.
+SELECT DAYOFMONTH('0000-01-01') AS year_zero_dayofmonth,
+       DAYNAME('0000-01-01') AS year_zero_dayname,
+       MONTHNAME('0000-01-01') AS year_zero_monthname,
+       QUARTER('0000-01-01') AS year_zero_quarter,
+       WEEKOFYEAR('0000-01-01') AS year_zero_weekofyear;
+
+SELECT DAYOFMONTH('0000-02-29') AS invalid_year_zero_dayofmonth,
+       DAYNAME('0000-02-29') AS invalid_year_zero_dayname,
+       MONTHNAME('0000-02-29') AS invalid_year_zero_monthname,
+       QUARTER('0000-02-29') AS invalid_year_zero_quarter,
+       WEEKOFYEAR('0000-02-29') AS invalid_year_zero_weekofyear;
+
+-- Deprecated MySQL date delimiters are accepted for both date and datetime inputs.
+SELECT DAYOFMONTH('2024/01/15') AS slash_dayofmonth,
+       DAYNAME('2024/01/15') AS slash_dayname,
+       MONTHNAME('2024/01/15') AS slash_monthname,
+       QUARTER('2024/01/15') AS slash_quarter,
+       WEEKOFYEAR('2024/01/15') AS slash_weekofyear;
+
+SELECT DAYOFMONTH('2024:01:15T12:34:56') AS colon_dayofmonth,
+       DAYNAME('2024:01:15T12:34:56') AS colon_dayname,
+       MONTHNAME('2024:01:15T12:34:56') AS colon_monthname,
+       QUARTER('2024:01:15T12:34:56') AS colon_quarter,
+       WEEKOFYEAR('2024:01:15T12:34:56') AS colon_weekofyear;

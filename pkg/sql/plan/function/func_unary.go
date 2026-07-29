@@ -853,6 +853,7 @@ func TimestampToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 type dateExtractParts struct {
+	year  int32
 	month uint8
 	day   uint8
 	date  types.Date
@@ -865,9 +866,13 @@ func parseDateExtractParts(value string) (dateExtractParts, bool) {
 		return dateExtractParts{}, false
 	}
 
-	parts := dateExtractParts{month: month, day: day}
+	parts := dateExtractParts{year: year, month: month, day: day}
 	if types.ValidDate(year, month, day) {
 		parts.date = types.DateFromCalendar(year, month, day)
+		parts.valid = true
+		return parts, true
+	}
+	if types.ValidCalendarDate(year, month, day) {
 		parts.valid = true
 		return parts, true
 	}
@@ -878,11 +883,7 @@ func parseDateExtractParts(value string) (dateExtractParts, bool) {
 		return dateExtractParts{}, false
 	}
 	if month != 0 && day != 0 {
-		validationYear := year
-		if validationYear == 0 {
-			validationYear = 2000
-		}
-		if !types.ValidDate(validationYear, month, day) {
+		if !types.ValidCalendarDate(year, month, day) {
 			return dateExtractParts{}, false
 		}
 	}
@@ -6743,6 +6744,9 @@ func DateStringToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResult
 		if !parts.valid {
 			return 0, false
 		}
+		if parts.year == 0 {
+			return int64(types.WeekFromCalendar(parts.year, parts.month, parts.day, 3)), true
+		}
 		return int64(parts.date.Week(3)), true
 	})
 }
@@ -6851,6 +6855,9 @@ func DateStringToDayName(ivecs []*vector.Vector, result vector.FunctionResultWra
 	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
 		if !parts.valid {
 			return "", false
+		}
+		if parts.year == 0 {
+			return types.DayOfWeekFromCalendar(parts.year, parts.month, parts.day).String(), true
 		}
 		return parts.date.DayOfWeek().String(), true
 	})

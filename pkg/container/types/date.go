@@ -148,7 +148,7 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 					}
 					year = year*10 + int64(s[i]-'0')
 					yearLen++
-				} else if s[i] == '-' {
+				} else if isDateDelimiter(s[i]) {
 					state = monthState
 					if yearLen == 0 {
 						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
@@ -163,7 +163,7 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 					if monthLen >= 3 {
 						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
-				} else if s[i] == '-' {
+				} else if isDateDelimiter(s[i]) {
 					if monthLen == 0 {
 						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
@@ -272,6 +272,12 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 	return int32(year), uint8(month), uint8(day), false, nil
 }
 
+// isDateDelimiter matches MySQL's deprecated punctuation-delimited date forms.
+func isDateDelimiter(c byte) bool {
+	return c >= '!' && c <= '/' || c >= ':' && c <= '@' ||
+		c >= '[' && c <= '`' || c >= '{' && c <= '~'
+}
+
 func parseFixedDateCast(s string) (Date, bool) {
 	if len(s) < 19 || s[4] != '-' || s[7] != '-' || (s[10] != ' ' && s[10] != 'T') ||
 		s[13] != ':' || s[16] != ':' || !isAllDigit(s[:4]) || !isAllDigit(s[5:7]) ||
@@ -347,18 +353,20 @@ func ParseDateCast(s string) (Date, error) {
 
 // date[0001-01-01 to 9999-12-31]
 func ValidDate(year int32, month, day uint8) bool {
-	if year >= MinDateYear && year <= MaxDateYear {
-		if MinMonthInYear <= month && month <= MaxMonthInYear {
-			if day > 0 {
-				if isLeap(year) {
-					return day <= leapYearMonthDays[month-1]
-				} else {
-					return day <= flatYearMonthDays[month-1]
-				}
-			}
-		}
+	return year >= MinDateYear && ValidCalendarDate(year, month, day)
+}
+
+// ValidCalendarDate validates a calendar value accepted by MySQL VARCHAR
+// temporal functions. It intentionally includes year 0, which is not a
+// storable DATE value in MatrixOne. MySQL treats year 0 as a non-leap year.
+func ValidCalendarDate(year int32, month, day uint8) bool {
+	if year < 0 || year > MaxDateYear || month < MinMonthInYear || month > MaxMonthInYear || day == 0 {
+		return false
 	}
-	return false
+	if year != 0 && isLeap(year) {
+		return day <= leapYearMonthDays[month-1]
+	}
+	return day <= flatYearMonthDays[month-1]
 }
 
 func (d Date) String() string {
@@ -847,7 +855,21 @@ func (d Date) Week(mode int) int {
 	if d.Month() == 0 || d.Day() == 0 {
 		return 0
 	}
-	_, week := calcWeek(d, weekMode(mode))
+	_, week := calcWeekFromCalendar(int(d.Year()), int(d.Month()), int(d.Day()), weekMode(mode))
+	return week
+}
+
+// DayOfWeekFromCalendar returns the weekday for a validated calendar date,
+// including MySQL's year-0 date values.
+func DayOfWeekFromCalendar(year int32, month, day uint8) Weekday {
+	weekday := calcWeekday(calcDaynr(int(year), int(month), int(day)), false)
+	return Weekday((weekday + 1) % 7)
+}
+
+// WeekFromCalendar returns WEEK(year-month-day, mode) for a validated calendar
+// date, including MySQL's year-0 date values.
+func WeekFromCalendar(year int32, month, day uint8, mode int) int {
+	_, week := calcWeekFromCalendar(int(year), int(month), int(day), weekMode(mode))
 	return week
 }
 
@@ -859,8 +881,11 @@ func (d Date) YearWeek(mode int) (year int, week int) {
 
 // calcWeek calculates week and year for the date.
 func calcWeek(d Date, wb WeekBehaviour) (year int, week int) {
+	return calcWeekFromCalendar(int(d.Year()), int(d.Month()), int(d.Day()), wb)
+}
+
+func calcWeekFromCalendar(ty, tm, td int, wb WeekBehaviour) (year int, week int) {
 	var days int
-	ty, tm, td := int(d.Year()), int(d.Month()), int(d.Day())
 	daynr := calcDaynr(ty, tm, td)
 	firstDaynr := calcDaynr(ty, 1, 1)
 	mondayFirst := wb.bitAnd(WeekMondayFirst)

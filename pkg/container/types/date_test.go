@@ -126,6 +126,16 @@ func TestParseDateCast(t *testing.T) {
 			want: "2005-02-23",
 		},
 		{
+			name: "punctuation_delimited_date",
+			args: args{s: "2005/02/23"},
+			want: "2005-02-23",
+		},
+		{
+			name: "punctuation_delimited_datetime",
+			args: args{s: "2005:02:23T10:20:30"},
+			want: "2005-02-23",
+		},
+		{
 			name:    "non-midnight zero datetime remains invalid",
 			args:    args{s: "0000-00-00 12:34:56"},
 			wantErr: true,
@@ -170,6 +180,11 @@ func TestParseDateCastComponents(t *testing.T) {
 		{name: "zero datetime", input: "0000-00-00 12:34:56", year: 0, month: 0, day: 0},
 		{name: "complete variable width datetime", input: "2001-1-2 12:34:56", year: 2001, month: 1, day: 2},
 		{name: "ISO datetime", input: "2024-01-01T12:34:56", year: 2024, month: 1, day: 1},
+		{name: "slash date", input: "2024/01/15", year: 2024, month: 1, day: 15},
+		{name: "colon datetime", input: "2024:01:15 12:34:56", year: 2024, month: 1, day: 15},
+		{name: "mixed punctuation separators", input: "2024/01-15", year: 2024, month: 1, day: 15},
+		{name: "dot date", input: "2024.01.15", year: 2024, month: 1, day: 15},
+		{name: "year zero date", input: "0000-01-01", year: 0, month: 1, day: 1},
 		{name: "malformed", input: "2001-11-x", wantErr: true},
 		{name: "malformed month separator", input: "2024-0x-01", wantErr: true},
 		{name: "invalid hour", input: "2024-01-01 24:00:00", wantErr: true},
@@ -191,6 +206,14 @@ func TestParseDateCastComponents(t *testing.T) {
 			assert.Equal(t, tt.day, day)
 		})
 	}
+}
+
+func TestValidCalendarDateYearZero(t *testing.T) {
+	require.True(t, ValidCalendarDate(0, 1, 1))
+	require.False(t, ValidCalendarDate(0, 2, 29))
+	require.False(t, ValidDate(0, 1, 1))
+	require.Equal(t, Sunday, DayOfWeekFromCalendar(0, 1, 1))
+	require.Equal(t, 52, WeekFromCalendar(0, 1, 1, 3))
 }
 
 func TestParseDateCastStrictValidation(t *testing.T) {
