@@ -2241,39 +2241,61 @@ func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
 	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
 	producerErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
 	notifyErr := moerr.NewInternalErrorNoCtx("remote producer failed")
+	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
+	cancelInternal(producerErr)
+	externalCancelCtx, cancelExternal := context.WithCancel(context.Background())
+	cancelExternal()
 
 	tests := []struct {
 		name     string
-		current  error
-		preScope []error
+		current  scopeRunResult
+		preScope []scopeRunResult
 		notify   []error
 		want     error
 	}{
 		{
 			name:     "producer error replaces cleanup fallback",
-			current:  cleanupErr,
-			preScope: []error{context.Canceled, producerErr},
+			current:  scopeRunResult{err: cleanupErr},
+			preScope: []scopeRunResult{{err: context.Canceled}, {err: producerErr}},
 			want:     producerErr,
 		},
 		{
 			name:    "remote notifier error replaces cleanup fallback",
-			current: cleanupErr,
+			current: scopeRunResult{err: cleanupErr},
 			notify:  []error{notifyErr},
 			want:    notifyErr,
 		},
 		{
 			name:     "cleanup fallback does not replace producer error",
-			current:  producerErr,
-			preScope: []error{cleanupErr},
+			current:  scopeRunResult{err: producerErr},
+			preScope: []scopeRunResult{{err: cleanupErr}},
 			want:     producerErr,
+		},
+		{
+			name:     "internally canceled merge resolves to producer error",
+			current:  scopeRunResult{err: context.Canceled, ctx: internalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "internally interrupted merge resolves to producer error",
+			current:  scopeRunResult{err: moerr.NewQueryInterrupted(context.Background()), ctx: internalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "externally canceled merge remains canceled",
+			current:  scopeRunResult{err: context.Canceled, ctx: externalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     context.Canceled,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			preScopeResults := make(chan error, len(tt.preScope))
-			for _, err := range tt.preScope {
-				preScopeResults <- err
+			preScopeResults := make(chan scopeRunResult, len(tt.preScope))
+			for _, result := range tt.preScope {
+				preScopeResults <- result
 			}
 			notifyResults := make(chan notifyMessageResult, len(tt.notify))
 			for _, err := range tt.notify {

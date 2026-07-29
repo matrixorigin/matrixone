@@ -398,7 +398,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 
 	// Merge Run normally.
 	var wg sync.WaitGroup
-	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
+	preScopeResultReceiveChan := make(chan scopeRunResult, len(s.PreScopes))
 
 	// step 1.
 	for i := range s.PreScopes {
@@ -423,7 +423,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
 				}
 				s.cancelMergeSiblingsOnError(err)
-				preScopeResultReceiveChan <- err
+				preScopeResultReceiveChan <- newScopeRunResult(err, scope)
 			})
 
 		// build routine failed.
@@ -431,7 +431,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			wg.Done() // this is necessary, because the submitPreScope may panic.
 			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
 			s.cancelMergeSiblingsOnError(submitPreScope)
-			preScopeResultReceiveChan <- submitPreScope
+			preScopeResultReceiveChan <- newScopeRunResult(submitPreScope, scope)
 		}
 	}
 
@@ -448,7 +448,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		wg.Wait()
 		err = collectMergeRunResults(
 			s.Proc,
-			err,
+			scopeRunResult{err: err, ctx: s.Proc.Ctx},
 			preScopeResultReceiveChan,
 			notifyMessageResultReceiveChan)
 	}()
@@ -465,7 +465,9 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	// receive and check error from pre-scopes and remote scopes.
 	if remoteScopeCount == 0 {
 		for i := 0; i < preScopeCount; i++ {
-			if err = <-preScopeResultReceiveChan; err != nil {
+			result := <-preScopeResultReceiveChan
+			result, _ = result.resolveCancelCause()
+			if err = result.err; err != nil {
 				return err
 			}
 		}
@@ -474,7 +476,9 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 
 	for {
 		select {
-		case err := <-preScopeResultReceiveChan:
+		case result := <-preScopeResultReceiveChan:
+			result, _ = result.resolveCancelCause()
+			err := result.err
 			if err != nil {
 				return s.cancelMergeSiblingsOnError(err)
 			}
@@ -500,19 +504,20 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 // that caused cleanup to race a full pipeline channel.
 func collectMergeRunResults(
 	proc *process.Process,
-	current error,
-	preScopeResults <-chan error,
+	current scopeRunResult,
+	preScopeResults <-chan scopeRunResult,
 	notifyResults <-chan notifyMessageResult,
 ) error {
 	for len(preScopeResults) > 0 {
-		current = preferPrimaryScopeError(current, <-preScopeResults)
+		current = preferPrimaryScopeResult(current, <-preScopeResults)
 	}
 	for len(notifyResults) > 0 {
 		result := <-notifyResults
-		current = preferPrimaryScopeError(current, result.err)
+		current = preferPrimaryScopeResult(current, scopeRunResult{err: result.err, ctx: proc.Ctx})
 		result.clean(proc)
 	}
-	return current
+	current, _ = current.resolveCancelCause()
+	return current.err
 }
 
 // cancelMergeSiblingsOnError breaks the wait-for cycle between a failed
