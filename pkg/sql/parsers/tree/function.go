@@ -274,8 +274,9 @@ func (node *CreateFunction) Free() {
 
 type DropFunction struct {
 	statementImpl
-	Name *FunctionName
-	Args FunctionArgs
+	Name     *FunctionName
+	Args     FunctionArgs
+	IfExists bool
 }
 
 func (node DropFunction) TypeName() string { return "tree.DropFunction" }
@@ -293,6 +294,9 @@ func (node *DropFunction) reset() {
 
 func (node *DropFunction) Format(ctx *FmtCtx) {
 	ctx.WriteString("drop function ")
+	if node.IfExists {
+		ctx.WriteString("if exists ")
+	}
 	node.Name.Format(ctx)
 	ctx.WriteString(" (")
 

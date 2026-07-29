@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -100,8 +101,9 @@ func (client *testHAKClient) UpdateNonVotingLocality(ctx context.Context, locali
 var _ taskservice.TaskRunner = new(testRunner)
 
 type testRunner struct {
-	stopErr error
-	stopped int
+	stopErr   error
+	stopped   int
+	executors map[task.TaskCode]taskservice.TaskExecutor
 }
 
 func (runner *testRunner) ID() string {
@@ -125,6 +127,10 @@ func (runner *testRunner) Parallelism() int {
 }
 
 func (runner *testRunner) RegisterExecutor(code task.TaskCode, executor taskservice.TaskExecutor) {
+	if runner.executors == nil {
+		runner.executors = make(map[task.TaskCode]taskservice.TaskExecutor)
+	}
+	runner.executors[code] = executor
 	if code == task.TaskCode_MergeObject {
 		tsk := &task.AsyncTask{}
 		_ = executor(context.Background(), tsk)
@@ -132,8 +138,7 @@ func (runner *testRunner) RegisterExecutor(code task.TaskCode, executor taskserv
 }
 
 func (runner *testRunner) GetExecutor(code task.TaskCode) taskservice.TaskExecutor {
-	//TODO implement me
-	panic("implement me")
+	return runner.executors[code]
 }
 
 func (runner *testRunner) Attach(ctx context.Context, taskID uint64, routine taskservice.ActiveRoutine) error {
@@ -182,6 +187,8 @@ func TestStopTaskStopsRunnerAfterHolderCloseFailure(t *testing.T) {
 var _ taskservice.TaskService = new(testTS)
 
 type testTS struct {
+	cronTasks []task.TaskMetadata
+	cronExprs []string
 }
 
 func (ts *testTS) Close() error {
@@ -199,9 +206,10 @@ func (ts *testTS) CreateBatch(ctx context.Context, metadata []task.TaskMetadata)
 	panic("implement me")
 }
 
-func (ts *testTS) CreateCronTask(ctx context.Context, task task.TaskMetadata, cronExpr string) error {
-	//TODO implement me
-	panic("implement me")
+func (ts *testTS) CreateCronTask(ctx context.Context, metadata task.TaskMetadata, cronExpr string) error {
+	ts.cronTasks = append(ts.cronTasks, metadata)
+	ts.cronExprs = append(ts.cronExprs, cronExpr)
+	return nil
 }
 
 func (ts *testTS) Allocate(ctx context.Context, value task.AsyncTask, taskRunner string) error {
@@ -328,4 +336,9 @@ func Test_registerExecutorsLocked(t *testing.T) {
 	}
 
 	sv.registerExecutorsLocked()
+	require.NotNil(t, run.GetExecutor(task.TaskCode_DataBranchLineageGC))
+	require.Len(t, ts.cronTasks, 1)
+	assert.Equal(t, task.TaskCode_DataBranchLineageGC, ts.cronTasks[0].Executor)
+	assert.Equal(t, "data_branch_lineage_gc", ts.cronTasks[0].ID)
+	assert.Equal(t, "0 */5 * * * *", ts.cronExprs[0])
 }

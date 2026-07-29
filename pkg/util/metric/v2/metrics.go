@@ -51,6 +51,7 @@ func init() {
 	initProxyMetrics()
 	initFrontendMetrics()
 	initPipelineMetrics()
+	initSQLMetrics()
 	initScheduleMetrics()
 	initLogServiceMetrics()
 	initShardingMetrics()
