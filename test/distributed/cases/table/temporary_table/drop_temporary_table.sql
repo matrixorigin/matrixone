@@ -39,50 +39,25 @@ use drop_temporary_owner_db;
 create temporary table t_shadow (id int primary key);
 insert into t_shadow values (2);
 -- @session
-select p.role_name
-from mo_catalog.mo_role_privs p
-join mo_catalog.mo_tables t on p.obj_id = t.rel_id
-where p.privilege_name = 'table ownership'
-  and t.reldatabase = 'drop_temporary_owner_db'
-  and t.relname = 't_shadow'
-order by p.role_name;
+select p.role_name from mo_catalog.mo_role_privs p join mo_catalog.mo_tables t on p.obj_id = t.rel_id where p.privilege_name = 'table ownership' and t.reldatabase = 'drop_temporary_owner_db' and t.relname = 't_shadow' order by p.role_name;
 
 -- @session:id=2&user=sys:drop_temporary_worker_user&password=123456
 drop table t_shadow;
 -- @session
-select p.role_name
-from mo_catalog.mo_role_privs p
-join mo_catalog.mo_tables t on p.obj_id = t.rel_id
-where p.privilege_name = 'table ownership'
-  and t.reldatabase = 'drop_temporary_owner_db'
-  and t.relname = 't_shadow'
-order by p.role_name;
+select p.role_name from mo_catalog.mo_role_privs p join mo_catalog.mo_tables t on p.obj_id = t.rel_id where p.privilege_name = 'table ownership' and t.reldatabase = 'drop_temporary_owner_db' and t.relname = 't_shadow' order by p.role_name;
 
 -- @session:id=2&user=sys:drop_temporary_worker_user&password=123456
 create temporary table t_shadow (id int primary key);
 drop temporary table t_shadow;
 -- @session
-select p.role_name
-from mo_catalog.mo_role_privs p
-join mo_catalog.mo_tables t on p.obj_id = t.rel_id
-where p.privilege_name = 'table ownership'
-  and t.reldatabase = 'drop_temporary_owner_db'
-  and t.relname = 't_shadow'
-order by p.role_name;
+select p.role_name from mo_catalog.mo_role_privs p join mo_catalog.mo_tables t on p.obj_id = t.rel_id where p.privilege_name = 'table ownership' and t.reldatabase = 'drop_temporary_owner_db' and t.relname = 't_shadow' order by p.role_name;
 
 -- @session:id=2&user=sys:drop_temporary_worker_user&password=123456
 create temporary table t_shadow (id int primary key);
 drop table t_shadow, t_persistent;
 -- @session
-select p.role_name
-from mo_catalog.mo_role_privs p
-join mo_catalog.mo_tables t on p.obj_id = t.rel_id
-where p.privilege_name = 'table ownership'
-  and t.reldatabase = 'drop_temporary_owner_db'
-  and t.relname = 't_shadow'
-order by p.role_name;
-select count(*) from mo_catalog.mo_tables
-where reldatabase = 'drop_temporary_owner_db' and relname = 't_persistent';
+select p.role_name from mo_catalog.mo_role_privs p join mo_catalog.mo_tables t on p.obj_id = t.rel_id where p.privilege_name = 'table ownership' and t.reldatabase = 'drop_temporary_owner_db' and t.relname = 't_shadow' order by p.role_name;
+select count(*) from mo_catalog.mo_tables where reldatabase = 'drop_temporary_owner_db' and relname = 't_persistent';
 
 drop database drop_temporary_owner_db;
 drop user drop_temporary_worker_user;
