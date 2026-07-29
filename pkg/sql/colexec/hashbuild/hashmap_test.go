@@ -15,6 +15,7 @@
 package hashbuild
 
 import (
+	"context"
 	"errors"
 	"math"
 	"reflect"
@@ -84,6 +85,41 @@ func TestBuildHashMapBudgetRejectsResizeAndReleasesOnReset(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestBuildHashMapCancellationReleasesRetainedBudgetOnReset(t *testing.T) {
+	const budgetCap = uint64(16 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	ctx, cancel := context.WithCancelCause(proc.Ctx)
+	process.ReplacePipelineCtx(proc, ctx, cancel)
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
+
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 10_000, proc.Mp())
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+	require.Positive(t, generation.Used(), "retained build input must own budget before cancellation")
+
+	proc.Cancel(context.Canceled)
+	err = hb.BuildHashmap(false, false, false, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, hb.IntHashMap)
+	require.Nil(t, hb.StrHashMap)
+
+	hb.Reset(proc, true)
+	hb.Free(proc)
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestPublishedJoinMapResizeKeepsReservationWithConsumer(t *testing.T) {
 	const budgetCap = uint64(16 << 20)
 	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
@@ -142,6 +178,49 @@ func TestHashMapReservationOwnerRetainsSegmentedGrowthTokens(t *testing.T) {
 
 	owner.release()
 	require.Zero(t, generation.Used())
+}
+
+func TestBudgetedEmptyJoinMapRejectsUnadmittedAllocationAndResize(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		keyWidth     int
+		initialBytes uint64
+	}{
+		{name: "int", keyWidth: 4, initialBytes: hashtable.Int64HashMapInitialAllocationBytes()},
+		{name: "string", keyWidth: 128, initialBytes: hashtable.StringHashMapInitialAllocationBytes()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+
+			tooSmall := process.MustNewHashBuildBudget(tc.initialBytes-1, tc.initialBytes-1)
+			tooSmallGeneration, err := tooSmall.OpenGeneration(1)
+			require.NoError(t, err)
+			jm, err := NewBudgetedEmptyJoinMap(tc.keyWidth, tooSmallGeneration, mp)
+			require.Nil(t, jm)
+			require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+			require.Zero(t, tooSmallGeneration.Used())
+			require.Zero(t, mp.CurrNB())
+
+			exact := process.MustNewHashBuildBudget(tc.initialBytes, tc.initialBytes)
+			generation, err := exact.OpenGeneration(2)
+			require.NoError(t, err)
+			jm, err = NewBudgetedEmptyJoinMap(tc.keyWidth, generation, mp)
+			require.NoError(t, err)
+			require.Equal(t, tc.initialBytes, generation.Used())
+			require.Equal(t, int64(tc.initialBytes), mp.CurrNB())
+
+			err = jm.PreAlloc(10_000)
+			require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+			require.Equal(t, tc.initialBytes, generation.Used(),
+				"rejected growth must roll back its temporary reservation")
+
+			jm.Free()
+			require.Zero(t, generation.Used())
+			require.Zero(t, generation.SpillDiskUsed())
+			require.Zero(t, generation.SpillFDUsed())
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
 
 func TestCopyBuildBatchBudgetsFixedSizeTailPreallocation(t *testing.T) {

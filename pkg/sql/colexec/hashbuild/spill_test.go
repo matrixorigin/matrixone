@@ -721,7 +721,7 @@ func TestSpillWriteCoalescesAcrossBatches(t *testing.T) {
 	stat, err := file.Stat()
 	require.NoError(t, err)
 	require.Zero(t, stat.Size(), "records stay pending until the handoff flush")
-	require.NoError(t, ctr.flushSpillBuffers(files, analyzer))
+	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
 	stat, err = file.Stat()
 	require.NoError(t, err)
 	require.Positive(t, stat.Size())
@@ -872,7 +872,29 @@ func TestRetainedSpillGrowsEmergencyLeaseWithoutDoubleChargingSource(t *testing.
 	require.Equal(t, retainedNeed, ctr.spillScratchBase)
 	require.Equal(t, int64(1), analyzer.GetOpStats().ExtraStats["HashBuildRetainedEmergencyGrowCount"])
 	require.Equal(t, int64(1), analyzer.GetOpStats().ExtraStats["HashBuildRetainedEmergencyGrowBytes"])
-	require.NoError(t, ctr.flushSpillBuffers(files, analyzer))
+	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
+}
+
+func TestFlushSpillBuffersCancellationDiscardsPendingWrites(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	ctx, cancel := context.WithCancelCause(proc.Ctx)
+	process.ReplacePipelineCtx(proc, ctx, cancel)
+
+	ctr := &container{}
+	for _, bucket := range []int{0, spillNumBuckets - 1} {
+		_, err := ctr.spillBucketWriteBufs[bucket].Write([]byte("pending"))
+		require.NoError(t, err)
+		ctr.spillBucketWriteRows[bucket] = 1
+	}
+	proc.Cancel(context.Canceled)
+
+	err := ctr.flushSpillBuffers(proc, nil, process.NewAnalyzer(0, false, false, "test"))
+	require.ErrorIs(t, err, context.Canceled)
+	for bucket := 0; bucket < spillNumBuckets; bucket++ {
+		require.Zero(t, ctr.spillBucketWriteBufs[bucket].Len())
+		require.Zero(t, ctr.spillBucketWriteRows[bucket])
+	}
 }
 
 func TestSpillEmergencyBudgetDoesNotDoubleScaleShuffledConstVector(t *testing.T) {

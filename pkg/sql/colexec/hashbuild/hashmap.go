@@ -494,6 +494,9 @@ func (hb *HashmapBuilder) buildHashmap(
 	dedupBuildKeepLast bool,
 	proc *process.Process,
 ) (retErr error) {
+	if err := checkHashBuildCanceled(proc); err != nil {
+		return err
+	}
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
@@ -615,6 +618,9 @@ func (hb *HashmapBuilder) buildHashmap(
 
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
+			if err := checkHashBuildCanceled(proc); err != nil {
+				return err
+			}
 			runtime.Gosched()
 		}
 		n := hb.InputBatchRowCount - i
@@ -860,6 +866,9 @@ func (hb *HashmapBuilder) buildHashmap(
 		}
 		for i := 0; i < delScanRowCount; i += hashmap.UnitLimit {
 			if i%(hashmap.UnitLimit*32) == 0 {
+				if err := checkHashBuildCanceled(proc); err != nil {
+					return err
+				}
 				runtime.Gosched()
 			}
 			n := delScanRowCount - i

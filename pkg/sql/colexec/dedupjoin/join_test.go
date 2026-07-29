@@ -17,6 +17,7 @@ package dedupjoin
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -78,6 +79,30 @@ func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
 	require.Nil(t, arg.ctr.buf)
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 	arg.Free(proc, false, nil)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	proc.Free()
+}
+
+func TestWithRestoredJoinBat1VectorsRestoresOwnerOnError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseline := proc.Mp().CurrNB()
+	original := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	executorOwned := testutil.MakeInt32Vector([]int32{2}, nil, proc.Mp())
+	joinBat := batch.NewWithSize(1)
+	joinBat.Vecs[0] = original
+	joinBat.SetRowCount(1)
+	ctr := container{joinBat1: joinBat}
+	wantErr := errors.New("injected update expression failure")
+
+	err := ctr.withRestoredJoinBat1Vectors([]int32{0}, func() error {
+		ctr.joinBat1.Vecs[0] = executorOwned
+		return wantErr
+	})
+
+	require.ErrorIs(t, err, wantErr)
+	require.Same(t, original, ctr.joinBat1.Vecs[0])
+	joinBat.Clean(proc.Mp())
+	executorOwned.Free(proc.Mp())
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 	proc.Free()
 }

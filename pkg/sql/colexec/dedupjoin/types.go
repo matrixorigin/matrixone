@@ -443,6 +443,8 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 		ctr.joinBat2.Clean(proc.GetMPool())
 		ctr.joinBat2 = nil
 	}
+	clear(ctr.savedVecs)
+	ctr.savedVecs = nil
 }
 
 // cleanBucketState releases per-bucket state before advancing to the next

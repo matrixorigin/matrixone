@@ -580,6 +580,9 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
+	if err := checkHashBuildCanceled(proc); err != nil {
+		return err
+	}
 	need, err := spillScratchBudgetBytes(bat, sourceAlreadyCharged)
 	if err != nil {
 		return err
@@ -679,6 +682,9 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 		}
 		keyVecs[i] = vec
 	}
+	if err := checkHashBuildCanceled(proc); err != nil {
+		return err
+	}
 	if old := ctr.spillExprReservation; old != nil {
 		old.Release()
 	}
@@ -689,6 +695,9 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	// Reuse hashValues buffer
 	hashes := ctr.spillHashValues[:rows]
 	computeXXHash(keyVecs, hashes)
+	if err := checkHashBuildCanceled(proc); err != nil {
+		return err
+	}
 	// Keep the legacy spillSelection field as an alias for callers/tests that
 	// inspect it. It intentionally points at the same backing array: no second
 	// row-id allocation is made.
@@ -717,6 +726,9 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	}
 
 	for bucket := 0; bucket < spillNumBuckets; bucket++ {
+		if err := checkHashBuildCanceled(proc); err != nil {
+			return err
+		}
 		start, end := offsets[bucket], offsets[bucket+1]
 		if start == end {
 			continue
@@ -856,12 +868,24 @@ func (ctr *container) flushPendingSpillBucket(file *os.File, bucket int, analyze
 }
 
 // flushSpillBuffers writes all pending bucket records before files are rewound
-// or handed to JoinMap. Continue after an individual failure so every buffer
-// reaches a terminal state; the first error is returned to the caller.
-func (ctr *container) flushSpillBuffers(files []*os.File, analyzer process.Analyzer) error {
+// or handed to JoinMap. Cancellation is checked between physical writes. After
+// the first error, the remaining buffers are discarded rather than written, so
+// every buffer still reaches a terminal state without doing doomed I/O.
+func (ctr *container) flushSpillBuffers(proc *process.Process, files []*os.File, analyzer process.Analyzer) error {
 	var firstErr error
 	for bucket := 0; bucket < spillNumBuckets; bucket++ {
 		if ctr.spillBucketWriteBufs[bucket].Len() == 0 {
+			continue
+		}
+		if firstErr != nil {
+			ctr.spillBucketWriteBufs[bucket].Reset()
+			ctr.spillBucketWriteRows[bucket] = 0
+			continue
+		}
+		if err := checkHashBuildCanceled(proc); err != nil {
+			firstErr = err
+			ctr.spillBucketWriteBufs[bucket].Reset()
+			ctr.spillBucketWriteRows[bucket] = 0
 			continue
 		}
 		var file *os.File
@@ -876,7 +900,7 @@ func (ctr *container) flushSpillBuffers(files []*os.File, analyzer process.Analy
 			ctr.spillBucketWriteRows[bucket] = 0
 			continue
 		}
-		if err := ctr.flushPendingSpillBucket(file, bucket, analyzer); err != nil && firstErr == nil {
+		if err := ctr.flushPendingSpillBucket(file, bucket, analyzer); err != nil {
 			firstErr = err
 		}
 	}

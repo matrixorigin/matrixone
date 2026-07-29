@@ -19,6 +19,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -41,6 +42,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,6 +64,28 @@ func TestDupOperator(t *testing.T) {
 		0,
 		0,
 	)
+}
+
+func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
+	operators := []vm.Operator{
+		&hashjoin.HashJoin{EqConds: [][]*plan.Expr{{}, {}}},
+		&dedupjoin.DedupJoin{Conditions: [][]*plan.Expr{{}, {}}},
+		&rightdedupjoin.RightDedupJoin{Conditions: [][]*plan.Expr{{}, {}}},
+	}
+
+	for _, operator := range operators {
+		t.Run(operator.OpType().String(), func(t *testing.T) {
+			broadcast := constructBroadcastHashBuild(operator, nil, 4)
+			require.False(t, broadcast.IsShuffle)
+			require.Equal(t, int32(4), broadcast.JoinMapRefCnt)
+			broadcast.Release()
+
+			shuffle := constructShuffleHashBuild(&plan.Node{}, operator, nil)
+			require.True(t, shuffle.IsShuffle)
+			require.Equal(t, int32(1), shuffle.JoinMapRefCnt)
+			shuffle.Release()
+		})
+	}
 }
 
 func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
@@ -470,6 +494,23 @@ func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	require.Same(t, dup1.Mailbox, dup2.Mailbox)
 	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*dedupjoin.DedupJoin)
 	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
+}
+
+func TestDupOperatorHashJoinSharesChannelOnlyWithinGeneration(t *testing.T) {
+	op := hashjoin.NewArgument()
+	staleChannel := make(chan *bitmap.Bitmap, 2)
+	close(staleChannel)
+	op.Channel = staleChannel
+
+	dupCtx := newOperatorDupContext()
+	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*hashjoin.HashJoin)
+	dup2 := dupOperatorWithContext(op, 1, 2, dupCtx).(*hashjoin.HashJoin)
+
+	require.Equal(t, staleChannel, op.Channel, "duplicating must not mutate the reusable template")
+	require.NotEqual(t, staleChannel, dup1.Channel, "a stale closed template channel must not enter a new execution")
+	require.Equal(t, dup1.Channel, dup2.Channel)
+	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*hashjoin.HashJoin)
+	require.NotEqual(t, dup1.Channel, nextGeneration.Channel)
 }
 
 func TestDupOperatorAssignsSharedShuffleConsumerIndex(t *testing.T) {
