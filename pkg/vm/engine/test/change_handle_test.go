@@ -2994,9 +2994,9 @@ func TestISCPExecutor8(t *testing.T) {
 	tableID := rel.GetTableID(ctxWithTimeout)
 
 	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
-	require.Nil(t, err)
+	require.NoError(t, err)
 
-	txn.Commit(ctxWithTimeout)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
 	// init cdc executor
 	checkLeaseStub := gostub.Stub(
@@ -3028,7 +3028,7 @@ func TestISCPExecutor8(t *testing.T) {
 	require.NoError(t, err)
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
-	cdcExecutor.Start()
+	require.NoError(t, cdcExecutor.Start())
 	defer cdcExecutor.Stop()
 
 	// register cdc job
@@ -3048,35 +3048,40 @@ func TestISCPExecutor8(t *testing.T) {
 		},
 		false,
 	)
-	assert.True(t, ok)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(ctxWithTimeout))
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
-	now := taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		4000,
-		func() bool {
-			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-			return ok && ts.GE(&now)
-		},
-	)
-	ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-	assert.True(t, ok)
-	assert.True(t, ts.GE(&now))
+	const jobName = "hnsw_idx"
+	waitForWatermark := func(target types.TS) {
+		var (
+			current types.TS
+			found   bool
+		)
+		reached := assert.Eventually(t, func() bool {
+			current, found = cdcExecutor.GetWatermark(accountId, tableID, jobName)
+			return found && current.GE(&target)
+		}, 10*time.Second, 10*time.Millisecond)
+		if !reached {
+			require.FailNowf(
+				t,
+				"ISCP watermark did not reach target",
+				"account=%d table=%d job=%s found=%t current=%s target=%s",
+				accountId,
+				tableID,
+				jobName,
+				found,
+				current.ToString(),
+				target.ToString(),
+			)
+		}
+	}
+
+	waitForWatermark(taeHandler.GetDB().TxnMgr.Now())
 
 	testutil2.DeleteAll(t, accountId, taeHandler.GetDB(), "srcdb", "src_table")
 
-	now = taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		4000,
-		func() bool {
-			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-			return ok && ts.GE(&now)
-		},
-	)
-	ts, ok = cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-	assert.True(t, ok)
-	assert.True(t, ts.GE(&now))
+	waitForWatermark(taeHandler.GetDB().TxnMgr.Now())
 
 }
 
