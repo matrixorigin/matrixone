@@ -31,7 +31,7 @@ import (
 )
 
 func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
-	embed.RunBaseClusterTests(func(c embed.Cluster) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 		defer cancel()
 
