@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"io"
 	"math"
@@ -911,7 +912,7 @@ func TestSpillEmergencyBudgetDoesNotDoubleScaleShuffledConstVector(t *testing.T)
 	legacyMetadata, ok := retainedMetadataAllowance(bat)
 	require.True(t, ok)
 	legacyScaled += legacyMetadata * uint64(colexec.DefaultBatchSize)
-	legacyNeed, err := spillPeakBudgetFor(uint64(colexec.DefaultBatchSize), 0, legacyScaled)
+	legacyNeed, err := spillPeakBudgetFor(uint64(colexec.DefaultBatchSize), 0, legacyScaled, uint64(len(bat.Vecs)))
 	require.NoError(t, err)
 	require.Greater(t, legacyNeed, uint64(10<<30),
 		"the old logical-size extrapolation must reproduce the false 10 GiB rejection")
@@ -1025,7 +1026,7 @@ func TestSpillProjectedSourceSkipsStaleNullVarlenaPayload(t *testing.T) {
 
 	targetRows := uint64(colexec.DefaultBatchSize)
 	legacySource := targetRows * (uint64(bat.Vecs[0].GetType().TypeSize()) + uint64(staleLen))
-	legacyNeed, err := spillPeakBudgetFor(targetRows, 0, legacySource)
+	legacyNeed, err := spillPeakBudgetFor(targetRows, 0, legacySource, uint64(len(bat.Vecs)))
 	require.NoError(t, err)
 	require.Greater(t, legacyNeed, uint64(10<<30),
 		"stale null payload would falsely exceed the query budget")
@@ -1086,12 +1087,107 @@ func TestSpillBudgetArithmeticFailsClosed(t *testing.T) {
 	_, err = spillCheckedMul(math.MaxUint64, 2)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
 
-	_, err = spillPeakBudgetFor(math.MaxUint64, 0, 0)
+	_, err = spillPeakBudgetFor(math.MaxUint64, 0, 0, 0)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
-	_, err = spillPeakBudgetFor(0, math.MaxUint64, 1)
+	_, err = spillPeakBudgetFor(0, math.MaxUint64, 1, 0)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
-	_, err = spillPeakBudgetFor(0, 0, math.MaxUint64)
+	_, err = spillPeakBudgetFor(0, 0, math.MaxUint64, 0)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
+func TestSpillCapacityReplacementOverlapChargesOldArrays(t *testing.T) {
+	got, err := spillCapacityReplacementOverlap(16, 4, 8, 8, 2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(8*8+8*4+2*8), got)
+
+	got, err = spillCapacityReplacementOverlap(8, 2, 8, 8, 2)
+	require.NoError(t, err)
+	require.Zero(t, got)
+
+	_, err = spillCapacityReplacementOverlap(-1, 0, 0, 0, 0)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = spillCapacityReplacementOverlap(math.MaxInt, 0, math.MaxInt-1, 0, 0)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
+func TestSpillReplacementPeakReusesHighWaterLease(t *testing.T) {
+	budget := process.MustNewHashBuildBudget(120, 120)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	token, err := generation.Reserve(100)
+	require.NoError(t, err)
+	ctr := container{
+		hashmapBuilder:          HashmapBuilder{budget: generation},
+		spillScratchReservation: token,
+		spillScratchBase:        100,
+	}
+
+	oldSize, grew, err := ctr.growSpillScratchTransient(90)
+	require.NoError(t, err)
+	require.False(t, grew)
+	require.Zero(t, oldSize)
+	require.Equal(t, uint64(100), generation.Used())
+
+	oldSize, grew, err = ctr.growSpillScratchTransient(110)
+	require.NoError(t, err)
+	require.True(t, grew)
+	require.Equal(t, uint64(100), oldSize)
+	require.Equal(t, uint64(110), generation.Used())
+	require.NoError(t, ctr.restoreSpillScratchTransient(oldSize, grew))
+	require.Equal(t, uint64(100), generation.Used())
+	require.NoError(t, ctr.restoreSpillScratchTransient(0, false))
+
+	_, grew, err = ctr.growSpillScratchTransient(121)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.False(t, grew)
+	require.Equal(t, uint64(100), generation.Used())
+
+	token.Release()
+	require.Zero(t, generation.Used())
+}
+
+func TestSpillPeakChargesSerializedPayloadOnce(t *testing.T) {
+	const (
+		rows          = uint64(8192)
+		inputBytes    = uint64(3 << 20)
+		selectedBytes = uint64(5 << 20)
+	)
+	got, err := spillPeakBudgetFor(rows, inputBytes, selectedBytes, 0)
+	require.NoError(t, err)
+	want := rows*12 + inputBytes + selectedBytes + selectedBytes + 64*1024
+	require.Equal(t, want, got)
+}
+
+func TestMarshalSpillRecordPreallocatesSinglePayload(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	bat := batch.NewWithSize(1)
+	var err error
+	bat.Vecs[0], err = vector.NewConstBytes(
+		types.T_varchar.ToType(), make([]byte, 4<<20), 64, proc.Mp(),
+	)
+	require.NoError(t, err)
+	bat.SetRowCount(64)
+	defer bat.Clean(proc.Mp())
+
+	buf := bytes.NewBuffer(make([]byte, 0, 1<<20))
+	_, err = marshalSpillRecord(bat, buf)
+	require.NoError(t, err)
+	base := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > base {
+		base = size
+	}
+	require.Equal(t, base+128+24, uint64(buf.Cap()))
+
+	small := batch.NewWithSize(1)
+	small.Vecs[0], err = vector.NewConstBytes(
+		types.T_varchar.ToType(), make([]byte, 1024), 1, proc.Mp(),
+	)
+	require.NoError(t, err)
+	small.SetRowCount(1)
+	defer small.Clean(proc.Mp())
+	_, err = marshalSpillRecord(small, buf)
+	require.NoError(t, err, "a retained large serialization buffer must be reusable for a smaller batch")
 }
 
 func TestSpillReservationBoundaryInputs(t *testing.T) {

@@ -145,28 +145,6 @@ func (c *simpleCAllocatorMmapCache) expire(generation uint64) {
 	unmapSimpleCAllocatorCacheEntries(entries)
 }
 
-func (c *simpleCAllocatorMmapCache) cachedBytes() uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.bytes
-}
-
-func (c *simpleCAllocatorMmapCache) drain() {
-	c.mu.Lock()
-	if c.timer != nil {
-		c.timer.Stop()
-		c.timer = nil
-	}
-	c.timerGeneration++
-	entries := c.bySize
-	c.bySize = make(map[uint64][][]byte)
-	c.bytes = 0
-	c.updateGaugeLocked()
-	c.mu.Unlock()
-
-	unmapSimpleCAllocatorCacheEntries(entries)
-}
-
 func (c *simpleCAllocatorMmapCache) updateGaugeLocked() {
 	if c.cachedBytesGauge != nil {
 		c.cachedBytesGauge.Set(float64(c.bytes))
