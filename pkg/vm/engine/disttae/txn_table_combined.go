@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"container/heap"
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -308,20 +309,71 @@ func (t *combinedTxnTable) CollectChanges(
 }
 
 type combinedChangesHandle struct {
-	handles  []engine.ChangesHandle
-	pending  []pendingPartitionChanges
-	mp       *mpool.MPool
-	idx      int
-	snapshot bool
-	closed   bool
+	handles         []engine.ChangesHandle
+	pending         []pendingPartitionChanges
+	frontier        pendingChangesHeap
+	mp              *mpool.MPool
+	idx             int
+	snapshot        bool
+	closed          bool
+	pendingLoaded   bool
+	lastCommitTS    types.TS
+	hasLastCommitTS bool
 }
 
 type pendingPartitionChanges struct {
-	data      *batch.Batch
-	tombstone *batch.Batch
-	hint      engine.ChangesHandle_Hint
-	exhausted bool
-	closed    bool
+	data            *batch.Batch
+	tombstone       *batch.Batch
+	dataOffset      int
+	tombstoneOffset int
+	hint            engine.ChangesHandle_Hint
+	exhausted       bool
+	closed          bool
+}
+
+type pendingChangeKind uint8
+
+const (
+	pendingChangeData pendingChangeKind = iota
+	pendingChangeTombstone
+)
+
+type pendingChangeFrontier struct {
+	partition int
+	kind      pendingChangeKind
+	commitTS  types.TS
+}
+
+type pendingChangesHeap []pendingChangeFrontier
+
+func (h pendingChangesHeap) Len() int {
+	return len(h)
+}
+
+func (h pendingChangesHeap) Less(i, j int) bool {
+	if h[i].commitTS.EQ(&h[j].commitTS) {
+		if h[i].partition == h[j].partition {
+			return h[i].kind < h[j].kind
+		}
+		return h[i].partition < h[j].partition
+	}
+	return h[i].commitTS.LT(&h[j].commitTS)
+}
+
+func (h pendingChangesHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *pendingChangesHeap) Push(value any) {
+	*h = append(*h, value.(pendingChangeFrontier))
+}
+
+func (h *pendingChangesHeap) Pop() any {
+	old := *h
+	last := len(old) - 1
+	value := old[last]
+	*h = old[:last]
+	return value
 }
 
 func (h *combinedChangesHandle) Next(
@@ -390,64 +442,75 @@ func (h *combinedChangesHandle) nextTail(
 ) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	h.ensurePending()
 
-	if err = h.loadPending(ctx, mp); err != nil {
-		return h.fail(mp, nil, nil, err)
+	if !h.pendingLoaded {
+		if err = h.loadPending(ctx, mp); err != nil {
+			return h.fail(mp, nil, nil, err)
+		}
+		h.pendingLoaded = true
 	}
 	commitTS, ok := h.nextCommitTS()
 	if !ok {
 		return nil, nil, engine.ChangesHandle_Tail_done, nil
 	}
+	h.lastCommitTS = commitTS
+	h.hasLastCommitTS = true
 
 	var groupHint engine.ChangesHandle_Hint
 	hasGroupHint := false
-	for {
-		for i := range h.pending {
-			pending := &h.pending[i]
-			var appended bool
-			if appended, err = appendChangesAtCommitTS(&data, &pending.data, commitTS, mp); err != nil {
-				return h.fail(mp, data, tombstone, err)
-			}
-			if appended {
-				groupHint, hasGroupHint, err = mergeChangesHint(groupHint, hasGroupHint, pending.hint)
-				if err != nil {
-					return h.fail(mp, data, tombstone, err)
-				}
-			}
+	for h.frontier.Len() > 0 && h.frontier[0].commitTS.EQ(&commitTS) {
+		entry := heap.Pop(&h.frontier).(pendingChangeFrontier)
+		pending := &h.pending[entry.partition]
 
-			if appended, err = appendChangesAtCommitTS(&tombstone, &pending.tombstone, commitTS, mp); err != nil {
-				return h.fail(mp, data, tombstone, err)
-			}
-			if appended {
-				groupHint, hasGroupHint, err = mergeChangesHint(groupHint, hasGroupHint, pending.hint)
-				if err != nil {
-					return h.fail(mp, data, tombstone, err)
-				}
-			}
+		var src **batch.Batch
+		var offset *int
+		var dst **batch.Batch
+		if entry.kind == pendingChangeData {
+			src = &pending.data
+			offset = &pending.dataOffset
+			dst = &data
+		} else {
+			src = &pending.tombstone
+			offset = &pending.tombstoneOffset
+			dst = &tombstone
 		}
 
-		if !hasGroupHint {
-			return h.fail(mp, data, tombstone, moerr.NewInternalErrorNoCtx("combined changes handle lost commit timestamp"))
+		var appended bool
+		if appended, err = appendChangesAtCommitTS(dst, src, offset, commitTS, mp); err != nil {
+			return h.fail(mp, data, tombstone, err)
 		}
-		if groupHint == engine.ChangesHandle_Snapshot {
-			return h.fail(mp, data, tombstone, moerr.NewInternalErrorNoCtx("tail changes handle returned snapshot data"))
+		if !appended {
+			return h.fail(mp, data, tombstone, moerr.NewInternalErrorNoCtx("combined changes frontier lost commit timestamp"))
 		}
-		if err = h.loadPending(ctx, mp); err != nil {
+		groupHint, hasGroupHint, err = mergeChangesHint(groupHint, hasGroupHint, pending.hint)
+		if err != nil {
 			return h.fail(mp, data, tombstone, err)
 		}
 
-		nextTS, hasNext := h.nextCommitTS()
-		if !hasNext || !nextTS.EQ(&commitTS) {
-			if hasNext && nextTS.LT(&commitTS) {
-				return h.fail(mp, data, tombstone, moerr.NewInternalErrorNoCtx("partition change stream is not ordered by commit timestamp"))
+		if *src != nil {
+			if err = h.pushFrontier(entry.partition, entry.kind); err != nil {
+				return h.fail(mp, data, tombstone, err)
 			}
-			break
+		} else if pending.data == nil && pending.tombstone == nil {
+			if err = h.loadPendingPartition(ctx, mp, entry.partition); err != nil {
+				return h.fail(mp, data, tombstone, err)
+			}
 		}
+	}
+
+	if !hasGroupHint {
+		return h.fail(mp, data, tombstone, moerr.NewInternalErrorNoCtx("combined changes handle lost commit timestamp"))
+	}
+	if groupHint == engine.ChangesHandle_Snapshot {
+		return h.fail(mp, data, tombstone, moerr.NewInternalErrorNoCtx("tail changes handle returned snapshot data"))
 	}
 
 	// A tail-done boundary is emitted for each commit timestamp, after every
 	// partition has contributed its rows for that timestamp. This keeps the
 	// CDC consumer's atomic batch aligned with the logical transaction instead
-	// of the partition that happened to be drained first.
+	// of the partition that happened to be drained first. Do not merge several
+	// commit timestamps into one Tail_done: the sink applies deletes before
+	// inserts, which would reverse cross-timestamp updates of the same primary
+	// key.
 	return data, tombstone, engine.ChangesHandle_Tail_done, nil
 }
 
@@ -488,37 +551,42 @@ func (h *combinedChangesHandle) ensurePending() {
 
 func (h *combinedChangesHandle) loadPending(ctx context.Context, mp *mpool.MPool) error {
 	for i := range h.pending {
-		pending := &h.pending[i]
-		if pending.exhausted || pending.data != nil || pending.tombstone != nil {
-			continue
-		}
-		for {
-			data, tombstone, hint, err := h.handles[i].Next(ctx, mp)
-			if err != nil {
-				return err
-			}
-			if data != nil && data.RowCount() == 0 {
-				data.Clean(mp)
-				data = nil
-			}
-			if tombstone != nil && tombstone.RowCount() == 0 {
-				tombstone.Clean(mp)
-				tombstone = nil
-			}
-			if data != nil || tombstone != nil {
-				pending.data = data
-				pending.tombstone = tombstone
-				pending.hint = hint
-				break
-			}
-			pending.exhausted = true
-			if err = h.closePartition(i, mp); err != nil {
-				return err
-			}
-			break
+		if err := h.loadPendingPartition(ctx, mp, i); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func (h *combinedChangesHandle) loadPendingPartition(ctx context.Context, mp *mpool.MPool, index int) error {
+	pending := &h.pending[index]
+	if pending.exhausted || pending.data != nil || pending.tombstone != nil {
+		return nil
+	}
+	for {
+		data, tombstone, hint, err := h.handles[index].Next(ctx, mp)
+		if err != nil {
+			return err
+		}
+		if data != nil && data.RowCount() == 0 {
+			data.Clean(mp)
+			data = nil
+		}
+		if tombstone != nil && tombstone.RowCount() == 0 {
+			tombstone.Clean(mp)
+			tombstone = nil
+		}
+		if data != nil || tombstone != nil {
+			pending.data = data
+			pending.tombstone = tombstone
+			pending.dataOffset = 0
+			pending.tombstoneOffset = 0
+			pending.hint = hint
+			return h.pushPartitionFrontier(index)
+		}
+		pending.exhausted = true
+		return h.closePartition(index, mp)
+	}
 }
 
 func (h *combinedChangesHandle) closePartition(index int, mp *mpool.MPool) error {
@@ -532,20 +600,43 @@ func (h *combinedChangesHandle) closePartition(index int, mp *mpool.MPool) error
 }
 
 func (h *combinedChangesHandle) nextCommitTS() (types.TS, bool) {
-	var next types.TS
-	found := false
-	for i := range h.pending {
-		pending := &h.pending[i]
-		if ts, ok := firstCommitTS(pending.data); ok && (!found || ts.LT(&next)) {
-			next = ts
-			found = true
-		}
-		if ts, ok := firstCommitTS(pending.tombstone); ok && (!found || ts.LT(&next)) {
-			next = ts
-			found = true
-		}
+	if h.frontier.Len() == 0 {
+		return types.TS{}, false
 	}
-	return next, found
+	return h.frontier[0].commitTS, true
+}
+
+func (h *combinedChangesHandle) pushPartitionFrontier(index int) error {
+	if err := h.pushFrontier(index, pendingChangeData); err != nil {
+		return err
+	}
+	return h.pushFrontier(index, pendingChangeTombstone)
+}
+
+func (h *combinedChangesHandle) pushFrontier(index int, kind pendingChangeKind) error {
+	pending := &h.pending[index]
+	var source *batch.Batch
+	var offset int
+	if kind == pendingChangeData {
+		source = pending.data
+		offset = pending.dataOffset
+	} else {
+		source = pending.tombstone
+		offset = pending.tombstoneOffset
+	}
+	commitTS, ok := commitTSAt(source, offset)
+	if !ok {
+		return nil
+	}
+	if h.hasLastCommitTS && commitTS.LT(&h.lastCommitTS) {
+		return moerr.NewInternalErrorNoCtx("partition change stream is not ordered by commit timestamp")
+	}
+	heap.Push(&h.frontier, pendingChangeFrontier{
+		partition: index,
+		kind:      kind,
+		commitTS:  commitTS,
+	})
+	return nil
 }
 
 func (h *combinedChangesHandle) fail(mp *mpool.MPool, data, tombstone *batch.Batch, err error) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
@@ -568,6 +659,8 @@ func cleanPendingChanges(pending *pendingPartitionChanges, mp *mpool.MPool) {
 		pending.tombstone.Clean(mp)
 		pending.tombstone = nil
 	}
+	pending.dataOffset = 0
+	pending.tombstoneOffset = 0
 }
 
 func mergeChangesHint(current engine.ChangesHandle_Hint, hasCurrent bool, next engine.ChangesHandle_Hint) (engine.ChangesHandle_Hint, bool, error) {
@@ -583,18 +676,18 @@ func mergeChangesHint(current engine.ChangesHandle_Hint, hasCurrent bool, next e
 	return engine.ChangesHandle_Tail_wip, true, nil
 }
 
-func appendChangesAtCommitTS(dst **batch.Batch, src **batch.Batch, commitTS types.TS, mp *mpool.MPool) (bool, error) {
+func appendChangesAtCommitTS(dst **batch.Batch, src **batch.Batch, offset *int, commitTS types.TS, mp *mpool.MPool) (bool, error) {
 	if *src == nil {
 		return false, nil
 	}
-	first, _ := firstCommitTS(*src)
+	first, _ := commitTSAt(*src, *offset)
 	if !first.EQ(&commitTS) {
 		return false, nil
 	}
 
 	count := 1
-	for count < (*src).RowCount() {
-		ts, _ := commitTSAt(*src, count)
+	for *offset+count < (*src).RowCount() {
+		ts, _ := commitTSAt(*src, *offset+count)
 		if !ts.EQ(&commitTS) {
 			break
 		}
@@ -603,20 +696,16 @@ func appendChangesAtCommitTS(dst **batch.Batch, src **batch.Batch, commitTS type
 	if *dst == nil {
 		*dst = newChangeBatch(*src)
 	}
-	if err := (*dst).UnionWindow(*src, 0, count, mp); err != nil {
+	if err := (*dst).UnionWindow(*src, *offset, count, mp); err != nil {
 		return false, err
 	}
 
-	if count == (*src).RowCount() {
+	*offset += count
+	if *offset == (*src).RowCount() {
 		(*src).Clean(mp)
 		*src = nil
-		return true, nil
+		*offset = 0
 	}
-	sels := make([]int64, count)
-	for i := range sels {
-		sels[i] = int64(i)
-	}
-	(*src).Shrink(sels, true)
 	return true, nil
 }
 
@@ -627,10 +716,6 @@ func newChangeBatch(src *batch.Batch) *batch.Batch {
 		dst.Vecs[i] = vector.NewVec(*vec.GetType())
 	}
 	return dst
-}
-
-func firstCommitTS(bat *batch.Batch) (types.TS, bool) {
-	return commitTSAt(bat, 0)
 }
 
 func commitTSAt(bat *batch.Batch, row int) (types.TS, bool) {

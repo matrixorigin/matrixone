@@ -132,14 +132,16 @@ func TestCombinedTxnTable_CollectChangesKeepsPartitionMoveAtomic(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	insert := newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)})
+	insertSameCommit := newChangesTestBatch(t, mp, []int64{2}, []types.TS{types.BuildTS(10, 0)})
 	delete := newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)})
-	later := newChangesTestBatch(t, mp, []int64{2}, []types.TS{types.BuildTS(20, 0)})
+	later := newChangesTestBatch(t, mp, []int64{3}, []types.TS{types.BuildTS(20, 0)})
 	table := newMockCombinedTxnTable()
 	table.tablesFunc = func() ([]engine.Relation, error) {
 		return []engine.Relation{
 			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
 				return &mockChangesHandle{changes: []mockChange{
 					{data: insert, hint: engine.ChangesHandle_Tail_done},
+					{data: insertSameCommit, hint: engine.ChangesHandle_Tail_done},
 					{data: later, hint: engine.ChangesHandle_Tail_done},
 				}}, nil
 			}},
@@ -157,6 +159,7 @@ func TestCombinedTxnTable_CollectChangesKeepsPartitionMoveAtomic(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, data)
 	require.NotNil(t, tombstone)
+	assert.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](data.Vecs[0]))
 	assert.Equal(t, types.BuildTS(10, 0), vector.GetFixedAtNoTypeCheck[types.TS](data.Vecs[1], 0))
 	assert.Equal(t, types.BuildTS(10, 0), vector.GetFixedAtNoTypeCheck[types.TS](tombstone.Vecs[1], 0))
 	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
@@ -500,13 +503,15 @@ func TestCombinedChangesHelpers(t *testing.T) {
 	t.Run("append one commit timestamp and retain the following rows", func(t *testing.T) {
 		src := newChangesTestBatch(t, mp, []int64{1, 2}, []types.TS{types.BuildTS(10, 0), types.BuildTS(20, 0)})
 		var dst *batch.Batch
+		offset := 0
 
-		appended, err := appendChangesAtCommitTS(&dst, &src, types.BuildTS(10, 0), mp)
+		appended, err := appendChangesAtCommitTS(&dst, &src, &offset, types.BuildTS(10, 0), mp)
 		require.NoError(t, err)
 		require.True(t, appended)
 		require.NotNil(t, dst)
 		assert.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](dst.Vecs[0]))
-		assert.Equal(t, []int64{2}, vector.MustFixedColWithTypeCheck[int64](src.Vecs[0]))
+		assert.Equal(t, 1, offset)
+		assert.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](src.Vecs[0]))
 
 		dst.Clean(mp)
 		src.Clean(mp)
@@ -548,6 +553,8 @@ func TestCombinedChangesHelpers(t *testing.T) {
 			{data: newChangesTestBatch(t, mp, []int64{2}, []types.TS{types.BuildTS(20, 0)})},
 			{tombstone: newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)})},
 		}}
+		require.NoError(t, handle.pushPartitionFrontier(0))
+		require.NoError(t, handle.pushPartitionFrontier(1))
 		commitTS, ok := handle.nextCommitTS()
 		require.True(t, ok)
 		assert.Equal(t, types.BuildTS(10, 0), commitTS)
@@ -574,6 +581,93 @@ func TestCombinedChangesHelpers(t *testing.T) {
 		require.NoError(t, handle.closePartition(0, mp))
 		assert.Equal(t, 1, child.closeCount)
 	})
+}
+
+func TestCombinedChangesHandleTailManyCommitTimestamps(t *testing.T) {
+	const rowCount = 8192
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	handle, children := newMixedTimestampChangesHandle(t, mp, rowCount)
+
+	for i := 0; i < rowCount; i++ {
+		data, tombstone, hint, err := handle.Next(context.Background(), mp)
+		require.NoError(t, err)
+		require.NotNil(t, data)
+		require.Nil(t, tombstone)
+		require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+		require.Equal(t, 1, data.RowCount())
+		require.Equal(t, int64(i), vector.GetFixedAtNoTypeCheck[int64](data.Vecs[0], 0))
+		require.Equal(t, types.BuildTS(int64(i+1), 0), vector.GetFixedAtNoTypeCheck[types.TS](data.Vecs[1], 0))
+		data.Clean(mp)
+	}
+
+	data, tombstone, hint, err := handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.Nil(t, data)
+	require.Nil(t, tombstone)
+	require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	for _, child := range children {
+		require.True(t, child.closed)
+	}
+}
+
+func BenchmarkCombinedChangesHandleTail8KDistinctCommitTimestamps(b *testing.B) {
+	const rowCount = 8192
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		mp := mpool.MustNewZero()
+		handle, _ := newMixedTimestampChangesHandle(b, mp, rowCount)
+		b.StartTimer()
+		for {
+			data, tombstone, _, err := handle.Next(context.Background(), mp)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if data == nil && tombstone == nil {
+				break
+			}
+			if data != nil {
+				data.Clean(mp)
+			}
+			if tombstone != nil {
+				tombstone.Clean(mp)
+			}
+		}
+		b.StopTimer()
+		mpool.DeleteMPool(mp)
+	}
+}
+
+func newMixedTimestampChangesHandle(
+	t testing.TB,
+	mp *mpool.MPool,
+	rowCount int,
+) (*combinedChangesHandle, []*mockChangesHandle) {
+	t.Helper()
+	const partitionCount = 8
+	require.Zero(t, rowCount%partitionCount)
+
+	rowsPerPartition := rowCount / partitionCount
+	handles := make([]engine.ChangesHandle, partitionCount)
+	children := make([]*mockChangesHandle, partitionCount)
+	for partition := range handles {
+		values := make([]int64, rowsPerPartition)
+		timestamps := make([]types.TS, rowsPerPartition)
+		for row := range values {
+			sequence := row*partitionCount + partition
+			values[row] = int64(sequence)
+			timestamps[row] = types.BuildTS(int64(sequence+1), 0)
+		}
+		children[partition] = &mockChangesHandle{changes: []mockChange{{
+			data: newChangesTestBatch(t, mp, values, timestamps),
+			hint: engine.ChangesHandle_Tail_done,
+		}}}
+		handles[partition] = children[partition]
+	}
+	return &combinedChangesHandle{handles: handles, mp: mp}, children
 }
 
 func TestCombinedTxnTable_MergeObjects(t *testing.T) {
@@ -1747,7 +1841,7 @@ type mockChange struct {
 	hint      engine.ChangesHandle_Hint
 }
 
-func newChangesTestBatch(t *testing.T, mp *mpool.MPool, values []int64, timestamps []types.TS) *batch.Batch {
+func newChangesTestBatch(t testing.TB, mp *mpool.MPool, values []int64, timestamps []types.TS) *batch.Batch {
 	t.Helper()
 	require.Len(t, values, len(timestamps))
 	bat := batch.NewWithSize(2)
