@@ -138,10 +138,25 @@ func getSqlForAccountInfo(like *tree.ComparisonExpr, accId int64, needObjectCoun
 	return fmt.Sprintf(getAccountInfoFormatV2, dbCountFilter, tblCountFilter, objectCountExpr, clause)
 }
 
-func needShowAccountsObjectCount(account *TenantInfo, sa *tree.ShowAccounts, database string) bool {
-	return account.IsSysTenant() &&
+func buildShowAccountsSQL(
+	account *TenantInfo,
+	sa *tree.ShowAccounts,
+	database string,
+) (sql string, needObjectCount bool) {
+	isSysTenant := account.IsSysTenant()
+	accountID := int64(account.GetTenantID())
+	like := sa.Like
+	if isSysTenant {
+		accountID = -1
+	} else {
+		// Non-system tenants can only inspect their own account. Preserve the
+		// existing behavior of ignoring a SHOW ACCOUNTS LIKE clause here.
+		like = nil
+	}
+	needObjectCount = isSysTenant &&
 		sa.Like == nil &&
 		database == mometric.MetricDBConst
+	return getSqlForAccountInfo(like, accountID, needObjectCount), needObjectCount
 }
 
 func buildAccountInfoClause(like *tree.ComparisonExpr, accId int64) string {
@@ -548,16 +563,13 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		return err
 	}
 
-	// The storage-usage cron task queries all accounts from the metrics
-	// database and needs an extra object-count column in that result.
-	needUpdateObjectCountMetric := needShowAccountsObjectCount(
-		account,
-		sa,
-		ses.GetTxnCompileCtx().GetDatabase(),
-	)
-
+	var needUpdateObjectCountMetric bool
 	if account.IsSysTenant() {
-		sql = getSqlForAccountInfo(sa.Like, -1, needUpdateObjectCountMetric)
+		sql, needUpdateObjectCountMetric = buildShowAccountsSQL(
+			account,
+			sa,
+			ses.GetTxnCompileCtx().GetDatabase(),
+		)
 		accInfosBatches, accIds, err = getAccountInfo(ctx, bh, sql, mp)
 		if err != nil {
 			return err
@@ -570,7 +582,11 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 		// switch to the sys account to get account info
 		newCtx := defines.AttachAccountId(ctx, uint32(sysAccountID))
-		sql = getSqlForAccountInfo(nil, int64(account.GetTenantID()), needUpdateObjectCountMetric)
+		sql, needUpdateObjectCountMetric = buildShowAccountsSQL(
+			account,
+			sa,
+			ses.GetTxnCompileCtx().GetDatabase(),
+		)
 		accInfosBatches, accIds, err = getAccountInfo(newCtx, bh, sql, mp)
 		if err != nil {
 			return err
