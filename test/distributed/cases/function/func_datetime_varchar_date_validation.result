@@ -1,0 +1,35 @@
+SELECT DAYOFMONTH('2024-01-01T12:34:56') AS dayofmonth,
+DAYNAME('2024-01-01T12:34:56') AS dayname,
+MONTHNAME('2024-01-01T12:34:56') AS monthname,
+QUARTER('2024-01-01T12:34:56') AS quarter,
+WEEKOFYEAR('2024-01-01T12:34:56') AS weekofyear;
+➤ dayofmonth[-6,8,0]  ¦  dayname[12,-1,0]  ¦  monthname[12,-1,0]  ¦  quarter[-6,8,0]  ¦  weekofyear[-5,64,0]  𝄀
+1  ¦  Monday  ¦  January  ¦  1  ¦  1
+SELECT DAYOFMONTH('2024-01-01 24:00:00') AS invalid_hour_dayofmonth,
+DAYNAME('2024-01-01 24:00:00') AS invalid_hour_dayname,
+MONTHNAME('2024-01-01 24:00:00') AS invalid_hour_monthname,
+QUARTER('2024-01-01 24:00:00') AS invalid_hour_quarter,
+WEEKOFYEAR('2024-01-01 24:00:00') AS invalid_hour_weekofyear;
+➤ invalid_hour_dayofmonth[-6,8,0]  ¦  invalid_hour_dayname[12,-1,0]  ¦  invalid_hour_monthname[12,-1,0]  ¦  invalid_hour_quarter[-6,8,0]  ¦  invalid_hour_weekofyear[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT DAYOFMONTH('2024-01-01 23:60:00') AS invalid_minute_dayofmonth,
+DAYNAME('2024-01-01 23:60:00') AS invalid_minute_dayname,
+MONTHNAME('2024-01-01 23:60:00') AS invalid_minute_monthname,
+QUARTER('2024-01-01 23:60:00') AS invalid_minute_quarter,
+WEEKOFYEAR('2024-01-01 23:60:00') AS invalid_minute_weekofyear;
+➤ invalid_minute_dayofmonth[-6,8,0]  ¦  invalid_minute_dayname[12,-1,0]  ¦  invalid_minute_monthname[12,-1,0]  ¦  invalid_minute_quarter[-6,8,0]  ¦  invalid_minute_weekofyear[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT DAYOFMONTH('2024-0x-01') AS invalid_separator_dayofmonth,
+DAYNAME('2024-0x-01') AS invalid_separator_dayname,
+MONTHNAME('2024-0x-01') AS invalid_separator_monthname,
+QUARTER('2024-0x-01') AS invalid_separator_quarter,
+WEEKOFYEAR('2024-0x-01') AS invalid_separator_weekofyear;
+➤ invalid_separator_dayofmonth[-6,8,0]  ¦  invalid_separator_dayname[12,-1,0]  ¦  invalid_separator_monthname[12,-1,0]  ¦  invalid_separator_quarter[-6,8,0]  ¦  invalid_separator_weekofyear[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT DAYOFMONTH('4294967297-01-01') AS oversized_year_dayofmonth,
+DAYNAME('4294967297-01-01') AS oversized_year_dayname,
+MONTHNAME('4294967297-01-01') AS oversized_year_monthname,
+QUARTER('4294967297-01-01') AS oversized_year_quarter,
+WEEKOFYEAR('4294967297-01-01') AS oversized_year_weekofyear;
+➤ oversized_year_dayofmonth[-6,8,0]  ¦  oversized_year_dayname[12,-1,0]  ¦  oversized_year_monthname[12,-1,0]  ¦  oversized_year_quarter[-6,8,0]  ¦  oversized_year_weekofyear[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null

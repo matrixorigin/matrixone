@@ -10152,3 +10152,29 @@ func TestHllCardinality(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func TestParseDateExtractPartsVarcharTemporalValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		ok         bool
+		month, day uint8
+	}{
+		{name: "ISO datetime", input: "2024-01-01T12:34:56", ok: true, month: 1, day: 1},
+		{name: "invalid month separator", input: "2024-0x-01"},
+		{name: "hour out of range", input: "2024-01-01 24:00:00"},
+		{name: "minute out of range", input: "2024-01-01 23:60:00"},
+		{name: "oversized year", input: "4294967297-01-01"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parts, ok := parseDateExtractParts(test.input)
+			require.Equal(t, test.ok, ok)
+			if ok {
+				assert.Equal(t, test.month, parts.month)
+				assert.Equal(t, test.day, parts.day)
+			}
+		})
+	}
+}

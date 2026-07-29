@@ -169,7 +169,12 @@ func TestParseDateCastComponents(t *testing.T) {
 		{name: "incomplete variable width", input: "2001-11-0", year: 2001, month: 11, day: 0},
 		{name: "zero datetime", input: "0000-00-00 12:34:56", year: 0, month: 0, day: 0},
 		{name: "complete variable width datetime", input: "2001-1-2 12:34:56", year: 2001, month: 1, day: 2},
+		{name: "ISO datetime", input: "2024-01-01T12:34:56", year: 2024, month: 1, day: 1},
 		{name: "malformed", input: "2001-11-x", wantErr: true},
+		{name: "malformed month separator", input: "2024-0x-01", wantErr: true},
+		{name: "invalid hour", input: "2024-01-01 24:00:00", wantErr: true},
+		{name: "invalid minute", input: "2024-01-01 23:60:00", wantErr: true},
+		{name: "oversized year", input: "4294967297-01-01", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -183,6 +188,28 @@ func TestParseDateCastComponents(t *testing.T) {
 			assert.Equal(t, tt.year, year)
 			assert.Equal(t, tt.month, month)
 			assert.Equal(t, tt.day, day)
+		})
+	}
+}
+
+func BenchmarkParseDateCast(b *testing.B) {
+	inputs := []struct {
+		name  string
+		value string
+	}{
+		{name: "dashed", value: "2024-01-15"},
+		{name: "compact", value: "20240115"},
+		{name: "datetime with fraction", value: "2024-01-15 12:34:56.123456"},
+	}
+
+	for _, input := range inputs {
+		b.Run(input.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if _, err := ParseDateCast(input.value); err != nil {
+					b.Fatal(err)
+				}
+			}
 		})
 	}
 }

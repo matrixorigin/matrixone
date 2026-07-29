@@ -1,0 +1,31 @@
+-- VARCHAR date extractors must accept the datetime forms accepted by the
+-- temporal parser and reject malformed date/time components.
+SELECT DAYOFMONTH('2024-01-01T12:34:56') AS dayofmonth,
+       DAYNAME('2024-01-01T12:34:56') AS dayname,
+       MONTHNAME('2024-01-01T12:34:56') AS monthname,
+       QUARTER('2024-01-01T12:34:56') AS quarter,
+       WEEKOFYEAR('2024-01-01T12:34:56') AS weekofyear;
+
+SELECT DAYOFMONTH('2024-01-01 24:00:00') AS invalid_hour_dayofmonth,
+       DAYNAME('2024-01-01 24:00:00') AS invalid_hour_dayname,
+       MONTHNAME('2024-01-01 24:00:00') AS invalid_hour_monthname,
+       QUARTER('2024-01-01 24:00:00') AS invalid_hour_quarter,
+       WEEKOFYEAR('2024-01-01 24:00:00') AS invalid_hour_weekofyear;
+
+SELECT DAYOFMONTH('2024-01-01 23:60:00') AS invalid_minute_dayofmonth,
+       DAYNAME('2024-01-01 23:60:00') AS invalid_minute_dayname,
+       MONTHNAME('2024-01-01 23:60:00') AS invalid_minute_monthname,
+       QUARTER('2024-01-01 23:60:00') AS invalid_minute_quarter,
+       WEEKOFYEAR('2024-01-01 23:60:00') AS invalid_minute_weekofyear;
+
+SELECT DAYOFMONTH('2024-0x-01') AS invalid_separator_dayofmonth,
+       DAYNAME('2024-0x-01') AS invalid_separator_dayname,
+       MONTHNAME('2024-0x-01') AS invalid_separator_monthname,
+       QUARTER('2024-0x-01') AS invalid_separator_quarter,
+       WEEKOFYEAR('2024-0x-01') AS invalid_separator_weekofyear;
+
+SELECT DAYOFMONTH('4294967297-01-01') AS oversized_year_dayofmonth,
+       DAYNAME('4294967297-01-01') AS oversized_year_dayname,
+       MONTHNAME('4294967297-01-01') AS oversized_year_monthname,
+       QUARTER('4294967297-01-01') AS oversized_year_quarter,
+       WEEKOFYEAR('4294967297-01-01') AS oversized_year_weekofyear;

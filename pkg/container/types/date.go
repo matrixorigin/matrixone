@@ -94,11 +94,193 @@ func isAllDigit(s string) bool {
 // incomplete dates can use the same normalization as normal date casts.
 func ParseDateCastComponents(s string) (int32, uint8, uint8, error) {
 	s = strings.TrimSpace(s)
+	year, month, day, _, err := parseDateCastComponents(s)
+	return year, month, day, err
+}
+
+// parseDateCastComponents parses an already-trimmed date string. Keeping the
+// normalization outside this helper lets ParseDateCast avoid repeating it.
+func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 	if isZeroDatetimeString(s) {
-		return 0, 0, 0, nil
+		return 0, 0, 0, true, nil
 	}
 	if len(s) < 7 && isAllDigit(s) {
-		return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+		return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+	}
+	var year, month, day int64
+	if len(s) == 7 && isAllDigit(s) {
+		year = int64(s[0]-'0')*100 + int64(s[1]-'0')*10 + int64(s[2]-'0')
+		month = int64(s[3]-'0')*10 + int64(s[4]-'0')
+		day = int64(s[5]-'0')*10 + int64(s[6]-'0')
+	} else if len(s) == 8 && isAllDigit(s) {
+		year = int64(s[0]-'0')*1000 + int64(s[1]-'0')*100 + int64(s[2]-'0')*10 + int64(s[3]-'0')
+		month = int64(s[4]-'0')*10 + int64(s[5]-'0')
+		day = int64(s[6]-'0')*10 + int64(s[7]-'0')
+	} else {
+		const (
+			start uint8 = iota
+			yearState
+			monthState
+			dayState
+			hourState
+			minuteState
+			secondState
+			msState
+			end
+		)
+		var state = start
+		var yearLen, monthLen, dayLen, hourLen, minuteLen, secondLen int
+		var hour, minute, second uint8
+		var hasTime bool
+		for i := 0; i < len(s); i++ {
+			switch state {
+			case start:
+				if !isDigit(s[i]) {
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+				state = yearState
+				year = int64(s[i] - '0')
+				yearLen = 1
+			case yearState:
+				if isDigit(s[i]) {
+					if yearLen >= 4 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					year = year*10 + int64(s[i]-'0')
+					yearLen++
+				} else if s[i] == '-' {
+					state = monthState
+					if yearLen == 0 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+				} else {
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+			case monthState:
+				if isDigit(s[i]) {
+					month = month*10 + int64(s[i]-'0')
+					monthLen++
+					if monthLen >= 3 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+				} else if s[i] == '-' {
+					if monthLen == 0 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					state = dayState
+				} else {
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+			case dayState:
+				if isDigit(s[i]) {
+					day = day*10 + int64(s[i]-'0')
+					dayLen++
+					if dayLen >= 3 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+				} else if s[i] == ' ' || s[i] == 'T' {
+					if dayLen == 0 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					state = hourState
+					hasTime = true
+				} else {
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+				if i == len(s)-1 {
+					state = end
+				}
+			case hourState:
+				if s[i] == ' ' {
+					continue
+				}
+				if isDigit(s[i]) {
+					hourLen++
+					if hourLen >= 3 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					hour = hour*10 + uint8(s[i]-'0')
+				} else if s[i] == ':' {
+					if hourLen == 0 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					state = minuteState
+				} else {
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+			case minuteState:
+				if isDigit(s[i]) {
+					minuteLen++
+					if minuteLen >= 3 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					minute = minute*10 + uint8(s[i]-'0')
+					if i == len(s)-1 {
+						s += ":00"
+					}
+				} else if s[i] == ':' {
+					if minuteLen == 0 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					if i == len(s)-1 {
+						s += "00"
+					}
+					state = secondState
+				} else {
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+			case secondState:
+				if isDigit(s[i]) {
+					secondLen++
+					if secondLen >= 3 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					second = second*10 + uint8(s[i]-'0')
+				} else if s[i] == '.' {
+					if secondLen == 0 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					state = msState
+				} else {
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+				if i == len(s)-1 {
+					state = end
+				}
+			case msState:
+				if isAllDigit(s[i:]) {
+					state = end
+					i = len(s)
+				} else {
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+				}
+			}
+		}
+		if state != end {
+			return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+		}
+		if hasTime && !ValidTimeInDay(hour, minute, second) {
+			return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+		}
+	}
+	if year > MaxDateYear || month > MaxMonthInYear || day > 31 {
+		return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+	}
+	return int32(year), uint8(month), uint8(day), false, nil
+}
+
+// rewrite ParseDateCast, don't use regexp, that's too slow
+// the format we need to support:
+// 1.yyyy-mm-dd hh:mm:ss.ms or yyyy-mm-dd hh:mm: or yyyy-mm-dd hh:mm
+// 2.yyyy-mm-dd
+// 3.yyyymmdd
+func ParseDateCast(s string) (Date, error) {
+	s = strings.TrimSpace(s)
+	if len(s) > 0 && s[0] == '0' && isZeroDatetimeString(s) {
+		return ZeroDate, nil
+	}
+	if len(s) < 7 && isAllDigit(s) {
+		return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 	}
 	var year, month, day int64
 	if len(s) == 7 && isAllDigit(s) {
@@ -127,7 +309,7 @@ func ParseDateCastComponents(s string) (int32, uint8, uint8, error) {
 			switch state {
 			case start:
 				if !isDigit(s[i]) {
-					return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 				state = yearState
 				year = int64(s[i] - '0')
@@ -139,21 +321,21 @@ func ParseDateCastComponents(s string) (int32, uint8, uint8, error) {
 				} else if s[i] == '-' {
 					state = monthState
 					if yearLen == 0 {
-						return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else {
-					return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 			case monthState:
 				if isDigit(s[i]) {
 					month = month*10 + int64(s[i]-'0')
 					monthLen++
 					if monthLen >= 3 {
-						return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else if s[i] == '-' {
 					if monthLen == 0 {
-						return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 					state = dayState
 				}
@@ -162,15 +344,15 @@ func ParseDateCastComponents(s string) (int32, uint8, uint8, error) {
 					day = day*10 + int64(s[i]-'0')
 					dayLen++
 					if dayLen >= 3 {
-						return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else if s[i] == ' ' {
 					if dayLen == 0 {
-						return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 					state = hourState
 				} else {
-					return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 				if i == len(s)-1 {
 					state = end
@@ -182,28 +364,28 @@ func ParseDateCastComponents(s string) (int32, uint8, uint8, error) {
 				if isDigit(s[i]) {
 					hourLen++
 					if hourLen >= 3 {
-						return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else if s[i] == ':' {
 					if hourLen == 0 {
-						return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 					state = minuteState
 				} else {
-					return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 			case minuteState:
 				if isDigit(s[i]) {
 					minuteLen++
 					if minuteLen >= 3 {
-						return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 					if i == len(s)-1 {
 						s += ":00"
 					}
 				} else if s[i] == ':' {
 					if minuteLen == 0 {
-						return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 					if i == len(s)-1 {
 						s += "00"
@@ -214,15 +396,15 @@ func ParseDateCastComponents(s string) (int32, uint8, uint8, error) {
 				if isDigit(s[i]) {
 					secondLen++
 					if secondLen >= 3 {
-						return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else if s[i] == '.' {
 					if secondLen == 0 {
-						return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 					state = msState
 				} else {
-					return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 				if i == len(s)-1 {
 					state = end
@@ -232,33 +414,16 @@ func ParseDateCastComponents(s string) (int32, uint8, uint8, error) {
 					state = end
 					i = len(s)
 				} else {
-					return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 			}
 		}
 		if state != end {
-			return 0, 0, 0, moerr.NewInvalidArgNoCtx("parsedate", s)
+			return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 		}
 	}
-	return int32(year), uint8(month), uint8(day), nil
-}
-
-// rewrite ParseDateCast, don't use regexp, that's too slow
-// the format we need to support:
-// 1.yyyy-mm-dd hh:mm:ss.ms or yyyy-mm-dd hh:mm: or yyyy-mm-dd hh:mm
-// 2.yyyy-mm-dd
-// 3.yyyymmdd
-func ParseDateCast(s string) (Date, error) {
-	s = strings.TrimSpace(s)
-	if isZeroDatetimeString(s) {
-		return ZeroDate, nil
-	}
-	year, month, day, err := ParseDateCastComponents(s)
-	if err != nil {
-		return -1, err
-	}
-	if ValidDate(year, month, day) {
-		return DateFromCalendar(year, month, day), nil
+	if ValidDate(int32(year), uint8(month), uint8(day)) {
+		return DateFromCalendar(int32(year), uint8(month), uint8(day)), nil
 	}
 	return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 }
