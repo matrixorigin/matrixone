@@ -142,6 +142,85 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 	})
 }
 
+func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"create temporary table temp_marked (id int, unique key uk_id (id))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	createTable := p.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.NotEmpty(t, createTable.IndexTables)
+
+	tableDefs := append([]*plan.TableDef{createTable.TableDef}, createTable.IndexTables...)
+	for _, tableDef := range tableDefs {
+		requireTemporaryCatalogRelkind(t, tableDef)
+	}
+}
+
+func TestBuildTemporaryTableIndexDDLMarksCatalogRelkind(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		indexTables func(*plan.Plan) []*plan.TableDef
+	}{
+		{
+			name: "create index",
+			sql:  "create unique index uk_name on tpch.nation (n_name)",
+			indexTables: func(p *plan.Plan) []*plan.TableDef {
+				return p.GetDdl().GetCreateIndex().GetIndex().GetIndexTables()
+			},
+		},
+		{
+			name: "alter table add index",
+			sql:  "alter table tpch.nation add unique index uk_name (n_name)",
+			indexTables: func(p *plan.Plan) []*plan.TableDef {
+				actions := p.GetDdl().GetAlterTable().GetActions()
+				require.Len(t, actions, 1)
+				return actions[0].GetAddIndex().GetIndexInfo().GetIndexTables()
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			catalog.MarkTableDefTemporary(ctx.tables["nation"])
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			indexTables := test.indexTables(p)
+			require.NotEmpty(t, indexTables)
+			for _, tableDef := range indexTables {
+				requireTemporaryCatalogRelkind(t, tableDef)
+			}
+		})
+	}
+}
+
+func requireTemporaryCatalogRelkind(t *testing.T, tableDef *plan.TableDef) {
+	t.Helper()
+	require.Equal(t, catalog.SystemTemporaryTable, tableDef.TableType)
+	require.True(t, tableDef.IsTemporary)
+
+	kindCount := 0
+	for _, def := range tableDef.Defs {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.Key == catalog.SystemRelAttr_Kind {
+				kindCount++
+				require.Equal(t, catalog.SystemTemporaryTable, property.Value)
+			}
+		}
+	}
+	require.Equal(t, 1, kindCount)
+}
+
 func TestBuildAlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

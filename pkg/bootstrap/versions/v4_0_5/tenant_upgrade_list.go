@@ -29,23 +29,26 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addOrphanFileColumn("namespace", "varchar(2048) not null default ''", "catalog_id"),
 	addOrphanFileColumn("table_name", "varchar(1024) not null default ''", "namespace"),
 	addOrphanFileColumn("file_path", "varchar(4096) not null default ''", "table_location_hash"),
-	upgradeInformationSchemaTables(),
+	upgradeInformationSchemaView("TABLES", sysview.InformationSchemaTablesDDL),
+	upgradeInformationSchemaView("COLUMNS", sysview.InformationSchemaColumnsDDL),
+	upgradeInformationSchemaView("STATISTICS", sysview.InformationSchemaStatisticsDDL),
+	upgradeInformationSchemaView("TABLE_CONSTRAINTS", sysview.InformationSchemaTableConstraintsDDL),
 }
 
-func upgradeInformationSchemaTables() versions.UpgradeEntry {
+func upgradeInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:    sysview.InformationDBConst,
-		TableName: "TABLES",
+		TableName: viewName,
 		UpgType:   versions.MODIFY_VIEW,
-		UpgSql:    sysview.InformationSchemaTablesDDL,
+		UpgSql:    viewDDL,
 		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-			exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "TABLES")
+			exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, viewName)
 			if err != nil {
 				return false, err
 			}
-			return exists && viewDef == sysview.InformationSchemaTablesDDL, nil
+			return exists && viewDef == viewDDL, nil
 		},
-		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "TABLES"),
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
 	}
 }
 

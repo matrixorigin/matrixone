@@ -20,13 +20,28 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
-func TestInformationSchemaTablesDDL_HidesTemporaryTables(t *testing.T) {
-	assert.Contains(t, InformationSchemaTablesDDL, "left(tbl.relname, 9) != '__mo_tmp_'")
-	assert.Equal(t, 9, len(defines.TempTableNamePrefix))
-	assert.NotContains(t, InformationSchemaTablesDDL, `\`)
+func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
+	tests := []struct {
+		name       string
+		ddl        string
+		tableAlias string
+	}{
+		{name: "tables", ddl: InformationSchemaTablesDDL, tableAlias: "tbl"},
+		{name: "columns", ddl: InformationSchemaColumnsDDL, tableAlias: "mt"},
+		{name: "statistics", ddl: InformationSchemaStatisticsDDL, tableAlias: "tbl"},
+		{name: "table constraints", ddl: InformationSchemaTableConstraintsDDL, tableAlias: "tbl"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Contains(t, test.ddl, nonTemporaryTablePredicate(test.tableAlias))
+			assert.Contains(t, test.ddl, catalog.SystemTemporaryTable)
+			assert.NotContains(t, test.ddl, "__mo_tmp_")
+		})
+	}
 }
 
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {

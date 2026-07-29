@@ -455,6 +455,12 @@ func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
 			}
 		})
 	}
+	if !strings.Contains(sql, "relkind != 'temporary_table'") {
+		t.Fatalf("temporary tables were not filtered by catalog marker: %s", sql)
+	}
+	if strings.Contains(sql, "mo\\_tmp") {
+		t.Fatalf("temporary tables were filtered by reserved-looking name: %s", sql)
+	}
 }
 
 func TestGetTableInfosFromTSSkipsStaleTableMetadata(t *testing.T) {

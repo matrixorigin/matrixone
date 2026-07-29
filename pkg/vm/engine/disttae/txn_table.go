@@ -1582,6 +1582,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Name2ColIndex: name2index,
 			Defs:          defs,
 			TableType:     TableType,
+			IsTemporary:   TableType == catalog.SystemTemporaryTable,
 			Createsql:     Createsql,
 			Pkey:          primarykey,
 			ViewSql:       viewSql,

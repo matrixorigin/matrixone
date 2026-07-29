@@ -27,8 +27,8 @@ import (
 )
 
 func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
-	if len(tenantUpgEntries) != 5 {
-		t.Fatalf("expected 5 tenant upgrades, got %d", len(tenantUpgEntries))
+	if len(tenantUpgEntries) != 8 {
+		t.Fatalf("expected 8 tenant upgrades, got %d", len(tenantUpgEntries))
 	}
 	allocator := tenantUpgEntries[0]
 	if allocator.UpgType != versions.MODIFY_COLUMN || allocator.TableName != "mo_iceberg_catalogs" {
@@ -59,65 +59,77 @@ func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
 	}
 }
 
-func TestInformationSchemaTablesTenantUpgradeEntry(t *testing.T) {
-	entry := tenantUpgEntries[4]
-	if entry.Schema != sysview.InformationDBConst || entry.TableName != "TABLES" || entry.UpgType != versions.MODIFY_VIEW {
-		t.Fatalf("unexpected information_schema.TABLES upgrade: %+v", entry)
+func TestInformationSchemaTenantUpgradeEntries(t *testing.T) {
+	views := []struct {
+		name string
+		ddl  string
+	}{
+		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
+		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
 	}
-	if entry.UpgSql != sysview.InformationSchemaTablesDDL || !strings.Contains(entry.UpgSql, "left(tbl.relname, 9) != '__mo_tmp_'") {
-		t.Fatalf("TABLES upgrade does not filter temporary objects: %s", entry.UpgSql)
-	}
-	if !strings.Contains(strings.ToLower(entry.PreSql), "drop view if exists information_schema.tables") {
-		t.Fatalf("TABLES upgrade is missing its drop-view precondition: %s", entry.PreSql)
+
+	for i, view := range views {
+		entry := tenantUpgEntries[4+i]
+		if entry.Schema != sysview.InformationDBConst || entry.TableName != view.name || entry.UpgType != versions.MODIFY_VIEW {
+			t.Fatalf("unexpected information_schema.%s upgrade: %+v", view.name, entry)
+		}
+		if entry.UpgSql != view.ddl || !strings.Contains(entry.UpgSql, "relkind != 'temporary_table'") {
+			t.Fatalf("%s upgrade does not use the temporary catalog marker: %s", view.name, entry.UpgSql)
+		}
+		wantPreSQL := "drop view if exists information_schema." + strings.ToLower(view.name)
+		if !strings.Contains(strings.ToLower(entry.PreSql), wantPreSQL) {
+			t.Fatalf("%s upgrade is missing its drop-view precondition: %s", view.name, entry.PreSql)
+		}
 	}
 }
 
-func TestInformationSchemaTablesTenantUpgradeCheckFunc(t *testing.T) {
+func TestInformationSchemaTenantUpgradeCheckFunc(t *testing.T) {
 	checkErr := errors.New("check view definition")
-	tests := []struct {
-		name       string
-		exists     bool
-		definition string
-		checkErr   error
-		wantOK     bool
+	views := []struct {
+		name string
+		ddl  string
 	}{
-		{
-			name:       "matching view",
-			exists:     true,
-			definition: sysview.InformationSchemaTablesDDL,
-			wantOK:     true,
-		},
-		{
-			name:       "mismatched view",
-			exists:     true,
-			definition: "old view definition",
-		},
-		{
-			name:       "missing view",
-			definition: sysview.InformationSchemaTablesDDL,
-		},
-		{
-			name:     "check error",
-			checkErr: checkErr,
-		},
+		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
+		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
-				if txn != nil || accountID != 42 || schema != sysview.InformationDBConst || viewName != "TABLES" {
-					t.Fatalf("unexpected view check arguments: txn=%v accountID=%d schema=%q view=%q", txn, accountID, schema, viewName)
-				}
-				return test.exists, test.definition, test.checkErr
-			})
-			defer stubs.Reset()
-
-			ok, err := tenantUpgEntries[4].CheckFunc(nil, 42)
-			if ok != test.wantOK {
-				t.Fatalf("unexpected check result: got %v, want %v", ok, test.wantOK)
+	for i, view := range views {
+		t.Run(view.name, func(t *testing.T) {
+			tests := []struct {
+				name       string
+				exists     bool
+				definition string
+				checkErr   error
+				wantOK     bool
+			}{
+				{name: "matching view", exists: true, definition: view.ddl, wantOK: true},
+				{name: "mismatched view", exists: true, definition: "old view definition"},
+				{name: "missing view", definition: view.ddl},
+				{name: "check error", checkErr: checkErr},
 			}
-			if !errors.Is(err, test.checkErr) {
-				t.Fatalf("unexpected check error: got %v, want %v", err, test.checkErr)
+
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					stubs := gostub.Stub(&versions.CheckViewDefinition, func(txn executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+						if txn != nil || accountID != 42 || schema != sysview.InformationDBConst || viewName != view.name {
+							t.Fatalf("unexpected view check arguments: txn=%v accountID=%d schema=%q view=%q", txn, accountID, schema, viewName)
+						}
+						return test.exists, test.definition, test.checkErr
+					})
+					defer stubs.Reset()
+
+					ok, err := tenantUpgEntries[4+i].CheckFunc(nil, 42)
+					if ok != test.wantOK {
+						t.Fatalf("unexpected check result: got %v, want %v", ok, test.wantOK)
+					}
+					if !errors.Is(err, test.checkErr) {
+						t.Fatalf("unexpected check error: got %v, want %v", err, test.checkErr)
+					}
+				})
 			}
 		})
 	}

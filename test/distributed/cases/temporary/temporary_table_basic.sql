@@ -353,14 +353,22 @@ show create table temp_show;
 drop table temp_show;
 
 -- 测试用例 9.2: show tables 不显示临时表
--- 预期结果: show tables结果中不包含临时表
+-- 预期结果: show tables结果中不包含临时表，但包含名字使用临时表前缀的永久表
 create table permanent_table (id int);
+create table __mo_tmp_customer (
+    id int primary key,
+    customer_code int,
+    unique key uk_customer_code (customer_code),
+    key idx_customer_code (customer_code)
+);
 create temporary table temp_invisible (
-    id int,
-    key idx_id (id)
+    id int primary key,
+    customer_code int,
+    unique key uk_temp_customer_code (customer_code),
+    key idx_temp_customer_code (customer_code)
 );
 
-show tables;  -- 应该只显示 permanent_table
+show tables;  -- 应该显示两个永久表
 -- 表名匹配未转义的 LIKE '__mo_tmp_%'，但它不是临时表，必须在 information_schema.tables 中可见
 create table xxmo_tmp_visible (id int);
 select table_name, table_type
@@ -368,8 +376,43 @@ from information_schema.tables
 where table_schema = database()
 order by table_name;
 
+-- 临时对象必须使用持久化的 catalog 标记；普通前缀表仍保持 ordinary relkind
+select relname, relkind
+from mo_catalog.mo_tables
+where reldatabase = database() and relname = '__mo_tmp_customer';
+select count(*) > 0 as has_temp_objects,
+	   count(*) = sum(if(relkind = 'temporary_table', 1, 0)) as all_temp_objects_marked
+from mo_catalog.mo_tables
+where reldatabase = database()
+  and left(relname, 9) = '__mo_tmp_'
+  and relname != '__mo_tmp_customer';
+
+-- 精确前缀的永久表必须在所有相关 metadata view 中可见
+select distinct table_name from information_schema.columns
+where table_schema = database() and table_name = '__mo_tmp_customer';
+select distinct table_name from information_schema.statistics
+where table_schema = database() and table_name = '__mo_tmp_customer';
+select distinct table_name from information_schema.table_constraints
+where table_schema = database() and table_name = '__mo_tmp_customer';
+
+-- 临时基表和派生索引表不能泄漏到任何相关 metadata view
+select 'TABLES' as metadata_view, count(*) as leaked_objects
+from information_schema.tables
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_' and table_name != '__mo_tmp_customer'
+union all
+select 'COLUMNS', count(*) from information_schema.columns
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_' and table_name != '__mo_tmp_customer'
+union all
+select 'STATISTICS', count(*) from information_schema.statistics
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_' and table_name != '__mo_tmp_customer'
+union all
+select 'TABLE_CONSTRAINTS', count(*) from information_schema.table_constraints
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_' and table_name != '__mo_tmp_customer'
+order by metadata_view;
+
 drop table temp_invisible;
 drop table permanent_table;
+drop table __mo_tmp_customer;
 drop table xxmo_tmp_visible;
 
 -- ============================================================================
