@@ -366,7 +366,15 @@ func ConstructCreateTableSQL(
 			if _, tempTableDef, err = ctx.Resolve(schemaName, fkDef.Name, snap); err != nil {
 				return err
 			}
-
+			if tempTableDef == nil {
+				enabled, resolveErr := IsForeignKeyChecksEnabled(ctx)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				if !enabled {
+					return nil
+				}
+			}
 			fkDef = tempTableDef
 			return err
 		}
@@ -464,9 +472,14 @@ func ConstructCreateTableSQL(
 			createStr += ",\n"
 		}
 
+		fkRefDbName := fkTableDef.DbName
+		if cloneStmt != nil && (cloneStmt.StmtType == tree.WithinAccCloneDB || cloneStmt.StmtType == tree.BetweenAccCloneDB) &&
+			cloneStmt.SrcTable.SchemaName.String() == fkTableDef.DbName {
+			fkRefDbName = schemaName
+		}
 		fkRefDbTblName := sqlquote.Ident(fkTableDef.Name)
 		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
-			fkRefDbTblName = sqlquote.QualifiedIdent(fkTableDef.DbName, fkTableDef.Name)
+			fkRefDbTblName = sqlquote.QualifiedIdent(fkRefDbName, fkTableDef.Name)
 		}
 		createStr += fmt.Sprintf("  CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s) ON DELETE %s ON UPDATE %s",
 			sqlquote.Ident(fk.Name), joinQuotedIdentifiers(colOriginNames), fkRefDbTblName, joinQuotedIdentifiers(fkColOriginNames), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
