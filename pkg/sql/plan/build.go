@@ -313,13 +313,19 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 
 	rootId, err := builder.bindUpdate(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
-			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
-				return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
-			}
+		route, reason, routedErr := classifyUpdatePlannerError(err)
+		switch route {
+		case updatePlannerLegacy:
+			recordUpdatePlannerRoute(route, reason, "selected")
 			return buildTableUpdate(stmt, ctx, isPrepareStmt)
+		case updatePlannerSpecialized:
+			recordUpdatePlannerRoute(route, reason, "selected")
+			return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
+		case updatePlannerRejected, updatePlannerUnknown:
+			recordUpdatePlannerRoute(route, reason, "rejected")
+			return nil, routedErr
 		}
-		return nil, err
+		return nil, routedErr
 	}
 	ctx.SetViews(bindCtx.views)
 
@@ -329,6 +335,7 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err != nil {
 		return nil, err
 	}
+	recordUpdatePlannerRoute(updatePlannerModern, updateRouteReasonNone, "selected")
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
