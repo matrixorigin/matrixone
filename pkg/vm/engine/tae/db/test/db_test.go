@@ -8821,13 +8821,13 @@ func TestCkpLeak(t *testing.T) {
 	schema2.Extra.ObjectMaxBlocks = 2
 	{
 		txn, _ := db.StartTxn(nil)
-		database, err := txn.CreateDatabase("db", "", "")
-		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema1)
-		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema2)
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit(context.Background()))
+		database, err := testutil.CreateDatabase2(ctx, txn, "db")
+		require.NoError(t, err)
+		_, err = testutil.CreateRelation2(ctx, txn, database, schema1)
+		require.NoError(t, err)
+		_, err = testutil.CreateRelation2(ctx, txn, database, schema2)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(context.Background()))
 	}
 	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
 	defer bat.Close()
@@ -8874,6 +8874,7 @@ func TestCkpLeak(t *testing.T) {
 		return
 	}
 	tae.Restart(ctx)
+	db = tae.DB
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
