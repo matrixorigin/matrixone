@@ -1,34 +1,34 @@
 SELECT UTC_TIME() AS result1;
 ➤ result1[92,64,0]  𝄀
-04:50:51
+10:08:23
 SELECT UTC_TIME() AS current_utc_time;
 ➤ current_utc_time[92,64,0]  𝄀
-04:50:51
+10:08:23
 SELECT UTC_TIME AS current_utc_time_no_parens;
 ➤ current_utc_time_no_parens[92,64,0]  𝄀
-04:50:51
+10:08:23
 select utc_time() = utc_time as should_be_true;
 ➤ should_be_true[-7,1,0]  𝄀
 1
 SELECT UTC_TIME(0) AS utc_time_scale0;
 ➤ utc_time_scale0[92,64,0]  𝄀
-04:50:51
+10:08:23
 SELECT UTC_TIME(3) AS utc_time_scale3;
 ➤ utc_time_scale3[92,64,0]  𝄀
-04:50:51.163000000
+10:08:22.840000000
 SELECT UTC_TIME(6) AS utc_time_scale6;
 ➤ utc_time_scale6[92,64,0]  𝄀
-04:50:51.163176000
+10:08:22.841108000
 SELECT UTC_TIME() AS utc_time_value, CURRENT_TIME() AS local_time_value;
 ➤ utc_time_value[92,64,0]  ¦  local_time_value[92,64,0]  𝄀
-04:50:51  ¦  12:50:51
+10:08:23  ¦  18:08:23
 CREATE TABLE t1(id INT);
 INSERT INTO t1 VALUES (1), (2), (3);
 SELECT id, UTC_TIME() AS utc_time_value FROM t1;
 ➤ id[4,32,0]  ¦  utc_time_value[92,64,0]  𝄀
-1  ¦  04:50:51  𝄀
-2  ¦  04:50:51  𝄀
-3  ¦  04:50:51
+1  ¦  10:08:23  𝄀
+2  ¦  10:08:23  𝄀
+3  ¦  10:08:23
 DROP TABLE t1;
 SELECT UTC_TIME() IS NOT NULL AS not_null_check;
 ➤ not_null_check[-7,1,0]  𝄀
@@ -39,28 +39,28 @@ SELECT UTC_TIME() - INTERVAL 30 MINUTE AS thirty_minutes_ago;
 invalid argument operator -, bad value [TIME INTERVAL]
 SELECT UTC_TIME() AS time_format;
 ➤ time_format[92,64,0]  𝄀
-04:50:51
+10:08:23
 SELECT UTC_TIME(0) AS no_fractional;
 ➤ no_fractional[92,64,0]  𝄀
-04:50:51
+10:08:23
 SELECT UTC_TIME(1) AS one_digit;
 ➤ one_digit[92,64,0]  𝄀
-04:50:51.200000000
+10:08:22.900000000
 SELECT UTC_TIME(2) AS two_digits;
 ➤ two_digits[92,64,0]  𝄀
-04:50:51.220000000
+10:08:22.900000000
 SELECT UTC_TIME(3) AS three_digits;
 ➤ three_digits[92,64,0]  𝄀
-04:50:51.218000000
+10:08:22.896000000
 SELECT UTC_TIME(4) AS four_digits;
 ➤ four_digits[92,64,0]  𝄀
-04:50:51.219000000
+10:08:22.896400000
 SELECT UTC_TIME(5) AS five_digits;
 ➤ five_digits[92,64,0]  𝄀
-04:50:51.219650000
+10:08:22.897050000
 SELECT UTC_TIME(6) AS six_digits;
 ➤ six_digits[92,64,0]  𝄀
-04:50:51.220147000
+10:08:22.897663000
 SELECT MICROSECOND(UTC_TIME(3)) % 1000 AS utc_time_millisecond_precision;
 ➤ utc_time_millisecond_precision[-5,64,0]  𝄀
 0
@@ -88,5 +88,5 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 SELECT UTC_TIME(-1);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 17 near "-1);";
 SELECT UTC_TIME(7);
-invalid input: UTC_TIME fractional seconds precision must be an integer literal between 0 and 6
+Too-big precision 7 specified for 'utc_time'. Maximum is 6.
 DROP TABLE utc_time_fsp_arg;
