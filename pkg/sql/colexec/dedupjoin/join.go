@@ -475,6 +475,9 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				if msg.err != nil {
 					return msg.err
 				}
+				if err := context.Cause(proc.Ctx); err != nil {
+					return err
+				}
 				// A normal upper-operator early stop is not a query error, but
 				// no partial unmatched-build output may escape.
 				ctr.state = End

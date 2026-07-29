@@ -1156,7 +1156,7 @@ func TestDedupFinalizeMissingWorkerHonorsCancellation(t *testing.T) {
 	require.Nil(t, result.Batch)
 }
 
-func TestDedupFinalizeWaitingForWorkerUnblocksOnCancellation(t *testing.T) {
+func TestDedupFinalizeConcurrentCancellationReturns(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	arg := &DedupJoin{
 		NumCPU:            2,
@@ -1171,20 +1171,36 @@ func TestDedupFinalizeWaitingForWorkerUnblocksOnCancellation(t *testing.T) {
 	proc.Ctx = ctx
 
 	resultC := make(chan error, 1)
+	resultReceived := false
+	t.Cleanup(func() {
+		cancel()
+		if !resultReceived {
+			cleanupGuard := time.NewTimer(2 * time.Second)
+			defer cleanupGuard.Stop()
+			select {
+			case <-resultC:
+			case <-cleanupGuard.C:
+				return
+			}
+		}
+		arg.Free(proc, true, context.Canceled)
+		proc.Free()
+	})
 	go func() {
 		_, err := arg.Call(proc)
 		resultC <- err
 	}()
 	cancel()
 
+	guard := time.NewTimer(2 * time.Second)
+	defer guard.Stop()
 	select {
 	case err := <-resultC:
+		resultReceived = true
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(2 * time.Second):
-		t.Fatal("dedup finalize remained blocked after cancellation")
+	case <-guard.C:
+		t.Fatal("dedup finalize did not return after cancellation")
 	}
-	arg.Free(proc, true, context.Canceled)
-	proc.Free()
 }
 
 func TestDedupFinalizeWorkerFailureCleansTransferredMessages(t *testing.T) {
@@ -1269,6 +1285,57 @@ func TestDedupFinalizeWorkerFailureDoesNotWaitForMissingWorker(t *testing.T) {
 		t.Fatal("merger waited for a missing worker after cancellation")
 	}
 	require.ErrorIs(t, err, workerErr)
+}
+
+func TestDedupFinalizeNormalAbortDoesNotHideCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	mailbox := NewWorkerJoinMailbox(2)
+	sent, stopped := mailbox.trySend(&WorkerJoinMsg{aborted: true})
+	require.True(t, sent)
+	require.False(t, stopped)
+	arg := &DedupJoin{
+		NumCPU:            2,
+		IsMerger:          true,
+		Mailbox:           mailbox,
+		OnDuplicateAction: plan.Node_FAIL,
+	}
+	arg.ctr.state = Finalize
+	arg.ctr.matched = &bitmap.Bitmap{}
+	arg.ctr.matched.InitWithSize(1)
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	cancel()
+	t.Cleanup(func() {
+		arg.Free(proc, true, context.Canceled)
+		proc.Free()
+	})
+
+	result, err := arg.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+}
+
+func TestDedupFinalizeMailboxSupportsMultipleSpillBuckets(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	t.Cleanup(proc.Free)
+	mailbox := NewWorkerJoinMailbox(2)
+	worker := &DedupJoin{
+		NumCPU:   2,
+		IsMerger: false,
+		Mailbox:  mailbox,
+	}
+
+	for bucket := range 2 {
+		worker.ctr.matched = &bitmap.Bitmap{}
+		worker.ctr.matched.InitWithSize(2)
+		worker.ctr.matched.Add(uint64(bucket))
+
+		require.NoError(t, worker.ctr.finalize(worker, proc))
+		msg, err := receiveWorkerMsg(proc.Ctx, mailbox)
+		require.NoError(t, err)
+		require.True(t, msg.matched.Contains(uint64(bucket)))
+		require.Empty(t, mailbox.ch)
+	}
 }
 
 func TestDedupFinalizeNormalWorkerAbortStopsWithoutPartialOutput(t *testing.T) {
