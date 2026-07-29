@@ -154,6 +154,52 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 		require.Zero(t, count)
 
 		exec("begin")
+		exec("data branch create table " + dbName + ".d1 from " + dbName + ".src")
+		exec("data branch create table " + dbName + ".d2 from " + dbName + ".d1")
+		var d1ID, d2ID uint64
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname = 'd1'").Scan(&d1ID))
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname = 'd2'").Scan(&d2ID))
+		exec("drop table " + dbName + ".d1")
+		exec("commit")
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_tables where rel_id = ?", d1ID).Scan(&count))
+		require.Zero(t, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_branch_metadata where table_id = ? and table_deleted = true", d1ID).Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_branch_metadata where table_id = ? and p_table_id = ? and table_deleted = false", d2ID, d1ID).Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_snapshots where kind = 'branch' and sname = concat('__mo_branch_', cast(? as char))", d2ID).Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"data branch diff "+dbName+".d2 against "+dbName+".src output count").Scan(&count))
+		require.Zero(t, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"data branch diff "+dbName+".src against "+dbName+".d2 output count").Scan(&count))
+		require.Zero(t, count)
+
+		exec("begin")
+		exec("data branch create table " + dbName + ".e1 from " + dbName + ".src")
+		exec("insert into " + dbName + ".e1 values (3, 'txn change')")
+		exec("data branch create table " + dbName + ".e2 from " + dbName + ".e1")
+		exec("drop table " + dbName + ".e1")
+		exec("commit")
+		var value string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select v from "+dbName+".e2 where id = 3").Scan(&value))
+		require.Equal(t, "txn change", value)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"data branch diff "+dbName+".e2 against "+dbName+".src output count").Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"data branch diff "+dbName+".src against "+dbName+".e2 output count").Scan(&count))
+		require.Equal(t, 1, count)
+
+		exec("begin")
 		exec("create table " + dbName + ".cgs clone " + dbName + ".src {snapshot='" + snapshotName + "'} copy grants")
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".cgs").Scan(&count))
 		require.Equal(t, 1, count)

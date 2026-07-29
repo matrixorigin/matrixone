@@ -1558,6 +1558,12 @@ func getRelationById(
 	return rel, err
 }
 
+func isMissingDataBranchRelationByID(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+		(moerr.IsMoErrCode(err, moerr.ErrInternal) &&
+			strings.Contains(err.Error(), "can not find table by id"))
+}
+
 func getRelations(
 	ctx context.Context,
 	ses *Session,
@@ -1909,7 +1915,9 @@ func dataBranchPathTableDefs(
 		return nil, moerr.NewInternalErrorNoCtx("data branch: invalid schema lineage path")
 	}
 	defs := make([]*plan.TableDef, len(path))
-	for i, nodeID := range path {
+	var endpointCTS types.TS
+	for i := len(path) - 1; i >= 0; i-- {
+		nodeID := path[i]
 		if i == len(path)-1 {
 			defs[i] = endpointRel.GetTableDef(ctx)
 			continue
@@ -1922,11 +1930,78 @@ func dataBranchPathTableDefs(
 			},
 		)
 		if err != nil {
-			return nil, err
+			historicalErr := err
+			if endpointCTS.IsEmpty() {
+				cts, ctsErr := getTablesCreationCommitTS(
+					ctx, ses, endpointRel, endpointRel,
+					[]types.TS{endpointSP, endpointSP},
+				)
+				if ctsErr != nil || len(cts) == 0 {
+					return nil, historicalErr
+				}
+				endpointCTS = cts[0]
+			}
+			rel, _, zeroHistory, resolveErr := resolveSameTransactionDataBranchRelation(
+				ctx, ses, bh, nodeID, pathTS[i+1], endpointCTS, historicalErr,
+			)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if zeroHistory {
+				// The child clone materializes the source schema. A parent with no
+				// committed catalog generation therefore has the same schema as the
+				// already-resolved child at this lineage edge.
+				defs[i] = defs[i+1]
+				continue
+			}
 		}
 		defs[i] = rel.GetTableDef(ctx)
 	}
 	return defs, nil
+}
+
+func resolveSameTransactionDataBranchRelation(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	nodeID uint64,
+	nodeSnapshot types.TS,
+	endpointCTS types.TS,
+	historicalErr error,
+) (rel engine.Relation, nodeCTS types.TS, zeroHistory bool, err error) {
+	fallbackSnapshotPB := endpointCTS.ToTimestamp()
+	rel, err = getRelationById(
+		ctx, ses, bh, nodeID, &plan2.Snapshot{
+			Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
+			TS:     &fallbackSnapshotPB,
+		},
+	)
+	if err != nil {
+		if isMissingDataBranchRelationByID(historicalErr) &&
+			isMissingDataBranchRelationByID(err) &&
+			nodeSnapshot.LT(&endpointCTS) {
+			logutil.Info("DataBranch-CollectRange-ZeroHistory",
+				zap.Uint64("table-id", nodeID),
+				zap.String("clone-ts", nodeSnapshot.ToString()),
+				zap.String("endpoint-creation-ts", endpointCTS.ToString()),
+			)
+			err = nil
+			zeroHistory = true
+			return
+		}
+		err = historicalErr
+		return
+	}
+	ctsList, ctsErr := getTablesCreationCommitTS(
+		ctx, ses, rel, rel, []types.TS{endpointCTS, endpointCTS},
+	)
+	if ctsErr != nil || len(ctsList) == 0 ||
+		!ctsList[0].GT(&nodeSnapshot) || ctsList[0].GT(&endpointCTS) {
+		err = historicalErr
+		return
+	}
+	nodeCTS = ctsList[0]
+	return
 }
 
 func dataBranchColumnReachesLCA(
@@ -2216,14 +2291,14 @@ func decideCollectRange(
 	// ancestor to anchor the comparison, so the DAG model does
 	// not apply either.
 	if dagInfo.lcaTableId == 0 {
-		if tarCollectRange, err = buildSideCollectRange(
+		if tarCollectRange, _, err = buildSideCollectRange(
 			ctx, ses, bh, tables, tarSp, tarCTS,
 			dagInfo.pathFromLCAToTar, dagInfo.pathFromLCAToTarTS,
 			nil, nil, types.TS{}, true,
 		); err != nil {
 			return
 		}
-		if baseCollectRange, err = buildSideCollectRange(
+		if baseCollectRange, _, err = buildSideCollectRange(
 			ctx, ses, bh, tables, baseSp, baseCTS,
 			dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS,
 			nil, nil, types.TS{}, true,
@@ -2338,17 +2413,39 @@ func decideCollectRange(
 		return tarCollectRange, baseCollectRange, err
 	}
 
-	if tarCollectRange, err = buildSideCollectRange(
+	var tarHasZeroHistory, baseHasZeroHistory bool
+	if tarCollectRange, tarHasZeroHistory, err = buildSideCollectRange(
 		ctx, ses, bh, tables, tarSp, tarCTS,
 		tarPath, tarPathTS, basePathTS, dagInfo.pathFromLCAToBaseLineageOnly, baseSp, false,
 	); err != nil {
 		return
 	}
-	if baseCollectRange, err = buildSideCollectRange(
+	if baseCollectRange, baseHasZeroHistory, err = buildSideCollectRange(
 		ctx, ses, bh, tables, baseSp, baseCTS,
 		basePath, basePathTS, tarPathTS, dagInfo.pathFromLCAToTarLineageOnly, tarSp, false,
 	); err != nil {
 		return
+	}
+	if tarHasZeroHistory || baseHasZeroHistory {
+		// An intermediate created and dropped in one transaction has no
+		// committed relation history to walk. The child creation commit still
+		// materializes that intermediate's complete state, including writes made
+		// before the clone. Compare both endpoint histories directly so inherited
+		// rows cancel while those writes remain visible in the diff.
+		tarCollectRange = collectRange{
+			from: []types.TS{types.MinTs()},
+			end:  []types.TS{tarSp},
+			rel:  []engine.Relation{tables.tarRel},
+		}
+		baseCollectRange = collectRange{
+			from: []types.TS{types.MinTs()},
+			end:  []types.TS{baseSp},
+			rel:  []engine.Relation{tables.baseRel},
+		}
+		logutil.Info("DataBranch-CollectRange-Fallback-WholeHistory",
+			zap.Bool("target-zero-history", tarHasZeroHistory),
+			zap.Bool("base-zero-history", baseHasZeroHistory),
+		)
 	}
 	return
 }
@@ -2413,7 +2510,7 @@ func buildSideCollectRange(
 	otherPathLineageOnly []bool,
 	otherSP types.TS,
 	wholeHistory bool,
-) (cr collectRange, err error) {
+) (cr collectRange, hasZeroHistory bool, err error) {
 
 	endpointID := selfPath[len(selfPath)-1]
 	for i, nodeID := range selfPath {
@@ -2454,30 +2551,12 @@ func buildSideCollectRange(
 				},
 			); err != nil {
 				historicalErr := err
-				// A same-transaction intermediate has no committed catalog row at
-				// its child's pre-commit clone timestamp. Resolve it at the endpoint
-				// creation commit, where every table in that transaction is visible,
-				// instead of at the current snapshot where it may already be dropped.
-				fallbackSnapshot := endpointCTS
-				fallbackSnapshotPB := fallbackSnapshot.ToTimestamp()
-				if rel, err = getRelationById(
-					ctx, ses, bh, nodeID, &plan2.Snapshot{
-						Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
-						TS:     &fallbackSnapshotPB,
-					},
-				); err != nil {
-					err = historicalErr
-					return
-				}
-				ctsList, ctsErr := getTablesCreationCommitTS(
-					ctx, ses, rel, rel, []types.TS{fallbackSnapshot, fallbackSnapshot},
+				rel, nodeCTS, hasZeroHistory, err = resolveSameTransactionDataBranchRelation(
+					ctx, ses, bh, nodeID, relationSnapshot, endpointCTS, historicalErr,
 				)
-				if ctsErr != nil || len(ctsList) == 0 ||
-					!ctsList[0].GT(&nodeSnapshot) || ctsList[0].GT(&fallbackSnapshot) {
-					err = historicalErr
+				if err != nil || hasZeroHistory {
 					return
 				}
-				nodeCTS = ctsList[0]
 				nodeCTSResolved = true
 			}
 		}
