@@ -2951,6 +2951,11 @@ func TestISCPExecutor7(t *testing.T) {
 
 }
 
+type iscpWatermarkSnapshot struct {
+	current types.TS
+	found   bool
+}
+
 func waitForISCPWatermark(
 	t require.TestingT,
 	getWatermark func() (types.TS, bool),
@@ -2961,22 +2966,37 @@ func waitForISCPWatermark(
 	tableID uint64,
 	jobName string,
 ) {
+	var lastCompleted atomic.Pointer[iscpWatermarkSnapshot]
 	reached := assert.Eventually(t, func() bool {
 		current, found := getWatermark()
+		lastCompleted.Store(&iscpWatermarkSnapshot{
+			current: current,
+			found:   found,
+		})
 		return found && current.GE(&target)
 	}, waitFor, tick)
 	if reached {
 		return
 	}
 
-	current, found := getWatermark()
+	var (
+		current  types.TS
+		found    bool
+		observed bool
+	)
+	if snapshot := lastCompleted.Load(); snapshot != nil {
+		current = snapshot.current
+		found = snapshot.found
+		observed = true
+	}
 	require.FailNowf(
 		t,
 		"ISCP watermark did not reach target",
-		"account=%d table=%d job=%s found=%t current=%s target=%s",
+		"account=%d table=%d job=%s observed=%t found=%t current=%s target=%s",
 		accountID,
 		tableID,
 		jobName,
+		observed,
 		found,
 		current.ToString(),
 		target.ToString(),
@@ -2991,25 +3011,37 @@ func (failNowPanicTestingT) FailNow() {
 	panic("fail now")
 }
 
-func TestWaitForISCPWatermarkTimeoutSnapshotIsSynchronous(t *testing.T) {
-	releaseCondition := make(chan struct{})
+func TestWaitForISCPWatermarkTimeoutDoesNotWaitForBlockedGetter(t *testing.T) {
+	var tableMu sync.RWMutex
+	tableMu.Lock()
+
 	conditionExited := make(chan struct{})
+	lockReleased := make(chan struct{})
 	var calls atomic.Int32
 
 	getWatermark := func() (types.TS, bool) {
-		if calls.Add(1) == 1 {
-			<-releaseCondition
-			close(conditionExited)
-		}
+		calls.Add(1)
+		tableMu.RLock()
+		defer tableMu.RUnlock()
+		close(conditionExited)
 		return types.BuildTS(1, 0), true
 	}
 
+	go func() {
+		time.Sleep(time.Second)
+		tableMu.Unlock()
+		close(lockReleased)
+	}()
+
+	start := time.Now()
 	defer func() {
 		recovered := recover()
-		close(releaseCondition)
+		elapsed := time.Since(start)
+		<-lockReleased
 		<-conditionExited
 		require.Equal(t, "fail now", recovered)
-		require.Equal(t, int32(2), calls.Load())
+		require.Less(t, elapsed, 750*time.Millisecond)
+		require.Equal(t, int32(1), calls.Load())
 	}()
 
 	waitForISCPWatermark(
