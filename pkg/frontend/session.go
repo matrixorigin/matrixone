@@ -1284,6 +1284,7 @@ func (ses *Session) GetTenantName() string {
 }
 
 func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt *PrepareStmt) error {
+	name = strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
@@ -1315,9 +1316,10 @@ func (ses *Session) getMaxPrepareStmtCountLocked() uint64 {
 }
 
 func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
+	normalizedName := strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if prepareStmt, ok := ses.prepareStmts[name]; ok {
+	if prepareStmt, ok := ses.prepareStmts[normalizedName]; ok {
 		return prepareStmt, nil
 	}
 	var connID uint32
@@ -1338,13 +1340,17 @@ func (ses *Session) GetPrepareStmts() []*PrepareStmt {
 	return ret
 }
 
-func (ses *Session) RemovePrepareStmt(name string) {
+func (ses *Session) RemovePrepareStmt(name string) bool {
+	name = strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if stmt, ok := ses.prepareStmts[name]; ok {
-		stmt.Close()
-		delete(ses.prepareStmts, name)
+	stmt, ok := ses.prepareStmts[name]
+	if !ok {
+		return false
 	}
+	stmt.Close()
+	delete(ses.prepareStmts, name)
+	return true
 }
 
 // RemoveAllPrepareStmts closes and drops every cached prepared statement. It is

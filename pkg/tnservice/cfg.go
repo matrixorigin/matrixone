@@ -185,8 +185,6 @@ type Config struct {
 			// Backend txn storage backend implementation. [TAE|MEMKV], default TAE.
 			Backend StorageType `toml:"backend"`
 		}
-
-		DebugMode bool `toml:"debug-mode"`
 	}
 
 	// Cluster configuration

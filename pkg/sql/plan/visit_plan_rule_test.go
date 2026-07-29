@@ -29,6 +29,80 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var errWindowParameterVisit = errors.New("window parameter visit failed")
+
+type failWindowParameterVisitRule struct {
+	failOn int
+	calls  int
+}
+
+func (*failWindowParameterVisitRule) MatchNode(*planpb.Node) bool  { return false }
+func (*failWindowParameterVisitRule) IsApplyExpr() bool            { return true }
+func (*failWindowParameterVisitRule) ApplyNode(*planpb.Node) error { return nil }
+func (r *failWindowParameterVisitRule) ApplyExpr(expr *planpb.Expr) (*planpb.Expr, error) {
+	r.calls++
+	if r.calls == r.failOn {
+		return nil, errWindowParameterVisit
+	}
+	return expr, nil
+}
+
+func TestPrepareRulesTraverseEveryWindowSpecParameter(t *testing.T) {
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	window := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+		WindowFunc:  param(5),
+		PartitionBy: []*planpb.Expr{param(3), nil},
+		OrderBy:     []*planpb.OrderBySpec{{Expr: param(4)}, nil},
+		Frame: &planpb.FrameClause{
+			Start: &planpb.FrameBound{Val: param(2)},
+			End:   &planpb.FrameBound{Val: param(1)},
+		},
+	}}}
+
+	get := NewGetParamRule()
+	require.NoError(t, applyRuleToWindowSpec(get, nil))
+	_, err := get.ApplyExpr(window)
+	require.NoError(t, err)
+	require.Equal(t, map[int]int{1: 0, 2: 0, 3: 0, 4: 0, 5: 0}, get.params)
+	get.SetParamOrder()
+
+	_, err = NewResetParamOrderRule(get.params).ApplyExpr(window)
+	require.NoError(t, err)
+	require.Equal(t, []int32{4, 2, 3, 1, 0}, []int32{
+		window.GetW().WindowFunc.GetP().Pos,
+		window.GetW().PartitionBy[0].GetP().Pos,
+		window.GetW().OrderBy[0].Expr.GetP().Pos,
+		window.GetW().Frame.Start.Val.GetP().Pos,
+		window.GetW().Frame.End.Val.GetP().Pos,
+	})
+}
+
+func TestApplyRuleToWindowSpecPropagatesFieldErrors(t *testing.T) {
+	newWindow := func() *planpb.WindowSpec {
+		param := func() *planpb.Expr {
+			return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{}}}
+		}
+		return &planpb.WindowSpec{
+			WindowFunc:  param(),
+			PartitionBy: []*planpb.Expr{param()},
+			OrderBy:     []*planpb.OrderBySpec{{Expr: param()}},
+			Frame: &planpb.FrameClause{
+				Start: &planpb.FrameBound{Val: param()},
+				End:   &planpb.FrameBound{Val: param()},
+			},
+		}
+	}
+
+	for failOn := 1; failOn <= 5; failOn++ {
+		t.Run("field", func(t *testing.T) {
+			rule := &failWindowParameterVisitRule{failOn: failOn}
+			require.ErrorIs(t, applyRuleToWindowSpec(rule, newWindow()), errWindowParameterVisit)
+		})
+	}
+}
+
 type resolveErrorCompilerContext struct {
 	*MockCompilerContext
 	err error
@@ -711,6 +785,38 @@ func TestResetPreparePlanPreservesSubscriptionIdentity(t *testing.T) {
 	require.Len(t, schemas, 1)
 	require.Equal(t, "subscriber_db", schemas[0].SubscriptionName)
 	require.Equal(t, int32(11), schemas[0].GetPubInfo().GetTenantId())
+}
+
+func TestDecrementParamOrdinalRuleTraversesFunctionsAndLists(t *testing.T) {
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	first := param(1)
+	second := param(3)
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Args: []*planpb.Expr{{
+			Expr: &planpb.Expr_List{List: &planpb.ExprList{
+				List: []*planpb.Expr{first, second},
+			}},
+		}},
+	}}}
+	rule := &decrementParamOrdinalRule{seen: make(map[*planpb.ParamRef]struct{})}
+
+	_, err := rule.ApplyExpr(expr)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), first.GetP().Pos)
+	require.Equal(t, int32(2), second.GetP().Pos)
+
+	_, err = rule.ApplyExpr(first)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), first.GetP().Pos)
+
+	expr.GetF().Args[0].GetList().List = append(
+		expr.GetF().Args[0].GetList().List,
+		param(0),
+	)
+	_, err = rule.ApplyExpr(expr)
+	require.ErrorContains(t, err, "prepared parameter ordinal is not one-based")
 }
 
 func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {

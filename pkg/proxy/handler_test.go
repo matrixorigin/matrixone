@@ -749,6 +749,61 @@ func TestHandler_handleTunnelErrDiscardsBackendWhenKillFails(t *testing.T) {
 	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
 }
 
+func TestHandlerClientDisconnectCancellationMatrix(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	tests := []struct {
+		name           string
+		err            error
+		inFlight       bool
+		expectedClient bool
+		expectedCache  bool
+		killErr        error
+		wantKill       int
+		wantClose      int
+	}{
+		{name: "idle eof", err: withCode(io.EOF, codeClientDisconnect), wantClose: 1},
+		{name: "forwarded request eof", err: withCode(io.EOF, codeClientDisconnect), inFlight: true, wantKill: 1, wantClose: 1},
+		{name: "forwarded request reset", err: withCode(syscall.ECONNRESET, codeClientDisconnect), inFlight: true, wantKill: 1, wantClose: 1},
+		{name: "normal quit", err: withCode(io.EOF, codeClientDisconnect), inFlight: true, expectedClient: true, wantClose: 1},
+		{name: "cached quit", err: withCode(io.EOF, codeClientDisconnect), inFlight: true, expectedCache: true},
+		{name: "server disconnect", err: withCode(io.EOF, codeServerDisconnect)},
+		{name: "kill failure still closes", err: withCode(io.EOF, codeClientDisconnect), inFlight: true, killErr: errors.New("injected kill failure"), wantKill: 1, wantClose: 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &handler{logger: rt.Logger(), counterSet: newCounterSet()}
+			closeCalled := 0
+			tun := &tunnel{}
+			if tc.inFlight {
+				tun.trackClientRequest(makeSimplePacket("select 1"))
+			}
+			if tc.expectedCache {
+				tun.markExpectedCacheQuit()
+			} else if tc.expectedClient {
+				tun.markExpectedClientQuit()
+			}
+			tun.mu.sc = &killCurrentServerConn{
+				cn: &CNServer{connID: 11, uuid: "cn-new"},
+				closeFn: func() error {
+					closeCalled++
+					return nil
+				},
+			}
+			killCalled := 0
+			cc := &mockClientConn{killFn: func(ServerConn) error {
+				killCalled++
+				return tc.killErr
+			}}
+
+			require.NoError(t, h.handleTunnelErr(tc.err, cc, tun, 1, 1))
+			require.Equal(t, tc.wantKill, killCalled)
+			require.Equal(t, tc.wantClose, closeCalled)
+		})
+	}
+}
+
 func TestHandler_handleTunnelErrDoesNotKillConcurrentIdleEOFs(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)

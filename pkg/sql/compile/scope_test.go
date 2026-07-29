@@ -2708,7 +2708,7 @@ func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
 	}
 }
 
-func TestShuffleJoinStageNodesKeepsSinkScanReceiversLocal(t *testing.T) {
+func TestShuffleJoinStageNodesDistributesReceiversAndKeepsSinkScanWorker(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
 	c.cnList = engine.Nodes{
@@ -2726,13 +2726,29 @@ func TestShuffleJoinStageNodesKeepsSinkScanReceiversLocal(t *testing.T) {
 
 	stageNodes, local := c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
 	require.True(t, local)
-	require.Len(t, stageNodes, 1)
+	require.Len(t, stageNodes, 2)
 	require.Equal(t, "cn-local:6001", stageNodes[0].Addr)
+	require.Equal(t, "cn-remote:6001", stageNodes[1].Addr)
 
 	normalScope := &Scope{RootOp: merge.NewArgument()}
 	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{normalScope}, nil)
 	require.False(t, local)
 	require.Len(t, stageNodes, 2)
+
+	c.cnList = engine.Nodes{
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 2)
+	require.Equal(t, "cn-remote:6001", stageNodes[0].Addr)
+	require.Equal(t, "cn-local:6001", stageNodes[1].Addr)
+
+	c.cnList = nil
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 1)
+	require.Equal(t, "cn-local:6001", stageNodes[0].Addr)
 }
 
 func TestAttachShuffleDispatchSourceFallsBackToFirstReceiver(t *testing.T) {
