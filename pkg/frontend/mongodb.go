@@ -184,7 +184,11 @@ func retireMongoDBConnection(service string, accountID uint32, connectionID uint
 
 func mongoDBRuntimeDependencies(service string) *mongodb.RuntimeDependencies {
 	for _, serviceID := range []string{service, ""} {
-		value, ok := moruntime.ServiceRuntime(serviceID).GetGlobalVariables(mongodb.RuntimeDependenciesKey)
+		runtime := moruntime.ServiceRuntime(serviceID)
+		if runtime == nil {
+			continue
+		}
+		value, ok := runtime.GetGlobalVariables(mongodb.RuntimeDependenciesKey)
 		if !ok {
 			continue
 		}

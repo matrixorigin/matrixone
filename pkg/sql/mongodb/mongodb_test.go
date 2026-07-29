@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"math"
 	"net"
 	"strings"
 	"sync"
@@ -170,6 +171,112 @@ func TestPredicateTranslationAndProjection(t *testing.T) {
 	require.Error(t, (&Predicate{Op: PredicateEqual, Path: "$where", Value: 1}).Validate(ctx))
 }
 
+func TestPredicateOperatorsValidationAndProjectionParents(t *testing.T) {
+	ctx := t.Context()
+	require.NoError(t, (*Predicate)(nil).Validate(ctx))
+	empty, err := PredicateToBSON(ctx, nil)
+	require.NoError(t, err)
+	require.Empty(t, empty)
+	require.ErrorContains(t, (&Predicate{Op: PredicateAnd}).Validate(ctx), "requires children")
+	require.Error(t, (&Predicate{Op: PredicateAnd, Children: []*Predicate{{Op: PredicateInvalid, Path: "x"}}}).Validate(ctx))
+	require.ErrorContains(t, (&Predicate{Op: PredicateIn, Path: "x"}).Validate(ctx), "cannot be empty")
+	require.ErrorContains(t, (&Predicate{Op: PredicateInvalid, Path: "x"}).Validate(ctx), "unsupported")
+
+	for _, tc := range []struct {
+		name string
+		op   PredicateOp
+	}{
+		{name: "equal", op: PredicateEqual},
+		{name: "not equal", op: PredicateNotEqual},
+		{name: "less", op: PredicateLess},
+		{name: "less equal", op: PredicateLessEqual},
+		{name: "greater", op: PredicateGreater},
+		{name: "greater equal", op: PredicateGreaterEqual},
+		{name: "is null", op: PredicateIsNull},
+		{name: "is not null", op: PredicateIsNotNull},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			document, err := PredicateToBSON(t.Context(), &Predicate{Op: tc.op, Path: "reading.value", Value: int64(10)})
+			require.NoError(t, err)
+			require.NotEmpty(t, document)
+		})
+	}
+	in, err := PredicateToBSON(ctx, &Predicate{Op: PredicateIn, Path: "reading.value", Values: []any{int64(1), int64(2)}})
+	require.NoError(t, err)
+	require.NotEmpty(t, in)
+
+	for _, path := range []string{"", ".value", "value.", "a..b", "$value", "a.*", "a[0]", "a\x00b"} {
+		require.Error(t, ValidateBSONPath(ctx, path), path)
+	}
+	require.NoError(t, ValidateBSONPath(ctx, "metadata.reading.value"))
+
+	projection := ProjectionDocument([]ColumnMapping{
+		{Path: "payload.value"}, {Path: "payload.quality"}, {Path: "payload"}, {Path: "_id.hex"},
+	})
+	require.Equal(t, bson.D{{Key: "payload", Value: 1}, {Key: "_id.hex", Value: 1}}, projection)
+}
+
+func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing.T) {
+	ctx := t.Context()
+	validOptions := func(extra ...*tree.MongoDBOption) *tree.MongoDBTableParam {
+		options := tree.MongoDBOptions{
+			tree.NewMongoDBOption("connection", "source"),
+			tree.NewMongoDBOption("database", "telemetry"),
+			tree.NewMongoDBOption("collection", "raw"),
+		}
+		options = append(options, extra...)
+		return tree.NewMongoDBTableParam(options)
+	}
+	validDefs := func(attributes ...tree.ColumnAttribute) tree.TableDefs {
+		return tree.TableDefs{&tree.ColumnTableDef{Name: tree.NewUnresolvedColName("value"), Attributes: attributes}}
+	}
+	validTable := func() *planpb.TableDef {
+		return &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_int64)}}}}
+	}
+
+	for _, tc := range []struct {
+		name  string
+		param *tree.MongoDBTableParam
+		defs  tree.TableDefs
+		table *planpb.TableDef
+	}{
+		{name: "missing param", defs: validDefs(), table: validTable()},
+		{name: "missing table", param: validOptions(), defs: validDefs()},
+		{name: "empty option", param: tree.NewMongoDBTableParam(tree.MongoDBOptions{tree.NewMongoDBOption("", "value")}), defs: validDefs(), table: validTable()},
+		{name: "duplicate option", param: validOptions(tree.NewMongoDBOption("DATABASE", "other")), defs: validDefs(), table: validTable()},
+		{name: "unsupported option", param: validOptions(tree.NewMongoDBOption("password", "secret")), defs: validDefs(), table: validTable()},
+		{name: "missing required", param: tree.NewMongoDBTableParam(tree.MongoDBOptions{tree.NewMongoDBOption("connection", "source")}), defs: validDefs(), table: validTable()},
+		{name: "invalid namespace", param: tree.NewMongoDBTableParam(tree.MongoDBOptions{
+			tree.NewMongoDBOption("connection", "source"),
+			tree.NewMongoDBOption("database", "telemetry"),
+			tree.NewMongoDBOption("collection", "bad\x00name"),
+		}), defs: validDefs(), table: validTable()},
+		{name: "schema mode", param: validOptions(tree.NewMongoDBOption("schema_mode", "infer")), defs: validDefs(), table: validTable()},
+		{name: "conversion mode", param: validOptions(tree.NewMongoDBOption("conversion_mode", "lossy")), defs: validDefs(), table: validTable()},
+		{name: "parallel parse", param: validOptions(tree.NewMongoDBOption("max_parallelism", "many")), defs: validDefs(), table: validTable()},
+		{name: "parallel unsupported", param: validOptions(tree.NewMongoDBOption("max_parallelism", "2")), defs: validDefs(), table: validTable()},
+		{name: "missing columns", param: validOptions(), table: validTable()},
+		{name: "column count", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_int64)}}, {Name: "other", Typ: planpb.Type{Id: int32(types.T_int64)}}}}},
+		{name: "column order", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "other", Typ: planpb.Type{Id: int32(types.T_int64)}}}}},
+		{name: "duplicate path", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBPath("a"), tree.NewAttributeMongoDBPath("b")), table: validTable()},
+		{name: "duplicate conversion", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBConvert("strict"), tree.NewAttributeMongoDBConvert("try_null")), table: validTable()},
+		{name: "invalid column conversion", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBConvert("lossy")), table: validTable()},
+		{name: "invalid column path", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBPath("$where")), table: validTable()},
+		{name: "unsupported type", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_array_float32)}}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseTableMappingSpec(ctx, tc.param, tc.defs, tc.table)
+			require.Error(t, err)
+		})
+	}
+
+	spec, err := ParseTableMappingSpec(ctx, validOptions(tree.NewMongoDBOption("max_parallelism", "1")), validDefs(
+		tree.NewAttributeMongoDBPath("reading.value"), tree.NewAttributeMongoDBConvert(" TRY_NULL "),
+	), validTable())
+	require.NoError(t, err)
+	require.Equal(t, ConversionTryNull, spec.Mapping.Columns[0].Conversion)
+}
+
 func TestProjectColumnsByNameKeepsCompactResidualLayout(t *testing.T) {
 	columns := []ColumnMapping{
 		{Name: "pump", Path: "metadata.pump"},
@@ -291,6 +398,152 @@ func TestTemporalCandidateRoundingBeforeUnixEpoch(t *testing.T) {
 	require.Equal(t, int64(-1), ceilDiv(-1001, 1000))
 	require.Equal(t, int64(-1), floorDiv(-999, 1000))
 	require.Equal(t, int64(0), ceilDiv(-999, 1000))
+}
+
+func TestPlanPredicateHelperVariants(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		op   PredicateOp
+		want PredicateOp
+	}{
+		{name: "less", op: PredicateLess, want: PredicateGreater},
+		{name: "less equal", op: PredicateLessEqual, want: PredicateGreaterEqual},
+		{name: "greater", op: PredicateGreater, want: PredicateLess},
+		{name: "greater equal", op: PredicateGreaterEqual, want: PredicateLessEqual},
+		{name: "equal", op: PredicateEqual, want: PredicateEqual},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, reversePredicateOp(tc.op)) })
+	}
+
+	for _, tc := range []struct {
+		name string
+		want PredicateOp
+		ok   bool
+	}{
+		{name: "=", want: PredicateEqual, ok: true},
+		{name: "!=", want: PredicateNotEqual, ok: true},
+		{name: "<>", want: PredicateNotEqual, ok: true},
+		{name: "<", want: PredicateLess, ok: true},
+		{name: "<=", want: PredicateLessEqual, ok: true},
+		{name: ">", want: PredicateGreater, ok: true},
+		{name: ">=", want: PredicateGreaterEqual, ok: true},
+		{name: "like", want: PredicateInvalid},
+	} {
+		t.Run("operator "+tc.name, func(t *testing.T) {
+			got, ok := comparisonPredicateOp(tc.name)
+			require.Equal(t, tc.ok, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	literals := []struct {
+		name    string
+		literal *planpb.Literal
+		want    any
+		ok      bool
+	}{
+		{name: "nil"},
+		{name: "null", literal: &planpb.Literal{Isnull: true}, ok: true},
+		{name: "bool", literal: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: true}}, want: true, ok: true},
+		{name: "int8", literal: &planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: 8}}, want: int32(8), ok: true},
+		{name: "int16", literal: &planpb.Literal{Value: &planpb.Literal_I16Val{I16Val: 16}}, want: int32(16), ok: true},
+		{name: "int32", literal: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: 32}}, want: int32(32), ok: true},
+		{name: "int64", literal: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 64}}, want: int64(64), ok: true},
+		{name: "uint8", literal: &planpb.Literal{Value: &planpb.Literal_U8Val{U8Val: 8}}, want: int32(8), ok: true},
+		{name: "uint16", literal: &planpb.Literal{Value: &planpb.Literal_U16Val{U16Val: 16}}, want: int32(16), ok: true},
+		{name: "uint32", literal: &planpb.Literal{Value: &planpb.Literal_U32Val{U32Val: 32}}, want: int64(32), ok: true},
+		{name: "uint64", literal: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 64}}, want: int64(64), ok: true},
+		{name: "uint64 overflow", literal: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: math.MaxUint64}}},
+		{name: "float32", literal: &planpb.Literal{Value: &planpb.Literal_Fval{Fval: 1.5}}, want: float32(1.5), ok: true},
+		{name: "float64", literal: &planpb.Literal{Value: &planpb.Literal_Dval{Dval: 2.5}}, want: 2.5, ok: true},
+		{name: "string", literal: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "value"}}, want: "value", ok: true},
+		{name: "unsupported", literal: &planpb.Literal{Value: &planpb.Literal_Dateval{Dateval: 1}}},
+	}
+	for _, tc := range literals {
+		t.Run("literal "+tc.name, func(t *testing.T) {
+			expr := &planpb.Expr{}
+			if tc.literal != nil {
+				expr.Expr = &planpb.Expr_Lit{Lit: tc.literal}
+			}
+			got, ok := scalarPlanLiteral(expr)
+			require.Equal(t, tc.ok, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	for _, tc := range []struct {
+		op    PredicateOp
+		micro int64
+		want  int64
+		ok    bool
+	}{
+		{op: PredicateEqual, micro: 2000, want: 2, ok: true},
+		{op: PredicateNotEqual, micro: 2001},
+		{op: PredicateGreaterEqual, micro: 2001, want: 3, ok: true},
+		{op: PredicateLess, micro: 2001, want: 3, ok: true},
+		{op: PredicateGreater, micro: 2001, want: 2, ok: true},
+		{op: PredicateLessEqual, micro: 2001, want: 2, ok: true},
+		{op: PredicateIn, micro: 2000},
+	} {
+		got, ok := temporalCandidateMilliseconds(tc.micro, tc.op)
+		require.Equal(t, tc.ok, ok)
+		require.Equal(t, tc.want, got)
+	}
+}
+
+func TestPlanPredicateCompoundInAndReversedComparisons(t *testing.T) {
+	column := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	badColumn := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 9}}}
+	literal := func(value int64) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: value}}}}
+	}
+	fn := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: name}, Args: args}}}
+	}
+	columns := []*planpb.MongoColumnMapping{{
+		Path: "reading.value", ConversionMode: ConversionTryNull, MoType: planpb.Type{Id: int32(types.T_int64)},
+	}}
+
+	reversed, ok := planExprToPredicate(fn("<", literal(10), column), columns)
+	require.True(t, ok)
+	require.Equal(t, PredicateGreater, reversed.Op)
+	require.Equal(t, int64(10), reversed.Value)
+
+	and, ok := planExprToPredicate(fn("and", fn(">", column, literal(1)), fn("<=", column, literal(9))), columns)
+	require.True(t, ok)
+	require.Equal(t, PredicateAnd, and.Op)
+	require.Len(t, and.Children, 2)
+	_, ok = planExprToPredicate(fn("and", fn(">", column, literal(1)), fn("=", badColumn, literal(9))), columns)
+	require.False(t, ok)
+
+	inList := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{literal(1), literal(2)}}}}
+	in, ok := planExprToPredicate(fn("in", column, inList), columns)
+	require.True(t, ok)
+	require.Equal(t, []any{int64(1), int64(2)}, in.Values)
+	for _, invalid := range []*planpb.Expr{
+		fn("in", badColumn, inList),
+		fn("in", column, &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{}}}),
+		fn("in", column, &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}}}}}),
+		fn("unknown", column, literal(1)),
+		fn("=", column),
+		{},
+	} {
+		_, ok = planExprToPredicate(invalid, columns)
+		require.False(t, ok)
+	}
+
+	isNotNull, ok := planExprToPredicate(fn("isnotnull", column), columns)
+	require.True(t, ok)
+	require.Equal(t, PredicateIsNotNull, isNotNull.Op)
+	_, ok = planExprToPredicate(fn("isnull", column), columns)
+	require.False(t, ok)
+	_, ok = planExprToPredicate(fn("is_not_null", badColumn), columns)
+	require.False(t, ok)
+
+	pushed, residual := PushdownPlanFilters(t.Context(), []*planpb.Expr{fn(">", column, literal(1)), fn("unknown")}, columns)
+	require.NotNil(t, pushed)
+	require.Equal(t, "mo-residual:ff", residual)
+	require.Equal(t, "", residualDigest(nil))
 }
 
 func TestSourceLimiterCancellationReleaseAndKeyRecycling(t *testing.T) {
@@ -558,6 +811,145 @@ func TestConverterDecimalBinaryAndInternalJSONEncoding(t *testing.T) {
 	require.JSONEq(t, `{"nested":[{"$numberInt":"1"},"two"]}`, types.DecodeJson(bat.Vecs[2].GetBytesAt(0)).String())
 	bat.Clean(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestConverterCoversSupportedScalarFamilies(t *testing.T) {
+	mp := mpool.MustNewZero()
+	decimal, err := bson.ParseDecimal128("12.345")
+	require.NoError(t, err)
+	objectID := bson.NewObjectID()
+	when := time.Date(2026, 7, 29, 10, 11, 12, 345000000, time.UTC)
+	columns := []ColumnMapping{
+		{Name: "bool", TypeID: int32(types.T_bool)},
+		{Name: "int8", TypeID: int32(types.T_int8)},
+		{Name: "int16", TypeID: int32(types.T_int16)},
+		{Name: "int64", TypeID: int32(types.T_int64)},
+		{Name: "uint8", TypeID: int32(types.T_uint8)},
+		{Name: "uint16", TypeID: int32(types.T_uint16)},
+		{Name: "uint32", TypeID: int32(types.T_uint32)},
+		{Name: "uint64", TypeID: int32(types.T_uint64)},
+		{Name: "float32", TypeID: int32(types.T_float32)},
+		{Name: "decimal64", TypeID: int32(types.T_decimal64), Width: 18, Scale: 2},
+		{Name: "decimal128", TypeID: int32(types.T_decimal128), Width: 20, Scale: 3},
+		{Name: "decimal256", TypeID: int32(types.T_decimal256), Width: 38, Scale: 3},
+		{Name: "date", TypeID: int32(types.T_date)},
+		{Name: "timestamp", TypeID: int32(types.T_timestamp)},
+		{Name: "char", TypeID: int32(types.T_char), Width: 8},
+		{Name: "text", TypeID: int32(types.T_text)},
+		{Name: "binary", TypeID: int32(types.T_binary), Width: 8},
+		{Name: "varbinary", TypeID: int32(types.T_varbinary), Width: 12},
+		{Name: "blob", TypeID: int32(types.T_blob)},
+	}
+	converter, err := NewConverter(t.Context(), columns, 0)
+	require.NoError(t, err)
+	require.Equal(t, columns, converter.Columns())
+	copyOfColumns := converter.Columns()
+	copyOfColumns[0].Name = "changed"
+	require.Equal(t, "bool", converter.Columns()[0].Name)
+	converter.SetConversionErrorLimits(3, 0.25)
+	require.Equal(t, int64(3), converter.maxConversionErrors)
+	require.Equal(t, 0.25, converter.maxConversionErrorRate)
+	converter.SetConversionErrorLimits(0, 2)
+	require.Equal(t, DefaultRuntimeConfig().MaxConversionErrors, converter.maxConversionErrors)
+	require.Equal(t, DefaultRuntimeConfig().MaxConversionErrorRate, converter.maxConversionErrorRate)
+
+	raw, err := bson.Marshal(bson.D{
+		{Key: "bool", Value: true},
+		{Key: "int8", Value: int32(8)},
+		{Key: "int16", Value: int32(16)},
+		{Key: "int64", Value: float64(64)},
+		{Key: "uint8", Value: int32(8)},
+		{Key: "uint16", Value: int32(16)},
+		{Key: "uint32", Value: int64(32)},
+		{Key: "uint64", Value: int64(64)},
+		{Key: "float32", Value: 1.5},
+		{Key: "decimal64", Value: int32(12)},
+		{Key: "decimal128", Value: int64(12345)},
+		{Key: "decimal256", Value: decimal},
+		{Key: "date", Value: when},
+		{Key: "timestamp", Value: when},
+		{Key: "char", Value: "text"},
+		{Key: "text", Value: objectID},
+		{Key: "binary", Value: bson.Binary{Data: []byte{1, 2}}},
+		{Key: "varbinary", Value: objectID},
+		{Key: "blob", Value: bson.Binary{Data: []byte{3, 4}}},
+	})
+	require.NoError(t, err)
+	bat := converter.NewBatch()
+	require.NoError(t, converter.AppendDocument(t.Context(), bat, raw, mp))
+	require.Equal(t, 1, bat.RowCount())
+	require.True(t, vector.GetFixedAtNoTypeCheck[bool](bat.Vecs[0], 0))
+	require.Equal(t, int8(8), vector.GetFixedAtNoTypeCheck[int8](bat.Vecs[1], 0))
+	require.Equal(t, uint64(64), vector.GetFixedAtNoTypeCheck[uint64](bat.Vecs[7], 0))
+	require.Equal(t, objectID.Hex(), string(bat.Vecs[15].GetBytesAt(0)))
+	require.Equal(t, objectID[:], bat.Vecs[17].GetBytesAt(0))
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestConverterRejectsInvalidMappingsAndScalarBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		columns []ColumnMapping
+	}{
+		{name: "empty"},
+		{name: "empty name", columns: []ColumnMapping{{TypeID: int32(types.T_int64)}}},
+		{name: "duplicate", columns: []ColumnMapping{{Name: "Value", TypeID: int32(types.T_int64)}, {Name: "value", TypeID: int32(types.T_int64)}}},
+		{name: "invalid path", columns: []ColumnMapping{{Name: "value", Path: "$where", TypeID: int32(types.T_int64)}}},
+		{name: "invalid conversion", columns: []ColumnMapping{{Name: "value", TypeID: int32(types.T_int64), Conversion: "lossy"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewConverter(t.Context(), tc.columns, 1024)
+			require.Error(t, err)
+		})
+	}
+
+	mp := mpool.MustNewZero()
+	tooWideDecimal, err := bson.ParseDecimal128("123456789")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name   string
+		target types.T
+		width  int32
+		scale  int32
+		value  any
+	}{
+		{name: "bool", target: types.T_bool, value: "true"},
+		{name: "int8", target: types.T_int8, value: int32(math.MaxInt8 + 1)},
+		{name: "int16", target: types.T_int16, value: int32(math.MaxInt16 + 1)},
+		{name: "int64 fraction", target: types.T_int64, value: 1.5},
+		{name: "uint negative", target: types.T_uint64, value: int32(-1)},
+		{name: "uint8", target: types.T_uint8, value: int32(math.MaxUint8 + 1)},
+		{name: "uint16", target: types.T_uint16, value: int64(math.MaxUint16 + 1)},
+		{name: "uint32", target: types.T_uint32, value: int64(math.MaxUint32 + 1)},
+		{name: "float32", target: types.T_float32, value: math.MaxFloat64},
+		{name: "decimal type", target: types.T_decimal64, width: 18, scale: 2, value: "12.3"},
+		{name: "decimal width", target: types.T_decimal64, width: 4, scale: 0, value: tooWideDecimal},
+		{name: "date", target: types.T_date, value: "2026-07-29"},
+		{name: "char", target: types.T_char, width: 8, value: int32(1)},
+		{name: "binary", target: types.T_binary, width: 8, value: "bytes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			converter, err := NewConverter(t.Context(), []ColumnMapping{{
+				Name: "value", TypeID: int32(tc.target), Width: tc.width, Scale: tc.scale,
+			}}, 1024)
+			require.NoError(t, err)
+			raw, err := bson.Marshal(bson.D{{Key: "value", Value: tc.value}})
+			require.NoError(t, err)
+			bat := converter.NewBatch()
+			require.Error(t, converter.AppendDocument(t.Context(), bat, raw, mp))
+			require.Zero(t, bat.RowCount())
+			bat.Clean(mp)
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+
+	for _, value := range []any{math.NaN(), math.Inf(1), math.Inf(-1), float64(9223372036854775808)} {
+		raw, err := bson.Marshal(bson.D{{Key: "value", Value: value}})
+		require.NoError(t, err)
+		_, ok := bsonInt64(bson.Raw(raw).Lookup("value"))
+		require.False(t, ok)
+	}
 }
 
 func TestConnectionValidationAndRedaction(t *testing.T) {

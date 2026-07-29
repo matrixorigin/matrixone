@@ -16,6 +16,7 @@ package aggexec
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -24,6 +25,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func assertMaxByFixedCompare[T any](t *testing.T, mp *mpool.MPool, typ types.Type, low, high T) {
+	t.Helper()
+	a := vector.NewVec(typ)
+	b := vector.NewVec(typ)
+	t.Cleanup(func() {
+		a.Free(mp)
+		b.Free(mp)
+	})
+	require.NoError(t, vector.AppendFixed(a, low, false, mp))
+	require.NoError(t, vector.AppendFixed(b, high, false, mp))
+	require.Less(t, compareVectorValue(a, 0, b, 0, typ), 0)
+	require.Greater(t, compareVectorValue(b, 0, a, 0, typ), 0)
+	require.Zero(t, compareVectorValue(a, 0, a, 0, typ))
+}
 
 func maxByInputs(t *testing.T, mp *mpool.MPool, values []string, nullValue map[int]bool, orders []int64, ties []string) []*vector.Vector {
 	t.Helper()
@@ -217,4 +233,105 @@ func TestMaxByOOMDoesNotPublishMixedWinner(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "old", string(result[0].GetBytesAt(0)))
 	result[0].Free(mp)
+}
+
+func TestMaxByComparisonCoversSupportedOrderTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	assertMaxByFixedCompare(t, mp, types.T_bool.ToType(), false, true)
+	assertMaxByFixedCompare(t, mp, types.T_int8.ToType(), int8(1), int8(2))
+	assertMaxByFixedCompare(t, mp, types.T_int16.ToType(), int16(1), int16(2))
+	assertMaxByFixedCompare(t, mp, types.T_int32.ToType(), int32(1), int32(2))
+	assertMaxByFixedCompare(t, mp, types.T_int64.ToType(), int64(1), int64(2))
+	assertMaxByFixedCompare(t, mp, types.T_uint8.ToType(), uint8(1), uint8(2))
+	assertMaxByFixedCompare(t, mp, types.T_uint16.ToType(), uint16(1), uint16(2))
+	assertMaxByFixedCompare(t, mp, types.T_uint32.ToType(), uint32(1), uint32(2))
+	assertMaxByFixedCompare(t, mp, types.T_uint64.ToType(), uint64(1), uint64(2))
+	assertMaxByFixedCompare(t, mp, types.T_bit.ToType(), uint64(1), uint64(2))
+	assertMaxByFixedCompare(t, mp, types.T_float32.ToType(), float32(1), float32(2))
+	assertMaxByFixedCompare(t, mp, types.T_float64.ToType(), float64(1), float64(2))
+	assertMaxByFixedCompare(t, mp, types.T_date.ToType(), types.Date(1), types.Date(2))
+	assertMaxByFixedCompare(t, mp, types.T_datetime.ToType(), types.Datetime(1), types.Datetime(2))
+	assertMaxByFixedCompare(t, mp, types.T_timestamp.ToType(), types.Timestamp(1), types.Timestamp(2))
+	assertMaxByFixedCompare(t, mp, types.T_time.ToType(), types.Time(1), types.Time(2))
+	assertMaxByFixedCompare(t, mp, types.T_year.ToType(), types.MoYear(1), types.MoYear(2))
+	decimal64Low, err := types.ParseDecimal64("1", 18, 0)
+	require.NoError(t, err)
+	decimal64High, err := types.ParseDecimal64("2", 18, 0)
+	require.NoError(t, err)
+	assertMaxByFixedCompare(t, mp, types.T_decimal64.ToType(), decimal64Low, decimal64High)
+	decimal128Low, err := types.ParseDecimal128("1", 38, 0)
+	require.NoError(t, err)
+	decimal128High, err := types.ParseDecimal128("2", 38, 0)
+	require.NoError(t, err)
+	assertMaxByFixedCompare(t, mp, types.T_decimal128.ToType(), decimal128Low, decimal128High)
+	decimal256Low, err := types.ParseDecimal256("1", 76, 0)
+	require.NoError(t, err)
+	decimal256High, err := types.ParseDecimal256("2", 76, 0)
+	require.NoError(t, err)
+	assertMaxByFixedCompare(t, mp, types.T_decimal256.ToType(), decimal256Low, decimal256High)
+	uuidLow, err := types.ParseUuid("00000000-0000-0000-0000-000000000001")
+	require.NoError(t, err)
+	uuidHigh, err := types.ParseUuid("00000000-0000-0000-0000-000000000002")
+	require.NoError(t, err)
+	assertMaxByFixedCompare(t, mp, types.T_uuid.ToType(), uuidLow, uuidHigh)
+
+	a := vector.NewVec(types.T_varchar.ToType())
+	b := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(a, []byte("a"), false, mp))
+	require.NoError(t, vector.AppendBytes(b, []byte("b"), false, mp))
+	require.Less(t, compareVectorValue(a, 0, b, 0, types.T_varchar.ToType()), 0)
+	a.Free(mp)
+	b.Free(mp)
+}
+
+func TestMaxByNullableAndNaNComparison(t *testing.T) {
+	mp := mpool.MustNewZero()
+	a := vector.NewVec(types.T_varchar.ToType())
+	b := vector.NewVec(types.T_varchar.ToType())
+	defer func() {
+		a.Free(mp)
+		b.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, vector.AppendBytes(a, nil, true, mp))
+	require.NoError(t, vector.AppendBytes(a, []byte("a"), false, mp))
+	require.NoError(t, vector.AppendBytes(b, nil, true, mp))
+	require.NoError(t, vector.AppendBytes(b, []byte("b"), false, mp))
+
+	require.Zero(t, compareNullableVectorValue(a, 0, b, 0, types.T_varchar.ToType()))
+	require.Less(t, compareNullableVectorValue(a, 0, b, 1, types.T_varchar.ToType()), 0)
+	require.Greater(t, compareNullableVectorValue(a, 1, b, 0, types.T_varchar.ToType()), 0)
+	require.Less(t, compareNullableVectorValue(a, 1, b, 1, types.T_varchar.ToType()), 0)
+	require.Zero(t, compareNullableRaw(a, 0, b, 0))
+	require.Less(t, compareNullableRaw(a, 0, b, 1), 0)
+	require.Greater(t, compareNullableRaw(a, 1, b, 0), 0)
+	require.Less(t, compareNullableRaw(a, 1, b, 1), 0)
+
+	nan := math.NaN()
+	require.Zero(t, compareFloat64(nan, nan))
+	require.Greater(t, compareFloat64(nan, 1), 0)
+	require.Less(t, compareFloat64(1, nan), 0)
+	require.Less(t, compareFloat64(1, 2), 0)
+}
+
+func TestMaxByFillAndMergeSkipBranches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
+	exec := makeMaxByExec(mp, 7010, false, params).(*maxByExec)
+	other := makeMaxByExec(mp, 7010, false, params).(*maxByExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, other.GroupGrow(1))
+	inputs := maxByInputs(t, mp, []string{"value"}, nil, []int64{1}, []string{"tie"})
+	require.NoError(t, exec.BatchFill(0, []uint64{GroupNotMatched}, inputs))
+	require.NoError(t, exec.Fill(0, 0, inputs))
+	require.NoError(t, exec.BatchMerge(other, 0, []uint64{GroupNotMatched}))
+	require.NoError(t, exec.SetExtraInformation(nil, 0))
+	require.ErrorContains(t, exec.BatchFill(0, nil, nil), "three input vectors")
+	require.Panics(t, func() { makeMaxByExec(mp, 7011, false, nil) })
+	for _, input := range inputs {
+		input.Free(mp)
+	}
+	exec.Free()
+	other.Free()
+	require.Zero(t, mp.CurrNB())
 }
