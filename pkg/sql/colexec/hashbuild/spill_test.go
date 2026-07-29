@@ -268,6 +268,33 @@ func TestFileWriteErrorBuild(t *testing.T) {
 	spillfs.RemoveFile(context.Background(), "test_error_build")
 }
 
+func TestWriteSpillPayloadCancellationStopsBeforePhysicalWrite(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	ctx, cancel := context.WithCancelCause(proc.Ctx)
+	process.ReplacePipelineCtx(proc, ctx, cancel)
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	file, err := spillfs.CreateFile(context.Background(), t.Name())
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, file.Close())
+		require.NoError(t, spillfs.RemoveFile(context.Background(), t.Name()))
+	}()
+
+	proc.Cancel(context.Canceled)
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	err = (&container{}).writeSpillPayload(proc, file, []byte("stale spill payload"), 1, analyzer)
+	require.ErrorIs(t, err, context.Canceled)
+
+	info, err := file.Stat()
+	require.NoError(t, err)
+	require.Zero(t, info.Size(), "canceled spill must not start physical I/O")
+	require.Zero(t, analyzer.GetOpStats().SpillSize)
+	require.Zero(t, analyzer.GetOpStats().SpillRows)
+}
+
 func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

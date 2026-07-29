@@ -345,10 +345,10 @@ func TestHashBuildSpillLedgersTransferReconcile(t *testing.T) {
 	}
 }
 
-func TestConfiguredSpillFDCapAdmitsNormalShuffleRepartitionPeak(t *testing.T) {
-	const normalPeak = uint64(16 * (32 + 64))
-	if got := configuredSpillFDCap(192 << 20); got < normalPeak {
-		t.Fatalf("configured spill fd cap=%d, want at least normal 16-way peak=%d", got, normalPeak)
+func TestConfiguredSpillFDCapCushionsFirstShuffleRepartitionPeak(t *testing.T) {
+	const firstRepartitionPeak = uint64(16 * (64 + 64))
+	if got := configuredSpillFDCap(192 << 20); got < firstRepartitionPeak {
+		t.Fatalf("configured spill fd cap=%d, want at least first 16-way repartition peak=%d", got, firstRepartitionPeak)
 	}
 }
 

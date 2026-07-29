@@ -230,8 +230,13 @@ type container struct {
 	mp        *message.JoinMap
 	cachedItr hashmap.Iterator
 
-	matched     *bitmap.Bitmap
-	handledLast bool
+	matched *bitmap.Bitmap
+	// roundStatusPublished is true only while this worker's status for the
+	// current finalize round is in the mailbox and has not yet been
+	// acknowledged by completeRound. Reset publishes an abort when false so a
+	// merger that already advanced to the next spill bucket cannot wait
+	// forever after a normal worker early-stop.
+	roundStatusPublished bool
 
 	// Capture buffers for the REPLACE INTO merged main-table scan. When
 	// OldColCapturePlaceholderIdxList is non-empty, each entry i in the list
@@ -339,7 +344,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 			// state so no late worker can transfer capture ownership to an
 			// execution that no longer has a consumer.
 			dedupJoin.Mailbox.stopAndDrain(proc)
-		} else if !ctr.handledLast {
+		} else if !ctr.roundStatusPublished {
 			if pipelineFailed && err == nil {
 				err = context.Cause(proc.Ctx)
 				if err == nil {
@@ -368,7 +373,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
 	}
-	ctr.handledLast = false
+	ctr.roundStatusPublished = false
 	ctr.state = Build
 	ctr.lastPos = 0
 }

@@ -1160,7 +1160,7 @@ func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 		}
 
 		require.NoError(t, worker.ctr.finalize(worker, proc))
-		require.True(t, worker.ctr.handledLast)
+		require.False(t, worker.ctr.roundStatusPublished)
 		require.Equal(t, End, worker.ctr.state)
 	})
 
@@ -1487,7 +1487,58 @@ func TestDedupFinalizeMailboxSupportsMultipleSpillBuckets(t *testing.T) {
 		mailbox.completeRound()
 		require.NoError(t, <-fastErrC)
 		require.NoError(t, <-slowErrC)
+		for _, worker := range workers {
+			require.False(t, worker.ctr.roundStatusPublished)
+		}
 	}
+}
+
+func TestDedupFinalizeResetPublishesAbortForNextSpillBucket(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	t.Cleanup(proc.Free)
+
+	mailbox := NewWorkerJoinMailbox(2)
+	worker := &DedupJoin{
+		NumCPU:   2,
+		IsMerger: false,
+		Mailbox:  mailbox,
+	}
+	worker.ctr.matched = &bitmap.Bitmap{}
+	worker.ctr.matched.InitWithSize(1)
+
+	finalizeErrC := make(chan error, 1)
+	go func() {
+		finalizeErrC <- worker.ctr.finalize(worker, proc)
+	}()
+
+	first, err := receiveWorkerMsg(proc.Ctx, mailbox)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	require.False(t, first.aborted)
+	mailbox.completeRound()
+	require.NoError(t, <-finalizeErrC)
+	require.False(t, worker.ctr.roundStatusPublished)
+
+	// A normal upper-operator early stop can Reset this worker before it
+	// reaches the next spill bucket. The merger may already be waiting in that
+	// next round, so Reset must publish a terminal status for it.
+	worker.Reset(proc, false, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	second, err := receiveWorkerMsg(ctx, mailbox)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	require.True(t, second.aborted)
+	require.NoError(t, second.err)
+	freeWorkerJoinMsg(second, proc)
+
+	merger := &DedupJoin{
+		NumCPU:   2,
+		IsMerger: true,
+		Mailbox:  mailbox,
+	}
+	merger.Reset(proc, false, nil)
+	require.Empty(t, mailbox.ch)
 }
 
 func TestDedupFinalizeCancellationAfterPublishDoesNotDuplicateStatus(t *testing.T) {
@@ -1629,12 +1680,10 @@ func TestDedupFinalizeParallelMergePreservesDataAcrossReset(t *testing.T) {
 	}
 
 	run([]int32{10, 20, 30, 40}, []uint64{0}, []uint64{2}, []int32{20, 40})
-	workerArg.ctr.handledLast = true
 	workerArg.Reset(proc, false, nil)
 	arg.Reset(proc, false, nil)
 	run([]int32{50, 60}, nil, []uint64{0}, []int32{60})
 
-	workerArg.ctr.handledLast = true
 	workerArg.Reset(proc, false, nil)
 	arg.Reset(proc, false, nil)
 	arg.Free(proc, false, nil)

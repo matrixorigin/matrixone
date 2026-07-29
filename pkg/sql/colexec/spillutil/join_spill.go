@@ -91,6 +91,9 @@ type BucketReader struct {
 }
 
 func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (*batch.Batch, error) {
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, err
+	}
 	if r.fd == nil {
 		return nil, io.EOF
 	}
@@ -109,17 +112,30 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 		oldToken.Release()
 	}
 	if !r.mergeRecords {
+		if err := checkSpillCanceled(proc); err != nil {
+			r.releaseReadBatch(proc, reuseBat, nil)
+			return nil, err
+		}
 		return reuseBat, nil
 	}
 	// Merge adjacent records up to the bounded historical batch payload.
 	// This preserves dedup/outer-join behaviour across small source batches
 	// without retaining one selected batch per bucket during scatter.
 	for reuseBat.RowCount() < colexec.DefaultBatchSize {
+		if err := checkSpillCanceled(proc); err != nil {
+			return nil, r.mergeReadError(proc, reuseBat, nil, nil, err)
+		}
 		header, err := r.reader.Peek(16)
 		if err != nil {
-			if err == io.EOF {
+			if err == io.EOF && len(header) == 0 {
 				break
 			}
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, r.mergeReadError(proc, reuseBat, nil, nil, err)
+		}
+		if err := checkSpillCanceled(proc); err != nil {
 			return nil, r.mergeReadError(proc, reuseBat, nil, nil, err)
 		}
 		nextRows := types.DecodeInt64(header[:8])
@@ -142,6 +158,9 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 		next := batch.NewOffHeapWithSize(0)
 		_, nextToken, _, err := r.readBatchRecord(proc, next, nil, 0, false)
 		if err != nil {
+			return nil, r.mergeReadError(proc, reuseBat, next, nextToken, err)
+		}
+		if err := checkSpillCanceled(proc); err != nil {
 			return nil, r.mergeReadError(proc, reuseBat, next, nextToken, err)
 		}
 		var mergeToken *process.HashBuildReservation
@@ -188,6 +207,9 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 			r.batchToken = mergeToken
 			r.batchCharge = actual
 		}
+	}
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, r.mergeReadError(proc, reuseBat, nil, nil, err)
 	}
 	return reuseBat, nil
 }
@@ -487,6 +509,9 @@ func (r *BucketReader) readBatchRecord(
 	charge uint64,
 	retainLease bool,
 ) (*batch.Batch, *process.HashBuildReservation, uint64, error) {
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, token, charge, err
+	}
 	if _, err := io.ReadFull(r.reader, r.buf[:]); err != nil {
 		if err == io.EOF {
 			return nil, token, charge, io.EOF
@@ -497,6 +522,9 @@ func (r *BucketReader) readBatchRecord(
 	batchSize := types.DecodeInt64(r.buf[8:16])
 	if cnt < 0 || batchSize < 0 {
 		return nil, token, charge, moerr.NewInternalError(proc.Ctx, "negative spill batch header")
+	}
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, token, charge, err
 	}
 	if r.budget != nil {
 		payload := uint64(batchSize)
@@ -568,9 +596,15 @@ func (r *BucketReader) readBatchRecord(
 	}
 
 	reuseBat.CleanOnlyData()
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, token, charge, err
+	}
 
 	limitReader := io.LimitedReader{R: r.reader, N: batchSize}
 	if err := reuseBat.UnmarshalFromReader(&limitReader, proc.Mp()); err != nil {
+		return nil, token, charge, err
+	}
+	if err := checkSpillCanceled(proc); err != nil {
 		return nil, token, charge, err
 	}
 
@@ -1699,8 +1733,18 @@ func (e *SpillEngine) ScatterProbeTable(
 	analyzer process.Analyzer,
 	evalKeysFn func(bat *batch.Batch) ([]*vector.Vector, error),
 ) error {
+	bucketCount := len(e.buckets)
+	if bucketCount == 0 ||
+		bucketCount > SpillNumBuckets ||
+		bucketCount&(bucketCount-1) != 0 {
+		return process.ErrHashBuildBudgetInvalid
+	}
 	e.probeKeyEval = evalKeysFn
-	writers := e.makeBucketWriters("probe")
+	// The build payload defines the partition fanout. Using the production
+	// maximum unconditionally would hash probe rows into writers that have no
+	// corresponding build bucket; those files are never handed off and their
+	// rows would be silently discarded for legacy or reduced-fanout payloads.
+	writers := e.makeBucketWriters("probe")[:bucketCount]
 	for i := range writers {
 		writers[i].Budget = e.cfg.Budget
 	}
@@ -1796,6 +1840,9 @@ func (e *SpillEngine) ScatterProbeTable(
 // NextProbeBatch returns the next probe batch from the current bucket's probe file.
 // Returns nil when EOF is reached (caller should then call FinishBucket).
 func (e *SpillEngine) NextProbeBatch(proc *process.Process) (*batch.Batch, error) {
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, err
+	}
 	if e.probeReader.fd == nil {
 		return nil, nil
 	}
@@ -1808,6 +1855,12 @@ func (e *SpillEngine) NextProbeBatch(proc *process.Process) (*batch.Batch, error
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	// Cancellation can race the reader's final record-boundary check. Do not
+	// hand a freshly decoded batch to the join probe loop after that point.
+	if err := checkSpillCanceled(proc); err != nil {
+		e.probeReader.releaseReadBatch(proc, e.probeReadBatch, nil)
 		return nil, err
 	}
 	return bat, nil
@@ -1985,6 +2038,10 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 
 	jm := builder.GetJoinMap(proc.Mp())
 	if jm == nil {
+		// GetJoinMap transfers nothing when the decoded build contains no
+		// rows. Release executors and every residual builder allocation before
+		// handing an empty-build probe file to the caller.
+		builder.Free(proc)
 		e.buckets[0].ProbeFd = nil // transferred to reader below; prevent Cleanup double-close
 		e.buckets = e.buckets[1:]
 		if e.cfg.NeedsProbeForEmptyBuild && bucket.ProbeFd != nil {
@@ -1999,7 +2056,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		if bucket.ProbeFd != nil {
 			bucket.ProbeFd.Close()
 		}
-		builder.Free(proc)
 		return nil, BucketSkip, nil
 	}
 	jm.SetRowCount(int64(builder.InputBatchRowCount))

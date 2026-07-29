@@ -439,7 +439,6 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if stopped {
 				// The merger already terminated this generation. Ownership
 				// remains local and Free will release the capture vectors.
-				ctr.handledLast = true
 				ctr.state = End
 				return nil
 			}
@@ -455,9 +454,15 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			// Publication, not acknowledgement, is the worker's single status
 			// for this round. Mark it before waiting so concurrent cancellation
 			// cannot make Reset enqueue a duplicate abort status.
-			ctr.handledLast = true
+			ctr.roundStatusPublished = true
 			select {
 			case <-roundDone:
+				// completeRound closes this acknowledgement and installs the
+				// next round under the same mailbox lock, before any later
+				// trySend can enter. From this point Reset must publish an
+				// abort for that next round: the merger may advance before this
+				// worker resumes execution.
+				ctr.roundStatusPublished = false
 			case <-proc.Ctx.Done():
 				return context.Cause(proc.Ctx)
 			}
@@ -508,7 +513,6 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 		ap.Mailbox.completeRound()
 	}
 
-	ctr.handledLast = true
 	if ctr.matched == nil {
 		return nil
 	}

@@ -276,11 +276,12 @@ func defaultSpillCap(memoryCap uint64) uint64 {
 
 func configuredSpillFDCap(memoryCap uint64) uint64 {
 	// A finite cap derived from memory keeps FD admission bounded while
-	// retaining enough fanout for normal (32-way) spill partitions.
-	// A 16-way shuffle query can have 16 concurrent build partitions, each
-	// owning 32 first-pass files and up to 64 transactional build/probe child
-	// files during re-spill. Keep that normal peak admissible while retaining a
-	// finite query/CN ledger that rejects runaway fanout.
+	// cushioning the first 32-way repartition peak. One engine can retain 32
+	// build plus 32 probe files and open up to 64 child writers while it
+	// re-partitions a bucket; 16 concurrent engines therefore reach roughly
+	// 2048 descriptors. Deeper skew can retain a larger bucket queue and is
+	// intentionally allowed to fail controlled FD admission: this floor is a
+	// bounded operating allowance, not a completion guarantee.
 	const minFD = uint64(2048)
 	const bytesPerFD = uint64(4 << 20)
 	cap := memoryCap / bytesPerFD
