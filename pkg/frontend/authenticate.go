@@ -4826,6 +4826,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	var checkDatabase string
 	var dbName string
 	var dbExists bool
+	var matched bool
 	var funcId int64
 	var erArray []ExecResult
 
@@ -4928,11 +4929,14 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 				if err != nil {
 					return err
 				}
+				matched = true
 			}
 		}
-		return err
+		if matched {
+			return nil
+		}
 	}
-	// no such function
+	// No function with the requested name and signature exists.
 	if df.IfExists {
 		return nil
 	}
