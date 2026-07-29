@@ -180,10 +180,10 @@ func requireCheckConstraintProtocol(ctx context.Context, proc *process.Process) 
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion6 {
+	if !ok || !valid || version < defines.MORPCVersion7 {
 		return moerr.NewNotSupported(
 			ctx,
-			"CHECK constraints require all CNs to support protocol version 6",
+			"CHECK constraints require all CNs to support protocol version 7",
 		)
 	}
 	return nil

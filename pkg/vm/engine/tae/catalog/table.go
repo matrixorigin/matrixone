@@ -882,6 +882,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {
+		checks := apipb.CloneExtra(newSchema.Extra).Checks
 		// Extra info(except seqnnum etc.) is meaningful to the previous version schema
 		// reset in new Schema
 		var hints []apipb.MergeHint
@@ -897,6 +898,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			Hints:             hints,
 			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
 			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
+			Checks:            checks,
 		}
 
 	}

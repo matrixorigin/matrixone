@@ -109,6 +109,27 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		require.ErrorContains(t, err, "column check constraint cannot refer to column")
 	})
 
+	t.Run("ctas explicit column preserves column check", func(t *testing.T) {
+		tableDef, err := build(
+			"create table t(a int constraint positive_a check (a > 0)) as select 1 as a",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, tableDef.Checks, 1)
+		require.Equal(t, "positive_a", tableDef.Checks[0].Name)
+		require.Equal(t, "`a` > 0", tableDef.Checks[0].OriginSql)
+	})
+
+	t.Run("check origin sql uses replay-safe string quoting", func(t *testing.T) {
+		tableDef, err := build(
+			"create table t(s varchar(10) check (s = 'ok'))",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, tableDef.Checks, 1)
+		require.Equal(t, "`s` = 'ok'", tableDef.Checks[0].OriginSql)
+	})
+
 	t.Run("non boolean root is converted", func(t *testing.T) {
 		tableDef, err := build("create table t(a int, check (a))", false)
 		require.NoError(t, err)
@@ -147,7 +168,7 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		proc := ctx.GetProcess()
 		rt := moruntime.ServiceRuntime(proc.GetService())
 		old, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion6)
 		defer func() {
 			if ok {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
@@ -165,7 +186,7 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 		_, err = BuildPlan(ctx, stmt, false)
-		require.ErrorContains(t, err, "protocol version 6")
+		require.ErrorContains(t, err, "protocol version 7")
 	})
 }
 
@@ -533,6 +554,10 @@ func TestBuildCreateTable(t *testing.T) {
 					UNIQUE KEY (col1, col3)
 				);`,
 
+		`CREATE TABLE set_auto_increment (
+			id SET('one', 'two') AUTO_INCREMENT
+		);`,
+
 		`CREATE TABLE t1 (
 			col1 INT NOT NULL,
 			col2 DATE NOT NULL,
@@ -615,6 +640,10 @@ func TestBuildCreateTableError(t *testing.T) {
 			col3 INT NOT NULL,
 			col4 INT NOT NULL,
 			UNIQUE KEY uk1 ((col1 + col3))
+		);`,
+
+		`CREATE TABLE enum_auto_increment (
+			id ENUM('one', 'two') AUTO_INCREMENT
 		);`,
 	}
 	runTestShouldError(mock, t, sqlerrs)

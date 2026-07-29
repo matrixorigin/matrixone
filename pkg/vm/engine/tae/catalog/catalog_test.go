@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -215,6 +216,10 @@ func TestDropTableSharesSchemaAndAlterKeepsCopyOnWrite(t *testing.T) {
 	require.NoError(t, err)
 	schema := MockSchema(4, 0)
 	schema.Name = "tb1"
+	schema.Extra.Checks = []*planpb.CheckDef{{
+		Name:      "positive_col_0",
+		OriginSql: "`col_0` > 0",
+	}}
 	rel, err := db.CreateRelation(schema)
 	require.NoError(t, err)
 	require.NoError(t, createTxn.Commit(context.Background()))
@@ -251,6 +256,8 @@ func TestDropTableSharesSchemaAndAlterKeepsCopyOnWrite(t *testing.T) {
 	require.NotSame(t, createdNode.BaseNode.Schema, alteredSchema)
 	require.Equal(t, originalComment, createdNode.BaseNode.Schema.Comment)
 	require.Equal(t, "new comment", alteredSchema.Comment)
+	require.Equal(t, schema.Extra.Checks, alteredSchema.Extra.Checks)
+	require.NotSame(t, schema.Extra.Checks[0], alteredSchema.Extra.Checks[0])
 	require.NoError(t, dropTxn.Commit(context.Background()))
 }
 

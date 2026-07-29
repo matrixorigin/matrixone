@@ -366,15 +366,34 @@ func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct show create failed: %+v", err)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_age` CHECK (`c_age` is null or (`c_age` >= 0 and `c_age` <= 200))") {
 		t.Fatalf("expected chk_age check constraint in show create output: %s", showSQL)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_score` CHECK (`c_score` is null or (`c_score` >= 0 and `c_score` <= 100))") {
 		t.Fatalf("expected chk_score check constraint in show create output: %s", showSQL)
 	}
 	if !strings.Contains(showSQL, "PRIMARY KEY (`id`)") {
 		t.Fatalf("expected canonical primary key output to be preserved: %s", showSQL)
 	}
+}
+
+func TestConstructCreateTableSQLUsesStructuredColumnCheck(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(
+		mock,
+		"create table t(a int constraint positive_a check (a > 0))",
+	)
+	require.NoError(t, err)
+	require.Len(t, tableDef.Checks, 1)
+	tableDef.Createsql = "create table t(a int)"
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(
+		t,
+		showSQL,
+		"CONSTRAINT `positive_a` CHECK (`a` > 0)",
+	)
 }
 
 func Test_extractTopLevelCheckDefs(t *testing.T) {

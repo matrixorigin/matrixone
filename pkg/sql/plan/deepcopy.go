@@ -547,8 +547,9 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 
 	for idx, col := range table.Checks {
 		newTable.Checks[idx] = &plan.CheckDef{
-			Name:  col.Name,
-			Check: DeepCopyExpr(col.Check),
+			Name:      col.Name,
+			Check:     DeepCopyExpr(col.Check),
+			OriginSql: col.OriginSql,
 		}
 	}
 
@@ -989,8 +990,10 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 		newExpr.Expr = &plan.Expr_F{
 			F: &plan.Function{
-				Func: DeepCopyObjectRef(item.F.Func),
-				Args: newArgs,
+				Func:          DeepCopyObjectRef(item.F.Func),
+				Args:          newArgs,
+				AggConfig:     bytes.Clone(item.F.AggConfig),
+				AggConfigType: item.F.AggConfigType,
 			},
 		}
 

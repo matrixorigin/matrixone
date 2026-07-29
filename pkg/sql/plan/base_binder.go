@@ -2691,6 +2691,11 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
+	case "nth_value":
+		if err := validateNthValueArgs(ctx, proc, retExpr.GetF().Args); err != nil {
+			return nil, err
+		}
+
 	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
 			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
@@ -2832,6 +2837,50 @@ between_fallback:
 	}
 
 	return retExpr, nil
+}
+
+// validateNthValueArgs enforces MySQL's bind-time contract for NTH_VALUE:
+// the offset must be a constant positive integer. Folding first keeps valid
+// constant expressions, such as 1 + 1, compatible with MySQL.
+func validateNthValueArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
+	if len(args) != 2 || proc == nil {
+		return moerr.NewWrongArguments(ctx, "nth_value")
+	}
+
+	offset, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	if err != nil {
+		return err
+	}
+	args[1] = offset
+
+	lit := offset.GetLit()
+	if lit == nil || lit.Isnull || !types.T(offset.Typ.Id).IsInteger() || !isPositiveIntegerLiteral(lit) {
+		return moerr.NewWrongArguments(ctx, "nth_value")
+	}
+	return nil
+}
+
+func isPositiveIntegerLiteral(lit *plan.Literal) bool {
+	switch value := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return value.I8Val > 0
+	case *plan.Literal_I16Val:
+		return value.I16Val > 0
+	case *plan.Literal_I32Val:
+		return value.I32Val > 0
+	case *plan.Literal_I64Val:
+		return value.I64Val > 0
+	case *plan.Literal_U8Val:
+		return value.U8Val > 0
+	case *plan.Literal_U16Val:
+		return value.U16Val > 0
+	case *plan.Literal_U32Val:
+		return value.U32Val > 0
+	case *plan.Literal_U64Val:
+		return value.U64Val > 0
+	default:
+		return false
+	}
 }
 
 func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) (*plan.Expr, bool, error) {

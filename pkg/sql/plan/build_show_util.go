@@ -47,7 +47,7 @@ func ConstructCreateTableSQL(
 		display string
 		rewrite string
 	}, 0)
-	checkDefs := extractTopLevelCheckDefs(tableDef)
+	checkDefs := constructCheckDefs(tableDef)
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
@@ -729,6 +729,34 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 		if isTopLevelCheckDef(segment) {
 			checks = append(checks, segment)
 		}
+	}
+	return checks
+}
+
+func constructCheckDefs(tableDef *plan.TableDef) []string {
+	if tableDef == nil || tableDef.TableType == catalog.SystemExternalRel {
+		return nil
+	}
+	if len(tableDef.Checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
+	}
+
+	checks := make([]string, 0, len(tableDef.Checks))
+	for _, check := range tableDef.Checks {
+		if check == nil || check.OriginSql == "" {
+			continue
+		}
+		checks = append(
+			checks,
+			fmt.Sprintf(
+				"CONSTRAINT `%s` CHECK (%s)",
+				formatStr(check.Name),
+				check.OriginSql,
+			),
+		)
+	}
+	if len(checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
 	}
 	return checks
 }

@@ -1195,10 +1195,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
 	type pendingCheckDef struct {
-		name      string
-		expr      tree.Expr
-		columnPos int
-		enforced  bool
+		name       string
+		expr       tree.Expr
+		columnName string
+		enforced   bool
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
 
@@ -1392,18 +1392,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			} else {
 				colMap[colName] = col
 				createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
-				for _, attr := range def.Attributes {
-					check, ok := attr.(*tree.AttributeCheckConstraint)
-					if !ok {
-						continue
-					}
-					pendingChecks = append(pendingChecks, pendingCheckDef{
-						name:      check.Name,
-						expr:      check.Expr,
-						columnPos: len(createTable.TableDef.Cols) - 1,
-						enforced:  check.Enforced,
-					})
-				}
 
 				// get default val from ast node
 				attrIdx := slices.IndexFunc(def.Attributes, func(a tree.ColumnAttribute) bool {
@@ -1419,6 +1407,18 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				} else {
 					defaultMap[colName] = "NULL"
 				}
+			}
+			for _, attr := range def.Attributes {
+				check, ok := attr.(*tree.AttributeCheckConstraint)
+				if !ok {
+					continue
+				}
+				pendingChecks = append(pendingChecks, pendingCheckDef{
+					name:       check.Name,
+					expr:       check.Expr,
+					columnName: colName,
+					enforced:   check.Enforced,
+				})
 			}
 			genColIdx++
 		case *tree.PrimaryKeyIndex:
@@ -1536,10 +1536,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 		case *tree.CheckIndex:
 			pendingChecks = append(pendingChecks, pendingCheckDef{
-				name:      def.ConstraintSymbol,
-				expr:      def.Expr,
-				columnPos: -1,
-				enforced:  def.Enforced,
+				name:     def.ConstraintSymbol,
+				expr:     def.Expr,
+				enforced: def.Enforced,
 			})
 		default:
 			return moerr.NewNYIf(ctx.GetContext(), "table def: '%v'", def)
@@ -1608,7 +1607,21 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				"NOT ENFORCED CHECK constraints",
 			)
 		}
-		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, check.columnPos); err != nil {
+		columnPos := -1
+		if check.columnName != "" {
+			columnPos = slices.IndexFunc(
+				createTable.TableDef.Cols,
+				func(col *ColDef) bool { return col.Name == check.columnName },
+			)
+			if columnPos == -1 {
+				return moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					"column check constraint references missing column '%s'",
+					check.columnName,
+				)
+			}
+		}
+		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, columnPos); err != nil {
 			return err
 		}
 	}
@@ -1906,10 +1919,21 @@ func appendCheckDef(
 		}
 	}
 	tableDef.Checks = append(tableDef.Checks, &plan.CheckDef{
-		Name:  name,
-		Check: checkExpr,
+		Name:      name,
+		Check:     checkExpr,
+		OriginSql: formatCheckConstraintExpr(astExpr),
 	})
 	return nil
+}
+
+func formatCheckConstraintExpr(expr tree.Expr) string {
+	fmtCtx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithSingleQuoteString(),
+		tree.WithQuoteIdentifier(),
+	)
+	expr.Format(fmtCtx)
+	return fmtCtx.String()
 }
 
 func validateCheckExpr(ctx context.Context, tableDef *TableDef, expr *plan.Expr, columnPos int) error {

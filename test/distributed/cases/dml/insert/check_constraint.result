@@ -29,4 +29,12 @@ a    b
 NULL    NULL
 1    ok
 3    yes
+create table ctas_check(
+a int constraint ctas_positive_a check(a > 0)
+) as select 5 as a;
+insert into ctas_check values (-1);
+constraint violation: Check constraint 'ctas_positive_a' is violated
+select * from ctas_check;
+a
+5
 drop database check_constraint_test;
