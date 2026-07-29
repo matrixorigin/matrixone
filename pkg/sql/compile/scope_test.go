@@ -86,8 +86,20 @@ func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 			nil,
 			aggexec.EncodeGroupConcatConfig(separator, 1024))
 	}
+	orderConfig := []byte{1, 2, 3}
+	newOrderedGroupConcatExpr := func() aggexec.AggFuncExecExpression {
+		return aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			nil,
+			aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024),
+			plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER)
+	}
 	groupArg := group.NewArgument()
-	groupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("")}
+	groupArg.Aggs = []aggexec.AggFuncExecExpression{
+		newGroupConcatExpr(""),
+		newOrderedGroupConcatExpr(),
+	}
 	mergeGroupArg := group.NewArgumentMergeGroup()
 	mergeGroupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("|")}
 	windowArg := window.NewArgument()
@@ -100,12 +112,14 @@ func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 
 	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 5), groupArg.Aggs[1].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 5), mergeGroupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 5), windowArg.Aggs[0].GetExtraConfig())
 
 	sessionMaxLen = 1024
 	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
 

@@ -25,16 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func RegisterJsonArrayAgg(id int64) {
-	specialAgg[id] = true
-	AggIdOfJsonArrayAgg = id
-}
-
-func RegisterJsonObjectAgg(id int64) {
-	specialAgg[id] = true
-	AggIdOfJsonObjectAgg = id
-}
-
 type jsonArrayAggExec struct {
 	aggExec
 	distinct     bool
