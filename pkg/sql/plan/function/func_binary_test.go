@@ -8990,6 +8990,22 @@ func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
 	}
 }
 
+func TestExtractFromVarcharTimeIsNotColonDate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"hour_minute"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"10:11:12"}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1011"}, nil),
+		ExtractFromVarchar,
+	)
+
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
+
 // TestExtractMicrosecondFromDateAddString tests EXTRACT(MICROSECOND FROM DATE_ADD(...))
 // This verifies that when DATE_ADD returns a string with fractional seconds,
 // EXTRACT can correctly extract the microseconds even when the string type has scale=0

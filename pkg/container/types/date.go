@@ -148,7 +148,9 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 					}
 					year = year*10 + int64(s[i]-'0')
 					yearLen++
-				} else if isDateDelimiter(s[i]) {
+				} else if isDateDelimiter(s[i]) && (s[i] != ':' || yearLen == 4) {
+					// ':' also separates TIME fields. Only a four-digit prefix is
+					// unambiguously a MySQL punctuation-delimited date year.
 					state = monthState
 					if yearLen == 0 {
 						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)

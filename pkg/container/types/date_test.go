@@ -184,6 +184,7 @@ func TestParseDateCastComponents(t *testing.T) {
 		{name: "colon datetime", input: "2024:01:15 12:34:56", year: 2024, month: 1, day: 15},
 		{name: "mixed punctuation separators", input: "2024/01-15", year: 2024, month: 1, day: 15},
 		{name: "dot date", input: "2024.01.15", year: 2024, month: 1, day: 15},
+		{name: "time is not a colon date", input: "10:11:12", wantErr: true},
 		{name: "year zero date", input: "0000-01-01", year: 0, month: 1, day: 1},
 		{name: "malformed", input: "2001-11-x", wantErr: true},
 		{name: "malformed month separator", input: "2024-0x-01", wantErr: true},
