@@ -10393,7 +10393,7 @@ table_option:
     }
 |   AUTO_INCREMENT equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionAutoIncrement(uint64($3.(int64)))
+        $$ = tree.NewTableOptionAutoIncrement(integralToUint64($3))
     }
 |   AVG_ROW_LENGTH equal_opt INTEGRAL
     {

@@ -26130,7 +26130,7 @@ yydefault:
 		var yyLOCAL tree.TableOption
 //line mysql_sql.y:10395
 		{
-			yyLOCAL = tree.NewTableOptionAutoIncrement(uint64(yyDollar[3].item.(int64)))
+			yyLOCAL = tree.NewTableOptionAutoIncrement(integralToUint64(yyDollar[3].item))
 		}
 		yyVAL.union = yyLOCAL
 	case 1536:
