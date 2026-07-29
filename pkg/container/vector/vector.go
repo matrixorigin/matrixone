@@ -2953,13 +2953,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			// inline varlena has s[0] <= 23 (its length byte), never the 0xffffffff
 			// big-header sentinel, so the check is exact.
 			if baseOff != 0 && len(w.area) > 0 {
-				p := unsafe.Pointer(&vCol[oldLen])
-				for i := 0; i < cnt; i++ {
-					s := (*[6]uint32)(p)
-					if s[0] == types.VarlenaBigHdr {
-						s[1] += uint32(baseOff)
+				for i := oldLen; i < oldLen+cnt; i++ {
+					if !vCol[i].IsSmall() {
+						offset, length := vCol[i].OffsetLen()
+						vCol[i].SetOffsetLen(offset+uint32(baseOff), length)
 					}
-					p = unsafe.Add(p, types.VarlenaSize)
 				}
 			}
 			// propagate grouping bits (value is still real for these rows).

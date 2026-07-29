@@ -1941,11 +1941,12 @@ func dataBranchPathTableDefs(
 				}
 				endpointCTS = cts[0]
 			}
-			rel, _, zeroHistory, resolveErr := resolveSameTransactionDataBranchRelation(
+			var zeroHistory bool
+			rel, _, zeroHistory, err = resolveSameTransactionDataBranchRelation(
 				ctx, ses, bh, nodeID, pathTS[i+1], endpointCTS, historicalErr,
 			)
-			if resolveErr != nil {
-				return nil, resolveErr
+			if err != nil {
+				return nil, err
 			}
 			if zeroHistory {
 				// The child clone materializes the source schema. A parent with no
