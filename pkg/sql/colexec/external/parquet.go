@@ -2849,8 +2849,9 @@ func isParquetDecimalCastSource(st parquet.Type) bool {
 }
 
 func canUseRawDecimalMapping(st parquet.Type, precision, scale int32) bool {
-	if isDecimalLogicalType(st.LogicalType()) {
-		return parquetDecimalScale(st) == scale
+	if lt := st.LogicalType(); isDecimalLogicalType(lt) {
+		return parquetDecimalScale(st) == scale &&
+			(precision == 0 || lt.Decimal.Precision <= precision)
 	}
 	return useRawIntegerDecimalMapping(st, precision, scale)
 }
