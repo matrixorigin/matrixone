@@ -785,11 +785,12 @@ const (
 	VECF16_FROM_BASE64   = 551
 	VECINT8_FROM_BASE64  = 552
 	VECUINT8_FROM_BASE64 = 553
-
 	// function `cast_assign`
 	CAST_ASSIGN = 554
 	// function `cast_ignore`
 	CAST_IGNORE = 555
+	// function `approx_percentile`
+	APPROX_PERCENTILE = 557
 
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.
@@ -797,7 +798,7 @@ const (
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 557
+	FUNCTION_END_NUMBER = 558
 )
 
 // functionIdRegister is what function we have registered already.
@@ -894,6 +895,7 @@ var functionIdRegister = map[string]int32{
 	"hll_merge_agg":         HLL_MERGE_AGG,
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
+	"approx_percentile":     APPROX_PERCENTILE,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,

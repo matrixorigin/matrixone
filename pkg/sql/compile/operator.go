@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1557,9 +1559,10 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		// Every slot the layout hands out must get an aggregate, or the
 		// operator's columns stop matching the positions the planner projects.
 		e := f.F.Args[0]
+		args, cfg := constructAggregateConfig(f.F, proc)
 		aggregationExpressions = append(
 			aggregationExpressions,
-			aggexec.MakeAggFunctionExpression(functionID, isDistinct, f.F.Args, nil))
+			aggexec.MakeAggFunctionExpression(functionID, isDistinct, args, cfg))
 		typs = append(typs, types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale))
 	}
 	wStart := layout.WStartSlot != plan2.TimeWindowSlotNone
@@ -1700,6 +1703,24 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		if len(args) > 1 {
 			config := evaluateAggregateConfigString(proc, args[len(args)-1])
 			return args[:len(args)-1], []byte(config)
+		}
+
+	case plan2.NameApproxPercentile:
+		if len(args) > 1 {
+			configExpr := args[len(args)-1]
+			if err := validateApproxPercentileExpr(configExpr); err != nil {
+				panic(err)
+			}
+			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+			if err != nil {
+				panic(err)
+			}
+			defer free()
+			config, err := getPercentileConfig(vec)
+			if err != nil {
+				panic(err)
+			}
+			return args[:len(args)-1], config
 		}
 	}
 	return args, nil
@@ -2551,6 +2572,66 @@ func constructTableClone(
 	}
 	success = true
 	return metaCopy, nil
+}
+
+func validateApproxPercentileExpr(expr *plan.Expr) error {
+	if expr == nil || !rule.IsConstant(expr, false) {
+		return moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile must be a constant")
+	}
+	return nil
+}
+
+// getPercentileConfig extracts the percentile value from a vector for approx_percentile.
+func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
+	if vec == nil || !vec.IsConst() {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile must be a constant")
+	}
+	if vec.Length() == 0 || vec.IsConstNull() {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile cannot be NULL")
+	}
+
+	var p float64
+	var config string
+	switch vec.GetType().Oid {
+	case types.T_float64:
+		p = vector.MustFixedColWithTypeCheck[float64](vec)[0]
+		config = strconv.FormatFloat(p, 'f', -1, 64)
+	case types.T_float32:
+		p = float64(vector.MustFixedColWithTypeCheck[float32](vec)[0])
+		config = strconv.FormatFloat(p, 'f', -1, 32)
+	case types.T_int64:
+		v := vector.MustFixedColWithTypeCheck[int64](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(v, 10)
+	case types.T_int32:
+		v := vector.MustFixedColWithTypeCheck[int32](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(int64(v), 10)
+	case types.T_decimal64:
+		d := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0]
+		p = types.Decimal64ToFloat64(d, vec.GetType().Scale)
+		config = d.Format(vec.GetType().Scale)
+	case types.T_decimal128:
+		d := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0]
+		p = types.Decimal128ToFloat64(d, vec.GetType().Scale)
+		config = d.Format(vec.GetType().Scale)
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"unsupported percentile type %s for approx_percentile", vec.GetType().String())
+	}
+	if math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of approx_percentile must be finite and in [0,1], got %v", p)
+	}
+	exact, ok := new(big.Rat).SetString(config)
+	if !ok || exact.Sign() < 0 || exact.Cmp(big.NewRat(1, 1)) > 0 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of approx_percentile must be in [0,1], got %s", config)
+	}
+	return []byte(config), nil
 }
 
 type cloneIndexAutoIncrementTable struct {
