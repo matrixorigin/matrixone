@@ -11697,6 +11697,11 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	var err error
 	var sql string
 	var curRole string
+	if createTable, ok := stmt.(*tree.CreateTable); ok && createTable.Temporary {
+		// Temporary tables have no persistent ownership metadata. Granting the
+		// logical alias could otherwise target a same-named permanent table.
+		return nil
+	}
 	tenantInfo := ses.GetTenantInfo()
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
@@ -11755,8 +11760,16 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	return err
 }
 
-func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+func doRevokePrivilegeImplicitly(
+	ctx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+	persistentDropTableTargets tree.TableNames,
+) error {
 	var err error
+	if _, ok := stmt.(*tree.DropTable); ok && len(persistentDropTableTargets) == 0 {
+		return nil
+	}
 	tenantInfo := ses.GetTenantInfo()
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
@@ -11789,8 +11802,8 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		}
 		return doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh)
 	case *tree.DropTable:
-		sqls := make([]string, 0, len(st.Names))
-		for _, name := range st.Names {
+		sqls := make([]string, 0, len(persistentDropTableTargets))
+		for _, name := range persistentDropTableTargets {
 			dbName := string(name.SchemaName)
 			if len(dbName) == 0 {
 				dbName = ses.GetDatabaseName()
