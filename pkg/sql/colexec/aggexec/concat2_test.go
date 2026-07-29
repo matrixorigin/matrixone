@@ -940,6 +940,95 @@ func TestGroupConcatMaxLenKeepsTextWellFormed(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestGroupConcatMaxLenStopsAfterTruncatedUTF8Argument(t *testing.T) {
+	tests := []struct {
+		name    string
+		ordered bool
+		spill   bool
+	}{
+		{name: "input order"},
+		{name: "ordered memory", ordered: true},
+		{name: "ordered spill", ordered: true, spill: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			argTypes := []types.Type{
+				types.T_varchar.ToType(),
+				types.T_varchar.ToType(),
+			}
+			if tc.ordered {
+				argTypes = append(argTypes, types.T_varchar.ToType())
+			}
+			info := multiAggInfo{
+				aggID:     104,
+				argTypes:  argTypes,
+				retType:   types.T_text.ToType(),
+				emptyNull: true,
+			}
+			exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+			if tc.ordered {
+				require.NoError(t, exec.SetExtraInformation(
+					testGroupConcatOrderConfig(2, []byte{groupConcatOrderAsc}, ","),
+					0,
+				))
+			} else {
+				require.NoError(t, exec.SetExtraInformation(
+					EncodeGroupConcatConfig(",", 4),
+					0,
+				))
+			}
+			exec.maxLen = 4
+			require.NoError(t, exec.GroupGrow(1))
+
+			first := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"你好", "later"})
+			second := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"x", "y"})
+			vectors := []*vector.Vector{first, second}
+			var orderKey *vector.Vector
+			if tc.ordered {
+				keys := []string{"a", "b"}
+				if tc.spill {
+					keys[0] += strings.Repeat("k", int(groupConcatMinRunSize))
+				}
+				orderKey = buildVarlenVec(t, mp, types.T_varchar.ToType(), keys)
+				vectors = append(vectors, orderKey)
+			}
+			if tc.spill {
+				ConfigureGroupConcatH0Spill(
+					exec,
+					groupConcatMinRunSize,
+					context.Background(),
+					func() (*os.File, error) {
+						file, err := os.CreateTemp(t.TempDir(), "group-concat-utf8-")
+						if err == nil {
+							err = os.Remove(file.Name())
+						}
+						return file, err
+					},
+					nil,
+				)
+			}
+
+			require.NoError(t, exec.BatchFill(0, []uint64{1, 1}, vectors))
+			if tc.spill {
+				require.True(t, exec.hasOrderedSpillRuns())
+			}
+			results, err := exec.FlushWithContext(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, "你", string(results[0].GetBytesAt(0)))
+
+			results[0].Free(mp)
+			first.Free(mp)
+			second.Free(mp)
+			if orderKey != nil {
+				orderKey.Free(mp)
+			}
+			exec.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestGroupConcatMaxLenStopsAfterTruncatedSeparator(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{

@@ -592,6 +592,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 	case *group.Group:
+		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
+			return ctxId, nil, err
+		}
 		in.Agg = &pipeline.Group{
 			NeedEval:     t.NeedEval,
 			SpillMem:     t.SpillMem,
@@ -1457,6 +1460,24 @@ func convertToTypes(ts []plan.Type) []types.Type {
 		result[i] = types.New(types.T(t.Id), t.Width, t.Scale)
 	}
 	return result
+}
+
+func validateRemoteAggregateProtocol(
+	proc *process.Process,
+	aggs []aggexec.AggFuncExecExpression,
+) error {
+	for _, agg := range aggs {
+		if agg.GetConfigType() != plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			continue
+		}
+		if proc != nil && supportsRemoteOrderedAggregates(proc.GetService()) {
+			return nil
+		}
+		return moerr.NewNotSupportedNoCtx(
+			"ordered aggregate remote execution requires MORPC protocol version 6",
+		)
+	}
+	return nil
 }
 
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate

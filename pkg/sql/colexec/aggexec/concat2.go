@@ -665,8 +665,12 @@ func (exec *groupConcatExec) flushSpilledGroup(
 				}
 			}
 			first = false
-			if buf, err = exec.appendConcatPayload(buf, entry.concatPayload); err != nil {
+			var truncated bool
+			if buf, truncated, err = exec.appendConcatPayload(buf, entry.concatPayload); err != nil {
 				return nil, err
+			}
+			if truncated {
+				break
 			}
 		}
 		return buf, nil
@@ -750,8 +754,12 @@ func (exec *groupConcatExec) flushSpilledGroup(
 			}
 		}
 		first = false
-		if buf, err = exec.appendConcatPayload(buf, entry.concatPayload); err != nil {
+		var truncated bool
+		if buf, truncated, err = exec.appendConcatPayload(buf, entry.concatPayload); err != nil {
 			return nil, err
+		}
+		if truncated {
+			break
 		}
 		heads[run], err = readGroupConcatRunEntry(exec.h0SpillData, &runs[run])
 		if err != nil {
@@ -1242,9 +1250,13 @@ func (exec *groupConcatExec) flushOrderedEntries(
 			}
 		}
 		first = false
-		buf, err = exec.appendConcatPayload(buf, entry.concatPayload)
+		var truncated bool
+		buf, truncated, err = exec.appendConcatPayload(buf, entry.concatPayload)
 		if err != nil {
 			return nil, err
+		}
+		if truncated {
+			break
 		}
 	}
 	return buf, nil
@@ -1362,26 +1374,40 @@ func (exec *groupConcatExec) flushGroupInInputOrder(st aggState, group uint16) (
 			}
 		}
 		first = false
-		var err error
-		buf, err = exec.appendConcatPayload(buf, payload)
-		return err
+		var (
+			err              error
+			payloadTruncated bool
+		)
+		buf, payloadTruncated, err = exec.appendConcatPayload(buf, payload)
+		if err != nil {
+			return err
+		}
+		if payloadTruncated {
+			truncated = true
+			return nil
+		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
 	return buf, nil
 }
 
-func (exec *groupConcatExec) appendConcatPayload(buf, payload []byte) ([]byte, error) {
+func (exec *groupConcatExec) appendConcatPayload(
+	buf, payload []byte,
+) ([]byte, bool, error) {
+	truncated := false
 	err := payloadFieldIterator(
 		payload,
 		exec.concatArgCnt,
 		func(i int, isNull bool, data []byte) error {
-			if isNull || uint64(len(buf)) >= exec.maxLen {
+			if isNull || truncated {
 				return nil
 			}
 			var err error
 			buf, err = appendGroupConcatData(buf, exec.argTypes[i], data)
 			if uint64(len(buf)) > exec.maxLen {
+				truncated = true
 				buf = truncateGroupConcatBytes(
 					buf,
 					exec.maxLen,
@@ -1391,7 +1417,7 @@ func (exec *groupConcatExec) appendConcatPayload(buf, payload []byte) ([]byte, e
 			return err
 		},
 	)
-	return buf, err
+	return buf, truncated, err
 }
 
 func appendGroupConcatBytes(dst, src []byte, maxLen uint64, binaryResult bool) ([]byte, bool) {
