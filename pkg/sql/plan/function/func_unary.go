@@ -4848,6 +4848,11 @@ func mysqlDaysInMonthForExtract(year, month uint64) uint64 {
 	case 4, 6, 9, 11:
 		return 30
 	case 2:
+		// MySQL's zero year accepts February 28 but not February 29. Do not
+		// apply the proleptic Gregorian leap-year rule to year zero.
+		if year == 0 {
+			return 28
+		}
 		if year%4 == 0 && (year%100 != 0 || year%400 == 0) {
 			return 29
 		}
@@ -5012,14 +5017,27 @@ func parseCompactDatetimeClockForExtract(str string) timeExtractParseResult {
 	}
 
 	if digitCount >= 14 {
+		if !mysqlCompactDatetimeSuffixForExtract(str[14:]) {
+			return timeExtractParseResult{matched: true}
+		}
 		hour, minute, second, ok := compactDatetimeClockForExtract(str[:14], false)
 		return timeExtractParseResult{hour: hour, minute: minute, second: second, matched: true, valid: ok}
 	}
 	if digitCount >= 12 {
+		if !mysqlCompactDatetimeSuffixForExtract(str[12:]) {
+			return timeExtractParseResult{matched: true}
+		}
 		hour, minute, second, ok := compactDatetimeClockForExtract(str[:12], true)
 		return timeExtractParseResult{hour: hour, minute: minute, second: second, matched: true, valid: ok}
 	}
 	return timeExtractParseResult{}
+}
+
+func mysqlCompactDatetimeSuffixForExtract(suffix string) bool {
+	if len(suffix) == 0 {
+		return true
+	}
+	return suffix[0] == '.' && len(suffix) > 1 && asciiDigits(suffix[1:])
 }
 
 func compactDatetimeClockForExtract(str string, twoDigitYear bool) (uint64, uint8, uint8, bool) {

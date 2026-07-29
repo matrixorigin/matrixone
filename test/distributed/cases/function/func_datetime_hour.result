@@ -130,9 +130,19 @@ HOUR('2024-12-20T15:30:45.123456') AS iso_t_datetime_hour;
 ➤ zero_year_datetime_hour[4,32,0]  ¦  zero_month_datetime_hour[4,32,0]  ¦  zero_day_datetime_hour[4,32,0]  ¦  zero_date_datetime_hour[4,32,0]  ¦  iso_t_datetime_hour[4,32,0]  𝄀
 12  ¦  11  ¦  10  ¦  9  ¦  0
 SELECT HOUR('2024-12-20 12:34') AS minute_datetime_hour,
+HOUR('0000-02-28 12:34:56') AS valid_zero_year_february_hour,
+HOUR('0000-02-29 12:34:56') AS invalid_zero_year_leap_day_hour,
 HOUR('0000-02-31 12:34:56') AS invalid_zero_year_february_hour,
 HOUR('0000-04-31 12:34:56') AS invalid_zero_year_april_hour,
 HOUR('1900-02-29 12:34:56') AS invalid_nonleap_datetime_hour,
 HOUR('2000-02-29 01:02:03') AS leap_datetime_hour;
-➤ minute_datetime_hour[4,32,0]  ¦  invalid_zero_year_february_hour[4,32,0]  ¦  invalid_zero_year_april_hour[4,32,0]  ¦  invalid_nonleap_datetime_hour[4,32,0]  ¦  leap_datetime_hour[4,32,0]  𝄀
-12  ¦  null  ¦  null  ¦  null  ¦  1
+➤ minute_datetime_hour[4,32,0]  ¦  valid_zero_year_february_hour[4,32,0]  ¦  invalid_zero_year_leap_day_hour[4,32,0]  ¦  invalid_zero_year_february_hour[4,32,0]  ¦  invalid_zero_year_april_hour[4,32,0]  ¦  invalid_nonleap_datetime_hour[4,32,0]  ¦  leap_datetime_hour[4,32,0]  𝄀
+12  ¦  12  ¦  null  ¦  null  ¦  null  ¦  null  ¦  1
+SELECT HOUR('20241220153045') AS compact_14_hour,
+HOUR('241220153045') AS compact_12_hour,
+HOUR('202412201530451') AS compact_14_extra_digit_hour,
+HOUR('2412201530451') AS compact_12_extra_digit_hour,
+HOUR('20241220153045abc') AS compact_14_alpha_suffix_hour,
+HOUR('241220153045abc') AS compact_12_alpha_suffix_hour;
+➤ compact_14_hour[4,32,0]  ¦  compact_12_hour[4,32,0]  ¦  compact_14_extra_digit_hour[4,32,0]  ¦  compact_12_extra_digit_hour[4,32,0]  ¦  compact_14_alpha_suffix_hour[4,32,0]  ¦  compact_12_alpha_suffix_hour[4,32,0]  𝄀
+15  ¦  15  ¦  null  ¦  null  ¦  null  ¦  null

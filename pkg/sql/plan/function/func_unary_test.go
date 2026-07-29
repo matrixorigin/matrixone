@@ -4253,6 +4253,8 @@ func TestStringTimeExtractIncompleteDatetimeAndZeroYearCalendar(t *testing.T) {
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{
 			"2024-12-20 12:34",
+			"0000-02-28 12:34:56",
+			"0000-02-29 12:34:56",
 			"0000-02-31 12:34:56",
 			"0000-04-31 12:34:56",
 			"1900-02-29 12:34:56",
@@ -4265,9 +4267,36 @@ func TestStringTimeExtractIncompleteDatetimeAndZeroYearCalendar(t *testing.T) {
 		expect FunctionTestResult
 		fn     fEvalFn
 	}{
-		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{12, 0, 0, 0, 1}, []bool{false, true, true, true, false}), StringToHour},
-		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{34, 0, 0, 0, 2}, []bool{false, true, true, true, false}), StringToMinute},
-		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0, 0, 0, 3}, []bool{false, true, true, true, false}), StringToSecond},
+		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{12, 12, 0, 0, 0, 0, 1}, []bool{false, false, true, true, true, true, false}), StringToHour},
+		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{34, 34, 0, 0, 0, 0, 2}, []bool{false, false, true, true, true, true, false}), StringToMinute},
+		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 56, 0, 0, 0, 0, 3}, []bool{false, false, true, true, true, true, false}), StringToSecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringTimeExtractCompactDatetimeSuffix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"20241220153045", "241220153045", "20241220153045.999999", "241220153045.9",
+			"202412201530451", "2412201530451",
+			"20241220153045abc", "241220153045abc",
+		}, nil),
+	}
+
+	for _, tc := range []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{15, 15, 15, 15, 0, 0, 0, 0}, []bool{false, false, false, false, true, true, true, true}), StringToHour},
+		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{30, 30, 30, 30, 0, 0, 0, 0}, []bool{false, false, false, false, true, true, true, true}), StringToMinute},
+		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{45, 45, 45, 45, 0, 0, 0, 0}, []bool{false, false, false, false, true, true, true, true}), StringToSecond},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
