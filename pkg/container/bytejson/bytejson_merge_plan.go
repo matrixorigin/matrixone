@@ -22,8 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// ByteJsonDataEncoder writes the Data portion of one finalized ByteJson value.
-// The leading type byte is owned by the storage sink.
+// ByteJsonDataEncoder writes the storage payload of one finalized ByteJson
+// value. The leading type byte is owned by the storage sink.
 type ByteJsonDataEncoder interface {
 	TypeCode() TpCode
 	DataSize() uint32
@@ -95,6 +95,8 @@ type MergeBuilder struct {
 	root        mergeValue
 	initialized bool
 	rootValid   bool
+	storageType TpCode
+	storageData []byte
 }
 
 func NewMergePatchBuilder() *MergeBuilder {
@@ -115,6 +117,8 @@ func (b *MergeBuilder) BeginRow() error {
 	b.root = mergeValue{}
 	b.initialized = false
 	b.rootValid = false
+	b.storageType = 0
+	b.storageData = nil
 	b.state = mergeBuilderBuilding
 	return nil
 }
@@ -126,6 +130,8 @@ func (b *MergeBuilder) ResetUnknown() error {
 	b.root = mergeValue{}
 	b.initialized = false
 	b.rootValid = false
+	b.storageType = 0
+	b.storageData = nil
 	return nil
 }
 
@@ -201,6 +207,9 @@ func (b *MergeBuilder) Finalize() error {
 	if depth > maxJSONMergeNestingDepth {
 		return b.fail(newJSONMergeDepthError())
 	}
+	if err := b.prepareStorageEncoding(); err != nil {
+		return b.fail(err)
+	}
 	b.state = mergeBuilderFinalized
 	return nil
 }
@@ -209,27 +218,34 @@ func (b *MergeBuilder) BuildOwned() (ByteJson, error) {
 	if err := b.Finalize(); err != nil {
 		return Null, err
 	}
+	return b.buildLogicalOwned()
+}
+
+func (b *MergeBuilder) buildLogicalOwned() (ByteJson, error) {
 	buf := make([]byte, int(b.root.dataSize))
-	n, err := b.EncodeDataInto(buf)
+	n, err := encodeMergeValueData(&b.root, buf)
 	if err != nil {
 		return Null, err
 	}
 	if n != len(buf) {
-		return Null, b.fail(newMergeSizeMismatchError(len(buf), n))
+		return Null, newMergeSizeMismatchError(len(buf), n)
 	}
-	return ByteJson{Type: b.TypeCode(), Data: buf}, nil
+	return ByteJson{Type: b.root.typeCode(), Data: buf}, nil
 }
 
 func (b *MergeBuilder) TypeCode() TpCode {
 	if b.state != mergeBuilderFinalized {
 		return 0
 	}
-	return b.root.typeCode()
+	return b.storageType
 }
 
 func (b *MergeBuilder) DataSize() uint32 {
 	if b.state != mergeBuilderFinalized {
 		return 0
+	}
+	if b.storageData != nil {
+		return uint32(len(b.storageData))
 	}
 	return b.root.dataSize
 }
@@ -238,8 +254,11 @@ func (b *MergeBuilder) EncodeDataInto(dst []byte) (int, error) {
 	if b.state != mergeBuilderFinalized {
 		return 0, newMergeBuilderStateError("builder is not finalized")
 	}
-	if uint64(len(dst)) != uint64(b.root.dataSize) {
-		return 0, b.fail(newMergeSizeMismatchError(int(b.root.dataSize), len(dst)))
+	if uint64(len(dst)) != uint64(b.DataSize()) {
+		return 0, b.fail(newMergeSizeMismatchError(int(b.DataSize()), len(dst)))
+	}
+	if b.storageData != nil {
+		return copy(dst, b.storageData), nil
 	}
 	n, err := encodeMergeValueData(&b.root, dst)
 	if err != nil {
@@ -255,6 +274,8 @@ func (b *MergeBuilder) Clear() {
 	b.root = mergeValue{}
 	b.initialized = false
 	b.rootValid = false
+	b.storageType = 0
+	b.storageData = nil
 	if b.configured() {
 		b.state = mergeBuilderCleared
 	} else {
@@ -281,8 +302,60 @@ func (b *MergeBuilder) fail(err error) error {
 	return err
 }
 
+func (b *MergeBuilder) prepareStorageEncoding() error {
+	b.storageType = b.root.typeCode()
+	b.storageData = nil
+	if !mergeValueRequiresLegacyBinaryEncoding(&b.root) {
+		return nil
+	}
+	logical, err := b.buildLogicalOwned()
+	if err != nil {
+		return err
+	}
+	stored, err := logical.StorageCompatible()
+	if err != nil {
+		return err
+	}
+	b.storageType = stored.Type
+	b.storageData = stored.Data
+	return nil
+}
+
 func newRawMergeValue(value ByteJson) mergeValue {
 	return mergeValue{kind: mergeValueRaw, raw: value}
+}
+
+func mergeValueRequiresLegacyBinaryEncoding(v *mergeValue) bool {
+	switch v.kind {
+	case mergeValueRaw:
+		return v.raw.requiresLegacyBinaryEncoding()
+	case mergeValueObject:
+		if v.object == nil {
+			return false
+		}
+		for _, entry := range v.object.sorted {
+			if mergeValueRequiresLegacyBinaryEncoding(&entry.value) {
+				return true
+			}
+		}
+	case mergeValueArray:
+		if v.array == nil {
+			return false
+		}
+		for i := range v.array.segments {
+			segment := &v.array.segments[i]
+			if segment.isRaw {
+				if segment.rawArray.requiresLegacyBinaryEncoding() {
+					return true
+				}
+				continue
+			}
+			if mergeValueRequiresLegacyBinaryEncoding(&segment.single) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (v *mergeValue) typeCode() TpCode {

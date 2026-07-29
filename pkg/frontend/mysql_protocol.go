@@ -3856,6 +3856,11 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *Conn) {
 		mp.ses.Debugf(mp.ctx, "failed to set deadline for salt updating: %v", err)
 		return
 	}
+	defer func() {
+		if err := rs.RawConn().SetReadDeadline(time.Time{}); err != nil {
+			mp.ses.Debugf(mp.ctx, "failed to clear deadline for salt updating: %v", err)
+		}
+	}()
 	var i proxy.ExtraInfo
 	reader := bufio.NewReader(rs.RawConn())
 	if err := i.Decode(reader); err != nil {

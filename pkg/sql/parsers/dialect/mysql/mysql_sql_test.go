@@ -170,6 +170,102 @@ func TestSQLModeParserModes(t *testing.T) {
 	})
 }
 
+// A fulltext MATCH ... AGAINST pattern is stored unescaped and re-escaped on Format.
+// Under NO_BACKSLASH_ESCAPES a backslash is a literal char, so the formatter must NOT
+// re-escape it (WithNoBackslashEscape), otherwise every parse->format cycle doubles the
+// backslashes and the search pattern drifts (#24823 follow-up). Verify the pattern is
+// preserved across a mode-aware round-trip and that a second format is byte-identical.
+func TestFullTextMatchPatternRoundTrip(t *testing.T) {
+	ctx := context.Background()
+
+	matchPattern := func(t *testing.T, stmt tree.Statement) string {
+		t.Helper()
+		sel, ok := stmt.(*tree.Select)
+		require.True(t, ok)
+		clause, ok := sel.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.NotNil(t, clause.Where)
+		m, ok := clause.Where.Expr.(*tree.FullTextMatchExpr)
+		require.True(t, ok)
+		// Post-#24796 the pattern is an Expr; a string literal is a *NumVal whose
+		// String() returns the stored unescaped value.
+		return m.Pattern.(*tree.NumVal).String()
+	}
+
+	// sql is the source; want is the parsed pattern value under NO_BACKSLASH_ESCAPES.
+	cases := []struct{ name, sql, want string }{
+		{"backslash-n literal", `select * from t where match(body) against('a\nb' in boolean mode)`, `a\nb`},
+		{"ordinary backslashes", `select * from t where match(body) against('c\\d' in boolean mode)`, `c\\d`},
+		{"trailing backslash", `select * from t where match(body) against('back\' in boolean mode)`, `back\`},
+		{"backslash next to quote", `select * from t where match(body) against('x\''y' in boolean mode)`, `x\'y`},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s1, err := ParseOneWithSQLMode(ctx, c.sql, 1, "NO_BACKSLASH_ESCAPES")
+			require.NoError(t, err)
+			defer s1.Free()
+			require.Equal(t, c.want, matchPattern(t, s1))
+
+			f1 := tree.StringWithOpts(s1, dialect.MYSQL, tree.WithNoBackslashEscape())
+			s2, err := ParseOneWithSQLMode(ctx, f1, 1, "NO_BACKSLASH_ESCAPES")
+			require.NoError(t, err)
+			defer s2.Free()
+
+			// pattern survives the deparse->reparse unchanged (no drift)
+			require.Equal(t, c.want, matchPattern(t, s2))
+			// and a second format is byte-identical (no per-cycle growth)
+			f2 := tree.StringWithOpts(s2, dialect.MYSQL, tree.WithNoBackslashEscape())
+			require.Equal(t, f1, f2)
+		})
+	}
+
+	// Default mode (backslash IS an escape): tree.String keeps re-escaping and must stay
+	// idempotent — the mode-aware branch must not regress the default path.
+	t.Run("default mode idempotent", func(t *testing.T) {
+		sql := `select * from t where match(body) against('a\nb' in boolean mode)`
+		s1, err := ParseOneWithSQLMode(ctx, sql, 1, "")
+		require.NoError(t, err)
+		defer s1.Free()
+		require.Equal(t, "a\nb", matchPattern(t, s1)) // \n parsed as a newline
+
+		f1 := tree.String(s1, dialect.MYSQL)
+		s2, err := ParseOneWithSQLMode(ctx, f1, 1, "")
+		require.NoError(t, err)
+		defer s2.Free()
+		require.Equal(t, "a\nb", matchPattern(t, s2))
+		require.Equal(t, f1, tree.String(s2, dialect.MYSQL))
+	})
+}
+
+func TestConvertToJSONBuildsCastExpr(t *testing.T) {
+	ctx := context.Background()
+	convertStmt, err := ParseOne(ctx, "select convert('1', json)", 1)
+	require.NoError(t, err)
+	defer convertStmt.Free()
+
+	convert, ok := firstSelectExpr(t, convertStmt).(*tree.CastExpr)
+	require.True(t, ok)
+	convertType, ok := convert.Type.(*tree.T)
+	require.True(t, ok)
+	require.Equal(t, uint32(defines.MYSQL_TYPE_JSON), convertType.InternalType.Oid)
+
+	castStmt, err := ParseOne(ctx, "select cast('1' as json)", 1)
+	require.NoError(t, err)
+	defer castStmt.Free()
+	cast, ok := firstSelectExpr(t, castStmt).(*tree.CastExpr)
+	require.True(t, ok)
+	castType, ok := cast.Type.(*tree.T)
+	require.True(t, ok)
+	require.Equal(t, castType.InternalType, convertType.InternalType)
+
+	usingStmt, err := ParseOne(ctx, "select convert('1' using utf8mb4)", 1)
+	require.NoError(t, err)
+	defer usingStmt.Free()
+	_, isCast := firstSelectExpr(t, usingStmt).(*tree.CastExpr)
+	require.False(t, isCast)
+}
+
 func TestParseFirstWithSQLMode(t *testing.T) {
 	ctx := context.Background()
 	parser := &MySQLParser{}
@@ -4081,27 +4177,27 @@ var (
 		},
 		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc dfc ghc')",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc dfc ghc)",
+			output: "select * from t1 where MATCH (body, title) AGAINST ('abc dfc ghc')",
 		},
 		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc- +abc' IN BOOLEAN MODE)",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc- +abc IN BOOLEAN MODE)",
+			output: "select * from t1 where MATCH (body, title) AGAINST ('abc- +abc' IN BOOLEAN MODE)",
 		},
 		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc%' IN NATURAL LANGUAGE MODE)",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc% IN NATURAL LANGUAGE MODE)",
+			output: "select * from t1 where MATCH (body, title) AGAINST ('abc%' IN NATURAL LANGUAGE MODE)",
 		},
 		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc gg*' WITH QUERY EXPANSION)",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc gg* WITH QUERY EXPANSION)",
+			output: "select * from t1 where MATCH (body, title) AGAINST ('abc gg*' WITH QUERY EXPANSION)",
 		},
 		{
 			input:  "select * from t1 where MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
-			output: "select * from t1 where MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
+			output: "select * from t1 where MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION)",
 		},
 		{
 			input:  "select MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
-			output: "select MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
+			output: "select MATCH (body, title) AGAINST ('abc' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
 		},
 		{
 			input:  "prepare st from 'select id from ft where MATCH (t) AGAINST (? IN BOOLEAN MODE)'",
@@ -4315,6 +4411,35 @@ func TestValid(t *testing.T) {
 	}
 }
 
+// TestFullTextMatchDeparseRoundTrip is the #24823 regression on the DEFAULT tree.String path
+// (not only the WithSingleQuoteString path): MATCH(...) AGAINST('...') must deparse to a
+// quoted, re-parseable string literal so re-serialized statements (CREATE TABLE AS SELECT,
+// view expansion, etc.) round-trip. Before the fix the default path emitted the pattern bare
+// (AGAINST (防水 ...)) which is invalid SQL.
+func TestFullTextMatchDeparseRoundTrip(t *testing.T) {
+	ctx := context.TODO()
+	cases := []string{
+		"select * from t where MATCH (body) AGAINST ('防水' IN BOOLEAN MODE)",
+		"select * from t where MATCH (a, b) AGAINST ('abc dfc')",
+		"select MATCH (body) AGAINST ('abc%' IN NATURAL LANGUAGE MODE) from t",
+		// embedded single quote must survive escaping on the default path
+		"select * from t where MATCH (body) AGAINST ('it''s a test')",
+	}
+	for _, sql := range cases {
+		ast, err := ParseOne(ctx, sql, 1)
+		require.NoError(t, err, sql)
+
+		// DEFAULT path (no WithSingleQuoteString / WithQuoteString).
+		out := tree.String(ast, dialect.MYSQL)
+		require.Contains(t, out, "AGAINST ('", "default deparse must quote the pattern, got: "+out)
+
+		// The deparsed SQL must re-parse and be idempotent under further deparse.
+		ast2, err := ParseOne(ctx, out, 1)
+		require.NoError(t, err, "deparsed SQL must re-parse: "+out)
+		require.Equal(t, out, tree.String(ast2, dialect.MYSQL), "deparse must be idempotent")
+	}
+}
+
 func TestQuotedUnicodeIdentifierAliases(t *testing.T) {
 	for _, sql := range []string{
 		"SELECT 1 AS `الكمية`",
@@ -4348,6 +4473,17 @@ var (
 		{
 			input:  "select count(*) from t",
 			output: "select count(*) from t",
+		},
+		{
+			// #24823: MATCH ... AGAINST pattern must keep its quotes when the query is
+			// re-serialized (e.g. CREATE TABLE AS SELECT), else the re-parse syntax-errors.
+			input:  "select id, MATCH (body) AGAINST ('防水' IN BOOLEAN MODE) as sc from ft where MATCH (body) AGAINST ('防水' IN BOOLEAN MODE)",
+			output: "select id, MATCH (body) AGAINST ('防水' IN BOOLEAN MODE) as sc from ft where MATCH (body) AGAINST ('防水' IN BOOLEAN MODE)",
+		},
+		{
+			// embedded single quote in the pattern must be escaped ('' ) on restore.
+			input:  "select * from t where MATCH (body) AGAINST ('a''b')",
+			output: "select * from t where MATCH (body) AGAINST ('a''b')",
 		},
 		{
 			input:  "select count(*) as cnt, sum(a) from t group by b having count(*) > 1",
@@ -4666,6 +4802,37 @@ func TestFaultTolerance(t *testing.T) {
 			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
 			continue
 		}
+	}
+}
+
+func TestOrderByRejectsNullsPosition(t *testing.T) {
+	testCases := []struct {
+		name    string
+		sql     string
+		message string
+	}{
+		{
+			name:    "top-level NULLS FIRST",
+			sql:     "select id, score from t order by score desc nulls first, id",
+			message: "NULLS FIRST is not supported in MySQL syntax",
+		},
+		{
+			name:    "top-level NULLS LAST",
+			sql:     "select id, score from t order by score asc nulls last, id",
+			message: "NULLS LAST is not supported in MySQL syntax",
+		},
+		{
+			name:    "window NULLS LAST",
+			sql:     "select sum(score) over (order by score nulls last) from t",
+			message: "NULLS LAST is not supported in MySQL syntax",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), testCase.sql, 1)
+			require.ErrorContains(t, err, testCase.message)
+		})
 	}
 }
 
