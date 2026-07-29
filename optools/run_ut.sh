@@ -243,13 +243,9 @@ function run_tests(){
             return 0
         fi
 
-        # These packages need exclusive runner access. NewTestService callers
-        # bind fixed ports, while the issues package runs multiple embedded
-        # services whose race builds can starve under package-level concurrency.
+        # The issues package runs multiple embedded services whose race builds
+        # can starve under package-level concurrency.
         if ! serial_test_scope=$(go list ${GO_MODULE_MODE} \
-            ./pkg/logservice \
-            ./pkg/vm/engine/tae/logstore \
-            ./pkg/vm/engine/tae/logstore/driver/logservicedriver \
             ./pkg/tests/issues); then
             logger "ERR" "Failed to resolve serial race-test packages"
             UT_TEST_STATUS=1
