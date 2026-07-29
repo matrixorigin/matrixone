@@ -57,6 +57,22 @@ func Test_runSql(t *testing.T) {
 	require.Error(t, err, "internal error: no account id in context")
 }
 
+func TestGetSqlForTransferAlterCopyFk(t *testing.T) {
+	prepare, finalize := GetSqlForTransferAlterCopyFk(
+		"db'1",
+		"source'child",
+		"copy'child",
+	)
+
+	require.Equal(t, []string{
+		"delete from `mo_catalog`.`mo_foreign_keys` where db_name = 'db''1' and table_name = 'copy''child'",
+		"update `mo_catalog`.`mo_foreign_keys` set table_name = 'copy''child' where db_name = 'db''1' and table_name = 'source''child'",
+	}, prepare)
+	require.Equal(t, []string{
+		"update `mo_catalog`.`mo_foreign_keys` set table_name = 'source''child' where db_name = 'db''1' and table_name = 'copy''child'",
+	}, finalize)
+}
+
 func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
 	{
 		//invalid json

@@ -26,27 +26,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
-func fkTablesTopoSortWithTS(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (sortedTbls []string, err error) {
+func fkTablesTopoSortWithTS(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	tblName string,
+	ts int64,
+	from,
+	to uint32,
+	tableInfos []*tableInfo,
+) (sortedTbls []string, err error) {
 	newCtx := defines.AttachAccountId(ctx, from)
 	getLogger("").Info(fmt.Sprintf("[%d:%d] start to get fk tables topo sort from account %d", from, ts, from))
-	// get foreign key deps from mo_catalog.mo_foreign_keys
 	fkDeps, err := getFkDepsWithTS(newCtx, bh, dbName, tblName, ts, from, to)
 	if err != nil {
 		return
 	}
-
-	g := toposort{next: make(map[string][]string)}
-	for key, deps := range fkDeps {
-		g.addVertex(key)
-		for _, depTbl := range deps {
-			// exclude self dep
-			if key != depTbl {
-				g.addEdge(depTbl, key)
-			}
-		}
-	}
-	sortedTbls, err = g.sort()
-	return
+	return topoSortRestoreFkDeps(ctx, fkDeps, tableInfos)
 }
 
 func getFkDepsWithTS(ctx context.Context, bh BackgroundExec, db string, tbl string, ts int64, from, to uint32) (ans map[string][]string, err error) {
