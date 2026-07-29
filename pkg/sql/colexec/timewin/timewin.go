@@ -354,7 +354,7 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 		if err != nil {
 			return nil, err
 		}
-		if config := expression.GetExtraConfig(); config != nil {
+		if config := expression.GetExtraInformation(); config != nil {
 			if err = aggs[i].SetExtraInformation(config, 0); err != nil {
 				return nil, err
 			}

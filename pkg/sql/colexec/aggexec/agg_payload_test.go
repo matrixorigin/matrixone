@@ -102,6 +102,20 @@ func TestEncodeGroupConcatPayloadAndFieldBytes(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, payload)
 
+	payload, err = encodeGroupConcatPayloadWithNulls(
+		[]*vector.Vector{nullVec, intVec},
+		0,
+		[]types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+	var nullFlags []bool
+	err = payloadFieldIterator(payload, 2, func(_ int, isNull bool, _ []byte) error {
+		nullFlags = append(nullFlags, isNull)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, []bool{true, false}, nullFlags)
+
 	require.Equal(t, textVec.GetBytesAt(0), groupConcatFieldBytes(textVec, 0, types.T_varchar.ToType()))
 	require.Equal(t, intVec.GetRawBytesAt(0), groupConcatFieldBytes(intVec, 0, types.T_int64.ToType()))
 
