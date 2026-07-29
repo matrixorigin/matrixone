@@ -687,27 +687,18 @@ func (p *PartitionState) HandleRowsDelete(
 	ctx context.Context,
 	input *api.Batch,
 	packer *types.Packer,
-	pool *mpool.MPool,
+	_ *mpool.MPool,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
-
-	vec := mustVectorFromProto(input.Vecs[0])
-	defer vec.Free(pool)
-	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
-
-	vec = mustVectorFromProto(input.Vecs[1])
-	defer vec.Free(pool)
-	timeVector := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(input.Vecs[3])
-	defer vec.Free(pool)
-	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
 
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
 	}
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[0])
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[1])
+	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[3])
 
 	var primaryKeys [][]byte
 	if len(input.Vecs) > 2 {
@@ -781,25 +772,19 @@ func (p *PartitionState) HandleRowsInsert(
 	input *api.Batch,
 	primarySeqnum int,
 	packer *types.Packer,
-	pool *mpool.MPool,
+	_ *mpool.MPool,
 ) (
 	primaryKeys [][]byte,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	vec := mustVectorFromProto(input.Vecs[0])
-	defer vec.Free(pool)
-	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
-
-	vec = mustVectorFromProto(input.Vecs[1])
-	defer vec.Free(pool)
-	timeVector := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
 	}
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[0])
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[1])
 	primaryKeys = readutil.EncodePrimaryKeyVector(
 		batch.Vecs[2+primarySeqnum],
 		packer,
