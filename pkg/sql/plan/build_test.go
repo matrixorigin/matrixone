@@ -3486,6 +3486,10 @@ func TestInsertOnDupSelfReferFKUsesModernPath(t *testing.T) {
 	}
 	assert.True(t, hasMultiUpdate, "self-refer FK ODKU plan should contain MULTI_UPDATE node")
 	assert.NotEmpty(t, query.DetectSqls, "self-refer FK insert should generate FK constraint DetectSqls")
+	for _, detectSQL := range query.DetectSqls {
+		assert.Contains(t, detectSQL, ") as __mo_fk_check_source",
+			"generated FK constraint SQL must alias its derived table")
+	}
 }
 
 func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {
