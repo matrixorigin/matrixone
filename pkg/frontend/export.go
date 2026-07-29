@@ -472,7 +472,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			case types.T_float64:
 				val := vector.GetFixedAtNoTypeCheck[float64](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], buffer)
+					formatOutputString(ep, []byte(strconv.FormatFloat(val, 'f', -1, 64)), symbol[j], closeby, flag[j], buffer)
 				} else {
 					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
 				}
