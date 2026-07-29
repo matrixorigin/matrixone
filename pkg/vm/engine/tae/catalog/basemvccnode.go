@@ -167,6 +167,7 @@ func ReadEntryNodeTuple(createAt, deleteAt types.TS) (un *EntryMVCCNode) {
 type BaseNode[T any] interface {
 	CloneAll() T
 	CloneData() T
+	CloneForDelete() T
 	String() string
 	Update(vun T)
 	WriteTo(w io.Writer) (n int64, err error)
@@ -212,6 +213,15 @@ func (e *MVCCNode[T]) CloneData() *MVCCNode[T] {
 		BaseNode:      e.BaseNode.CloneData(),
 	}
 }
+
+func (e *MVCCNode[T]) CloneForDelete() *MVCCNode[T] {
+	return &MVCCNode[T]{
+		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		TxnMVCCNode:   txnbase.TxnMVCCNode{},
+		BaseNode:      e.BaseNode.CloneForDelete(),
+	}
+}
+
 func (e *MVCCNode[T]) IsNil() bool {
 	return e == nil
 }

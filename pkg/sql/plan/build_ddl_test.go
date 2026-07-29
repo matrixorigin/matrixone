@@ -104,6 +104,44 @@ func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
 	require.Equal(t, rootSQL, createSQL)
 }
 
+func TestBuildCreateViewExplicitColumnList(t *testing.T) {
+	t.Run("applies explicit names", func(t *testing.T) {
+		const rootSQL = "create view v (`alias#one`, alias_two) as select 1, 2"
+		ctx := &rootSQLCompilerContext{
+			MockCompilerContext: NewMockCompilerContext(false),
+			rootSQL:             rootSQL,
+		}
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		p, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		cols := p.GetDdl().GetCreateView().GetTableDef().GetCols()
+		require.Len(t, cols, 2)
+		require.Equal(t, "alias#one", cols[0].GetName())
+		require.Equal(t, "alias#one", cols[0].GetOriginName())
+		require.Equal(t, "alias_two", cols[1].GetName())
+		require.Equal(t, "alias_two", cols[1].GetOriginName())
+	})
+
+	t.Run("rejects cardinality mismatch", func(t *testing.T) {
+		const rootSQL = "create view v (only_one) as select 1, 2"
+		ctx := &rootSQLCompilerContext{
+			MockCompilerContext: NewMockCompilerContext(false),
+			rootSQL:             rootSQL,
+		}
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		_, err = BuildPlan(ctx, stmt, false)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrViewWrongList))
+		require.Equal(t, uint16(moerr.ER_VIEW_WRONG_LIST), err.(*moerr.Error).MySQLCode())
+	})
+}
+
 func TestBuildAlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

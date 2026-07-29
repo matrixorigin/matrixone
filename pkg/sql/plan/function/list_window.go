@@ -36,10 +36,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				overloadId: 0,
 				isWin:      true,
 				retType:    aggexec.SingleWindowReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "rank",
-					aggRegister: aggexec.RegisterRankWin,
-				},
+				aggName:    "rank",
 			},
 		},
 	},
@@ -58,10 +55,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				overloadId: 0,
 				isWin:      true,
 				retType:    aggexec.SingleWindowReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "row_number",
-					aggRegister: aggexec.RegisterRowNumberWin,
-				},
+				aggName:    "row_number",
 			},
 		},
 	},
@@ -80,10 +74,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				overloadId: 0,
 				isWin:      true,
 				retType:    aggexec.SingleWindowReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "dense_rank",
-					aggRegister: aggexec.RegisterDenseRankWin,
-				},
+				aggName:    "dense_rank",
 			},
 		},
 	},
@@ -104,10 +95,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				retType: func(_ []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "percent_rank",
-					aggRegister: aggexec.RegisterPercentRankWin,
-				},
+				aggName: "percent_rank",
 			},
 		},
 	},
@@ -126,10 +114,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				overloadId: 0,
 				isWin:      true,
 				retType:    aggexec.SingleWindowReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "ntile",
-					aggRegister: aggexec.RegisterNtileWin,
-				},
+				aggName:    "ntile",
 			},
 		},
 	},
@@ -148,10 +133,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				overloadId: 0,
 				isWin:      true,
 				retType:    aggexec.CumeDistReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "cume_dist",
-					aggRegister: aggexec.RegisterCumeDistWin,
-				},
+				aggName:    "cume_dist",
 			},
 		},
 	},
@@ -178,10 +160,7 @@ var supportedWindowInNewFramework = []FuncNew{
 					}
 					return types.T_any.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "lag",
-					aggRegister: aggexec.RegisterLagWin,
-				},
+				aggName: "lag",
 			},
 		},
 	},
@@ -208,10 +187,7 @@ var supportedWindowInNewFramework = []FuncNew{
 					}
 					return types.T_any.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "lead",
-					aggRegister: aggexec.RegisterLeadWin,
-				},
+				aggName: "lead",
 			},
 		},
 	},
@@ -236,10 +212,7 @@ var supportedWindowInNewFramework = []FuncNew{
 					}
 					return types.T_any.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "first_value",
-					aggRegister: aggexec.RegisterFirstValueWin,
-				},
+				aggName: "first_value",
 			},
 		},
 	},
@@ -264,10 +237,7 @@ var supportedWindowInNewFramework = []FuncNew{
 					}
 					return types.T_any.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "last_value",
-					aggRegister: aggexec.RegisterLastValueWin,
-				},
+				aggName: "last_value",
 			},
 		},
 	},
@@ -293,10 +263,7 @@ var supportedWindowInNewFramework = []FuncNew{
 					}
 					return types.T_any.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "nth_value",
-					aggRegister: aggexec.RegisterNthValueWin,
-				},
+				aggName: "nth_value",
 			},
 		},
 	},
