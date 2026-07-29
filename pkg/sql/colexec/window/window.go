@@ -264,7 +264,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
-				if config := ag.GetExtraConfig(); config != nil {
+				if config := ag.GetExtraInformation(); config != nil {
 					if err = ctr.batAggs[i].SetExtraInformation(config, 0); err != nil {
 						return result, err
 					}

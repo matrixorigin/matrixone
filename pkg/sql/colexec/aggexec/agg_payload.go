@@ -81,10 +81,30 @@ func encodeGroupConcatPayload(vectors []*vector.Vector, row int, argTypes []type
 	return payload, nil
 }
 
+func encodeGroupConcatPayloadWithNulls(
+	vectors []*vector.Vector,
+	row int,
+	argTypes []types.Type,
+) ([]byte, error) {
+	payload := make([]byte, 0, len(vectors)*8)
+	for i, vec := range vectors {
+		r := row
+		if vec.IsConst() {
+			r = 0
+		}
+		if vec.IsNull(uint64(r)) {
+			payload = appendPayloadField(payload, nil, true)
+			continue
+		}
+		payload = appendPayloadField(payload, groupConcatFieldBytes(vec, r, argTypes[i]), false)
+	}
+	return payload, nil
+}
+
 func groupConcatFieldBytes(vec *vector.Vector, row int, typ types.Type) []byte {
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink,
-		types.T_varbinary, types.T_binary, types.T_json, types.T_enum,
+		types.T_varbinary, types.T_binary, types.T_json,
 		types.T_array_float32, types.T_array_float64:
 		return vec.GetBytesAt(row)
 	default:

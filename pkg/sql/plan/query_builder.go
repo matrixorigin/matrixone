@@ -3788,6 +3788,28 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	for i, col := range cols {
 		subCtx.headings[i] = string(col)
 	}
+
+	if len(cteRef.occurrences) == 0 {
+		builder.cteRefs = append(builder.cteRefs, cteRef)
+	}
+	if ctx.bindingNonRecurCte() {
+		cteRef.hasNestedUse = true
+		if ctx.cteState.cte != nil {
+			ctx.cteState.cte.hasNestedRef = true
+		}
+	}
+	types := make([]plan.Type, len(builder.qry.Nodes[nodeID].ProjectList))
+	for i, expr := range builder.qry.Nodes[nodeID].ProjectList {
+		types[i] = expr.Typ
+	}
+	cteRef.occurrences = append(cteRef.occurrences, cteOccurrence{
+		rootID:       nodeID,
+		rootTag:      subCtx.rootTag(),
+		ctx:          subCtx,
+		headings:     append([]string(nil), subCtx.headings...),
+		types:        types,
+		isCorrelated: subCtx.isCorrelated,
+	})
 	return nodeID, nil
 }
 
@@ -4450,43 +4472,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.hasSingleRow = true
 	}
 
-	// Flatten aggregate argument subqueries before adding any physical ordering
-	// required by ordered aggregates. The resulting joins may not preserve their
-	// input order (for example when a hash join spills), so the Sort must remain
-	// above those joins and directly below the AGG node.
+	// Flatten aggregate argument subqueries before building the AGG node.
 	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
 		for i, agg := range ctx.aggregates {
 			if nodeID, ctx.aggregates[i], err = builder.flattenSubqueries(nodeID, agg, ctx); err != nil {
 				return
 			}
 		}
-	}
-
-	// For group_concat with ORDER BY, we need to sort the data before aggregation.
-	// The sort key should be: GROUP BY columns (if any) + ORDER BY columns.
-	// This ensures that within each group, the data arrives in the correct order.
-	if len(ctx.groupConcatOrderBys) > 0 && (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) {
-		var sortSpecs []*plan.OrderBySpec
-
-		// First, add GROUP BY columns to sort key (ASC by default)
-		// This ensures data is grouped together before applying group_concat order
-		for _, groupExpr := range ctx.groups {
-			sortSpecs = append(sortSpecs, &plan.OrderBySpec{
-				Expr: DeepCopyExpr(groupExpr),
-				Flag: plan.OrderBySpec_ASC,
-			})
-		}
-
-		// Then, add group_concat ORDER BY columns
-		sortSpecs = append(sortSpecs, ctx.groupConcatOrderBys...)
-
-		// Insert Sort node before Agg
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_SORT,
-			Children: []int32{nodeID},
-			OrderBy:  sortSpecs,
-			SpillMem: builder.sortSpillMem,
-		}, ctx)
 	}
 
 	// append AGG node or SAMPLE node
