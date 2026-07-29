@@ -30,10 +30,10 @@ func testCreateQueryClient(t *testing.T) QueryClient {
 	return ct
 }
 
-func TestWorkloadPolicyUpdateRequiresMORPCVersion5(t *testing.T) {
+func TestWorkloadPolicyUpdateRequiresMORPCVersion7(t *testing.T) {
 	assert.Equal(
 		t,
-		defines.MORPCVersion5,
+		defines.MORPCVersion7,
 		methodVersions[query.CmdMethod_WorkloadPolicyUpdate],
 	)
 }

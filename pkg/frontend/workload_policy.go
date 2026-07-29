@@ -1197,11 +1197,11 @@ func ensureWorkloadPolicyFeatureReady(
 	// This local check fails fast; after the table-version check below, every
 	// CN is queried because local readiness alone cannot prove cluster-wide
 	// readiness during a rolling upgrade.
-	if protocolVersion < defines.MORPCVersion5 {
+	if protocolVersion < defines.MORPCVersion7 {
 		return moerr.NewInternalErrorf(
 			ctx,
 			"workload policy requires protocol version %d or later; current protocol version is %d",
-			defines.MORPCVersion5,
+			defines.MORPCVersion7,
 			protocolVersion,
 		)
 	}

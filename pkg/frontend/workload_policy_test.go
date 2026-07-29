@@ -2697,8 +2697,8 @@ func TestWorkloadPolicyActivationRequiresCompatibleRPCProtocol(t *testing.T) {
 		{
 			name:        "protocol too old",
 			service:     "workload-policy-protocol-old",
-			protocol:    defines.MORPCVersion5 - 1,
-			wantErr:     "requires protocol version 5 or later; current protocol version is 4",
+			protocol:    defines.MORPCVersion7 - 1,
+			wantErr:     "requires protocol version 7 or later; current protocol version is 6",
 			initRuntime: true,
 		},
 	}

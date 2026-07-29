@@ -62,7 +62,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_CtlPrefetchOnSubscribed:  defines.MORPCVersion4,
 	pb.CmdMethod_ISCPDrainConsumer:        defines.MORPCVersion4,
 	pb.CmdMethod_IcebergCacheInvalidate:   defines.MORPCVersion4,
-	pb.CmdMethod_WorkloadPolicyUpdate:     defines.MORPCVersion5,
+	pb.CmdMethod_WorkloadPolicyUpdate:     defines.MORPCVersion7,
 }
 
 type queryClient struct {
