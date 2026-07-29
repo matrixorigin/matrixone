@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -28,6 +29,26 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addOrphanFileColumn("namespace", "varchar(2048) not null default ''", "catalog_id"),
 	addOrphanFileColumn("table_name", "varchar(1024) not null default ''", "namespace"),
 	addOrphanFileColumn("file_path", "varchar(4096) not null default ''", "table_location_hash"),
+	// Keep same-version upgrades append-only: offsets 1-4 were already
+	// published by the Iceberg upgrade. This table establishes offset 5.
+	createQueryWorkloadPolicyTable(),
+}
+
+func createQueryWorkloadPolicyTable() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: catalog.MO_QUERY_WORKLOAD_POLICY,
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    frontend.MoCatalogMoQueryWorkloadPolicyDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDefinition(
+				txn,
+				accountID,
+				catalog.MO_CATALOG,
+				catalog.MO_QUERY_WORKLOAD_POLICY,
+			)
+		},
+	}
 }
 
 func upgradeIcebergCatalogIDAllocator() versions.UpgradeEntry {

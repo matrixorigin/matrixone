@@ -16,7 +16,9 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,9 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
@@ -53,16 +58,375 @@ func TestIe(t *testing.T) {
 			setPu("", pu)
 			executor := newIe(sid)
 			executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
-			sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
+			sess, err := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
+			require.NoError(t, err)
+			defer sess.Close()
 			assert.Equal(t, "dump", sess.GetResponser().GetStr(USERNAME))
 
-			err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
+			err = executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
 			assert.Error(t, err)
 			res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
 			assert.Error(t, err)
 			assert.Equal(t, uint64(0), res.RowCount())
 		},
 	)
+}
+
+func TestInternalExecutorLoadsAccountWorkloadPolicy(t *testing.T) {
+	const (
+		service   = "internal-executor-workload-policy-test"
+		accountID = uint32(91)
+	)
+	mp := mpool.MustNewZero()
+	memResult := executor.NewMemResult(
+		[]types.Type{
+			types.T_text.ToType(),
+			types.T_uint64.ToType(),
+		},
+		mp,
+	)
+	memResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		memResult,
+		0,
+		[]string{`{"version":1,"policies":{"internal":{"pool":"internal-pool","labels":{"role":"internal"}}}}`},
+	))
+	require.NoError(t, executor.AppendFixedRows(
+		memResult,
+		1,
+		[]uint64{1},
+	))
+	accountResult := executor.NewMemResult(
+		[]types.Type{types.T_varchar.ToType()},
+		mp,
+	)
+	accountResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		accountResult,
+		0,
+		[]string{"tenant-91"},
+	))
+
+	runtime.RunTest(
+		service,
+		func(rt runtime.Runtime) {
+			defer GWorkloadPolicyManager.Remove(accountID)
+			InitServerLevelVars(service)
+			parameters := &config.FrontendParameters{}
+			parameters.SessionTimeout.Duration = time.Minute
+			setPu(service, config.NewParameterUnit(
+				parameters,
+				nil,
+				nil,
+				nil,
+			))
+			rt.SetGlobalVariables(
+				runtime.InternalSQLExecutor,
+				&workloadPolicySQLExecutor{
+					exec: func(
+						ctx context.Context,
+						sql string,
+						opts executor.Options,
+					) (executor.Result, error) {
+						require.True(t, workloadPolicyBypassed(ctx))
+						if strings.Contains(sql, "from mo_catalog.mo_account") {
+							require.Equal(t, uint32(sysAccountID), opts.AccountID())
+							return accountResult.GetResult(), nil
+						}
+						require.Equal(t, accountID, opts.AccountID())
+						return memResult.GetResult(), nil
+					},
+				},
+			)
+
+			ctx := defines.AttachAccountId(context.Background(), accountID)
+			sess, err := newIe(service).newCmdSession(
+				ctx,
+				ie.NewOptsBuilder().Internal(true).Finish(),
+			)
+			require.NoError(t, err)
+			defer sess.Close()
+
+			policy := queryWorkloadPolicySnapshotAt(ctx, sess)
+			require.Empty(t, policy.InvalidReason)
+			require.Equal(
+				t,
+				"internal-pool",
+				policy.Rules[schedule.WorkloadInternal].PoolIdentity,
+			)
+			resolved := schedule.ResolveWorkloadPolicy(
+				schedule.WorkloadDescriptor{
+					Internal: true,
+					Tenant:   queryWorkloadPolicyTenantName(sess),
+				},
+				policy,
+			)
+			require.Equal(t, schedule.WorkloadInternal, resolved.WorkloadClass)
+			require.Equal(t, "internal-pool", resolved.Pool.Identity)
+			require.Equal(t, "tenant-91", resolved.Pool.Labels["account"])
+			require.Empty(t, sess.GetTenantInfo().GetTenant(),
+				"routing identity must not become authenticated identity")
+			require.Equal(t, "tenant-91", queryWorkloadPolicyTenantName(sess))
+		},
+	)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestInternalExecutorReturnsRoutingAccountLookupFailure(t *testing.T) {
+	const (
+		service   = "internal-executor-routing-account-error-test"
+		accountID = uint32(94)
+	)
+	mp := mpool.MustNewZero()
+	policyResult := executor.NewMemResult(
+		[]types.Type{
+			types.T_text.ToType(),
+			types.T_uint64.ToType(),
+		},
+		mp,
+	)
+	policyResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		policyResult,
+		0,
+		[]string{`{"version":1,"policies":{"internal":{"pool":"internal-pool","labels":{"role":"internal"}}}}`},
+	))
+	require.NoError(t, executor.AppendFixedRows(
+		policyResult,
+		1,
+		[]uint64{1},
+	))
+	lookupErr := moerr.NewInternalErrorNoCtx(
+		"injected routing account lookup failure",
+	)
+
+	runtime.RunTest(
+		service,
+		func(rt runtime.Runtime) {
+			defer GWorkloadPolicyManager.Remove(accountID)
+			InitServerLevelVars(service)
+			parameters := &config.FrontendParameters{}
+			parameters.SessionTimeout.Duration = time.Minute
+			setPu(service, config.NewParameterUnit(
+				parameters,
+				nil,
+				nil,
+				nil,
+			))
+			rt.SetGlobalVariables(
+				runtime.InternalSQLExecutor,
+				&workloadPolicySQLExecutor{
+					exec: func(
+						ctx context.Context,
+						sql string,
+						opts executor.Options,
+					) (executor.Result, error) {
+						require.True(t, workloadPolicyBypassed(ctx))
+						if strings.Contains(sql, "from mo_catalog.mo_account") {
+							return executor.Result{}, lookupErr
+						}
+						require.Equal(t, accountID, opts.AccountID())
+						return policyResult.GetResult(), nil
+					},
+				},
+			)
+
+			ctx := defines.AttachAccountId(context.Background(), accountID)
+			result := newIe(service).Query(
+				ctx,
+				"select 1",
+				ie.NewOptsBuilder().Internal(true).Finish(),
+			)
+			require.ErrorIs(t, result.Error(), lookupErr)
+			require.ErrorContains(
+				t,
+				result.Error(),
+				"injected routing account lookup failure",
+			)
+		},
+	)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestInternalExecutorLoadsColdAccountPolicyForNonInternalSession(t *testing.T) {
+	const (
+		service   = "non-internal-executor-workload-policy-test"
+		accountID = uint32(92)
+	)
+	mp := mpool.MustNewZero()
+	policyResult := executor.NewMemResult(
+		[]types.Type{
+			types.T_text.ToType(),
+			types.T_uint64.ToType(),
+		},
+		mp,
+	)
+	policyResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		policyResult,
+		0,
+		[]string{`{"version":1,"policies":{"ap":{"pool":"task-ap","labels":{"role":"ap"}}}}`},
+	))
+	require.NoError(t, executor.AppendFixedRows(
+		policyResult,
+		1,
+		[]uint64{1},
+	))
+	accountResult := executor.NewMemResult(
+		[]types.Type{types.T_varchar.ToType()},
+		mp,
+	)
+	accountResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		accountResult,
+		0,
+		[]string{"tenant-92"},
+	))
+
+	runtime.RunTest(
+		service,
+		func(rt runtime.Runtime) {
+			defer GWorkloadPolicyManager.Remove(accountID)
+			InitServerLevelVars(service)
+			setPu(service, config.NewParameterUnit(
+				&config.FrontendParameters{},
+				nil,
+				nil,
+				nil,
+			))
+			var policyReads, accountReads int
+			rt.SetGlobalVariables(
+				runtime.InternalSQLExecutor,
+				&workloadPolicySQLExecutor{
+					exec: func(
+						ctx context.Context,
+						sql string,
+						opts executor.Options,
+					) (executor.Result, error) {
+						require.True(t, workloadPolicyBypassed(ctx))
+						if strings.Contains(sql, "from mo_catalog.mo_account") {
+							accountReads++
+							require.Equal(t, uint32(sysAccountID), opts.AccountID())
+							return accountResult.GetResult(), nil
+						}
+						policyReads++
+						require.Equal(t, accountID, opts.AccountID())
+						return policyResult.GetResult(), nil
+					},
+				},
+			)
+
+			ctx := defines.AttachAccountId(context.Background(), accountID)
+			first, err := newIe(service).newCmdSession(
+				ctx,
+				ie.NewOptsBuilder().Finish(),
+			)
+			require.NoError(t, err)
+			require.False(t, first.GetIsInternal())
+			policy := queryWorkloadPolicySnapshotAt(ctx, first)
+			require.Empty(t, policy.InvalidReason)
+			resolved := schedule.ResolveWorkloadPolicy(
+				schedule.WorkloadDescriptor{
+					Class:    schedule.WorkloadAP,
+					ExecKind: schedule.QueryExecAPMultiCN,
+					Tenant:   queryWorkloadPolicyTenantName(first),
+				},
+				policy,
+			)
+			require.True(t, resolved.Applied)
+			require.Equal(t, "task-ap", resolved.Pool.Identity)
+			require.Equal(t, "tenant-92", resolved.Pool.Labels["account"])
+			require.Empty(t, first.GetTenantInfo().GetTenant(),
+				"account-bound internal execution must not fabricate authentication")
+			require.Equal(t, "tenant-92", queryWorkloadPolicyTenantName(first))
+			first.Close()
+			require.Equal(t, 1, policyReads)
+			require.Equal(t, 1, accountReads)
+
+			for range 10 {
+				next, err := newIe(service).newCmdSession(
+					ctx,
+					ie.NewOptsBuilder().Finish(),
+				)
+				require.NoError(t, err)
+				require.Equal(
+					t,
+					"task-ap",
+					queryWorkloadPolicySnapshotAt(ctx, next).
+						Rules[schedule.WorkloadAP].
+						PoolIdentity,
+				)
+				require.Equal(t, "tenant-92", queryWorkloadPolicyTenantName(next))
+				next.Close()
+			}
+			require.Equal(t, 1, policyReads,
+				"fresh idle account state must eliminate per-statement catalog reads")
+			require.Equal(t, 1, accountReads,
+				"routing identity must survive sequential internal sessions")
+		},
+	)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestInternalExecutorReusesEmptyAccountWorkloadPolicy(t *testing.T) {
+	const (
+		service   = "empty-internal-executor-workload-policy-test"
+		accountID = uint32(93)
+	)
+	mp := mpool.MustNewZero()
+	emptyPolicyResult := executor.NewMemResult(
+		[]types.Type{
+			types.T_text.ToType(),
+			types.T_uint64.ToType(),
+		},
+		mp,
+	)
+
+	runtime.RunTest(
+		service,
+		func(rt runtime.Runtime) {
+			defer GWorkloadPolicyManager.Remove(accountID)
+			InitServerLevelVars(service)
+			setPu(service, config.NewParameterUnit(
+				&config.FrontendParameters{},
+				nil,
+				nil,
+				nil,
+			))
+			var policyReads int
+			rt.SetGlobalVariables(
+				runtime.InternalSQLExecutor,
+				&workloadPolicySQLExecutor{
+					exec: func(
+						ctx context.Context,
+						sql string,
+						opts executor.Options,
+					) (executor.Result, error) {
+						require.True(t, workloadPolicyBypassed(ctx))
+						require.Contains(t, sql, "mo_query_workload_policy")
+						require.NotContains(t, sql, "mo_account")
+						require.Equal(t, accountID, opts.AccountID())
+						policyReads++
+						return emptyPolicyResult.GetResult(), nil
+					},
+				},
+			)
+
+			ctx := defines.AttachAccountId(context.Background(), accountID)
+			for range 10 {
+				sess, err := newIe(service).newCmdSession(
+					ctx,
+					ie.NewOptsBuilder().Finish(),
+				)
+				require.NoError(t, err)
+				require.False(t, queryWorkloadPolicySnapshotAt(ctx, sess).Configured())
+				sess.Close()
+			}
+			require.Equal(t, 1, policyReads,
+				"an authoritative empty snapshot must be reusable too")
+		},
+	)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestIeProto(t *testing.T) {
@@ -159,7 +523,9 @@ func Test_internalProtocol_Write(t *testing.T) {
 	assert.Nil(t, ip.WriteOK(1, 1, 0, 0, ""))
 	assert.Nil(t, ip.WriteEOFOrOK(0, 1))
 
-	ses := executorVar.newCmdSession(ctx, ie.NewOptsBuilder().Finish())
+	ses, err := executorVar.newCmdSession(ctx, ie.NewOptsBuilder().Finish())
+	require.NoError(t, err)
+	defer ses.Close()
 	col1 := &MysqlColumn{}
 	col1.SetName("col1")
 	col1.SetColumnType(defines.MYSQL_TYPE_LONG)
@@ -187,7 +553,7 @@ func Test_internalProtocol_Write(t *testing.T) {
 
 	// ======================= main ===================
 	ip.Reset(ses)
-	err := ip.Write(execCtx, nil, batch1)
+	err = ip.Write(execCtx, nil, batch1)
 	require.NoError(t, err)
 	require.Equal(t, 1, int(ip.result.affectedRows))
 	require.Equal(t, 1, len(ip.result.resultSet.Data))

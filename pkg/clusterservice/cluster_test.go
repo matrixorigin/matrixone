@@ -148,6 +148,129 @@ func TestClusterForceRefresh(t *testing.T) {
 		})
 }
 
+func TestLocalCNStateChangeRunsBeforeSnapshotPublication(t *testing.T) {
+	c := &cluster{
+		serviceID: "cn-local",
+		readyC:    make(chan struct{}),
+	}
+	c.services.Store(&services{cn: []metadata.CNService{{
+		ServiceID: "cn-local",
+		WorkState: metadata.WorkState_Working,
+	}}})
+	c.ready.Store(true)
+
+	var stateCallbacks int
+	var placementCallbacks int
+	var observed metadata.WorkState
+	var notified metadata.WorkState
+	c.localCNStateChange = func(state metadata.WorkState) {
+		stateCallbacks++
+		notified = state
+		observed, _ = findCNWorkState("cn-local", c.services.Load())
+	}
+	c.cnPlacementChange = func() {
+		placementCallbacks++
+	}
+
+	c.UpdateCN(metadata.CNService{
+		ServiceID: "cn-local",
+		WorkState: metadata.WorkState_Draining,
+	})
+	require.Equal(t, 1, stateCallbacks)
+	require.Equal(t, metadata.WorkState_Draining, notified)
+	require.Equal(t, metadata.WorkState_Working, observed,
+		"cache invalidation must run before the CN becomes draining")
+	require.Equal(t, 2, placementCallbacks)
+
+	c.UpdateCN(metadata.CNService{
+		ServiceID: "cn-local",
+		WorkState: metadata.WorkState_Working,
+	})
+	require.Equal(t, 2, stateCallbacks)
+	require.Equal(t, metadata.WorkState_Working, notified)
+	require.Equal(t, metadata.WorkState_Draining, observed,
+		"cache invalidation must run before the CN becomes schedulable again")
+	require.Equal(t, 4, placementCallbacks)
+
+	c.UpdateCN(metadata.CNService{
+		ServiceID: "cn-local",
+		WorkState: metadata.WorkState_Working,
+		Labels: map[string]metadata.LabelList{
+			"role": {Labels: []string{"tp"}},
+		},
+	})
+	require.Equal(t, 2, stateCallbacks,
+		"non-work-state metadata must not invalidate policy caches")
+	require.Equal(t, 6, placementCallbacks,
+		"label changes must invalidate materialized prepared placements")
+
+	c.UpdateCN(metadata.CNService{
+		ServiceID: "cn-local",
+		WorkState: metadata.WorkState_Working,
+		Labels: map[string]metadata.LabelList{
+			"role": {Labels: []string{"tp"}},
+		},
+	})
+	require.Equal(t, 2, stateCallbacks)
+	require.Equal(t, 6, placementCallbacks,
+		"identical metadata must not advance placement generation")
+
+	c.UpdateCN(metadata.CNService{
+		ServiceID:    "cn-local",
+		QueryAddress: "new-query-address",
+		WorkState:    metadata.WorkState_Working,
+		Labels: map[string]metadata.LabelList{
+			"role": {Labels: []string{"tp"}},
+		},
+	})
+	require.Equal(t, 2, stateCallbacks)
+	require.Equal(t, 6, placementCallbacks,
+		"metadata outside query placement must not rebuild prepared compiles")
+}
+
+func TestInitialLocalCNStateIsPublishedToCallbacks(t *testing.T) {
+	t.Run("present and draining", func(t *testing.T) {
+		c := &cluster{serviceID: "cn-local"}
+		c.services.Store(&services{})
+
+		var states []metadata.WorkState
+		var placementCallbacks int
+		c.localCNStateChange = func(state metadata.WorkState) {
+			states = append(states, state)
+		}
+		c.cnPlacementChange = func() {
+			placementCallbacks++
+		}
+
+		c.storeServices(&services{cn: []metadata.CNService{{
+			ServiceID: "cn-local",
+			WorkState: metadata.WorkState_Draining,
+		}}})
+		require.Equal(t, []metadata.WorkState{
+			metadata.WorkState_Draining,
+		}, states)
+		require.Equal(t, 2, placementCallbacks)
+	})
+
+	t.Run("absent means drained", func(t *testing.T) {
+		c := &cluster{serviceID: "cn-local"}
+		c.services.Store(&services{})
+
+		var states []metadata.WorkState
+		c.localCNStateChange = func(state metadata.WorkState) {
+			states = append(states, state)
+		}
+
+		c.storeServices(&services{cn: []metadata.CNService{{
+			ServiceID: "cn-remote",
+			WorkState: metadata.WorkState_Working,
+		}}})
+		require.Equal(t, []metadata.WorkState{
+			metadata.WorkState_Drained,
+		}, states)
+	})
+}
+
 func TestClusterRefreshReportsFailureAndPreservesSnapshot(t *testing.T) {
 	runClusterTest(
 		time.Hour,

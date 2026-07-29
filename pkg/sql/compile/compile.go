@@ -308,6 +308,10 @@ func (c *Compile) clear() {
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
 	c.querySchedulingIntent = schedule.SchedulingIntent{}
+	c.querySelectionKey = ""
+	c.workloadPolicySet = schedule.WorkloadPolicySet{}
+	c.workloadClassHint = ""
+	c.workloadPlacementGen = 0
 	c.schedulingTrace = nil
 	c.schedulingAttempt = 0
 	c.stmt = nil
@@ -955,6 +959,11 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}
 
 	ncpu := int32(c.ncpu)
+	if c.queryPlacement.WorkloadPolicy.Applied &&
+		c.queryPlacement.WorkloadPolicy.Routing == schedule.WorkloadRoutingSingle &&
+		len(c.cnList) > 0 {
+		ncpu = normalizeMcpuForPlan(c.cnList[0].Mcpu)
+	}
 	if qry.MaxDop > 0 {
 		ncpu = min(ncpu, int32(qry.MaxDop))
 	}
@@ -1008,7 +1017,11 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 		for _, s := range n.SourceStep {
 			var edge *process.PipelineEdge
 			if c.anal.qry.LoadTag {
-				edge = process.NewPipelineEdge(int(c.ncpu), 0)
+				edgeCPU := c.ncpu
+				if c.queryPlacement.WorkloadPolicy.Applied {
+					edgeCPU = c.executionNodeCPU(getEngineNode(c))
+				}
+				edge = process.NewPipelineEdge(edgeCPU, 0)
 			} else {
 				edge = process.NewPipelineEdge(1, 0)
 			}
@@ -1044,7 +1057,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		return ss, nil
 	default:
 		var rs *Scope
-		if c.IsSingleScope(ss) {
+		if c.IsSingleScope(ss) && !c.resultScopeRunsOffIngress(ss[0]) {
 			rs = ss[0]
 		} else {
 			ss = c.mergeShuffleScopesIfNeeded(ss, false)
@@ -1063,6 +1076,16 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		)
 		return []*Scope{rs}, nil
 	}
+}
+
+// resultScopeRunsOffIngress reports whether the client-facing Output operator
+// would otherwise be attached to a scope that must be encoded and executed by
+// another CN. Output owns a local callback and is not part of the remote
+// pipeline protocol, so even one remote producer needs a local merge root.
+func (c *Compile) resultScopeRunsOffIngress(scope *Scope) bool {
+	return scope != nil &&
+		scope.Magic == Remote &&
+		!sameExecutionNode(scope.NodeInfo, getIngressEngineNode(c))
 }
 
 func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.Node) ([]*Scope, error) {
@@ -1535,15 +1558,66 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	return ds
 }
 
+func (c *Compile) workloadTargetNode() (engine.Node, bool) {
+	if !c.queryPlacement.WorkloadPolicy.Applied || len(c.cnList) == 0 {
+		return engine.Node{}, false
+	}
+	return c.cnList[0], true
+}
+
+// singleSourceExecutionNode chooses the worker for a physical source that is
+// not distributed across the whole query-worker set. Once a workload policy
+// has resolved an authorized pool, such a source must stay on one of those
+// workers even when the query-level routing mode is multi-worker. The first
+// scheduled worker is deterministic for the statement and keeps the source
+// single-owner without falling back to an out-of-pool ingress CN.
+func (c *Compile) singleSourceExecutionNode() engine.Node {
+	if node, ok := c.workloadTargetNode(); ok {
+		return node
+	}
+	return getEngineNode(c)
+}
+
+func (c *Compile) constructWorkloadScopeForExternal(
+	legacyAddress string,
+	parallel bool,
+) *Scope {
+	if c.queryPlacement.WorkloadPolicy.Applied {
+		return c.constructScopeForExternalNode(
+			c.singleSourceExecutionNode(),
+			parallel,
+		)
+	}
+	return c.constructScopeForExternal(legacyAddress, parallel)
+}
+
 func (c *Compile) constructScopeForExternalNode(node engine.Node, parallel bool) *Scope {
 	scope := c.constructScopeForExternal(node.Addr, parallel)
-	scope.NodeInfo.Id = node.Id
-	scope.NodeInfo.WorkState = node.WorkState
+	scope.NodeInfo = scopeNodeWithMcpu(node, node.Mcpu)
+	if !parallel {
+		scope.NodeInfo.Mcpu = 1
+	}
+	c.markScopeRemoteWhenNeeded(scope)
 	return scope
+}
+
+func (c *Compile) markScopeRemoteWhenNeeded(scope *Scope) {
+	if scope == nil {
+		return
+	}
+	// A scope assigned outside the ingress CN must cross the CN boundary even
+	// when it has only one local pipeline. Execution identity, rather than
+	// local parallelism, decides whether the pipeline must be remotely run.
+	if !sameExecutionNode(scope.NodeInfo, getIngressEngineNode(c)) {
+		scope.Magic = Remote
+	}
 }
 
 func (c *Compile) constructLoadMergeScope() *Scope {
 	ds := c.newEmptyMergeScope()
+	if node, ok := c.workloadTargetNode(); ok {
+		ds.NodeInfo = scopeNodeWithMcpu(node, 1)
+	}
 	ds.Proc = c.proc.NewNoContextChildProc(1)
 	ds.Proc.Base.LoadTag = true
 	arg := merge.NewArgument()
@@ -1555,6 +1629,25 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 }
 
 func (c *Compile) compileSourceScan(node *plan.Node) ([]*Scope, error) {
+	return c.compileSourceScanWithSizeLoader(
+		node,
+		func(
+			ctx context.Context,
+			configs map[string]interface{},
+		) (int64, error) {
+			return mokafka.GetStreamCurrentSize(
+				ctx,
+				configs,
+				mokafka.NewKafkaAdapter,
+			)
+		},
+	)
+}
+
+func (c *Compile) compileSourceScanWithSizeLoader(
+	node *plan.Node,
+	loadSize func(context.Context, map[string]interface{}) (int64, error),
+) ([]*Scope, error) {
 	_, span := trace.Start(c.proc.Ctx, "compileSourceScan")
 	defer span.End()
 	configs := make(map[string]interface{})
@@ -1567,18 +1660,28 @@ func (c *Compile) compileSourceScan(node *plan.Node) ([]*Scope, error) {
 		}
 	}
 
-	end, err := mokafka.GetStreamCurrentSize(c.proc.Ctx, configs, mokafka.NewKafkaAdapter)
+	end, err := loadSize(c.proc.Ctx, configs)
 	if err != nil {
 		return nil, err
 	}
-	ps := calculatePartitions(0, end, int64(c.ncpu))
+	sourceNode := c.singleSourceExecutionNode()
+	parallelism := c.ncpu
+	if c.queryPlacement.WorkloadPolicy.Applied {
+		parallelism = c.executionNodeCPU(sourceNode)
+	}
+	ps := calculatePartitions(0, end, int64(parallelism))
 
 	ss := make([]*Scope, len(ps))
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		ss[i] = newScope(Merge)
-		ss[i].NodeInfo = getEngineNode(c)
+		ss[i].NodeInfo = sourceNode
+		if c.queryPlacement.WorkloadPolicy.Applied {
+			// Each partition is already represented by its own scope.
+			ss[i].NodeInfo.Mcpu = 1
+		}
+		c.markScopeRemoteWhenNeeded(ss[i])
 		ss[i].Proc = c.proc.NewNoContextChildProc(0)
 		arg := constructStream(node, ps[i])
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -1963,8 +2066,9 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 
 	if len(fileList) == 0 {
 		ret := newScope(Merge)
-		ret.NodeInfo = getEngineNode(c)
+		ret.NodeInfo = c.singleSourceExecutionNode()
 		ret.NodeInfo.Mcpu = 1
+		c.markScopeRemoteWhenNeeded(ret)
 		ret.DataSource = &Source{isConst: true, node: node}
 
 		currentFirstFlag := c.anal.isFirst
@@ -2037,7 +2141,7 @@ func (c *Compile) getLoadWriteS3ParallelSize(node *plan.Node, cpuNum int) int {
 
 // load data inline goes here, should always be single parallel
 func (c *Compile) compileExternValueScan(node *plan.Node, param *tree.ExternParam, strictSqlMode bool) ([]*Scope, error) {
-	s := c.constructScopeForExternal(c.addr, false)
+	s := c.constructWorkloadScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
 	op.SetIdx(c.anal.curNodeIdx)
@@ -2058,7 +2162,7 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 		fileOffsetTmp[i].Offset = make([]int64, 0)
 		fileOffsetTmp[i].Offset = append(fileOffsetTmp[i].Offset, []int64{0, -1}...)
 	}
-	scope := c.constructScopeForExternal(c.addr, false)
+	scope := c.constructWorkloadScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
 	extern := constructExternal(node, param, c.proc.Ctx, fileList, fileSize, fileOffsetTmp, strictSqlMode)
 	parallelLoad := true
@@ -2071,7 +2175,11 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 	scope.setRootOperator(extern)
 	c.anal.isFirst = false
 
-	mcpu := c.getLoadWriteS3ParallelSize(node, c.ncpu) // dop of insert scopes
+	targetCPU := c.ncpu
+	if target, ok := c.workloadTargetNode(); ok {
+		targetCPU = normalizeMcpu(target.Mcpu)
+	}
+	mcpu := c.getLoadWriteS3ParallelSize(node, targetCPU) // dop of insert scopes
 	if mcpu == 1 {
 		return []*Scope{scope}, nil
 	}
@@ -2212,8 +2320,12 @@ func (c *Compile) compileExternScanIcebergFileFanout(
 	shardParam := new(tree.ExternParam)
 	*shardParam = *param
 	shardParam.Parallel = false
+	fallbackNode := scopeNodeWithMcpu(getIngressEngineNode(c), 1)
+	if node, ok := c.workloadTargetNode(); ok {
+		fallbackNode = scopeNodeWithMcpu(node, 1)
+	}
 	return c.compileExternScanIcebergShard(node, shardParam, runtime, icebergDataFileScopeShard{
-		node:      engine.Node{Addr: c.addr, Mcpu: 1},
+		node:      fallbackNode,
 		fileList:  fileList,
 		fileSize:  fileSize,
 		dataTasks: runtime.dataTasks,
@@ -2228,7 +2340,7 @@ func (c *Compile) compileExternScanIcebergShard(
 	strictSqlMode bool,
 ) ([]*Scope, error) {
 	ss := make([]*Scope, 1)
-	ss[0] = c.constructScopeForExternal(shard.node.Addr, param.Parallel)
+	ss[0] = c.constructScopeForExternalNode(shard.node, param.Parallel)
 	ss[0].NodeInfo.Mcpu = 1
 	ss[0].IsLoad = true
 
@@ -2483,7 +2595,8 @@ func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int)
 		return nil
 	}
 	stageNodes := c.queryWorkerStageNodes()
-	if param.ScanType == tree.S3 && len(stageNodes) > 0 {
+	if (param.ScanType == tree.S3 || c.queryPlacement.WorkloadPolicy.Applied) &&
+		len(stageNodes) > 0 {
 		nodes := make([]engine.Node, 0, fileCount)
 		for _, node := range stageNodes {
 			mcpu := node.Mcpu
@@ -3040,7 +3153,7 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 
 func (c *Compile) compileExternScanSerialReadWrite(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	ss := make([]*Scope, 1)
-	ss[0] = c.constructScopeForExternal(c.addr, param.Parallel)
+	ss[0] = c.constructWorkloadScopeForExternal(c.addr, param.Parallel)
 
 	currentFirstFlag := c.anal.isFirst
 	ss[0].IsLoad = true
@@ -3150,9 +3263,10 @@ func (c *Compile) generateSeriesParallel(proc *process.Process, node *plan.Node,
 func (c *Compile) compileSingleTableFunction(node *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	ds := newScope(Merge)
-	ds.NodeInfo = getEngineNode(c)
+	ds.NodeInfo = c.singleSourceExecutionNode()
 	ds.DataSource = &Source{isConst: true, node: node}
-	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	ds.NodeInfo.Mcpu = 1
+	c.markScopeRemoteWhenNeeded(ds)
 	ds.Proc = c.proc.NewNoContextChildProc(0)
 	op := constructTableFunction(node, c.pn.GetQuery())
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -3178,11 +3292,17 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 		op.CanOpt = canOpt
 		op.GenerateSeriesCtrNumState(offset[0][0], offset[len(offset)-1][1], step, offset[0][0])
 		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
+		startOffset += currMcpu
 
 		ds.NodeInfo = getEngineNode(c)
 		ds.DataSource = &Source{isConst: true, node: node}
 
-		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: currMcpu}
+		if c.queryPlacement.WorkloadPolicy.Applied {
+			ds.NodeInfo = scopeNodeWithMcpu(c.cnList[i], currMcpu)
+		} else {
+			ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: currMcpu}
+		}
+		c.markScopeRemoteWhenNeeded(ds)
 		ds.Proc = c.proc.NewNoContextChildProc(0)
 		parallelSize -= currMcpu
 		ds.IsTbFunc = true
@@ -3296,9 +3416,10 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 
 func (c *Compile) compileValueScan(node *plan.Node) ([]*Scope, error) {
 	ds := newScope(Merge)
-	ds.NodeInfo = getEngineNode(c)
+	ds.NodeInfo = c.singleSourceExecutionNode()
 	ds.DataSource = &Source{isConst: true, node: node}
-	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	ds.NodeInfo.Mcpu = 1
+	c.markScopeRemoteWhenNeeded(ds)
 	ds.Proc = c.proc.NewNoContextChildProc(0)
 
 	currentFirstFlag := c.anal.isFirst
@@ -4195,6 +4316,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
+			executionCPU := c.executionNodeCPU(rs[i].NodeInfo)
 			op := constructProductL2(node, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
@@ -4202,8 +4324,8 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 				//product_l2 join is very time_consuming, increase the parallelism
 				rs[i].NodeInfo.Mcpu *= 8
 			}
-			if rs[i].NodeInfo.Mcpu > c.ncpu {
-				rs[i].NodeInfo.Mcpu = c.ncpu
+			if rs[i].NodeInfo.Mcpu > executionCPU {
+				rs[i].NodeInfo.Mcpu = executionCPU
 			}
 		}
 		c.anal.isFirst = false
@@ -4999,6 +5121,9 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		return nil, err
 	} else if ok {
 		currentFirstFlag := c.anal.isFirst
+		// Keep any same-worker local dispatch and all of its sibling receivers
+		// inside one remote send tree before the coordinator-owned writer merge.
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		// A single Iceberg writer is a correctness boundary, not only a layout
 		// optimization. The coordinator owns one commit generation and publishes
 		// only after its input reaches terminal state; splitting it across remote
@@ -5047,6 +5172,7 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 				}
 			}
 			if len(remoteSS) > 0 {
+				remoteSS = c.groupShuffleBucketsByCNIfNeeded(remoteSS)
 				mergedRemote := c.newMergeScope(remoteSS)
 				localSS = append(localSS, mergedRemote)
 			}
@@ -5059,6 +5185,11 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			}
 			insertArg.GetOperatorBase().SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			ss[i].setRootOperator(insertArg)
+		}
+		if !localFileStage {
+			// Each scope retains its own writer, but same-worker siblings that
+			// communicate through local registers must be transported together.
+			ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		}
 		c.anal.isFirst = false
 		return ss, nil
@@ -5213,7 +5344,10 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {
 		if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
-			mcpu := c.getParallelSizeForExternalScan(node, c.ncpu)
+			mcpu := c.getParallelSizeForExternalScan(
+				node,
+				c.executionNodeCPU(ss[0].NodeInfo),
+			)
 			if mcpu > 1 {
 				oldScope := ss[0]
 
@@ -5813,9 +5947,54 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 	return false
 }
 
-// groupShuffleBucketsByCNIfNeeded groups the same-CN shuffle buckets (together with the
-// shuffle dispatch nested under them) into one per-CN send unit, so a cross-CN shuffle
-// dispatch always travels in the same pipeline tree as all of its dop local buckets.
+// scopeTreeHasOutOfTreeLocalDispatch reports whether a non-root scope in the
+// tree dispatches to a WaitRegister owned by a sibling tree. Such a tree cannot
+// be serialized and executed independently at a remote CN; all colocated
+// siblings participating in that local dispatch must travel as one send unit.
+//
+// The root operator is intentionally excluded because it is the one operator a
+// standalone remote pipeline may use to send data outside its tree.
+func scopeTreeHasOutOfTreeLocalDispatch(s *Scope) bool {
+	if s == nil {
+		return false
+	}
+	regs := make(map[*process.WaitRegister]struct{})
+	toScan := []*Scope{s}
+	for len(toScan) > 0 {
+		node := toScan[len(toScan)-1]
+		toScan = toScan[:len(toScan)-1]
+		if node == nil {
+			continue
+		}
+		for _, reg := range node.Proc.Reg.MergeReceivers {
+			regs[reg] = struct{}{}
+		}
+		toScan = append(toScan, node.PreScopes...)
+	}
+
+	toScan = append(toScan[:0], s.PreScopes...)
+	for len(toScan) > 0 {
+		node := toScan[len(toScan)-1]
+		toScan = toScan[:len(toScan)-1]
+		if node == nil {
+			continue
+		}
+		if d, ok := node.RootOp.(*dispatch.Dispatch); ok {
+			for _, reg := range d.LocalRegs {
+				if _, owned := regs[reg]; !owned {
+					return true
+				}
+			}
+		}
+		toScan = append(toScan, node.PreScopes...)
+	}
+	return false
+}
+
+// groupShuffleBucketsByCNIfNeeded groups scopes that must travel as one
+// independently executable per-CN send unit. This includes the same-CN shuffle
+// buckets that carry a cross-CN dispatch and any remote stage whose local
+// dispatch connects multiple sibling scopes.
 //
 // Background (issue #24919): newShuffleJoinScopeList leaves a CN's dop join buckets in
 // separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
@@ -5827,8 +6006,8 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // and the remote receiver/merge could wait forever. Regrouping by CN keeps all of a CN's
 // buckets in one tree, so the whole group executes at the intended remote CN.
 //
-// It is a no-op unless we are multi-CN and ss actually carries a cross-CN shuffle dispatch,
-// so single-CN and non-shuffle inserts are completely unaffected.
+// It is otherwise a no-op, so legacy single-CN and non-shuffle inserts are
+// unaffected.
 //
 // Operator-chain note: callers attach their own root operator to each bucket first (e.g.
 // the insert / multiUpdate operator). mergeScopesByCN (via newMergeScopeByCN ->
@@ -5836,6 +6015,9 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // semantics, so the caller's operator is preserved as the connector's child, not replaced.
 func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
 	stageNodes := shuffleBucketStageNodes(ss)
+	if c.shouldGroupColocatedRemoteWorkloadScopes(ss, stageNodes) {
+		return c.mergeScopesByStageNodes(ss, stageNodes)
+	}
 	if len(stageNodes) <= 1 || len(ss) <= len(stageNodes) {
 		return ss
 	}
@@ -5870,6 +6052,28 @@ func shuffleBucketStageNodes(ss []*Scope) engine.Nodes {
 		}
 	}
 	return stageNodes
+}
+
+func (c *Compile) shouldGroupColocatedRemoteWorkloadScopes(
+	scopes []*Scope,
+	stageNodes engine.Nodes,
+) bool {
+	if len(stageNodes) != 1 ||
+		len(scopes) <= 1 ||
+		sameExecutionNode(stageNodes[0], getIngressEngineNode(c)) {
+		return false
+	}
+	for _, scope := range scopes {
+		if scope == nil || !sameExecutionNode(scope.NodeInfo, stageNodes[0]) {
+			return false
+		}
+	}
+	for _, scope := range scopes {
+		if scopeTreeHasOutOfTreeLocalDispatch(scope) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compile) mergeScopesByStageNodes(ss []*Scope, stageNodes engine.Nodes) []*Scope {
@@ -6847,14 +7051,43 @@ func runDetectFkReferToDBSql(c *Compile, sql string) error {
 }
 
 func getEngineNode(c *Compile) engine.Node {
-	// getEngineNode only describes the local execution identity and capacity.
+	// A policy-routed single-worker query builds its scopes on the selected
+	// target. The ingress identity remains separately available through
+	// getIngressEngineNode for placement, logging, and route ownership.
+	if c.queryPlacement.WorkloadPolicy.Applied &&
+		c.queryPlacement.WorkloadPolicy.Routing != schedule.WorkloadRoutingMulti {
+		if node, ok := c.workloadTargetNode(); ok {
+			if c.IsTpQuery() {
+				node.Mcpu = 1
+			}
+			return node
+		}
+	}
+	return getIngressEngineNode(c)
+}
+
+func getIngressEngineNode(c *Compile) engine.Node {
 	// Runtime work state is intentionally left Unknown here; callers that make
-	// AP multi-CN placement decisions must enrich it from cluster metadata.
+	// placement decisions enrich it from cluster metadata.
 	if c.IsTpQuery() {
 		return engine.Node{Addr: c.addr, Mcpu: 1}
-	} else {
-		return engine.Node{Addr: c.addr, Mcpu: c.ncpu}
 	}
+	return engine.Node{Addr: c.addr, Mcpu: c.ncpu}
+}
+
+// executionNodeCPU returns the capacity advertised for the node that will
+// actually run a scope. It prevents a high-capacity ingress CN from inflating
+// parallelism on a smaller workload-policy target.
+func (c *Compile) executionNodeCPU(node engine.Node) int {
+	for _, worker := range c.cnList {
+		if sameExecutionNode(worker, node) {
+			return normalizeMcpu(worker.Mcpu)
+		}
+	}
+	if sameExecutionNode(node, getIngressEngineNode(c)) {
+		return normalizeMcpu(c.ncpu)
+	}
+	return normalizeMcpu(node.Mcpu)
 }
 
 func (c *Compile) setHaveDDL(haveDDL bool) {

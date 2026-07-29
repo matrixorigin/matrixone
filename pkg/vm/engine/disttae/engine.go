@@ -825,11 +825,34 @@ func (e *Engine) Nodes(
 }
 
 var _ engine.QueryCandidateDiscoverer = (*Engine)(nil)
+var _ engine.CurrentQueryCandidateDiscoverer = (*Engine)(nil)
 var _ engine.QueryCandidatePoolResolver = (*Engine)(nil)
 
 // DiscoverQueryCandidates reads a version-compatible CN inventory without
 // applying tenant or label policy.
 func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandidates, error) {
+	return e.discoverQueryCandidates(ctx, clusterservice.NewSelector())
+}
+
+// DiscoverCurrentQueryCandidate reads only the ingress CN metadata needed by
+// a local-routing workload policy.
+func (e *Engine) DiscoverCurrentQueryCandidate(
+	ctx context.Context,
+	serviceID string,
+) (engine.QueryCandidates, error) {
+	if serviceID == "" {
+		return nil, moerr.NewInvalidInput(ctx, "current CN service ID is empty")
+	}
+	return e.discoverQueryCandidates(
+		ctx,
+		clusterservice.NewServiceIDSelector(serviceID),
+	)
+}
+
+func (e *Engine) discoverQueryCandidates(
+	ctx context.Context,
+	selector clusterservice.Selector,
+) (engine.QueryCandidates, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementNodesHistogram.Observe(time.Since(start).Seconds())
@@ -850,7 +873,7 @@ func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandi
 	err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(
 		ctx,
 		cluster,
-		clusterservice.NewSelector(),
+		selector,
 		func(c metadata.CNService) bool {
 			if ctx.Err() != nil {
 				return false
@@ -900,7 +923,11 @@ func (e *Engine) ResolveQueryCandidatePool(
 	if !request.FallbackPolicy.Valid() {
 		return engine.ResolvedQueryPool{}, moerr.NewInvalidInput(ctx, "invalid query pool fallback policy")
 	}
-	if len(request.CNLabel) == 0 {
+	selectorLabels := request.TargetLabels
+	if selectorLabels == nil {
+		selectorLabels = request.CNLabel
+	}
+	if len(selectorLabels) == 0 {
 		if request.FallbackPolicy == engine.QueryPoolFallbackStrict {
 			identity := request.RequestedPool
 			if identity == "" {
@@ -922,7 +949,7 @@ func (e *Engine) ResolveQueryCandidatePool(
 		}, err
 	}
 
-	labels, err := cloneStringMap(ctx, request.CNLabel)
+	labels, err := cloneStringMap(ctx, selectorLabels)
 	if err != nil {
 		return engine.ResolvedQueryPool{}, err
 	}

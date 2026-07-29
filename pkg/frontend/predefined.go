@@ -128,6 +128,16 @@ var (
 				primary key(configuration_id)
 			)`
 
+	MoCatalogMoQueryWorkloadPolicyDDL = fmt.Sprintf(`create table %s.%s (
+				account_id int unsigned not null,
+				policy text not null,
+				revision bigint unsigned not null,
+				updated_at timestamp not null default utc_timestamp on update utc_timestamp,
+				updated_by_account_id int unsigned not null,
+				updated_by_user_id int unsigned not null,
+				primary key(account_id)
+			)`, catalog.MO_CATALOG, catalog.MO_QUERY_WORKLOAD_POLICY)
+
 	MoCatalogMoSnapshotsDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
 			snapshot_id uuid unique key,
 			sname varchar(64) primary key,

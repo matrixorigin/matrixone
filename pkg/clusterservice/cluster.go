@@ -187,6 +187,26 @@ func WithDisableRefresh() Option {
 	}
 }
 
+// WithLocalCNStateChange registers a synchronous, non-blocking callback for
+// changes to this process's CN membership or work state. The callback receives
+// Drained when the local CN disappears and runs before the new snapshot is
+// visible.
+func WithLocalCNStateChange(callback func(metadata.WorkState)) Option {
+	return func(c *cluster) {
+		c.localCNStateChange = callback
+	}
+}
+
+// WithCNPlacementChange registers a synchronous, non-blocking callback for CN
+// metadata changes that can invalidate a materialized query placement. It runs
+// immediately before and after publication, forming an odd/even generation
+// fence for consumers that cache placement decisions.
+func WithCNPlacementChange(callback func()) Option {
+	return func(c *cluster) {
+		c.cnPlacementChange = callback
+	}
+}
+
 type cluster struct {
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
@@ -207,10 +227,13 @@ type cluster struct {
 	// Correctness: readyOnce.Do guarantees that ready.Store(true) happens before
 	// close(readyC), so if readyC is closed (i.e., <-readyC returns), ready is
 	// guaranteed to be true. If ready.Load() returns false, we fall back to channel wait.
-	ready       atomic.Bool
-	services    atomic.Pointer[services]
-	regexpCache *regexpCache
-	options     struct {
+	ready              atomic.Bool
+	services           atomic.Pointer[services]
+	regexpCache        *regexpCache
+	serviceID          string
+	localCNStateChange func(metadata.WorkState)
+	cnPlacementChange  func()
+	options            struct {
 		disableRefresh bool
 	}
 }
@@ -230,6 +253,7 @@ func NewMOCluster(
 		logger:          logger,
 		stopper:         stopper.NewStopper("mo-cluster", stopper.WithLogger(logger.RawLogger())),
 		client:          client,
+		serviceID:       service,
 		forceRefreshC:   make(chan struct{}, 1),
 		readyC:          make(chan struct{}),
 		refreshInterval: refreshInterval,
@@ -420,13 +444,13 @@ func (c *cluster) RemoveCN(id string) {
 		}
 	}
 	new.cn = values
-	c.services.Store(new)
+	c.storeServices(new)
 }
 
 func (c *cluster) AddCN(s metadata.CNService) {
 	new := c.copyServices()
 	new.cn = append(new.cn, s)
-	c.services.Store(new)
+	c.storeServices(new)
 }
 
 func (c *cluster) UpdateCN(s metadata.CNService) {
@@ -437,7 +461,7 @@ func (c *cluster) UpdateCN(s metadata.CNService) {
 			break
 		}
 	}
-	c.services.Store(new)
+	c.storeServices(new)
 }
 
 // waitReady blocks until the cluster has completed its first refresh from HAKeeper
@@ -548,12 +572,103 @@ func (c *cluster) refreshWithContext(ctx context.Context) error {
 	if len(new.tn) > 1 {
 		new.tn = new.tn[:1]
 	}
-	c.services.Store(new)
+	c.storeServices(new)
 	c.readyOnce.Do(func() {
 		c.ready.Store(true)
 		close(c.readyC)
 	})
 	return nil
+}
+
+func (c *cluster) storeServices(new *services) {
+	old := c.services.Load()
+	initialSnapshot := !c.ready.Load()
+	placementChanged := cnPlacementChanged(old, new)
+	if placementChanged && c.cnPlacementChange != nil {
+		c.cnPlacementChange()
+	}
+	if newState, changed := localCNStateTransition(c.serviceID, old, new); changed && c.localCNStateChange != nil {
+		c.localCNStateChange(newState)
+	} else if initialSnapshot && c.serviceID != "" && c.localCNStateChange != nil {
+		c.localCNStateChange(metadata.WorkState_Drained)
+	}
+	c.services.Store(new)
+	if placementChanged && c.cnPlacementChange != nil {
+		c.cnPlacementChange()
+	}
+}
+
+func localCNStateTransition(
+	serviceID string,
+	old *services,
+	new *services,
+) (metadata.WorkState, bool) {
+	oldState, oldFound := findCNWorkState(serviceID, old)
+	newState, newFound := findCNWorkState(serviceID, new)
+	if oldFound == newFound && (!oldFound || oldState == newState) {
+		return newState, false
+	}
+	if !newFound {
+		newState = metadata.WorkState_Drained
+	}
+	return newState, true
+}
+
+func cnPlacementChanged(old *services, new *services) bool {
+	if old == nil || new == nil || len(old.cn) != len(new.cn) {
+		return old != new
+	}
+	oldByID := make(map[string]metadata.CNService, len(old.cn))
+	for _, cn := range old.cn {
+		oldByID[cn.ServiceID] = cn
+	}
+	for _, cn := range new.cn {
+		previous, ok := oldByID[cn.ServiceID]
+		if !ok || !sameCNPlacementMetadata(previous, cn) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameCNPlacementMetadata(left, right metadata.CNService) bool {
+	return left.ServiceID == right.ServiceID &&
+		left.PipelineServiceAddress == right.PipelineServiceAddress &&
+		left.WorkState == right.WorkState &&
+		left.CPUTotal == right.CPUTotal &&
+		left.MemTotal == right.MemTotal &&
+		sameCNLabels(left.Labels, right.Labels)
+}
+
+func sameCNLabels(
+	left map[string]metadata.LabelList,
+	right map[string]metadata.LabelList,
+) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftValues := range left {
+		rightValues, ok := right[key]
+		if !ok || !slices.Equal(leftValues.Labels, rightValues.Labels) {
+			return false
+		}
+	}
+	return true
+}
+
+func findCNWorkState(
+	serviceID string,
+	snapshot *services,
+) (metadata.WorkState, bool) {
+	if serviceID == "" || snapshot == nil {
+		return metadata.WorkState_Unknown, false
+	}
+	for _, cn := range snapshot.cn {
+		if cn.ServiceID == serviceID {
+			return cn.WorkState, true
+		}
+	}
+	return metadata.WorkState_Unknown, false
 }
 
 func (c *cluster) acquireRefresh(ctx context.Context) error {

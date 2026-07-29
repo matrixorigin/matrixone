@@ -310,11 +310,14 @@ func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
 
 func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) (err error) {
 	var sv *SystemVariables
-	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
+	tenantID := ses.GetTenantInfo().GetTenantID()
+	if sv, err = GSysVarsMgr.Get(tenantID, ses, ctx, bh); err != nil {
 		return
 	}
+	state := GWorkloadPolicyManager.acquire(tenantID)
+	state.rememberRoutingAccountName(ses.GetTenantInfo().GetTenant())
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
+	oldState := ses.workloadPolicy.Swap(state)
 	ses.gSysVars = sv
 	ses.sesSysVars = ses.gSysVars.Clone()
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
@@ -323,6 +326,29 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	if v := ses.sesSysVars.Get("enable_remap_hint"); v != nil {
 		if on, convErr := valueIsBoolTrue(v); convErr == nil {
 			ses.rewriteEnabled.Store(on)
+		}
+	}
+	ses.mu.Unlock()
+	GWorkloadPolicyManager.release(oldState)
+	if bh != nil {
+		tenantCtx := defines.AttachAccountId(ctx, tenantID)
+		if refreshErr := GWorkloadPolicyManager.refreshWith(
+			tenantCtx,
+			tenantID,
+			state,
+			func() (string, uint64, error) {
+				return loadWorkloadPolicyFromCatalogWithExec(
+					tenantCtx,
+					bh,
+					tenantID,
+				)
+			},
+		); refreshErr != nil {
+			ses.Warn(
+				ctx,
+				"failed to initialize query workload policy cache",
+				zap.Error(refreshErr),
+			)
 		}
 	}
 	return
@@ -896,7 +922,11 @@ func (ses *Session) Close() {
 	}
 
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
+	workloadPolicy := ses.workloadPolicy.Swap(nil)
+	defer func() {
+		ses.mu.Unlock()
+		GWorkloadPolicyManager.release(workloadPolicy)
+	}()
 	ses.feSessionImpl.Close()
 	ses.feSessionImpl.Clear()
 	ses.respr = nil
@@ -2100,6 +2130,16 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	ses.fromProxy = prev.fromProxy
 	ses.clientAddr = prev.clientAddr
 	ses.proxyAddr = prev.proxyAddr
+
+	// A reset replacement is a distinct Session and therefore needs its own
+	// counted reference. Reacquiring also fences a retired manager generation;
+	// copying the raw pointer would let closing prev retire policy ownership
+	// while the proxy continues to reuse the replacement session.
+	if prevState := workloadPolicyState(prev); prevState != nil {
+		state := GWorkloadPolicyManager.acquire(prevState.accountID)
+		replaced := ses.workloadPolicy.Swap(state)
+		GWorkloadPolicyManager.release(replaced)
+	}
 
 	// rollback the transactions in the old session.
 	rollbackCtx := prev.getCleanupContext()

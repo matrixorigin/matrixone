@@ -38,6 +38,51 @@ func TestDecideQueryPlacementKeepsLocalExecTypesLocal(t *testing.T) {
 	}
 }
 
+func TestSelectWorkerSubsetIgnoresInvalidPinnedWorker(t *testing.T) {
+	workers := Workers{
+		{ID: "cn-a", Addr: "a:6001", Mcpu: 4},
+		{ID: "cn-b", Addr: "b:6001", Mcpu: 4},
+		{ID: "cn-c", Addr: "c:6001", Mcpu: 4},
+	}
+	policy := WorkerSetPolicy{
+		Mode:         WorkerSetMax,
+		MaxWorkers:   2,
+		SelectionKey: "query-1",
+	}
+	want, reason, ok := selectWorkerSubset(policy, workers, nil)
+	require.True(t, ok)
+	require.Empty(t, reason)
+
+	for _, pinned := range []Worker{
+		{},
+		{ID: "missing", Addr: "missing:6001", Mcpu: 4},
+	} {
+		got, gotReason, gotOK := selectWorkerSubset(policy, workers, &pinned)
+		require.True(t, gotOK)
+		require.Empty(t, gotReason)
+		require.Equal(t, want, got)
+		require.NotContains(t, got, Worker{})
+	}
+}
+
+func TestSelectWorkerSubsetPinsResolvedCandidate(t *testing.T) {
+	workers := Workers{
+		{ID: "cn-a", Addr: "a:6001", Mcpu: 4},
+		{ID: "cn-b", Addr: "b:6001", Mcpu: 4},
+		{ID: "cn-c", Addr: "c:6001", Mcpu: 4},
+	}
+	pinned := Worker{ID: "cn-b", Addr: "stale-address:6001"}
+	selected, reason, ok := selectWorkerSubset(WorkerSetPolicy{
+		Mode:         WorkerSetMax,
+		MaxWorkers:   1,
+		SelectionKey: "query-1",
+	}, workers, &pinned)
+
+	require.True(t, ok)
+	require.Empty(t, reason)
+	require.Equal(t, Workers{workers[1]}, selected)
+}
+
 func TestDecideQueryPlacementRejectsInvalidCurrentCNPolicy(t *testing.T) {
 	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
 
@@ -337,6 +382,138 @@ func TestDecideLocalQueryPlacementPreservesRequestedPoolIdentity(t *testing.T) {
 	require.Equal(t, PoolResolutionUnspecified, decision.ResolvedPool.Resolution)
 }
 
+func TestDecidePolicyLocalPlacementEnforcesResolvedPoolMembership(t *testing.T) {
+	local := Worker{
+		ID:    "local",
+		Addr:  "local:6001",
+		Mcpu:  8,
+		State: WorkerStateWorking,
+	}
+	remote := Worker{
+		ID:    "remote",
+		Addr:  "remote:6001",
+		Mcpu:  16,
+		State: WorkerStateWorking,
+	}
+	policy := EffectiveWorkloadPolicy{
+		Applied: true,
+		Routing: WorkloadRoutingLocal,
+	}
+	tests := []struct {
+		name          string
+		current       Worker
+		candidates    Workers
+		emptyPolicy   EmptyWorkerPolicy
+		wantWorkers   Workers
+		wantDropped   DroppedWorkers
+		wantReason    string
+		wantEligible  int
+		wantSatisfied bool
+	}{
+		{
+			name:         "current CN identity is required",
+			candidates:   Workers{remote},
+			wantWorkers:  Workers{remote},
+			wantReason:   ReasonCurrentCNMissingIdentity,
+			wantEligible: 1,
+		},
+		{
+			name: "draining current CN cannot satisfy local routing",
+			current: Worker{
+				ID:    "local",
+				Addr:  "local:6001",
+				Mcpu:  8,
+				State: WorkerStateDraining,
+			},
+			candidates: Workers{
+				{
+					ID:    "local",
+					Addr:  "local:6001",
+					Mcpu:  8,
+					State: WorkerStateDraining,
+				},
+				remote,
+			},
+			wantWorkers: Workers{remote},
+			wantDropped: DroppedWorkers{{
+				Worker: Worker{
+					ID:    "local",
+					Addr:  "local:6001",
+					Mcpu:  8,
+					State: WorkerStateDraining,
+				},
+				Reason: ReasonDroppedDrainingCN,
+			}},
+			wantReason:   ReasonCurrentCNDraining,
+			wantEligible: 1,
+		},
+		{
+			name:          "empty pool allows explicit local fallback",
+			current:       local,
+			emptyPolicy:   EmptyWorkerLocalFallback,
+			wantWorkers:   Workers{local},
+			wantReason:    ReasonNoCandidateCN,
+			wantSatisfied: true,
+		},
+		{
+			name:         "empty pool fails when fallback is disabled",
+			current:      local,
+			emptyPolicy:  EmptyWorkerFail,
+			wantReason:   ReasonRequiredCurrentOutsidePool,
+			wantEligible: 0,
+		},
+		{
+			name:          "current CN in resolved pool is selected alone",
+			current:       local,
+			candidates:    Workers{remote, local},
+			wantWorkers:   Workers{local},
+			wantReason:    ReasonRequiredCurrentCN,
+			wantEligible:  2,
+			wantSatisfied: true,
+		},
+		{
+			name:    "current CN uses canonical ingress identity",
+			current: local,
+			candidates: Workers{{
+				ID:    local.ID,
+				Addr:  "advertised-local:6001",
+				Mcpu:  16,
+				State: WorkerStateWorking,
+			}},
+			wantWorkers:   Workers{local},
+			wantReason:    ReasonRequiredCurrentCN,
+			wantEligible:  1,
+			wantSatisfied: true,
+		},
+		{
+			name:         "current CN outside resolved pool is rejected",
+			current:      local,
+			candidates:   Workers{remote},
+			wantReason:   ReasonRequiredCurrentOutsidePool,
+			wantEligible: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestPolicy := policy
+			requestPolicy.Intent.EmptyWorkerPolicy = test.emptyPolicy
+			decision := DecideQueryPlacement(QueryRequest{
+				ExecKind:       QueryExecAPMultiCN,
+				CurrentCN:      test.current,
+				Candidates:     test.candidates,
+				Intent:         requestPolicy.Intent,
+				WorkloadPolicy: requestPolicy,
+			})
+
+			require.Equal(t, test.wantWorkers, decision.Workers)
+			require.Equal(t, test.wantDropped, decision.Dropped)
+			require.Equal(t, test.wantReason, decision.Reason)
+			require.Equal(t, test.wantEligible, decision.EligibleCount)
+			require.Equal(t, test.wantSatisfied, decision.Satisfied)
+		})
+	}
+}
+
 func TestDecideQueryPlacementFallsBackToLocalWhenCandidatesEmpty(t *testing.T) {
 	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
 
@@ -562,6 +739,53 @@ func TestDecideQueryPlacementKeepsPreferredCurrentCNFirstAndSortsTail(t *testing
 	require.Equal(t, Workers{candidates[0], candidates[2], candidates[1]}, decision.Workers)
 	require.Equal(t, ReasonPreferredCurrentCN, decision.Reason)
 	require.True(t, decision.Satisfied)
+}
+
+func TestDecideQueryPlacementPinsEligiblePreferredCurrentCNInCappedSubset(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
+	candidates := Workers{
+		local,
+		{ID: "remote-a", Addr: "a:6001", Mcpu: 16},
+		{ID: "remote-b", Addr: "b:6001", Mcpu: 16},
+	}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:        QueryExecAPMultiCN,
+		CurrentCN:       local,
+		Candidates:      candidates,
+		CurrentCNPolicy: CurrentCNPreferred,
+		Intent: SchedulingIntent{WorkerSet: WorkerSetPolicy{
+			Mode: WorkerSetMax, MaxWorkers: 1, SelectionKey: "query-1",
+		}},
+	})
+
+	require.True(t, decision.Satisfied)
+	require.Equal(t, ReasonPreferredCurrentCN, decision.Reason)
+	require.Equal(t, Workers{local}, decision.Workers)
+	require.Equal(t, 3, decision.EligibleCount)
+}
+
+func TestDecideQueryPlacementDoesNotPinAbsentPreferredCurrentCNInCappedSubset(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
+	candidates := Workers{
+		{ID: "remote-a", Addr: "a:6001", Mcpu: 16},
+		{ID: "remote-b", Addr: "b:6001", Mcpu: 16},
+	}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:        QueryExecAPMultiCN,
+		CurrentCN:       local,
+		Candidates:      candidates,
+		CurrentCNPolicy: CurrentCNPreferred,
+		Intent: SchedulingIntent{WorkerSet: WorkerSetPolicy{
+			Mode: WorkerSetMax, MaxWorkers: 1, SelectionKey: "query-1",
+		}},
+	})
+
+	require.True(t, decision.Satisfied)
+	require.Equal(t, ReasonMultiCN, decision.Reason)
+	require.Len(t, decision.Workers, 1)
+	require.NotEqual(t, local.ID, decision.Workers[0].ID)
 }
 
 func TestDecideQueryPlacementDoesNotForcePreferredCurrentCN(t *testing.T) {

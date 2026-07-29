@@ -62,6 +62,7 @@ func TestExplainLinesRendersCandidateBoundaryAndDecision(t *testing.T) {
 	require.Contains(t, output, "resolved-pool=shared-unlabeled")
 	require.Contains(t, output, "resolved-pool-resolution=shared-unlabeled")
 	require.Contains(t, output, "worker-set=max-workers max-workers=2")
+	require.Contains(t, output, "Selected workers (representative):")
 	require.Contains(t, output, "id=cn-a")
 	require.NotContains(t, output, "a:6001")
 	require.Contains(t, output, "route=available")
@@ -94,6 +95,9 @@ func TestExplainLinesIsIndependentlyBounded(t *testing.T) {
 	lines := ExplainLines(trace)
 	require.LessOrEqual(t, len(lines), maxSchedulingExplainLines)
 	require.Equal(t, "  Scheduling explain output truncated", lines[len(lines)-1])
+	output := strings.Join(lines, "\n")
+	require.Contains(t, output, "Selected workers: []")
+	require.NotContains(t, output, "Selected workers (representative):")
 	for _, line := range lines {
 		require.NotContains(t, line, strings.Repeat("x", maxSchedulingExplainValue+1))
 	}

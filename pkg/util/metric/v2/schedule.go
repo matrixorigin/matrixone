@@ -50,6 +50,14 @@ var (
 			Help:      "Total number of selected workers rejected by final route validation.",
 		}, []string{"reason"})
 
+	QueryWorkloadPolicyDecisionCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "sql",
+			Name:      "query_workload_policy_decision_total",
+			Help:      "Total number of workload policy decisions.",
+		}, []string{"workload_class", "policy_source", "routing", "result"})
+
 	ScanScheduleDecisionCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -73,6 +81,7 @@ func initScheduleMetrics() {
 	registry.MustRegister(QueryScheduleWorkerHistogram)
 	registry.MustRegister(QueryScheduleDroppedWorkerCounter)
 	registry.MustRegister(QueryScheduleSelectedWorkerFailureCounter)
+	registry.MustRegister(QueryWorkloadPolicyDecisionCounter)
 	registry.MustRegister(ScanScheduleDecisionCounter)
 	registry.MustRegister(ScanScheduleInputHistogram)
 }

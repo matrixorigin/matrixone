@@ -96,6 +96,7 @@ type QueryRequest struct {
 	CandidateResolution  CandidateResolution
 	Intent               SchedulingIntent
 	ResolvedPool         ResolvedPool
+	WorkloadPolicy       EffectiveWorkloadPolicy
 	CurrentCNPolicy      CurrentCNPolicy
 	CurrentCNOrdinalZero bool
 }
@@ -108,6 +109,7 @@ type QueryDecision struct {
 	Reason                 string
 	CandidateResolution    CandidateResolution
 	Intent                 SchedulingIntent
+	WorkloadPolicy         EffectiveWorkloadPolicy
 	ResolvedPool           ResolvedPoolDecision
 	EligibleCount          int
 	ResolvedCandidateCount int
@@ -252,7 +254,12 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	if req.Intent.PoolFallback == PoolFallbackStrict && req.ResolvedPool.Fallback {
 		return queryDecision(req, nil, nil, ReasonStrictPoolFallback, false)
 	}
-	if req.ExecKind == QueryExecTP || req.ExecKind == QueryExecAPOneCN {
+	if req.WorkloadPolicy.Applied &&
+		req.WorkloadPolicy.Routing == WorkloadRoutingLocal {
+		return decidePolicyLocalPlacement(req)
+	}
+	if !req.WorkloadPolicy.Applied &&
+		(req.ExecKind == QueryExecTP || req.ExecKind == QueryExecAPOneCN) {
 		// A max-worker policy is an upper bound, so a local query using one
 		// worker satisfies every positive cap. Strict pool intent has already
 		// rejected a compatibility fallback above. Treating either policy as
@@ -296,6 +303,7 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	}
 
 	reason := ReasonMultiCN
+	pinCurrent := false
 	if len(workers) == 0 {
 		if currentRejected {
 			return makeDecision(workers, currentRejectReason, false)
@@ -314,6 +322,7 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 			return makeDecision(nil, ReasonRequiredCurrentOutsidePool, false)
 		}
 		reason = ReasonRequiredCurrentCN
+		pinCurrent = true
 	case CurrentCNPreferred:
 		if !currentRejected {
 			preferredWorkers, ok := preferCurrentWorker(workers, req.CurrentCN)
@@ -322,10 +331,14 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 			}
 			workers = preferredWorkers
 			reason = ReasonPreferredCurrentCN
+			// Preferred means keep the current CN when it is eligible, not
+			// merely place it first before a capped HRW selection re-ranks the
+			// candidates. Unlike Required, absence remains non-fatal.
+			pinCurrent = true
 		}
 	}
 	var pinned *Worker
-	if req.CurrentCNPolicy == CurrentCNRequired {
+	if pinCurrent {
 		pinned = &req.CurrentCN
 	}
 	selected, selectionReason, ok := selectWorkerSubset(req.Intent.WorkerSet, workers, pinned)
@@ -369,11 +382,11 @@ func selectWorkerSubset(policy WorkerSetPolicy, workers Workers, pinned *Worker)
 		if policy.MaxWorkers >= len(workers) {
 			return workers, "", true
 		}
-		var pinnedWorker Worker
+		pinnedIndex := -1
 		if pinned != nil {
-			for _, worker := range workers {
+			for i, worker := range workers {
 				if sameWorker(worker, *pinned) {
-					pinnedWorker = worker
+					pinnedIndex = i
 					break
 				}
 			}
@@ -384,7 +397,7 @@ func selectWorkerSubset(policy WorkerSetPolicy, workers Workers, pinned *Worker)
 		}
 		ranked := make([]rankedWorker, 0, len(workers))
 		for i := range workers {
-			if pinned != nil && sameWorker(workers[i], *pinned) {
+			if i == pinnedIndex {
 				continue
 			}
 			ranked = append(ranked, rankedWorker{
@@ -399,8 +412,8 @@ func selectWorkerSubset(policy WorkerSetPolicy, workers Workers, pinned *Worker)
 			return compareWorkerIdentity(workers[a.index], workers[b.index])
 		})
 		selected := make(Workers, 0, policy.MaxWorkers)
-		if pinned != nil {
-			selected = append(selected, pinnedWorker)
+		if pinnedIndex >= 0 {
+			selected = append(selected, workers[pinnedIndex])
 		}
 		for i := 0; len(selected) < policy.MaxWorkers; i++ {
 			selected = append(selected, workers[ranked[i].index])
@@ -499,6 +512,73 @@ func decideLocalQueryPlacement(req QueryRequest) QueryDecision {
 	return queryDecision(req, workers, nil, ReasonLocalExecType, true)
 }
 
+func decidePolicyLocalPlacement(req QueryRequest) QueryDecision {
+	resolved := resolvedWorkers(req)
+	workers, dropped := selectEligibleCandidateWorkers(resolved)
+	currentRejectReason, currentRejected := rejectedCurrentWorkerReason(req.CurrentCN)
+	if !hasWorkerIdentity(req.CurrentCN) {
+		decision := queryDecision(
+			req,
+			workers,
+			dropped,
+			ReasonCurrentCNMissingIdentity,
+			false,
+		)
+		decision.EligibleCount = len(workers)
+		return decision
+	}
+	if currentRejected {
+		decision := queryDecision(
+			req,
+			workers,
+			dropped,
+			currentRejectReason,
+			false,
+		)
+		decision.EligibleCount = len(workers)
+		return decision
+	}
+	if len(workers) == 0 &&
+		req.Intent.EmptyWorkerPolicy == EmptyWorkerLocalFallback {
+		decision := queryDecision(
+			req,
+			Workers{req.CurrentCN},
+			dropped,
+			ReasonNoCandidateCN,
+			true,
+		)
+		decision.EligibleCount = 0
+		return decision
+	}
+	for _, worker := range workers {
+		if sameWorker(worker, req.CurrentCN) {
+			decision := queryDecision(
+				req,
+				// The pool worker proves membership, but the ingress worker
+				// is the canonical execution identity for local routing.
+				// A cluster-advertised address may differ from the address
+				// used by this Compile; retaining it would make compile
+				// materialize this current-CN decision as remote.
+				Workers{req.CurrentCN},
+				dropped,
+				ReasonRequiredCurrentCN,
+				true,
+			)
+			decision.EligibleCount = len(workers)
+			return decision
+		}
+	}
+	decision := queryDecision(
+		req,
+		nil,
+		dropped,
+		ReasonRequiredCurrentOutsidePool,
+		false,
+	)
+	decision.EligibleCount = len(workers)
+	return decision
+}
+
 func (p CurrentCNPolicy) Valid() bool {
 	switch p {
 	case CurrentCNAllowed, CurrentCNRequired, CurrentCNPreferred, CurrentCNExcluded:
@@ -526,6 +606,7 @@ func queryDecision(req QueryRequest, workers Workers, dropped DroppedWorkers, re
 		Reason:                 reason,
 		CandidateResolution:    resolution,
 		Intent:                 req.Intent,
+		WorkloadPolicy:         req.WorkloadPolicy,
 		ResolvedPool:           resolvedPoolDecision(req),
 		ResolvedCandidateCount: len(resolvedWorkers(req)),
 		CurrentCNPolicy:        req.CurrentCNPolicy,

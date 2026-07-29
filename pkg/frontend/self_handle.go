@@ -428,6 +428,10 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 				return
 			}
 		}
+	case *tree.AlterAccountConfig:
+		if err = handleAlterQueryWorkloadPolicy(ses, execCtx, st); err != nil {
+			return
+		}
 	case *tree.CreateUser:
 		ses.EnterFPrint(FPCreateUser)
 		defer ses.ExitFPrint(FPCreateUser)

@@ -32,7 +32,8 @@ func ExplainLines(trace Trace) []string {
 		return nil
 	}
 	b := schedulingExplainBuilder{}
-	b.add(fmt.Sprintf("Scheduling (%s):", normalizedTraceMode(trace.Mode)))
+	mode := normalizedTraceMode(trace.Mode)
+	b.add(fmt.Sprintf("Scheduling (%s):", mode))
 	for i := range trace.Attempts {
 		if b.full() {
 			break
@@ -40,7 +41,7 @@ func ExplainLines(trace Trace) []string {
 		attempt := &trace.Attempts[i]
 		b.add(fmt.Sprintf("  Attempt %d:", attempt.Sequence))
 		if attempt.Query != nil {
-			appendQueryExplain(&b, attempt.Query)
+			appendQueryExplain(&b, attempt.Query, mode == TraceModePreview)
 		}
 		for j := range attempt.Failures {
 			if b.full() {
@@ -107,7 +108,11 @@ func ExplainLines(trace Trace) []string {
 	return b.finish()
 }
 
-func appendQueryExplain(b *schedulingExplainBuilder, query *QueryTrace) {
+func appendQueryExplain(
+	b *schedulingExplainBuilder,
+	query *QueryTrace,
+	representativeSelection bool,
+) {
 	b.add(fmt.Sprintf(
 		"    Query: exec=%s current-cn-policy=%s reason=%s satisfied=%t fallback=%t",
 		explainValue(query.ExecKind),
@@ -115,6 +120,14 @@ func appendQueryExplain(b *schedulingExplainBuilder, query *QueryTrace) {
 		explainValue(query.Reason),
 		query.Satisfied,
 		query.Fallback,
+	))
+	b.add(fmt.Sprintf(
+		"    Workload: class=%s policy-source=%s generation=%s routing=%s policy-reason=%s",
+		explainValue(query.WorkloadClass),
+		explainValue(query.WorkloadPolicySource),
+		explainValue(query.WorkloadPolicyGeneration),
+		explainValue(query.WorkloadRouting),
+		explainValue(query.WorkloadPolicyReason),
 	))
 	b.add(fmt.Sprintf(
 		"    Candidates: source=%s pool-resolution=%s discovered=%d resolved=%d selected=%d dropped=%d",
@@ -140,10 +153,14 @@ func appendQueryExplain(b *schedulingExplainBuilder, query *QueryTrace) {
 		query.EligibleCount,
 	))
 	b.add("    Current CN: " + explainWorker(query.CurrentCN))
+	selectedLabel := "    Selected workers"
+	if representativeSelection {
+		selectedLabel += " (representative)"
+	}
 	if query.SelectedOmitted {
-		b.add("    Selected workers: local details omitted")
+		b.add(selectedLabel + ": local details omitted")
 	} else {
-		b.add("    Selected workers: " + explainWorkers(query.Selected, query.SelectedTruncated))
+		b.add(selectedLabel + ": " + explainWorkers(query.Selected, query.SelectedTruncated))
 	}
 	if len(query.Dropped) > 0 {
 		parts := make([]string, 0, len(query.Dropped))
