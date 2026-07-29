@@ -128,6 +128,25 @@ func TestRequiresAutoIncrEpochFenceCommit(t *testing.T) {
 	}
 }
 
+type recordingAutoIncrEpochFenceCommitter struct {
+	client.TxnOperator
+	required bool
+}
+
+func (op *recordingAutoIncrEpochFenceCommitter) RequireAutoIncrEpochFenceCommit() {
+	op.required = true
+}
+
+func TestTransactionMarksAutoIncrEpochFenceBeforeWorkspaceFlush(t *testing.T) {
+	op := &recordingAutoIncrEpochFenceCommitter{}
+	txn := &Transaction{op: op}
+
+	require.NoError(t, txn.requireAutoIncrEpochFenceCommit(0, true))
+	require.False(t, op.required)
+	require.NoError(t, txn.requireAutoIncrEpochFenceCommit(1, true))
+	require.True(t, op.required)
+}
+
 func TestWorkspaceFlushKeySeparatesAutoIncrEpochs(t *testing.T) {
 	base := tableKey{accountId: 1, databaseId: 7, dbName: "db", name: "tbl"}
 	batches := map[workspaceTableKey]int{

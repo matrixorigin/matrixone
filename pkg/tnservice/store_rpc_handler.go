@@ -107,6 +107,11 @@ func (s *store) doDebug(ctx context.Context, request *txn.TxnRequest, response *
 }
 
 func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	if request.Method == txn.TxnMethod_CommitAutoIncrEpochFence {
+		if err := rpc.CheckMethodVersion(ctx, s.rt, request); err != nil {
+			return err
+		}
+	}
 	_, span := trace.Start(ctx, "store.handleCommit",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
