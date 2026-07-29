@@ -42,6 +42,9 @@ type MockCompilerContext struct {
 	id2name         map[uint64]string
 	isDml           bool
 	mysqlCompatible bool
+	// sqlModeOverride, when non-nil, is returned for ResolveVariable("sql_mode")
+	// so tests can exercise mode-dependent paths (e.g. NO_BACKSLASH_ESCAPES).
+	sqlModeOverride *string
 
 	// ctx default: nil
 	ctx context.Context
@@ -112,7 +115,9 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	vars["null_var"] = nil
 	vars["delete_opt_to_truncate"] = int64(1)
 
-	if m.mysqlCompatible {
+	if m.sqlModeOverride != nil {
+		vars["sql_mode"] = *m.sqlModeOverride
+	} else if m.mysqlCompatible {
 		vars["sql_mode"] = ""
 	} else {
 		vars["sql_mode"] = "ONLY_FULL_GROUP_BY"
@@ -1775,4 +1780,10 @@ func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 
 func (moc *MockOptimizer) CurrentContext() CompilerContext {
 	return &moc.ctxt
+}
+
+// SetSqlModeOverride makes ResolveVariable("sql_mode") return the given mode,
+// letting tests exercise sql_mode-dependent build paths.
+func (m *MockCompilerContext) SetSqlModeOverride(mode string) {
+	m.sqlModeOverride = &mode
 }
