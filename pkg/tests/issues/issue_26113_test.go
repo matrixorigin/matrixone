@@ -27,7 +27,7 @@ import (
 )
 
 func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
-	embed.RunBaseClusterTests(func(c embed.Cluster) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 		defer cancel()
 
