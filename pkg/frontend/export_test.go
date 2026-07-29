@@ -358,7 +358,7 @@ func TestConstructByteFormatsUnscaledFloat64WithFullPrecision(t *testing.T) {
 			userConfig: &tree.ExportParam{
 				Fields: &tree.Fields{EnclosedBy: &tree.EnclosedBy{}},
 			},
-			Symbol:     [][]byte{[]byte{'\n'}},
+			Symbol:     [][]byte{{'\n'}},
 			ColumnFlag: []bool{false},
 		}
 		bytesChan := make(chan *BatchByte, 1)
