@@ -1436,3 +1436,21 @@ CREATE TABLE tx1 (
 create dynamic table dt_test as select * from tx1;
 drop table tx1;
 drop database db9;
+
+-- CTAS must preserve DATETIME(fsp) casts when it serializes the SELECT for the insert plan.
+drop database if exists repro_ctas_datetime6;
+create database repro_ctas_datetime6;
+use repro_ctas_datetime6;
+create table t as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit;
+select dt_lit from t;
+select table_name, column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'repro_ctas_datetime6'
+order by ordinal_position;
+create table t_union as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit
+union all
+select cast('2025-05-07 08:09:10.654321' as datetime(6));
+select dt_lit from t_union order by dt_lit;
+drop database repro_ctas_datetime6;
