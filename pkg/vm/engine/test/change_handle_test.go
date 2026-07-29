@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2950,6 +2951,79 @@ func TestISCPExecutor7(t *testing.T) {
 
 }
 
+func waitForISCPWatermark(
+	t require.TestingT,
+	getWatermark func() (types.TS, bool),
+	target types.TS,
+	waitFor time.Duration,
+	tick time.Duration,
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+) {
+	reached := assert.Eventually(t, func() bool {
+		current, found := getWatermark()
+		return found && current.GE(&target)
+	}, waitFor, tick)
+	if reached {
+		return
+	}
+
+	current, found := getWatermark()
+	require.FailNowf(
+		t,
+		"ISCP watermark did not reach target",
+		"account=%d table=%d job=%s found=%t current=%s target=%s",
+		accountID,
+		tableID,
+		jobName,
+		found,
+		current.ToString(),
+		target.ToString(),
+	)
+}
+
+type failNowPanicTestingT struct{}
+
+func (failNowPanicTestingT) Errorf(string, ...any) {}
+
+func (failNowPanicTestingT) FailNow() {
+	panic("fail now")
+}
+
+func TestWaitForISCPWatermarkTimeoutSnapshotIsSynchronous(t *testing.T) {
+	releaseCondition := make(chan struct{})
+	conditionExited := make(chan struct{})
+	var calls atomic.Int32
+
+	getWatermark := func() (types.TS, bool) {
+		if calls.Add(1) == 1 {
+			<-releaseCondition
+			close(conditionExited)
+		}
+		return types.BuildTS(1, 0), true
+	}
+
+	defer func() {
+		recovered := recover()
+		close(releaseCondition)
+		<-conditionExited
+		require.Equal(t, "fail now", recovered)
+		require.Equal(t, int32(2), calls.Load())
+	}()
+
+	waitForISCPWatermark(
+		failNowPanicTestingT{},
+		getWatermark,
+		types.BuildTS(2, 0),
+		100*time.Millisecond,
+		time.Millisecond,
+		1,
+		2,
+		"blocked-job",
+	)
+}
+
 // test delete
 func TestISCPExecutor8(t *testing.T) {
 	catalog.SetupDefines("")
@@ -3054,27 +3128,18 @@ func TestISCPExecutor8(t *testing.T) {
 
 	const jobName = "hnsw_idx"
 	waitForWatermark := func(target types.TS) {
-		var (
-			current types.TS
-			found   bool
+		waitForISCPWatermark(
+			t,
+			func() (types.TS, bool) {
+				return cdcExecutor.GetWatermark(accountId, tableID, jobName)
+			},
+			target,
+			10*time.Second,
+			10*time.Millisecond,
+			accountId,
+			tableID,
+			jobName,
 		)
-		reached := assert.Eventually(t, func() bool {
-			current, found = cdcExecutor.GetWatermark(accountId, tableID, jobName)
-			return found && current.GE(&target)
-		}, 10*time.Second, 10*time.Millisecond)
-		if !reached {
-			require.FailNowf(
-				t,
-				"ISCP watermark did not reach target",
-				"account=%d table=%d job=%s found=%t current=%s target=%s",
-				accountId,
-				tableID,
-				jobName,
-				found,
-				current.ToString(),
-				target.ToString(),
-			)
-		}
 	}
 
 	waitForWatermark(taeHandler.GetDB().TxnMgr.Now())
