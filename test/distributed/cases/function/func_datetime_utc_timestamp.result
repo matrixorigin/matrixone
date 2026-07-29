@@ -50,7 +50,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 select utc_timestamp(-1);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 22 near "-1);";
 select utc_timestamp(7);
-invalid input: UTC_TIMESTAMP fractional seconds precision must be an integer literal between 0 and 6
+Too-big precision 7 specified for 'utc_timestamp'. Maximum is 6.
 drop table utc_timestamp_fsp_arg;
 CREATE TABLE t1 (a TIMESTAMP);
 INSERT INTO t1 select (utc_timestamp());

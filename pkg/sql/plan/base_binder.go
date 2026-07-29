@@ -3683,8 +3683,14 @@ func utcFunctionFSPFromPlanExpr(ctx context.Context, name string, expr *Expr) (i
 		return 0, invalidUTCFunctionFSPError(ctx, name)
 	}
 	fsp, ok := literal.GetValue().(*plan.Literal_I64Val)
-	if !ok || fsp.I64Val < 0 || fsp.I64Val > 6 {
+	if !ok {
 		return 0, invalidUTCFunctionFSPError(ctx, name)
+	}
+	if fsp.I64Val < 0 {
+		return 0, moerr.NewInvalidArg(ctx, name, fmt.Sprintf("negative precision %d specified", fsp.I64Val))
+	}
+	if fsp.I64Val > 6 {
+		return 0, moerr.NewErrTooBigPrecision(ctx, fsp.I64Val, name, 6)
 	}
 	return int32(fsp.I64Val), nil
 }

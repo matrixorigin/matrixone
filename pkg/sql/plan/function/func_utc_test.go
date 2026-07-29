@@ -15,6 +15,7 @@
 package function
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -112,8 +113,8 @@ func TestUTCFunctionsRejectInvalidFractionalSecondPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	for _, name := range []string{"utc_time", "utc_timestamp"} {
-		for _, scale := range []int64{-1, 7} {
-			t.Run(name, func(t *testing.T) {
+		for _, scale := range []int64{-1, 7, 2147483648} {
+			t.Run(fmt.Sprintf("%s/%d", name, scale), func(t *testing.T) {
 				input := utcScaleInput(t, proc, scale)
 				defer input.Free(proc.Mp())
 				fn, err := GetFunctionByName(proc.Ctx, name, []types.Type{types.T_int64.ToType()})
@@ -124,6 +125,13 @@ func TestUTCFunctionsRejectInvalidFractionalSecondPrecision(t *testing.T) {
 					out.Free(proc.Mp())
 				}
 				require.Contains(t, err.Error(), name)
+				if scale < 0 {
+					require.Contains(t, err.Error(), "negative precision -1 specified")
+					require.NotContains(t, err.Error(), "Too-big precision")
+				} else {
+					require.Contains(t, err.Error(), fmt.Sprintf("Too-big precision %d specified", scale))
+					require.NotContains(t, err.Error(), "negative precision")
+				}
 			})
 		}
 	}

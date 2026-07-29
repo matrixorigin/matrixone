@@ -86,14 +86,16 @@ func TestBindUTCFunctionRejectsInvalidFractionalSecondPrecision(t *testing.T) {
 	require.NoError(t, err)
 
 	invalidArgs := []struct {
-		name string
-		expr *Expr
+		name     string
+		expr     *Expr
+		contains string
 	}{
-		{name: "column", expr: column},
-		{name: "expression", expr: expression},
-		{name: "null", expr: makePlan2NullConstExprWithType()},
-		{name: "negative", expr: makePlan2Int64ConstExprWithType(-1)},
-		{name: "above maximum", expr: makePlan2Int64ConstExprWithType(7)},
+		{name: "column", expr: column, contains: "integer literal between 0 and 6"},
+		{name: "expression", expr: expression, contains: "integer literal between 0 and 6"},
+		{name: "null", expr: makePlan2NullConstExprWithType(), contains: "integer literal between 0 and 6"},
+		{name: "negative", expr: makePlan2Int64ConstExprWithType(-1), contains: "negative precision -1 specified"},
+		{name: "above maximum", expr: makePlan2Int64ConstExprWithType(7), contains: "Too-big precision 7 specified"},
+		{name: "above int32 maximum", expr: makePlan2Int64ConstExprWithType(2147483648), contains: "Too-big precision 2147483648 specified"},
 	}
 
 	for _, function := range []string{"utc_time", "utc_timestamp"} {
@@ -101,7 +103,7 @@ func TestBindUTCFunctionRejectsInvalidFractionalSecondPrecision(t *testing.T) {
 			t.Run(function+"/"+test.name, func(t *testing.T) {
 				expr, err := BindFuncExprImplByPlanExpr(ctx, function, []*Expr{test.expr})
 				require.Nil(t, expr)
-				require.ErrorContains(t, err, "integer literal between 0 and 6")
+				require.ErrorContains(t, err, test.contains)
 			})
 		}
 	}

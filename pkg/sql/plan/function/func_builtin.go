@@ -81,7 +81,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
-			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "now", 6)
+			return moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "now", 6)
 		}
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
@@ -104,7 +104,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
-			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "sysdate", 6)
+			return moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "sysdate", 6)
 		}
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
@@ -192,7 +192,7 @@ func utcFunctionScale(ivecs []*vector.Vector, proc *process.Process, name string
 		return 0, moerr.NewInvalidArg(proc.Ctx, name, fmt.Sprintf("negative precision %d specified", scale))
 	}
 	if scale > 6 {
-		return 0, moerr.NewErrTooBigPrecision(proc.Ctx, int32(scale), name, 6)
+		return 0, moerr.NewErrTooBigPrecision(proc.Ctx, scale, name, 6)
 	}
 	if !ivecs[0].IsConst() {
 		return 0, moerr.NewInvalidArg(proc.Ctx, name, "fractional seconds precision must be a constant integer between 0 and 6")
