@@ -25,6 +25,7 @@ import (
 	"go.uber.org/zap"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -597,7 +598,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		specialLayout := objectio.ResolveSpecialColumnLayout(blockMeta)
 		commitPos, ok := specialLayout.Resolve(objectio.SEQNUM_COMMITTS)
 		if !ok {
-			return fmt.Errorf("snapshot table object has no commit timestamp")
+			return moerr.NewInternalError(ctx, "snapshot table object has no commit timestamp")
 		}
 		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
