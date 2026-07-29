@@ -49,6 +49,12 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 	ctr.localRegsCnt = len(dispatch.LocalRegs)
 	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
+	if dispatch.MaterializedSource != nil {
+		if dispatch.FuncId != SendToAllLocalFunc || ctr.remoteRegsCnt != 0 {
+			return moerr.NewInternalError(proc.Ctx, "materialized dispatch must be local send-to-all")
+		}
+		return nil
+	}
 	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), uint32(len(dispatch.LocalRegs)))
 
 	switch dispatch.FuncId {
@@ -160,6 +166,12 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	} else {
 		dispatch.ctr.hasData = true
+	}
+
+	if dispatch.MaterializedSource != nil {
+		err = dispatch.MaterializedSource.Append(whichToSend)
+		analyzer.SetMemUsed(dispatch.MaterializedSource.CurrentBytes())
+		return result, err
 	}
 
 	// sending.
