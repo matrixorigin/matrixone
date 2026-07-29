@@ -719,44 +719,37 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 			v2.CdcBytesProcessedCounter.WithLabelValues("insert", tableLabel).Add(float64(insertBytes))
 		}
 
-		// AtomicBatch contains multiple source batches, we need to process each one
-		for _, srcBatch := range cmd.InsertAtmBatch.Batches {
-			if srcBatch == nil || srcBatch.RowCount() == 0 {
-				continue
-			}
+		sqls, err := s.builder.buildAtomicInsertSQL(ctx, cmd.InsertAtmBatch, cmd.Meta.FromTs, cmd.Meta.ToTs)
+		if err != nil {
+			logutil.Error("cdc.mysql_sinker2.build_insert_sql_failed",
+				zap.String("table", s.dbTblInfo.String()),
+				zap.Int("rows", insertRows),
+				zap.Error(err))
+			return err
+		}
 
-			sqls, err := s.builder.BuildInsertSQL(ctx, srcBatch, cmd.Meta.FromTs, cmd.Meta.ToTs)
+		for i, sql := range sqls {
+			sqlStart := time.Now()
+			err := s.executor.ExecSQL(ctx, s.ar, sql, true)
+			duration := time.Since(sqlStart)
 			if err != nil {
-				logutil.Error("cdc.mysql_sinker2.build_insert_sql_failed",
+				s.recordSQLFailure("insert", duration)
+				logutil.Error("cdc.mysql_sinker2.exec_insert_sql_failed",
 					zap.String("table", s.dbTblInfo.String()),
-					zap.Int("rows", srcBatch.RowCount()),
+					zap.Int("sql-index", i),
+					zap.Int("total-sqls", len(sqls)),
+					zap.Duration("duration", duration),
 					zap.Error(err))
 				return err
 			}
 
-			for i, sql := range sqls {
-				sqlStart := time.Now()
-				err := s.executor.ExecSQL(ctx, s.ar, sql, true)
-				duration := time.Since(sqlStart)
-				if err != nil {
-					s.recordSQLFailure("insert", duration)
-					logutil.Error("cdc.mysql_sinker2.exec_insert_sql_failed",
-						zap.String("table", s.dbTblInfo.String()),
-						zap.Int("sql-index", i),
-						zap.Int("total-sqls", len(sqls)),
-						zap.Duration("duration", duration),
-						zap.Error(err))
-					return err
-				}
+			s.recordSQLSuccess("insert", duration)
 
-				s.recordSQLSuccess("insert", duration)
-
-				if duration > time.Second {
-					logutil.Warn("cdc.mysql_sinker2.exec_insert_sql_slow",
-						zap.String("table", s.dbTblInfo.String()),
-						zap.Int("sql-index", i),
-						zap.Duration("duration", duration))
-				}
+			if duration > time.Second {
+				logutil.Warn("cdc.mysql_sinker2.exec_insert_sql_slow",
+					zap.String("table", s.dbTblInfo.String()),
+					zap.Int("sql-index", i),
+					zap.Duration("duration", duration))
 			}
 		}
 	}
