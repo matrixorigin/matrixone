@@ -77,6 +77,9 @@ message TNStore {
   string QueryAddress = 10;
   string  ShardServiceAddress   = 11;
   bool AutoIncrEpochFenceSupported = 12;
+  // AutoIncrEpochFenceGeneration identifies the TN process generation for
+  // which AutoIncrEpochFenceSupported was advertised.
+  string AutoIncrEpochFenceGeneration = 13;
 }
 
 message LogStore {
@@ -209,6 +212,9 @@ message TNStoreHeartbeat {
   // AutoIncrEpochFenceSupported reports that this TN rejects writes whose
   // allocator epoch does not match the table epoch.
   bool AutoIncrEpochFenceSupported = 12;
+  // AutoIncrEpochFenceGeneration is regenerated whenever the TN process
+  // starts, so CNs can reject a reset admitted against a stale process.
+  string AutoIncrEpochFenceGeneration = 13;
 };
 
 message RSMState {
@@ -603,6 +609,7 @@ message TNStoreInfo {
   string  ShardServiceAddress   = 10;
   uint64 ReplayedLsn = 11;
   bool AutoIncrEpochFenceSupported = 12;
+  string AutoIncrEpochFenceGeneration = 13;
 }
 
 // TNState contains all TN details known to the HAKeeper.

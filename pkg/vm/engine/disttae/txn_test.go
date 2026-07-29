@@ -24,14 +24,19 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -51,29 +56,91 @@ func TestValidateAutoIncrEpochAdvance(t *testing.T) {
 	require.Error(t, validateAutoIncrEpochAdvance(math.MaxUint32-1, 2))
 }
 
-func TestTransactionAutoIncrEpochFenceCapabilityUsesTargetSnapshot(t *testing.T) {
+func TestSupportsAutoIncrEpochFenceBindsProcessGeneration(t *testing.T) {
+	supported := func(id, generation string) DNStore {
+		return DNStore{
+			ServiceID:                    id,
+			AutoIncrEpochFenceSupported:  true,
+			AutoIncrEpochFenceGeneration: generation,
+		}
+	}
 	for _, tc := range []struct {
 		name     string
-		stores   []DNStore
+		captured []DNStore
+		current  []DNStore
 		expected bool
 	}{
 		{name: "no target", expected: false},
-		{name: "legacy target", stores: []DNStore{{ServiceID: "old"}}, expected: false},
-		{name: "new target", stores: []DNStore{{ServiceID: "new", AutoIncrEpochFenceSupported: true}}, expected: true},
+		{name: "same generation", captured: []DNStore{supported("tn", "g1")}, current: []DNStore{supported("tn", "g1")}, expected: true},
+		{name: "legacy target", captured: []DNStore{{ServiceID: "tn"}}, current: []DNStore{{ServiceID: "tn"}}, expected: false},
+		{name: "missing generation", captured: []DNStore{supported("tn", "")}, current: []DNStore{supported("tn", "")}, expected: false},
+		{name: "restart changes generation", captured: []DNStore{supported("tn", "g1")}, current: []DNStore{supported("tn", "g2")}, expected: false},
+		{name: "rollback clears support", captured: []DNStore{supported("tn", "g1")}, current: []DNStore{{ServiceID: "tn"}}, expected: false},
+		{name: "target set changes", captured: []DNStore{supported("tn-1", "g1")}, current: []DNStore{supported("tn-2", "g2")}, expected: false},
+		{
+			name: "duplicate captured target",
+			captured: []DNStore{
+				supported("tn-1", "g1"),
+				supported("tn-1", "g1"),
+			},
+			current: []DNStore{
+				supported("tn-1", "g1"),
+				supported("tn-2", "g2"),
+			},
+			expected: false,
+		},
 		{
 			name: "mixed targets fail closed",
-			stores: []DNStore{
-				{ServiceID: "new", AutoIncrEpochFenceSupported: true},
+			captured: []DNStore{
+				supported("new", "g1"),
+				{ServiceID: "old"},
+			},
+			current: []DNStore{
+				supported("new", "g1"),
 				{ServiceID: "old"},
 			},
 			expected: false,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			txn := &Transaction{tnStores: tc.stores}
-			require.Equal(t, tc.expected, txn.SupportsAutoIncrEpochFence())
+			require.Equal(t, tc.expected, supportsAutoIncrEpochFence(tc.captured, tc.current))
 		})
 	}
+}
+
+func TestTransactionSupportsAutoIncrEpochFenceRejectsLiveGenerationChange(t *testing.T) {
+	service := t.Name()
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, zap.NewNop())
+	moruntime.SetupServiceBasedRuntime(service, rt)
+
+	store := DNStore{
+		ServiceID:                    "tn",
+		AutoIncrEpochFenceSupported:  true,
+		AutoIncrEpochFenceGeneration: "generation-1",
+	}
+	cluster := clusterservice.NewMOCluster(
+		service, nil, time.Second,
+		clusterservice.WithServices(nil, []metadata.TNService{store}),
+		clusterservice.WithDisableRefresh(),
+	)
+	t.Cleanup(cluster.Close)
+	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
+
+	txn := &Transaction{engine: &Engine{service: service}, tnStores: []DNStore{store}}
+	require.True(t, txn.SupportsAutoIncrEpochFence())
+
+	restarted := clusterservice.NewMOCluster(
+		service, nil, time.Second,
+		clusterservice.WithServices(nil, []metadata.TNService{{
+			ServiceID:                    "tn",
+			AutoIncrEpochFenceSupported:  true,
+			AutoIncrEpochFenceGeneration: "generation-2",
+		}}),
+		clusterservice.WithDisableRefresh(),
+	)
+	t.Cleanup(restarted.Close)
+	rt.SetGlobalVariables(moruntime.ClusterService, restarted)
+	require.False(t, txn.SupportsAutoIncrEpochFence())
 }
 
 func TestPrecommitEntryCarriesAutoIncrEpoch(t *testing.T) {

@@ -351,13 +351,16 @@ func (c *testHAKeeperClient) addTN(tick uint64, serviceIDs ...string) {
 
 func TestNewTNServicePreservesAutoIncrEpochFenceCapability(t *testing.T) {
 	service := newTNService(logpb.TNStore{
-		UUID:                        "tn-new",
-		AutoIncrEpochFenceSupported: true,
+		UUID:                         "tn-new",
+		AutoIncrEpochFenceSupported:  true,
+		AutoIncrEpochFenceGeneration: "generation-1",
 	})
 	require.True(t, service.AutoIncrEpochFenceSupported)
+	require.Equal(t, "generation-1", service.AutoIncrEpochFenceGeneration)
 
 	legacy := newTNService(logpb.TNStore{UUID: "tn-old"})
 	require.False(t, legacy.AutoIncrEpochFenceSupported)
+	require.Empty(t, legacy.AutoIncrEpochFenceGeneration)
 }
 
 func (c *testHAKeeperClient) Close() error                                   { return nil }

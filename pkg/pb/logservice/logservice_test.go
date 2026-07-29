@@ -102,18 +102,20 @@ func TestTNStateUpdate(t *testing.T) {
 		Shards: []TNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 2, ReplicaID: 1}},
-		LogtailServerAddress:        "addr-0",
-		AutoIncrEpochFenceSupported: true,
+		LogtailServerAddress:         "addr-0",
+		AutoIncrEpochFenceSupported:  true,
+		AutoIncrEpochFenceGeneration: "generation-1",
 	}
 	tick2 := uint64(200)
 
 	state.Update(hb2, tick2)
 	assert.Equal(t, state.Stores[hb2.UUID], TNStoreInfo{
-		Tick:                        tick2,
-		ServiceAddress:              hb2.ServiceAddress,
-		Shards:                      hb2.Shards,
-		LogtailServerAddress:        "addr-0",
-		AutoIncrEpochFenceSupported: true,
+		Tick:                         tick2,
+		ServiceAddress:               hb2.ServiceAddress,
+		Shards:                       hb2.Shards,
+		LogtailServerAddress:         "addr-0",
+		AutoIncrEpochFenceSupported:  true,
+		AutoIncrEpochFenceGeneration: "generation-1",
 	})
 
 	data, err := state.Marshal()
@@ -121,12 +123,15 @@ func TestTNStateUpdate(t *testing.T) {
 	var restored TNState
 	assert.NoError(t, restored.Unmarshal(data))
 	assert.True(t, restored.Stores[hb2.UUID].AutoIncrEpochFenceSupported)
+	assert.Equal(t, "generation-1", restored.Stores[hb2.UUID].AutoIncrEpochFenceGeneration)
 
 	// A heartbeat from a legacy TN must clear a capability previously
 	// advertised by a newer process using the same store UUID.
 	hb2.AutoIncrEpochFenceSupported = false
+	hb2.AutoIncrEpochFenceGeneration = ""
 	state.Update(hb2, tick2+1)
 	assert.False(t, state.Stores[hb2.UUID].AutoIncrEpochFenceSupported)
+	assert.Empty(t, state.Stores[hb2.UUID].AutoIncrEpochFenceGeneration)
 }
 
 func TestLogStateUpdateStores(t *testing.T) {

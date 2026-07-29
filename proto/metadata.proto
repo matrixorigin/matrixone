@@ -159,6 +159,9 @@ message TNService {
   // AutoIncrEpochFenceSupported reports that this TN enforces the
   // auto_incr_epoch fields carried by CN writes.
   bool AutoIncrEpochFenceSupported = 10;
+  // AutoIncrEpochFenceGeneration identifies the TN process generation that
+  // advertised AutoIncrEpochFenceSupported.
+  string AutoIncrEpochFenceGeneration = 11;
 }
 
 // LabelList defines the labels on CN store.

@@ -403,8 +403,9 @@ func TestClusterDetailsQuery(t *testing.T) {
 				ReplicaID: 1,
 			},
 		},
-		LogtailServerAddress:        "addr4",
-		AutoIncrEpochFenceSupported: true,
+		LogtailServerAddress:         "addr4",
+		AutoIncrEpochFenceSupported:  true,
+		AutoIncrEpochFenceGeneration: "generation-1",
 	}
 	tsm.state.LogState.Shards[1] = pb.LogShardInfo{
 		ShardID:  1,
@@ -467,8 +468,9 @@ func TestClusterDetailsQuery(t *testing.T) {
 						ReplicaID: 1,
 					},
 				},
-				LogtailServerAddress:        "addr4",
-				AutoIncrEpochFenceSupported: true,
+				LogtailServerAddress:         "addr4",
+				AutoIncrEpochFenceSupported:  true,
+				AutoIncrEpochFenceGeneration: "generation-1",
 			},
 		},
 		CNStores: []pb.CNStore{

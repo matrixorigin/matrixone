@@ -56,21 +56,33 @@ type autoIncrementTestRelation struct {
 type tableCloneAutoIncrEpochWorkspace struct {
 	client.Workspace
 	supported bool
+	support   func() bool
 }
 
 func (w tableCloneAutoIncrEpochWorkspace) SupportsAutoIncrEpochFence() bool {
+	if w.support != nil {
+		return w.support()
+	}
 	return w.supported
 }
 
-func newTableCloneAutoIncrProcess(t *testing.T, supported bool) *process.Process {
+func newTableCloneAutoIncrProcessWithWorkspace(
+	t *testing.T,
+	workspace tableCloneAutoIncrEpochWorkspace,
+) *process.Process {
 	proc := testutil.NewProcess(t)
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().GetWorkspace().Return(
-		tableCloneAutoIncrEpochWorkspace{supported: supported},
-	).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	proc.Base.TxnOperator = txnOp
 	return proc
+}
+
+func newTableCloneAutoIncrProcess(t *testing.T, supported bool) *process.Process {
+	return newTableCloneAutoIncrProcessWithWorkspace(
+		t,
+		tableCloneAutoIncrEpochWorkspace{supported: supported},
+	)
 }
 
 func (r *autoIncrementTestRelation) GetTableID(context.Context) uint64 {
@@ -143,6 +155,38 @@ func TestUpdateDstAutoIncrColumnsRejectsLegacyTN(t *testing.T) {
 
 	err := tc.updateDstAutoIncrColumns(proc.Ctx, proc)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+}
+
+func TestUpdateDstAutoIncrColumnsRejectsDowngradeBeforeSetOffset(t *testing.T) {
+	checks := 0
+	proc := newTableCloneAutoIncrProcessWithWorkspace(
+		t,
+		tableCloneAutoIncrEpochWorkspace{support: func() bool {
+			checks++
+			return checks <= 2
+		}},
+	)
+	ctrl := gomock.NewController(t)
+	incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(42), "id", uint64(1), gomock.Any())
+	proc.Base.IncrService = incrSvc
+
+	def := &plan.TableDef{
+		TblId: 42,
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{Name: "seq", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+	}
+	tc := &TableClone{
+		Ctx:          &TableCloneCtx{SrcAutoIncrMaxValues: map[string]uint64{"id": 1, "seq": 2}},
+		dstMasterRel: &autoIncrementTestRelation{tableID: def.TblId, def: def},
+	}
+
+	err := tc.updateDstAutoIncrColumns(proc.Ctx, proc)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.Equal(t, 3, checks)
 }
 
 func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {

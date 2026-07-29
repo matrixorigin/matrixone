@@ -83,14 +83,18 @@ func Test_heartbeat(t *testing.T) {
 
 	client := &testHAClient{}
 	lstore := &store{
-		cfg:            cfg,
-		replicas:       &sync.Map{},
-		config:         &util.ConfigData{},
-		hakeeperClient: client,
-		rt:             rt,
+		cfg:                          cfg,
+		replicas:                     &sync.Map{},
+		config:                       &util.ConfigData{},
+		hakeeperClient:               client,
+		rt:                           rt,
+		autoIncrEpochFenceGeneration: "generation-1",
 	}
 	lstore.heartbeat(ctx)
 	if !client.lastHeartbeat.AutoIncrEpochFenceSupported {
 		t.Fatal("TN heartbeat must advertise AUTO_INCREMENT epoch enforcement")
+	}
+	if client.lastHeartbeat.AutoIncrEpochFenceGeneration != "generation-1" {
+		t.Fatal("TN heartbeat must bind AUTO_INCREMENT epoch enforcement to the process generation")
 	}
 }
