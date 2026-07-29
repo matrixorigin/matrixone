@@ -80,9 +80,8 @@ func TestInformationSchemaTenantUpgradeEntries(t *testing.T) {
 		}
 		for _, want := range []string{
 			"relkind = 'temporary_table'",
-			"lower(coalesce(",
 			"rel_createsql",
-			"regexp '^[[:space:]]*create[[:space:]]+temporary[[:space:]]+table([[:space:]]|$)'",
+			"mo_is_legacy_temporary_table",
 			"[0-9a-f]{32}",
 		} {
 			if !strings.Contains(entry.UpgSql, want) {

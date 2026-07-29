@@ -15,8 +15,6 @@
 package catalog
 
 import (
-	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,10 +81,13 @@ func TestMarkTableDefTemporary(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			test.tableDef.IsTemporary = true
 			MarkTableDefTemporary(test.tableDef)
 			MarkTableDefTemporary(test.tableDef)
 
 			require.Equal(t, SystemTemporaryTable, test.tableDef.TableType)
+			// This field belongs to session alias resolution and must not be
+			// rewritten by the durable catalog marker helper.
 			require.True(t, test.tableDef.IsTemporary)
 
 			kindCount := 0
@@ -114,6 +115,12 @@ func TestMarkTableDefTemporaryNil(t *testing.T) {
 	require.NotPanics(t, func() { MarkTableDefTemporary(nil) })
 }
 
+func TestMarkTableDefTemporaryDoesNotCreateSessionState(t *testing.T) {
+	tableDef := &plan.TableDef{}
+	MarkTableDefTemporary(tableDef)
+	require.False(t, tableDef.IsTemporary)
+}
+
 func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -121,12 +128,14 @@ func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 		relKind   string
 		relName   string
 		createSQL string
+		database  string
 	}{
 		{
 			name:      "unqualified",
 			relKind:   SystemRelAttr_Kind,
 			relName:   SystemRelAttr_Name,
 			createSQL: SystemRelAttr_CreateSQL,
+			database:  SystemRelAttr_DBName,
 		},
 		{
 			name:      "qualified",
@@ -134,6 +143,7 @@ func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 			relKind:   "tbl." + SystemRelAttr_Kind,
 			relName:   "tbl." + SystemRelAttr_Name,
 			createSQL: "tbl." + SystemRelAttr_CreateSQL,
+			database:  "tbl." + SystemRelAttr_DBName,
 		},
 	}
 
@@ -142,8 +152,7 @@ func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 			got := NonTemporaryTableSQLPredicate(test.alias)
 
 			require.Contains(t, got, test.relKind+" = '"+SystemTemporaryTable+"'")
-			require.Contains(t, got, test.relKind+" = '"+SystemOrdinaryRel+"'")
-			require.Contains(t, got, "lower(coalesce("+test.createSQL+", '')) regexp '"+legacyTemporaryTableCreateSQLRegexp+"'")
+			require.Contains(t, got, legacyTemporaryTableFunction+"(coalesce("+test.relKind+", ''), coalesce("+test.relName+", ''), coalesce("+test.database+", ''), coalesce("+test.createSQL+", ''))")
 			require.Contains(t, got, "coalesce("+test.relKind+", '') not in (")
 			for _, kind := range []string{
 				SystemOrdinaryRel,
@@ -158,28 +167,6 @@ func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 				require.Contains(t, got, "'"+kind+"'")
 			}
 			require.Contains(t, got, test.relName+" regexp '"+legacyTemporaryTableNameRegexp+"'")
-		})
-	}
-}
-
-func TestLegacyTemporaryTableCreateSQLRegexp(t *testing.T) {
-	pattern := regexp.MustCompile(legacyTemporaryTableCreateSQLRegexp)
-	tests := []struct {
-		name      string
-		createSQL string
-		wantMatch bool
-	}{
-		{name: "canonical", createSQL: "CREATE TEMPORARY TABLE t (id int)", wantMatch: true},
-		{name: "newline between keywords", createSQL: "CREATE TEMPORARY\nTABLE t (id int)", wantMatch: true},
-		{name: "multiple spaces", createSQL: "CREATE  TEMPORARY   TABLE t (id int)", wantMatch: true},
-		{name: "tabs and leading whitespace", createSQL: "\t\nCREATE\tTEMPORARY \tTABLE t (id int)", wantMatch: true},
-		{name: "ordinary table", createSQL: "CREATE TABLE __mo_tmp_customer (id int)"},
-		{name: "temporary tables token", createSQL: "CREATE TEMPORARY TABLES t (id int)"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.wantMatch, pattern.MatchString(strings.ToLower(test.createSQL)))
 		})
 	}
 }

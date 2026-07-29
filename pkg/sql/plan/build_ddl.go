@@ -138,7 +138,7 @@ func parserSQLModeFromContext(ctx CompilerContext) *string {
 	return &sqlMode
 }
 
-func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
+func canonicalCreateTableSQL(stmt *tree.CreateTable) string {
 	fmtCtx := tree.NewFmtCtx(
 		dialect.MYSQL,
 		tree.WithQuoteIdentifier(),
@@ -917,7 +917,7 @@ func buildCreateTable(
 	}
 
 	if stmt.PartitionOption != nil {
-		createTable.RawSQL = canonicalPartitionedCreateTableSQL(stmt)
+		createTable.RawSQL = canonicalCreateTableSQL(stmt)
 		createTable.TableDef.FeatureFlag |= features.Partitioned
 	}
 
@@ -1111,10 +1111,11 @@ func buildCreateTable(
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
-		createSQL := ctx.GetRootSql()
-		if stmt.PartitionOption != nil {
-			createSQL = canonicalPartitionedCreateTableSQL(stmt)
-		}
+		// rel_createsql is durable per-table metadata. Generate it from this
+		// statement's AST rather than GetRootSql(), which may contain an entire
+		// multi-statement COM_QUERY and therefore cannot identify which statement
+		// created the row.
+		createSQL := canonicalCreateTableSQL(stmt)
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,

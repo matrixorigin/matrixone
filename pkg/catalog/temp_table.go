@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	legacyTemporaryTableNameRegexp      = `^__mo_tmp_[0-9a-f]{32}_`
-	legacyTemporaryTableCreateSQLRegexp = `^[[:space:]]*create[[:space:]]+temporary[[:space:]]+table([[:space:]]|$)`
-	userVisibleRelationKindsSQL         = "'" + SystemOrdinaryRel + "', '" + SystemViewRel + "', '" + SystemExternalRel + "', '" + SystemMaterializedRel + "', '" + SystemSourceRel + "', '" + SystemClusterRel + "', '" + SystemPartitionRel + "', '" + SystemSequenceRel + "'"
+	legacyTemporaryTableNameRegexp = `^__mo_tmp_[0-9a-f]{32}_`
+	legacyTemporaryTableFunction   = `mo_is_legacy_temporary_table`
+	userVisibleRelationKindsSQL    = "'" + SystemOrdinaryRel + "', '" + SystemViewRel + "', '" + SystemExternalRel + "', '" + SystemMaterializedRel + "', '" + SystemSourceRel + "', '" + SystemClusterRel + "', '" + SystemPartitionRel + "', '" + SystemSequenceRel + "'"
 )
 
 // NonTemporaryTableSQLPredicate returns the catalog predicate used to exclude
@@ -32,12 +32,14 @@ const (
 //
 // New temporary objects have SystemTemporaryTable in mo_tables.relkind. During
 // an asynchronous upgrade, however, sessions started on an older version can
-// still have base rows whose relkind is SystemOrdinaryRel. Their persisted
-// CREATE TEMPORARY TABLE statement is the compatibility marker. Old derived
-// objects added later do not reliably retain that statement, so they are
-// recognized only when their relkind is not user-visible and their name has the
-// exact physical session-ID shape. The relkind guard keeps permanent tables,
-// views, and external objects with otherwise legal __mo_tmp_ names visible.
+// still have base rows whose relkind is SystemOrdinaryRel. The compatibility
+// function parses their request-wide rel_createsql and associates the creating
+// statement with the logical alias encoded in the physical table name. Old
+// derived objects added later do not reliably retain that statement, so they
+// are recognized only when their relkind is not user-visible and their name has
+// the exact physical session-ID shape. The relkind guard keeps permanent
+// tables, views, and external objects with otherwise legal __mo_tmp_ names
+// visible.
 func NonTemporaryTableSQLPredicate(alias string) string {
 	prefix := ""
 	if alias != "" {
@@ -45,16 +47,18 @@ func NonTemporaryTableSQLPredicate(alias string) string {
 	}
 	relKind := prefix + SystemRelAttr_Kind
 	relName := prefix + SystemRelAttr_Name
+	relDatabase := prefix + SystemRelAttr_DBName
 	createSQL := prefix + SystemRelAttr_CreateSQL
 
 	return fmt.Sprintf(
-		"not (%s = '%s' or (%s = '%s' and lower(coalesce(%s, '')) regexp '%s') or (coalesce(%s, '') not in (%s) and %s regexp '%s'))",
+		"not (%s = '%s' or %s(coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, '')) or (coalesce(%s, '') not in (%s) and %s regexp '%s'))",
 		relKind,
 		SystemTemporaryTable,
+		legacyTemporaryTableFunction,
 		relKind,
-		SystemOrdinaryRel,
+		relName,
+		relDatabase,
 		createSQL,
-		legacyTemporaryTableCreateSQLRegexp,
 		relKind,
 		userVisibleRelationKindsSQL,
 		relName,
@@ -65,13 +69,14 @@ func NonTemporaryTableSQLPredicate(alias string) string {
 // MarkTableDefTemporary keeps the in-memory table type and the durable
 // mo_tables.relkind property in sync. The catalog marker, rather than the
 // generated physical name, is the canonical temporary-object classifier.
+// IsTemporary is deliberately left untouched: it is session state populated
+// when a logical temporary-table alias is resolved, not durable table metadata.
 func MarkTableDefTemporary(tableDef *plan.TableDef) {
 	if tableDef == nil {
 		return
 	}
 
 	tableDef.TableType = SystemTemporaryTable
-	tableDef.IsTemporary = true
 
 	var firstProperties *plan.PropertiesDef
 	foundKind := false

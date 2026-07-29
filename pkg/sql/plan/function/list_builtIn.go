@@ -13034,6 +13034,29 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_is_legacy_temporary_table`
+	// Used by catalog metadata predicates while pre-marker temporary rows can
+	// remain alive across an asynchronous tenant upgrade.
+	{
+		functionId: MO_IS_LEGACY_TEMPORARY_TABLE,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInIsLegacyTemporaryTable
+				},
+			},
+		},
+	},
+
 	// function `internal_char_length`
 	{
 		functionId: INTERNAL_CHAR_LENGTH,
