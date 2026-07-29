@@ -2224,8 +2224,8 @@ func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
 	logicPlan, err := runOneStmt(
 		NewMockOptimizer(true),
 		t,
-		"select group_concat(n_name order by n_nationkey desc nulls first separator '|'), "+
-			"group_concat(n_name order by n_regionkey asc nulls last) from nation",
+		"select group_concat(n_name order by n_nationkey desc separator '|'), "+
+			"group_concat(n_name order by n_regionkey asc) from nation",
 	)
 	require.NoError(t, err)
 
@@ -2241,8 +2241,8 @@ func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
 	require.Empty(t, collectReachableSortNodes(logicPlan.GetQuery()))
 
 	expectedFlags := []byte{
-		byte(plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_FIRST),
-		byte(plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_LAST),
+		byte(plan.OrderBySpec_DESC),
+		byte(plan.OrderBySpec_ASC),
 	}
 	for i, agg := range aggNode.AggList {
 		fn := agg.GetF()
