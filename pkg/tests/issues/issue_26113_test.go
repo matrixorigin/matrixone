@@ -59,10 +59,14 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
-			_, _ = conn.ExecContext(cleanupCtx, "rollback")
-			_, _ = conn.ExecContext(cleanupCtx, "drop snapshot if exists "+snapshotName)
-			_, _ = conn.ExecContext(cleanupCtx, "drop database if exists "+dbName)
-			_, _ = conn.ExecContext(cleanupCtx, "drop role if exists "+roleName)
+			cleanup := func(statement string) {
+				_, cleanupErr := conn.ExecContext(cleanupCtx, statement)
+				require.NoError(t, cleanupErr, statement)
+			}
+			cleanup("rollback")
+			cleanup("drop snapshot if exists " + snapshotName)
+			cleanup("drop database if exists " + dbName)
+			cleanup("drop role if exists " + roleName)
 		}()
 		exec("create table " + dbName + ".src (id int primary key, v varchar(20))")
 		exec("insert into " + dbName + ".src values (1, 'a')")
