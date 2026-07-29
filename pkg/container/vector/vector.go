@@ -866,8 +866,21 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 			return err
 		}
 	}
+	decodedType := types.DecodeType(typ)
+	typeSize := decodedType.TypeSize()
+	if typeSize < 0 {
+		return moerr.NewInvalidInputNoCtx("invalid vector type size")
+	}
+	if class[0] != CONSTANT {
+		expectedDataLen := uint64(length) * uint64(typeSize)
+		if uint64(len(vecData)) < expectedDataLen {
+			return io.ErrUnexpectedEOF
+		}
+	} else if len(vecData) > 0 && len(vecData) < typeSize {
+		return io.ErrUnexpectedEOF
+	}
 	v.class = int(class[0])
-	v.typ = types.DecodeType(typ)
+	v.typ = decodedType
 	v.length = int(length)
 	v.data = vecData
 	v.area = area
