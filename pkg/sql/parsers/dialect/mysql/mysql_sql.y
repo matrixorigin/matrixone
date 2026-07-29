@@ -10981,9 +10981,9 @@ constraint_elem:
 
 enforce_opt:
     {
-        $$ = false
+        $$ = true
     }
-|    enforce
+|   enforce
 
 key_or_index_opt:
     {
@@ -11183,7 +11183,7 @@ column_attribute_elem:
     }
 |   constraint_keyword_opt CHECK '(' expression ')'
     {
-        $$ = tree.NewAttributeCheckConstraint($4, false, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, true, $1)
     }
 |   constraint_keyword_opt CHECK '(' expression ')' enforce
     {

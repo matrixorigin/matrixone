@@ -1194,6 +1194,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
+	type pendingCheckDef struct {
+		name      string
+		expr      tree.Expr
+		columnPos int
+		enforced  bool
+	}
+	pendingChecks := make([]pendingCheckDef, 0)
 
 	if stmt.Param != nil || stmt.IcebergParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
@@ -1385,6 +1392,18 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			} else {
 				colMap[colName] = col
 				createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
+				for _, attr := range def.Attributes {
+					check, ok := attr.(*tree.AttributeCheckConstraint)
+					if !ok {
+						continue
+					}
+					pendingChecks = append(pendingChecks, pendingCheckDef{
+						name:      check.Name,
+						expr:      check.Expr,
+						columnPos: len(createTable.TableDef.Cols) - 1,
+						enforced:  check.Enforced,
+					})
+				}
 
 				// get default val from ast node
 				attrIdx := slices.IndexFunc(def.Attributes, func(a tree.ColumnAttribute) bool {
@@ -1516,8 +1535,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				fkDatasOfFKSelfRefer = append(fkDatasOfFKSelfRefer, fkData)
 			}
 		case *tree.CheckIndex:
-			// unsupport in plan. will support in next version.
-			// return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
+			pendingChecks = append(pendingChecks, pendingCheckDef{
+				expr:      def.Expr,
+				columnPos: -1,
+				enforced:  def.Enforced,
+			})
 		default:
 			return moerr.NewNYIf(ctx.GetContext(), "table def: '%v'", def)
 		}
@@ -1576,6 +1598,18 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
+	}
+
+	for _, check := range pendingChecks {
+		if !check.enforced {
+			return moerr.NewNotSupported(
+				ctx.GetContext(),
+				"NOT ENFORCED CHECK constraints",
+			)
+		}
+		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, check.columnPos); err != nil {
+			return err
+		}
 	}
 
 	// table must have one visible column
@@ -1821,6 +1855,132 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	return nil
+}
+
+func appendCheckDef(
+	ctx CompilerContext,
+	tableDef *TableDef,
+	name string,
+	astExpr tree.Expr,
+	columnPos int,
+) error {
+	if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+		return err
+	}
+	colNames := make([]string, 0, len(tableDef.Cols))
+	colTypes := make([]plan.Type, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		colNames = append(colNames, col.Name)
+		colTypes = append(colTypes, col.Typ)
+	}
+
+	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
+	checkExpr, err := binder.BindExpr(astExpr, 0, true)
+	if err != nil {
+		return err
+	}
+	if err = validateCheckExpr(ctx.GetContext(), tableDef, checkExpr, columnPos); err != nil {
+		return err
+	}
+	if checkExpr.Typ.Id != int32(types.T_bool) {
+		checkExpr, err = makePlan2CastExpr(
+			ctx.GetContext(),
+			checkExpr,
+			plan.Type{Id: int32(types.T_bool)},
+		)
+		if err != nil {
+			return err
+		}
+	}
+	if name == "" {
+		name = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
+	for _, check := range tableDef.Checks {
+		if check.Name == name {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", name)
+		}
+	}
+	tableDef.Checks = append(tableDef.Checks, &plan.CheckDef{
+		Name:  name,
+		Check: checkExpr,
+	})
+	return nil
+}
+
+func validateCheckExpr(ctx context.Context, tableDef *TableDef, expr *plan.Expr, columnPos int) error {
+	if expr == nil {
+		return moerr.NewInvalidInput(ctx, "check constraint expression cannot be empty")
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		pos := int(e.Col.ColPos)
+		if pos < 0 || pos >= len(tableDef.Cols) {
+			return moerr.NewInvalidInput(ctx, "check constraint references an invalid column")
+		}
+		if columnPos >= 0 && pos != columnPos {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"column check constraint cannot refer to column '%s'",
+				tableDef.Cols[pos].OriginName,
+			)
+		}
+		if tableDef.Cols[pos].Typ.AutoIncr {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"check constraint cannot refer to auto-increment column '%s'",
+				tableDef.Cols[pos].OriginName,
+			)
+		}
+	case *plan.Expr_V:
+		return moerr.NewInvalidInput(ctx, "check constraint cannot refer to a variable")
+	case *plan.Expr_P:
+		return moerr.NewInvalidInput(ctx, "check constraint cannot contain a parameter marker")
+	case *plan.Expr_F:
+		switch strings.ToLower(e.F.Func.ObjName) {
+		case "connection_id",
+			"current_account_id",
+			"current_account_name",
+			"current_role",
+			"current_role_id",
+			"current_role_name",
+			"current_user",
+			"current_user_id",
+			"current_user_name",
+			"database",
+			"found_rows",
+			"last_insert_id",
+			"row_count",
+			"session_user",
+			"system_user",
+			"user":
+			return moerr.NewInvalidInputf(
+				ctx,
+				"check constraint cannot contain session-dependent function '%s'",
+				e.F.Func.ObjName,
+			)
+		}
+		if err := checkExprForVolatileFunc(ctx, expr); err != nil {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"check constraint cannot contain a non-deterministic function",
+			)
+		}
+		for _, arg := range e.F.Args {
+			if err := validateCheckExpr(ctx, tableDef, arg, columnPos); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := validateCheckExpr(ctx, tableDef, item, columnPos); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

@@ -270,7 +270,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.baseBindVar(exprImpl, depth, isRoot)
 
 	case *tree.ParamExpr:
-		if !b.builder.isPrepareStatement {
+		if b.builder == nil || !b.builder.isPrepareStatement {
 			err = moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
 		} else {
 			expr, err = b.baseBindParam(exprImpl, depth, isRoot)
@@ -2542,6 +2542,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	// not a builtin func, look to resolve udf
+	if b.builder == nil {
+		return nil, moerr.NewInvalidInputf(
+			b.GetContext(),
+			"function '%s' is not allowed in this expression",
+			name,
+		)
+	}
 	cmpCtx := b.builder.compCtx
 	udf, err := cmpCtx.ResolveUdf(name, args)
 	if err != nil {

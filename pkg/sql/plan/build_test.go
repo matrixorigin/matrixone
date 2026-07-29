@@ -3091,6 +3091,69 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 	require.Contains(t, upgradedPlan, `"obj_name":"cast_assign"`)
 }
 
+func TestInsertAddsCheckConstraintFilter(t *testing.T) {
+	build := func(sql string) *plan.Query {
+		mock := NewMockOptimizer(true)
+		tableDef := mock.ctxt.tables["dept"]
+		colPos := tableDef.Name2ColIndex["deptno"]
+		colExpr := &plan.Expr{
+			Typ: tableDef.Cols[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: colPos},
+			},
+		}
+		checkExpr, err := BindFuncExprImplByPlanExpr(
+			t.Context(),
+			">",
+			[]*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)},
+		)
+		require.NoError(t, err)
+		tableDef.Checks = []*plan.CheckDef{{
+			Name:  "dept_chk_1",
+			Check: checkExpr,
+		}}
+
+		stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err)
+		built, err := mock.Optimize(stmt)
+		require.NoError(t, err)
+		return built
+	}
+
+	t.Run("regular insert asserts", func(t *testing.T) {
+		query := build("insert into dept values (1, 'Sales', 'NY')")
+		found := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_FILTER {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if expr.GetF() != nil &&
+					expr.GetF().GetFunc().GetObjName() == "_check_constraint_assert" {
+					found = true
+				}
+			}
+		}
+		require.True(t, found)
+	})
+
+	t.Run("insert ignore filters invalid rows", func(t *testing.T) {
+		query := build("insert ignore into dept values (1, 'Sales', 'NY')")
+		found := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_FILTER {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == "coalesce" {
+					found = true
+				}
+			}
+		}
+		require.True(t, found)
+	})
+}
+
 func TestReplaceSetColRefAsDefault(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// REPLACE ... SET col = <expr referencing columns> must bind the RHS column

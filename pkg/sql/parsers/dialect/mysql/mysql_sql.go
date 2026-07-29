@@ -27002,7 +27002,7 @@ yydefault:
 		var yyLOCAL bool
 //line mysql_sql.y:10983
 		{
-			yyLOCAL = false
+			yyLOCAL = true
 		}
 		yyVAL.union = yyLOCAL
 	case 1626:
@@ -27303,7 +27303,7 @@ yydefault:
 		var yyLOCAL tree.ColumnAttribute
 //line mysql_sql.y:11185
 		{
-			yyLOCAL = tree.NewAttributeCheckConstraint(yyDollar[4].exprUnion(), false, yyDollar[1].str)
+			yyLOCAL = tree.NewAttributeCheckConstraint(yyDollar[4].exprUnion(), true, yyDollar[1].str)
 		}
 		yyVAL.union = yyLOCAL
 	case 1678:

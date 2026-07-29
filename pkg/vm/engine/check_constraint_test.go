@@ -1,0 +1,46 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package engine
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
+
+func TestPlanDefsToExeDefsPersistsChecksInSchemaExtra(t *testing.T) {
+	check := &plan.CheckDef{
+		Name: "t_chk_1",
+		Check: &plan.Expr{
+			Typ: plan.Type{Id: 10},
+		},
+	}
+	_, extra, err := PlanDefsToExeDefs(&plan.TableDef{
+		Name:   "t",
+		Checks: []*plan.CheckDef{check},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []*plan.CheckDef{check}, extra.Checks)
+
+	roundTrip := api.MustUnmarshalTblExtra(api.MustMarshalTblExtra(extra))
+	require.Equal(t, extra.Checks, roundTrip.Checks)
+
+	clone := api.CloneExtra(extra)
+	require.Equal(t, extra.Checks, clone.Checks)
+	require.NotSame(t, extra.Checks[0], clone.Checks[0])
+}

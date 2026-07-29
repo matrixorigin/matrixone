@@ -16,6 +16,7 @@ package api
 import (
 	"strings"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -61,6 +62,12 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 	if info == nil {
 		return nil
 	}
+	checks := make([]*plan.CheckDef, len(info.Checks))
+	for i, check := range info.Checks {
+		if check != nil {
+			checks[i] = proto.Clone(check).(*plan.CheckDef)
+		}
+	}
 	return &SchemaExtra{
 		NextColSeqnum:     info.NextColSeqnum,
 		DroppedAttrs:      append([]string{}, info.DroppedAttrs...),
@@ -78,6 +85,7 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		ParentTableID:     info.ParentTableID,
 		AutoIncrOffset:    info.AutoIncrOffset,
 		AutoIncrEpoch:     info.AutoIncrEpoch,
+		Checks:            checks,
 	}
 }
 
