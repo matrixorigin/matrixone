@@ -26,6 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+func TestHandleDropTableWithoutPersistentTargetsSkipsDynamicTableTasks(t *testing.T) {
+	err := handleDropDynamicTable(context.Background(), nil, nil)
+	require.NoError(t, err)
+}
+
 // TestShowConnectors_TaskServiceNil tests the error case in showConnectors function
 // when the task service is nil (line 362 in connector.go)
 func TestShowConnectors_TaskServiceNil(t *testing.T) {

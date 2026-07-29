@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -464,6 +465,62 @@ func (c *Compile) isRetryErr(err error) bool {
 		c.proc.GetTxnOperator().Txn().IsRCIsolation()
 }
 
+type scopeRunResult struct {
+	err error
+	ctx context.Context
+}
+
+func newScopeRunResult(err error, scope *Scope) scopeRunResult {
+	result := scopeRunResult{err: err}
+	if scope != nil && scope.Proc != nil {
+		result.ctx = scope.Proc.Ctx
+	}
+	return result
+}
+
+func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
+	if r.err == nil || r.ctx == nil ||
+		(!errors.Is(r.err, context.Canceled) &&
+			!errors.Is(r.err, context.DeadlineExceeded) &&
+			!moerr.IsMoErrCode(r.err, moerr.ErrQueryInterrupted)) {
+		return r, false
+	}
+	if cause := context.Cause(r.ctx); cause != nil {
+		r.err = cause
+		return r, true
+	}
+	return r, false
+}
+
+// preferPrimaryScopeResult keeps cleanup fallout from masking the execution
+// error that caused another scope to stop consuming its pipeline input. A
+// cancellation result is first resolved through that scope's CancelCauseFunc:
+// internally canceled siblings therefore report the triggering execution
+// error, while an externally canceled query keeps its external cause.
+func preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult {
+	current, _ = current.resolveCancelCause()
+	candidate, candidateHasCause := candidate.resolveCancelCause()
+
+	if current.err == nil {
+		return candidate
+	}
+	if candidate.err == nil ||
+		!errors.Is(current.err, process.ErrPipelineEndSignalDeliveryFailed) ||
+		errors.Is(candidate.err, process.ErrPipelineEndSignalDeliveryFailed) {
+		return current
+	}
+	// Without a cancellation cause, a canceled sibling does not prove that the
+	// cleanup fallback was secondary. Process-backed production results always
+	// carry their pipeline context, but keep this conservative for synthetic
+	// and start-failure results that do not.
+	if !candidateHasCause &&
+		(errors.Is(candidate.err, context.Canceled) ||
+			moerr.IsMoErrCode(candidate.err, moerr.ErrQueryInterrupted)) {
+		return current
+	}
+	return candidate
+}
+
 func (c *Compile) canRetry(err error) bool {
 	if c.disableRetry {
 		return false
@@ -574,7 +631,7 @@ func (c *Compile) runOnce() (err error) {
 			return err
 		}
 	} else {
-		errC := make(chan error, len(c.scopes))
+		errC := make(chan scopeRunResult, len(c.scopes))
 		for i := range c.scopes {
 			scope := c.scopes[i]
 			errSubmit := ants.Submit(func() {
@@ -584,23 +641,24 @@ func (c *Compile) runOnce() (err error) {
 						c.proc.Error(c.proc.Ctx, "panic in run",
 							zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 							zap.String("error", err.Error()))
-						errC <- err
+						errC <- newScopeRunResult(err, scope)
 					}
 				}()
-				errC <- c.run(scope)
+				errC <- newScopeRunResult(c.run(scope), scope)
 			})
 			if errSubmit != nil {
-				errC <- errSubmit
+				errC <- newScopeRunResult(errSubmit, scope)
 			}
 		}
 
-		var errToThrowOut error
+		var resultToThrowOut scopeRunResult
 		for i := 0; i < cap(errC); i++ {
-			e := <-errC
+			result := <-errC
+			result, _ = result.resolveCancelCause()
+			e := result.err
 
 			// cancel this query if the first error occurs.
-			if e != nil && errToThrowOut == nil {
-				errToThrowOut = e
+			if e != nil && resultToThrowOut.err == nil {
 
 				// cancel all scope tree.
 				for j := range c.scopes {
@@ -609,17 +667,19 @@ func (c *Compile) runOnce() (err error) {
 					}
 				}
 			}
+			resultToThrowOut = preferPrimaryScopeResult(resultToThrowOut, result)
 
 			// if any error already return is retryable, we should throw this one
 			// to make sure query will retry.
 			if e != nil && c.isRetryErr(e) {
-				errToThrowOut = e
+				resultToThrowOut = result
 			}
 		}
 		close(errC)
 
-		if errToThrowOut != nil {
-			return errToThrowOut
+		resultToThrowOut, _ = resultToThrowOut.resolveCancelCause()
+		if resultToThrowOut.err != nil {
+			return resultToThrowOut.err
 		}
 	}
 

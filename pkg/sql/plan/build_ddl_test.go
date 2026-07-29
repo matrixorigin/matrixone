@@ -42,6 +42,32 @@ type rootSQLCompilerContext struct {
 	calls   int
 }
 
+func TestBuildDropTemporaryTableOnlyTargetsTemporaryTable(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "drop temporary table nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	_, err = BuildPlan(ctx, stmt, false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+
+	ctx.tables["nation"].IsTemporary = true
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.True(t, p.GetDdl().GetDropTable().GetTableDef().GetIsTemporary())
+	require.Empty(t, p.GetDdl().GetDropTable().GetUpdateFkSqls())
+}
+
+func TestBuildDropTemporaryTableIfExistsDoesNotTargetPermanentTable(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "drop temporary table if exists nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	require.Nil(t, p.GetDdl().GetDropTable().GetTableDef())
+}
+
 func (c *rootSQLCompilerContext) GetRootSql() string {
 	c.calls++
 	return c.rootSQL
