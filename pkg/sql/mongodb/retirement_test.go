@@ -69,7 +69,6 @@ func TestClusterRemoteClientRetirerCoversEveryCNLifecycleScope(t *testing.T) {
 				"remote-2-addr": NewClientPool(&fakeFactory{}),
 			}
 			for _, pool := range pools {
-				pool := pool
 				t.Cleanup(func() { require.NoError(t, pool.Close(context.Background())) })
 			}
 			targets := make(map[string]*fakeClient, len(pools))
