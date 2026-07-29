@@ -1081,6 +1081,85 @@ func TestReceiveWorkerMsg_ChannelClose(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestReceiveWorkerMsg_RejectsMissingMailboxAndNilStatus(t *testing.T) {
+	msg, err := receiveWorkerMsg(context.Background(), nil)
+	require.Nil(t, msg)
+	require.ErrorContains(t, err, "mailbox is not initialized")
+
+	mailbox := NewWorkerJoinMailbox(2)
+	mailbox.ch <- nil
+	msg, err = receiveWorkerMsg(context.Background(), mailbox)
+	require.Nil(t, msg)
+	require.ErrorContains(t, err, "empty finalize status")
+}
+
+func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
+	t.Run("missing mailbox", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		t.Cleanup(proc.Free)
+		worker := &DedupJoin{
+			NumCPU:   2,
+			IsMerger: false,
+		}
+
+		err := worker.ctr.finalize(worker, proc)
+		require.ErrorContains(t, err, "mailbox is not initialized")
+	})
+
+	t.Run("canceled before publication", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		t.Cleanup(proc.Free)
+		ctx, cancel := context.WithCancel(proc.Ctx)
+		cancel()
+		proc.Ctx = ctx
+		worker := &DedupJoin{
+			NumCPU:   2,
+			IsMerger: false,
+			Mailbox:  NewWorkerJoinMailbox(2),
+		}
+
+		err := worker.ctr.finalize(worker, proc)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Empty(t, worker.Mailbox.ch)
+	})
+
+	t.Run("merger already stopped", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		t.Cleanup(proc.Free)
+		mailbox := NewWorkerJoinMailbox(2)
+		mailbox.stopAndDrain(proc)
+		worker := &DedupJoin{
+			NumCPU:   2,
+			IsMerger: false,
+			Mailbox:  mailbox,
+		}
+
+		require.NoError(t, worker.ctr.finalize(worker, proc))
+		require.True(t, worker.ctr.handledLast)
+		require.Equal(t, End, worker.ctr.state)
+	})
+
+	t.Run("full mailbox", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		t.Cleanup(proc.Free)
+		mailbox := NewWorkerJoinMailbox(1)
+		sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{})
+		require.True(t, sent)
+		require.False(t, stopped)
+		t.Cleanup(func() {
+			mailbox.stopAndDrain(proc)
+		})
+		worker := &DedupJoin{
+			NumCPU:   2,
+			IsMerger: false,
+			Mailbox:  mailbox,
+		}
+
+		err := worker.ctr.finalize(worker, proc)
+		require.ErrorContains(t, err, "mailbox is unexpectedly full")
+	})
+}
+
 func TestWorkerJoinMailboxStopAndSendHaveSingleCaptureOwner(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
