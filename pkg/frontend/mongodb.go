@@ -369,10 +369,6 @@ func mongoDBRuntimeConfig(parameters config.MongoDBParameters) mongodb.RuntimeCo
 	}
 }
 
-func queryMongoDBConnectionByName(ctx context.Context, bh BackgroundExec, accountID uint32, name string) (mongodb.Connection, bool, error) {
-	return queryMongoDBConnectionByNameSQL(ctx, bh, mongodb.GetConnectionByNameSQL(accountID, name))
-}
-
 func queryMongoDBConnectionByNameForUpdate(ctx context.Context, bh BackgroundExec, accountID uint32, name string) (mongodb.Connection, bool, error) {
 	return queryMongoDBConnectionByNameSQL(ctx, bh, mongodb.GetConnectionByNameForUpdateSQL(accountID, name))
 }
