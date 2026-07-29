@@ -563,30 +563,28 @@ func (h *combinedChangesHandle) loadPendingPartition(ctx context.Context, mp *mp
 	if pending.exhausted || pending.data != nil || pending.tombstone != nil {
 		return nil
 	}
-	for {
-		data, tombstone, hint, err := h.handles[index].Next(ctx, mp)
-		if err != nil {
-			return err
-		}
-		if data != nil && data.RowCount() == 0 {
-			data.Clean(mp)
-			data = nil
-		}
-		if tombstone != nil && tombstone.RowCount() == 0 {
-			tombstone.Clean(mp)
-			tombstone = nil
-		}
-		if data != nil || tombstone != nil {
-			pending.data = data
-			pending.tombstone = tombstone
-			pending.dataOffset = 0
-			pending.tombstoneOffset = 0
-			pending.hint = hint
-			return h.pushPartitionFrontier(index)
-		}
-		pending.exhausted = true
-		return h.closePartition(index, mp)
+	data, tombstone, hint, err := h.handles[index].Next(ctx, mp)
+	if err != nil {
+		return err
 	}
+	if data != nil && data.RowCount() == 0 {
+		data.Clean(mp)
+		data = nil
+	}
+	if tombstone != nil && tombstone.RowCount() == 0 {
+		tombstone.Clean(mp)
+		tombstone = nil
+	}
+	if data != nil || tombstone != nil {
+		pending.data = data
+		pending.tombstone = tombstone
+		pending.dataOffset = 0
+		pending.tombstoneOffset = 0
+		pending.hint = hint
+		return h.pushPartitionFrontier(index)
+	}
+	pending.exhausted = true
+	return h.closePartition(index, mp)
 }
 
 func (h *combinedChangesHandle) closePartition(index int, mp *mpool.MPool) error {
