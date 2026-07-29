@@ -330,6 +330,35 @@ func TestPositionFunctionSyntax(t *testing.T) {
 	}
 }
 
+func TestTableOptionAutoIncrementUint64Boundaries(t *testing.T) {
+	tests := []struct {
+		value string
+		want  uint64
+	}{
+		{value: "9223372036854775807", want: 9223372036854775807},
+		{value: "9223372036854775808", want: 9223372036854775808},
+		{value: "18446744073709551614", want: 18446744073709551614},
+		{value: "18446744073709551615", want: 18446744073709551615},
+	}
+
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			sql := "create table t (id bigint unsigned auto_increment primary key) auto_increment = " + test.value
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			require.Len(t, createTable.Options, 1)
+			option, ok := createTable.Options[0].(*tree.TableOptionAutoIncrement)
+			require.True(t, ok)
+			require.Equal(t, test.want, option.Value)
+			require.Contains(t, tree.String(stmt, dialect.MYSQL), "auto_increment = "+test.value)
+		})
+	}
+}
+
 func TestOuterJoinRequiresCondition(t *testing.T) {
 	for _, sql := range []string{
 		"select * from t1 left join t2",
