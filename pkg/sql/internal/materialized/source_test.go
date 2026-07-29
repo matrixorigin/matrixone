@@ -17,6 +17,7 @@ package materialized
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -50,6 +51,7 @@ func TestSharedMaterializedSourceAllowsDependentReaders(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, end)
 		require.Equal(t, int64(i), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0))
+		bat.Clean(mp)
 	}
 	_, end, err := source.Next(context.Background(), 1, 4)
 	require.NoError(t, err)
@@ -60,6 +62,7 @@ func TestSharedMaterializedSourceAllowsDependentReaders(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, end)
 		require.Equal(t, int64(i), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0))
+		bat.Clean(mp)
 	}
 
 	source.ReleaseReader(1)
@@ -153,6 +156,7 @@ func TestSharedMaterializedSourcePublishesProducerErrorAfterBufferedData(t *test
 	require.NoError(t, err)
 	require.False(t, end)
 	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
+	got.Clean(mp)
 	_, end, err = source.Next(context.Background(), 0, 1)
 	require.True(t, end)
 	require.ErrorIs(t, err, want)
@@ -160,11 +164,9 @@ func TestSharedMaterializedSourcePublishesProducerErrorAfterBufferedData(t *test
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestSharedMaterializedSourceRuntimeLimit(t *testing.T) {
+func TestSharedMaterializedSourceUnderestimatedFixedWidthProducerSpills(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	source := NewSource(2)
-	require.NoError(t, source.Begin(mp))
 
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
@@ -173,19 +175,88 @@ func TestSharedMaterializedSourceRuntimeLimit(t *testing.T) {
 	inputMemory := mp.CurrNB()
 
 	reserved := int64(max(bat.Size(), bat.Allocated()))
-	source.bytes = sharedMaterializedSourceMaxBytes - reserved
-	require.NoError(t, source.Append(bat), "the exact 64 MiB boundary is allowed")
-	require.Equal(t, sharedMaterializedSourceMaxBytes, source.bytes)
+	// A stale estimate selected materialization for one row, but the fixed-width
+	// producer actually emits two. Crossing the runtime memory budget must spill
+	// instead of turning the optimizer choice into a new query error.
+	source := newSource(2, reserved)
+	spillDir := t.TempDir()
+	require.NoError(t, source.Begin(mp, func(name string) (*os.File, error) {
+		file, err := os.CreateTemp(spillDir, name)
+		if err == nil {
+			err = os.Remove(file.Name())
+		}
+		return file, err
+	}))
+	require.NoError(t, source.Append(bat), "the exact in-memory boundary is allowed")
+	require.Equal(t, reserved, source.CurrentBytes())
+	require.NoError(t, source.Append(bat), "actual rows above the estimate must spill")
+	require.Positive(t, source.spillBytes)
+	source.Finish(nil)
 
-	err := source.Append(bat)
-	require.ErrorContains(t, err, "exceeds 64 MiB runtime limit")
 	for readerID := 0; readerID < 2; readerID++ {
-		_, end, readerErr := source.Next(context.Background(), readerID, 1)
+		for position := 0; position < 2; position++ {
+			readCtx := context.Background()
+			if readerID == 0 && position == 1 {
+				// Published spill data has the same data-before-cancellation
+				// ordering as an in-memory batch.
+				canceled, cancel := context.WithCancel(context.Background())
+				cancel()
+				readCtx = canceled
+			}
+			got, end, readerErr := source.Next(readCtx, readerID, position)
+			require.NoError(t, readerErr)
+			require.False(t, end)
+			require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
+			got.Clean(mp)
+		}
+		_, end, readerErr := source.Next(context.Background(), readerID, 2)
+		require.NoError(t, readerErr)
 		require.True(t, end)
-		require.Same(t, err, readerErr)
 		source.ReleaseReader(readerID)
 	}
-	source.Finish(err)
+	require.Equal(t, inputMemory, mp.CurrNB())
+	require.Nil(t, source.spillFile)
+	bat.Clean(mp)
+}
+
+func TestSharedMaterializedSourceBoundsTinyBatchMetadataWithSpill(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	bat.SetRowCount(1)
+	inputMemory := mp.CurrNB()
+
+	source := newSource(1, sharedMaterializedSourceMaxBytes)
+	source.memoryBatchLimit = 1
+	spillDir := t.TempDir()
+	require.NoError(t, source.Begin(mp, func(name string) (*os.File, error) {
+		file, err := os.CreateTemp(spillDir, name)
+		if err == nil {
+			err = os.Remove(file.Name())
+		}
+		return file, err
+	}))
+	require.NoError(t, source.Append(bat))
+	require.Len(t, source.batches, 1)
+	require.NoError(t, source.Append(bat), "Go batch metadata must stay bounded by spilling later tiny batches")
+	require.Len(t, source.batches, 1)
+	require.Equal(t, 1, source.spillBatchCount)
+	source.Finish(nil)
+
+	for position := 0; position < 2; position++ {
+		got, end, err := source.Next(context.Background(), 0, position)
+		require.NoError(t, err)
+		require.False(t, end)
+		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
+		got.Clean(mp)
+	}
+	_, end, err := source.Next(context.Background(), 0, 2)
+	require.NoError(t, err)
+	require.True(t, end)
+	source.ReleaseReader(0)
 	require.Equal(t, inputMemory, mp.CurrNB())
 	bat.Clean(mp)
 }
