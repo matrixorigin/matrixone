@@ -57,6 +57,8 @@ type cluster struct {
 	services []*operator
 	startFn  func(*operator) error
 
+	pendingCleanup []*operator
+
 	options struct {
 		dataPath  string
 		cn        int
@@ -159,7 +161,10 @@ func (c *cluster) Close() error {
 }
 
 func (c *cluster) closeServicesLocked() error {
-	err := c.closeServicesFromLocked(0)
+	err := errors.Join(
+		c.closeServicesFromLocked(0),
+		c.retryPendingCleanupLocked(),
+	)
 	c.state = stopped
 	return err
 }
@@ -239,6 +244,9 @@ func (c *cluster) StartNewCNService(n int) error {
 	if c.state != started {
 		panic("cannot start cn services in stopped cluster")
 	}
+	if err := c.retryPendingCleanupLocked(); err != nil {
+		return err
+	}
 
 	serviceFrom := len(c.services)
 	cnFrom := c.options.cn
@@ -258,11 +266,33 @@ func (c *cluster) StartNewCNService(n int) error {
 }
 
 func (c *cluster) rollbackNewServicesLocked(serviceFrom, cnFrom int) error {
+	newServices := append([]*operator(nil), c.services[serviceFrom:]...)
 	err := c.closeServicesFromLocked(serviceFrom)
-	if err == nil {
-		c.services = c.services[:serviceFrom]
-		c.files = c.files[:serviceFrom]
-		c.options.cn = cnFrom
+	c.services = c.services[:serviceFrom]
+	c.files = c.files[:serviceFrom]
+	c.options.cn = cnFrom
+
+	if err != nil {
+		for _, op := range newServices {
+			if op.needsCleanup() {
+				c.pendingCleanup = append(c.pendingCleanup, op)
+			}
+		}
+	}
+	return err
+}
+
+func (c *cluster) retryPendingCleanupLocked() error {
+	pending := c.pendingCleanup
+	c.pendingCleanup = nil
+
+	var err error
+	for _, op := range pending {
+		closeErr := op.Close()
+		err = errors.Join(err, closeErr)
+		if closeErr != nil && op.needsCleanup() {
+			c.pendingCleanup = append(c.pendingCleanup, op)
+		}
 	}
 	return err
 }

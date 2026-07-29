@@ -51,7 +51,7 @@ func Test_TxnExecutorExec(t *testing.T) {
 }
 
 func TestPreparedParams(t *testing.T) {
-	require.NoError(t, embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -111,5 +111,5 @@ func TestPreparedParams(t *testing.T) {
 			require.Equal(t, 3, testutils.ReadCount(res))
 			res.Close()
 		},
-	))
+	)
 }

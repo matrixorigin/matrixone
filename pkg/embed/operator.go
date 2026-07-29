@@ -160,6 +160,14 @@ func (op *operator) Close() error {
 	return err
 }
 
+func (op *operator) needsCleanup() bool {
+	op.RLock()
+	defer op.RUnlock()
+	return op.reset.svc != nil ||
+		op.reset.stopper != nil ||
+		op.reset.fs != nil
+}
+
 func (op *operator) Start() error {
 	op.Lock()
 	defer op.Unlock()
@@ -233,7 +241,7 @@ func (op *operator) startLogServiceLocked(
 	if err != nil {
 		return err
 	}
-	if err := s.Start(); err != nil {
+	if err := op.startConstructedServiceLocked(s); err != nil {
 		return err
 	}
 	if op.cfg.LogService.BootstrapConfig.BootstrapCluster {
@@ -242,7 +250,6 @@ func (op *operator) startLogServiceLocked(
 			return err
 		}
 	}
-	op.reset.svc = s
 	return nil
 }
 
@@ -267,10 +274,9 @@ func (op *operator) startTNServiceLocked(
 	if err != nil {
 		return err
 	}
-	if err := s.Start(); err != nil {
+	if err := op.startConstructedServiceLocked(s); err != nil {
 		return err
 	}
-	op.reset.svc = s
 	return nil
 }
 
@@ -296,11 +302,18 @@ func (op *operator) startCNServiceLocked(
 	if err != nil {
 		return err
 	}
-	if err := s.Start(); err != nil {
+	if err := op.startConstructedServiceLocked(s); err != nil {
 		return err
 	}
-	op.reset.svc = s
 	return nil
+}
+
+func (op *operator) startConstructedServiceLocked(s service) error {
+	// Start may fail after the concrete service has opened listeners or started
+	// goroutines. Transfer ownership before calling it so rollback can always
+	// reach Close.
+	op.reset.svc = s
+	return s.Start()
 }
 
 func (op *operator) init() error {

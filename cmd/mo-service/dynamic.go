@@ -23,7 +23,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixone/pkg/common/chaos"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -63,17 +62,35 @@ func startDynamicCluster(
 		}
 	}
 
-	// TODO: make configurable for 6001
-	cnProxy = goetty.NewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
-	for i := 0; i < cfg.Dynamic.ServiceCount; i++ {
-		port := baseFrontendPort + i
-		cnProxy.AddUpStream(fmt.Sprintf("127.0.0.1:%d", port), time.Second*10)
+	proxyOwns6001 := false
+	if *withProxy {
+		var err error
+		proxyOwns6001, err = proxyServiceOwnsPort(cfg.ProxyServiceConfigsFiles, 6001)
+		if err != nil {
+			return err
+		}
 	}
-	if err := cnProxy.Start(); err != nil {
+	if err := startDynamicBuiltinProxy(cfg.Dynamic.ServiceCount, proxyOwns6001); err != nil {
 		return err
 	}
 	// }
 	return startDynamicCtlHTTPServer(cfg.Dynamic.CtlAddress)
+}
+
+func startDynamicBuiltinProxy(serviceCount int, proxyOwns6001 bool) error {
+	if !shouldStartDynamicBuiltinProxy(serviceCount, proxyOwns6001) {
+		return nil
+	}
+	cnProxy = launchNewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
+	for i := 0; i < serviceCount; i++ {
+		port := baseFrontendPort + i
+		cnProxy.AddUpStream(fmt.Sprintf("127.0.0.1:%d", port), time.Second*10)
+	}
+	return cnProxy.Start()
+}
+
+func shouldStartDynamicBuiltinProxy(serviceCount int, proxyOwns6001 bool) bool {
+	return serviceCount > 0 && !proxyOwns6001
 }
 
 func startDynamicCNServices(

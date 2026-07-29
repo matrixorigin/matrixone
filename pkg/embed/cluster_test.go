@@ -37,11 +37,12 @@ import (
 
 type closeTrackingService struct {
 	closeCount atomic.Int32
+	startErr   error
 	closeErr   error
 }
 
 func (s *closeTrackingService) Start() error {
-	return nil
+	return s.startErr
 }
 
 func (s *closeTrackingService) Close() error {
@@ -55,6 +56,20 @@ type closeTrackingFileService struct {
 
 func (s *closeTrackingFileService) Close(context.Context) {
 	s.closeCount.Add(1)
+}
+
+func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
+	startErr := errors.New("service partially started")
+	svc := &closeTrackingService{startErr: startErr}
+	op := &operator{}
+
+	err := op.startConstructedServiceLocked(svc)
+	require.ErrorIs(t, err, startErr)
+	require.Same(t, svc, op.reset.svc)
+
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), svc.closeCount.Load())
+	require.False(t, op.needsCleanup())
 }
 
 func TestBasicCluster(t *testing.T) {
@@ -143,7 +158,7 @@ func TestMultiClusterCanWork(t *testing.T) {
 }
 
 func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			validCNCanWork(t, c, 0)
 			validCNCanWork(t, c, 1)
@@ -165,13 +180,13 @@ func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
 
 func TestBaseClusterOnlyStartOnce(t *testing.T) {
 	var id1, id2 uint64
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			id1 = c.ID()
 		},
 	)
 
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			id2 = c.ID()
 		},
@@ -182,7 +197,7 @@ func TestBaseClusterOnlyStartOnce(t *testing.T) {
 
 func TestRestartCN(t *testing.T) {
 	t.SkipNow()
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			svc, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -195,7 +210,7 @@ func TestRestartCN(t *testing.T) {
 }
 
 func TestRunSQLWithFrontend(t *testing.T) {
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -215,7 +230,7 @@ func TestRunSQLWithFrontend(t *testing.T) {
 }
 
 func TestRowCountOverMySQLProtocol(t *testing.T) {
-	require.NoError(t, RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -311,7 +326,7 @@ func TestRowCountOverMySQLProtocol(t *testing.T) {
 			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&rowCount))
 			require.Equal(t, int64(-1), rowCount)
 		},
-	))
+	)
 }
 
 func TestGetInitValue(t *testing.T) {
@@ -380,7 +395,7 @@ func validCNCanWork(
 }
 
 func TestCreateDB(t *testing.T) {
-	RunBaseClusterTests(
+	RunBaseClusterTests(t,
 		func(c Cluster) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -607,4 +622,46 @@ func TestRollbackNewServicesKeepsRunningCluster(t *testing.T) {
 	default:
 		t.Fatal("partially initialized new CN stopper was not stopped")
 	}
+}
+
+func TestRollbackNewServicesDropsTopologyAfterCloseError(t *testing.T) {
+	startErr := errors.New("start new CN")
+	closeErr := errors.New("close new CN")
+	newService := &closeTrackingService{closeErr: closeErr}
+	clusterValue, err := NewCluster(WithCNCount(1))
+	require.NoError(t, err)
+	c := clusterValue.(*cluster)
+	c.state = started
+	servicesBefore := append([]*operator(nil), c.services...)
+	filesBefore := append([]string(nil), c.files...)
+	c.startFn = func(op *operator) error {
+		require.Equal(t, metadata.ServiceType_CN, op.serviceType)
+		op.state = started
+		op.reset.svc = newService
+		return startErr
+	}
+
+	err = c.StartNewCNService(1)
+	require.ErrorIs(t, err, startErr)
+	require.ErrorIs(t, err, closeErr)
+	require.Equal(t, started, c.state)
+	require.Equal(t, servicesBefore, c.services)
+	require.Equal(t, filesBefore, c.files)
+	require.Equal(t, 1, c.options.cn)
+	require.Len(t, c.pendingCleanup, 1)
+	_, err = c.GetCNService(1)
+	require.Error(t, err)
+
+	err = c.StartNewCNService(1)
+	require.ErrorIs(t, err, closeErr)
+	require.Equal(t, servicesBefore, c.services)
+	require.Equal(t, filesBefore, c.files)
+	require.Equal(t, 1, c.options.cn)
+	require.Len(t, c.pendingCleanup, 1)
+
+	newService.closeErr = nil
+	require.NoError(t, c.StartNewCNService(0))
+	require.Empty(t, c.pendingCleanup)
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(3), newService.closeCount.Load())
 }
