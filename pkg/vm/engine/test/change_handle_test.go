@@ -3014,46 +3014,61 @@ func (failNowPanicTestingT) FailNow() {
 func TestWaitForISCPWatermarkTimeoutDoesNotWaitForBlockedGetter(t *testing.T) {
 	var tableMu sync.RWMutex
 	tableMu.Lock()
+	var unlockOnce sync.Once
+	unlockTable := func() {
+		unlockOnce.Do(tableMu.Unlock)
+	}
+	defer unlockTable()
 
+	conditionEntered := make(chan struct{})
 	conditionExited := make(chan struct{})
-	lockReleased := make(chan struct{})
 	var calls atomic.Int32
 
 	getWatermark := func() (types.TS, bool) {
 		calls.Add(1)
+		close(conditionEntered)
 		tableMu.RLock()
 		defer tableMu.RUnlock()
 		close(conditionExited)
 		return types.BuildTS(1, 0), true
 	}
 
+	helperResult := make(chan any, 1)
 	go func() {
-		time.Sleep(time.Second)
-		tableMu.Unlock()
-		close(lockReleased)
+		defer func() {
+			helperResult <- recover()
+		}()
+		waitForISCPWatermark(
+			failNowPanicTestingT{},
+			getWatermark,
+			types.BuildTS(2, 0),
+			100*time.Millisecond,
+			time.Millisecond,
+			1,
+			2,
+			"blocked-job",
+		)
 	}()
 
-	start := time.Now()
-	defer func() {
-		recovered := recover()
-		elapsed := time.Since(start)
-		<-lockReleased
-		<-conditionExited
+	select {
+	case <-conditionEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watermark condition did not enter the blocked getter")
+	}
+	select {
+	case recovered := <-helperResult:
 		require.Equal(t, "fail now", recovered)
-		require.Less(t, elapsed, 750*time.Millisecond)
 		require.Equal(t, int32(1), calls.Load())
-	}()
+	case <-time.After(5 * time.Second):
+		t.Fatal("watermark timeout waited for the blocked getter")
+	}
 
-	waitForISCPWatermark(
-		failNowPanicTestingT{},
-		getWatermark,
-		types.BuildTS(2, 0),
-		100*time.Millisecond,
-		time.Millisecond,
-		1,
-		2,
-		"blocked-job",
-	)
+	unlockTable()
+	select {
+	case <-conditionExited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked watermark condition did not exit after lock release")
+	}
 }
 
 // test delete
