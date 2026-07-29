@@ -48,20 +48,25 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 		const (
 			dbName       = "issue_26113"
 			snapshotName = "issue_26113_snapshot"
+			roleName     = "issue_26113_copy_grants_role"
 		)
 		exec("set role moadmin")
 		exec("drop snapshot if exists " + snapshotName)
 		exec("drop database if exists " + dbName)
+		exec("drop role if exists " + roleName)
 		exec("create database " + dbName)
+		exec("create role " + roleName)
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
 			_, _ = conn.ExecContext(cleanupCtx, "rollback")
 			_, _ = conn.ExecContext(cleanupCtx, "drop snapshot if exists "+snapshotName)
 			_, _ = conn.ExecContext(cleanupCtx, "drop database if exists "+dbName)
+			_, _ = conn.ExecContext(cleanupCtx, "drop role if exists "+roleName)
 		}()
 		exec("create table " + dbName + ".src (id int primary key, v varchar(20))")
 		exec("insert into " + dbName + ".src values (1, 'a')")
+		exec("grant select on table " + dbName + ".src to " + roleName + " with grant option")
 		exec("create table " + dbName + ".baseline clone " + dbName + ".src")
 		var count int
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".baseline").Scan(&count))
@@ -148,9 +153,21 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 		exec("create table " + dbName + ".cg2 clone " + dbName + ".cg1 copy grants")
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".cg2").Scan(&count))
 		require.Equal(t, 1, count)
+		var cg1ID, cg2ID uint64
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname = 'cg1'").Scan(&cg1ID))
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname = 'cg2'").Scan(&cg2ID))
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_role_privs where role_name = '"+roleName+"' "+
+				fmt.Sprintf("and obj_id = %d and privilege_name = 'select' and with_grant_option = true", cg2ID)).Scan(&count))
+		require.Equal(t, 1, count)
 		exec("rollback")
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select count(*) from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname in ('cg1', 'cg2')").Scan(&count))
+		require.Zero(t, count)
+		require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+			"select count(*) from mo_catalog.mo_role_privs where obj_id in (%d, %d)", cg1ID, cg2ID)).Scan(&count))
 		require.Zero(t, count)
 	})
 }
