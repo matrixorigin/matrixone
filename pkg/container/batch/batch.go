@@ -259,9 +259,6 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		if err := vecs[i].UnmarshalBinary(vecData); err != nil {
 			return err
 		}
-		if vecs[i].Length() < bat.rowCount {
-			return moerr.NewInvalidInputNoCtx("batch row count exceeds vector length")
-		}
 	}
 
 	l, err = cursor.readInt32()

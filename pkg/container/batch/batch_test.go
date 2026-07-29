@@ -190,20 +190,6 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 		target.Clean(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	})
-	t.Run("row_count_must_not_exceed_vector_length", func(t *testing.T) {
-		corrupted := append([]byte(nil), data...)
-		rowCount := int64(2)
-		copy(corrupted[:8], types.EncodeInt64(&rowCount))
-
-		target := NewOffHeapEmpty()
-		var unmarshalErr error
-		require.NotPanics(t, func() {
-			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
-		})
-		require.Error(t, unmarshalErr)
-		target.Clean(mp)
-		require.Equal(t, int64(0), mp.CurrNB())
-	})
 	t.Run("invalid_null_bitmap_metadata", func(t *testing.T) {
 		source := NewWithSize(1)
 		source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
@@ -280,6 +266,23 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 		target.Clean(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	})
+}
+
+func TestBatchUnmarshalPreservesIndependentRowCount(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewOffHeapEmpty()
+	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+	require.Equal(t, 1, target.RowCount())
+	require.Zero(t, target.Vecs[0].Length())
+	target.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestBatchShrink(t *testing.T) {

@@ -853,7 +853,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	}
 
 	decodedType := types.DecodeType(typ)
-	if err := validateVectorBinary(class[0], decodedType, length, vecData, area, nspData); err != nil {
+	if err := validateVectorNullBitmap(nspData); err != nil {
 		return err
 	}
 	var nsp nulls.Nulls
@@ -861,6 +861,9 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 		if err := nsp.ReadNoCopy(nspData); err != nil {
 			return err
 		}
+	}
+	if err := validateVectorBinary(class[0], decodedType, length, vecData, area, &nsp); err != nil {
+		return err
 	}
 	v.class = int(class[0])
 	v.typ = decodedType
@@ -876,7 +879,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func validateVectorBinary(class byte, typ types.Type, length uint32, data, area, nspData []byte) error {
+func validateVectorBinary(class byte, typ types.Type, length uint32, data, area []byte, nsp *nulls.Nulls) error {
 	if class > DIST {
 		return moerr.NewInvalidInputNoCtx("invalid vector class")
 	}
@@ -894,7 +897,9 @@ func validateVectorBinary(class byte, typ types.Type, length uint32, data, area,
 	if typ.IsVarlen() {
 		values := types.DecodeSlice[types.Varlena](data)
 		for i := range values {
-			if values[i].IsSmall() {
+			// Null varlen slots may retain stale offset/length metadata. The
+			// payload is never dereferenced, so only validate live values.
+			if nsp.Contains(uint64(i)) || values[i].IsSmall() {
 				continue
 			}
 			offset, size := values[i].OffsetLen()
@@ -903,10 +908,13 @@ func validateVectorBinary(class byte, typ types.Type, length uint32, data, area,
 			}
 		}
 	}
-	return validateVectorNullBitmap(nspData, length)
+	return nil
 }
 
-func validateVectorNullBitmap(data []byte, length uint32) error {
+// The bitmap length tracks allocated coverage and may exceed the vector's
+// logical length after range operations or reuse. Validate only the bitmap's
+// own representation invariants here.
+func validateVectorNullBitmap(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -916,7 +924,8 @@ func validateVectorNullBitmap(data []byte, length uint32) error {
 	count := types.DecodeInt64(data[:8])
 	bitmapLen := types.DecodeUint64(data[8:16])
 	bitmapDataLen := types.DecodeUint64(data[16:24])
-	if count < 0 || bitmapLen > uint64(length) || bitmapDataLen%8 != 0 || bitmapDataLen != uint64(len(data)-24) {
+	if count < 0 || bitmapLen > uint64(1<<63-1) ||
+		bitmapDataLen%8 != 0 || bitmapDataLen != uint64(len(data)-24) {
 		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap")
 	}
 	if bitmapDataLen != ((bitmapLen+63)/64)*8 {
