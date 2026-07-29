@@ -1330,34 +1330,59 @@ func TestDedupFinalizeNormalAbortDoesNotHideCancellation(t *testing.T) {
 func TestDedupFinalizeMailboxSupportsMultipleSpillBuckets(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	t.Cleanup(proc.Free)
-	mailbox := NewWorkerJoinMailbox(2)
-	worker := &DedupJoin{
-		NumCPU:   2,
-		IsMerger: false,
-		Mailbox:  mailbox,
+	mailbox := NewWorkerJoinMailbox(3)
+	workers := []*DedupJoin{
+		{
+			NumCPU:   3,
+			IsMerger: false,
+			Mailbox:  mailbox,
+		},
+		{
+			NumCPU:   3,
+			IsMerger: false,
+			Mailbox:  mailbox,
+		},
 	}
 
 	for bucket := range 2 {
-		worker.ctr.matched = &bitmap.Bitmap{}
-		worker.ctr.matched.InitWithSize(2)
-		worker.ctr.matched.Add(uint64(bucket))
+		for i, worker := range workers {
+			worker.ctr.matched = &bitmap.Bitmap{}
+			worker.ctr.matched.InitWithSize(4)
+			worker.ctr.matched.Add(uint64(bucket*2 + i))
+		}
 
-		errC := make(chan error, 1)
+		fastErrC := make(chan error, 1)
 		go func() {
-			errC <- worker.ctr.finalize(worker, proc)
+			fastErrC <- workers[0].ctr.finalize(workers[0], proc)
 		}()
-		msg, err := receiveWorkerMsg(proc.Ctx, mailbox)
+		fastMsg, err := receiveWorkerMsg(proc.Ctx, mailbox)
 		require.NoError(t, err)
-		require.True(t, msg.matched.Contains(uint64(bucket)))
+		require.True(t, fastMsg.matched.Contains(uint64(bucket*2)))
 		require.Empty(t, mailbox.ch)
 		select {
-		case err := <-errC:
+		case err := <-fastErrC:
 			require.NoError(t, err)
-			t.Fatal("worker advanced before the merger completed the spill bucket")
+			t.Fatal("fast worker advanced before the slow worker published its spill bucket")
 		default:
 		}
+
+		slowErrC := make(chan error, 1)
+		go func() {
+			slowErrC <- workers[1].ctr.finalize(workers[1], proc)
+		}()
+		slowMsg, err := receiveWorkerMsg(proc.Ctx, mailbox)
+		require.NoError(t, err)
+		require.True(t, slowMsg.matched.Contains(uint64(bucket*2+1)))
+		select {
+		case err := <-slowErrC:
+			require.NoError(t, err)
+			t.Fatal("slow worker advanced before the merger completed the spill bucket")
+		default:
+		}
+
 		mailbox.completeRound()
-		require.NoError(t, <-errC)
+		require.NoError(t, <-fastErrC)
+		require.NoError(t, <-slowErrC)
 	}
 }
 
