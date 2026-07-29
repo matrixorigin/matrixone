@@ -52,6 +52,41 @@ func TestAutoIncrEpochFenceCommitRequiresV6(t *testing.T) {
 	require.Error(t, runtime.CheckMethodVersionWithRuntime(context.Background(), rt, legacyMethods, req))
 }
 
+func TestAutoIncrEpochFenceCommitNetworkDispatchRequiresV6(t *testing.T) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
+		var calls atomic.Int32
+		s.RegisterMethodHandler(txn.TxnMethod_CommitAutoIncrEpochFence, func(
+			context.Context,
+			*txn.TxnRequest,
+			*txn.TxnResponse,
+		) error {
+			calls.Add(1)
+			return nil
+		})
+
+		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
+		v5Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
+		require.Error(t, s.onMessage(
+			context.Background(),
+			v5Message,
+			1,
+			newTestClientSession(make(chan morpc.Message, 1)),
+		))
+		require.Zero(t, calls.Load(), "V5 must reject before invoking the handler")
+
+		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
+		v6Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
+		defer v6Message.Cancel()
+		require.NoError(t, s.onMessage(
+			context.Background(),
+			v6Message,
+			2,
+			newTestClientSession(make(chan morpc.Message, 1)),
+		))
+		require.Eventually(t, func() bool { return calls.Load() == 1 }, time.Second, time.Millisecond)
+	})
+}
+
 func TestHandleMessageWithSender(t *testing.T) {
 	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		s.RegisterMethodHandler(txn.TxnMethod_Read, func(ctx context.Context, tr1 *txn.TxnRequest, tr2 *txn.TxnResponse) error {

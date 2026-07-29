@@ -147,6 +147,51 @@ func TestTransactionMarksAutoIncrEpochFenceBeforeWorkspaceFlush(t *testing.T) {
 	require.True(t, op.required)
 }
 
+type unsupportedAutoIncrEpochTxnOperator struct {
+	client.TxnOperator
+}
+
+func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
+	newTxn := func(t *testing.T) *Transaction {
+		return &Transaction{
+			op:   &unsupportedAutoIncrEpochTxnOperator{},
+			proc: testutil.NewProc(t),
+		}
+	}
+
+	t.Run("row", func(t *testing.T) {
+		txn := newTxn(t)
+		_, err := txn.writeBatchWithAutoIncrEpochKnown(
+			INSERT, "", 1, 2, 3, "db", "tbl", nil, DNStore{}, 1, true,
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+		require.Empty(t, txn.writes)
+		require.Zero(t, txn.workspaceSize)
+	})
+
+	t.Run("file", func(t *testing.T) {
+		txn := newTxn(t)
+		err := txn.writeFileLockedWithAutoIncrEpochKnown(
+			INSERT, 1, 2, 3, "db", "tbl", "file", nil, DNStore{}, 1, true,
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+		require.Empty(t, txn.writes)
+		require.False(t, txn.hasS3Op.Load())
+		require.Zero(t, txn.workspaceSize)
+	})
+
+	t.Run("skip transfer file", func(t *testing.T) {
+		txn := newTxn(t)
+		err := txn.writeFileLockedSkipTransferWithAutoIncrEpochKnown(
+			INSERT, 1, 2, 3, "db", "tbl", "file", nil, DNStore{}, 1, true,
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+		require.Empty(t, txn.writes)
+		require.False(t, txn.hasS3Op.Load())
+		require.Zero(t, txn.workspaceSize)
+	})
+}
+
 func TestWorkspaceFlushKeySeparatesAutoIncrEpochs(t *testing.T) {
 	base := tableKey{accountId: 1, databaseId: 7, dbName: "db", name: "tbl"}
 	batches := map[workspaceTableKey]int{
