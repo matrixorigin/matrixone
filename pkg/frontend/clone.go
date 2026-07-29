@@ -462,6 +462,22 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
+	if source.hasFkCycle {
+		oldForeignKeyChecks, getErr := ses.GetSessionSysVar("foreign_key_checks")
+		if getErr != nil {
+			return nil, getErr
+		}
+		if err = ses.SetSessionSysVar(reqCtx, "foreign_key_checks", int64(0)); err != nil {
+			return nil, err
+		}
+		defer func() {
+			restoreErr := ses.SetSessionSysVar(reqCtx, "foreign_key_checks", oldForeignKeyChecks)
+			if err == nil {
+				err = restoreErr
+			}
+		}()
+	}
+
 	ctx1 = defines.AttachAccountId(reqCtx, source.toAccountId)
 	if err = bh.Exec(ctx1,
 		fmt.Sprintf("create database %s", quoteIdentifierForSQL(stmt.DstDatabase.String())),
