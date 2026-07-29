@@ -2023,7 +2023,7 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 		)
 	}
 	if len(tblName) > 0 {
-		whereClause += fmt.Sprintf(" and relname like %s", quoteSQLStringLiteral(tblName))
+		whereClause += fmt.Sprintf(" and relname = %s", quoteSQLStringLiteral(tblName))
 	}
 	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
 	return whereClause
