@@ -623,7 +623,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				return false, nil, nil, err
 			}
 		} else {
-			projExpr, err = builder.forceAssignmentCastExpr(projExpr, tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
+			projExpr, err = builder.forceProjectedAssignmentCastExpr(
+				projExpr, oldProject[i], tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -1044,6 +1045,15 @@ func forceCastExpr2WithProcess(
 	if targetType.Typ.Id == 0 {
 		return expr, nil
 	}
+	var err error
+	var rewritten bool
+	expr, rewritten, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType.Typ)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
+		return expr, nil
+	}
 	if isTypedArrayPlanType(&targetType.Typ) {
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
@@ -1148,8 +1158,103 @@ func (builder *QueryBuilder) forceAssignmentCastExpr(expr *Expr, targetType Type
 	)
 }
 
+func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
+	expr, sourceExpr *Expr,
+	targetType Type,
+	isIgnore bool,
+) (*Expr, error) {
+	var err error
+	var rewritten bool
+	expr, rewritten, err = builder.rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, sourceExpr, targetType)
+	if err != nil || rewritten {
+		return expr, err
+	}
+	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore)
+}
+
+func (builder *QueryBuilder) rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
+	if builder == nil || expr == nil || sourceExpr == nil ||
+		targetType.Id != int32(types.T_json) || sourceExpr.Typ.Id == int32(types.T_enum) {
+		return expr, false, nil
+	}
+	if builder.isProjectedEnumOrSetDisplayValueExpr(sourceExpr, nil) {
+		quoted, err := quoteEnumOrSetDisplayValueAsJSON(builder.GetContext(), expr)
+		return quoted, err == nil, err
+	}
+	return expr, false, nil
+}
+
+func (builder *QueryBuilder) isProjectedEnumOrSetDisplayValueExpr(expr *Expr, visited map[[2]int32]struct{}) bool {
+	if isEnumOrSetDisplayValueExpr(expr) {
+		return true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	key := [2]int32{col.RelPos, col.ColPos}
+	if visited == nil {
+		visited = make(map[[2]int32]struct{})
+	}
+	if _, ok := visited[key]; ok {
+		return false
+	}
+	visited[key] = struct{}{}
+	defer delete(visited, key)
+
+	nodeID, ok := builder.tag2NodeID[col.RelPos]
+	if !ok || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL:
+		if len(node.Children) == 0 {
+			return false
+		}
+		for _, childID := range node.Children {
+			if childID < 0 || int(childID) >= len(builder.qry.Nodes) {
+				return false
+			}
+			childProjectList := builder.qry.Nodes[childID].ProjectList
+			if col.ColPos < 0 || int(col.ColPos) >= len(childProjectList) {
+				return false
+			}
+			if !builder.isProjectedEnumOrSetDisplayValueExpr(childProjectList[col.ColPos], visited) {
+				return false
+			}
+		}
+		return true
+	case plan.Node_MINUS, plan.Node_MINUS_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		if len(node.Children) == 0 || node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) {
+			return false
+		}
+		leftProjectList := builder.qry.Nodes[node.Children[0]].ProjectList
+		if col.ColPos < 0 || int(col.ColPos) >= len(leftProjectList) {
+			return false
+		}
+		return builder.isProjectedEnumOrSetDisplayValueExpr(leftProjectList[col.ColPos], visited)
+	}
+
+	projectList := node.ProjectList
+	if col.ColPos < 0 || int(col.ColPos) >= len(projectList) {
+		return false
+	}
+	return builder.isProjectedEnumOrSetDisplayValueExpr(projectList[col.ColPos], visited)
+}
+
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
 	if targetType.Id == 0 {
+		return expr, nil
+	}
+	var err error
+	var rewritten bool
+	expr, rewritten, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
 		return expr, nil
 	}
 	if isTypedArrayPlanType(&targetType) {

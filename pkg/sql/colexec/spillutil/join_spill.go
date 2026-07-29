@@ -45,10 +45,10 @@ const (
 	SpillNumBuckets = 32
 	SpillMaxPass    = 3
 	// Coalesce serialized records across source batches without retaining
-	// selected vectors. bytes.Buffer growth is charged at 2x this target.
+	// selected vectors. Retained buffer capacity is charged once.
 	spillWriteCoalesceSize = 64 << 10
 	// Keep enough decoded-batch headroom to reuse the reservation for ordinary
-	// spill records without retaining the conservative 4x unmarshal estimate
+	// spill records without retaining the pre-admission unmarshal estimate
 	// for a large record until the reader closes. The additive bound makes the
 	// long-lived charge independent of the largest serialized payload seen.
 	decodedBatchLeaseSlack = 1 << 20
@@ -199,8 +199,14 @@ func batchRetainedBytes(bat *batch.Batch) (uint64, bool) {
 		return 0, false
 	}
 	actual := uint64(bat.Allocated())
-	rows := uint64(bat.RowCount())
-	cols := uint64(len(bat.Vecs))
+	metadata, ok := batchRetainedMetadataBytes(uint64(bat.RowCount()), uint64(len(bat.Vecs)))
+	if !ok {
+		return 0, false
+	}
+	return addUint64(actual, metadata)
+}
+
+func batchRetainedMetadataBytes(rows, cols uint64) (uint64, bool) {
 	if cols > (math.MaxUint64-16)/8 {
 		return 0, false
 	}
@@ -208,7 +214,7 @@ func batchRetainedBytes(bat *batch.Batch) (uint64, bool) {
 	if rows > 0 && metadata > math.MaxUint64/rows {
 		return 0, false
 	}
-	return addUint64(actual, rows*metadata)
+	return rows * metadata, true
 }
 
 // reconcileReadReservation shrinks a conservative read reservation to the
@@ -369,8 +375,63 @@ func mulUint64(a, b uint64) (uint64, bool) {
 	return a * b, true
 }
 
+func batchPayloadWithAllocationSlack(payload, columns uint64) (uint64, bool) {
+	const perVectorAllocationSlack = uint64(64 << 10)
+	if columns >= math.MaxUint64/perVectorAllocationSlack {
+		return 0, false
+	}
+	allocationSlack := (columns + 1) * perVectorAllocationSlack
+	if payload > math.MaxUint64-allocationSlack {
+		return 0, false
+	}
+	return payload + allocationSlack, true
+}
+
+func decodedBatchProjectedBytes(payload uint64, rows int64, columns int32) (uint64, bool) {
+	if rows < 0 || columns < 0 {
+		return 0, false
+	}
+	projected, ok := batchPayloadWithAllocationSlack(payload, uint64(columns))
+	if !ok {
+		return 0, false
+	}
+	metadata, ok := batchRetainedMetadataBytes(uint64(rows), uint64(columns))
+	if !ok {
+		return 0, false
+	}
+	return addUint64(projected, metadata)
+}
+
+func decodedBatchReusePeakBytes(retained, projected, payload uint64) (uint64, bool) {
+	// For large buffers mpool.Grow follows Go's 1.25x growth policy. The old
+	// allocation remains live until the replacement is allocated and copied.
+	// Small-buffer doubling is bounded by the per-vector slack already included
+	// in projected.
+	growthSlack := payload / 4
+	if payload%4 != 0 {
+		growthSlack++
+	}
+	newAllocation, ok := addUint64(projected, growthSlack)
+	if !ok {
+		return 0, false
+	}
+	return addUint64(retained, newAllocation)
+}
+
 func maxIntValue() int {
 	return int(^uint(0) >> 1)
+}
+
+func marshalSpillRecordGrowBytes(bat *batch.Batch) (uint64, bool) {
+	base := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > base {
+		base = size
+	}
+	columns := uint64(len(bat.Vecs))
+	if columns > (math.MaxUint64-24)/128 {
+		return 0, false
+	}
+	return addUint64(base, columns*128+24)
 }
 
 func (r *BucketReader) releaseReadBatch(proc *process.Process, bat *batch.Batch, token *process.HashBuildReservation) {
@@ -407,22 +468,70 @@ func (r *BucketReader) readBatchRecord(
 	}
 	if r.budget != nil {
 		payload := uint64(batchSize)
-		if payload > (math.MaxUint64-(64<<10))/4 {
+		if payload > uint64(maxIntValue())-(64<<10) {
 			return nil, token, charge, process.ErrHashBuildBudgetInvalid
 		}
-		projected := payload*4 + 64<<10
+		// The batch payload starts with row count and vector count. Peek only the
+		// fixed header so allocator rounding can be bounded per decoded vector
+		// before UnmarshalFromReader performs any allocation.
+		header, err := r.reader.Peek(12)
+		if err != nil {
+			return nil, token, charge, err
+		}
+		rows := types.DecodeInt64(header[:8])
+		columns := types.DecodeInt32(header[8:12])
+		if rows != cnt {
+			return nil, token, charge, moerr.NewInternalError(proc.Ctx, "row count mismatch")
+		}
+		projected, ok := decodedBatchProjectedBytes(payload, rows, columns)
+		if !ok {
+			return nil, token, charge, process.ErrHashBuildBudgetInvalid
+		}
+		// The serialized payload already includes every vector's data, area, null
+		// bitmap, and headers. Reserve one decoded payload plus bounded allocator
+		// slack, then reconcile to the retained capacities reported by the batch.
+		// Multiplying the complete payload rejects large spill records before
+		// UnmarshalFromReader can establish their actual retained footprint.
 		if token == nil {
+			// A caller-provided reuse batch has no budget ownership on the first
+			// read. Drop it before admitting the decoded payload.
+			reuseBat.Clean(proc.Mp())
 			var err error
 			token, err = r.budget.Reserve(projected)
 			if err != nil {
 				return nil, nil, 0, err
 			}
 			charge = projected
-		} else if projected > charge {
-			if err := token.Grow(projected - charge); err != nil {
-				return nil, token, charge, err
+		} else {
+			// Reusing vectors can briefly keep their old allocation alive while
+			// mpool.Grow allocates the replacement. Admit one complete decoded
+			// payload above the retained lease before unmarshal. If that transient
+			// peak does not fit, release the old batch and decode from a clean
+			// batch so a valid single payload is not rejected.
+			retained, retainedOK := batchRetainedBytes(reuseBat)
+			peak, peakOK := decodedBatchReusePeakBytes(retained, projected, payload)
+			var growErr error
+			if retainedOK && peakOK && peak > charge {
+				growErr = token.Grow(peak - charge)
 			}
-			charge = projected
+			if growErr != nil &&
+				!errors.Is(growErr, process.ErrHashBuildBudgetAdmission) &&
+				!errors.Is(growErr, process.ErrHashBuildBudgetRejected) {
+				return nil, token, charge, growErr
+			}
+			if !retainedOK || !peakOK || growErr != nil {
+				reuseBat.Clean(proc.Mp())
+				token.Release()
+				token = nil
+				var err error
+				token, err = r.budget.Reserve(projected)
+				if err != nil {
+					return nil, nil, 0, err
+				}
+				charge = projected
+			} else if peak > charge {
+				charge = peak
+			}
 		}
 	}
 
@@ -651,6 +760,16 @@ func marshalSpillRecord(bat *batch.Batch, buf *bytes.Buffer) error {
 	}
 	cnt := int64(bat.RowCount())
 	buf.Reset()
+	grow, ok := marshalSpillRecordGrowBytes(bat)
+	if !ok || grow > uint64(maxIntValue()) {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	if uint64(buf.Cap()) < grow {
+		// Allocate the final serialization capacity in one step. Retaining a
+		// smaller bytes.Buffer while it grows geometrically would invalidate the
+		// single-payload admission estimate.
+		*buf = *bytes.NewBuffer(make([]byte, 0, int(grow)))
+	}
 	buf.Write(types.EncodeInt64(&cnt))
 	batchSizePos := buf.Len()
 	var zero int64
@@ -952,9 +1071,97 @@ func (e *SpillEngine) scatterBatch(
 	writers []BucketWriter,
 	buffers []*batch.Batch,
 	partitionLevel uint64,
+	sourceAlreadyCharged bool,
 	analyzer process.Analyzer,
 ) error {
-	return e.scatterBatchBounded(proc, bat, keyVecs, writers, partitionLevel, analyzer)
+	return e.scatterBatchBounded(proc, bat, keyVecs, writers, partitionLevel, sourceAlreadyCharged, analyzer)
+}
+
+func scatterTransientBudgetBytes(bat *batch.Batch, sourceAlreadyCharged bool) (uint64, error) {
+	if bat == nil || bat.RowCount() < 0 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	allocated := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > allocated {
+		allocated = size
+	}
+	columns := uint64(len(bat.Vecs))
+	oneMaterializedBatch, ok := batchPayloadWithAllocationSlack(allocated, columns)
+	if !ok {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	// The selected batch and serialized payload are distinct live objects, so
+	// each receives one source-sized estimate plus bounded allocator/framing
+	// slack. The row/hash arrays are accounted separately from their capacities.
+	need, ok := addUint64(oneMaterializedBatch, oneMaterializedBatch)
+	if !ok {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	if !sourceAlreadyCharged {
+		if need, ok = addUint64(need, allocated); !ok {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+	}
+	return need, nil
+}
+
+func (e *SpillEngine) scatterRetainedBytes() (uint64, bool) {
+	actual := uint64(0)
+	add := func(v uint64) bool {
+		var ok bool
+		actual, ok = addUint64(actual, v)
+		return ok
+	}
+	mul := func(v, n uint64) (uint64, bool) {
+		if n != 0 && v > math.MaxUint64/n {
+			return 0, false
+		}
+		return v * n, true
+	}
+	hashBytes, hashOK := mul(uint64(cap(e.scatterHashValues)), 8)
+	rowIDBytes, rowIDOK := mul(uint64(cap(e.scatterBucketRowIds)), 4)
+	keyBytes, keyOK := mul(uint64(cap(e.keyVecs)), 8)
+	countBytes, countOK := mul(uint64(len(e.scatterBucketCounts)), 4)
+	offsetBytes, offsetOK := mul(uint64(len(e.scatterBucketOffsets)), 4)
+	if !hashOK || !rowIDOK || !keyOK || !countOK || !offsetOK ||
+		!add(hashBytes) || !add(rowIDBytes) || !add(keyBytes) || !add(countBytes) || !add(offsetBytes) ||
+		!add(uint64(e.scatterWriteBuf.Cap())) {
+		return 0, false
+	}
+	for i := range e.scatterWriteBuffers {
+		if !add(uint64(e.scatterWriteBuffers[i].Cap())) {
+			return 0, false
+		}
+	}
+	return actual, true
+}
+
+func (e *SpillEngine) scatterCapacityGrowthBytes(rows, keys int) (uint64, bool) {
+	if rows < 0 || keys < 0 {
+		return 0, false
+	}
+	var growth uint64
+	addGrowth := func(required, current uint64) bool {
+		if required <= current {
+			return true
+		}
+		var ok bool
+		// make allocates the complete replacement before assignment drops the
+		// old slice. retained already includes current, so admit all of required.
+		growth, ok = addUint64(growth, required)
+		return ok
+	}
+	rowCount := uint64(rows)
+	keyCount := uint64(keys)
+	if rowCount > math.MaxUint64/8 || keyCount > math.MaxUint64/8 {
+		return 0, false
+	}
+	if !addGrowth(rowCount*8, uint64(cap(e.scatterHashValues))*8) ||
+		!addGrowth(rowCount*4, uint64(cap(e.scatterBucketRowIds))*4) ||
+		!addGrowth(keyCount*8, uint64(cap(e.keyVecs))*8) {
+		return 0, false
+	}
+	return growth, true
 }
 
 // scatterBatchBounded writes one bucket at a time. The historical path kept
@@ -968,6 +1175,7 @@ func (e *SpillEngine) scatterBatchBounded(
 	keyVecs []*vector.Vector,
 	writers []BucketWriter,
 	partitionLevel uint64,
+	sourceAlreadyCharged bool,
 	analyzer process.Analyzer,
 ) (retErr error) {
 	if bat == nil || bat.RowCount() == 0 {
@@ -992,35 +1200,34 @@ func (e *SpillEngine) scatterBatchBounded(
 		}
 	}()
 	if e.cfg.Budget != nil {
-		// Hash values, row IDs, a single selected batch, and marshal growth all
-		// coexist briefly. Charge a conservative bound before any allocation.
-		allocated := uint64(bat.Allocated())
-		if size := uint64(bat.Size()); size > allocated {
-			allocated = size
-		}
-		rowCount := uint64(rows)
-		if rowCount > math.MaxUint64/96 {
+		// Start with retained capacities already owned by this token, add only
+		// row/hash capacity growth, then add each per-batch transient once.
+		retained, ok := e.scatterRetainedBytes()
+		if !ok {
 			return process.ErrHashBuildBudgetInvalid
 		}
-		rowScratch := rowCount * 96
-		const marshalSlack = uint64(64 << 10)
-		if rowScratch > math.MaxUint64-marshalSlack ||
-			allocated > (math.MaxUint64-rowScratch-marshalSlack)/3 {
+		growth, ok := e.scatterCapacityGrowthBytes(rows, len(keyVecs))
+		if !ok {
 			return process.ErrHashBuildBudgetInvalid
 		}
-		// Worst case keeps the source, a full selected varlen copy, and the
-		// serialized bytes.Buffer alive together. Use 3x source so capacity
-		// growth and varlen area remain admitted before Union/Marshal.
-		need := allocated*3 + rowScratch + marshalSlack
-		var err error
+		transient, err := scatterTransientBudgetBytes(bat, sourceAlreadyCharged)
+		if err != nil {
+			return err
+		}
+		need, ok := addUint64(retained, growth)
+		if !ok {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		if need, ok = addUint64(need, transient); !ok {
+			return process.ErrHashBuildBudgetInvalid
+		}
 		if e.scatterScratchReservation == nil {
 			e.scatterScratchReservation, err = e.cfg.Budget.Reserve(need)
-		} else {
-			// The live token already charges retained hash/row-id/coalesce
-			// capacities. A new source batch and its selected/marshal peak must
-			// be admitted on top of that retained charge, even when the token's
-			// current size is larger than this batch's standalone estimate.
-			err = e.scatterScratchReservation.Grow(need)
+		} else if current := e.scatterScratchReservation.Size(); need > current {
+			// Grow the retained scratch token to the complete batch peak. Its
+			// current hash/row-id/coalesce capacities are components of need,
+			// not an additional allocation to charge a second time.
+			err = e.scatterScratchReservation.Grow(need - current)
 		}
 		if err != nil {
 			return err
@@ -1099,7 +1306,9 @@ func (e *SpillEngine) appendScatterRecord(proc *process.Process, bat *batch.Batc
 		if !e.ensureScatterCoalesceCapacity(buf) {
 			return writeBucketPayload(proc, payload, cnt, writer, analyzer)
 		}
-		buf.Grow(spillWriteCoalesceSize)
+		if buf.Cap() < spillWriteCoalesceSize {
+			*buf = *bytes.NewBuffer(make([]byte, 0, spillWriteCoalesceSize))
+		}
 	}
 	_, _ = buf.Write(payload)
 	e.scatterWriteRows[bucket] += cnt
@@ -1116,7 +1325,7 @@ func (e *SpillEngine) ensureScatterCoalesceCapacity(buf *bytes.Buffer) bool {
 	if e.cfg.Budget == nil || e.scatterScratchReservation == nil {
 		return e.cfg.Budget == nil
 	}
-	additional := uint64(spillWriteCoalesceSize-buf.Cap()) * 2
+	additional := uint64(spillWriteCoalesceSize - buf.Cap())
 	if err := e.scatterScratchReservation.Grow(additional); err != nil {
 		return false
 	}
@@ -1196,34 +1405,9 @@ func (e *SpillEngine) reconcileScatterScratch() error {
 	if e.scatterScratchReservation == nil {
 		return nil
 	}
-	actual := uint64(0)
-	add := func(v uint64) bool {
-		if actual > math.MaxUint64-v {
-			return false
-		}
-		actual += v
-		return true
-	}
-	mul := func(v, n uint64) (uint64, bool) {
-		if n != 0 && v > math.MaxUint64/n {
-			return 0, false
-		}
-		return v * n, true
-	}
-	hashBytes, hashOK := mul(uint64(cap(e.scatterHashValues)), 8)
-	rowIDBytes, rowIDOK := mul(uint64(cap(e.scatterBucketRowIds)), 4)
-	keyBytes, keyOK := mul(uint64(cap(e.keyVecs)), 8)
-	countBytes, countOK := mul(uint64(len(e.scatterBucketCounts)), 4)
-	offsetBytes, offsetOK := mul(uint64(len(e.scatterBucketOffsets)), 4)
-	if !hashOK || !rowIDOK || !keyOK || !countOK || !offsetOK ||
-		!add(hashBytes) || !add(rowIDBytes) || !add(keyBytes) || !add(countBytes) || !add(offsetBytes) ||
-		!add(uint64(e.scatterWriteBuf.Cap())) {
+	actual, ok := e.scatterRetainedBytes()
+	if !ok {
 		return process.ErrHashBuildBudgetInvalid
-	}
-	for i := range e.scatterWriteBuffers {
-		if !add(uint64(e.scatterWriteBuffers[i].Cap())) {
-			return process.ErrHashBuildBudgetInvalid
-		}
 	}
 	reserved := e.scatterScratchReservation.Size()
 	if actual > reserved {
@@ -1445,7 +1629,7 @@ func (e *SpillEngine) ScatterProbeTable(
 			return err
 		}
 		e.replaceProbeExpressionReservation(candidate)
-		if err := e.scatterBatch(proc, bat, keyVecs, writers, nil, 0, analyzer); err != nil {
+		if err := e.scatterBatch(proc, bat, keyVecs, writers, nil, 0, false, analyzer); err != nil {
 			return err
 		}
 	}
@@ -1726,7 +1910,13 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 	}
 
 	// evalAndScatter builds key vectors using the given executors and scatters.
-	evalAndScatter := func(bat *batch.Batch, writers []BucketWriter, buffers []*batch.Batch, execs []colexec.ExpressionExecutor) error {
+	evalAndScatter := func(
+		bat *batch.Batch,
+		writers []BucketWriter,
+		buffers []*batch.Batch,
+		execs []colexec.ExpressionExecutor,
+		sourceAlreadyCharged bool,
+	) error {
 		candidate, err := e.reserveExpressionPeak(proc, e.cfg.BuildKeyExprs, bat.RowCount())
 		if err != nil {
 			return err
@@ -1755,7 +1945,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			keyVecs[i] = vec
 		}
 		e.replaceBuildExpressionReservation(candidate)
-		return e.scatterBatch(proc, bat, keyVecs, writers, nil, partitionLevel, analyzer)
+		return e.scatterBatch(proc, bat, keyVecs, writers, nil, partitionLevel, sourceAlreadyCharged, analyzer)
 	}
 
 	var buildRows int64
@@ -1763,7 +1953,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		if b != nil {
 			buildRows += int64(b.RowCount())
 		}
-		if err := evalAndScatter(b, buildWriters, nil, e.keyExecs); err != nil {
+		if err := evalAndScatter(b, buildWriters, nil, e.keyExecs, true); err != nil {
 			return err
 		}
 		return nil
@@ -1771,7 +1961,9 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		return nil, err
 	}
 	if pending != nil && pending.RowCount() > 0 {
-		if err := evalAndScatter(pending, buildWriters, nil, e.keyExecs); err != nil {
+		// pending is the current BucketReader batch whose copy admission failed;
+		// the reader keeps its batch token live until the next ReadBatch.
+		if err := evalAndScatter(pending, buildWriters, nil, e.keyExecs, true); err != nil {
 			return nil, err
 		}
 	}
@@ -1788,7 +1980,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			return nil, err
 		}
 		buildRows += int64(bat.RowCount())
-		if err := evalAndScatter(bat, buildWriters, nil, e.keyExecs); err != nil {
+		if err := evalAndScatter(bat, buildWriters, nil, e.keyExecs, true); err != nil {
 			return nil, err
 		}
 	}
@@ -1982,7 +2174,7 @@ func scatterProbe(proc *process.Process, e *SpillEngine, bat *batch.Batch, write
 		return err
 	}
 	e.replaceProbeExpressionReservation(candidate)
-	return e.scatterBatch(proc, bat, keyVecs, writers, buffers, seed, analyzer)
+	return e.scatterBatch(proc, bat, keyVecs, writers, buffers, seed, true, analyzer)
 }
 
 func (e *SpillEngine) reserveExpressionPeak(proc *process.Process, exprs []*plan.Expr, rows int) (*process.HashBuildReservation, error) {

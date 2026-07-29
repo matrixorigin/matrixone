@@ -1580,7 +1580,7 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 				}
 				tbl.dumpCore(buf.String())
 			}
-			break
+			return err
 		}
 	}
 	// In flush and merge, it transfers deletes when prepare commit.
