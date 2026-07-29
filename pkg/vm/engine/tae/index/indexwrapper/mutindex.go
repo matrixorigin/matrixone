@@ -171,12 +171,6 @@ func (idx *MutIndex) GetDuplicatedRows(
 		if err == index.ErrNotFound {
 			return nil
 		}
-		if skipFn != nil {
-			err = skipFn(rows[len(rows)-1])
-			if err != nil {
-				return err
-			}
-		}
 		var maxRow uint32
 		exist := false
 		for i := len(rows) - 1; i >= 0; i-- {
@@ -184,6 +178,15 @@ func (idx *MutIndex) GetDuplicatedRows(
 				break
 			}
 			if int32(rows[i]) < maxVisibleRow {
+				if skipFn != nil {
+					err = skipFn(rows[i])
+					if err == index.ErrNotFound {
+						continue
+					}
+					if err != nil {
+						return err
+					}
+				}
 				maxRow = rows[i]
 				exist = true
 				break
@@ -232,6 +235,9 @@ func (idx *MutIndex) Contains(
 			panic("logic err: tombstones doesn't have duplicate rows")
 		}
 		err = skipFn(rows[0])
+		if err == index.ErrNotFound {
+			return nil
+		}
 		if err != nil {
 			return err
 		}

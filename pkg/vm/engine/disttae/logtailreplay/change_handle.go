@@ -652,14 +652,12 @@ func blockCommitTSOverlapsRange(
 	if metaColCnt == 0 {
 		return false, false, "no_meta_columns", base
 	}
-	// Commit-ts is stored as the trailing hidden column when available.
-	// Do not gate by max-seqnum here: merged/rewritten TN objects may expose
-	// different seqnum layouts while still carrying valid commit-ts zonemap.
-	commitCol := blk.ColumnMeta(metaColCnt - 1)
-	base = fmt.Sprintf("%s tail_col_type=%d", base, commitCol.DataType())
-	if commitCol.DataType() != uint8(types.T_TS) {
+	commitPos, ok := objectio.ResolveSpecialColumnLayout(blk).Resolve(objectio.SEQNUM_COMMITTS)
+	if !ok {
 		return false, false, "tail_column_not_ts", base
 	}
+	commitCol := blk.ColumnMeta(commitPos)
+	base = fmt.Sprintf("%s commit_pos=%d", base, commitPos)
 	zm := commitCol.ZoneMap()
 	if !zm.IsInited() {
 		return false, false, "zonemap_not_inited", base

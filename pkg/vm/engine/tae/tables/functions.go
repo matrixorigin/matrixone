@@ -166,24 +166,36 @@ func parseAGetDuplicateRowIDsArgs(args ...any) (
 // loaded for blocks without an actual candidate. Both success and failure are
 // cached to keep the storage read bounded to once per candidate block.
 type commitTSLoader struct {
-	load   func() (containers.Vector, error)
-	vec    containers.Vector
-	err    error
-	loaded bool
+	load     func() (containers.Vector, containers.Vector, error)
+	commitTS containers.Vector
+	abort    containers.Vector
+	err      error
+	loaded   bool
 }
 
-func (loader *commitTSLoader) get() (containers.Vector, error) {
+func (loader *commitTSLoader) get() (containers.Vector, containers.Vector, error) {
 	if !loader.loaded {
-		loader.vec, loader.err = loader.load()
+		loader.commitTS, loader.abort, loader.err = loader.load()
 		loader.loaded = true
 	}
-	return loader.vec, loader.err
+	return loader.commitTS, loader.abort, loader.err
+}
+
+func isAborted(abort containers.Vector, row int) bool {
+	if abort == nil || abort.IsConstNull() || row >= abort.Length() {
+		return false
+	}
+	return vector.GetFixedAtNoTypeCheck[bool](abort.GetDownstreamVector(), row)
 }
 
 func (loader *commitTSLoader) close() {
-	if loader.vec != nil {
-		loader.vec.Close()
-		loader.vec = nil
+	if loader.commitTS != nil {
+		loader.commitTS.Close()
+		loader.commitTS = nil
+	}
+	if loader.abort != nil {
+		loader.abort.Close()
+		loader.abort = nil
 	}
 }
 
@@ -193,14 +205,15 @@ func missingCommitTS(vec containers.Vector, row int) bool {
 
 func parseAContainsArgs(args ...any) (
 	vec containers.Vector, rowIDs containers.Vector,
-	scanFn func(uint16) (vec containers.Vector, err error), txn txnif.TxnReader, delsFn func(rowID any, ts types.TS) (types.TS, error),
+	scanFn func(uint16) (commitTS, abort containers.Vector, err error),
+	txn txnif.TxnReader, delsFn func(rowID any, ts types.TS) (types.TS, error),
 ) {
 	vec = args[0].(containers.Vector)
 	if args[1] != nil {
 		rowIDs = args[1].(containers.Vector)
 	}
 	if args[2] != nil {
-		scanFn = args[2].(func(bid uint16) (vec containers.Vector, err error))
+		scanFn = args[2].(func(bid uint16) (commitTS, abort containers.Vector, err error))
 	}
 	if args[3] != nil {
 		txn = args[3].(txnif.TxnReader)
@@ -314,9 +327,12 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				if compute.CompareBytes(v1, v2) != 0 {
 					return
 				}
-				tsVec, err := loader.get()
+				tsVec, abortVec, err := loader.get()
 				if err != nil {
 					return err
+				}
+				if isAborted(abortVec, row) {
+					return nil
 				}
 				// Legacy objects and TN rewrites containing CN-created rows may
 				// not carry row commit timestamps. Incremental dedup is only a
@@ -377,9 +393,12 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 					if comp(v1, v2) != 0 {
 						return
 					}
-					tsVec, err := loader.get()
+					tsVec, abortVec, err := loader.get()
 					if err != nil {
 						return err
+					}
+					if isAborted(abortVec, row) {
+						return nil
 					}
 					// See the varlen path above: missing metadata is a
 					// policy-aware compatibility fallback.
@@ -424,11 +443,15 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 			if rowIDs.IsNull(rowOffset) {
 				return nil
 			}
-			var tsVec containers.Vector
+			var tsVec, abortVec containers.Vector
 			defer func() {
 				if tsVec != nil {
 					tsVec.Close()
 					tsVec = nil
+				}
+				if abortVec != nil {
+					abortVec.Close()
+					abortVec = nil
 				}
 			}()
 			if row, existed := compute.GetOffsetWithFunc(
@@ -439,12 +462,15 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 			); existed {
 				if tsVec == nil {
 					var err error
-					tsVec, err = scanFn(0)
+					tsVec, abortVec, err = scanFn(0)
 					if err != nil {
 						return err
 					}
 				}
 				rowIDs.Update(rowOffset, nil, true)
+				if isAborted(abortVec, row) {
+					return nil
+				}
 				commitTS := tsVec.Get(row).(types.TS)
 				startTS := txn.GetStartTS()
 				if commitTS.GT(&startTS) {

@@ -149,7 +149,7 @@ func BlockDataReadNoCopy(
 		}
 	}()
 
-	cacheVectors := containers.NewVectors(len(columns) + 1)
+	cacheVectors := containers.NewVectors(len(columns) + 2)
 
 	phyAddrColumnPos := -1
 	for i := range columns {
@@ -835,11 +835,12 @@ func readBlockData(
 		deletes objectio.Bitmap,
 		err2 error,
 	) {
-		// appendable block should be filtered by committs
-		//cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT) // committs, aborted
-		cols = append(cols, objectio.SEQNUM_COMMITTS) // committs, aborted
+		// Appendable blocks are filtered by both MVCC special columns. The
+		// object reader synthesizes a NULL abort vector for old commitTS-only
+		// objects, which is interpreted as "no aborted rows".
+		cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT)
+		typs = append(typs, objectio.TSType, types.T_bool.ToType())
 
-		// no need to add typs, the two columns won't be generated
 		if err2 = readColumns(
 			cols, cacheVectors2,
 		); err2 != nil {
@@ -849,10 +850,14 @@ func readBlockData(
 		deletes = objectio.GetReusableBitmap()
 
 		t0 := time.Now()
-		//aborts := vector.MustFixedColWithTypeCheck[bool](loaded.Vecs[len(loaded.Vecs)-1])
-		commits := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors2[len(cols)-1])
+		abortVec := &cacheVectors2[len(cols)-1]
+		commits := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors2[len(cols)-2])
+		var aborts []bool
+		if !abortVec.IsConstNull() {
+			aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+		}
 		for i := 0; i < len(commits); i++ {
-			if commits[i].GT(&ts) {
+			if commits[i].GT(&ts) || (aborts != nil && aborts[i]) {
 				deletes.Add(uint64(i))
 			}
 		}

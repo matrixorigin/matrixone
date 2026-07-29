@@ -2614,6 +2614,7 @@ func (tbl *txnTable) getPartitionState(
 // callers should keep the original conservative behavior in that case.
 func pkCommitTSMatchedInRange(
 	commitTSVec *vector.Vector,
+	abortVec *vector.Vector,
 	sels []int64,
 	from, to types.TS,
 ) (bool, bool) {
@@ -2623,12 +2624,22 @@ func pkCommitTSMatchedInRange(
 		return false, false
 	}
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
+	var aborts []bool
+	if abortVec != nil && !abortVec.IsConstNull() {
+		if abortVec.GetType().Oid != types.T_bool {
+			return false, false
+		}
+		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+	}
 	for _, sel := range sels {
 		if sel < 0 || int(sel) >= len(timestamps) {
 			return false, false
 		}
 		if commitTSVec.IsNull(uint64(sel)) {
 			return false, false
+		}
+		if aborts != nil && aborts[sel] {
+			continue
 		}
 		ts := timestamps[sel]
 		if ts.GT(&from) && ts.LE(&to) {
@@ -2817,7 +2828,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, nil
 	}
 
-	cacheVectors := containers.NewVectors(2)
+	cacheVectors := containers.NewVectors(3)
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
@@ -2835,8 +2846,8 @@ func (tbl *txnTable) PKPersistedBetween(
 		for _, blk := range candidateBlks {
 			release, _, err := ioutil.LoadColumns(
 				ctx,
-				[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS},
-				[]types.Type{pkType, types.T_TS.ToType()},
+				[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+				[]types.Type{pkType, types.T_TS.ToType(), types.T_bool.ToType()},
 				fs,
 				blk.MetaLocation(),
 				cacheVectors,
@@ -2856,7 +2867,7 @@ func (tbl *txnTable) PKPersistedBetween(
 
 			sels := searchFunc(cacheVectors)
 			if len(sels) > 0 {
-				changed, ok := pkCommitTSMatchedInRange(&cacheVectors[1], sels, from, to)
+				changed, ok := pkCommitTSMatchedInRange(&cacheVectors[1], &cacheVectors[2], sels, from, to)
 				release()
 				if !ok || changed {
 					releasePKCheckSemaphore()
@@ -2914,7 +2925,7 @@ func tombstonePKExistsInRange(
 		for blkIdx := uint32(0); blkIdx < obj.BlkCnt(); blkIdx++ {
 			loc := obj.BlockLocation(uint16(blkIdx), objectio.BlockMaxRows)
 			isCNCreated := obj.GetCNCreated()
-			vecCount := 3
+			vecCount := 4
 			if isCNCreated {
 				vecCount = 2
 			}
@@ -2930,7 +2941,7 @@ func tombstonePKExistsInRange(
 					release()
 					return true, "tombstone_cn_hit", nil
 				}
-				changed, ok := pkCommitTSMatchedInRange(&tombVectors[2], hits, from, to)
+				changed, ok := pkCommitTSMatchedInRange(&tombVectors[2], &tombVectors[3], hits, from, to)
 				release()
 				if !ok || changed {
 					if ok {

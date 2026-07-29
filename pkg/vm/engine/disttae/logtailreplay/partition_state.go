@@ -1277,9 +1277,9 @@ func (p *PartitionState) countVisibleRowsInAppendableObject(
 	obj objectio.ObjectEntry,
 	mp *mpool.MPool,
 ) (uint64, error) {
-	cols := []uint16{objectio.SEQNUM_COMMITTS}
-	typs := []types.Type{types.T_TS.ToType()}
-	cacheVectors := containers.NewVectors(1)
+	cols := []uint16{objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}
+	typs := []types.Type{types.T_TS.ToType(), types.T_bool.ToType()}
+	cacheVectors := containers.NewVectors(2)
 
 	var count uint64
 	var loadErr error
@@ -1296,8 +1296,13 @@ func (p *PartitionState) countVisibleRowsInAppendableObject(
 				return true
 			}
 			commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[0])
-			for _, ts := range commitTSCol {
-				if ts.LE(&snapshot) {
+			abortVec := &cacheVectors[1]
+			var aborts []bool
+			if !abortVec.IsConstNull() {
+				aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+			}
+			for row, ts := range commitTSCol {
+				if (aborts == nil || !aborts[row]) && ts.LE(&snapshot) {
 					count++
 				}
 			}
@@ -1645,10 +1650,14 @@ func (p *PartitionState) countTombstoneStatsLinear(
 			rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
 
 			var commitTSs []types.TS
+			var aborts []bool
 			// When cnCreated=false (TN created), ReadDeletes reads [Rowid, CommitTS] at indices [0, 1]
 			// When cnCreated=true (CN created), ReadDeletes only reads [Rowid] at index [0], no CommitTS
 			if needCheckCommitTs && len(persistedDeletes) > 2 {
 				commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[1])
+				if !persistedDeletes[2].IsConstNull() {
+					aborts = vector.MustFixedColNoTypeCheck[bool](&persistedDeletes[2])
+				}
 			}
 
 			var lastObjId types.Objectid
@@ -1661,7 +1670,8 @@ func (p *PartitionState) countTombstoneStatsLinear(
 					continue
 				}
 
-				if needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot) {
+				if (aborts != nil && aborts[j]) ||
+					(needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot)) {
 					continue
 				}
 
@@ -1744,10 +1754,14 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
 
 				var commitTSs []types.TS
+				var aborts []bool
 				// When cnCreated=false (TN created), ReadDeletes reads [Rowid, CommitTS] at indices [0, 1]
 				// When cnCreated=true (CN created), ReadDeletes only reads [Rowid] at index [0], no CommitTS
 				if needCheckCommitTs && len(persistedDeletes) > 2 {
 					commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[1])
+					if !persistedDeletes[2].IsConstNull() {
+						aborts = vector.MustFixedColNoTypeCheck[bool](&persistedDeletes[2])
+					}
 				}
 
 				var lastObjId types.Objectid
@@ -1759,7 +1773,8 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 						continue
 					}
 
-					if needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot) {
+					if (aborts != nil && aborts[j]) ||
+						(needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot)) {
 						continue
 					}
 
@@ -1838,6 +1853,7 @@ type tombstoneBlockIterator struct {
 	blockIdx     int
 	rowIds       []types.Rowid
 	commitTSs    []types.TS
+	aborts       []bool
 	rowIdx       int
 	needCheckTS  bool
 	snapshot     types.TS
@@ -1876,9 +1892,15 @@ func (it *tombstoneBlockIterator) loadNextBlock() bool {
 	it.rowIds = vector.MustFixedColNoTypeCheck[types.Rowid](&it.persistedDel[0])
 
 	if it.needCheckTS && len(it.persistedDel) > 2 {
-		it.commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&it.persistedDel[len(it.persistedDel)-1])
+		it.commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&it.persistedDel[1])
+		if !it.persistedDel[2].IsConstNull() {
+			it.aborts = vector.MustFixedColNoTypeCheck[bool](&it.persistedDel[2])
+		} else {
+			it.aborts = nil
+		}
 	} else {
 		it.commitTSs = nil
+		it.aborts = nil
 	}
 
 	it.rowIdx = 0
@@ -1910,7 +1932,8 @@ func (it *tombstoneBlockIterator) next() bool {
 	// Persisted tombstone iterator
 	for {
 		for it.rowIdx < len(it.rowIds) {
-			if it.needCheckTS && len(it.commitTSs) > 0 && it.commitTSs[it.rowIdx].GT(&it.snapshot) {
+			if (it.aborts != nil && it.aborts[it.rowIdx]) ||
+				(it.needCheckTS && len(it.commitTSs) > 0 && it.commitTSs[it.rowIdx].GT(&it.snapshot)) {
 				it.rowIdx++
 				continue
 			}

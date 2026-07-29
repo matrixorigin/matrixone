@@ -4986,7 +4986,7 @@ func TestBlockRead(t *testing.T) {
 			}
 			b1 := buildBatch(colTyps)
 			phyAddrColumnPos := -1
-			cacheVectors := containers.NewVectors(len(colIdxs) + 1)
+			cacheVectors := containers.NewVectors(len(colIdxs) + 2)
 			err = blockio.BlockDataReadInner(
 				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
 				beforeDel, nil, nil, fileservice.Policy(0), b1, cacheVectors, pool, fs,
@@ -5134,7 +5134,7 @@ func TestBlockRead2(t *testing.T) {
 				info.MetaLocation().SetID(uint16(i))
 				b1 := buildBatch(colTyps)
 				phyAddrColumnPos := -1
-				cacheVectors := containers.NewVectors(len(colIdxs) + 1)
+				cacheVectors := containers.NewVectors(len(colIdxs) + 2)
 				ds.SetTS(beforeDel)
 				err = blockio.BlockDataReadInner(
 					context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,

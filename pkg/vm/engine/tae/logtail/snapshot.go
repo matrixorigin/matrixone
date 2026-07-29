@@ -588,10 +588,21 @@ func (sm *SnapshotMeta) updateTableInfo(
 		if !obj.deleteAt.IsEmpty() {
 			sm.aobjDelTsMap[obj.deleteAt] = struct{}{}
 		}
+		location := obj.stats.ObjectLocation()
+		objectMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		if err != nil {
+			return err
+		}
+		blockMeta := objectMeta.MustDataMeta().GetBlockMeta(0)
+		specialLayout := objectio.ResolveSpecialColumnLayout(blockMeta)
+		commitPos, ok := specialLayout.Resolve(objectio.SEQNUM_COMMITTS)
+		if !ok {
+			return fmt.Errorf("snapshot table object has no commit timestamp")
+		}
 		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
 			fs,
-			obj.stats.ObjectLocation(),
+			location,
 			objectio.SchemaData,
 		)
 		if err != nil {
@@ -600,7 +611,6 @@ func (sm *SnapshotMeta) updateTableInfo(
 		// 0 is table id
 		// 1 is table name
 		// 11 is account id
-		// len(objectBat.Vecs)-1 is commit ts
 		tids := vector.MustFixedColWithTypeCheck[uint64](objectBat.Vecs[0])
 		nameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](objectBat.Vecs[1])
 		nameArea := objectBat.Vecs[1].GetArea()
@@ -608,8 +618,18 @@ func (sm *SnapshotMeta) updateTableInfo(
 		dbArea := objectBat.Vecs[2].GetArea()
 		dbs := vector.MustFixedColWithTypeCheck[uint64](objectBat.Vecs[3])
 		accounts := vector.MustFixedColWithTypeCheck[uint32](objectBat.Vecs[11])
-		creates := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
+		creates := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[commitPos])
+		var aborts []bool
+		if abortPos, ok := specialLayout.Resolve(objectio.SEQNUM_ABORT); ok {
+			abortVec := objectBat.Vecs[abortPos]
+			if !abortVec.IsConstNull() {
+				aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+			}
+		}
 		for i := 0; i < len(tids); i++ {
+			if aborts != nil && aborts[i] {
+				continue
+			}
 			createAt := creates[i]
 			if createAt.LT(&startts) || createAt.GT(&endts) {
 				continue

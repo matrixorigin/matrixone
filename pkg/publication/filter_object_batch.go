@@ -256,8 +256,8 @@ func convertObjectToBatch(
 
 	// Step 3: Prepare columns and types
 	// For appendable objects, we need to include commit TS column
-	cols := make([]uint16, 0, maxSeqnum+2)
-	typs := make([]types.Type, 0, maxSeqnum+2)
+	cols := make([]uint16, 0, maxSeqnum+3)
+	typs := make([]types.Type, 0, maxSeqnum+3)
 
 	// Add data columns
 	for seqnum := uint16(0); seqnum <= maxSeqnum; seqnum++ {
@@ -273,6 +273,8 @@ func convertObjectToBatch(
 	// Add commit TS column for appendable objects
 	cols = append(cols, objectio.SEQNUM_COMMITTS)
 	typs = append(typs, objectio.TSType)
+	cols = append(cols, objectio.SEQNUM_ABORT)
+	typs = append(typs, types.T_bool.ToType())
 
 	// Step 4: Read column data from ALL blocks and merge
 	// Initialize vectors for each column
@@ -280,6 +282,16 @@ func convertObjectToBatch(
 	for i, typ := range typs {
 		vecs[i] = containers.MakeVector(typ, mp)
 	}
+	ownershipTransferred := false
+	defer func() {
+		if !ownershipTransferred {
+			for _, vec := range vecs {
+				if vec != nil {
+					vec.Close()
+				}
+			}
+		}
+	}()
 	allocator := fileservice.DefaultCacheDataAllocator()
 
 	// Iterate through all blocks
@@ -290,14 +302,19 @@ func convertObjectToBatch(
 			var colMeta objectio.ColumnMeta
 			var ext objectio.Extent
 
-			// Handle special columns (commit TS)
+			// Handle appendable special columns through the shared layout.
 			if seqnum >= objectio.SEQNUM_UPPER {
-				if seqnum == objectio.SEQNUM_COMMITTS {
-					metaColCnt := blkMeta.GetMetaColumnCount()
-					colMeta = blkMeta.ColumnMeta(metaColCnt - 1)
-				} else {
+				pos, ok := objectio.ResolveSpecialColumnLayout(blkMeta).Resolve(seqnum)
+				if !ok {
+					if seqnum == objectio.SEQNUM_ABORT {
+						for range int(blkMeta.GetRows()) {
+							vecs[i].Append(false, false)
+						}
+						continue
+					}
 					return nil, moerr.NewInternalErrorf(ctx, "unsupported special column: %d", seqnum)
 				}
+				colMeta = blkMeta.ColumnMeta(pos)
 			} else {
 				// Normal column
 				if seqnum > maxSeqnum || blkMeta.ColumnMeta(seqnum).DataType() == 0 {
@@ -365,12 +382,15 @@ func convertObjectToBatch(
 		var attr string
 		if cols[i] == objectio.SEQNUM_COMMITTS {
 			attr = objectio.TombstoneAttr_CommitTs_Attr
+		} else if cols[i] == objectio.SEQNUM_ABORT {
+			attr = objectio.TombstoneAttr_Abort_Attr
 		} else {
 			attr = fmt.Sprintf("tmp_%d", i)
 		}
 		bat.AddVector(attr, vec)
 	}
 
+	ownershipTransferred = true
 	return bat, nil
 }
 
@@ -399,11 +419,27 @@ func filterBatchBySnapshotTS(
 
 	// Get commit TS values
 	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
+	var aborts []bool
+	if abortPos, ok := bat.Nameidx[objectio.TombstoneAttr_Abort_Attr]; ok {
+		abortVec := bat.Vecs[abortPos]
+		if abortVec.GetType().Oid != types.T_bool {
+			return nil, moerr.NewInternalErrorf(ctx, "abort column has invalid type")
+		}
+		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec.GetDownstreamVector())
+		if len(aborts) != len(commitTSs) {
+			return nil, moerr.NewInternalErrorf(
+				ctx,
+				"abort column length %d does not match commit TS length %d",
+				len(aborts),
+				len(commitTSs),
+			)
+		}
+	}
 
 	// Build bitmap of rows to delete (commit TS < snapshot TS)
 	deletes := roaring.New()
 	for i, ts := range commitTSs {
-		if ts.GT(&snapshotTS) {
+		if ts.GT(&snapshotTS) || (aborts != nil && aborts[i]) {
 			deletes.Add(uint32(i))
 		}
 	}
@@ -471,26 +507,26 @@ func createObjectFromBatch(
 		}
 	}
 
-	// Step 3: Remove commit TS column
-	// Find commit TS column index
-	commitTSIdx := -1
+	// Step 3: Remove appendable-only MVCC columns.
+	commitTSIdx, abortIdx := -1, -1
 	for i, attr := range cnBat.Attrs {
 		if attr == objectio.TombstoneAttr_CommitTs_Attr {
 			commitTSIdx = i
-			break
+		} else if attr == objectio.TombstoneAttr_Abort_Attr {
+			abortIdx = i
 		}
 	}
-	if commitTSIdx == -1 {
-		return objectio.ObjectStats{}, nil, moerr.NewInternalErrorf(ctx, "commit TS column not found")
+	if commitTSIdx == -1 || abortIdx == -1 {
+		return objectio.ObjectStats{}, nil, moerr.NewInternalErrorf(ctx, "MVCC columns not found")
 	}
 
-	// Create new batch without commit TS column
+	// Create new batch without commit TS and abort.
 	newBat := &batch.Batch{
-		Vecs:  make([]*vector.Vector, 0, len(cnBat.Vecs)-1),
-		Attrs: make([]string, 0, len(cnBat.Attrs)-1),
+		Vecs:  make([]*vector.Vector, 0, len(cnBat.Vecs)-2),
+		Attrs: make([]string, 0, len(cnBat.Attrs)-2),
 	}
 	for i, vec := range cnBat.Vecs {
-		if i != commitTSIdx {
+		if i != commitTSIdx && i != abortIdx {
 			newBat.Attrs = append(newBat.Attrs, cnBat.Attrs[i])
 			newBat.Vecs = append(newBat.Vecs, vec)
 		}

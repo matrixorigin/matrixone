@@ -45,6 +45,7 @@ func TestCompactBlockCmd(t *testing.T) {
 	ts := types.NextGlobalTsForTest()
 	//node := MockAppendNode(341, 0, 2515, controller)
 	node := MockAppendNode(ts, 0, 2515, controller)
+	node.Aborted = true
 	cmd := NewAppendCmd(1, node)
 
 	buf, err := cmd.MarshalBinary()
@@ -59,6 +60,31 @@ func checkAppendCmdIsEqual(t *testing.T, cmd1, cmd2 *UpdateCmd) {
 	assert.Equal(t, IOET_WALTxnCommand_AppendNode, cmd1.GetType())
 	assert.Equal(t, IOET_WALTxnCommand_AppendNode, cmd2.GetType())
 	assert.Equal(t, cmd1.append.maxRow, cmd2.append.maxRow)
+	assert.Equal(t, cmd1.append.Aborted, cmd2.append.Aborted)
+}
+
+func TestAppendCmdV1CompatibilityDefaultsToNotAborted(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+
+	controller := NewAppendMVCCHandle(obj)
+	node := MockAppendNode(types.NextGlobalTsForTest(), 0, 10, controller)
+	cmd := NewAppendCmd(1, node)
+	cmd.version = IOET_WALTxnCommand_AppendNode_V1
+
+	buf, err := cmd.MarshalBinary()
+	assert.NoError(t, err)
+	decoded, err := txnbase.BuildCommandFrom(buf)
+	assert.NoError(t, err)
+	assert.False(t, decoded.(*UpdateCmd).append.Aborted)
 }
 
 // errorUpdateCmd is an UpdateCmd that returns error on MarshalBinaryWithBuffer

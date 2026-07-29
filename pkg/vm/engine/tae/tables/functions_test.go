@@ -34,16 +34,17 @@ func TestCommitTSLoaderLoadsOnceAndReleases(t *testing.T) {
 
 	loads := 0
 	loader := &commitTSLoader{
-		load: func() (containers.Vector, error) {
+		load: func() (containers.Vector, containers.Vector, error) {
 			loads++
-			return commitTS, nil
+			return commitTS, nil, nil
 		},
 	}
 
 	for range 2 {
-		got, err := loader.get()
+		got, abort, err := loader.get()
 		require.NoError(t, err)
 		require.Same(t, commitTS, got)
+		require.Nil(t, abort)
 	}
 	require.Equal(t, 1, loads)
 	loader.close()
@@ -54,19 +55,58 @@ func TestCommitTSLoaderCachesError(t *testing.T) {
 	loadErr := errors.New("load commit timestamps")
 	loads := 0
 	loader := &commitTSLoader{
-		load: func() (containers.Vector, error) {
+		load: func() (containers.Vector, containers.Vector, error) {
 			loads++
-			return nil, loadErr
+			return nil, nil, loadErr
 		},
 	}
 
 	for range 2 {
-		got, err := loader.get()
+		got, abort, err := loader.get()
 		require.ErrorIs(t, err, loadErr)
 		require.Nil(t, got)
+		require.Nil(t, abort)
 	}
 	require.Equal(t, 1, loads)
 	loader.close()
+}
+
+func TestPersistedAppendableDedupSkipsAbortedRow(t *testing.T) {
+	data := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+	defer data.Close()
+	data.Append(int64(42), false)
+	keys := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+	defer keys.Close()
+	keys.Append(int64(42), false)
+	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer rowIDs.Close()
+	rowIDs.Append(nil, true)
+
+	commitTS := containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
+	commitTS.Append(types.BuildTS(5, 0), false)
+	abort := containers.MakeVector(types.T_bool.ToType(), common.DefaultAllocator)
+	abort.Append(true, false)
+	loader := &commitTSLoader{
+		load: func() (containers.Vector, containers.Vector, error) {
+			return commitTS, abort, nil
+		},
+	}
+	defer loader.close()
+
+	txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+	op := containers.MakeForeachVectorOp(
+		keys.GetType().Oid,
+		getRowIDAlkFunctions,
+		data,
+		rowIDs,
+		types.Blockid{},
+		loader,
+		txn,
+		types.TS{},
+		types.BuildTS(10, 0),
+	)
+	require.NoError(t, containers.ForeachVector(keys, op, nil))
+	require.True(t, rowIDs.IsNull(0))
 }
 
 func TestMissingCommitTSFollowsDedupPolicy(t *testing.T) {
@@ -142,8 +182,8 @@ func TestMissingCommitTSFollowsDedupPolicy(t *testing.T) {
 
 					commitTS := commitTSCase.make()
 					loader := &commitTSLoader{
-						load: func() (containers.Vector, error) {
-							return commitTS, nil
+						load: func() (containers.Vector, containers.Vector, error) {
+							return commitTS, nil, nil
 						},
 					}
 					defer loader.close()
@@ -204,8 +244,8 @@ func TestCommitTSAtDedupLowerBoundIsIncluded(t *testing.T) {
 			)
 			commitTS.Append(from, false)
 			loader := &commitTSLoader{
-				load: func() (containers.Vector, error) {
-					return commitTS, nil
+				load: func() (containers.Vector, containers.Vector, error) {
+					return commitTS, nil, nil
 				},
 			}
 			defer loader.close()
@@ -257,9 +297,9 @@ func TestCommitTSIsNotLoadedWithoutExactPKMatch(t *testing.T) {
 
 			loads := 0
 			loader := &commitTSLoader{
-				load: func() (containers.Vector, error) {
+				load: func() (containers.Vector, containers.Vector, error) {
 					loads++
-					return nil, errors.New("unexpected commit-TS read")
+					return nil, nil, errors.New("unexpected commit-TS read")
 				},
 			}
 			defer loader.close()

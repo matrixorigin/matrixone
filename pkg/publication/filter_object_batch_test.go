@@ -173,11 +173,16 @@ func TestFilterBatchBySnapshotTS_WithDeletes(t *testing.T) {
 	tsVec.Append(ts2, false)
 	tsVec.Append(ts3, false)
 	bat.AddVector(objectio.TombstoneAttr_CommitTs_Attr, tsVec)
+	abortVec := containers.MakeVector(types.T_bool.ToType(), mp)
+	abortVec.Append(false, false)
+	abortVec.Append(false, false)
+	abortVec.Append(true, false) // visible commit TS, but rolled back
+	bat.AddVector(objectio.TombstoneAttr_Abort_Attr, abortVec)
 
 	snapshotTS := types.BuildTS(300, 0)
 	result, err := filterBatchBySnapshotTS(context.Background(), bat, snapshotTS, mp)
 	assert.NoError(t, err)
-	assert.Equal(t, 2, result.Length())
+	assert.Equal(t, 1, result.Length())
 	bat.Close()
 }
 

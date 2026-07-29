@@ -349,11 +349,16 @@ func IsRowDeletedByLocation(
 		deleted = (idx < len(rowids)) && (rowids[idx].EQ(row))
 	} else {
 		tss := vector.MustFixedColNoTypeCheck[types.TS](&data[1])
+		abortVec := &data[2]
+		var aborts []bool
+		if !abortVec.IsConstNull() {
+			aborts = vector.MustFixedColNoTypeCheck[bool](abortVec)
+		}
 		for i := idx; i < len(rowids); i++ {
 			if !rowids[i].EQ(row) {
 				break
 			}
-			if tss[i].LE(snapshotTS) {
+			if (aborts == nil || !aborts[i]) && tss[i].LE(snapshotTS) {
 				deleted = true
 				break
 			}
@@ -400,6 +405,7 @@ func FillBlockDeleteMask(
 		deleteMask = EvalDeleteMaskFromDNCreatedTombstones(
 			&persistedDeletes[0],
 			&persistedDeletes[1],
+			&persistedDeletes[2],
 			meta.GetBlockMeta(uint32(location.ID())),
 			snapshotTS,
 			blockId,
@@ -426,8 +432,12 @@ func ReadDeletes(
 		cols = []uint16{objectio.TombstoneAttr_Rowid_SeqNum}
 		typs = []types.Type{objectio.RowidType}
 	} else {
-		cols = []uint16{objectio.TombstoneAttr_Rowid_SeqNum, objectio.TombstoneAttr_CommitTs_SeqNum}
-		typs = []types.Type{objectio.RowidType, objectio.TSType}
+		cols = []uint16{
+			objectio.TombstoneAttr_Rowid_SeqNum,
+			objectio.TombstoneAttr_CommitTs_SeqNum,
+			objectio.TombstoneAttr_Abort_SeqNum,
+		}
+		typs = []types.Type{objectio.RowidType, objectio.TSType, types.T_bool.ToType()}
 	}
 
 	if pkType != nil {
@@ -443,6 +453,7 @@ func ReadDeletes(
 func EvalDeleteMaskFromDNCreatedTombstones(
 	deletedRows *vector.Vector,
 	commitTSVec *vector.Vector,
+	abortVec *vector.Vector,
 	meta objectio.BlockObject,
 	ts *types.TS,
 	blockid *types.Blockid,
@@ -457,11 +468,17 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 	}
 
 	noTSCheck := false
-	if end-start > 10 {
+	var aborts []bool
+	if abortVec != nil && !abortVec.IsConstNull() {
+		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+	}
+	if end-start > 10 && aborts == nil {
 		// fast path is true if the maxTS is less than the snapshotTS
 		// this means that all the rows between start and end are visible
-		idx := objectio.GetTombstoneCommitTSAttrIdx(meta.GetMetaColumnCount())
-		noTSCheck = meta.MustGetColumn(idx).ZoneMap().FastLEValue(ts[:], 0)
+		layout := objectio.ResolveSpecialColumnLayout(meta)
+		if idx, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
+			noTSCheck = meta.MustGetColumn(idx).ZoneMap().FastLEValue(ts[:], 0)
+		}
 	}
 	rows = objectio.GetReusableBitmap()
 	if noTSCheck {
@@ -472,7 +489,7 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 	} else {
 		tss := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
 		for i := end - 1; i >= start; i-- {
-			if tss[i].GT(ts) {
+			if (aborts != nil && aborts[i]) || tss[i].GT(ts) {
 				continue
 			}
 			row := rowids[i].GetRowOffset()

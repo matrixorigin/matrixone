@@ -377,6 +377,12 @@ func (c *DumpTableArg) onObject(e *catalog.ObjectEntry) error {
 	if isPersisted, err = c.collectObjectList(e); err != nil {
 		return err
 	}
+	// Scan represents invisible append ranges (including rollback holes) in the
+	// batch delete bitmap. Dump-table objects do not carry appendable abort
+	// metadata, so compact those rows before handing the batch to restore.
+	if bat.HasDelete() {
+		bat.Compact()
+	}
 	cnBatch := containers.ToCNBatch(bat)
 	if isPersisted {
 		name := e.ObjectStats.ObjectName().String()
