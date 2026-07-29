@@ -33,13 +33,13 @@ const (
 // New temporary objects have SystemTemporaryTable in mo_tables.relkind. During
 // an asynchronous upgrade, however, sessions started on an older version can
 // still have base rows whose relkind is SystemOrdinaryRel. The compatibility
-// function parses their request-wide rel_createsql and associates the creating
-// statement with the logical alias encoded in the physical table name. Old
-// derived objects added later do not reliably retain that statement, so they
-// are recognized only when their relkind is not user-visible and their name has
-// the exact physical session-ID shape. The relkind guard keeps permanent
-// tables, views, and external objects with otherwise legal __mo_tmp_ names
-// visible.
+// function parses their request-wide rel_createsql and checks durable rename
+// metadata before associating the creating statement with the logical alias
+// encoded in the physical table name. Old derived objects added later do not
+// reliably retain that statement, so they are recognized only when their
+// relkind is not user-visible and their name has the exact physical session-ID
+// shape. The relkind guard keeps permanent tables, views, and external objects
+// with otherwise legal __mo_tmp_ names visible.
 func NonTemporaryTableSQLPredicate(alias string) string {
 	prefix := ""
 	if alias != "" {
@@ -49,9 +49,10 @@ func NonTemporaryTableSQLPredicate(alias string) string {
 	relName := prefix + SystemRelAttr_Name
 	relDatabase := prefix + SystemRelAttr_DBName
 	createSQL := prefix + SystemRelAttr_CreateSQL
+	extraInfo := prefix + SystemRelAttr_ExtraInfo
 
 	return fmt.Sprintf(
-		"not (%s = '%s' or %s(coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, '')) or (coalesce(%s, '') not in (%s) and %s regexp '%s'))",
+		"not (%s = '%s' or %s(coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, '')) or (coalesce(%s, '') not in (%s) and %s regexp '%s'))",
 		relKind,
 		SystemTemporaryTable,
 		legacyTemporaryTableFunction,
@@ -59,6 +60,7 @@ func NonTemporaryTableSQLPredicate(alias string) string {
 		relName,
 		relDatabase,
 		createSQL,
+		extraInfo,
 		relKind,
 		userVisibleRelationKindsSQL,
 		relName,

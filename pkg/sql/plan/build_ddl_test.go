@@ -174,7 +174,39 @@ func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
 		requireIndexCatalogRelkind(t, tableDef)
 	}
 
-	require.Equal(t, canonicalCreateTableSQL(stmt.(*tree.CreateTable)), tableDefCreateSQL(createTable.TableDef))
+	require.Equal(t, rootSQL, tableDefCreateSQL(createTable.TableDef))
+}
+
+func TestBuildCreateTablePreservesSingleStatementSQL(t *testing.T) {
+	const rootSQL = "/* before */ CREATE TABLE /* table */ t_check (id INT, CONSTRAINT chk_id CHECK (id > 0));"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, rootSQL, tableDefCreateSQL(p.GetDdl().GetCreateTable().GetTableDef()))
+}
+
+func TestBuildPartitionedTablePersistsCanonicalSingleStatementSQL(t *testing.T) {
+	const rootSQL = "/* before */ CREATE TABLE partitioned_t (category VARCHAR(20)) PARTITION BY LIST COLUMNS (category) (PARTITION p0 VALUES IN ('A'));"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	createTable := p.GetDdl().GetCreateTable()
+	require.Equal(t, createTable.GetRawSQL(), tableDefCreateSQL(createTable.GetTableDef()))
+	require.NotEqual(t, rootSQL, createTable.GetRawSQL())
 }
 
 func TestBuildCreateTablePersistsStatementCanonicalSQL(t *testing.T) {

@@ -160,6 +160,39 @@ func canonicalCreateTableSQL(stmt *tree.CreateTable) string {
 	return fmtCtx.String()
 }
 
+// createTableSQLForCatalog preserves the historical rel_createsql contract for
+// a single-statement request, including comments, constraint names, and exact
+// formatting consumed by SHOW CREATE TABLE. For a multi-statement COM_QUERY,
+// GetRootSql contains the whole request and cannot identify the row's creating
+// statement, so persist this statement's canonical AST instead.
+func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) string {
+	// Partition metadata is parsed again by ALTER TABLE ADD PARTITION. Keep it
+	// independent of the creating session's SQL mode, even when the request
+	// contains only this statement.
+	if stmt.PartitionOption != nil {
+		return canonicalCreateTableSQL(stmt)
+	}
+
+	rootSQL := ctx.GetRootSql()
+	if rootSQL != "" {
+		sqlMode := parserSQLModeFromContext(ctx)
+		statements, err := parsers.ParseWithSQLMode(
+			ctx.GetContext(), dialect.MYSQL, rootSQL, 1, *sqlMode,
+		)
+		if err == nil {
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+			if len(statements) == 1 {
+				return rootSQL
+			}
+		}
+	}
+	return canonicalCreateTableSQL(stmt)
+}
+
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 
@@ -1111,11 +1144,7 @@ func buildCreateTable(
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
-		// rel_createsql is durable per-table metadata. Generate it from this
-		// statement's AST rather than GetRootSql(), which may contain an entire
-		// multi-statement COM_QUERY and therefore cannot identify which statement
-		// created the row.
-		createSQL := canonicalCreateTableSQL(stmt)
+		createSQL := createTableSQLForCatalog(ctx, stmt)
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,

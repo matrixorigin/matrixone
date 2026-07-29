@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
 func TestIsLegacyTemporaryTableAssociatesCreatingStatement(t *testing.T) {
@@ -31,8 +32,39 @@ func TestIsLegacyTemporaryTableAssociatesCreatingStatement(t *testing.T) {
 		relName   string
 		database  string
 		createSQL string
+		extraInfo string
 		want      bool
 	}{
+		{
+			name:      "permanent exact physical name wins over temporary alias",
+			relKind:   catalog.SystemOrdinaryRel,
+			relName:   physicalPrefix + "t",
+			database:  "test_db",
+			createSQL: "CREATE TEMPORARY TABLE t(id int); CREATE TABLE __mo_tmp_123e4567e89b12d3a456426614174000_test_db_t(id int)",
+		},
+		{
+			name:      "qualified permanent exact physical name wins over temporary alias",
+			relKind:   catalog.SystemOrdinaryRel,
+			relName:   physicalPrefix + "t",
+			database:  "test_db",
+			createSQL: "CREATE TEMPORARY TABLE t(id int); CREATE TABLE test_db.__mo_tmp_123e4567e89b12d3a456426614174000_test_db_t(id int)",
+		},
+		{
+			name:      "renamed permanent physical name stays visible",
+			relKind:   catalog.SystemOrdinaryRel,
+			relName:   physicalPrefix + "t",
+			database:  "test_db",
+			createSQL: "CREATE TEMPORARY TABLE t(id int); CREATE TABLE permanent_t(id int)",
+			extraInfo: string(api.MustMarshalTblExtra(&api.SchemaExtra{OldName: "permanent_t"})),
+		},
+		{
+			name:      "malformed rename metadata fails open",
+			relKind:   catalog.SystemOrdinaryRel,
+			relName:   physicalPrefix + "t",
+			database:  "test_db",
+			createSQL: "CREATE TEMPORARY TABLE t(id int)",
+			extraInfo: "not protobuf",
+		},
 		{
 			name:      "temporary then permanent classifies temporary",
 			relKind:   catalog.SystemOrdinaryRel,
@@ -90,7 +122,7 @@ func TestIsLegacyTemporaryTableAssociatesCreatingStatement(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, isLegacyTemporaryTable(
-				context.Background(), test.relKind, test.relName, test.database, test.createSQL,
+				context.Background(), test.relKind, test.relName, test.database, test.createSQL, test.extraInfo,
 			))
 		})
 	}

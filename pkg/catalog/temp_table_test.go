@@ -129,6 +129,7 @@ func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 		relName   string
 		createSQL string
 		database  string
+		extraInfo string
 	}{
 		{
 			name:      "unqualified",
@@ -136,6 +137,7 @@ func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 			relName:   SystemRelAttr_Name,
 			createSQL: SystemRelAttr_CreateSQL,
 			database:  SystemRelAttr_DBName,
+			extraInfo: SystemRelAttr_ExtraInfo,
 		},
 		{
 			name:      "qualified",
@@ -144,6 +146,7 @@ func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 			relName:   "tbl." + SystemRelAttr_Name,
 			createSQL: "tbl." + SystemRelAttr_CreateSQL,
 			database:  "tbl." + SystemRelAttr_DBName,
+			extraInfo: "tbl." + SystemRelAttr_ExtraInfo,
 		},
 	}
 
@@ -152,7 +155,7 @@ func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 			got := NonTemporaryTableSQLPredicate(test.alias)
 
 			require.Contains(t, got, test.relKind+" = '"+SystemTemporaryTable+"'")
-			require.Contains(t, got, legacyTemporaryTableFunction+"(coalesce("+test.relKind+", ''), coalesce("+test.relName+", ''), coalesce("+test.database+", ''), coalesce("+test.createSQL+", ''))")
+			require.Contains(t, got, legacyTemporaryTableFunction+"(coalesce("+test.relKind+", ''), coalesce("+test.relName+", ''), coalesce("+test.database+", ''), coalesce("+test.createSQL+", ''), coalesce("+test.extraInfo+", ''))")
 			require.Contains(t, got, "coalesce("+test.relKind+", '') not in (")
 			for _, kind := range []string{
 				SystemOrdinaryRel,

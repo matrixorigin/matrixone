@@ -453,19 +453,19 @@ func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
 			if strings.Contains(sql, "relname like "+quoteSQLStringLiteral(tableName)) {
 				t.Fatalf("table name was treated as a LIKE pattern in SQL: %s", sql)
 			}
+			if !strings.Contains(sql, "relkind = 'temporary_table'") {
+				t.Fatalf("temporary tables were not filtered by catalog marker: %s", sql)
+			}
+			if !strings.Contains(sql, "mo_is_legacy_temporary_table(coalesce(relkind, ''), coalesce(relname, ''), coalesce(reldatabase, ''), coalesce(rel_createsql, ''), coalesce(extra_info, ''))") {
+				t.Fatalf("legacy temporary base tables were not filtered by CREATE SQL: %s", sql)
+			}
+			if !strings.Contains(sql, "coalesce(relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and relname regexp '^__mo_tmp_[0-9a-f]{32}_'") {
+				t.Fatalf("legacy temporary derived objects were not filtered by exact physical name: %s", sql)
+			}
+			if strings.Contains(sql, "relname not like '__mo_tmp_%'") {
+				t.Fatalf("temporary tables were filtered by the broad legal name prefix: %s", sql)
+			}
 		})
-	}
-	if !strings.Contains(sql, "relkind = 'temporary_table'") {
-		t.Fatalf("temporary tables were not filtered by catalog marker: %s", sql)
-	}
-	if !strings.Contains(sql, "mo_is_legacy_temporary_table(coalesce(relkind, ''), coalesce(relname, ''), coalesce(reldatabase, ''), coalesce(rel_createsql, ''))") {
-		t.Fatalf("legacy temporary base tables were not filtered by CREATE SQL: %s", sql)
-	}
-	if !strings.Contains(sql, "coalesce(relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and relname regexp '^__mo_tmp_[0-9a-f]{32}_'") {
-		t.Fatalf("legacy temporary derived objects were not filtered by exact physical name: %s", sql)
-	}
-	if strings.Contains(sql, "relname not like '__mo_tmp_%'") {
-		t.Fatalf("temporary tables were filtered by the broad legal name prefix: %s", sql)
 	}
 }
 
