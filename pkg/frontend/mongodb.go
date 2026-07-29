@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -83,7 +84,10 @@ func handleAlterMongoDBConnection(ctx context.Context, ses *Session, stmt *tree.
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 		if err == nil && retireConnectionID != 0 {
-			retireMongoDBClientsBefore(ses.GetService(), ses.GetAccountId(), retireConnectionID, retireBeforeVersion)
+			retireMongoDBClients(ctx, ses.GetService(), mongodb.ClientRetirement{
+				AccountID: ses.GetAccountId(), ConnectionID: retireConnectionID,
+				VersionExclusive: retireBeforeVersion,
+			})
 		}
 	}()
 	existing, found, err := queryMongoDBConnectionByNameForUpdate(ctx, bh, ses.GetAccountId(), string(stmt.Name))
@@ -137,7 +141,9 @@ func handleDropMongoDBConnection(ctx context.Context, ses *Session, stmt *tree.D
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 		if err == nil && retiredConnectionID != 0 {
-			retireMongoDBConnection(ses.GetService(), accountID, retiredConnectionID)
+			retireMongoDBClients(ctx, ses.GetService(), mongodb.ClientRetirement{
+				AccountID: accountID, ConnectionID: retiredConnectionID,
+			})
 		}
 	}()
 	connection, found, err := queryMongoDBConnectionByNameForUpdate(ctx, bh, accountID, string(stmt.Name))
@@ -170,16 +176,42 @@ func handleDropMongoDBConnection(ctx context.Context, ses *Session, stmt *tree.D
 	return err
 }
 
-func retireMongoDBClientsBefore(service string, accountID uint32, connectionID, versionExclusive uint64) {
+func retireMongoDBClients(ctx context.Context, service string, retirement mongodb.ClientRetirement) {
 	if dependencies := mongoDBRuntimeDependencies(service); dependencies != nil && dependencies.Pool != nil {
-		_ = dependencies.Pool.RetireBefore(accountID, connectionID, versionExclusive)
+		_ = retirement.Apply(dependencies.Pool)
 	}
+	pu := getPuIfPresent(service)
+	if pu == nil || pu.QueryClient == nil {
+		return
+	}
+	value, ok := moruntime.ServiceRuntime(pu.QueryClient.ServiceID()).GetGlobalVariables(moruntime.ClusterService)
+	if !ok {
+		return
+	}
+	cluster, ok := value.(clusterservice.MOCluster)
+	if !ok || cluster == nil {
+		return
+	}
+	mongodb.ClusterRemoteClientRetirer{
+		Cluster: cluster, QueryClient: pu.QueryClient,
+	}.Retire(ctx, retirement)
 }
 
-func retireMongoDBConnection(service string, accountID uint32, connectionID uint64) {
-	if dependencies := mongoDBRuntimeDependencies(service); dependencies != nil && dependencies.Pool != nil {
-		_ = dependencies.Pool.RetireConnection(accountID, connectionID)
+func finishTxnAndRetireMongoDBAccounts(
+	ctx context.Context,
+	bh BackgroundExec,
+	service string,
+	accountIDs []uint32,
+	err error,
+) error {
+	err = finishTxn(ctx, bh, err)
+	if err != nil {
+		return err
 	}
+	for _, accountID := range accountIDs {
+		retireMongoDBClients(ctx, service, mongodb.ClientRetirement{AccountID: accountID})
+	}
+	return nil
 }
 
 func mongoDBRuntimeDependencies(service string) *mongodb.RuntimeDependencies {

@@ -312,6 +312,44 @@ func (p *ClientPool) RetireConnection(accountID uint32, connectionID uint64) err
 	return disconnectClients(clients)
 }
 
+// RetireAccount drains every client owned by an account after DROP ACCOUNT.
+// It also installs per-connection tombstones for Connect calls that started
+// before the catalog transaction committed and have not published yet.
+func (p *ClientPool) RetireAccount(accountID uint32) error {
+	p.mu.Lock()
+	connections := make(map[connectionKey]struct{})
+	clients := make([]Client, 0)
+	for key, entry := range p.entries {
+		if key.accountID != accountID {
+			continue
+		}
+		connection := connectionKey{accountID: key.accountID, connectionID: key.connectionID}
+		connections[connection] = struct{}{}
+		retirement := p.retirements[connection]
+		retirement.dropped = true
+		p.retirements[connection] = retirement
+		entry.draining = true
+		if entry.refs == 0 {
+			delete(p.entries, key)
+			clients = append(clients, entry.client)
+		}
+	}
+	for connection := range p.connecting {
+		if connection.accountID != accountID {
+			continue
+		}
+		connections[connection] = struct{}{}
+		retirement := p.retirements[connection]
+		retirement.dropped = true
+		p.retirements[connection] = retirement
+	}
+	for connection := range connections {
+		p.pruneRetirementLocked(connection)
+	}
+	p.mu.Unlock()
+	return disconnectClients(clients)
+}
+
 func (p *ClientPool) isRetiredLocked(key poolKey) bool {
 	retirement := p.retirements[connectionKey{accountID: key.accountID, connectionID: key.connectionID}]
 	return retirement.dropped || key.version < retirement.versionFloor

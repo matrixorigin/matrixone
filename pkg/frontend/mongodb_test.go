@@ -533,6 +533,67 @@ func (frontendMongoDBClientFactory) Connect(context.Context, mongodb.Connection,
 	return nil, nil
 }
 
+type retirementFrontendMongoDBClientFactory struct {
+	client *retirementFrontendMongoDBClient
+}
+
+func (f *retirementFrontendMongoDBClientFactory) Connect(
+	context.Context, mongodb.Connection, mongodb.Credentials, mongodb.RuntimeConfig,
+) (mongodb.Client, error) {
+	f.client = &retirementFrontendMongoDBClient{}
+	return f.client, nil
+}
+
+type retirementFrontendMongoDBClient struct {
+	disconnects int
+}
+
+func (*retirementFrontendMongoDBClient) Collection(string, string) mongodb.Collection { return nil }
+func (*retirementFrontendMongoDBClient) Ping(context.Context) error                   { return nil }
+func (c *retirementFrontendMongoDBClient) Disconnect(context.Context) error {
+	c.disconnects++
+	return nil
+}
+
+func TestFinishTxnAndRetireMongoDBAccounts(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		txnErr      error
+		wantSQL     string
+		wantRetired int
+	}{
+		{name: "commit", wantSQL: "commit;", wantRetired: 1},
+		{name: "rollback", txnErr: errors.New("restore failed"), wantSQL: "rollback;"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := "mongodb-restore-retirement-" + tc.name
+			rt := moruntime.DefaultRuntime()
+			moruntime.SetupServiceBasedRuntime(service, rt)
+			factory := &retirementFrontendMongoDBClientFactory{}
+			pool := mongodb.NewClientPool(factory)
+			t.Cleanup(func() { require.NoError(t, pool.Close(context.Background())) })
+			rt.SetGlobalVariables(mongodb.RuntimeDependenciesKey, &mongodb.RuntimeDependencies{Pool: pool})
+
+			lease, err := pool.Acquire(t.Context(), mongodb.Connection{
+				AccountID: 7, ConnectionID: 9, Version: 1,
+			}, mongodb.Credentials{}, mongodb.RuntimeConfig{})
+			require.NoError(t, err)
+			require.NoError(t, lease.Release(t.Context()))
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			err = finishTxnAndRetireMongoDBAccounts(t.Context(), bh, service, []uint32{7}, tc.txnErr)
+			if tc.txnErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tc.txnErr)
+			}
+			require.Equal(t, []string{tc.wantSQL}, bh.executedSQLs)
+			require.Equal(t, tc.wantRetired, factory.client.disconnects)
+		})
+	}
+}
+
 func TestMongoDBRuntimeDependencyLookupAndRetirement(t *testing.T) {
 	missingService := fmt.Sprintf("mongodb-no-runtime-%s-%d", t.Name(), mongoDBTestServiceSequence.Add(1))
 	require.NotPanics(t, func() { _ = mongoDBRuntimeDependencies(missingService) })
@@ -544,10 +605,10 @@ func TestMongoDBRuntimeDependencyLookupAndRetirement(t *testing.T) {
 	dependencies := &mongodb.RuntimeDependencies{Pool: mongodb.NewClientPool(frontendMongoDBClientFactory{})}
 	moruntime.ServiceRuntime(service).SetGlobalVariables(mongodb.RuntimeDependenciesKey, dependencies)
 	require.Same(t, dependencies, mongoDBRuntimeDependencies(service))
-	retireMongoDBClientsBefore(service, 7, 12, 3)
-	retireMongoDBConnection(service, 7, 12)
-	retireMongoDBClientsBefore(missingService, 7, 12, 3)
-	retireMongoDBConnection(missingService, 7, 12)
+	retireMongoDBClients(t.Context(), service, mongodb.ClientRetirement{AccountID: 7, ConnectionID: 12, VersionExclusive: 3})
+	retireMongoDBClients(t.Context(), service, mongodb.ClientRetirement{AccountID: 7, ConnectionID: 12})
+	retireMongoDBClients(t.Context(), service, mongodb.ClientRetirement{AccountID: 7})
+	retireMongoDBClients(t.Context(), missingService, mongodb.ClientRetirement{AccountID: 7, ConnectionID: 12})
 }
 
 func cloneStringMap(source map[string]string) map[string]string {

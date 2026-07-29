@@ -918,12 +918,13 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}()
 
 	var (
-		restoreLevel  tree.RestoreLevel
-		ts            int64
-		pitrExist     bool
-		sortedFkTbls  []string
-		fkTableMap    map[string]*tableInfo
-		accountRecord *accountRecord
+		restoreLevel             tree.RestoreLevel
+		ts                       int64
+		pitrExist                bool
+		sortedFkTbls             []string
+		fkTableMap               map[string]*tableInfo
+		accountRecord            *accountRecord
+		retiredMongoDBAccountIDs []uint32
 	)
 	// resolve timestamp
 	ts, err = doResolveTimeStamp(stmt.TimeStamp)
@@ -945,7 +946,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, err
 	}
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
 
 	// check if the pitr exists
@@ -1128,7 +1129,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	case tree.RESTORELEVELCLUSTER:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
-		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore, &retiredMongoDBAccountIDs); err != nil {
 			return
 		}
 		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, pitrName, ts); err != nil {

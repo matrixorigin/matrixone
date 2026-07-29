@@ -4448,6 +4448,9 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	if !hasAccount {
 		return err
 	}
+	if !inTxn {
+		retireMongoDBClients(ctx, ses.GetService(), mongodb.ClientRetirement{AccountID: uint32(accountId)})
+	}
 	// if drop the account, add the account to kill queue
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
 

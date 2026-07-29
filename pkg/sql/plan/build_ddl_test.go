@@ -30,6 +30,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -568,6 +569,39 @@ func TestBuildCreateIndexOnExternalTableError(t *testing.T) {
 		_, err := runOneStmt(mock, t, sql)
 		require.Error(t, err, sql)
 		require.Contains(t, err.Error(), "cannot create index on external table", sql)
+	}
+}
+
+func TestBuildAlterTableRejectsMongoDBExternalTable(t *testing.T) {
+	mock := NewEmptyMockOptimizer()
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.objects["mongo_ext"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mongo_ext"}
+	ctx.tables["mongo_ext"] = &plan.TableDef{
+		Name:      "mongo_ext",
+		TableType: catalog.SystemExternalRel,
+		Cols: []*plan.ColDef{
+			{Name: "pump", Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
+			{Name: "value", Typ: plan.Type{Id: int32(types.T_float64)}},
+		},
+		Createsql: sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
+			Connection: "source", Database: "nesr", Collection: "samples",
+			SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict,
+			MaxParallelism: 1,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: "pump", Path: "metadata.pump", TypeID: int32(types.T_varchar), Width: 64},
+				{Name: "value", Path: "reading.value", TypeID: int32(types.T_float64)},
+			},
+		}),
+	}
+
+	for _, sql := range []string{
+		"ALTER TABLE mongo_ext RENAME COLUMN pump TO pump_id",
+		"ALTER TABLE mongo_ext MODIFY COLUMN value DECIMAL(18, 6)",
+		"ALTER TABLE mongo_ext ADD COLUMN crew VARCHAR(32)",
+		"ALTER TABLE mongo_ext DROP COLUMN value",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.ErrorContains(t, err, "ALTER TABLE on a MongoDB external table", sql)
 	}
 }
 

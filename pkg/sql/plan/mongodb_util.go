@@ -17,9 +17,11 @@ package plan
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 )
 
 func ensureMongoDBTableSurfaceEnabled(ctx context.Context) error {
@@ -48,4 +50,15 @@ func ensureMongoDBTableSurfaceEnabled(ctx context.Context) error {
 		}
 	}
 	return moerr.NewNotSupported(ctx, "MongoDB external tables are disabled for this account")
+}
+
+func IsMongoDBTableDef(ctx context.Context, tableDef *TableDef) (bool, error) {
+	if tableDef == nil || tableDef.TableType != catalog.SystemExternalRel {
+		return false, nil
+	}
+	_, found, err := sqlmongodb.ParseCreateSQLEnvelope(ctx, tableDef.Createsql)
+	if err != nil {
+		return false, err
+	}
+	return found, nil
 }

@@ -589,12 +589,13 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	var restoreAccount uint32
 	var toAccountId uint32
+	var retiredMongoDBAccountIDs []uint32
 	// restore as a txn
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return stats, err
 	}
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
 
 	// check snapshot
@@ -624,7 +625,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 		// restore cluster
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
-		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore, &retiredMongoDBAccountIDs); err != nil {
 			return
 		}
 
@@ -2537,6 +2538,7 @@ func restoreToCluster(ctx context.Context,
 	snapshotName string,
 	snapshotTs int64,
 	subDbToRestore map[string]*subDbRestoreRecord,
+	retiredMongoDBAccountIDs *[]uint32,
 ) (err error) {
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
 
@@ -2591,6 +2593,9 @@ func restoreToCluster(ctx context.Context,
 		err = dropExistsAccount(ctx, ses, bh, snapshotName, account)
 		if err != nil {
 			return err
+		}
+		if retiredMongoDBAccountIDs != nil {
+			*retiredMongoDBAccountIDs = append(*retiredMongoDBAccountIDs, uint32(account.accountId))
 		}
 	}
 

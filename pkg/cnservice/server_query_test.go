@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -1469,6 +1470,54 @@ func Test_service_handleIcebergCacheInvalidate(t *testing.T) {
 		MetadataLocationHash: "hash-200",
 		CommitID:             "commit-200",
 	}, handler.req)
+}
+
+func Test_service_handleMongoDBClientRetire(t *testing.T) {
+	const serviceID = "mongodb-retire-handler"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	factory := &cnMongoDBClientFactory{}
+	pool := sqlmongodb.NewClientPool(factory)
+	t.Cleanup(func() { require.NoError(t, pool.Close(context.Background())) })
+	rt.SetGlobalVariables(sqlmongodb.RuntimeDependenciesKey, &sqlmongodb.RuntimeDependencies{Pool: pool})
+	defer rt.SetGlobalVariables(sqlmongodb.RuntimeDependenciesKey, nil)
+
+	lease, err := pool.Acquire(t.Context(), sqlmongodb.Connection{
+		AccountID: 7, ConnectionID: 9, Version: 3,
+	}, sqlmongodb.Credentials{}, sqlmongodb.RuntimeConfig{})
+	require.NoError(t, err)
+	require.NoError(t, lease.Release(t.Context()))
+
+	s := &service{cfg: &Config{UUID: serviceID}}
+	var resp query.Response
+	err = s.handleMongoDBClientRetire(t.Context(), &query.Request{
+		MongoDBClientRetireRequest: query.MongoDBClientRetireRequest{AccountID: 7},
+	}, &resp, nil)
+	require.NoError(t, err)
+	require.True(t, resp.MongoDBClientRetireResponse.Success)
+	require.Equal(t, 1, factory.client.disconnects)
+}
+
+type cnMongoDBClientFactory struct {
+	client *cnMongoDBClient
+}
+
+func (f *cnMongoDBClientFactory) Connect(
+	context.Context, sqlmongodb.Connection, sqlmongodb.Credentials, sqlmongodb.RuntimeConfig,
+) (sqlmongodb.Client, error) {
+	f.client = &cnMongoDBClient{}
+	return f.client, nil
+}
+
+type cnMongoDBClient struct {
+	disconnects int
+}
+
+func (*cnMongoDBClient) Collection(string, string) sqlmongodb.Collection { return nil }
+func (*cnMongoDBClient) Ping(context.Context) error                      { return nil }
+func (c *cnMongoDBClient) Disconnect(context.Context) error {
+	c.disconnects++
+	return nil
 }
 
 type fakeIcebergCacheInvalidationHandler struct {

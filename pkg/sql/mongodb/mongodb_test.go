@@ -1365,6 +1365,14 @@ func TestClientPoolLateGenerationObservesRetirementTombstone(t *testing.T) {
 			version: 1,
 			connID:  9,
 		},
+		{
+			name: "drop account",
+			retire: func(pool *ClientPool) error {
+				return pool.RetireAccount(4)
+			},
+			version: 1,
+			connID:  10,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			allow := make(chan struct{})
