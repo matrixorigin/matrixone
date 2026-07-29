@@ -41,6 +41,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
+var resolveSnapshotForBetween = resolveSnapshot
+
 // resolveBetweenSnapshots resolves two snapshot names to types.TS values.
 // Used by BETWEEN SNAPSHOT sp1 AND sp2 to produce timestamps for the
 // collect range intersection in constructChangeHandle.
@@ -56,14 +58,14 @@ func resolveBetweenSnapshots(ses *Session, fromName, toName string) (from, to *t
 		Expr:         tree.NewNumVal(toName, toName, false, tree.P_char),
 	}
 
-	fromSnap, err := resolveSnapshot(ses, fromAtTs)
+	fromSnap, err := resolveSnapshotForBetween(ses, fromAtTs)
 	if err != nil {
 		if plan2.IsSnapshotNotFound(err) {
 			return nil, nil, moerr.NewInvalidInputNoCtxf("snapshot '%s' not found", fromName)
 		}
 		return nil, nil, moerr.NewInvalidInputNoCtxf("cannot resolve snapshot '%s': %v", fromName, err)
 	}
-	toSnap, err := resolveSnapshot(ses, toAtTs)
+	toSnap, err := resolveSnapshotForBetween(ses, toAtTs)
 	if err != nil {
 		if plan2.IsSnapshotNotFound(err) {
 			return nil, nil, moerr.NewInvalidInputNoCtxf("snapshot '%s' not found", toName)
@@ -79,7 +81,21 @@ func resolveBetweenSnapshots(ses *Session, fromName, toName string) (from, to *t
 
 	fromTS := types.TimestampToTS(*fromSnap.TS)
 	toTS := types.TimestampToTS(*toSnap.TS)
+	if err = validateBetweenSnapshotRange(fromName, toName, &fromTS, &toTS); err != nil {
+		return nil, nil, err
+	}
 	return &fromTS, &toTS, nil
+}
+
+func validateBetweenSnapshotRange(fromName, toName string, fromTS, toTS *types.TS) error {
+	if !fromTS.GT(toTS) {
+		return nil
+	}
+	return moerr.NewInvalidInputNoCtxf(
+		"invalid BETWEEN SNAPSHOT range: start snapshot '%s' is later than end snapshot '%s'",
+		fromName,
+		toName,
+	)
 }
 
 func handleBranchPick(

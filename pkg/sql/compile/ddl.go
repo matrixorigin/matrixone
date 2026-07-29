@@ -240,7 +240,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 
 	for _, t := range deleteTables {
-		dropSql := fmt.Sprintf(dropTableBeforeDropDatabase, dbName, t)
+		dropSql := fmt.Sprintf("drop table if exists %s.%s;",
+			quoteMySQLIdent(dbName), quoteMySQLIdent(t))
 		if err = c.runSqlWithOptions(
 			dropSql, executor.StatementOption{}.WithDisableLog(),
 		); err != nil {

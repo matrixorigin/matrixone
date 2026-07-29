@@ -95,21 +95,17 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 		} else {
 			abortErr := terminalErr
 			if terminalSignal.EventType == process.EventEnd && !terminalDelivered {
-				abortErr = process.ExistingTerminalError(connector.Reg)
-				if abortErr == nil {
-					abortErr = process.ErrPipelineEndSignalDeliveryFailed
-					connector.sendTerminalWithLog(signalCtx, proc, process.NewAbortSignal(abortErr), true, abortErr)
-				}
+				fallbackErr := process.ResolvePipelineSpoolAbortError(connector.Reg)
+				connector.sendTerminalWithLog(signalCtx, proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
+				abortErr = fallbackErr
 			}
 			sp.Abort(abortErr)
 			connector.cleanupSpool = nil
 		}
 		connector.ctr.sp = nil
 	} else if terminalSignal.EventType == process.EventEnd && !terminalDelivered {
-		if process.ExistingTerminalError(connector.Reg) == nil {
-			fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
-			connector.sendTerminalWithLog(signalCtx, proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
-		}
+		fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
+		connector.sendTerminalWithLog(signalCtx, proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
 	}
 }
 
@@ -127,9 +123,6 @@ func (connector *Connector) sendTerminalWithLog(ctx context.Context, proc *proce
 	}
 	if process.SendPipelineSignalWithContext(ctx, connector.Reg, signal) {
 		return true
-	}
-	if signal.EventType == process.EventEnd && process.ExistingTerminalError(connector.Reg) != nil {
-		return false
 	}
 	chLen, chCap := process.WaitRegisterChannelState(connector.Reg)
 	process.WarnPipelineCleanupf(

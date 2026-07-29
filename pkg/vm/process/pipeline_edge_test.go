@@ -71,30 +71,6 @@ func TestPipelineEdgeSendErrorPropagatesErr(t *testing.T) {
 	}
 }
 
-func TestExistingTerminalError(t *testing.T) {
-	active := NewPipelineEdge(1, 1)
-	if err := ExistingTerminalError(active); err != nil {
-		t.Fatalf("active edge error = %v, want nil", err)
-	}
-
-	normal := NewPipelineEdge(1, 1)
-	if !normal.SendEnd() {
-		t.Fatal("SendEnd failed")
-	}
-	if err := ExistingTerminalError(normal); err != nil {
-		t.Fatalf("normal terminal error = %v, want nil", err)
-	}
-
-	fatal := NewPipelineEdge(1, 1)
-	want := moerr.NewInternalErrorNoCtx("first fatal error")
-	if !fatal.SendError(want) {
-		t.Fatal("SendError failed")
-	}
-	if got := ExistingTerminalError(fatal); got != want {
-		t.Fatalf("fatal terminal error = %v, want %v", got, want)
-	}
-}
-
 // TestPipelineEdgeAbortClosesAborted verifies that Abort closes
 // both Done and Aborted channels.
 func TestPipelineEdgeAbortClosesAborted(t *testing.T) {

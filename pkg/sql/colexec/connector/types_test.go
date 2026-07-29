@@ -179,26 +179,6 @@ func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing
 	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
 }
 
-func TestConnectorResetEndPreservesExistingTerminalFailure(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-	t.Cleanup(func() {
-		mpool.DeleteMPool(mp)
-	})
-
-	sp := pSpool.InitMyPipelineSpool(mp, 1)
-	reg := process.NewPipelineEdge(1, 0)
-	sourceErr := moerr.NewCheckRecursiveLevel(context.Background())
-	require.True(t, reg.SendError(sourceErr))
-
-	conn := &Connector{Reg: reg}
-	conn.ctr.sp = sp
-	conn.Reset(nil, false, nil)
-
-	_, gotErr := sp.ReceiveBatch(0)
-	require.Same(t, sourceErr, gotErr)
-	require.Same(t, sourceErr, reg.Err())
-}
-
 func TestConnectorResetUndeliveredFallbackAbortWakesReceiver(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 10 * time.Millisecond
@@ -239,6 +219,42 @@ func TestConnectorResetUndeliveredFallbackAbortWakesReceiver(t *testing.T) {
 		<-resultCh
 		t.Fatal("receiver remained blocked after the fallback Abort failed to enter the full channel")
 	}
+}
+
+func TestConnectorResetPreservesRecordedTerminalError(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newConnectorSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	queryDone, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	originalErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	require.False(t, reg.TrySendError(originalErr))
+	require.ErrorIs(t, reg.Err(), originalErr)
+
+	conn := &Connector{Reg: reg}
+	conn.ctr.sp = sp
+	conn.Reset(nil, false, nil)
+
+	staleSignal := <-reg.Ch2
+	got, info := staleSignal.Action()
+	require.Nil(t, got)
+	require.ErrorIs(t, info, originalErr)
+	require.NotErrorIs(t, info, process.ErrPipelineEndSignalDeliveryFailed)
 }
 
 func TestConnectorResetUsesSharedTerminalSendBudget(t *testing.T) {

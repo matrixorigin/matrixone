@@ -2012,7 +2012,7 @@ president  ¦  CREATE TABLE `president` (
   `impeached` int DEFAULT NULL
 )
 ALTER TABLE president MODIFY nth JSON;
-not supported: currently unsupport change from original type INT to JSON 
+not supported: currently unsupport change from original type INT to JSON
 show create table president;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 president  ¦  CREATE TABLE `president` (

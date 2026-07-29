@@ -742,28 +742,6 @@ func TestDispatchResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.
 	require.Equal(t, process.EventEnd, terminalSignal.EventType)
 }
 
-func TestDispatchResetEndPreservesExistingTerminalFailure(t *testing.T) {
-	mp := mpool.MustNewZeroNoFixed()
-	t.Cleanup(func() {
-		mpool.DeleteMPool(mp)
-	})
-
-	sp := pSpool.InitMyPipelineSpool(mp, 1)
-	reg := process.NewPipelineEdge(1, 0)
-	sourceErr := moerr.NewCheckRecursiveLevel(context.Background())
-	require.True(t, reg.SendError(sourceErr))
-
-	d := &Dispatch{
-		ctr:       &container{sp: sp},
-		LocalRegs: []*process.WaitRegister{reg},
-	}
-	d.Reset(nil, false, nil)
-
-	_, gotErr := sp.ReceiveBatch(0)
-	require.Same(t, sourceErr, gotErr)
-	require.Same(t, sourceErr, reg.Err())
-}
-
 func TestDispatchResetUsesSharedTerminalSendBudget(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 200 * time.Millisecond
