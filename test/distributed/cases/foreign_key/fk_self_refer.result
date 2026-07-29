@@ -39,7 +39,7 @@ internal error: Cannot delete or update a parent row: a foreign key constraint f
 update t1 set b=NULL where a= 4;
 constraint violation: Column 'b' cannot be null
 update t1 set b=5 where a= 4;
-Cannot add or update a child row: a foreign key constraint fails
+internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into t1 values (3,4);
 update t1 set b = 3 where a= 4;
 select * from t1;

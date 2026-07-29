@@ -354,6 +354,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
 					newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
 					err = replaceFuncId(builder.GetContext(), newDefExpr)
+					if err != nil {
+						return 0, err
+					}
 
 					oldPos := oldColName2Idx[alias+"."+col.Name]
 					newColName2Idx[alias+"."+col.Name] = oldPos
@@ -416,6 +419,18 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
 			selectNode.ProjectList[oldPos] = genExpr
 		}
+	}
+
+	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(
+		bindCtx,
+		dmlCtx,
+		lastNodeID,
+		selectNodeTag,
+		oldColName2Idx,
+		newColName2Idx,
+	)
+	if err != nil {
+		return 0, err
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
