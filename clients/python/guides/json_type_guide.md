@@ -782,7 +782,7 @@ ORDER BY
 
 -- Sort with NULL handling
 SELECT * FROM products
-ORDER BY specifications NULLS LAST;
+ORDER BY specifications IS NULL, specifications;
 ```
 
 **Note on Sorting:**
