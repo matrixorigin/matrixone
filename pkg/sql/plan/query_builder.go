@@ -8666,8 +8666,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		derivedSelect := numericProjectionTableSelect(tbl.Expr)
-		if _, directSelect := tbl.Expr.(*tree.Select); directSelect && tbl.As.Alias == "" {
-			return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "subquery in FROM must have an alias: %T", stmt)
+		if derivedSelect != nil && tbl.As.Alias == "" {
+			return 0, moerr.NewDerivedMustHaveAlias(builder.GetContext())
 		}
 		targets := ctx.numericTableProjectionTypes[strings.ToLower(string(tbl.As.Alias))]
 		if derivedSelect != nil && len(targets) > 0 {
@@ -8892,8 +8892,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		headings := subCtx.headings
 		projects := subCtx.projects
 
-		if len(alias.Cols) > len(headings) {
-			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
+		if len(alias.Cols) > 0 && len(alias.Cols) != len(headings) {
+			return moerr.NewViewWrongList(builder.GetContext())
 		}
 
 		table = subCtx.cteName
