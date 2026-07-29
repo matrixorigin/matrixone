@@ -8210,6 +8210,14 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
+	if len(viewStmt.ColNames) > 0 {
+		if len(viewStmt.ColNames) != len(viewCtx.headings) {
+			return 0, moerr.NewViewWrongList(builder.GetContext())
+		}
+		for i, colName := range viewStmt.ColNames {
+			viewCtx.headings[i] = string(colName)
+		}
+	}
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
