@@ -43,7 +43,6 @@ func init() {
 		IOET_WALTxnCommand_AppendNode_V1,
 		IOET_WALTxnCommand_AppendNode_V2,
 	} {
-		version := version
 		objectio.RegisterIOEnrtyCodec(
 			objectio.IOEntryHeader{
 				Type:    IOET_WALTxnCommand_AppendNode,
