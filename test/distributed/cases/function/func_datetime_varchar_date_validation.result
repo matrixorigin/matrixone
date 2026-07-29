@@ -33,3 +33,10 @@ QUARTER('4294967297-01-01') AS oversized_year_quarter,
 WEEKOFYEAR('4294967297-01-01') AS oversized_year_weekofyear;
 ➤ oversized_year_dayofmonth[-6,8,0]  ¦  oversized_year_dayname[12,-1,0]  ¦  oversized_year_monthname[12,-1,0]  ¦  oversized_year_quarter[-6,8,0]  ¦  oversized_year_weekofyear[-5,64,0]  𝄀
 null  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT DAYOFMONTH('2024-01-01T') AS dangling_iso_dayofmonth,
+DAYNAME('2024-01-01T') AS dangling_iso_dayname,
+MONTHNAME('2024-01-01T') AS dangling_iso_monthname,
+QUARTER('2024-01-01T') AS dangling_iso_quarter,
+WEEKOFYEAR('2024-01-01T') AS dangling_iso_weekofyear;
+➤ dangling_iso_dayofmonth[-6,8,0]  ¦  dangling_iso_dayname[12,-1,0]  ¦  dangling_iso_monthname[12,-1,0]  ¦  dangling_iso_quarter[-6,8,0]  ¦  dangling_iso_weekofyear[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null

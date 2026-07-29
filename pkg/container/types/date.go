@@ -182,6 +182,9 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 					if dayLen == 0 {
 						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
+					if i == len(s)-1 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
 					state = hourState
 					hasTime = true
 				} else {
@@ -269,6 +272,28 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 	return int32(year), uint8(month), uint8(day), false, nil
 }
 
+func parseFixedDateCast(s string) (Date, bool) {
+	if len(s) < 19 || s[4] != '-' || s[7] != '-' || (s[10] != ' ' && s[10] != 'T') ||
+		s[13] != ':' || s[16] != ':' || !isAllDigit(s[:4]) || !isAllDigit(s[5:7]) ||
+		!isAllDigit(s[8:10]) || !isAllDigit(s[11:13]) || !isAllDigit(s[14:16]) || !isAllDigit(s[17:19]) {
+		return 0, false
+	}
+	if len(s) > 19 && (s[19] != '.' || len(s) == 20 || !isAllDigit(s[20:])) {
+		return 0, false
+	}
+
+	year := int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
+	month := uint8(s[5]-'0')*10 + uint8(s[6]-'0')
+	day := uint8(s[8]-'0')*10 + uint8(s[9]-'0')
+	hour := uint8(s[11]-'0')*10 + uint8(s[12]-'0')
+	minute := uint8(s[14]-'0')*10 + uint8(s[15]-'0')
+	second := uint8(s[17]-'0')*10 + uint8(s[18]-'0')
+	if !ValidDate(year, month, day) || !ValidTimeInDay(hour, minute, second) {
+		return 0, false
+	}
+	return DateFromCalendar(year, month, day), true
+}
+
 // rewrite ParseDateCast, don't use regexp, that's too slow
 // the format we need to support:
 // 1.yyyy-mm-dd hh:mm:ss.ms or yyyy-mm-dd hh:mm: or yyyy-mm-dd hh:mm
@@ -279,151 +304,43 @@ func ParseDateCast(s string) (Date, error) {
 	if len(s) > 0 && s[0] == '0' && isZeroDatetimeString(s) {
 		return ZeroDate, nil
 	}
-	if len(s) < 7 && isAllDigit(s) {
-		return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-	}
-	var year, month, day int64
+
 	if len(s) == 7 && isAllDigit(s) {
-		year = int64(s[0]-'0')*100 + int64(s[1]-'0')*10 + int64(s[2]-'0')
-		month = int64(s[3]-'0')*10 + int64(s[4]-'0')
-		day = int64(s[5]-'0')*10 + int64(s[6]-'0')
-	} else if len(s) == 8 && isAllDigit(s) {
-		year = int64(s[0]-'0')*1000 + int64(s[1]-'0')*100 + int64(s[2]-'0')*10 + int64(s[3]-'0')
-		month = int64(s[4]-'0')*10 + int64(s[5]-'0')
-		day = int64(s[6]-'0')*10 + int64(s[7]-'0')
-	} else {
-		const (
-			start uint8 = iota
-			yearState
-			monthState
-			dayState
-			hourState
-			minuteState
-			secondState
-			msState
-			end
-		)
-		var state = start
-		var yearLen, monthLen, dayLen, hourLen, minuteLen, secondLen int
-		for i := 0; i < len(s); i++ {
-			switch state {
-			case start:
-				if !isDigit(s[i]) {
-					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-				}
-				state = yearState
-				year = int64(s[i] - '0')
-				yearLen = 1
-			case yearState:
-				if isDigit(s[i]) {
-					year = year*10 + int64(s[i]-'0')
-					yearLen++
-				} else if s[i] == '-' {
-					state = monthState
-					if yearLen == 0 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
-				} else {
-					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-				}
-			case monthState:
-				if isDigit(s[i]) {
-					month = month*10 + int64(s[i]-'0')
-					monthLen++
-					if monthLen >= 3 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
-				} else if s[i] == '-' {
-					if monthLen == 0 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
-					state = dayState
-				}
-			case dayState:
-				if isDigit(s[i]) {
-					day = day*10 + int64(s[i]-'0')
-					dayLen++
-					if dayLen >= 3 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
-				} else if s[i] == ' ' {
-					if dayLen == 0 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
-					state = hourState
-				} else {
-					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-				}
-				if i == len(s)-1 {
-					state = end
-				}
-			case hourState:
-				if s[i] == ' ' {
-					continue
-				}
-				if isDigit(s[i]) {
-					hourLen++
-					if hourLen >= 3 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
-				} else if s[i] == ':' {
-					if hourLen == 0 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
-					state = minuteState
-				} else {
-					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-				}
-			case minuteState:
-				if isDigit(s[i]) {
-					minuteLen++
-					if minuteLen >= 3 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
-					if i == len(s)-1 {
-						s += ":00"
-					}
-				} else if s[i] == ':' {
-					if minuteLen == 0 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
-					if i == len(s)-1 {
-						s += "00"
-					}
-					state = secondState
-				}
-			case secondState:
-				if isDigit(s[i]) {
-					secondLen++
-					if secondLen >= 3 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
-				} else if s[i] == '.' {
-					if secondLen == 0 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
-					state = msState
-				} else {
-					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-				}
-				if i == len(s)-1 {
-					state = end
-				}
-			case msState:
-				if isAllDigit(s[i:]) {
-					state = end
-					i = len(s)
-				} else {
-					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-				}
-			}
+		year := int32(s[0]-'0')*100 + int32(s[1]-'0')*10 + int32(s[2]-'0')
+		month := uint8(s[3]-'0')*10 + uint8(s[4]-'0')
+		day := uint8(s[5]-'0')*10 + uint8(s[6]-'0')
+		if ValidDate(year, month, day) {
+			return DateFromCalendar(year, month, day), nil
 		}
-		if state != end {
-			return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+	} else if len(s) == 8 && isAllDigit(s) {
+		year := int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
+		month := uint8(s[4]-'0')*10 + uint8(s[5]-'0')
+		day := uint8(s[6]-'0')*10 + uint8(s[7]-'0')
+		if ValidDate(year, month, day) {
+			return DateFromCalendar(year, month, day), nil
+		}
+	} else if len(s) == 10 && s[4] == '-' && s[7] == '-' &&
+		isAllDigit(s[:4]) && isAllDigit(s[5:7]) && isAllDigit(s[8:]) {
+		year := int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
+		month := uint8(s[5]-'0')*10 + uint8(s[6]-'0')
+		day := uint8(s[8]-'0')*10 + uint8(s[9]-'0')
+		if ValidDate(year, month, day) {
+			return DateFromCalendar(year, month, day), nil
 		}
 	}
-	if ValidDate(int32(year), uint8(month), uint8(day)) {
-		return DateFromCalendar(int32(year), uint8(month), uint8(day)), nil
+	if date, ok := parseFixedDateCast(s); ok {
+		return date, nil
+	}
+
+	year, month, day, isZero, err := parseDateCastComponents(s)
+	if err != nil {
+		return -1, err
+	}
+	if isZero {
+		return ZeroDate, nil
+	}
+	if ValidDate(year, month, day) {
+		return DateFromCalendar(year, month, day), nil
 	}
 	return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 }

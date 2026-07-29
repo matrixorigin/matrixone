@@ -29,3 +29,9 @@ SELECT DAYOFMONTH('4294967297-01-01') AS oversized_year_dayofmonth,
        MONTHNAME('4294967297-01-01') AS oversized_year_monthname,
        QUARTER('4294967297-01-01') AS oversized_year_quarter,
        WEEKOFYEAR('4294967297-01-01') AS oversized_year_weekofyear;
+
+SELECT DAYOFMONTH('2024-01-01T') AS dangling_iso_dayofmonth,
+       DAYNAME('2024-01-01T') AS dangling_iso_dayname,
+       MONTHNAME('2024-01-01T') AS dangling_iso_monthname,
+       QUARTER('2024-01-01T') AS dangling_iso_quarter,
+       WEEKOFYEAR('2024-01-01T') AS dangling_iso_weekofyear;

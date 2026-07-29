@@ -10165,6 +10165,7 @@ func TestParseDateExtractPartsVarcharTemporalValidation(t *testing.T) {
 		{name: "hour out of range", input: "2024-01-01 24:00:00"},
 		{name: "minute out of range", input: "2024-01-01 23:60:00"},
 		{name: "oversized year", input: "4294967297-01-01"},
+		{name: "dangling ISO separator", input: "2024-01-01T"},
 	}
 
 	for _, test := range tests {

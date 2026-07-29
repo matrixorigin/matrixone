@@ -175,6 +175,7 @@ func TestParseDateCastComponents(t *testing.T) {
 		{name: "invalid hour", input: "2024-01-01 24:00:00", wantErr: true},
 		{name: "invalid minute", input: "2024-01-01 23:60:00", wantErr: true},
 		{name: "oversized year", input: "4294967297-01-01", wantErr: true},
+		{name: "dangling ISO separator", input: "2024-01-01T", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -188,6 +189,20 @@ func TestParseDateCastComponents(t *testing.T) {
 			assert.Equal(t, tt.year, year)
 			assert.Equal(t, tt.month, month)
 			assert.Equal(t, tt.day, day)
+		})
+	}
+}
+
+func TestParseDateCastStrictValidation(t *testing.T) {
+	for _, input := range []string{
+		"2024-01x-02",
+		"2024-01-01 12:3x:56",
+		"2024-01-01 24:00:00",
+		"4294967297-01-01",
+	} {
+		t.Run(input, func(t *testing.T) {
+			_, err := ParseDateCast(input)
+			require.Error(t, err)
 		})
 	}
 }
