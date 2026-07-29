@@ -3738,6 +3738,7 @@ func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts [
 
 const NameGroupConcat = "group_concat"
 const NameClusterCenters = "cluster_centers"
+const NameApproxPercentile = "approx_percentile"
 
 func (builder *QueryBuilder) bindNoRecursiveCte(
 	ctx *BindContext,
@@ -8179,6 +8180,14 @@ func (builder *QueryBuilder) bindView(
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
+	}
+	if len(viewStmt.ColNames) > 0 {
+		if len(viewStmt.ColNames) != len(viewCtx.headings) {
+			return 0, moerr.NewViewWrongList(builder.GetContext())
+		}
+		for i, colName := range viewStmt.ColNames {
+			viewCtx.headings[i] = string(colName)
+		}
 	}
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)

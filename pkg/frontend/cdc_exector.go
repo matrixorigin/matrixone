@@ -179,6 +179,10 @@ type CDCTaskExecutor struct {
 	// restartStartupTimeout is test-only when non-zero. Production keeps the
 	// historical four-second admission bound.
 	restartStartupTimeout time.Duration
+	// restartStartupTimeoutSignal lets tests deterministically choose when the
+	// replacement-startup wait times out. Production leaves it nil and uses
+	// restartStartupTimeout through a real timer.
+	restartStartupTimeoutSignal <-chan time.Time
 
 	// start wrapper, for ut
 	startFunc func(ctx context.Context) error
@@ -380,6 +384,16 @@ func (exec *CDCTaskExecutor) restartTimeout() time.Duration {
 		return exec.restartStartupTimeout
 	}
 	return 4 * time.Second
+}
+
+func (exec *CDCTaskExecutor) waitForRestartStartup(
+	completion <-chan error,
+	timeout time.Duration,
+) (error, bool) {
+	if exec.restartStartupTimeoutSignal != nil {
+		return selectCDCCompletion(completion, exec.restartStartupTimeoutSignal)
+	}
+	return waitForCDCCompletion(completion, timeout)
 }
 
 func waitForCDCCompletion[T any](
@@ -1085,7 +1099,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 		return moerr.NewInternalErrorf(context.Background(), "cannot schedule CDC restart replacement: %v", err)
 	}
 
-	if err, timedOut := waitForCDCCompletion(ready, timeout); !timedOut {
+	if err, timedOut := exec.waitForRestartStartup(ready, timeout); !timedOut {
 		return err
 	}
 	// Completion and timeout race on the attempt token, not on which select arm
