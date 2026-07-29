@@ -274,9 +274,8 @@ func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string
 	return false, nil
 }
 
-func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) error {
+func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err error) {
 	var (
-		err            error
 		pitrLevel      tree.PitrLevel
 		pitrForAccount string
 		pitrName       string

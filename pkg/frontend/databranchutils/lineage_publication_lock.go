@@ -20,15 +20,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
-// LineageOwnerPublicationLockSQL writes a catalog row that exists before any
-// snapshot, PITR, or data-branch lineage row can be created. Pessimistic
-// transactions serialize on its row lock; optimistic transactions serialize
-// through a write-write conflict and retry. A SELECT FOR UPDATE is insufficient
-// here because optimistic transactions do not take that locking path.
+// LineageOwnerPublicationLockSQL writes the bootstrap-created SNAPSHOT feature
+// registry row, which exists before any snapshot, PITR, or data-branch lineage
+// row can be created. Pessimistic transactions serialize on its row lock;
+// optimistic transactions serialize through a write-write conflict and retry.
+// A SELECT FOR UPDATE is insufficient here because optimistic transactions do
+// not take that locking path. updated_at is assigned explicitly so crossing the
+// barrier does not change the feature registry's observable metadata.
 func LineageOwnerPublicationLockSQL() string {
 	return fmt.Sprintf(
-		"update %s.%s set dat_type = dat_type where dat_id = %d",
-		catalog.MO_CATALOG, catalog.MO_DATABASE, catalog.MO_CATALOG_ID,
+		"update %s.%s set scope_spec = scope_spec, updated_at = updated_at where feature_code = 'SNAPSHOT'",
+		catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY,
 	)
 }
 

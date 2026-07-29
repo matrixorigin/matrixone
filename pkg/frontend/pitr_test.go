@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -2678,6 +2679,11 @@ func Test_doCreatePitr(t *testing.T) {
 
 		err = doCreatePitr(ctx, ses, stmt)
 		assert.NoError(t, err)
+
+		commitErr := errors.New("pitr commit conflict")
+		bh.sql2err["commit;"] = commitErr
+		err = doCreatePitr(ctx, ses, stmt)
+		assert.ErrorIs(t, err, commitErr)
 	})
 
 }
