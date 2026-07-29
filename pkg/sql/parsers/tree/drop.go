@@ -123,12 +123,17 @@ func NewDropDatabase(n Identifier, i bool) *DropDatabase {
 // DROP Table statement
 type DropTable struct {
 	statementImpl
-	IfExists bool
-	Names    TableNames
+	IfExists  bool
+	Temporary bool
+	Names     TableNames
 }
 
 func (node *DropTable) Format(ctx *FmtCtx) {
-	ctx.WriteString("drop table")
+	ctx.WriteString("drop")
+	if node.Temporary {
+		ctx.WriteString(" temporary")
+	}
+	ctx.WriteString(" table")
 	if node.IfExists {
 		ctx.WriteString(" if exists")
 	}
