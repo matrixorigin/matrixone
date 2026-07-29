@@ -183,7 +183,7 @@ func utcFunctionScale(ivecs []*vector.Vector, proc *process.Process, name string
 	if len(ivecs) == 0 {
 		return 0, nil
 	}
-	if len(ivecs) != 1 || ivecs[0] == nil || !ivecs[0].IsConst() || ivecs[0].IsConstNull() || ivecs[0].Length() == 0 {
+	if len(ivecs) != 1 || ivecs[0] == nil || ivecs[0].IsConstNull() || ivecs[0].Length() == 0 {
 		return 0, moerr.NewInvalidArg(proc.Ctx, name, "fractional seconds precision must be a constant integer between 0 and 6")
 	}
 
@@ -193,6 +193,9 @@ func utcFunctionScale(ivecs []*vector.Vector, proc *process.Process, name string
 	}
 	if scale > 6 {
 		return 0, moerr.NewErrTooBigPrecision(proc.Ctx, int32(scale), name, 6)
+	}
+	if !ivecs[0].IsConst() {
+		return 0, moerr.NewInvalidArg(proc.Ctx, name, "fractional seconds precision must be a constant integer between 0 and 6")
 	}
 	return int32(scale), nil
 }
