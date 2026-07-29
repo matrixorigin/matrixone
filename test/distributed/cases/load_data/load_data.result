@@ -205,13 +205,40 @@ select * from t3;
 1.0  ¦  1.0  ¦  1.00  ¦  1.00000  𝄀
 null  ¦  null  ¦  null  ¦  null  𝄀
 1.23456  ¦  1.23456  ¦  1.23  ¦  1.23456  𝄀
-1.2345679  ¦  1.2345679  ¦  1.23  ¦  1.23457  𝄀
-1.0123457  ¦  1.0123457  ¦  1.01  ¦  1.01235  𝄀
+1.2345679  ¦  1.23456789  ¦  1.23  ¦  1.23457  𝄀
+1.0123457  ¦  1.0123456789  ¦  1.01  ¦  1.01235  𝄀
 1.0E-10  ¦  1.0E-10  ¦  0.00  ¦  0.00000
 delete from t3;
 load data infile '$resources/load_data/float_3.csv' into table t3 fields terminated by ',';
 internal error: the input value '1000.001' is invalid Decimal64 type for column 2
 drop table t3;
+drop table if exists double_outfile_src;
+drop table if exists double_outfile_dst;
+create table double_outfile_src (
+id bigint primary key,
+f double,
+d date,
+s varchar(200)
+);
+insert into double_outfile_src values
+(1, 3.14159265358979, '2024-01-15', 'hello "world"'),
+(2, null, null, null);
+select * from double_outfile_src order by id
+into outfile '$resources/into_outfile/outfile_double_roundtrip.csv';
+create table double_outfile_dst like double_outfile_src;
+load data infile '$resources/into_outfile/outfile_double_roundtrip.csv'
+into table double_outfile_dst
+fields terminated by ',' enclosed by '"'
+lines terminated by '\n'
+ignore 1 lines;
+select s.id, s.f as src_f, d.f as dst_f, s.f = d.f as f_equal
+from double_outfile_src s join double_outfile_dst d on s.id = d.id
+order by s.id;
+➤ id[-5,64,0]  ¦  src_f[8,54,0]  ¦  dst_f[8,54,0]  ¦  f_equal[-7,1,0]  𝄀
+1  ¦  3.14159265358979  ¦  3.14159265358979  ¦  1  𝄀
+2  ¦  null  ¦  null  ¦  null
+drop table double_outfile_dst;
+drop table double_outfile_src;
 drop table if exists t4;
 create table t4(
 col1 date,
