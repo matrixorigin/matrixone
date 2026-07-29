@@ -15,6 +15,8 @@
 package catalog
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -113,6 +115,88 @@ func TestObjectListGroupSeek(t *testing.T) {
 	require.Equal(t, types.BuildTS(2, 0), it.Item().DeletedAt)
 
 	require.False(t, SeekObjectListGroup(&it, ObjectListGroupNonAppendableDrop, types.TS{}))
+}
+
+func TestObjectListUncommittedSeekKeysMatchFreshKeys(t *testing.T) {
+	tree := newObjectEntryTree()
+	marker := byte(1)
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+		committed := makeObjectListOrderTestEntry(marker, group, 1)
+		marker++
+		uncommitted := makeObjectListOrderTestEntry(marker, group, 2)
+		marker++
+		if uncommitted.IsDEntry() {
+			uncommitted.DeletedAt = txnif.UncommitTS
+		} else {
+			uncommitted.CreatedAt = txnif.UncommitTS
+		}
+		tree.Set(committed)
+		tree.Set(uncommitted)
+	}
+
+	assertSameSeek := func(fresh, cached *ObjectEntry) {
+		freshIt := tree.Iter()
+		defer freshIt.Release()
+		cachedIt := tree.Iter()
+		defer cachedIt.Release()
+
+		freshOK := freshIt.Seek(fresh)
+		cachedOK := cachedIt.Seek(cached)
+		require.Equal(t, freshOK, cachedOK)
+		if freshOK {
+			require.Same(t, freshIt.Item(), cachedIt.Item())
+		}
+	}
+
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+		var minID, maxID objectio.ObjectId
+		for i := range maxID {
+			maxID[i] = 0xff
+		}
+		assertSameSeek(
+			makeObjectListKey(group, txnif.UncommitTS, &minID),
+			objectListUncommittedMinKeys[group],
+		)
+		assertSameSeek(
+			makeObjectListKey(group, txnif.UncommitTS, &maxID),
+			objectListUncommittedMaxKeys[group],
+		)
+	}
+}
+
+func TestObjectListUncommittedSeekKeysConcurrent(t *testing.T) {
+	tree := newObjectEntryTree()
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+		tree.Set(makeObjectListOrderTestEntry(byte(group+1), group, 1))
+	}
+
+	const workers = 16
+	errC := make(chan error, workers)
+	var wg sync.WaitGroup
+	for worker := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			group := ObjectListGroup(worker % len(objectListUncommittedMaxKeys))
+			it := tree.Iter()
+			defer it.Release()
+			for range 100 {
+				if !SeekObjectListGroupReverse(&it, group, txnif.UncommitTS) {
+					errC <- fmt.Errorf("group %d not found", group)
+					return
+				}
+				if actual := it.Item().ObjectListGroup(); actual != group {
+					errC <- fmt.Errorf("got group %d, want %d", actual, group)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errC)
+	for err := range errC {
+		require.NoError(t, err)
+	}
 }
 
 func TestObjectListGroupUsesVersionLink(t *testing.T) {
