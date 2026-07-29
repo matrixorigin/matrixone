@@ -46,14 +46,12 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 			cfg.DeploymentID = 1
 			cfg.RTTMillisecond = 5
 			cfg.DataDir = "data-1"
-			cfg.LogServicePort = 9002
-			cfg.RaftPort = 9000
-			cfg.GossipPort = 9001
+			require.NoError(t, allocateTestConfigPorts(&cfg))
 			// below is an unreachable address intentionally set
-			cfg.GossipSeedAddresses = []string{"127.0.0.1:9010"}
+			cfg.GossipSeedAddresses = []string{getDummyGossipSeedAddress()}
 			cfg.HeartbeatInterval.Duration = 5 * time.Millisecond
 			cfg.HAKeeperTickInterval.Duration = 5 * time.Millisecond
-			cfg.HAKeeperClientConfig.ServiceAddresses = []string{"127.0.0.1:9002"}
+			setTestHAKeeperClientConfig(&cfg)
 
 			runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
 

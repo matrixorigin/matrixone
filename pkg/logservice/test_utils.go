@@ -108,6 +108,26 @@ func getAvailablePort() int {
 	return ports[0]
 }
 
+func allocateTestConfigPorts(configs ...*Config) error {
+	for i, cfg := range configs {
+		if cfg == nil {
+			return errutil.Wrapf(errNoAvailableTestPort, "nil config at index %d", i)
+		}
+	}
+
+	ports, err := getAvailablePorts(len(configs) * 3)
+	if err != nil {
+		return err
+	}
+	for i, cfg := range configs {
+		offset := i * 3
+		cfg.LogServicePort = ports[offset]
+		cfg.RaftPort = ports[offset+1]
+		cfg.GossipPort = ports[offset+2]
+	}
+	return nil
+}
+
 var getClientConfig = func(readOnly bool, svcAddress ...string) ClientConfig {
 	var addr string
 	if len(svcAddress) > 0 {

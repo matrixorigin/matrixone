@@ -735,10 +735,6 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 			cfg1.DeploymentID = 1
 			cfg1.RTTMillisecond = 5
 			cfg1.DataDir = "data-1"
-			cfg1.LogServicePort = 9002
-			cfg1.RaftPort = 9000
-			cfg1.GossipPort = 9001
-			cfg1.GossipSeedAddresses = []string{"127.0.0.1:9011"}
 			cfg1.DisableWorkers = true
 			cfg2 := DefaultConfig()
 			cfg2.UUID = uuid.New().String()
@@ -746,11 +742,12 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 			cfg2.DeploymentID = 1
 			cfg2.RTTMillisecond = 5
 			cfg2.DataDir = "data-2"
-			cfg2.LogServicePort = 9012
-			cfg2.RaftPort = 9010
-			cfg2.GossipPort = 9011
-			cfg2.GossipSeedAddresses = []string{"127.0.0.1:9001"}
 			cfg2.DisableWorkers = true
+			require.NoError(t, allocateTestConfigPorts(&cfg1, &cfg2))
+			cfg1.GossipSeedAddresses = []string{cfg2.GossipServiceAddr()}
+			cfg2.GossipSeedAddresses = []string{cfg1.GossipServiceAddr()}
+			setTestHAKeeperClientConfig(&cfg1)
+			setTestHAKeeperClientConfig(&cfg2)
 
 			runtime.SetupServiceBasedRuntime(cfg1.UUID, rt)
 			runtime.SetupServiceBasedRuntime(cfg2.UUID, rt)
