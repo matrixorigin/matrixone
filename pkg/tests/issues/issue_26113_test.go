@@ -138,5 +138,19 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"data branch diff "+dbName+".b3 against "+dbName+".src output count").Scan(&count))
 		require.Zero(t, count)
+		exec("drop table " + dbName + ".b1")
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"data branch diff "+dbName+".b3 against "+dbName+".src output count").Scan(&count))
+		require.Zero(t, count)
+
+		exec("begin")
+		exec("create table " + dbName + ".cg1 clone " + dbName + ".src copy grants")
+		exec("create table " + dbName + ".cg2 clone " + dbName + ".cg1 copy grants")
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".cg2").Scan(&count))
+		require.Equal(t, 1, count)
+		exec("rollback")
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname in ('cg1', 'cg2')").Scan(&count))
+		require.Zero(t, count)
 	})
 }

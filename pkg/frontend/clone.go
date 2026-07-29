@@ -790,7 +790,7 @@ func handleCloneTable(
 	}
 
 	if stmt.CopyGrants && !dstTableExistedBeforeRestore {
-		copyGrantsSnapshotTS := snapshotTS
+		copyGrantsSnapshotTS := restoreSnapshotTS
 		if snapshot != nil && snapshot.TS != nil {
 			copyGrantsSnapshotTS = snapshot.TS.PhysicalTime
 		}

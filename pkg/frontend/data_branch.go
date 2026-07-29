@@ -2454,15 +2454,26 @@ func buildSideCollectRange(
 				},
 			); err != nil {
 				historicalErr := err
-				if rel, err = getRelationById(ctx, ses, bh, nodeID, nil); err != nil {
+				// A same-transaction intermediate has no committed catalog row at
+				// its child's pre-commit clone timestamp. Resolve it at the endpoint
+				// creation commit, where every table in that transaction is visible,
+				// instead of at the current snapshot where it may already be dropped.
+				fallbackSnapshot := endpointCTS
+				fallbackSnapshotPB := fallbackSnapshot.ToTimestamp()
+				if rel, err = getRelationById(
+					ctx, ses, bh, nodeID, &plan2.Snapshot{
+						Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
+						TS:     &fallbackSnapshotPB,
+					},
+				); err != nil {
 					err = historicalErr
 					return
 				}
 				ctsList, ctsErr := getTablesCreationCommitTS(
-					ctx, ses, rel, rel, []types.TS{endpointSP, endpointSP},
+					ctx, ses, rel, rel, []types.TS{fallbackSnapshot, fallbackSnapshot},
 				)
 				if ctsErr != nil || len(ctsList) == 0 ||
-					!ctsList[0].GT(&nodeSnapshot) || ctsList[0].GT(&endpointSP) {
+					!ctsList[0].GT(&nodeSnapshot) || ctsList[0].GT(&fallbackSnapshot) {
 					err = historicalErr
 					return
 				}
