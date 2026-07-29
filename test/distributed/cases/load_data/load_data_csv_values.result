@@ -9,10 +9,10 @@ load data  inline format='csv', data=$XXX$
 $XXX$
 into table t1;
 select * from t1;
-col1
-1
-2
-1
+➤ col1[-6,8,0]  𝄀
+1  𝄀
+2  𝄀
+1  𝄀
 2
 drop table if exists t1;
 create table t1(
@@ -21,8 +21,9 @@ col1 text
 load data inline format='csv', data='"1
 2"\n"2"\n' into table t1;
 select * from t1;
-col1
-1\n2
+➤ col1[12,0,0]  𝄀
+1
+2  𝄀
 2
 drop table if exists t4;
 create table t4(
@@ -31,13 +32,13 @@ col2 datetime,
 col3 timestamp,
 col4 bool
 );
-load data inline format='csv', data='1000-01-01,0001-01-01,1970-01-01 00:00:01,0
+load data inline format='csv', data='1000-01-01,0001-01-01,1970-01-02 00:00:01,0
 9999-12-31,9999-12-31,2038-01-19,1
 ' into table t4;
 select * from t4;
-col1    col2    col3    col4
-1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    0
-9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    1
+➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]  𝄀
+1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-02 00:00:01  ¦  0  𝄀
+9999-12-31  ¦  9999-12-31 00:00:00  ¦  2038-01-19 00:00:00  ¦  1
 create table t5(
 col1 text
 );
@@ -59,13 +60,13 @@ LOAD DATA INLINE FORMAT='csv', DATA='row7,1,1.1,1,2023-05-16 16:06:18.070277,"{"
 LOAD DATA INLINE FORMAT='csv', DATA='row\\8,1,1.1,1,2023-05-16 16:06:18.070277,"{""key1"":""newline""}"' INTO TABLE t6 FIELDS TERMINATED BY ',';
 LOAD DATA INLINE FORMAT='csv', DATA='row\\8,1,1.1,1,2023-05-16 16:06:18.070277,"{""key1"":""newline""}"' INTO TABLE t6;
 select * from t6 order by str;
-str    int64    float64    uint64    datetime_6    json_col
-row5    1    1.1    1    2023-05-16 16:06:18.070277000    {"key1":"insert charactor \'"}
-row5    1    1.1    1    2023-05-16 16:06:18.070277000    {"key1":"insert charactor \'"}
-row7    1    1.1    1    2023-05-16 16:06:18.070277000    {"key1":"newline: \n"}
-row7    1    1.1    1    2023-05-16 16:06:18.070277000    {"key1":"newline: \n"}
-row\8    1    1.1    1    2023-05-16 16:06:18.070277000    {"key1":"newline"}
-row\8    1    1.1    1    2023-05-16 16:06:18.070277000    {"key1":"newline"}
+➤ str[12,-1,0]  ¦  int64[-5,64,0]  ¦  float64[8,54,0]  ¦  uint64[-5,64,0]  ¦  datetime_6[93,64,0]  ¦  json_col[12,0,0]  𝄀
+row5  ¦  1  ¦  1.1  ¦  1  ¦  2023-05-16 16:06:18.070277000  ¦  {"key1":"insert charactor \'"}  𝄀
+row5  ¦  1  ¦  1.1  ¦  1  ¦  2023-05-16 16:06:18.070277000  ¦  {"key1":"insert charactor \'"}  𝄀
+row7  ¦  1  ¦  1.1  ¦  1  ¦  2023-05-16 16:06:18.070277000  ¦  {"key1":"newline: \n"}  𝄀
+row7  ¦  1  ¦  1.1  ¦  1  ¦  2023-05-16 16:06:18.070277000  ¦  {"key1":"newline: \n"}  𝄀
+row\8  ¦  1  ¦  1.1  ¦  1  ¦  2023-05-16 16:06:18.070277000  ¦  {"key1":"newline"}  𝄀
+row\8  ¦  1  ¦  1.1  ¦  1  ¦  2023-05-16 16:06:18.070277000  ¦  {"key1":"newline"}
 CREATE TABLE `rawlog` (
 `raw_item` VARCHAR(1024) NOT NULL COMMENT 'raw log item',
 `node_uuid` VARCHAR(36) NOT NULL COMMENT 'node uuid, which node gen this data.',
@@ -93,5 +94,5 @@ CREATE TABLE `rawlog` (
 );
 LOAD DATA INLINE FORMAT='csv', DATA='log_info,7c4dccb4-4d3c-41f8-b482-5251dc7a41bf,ALL,7c4dccb44d3c41f8,,,2024-05-06 18:28:54.956415,info,compile/sql_executor.go:355,sql_executor exec,"{""sql"":""insert into mo_catalog.mo_account(\\n\\t\\t\\t\\taccount_id,\\n\\t\\t\\t\\taccount_name,\\n\\t\\t\\t\\tstatus,\\n\\t\\t\\t\\tcreated_time,\\n\\t\\t\\t\\tcomments,\\n                create_version) values (0,\\""sys\\"",\\""open\\"",\\""2024-05-06 10:28:54\\"",\\""system account\\"",\\""1.2.0\\"");"",""txn-id"":""018f4d73053c7667a7fbe169f33a12d1"",""duration"":0.011872,""AffectedRows"":1}",0,,,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},internal,,' INTO TABLE rawlog;
 select raw_item from rawlog;
-raw_item
+➤ raw_item[12,-1,0]  𝄀
 log_info
