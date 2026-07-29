@@ -54,7 +54,8 @@ func receiveWorkerMsg(ctx context.Context, mailbox *WorkerJoinMailbox) (*WorkerJ
 		}
 		return nil, err
 	}
-	if mailbox.isStopped() {
+	roundDone, stopped := mailbox.receiveState()
+	if stopped {
 		return nil, moerr.NewInternalErrorNoCtx(
 			"dedup join worker mailbox is stopped before all workers finalized",
 		)
@@ -69,6 +70,13 @@ func receiveWorkerMsg(ctx context.Context, mailbox *WorkerJoinMailbox) (*WorkerJ
 		default:
 		}
 		return nil, context.Cause(ctx)
+	case <-roundDone:
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewInternalErrorNoCtx(
+			"dedup join worker mailbox stopped before all workers finalized",
+		)
 	case msg, ok := <-mailbox.ch:
 		if !ok {
 			if err := context.Cause(ctx); err != nil {
@@ -440,7 +448,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if err := context.Cause(proc.Ctx); err != nil {
 				return err
 			}
-			sent, stopped := ap.Mailbox.trySend(msg)
+			sent, stopped, roundDone := ap.Mailbox.trySend(msg)
 			if stopped {
 				// The merger already terminated this generation. Ownership
 				// remains local and Free will release the capture vectors.
@@ -457,7 +465,15 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			// point Reset/Free still owns and releases these vectors.
 			ctr.captured = nil
 			ctr.capturedVecs = nil
+			// Publication, not acknowledgement, is the worker's single status
+			// for this round. Mark it before waiting so concurrent cancellation
+			// cannot make Reset enqueue a duplicate abort status.
 			ctr.handledLast = true
+			select {
+			case <-roundDone:
+			case <-proc.Ctx.Done():
+				return context.Cause(proc.Ctx)
+			}
 			return nil
 		}
 
@@ -500,6 +516,9 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			ap.Mailbox.stopAndDrain(proc)
 			return err
 		}
+		// Do not release a fast worker into the next spill bucket until every
+		// worker's status for this bucket has been collected.
+		ap.Mailbox.completeRound()
 	}
 
 	ctr.handledLast = true

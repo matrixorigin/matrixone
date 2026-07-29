@@ -69,6 +69,7 @@ type WorkerJoinMsg struct {
 type WorkerJoinMailbox struct {
 	mu           sync.Mutex
 	ch           chan *WorkerJoinMsg
+	roundDone    chan struct{}
 	participants int
 	resetCount   int
 	stopped      bool
@@ -80,34 +81,52 @@ func NewWorkerJoinMailbox(participants int) *WorkerJoinMailbox {
 	}
 	return &WorkerJoinMailbox{
 		ch:           make(chan *WorkerJoinMsg, participants),
+		roundDone:    make(chan struct{}),
 		participants: participants,
 	}
 }
 
-func (m *WorkerJoinMailbox) trySend(msg *WorkerJoinMsg) (sent, stopped bool) {
+func (m *WorkerJoinMailbox) trySend(msg *WorkerJoinMsg) (sent, stopped bool, roundDone <-chan struct{}) {
 	if m == nil {
-		return false, false
+		return false, false, nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.stopped {
-		return false, true
+		return false, true, nil
 	}
 	select {
 	case m.ch <- msg:
-		return true, false
+		return true, false, m.roundDone
 	default:
-		return false, false
+		return false, false, nil
 	}
 }
 
-func (m *WorkerJoinMailbox) isStopped() bool {
+func (m *WorkerJoinMailbox) receiveState() (roundDone <-chan struct{}, stopped bool) {
 	if m == nil {
-		return true
+		return nil, true
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.stopped
+	return m.roundDone, m.stopped
+}
+
+// completeRound releases every worker only after the merger has collected the
+// complete status set for the current spill bucket. Without this barrier a
+// fast worker can publish its next bucket before a slow worker publishes the
+// current one, and a count-only merger can combine different bucket layouts.
+func (m *WorkerJoinMailbox) completeRound() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopped {
+		return
+	}
+	close(m.roundDone)
+	m.roundDone = make(chan struct{})
 }
 
 func (m *WorkerJoinMailbox) stopAndDrain(proc *process.Process) {
@@ -116,7 +135,11 @@ func (m *WorkerJoinMailbox) stopAndDrain(proc *process.Process) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.stopped = true
+	if !m.stopped {
+		m.stopped = true
+		close(m.roundDone)
+		m.roundDone = nil
+	}
 	m.drainLocked(proc)
 }
 
@@ -159,6 +182,7 @@ func (m *WorkerJoinMailbox) resetParticipant(proc *process.Process) {
 	m.drainLocked(proc)
 	m.resetCount = 0
 	m.stopped = false
+	m.roundDone = make(chan struct{})
 }
 
 // freeCapturedVecs releases vectors owned by a WorkerJoinMsg. Intended to be

@@ -202,14 +202,26 @@ func TestDedupShuffleWorkersFinalizeTheirOwnPartitions(t *testing.T) {
 			arg.ctr.batchRowCount = jm.GetRowCount()
 			arg.ctr.matched = matched
 
-			require.NoError(t, arg.ctr.finalize(arg, proc))
+			if test.wantMessage {
+				errC := make(chan error, 1)
+				go func() {
+					errC <- arg.ctr.finalize(arg, proc)
+				}()
+				msg, err := receiveWorkerMsg(proc.Ctx, mailbox)
+				require.NoError(t, err)
+				require.Same(t, matched, msg.matched)
+				mailbox.completeRound()
+				require.NoError(t, <-errC)
+			} else {
+				require.NoError(t, arg.ctr.finalize(arg, proc))
+			}
 			if test.wantOutput {
 				require.Len(t, arg.ctr.buf, 1)
 				require.Equal(t, []int32{42}, vector.MustFixedColNoTypeCheck[int32](arg.ctr.buf[0].Vecs[0]))
 			} else {
 				require.Nil(t, arg.ctr.buf)
 			}
-			require.Equal(t, test.wantMessage, len(mailbox.ch) == 1)
+			require.Empty(t, mailbox.ch)
 
 			arg.Free(proc, false, nil)
 			require.Equal(t, baseline, proc.Mp().CurrNB())
@@ -1019,7 +1031,7 @@ func TestWorkerJoinMsg_MailboxRoundTrip(t *testing.T) {
 	writeBucketValue(t, msg.capturedVecs, msg.captured, 2, 3, proc)
 
 	mailbox := NewWorkerJoinMailbox(2)
-	sent, stopped := mailbox.trySend(msg)
+	sent, stopped, _ := mailbox.trySend(msg)
 	require.True(t, sent)
 	require.False(t, stopped)
 
@@ -1086,7 +1098,7 @@ func TestWorkerJoinMailboxStopAndSendHaveSingleCaptureOwner(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			sent, stopped := mailbox.trySend(
+			sent, stopped, _ := mailbox.trySend(
 				&WorkerJoinMsg{capturedVecs: []*vector.Vector{captured}},
 			)
 			sendResult <- [2]bool{sent, stopped}
@@ -1114,17 +1126,17 @@ func TestWorkerJoinMailboxReopensAfterCompleteResetGeneration(t *testing.T) {
 	mailbox := NewWorkerJoinMailbox(2)
 
 	mailbox.stopAndDrain(proc)
-	sent, stopped := mailbox.trySend(&WorkerJoinMsg{})
+	sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{})
 	require.False(t, sent)
 	require.True(t, stopped)
 
 	mailbox.resetParticipant(proc)
-	sent, stopped = mailbox.trySend(&WorkerJoinMsg{})
+	sent, stopped, _ = mailbox.trySend(&WorkerJoinMsg{})
 	require.False(t, sent)
 	require.True(t, stopped)
 
 	mailbox.resetParticipant(proc)
-	sent, stopped = mailbox.trySend(&WorkerJoinMsg{})
+	sent, stopped, _ = mailbox.trySend(&WorkerJoinMsg{})
 	require.True(t, sent)
 	require.False(t, stopped)
 	mailbox.drain(proc)
@@ -1221,11 +1233,11 @@ func TestDedupFinalizeWorkerFailureCleansTransferredMessages(t *testing.T) {
 	arg.ctr.matched = &bitmap.Bitmap{}
 	arg.ctr.matched.InitWithSize(1)
 	require.True(t, func() bool {
-		sent, _ := mailbox.trySend(&WorkerJoinMsg{aborted: true, err: workerErr})
+		sent, _, _ := mailbox.trySend(&WorkerJoinMsg{aborted: true, err: workerErr})
 		return sent
 	}())
 	require.True(t, func() bool {
-		sent, _ := mailbox.trySend(&WorkerJoinMsg{capturedVecs: []*vector.Vector{captured}})
+		sent, _, _ := mailbox.trySend(&WorkerJoinMsg{capturedVecs: []*vector.Vector{captured}})
 		return sent
 	}())
 	t.Cleanup(func() {
@@ -1265,7 +1277,7 @@ func TestDedupFinalizeWorkerFailureDoesNotWaitForMissingWorker(t *testing.T) {
 		arg.Free(proc, true, workerErr)
 		proc.Free()
 	})
-	sent, stopped := mailbox.trySend(&WorkerJoinMsg{aborted: true, err: workerErr})
+	sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{aborted: true, err: workerErr})
 	require.True(t, sent)
 	require.False(t, stopped)
 	cancel(context.Canceled)
@@ -1290,7 +1302,7 @@ func TestDedupFinalizeWorkerFailureDoesNotWaitForMissingWorker(t *testing.T) {
 func TestDedupFinalizeNormalAbortDoesNotHideCancellation(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	mailbox := NewWorkerJoinMailbox(2)
-	sent, stopped := mailbox.trySend(&WorkerJoinMsg{aborted: true})
+	sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{aborted: true})
 	require.True(t, sent)
 	require.False(t, stopped)
 	arg := &DedupJoin{
@@ -1330,12 +1342,53 @@ func TestDedupFinalizeMailboxSupportsMultipleSpillBuckets(t *testing.T) {
 		worker.ctr.matched.InitWithSize(2)
 		worker.ctr.matched.Add(uint64(bucket))
 
-		require.NoError(t, worker.ctr.finalize(worker, proc))
+		errC := make(chan error, 1)
+		go func() {
+			errC <- worker.ctr.finalize(worker, proc)
+		}()
 		msg, err := receiveWorkerMsg(proc.Ctx, mailbox)
 		require.NoError(t, err)
 		require.True(t, msg.matched.Contains(uint64(bucket)))
 		require.Empty(t, mailbox.ch)
+		select {
+		case err := <-errC:
+			require.NoError(t, err)
+			t.Fatal("worker advanced before the merger completed the spill bucket")
+		default:
+		}
+		mailbox.completeRound()
+		require.NoError(t, <-errC)
 	}
+}
+
+func TestDedupFinalizeCancellationAfterPublishDoesNotDuplicateStatus(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	t.Cleanup(proc.Free)
+
+	mailbox := NewWorkerJoinMailbox(2)
+	worker := &DedupJoin{
+		NumCPU:   2,
+		IsMerger: false,
+		Mailbox:  mailbox,
+	}
+	worker.ctr.matched = &bitmap.Bitmap{}
+	worker.ctr.matched.InitWithSize(1)
+
+	errC := make(chan error, 1)
+	go func() {
+		errC <- worker.ctr.finalize(worker, proc)
+	}()
+	msg, err := receiveWorkerMsg(proc.Ctx, mailbox)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+
+	cancel()
+	require.ErrorIs(t, <-errC, context.Canceled)
+	worker.Reset(proc, true, context.Canceled)
+	require.Empty(t, mailbox.ch, "Reset must not publish a second status for the same worker and bucket")
+	mailbox.stopAndDrain(proc)
 }
 
 func TestDedupFinalizeNormalWorkerAbortStopsWithoutPartialOutput(t *testing.T) {
@@ -1353,7 +1406,7 @@ func TestDedupFinalizeNormalWorkerAbortStopsWithoutPartialOutput(t *testing.T) {
 	joinMap.IncRef(1)
 
 	mailbox := NewWorkerJoinMailbox(2)
-	sent, stopped := mailbox.trySend(&WorkerJoinMsg{aborted: true})
+	sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{aborted: true})
 	require.True(t, sent)
 	require.False(t, stopped)
 	arg := &DedupJoin{
@@ -1432,7 +1485,7 @@ func TestDedupFinalizeParallelMergePreservesDataAcrossReset(t *testing.T) {
 		for _, row := range workerMatches {
 			worker.Add(row)
 		}
-		sent, stopped := mailbox.trySend(&WorkerJoinMsg{matched: worker})
+		sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{matched: worker})
 		require.True(t, sent)
 		require.False(t, stopped)
 
