@@ -171,6 +171,21 @@ func (idx *MutIndex) GetDuplicatedRows(
 		if err == index.ErrNotFound {
 			return nil
 		}
+		// Preserve the conflict check against the newest non-aborted owner even
+		// when that row is newer than this transaction's snapshot. Aborted
+		// append nodes remain in the index as rollback holes and must be skipped.
+		if skipFn != nil {
+			for i := len(rows) - 1; i >= 0; i-- {
+				err = skipFn(rows[i])
+				if err == index.ErrNotFound {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				break
+			}
+		}
 		var maxRow uint32
 		exist := false
 		for i := len(rows) - 1; i >= 0; i-- {

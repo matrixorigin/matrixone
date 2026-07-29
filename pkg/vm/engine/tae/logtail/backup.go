@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -57,6 +58,47 @@ type BackupDeltaLocDataSource struct {
 	ds         map[string]*objData
 	tombstones []objectio.ObjectStats
 	needShrink bool
+}
+
+func loadSpecialColumnLayout(
+	ctx context.Context,
+	fs fileservice.FileService,
+	location objectio.Location,
+) (objectio.SpecialColumnLayout, error) {
+	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+	if err != nil {
+		return objectio.SpecialColumnLayout{}, err
+	}
+	blockMeta := objectMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
+	return objectio.ResolveSpecialColumnLayout(blockMeta), nil
+}
+
+func visibleAppendableRows(
+	ctx context.Context,
+	bat *batch.Batch,
+	layout objectio.SpecialColumnLayout,
+	ts *types.TS,
+) ([]int64, error) {
+	commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
+	if !ok || int(commitPos) >= len(bat.Vecs) {
+		return nil, moerr.NewInternalError(ctx, "appendable object has no commit timestamp")
+	}
+	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[commitPos])
+	var aborts []bool
+	if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok && int(abortPos) < len(bat.Vecs) {
+		abortVec := bat.Vecs[abortPos]
+		if !abortVec.IsConstNull() {
+			aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+		}
+	}
+	rows := make([]int64, 0, len(commitTSs))
+	for row, commitTS := range commitTSs {
+		if (aborts != nil && aborts[row]) || (ts != nil && commitTS.GT(ts)) {
+			continue
+		}
+		rows = append(rows, int64(row))
+	}
+	return rows, nil
 }
 
 func NewBackupDeltaLocDataSource(
@@ -226,25 +268,16 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 						return false, err
 					}
 					if !tombstone.GetCNCreated() {
-						deleteRow := make([]int64, 0)
-						for v := 0; v < bat.Vecs[0].Length(); v++ {
-							var commitTs types.TS
-							err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-1].GetRawBytesAt(v))
-							if err != nil {
-								return false, err
-							}
-							if commitTs.GT(&d.ts) {
-
-								logutil.Debug("[GetSnapshot]",
-									zap.Int("row", v),
-									zap.String("commitTs", commitTs.ToString()),
-									zap.String("location", location.String()))
-							} else {
-								deleteRow = append(deleteRow, int64(v))
-							}
+						layout, err := loadSpecialColumnLayout(ctx, d.fs, location)
+						if err != nil {
+							return false, err
 						}
-						if len(deleteRow) != bat.Vecs[0].Length() {
-							bat.Shrink(deleteRow, false)
+						visibleRows, err := visibleAppendableRows(ctx, bat, layout, &d.ts)
+						if err != nil {
+							return false, err
+						}
+						if len(visibleRows) != bat.Vecs[0].Length() {
+							bat.Shrink(visibleRows, false)
 						}
 					}
 					if id == 0 {
@@ -341,27 +374,21 @@ func trimTombstoneData(
 		var err error
 		var sortKey uint16
 		// As long as there is an aBlk to be deleted, isCkpChange must be set to true.
-		commitTs := types.TS{}
 		location.SetID(uint16(0))
 		bat, sortKey, err = ioutil.LoadOneBlock(ctx, fs, location, objectio.SchemaData)
 		if err != nil {
 			return err
 		}
-		deleteRow := make([]int64, 0)
-		for v := 0; v < bat.Vecs[0].Length(); v++ {
-			err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-1].GetRawBytesAt(v))
-			if err != nil {
-				return err
-			}
-			if commitTs.GT(&ts) {
-				logutil.Debugf("delete row %v, commitTs %v, location %v",
-					v, commitTs.ToString(), (*objectsData)[name].stats.ObjectLocation().String())
-			} else {
-				deleteRow = append(deleteRow, int64(v))
-			}
+		layout, err := loadSpecialColumnLayout(ctx, fs, location)
+		if err != nil {
+			return err
 		}
-		if len(deleteRow) != bat.Vecs[0].Length() {
-			bat.Shrink(deleteRow, false)
+		visibleRows, err := visibleAppendableRows(ctx, bat, layout, &ts)
+		if err != nil {
+			return err
+		}
+		if len(visibleRows) != bat.Vecs[0].Length() {
+			bat.Shrink(visibleRows, false)
 		}
 		bat = formatData(bat)
 		(*objectsData)[name].sortKey = sortKey
@@ -750,6 +777,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				logutil.Info("[Data Empty] ReWrite Checkpoint",
 					zap.String("object", oData.stats.ObjectName().String()),
 					zap.Uint64("tid", oData.tid))
+				bat.Clean(common.DebugAllocator)
 				return true, nil
 			}
 			oData.sortKey = sortKey
@@ -758,9 +786,25 @@ func ReWriteCheckpointAndBlockFromKey(
 			if oData.sortKey != math.MaxUint16 {
 				writer.SetPrimaryKey(oData.sortKey)
 			}
-			result := batch.NewWithSize(len(oData.data[0].Vecs) - 2)
-			for i := range result.Vecs {
-				result.Vecs[i] = oData.data[0].Vecs[i]
+			layout, err := loadSpecialColumnLayout(ctx, fs, oData.stats.ObjectLocation())
+			if err != nil {
+				return true, err
+			}
+			specialPositions := map[uint16]struct{}{}
+			for _, pos := range []uint16{layout.PhysicalAddr, layout.CommitTS, layout.Abort} {
+				if pos != objectio.InvalidSpecialColumnPosition {
+					specialPositions[pos] = struct{}{}
+				}
+			}
+			result := batch.NewWithSize(len(oData.data[0].Vecs) - len(specialPositions))
+			resultPos := 0
+			for pos, vec := range oData.data[0].Vecs {
+				if _, special := specialPositions[uint16(pos)]; special {
+					vec.Free(common.DebugAllocator)
+					continue
+				}
+				result.Vecs[resultPos] = vec
+				resultPos++
 			}
 			result = formatData(result)
 			oData.data[0] = result

@@ -325,17 +325,6 @@ func CopyBlockData(
 	return
 }
 
-func windowCNBatch(bat *batch.Batch, start, end uint64) error {
-	var err error
-	for i, vec := range bat.Vecs {
-		bat.Vecs[i], err = vec.Window(int(start), int(end))
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func BlockDataReadBackup(
 	ctx context.Context,
 	info *objectio.BlockInfo,
@@ -354,24 +343,40 @@ func BlockDataReadBackup(
 		return
 	}
 	if !ts.IsEmpty() {
-		commitTs := types.TS{}
-		for v := 0; v < loaded.Vecs[0].Length(); v++ {
-			err = commitTs.Unmarshal(loaded.Vecs[len(loaded.Vecs)-1].GetRawBytesAt(v))
-			if err != nil {
-				return
+		location := info.MetaLocation()
+		objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		if metaErr != nil {
+			err = metaErr
+			return
+		}
+		blockMeta := objectMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
+		layout := objectio.ResolveSpecialColumnLayout(blockMeta)
+		commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
+		if !ok {
+			err = moerr.NewInternalError(ctx, "backup object has no commit timestamp")
+			return
+		}
+		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[commitPos])
+		var aborts []bool
+		if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+			abortVec := loaded.Vecs[abortPos]
+			if !abortVec.IsConstNull() {
+				aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
 			}
-			if commitTs.GT(&ts) {
-				err = windowCNBatch(loaded, 0, uint64(v))
-				if err != nil {
-					return
-				}
-				logutil.Info("[BlockDataReadBackup]",
-					zap.String("commitTs", commitTs.ToString()),
-					zap.String("ts", ts.ToString()),
-					zap.String("location", info.MetaLocation().String()),
-					zap.Int("rows", v))
-				break
+		}
+		visibleRows := make([]int64, 0, len(commitTSs))
+		for row, commitTS := range commitTSs {
+			if commitTS.GT(&ts) || (aborts != nil && aborts[row]) {
+				continue
 			}
+			visibleRows = append(visibleRows, int64(row))
+		}
+		if len(visibleRows) != len(commitTSs) {
+			loaded.Shrink(visibleRows, false)
+			logutil.Info("[BlockDataReadBackup]",
+				zap.String("ts", ts.ToString()),
+				zap.String("location", info.MetaLocation().String()),
+				zap.Int("rows", len(visibleRows)))
 		}
 	}
 	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)

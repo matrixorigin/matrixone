@@ -730,9 +730,27 @@ func (sm *SnapshotMeta) updateTableInfo(
 			return err
 		}
 
-		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
+		layout, err := loadSpecialColumnLayout(ctx, fs, obj.stats.ObjectLocation())
+		if err != nil {
+			return err
+		}
+		commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
+		if !ok {
+			return moerr.NewInternalError(ctx, "snapshot tombstone object has no commit timestamp")
+		}
+		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[commitPos])
+		var aborts []bool
+		if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+			abortVec := objectBat.Vecs[abortPos]
+			if !abortVec.IsConstNull() {
+				aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+			}
+		}
 		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](objectBat.Vecs[0])
 		for i := 0; i < len(commitTSs); i++ {
+			if aborts != nil && aborts[i] {
+				continue
+			}
 			pk, _, _, _ := types.DecodeTuple(objectBat.Vecs[1].GetRawBytesAt(i))
 			commitTs := commitTSs[i]
 			if commitTs.LT(&startts) || commitTs.GT(&endts) {
