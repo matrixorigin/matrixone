@@ -426,6 +426,14 @@ func TestPositionFunctionSyntax(t *testing.T) {
 	}
 }
 
+func TestIntegralToUint64(t *testing.T) {
+	require.Equal(t, uint64(1), integralToUint64(int64(1)))
+	require.Equal(t, uint64(1<<63), integralToUint64(uint64(1<<63)))
+	require.PanicsWithValue(t, "unexpected integral type string", func() {
+		integralToUint64("1")
+	})
+}
+
 func TestTableOptionAutoIncrementUint64Boundaries(t *testing.T) {
 	tests := []struct {
 		value string
