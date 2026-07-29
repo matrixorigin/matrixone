@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"context"
 	"sort"
 
@@ -415,7 +416,20 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
-			return BindFuncExprImplByPlanExpr(rule.ctx, exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			rewritten, err := BindFuncExprImplByPlanExpr(
+				rule.ctx,
+				exprImpl.F.Func.GetObjName(),
+				exprImpl.F.Args,
+			)
+			if err != nil {
+				return nil, err
+			}
+			rewrittenFn := rewritten.GetF()
+			if rewrittenFn != nil {
+				rewrittenFn.AggConfig = bytes.Clone(exprImpl.F.AggConfig)
+				rewrittenFn.AggConfigType = exprImpl.F.AggConfigType
+			}
+			return rewritten, nil
 		}
 		return e, nil
 	case *plan.Expr_W:
