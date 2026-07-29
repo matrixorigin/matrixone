@@ -184,4 +184,25 @@ drop snapshot sp1;
 drop snapshot sp2;
 drop table t0;
 
+-- ----------------------------------------------------------------
+-- case g: Reversed BETWEEN SNAPSHOT range is rejected
+-- ----------------------------------------------------------------
+
+drop snapshot if exists sp_early;
+drop snapshot if exists sp_late;
+
+create table t0 (a int, b int, primary key(a));
+data branch create table t1 from t0;
+
+create snapshot sp_early for account sys;
+insert into t1 values (1,1);
+create snapshot sp_late for account sys;
+
+data branch pick t1 into t0 between snapshot sp_late and sp_early;
+
+drop snapshot sp_early;
+drop snapshot sp_late;
+drop table t0;
+drop table t1;
+
 drop database test;
