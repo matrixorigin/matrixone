@@ -40,14 +40,26 @@ type AggFuncExecExpression struct {
 	isDistinct     bool
 	argExpressions []*plan.Expr
 	extraConfig    []byte
+	configType     plan.AggregateConfigType
 }
 
-func MakeAggFunctionExpression(id int64, isDistinct bool, args []*plan.Expr, config []byte) AggFuncExecExpression {
+func MakeAggFunctionExpression(
+	id int64,
+	isDistinct bool,
+	args []*plan.Expr,
+	config []byte,
+	configType ...plan.AggregateConfigType,
+) AggFuncExecExpression {
+	var typ plan.AggregateConfigType
+	if len(configType) > 0 {
+		typ = configType[0]
+	}
 	return AggFuncExecExpression{
 		aggID:          id,
 		isDistinct:     isDistinct,
 		argExpressions: args,
 		extraConfig:    config,
+		configType:     typ,
 	}
 }
 
@@ -89,6 +101,25 @@ func (ag *AggFuncExecExpression) GetExtraConfig() []byte {
 
 func (ag *AggFuncExecExpression) SetExtraConfig(config []byte) {
 	ag.extraConfig = config
+}
+
+type AggregateConfig struct {
+	Type plan.AggregateConfigType
+	Data []byte
+}
+
+func (ag *AggFuncExecExpression) GetExtraInformation() any {
+	if ag.extraConfig == nil {
+		return nil
+	}
+	if ag.configType == plan.AggregateConfigType_AGG_CONFIG_NONE {
+		return ag.extraConfig
+	}
+	return AggregateConfig{Type: ag.configType, Data: ag.extraConfig}
+}
+
+func (ag *AggFuncExecExpression) GetConfigType() plan.AggregateConfigType {
+	return ag.configType
 }
 
 // AggFuncExec is an interface to do execution for aggregation.
