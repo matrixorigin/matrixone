@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -24,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -394,6 +397,43 @@ func TestConstructCreateTableSQLUsesStructuredColumnCheck(t *testing.T) {
 		showSQL,
 		"CONSTRAINT `positive_a` CHECK (`a` > 0)",
 	)
+}
+
+func TestConstructCreateTableSQLPreservesCheckUnderNoBackslashEscapes(t *testing.T) {
+	const (
+		sqlMode   = "NO_BACKSLASH_ESCAPES"
+		createSQL = `create table t(s varchar(10), check (s = 'a\nb'))`
+	)
+
+	build := func(sql string) *plan.TableDef {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.SetSqlModeOverride(sqlMode)
+		stmt, err := parsers.ParseOneWithSQLMode(
+			context.Background(),
+			dialect.MYSQL,
+			sql,
+			1,
+			sqlMode,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+		built, err := BuildPlan(&mock.ctxt, stmt, false)
+		require.NoError(t, err)
+		return built.GetDdl().GetCreateTable().GetTableDef()
+	}
+
+	tableDef := build(createSQL)
+	require.Len(t, tableDef.Checks, 1)
+	require.Equal(t, "`s` = 'a\\nb'", tableDef.Checks[0].OriginSql)
+
+	showSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "CHECK (`s` = 'a\\nb')")
+
+	replayedTableDef := build(showSQL)
+	require.Len(t, replayedTableDef.Checks, 1)
+	require.Equal(t, tableDef.Checks[0].OriginSql, replayedTableDef.Checks[0].OriginSql)
+	require.Equal(t, tableDef.Checks[0].Check, replayedTableDef.Checks[0].Check)
 }
 
 func Test_extractTopLevelCheckDefs(t *testing.T) {

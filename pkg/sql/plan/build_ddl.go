@@ -1921,17 +1921,21 @@ func appendCheckDef(
 	tableDef.Checks = append(tableDef.Checks, &plan.CheckDef{
 		Name:      name,
 		Check:     checkExpr,
-		OriginSql: formatCheckConstraintExpr(astExpr),
+		OriginSql: formatCheckConstraintExpr(ctx, astExpr),
 	})
 	return nil
 }
 
-func formatCheckConstraintExpr(expr tree.Expr) string {
-	fmtCtx := tree.NewFmtCtx(
-		dialect.MYSQL,
+func formatCheckConstraintExpr(ctx CompilerContext, expr tree.Expr) string {
+	opts := []tree.FmtCtxOption{
 		tree.WithSingleQuoteString(),
 		tree.WithQuoteIdentifier(),
-	)
+	}
+	if sqlMode := parserSQLModeFromContext(ctx); sqlMode != nil &&
+		mysql.ParseSQLModeFlags(*sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		opts = append(opts, tree.WithNoBackslashEscape())
+	}
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, opts...)
 	expr.Format(fmtCtx)
 	return fmtCtx.String()
 }

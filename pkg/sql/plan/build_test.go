@@ -3153,6 +3153,52 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 		}
 		require.True(t, found)
 	})
+
+	t.Run("ODKU without unique key asserts on legacy fallback", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		tableDef := mock.ctxt.tables["fake_pk_t"]
+		tableDef.Indexes = nil
+		colPos := tableDef.Name2ColIndex["a"]
+		colExpr := &plan.Expr{
+			Typ: tableDef.Cols[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: colPos},
+			},
+		}
+		checkExpr, err := BindFuncExprImplByPlanExpr(
+			t.Context(),
+			">",
+			[]*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)},
+		)
+		require.NoError(t, err)
+		tableDef.Checks = []*plan.CheckDef{{
+			Name:  "fake_pk_t_chk_1",
+			Check: checkExpr,
+		}}
+
+		stmt, err := mysql.ParseOne(
+			t.Context(),
+			"insert into fake_pk_t(a, b) values (-1, 'x') on duplicate key update b = 'y'",
+			1,
+		)
+		require.NoError(t, err)
+		query, err := mock.Optimize(stmt)
+		require.NoError(t, err)
+
+		found := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_FILTER {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if expr.GetF() != nil &&
+					expr.GetF().GetFunc().GetObjName() == "_check_constraint_assert" {
+					found = true
+				}
+			}
+		}
+		require.True(t, found)
+	})
 }
 
 func TestReplaceSetColRefAsDefault(t *testing.T) {
