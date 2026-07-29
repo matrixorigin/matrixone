@@ -2012,19 +2012,19 @@ func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {
 		name: "clone and snapshot",
 		sql:  baseSQL + filters,
 		run: func(bh *backgroundExecTest) ([]string, error) {
-			return fkTablesTopoSort(ctx, bh, nil, dbName, tblName)
+			return fkTablesTopoSort(ctx, bh, nil, dbName, tblName, nil)
 		},
 	}, {
 		name: "pitr restore",
 		sql:  baseSQL + " {MO_TS = 42}" + filters,
 		run: func(bh *backgroundExecTest) ([]string, error) {
-			return fkTablesTopoSortInPitrRestore(ctx, bh, 42, dbName, tblName)
+			return fkTablesTopoSortInPitrRestore(ctx, bh, 42, dbName, tblName, nil)
 		},
 	}, {
 		name: "cross-account snapshot restore",
 		sql:  baseSQL + " {MO_TS = 42}" + filters,
 		run: func(bh *backgroundExecTest) ([]string, error) {
-			return fkTablesTopoSortWithTS(ctx, bh, dbName, tblName, 42, 7, 8)
+			return fkTablesTopoSortWithTS(ctx, bh, dbName, tblName, 42, 7, 8, nil)
 		},
 	}}
 
