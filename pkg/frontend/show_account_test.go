@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/assert"
@@ -148,6 +149,59 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 			}
 			_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, got, 1)
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestNeedShowAccountsObjectCount(t *testing.T) {
+	sysAccount := &TenantInfo{Tenant: GetDefaultTenant()}
+	tenantAccount := &TenantInfo{Tenant: "tenant"}
+	allAccounts := &tree.ShowAccounts{}
+	filteredAccounts := &tree.ShowAccounts{
+		Like: &tree.ComparisonExpr{},
+	}
+
+	tests := []struct {
+		name      string
+		account   *TenantInfo
+		statement *tree.ShowAccounts
+		database  string
+		want      bool
+	}{
+		{
+			name:      "metrics cron query",
+			account:   sysAccount,
+			statement: allAccounts,
+			database:  mometric.MetricDBConst,
+			want:      true,
+		},
+		{
+			name:      "non metrics database",
+			account:   sysAccount,
+			statement: allAccounts,
+			database:  "mo_catalog",
+		},
+		{
+			name:      "filtered sys query",
+			account:   sysAccount,
+			statement: filteredAccounts,
+			database:  mometric.MetricDBConst,
+		},
+		{
+			name:      "tenant query",
+			account:   tenantAccount,
+			statement: allAccounts,
+			database:  mometric.MetricDBConst,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, needShowAccountsObjectCount(
+				test.account,
+				test.statement,
+				test.database,
+			))
 		})
 	}
 }

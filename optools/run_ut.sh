@@ -243,9 +243,10 @@ function run_tests(){
             return 0
         fi
 
-        # These packages need exclusive runner access. NewTestService callers
-        # bind fixed ports, while the issues package runs multiple embedded
-        # services whose race builds can starve under package-level concurrency.
+        # Keep Dragonboat/logstore packages on one race-test process at a time.
+        # Dynamic ports avoid address collisions, but do not remove their CPU
+        # scheduling sensitivity under race instrumentation. The issues package
+        # also runs multiple embedded services and needs the same runner isolation.
         if ! serial_test_scope=$(go list ${GO_MODULE_MODE} \
             ./pkg/logservice \
             ./pkg/vm/engine/tae/logstore \

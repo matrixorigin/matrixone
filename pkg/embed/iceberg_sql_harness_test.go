@@ -113,6 +113,26 @@ func TestCreateEmbeddedIcebergTenantAccountRetriesExpiredAttempt(t *testing.T) {
 	require.Equal(t, 2, calls)
 }
 
+func TestCreateEmbeddedIcebergTenantAccountStopsAtOuterDeadline(t *testing.T) {
+	var calls int
+	execer := embeddedIcebergSQLExecerFunc(func(ctx context.Context, _ string, _ ...any) (sql.Result, error) {
+		calls++
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	err := createEmbeddedIcebergTenantAccountWithAttemptTimeout(
+		ctx,
+		execer,
+		"iceacc_outer_deadline",
+		time.Second,
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, 1, calls)
+}
+
 func TestCreateEmbeddedIcebergTenantAccountRejectsNonConnectionErrors(t *testing.T) {
 	var calls int
 	execer := embeddedIcebergSQLExecerFunc(func(_ context.Context, _ string, _ ...any) (sql.Result, error) {
@@ -749,6 +769,9 @@ func createEmbeddedIcebergTenantAccountWithAttemptTimeout(
 
 	stmt := fmt.Sprintf("create account if not exists %s admin_name 'admin' identified by '111'", accountName)
 	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("create embedded Iceberg tenant account: %w", ctxErr)
+		}
 		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 		_, err := db.ExecContext(attemptCtx, stmt)
 		cancel()

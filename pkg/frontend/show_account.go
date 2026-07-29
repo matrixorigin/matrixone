@@ -138,6 +138,12 @@ func getSqlForAccountInfo(like *tree.ComparisonExpr, accId int64, needObjectCoun
 	return fmt.Sprintf(getAccountInfoFormatV2, dbCountFilter, tblCountFilter, objectCountExpr, clause)
 }
 
+func needShowAccountsObjectCount(account *TenantInfo, sa *tree.ShowAccounts, database string) bool {
+	return account.IsSysTenant() &&
+		sa.Like == nil &&
+		database == mometric.MetricDBConst
+}
+
 func buildAccountInfoClause(like *tree.ComparisonExpr, accId int64) string {
 	predicates := make([]string, 0, 2)
 	if like != nil {
@@ -542,14 +548,13 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		return err
 	}
 
-	var needUpdateObjectCountMetric bool
-	if account.IsSysTenant() &&
-		sa.Like == nil &&
-		ses.GetTxnCompileCtx().GetDatabase() == mometric.MetricDBConst {
-		// storage usage cron task try to get storage usage for all accounts,
-		// adding an extra col to return object count val for all accounts.
-		needUpdateObjectCountMetric = true
-	}
+	// The storage-usage cron task queries all accounts from the metrics
+	// database and needs an extra object-count column in that result.
+	needUpdateObjectCountMetric := needShowAccountsObjectCount(
+		account,
+		sa,
+		ses.GetTxnCompileCtx().GetDatabase(),
+	)
 
 	if account.IsSysTenant() {
 		sql = getSqlForAccountInfo(sa.Like, -1, needUpdateObjectCountMetric)
