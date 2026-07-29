@@ -363,6 +363,15 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 			) select a.n_regionkey from c a join c b on a.n_regionkey = b.n_regionkey`,
 		},
 		{
+			name: "sample producer",
+			sql: `with c as (
+				select sample(total, 2 rows) as n from (
+					select l_suppkey, sum(l_extendedprice) as total
+					from lineitem group by l_suppkey
+				) grouped
+			) select a.n from c a join c b on a.n = b.n`,
+		},
+		{
 			name: "limit consumer",
 			sql: `with c as (
 				select n_regionkey, count(*) as n from nation group by n_regionkey
