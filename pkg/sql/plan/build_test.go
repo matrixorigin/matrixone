@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"strings"
@@ -87,6 +88,124 @@ func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
 	p, err := buildPrepare(tree.NewPrepareString("stmt_sql_mode", "select 'a'||'b'"), ctx)
 	require.NoError(t, err)
 	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
+}
+
+func TestPreparedSetVariablesCollectParamsInAssignmentOrder(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @first = ? + 1, @second = ?'")
+	require.NoError(t, err)
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 2)
+
+	setVars := prepare.Plan.GetDcl().GetSetVariables()
+	require.NotNil(t, setVars)
+	require.Len(t, setVars.Items, 2)
+	require.Equal(t, int32(0), findFirstParamPos(setVars.Items[0].Value))
+	require.Equal(t, int32(1), findFirstParamPos(setVars.Items[1].Value))
+}
+
+func TestPreparedSetVariablesCollectScalarSubqueryParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = (select ?)'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 1)
+}
+
+func TestPreparedSetVariablesCollectScalarAggregateParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = (select sum(cast(? as signed)))'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 1)
+}
+
+func TestPreparedSetVariablesCollectScalarGroupByParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = (select max(1) group by cast(? as signed))'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 1)
+}
+
+func TestPreparedSetVariablesCollectWindowParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = (select sum(cast(? as signed)) over (partition by cast(? as signed) order by cast(? as signed)))'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 3)
+}
+
+func TestPreparedSetVariablesKeepGlobalParamOrderAcrossSubqueries(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @first = ?, @nested = (select (select ?)), @third = ?'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 3)
+
+	setVars := prepare.Plan.GetDcl().GetSetVariables()
+	require.NotNil(t, setVars)
+	require.Len(t, setVars.Items, 3)
+	require.Equal(t, int32(0), findFirstParamPos(setVars.Items[0].Value))
+	require.Equal(t, int32(2), findFirstParamPos(setVars.Items[2].Value))
+}
+
+func TestPreparedSetVariablesCollectScalarSubquerySchemas(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = (select n_nationkey from nation where n_nationkey = ?)'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 1)
+	require.Len(t, prepare.Schemas, 1)
+	require.Equal(t, "nation", prepare.Schemas[0].ObjName)
+}
+
+func TestPreparedLiteralSetHasNoParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = 41 + 1'")
+	require.NoError(t, err)
+	require.Empty(t, p.GetDcl().GetPrepare().ParamTypes)
+}
+
+func findFirstParamPos(expr *plan.Expr) int32 {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		return exprImpl.P.Pos
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if pos := findFirstParamPos(arg); pos >= 0 {
+				return pos
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			if pos := findFirstParamPos(item); pos >= 0 {
+				return pos
+			}
+		}
+	}
+	return -1
 }
 
 func TestBuildViewPersistsSessionSQLMode(t *testing.T) {
@@ -416,6 +535,208 @@ func TestInsertSelectVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, vc) select id, txt from text_cast_t")
 	assert.NoError(t, err)
 	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
+}
+
+func TestInsertSelectEnumToJSONQuotesDisplayValue(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	source := mock.ctxt.tables["nation"]
+	source.Cols[1].Typ = plan.Type{
+		Id:         int32(types.T_enum),
+		Enumvalues: `alpha,{"a":1}`,
+	}
+
+	const tableName = "enum_json_destination"
+	idType := plan.Type{Id: int32(types.T_int32), NotNullable: true}
+	jsonType := plan.Type{Id: int32(types.T_json)}
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
+	cols := []*ColDef{
+		{ColId: 0, Name: "id", OriginName: "id", Typ: idType, Primary: true, Pkidx: 1, Default: &plan.Default{}},
+		{ColId: 1, Name: "j", OriginName: "j", Typ: jsonType, Default: &plan.Default{NullAbility: true}},
+		{ColId: 2, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &plan.Default{}},
+	}
+	tableDef := &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     23177,
+		Name:      tableName,
+		Cols:      cols,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+			CompPkeyCol: cols[0],
+		},
+	}
+	mock.ctxt.objects[tableName] = &ObjectRef{SchemaName: "tpch", ObjName: tableName, Obj: 23177}
+	mock.ctxt.tables[tableName] = tableDef
+	mock.ctxt.id2name[23177] = tableName
+	mock.ctxt.pks[tableName] = []int{0}
+
+	for _, tc := range []struct {
+		sql       string
+		wantQuote bool
+	}{
+		{sql: "insert into enum_json_destination(id, j) select n_nationkey, n_name from nation", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation union all select n_nationkey, n_name from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation union select n_nationkey, n_name from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation intersect select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation intersect all select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation minus select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation union all select n_nationkey, n_comment from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_comment as name from nation union all select n_nationkey, n_name from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation union select n_nationkey, n_comment from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_comment as name from nation union select n_nationkey, n_name from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, cast('{\"a\":1}' as varchar) as name from nation intersect select n_nationkey, n_name from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, cast('{\"a\":1}' as varchar) as name from nation intersect all select n_nationkey, n_name from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, cast('{\"a\":1}' as varchar) as name from nation minus select n_nationkey, n_name from nation) src", wantQuote: false},
+	} {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		require.NoError(t, err, tc.sql)
+
+		foundJSONQuote := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if exprContainsFuncName(expr, "json_quote") {
+					foundJSONQuote = true
+				}
+			}
+		}
+		require.Equal(t, tc.wantQuote, foundJSONQuote, "unexpected ENUM display quoting decision: %s", tc.sql)
+	}
+}
+
+func TestProjectedEnumToJSONExplicitCastQuotesDisplayValue(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	source := mock.ctxt.tables["nation"]
+	source.Cols[1].Typ = plan.Type{
+		Id:         int32(types.T_enum),
+		Enumvalues: `alpha,{"a":1}`,
+	}
+
+	for _, tc := range []struct {
+		sql       string
+		wantQuote bool
+	}{
+		{sql: "select convert(name, json) from (select n_name as name from nation) src", wantQuote: true},
+		{sql: "select cast(name as json) from (select n_name as name from nation union all select n_name from nation) src", wantQuote: true},
+		{sql: "select convert(name, json) from (select n_name as name from nation union select n_name from nation) src", wantQuote: true},
+		{sql: "select convert(name, json) from (select n_name as name from nation union all select n_comment from nation) src", wantQuote: false},
+	} {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		require.NoError(t, err, tc.sql)
+
+		foundJSONQuote := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if exprContainsFuncName(expr, "json_quote") {
+					foundJSONQuote = true
+				}
+			}
+		}
+		require.Equal(t, tc.wantQuote, foundJSONQuote, "unexpected ENUM display quoting decision: %s", tc.sql)
+	}
+}
+
+func TestUpdateProjectedEnumToJSONQuotesDisplayValue(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	table := mock.ctxt.tables["nation"]
+	table.Cols[1].Typ = plan.Type{
+		Id:         int32(types.T_enum),
+		Enumvalues: `alpha,{"a":1}`,
+	}
+	for _, col := range table.Cols {
+		if col.Name == "n_comment" {
+			col.Typ = plan.Type{Id: int32(types.T_json)}
+			break
+		}
+	}
+
+	for _, tc := range []struct {
+		sql       string
+		wantQuote bool
+	}{
+		{
+			sql:       "update nation n join (select n_nationkey as id, n_name as value from nation) src on n.n_nationkey = src.id set n.n_comment = src.value",
+			wantQuote: true,
+		},
+		{
+			sql:       "update nation n join (select n_nationkey as id, n_name as value from nation union all select n_nationkey, n_name from nation) src on n.n_nationkey = src.id set n.n_comment = src.value",
+			wantQuote: true,
+		},
+		{
+			sql:       "update nation n join (select n_nationkey as id, n_name as value from nation union all select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src on n.n_nationkey = src.id set n.n_comment = src.value",
+			wantQuote: false,
+		},
+	} {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		require.NoError(t, err, tc.sql)
+
+		foundJSONQuote := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if exprContainsFuncName(expr, "json_quote") {
+					foundJSONQuote = true
+				}
+			}
+		}
+		require.Equal(t, tc.wantQuote, foundJSONQuote, "unexpected ENUM display quoting decision: %s", tc.sql)
+	}
+}
+
+func TestSetDisplayValueToJSONQuotesAcrossPlannerPaths(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	table := mock.ctxt.tables["nation"]
+	table.Cols[1].Typ = plan.Type{
+		Id:         int32(types.T_uint64),
+		Enumvalues: "alpha,beta",
+	}
+
+	const tableName = "set_json_destination"
+	idType := plan.Type{Id: int32(types.T_int32), NotNullable: true}
+	jsonType := plan.Type{Id: int32(types.T_json)}
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
+	cols := []*ColDef{
+		{ColId: 0, Name: "id", OriginName: "id", Typ: idType, Primary: true, Pkidx: 1, Default: &plan.Default{}},
+		{ColId: 1, Name: "j", OriginName: "j", Typ: jsonType, Default: &plan.Default{NullAbility: true}},
+		{ColId: 2, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &plan.Default{}},
+	}
+	mock.ctxt.objects[tableName] = &ObjectRef{SchemaName: "tpch", ObjName: tableName, Obj: 23178}
+	mock.ctxt.tables[tableName] = &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     23178,
+		Name:      tableName,
+		Cols:      cols,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+			CompPkeyCol: cols[0],
+		},
+	}
+	mock.ctxt.id2name[23178] = tableName
+	mock.ctxt.pks[tableName] = []int{0}
+
+	for _, sql := range []string{
+		"select convert(n_name, json) from nation",
+		"select cast(n_name as json) from nation",
+		"select convert(name, json) from (select n_name as name from nation) src",
+		"select cast(name as json) from (select n_name as name from nation union all select n_name from nation) src",
+		"insert into set_json_destination(id, j) select n_nationkey, n_name from nation",
+		"update set_json_destination dst join nation src on dst.id = src.n_nationkey set dst.j = src.n_name",
+	} {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+
+		foundJSONQuote := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if exprContainsFuncName(expr, "json_quote") {
+					foundJSONQuote = true
+				}
+			}
+		}
+		require.True(t, foundJSONQuote, "SET display value must be quoted as JSON: %s", sql)
+	}
 }
 
 func TestOnDuplicateUpdateVarcharFromTextUsesAssignmentCast(t *testing.T) {
@@ -1324,6 +1645,15 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 		"select *", //No table used
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestMySQLJoinSyntaxVariantsPlan(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"SELECT * FROM { OJ NATION left outer join NATION2 on NATION.N_NATIONKEY = NATION2.N_NATIONKEY }",
+		"SELECT * FROM NATION straight_join NATION2 using(N_NATIONKEY)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
 }
 
 // test derived table plan building
@@ -3621,7 +3951,7 @@ func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
 	}
 }
 
-func TestAggregateArgumentScalarSubqueryFlattenedBeforeGroupConcatSort(t *testing.T) {
+func TestAggregateArgumentScalarSubqueryFlattenedBeforeOrderedGroupConcat(t *testing.T) {
 	sql := `SELECT n.N_REGIONKEY,
 	               GROUP_CONCAT(n.N_NAME ORDER BY n.N_NAME),
 	               AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
@@ -3637,28 +3967,34 @@ func TestAggregateArgumentScalarSubqueryFlattenedBeforeGroupConcatSort(t *testin
 			continue
 		}
 
-		hasGroupConcat := false
+		var groupConcat *plan.Function
 		for _, agg := range node.AggList {
 			if f := agg.GetF(); f != nil && f.Func.ObjName == NameGroupConcat {
-				hasGroupConcat = true
+				groupConcat = f
 				break
 			}
 		}
-		if !hasGroupConcat {
+		if groupConcat == nil {
 			continue
 		}
 
 		foundGroupConcatAgg = true
+		require.False(t, hasSubquery(&plan.Expr{
+			Expr: &plan.Expr_F{F: groupConcat},
+		}), "GROUP_CONCAT contains an executable Expr_Sub")
+		require.Len(t, groupConcat.Args, 2)
+		require.Equal(
+			t,
+			plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+			groupConcat.AggConfigType,
+		)
+		require.Equal(t, groupConcatOrderConfigVersion, groupConcat.AggConfig[0])
+
 		require.Len(t, node.Children, 1)
-		sortNode := query.Nodes[node.Children[0]]
-		require.Equal(t, plan.Node_SORT, sortNode.NodeType, "GROUP_CONCAT input must be sorted after subquery joins")
-		for _, orderBy := range sortNode.OrderBy {
-			require.False(t, hasSubquery(orderBy.Expr), "SORT contains an executable Expr_Sub")
-		}
-		require.Len(t, sortNode.Children, 1)
-		require.Equal(t, plan.Node_JOIN, query.Nodes[sortNode.Children[0]].NodeType)
+		require.Equal(t, plan.Node_JOIN, query.Nodes[node.Children[0]].NodeType)
 	}
 	require.True(t, foundGroupConcatAgg)
+	require.Empty(t, collectReachableSortNodes(query))
 }
 
 func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
@@ -3696,6 +4032,85 @@ func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
 			require.Contains(t, err.Error(), "subquery in group_concat ORDER BY")
 		})
 	}
+}
+
+func TestGroupConcatOrdinalReusesArgument(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"SELECT GROUP_CONCAT(RAND() ORDER BY 1) FROM NATION",
+	)
+	require.NoError(t, err)
+
+	var fn *plan.Function
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 {
+			fn = node.AggList[0].GetF()
+			break
+		}
+	}
+	require.NotNil(t, fn)
+	require.Len(t, fn.Args, 1, "ORDER BY ordinal must not add a second RAND evaluator")
+	require.Equal(t, groupConcatOrderConfigVersion, fn.AggConfig[0])
+
+	pos := 1 + 4
+	require.Equal(t, uint32(1), binary.BigEndian.Uint32(fn.AggConfig[pos:pos+4]))
+	pos += 4 + 1
+	require.Equal(t, uint32(0), binary.BigEndian.Uint32(fn.AggConfig[pos:pos+4]))
+}
+
+func TestGroupConcatAcceptsConstantOrderExpressions(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY NULL) FROM NATION",
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY 'constant') FROM NATION",
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY 1.5) FROM NATION",
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY -1) FROM NATION",
+	} {
+		_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestGroupConcatRejectsUnsupportedOrderKeyType(t *testing.T) {
+	_, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY (N_REGIONKEY, N_NAME)) FROM NATION",
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "group_concat ORDER BY type TUPLE")
+	require.NotContains(t, err.Error(), "internal error")
+}
+
+func TestOrderedGroupConcatInNonEquiCorrelatedScalarSubqueryKeepsConfig(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`SELECT o.N_REGIONKEY, o.N_NAME,
+		        (SELECT GROUP_CONCAT(i.N_NAME ORDER BY i.N_NATIONKEY DESC SEPARATOR '~')
+		           FROM NATION i
+		          WHERE i.N_REGIONKEY < o.N_REGIONKEY)
+		   FROM NATION o`,
+	)
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, agg := range node.AggList {
+			fn := agg.GetF()
+			if fn == nil || fn.Func.ObjName != NameGroupConcat {
+				continue
+			}
+			found = true
+			require.Equal(
+				t,
+				plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+				fn.AggConfigType,
+			)
+			require.NotEmpty(t, fn.AggConfig)
+		}
+	}
+	require.True(t, found)
 }
 
 func TestMysqlCompatibilityMode(t *testing.T) {

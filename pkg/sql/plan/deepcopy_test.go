@@ -57,6 +57,25 @@ func TestCloneTableDefForPlan(t *testing.T) {
 	require.Same(t, pkey, withoutCols.Pkey)
 }
 
+func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
+	source := &planpb.Expr{
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func:          &planpb.ObjectRef{ObjName: NameGroupConcat},
+			AggConfig:     []byte{1, 2, 3},
+			AggConfigType: planpb.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		}},
+	}
+
+	cloned := DeepCopyExpr(source)
+	require.NotSame(t, source.GetF(), cloned.GetF())
+	require.Equal(t, source.GetF().Func, cloned.GetF().Func)
+	require.Equal(t, source.GetF().AggConfig, cloned.GetF().AggConfig)
+	require.Equal(t, source.GetF().AggConfigType, cloned.GetF().AggConfigType)
+
+	cloned.GetF().AggConfig[0] = 9
+	require.Equal(t, byte(1), source.GetF().AggConfig[0])
+}
+
 var clonedTableDef *planpb.TableDef
 
 func BenchmarkCloneTableDefForPlan(b *testing.B) {

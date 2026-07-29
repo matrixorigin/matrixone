@@ -1094,8 +1094,22 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return
 	}
 
+	sourceTableInfos, err := collectRestoreSourceTableInfos(
+		dbName,
+		tblName,
+		func() ([]string, error) {
+			return showDatabasesWithPitr(ctx, ses.GetService(), bh, pitrName, ts)
+		},
+		func(sourceDBName string, sourceTblName string) ([]*tableInfo, error) {
+			return getTableInfoWithPitr(ctx, ses.GetService(), bh, pitrName, ts, sourceDBName, sourceTblName)
+		},
+	)
+	if err != nil {
+		return
+	}
+
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, ts, dbName, tblName)
+	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, ts, dbName, tblName, sourceTableInfos)
 	if err != nil {
 		return
 	}
@@ -1635,7 +1649,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 	)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, 0, dbName, tblName)
+	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, 0, dbName, tblName, nil)
 	if err != nil {
 		return
 	}
@@ -1671,25 +1685,14 @@ func fkTablesTopoSortInPitrRestore(
 	bh BackgroundExec,
 	ts int64,
 	dbName string,
-	tblName string) (sortedTbls []string, err error) {
-	// get foreign key deps from mo_catalog.mo_foreign_keys
+	tblName string,
+	tableInfos []*tableInfo,
+) (sortedTbls []string, err error) {
 	fkDeps, err := getFkDepsInPitrRestore(ctx, bh, ts, dbName, tblName)
 	if err != nil {
 		return
 	}
-
-	g := toposort{next: make(map[string][]string)}
-	for key, deps := range fkDeps {
-		g.addVertex(key)
-		for _, depTbl := range deps {
-			// exclude self dep
-			if key != depTbl {
-				g.addEdge(depTbl, key)
-			}
-		}
-	}
-	sortedTbls, err = g.sort()
-	return
+	return topoSortRestoreFkDeps(ctx, fkDeps, tableInfos)
 }
 
 func restoreTablesWithFkByPitr(
@@ -1773,6 +1776,10 @@ func restoreViewsWithPitr(
 
 		g.addVertex(key)
 		for _, depView := range compCtx.GetViews() {
+			depView, err = normalizeViewDependencyKey(depView)
+			if err != nil {
+				return err
+			}
 			g.addEdge(depView, key)
 		}
 	}
@@ -2135,9 +2142,9 @@ func getFkDepsInPitrRestore(
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
 	if len(dbName) > 0 {
-		sql += fmt.Sprintf(" where db_name = '%s'", dbName)
+		sql += fmt.Sprintf(" where db_name = %s", quoteSQLStringLiteral(dbName))
 		if len(tblName) > 0 {
-			sql += fmt.Sprintf(" and table_name = '%s'", tblName)
+			sql += fmt.Sprintf(" and table_name = %s", quoteSQLStringLiteral(tblName))
 		}
 	}
 

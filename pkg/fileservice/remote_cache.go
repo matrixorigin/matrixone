@@ -149,7 +149,7 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 							continue
 						}
 						vector.Entries[idx].done = true
-						vector.Entries[idx].CachedData = &Bytes{bytes: cacheData.Data}
+						vector.Entries[idx].CachedData = NewBytes(cacheData.Data)
 						vector.Entries[idx].fromCache = r
 						numHit++
 					}

@@ -43,10 +43,11 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 	if err != nil {
 		return nil, err
 	}
+	builder.skipStats = skipStats
+	rootId = builder.reuseMultiReferenceCTEs(rootId)
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
-	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
@@ -313,13 +314,19 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 
 	rootId, err := builder.bindUpdate(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
-			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
-				return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
-			}
+		route, reason, routedErr := classifyUpdatePlannerError(err)
+		switch route {
+		case updatePlannerLegacy:
+			recordUpdatePlannerRoute(route, reason, "selected")
 			return buildTableUpdate(stmt, ctx, isPrepareStmt)
+		case updatePlannerSpecialized:
+			recordUpdatePlannerRoute(route, reason, "selected")
+			return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
+		case updatePlannerRejected, updatePlannerUnknown:
+			recordUpdatePlannerRoute(route, reason, "rejected")
+			return nil, routedErr
 		}
-		return nil, err
+		return nil, routedErr
 	}
 	ctx.SetViews(bindCtx.views)
 
@@ -329,6 +336,7 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err != nil {
 		return nil, err
 	}
+	recordUpdatePlannerRoute(updatePlannerModern, updateRouteReasonNone, "selected")
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -492,7 +500,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.ShowRolesStmt:
 		return buildShowRoles(stmt, ctx)
 	case *tree.SetVar:
-		return buildSetVariables(stmt, ctx)
+		return buildSetVariables(stmt, ctx, isPrepareStmt)
 	case *tree.Execute:
 		return buildExecute(stmt, ctx)
 	case *tree.Deallocate:

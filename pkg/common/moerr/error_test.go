@@ -89,6 +89,23 @@ func TestNew_MyErrorCode(t *testing.T) {
 
 	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
+
+	err = NewUnknownStmtHandler(context.TODO(), "stmt1", "DEALLOCATE PREPARE")
+	require.Equal(t, ErrUnknownStmtHandler, err.ErrorCode())
+	require.Equal(t, ER_UNKNOWN_STMT_HANDLER, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t,
+		"Unknown prepared statement handler (stmt1) given to DEALLOCATE PREPARE",
+		err.Error(),
+	)
+}
+
+func TestWrongArgumentsMySQLError(t *testing.T) {
+	err := NewWrongArguments(context.Background(), "nth_value")
+	require.Equal(t, ErrWrongArguments, err.ErrorCode())
+	require.Equal(t, ER_WRONG_ARGUMENTS, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Incorrect arguments to nth_value", err.Error())
 }
 
 func TestLockWaitTimeoutMySQLError(t *testing.T) {

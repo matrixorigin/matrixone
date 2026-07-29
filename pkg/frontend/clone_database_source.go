@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -29,6 +30,7 @@ type cloneDatabaseSource struct {
 	viewMap            map[string]*tableInfo
 	sortedFkTbls       []string
 	fkTableMap         map[string]*tableInfo
+	hasFkCycle         bool
 	snapshot           *plan.Snapshot
 	opAccountId        uint32
 	toAccountId        uint32
@@ -88,10 +90,16 @@ func collectCloneDatabaseSource(
 	if err != nil {
 		return source, err
 	}
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshot, srcDBName, "")
+	fkDeps, err := getFkDeps(ctx, bh, snapshot, srcDBName, "")
 	if err != nil {
 		return source, err
 	}
+	schemaFkDeps, err := getFkDepsFromTableInfos(ctx, srcTblInfos)
+	if err != nil {
+		return source, err
+	}
+	mergeFkDeps(fkDeps, schemaFkDeps)
+	sortedFkTbls, hasFkCycle := cloneFkTableOrder(fkDeps)
 	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls)
 	if err != nil {
 		return source, err
@@ -107,8 +115,37 @@ func collectCloneDatabaseSource(
 	source.srcTblInfos = srcTblInfos
 	source.sortedFkTbls = sortedFkTbls
 	source.fkTableMap = fkTableMap
+	source.hasFkCycle = hasFkCycle
 	source.snapshot = snapshot
 	source.opAccountId = opAccountId
 	source.toAccountId = toAccountId
 	return source, nil
+}
+
+func cloneFkTableOrder(fkDeps map[string][]string) (sortedTbls []string, hasCycle bool) {
+	g := toposort{next: make(map[string][]string)}
+	for key, deps := range fkDeps {
+		g.addVertex(key)
+		for _, depTbl := range deps {
+			if key != depTbl {
+				g.addEdge(depTbl, key)
+			}
+		}
+	}
+
+	sortedTbls, err := g.sort()
+	if err == nil {
+		return sortedTbls, false
+	}
+
+	// CREATE TABLE resolves forward foreign-key references while
+	// foreign_key_checks is disabled. A deterministic order is sufficient for
+	// a cyclic component because creating its later tables backfills those
+	// references.
+	sortedTbls = sortedTbls[:0]
+	for key := range g.next {
+		sortedTbls = append(sortedTbls, key)
+	}
+	sort.Strings(sortedTbls)
+	return sortedTbls, true
 }

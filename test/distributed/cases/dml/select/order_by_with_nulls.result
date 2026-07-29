@@ -465,20 +465,18 @@ id    name
 3    rorgdbs
 1    jacak
 4    null
-SELECT * FROM t1 ORDER BY name ASC NULLS LAST;
+SELECT * FROM t1 ORDER BY name IS NULL, name ASC;
 id    name
 1    jacak
 3    rorgdbs
 2    tommy
 4    null
-SELECT * FROM t1 ORDER BY name ASC NULLS FIRST;
+SELECT * FROM t1 ORDER BY name IS NOT NULL, name ASC;
 id    name
 4    null
 1    jacak
 3    rorgdbs
 2    tommy
-SELECT * FROM t1 ORDER BY name ASC NULLS FIRST LAST;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " LAST;";
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(
 id INT,
@@ -488,18 +486,18 @@ dept INT,
 PRIMARY KEY(id)
 );
 INSERT INTO t1() VALUES(1,'bdkia',133.1,11), (2, 'dodro',983.6,NULL), (3, 'fafeaz',301.5,10), (4, NULL,NULL,13);
-SELECT * FROM t1 WHERE id > 1 ORDER BY id DESC, salary NULLS FIRST;
+SELECT * FROM t1 WHERE id > 1 ORDER BY id DESC, salary;
 id    name    salary    dept
 4    null    null    13
 3    fafeaz    301.5    10
 2    dodro    983.6    null
-SELECT * FROM t1 WHERE id BETWEEN 1 AND 4 ORDER BY id DESC, dept NULLS LAST, salary DESC NULLS FIRST;
+SELECT * FROM t1 WHERE id BETWEEN 1 AND 4 ORDER BY id DESC, dept IS NULL, dept, salary IS NOT NULL, salary DESC;
 id    name    salary    dept
 4    null    null    13
 3    fafeaz    301.5    10
 2    dodro    983.6    null
 1    bdkia    133.1    11
-SELECT id,name FROM t1 ORDER BY salary DESC NULLS FIRST, dept DESC NULLS LAST, name ASC NULLS FIRST;
+SELECT id,name FROM t1 ORDER BY salary IS NOT NULL, salary DESC, dept DESC, name ASC;
 id    name
 4    null
 2    dodro
@@ -519,26 +517,26 @@ PRIMARY KEY(id)
 );
 INSERT INTO t1() VALUES(1, 'jacak'), (2, 'tommy'), (3, 'roses'), (4, NULL);
 INSERT INTO t2() VALUES(1, 'US'), (2, 'UK'), (3, NULL), (4, NULL), (5, NULL);
-SELECT * FROM t1 JOIN t2 ON t1.id = t2.id ORDER BY name DESC NULLS FIRST;
+SELECT * FROM t1 JOIN t2 ON t1.id = t2.id ORDER BY name IS NOT NULL, name DESC;
 id    name    id    nation
 4    null    4    null
 2    tommy    2    UK
 3    roses    3    null
 1    jacak    1    US
-SELECT * FROM t1 LEFT JOIN t2 ON t1.id = t2.id ORDER BY name ASC NULLS LAST;
+SELECT * FROM t1 LEFT JOIN t2 ON t1.id = t2.id ORDER BY name IS NULL, name ASC;
 id    name    id    nation
 1    jacak    1    US
 3    roses    3    null
 2    tommy    2    UK
 4    null    4    null
-SELECT * FROM t1 RIGHT JOIN t2 ON t1.id = t2.id ORDER BY name ASC, nation DESC NULLS LAST;
+SELECT * FROM t1 RIGHT JOIN t2 ON t1.id = t2.id ORDER BY name ASC, nation DESC;
 id    name    id    nation
 4    null    4    null
 null    null    5    null
 1    jacak    1    US
 3    roses    3    null
 2    tommy    2    UK
-SELECT * FROM t1 INNER JOIN t2 ON t1.id = t2.id ORDER BY name DESC, nation ASC NULLS FIRST;
+SELECT * FROM t1 INNER JOIN t2 ON t1.id = t2.id ORDER BY name DESC, nation ASC;
 id    name    id    nation
 2    tommy    2    UK
 3    roses    3    null
@@ -556,14 +554,14 @@ home CHAR(20)
 );
 INSERT INTO t1() VALUES(1, 'F'), (2, 'M'), (NULL, 'M'), (4, NULL), (NULL, NULL);
 INSERT INTO t2() VALUES(1, 'EU'), (2, 'UK'), (3, NULL), (4, NULL), (5, NULL), (NULL, NULL);
-SELECT * FROM t1 LEFT JOIN t2 ON t1.id = t2.id ORDER BY sex ASC NULLS LAST;
+SELECT * FROM t1 LEFT JOIN t2 ON t1.id = t2.id ORDER BY sex IS NULL, sex ASC;
 id    sex    id    home
 1    F    1    EU
 2    M    2    UK
 null    M    null    null
 4    null    4    null
 null    null    null    null
-SELECT * FROM t1 RIGHT JOIN t2 ON t1.id = t2.id ORDER BY home ASC NULLS FIRST;
+SELECT * FROM t1 RIGHT JOIN t2 ON t1.id = t2.id ORDER BY home ASC;
 id    sex    id    home
 null    null    3    null
 4    null    4    null
@@ -571,7 +569,7 @@ null    null    5    null
 null    null    null    null
 1    F    1    EU
 2    M    2    UK
-SELECT * FROM t1 INNER JOIN t2 ON t1.id = t2.id ORDER BY home ASC, sex DESC NULLS FIRST;
+SELECT * FROM t1 INNER JOIN t2 ON t1.id = t2.id ORDER BY home ASC, sex IS NOT NULL, sex DESC;
 id    sex    id    home
 4    null    4    null
 1    F    1    EU

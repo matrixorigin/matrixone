@@ -60,6 +60,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestTemporaryTableSkipsPersistentOwnershipChanges(t *testing.T) {
+	require.NoError(t, doGrantPrivilegeImplicitly(
+		context.Background(), nil, &tree.CreateTable{Temporary: true},
+	))
+	require.NoError(t, doRevokePrivilegeImplicitly(
+		context.Background(), nil, &tree.DropTable{}, nil,
+	))
+}
+
 func TestGetTenantInfo(t *testing.T) {
 	convey.Convey("tenant", t, func() {
 		type input struct {
@@ -8668,6 +8677,104 @@ func Test_doDropFunction(t *testing.T) {
 	})
 }
 
+func Test_doDropFunctionIfExists(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ses := newSes(nil, ctrl)
+	ctx := ses.GetTxnHandler().GetTxnCtx()
+	checkDBSQL, err := getSqlForCheckDatabaseByAccount(ctx, "db")
+	require.NoError(t, err)
+	bh.sql2result[checkDBSQL] = newMrsForCheckDatabase([][]interface{}{{int64(1)}})
+	bh.sql2result[fmt.Sprintf(checkUdfArgs, "testFunc", "db")] = newMrsForCheckDatabase(nil)
+
+	drop := &tree.DropFunction{
+		Name: tree.NewFuncName("testFunc",
+			tree.ObjectNamePrefix{
+				SchemaName:      tree.Identifier("db"),
+				ExplicitSchema:  true,
+				ExplicitCatalog: false,
+			},
+		),
+		IfExists: true,
+	}
+
+	require.NoError(t, doDropFunction(ctx, ses, drop, nil))
+	drop.IfExists = false
+	require.Error(t, doDropFunction(ctx, ses, drop, nil))
+}
+
+func Test_doDropFunctionIfExistsWithDifferentOverload(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		ifExists   bool
+		wantErr    bool
+		wantCommit bool
+	}{
+		{
+			name:       "if exists ignores a missing signature",
+			sql:        "drop function if exists db.testfunc (int)",
+			ifExists:   true,
+			wantCommit: true,
+		},
+		{
+			name:    "missing signature returns an error",
+			sql:     "drop function db.testfunc (int)",
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+
+			ses := newSes(nil, ctrl)
+			ctx := ses.GetTxnHandler().GetTxnCtx()
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			drop, ok := stmt.(*tree.DropFunction)
+			require.True(t, ok)
+			require.Equal(t, test.ifExists, drop.IfExists)
+
+			checkDBSQL, err := getSqlForCheckDatabaseByAccount(ctx, "db")
+			require.NoError(t, err)
+			bh.sql2result[checkDBSQL] = newMrsForCheckDatabase([][]interface{}{{int64(1)}})
+			bh.sql2result[fmt.Sprintf(checkUdfArgs, "testfunc", "db")] = newMrsForCheckUdfArgs([][]interface{}{
+				{`[{"name":"arg","type":"varchar"}]`, int64(1), `{}`},
+			})
+
+			err = doDropFunction(ctx, ses, drop, nil)
+			if test.wantErr {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropNonExistsFunction))
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.NotContains(t, bh.executedSQLs, fmt.Sprintf(deleteUserDefinedFunctionFormat, int64(1)))
+			if test.wantCommit {
+				require.Contains(t, bh.executedSQLs, "commit;")
+				require.NotContains(t, bh.executedSQLs, "rollback;")
+			} else {
+				require.Contains(t, bh.executedSQLs, "rollback;")
+				require.NotContains(t, bh.executedSQLs, "commit;")
+			}
+		})
+	}
+}
+
 func Test_doDropRole(t *testing.T) {
 	convey.Convey("drop role succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -11804,6 +11911,22 @@ func newMrsForCheckDatabase(rows [][]interface{}) *MysqlResultSet {
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForCheckUdfArgs(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	for _, name := range []string{"args", "function_id", "body"} {
+		col := &MysqlColumn{}
+		col.SetName(name)
+		mrs.AddColumn(col)
+	}
 
 	for _, row := range rows {
 		mrs.AddRow(row)

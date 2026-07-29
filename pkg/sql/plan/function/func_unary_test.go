@@ -9056,6 +9056,12 @@ func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)
 		service.blockUnlock.Store(true)
+		// Keep the synthetic queue saturated until the admission assertions are
+		// complete. Letting workers drain 1,024 unrelated entries makes the
+		// session-close recovery assertion depend on CI scheduling.
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.started = true
+		detachedUserLevelLockCleanups.Unlock()
 		enqueueLockCleanup := func(owner string, connID uint64, name string) bool {
 			return enqueueDetachedUserLevelLockTxnCleanup(
 				service,
@@ -9093,19 +9099,40 @@ func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, int64(1), v)
 		}
+		row := string(userLevelLockRow(holder, "close_overload_a"))
+		service.state.Lock()
+		cleanupTxnID := []byte(service.state.locks[row])
+		service.state.Unlock()
+		require.NotEmpty(t, cleanupTxnID)
+
 		releaseUserLevelLocksOnSessionCloseWithTimeout(holder, 10*time.Millisecond)
 		require.Empty(t, UserLevelLocksForMigration(holder))
 		require.LessOrEqual(t, detachedUserLevelLockCleanupCountForKind("overflow"), userLevelLockDetachedCleanupOverflowShards)
+		var cleanupKey detachedUserLevelLockCleanupKey
+		detachedUserLevelLockCleanups.Lock()
+		for key, entry := range detachedUserLevelLockCleanups.entries {
+			for _, txnID := range entry.txnIDs {
+				if bytes.Equal(txnID, cleanupTxnID) {
+					cleanupKey = key
+					break
+				}
+			}
+			if cleanupKey.serviceID != "" {
+				break
+			}
+		}
+		detachedUserLevelLockCleanups.Unlock()
+		require.NotEmpty(t, cleanupKey.serviceID)
 
 		v, err := getUserLevelLock("close_overload_a", 0, contender)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v)
 
 		service.blockUnlock.Store(false)
-		require.Eventually(t, func() bool {
-			v, err := getUserLevelLock("close_overload_a", 0, contender)
-			return err == nil && v == 1
-		}, 3*time.Second, 10*time.Millisecond)
+		runDetachedUserLevelLockCleanupAttempt(cleanupKey)
+		v, err = getUserLevelLock("close_overload_a", 0, contender)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
 	})
 }
 
@@ -9567,8 +9594,13 @@ func TestActiveUserLevelLockOwnersBoundRetainedCloseCleanupGrowth(t *testing.T) 
 			userLevelLocks.byOwner[owner] = map[string]struct{}{name: {}}
 			userLevelLocks.ownerSessions[owner] = fmt.Sprintf("session-active-close-cap-%d", i)
 		}
-		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, retainedUserLevelLockCleanupEntryCountLocked())
+		// This test inspects admission accounting, not asynchronous cleanup.
+		// Keep the worker stopped so it cannot consume the retained entry while
+		// the capacity invariants are being observed.
+		userLevelLocks.retainedCleanupStarted = true
+		entryCount := retainedUserLevelLockCleanupEntryCountLocked()
 		userLevelLocks.Unlock()
+		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, entryCount)
 
 		proc := newUserLevelLockTestProcess(t, services[0], "acc")
 		v, err := getUserLevelLock("active_close_cap_rejected", 0, proc)
@@ -9586,8 +9618,9 @@ func TestActiveUserLevelLockOwnersBoundRetainedCloseCleanupGrowth(t *testing.T) 
 			1,
 		))
 		userLevelLocks.Lock()
-		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, retainedUserLevelLockCleanupEntryCountLocked())
+		entryCount = retainedUserLevelLockCleanupEntryCountLocked()
 		userLevelLocks.Unlock()
+		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, entryCount)
 
 		require.False(t, retainUserLevelLockCloseCleanup(
 			service,
@@ -9597,9 +9630,12 @@ func TestActiveUserLevelLockOwnersBoundRetainedCloseCleanupGrowth(t *testing.T) 
 			9999,
 		))
 		userLevelLocks.Lock()
-		require.Len(t, userLevelLocks.retainedCloseCleanups, 1)
-		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, retainedUserLevelLockCleanupEntryCountLocked())
+		retainedCloseCleanupCount := len(userLevelLocks.retainedCloseCleanups)
+		entryCount = retainedUserLevelLockCleanupEntryCountLocked()
+		userLevelLocks.retainedCleanupStarted = false
 		userLevelLocks.Unlock()
+		require.Equal(t, 1, retainedCloseCleanupCount)
+		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, entryCount)
 	})
 }
 

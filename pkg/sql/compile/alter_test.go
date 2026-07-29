@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -44,6 +45,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -70,6 +72,151 @@ func TestIsAlterAffectedPluginIndexMatchesIndexNamePartsAndIncludedColumns(t *te
 	require.False(t, isAlterAffectedPluginIndex(nil, []string{"idx_vec"}))
 }
 
+func TestReplaceRefChildTableID(t *testing.T) {
+	t.Run("replace altered child and preserve siblings", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
+		}}
+		replaceRefChildTableID(constraintDef, 20, 21)
+		require.Equal(t, []uint64{10, 21, 30}, canonicalRefChildTableIDs(constraintDef))
+	})
+
+	t.Run("do not invent a missing child reference", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 30}},
+		}}
+		replaceRefChildTableID(constraintDef, 20, 21)
+		require.Equal(t, []uint64{10, 30}, canonicalRefChildTableIDs(constraintDef))
+	})
+
+	t.Run("canonicalize duplicate definitions and table ids", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20, 21}},
+			&engine.RefChildTableDef{Tables: []uint64{20, 30, 0}},
+			&engine.RefChildTableDef{Tables: []uint64{0}},
+		}}
+		replaceRefChildTableID(constraintDef, 20, 21)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{10, 21, 30, 0},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+
+	t.Run("keep an empty reference list empty", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{}
+		replaceRefChildTableID(constraintDef, 20, 21)
+		require.Len(t, constraintDef.Cts, 1)
+		require.Empty(t, canonicalRefChildTableIDs(constraintDef))
+	})
+}
+
+func TestTruncateRefChildTableIDReplacementCanonicalizesLegacyState(t *testing.T) {
+	constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.RefChildTableDef{Tables: []uint64{0, 10, 20}},
+		&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
+		&engine.RefChildTableDef{Tables: []uint64{0}},
+	}}
+
+	replaceRefChildTableID(constraintDef, 20, 21)
+
+	require.Len(t, constraintDef.Cts, 1)
+	require.Equal(
+		t,
+		[]uint64{0, 10, 21, 30},
+		constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+	)
+}
+
+func TestCanonicalRefChildTableIDMutations(t *testing.T) {
+	t.Run("add merges definitions and deduplicates sentinel", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{0, 10}},
+			&engine.RefChildTableDef{Tables: []uint64{10, 20}},
+		}}
+
+		addRefChildTableIDs(constraintDef, []uint64{0, 20, 30})
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{0, 10, 20, 30},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+
+	t.Run("remove deletes every duplicate and keeps other ids", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{0, 10, 20}},
+			&engine.RefChildTableDef{Tables: []uint64{10, 30}},
+		}}
+
+		removeRefChildTableID(constraintDef, 10)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{0, 20, 30},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+}
+
+func TestReconcileParentRefChildTableID(t *testing.T) {
+	t.Run("replace child in existing reverse reference", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
+		}}
+		reconcileParentRefChildTableID(constraintDef, 20, 21)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{10, 21, 30},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+
+	t.Run("restore reverse reference removed while dropping old child", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{}
+		reconcileParentRefChildTableID(constraintDef, 20, 21)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{21},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+}
+
+func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.Background()
+	_, txnOp := newTestTxnClientAndOp(ctrl)
+	proc.Base.TxnOperator = txnOp
+
+	cleanupErr := errors.New("discard failed")
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(11), txnOp).Return(cleanupErr)
+	autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(12), txnOp).Return(nil)
+	incrservice.SetAutoIncrementServiceByID(proc.GetService(), autoSvc)
+
+	cleanup := newAlterCopyAutoIncrementCleanup(&Compile{proc: proc})
+	cleanup.track(11)
+	cleanup.track(11)
+	cleanup.track(12)
+	originalErr := errors.New("statement failed")
+	statementErr := originalErr
+	cleanup.finish(&statementErr)
+
+	require.ErrorIs(t, statementErr, originalErr)
+	require.ErrorIs(t, statementErr, cleanupErr)
+}
+
 type alterCopyInsertSpyExecutor struct {
 	insertSQL    string
 	insertErr    error
@@ -78,6 +225,152 @@ type alterCopyInsertSpyExecutor struct {
 	results      map[string]executor.Result
 	errs         map[string]error
 	executedSQLs []string
+}
+
+func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	sourceOffsetSQL := "select col_index, offset from mo_catalog.mo_increment_columns where table_id = 1"
+	renamedMaxSQL := "select cast(coalesce(max(case when `renamed_id` > 0 then `renamed_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	reusedMaxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		sourceOffsetSQL: newTableCloneOffsetResult(t, resultMP, 0, 500),
+		renamedMaxSQL:   newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{40}),
+		reusedMaxSQL:    newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+
+	autoType := plan.Type{Id: int32(types.T_uint64), AutoIncr: true}
+	srcDef := &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{
+			{ColId: 10, Name: "id", Typ: autoType},
+			{ColId: 11, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	copyDef := &plan.TableDef{
+		TblId:          2,
+		Name:           "dept_copy",
+		AutoIncrOffset: 99,
+		Cols: []*plan.ColDef{
+			{ColId: 12, Name: "id", Typ: autoType},
+			{ColId: 10, Name: "renamed_id", Typ: autoType},
+			{ColId: 11, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	gomock.InOrder(
+		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, "id", uint64(99), c.proc.GetTxnOperator()),
+		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, "renamed_id", uint64(500), c.proc.GetTxnOperator()),
+		autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), copyDef.TblId, c.proc.GetTxnOperator()).Return(nil),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	cleanup := newAlterCopyAutoIncrementCleanup(c)
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", srcDef, copyDef, copyRel, cleanup,
+	))
+	require.Equal(t, []string{sourceOffsetSQL, reusedMaxSQL, renamedMaxSQL}, spyExec.executedSQLs)
+	require.Zero(t, resultMP.CurrNB(), "all internal SQL results must be closed")
+	laterErr := errors.New("later ALTER COPY step failed")
+	cleanup.finish(&laterErr)
+	require.ErrorContains(t, laterErr, "later ALTER COPY step failed")
+}
+
+func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t *testing.T) {
+	t.Run("hidden only", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		spyExec := &alterCopyInsertSpyExecutor{}
+		c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+		copyDef := &plan.TableDef{
+			TblId: 2,
+			Name:  "dept_copy",
+			Cols: []*plan.ColDef{{
+				ColId: 1, Name: catalog.FakePrimaryKeyColName, Hidden: true,
+				Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+			}},
+		}
+		copyRel := mock_frontend.NewMockRelation(ctrl)
+		autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+		autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+		require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+			"test", &plan.TableDef{}, copyDef, copyRel, newAlterCopyAutoIncrementCleanup(c),
+		))
+		require.Empty(t, spyExec.executedSQLs)
+	})
+
+	t.Run("source offset exceeds narrowed type", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		resultMP := mpool.MustNewZero()
+		sourceOffsetSQL := "select col_index, offset from mo_catalog.mo_increment_columns where table_id = 1"
+		maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+		spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+			sourceOffsetSQL: newTableCloneOffsetResult(t, resultMP, 0, 300),
+			maxSQL:          newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{40}),
+		}}
+		c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+		srcDef := &plan.TableDef{TblId: 1, Cols: []*plan.ColDef{{
+			ColId: 10, Name: "id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}}}
+		copyDef := &plan.TableDef{TblId: 2, Name: "dept_copy", Cols: []*plan.ColDef{{
+			ColId: 10, Name: "id", Typ: plan.Type{Id: int32(types.T_uint8), AutoIncr: true},
+		}}}
+		copyRel := mock_frontend.NewMockRelation(ctrl)
+		copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
+		autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+		autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+		err := c.reconcileAlterCopyAutoIncrement(
+			"test", srcDef, copyDef, copyRel, newAlterCopyAutoIncrementCleanup(c),
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		require.Zero(t, resultMP.CurrNB(), "all internal SQL results must be closed")
+	})
+}
+
+func TestReconcileAlterCopyAutoIncrementStopsAfterCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	firstMaxSQL := "select cast(coalesce(max(case when `first` > 0 then `first` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		firstMaxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{40}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	ctx, cancel := context.WithCancel(c.proc.Ctx)
+	c.proc.Ctx = ctx
+	c.proc.ReplaceTopCtx(ctx)
+
+	copyDef := &plan.TableDef{
+		TblId:          2,
+		Name:           "dept_copy",
+		AutoIncrOffset: 99,
+		Cols: []*plan.ColDef{
+			{ColId: 20, Name: "first", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{ColId: 21, Name: "second", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(ctx, copyDef.TblId, "first", uint64(99), c.proc.GetTxnOperator()).DoAndReturn(
+		func(context.Context, uint64, string, uint64, client.TxnOperator) error {
+			cancel()
+			return nil
+		},
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	err := c.reconcileAlterCopyAutoIncrement(
+		"test", &plan.TableDef{}, copyDef, copyRel, newAlterCopyAutoIncrementCleanup(c),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, []string{firstMaxSQL}, spyExec.executedSQLs)
+	require.Zero(t, resultMP.CurrNB())
 }
 
 const (

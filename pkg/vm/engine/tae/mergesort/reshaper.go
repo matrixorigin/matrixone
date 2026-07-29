@@ -37,7 +37,11 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 			totalBlkCnt += cnt
 		}
 		stride = int(host.GetBlockMaxRows())
-		slab = getTransferSlab(totalBlkCnt * stride)
+		var err error
+		slab, err = getTransferSlab(totalBlkCnt * stride)
+		if err != nil {
+			return err
+		}
 		blockActive = make([]bool, totalBlkCnt)
 		table = &TransferTable{Slab: slab, Stride: stride, BlockActive: blockActive}
 	}

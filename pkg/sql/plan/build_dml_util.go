@@ -1362,10 +1362,14 @@ func appendSinkScanNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, sour
 	b := bindCtx.bindings[0]
 	sinkScanNode.TableDef.Cols = make([]*ColDef, len(b.cols))
 	for i, col := range b.cols {
+		typ := *b.types[i]
+		if i < len(sinkScanProject) {
+			typ = sinkScanProject[i].Typ
+		}
 		sinkScanNode.TableDef.Cols[i] = &ColDef{
 			Name:   col,
 			Hidden: b.colIsHidden[i],
-			Typ:    *b.types[i],
+			Typ:    typ,
 		}
 	}
 	lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
@@ -1386,10 +1390,14 @@ func appendRecursiveScanNode(builder *QueryBuilder, bindCtx *BindContext, source
 	b := bindCtx.bindings[0]
 	recursiveScanNode.TableDef.Cols = make([]*ColDef, len(b.cols))
 	for i, col := range b.cols {
+		typ := *b.types[i]
+		if i < len(recursiveScanProject) {
+			typ = recursiveScanProject[i].Typ
+		}
 		recursiveScanNode.TableDef.Cols[i] = &ColDef{
 			Name:   col,
 			Hidden: b.colIsHidden[i],
-			Typ:    *b.types[i],
+			Typ:    typ,
 		}
 	}
 	lastNodeId = builder.appendNode(recursiveScanNode, bindCtx)
@@ -3613,6 +3621,44 @@ func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
 	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' ; ", db, oldName))
 	ret = append(ret, sb.String())
 	return
+}
+
+// GetSqlForTransferAlterCopyFk returns the catalog statements that transfer
+// child-side foreign-key metadata from the source relation to its COPY
+// replacement. The source rows are authoritative because UpdateFkSqls has
+// already applied the ALTER actions to them; rows created while creating the
+// temporary relation are discarded before the transfer.
+//
+// Parent-side names intentionally remain unchanged. The replacement ultimately
+// takes the source name, so changing refer_table_name would expose an
+// intermediate reference to a non-existent temporary parent.
+func GetSqlForTransferAlterCopyFk(db, sourceTable, copyTable string) (
+	prepare []string,
+	finalize []string,
+) {
+	prepare = append(prepare, getSqlForDeleteFkChildTable(db, copyTable))
+	prepare = append(prepare, getSqlForRenameFkChildTable(db, sourceTable, copyTable))
+	finalize = append(finalize, getSqlForRenameFkChildTable(db, copyTable, sourceTable))
+	return
+}
+
+func getSqlForDeleteFkChildTable(db, table string) string {
+	return fmt.Sprintf(
+		"delete from `mo_catalog`.`mo_foreign_keys` "+
+			"where db_name = %s and table_name = %s",
+		quoteSQLStringLiteral(db),
+		quoteSQLStringLiteral(table),
+	)
+}
+
+func getSqlForRenameFkChildTable(db, oldName, newName string) string {
+	return fmt.Sprintf(
+		"update `mo_catalog`.`mo_foreign_keys` set table_name = %s "+
+			"where db_name = %s and table_name = %s",
+		quoteSQLStringLiteral(newName),
+		quoteSQLStringLiteral(db),
+		quoteSQLStringLiteral(oldName),
+	)
 }
 
 // getSqlForRenameColumn returns the sqls that rename the column of all fk relationships in mo_foreign_keys

@@ -116,7 +116,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		// (for example IVF entries store the origin PK), so ask the caller to use
 		// the fallback update planner that runs the delete+insert rebuild path.
 		if hasIrregularIndex && primaryKeyUpdated(tableDef, dmlCtx.updateCol2Expr[i]) {
-			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index")
+			return 0, newLegacyUpdatePlannerRouteError(
+				updateRouteReasonIrregularIndex,
+				moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index"),
+			)
 		}
 
 		// Only block if irregular index exists AND indexed columns are being updated.
@@ -125,7 +128,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		if hasIrregularIndex {
 			for colName := range dmlCtx.updateCol2Expr[i] {
 				if irregularIndexCols[colName] {
-					return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index")
+					return 0, newLegacyUpdatePlannerRouteError(
+						updateRouteReasonIrregularIndex,
+						moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index"),
+					)
 				}
 			}
 			// An UPDATE that changes a primary key column of an irregular-index table must go
@@ -136,7 +142,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if tableDef.Pkey != nil {
 				for _, pkColName := range tableDef.Pkey.Names {
 					if _, ok := dmlCtx.updateCol2Expr[i][pkColName]; ok {
-						return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update primary key with vector/full-text index")
+						return 0, newLegacyUpdatePlannerRouteError(
+							updateRouteReasonIrregularIndex,
+							moerr.NewUnsupportedDML(
+								builder.GetContext(),
+								"update primary key with vector/full-text index",
+							),
+						)
 					}
 				}
 			}
@@ -167,7 +179,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
 			if pkAndUkCols[colName] {
-				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table")
+				return 0, newLegacyUpdatePlannerRouteError(
+					updateRouteReasonPubSubKey,
+					moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table"),
+				)
 			}
 
 			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
@@ -197,7 +212,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if colDef.Name == colName {
 					if isEnumOrSetPlanType(&colDef.Typ) {
 						if colDef.Typ.AutoIncr {
-							return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
+							return 0, newLegacyUpdatePlannerRouteError(
+								updateRouteReasonAutoIncrement,
+								moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value"),
+							)
 						}
 
 						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
@@ -303,11 +321,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						return 0, err
 					}
 				} else {
-					selectNode.ProjectList[colPos], err = builder.forceAssignmentCastExpr(
-						updateExpr,
-						col.Typ,
-						stmt.Ignore,
-					)
+					selectNode.ProjectList[colPos], err = builder.forceProjectedAssignmentCastExpr(
+						updateExpr, updateExpr, col.Typ, stmt.Ignore)
 					if err != nil {
 						return 0, err
 					}

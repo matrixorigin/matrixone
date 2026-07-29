@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -47,6 +49,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -57,6 +62,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestHasOrderedGroupConcat(t *testing.T) {
+	ordered := &plan.Node{
+		AggList: []*plan.Expr{{
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func:          &plan.ObjectRef{ObjName: "group_concat"},
+				AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+			}},
+		}},
+	}
+	require.True(t, hasOrderedGroupConcat(ordered))
+
+	ordered.GroupBy = []*plan.Expr{{}}
+	require.True(t, hasOrderedGroupConcat(ordered))
+	ordered.GroupBy = nil
+	ordered.AggList[0].GetF().AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
+	require.False(t, hasOrderedGroupConcat(ordered))
+}
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
@@ -467,6 +490,54 @@ func TestDebugLogFor19288(t *testing.T) {
 	}
 }
 
+func TestPreferPrimaryScopeResult(t *testing.T) {
+	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
+	executionErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	queryInterrupted := moerr.NewQueryInterrupted(context.Background())
+	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
+	cancelInternal(executionErr)
+	externalCancelCtx, cancelExternal := context.WithCancel(context.Background())
+	cancelExternal()
+	externalDeadlineCtx, cancelExternalDeadline := context.WithTimeout(context.Background(), 0)
+	defer cancelExternalDeadline()
+	externalCause := moerr.NewInternalErrorNoCtx("client canceled query")
+	externalCauseCtx, cancelExternalCause := context.WithCancelCause(context.Background())
+	cancelExternalCause(externalCause)
+
+	tests := []struct {
+		name      string
+		current   scopeRunResult
+		candidate scopeRunResult
+		want      error
+	}{
+		{name: "first error", candidate: scopeRunResult{err: cleanupErr}, want: cleanupErr},
+		{name: "execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "causal cancellation replaces cleanup fallback with execution error", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, want: executionErr},
+		{name: "external cancellation replaces cleanup fallback with external cause", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx}, want: externalCause},
+		{name: "cleanup fallback does not replace execution error", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: cleanupErr}, want: executionErr},
+		{name: "unresolved canceled sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled}, want: cleanupErr},
+		{name: "unresolved interrupted sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: cleanupErr},
+		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "plain external cancellation remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
+		{name: "external deadline remains primary", current: scopeRunResult{err: context.DeadlineExceeded, ctx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
+		{name: "external cancellation cause remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: externalCause},
+		{name: "first substantive error remains", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: moerr.NewInternalErrorNoCtx("later")}, want: executionErr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := preferPrimaryScopeResult(tt.current, tt.candidate)
+			got, _ = got.resolveCancelCause()
+			if errors.Is(tt.want, context.Canceled) || errors.Is(tt.want, context.DeadlineExceeded) {
+				require.ErrorIs(t, got.err, tt.want)
+			} else {
+				require.Same(t, tt.want, got.err)
+			}
+		})
+	}
+}
+
 func TestLockMeta_doLock(t *testing.T) {
 	lm := &LockMeta{
 		database_table_id: 11230,
@@ -553,6 +624,69 @@ func TestCompileShuffleGroupUsesDistributedPathWhenScopeMcpuDiffersFromDop(t *te
 	}
 	require.Len(t, result[0].PreScopes, 1)
 	require.IsType(t, &shuffle.Shuffle{}, result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
+}
+
+func TestCompileShuffleGroupSupportsOrderedGroupConcat(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	c.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return int64(1024), nil
+	})
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NameGroupConcat,
+			},
+			AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		}},
+	}}
+	scope := newShuffleGroupInputScope(t, 1)
+
+	require.True(t, hasOrderedGroupConcat(aggNode))
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 16)
+	for _, resultScope := range result {
+		groupOp, ok := resultScope.RootOp.(*group.Group)
+		require.True(t, ok)
+		require.True(t, groupOp.NeedEval)
+	}
+	require.IsType(t, &shuffle.Shuffle{}, result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
+}
+
+func TestCompileShuffleGroupGatesOrderedAggregateByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NameGroupConcat,
+			},
+			AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		}},
+	}}
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
+	require.False(t, c.supportsRemoteOrderedAggregates())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"mixed-version clusters must keep the final ordered aggregate local")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
+	require.True(t, c.supportsRemoteOrderedAggregates())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"rollback must disable the v6 pipeline field before contacting old CNs")
+
+	aggNode.AggList = nil
+	require.True(t, c.canCompileShuffleGroup(aggNode),
+		"legacy shuffle aggregates remain safe on protocol v5")
 }
 
 func TestCompileShuffleGroupUsesDistributedPathWhenInputScopesNotSingle(t *testing.T) {
@@ -663,6 +797,165 @@ func TestCompileShuffleJoinKeepsReusableLocalShuffle(t *testing.T) {
 
 	require.Len(t, result, 1,
 		"reusing an existing probe partition must keep the single local fast path")
+}
+
+func TestCompileShuffleJoinDistributesSinkScanHashbuild(t *testing.T) {
+	const dop = int32(2)
+	tests := []struct {
+		name        string
+		joinType    plan.Node_JoinType
+		isRightJoin bool
+		sinkOnBuild bool
+	}{
+		{
+			name:     "probe-side sink inner join",
+			joinType: plan.Node_INNER,
+		},
+		{
+			name:        "build-side sink right dedup join",
+			joinType:    plan.Node_DEDUP,
+			isRightJoin: true,
+			sinkOnBuild: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			nodes := engine.Nodes{
+				{Id: "cn-local", Addr: "cn-local:6001", Mcpu: int(dop)},
+				{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: int(dop)},
+			}
+			c := newCompileForShuffleJoinTest(t, nodes)
+			c.execType = plan2.ExecTypeAP_MULTICN
+			node := newShuffleJoinTestNode(dop)
+			node.JoinType = test.joinType
+			node.IsRightJoin = test.isRightJoin
+			if test.joinType == plan.Node_DEDUP {
+				node.DedupJoinCtx = &plan.DedupJoinCtx{}
+			}
+			node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+
+			sinkMerge := merge.NewArgument().WithSinkScan(true)
+			sinkRoot := projection.NewArgument()
+			sinkRoot.AppendChild(sinkMerge)
+			probe := newShuffleJoinTestScope(t, nodes[1], 1)
+			build := newShuffleJoinTestScope(t, nodes[1], 1)
+			var sinkScope *Scope
+			if test.sinkOnBuild {
+				build = newShuffleJoinTestScope(t, nodes[0], 1)
+				sinkScope = build
+			} else {
+				probe = newShuffleJoinTestScope(t, nodes[0], 1)
+				sinkScope = probe
+			}
+			sinkScope.RootOp = sinkRoot
+
+			result := c.compileShuffleJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+
+			require.Len(t, result, len(nodes)*int(dop))
+			hashbuildByCN := make(map[string]int)
+			for _, scope := range result {
+				require.NotNil(t, scope)
+				require.NotEmpty(t, scope.PreScopes)
+				require.IsType(t, &hashbuild.HashBuild{}, scope.PreScopes[0].RootOp)
+				hashbuildByCN[scope.NodeInfo.Addr]++
+				if scope.NodeInfo.Addr == nodes[1].Addr {
+					_, hasSinkScan := sinkScanDependencyNode([]*Scope{scope})
+					require.False(t, hasSinkScan,
+						"the in-process SINK_SCAN dependency must never enter a remote scope tree")
+				}
+			}
+			require.Equal(t, int(dop), hashbuildByCN[nodes[0].Addr])
+			require.Equal(t, int(dop), hashbuildByCN[nodes[1].Addr])
+
+			sinkDispatch, ok := sinkScope.RootOp.(*dispatch.Dispatch)
+			require.True(t, ok)
+			require.Len(t, sinkDispatch.LocalRegs, int(dop))
+			require.Len(t, sinkDispatch.RemoteRegs, int(dop))
+
+			localSinkOwners := 0
+			for _, scope := range result {
+				_, hasSinkScan := sinkScanDependencyNode([]*Scope{scope})
+				if hasSinkScan {
+					localSinkOwners++
+					require.Equal(t, nodes[0].Addr, scope.NodeInfo.Addr)
+				}
+			}
+			require.Equal(t, 1, localSinkOwners,
+				"the local SINK_SCAN producer must be started by exactly one receiver tree")
+
+			grouped := c.groupShuffleBucketsByCNIfNeeded(result)
+			require.Len(t, grouped, len(nodes))
+			for _, scope := range grouped {
+				if scope.NodeInfo.Addr == nodes[1].Addr {
+					require.True(t, checkPipelineStandaloneExecutableAtRemote(scope),
+						"the remote CN bucket group must own every local receiver targeted by its dispatch")
+				}
+			}
+		})
+	}
+}
+
+func TestCompileJoinGroupsExternalSinkScanOwner(t *testing.T) {
+	const dop = int32(2)
+	for _, workerCount := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d scheduled workers", workerCount), func(t *testing.T) {
+			workers := make(engine.Nodes, workerCount)
+			for i := range workers {
+				workers[i] = engine.Node{
+					Id:   fmt.Sprintf("cn-remote-%d", i),
+					Addr: fmt.Sprintf("cn-remote-%d:6001", i),
+					Mcpu: int(dop),
+				}
+			}
+			owner := engine.Node{
+				Id:   "cn-sink-owner",
+				Addr: "cn-sink-owner:6001",
+				Mcpu: int(dop),
+			}
+			c := newCompileForShuffleJoinTest(t, workers)
+			c.addr = owner.Addr
+			c.execType = plan2.ExecTypeAP_MULTICN
+
+			node := newShuffleJoinTestNode(dop)
+			node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			sinkMerge := merge.NewArgument().WithSinkScan(true)
+			sinkRoot := projection.NewArgument()
+			sinkRoot.AppendChild(sinkMerge)
+			probe := newShuffleJoinTestScope(t, owner, 1)
+			probe.RootOp = sinkRoot
+			build := newShuffleJoinTestScope(t, workers[0], 1)
+
+			buckets := c.compileJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+			require.Len(t, buckets, (workerCount+1)*int(dop))
+
+			grouped := c.groupShuffleBucketsByCNIfNeeded(buckets)
+			require.Len(t, grouped, workerCount+1)
+
+			groupedByCN := make(map[string]*Scope, len(grouped))
+			sinkOwnerGroups := 0
+			for _, scope := range grouped {
+				groupedByCN[scope.NodeInfo.Addr] = scope
+				_, hasSinkScan := sinkScanDependencyNode([]*Scope{scope})
+				if hasSinkScan {
+					sinkOwnerGroups++
+					require.Equal(t, owner.Addr, scope.NodeInfo.Addr)
+				}
+			}
+			require.Equal(t, 1, sinkOwnerGroups)
+			require.Contains(t, groupedByCN, owner.Addr)
+			for _, worker := range workers {
+				remoteGroup, ok := groupedByCN[worker.Addr]
+				require.True(t, ok)
+				require.True(t, checkPipelineStandaloneExecutableAtRemote(remoteGroup),
+					"each remote CN group must own every receiver targeted by its local dispatches")
+			}
+		})
+	}
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {
