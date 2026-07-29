@@ -1,34 +1,34 @@
 SELECT UTC_TIME() AS result1;
 ➤ result1[92,64,0]  𝄀
-11:28:41
+04:50:51
 SELECT UTC_TIME() AS current_utc_time;
 ➤ current_utc_time[92,64,0]  𝄀
-11:28:41
+04:50:51
 SELECT UTC_TIME AS current_utc_time_no_parens;
 ➤ current_utc_time_no_parens[92,64,0]  𝄀
-11:28:41
+04:50:51
 select utc_time() = utc_time as should_be_true;
 ➤ should_be_true[-7,1,0]  𝄀
 1
 SELECT UTC_TIME(0) AS utc_time_scale0;
 ➤ utc_time_scale0[92,64,0]  𝄀
-11:28:41
+04:50:51
 SELECT UTC_TIME(3) AS utc_time_scale3;
 ➤ utc_time_scale3[92,64,0]  𝄀
-11:28:41.172000000
+04:50:51.163000000
 SELECT UTC_TIME(6) AS utc_time_scale6;
 ➤ utc_time_scale6[92,64,0]  𝄀
-11:28:41.172137000
+04:50:51.163176000
 SELECT UTC_TIME() AS utc_time_value, CURRENT_TIME() AS local_time_value;
 ➤ utc_time_value[92,64,0]  ¦  local_time_value[92,64,0]  𝄀
-11:28:41  ¦  19:28:41
+04:50:51  ¦  12:50:51
 CREATE TABLE t1(id INT);
 INSERT INTO t1 VALUES (1), (2), (3);
 SELECT id, UTC_TIME() AS utc_time_value FROM t1;
 ➤ id[4,32,0]  ¦  utc_time_value[92,64,0]  𝄀
-1  ¦  11:28:41  𝄀
-2  ¦  11:28:41  𝄀
-3  ¦  11:28:41
+1  ¦  04:50:51  𝄀
+2  ¦  04:50:51  𝄀
+3  ¦  04:50:51
 DROP TABLE t1;
 SELECT UTC_TIME() IS NOT NULL AS not_null_check;
 ➤ not_null_check[-7,1,0]  𝄀
@@ -39,28 +39,28 @@ SELECT UTC_TIME() - INTERVAL 30 MINUTE AS thirty_minutes_ago;
 invalid argument operator -, bad value [TIME INTERVAL]
 SELECT UTC_TIME() AS time_format;
 ➤ time_format[92,64,0]  𝄀
-11:28:41
+04:50:51
 SELECT UTC_TIME(0) AS no_fractional;
 ➤ no_fractional[92,64,0]  𝄀
-11:28:41
+04:50:51
 SELECT UTC_TIME(1) AS one_digit;
 ➤ one_digit[92,64,0]  𝄀
-11:28:41.200000000
+04:50:51.200000000
 SELECT UTC_TIME(2) AS two_digits;
 ➤ two_digits[92,64,0]  𝄀
-11:28:41.230000000
+04:50:51.220000000
 SELECT UTC_TIME(3) AS three_digits;
 ➤ three_digits[92,64,0]  𝄀
-11:28:41.231000000
+04:50:51.218000000
 SELECT UTC_TIME(4) AS four_digits;
 ➤ four_digits[92,64,0]  𝄀
-11:28:41.231800000
+04:50:51.219000000
 SELECT UTC_TIME(5) AS five_digits;
 ➤ five_digits[92,64,0]  𝄀
-11:28:41.232470000
+04:50:51.219650000
 SELECT UTC_TIME(6) AS six_digits;
 ➤ six_digits[92,64,0]  𝄀
-11:28:41.233180000
+04:50:51.220147000
 SELECT MICROSECOND(UTC_TIME(3)) % 1000 AS utc_time_millisecond_precision;
 ➤ utc_time_millisecond_precision[-5,64,0]  𝄀
 0

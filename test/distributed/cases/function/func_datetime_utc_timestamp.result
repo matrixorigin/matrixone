@@ -22,7 +22,7 @@ select utc_timestamp()-utc_timestamp(),weekday(utc_timestamp())-weekday(utc_time
 0  ¦  0  ¦  -36001
 select utc_timestamp(3) as utc_timestamp_milliseconds;
 ➤ utc_timestamp_milliseconds[93,64,0]  𝄀
-2026-07-28 11:28:47.868000000
+2026-07-29 04:50:56.875000000
 select microsecond(utc_timestamp(3)) % 1000 as utc_timestamp_millisecond_precision;
 ➤ utc_timestamp_millisecond_precision[-5,64,0]  𝄀
 0
