@@ -497,7 +497,7 @@ func (hb *HashmapBuilder) buildHashmap(
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
-	if err := hb.reserveBuildAux(); err != nil {
+	if err := hb.reserveBuildAux(needUniqueVec); err != nil {
 		return err
 	}
 	dedupBuildKeepLast = dedupBuildKeepLast && hb.IsDedup && hb.OnDuplicateAction == plan.Node_FAIL
@@ -759,7 +759,18 @@ func (hb *HashmapBuilder) buildHashmap(
 
 			if hashOnPK {
 				for j, vec := range hb.curVecs {
+					areaBytes, reserveErr := uniqueAppendAreaBytes(vec, vecIdx2, n, nil)
+					if reserveErr != nil {
+						return reserveErr
+					}
+					overlap, reserveErr := hb.reserveUniqueAppendOverlap(hb.UniqueJoinKeys[j], n, areaBytes)
+					if reserveErr != nil {
+						return reserveErr
+					}
 					err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
+					if overlap != nil {
+						overlap.Release()
+					}
 					if err != nil {
 						return err
 					}
@@ -778,7 +789,18 @@ func (hb *HashmapBuilder) buildHashmap(
 				hb.uniqueSels = newSels
 
 				for j, vec := range hb.curVecs {
+					areaBytes, reserveErr := uniqueAppendAreaBytes(vec, 0, len(newSels), newSels)
+					if reserveErr != nil {
+						return reserveErr
+					}
+					overlap, reserveErr := hb.reserveUniqueAppendOverlap(hb.UniqueJoinKeys[j], len(newSels), areaBytes)
+					if reserveErr != nil {
+						return reserveErr
+					}
 					err = hb.UniqueJoinKeys[j].Union(vec, newSels, proc.Mp())
+					if overlap != nil {
+						overlap.Release()
+					}
 					if err != nil {
 						return err
 					}
