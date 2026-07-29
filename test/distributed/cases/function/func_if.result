@@ -459,4 +459,33 @@ CASE WHEN 0 THEN CAST('bad' AS SIGNED) ELSE 7 END AS case_skip_then,
 COALESCE(5, CAST('bad' AS SIGNED)) AS coalesce_skip_later,
 IFNULL(5, CAST('bad' AS SIGNED)) AS ifnull_skip_later;
 [unknown result because it is related to issue#25314]
+SELECT IF(0, 'x', 1.23) AS if_decimal_metadata;
+➤ if_decimal_metadata[12,5,0]  𝄀
+1.23
+SELECT CASE WHEN 0 THEN 'x' ELSE CAST(-123.45 AS DECIMAL(5, 2)) END AS case_decimal_metadata;
+➤ case_decimal_metadata[12,7,0]  𝄀
+-123.45
+SELECT COALESCE(NULL, 1.23, 'x') AS coalesce_decimal_metadata;
+➤ coalesce_decimal_metadata[12,5,0]  𝄀
+1.23
+CREATE TABLE if_control_flow_decimal_metadata(d DECIMAL(5, 2));
+INSERT INTO if_control_flow_decimal_metadata VALUES (-123.45);
+SELECT IF(0, 'x', d) AS if_decimal_column,
+CASE WHEN 0 THEN 'x' ELSE d END AS case_decimal_column,
+COALESCE(NULL, d, 'x') AS coalesce_decimal_column
+FROM if_control_flow_decimal_metadata;
+➤ if_decimal_column[12,7,0]  ¦  case_decimal_column[12,7,0]  ¦  coalesce_decimal_column[12,7,0]  𝄀
+-123.45  ¦  -123.45  ¦  -123.45
+DROP TABLE if_control_flow_decimal_metadata;
+CREATE TABLE if_control_flow_binary_metadata AS
+SELECT CASE WHEN 1 THEN CAST('a' AS BINARY(4)) ELSE CAST('b' AS BINARY(4)) END AS b;
+SELECT data_type, column_type
+FROM information_schema.columns
+WHERE table_schema = DATABASE() AND table_name = 'if_control_flow_binary_metadata' AND column_name = 'b';
+➤ data_type[12,-1,0]  ¦  column_type[12,-1,0]  𝄀
+BINARY  ¦  BINARY(4)
+SELECT HEX(b) AS case_fixed_binary_hex FROM if_control_flow_binary_metadata;
+➤ case_fixed_binary_hex[12,-1,0]  𝄀
+61000000
+DROP TABLE if_control_flow_binary_metadata;
 SET TIME_ZONE = "SYSTEM";

@@ -819,6 +819,41 @@ func TestBinaryStringCommonTypeCapsUTF8MB4Width(t *testing.T) {
 	}
 }
 
+func TestBinaryStringCommonTypePreservesSameFixedBinary(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		source    []types.Type
+		wantOid   types.T
+		wantWidth int32
+	}{
+		{
+			name: "same fixed binary",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.New(types.T_binary, 4, 0),
+			},
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "different fixed binary widths",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.New(types.T_binary, 8, 0),
+			},
+			wantOid:   types.T_varbinary,
+			wantWidth: 8,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, ok := binaryStringCommonType(test.source)
+			require.True(t, ok)
+			require.Equal(t, test.wantOid, result.Oid)
+			require.Equal(t, test.wantWidth, result.Width)
+		})
+	}
+}
+
 func Test_CaseCheck_DifferentDecimalScale(t *testing.T) {
 	inputs := []types.Type{
 		types.T_bool.ToType(),

@@ -3713,6 +3713,9 @@ func controlFlowStringWidth(expr *Expr, typ types.Type) int32 {
 	if typ.Oid.IsMySQLString() {
 		return typ.Width
 	}
+	if typ.Oid.IsDecimal() {
+		return decimalDisplayWidth(typ)
+	}
 	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
 		switch value := lit.Value.(type) {
 		case *plan.Literal_I8Val:
@@ -3741,6 +3744,30 @@ func controlFlowStringWidth(expr *Expr, typ types.Type) int32 {
 		return width
 	}
 	return typ.Width
+}
+
+// decimalDisplayWidth returns the maximum byte width of a DECIMAL value after
+// it is converted to a control-flow VARCHAR result. Decimal precision counts
+// only significant digits, so it excludes the optional sign, decimal point,
+// and (for DECIMAL(M, M)) the displayed leading zero.
+func decimalDisplayWidth(typ types.Type) int32 {
+	precision := typ.Width
+	if precision <= 0 {
+		return types.MaxVarcharLen
+	}
+
+	width := int64(precision) // significant digits
+	if typ.Scale > 0 {
+		width++ // decimal point
+		if typ.Scale >= precision {
+			width++ // leading zero before the decimal point
+		}
+	}
+	width++ // optional sign
+	if width > int64(types.MaxVarcharLen) {
+		return types.MaxVarcharLen
+	}
+	return int32(width)
 }
 
 func signedIntegerLiteralWidth(value int64) int32 {

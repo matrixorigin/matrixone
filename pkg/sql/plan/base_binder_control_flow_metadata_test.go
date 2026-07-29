@@ -141,6 +141,98 @@ func TestBuildControlFlowUTF8MB4BinaryWidth(t *testing.T) {
 	}
 }
 
+func TestBuildControlFlowDecimalStringMetadataWidth(t *testing.T) {
+	tests := []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{
+			name:  "if positive decimal literal",
+			sql:   `select if(true, 'x', 1.23)`,
+			width: 5,
+		},
+		{
+			name:  "case negative decimal literal",
+			sql:   `select case when true then 'x' else cast(-123.45 as decimal(5, 2)) end`,
+			width: 7,
+		},
+		{
+			name:  "coalesce positive decimal literal",
+			sql:   `select coalesce(null, 1.23, 'x')`,
+			width: 5,
+		},
+		{
+			name:  "if decimal column",
+			sql:   `select if(true, 'x', d) from (select cast(-123.45 as decimal(5, 2)) as d) t`,
+			width: 7,
+		},
+		{
+			name:  "case decimal column",
+			sql:   `select case when true then 'x' else d end from (select cast(-123.45 as decimal(5, 2)) as d) t`,
+			width: 7,
+		},
+		{
+			name:  "coalesce decimal column",
+			sql:   `select coalesce(null, d, 'x') from (select cast(-123.45 as decimal(5, 2)) as d) t`,
+			width: 7,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_varchar), projectList[0].Typ.Id)
+			require.Equal(t, test.width, projectList[0].Typ.Width)
+		})
+	}
+}
+
+func TestBuildCaseSameFixedBinaryMetadata(t *testing.T) {
+	for _, sql := range []string{
+		`select case when true then cast('a' as binary(4)) else cast('b' as binary(4)) end`,
+		`select if(true, cast('a' as binary(4)), cast('b' as binary(4)))`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_binary), projectList[0].Typ.Id)
+			require.Equal(t, int32(4), projectList[0].Typ.Width)
+		})
+	}
+}
+
+func TestDecimalDisplayWidth(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		typ   types.Type
+		width int32
+	}{
+		{name: "fractional", typ: types.New(types.T_decimal64, 3, 2), width: 5},
+		{name: "all fractional digits include leading zero", typ: types.New(types.T_decimal64, 3, 3), width: 6},
+		{name: "integer", typ: types.New(types.T_decimal64, 5, 0), width: 6},
+		{name: "unknown precision", typ: types.New(types.T_decimal64, 0, 0), width: types.MaxVarcharLen},
+		{name: "maximum precision caps", typ: types.New(types.T_decimal256, types.MaxVarcharLen, 0), width: types.MaxVarcharLen},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.width, decimalDisplayWidth(test.typ))
+		})
+	}
+}
+
 func TestDecimalLiteralMetadataPrecision(t *testing.T) {
 	expr, err := makePlan2DecimalExprWithType(context.Background(), "9.5")
 	require.NoError(t, err)
