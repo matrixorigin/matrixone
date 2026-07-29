@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -123,10 +124,25 @@ func alterDataBranchHistoricalSnapshotSourceSQL(
 	accountName, databaseName, tableName string,
 	tableID uint64,
 ) string {
+	return alterDataBranchHistoricalSnapshotSourceProbeSQL(
+		accountName, databaseName, tableName, tableID, true,
+	)
+}
+
+func alterDataBranchHistoricalSnapshotSourceProbeSQL(
+	accountName, databaseName, tableName string,
+	tableID uint64,
+	forUpdate bool,
+) string {
+	lockClause := ""
+	if forUpdate {
+		lockClause = " for update"
+	}
 	return fmt.Sprintf(
-		"select 1 from %s.%s where kind = 'user' and %s limit 1 for update",
+		"select 1 from %s.%s where kind = 'user' and %s limit 1%s",
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
 		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID),
+		lockClause,
 	)
 }
 
@@ -134,11 +150,49 @@ func alterDataBranchHistoricalPitrSourceSQL(
 	accountName, databaseName, tableName string,
 	tableID uint64,
 ) string {
+	return alterDataBranchHistoricalPitrSourceProbeSQL(
+		accountName, databaseName, tableName, tableID, true,
+	)
+}
+
+func alterDataBranchHistoricalPitrSourceProbeSQL(
+	accountName, databaseName, tableName string,
+	tableID uint64,
+	forUpdate bool,
+) string {
+	lockClause := ""
+	if forUpdate {
+		lockClause = " for update"
+	}
 	return fmt.Sprintf(
-		"select 1 from %s.%s where pitr_status = 1 and %s limit 1 for update",
+		"select 1 from %s.%s where pitr_status = 1 and %s limit 1%s",
 		catalog.MO_CATALOG, catalog.MO_PITR,
 		alterDataBranchHistoricalSourceScopeSQL(accountName, databaseName, tableName, tableID),
+		lockClause,
 	)
+}
+
+func alterDataBranchHistoricalSourceExists(
+	query alterDataBranchQuery,
+	sqls []string,
+) (bool, error) {
+	for _, sql := range sqls {
+		res, err := query(sql)
+		if err != nil {
+			res.Close()
+			return false, err
+		}
+		hasHistory := false
+		res.ReadRows(func(rows int, _ []*vector.Vector) bool {
+			hasHistory = rows > 0
+			return false
+		})
+		res.Close()
+		if hasHistory {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *Compile) alterTableParticipatesInDataBranch(oldTableID uint64) (bool, error) {
@@ -160,29 +214,61 @@ func (c *Compile) alterTableHasHistoricalBranchSource(
 	oldTableID uint64,
 	databaseName, tableName string,
 ) (bool, error) {
-	for _, sql := range []string{
-		alterDataBranchHistoricalSnapshotSourceSQL(
-			c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID,
-		),
-		alterDataBranchHistoricalPitrSourceSQL(
-			c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID,
-		),
-	} {
-		res, err := c.runSqlWithResult(sql, int32(catalog.System_Account))
-		if err != nil {
-			return false, err
-		}
-		hasHistory := false
-		res.ReadRows(func(rows int, _ []*vector.Vector) bool {
-			hasHistory = rows > 0
-			return false
-		})
-		res.Close()
-		if hasHistory {
-			return true, nil
-		}
+	return alterDataBranchHistoricalSourceExists(
+		func(sql string) (executor.Result, error) {
+			return c.runSqlWithResult(sql, int32(catalog.System_Account))
+		},
+		[]string{
+			alterDataBranchHistoricalSnapshotSourceSQL(
+				c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID,
+			),
+			alterDataBranchHistoricalPitrSourceSQL(
+				c.proc.GetSessionInfo().Account, databaseName, tableName, oldTableID,
+			),
+		},
+	)
+}
+
+func (c *Compile) alterTableHasLatestHistoricalBranchSource(
+	oldTableID uint64,
+	databaseName, tableName string,
+) (hasHistory bool, err error) {
+	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return false, moerr.NewInternalErrorNoCtx("missing internal SQL executor")
 	}
-	return false, nil
+	exec := v.(executor.SQLExecutor)
+	ctx := c.proc.Ctx
+	if ctx == nil {
+		ctx = c.proc.GetTopContext()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	accountName := c.proc.GetSessionInfo().Account
+	err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		hasHistory, err = alterDataBranchHistoricalSourceExists(
+			func(sql string) (executor.Result, error) {
+				return txn.Exec(sql, executor.StatementOption{}.WithAccountID(catalog.System_Account))
+			},
+			[]string{
+				alterDataBranchHistoricalSnapshotSourceProbeSQL(
+					accountName, databaseName, tableName, oldTableID, false,
+				),
+				alterDataBranchHistoricalPitrSourceProbeSQL(
+					accountName, databaseName, tableName, oldTableID, false,
+				),
+			},
+		)
+		return err
+	}, executor.Options{}.WithAccountID(catalog.System_Account))
+	return hasHistory, err
+}
+
+func (c *Compile) lockDataBranchLineageOwnerPublication() error {
+	return databranchutils.LockLineageOwnerPublication(func(sql string) error {
+		return c.runSqlWithAccountId(sql, int32(catalog.System_Account))
+	})
 }
 
 func (c *Compile) prepareAlterDataBranchLineage(
@@ -1045,9 +1131,28 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 			lineageSnapshotAdvanced = true
 		}
 	}
+	// The stable row exists even when no owner does. Snapshot and PITR creation
+	// cross the same write barrier before choosing their timestamp and retain
+	// the write through owner publication. Pessimistic transactions wait; an
+	// optimistic write-write loser retries the whole statement.
+	if err = c.lockDataBranchLineageOwnerPublication(); err != nil {
+		return err
+	}
 	lineagePlan, err = c.prepareAlterDataBranchLineage(oldId, dbName, tblName)
 	if err != nil {
 		return err
+	}
+	if !lineagePlan.enabled {
+		var hasLatestHistory bool
+		if hasLatestHistory, err = c.alterTableHasLatestHistoricalBranchSource(
+			oldId, dbName, tblName,
+		); err != nil {
+			return err
+		}
+		if hasLatestHistory {
+			lineagePlan.enabled = true
+			lineagePlan.preserveHistoricalSource = true
+		}
 	}
 	if lineagePlan.enabled {
 		if columnName, replaced := alterCopySameStatementColumnReplacement(qry); replaced {

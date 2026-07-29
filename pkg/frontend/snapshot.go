@@ -249,6 +249,13 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 	}
 
+	// Serialize the timestamp choice and owner-row publication with COPY ALTER.
+	// Unlike locking mo_snapshots itself, this stable catalog write also covers
+	// an empty owner set and forces an optimistic loser to retry.
+	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
+		return err
+	}
+
 	// 3.1 generate snapshot id
 	newUUid, err := uuid.NewV7()
 	if err != nil {

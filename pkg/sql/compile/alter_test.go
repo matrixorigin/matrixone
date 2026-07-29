@@ -172,6 +172,29 @@ func TestAlterDataBranchHistoricalSourceSQL(t *testing.T) {
 	}
 }
 
+func TestAlterTableHasLatestHistoricalBranchSourceUsesFreshUnlockedProbe(t *testing.T) {
+	const (
+		oldTableID = uint64(42)
+		database   = "test"
+		table      = "dept"
+	)
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{results: make(map[string]executor.Result)}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	snapshotSQL := alterDataBranchHistoricalSnapshotSourceProbeSQL(
+		"", database, table, oldTableID, false,
+	)
+	spyExec.results[snapshotSQL] = newAlterCopyFixedResult(
+		t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
+	)
+
+	hasHistory, err := c.alterTableHasLatestHistoricalBranchSource(oldTableID, database, table)
+	require.NoError(t, err)
+	require.True(t, hasHistory)
+	require.NotContains(t, snapshotSQL, "for update")
+	require.Equal(t, []string{snapshotSQL}, spyExec.executedSQLs)
+}
+
 func TestAlterDataBranchLineageMetadata(t *testing.T) {
 	dag := databranchutils.NewBranchReclaimDag([]databranchutils.DataBranchMetadata{
 		{TableID: 2, PTableID: 1, Creator: 9, Level: "table", TableDeleted: false},
@@ -633,7 +656,9 @@ func (e *alterCopyInsertSpyExecutor) ExecTxn(
 	execFunc func(executor.TxnExecutor) error,
 	opts executor.Options,
 ) error {
-	return nil
+	return execFunc(executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return e.Exec(ctx, sql, opts)
+	}, opts.Txn()))
 }
 
 func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
@@ -980,9 +1005,12 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	require.True(t, spyExec.insertOption.AlterCopyDedupOpt().SkipPkDedup)
 	require.Equal(t, alterTable.Options.TargetTableName, spyExec.insertOption.AlterCopyDedupOpt().TargetTableName)
 	assert.Equal(t, []string{
+		databranchutils.LineageOwnerPublicationLockSQL(),
 		alterDataBranchParticipationSQL(1),
 		alterDataBranchHistoricalSnapshotSourceSQL("", "test", "dept", 1),
 		alterDataBranchHistoricalPitrSourceSQL("", "test", "dept", 1),
+		alterDataBranchHistoricalSnapshotSourceProbeSQL("", "test", "dept", 1, false),
+		alterDataBranchHistoricalPitrSourceProbeSQL("", "test", "dept", 1, false),
 		alterTable.CreateTmpTableSql,
 		alterCopyTestPkNullCheckSQL,
 		alterCopyTestPkDuplicateCheckSQL,
