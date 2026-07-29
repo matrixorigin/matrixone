@@ -26,7 +26,7 @@ import (
 )
 
 func TestIssue26216CopiedViewSupportsBareBooleanPredicate(t *testing.T) {
-	require.NoError(t, runIssue26087AuthenticatedClusterTest(func(c embed.Cluster) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 		defer cancel()
 
@@ -58,7 +58,7 @@ func TestIssue26216CopiedViewSupportsBareBooleanPredicate(t *testing.T) {
 
 		execSQLRequire(t, ctx, db, "data branch create database `"+targetDB+"` from `"+sourceDB+"`")
 		assertIssue26216ViewRows(t, ctx, db, targetDB)
-	}))
+	})
 }
 
 func assertIssue26216ViewRows(t *testing.T, ctx context.Context, db *sql.DB, databaseName string) {
