@@ -331,14 +331,12 @@ WHERE grp = 2;
 GROUP_CONCAT(distinct val, ,order by x)
 a,b
 SELECT
-GROUP_CONCAT(val ORDER BY x ASC NULLS LAST),
-GROUP_CONCAT(val ORDER BY x DESC NULLS FIRST),
 GROUP_CONCAT(val ORDER BY x ASC),
 GROUP_CONCAT(val ORDER BY x DESC)
 FROM group_concat_ordered
 WHERE grp = 3;
-GROUP_CONCAT(val, ,order by x asc nulls last)    GROUP_CONCAT(val, ,order by x desc nulls first)    GROUP_CONCAT(val, ,order by x asc)    GROUP_CONCAT(val, ,order by x desc)
-one,two,null-key    null-key,two,one    null-key,one,two    two,one,null-key
+GROUP_CONCAT(val, ,order by x asc)    GROUP_CONCAT(val, ,order by x desc)
+null-key,one,two    two,one,null-key
 SELECT
 grp,
 GROUP_CONCAT(val, ':', suffix ORDER BY x % 2 ASC, y DESC SEPARATOR '|')

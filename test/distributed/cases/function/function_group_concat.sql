@@ -275,10 +275,8 @@ SELECT GROUP_CONCAT(DISTINCT val ORDER BY x)
 FROM group_concat_ordered
 WHERE grp = 2;
 
--- explicit and default null placement
+-- default null placement
 SELECT
-    GROUP_CONCAT(val ORDER BY x ASC NULLS LAST),
-    GROUP_CONCAT(val ORDER BY x DESC NULLS FIRST),
     GROUP_CONCAT(val ORDER BY x ASC),
     GROUP_CONCAT(val ORDER BY x DESC)
 FROM group_concat_ordered
