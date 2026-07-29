@@ -3532,7 +3532,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				branchCtx := subCtxList[0]
 				branchProjectionBinder := NewProjectionBinder(builder, branchCtx, NewHavingBinder(builder, branchCtx))
 				branchOrderBinder := NewOrderBinder(branchProjectionBinder, nil)
-				branchExpr, bindErr := branchOrderBinder.BindExpr(order.Expr)
+				branchExpr, bindErr := branchOrderBinder.BindExpr(groupingOrderResolve.visibleExpr[oi])
 				if bindErr != nil {
 					return 0, bindErr
 				}
@@ -6608,6 +6608,10 @@ type groupingSetOrderResolution struct {
 	// branch so star expansion and source relation identity resolve to the
 	// correct visible UNION column without evaluating the expression twice.
 	bindVisible []bool
+	// visibleExpr[i] is the selected AST expression matched by ORDER BY entry i.
+	// Rebinding the selected spelling avoids reintroducing case-sensitive AST
+	// lookup differences after semantic identifier matching has succeeded.
+	visibleExpr []tree.Expr
 	// bindDistinct[i] is true when a DISTINCT grouping-related ORDER BY entry
 	// must be resolved after the first generated grouping-set branch is fully
 	// bound. Binding there preserves source relation identity and normal
@@ -6748,6 +6752,7 @@ func prepareGroupingSetOrderByProjects(
 	resolve := &groupingSetOrderResolution{
 		hiddenIdx:    make([]int, len(astOrderBy)),
 		bindVisible:  make([]bool, len(astOrderBy)),
+		visibleExpr:  make([]tree.Expr, len(astOrderBy)),
 		bindDistinct: make([]bool, len(astOrderBy)),
 	}
 	for i := range resolve.hiddenIdx {
@@ -6778,12 +6783,24 @@ func prepareGroupingSetOrderByProjects(
 		}
 
 		if !containsGroupingFunction(order.Expr) {
-			matchesSelect, matchErr := groupingSetOrderMatchesSelectExpr(builder, selectList, order.Expr)
+			matchedSelectExpr, matchesSelect, matchErr := groupingSetOrderMatchesSelectExpr(builder, selectList, order.Expr)
 			if matchErr != nil {
 				return nil, nil, nil, matchErr
 			}
 			if matchesSelect {
 				resolve.bindVisible[i] = true
+				if groupingSetOrderExprEqual(order.Expr, matchedSelectExpr) {
+					// The ORDER BY syntax itself names the selected expression.
+					// Rebind the SELECT spelling so identifier-case differences
+					// cannot miss the branch projection's AST key.
+					resolve.visibleExpr[i] = cloneTreeExpr(matchedSelectExpr)
+				} else {
+					// The match was produced by AliasBeforeColumn rewriting.
+					// Preserve the ORDER BY alias so the branch binder resolves
+					// it to the visible projection rather than recomputing the
+					// selected expression against source columns.
+					resolve.visibleExpr[i] = cloneTreeExpr(order.Expr)
+				}
 				continue
 			}
 			if !groupingSetOrderNeedsHiddenProject(selectList, order.Expr) {
@@ -6808,18 +6825,38 @@ func groupingSetOrderMatchesSelectExpr(
 	builder *QueryBuilder,
 	selectList tree.SelectExprs,
 	astExpr tree.Expr,
-) (bool, error) {
+) (tree.Expr, bool, error) {
 	qualifiedOrder, err := qualifyGroupingOrderExpr(builder, selectList, astExpr, true)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
-	orderKey := tree.String(unwrapParenExpr(qualifiedOrder), dialect.MYSQL)
 	for _, selectExpr := range selectList {
-		if orderKey == tree.String(unwrapParenExpr(selectExpr.Expr), dialect.MYSQL) {
-			return true, nil
+		if groupingSetOrderExprEqual(qualifiedOrder, selectExpr.Expr) {
+			return selectExpr.Expr, true, nil
 		}
 	}
-	return false, nil
+	return nil, false, nil
+}
+
+func groupingSetOrderExprEqual(left, right tree.Expr) bool {
+	normalizeIdentifiers := func(expr tree.Expr) tree.Expr {
+		normalized := cloneTreeExpr(expr)
+		walkGroupingSetOrderByExpr(normalized, func(node tree.Expr) bool {
+			name, ok := node.(*tree.UnresolvedName)
+			if !ok {
+				return true
+			}
+			for i := 0; i < name.NumParts; i++ {
+				if name.CStrParts[i] != nil {
+					name.CStrParts[i] = tree.NewCStr(name.CStrParts[i].Compare(), 0)
+				}
+			}
+			return true
+		})
+		return unwrapParenExpr(normalized)
+	}
+
+	return reflect.DeepEqual(normalizeIdentifiers(left), normalizeIdentifiers(right))
 }
 
 func groupingSetOrderNeedsHiddenProject(selectList tree.SelectExprs, astExpr tree.Expr) bool {

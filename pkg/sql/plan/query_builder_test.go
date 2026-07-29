@@ -929,6 +929,41 @@ func TestQueryBuilderBuildRollupOrderByLiteralCaseDifference(t *testing.T) {
 	require.Len(t, queryPlan.GetQuery().Nodes[sortNode.Children[0]].ProjectList, 4)
 }
 
+func TestQueryBuilderBuildGroupingSetOrderByIdentifierCaseDifference(t *testing.T) {
+	for _, groupBy := range []string{
+		"a with rollup",
+		"cube(a)",
+		"grouping sets ((a), ())",
+	} {
+		t.Run(groupBy, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select abs(a), count(*)
+					from select_test.bind_select
+					group by %s
+					order by abs(A), grouping(a)`, groupBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+
+			var sortNode *plan.Node
+			for _, node := range queryPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_SORT {
+					sortNode = node
+					break
+				}
+			}
+			require.NotNil(t, sortNode)
+			require.Len(t, sortNode.OrderBy, 2)
+			require.Equal(t, int32(0), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+		})
+	}
+}
+
 func TestQueryBuilderBuildRollupOrderByCorrelatedScalarSubquery(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
