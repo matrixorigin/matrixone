@@ -172,6 +172,26 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 		target.Clean(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	})
+	t.Run("forged_fixed_vector_type_size", func(t *testing.T) {
+		corrupted := append([]byte(nil), data...)
+		rowCount := int64(2)
+		vectorLength := uint32(2)
+		forgedTypeSize := int32(1)
+		copy(corrupted[:8], types.EncodeInt64(&rowCount))
+		vectorLengthOffset := 16 + 1 + types.TSize
+		copy(corrupted[vectorLengthOffset:vectorLengthOffset+4], types.EncodeUint32(&vectorLength))
+		vectorTypeSizeOffset := 16 + 1 + 4
+		copy(corrupted[vectorTypeSizeOffset:vectorTypeSizeOffset+4], types.EncodeInt32(&forgedTypeSize))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
 	t.Run("preallocated_nil_vector", func(t *testing.T) {
 		target := NewWithSize(1)
 		var unmarshalErr error
