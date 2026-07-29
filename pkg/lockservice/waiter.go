@@ -98,8 +98,8 @@ type waiter struct {
 	enableChecker bool
 
 	// lockWaitTimeout is the session-level SET lock_wait_timeout value.
-	// A zero value means no session-level timeout is enforced here; in that
-	// case waiting relies on the context or other external cancellation.
+	// A zero value means no caller timeout was attached at this raw lock-table
+	// layer; service entry points normally replace it with the safety ceiling.
 	// Set in waiterEvents.add() from the lockContext and checked in
 	// waiterEvents.check() to enforce timeouts on the async (remote) lock path.
 	lockWaitTimeout     time.Duration
@@ -107,6 +107,9 @@ type waiter struct {
 	lockWaitGranularity pb.Granularity
 	lockWaitMode        pb.LockMode
 	lockWaitTimer       atomic.Pointer[time.Timer]
+	// waitTooLongLogged is per waiter lifecycle and is reset before reuse.
+	// It suppresses repeated diagnostics without disabling orphan checks.
+	waitTooLongLogged atomic.Bool
 
 	// isRemoteSnapshot marks a waiter reconstructed from GetTxnLock. It is an
 	// active wait-for edge captured by the remote lock owner, not a local waiter
@@ -200,10 +203,13 @@ func (w *waiter) mustRecvNotification(
 func (w *waiter) mustSendNotification(
 	value notifyValue,
 	logger *log.MOLogger,
+	notifyEvent bool,
 ) {
 	logWaiterNotified(logger, w, value)
 
-	w.event.notified()
+	if notifyEvent {
+		w.event.notified()
+	}
 	select {
 	case w.c <- value:
 		return
@@ -276,6 +282,25 @@ func (w *waiter) notify(
 	value notifyValue,
 	logger *log.MOLogger,
 ) bool {
+	return w.notifyWithEvent(value, logger, true)
+}
+
+// notifyWithoutEvent is used by waiterEvents.check, which already runs on the
+// event-consumer goroutine. Sending back into its own bounded eventC can
+// self-deadlock when the channel is full; the checker resumes the lock context
+// directly after releasing waiterEvents.mu instead.
+func (w *waiter) notifyWithoutEvent(
+	value notifyValue,
+	logger *log.MOLogger,
+) bool {
+	return w.notifyWithEvent(value, logger, false)
+}
+
+func (w *waiter) notifyWithEvent(
+	value notifyValue,
+	logger *log.MOLogger,
+	notifyEvent bool,
+) bool {
 	debug := ""
 	if logger != nil && logger.Enabled(zap.DebugLevel) {
 		debug = w.String()
@@ -294,7 +319,7 @@ func (w *waiter) notify(
 		// retry.
 		if w.casStatus(status, notified, logger) {
 			w.stopLockWaitTimer()
-			w.mustSendNotification(value, logger)
+			w.mustSendNotification(value, logger, notifyEvent)
 			return true
 		}
 		logWaiterNotifySkipped(logger, debug, "concurrently issued")
@@ -330,6 +355,7 @@ func (w *waiter) reset() {
 	w.lockWaitGranularity = pb.Granularity_Row
 	w.lockWaitMode = pb.LockMode_Exclusive
 	w.isRemoteSnapshot = false
+	w.waitTooLongLogged.Store(false)
 	w.stopLockWaitTimer()
 }
 

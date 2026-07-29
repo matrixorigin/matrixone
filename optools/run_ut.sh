@@ -40,6 +40,13 @@ BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 LOG="$G_TS-$TEST_TYPE.log"
 UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
+# Race-enabled packages use substantially more CPU and memory. In particular,
+# several pkg/tests packages each start a multi-node embedded cluster. Running
+# six of those packages concurrently on the 8-core/16-GB CI worker can starve
+# HAKeeper heartbeats and turn otherwise healthy tests into bootstrap/commit
+# timeouts. Keep the caller's requested parallelism for normal UT, but cap the
+# race matrix by default. Larger workers can override the cap explicitly.
+UT_RACE_PARALLEL_MAX=${UT_RACE_PARALLEL_MAX:-"4"}
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
 UT_FILTER="$G_WKSP/$G_TS-UT-Filter.out"
@@ -108,7 +115,11 @@ function run_tests(){
     echo "#  UT REPORT:       $UT_REPORT"
     echo "#  COVERAGE REPORT: $CODE_COVERAGE"
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
-    echo "#  UT PARALLEL:     $UT_PARALLEL"
+    local test_parallel=$UT_PARALLEL
+    if [[ $SKIP_TESTS != 'race' ]] && (( test_parallel > UT_RACE_PARALLEL_MAX )); then
+        test_parallel=$UT_RACE_PARALLEL_MAX
+    fi
+    echo "#  UT PARALLEL:     $test_parallel"
     horiz_rule
 
     logger "INF" "Clean go test cache"
@@ -137,10 +148,10 @@ function run_tests(){
 
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope > $UT_REPORT
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${test_parallel} -timeout "${UT_TIMEOUT}m"  $test_scope > $UT_REPORT
     else
         logger "INF" "Run UT with race check"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope > $UT_REPORT
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${test_parallel} -timeout "${UT_TIMEOUT}m" -race $test_scope > $UT_REPORT
     fi
 
     # run_ut.sh intentionally does not use errexit because post-processing must
