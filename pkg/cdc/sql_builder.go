@@ -26,9 +26,13 @@ const (
 	CDCWatermarkErrMsgMaxLen = 256
 
 	CDCState_Running = "running"
-	CDCState_Pausing = "pausing"
-	CDCState_Paused  = "paused"
-	CDCState_Failed  = "failed"
+	// CDCState_Restarting is the durable admission marker for a restart. It
+	// distinguishes the state observed by a replacement startup from a later
+	// pause, which may also end in paused.
+	CDCState_Restarting = "restarting"
+	CDCState_Pausing    = "pausing"
+	CDCState_Paused     = "paused"
+	CDCState_Failed     = "failed"
 )
 
 var CDCSQLBuilder = cdcSQLBuilder{}

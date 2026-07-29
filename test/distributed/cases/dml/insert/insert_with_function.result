@@ -27,7 +27,6 @@ null  ¦  null  𝄀
 null  ¦  64
 DELETE FROM char_test;
 INSERT INTO char_test(str1) VALUES(SPACE(100));
-internal error: Can't cast '                                                                                                    ' from VARCHAR type to CHAR type. Src length 100 is larger than Dest length 50
 INSERT INTO char_test(str1) VALUES('RONALDOSHOOTGOAL');
 INSERT INTO char_test(str2) VALUES(EMPTY(""));
 INSERT INTO char_test(str2) VALUES(EMPTY(null));
@@ -36,6 +35,7 @@ INSERT INTO char_test(str2) VALUES(EMPTY(SPACE(100)));
 INSERT INTO char_test(str2) VALUES(EMPTY(OCT(4564123156)));
 select * from char_test;
 ➤ str1[1,50,0]  ¦  str2[12,-1,0]  𝄀
+                                                    ¦  null  𝄀
 RONALDOSHOOTGOAL  ¦  null  𝄀
 null  ¦  1  𝄀
 null  ¦  null  𝄀

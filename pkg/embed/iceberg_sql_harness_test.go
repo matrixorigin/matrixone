@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -49,13 +50,70 @@ import (
 )
 
 const (
-	embeddedIcebergSnapshotOld     int64 = 101
-	embeddedIcebergSnapshotCurrent int64 = 202
-	embeddedIcebergTimestampCutoff       = int64(1767312000000) // 2026-01-02T00:00:00Z in ms.
+	embeddedIcebergSnapshotOld          int64 = 101
+	embeddedIcebergSnapshotCurrent      int64 = 202
+	embeddedIcebergTimestampCutoff            = int64(1767312000000) // 2026-01-02T00:00:00Z in ms.
+	embeddedIcebergAccountRetryInterval       = 100 * time.Millisecond
+	embeddedIcebergAccountCreateTimeout       = 10 * time.Second
 )
 
+type embeddedIcebergSQLExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+type embeddedIcebergSQLExecerFunc func(context.Context, string, ...any) (sql.Result, error)
+
+func (f embeddedIcebergSQLExecerFunc) ExecContext(ctx context.Context, stmt string, args ...any) (sql.Result, error) {
+	return f(ctx, stmt, args...)
+}
+
+func TestCreateEmbeddedIcebergTenantAccountRetriesConnectionErrors(t *testing.T) {
+	var calls int
+	var statement string
+	execer := embeddedIcebergSQLExecerFunc(func(_ context.Context, stmt string, _ ...any) (sql.Result, error) {
+		calls++
+		statement = stmt
+		if calls == 1 {
+			return nil, fmt.Errorf("writeto tcp: connection reset by peer")
+		}
+		return nil, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, createEmbeddedIcebergTenantAccount(ctx, execer, "iceacc_retry"))
+	require.Equal(t, 2, calls)
+	require.Equal(t, "create account if not exists iceacc_retry admin_name 'admin' identified by '111'", statement)
+}
+
+func TestCreateEmbeddedIcebergTenantAccountRejectsNonConnectionErrors(t *testing.T) {
+	var calls int
+	execer := embeddedIcebergSQLExecerFunc(func(_ context.Context, _ string, _ ...any) (sql.Result, error) {
+		calls++
+		return nil, fmt.Errorf("invalid account syntax")
+	})
+
+	err := createEmbeddedIcebergTenantAccount(context.Background(), execer, "iceacc_invalid")
+	require.EqualError(t, err, "invalid account syntax")
+	require.Equal(t, 1, calls)
+}
+
+func TestCreateEmbeddedIcebergTenantAccountStopsWhenContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls int
+	execer := embeddedIcebergSQLExecerFunc(func(_ context.Context, _ string, _ ...any) (sql.Result, error) {
+		calls++
+		cancel()
+		return nil, fmt.Errorf("writeto tcp: connection reset by peer")
+	})
+
+	err := createEmbeddedIcebergTenantAccount(ctx, execer, "iceacc_cancelled")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, calls)
+}
+
 func TestIcebergSQLEngineEmbeddedReadPruningExplainAndTimeTravel(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -118,7 +176,7 @@ func TestIcebergSQLEngineEmbeddedReadPruningExplainAndTimeTravel(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedSecurityErrors(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -160,7 +218,7 @@ func TestIcebergSQLEngineEmbeddedSecurityErrors(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedCredentialSecurityAndRedaction(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -194,7 +252,7 @@ func TestIcebergSQLEngineEmbeddedCredentialSecurityAndRedaction(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedDeleteApply(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -220,7 +278,7 @@ func TestIcebergSQLEngineEmbeddedDeleteApply(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedImportNativePinsSnapshot(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -257,7 +315,7 @@ func TestIcebergSQLEngineEmbeddedImportNativePinsSnapshot(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedBranchRefReadAndAppendWriteIntent(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -292,7 +350,7 @@ func TestIcebergSQLEngineEmbeddedBranchRefReadAndAppendWriteIntent(t *testing.T)
 }
 
 func TestIcebergSQLEngineEmbeddedWriteDMLAndMaintenanceSQL(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -623,7 +681,9 @@ func createEmbeddedIcebergTableWithRefModes(t *testing.T, db *embeddedSQLSession
 func openIcebergTenantTestSQL(t *testing.T, c Cluster, rootDB *sql.DB) *embeddedSQLSession {
 	t.Helper()
 	accountName := fmt.Sprintf("iceacc_%d", time.Now().UnixNano())
-	mustExec(t, rootDB, fmt.Sprintf("create account %s admin_name 'admin' identified by '111'", accountName))
+	ctx, cancel := context.WithTimeout(context.Background(), embeddedIcebergAccountCreateTimeout)
+	defer cancel()
+	require.NoError(t, createEmbeddedIcebergTenantAccount(ctx, rootDB, accountName))
 	t.Cleanup(func() {
 		cleanupDB := openIcebergRootTestDB(t, c)
 		defer cleanupDB.Close()
@@ -639,6 +699,27 @@ func openIcebergTenantTestSQL(t *testing.T, c Cluster, rootDB *sql.DB) *embedded
 	require.Equal(t, int64(2), queryInt64(t, session, "select current_user_id()"))
 	require.Equal(t, int64(2), queryInt64(t, session, "select current_role_id()"))
 	return session
+}
+
+func createEmbeddedIcebergTenantAccount(ctx context.Context, db embeddedIcebergSQLExecer, accountName string) error {
+	stmt := fmt.Sprintf("create account if not exists %s admin_name 'admin' identified by '111'", accountName)
+	for {
+		_, err := db.ExecContext(ctx, stmt)
+		if err == nil {
+			return nil
+		}
+		if !morpc.IsConnectionError(err) {
+			return err
+		}
+
+		timer := time.NewTimer(embeddedIcebergAccountRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("create embedded Iceberg tenant account: %w (last connection error: %v)", ctx.Err(), err)
+		case <-timer.C:
+		}
+	}
 }
 
 func openIcebergTenantFrontendDB(t *testing.T, c Cluster, accountName string) *sql.DB {

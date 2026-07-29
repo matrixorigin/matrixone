@@ -19,8 +19,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -62,41 +62,41 @@ import (
 // Global stub for GetTableDetector - initialized in init() to prevent panics across all tests
 var _globalTableDetectorStub *gostub.Stubs
 
+const testPermanentDetectorTask = "__test_permanent_dummy__"
+
 // init sets up global mock for GetTableDetector once for all tests in this package
 // This stub is NEVER reset to ensure consistent behavior across all tests
 func init() {
 	_globalTableDetectorStub = gostub.Stub(&cdc.GetTableDetector, createMockTableDetectorForTest())
 }
 
-// createMockTableDetectorForTest creates a properly initialized mock TableDetector for testing
+// createMockTableDetectorForTest creates a mock TableDetector that never starts
+// the background scan loop. Frontend tests only need registration semantics; the
+// permanent callback makes every test registration non-initial.
 func createMockTableDetectorForTest() func(cnUUID string) *cdc.TableDetector {
 	return func(cnUUID string) *cdc.TableDetector {
-		detector := &cdc.TableDetector{
-			Mp:                   make(map[uint32]cdc.TblMap),
-			Callbacks:            make(map[string]cdc.TableCallback),
-			CallBackAccountId:    make(map[string]uint32),
-			SubscribedAccountIds: make(map[uint32][]string),
-			CallBackDbName:       make(map[string][]string),
-			SubscribedDbNames:    make(map[string][]string),
-			CallBackTableName:    make(map[string][]string),
+		return &cdc.TableDetector{
+			Mp: make(map[uint32]cdc.TblMap),
+			Callbacks: map[string]cdc.TableCallback{
+				testPermanentDetectorTask: func(map[uint32]cdc.TblMap) error {
+					return nil
+				},
+			},
+			CallBackAccountId: map[string]uint32{
+				testPermanentDetectorTask: 1,
+			},
+			SubscribedAccountIds: map[uint32][]string{
+				1: {testPermanentDetectorTask},
+			},
+			CallBackDbName: map[string][]string{
+				testPermanentDetectorTask: {},
+			},
+			SubscribedDbNames: make(map[string][]string),
+			CallBackTableName: map[string][]string{
+				testPermanentDetectorTask: {},
+			},
 			SubscribedTableNames: make(map[string][]string),
 		}
-
-		// Set scanTableFn to no-op to prevent panic in scanTableLoop
-		detectorValue := reflect.ValueOf(detector).Elem()
-		scanTableFnField := detectorValue.FieldByName("scanTableFn")
-		if scanTableFnField.IsValid() && scanTableFnField.CanSet() {
-			scanTableFnField.Set(reflect.ValueOf(func() error {
-				return nil
-			}))
-		}
-
-		// Call RegisterIfAbsent to properly initialize cancel field
-		detector.RegisterIfAbsent("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
-			return nil
-		})
-
-		return detector
 	}
 }
 
@@ -870,6 +870,7 @@ type captureExecContextIE struct {
 	execCtxErr       error
 	execErr          error
 	execSQL          string
+	execSQLs         []string
 	querySQL         string
 	affectedRows     uint64
 	hasAffectedRows  bool
@@ -881,6 +882,7 @@ type captureExecContextIE struct {
 func (e *captureExecContextIE) Exec(ctx context.Context, sql string, options ie.SessionOverrideOptions) error {
 	e.execCtxErr = ctx.Err()
 	e.execSQL = sql
+	e.execSQLs = append(e.execSQLs, sql)
 	return e.execErr
 }
 
@@ -891,6 +893,7 @@ func (e *captureExecContextIE) ExecWithStatus(ctx context.Context, sql string, o
 	}
 	e.execCtxErr = ctx.Err()
 	e.execSQL = sql
+	e.execSQLs = append(e.execSQLs, sql)
 	return ie.InternalExecStatus{AffectedRows: affectedRows}, e.execErr
 }
 
@@ -904,6 +907,15 @@ func (e *captureExecContextIE) Query(ctx context.Context, sql string, options ie
 }
 
 func (e *captureExecContextIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
+}
+
+func (e *captureExecContextIE) containsExecutedSQL(part string) bool {
+	for _, sql := range e.execSQLs {
+		if strings.Contains(sql, part) {
+			return true
+		}
+	}
+	return false
 }
 
 type captureExecOnlyIE struct {
@@ -1403,27 +1415,16 @@ func Test_updateCdcTask_restart(t *testing.T) {
 	sql15 := "SELECT task_id FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
 	mock.ExpectQuery(sql15).WillReturnRows(
 		sqlmock.NewRows([]string{"task_id"}).AddRow("taskID-1"))
-
 	sql16 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
 	mock.ExpectPrepare(sql16)
-
-	sql17 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
-	mock.ExpectExec(sql17).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(sql16).WithArgs(cdc.CDCState_Restarting).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
 		mSql15, err := regexp.MatchString(sql15, sql)
 		assert.NoError(t, err)
-		mSql16, err := regexp.MatchString(sql16, sql)
-		assert.NoError(t, err)
-		mSql17, err := regexp.MatchString(sql17, sql)
-		assert.NoError(t, err)
 
 		if mSql15 {
 			return mSqlIdx15
-		} else if mSql16 {
-			return mSqlIdx16
-		} else if mSql17 {
-			return mSqlIdx17
 		}
 
 		return -1
@@ -2665,6 +2666,74 @@ func TestCDCTaskUpdateErrMsgRequiresRunningState(t *testing.T) {
 	require.Contains(t, capture.execSQL, "SET state = 'failed'")
 	require.Contains(t, capture.execSQL, "err_msg = 'permanent error'")
 	require.Contains(t, capture.execSQL, "AND state = 'running'")
+}
+
+func TestCDCTaskUpdateErrMsgUsesRestartCatalogState(t *testing.T) {
+	for _, currentState := range []string{cdc.CDCState_Failed, cdc.CDCState_Paused} {
+		t.Run(currentState, func(t *testing.T) {
+			capture := &captureExecContextIE{}
+			executor := &CDCTaskExecutor{
+				spec: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					Accounts: []*task.Account{{Id: 1}},
+				},
+				ie: capture,
+			}
+
+			require.NoError(t, executor.updateErrMsgWithCurrentState(context.Background(), "", currentState))
+			require.Contains(t, capture.execSQL, "SET state = 'running'")
+			require.Contains(t, capture.execSQL, "AND state = '"+currentState+"'")
+		})
+	}
+}
+
+func TestCDCTaskStartupUpdateRequiresExactAdmissionState(t *testing.T) {
+	for _, tt := range []struct {
+		name             string
+		restartAdmission bool
+		expectedState    string
+	}{
+		{name: "ordinary start", expectedState: cdc.CDCState_Running},
+		{name: "restart admission", restartAdmission: true, expectedState: cdc.CDCState_Restarting},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			capture := &captureExecContextIE{}
+			executor := &CDCTaskExecutor{
+				spec: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					Accounts: []*task.Account{{Id: 1}},
+				},
+				ie: capture,
+			}
+
+			require.NoError(t, executor.updateErrMsgForStartup(context.Background(), "", "", false, tt.restartAdmission))
+			require.Contains(t, capture.execSQL, "AND state = '"+tt.expectedState+"'")
+			require.NotContains(t, capture.execSQL, "state IN")
+		})
+	}
+}
+
+func TestCDCTaskRestartStartupDoesNotOverwriteCompletedPause(t *testing.T) {
+	ctx := context.Background()
+	spec := &task.CreateCdcDetails{
+		TaskId:   "task1",
+		TaskName: "task1",
+		Accounts: []*task.Account{{Id: 1}},
+	}
+	exec := &cdcCatalogStateExecutor{
+		state:        cdc.CDCState_Restarting,
+		currentState: cdc.CDCState_Restarting,
+		targetState:  cdc.CDCState_Running,
+	}
+	cdcTask := &CDCTaskExecutor{spec: spec, ie: exec}
+
+	// This models a PAUSE that completes after restart admission but before the
+	// replacement publishes readiness. The startup CAS must leave paused alone.
+	exec.setState(cdc.CDCState_Paused)
+	err := cdcTask.updateErrMsgForStartup(ctx, "", "", false, true)
+	require.ErrorContains(t, err, "conflicting catalog state paused")
+	require.Equal(t, cdc.CDCState_Paused, exec.getState())
+	require.Contains(t, exec.execSQL, "AND state = 'restarting'")
 }
 
 func TestCDCTaskUpdateErrMsgRejectsConflictingCatalogState(t *testing.T) {
@@ -4098,10 +4167,15 @@ func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
 	require.True(t, executor.tableErrorsAreCleared())
 
 	sqls := executor.capturedExecSQLs()
-	require.Len(t, sqls, 2)
+	require.Len(t, sqls, 3)
 	require.Contains(t, sqls[0], "SET state = 'failed'")
-	require.Contains(t, sqls[1], "UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg = ''")
-	require.Contains(t, sqls[1], "task-1")
+	// The retry explicitly reopens the failure state before it clears table
+	// errors, so a prior timed-out/retried restart cannot remain admitted as
+	// restarting with its original failure cause lost.
+	require.Contains(t, sqls[1], "SET state = 'restarting'")
+	require.Contains(t, sqls[1], "AND state = 'failed'")
+	require.Contains(t, sqls[2], "UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg = ''")
+	require.Contains(t, sqls[2], "task-1")
 
 	cdcTask.activeRoutine.CloseCancel()
 	if val, ok := cdcTask.runningReaders.Load("db1.tb1"); ok {

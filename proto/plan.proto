@@ -151,6 +151,10 @@ message ObjectRef {
   string subscription_name = 9;
   PubInfo pub_info = 10;
   bool not_lock_meta = 11;
+  // snapshot preserves the catalog identity used to resolve this dependency.
+  // Prepared statements must validate historical dependencies in the same
+  // snapshot instead of resolving the current object.
+  Snapshot snapshot = 12;
 }
 
 message PubInfo {
@@ -346,6 +350,8 @@ message IndexDef {
   string index_algo = 10;
   string index_algo_table_type = 11;
   string index_algo_params = 12;
+  // Logical INCLUDE columns of the index, letter case: lower.
+  repeated string included_columns = 13;
 }
 
 message ForeignKeyDef {

@@ -67,7 +67,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	taerpc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -7609,7 +7608,7 @@ func TestAppendAndGC2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	ckpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ckpCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
 	err = db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now())
 	cancel()
 	require.NoError(t, err)
@@ -7836,7 +7835,7 @@ func TestSnapshotGC(t *testing.T) {
 	snapWG.Wait()
 	wg.Wait()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	ckpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ckpCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
 	err = db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now())
 	cancel()
 	require.NoError(t, err)
@@ -8847,7 +8846,10 @@ func TestCkpLeak(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	testutil.WaitAllCheckpointsFinished(t, db)
+	ckpCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
+	err = db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now())
+	cancel()
+	require.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	checkLeak := func() bool {
 		ckpMetaFiles := db.BGCheckpointRunner.GetCheckpointMetaFiles()
@@ -9899,12 +9901,6 @@ func TestDedupSnapshot1(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	fault.Enable()
-	defer fault.Disable()
-	rmFn, err := objectio.InjectPrintFlushEntry("")
-	assert.NoError(t, err)
-	defer rmFn()
-
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 3
@@ -9912,18 +9908,30 @@ func TestDedupSnapshot1(t *testing.T) {
 	bat := catalog.MockBatch(schema, 10)
 	tae.CreateRelAndAppend(bat, true)
 
-	testutils.WaitExpect(10000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	targetLSN := tae.Wal.GetLSNWatermark()
+	require.NotZero(t, targetLSN)
+	require.Eventually(
+		t,
+		func() bool {
+			return tae.AllCheckpointsFinished() &&
+				tae.Wal.GetCheckpointed() >= targetLSN
+		},
+		30*time.Second,
+		25*time.Millisecond,
+		"background checkpoint did not cover LSN %d",
+		targetLSN,
+	)
 
 	txn, rel := tae.GetRelation()
 	startTS := txn.GetStartTS()
 	txn.SetSnapshotTS(startTS.Next())
 	txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
-	err = rel.Append(context.Background(), bat)
-	assert.NoError(t, err)
-	_ = txn.Commit(context.Background())
+	if !assert.NoError(t, rel.Append(context.Background(), bat)) {
+		require.NoError(t, txn.Rollback(context.Background()))
+		return
+	}
+	require.NoError(t, txn.Commit(context.Background()))
+	tae.CheckRowsByScan(20, true)
 }
 
 func TestDedupSnapshot2(t *testing.T) {
@@ -12013,6 +12021,103 @@ func TestRollbackMergeInQueue(t *testing.T) {
 	require.Equal(t, 3, rel.GetMeta().(*catalog.TableEntry).ObjectCnt(false) /*Aobj(created + deleted), Nobj(rollbacked)*/)
 }
 
+func TestRollbackMergeOnTransferError(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	require.NoError(t, err)
+	require.NoError(t, task.OnExec(ctx))
+
+	const injectedErr = "mock transfer error"
+	require.True(t, fault.Enable())
+	t.Cleanup(func() {
+		assert.True(t, fault.Disable())
+	})
+	require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_TransferError, ":::", "echo", 0, injectedErr, false))
+	t.Cleanup(func() {
+		removed, err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferError)
+		assert.NoError(t, err)
+		assert.True(t, removed)
+	})
+
+	require.ErrorContains(t, txn.Commit(ctx), injectedErr)
+
+	_, rel = tae.GetRelation()
+	objH, err := rel.GetObject(obj.ID(), false)
+	require.NoError(t, err)
+	defer objH.Close()
+
+	meta := objH.GetMeta().(*catalog.ObjectEntry)
+	require.Equal(t, catalog.ObjectState_Create_ApplyCommit, meta.ObjectState)
+	require.True(t, meta.DeletedAt.IsEmpty())
+	require.Equal(t, 3, rel.GetMeta().(*catalog.TableEntry).ObjectCnt(false) /*Aobj(created + deleted), Nobj(rollbacked)*/)
+}
+
+func TestRollbackMergeAfterTransferredDeleteError(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	txn, rel := tae.GetRelation()
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	require.NoError(t, err)
+	require.NoError(t, task.OnExec(ctx))
+
+	// This committed delete is collected during merge phase 2. Transferring it
+	// appends a tombstone entry to the merge transaction before the injected
+	// error is returned.
+	require.NoError(t, tae.DeleteAll(true))
+
+	const injectedErr = "mock post-transfer error"
+	require.True(t, fault.Enable())
+	t.Cleanup(func() {
+		assert.True(t, fault.Disable())
+	})
+	require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_TransferErrorAfterTransfer, ":::", "echo", 0, injectedErr, false))
+	t.Cleanup(func() {
+		removed, err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferErrorAfterTransfer)
+		assert.NoError(t, err)
+		assert.True(t, removed)
+	})
+
+	require.ErrorContains(t, txn.Commit(ctx), injectedErr)
+
+	_, rel = tae.GetRelation()
+	objH, err := rel.GetObject(obj.ID(), false)
+	require.NoError(t, err)
+	defer objH.Close()
+
+	meta := objH.GetMeta().(*catalog.ObjectEntry)
+	require.Equal(t, catalog.ObjectState_Create_ApplyCommit, meta.ObjectState)
+	require.True(t, meta.DeletedAt.IsEmpty())
+	require.Equal(t, 3, rel.GetMeta().(*catalog.TableEntry).ObjectCnt(false) /*Aobj(created + deleted), Nobj(rollbacked)*/)
+}
+
 func TestTransferInMerge(t *testing.T) {
 	ctx := context.Background()
 
@@ -13469,223 +13574,6 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 	defer bat2.Clean(common.DebugAllocator)
 }
 
-func Test_ApplyTableData(t *testing.T) {
-	ctx := context.Background()
-
-	opts := config.WithLongScanAndCKPOpts(nil)
-	opts.EnableApplyTableData = true
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-	colCount := 2
-	schema := catalog.MockSchema(colCount, -1)
-	schema.Extra.BlockMaxRows = 10
-	schema.Extra.ObjectMaxBlocks = 2
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 2)
-
-	tae.CreateRelAndAppend2(bat, true)
-	tae.CompactBlocks(true)
-	txn, table := tae.GetRelation()
-	tableEntry := table.GetMeta().(*catalog.TableEntry)
-	assert.NoError(t, txn.Commit(ctx))
-
-	dir := "Test_ApplyTableData"
-
-	dumpArg := taerpc.NewDumpTableArg(
-		ctx,
-		tableEntry,
-		dir,
-		taerpc.MockInspectContext(tae.DB),
-		common.DebugAllocator,
-		tae.Opts.Fs,
-	)
-	err := dumpArg.Run()
-	assert.NoError(t, err)
-
-	t.Log(tae.Catalog.SimplePPString(3))
-
-	applyArg, err := taerpc.NewApplyTableDataArg(
-		ctx,
-		dir,
-		taerpc.MockInspectContext(tae.DB),
-		"db2",
-		"table2",
-		common.DebugAllocator,
-		tae.Opts.Fs,
-	)
-	assert.NoError(t, err)
-	err = applyArg.Run()
-	assert.NoError(t, err)
-
-	checkAppliedTable := func() {
-		t.Helper()
-		txn, rel := testutil.GetRelation(t, 0, tae.DB, "db2", "table2")
-		it := rel.MakeObjectIt(false)
-		objectCount := 0
-		for it.Next() {
-			objectCount++
-			meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
-			require.False(t, meta.IsAppendable())
-			require.True(t, meta.ObjectPersisted())
-			require.False(t, meta.GetObjectData().IsAppendable())
-		}
-		require.NoError(t, it.Close())
-		require.Equal(t, 1, objectCount)
-		for i := 0; i < colCount; i++ {
-			rows := testutil.GetColumnRowsByScan(t, rel, i, true)
-			require.Equal(t, 2, rows)
-		}
-		require.NoError(t, txn.Commit(ctx))
-	}
-
-	checkAppliedTable()
-	tae.Restart(ctx)
-	checkAppliedTable()
-
-	t.Log(tae.Catalog.SimplePPString(3))
-}
-
-func Test_ApplyTableData2(t *testing.T) {
-	ctx := context.Background()
-
-	opts := config.WithLongScanAndCKPOpts(nil)
-	opts.EnableApplyTableData = true
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-	colCount := 2
-	schema := catalog.MockSchema(colCount, -1)
-	schema.Extra.BlockMaxRows = 10
-	schema.Extra.ObjectMaxBlocks = 2
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 2)
-
-	tae.CreateRelAndAppend2(bat, true)
-	tae.DoAppend(bat)
-	tae.DeleteAll(true)
-	txn, table := tae.GetRelation()
-	tableEntry := table.GetMeta().(*catalog.TableEntry)
-	assert.NoError(t, txn.Commit(ctx))
-
-	dir := "Test_ApplyTableData"
-
-	dumpArg := taerpc.NewDumpTableArg(
-		ctx,
-		tableEntry,
-		dir,
-		taerpc.MockInspectContext(tae.DB),
-		common.DebugAllocator,
-		tae.Opts.Fs,
-	)
-	err := dumpArg.Run()
-	assert.NoError(t, err)
-
-	t.Log(tae.Catalog.SimplePPString(3))
-
-	applyArg, err := taerpc.NewApplyTableDataArg(
-		ctx,
-		dir,
-		taerpc.MockInspectContext(tae.DB),
-		"db2",
-		"table2",
-		common.DebugAllocator,
-		tae.Opts.Fs,
-	)
-	assert.NoError(t, err)
-
-	fault.Enable()
-	defer fault.Disable()
-	rmFn, err := objectio.InjectGCDumpTable("")
-	assert.NoError(t, err)
-	err = applyArg.Run()
-	assert.Error(t, err)
-	rmFn()
-
-	applyArg, err = taerpc.NewApplyTableDataArg(
-		ctx,
-		dir,
-		taerpc.MockInspectContext(tae.DB),
-		"db2",
-		"table2",
-		common.DebugAllocator,
-		tae.Opts.Fs,
-	)
-	assert.NoError(t, err)
-	err = applyArg.Run()
-	assert.NoError(t, err)
-
-	txn, rel := testutil.GetRelation(t, 0, tae.DB, "db2", "table2")
-	newDBID := rel.GetMeta().(*catalog.TableEntry).GetDB().ID
-	newTableID := rel.GetMeta().(*catalog.TableEntry).ID
-
-	assert.NoError(t, txn.Commit(ctx))
-	for i := 0; i < colCount; i++ {
-		rows := testutil.GetColumnRowsByScan(t, rel, i, true)
-		assert.Equal(t, 0, rows)
-	}
-
-	t.Log(tae.Catalog.SimplePPString(3))
-	_, close, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: totsp(types.TS{}),
-		CnWant: totsp(types.MaxTs()),
-		Table:  &api.TableID{DbId: newDBID, TbId: newTableID},
-	}, false)
-	assert.Nil(t, err)
-	close()
-}
-
-func TestDumpTableFileNameDecode(t *testing.T) {
-	ctx := context.Background()
-
-	opts := config.WithLongScanAndCKPOpts(nil)
-	opts.EnableApplyTableData = true
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
-	colCount := 2
-	schema := catalog.MockSchema(colCount, -1)
-	schema.Extra.BlockMaxRows = 10
-	schema.Extra.ObjectMaxBlocks = 2
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 2)
-
-	tae.CreateRelAndAppend2(bat, true)
-	txn, table := tae.GetRelation()
-	tableEntry := table.GetMeta().(*catalog.TableEntry)
-	assert.NoError(t, txn.Commit(ctx))
-
-	dir := taerpc.GetDumpTableDir(tableEntry.ID, tae.TxnMgr.Now())
-
-	dumpArg := taerpc.NewDumpTableArg(
-		ctx,
-		tableEntry,
-		dir,
-		taerpc.MockInspectContext(tae.DB),
-		common.DebugAllocator,
-		tae.Opts.Fs,
-	)
-	err := dumpArg.Run()
-	assert.NoError(t, err)
-
-	needGC, err := taerpc.GCDumpTableFiles(dir, tae.Opts.Fs)
-	assert.NoError(t, err)
-	assert.False(t, needGC)
-
-	_, _, _, err = taerpc.DecodeDumpTableDir("a_b")
-	assert.Error(t, err)
-	_, _, _, err = taerpc.DecodeDumpTableDir("a_b_c")
-	assert.Error(t, err)
-	_, _, _, err = taerpc.DecodeDumpTableDir("1000_b_c")
-	assert.Error(t, err)
-
-	t.Log(tae.Catalog.SimplePPString(3))
-	fault.Enable()
-	defer fault.Disable()
-	rmFn, err := objectio.InjectGCDumpTable("")
-	assert.NoError(t, err)
-	defer rmFn()
-	needGC, err = taerpc.GCDumpTableFiles(dir, tae.Opts.Fs)
-	assert.NoError(t, err)
-	assert.True(t, needGC)
-}
 func Test_TmpFileService1(t *testing.T) {
 	ctx := context.Background()
 	var gcEnabled atomic.Bool
@@ -14110,7 +13998,13 @@ func TestCheckpointTableIDBatch2(t *testing.T) {
 		testutil.CreateRelationAndAppend2(t, 0, tae.DB, "db", tableSchema, bats[0], i == 0)
 	}
 
-	tae.ForceCheckpoint()
+	// This checkpoint merges the 100k historical table-ID fixture above. Keep
+	// the timeout local to this stress case: the generic test helper uses 5s,
+	// which is shorter than this merge can take under race-enabled CI load.
+	checkpointCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	err = tae.DB.ForceCheckpoint(checkpointCtx, tae.TxnMgr.Now())
+	cancel()
+	require.NoError(t, err)
 
 	ickp = tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
 

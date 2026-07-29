@@ -59,16 +59,39 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 		return nil
 	}
 	return &plan.ObjectRef{
-		Server:     ref.Server,
-		Db:         ref.Db,
-		Schema:     ref.Schema,
-		Obj:        ref.Obj,
-		ServerName: ref.ServerName,
-		DbName:     ref.DbName,
-		SchemaName: ref.SchemaName,
-		ObjName:    ref.ObjName,
-		PubInfo:    ref.PubInfo,
+		Server:           ref.Server,
+		Db:               ref.Db,
+		Schema:           ref.Schema,
+		Obj:              ref.Obj,
+		ServerName:       ref.ServerName,
+		DbName:           ref.DbName,
+		SchemaName:       ref.SchemaName,
+		ObjName:          ref.ObjName,
+		SubscriptionName: ref.SubscriptionName,
+		PubInfo:          ref.PubInfo,
+		NotLockMeta:      ref.NotLockMeta,
+		Snapshot:         DeepCopySnapshot(ref.Snapshot),
 	}
+}
+
+func DeepCopySnapshot(snapshot *plan.Snapshot) *plan.Snapshot {
+	if snapshot == nil {
+		return nil
+	}
+	cloned := *snapshot
+	if snapshot.TS != nil {
+		ts := *snapshot.TS
+		cloned.TS = &ts
+	}
+	if snapshot.Tenant != nil {
+		tenant := *snapshot.Tenant
+		cloned.Tenant = &tenant
+	}
+	if snapshot.ExtraInfo != nil {
+		extraInfo := *snapshot.ExtraInfo
+		cloned.ExtraInfo = &extraInfo
+	}
+	return &cloned
 }
 
 func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
@@ -407,6 +430,7 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		IndexAlgoTableType: indexDef.IndexAlgoTableType,
 		IndexAlgoParams:    indexDef.IndexAlgoParams,
 		Parts:              slices.Clone(indexDef.Parts),
+		IncludedColumns:    slices.Clone(indexDef.IncludedColumns),
 	}
 	newindexDef.Option = DeepCopyIndexOption(indexDef.Option)
 	return newindexDef

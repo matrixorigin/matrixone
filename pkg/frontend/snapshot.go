@@ -78,9 +78,9 @@ const (
 
 	getSubsSqlFmt = "select sub_account_id, sub_account_name, sub_name, sub_time, pub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
 
-	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and refer_table_name = '%s'"
+	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = %s and refer_table_name = %s"
 
-	checkDatabaseIsMasterFormat = "select db_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and db_name != '%s'"
+	checkDatabaseIsMasterFormat = "select db_name from mo_catalog.mo_foreign_keys where refer_db_name = %s and db_name != %s"
 )
 
 var (
@@ -1488,6 +1488,10 @@ func sortedViewInfos(
 
 		g.addVertex(key)
 		for _, depView := range compCtx.GetViews() {
+			depView, err = normalizeViewDependencyKey(depView)
+			if err != nil {
+				return nil, err
+			}
 			g.addEdge(depView, key)
 		}
 	}
@@ -2132,7 +2136,8 @@ func getCreateTableSql(
 
 	newCtx := ctx
 
-	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
+	sql := fmt.Sprintf("show create table %s.%s",
+		quoteIdentifierForSQL(dbName), quoteIdentifierForSQL(tblName))
 	if snapshot != nil {
 		if snapshot.TS != nil {
 			sql += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
@@ -2249,9 +2254,9 @@ func getFkDeps(
 	}
 
 	if len(dbName) > 0 {
-		sql += fmt.Sprintf(" where db_name = '%s'", dbName)
+		sql += fmt.Sprintf(" where db_name = %s", quoteSQLStringLiteral(dbName))
 		if len(tblName) > 0 {
-			sql += fmt.Sprintf(" and table_name = '%s'", tblName)
+			sql += fmt.Sprintf(" and table_name = %s", quoteSQLStringLiteral(tblName))
 		}
 	}
 
@@ -2863,7 +2868,7 @@ func checkTableIsMaster(
 	snapshotName string,
 	dbName string,
 	tblName string) (bool, error) {
-	sql := fmt.Sprintf(checkTableIsMasterFormat, dbName, tblName)
+	sql := fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(tblName))
 	getLogger(sid).Debug(fmt.Sprintf("[%s] check table is master or not sql: %s", snapshotName, sql))
 
 	bh.ClearExecResultSet()
@@ -2888,7 +2893,7 @@ func checkDatabaseIsMaster(
 	bh BackgroundExec,
 	snapshotName string,
 	dbName string) (bool, error) {
-	sql := fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)
+	sql := fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))
 	getLogger(sid).Debug(fmt.Sprintf("[%s] check database is master or not sql: %s", snapshotName, sql))
 
 	bh.ClearExecResultSet()

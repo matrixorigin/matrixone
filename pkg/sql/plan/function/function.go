@@ -101,6 +101,19 @@ func GetFunctionIsWinValueFunByName(name string) bool {
 	return f.isWindowValue()
 }
 
+func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	for _, ov := range allSupportedFunctions[fid].Overloads {
+		if ov.CannotFold() || ov.IsRealTimeRelated() {
+			return true
+		}
+	}
+	return false
+}
+
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {
 	fid, _ := DecodeOverloadID(overloadID)
 	return allSupportedFunctions[fid].isWindowOrder()
@@ -277,6 +290,19 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
+	// Value window functions can synthesize NULLs even when every input is
+	// NOT NULL. LAG/LEAD do so outside the partition unless an explicit,
+	// non-NULL default is present. FIRST_VALUE/LAST_VALUE can observe an empty
+	// frame, and NTH_VALUE can also miss the requested row. The frame is not
+	// available here, so keep those contracts conservative.
+	switch fid {
+	case LAG, LEAD:
+		if len(args) != 3 {
+			return false
+		}
+	case FIRST_VALUE, LAST_VALUE, NTH_VALUE:
+		return false
+	}
 	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
 	}
@@ -287,6 +313,18 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		}
 	}
 	return true
+}
+
+// ProducesNoNull reports whether a function's contract guarantees a non-NULL
+// result independently of its argument values. This is stronger than
+// DeduceNotNullable: STRICT functions such as json_extract can still return
+// SQL NULL for non-NULL inputs when a requested value is absent.
+func ProducesNoNull(overloadID int64) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	return fid >= 0 &&
+		int(fid) < len(allSupportedFunctions) &&
+		int(fid) == allSupportedFunctions[fid].functionId &&
+		allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL)
 }
 
 type FuncGetResult struct {
@@ -328,6 +366,15 @@ func DecodeOverloadID(overloadID int64) (fid int32, oIndex int32) {
 	oIndex = int32(overloadID)
 	fid = int32(base >> 32)
 	return fid, oIndex
+}
+
+func IsUserLevelLockFunctionID(fid int32) bool {
+	switch fid {
+	case GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK, RELEASE_ALL_LOCKS:
+		return true
+	default:
+		return false
+	}
 }
 
 func getFunctionIdByName(ctx context.Context, name string) (int32, error) {

@@ -55,7 +55,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 
 		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {snapshot = '%s'} where datname = '%s' and account_id = 0", snapshotName, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
-		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, uint32(sysAccountID))] =
 			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
@@ -66,7 +66,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"base_t", "create table base_t (id int)"}})
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`hive_ext` {MO_TS = %d}", dbName, snapshotTs)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"hive_ext", "create external table hive_ext (id int)"}})
-		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, dbName, "base_t")] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral("base_t"))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 
 		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil)
 		convey.So(err, convey.ShouldBeNil)
@@ -111,7 +111,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 
 		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = %d", snapshotTs, dbName, fromAccount)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
-		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, toAccount)+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, fromAccount)] =
 			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
@@ -143,7 +143,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 
 		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
-		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", ts, uint32(sysAccountID))] =
 			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
@@ -154,7 +154,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"base_t", "create table base_t (id int)"}})
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`hive_ext` {MO_TS = %d}", dbName, ts)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"hive_ext", "create external table hive_ext (id int)"}})
-		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, dbName, "base_t")] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral("base_t"))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[getPubInfoWithPitr(ts, uint32(sysAccountID), dbName)] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 
 		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, "", map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID))
@@ -1738,4 +1738,82 @@ func newDdlBatchForTest(mp *mpool.MPool, records [][]interface{}) *batch.Batch {
 	bat.SetRowCount(len(records))
 
 	return bat
+}
+
+// TestDataBranchAuditFkDepsEscapesQuotedNames verifies every FK dependency
+// lookup used by CLONE, snapshot restore, and PITR restore. Legal quoted
+// identifiers must survive the SQL literal boundary and still produce the
+// dependency order consumed by the restore path (issue #26144).
+func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+	const (
+		dbName  = `db'name\part`
+		tblName = `child'name\part`
+		refDB   = `parent'db`
+		refTbl  = `parent'table`
+		baseSQL = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		filters = ` where db_name = 'db''name\\part' and table_name = 'child''name\\part'`
+	)
+	wantOrder := []string{genKey(refDB, refTbl), genKey(dbName, tblName)}
+	result := newMrsForPitrRecord([][]interface{}{{dbName, tblName, refDB, refTbl}})
+
+	tests := []struct {
+		name string
+		sql  string
+		run  func(*backgroundExecTest) ([]string, error)
+	}{{
+		name: "clone and snapshot",
+		sql:  baseSQL + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSort(ctx, bh, nil, dbName, tblName)
+		},
+	}, {
+		name: "pitr restore",
+		sql:  baseSQL + " {MO_TS = 42}" + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSortInPitrRestore(ctx, bh, 42, dbName, tblName)
+		},
+	}, {
+		name: "cross-account snapshot restore",
+		sql:  baseSQL + " {MO_TS = 42}" + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSortWithTS(ctx, bh, dbName, tblName, 42, 7, 8)
+		},
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[tc.sql] = result
+
+			got, err := tc.run(bh)
+			require.NoError(t, err)
+			require.Equal(t, wantOrder, got)
+			require.Equal(t, []string{tc.sql}, bh.executedSQLs)
+		})
+	}
 }

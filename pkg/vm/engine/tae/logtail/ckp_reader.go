@@ -754,7 +754,14 @@ func consumeCheckpointWithTableID(
 	if len(dataRanges) != 0 {
 		iter := ckputil.NewObjectIter(ctx, dataRanges, mp, fs)
 		defer iter.Close()
-		for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
+		for {
+			ok, err := iter.Next()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				break
+			}
 			entry := iter.Entry()
 			if err := forEachObject(ctx, fs, entry, false); err != nil {
 				return err
@@ -764,7 +771,14 @@ func consumeCheckpointWithTableID(
 	if tombstoneRanges != nil {
 		iter := ckputil.NewObjectIter(ctx, tombstoneRanges, mp, fs)
 		defer iter.Close()
-		for ok, err := iter.Next(); ok && err == nil; ok, err = iter.Next() {
+		for {
+			ok, err := iter.Next()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				break
+			}
 			entry := iter.Entry()
 			if err := forEachObject(ctx, fs, entry, true); err != nil {
 				return err

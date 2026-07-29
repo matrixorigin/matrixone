@@ -1296,33 +1296,7 @@ func (tbl *txnTable) findDeletes(
 	tbl.entry.WaitTombstoneObjectCommitted(to)
 	it := tbl.entry.MakeTombstoneObjectIt()
 	defer it.Release()
-	var earlybreak bool
-	for ok := it.Last(); ok; ok = it.Prev() {
-		if earlybreak {
-			break
-		}
-		obj := it.Item()
-
-		if obj.CreatedAt.GT(&to) {
-			continue
-		}
-
-		if obj.IsAppendable() {
-			if !obj.HasDropIntent() && obj.CreatedAt.LT(&from) {
-				earlybreak = true
-			}
-		} else if obj.CreatedAt.LT(&from) {
-			continue
-		}
-
-		// only keep the category-a + category-c for candidates.
-		if obj.GetPrevVersion() == nil && obj.GetNextVersion() != nil {
-			continue
-		}
-
-		if !obj.VisibleByTS(to) {
-			continue
-		}
+	return foreachIncrementalObject(&it, from, to, func(obj *catalog.ObjectEntry) error {
 		objData := obj.GetObjectData()
 		if objData == nil {
 			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
@@ -1332,24 +1306,20 @@ func (tbl *txnTable) findDeletes(
 		if obj.Rows() != 0 {
 			var skip bool
 			if skip, err = quickSkipThisObject(ctx, keysZM, obj); err != nil {
-				return
+				return err
 			} else if skip {
-				continue
+				return nil
 			}
 		}
 
-		if err = objData.Contains(
+		return objData.Contains(
 			ctx,
 			tbl.store.txn,
 			rowIDs,
 			keysZM,
 			common.WorkspaceAllocator,
-		); err != nil {
-			// logutil.Infof("%s, %s, %v", obj.String(), rowmask, err)
-			return
-		}
-	}
-	return
+		)
+	})
 }
 
 // DoPrecommitDedupByPK 1. it do deduplication by traversing all the Objects/blocks, and
@@ -1610,7 +1580,7 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 				}
 				tbl.dumpCore(buf.String())
 			}
-			break
+			return err
 		}
 	}
 	// In flush and merge, it transfers deletes when prepare commit.

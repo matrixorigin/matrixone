@@ -479,7 +479,17 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 
 // to determine if join need to go shuffle
 func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
+	determineShuffleForJoinWithColRefMode(node, builder, false)
+}
+
+// determineShuffleForJoinWithColRefMode plans join shuffle either before or
+// after column remapping. Normal optimizer plans use binding tags to identify
+// the two join sides. Late DML/index-maintenance plans are appended after
+// createQuery has remapped column references to local RelPos 0/1, so they must
+// use the positional form instead.
+func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilder, afterRemap bool) {
 	// do not shuffle by default
+	node.Stats.HashmapStats.Shuffle = false
 	node.Stats.HashmapStats.ShuffleColIdx = -1
 	if node.NodeType != plan.Node_JOIN {
 		return
@@ -513,7 +523,7 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 			return
 		}
 
-	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_OUTER:
+	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_OUTER, plan.Node_MARK:
 
 	default:
 		return
@@ -525,7 +535,13 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	}
 
 	idx := 0
-	if !builder.IsEquiJoin(node) {
+	isEquiJoin := false
+	if afterRemap {
+		isEquiJoin = IsEquiJoin2(node.OnList)
+	} else {
+		isEquiJoin = builder.IsEquiJoin(node)
+	}
+	if !isEquiJoin {
 		return
 	}
 	leftTags := make(map[int32]bool)
@@ -536,14 +552,20 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
 		rightTags[tag] = true
 	}
+	if node.JoinType == plan.Node_MARK && !markJoinSupportsShuffle(node, builder, leftTags, rightTags, afterRemap) {
+		return
+	}
 	// for now ,only support the first join condition
 	for i := range node.OnList {
-		if isEquiCond(node.OnList[i], leftTags, rightTags) {
+		isEqui := isEquiCond(node.OnList[i], leftTags, rightTags)
+		if afterRemap {
+			isEqui = isEquiCond2(node.OnList[i])
+		}
+		if isEqui {
 			idx = i
 			break
 		}
 	}
-
 	if node.IsRightJoin {
 		if node.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
 			return
@@ -593,7 +615,6 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 				node.OnList[idx].Ndv = node.Stats.HashmapStats.HashmapSize
 			}
 		}
-	default:
 	}
 
 	//recheck shuffle plan
@@ -607,7 +628,11 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		}
 		if node.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
 			highestNDV := node.OnList[idx].Ndv
-			if highestNDV < ShuffleThreshHoldOfNDV {
+			// A negative NDV means that statistics are unavailable.  Do not treat
+			// unknown cardinality as low cardinality: for a large build side that
+			// would turn a valid shuffle plan back into a broadcast hash build and
+			// can concentrate the entire hash table on one CN.
+			if highestNDV >= 0 && highestNDV < ShuffleThreshHoldOfNDV {
 				node.Stats.HashmapStats.Shuffle = false
 			}
 		}
@@ -625,6 +650,272 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 			rightChild.Stats.HashmapStats.Ranges = node.Stats.HashmapStats.Ranges
 		}
 	}
+}
+
+// markJoinSupportsShuffle reports whether bucket-local hash state is enough to
+// preserve MARK's three-valued result. Unlike broadcast MARK joins, shuffle
+// buckets do not share the global build row count or the global build-NULL
+// fact. Requiring every equality operand to be effectively NOT NULL after
+// child materialization removes both global dependencies: exact matches are
+// co-located and every non-match is FALSE.
+func markJoinSupportsShuffle(
+	node *plan.Node,
+	builder *QueryBuilder,
+	leftTags, rightTags map[int32]bool,
+	afterRemap bool,
+) bool {
+	if node == nil || node.JoinType != plan.Node_MARK ||
+		len(node.Children) != 2 || len(node.OnList) == 0 {
+		return false
+	}
+	var left, right *plan.Node
+	if afterRemap {
+		if builder == nil || builder.qry == nil || len(node.Children) != 2 ||
+			node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) ||
+			node.Children[1] < 0 || int(node.Children[1]) >= len(builder.qry.Nodes) {
+			return false
+		}
+		left = builder.qry.Nodes[node.Children[0]]
+		right = builder.qry.Nodes[node.Children[1]]
+	}
+	for _, condition := range node.OnList {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 {
+			return false
+		}
+		isEqui := isEquiCond(condition, leftTags, rightTags)
+		if afterRemap {
+			isEqui = isEquiCond2(condition)
+		}
+		if !isEqui {
+			return false
+		}
+		if afterRemap {
+			if !IsJoinExprProvenNotNullable(fn.Args[0], left, right) ||
+				!IsJoinExprProvenNotNullable(fn.Args[1], left, right) {
+				return false
+			}
+		} else {
+			for _, arg := range fn.Args {
+				leftRef := exprRefsAnyTag(arg, leftTags)
+				rightRef := exprRefsAnyTag(arg, rightTags)
+				if leftRef == rightRef {
+					return false
+				}
+				childID := node.Children[1]
+				if leftRef {
+					childID = node.Children[0]
+				}
+				if !builder.exprEffectivelyNotNullableBeforeRemap(arg, childID) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func (builder *QueryBuilder) exprEffectivelyNotNullableBeforeRemap(expr *plan.Expr, nodeID int32) bool {
+	return exprProvenNotNullableWithColResolver(expr, func(colExpr *plan.Expr) bool {
+		if colExpr == nil || !colExpr.Typ.NotNullable {
+			return false
+		}
+		return builder.colRefEffectivelyNotNullableBeforeRemap(colExpr.GetCol(), nodeID)
+	})
+}
+
+func (builder *QueryBuilder) colRefEffectivelyNotNullableBeforeRemap(
+	col *plan.ColRef,
+	nodeID int32,
+) bool {
+	if builder == nil || builder.qry == nil || col == nil ||
+		nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+
+	switch node.NodeType {
+	case plan.Node_SINK_SCAN:
+		if len(node.BindingTags) > 0 && node.BindingTags[0] == col.RelPos {
+			return builder.sinkScanOutputEffectivelyNotNullableBeforeRemap(
+				node,
+				int(col.ColPos),
+			)
+		}
+	case plan.Node_RECURSIVE_SCAN, plan.Node_RECURSIVE_CTE:
+		if len(node.BindingTags) > 0 && node.BindingTags[0] == col.RelPos {
+			if col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+				return false
+			}
+			return node.ProjectList[col.ColPos].Typ.NotNullable
+		}
+	}
+
+	if expr, childID, materialized := materializedOutputExprBeforeRemap(node, col); materialized {
+		if expr == nil || childID < 0 {
+			return false
+		}
+		return builder.exprEffectivelyNotNullableBeforeRemap(
+			expr,
+			childID,
+		)
+	}
+
+	// WINDOW and its PARTITION helper reuse the window binding tag while
+	// stacking operators, and FILL passes the time-window binding through.
+	// None of those tags proves the referenced value non-NULL: trace the
+	// materialized slot into its producer instead of accepting this generic
+	// bind-time fast path.
+	if node.NodeType != plan.Node_WINDOW &&
+		node.NodeType != plan.Node_PARTITION &&
+		node.NodeType != plan.Node_FILL {
+		for _, bindingTag := range node.BindingTags {
+			if bindingTag == col.RelPos {
+				return true
+			}
+		}
+	}
+
+	for childIdx, childID := range node.Children {
+		if !builder.nodeContainsBindingTag(childID, col.RelPos) {
+			continue
+		}
+		if nodeNullExtendsChild(node, childIdx) {
+			return false
+		}
+		return builder.colRefEffectivelyNotNullableBeforeRemap(col, childID)
+	}
+
+	return false
+}
+
+func (builder *QueryBuilder) sinkScanOutputEffectivelyNotNullableBeforeRemap(
+	node *plan.Node,
+	colPos int,
+) bool {
+	if builder == nil || builder.qry == nil || node == nil ||
+		node.NodeType != plan.Node_SINK_SCAN || colPos < 0 ||
+		len(node.SourceStep) == 0 {
+		return false
+	}
+	for _, sourceStep := range node.SourceStep {
+		if sourceStep < 0 || int(sourceStep) >= len(builder.qry.Steps) ||
+			!builder.outputSlotEffectivelyNotNullableBeforeRemap(
+				builder.qry.Steps[sourceStep],
+				colPos,
+			) {
+			return false
+		}
+	}
+	return true
+}
+
+// materializedOutputExprBeforeRemap resolves output slots whose runtime value
+// is computed from a child expression. Bind-time column types are insufficient
+// at these boundaries because an outer join below the materializer can make a
+// NOT NULL base column nullable.
+//
+// The bool distinguishes "this node owns the binding but the slot is invalid"
+// from "this node does not own the binding". The former must fail closed rather
+// than fall through to the generic binding-tag check.
+func materializedOutputExprBeforeRemap(
+	node *plan.Node,
+	col *plan.ColRef,
+) (expr *plan.Expr, childID int32, materialized bool) {
+	if node == nil || col == nil || len(node.Children) != 1 {
+		return nil, -1, false
+	}
+
+	childID = node.Children[0]
+	switch node.NodeType {
+	case plan.Node_PROJECT, plan.Node_MATERIAL:
+		if len(node.BindingTags) == 0 || node.BindingTags[0] != col.RelPos {
+			return nil, -1, false
+		}
+		if col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+			return nil, -1, true
+		}
+		return node.ProjectList[col.ColPos], childID, true
+
+	case plan.Node_AGG, plan.Node_SAMPLE:
+		if len(node.BindingTags) < 2 {
+			return nil, -1, false
+		}
+		if node.BindingTags[0] == col.RelPos {
+			if col.ColPos < 0 || int(col.ColPos) >= len(node.GroupBy) {
+				return nil, -1, true
+			}
+			return node.GroupBy[col.ColPos], childID, true
+		}
+		if node.BindingTags[1] == col.RelPos {
+			if col.ColPos < 0 || int(col.ColPos) >= len(node.AggList) {
+				return nil, -1, true
+			}
+			return node.AggList[col.ColPos], childID, true
+		}
+		return nil, -1, false
+
+	case plan.Node_TIME_WINDOW:
+		if len(node.BindingTags) < 2 {
+			return nil, -1, false
+		}
+		if node.BindingTags[0] == col.RelPos {
+			if col.ColPos < 0 || int(col.ColPos) >= len(node.AggList) {
+				return nil, -1, true
+			}
+			return node.AggList[col.ColPos], childID, true
+		}
+		if node.BindingTags[1] == col.RelPos {
+			for _, partitionExpr := range node.TimeWindowPartitionBy {
+				partitionCol := partitionExpr.GetCol()
+				if partitionCol != nil &&
+					partitionCol.RelPos == col.RelPos &&
+					partitionCol.ColPos == col.ColPos {
+					return partitionExpr, childID, true
+				}
+			}
+			return nil, -1, true
+		}
+		return nil, -1, false
+
+	case plan.Node_WINDOW:
+		if len(node.BindingTags) == 0 || node.BindingTags[0] != col.RelPos ||
+			col.ColPos != node.GetWindowIdx() {
+			return nil, -1, false
+		}
+		if len(node.WinSpecList) != 1 {
+			return nil, -1, true
+		}
+		return node.WinSpecList[0], childID, true
+	}
+
+	return nil, -1, false
+}
+
+func (builder *QueryBuilder) nodeContainsBindingTag(nodeID, tag int32) bool {
+	if builder == nil || builder.qry == nil ||
+		nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	for _, bindingTag := range node.BindingTags {
+		if bindingTag == tag {
+			return true
+		}
+	}
+	for _, childID := range node.Children {
+		if builder.nodeContainsBindingTag(childID, tag) {
+			return true
+		}
+	}
+	return false
 }
 
 func dedupJoinUsesUnsupportedFloatShuffle(node *plan.Node) bool {
@@ -770,13 +1061,21 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 }
 
 func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
+	determineShuffleMethodWithColRefMode(nodeID, builder, false)
+}
+
+func determineShuffleMethodAfterRemap(nodeID int32, builder *QueryBuilder) {
+	determineShuffleMethodWithColRefMode(nodeID, builder, true)
+}
+
+func determineShuffleMethodWithColRefMode(nodeID int32, builder *QueryBuilder, afterRemap bool) {
 	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 1 {
 		return
 	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			determineShuffleMethod(child, builder)
+			determineShuffleMethodWithColRefMode(child, builder, afterRemap)
 		}
 	}
 	switch node.NodeType {
@@ -785,7 +1084,7 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	case plan.Node_TABLE_SCAN:
 		determineShuffleForScan(node, builder)
 	case plan.Node_JOIN:
-		determineShuffleForJoin(node, builder)
+		determineShuffleForJoinWithColRefMode(node, builder, afterRemap)
 	default:
 	}
 }

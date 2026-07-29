@@ -16,14 +16,15 @@ package process
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"slices"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
-	"reflect"
-	"time"
 )
 
 var (
@@ -178,6 +179,23 @@ func NormalizePipelineCleanupError(pipelineFailed bool, err error) error {
 	return nil
 }
 
+// ResolvePipelineSpoolAbortError preserves an error already recorded on a
+// receiver edge when normal End delivery fails and the spool must be aborted.
+// The synthetic delivery error is only used when none of the edges has a more
+// specific terminal cause.
+func ResolvePipelineSpoolAbortError(regs ...*WaitRegister) error {
+	for _, reg := range regs {
+		if reg == nil {
+			continue
+		}
+		if err := reg.Err(); err != nil &&
+			!errors.Is(err, ErrPipelineEndSignalDeliveryFailed) {
+			return err
+		}
+	}
+	return ErrPipelineEndSignalDeliveryFailed
+}
+
 // BuildCleanupSignal returns the appropriate terminal signal for pipeline cleanup.
 // EventError is used when pipelineFailed=true or err!=nil; EventEnd otherwise.
 func BuildCleanupSignal(pipelineFailed bool, err error) PipelineSignal {
@@ -260,6 +278,47 @@ func WaitRegisterChannelState(reg *WaitRegister) (int, int) {
 	return len(reg.Ch2), cap(reg.Ch2)
 }
 
+// WaitPipelineSignalCapacity blocks until the receiver channel has room for a
+// new signal. It is used by senders before pulling more input from upstream so
+// downstream backpressure can slow batch production before additional spool
+// memory is allocated.
+func WaitPipelineSignalCapacity(ctx context.Context, reg *WaitRegister) bool {
+	if reg == nil || reg.Ch2 == nil {
+		return false
+	}
+	if cap(reg.Ch2) == 0 {
+		return true
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	select {
+	case <-reg.Done():
+		return false
+	default:
+	}
+	if len(reg.Ch2) < cap(reg.Ch2) {
+		return true
+	}
+	if ctx == nil {
+		ctx = context.TODO()
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if len(reg.Ch2) < cap(reg.Ch2) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-reg.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
 // Action will get the input batch from one place according to which type this signal is.
 //
 // For terminal events (EventEnd/EventError/EventAbort), nil batch is returned.
@@ -281,12 +340,15 @@ func (signal PipelineSignal) Action() (data *batch.Batch, info error) {
 type PipelineSignalReceiver struct {
 	usrCtx context.Context
 	srcReg []*WaitRegister
+	doneCh []<-chan struct{}
 
 	alive int
 
-	// receive data channel, first reg is the monitor for runningCtx.
+	// reflect-select cases for receivers with more than eight inputs. The first
+	// case monitors usrCtx; each input then contributes a Ch2 case and a Done
+	// case.
 	regs []reflect.SelectCase
-	// how much nil batch should each reg wait. its length is 1 less than regs.
+	// how many terminal signals each srcReg still expects.
 	nbs []int
 
 	// currentSignal is the current signal this receiver was using.
@@ -303,6 +365,7 @@ type PipelineSignalReceiverState struct {
 func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister) *PipelineSignalReceiver {
 	nbs := make([]int, len(regs))
 	srcRegs := make([]*WaitRegister, len(regs))
+	doneCh := make([]<-chan struct{}, len(regs))
 
 	for i, reg := range regs {
 		// 0 is default number, it takes a same effect as 1.
@@ -312,22 +375,25 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 			nbs[i] = reg.NilBatchCnt
 		}
 		srcRegs[i] = reg
+		doneCh[i] = reg.Done()
 	}
 
 	// if regs were not much, we will use an optimized method to receive msg.
 	// and there is no need to init the `reflect.SelectCase`.
 	var scs []reflect.SelectCase = nil
 	if len(regs) > 8 {
-		scs = make([]reflect.SelectCase, 0, len(regs)+1)
+		scs = make([]reflect.SelectCase, 0, len(regs)*2+1)
 		scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(runningCtx.Done())})
 		for i := range regs {
 			scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(regs[i].Ch2)})
+			scs = append(scs, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(doneCh[i])})
 		}
 	}
 
 	return &PipelineSignalReceiver{
 		usrCtx:        runningCtx,
 		srcReg:        srcRegs,
+		doneCh:        doneCh,
 		alive:         len(regs),
 		regs:          scs,
 		nbs:           nbs,
@@ -428,10 +494,12 @@ func (receiver *PipelineSignalReceiver) removeIdxReceiver(chosen int) {
 	if receiver.nbs[idx] == 0 {
 		// remove the unused channel.
 		receiver.srcReg = append(receiver.srcReg[:idx], receiver.srcReg[idx+1:]...)
+		receiver.doneCh = append(receiver.doneCh[:idx], receiver.doneCh[idx+1:]...)
 		receiver.nbs = append(receiver.nbs[:idx], receiver.nbs[idx+1:]...)
 
 		if len(receiver.regs) > 0 {
-			receiver.regs = append(receiver.regs[:chosen], receiver.regs[chosen+1:]...)
+			caseIdx := idx*2 + 1
+			receiver.regs = append(receiver.regs[:caseIdx], receiver.regs[caseIdx+2:]...)
 		}
 		receiver.alive--
 	}
@@ -481,13 +549,52 @@ func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
 
 	// common case.
 	chosen, value, ok := reflect.Select(receiver.regs)
-	if !ok {
-		if chosen == 0 {
-			return 0, PipelineSignal{}
-		}
-		panic("unexpected sender close during GetNextBatch")
+	if chosen == 0 {
+		return 0, PipelineSignal{}
 	}
-	return chosen, value.Interface().(PipelineSignal)
+
+	idx := (chosen - 1) / 2
+	// Data cases occupy odd reflect indexes; Done cases occupy even indexes.
+	if chosen%2 == 1 {
+		if !ok {
+			panic("unexpected sender close during GetNextBatch")
+		}
+		return idx + 1, value.Interface().(PipelineSignal)
+	}
+	return receiver.receiveSignalOrTerminal(idx)
+}
+
+// receiveSignalOrTerminal handles an edge whose Done channel is ready. Ch2
+// remains the ordered source of truth: buffered data and successfully enqueued
+// terminal signals must be consumed before a terminal that failed to enqueue is
+// synthesized from the edge's durable terminal state.
+func (receiver *PipelineSignalReceiver) receiveSignalOrTerminal(idx int) (int, PipelineSignal) {
+	reg := receiver.srcReg[idx]
+	if signal, ok := tryReceivePipelineSignal(reg.Ch2); ok {
+		return idx + 1, signal
+	}
+
+	// Synchronize with an in-flight terminal sender. The sender closes Done
+	// before attempting a fatal enqueue, so it may enqueue after our first
+	// non-blocking receive. Recheck Ch2 after taking the snapshot to avoid
+	// synthesizing a duplicate terminal.
+	terminal := reg.terminalSignalSnapshot()
+	if signal, ok := tryReceivePipelineSignal(reg.Ch2); ok {
+		return idx + 1, signal
+	}
+	return idx + 1, terminal
+}
+
+func tryReceivePipelineSignal(ch <-chan PipelineSignal) (PipelineSignal, bool) {
+	select {
+	case signal, ok := <-ch:
+		if !ok {
+			panic("unexpected sender close during GetNextBatch")
+		}
+		return signal, true
+	default:
+		return PipelineSignal{}, false
+	}
 }
 
 func (receiver *PipelineSignalReceiver) WaitingEnd() {
@@ -529,6 +636,8 @@ func (receiver *PipelineSignalReceiver) listenToSingleEntry() (chosen int, v Pip
 		return 0, v
 	case v = <-receiver.srcReg[0].Ch2:
 		return 1, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
 	}
 }
 
@@ -540,6 +649,10 @@ func (receiver *PipelineSignalReceiver) listenToTwoEntry() (chosen int, v Pipeli
 		return 1, v
 	case v = <-receiver.srcReg[1].Ch2:
 		return 2, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
 	}
 }
 
@@ -553,6 +666,12 @@ func (receiver *PipelineSignalReceiver) listenToThreeEntry() (chosen int, v Pipe
 		return 2, v
 	case v = <-receiver.srcReg[2].Ch2:
 		return 3, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
 	}
 }
 
@@ -568,6 +687,14 @@ func (receiver *PipelineSignalReceiver) listenToFourEntry() (chosen int, v Pipel
 		return 3, v
 	case v = <-receiver.srcReg[3].Ch2:
 		return 4, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
+	case <-receiver.doneCh[3]:
+		return receiver.receiveSignalOrTerminal(3)
 	}
 }
 
@@ -585,6 +712,16 @@ func (receiver *PipelineSignalReceiver) listenToFiveEntry() (chosen int, v Pipel
 		return 4, v
 	case v = <-receiver.srcReg[4].Ch2:
 		return 5, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
+	case <-receiver.doneCh[3]:
+		return receiver.receiveSignalOrTerminal(3)
+	case <-receiver.doneCh[4]:
+		return receiver.receiveSignalOrTerminal(4)
 	}
 }
 
@@ -604,6 +741,18 @@ func (receiver *PipelineSignalReceiver) listenToSixEntry() (chosen int, v Pipeli
 		return 5, v
 	case v = <-receiver.srcReg[5].Ch2:
 		return 6, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
+	case <-receiver.doneCh[3]:
+		return receiver.receiveSignalOrTerminal(3)
+	case <-receiver.doneCh[4]:
+		return receiver.receiveSignalOrTerminal(4)
+	case <-receiver.doneCh[5]:
+		return receiver.receiveSignalOrTerminal(5)
 	}
 }
 
@@ -625,6 +774,20 @@ func (receiver *PipelineSignalReceiver) listenToSevenEntry() (chosen int, v Pipe
 		return 6, v
 	case v = <-receiver.srcReg[6].Ch2:
 		return 7, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
+	case <-receiver.doneCh[3]:
+		return receiver.receiveSignalOrTerminal(3)
+	case <-receiver.doneCh[4]:
+		return receiver.receiveSignalOrTerminal(4)
+	case <-receiver.doneCh[5]:
+		return receiver.receiveSignalOrTerminal(5)
+	case <-receiver.doneCh[6]:
+		return receiver.receiveSignalOrTerminal(6)
 	}
 }
 
@@ -648,5 +811,21 @@ func (receiver *PipelineSignalReceiver) listenToEightEntry() (chosen int, v Pipe
 		return 7, v
 	case v = <-receiver.srcReg[7].Ch2:
 		return 8, v
+	case <-receiver.doneCh[0]:
+		return receiver.receiveSignalOrTerminal(0)
+	case <-receiver.doneCh[1]:
+		return receiver.receiveSignalOrTerminal(1)
+	case <-receiver.doneCh[2]:
+		return receiver.receiveSignalOrTerminal(2)
+	case <-receiver.doneCh[3]:
+		return receiver.receiveSignalOrTerminal(3)
+	case <-receiver.doneCh[4]:
+		return receiver.receiveSignalOrTerminal(4)
+	case <-receiver.doneCh[5]:
+		return receiver.receiveSignalOrTerminal(5)
+	case <-receiver.doneCh[6]:
+		return receiver.receiveSignalOrTerminal(6)
+	case <-receiver.doneCh[7]:
+		return receiver.receiveSignalOrTerminal(7)
 	}
 }
