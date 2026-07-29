@@ -459,6 +459,19 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	require.True(t, dup2.DrainAllBuckets)
 }
 
+func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
+	op := dedupjoin.NewArgument()
+
+	dupCtx := newOperatorDupContext()
+	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*dedupjoin.DedupJoin)
+	dup2 := dupOperatorWithContext(op, 1, 2, dupCtx).(*dedupjoin.DedupJoin)
+
+	require.Nil(t, op.Mailbox, "duplicating must not mutate the reusable template")
+	require.Same(t, dup1.Mailbox, dup2.Mailbox)
+	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*dedupjoin.DedupJoin)
+	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
+}
+
 func TestDupOperatorAssignsSharedShuffleConsumerIndex(t *testing.T) {
 	hashBuild := hashbuild.NewArgument()
 	hashBuild.IsShuffle = true
