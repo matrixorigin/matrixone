@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -1081,7 +1083,169 @@ func (s *Scope) doAlterTable(c *Compile) error {
 			}
 		}
 	}
-	return err
+	if qry.GetCopyTableDef() != nil {
+		return refreshViewMetadataAfterAlter(c)
+	}
+	return nil
+}
+
+type viewMetadataRefresh struct {
+	database string
+	name     string
+	viewData plan2.ViewData
+}
+
+type viewMetadataRefreshKey struct{}
+
+func isViewMetadataRefresh(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	refresh, _ := ctx.Value(viewMetadataRefreshKey{}).(bool)
+	return refresh
+}
+
+func refreshViewMetadataAfterAlter(c *Compile) error {
+	sql := fmt.Sprintf(
+		"select reldatabase, relname, viewdef from %s.mo_tables "+
+			"where account_id = current_account_id() and relkind = '%s' "+
+			"and reldatabase not in ('%s', '%s') order by reldatabase, relname",
+		catalog.MO_CATALOG,
+		catalog.SystemViewRel,
+		catalog.MO_CATALOG,
+		"information_schema",
+	)
+	result, err := c.runSqlWithResultAndOptions(
+		sql,
+		NoAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		result.Close()
+		return err
+	}
+
+	var views []viewMetadataRefresh
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		databases := executor.GetStringRows(cols[0])
+		names := executor.GetStringRows(cols[1])
+		definitions := executor.GetStringRows(cols[2])
+		for i := 0; i < rows; i++ {
+			var viewData plan2.ViewData
+			if err := json.Unmarshal([]byte(definitions[i]), &viewData); err != nil {
+				logutil.Warn("skip refreshing view with invalid definition",
+					zap.String("database", databases[i]),
+					zap.String("view", names[i]),
+					zap.Error(err))
+				continue
+			}
+			views = append(views, viewMetadataRefresh{
+				database: databases[i],
+				name:     names[i],
+				viewData: viewData,
+			})
+		}
+		return true
+	})
+	result.Close()
+
+	for _, view := range views {
+		sql, err := buildRefreshViewSQL(c.proc.Ctx, c.getLower(), view)
+		if err != nil {
+			logutil.Warn("skip refreshing view that cannot be parsed",
+				zap.String("database", view.database),
+				zap.String("view", view.name),
+				zap.Error(err))
+			continue
+		}
+		oldCtx := c.proc.Ctx
+		refreshCtx := oldCtx
+		if refreshCtx == nil {
+			refreshCtx = c.proc.GetTopContext()
+		}
+		if refreshCtx == nil {
+			refreshCtx = context.Background()
+		}
+		c.proc.Ctx = context.WithValue(refreshCtx, viewMetadataRefreshKey{}, true)
+		err = c.runSqlWithOptions(sql, executor.StatementOption{}.WithDisableLog())
+		c.proc.Ctx = oldCtx
+		if err != nil {
+			if !canSkipViewMetadataRefreshError(err) {
+				return err
+			}
+			logutil.Warn("skip refreshing invalid view metadata",
+				zap.String("database", view.database),
+				zap.String("view", view.name),
+				zap.Error(err))
+		}
+	}
+	return nil
+}
+
+func canSkipViewMetadataRefreshError(err error) bool {
+	code, ok := moerr.GetMoErrCode(err)
+	if !ok {
+		return false
+	}
+	if code >= moerr.ErrBadConfig && code <= moerr.ErrUnknownStmtHandler {
+		return true
+	}
+	return code == moerr.ErrBadDB ||
+		code == moerr.ErrNoSuchTable ||
+		code == moerr.ErrNoDB ||
+		code == moerr.ErrBadView
+}
+
+func buildRefreshViewSQL(
+	ctx context.Context,
+	lower int64,
+	view viewMetadataRefresh,
+) (string, error) {
+	sqlMode := ""
+	if view.viewData.SQLMode != nil {
+		sqlMode = *view.viewData.SQLMode
+	}
+	stmts, err := mysql.ParseWithSQLMode(ctx, view.viewData.Stmt, lower, sqlMode)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	if len(stmts) != 1 {
+		return "", moerr.NewParseError(ctx, "invalid view definition")
+	}
+
+	var colNames tree.IdentifierList
+	var source *tree.Select
+	switch stmt := stmts[0].(type) {
+	case *tree.CreateView:
+		colNames = stmt.ColNames
+		source = stmt.AsSource
+	case *tree.AlterView:
+		colNames = stmt.ColNames
+		source = stmt.AsSource
+	default:
+		return "", moerr.NewParseError(ctx, "invalid view definition")
+	}
+
+	fmtCtx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+	fmtCtx.WriteString("alter view ")
+	fmtCtx.WriteString(quoteAlterCopyTableName(view.database, view.name))
+	if len(colNames) > 0 {
+		fmtCtx.WriteString(" (")
+		colNames.Format(fmtCtx)
+		fmtCtx.WriteByte(')')
+	}
+	fmtCtx.WriteString(" as ")
+	source.Format(fmtCtx)
+	return fmtCtx.String(), nil
 }
 
 func (s *Scope) RenameTable(c *Compile) (err error) {

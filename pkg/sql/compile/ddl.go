@@ -427,6 +427,9 @@ func (s *Scope) AlterView(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterView()
 
 	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
 	tblName := qry.GetTableDef().GetName()
 
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
@@ -450,23 +453,60 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
-	// Drop view table.
-	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
-		return err
-	}
-
-	// Create view table.
-	// convert the plan's cols to the execution's cols
-	planCols := qry.GetTableDef().GetCols()
-	exeCols := engine.PlanColsToExeCols(planCols)
-
-	// convert the plan's defs to the execution's defs
-	exeDefs, _, err := engine.PlanDefsToExeDefs(qry.GetTableDef())
+	rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		return err
 	}
+	replaceDef := qry.GetTableDef()
+	if isViewMetadataRefresh(c.proc.Ctx) {
+		currentDef := rel.GetTableDef(c.proc.Ctx)
+		if viewColumnsEqual(currentDef.GetCols(), replaceDef.GetCols()) {
+			return nil
+		}
+		replaceDef = plan2.DeepCopyTableDef(currentDef, true)
+		replaceDef.Cols = qry.GetTableDef().GetCols()
+		replaceDef.Name2ColIndex = nil
+	}
+	databaseID, err := strconv.ParseUint(dbSource.GetDatabaseId(c.proc.Ctx), 10, 64)
+	if err != nil {
+		return err
+	}
+	return rel.AlterTable(
+		context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql),
+		nil,
+		[]*api.AlterTableReq{
+			api.NewReplaceDefReq(
+				databaseID,
+				rel.GetTableID(c.proc.Ctx),
+				replaceDef,
+			),
+		},
+	)
+}
 
-	return dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
+func viewColumnsEqual(current, refreshed []*plan.ColDef) bool {
+	currentVisible := make([]*plan.ColDef, 0, len(current))
+	for _, col := range current {
+		if !col.GetHidden() {
+			currentVisible = append(currentVisible, col)
+		}
+	}
+	if len(currentVisible) != len(refreshed) {
+		return false
+	}
+	for i, oldCol := range currentVisible {
+		newCol := refreshed[i]
+		oldType, newType := oldCol.GetTyp(), newCol.GetTyp()
+		if oldCol.GetName() != newCol.GetName() ||
+			oldType.GetId() != newType.GetId() ||
+			oldType.GetWidth() != newType.GetWidth() ||
+			oldType.GetScale() != newType.GetScale() ||
+			oldType.GetNotNullable() != newType.GetNotNullable() ||
+			oldType.GetEnumvalues() != newType.GetEnumvalues() {
+			return false
+		}
+	}
+	return true
 }
 
 // reindexSpecifiedParams extracts the build options the user wrote on

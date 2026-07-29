@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -99,6 +100,9 @@ type stubRelation struct {
 	tombstones            engine.Tombstoner
 	collectTombstonesErr  error
 	collectTombstonesCall int
+	tableDef              *plan.TableDef
+	alterReqs             []*api.AlterTableReq
+	alterErr              error
 }
 
 func newStubRelation(name string) *stubRelation {
@@ -118,7 +122,19 @@ func (r *stubRelation) TableDefs(ctx context.Context) ([]engine.TableDef, error)
 }
 
 func (r *stubRelation) GetTableDef(ctx context.Context) *plan.TableDef {
+	if r.tableDef != nil {
+		return r.tableDef
+	}
 	return &plan.TableDef{}
+}
+
+func (r *stubRelation) AlterTable(
+	_ context.Context,
+	_ *engine.ConstraintDef,
+	reqs []*api.AlterTableReq,
+) error {
+	r.alterReqs = reqs
+	return r.alterErr
 }
 
 func (r *stubRelation) CollectTombstones(

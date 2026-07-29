@@ -57,6 +57,139 @@ func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: true}))
 }
 
+func TestBuildRefreshViewSQL(t *testing.T) {
+	sqlMode := "ANSI_QUOTES"
+	testCases := []struct {
+		name     string
+		view     viewMetadataRefresh
+		expected string
+	}{
+		{
+			name: "create view with explicit columns",
+			view: viewMetadataRefresh{
+				database: "target-db",
+				name:     "target`view",
+				viewData: plan.ViewData{
+					Stmt:            "create view old_name (A, B) as select code, qty + 1 from source_t",
+					DefaultDatabase: "source-db",
+					SQLMode:         &sqlMode,
+				},
+			},
+			expected: "alter view `target-db`.`target``view` (`a`, `b`) as select `code`, `qty` + 1 from `source_t`",
+		},
+		{
+			name: "stored alter view",
+			view: viewMetadataRefresh{
+				database: "db",
+				name:     "v",
+				viewData: plan.ViewData{
+					Stmt:            "alter view v as select * from source_t",
+					DefaultDatabase: "db",
+				},
+			},
+			expected: "alter view `db`.`v` as select * from `source_t`",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			sql, err := buildRefreshViewSQL(context.Background(), 1, testCase.view)
+			require.NoError(t, err)
+			require.Equal(t, testCase.expected, sql)
+		})
+	}
+
+	_, err := buildRefreshViewSQL(context.Background(), 1, viewMetadataRefresh{
+		database: "db",
+		name:     "v",
+		viewData: plan.ViewData{
+			Stmt: "select 1",
+		},
+	})
+	require.Error(t, err)
+}
+
+func TestViewColumnsEqual(t *testing.T) {
+	col := func(name string, typ plan2.Type) *plan2.ColDef {
+		return &plan2.ColDef{Name: name, Typ: typ}
+	}
+	base := []*plan2.ColDef{
+		col("code", plan2.Type{Id: int32(types.T_varchar), Width: 5}),
+		col("qty", plan2.Type{Id: int32(types.T_int32), NotNullable: true}),
+	}
+
+	require.True(t, viewColumnsEqual(
+		append(base, &plan2.ColDef{Name: catalog.Row_ID, Hidden: true}),
+		base,
+	))
+	require.False(t, viewColumnsEqual(base, []*plan2.ColDef{
+		col("code", plan2.Type{Id: int32(types.T_varchar), Width: 60}),
+		base[1],
+	}))
+	require.False(t, viewColumnsEqual(base, []*plan2.ColDef{
+		base[0],
+		col("qty", plan2.Type{Id: int32(types.T_int64), NotNullable: true}),
+	}))
+	require.False(t, viewColumnsEqual(base, base[:1]))
+}
+
+func TestCanSkipViewMetadataRefreshError(t *testing.T) {
+	ctx := context.Background()
+	require.True(t, canSkipViewMetadataRefreshError(
+		moerr.NewBadFieldError(ctx, "missing_column", "field list"),
+	))
+	require.True(t, canSkipViewMetadataRefreshError(
+		moerr.NewNoSuchTable(ctx, "db", "missing_table"),
+	))
+	require.False(t, canSkipViewMetadataRefreshError(
+		moerr.NewTxnNeedRetry(ctx),
+	))
+	require.False(t, canSkipViewMetadataRefreshError(
+		context.Canceled,
+	))
+}
+
+func TestRefreshViewMetadataAfterAlter(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mp := mpool.MustNewZero()
+	query := "select reldatabase, relname, viewdef from mo_catalog.mo_tables " +
+		"where account_id = current_account_id() and relkind = 'v' " +
+		"and reldatabase not in ('mo_catalog', 'information_schema') order by reldatabase, relname"
+
+	bat := batch.NewWithSize(3)
+	bat.SetRowCount(2)
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+	}
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("db"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("v"), false, mp))
+	require.NoError(t, vector.AppendBytes(
+		bat.Vecs[2],
+		[]byte(`{"Stmt":"create view v as select a from t","DefaultDatabase":"db"}`),
+		false,
+		mp,
+	))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("db"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("invalid_v"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("not-json"), false, mp))
+
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		query: {Mp: mp, Batches: []*batch.Batch{bat}},
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	require.NoError(t, refreshViewMetadataAfterAlter(c))
+	require.Equal(t, []string{
+		query,
+		"alter view `db`.`v` as select `a` from `t`",
+	}, spyExec.executedSQLs)
+	require.Zero(t, mp.CurrNB())
+
+	require.False(t, isViewMetadataRefresh(nil))
+	require.True(t, isViewMetadataRefresh(
+		context.WithValue(context.Background(), viewMetadataRefreshKey{}, true),
+	))
+}
+
 func TestIsAlterAffectedPluginIndexMatchesIndexNamePartsAndIncludedColumns(t *testing.T) {
 	indexDef := &plan2.IndexDef{
 		IndexName:       "idx_vec",

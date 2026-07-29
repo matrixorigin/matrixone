@@ -62,6 +62,81 @@ func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
 	require.Same(t, want, got)
 }
 
+func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
+	lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, dbName string, _ lock.LockMode) error {
+		require.Equal(t, "other_db", dbName)
+		return nil
+	})
+	defer lockMoDb.Reset()
+	lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, dbName, tableName string, _ lock.LockMode) error {
+		require.Equal(t, "other_db", dbName)
+		require.Equal(t, "v", tableName)
+		return nil
+	})
+	defer lockMoTbl.Reset()
+
+	oldDef := &plan2.TableDef{
+		Name: "v",
+		Cols: []*plan2.ColDef{{
+			Name: "a",
+			Typ:  plan2.Type{Id: int32(types.T_int32)},
+		}},
+		ViewSql: &plan2.ViewDef{View: `{"Stmt":"create view v as select a from t"}`},
+	}
+	newDef := &plan2.TableDef{
+		Name: "v",
+		Cols: []*plan2.ColDef{{
+			Name: "a",
+			Typ:  plan2.Type{Id: int32(types.T_int64)},
+		}},
+		ViewSql: &plan2.ViewDef{View: `{"Stmt":"alter view v as select cast(a as bigint) from t"}`},
+	}
+
+	eng := newStubEngine()
+	db := newStubDatabase("other_db")
+	rel := newStubRelation("v")
+	rel.tableDef = oldDef
+	db.rels["v"] = rel
+	eng.dbs["other_db"] = db
+
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(context.Background(), viewMetadataRefreshKey{}, true)
+	c := NewCompile("test", "default_db", "alter view other_db.v as select a from t", "", "", eng, proc, nil, false, nil, time.Now())
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_AlterView{
+			AlterView: &plan2.AlterView{
+				Database: "other_db",
+				TableDef: newDef,
+			},
+		},
+	}}}}
+
+	require.NoError(t, s.AlterView(c))
+	require.Len(t, rel.alterReqs, 1)
+	require.Equal(t, api.AlterKind_ReplaceDef, rel.alterReqs[0].GetKind())
+	replaced := rel.alterReqs[0].GetReplaceDef().GetDef()
+	require.Equal(t, int32(types.T_int64), replaced.GetCols()[0].GetTyp().Id)
+	require.Equal(t, oldDef.GetViewSql().GetView(), replaced.GetViewSql().GetView())
+
+	rel.alterReqs = nil
+	rel.tableDef = replaced
+	require.NoError(t, s.AlterView(c))
+	require.Empty(t, rel.alterReqs, "unchanged refresh must not advance the view schema")
+
+	proc.Ctx = context.Background()
+	require.NoError(t, s.AlterView(c))
+	require.Len(t, rel.alterReqs, 1)
+	require.Equal(
+		t,
+		newDef.GetViewSql().GetView(),
+		rel.alterReqs[0].GetReplaceDef().GetDef().GetViewSql().GetView(),
+		"an explicit ALTER VIEW must replace the stored view definition",
+	)
+
+	delete(db.rels, "v")
+	require.Error(t, s.AlterView(c))
+}
+
 func TestIsMissingCCPRMetadataTable(t *testing.T) {
 	tableName := catalog.MO_CCPR_TABLES
 
