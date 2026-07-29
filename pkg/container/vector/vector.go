@@ -5364,6 +5364,11 @@ func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpo
 }
 
 func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
+	stored, err := bj.StorageCompatible()
+	if err != nil {
+		return err
+	}
+	bj = stored
 	vlen := len(bj.Data) + 1
 	if vlen <= types.VarlenaInlineSize {
 		// first clear varlena to 0

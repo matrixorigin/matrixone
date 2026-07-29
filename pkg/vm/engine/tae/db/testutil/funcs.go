@@ -42,7 +42,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const DefaultCheckpointWaitTimeoutMS = 10000
+// DefaultCheckpointWaitTimeoutMS bounds WaitAllCheckpointsFinished. It matches
+// TestCheckpointTimeout (2 min): under parallel CI load a forced checkpoint can
+// legitimately need more than a few seconds (TestGlobalCheckpoint2 timed out at
+// 10s with the last checkpoint still in flight), while WaitExpect polls, so
+// green runs return as soon as the condition holds and only genuinely stuck
+// checkpoints wait this long.
+const DefaultCheckpointWaitTimeoutMS = 120000
 
 func WithTestAllPKType(t *testing.T, tae *db.DB, test func(*testing.T, *db.DB, *catalog.Schema)) {
 	var wg sync.WaitGroup

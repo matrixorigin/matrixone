@@ -555,6 +555,9 @@ func compareJSONOverlapExact(left, right bytejson.ByteJson) int {
 	if jsonOverlapNumericType(left.Type) && jsonOverlapNumericType(right.Type) {
 		return compareJSONOverlapNumeric(left, right)
 	}
+	if cmp, ok := bytejson.CompareBinaryJSON(left, right); ok {
+		return cmp
+	}
 	leftRank := jsonOverlapTypeRank(left.Type)
 	rightRank := jsonOverlapTypeRank(right.Type)
 	if leftRank != rightRank {
@@ -567,7 +570,7 @@ func compareJSONOverlapExact(left, right bytejson.ByteJson) int {
 	switch left.Type {
 	case bytejson.TpCodeLiteral:
 		return compareInt(int(left.Data[0]), int(right.Data[0]))
-	case bytejson.TpCodeString, bytejson.TpCodeBlob:
+	case bytejson.TpCodeString, bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
 		return bytes.Compare(left.GetString(), right.GetString())
 	case bytejson.TpCodeDate:
 		return compareJSONOverlapDate(left, right)
@@ -640,7 +643,7 @@ func jsonOverlapTypeRank(valueType bytejson.TpCode) int {
 		return 6
 	case bytejson.TpCodeDatetime:
 		return 7
-	case bytejson.TpCodeBlob:
+	case bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
 		return 8
 	default:
 		return 9 + int(valueType)

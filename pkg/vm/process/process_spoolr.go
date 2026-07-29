@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"slices"
 	"time"
@@ -176,6 +177,23 @@ func NormalizePipelineCleanupError(pipelineFailed bool, err error) error {
 		return ErrPipelineTerminalWithoutCause
 	}
 	return nil
+}
+
+// ResolvePipelineSpoolAbortError preserves an error already recorded on a
+// receiver edge when normal End delivery fails and the spool must be aborted.
+// The synthetic delivery error is only used when none of the edges has a more
+// specific terminal cause.
+func ResolvePipelineSpoolAbortError(regs ...*WaitRegister) error {
+	for _, reg := range regs {
+		if reg == nil {
+			continue
+		}
+		if err := reg.Err(); err != nil &&
+			!errors.Is(err, ErrPipelineEndSignalDeliveryFailed) {
+			return err
+		}
+	}
+	return ErrPipelineEndSignalDeliveryFailed
 }
 
 // BuildCleanupSignal returns the appropriate terminal signal for pipeline cleanup.

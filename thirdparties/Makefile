@@ -43,7 +43,33 @@ CROARING_TAR=$(CROARING_DIR).tar.gz
 CROARING_TMP=_croaring_build
 CROARING_CFLAGS=-O3 -fPIC -std=c11
 
-all: init usearch xxhash croaring
+# Prebuilt onnxruntime shared library (CPU-only) from the MatrixOne thirdparty
+# mirror. GPU (linux_x64_gpu_cuda12) is intentionally not fetched here.
+# ONNX_LIB is the local filename our loader resolves; ONNX_SRC is the source path
+# in the mirror (whose real files are versioned/symlinked).
+#
+# The download is pinned to an immutable mirror commit and verified against a
+# per-platform SHA-256, so the same MatrixOne commit always produces the same
+# native library and a changed mirror artifact fails the build instead of
+# silently shipping different code.
+ONNX_VERSION=1.26.0
+ONNX_REPO_COMMIT=655365097e21c4df0f82337063f9a12b66700593
+ONNX_BASE_URL=https://github.com/matrixorigin/thirdparty/raw/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
+ifeq ($(UNAME_S),darwin)
+  ONNX_LIB=onnxruntime_arm64.dylib
+  ONNX_SRC=osx_arm64/lib/libonnxruntime.$(ONNX_VERSION).dylib
+  ONNX_SHA256=30afadcfc3c704f7671f8430d6252956651c1972373901d2be629da2e6a4d8ee
+else ifeq ($(UNAME_M),x86_64)
+  ONNX_LIB=onnxruntime.so
+  ONNX_SRC=linux_x64/lib/libonnxruntime.so.$(ONNX_VERSION)
+  ONNX_SHA256=5bd5bedf736fc501692435d0ec4f6e8b2bdf48cd30af8e6d00d61b3ddc9a7ab8
+else
+  ONNX_LIB=onnxruntime_arm64.so
+  ONNX_SRC=linux_aarch64/lib/libonnxruntime.so.$(ONNX_VERSION)
+  ONNX_SHA256=115ecb838e703d390262b8b4d07d5248e6693c67658d4c98c48f94905ab27af4
+endif
+
+all: init usearch xxhash croaring onnxruntime
 
 init:
 	mkdir -p install
@@ -141,7 +167,22 @@ install/lib/libroaring.a:
 	cp $(CROARING_TMP)/roaring.h install/include/roaring.h
 	rm -rf $(CROARING_TMP)
 
+# Download the prebuilt onnxruntime $(ONNX_VERSION) shared library (CPU) for the
+# current platform, saved under the name our loader resolves:
+#   linux amd64  -> onnxruntime.so
+#   linux arm64  -> onnxruntime_arm64.so
+#   macOS arm64  -> onnxruntime_arm64.dylib
+onnxruntime: install/lib/$(ONNX_LIB)
+
+# Download to a temp file, verify the pinned SHA-256, then move into place.
+# sha256sum on linux, shasum -a 256 on macOS.
+install/lib/$(ONNX_LIB): | init
+	curl -fSL -o $@.tmp $(ONNX_BASE_URL)/$(ONNX_SRC)
+	@echo "$(ONNX_SHA256)  $@.tmp" | (command -v sha256sum > /dev/null && sha256sum -c - || shasum -a 256 -c -) \
+		|| { echo "onnxruntime checksum mismatch for $(ONNX_SRC)"; rm -f $@.tmp; exit 1; }
+	mv $@.tmp $@
+
 clean:
 	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP)
 
-.PHONY: usearch stringzilla fp16 simsimd init croaring
+.PHONY: usearch stringzilla fp16 simsimd init croaring onnxruntime

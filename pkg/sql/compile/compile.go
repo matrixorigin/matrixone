@@ -5501,11 +5501,12 @@ func (c *Compile) queryWorkerStageNodes() engine.Nodes {
 	return c.materializeScheduledWorkers(decision.Workers)
 }
 
-// shuffleJoinStageNodes keeps shuffle receivers on the coordinator when either
-// input depends on a SINK_SCAN. SINK_SCAN consumes an in-process PipelineEdge
-// created for another query step; that edge cannot be serialized and registered
-// on a remote CN. The scan/table side may still execute remotely and dispatch to
-// these local shuffle buckets, so hashbuild remains partitioned and spillable.
+// shuffleJoinStageNodes keeps the SINK_SCAN producer on its owning CN while
+// allowing the shuffle receivers to use every query worker. SINK_SCAN consumes
+// an in-process PipelineEdge created for another query step, so its scope cannot
+// be serialized to a remote CN. Including its owning CN in the receiver set lets
+// attachShuffleDispatchSource keep that scope local; the following dispatch can
+// still send buckets to hashbuild receivers on the other query workers.
 func (c *Compile) shuffleJoinStageNodes(probeScopes, buildScopes []*Scope) (engine.Nodes, bool) {
 	stageNode, hasSinkScan := sinkScanDependencyNode(probeScopes, buildScopes)
 	if !hasSinkScan {
@@ -5514,8 +5515,13 @@ func (c *Compile) shuffleJoinStageNodes(probeScopes, buildScopes []*Scope) (engi
 	if stageNode.Addr == "" {
 		stageNode = c.materializeScheduledWorker(c.currentCNWorker())
 	}
-	stageNode = scopeNodeWithMcpu(stageNode, 1)
-	return engine.Nodes{stageNode}, true
+	stageNodes := c.queryWorkerStageNodes()
+	for _, node := range stageNodes {
+		if sameExecutionNode(node, stageNode) {
+			return stageNodes, true
+		}
+	}
+	return append(stageNodes, scopeNodeWithMcpu(stageNode, 1)), true
 }
 
 func sinkScanDependencyNode(scopeLists ...[]*Scope) (engine.Node, bool) {
@@ -5713,7 +5719,7 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // doSetRootOperator) appends a connector *on top of* that existing root using AppendChild
 // semantics, so the caller's operator is preserved as the connector's child, not replaced.
 func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
-	stageNodes := c.queryWorkerStageNodes()
+	stageNodes := shuffleBucketStageNodes(ss)
 	if len(stageNodes) <= 1 || len(ss) <= len(stageNodes) {
 		return ss
 	}
@@ -5728,6 +5734,26 @@ func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
 		return ss
 	}
 	return c.mergeScopesByStageNodes(ss, stageNodes)
+}
+
+// shuffleBucketStageNodes derives the grouping boundary from the receiver
+// scopes themselves. The receiver set may include a local SINK_SCAN owner that
+// is intentionally absent from the scheduled query-worker set.
+func shuffleBucketStageNodes(ss []*Scope) engine.Nodes {
+	stageNodes := make(engine.Nodes, 0, len(ss))
+	for _, scope := range ss {
+		found := false
+		for _, node := range stageNodes {
+			if sameExecutionNode(node, scope.NodeInfo) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			stageNodes = append(stageNodes, scope.NodeInfo)
+		}
+	}
+	return stageNodes
 }
 
 func (c *Compile) mergeScopesByStageNodes(ss []*Scope, stageNodes engine.Nodes) []*Scope {
