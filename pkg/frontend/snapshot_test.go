@@ -455,11 +455,17 @@ func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
 			}
 		})
 	}
-	if !strings.Contains(sql, "relkind != 'temporary_table'") {
+	if !strings.Contains(sql, "relkind = 'temporary_table'") {
 		t.Fatalf("temporary tables were not filtered by catalog marker: %s", sql)
 	}
-	if strings.Contains(sql, "mo\\_tmp") {
-		t.Fatalf("temporary tables were filtered by reserved-looking name: %s", sql)
+	if !strings.Contains(sql, "lower(ltrim(coalesce(rel_createsql, ''))) like 'create temporary table%'") {
+		t.Fatalf("legacy temporary base tables were not filtered by CREATE SQL: %s", sql)
+	}
+	if !strings.Contains(sql, "coalesce(relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and relname regexp '^__mo_tmp_[0-9a-f]{32}_'") {
+		t.Fatalf("legacy temporary derived objects were not filtered by exact physical name: %s", sql)
+	}
+	if strings.Contains(sql, "relname not like '__mo_tmp_%'") {
+		t.Fatalf("temporary tables were filtered by the broad legal name prefix: %s", sql)
 	}
 }
 

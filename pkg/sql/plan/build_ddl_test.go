@@ -143,9 +143,12 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 }
 
 func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
-		"create temporary table temp_marked (id int, unique key uk_id (id))", 1)
+	const rootSQL = "create temporary table temp_marked (id int, unique key uk_id (id))"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 
@@ -159,6 +162,16 @@ func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
 	for _, tableDef := range tableDefs {
 		requireTemporaryCatalogRelkind(t, tableDef)
 	}
+
+	var createSQL string
+	for _, def := range createTable.TableDef.GetDefs() {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.GetKey() == catalog.SystemRelAttr_CreateSQL {
+				createSQL = property.GetValue()
+			}
+		}
+	}
+	require.Equal(t, rootSQL, createSQL)
 }
 
 func TestBuildTemporaryTableIndexDDLMarksCatalogRelkind(t *testing.T) {

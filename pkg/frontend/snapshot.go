@@ -2006,10 +2006,10 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 	clusterTableClause := fmt.Sprintf(" or relkind = %s", quoteSQLStringLiteral(catalog.SystemClusterRel))
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTableClause)
 	whereClause := fmt.Sprintf(
-		"reldatabase = %s and relkind not in (%s) and relkind != %s and relkind != %s and (%s)",
+		"reldatabase = %s and relkind not in (%s) and %s and relkind != %s and (%s)",
 		quoteSQLStringLiteral(dbName),
 		hiddenIndexTableTypesSQL(),
-		quoteSQLStringLiteral(catalog.SystemTemporaryTable),
+		catalog.NonTemporaryTableSQLPredicate(""),
 		quoteSQLStringLiteral(catalog.SystemPartitionRel),
 		accountClause,
 	)

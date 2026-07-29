@@ -15,10 +15,50 @@
 package catalog
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
+
+const (
+	legacyTemporaryTableNameRegexp = `^__mo_tmp_[0-9a-f]{32}_`
+	userVisibleRelationKindsSQL    = "'" + SystemOrdinaryRel + "', '" + SystemViewRel + "', '" + SystemExternalRel + "', '" + SystemMaterializedRel + "', '" + SystemSourceRel + "', '" + SystemClusterRel + "', '" + SystemPartitionRel + "', '" + SystemSequenceRel + "'"
+)
+
+// NonTemporaryTableSQLPredicate returns the catalog predicate used to exclude
+// temporary objects from metadata and clone/restore queries.
+//
+// New temporary objects have SystemTemporaryTable in mo_tables.relkind. During
+// an asynchronous upgrade, however, sessions started on an older version can
+// still have base rows whose relkind is SystemOrdinaryRel. Their persisted
+// CREATE TEMPORARY TABLE statement is the compatibility marker. Old derived
+// objects added later do not reliably retain that statement, so they are
+// recognized only when their relkind is not user-visible and their name has the
+// exact physical session-ID shape. The relkind guard keeps permanent tables,
+// views, and external objects with otherwise legal __mo_tmp_ names visible.
+func NonTemporaryTableSQLPredicate(alias string) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	relKind := prefix + SystemRelAttr_Kind
+	relName := prefix + SystemRelAttr_Name
+	createSQL := prefix + SystemRelAttr_CreateSQL
+
+	return fmt.Sprintf(
+		"not (%s = '%s' or (%s = '%s' and lower(ltrim(coalesce(%s, ''))) like 'create temporary table%%') or (coalesce(%s, '') not in (%s) and %s regexp '%s'))",
+		relKind,
+		SystemTemporaryTable,
+		relKind,
+		SystemOrdinaryRel,
+		createSQL,
+		relKind,
+		userVisibleRelationKindsSQL,
+		relName,
+		legacyTemporaryTableNameRegexp,
+	)
+}
 
 // MarkTableDefTemporary keeps the in-memory table type and the durable
 // mo_tables.relkind property in sync. The catalog marker, rather than the

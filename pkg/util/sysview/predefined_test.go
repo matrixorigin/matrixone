@@ -37,9 +37,11 @@ func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			assert.Contains(t, test.ddl, nonTemporaryTablePredicate(test.tableAlias))
+			assert.Contains(t, test.ddl, catalog.NonTemporaryTableSQLPredicate(test.tableAlias))
 			assert.Contains(t, test.ddl, catalog.SystemTemporaryTable)
-			assert.NotContains(t, test.ddl, "__mo_tmp_")
+			assert.Contains(t, test.ddl, catalog.SystemRelAttr_CreateSQL)
+			assert.Contains(t, test.ddl, `[0-9a-f]{32}`)
+			assert.NotContains(t, test.ddl, "relname not like '__mo_tmp_%'")
 		})
 	}
 }

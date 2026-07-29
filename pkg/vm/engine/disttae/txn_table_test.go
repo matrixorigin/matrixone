@@ -85,6 +85,30 @@ func newTxnTableForTest() *txnTable {
 	return table
 }
 
+func TestTxnTableGetTableDefRestoresTemporaryFlag(t *testing.T) {
+	tests := []struct {
+		name          string
+		kind          string
+		wantTemporary bool
+	}{
+		{name: "temporary", kind: catalog.SystemTemporaryTable, wantTemporary: true},
+		{name: "ordinary", kind: catalog.SystemOrdinaryRel},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			table := &txnTable{
+				db:      &txnDatabase{},
+				relKind: test.kind,
+			}
+			tableDef := table.GetTableDef(context.Background())
+			require.NotNil(t, tableDef)
+			require.Equal(t, test.kind, tableDef.TableType)
+			require.Equal(t, test.wantTemporary, tableDef.IsTemporary)
+		})
+	}
+}
+
 func makeBatchForTest(
 	mp *mpool.MPool,
 	ints ...int64,

@@ -82,6 +82,7 @@ func TestMarkTableDefTemporary(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			MarkTableDefTemporary(test.tableDef)
+			MarkTableDefTemporary(test.tableDef)
 
 			require.Equal(t, SystemTemporaryTable, test.tableDef.TableType)
 			require.True(t, test.tableDef.IsTemporary)
@@ -109,4 +110,52 @@ func TestMarkTableDefTemporary(t *testing.T) {
 
 func TestMarkTableDefTemporaryNil(t *testing.T) {
 	require.NotPanics(t, func() { MarkTableDefTemporary(nil) })
+}
+
+func TestNonTemporaryTableSQLPredicate(t *testing.T) {
+	tests := []struct {
+		name      string
+		alias     string
+		relKind   string
+		relName   string
+		createSQL string
+	}{
+		{
+			name:      "unqualified",
+			relKind:   SystemRelAttr_Kind,
+			relName:   SystemRelAttr_Name,
+			createSQL: SystemRelAttr_CreateSQL,
+		},
+		{
+			name:      "qualified",
+			alias:     "tbl",
+			relKind:   "tbl." + SystemRelAttr_Kind,
+			relName:   "tbl." + SystemRelAttr_Name,
+			createSQL: "tbl." + SystemRelAttr_CreateSQL,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := NonTemporaryTableSQLPredicate(test.alias)
+
+			require.Contains(t, got, test.relKind+" = '"+SystemTemporaryTable+"'")
+			require.Contains(t, got, test.relKind+" = '"+SystemOrdinaryRel+"'")
+			require.Contains(t, got, "lower(ltrim(coalesce("+test.createSQL+", ''))) like 'create temporary table%'")
+			require.Contains(t, got, "coalesce("+test.relKind+", '') not in (")
+			for _, kind := range []string{
+				SystemOrdinaryRel,
+				SystemViewRel,
+				SystemExternalRel,
+				SystemMaterializedRel,
+				SystemSourceRel,
+				SystemClusterRel,
+				SystemPartitionRel,
+				SystemSequenceRel,
+			} {
+				require.Contains(t, got, "'"+kind+"'")
+			}
+			require.Contains(t, got, test.relName+" regexp '"+legacyTemporaryTableNameRegexp+"'")
+		})
+	}
 }

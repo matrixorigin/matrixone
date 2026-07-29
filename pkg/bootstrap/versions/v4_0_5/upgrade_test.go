@@ -75,8 +75,19 @@ func TestInformationSchemaTenantUpgradeEntries(t *testing.T) {
 		if entry.Schema != sysview.InformationDBConst || entry.TableName != view.name || entry.UpgType != versions.MODIFY_VIEW {
 			t.Fatalf("unexpected information_schema.%s upgrade: %+v", view.name, entry)
 		}
-		if entry.UpgSql != view.ddl || !strings.Contains(entry.UpgSql, "relkind != 'temporary_table'") {
-			t.Fatalf("%s upgrade does not use the temporary catalog marker: %s", view.name, entry.UpgSql)
+		if entry.UpgSql != view.ddl {
+			t.Fatalf("%s upgrade does not use the current view definition: %s", view.name, entry.UpgSql)
+		}
+		for _, want := range []string{
+			"relkind = 'temporary_table'",
+			"lower(ltrim(coalesce(",
+			"rel_createsql",
+			"like 'create temporary table%'",
+			"[0-9a-f]{32}",
+		} {
+			if !strings.Contains(entry.UpgSql, want) {
+				t.Fatalf("%s upgrade is missing legacy temporary-table compatibility %q: %s", view.name, want, entry.UpgSql)
+			}
 		}
 		wantPreSQL := "drop view if exists information_schema." + strings.ToLower(view.name)
 		if !strings.Contains(strings.ToLower(entry.PreSql), wantPreSQL) {
