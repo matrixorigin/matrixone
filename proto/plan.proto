@@ -179,6 +179,11 @@ message IndexScanInfo {
   string index_table_name = 6;
 }
 
+enum AggregateConfigType {
+  AGG_CONFIG_NONE = 0;
+  AGG_CONFIG_GROUP_CONCAT_ORDER = 1;
+}
+
 message Function {
   // Function flags
   enum FuncFlag {
@@ -210,6 +215,8 @@ message Function {
 
   ObjectRef func = 1;
   repeated Expr args = 2;
+  bytes agg_config = 3;
+  AggregateConfigType agg_config_type = 4;
 }
 
 message Expr {
