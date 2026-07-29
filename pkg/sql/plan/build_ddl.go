@@ -1536,6 +1536,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 		case *tree.CheckIndex:
 			pendingChecks = append(pendingChecks, pendingCheckDef{
+				name:      def.ConstraintSymbol,
 				expr:      def.Expr,
 				columnPos: -1,
 				enforced:  def.Enforced,

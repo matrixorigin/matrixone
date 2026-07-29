@@ -2,10 +2,10 @@ drop database if exists check_constraint_test;
 create database check_constraint_test;
 use check_constraint_test;
 create table t(
-    a int,
-    b varchar(10),
-    constraint positive_a check(a > 0),
-    constraint short_b check(length(b) < 5)
+a int,
+b varchar(10),
+constraint positive_a check(a > 0),
+constraint short_b check(length(b) < 5)
 );
 insert into t values (1, 'ok'), (null, null);
 insert into t values (-1, 'bad');

@@ -26874,7 +26874,7 @@ yydefault:
 	case 1616:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL tree.TableDef
-//line mysql_sql.y:10886
+//line mysql_sql.y:10885
 		{
 			if yyDollar[1].str != "" {
 				switch v := yyDollar[2].tableDefUnion().(type) {
@@ -26883,6 +26883,8 @@ yydefault:
 				case *tree.ForeignKey:
 					v.ConstraintSymbol = yyDollar[1].str
 				case *tree.UniqueIndex:
+					v.ConstraintSymbol = yyDollar[1].str
+				case *tree.CheckIndex:
 					v.ConstraintSymbol = yyDollar[1].str
 				}
 			}

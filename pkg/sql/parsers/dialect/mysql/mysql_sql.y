@@ -10880,7 +10880,6 @@ index_def:
             IndexOption,
         )
     }
-
 constaint_def:
     constraint_keyword constraint_elem
     {
@@ -10892,6 +10891,7 @@ constaint_def:
                 v.ConstraintSymbol = $1
             case *tree.UniqueIndex:
                 v.ConstraintSymbol = $1
+            case *tree.CheckIndex: v.ConstraintSymbol = $1
             }
         }
         $$ = $2

@@ -94,6 +94,16 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		require.Equal(t, int32(types.T_bool), tableDef.Checks[0].Check.Typ.Id)
 	})
 
+	t.Run("table check preserves explicit name", func(t *testing.T) {
+		tableDef, err := build(
+			"create table t(a int, constraint positive_a check (a > 0))",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, tableDef.Checks, 1)
+		require.Equal(t, "positive_a", tableDef.Checks[0].Name)
+	})
+
 	t.Run("column check only references its column", func(t *testing.T) {
 		_, err := build("create table t(a int, b int check (a > b))", false)
 		require.ErrorContains(t, err, "column check constraint cannot refer to column")
