@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
@@ -405,15 +404,6 @@ func TestHandleCommit(t *testing.T) {
 		req := service.NewTestCommitRequest(service.NewTestTxn(1, 1, 1))
 		req.Txn.TNShards[0].ReplicaID = 2
 		assert.NoError(t, s.handleCommit(context.Background(), &req, &txn.TxnResponse{}))
-	})
-}
-
-func TestHandleAutoIncrEpochFenceCommitRequiresV6(t *testing.T) {
-	runTNStoreTest(t, func(s *store) {
-		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
-		req := service.NewTestCommitRequest(service.NewTestTxn(1, 1, 1))
-		req.Method = txn.TxnMethod_CommitAutoIncrEpochFence
-		require.Error(t, s.handleCommit(context.Background(), &req, &txn.TxnResponse{}))
 	})
 }
 

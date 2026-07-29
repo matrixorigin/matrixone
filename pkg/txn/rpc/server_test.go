@@ -43,10 +43,10 @@ func TestAutoIncrEpochFenceCommitRequiresV6(t *testing.T) {
 	req := &txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence}
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
-	require.Error(t, CheckMethodVersion(context.Background(), rt, req))
+	require.Error(t, checkMethodVersion(context.Background(), rt, req))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
-	require.NoError(t, CheckMethodVersion(context.Background(), rt, req))
+	require.NoError(t, checkMethodVersion(context.Background(), rt, req))
 
 	legacyMethods := map[txn.TxnMethod]int64{txn.TxnMethod_Commit: defines.MORPCVersion1}
 	require.Error(t, runtime.CheckMethodVersionWithRuntime(context.Background(), rt, legacyMethods, req))

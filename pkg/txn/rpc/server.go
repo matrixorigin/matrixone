@@ -272,7 +272,7 @@ func (s *server) onMessage(
 		msg.Cancel()
 		return nil
 	}
-	if err := CheckMethodVersion(ctx, s.rt, m); err != nil {
+	if err := checkMethodVersion(ctx, s.rt, m); err != nil {
 		s.releaseRequest(m)
 		msg.Cancel()
 		return err
@@ -429,9 +429,7 @@ func (r executor) exec() ([]byte, error) {
 	return txnID, err
 }
 
-// CheckMethodVersion validates a transaction method against the runtime
-// protocol version. Local TN dispatch uses the same gate as network dispatch.
-func CheckMethodVersion(
+func checkMethodVersion(
 	ctx context.Context,
 	rt runtime.Runtime,
 	req *txn.TxnRequest,
