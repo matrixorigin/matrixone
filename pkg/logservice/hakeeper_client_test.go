@@ -523,57 +523,47 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 
 func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAKeeperClient)) {
 	defer leaktest.AfterTest(t)()
-	cfg1 := DefaultConfig()
-	cfg1.UUID = uuid.New().String()
-	cfg1.FS = vfs.NewStrictMem()
-	cfg1.DeploymentID = 1
-	cfg1.RTTMillisecond = 5
-	cfg1.DataDir = "data-1"
-	cfg1.DisableWorkers = true
-	cfg2 := DefaultConfig()
-	cfg2.UUID = uuid.New().String()
-	cfg2.FS = vfs.NewStrictMem()
-	cfg2.DeploymentID = 1
-	cfg2.RTTMillisecond = 5
-	cfg2.DataDir = "data-2"
-	cfg2.DisableWorkers = true
-	require.NoError(t, allocateTestConfigPorts(&cfg1, &cfg2))
-	cfg1.GossipSeedAddresses = []string{cfg2.GossipServiceAddr()}
-	cfg2.GossipSeedAddresses = []string{cfg1.GossipServiceAddr()}
-	setTestHAKeeperClientConfig(&cfg1)
-	setTestHAKeeperClientConfig(&cfg2)
-
 	rt := runtime.ServiceRuntime("")
 	runtime.SetupServiceBasedRuntime("", rt)
-	runtime.SetupServiceBasedRuntime(cfg1.UUID, rt)
-	runtime.SetupServiceBasedRuntime(cfg2.UUID, rt)
-
-	service1, err := NewService(cfg1,
-		newFS(),
-		nil,
+	genConfigs := func() ([]Config, error) {
+		configs := make([]Config, 2)
+		for i := range configs {
+			configs[i] = DefaultConfig()
+			configs[i].UUID = uuid.New().String()
+			configs[i].FS = vfs.NewStrictMem()
+			configs[i].DeploymentID = 1
+			configs[i].RTTMillisecond = 5
+			configs[i].DisableWorkers = true
+		}
+		configs[0].DataDir = "data-1"
+		configs[1].DataDir = "data-2"
+		if err := allocateTestConfigPorts(&configs[0], &configs[1]); err != nil {
+			return nil, err
+		}
+		configs[0].GossipSeedAddresses = []string{configs[1].GossipServiceAddr()}
+		configs[1].GossipSeedAddresses = []string{configs[0].GossipServiceAddr()}
+		for i := range configs {
+			setTestHAKeeperClientConfig(&configs[i])
+			runtime.SetupServiceBasedRuntime(configs[i].UUID, rt)
+		}
+		return configs, nil
+	}
+	configs, services, err := newTestServiceTopologyWithRetry(
+		genConfigs,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
 	)
 	require.NoError(t, err)
 	defer func() {
-		assert.NoError(t, service1.Close())
+		assert.NoError(t, closeTestServiceTopology(services))
 	}()
-	service2, err := NewService(cfg2,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
-	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service2.Close())
-	}()
+	cfg1, cfg2 := configs[0], configs[1]
+	service2 := services[1]
 	// service2 is HAKeeper
 	peers := make(map[uint64]dragonboat.Target)
 	peers[1] = service2.ID()
-	assert.NoError(t, service2.store.startHAKeeperReplica(1, peers, false))
+	require.NoError(t, service2.store.startHAKeeperReplica(1, peers, false))
 	// manually construct a HAKeeper client that is connected to service1
 	pool := &sync.Pool{}
 	pool.New = func() interface{} {

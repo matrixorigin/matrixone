@@ -16,7 +16,6 @@ package logservice
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -189,7 +188,7 @@ func TestNewServiceWithRetryClosesRPCServerOnBindFailure(t *testing.T) {
 }
 
 func TestNewServiceWithRetryStopsOnConfigError(t *testing.T) {
-	expected := errors.New("generate config")
+	expected := moerr.NewInternalErrorNoCtx("generate config")
 	attempts := 0
 
 	service, err := newServiceWithRetry(
@@ -232,7 +231,7 @@ func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {
 	md := metadata.LogStore{UUID: cfg.UUID}
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, fs))
 
-	injectedErr := errors.New("injected metadata open failure")
+	injectedErr := moerr.NewInternalErrorNoCtx("injected metadata open failure")
 	cfg.FS = &failOpenFS{
 		FS:   fs,
 		path: fs.PathJoin(cfg.DataDir, logMetadataFilename),
@@ -729,58 +728,46 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		"",
 		func(rt runtime.Runtime) {
 			defer leaktest.AfterTest(t)()
-			cfg1 := DefaultConfig()
-			cfg1.UUID = uuid.New().String()
-			cfg1.FS = vfs.NewStrictMem()
-			cfg1.DeploymentID = 1
-			cfg1.RTTMillisecond = 5
-			cfg1.DataDir = "data-1"
-			cfg1.DisableWorkers = true
-			cfg2 := DefaultConfig()
-			cfg2.UUID = uuid.New().String()
-			cfg2.FS = vfs.NewStrictMem()
-			cfg2.DeploymentID = 1
-			cfg2.RTTMillisecond = 5
-			cfg2.DataDir = "data-2"
-			cfg2.DisableWorkers = true
-			require.NoError(t, allocateTestConfigPorts(&cfg1, &cfg2))
-			cfg1.GossipSeedAddresses = []string{cfg2.GossipServiceAddr()}
-			cfg2.GossipSeedAddresses = []string{cfg1.GossipServiceAddr()}
-			setTestHAKeeperClientConfig(&cfg1)
-			setTestHAKeeperClientConfig(&cfg2)
-
-			runtime.SetupServiceBasedRuntime(cfg1.UUID, rt)
-			runtime.SetupServiceBasedRuntime(cfg2.UUID, rt)
-
-			service1, err := NewService(
-				cfg1,
-				newFS(),
-				nil,
+			genConfigs := func() ([]Config, error) {
+				configs := make([]Config, 2)
+				for i := range configs {
+					configs[i] = DefaultConfig()
+					configs[i].UUID = uuid.New().String()
+					configs[i].FS = vfs.NewStrictMem()
+					configs[i].DeploymentID = 1
+					configs[i].RTTMillisecond = 5
+					configs[i].DataDir = fmt.Sprintf("data-%d", i+1)
+					configs[i].DisableWorkers = true
+				}
+				if err := allocateTestConfigPorts(&configs[0], &configs[1]); err != nil {
+					return nil, err
+				}
+				configs[0].GossipSeedAddresses = []string{configs[1].GossipServiceAddr()}
+				configs[1].GossipSeedAddresses = []string{configs[0].GossipServiceAddr()}
+				for i := range configs {
+					setTestHAKeeperClientConfig(&configs[i])
+					runtime.SetupServiceBasedRuntime(configs[i].UUID, rt)
+				}
+				return configs, nil
+			}
+			configs, services, err := newTestServiceTopologyWithRetry(
+				genConfigs,
 				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 					return true
 				}),
 			)
 			require.NoError(t, err)
 			defer func() {
-				assert.NoError(t, service1.Close())
+				assert.NoError(t, closeTestServiceTopology(services))
 			}()
+			cfg1, cfg2 := configs[0], configs[1]
+			service1, service2 := services[0], services[1]
 			peers1 := make(map[uint64]dragonboat.Target)
 			peers1[1] = service1.ID()
-			assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
-			service2, err := NewService(cfg2,
-				newFS(),
-				nil,
-				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-					return true
-				}),
-			)
-			require.NoError(t, err)
-			defer func() {
-				assert.NoError(t, service2.Close())
-			}()
+			require.NoError(t, service1.store.startReplica(1, 1, peers1, false))
 			peers2 := make(map[uint64]dragonboat.Target)
 			peers2[1] = service2.ID()
-			assert.NoError(t, service2.store.startReplica(2, 1, peers2, false))
+			require.NoError(t, service2.store.startReplica(2, 1, peers2, false))
 
 			nhID1 := service1.ID()
 			nhID2 := service2.ID()
@@ -861,47 +848,42 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 			// start all services
 			nodeCount := 24
 			shardCount := nodeCount / 3
-			configs := make([]Config, 0)
-			services := make([]*Service, 0)
-			for i := 0; i < nodeCount; i++ {
-				cfg := DefaultConfig()
-				cfg.FS = vfs.NewStrictMem()
-				cfg.UUID = uuid.New().String()
-				cfg.DeploymentID = 1
-				cfg.RTTMillisecond = 200
-				cfg.DataDir = fmt.Sprintf("data-%d", i)
-				cfg.LogServicePort = 26000 + 10*i
-				cfg.RaftPort = 26000 + 10*i + 1
-				cfg.GossipPort = 26000 + 10*i + 2
-				cfg.GossipSeedAddresses = []string{
-					"127.0.0.1:26002",
-					"127.0.0.1:26012",
-					"127.0.0.1:26022",
-					"127.0.0.1:26032",
-					"127.0.0.1:26042",
-					"127.0.0.1:26052",
-					"127.0.0.1:26062",
-					"127.0.0.1:26072",
-					"127.0.0.1:26082",
-					"127.0.0.1:26092",
+			genConfigs := func() ([]Config, error) {
+				configs := make([]Config, nodeCount)
+				configPointers := make([]*Config, nodeCount)
+				for i := range configs {
+					configs[i] = DefaultConfig()
+					configs[i].FS = vfs.NewStrictMem()
+					configs[i].UUID = uuid.New().String()
+					configs[i].DeploymentID = 1
+					configs[i].RTTMillisecond = 200
+					configs[i].DataDir = fmt.Sprintf("data-%d", i)
+					configs[i].DisableWorkers = true
+					configs[i].LogDBBufferSize = 1024 * 16
+					configs[i].GossipProbeInterval.Duration = 350 * time.Millisecond
+					configPointers[i] = &configs[i]
 				}
-				cfg.DisableWorkers = true
-				cfg.LogDBBufferSize = 1024 * 16
-				cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
-				configs = append(configs, cfg)
-
-				runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
-
-				service, err := NewService(cfg,
-					newFS(),
-					nil,
-					WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-						return true
-					}),
-				)
-				require.NoError(t, err)
-				services = append(services, service)
+				if err := allocateTestConfigPorts(configPointers...); err != nil {
+					return nil, err
+				}
+				seeds := make([]string, 0, 10)
+				for i := 0; i < 10; i++ {
+					seeds = append(seeds, configs[i].GossipServiceAddr())
+				}
+				for i := range configs {
+					configs[i].GossipSeedAddresses = seeds
+					setTestHAKeeperClientConfig(&configs[i])
+					runtime.SetupServiceBasedRuntime(configs[i].UUID, rt)
+				}
+				return configs, nil
 			}
+			configs, services, err := newTestServiceTopologyWithRetry(
+				genConfigs,
+				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+					return true
+				}),
+			)
+			require.NoError(t, err)
 			defer func() {
 				testLogger.Info("going to close all services")
 				var wg sync.WaitGroup

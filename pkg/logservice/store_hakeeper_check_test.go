@@ -259,135 +259,58 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 		"",
 		func(rt runtime.Runtime) {
 			defer leaktest.AfterTest(t)()
-			cfg1 := DefaultConfig()
-			cfg1.UUID = uuid.New().String()
-			cfg1.FS = vfs.NewStrictMem()
-			cfg1.DeploymentID = 1
-			cfg1.RTTMillisecond = 5
-			cfg1.DataDir = "data-1"
-			cfg1.DisableWorkers = true
-			cfg1.HAKeeperConfig.TickPerSecond = 10
-			cfg1.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-			cfg1.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
-			cfg1.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-			cfg2 := DefaultConfig()
-			cfg2.UUID = uuid.New().String()
-			cfg2.FS = vfs.NewStrictMem()
-			cfg2.DeploymentID = 1
-			cfg2.RTTMillisecond = 5
-			cfg2.DataDir = "data-2"
-			cfg2.DisableWorkers = true
-			cfg2.HAKeeperConfig.TickPerSecond = 10
-			cfg2.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-			cfg2.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
-			cfg2.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-			cfg3 := DefaultConfig()
-			cfg3.UUID = uuid.New().String()
-			cfg3.FS = vfs.NewStrictMem()
-			cfg3.DeploymentID = 1
-			cfg3.RTTMillisecond = 5
-			cfg3.DataDir = "data-3"
-			cfg3.DisableWorkers = true
-			cfg3.HAKeeperConfig.TickPerSecond = 10
-			cfg3.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-			cfg3.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
-			cfg3.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-			cfg4 := DefaultConfig()
-			cfg4.UUID = uuid.New().String()
-			cfg4.FS = vfs.NewStrictMem()
-			cfg4.DeploymentID = 1
-			cfg4.RTTMillisecond = 5
-			cfg4.DataDir = "data-4"
-			cfg4.DisableWorkers = true
-			cfg4.HAKeeperConfig.TickPerSecond = 10
-			cfg4.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-			cfg4.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
-			cfg4.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
-
-			require.NoError(t, allocateTestConfigPorts(&cfg1, &cfg2, &cfg3, &cfg4))
-			cfg1.GossipSeedAddresses = []string{
-				cfg2.GossipServiceAddr(),
-				cfg3.GossipServiceAddr(),
-				cfg4.GossipServiceAddr(),
+			genConfigs := func() ([]Config, error) {
+				configs := make([]Config, 4)
+				configPointers := make([]*Config, len(configs))
+				for i := range configs {
+					configs[i] = DefaultConfig()
+					configs[i].UUID = uuid.New().String()
+					configs[i].FS = vfs.NewStrictMem()
+					configs[i].DeploymentID = 1
+					configs[i].RTTMillisecond = 5
+					configs[i].DataDir = fmt.Sprintf("data-%d", i+1)
+					configs[i].DisableWorkers = true
+					configs[i].HAKeeperConfig.TickPerSecond = 10
+					configs[i].HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
+					configs[i].HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
+					configs[i].HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
+					configPointers[i] = &configs[i]
+				}
+				if err := allocateTestConfigPorts(configPointers...); err != nil {
+					return nil, err
+				}
+				for i := range configs {
+					seeds := make([]string, 0, len(configs)-1)
+					for j := range configs {
+						if i != j {
+							seeds = append(seeds, configs[j].GossipServiceAddr())
+						}
+					}
+					configs[i].GossipSeedAddresses = seeds
+					setTestHAKeeperClientConfig(&configs[i])
+					runtime.SetupServiceBasedRuntime(configs[i].UUID, rt)
+				}
+				return configs, nil
 			}
-			cfg2.GossipSeedAddresses = []string{
-				cfg1.GossipServiceAddr(),
-				cfg3.GossipServiceAddr(),
-				cfg4.GossipServiceAddr(),
-			}
-			cfg3.GossipSeedAddresses = []string{
-				cfg1.GossipServiceAddr(),
-				cfg2.GossipServiceAddr(),
-				cfg4.GossipServiceAddr(),
-			}
-			cfg4.GossipSeedAddresses = []string{
-				cfg1.GossipServiceAddr(),
-				cfg2.GossipServiceAddr(),
-				cfg3.GossipServiceAddr(),
-			}
-			setTestHAKeeperClientConfig(&cfg1)
-			setTestHAKeeperClientConfig(&cfg2)
-			setTestHAKeeperClientConfig(&cfg3)
-			setTestHAKeeperClientConfig(&cfg4)
-
-			runtime.SetupServiceBasedRuntime(cfg1.UUID, rt)
-			runtime.SetupServiceBasedRuntime(cfg2.UUID, rt)
-			runtime.SetupServiceBasedRuntime(cfg3.UUID, rt)
-			runtime.SetupServiceBasedRuntime(cfg4.UUID, rt)
-
-			service1, err := NewService(cfg1,
-				newFS(),
-				nil,
+			_, services, err := newTestServiceTopologyWithRetry(
+				genConfigs,
 				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 					return true
 				}),
 			)
 			require.NoError(t, err)
 			defer func() {
-				assert.NoError(t, service1.Close())
-			}()
-			service2, err := NewService(cfg2,
-				newFS(),
-				nil,
-				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-					return true
-				}),
-			)
-			require.NoError(t, err)
-			defer func() {
-				assert.NoError(t, service2.Close())
-			}()
-			service3, err := NewService(cfg3,
-				newFS(),
-				nil,
-				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-					return true
-				}),
-			)
-			require.NoError(t, err)
-			defer func() {
-				assert.NoError(t, service3.Close())
-			}()
-			service4, err := NewService(cfg4,
-				newFS(),
-				nil,
-				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-					return true
-				}),
-			)
-			require.NoError(t, err)
-			defer func() {
-				assert.NoError(t, service4.Close())
+				assert.NoError(t, closeTestServiceTopology(services))
 			}()
 
 			peers := make(map[uint64]dragonboat.Target)
-			peers[1] = service1.ID()
-			peers[2] = service2.ID()
-			peers[3] = service3.ID()
-			assert.NoError(t, service1.store.startHAKeeperReplica(1, peers, false))
-			assert.NoError(t, service2.store.startHAKeeperReplica(2, peers, false))
-			assert.NoError(t, service3.store.startHAKeeperReplica(3, peers, false))
-			fn(t, []*Service{service1, service2, service3, service4})
+			peers[1] = services[0].ID()
+			peers[2] = services[1].ID()
+			peers[3] = services[2].ID()
+			require.NoError(t, services[0].store.startHAKeeperReplica(1, peers, false))
+			require.NoError(t, services[1].store.startHAKeeperReplica(2, peers, false))
+			require.NoError(t, services[2].store.startHAKeeperReplica(3, peers, false))
+			fn(t, services)
 		},
 	)
 }

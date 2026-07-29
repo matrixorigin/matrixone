@@ -15,7 +15,6 @@
 package logservicedriver
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -79,7 +79,7 @@ func TestNewClientPoolPanicsWhenFactoryAlwaysFail(t *testing.T) {
 func TestNewClientDoesNotRetryBadConfig(t *testing.T) {
 	var attempts atomic.Int32
 	expected := moerr.NewBadConfigNoCtx("invalid log service client config")
-	wrapped := fmt.Errorf("create client: %w", expected)
+	wrapped := errutil.Wrap(expected, "create client")
 
 	client, err := NewClient(
 		func() (logservice.Client, error) {

@@ -278,8 +278,7 @@ func newServiceWithRetry(
 		if err == nil {
 			return s, nil
 		}
-		if !errors.Is(err, syscall.EADDRINUSE) &&
-			!strings.Contains(strings.ToLower(err.Error()), "address already in use") {
+		if !isAddressAlreadyInUseError(err) {
 			return nil, err
 		}
 		lastErr = err
@@ -289,6 +288,11 @@ func newServiceWithRetry(
 		"failed to create log service after %d attempts",
 		serviceStartMaxAttempts,
 	)
+}
+
+func isAddressAlreadyInUseError(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE) ||
+		strings.Contains(strings.ToLower(err.Error()), "address already in use")
 }
 
 func (s *Service) Start() error {

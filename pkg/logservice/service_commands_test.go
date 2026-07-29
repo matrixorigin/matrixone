@@ -40,33 +40,35 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 		"",
 		func(rt runtime.Runtime) {
 			defer leaktest.AfterTest(t)()
-			cfg := DefaultConfig()
-			cfg.UUID = uuid.New().String()
-			cfg.FS = vfs.NewStrictMem()
-			cfg.DeploymentID = 1
-			cfg.RTTMillisecond = 5
-			cfg.DataDir = "data-1"
-			require.NoError(t, allocateTestConfigPorts(&cfg))
-			// below is an unreachable address intentionally set
-			cfg.GossipSeedAddresses = []string{getDummyGossipSeedAddress()}
-			cfg.HeartbeatInterval.Duration = 5 * time.Millisecond
-			cfg.HAKeeperTickInterval.Duration = 5 * time.Millisecond
-			setTestHAKeeperClientConfig(&cfg)
-
-			runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
-
-			service, err := NewService(
-				cfg,
-				newFS(),
-				nil,
+			genConfigs := func() ([]Config, error) {
+				cfg := DefaultConfig()
+				cfg.UUID = uuid.New().String()
+				cfg.FS = vfs.NewStrictMem()
+				cfg.DeploymentID = 1
+				cfg.RTTMillisecond = 5
+				cfg.DataDir = "data-1"
+				if err := allocateTestConfigPorts(&cfg); err != nil {
+					return nil, err
+				}
+				// below is an unreachable address intentionally set
+				cfg.GossipSeedAddresses = []string{getDummyGossipSeedAddress()}
+				cfg.HeartbeatInterval.Duration = 5 * time.Millisecond
+				cfg.HAKeeperTickInterval.Duration = 5 * time.Millisecond
+				setTestHAKeeperClientConfig(&cfg)
+				runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
+				return []Config{cfg}, nil
+			}
+			_, services, err := newTestServiceTopologyWithRetry(
+				genConfigs,
 				WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 					return true
 				}),
 			)
 			require.NoError(t, err)
 			defer func() {
-				assert.NoError(t, service.Close())
+				assert.NoError(t, closeTestServiceTopology(services))
 			}()
+			service := services[0]
 			peers := make(map[uint64]dragonboat.Target)
 			peers[1] = service.ID()
 			require.NoError(t, service.store.startHAKeeperReplica(1, peers, false))
