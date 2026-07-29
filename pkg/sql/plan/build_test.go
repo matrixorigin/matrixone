@@ -1698,6 +1698,20 @@ func TestDerivedTableAliasValidation(t *testing.T) {
 			message:   "Every derived table must have its own alias",
 		},
 		{
+			name:      "missing alias for values",
+			sql:       "select * from (values row(1))",
+			mysqlCode: moerr.ER_DERIVED_MUST_HAVE_ALIAS,
+			sqlState:  "42000",
+			message:   "Every derived table must have its own alias",
+		},
+		{
+			name:      "missing alias through parentheses",
+			sql:       "select * from ((select c_custkey from CUSTOMER))",
+			mysqlCode: moerr.ER_DERIVED_MUST_HAVE_ALIAS,
+			sqlState:  "42000",
+			message:   "Every derived table must have its own alias",
+		},
+		{
 			name:      "too few column aliases",
 			sql:       "select * from (select c_custkey, c_name from CUSTOMER) as d(a)",
 			mysqlCode: moerr.ER_VIEW_WRONG_LIST,
@@ -1707,6 +1721,13 @@ func TestDerivedTableAliasValidation(t *testing.T) {
 		{
 			name:      "too many column aliases",
 			sql:       "select * from (select c_custkey from CUSTOMER) as d(a, b)",
+			mysqlCode: moerr.ER_VIEW_WRONG_LIST,
+			sqlState:  "HY000",
+			message:   "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts",
+		},
+		{
+			name:      "too few column aliases inside cte body",
+			sql:       "with c as (select * from (select c_custkey, c_name from CUSTOMER) as d(a)) select * from c",
 			mysqlCode: moerr.ER_VIEW_WRONG_LIST,
 			sqlState:  "HY000",
 			message:   "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts",

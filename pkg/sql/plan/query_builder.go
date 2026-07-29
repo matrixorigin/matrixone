@@ -8690,6 +8690,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			return
 		}
 
+		if derivedSelect != nil && len(tbl.As.Cols) > 0 {
+			derivedCtx := builder.ctxByNode[nodeID]
+			if len(tbl.As.Cols) != len(derivedCtx.headings) {
+				return 0, moerr.NewViewWrongList(builder.GetContext())
+			}
+		}
+
 		err = builder.addBinding(nodeID, tbl.As, ctx)
 		if err != nil {
 			return
@@ -8892,8 +8899,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		headings := subCtx.headings
 		projects := subCtx.projects
 
-		if len(alias.Cols) > 0 && len(alias.Cols) != len(headings) {
-			return moerr.NewViewWrongList(builder.GetContext())
+		if len(alias.Cols) > len(headings) {
+			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
 		}
 
 		table = subCtx.cteName
