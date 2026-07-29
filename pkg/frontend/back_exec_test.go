@@ -54,6 +54,18 @@ func TestBindBackExecSession(t *testing.T) {
 	require.Equal(t, "real_tmp1", realName)
 }
 
+func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
+	ctx := context.Background()
+	ses := newFeatureLimitTestSession(t)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "foreign_key_checks", int64(0)))
+	backSes := &backSession{}
+	backSes.upstream = ses
+
+	value, err := backSes.GetSessionSysVar("foreign_key_checks")
+	require.NoError(t, err)
+	require.Equal(t, int8(0), value)
+}
+
 func TestBindBackExecSessionWithoutUpstream(t *testing.T) {
 	backSessionID := uuid.New()
 	backSes := &backSession{
