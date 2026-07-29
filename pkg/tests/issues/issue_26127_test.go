@@ -26,7 +26,7 @@ import (
 )
 
 func TestIssue26127CloneAndBranchEmbeddedBacktickTable(t *testing.T) {
-	require.NoError(t, runIssue26087AuthenticatedClusterTest(func(c embed.Cluster) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 		defer cancel()
 
@@ -81,7 +81,7 @@ func TestIssue26127CloneAndBranchEmbeddedBacktickTable(t *testing.T) {
 				"select count(*) from mo_catalog.mo_database where datname = '"+sourceDB+"'").Scan(&count))
 			require.Zero(t, count)
 		})
-	}))
+	})
 }
 
 func assertIssue26127Row(t *testing.T, ctx context.Context, db *sql.DB, databaseName, tableNameSQL string) {
