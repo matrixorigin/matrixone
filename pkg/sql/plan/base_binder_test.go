@@ -19,6 +19,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -58,6 +59,44 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 		require.NotNil(t, f)
 		require.Equal(t, "power", f.Func.GetObjName())
 	})
+}
+
+func TestIsPositiveIntegerLiteral(t *testing.T) {
+	tests := []struct {
+		name string
+		lit  *plan.Literal
+		want bool
+	}{
+		{"int8 positive", &plan.Literal{Value: &plan.Literal_I8Val{I8Val: 1}}, true},
+		{"int8 zero", &plan.Literal{Value: &plan.Literal_I8Val{I8Val: 0}}, false},
+		{"int16 positive", &plan.Literal{Value: &plan.Literal_I16Val{I16Val: 1}}, true},
+		{"int16 negative", &plan.Literal{Value: &plan.Literal_I16Val{I16Val: -1}}, false},
+		{"int32 positive", &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 1}}, true},
+		{"int32 zero", &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 0}}, false},
+		{"int64 positive", &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}, true},
+		{"int64 negative", &plan.Literal{Value: &plan.Literal_I64Val{I64Val: -1}}, false},
+		{"uint8 positive", &plan.Literal{Value: &plan.Literal_U8Val{U8Val: 1}}, true},
+		{"uint8 zero", &plan.Literal{Value: &plan.Literal_U8Val{U8Val: 0}}, false},
+		{"uint16 positive", &plan.Literal{Value: &plan.Literal_U16Val{U16Val: 1}}, true},
+		{"uint16 zero", &plan.Literal{Value: &plan.Literal_U16Val{U16Val: 0}}, false},
+		{"uint32 positive", &plan.Literal{Value: &plan.Literal_U32Val{U32Val: 1}}, true},
+		{"uint32 zero", &plan.Literal{Value: &plan.Literal_U32Val{U32Val: 0}}, false},
+		{"uint64 positive", &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 1}}, true},
+		{"uint64 zero", &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 0}}, false},
+		{"non-integer literal", &plan.Literal{}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isPositiveIntegerLiteral(tc.lit))
+		})
+	}
+}
+
+func TestValidateNthValueArgsRequiresProcessAndTwoArgs(t *testing.T) {
+	err := validateNthValueArgs(context.Background(), nil, nil)
+	require.Error(t, err)
+	require.Equal(t, moerr.ER_WRONG_ARGUMENTS, err.(*moerr.Error).MySQLCode())
 }
 
 func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {

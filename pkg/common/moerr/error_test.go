@@ -100,6 +100,14 @@ func TestNew_MyErrorCode(t *testing.T) {
 	)
 }
 
+func TestWrongArgumentsMySQLError(t *testing.T) {
+	err := NewWrongArguments(context.Background(), "nth_value")
+	require.Equal(t, ErrWrongArguments, err.ErrorCode())
+	require.Equal(t, ER_WRONG_ARGUMENTS, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Incorrect arguments to nth_value", err.Error())
+}
+
 func TestLockWaitTimeoutMySQLError(t *testing.T) {
 	err := NewLockWaitTimeout(context.Background())
 	require.Equal(t, ErrLockWaitTimeout, err.ErrorCode())
