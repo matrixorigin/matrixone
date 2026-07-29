@@ -330,7 +330,7 @@ func validCNCanWork(
 	c Cluster,
 	index int,
 ) {
-	assert.EventuallyWithT(t, func(collect *assert.CollectT) {
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		svc, err := c.GetCNService(index)
 		if !assert.NoError(collect, err) {
 			return
