@@ -1801,6 +1801,29 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 1. delete old table metadata
+	var preservedIdentity preservedTableIdentity
+	if hasReplaceDef && tbl.relKind == catalog.SystemViewRel {
+		sql := fmt.Sprintf(
+			"select created_time, creator, owner from %s.%s where account_id = %d and rel_id = %d",
+			catalog.MO_CATALOG,
+			catalog.MO_TABLES,
+			tbl.accountId,
+			tbl.tableId,
+		)
+		res, err := execReadSql(ctx, tbl.db.op, sql, true)
+		if err != nil {
+			return err
+		}
+		defer res.Close()
+		if len(res.Batches) != 1 || res.Batches[0].RowCount() != 1 {
+			return moerr.NewInternalErrorf(ctx, "cannot load catalog identity for view %d", tbl.tableId)
+		}
+		preservedIdentity = preservedTableIdentity{
+			createdAt: vector.GetFixedAtNoTypeCheck[types.Timestamp](res.Batches[0].Vecs[0], 0),
+			creator:   vector.GetFixedAtNoTypeCheck[uint32](res.Batches[0].Vecs[1], 0),
+			owner:     vector.GetFixedAtNoTypeCheck[uint32](res.Batches[0].Vecs[2], 0),
+		}
+	}
 	if _, err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn); err != nil {
 		return err
 	}
@@ -1810,6 +1833,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	tbl.RefeshTableDef(ctx)
 
 	ctx = context.WithValue(ctx, defines.LogicalIdKey{}, tbl.logicalId)
+	if hasReplaceDef && tbl.relKind == catalog.SystemViewRel {
+		ctx = context.WithValue(ctx, preservedTableIdentityKey{}, preservedIdentity)
+	}
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata

@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -89,7 +90,7 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 			Name: "a",
 			Typ:  plan2.Type{Id: int32(types.T_int64)},
 		}},
-		ViewSql: &plan2.ViewDef{View: `{"Stmt":"alter view v as select cast(a as bigint) from t"}`},
+		ViewSql: &plan2.ViewDef{View: `{"Stmt":"alter view v as select cast(a as bigint) from t","dependencies":[{"table_id":1,"version":1}]}`},
 	}
 
 	eng := newStubEngine()
@@ -100,7 +101,11 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	eng.dbs["other_db"] = db
 
 	proc := testutil.NewProcess(t)
-	proc.Ctx = context.WithValue(context.Background(), viewMetadataRefreshKey{}, true)
+	proc.Ctx = context.WithValue(
+		context.Background(),
+		defines.ViewMetadataRefreshKey{},
+		viewMetadataRefreshContext{currentSourceTableID: 1},
+	)
 	c := NewCompile("test", "default_db", "alter view other_db.v as select a from t", "", "", eng, proc, nil, false, nil, time.Now())
 	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
 		Definition: &plan2.DataDefinition_AlterView{
@@ -116,7 +121,10 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	require.Equal(t, api.AlterKind_ReplaceDef, rel.alterReqs[0].GetKind())
 	replaced := rel.alterReqs[0].GetReplaceDef().GetDef()
 	require.Equal(t, int32(types.T_int64), replaced.GetCols()[0].GetTyp().Id)
-	require.Equal(t, oldDef.GetViewSql().GetView(), replaced.GetViewSql().GetView())
+	var replacedViewData plan.ViewData
+	require.NoError(t, json.Unmarshal([]byte(replaced.GetViewSql().GetView()), &replacedViewData))
+	require.Equal(t, "create view v as select a from t", replacedViewData.Stmt)
+	require.Equal(t, []plan.ViewDependency{{TableID: 1, Version: 1}}, replacedViewData.Dependencies)
 
 	rel.alterReqs = nil
 	rel.tableDef = replaced
@@ -135,6 +143,52 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 
 	delete(db.rels, "v")
 	require.Error(t, s.AlterView(c))
+}
+
+func TestLockAndValidateViewDependencies(t *testing.T) {
+	require.NoError(t, lockAndValidateViewDependencies(nil, nil))
+
+	var locked []string
+	lockStub := gostub.Stub(&lockMoTable, func(
+		_ *Compile,
+		dbName string,
+		tableName string,
+		mode lock.LockMode,
+	) error {
+		require.Equal(t, lock.LockMode_Shared, mode)
+		locked = append(locked, dbName+"."+tableName)
+		return nil
+	})
+	defer lockStub.Reset()
+
+	eng := newStubEngine()
+	first := newStubRelation("first")
+	first.tableDef = &plan2.TableDef{TblId: 11, Version: 3}
+	second := newStubRelation("second")
+	second.tableDef = &plan2.TableDef{TblId: 22, Version: 7}
+	eng.relationsByID[11] = stubRelationByID{database: "db", table: "first", relation: first}
+	eng.relationsByID[22] = stubRelationByID{database: "other", table: "second", relation: second}
+
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.Background()
+	c := NewCompile("test", "db", "create view v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
+	require.NoError(t, lockAndValidateViewDependencies(c, &plan2.ViewDef{}))
+	require.Error(t, lockAndValidateViewDependencies(c, &plan2.ViewDef{View: "not-json"}))
+
+	viewData, err := json.Marshal(plan.ViewData{Dependencies: []plan.ViewDependency{
+		{TableID: 11, Version: 3},
+		{TableID: 22, Version: 7},
+	}})
+	require.NoError(t, err)
+	viewDef := &plan2.ViewDef{View: string(viewData)}
+
+	require.NoError(t, lockAndValidateViewDependencies(c, viewDef))
+	require.Equal(t, []string{"db.first", "other.second"}, locked)
+
+	second.tableDef.Version++
+	err = lockAndValidateViewDependencies(c, viewDef)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
 }
 
 func TestIsMissingCCPRMetadataTable(t *testing.T) {

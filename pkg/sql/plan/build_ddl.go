@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -180,6 +181,21 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	}
 
 	query := stmtPlan.GetQuery()
+	dependencyByID := make(map[uint64]uint32)
+	for _, node := range query.GetNodes() {
+		if node.GetObjRef() == nil || node.GetTableDef() == nil || node.GetObjRef().GetObj() <= 0 {
+			continue
+		}
+		tableID := uint64(node.GetObjRef().GetObj())
+		dependencyByID[tableID] = node.GetTableDef().GetVersion()
+	}
+	dependencies := make([]ViewDependency, 0, len(dependencyByID))
+	for tableID, version := range dependencyByID {
+		dependencies = append(dependencies, ViewDependency{TableID: tableID, Version: version})
+	}
+	slices.SortFunc(dependencies, func(left, right ViewDependency) int {
+		return cmp.Compare(left.TableID, right.TableID)
+	})
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
@@ -225,6 +241,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 		DefaultDatabase: ctx.DefaultDatabase(),
 		SQLMode:         parserSQLModeFromContext(ctx),
 		SecurityType:    getViewSecurityTypeFromContext(ctx),
+		Dependencies:    dependencies,
 	})
 	if err != nil {
 		return nil, err

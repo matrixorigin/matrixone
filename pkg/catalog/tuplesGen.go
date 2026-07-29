@@ -73,6 +73,7 @@ type Table struct {
 	Version       uint32
 	ExtraInfo     []byte
 	LogicalId     uint64 // rel_logical_id, if 0, will use TableId
+	CreatedAt     *types.Timestamp
 }
 
 // genColumnsFromDefs generates column struct from TableDef.
@@ -418,7 +419,11 @@ func GenCreateTableTuple(tbl Table, m *mpool.MPool, packer *types.Packer) (*batc
 		}
 		idx = MO_TABLES_CREATED_TIME_IDX
 		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // created_time
-		if err = vector.AppendFixed(bat.Vecs[idx], types.CurrentTimestamp(), false, m); err != nil {
+		createdAt := types.CurrentTimestamp()
+		if tbl.CreatedAt != nil {
+			createdAt = *tbl.CreatedAt
+		}
+		if err = vector.AppendFixed(bat.Vecs[idx], createdAt, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_CREATOR_IDX

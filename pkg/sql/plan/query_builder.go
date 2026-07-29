@@ -8227,6 +8227,10 @@ func (builder *QueryBuilder) bindView(
 // legacy grammar where || meant concat.
 const legacyViewParserSQLMode = "PIPES_AS_CONCAT"
 
+func LegacyViewParserSQLMode() string {
+	return legacyViewParserSQLMode
+}
+
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:

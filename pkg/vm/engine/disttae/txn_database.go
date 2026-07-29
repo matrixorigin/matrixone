@@ -41,6 +41,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type preservedTableIdentity struct {
+	createdAt types.Timestamp
+	creator   uint32
+	owner     uint32
+}
+
+type preservedTableIdentityKey struct{}
+
 var _ engine.Database = new(txnDatabase)
 
 func (db *txnDatabase) getTxn() *Transaction {
@@ -397,6 +405,12 @@ func (db *txnDatabase) createWithID(
 		return err
 	}
 	roleId := getDDLOwnerRoleId(ctx)
+	var createdAt *types.Timestamp
+	if identity, ok := ctx.Value(preservedTableIdentityKey{}).(preservedTableIdentity); ok {
+		userId = identity.creator
+		roleId = identity.owner
+		createdAt = &identity.createdAt
+	}
 	txn := db.getTxn()
 	m := txn.proc.Mp()
 
@@ -532,6 +546,7 @@ func (db *txnDatabase) createWithID(
 			Version:       tbl.version,
 			ExtraInfo:     api.MustMarshalTblExtra(tbl.extraInfo),
 			LogicalId:     logicalId,
+			CreatedAt:     createdAt,
 		}
 		bat, err := catalog.GenCreateTableTuple(arg, m, packer)
 		if err != nil {

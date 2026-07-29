@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +90,18 @@ func TestBuildRefreshViewSQL(t *testing.T) {
 			},
 			expected: "alter view `db`.`v` as select * from `source_t`",
 		},
+		{
+			name: "legacy pipes as concat",
+			view: viewMetadataRefresh{
+				database: "db",
+				name:     "legacy_v",
+				viewData: plan.ViewData{
+					Stmt:            "create view legacy_v as select a || b from source_t",
+					DefaultDatabase: "db",
+				},
+			},
+			expected: "alter view `db`.`legacy_v` as select concat(`a`, `b`) from `source_t`",
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -141,8 +154,14 @@ func TestCanSkipViewMetadataRefreshError(t *testing.T) {
 	require.True(t, canSkipViewMetadataRefreshError(
 		moerr.NewNoSuchTable(ctx, "db", "missing_table"),
 	))
+	require.True(t, canSkipViewMetadataRefreshError(
+		moerr.NewViewWrongList(ctx),
+	))
 	require.False(t, canSkipViewMetadataRefreshError(
 		moerr.NewTxnNeedRetry(ctx),
+	))
+	require.False(t, canSkipViewMetadataRefreshError(
+		moerr.NewDuplicateEntry(ctx, "duplicate", "key"),
 	))
 	require.False(t, canSkipViewMetadataRefreshError(
 		context.Canceled,
@@ -152,41 +171,55 @@ func TestCanSkipViewMetadataRefreshError(t *testing.T) {
 func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	mp := mpool.MustNewZero()
-	query := "select reldatabase, relname, viewdef from mo_catalog.mo_tables " +
+	const sourceTableID = 42
+	query := "select rel_id, reldatabase, relname, viewdef from mo_catalog.mo_tables " +
 		"where account_id = current_account_id() and relkind = 'v' " +
-		"and reldatabase not in ('mo_catalog', 'information_schema') order by reldatabase, relname"
+		"and reldatabase not in ('mo_catalog', 'information_schema') and rel_id > 0 " +
+		"and ((viewdef not like '%\\\"dependencies\\\":%' and viewdef like '%source_t%') " +
+		"or viewdef like '%\\\"table_id\\\":42,%') " +
+		"order by rel_id limit 128"
+	nextQuery := strings.Replace(query, "rel_id > 0", "rel_id > 2", 1)
 
-	bat := batch.NewWithSize(3)
+	bat := batch.NewWithSize(4)
 	bat.SetRowCount(2)
-	for i := range bat.Vecs {
+	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], uint64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], uint64(2), false, mp))
+	for i := 1; i < len(bat.Vecs); i++ {
 		bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
 	}
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("db"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("v"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("db"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("v"), false, mp))
 	require.NoError(t, vector.AppendBytes(
-		bat.Vecs[2],
-		[]byte(`{"Stmt":"create view v as select a from t","DefaultDatabase":"db"}`),
+		bat.Vecs[3],
+		[]byte(`{"Stmt":"create view v as select a from t","DefaultDatabase":"db","dependencies":[{"table_id":42,"version":1}]}`),
 		false,
 		mp,
 	))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("db"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("invalid_v"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("not-json"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("db"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("invalid_v"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[3], []byte("not-json"), false, mp))
 
 	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
-		query: {Mp: mp, Batches: []*batch.Batch{bat}},
+		query:     {Mp: mp, Batches: []*batch.Batch{bat}},
+		nextQuery: {},
 	}}
 	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
-	require.NoError(t, refreshViewMetadataAfterAlter(c))
+	require.NoError(t, refreshViewMetadataAfterAlter(c, sourceTableID, sourceTableID, "source_t"))
 	require.Equal(t, []string{
 		query,
 		"alter view `db`.`v` as select `a` from `t`",
+		nextQuery,
 	}, spyExec.executedSQLs)
 	require.Zero(t, mp.CurrNB())
 
 	require.False(t, isViewMetadataRefresh(nil))
 	require.True(t, isViewMetadataRefresh(
-		context.WithValue(context.Background(), viewMetadataRefreshKey{}, true),
+		context.WithValue(
+			context.Background(),
+			defines.ViewMetadataRefreshKey{},
+			viewMetadataRefreshContext{currentSourceTableID: sourceTableID},
+		),
 	))
 }
 

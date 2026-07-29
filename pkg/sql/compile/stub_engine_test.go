@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,18 +28,40 @@ import (
 
 type stubEngine struct {
 	engine.Engine
-	dbs   map[string]*stubDatabase
-	dbErr error
+	dbs           map[string]*stubDatabase
+	relationsByID map[uint64]stubRelationByID
+	dbErr         error
+}
+
+type stubRelationByID struct {
+	database string
+	table    string
+	relation engine.Relation
 }
 
 func newStubEngine() *stubEngine {
-	e := &stubEngine{dbs: make(map[string]*stubDatabase)}
+	e := &stubEngine{
+		dbs:           make(map[string]*stubDatabase),
+		relationsByID: make(map[uint64]stubRelationByID),
+	}
 	// Setup MO_CATALOG
 	cat := newStubDatabase(catalog.MO_CATALOG)
 	cat.rels[catalog.MO_DATABASE] = newStubRelation(catalog.MO_DATABASE)
 	cat.rels[catalog.MO_TABLES] = newStubRelation(catalog.MO_TABLES)
 	e.dbs[catalog.MO_CATALOG] = cat
 	return e
+}
+
+func (e *stubEngine) GetRelationById(
+	ctx context.Context,
+	_ client.TxnOperator,
+	tableID uint64,
+) (string, string, engine.Relation, error) {
+	item, ok := e.relationsByID[tableID]
+	if !ok {
+		return "", "", nil, moerr.NewNoSuchTable(ctx, "", fmt.Sprintf("%d", tableID))
+	}
+	return item.database, item.table, item.relation, nil
 }
 
 func (e *stubEngine) Database(ctx context.Context, name string, op client.TxnOperator) (engine.Database, error) {

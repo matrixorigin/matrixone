@@ -1103,7 +1103,27 @@ func (s *Scope) doAlterTable(c *Compile) error {
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		// COPY ALTER transfers mo_foreign_keys around the source-table drop,
 		// so its catalog statements are executed inside AlterTableCopy.
-		return s.AlterTableCopy(c)
+		if err = s.AlterTableCopy(c); err != nil {
+			return err
+		}
+		database, err := c.e.Database(c.proc.Ctx, qry.GetDatabase(), c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		relation, err := database.Relation(
+			c.proc.Ctx,
+			qry.GetTableDef().GetName(),
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+		return refreshViewMetadataAfterAlter(
+			c,
+			qry.GetTableDef().GetTblId(),
+			relation.GetTableID(c.proc.Ctx),
+			qry.GetTableDef().GetName(),
+		)
 	} else {
 		err = s.AlterTableInplace(c)
 	}
@@ -1120,37 +1140,108 @@ func (s *Scope) doAlterTable(c *Compile) error {
 			}
 		}
 	}
-	if qry.GetCopyTableDef() != nil {
-		return refreshViewMetadataAfterAlter(c)
-	}
 	return nil
 }
 
 type viewMetadataRefresh struct {
+	id       uint64
 	database string
 	name     string
 	viewData plan2.ViewData
 }
 
-type viewMetadataRefreshKey struct{}
+type viewMetadataRefreshContext struct {
+	currentSourceTableID uint64
+}
 
 func isViewMetadataRefresh(ctx context.Context) bool {
 	if ctx == nil {
 		return false
 	}
-	refresh, _ := ctx.Value(viewMetadataRefreshKey{}).(bool)
-	return refresh
+	refresh, _ := ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext)
+	return refresh.currentSourceTableID != 0
 }
 
-func refreshViewMetadataAfterAlter(c *Compile) error {
+func refreshViewMetadataAfterAlter(
+	c *Compile,
+	previousSourceTableID uint64,
+	currentSourceTableID uint64,
+	sourceTable string,
+) error {
+	var afterViewID uint64
+	for {
+		views, err := loadViewMetadataRefreshPage(
+			c,
+			previousSourceTableID,
+			sourceTable,
+			afterViewID,
+		)
+		if err != nil {
+			return err
+		}
+		if len(views) == 0 {
+			return nil
+		}
+		for _, view := range views {
+			afterViewID = view.id
+			sql, err := buildRefreshViewSQL(c.proc.Ctx, c.getLower(), view)
+			if err != nil {
+				logutil.Warn("skip refreshing view that cannot be parsed",
+					zap.String("database", view.database),
+					zap.String("view", view.name),
+					zap.Error(err))
+				continue
+			}
+			oldCtx := c.proc.Ctx
+			refreshCtx := oldCtx
+			if refreshCtx == nil {
+				refreshCtx = c.proc.GetTopContext()
+			}
+			if refreshCtx == nil {
+				refreshCtx = context.Background()
+			}
+			c.proc.Ctx = context.WithValue(
+				refreshCtx,
+				defines.ViewMetadataRefreshKey{},
+				viewMetadataRefreshContext{currentSourceTableID: currentSourceTableID},
+			)
+			err = runViewMetadataRefreshSQL(c, sql, view.viewData)
+			c.proc.Ctx = oldCtx
+			if err != nil {
+				if !canSkipViewMetadataRefreshError(err) {
+					return err
+				}
+				logutil.Warn("skip refreshing invalid view metadata",
+					zap.String("database", view.database),
+					zap.String("view", view.name),
+					zap.Error(err))
+			}
+		}
+	}
+}
+
+func loadViewMetadataRefreshPage(
+	c *Compile,
+	sourceTableID uint64,
+	sourceTable string,
+	afterViewID uint64,
+) ([]viewMetadataRefresh, error) {
+	const pageSize = 128
+	legacyCandidate := strings.ReplaceAll(sourceTable, "'", "''")
 	sql := fmt.Sprintf(
-		"select reldatabase, relname, viewdef from %s.mo_tables "+
+		"select rel_id, reldatabase, relname, viewdef from %s.mo_tables "+
 			"where account_id = current_account_id() and relkind = '%s' "+
-			"and reldatabase not in ('%s', '%s') order by reldatabase, relname",
+			"and reldatabase not in ('%s', '%s') and rel_id > %d "+
+			"and ((viewdef not like '%%\\\"dependencies\\\":%%' and viewdef like '%%%s%%') "+
+			"or viewdef like '%%\\\"table_id\\\":%d,%%') order by rel_id limit %d",
 		catalog.MO_CATALOG,
 		catalog.SystemViewRel,
 		catalog.MO_CATALOG,
 		"information_schema",
+		afterViewID,
+		legacyCandidate,
+		sourceTableID,
+		pageSize,
 	)
 	result, err := c.runSqlWithResultAndOptions(
 		sql,
@@ -1159,14 +1250,16 @@ func refreshViewMetadataAfterAlter(c *Compile) error {
 	)
 	if err != nil {
 		result.Close()
-		return err
+		return nil, err
 	}
+	defer result.Close()
 
-	var views []viewMetadataRefresh
+	views := make([]viewMetadataRefresh, 0, pageSize)
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		databases := executor.GetStringRows(cols[0])
-		names := executor.GetStringRows(cols[1])
-		definitions := executor.GetStringRows(cols[2])
+		ids := executor.GetFixedRows[uint64](cols[0])
+		databases := executor.GetStringRows(cols[1])
+		names := executor.GetStringRows(cols[2])
+		definitions := executor.GetStringRows(cols[3])
 		for i := 0; i < rows; i++ {
 			var viewData plan2.ViewData
 			if err := json.Unmarshal([]byte(definitions[i]), &viewData); err != nil {
@@ -1174,9 +1267,15 @@ func refreshViewMetadataAfterAlter(c *Compile) error {
 					zap.String("database", databases[i]),
 					zap.String("view", names[i]),
 					zap.Error(err))
+				views = append(views, viewMetadataRefresh{
+					id:       ids[i],
+					database: databases[i],
+					name:     names[i],
+				})
 				continue
 			}
 			views = append(views, viewMetadataRefresh{
+				id:       ids[i],
 				database: databases[i],
 				name:     names[i],
 				viewData: viewData,
@@ -1184,39 +1283,38 @@ func refreshViewMetadataAfterAlter(c *Compile) error {
 		}
 		return true
 	})
-	result.Close()
+	return views, nil
+}
 
-	for _, view := range views {
-		sql, err := buildRefreshViewSQL(c.proc.Ctx, c.getLower(), view)
-		if err != nil {
-			logutil.Warn("skip refreshing view that cannot be parsed",
-				zap.String("database", view.database),
-				zap.String("view", view.name),
-				zap.Error(err))
-			continue
-		}
-		oldCtx := c.proc.Ctx
-		refreshCtx := oldCtx
-		if refreshCtx == nil {
-			refreshCtx = c.proc.GetTopContext()
-		}
-		if refreshCtx == nil {
-			refreshCtx = context.Background()
-		}
-		c.proc.Ctx = context.WithValue(refreshCtx, viewMetadataRefreshKey{}, true)
-		err = c.runSqlWithOptions(sql, executor.StatementOption{}.WithDisableLog())
-		c.proc.Ctx = oldCtx
-		if err != nil {
-			if !canSkipViewMetadataRefreshError(err) {
-				return err
-			}
-			logutil.Warn("skip refreshing invalid view metadata",
-				zap.String("database", view.database),
-				zap.String("view", view.name),
-				zap.Error(err))
-		}
+func runViewMetadataRefreshSQL(c *Compile, sql string, viewData plan2.ViewData) error {
+	oldDatabase := c.db
+	oldResolveVariable := c.proc.GetResolveVariableFunc()
+	oldSQLMode := c.proc.GetSessionInfo().SqlMode
+	lower := c.getLower()
+	sqlMode := plan2.LegacyViewParserSQLMode()
+	if viewData.SQLMode != nil {
+		sqlMode = *viewData.SQLMode
 	}
-	return nil
+	c.db = viewData.DefaultDatabase
+	c.proc.GetSessionInfo().SqlMode = sqlMode
+	c.proc.SetResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (any, error) {
+		if isSystemVar && !isGlobalVar && strings.EqualFold(name, "sql_mode") {
+			return sqlMode, nil
+		}
+		if isSystemVar && !isGlobalVar && strings.EqualFold(name, "lower_case_table_names") {
+			return lower, nil
+		}
+		if oldResolveVariable == nil {
+			return nil, nil
+		}
+		return oldResolveVariable(name, isSystemVar, isGlobalVar)
+	})
+	defer func() {
+		c.db = oldDatabase
+		c.proc.GetSessionInfo().SqlMode = oldSQLMode
+		c.proc.SetResolveVariableFunc(oldResolveVariable)
+	}()
+	return c.runSqlWithOptions(sql, executor.StatementOption{}.WithDisableLog())
 }
 
 func canSkipViewMetadataRefreshError(err error) bool {
@@ -1224,13 +1322,19 @@ func canSkipViewMetadataRefreshError(err error) bool {
 	if !ok {
 		return false
 	}
-	if code >= moerr.ErrBadConfig && code <= moerr.ErrUnknownStmtHandler {
+	switch code {
+	case moerr.ErrParseError,
+		moerr.ErrBadFieldError,
+		moerr.ErrOperandColumns,
+		moerr.ErrViewWrongList,
+		moerr.ErrBadDB,
+		moerr.ErrNoSuchTable,
+		moerr.ErrNoDB,
+		moerr.ErrBadView:
 		return true
+	default:
+		return false
 	}
-	return code == moerr.ErrBadDB ||
-		code == moerr.ErrNoSuchTable ||
-		code == moerr.ErrNoDB ||
-		code == moerr.ErrBadView
 }
 
 func buildRefreshViewSQL(
@@ -1238,7 +1342,7 @@ func buildRefreshViewSQL(
 	lower int64,
 	view viewMetadataRefresh,
 ) (string, error) {
-	sqlMode := ""
+	sqlMode := plan2.LegacyViewParserSQLMode()
 	if view.viewData.SQLMode != nil {
 		sqlMode = *view.viewData.SQLMode
 	}

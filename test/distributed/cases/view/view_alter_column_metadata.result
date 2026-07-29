@@ -14,32 +14,33 @@ create view v_source_t as
 select id, code, qty, price, qty * price as total from source_t;
 create view v_nested as select code, qty, total from v_source_t;
 create view view_alter_column_metadata_cross.v_cross as
-select code, price from view_alter_column_metadata.source_t;
+select code, price from source_t;
 create table invalid_source (a int);
 create view invalid_view as select a from invalid_source;
 drop table invalid_source;
-create table original_view_ids as
-select relname, rel_id
+create table original_view_metadata as
+select relname, rel_id, creator, owner, created_time
 from mo_catalog.mo_tables
 where reldatabase in ('view_alter_column_metadata', 'view_alter_column_metadata_cross')
 and relname in ('v_source_t', 'v_nested', 'v_cross');
-alter table source_t modify column code varchar(60) not null;
-alter table source_t modify column qty bigint not null default 1;
-alter table source_t modify column price decimal(20, 5) not null;
-insert into source_t values
+use view_alter_column_metadata_cross;
+alter table view_alter_column_metadata.source_t modify column code varchar(60) not null;
+alter table view_alter_column_metadata.source_t change column qty qty bigint not null default 1;
+alter table view_alter_column_metadata.source_t modify column price decimal(20, 5) not null;
+insert into view_alter_column_metadata.source_t values
 (2, 'this-code-is-longer-than-five-characters', 5000000000, 12345.67891);
-select id, code, qty, price, total from v_source_t order by id;
+select id, code, qty, price, total from view_alter_column_metadata.v_source_t order by id;
 ➤ id[4,32,0]  ¦  code[12,-1,0]  ¦  qty[-5,64,0]  ¦  price[3,20,5]  ¦  total[3,38,5]  𝄀
 1  ¦  short  ¦  2  ¦  1.25000  ¦  2.50000  𝄀
 2  ¦  this-code-is-longer-than-five-characters  ¦  5000000000  ¦  12345.67891  ¦  61728394550000.00000
-desc v_source_t;
+desc view_alter_column_metadata.v_source_t;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 price  ¦  DECIMAL(20,5)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 total  ¦  DECIMAL(38,5)  ¦  NO  ¦    ¦  null  ¦    ¦
-desc v_nested;
+desc view_alter_column_metadata.v_nested;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -68,19 +69,23 @@ view_alter_column_metadata  ¦  v_source_t  ¦  price  ¦  DECIMAL(20,5)  𝄀
 view_alter_column_metadata  ¦  v_source_t  ¦  total  ¦  DECIMAL(38,5)  𝄀
 view_alter_column_metadata_cross  ¦  v_cross  ¦  code  ¦  VARCHAR(60)  𝄀
 view_alter_column_metadata_cross  ¦  v_cross  ¦  price  ¦  DECIMAL(20,5)
-select count(*) = 3 as view_ids_preserved
+select count(*) = 3 as view_metadata_preserved
 from mo_catalog.mo_tables current_view
-join original_view_ids original_view
+join view_alter_column_metadata.original_view_metadata original_view
 on current_view.relname = original_view.relname
 and current_view.rel_id = original_view.rel_id
+and current_view.creator = original_view.creator
+and current_view.owner = original_view.owner
+and current_view.created_time = original_view.created_time
 where current_view.reldatabase in (
 'view_alter_column_metadata',
 'view_alter_column_metadata_cross'
 );
-➤ view_ids_preserved[-7,1,0]  𝄀
+➤ view_metadata_preserved[-7,1,0]  𝄀
 1
-create table ctas_view as select id, code, qty, price from v_source_t;
-desc ctas_view;
+create table view_alter_column_metadata.ctas_view as
+select id, code, qty, price from view_alter_column_metadata.v_source_t;
+desc view_alter_column_metadata.ctas_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀

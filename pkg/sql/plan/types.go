@@ -229,8 +229,14 @@ type BaseOptimizer struct {
 type ViewData struct {
 	Stmt            string
 	DefaultDatabase string
-	SQLMode         *string `json:"sql_mode,omitempty"`
-	SecurityType    string  `json:"security_type,omitempty"`
+	SQLMode         *string          `json:"sql_mode,omitempty"`
+	SecurityType    string           `json:"security_type,omitempty"`
+	Dependencies    []ViewDependency `json:"dependencies,omitempty"`
+}
+
+type ViewDependency struct {
+	TableID uint64 `json:"table_id"`
+	Version uint32 `json:"version"`
 }
 
 type QueryBuilder struct {

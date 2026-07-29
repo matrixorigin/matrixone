@@ -15,12 +15,14 @@
 package compile
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -459,6 +461,13 @@ func (s *Scope) AlterView(c *Compile) error {
 	}
 	replaceDef := qry.GetTableDef()
 	if isViewMetadataRefresh(c.proc.Ctx) {
+		refresh, _ := c.proc.Ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext)
+		var refreshedViewData plan2.ViewData
+		if replaceDef.GetViewSql() == nil ||
+			json.Unmarshal([]byte(replaceDef.GetViewSql().GetView()), &refreshedViewData) != nil ||
+			!viewDependsOnTable(refreshedViewData.Dependencies, refresh.currentSourceTableID) {
+			return nil
+		}
 		currentDef := rel.GetTableDef(c.proc.Ctx)
 		if viewColumnsEqual(currentDef.GetCols(), replaceDef.GetCols()) {
 			return nil
@@ -466,6 +475,16 @@ func (s *Scope) AlterView(c *Compile) error {
 		replaceDef = plan2.DeepCopyTableDef(currentDef, true)
 		replaceDef.Cols = qry.GetTableDef().GetCols()
 		replaceDef.Name2ColIndex = nil
+		if currentDef.GetViewSql() != nil && qry.GetTableDef().GetViewSql() != nil {
+			var currentViewData plan2.ViewData
+			if json.Unmarshal([]byte(currentDef.GetViewSql().GetView()), &currentViewData) == nil &&
+				len(refreshedViewData.Dependencies) > 0 {
+				currentViewData.Dependencies = refreshedViewData.Dependencies
+				if encoded, err := json.Marshal(currentViewData); err == nil {
+					replaceDef.ViewSql = &plan.ViewDef{View: string(encoded)}
+				}
+			}
+		}
 	}
 	databaseID, err := strconv.ParseUint(dbSource.GetDatabaseId(c.proc.Ctx), 10, 64)
 	if err != nil {
@@ -482,6 +501,17 @@ func (s *Scope) AlterView(c *Compile) error {
 			),
 		},
 	)
+}
+
+func viewDependsOnTable(dependencies []plan2.ViewDependency, tableID uint64) bool {
+	_, found := slices.BinarySearchFunc(
+		dependencies,
+		tableID,
+		func(dependency plan2.ViewDependency, target uint64) int {
+			return cmp.Compare(dependency.TableID, target)
+		},
+	)
+	return found
 }
 
 func viewColumnsEqual(current, refreshed []*plan.ColDef) bool {
@@ -2307,6 +2337,9 @@ func (s *Scope) CreateView(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateView()
+	if err := lockAndValidateViewDependencies(c, qry.GetTableDef().GetViewSql()); err != nil {
+		return err
+	}
 
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -2386,6 +2419,41 @@ func (s *Scope) CreateView(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
+	}
+	return nil
+}
+
+func lockAndValidateViewDependencies(c *Compile, viewDef *plan.ViewDef) error {
+	if viewDef == nil || viewDef.GetView() == "" {
+		return nil
+	}
+	var viewData plan2.ViewData
+	if err := json.Unmarshal([]byte(viewDef.GetView()), &viewData); err != nil {
+		return err
+	}
+	for _, dependency := range viewData.Dependencies {
+		dbName, tableName, _, err := c.e.GetRelationById(
+			c.proc.Ctx,
+			c.proc.GetTxnOperator(),
+			dependency.TableID,
+		)
+		if err != nil {
+			return err
+		}
+		if err = lockMoTable(c, dbName, tableName, lock.LockMode_Shared); err != nil {
+			return err
+		}
+		_, _, rel, err := c.e.GetRelationById(
+			c.proc.Ctx,
+			c.proc.GetTxnOperator(),
+			dependency.TableID,
+		)
+		if err != nil {
+			return err
+		}
+		if rel.GetTableDef(c.proc.Ctx).GetVersion() != dependency.Version {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
 	}
 	return nil
 }
