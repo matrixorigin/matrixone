@@ -48,7 +48,7 @@ func NewDMLContext() *DMLContext {
 func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Update) error {
 	err := dmlCtx.ResolveTables(ctx, stmt.Tables, stmt.With, nil, false)
 	if err != nil {
-		return err
+		return classifyUpdateTableResolutionError(ctx, stmt, err)
 	}
 
 	// check update field and set updateKeys
@@ -115,7 +115,10 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	}
 
 	if len(usedTbl) > 1 {
-		return moerr.NewUnsupportedDML(ctx.GetContext(), "multi-table update")
+		return newLegacyUpdatePlannerRouteError(
+			updateRouteReasonMultiTarget,
+			moerr.NewUnsupportedDML(ctx.GetContext(), "multi-table update"),
+		)
 	}
 
 	dmlCtx.updateCol2Expr = make([]map[string]tree.Expr, len(dmlCtx.tableDefs))
@@ -127,6 +130,58 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	dmlCtx.updatePartCol = make([]bool, len(dmlCtx.tableDefs))
 
 	return nil
+}
+
+func classifyUpdateTableResolutionError(ctx CompilerContext, stmt *tree.Update, err error) error {
+	if !moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
+		return err
+	}
+
+	switch err.Error() {
+	case icebergRowLevelDMLUnsupportedMsg:
+		return newUpdatePlannerRouteError(
+			updatePlannerSpecialized,
+			updateRouteReasonIceberg,
+			err,
+		)
+	case externalTableUnsupportedDMLMsg:
+		return newUpdatePlannerRouteError(
+			updatePlannerRejected,
+			updateRouteReasonExternalTable,
+			moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table"),
+		)
+	case foreignKeyUnsupportedDMLMsg:
+		return newLegacyUpdatePlannerRouteError(updateRouteReasonForeignKey, err)
+	case unsupportedTableTypeDMLMsg:
+		if updateHasMultiTableTargetShape(stmt) {
+			return newLegacyUpdatePlannerRouteError(updateRouteReasonMultiTarget, err)
+		}
+		return newUpdatePlannerRouteError(
+			updatePlannerRejected,
+			updateRouteReasonTableForm,
+			err,
+		)
+	case emptyTableNameDMLMsg:
+		return newUpdatePlannerRouteError(
+			updatePlannerRejected,
+			updateRouteReasonEmptyTableName,
+			err,
+		)
+	default:
+		return err
+	}
+}
+
+func updateHasMultiTableTargetShape(stmt *tree.Update) bool {
+	if stmt == nil {
+		return false
+	}
+	for _, tableExpr := range stmt.Tables {
+		if _, ok := tableExpr.(*tree.JoinTableExpr); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // externalTableUnsupportedDMLCause is the cause string of the fallback sentinel
@@ -151,6 +206,14 @@ const noPkOnDupUpdateMsg = "unsupported DML: " + noPkOnDupUpdateCause
 const icebergRowLevelDMLUnsupportedCause = "Iceberg row-level DML"
 
 const icebergRowLevelDMLUnsupportedMsg = "unsupported DML: " + icebergRowLevelDMLUnsupportedCause
+
+const foreignKeyUnsupportedDMLCause = "foreign key constraint"
+
+const foreignKeyUnsupportedDMLMsg = "unsupported DML: " + foreignKeyUnsupportedDMLCause
+
+const unsupportedTableTypeDMLMsg = "unsupported DML: unsupported table type"
+
+const emptyTableNameDMLMsg = "unsupported DML: empty table name"
 
 func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
@@ -263,7 +326,7 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 	}
 
 	if checkFK && (len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0) {
-		return moerr.NewUnsupportedDML(ctx.GetContext(), "foreign key constraint")
+		return moerr.NewUnsupportedDML(ctx.GetContext(), foreignKeyUnsupportedDMLCause)
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
