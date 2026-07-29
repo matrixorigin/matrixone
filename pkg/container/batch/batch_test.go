@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -155,7 +153,6 @@ func newBatch(ts []types.Type, rows int) *Batch {
 	}
 
 	bat.ExtraBuf = []byte("extra buf")
-	aggexec.RegisterGroupConcatAgg(0, ",")
 	bat.Attrs = []string{"1"}
 	return bat
 }
