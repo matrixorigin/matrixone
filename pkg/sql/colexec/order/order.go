@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/partition"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -52,7 +51,6 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			}
 		}
 
-		firstVec := ctr.sortVectors[0]
 		if cap(ctr.resultOrderList) >= ctr.batWaitForSort.RowCount() {
 			ctr.resultOrderList = ctr.resultOrderList[:ctr.batWaitForSort.RowCount()]
 		} else {
@@ -63,42 +61,7 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			ctr.resultOrderList[i] = int64(i)
 		}
 
-		// skip sort for const vector
-		if !firstVec.IsConst() {
-			nullCnt := firstVec.GetNulls().Count()
-			if nullCnt < firstVec.Length() {
-				sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.resultOrderList, firstVec)
-			}
-		}
-
-		sels := ctr.resultOrderList
-		ovec := firstVec
-		if len(ctr.sortVectors) != 1 {
-			ps := make([]int64, 0, 16)
-			ds := make([]bool, len(sels))
-			for i, j := 1, len(ctr.sortVectors); i < j; i++ {
-				vec := ctr.sortVectors[i]
-				ps = partition.Partition(sels, ds, ps, ovec)
-
-				// skip sort for const vector
-				if !vec.IsConst() {
-					desc := ctr.desc[i]
-					nullsLast := ctr.nullsLast[i]
-
-					nullCnt := vec.GetNulls().Count()
-					if nullCnt < vec.Length() {
-						for m, n := 0, len(ps); m < n; m++ {
-							if m == n-1 {
-								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:], vec)
-							} else {
-								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:ps[m+1]], vec)
-							}
-						}
-					}
-				}
-				ovec = vec
-			}
-		}
+		sort.SortByVectors(ctr.resultOrderList, ctr.sortVectors, ctr.desc, ctr.nullsLast)
 
 		if err = ctr.batWaitForSort.Shuffle(ctr.resultOrderList, proc.Mp()); err != nil {
 			return err
