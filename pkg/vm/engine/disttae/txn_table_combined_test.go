@@ -109,7 +109,7 @@ func TestCombinedTxnTable_CollectChangesOrdersPartitionsByCommitTS(t *testing.T)
 	assert.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](data.Vecs[0], 0))
 	assert.Equal(t, types.BuildTS(10, 0), vector.GetFixedAtNoTypeCheck[types.TS](data.Vecs[1], 0))
 	assert.Nil(t, tombstone)
-	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	assert.Equal(t, engine.ChangesHandle_Tail_wip, hint)
 	data.Clean(mp)
 
 	data, tombstone, hint, err = handle.Next(context.Background(), mp)
@@ -584,23 +584,30 @@ func TestCombinedChangesHelpers(t *testing.T) {
 }
 
 func TestCombinedChangesHandleTailManyCommitTimestamps(t *testing.T) {
-	const rowCount = 8192
+	const rowCount = int(objectio.BlockMaxRows)
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
 	handle, children := newMixedTimestampChangesHandle(t, mp, rowCount)
 
+	tailDoneCount := 0
 	for i := 0; i < rowCount; i++ {
 		data, tombstone, hint, err := handle.Next(context.Background(), mp)
 		require.NoError(t, err)
 		require.NotNil(t, data)
 		require.Nil(t, tombstone)
-		require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+		if i == rowCount-1 {
+			require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+			tailDoneCount++
+		} else {
+			require.Equal(t, engine.ChangesHandle_Tail_wip, hint)
+		}
 		require.Equal(t, 1, data.RowCount())
 		require.Equal(t, int64(i), vector.GetFixedAtNoTypeCheck[int64](data.Vecs[0], 0))
 		require.Equal(t, types.BuildTS(int64(i+1), 0), vector.GetFixedAtNoTypeCheck[types.TS](data.Vecs[1], 0))
 		data.Clean(mp)
 	}
+	require.Equal(t, 1, tailDoneCount, "an 8K pure insert range must produce one sink boundary")
 
 	data, tombstone, hint, err := handle.Next(context.Background(), mp)
 	require.NoError(t, err)
@@ -610,6 +617,82 @@ func TestCombinedChangesHandleTailManyCommitTimestamps(t *testing.T) {
 	for _, child := range children {
 		require.True(t, child.closed)
 	}
+}
+
+func TestCombinedChangesHandleTailBoundsPureRanges(t *testing.T) {
+	const rowCount = 2 * int(objectio.BlockMaxRows)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	handle, children := newMixedTimestampChangesHandle(t, mp, rowCount)
+	tailDoneCount := 0
+	for i := 0; i < rowCount; i++ {
+		data, tombstone, hint, err := handle.Next(context.Background(), mp)
+		require.NoError(t, err)
+		require.NotNil(t, data)
+		require.Nil(t, tombstone)
+		if (i+1)%int(objectio.BlockMaxRows) == 0 {
+			require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+			tailDoneCount++
+		} else {
+			require.Equal(t, engine.ChangesHandle_Tail_wip, hint)
+		}
+		data.Clean(mp)
+	}
+	require.Equal(t, 2, tailDoneCount)
+	for _, child := range children {
+		require.True(t, child.closed)
+	}
+}
+
+func TestCombinedChangesHandleTailCoalescesOnlyPureOperations(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	t.Run("pure deletes coalesce", func(t *testing.T) {
+		child := &mockChangesHandle{changes: []mockChange{{
+			tombstone: newChangesTestBatch(t, mp, []int64{1, 2}, []types.TS{types.BuildTS(10, 0), types.BuildTS(20, 0)}),
+			hint:      engine.ChangesHandle_Tail_done,
+		}}}
+		handle := &combinedChangesHandle{handles: []engine.ChangesHandle{child}, mp: mp}
+
+		data, tombstone, hint, err := handle.Next(context.Background(), mp)
+		require.NoError(t, err)
+		require.Nil(t, data)
+		require.NotNil(t, tombstone)
+		require.Equal(t, engine.ChangesHandle_Tail_wip, hint)
+		tombstone.Clean(mp)
+
+		data, tombstone, hint, err = handle.Next(context.Background(), mp)
+		require.NoError(t, err)
+		require.Nil(t, data)
+		require.NotNil(t, tombstone)
+		require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+		tombstone.Clean(mp)
+	})
+
+	t.Run("insert followed by delete stays separate", func(t *testing.T) {
+		child := &mockChangesHandle{changes: []mockChange{{
+			data:      newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)}),
+			tombstone: newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(20, 0)}),
+			hint:      engine.ChangesHandle_Tail_done,
+		}}}
+		handle := &combinedChangesHandle{handles: []engine.ChangesHandle{child}, mp: mp}
+
+		data, tombstone, hint, err := handle.Next(context.Background(), mp)
+		require.NoError(t, err)
+		require.NotNil(t, data)
+		require.Nil(t, tombstone)
+		require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+		data.Clean(mp)
+
+		data, tombstone, hint, err = handle.Next(context.Background(), mp)
+		require.NoError(t, err)
+		require.Nil(t, data)
+		require.NotNil(t, tombstone)
+		require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+		tombstone.Clean(mp)
+	})
 }
 
 func BenchmarkCombinedChangesHandleTail8KDistinctCommitTimestamps(b *testing.B) {

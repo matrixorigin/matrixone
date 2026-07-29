@@ -312,6 +312,7 @@ type combinedChangesHandle struct {
 	handles         []engine.ChangesHandle
 	pending         []pendingPartitionChanges
 	frontier        pendingChangesHeap
+	frontierGroups  map[types.TS]pendingChangeGroup
 	mp              *mpool.MPool
 	idx             int
 	snapshot        bool
@@ -319,6 +320,8 @@ type combinedChangesHandle struct {
 	pendingLoaded   bool
 	lastCommitTS    types.TS
 	hasLastCommitTS bool
+	tailRangeMask   pendingChangeMask
+	tailRangeRows   int
 }
 
 type pendingPartitionChanges struct {
@@ -338,10 +341,40 @@ const (
 	pendingChangeTombstone
 )
 
+type pendingChangeMask uint8
+
+const (
+	pendingChangeNone     pendingChangeMask = 0
+	pendingChangeDataMask pendingChangeMask = 1 << iota
+	pendingChangeTombstoneMask
+)
+
+const combinedTailMaxRows = int(objectio.BlockMaxRows)
+
 type pendingChangeFrontier struct {
 	partition int
 	kind      pendingChangeKind
 	commitTS  types.TS
+}
+
+type pendingChangeGroup struct {
+	data      int
+	tombstone int
+}
+
+func (g pendingChangeGroup) mask() pendingChangeMask {
+	var mask pendingChangeMask
+	if g.data > 0 {
+		mask |= pendingChangeDataMask
+	}
+	if g.tombstone > 0 {
+		mask |= pendingChangeTombstoneMask
+	}
+	return mask
+}
+
+func (m pendingChangeMask) isPure() bool {
+	return m == pendingChangeDataMask || m == pendingChangeTombstoneMask
 }
 
 type pendingChangesHeap []pendingChangeFrontier
@@ -458,7 +491,7 @@ func (h *combinedChangesHandle) nextTail(
 	var groupHint engine.ChangesHandle_Hint
 	hasGroupHint := false
 	for h.frontier.Len() > 0 && h.frontier[0].commitTS.EQ(&commitTS) {
-		entry := heap.Pop(&h.frontier).(pendingChangeFrontier)
+		entry := h.popFrontier()
 		pending := &h.pending[entry.partition]
 
 		var src **batch.Batch
@@ -503,15 +536,17 @@ func (h *combinedChangesHandle) nextTail(
 	if groupHint == engine.ChangesHandle_Snapshot {
 		return h.fail(mp, data, tombstone, moerr.NewInternalErrorNoCtx("tail changes handle returned snapshot data"))
 	}
+	mask := changeMask(data, tombstone)
+	if h.tailRangeMask != pendingChangeNone && h.tailRangeMask != mask {
+		return h.fail(mp, data, tombstone, moerr.NewInternalErrorNoCtx("combined tail range changed operation kind before completion"))
+	}
 
-	// A tail-done boundary is emitted for each commit timestamp, after every
-	// partition has contributed its rows for that timestamp. This keeps the
-	// CDC consumer's atomic batch aligned with the logical transaction instead
-	// of the partition that happened to be drained first. Do not merge several
-	// commit timestamps into one Tail_done: the sink applies deletes before
-	// inserts, which would reverse cross-timestamp updates of the same primary
-	// key.
-	return data, tombstone, engine.ChangesHandle_Tail_done, nil
+	// A mixed timestamp remains a Tail_done boundary: the sink applies all
+	// deletes before all inserts, so spanning an earlier insert and a later
+	// delete could reverse the final state for one primary key. Consecutive
+	// pure insert or pure delete timestamps are safe to accumulate and are
+	// bounded to the regular change-handler batch size.
+	return data, tombstone, h.tailHint(mask, changeRows(data, tombstone)), nil
 }
 
 func (h *combinedChangesHandle) Close() error {
@@ -539,6 +574,10 @@ func (h *combinedChangesHandle) closeRemaining() error {
 			firstErr = err
 		}
 	}
+	h.frontier = nil
+	h.frontierGroups = nil
+	h.tailRangeMask = pendingChangeNone
+	h.tailRangeRows = 0
 	return firstErr
 }
 
@@ -629,12 +668,61 @@ func (h *combinedChangesHandle) pushFrontier(index int, kind pendingChangeKind) 
 	if h.hasLastCommitTS && commitTS.LT(&h.lastCommitTS) {
 		return moerr.NewInternalErrorNoCtx("partition change stream is not ordered by commit timestamp")
 	}
-	heap.Push(&h.frontier, pendingChangeFrontier{
+	entry := pendingChangeFrontier{
 		partition: index,
 		kind:      kind,
 		commitTS:  commitTS,
-	})
+	}
+	h.addFrontier(entry)
+	heap.Push(&h.frontier, entry)
 	return nil
+}
+
+func (h *combinedChangesHandle) addFrontier(entry pendingChangeFrontier) {
+	if h.frontierGroups == nil {
+		h.frontierGroups = make(map[types.TS]pendingChangeGroup)
+	}
+	group := h.frontierGroups[entry.commitTS]
+	if entry.kind == pendingChangeData {
+		group.data++
+	} else {
+		group.tombstone++
+	}
+	h.frontierGroups[entry.commitTS] = group
+}
+
+func (h *combinedChangesHandle) popFrontier() pendingChangeFrontier {
+	entry := heap.Pop(&h.frontier).(pendingChangeFrontier)
+	group := h.frontierGroups[entry.commitTS]
+	if entry.kind == pendingChangeData {
+		group.data--
+	} else {
+		group.tombstone--
+	}
+	if group.data == 0 && group.tombstone == 0 {
+		delete(h.frontierGroups, entry.commitTS)
+	} else {
+		h.frontierGroups[entry.commitTS] = group
+	}
+	return entry
+}
+
+func (h *combinedChangesHandle) nextFrontierMask() pendingChangeMask {
+	if h.frontier.Len() == 0 {
+		return pendingChangeNone
+	}
+	return h.frontierGroups[h.frontier[0].commitTS].mask()
+}
+
+func (h *combinedChangesHandle) tailHint(mask pendingChangeMask, rows int) engine.ChangesHandle_Hint {
+	if mask.isPure() && h.nextFrontierMask() == mask && h.tailRangeRows+rows < combinedTailMaxRows {
+		h.tailRangeMask = mask
+		h.tailRangeRows += rows
+		return engine.ChangesHandle_Tail_wip
+	}
+	h.tailRangeMask = pendingChangeNone
+	h.tailRangeRows = 0
+	return engine.ChangesHandle_Tail_done
 }
 
 func (h *combinedChangesHandle) fail(mp *mpool.MPool, data, tombstone *batch.Batch, err error) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
@@ -714,6 +802,28 @@ func newChangeBatch(src *batch.Batch) *batch.Batch {
 		dst.Vecs[i] = vector.NewVec(*vec.GetType())
 	}
 	return dst
+}
+
+func changeMask(data, tombstone *batch.Batch) pendingChangeMask {
+	var mask pendingChangeMask
+	if data != nil {
+		mask |= pendingChangeDataMask
+	}
+	if tombstone != nil {
+		mask |= pendingChangeTombstoneMask
+	}
+	return mask
+}
+
+func changeRows(data, tombstone *batch.Batch) int {
+	rows := 0
+	if data != nil {
+		rows += data.RowCount()
+	}
+	if tombstone != nil {
+		rows += tombstone.RowCount()
+	}
+	return rows
 }
 
 func commitTSAt(bat *batch.Batch, row int) (types.TS, bool) {
