@@ -67,41 +67,26 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 		if result.Batch == nil {
 			ctr.status = sendLastTag
 		} else {
-			if len(ctr.freeBats) > ctr.i {
-				if ctr.freeBats[ctr.i] != nil {
-					ctr.freeBats[ctr.i].CleanOnlyData()
-				}
-				ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-				if err != nil {
-					return result, err
-				}
-			} else {
-				appBat, err := result.Batch.Dup(proc.Mp())
-				if err != nil {
-					return result, err
-				}
-				analyzer.Alloc(int64(appBat.Size()))
-				ctr.freeBats = append(ctr.freeBats, appBat)
+			appBat, err := ctr.cacheBatch(proc, analyzer, result.Batch)
+			if err != nil {
+				return result, err
 			}
-			ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
-			ctr.i++
+			ctr.bats = append(ctr.bats, appBat)
 		}
 
 		fallthrough
 	case sendLastTag:
 		if mergeCTE.ctr.status == sendLastTag {
 			mergeCTE.ctr.status = sendRecursive
-			if len(ctr.freeBats) > ctr.i {
-				ctr.freeBats[ctr.i].SetLast()
-			} else {
-				ctr.freeBats = append(ctr.freeBats, makeRecursiveBatch(proc))
+			recursiveBatch, err := ctr.cacheRecursiveBatch(proc)
+			if err != nil {
+				return result, err
 			}
 			if len(mergeCTE.ctr.bats) == 0 {
-				mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, ctr.freeBats[ctr.i])
+				mergeCTE.ctr.bats = append(mergeCTE.ctr.bats, recursiveBatch)
 			} else {
-				mergeCTE.ctr.bats[0] = ctr.freeBats[ctr.i]
+				mergeCTE.ctr.bats[0] = recursiveBatch
 			}
-			ctr.i++
 		}
 	case sendRecursive:
 		for !mergeCTE.ctr.last {
@@ -133,45 +118,19 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 						result.Status = vm.ExecStop
 						return result, moerr.NewCheckRecursiveLevel(proc.Ctx)
 					}
-					if len(ctr.freeBats) > ctr.i {
-						if ctr.freeBats[ctr.i] != nil {
-							ctr.freeBats[ctr.i].CleanOnlyData()
-						}
-						ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-						if err != nil {
-							return result, err
-						}
-					} else {
-						appBat, err := result.Batch.Dup(proc.Mp())
-						if err != nil {
-							return result, err
-						}
-						analyzer.Alloc(int64(appBat.Size()))
-						ctr.freeBats = append(ctr.freeBats, appBat)
+					appBat, err := ctr.cacheBatch(proc, analyzer, result.Batch)
+					if err != nil {
+						return result, err
 					}
-					ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
-					ctr.i++
+					ctr.bats = append(ctr.bats, appBat)
 					break
 				}
 			} else {
-				if len(ctr.freeBats) > ctr.i {
-					if ctr.freeBats[ctr.i] != nil {
-						ctr.freeBats[ctr.i].CleanOnlyData()
-					}
-					ctr.freeBats[ctr.i], err = ctr.freeBats[ctr.i].AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-					if err != nil {
-						return result, err
-					}
-				} else {
-					appBat, err := result.Batch.Dup(proc.Mp())
-					if err != nil {
-						return result, err
-					}
-					analyzer.Alloc(int64(appBat.Size()))
-					ctr.freeBats = append(ctr.freeBats, appBat)
+				appBat, err := ctr.cacheBatch(proc, analyzer, result.Batch)
+				if err != nil {
+					return result, err
 				}
-				ctr.bats = append(ctr.bats, ctr.freeBats[ctr.i])
-				ctr.i++
+				ctr.bats = append(ctr.bats, appBat)
 			}
 
 		}
@@ -188,16 +147,120 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 	return result, nil
 }
 
-func makeRecursiveBatch(proc *process.Process) *batch.Batch {
+func (ctr *container) cacheBatch(
+	proc *process.Process,
+	analyzer process.Analyzer,
+	src *batch.Batch,
+) (*batch.Batch, error) {
+	if ctr.i == len(ctr.freeBats) {
+		appBat, err := src.Dup(proc.Mp())
+		if err != nil {
+			return nil, err
+		}
+		analyzer.Alloc(int64(appBat.Size()))
+		ctr.freeBats = append(ctr.freeBats, appBat)
+		ctr.i++
+		return appBat, nil
+	}
+
+	cached := ctr.freeBats[ctr.i]
+	if sameBatchSchema(cached, src) {
+		cached.CleanOnlyData()
+		appBat, err := cached.AppendWithCopy(proc.Ctx, proc.Mp(), src)
+		if err != nil {
+			return nil, err
+		}
+		appBat.Recursive = src.Recursive
+		appBat.ShuffleIDX = src.ShuffleIDX
+		appBat.Attrs = append(appBat.Attrs[:0], src.Attrs...)
+		appBat.SetRowCount(src.RowCount())
+		ctr.i++
+		return appBat, nil
+	}
+
+	// The number of batches produced before this slot may change after Reset,
+	// so a cache slot is not guaranteed to keep the same schema.
+	appBat, err := src.Dup(proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	analyzer.Alloc(int64(appBat.Size()))
+	if cached != nil {
+		cached.Clean(proc.Mp())
+	}
+	ctr.freeBats[ctr.i] = appBat
+	ctr.i++
+	return appBat, nil
+}
+
+func sameBatchSchema(left, right *batch.Batch) bool {
+	if left == nil || right == nil || len(left.Vecs) != len(right.Vecs) {
+		return false
+	}
+	for i := range left.Vecs {
+		if left.Vecs[i] == nil || right.Vecs[i] == nil ||
+			!left.Vecs[i].GetType().Eq(*right.Vecs[i].GetType()) {
+			return false
+		}
+	}
+	return true
+}
+
+func (ctr *container) cacheRecursiveBatch(proc *process.Process) (*batch.Batch, error) {
+	if ctr.i < len(ctr.freeBats) && isRecursiveBatch(ctr.freeBats[ctr.i]) {
+		b := ctr.freeBats[ctr.i]
+		b.CleanOnlyData()
+		b.Recursive = 0
+		if err := fillRecursiveBatch(proc, b); err != nil {
+			return nil, err
+		}
+		ctr.i++
+		return b, nil
+	}
+
+	b, err := makeRecursiveBatch(proc)
+	if err != nil {
+		return nil, err
+	}
+	if ctr.i == len(ctr.freeBats) {
+		ctr.freeBats = append(ctr.freeBats, b)
+	} else {
+		if ctr.freeBats[ctr.i] != nil {
+			ctr.freeBats[ctr.i].Clean(proc.Mp())
+		}
+		ctr.freeBats[ctr.i] = b
+	}
+	ctr.i++
+	return b, nil
+}
+
+func isRecursiveBatch(b *batch.Batch) bool {
+	return b != nil &&
+		len(b.Vecs) == 1 &&
+		b.Vecs[0] != nil &&
+		b.Vecs[0].GetType().Eq(types.T_varchar.ToType())
+}
+
+func makeRecursiveBatch(proc *process.Process) (*batch.Batch, error) {
 	b := batch.NewWithSize(1)
 	b.Attrs = []string{
 		"recursive_col",
 	}
 	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
-	if err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool()); err != nil {
-		panic(err)
+	if err := fillRecursiveBatch(proc, b); err != nil {
+		b.Clean(proc.Mp())
+		return nil, err
 	}
+	return b, nil
+}
+
+func fillRecursiveBatch(proc *process.Process, b *batch.Batch) error {
+	if err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool()); err != nil {
+		return err
+	}
+	b.Attrs = append(b.Attrs[:0], "recursive_col")
+	b.ShuffleIDX = 0
 	batch.SetLength(b, 1)
 	b.SetLast()
-	return b
+	return nil
 }
