@@ -61,6 +61,18 @@ select * from temp_pk;
 1  ¦  alice  𝄀
 2  ¦  bob
 drop table temp_pk;
+create temporary table temp_insert_modes (
+id int primary key,
+value varchar(50)
+);
+insert into temp_insert_modes values (1, 'plain');
+insert ignore into temp_insert_modes values (1, 'ignored');
+insert into temp_insert_modes values (1, 'updated')
+on duplicate key update value = values(value);
+select * from temp_insert_modes;
+➤ id[4,32,0]  ¦  value[12,-1,0]  𝄀
+1  ¦  updated
+drop table temp_insert_modes;
 create temporary table temp_not_null (
 id int not null,
 name varchar(50) not null,

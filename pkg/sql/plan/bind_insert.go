@@ -1284,11 +1284,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// legacy ODKU operator used to handle. The legacy ODKU operator has been removed,
 	// so let such an ODKU through to the modern dedup+multi-update path: the metadata
 	// table is a normal real-PK table that the modern path handles correctly.
+	// Temporary tables are ordinary user DML targets even though their durable
+	// relkind is distinct; accept either the catalog marker or the session-scoped
+	// resolution bit without admitting any of the internal index table types.
 	isOnDupUpdate := len(astUpdateExprs) > 0 &&
 		!(len(astUpdateExprs) == 1 && astUpdateExprs[0] == nil)
+	isRegularDMLTarget := tableDef.TableType == catalog.SystemOrdinaryRel ||
+		tableDef.TableType == catalog.SystemIndexRel ||
+		tableDef.TableType == catalog.SystemTemporaryTable ||
+		tableDef.IsTemporary
 	if !isOnDupUpdate &&
-		tableDef.TableType != catalog.SystemOrdinaryRel &&
-		tableDef.TableType != catalog.SystemIndexRel {
+		!isRegularDMLTarget {
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into vector/text index table")
 	}
 

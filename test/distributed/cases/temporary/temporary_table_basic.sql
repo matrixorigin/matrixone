@@ -91,7 +91,22 @@ insert into temp_pk values (1, 'charlie');  -- 应该失败
 select * from temp_pk;
 drop table temp_pk;
 
--- 测试用例 3.2: not null 约束
+-- 测试用例 3.2: 持久化临时表标记支持所有 INSERT 冲突模式
+-- 预期结果: 普通 INSERT、INSERT IGNORE 和 ON DUPLICATE KEY UPDATE 均成功
+create temporary table temp_insert_modes (
+    id int primary key,
+    value varchar(50)
+);
+
+insert into temp_insert_modes values (1, 'plain');
+insert ignore into temp_insert_modes values (1, 'ignored');
+insert into temp_insert_modes values (1, 'updated')
+    on duplicate key update value = values(value);
+
+select * from temp_insert_modes;
+drop table temp_insert_modes;
+
+-- 测试用例 3.3: not null 约束
 -- 预期结果: 前两条成功，第三条因not null约束失败
 create temporary table temp_not_null (
     id int not null,
@@ -106,7 +121,7 @@ insert into temp_not_null values (null, 'item3', 'description');  -- 应该失�
 select * from temp_not_null;
 drop table temp_not_null;
 
--- 测试用例 3.3: 默认值
+-- 测试用例 3.4: 默认值
 -- 预期结果: 第一条使用默认值，第二条使用指定值
 create temporary table temp_default (
     id int,
