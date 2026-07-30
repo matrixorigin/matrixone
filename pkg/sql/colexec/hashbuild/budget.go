@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -111,6 +112,66 @@ func resizeAdmission(budget *process.HashBuildBudgetGeneration, owner *hashMapRe
 		return nil, err
 	}
 	return &hashMapResizeReservation{owner: owner, token: token}, nil
+}
+
+// NewBudgetedEmptyJoinMap creates an initially empty JoinMap whose complete
+// physical hash-table lifetime is charged to budget. The initial allocation is
+// admitted before touching the mpool, every later resize uses the same
+// generation, and JoinMap.Free releases all retained reservations.
+//
+// This is used by consumers that must grow a hash table from probe-side keys
+// (for example RightDedupJoin after an empty build partition). Such maps cannot
+// use the regular HashmapBuilder ownership transfer because there is no build
+// batch to publish.
+func NewBudgetedEmptyJoinMap(
+	keyWidth int,
+	budget *process.HashBuildBudgetGeneration,
+	mp *mpool.MPool,
+) (*message.JoinMap, error) {
+	if budget == nil || mp == nil {
+		return nil, process.ErrHashBuildBudgetInvalid
+	}
+
+	initialBytes := hashtable.Int64HashMapInitialAllocationBytes()
+	if keyWidth > 8 {
+		initialBytes = hashtable.StringHashMapInitialAllocationBytes()
+	}
+	initial, err := budget.Reserve(initialBytes)
+	if err != nil {
+		return nil, err
+	}
+	owner := &hashMapReservationOwner{
+		tokens: []*process.HashBuildReservation{initial},
+	}
+
+	var (
+		intHashMap *hashmap.IntHashMap
+		strHashMap *hashmap.StrHashMap
+	)
+	if keyWidth <= 8 {
+		intHashMap, err = hashmap.NewIntHashMap(false, mp)
+		if err == nil {
+			intHashMap.SetResizeAdmission(func(plan hashtable.ResizePlan) (hashtable.ResizeReservation, error) {
+				return resizeAdmission(budget, owner, plan)
+			})
+		}
+	} else {
+		strHashMap, err = hashmap.NewStrHashMap(false, mp)
+		if err == nil {
+			strHashMap.SetResizeAdmission(func(plan hashtable.ResizePlan) (hashtable.ResizeReservation, error) {
+				return resizeAdmission(budget, owner, plan)
+			})
+		}
+	}
+	if err != nil {
+		owner.release()
+		return nil, err
+	}
+
+	jm := message.NewJoinMap(message.GroupSels{}, intHashMap, strHashMap, nil, nil, mp)
+	jm.SetMemoryRelease(owner.release)
+	jm.IncRef(1)
+	return jm, nil
 }
 
 func (hb *HashmapBuilder) attachIntHashMapAdmission(m *hashmap.IntHashMap) error {
