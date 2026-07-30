@@ -1,0 +1,67 @@
+-- @suit
+
+-- @case
+-- @desc: multi-target UPDATE uses independent physical-row selection
+-- @label: bvt
+
+DROP TABLE IF EXISTS multi_update_target_a;
+DROP TABLE IF EXISTS multi_update_target_b;
+
+CREATE TABLE multi_update_target_a (
+    id INT PRIMARY KEY,
+    grp INT,
+    x INT,
+    y INT,
+    UNIQUE KEY ux_a (id, x),
+    KEY iy_a (y)
+);
+
+CREATE TABLE multi_update_target_b (
+    id INT PRIMARY KEY,
+    grp INT,
+    x INT,
+    y INT,
+    UNIQUE KEY ux_b (id, x),
+    KEY iy_b (y)
+);
+
+INSERT INTO multi_update_target_a VALUES
+    (1, 1, 0, 0),
+    (2, 1, 0, 0),
+    (3, 2, 0, 0);
+
+INSERT INTO multi_update_target_b VALUES
+    (10, 1, 0, 0),
+    (20, 1, 0, 0),
+    (30, 3, 0, 0);
+
+UPDATE multi_update_target_a a
+JOIN multi_update_target_b b ON a.grp = b.grp
+SET
+    a.x = b.id,
+    a.y = b.id,
+    b.x = a.id,
+    b.y = a.id;
+
+SELECT COUNT(*) FROM multi_update_target_a WHERE x <> y;
+SELECT COUNT(*) FROM multi_update_target_b WHERE x <> y;
+SELECT COUNT(*) FROM multi_update_target_a WHERE grp = 1 AND x = 0;
+SELECT COUNT(*) FROM multi_update_target_b WHERE grp = 1 AND x = 0;
+
+UPDATE multi_update_target_a a
+LEFT JOIN multi_update_target_b b ON a.grp = b.grp
+SET
+    a.x = 7,
+    b.x = 9;
+
+UPDATE multi_update_target_a a
+RIGHT JOIN multi_update_target_b b ON a.grp = b.grp
+SET
+    a.y = 11,
+    b.y = 13;
+
+SELECT id, x, y FROM multi_update_target_a ORDER BY id;
+SELECT id, x, y FROM multi_update_target_b ORDER BY id;
+
+DROP TABLE multi_update_target_a;
+DROP TABLE multi_update_target_b;

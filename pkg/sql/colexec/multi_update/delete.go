@@ -55,7 +55,7 @@ func (update *MultiUpdate) delete_table(
 
 		for i := 0; i < rowCount; i++ {
 			if !rowIdNulls.Contains(uint64(i)) {
-				for deleteIdx, inputIdx := range updateCtx.DeleteCols {
+				for deleteIdx, inputIdx := range updateCtx.DeleteCols[:2] {
 					err = deleteBatch.Vecs[deleteIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp())
 					if err != nil {
 						return err
@@ -65,7 +65,7 @@ func (update *MultiUpdate) delete_table(
 		}
 
 	} else {
-		for deleteIdx, inputIdx := range updateCtx.DeleteCols {
+		for deleteIdx, inputIdx := range updateCtx.DeleteCols[:2] {
 			err = deleteBatch.Vecs[deleteIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
 			if err != nil {
 				return err

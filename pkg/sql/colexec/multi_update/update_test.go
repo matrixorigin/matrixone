@@ -64,6 +64,77 @@ func TestUpdateTableWithUniqueKey(t *testing.T) {
 	runTestCases(t, proc, []*testCase{case1})
 }
 
+func TestFilterTargetRowsKeepsIndependentWholeRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	bat := batch.NewWithSize(5)
+	bat.Vecs[0] = testutil.MakeRowIdVector(
+		[]types.Rowid{
+			types.BuildTestRowid(1, 1),
+			types.BuildTestRowid(1, 1),
+			types.BuildTestRowid(1, 2),
+			types.BuildTestRowid(1, 3),
+		},
+		[]uint64{3},
+		mp,
+	)
+	bat.Vecs[1] = testutil.NewInt64Vector(
+		4,
+		types.T_int64.ToType(),
+		mp,
+		false,
+		nil,
+		[]int64{1, 2, 1, 1},
+	)
+	bat.Vecs[2] = testutil.MakeRowIdVector(
+		[]types.Rowid{
+			types.BuildTestRowid(2, 1),
+			types.BuildTestRowid(2, 2),
+			types.BuildTestRowid(2, 2),
+			types.BuildTestRowid(2, 3),
+		},
+		nil,
+		mp,
+	)
+	bat.Vecs[3] = testutil.NewInt64Vector(
+		4,
+		types.T_int64.ToType(),
+		mp,
+		false,
+		nil,
+		[]int64{1, 1, 2, 1},
+	)
+	bat.Vecs[4] = testutil.NewInt32Vector(
+		4,
+		types.T_int32.ToType(),
+		mp,
+		false,
+		nil,
+		[]int32{10, 20, 30, 40},
+	)
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
+
+	first, clean, err := filterTargetRows(proc, &MultiUpdateCtx{
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 4, 1},
+	}, bat)
+	require.NoError(t, err)
+	require.True(t, clean)
+	defer first.Clean(mp)
+	require.Equal(t, []int32{10, 30}, vector.MustFixedColWithTypeCheck[int32](first.Vecs[4]))
+
+	second, clean, err := filterTargetRows(proc, &MultiUpdateCtx{
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{2, 4, 3},
+	}, bat)
+	require.NoError(t, err)
+	require.True(t, clean)
+	defer second.Clean(mp)
+	require.Equal(t, []int32{10, 20, 40}, vector.MustFixedColWithTypeCheck[int32](second.Vecs[4]))
+}
+
 // update table s3
 func TestUpdateS3SingleTable(t *testing.T) {
 	hasUniqueKey := false

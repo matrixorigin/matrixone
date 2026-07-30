@@ -252,11 +252,13 @@ func TestDeleteAffectedRows(t *testing.T) {
 // PartitionCols and keeps nested objects independent.
 func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 	original := &MultiUpdateCtx{
-		InsertCols:    []int{1, 2, 3},
-		DeleteCols:    []int{4, 5},
-		PartitionCols: []int{6, 7, 8, 9},
-		ObjRef:        &plan.ObjectRef{SchemaName: "test", ObjName: "t1"},
-		TableDef:      &plan.TableDef{Name: "t1"},
+		InsertCols:         []int{1, 2, 3},
+		DeleteCols:         []int{4, 5},
+		PartitionCols:      []int{6, 7, 8, 9},
+		DedupByTargetRowID: true,
+		TargetUpdateCtxIdx: 10,
+		ObjRef:             &plan.ObjectRef{SchemaName: "test", ObjName: "t1"},
+		TableDef:           &plan.TableDef{Name: "t1"},
 	}
 
 	cloned := original.clone()
@@ -267,6 +269,8 @@ func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 		"PartitionCols should not be DeleteCols")
 	require.Equal(t, original.InsertCols, cloned.InsertCols)
 	require.Equal(t, original.DeleteCols, cloned.DeleteCols)
+	require.True(t, cloned.DedupByTargetRowID)
+	require.Equal(t, original.TargetUpdateCtxIdx, cloned.TargetUpdateCtxIdx)
 	require.Equal(t, original.ObjRef.SchemaName, cloned.ObjRef.SchemaName)
 	require.Equal(t, original.TableDef.Name, cloned.TableDef.Name)
 	require.NotSame(t, original.ObjRef, cloned.ObjRef)

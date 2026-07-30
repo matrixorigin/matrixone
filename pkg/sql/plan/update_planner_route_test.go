@@ -172,12 +172,6 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 		wantReason updatePlannerRouteReason
 	}{
 		{
-			name:       "multi target",
-			sql:        "UPDATE emp, dept SET emp.sal = 1, dept.loc = 'x'",
-			wantRoute:  updatePlannerLegacy,
-			wantReason: updateRouteReasonMultiTarget,
-		},
-		{
 			name: "foreign key metadata",
 			sql:  "UPDATE nation SET n_name = 'x'",
 			prepare: func(mock *MockOptimizer) {

@@ -117,6 +117,11 @@ type MultiUpdateCtx struct {
 	// InsertPkColIdx is the PK column's index within InsertCols. It is only
 	// used with SkipInsertOnNullPk for REPLACE delete-only rows.
 	InsertPkColIdx int
+	// DedupByTargetRowID makes this context consume only the whole input row
+	// selected for its physical target row. The planner supplies an independent
+	// row_number() partition for every updated target table.
+	DedupByTargetRowID bool
+	TargetUpdateCtxIdx int
 }
 
 func (update MultiUpdate) TypeName() string {
