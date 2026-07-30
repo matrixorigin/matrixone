@@ -1540,8 +1540,25 @@ func runBindChangedTests(
 		func(alloc *lockTableAllocator, s []*service) {
 			l1 := s[0]
 			l2 := s[1]
+			l3 := s[2]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
+			// l2 owns RPC backends to l1 and l3. Close the client side before
+			// those servers; otherwise a backend reset can race leak detection
+			// while the shared test helper closes services in creation order.
+			defer func() {
+				assert.NoError(t, l2.Close())
+				assert.NoError(t, l3.Close())
+			}()
+
+			// Reproduce the transient failure seen in CI deterministically. A
+			// first remote lock can lose the race with asynchronous backend
+			// creation and return ErrBackendClosed after its bounded wait.
+			l2.remote.client = &failOnceSendClient{
+				Client: l2.remote.client,
+				method: pb.Method_Lock,
+				err:    moerr.NewBackendClosedNoCtx(),
+			}
 
 			txnID1 := []byte("txn1")
 			txnID2 := []byte("txn2")
@@ -1549,8 +1566,17 @@ func runBindChangedTests(
 			// make table bind on l1
 			mustAddTestLock(t, ctx, l1, table1, txnID1, [][]byte{{1}}, pb.Granularity_Row)
 
-			// l2 get the table1's bind
-			mustAddTestLock(t, ctx, l2, table1, txnID2, [][]byte{{2}}, pb.Granularity_Row)
+			// l2 gets table1's bind over RPC. The backend is started
+			// asynchronously, so use the operation itself as the readiness
+			// barrier instead of assuming it is ready within one RPC attempt.
+			mustAddTestLockWithBackendRetry(
+				t,
+				ctx,
+				l2,
+				table1,
+				txnID2,
+				[][]byte{{2}},
+				pb.Granularity_Row)
 			v, err := l2.getLockTable(context.Background(), 0, table1)
 			require.NoError(t, err)
 			require.Equal(t, l1.serviceID, v.getBind().ServiceID)
@@ -1570,7 +1596,7 @@ func runBindChangedTests(
 				time.Sleep(time.Millisecond * 100)
 			}
 
-			fn(ctx, alloc, l1, l2, s[2], table1)
+			fn(ctx, alloc, l1, l2, l3, table1)
 		},
 		func(c *Config) {
 			c.KeepBindDuration.Duration = time.Second
@@ -1586,6 +1612,57 @@ func runBindChangedTests(
 				}))
 		},
 	)
+}
+
+type failOnceSendClient struct {
+	Client
+	method pb.Method
+	err    error
+	failed atomic.Bool
+}
+
+func (c *failOnceSendClient) Send(
+	ctx context.Context,
+	request *pb.Request,
+) (*pb.Response, error) {
+	if request.Method == c.method && c.failed.CompareAndSwap(false, true) {
+		return nil, c.err
+	}
+	return c.Client.Send(ctx, request)
+}
+
+func mustAddTestLockWithBackendRetry(
+	t *testing.T,
+	ctx context.Context,
+	s *service,
+	table uint64,
+	txnID []byte,
+	lock [][]byte,
+	granularity pb.Granularity,
+) pb.Result {
+	t.Helper()
+	for {
+		result, err := s.Lock(ctx, table, lock, txnID, pb.LockOptions{
+			Granularity: granularity,
+			Mode:        pb.LockMode_Exclusive,
+			Policy:      pb.WaitPolicy_Wait,
+		})
+		if err == nil {
+			return result
+		}
+		if !moerr.IsMoErrCode(err, moerr.ErrBackendClosed) &&
+			!moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+			require.NoError(t, err)
+			return pb.Result{}
+		}
+
+		select {
+		case <-ctx.Done():
+			require.NoError(t, ctx.Err(), "last lock error: %v", err)
+			return pb.Result{}
+		case <-time.After(time.Millisecond * 10):
+		}
+	}
 }
 
 func waitBindDisabled(_ *testing.T, alloc *lockTableAllocator, sid string) {
