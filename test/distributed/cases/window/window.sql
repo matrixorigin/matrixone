@@ -1658,9 +1658,12 @@ select id, name, rank() over (order by name) from t_win_varchar;
 select id, name, dense_rank() over (order by name) from t_win_varchar;
 select id, name, rank() over (partition by score order by name) from t_win_varchar;
 
--- aggregate window function + varchar ORDER BY should error (RANGE frame)
-select sum(score) over (order by name) from t_win_varchar;
-select avg(score) over (order by name range between unbounded preceding and current row) from t_win_varchar;
+-- issue #24816: aggregate window functions support the implicit RANGE frame
+-- on a varchar ORDER BY key and include all peers of the current row.
+with m as (select 1 id, '2026-01' ym, 100 rev union all select 2, '2026-02', 200 union all select 3, '2026-02', 50) select id, ym, sum(rev) over (order by ym) cum from m order by id;
+
+-- RANGE offsets still require a numeric or temporal ORDER BY expression.
+select avg(score) over (order by name range between 1 preceding and current row) from t_win_varchar;
 
 drop table t_win_varchar;
 

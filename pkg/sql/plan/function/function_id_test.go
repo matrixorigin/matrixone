@@ -669,11 +669,12 @@ var predefinedFunids = map[int]int{
 	CAST_IGNORE:                   555,
 	ONNX_RUN:                      556,
 	APPROX_PERCENTILE:             557,
-	CHECK_CONSTRAINT_ASSERT:       558,
+	MO_IS_LEGACY_TEMPORARY_TABLE:  558,
+	CHECK_CONSTRAINT_ASSERT:       559,
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 559,
+	FUNCTION_END_NUMBER: 560,
 }
 
 func Test_funids(t *testing.T) {

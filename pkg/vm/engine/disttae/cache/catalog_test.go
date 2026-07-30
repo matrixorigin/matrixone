@@ -44,6 +44,13 @@ func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
 	require.Equal(t, []*plan.CheckDef{check}, tableDef.Checks)
 }
 
+func TestGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
+	tableDef, _ := getTableDef(&TableItem{Kind: catalog.SystemTemporaryTable}, nil)
+	require.NotNil(t, tableDef)
+	require.Equal(t, catalog.SystemTemporaryTable, tableDef.TableType)
+	require.False(t, tableDef.IsTemporary)
+}
+
 func TestCatalogCacheConcurrentGC(t *testing.T) {
 	cc := NewCatalog()
 

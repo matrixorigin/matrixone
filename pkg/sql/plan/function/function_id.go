@@ -791,17 +791,19 @@ const (
 	CAST_IGNORE = 555
 	// function `approx_percentile`
 	APPROX_PERCENTILE = 557
+	// function `mo_is_legacy_temporary_table`
+	MO_IS_LEGACY_TEMPORARY_TABLE = 558
 
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.
 	ONNX_RUN = 556
 	// Internal CHECK constraint assertion. This is protocol-gated because older
 	// CNs do not have this function ID.
-	CHECK_CONSTRAINT_ASSERT = 558
+	CHECK_CONSTRAINT_ASSERT = 559
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 559
+	FUNCTION_END_NUMBER = 560
 )
 
 // functionIdRegister is what function we have registered already.
@@ -869,36 +871,37 @@ var functionIdRegister = map[string]int32{
 	"prefix_between":  PREFIX_BETWEEN,
 	"prefix_in_range": PREFIX_IN_RANGE,
 	// aggregate
-	"max":                   MAX,
-	"min":                   MIN,
-	"sum":                   SUM,
-	"group_concat":          GROUP_CONCAT,
-	"grouping":              GROUPING,
-	"avg":                   AVG,
-	"avg_tw_cache":          AVG_TW_CACHE,
-	"avg_tw_result":         AVG_TW_RESULT,
-	"count":                 COUNT,
-	"starcount":             STARCOUNT,
-	"bit_or":                BIT_OR,
-	"bit_and":               BIT_AND,
-	"bit_xor":               BIT_XOR,
-	"bit_count":             BIT_COUNT,
-	"cluster_centers":       CLUSTER_CENTERS,
-	"subvector":             SUB_VECTOR,
-	"std":                   STDDEV_POP,
-	"stddev":                STDDEV_POP,
-	"stddev_pop":            STDDEV_POP,
-	"stddev_samp":           STDDEV_SAMPLE,
-	"variance":              VAR_POP,
-	"var_pop":               VAR_POP,
-	"var_samp":              VAR_SAMPLE,
-	"approx_count":          APPROX_COUNT,
-	"approx_count_distinct": APPROX_COUNT_DISTINCT,
-	"hll_add_agg":           HLL_ADD_AGG,
-	"hll_merge_agg":         HLL_MERGE_AGG,
-	"any_value":             ANY_VALUE,
-	"median":                MEDIAN,
-	"approx_percentile":     APPROX_PERCENTILE,
+	"max":                          MAX,
+	"min":                          MIN,
+	"sum":                          SUM,
+	"group_concat":                 GROUP_CONCAT,
+	"grouping":                     GROUPING,
+	"avg":                          AVG,
+	"avg_tw_cache":                 AVG_TW_CACHE,
+	"avg_tw_result":                AVG_TW_RESULT,
+	"count":                        COUNT,
+	"starcount":                    STARCOUNT,
+	"bit_or":                       BIT_OR,
+	"bit_and":                      BIT_AND,
+	"bit_xor":                      BIT_XOR,
+	"bit_count":                    BIT_COUNT,
+	"cluster_centers":              CLUSTER_CENTERS,
+	"subvector":                    SUB_VECTOR,
+	"std":                          STDDEV_POP,
+	"stddev":                       STDDEV_POP,
+	"stddev_pop":                   STDDEV_POP,
+	"stddev_samp":                  STDDEV_SAMPLE,
+	"variance":                     VAR_POP,
+	"var_pop":                      VAR_POP,
+	"var_samp":                     VAR_SAMPLE,
+	"approx_count":                 APPROX_COUNT,
+	"approx_count_distinct":        APPROX_COUNT_DISTINCT,
+	"hll_add_agg":                  HLL_ADD_AGG,
+	"hll_merge_agg":                HLL_MERGE_AGG,
+	"any_value":                    ANY_VALUE,
+	"median":                       MEDIAN,
+	"approx_percentile":            APPROX_PERCENTILE,
+	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,
