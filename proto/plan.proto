@@ -1164,6 +1164,10 @@ message Query {
 
   // True when the planner generated recursive FK side-effect DML for this query.
   bool has_foreign_key_action = 11;
+
+  // Catalog objects that a rewrite depends on even when the final plan no
+  // longer contains the scans that originally carried those objects.
+  repeated ObjectRef catalog_dependencies = 12;
 }
 
 message TransationControl {
