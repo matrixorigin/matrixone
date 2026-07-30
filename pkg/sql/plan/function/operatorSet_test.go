@@ -508,6 +508,18 @@ func TestIffCheck_PreservesBinaryResultTypes(t *testing.T) {
 	}
 }
 
+func TestIffCheckDifferentFixedBinaryPromotesToVarbinary(t *testing.T) {
+	result := iffCheck(nil, []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_binary, 4, 0),
+		types.New(types.T_binary, 8, 0),
+	})
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, types.T_varbinary, result.finalType[1].Oid)
+	require.Equal(t, int32(8), result.finalType[1].Width)
+	require.Equal(t, result.finalType[1], result.finalType[2])
+}
+
 func TestIffCheck_VectorCommonType(t *testing.T) {
 	vecf32 := types.New(types.T_array_float32, 2, 0)
 	vecf64 := types.New(types.T_array_float64, 2, 0)

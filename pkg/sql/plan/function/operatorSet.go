@@ -603,7 +603,7 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 				binaryIdx = 1
 			}
 			otherIdx := 1 - binaryIdx
-			if source[otherIdx].Oid == types.T_any || source[otherIdx].Oid == source[binaryIdx].Oid {
+			if source[otherIdx].Oid == types.T_any {
 				retType := source[binaryIdx]
 				setMaxWidthFromSource(&retType, source)
 				finalTypes := []types.Type{conditionType, retType, retType}

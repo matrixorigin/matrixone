@@ -215,6 +215,26 @@ func TestBuildCaseSameFixedBinaryMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildControlFlowDifferentFixedBinaryMetadata(t *testing.T) {
+	for _, sql := range []string{
+		`select case when true then cast('a' as binary(4)) else cast('b' as binary(8)) end`,
+		`select if(true, cast('a' as binary(4)), cast('b' as binary(8)))`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_varbinary), projectList[0].Typ.Id)
+			require.Equal(t, int32(8), projectList[0].Typ.Width)
+		})
+	}
+}
+
 func TestBuildCaseBinaryMetadataWithNullBranches(t *testing.T) {
 	for _, test := range []struct {
 		name string
