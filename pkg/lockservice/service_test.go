@@ -4649,17 +4649,15 @@ func TestIssue5543(t *testing.T) {
 				}, closeReasonBindChanged)
 			}
 
-			var wg sync.WaitGroup
-			wg.Add(1)
+			errCh := make(chan error, 1)
 			go func() {
-				defer wg.Done()
 				_, err1 := l1.Lock(
 					ctx,
 					0,
 					[][]byte{{2}},
 					[]byte("txn3"),
 					option)
-				require.NoError(t, err1)
+				errCh <- err1
 			}()
 
 			waitWaiters(t, l1, 0, []byte{2}, 1)
@@ -4668,7 +4666,7 @@ func TestIssue5543(t *testing.T) {
 				[]byte("txn2"),
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			wg.Wait()
+			require.NoError(t, <-errCh)
 		},
 	)
 }

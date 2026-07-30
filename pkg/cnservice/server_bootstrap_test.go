@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -76,5 +77,40 @@ func TestHandleBootstrapErr(t *testing.T) {
 		assert.Panics(t, func() {
 			handleBootstrapErr(ctx, moerr.NewInternalErrorNoCtx("bootstrap init failed"))
 		})
+	})
+}
+
+func TestBootstrapWithRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"connection reset", moerr.NewConnectionResetNoCtx()},
+		{"backend closed", moerr.NewBackendClosedNoCtx()},
+		{"backend cannot connect", moerr.NewBackendCannotConnectNoCtx("hakeeper")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attempts := 0
+			err := bootstrapWithRetry(context.Background(), time.Millisecond, func(context.Context) error {
+				attempts++
+				if attempts == 1 {
+					return tc.err
+				}
+				return nil
+			})
+			require.NoError(t, err)
+			require.Equal(t, 2, attempts)
+		})
+	}
+
+	t.Run("does not retry bootstrap error", func(t *testing.T) {
+		attempts := 0
+		expected := moerr.NewInternalErrorNoCtx("bootstrap init failed")
+		err := bootstrapWithRetry(context.Background(), time.Millisecond, func(context.Context) error {
+			attempts++
+			return expected
+		})
+		require.ErrorIs(t, err, expected)
+		require.Equal(t, 1, attempts)
 	})
 }

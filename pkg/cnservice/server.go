@@ -82,6 +82,7 @@ const (
 	rssCacheFamilyEvictTimeout   = 10 * time.Second
 	rssCacheAdmissionPressureTTL = 2 * time.Minute
 	rssCachePressureTargetOwner  = "cn-rss"
+	bootstrapRetryInterval       = 100 * time.Millisecond
 )
 
 var (
@@ -998,9 +999,10 @@ func (s *service) bootstrap() error {
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
 	defer cancel()
 
-	// bootstrap cannot fail. We panic here to make sure the service can not start.
-	// If bootstrap failed, need clean all data to retry.
-	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
+	// HAKeeper can briefly reset or recreate its transport while concurrent CNs
+	// are bootstrapping. Retry connection errors inside the existing bootstrap
+	// deadline; all non-connection bootstrap errors retain fail-fast behavior.
+	if err := bootstrapWithRetry(ctx, bootstrapRetryInterval, s.bootstrapService.Bootstrap); err != nil {
 		return handleBootstrapErr(ctx, err)
 	}
 
@@ -1020,6 +1022,27 @@ func (s *service) bootstrap() error {
 		})
 	}
 	return nil
+}
+
+func bootstrapWithRetry(
+	ctx context.Context,
+	interval time.Duration,
+	bootstrap func(context.Context) error,
+) error {
+	for {
+		err := bootstrap(ctx)
+		if err == nil || !morpc.IsConnectionError(err) {
+			return err
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // handleBootstrapErr decides whether a bootstrap error should be returned
