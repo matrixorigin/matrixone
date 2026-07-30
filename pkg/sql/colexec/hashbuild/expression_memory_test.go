@@ -645,6 +645,80 @@ func TestExpressionMemoryLeaseRejectsUnknownExecutorOwnership(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestExpressionMemoryLeaseRejectsInvalidCalls(t *testing.T) {
+	_, err := NewExpressionMemoryLease(
+		nil,
+		[]*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int32)}}},
+		nil,
+		false,
+	)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	var nilLease *ExpressionMemoryLease
+	require.ErrorIs(t,
+		nilLease.Run(nil, 0, func(int) error { return nil }),
+		process.ErrHashBuildBudgetInvalid,
+	)
+	require.ErrorIs(t,
+		nilLease.Run(nil, 0, nil),
+		process.ErrHashBuildBudgetInvalid,
+	)
+	require.ErrorIs(t,
+		nilLease.Eval(nil, nil, 0, nil),
+		process.ErrHashBuildBudgetInvalid,
+	)
+	require.Zero(t, nilLease.Reserved())
+	require.Zero(t, nilLease.Len())
+	retained, ok := nilLease.Retained()
+	require.True(t, ok)
+	require.Zero(t, retained)
+	nilLease.Release()
+
+	emptyLease := &ExpressionMemoryLease{}
+	require.ErrorIs(t,
+		emptyLease.Run(nil, -1, func(int) error { return nil }),
+		process.ErrHashBuildBudgetInvalid,
+	)
+}
+
+func TestExpressionMemoryAccountingHelperBoundaries(t *testing.T) {
+	size, err := expressionInitialOwnedBytes(nil)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.Zero(t, size)
+
+	size, err = literalInitialOwnedBytes(types.T_int32, &plan.Literal{})
+	require.NoError(t, err)
+	require.Zero(t, size)
+
+	require.True(t, expressionExecutorMayGrowWithinBound(nil))
+	require.True(t, expressionExecutorMayGrowWithinBound(&plan.Expr{}))
+
+	size, err = initialAllocationCapacity(0)
+	require.NoError(t, err)
+	require.Zero(t, size)
+}
+
+func TestExpressionMemoryLeaseEvalPropagatesExecutorError(t *testing.T) {
+	expected := errors.New("expression evaluation failed")
+	executor := failingExpressionLeaseExecutor{err: expected}
+	lease, err := NewExpressionMemoryLease(
+		nil,
+		[]*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int32)}}},
+		[]colexec.ExpressionExecutor{executor},
+		false,
+	)
+	require.NoError(t, err)
+	defer lease.Release()
+
+	consumed := false
+	err = lease.Eval(nil, nil, 0, func(int, *vector.Vector) error {
+		consumed = true
+		return nil
+	})
+	require.ErrorIs(t, err, expected)
+	require.False(t, consumed)
+}
+
 func TestExpressionMemoryLeaseReleaseIsTerminal(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -745,3 +819,16 @@ func (unknownExpressionLeaseExecutor) ResetForNextQuery() {}
 func (unknownExpressionLeaseExecutor) Free()              {}
 func (unknownExpressionLeaseExecutor) IsColumnExpr() bool { return false }
 func (unknownExpressionLeaseExecutor) TypeName() string   { return "unknown" }
+
+type failingExpressionLeaseExecutor struct {
+	unknownExpressionLeaseExecutor
+	err error
+}
+
+func (f failingExpressionLeaseExecutor) Eval(
+	*process.Process,
+	[]*batch.Batch,
+	[]bool,
+) (*vector.Vector, error) {
+	return nil, f.err
+}
