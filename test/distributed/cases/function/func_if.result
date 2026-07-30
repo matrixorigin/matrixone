@@ -460,13 +460,13 @@ COALESCE(5, CAST('bad' AS SIGNED)) AS coalesce_skip_later,
 IFNULL(5, CAST('bad' AS SIGNED)) AS ifnull_skip_later;
 [unknown result because it is related to issue#25314]
 SELECT IF(0, 'x', 1.23) AS if_decimal_metadata;
-➤ if_decimal_metadata[12,5,0]  𝄀
+➤ if_decimal_metadata[12,-1,0]  𝄀
 1.23
 SELECT CASE WHEN 0 THEN 'x' ELSE CAST(-123.45 AS DECIMAL(5, 2)) END AS case_decimal_metadata;
-➤ case_decimal_metadata[12,7,0]  𝄀
+➤ case_decimal_metadata[12,-1,0]  𝄀
 -123.45
 SELECT COALESCE(NULL, 1.23, 'x') AS coalesce_decimal_metadata;
-➤ coalesce_decimal_metadata[12,5,0]  𝄀
+➤ coalesce_decimal_metadata[12,-1,0]  𝄀
 1.23
 CREATE TABLE if_control_flow_decimal_metadata(d DECIMAL(5, 2));
 INSERT INTO if_control_flow_decimal_metadata VALUES (-123.45);
@@ -474,7 +474,7 @@ SELECT IF(0, 'x', d) AS if_decimal_column,
 CASE WHEN 0 THEN 'x' ELSE d END AS case_decimal_column,
 COALESCE(NULL, d, 'x') AS coalesce_decimal_column
 FROM if_control_flow_decimal_metadata;
-➤ if_decimal_column[12,7,0]  ¦  case_decimal_column[12,7,0]  ¦  coalesce_decimal_column[12,7,0]  𝄀
+➤ if_decimal_column[12,-1,0]  ¦  case_decimal_column[12,-1,0]  ¦  coalesce_decimal_column[12,-1,0]  𝄀
 -123.45  ¦  -123.45  ¦  -123.45
 DROP TABLE if_control_flow_decimal_metadata;
 CREATE TABLE if_control_flow_binary_metadata AS
@@ -497,6 +497,7 @@ WHERE table_schema = DATABASE() AND table_name = 'if_control_flow_binary_width_m
 ORDER BY ordinal_position;
 ➤ column_name[12,-1,0]  ¦  data_type[12,-1,0]  ¦  column_type[12,-1,0]  𝄀
 if_b  ¦  VARBINARY  ¦  VARBINARY(8)  𝄀
-case_b  ¦  VARBINARY  ¦  VARBINARY(8)
+case_b  ¦  VARBINARY  ¦  VARBINARY(8)  𝄀
+__mo_fake_pk_col  ¦  BIGINT UNSIGNED  ¦  BIGINT UNSIGNED(0)
 DROP TABLE if_control_flow_binary_width_metadata;
 SET TIME_ZONE = "SYSTEM";
