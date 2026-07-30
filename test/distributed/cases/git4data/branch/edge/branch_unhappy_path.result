@@ -111,7 +111,7 @@ marker
 br_view_literal_src
 show create view br_view_literal_copy.v_literal;
 View    Create View    character_set_client    collation_connection
-v_literal    create view `v_literal` as select 'br_view_literal_src' as `marker`, `a` from `t`    utf8mb4    utf8mb4_general_ci
+v_literal    create view v_literal as select 'br_view_literal_src' as marker, a from t;    utf8mb4    utf8mb4_general_ci
 create database clone_view_literal_copy clone br_view_literal_src;
 select marker from clone_view_literal_copy.v_literal;
 marker
