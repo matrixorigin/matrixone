@@ -181,7 +181,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		if selectStmt == nil {
 			return nil
 		}
-		queryPlan, err := bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, selectStmt, false, true)
+		queryPlan, err := bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, selectStmt, true, true)
 		if err != nil {
 			return err
 		}
