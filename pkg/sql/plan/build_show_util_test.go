@@ -422,29 +422,60 @@ func TestConstructCreateTableSQLPreservesCheckAcrossSQLModes(t *testing.T) {
 		sourceMode string
 		replayMode string
 		createSQL  string
+		canonical  string
 	}{
 		{
 			name:       "no backslash escapes to default",
 			sourceMode: "NO_BACKSLASH_ESCAPES",
 			replayMode: "",
 			createSQL:  `create table t(s varchar(10), check (s = 'a\nb'))`,
+			canonical:  "cast(0x615c6e62 as varchar)",
 		},
 		{
 			name:       "default to no backslash escapes",
 			sourceMode: "",
 			replayMode: "NO_BACKSLASH_ESCAPES",
 			createSQL:  `create table t(s varchar(10), check (s = 'a\\nb'))`,
+			canonical:  "cast(0x615c6e62 as varchar)",
+		},
+		{
+			name:       "binary string keeps introducer",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(b varbinary(10), check (b = _binary 'x'))`,
+			canonical:  "_binary 0x78",
+		},
+		{
+			name:       "binary string with backslash",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(b varbinary(10), check (b = _binary 'x\y'))`,
+			canonical:  "_binary 0x785c79",
+		},
+		{
+			name:       "binary hex keeps introducer",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(b varbinary(10), check (bit_count(_binary X'3132') > 0))`,
+			canonical:  "_binary 0x3132",
+		},
+		{
+			name:       "name const keeps literal contract",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(a int, check (name_const('a\b', 1) = 1))`,
+			canonical:  "name_const(cast(0x615c62 as varchar), 1)",
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			tableDef := build(tc.createSQL, tc.sourceMode)
 			require.Len(t, tableDef.Checks, 1)
-			require.Contains(t, tableDef.Checks[0].OriginSql, "cast(0x615c6e62 as varchar)")
+			require.Contains(t, tableDef.Checks[0].OriginSql, tc.canonical)
 
 			showSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, false, nil)
 			require.NoError(t, err)
-			require.Contains(t, showSQL, "CHECK (`s` = cast(0x615c6e62 as varchar))")
+			require.Contains(t, showSQL, tc.canonical)
 
 			replayedTableDef := build(showSQL, tc.replayMode)
 			require.Len(t, replayedTableDef.Checks, 1)

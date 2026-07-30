@@ -4527,7 +4527,11 @@ func validateNameConstArgs(ctx context.Context, args []*plan.Expr) error {
 	}
 
 	nameLit := args[0].GetLit()
-	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
+	validName := nameLit != nil && !nameLit.Isnull
+	if !validName {
+		validName = isCanonicalStringLiteralCast(args[0])
+	}
+	if !validName || !validNameConstValueExpr(args[1]) {
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
 	}
 	return nil
@@ -4541,6 +4545,9 @@ func validNameConstValueExpr(arg *plan.Expr) bool {
 		return true
 	}
 	if isDecimalLiteralCast(arg) {
+		return true
+	}
+	if isCanonicalStringLiteralCast(arg) {
 		return true
 	}
 	fn := arg.GetF()
@@ -4558,8 +4565,10 @@ func validNameConstNameAst(args []tree.Expr) bool {
 		return false
 	}
 	name := stripNameConstParens(args[0])
-	nameLit, ok := name.(*tree.NumVal)
-	return ok && validNameConstNameLiteral(nameLit)
+	if nameLit, ok := name.(*tree.NumVal); ok {
+		return validNameConstNameLiteral(nameLit)
+	}
+	return isCanonicalStringLiteralCastAst(name)
 }
 
 func validNameConstValueAst(args []tree.Expr) bool {
@@ -4574,6 +4583,8 @@ func validNameConstLiteralValueAst(expr tree.Expr) bool {
 	switch value := expr.(type) {
 	case *tree.NumVal:
 		return true
+	case *tree.CastExpr:
+		return isCanonicalStringLiteralCastAst(value)
 	case *tree.UnaryExpr:
 		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
 			return false
@@ -4583,6 +4594,32 @@ func validNameConstLiteralValueAst(expr tree.Expr) bool {
 	default:
 		return false
 	}
+}
+
+func isCanonicalStringLiteralCastAst(expr tree.Expr) bool {
+	castExpr, ok := stripNameConstParens(expr).(*tree.CastExpr)
+	if !ok {
+		return false
+	}
+	lit, ok := stripNameConstParens(castExpr.Expr).(*tree.NumVal)
+	if !ok || lit.ValType != tree.P_hexnum {
+		return false
+	}
+	target, ok := castExpr.Type.(*tree.T)
+	return ok && target.InternalType.Family == tree.StringFamily
+}
+
+func isCanonicalStringLiteralCast(expr *plan.Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return false
+	}
+	return fn.Args[0].GetLit() != nil &&
+		fn.Args[0].GetLit().IsBin &&
+		types.T(expr.Typ.Id) == types.T_varchar
 }
 
 func stripNameConstParens(expr tree.Expr) tree.Expr {
