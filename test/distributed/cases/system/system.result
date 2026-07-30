@@ -158,7 +158,7 @@ use issue_26372;
 create table t(id int primary key, uk int unique);
 insert into t values (1, 10), (2, 20);
 select * from stale_diagnostic_marker_26372;
-no such table issue_26372.stale_diagnostic_marker_26372
+SQL parser error: table "stale_diagnostic_marker_26372" does not exist
 update t set uk = 20 where id = 1;
 Duplicate entry '20' for key 'uk'
 show warnings;
