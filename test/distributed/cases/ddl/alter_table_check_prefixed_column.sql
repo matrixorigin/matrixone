@@ -13,6 +13,7 @@ create table agent_runs (
     retry_scope varchar(16) not null default 'node',
     checkpoint_version varchar(32),
     checkpoint_json longtext,
+    check$point varchar(32),
     error_code varchar(128),
     constraint chk_scope check (retry_scope in ('node', 'subtree', 'siblings')),
     primary key (user_id, run_id)
@@ -22,7 +23,7 @@ insert into agent_runs (run_id, user_id) values ('run-1', 'user-1');
 alter table agent_runs add column model_offering_id varchar(64);
 
 select run_id, user_id, retry_scope, checkpoint_version, checkpoint_json,
-       error_code, model_offering_id
+       check$point, error_code, model_offering_id
 from agent_runs;
 show create table agent_runs;
 

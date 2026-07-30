@@ -402,6 +402,7 @@ func TestExtractTopLevelCheckDefsIgnoresCheckPrefixedColumns(t *testing.T) {
 		retry_scope varchar(16) not null default 'node',
 		checkpoint_version varchar(32) null,
 		checkpoint_json longtext null,
+		check$point varchar(32) null,
 		error_code varchar(128) null,
 		constraint chk_scope check (retry_scope in ('node','subtree','siblings')),
 		primary key(user_id, run_id)

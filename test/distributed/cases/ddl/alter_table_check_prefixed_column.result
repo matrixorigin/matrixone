@@ -7,6 +7,7 @@ user_id varchar(128) not null,
 retry_scope varchar(16) not null default 'node',
 checkpoint_version varchar(32),
 checkpoint_json longtext,
+check$point varchar(32),
 error_code varchar(128),
 constraint chk_scope check (retry_scope in ('node', 'subtree', 'siblings')),
 primary key (user_id, run_id)
@@ -14,10 +15,10 @@ primary key (user_id, run_id)
 insert into agent_runs (run_id, user_id) values ('run-1', 'user-1');
 alter table agent_runs add column model_offering_id varchar(64);
 select run_id, user_id, retry_scope, checkpoint_version, checkpoint_json,
-error_code, model_offering_id
+check$point, error_code, model_offering_id
 from agent_runs;
-➤ run_id[12,-1,0]  ¦  user_id[12,-1,0]  ¦  retry_scope[12,-1,0]  ¦  checkpoint_version[12,-1,0]  ¦  checkpoint_json[12,0,0]  ¦  error_code[12,-1,0]  ¦  model_offering_id[12,-1,0]  𝄀
-run-1  ¦  user-1  ¦  node  ¦  null  ¦  null  ¦  null  ¦  null
+➤ run_id[12,-1,0]  ¦  user_id[12,-1,0]  ¦  retry_scope[12,-1,0]  ¦  checkpoint_version[12,-1,0]  ¦  checkpoint_json[12,0,0]  ¦  check$point[12,-1,0]  ¦  error_code[12,-1,0]  ¦  model_offering_id[12,-1,0]  𝄀
+run-1  ¦  user-1  ¦  node  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
 show create table agent_runs;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 agent_runs  ¦  CREATE TABLE `agent_runs` (
@@ -26,6 +27,7 @@ agent_runs  ¦  CREATE TABLE `agent_runs` (
   `retry_scope` varchar(16) NOT NULL DEFAULT 'node',
   `checkpoint_version` varchar(32) DEFAULT NULL,
   `checkpoint_json` text DEFAULT NULL,
+  `check$point` varchar(32) DEFAULT NULL,
   `error_code` varchar(128) DEFAULT NULL,
   `model_offering_id` varchar(64) DEFAULT NULL,
   PRIMARY KEY (`user_id`,`run_id`),
