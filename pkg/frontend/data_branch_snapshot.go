@@ -497,10 +497,10 @@ func createBranchProtectSnapshot(
 	// `table'name` is a legal identifier that contains a literal apostrophe).
 	insertSQL := fmt.Sprintf(
 		`insert into %s.%s(snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id, kind) `+
-			`values ('%s', '%s', %d, %s, %s, %s, %s, %d, %s)`,
+			`values (%s, %s, %d, %s, %s, %s, %s, %d, %s)`,
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
-		newUUID.String(),
-		sname,
+		quoteSQLStringLiteral(newUUID.String()),
+		quoteSQLStringLiteral(sname),
 		receipt.snapshotTS,
 		quoteSQLStringLiteral(dataBranchLevel_Table),
 		quoteSQLStringLiteral(parentAccountName),
