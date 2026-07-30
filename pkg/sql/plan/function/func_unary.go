@@ -4967,16 +4967,13 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 	}
 	minuteText := str[minuteStart:pos]
 	if len(minuteText) == 0 {
-		// MySQL interprets a trailing colon after a numeric field as a
-		// seconds-only value, for example "12:" as 00:00:12.
+		// MySQL ignores a trailing colon and applies its compact TIME coercion
+		// to the preceding digits: "12:" is 00:00:12, while "1234:" is
+		// 00:12:34.
 		if len(hourText) == 0 || pos != len(str) {
 			return 0, 0, 0, false
 		}
-		second := mysqlClampedDigitsForExtract(hourText, 60)
-		if second >= 60 {
-			return 0, 0, 0, false
-		}
-		return 0, 0, uint8(second), true
+		return mysqlClockFieldsForExtract(hourText)
 	}
 
 	minute := mysqlClampedDigitsForExtract(minuteText, 60)

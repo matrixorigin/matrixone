@@ -155,6 +155,10 @@ HOUR('241220153045.') AS compact_12_empty_fraction_hour;
 SELECT HOUR('12:') AS trailing_colon_hour,
 HOUR(':34') AS leading_colon_hour,
 HOUR('12:34:56-') AS trailing_dash_hour,
-HOUR('12:34:56..') AS trailing_dots_hour;
-➤ trailing_colon_hour[4,32,0]  ¦  leading_colon_hour[4,32,0]  ¦  trailing_dash_hour[4,32,0]  ¦  trailing_dots_hour[4,32,0]  𝄀
-0  ¦  0  ¦  12  ¦  12
+HOUR('12:34:56..') AS trailing_dots_hour,
+HOUR('123:') AS compact_3_trailing_colon_hour,
+HOUR('1234:') AS compact_4_trailing_colon_hour,
+HOUR('12345:') AS compact_5_trailing_colon_hour,
+HOUR('123456:') AS compact_6_trailing_colon_hour;
+➤ trailing_colon_hour[4,32,0]  ¦  leading_colon_hour[4,32,0]  ¦  trailing_dash_hour[4,32,0]  ¦  trailing_dots_hour[4,32,0]  ¦  compact_3_trailing_colon_hour[4,32,0]  ¦  compact_4_trailing_colon_hour[4,32,0]  ¦  compact_5_trailing_colon_hour[4,32,0]  ¦  compact_6_trailing_colon_hour[4,32,0]  𝄀
+0  ¦  0  ¦  12  ¦  12  ¦  0  ¦  0  ¦  1  ¦  12

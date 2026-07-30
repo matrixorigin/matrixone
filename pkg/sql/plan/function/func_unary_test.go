@@ -4311,7 +4311,7 @@ func TestStringTimeExtractPartialClockPrefix(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{
-			"12:", ":34", "12:34:56-", "12:34:56..",
+			"12:", ":34", "12:34:56-", "12:34:56..", "123:", "1234:", "12345:", "123456:",
 		}, nil),
 	}
 
@@ -4320,9 +4320,9 @@ func TestStringTimeExtractPartialClockPrefix(t *testing.T) {
 		expect FunctionTestResult
 		fn     fEvalFn
 	}{
-		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0, 0, 12, 12}, nil), StringToHour},
-		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 34, 34, 34}, nil), StringToMinute},
-		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{12, 0, 56, 56}, nil), StringToSecond},
+		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0, 0, 12, 12, 0, 0, 1, 12}, nil), StringToHour},
+		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 34, 34, 34, 1, 12, 23, 34}, nil), StringToMinute},
+		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{12, 0, 56, 56, 23, 34, 45, 56}, nil), StringToSecond},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)

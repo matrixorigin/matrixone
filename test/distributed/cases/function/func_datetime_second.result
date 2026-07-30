@@ -144,6 +144,10 @@ SECOND('241220153045.') AS compact_12_empty_fraction_second;
 SELECT SECOND('12:') AS trailing_colon_second,
 SECOND(':34') AS leading_colon_second,
 SECOND('12:34:56-') AS trailing_dash_second,
-SECOND('12:34:56..') AS trailing_dots_second;
-➤ trailing_colon_second[-6,8,0]  ¦  leading_colon_second[-6,8,0]  ¦  trailing_dash_second[-6,8,0]  ¦  trailing_dots_second[-6,8,0]  𝄀
-12  ¦  0  ¦  56  ¦  56
+SECOND('12:34:56..') AS trailing_dots_second,
+SECOND('123:') AS compact_3_trailing_colon_second,
+SECOND('1234:') AS compact_4_trailing_colon_second,
+SECOND('12345:') AS compact_5_trailing_colon_second,
+SECOND('123456:') AS compact_6_trailing_colon_second;
+➤ trailing_colon_second[-6,8,0]  ¦  leading_colon_second[-6,8,0]  ¦  trailing_dash_second[-6,8,0]  ¦  trailing_dots_second[-6,8,0]  ¦  compact_3_trailing_colon_second[-6,8,0]  ¦  compact_4_trailing_colon_second[-6,8,0]  ¦  compact_5_trailing_colon_second[-6,8,0]  ¦  compact_6_trailing_colon_second[-6,8,0]  𝄀
+12  ¦  0  ¦  56  ¦  56  ¦  23  ¦  34  ¦  45  ¦  56

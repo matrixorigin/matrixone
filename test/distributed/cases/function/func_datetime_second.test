@@ -130,4 +130,8 @@ SELECT SECOND('20241220153045.123abc') AS compact_14_fraction_text_second,
 SELECT SECOND('12:') AS trailing_colon_second,
        SECOND(':34') AS leading_colon_second,
        SECOND('12:34:56-') AS trailing_dash_second,
-       SECOND('12:34:56..') AS trailing_dots_second;
+       SECOND('12:34:56..') AS trailing_dots_second,
+       SECOND('123:') AS compact_3_trailing_colon_second,
+       SECOND('1234:') AS compact_4_trailing_colon_second,
+       SECOND('12345:') AS compact_5_trailing_colon_second,
+       SECOND('123456:') AS compact_6_trailing_colon_second;

@@ -130,4 +130,8 @@ SELECT MINUTE('20241220153045.123abc') AS compact_14_fraction_text_minute,
 SELECT MINUTE('12:') AS trailing_colon_minute,
        MINUTE(':34') AS leading_colon_minute,
        MINUTE('12:34:56-') AS trailing_dash_minute,
-       MINUTE('12:34:56..') AS trailing_dots_minute;
+       MINUTE('12:34:56..') AS trailing_dots_minute,
+       MINUTE('123:') AS compact_3_trailing_colon_minute,
+       MINUTE('1234:') AS compact_4_trailing_colon_minute,
+       MINUTE('12345:') AS compact_5_trailing_colon_minute,
+       MINUTE('123456:') AS compact_6_trailing_colon_minute;
