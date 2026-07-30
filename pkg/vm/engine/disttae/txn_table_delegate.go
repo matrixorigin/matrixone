@@ -1528,7 +1528,7 @@ func (r *shardingLocalReader) Read(
 					resp = resp[1:]
 					l := types.DecodeUint32(resp)
 					resp = resp[4:]
-					if err := bat.UnmarshalBinary(resp[:l]); err != nil {
+					if err := bat.UnmarshalBinaryWithAnyMp(resp[:l], mp); err != nil {
 						panic(err)
 					}
 				},

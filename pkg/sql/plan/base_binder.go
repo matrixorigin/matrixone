@@ -2044,6 +2044,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 	case tree.NOT_LIKE:
 		newExpr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
+		newExpr.Escape = astExpr.Escape
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.ILIKE:
@@ -2051,6 +2052,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 	case tree.NOT_ILIKE:
 		newExpr := tree.NewComparisonExpr(tree.ILIKE, astExpr.Left, astExpr.Right)
+		newExpr.Escape = astExpr.Escape
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
@@ -2203,7 +2205,11 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 	}
 
-	return b.bindFuncExprImplByAstExpr(op, []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	args := []tree.Expr{astExpr.Left, astExpr.Right}
+	if (op == "like" || op == "ilike") && astExpr.Escape != nil {
+		args = append(args, astExpr.Escape)
+	}
+	return b.bindFuncExprImplByAstExpr(op, args, depth)
 }
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
@@ -3190,9 +3196,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return nil, err
 			}
 		}
-	case "like":
+	case "like", "ilike":
 		// sql 'select * from t where col like ?'  the ? Expr's type will be T_any
-		if len(args) != 2 {
+		if len(args) != 2 && len(args) != 3 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_any) {
@@ -3200,6 +3206,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
+		}
+		if len(args) == 3 && args[2].Typ.Id == int32(types.T_any) {
+			args[2].Typ.Id = int32(types.T_varchar)
 		}
 		if args[0].Typ.Id == int32(types.T_json) {
 			targetTp := types.T_varchar.ToType()
@@ -3583,6 +3592,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		case *plan.Expr_Col:
 			if argsType[0].IsVarlen() && checkNoNeedCast(argsType[1], argsType[0], args[1]) {
 				argsCastType = []types.Type{argsType[0], argsType[0]}
+				if len(argsType) == 3 {
+					argsCastType = append(argsCastType, argsType[2])
+				}
 				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 				if err != nil {
 					return nil, err
