@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -51,6 +52,8 @@ var (
 var (
 	bootstrapKey = "_mo_bootstrap"
 )
+
+const bootstrapRetryInterval = 100 * time.Millisecond
 
 var (
 	bootstrappedCheckerDB        = catalog.MOTaskDB
@@ -189,13 +192,19 @@ func (s *service) Bootstrap(ctx context.Context) error {
 
 	ok, err := s.lock.Get(ctx, bootstrapKey)
 	if err != nil {
+		// A connection error can mean the keyed allocation committed but its
+		// response was lost. Do not retry here: a second allocation would lose
+		// ownership and incorrectly enter the waiter path.
 		return err
 	}
 
 	// current node get the bootstrap privilege
 	if ok {
-		// the auto-increment service has already been initialized at current time
-		return s.execBootstrap(ctx)
+		// The auto-increment service has already been initialized. Retry only the
+		// owner work so the lock allocation is never repeated after its outcome is
+		// known. Retrying Locker.Get would consume another keyed ID and turn an
+		// owner into a waiter.
+		return s.execBootstrapWithRetry(ctx)
 	}
 
 	// otherwise, wait bootstrap completed
@@ -210,6 +219,23 @@ func (s *service) Bootstrap(ctx context.Context) error {
 				zap.Bool("result", ok),
 				zap.Error(err))
 			return err
+		}
+	}
+}
+
+func (s *service) execBootstrapWithRetry(ctx context.Context) error {
+	for {
+		err := s.execBootstrap(ctx)
+		if err == nil || !morpc.IsConnectionError(err) {
+			return err
+		}
+
+		timer := time.NewTimer(bootstrapRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
 		}
 	}
 }

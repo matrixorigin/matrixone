@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -321,6 +322,68 @@ func TestBootstrapWithWait(t *testing.T) {
 	)
 }
 
+func TestBootstrapRetriesOwnerInitializationWithoutReacquiringLock(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			var initAttempts atomic.Uint32
+			locker := &memLocker{}
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if sql == "show databases" {
+					return executor.Result{}, nil
+				}
+				if sql == initSQLs[0] && initAttempts.Add(1) == 1 {
+					return executor.Result{}, moerr.NewConnectionResetNoCtx()
+				}
+				return newBootstrapStringResult("mo_catalog", "mo_catalog"), nil
+			})
+
+			b := NewService(
+				sid,
+				locker,
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				exec,
+			)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			frontendParameters := &config.FrontendParameters{}
+			frontendParameters.SetDefaultValues()
+			ctx = context.WithValue(ctx, config.ParameterUnitKey,
+				config.NewParameterUnit(frontendParameters, nil, nil, nil))
+
+			require.NoError(t, b.Bootstrap(ctx))
+			require.Equal(t, uint32(2), initAttempts.Load())
+			require.Equal(t, uint64(1), locker.ids[bootstrapKey])
+		},
+	)
+}
+
+func TestBootstrapDoesNotRetryUncertainLockAllocation(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			locker := &uncertainMemLocker{err: moerr.NewConnectionResetNoCtx()}
+			b := NewService(
+				sid,
+				locker,
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				executor.NewMemExecutor(func(string) (executor.Result, error) {
+					return executor.Result{}, nil
+				}),
+			)
+
+			err := b.Bootstrap(context.Background())
+			require.ErrorIs(t, err, locker.err)
+			require.Equal(t, uint32(1), locker.calls.Load())
+			require.Equal(t, uint64(1), locker.ids[bootstrapKey])
+		},
+	)
+}
+
 func TestBootstrapMissingSQLTaskTablesIsNotBootstrapped(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -433,6 +496,23 @@ func (l *memLocker) Get(
 
 	l.ids[key]++
 	return l.ids[key] == 1, nil
+}
+
+type uncertainMemLocker struct {
+	memLocker
+	err   error
+	calls atomic.Uint32
+}
+
+func (l *uncertainMemLocker) Get(ctx context.Context, key string) (bool, error) {
+	ok, err := l.memLocker.Get(ctx, key)
+	if err != nil {
+		return false, err
+	}
+	if l.calls.Add(1) == 1 {
+		return false, l.err
+	}
+	return ok, nil
 }
 
 // tolerance test

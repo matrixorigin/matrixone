@@ -999,10 +999,10 @@ func (s *service) bootstrap() error {
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
 	defer cancel()
 
-	// HAKeeper can briefly reset or recreate its transport while concurrent CNs
-	// are bootstrapping. Retry connection errors inside the existing bootstrap
-	// deadline; all non-connection bootstrap errors retain fail-fast behavior.
-	if err := bootstrapWithRetry(ctx, bootstrapRetryInterval, s.bootstrapService.Bootstrap); err != nil {
+	// Bootstrap owns retrying only the initialization phase after it has acquired
+	// the bootstrap privilege. Retrying this whole state machine can allocate a
+	// second lock ID after an uncertain allocation response.
+	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
 		return handleBootstrapErr(ctx, err)
 	}
 
@@ -1022,27 +1022,6 @@ func (s *service) bootstrap() error {
 		})
 	}
 	return nil
-}
-
-func bootstrapWithRetry(
-	ctx context.Context,
-	interval time.Duration,
-	bootstrap func(context.Context) error,
-) error {
-	for {
-		err := bootstrap(ctx)
-		if err == nil || !morpc.IsConnectionError(err) {
-			return err
-		}
-
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
 }
 
 // handleBootstrapErr decides whether a bootstrap error should be returned
