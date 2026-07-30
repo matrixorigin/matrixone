@@ -16,6 +16,7 @@ package batch
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -354,6 +355,76 @@ func TestBatchUnmarshalRejectsOwnedVectorCountChangeWithoutMpool(t *testing.T) {
 		unmarshalErr = target.UnmarshalBinary(encoded)
 	})
 	require.Error(t, unmarshalErr)
+}
+
+func TestBatchUnmarshalSeparatesAliasedReuseVectors(t *testing.T) {
+	for _, columnCount := range []int{2, 3} {
+		t.Run(fmt.Sprintf("%d_columns", columnCount), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := NewWithSize(columnCount)
+			for i := range source.Vecs {
+				source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+			}
+			source.SetRowCount(1)
+			encoded, err := source.MarshalBinary()
+			require.NoError(t, err)
+			source.Clean(mp)
+
+			target := NewOffHeapWithSize(columnCount)
+			shared := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(shared, int64(-1), false, mp))
+			for i := range target.Vecs {
+				target.Vecs[i] = shared
+			}
+			t.Cleanup(func() {
+				target.Clean(mp)
+				require.Equal(t, int64(0), mp.CurrNB())
+			})
+
+			require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+			for i := range target.Vecs {
+				require.Equal(t, int64(i+1), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[i], 0))
+				if i > 0 {
+					require.NotSame(t, target.Vecs[i-1], target.Vecs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestBatchUnmarshalSeparatesBorrowedAliasedReuseVectorsWithoutMpool(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	for i := range source.Vecs {
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+	}
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	seed := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(seed, int64(-1), false, mp))
+	seedData, err := seed.MarshalBinary()
+	require.NoError(t, err)
+	seed.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	shared := vector.NewVecFromReuse()
+	require.NoError(t, shared.UnmarshalBinary(seedData))
+	target := NewWithSize(2)
+	target.Vecs[0] = shared
+	target.Vecs[1] = shared
+	t.Cleanup(func() {
+		target.Clean(nil)
+	})
+
+	require.NoError(t, target.UnmarshalBinary(encoded))
+	require.NotSame(t, target.Vecs[0], target.Vecs[1])
+	require.Equal(t, int64(1), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[0], 0))
+	require.Equal(t, int64(2), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[1], 0))
 }
 
 func TestBatchShrink(t *testing.T) {

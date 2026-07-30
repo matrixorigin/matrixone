@@ -239,6 +239,9 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	}
 
 	vecs := bat.Vecs
+	// SelectColumns and ReplaceVector can leave multiple slots pointing to the
+	// same Vector. Reuse each receiver for at most one decoded column.
+	var usedReceivers map[*vector.Vector]struct{}
 	for i := 0; i < vecsLen; i++ {
 		size, err := cursor.readUint32()
 		if err != nil {
@@ -250,6 +253,16 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		vecData, err := cursor.read(int(size))
 		if err != nil {
 			return err
+		}
+		if vecs[i] != nil {
+			if _, used := usedReceivers[vecs[i]]; used {
+				vecs[i] = nil
+			} else {
+				if usedReceivers == nil {
+					usedReceivers = make(map[*vector.Vector]struct{}, vecsLen)
+				}
+				usedReceivers[vecs[i]] = struct{}{}
+			}
 		}
 		if vecs[i] == nil {
 			if bat.offHeap {
