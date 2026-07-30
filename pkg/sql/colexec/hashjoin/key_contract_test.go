@@ -214,9 +214,16 @@ func runHashJoinKeyContract(t *testing.T, keyCase joinKeyContractCase, mode join
 	)
 	tc.proc.Base.Lim.Size = 8 << 20
 	tc.proc.Base.Lim.SpillSize = 64 << 20
+	var build, probe *batch.Batch
 	defer func() {
 		tc.arg.Free(tc.proc, false, nil)
 		tc.barg.Free(tc.proc, false, nil)
+		if build != nil {
+			build.Clean(tc.proc.Mp())
+		}
+		if probe != nil {
+			probe.Clean(tc.proc.Mp())
+		}
 		budget, err := tc.proc.GetHashBuildBudget()
 		require.NoError(t, err)
 		require.Zero(t, budget.Used())
@@ -232,10 +239,10 @@ func runHashJoinKeyContract(t *testing.T, keyCase joinKeyContractCase, mode join
 	for i := 1; i < buildRows; i++ {
 		buildValues[i] = keyCase.makeBuildFiller(i)
 	}
-	build := batch.NewWithSize(1)
+	build = batch.NewWithSize(1)
 	build.Vecs[0] = makeJoinKeyVector(t, tc.proc, keyCase.typ, buildValues)
 	build.SetRowCount(buildRows)
-	probe := batch.NewWithSize(1)
+	probe = batch.NewWithSize(1)
 	probe.Vecs[0] = makeJoinKeyVector(t, tc.proc, keyCase.typ, []joinKeyContractValue{keyCase.probe})
 	probe.SetRowCount(1)
 

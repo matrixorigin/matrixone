@@ -17,7 +17,6 @@ package hashmap
 import (
 	"bytes"
 	"io"
-	"math"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
@@ -100,9 +99,10 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		case 4:
 			fillKeys[uint32](itr, vec, 4, start, count)
 		case 8:
-			fillKeys[uint64](itr, vec, 8, start, count)
 			if vec.GetType().Oid == types.T_float64 {
-				normalizeFloat64HashKeys(itr, vec, start, count)
+				fillFloat64Keys(itr, vec, start, count)
+			} else {
+				fillKeys[uint64](itr, vec, 8, start, count)
 			}
 		default:
 			if !vec.IsConst() && vec.GetArea() == nil {
@@ -114,18 +114,82 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 	}
 }
 
-func normalizeFloat64HashKeys(itr *intHashMapIterator, vec *vector.Vector, start, n int) {
+func fillFloat64Keys(itr *intHashMapIterator, vec *vector.Vector, start, n int) {
+	keys := itr.keys
+	keyOffs := itr.keyOffs
 	if vec.IsConstNull() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				itr.zValues[i] = 0
+			}
+		}
 		return
 	}
-	nsp := vec.GetNulls()
-	for i := 0; i < n; i++ {
-		if nsp.Contains(uint64(i + start)) {
-			continue
+
+	values := vector.MustFixedColNoTypeCheck[float64](vec)
+	if vec.IsConst() {
+		bits := keycodec.CanonicalFloat64Bits(values[0])
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = bits
+			}
+			uint32AddScalar(1+uint32(types.T_float64.TypeLen()), keyOffs[:n], keyOffs[:n])
+		} else {
+			for i := 0; i < n; i++ {
+				*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = bits
+			}
+			uint32AddScalar(uint32(types.T_float64.TypeLen()), keyOffs[:n], keyOffs[:n])
 		}
-		valueOffset := itr.keyOffs[i] - uint32(types.T_float64.TypeLen())
-		ptr := (*uint64)(unsafe.Add(unsafe.Pointer(&itr.keys[i]), valueOffset))
-		*ptr = keycodec.CanonicalFloat64Bits(math.Float64frombits(*ptr))
+		return
+	}
+
+	if !vec.GetNulls().Any() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					keycodec.CanonicalFloat64Bits(values[i+start])
+			}
+			uint32AddScalar(1+uint32(types.T_float64.TypeLen()), keyOffs[:n], keyOffs[:n])
+		} else {
+			for i := 0; i < n; i++ {
+				*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+					keycodec.CanonicalFloat64Bits(values[i+start])
+			}
+			uint32AddScalar(uint32(types.T_float64.TypeLen()), keyOffs[:n], keyOffs[:n])
+		}
+		return
+	}
+
+	nsp := vec.GetNulls()
+	if itr.mp.hasNull {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			} else {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					keycodec.CanonicalFloat64Bits(values[i+start])
+				keyOffs[i] += 1 + uint32(types.T_float64.TypeLen())
+			}
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				itr.zValues[i] = 0
+				continue
+			}
+			*(*uint64)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+				keycodec.CanonicalFloat64Bits(values[i+start])
+			keyOffs[i] += uint32(types.T_float64.TypeLen())
+		}
 	}
 }
 

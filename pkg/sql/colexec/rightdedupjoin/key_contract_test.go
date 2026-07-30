@@ -61,6 +61,30 @@ func runRightDedupJoinDoubleSignedZeroContract(
 	defer ctrl.Finish()
 	proc.Base.Lim.Size = 8 << 20
 	proc.Base.Lim.SpillSize = 64 << 20
+	var buildBatch, probeBatch *batch.Batch
+	var rightDedupArg *RightDedupJoin
+	var buildArg *hashbuild.HashBuild
+	defer func() {
+		if rightDedupArg != nil {
+			rightDedupArg.Free(proc, false, nil)
+		}
+		if buildArg != nil {
+			buildArg.Free(proc, false, nil)
+		}
+		if buildBatch != nil {
+			buildBatch.Clean(proc.Mp())
+		}
+		if probeBatch != nil {
+			probeBatch.Clean(proc.Mp())
+		}
+		budget, err := proc.GetHashBuildBudget()
+		require.NoError(t, err)
+		require.Zero(t, budget.Used())
+		require.Zero(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	}()
 
 	floatType := types.T_float64.ToType()
 	conditions := [][]*plan.Expr{
@@ -71,7 +95,7 @@ func runRightDedupJoinDoubleSignedZeroContract(
 	joinMapTag := tag
 
 	const buildRows = 256
-	buildBatch := batch.NewWithSize(1)
+	buildBatch = batch.NewWithSize(1)
 	buildBatch.Vecs[0] = vector.NewVec(floatType)
 	require.NoError(t, vector.AppendFixed(buildBatch.Vecs[0], float64(0), false, proc.Mp()))
 	for i := 1; i < buildRows; i++ {
@@ -79,7 +103,7 @@ func runRightDedupJoinDoubleSignedZeroContract(
 	}
 	buildBatch.SetRowCount(buildRows)
 
-	probeBatch := batch.NewWithSize(1)
+	probeBatch = batch.NewWithSize(1)
 	probeBatch.Vecs[0] = vector.NewVec(floatType)
 	require.NoError(t, vector.AppendFixed(
 		probeBatch.Vecs[0],
@@ -89,7 +113,7 @@ func runRightDedupJoinDoubleSignedZeroContract(
 	))
 	probeBatch.SetRowCount(1)
 
-	rightDedupArg := &RightDedupJoin{
+	rightDedupArg = &RightDedupJoin{
 		LeftTypes:         []types.Type{floatType},
 		RightTypes:        []types.Type{floatType},
 		Conditions:        conditions,
@@ -104,7 +128,7 @@ func runRightDedupJoinDoubleSignedZeroContract(
 	}
 	rightDedupArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBatch}))
 
-	buildArg := &hashbuild.HashBuild{
+	buildArg = &hashbuild.HashBuild{
 		NeedHashMap:    true,
 		NeedBatches:    false,
 		Conditions:     conditions[1],
@@ -118,17 +142,6 @@ func runRightDedupJoinDoubleSignedZeroContract(
 		buildArg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: joinMapTag + 9000}
 	}
 	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBatch}))
-	defer func() {
-		rightDedupArg.Free(proc, false, nil)
-		buildArg.Free(proc, false, nil)
-		budget, err := proc.GetHashBuildBudget()
-		require.NoError(t, err)
-		require.Zero(t, budget.Used())
-		require.Zero(t, budget.SpillDiskUsed())
-		require.Zero(t, budget.SpillFDUsed())
-		proc.Free()
-		require.Zero(t, proc.Mp().CurrNB())
-	}()
 
 	spillBefore := promtestutil.ToFloat64(
 		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"),

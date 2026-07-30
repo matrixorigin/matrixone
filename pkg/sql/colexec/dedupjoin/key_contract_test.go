@@ -58,6 +58,30 @@ func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMod
 	defer ctrl.Finish()
 	proc.Base.Lim.Size = 8 << 20
 	proc.Base.Lim.SpillSize = 64 << 20
+	var buildBatch, probeBatch *batch.Batch
+	var dedupArg *DedupJoin
+	var buildArg *hashbuild.HashBuild
+	defer func() {
+		if dedupArg != nil {
+			dedupArg.Free(proc, false, nil)
+		}
+		if buildArg != nil {
+			buildArg.Free(proc, false, nil)
+		}
+		if buildBatch != nil {
+			buildBatch.Clean(proc.Mp())
+		}
+		if probeBatch != nil {
+			probeBatch.Clean(proc.Mp())
+		}
+		budget, err := proc.GetHashBuildBudget()
+		require.NoError(t, err)
+		require.Zero(t, budget.Used())
+		require.Zero(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	}()
 
 	floatType := types.T_float64.ToType()
 	intType := types.T_int32.ToType()
@@ -77,12 +101,12 @@ func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMod
 		require.NoError(t, vector.AppendFixed(buildKeys, float64(i), false, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(buildPlaceholder, int32(0), true, proc.Mp()))
 	}
-	buildBatch := batch.NewWithSize(2)
+	buildBatch = batch.NewWithSize(2)
 	buildBatch.Vecs[0] = buildKeys
 	buildBatch.Vecs[1] = buildPlaceholder
 	buildBatch.SetRowCount(buildRows)
 
-	probeBatch := batch.NewWithSize(2)
+	probeBatch = batch.NewWithSize(2)
 	probeBatch.Vecs[0] = vector.NewVec(floatType)
 	probeBatch.Vecs[1] = vector.NewVec(intType)
 	require.NoError(t, vector.AppendFixed(
@@ -94,7 +118,7 @@ func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMod
 	require.NoError(t, vector.AppendFixed(probeBatch.Vecs[1], int32(42), false, proc.Mp()))
 	probeBatch.SetRowCount(1)
 
-	dedupArg := &DedupJoin{
+	dedupArg = &DedupJoin{
 		LeftTypes:  []types.Type{floatType, intType},
 		RightTypes: []types.Type{floatType, intType},
 		Conditions: conditions,
@@ -113,7 +137,7 @@ func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMod
 	}
 	dedupArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBatch}))
 
-	buildArg := &hashbuild.HashBuild{
+	buildArg = &hashbuild.HashBuild{
 		NeedHashMap:      true,
 		NeedBatches:      true,
 		Conditions:       conditions[1],
@@ -130,17 +154,6 @@ func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMod
 		buildArg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: joinMapTag + 8000}
 	}
 	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBatch}))
-	defer func() {
-		dedupArg.Free(proc, false, nil)
-		buildArg.Free(proc, false, nil)
-		budget, err := proc.GetHashBuildBudget()
-		require.NoError(t, err)
-		require.Zero(t, budget.Used())
-		require.Zero(t, budget.SpillDiskUsed())
-		require.Zero(t, budget.SpillFDUsed())
-		proc.Free()
-		require.Zero(t, proc.Mp().CurrNB())
-	}()
 
 	spillBefore := promtestutil.ToFloat64(
 		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"),

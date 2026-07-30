@@ -135,12 +135,30 @@ func fillFloat64GroupStr(itr *strHashmapIterator, vec *vector.Vector, n, start i
 		return
 	}
 	if vec.IsConst() {
-		value := keycodec.BytesAt(vec, 0)
+		values := vector.MustFixedColNoTypeCheck[float64](vec)
+		value := keycodec.CanonicalFloat64Bytes(values[0])
 		for i := 0; i < n; i++ {
 			if itr.mp.hasNull {
 				keys[i] = append(keys[i], byte(0))
 			}
-			keys[i] = append(keys[i], value...)
+			keys[i] = append(keys[i], value[:]...)
+		}
+		return
+	}
+
+	values := vector.MustFixedColNoTypeCheck[float64](vec)
+	if !vec.GetNulls().Any() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				keys[i] = append(keys[i], byte(0))
+				value := keycodec.CanonicalFloat64Bytes(values[i+start])
+				keys[i] = append(keys[i], value[:]...)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				value := keycodec.CanonicalFloat64Bytes(values[i+start])
+				keys[i] = append(keys[i], value[:]...)
+			}
 		}
 		return
 	}
@@ -156,12 +174,14 @@ func fillFloat64GroupStr(itr *strHashmapIterator, vec *vector.Vector, n, start i
 				keys[i] = append(keys[i], byte(1))
 			} else {
 				keys[i] = append(keys[i], byte(0))
-				keys[i] = append(keys[i], keycodec.BytesAt(vec, row)...)
+				value := keycodec.CanonicalFloat64Bytes(values[row])
+				keys[i] = append(keys[i], value[:]...)
 			}
 		} else if nsp.Contains(uint64(row)) {
 			itr.zValues[i] = 0
 		} else {
-			keys[i] = append(keys[i], keycodec.BytesAt(vec, row)...)
+			value := keycodec.CanonicalFloat64Bytes(values[row])
+			keys[i] = append(keys[i], value[:]...)
 		}
 	}
 }
