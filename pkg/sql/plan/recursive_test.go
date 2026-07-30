@@ -125,7 +125,7 @@ func TestRecursiveCteDuplicateExplicitAliasStillErrors(t *testing.T) {
 	require.Contains(t, err.Error(), "table 'a' specified more than once")
 }
 
-func TestRecursiveCteStringAnchorUsesStrictCast(t *testing.T) {
+func TestRecursiveCteStringAnchorUsesAssignmentCast(t *testing.T) {
 	query := `
 		with recursive r(n, s) as (
 			select 1, 'a'
@@ -143,7 +143,7 @@ func TestRecursiveCteStringAnchorUsesStrictCast(t *testing.T) {
 			return
 		}
 		if fn := expr.GetF(); fn != nil {
-			if fn.Func != nil && fn.Func.ObjName == "cast_strict" &&
+			if fn.Func != nil && fn.Func.ObjName == "cast_assign" &&
 				expr.Typ.Id == int32(types.T_varchar) {
 				found = true
 				return
@@ -163,7 +163,7 @@ func TestRecursiveCteStringAnchorUsesStrictCast(t *testing.T) {
 			visit(expr)
 		}
 	}
-	require.True(t, found, "recursive string member must use cast_strict")
+	require.True(t, found, "recursive string member must use cast_assign")
 }
 
 func TestOrdinaryAliasesRemainUnchanged(t *testing.T) {
