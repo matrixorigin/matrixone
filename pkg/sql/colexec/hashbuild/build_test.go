@@ -270,6 +270,24 @@ func newTestCase(t testing.TB, flgs []bool, ts []types.Type, cs []*plan.Expr) bu
 	}
 }
 
+func TestHashBuildPrepareDropsPriorGenerationSpillFileService(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	prior, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+
+	arg := &HashBuild{NeedHashMap: false}
+	arg.ctr.spillFS = prior
+	require.NoError(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.spillFS, "a reused operator must not retain the prior Process service")
+
+	current, err := arg.ctr.getSpillFS(proc)
+	require.NoError(t, err)
+	require.NotSame(t, prior, current, "the current generation must resolve its own borrowed wrapper")
+	arg.Free(proc, false, nil)
+	require.Nil(t, arg.ctr.spillFS)
+}
+
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
@@ -812,19 +830,98 @@ func TestHashBuildIsShuffle(t *testing.T) {
 		jm := result.JoinMap()
 		require.NotNil(t, jm)
 		require.True(t, jm.IsSpilled())
-		files := jm.TakeSpillBuildFiles()
-		require.Len(t, files, spillNumBuckets)
-		for _, file := range files {
-			if file != nil {
-				_ = file.Close()
-			}
-		}
+		spillPayload, err := jm.TakeSpillBuildPayload()
+		require.NoError(t, err)
+		require.Len(t, spillPayload.Files, spillNumBuckets)
+		require.Same(t, budget, spillPayload.BudgetRef)
+		require.NoError(t, spillPayload.Close())
 		require.Zero(t, budget.Used())
 		require.Zero(t, budget.SpillDiskUsed())
 		require.Zero(t, budget.SpillFDUsed())
 		tc.arg.Reset(tc.proc, false, nil)
 	}
 	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+}
+
+func TestBroadcastHashBuildParallelConsumersStayResident(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.IsShuffle = false
+	tc.arg.JoinMapRefCnt = 2
+	tc.arg.SpillThreshold = 1
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	build := batch.NewWithSize(1)
+	build.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, tc.proc.Mp())
+	build.SetRowCount(3)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	first, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, false, 0, tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	second, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, false, 0, tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	require.True(t, first.IsSuccess())
+	require.True(t, second.IsSuccess())
+	require.Same(t, first.JoinMap(), second.JoinMap())
+	require.False(t, first.JoinMap().IsSpilled())
+	require.Equal(t, int64(2), first.JoinMap().GetRefCount())
+	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
+
+	first.JoinMap().Free()
+	second.JoinMap().Free()
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.marg.Reset(tc.proc, false, nil)
+	tc.proc.Free()
+}
+
+func TestHashBuildRejectsSharedSpillPayload(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.JoinMapRefCnt = 2
+	tc.arg.SpillThreshold = 1
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 2}
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	build := batch.NewWithSize(1)
+	build.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, tc.proc.Mp())
+	build.SetRowCount(3)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+
+	_, buildErr := vm.Exec(tc.arg, tc.proc)
+	require.ErrorContains(t, buildErr, "hash build spill requires exactly one consumer, got 2")
+
+	first, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	second, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	require.True(t, first.IsBuildError())
+	require.True(t, second.IsBuildError())
+	require.Same(t, first.BuildError(), second.BuildError())
+
+	tc.arg.Reset(tc.proc, true, buildErr)
+	tc.marg.Reset(tc.proc, true, buildErr)
+	budget, err := tc.proc.GetHashBuildBudget()
+	require.NoError(t, err)
+	require.Zero(t, budget.Used())
+	require.Zero(t, budget.SpillDiskUsed())
+	require.Zero(t, budget.SpillFDUsed())
+	tc.arg.Free(tc.proc, true, buildErr)
 	tc.proc.Free()
 }
 
@@ -872,11 +969,9 @@ func TestShuffleHashBuildFallsBackToDirectSpillWhenRetainedProofRejects(t *testi
 	require.NotNil(t, jm)
 	require.True(t, jm.IsSpilled(), "failed future-retained proof must choose direct spill")
 	require.Equal(t, int64(1), jm.GetRowCount())
-	for _, file := range jm.TakeSpillBuildFiles() {
-		if file != nil {
-			require.NoError(t, file.Close())
-		}
-	}
+	spillPayload, err := jm.TakeSpillBuildPayload()
+	require.NoError(t, err)
+	require.NoError(t, spillPayload.Close())
 	require.Empty(t, tc.arg.ctr.hashmapBuilder.Batches.Buf)
 	require.Zero(t, generation.Used())
 	require.Zero(t, generation.SpillDiskUsed())
@@ -924,11 +1019,9 @@ func TestShuffleHashBuildSpillsExpressionKey(t *testing.T) {
 	require.NotNil(t, jm)
 	require.True(t, jm.IsSpilled())
 	require.Equal(t, int64(4), jm.GetRowCount())
-	for _, file := range jm.TakeSpillBuildFiles() {
-		if file != nil {
-			require.NoError(t, file.Close())
-		}
-	}
+	spillPayload, err := jm.TakeSpillBuildPayload()
+	require.NoError(t, err)
+	require.NoError(t, spillPayload.Close())
 	budget, err := tc.proc.GetHashBuildBudget()
 	require.NoError(t, err)
 	require.Zero(t, budget.Used())
@@ -986,11 +1079,9 @@ func TestShuffleHashBuildResizeRejectReleasesPartialMapAndSpills(t *testing.T) {
 	require.NotNil(t, jm)
 	require.True(t, jm.IsSpilled())
 	require.Equal(t, int64(8192), jm.GetRowCount())
-	for _, file := range jm.TakeSpillBuildFiles() {
-		if file != nil {
-			require.NoError(t, file.Close())
-		}
-	}
+	spillPayload, err := jm.TakeSpillBuildPayload()
+	require.NoError(t, err)
+	require.NoError(t, spillPayload.Close())
 	require.Zero(t, generation.SpillDiskUsed())
 	require.Zero(t, generation.SpillFDUsed())
 
@@ -1108,11 +1199,9 @@ func TestShuffleHashBuildDrainsRetainedBatchBeforeGrowingScratch(t *testing.T) {
 	jm := result.JoinMap()
 	require.True(t, jm.IsSpilled())
 	require.Equal(t, int64(73728), jm.GetRowCount())
-	for _, file := range jm.TakeSpillBuildFiles() {
-		if file != nil {
-			require.NoError(t, file.Close())
-		}
-	}
+	spillPayload, err := jm.TakeSpillBuildPayload()
+	require.NoError(t, err)
+	require.NoError(t, spillPayload.Close())
 	require.Zero(t, generation.SpillDiskUsed())
 	require.Zero(t, generation.SpillFDUsed())
 

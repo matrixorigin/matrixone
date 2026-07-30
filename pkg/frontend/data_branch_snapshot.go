@@ -380,6 +380,7 @@ func reclaimBranchSnapshotsWithBH(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
+	accountID uint32,
 	deadTIDs []uint64,
 ) error {
 	if len(deadTIDs) == 0 {
@@ -392,6 +393,9 @@ func reclaimBranchSnapshotsWithBH(
 	)
 	loadDAG := func() (databranchutils.BranchReclaimDag, error) {
 		return loadBranchDAGWithBH(ctx, bh)
+	}
+	markDeleted := func() error {
+		return markBranchTablesDeleted(ctx, ses, bh, accountID, deadTIDs)
 	}
 	execDelete := func(snames []string) error {
 		sysCtx := defines.AttachAccountId(ctx, sysAccountID)
@@ -407,8 +411,7 @@ func reclaimBranchSnapshotsWithBH(
 		)
 		return nil
 	}
-	_ = ses
-	return databranchutils.ReclaimBranchSnapshotsCore(deadTIDs, loadDAG, execDelete)
+	return databranchutils.MarkAndReclaimBranchSnapshotsCore(deadTIDs, loadDAG, markDeleted, execDelete)
 }
 
 // getBranchParentAccountName resolves the account name for the source
@@ -494,10 +497,10 @@ func createBranchProtectSnapshot(
 	// `table'name` is a legal identifier that contains a literal apostrophe).
 	insertSQL := fmt.Sprintf(
 		`insert into %s.%s(snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id, kind) `+
-			`values ('%s', '%s', %d, %s, %s, %s, %s, %d, %s)`,
+			`values (%s, %s, %d, %s, %s, %s, %s, %d, %s)`,
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
-		newUUID.String(),
-		sname,
+		quoteSQLStringLiteral(newUUID.String()),
+		quoteSQLStringLiteral(sname),
 		receipt.snapshotTS,
 		quoteSQLStringLiteral(dataBranchLevel_Table),
 		quoteSQLStringLiteral(parentAccountName),
