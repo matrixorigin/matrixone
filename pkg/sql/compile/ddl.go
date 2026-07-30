@@ -285,7 +285,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			catalog.MO_PITR_CHANGED_TIME, now,
 
 			catalog.MO_PITR_ACCOUNT_ID, accountId,
-			catalog.MO_PITR_DB_NAME, dbName,
+			catalog.MO_PITR_DB_NAME, sqlquote.EscapeString(dbName),
 			catalog.MO_PITR_STATUS, 1,
 			catalog.MO_PITR_OBJECT_ID, database.GetDatabaseId(c.proc.Ctx),
 		)
@@ -2172,8 +2172,9 @@ func (c *Compile) runSqlWithSystemTenant(sql string) error {
 // shared reclaim core from the databranchutils package, and submits the
 // resulting DELETE via a sys-tenant executor.
 //
-// Called synchronously by the plain `DROP TABLE` path after flipping
-// table_deleted=true for the affected tid (design §9.2 / §10).
+// Called synchronously by the plain `DROP TABLE` path. It reports whether the
+// dropped table participates in branch lineage and acquires the DAG lock before
+// flipping table_deleted=true for the affected tid (design §9.2 / §10).
 func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error) {
 	if len(deadTIDs) == 0 {
 		return false, nil
@@ -2254,11 +2255,19 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 		})
 		return databranchutils.NewBranchReclaimDag(rows), nil
 	}
+	markDeleted := func() error {
+		return c.runSqlWithSystemTenant(fmt.Sprintf(
+			"update %s.%s set table_deleted = true where table_id in (%s)",
+			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, idList.String(),
+		))
+	}
 	execDelete := func(snames []string) error {
 		sql := databranchutils.BuildBranchSnapshotDeleteSQL(snames)
 		return c.runSqlWithSystemTenant(sql)
 	}
-	return true, databranchutils.ReclaimBranchSnapshotsCore(deadTIDs, loadDAG, execDelete)
+	return true, databranchutils.MarkAndReclaimBranchSnapshotsCore(
+		deadTIDs, loadDAG, markDeleted, execDelete,
+	)
 }
 
 func (s *Scope) CreateView(c *Compile) error {
@@ -3630,8 +3639,8 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			catalog.MO_PITR_CHANGED_TIME, now,
 
 			catalog.MO_PITR_ACCOUNT_ID, accountID,
-			catalog.MO_PITR_DB_NAME, dbName,
-			catalog.MO_PITR_TABLE_NAME, tblName,
+			catalog.MO_PITR_DB_NAME, sqlquote.EscapeString(dbName),
+			catalog.MO_PITR_TABLE_NAME, sqlquote.EscapeString(tblName),
 			catalog.MO_PITR_STATUS, 1,
 			catalog.MO_PITR_OBJECT_ID, tblID,
 		)
@@ -3647,11 +3656,6 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			"delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d",
 			accountID, tblID,
 		),
-
-		fmt.Sprintf(
-			"update mo_catalog.mo_branch_metadata set table_deleted = true where table_id = %d",
-			tblID,
-		),
 	}
 
 	for _, ss := range sqls {
@@ -3664,11 +3668,12 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 	}
 
-	// Branch Protect Snapshot reclaim: after flipping table_deleted=true for
-	// this tid, check whether any subtree has become fully deleted and if so
-	// release the corresponding `__mo_branch_*` snapshots. This must run
-	// synchronously so drop paths have identical semantics in the frontend
-	// and compile-layer paths (design §5.3 / §9.2).
+	// Branch Protect Snapshot reclaim: lock the complete metadata DAG before
+	// flipping table_deleted=true for this tid, then check whether any subtree
+	// has become fully deleted and release the corresponding
+	// `__mo_branch_*` snapshots. This must run synchronously so drop paths have
+	// identical semantics in the frontend and compile-layer paths (design
+	// §5.3 / §9.2).
 	var branchParticipates bool
 	if branchParticipates, err = c.reclaimBranchProtectSnapshots([]uint64{tblID}); err != nil {
 		logutil.Error("reclaim branch protect snapshots failed",
@@ -4894,21 +4899,21 @@ func (s *Scope) CreatePitr(c *Compile) error {
                                table_name,
                                obj_id,
                                pitr_length,
-                               pitr_unit,
-                               pitr_status_changed_time) values ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', %d, %d, '%s', %d)`,
+	                               pitr_unit,
+	                               pitr_status_changed_time) values ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', %d, %d, '%s', %d)`,
 		newUUid,
-		pitrName,
+		sqlquote.EscapeString(pitrName),
 		createPitr.GetCurrentAccountId(),
 		now,
 		now,
-		pitrLevel.String(),
+		sqlquote.EscapeString(pitrLevel.String()),
 		createPitr.GetCurrentAccountId(),
-		createPitr.GetAccountName(),
-		createPitr.GetDatabaseName(),
-		createPitr.GetTableName(),
+		sqlquote.EscapeString(createPitr.GetAccountName()),
+		sqlquote.EscapeString(createPitr.GetDatabaseName()),
+		sqlquote.EscapeString(createPitr.GetTableName()),
 		pitrObjectID,
 		createPitr.GetPitrValue(),
-		createPitr.GetPitrUnit(),
+		sqlquote.EscapeString(createPitr.GetPitrUnit()),
 		now,
 	)
 
@@ -5092,7 +5097,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 1. Check if PITR exists
-	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
+	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", sqlquote.EscapeString(pitrName), accountId)
 	res, err := c.runSqlWithResultAndOptions(checkSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
@@ -5106,7 +5111,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 2. Delete PITR record
-	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
+	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", sqlquote.EscapeString(pitrName), accountId)
 	err = c.runSqlWithAccountIdAndOptions(deleteSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
@@ -5154,14 +5159,14 @@ func getSqlForCheckPitrDup(
 		return getSqlForCheckDupPitrFormat(createPitr.CurrentAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if createPitr.OriginAccountName {
-			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", createPitr.AccountName)
+			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", sqlquote.EscapeString(createPitr.AccountName))
 		} else {
-			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", createPitr.CurrentAccount)
+			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", sqlquote.EscapeString(createPitr.CurrentAccount))
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND level = 'database' AND pitr_status = 1;", createPitr.DatabaseName)
+		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND level = 'database' AND pitr_status = 1;", sqlquote.EscapeString(createPitr.DatabaseName))
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND table_name = '%s' AND level = 'table' AND pitr_status = 1;", createPitr.DatabaseName, createPitr.TableName)
+		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND table_name = '%s' AND level = 'table' AND pitr_status = 1;", sqlquote.EscapeString(createPitr.DatabaseName), sqlquote.EscapeString(createPitr.TableName))
 	}
 	return sql
 }
@@ -5219,7 +5224,7 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 }
 
 func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {
-	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d ORDER BY pitr_id", pitrName, accountId)
+	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d ORDER BY pitr_id", sqlquote.EscapeString(pitrName), accountId)
 }
 
 func (s *Scope) CreateCDC(c *Compile) error {
@@ -6016,15 +6021,13 @@ func (c *Compile) checkPitrGranularity(
 		}
 
 		checkDBByName := func(nameLower string) (bool, error) {
-			qDB := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and account_id = %d`,
-				catalog.MO_CATALOG, catalog.MO_PITR, nameLower, accountId)
+			qDB := getPitrDatabaseGranularitySql(nameLower, accountId, true)
 			if ok, err := checkQuery(qDB); err != nil {
 				return false, err
 			} else if ok {
 				return true, nil
 			}
-			qDB2 := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s'`,
-				catalog.MO_CATALOG, catalog.MO_PITR, nameLower)
+			qDB2 := getPitrDatabaseGranularitySql(nameLower, accountId, false)
 			return checkQuery(qDB2)
 		}
 
@@ -6061,8 +6064,7 @@ func (c *Compile) checkPitrGranularity(
 
 		// 3) table level only for table pattern
 		if !isDB {
-			qTbl := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='table' and lower(database_name)='%s' and lower(table_name)='%s' and account_id = %d`,
-				catalog.MO_CATALOG, catalog.MO_PITR, dbNameLower, tblNameLower, accountId)
+			qTbl := getPitrTableGranularitySql(dbNameLower, tblNameLower, accountId)
 			if ok, err := checkQuery(qTbl); err != nil {
 				return err
 			} else if ok {
@@ -6074,6 +6076,22 @@ func (c *Compile) checkPitrGranularity(
 			"PITR config of %s.%s insufficient (<%dh)", pt.Source.Database, pt.Source.Table, minPitrLen)
 	}
 	return nil
+}
+
+func getPitrDatabaseGranularitySql(nameLower string, accountId uint32, withAccount bool) string {
+	nameLit := sqlquote.EscapeString(nameLower)
+	if withAccount {
+		return fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and account_id = %d`,
+			catalog.MO_CATALOG, catalog.MO_PITR, nameLit, accountId)
+	}
+	return fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s'`,
+		catalog.MO_CATALOG, catalog.MO_PITR, nameLit)
+}
+
+func getPitrTableGranularitySql(dbNameLower, tblNameLower string, accountId uint32) string {
+	return fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='table' and lower(database_name)='%s' and lower(table_name)='%s' and account_id = %d`,
+		catalog.MO_CATALOG, catalog.MO_PITR,
+		sqlquote.EscapeString(dbNameLower), sqlquote.EscapeString(tblNameLower), accountId)
 }
 
 func toHours(val int64, unit string) int64 {

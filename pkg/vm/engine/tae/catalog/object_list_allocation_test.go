@@ -45,7 +45,7 @@ func TestObjectListUncommittedSeekAllocations(t *testing.T) {
 		it.Release()
 	})
 	require.Equal(t, 1, count)
-	require.LessOrEqual(t, visibleAllocs, float64(4))
+	require.LessOrEqual(t, visibleAllocs, float64(1))
 }
 
 func BenchmarkObjectListWaitUntilCommitted(b *testing.B) {
@@ -72,5 +72,44 @@ func BenchmarkObjectListVisibleCommitted(b *testing.B) {
 		for it.Next() {
 		}
 		it.Release()
+	}
+}
+
+func makeObjectListDynamicSeekBenchmark() (*ObjectList, types.TS, types.TS) {
+	list := NewObjectList(false)
+	marker := byte(1)
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+		list.Set(makeObjectListOrderTestEntry(marker, group, 1))
+		marker++
+	}
+	from := types.BuildTS(2, 0)
+	to := types.BuildTS(3, 0)
+	return list, from, to
+}
+
+func runObjectListDynamicGroupSeeks(list *ObjectList, from, to types.TS) {
+	it := list.loadTree().Iter()
+	SeekObjectListGroupBefore(&it, ObjectListGroupAppendableCreate, from)
+	SeekObjectListGroup(&it, ObjectListGroupAppendableCreate, from)
+	SeekObjectListGroup(&it, ObjectListGroupAppendableDrop, to)
+	SeekObjectListGroup(&it, ObjectListGroupNonAppendableCreate, from)
+	SeekObjectListGroup(&it, ObjectListGroupNonAppendableDrop, to)
+	it.Release()
+}
+
+func TestObjectListDynamicGroupSeekAllocations(t *testing.T) {
+	list, from, to := makeObjectListDynamicSeekBenchmark()
+	allocs := testing.AllocsPerRun(100, func() {
+		runObjectListDynamicGroupSeeks(list, from, to)
+	})
+	require.LessOrEqual(t, allocs, float64(1))
+}
+
+func BenchmarkObjectListDynamicGroupSeeks(b *testing.B) {
+	list, from, to := makeObjectListDynamicSeekBenchmark()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		runObjectListDynamicGroupSeeks(list, from, to)
 	}
 }
