@@ -807,6 +807,103 @@ func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[2].Width)
 }
 
+func TestSignedUnsignedIntegerCommonTypeWithNull(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source []types.Type
+		wantOK bool
+	}{
+		{
+			name:   "leading null",
+			source: []types.Type{types.T_any.ToType(), types.T_uint64.ToType(), types.T_int64.ToType()},
+			wantOK: true,
+		},
+		{
+			name:   "middle null",
+			source: []types.Type{types.T_uint64.ToType(), types.T_any.ToType(), types.T_int64.ToType()},
+			wantOK: true,
+		},
+		{
+			name:   "trailing null",
+			source: []types.Type{types.T_uint64.ToType(), types.T_int64.ToType(), types.T_any.ToType()},
+			wantOK: true,
+		},
+		{
+			name:   "null and signed only",
+			source: []types.Type{types.T_any.ToType(), types.T_int64.ToType()},
+			wantOK: false,
+		},
+		{
+			name:   "null and unsigned only",
+			source: []types.Type{types.T_uint64.ToType(), types.T_any.ToType()},
+			wantOK: false,
+		},
+		{
+			name:   "only null",
+			source: []types.Type{types.T_any.ToType()},
+			wantOK: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, ok := signedUnsignedIntegerCommonType(test.source)
+			require.Equal(t, test.wantOK, ok)
+			if !test.wantOK {
+				return
+			}
+			require.Equal(t, types.T_decimal128, result.Oid)
+			require.Equal(t, int32(21), result.Width)
+			require.Zero(t, result.Scale)
+		})
+	}
+}
+
+func TestCaseCheckSignedUnsignedIntegerWithNull(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name: "leading null",
+			inputs: []types.Type{
+				types.T_bool.ToType(), types.T_any.ToType(),
+				types.T_bool.ToType(), types.T_uint64.ToType(),
+				types.T_int64.ToType(),
+			},
+		},
+		{
+			name: "middle null",
+			inputs: []types.Type{
+				types.T_bool.ToType(), types.T_uint64.ToType(),
+				types.T_bool.ToType(), types.T_any.ToType(),
+				types.T_int64.ToType(),
+			},
+		},
+		{
+			name: "trailing null",
+			inputs: []types.Type{
+				types.T_bool.ToType(), types.T_uint64.ToType(),
+				types.T_bool.ToType(), types.T_int64.ToType(),
+				types.T_any.ToType(),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := caseCheck(nil, test.inputs)
+			require.Equal(t, succeedWithCast, result.status)
+			require.Len(t, result.finalType, len(test.inputs))
+			for i, typ := range result.finalType {
+				if i%2 == 0 && i != len(result.finalType)-1 {
+					require.Equal(t, types.T_bool, typ.Oid)
+					continue
+				}
+				require.Equal(t, types.T_decimal128, typ.Oid)
+				require.Equal(t, int32(21), typ.Width)
+				require.Zero(t, typ.Scale)
+			}
+		})
+	}
+}
+
 func TestBinaryStringCommonTypeCapsUTF8MB4Width(t *testing.T) {
 	tests := []struct {
 		name         string
