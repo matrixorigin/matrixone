@@ -39,9 +39,8 @@ type rightDedupKeyContractMode struct {
 }
 
 func TestRightDedupJoinDoubleSignedZeroContract(t *testing.T) {
-	// Pessimistic RightDedupJoin reports a duplicate when the probe key matches
-	// an existing build key. The false expectations characterize the current
-	// +0/-0 key-encoding gap across all three execution modes.
+	// Pessimistic RightDedupJoin must report a duplicate when -0 probes an
+	// existing +0 build key, in every execution mode.
 	modes := []rightDedupKeyContractMode{
 		{name: "resident"},
 		{name: "initial-spill", shuffle: true, spillThreshold: 64, wantInitialSpill: true},
@@ -49,7 +48,7 @@ func TestRightDedupJoinDoubleSignedZeroContract(t *testing.T) {
 	}
 	for _, mode := range modes {
 		t.Run(mode.name, func(t *testing.T) {
-			require.False(t, runRightDedupJoinDoubleSignedZeroContract(t, mode))
+			require.True(t, runRightDedupJoinDoubleSignedZeroContract(t, mode))
 		})
 	}
 }

@@ -40,15 +40,12 @@ type joinKeyContractValue struct {
 }
 
 type joinKeyContractCase struct {
-	name              string
-	typ               types.Type
-	build             joinKeyContractValue
-	probe             joinKeyContractValue
-	sqlEquality       string
-	residentMatch     bool
-	initialSpillMatch bool
-	reSpillMatch      bool
-	makeBuildFiller   func(int) joinKeyContractValue
+	name            string
+	typ             types.Type
+	build           joinKeyContractValue
+	probe           joinKeyContractValue
+	sqlEquality     string
+	makeBuildFiller func(int) joinKeyContractValue
 }
 
 type joinKeyExecutionMode struct {
@@ -66,23 +63,16 @@ var joinKeyExecutionModes = []joinKeyExecutionMode{
 }
 
 func TestHashJoinKeyEqualityContract(t *testing.T) {
-	// This is a characterization table for issue #26432, not the final desired
-	// behavior. sqlEquality comes from the real scalar "=" evaluator; the three
-	// match columns deliberately record today's hash-key behavior so the codec
-	// fix can change the contract in one visible place.
+	// sqlEquality is verified against the real scalar "=" evaluator. Every hash
+	// execution mode must then implement that same SQL contract: only TRUE
+	// matches; FALSE and NULL do not.
 	cases := hashJoinKeyContractCases()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.sqlEquality, runScalarEqualityOracle(t, tc))
+			wantMatch := tc.sqlEquality == "TRUE"
 			for _, mode := range joinKeyExecutionModes {
 				t.Run(mode.name, func(t *testing.T) {
-					wantMatch := tc.residentMatch
-					if mode.wantInitialSpill {
-						wantMatch = tc.initialSpillMatch
-					}
-					if mode.wantReSpill {
-						wantMatch = tc.reSpillMatch
-					}
 					require.Equal(t, wantMatch, runHashJoinKeyContract(t, tc, mode))
 				})
 			}
@@ -99,79 +89,61 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 
 	return []joinKeyContractCase{
 		{
-			name:              "double-signed-zero",
-			typ:               types.T_float64.ToType(),
-			build:             joinKeyContractValue{value: float64(0)},
-			probe:             joinKeyContractValue{value: math.Copysign(0, -1)},
-			sqlEquality:       "TRUE",
-			residentMatch:     false,
-			initialSpillMatch: false,
-			reSpillMatch:      false,
+			name:        "double-signed-zero",
+			typ:         types.T_float64.ToType(),
+			build:       joinKeyContractValue{value: float64(0)},
+			probe:       joinKeyContractValue{value: math.Copysign(0, -1)},
+			sqlEquality: "TRUE",
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: float64(i + 1)}
 			},
 		},
 		{
-			name:              "scaled-float32",
-			typ:               float32Type,
-			build:             joinKeyContractValue{value: float32(1.234)},
-			probe:             joinKeyContractValue{value: float32(1.23)},
-			sqlEquality:       "TRUE",
-			residentMatch:     false,
-			initialSpillMatch: false,
-			reSpillMatch:      false,
+			name:        "scaled-float32",
+			typ:         float32Type,
+			build:       joinKeyContractValue{value: float32(1.234)},
+			probe:       joinKeyContractValue{value: float32(1.23)},
+			sqlEquality: "TRUE",
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: float32(i + 10)}
 			},
 		},
 		{
-			name:              "json-numeric-representation",
-			typ:               types.T_json.ToType(),
-			build:             joinKeyContractValue{value: "1"},
-			probe:             joinKeyContractValue{value: "1.0"},
-			sqlEquality:       "TRUE",
-			residentMatch:     false,
-			initialSpillMatch: false,
-			reSpillMatch:      false,
+			name:        "json-numeric-representation",
+			typ:         types.T_json.ToType(),
+			build:       joinKeyContractValue{value: "1"},
+			probe:       joinKeyContractValue{value: "1.0"},
+			sqlEquality: "TRUE",
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: strconv.Itoa(i + 100)}
 			},
 		},
 		{
-			name:              "vecf32-signed-zero",
-			typ:               types.T_array_float32.ToType(),
-			build:             joinKeyContractValue{value: vectorZero},
-			probe:             joinKeyContractValue{value: vectorNegativeZero},
-			sqlEquality:       "TRUE",
-			residentMatch:     false,
-			initialSpillMatch: false,
-			reSpillMatch:      false,
+			name:        "vecf32-signed-zero",
+			typ:         types.T_array_float32.ToType(),
+			build:       joinKeyContractValue{value: vectorZero},
+			probe:       joinKeyContractValue{value: vectorNegativeZero},
+			sqlEquality: "TRUE",
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: []float32{float32(i + 1), 1, 2, 3, 4, 5, 6, 7}}
 			},
 		},
 		{
-			name:              "double-nan",
-			typ:               types.T_float64.ToType(),
-			build:             joinKeyContractValue{value: math.Float64frombits(0x7ff8000000000001)},
-			probe:             joinKeyContractValue{value: math.Float64frombits(0x7ff8000000000001)},
-			sqlEquality:       "FALSE",
-			residentMatch:     true,
-			initialSpillMatch: true,
-			reSpillMatch:      true,
+			name:        "double-nan",
+			typ:         types.T_float64.ToType(),
+			build:       joinKeyContractValue{value: math.Float64frombits(0x7ff8000000000001)},
+			probe:       joinKeyContractValue{value: math.Float64frombits(0x7ff8000000000001)},
+			sqlEquality: "FALSE",
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: float64(i + 1)}
 			},
 		},
 		{
-			name:              "double-null",
-			typ:               types.T_float64.ToType(),
-			build:             joinKeyContractValue{null: true},
-			probe:             joinKeyContractValue{null: true},
-			sqlEquality:       "NULL",
-			residentMatch:     false,
-			initialSpillMatch: false,
-			reSpillMatch:      false,
+			name:        "double-null",
+			typ:         types.T_float64.ToType(),
+			build:       joinKeyContractValue{null: true},
+			probe:       joinKeyContractValue{null: true},
+			sqlEquality: "NULL",
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: float64(i + 1)}
 			},

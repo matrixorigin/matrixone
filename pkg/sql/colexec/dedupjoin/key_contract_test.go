@@ -39,9 +39,8 @@ type dedupKeyContractMode struct {
 }
 
 func TestDedupJoinDoubleSignedZeroContract(t *testing.T) {
-	// Scalar DOUBLE equality treats +0 and -0 as equal. The false expectations
-	// characterize the current key-encoding gap for one representative
-	// DedupJoin operation across all three execution modes.
+	// Scalar DOUBLE equality treats +0 and -0 as equal, so every execution mode
+	// must capture the matching probe value.
 	modes := []dedupKeyContractMode{
 		{name: "resident"},
 		{name: "initial-spill", shuffle: true, spillThreshold: 64, wantInitialSpill: true},
@@ -49,7 +48,7 @@ func TestDedupJoinDoubleSignedZeroContract(t *testing.T) {
 	}
 	for _, mode := range modes {
 		t.Run(mode.name, func(t *testing.T) {
-			require.False(t, runDedupJoinDoubleSignedZeroContract(t, mode))
+			require.True(t, runDedupJoinDoubleSignedZeroContract(t, mode))
 		})
 	}
 }
