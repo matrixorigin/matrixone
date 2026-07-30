@@ -497,6 +497,11 @@ set @like_escape = '!';
 execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
 ➤ prepared_escape[-7,1,0]  𝄀
 1
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+set @like_escape = '';
+execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
+invalid input: Incorrect arguments to ESCAPE
+set sql_mode = default;
 deallocate prepare like_escape_stmt;
 drop table if exists like_escape_test;
 create table like_escape_test (v varchar(20), esc varchar(2));

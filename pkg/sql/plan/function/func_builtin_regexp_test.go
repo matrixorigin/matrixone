@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -295,6 +296,16 @@ func Test_BuiltIn_LikeWithEscape(t *testing.T) {
 			fn:       newOpBuiltInRegexp().likeFn,
 		},
 		{
+			name: "empty escape",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"axb"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil),
+			},
+			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
+			fn:       newOpBuiltInRegexp().likeFn,
+		},
+		{
 			name: "null escape",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a_b", "axb"}, nil),
@@ -339,6 +350,50 @@ func Test_BuiltIn_LikeWithEscape(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expected, tc.fn)
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+}
+
+func Test_BuiltIn_LikeWithEscapeSQLMode(t *testing.T) {
+	testCases := []struct {
+		name      string
+		configure func(*process.Process)
+	}{
+		{
+			name: "runtime resolver",
+			configure: func(proc *process.Process) {
+				proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+					require.Equal(t, "sql_mode", name)
+					require.True(t, system)
+					require.False(t, global)
+					return "NO_BACKSLASH_ESCAPES", nil
+				})
+			},
+		},
+		{
+			name: "serialized session fallback",
+			configure: func(proc *process.Process) {
+				proc.GetSessionInfo().SqlMode = "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			tc.configure(proc)
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"axb"}, nil),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a_b"}, nil),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, nil),
+				newOpBuiltInRegexp().likeFn,
+			)
 			succeed, errInfo := tcc.Run()
 			require.True(t, succeed, errInfo)
 		})

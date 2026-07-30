@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -124,6 +125,9 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	if !utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1 {
 		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 	}
+	if len(escapeBytes) == 0 && likeNoBackslashEscapes(proc) {
+		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
+	}
 
 	escapeEnabled := len(escapeBytes) != 0
 	var escape rune
@@ -133,6 +137,25 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(value, pattern []byte) (bool, error) {
 		return op.regMap.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, caseInsensitive)
 	}, selectList)
+}
+
+func likeNoBackslashEscapes(proc *process.Process) bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+
+	mode := proc.GetSessionInfo().SqlMode
+	if resolver := proc.GetResolveVariableFunc(); resolver != nil {
+		if value, err := resolver("sql_mode", true, false); err == nil {
+			if sessionMode, ok := value.(string); ok {
+				mode = sessionMode
+			}
+		}
+	}
+	if mode == process.EmptySqlModeSentinel {
+		mode = ""
+	}
+	return mysql.HasSQLMode(mode, "NO_BACKSLASH_ESCAPES")
 }
 
 func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], length int,

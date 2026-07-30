@@ -250,6 +250,10 @@ set @like_value = 'a_b';
 set @like_pattern = 'a!_b';
 set @like_escape = '!';
 execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+set @like_escape = '';
+execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
+set sql_mode = default;
 deallocate prepare like_escape_stmt;
 
 drop table if exists like_escape_test;

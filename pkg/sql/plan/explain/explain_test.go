@@ -821,6 +821,73 @@ func TestPositionFunctionExplain(t *testing.T) {
 	}
 }
 
+func TestLikeWithEscapeExplain(t *testing.T) {
+	ctx := context.Background()
+	options := NewExplainDefaultOptions()
+	literal := func(s string) *plan2.Expr {
+		return &plan2.Expr{
+			Typ: plan2.Type{Id: int32(types.T_varchar)},
+			Expr: &plan2.Expr_Lit{Lit: &plan2.Literal{
+				Value: &plan2.Literal_Sval{Sval: s},
+			}},
+		}
+	}
+	operator := func(name string) *plan2.Expr {
+		registered, err := function.GetFunctionByName(ctx, name, []types.Type{
+			types.T_varchar.ToType(),
+			types.T_varchar.ToType(),
+			types.T_varchar.ToType(),
+		})
+		if err != nil {
+			t.Fatalf("resolve %s: %v", name, err)
+		}
+		return &plan2.Expr{
+			Typ: plan2.Type{Id: int32(types.T_bool)},
+			Expr: &plan2.Expr_F{F: &plan2.Function{
+				Func: &plan2.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: name},
+				Args: []*plan2.Expr{literal("a_b"), literal("a!_b"), literal("!")},
+			}},
+		}
+	}
+	not := func(arg *plan2.Expr) *plan2.Expr {
+		registered, err := function.GetFunctionByName(ctx, "not", []types.Type{types.T_bool.ToType()})
+		if err != nil {
+			t.Fatalf("resolve not: %v", err)
+		}
+		return &plan2.Expr{
+			Typ: plan2.Type{Id: int32(types.T_bool)},
+			Expr: &plan2.Expr_F{F: &plan2.Function{
+				Func: &plan2.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: "not"},
+				Args: []*plan2.Expr{arg},
+			}},
+		}
+	}
+
+	tests := []struct {
+		name string
+		expr *plan2.Expr
+		want string
+	}{
+		{name: "like", expr: operator("like"), want: "('a_b' like 'a!_b' ESCAPE '!')"},
+		{name: "ilike", expr: operator("ilike"), want: "('a_b' ilike 'a!_b' ESCAPE '!')"},
+		{name: "not like", expr: not(operator("like")), want: "(not ('a_b' like 'a!_b' ESCAPE '!'))"},
+		{name: "not ilike", expr: not(operator("ilike")), want: "(not ('a_b' ilike 'a!_b' ESCAPE '!'))"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := bytes.NewBuffer(nil)
+			err := describeExpr(ctx, tt.expr, options, buf)
+			if err != nil {
+				t.Fatalf("describeExpr() error = %v", err)
+			}
+			if got := buf.String(); got != tt.want {
+				t.Fatalf("describeExpr() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExplainOrderedGroupConcat(t *testing.T) {
 	ctx := context.Background()
 	registered, err := function.GetFunctionByName(
