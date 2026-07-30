@@ -683,7 +683,11 @@ func (hb *HashmapBuilder) buildHashmap(
 		}
 		for k, v := range vals[:n] {
 			if hb.IsDedup && hb.OnDuplicateAction == plan.Node_UPDATE {
-				hb.Sels.Insert(int32(v), int32(i+k))
+				group := int32(v)
+				if zvals[k] == 0 || v == 0 {
+					group = 0
+				}
+				hb.Sels.Insert(group, int32(i+k))
 				continue
 			}
 

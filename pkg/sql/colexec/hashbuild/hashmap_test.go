@@ -891,6 +891,48 @@ func TestGetJoinMapTransfersGroupSels(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestDedupUpdateBuildGroupsNullKeysSeparately(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hb.IsDedup = true
+	hb.OnDuplicateAction = plan.Node_UPDATE
+	defer func() {
+		hb.Reset(proc, true)
+		hb.Free(proc)
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
+
+	rows := hashmap.UnitLimit * 2
+	keys := make([]int32, rows)
+	nulls := make([]uint64, hashmap.UnitLimit)
+	for i := 0; i < hashmap.UnitLimit; i++ {
+		keys[i] = int32(i + 1)
+		nulls[i] = uint64(hashmap.UnitLimit + i)
+	}
+	keyVec := testutil.MakeInt32Vector(keys, nulls, proc.Mp())
+	bat := batch.New([]string{"id"})
+	bat.SetVector(0, keyVec)
+	bat.SetRowCount(rows)
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	bat.Clean(proc.Mp())
+
+	require.NoError(t, hb.BuildHashmap(false, true, false, proc))
+	require.Equal(t, uint64(hashmap.UnitLimit), hb.GetGroupCount())
+
+	nullRows := hb.Sels.Get(0)
+	require.Len(t, nullRows, hashmap.UnitLimit)
+	for i, row := range nullRows {
+		require.Equal(t, int32(hashmap.UnitLimit+i), row)
+	}
+	for group := 1; group <= hashmap.UnitLimit; group++ {
+		require.Equal(t, []int32{int32(group - 1)}, hb.Sels.Get(int32(group)))
+	}
+}
+
 func TestHashMapAllocAndFree(t *testing.T) {
 	mp := mpool.MustNewZero()
 
