@@ -40,6 +40,53 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
+type fixedObjectIter struct {
+	entries []objectio.ObjectEntry
+	pos     int
+}
+
+func (i *fixedObjectIter) Next() bool {
+	if i.pos >= len(i.entries) {
+		return false
+	}
+	i.pos++
+	return true
+}
+
+func (i *fixedObjectIter) Entry() objectio.ObjectEntry {
+	return i.entries[i.pos-1]
+}
+
+func (i *fixedObjectIter) Close() error {
+	return nil
+}
+
+func TestReusableObjectStatsIterAllocations(t *testing.T) {
+	const count = 10_000
+	entries := make([]objectio.ObjectEntry, count)
+
+	var visited int
+	allocs := testing.AllocsPerRun(10, func() {
+		visited = 0
+		iter := reusableObjectStatsIter{
+			iter: &fixedObjectIter{entries: entries},
+		}
+		for {
+			stats, err := iter.next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stats == nil {
+				break
+			}
+			visited++
+		}
+	})
+
+	require.Equal(t, count, visited)
+	require.LessOrEqual(t, allocs, float64(2))
+}
+
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	location := objectio.NewRandomLocation(0, 0)
 	objID := location.ObjectId()

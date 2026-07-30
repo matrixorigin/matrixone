@@ -1395,27 +1395,16 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 		return offsets, nil
 	}
 
-	var iter objectio.ObjectIter
-	getTombstone := func() (*objectio.ObjectStats, error) {
-		var err error
-		if iter == nil {
-			if iter, err = ls.pState.NewObjectsIter(
-				ls.snapshotTS, true, true,
-			); err != nil {
-				return nil, err
-			}
-		}
-		if iter.Next() {
-			entry := iter.Entry()
-			return &entry.ObjectStats, nil
-		}
-		return nil, nil
+	iter, err := ls.pState.NewObjectsIter(
+		ls.snapshotTS, true, true,
+	)
+	if err != nil {
+		return nil, err
 	}
-	defer func() {
-		if iter != nil {
-			iter.Close()
-		}
-	}()
+	defer iter.Close()
+
+	statsIter := reusableObjectStatsIter{iter: iter}
+	getTombstone := statsIter.next
 
 	// PXU TODO: handle len(offsets) < 10 or 20, 30?
 	if len(offsets) == 1 {
@@ -1460,6 +1449,20 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 	})
 
 	return offsets, nil
+}
+
+type reusableObjectStatsIter struct {
+	iter    objectio.ObjectIter
+	current objectio.ObjectStats
+}
+
+// next returns stats that remain valid until the next call.
+func (i *reusableObjectStatsIter) next() (*objectio.ObjectStats, error) {
+	if !i.iter.Next() {
+		return nil, nil
+	}
+	i.current = i.iter.Entry().ObjectStats
+	return &i.current, nil
 }
 
 func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
