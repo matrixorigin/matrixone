@@ -1671,7 +1671,7 @@ test01  ¦  CREATE TABLE `test01` (
 create publication publication01 database test account all;
 show publications;
 ➤ publication[12,0,0]  ¦  database[12,0,0]  ¦  tables[1111,0,0]  ¦  sub_account[1111,0,0]  ¦  subscribed_accounts[1111,0,0]  ¦  create_time[93,0,0]  ¦  update_time[93,0,0]  ¦  comments[1111,0,0]  𝄀
-publication01  ¦  test  ¦  *  ¦  *  ¦    ¦  2026-07-15 16:27:45  ¦  null  ¦
+publication01  ¦  test  ¦  *  ¦  *  ¦    ¦  2026-07-15 16:27:45  ¦  null  ¦  
 drop table if exists test02;
 create table test02 as select * from test01;
 select * from test02;
@@ -1693,7 +1693,7 @@ select * from sys_tbl_1;
 3  ¦  4  ¦  c  ¦  324243243
 show publications;
 ➤ publication[12,0,0]  ¦  database[12,0,0]  ¦  tables[1111,0,0]  ¦  sub_account[1111,0,0]  ¦  subscribed_accounts[1111,0,0]  ¦  create_time[93,0,0]  ¦  update_time[93,0,0]  ¦  comments[1111,0,0]  𝄀
-sys_pub_1  ¦  test  ¦  *  ¦  *  ¦    ¦  2026-07-15 16:27:45  ¦  null  ¦
+sys_pub_1  ¦  test  ¦  *  ¦  *  ¦    ¦  2026-07-15 16:27:45  ¦  null  ¦  
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 ➤ pub_name[12,-1,0]  ¦  database_name[12,-1,0]  ¦  account_list[12,0,0]  𝄀
 sys_pub_1  ¦  test  ¦  all
