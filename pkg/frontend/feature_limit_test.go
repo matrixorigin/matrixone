@@ -73,11 +73,7 @@ func TestCheckBranchQuotaLocksFiniteQuota(t *testing.T) {
 		catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, accountID, featureCodeBranch,
 	)
 	lockedQuotaSQL := quotaSQL + " for update"
-	countSQL := fmt.Sprintf(
-		"select count(*) from %s.%s b join %s.%s t on b.table_id = t.rel_id where t.account_id = %d and b.table_deleted = false for update",
-		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
-		catalog.MO_CATALOG, catalog.MO_TABLES, accountID,
-	)
+	countSQL := branchQuotaUsageSQL(accountID)
 
 	bh.sql2result[registrySQL] = newMrsForFeatureRegistry([][]interface{}{{int8(1), nil}})
 	bh.sql2result[quotaSQL] = newMrsForFeatureLimit([][]interface{}{{int64(1)}})
@@ -191,11 +187,7 @@ func TestCheckBranchQuotaInitializesMissingQuotaWithBackExec(t *testing.T) {
 		catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, accountID, featureCodeBranch, defaultBranchLimit,
 	)
 	lockedQuotaSQL := quotaSQL + " for update"
-	countSQL := fmt.Sprintf(
-		"select count(*) from %s.%s b join %s.%s t on b.table_id = t.rel_id where t.account_id = %d and b.table_deleted = false for update",
-		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
-		catalog.MO_CATALOG, catalog.MO_TABLES, accountID,
-	)
+	countSQL := branchQuotaUsageSQL(accountID)
 
 	bh.sql2result[registrySQL] = newMrsForFeatureRegistry([][]interface{}{{int8(1), nil}})
 	bh.sql2result[quotaSQL] = newMrsForFeatureLimit(nil)

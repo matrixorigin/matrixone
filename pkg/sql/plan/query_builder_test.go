@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -794,6 +795,244 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpression(t *testing.T) {
 	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 5)
 }
 
+func TestQueryBuilderBuildRollupOrderByWrappedGroupingColumns(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select coalesce(a, -1), coalesce(b, -1), count(*), grouping(a), grouping(b)
+		from select_test.bind_select
+		group by a, b with rollup
+		order by grouping(a), a, grouping(b), b`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	query := queryPlan.GetQuery()
+	require.NotEmpty(t, query.Steps)
+	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Equal(t, plan.Node_PROJECT, rootNode.NodeType)
+	require.Len(t, rootNode.ProjectList, 5)
+	require.Len(t, query.Headings, 5)
+
+	var sortNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 4)
+	for i, orderBy := range sortNode.OrderBy {
+		require.Equal(t, int32(5+i), orderBy.Expr.GetCol().ColPos)
+	}
+	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 9)
+}
+
+func TestQueryBuilderBuildRollupOrderByWrappedGroupingColumnResolution(t *testing.T) {
+	testCases := []struct {
+		name             string
+		sql              string
+		wantOrderColumns []int32
+		wantProjectLen   int
+	}{
+		{
+			name: "select alias takes precedence",
+			sql: `select coalesce(a, -1) as a, count(*), grouping(a)
+				from select_test.bind_select
+				group by a with rollup
+				order by a, grouping(a)`,
+			wantOrderColumns: []int32{0, 3},
+			wantProjectLen:   4,
+		},
+		{
+			name: "selected expression is reused",
+			sql: `select coalesce(a, -1), count(*), grouping(a)
+				from select_test.bind_select
+				group by a with rollup
+				order by coalesce(a, -1), grouping(a)`,
+			wantOrderColumns: []int32{0, 3},
+			wantProjectLen:   4,
+		},
+		{
+			name: "aliased selected expression is reused",
+			sql: `select a + 0 as adjusted_a, count(*), grouping(a)
+				from select_test.bind_select
+				group by a with rollup
+				order by a + 0, grouping(a)`,
+			wantOrderColumns: []int32{0, 3},
+			wantProjectLen:   4,
+		},
+		{
+			name: "selected column is reused and wrapped column is hidden",
+			sql: `select a, coalesce(b, -1), count(*), grouping(b)
+				from select_test.bind_select
+				group by a, b with rollup
+				order by a, grouping(b), b`,
+			wantOrderColumns: []int32{0, 4, 5},
+			wantProjectLen:   6,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, testCase.sql, 1)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+
+			var sortNode *plan.Node
+			for _, node := range queryPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_SORT {
+					sortNode = node
+					break
+				}
+			}
+			require.NotNil(t, sortNode)
+			require.Len(t, sortNode.OrderBy, len(testCase.wantOrderColumns))
+			for i, wantColPos := range testCase.wantOrderColumns {
+				require.Equal(t, wantColPos, sortNode.OrderBy[i].Expr.GetCol().ColPos)
+			}
+			require.Len(t, queryPlan.GetQuery().Nodes[sortNode.Children[0]].ProjectList, testCase.wantProjectLen)
+		})
+	}
+}
+
+func TestQueryBuilderBuildRollupOrderByLiteralCaseDifference(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select concat(cast(a as char), 'X') as marker, a, count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by concat(cast(a as char), 'x')`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	var sortNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.Equal(t, int32(3), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, queryPlan.GetQuery().Nodes[sortNode.Children[0]].ProjectList, 4)
+}
+
+func TestQueryBuilderBuildGroupingSetOrderByIdentifierCaseDifference(t *testing.T) {
+	for _, groupBy := range []string{
+		"a with rollup",
+		"cube(a)",
+		"grouping sets ((a), ())",
+	} {
+		t.Run(groupBy, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select abs(a), count(*)
+					from select_test.bind_select
+					group by %s
+					order by abs(A), grouping(a)`, groupBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+
+			var sortNode *plan.Node
+			for _, node := range queryPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_SORT {
+					sortNode = node
+					break
+				}
+			}
+			require.NotNil(t, sortNode)
+			require.Len(t, sortNode.OrderBy, 2)
+			require.Equal(t, int32(0), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+		})
+	}
+}
+
+func TestQueryBuilderBuildRollupOrderByCorrelatedScalarSubquery(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select coalesce(a, -1), count(*)
+		from select_test.bind_select
+		group by a with rollup
+		order by (select a)`,
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+
+	var sortNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_SORT {
+			sortNode = node
+			break
+		}
+	}
+	require.NotNil(t, sortNode)
+	require.Len(t, sortNode.OrderBy, 1)
+	require.Equal(t, int32(2), sortNode.OrderBy[0].Expr.GetCol().ColPos)
+	require.Len(t, queryPlan.GetQuery().Nodes[sortNode.Children[0]].ProjectList, 3)
+}
+
+func TestQueryBuilderBuildGroupingSetOrderByWrappedGroupingColumns(t *testing.T) {
+	for _, groupBy := range []string{
+		"a, b with rollup",
+		"cube(a, b)",
+		"grouping sets ((a, b), (a), ())",
+	} {
+		t.Run(groupBy, func(t *testing.T) {
+			stmts, err := parsers.Parse(
+				context.TODO(),
+				dialect.MYSQL,
+				fmt.Sprintf(`select coalesce(a, -1), coalesce(b, -1), count(*), grouping(a), grouping(b)
+					from select_test.bind_select
+					group by %s
+					order by grouping(a), a, grouping(b), b`, groupBy),
+				1,
+			)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestQueryBuilderBuildDistinctRollupRejectsUnselectedGroupingColumnOrder(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select distinct coalesce(a, -1), grouping(a)
+		from select_test.bind_select
+		group by a with rollup
+		order by a`,
+		1,
+	)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.Error(t, err)
+}
+
 func TestQueryBuilderBuildRollupOrderByGroupingExpressionWithStar(t *testing.T) {
 	testCases := []struct {
 		name       string
@@ -1334,6 +1573,31 @@ func TestAppendGroupingSetOrderByNestedProjects(t *testing.T) {
 			require.Equal(t, orderExprBefore, tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL))
 		})
 	}
+}
+
+func TestAppendGroupingSetOrderByVisibleMatchUsesOrderAliasPrecedence(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(),
+		dialect.MYSQL,
+		`select b as a, a + 0 as source_a, count(*)
+		from select_test.bind_select
+		group by a, b with rollup
+		order by a + 0`,
+		1,
+	)
+	require.NoError(t, err)
+
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	_, _, orderResolve, err := prepareGroupingSetOrderByProjects(
+		nil,
+		selectStmt.OrderBy,
+		selectClause.Exprs,
+		false,
+	)
+	require.NoError(t, err)
+	require.False(t, orderResolve.bindVisible[0],
+		"ORDER BY a must resolve to the select alias b, not the source expression a")
 }
 
 func TestAppendGroupingSetOrderByNestedQualifiedProject(t *testing.T) {
@@ -2216,6 +2480,53 @@ func TestQueryBuilder_buildSetOperationOrderByNull(t *testing.T) {
 			require.Equal(t, plan.OrderBySpec_DESC, sortNodes[0].OrderBy[0].Flag)
 			require.NotNil(t, sortNodes[0].OrderBy[0].Expr.GetCol())
 		})
+	}
+}
+
+func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(true),
+		t,
+		"select group_concat(n_name order by n_nationkey desc separator '|'), "+
+			"group_concat(n_name order by n_regionkey asc) from nation",
+	)
+	require.NoError(t, err)
+
+	var aggNode *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggNode = node
+			break
+		}
+	}
+	require.NotNil(t, aggNode)
+	require.Len(t, aggNode.AggList, 2)
+	require.Empty(t, collectReachableSortNodes(logicPlan.GetQuery()))
+
+	expectedFlags := []byte{
+		byte(plan.OrderBySpec_DESC),
+		byte(plan.OrderBySpec_ASC),
+	}
+	for i, agg := range aggNode.AggList {
+		fn := agg.GetF()
+		args := fn.Args
+		require.Len(t, args, 2)
+		require.NotNil(t, args[0].GetCol())
+		require.NotNil(t, args[1].GetCol())
+
+		require.Equal(
+			t,
+			plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+			fn.AggConfigType,
+		)
+		config := fn.AggConfig
+		require.Equal(t, groupConcatOrderConfigVersion, config[0])
+		pos := 1
+		require.Equal(t, uint32(1), binary.BigEndian.Uint32(config[pos:pos+4]))
+		pos += 4
+		require.Equal(t, uint32(1), binary.BigEndian.Uint32(config[pos:pos+4]))
+		pos += 4
+		require.Equal(t, expectedFlags[i], config[pos])
 	}
 }
 

@@ -60,6 +60,29 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestDropFunctionIfExists(t *testing.T) {
+	tests := []struct {
+		sql      string
+		ifExists bool
+	}{
+		{sql: "drop function f_lookup (int)"},
+		{sql: "drop function if exists f_lookup (p_id int)", ifExists: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			drop, ok := stmt.(*tree.DropFunction)
+			require.True(t, ok)
+			require.Equal(t, test.ifExists, drop.IfExists)
+			require.Equal(t, test.sql, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
 func TestSQLModeParserModes(t *testing.T) {
 	t.Run("ansi quotes changes double quoted token from string to identifier", func(t *testing.T) {
 		stmt, err := ParseOneWithSQLMode(context.Background(), `select "abc"`, 1, "")
@@ -379,6 +402,17 @@ func TestPreparedWindowFrameMarkers(t *testing.T) {
 	require.IsType(t, &tree.ParamExpr{}, window.Frame.End.Expr)
 }
 
+func TestVarianceWindowSpec(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"select variance(amount) over (partition by customer_id) from orders",
+		1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	window := extractFirstWindowSpec(t, stmt)
+	require.Len(t, window.PartitionBy, 1)
+}
+
 func firstColumnType(t *testing.T, stmt tree.Statement) tree.InternalType {
 	t.Helper()
 	createTable, ok := stmt.(*tree.CreateTable)
@@ -689,6 +723,16 @@ func TestDataBranchCreateTableParsesWithLeadingComment(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, tree.Identifier("dst"), branchStmt.CreateTable.Table.ObjectName)
 	require.Equal(t, tree.Identifier("src"), branchStmt.SrcTable.ObjectName)
+}
+
+func TestDataBranchCreateTablePreservesQuotedApostropheIdentifier(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "data branch create table `quote'dst` from `quote'src`", 1)
+	require.NoError(t, err)
+
+	branchStmt, ok := stmt.(*tree.DataBranchCreateTable)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("quote'dst"), branchStmt.CreateTable.Table.ObjectName)
+	require.Equal(t, tree.Identifier("quote'src"), branchStmt.SrcTable.ObjectName)
 }
 
 func TestDataBranchDiffOutputModes(t *testing.T) {

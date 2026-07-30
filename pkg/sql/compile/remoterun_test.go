@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -40,7 +41,6 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
@@ -803,39 +803,41 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, restored.(*hashbuild.HashBuild).TrackNullKeys)
 	})
 
-	t.Run("JoinSpillThreshold_ReceiverResolvesLocally", func(t *testing.T) {
-		for name, op := range map[string]vm.Operator{
-			"hashjoin": &hashjoin.HashJoin{
-				EqConds:        [][]*planpb.Expr{{}, {}},
-				SpillThreshold: 4096,
-			},
-			"dedupjoin": &dedupjoin.DedupJoin{
-				Conditions:     [][]*planpb.Expr{{}, {}},
-				SpillThreshold: 4096,
-			},
-			"rightdedupjoin": &rightdedupjoin.RightDedupJoin{
-				Conditions:     [][]*planpb.Expr{{}, {}},
-				SpillThreshold: 4096,
-			},
-		} {
-			t.Run(name, func(t *testing.T) {
-				_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
-				require.NoError(t, err)
-				require.Equal(t, int64(4096), pipeInstr.SpillMem)
+	t.Run("JoinSpillThreshold_ReceiverRoundtripPreservesPolicy", func(t *testing.T) {
+		for _, threshold := range []int64{0, 4096, 100001} {
+			for name, op := range map[string]vm.Operator{
+				"hashjoin": &hashjoin.HashJoin{
+					EqConds:        [][]*planpb.Expr{{}, {}},
+					SpillThreshold: threshold,
+				},
+				"dedupjoin": &dedupjoin.DedupJoin{
+					Conditions:     [][]*planpb.Expr{{}, {}},
+					SpillThreshold: threshold,
+				},
+				"rightdedupjoin": &rightdedupjoin.RightDedupJoin{
+					Conditions:     [][]*planpb.Expr{{}, {}},
+					SpillThreshold: threshold,
+				},
+			} {
+				t.Run(fmt.Sprintf("%s/%d", name, threshold), func(t *testing.T) {
+					_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+					require.NoError(t, err)
+					require.Equal(t, threshold, pipeInstr.SpillMem)
 
-				restored, err := convertToVmOperator(pipeInstr, ctx, nil)
-				require.NoError(t, err)
-				switch join := restored.(type) {
-				case *hashjoin.HashJoin:
-					require.Zero(t, join.SpillThreshold)
-				case *dedupjoin.DedupJoin:
-					require.Zero(t, join.SpillThreshold)
-				case *rightdedupjoin.RightDedupJoin:
-					require.Zero(t, join.SpillThreshold)
-				default:
-					t.Fatalf("unexpected restored operator %T", restored)
-				}
-			})
+					restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+					require.NoError(t, err)
+					switch join := restored.(type) {
+					case *hashjoin.HashJoin:
+						require.Equal(t, threshold, join.SpillThreshold)
+					case *dedupjoin.DedupJoin:
+						require.Equal(t, threshold, join.SpillThreshold)
+					case *rightdedupjoin.RightDedupJoin:
+						require.Equal(t, threshold, join.SpillThreshold)
+					default:
+						t.Fatalf("unexpected restored operator %T", restored)
+					}
+				})
+			}
 		}
 	})
 
@@ -981,7 +983,6 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 
 func Test_decodeBatch(t *testing.T) {
 	mp := &mpool.MPool{}
-	aggexec.RegisterGroupConcatAgg(0, ",")
 	bat := &batch.Batch{
 		Recursive:  0,
 		ShuffleIDX: 0,

@@ -46,8 +46,10 @@ type peerIsolationClient struct {
 	Client
 	slowPeer    string
 	healthyPeer string
+	slowStarted chan struct{}
 	healthySent chan struct{}
-	once        sync.Once
+	slowOnce    sync.Once
+	healthyOnce sync.Once
 }
 
 type globalBoundClient struct {
@@ -180,11 +182,18 @@ func (c *peerIsolationClient) AsyncSend(
 	req *pb.Request,
 ) (*morpc.Future, error) {
 	if req.LockTable.ServiceID == c.healthyPeer {
-		c.once.Do(func() { close(c.healthySent) })
+		select {
+		case <-c.slowStarted:
+		case <-ctx.Done():
+			releaseRequest(req)
+			return nil, ctx.Err()
+		}
+		c.healthyOnce.Do(func() { close(c.healthySent) })
 		releaseRequest(req)
 		return nil, context.Canceled
 	}
 	if req.LockTable.ServiceID == c.slowPeer {
+		c.slowOnce.Do(func() { close(c.slowStarted) })
 		<-ctx.Done()
 		releaseRequest(req)
 		return nil, ctx.Err()
@@ -603,8 +612,12 @@ func TestKeepRemoteLockHasBoundedInflight(t *testing.T) {
 func TestKeepRemoteLockSlowPeerDoesNotBlockHealthyPeer(t *testing.T) {
 	logger := getLogger("")
 	client := &peerIsolationClient{
-		slowPeer:    "slow",
-		healthyPeer: "healthy",
+		// Keep the slow peer first in the deterministic ServiceID ordering.
+		// A scheduler that fills the entire window from one peer would then
+		// consume all slots before reaching the healthy peer.
+		slowPeer:    "a-slow",
+		healthyPeer: "z-healthy",
+		slowStarted: make(chan struct{}),
 		healthySent: make(chan struct{}),
 	}
 	tables := &lockTableHolders{
@@ -644,24 +657,38 @@ func TestKeepRemoteLockSlowPeerDoesNotBlockHealthyPeer(t *testing.T) {
 		groupTables: tables,
 		service:     &service{serviceID: "local", logger: logger},
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		keeper.doKeepRemoteLock(ctx, nil, nil)
 		close(done)
 	}()
+	const hangGuard = 5 * time.Second
+	t.Cleanup(func() {
+		cancel()
+		timer := time.NewTimer(hangGuard)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+			t.Errorf("keeper round did not stop during test cleanup")
+		}
+	})
+	waitForSignal := func(ch <-chan struct{}, failure string) {
+		t.Helper()
+		timer := time.NewTimer(hangGuard)
+		defer timer.Stop()
+		select {
+		case <-ch:
+		case <-timer.C:
+			t.Fatal(failure)
+		}
+	}
 
-	select {
-	case <-client.healthySent:
-	case <-ctx.Done():
-		t.Fatal("healthy peer keepalive was blocked by the slow peer")
-	}
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("keeper round exceeded its shared deadline")
-	}
+	waitForSignal(client.slowStarted, "slow peer keepalive did not start")
+	waitForSignal(client.healthySent, "healthy peer keepalive was blocked by the slow peer")
+	cancel()
+	waitForSignal(done, "keeper round did not stop after cancellation")
 }
 
 func TestKeepRemoteLockHasGlobalInflightBoundAcrossPeers(t *testing.T) {
