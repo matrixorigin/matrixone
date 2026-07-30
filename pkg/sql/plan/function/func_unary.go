@@ -5041,29 +5041,37 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 	if len(str) == 0 {
 		return 0, 0, 0, false
 	}
-	firstColon := strings.IndexByte(str, ':')
-	if firstColon < 0 {
-		if !asciiDigits(str) {
+
+	pos := 0
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	hourText := str[:pos]
+	if pos == len(str) || str[pos] != ':' {
+		// A punctuation-only suffix terminates a valid compact TIME prefix. This
+		// keeps inputs such as "12-.abc" as 00:00:12 without turning a
+		// date-looking value such as "2024-12-20" into a compact TIME here.
+		if len(hourText) == 0 || !mysqlCompactTimePrefixBoundary(str[pos:]) {
 			return 0, 0, 0, false
 		}
-		switch len(str) {
+		switch len(hourText) {
 		case 1, 2:
-			second := mysqlClampedDigitsForExtract(str, 60)
+			second := mysqlClampedDigitsForExtract(hourText, 60)
 			if second >= 60 {
 				return 0, 0, 0, false
 			}
 			return 0, 0, uint8(second), true
 		case 3, 4:
-			minute := mysqlClampedDigitsForExtract(str[:len(str)-2], 60)
-			second := mysqlClampedDigitsForExtract(str[len(str)-2:], 60)
+			minute := mysqlClampedDigitsForExtract(hourText[:len(hourText)-2], 60)
+			second := mysqlClampedDigitsForExtract(hourText[len(hourText)-2:], 60)
 			if minute >= 60 || second >= 60 {
 				return 0, 0, 0, false
 			}
 			return 0, uint8(minute), uint8(second), true
 		default:
-			hour := mysqlClampedDigitsForExtract(str[:len(str)-4], 839)
-			minute := mysqlClampedDigitsForExtract(str[len(str)-4:len(str)-2], 60)
-			second := mysqlClampedDigitsForExtract(str[len(str)-2:], 60)
+			hour := mysqlClampedDigitsForExtract(hourText[:len(hourText)-4], 839)
+			minute := mysqlClampedDigitsForExtract(hourText[len(hourText)-4:len(hourText)-2], 60)
+			second := mysqlClampedDigitsForExtract(hourText[len(hourText)-2:], 60)
 			if minute >= 60 || second >= 60 {
 				return 0, 0, 0, false
 			}
@@ -5071,12 +5079,7 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 		}
 	}
 
-	hourText := str[:firstColon]
-	if len(hourText) > 0 && !asciiDigits(hourText) {
-		return 0, 0, 0, false
-	}
-
-	pos := firstColon + 1
+	pos++
 	minuteStart := pos
 	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
 		pos++
@@ -5084,9 +5087,9 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 	minuteText := str[minuteStart:pos]
 	if len(minuteText) == 0 {
 		// MySQL ignores a trailing colon and applies its compact TIME coercion
-		// to the preceding digits: "12:" is 00:00:12, while "1234:" is
-		// 00:12:34.
-		if len(hourText) == 0 || pos != len(str) {
+		// to the preceding digits. This also stops at the first colon in
+		// "12::56", preserving 00:00:12 rather than rejecting the input.
+		if len(hourText) == 0 {
 			return 0, 0, 0, false
 		}
 		return mysqlClockFieldsForExtract(hourText)
@@ -5096,12 +5099,10 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 	if minute >= 60 {
 		return 0, 0, 0, false
 	}
-	if len(hourText) == 0 {
-		// A leading colon leaves the hour unspecified: ":34" is 00:34:00.
-		return 0, uint8(minute), 0, true
+	hour := uint64(0)
+	if len(hourText) > 0 {
+		hour = mysqlClampedDigitsForExtract(hourText, 839)
 	}
-
-	hour := mysqlClampedDigitsForExtract(hourText, 839)
 	if pos == len(str) || str[pos] != ':' {
 		// Stop at the valid HOUR:MINUTE prefix. mysqlTimePrefixForExtract has
 		// already retained intentionally tolerated trailing text.
@@ -5115,18 +5116,28 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 	}
 	secondText := str[secondStart:pos]
 	if len(secondText) == 0 {
-		return 0, 0, 0, false
+		// A trailing second separator is a valid prefix with omitted seconds.
+		return hour, uint8(minute), 0, true
 	}
 	second := mysqlClampedDigitsForExtract(secondText, 60)
 	if second >= 60 {
 		return 0, 0, 0, false
 	}
-	// Consume a complete HOUR:MINUTE:SECOND prefix and ignore following
-	// punctuation/text. A third colon remains structural input and is invalid.
-	if pos < len(str) && str[pos] == ':' {
-		return 0, 0, 0, false
-	}
+	// Stop after a complete HOUR:MINUTE:SECOND prefix. Following punctuation,
+	// including a third colon, does not discard the parsed clock.
 	return hour, uint8(minute), uint8(second), true
+}
+
+func mysqlCompactTimePrefixBoundary(str string) bool {
+	if len(str) == 0 {
+		return true
+	}
+	for i := 0; i < len(str); i++ {
+		if str[i] >= '0' && str[i] <= '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func mysqlClampedDigitsForExtract(str string, limit uint64) uint64 {

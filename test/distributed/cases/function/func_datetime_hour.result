@@ -6,7 +6,7 @@ SELECT HOUR('2024-12-20 15:30:45') AS result2;
 15
 SELECT HOUR(NOW()) AS result3;
 ➤ result3[-6,8,0]  𝄀
-14
+16
 SELECT HOUR(CAST('15:30:45' AS TIME)) AS time_cast;
 ➤ time_cast[4,32,0]  𝄀
 15
@@ -162,3 +162,10 @@ HOUR('12345:') AS compact_5_trailing_colon_hour,
 HOUR('123456:') AS compact_6_trailing_colon_hour;
 ➤ trailing_colon_hour[4,32,0]  ¦  leading_colon_hour[4,32,0]  ¦  trailing_dash_hour[4,32,0]  ¦  trailing_dots_hour[4,32,0]  ¦  compact_3_trailing_colon_hour[4,32,0]  ¦  compact_4_trailing_colon_hour[4,32,0]  ¦  compact_5_trailing_colon_hour[4,32,0]  ¦  compact_6_trailing_colon_hour[4,32,0]  𝄀
 0  ¦  0  ¦  12  ¦  12  ¦  0  ¦  0  ¦  1  ¦  12
+SELECT HOUR(':34:56') AS leading_colon_with_seconds_hour,
+HOUR('12:34:') AS trailing_second_colon_hour,
+HOUR('12::56') AS empty_minute_hour,
+HOUR('12:34:56:') AS fourth_field_colon_hour,
+HOUR('12-.abc') AS compact_prefix_before_fraction_hour;
+➤ leading_colon_with_seconds_hour[4,32,0]  ¦  trailing_second_colon_hour[4,32,0]  ¦  empty_minute_hour[4,32,0]  ¦  fourth_field_colon_hour[4,32,0]  ¦  compact_prefix_before_fraction_hour[4,32,0]  𝄀
+0  ¦  12  ¦  0  ¦  12  ¦  0

@@ -139,3 +139,10 @@ SELECT HOUR('12:') AS trailing_colon_hour,
        HOUR('1234:') AS compact_4_trailing_colon_hour,
        HOUR('12345:') AS compact_5_trailing_colon_hour,
        HOUR('123456:') AS compact_6_trailing_colon_hour;
+
+-- MySQL retains every valid field consumed before a partial TIME suffix.
+SELECT HOUR(':34:56') AS leading_colon_with_seconds_hour,
+       HOUR('12:34:') AS trailing_second_colon_hour,
+       HOUR('12::56') AS empty_minute_hour,
+       HOUR('12:34:56:') AS fourth_field_colon_hour,
+       HOUR('12-.abc') AS compact_prefix_before_fraction_hour;
