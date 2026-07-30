@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -114,6 +116,7 @@ func TestWithHAKeeperHeartbeatTimeout(t *testing.T) {
 	c := clusterValue.(*cluster)
 	defer func() {
 		require.NoError(t, c.Close())
+		require.NoError(t, os.RemoveAll(c.options.dataPath))
 	}()
 
 	for _, svc := range c.services {
@@ -126,6 +129,16 @@ func TestWithHAKeeperHeartbeatTimeout(t *testing.T) {
 			require.Equal(t, timeout, cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration)
 		}
 	}
+}
+
+func TestHAKeeperHeartbeatTimeoutHonorsLegacyTNConfig(t *testing.T) {
+	timeout := 15 * time.Second
+	cfg := &ServiceConfig{TNCompatible: &tnservice.Config{}}
+
+	applyHAKeeperHeartbeatTimeout(cfg, metadata.ServiceType_TN, timeout)
+
+	require.Same(t, cfg.TNCompatible, cfg.TN_please_use_getTNServiceConfig)
+	require.Equal(t, timeout, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
 }
 
 func TestSingleCNCluster(t *testing.T) {

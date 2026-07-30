@@ -340,14 +340,7 @@ func (c *cluster) createServiceOperators(from int) error {
 		}
 		if c.options.heartbeatTimeout > 0 {
 			s.Adjust(func(cfg *ServiceConfig) {
-				switch s.serviceType {
-				case metadata.ServiceType_CN:
-					cfg.CN.HAKeeper.HeatbeatTimeout.Duration = c.options.heartbeatTimeout
-				case metadata.ServiceType_TN:
-					if cfg.TN_please_use_getTNServiceConfig != nil {
-						cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration = c.options.heartbeatTimeout
-					}
-				}
+				applyHAKeeperHeartbeatTimeout(cfg, s.serviceType, c.options.heartbeatTimeout)
 			})
 		}
 
@@ -357,6 +350,28 @@ func (c *cluster) createServiceOperators(from int) error {
 		c.services = append(c.services, s)
 	}
 	return nil
+}
+
+func applyHAKeeperHeartbeatTimeout(
+	cfg *ServiceConfig,
+	serviceType metadata.ServiceType,
+	timeout time.Duration,
+) {
+	switch serviceType {
+	case metadata.ServiceType_CN:
+		cfg.CN.HAKeeper.HeatbeatTimeout.Duration = timeout
+	case metadata.ServiceType_TN:
+		// Keep the legacy [dn] alias effective for callers that still use it.
+		if cfg.TN_please_use_getTNServiceConfig == nil {
+			cfg.TN_please_use_getTNServiceConfig = cfg.TNCompatible
+		}
+		if cfg.TN_please_use_getTNServiceConfig != nil {
+			cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration = timeout
+		}
+		if cfg.TNCompatible != nil && cfg.TNCompatible != cfg.TN_please_use_getTNServiceConfig {
+			cfg.TNCompatible.HAKeeper.HeatbeatTimeout.Duration = timeout
+		}
+	}
 }
 
 func (c *cluster) initConfigs() error {
