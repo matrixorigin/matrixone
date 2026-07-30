@@ -146,3 +146,15 @@ HOUR('20241220153045abc') AS compact_14_alpha_suffix_hour,
 HOUR('241220153045abc') AS compact_12_alpha_suffix_hour;
 ➤ compact_14_hour[4,32,0]  ¦  compact_12_hour[4,32,0]  ¦  compact_14_extra_digit_hour[4,32,0]  ¦  compact_12_extra_digit_hour[4,32,0]  ¦  compact_14_alpha_suffix_hour[4,32,0]  ¦  compact_12_alpha_suffix_hour[4,32,0]  𝄀
 15  ¦  15  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT HOUR('20241220153045.123abc') AS compact_14_fraction_text_hour,
+HOUR('20241220153045.') AS compact_14_empty_fraction_hour,
+HOUR('241220153045.123abc') AS compact_12_fraction_text_hour,
+HOUR('241220153045.') AS compact_12_empty_fraction_hour;
+➤ compact_14_fraction_text_hour[4,32,0]  ¦  compact_14_empty_fraction_hour[4,32,0]  ¦  compact_12_fraction_text_hour[4,32,0]  ¦  compact_12_empty_fraction_hour[4,32,0]  𝄀
+15  ¦  15  ¦  15  ¦  15
+SELECT HOUR('12:') AS trailing_colon_hour,
+HOUR(':34') AS leading_colon_hour,
+HOUR('12:34:56-') AS trailing_dash_hour,
+HOUR('12:34:56..') AS trailing_dots_hour;
+➤ trailing_colon_hour[4,32,0]  ¦  leading_colon_hour[4,32,0]  ¦  trailing_dash_hour[4,32,0]  ¦  trailing_dots_hour[4,32,0]  𝄀
+0  ¦  0  ¦  12  ¦  12

@@ -4884,9 +4884,9 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 	}
 
 	if dot := strings.IndexByte(prefix, '.'); dot >= 0 {
-		if dot < len(prefix)-1 && !asciiDigits(prefix[dot+1:]) {
-			return 0, 0, 0, false
-		}
+		// MySQL consumes the complete TIME prefix before a fractional separator.
+		// The remainder is irrelevant to HOUR/MINUTE/SECOND extraction, including
+		// an empty fraction or trailing non-numeric text.
 		prefix = prefix[:dot]
 	}
 
@@ -4955,31 +4955,62 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 		}
 	}
 
-	secondColon := firstColon + 1 + strings.IndexByte(str[firstColon+1:], ':')
-	if secondColon <= firstColon {
-		hourText, minuteText := str[:firstColon], str[firstColon+1:]
-		if len(hourText) == 0 || len(minuteText) == 0 || !asciiDigits(hourText) || !asciiDigits(minuteText) {
+	hourText := str[:firstColon]
+	if len(hourText) > 0 && !asciiDigits(hourText) {
+		return 0, 0, 0, false
+	}
+
+	pos := firstColon + 1
+	minuteStart := pos
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	minuteText := str[minuteStart:pos]
+	if len(minuteText) == 0 {
+		// MySQL interprets a trailing colon after a numeric field as a
+		// seconds-only value, for example "12:" as 00:00:12.
+		if len(hourText) == 0 || pos != len(str) {
 			return 0, 0, 0, false
 		}
-		hour := mysqlClampedDigitsForExtract(hourText, 839)
-		minute := mysqlClampedDigitsForExtract(minuteText, 60)
-		if minute >= 60 {
+		second := mysqlClampedDigitsForExtract(hourText, 60)
+		if second >= 60 {
 			return 0, 0, 0, false
 		}
+		return 0, 0, uint8(second), true
+	}
+
+	minute := mysqlClampedDigitsForExtract(minuteText, 60)
+	if minute >= 60 {
+		return 0, 0, 0, false
+	}
+	if len(hourText) == 0 {
+		// A leading colon leaves the hour unspecified: ":34" is 00:34:00.
+		return 0, uint8(minute), 0, true
+	}
+
+	hour := mysqlClampedDigitsForExtract(hourText, 839)
+	if pos == len(str) || str[pos] != ':' {
+		// Stop at the valid HOUR:MINUTE prefix. mysqlTimePrefixForExtract has
+		// already retained intentionally tolerated trailing text.
 		return hour, uint8(minute), 0, true
 	}
-	if strings.IndexByte(str[secondColon+1:], ':') >= 0 {
+
+	pos++
+	secondStart := pos
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	secondText := str[secondStart:pos]
+	if len(secondText) == 0 {
 		return 0, 0, 0, false
 	}
-	hourText, minuteText, secondText := str[:firstColon], str[firstColon+1:secondColon], str[secondColon+1:]
-	if len(hourText) == 0 || len(minuteText) == 0 || len(secondText) == 0 ||
-		!asciiDigits(hourText) || !asciiDigits(minuteText) || !asciiDigits(secondText) {
-		return 0, 0, 0, false
-	}
-	hour := mysqlClampedDigitsForExtract(hourText, 839)
-	minute := mysqlClampedDigitsForExtract(minuteText, 60)
 	second := mysqlClampedDigitsForExtract(secondText, 60)
-	if minute >= 60 || second >= 60 {
+	if second >= 60 {
+		return 0, 0, 0, false
+	}
+	// Consume a complete HOUR:MINUTE:SECOND prefix and ignore following
+	// punctuation/text. A third colon remains structural input and is invalid.
+	if pos < len(str) && str[pos] == ':' {
 		return 0, 0, 0, false
 	}
 	return hour, uint8(minute), uint8(second), true
@@ -5037,7 +5068,10 @@ func mysqlCompactDatetimeSuffixForExtract(suffix string) bool {
 	if len(suffix) == 0 {
 		return true
 	}
-	return suffix[0] == '.' && len(suffix) > 1 && asciiDigits(suffix[1:])
+	// MySQL consumes a compact DATETIME through the fractional separator. The
+	// fraction may be empty or may stop before trailing non-numeric text, but a
+	// suffix without a decimal separator is not part of this coercion.
+	return suffix[0] == '.'
 }
 
 func compactDatetimeClockForExtract(str string, twoDigitYear bool) (uint64, uint8, uint8, bool) {

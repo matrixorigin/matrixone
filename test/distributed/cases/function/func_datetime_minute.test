@@ -118,3 +118,16 @@ SELECT MINUTE('20241220153045') AS compact_14_minute,
        MINUTE('2412201530451') AS compact_12_extra_digit_minute,
        MINUTE('20241220153045abc') AS compact_14_alpha_suffix_minute,
        MINUTE('241220153045abc') AS compact_12_alpha_suffix_minute;
+
+-- Compact DATETIME consumes the fractional prefix, including an empty fraction
+-- or non-numeric text after the fractional digits.
+SELECT MINUTE('20241220153045.123abc') AS compact_14_fraction_text_minute,
+       MINUTE('20241220153045.') AS compact_14_empty_fraction_minute,
+       MINUTE('241220153045.123abc') AS compact_12_fraction_text_minute,
+       MINUTE('241220153045.') AS compact_12_empty_fraction_minute;
+
+-- TIME coercion stops after the valid clock prefix.
+SELECT MINUTE('12:') AS trailing_colon_minute,
+       MINUTE(':34') AS leading_colon_minute,
+       MINUTE('12:34:56-') AS trailing_dash_minute,
+       MINUTE('12:34:56..') AS trailing_dots_minute;

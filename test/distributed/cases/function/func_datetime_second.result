@@ -135,3 +135,15 @@ SECOND('20241220153045abc') AS compact_14_alpha_suffix_second,
 SECOND('241220153045abc') AS compact_12_alpha_suffix_second;
 ➤ compact_14_second[-6,8,0]  ¦  compact_12_second[-6,8,0]  ¦  compact_14_extra_digit_second[-6,8,0]  ¦  compact_12_extra_digit_second[-6,8,0]  ¦  compact_14_alpha_suffix_second[-6,8,0]  ¦  compact_12_alpha_suffix_second[-6,8,0]  𝄀
 45  ¦  45  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT SECOND('20241220153045.123abc') AS compact_14_fraction_text_second,
+SECOND('20241220153045.') AS compact_14_empty_fraction_second,
+SECOND('241220153045.123abc') AS compact_12_fraction_text_second,
+SECOND('241220153045.') AS compact_12_empty_fraction_second;
+➤ compact_14_fraction_text_second[-6,8,0]  ¦  compact_14_empty_fraction_second[-6,8,0]  ¦  compact_12_fraction_text_second[-6,8,0]  ¦  compact_12_empty_fraction_second[-6,8,0]  𝄀
+45  ¦  45  ¦  45  ¦  45
+SELECT SECOND('12:') AS trailing_colon_second,
+SECOND(':34') AS leading_colon_second,
+SECOND('12:34:56-') AS trailing_dash_second,
+SECOND('12:34:56..') AS trailing_dots_second;
+➤ trailing_colon_second[-6,8,0]  ¦  leading_colon_second[-6,8,0]  ¦  trailing_dash_second[-6,8,0]  ¦  trailing_dots_second[-6,8,0]  𝄀
+12  ¦  0  ¦  56  ¦  56

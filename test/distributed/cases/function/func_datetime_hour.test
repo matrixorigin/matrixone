@@ -122,3 +122,16 @@ SELECT HOUR('20241220153045') AS compact_14_hour,
        HOUR('2412201530451') AS compact_12_extra_digit_hour,
        HOUR('20241220153045abc') AS compact_14_alpha_suffix_hour,
        HOUR('241220153045abc') AS compact_12_alpha_suffix_hour;
+
+-- Compact DATETIME consumes the fractional prefix, including an empty fraction
+-- or non-numeric text after the fractional digits.
+SELECT HOUR('20241220153045.123abc') AS compact_14_fraction_text_hour,
+       HOUR('20241220153045.') AS compact_14_empty_fraction_hour,
+       HOUR('241220153045.123abc') AS compact_12_fraction_text_hour,
+       HOUR('241220153045.') AS compact_12_empty_fraction_hour;
+
+-- TIME coercion stops after the valid clock prefix.
+SELECT HOUR('12:') AS trailing_colon_hour,
+       HOUR(':34') AS leading_colon_hour,
+       HOUR('12:34:56-') AS trailing_dash_hour,
+       HOUR('12:34:56..') AS trailing_dots_hour;
