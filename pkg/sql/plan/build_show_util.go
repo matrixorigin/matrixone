@@ -788,10 +788,10 @@ func isTopLevelCheckDef(def string) bool {
 
 	trimmed := strings.TrimSpace(def)
 	upper := strings.ToUpper(trimmed)
-	if strings.HasPrefix(upper, "CHECK") {
+	if hasKeywordAt(upper, "CHECK", 0) {
 		return true
 	}
-	if !strings.HasPrefix(upper, "CONSTRAINT") {
+	if !hasKeywordAt(upper, "CONSTRAINT", 0) {
 		return false
 	}
 	return containsKeywordOutsideQuotes(trimmed, "CHECK")
