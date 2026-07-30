@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -161,7 +162,7 @@ func constructRecoveryWindow(
 
 		snapPitrSearchCond = fmt.Sprintf(
 			"account_name = '%s'",
-			accountName,
+			sqlquote.EscapeString(accountName),
 		)
 	case tree.RECOVERYWINDOWLEVELDATABASE:
 		levelStr = "database"
@@ -169,8 +170,8 @@ func constructRecoveryWindow(
 		snapPitrSearchCond = fmt.Sprintf(
 			"(account_name = '%s' AND database_name = '') OR "+
 				"(account_name = '%s' AND database_name = '%s')",
-			accountName,
-			accountName, databaseName,
+			sqlquote.EscapeString(accountName),
+			sqlquote.EscapeString(accountName), sqlquote.EscapeString(databaseName),
 		)
 	case tree.RECOVERYWINDOWLEVELTABLE:
 		levelStr = "table"
@@ -179,9 +180,9 @@ func constructRecoveryWindow(
 			"(account_name = '%s' AND database_name = '') OR "+
 				"(account_name = '%s' AND database_name = '%s' AND table_name = '') OR "+
 				"(account_name = '%s' AND database_name = '%s' AND table_name = '%s')",
-			accountName,
-			accountName, databaseName,
-			accountName, databaseName, tableName,
+			sqlquote.EscapeString(accountName),
+			sqlquote.EscapeString(accountName), sqlquote.EscapeString(databaseName),
+			sqlquote.EscapeString(accountName), sqlquote.EscapeString(databaseName), sqlquote.EscapeString(tableName),
 		)
 
 	default:
