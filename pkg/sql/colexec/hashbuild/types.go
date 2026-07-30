@@ -337,6 +337,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 		hashBuild.cleanupSpillFiles(proc)
 	}
 	hashBuild.ctr.spilledFds = nil
+	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
 	if !hashBuild.ctr.runtimeFilterDone {
@@ -365,6 +366,7 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 		hashBuild.publishBuildError(proc, err)
 	}
 	hashBuild.cleanupSpillFiles(proc)
+	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 	hashBuild.ctr.freeSpillExprExecs()
 	hashBuild.ctr.dropSpillScratchBuffers()

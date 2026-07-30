@@ -748,6 +748,37 @@ func TestNewParallelScope(t *testing.T) {
 	}
 }
 
+func TestParallelScopeGenerationsReleasedAtCompileResetBoundary(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.isPrepare = true
+	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{{}}
+	scopeToParallel := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector},
+	)
+	scopeToParallel.NodeInfo.Mcpu = 2
+
+	first, firstWorkers := newParallelScope(scopeToParallel)
+	require.Len(t, firstWorkers, 2)
+	require.Contains(t, scopeToParallel.PreScopes, first)
+	require.Equal(t, []*Scope{first}, scopeToParallel.parallelGenerations)
+
+	require.NoError(t, scopeToParallel.reset(testCompile, false))
+	require.NotContains(t, scopeToParallel.PreScopes, first)
+	require.Empty(t, scopeToParallel.parallelGenerations)
+
+	second, secondWorkers := newParallelScope(scopeToParallel)
+	require.Len(t, secondWorkers, 2)
+	require.Contains(t, scopeToParallel.PreScopes, second)
+	require.Equal(t, []*Scope{second}, scopeToParallel.parallelGenerations)
+	require.Len(t, scopeToParallel.PreScopes, 1,
+		"reused execution must retain only its current physical generation")
+
+	// The final generation remains attached for post-run physical-plan
+	// analysis and is released with the owning template.
+	scopeToParallel.release()
+}
+
 func TestCompileExternValueScan(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}

@@ -54,6 +54,15 @@ func TestParquet_StringToDate(t *testing.T) {
 				mustParseDate(t, "1970-01-01"),
 			},
 		},
+		{
+			// ParseDateCast follows MySQL's punctuation-delimited DATE grammar.
+			// Keep Parquet STRING -> DATE conversion aligned with SQL casts.
+			name:      "MySQL punctuation-delimited date",
+			strValues: []string{"2024/01/01"},
+			expected: []types.Date{
+				mustParseDate(t, "2024-01-01"),
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -270,7 +279,6 @@ func TestParquet_StringToDate_InvalidFormats(t *testing.T) {
 		{name: "Invalid month", strValue: "2024-13-01"},
 		{name: "Invalid day", strValue: "2024-02-30"},
 		{name: "Letters", strValue: "abc"},
-		{name: "Wrong format slash", strValue: "2024/01/01"},
 		{name: "Invalid year", strValue: "99999-01-01"},
 	}
 
