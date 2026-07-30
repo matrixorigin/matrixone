@@ -31,7 +31,7 @@ agent_runs  ¦  CREATE TABLE `agent_runs` (
   `error_code` varchar(128) DEFAULT NULL,
   `model_offering_id` varchar(64) DEFAULT NULL,
   PRIMARY KEY (`user_id`,`run_id`),
-  constraint chk_scope check (retry_scope in ('node', 'subtree', 'siblings'))
+  CONSTRAINT `chk_scope` CHECK (`retry_scope` in ('node', 'subtree', 'siblings'))
 )
 drop database alter_check_prefix_26425;
 drop database if exists mo_issue_agent_runs_repro;
