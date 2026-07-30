@@ -71,17 +71,20 @@ func (mergeRecursive *MergeRecursive) Release() {
 }
 
 func (mergeRecursive *MergeRecursive) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeRecursive.ctr.last = false
-	mergeRecursive.ctr.i = 0
-	for _, bat := range mergeRecursive.ctr.freeBats {
-		bat.Clean(proc.Mp())
-	}
-	mergeRecursive.ctr.freeBats = nil
-	mergeRecursive.ctr.bats = nil
-	mergeRecursive.ctr.buf = nil
+	mergeRecursive.clean(proc)
 }
 
 func (mergeRecursive *MergeRecursive) Free(proc *process.Process, pipelineFailed bool, err error) {
+	mergeRecursive.clean(proc)
+}
+
+func (mergeRecursive *MergeRecursive) clean(proc *process.Process) {
+	for _, bat := range mergeRecursive.ctr.freeBats {
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
+	}
+	mergeRecursive.ctr = container{}
 }
 
 func (mergeRecursive *MergeRecursive) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

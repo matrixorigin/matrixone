@@ -430,6 +430,15 @@ func TestAppendNumericStringToVec_AllTypes(t *testing.T) {
 		input  string
 		verify func(*vector.Vector)
 	}{
+		{"bool_true", types.Type{}, types.T_bool, "true", func(v *vector.Vector) {
+			require.True(t, vector.GetFixedAtNoTypeCheck[bool](v, 0))
+		}},
+		{"bool_numeric_false", types.Type{}, types.T_bool, "0", func(v *vector.Vector) {
+			require.False(t, vector.GetFixedAtNoTypeCheck[bool](v, 0))
+		}},
+		{"bit", types.New(types.T_bit, 8, 0), types.T_bit, "255", func(v *vector.Vector) {
+			require.Equal(t, uint64(255), vector.GetFixedAtNoTypeCheck[uint64](v, 0))
+		}},
 		{"int8", types.Type{}, types.T_int8, "42", func(v *vector.Vector) {
 			require.Equal(t, int8(42), vector.GetFixedAtNoTypeCheck[int8](v, 0))
 		}},
@@ -506,6 +515,20 @@ func TestAppendNumericStringToVec_AllTypes(t *testing.T) {
 	}
 }
 
+func TestAppendNumericStringToVec_BitOutOfRange(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.New(types.T_bit, 8, 0)
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+
+	err = appendNumericStringToVec(vec, "256", pkType, time.UTC, mp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bit(8)")
+}
+
 func TestAppendNumericStringToVec_UnsupportedType(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
@@ -547,6 +570,21 @@ func TestAppendExprToVec_StrVal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, vec.Length())
 	require.Equal(t, []byte("test_value"), vec.GetBytesAt(0))
+}
+
+func TestAppendExprToVec_BoolLiteral(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.T_bool.ToType()
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+
+	expr := tree.NewNumVal(true, "true", false, tree.P_bool)
+	err = appendExprToVec(vec, expr, pkType, time.UTC, mp)
+	require.NoError(t, err)
+	require.True(t, vector.GetFixedAtNoTypeCheck[bool](vec, 0))
 }
 
 func TestAppendExprToVec_UnaryMinus(t *testing.T) {

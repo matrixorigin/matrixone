@@ -441,12 +441,19 @@ func TestRestoreExternalTableDefensiveCloneGuards(t *testing.T) {
 }
 
 func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
-	sql := buildTableInfoListSQL("db'name", "tbl'name", 0, uint32(sysAccountID))
-	if !strings.Contains(sql, "reldatabase = 'db''name'") {
-		t.Fatalf("database name was not escaped in SQL: %s", sql)
-	}
-	if !strings.Contains(sql, "relname like 'tbl''name'") {
-		t.Fatalf("table name was not escaped in SQL: %s", sql)
+	for _, tableName := range []string{"tbl'name", "a_b", "a%b", `child\fk`} {
+		t.Run(tableName, func(t *testing.T) {
+			sql := buildTableInfoListSQL("db'name", tableName, 0, uint32(sysAccountID))
+			if !strings.Contains(sql, "reldatabase = 'db''name'") {
+				t.Fatalf("database name was not escaped in SQL: %s", sql)
+			}
+			if !strings.Contains(sql, "relname = "+quoteSQLStringLiteral(tableName)) {
+				t.Fatalf("table name was not matched exactly in SQL: %s", sql)
+			}
+			if strings.Contains(sql, "relname like "+quoteSQLStringLiteral(tableName)) {
+				t.Fatalf("table name was treated as a LIKE pattern in SQL: %s", sql)
+			}
+		})
 	}
 }
 
