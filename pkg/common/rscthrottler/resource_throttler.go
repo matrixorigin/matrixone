@@ -24,8 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -36,6 +36,7 @@ import (
 
 const (
 	refreshMaxInterval     = time.Second * 10
+	refreshLogInterval     = time.Minute
 	rssScavengeInterval    = time.Minute
 	rssCacheEvictTimeout   = time.Second * 10
 	rssScavengeVisibleRate = 0.70
@@ -78,6 +79,11 @@ type RSCThrottler interface {
 	Available() int64
 }
 
+type RefreshableRSCThrottler interface {
+	RSCThrottler
+	ForceRefresh()
+}
+
 type memThrottler struct {
 	limit atomic.Int64
 	rss   atomic.Int64
@@ -95,7 +101,11 @@ type memThrottler struct {
 	proc             *process.Process
 
 	cgroup atomic.Uint64
-	total  atomic.Uint64
+	// cgroupUsage is sampled from the same cgroup that imposes cgroup's
+	// effective limit. It includes kernel and page-cache charges that process
+	// RSS cannot observe.
+	cgroupUsage atomic.Uint64
+	total       atomic.Uint64
 
 	actualTotalMemory atomic.Uint64
 
@@ -103,6 +113,7 @@ type memThrottler struct {
 	limitRate float64
 
 	lastRefresh        atomic.Int64
+	lastRefreshLog     atomic.Int64
 	lastRSSScavenge    atomic.Int64
 	lastRSSCacheEvict  atomic.Int64
 	lastRSSCacheTarget atomic.Int64
@@ -132,13 +143,15 @@ type memThrottler struct {
 
 func (m *memThrottler) String() string {
 	return fmt.Sprintf(
-		"{%s: limit=%s, total=%s, available=%s, cgroup=%s, rss=%s, pinned=%s, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
+		"{%s: limit=%s, total=%s, available=%s, cgroup=%s, cgroup-usage=%s, rss=%s, physical-used=%s, pinned=%s, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
 		m.name,
 		common.HumanReadableBytes(int(m.limit.Load())),
 		common.HumanReadableBytes(int(m.total.Load())),
 		common.HumanReadableBytes(int(m.Available())),
 		common.HumanReadableBytes(int(m.cgroup.Load())),
+		common.HumanReadableBytes(int(m.cgroupUsage.Load())),
 		common.HumanReadableBytes(int(m.rss.Load())),
+		common.HumanReadableBytes(int(m.physicalMemoryUsed())),
 		common.HumanReadableBytes(int(m.reserved.Load())),
 		m.pinnedRate(),
 		m.limitRate,
@@ -180,6 +193,13 @@ func (m *memThrottler) refresh(force bool) {
 	)
 
 	defer func() {
+		lastLog := m.lastRefreshLog.Load()
+		if err == nil && time.Duration(now-lastLog) < refreshLogInterval {
+			return
+		}
+		if err == nil && !m.lastRefreshLog.CompareAndSwap(lastLog, now) {
+			return
+		}
 		logutil.Info(
 			fmt.Sprintf("%s-Refresh", MemoryThrottlerLogHeader),
 			zap.String("detail", m.String()),
@@ -188,7 +208,9 @@ func (m *memThrottler) refresh(force bool) {
 	}()
 
 	total = objectio.TotalMem()
-	cgroup, err = memlimit.FromCgroup()
+	cgroup, cgroupUsage := system.CgroupMemoryLimitAndUsage()
+	m.cgroup.Store(cgroup)
+	m.cgroupUsage.Store(cgroupUsage)
 
 	if cgroup != 0 && cgroup < total {
 		m.actualTotalMemory.Store(cgroup)
@@ -241,14 +263,21 @@ func (m *memThrottler) refresh(force bool) {
 		)
 		m.rssReservedBase.Store(base)
 		m.rssMpoolLiveBase.Store(liveBase)
-		m.tryScavengeRSS(now, rss)
+		m.tryScavengeRSS(now, m.physicalMemoryUsed())
 	}
 
-	m.cgroup.Store(cgroup)
 	m.total.Store(total)
 }
 
-func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
+func (m *memThrottler) physicalMemoryUsed() int64 {
+	cgroupUsage := m.cgroupUsage.Load()
+	if cgroupUsage > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return max(m.rss.Load(), int64(cgroupUsage))
+}
+
+func (m *memThrottler) tryScavengeRSS(now int64, physicalUsed int64) {
 	if !m.options.enableRSSScavenging {
 		return
 	}
@@ -260,7 +289,7 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	if visible < 0 {
 		visible = 0
 	}
-	rssRate := float64(rss) / float64(actualMaxMemory)
+	usedRate := float64(physicalUsed) / float64(actualMaxMemory)
 
 	var (
 		prevState              rssPressureState
@@ -276,7 +305,7 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 
 	m.rssScavengeMu.Lock()
 	prevState = rssPressureState(m.rssPressureState.Load())
-	nextState = nextRSSPressureState(prevState, rssRate)
+	nextState = nextRSSPressureState(prevState, usedRate)
 	cacheTargetPercent = rssPressureCacheTarget(nextState)
 
 	if nextState != prevState {
@@ -324,7 +353,7 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	m.rssScavengeMu.Unlock()
 
 	needFreeOSMemory := nextState != rssPressureNone &&
-		float64(visible) < float64(rss)*rssScavengeVisibleRate
+		float64(visible) < float64(physicalUsed)*rssScavengeVisibleRate
 	if needFreeOSMemory {
 		last := m.lastRSSScavenge.Load()
 		if time.Duration(now-last) > rssScavengeInterval &&
@@ -338,7 +367,9 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	metric.FSCachePressureTriggerCounter.Inc()
 	logutil.Info(
 		fmt.Sprintf("%s-RSSScavenge", MemoryThrottlerLogHeader),
-		zap.String("rss", common.HumanReadableBytes(int(rss))),
+		zap.String("rss", common.HumanReadableBytes(int(m.rss.Load()))),
+		zap.String("cgroup-usage", common.HumanReadableBytes(int(m.cgroupUsage.Load()))),
+		zap.String("physical-used", common.HumanReadableBytes(int(physicalUsed))),
 		zap.String("visible", common.HumanReadableBytes(int(visible))),
 		zap.String("actual-total-memory", common.HumanReadableBytes(int(actualMaxMemory))),
 		zap.Bool("free-os-memory", shouldFreeOSMemory),
@@ -426,7 +457,7 @@ func (m *memThrottler) Available() int64 {
 	var (
 		avail    int64
 		limit    = m.limit.Load()
-		rss      = m.rss.Load()
+		used     = m.physicalMemoryUsed()
 		reserved = m.reserved.Load()
 
 		actualMaxMemory = int64(m.actualTotalMemory.Load())
@@ -441,18 +472,18 @@ func (m *memThrottler) Available() int64 {
 			}
 
 			if info, err := m.proc.MemoryInfo(); err == nil {
-				rss = int64(info.RSS)
-				m.rss.Store(rss)
+				m.rss.Store(int64(info.RSS))
+				used = m.physicalMemoryUsed()
 			}
 		}
 
-		return max(0, limit-rss-reserved)
+		return max(0, limit-used-reserved)
 	}
 
-	if actualMaxMemory-rss >= limit {
+	if actualMaxMemory-used >= limit {
 		avail = limit - reserved
 	} else {
-		avail = actualMaxMemory - rss - reserved
+		avail = actualMaxMemory - used - reserved
 	}
 
 	return max(0, avail)
@@ -522,7 +553,7 @@ func NewMemThrottler(
 	name string,
 	limitRate float64,
 	opts ...MemThrottlerOption,
-) RSCThrottler {
+) RefreshableRSCThrottler {
 
 	throttler := &memThrottler{
 		limitRate: limitRate,
@@ -695,7 +726,7 @@ func cnFlushS3PhysicalAvailable(throttler *memThrottler, reserved int64) int64 {
 	liveBase := throttler.rssMpoolLiveBase.Load()
 	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
 	covered := currentCNFlushS3RSSCovered(base, liveBase, reserved, currentLive)
-	used := throttler.rss.Load()
+	used := throttler.physicalMemoryUsed()
 	if delta := reserved - covered; delta > 0 {
 		used += delta
 	}
@@ -708,7 +739,7 @@ func cnFlushS3ProjectedPhysicalUsed(throttler *memThrottler, reserved int64) int
 	liveBase := throttler.rssMpoolLiveBase.Load()
 	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
 	covered := currentCNFlushS3RSSCovered(base, liveBase, reserved, currentLive)
-	used := throttler.rss.Load()
+	used := throttler.physicalMemoryUsed()
 	if delta := reserved - covered; delta > 0 {
 		used += delta
 	}

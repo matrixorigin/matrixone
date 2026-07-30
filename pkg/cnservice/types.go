@@ -698,7 +698,7 @@ type service struct {
 		client  cnclient.PipelineClient
 	}
 
-	CNMemoryThrottler rscthrottler.RSCThrottler
+	CNMemoryThrottler rscthrottler.RefreshableRSCThrottler
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {

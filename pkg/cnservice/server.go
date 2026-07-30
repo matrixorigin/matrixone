@@ -83,6 +83,7 @@ const (
 	rssCacheAdmissionPressureTTL = 2 * time.Minute
 	rssCachePressureTargetOwner  = "cn-rss"
 	bootstrapRetryInterval       = 100 * time.Millisecond
+	memoryPressureSampleInterval = time.Second
 )
 
 var (
@@ -397,9 +398,32 @@ func (s *service) Start() error {
 		return err
 	}
 
+	if err := s.stopper.RunNamedTask("memory pressure monitor", func(ctx context.Context) {
+		runMemoryPressureMonitor(ctx, memoryPressureSampleInterval, s.CNMemoryThrottler.ForceRefresh)
+	}); err != nil {
+		return err
+	}
+
 	s.task.runnerReady.Store(true)
 	s.startTaskRunner()
 	return nil
+}
+
+func runMemoryPressureMonitor(
+	ctx context.Context,
+	interval time.Duration,
+	refresh func(),
+) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refresh()
+		}
+	}
 }
 
 func (s *service) Close() error {

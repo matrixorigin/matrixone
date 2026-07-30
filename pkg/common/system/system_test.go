@@ -71,6 +71,39 @@ func TestMinHierarchicalCgroupLimit(t *testing.T) {
 	require.Equal(t, filepath.Join(root, "tenant", "query"), dir)
 }
 
+func TestMinHierarchicalCgroupLimitAndUsage(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+
+	write := func(dir, name, value string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(value+"\n"), 0o600))
+	}
+	write(root, "memory.max", "max")
+	write(root, "memory.current", "100")
+	write(parent, "memory.max", "2147483648")
+	write(parent, "memory.current", "1500000000")
+	write(child, "memory.max", "3221225472")
+	write(child, "memory.current", "1200000000")
+
+	limit, usage := minHierarchicalLimitAndUsage(
+		child, root, "memory.max", "memory.current",
+	)
+	require.Equal(t, uint64(2<<30), limit)
+	require.Equal(t, uint64(1500000000), usage)
+
+	// If the leaf becomes the tighter cgroup, usage must be sampled from the
+	// leaf as well instead of being paired with its former parent limit.
+	write(child, "memory.max", "1073741824")
+	write(child, "memory.current", "900000000")
+	limit, usage = minHierarchicalLimitAndUsage(
+		child, root, "memory.max", "memory.current",
+	)
+	require.Equal(t, uint64(1<<30), limit)
+	require.Equal(t, uint64(900000000), usage)
+}
+
 // Benchmark_GoRutinues
 // goos: darwin
 // goarch: arm64

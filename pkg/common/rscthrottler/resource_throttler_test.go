@@ -391,6 +391,36 @@ func TestMemThrottlerRSSScavengingDisabled(t *testing.T) {
 	require.Equal(t, int32(0), calls.Load())
 }
 
+func TestMemThrottlerUsesCgroupMemoryPressure(t *testing.T) {
+	oldFreeOSMemory := freeOSMemory
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+	freeOSMemory = func() {}
+
+	const gib = int64(mpool.GB)
+	throttler := &memThrottler{limitRate: 0.90}
+	throttler.options.enableRSSScavenging = true
+	throttler.actualTotalMemory.Store(uint64(36 * gib))
+	throttler.limit.Store(32 * gib)
+	throttler.rss.Store(3042 * gib / 100) // 84.5%: below the RSS soft threshold.
+	throttler.cgroupUsage.Store(uint64(3377 * gib / 100))
+
+	throttler.tryScavengeRSS(time.Now().UnixNano(), throttler.physicalMemoryUsed())
+
+	require.Equal(t, rssPressureHard, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, 3377*gib/100, throttler.physicalMemoryUsed())
+	require.Equal(t, 36*gib-3377*gib/100, throttler.Available())
+}
+
+func TestCNFlushS3PhysicalMemoryUsesCgroupUsage(t *testing.T) {
+	throttler := &memThrottler{}
+	throttler.actualTotalMemory.Store(100)
+	throttler.rss.Store(80)
+	throttler.cgroupUsage.Store(94)
+
+	require.Equal(t, int64(6), cnFlushS3PhysicalAvailable(throttler, 0))
+	require.Equal(t, int64(94), cnFlushS3ProjectedPhysicalUsed(throttler, 0))
+}
+
 func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 	t.Run("allow under high rss when pool has headroom", func(t *testing.T) {
 		throttler := &memThrottler{limitRate: 0.90}

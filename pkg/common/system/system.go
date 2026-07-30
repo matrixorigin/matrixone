@@ -79,28 +79,42 @@ func MemoryTotal() uint64 {
 	return memoryTotal.Load()
 }
 
-// CgroupMemoryLimit returns the memory limit for the current process cgroup,
-// including when the process is not PID 1 (for example a systemd scope or a
-// nested container cgroup). Zero means unavailable.
-func CgroupMemoryLimit() uint64 {
-	if limit := hierarchicalCgroupMemoryLimit(pid); limit > 0 {
-		return limit
+// CgroupMemoryLimitAndUsage returns the memory limit and current usage from
+// the tightest limiting cgroup in the current process hierarchy. Returning a
+// matched pair matters for nested cgroups: a parent can impose the effective
+// limit and its usage includes memory charged outside the process' leaf
+// cgroup. Zero means unavailable.
+func CgroupMemoryLimitAndUsage() (limit uint64, usage uint64) {
+	if limit, usage = hierarchicalCgroupMemoryLimitAndUsage(pid); limit > 0 {
+		return
 	}
-	limit, err := cgroup.GetMemLimit(pid)
-	if err != nil || limit <= 0 {
-		return 0
+	rawLimit, limitErr := cgroup.GetMemLimit(pid)
+	rawUsage, usageErr := cgroup.GetMemUsage(pid)
+	if limitErr != nil || rawLimit <= 0 {
+		return 0, 0
 	}
-	return uint64(limit)
+	limit = uint64(rawLimit)
+	if usageErr == nil && rawUsage > 0 {
+		usage = uint64(rawUsage)
+	}
+	return
 }
 
-func hierarchicalCgroupMemoryLimit(pid int) uint64 {
+// CgroupMemoryLimit returns the effective memory limit for the current
+// process cgroup. Zero means unavailable.
+func CgroupMemoryLimit() uint64 {
+	limit, _ := CgroupMemoryLimitAndUsage()
+	return limit
+}
+
+func hierarchicalCgroupMemoryLimitAndUsage(pid int) (limit uint64, usage uint64) {
 	cgroupData, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
 	if err != nil {
-		return 0
+		return 0, 0
 	}
 	mountData, err := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
 	if err != nil {
-		return 0
+		return 0, 0
 	}
 
 	v2Path := ""
@@ -135,18 +149,22 @@ func hierarchicalCgroupMemoryLimit(pid int) uint64 {
 		case "cgroup2":
 			if v2Path != "" {
 				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v2Path); ok {
-					return minHierarchicalLimit(dir, mountPoint, "memory.max")
+					return minHierarchicalLimitAndUsage(
+						dir, mountPoint, "memory.max", "memory.current",
+					)
 				}
 			}
 		case "cgroup":
 			if v1MemoryPath != "" && strings.Contains(","+right[2]+",", ",memory,") {
 				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v1MemoryPath); ok {
-					return minHierarchicalLimit(dir, mountPoint, "memory.limit_in_bytes")
+					return minHierarchicalLimitAndUsage(
+						dir, mountPoint, "memory.limit_in_bytes", "memory.usage_in_bytes",
+					)
 				}
 			}
 		}
 	}
-	return 0
+	return 0, 0
 }
 
 func cgroupDirectory(mountPoint, mountRoot, processPath string) (string, bool) {
@@ -160,16 +178,24 @@ func cgroupDirectory(mountPoint, mountRoot, processPath string) (string, bool) {
 }
 
 func minHierarchicalLimit(dir, mountPoint, filename string) uint64 {
+	limit, _ := minHierarchicalLimitAndUsage(dir, mountPoint, filename, "")
+	return limit
+}
+
+func minHierarchicalLimitAndUsage(
+	dir, mountPoint, limitFilename, usageFilename string,
+) (minimum uint64, usage uint64) {
 	dir = filepath.Clean(dir)
 	mountPoint = filepath.Clean(mountPoint)
-	var minimum uint64
 	for {
-		data, err := os.ReadFile(filepath.Join(dir, filename))
+		data, err := os.ReadFile(filepath.Join(dir, limitFilename))
 		if err == nil {
 			value := strings.TrimSpace(string(data))
 			if value != "" && value != "max" {
-				if limit, parseErr := strconv.ParseUint(value, 10, 64); parseErr == nil && limit > 0 && (minimum == 0 || limit < minimum) {
+				if limit, parseErr := strconv.ParseUint(value, 10, 64); parseErr == nil &&
+					limit > 0 && (minimum == 0 || limit <= minimum) {
 					minimum = limit
+					usage = readCgroupUint(filepath.Join(dir, usageFilename))
 				}
 			}
 		}
@@ -182,7 +208,22 @@ func minHierarchicalLimit(dir, mountPoint, filename string) uint64 {
 		}
 		dir = parent
 	}
-	return minimum
+	return
+}
+
+func readCgroupUint(path string) uint64 {
+	if path == "" {
+		return 0
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	value, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return value
 }
 
 // MemoryAvailable returns the available size of memory of this node.

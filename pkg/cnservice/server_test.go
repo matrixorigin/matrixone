@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +51,20 @@ import (
 
 type closeErrorMOServer struct {
 	err error
+}
+
+func TestRunMemoryPressureMonitor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var calls atomic.Int32
+	runMemoryPressureMonitor(ctx, time.Millisecond, func() {
+		if calls.Add(1) == 3 {
+			cancel()
+		}
+	})
+
+	require.GreaterOrEqual(t, calls.Load(), int32(3))
 }
 
 func (s closeErrorMOServer) GetRoutineManager() *frontend.RoutineManager {
