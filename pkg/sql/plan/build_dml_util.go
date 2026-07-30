@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -3457,7 +3458,7 @@ func GetSqlForFkReferredTo(db, table string) string {
 			"refer_db_name = %s and refer_table_name = %s "+
 			" and "+
 			"(db_name != %s or db_name = %s and table_name != %s) "+
-			"order by db_name, table_name, constraint_name;",
+			"order by db_name, table_name, constraint_name, constraint_id;",
 		quoteSQLStringLiteral(db), quoteSQLStringLiteral(table),
 		quoteSQLStringLiteral(db), quoteSQLStringLiteral(db), quoteSQLStringLiteral(table))
 }
@@ -3542,7 +3543,8 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 	sb.WriteString(" values ")
 	for childIdx, childCol := range data.Cols.Cols {
 		row[0] = data.Def.Name
-		row[1] = "0"
+		// constraint_id preserves the declaration order of composite foreign-key columns.
+		row[1] = strconv.Itoa(childIdx + 1)
 		row[2] = db
 		row[3] = "0"
 		row[4] = table

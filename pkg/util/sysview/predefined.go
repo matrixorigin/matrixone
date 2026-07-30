@@ -155,20 +155,21 @@ var (
 // `information_schema` database
 // They are all Tenant level system tables/system views
 var (
-	InformationSchemaKeyColumnUsageDDL = "CREATE TABLE information_schema.KEY_COLUMN_USAGE (" +
-		"CONSTRAINT_CATALOG varchar(64)," +
-		"CONSTRAINT_SCHEMA varchar(64)," +
-		"CONSTRAINT_NAME varchar(64)," +
-		"TABLE_CATALOG varchar(64)," +
-		"TABLE_SCHEMA varchar(64)," +
-		"TABLE_NAME varchar(64)," +
-		"COLUMN_NAME varchar(64)," +
-		"ORDINAL_POSITION int unsigned," +
-		"POSITION_IN_UNIQUE_CONSTRAINT int unsigned," +
-		"REFERENCED_TABLE_SCHEMA varchar(64)," +
-		"REFERENCED_TABLE_NAME varchar(64)," +
-		"REFERENCED_COLUMN_NAME varchar(64)" +
-		")"
+	InformationSchemaKeyColumnUsageDDL = "CREATE VIEW information_schema.KEY_COLUMN_USAGE AS " +
+		"SELECT " +
+		"CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, " +
+		"CAST(fk.db_name AS varchar(64)) AS CONSTRAINT_SCHEMA, " +
+		"CAST(fk.constraint_name AS varchar(64)) AS CONSTRAINT_NAME, " +
+		"CAST('def' AS varchar(64)) AS TABLE_CATALOG, " +
+		"CAST(fk.db_name AS varchar(64)) AS TABLE_SCHEMA, " +
+		"CAST(fk.table_name AS varchar(64)) AS TABLE_NAME, " +
+		"CAST(fk.column_name AS varchar(64)) AS COLUMN_NAME, " +
+		"CAST(CASE WHEN fk.constraint_id = 0 THEN 1 ELSE fk.constraint_id END AS int unsigned) AS ORDINAL_POSITION, " +
+		"CAST(CASE WHEN fk.constraint_id = 0 THEN 1 ELSE fk.constraint_id END AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, " +
+		"CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, " +
+		"CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME, " +
+		"CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME " +
+		"FROM mo_catalog.mo_foreign_keys fk"
 
 	InformationSchemaColumnsDDL = fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
 		"'def' as TABLE_CATALOG,"+
@@ -411,8 +412,8 @@ var (
 		"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, " +
 		"idx.type AS UNIQUE_CONSTRAINT_NAME," +
 		"'NONE' AS MATCH_OPTION, " +
-		"fk.on_update AS UPDATE_RULE, " +
-		"fk.on_delete AS DELETE_RULE, " +
+		"CASE WHEN upper(fk.on_update) = 'RESTRICT' THEN 'NO ACTION' ELSE fk.on_update END AS UPDATE_RULE, " +
+		"CASE WHEN upper(fk.on_delete) = 'RESTRICT' THEN 'NO ACTION' ELSE fk.on_delete END AS DELETE_RULE, " +
 		"fk.table_name AS TABLE_NAME, " +
 		"fk.refer_table_name AS REFERENCED_TABLE_NAME " +
 		"FROM mo_catalog.mo_foreign_keys fk " +

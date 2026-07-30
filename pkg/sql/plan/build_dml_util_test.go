@@ -88,6 +88,24 @@ func TestGetSqlForAddFkEscapesStringLiterals(t *testing.T) {
 	require.Contains(t, sql, "'parent''col'")
 }
 
+func TestGetSqlForAddFkRecordsCompositeColumnOrder(t *testing.T) {
+	fkData := &FkData{
+		Def:  &plan.ForeignKeyDef{Name: "fk_child_parent"},
+		Cols: &plan.FkColName{Cols: []string{"child_first", "child_second"}},
+		ColsReferred: &plan.FkColName{Cols: []string{
+			"parent_first", "parent_second",
+		}},
+		ParentDbName:    "parent_db",
+		ParentTableName: "parent",
+	}
+
+	sql := getSqlForAddFk("child_db", "child", fkData)
+	require.Contains(t, sql, "('fk_child_parent','1','child_db','0','child','0','child_first'")
+	require.Contains(t, sql, "('fk_child_parent','2','child_db','0','child','0','child_second'")
+	require.Contains(t, GetSqlForFkReferredTo("parent_db", "parent"),
+		"order by db_name, table_name, constraint_name, constraint_id")
+}
+
 func TestGetSqlForCheckHasDBRefersToEscapesStringLiterals(t *testing.T) {
 	sql := getSqlForCheckHasDBRefersTo("db'name")
 	require.Contains(t, sql, "refer_db_name = 'db''name'")

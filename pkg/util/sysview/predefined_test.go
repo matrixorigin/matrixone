@@ -32,3 +32,23 @@ func TestInformationSchemaStatisticsDDL_RestrictsCatalogJoins(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tcl`.`att_relname` = `tbl`.`relname`"))
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tbl`.`account_id` = current_account_id()"))
 }
+
+func TestInformationSchemaKeyColumnUsageDDL_ProjectsForeignKeyMappings(t *testing.T) {
+	assert.True(t, strings.HasPrefix(InformationSchemaKeyColumnUsageDDL, "CREATE VIEW information_schema.KEY_COLUMN_USAGE AS"))
+	for _, column := range []string{
+		"CAST(fk.column_name AS varchar(64)) AS COLUMN_NAME",
+		"CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA",
+		"CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME",
+		"CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME",
+		"CAST(CASE WHEN fk.constraint_id = 0 THEN 1 ELSE fk.constraint_id END AS int unsigned) AS ORDINAL_POSITION",
+	} {
+		assert.Contains(t, InformationSchemaKeyColumnUsageDDL, column)
+	}
+}
+
+func TestInformationSchemaReferentialConstraintsDDL_UsesMySQLDefaultAction(t *testing.T) {
+	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
+		"CASE WHEN upper(fk.on_update) = 'RESTRICT' THEN 'NO ACTION' ELSE fk.on_update END AS UPDATE_RULE")
+	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
+		"CASE WHEN upper(fk.on_delete) = 'RESTRICT' THEN 'NO ACTION' ELSE fk.on_delete END AS DELETE_RULE")
+}
