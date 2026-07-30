@@ -323,6 +323,13 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			if err != nil {
 				return err
 			}
+			if len(funcExpr.Args) == 3 && (strings.EqualFold(funcName, "like") || strings.EqualFold(funcName, "ilike")) {
+				buf.WriteString(" ESCAPE ")
+				err = describeExpr(ctx, funcExpr.Args[2], options, buf)
+				if err != nil {
+					return err
+				}
+			}
 		}
 		buf.WriteString(")")
 	case function.MULTIARY_LOGICAL_OPERATOR:
