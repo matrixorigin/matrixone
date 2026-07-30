@@ -97,7 +97,11 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		case 2:
 			fillKeys[uint16](itr, vec, 2, start, count)
 		case 4:
-			fillKeys[uint32](itr, vec, 4, start, count)
+			if vec.GetType().Oid == types.T_float32 {
+				fillFloat32Keys(itr, vec, start, count)
+			} else {
+				fillKeys[uint32](itr, vec, 4, start, count)
+			}
 		case 8:
 			if vec.GetType().Oid == types.T_float64 {
 				fillFloat64Keys(itr, vec, start, count)
@@ -110,6 +114,86 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 			} else {
 				fillStrKey(itr, vec, start, count)
 			}
+		}
+	}
+}
+
+func fillFloat32Keys(itr *intHashMapIterator, vec *vector.Vector, start, n int) {
+	keys := itr.keys
+	keyOffs := itr.keyOffs
+	if vec.IsConstNull() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				itr.zValues[i] = 0
+			}
+		}
+		return
+	}
+
+	values := vector.MustFixedColNoTypeCheck[float32](vec)
+	codec := keycodec.NewFloat32Codec(vec.GetType().Scale)
+	if vec.IsConst() {
+		bits := codec.CanonicalBits(values[0])
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = bits
+			}
+			uint32AddScalar(1+uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		} else {
+			for i := 0; i < n; i++ {
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = bits
+			}
+			uint32AddScalar(uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		}
+		return
+	}
+
+	if !vec.GetNulls().Any() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					codec.CanonicalBits(values[i+start])
+			}
+			uint32AddScalar(1+uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		} else {
+			for i := 0; i < n; i++ {
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+					codec.CanonicalBits(values[i+start])
+			}
+			uint32AddScalar(uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		}
+		return
+	}
+
+	nsp := vec.GetNulls()
+	if itr.mp.hasNull {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			} else {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					codec.CanonicalBits(values[i+start])
+				keyOffs[i] += 1 + uint32(types.T_float32.TypeLen())
+			}
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				itr.zValues[i] = 0
+				continue
+			}
+			*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+				codec.CanonicalBits(values[i+start])
+			keyOffs[i] += uint32(types.T_float32.TypeLen())
 		}
 	}
 }

@@ -25,6 +25,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// Float32Codec holds the SQL comparison normalization for one FLOAT32 type.
+// Construct it once per vector so scale processing is not repeated per row.
+type Float32Codec struct {
+	normalizer types.Float32ScaleNormalizer
+}
+
+// NewFloat32Codec returns the canonical key codec for a FLOAT32 scale.
+func NewFloat32Codec(scale int32) Float32Codec {
+	return Float32Codec{
+		normalizer: types.NewFloat32ScaleNormalizer(scale),
+	}
+}
+
+// CanonicalBits makes SQL-equal FLOAT32 values use one hash key. Scaled
+// values are normalized exactly as scalar comparisons normalize them, and
+// signed zero uses the single all-zero representation.
+func (c Float32Codec) CanonicalBits(value float32) uint32 {
+	bits := math.Float32bits(c.normalizer.Normalize(value))
+	if bits<<1 == 0 {
+		return 0
+	}
+	return bits
+}
+
+// CanonicalBytes returns the native-endian bytes used by resident hashmaps and
+// spill partitioning.
+func (c Float32Codec) CanonicalBytes(value float32) [4]byte {
+	bits := c.CanonicalBits(value)
+	return *(*[4]byte)(unsafe.Pointer(&bits))
+}
+
 // CanonicalFloat64Bits makes SQL-equal signed zero values use one hash key.
 func CanonicalFloat64Bits(value float64) uint64 {
 	bits := math.Float64bits(value)
@@ -64,7 +95,11 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 	}
 
 	for _, vec := range keyVecs {
-		if vec.GetType().Oid == types.T_float64 {
+		switch vec.GetType().Oid {
+		case types.T_float32:
+			computeFloat32XXHash(vec, hashValues)
+			continue
+		case types.T_float64:
 			computeFloat64XXHash(vec, hashValues)
 			continue
 		}
@@ -97,6 +132,45 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 				hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
 			}
 		}
+	}
+}
+
+func computeFloat32XXHash(vec *vector.Vector, hashValues []uint64) {
+	rowCount := len(hashValues)
+	codec := NewFloat32Codec(vec.GetType().Scale)
+	if vec.IsConst() {
+		columnHash := uint64(0)
+		if !vec.IsConstNull() {
+			values := vector.MustFixedColNoTypeCheck[float32](vec)
+			value := codec.CanonicalBytes(values[0])
+			columnHash = xxhash.Sum64(value[:])
+		}
+		for i := 0; i < rowCount; i++ {
+			hashValues[i] = HashCombine(hashValues[i], columnHash)
+		}
+		return
+	}
+
+	n := rowCount
+	if vec.Length() < n {
+		n = vec.Length()
+	}
+	values := vector.MustFixedColNoTypeCheck[float32](vec)
+	if vec.GetNulls().Any() {
+		nulls := vec.GetNulls()
+		for i := 0; i < n; i++ {
+			if nulls.Contains(uint64(i)) {
+				hashValues[i] = HashCombine(hashValues[i], 0)
+			} else {
+				value := codec.CanonicalBytes(values[i])
+				hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
+			}
+		}
+		return
+	}
+	for i := 0; i < n; i++ {
+		value := codec.CanonicalBytes(values[i])
+		hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
 	}
 }
 
