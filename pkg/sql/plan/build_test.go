@@ -1893,6 +1893,58 @@ func TestInsert(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestInsertIntoMarkedTemporaryTableUsesModernPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	catalog.MarkTableDefTemporary(mock.ctxt.tables["nation"])
+	// Resolve sets this session-scoped bit when the logical temporary-table
+	// alias is mapped to its physical table.
+	mock.ctxt.tables["nation"].IsTemporary = true
+
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "plain insert",
+			sql:  "insert into nation values (1, 'n', 2, 'plain')",
+		},
+		{
+			name: "insert ignore",
+			sql:  "insert ignore into nation values (1, 'n', 2, 'ignore')",
+		},
+		{
+			name: "on duplicate key update",
+			sql: "insert into nation values (1, 'n', 2, 'upsert') " +
+				"on duplicate key update n_comment = values(n_comment)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			hasMultiUpdate := false
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_MULTI_UPDATE {
+					hasMultiUpdate = true
+					break
+				}
+			}
+			require.True(t, hasMultiUpdate,
+				"temporary-table %s should stay on the modern insert path", test.name)
+		})
+	}
+}
+
+func TestInsertIgnoreIntoInternalIndexTableRemainsUnsupported(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"insert ignore into `__mo_index_secondary_meta` (`__mo_index_key`, `__mo_index_val`) "+
+			"values ('version', '0')")
+	require.ErrorContains(t, err, "insert into vector/text index table")
+}
+
 func TestUpdate(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// should pass
