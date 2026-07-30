@@ -1,67 +1,76 @@
 SELECT MONTHNAME('2008-02-03') AS result1;
-result1
+➤ result1[12,-1,0]  𝄀
 February
 SELECT MONTHNAME('2008-01-15') AS jan;
-jan
+➤ jan[12,-1,0]  𝄀
 January
 SELECT MONTHNAME('2008-02-15') AS feb;
-feb
+➤ feb[12,-1,0]  𝄀
 February
 SELECT MONTHNAME('2008-03-15') AS mar;
-mar
+➤ mar[12,-1,0]  𝄀
 March
 SELECT MONTHNAME('2008-04-15') AS apr;
-apr
+➤ apr[12,-1,0]  𝄀
 April
 SELECT MONTHNAME('2008-05-15') AS may;
-may
+➤ may[12,-1,0]  𝄀
 May
 SELECT MONTHNAME('2008-06-15') AS jun;
-jun
+➤ jun[12,-1,0]  𝄀
 June
 SELECT MONTHNAME('2008-07-15') AS jul;
-jul
+➤ jul[12,-1,0]  𝄀
 July
 SELECT MONTHNAME('2008-08-15') AS aug;
-aug
+➤ aug[12,-1,0]  𝄀
 August
 SELECT MONTHNAME('2008-09-15') AS sep;
-sep
+➤ sep[12,-1,0]  𝄀
 September
 SELECT MONTHNAME('2008-10-15') AS oct;
-oct
+➤ oct[12,-1,0]  𝄀
 October
 SELECT MONTHNAME('2008-11-15') AS nov;
-nov
+➤ nov[12,-1,0]  𝄀
 November
 SELECT MONTHNAME('2008-12-15') AS dec;
-dec
+➤ dec[12,-1,0]  𝄀
 December
 SELECT MONTHNAME('2008-02-03') AS date_type;
-date_type
+➤ date_type[12,-1,0]  𝄀
 February
 SELECT MONTHNAME('2008-02-03 10:30:45') AS datetime_type;
-datetime_type
+➤ datetime_type[12,-1,0]  𝄀
 February
 SELECT MONTHNAME(TIMESTAMP('2008-02-03 10:30:45')) AS timestamp_type;
-timestamp_type
+➤ timestamp_type[12,-1,0]  𝄀
 February
 SELECT MONTHNAME(NULL) AS null_date;
-null_date
+➤ null_date[12,-1,0]  𝄀
 null
 CREATE TABLE t1(d DATE);
 INSERT INTO t1 VALUES ('2008-01-15'), ('2008-06-15'), ('2008-12-15');
 SELECT MONTHNAME(d) AS month_name FROM t1;
-month_name
-January
-June
+➤ month_name[12,-1,0]  𝄀
+January  𝄀
+June  𝄀
 December
 DROP TABLE t1;
 CREATE TABLE t1(d DATE);
 INSERT INTO t1 VALUES ('2008-01-15'), ('2008-06-15'), ('2008-12-15');
 SELECT * FROM t1 WHERE MONTHNAME(d) = 'February';
-d
+➤ d[91,64,0]
 DROP TABLE t1;
 SELECT MONTHNAME('2000-02-03') AS year2000, MONTHNAME('2024-02-03') AS year2024;
-year2000    year2024
-February    February
+➤ year2000[12,-1,0]  ¦  year2024[12,-1,0]  𝄀
+February  ¦  February
+SELECT MONTHNAME('2024-06-15') AS string_monthname;
+➤ string_monthname[12,-1,0]  𝄀
+June
+SELECT MONTHNAME('2001-11-00 12:34:56') AS incomplete_datetime,
+MONTHNAME('20011100') AS incomplete_compact,
+MONTHNAME('2001-11-0') AS incomplete_variable,
+MONTHNAME('0000-00-00 12:34:56') AS zero_datetime;
+➤ incomplete_datetime[12,-1,0]  ¦  incomplete_compact[12,-1,0]  ¦  incomplete_variable[12,-1,0]  ¦  zero_datetime[12,-1,0]  𝄀
+November  ¦  November  ¦  November  ¦  null

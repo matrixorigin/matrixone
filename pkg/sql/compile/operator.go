@@ -128,11 +128,17 @@ func mergeReceiverChannelBufferSize(s *Scope) int {
 }
 
 type operatorDupContext struct {
-	shufflePools map[*shuffle.Shuffle]*shuffle.ShufflePool
+	shufflePools       map[*shuffle.Shuffle]*shuffle.ShufflePool
+	hashJoinChannels   map[*hashjoin.HashJoin]chan *bitmap.Bitmap
+	dedupJoinMailboxes map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox
 }
 
 func newOperatorDupContext() *operatorDupContext {
-	return &operatorDupContext{shufflePools: make(map[*shuffle.Shuffle]*shuffle.ShufflePool)}
+	return &operatorDupContext{
+		shufflePools:       make(map[*shuffle.Shuffle]*shuffle.ShufflePool),
+		hashJoinChannels:   make(map[*hashjoin.HashJoin]chan *bitmap.Bitmap),
+		dedupJoinMailboxes: make(map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox),
+	}
 }
 
 func dupOperatorRecursivelyWithContext(sourceOp vm.Operator, index int, maxParallel int, dupCtx *operatorDupContext) vm.Operator {
@@ -223,10 +229,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CanSkipProbe = t.CanSkipProbe
 		op.IsShuffle = t.IsShuffle
 		if !t.IsShuffle {
-			if t.Channel == nil {
-				t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			channel := dupCtx.hashJoinChannels[t]
+			if channel == nil {
+				channel = make(chan *bitmap.Bitmap, maxParallel)
+				dupCtx.hashJoinChannels[t] = channel
 			}
-			op.Channel = t.Channel
+			op.Channel = channel
 			op.NumCPU = uint64(maxParallel)
 			op.IsMerger = (index == 0)
 		}
@@ -350,8 +358,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Partial = t.Partial
 		op.StartIDX = t.StartIDX
 		op.EndIDX = t.EndIDX
-		op.MaterializedSource = t.MaterializedSource
-		op.MaterializedReaderID = t.MaterializedReaderID
 		op.SetInfo(&info)
 		return op
 	case vm.MergeRecursive:
@@ -464,7 +470,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ShuffleRegIdxLocal = sourceArg.ShuffleRegIdxLocal
 		op.ShuffleRegIdxRemote = sourceArg.ShuffleRegIdxRemote
 		op.FuncId = sourceArg.FuncId
-		op.MaterializedSource = sourceArg.MaterializedSource
 		op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
 		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
 		for j := range op.LocalRegs {
@@ -601,10 +606,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.DedupJoin:
 		t := sourceOp.(*dedupjoin.DedupJoin)
 		op := dedupjoin.NewArgument()
-		if t.Channel == nil {
-			t.Channel = make(chan *dedupjoin.WorkerJoinMsg, maxParallel)
+		mailbox := dupCtx.dedupJoinMailboxes[t]
+		if mailbox == nil {
+			mailbox = dedupjoin.NewWorkerJoinMailbox(maxParallel)
+			dupCtx.dedupJoinMailboxes[t] = mailbox
 		}
-		op.Channel = t.Channel
+		op.Mailbox = mailbox
 		op.NumCPU = uint64(maxParallel)
 		op.IsMerger = (index == 0)
 		op.Result = t.Result
