@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -207,22 +208,9 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 	} else {
 		// Handle spilled build side.
 		if ctr.mp.IsSpilled() {
-			files := ctr.mp.TakeSpillBuildFiles()
-			var budget *process.HashBuildBudgetGeneration
-			if files != nil {
-				var ok bool
-				budget, ok = ctr.mp.TakeSpillBudget().(*process.HashBuildBudgetGeneration)
-				if !ok || budget == nil {
-					for _, file := range files {
-						_ = file.Close()
-					}
-					return moerr.NewInternalError(proc.Ctx, "spilled right dedup join map is missing its producer budget generation")
-				}
-			} else {
-				budget, err = proc.GetHashBuildBudget()
-				if err != nil {
-					return err
-				}
+			payload, budget, takeErr := spillutil.TakeSpillBuildPayload(proc, ctr.mp)
+			if takeErr != nil {
+				return takeErr
 			}
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           rightDedupJoin.Conditions[1],
@@ -232,10 +220,10 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				MergeProbeBatches:       true,
 				Budget:                  budget,
 			})
-			if files != nil {
-				engine.InitFromSpilledFiles(files)
+			if len(payload.Files) > 0 {
+				engine.InitFromSpilledFiles(payload.Files)
 			} else {
-				engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+				engine.InitFromSpilledMap(payload.LegacyFds)
 			}
 			if err := engine.ScatterProbeTable(proc,
 				func() (*batch.Batch, error) {
@@ -282,23 +270,11 @@ func (rightDedupJoin *RightDedupJoin) newEmptyJoinMap(proc *process.Process) (*m
 		keyWidth += width
 	}
 
-	var (
-		intHashMap *hashmap.IntHashMap
-		strHashMap *hashmap.StrHashMap
-		err        error
-	)
-	if keyWidth <= 8 {
-		intHashMap, err = hashmap.NewIntHashMap(false, proc.Mp())
-	} else {
-		strHashMap, err = hashmap.NewStrHashMap(false, proc.Mp())
-	}
+	budget, err := proc.GetHashBuildBudget()
 	if err != nil {
 		return nil, err
 	}
-
-	jm := message.NewJoinMap(message.GroupSels{}, intHashMap, strHashMap, nil, nil, proc.Mp())
-	jm.IncRef(1)
-	return jm, nil
+	return hashbuild.NewBudgetedEmptyJoinMap(keyWidth, budget, proc.Mp())
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {

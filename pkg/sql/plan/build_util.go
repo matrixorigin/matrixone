@@ -1048,7 +1048,7 @@ basic logic of fk constraint check.
 			select distinct S.b from S where S.b is not null
 			except
 			select distinct T.a from T
-		)
+		) as __mo_fk_check_source
 	if the result is true, then the fk constraint confirmed.
 */
 func genSqlForCheckFKConstraints(ctx context.Context,
@@ -1082,7 +1082,7 @@ func genSqlForCheckFKConstraints(ctx context.Context,
 	sql := strings.Join([]string{
 		"select count(*) = 0 from (",
 		except,
-		")",
+		") as __mo_fk_check_source",
 	}, " ")
 	return sql, nil
 }
