@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -159,6 +160,50 @@ func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
 	query := built.GetQuery()
 	require.NotNil(t, query)
 	require.True(t, queryContainsCrossRelationEquality(query), "SQL UDF parameter must bind to the outer scan column")
+}
+
+func TestExpandSQLUdfArgumentsAvoidsIdentifierCollision(t *testing.T) {
+	const userColumn = "__mo_sql_udf_1_arg_1"
+
+	builder := &QueryBuilder{}
+	bindCtx := NewBindContext(nil, nil)
+	binder := NewDefaultBinder(
+		context.Background(),
+		builder,
+		bindCtx,
+		plan.Type{Id: int32(types.T_int64)},
+		[]string{userColumn},
+	)
+	arg := makeInt64ConstPlanExpr(42)
+	body := "select " + userColumn + ", $1"
+	rewritten, markers := binder.expandSQLUdfArguments(body, []*plan.Expr{arg}, "")
+
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, rewritten, 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	require.Len(t, selectClause.Exprs, 2)
+	originalName := selectClause.Exprs[0].Expr.(*tree.UnresolvedName)
+	argumentName := selectClause.Exprs[1].Expr.(*tree.UnresolvedName)
+	require.Equal(t, userColumn, originalName.ColName())
+	require.NotEqual(t, originalName.ColName(), argumentName.ColName())
+	require.NotContains(t, strings.ToLower(body), strings.ToLower(argumentName.ColName()))
+	require.NotContains(t, markers, originalName.ColName())
+	require.Contains(t, markers, argumentName.ColName())
+
+	restore := binder.pushSQLUdfArguments(markers)
+	defer restore()
+	boundOriginal, err := binder.BindExpr(originalName, 0, false)
+	require.NoError(t, err)
+	require.NotNil(t, boundOriginal.GetCol(), "user-authored identifier must retain normal column binding")
+	boundArgument, err := binder.BindExpr(argumentName, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(42), boundArgument.GetLit().GetI64Val())
 }
 
 func TestReplaceSQLUdfArgMarkers(t *testing.T) {

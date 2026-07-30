@@ -465,7 +465,7 @@ type BindContext struct {
 	// FULL OUTER JOIN ... USING. Length is always >= 2 when present.
 	outerUsingCols map[string][]string
 	// sqlUdfArgs holds the already-bound arguments of the SQL UDF currently
-	// being expanded in this query block. The UDF body uses reserved marker
+	// being expanded in this query block. The UDF body uses body-unique marker
 	// names for its $n parameters; resolving those markers from a child query
 	// block turns the argument's column references into correlated references.
 	sqlUdfArgs map[string]*plan.Expr

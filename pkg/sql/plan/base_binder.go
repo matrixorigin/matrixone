@@ -2673,10 +2673,13 @@ func bindFuncExprImplUdf(
 	}
 }
 
-// expandSQLUdfArguments replaces each $n parameter with a reserved identifier.
-// The identifier is resolved from sqlUdfArgs while the parsed UDF body is bound,
-// so a column argument keeps its outer-query identity even when an inner table
-// exposes a column with the same name.
+// expandSQLUdfArguments replaces each $n parameter with an identifier that is
+// provably absent from the original UDF body. The identifier is resolved from
+// sqlUdfArgs while the parsed body is bound, so a column argument keeps its
+// outer-query identity even when an inner table exposes a column with the same
+// name. Checking the entire body (including quotes and comments) is deliberately
+// conservative: absence from the raw text guarantees that no user-authored
+// identifier in the parsed tree can be captured by the marker.
 func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMode string) (string, map[string]*plan.Expr) {
 	if len(args) == 0 {
 		return sql, nil
@@ -2689,8 +2692,19 @@ func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMod
 	}
 
 	markers := make(map[string]*plan.Expr, len(args))
+	markerByOrdinal := make(map[int]string, len(args))
+	foldedBody := strings.ToLower(sql)
 	markerForOrdinal := func(ordinal int) string {
-		name := fmt.Sprintf("__mo_sql_udf_%d_arg_%d", callID, ordinal)
+		if name, ok := markerByOrdinal[ordinal]; ok {
+			return "`" + name + "`"
+		}
+
+		baseName := fmt.Sprintf("__mo_sql_udf_%d_arg_%d", callID, ordinal)
+		name := baseName
+		for collisionID := uint64(1); strings.Contains(foldedBody, name); collisionID++ {
+			name = fmt.Sprintf("%s_%d", baseName, collisionID)
+		}
+		markerByOrdinal[ordinal] = name
 		markers[name] = args[ordinal-1]
 		return "`" + name + "`"
 	}

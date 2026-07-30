@@ -47,3 +47,12 @@ select id, udf_lookup(id) as lookup_v from udf_lookup_base order by id;
 select id from udf_lookup_base where udf_lookup(id) >= 15 order by id;
 drop function udf_lookup(int);
 drop table udf_lookup_base;
+
+drop table if exists udf_marker_collision_base;
+drop function if exists udf_marker_collision(int);
+create table udf_marker_collision_base (`__mo_sql_udf_1_arg_1` int);
+insert into udf_marker_collision_base values (7);
+create function udf_marker_collision(p_id int) returns int language sql as 'select __mo_sql_udf_1_arg_1 from udf_marker_collision_base where $1 = $1';
+select udf_marker_collision(cast(5 as int)) as collision_safe;
+drop function udf_marker_collision(int);
+drop table udf_marker_collision_base;
