@@ -896,15 +896,30 @@ func validateVectorBinary(class byte, typ types.Type, length uint32, data, area 
 	}
 	if typ.IsVarlen() {
 		values := types.DecodeSlice[types.Varlena](data)
+		arrayElementSize := 0
+		switch typ.Oid {
+		case types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+			types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+			arrayElementSize = typ.GetArrayElementSize()
+		}
 		for i := range values {
 			// Null varlen slots may retain stale offset/length metadata. The
 			// payload is never dereferenced, so only validate live values.
-			if nsp.Contains(uint64(i)) || values[i].IsSmall() {
+			if nsp.Contains(uint64(i)) {
 				continue
 			}
-			offset, size := values[i].OffsetLen()
-			if uint64(offset) > uint64(len(area)) || uint64(size) > uint64(len(area))-uint64(offset) {
-				return moerr.NewInvalidInputNoCtx("invalid vector varlen offset")
+			var payloadLen uint32
+			if values[i].IsSmall() {
+				payloadLen = uint32(values[i][0])
+			} else {
+				offset, size := values[i].OffsetLen()
+				if uint64(offset) > uint64(len(area)) || uint64(size) > uint64(len(area))-uint64(offset) {
+					return moerr.NewInvalidInputNoCtx("invalid vector varlen offset")
+				}
+				payloadLen = size
+			}
+			if arrayElementSize > 0 && payloadLen%uint32(arrayElementSize) != 0 {
+				return moerr.NewInvalidInputNoCtx("invalid vector array payload size")
 			}
 		}
 	}
@@ -954,11 +969,11 @@ func canonicalVectorTypeSize(typ types.Type) (int, error) {
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
-		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_interval, types.T_year,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
 		types.T_char, types.T_varchar, types.T_json, types.T_uuid,
 		types.T_binary, types.T_varbinary, types.T_enum, types.T_geometry, types.T_geometry32,
 		types.T_blob, types.T_text, types.T_datalink,
-		types.T_TS, types.T_Rowid, types.T_Blockid, types.T_tuple,
+		types.T_TS, types.T_Rowid, types.T_Blockid,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16,
 		types.T_array_int8, types.T_array_uint8:
 	default:

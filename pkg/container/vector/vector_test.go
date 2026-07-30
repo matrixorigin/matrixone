@@ -1760,6 +1760,72 @@ func TestUnmarshalBinaryRejectsOverflowingNullBitmapLength(t *testing.T) {
 	require.Error(t, target.UnmarshalBinary(corrupted))
 }
 
+func TestUnmarshalBinaryRejectsMisalignedArrayPayload(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		values     []float32
+		corruptLen func([]byte, int)
+	}{
+		{
+			name:   "out_of_line",
+			values: make([]float32, 10),
+			corruptLen: func(data []byte, varlenOffset int) {
+				misalignedLength := uint32(3)
+				copy(data[varlenOffset+8:varlenOffset+12], types.EncodeUint32(&misalignedLength))
+			},
+		},
+		{
+			name:   "inline",
+			values: []float32{0},
+			corruptLen: func(data []byte, varlenOffset int) {
+				data[varlenOffset] = 3
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := NewVec(types.New(types.T_array_float32, 10, 0))
+			require.NoError(t, AppendArray(source, test.values, false, mp))
+			data, err := source.MarshalBinary()
+			require.NoError(t, err)
+			source.Free(mp)
+
+			// The array payload remains in bounds, but cannot be decoded as a
+			// []float32. Cover both Varlena storage forms.
+			corrupted := append([]byte(nil), data...)
+			varlenOffset := 1 + types.TSize + 4 + 4
+			test.corruptLen(corrupted, varlenOffset)
+
+			target := NewVecFromReuse()
+			var unmarshalErr error
+			require.NotPanics(t, func() {
+				unmarshalErr = target.UnmarshalBinary(corrupted)
+				if unmarshalErr == nil {
+					_ = GetArrayAt[float32](target, 0)
+				}
+			})
+			require.Error(t, unmarshalErr)
+		})
+	}
+}
+
+func TestUnmarshalBinaryRejectsUnsupportedZeroSizeType(t *testing.T) {
+	for _, oid := range []types.T{types.T_interval, types.T_tuple} {
+		t.Run(oid.String(), func(t *testing.T) {
+			source := NewVec(types.Type{Oid: oid})
+			data, err := source.MarshalBinary()
+			require.NoError(t, err)
+
+			target := NewVecFromReuse()
+			var unmarshalErr error
+			require.NotPanics(t, func() {
+				unmarshalErr = target.UnmarshalBinary(data)
+			})
+			require.Error(t, unmarshalErr)
+		})
+	}
+}
+
 func TestStrMarshalAndUnMarshal(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := NewVec(types.T_text.ToType())
