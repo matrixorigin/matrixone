@@ -105,6 +105,7 @@ const (
 	Apply
 	PostDml
 	IcebergWrite
+	MongoScan
 )
 
 var OperatorToStrMap map[OpType]string
@@ -169,6 +170,7 @@ func init() {
 		Apply:                   "Apply",
 		PostDml:                 "PostDml",
 		IcebergWrite:            "IcebergWrite",
+		MongoScan:               "MongoScan",
 	}
 
 	// Initialize StrToOperatorMap
@@ -190,6 +192,7 @@ func init() {
 	MajorOpMap = map[string]bool{
 		OperatorToStrMap[TableScan]: true,
 		OperatorToStrMap[External]:  true,
+		OperatorToStrMap[MongoScan]: true,
 		OperatorToStrMap[Order]:     true,
 		OperatorToStrMap[Window]:    true,
 		OperatorToStrMap[Group]:     true,

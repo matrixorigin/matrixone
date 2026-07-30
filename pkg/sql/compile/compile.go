@@ -66,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
@@ -73,6 +74,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -1836,6 +1838,19 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		}
 	}()
 
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_MONGODB_TB) {
+		if err := c.hydrateMongoScan(node); err != nil {
+			return nil, err
+		}
+		scope := c.constructScopeForExternal(c.addr, false)
+		currentFirstFlag := c.anal.isFirst
+		op := mongoscan.NewArgument().WithScan(node.ExternScan.MongodbScan)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		scope.setRootOperator(op)
+		c.anal.isFirst = false
+		return []*Scope{scope}, nil
+	}
+
 	err, strictSqlMode := StrictSqlMode(c.proc)
 	if err != nil {
 		return nil, err
@@ -1913,6 +1928,116 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	} else {
 		return c.compileExternScanSerialReadWrite(node, param, fileList, fileSize, strictSqlMode)
 	}
+}
+
+func (c *Compile) hydrateMongoScan(node *plan.Node) error {
+	if node == nil || node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
+		return moerr.NewInvalidInput(c.proc.Ctx, "MongoDB external table is missing scan metadata")
+	}
+	scan := node.ExternScan.MongodbScan
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	res, err := c.runSqlWithResultAndOptions(
+		sqlmongodb.GetMappingByTableIDSQL(accountID, scan.TableId),
+		NoAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	found := false
+	var parseErr error
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 || len(cols) < 9 {
+			return true
+		}
+		mappingIDs := executor.GetFixedRows[uint64](cols[0])
+		connectionIDs := executor.GetFixedRows[uint64](cols[1])
+		versions := executor.GetFixedRows[uint64](cols[2])
+		parallelism := executor.GetFixedRows[int32](cols[6])
+		disabled := executor.GetFixedRows[uint64](cols[7])
+		mappingVersions := executor.GetFixedRows[uint64](cols[8])
+		if len(mappingIDs) == 0 || len(connectionIDs) == 0 || len(versions) == 0 || len(parallelism) == 0 || len(disabled) == 0 || len(mappingVersions) == 0 {
+			parseErr = moerr.NewInternalError(c.proc.Ctx, "MongoDB catalog mapping row has invalid types")
+			return false
+		}
+		if disabled[0] != 0 {
+			parseErr = moerr.NewInvalidInput(c.proc.Ctx, "MongoDB connection is disabled")
+			return false
+		}
+		var columns []sqlmongodb.ColumnMapping
+		if err := json.Unmarshal(cols[5].GetBytesAt(0), &columns); err != nil {
+			parseErr = moerr.NewInternalError(c.proc.Ctx, "MongoDB catalog column mapping is invalid")
+			return false
+		}
+		catalogMapping := sqlmongodb.TableMapping{
+			TableID: scan.TableId, MappingID: mappingIDs[0], ConnectionID: connectionIDs[0],
+			Database: string(cols[3].GetBytesAt(0)), Collection: string(cols[4].GetBytesAt(0)),
+			Columns: columns, MaxParallelism: parallelism[0], Version: mappingVersions[0],
+		}
+		if !sqlmongodb.MappingDefinitionMatchesPlan(catalogMapping, scan) {
+			parseErr = moerr.NewInvalidInput(c.proc.Ctx, "MongoDB table mapping changed during planning; retry the statement")
+			return false
+		}
+		columns, parseErr = projectedMongoColumns(c.proc.Ctx, columns, node.TableDef)
+		if parseErr != nil {
+			return false
+		}
+		scan.MappingId = mappingIDs[0]
+		scan.MappingVersion = mappingVersions[0]
+		scan.ConnectionId = connectionIDs[0]
+		scan.ConnectionVersion = versions[0]
+		scan.Database = string(cols[3].GetBytesAt(0))
+		scan.Collection = string(cols[4].GetBytesAt(0))
+		scan.Columns = sqlmongodb.ColumnsToPlan(columns)
+		scan.ProjectedPaths = projectedMongoPlanPaths(columns)
+		scan.MaxParallelism = parallelism[0]
+		found = true
+		return false
+	})
+	if parseErr != nil {
+		return parseErr
+	}
+	if !found {
+		return moerr.NewInvalidInput(c.proc.Ctx, "MongoDB table mapping does not exist for this account")
+	}
+	if scan.MaxParallelism != 1 {
+		return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP requires max_parallelism=1")
+	}
+	scan.PushedPredicate, scan.ResidualFilterDigest = sqlmongodb.PushdownPlanFilters(c.proc.Ctx, node.FilterList, scan.Columns)
+	return nil
+}
+
+func projectedMongoColumns(ctx context.Context, columns []sqlmongodb.ColumnMapping, tableDef *plan.TableDef) ([]sqlmongodb.ColumnMapping, error) {
+	if tableDef == nil {
+		return nil, moerr.NewInternalError(ctx, "MongoDB external scan is missing its table definition")
+	}
+	names := make([]string, 0, len(tableDef.Cols))
+	for _, column := range tableDef.Cols {
+		if column != nil && !column.Hidden {
+			names = append(names, column.Name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, moerr.NewInternalError(ctx, "MongoDB external scan has no retained mapped columns")
+	}
+	return sqlmongodb.ProjectColumnsByName(ctx, columns, names)
+}
+
+func projectedMongoPlanPaths(columns []sqlmongodb.ColumnMapping) []string {
+	result := make([]string, 0, len(columns))
+	seen := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		if _, ok := seen[column.Path]; ok {
+			continue
+		}
+		seen[column.Path] = struct{}{}
+		result = append(result, column.Path)
+	}
+	return result
 }
 
 func (c *Compile) getParallelSizeForExternalScan(node *plan.Node, cpuNum int) int {
@@ -3438,6 +3563,12 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 				c.setProjection(node, ss[i])
 			}
 		case *external.External:
+			if op.ProjectList == nil {
+				op.ProjectList = node.ProjectList
+			} else {
+				c.setProjection(node, ss[i])
+			}
+		case *mongoscan.MongoScan:
 			if op.ProjectList == nil {
 				op.ProjectList = node.ProjectList
 			} else {

@@ -132,6 +132,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.TimeWindowPartitionBy {
+		node.TimeWindowPartitionBy[i], err = rule.ApplyExpr(node.TimeWindowPartitionBy[i])
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range node.BlockFilterList {
 		node.BlockFilterList[i], err = rule.ApplyExpr(node.BlockFilterList[i])
 		if err != nil {

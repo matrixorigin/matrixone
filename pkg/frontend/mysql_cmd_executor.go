@@ -273,7 +273,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 func redactStatementTextForLogging(statement tree.Statement, text string) string {
 	switch statement.(type) {
-	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog:
+	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
+		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection:
 		return tree.String(statement, dialect.MYSQL)
 	default:
 		return text
@@ -3110,6 +3111,12 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 	}
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+		if !canCreateMongoDBTableMapping(stmt, ses.GetTenantInfo()) {
+			// The privilege model has no external-connection USAGE object yet.
+			// Fail closed instead of letting any ordinary CREATE TABLE holder use
+			// an administrator's connection against an arbitrary collection.
+			return stats, moerr.NewInternalError(reqCtx, "MongoDB external table creation requires account admin until connection USAGE privileges are available")
+		}
 
 		// can or not execute in retricted status
 		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
@@ -3153,6 +3160,14 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		}
 	}
 	return stats, nil
+}
+
+func canCreateMongoDBTableMapping(stmt tree.Statement, tenant *TenantInfo) bool {
+	create, ok := stmt.(*tree.CreateTable)
+	if !ok || create.MongoDBParam == nil {
+		return true
+	}
+	return tenant != nil && tenant.IsAdminRole()
 }
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan

@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -737,6 +738,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
 		}
 		in.ProjectList = t.ProjectList
+	case *mongoscan.MongoScan:
+		in.MongodbScan = t.Scan
+		in.ProjectList = t.ProjectList
 	case *source.Source:
 		in.StreamScan = &pipeline.StreamScan{
 			TblDef: t.TblDef,
@@ -1240,6 +1244,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			},
 		)
 		op.(*external.External).ProjectList = opr.ProjectList
+	case vm.MongoScan:
+		op = mongoscan.NewArgument().WithScan(opr.GetMongodbScan())
+		op.(*mongoscan.MongoScan).ProjectList = opr.ProjectList
 	case vm.Source:
 		t := opr.GetStreamScan()
 		arg := source.NewArgument()

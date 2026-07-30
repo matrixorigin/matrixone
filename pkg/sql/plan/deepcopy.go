@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"slices"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -196,23 +197,34 @@ func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
 
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
-		NodeType:         node.NodeType,
-		NodeId:           node.NodeId,
-		ExtraOptions:     node.ExtraOptions,
-		Children:         slices.Clone(node.Children),
-		JoinType:         node.JoinType,
-		IsRightJoin:      node.IsRightJoin,
-		BindingTags:      slices.Clone(node.BindingTags),
-		Limit:            DeepCopyExpr(node.Limit),
-		Offset:           DeepCopyExpr(node.Offset),
-		ProjectList:      DeepCopyExprList(node.ProjectList),
-		OnList:           DeepCopyExprList(node.OnList),
-		FilterList:       DeepCopyExprList(node.FilterList),
-		BlockFilterList:  DeepCopyExprList(node.BlockFilterList),
-		GroupBy:          DeepCopyExprList(node.GroupBy),
-		GroupingFlag:     slices.Clone(node.GroupingFlag),
-		AggList:          DeepCopyExprList(node.AggList),
-		OrderBy:          DeepCopyOrderBySpecList(node.OrderBy),
+		NodeType:        node.NodeType,
+		NodeId:          node.NodeId,
+		ExtraOptions:    node.ExtraOptions,
+		Children:        slices.Clone(node.Children),
+		JoinType:        node.JoinType,
+		IsRightJoin:     node.IsRightJoin,
+		BindingTags:     slices.Clone(node.BindingTags),
+		Limit:           DeepCopyExpr(node.Limit),
+		Offset:          DeepCopyExpr(node.Offset),
+		ProjectList:     DeepCopyExprList(node.ProjectList),
+		OnList:          DeepCopyExprList(node.OnList),
+		FilterList:      DeepCopyExprList(node.FilterList),
+		BlockFilterList: DeepCopyExprList(node.BlockFilterList),
+		GroupBy:         DeepCopyExprList(node.GroupBy),
+		GroupingFlag:    slices.Clone(node.GroupingFlag),
+		AggList:         DeepCopyExprList(node.AggList),
+		OrderBy:         DeepCopyOrderBySpecList(node.OrderBy),
+		Interval:        DeepCopyExpr(node.Interval),
+		Sliding:         DeepCopyExpr(node.Sliding),
+		Timestamp:       DeepCopyExpr(node.Timestamp),
+		WEnd:            DeepCopyExpr(node.WEnd),
+		FillType:        node.FillType,
+		FillVal:         DeepCopyExprList(node.FillVal),
+		GapFillMode:     node.GapFillMode,
+
+		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
+		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),
+
 		DeleteCtx:        DeepCopyDeleteCtx(node.DeleteCtx),
 		TblFuncExprList:  DeepCopyExprList(node.TblFuncExprList),
 		ClusterTable:     DeepCopyClusterTable(node.GetClusterTable()),
@@ -224,7 +236,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		LockTargets:      make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:      DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:            node.IsEnd,
-		ExternScan:       node.ExternScan,
+		ExternScan:       deepCopyExternScan(node.ExternScan),
 		SampleFunc:       DeepCopySampleFuncSpec(node.SampleFunc),
 		OnUpdateExprs:    DeepCopyExprList(node.OnUpdateExprs),
 		DedupColName:     node.DedupColName,
@@ -279,6 +291,13 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	}
 
 	return newNode
+}
+
+func deepCopyExternScan(scan *plan.ExternScan) *plan.ExternScan {
+	if scan == nil {
+		return nil
+	}
+	return proto.Clone(scan).(*plan.ExternScan)
 }
 
 func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReaderParam {

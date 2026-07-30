@@ -197,6 +197,22 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleShowIcebergTables(execCtx.reqCtx, ses, st); err != nil {
 			return
 		}
+	case *tree.CreateMongoDBConnection:
+		if err = handleCreateMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.AlterMongoDBConnection:
+		if err = handleAlterMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.DropMongoDBConnection:
+		if err = handleDropMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowMongoDBConnections:
+		if err = handleShowMongoDBConnections(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
 	case *tree.Deallocate:
 		ses.EnterFPrint(FPDeallocate)
 		defer ses.ExitFPrint(FPDeallocate)

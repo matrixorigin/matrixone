@@ -449,6 +449,18 @@ func ISCPExecutorInjected() (string, bool) {
 	return sarg, injected
 }
 
+// ISCPExecutorFaultWaitKey identifies the optional phase barrier for one
+// executor fault. Tests install the barrier before enabling the matching fault,
+// then observe its waiter to prove that the asynchronous worker reached the
+// intended failure point.
+func ISCPExecutorFaultWaitKey(msg string) string {
+	return FJ_CDCExecutor + ":" + msg
+}
+
+func WaitForISCPExecutorFault(_ context.Context, msg string) {
+	WaitInjected(ISCPExecutorFaultWaitKey(msg))
+}
+
 func CDCScanTableInjected() (string, bool) {
 	_, sarg, injected := fault.TriggerFault(FJ_CDCScanTable)
 	return sarg, injected

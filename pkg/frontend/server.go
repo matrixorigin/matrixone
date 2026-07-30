@@ -558,6 +558,19 @@ func SetPUForExternalUT(service string, pu *config.ParameterUnit) {
 	setPu(service, pu)
 }
 
+func getPuIfPresent(service string) *config.ParameterUnit {
+	vars := getServerLevelVars(service)
+	if vars == nil {
+		return nil
+	}
+	value := vars.Pu.Load()
+	if value == nil {
+		return nil
+	}
+	pu, _ := value.(*config.ParameterUnit)
+	return pu
+}
+
 func getPu(service string) *config.ParameterUnit {
 	return getServerLevelVars(service).Pu.Load().(*config.ParameterUnit)
 }

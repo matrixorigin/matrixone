@@ -266,6 +266,15 @@ func (b *HavingBinder) remapAggToTimeWindowCacheAgg(expr *Expr) (*Expr, error) {
 		expr.Typ.Id = int32(fGet.GetReturnType().Oid)
 		expr.Typ.Width = fGet.GetReturnType().Width
 		expr.Typ.Scale = fGet.GetReturnType().Scale
+	case function.MAX_BY, function.MAX_BY_NON_NULL:
+		if b.ctx == nil || !b.ctx.explicitSliding {
+			return expr, nil
+		}
+		// A sliding window combines winners from several child buckets. The
+		// value alone is not a mergeable max_by state because its order/tie
+		// columns have already been consumed by the child aggregate. Refuse the
+		// query until a typed cache/result pair (like AVG_TW_*) is available.
+		return nil, moerr.NewNotSupported(b.GetContext(), "max_by aggregates in a sliding time window")
 	}
 	return expr, nil
 }
@@ -287,7 +296,11 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 		expr.Typ.Id = int32(fGet.GetReturnType().Oid)
 		expr.Typ.Width = fGet.GetReturnType().Width
 		expr.Typ.Scale = fGet.GetReturnType().Scale
-	case function.COUNT:
+	case function.COUNT, function.STARCOUNT:
+		// COUNT(*) is bound as STARCOUNT in the child Aggregate.  A GAPFILL
+		// tumbling window consumes one partial row per existing bucket, so the
+		// second stage must merge that partial count instead of counting the
+		// partial row itself (which would return 1 for every non-empty bucket).
 		fGet, err := function.GetFunctionByName(b.GetContext(), "sum", []types.Type{types.T_int64.ToType()})
 		if err != nil {
 			return nil, err
@@ -305,6 +318,23 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 		}
 		obj.Obj = fGet.GetEncodedOverloadID()
 		obj.ObjName = "avg_tw_result"
+		expr.Typ.Id = int32(fGet.GetReturnType().Oid)
+		expr.Typ.Width = fGet.GetReturnType().Width
+		expr.Typ.Scale = fGet.GetReturnType().Scale
+	case function.MAX_BY, function.MAX_BY_NON_NULL:
+		// For a tumbling window the child Aggregate has already produced exactly
+		// one fully merged winner for each (partition, bucket). TimeWin either
+		// forwards that row or runs the GAPFILL state machine over that one row,
+		// so the outer aggregate is an identity operation. Retaining max_by here
+		// would construct a one-argument max_by and fail during Prepare.
+		arg := expr.GetF().Args[0]
+		typ := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+		fGet, err := function.GetFunctionByName(b.GetContext(), "any_value", []types.Type{typ})
+		if err != nil {
+			return nil, err
+		}
+		obj.Obj = fGet.GetEncodedOverloadID()
+		obj.ObjName = "any_value"
 		expr.Typ.Id = int32(fGet.GetReturnType().Oid)
 		expr.Typ.Width = fGet.GetReturnType().Width
 		expr.Typ.Scale = fGet.GetReturnType().Scale

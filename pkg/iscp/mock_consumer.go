@@ -220,12 +220,14 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 	}
 
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "consume" {
+		objectio.WaitForISCPExecutorFault(ctx, msg)
 		return moerr.NewInternalErrorNoCtx(msg)
 	}
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "consumeWithJobName") {
 		strs := strings.Split(msg, ":")
 		for i := 1; i < len(strs); i++ {
 			if s.jobName == strs[i] {
+				objectio.WaitForISCPExecutorFault(ctx, msg)
 				return moerr.NewInternalErrorNoCtx(strs[0])
 			}
 		}

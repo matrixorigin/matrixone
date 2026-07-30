@@ -769,9 +769,12 @@ const (
 	JSON_MERGE_PATCH             = 547
 	JSON_MERGE_PRESERVE          = 548
 
+	MAX_BY          = 559
+	MAX_BY_NON_NULL = 560
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 549
+	FUNCTION_END_NUMBER = 561
 )
 
 // functionIdRegister is what function we have registered already.
@@ -866,6 +869,8 @@ var functionIdRegister = map[string]int32{
 	"hll_merge_agg":         HLL_MERGE_AGG,
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
+	"max_by":                MAX_BY,
+	"max_by_non_null":       MAX_BY_NON_NULL,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,

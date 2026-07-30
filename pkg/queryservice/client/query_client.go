@@ -61,6 +61,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_MinTimestamp:             defines.MORPCVersion4,
 	pb.CmdMethod_CtlPrefetchOnSubscribed:  defines.MORPCVersion4,
 	pb.CmdMethod_IcebergCacheInvalidate:   defines.MORPCVersion4,
+	pb.CmdMethod_MongoDBClientRetire:      defines.MORPCVersion5,
 }
 
 type queryClient struct {

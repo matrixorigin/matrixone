@@ -83,6 +83,16 @@ func RegisterMax(id int64) {
 	AggIdOfMax = id
 }
 
+func RegisterMaxBy(id int64) {
+	specialAgg[id] = true
+	AggIdOfMaxBy = id
+}
+
+func RegisterMaxByNonNull(id int64) {
+	specialAgg[id] = true
+	AggIdOfMaxByNonNull = id
+}
+
 func RegisterSum(id int64) {
 	specialAgg[id] = true
 	AggIdOfSum = id
@@ -234,6 +244,8 @@ var (
 	AggIdOfAvgTwResult     = int64(-34)
 	AggIdOfHllAdd          = int64(-35)
 	AggIdOfHllMerge        = int64(-36)
+	AggIdOfMaxBy           = int64(-37)
+	AggIdOfMaxByNonNull    = int64(-38)
 	groupConcatSep         = ","
 	getGroupConcatRet      = func(args ...types.Type) types.Type {
 		for _, p := range args {

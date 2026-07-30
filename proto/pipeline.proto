@@ -584,6 +584,7 @@ message Instruction {
   MultiUpdate multi_update = 52;
   PostDml post_dml = 53;
   int64 spill_mem = 54;
+  plan.MongoScan mongodb_scan = 55;
 }
 
 message AnalysisList {

@@ -893,20 +893,20 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 	h := newTableStreamHarness(t)
 	defer h.Close()
 
-	tail := createTestBatch(t, h.MP(), types.BuildTS(10, 0), []int32{1})
-	h.SetCollectBatches([]changeBatch{
-		{insert: tail, hint: engine.ChangesHandle_Tail_done},
-		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	ready := make(chan struct{})
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		return &blockingChangesHandle{ready: ready}, nil
 	})
 
 	ar := h.NewActiveRoutine()
 	errCh, done := h.RunStreamAsync(ar)
 
-	require.Eventually(t, func() bool {
-		return len(h.CollectCallsSnapshot()) > 0
-	}, time.Second, 10*time.Millisecond, "stream should begin collecting before cancellation")
-
-	opsBefore := h.Sinker().opsSnapshot()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("collector did not block before context cancellation")
+	}
+	require.Empty(t, h.Sinker().opsSnapshot(), "blocked collector should not produce sink operations")
 
 	h.Cancel()
 	done()
@@ -923,7 +923,7 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 	}
 
 	require.False(t, h.Stream().GetRetryable(), "cancel should not mark stream retryable")
-	require.Equal(t, opsBefore, h.Sinker().opsSnapshot(), "cancel should not produce additional sink operations")
+	require.Empty(t, h.Sinker().opsSnapshot(), "cancel should not produce sink or cleanup operations")
 }
 
 // Test ActiveRoutine Pause

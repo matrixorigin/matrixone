@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,7 +41,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_VALUE,
 				FillVal: []*plan.Expr{
 					{
@@ -70,7 +67,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_PREV,
 				FillVal: []*plan.Expr{
 					{
@@ -97,7 +93,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_NONE,
 				FillVal: []*plan.Expr{
 					{
@@ -125,7 +120,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_NEXT,
 				FillVal: []*plan.Expr{
 					{
@@ -152,7 +146,6 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
-				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_LINEAR,
 				FillVal: []*plan.Expr{
 					{
@@ -234,10 +227,10 @@ func TestProcessLinearDecimal128(t *testing.T) {
 	arg := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
 	ctr := &arg.ctr
 	ctr.bats = []*batch.Batch{bat}
-	ctr.doneIdx = make([]int, 1)
-	ctr.endBatch = make([]bool, 1)
+	ctr.linRun = make([][]fillCoord, 1)
+	ctr.linPre = []fillCoord{{seq: -1, row: -1}}
 
-	require.NoError(t, processLinearCol(ctr, arg, proc, 0, nil))
+	require.NoError(t, ctr.consumeLinear(arg, bat, 0, proc))
 	require.False(t, vec.IsNull(1))
 	require.Equal(t, types.Decimal128FromInt64(200), vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 1))
 }
@@ -1151,17 +1144,13 @@ func TestLinearFillValueUsesExpressionForNonDecimal128(t *testing.T) {
 	defer resultVec.Free(proc.Mp())
 
 	ctr := &container{
-		bats:   []*batch.Batch{input},
-		preIdx: 0,
-		preRow: 0,
-		curIdx: 0,
-		curRow: 2,
+		bats: []*batch.Batch{input},
 		exes: []colexec.ExpressionExecutor{
 			&fillStubExpressionExecutor{result: resultVec},
 		},
 	}
 
-	vec, owned, err := linearFillValue(ctr, proc, 0)
+	vec, owned, err := linearFillValue(ctr, proc, 0, input, 0, input, 2)
 	require.NoError(t, err)
 	require.False(t, owned)
 	require.Same(t, resultVec, vec)

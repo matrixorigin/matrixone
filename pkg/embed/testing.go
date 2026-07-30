@@ -17,6 +17,9 @@ package embed
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
+
 	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -24,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
-	"sync"
 )
 
 var (
@@ -35,6 +37,41 @@ var (
 
 func init() {
 	stats.SkipPanicONDuplicate.Store(true)
+}
+
+const (
+	basicClusterHAKeeperHeartbeatTimeout = 30 * time.Second
+	basicClusterHAKeeperStoreTimeout     = 60 * time.Second
+)
+
+func configureBaseClusterService(svc ServiceOperator) {
+	svc.Adjust(func(config *ServiceConfig) {
+		switch svc.ServiceType() {
+		case metadata.ServiceType_CN:
+			config.CN.LockService.MaxFixedSliceSize = 10001
+			config.CN.LockService.MaxLockRowCount = 10000
+			config.CN.Frontend.SkipCheckUser = true
+			config.CN.Frontend.Iceberg.Enable = true
+			config.CN.Frontend.Iceberg.EnableWrite = true
+			config.CN.Frontend.Iceberg.EnableDelete = true
+			config.CN.Frontend.Iceberg.EnableDML = true
+			config.CN.Frontend.Iceberg.EnableMaintenance = true
+			config.CN.HAKeeper.HeatbeatTimeout.Duration = basicClusterHAKeeperHeartbeatTimeout
+		case metadata.ServiceType_TN:
+			if config.TN_please_use_getTNServiceConfig != nil {
+				config.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration =
+					basicClusterHAKeeperHeartbeatTimeout
+			}
+			if config.TNCompatible != nil &&
+				config.TNCompatible != config.TN_please_use_getTNServiceConfig {
+				config.TNCompatible.HAKeeper.HeatbeatTimeout.Duration =
+					basicClusterHAKeeperHeartbeatTimeout
+			}
+		case metadata.ServiceType_LOG:
+			config.LogService.HAKeeperConfig.TNStoreTimeout.Duration = basicClusterHAKeeperStoreTimeout
+			config.LogService.HAKeeperConfig.CNStoreTimeout.Duration = basicClusterHAKeeperStoreTimeout
+		}
+	})
 }
 
 // RunBaseClusterTests starting an integration test for a 1 log, 1tn, 3cn base cluster is very slow
@@ -55,22 +92,7 @@ func RunBaseClusterTests(
 			c, err = NewCluster(
 				WithCNCount(3),
 				WithTesting(),
-				WithPreStart(func(svc ServiceOperator) {
-					if svc.ServiceType() == metadata.ServiceType_CN {
-						svc.Adjust(
-							func(config *ServiceConfig) {
-								config.CN.LockService.MaxFixedSliceSize = 10001
-								config.CN.LockService.MaxLockRowCount = 10000
-								config.CN.Frontend.SkipCheckUser = true
-								config.CN.Frontend.Iceberg.Enable = true
-								config.CN.Frontend.Iceberg.EnableWrite = true
-								config.CN.Frontend.Iceberg.EnableDelete = true
-								config.CN.Frontend.Iceberg.EnableDML = true
-								config.CN.Frontend.Iceberg.EnableMaintenance = true
-							},
-						)
-					}
-				}),
+				WithPreStart(configureBaseClusterService),
 			)
 			if err != nil {
 				return

@@ -218,6 +218,7 @@ func ExecuteIteration(
 	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
 		err = moerr.NewInternalErrorNoCtx(msg)
+		objectio.WaitForISCPExecutorFault(ctx, msg)
 	}
 	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "iteration:") {
@@ -388,6 +389,7 @@ func runISCPTaskIterationConsumers(
 			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
 				err = moerr.NewInternalErrorNoCtx(msg)
+				objectio.WaitForISCPExecutorFault(ctxWithCancel, msg)
 			}
 			if err != nil {
 				jobNames := ""

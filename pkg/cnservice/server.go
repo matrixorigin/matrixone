@@ -62,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -124,6 +125,9 @@ func NewService(
 	//set frontend parameters
 	cfg.Frontend.SetDefaultValues()
 	if err := cfg.Frontend.Iceberg.Validate(ctx); err != nil {
+		return nil, err
+	}
+	if err := cfg.Frontend.MongoDB.Validate(ctx); err != nil {
 		return nil, err
 	}
 	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
@@ -421,44 +425,51 @@ func (s *service) Close() error {
 	defer logutil.LogClose(s.logger, "cnservice")()
 
 	s.stopper.Stop()
-	if err := s.bootstrapService.Close(); err != nil {
-		return err
-	}
-	if err := s.stopFrontend(); err != nil {
-		return err
-	}
-	if err := s.stopTask(); err != nil {
-		return err
-	}
-	if err := s.stopRPCs(); err != nil {
-		return err
-	}
-	// stop I/O pipeline
-	ioutil.Stop(s.cfg.UUID)
 
-	if s.gossipNode != nil {
-		if err := s.gossipNode.Leave(time.Second); err != nil {
-			return err
-		}
-	}
+	return closeCNServiceSteps(
+		s.bootstrapService.Close,
+		s.stopFrontend,
+		// Frontend shutdown stops accepting interactive work, while stopTask
+		// drains scheduled ingestion statements. Only after both producers have
+		// stopped may the MongoDB pool disconnect clients still leased by a
+		// MongoScan operator.
+		s.stopTask,
+		s.closeMongoDBRuntime,
+		s.stopRPCs,
+		func() error {
+			// stop I/O pipeline
+			ioutil.Stop(s.cfg.UUID)
+			return nil
+		},
+		func() error {
+			if s.gossipNode != nil {
+				return s.gossipNode.Leave(time.Second)
+			}
+			return nil
+		},
+		s.server.Close,
+		s.lockService.Close,
+		func() error {
+			if s.shardService != nil {
+				return s.shardService.Close()
+			}
+			return nil
+		},
+		func() error {
+			if s.pipelines.client != nil {
+				return s.pipelines.client.Close()
+			}
+			return nil
+		},
+	)
+}
 
-	if err := s.server.Close(); err != nil {
-		return err
+func closeCNServiceSteps(steps ...func() error) error {
+	var err error
+	for _, step := range steps {
+		err = errors.Join(err, step())
 	}
-	if err := s.lockService.Close(); err != nil {
-		return err
-	}
-	if s.shardService != nil {
-		if err := s.shardService.Close(); err != nil {
-			return err
-		}
-	}
-	if s.pipelines.client != nil {
-		if err := s.pipelines.client.Close(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return err
 }
 
 // ID implements the frontend.BaseService interface.
@@ -1069,6 +1080,59 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s.pu.GetTaskService(),
 	)
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
+	s.initMongoDBRuntime()
+}
+
+func (s *service) initMongoDBRuntime() {
+	parameters := s.pu.SV.MongoDB
+	allowedAccounts := make(map[uint32]struct{}, len(parameters.AllowedAccounts))
+	for _, accountID := range parameters.AllowedAccounts {
+		allowedAccounts[accountID] = struct{}{}
+	}
+	config := sqlmongodb.RuntimeConfig{
+		Enable: parameters.Enable, EnablePerAccount: parameters.EnablePerAccount,
+		AllowedAccounts: allowedAccounts, AllowLoopback: parameters.AllowLoopback,
+		AllowedHostSuffixes:    append([]string(nil), parameters.AllowedHostSuffixes...),
+		AllowedCIDRs:           append([]string(nil), parameters.AllowedCIDRs...),
+		ConnectTimeout:         parameters.ConnectTimeout.Duration,
+		ServerSelectionTimeout: parameters.ServerSelectionTimeout.Duration,
+		SocketTimeout:          parameters.SocketTimeout.Duration,
+		MaxPoolSize:            parameters.MaxPoolSize, MinPoolSize: parameters.MinPoolSize,
+		MaxConnecting: parameters.MaxConnecting, MaxCachedClients: parameters.MaxCachedClients,
+		BatchRows:     parameters.BatchRows,
+		MaxBatchBytes: parameters.MaxBatchBytes, MaxValueBytes: parameters.MaxValueBytes,
+		MaxScanRows: parameters.MaxScanRows, MaxScanBytes: parameters.MaxScanBytes,
+		MaxConversionErrors: parameters.MaxConversionErrors, MaxConversionErrorRate: parameters.MaxConversionErrorRate,
+		MaxSourceConcurrency: parameters.MaxSourceConcurrency,
+	}
+	dependencies := &sqlmongodb.RuntimeDependencies{
+		Config:      config,
+		Connections: sqlmongodb.CatalogConnectionResolver{Executor: s.sqlExecutor},
+		Mappings:    sqlmongodb.CatalogMappingResolver{Executor: s.sqlExecutor},
+		Secrets:     sqlmongodb.EnvSecretResolver{},
+		Pool: sqlmongodb.NewValidatedClientPool(
+			sqlmongodb.OfficialClientFactory{},
+			sqlmongodb.CatalogConnectionResolver{Executor: s.sqlExecutor},
+			config.MaxCachedClients,
+		),
+		Limiter: sqlmongodb.NewSourceLimiter(config.MaxSourceConcurrency),
+	}
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(sqlmongodb.RuntimeDependenciesKey, dependencies)
+}
+
+func (s *service) closeMongoDBRuntime() error {
+	rt := runtime.ServiceRuntime(s.cfg.UUID)
+	value, ok := rt.GetGlobalVariables(sqlmongodb.RuntimeDependenciesKey)
+	if !ok {
+		return nil
+	}
+	dependencies, ok := value.(*sqlmongodb.RuntimeDependencies)
+	if !ok || dependencies == nil || dependencies.Pool == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseShutdown)
+	defer cancel()
+	return dependencies.Pool.Close(ctx)
 }
 
 func (s *service) initIncrService() {

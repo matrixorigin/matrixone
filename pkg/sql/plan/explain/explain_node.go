@@ -303,6 +303,26 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		}
 		lines = append(lines, icebergInfo)
 	}
+	if ndesc.Node.NodeType == plan.Node_EXTERNAL_SCAN &&
+		ndesc.Node.GetExternScan() != nil && ndesc.Node.GetExternScan().GetMongodbScan() != nil {
+		scan := ndesc.Node.GetExternScan().GetMongodbScan()
+		pushed := 0
+		var countPredicate func(*plan.MongoPredicate)
+		countPredicate = func(predicate *plan.MongoPredicate) {
+			if predicate == nil {
+				return
+			}
+			if predicate.Op != plan.MongoPredicateOp_MONGO_PREDICATE_AND {
+				pushed++
+			}
+			for _, child := range predicate.Children {
+				countPredicate(child)
+			}
+		}
+		countPredicate(scan.PushedPredicate)
+		lines = append(lines, fmt.Sprintf("MongoDB Scan: table=%d columns=%d pushed=%d residual=%s",
+			scan.TableId, len(scan.Columns), pushed, scan.ResidualFilterDigest))
+	}
 
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
@@ -347,6 +367,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			return nil, err
 		}
 		lines = append(lines, groupByInfo)
+	}
+	if ndesc.Node.NodeType == plan.Node_TIME_WINDOW && ndesc.Node.GapFillMode == plan.Node_GAP_FILL_PARTITION {
+		lines = append(lines, "Gap Fill: Partition")
 	}
 
 	if ndesc.Node.NodeType == plan.Node_FILL {

@@ -170,6 +170,12 @@ func makeSpecialAggExec(
 	id int64, isDistinct bool, params ...types.Type,
 ) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
+		if id == AggIdOfMaxBy && len(params) != 3 {
+			return nil, true, moerr.NewInternalErrorNoCtx("max_by requires value, order, and tie arguments")
+		}
+		if id == AggIdOfMaxByNonNull && len(params) != 3 {
+			return nil, true, moerr.NewInternalErrorNoCtx("max_by_non_null requires value, order, and tie arguments")
+		}
 		switch id {
 		case AggIdOfBitmapConstruct:
 			return makeBmpConstructExec(mp, id, params[0]), true, nil
@@ -195,6 +201,10 @@ func makeSpecialAggExec(
 			return makeMinMaxExec(mp, id, true, params[0]), true, nil
 		case AggIdOfMax:
 			return makeMinMaxExec(mp, id, false, params[0]), true, nil
+		case AggIdOfMaxBy:
+			return makeMaxByExec(mp, id, false, params), true, nil
+		case AggIdOfMaxByNonNull:
+			return makeMaxByExec(mp, id, true, params), true, nil
 		case AggIdOfSum:
 			return makeSumAvgExec(mp, true, id, isDistinct, params[0]), true, nil
 		case AggIdOfAvg:

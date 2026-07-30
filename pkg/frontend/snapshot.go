@@ -588,12 +588,13 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	var restoreAccount uint32
 	var toAccountId uint32
+	var retiredMongoDBAccountIDs []uint32
 	// restore as a txn
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return stats, err
 	}
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
 
 	// check snapshot
@@ -623,7 +624,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 		// restore cluster
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
-		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore, &retiredMongoDBAccountIDs); err != nil {
 			return
 		}
 
@@ -648,6 +649,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		if err != nil {
 			return stats, err
 		}
+		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 		return
 	}
 
@@ -706,6 +708,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			nil); err != nil {
 			return stats, err
 		}
+		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 
@@ -2513,6 +2516,7 @@ func restoreToCluster(ctx context.Context,
 	snapshotName string,
 	snapshotTs int64,
 	subDbToRestore map[string]*subDbRestoreRecord,
+	retiredMongoDBAccountIDs *[]uint32,
 ) (err error) {
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
 
@@ -2568,6 +2572,7 @@ func restoreToCluster(ctx context.Context,
 		if err != nil {
 			return err
 		}
+		markMongoDBAccountForRetirement(retiredMongoDBAccountIDs, uint32(account.accountId))
 	}
 
 	// get restore accounts exists in snapshot
@@ -2586,6 +2591,7 @@ func restoreToCluster(ctx context.Context,
 		if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, isRestoreToCluster, isNeedToCleanToDatabase); err != nil {
 			return err
 		}
+		markMongoDBAccountForRetirement(retiredMongoDBAccountIDs, newAccountId)
 
 		getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] restore account: %v, account id: %d success", snapshotName, account.accountName, account.accountId))
 	}

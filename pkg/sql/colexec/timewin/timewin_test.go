@@ -191,9 +191,13 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 	arg.ctr.status = flush
 	arg.ctr.colCnt = 1
 	arg.ctr.aggs = []aggexec.AggFuncExec{agg}
+	arg.ctr.wStart = make([]types.Datetime, rows)
+	arg.ctr.wEnd = make([]types.Datetime, rows)
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
+	require.Empty(t, arg.ctr.wStart)
+	require.Empty(t, arg.ctr.wEnd)
 	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
@@ -209,10 +213,14 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 	// released when the second replacement is installed.
 	require.NoError(t, arg.ctr.aggs[0].Fill(0, 0, []*vector.Vector{input}))
 	arg.ctr.status = flush
+	arg.ctr.wStart = make([]types.Datetime, maxTimeWindowRows+1)
+	arg.ctr.wEnd = make([]types.Datetime, maxTimeWindowRows+1)
 	secondResult, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, secondResult.Batch)
 	require.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](secondResult.Batch.Vecs[0]))
+	require.Empty(t, arg.ctr.wStart)
+	require.Empty(t, arg.ctr.wEnd)
 
 	arg.Free(proc, false, nil)
 	input.Free(proc.Mp())

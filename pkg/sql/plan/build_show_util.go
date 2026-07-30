@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -48,6 +49,20 @@ func ConstructCreateTableSQL(
 		rewrite string
 	}, 0)
 	checkDefs := extractTopLevelCheckDefs(tableDef)
+	var mongoEnvelope sqlmongodb.CreateSQLEnvelope
+	mongoColumns := make(map[string]sqlmongodb.ColumnMapping)
+	if tableDef.TableType == catalog.SystemExternalRel {
+		var found bool
+		mongoEnvelope, found, err = sqlmongodb.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql)
+		if err != nil {
+			return "", nil, err
+		}
+		if found {
+			for _, column := range mongoEnvelope.Columns {
+				mongoColumns[strings.ToLower(column.Name)] = column
+			}
+		}
+	}
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
@@ -152,6 +167,13 @@ func ConstructCreateTableSQL(
 
 		if col.Comment != "" {
 			buf.WriteString(" COMMENT '" + col.Comment + "'")
+		}
+		if mapping, ok := mongoColumns[strings.ToLower(col.Name)]; ok {
+			buf.WriteString(" MONGODB_PATH '")
+			buf.WriteString(formatStrInSingleQuotes(mapping.Path))
+			buf.WriteString("' MONGODB_CONVERT '")
+			buf.WriteString(formatStrInSingleQuotes(mapping.Conversion))
+			buf.WriteString("'")
 		}
 
 		createStr += buf.String()
@@ -588,6 +610,14 @@ func ConstructCreateTableSQL(
 			}
 			return createStr, stmt, err
 		}
+		if len(mongoColumns) > 0 {
+			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmt(ctx, createStr)
+			}
+			return createStr, stmt, err
+		}
 
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
@@ -1008,6 +1038,40 @@ func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) st
 	}
 	var builder strings.Builder
 	builder.WriteString(" ENGINE = ICEBERG WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotes(option.value))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "connection", value: env.Connection},
+		{key: "database", value: env.Database},
+		{key: "collection", value: env.Collection},
+		{key: "schema_mode", value: env.SchemaMode},
+		{key: "conversion_mode", value: env.ConversionMode},
+		{key: "max_parallelism", value: fmt.Sprintf("%d", env.MaxParallelism)},
+	}
+	if env.SplitKey != "" {
+		options = append(options, struct {
+			key   string
+			value string
+		}{key: "split_key", value: env.SplitKey})
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = MONGODB WITH (")
 	for i, option := range options {
 		if i > 0 {
 			builder.WriteString(", ")

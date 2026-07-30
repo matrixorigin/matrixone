@@ -51,6 +51,7 @@ func init() {
 	initProxyMetrics()
 	initFrontendMetrics()
 	initPipelineMetrics()
+	initMongoDBMetrics()
 	initScheduleMetrics()
 	initLogServiceMetrics()
 	initShardingMetrics()
@@ -281,6 +282,22 @@ func initPipelineMetrics() {
 	registry.MustRegister(PipelineStreamFinishDurationHistogram)
 	registry.MustRegister(PipelineRemoteReceiverWaitDurationHistogram)
 	registry.MustRegister(PipelineRemoteNotifyRetryCounter)
+}
+
+func initMongoDBMetrics() {
+	registry.MustRegister(MongoDBScanDocumentsCounter)
+	registry.MustRegister(MongoDBScanRawBytesCounter)
+	registry.MustRegister(MongoDBConversionErrorCounter)
+	registry.MustRegister(MongoDBCursorEventCounter)
+	registry.MustRegister(MongoDBPhaseDurationHistogram)
+	registry.MustRegister(MongoDBDriverCommandCounter)
+	registry.MustRegister(MongoDBDriverCommandDurationHistogram)
+	registry.MustRegister(MongoDBRetryableFindCounter)
+	registry.MustRegister(MongoDBPoolEventCounter)
+	registry.MustRegister(MongoDBPoolEventDurationHistogram)
+	registry.MustRegister(MongoDBPoolCheckedOutGauge)
+	registry.MustRegister(MongoDBSelectedServerRoleCounter)
+	registry.MustRegister(MongoDBServerHeartbeatDurationHistogram)
 }
 
 func initLogServiceMetrics() {

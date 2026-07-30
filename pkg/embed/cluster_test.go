@@ -149,6 +149,38 @@ func TestBaseClusterOnlyStartOnce(t *testing.T) {
 	require.Equal(t, id1, id2)
 }
 
+func TestBaseClusterHAKeeperTimeouts(t *testing.T) {
+	require.NoError(t, RunBaseClusterTests(func(c Cluster) {
+		var cnCount, tnCount, logCount int
+		c.ForeachServices(func(svc ServiceOperator) bool {
+			cfg := svc.GetServiceConfig()
+			switch svc.ServiceType() {
+			case metadata.ServiceType_CN:
+				cnCount++
+				require.Equal(t, basicClusterHAKeeperHeartbeatTimeout, cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+			case metadata.ServiceType_TN:
+				tnCount++
+				require.NotNil(t, cfg.TN_please_use_getTNServiceConfig)
+				require.Equal(
+					t,
+					basicClusterHAKeeperHeartbeatTimeout,
+					cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration,
+				)
+			case metadata.ServiceType_LOG:
+				logCount++
+				require.Equal(t, basicClusterHAKeeperStoreTimeout, cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
+				require.Equal(t, basicClusterHAKeeperStoreTimeout, cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration)
+			}
+			return true
+		})
+
+		require.Equal(t, 3, cnCount)
+		require.Equal(t, 1, tnCount)
+		require.Equal(t, 1, logCount)
+		require.Less(t, basicClusterHAKeeperHeartbeatTimeout, basicClusterHAKeeperStoreTimeout)
+	}))
+}
+
 func TestRestartCN(t *testing.T) {
 	t.SkipNow()
 	RunBaseClusterTests(
