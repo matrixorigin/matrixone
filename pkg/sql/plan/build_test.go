@@ -1682,6 +1682,73 @@ func TestDerivedTableSqlBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestDerivedTableAliasValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		mysqlCode uint16
+		sqlState  string
+		message   string
+	}{
+		{
+			name:      "missing alias",
+			sql:       "select * from (select c_custkey from CUSTOMER)",
+			mysqlCode: moerr.ER_DERIVED_MUST_HAVE_ALIAS,
+			sqlState:  "42000",
+			message:   "Every derived table must have its own alias",
+		},
+		{
+			name:      "missing alias for values",
+			sql:       "select * from (values row(1))",
+			mysqlCode: moerr.ER_DERIVED_MUST_HAVE_ALIAS,
+			sqlState:  "42000",
+			message:   "Every derived table must have its own alias",
+		},
+		{
+			name:      "missing alias through parentheses",
+			sql:       "select * from ((select c_custkey from CUSTOMER))",
+			mysqlCode: moerr.ER_DERIVED_MUST_HAVE_ALIAS,
+			sqlState:  "42000",
+			message:   "Every derived table must have its own alias",
+		},
+		{
+			name:      "too few column aliases",
+			sql:       "select * from (select c_custkey, c_name from CUSTOMER) as d(a)",
+			mysqlCode: moerr.ER_VIEW_WRONG_LIST,
+			sqlState:  "HY000",
+			message:   "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts",
+		},
+		{
+			name:      "too many column aliases",
+			sql:       "select * from (select c_custkey from CUSTOMER) as d(a, b)",
+			mysqlCode: moerr.ER_VIEW_WRONG_LIST,
+			sqlState:  "HY000",
+			message:   "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts",
+		},
+		{
+			name:      "too few column aliases inside cte body",
+			sql:       "with c as (select * from (select c_custkey, c_name from CUSTOMER) as d(a)) select * from c",
+			mysqlCode: moerr.ER_VIEW_WRONG_LIST,
+			sqlState:  "HY000",
+			message:   "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			_, err := runOneStmt(mock, t, test.sql)
+			require.Error(t, err)
+
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, test.mysqlCode, moErr.MySQLCode())
+			require.Equal(t, test.sqlState, moErr.SqlState())
+			require.Equal(t, test.message, moErr.Error())
+		})
+	}
+}
+
 // test derived table plan building
 func TestUnionSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
@@ -3440,6 +3507,10 @@ func TestInsertOnDupSelfReferFKUsesModernPath(t *testing.T) {
 	}
 	assert.True(t, hasMultiUpdate, "self-refer FK ODKU plan should contain MULTI_UPDATE node")
 	assert.NotEmpty(t, query.DetectSqls, "self-refer FK insert should generate FK constraint DetectSqls")
+	for _, detectSQL := range query.DetectSqls {
+		assert.Contains(t, detectSQL, ") as __mo_fk_check_source",
+			"generated FK constraint SQL must alias its derived table")
+	}
 }
 
 func TestInsertOnDupRealPKUniqueKeyConflictUpdates(t *testing.T) {

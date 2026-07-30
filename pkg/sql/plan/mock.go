@@ -1193,7 +1193,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		isView: true,
 		viewCfg: ViewCfg{
-			sql: "create view v2 as\nwith \n\tv2 as (\n\t\tselect a from t1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from v2\n\t)\n",
+			sql: "create view v2 as\nwith \n\tv2 as (\n\t\tselect a from t1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from v2\n\t) as v2_sub\n",
 			db:  "cte_test",
 		},
 	}
@@ -1362,7 +1362,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		isView: true,
 		viewCfg: ViewCfg{
-			sql: "create view vv2 as\nwith \n\tvv2 as (\n\t\tselect a from vt1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from vv2\n\t)",
+			sql: "create view vv2 as\nwith \n\tvv2 as (\n\t\tselect a from vt1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from vv2\n\t) as vv2_sub",
 			db:  "cte_test2",
 		},
 	}
