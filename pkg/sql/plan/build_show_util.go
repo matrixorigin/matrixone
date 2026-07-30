@@ -797,10 +797,10 @@ func isTopLevelCheckDef(def string) bool {
 
 	trimmed := strings.TrimSpace(def)
 	upper := strings.ToUpper(trimmed)
-	if strings.HasPrefix(upper, "CHECK") {
+	if hasKeywordAt(upper, "CHECK", 0) {
 		return true
 	}
-	if !strings.HasPrefix(upper, "CONSTRAINT") {
+	if !hasKeywordAt(upper, "CONSTRAINT", 0) {
 		return false
 	}
 	return containsKeywordOutsideQuotes(trimmed, "CHECK")
@@ -842,7 +842,7 @@ func hasKeywordAt(s string, keyword string, pos int) bool {
 }
 
 func isIdentChar(ch byte) bool {
-	return ch == '_' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
+	return ch == '_' || ch == '$' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
 }
 
 func findTopLevelByte(s string, target byte) int {

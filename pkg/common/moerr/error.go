@@ -96,6 +96,9 @@ const (
 	ErrUnknownStmtHandler   uint16 = 20317
 	ErrViewWrongList        uint16 = 20318
 	ErrWrongArguments       uint16 = 20319
+	ErrDerivedMustHaveAlias uint16 = 20320
+	ErrWrongUsage           uint16 = 20321
+	ErrUpdateTableUsed      uint16 = 20322
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -418,6 +421,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrUnknownStmtHandler:   {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
 	ErrViewWrongList:        {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
 	ErrWrongArguments:       {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
+	ErrDerivedMustHaveAlias: {ER_DERIVED_MUST_HAVE_ALIAS, []string{"42000"}, "Every derived table must have its own alias"},
+	ErrWrongUsage:           {ER_WRONG_USAGE, []string{MySQLDefaultSqlState}, "Incorrect usage of %s and %s"},
+	ErrUpdateTableUsed:      {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -998,6 +1004,14 @@ func NewWrongArguments(ctx context.Context, function string) *Error {
 	return newError(ctx, ErrWrongArguments, function)
 }
 
+func NewWrongUsage(ctx context.Context, first, second string) *Error {
+	return newError(ctx, ErrWrongUsage, first, second)
+}
+
+func NewUpdateTableUsed(ctx context.Context, table string) *Error {
+	return newError(ctx, ErrUpdateTableUsed, table)
+}
+
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {
 	return newError(ctx, ErrInvalidTypeForJSON, argument, function)
 }
@@ -1471,6 +1485,10 @@ func NewOperandColumns(ctx context.Context, columns int) *Error {
 
 func NewErrSubqueryNo1Row(ctx context.Context) *Error {
 	return newError(ctx, ErrSubqueryNo1Row)
+}
+
+func NewDerivedMustHaveAlias(ctx context.Context) *Error {
+	return newError(ctx, ErrDerivedMustHaveAlias)
 }
 
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
