@@ -16,6 +16,7 @@ package function
 
 import (
 	"math"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -56,6 +57,94 @@ func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
 		}
 	}
 	return types.Type{}, false
+}
+
+func signedUnsignedIntegerCommonType(source []types.Type) (types.Type, bool) {
+	hasSigned := false
+	hasUnsigned := false
+	maxWidth := int32(0)
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_any:
+			// An untyped NULL branch affects result nullability, but it has no
+			// numeric domain and must not change the common integer type.
+			continue
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			hasSigned = true
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			hasUnsigned = true
+		default:
+			return types.Type{}, false
+		}
+		if width := integerIntegralWidth(typ.Oid); width > maxWidth {
+			maxWidth = width
+		}
+	}
+	if !hasSigned || !hasUnsigned {
+		return types.Type{}, false
+	}
+
+	width := maxWidth + 1
+	oid, ok := decimalTypeForRequiredWidth(types.T_decimal64, width)
+	if !ok {
+		return types.Type{}, false
+	}
+	return types.New(oid, width, 0), true
+}
+
+func binaryStringCommonType(source []types.Type) (types.Type, bool) {
+	hasBinary := false
+	sameFixedBinary := true
+	hasFixedBinary := false
+	fixedBinaryWidth := int32(0)
+	width := int32(0)
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_any:
+			// NULL has no concrete binary representation. It affects result
+			// nullability, but must not change the common type of the value
+			// branches.
+			continue
+		case types.T_binary:
+			hasBinary = true
+			if !hasFixedBinary {
+				fixedBinaryWidth = typ.Width
+				hasFixedBinary = true
+			} else if typ.Width != fixedBinaryWidth {
+				sameFixedBinary = false
+			}
+			if typ.Width > width {
+				width = typ.Width
+			}
+		case types.T_varbinary:
+			hasBinary = true
+			sameFixedBinary = false
+			if typ.Width > width {
+				width = typ.Width
+			}
+		case types.T_char, types.T_varchar:
+			sameFixedBinary = false
+			// Character widths count runes, while VARBINARY widths count bytes.
+			// Reserve the maximum utf8mb4 encoding size without exceeding the
+			// largest representable VARBINARY width.
+			byteWidth := int32(types.MaxVarBinaryLen)
+			if typ.Width >= 0 && typ.Width <= int32(types.MaxVarBinaryLen/utf8.UTFMax) {
+				byteWidth = typ.Width * utf8.UTFMax
+			}
+			if byteWidth > width {
+				width = byteWidth
+			}
+		default:
+			return types.Type{}, false
+		}
+	}
+	if !hasBinary {
+		return types.Type{}, false
+	}
+	if sameFixedBinary {
+		return types.New(types.T_binary, fixedBinaryWidth, 0), true
+	}
+	return types.New(types.T_varbinary, width, 0), true
 }
 
 func needDecimalMetadataCast(source []types.Type, target types.Type) bool {
@@ -168,6 +257,17 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			source = append(source, inputs[l-1])
 		}
 
+		if retType, ok := binaryStringCommonType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = retType
+				}
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
 		if retType, ok := mixedStringNumericToVarchar(source); ok {
 			finalTypes := make([]types.Type, len(inputs))
 			for i := range finalTypes {
@@ -179,6 +279,17 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 			if len(inputs)%2 == 1 {
 				finalTypes[len(finalTypes)-1] = retType
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+		if retType, ok := signedUnsignedIntegerCommonType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = retType
+				}
 			}
 			return newCheckResultWithCast(0, finalTypes)
 		}
@@ -299,6 +410,8 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	case types.T_char:
 		return strCaseFn(parameters, result, proc, length, selectList)
 	case types.T_varchar:
+		return strCaseFn(parameters, result, proc, length, selectList)
+	case types.T_binary, types.T_varbinary:
 		return strCaseFn(parameters, result, proc, length, selectList)
 	case types.T_blob:
 		return strCaseFn(parameters, result, proc, length, selectList)
@@ -494,14 +607,20 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 				binaryIdx = 1
 			}
 			otherIdx := 1 - binaryIdx
-			if source[otherIdx].Oid == types.T_any || source[otherIdx].Oid == source[binaryIdx].Oid {
+			if source[otherIdx].Oid == types.T_any {
 				retType := source[binaryIdx]
 				setMaxWidthFromSource(&retType, source)
 				finalTypes := []types.Type{conditionType, retType, retType}
 				return newCheckResultWithCast(0, finalTypes)
 			}
 		}
+		if retType, ok := binaryStringCommonType(source); ok {
+			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
+		}
 		if retType, ok := mixedStringNumericToVarchar(source); ok {
+			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
+		}
+		if retType, ok := signedUnsignedIntegerCommonType(source); ok {
 			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
 		}
 		if retType, resultAligned, ok := textStringCommonType(source); ok {
