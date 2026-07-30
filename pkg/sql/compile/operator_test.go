@@ -84,6 +84,29 @@ func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), config)
 }
 
+func TestConstructAggregateConfigPreservesOrderedGroupConcatArgs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return int64(5), nil
+	})
+
+	valueArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	orderArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	planConfig := []byte{1, 2, 3}
+	args, config := constructAggregateConfig(&plan.Function{
+		Func:          &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args:          []*plan.Expr{valueArg, orderArg},
+		AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		AggConfig:     planConfig,
+	}, proc)
+
+	require.Equal(t, []*plan.Expr{valueArg, orderArg}, args)
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(planConfig, 5), config)
+}
+
 func TestDupHashBuildPreservesNullTracking(t *testing.T) {
 	source := hashbuild.NewArgument()
 	defer source.Release()
@@ -434,6 +457,19 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	require.Equal(t, int32(1), dup2.CurrentShuffleIdx)
 	require.True(t, dup1.DrainAllBuckets)
 	require.True(t, dup2.DrainAllBuckets)
+}
+
+func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
+	op := dedupjoin.NewArgument()
+
+	dupCtx := newOperatorDupContext()
+	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*dedupjoin.DedupJoin)
+	dup2 := dupOperatorWithContext(op, 1, 2, dupCtx).(*dedupjoin.DedupJoin)
+
+	require.Nil(t, op.Mailbox, "duplicating must not mutate the reusable template")
+	require.Same(t, dup1.Mailbox, dup2.Mailbox)
+	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*dedupjoin.DedupJoin)
+	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
 }
 
 func TestDupOperatorAssignsSharedShuffleConsumerIndex(t *testing.T) {
