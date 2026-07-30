@@ -184,8 +184,11 @@ func updateHasMultiTableTargetShape(stmt *tree.Update) bool {
 	if stmt == nil {
 		return false
 	}
+	if len(stmt.Tables) > 1 {
+		return true
+	}
 	for _, tableExpr := range stmt.Tables {
-		if _, ok := tableExpr.(*tree.JoinTableExpr); ok {
+		if tableExprContainsJoin(tableExpr) {
 			return true
 		}
 	}
