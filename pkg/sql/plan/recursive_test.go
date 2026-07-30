@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -121,6 +123,47 @@ func TestRecursiveCteDuplicateExplicitAliasStillErrors(t *testing.T) {
 		select a.n from seq as a cross join seq as a`))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "table 'a' specified more than once")
+}
+
+func TestRecursiveCteStringAnchorUsesStrictCast(t *testing.T) {
+	query := `
+		with recursive r(n, s) as (
+			select 1, 'a'
+			union all
+			select n + 1, concat(s, 'b') from r where n < 4
+		)
+		select * from r`
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
+	require.NoError(t, err)
+
+	found := false
+	var visit func(*planpb.Expr)
+	visit = func(expr *planpb.Expr) {
+		if expr == nil || found {
+			return
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func != nil && fn.Func.ObjName == "cast_strict" &&
+				expr.Typ.Id == int32(types.T_varchar) {
+				found = true
+				return
+			}
+			for _, arg := range fn.Args {
+				visit(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				visit(item)
+			}
+		}
+	}
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			visit(expr)
+		}
+	}
+	require.True(t, found, "recursive string member must use cast_strict")
 }
 
 func TestOrdinaryAliasesRemainUnchanged(t *testing.T) {

@@ -3973,7 +3973,15 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		}
 		for i := range n.ProjectList {
 			projTyp := projects[i].GetTyp()
-			n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
+			castName := "cast"
+			if projTyp.Id == int32(types.T_char) || projTyp.Id == int32(types.T_varchar) {
+				// MySQL fixes recursive CTE column types from the anchor. A
+				// recursive value exceeding a CHAR/VARCHAR anchor width must
+				// fail instead of being silently truncated.
+				castName = "cast_strict"
+			}
+			n.ProjectList[i], err = makePlan2CastExprWithName(
+				builder.GetContext(), n.ProjectList[i], projTyp, castName)
 			if err != nil {
 				return
 			}
