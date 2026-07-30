@@ -16,6 +16,7 @@ package hashmap
 
 import (
 	"io"
+	"math"
 	"math/rand"
 	"strconv"
 	"testing"
@@ -30,6 +31,44 @@ import (
 const (
 	Rows = 10
 )
+
+func TestStrHashMapFloat64SignedZero(t *testing.T) {
+	m := mpool.MustNewZero()
+	mp, err := NewStrHashMap(false, m)
+	require.NoError(t, err)
+	defer func() {
+		mp.Free()
+		require.Zero(t, m.Stats().NumCurrBytes.Load())
+	}()
+
+	floatType := types.T_float64.ToType()
+	intType := types.T_int8.ToType()
+	build := []*vector.Vector{
+		vector.NewVec(floatType),
+		vector.NewVec(intType),
+	}
+	probe := []*vector.Vector{
+		vector.NewVec(floatType),
+		vector.NewVec(intType),
+	}
+	defer func() {
+		for _, vec := range append(build, probe...) {
+			vec.Free(m)
+		}
+	}()
+	require.NoError(t, vector.AppendFixed(build[0], float64(0), false, m))
+	require.NoError(t, vector.AppendFixed(build[1], int8(7), false, m))
+	require.NoError(t, vector.AppendFixed(probe[0], math.Copysign(0, -1), false, m))
+	require.NoError(t, vector.AppendFixed(probe[1], int8(7), false, m))
+
+	itr := mp.NewIterator()
+	vals, _, err := itr.Insert(0, 1, build)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), vals[0])
+	vals, zvals := itr.Find(0, 1, probe)
+	require.Equal(t, uint64(1), vals[0])
+	require.Equal(t, int64(1), zvals[0])
+}
 
 func TestInsert(t *testing.T) {
 	m := mpool.MustNewZero()

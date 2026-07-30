@@ -17,8 +17,10 @@ package hashmap
 import (
 	"bytes"
 	"io"
+	"math"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -99,6 +101,9 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 			fillKeys[uint32](itr, vec, 4, start, count)
 		case 8:
 			fillKeys[uint64](itr, vec, 8, start, count)
+			if vec.GetType().Oid == types.T_float64 {
+				normalizeFloat64HashKeys(itr, vec, start, count)
+			}
 		default:
 			if !vec.IsConst() && vec.GetArea() == nil {
 				fillVarlenaKey(itr, vec, start, count)
@@ -106,6 +111,21 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 				fillStrKey(itr, vec, start, count)
 			}
 		}
+	}
+}
+
+func normalizeFloat64HashKeys(itr *intHashMapIterator, vec *vector.Vector, start, n int) {
+	if vec.IsConstNull() {
+		return
+	}
+	nsp := vec.GetNulls()
+	for i := 0; i < n; i++ {
+		if nsp.Contains(uint64(i + start)) {
+			continue
+		}
+		valueOffset := itr.keyOffs[i] - uint32(types.T_float64.TypeLen())
+		ptr := (*uint64)(unsafe.Add(unsafe.Pointer(&itr.keys[i]), valueOffset))
+		*ptr = keycodec.CanonicalFloat64Bits(math.Float64frombits(*ptr))
 	}
 }
 

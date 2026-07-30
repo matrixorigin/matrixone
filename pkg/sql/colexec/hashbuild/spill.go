@@ -22,6 +22,7 @@ import (
 	"os"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1035,7 +1036,7 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) {
 		if vec.IsConst() {
 			colHash := uint64(0)
 			if !vec.IsConstNull() {
-				colHash = xxhash.Sum64(vec.GetRawBytesAt(0))
+				colHash = xxhash.Sum64(keycodec.BytesAt(vec, 0))
 			}
 			for i := 0; i < rowCount; i++ {
 				hashValues[i] = hashCombine(hashValues[i], colHash)
@@ -1051,12 +1052,12 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) {
 					if nulls.Contains(uint64(i)) {
 						hashValues[i] = hashCombine(hashValues[i], 0)
 					} else {
-						hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
+						hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(keycodec.BytesAt(vec, i)))
 					}
 				}
 			} else {
 				for i := 0; i < n; i++ {
-					hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
+					hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(keycodec.BytesAt(vec, i)))
 				}
 			}
 		}

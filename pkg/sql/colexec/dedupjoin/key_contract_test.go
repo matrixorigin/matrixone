@@ -105,6 +105,7 @@ func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMod
 		OnDuplicateAction:               plan.Node_FAIL,
 		OldColCapturePlaceholderIdxList: []int32{1},
 		OldColCaptureProbeIdxList:       []int32{1},
+		DelColIdx:                       -1,
 		IsShuffle:                       mode.shuffle,
 		ShuffleIdx:                      0,
 		SpillThreshold:                  mode.spillThreshold,
@@ -159,8 +160,11 @@ func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMod
 		require.NoError(t, execErr)
 		if result.Batch != nil {
 			keys := vector.MustFixedColNoTypeCheck[float64](result.Batch.Vecs[0])
+			capturedValues := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])
 			for i, key := range keys {
-				if key == 0 && !result.Batch.Vecs[1].GetNulls().Contains(uint64(i)) {
+				if key == 0 &&
+					!result.Batch.Vecs[1].GetNulls().Contains(uint64(i)) &&
+					capturedValues[i] == 42 {
 					targetCaptured = true
 				}
 			}
