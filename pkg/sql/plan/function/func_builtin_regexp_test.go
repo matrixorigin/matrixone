@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -236,6 +237,122 @@ func Test_BuiltIn_RegularMatchForLikeOp(t *testing.T) {
 		match, err := op.regMap.regularMatchForLikeOp([]byte(c.pat), []byte(c.str))
 		require.NoError(t, err, i)
 		require.Equal(t, c.expected, match, i)
+	}
+}
+
+func Test_BuiltIn_RegularMatchForLikeOpWithEscape(t *testing.T) {
+	op := newOpBuiltInRegexp()
+
+	testCases := []struct {
+		name            string
+		pattern         string
+		value           string
+		escape          rune
+		escapeEnabled   bool
+		caseInsensitive bool
+		expected        bool
+	}{
+		{name: "custom escape underscore", pattern: "a!_b", value: "a_b", escape: '!', escapeEnabled: true, expected: true},
+		{name: "custom escape percent", pattern: "a!%b", value: "a%b", escape: '!', escapeEnabled: true, expected: true},
+		{name: "empty escape", pattern: `a\_b`, value: `a\xb`, escapeEnabled: false, expected: true},
+		{name: "unicode escape", pattern: "a界_b", value: "a_b", escape: '界', escapeEnabled: true, expected: true},
+		{name: "ilike recognizes escape before folding", pattern: "aX_b", value: "A_B", escape: 'X', escapeEnabled: true, caseInsensitive: true, expected: true},
+		{name: "ilike lowercase escape spelling remains literal", pattern: "axb", value: "AXB", escape: 'X', escapeEnabled: true, caseInsensitive: true, expected: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			match, err := op.regMap.regularMatchForLikeOpWithEscape(
+				[]byte(tc.pattern),
+				[]byte(tc.value),
+				tc.escape,
+				tc.escapeEnabled,
+				tc.caseInsensitive,
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, match)
+		})
+	}
+}
+
+func Test_BuiltIn_LikeWithEscape(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name     string
+		inputs   []FunctionTestInput
+		expected FunctionTestResult
+		fn       fEvalFn
+	}{
+		{
+			name: "constant escape",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a_b", "axb"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a!_b", "a!_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"!", "!"}, nil),
+			},
+			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, nil),
+			fn:       newOpBuiltInRegexp().likeFn,
+		},
+		{
+			name: "null escape",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a_b", "axb"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a!_b", "a!_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"", ""}, []bool{true, true}),
+			},
+			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false}, []bool{true, true}),
+			fn:       newOpBuiltInRegexp().likeFn,
+		},
+		{
+			name: "nonconstant escape",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a!_b"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"!"}, nil),
+			},
+			expected: NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, nil),
+			fn:       newOpBuiltInRegexp().likeFn,
+		},
+		{
+			name: "multicharacter escape",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a!_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"!!"}, nil),
+			},
+			expected: NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, nil),
+			fn:       newOpBuiltInRegexp().likeFn,
+		},
+		{
+			name: "ilike preserves case-sensitive escape recognition",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"A_B", "AXB"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"aX_b", "aX_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"X", "X"}, nil),
+			},
+			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, nil),
+			fn:       newOpBuiltInRegexp().iLikeFn,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expected, tc.fn)
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+}
+
+func Test_BuiltIn_ILikeRejectsInvalidArity(t *testing.T) {
+	for _, args := range [][]types.Type{
+		nil,
+		{types.T_varchar.ToType()},
+		{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+	} {
+		_, err := GetFunctionByName(context.Background(), "ilike", args)
+		require.Error(t, err)
 	}
 }
 
