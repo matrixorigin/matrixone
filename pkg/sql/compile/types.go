@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
@@ -306,10 +305,6 @@ type Compile struct {
 
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
-
-	materializedSinkScanNodes map[int32][]int32
-	materializedSources       map[int32]*materialized.Source
-	materializedReaderIDs     map[[2]int32]int
 
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string

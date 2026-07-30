@@ -3812,28 +3812,6 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	for i, col := range cols {
 		subCtx.headings[i] = string(col)
 	}
-
-	if len(cteRef.occurrences) == 0 {
-		builder.cteRefs = append(builder.cteRefs, cteRef)
-	}
-	if ctx.bindingNonRecurCte() {
-		cteRef.hasNestedUse = true
-		if ctx.cteState.cte != nil {
-			ctx.cteState.cte.hasNestedRef = true
-		}
-	}
-	types := make([]plan.Type, len(builder.qry.Nodes[nodeID].ProjectList))
-	for i, expr := range builder.qry.Nodes[nodeID].ProjectList {
-		types[i] = expr.Typ
-	}
-	cteRef.occurrences = append(cteRef.occurrences, cteOccurrence{
-		rootID:       nodeID,
-		rootTag:      subCtx.rootTag(),
-		ctx:          subCtx,
-		headings:     append([]string(nil), subCtx.headings...),
-		types:        types,
-		isCorrelated: subCtx.isCorrelated,
-	})
 	return nodeID, nil
 }
 
