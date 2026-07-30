@@ -40,3 +40,11 @@ SELECT DAYOFMONTH('2007-04-01') AS first_day_apr, DAYOFMONTH('2007-04-30') AS la
 # Different months
 SELECT DAYOFMONTH('2007-01-15') AS jan, DAYOFMONTH('2007-02-15') AS feb, DAYOFMONTH('2007-03-15') AS mar, DAYOFMONTH('2007-04-15') AS apr;
 
+# Regression: VARCHAR input must resolve without an implicit unsupported cast.
+SELECT DAYOFMONTH('2024-01-15') AS string_dayofmonth;
+
+-- Incomplete VARCHAR dates preserve the regular date-cast grammar.
+SELECT DAYOFMONTH('2001-11-00 12:34:56') AS incomplete_datetime,
+       DAYOFMONTH('20011100') AS incomplete_compact,
+       DAYOFMONTH('2001-11-0') AS incomplete_variable,
+       DAYOFMONTH('0000-00-00 12:34:56') AS zero_datetime;

@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
@@ -163,14 +164,65 @@ type JoinMap struct {
 	memoryRelease     func()
 	memoryReleaseOnce sync.Once
 
-	// spill support
-	Spilled         bool
-	SpillBuildFds   []*os.File // legacy anonymous build-side file descriptors
-	SpillBuildFiles []*SpillFile
-	// spillBudget is an in-process opaque handle to the exact producer budget
-	// generation.  The message package deliberately does not import process;
-	// the single spill consumer type-checks the handle before use.
-	spillBudget any
+	// A resident JoinMap may be broadcast to multiple consumers, but a spill
+	// payload is move-only. Keep the complete payload behind one lock so files,
+	// legacy descriptors, and the producer budget generation cannot be claimed
+	// by different consumers.
+	spillMu           sync.Mutex
+	spilled           atomic.Bool
+	spillPayload      SpillBuildPayload
+	spillPayloadSet   bool
+	spillPayloadTaken bool
+}
+
+var (
+	ErrSpillBuildPayloadEmpty = moerr.NewInternalErrorNoCtx("spill build payload is empty")
+	ErrSpillBuildPayloadMixed = moerr.NewInternalErrorNoCtx("spill build payload mixes accounted files and legacy descriptors")
+	ErrSpillBuildBudgetRef    = moerr.NewInternalErrorNoCtx("accounted spill build payload is missing its budget reference")
+	ErrSpillBuildLegacyBudget = moerr.NewInternalErrorNoCtx("legacy spill build payload must not carry a budget reference")
+	ErrSpillBuildPayloadSet   = moerr.NewInternalErrorNoCtx("spill build payload is already set")
+	ErrSpillBuildPayloadTaken = moerr.NewInternalErrorNoCtx("spill build payload is already taken")
+	ErrSpillBuildShared       = moerr.NewInternalErrorNoCtx("spill build payload requires exactly one consumer")
+)
+
+// SpillBuildPayload is the complete move-only build-side spill dependency.
+// BudgetRef is deliberately opaque because message cannot import process; the
+// receiving join type-checks this borrowed generation reference before
+// transferring the files to SpillEngine.
+type SpillBuildPayload struct {
+	Files     []*SpillFile
+	LegacyFds []*os.File
+	BudgetRef any
+}
+
+// Close releases payload ownership that has not been transferred to a
+// SpillEngine. It is safe on a partially populated payload and clears every
+// handle so repeated cleanup is harmless.
+func (p *SpillBuildPayload) Close() error {
+	if p == nil {
+		return nil
+	}
+	var firstErr error
+	for i, file := range p.Files {
+		if file != nil {
+			if err := file.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			p.Files[i] = nil
+		}
+	}
+	p.Files = nil
+	for i, fd := range p.LegacyFds {
+		if fd != nil {
+			if err := fd.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			p.LegacyFds[i] = nil
+		}
+	}
+	p.LegacyFds = nil
+	p.BudgetRef = nil
+	return firstErr
 }
 
 // SpillFile binds one anonymous spill descriptor to the accounting ownership
@@ -239,16 +291,13 @@ func (f *SpillFile) Close() error {
 
 func NewJoinMap(sels GroupSels, ihm *hashmap.IntHashMap, shm *hashmap.StrHashMap, delRows *bitmap.Bitmap, batches []*batch.Batch, m *mpool.MPool) *JoinMap {
 	return &JoinMap{
-		valid:           true,
-		mpool:           m,
-		shm:             shm,
-		ihm:             ihm,
-		sels:            sels,
-		delRows:         delRows,
-		batches:         batches,
-		Spilled:         false,
-		SpillBuildFds:   nil,
-		SpillBuildFiles: nil,
+		valid:   true,
+		mpool:   m,
+		shm:     shm,
+		ihm:     ihm,
+		sels:    sels,
+		delRows: delRows,
+		batches: batches,
 	}
 }
 
@@ -338,7 +387,10 @@ func (jm *JoinMap) IsValid() bool {
 }
 
 func (jm *JoinMap) IsSpilled() bool {
-	return jm.Spilled
+	if jm == nil {
+		return false
+	}
+	return jm.spilled.Load()
 }
 
 // SetMemoryRelease attaches accounting ownership to the JoinMap. The callback
@@ -347,40 +399,61 @@ func (jm *JoinMap) SetMemoryRelease(release func()) {
 	jm.memoryRelease = release
 }
 
-// TakeSpillBuildFds transfers ownership of anonymous build-side file
-// descriptors from the JoinMap to the caller. After this call the JoinMap
-// no longer owns the fds; FreeMemory will not close them.
-func (jm *JoinMap) TakeSpillBuildFds() []*os.File {
-	fds := jm.SpillBuildFds
-	jm.SpillBuildFds = nil
-	return fds
+// SetSpillBuildPayload atomically installs the complete spill dependency.
+// The producer must finish the JoinMap reference count first: a spill payload
+// is intentionally rejected for a broadcast map because its execution
+// protocol has only one physical file/budget owner.
+//
+// On error, ownership remains with the caller.
+func (jm *JoinMap) SetSpillBuildPayload(payload SpillBuildPayload) error {
+	if jm == nil || (len(payload.Files) == 0 && len(payload.LegacyFds) == 0) {
+		return ErrSpillBuildPayloadEmpty
+	}
+	if len(payload.Files) > 0 && len(payload.LegacyFds) > 0 {
+		return ErrSpillBuildPayloadMixed
+	}
+	if len(payload.Files) > 0 && payload.BudgetRef == nil {
+		return ErrSpillBuildBudgetRef
+	}
+	if len(payload.LegacyFds) > 0 && payload.BudgetRef != nil {
+		return ErrSpillBuildLegacyBudget
+	}
+	jm.spillMu.Lock()
+	defer jm.spillMu.Unlock()
+	if jm.spillPayloadTaken {
+		return ErrSpillBuildPayloadTaken
+	}
+	if jm.spillPayloadSet {
+		return ErrSpillBuildPayloadSet
+	}
+	consumers := jm.GetRefCount()
+	if consumers != 1 {
+		return ErrSpillBuildShared
+	}
+	jm.spilled.Store(true)
+	jm.spillPayload = payload
+	jm.spillPayloadSet = true
+	return nil
 }
 
-// SetSpillBuildFiles installs a complete, transactionally-published spill
-// file set. The JoinMap becomes its single owner until TakeSpillBuildFiles.
-func (jm *JoinMap) SetSpillBuildFiles(files []*SpillFile) {
-	jm.Spilled = len(files) > 0
-	jm.SpillBuildFiles = files
-}
-
-func (jm *JoinMap) SetSpillBudget(budget any) {
-	jm.spillBudget = budget
-}
-
-// TakeSpillBudget moves the producer generation handle to the single spill
-// consumer. It must be called together with TakeSpillBuildFiles.
-func (jm *JoinMap) TakeSpillBudget() any {
-	budget := jm.spillBudget
-	jm.spillBudget = nil
-	return budget
-}
-
-// TakeSpillBuildFiles transfers the complete accounted spill file set to the
-// caller. FreeMemory no longer closes or releases the transferred files.
-func (jm *JoinMap) TakeSpillBuildFiles() []*SpillFile {
-	files := jm.SpillBuildFiles
-	jm.SpillBuildFiles = nil
-	return files
+// TakeSpillBuildPayload atomically transfers files, legacy descriptors, and
+// the producer budget generation to the sole spill consumer.
+func (jm *JoinMap) TakeSpillBuildPayload() (SpillBuildPayload, error) {
+	if jm == nil {
+		return SpillBuildPayload{}, ErrSpillBuildPayloadEmpty
+	}
+	jm.spillMu.Lock()
+	defer jm.spillMu.Unlock()
+	if !jm.spillPayloadSet {
+		return SpillBuildPayload{}, ErrSpillBuildPayloadEmpty
+	}
+	if jm.spillPayloadTaken {
+		return SpillBuildPayload{}, ErrSpillBuildPayloadTaken
+	}
+	payload := jm.spillPayload
+	jm.spillPayload = SpillBuildPayload{}
+	jm.spillPayloadTaken = true
+	return payload, nil
 }
 
 func (jm *JoinMap) IsDeleted(row uint64) bool {
@@ -394,21 +467,12 @@ func (jm *JoinMap) FreeMemory() {
 			jm.memoryRelease = nil
 		}
 	})
-	for i, fd := range jm.SpillBuildFds {
-		if fd != nil {
-			fd.Close()
-			jm.SpillBuildFds[i] = nil
-		}
-	}
-	jm.SpillBuildFds = nil
-	for i, file := range jm.SpillBuildFiles {
-		if file != nil {
-			_ = file.Close()
-			jm.SpillBuildFiles[i] = nil
-		}
-	}
-	jm.SpillBuildFiles = nil
-	jm.spillBudget = nil
+	jm.spillMu.Lock()
+	payload := jm.spillPayload
+	jm.spillPayload = SpillBuildPayload{}
+	jm.spillPayloadTaken = true
+	jm.spillMu.Unlock()
+	_ = payload.Close()
 	jm.sels.Free(jm.mpool)
 	if jm.ihm != nil {
 		jm.ihm.Free()

@@ -774,17 +774,17 @@ func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
 		{
 			name: "non-ASCII select alias",
 			sql:  "CREATE TABLE ctas_alias AS SELECT N_NAME AS `中文别名` FROM NATION",
-			want: "insert into `tpch`.`ctas_alias` select * from (select `nation`.`N_NAME` as `中文别名` from `nation`)",
+			want: "insert into `tpch`.`ctas_alias` select * from (select `nation`.`N_NAME` as `中文别名` from `nation`) as __mo_ctas_source",
 		},
 		{
 			name: "reserved table alias",
 			sql:  "CREATE TABLE ctas_alias AS SELECT `order`.N_NAME AS `select` FROM NATION AS `order`",
-			want: "insert into `tpch`.`ctas_alias` select * from (select `order`.`N_NAME` as `select` from `nation` as `order`)",
+			want: "insert into `tpch`.`ctas_alias` select * from (select `order`.`N_NAME` as `select` from `nation` as `order`) as __mo_ctas_source",
 		},
 		{
 			name: "embedded backtick in target name",
 			sql:  "CREATE TABLE `ctas``alias` AS SELECT N_NAME FROM NATION",
-			want: "insert into `tpch`.`ctas``alias` select * from (select `nation`.`N_NAME` from `nation`)",
+			want: "insert into `tpch`.`ctas``alias` select * from (select `nation`.`N_NAME` from `nation`) as __mo_ctas_source",
 		},
 	}
 
