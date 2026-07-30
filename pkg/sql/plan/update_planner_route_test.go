@@ -605,6 +605,23 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		require.Equal(t, updatePlannerLegacy, route)
 		require.Equal(t, updateRouteReasonForeignKey, reason)
 	})
+
+	t.Run("disabled checks preserve pre-insert input schema", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		mock.ctxt.tables["emp"].Cols[0].Typ.AutoIncr = true
+		mock.ctxt.SetContext(context.WithValue(
+			mock.ctxt.GetContext(),
+			defines.DisableFkCheck{},
+			true,
+		))
+
+		query := bindDirect(t, mock, "UPDATE emp SET empno = DEFAULT")
+		require.NotNil(t, query)
+		require.NotEqual(t, -1, firstNode(query, func(node *planpb.Node) bool {
+			return node.NodeType == planpb.Node_PRE_INSERT
+		}))
+	})
 }
 
 func TestResolveSingleTablePreservesForeignKeyPolicy(t *testing.T) {

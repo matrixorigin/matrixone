@@ -203,6 +203,20 @@ update parent_dual_a set id = 2 where id = 1;
 select * from parent_dual_a order by id;
 select * from child_dual_fk;
 
+set foreign_key_checks = 0;
+create table update_preinsert_index (
+    a int not null auto_increment primary key,
+    b varchar(25) not null,
+    c datetime,
+    key idx_b(b),
+    key idx_c(c)
+);
+insert into update_preinsert_index(b, c)
+values ('a', '2020-09-08'), ('b', '2020-09-09');
+update update_preinsert_index set a = 90;
+set foreign_key_checks = 1;
+drop table update_preinsert_index;
+
 drop table child_dual_fk;
 drop table parent_dual_b;
 drop table parent_dual_a;

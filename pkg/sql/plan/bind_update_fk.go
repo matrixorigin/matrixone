@@ -36,6 +36,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 	dmlCtx *DMLContext,
 	lastNodeID int32,
 	selectNodeTag int32,
+	selectNode *plan.Node,
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
 ) (int32, int32, *plan.Node, error) {
@@ -44,7 +45,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 		return 0, 0, nil, err
 	}
 	if !enabled {
-		return lastNodeID, selectNodeTag, builder.qry.Nodes[lastNodeID], nil
+		return lastNodeID, selectNodeTag, selectNode, nil
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
@@ -86,7 +87,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			fkTableDef.Fkeys[j] = DeepCopyFkey(fk)
 		}
 
-		sourceNode := builder.updateInputProjectNode(lastNodeID)
+		sourceNode := selectNode
 		projLen := len(sourceNode.ProjectList)
 		projectTypes := make([]plan.Type, projLen)
 		for j, expr := range sourceNode.ProjectList {
@@ -176,9 +177,10 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 		}, bindCtx)
 
 		selectNodeTag = validatedTag
+		selectNode = builder.qry.Nodes[lastNodeID]
 	}
 
-	return lastNodeID, selectNodeTag, builder.qry.Nodes[lastNodeID], nil
+	return lastNodeID, selectNodeTag, selectNode, nil
 }
 
 func affectedUpdateChildFks(

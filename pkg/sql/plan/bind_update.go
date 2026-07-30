@@ -445,6 +445,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		dmlCtx,
 		lastNodeID,
 		selectNodeTag,
+		selectNode,
 		oldColName2Idx,
 		newColName2Idx,
 	)
