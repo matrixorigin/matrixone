@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
@@ -106,7 +107,7 @@ func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
 		expr, err := bindFuncExprImplUdf(&binder.baseBinder, "legacy_pipe", &function.Udf{
 			Body:     "0 || 1",
 			Language: string(tree.SQL),
-		}, nil, 0)
+		}, nil, nil, 0)
 		require.NoError(t, err)
 		require.Equal(t, "concat", expr.GetF().GetFunc().GetObjName())
 	})
@@ -117,10 +118,128 @@ func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
 			Body:     "0 || 1",
 			Language: string(tree.SQL),
 			SQLMode:  &emptyMode,
-		}, nil, 0)
+		}, nil, nil, 0)
 		require.NoError(t, err)
 		require.Equal(t, "or", expr.GetF().GetFunc().GetObjName())
 	})
+}
+
+type sqlUdfMockCompilerContext struct {
+	*MockCompilerContext
+}
+
+func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*function.Udf, error) {
+	if name != "f_lookup" {
+		return nil, nil
+	}
+	return &function.Udf{
+		Body:     "select n_regionkey from nation where n_nationkey = $1",
+		Language: string(tree.SQL),
+	}, nil
+}
+
+func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.Background(),
+		dialect.MYSQL,
+		"select n_nationkey, f_lookup(n_nationkey) from nation",
+		1,
+	)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+	built, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+
+	query := built.GetQuery()
+	require.NotNil(t, query)
+	require.True(t, queryContainsCrossRelationEquality(query), "SQL UDF parameter must bind to the outer scan column")
+}
+
+func TestReplaceSQLUdfArgMarkers(t *testing.T) {
+	marker := func(ordinal int) string { return fmt.Sprintf("<arg%d>", ordinal) }
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "repeated parameter",
+			sql:  "select $1 + $1, $2",
+			want: "select <arg1> + <arg1>, <arg2>",
+		},
+		{
+			name: "quoted text and identifiers",
+			sql:  "select '$1', \"$1\", `$1`, $1",
+			want: "select '$1', \"$1\", `$1`, <arg1>",
+		},
+		{
+			name: "comments",
+			sql:  "select $1 -- $2\n, $2 /* $1 */ # $1\n",
+			want: "select <arg1> -- $2\n, <arg2> /* $1 */ # $1\n",
+		},
+		{
+			name: "double minus without comment whitespace",
+			sql:  "select 1--$1",
+			want: "select 1--<arg1>",
+		},
+		{
+			name: "out of range parameter",
+			sql:  "select $0, $3, $1",
+			want: "select $0, $3, <arg1>",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, replaceSQLUdfArgMarkers(test.sql, 2, "", marker))
+		})
+	}
+}
+
+func queryContainsCrossRelationEquality(query *plan.Query) bool {
+	for _, node := range query.Nodes {
+		for _, exprs := range [][]*plan.Expr{
+			node.ProjectList,
+			node.OnList,
+			node.FilterList,
+			node.BlockFilterList,
+		} {
+			for _, expr := range exprs {
+				if exprContainsCrossRelationEquality(expr) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func exprContainsCrossRelationEquality(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	if fn.Func.GetObjName() == "=" && len(fn.Args) == 2 {
+		left, right := fn.Args[0].GetCol(), fn.Args[1].GetCol()
+		if left != nil && right != nil && left.RelPos != right.RelPos {
+			return true
+		}
+	}
+	for _, arg := range fn.Args {
+		if exprContainsCrossRelationEquality(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCombinePlanExprsBalancedHasLogarithmicDepth(t *testing.T) {
