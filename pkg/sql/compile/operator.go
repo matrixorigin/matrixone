@@ -129,12 +129,14 @@ func mergeReceiverChannelBufferSize(s *Scope) int {
 
 type operatorDupContext struct {
 	shufflePools       map[*shuffle.Shuffle]*shuffle.ShufflePool
+	hashJoinChannels   map[*hashjoin.HashJoin]chan *bitmap.Bitmap
 	dedupJoinMailboxes map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox
 }
 
 func newOperatorDupContext() *operatorDupContext {
 	return &operatorDupContext{
 		shufflePools:       make(map[*shuffle.Shuffle]*shuffle.ShufflePool),
+		hashJoinChannels:   make(map[*hashjoin.HashJoin]chan *bitmap.Bitmap),
 		dedupJoinMailboxes: make(map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox),
 	}
 }
@@ -227,10 +229,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CanSkipProbe = t.CanSkipProbe
 		op.IsShuffle = t.IsShuffle
 		if !t.IsShuffle {
-			if t.Channel == nil {
-				t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			channel := dupCtx.hashJoinChannels[t]
+			if channel == nil {
+				channel = make(chan *bitmap.Bitmap, maxParallel)
+				dupCtx.hashJoinChannels[t] = channel
 			}
-			op.Channel = t.Channel
+			op.Channel = channel
 			op.NumCPU = uint64(maxParallel)
 			op.IsMerger = (index == 0)
 		}
