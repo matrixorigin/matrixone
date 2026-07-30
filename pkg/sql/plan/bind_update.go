@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -77,6 +79,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	dmlCtx := NewDMLContext()
 	err := dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
 	if err != nil {
+		return 0, err
+	}
+	if err = validateModernMultiTargetUpdate(builder.GetContext(), dmlCtx); err != nil {
 		return 0, err
 	}
 	if err = validateUpdateTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
@@ -288,6 +293,18 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectNodeTag := selectNode.BindingTags[0]
+	lastNodeID, selectNode, selectNodeTag, err = builder.mergeSamePhysicalTargetAssignments(
+		bindCtx,
+		lastNodeID,
+		selectNode,
+		selectNodeTag,
+		dmlCtx,
+		oldColName2Idx,
+		newColName2Idx,
+	)
+	if err != nil {
+		return 0, err
+	}
 	updatedTargetCount := 0
 	for i := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) > 0 {
@@ -1342,6 +1359,153 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
+}
+
+func validateModernMultiTargetUpdate(ctx context.Context, dmlCtx *DMLContext) error {
+	updatedTargetCount := 0
+	hasPartitionedTarget := false
+
+	for i, updateCols := range dmlCtx.updateCol2Expr {
+		if len(updateCols) == 0 {
+			continue
+		}
+		updatedTargetCount++
+		tableDef := dmlCtx.tableDefs[i]
+		hasPartitionedTarget = hasPartitionedTarget || features.IsPartitioned(tableDef.FeatureFlag)
+	}
+
+	if updatedTargetCount > 1 && hasPartitionedTarget {
+		return newLegacyUpdatePlannerRouteError(
+			updateRouteReasonMultiTarget,
+			moerr.NewUnsupportedDML(ctx, "multi-target update with partitioned table"),
+		)
+	}
+	return nil
+}
+
+func (builder *QueryBuilder) mergeSamePhysicalTargetAssignments(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	dmlCtx *DMLContext,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (int32, *plan.Node, int32, error) {
+	targetsByTableID := make(map[uint64][]int)
+	for i, updateCols := range dmlCtx.updateCol2Expr {
+		if len(updateCols) > 0 {
+			targetsByTableID[dmlCtx.tableDefs[i].TblId] =
+				append(targetsByTableID[dmlCtx.tableDefs[i].TblId], i)
+		}
+	}
+
+	hasRepeatedPhysicalTarget := false
+	for _, targets := range targetsByTableID {
+		if len(targets) > 1 {
+			hasRepeatedPhysicalTarget = true
+			break
+		}
+	}
+	if !hasRepeatedPhysicalTarget {
+		return lastNodeID, selectNode, selectNodeTag, nil
+	}
+
+	childColExpr := func(pos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: selectNode.ProjectList[pos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: pos,
+				},
+			},
+		}
+	}
+	projectList := make([]*plan.Expr, len(selectNode.ProjectList))
+	for i := range projectList {
+		projectList[i] = childColExpr(int32(i))
+	}
+
+	processedTableIDs := make(map[uint64]struct{})
+	for targetIdx := range dmlCtx.aliases {
+		tableID := dmlCtx.tableDefs[targetIdx].TblId
+		if _, ok := processedTableIDs[tableID]; ok {
+			continue
+		}
+		processedTableIDs[tableID] = struct{}{}
+		targets := targetsByTableID[tableID]
+		if len(targets) < 2 {
+			continue
+		}
+		for _, targetIdx := range targets {
+			targetAlias := dmlCtx.aliases[targetIdx]
+			targetRowIDPos := oldColName2Idx[targetAlias+"."+catalog.Row_ID]
+
+			for _, col := range dmlCtx.tableDefs[targetIdx].Cols {
+				var sourceTargets []int
+				for _, sourceIdx := range targets {
+					if _, ok := dmlCtx.updateCol2Expr[sourceIdx][col.Name]; ok {
+						sourceTargets = append(sourceTargets, sourceIdx)
+					}
+				}
+				if len(sourceTargets) == 0 {
+					continue
+				}
+
+				key := targetAlias + "." + col.Name
+				targetOldPos := oldColName2Idx[key]
+				currentPos, targetUpdatesCol := newColName2Idx[key]
+				if !targetUpdatesCol {
+					currentPos = targetOldPos
+					oldColName2Idx[key] = int32(len(projectList))
+					projectList = append(projectList, childColExpr(currentPos))
+					newColName2Idx[key] = currentPos
+				}
+
+				finalExpr := childColExpr(targetOldPos)
+				for _, sourceIdx := range sourceTargets {
+					sourceAlias := dmlCtx.aliases[sourceIdx]
+					sourceRowIDPos := oldColName2Idx[sourceAlias+"."+catalog.Row_ID]
+					sameRowExpr, err := BindFuncExprImplByPlanExpr(
+						builder.GetContext(),
+						"=",
+						[]*plan.Expr{
+							childColExpr(targetRowIDPos),
+							childColExpr(sourceRowIDPos),
+						},
+					)
+					if err != nil {
+						return 0, nil, 0, err
+					}
+					sourceValuePos := newColName2Idx[sourceAlias+"."+col.Name]
+					finalExpr, err = BindFuncExprImplByPlanExpr(
+						builder.GetContext(),
+						"if",
+						[]*plan.Expr{
+							sameRowExpr,
+							childColExpr(sourceValuePos),
+							finalExpr,
+						},
+					)
+					if err != nil {
+						return 0, nil, 0, err
+					}
+				}
+				projectList[currentPos] = finalExpr
+			}
+		}
+	}
+
+	projectTag := builder.genNewBindTag()
+	projectNode := &plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeID},
+		ProjectList: projectList,
+		BindingTags: []int32{projectTag},
+	}
+	lastNodeID = builder.appendNode(projectNode, bindCtx)
+	return lastNodeID, projectNode, projectTag, nil
 }
 
 func collectIrregularIndexUpdateCols(tableDef *plan.TableDef) (bool, map[string]bool) {
