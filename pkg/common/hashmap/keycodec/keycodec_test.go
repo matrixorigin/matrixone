@@ -39,6 +39,44 @@ func TestFloat32CodecContract(t *testing.T) {
 	require.Equal(t, scaled.CanonicalBits(float32(0)), scaled.CanonicalBits(negativeZero))
 }
 
+func TestSupportsExactRawRuntimeFilter(t *testing.T) {
+	supported := []types.T{
+		types.T_bool,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_uuid, types.T_year,
+	}
+	for _, oid := range supported {
+		require.True(t, SupportsExactRawRuntimeFilter(oid), oid.String())
+	}
+
+	unsupported := []types.T{
+		types.T_any,
+		types.T_float32, types.T_float64,
+		types.T_json,
+		types.T_array_float32, types.T_array_float64,
+	}
+	for _, oid := range unsupported {
+		require.False(t, SupportsExactRawRuntimeFilter(oid), oid.String())
+	}
+
+	varchar10 := types.New(types.T_varchar, 10, 0)
+	varchar20 := types.New(types.T_varchar, 20, 0)
+	require.True(t, SupportsExactRawRuntimeFilterPair(varchar10, varchar20))
+
+	decimal10Scale2 := types.New(types.T_decimal64, 10, 2)
+	decimal18Scale2 := types.New(types.T_decimal64, 18, 2)
+	decimal18Scale3 := types.New(types.T_decimal64, 18, 3)
+	require.True(t, SupportsExactRawRuntimeFilterPair(decimal10Scale2, decimal18Scale2))
+	require.False(t, SupportsExactRawRuntimeFilterPair(decimal10Scale2, decimal18Scale3))
+	require.False(t, SupportsExactRawRuntimeFilterPair(types.T_int32.ToType(), types.T_int64.ToType()))
+	require.False(t, SupportsExactRawRuntimeFilterPair(types.T_float32.ToType(), types.T_float32.ToType()))
+}
+
 func TestComputeXXHashScaledFloat32Contract(t *testing.T) {
 	m := mpool.MustNewZero()
 	floatType := types.T_float32.ToType()
@@ -88,4 +126,30 @@ func TestComputeXXHashScaledFloat32Contract(t *testing.T) {
 	ComputeXXHash([]*vector.Vector{short}, shortHashes, 17)
 	require.Equal(t, hashes[0], shortHashes[0])
 	require.Equal(t, uint64(17), shortHashes[1])
+}
+
+func TestComputeXXHashCompositeScaledFloat32Contract(t *testing.T) {
+	m := mpool.MustNewZero()
+	floatType := types.T_float32.ToType()
+	floatType.Scale = 2
+	discriminators := vector.NewVec(types.T_int64.ToType())
+	floats := vector.NewVec(floatType)
+	defer func() {
+		discriminators.Free(m)
+		floats.Free(m)
+		require.Zero(t, m.CurrNB())
+	}()
+
+	for _, value := range []int64{7, 7, 8, 7} {
+		require.NoError(t, vector.AppendFixed(discriminators, value, false, m))
+	}
+	for _, value := range []float32{1.234, 1.23, 1.234, 1.236} {
+		require.NoError(t, vector.AppendFixed(floats, value, false, m))
+	}
+
+	hashes := make([]uint64, floats.Length())
+	ComputeXXHash([]*vector.Vector{discriminators, floats}, hashes, 17)
+	require.Equal(t, hashes[0], hashes[1])
+	require.NotEqual(t, hashes[0], hashes[2], "the FLOAT32 codec must preserve prior column hash state")
+	require.NotEqual(t, hashes[0], hashes[3], "a distinct canonical FLOAT32 value must change the composite hash")
 }

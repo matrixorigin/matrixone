@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -228,11 +229,17 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	rfTag := builder.genNewMsgTag()
-
 	for i := range probeExprs {
-		exprType := makeTypeByPlan2Expr(probeExprs[i])
-		args := []types.Type{exprType, exprType}
+		probeType := makeTypeByPlan2Expr(probeExprs[i])
+		buildType := makeTypeByPlan2Expr(buildExprs[i])
+		// Exact runtime-filter payloads eventually reach consumers which compare
+		// physical bytes (notably persistent Bloom filters). Generate one only
+		// when raw representation is a sound identity for both join operands and
+		// both sides have the same physical type contract.
+		if !keycodec.SupportsExactRawRuntimeFilterPair(probeType, buildType) {
+			return
+		}
+		args := []types.Type{probeType, probeType}
 		_, err := function.GetFunctionByName(builder.GetContext(), "in", args)
 		if err != nil {
 			//don't support this type
@@ -240,6 +247,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		}
 	}
 
+	// HashBuild currently falls back to PASS for function/composite exact
+	// payloads. Do not publish a dependency, alter scan placement, or reduce
+	// statistics for a filter which cannot be materialized.
 	if len(probeExprs) == 1 {
 		convertToCPKey := false
 		tableDef := leftChild.TableDef
@@ -298,6 +308,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		if !rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
 			return
 		}
+		if convertToCPKey {
+			return
+		}
 
 		buildExpr := &plan.Expr{
 			Typ: buildExprs[0].Typ,
@@ -308,20 +321,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 				},
 			},
 		}
-		var probeSpec, buildSpec *plan.RuntimeFilterSpec
-		if convertToCPKey {
-			if _, ok := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]; !ok {
-				return
-			}
-			probeSpec = MakeCPKEYRuntimeFilter(rfTag, 0, DeepCopyExpr(probeExprs[0]), tableDef, notOnPk)
-			buildSpec = MakeSerialRuntimeFilter(builder.GetContext(), rfTag, false, inLimit, buildExpr, notOnPk)
-			if buildSpec.Expr == nil {
-				return
-			}
-		} else {
-			probeSpec = MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0]), notOnPk)
-			buildSpec = MakeRuntimeFilter(rfTag, false, inLimit, buildExpr, notOnPk)
-		}
+		rfTag := builder.genNewMsgTag()
+		probeSpec := MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0]), notOnPk)
+		buildSpec := MakeRuntimeFilter(rfTag, false, inLimit, buildExpr, notOnPk)
 		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, probeSpec)
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, buildSpec)
 		// SINGLE output cardinality belongs to its semantic preserved side.  Do
@@ -331,93 +333,6 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			recalcStatsByRuntimeFilter(leftChild, node, builder)
 		}
 		return
-	}
-
-	tableDef := leftChild.TableDef
-	if tableDef == nil || tableDef.Pkey == nil {
-		return
-	}
-	if len(tableDef.Pkey.Names) < len(probeExprs) {
-		return
-	}
-
-	name2Pos := make(map[string]int)
-	for i, name := range tableDef.Pkey.Names {
-		name2Pos[name] = i
-	}
-
-	col2Probe := make([]int, len(tableDef.Pkey.Names))
-	for i := range col2Probe {
-		col2Probe[i] = -1
-	}
-
-	for i, expr := range probeExprs {
-		col := expr.GetCol()
-		if col == nil {
-			return
-		}
-		if pos, ok := name2Pos[tableDef.Cols[col.ColPos].Name]; ok {
-			col2Probe[pos] = i
-		}
-	}
-
-	cnt := 0
-	for ; cnt < len(col2Probe); cnt++ {
-		if col2Probe[cnt] == -1 {
-			break
-		}
-	}
-
-	if cnt != len(probeExprs) {
-		return
-	}
-
-	pkIdx, ok := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
-	if !ok {
-		return
-	}
-
-	if builder.optimizerHints != nil && builder.optimizerHints.runtimeFilter != 0 && node.JoinType != plan.Node_INDEX {
-		return
-	}
-
-	probeExpr := &plan.Expr{
-		Typ: tableDef.Cols[pkIdx].Typ,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: leftChild.BindingTags[0],
-				ColPos: pkIdx,
-			},
-		},
-	}
-	inLimit := GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
-	if !rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
-		return
-	}
-
-	buildArgs := make([]*plan.Expr, len(probeExprs))
-	for i := range probeExprs {
-		pos := col2Probe[i]
-		buildArgs[i] = &plan.Expr{
-			Typ: buildExprs[pos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: -1,
-					ColPos: int32(pos),
-				},
-			},
-		}
-	}
-
-	buildExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
-	if err != nil || buildExpr == nil {
-		return
-	}
-
-	leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), 0, probeExpr, false))
-	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), inLimit, buildExpr, false))
-	if node.JoinType != plan.Node_SINGLE {
-		recalcStatsByRuntimeFilter(leftChild, node, builder)
 	}
 }
 

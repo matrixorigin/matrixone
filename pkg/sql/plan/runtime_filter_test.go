@@ -25,13 +25,20 @@ import (
 )
 
 func makeRuntimeFilterTestEq(typ planpb.Type, leftTag, rightTag, leftPos, rightPos int32) *planpb.Expr {
+	return makeRuntimeFilterTestEqTypes(typ, typ, leftTag, rightTag, leftPos, rightPos)
+}
+
+func makeRuntimeFilterTestEqTypes(
+	leftType, rightType planpb.Type,
+	leftTag, rightTag, leftPos, rightPos int32,
+) *planpb.Expr {
 	return &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_bool), NotNullable: true},
 		Expr: &planpb.Expr_F{F: &planpb.Function{
 			Func: getFunctionObjRef(function.EncodeOverloadID(int32(function.EQUAL), 0), "="),
 			Args: []*planpb.Expr{
-				GetColExpr(typ, leftTag, leftPos),
-				GetColExpr(typ, rightTag, rightPos),
+				GetColExpr(leftType, leftTag, leftPos),
+				GetColExpr(rightType, rightTag, rightPos),
 			},
 		}},
 	}
@@ -181,6 +188,62 @@ func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
 		require.Len(t, builder.qry.Nodes[2].OnList, 2)
 		require.Same(t, mixed, builder.qry.Nodes[2].OnList[1])
+	})
+}
+
+func TestUnsoundRuntimeFilterIsNotGenerated(t *testing.T) {
+	for _, oid := range []types.T{types.T_float32, types.T_float64} {
+		t.Run(oid.String(), func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(true)
+			floatType := planpb.Type{Id: int32(oid), Width: 10, Scale: 2}
+			if oid == types.T_float64 {
+				floatType.Scale = 0
+			}
+			builder.qry.Nodes[0].TableDef.Cols[0].Typ = floatType
+			builder.qry.Nodes[1].TableDef.Cols[0].Typ = floatType
+			builder.qry.Nodes[2].OnList = []*planpb.Expr{
+				makeRuntimeFilterTestEq(floatType, 1, 2, 0, 0),
+			}
+
+			builder.generateRuntimeFilters(2)
+
+			require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
+			require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
+		})
+	}
+
+	t.Run("different decimal scales", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		probeType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+		buildType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 3}
+		builder.qry.Nodes[0].TableDef.Cols[0].Typ = probeType
+		builder.qry.Nodes[1].TableDef.Cols[0].Typ = buildType
+		builder.qry.Nodes[2].OnList = []*planpb.Expr{
+			makeRuntimeFilterTestEqTypes(probeType, buildType, 1, 2, 0, 0),
+		}
+		require.True(t, isEquiCond(builder.qry.Nodes[2].OnList[0],
+			map[int32]bool{1: true}, map[int32]bool{2: true}))
+
+		builder.generateRuntimeFilters(2)
+
+		require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
+		require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
+	})
+
+	t.Run("different varchar widths remain raw-compatible", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		probeType := planpb.Type{Id: int32(types.T_varchar), Width: 10}
+		buildType := planpb.Type{Id: int32(types.T_varchar), Width: 20}
+		builder.qry.Nodes[0].TableDef.Cols[0].Typ = probeType
+		builder.qry.Nodes[1].TableDef.Cols[0].Typ = buildType
+		builder.qry.Nodes[2].OnList = []*planpb.Expr{
+			makeRuntimeFilterTestEqTypes(probeType, buildType, 1, 2, 0, 0),
+		}
+
+		builder.generateRuntimeFilters(2)
+
+		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
+		require.Len(t, builder.qry.Nodes[0].RuntimeFilterProbeList, 1)
 	})
 }
 
@@ -405,40 +468,31 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 		require.Empty(t, probe.RuntimeFilterProbeList)
 	})
 
-	t.Run("full composite prefix remains exact", func(t *testing.T) {
+	t.Run("full composite filter is omitted until HashBuild can materialize it", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)
 		probe, _ := configureRuntimeFilterCompositePK(builder)
 
 		builder.generateRuntimeFilters(2)
-
-		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
-		require.Len(t, probe.RuntimeFilterProbeList, 1)
-		require.Equal(t, int32(2), probe.RuntimeFilterProbeList[0].Expr.GetCol().ColPos)
-	})
-
-	t.Run("leading composite prefix remains prunable", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
-		probe, _ := configureRuntimeFilterCompositePK(builder)
-		builder.qry.Nodes[2].OnList = builder.qry.Nodes[2].OnList[:1]
-
-		builder.generateRuntimeFilters(2)
-
-		require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
-		require.Len(t, probe.RuntimeFilterProbeList, 1)
-		require.True(t, probe.RuntimeFilterProbeList[0].MatchPrefix)
-		require.Equal(t, int32(2), probe.RuntimeFilterProbeList[0].Expr.GetCol().ColPos)
-	})
-
-	t.Run("missing hidden composite key metadata leaves no partial runtime filter", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
-		probe, _ := configureRuntimeFilterCompositePK(builder)
-		builder.qry.Nodes[2].OnList = builder.qry.Nodes[2].OnList[:1]
-		delete(probe.TableDef.Name2ColIndex, catalog.CPrimaryKeyColName)
-
-		builder.generateRuntimeFilters(2)
+		builder.forceJoinOnOneCN(2, false)
 
 		require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
 		require.Empty(t, probe.RuntimeFilterProbeList)
+		require.False(t, probe.Stats.ForceOneCN)
+		require.False(t, builder.qry.Nodes[1].Stats.ForceOneCN)
+	})
+
+	t.Run("leading composite prefix is omitted until HashBuild can materialize it", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(true)
+		probe, _ := configureRuntimeFilterCompositePK(builder)
+		builder.qry.Nodes[2].OnList = builder.qry.Nodes[2].OnList[:1]
+
+		builder.generateRuntimeFilters(2)
+		builder.forceJoinOnOneCN(2, false)
+
+		require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
+		require.Empty(t, probe.RuntimeFilterProbeList)
+		require.False(t, probe.Stats.ForceOneCN)
+		require.False(t, builder.qry.Nodes[1].Stats.ForceOneCN)
 	})
 
 	t.Run("composite probe preserves existing runtime filters", func(t *testing.T) {
@@ -449,21 +503,9 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 
 		builder.generateRuntimeFilters(2)
 
-		require.Len(t, probe.RuntimeFilterProbeList, 2)
+		require.Len(t, probe.RuntimeFilterProbeList, 1)
 		require.Same(t, existing, probe.RuntimeFilterProbeList[0])
-		require.Equal(t, builder.qry.Nodes[2].RuntimeFilterBuildList[0].Tag, probe.RuntimeFilterProbeList[1].Tag)
-	})
-
-	t.Run("composite build estimate must fit exact IN limit", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
-		probe, build := configureRuntimeFilterCompositePK(builder)
-		probe.Stats.TableCnt = 100_000
-		build.Stats.Outcnt = 50_000
-
-		builder.generateRuntimeFilters(2)
-
 		require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
-		require.Empty(t, probe.RuntimeFilterProbeList)
 	})
 }
 

@@ -23,7 +23,9 @@ import (
 	"os"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -381,9 +383,17 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		if err := checkHashBuildCanceled(proc); err != nil {
 			return err
 		}
-		needUniqueVec := true
-		if hashBuild.IsShuffle || hashBuild.RuntimeFilterSpec == nil || hashBuild.RuntimeFilterSpec.Expr == nil {
-			needUniqueVec = false
+		needUniqueVec := false
+		if !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil && hashBuild.RuntimeFilterSpec.Expr != nil {
+			specType := types.T(hashBuild.RuntimeFilterSpec.Expr.Typ.Id)
+			// Membership-filter consumers own a separate typed-key contract.
+			// Ordinary exact filters collect unique keys only when every raw
+			// payload consumer can preserve the join equality relation. Both
+			// paths already fall back to PASS for composite expressions, so do
+			// not retain keys which can never be serialized.
+			needUniqueVec = hashBuild.RuntimeFilterSpec.Expr.GetF() == nil &&
+				(hashBuild.RuntimeFilterSpec.UseMembershipFilter ||
+					keycodec.SupportsExactRawRuntimeFilter(specType))
 		}
 
 		err := ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc)
@@ -494,6 +504,17 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 	runtimeFilter.Tag = hashBuild.RuntimeFilterSpec.Tag
 
 	spec := hashBuild.RuntimeFilterSpec
+	// Unique keys are source state for an optional message, never transferred
+	// with the message payload. Release them on every terminal path, including
+	// malformed cached plans and contradictory empty/missing states.
+	defer func() {
+		for i := range ctr.hashmapBuilder.UniqueJoinKeys {
+			if ctr.hashmapBuilder.UniqueJoinKeys[i] != nil {
+				ctr.hashmapBuilder.UniqueJoinKeys[i].Free(proc.Mp())
+			}
+		}
+		ctr.hashmapBuilder.UniqueJoinKeys = nil
+	}()
 
 	// send the unique join keys (doc_id membership pushdown) when requested
 	if spec.UseMembershipFilter {
@@ -505,23 +526,29 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 			return nil
 		}
 
-		// No data, directly DROP
-		if ctr.hashmapBuilder.InputBatchRowCount == 0 ||
-			len(ctr.hashmapBuilder.UniqueJoinKeys) == 0 ||
-			ctr.hashmapBuilder.UniqueJoinKeys[0].Length() == 0 {
+		if ctr.hashmapBuilder.InputBatchRowCount == 0 {
 			runtimeFilter.Typ = message.RuntimeFilter_DROP
 			hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 			return nil
 		}
 
+		if len(ctr.hashmapBuilder.UniqueJoinKeys) == 0 ||
+			ctr.hashmapBuilder.UniqueJoinKeys[0] == nil {
+			// A non-empty build with missing payload state is not evidence that
+			// the membership set is empty. Fail open just like ordinary exact
+			// runtime filters.
+			runtimeFilter.Typ = message.RuntimeFilter_PASS
+			hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+			return nil
+		}
+
 		keyVec := ctr.hashmapBuilder.UniqueJoinKeys[0]
+		if keyVec.Length() == 0 {
+			runtimeFilter.Typ = message.RuntimeFilter_DROP
+			hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+			return nil
+		}
 		rowCount := keyVec.Length()
-		defer func() {
-			for i := range ctr.hashmapBuilder.UniqueJoinKeys {
-				ctr.hashmapBuilder.UniqueJoinKeys[i].Free(proc.Mp())
-			}
-			ctr.hashmapBuilder.UniqueJoinKeys = nil
-		}()
 
 		// Always send the unique join keys; the consumer (ivfflat / fulltext
 		// search) decides whether to use them as an exact pk IN filter or to
@@ -546,55 +573,79 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
-	} else if ctr.hashmapBuilder.InputBatchRowCount == 0 || len(ctr.hashmapBuilder.UniqueJoinKeys) == 0 || ctr.hashmapBuilder.UniqueJoinKeys[0].Length() == 0 {
+	} else if ctr.hashmapBuilder.InputBatchRowCount == 0 {
 		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+		return nil
+	}
+
+	// Plans produced by current optimizers reject these types before HashBuild.
+	// Keep this execution-side check because plans can be cached, deserialized,
+	// or constructed by another version. An exact filter is optional; PASS is
+	// correct when its raw payload cannot preserve join equality.
+	specType := types.New(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale)
+	if !keycodec.SupportsExactRawRuntimeFilter(specType.Oid) {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+		return nil
+	}
+
+	if spec.Expr.GetF() != nil {
+		// Composite runtime-filter expression evaluation has no sound peak
+		// estimator yet. PASS preserves query correctness without collecting or
+		// allocating expression intermediates.
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+		return nil
+	}
+
+	if len(ctr.hashmapBuilder.UniqueJoinKeys) == 0 ||
+		ctr.hashmapBuilder.UniqueJoinKeys[0] == nil {
+		// Missing payload state cannot prove that the probe is empty. Runtime
+		// filters are optional, so fail open instead of silently discarding rows.
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+		return nil
+	}
+
+	if ctr.hashmapBuilder.UniqueJoinKeys[0].Length() == 0 {
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+		return nil
+	}
+
+	keyType := ctr.hashmapBuilder.UniqueJoinKeys[0].GetType()
+	if !keycodec.SupportsExactRawRuntimeFilterPair(specType, *keyType) {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
 	}
 
 	hashmapCount := ctr.hashmapBuilder.GetGroupCount()
 	inFilterCardLimit := spec.UpperLimit
-
-	defer func() {
-		for i := range ctr.hashmapBuilder.UniqueJoinKeys {
-			ctr.hashmapBuilder.UniqueJoinKeys[i].Free(proc.Mp())
-		}
-		ctr.hashmapBuilder.UniqueJoinKeys = nil
-	}()
-
 	if hashmapCount > uint64(inFilterCardLimit) {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
-	} else {
-		if spec.Expr.GetF() != nil {
-			// Composite runtime-filter expression evaluation has no sound peak
-			// estimator yet. PASS preserves query correctness without allocating
-			// unaccounted expression intermediates.
-			runtimeFilter.Typ = message.RuntimeFilter_PASS
-			hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+	}
+
+	rowCount := ctr.hashmapBuilder.UniqueJoinKeys[0].Length()
+	ctr.hashmapBuilder.UniqueJoinKeys[0].GetNulls().Reset()
+	ctr.hashmapBuilder.UniqueJoinKeys[0].InplaceSort()
+	data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(ctr.hashmapBuilder.UniqueJoinKeys[0])
+	if err != nil {
+		if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(err, &runtimeFilter, spec, proc) {
 			return nil
 		}
-		rowCount := ctr.hashmapBuilder.UniqueJoinKeys[0].Length()
-
-		ctr.hashmapBuilder.UniqueJoinKeys[0].GetNulls().Reset()
-		ctr.hashmapBuilder.UniqueJoinKeys[0].InplaceSort()
-		data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(ctr.hashmapBuilder.UniqueJoinKeys[0])
-
-		if err != nil {
-			if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(err, &runtimeFilter, spec, proc) {
-				return nil
-			}
-			return err
-		}
-
-		runtimeFilter.Typ = message.RuntimeFilter_IN
-		runtimeFilter.Card = int32(rowCount)
-		runtimeFilter.Data = data
-		runtimeFilter.SetMemoryRelease(release)
-		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
-		ctr.runtimeFilterIn = true
+		return err
 	}
+
+	runtimeFilter.Typ = message.RuntimeFilter_IN
+	runtimeFilter.Card = int32(rowCount)
+	runtimeFilter.Data = data
+	runtimeFilter.SetMemoryRelease(release)
+	hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+	ctr.runtimeFilterIn = true
 	return nil
 }
 

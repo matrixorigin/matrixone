@@ -105,8 +105,10 @@ func TestHashJoinKeyEqualityContract(t *testing.T) {
 
 func hashJoinKeyContractCases() []joinKeyContractCase {
 	float32Type := types.T_float32.ToType()
+	float32Type.Width = 5
 	float32Type.Scale = 2
 	float32ProbeType := types.T_float32.ToType()
+	float32ProbeType.Width = 6
 	float32ProbeType.Scale = 3
 	vectorZero := make([]float32, 8)
 	vectorNegativeZero := make([]float32, 8)
@@ -134,7 +136,7 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 			typ:         float32Type,
 			probeTyp:    float32ProbeType,
 			build:       joinKeyContractValue{value: float32(1.234)},
-			probe:       joinKeyContractValue{value: float32(1.23)},
+			probe:       joinKeyContractValue{value: float32(1.2304)},
 			sqlEquality: "TRUE",
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: float32(i + 10)}
@@ -151,7 +153,7 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 			typ:         float32Type,
 			probeTyp:    float32ProbeType,
 			build:       joinKeyContractValue{value: float32(1.234)},
-			probe:       joinKeyContractValue{value: float32(1.231)},
+			probe:       joinKeyContractValue{value: float32(1.2306)},
 			sqlEquality: "FALSE",
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: float32(i + 10)}
@@ -209,6 +211,20 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 			},
 			makeEquivalent: func(int) joinKeyContractValue {
 				return joinKeyContractValue{value: math.Float64frombits(0x7ff8000000000001)}
+			},
+		},
+		{
+			name:        "scaled-float32-nan",
+			typ:         float32Type,
+			build:       joinKeyContractValue{value: math.Float32frombits(0x7fc00001)},
+			probe:       joinKeyContractValue{value: math.Float32frombits(0x7fc00001)},
+			sqlEquality: "FALSE",
+			skipReason:  "NaN non-match key handling is pending",
+			makeBuildFiller: func(i int) joinKeyContractValue {
+				return joinKeyContractValue{value: float32(i + 1)}
+			},
+			makeEquivalent: func(int) joinKeyContractValue {
+				return joinKeyContractValue{value: math.Float32frombits(0x7fc00001)}
 			},
 		},
 		{

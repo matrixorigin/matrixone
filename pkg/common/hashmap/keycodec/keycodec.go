@@ -31,6 +31,52 @@ type Float32Codec struct {
 	normalizer types.Float32ScaleNormalizer
 }
 
+// SupportsExactRawRuntimeFilter reports whether a raw vector payload can be
+// used as an exact join runtime filter for this type. Exact filters are
+// evaluated by several consumers, including persistent Bloom filters which
+// hash the physical bytes. Keep this as an explicit allowlist: a new type must
+// prove that its raw representation preserves SQL join equality before it can
+// participate in an exact filter.
+//
+// Floating-point types deliberately remain unsupported. Signed zeros compare
+// equal despite having different bytes, and scaled FLOAT32 values are
+// normalized by the join key contract. PASS is the only conservative result
+// for them until every runtime-filter consumer shares the canonical codec.
+func SupportsExactRawRuntimeFilter(oid types.T) bool {
+	switch oid {
+	case types.T_bool,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_uuid, types.T_year:
+		return true
+	default:
+		return false
+	}
+}
+
+// SupportsExactRawRuntimeFilterPair reports whether a payload encoded with
+// payloadType can conservatively filter probeType. OIDs must match because the
+// runtime message does not carry a cross-type conversion contract. Width is
+// representational metadata for the allowed string and fixed-width types, but
+// decimal scale changes the numeric value represented by the same integer
+// bytes and therefore must match.
+func SupportsExactRawRuntimeFilterPair(probeType, payloadType types.Type) bool {
+	if probeType.Oid != payloadType.Oid ||
+		!SupportsExactRawRuntimeFilter(probeType.Oid) {
+		return false
+	}
+	switch probeType.Oid {
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return probeType.Scale == payloadType.Scale
+	default:
+		return true
+	}
+}
+
 // NewFloat32Codec returns the canonical key codec for a FLOAT32 scale.
 func NewFloat32Codec(scale int32) Float32Codec {
 	return Float32Codec{
