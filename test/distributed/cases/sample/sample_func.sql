@@ -26,11 +26,11 @@ select sample(*, 1 rows) from s_t1 group by c1;
 
 -- expected succeed case
 -- 1. sample 2 rows from table by column c1
-select count(*) from (select sample(c1, 2 rows) from s_t1);
+select count(*) from (select sample(c1, 2 rows) from s_t1) as sampled;
 -- 2. sample 2 rows from table by column c2
-select count(*) from (select sample(c2, 2 rows) from s_t1);
+select count(*) from (select sample(c2, 2 rows) from s_t1) as sampled;
 -- 3. sample 2 rows from table by column c2 group by col1
-select count(*) from (select sample(c2, 2 rows) from s_t1 group by c1);
+select count(*) from (select sample(c2, 2 rows) from s_t1 group by c1) as sampled;
 -- 4. sample 3 rows from table by column c3 where c1 = 2, expected to get only 2 rows because one row c3 is null
 select sample(c3, 3 rows) from s_t1 where c1 = 2;
 -- 5. sample 3 rows from table by column c3 where c1 = 1, expected to get 3 rows (0),(1),(2)
@@ -40,11 +40,11 @@ select sample(c3, 100 percent) from s_t1 order by c3;
 -- 7. sample 0 percent from table by column c1, expected to get empty
 select sample(c1, 0 percent) from s_t1;
 -- 8. some case I dont know how to describe it, in short, these cases should be OK
-select count(*) from (select c1, c2, sample(c2, 100 percent), c3 from s_t1);
-select count(*) from (select c1, sample(c2, 100 percent), c2, c3 from s_t1);
+select count(*) from (select c1, c2, sample(c2, 100 percent), c3 from s_t1) as sampled;
+select count(*) from (select c1, sample(c2, 100 percent), c2, c3 from s_t1) as sampled;
 -- 9. with limit
-select count(*) from (select sample(c2, 2 rows) from s_t1 limit 1);
-select count(*) from (select sample(c2, 2 rows) from s_t1 group by c1 limit 2);
+select count(*) from (select sample(c2, 2 rows) from s_t1 limit 1) as sampled;
+select count(*) from (select sample(c2, 2 rows) from s_t1 group by c1 limit 2) as sampled;
 -- 10. with alias
 select sample(c3, 3 rows) as k from s_t1 where c1 = 2;
 -- 11. sample from all invalid rows, should get only one invalid row
@@ -53,7 +53,7 @@ select sample(c3, 2 rows) from s_t1 where c1 = 3;
 select c1, sample(c3, 3 rows) from s_t1 where c1 = 3 group by c1;
 select c1, sample(c3, 3 rows) from s_t1 group by c1 order by c1, c3;
 -- 12. sample as and outer filter
-select * from (select c1, sample(c3, 3 rows) as k from s_t1 group by c1) where k < 2 order by c1, k;
+select * from (select c1, sample(c3, 3 rows) as k from s_t1 group by c1) as sampled where k < 2 order by c1, k;
 
 -- data prepare for sample from multi columns
 drop table if exists s_t2;
@@ -66,7 +66,7 @@ select sample(cc1, cc2, 1 rows) as k from s_t2;
 
 -- expected succeed case
 -- 1. sample 2 rows from table by column cc1, cc2, expected to get 3 rows because we should sample 2 not-null value for each column
-select count(*) from (select sample(cc1, cc2, 2 rows) from s_t2);
+select count(*) from (select sample(cc1, cc2, 2 rows) from s_t2) as sampled;
 -- 2. sample 100 percent from table by column cc1, cc2, expected to get all rows except (null, null)
 select sample(cc1, cc2, 100 percent) from s_t2 order by cc1 asc;
 -- 3. sample 0 percent from table by column cc1, cc2, expected to get empty
@@ -91,6 +91,6 @@ select c1, sample(c1+1, 100 percent) from s_t3 order by c1;
 
 -- test `sample(expression, n rows, unit)` syntax.
 -- it's same as sample(n rows) but will avoid centroids skewed.
-select count(*) from (select sample(c1, 2 rows, 'row') from s_t3);
-select count(*) from (select sample(c1, 2 rows, 'block') from s_t3);
+select count(*) from (select sample(c1, 2 rows, 'row') from s_t3) as sampled;
+select count(*) from (select sample(c1, 2 rows, 'block') from s_t3) as sampled;
 select c1, sample(c2, 1 rows, 'row') from s_t3 group by c1 order by c1;

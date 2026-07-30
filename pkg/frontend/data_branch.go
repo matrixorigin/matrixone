@@ -591,26 +591,23 @@ func dataBranchDeleteTable(
 	}
 
 	{
-		var dropRet executor.Result
-		defer func() {
-			dropRet.Close()
-		}()
-
 		dropSQL := fmt.Sprintf(
 			"drop table %s.%s",
 			quoteIdentifierForSQL(dbName),
 			quoteIdentifierForSQL(tblName),
 		)
-		if dropRet, err = runSql(execCtx.reqCtx, ses, bh, dropSQL, nil, nil); err != nil {
+		// Execute the nested DDL as a real background statement. The internal
+		// SQL fast path deliberately disables statement retry, but a concurrent
+		// branch reclaim can require an RC retry after waiting for the metadata
+		// coordination lock.
+		bh.ClearExecResultSet()
+		if err = bh.Exec(execCtx.reqCtx, dropSQL); err != nil {
 			return
 		}
+		bh.ClearExecResultSet()
 	}
 
-	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, []uint64{tblID}); err != nil {
-		return
-	}
-
-	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, []uint64{tblID}); err != nil {
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, accId, []uint64{tblID}); err != nil {
 		return
 	}
 	if err = compactHistoricalAlterLineageWithBH(execCtx.reqCtx, bh, time.Now().UTC()); err != nil {
@@ -666,11 +663,7 @@ func dataBranchDeleteDatabase(
 		}
 	}
 
-	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, tableIDs); err != nil {
-		return
-	}
-
-	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, tableIDs); err != nil {
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, accId, tableIDs); err != nil {
 		return
 	}
 	if err = compactHistoricalAlterLineageWithBH(execCtx.reqCtx, bh, time.Now().UTC()); err != nil {
@@ -749,9 +742,6 @@ func diffMergeAgency(
 		); err != nil {
 			return
 		}
-		if err = validateProjectedColumns(diffStmt, tblStuff); err != nil {
-			return
-		}
 	} else if mergeStmt != nil {
 		copt.conflictOpt = mergeStmt.ConflictOpt
 		copt.expandUpdate = true
@@ -773,13 +763,12 @@ func diffMergeAgency(
 		); err != nil {
 			return
 		}
-		if tblStuff.def.pkKind == fakeKind {
-			err = moerr.NewNotSupportedNoCtxf(
-				"DATA BRANCH PICK requires a table with a primary key; table %s has no primary key",
-				pickStmt.SrcTable.ObjectName)
-			return
-		}
 	}
+
+	if err = prepareDataBranchWorker(diffStmt, pickStmt, &tblStuff); err != nil {
+		return
+	}
+	defer tblStuff.worker.Release()
 
 	if dagInfo, err = decideLCABranchTSFromBranchDAG(
 		ctx, ses, bh, tblStuff,
@@ -953,6 +942,30 @@ func diffMergeAgency(
 	return err
 }
 
+func prepareDataBranchWorker(
+	diffStmt *tree.DataBranchDiff,
+	pickStmt *tree.DataBranchPick,
+	tblStuff *tableStuff,
+) error {
+	if diffStmt != nil {
+		if err := validateProjectedColumns(diffStmt, *tblStuff); err != nil {
+			return err
+		}
+	}
+	if pickStmt != nil && tblStuff.def.pkKind == fakeKind {
+		return moerr.NewNotSupportedNoCtxf(
+			"DATA BRANCH PICK requires a table with a primary key; table %s has no primary key",
+			pickStmt.SrcTable.ObjectName)
+	}
+
+	worker, err := ants.NewPool(runtime.NumCPU())
+	if err != nil {
+		return err
+	}
+	tblStuff.worker = worker
+	return nil
+}
+
 func handleBranchDiff(
 	execCtx *ExecCtx,
 	ses *Session,
@@ -1025,12 +1038,6 @@ func getTableStuff(
 		tarTblDef  *plan.TableDef
 		baseTblDef *plan.TableDef
 	)
-
-	defer func() {
-		if err == nil {
-			tblStuff.worker, err = ants.NewPool(runtime.NumCPU())
-		}
-	}()
 
 	if tblStuff.tarRel, tblStuff.baseRel, tblStuff.tarSnap, tblStuff.baseSnap, err = getRelations(
 		ctx, ses, bh, srcTable, dstTable,

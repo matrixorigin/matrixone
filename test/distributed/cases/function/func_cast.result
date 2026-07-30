@@ -462,7 +462,7 @@ SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
 invalid argument operator cast, bad value [DATE BIGINT UNSIGNED]
 SELECT CAST(cast('01-01-01' as date) AS SIGNED);
 ➤ cast(cast(01-01-01 as date) as signed)[-5,64,0]  𝄀
-10101
+20010101
 select cast('1.2' as decimal(3,2));
 ➤ cast(1.2 as decimal(3, 2))[3,3,2]  𝄀
 1.20
@@ -559,9 +559,11 @@ insert into t1 values ("2006-01-02", "2006-01-02 12:01:02", "2006-01-02 12:01:02
 select f1 from t1 where f1 between CAST("2006-1-1" as date) and CAST(20060101 as date);
 invalid argument operator cast, bad value [BIGINT DATE]
 select f1 from t1 where f1 between cast("2006-1-1" as date) and cast("2006.1.1" as date);
-➤ f1[91,64,0]
+➤ f1[91,64,0]  𝄀
+2006-01-01
 select f1 from t1 where date(f1) between cast("2006-1-1" as date) and cast("2006.1.1" as date);
-➤ f1[91,64,0]
+➤ f1[91,64,0]  𝄀
+2006-01-01
 select f3 from t1 where f3 between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
 ➤ f3[93,64,0]  𝄀
 2006-01-01 12:01:01
