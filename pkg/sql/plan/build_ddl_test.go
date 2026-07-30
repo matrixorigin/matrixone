@@ -152,6 +152,24 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		require.ErrorContains(t, err, "NOT ENFORCED CHECK constraints")
 	})
 
+	t.Run("external table column check is unsupported", func(t *testing.T) {
+		_, err := build(
+			"create external table t(a int check (a > 0)) "+
+				"infile{'filepath'='/tmp/t.csv'}",
+			false,
+		)
+		require.ErrorContains(t, err, "CHECK constraints on external tables")
+	})
+
+	t.Run("external table table check is unsupported", func(t *testing.T) {
+		_, err := build(
+			"create external table t(a int, check (a > 0)) "+
+				"infile{'filepath'='/tmp/t.csv'}",
+			false,
+		)
+		require.ErrorContains(t, err, "CHECK constraints on external tables")
+	})
+
 	t.Run("invalid function and marker do not panic", func(t *testing.T) {
 		require.NotPanics(t, func() {
 			_, err := build("create table t(a int, check (no_such_func(a) > 0))", false)

@@ -464,7 +464,7 @@ func TestConstructCreateTableSQLPreservesCheckAcrossSQLModes(t *testing.T) {
 			sourceMode: "NO_BACKSLASH_ESCAPES",
 			replayMode: "",
 			createSQL:  `create table t(a int, check (name_const('a\b', 1) = 1))`,
-			canonical:  "name_const(cast(0x615c62 as varchar), 1)",
+			canonical:  "name_const(0x615c62, 1)",
 		},
 	}
 	for _, tc := range testCases {

@@ -1478,6 +1478,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if !ok {
 					continue
 				}
+				if stmt.Param != nil || stmt.IcebergParam != nil {
+					return moerr.NewNotSupported(
+						ctx.GetContext(),
+						"CHECK constraints on external tables",
+					)
+				}
 				pendingChecks = append(pendingChecks, pendingCheckDef{
 					name:       check.Name,
 					expr:       check.Expr,
@@ -1600,6 +1606,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				fkDatasOfFKSelfRefer = append(fkDatasOfFKSelfRefer, fkData)
 			}
 		case *tree.CheckIndex:
+			if stmt.Param != nil || stmt.IcebergParam != nil {
+				return moerr.NewNotSupported(
+					ctx.GetContext(),
+					"CHECK constraints on external tables",
+				)
+			}
 			pendingChecks = append(pendingChecks, pendingCheckDef{
 				name:     def.ConstraintSymbol,
 				expr:     def.Expr,
