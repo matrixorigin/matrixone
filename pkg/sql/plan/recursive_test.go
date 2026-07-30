@@ -18,7 +18,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -133,20 +134,51 @@ func TestRecursiveCteStringAnchorUsesAssignmentCast(t *testing.T) {
 			select n + 1, concat(s, 'b') from r where n < 4
 		)
 		select * from r`
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
-	require.NoError(t, err)
+	rt := runtime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 
-	found := false
+	for _, test := range []struct {
+		name        string
+		version     int64
+		mustContain string
+		mustExclude []string
+	}{
+		{
+			name:        "mixed version uses supported strict cast",
+			version:     defines.MORPCVersion4,
+			mustContain: "cast_strict",
+			mustExclude: []string{"cast_assign", "cast_ignore"},
+		},
+		{
+			name:        "latest version uses runtime assignment cast",
+			version:     defines.MORPCVersion5,
+			mustContain: "cast_assign",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, test.version)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
+			require.NoError(t, err)
+
+			functionNames := recursivePlanFunctionNames(logicPlan)
+			require.Contains(t, functionNames, test.mustContain)
+			for _, name := range test.mustExclude {
+				require.NotContains(t, functionNames, name)
+			}
+		})
+	}
+}
+
+func recursivePlanFunctionNames(logicPlan *planpb.Plan) map[string]struct{} {
+	functionNames := make(map[string]struct{})
 	var visit func(*planpb.Expr)
 	visit = func(expr *planpb.Expr) {
-		if expr == nil || found {
+		if expr == nil {
 			return
 		}
 		if fn := expr.GetF(); fn != nil {
-			if fn.Func != nil && fn.Func.ObjName == "cast_assign" &&
-				expr.Typ.Id == int32(types.T_varchar) {
-				found = true
-				return
+			if fn.Func != nil {
+				functionNames[fn.Func.ObjName] = struct{}{}
 			}
 			for _, arg := range fn.Args {
 				visit(arg)
@@ -163,7 +195,7 @@ func TestRecursiveCteStringAnchorUsesAssignmentCast(t *testing.T) {
 			visit(expr)
 		}
 	}
-	require.True(t, found, "recursive string member must use cast_assign")
+	return functionNames
 }
 
 func TestOrdinaryAliasesRemainUnchanged(t *testing.T) {
