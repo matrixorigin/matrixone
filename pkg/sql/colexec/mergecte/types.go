@@ -35,11 +35,12 @@ const (
 )
 
 type container struct {
-	buf            *batch.Batch
-	bats           []*batch.Batch
-	curNodeCnt     int32
-	status         int32
-	last           bool
+	buf        *batch.Batch
+	bats       []*batch.Batch
+	curNodeCnt int32
+	status     int32
+	last       bool
+	// freeBats owns the cached batches. buf and bats are only aliases.
 	freeBats       []*batch.Batch
 	i              int
 	recursiveLevel int
@@ -90,19 +91,29 @@ func (mergeCTE *MergeCTE) Release() {
 }
 
 func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
-	mergeCTE.ctr.status = sendInitial
-	mergeCTE.ctr.i = 0
-	mergeCTE.ctr.last = false
-	mergeCTE.ctr.recursiveLevel = 0
+	ctr := &mergeCTE.ctr
+	// Discard references from the previous execution without destroying the
+	// reusable cache owned by freeBats.
+	ctr.buf = nil
+	ctr.bats = nil
+	ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
+	ctr.status = sendInitial
+	ctr.i = 0
+	ctr.last = false
+	ctr.recursiveLevel = 0
 }
 
 func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
-	for _, bat := range mergeCTE.ctr.freeBats {
+	ctr := &mergeCTE.ctr
+	for _, bat := range ctr.freeBats {
 		if bat != nil {
 			bat.Clean(proc.Mp())
 		}
 	}
+	ctr.buf = nil
+	ctr.bats = nil
+	ctr.freeBats = nil
+	ctr.i = 0
 }
 
 func (mergeCTE *MergeCTE) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

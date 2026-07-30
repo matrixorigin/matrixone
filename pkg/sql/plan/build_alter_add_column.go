@@ -409,6 +409,7 @@ func DropColumn(
 	}
 
 	delete(alterCtx.alterColMap, colName)
+	delete(alterCtx.changColDefMap, column.ColId)
 	return column.Primary, nil
 }
 
