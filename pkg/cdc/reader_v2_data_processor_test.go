@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1077,6 +1078,34 @@ func TestDataProcessor_TailWipThenTailDone_AccumulatesCorrectly(t *testing.T) {
 	// Batches should be cleared after sink
 	require.Nil(t, h.dp.insertAtmBatch)
 	require.Nil(t, h.dp.deleteAtmBatch)
+}
+
+func TestDataProcessor_TailWipRangeSinksOnce(t *testing.T) {
+	const rowCount = int(objectio.BlockMaxRows)
+	ctx := context.Background()
+	h := newDataProcessorHarness(t, false)
+
+	from := types.BuildTS(1, 0)
+	for i := 0; i < rowCount; i++ {
+		to := types.BuildTS(int64(i+2), 0)
+		h.dp.SetTransactionRange(from, to)
+		changeType := ChangeTypeTailWip
+		if i == rowCount-1 {
+			changeType = ChangeTypeTailDone
+		}
+		require.NoError(t, h.dp.ProcessChange(ctx, &ChangeData{
+			Type:        changeType,
+			InsertBatch: buildBatch(t, h.mp, []int32{int32(i)}, to),
+		}))
+		from = to
+	}
+
+	calls := h.sinker.sinkCallsSnapshot()
+	require.Len(t, calls, 1)
+	require.Equal(t, OutputTypeTail, calls[0].outputTyp)
+	require.NotNil(t, calls[0].insertAtmBatch)
+	require.Equal(t, rowCount, calls[0].insertAtmBatch.RowCount())
+	calls[0].Close()
 }
 
 // TestDataProcessor_BeginFailure_BatchesRetained tests that when BeginTransaction
