@@ -63,6 +63,11 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	}
 	group.OpAnalyzer = process.NewAnalyzer(group.GetIdx(), group.IsFirst, group.IsLast, "group")
 
+	// Ordered aggregate setup consumes the effective spill threshold. Set it
+	// before preparing aggregate executors so the first execution behaves the
+	// same as a reused prepared operator.
+	group.ctr.setSpillMem(group.SpillMem, group.Aggs)
+
 	if err = group.prepareGroupAndAggArg(proc); err != nil {
 		return err
 	}
@@ -71,7 +76,6 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 
-	group.ctr.setSpillMem(group.SpillMem, group.Aggs)
 	return nil
 }
 
@@ -165,6 +169,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			}
 		}
 	}
+	group.configureH0OrderedAggSpill(proc)
 
 	return nil
 }
