@@ -982,14 +982,26 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
-	if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
+	isGroupConcat := strings.EqualFold(funcName, "group_concat") ||
+		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat")
+	if isGroupConcat && len(node.Exprs) > 0 {
+		// The parser stores GROUP_CONCAT's separator as the final expression so
+		// binders can consume it uniformly. It is not a concatenated argument.
+		node.Exprs[:len(node.Exprs)-1].Format(ctx)
+		if node.OrderBy != nil {
+			ctx.WriteByte(' ')
+			node.OrderBy.Format(ctx)
+		}
+		ctx.WriteString(" separator ")
+		node.Exprs[len(node.Exprs)-1].Format(ctx)
+	} else if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
 		trimExprsFormat(ctx, node.Exprs)
 	} else {
 		formatFuncExprs(ctx, node)
-	}
 
-	if node.OrderBy != nil {
-		node.OrderBy.Format(ctx)
+		if node.OrderBy != nil {
+			node.OrderBy.Format(ctx)
+		}
 	}
 
 	ctx.WriteByte(')')

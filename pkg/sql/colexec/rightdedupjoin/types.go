@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -63,7 +64,11 @@ type container struct {
 
 	spillEngine    *spillutil.SpillEngine
 	spillThreshold int64
-	resultBatch    *batch.Batch
+	// Non-nil only for spilled joins, where probe expressions are part of the
+	// shared HashBuild/spill working set. Resident probe expressions remain
+	// under normal process/mpool accounting; this is not a general query budget.
+	probeExpressionLease *hashbuild.ExpressionMemoryLease
+	resultBatch          *batch.Batch
 }
 
 type RightDedupJoin struct {
@@ -134,10 +139,15 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 	ctr.cleanHashMap()
 	ctr.resetResultBatch()
 	ctr.resetExprExecutor()
-	ctr.resetEvalVectors()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
+	}
+	if ctr.probeExpressionLease != nil {
+		ctr.cleanEvalVectors()
+		ctr.releaseProbeExpressionLease()
+	} else {
+		ctr.resetEvalVectors()
 	}
 	ctr.state = Build
 }
@@ -153,6 +163,7 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()
+	ctr.releaseProbeExpressionLease()
 }
 
 func (rightDedupJoin *RightDedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -210,6 +221,7 @@ func (ctr *container) cleanEvalVectors() {
 		ctr.evecs[i].vec = nil
 	}
 	ctr.evecs = nil
+	ctr.vecs = nil
 }
 
 func (ctr *container) resetEvalVectors() {
@@ -217,5 +229,12 @@ func (ctr *container) resetEvalVectors() {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.ResetForNextQuery()
 		}
+	}
+}
+
+func (ctr *container) releaseProbeExpressionLease() {
+	if ctr.probeExpressionLease != nil {
+		ctr.probeExpressionLease.Release()
+		ctr.probeExpressionLease = nil
 	}
 }

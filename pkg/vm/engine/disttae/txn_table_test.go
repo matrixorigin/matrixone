@@ -85,6 +85,17 @@ func newTxnTableForTest() *txnTable {
 	return table
 }
 
+func TestTxnTableGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
+	table := &txnTable{
+		db:      &txnDatabase{},
+		relKind: catalog.SystemTemporaryTable,
+	}
+	tableDef := table.GetTableDef(context.Background())
+	require.NotNil(t, tableDef)
+	require.Equal(t, catalog.SystemTemporaryTable, tableDef.TableType)
+	require.False(t, tableDef.IsTemporary)
+}
+
 func makeBatchForTest(
 	mp *mpool.MPool,
 	ints ...int64,
