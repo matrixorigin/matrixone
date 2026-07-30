@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -2713,98 +2714,39 @@ func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMod
 }
 
 func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerForOrdinal func(int) string) string {
+	scanner := mysqlparser.NewScannerWithSQLMode(
+		dialect.MYSQL,
+		sql,
+		mysqlparser.ParseSQLModeFlags(sqlMode),
+	)
+	defer mysqlparser.PutScanner(scanner)
+
 	var result strings.Builder
 	result.Grow(len(sql))
-	noBackslashEscapes := strings.Contains(strings.ToUpper(sqlMode), "NO_BACKSLASH_ESCAPES")
-
-	for i := 0; i < len(sql); {
-		switch sql[i] {
-		case '\'', '"', '`':
-			quote := sql[i]
-			result.WriteByte(quote)
-			i++
-			for i < len(sql) {
-				ch := sql[i]
-				result.WriteByte(ch)
-				i++
-				if ch == '\\' && quote != '`' && !noBackslashEscapes && i < len(sql) {
-					result.WriteByte(sql[i])
-					i++
-					continue
-				}
-				if ch == quote {
-					if i < len(sql) && sql[i] == quote {
-						result.WriteByte(sql[i])
-						i++
-						continue
-					}
-					break
-				}
-			}
-		case '#':
-			for i < len(sql) {
-				result.WriteByte(sql[i])
-				if sql[i] == '\n' {
-					i++
-					break
-				}
-				i++
-			}
-		case '-':
-			if i+1 < len(sql) && sql[i+1] == '-' &&
-				(i+2 == len(sql) || sql[i+2] <= ' ') {
-				for i < len(sql) {
-					result.WriteByte(sql[i])
-					if sql[i] == '\n' {
-						i++
-						break
-					}
-					i++
-				}
-				continue
-			}
-			result.WriteByte(sql[i])
-			i++
-		case '/':
-			if i+1 < len(sql) && sql[i+1] == '*' {
-				result.WriteString("/*")
-				i += 2
-				for i < len(sql) {
-					if i+1 < len(sql) && sql[i] == '*' && sql[i+1] == '/' {
-						result.WriteString("*/")
-						i += 2
-						break
-					}
-					result.WriteByte(sql[i])
-					i++
-				}
-				continue
-			}
-			result.WriteByte(sql[i])
-			i++
-		case '$':
-			end := i + 1
-			for end < len(sql) && sql[end] >= '0' && sql[end] <= '9' {
-				end++
-			}
-			if end == i+1 {
-				result.WriteByte(sql[i])
-				i++
-				continue
-			}
-			ordinal, err := strconv.Atoi(sql[i+1 : end])
-			if err != nil || ordinal < 1 || ordinal > argCount {
-				result.WriteString(sql[i:end])
-			} else {
-				result.WriteString(markerForOrdinal(ordinal))
-			}
-			i = end
-		default:
-			result.WriteByte(sql[i])
-			i++
+	written := 0
+	for {
+		token, value := scanner.Scan()
+		if token == 0 || token == mysqlparser.LEX_ERROR {
+			break
 		}
+		if token != mysqlparser.ID || len(value) < 2 || value[0] != '$' {
+			continue
+		}
+
+		ordinal, err := strconv.Atoi(value[1:])
+		if err != nil || ordinal < 1 || ordinal > argCount {
+			continue
+		}
+
+		// ID tokens are returned byte-for-byte from the source, so their start is
+		// the scanner's current byte offset minus the token length.
+		start := scanner.Pos - len(value)
+		result.WriteString(sql[written:start])
+		result.WriteString(markerForOrdinal(ordinal))
+		written = scanner.Pos
 	}
 
+	result.WriteString(sql[written:])
 	return result.String()
 }
 

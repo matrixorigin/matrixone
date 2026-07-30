@@ -130,13 +130,39 @@ type sqlUdfMockCompilerContext struct {
 }
 
 func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*function.Udf, error) {
-	if name != "f_lookup" {
+	switch name {
+	case "f_lookup":
+		return &function.Udf{
+			Body:     "select n_regionkey from nation where n_nationkey = $1",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_ansi_quotes":
+		mode := "ANSI_QUOTES"
+		return &function.Udf{
+			Body:     `select 1 from (select 1) as "a\" where $1 = 2`,
+			Language: string(tree.SQL),
+			SQLMode:  &mode,
+		}, nil
+	case "f_ansi":
+		mode := "ANSI"
+		return &function.Udf{
+			Body:     `select 1 from (select 1) as "a\" where $1 = 2`,
+			Language: string(tree.SQL),
+			SQLMode:  &mode,
+		}, nil
+	case "f_executable_comment":
+		return &function.Udf{
+			Body:     "/*! $1 + */ 1",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_slash_comment":
+		return &function.Udf{
+			Body:     "select 1 // '\n + $1",
+			Language: string(tree.SQL),
+		}, nil
+	default:
 		return nil, nil
 	}
-	return &function.Udf{
-		Body:     "select n_regionkey from nation where n_nationkey = $1",
-		Language: string(tree.SQL),
-	}, nil
 }
 
 func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
@@ -160,6 +186,34 @@ func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
 	query := built.GetQuery()
 	require.NotNil(t, query)
 	require.True(t, queryContainsCrossRelationEquality(query), "SQL UDF parameter must bind to the outer scan column")
+}
+
+func TestBindSQLUDFArgumentMarkersFollowLexerSemantics(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "ANSI_QUOTES identifier", query: "select f_ansi_quotes(2)"},
+		{name: "ANSI composite mode identifier", query: "select f_ansi(2)"},
+		{name: "executable comment", query: "select f_executable_comment(2)"},
+		{name: "slash line comment", query: "select f_slash_comment(2)"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, test.query, 1)
+			require.NoError(t, err)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+
+			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+			_, err = BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestExpandSQLUdfArgumentsAvoidsIdentifierCollision(t *testing.T) {
@@ -237,6 +291,11 @@ func TestReplaceSQLUdfArgMarkers(t *testing.T) {
 			name: "out of range parameter",
 			sql:  "select $0, $3, $1",
 			want: "select $0, $3, <arg1>",
+		},
+		{
+			name: "parameter-like identifier",
+			sql:  "select $1suffix, $1",
+			want: "select $1suffix, <arg1>",
 		},
 	}
 
