@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -51,6 +52,8 @@ var (
 var (
 	bootstrapKey = "_mo_bootstrap"
 )
+
+const defaultBootstrapRetryInterval = time.Second
 
 var (
 	bootstrappedCheckerDB        = catalog.MOTaskDB
@@ -135,6 +138,8 @@ type service struct {
 	stopper *stopper.Stopper
 	handles []VersionHandle
 
+	bootstrapRetryInterval time.Duration
+
 	mu struct {
 		sync.RWMutex
 		tenants map[int32]bool
@@ -160,13 +165,14 @@ func NewService(
 	opts ...Option,
 ) Service {
 	s := &service{
-		sid:     sid,
-		clock:   clock,
-		exec:    exec,
-		lock:    lock,
-		client:  client,
-		logger:  getLogger(sid).Named("upgrade-framework"),
-		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger(sid).RawLogger())),
+		sid:                    sid,
+		clock:                  clock,
+		exec:                   exec,
+		lock:                   lock,
+		client:                 client,
+		logger:                 getLogger(sid).Named("upgrade-framework"),
+		stopper:                stopper.NewStopper("upgrade", stopper.WithLogger(getLogger(sid).RawLogger())),
+		bootstrapRetryInterval: defaultBootstrapRetryInterval,
 	}
 	s.mu.tenants = make(map[int32]bool)
 	s.initUpgrade()
@@ -195,7 +201,7 @@ func (s *service) Bootstrap(ctx context.Context) error {
 	// current node get the bootstrap privilege
 	if ok {
 		// the auto-increment service has already been initialized at current time
-		return s.execBootstrap(ctx)
+		return s.execBootstrapWithRetry(ctx)
 	}
 
 	// otherwise, wait bootstrap completed
@@ -211,6 +217,65 @@ func (s *service) Bootstrap(ctx context.Context) error {
 				zap.Error(err))
 			return err
 		}
+	}
+}
+
+func (s *service) execBootstrapWithRetry(ctx context.Context) error {
+	for attempt := 1; ; attempt++ {
+		err := s.execBootstrap(ctx)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !morpc.IsConnectionError(err) {
+			return err
+		}
+
+		s.logger.Warn("bootstrap interrupted by connection error",
+			zap.Int("attempt", attempt),
+			zap.Error(err))
+
+		// A connection error can also hide a successful commit. Establish the
+		// durable bootstrap state before starting another all-or-nothing txn.
+		for {
+			if err := waitBootstrapRetry(ctx, s.bootstrapRetryInterval); err != nil {
+				return err
+			}
+
+			ok, checkErr := s.checkAlreadyBootstrapped(ctx)
+			if ok {
+				s.logger.Info("bootstrap completed despite lost connection",
+					zap.Int("attempt", attempt))
+				return nil
+			}
+			if checkErr == nil {
+				break
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !morpc.IsConnectionError(checkErr) {
+				return checkErr
+			}
+
+			s.logger.Warn("bootstrap state check interrupted by connection error",
+				zap.Int("attempt", attempt),
+				zap.Error(checkErr))
+		}
+	}
+}
+
+func waitBootstrapRetry(ctx context.Context, interval time.Duration) error {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

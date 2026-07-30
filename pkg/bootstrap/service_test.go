@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	mock_executor "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 )
 
 var _ client.TxnOperator = new(testTxnOperator)
@@ -319,6 +320,95 @@ func TestBootstrapWithWait(t *testing.T) {
 			assert.True(t, n.Load() > 0)
 		},
 	)
+}
+
+func TestBootstrapRetriesConnectionError(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			ctrl := gomock.NewController(t)
+			exec := mock_executor.NewMockSQLExecutor(ctrl)
+			empty := executor.Result{}
+
+			exec.EXPECT().
+				Exec(gomock.Any(), "show databases", gomock.Any()).
+				Return(empty, nil).
+				Times(2)
+			exec.EXPECT().
+				ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).
+				Return(moerr.NewRPCTimeoutNoCtx())
+			exec.EXPECT().
+				ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).
+				Return(nil)
+
+			b := newBootstrapServiceForTest(sid, exec)
+			require.NoError(t, b.Bootstrap(context.Background()))
+		},
+	)
+}
+
+func TestBootstrapChecksStateBeforeRetry(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			ctrl := gomock.NewController(t)
+			exec := mock_executor.NewMockSQLExecutor(ctrl)
+
+			gomock.InOrder(
+				exec.EXPECT().
+					Exec(gomock.Any(), "show databases", gomock.Any()).
+					Return(executor.Result{}, nil),
+				exec.EXPECT().
+					ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).
+					Return(moerr.NewRPCTimeoutNoCtx()),
+				exec.EXPECT().
+					Exec(gomock.Any(), "show databases", gomock.Any()).
+					Return(newBootstrapStringResult(bootstrappedCheckerDB), nil),
+				exec.EXPECT().
+					Exec(gomock.Any(), fmt.Sprintf("show tables from %s", bootstrappedCheckerDB), gomock.Any()).
+					Return(newBootstrapStringResult(allBootstrappedCheckerTables()...), nil),
+			)
+
+			b := newBootstrapServiceForTest(sid, exec)
+			require.NoError(t, b.Bootstrap(context.Background()))
+		},
+	)
+}
+
+func TestBootstrapDoesNotRetryNonConnectionError(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			ctrl := gomock.NewController(t)
+			exec := mock_executor.NewMockSQLExecutor(ctrl)
+			expected := moerr.NewInternalErrorNoCtx("invalid bootstrap SQL")
+
+			exec.EXPECT().
+				Exec(gomock.Any(), "show databases", gomock.Any()).
+				Return(executor.Result{}, nil)
+			exec.EXPECT().
+				ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).
+				Return(expected)
+
+			b := newBootstrapServiceForTest(sid, exec)
+			require.ErrorIs(t, b.Bootstrap(context.Background()), expected)
+		},
+	)
+}
+
+func newBootstrapServiceForTest(sid string, exec executor.SQLExecutor) *service {
+	b := NewService(
+		sid,
+		&memLocker{},
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
+		exec,
+	).(*service)
+	b.bootstrapRetryInterval = 0
+	return b
 }
 
 func TestBootstrapMissingSQLTaskTablesIsNotBootstrapped(t *testing.T) {
