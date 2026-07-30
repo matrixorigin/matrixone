@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -144,6 +145,26 @@ func TestIsSharedSystemTable(t *testing.T) {
 	require.True(t, isSharedSystemTable(catalog.MO_SYSTEM, catalog.MO_STATEMENT))
 	require.False(t, isSharedSystemTable(catalog.MO_SYSTEM_METRICS, "tenant_table"))
 	require.False(t, isSharedSystemTable("tenant_db", catalog.MO_METRIC))
+}
+
+func TestCompareViewDependenciesIsTotal(t *testing.T) {
+	dependencies := []ViewDependency{
+		{AccountID: 1, LogicalID: 2, TableID: 3, Subscription: true, SubscriptionDB: "sub-b"},
+		{AccountID: 1, LogicalID: 2, TableID: 3, Snapshot: true},
+		{AccountID: 1, LogicalID: 2, TableID: 3},
+		{AccountID: 1, LogicalID: 2, TableID: 3, Subscription: true, SubscriptionDB: "sub-a"},
+		{AccountID: 1, LogicalID: 2, TableID: 4},
+	}
+
+	slices.SortFunc(dependencies, compareViewDependencies)
+
+	require.Equal(t, []ViewDependency{
+		{AccountID: 1, LogicalID: 2, TableID: 3},
+		{AccountID: 1, LogicalID: 2, TableID: 3, Subscription: true, SubscriptionDB: "sub-a"},
+		{AccountID: 1, LogicalID: 2, TableID: 3, Subscription: true, SubscriptionDB: "sub-b"},
+		{AccountID: 1, LogicalID: 2, TableID: 3, Snapshot: true},
+		{AccountID: 1, LogicalID: 2, TableID: 4},
+	}, dependencies)
 }
 
 func TestBuildCreateViewExplicitColumnList(t *testing.T) {

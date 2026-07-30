@@ -148,28 +148,19 @@ func TestBuildViewMetadataRefreshQueryEscapesLegacyTableName(t *testing.T) {
 	require.Contains(t, query, `x\\'')) OR 1=1 -- x`)
 	require.Contains(t, query, `\"logical_id\":24,`)
 	require.Contains(t, query, `\"table_id\":42,`)
+	require.Contains(t, query, "pub_account_id = 7")
+	require.NotContains(t, query, "account_id = 7 and viewdef not like")
 }
 
-func TestViewUsesSnapshot(t *testing.T) {
-	require.True(t, viewUsesSnapshot(plan.ViewData{
-		Dependencies: []plan.ViewDependency{{Snapshot: true}},
-	}))
-	require.True(t, viewUsesSnapshot(plan.ViewData{
-		Stmt: "create view v as select * from t {snapshot = 'sn'}",
-	}))
-	require.False(t, viewUsesSnapshot(plan.ViewData{
-		Stmt: "create view v as select * from t",
-	}))
-}
-
-func TestPersistedViewSubscriptionResolver(t *testing.T) {
-	resolver := persistedViewSubscriptionResolver{dependencies: []plan.ViewDependency{{
-		AccountID:      9,
-		AccountIDSet:   true,
-		Subscription:   true,
-		SubscriptionDB: "subdb",
-		PublisherDB:    "pubdb",
-	}}}
+func TestCurrentViewSubscriptionResolver(t *testing.T) {
+	resolver := currentViewSubscriptionResolver{byDatabase: map[string]*plan.SubscriptionMeta{
+		"subdb": {
+			AccountId: 9,
+			DbName:    "pubdb",
+			SubName:   "subdb",
+			Tables:    "allowed",
+		},
+	}}
 
 	meta, err := resolver.GetSubscriptionMeta("subdb")
 
@@ -177,7 +168,7 @@ func TestPersistedViewSubscriptionResolver(t *testing.T) {
 	require.Equal(t, int32(9), meta.GetAccountId())
 	require.Equal(t, "pubdb", meta.GetDbName())
 	require.Equal(t, "subdb", meta.GetSubName())
-	require.Equal(t, "*", meta.GetTables())
+	require.Equal(t, "allowed", meta.GetTables())
 
 	meta, err = resolver.GetSubscriptionMeta("localdb")
 	require.NoError(t, err)
@@ -260,13 +251,18 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 	query := "select account_id, rel_id, reldatabase, relname, viewdef from mo_catalog.mo_tables " +
 		"where relkind = 'v' " +
 		"and reldatabase not in ('mo_catalog', 'information_schema') and rel_id > 0 " +
-		"and ((account_id = 7 and viewdef not like '%\\\"dependencies\\\":%' " +
+		"and ((((account_id = 7) or account_id in " +
+		"(select sub_account_id from mo_catalog.mo_subs where pub_account_id = 7 and status = 0)) " +
+		"and viewdef not like '%\\\"dependencies\\\":%' " +
 		"and instr(viewdef, 'source_t') > 0) " +
 		"or (viewdef like '%\\\"account_id\\\":7,%' and (viewdef like '%\\\"logical_id\\\":24,%' " +
 		"or viewdef like '%\\\"table_id\\\":42,%')) " +
 		"or (account_id = 7 and viewdef like '%\\\"table_id\\\":42,%' " +
 		"and viewdef not like '%\\\"logical_id\\\":%')) order by rel_id limit 128"
 	nextQuery := strings.Replace(query, "rel_id > 0", "rel_id > 2", 1)
+	subscriptionQuery := "select sub_name, pub_account_id, pub_account_name, pub_name, " +
+		"pub_database, pub_tables from mo_catalog.mo_subs " +
+		"where sub_account_id = 7 and sub_name is not null and status = 0"
 
 	bat := batch.NewWithSize(5)
 	bat.SetRowCount(2)
@@ -292,8 +288,9 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("not-json"), false, mp))
 
 	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
-		query:     {Mp: mp, Batches: []*batch.Batch{bat}},
-		nextQuery: {},
+		query:             {Mp: mp, Batches: []*batch.Batch{bat}},
+		subscriptionQuery: {},
+		nextQuery:         {},
 	}}
 	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
 	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
@@ -302,6 +299,7 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 	))
 	require.Equal(t, []string{
 		query,
+		subscriptionQuery,
 		"alter view `db`.`v` as select `a` from `t`",
 		nextQuery,
 	}, spyExec.executedSQLs)

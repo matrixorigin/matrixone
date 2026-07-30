@@ -450,6 +450,18 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
+	replaceDef := qry.GetTableDef()
+	var refresh viewMetadataRefreshContext
+	var refreshedViewData plan2.ViewData
+	if isViewMetadataRefresh(c.proc.Ctx) {
+		refresh, _ = c.proc.Ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext)
+		if replaceDef.GetViewSql() == nil ||
+			json.Unmarshal([]byte(replaceDef.GetViewSql().GetView()), &refreshedViewData) != nil ||
+			!viewDependsOnTable(refreshedViewData.Dependencies, refresh) {
+			return nil
+		}
+	}
+
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
@@ -458,15 +470,17 @@ func (s *Scope) AlterView(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	replaceDef := qry.GetTableDef()
 	if isViewMetadataRefresh(c.proc.Ctx) {
-		refresh, _ := c.proc.Ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext)
-		var refreshedViewData plan2.ViewData
-		if replaceDef.GetViewSql() == nil ||
-			json.Unmarshal([]byte(replaceDef.GetViewSql().GetView()), &refreshedViewData) != nil ||
-			!viewDependsOnTable(refreshedViewData.Dependencies, refresh) {
-			return nil
+		if refresh.dependentViews != nil {
+			*refresh.dependentViews = *refresh.dependentViews + 1
+			if err := checkViewMetadataRefreshLimit(
+				c.proc.Ctx,
+				*refresh.dependentViews,
+			); err != nil {
+				return err
+			}
 		}
+		normalizeRefreshedViewDependencies(refreshedViewData.Dependencies, refresh)
 		currentDef := rel.GetTableDef(c.proc.Ctx)
 		columnsChanged := !viewColumnsEqual(currentDef.GetCols(), replaceDef.GetCols())
 		replaceDef = plan2.DeepCopyTableDef(currentDef, true)
@@ -510,6 +524,24 @@ func (s *Scope) AlterView(c *Compile) error {
 			),
 		},
 	)
+}
+
+func normalizeRefreshedViewDependencies(
+	dependencies []plan2.ViewDependency,
+	refresh viewMetadataRefreshContext,
+) {
+	for i := range dependencies {
+		dependency := &dependencies[i]
+		if dependency.Snapshot ||
+			!dependency.AccountIDSet ||
+			dependency.AccountID != refresh.sourceAccountID {
+			continue
+		}
+		if dependency.LogicalID == refresh.sourceLogicalID ||
+			dependency.TableID == refresh.currentSourceTableID {
+			dependency.LogicalID = refresh.sourceLogicalID
+		}
+	}
 }
 
 func viewDependsOnTable(

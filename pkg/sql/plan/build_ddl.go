@@ -221,26 +221,14 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 				dependency.AccountID = snapshot.GetTenant().GetTenantID()
 			}
 		}
-		key := fmt.Sprintf(
-			"%d/%d/%t/%t/%s",
-			dependency.AccountID,
-			dependency.LogicalID,
-			dependency.Snapshot,
-			dependency.Subscription,
-			dependency.SubscriptionDB,
-		)
+		key := viewDependencyIdentity(dependency)
 		dependencyByIdentity[key] = dependency
 	}
 	dependencies := make([]ViewDependency, 0, len(dependencyByIdentity))
 	for _, dependency := range dependencyByIdentity {
 		dependencies = append(dependencies, dependency)
 	}
-	slices.SortFunc(dependencies, func(left, right ViewDependency) int {
-		if accountOrder := cmp.Compare(left.AccountID, right.AccountID); accountOrder != 0 {
-			return accountOrder
-		}
-		return cmp.Compare(left.LogicalID, right.LogicalID)
-	})
+	slices.SortFunc(dependencies, compareViewDependencies)
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
@@ -313,6 +301,47 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	})
 
 	return &tableDef, nil
+}
+
+func viewDependencyIdentity(dependency ViewDependency) string {
+	return fmt.Sprintf(
+		"%d/%d/%d/%t/%t/%s/%s",
+		dependency.AccountID,
+		dependency.LogicalID,
+		dependency.TableID,
+		dependency.Snapshot,
+		dependency.Subscription,
+		dependency.SubscriptionDB,
+		dependency.PublisherDB,
+	)
+}
+
+func compareViewDependencies(left, right ViewDependency) int {
+	if order := cmp.Compare(left.AccountID, right.AccountID); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.LogicalID, right.LogicalID); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.TableID, right.TableID); order != 0 {
+		return order
+	}
+	if left.Snapshot != right.Snapshot {
+		if left.Snapshot {
+			return 1
+		}
+		return -1
+	}
+	if left.Subscription != right.Subscription {
+		if left.Subscription {
+			return 1
+		}
+		return -1
+	}
+	if order := cmp.Compare(left.SubscriptionDB, right.SubscriptionDB); order != 0 {
+		return order
+	}
+	return cmp.Compare(left.PublisherDB, right.PublisherDB)
 }
 
 func isSharedSystemTable(database, table string) bool {

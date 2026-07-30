@@ -63,38 +63,23 @@ func TestNewInternalStatementContextPreservesRootAndClaimsStatsOnce(t *testing.T
 	}
 }
 
-func Test_panic(t *testing.T) {
-	r := func() {
-		err := recover()
-		require.Equal(t, "not supported in internal sql executor", err)
+func TestCompilerContextUnsupportedResolversReturnErrors(t *testing.T) {
+	c := &compilerContext{
+		ctx:  context.Background(),
+		proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 	}
 
-	c := &compilerContext{}
-
-	func() {
-		defer r()
-		_ = c.CheckSubscriptionValid("", "", "")
-	}()
-
-	func() {
-		defer r()
-		_, _ = c.IsPublishing("")
-	}()
-
-	func() {
-		defer r()
-		_, _ = c.ResolveUdf("", nil)
-	}()
-
-	func() {
-		defer r()
-		_, _ = c.ResolveAccountIds(nil)
-	}()
-
-	func() {
-		defer r()
-		_, _, _ = c.GetQueryResultMeta("")
-	}()
+	_, err := c.ResolveUdf("f", nil)
+	require.Error(t, err)
+	_, err = c.ResolveAccountIds([]string{"acc"})
+	require.Error(t, err)
+	_, err = c.ResolveSnapshotWithSnapshotName("sn")
+	require.Error(t, err)
+	require.Error(t, c.CheckSubscriptionValid("sub", "acc", "pub"))
+	_, err = c.IsPublishing("db")
+	require.Error(t, err)
+	_, _, err = c.GetQueryResultMeta("uuid")
+	require.Error(t, err)
 }
 
 func TestCompilerContextQueryingSubscription(t *testing.T) {

@@ -126,6 +126,33 @@ id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 price  ¦  DECIMAL(20,5)  ¦  NO  ¦    ¦  null  ¦    ¦
+use view_alter_column_metadata;
+create table snapshot_live (a int);
+create table snapshot_frozen (b int);
+create snapshot view_alter_column_metadata_sn for account sys;
+create function refresh_udf() returns int language sql as '1';
+create view mixed_snapshot_v as
+select live.a, frozen.b
+from snapshot_live live, snapshot_frozen { snapshot = 'view_alter_column_metadata_sn' } frozen;
+create view snapshot_text_v as
+select a, '{snapshot is only text' as marker from snapshot_live;
+create view udf_v as select a, refresh_udf() as udf_value from snapshot_live;
+use view_alter_column_metadata_cross;
+alter table view_alter_column_metadata.snapshot_live modify column a bigint;
+desc view_alter_column_metadata.mixed_snapshot_v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
+desc view_alter_column_metadata.snapshot_text_v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+marker  ¦  VARCHAR(22)  ¦  NO  ¦    ¦  null  ¦    ¦
+desc view_alter_column_metadata.udf_v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+udf_value  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦
+drop function view_alter_column_metadata.refresh_udf();
+drop snapshot view_alter_column_metadata_sn;
 drop database view_alter_column_metadata;
 drop database view_alter_column_metadata_cross;
 drop account if exists view_alter_pub;
@@ -135,7 +162,8 @@ create account view_alter_sub admin_name = 'admin' identified by '111';
 create database pubdb;
 use pubdb;
 create table source_t (a int, b int);
-create publication pub database pubdb account view_alter_sub;
+create table excluded_t (a int);
+create publication pub database pubdb table source_t, excluded_t account view_alter_sub;
 create database subdb from view_alter_pub publication pub;
 create database localdb;
 use localdb;
@@ -144,6 +172,18 @@ alter table pubdb.source_t modify column a bigint;
 desc localdb.v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+alter publication pub database pubdb table excluded_t;
+alter table pubdb.source_t modify column a decimal(10, 2);
+select column_type
+from information_schema.columns
+where table_schema = 'localdb' and table_name = 'v' and column_name = 'a';
+➤ column_type[12,-1,0]  𝄀
+BIGINT(64)
+alter publication pub database pubdb table source_t, excluded_t;
+alter table pubdb.source_t modify column a decimal(12, 3);
+desc localdb.v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  DECIMAL(12,3)  ¦  YES  ¦    ¦  null  ¦    ¦
 drop database localdb;
 drop database subdb;
 drop publication pub;

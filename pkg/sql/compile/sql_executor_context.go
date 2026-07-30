@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -77,27 +78,63 @@ func (c *compilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planp
 }
 
 func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
-	panic("not supported in internal sql executor")
+	delegate := c.viewMetadataCompilerContext()
+	if delegate == nil {
+		return moerr.NewNYI(c.GetContext(), "subscription validation in internal sql executor")
+	}
+	restore := c.useViewMetadataContext(delegate)
+	defer restore()
+	return delegate.CheckSubscriptionValid(subName, accName, pubName)
 }
 
 func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef, error) {
-	panic("not supported in internal sql executor")
+	delegate := c.viewMetadataCompilerContext()
+	if delegate == nil {
+		return nil, nil, moerr.NewNYI(c.GetContext(), "subscription table resolution in internal sql executor")
+	}
+	restore := c.useViewMetadataContext(delegate)
+	defer restore()
+	return delegate.ResolveSubscriptionTableById(tableId, pubmeta)
 }
 
 func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
-	panic("not supported in internal sql executor")
+	delegate := c.viewMetadataCompilerContext()
+	if delegate == nil {
+		return false, moerr.NewNYI(c.GetContext(), "publication lookup in internal sql executor")
+	}
+	restore := c.useViewMetadataContext(delegate)
+	defer restore()
+	return delegate.IsPublishing(dbName)
 }
 
 func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
-	panic("not supported in internal sql executor")
+	delegate := c.viewMetadataCompilerContext()
+	if delegate == nil {
+		return nil, moerr.NewNYI(c.GetContext(), "catalog table definition in internal sql executor")
+	}
+	restore := c.useViewMetadataContext(delegate)
+	defer restore()
+	return delegate.BuildTableDefByMoColumns(dbName, table)
 }
 
 func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
-	panic("not supported in internal sql executor")
+	delegate := c.viewMetadataCompilerContext()
+	if delegate == nil {
+		return nil, moerr.NewNYI(c.GetContext(), "snapshot resolution in internal sql executor")
+	}
+	restore := c.useViewMetadataContext(delegate)
+	defer restore()
+	return delegate.ResolveSnapshotWithSnapshotName(snapshotName)
 }
 
 func (c *compilerContext) CheckTimeStampValid(ts int64) (bool, error) {
-	panic("not supported in internal sql executor")
+	delegate := c.viewMetadataCompilerContext()
+	if delegate == nil {
+		return false, moerr.NewNYI(c.GetContext(), "timestamp validation in internal sql executor")
+	}
+	restore := c.useViewMetadataContext(delegate)
+	defer restore()
+	return delegate.CheckTimeStampValid(ts)
 }
 
 func (c *compilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
@@ -113,11 +150,52 @@ func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
 }
 
 func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
-	panic("not supported in internal sql executor")
+	delegate := c.viewMetadataCompilerContext()
+	if delegate == nil {
+		return nil, moerr.NewNYI(c.GetContext(), "UDF resolution in internal sql executor")
+	}
+	restore := c.useViewMetadataContext(delegate)
+	defer restore()
+	return delegate.ResolveUdf(name, ast)
 }
 
 func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
-	panic("not supported in internal sql executor")
+	delegate := c.viewMetadataCompilerContext()
+	if delegate == nil {
+		return nil, moerr.NewNYI(c.GetContext(), "account resolution in internal sql executor")
+	}
+	restore := c.useViewMetadataContext(delegate)
+	defer restore()
+	return delegate.ResolveAccountIds(accountNames)
+}
+
+func (c *compilerContext) viewMetadataCompilerContext() plan.CompilerContext {
+	if c.ctx == nil {
+		return nil
+	}
+	delegate, _ := c.ctx.Value(viewMetadataCompilerContextKey{}).(plan.CompilerContext)
+	return delegate
+}
+
+func (c *compilerContext) useViewMetadataContext(delegate plan.CompilerContext) func() {
+	oldCtx := delegate.GetContext()
+	delegate.SetContext(c.GetContext())
+	type databaseContext interface {
+		GetDatabase() string
+		SetDatabase(string)
+	}
+	databaseDelegate, canSetDatabase := delegate.(databaseContext)
+	var oldDatabase string
+	if canSetDatabase {
+		oldDatabase = databaseDelegate.GetDatabase()
+		databaseDelegate.SetDatabase(c.DefaultDatabase())
+	}
+	return func() {
+		if canSetDatabase {
+			databaseDelegate.SetDatabase(oldDatabase)
+		}
+		delegate.SetContext(oldCtx)
+	}
 }
 
 func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*pb.StatsInfo, error) {
@@ -215,7 +293,13 @@ func (c *compilerContext) GetProcess() *process.Process {
 }
 
 func (c *compilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, string, error) {
-	panic("not supported in internal sql executor")
+	delegate := c.viewMetadataCompilerContext()
+	if delegate == nil {
+		return nil, "", moerr.NewNYI(c.GetContext(), "query result metadata in internal sql executor")
+	}
+	restore := c.useViewMetadataContext(delegate)
+	defer restore()
+	return delegate.GetQueryResultMeta(uuid)
 }
 
 func (c *compilerContext) DatabaseExists(name string, snapshot *plan.Snapshot) bool {
@@ -362,6 +446,9 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	sub, err := c.GetSubscriptionMeta(dbName, snapshot)
 	if err != nil {
 		return nil, nil, err
+	}
+	if sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
+		return nil, nil, nil
 	}
 	ctx, table, err := c.getRelation(dbName, tableName, snapshot, sub)
 	if err != nil {

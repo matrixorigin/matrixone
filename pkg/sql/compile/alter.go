@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1099,6 +1100,8 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 
 func (s *Scope) doAlterTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	refreshViewMetadata := !features.IsPartition(qry.GetTableDef().GetFeatureFlag()) &&
+		(qry.AlgorithmType == plan.AlterTable_COPY || qry.GetCopyTableDef() != nil)
 	sourceAccountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
@@ -1113,6 +1116,9 @@ func (s *Scope) doAlterTable(c *Compile) error {
 		// so its catalog statements are executed inside AlterTableCopy.
 		if err = s.AlterTableCopy(c); err != nil {
 			return err
+		}
+		if !refreshViewMetadata {
+			return nil
 		}
 		database, err := c.e.Database(c.proc.Ctx, qry.GetDatabase(), c.proc.GetTxnOperator())
 		if err != nil {
@@ -1150,6 +1156,9 @@ func (s *Scope) doAlterTable(c *Compile) error {
 			}
 		}
 	}
+	if !refreshViewMetadata {
+		return nil
+	}
 	return refreshViewMetadataAfterAlter(
 		c,
 		sourceAccountID,
@@ -1173,6 +1182,7 @@ type viewMetadataRefreshContext struct {
 	sourceAccountID      uint32
 	sourceLogicalID      uint64
 	currentSourceTableID uint64
+	dependentViews       *int
 }
 
 type viewMetadataRefreshPlanError struct {
@@ -1181,30 +1191,20 @@ type viewMetadataRefreshPlanError struct {
 
 type viewMetadataSubscriptionResolverKey struct{}
 
+type viewMetadataCompilerContextKey struct{}
+
 type viewMetadataSubscriptionResolver interface {
 	GetSubscriptionMeta(string) (*plan2.SubscriptionMeta, error)
 }
 
-type persistedViewSubscriptionResolver struct {
-	dependencies []plan2.ViewDependency
+type currentViewSubscriptionResolver struct {
+	byDatabase map[string]*plan2.SubscriptionMeta
 }
 
-func (r persistedViewSubscriptionResolver) GetSubscriptionMeta(
+func (r currentViewSubscriptionResolver) GetSubscriptionMeta(
 	database string,
 ) (*plan2.SubscriptionMeta, error) {
-	for _, dependency := range r.dependencies {
-		if dependency.Subscription &&
-			dependency.SubscriptionDB == database &&
-			dependency.PublisherDB != "" {
-			return &plan2.SubscriptionMeta{
-				AccountId: int32(dependency.AccountID),
-				DbName:    dependency.PublisherDB,
-				SubName:   dependency.SubscriptionDB,
-				Tables:    "*",
-			}, nil
-		}
-	}
-	return nil, nil
+	return r.byDatabase[strings.ToLower(database)], nil
 }
 
 func (e *viewMetadataRefreshPlanError) Error() string {
@@ -1241,7 +1241,8 @@ func refreshViewMetadataAfterAlter(
 	sourceTable string,
 ) error {
 	var afterViewID uint64
-	var refreshedViews int
+	var dependentViews int
+	subscriptionsByAccount := make(map[uint32]currentViewSubscriptionResolver)
 	for {
 		views, err := loadViewMetadataRefreshPage(
 			c,
@@ -1262,10 +1263,6 @@ func refreshViewMetadataAfterAlter(
 			if view.skip {
 				continue
 			}
-			refreshedViews++
-			if err := checkViewMetadataRefreshLimit(c.proc.Ctx, refreshedViews); err != nil {
-				return err
-			}
 			sql, err := buildRefreshViewSQL(c.proc.Ctx, c.getLower(), view)
 			if err != nil {
 				logutil.Warn("skip refreshing view that cannot be parsed",
@@ -1273,6 +1270,14 @@ func refreshViewMetadataAfterAlter(
 					zap.String("view", view.name),
 					zap.Error(err))
 				continue
+			}
+			subscriptions, ok := subscriptionsByAccount[view.accountID]
+			if !ok {
+				subscriptions, err = loadCurrentViewSubscriptions(c, view.accountID)
+				if err != nil {
+					return err
+				}
+				subscriptionsByAccount[view.accountID] = subscriptions
 			}
 			oldCtx := c.proc.Ctx
 			refreshCtx := oldCtx
@@ -1289,10 +1294,11 @@ func refreshViewMetadataAfterAlter(
 					sourceAccountID:      sourceAccountID,
 					sourceLogicalID:      sourceLogicalID,
 					currentSourceTableID: currentSourceTableID,
+					dependentViews:       &dependentViews,
 				},
 			)
 			c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, view.accountID)
-			err = runViewMetadataRefreshSQL(c, sql, view.viewData)
+			err = runViewMetadataRefreshSQL(c, sql, view.viewData, subscriptions)
 			c.proc.Ctx = oldCtx
 			if err != nil {
 				if !canSkipViewMetadataRefreshError(err) {
@@ -1305,6 +1311,54 @@ func refreshViewMetadataAfterAlter(
 			}
 		}
 	}
+}
+
+func loadCurrentViewSubscriptions(
+	c *Compile,
+	accountID uint32,
+) (currentViewSubscriptionResolver, error) {
+	resolver := currentViewSubscriptionResolver{
+		byDatabase: make(map[string]*plan2.SubscriptionMeta),
+	}
+	sql := fmt.Sprintf(
+		"select sub_name, pub_account_id, pub_account_name, pub_name, "+
+			"pub_database, pub_tables from %s.%s "+
+			"where sub_account_id = %d and sub_name is not null and status = %d",
+		catalog.MO_CATALOG,
+		catalog.MO_SUBS,
+		accountID,
+		pubsub.SubStatusNormal,
+	)
+	result, err := c.runSqlWithResultAndOptions(
+		sql,
+		int32(catalog.System_Account),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		result.Close()
+		return resolver, err
+	}
+	defer result.Close()
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		subNames := executor.GetStringRows(cols[0])
+		pubAccountIDs := executor.GetFixedRows[int32](cols[1])
+		pubAccountNames := executor.GetStringRows(cols[2])
+		pubNames := executor.GetStringRows(cols[3])
+		pubDatabases := executor.GetStringRows(cols[4])
+		pubTables := executor.GetStringRows(cols[5])
+		for i := 0; i < rows; i++ {
+			resolver.byDatabase[strings.ToLower(subNames[i])] = &plan2.SubscriptionMeta{
+				Name:        pubNames[i],
+				AccountId:   pubAccountIDs[i],
+				DbName:      pubDatabases[i],
+				AccountName: pubAccountNames[i],
+				SubName:     subNames[i],
+				Tables:      pubTables[i],
+			}
+		}
+		return true
+	})
+	return resolver, nil
 }
 
 func checkViewMetadataRefreshLimit(ctx context.Context, count int) error {
@@ -1375,7 +1429,6 @@ func loadViewMetadataRefreshPage(
 				database:  databases[i],
 				name:      names[i],
 				viewData:  viewData,
-				skip:      viewUsesSnapshot(viewData),
 			})
 		}
 		return true
@@ -1396,7 +1449,9 @@ func buildViewMetadataRefreshQuery(
 		"select account_id, rel_id, reldatabase, relname, viewdef from %s.mo_tables "+
 			"where relkind = '%s' "+
 			"and reldatabase not in ('%s', '%s') and rel_id > %d "+
-			"and ((account_id = %d and viewdef not like '%%\\\"dependencies\\\":%%' "+
+			"and ((((account_id = %d) or account_id in "+
+			"(select sub_account_id from %s.%s where pub_account_id = %d and status = %d)) "+
+			"and viewdef not like '%%\\\"dependencies\\\":%%' "+
 			"and instr(viewdef, %s) > 0) "+
 			"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
 			"and (viewdef like '%%\\\"logical_id\\\":%d,%%' "+
@@ -1410,6 +1465,10 @@ func buildViewMetadataRefreshQuery(
 		"information_schema",
 		afterViewID,
 		sourceAccountID,
+		catalog.MO_CATALOG,
+		catalog.MO_SUBS,
+		sourceAccountID,
+		pubsub.SubStatusNormal,
 		legacyCandidate,
 		sourceAccountID,
 		sourceLogicalID,
@@ -1420,16 +1479,12 @@ func buildViewMetadataRefreshQuery(
 	)
 }
 
-func viewUsesSnapshot(viewData plan2.ViewData) bool {
-	for _, dependency := range viewData.Dependencies {
-		if dependency.Snapshot {
-			return true
-		}
-	}
-	return strings.Contains(strings.ToLower(viewData.Stmt), "{snapshot")
-}
-
-func runViewMetadataRefreshSQL(c *Compile, sql string, viewData plan2.ViewData) error {
+func runViewMetadataRefreshSQL(
+	c *Compile,
+	sql string,
+	viewData plan2.ViewData,
+	subscriptions currentViewSubscriptionResolver,
+) error {
 	oldDatabase := c.db
 	oldCtx := c.proc.Ctx
 	oldResolveVariable := c.proc.GetResolveVariableFunc()
@@ -1441,16 +1496,19 @@ func runViewMetadataRefreshSQL(c *Compile, sql string, viewData plan2.ViewData) 
 	}
 	c.db = viewData.DefaultDatabase
 	c.proc.GetSessionInfo().SqlMode = sqlMode
-	if slices.ContainsFunc(viewData.Dependencies, func(dependency plan2.ViewDependency) bool {
-		return dependency.Subscription && dependency.PublisherDB != ""
-	}) {
-		c.proc.Ctx = context.WithValue(
-			c.proc.Ctx,
-			viewMetadataSubscriptionResolverKey{},
-			viewMetadataSubscriptionResolver(persistedViewSubscriptionResolver{
-				dependencies: viewData.Dependencies,
-			}),
-		)
+	c.proc.Ctx = context.WithValue(
+		c.proc.Ctx,
+		viewMetadataSubscriptionResolverKey{},
+		viewMetadataSubscriptionResolver(subscriptions),
+	)
+	if helper := c.proc.GetSessionInfo().SqlHelper; helper != nil {
+		if compilerContext, ok := helper.GetCompilerContext().(plan2.CompilerContext); ok {
+			c.proc.Ctx = context.WithValue(
+				c.proc.Ctx,
+				viewMetadataCompilerContextKey{},
+				compilerContext,
+			)
+		}
 	}
 	c.proc.SetResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (any, error) {
 		if isSystemVar && !isGlobalVar && strings.EqualFold(name, "sql_mode") {

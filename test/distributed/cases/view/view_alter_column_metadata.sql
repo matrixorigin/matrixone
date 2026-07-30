@@ -88,6 +88,28 @@ select id, code, qty, price from view_alter_column_metadata.v_source_t;
 -- @ignore:5,6
 desc view_alter_column_metadata.ctas_view;
 
+use view_alter_column_metadata;
+create table snapshot_live (a int);
+create table snapshot_frozen (b int);
+create snapshot view_alter_column_metadata_sn for account sys;
+create function refresh_udf() returns int language sql as '1';
+create view mixed_snapshot_v as
+select live.a, frozen.b
+from snapshot_live live, snapshot_frozen { snapshot = 'view_alter_column_metadata_sn' } frozen;
+create view snapshot_text_v as
+select a, '{snapshot is only text' as marker from snapshot_live;
+create view udf_v as select a, refresh_udf() as udf_value from snapshot_live;
+use view_alter_column_metadata_cross;
+alter table view_alter_column_metadata.snapshot_live modify column a bigint;
+-- @ignore:5,6
+desc view_alter_column_metadata.mixed_snapshot_v;
+-- @ignore:5,6
+desc view_alter_column_metadata.snapshot_text_v;
+-- @ignore:5,6
+desc view_alter_column_metadata.udf_v;
+drop function view_alter_column_metadata.refresh_udf();
+drop snapshot view_alter_column_metadata_sn;
+
 drop database view_alter_column_metadata;
 drop database view_alter_column_metadata_cross;
 
@@ -100,7 +122,8 @@ create account view_alter_sub admin_name = 'admin' identified by '111';
 create database pubdb;
 use pubdb;
 create table source_t (a int, b int);
-create publication pub database pubdb account view_alter_sub;
+create table excluded_t (a int);
+create publication pub database pubdb table source_t, excluded_t account view_alter_sub;
 -- @session
 
 -- @session:id=2&user=view_alter_sub:admin&password=111
@@ -112,6 +135,27 @@ create view v as select a from subdb.source_t;
 
 -- @session:id=1&user=view_alter_pub:admin&password=111
 alter table pubdb.source_t modify column a bigint;
+-- @session
+
+-- @session:id=2&user=view_alter_sub:admin&password=111
+-- @ignore:5,6
+desc localdb.v;
+-- @session
+
+-- @session:id=1&user=view_alter_pub:admin&password=111
+alter publication pub database pubdb table excluded_t;
+alter table pubdb.source_t modify column a decimal(10, 2);
+-- @session
+
+-- @session:id=2&user=view_alter_sub:admin&password=111
+select column_type
+from information_schema.columns
+where table_schema = 'localdb' and table_name = 'v' and column_name = 'a';
+-- @session
+
+-- @session:id=1&user=view_alter_pub:admin&password=111
+alter publication pub database pubdb table source_t, excluded_t;
+alter table pubdb.source_t modify column a decimal(12, 3);
 -- @session
 
 -- @session:id=2&user=view_alter_sub:admin&password=111
