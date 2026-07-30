@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/crc64"
 	"strconv"
@@ -59,6 +60,7 @@ type service struct {
 	clock                 clock.Clock
 	stopper               *stopper.Stopper
 	stopOnce              sync.Once
+	closeErr              error
 	// lockWaitCeilingWarned prevents a large explicit timeout from logging on
 	// every lock operation. The metric still counts every clamped request.
 	lockWaitCeilingWarned atomic.Bool
@@ -840,28 +842,42 @@ func (s *service) GetConfig() Config {
 }
 
 func (s *service) Close() error {
-	var err error
 	s.stopOnce.Do(func() {
+		// Stop producers before their consumers and dependencies. Inbound RPC
+		// handlers, service background tasks, and keeper tasks can all use lock
+		// tables, waiter state, the detector, and the RPC client.
+		serverErr := s.remote.server.Close()
 		s.stopper.Stop()
+		keeperErr := s.remote.keeper.Close()
+		releaseQueuedWhoWaitingList(s.fetchWhoWaitingListC)
 		s.tableGroups.removeWithFilter(func(_ uint64, _ lockTable) bool { return true }, closeReasonServiceClose)
-		if err = s.remote.client.Close(); err != nil {
-			return
-		}
-		s.deadlockDetector.close()
-		if err = s.remote.keeper.Close(); err != nil {
-			return
-		}
-		if err = s.remote.client.Close(); err != nil {
-			return
-		}
-		if err = s.remote.server.Close(); err != nil {
-			return
-		}
 		s.events.close()
+		s.deadlockDetector.close()
 		s.activeTxnHolder.close()
+		clientErr := s.remote.client.Close()
 		close(s.fetchWhoWaitingListC)
+		s.closeErr = errors.Join(serverErr, keeperErr, clientErr)
 	})
-	return err
+	return s.closeErr
+}
+
+func releaseQueuedWhoWaitingList(values chan who) {
+	for {
+		select {
+		case value, ok := <-values:
+			if !ok {
+				return
+			}
+			if value.cancel != nil {
+				value.cancel()
+			}
+			if value.resp != nil {
+				releaseResponse(value.resp)
+			}
+		default:
+			return
+		}
+	}
 }
 
 func (s *service) setStatus(status pb.Status) {

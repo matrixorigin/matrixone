@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -303,6 +304,7 @@ func TestHandleAutoCreateWaitDeterministic(t *testing.T) {
 		context.Background(),
 		"test-backend",
 		&creationStart,
+		nil,
 		1)
 
 	assert.False(t, shouldContinue)
@@ -317,6 +319,7 @@ func TestHandleAutoCreateWaitDeterministic(t *testing.T) {
 		ctx,
 		"test-backend",
 		&creationStart2,
+		nil,
 		1)
 
 	assert.False(t, shouldContinue)
@@ -328,10 +331,161 @@ func TestHandleAutoCreateWaitDeterministic(t *testing.T) {
 		context.Background(),
 		"test-backend",
 		&creationStart3,
+		nil,
 		1)
 
 	assert.True(t, shouldContinue)
 	assert.Nil(t, err)
+}
+
+func TestAutoCreateWaitBudgetStartsAtFactoryAdmission(t *testing.T) {
+	const waitTimeout = 30 * time.Millisecond
+
+	c, err := NewClient(
+		"test",
+		&testFailingBackendFactory{},
+		WithClientEnableAutoCreateBackend(),
+		WithClientAutoCreateWaitTimeout(waitTimeout),
+	)
+	require.NoError(t, err)
+	defer c.Close()
+	client := c.(*client)
+
+	t.Run("queued time is excluded", func(t *testing.T) {
+		state := newBackendCreateState(&backendGeneration{})
+		var creationStart time.Time
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		waitC := make(chan error, 1)
+		go func() {
+			waitC <- client.waitBackendCreateCompletion(
+				ctx,
+				"test-backend",
+				&creationStart,
+				state,
+			)
+		}()
+
+		select {
+		case err := <-waitC:
+			t.Fatalf("queued create consumed its %s factory budget: %v", waitTimeout, err)
+		case <-time.After(3 * waitTimeout):
+		}
+
+		state.markStarted()
+		close(state.done)
+		require.NoError(t, <-waitC)
+		require.False(t, creationStart.IsZero())
+	})
+
+	t.Run("started factory work is bounded", func(t *testing.T) {
+		state := newBackendCreateState(&backendGeneration{})
+		state.markStarted()
+		var creationStart time.Time
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		err := client.waitBackendCreateCompletion(
+			ctx,
+			"test-backend",
+			&creationStart,
+			state,
+		)
+		require.ErrorIs(t, err, ErrBackendCreateTimeout)
+	})
+}
+
+func TestAutoCreateWaitExcludesGlobalCreateQueueDelay(t *testing.T) {
+	const waitTimeout = 50 * time.Millisecond
+
+	blockingFactory := &blockingCreateFactory{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		backend: &testBackend{id: 1, activeTime: time.Now()},
+	}
+	blockedRPCClient, err := NewClient(
+		"blocked-create-worker",
+		blockingFactory,
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	var releaseOnce sync.Once
+	defer func() {
+		releaseOnce.Do(func() { close(blockingFactory.release) })
+		require.NoError(t, blockedRPCClient.Close())
+	}()
+
+	healthyRPCClient, err := NewClient(
+		"queued-healthy-backend",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+		WithClientAutoCreateWaitTimeout(waitTimeout),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, healthyRPCClient.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	send := func(c RPCClient, backend string, resultC chan<- error) {
+		future, err := c.Send(ctx, backend, &testMessage{id: 1})
+		if err == nil {
+			_, err = future.Get()
+			future.Close()
+		}
+		resultC <- err
+	}
+
+	blockedResultC := make(chan error, 1)
+	go send(blockedRPCClient, "blocked", blockedResultC)
+	select {
+	case <-blockingFactory.entered:
+	case <-ctx.Done():
+		t.Fatalf("blocking create did not reach factory: %v", context.Cause(ctx))
+	}
+
+	healthyResultC := make(chan error, 1)
+	go send(healthyRPCClient, "healthy", healthyResultC)
+	healthyClient := healthyRPCClient.(*client)
+	require.Eventually(t, func() bool {
+		healthyClient.mu.Lock()
+		state := healthyClient.mu.creating["healthy"]
+		healthyClient.mu.Unlock()
+		if state == nil {
+			return false
+		}
+		_, started := state.startTime()
+		return !started
+	}, 5*time.Second, time.Millisecond, "healthy create was not queued behind blocked worker")
+
+	timer := time.NewTimer(3 * waitTimeout)
+	<-timer.C
+	select {
+	case err := <-healthyResultC:
+		t.Fatalf("queued healthy create consumed its %s factory budget: %v", waitTimeout, err)
+	default:
+	}
+
+	releaseOnce.Do(func() { close(blockingFactory.release) })
+	for name, resultC := range map[string]<-chan error{
+		"blocked": blockedResultC,
+		"healthy": healthyResultC,
+	} {
+		select {
+		case err := <-resultC:
+			require.NoError(t, err, name)
+		case <-ctx.Done():
+			t.Fatalf("%s send did not finish after create worker was released: %v",
+				name, context.Cause(ctx))
+		}
+	}
 }
 
 // TestErrorDistinction tests that all errors are distinguishable

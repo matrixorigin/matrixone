@@ -226,7 +226,7 @@ func (l *remoteLockTable) lock(
 			zap.String("bind", l.bind.DebugString()),
 		)
 		// Return ErrLockTableBindChanged to trigger retry, preventing transaction from continuing without lock
-		err = moerr.NewLockTableBindChangedNoCtx()
+		err = ErrLockTableBindChanged
 	}
 	cb(pb.Result{}, err)
 }

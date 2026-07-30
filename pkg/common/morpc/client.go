@@ -39,7 +39,10 @@
 // can configure a bounded wait timeout:
 //
 //   - autoCreateWaitTimeout = 0 (default): Wait until context deadline (legacy behavior)
-//   - autoCreateWaitTimeout > 0: Wait up to specified duration, then return ErrBackendClosed
+//   - autoCreateWaitTimeout > 0: For asynchronous creation, start the bounded
+//     wait when backend factory work starts. Initial admission queue time is
+//     excluded; after the first attempt starts, retries share the same budget.
+//     Capacity waits with no asynchronous completion owner start immediately.
 //
 // Example: lockservice sets 500ms timeout for fast failure detection in orphan transaction cleanup.
 //
@@ -121,7 +124,7 @@ var (
 	ErrBackendUnavailable = moerr.NewBackendClosedNoCtx()
 
 	// ErrBackendCreateTimeout indicates that auto-create wait timeout exceeded.
-	// This typically means backend creation is too slow or queue congestion.
+	// This typically means backend creation or recovery is too slow.
 	// This is a boundary condition error (NoCtx + Counter for monitoring).
 	// Uses ErrBackendClosed code for compatibility with existing error handling.
 	ErrBackendCreateTimeout = moerr.NewBackendClosedNoCtx()
@@ -221,9 +224,11 @@ func WithClientCreateTaskChanSize(size int) ClientOption {
 	}
 }
 
-// WithClientAutoCreateWaitTimeout sets how long Send/NewStream/Ping will wait
-// for an auto-created backend before giving up. Zero keeps legacy behavior
-// (wait until context deadline).
+// WithClientAutoCreateWaitTimeout sets the bounded wait used by
+// Send/NewStream/Ping. For asynchronous creation, initial admission queue time
+// is excluded and retries after the first factory attempt share the same
+// budget. Capacity waits with no asynchronous completion owner start
+// immediately. Zero keeps legacy behavior (wait until context deadline).
 func WithClientAutoCreateWaitTimeout(timeout time.Duration) ClientOption {
 	return func(c *client) {
 		c.options.autoCreateWaitTimeout = timeout
@@ -493,7 +498,13 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
-				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
+				shouldContinue, waitErr := c.handleAutoCreateWait(
+					ctx,
+					backend,
+					&creationStart,
+					backendCreate,
+					retryCount,
+				)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
 					breaker.RecordFailure()
@@ -517,7 +528,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 				if waitErr := c.waitBackendChange(
 					ctx,
 					backend,
-					creationStart,
+					&creationStart,
 					backendCreate,
 					backoff,
 				); waitErr != nil {
@@ -634,7 +645,13 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
-				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
+				shouldContinue, waitErr := c.handleAutoCreateWait(
+					ctx,
+					backend,
+					&creationStart,
+					backendCreate,
+					retryCount,
+				)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
 					breaker.RecordFailure()
@@ -658,7 +675,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 				if waitErr := c.waitBackendChange(
 					ctx,
 					backend,
-					creationStart,
+					&creationStart,
 					backendCreate,
 					backoff,
 				); waitErr != nil {
@@ -764,7 +781,13 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 			// Handle backend creation-in-progress with bounded wait
 			if waitingForCreate {
-				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
+				shouldContinue, waitErr := c.handleAutoCreateWait(
+					ctx,
+					backend,
+					&creationStart,
+					backendCreate,
+					retryCount,
+				)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
 					breaker.RecordFailure()
@@ -788,7 +811,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 				if waitErr := c.waitBackendChange(
 					ctx,
 					backend,
-					creationStart,
+					&creationStart,
 					backendCreate,
 					backoff,
 				); waitErr != nil {
@@ -1229,6 +1252,10 @@ func (c *client) createBackendForClaimedGeneration(
 		return nil, moerr.NewBackendClosedNoCtx()
 	}
 	c.backendCreate.Add(1)
+	// Publish the point at which the global worker actually admits this request
+	// to factory I/O. Queue residence before this transition must not consume a
+	// peer-health timeout.
+	c.mu.creating[backend].markStarted()
 	c.mu.Unlock()
 	defer c.backendCreate.Done()
 
@@ -1308,6 +1335,8 @@ type backendGeneration struct {
 
 type backendCreateState struct {
 	generation *backendGeneration
+	started    chan struct{}
+	startedAt  time.Time
 	done       chan struct{}
 	// failed is published before done is closed. Waiters retain retry backoff
 	// after factory failures, while successful creates and invalidations wake
@@ -1318,7 +1347,30 @@ type backendCreateState struct {
 func newBackendCreateState(generation *backendGeneration) *backendCreateState {
 	return &backendCreateState{
 		generation: generation,
+		started:    make(chan struct{}),
 		done:       make(chan struct{}),
+	}
+}
+
+// markStarted publishes startedAt before closing started. Callers serialize
+// this transition with c.mu; channel close provides the happens-before edge for
+// waiters that read startedAt.
+func (s *backendCreateState) markStarted() {
+	select {
+	case <-s.started:
+		return
+	default:
+		s.startedAt = time.Now()
+		close(s.started)
+	}
+}
+
+func (s *backendCreateState) startTime() (time.Time, bool) {
+	select {
+	case <-s.started:
+		return s.startedAt, true
+	default:
+		return time.Time{}, false
 	}
 }
 
@@ -1669,7 +1721,13 @@ func isAutoCreateWaitError(err error) bool {
 //   - true: should continue waiting/retrying
 //   - false: should stop (timeout exceeded or context cancelled)
 //   - error: ErrBackendCreateTimeout if timeout exceeded, ctx.Err() if context cancelled
-func (c *client) handleAutoCreateWait(ctx context.Context, backend string, creationStart *time.Time, retryCount int) (bool, error) {
+func (c *client) handleAutoCreateWait(
+	ctx context.Context,
+	backend string,
+	creationStart *time.Time,
+	backendCreate *backendCreateState,
+	retryCount int,
+) (bool, error) {
 	// Check context first
 	select {
 	case <-ctx.Done():
@@ -1677,13 +1735,21 @@ func (c *client) handleAutoCreateWait(ctx context.Context, backend string, creat
 	default:
 	}
 
-	// Initialize creation start time
+	// A state with no completion owner (for example, a fully busy pool) needs a
+	// bounded retry budget immediately. For asynchronous creation, exclude only
+	// the initial global-manager queue residence. Once factory work has started,
+	// all later retries and queue waits retain the same budget.
 	if creationStart.IsZero() {
-		*creationStart = time.Now()
+		if backendCreate == nil {
+			*creationStart = time.Now()
+		} else if startedAt, ok := backendCreate.startTime(); ok {
+			*creationStart = startedAt
+		}
 	}
 
 	// Check bounded wait timeout
-	if timeout := c.options.autoCreateWaitTimeout; timeout > 0 {
+	if timeout := c.options.autoCreateWaitTimeout; timeout > 0 &&
+		!creationStart.IsZero() {
 		elapsed := time.Since(*creationStart)
 		if elapsed >= timeout {
 			return false, c.autoCreateTimeoutError(backend, elapsed, timeout)
@@ -1691,11 +1757,15 @@ func (c *client) handleAutoCreateWait(ctx context.Context, backend string, creat
 	}
 
 	// Log creation wait progress (sparse logging)
-	if retryCount == 1 || retryCount%10 == 0 {
+	if !creationStart.IsZero() && (retryCount == 1 || retryCount%10 == 0) {
 		c.logger.Debug("waiting for backend creation",
 			zap.String("backend", backend),
 			zap.Int("retry", retryCount),
 			zap.Duration("waited", time.Since(*creationStart)))
+	} else if creationStart.IsZero() && (retryCount == 1 || retryCount%10 == 0) {
+		c.logger.Debug("backend creation queued",
+			zap.String("backend", backend),
+			zap.Int("retry", retryCount))
 	}
 
 	return true, nil
@@ -1709,7 +1779,7 @@ func (c *client) handleAutoCreateWait(ctx context.Context, backend string, creat
 func (c *client) waitBackendChange(
 	ctx context.Context,
 	backend string,
-	creationStart time.Time,
+	creationStart *time.Time,
 	backendCreate *backendCreateState,
 	backoff time.Duration,
 ) error {
@@ -1727,15 +1797,39 @@ func (c *client) waitBackendChange(
 		}
 	}
 
-	return c.waitBackendRetryBackoff(ctx, backend, creationStart, backoff)
+	return c.waitBackendRetryBackoff(ctx, backend, *creationStart, backoff)
 }
 
 func (c *client) waitBackendCreateCompletion(
 	ctx context.Context,
 	backend string,
-	creationStart time.Time,
+	creationStart *time.Time,
 	backendCreate *backendCreateState,
 ) error {
+	// Before the first factory attempt starts, wait only for admission,
+	// invalidation, or caller cancellation. Global queue latency says nothing
+	// about whether this particular peer is reachable.
+	if creationStart.IsZero() {
+		if startedAt, ok := backendCreate.startTime(); ok {
+			*creationStart = startedAt
+		} else {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-backendCreate.started:
+				*creationStart = backendCreate.startedAt
+			case <-backendCreate.done:
+				// Reset/close can invalidate a queued request without ever
+				// starting it. If factory I/O did run, done was closed after
+				// started and startTime publishes the applicable budget.
+				if startedAt, ok := backendCreate.startTime(); ok {
+					*creationStart = startedAt
+				}
+				return nil
+			}
+		}
+	}
+
 	select {
 	case <-backendCreate.done:
 		return nil
@@ -1752,9 +1846,9 @@ func (c *client) waitBackendCreateCompletion(
 		}
 	}
 
-	remaining := timeout - time.Since(creationStart)
+	remaining := timeout - time.Since(*creationStart)
 	if remaining <= 0 {
-		return c.autoCreateTimeoutError(backend, time.Since(creationStart), timeout)
+		return c.autoCreateTimeoutError(backend, time.Since(*creationStart), timeout)
 	}
 	timer := time.NewTimer(remaining)
 	defer timer.Stop()
@@ -1764,7 +1858,7 @@ func (c *client) waitBackendCreateCompletion(
 	case <-backendCreate.done:
 		return nil
 	case <-timer.C:
-		return c.autoCreateTimeoutError(backend, time.Since(creationStart), timeout)
+		return c.autoCreateTimeoutError(backend, time.Since(*creationStart), timeout)
 	}
 }
 
@@ -1774,10 +1868,6 @@ func (c *client) waitBackendRetryBackoff(
 	creationStart time.Time,
 	backoff time.Duration,
 ) error {
-	if backoff <= 0 {
-		return nil
-	}
-
 	wait := backoff
 	timedByCreateTimeout := false
 	if timeout := c.options.autoCreateWaitTimeout; timeout > 0 {
@@ -1789,6 +1879,9 @@ func (c *client) waitBackendRetryBackoff(
 			wait = remaining
 			timedByCreateTimeout = true
 		}
+	}
+	if wait <= 0 {
+		return nil
 	}
 
 	timer := time.NewTimer(wait)

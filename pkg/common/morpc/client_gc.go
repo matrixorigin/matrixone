@@ -247,9 +247,27 @@ func (m *clientGCManager) ensureStartedLocked() {
 	if !m.started {
 		m.started = true
 		m.wg.Add(3)
-		go m.runGCIdleLoop()
-		go m.runGCInactiveLoop()
-		go m.runCreateLoop()
+		// "started" is also a readiness contract for callers such as package
+		// initialization. Do not return while a newly launched loop is still
+		// only runnable: leak snapshots taken immediately after initialization
+		// could otherwise observe an arbitrary subset of these process-lifetime
+		// goroutines and report the late starters as test leaks.
+		startedC := make(chan struct{}, 3)
+		go func() {
+			startedC <- struct{}{}
+			m.runGCIdleLoop()
+		}()
+		go func() {
+			startedC <- struct{}{}
+			m.runGCInactiveLoop()
+		}()
+		go func() {
+			startedC <- struct{}{}
+			m.runCreateLoop()
+		}()
+		for range 3 {
+			<-startedC
+		}
 	}
 }
 

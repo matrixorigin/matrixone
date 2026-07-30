@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -140,6 +141,25 @@ type testClientSession struct {
 	asyncCalled bool
 	closeCalled bool
 	response    morpc.Message
+}
+
+type closeResultRPCServer struct {
+	err   error
+	calls int
+}
+
+func (s *closeResultRPCServer) Start() error {
+	return nil
+}
+
+func (s *closeResultRPCServer) Close() error {
+	s.calls++
+	return s.err
+}
+
+func (s *closeResultRPCServer) RegisterRequestHandler(
+	func(context.Context, morpc.RPCMessage, uint64, morpc.ClientSession) error,
+) {
 }
 
 func TestLockserviceRemoteRPCErrorType(t *testing.T) {
@@ -325,6 +345,53 @@ func TestWriteResponseWithDeadlineClosesSessionOnWriteError(t *testing.T) {
 	require.True(t, cs.writeCalled)
 	require.True(t, cs.closeCalled)
 	require.True(t, extraFieldsCalled)
+}
+
+func TestServerCloseDrainsQueuesAfterRPCError(t *testing.T) {
+	rpcErr := errors.New("rpc close failed")
+	rpcServer := &closeResultRPCServer{err: rpcErr}
+	requests := make(chan requestCtx, 1)
+	getActiveTxnRequests := make(chan requestCtx, 1)
+	canceled := false
+	requests <- requestCtx{
+		req: acquireRequest(),
+		cancel: func() {
+			canceled = true
+		},
+	}
+	s := &server{
+		rpc:                  rpcServer,
+		stopper:              stopper.NewStopper("test-lock-rpc-server-close"),
+		requests:             requests,
+		getActiveTxnRequests: getActiveTxnRequests,
+	}
+
+	err := s.Close()
+	require.ErrorIs(t, err, rpcErr)
+	require.Equal(t, 1, rpcServer.calls)
+	require.True(t, canceled)
+	_, requestsOpen := <-requests
+	require.False(t, requestsOpen)
+	_, getActiveTxnRequestsOpen := <-getActiveTxnRequests
+	require.False(t, getActiveTxnRequestsOpen)
+	require.ErrorIs(t, s.stopper.RunTask(func(context.Context) {}), stopper.ErrUnavailable)
+
+	// A session can outlive a failed listener close. Late messages must be
+	// rejected by the lifecycle gate without touching the closed queues.
+	lateRequest := acquireRequest()
+	lateRequest.Method = lock.Method_Lock
+	lateCanceled := false
+	err = s.onMessage(
+		context.Background(),
+		morpc.RPCMessage{
+			Message: lateRequest,
+			Cancel:  func() { lateCanceled = true },
+		},
+		0,
+		&testClientSession{},
+	)
+	require.Error(t, err)
+	require.True(t, lateCanceled)
 }
 
 func TestRPCSend(t *testing.T) {
@@ -750,6 +817,18 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, normalRPCClient.sent)
 	require.Equal(t, []string{"10.0.0.1:18101"}, activeTxnRPCClient.sent)
+
+	_, err = c.AsyncSend(context.Background(), &lock.Request{
+		Method: lock.Method_ValidateService,
+		ValidateService: lock.ValidateServiceRequest{
+			ServiceID: serviceID,
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, normalRPCClient.sent)
+	require.Equal(t,
+		[]string{"10.0.0.1:18101", "10.0.0.1:18101"},
+		activeTxnRPCClient.sent)
 
 	_, err = c.AsyncSend(context.Background(), &lock.Request{
 		Method:    lock.Method_Unlock,

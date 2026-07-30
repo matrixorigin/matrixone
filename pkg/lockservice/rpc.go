@@ -44,6 +44,11 @@ var (
 	defaultRPCEnqueueTimeout   = time.Second * 5
 	defaultHandleWorkers       = 12
 	defaultHandleGetTxnWorkers = 4
+	// Backend creation/recovery must fail fast when a remote lock service is
+	// gone. For asynchronous creation, MORPC excludes initial global-manager
+	// queue residence from this budget, so ordinary Lock/Unlock traffic is not
+	// rejected merely due to admission load.
+	backendCreateWaitTimeout = 500 * time.Millisecond
 	// Recovery endpoints are hints: eviction safely falls back to service
 	// discovery and the negative-response confirmation path. Keep a hard bound
 	// so historical CN UUID churn cannot grow the client for its whole lifetime.
@@ -80,9 +85,9 @@ type client struct {
 	// data read timeout can therefore verify peer liveness without queueing
 	// behind the data TCP, writer, Flush, or reconnect lifecycle it diagnoses.
 	controlClient morpc.ControlClient
-	// Active-txn identity probes may deliberately reset their transport after
-	// detecting a stale CN incarnation. Keep them isolated so recovery cannot
-	// interrupt concurrent Lock/Unlock traffic on the normal client.
+	// Recovery identity/liveness probes may deliberately reset their transport
+	// after detecting a stale CN incarnation. Keep them isolated so recovery
+	// cannot interrupt concurrent Lock/Unlock traffic on the normal client.
 	activeTxnClient morpc.RPCClient
 	// Periodic remote-lock keepalives use an independent MORPC client so their
 	// queue, writer, Flush, read timeout, and reconnect lifecycle cannot be
@@ -134,17 +139,14 @@ func NewClient(
 		morpc.WithBackendReadTimeout(defaultRPCTimeout),
 		morpc.WithBackendFreeOrphansResponse(releaseResponse))
 
-	// Set bounded wait for auto-create to enable fast failure detection in lockservice.
-	// This is specifically needed for orphan transaction cleanup, where we need to quickly
-	// detect that a remote service is down (not just slow to start).
-	// 500ms is chosen to balance between:
-	// - Fast failure detection for down services (critical for orphan cleanup)
-	// - Enough time for legitimate backend creation in normal cases
-	// Note: This only affects auto-create wait time. Normal lock operations use their own
-	// timeouts (e.g., RemoteLockTimeout) and are not affected by this setting.
-	c.cfg.ClientOptions = append(c.cfg.ClientOptions,
-		morpc.WithClientAutoCreateWaitTimeout(500*time.Millisecond))
-
+	// Bound actual backend creation and recovery for every lockservice
+	// transport. MORPC starts this budget only when factory work is admitted,
+	// preserving fast down-peer detection without treating queue congestion as
+	// evidence that a healthy peer is unavailable.
+	c.cfg.ClientOptions = append(
+		c.cfg.ClientOptions,
+		morpc.WithClientAutoCreateWaitTimeout(backendCreateWaitTimeout),
+	)
 	controlClient, err := c.cfg.NewControlClient(
 		service,
 		"lock-control-client",
@@ -383,7 +385,7 @@ func (c *client) asyncSend(
 	transport := c.client
 	if keeperOwnsRequest {
 		transport = c.keeperTransport()
-	} else if isActiveTxnMethod(request.Method) {
+	} else if isRecoveryMethod(request.Method) {
 		address = c.activeTxnBackend(sid, address)
 		transport = c.activeTxnTransport()
 	}
@@ -464,6 +466,10 @@ func (c *client) Close() error {
 
 func isActiveTxnMethod(method pb.Method) bool {
 	return method == pb.Method_GetActiveTxn || method == pb.Method_CheckActiveTxn
+}
+
+func isRecoveryMethod(method pb.Method) bool {
+	return isActiveTxnMethod(method) || method == pb.Method_ValidateService
 }
 
 func (c *client) activeTxnTransport() morpc.RPCClient {
@@ -771,6 +777,10 @@ type server struct {
 	rpc      morpc.RPCServer
 	handlers map[pb.Method]RequestHandleFunc
 
+	lifecycle struct {
+		sync.RWMutex
+		closing bool
+	}
 	requests              chan requestCtx
 	getActiveTxnRequests  chan requestCtx
 	requestEnqueueTimeout time.Duration
@@ -827,15 +837,20 @@ func (s *server) Start() error {
 }
 
 func (s *server) Close() error {
-	if err := s.rpc.Close(); err != nil {
-		return err
-	}
+	// Close the admission gate before touching either the transport or worker
+	// queues. Taking the write lock also waits for every onMessage call that
+	// already passed admission, so no producer can race a later channel close.
+	s.lifecycle.Lock()
+	s.lifecycle.closing = true
+	s.lifecycle.Unlock()
+
+	rpcErr := s.rpc.Close()
 	s.stopper.Stop()
 	releaseQueuedRequests(s.requests)
 	releaseQueuedRequests(s.getActiveTxnRequests)
 	close(s.requests)
 	close(s.getActiveTxnRequests)
-	return nil
+	return rpcErr
 }
 
 func (s *server) RegisterMethodHandler(m pb.Method, h RequestHandleFunc) {
@@ -856,6 +871,20 @@ func (s *server) onMessage(
 		s.logger.Fatal("received invalid message",
 			zap.Any("message", request))
 	}
+
+	s.lifecycle.RLock()
+	if s.lifecycle.closing {
+		s.lifecycle.RUnlock()
+		if msg.Cancel != nil {
+			msg.Cancel()
+		}
+		releaseRequest(req)
+		// Returning an error asks MORPC to retire a session that survived an
+		// underlying listener-close failure. The request has already been
+		// released and cannot reach the closed worker queues.
+		return moerr.NewInternalErrorNoCtx("lock service rpc server is closing")
+	}
+	defer s.lifecycle.RUnlock()
 
 	if s.logger.Enabled(zap.DebugLevel) {
 		s.logger.Debug("received a request",
