@@ -188,6 +188,12 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
+	if node.ValType == P_char &&
+		ctx.ModeIndependentStringLiterals() &&
+		strings.Contains(node.origString, "\\") {
+		fmt.Fprintf(ctx, "cast(0x%x as varchar)", []byte(node.origString))
+		return
+	}
 	if strings.Contains(node.origString, "\\") && !ctx.NoBackslashEscape() {
 		ctx.WriteValue(node.ValType, FormatString(node.origString))
 		return

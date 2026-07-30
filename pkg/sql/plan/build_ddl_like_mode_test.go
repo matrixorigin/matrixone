@@ -17,6 +17,8 @@ package plan
 import (
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
@@ -75,4 +77,35 @@ func TestCreateTableLikePreservesCheckAcrossSQLModes(t *testing.T) {
 			require.NotSame(t, source.Checks[0].Check, clone.Checks[0].Check)
 		})
 	}
+}
+
+func TestCreateTableLikeRequiresCheckProtocol(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	source := func() *plan.TableDef {
+		stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int check (a > 0))", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+		require.NoError(t, err)
+		return built.GetDdl().GetCreateTable().GetTableDef()
+	}()
+	mock.ctxt.tables["source_t"] = source
+
+	proc := mock.ctxt.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion6)
+	defer func() {
+		if ok {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	stmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(mock.CurrentContext(), stmt, false)
+	require.ErrorContains(t, err, "protocol version 7")
 }

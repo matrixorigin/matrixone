@@ -399,13 +399,8 @@ func TestConstructCreateTableSQLUsesStructuredColumnCheck(t *testing.T) {
 	)
 }
 
-func TestConstructCreateTableSQLPreservesCheckUnderNoBackslashEscapes(t *testing.T) {
-	const (
-		sqlMode   = "NO_BACKSLASH_ESCAPES"
-		createSQL = `create table t(s varchar(10), check (s = 'a\nb'))`
-	)
-
-	build := func(sql string) *plan.TableDef {
+func TestConstructCreateTableSQLPreservesCheckAcrossSQLModes(t *testing.T) {
+	build := func(sql, sqlMode string) *plan.TableDef {
 		mock := NewMockOptimizer(false)
 		mock.ctxt.SetSqlModeOverride(sqlMode)
 		stmt, err := parsers.ParseOneWithSQLMode(
@@ -422,18 +417,41 @@ func TestConstructCreateTableSQLPreservesCheckUnderNoBackslashEscapes(t *testing
 		return built.GetDdl().GetCreateTable().GetTableDef()
 	}
 
-	tableDef := build(createSQL)
-	require.Len(t, tableDef.Checks, 1)
-	require.Equal(t, "`s` = 'a\\nb'", tableDef.Checks[0].OriginSql)
+	testCases := []struct {
+		name       string
+		sourceMode string
+		replayMode string
+		createSQL  string
+	}{
+		{
+			name:       "no backslash escapes to default",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(s varchar(10), check (s = 'a\nb'))`,
+		},
+		{
+			name:       "default to no backslash escapes",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(s varchar(10), check (s = 'a\\nb'))`,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tableDef := build(tc.createSQL, tc.sourceMode)
+			require.Len(t, tableDef.Checks, 1)
+			require.Contains(t, tableDef.Checks[0].OriginSql, "cast(0x615c6e62 as varchar)")
 
-	showSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, false, nil)
-	require.NoError(t, err)
-	require.Contains(t, showSQL, "CHECK (`s` = 'a\\nb')")
+			showSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.Contains(t, showSQL, "CHECK (`s` = cast(0x615c6e62 as varchar))")
 
-	replayedTableDef := build(showSQL)
-	require.Len(t, replayedTableDef.Checks, 1)
-	require.Equal(t, tableDef.Checks[0].OriginSql, replayedTableDef.Checks[0].OriginSql)
-	require.Equal(t, tableDef.Checks[0].Check, replayedTableDef.Checks[0].Check)
+			replayedTableDef := build(showSQL, tc.replayMode)
+			require.Len(t, replayedTableDef.Checks, 1)
+			require.Equal(t, tableDef.Checks[0].OriginSql, replayedTableDef.Checks[0].OriginSql)
+			require.Equal(t, tableDef.Checks[0].Check, replayedTableDef.Checks[0].Check)
+		})
+	}
 }
 
 func Test_extractTopLevelCheckDefs(t *testing.T) {

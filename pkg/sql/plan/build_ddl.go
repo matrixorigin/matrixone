@@ -887,6 +887,11 @@ func buildCreateTable(
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
+		if len(tableDef.Checks) > 0 {
+			if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+				return nil, err
+			}
+		}
 		// TODO WHY?
 		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
 			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
@@ -1922,8 +1927,28 @@ func appendCheckDef(
 		colTypes = append(colTypes, col.Typ)
 	}
 
+	originSQL := formatCheckConstraintExpr(astExpr)
+	canonicalStmt, err := parsers.ParseOne(
+		ctx.GetContext(),
+		dialect.MYSQL,
+		"select "+originSQL,
+		1,
+	)
+	if err != nil {
+		return err
+	}
+	defer canonicalStmt.Free()
+	canonicalSelect, ok := canonicalStmt.(*tree.Select)
+	if !ok {
+		return moerr.NewInternalError(ctx.GetContext(), "invalid canonical check constraint")
+	}
+	canonicalClause, ok := canonicalSelect.Select.(*tree.SelectClause)
+	if !ok || len(canonicalClause.Exprs) != 1 {
+		return moerr.NewInternalError(ctx.GetContext(), "invalid canonical check constraint expression")
+	}
+
 	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
-	checkExpr, err := binder.BindExpr(astExpr, 0, true)
+	checkExpr, err := binder.BindExpr(canonicalClause.Exprs[0].Expr, 0, true)
 	if err != nil {
 		return err
 	}
@@ -1951,19 +1976,16 @@ func appendCheckDef(
 	tableDef.Checks = append(tableDef.Checks, &plan.CheckDef{
 		Name:      name,
 		Check:     checkExpr,
-		OriginSql: formatCheckConstraintExpr(ctx, astExpr),
+		OriginSql: originSQL,
 	})
 	return nil
 }
 
-func formatCheckConstraintExpr(ctx CompilerContext, expr tree.Expr) string {
+func formatCheckConstraintExpr(expr tree.Expr) string {
 	opts := []tree.FmtCtxOption{
 		tree.WithSingleQuoteString(),
 		tree.WithQuoteIdentifier(),
-	}
-	if sqlMode := parserSQLModeFromContext(ctx); sqlMode != nil &&
-		mysql.ParseSQLModeFlags(*sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
-		opts = append(opts, tree.WithNoBackslashEscape())
+		tree.WithModeIndependentStringLiterals(),
 	}
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, opts...)
 	expr.Format(fmtCtx)
