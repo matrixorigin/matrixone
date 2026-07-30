@@ -3429,12 +3429,13 @@ func (fk FkReferDef) String() string {
 		fk.Db, fk.Tbl, fk.Name, fk.Col, fk.ReferCol)
 }
 
-// quoteSQLStringLiteral escapes a string for safe use in SQL string literals.
-// It replaces backslashes and single quotes, and wraps the result in quotes.
+// quoteSQLStringLiteral emits a literal that MatrixOne's MySQL scanner reads
+// byte-for-byte. Backslash is the scanner's escape introducer, including for a
+// single quote; doubling a quote would persist both quote bytes in INSERTs.
 func quoteSQLStringLiteral(s string) string {
 	replacer := strings.NewReplacer(
 		`\`, `\\`,
-		`'`, `''`,
+		`'`, `\'`,
 	)
 	return "'" + replacer.Replace(s) + "'"
 }
