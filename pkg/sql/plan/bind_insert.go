@@ -1059,7 +1059,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 	selectTag int32,
 	childColPos func(colName string) int32,
 ) (int32, []*plan.Expr, error) {
-	selectNode := builder.qry.Nodes[lastNodeID]
+	selectNode := builder.updateInputProjectNode(lastNodeID)
 
 	id2name := make(map[uint64]string, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {

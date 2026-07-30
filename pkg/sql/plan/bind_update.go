@@ -421,18 +421,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
-	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(
-		bindCtx,
-		dmlCtx,
-		lastNodeID,
-		selectNodeTag,
-		oldColName2Idx,
-		newColName2Idx,
-	)
-	if err != nil {
-		return 0, err
-	}
-
 	for i, tableDef := range dmlCtx.tableDefs {
 		if updateAutoIncrCols[i] {
 			lastNodeID = builder.appendNode(&plan.Node{
@@ -447,6 +435,18 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				},
 			}, bindCtx)
 		}
+	}
+
+	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(
+		bindCtx,
+		dmlCtx,
+		lastNodeID,
+		selectNodeTag,
+		oldColName2Idx,
+		newColName2Idx,
+	)
+	if err != nil {
+		return 0, err
 	}
 
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))

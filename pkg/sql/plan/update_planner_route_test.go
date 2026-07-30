@@ -432,6 +432,35 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.Equal(t, 1, countUpdateFkAsserts(logicPlan.GetQuery()))
 		require.True(t, updateFkPlanContainsFunc(logicPlan.GetQuery(), "<=>"))
 	})
+
+	t.Run("parent cascade changing another child foreign key is rejected", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		emp := mock.ctxt.tables["emp"]
+		emp.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+		otherParent := mock.ctxt.tables["nation"]
+		emp.Fkeys = append(emp.Fkeys, &planpb.ForeignKeyDef{
+			Name:        "fk_emp_other_parent",
+			Cols:        []uint64{7},
+			ForeignTbl:  otherParent.TblId,
+			ForeignCols: []uint64{0},
+		})
+
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(),
+			dialect.MYSQL,
+			"UPDATE dept SET deptno = 2",
+			1,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.ErrorContains(t, err, "child column constrained by another foreign key")
+		route, _, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerRejected, route)
+	})
 }
 
 func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
@@ -456,11 +485,12 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET parent_id = 2")
 		require.NoError(t, err)
 		require.Equal(t, 1, countUpdateFkPlanNodes(logicPlan.GetQuery(), planpb.Node_MULTI_UPDATE))
-		require.Equal(t, 1, countUpdateFkMarkJoins(logicPlan.GetQuery()))
-		require.Equal(t, 1, countUpdateFkAsserts(logicPlan.GetQuery()))
+		require.Equal(t, 0, countUpdateFkMarkJoins(logicPlan.GetQuery()))
+		require.Equal(t, 0, countUpdateFkAsserts(logicPlan.GetQuery()))
+		require.NotEmpty(t, logicPlan.GetQuery().DetectSqls)
 	})
 
-	t.Run("restricted referenced key stays modern with self probe", func(t *testing.T) {
+	t.Run("restricted referenced key uses final self validation", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareSelfRef(mock)
 		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET id = 2")
@@ -469,10 +499,11 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
 		require.Equal(t, 1, countUpdateFkMarkJoins(query))
 		require.Equal(t, 1, countUpdateFkAsserts(query))
-		require.True(t, updateFkPlanContainsFunc(query, "<=>"))
+		require.NotEmpty(t, query.DetectSqls)
+		require.True(t, updateFkPlanContainsFunc(query, "isnull"))
 	})
 
-	t.Run("self cascade is rejected explicitly without legacy fallback", func(t *testing.T) {
+	t.Run("self cascade uses typed legacy validation", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareSelfRef(mock)
 		mock.ctxt.tables["self_ref"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
@@ -488,8 +519,91 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
 		require.Error(t, err)
-		route, _, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerRejected, route)
+		route, reason, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerLegacy, route)
+		require.Equal(t, updateRouteReasonForeignKey, reason)
+	})
+
+	t.Run("disabled checks omit self detect sql", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareSelfRef(mock)
+		mock.ctxt.SetContext(context.WithValue(
+			mock.ctxt.GetContext(),
+			defines.DisableFkCheck{},
+			true,
+		))
+		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET parent_id = 99")
+		require.NoError(t, err)
+		require.Empty(t, logicPlan.GetQuery().DetectSqls)
+		require.Equal(t, 0, countUpdateFkMarkJoins(logicPlan.GetQuery()))
+		require.Equal(t, 0, countUpdateFkAsserts(logicPlan.GetQuery()))
+	})
+}
+
+func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
+	prepareEmpDept := func(mock *MockOptimizer) {
+		emp := mock.ctxt.tables["emp"]
+		dept := mock.ctxt.tables["dept"]
+		emp.TblId = 88887
+		emp.Fkeys[0].ForeignTbl = dept.TblId
+		emp.Fkeys[0].ForeignCols = []uint64{0}
+		dept.RefChildTbls = []uint64{emp.TblId}
+		mock.ctxt.id2name[emp.TblId] = "emp"
+	}
+	bindDirect := func(t *testing.T, mock *MockOptimizer, sql string) *planpb.Query {
+		stmt, err := parsers.ParseOne(mock.CurrentContext().GetContext(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.NoError(t, err)
+		return builder.qry
+	}
+	firstNode := func(query *planpb.Query, match func(*planpb.Node) bool) int {
+		for i, node := range query.Nodes {
+			if match(node) {
+				return i
+			}
+		}
+		return -1
+	}
+
+	t.Run("child check sees generated key", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		mock.ctxt.tables["emp"].Cols[7].Typ.AutoIncr = true
+		query := bindDirect(t, mock, "UPDATE emp SET deptno = DEFAULT")
+		preInsert := firstNode(query, func(node *planpb.Node) bool {
+			return node.NodeType == planpb.Node_PRE_INSERT
+		})
+		markJoin := firstNode(query, func(node *planpb.Node) bool {
+			return node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_MARK
+		})
+		require.NotEqual(t, -1, preInsert)
+		require.NotEqual(t, -1, markJoin)
+		require.Less(t, preInsert, markJoin)
+	})
+
+	t.Run("parent action on generated key uses legacy planner", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		mock.ctxt.tables["dept"].Cols[0].Typ.AutoIncr = true
+		mock.ctxt.tables["emp"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(),
+			dialect.MYSQL,
+			"UPDATE dept SET deptno = DEFAULT",
+			1,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.ErrorContains(t, err, "auto-increment referenced key")
+		route, reason, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerLegacy, route)
+		require.Equal(t, updateRouteReasonForeignKey, reason)
 	})
 }
 

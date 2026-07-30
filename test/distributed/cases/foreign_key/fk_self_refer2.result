@@ -79,7 +79,7 @@ delete from t1 where a = 4;
 delete from t1 where a = 6;
 update t1 set b = 8 where a = 3;
 update t1 set b = 6 where a = 3;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 delete from t1 where a = 8;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 delete from t1 where a = 3;

@@ -23,6 +23,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func (builder *QueryBuilder) updateInputProjectNode(nodeID int32) *plan.Node {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_PRE_INSERT && len(node.Children) == 1 {
+		return builder.qry.Nodes[node.Children[0]]
+	}
+	return node
+}
+
 func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 	bindCtx *BindContext,
 	dmlCtx *DMLContext,
@@ -62,16 +70,23 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			continue
 		}
 
-		fkTableDef := *tableDef
-		fkTableDef.Fkeys = make([]*plan.ForeignKeyDef, len(affectedFks))
-		for j, fk := range affectedFks {
-			fkTableDef.Fkeys[j] = DeepCopyFkey(fk)
-			if fkTableDef.Fkeys[j].ForeignTbl == 0 {
-				fkTableDef.Fkeys[j].ForeignTbl = tableDef.TblId
+		validatedFks := make([]*plan.ForeignKeyDef, 0, len(affectedFks))
+		for _, fk := range affectedFks {
+			if fk.ForeignTbl != 0 {
+				validatedFks = append(validatedFks, fk)
 			}
 		}
+		if len(validatedFks) == 0 {
+			continue
+		}
 
-		sourceNode := builder.qry.Nodes[lastNodeID]
+		fkTableDef := *tableDef
+		fkTableDef.Fkeys = make([]*plan.ForeignKeyDef, len(validatedFks))
+		for j, fk := range validatedFks {
+			fkTableDef.Fkeys[j] = DeepCopyFkey(fk)
+		}
+
+		sourceNode := builder.updateInputProjectNode(lastNodeID)
 		projLen := len(sourceNode.ProjectList)
 		projectTypes := make([]plan.Type, projLen)
 		for j, expr := range sourceNode.ProjectList {
@@ -100,7 +115,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 		errExpr := makePlan2StringConstExprWithType(
 			"Cannot add or update a child row: a foreign key constraint fails",
 		)
-		for j, fk := range affectedFks {
+		for j, fk := range validatedFks {
 			unchanged, buildErr := builder.buildUpdateFkUnchangedExpr(
 				tableDef,
 				fk,
@@ -265,6 +280,21 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	})
 
 	for _, affectedFK := range affected {
+		if affectedFK.childTableDef.TblId == tableDef.TblId {
+			switch affectedFK.fk.OnUpdate {
+			case plan.ForeignKeyDef_RESTRICT,
+				plan.ForeignKeyDef_NO_ACTION,
+				plan.ForeignKeyDef_SET_DEFAULT:
+			case plan.ForeignKeyDef_CASCADE, plan.ForeignKeyDef_SET_NULL:
+				return 0, 0, newLegacyUpdatePlannerRouteError(
+					updateRouteReasonForeignKey,
+					moerr.NewUnsupportedDML(
+						builder.GetContext(),
+						"self-referencing parent foreign key action",
+					),
+				)
+			}
+		}
 		switch affectedFK.fk.OnUpdate {
 		case plan.ForeignKeyDef_RESTRICT,
 			plan.ForeignKeyDef_NO_ACTION,
@@ -307,9 +337,12 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	mutationByChild := make(map[uint64]struct{}, len(mutations))
 	for _, mutation := range mutations {
 		if _, exists := mutationByChild[mutation.childTableDef.TblId]; exists {
-			return 0, 0, moerr.NewNotSupported(
-				builder.GetContext(),
-				"multiple parent foreign key actions targeting the same child table",
+			return 0, 0, newLegacyUpdatePlannerRouteError(
+				updateRouteReasonForeignKey,
+				moerr.NewUnsupportedDML(
+					builder.GetContext(),
+					"multiple parent foreign key actions targeting the same child table",
+				),
 			)
 		}
 		mutationByChild[mutation.childTableDef.TblId] = struct{}{}
@@ -345,8 +378,26 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 ) error {
 	childTableDef := affectedFK.childTableDef
 	ensureName2ColIndexForReplace(childTableDef)
+	parentColByID := make(map[uint64]*plan.ColDef, len(parentTableDef.Cols))
+	for _, col := range parentTableDef.Cols {
+		parentColByID[col.ColId] = col
+	}
+	for _, parentColID := range affectedFK.fk.ForeignCols {
+		if col := parentColByID[parentColID]; col != nil && col.Typ.AutoIncr {
+			return newLegacyUpdatePlannerRouteError(
+				updateRouteReasonForeignKey,
+				moerr.NewUnsupportedDML(
+					builder.GetContext(),
+					"parent foreign key action changing auto-increment referenced key",
+				),
+			)
+		}
+	}
 	if childTableDef.TblId == parentTableDef.TblId {
-		return moerr.NewNotSupported(builder.GetContext(), "self-referencing parent foreign key action")
+		return newLegacyUpdatePlannerRouteError(
+			updateRouteReasonForeignKey,
+			moerr.NewUnsupportedDML(builder.GetContext(), "self-referencing parent foreign key action"),
+		)
 	}
 	_, hasIrregularIndex := getValidIndexes(childTableDef)
 	if hasIrregularIndex {
@@ -373,9 +424,12 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 	}
 	for _, childColID := range affectedFK.fk.Cols {
 		if _, ok := primaryNames[childColIDToName[childColID]]; ok {
-			return moerr.NewNotSupported(
-				builder.GetContext(),
-				"parent foreign key action changing child primary key",
+			return newLegacyUpdatePlannerRouteError(
+				updateRouteReasonForeignKey,
+				moerr.NewUnsupportedDML(
+					builder.GetContext(),
+					"parent foreign key action changing child primary key",
+				),
 			)
 		}
 	}
@@ -383,6 +437,24 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 	updatedChildCols := make(map[uint64]struct{}, len(affectedFK.fk.Cols))
 	for _, childColID := range affectedFK.fk.Cols {
 		updatedChildCols[childColID] = struct{}{}
+	}
+	for _, col := range childTableDef.Cols {
+		if col.GeneratedCol != nil {
+			updatedChildCols[col.ColId] = struct{}{}
+		}
+	}
+	for _, outgoingFK := range childTableDef.Fkeys {
+		if outgoingFK == affectedFK.fk {
+			continue
+		}
+		for _, childColID := range outgoingFK.Cols {
+			if _, changed := updatedChildCols[childColID]; changed {
+				return moerr.NewNotSupported(
+					builder.GetContext(),
+					"parent foreign key action changing child column constrained by another foreign key",
+				)
+			}
+		}
 	}
 	visited := make(map[uint64]struct{}, len(childTableDef.RefChildTbls))
 	for _, grandchildID := range childTableDef.RefChildTbls {
@@ -854,7 +926,7 @@ func (builder *QueryBuilder) appendUpdateParentRestrictCheck(
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
 ) (int32, int32, error) {
-	sourceNode := builder.qry.Nodes[lastNodeID]
+	sourceNode := builder.updateInputProjectNode(lastNodeID)
 	sourceTypes := make([]plan.Type, len(sourceNode.ProjectList))
 	for i, expr := range sourceNode.ProjectList {
 		sourceTypes[i] = expr.Typ
@@ -950,6 +1022,50 @@ func (builder *QueryBuilder) appendUpdateParentRestrictCheck(
 		)
 		if err != nil {
 			return 0, 0, err
+		}
+	}
+	if affectedFK.childTableDef.TblId == parentTableDef.TblId {
+		var newKeyHasNull *plan.Expr
+		for _, parentColID := range affectedFK.fk.ForeignCols {
+			parentColName := parentColIDToName[parentColID]
+			parentPos := newColName2Idx[parentAlias+"."+parentColName]
+			newKeyExpr := &plan.Expr{
+				Typ: sourceNode.ProjectList[parentPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: parentPos,
+				}},
+			}
+			isNull, buildErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"isnull",
+				[]*plan.Expr{newKeyExpr},
+			)
+			if buildErr != nil {
+				return 0, 0, buildErr
+			}
+			if newKeyHasNull == nil {
+				newKeyHasNull = isNull
+				continue
+			}
+			newKeyHasNull, buildErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"or",
+				[]*plan.Expr{newKeyHasNull, isNull},
+			)
+			if buildErr != nil {
+				return 0, 0, buildErr
+			}
+		}
+		if newKeyHasNull != nil {
+			ok, err = BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"or",
+				[]*plan.Expr{ok, newKeyHasNull},
+			)
+			if err != nil {
+				return 0, 0, err
+			}
 		}
 	}
 	assertExpr, err := BindFuncExprImplByPlanExpr(

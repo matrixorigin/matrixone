@@ -72,6 +72,10 @@ create table self_ref (
 insert into self_ref values (1, 1, 'root'), (2, 1, 'child');
 update self_ref set name = 'changed' where id = 2;
 update self_ref set parent_id = 2 where id = 2;
+set foreign_key_checks = 0;
+update self_ref set parent_id = 99 where id = 2;
+update self_ref set parent_id = 2 where id = 2;
+set foreign_key_checks = 1;
 update self_ref set parent_id = 99 where id = 2;
 select * from self_ref order by id;
 
@@ -178,6 +182,30 @@ set foreign_key_checks = 1;
 select * from parent_cascade order by id;
 select * from child_cascade order by id;
 
+create table parent_dual_a (
+    id int primary key
+);
+create table parent_dual_b (
+    id int primary key
+);
+create table child_dual_fk (
+    x int,
+    constraint fk_dual_a foreign key (x)
+        references parent_dual_a(id) on update cascade,
+    constraint fk_dual_b foreign key (x)
+        references parent_dual_b(id)
+);
+
+insert into parent_dual_a values (1);
+insert into parent_dual_b values (1);
+insert into child_dual_fk values (1);
+update parent_dual_a set id = 2 where id = 1;
+select * from parent_dual_a order by id;
+select * from child_dual_fk;
+
+drop table child_dual_fk;
+drop table parent_dual_b;
+drop table parent_dual_a;
 drop table child_second_cascade;
 drop table child_composite_action;
 drop table parent_composite_action;
