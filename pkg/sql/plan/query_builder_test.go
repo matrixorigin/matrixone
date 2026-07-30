@@ -3801,6 +3801,49 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 			},
 		},
 		{
+			name:      "LIKE ESCAPE: a LIKE 'test#%' ESCAPE '#'",
+			sql:       "a LIKE 'test#%' ESCAPE '#'",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "like", funcExpr.F.Func.ObjName)
+				require.Len(t, funcExpr.F.Args, 3)
+			},
+		},
+		{
+			name:      "LIKE ESCAPE prepared parameters",
+			sql:       "a LIKE ? ESCAPE ?",
+			expectErr: false,
+			setupFunc: func() (*QueryBuilder, *BindContext) {
+				builder, bindCtx := genBuilderAndCtx()
+				builder.isPrepareStatement = true
+				return builder, bindCtx
+			},
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				funcExpr := expr.GetF()
+				require.NotNil(t, funcExpr)
+				require.Equal(t, "like", funcExpr.Func.ObjName)
+				require.Len(t, funcExpr.Args, 3)
+				paramPos := func(arg *plan.Expr) int32 {
+					if param := arg.GetP(); param != nil {
+						return param.Pos
+					}
+					castExpr := arg.GetF()
+					require.NotNil(t, castExpr)
+					require.Equal(t, "cast", castExpr.Func.ObjName)
+					require.NotEmpty(t, castExpr.Args)
+					require.NotNil(t, castExpr.Args[0].GetP())
+					return castExpr.Args[0].GetP().Pos
+				}
+				require.Equal(t, int32(1), paramPos(funcExpr.Args[1]))
+				require.Equal(t, int32(2), paramPos(funcExpr.Args[2]))
+			},
+		},
+		{
 			name:      "NOT_LIKE: a NOT LIKE 'test%'",
 			sql:       "a NOT LIKE 'test%'",
 			expectErr: false,
@@ -3811,6 +3854,22 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 				funcExpr, ok := expr.Expr.(*plan.Expr_F)
 				require.True(t, ok)
 				require.Equal(t, "not", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "NOT LIKE ESCAPE: a NOT LIKE 'test#%' ESCAPE '#'",
+			sql:       "a NOT LIKE 'test#%' ESCAPE '#'",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				notExpr := expr.GetF()
+				require.NotNil(t, notExpr)
+				require.Equal(t, "not", notExpr.Func.ObjName)
+				require.Len(t, notExpr.Args, 1)
+				likeExpr := notExpr.Args[0].GetF()
+				require.NotNil(t, likeExpr)
+				require.Equal(t, "like", likeExpr.Func.ObjName)
+				require.Len(t, likeExpr.Args, 3)
 			},
 		},
 		// Note: ILIKE requires string types, but 'a' column is BIGINT in genBuilderAndCtx
