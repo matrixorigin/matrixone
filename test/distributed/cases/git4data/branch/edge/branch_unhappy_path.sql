@@ -25,10 +25,17 @@ data branch diff br against missing_base;
 -- @bvt:issue
 
 alter table br add column c int default 0;
--- @regex("schema is not equivalent",true)
+-- Schema evolution (added column) now supports diff/merge.
 data branch diff br against base;
--- @regex("schema is not equivalent",true)
 data branch merge br into base;
+
+-- Type mismatch on a common column is still rejected.
+create table type_base(a int primary key, b int);
+insert into type_base values (1, 10);
+create table type_branch(a int primary key, b varchar(20));
+insert into type_branch values (1, '10');
+-- @regex("schema compatibility check: column 'b' exists in both schemas but has different types",true)
+data branch diff type_branch against type_base;
 
 create table no_pk(a int, b int);
 insert into no_pk values (1, 10), (2, 20);
