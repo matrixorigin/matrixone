@@ -192,9 +192,6 @@ func (s *service) Bootstrap(ctx context.Context) error {
 
 	ok, err := s.lock.Get(ctx, bootstrapKey)
 	if err != nil {
-		// A connection error can mean the keyed allocation committed but its
-		// response was lost. Do not retry here: a second allocation would lose
-		// ownership and incorrectly enter the waiter path.
 		return err
 	}
 

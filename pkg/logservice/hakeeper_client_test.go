@@ -970,6 +970,53 @@ func TestAllocateIDRetriesEOFSendError(t *testing.T) {
 	require.Equal(t, 2, sendCalls)
 }
 
+func TestAllocateIDByKeyWithRequestIDRetriesLostResponse(t *testing.T) {
+	originalNew := newHAKeeperClientFunc
+	originalSend := sendCNAllocateIDWithRequestIDFunc
+	originalRetryInterval := hakeeperClientRetryInterval
+	defer func() {
+		newHAKeeperClientFunc = originalNew
+		sendCNAllocateIDWithRequestIDFunc = originalSend
+		hakeeperClientRetryInterval = originalRetryInterval
+	}()
+
+	hakeeperClientRetryInterval = 0
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		return &hakeeperClient{}, nil
+	}
+
+	attempts := 0
+	sendCNAllocateIDWithRequestIDFunc = func(
+		_ *hakeeperClient,
+		_ context.Context,
+		key string,
+		batch uint64,
+		requestID string,
+	) (uint64, error) {
+		attempts++
+		require.Equal(t, "bootstrap", key)
+		require.Equal(t, uint64(1), batch)
+		require.Equal(t, "cn-1", requestID)
+		if attempts == 1 {
+			// The allocation was committed, but the reply did not reach the CN.
+			return 0, io.ErrUnexpectedEOF
+		}
+		return 1, nil
+	}
+
+	c := &managedHAKeeperClient{cfg: HAKeeperClientConfig{}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	id, err := c.AllocateIDByKeyWithRequestID(ctx, "bootstrap", 1, "cn-1")
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), id)
+	require.Equal(t, 2, attempts)
+}
+
 func TestAllocateBatchIDRetriesPrepareClientError(t *testing.T) {
 	originalNew := newHAKeeperClientFunc
 	originalSend := sendCNAllocateIDFunc

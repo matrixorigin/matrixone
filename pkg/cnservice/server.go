@@ -988,7 +988,7 @@ func (s *service) bootstrap() error {
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
 	s.bootstrapService = bootstrap.NewService(
 		s.cfg.UUID,
-		&locker{hakeeperClient: s._hakeeperClient},
+		&locker{hakeeperClient: s._hakeeperClient, requestID: s.cfg.UUID},
 		rt.Clock(),
 		s._txnClient,
 		s.sqlExecutor,
@@ -1119,12 +1119,21 @@ func SaveProfile(profilePath string, profileType string, etlFS fileservice.FileS
 
 type locker struct {
 	hakeeperClient logservice.CNHAKeeperClient
+	requestID      string
+}
+
+type idempotentKeyedIDAllocator interface {
+	AllocateIDByKeyWithRequestID(ctx context.Context, key string, batch uint64, requestID string) (uint64, error)
 }
 
 func (l *locker) Get(
 	ctx context.Context,
 	key string) (bool, error) {
-	v, err := l.hakeeperClient.AllocateIDByKeyWithBatch(ctx, key, 1)
+	allocator, ok := l.hakeeperClient.(idempotentKeyedIDAllocator)
+	if !ok {
+		return false, moerr.NewInternalError(ctx, "HAKeeper client does not support idempotent bootstrap lock allocation")
+	}
+	v, err := allocator.AllocateIDByKeyWithRequestID(ctx, key, 1, l.requestID)
 	if err != nil {
 		return false, err
 	}
