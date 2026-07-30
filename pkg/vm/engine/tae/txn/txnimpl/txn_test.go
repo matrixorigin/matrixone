@@ -187,6 +187,36 @@ func TestReplayOnePCRebuildsAutoIncrementDMLWatermark(t *testing.T) {
 	assert.Equal(t, commitTS, tableEntry.GetLatestKnownDMLPrepare())
 }
 
+func TestReplaySkipsCheckpointGCedDirtyTables(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	mgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(c), catalog.MockTxnFactory(c), types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+
+	setupTxn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	dbEntry, err := c.CreateDBEntry("replay_checkpoint_gc", "", "", setupTxn)
+	assert.NoError(t, err)
+	tableEntry, err := dbEntry.CreateTableEntry(catalog.MockSchemaAll(3, 1), setupTxn, nil)
+	assert.NoError(t, err)
+	assert.NoError(t, setupTxn.Commit(context.Background()))
+
+	startTS := types.BuildTS(10, 0)
+	commitTS := types.BuildTS(12, 0)
+	replayTxn := newPreparingEpochTestTxn(t, "replay-checkpoint-gc", startTS, types.BuildTS(11, 0))
+	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID)
+	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID+1)
+	replayTxn.GetMemo().AddTable(dbEntry.ID+1, tableEntry.ID)
+	assert.NoError(t, replayTxn.SetCommitTS(commitTS))
+	store := &replayTxnStore{Cmd: &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}, Observer: noopReplayObserver{}, catalog: c}
+
+	assert.NoError(t, store.prepareCommit(replayTxn))
+	assert.True(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS))
+	assert.NoError(t, store.applyCommit(replayTxn))
+	assert.Equal(t, commitTS, tableEntry.GetLatestKnownDMLPrepare())
+}
+
 type waitingSchemaTxn struct {
 	txnif.TxnReader
 	prepareTS types.TS
