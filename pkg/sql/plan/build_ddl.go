@@ -338,13 +338,26 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			Alg:  plan.CompressType_Lz4,
 			Typ:  *typ,
 			Default: &plan.Default{
-				NullAbility:  !expr.Typ.NotNullable,
+				NullAbility:  ctasExprCanBeNull(expr),
 				Expr:         nil,
 				OriginString: defaultVal,
 			},
 		}
 	}
 	return cols, builder.qry, nil
+}
+
+func ctasExprCanBeNull(expr *Expr) bool {
+	if !expr.Typ.NotNullable {
+		return true
+	}
+
+	// MySQL CTAS creates nullable columns for explicit DATETIME casts, even
+	// when the source expression is a non-NULL literal. Keep this CTAS-only
+	// metadata rule separate from normal expression nullability propagation.
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
+		types.T(expr.Typ.Id) == types.T_datetime
 }
 
 func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
