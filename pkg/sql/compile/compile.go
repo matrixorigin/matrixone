@@ -5560,7 +5560,9 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 	if materializedSource != nil {
 		// The materialized source is process-local state. Always terminate the
 		// producer at a local merge scope so it is never serialized as part of a
-		// remote scope without its consumers.
+		// remote scope without its consumers. Group same-CN shuffle buckets first
+		// so every remote producer scope is independently executable.
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		rs = c.newMergeScope(ss)
 	} else if c.IsSingleScope(ss) {
 		rs = ss[0]
@@ -5900,7 +5902,7 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 //
 // Background (issue #24919): newShuffleJoinScopeList leaves a CN's dop join buckets in
 // separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
-// When the consumer (here compileInsert) sends each bucket individually, RemoteRun ->
+// When a consumer sends each bucket individually, RemoteRun ->
 // checkPipelineStandaloneExecutableAtRemote sees the dispatch.LocalRegs pointing to the
 // sibling out-of-tree buckets, so the tree is not independently executable and must fail
 // before remote start. Historically RemoteRun silently moved that tree to the coordinator;
@@ -5909,7 +5911,7 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // buckets in one tree, so the whole group executes at the intended remote CN.
 //
 // It is a no-op unless we are multi-CN and ss actually carries a cross-CN shuffle dispatch,
-// so single-CN and non-shuffle inserts are completely unaffected.
+// so single-CN and non-shuffle consumers are completely unaffected.
 //
 // Operator-chain note: callers attach their own root operator to each bucket first (e.g.
 // the insert / multiUpdate operator). mergeScopesByCN (via newMergeScopeByCN ->
