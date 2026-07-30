@@ -1589,8 +1589,12 @@ type SpillEngineConfig struct {
 	// Budget is the statement generation shared with HashBuild. Rebuild and
 	// re-spill must charge this exact generation; creating a fresh generation
 	// would bypass aggregate admission and make ownership impossible to audit.
-	Budget   *process.HashBuildBudgetGeneration
-	MaxQueue int
+	Budget *process.HashBuildBudgetGeneration
+	// ProbeExpressionLease is owned by the consuming join operator and borrowed
+	// by SpillEngine while it scatters or re-scatters probe batches. The join
+	// must free its probe executors before releasing this lease.
+	ProbeExpressionLease *hashbuild.ExpressionMemoryLease
+	MaxQueue             int
 }
 
 // BucketResult encodes the outcome of a RebuildHashmap call.
@@ -1621,10 +1625,9 @@ type SpillEngine struct {
 	probePool ReusableBufferPool
 
 	// Cached key executors for re-spill
-	keyExecs             []colexec.ExpressionExecutor
-	keyVecs              []*vector.Vector
-	buildExprReservation *process.HashBuildReservation
-	probeExprReservation *process.HashBuildReservation
+	keyExecs       []colexec.ExpressionExecutor
+	keyVecs        []*vector.Vector
+	buildExprLease *hashbuild.ExpressionMemoryLease
 
 	// Reusable scatter buffers to avoid per-batch allocations.
 	scatterHashValues    []uint64
@@ -1639,9 +1642,8 @@ type SpillEngine struct {
 	// been dropped.
 	scatterScratchReservation *process.HashBuildReservation
 
-	// probeKeyEval evaluates probe-side key expressions for probe re-scatter.
-	// Stored from ScatterProbeTable. Must use probe-side conditions
-	// (EqConds[0]), not build-side (EqConds[1]) to ensure correct bucket assignment.
+	// probeKeyEval is the unbudgeted fallback for probe re-scatter. Production
+	// spilled joins evaluate the probe executors owned by ProbeExpressionLease.
 	probeKeyEval func(*batch.Batch) ([]*vector.Vector, error)
 }
 
@@ -1789,16 +1791,10 @@ func (e *SpillEngine) ScatterProbeTable(
 		if bat.IsEmpty() {
 			continue
 		}
-		candidate, err := e.reserveExpressionPeak(proc, e.cfg.ProbeKeyExprs, bat.RowCount())
+		keyVecs, err := e.evalProbeKeys(proc, bat, evalKeysFn)
 		if err != nil {
 			return err
 		}
-		keyVecs, err := evalKeysFn(bat)
-		if err != nil {
-			e.replaceProbeExpressionReservation(candidate)
-			return err
-		}
-		e.replaceProbeExpressionReservation(candidate)
 		if err := checkSpillCanceled(proc); err != nil {
 			return err
 		}
@@ -2081,6 +2077,10 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 	if err := checkSpillCanceled(proc); err != nil {
 		return nil, err
 	}
+	// Re-spill only drains the builder's copied batches. Drop the failed
+	// hashmap-build executor set before admitting the engine's re-partition
+	// executors, so the two equivalent retained working sets never overlap.
+	builder.FreeExecutors()
 	buildWriters := e.makeBucketWriters("build_sub")
 	for i := range buildWriters {
 		buildWriters[i].Budget = e.cfg.Budget
@@ -2122,12 +2122,18 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 
 	// Cache key executors.
 	if len(e.keyExecs) != len(e.cfg.BuildKeyExprs) {
-		execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, e.cfg.BuildKeyExprs)
+		execs, lease, err := hashbuild.NewBudgetedExpressionExecutors(
+			proc,
+			e.cfg.Budget,
+			e.cfg.BuildKeyExprs,
+			false,
+		)
 		if err != nil {
 			return nil, err
 		}
 		e.freeKeyExecs()
 		e.keyExecs = execs
+		e.buildExprLease = lease
 	}
 
 	// evalAndScatter builds key vectors using the given executors and scatters.
@@ -2141,10 +2147,6 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		if err := checkSpillCanceled(proc); err != nil {
 			return err
 		}
-		candidate, err := e.reserveExpressionPeak(proc, e.cfg.BuildKeyExprs, bat.RowCount())
-		if err != nil {
-			return err
-		}
 		if cap(e.keyVecs) < len(execs) {
 			e.keyVecs = make([]*vector.Vector, len(execs))
 		}
@@ -2154,21 +2156,20 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 				keyVecs[i] = nil
 			}
 		}()
-		for i, exec := range execs {
-			vec, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
-			if err != nil {
-				// Eval may leave newly allocated child/result vectors cached.
-				// Destroy the owned executor tree while both its previous
-				// reservation and this candidate are still charged.
-				e.freeKeyExecs()
-				if candidate != nil {
-					candidate.Release()
-				}
-				return err
+		err := e.buildExprLease.Run(proc, bat.RowCount(), func(i int) error {
+			vec, evalErr := execs[i].Eval(proc, []*batch.Batch{bat}, nil)
+			if evalErr != nil {
+				return evalErr
 			}
 			keyVecs[i] = vec
+			return nil
+		})
+		if err != nil {
+			// Eval may leave newly allocated child/result vectors cached.
+			// Destroy the owned executor tree before releasing its lease.
+			e.freeKeyExecs()
+			return err
 		}
-		e.replaceBuildExpressionReservation(candidate)
 		if err := checkSpillCanceled(proc); err != nil {
 			return err
 		}
@@ -2394,52 +2395,50 @@ func (e *SpillEngine) AdvanceToNextBucket(
 }
 
 // scatterProbe evaluates probe-side keys (EqConds[0]) for probe re-scatter.
-// Uses probeKeyEval — NOT keyExecs — to get correct column subscripts
-// when probe and build batches have different column layouts.
+// It uses the borrowed probe lease, not build-side keyExecs; probeKeyEval is
+// retained only as the unbudgeted fallback.
 func scatterProbe(proc *process.Process, e *SpillEngine, bat *batch.Batch, writers []BucketWriter, buffers []*batch.Batch, seed uint64, analyzer process.Analyzer) error {
-	candidate, err := e.reserveExpressionPeak(proc, e.cfg.ProbeKeyExprs, bat.RowCount())
+	keyVecs, err := e.evalProbeKeys(proc, bat, e.probeKeyEval)
 	if err != nil {
 		return err
 	}
-	keyVecs, err := e.probeKeyEval(bat)
-	if err != nil {
-		e.replaceProbeExpressionReservation(candidate)
-		return err
-	}
-	e.replaceProbeExpressionReservation(candidate)
 	return e.scatterBatch(proc, bat, keyVecs, writers, buffers, seed, true, analyzer)
 }
 
-func (e *SpillEngine) reserveExpressionPeak(proc *process.Process, exprs []*plan.Expr, rows int) (*process.HashBuildReservation, error) {
-	if e.cfg.Budget == nil {
-		return nil, nil
-	}
-	var peak uint64
-	for _, expr := range exprs {
-		exprPeak, err := hashbuild.ExpressionVectorPeak(proc, expr, rows, false)
-		if err != nil || peak > math.MaxUint64-exprPeak {
+func (e *SpillEngine) evalProbeKeys(
+	proc *process.Process,
+	bat *batch.Batch,
+	fallback func(*batch.Batch) ([]*vector.Vector, error),
+) ([]*vector.Vector, error) {
+	if e.cfg.ProbeExpressionLease == nil {
+		if fallback == nil {
 			return nil, process.ErrHashBuildBudgetInvalid
 		}
-		peak += exprPeak
+		return fallback(bat)
 	}
-	if peak == 0 {
-		return nil, nil
+	if e.cfg.ProbeExpressionLease.Len() != len(e.cfg.ProbeKeyExprs) {
+		return nil, process.ErrHashBuildBudgetInvalid
 	}
-	return e.cfg.Budget.Reserve(peak)
-}
-
-func (e *SpillEngine) replaceBuildExpressionReservation(candidate *process.HashBuildReservation) {
-	if e.buildExprReservation != nil {
-		e.buildExprReservation.Release()
+	if cap(e.keyVecs) < len(e.cfg.ProbeKeyExprs) {
+		e.keyVecs = make([]*vector.Vector, len(e.cfg.ProbeKeyExprs))
 	}
-	e.buildExprReservation = candidate
-}
-
-func (e *SpillEngine) replaceProbeExpressionReservation(candidate *process.HashBuildReservation) {
-	if e.probeExprReservation != nil {
-		e.probeExprReservation.Release()
+	keyVecs := e.keyVecs[:len(e.cfg.ProbeKeyExprs)]
+	err := e.cfg.ProbeExpressionLease.Eval(
+		proc,
+		[]*batch.Batch{bat},
+		bat.RowCount(),
+		func(index int, vec *vector.Vector) error {
+			keyVecs[index] = vec
+			return nil
+		},
+	)
+	if err != nil {
+		for i := range keyVecs {
+			keyVecs[i] = nil
+		}
+		return nil, err
 	}
-	e.probeExprReservation = candidate
+	return keyVecs, nil
 }
 
 func (e *SpillEngine) freeKeyExecs() {
@@ -2449,9 +2448,9 @@ func (e *SpillEngine) freeKeyExecs() {
 		}
 	}
 	e.keyExecs = nil
-	if e.buildExprReservation != nil {
-		e.buildExprReservation.Release()
-		e.buildExprReservation = nil
+	if e.buildExprLease != nil {
+		e.buildExprLease.Release()
+		e.buildExprLease = nil
 	}
 }
 
@@ -2493,9 +2492,5 @@ func (e *SpillEngine) Cleanup(proc *process.Process) {
 	e.buildPool.Release(proc)
 	e.probePool.Release(proc)
 	e.freeKeyExecs()
-	if e.probeExprReservation != nil {
-		e.probeExprReservation.Release()
-		e.probeExprReservation = nil
-	}
 	e.releaseScatterScratch()
 }
