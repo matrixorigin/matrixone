@@ -200,6 +200,41 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 		require.Equal(t, 1, count)
 
 		exec("begin")
+		exec("data branch create table " + dbName + ".f1 from " + dbName + ".src")
+		exec("insert into " + dbName + ".f1 values (4, 'shared txn change')")
+		exec("data branch create table " + dbName + ".f2 from " + dbName + ".f1")
+		exec("data branch create table " + dbName + ".f3 from " + dbName + ".f1")
+		var f1ID, f2ID, f3ID uint64
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname = 'f1'").Scan(&f1ID))
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname = 'f2'").Scan(&f2ID))
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = '"+dbName+"' and relname = 'f3'").Scan(&f3ID))
+		exec("drop table " + dbName + ".f1")
+		exec("commit")
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_branch_metadata where table_id = ? and table_deleted = true", f1ID).Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+			"select count(*) from mo_catalog.mo_branch_metadata where table_id in (%d, %d) and p_table_id = %d and table_deleted = false",
+			f2ID, f3ID, f1ID)).Scan(&count))
+		require.Equal(t, 2, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"data branch diff "+dbName+".f2 against "+dbName+".f3 output count").Scan(&count))
+		require.Zero(t, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"data branch diff "+dbName+".f3 against "+dbName+".f2 output count").Scan(&count))
+		require.Zero(t, count)
+		exec("insert into " + dbName + ".f2 values (5, 'target-only change')")
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"data branch diff "+dbName+".f2 against "+dbName+".f3 output count").Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"data branch diff "+dbName+".f3 against "+dbName+".f2 output count").Scan(&count))
+		require.Equal(t, 1, count)
+
+		exec("begin")
 		exec("create table " + dbName + ".cgs clone " + dbName + ".src {snapshot='" + snapshotName + "'} copy grants")
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".cgs").Scan(&count))
 		require.Equal(t, 1, count)

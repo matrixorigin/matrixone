@@ -1262,43 +1262,77 @@ func diffOnBase(
 	}()
 
 	if dagInfo.hasLCA() {
+		tarSp, baseSp := tblStuff.resolvedSnapshots(ses)
+		lcaProbe := dagInfo.lcaProbeSnapshot(tarSp, baseSp)
 		switch dagInfo.lcaTableId {
 		case tblStuff.tarRel.GetTableID(ctx):
 			tblStuff.lcaRel = tblStuff.tarRel
 		case tblStuff.baseRel.GetTableID(ctx):
 			tblStuff.lcaRel = tblStuff.baseRel
 		default:
-			tarSp, baseSp := tblStuff.resolvedSnapshots(ses)
-			probe := dagInfo.lcaProbeSnapshot(tarSp, baseSp)
 			lcaSnapshot := &plan2.Snapshot{
 				Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
-				TS:     &timestamp.Timestamp{PhysicalTime: probe.Physical()},
+				TS:     &timestamp.Timestamp{PhysicalTime: lcaProbe.Physical()},
 			}
 			if tblStuff.lcaRel, err = getRelationById(
 				ctx, ses, bh, dagInfo.lcaTableId, lcaSnapshot); err != nil {
-				return
+				historicalErr := err
+				endpointCTS, ctsErr := getTablesCreationCommitTS(
+					ctx, ses, tblStuff.tarRel, tblStuff.baseRel,
+					[]types.TS{tarSp, baseSp},
+				)
+				if ctsErr != nil {
+					return ctsErr
+				}
+				if len(endpointCTS) != 2 {
+					return moerr.NewInternalErrorNoCtxf(
+						"data branch: failed to resolve creation TS for LCA endpoints",
+					)
+				}
+				for _, endpointCreationTS := range endpointCTS {
+					var zeroHistory bool
+					tblStuff.lcaRel, tblStuff.lcaCTS, zeroHistory, err =
+						resolveSameTransactionDataBranchRelation(
+							ctx, ses, bh, dagInfo.lcaTableId, lcaProbe,
+							endpointCreationTS, historicalErr,
+						)
+					if err != nil {
+						return
+					}
+					if !zeroHistory {
+						tblStuff.lcaHasZeroHistory = false
+						break
+					}
+					tblStuff.lcaHasZeroHistory = true
+				}
 			}
 		}
-		tarSp, baseSp := tblStuff.resolvedSnapshots(ses)
-		lcaProbe := dagInfo.lcaProbeSnapshot(tarSp, baseSp)
-		lcaCTS, ctsErr := getTablesCreationCommitTS(
-			ctx, ses, tblStuff.lcaRel, tblStuff.lcaRel,
-			[]types.TS{lcaProbe, lcaProbe},
-		)
-		if ctsErr != nil {
-			return ctsErr
-		}
-		if len(lcaCTS) == 0 {
-			return moerr.NewInternalErrorNoCtxf(
-				"data branch: failed to resolve creation TS for LCA table %d",
-				dagInfo.lcaTableId,
-			)
-		}
-		tblStuff.lcaCTS = lcaCTS[0]
-		if tblStuff.lcaCTS.GT(&tarSp) || tblStuff.lcaCTS.GT(&baseSp) {
-			return moerr.NewInternalErrorNoCtxf(
-				"data branch: LCA table %d was created after an endpoint snapshot",
-				dagInfo.lcaTableId,
+		if !tblStuff.lcaHasZeroHistory {
+			if tblStuff.lcaCTS.IsEmpty() {
+				lcaCTS, ctsErr := getTablesCreationCommitTS(
+					ctx, ses, tblStuff.lcaRel, tblStuff.lcaRel,
+					[]types.TS{lcaProbe, lcaProbe},
+				)
+				if ctsErr != nil {
+					return ctsErr
+				}
+				if len(lcaCTS) == 0 {
+					return moerr.NewInternalErrorNoCtxf(
+						"data branch: failed to resolve creation TS for LCA table %d",
+						dagInfo.lcaTableId,
+					)
+				}
+				tblStuff.lcaCTS = lcaCTS[0]
+			}
+			if tblStuff.lcaCTS.GT(&tarSp) || tblStuff.lcaCTS.GT(&baseSp) {
+				return moerr.NewInternalErrorNoCtxf(
+					"data branch: LCA table %d was created after an endpoint snapshot",
+					dagInfo.lcaTableId,
+				)
+			}
+		} else {
+			logutil.Info("DataBranch-LCA-ZeroHistory",
+				zap.Uint64("table-id", dagInfo.lcaTableId),
 			)
 		}
 	}
