@@ -30,6 +30,7 @@ import (
 	splan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
 var _ engine.Relation = (*combinedTxnTable)(nil)
@@ -61,9 +62,61 @@ func newCombinedTxnTable(
 ) *combinedTxnTable {
 	return &combinedTxnTable{
 		primary:     primary,
-		pruneFunc:   pruneFunc,
-		tablesFunc:  tablesFunc,
-		prunePKFunc: prunePKFunc,
+		pruneFunc:   filterNilPrunedRelations(pruneFunc),
+		tablesFunc:  filterNilTableRelations(tablesFunc),
+		prunePKFunc: filterNilPKPrunedRelations(prunePKFunc),
+	}
+}
+
+func filterNilRelations(relations []engine.Relation) []engine.Relation {
+	for i, rel := range relations {
+		if rel == nil {
+			filtered := make([]engine.Relation, 0, len(relations)-1)
+			filtered = append(filtered, relations[:i]...)
+			for _, remaining := range relations[i+1:] {
+				if remaining != nil {
+					filtered = append(filtered, remaining)
+				}
+			}
+			return filtered
+		}
+	}
+	return relations
+}
+
+func filterNilTableRelations(fn tablesFunc) tablesFunc {
+	return func() ([]engine.Relation, error) {
+		relations, err := fn()
+		if err != nil {
+			return nil, err
+		}
+		return filterNilRelations(relations), nil
+	}
+}
+
+func filterNilPrunedRelations(fn pruneFunc) pruneFunc {
+	return func(
+		ctx context.Context,
+		param engine.RangesParam,
+	) ([]engine.Relation, error) {
+		relations, err := fn(ctx, param)
+		if err != nil {
+			return nil, err
+		}
+		return filterNilRelations(relations), nil
+	}
+}
+
+func filterNilPKPrunedRelations(fn prunePKFunc) prunePKFunc {
+	return func(
+		bat *batch.Batch,
+		partitionIndex int32,
+	) ([]engine.Relation, error) {
+		relations, err := fn(bat, partitionIndex)
+		if err != nil {
+			return nil, err
+		}
+		return filterNilRelations(relations), nil
 	}
 }
 
@@ -119,7 +172,7 @@ func (t *combinedTxnTable) BuildReaders(
 			}
 			readers = append(readers, r...)
 		}
-		return readers, nil
+		return ensureReaders(readers, num), nil
 	}
 
 	r := relData.(*CombinedRelData)
@@ -141,7 +194,18 @@ func (t *combinedTxnTable) BuildReaders(
 		}
 		readers = append(readers, r...)
 	}
-	return readers, nil
+	return ensureReaders(readers, num), nil
+}
+
+func ensureReaders(readers []engine.Reader, num int) []engine.Reader {
+	if len(readers) > 0 {
+		return readers
+	}
+	readers = make([]engine.Reader, num)
+	for i := range readers {
+		readers[i] = new(readutil.EmptyReader)
+	}
+	return readers
 }
 
 func (t *combinedTxnTable) BuildShardingReaders(
