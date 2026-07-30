@@ -50,6 +50,42 @@ func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
 	}
 }
 
+func TestLegacyForeignKeyMetadataUpdatesPreserveOrderAndActions(t *testing.T) {
+	updates, err := legacyForeignKeyMetadataUpdates(legacyForeignKeyTableDefinition{
+		database: "db'one",
+		table:    "child",
+		createSQL: "create table child (a int, b int, constraint fk_default foreign key (b, a) references parent (b, a), " +
+			"constraint fk_restrict foreign key (a) references parent (a) on delete restrict on update restrict)",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 3 {
+		t.Fatalf("expected 3 legacy foreign-key updates, got %d: %v", len(updates), updates)
+	}
+
+	for _, expected := range []string{
+		"constraint_id = 1, on_delete = 'NO_ACTION', on_update = 'NO_ACTION'",
+		"constraint_name = 'fk_default' AND column_name = 'b'",
+		"constraint_id = 2, on_delete = 'NO_ACTION', on_update = 'NO_ACTION'",
+		"constraint_name = 'fk_default' AND column_name = 'a'",
+		"constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT'",
+		"constraint_name = 'fk_restrict' AND column_name = 'a'",
+		"db_name = 'db''one'",
+	} {
+		found := false
+		for _, update := range updates {
+			if strings.Contains(update, expected) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing %q in generated updates: %v", expected, updates)
+		}
+	}
+}
+
 func TestForeignKeyMetadataVersionHandleMetadataAndClusterNoop(t *testing.T) {
 	meta := Handler.Metadata()
 	if meta.Version != "4.0.6" || meta.MinUpgradeVersion != "4.0.5" || meta.UpgradeTenant != versions.Yes || meta.UpgradeCluster != versions.Yes {

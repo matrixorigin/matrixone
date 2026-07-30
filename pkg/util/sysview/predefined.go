@@ -164,8 +164,8 @@ var (
 		"CAST(fk.db_name AS varchar(64)) AS TABLE_SCHEMA, " +
 		"CAST(fk.table_name AS varchar(64)) AS TABLE_NAME, " +
 		"CAST(fk.column_name AS varchar(64)) AS COLUMN_NAME, " +
-		"CAST(CASE WHEN fk.constraint_id = 0 THEN 1 ELSE fk.constraint_id END AS int unsigned) AS ORDINAL_POSITION, " +
-		"CAST(CASE WHEN fk.constraint_id = 0 THEN 1 ELSE fk.constraint_id END AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, " +
+		"CAST(fk.constraint_id AS int unsigned) AS ORDINAL_POSITION, " +
+		"CAST(fk.constraint_id AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, " +
 		"CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, " +
 		"CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME, " +
 		"CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME " +
@@ -404,20 +404,22 @@ var (
 		"where `tbl`.`account_id` = current_account_id()"
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +
-		"SELECT DISTINCT " +
+		"SELECT " +
 		"'def' AS CONSTRAINT_CATALOG, " +
 		"fk.db_name AS CONSTRAINT_SCHEMA, " +
 		"fk.constraint_name AS CONSTRAINT_NAME, " +
 		"'def' AS UNIQUE_CONSTRAINT_CATALOG, " +
 		"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, " +
-		"idx.type AS UNIQUE_CONSTRAINT_NAME," +
+		"min(idx.type) AS UNIQUE_CONSTRAINT_NAME," +
 		"'NONE' AS MATCH_OPTION, " +
-		"CASE WHEN upper(fk.on_update) = 'RESTRICT' THEN 'NO ACTION' ELSE fk.on_update END AS UPDATE_RULE, " +
-		"CASE WHEN upper(fk.on_delete) = 'RESTRICT' THEN 'NO ACTION' ELSE fk.on_delete END AS DELETE_RULE, " +
+		"replace(fk.on_update, '_', ' ') AS UPDATE_RULE, " +
+		"replace(fk.on_delete, '_', ' ') AS DELETE_RULE, " +
 		"fk.table_name AS TABLE_NAME, " +
 		"fk.refer_table_name AS REFERENCED_TABLE_NAME " +
 		"FROM mo_catalog.mo_foreign_keys fk " +
-		"JOIN mo_catalog.mo_indexes idx ON (fk.refer_column_name = idx.column_name)"
+		"JOIN mo_catalog.mo_tables tbl ON (tbl.reldatabase = fk.refer_db_name AND tbl.relname = fk.refer_table_name AND tbl.account_id = current_account_id()) " +
+		"JOIN mo_catalog.mo_indexes idx ON (idx.table_id = tbl.rel_id AND idx.column_name = fk.refer_column_name) " +
+		"GROUP BY fk.db_name, fk.constraint_name, fk.refer_db_name, fk.on_update, fk.on_delete, fk.table_name, fk.refer_table_name"
 
 	InformationSchemaEnginesDDL = "CREATE TABLE information_schema.ENGINES (" +
 		"ENGINE varchar(64)," +

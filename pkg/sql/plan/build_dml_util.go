@@ -3559,6 +3559,12 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 		row[13] = "0"
 		row[14] = data.Def.OnDelete.String()
 		row[15] = data.Def.OnUpdate.String()
+		if data.DefaultOnDelete {
+			row[14] = plan.ForeignKeyDef_NO_ACTION.String()
+		}
+		if data.DefaultOnUpdate {
+			row[15] = plan.ForeignKeyDef_NO_ACTION.String()
+		}
 		{
 			if rows > 0 {
 				sb.WriteByte(',')

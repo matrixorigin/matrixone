@@ -106,6 +106,25 @@ func TestGetSqlForAddFkRecordsCompositeColumnOrder(t *testing.T) {
 		"order by db_name, table_name, constraint_name, constraint_id")
 }
 
+func TestGetSqlForAddFkStoresDefaultActionsAsNoAction(t *testing.T) {
+	fkData := &FkData{
+		Def: &plan.ForeignKeyDef{
+			Name:     "fk_default_action",
+			OnDelete: plan.ForeignKeyDef_RESTRICT,
+			OnUpdate: plan.ForeignKeyDef_RESTRICT,
+		},
+		Cols:            &plan.FkColName{Cols: []string{"child_id"}},
+		ColsReferred:    &plan.FkColName{Cols: []string{"parent_id"}},
+		ParentDbName:    "parent_db",
+		ParentTableName: "parent",
+		DefaultOnDelete: true,
+		DefaultOnUpdate: true,
+	}
+
+	sql := getSqlForAddFk("child_db", "child", fkData)
+	require.Contains(t, sql, "'NO_ACTION','NO_ACTION'")
+}
+
 func TestGetSqlForCheckHasDBRefersToEscapesStringLiterals(t *testing.T) {
 	sql := getSqlForCheckHasDBRefersTo("db'name")
 	require.Contains(t, sql, "refer_db_name = 'db''name'")

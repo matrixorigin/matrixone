@@ -4305,6 +4305,9 @@ type FkData struct {
 	UpdateSql string
 	// forward reference
 	ForwardRefer bool
+	// reference options omitted by the user are MySQL NO ACTION in metadata.
+	DefaultOnDelete bool
+	DefaultOnUpdate bool
 }
 
 // getForeignKeyData prepares the foreign key data.
@@ -4321,6 +4324,8 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 			OnUpdate:    getRefAction(refer.OnUpdate),
 			ForeignCols: make([]uint64, len(refer.KeyParts)),
 		},
+		DefaultOnDelete: refer.OnDelete == tree.REFERENCE_OPTION_INVALID,
+		DefaultOnUpdate: refer.OnUpdate == tree.REFERENCE_OPTION_INVALID,
 	}
 
 	// get fk columns of create table
