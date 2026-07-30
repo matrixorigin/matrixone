@@ -1347,6 +1347,82 @@ func TestBuildRangeIntervalEmptyDescUnbounded(t *testing.T) {
 	require.Equal(t, 3, end, "empty desc: CURRENT ROW ends after last value 2")
 }
 
+func TestBuildRangeIntervalVarcharPeers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"2026-01", "2026-02", "2026-02", "2026-03"} {
+		require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+	}
+	defer vec.Free(mp)
+
+	ctr := &container{os: []int64{0, 1, 3}}
+	ctr.orderVecs = make([]colexec.ExprEvalVector, 1)
+	ctr.orderVecs[0].Vec = []*vector.Vector{vec}
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+
+	start, end, err := ctr.buildRangeInterval(1, 0, 4, frame)
+	require.NoError(t, err)
+	require.Equal(t, 0, start)
+	require.Equal(t, 3, end)
+
+	frame.Start = &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW}
+	start, end, err = ctr.buildRangeInterval(2, 0, 4, frame)
+	require.NoError(t, err)
+	require.Equal(t, 1, start)
+	require.Equal(t, 3, end)
+}
+
+func TestWindowRangeVarcharOrderBy(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{200, 100, 50}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"2026-02", "2026-01", "2026-02"}, nil, proc.Mp())
+	bat.SetRowCount(3)
+
+	orderType := types.T_varchar.ToType()
+	spec := &plan.Expr{
+		Expr: &plan.Expr_W{W: &plan.WindowSpec{
+			Name:       "sum",
+			WindowFunc: newFunExpr("sum"),
+			OrderBy: []*plan.OrderBySpec{{
+				Expr: newColExprWithType(1, orderType),
+				Flag: plan.OrderBySpec_ASC,
+			}},
+			Frame: &plan.FrameClause{
+				Type:  plan.FrameClause_RANGE,
+				Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+				End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			},
+		}},
+	}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExprAt(0)},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []string{"2026-01", "2026-02", "2026-02"}, []string{
+		string(result.Batch.Vecs[1].GetBytesAt(0)),
+		string(result.Batch.Vecs[1].GetBytesAt(1)),
+		string(result.Batch.Vecs[1].GetBytesAt(2)),
+	})
+	require.Equal(t, []int64{100, 350, 350}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 // ---------------------------------------------------------------------------
 // All-type coverage tests — each type case in searchLeft/searchRight must be
 // exercised at least once by a test to satisfy the 75% diff-coverage gate.

@@ -61,6 +61,18 @@ select * from temp_pk;
 1  ¦  alice  𝄀
 2  ¦  bob
 drop table temp_pk;
+create temporary table temp_insert_modes (
+id int primary key,
+value varchar(50)
+);
+insert into temp_insert_modes values (1, 'plain');
+insert ignore into temp_insert_modes values (1, 'ignored');
+insert into temp_insert_modes values (1, 'updated')
+on duplicate key update value = values(value);
+select * from temp_insert_modes;
+➤ id[4,32,0]  ¦  value[12,-1,0]  𝄀
+1  ¦  updated
+drop table temp_insert_modes;
 create temporary table temp_not_null (
 id int not null,
 name varchar(50) not null,
@@ -281,12 +293,100 @@ temp_show  ¦  CREATE TEMPORARY TABLE `temp_show` (
 )
 drop table temp_show;
 create table permanent_table (id int);
-create temporary table temp_invisible (id int);
-show tables;  -- 应该只显示 permanent_table
+create table __mo_tmp_customer (
+id int primary key,
+customer_code int,
+unique key uk_customer_code (customer_code),
+key idx_customer_code (customer_code)
+);
+create table __mo_tmp_0123456789abcdef0123456789abcdef_customer (id int primary key);
+create temporary table temp_invisible (
+id int primary key,
+customer_code int,
+unique key uk_temp_customer_code (customer_code),
+key idx_temp_customer_code (customer_code)
+);
+show tables;  -- 应该显示三个永久表
 ➤ Tables_in_temp_db[12,-1,0]  𝄀
+__mo_tmp_0123456789abcdef0123456789abcdef_customer  𝄀
+__mo_tmp_customer  𝄀
 permanent_table
+create table xxmo_tmp_visible (id int);
+select table_name, table_type
+from information_schema.tables
+where table_schema = database()
+order by table_name;
+➤ table_name[12,-1,0]  ¦  table_type[12,-1,0]  𝄀
+__mo_tmp_0123456789abcdef0123456789abcdef_customer  ¦  BASE TABLE  𝄀
+__mo_tmp_customer  ¦  BASE TABLE  𝄀
+permanent_table  ¦  BASE TABLE  𝄀
+xxmo_tmp_visible  ¦  BASE TABLE
+select relname, relkind
+from mo_catalog.mo_tables
+where reldatabase = database()
+and relname in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+order by relname;
+➤ relname[12,-1,0]  ¦  relkind[12,-1,0]  𝄀
+__mo_tmp_0123456789abcdef0123456789abcdef_customer  ¦  r  𝄀
+__mo_tmp_customer  ¦  r
+select count(*) > 0 as has_temp_objects,
+sum(if(relkind = 'temporary_table', 1, 0)) = 1 as temp_base_marked,
+sum(if(relkind = 'i', 1, 0)) > 0 as temp_indexes_keep_relkind,
+count(*) = sum(if(relkind in ('temporary_table', 'i'), 1, 0)) as all_temp_objects_classified
+from mo_catalog.mo_tables
+where reldatabase = database()
+and left(relname, 9) = '__mo_tmp_'
+and relname not in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer');
+➤ has_temp_objects[-7,1,0]  ¦  temp_base_marked[-7,1,0]  ¦  temp_indexes_keep_relkind[-7,1,0]  ¦  all_temp_objects_classified[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+select distinct table_name from information_schema.columns
+where table_schema = database()
+and table_name in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+order by table_name;
+➤ table_name[12,-1,0]  𝄀
+__mo_tmp_0123456789abcdef0123456789abcdef_customer  𝄀
+__mo_tmp_customer
+select distinct table_name from information_schema.statistics
+where table_schema = database()
+and table_name in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+order by table_name;
+➤ table_name[12,-1,0]  𝄀
+__mo_tmp_0123456789abcdef0123456789abcdef_customer  𝄀
+__mo_tmp_customer
+select distinct table_name from information_schema.table_constraints
+where table_schema = database()
+and table_name in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+order by table_name;
+➤ table_name[12,-1,0]  𝄀
+__mo_tmp_0123456789abcdef0123456789abcdef_customer  𝄀
+__mo_tmp_customer
+select 'TABLES' as metadata_view, count(*) as leaked_objects
+from information_schema.tables
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_'
+and table_name not in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+union all
+select 'COLUMNS', count(*) from information_schema.columns
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_'
+and table_name not in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+union all
+select 'STATISTICS', count(*) from information_schema.statistics
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_'
+and table_name not in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+union all
+select 'TABLE_CONSTRAINTS', count(*) from information_schema.table_constraints
+where table_schema = database() and left(table_name, 9) = '__mo_tmp_'
+and table_name not in ('__mo_tmp_customer', '__mo_tmp_0123456789abcdef0123456789abcdef_customer')
+order by metadata_view;
+➤ metadata_view[12,-1,0]  ¦  leaked_objects[-5,64,0]  𝄀
+COLUMNS  ¦  0  𝄀
+STATISTICS  ¦  0  𝄀
+TABLES  ¦  0  𝄀
+TABLE_CONSTRAINTS  ¦  0
 drop table temp_invisible;
 drop table permanent_table;
+drop table __mo_tmp_customer;
+drop table __mo_tmp_0123456789abcdef0123456789abcdef_customer;
+drop table xxmo_tmp_visible;
 create table prepared_shadow (id int primary key, value varchar(20));
 insert into prepared_shadow values (1, 'permanent');
 prepare prepared_shadow_stmt from

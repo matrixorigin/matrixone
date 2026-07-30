@@ -730,14 +730,19 @@ func initExecuteStmtParamWithResolver(
 		change = true
 	}
 
+	// FK-sensitive plans also depend on the current foreign_key_checks session
+	// value, which does not invalidate prepared statements. Rebuild them for
+	// every EXECUTE so both enabled->disabled and disabled->enabled transitions
+	// observe the current setting.
+	fkSensitive := shouldRebuildPreparePlan(false, preparePlan.Plan)
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode
 	protocolVersion := currentProtocolVersion(ses.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
-	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch)
+	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive
 
 	// Rebuild the plan when catalog schema, session temporary-table name
-	// resolution, or the session's compatibility mode changed.
+	// resolution, FK-check state, protocol, or compatibility mode changed.
 	if needRebuild {
 		newPlan, err := rebuildPreparePlan(execCtx, ses, prepareStmt, buildPlan)
 		if err != nil {
@@ -1024,6 +1029,14 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 		}
 	}
 	return !query.GetHasForeignKeyAction()
+}
+
+func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
+	if schemaChanged || p == nil {
+		return schemaChanged
+	}
+	query := p.GetQuery()
+	return query != nil && query.GetHasForeignKeyAction()
 }
 
 func createCompile(
