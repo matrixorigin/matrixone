@@ -9858,6 +9858,26 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DatetimeToQuarter
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampToQuarter
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToQuarter
+				},
+			},
 		},
 	},
 
@@ -9940,6 +9960,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampToDayName
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDayName
+				},
+			},
 		},
 	},
 
@@ -9981,6 +10011,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampToMonthName
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToMonthName
+				},
+			},
 		},
 	},
 
@@ -10020,6 +10060,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampToDay
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDay
 				},
 			},
 		},
@@ -10844,6 +10894,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampToWeekOfYear
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToWeekOfYear
 				},
 			},
 		},

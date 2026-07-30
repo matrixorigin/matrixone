@@ -3040,6 +3040,25 @@ func Test_restoreViews(t *testing.T) {
 		assert.NoError(t, err)
 
 		viewMap = map[string]*tableInfo{
+			genKey("quote`db", "quote view"): {
+				dbName:    "quote`db",
+				tblName:   "quote view",
+				typ:       "VIEW",
+				createSql: "create view `quote``db`.`quote view` as select 1",
+			},
+		}
+		sortedViews = []string{genKey("quote`db", "quote view")}
+		bh.executedSQLs = nil
+
+		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
+		require.NoError(t, err)
+		require.Equal(t, []string{
+			"use `quote``db`",
+			"drop view if exists `quote view`",
+			"create view `quote``db`.`quote view` as select 1",
+		}, bh.executedSQLs)
+
+		viewMap = map[string]*tableInfo{
 			"view01": {
 				dbName:    "db01",
 				tblName:   "tbl01",
