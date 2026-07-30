@@ -52,7 +52,7 @@ func NonTemporaryTableSQLPredicate(alias string) string {
 	extraInfo := prefix + SystemRelAttr_ExtraInfo
 
 	return fmt.Sprintf(
-		"not (%s = '%s' or %s(coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, '')) or (coalesce(%s, '') not in (%s) and %s regexp '%s'))",
+		"not (%s = '%s' or %s(coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, ''), coalesce(%s, '')) or (coalesce(%s, '') not in (%s) and regexp_like(%s, '%s')))",
 		relKind,
 		SystemTemporaryTable,
 		legacyTemporaryTableFunction,

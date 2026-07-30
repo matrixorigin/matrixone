@@ -169,7 +169,7 @@ func TestNonTemporaryTableSQLPredicate(t *testing.T) {
 			} {
 				require.Contains(t, got, "'"+kind+"'")
 			}
-			require.Contains(t, got, test.relName+" regexp '"+legacyTemporaryTableNameRegexp+"'")
+			require.Contains(t, got, "regexp_like("+test.relName+", '"+legacyTemporaryTableNameRegexp+"')")
 		})
 	}
 }

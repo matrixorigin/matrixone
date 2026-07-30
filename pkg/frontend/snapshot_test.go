@@ -459,7 +459,7 @@ func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
 			if !strings.Contains(sql, "mo_is_legacy_temporary_table(coalesce(relkind, ''), coalesce(relname, ''), coalesce(reldatabase, ''), coalesce(rel_createsql, ''), coalesce(extra_info, ''))") {
 				t.Fatalf("legacy temporary base tables were not filtered by CREATE SQL: %s", sql)
 			}
-			if !strings.Contains(sql, "coalesce(relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and relname regexp '^__mo_tmp_[0-9a-f]{32}_'") {
+			if !strings.Contains(sql, "coalesce(relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and regexp_like(relname, '^__mo_tmp_[0-9a-f]{32}_')") {
 				t.Fatalf("legacy temporary derived objects were not filtered by exact physical name: %s", sql)
 			}
 			if strings.Contains(sql, "relname not like '__mo_tmp_%'") {
