@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func buildMySQLDMLCompatibilityPlan(t *testing.T, sql string) (*Plan, error) {
@@ -65,6 +66,12 @@ func TestUpdateRejectsDirectTargetTableSubqueries(t *testing.T) {
 		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region WHERE EXISTS (SELECT 1 FROM nation))",
 		"UPDATE nation AS dst SET n_name = 'x' WHERE n_nationkey IN (SELECT n_nationkey FROM nation AS src)",
 		"UPDATE nation JOIN region ON region.r_regionkey = nation.n_regionkey SET nation.n_name = region.r_name WHERE nation.n_nationkey IN (SELECT n_nationkey FROM nation)",
+		"UPDATE nation JOIN region ON EXISTS (SELECT 1 FROM nation) SET nation.n_name = region.r_name",
+		"UPDATE nation SET n_name = 'x' FROM region JOIN nation2 ON EXISTS (SELECT 1 FROM nation)",
+		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region UNION ALL SELECT 1 FROM nation)",
+		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region ORDER BY (SELECT max(n_nationkey) FROM nation))",
+		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region GROUP BY r_regionkey HAVING EXISTS (SELECT 1 FROM nation))",
+		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region JOIN nation ON region.r_regionkey = nation.n_regionkey)",
 	}
 	for _, sql := range tests {
 		requireMySQLDMLCompatibilityError(
@@ -80,6 +87,8 @@ func TestDeleteRejectsDirectTargetTableSubquery(t *testing.T) {
 	for _, sql := range []string{
 		"DELETE FROM nation WHERE n_nationkey IN (SELECT n_nationkey FROM nation WHERE n_regionkey > 0)",
 		"DELETE nation FROM nation JOIN region ON region.r_regionkey = nation.n_regionkey WHERE EXISTS (SELECT 1 FROM nation)",
+		"DELETE nation FROM nation JOIN region ON EXISTS (SELECT 1 FROM nation)",
+		"DELETE FROM nation ORDER BY (SELECT max(n_nationkey) FROM nation) LIMIT 1",
 	} {
 		requireMySQLDMLCompatibilityError(
 			t,
@@ -88,6 +97,61 @@ func TestDeleteRejectsDirectTargetTableSubquery(t *testing.T) {
 			"You can't specify target table 'nation' for update in FROM clause",
 		)
 	}
+}
+
+func TestMySQLDMLCompatibilityHelpers(t *testing.T) {
+	join := &tree.JoinTableExpr{}
+	require.True(t, tableExprContainsJoin(tree.NewParenTableExpr(join)))
+	require.True(t, tableExprContainsJoin(tree.NewAliasedTableExpr(join, "joined", nil)))
+	require.False(t, tableExprContainsJoin(tree.NewTableName(tree.Identifier("nation"), tree.ObjectNamePrefix{}, nil)))
+
+	targets := makeMySQLDMLTargets(
+		[]*ObjectRef{nil, {Obj: 99, SchemaName: "resolved_db", ObjName: "resolved_name"}},
+		[]*TableDef{nil, {TblId: 7, DbName: "fallback_db", Name: "fallback_name"}},
+	)
+	require.Equal(t, []mysqlDMLTarget{{
+		objID: 99, tableID: 7, schema: "resolved_db", name: "resolved_name",
+	}}, targets)
+
+	require.True(t, (mysqlDMLTarget{objID: 99}).matches(&ObjectRef{Obj: 99}, &TableDef{TblId: 1}, "ignored", "ignored"))
+	require.True(t, (mysqlDMLTarget{tableID: 7}).matches(nil, &TableDef{TblId: 7}, "ignored", "ignored"))
+	require.True(t, (mysqlDMLTarget{schema: "tpch", name: "nation"}).matches(nil, nil, "TPCH", "NATION"))
+	require.False(t, (mysqlDMLTarget{schema: "tpch", name: "nation"}).matches(nil, nil, "tpch", "region"))
+
+	inherited := map[string]struct{}{"outer": {}}
+	visibleCTEs := mysqlCTENames(&tree.With{CTEs: []*tree.CTE{
+		nil,
+		{Name: nil},
+		{Name: &tree.AliasClause{Alias: tree.Identifier("Visible")}},
+	}}, inherited)
+	require.Contains(t, visibleCTEs, "outer")
+	require.Contains(t, visibleCTEs, "visible")
+	require.Equal(t, inherited, mysqlCTENames(nil, inherited))
+
+	ctx := NewMockCompilerContext(true)
+	_, ok := findMySQLDMLTargetInLimit(ctx, nil, targets, visibleCTEs)
+	require.False(t, ok)
+
+	cteName := tree.NewTableName(tree.Identifier("Visible"), tree.ObjectNamePrefix{}, nil)
+	_, ok = findMySQLDMLTargetInDirectTableExpr(ctx, cteName, targets, visibleCTEs)
+	require.False(t, ok)
+
+	objRef, tableDef, err := ctx.Resolve("tpch", "nation", nil)
+	require.NoError(t, err)
+	resolvedTargets := makeMySQLDMLTargets([]*ObjectRef{objRef}, []*TableDef{tableDef})
+	nationName := tree.NewTableName(tree.Identifier("nation"), tree.ObjectNamePrefix{}, nil)
+	aliasedNation := tree.NewAliasedTableExpr(tree.NewParenTableExpr(nationName), "n", nil)
+	target, ok := findMySQLDMLTargetInDirectTableExpr(ctx, aliasedNation, resolvedTargets, nil)
+	require.True(t, ok)
+	require.Equal(t, "nation", target)
+
+	regionName := tree.NewTableName(tree.Identifier("region"), tree.ObjectNamePrefix{}, nil)
+	apply := &tree.ApplyTableExpr{Left: regionName, Right: nationName}
+	target, ok = findMySQLDMLTargetInDirectTableExpr(ctx, apply, resolvedTargets, nil)
+	require.True(t, ok)
+	require.Equal(t, "nation", target)
+	_, ok = findMySQLDMLTargetInOuterTableExpr(ctx, apply, resolvedTargets, nil)
+	require.False(t, ok)
 }
 
 func TestMySQLDMLCompatibilityAllowsLegalShapes(t *testing.T) {
