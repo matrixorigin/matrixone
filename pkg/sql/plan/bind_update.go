@@ -79,6 +79,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
+	if err = validateUpdateTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
+		return 0, err
+	}
 	onDuplicateAction := plan.Node_FAIL
 	if stmt.Ignore {
 		onDuplicateAction = plan.Node_IGNORE
