@@ -802,6 +802,38 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("range frame without offsets accepts non-numeric order by", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
+				return makePlan2StringConstExprWithType("x"), nil
+			},
+			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		ws := testRangeWindowExpr().WindowSpec
+		ws.Frame.Start.Expr = nil
+		ws.Frame.Start.UnBounded = true
+		ws.Frame.End = &tree.FrameBound{Type: tree.CurrentRow}
+
+		expr, err := bindWindowFuncExpr(
+			binder,
+			ctx,
+			"sum",
+			testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT, ws, testNumVal(1)),
+			0,
+			true,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, expr)
+		require.Len(t, ctx.windows, 1)
+		require.Equal(t, planpb.FrameClause_RANGE, ctx.windows[0].GetW().Frame.Type)
+	})
+
 	t.Run("buildWindowColRefExpr keeps tag and column", func(t *testing.T) {
 		expr := buildWindowColRefExpr(&BindContext{windowTag: 17}, planpb.Type{Id: int32(types.T_int64)}, 3)
 		require.Equal(t, int32(17), expr.GetCol().RelPos)
