@@ -306,7 +306,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			} else {
 				batBufs[actionDelete].CleanOnlyData()
 			}
-			if err := batBufs[actionDelete].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
+			if err := batBufs[actionDelete].UnmarshalBinaryWithAnyMp(batData[i].GetByteSlice(batArea), proc.Mp()); err != nil {
 				return input, err
 			}
 			// For REPLACE INTO, we don't count DELETE rows in affected rows
@@ -332,7 +332,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			} else {
 				batBufs[actionInsert].CleanOnlyData()
 			}
-			if err := batBufs[actionInsert].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
+			if err := batBufs[actionInsert].UnmarshalBinaryWithAnyMp(batData[i].GetByteSlice(batArea), proc.Mp()); err != nil {
 				return input, err
 			}
 
@@ -358,7 +358,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			} else {
 				batBufs[actionUpdate].CleanOnlyData()
 			}
-			if err := batBufs[actionUpdate].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
+			if err := batBufs[actionUpdate].UnmarshalBinaryWithAnyMp(batData[i].GetByteSlice(batArea), proc.Mp()); err != nil {
 				return input, err
 			}
 
