@@ -23,10 +23,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestMaterializedSpillBudgetUsesProcessLimits(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.Lim.SpillSize = 128
+	budget := newMaterializedSpillBudget(proc)
+
+	disk, err := budget.ReserveDisk(128)
+	require.NoError(t, err)
+	_, err = budget.ReserveDisk(1)
+	require.Error(t, err, "materialized spill must honor the query SpillSize limit")
+	require.True(t, disk.Release())
+
+	memory, err := budget.ReserveMemory(1)
+	require.NoError(t, err)
+	require.True(t, memory.Release())
+	fd, err := budget.ReserveFD(1)
+	require.NoError(t, err)
+	require.True(t, fd.Release())
+	proc.SetStmtProfile(nil)
+}
 
 func TestCTESinkFanoutRegistersEveryConsumer(t *testing.T) {
 	c := NewMockCompile(t)

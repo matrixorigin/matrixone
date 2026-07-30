@@ -595,18 +595,48 @@ func (c *Compile) prePipelineInitializer() (err error) {
 			return err
 		}
 	}
+	var spillBudget materialized.SpillBudget
+	if len(c.materializedSources) > 0 {
+		spillBudget = newMaterializedSpillBudget(c.proc)
+	}
 	for _, source := range c.materializedSources {
-		if err = source.Begin(c.proc.Mp(), func(name string) (*os.File, error) {
+		if err = source.Begin(c.proc.Mp(), materialized.SpillConfig{FileFactory: func(name string) (*os.File, error) {
 			spillFS, spillErr := c.proc.GetSpillFileService()
 			if spillErr != nil {
 				return nil, spillErr
 			}
 			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
-		}); err != nil {
+		}, Budget: spillBudget}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget {
+	return materialized.SpillBudget{
+		ReserveMemory: func(size uint64) (materialized.Reservation, error) {
+			budget, err := proc.GetHashBuildBudget()
+			if err != nil {
+				return nil, err
+			}
+			return budget.Reserve(size)
+		},
+		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
+			budget, err := proc.GetHashBuildBudget()
+			if err != nil {
+				return nil, err
+			}
+			return budget.ReserveSpillDisk(size)
+		},
+		ReserveFD: func(size uint64) (materialized.Reservation, error) {
+			budget, err := proc.GetHashBuildBudget()
+			if err != nil {
+				return nil, err
+			}
+			return budget.ReserveSpillFD(size)
+		},
+	}
 }
 
 // run once
