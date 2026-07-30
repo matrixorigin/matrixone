@@ -21,9 +21,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -564,6 +566,70 @@ func TestConstructShuffleOperatorForJoinSupportsColumnsAndExpressions(t *testing
 	require.Equal(t, right.Typ.Id, rightShuffle.ShuffleExpr.Typ.Id)
 	require.Equal(t, "serial_full", rightShuffle.ShuffleExpr.GetF().Func.ObjName)
 	require.Nil(t, rightShuffle.RuntimeFilterSpec)
+}
+
+func TestRangeShuffleJoinSingleBucketSkewedBatch(t *testing.T) {
+	const (
+		key       = int64(7)
+		rowCount  = 8192
+		bucketNum = int32(1)
+	)
+	left := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	right := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	node := &plan.Node{
+		OnList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{left, right}}}}},
+		Stats: &plan.Stats{
+			TableCnt: rowCount,
+			HashmapStats: &plan.HashMapStats{
+				ShuffleColIdx: 0,
+				ShuffleType:   plan.ShuffleType_Range,
+				ShuffleColMin: key,
+				ShuffleColMax: key,
+				Ranges:        []float64{float64(key), float64(key), float64(key), float64(key)},
+			},
+		},
+	}
+
+	arg := constructShuffleOperatorForJoin(bucketNum, node, true)
+	require.Nil(t, arg.ShuffleRangeInt64)
+
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeScalarInt64(key, rowCount, mp)
+	input.SetRowCount(rowCount)
+	source := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(source)
+	defer func() {
+		source.Free(proc, false, nil)
+		arg.Reset(proc, false, nil)
+		arg.Free(proc, false, nil)
+		arg.Release()
+		proc.Free()
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+	require.NoError(t, vm.Prepare(arg, proc))
+
+	rows := 0
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		if result.Batch.IsEmpty() {
+			continue
+		}
+		require.Equal(t, int32(0), result.Batch.ShuffleIDX)
+		rows += result.Batch.RowCount()
+	}
+	require.Equal(t, rowCount, rows)
 }
 
 func TestGetPercentileConfig(t *testing.T) {
