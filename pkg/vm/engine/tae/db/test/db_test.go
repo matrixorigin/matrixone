@@ -8821,13 +8821,13 @@ func TestCkpLeak(t *testing.T) {
 	schema2.Extra.ObjectMaxBlocks = 2
 	{
 		txn, _ := db.StartTxn(nil)
-		database, err := txn.CreateDatabase("db", "", "")
-		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema1)
-		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema2)
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit(context.Background()))
+		database, err := testutil.CreateDatabase2(ctx, txn, "db")
+		require.NoError(t, err)
+		_, err = testutil.CreateRelation2(ctx, txn, database, schema1)
+		require.NoError(t, err)
+		_, err = testutil.CreateRelation2(ctx, txn, database, schema2)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(context.Background()))
 	}
 	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
 	defer bat.Close()
@@ -8874,6 +8874,7 @@ func TestCkpLeak(t *testing.T) {
 		return
 	}
 	tae.Restart(ctx)
+	db = tae.DB
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
@@ -8900,6 +8901,33 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
+	requireCheckpointCovered := func(requestedTS types.TS, entry *checkpoint.CheckpointEntry) {
+		require.NotNil(t, entry)
+		require.True(t, entry.IsFinished())
+		end := entry.GetEnd()
+		require.Truef(
+			t,
+			end.GE(&requestedTS),
+			"checkpoint end %s does not cover requested timestamp %s",
+			end.ToString(),
+			requestedTS.ToString(),
+		)
+		targetLSN := entry.LSN()
+		require.NotZero(t, targetLSN)
+		// Wait only for the forced checkpoint's WAL intent. A later commit may
+		// legitimately leave a newer LSN pending outside requestedTS.
+		require.Eventuallyf(
+			t,
+			func() bool {
+				return tae.Wal.GetCheckpointed() >= targetLSN
+			},
+			10*time.Second,
+			10*time.Millisecond,
+			"WAL checkpoint did not cover checkpoint LSN %d",
+			targetLSN,
+		)
+	}
+
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2
@@ -8923,19 +8951,42 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	assert.NoError(t, err)
 	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
 
-	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
+	forceTS := tae.TxnMgr.Now()
+	err = tae.DB.ForceCheckpoint(ctx, forceTS)
 	require.NoError(t, err)
-	tae.WaitAllCheckpointsFinished()
-	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	requireCheckpointCovered(forceTS, tae.DB.BGCheckpointRunner.MaxIncrementalCheckpoint())
 
-	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), 0)
+	forceTS = txn.GetStartTS()
+	err = tae.DB.ForceGlobalCheckpoint(ctx, forceTS, 0)
 	require.NoError(t, err)
-	tae.WaitAllCheckpointsFinished()
-	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	forcedEntry := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	requireCheckpointCovered(forceTS, forcedEntry)
 
 	assert.NoError(t, txn.Commit(context.Background()))
 
+	// Freeze checkpoint execution so the next data commit remains outside the
+	// forced entry while its WAL LSN is observably pending.
+	cfg, err := tae.DB.BGCheckpointRunner.DisableCheckpoint(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	checkpointDisabled := true
+	defer func() {
+		if checkpointDisabled {
+			tae.DB.BGCheckpointRunner.EnableCheckpoint(cfg)
+		}
+	}()
+
 	tae.CreateRelAndAppend2(bat, false)
+
+	forcedLSN := forcedEntry.LSN()
+	checkpointedLSN := tae.Wal.GetCheckpointed()
+	currentLSN := tae.Wal.GetLSNWatermark()
+	require.GreaterOrEqual(t, checkpointedLSN, forcedLSN)
+	require.Greater(t, currentLSN, forcedLSN)
+	require.Greater(t, tae.Wal.GetPenddingCnt(), uint64(0))
+
+	tae.DB.BGCheckpointRunner.EnableCheckpoint(cfg)
+	checkpointDisabled = false
 
 	currTs := tae.TxnMgr.Now()
 	assert.NoError(t, err)
@@ -8943,13 +8994,12 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	// 	return tae.AllCheckpointsFinished()
 	// })
 	tae.AllFlushExpected(currTs, 4000)
-	err = tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Duration(1))
-	assert.NoError(t, err)
-	tae.WaitAllCheckpointsFinished()
-	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	forceTS = tae.TxnMgr.Now()
+	err = tae.DB.ForceGlobalCheckpoint(ctx, forceTS, time.Duration(1))
+	require.NoError(t, err)
 
 	maxEntry := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
-	assert.NotNil(t, maxEntry)
+	requireCheckpointCovered(forceTS, maxEntry)
 	maxEnd := maxEntry.GetEnd()
 	t.Logf("maxEntry: %s, currTs: %s", maxEntry.String(), currTs.ToString())
 	assert.True(t, maxEnd.GT(&currTs))
