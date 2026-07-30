@@ -58,6 +58,24 @@ func makeExpressionLeaseTestBatch(proc *process.Process, rows int) *batch.Batch 
 	return bat
 }
 
+func makeMaxArrayLeaseTestVector[T types.ArrayElement](
+	t *testing.T,
+	proc *process.Process,
+	oid types.T,
+) *vector.Vector {
+	t.Helper()
+	typ := types.New(oid, types.MaxArrayDimension, 0)
+	vec := vector.NewVec(typ)
+	values := make([]T, types.MaxArrayDimension)
+	require.NoError(t, vector.AppendArrayList(
+		vec,
+		[][]T{values, values},
+		nil,
+		proc.Mp(),
+	))
+	return vec
+}
+
 func evalExpressionLeaseTestExecutors(
 	proc *process.Process,
 	executors []colexec.ExpressionExecutor,
@@ -135,6 +153,118 @@ func TestExpressionMemoryLeaseReusesRetainedHighWater(t *testing.T) {
 	freeExpressionLeaseTestExecutors(executors)
 	lease.Release()
 	require.Zero(t, generation.Used())
+}
+
+func TestExpressionTypePeakUsesArrayElementWidth(t *testing.T) {
+	for _, tc := range []struct {
+		oid          types.T
+		elementWidth uint64
+	}{
+		{oid: types.T_array_float64, elementWidth: 8},
+		{oid: types.T_array_float32, elementWidth: 4},
+		{oid: types.T_array_bf16, elementWidth: 2},
+		{oid: types.T_array_float16, elementWidth: 2},
+		{oid: types.T_array_int8, elementWidth: 1},
+		{oid: types.T_array_uint8, elementWidth: 1},
+	} {
+		t.Run(tc.oid.String(), func(t *testing.T) {
+			peak, err := expressionTypePeak(plan.Type{
+				Id:    int32(tc.oid),
+				Width: types.MaxArrayDimension,
+			}, 1)
+			require.NoError(t, err)
+			require.Equal(
+				t,
+				uint64(types.MaxArrayDimension)*tc.elementWidth+32+(64<<10),
+				peak,
+			)
+		})
+	}
+}
+
+func TestExpressionMemoryLeaseCoversMaxNarrowArrayPayload(t *testing.T) {
+	for _, tc := range []struct {
+		oid       types.T
+		makeInput func(*testing.T, *process.Process) *vector.Vector
+	}{
+		{
+			oid: types.T_array_bf16,
+			makeInput: func(t *testing.T, proc *process.Process) *vector.Vector {
+				return makeMaxArrayLeaseTestVector[types.BF16](
+					t, proc, types.T_array_bf16)
+			},
+		},
+		{
+			oid: types.T_array_float16,
+			makeInput: func(t *testing.T, proc *process.Process) *vector.Vector {
+				return makeMaxArrayLeaseTestVector[types.Float16](
+					t, proc, types.T_array_float16)
+			},
+		},
+	} {
+		t.Run(tc.oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			arrayType := plan.Type{
+				Id:    int32(tc.oid),
+				Width: types.MaxArrayDimension,
+			}
+			condition := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			}
+			left := &plan.Expr{
+				Typ:  arrayType,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+			}
+			right := &plan.Expr{
+				Typ:  arrayType,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}},
+			}
+			expr, err := plan2.BindFuncExprImplByPlanExpr(
+				proc.Ctx,
+				"iff",
+				[]*plan.Expr{condition, left, right},
+			)
+			require.NoError(t, err)
+
+			peak, err := expressionVectorPeak(proc, expr, 2, false)
+			require.NoError(t, err)
+			budget := process.MustNewHashBuildBudget(2*peak, 2*peak)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			executors, lease, err := NewBudgetedExpressionExecutors(
+				proc,
+				generation,
+				[]*plan.Expr{expr},
+				false,
+			)
+			require.NoError(t, err)
+
+			input := batch.NewWithSize(3)
+			input.Vecs[0] = testutil.MakeBoolVector(
+				[]bool{true, false}, nil, proc.Mp())
+			input.Vecs[1] = tc.makeInput(t, proc)
+			input.Vecs[2] = tc.makeInput(t, proc)
+			input.SetRowCount(2)
+			require.NoError(t, lease.Eval(
+				proc,
+				[]*batch.Batch{input},
+				input.RowCount(),
+				func(_ int, _ *vector.Vector) error { return nil },
+			))
+			retained, ok := lease.Retained()
+			require.True(t, ok)
+			require.LessOrEqual(t, retained, lease.Reserved(),
+				"retained max-width array payload must remain within admission")
+
+			input.Clean(proc.Mp())
+			freeExpressionLeaseTestExecutors(executors)
+			lease.Release()
+			require.Zero(t, generation.Used())
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
 }
 
 func TestExpressionMemoryLeaseGrowthRequiresReplacementPeak(t *testing.T) {

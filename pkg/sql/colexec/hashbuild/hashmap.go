@@ -499,17 +499,25 @@ func expressionParamPeak(proc *process.Process, pos int32) (uint64, error) {
 }
 
 func expressionTypePeak(typ plan.Type, rows uint64) (uint64, error) {
-	width := int64(types.T(typ.Id).FixedLength())
+	oid := types.T(typ.Id)
+	width := int64(oid.FixedLength())
 	if width < 0 {
 		width = int64(typ.Width)
 		hardMax := int64(types.MaxVarcharLen)
-		switch types.T(typ.Id) {
-		case types.T_blob, types.T_text, types.T_json, types.T_datalink,
-			types.T_geometry, types.T_geometry32, types.T_array_float32, types.T_array_float64:
-			hardMax = int64(types.MaxBlobLen)
+		if oid.IsArrayRelate() {
+			elementWidth := int64(oid.ToType().GetArrayElementSize())
+			width *= elementWidth
+			hardMax = int64(types.MaxArrayDimension) * elementWidth
+		} else {
+			switch oid {
+			case types.T_blob, types.T_text, types.T_json, types.T_datalink,
+				types.T_geometry, types.T_geometry32:
+				hardMax = int64(types.MaxBlobLen)
+			}
 		}
 		if width > hardMax {
-			// Never clamp a declared bound downward.
+			// Never clamp a declared bound downward. Array width is declared
+			// in elements, while every other varlena width is in bytes.
 			hardMax = width
 		}
 		width = hardMax
