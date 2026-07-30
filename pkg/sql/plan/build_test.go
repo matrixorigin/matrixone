@@ -2601,6 +2601,61 @@ func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
 	}
 }
 
+func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
+			"SET a.n_name = 'a', b.n_comment = 'b'",
+	)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	var multiUpdate *plan.Node
+	mainContexts := 0
+	mergedAssignments := 0
+	var walkExpr func(*plan.Expr)
+	walkExpr = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.GetFunc().GetObjName() == "if" {
+				mergedAssignments++
+			}
+			for _, arg := range fn.Args {
+				walkExpr(arg)
+			}
+		}
+	}
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdate = node
+		}
+		for _, expr := range node.ProjectList {
+			walkExpr(expr)
+		}
+	}
+
+	require.NotNil(t, multiUpdate)
+	var tableID uint64
+	for _, updateCtx := range multiUpdate.UpdateCtxList {
+		if updateCtx.TableDef == nil || updateCtx.TableDef.Name != "nation" {
+			continue
+		}
+		mainContexts++
+		require.True(t, updateCtx.DedupByTargetRowId)
+		if tableID == 0 {
+			tableID = updateCtx.TableDef.TblId
+		} else {
+			require.Equal(t, tableID, updateCtx.TableDef.TblId)
+		}
+	}
+	require.Equal(t, 2, mainContexts)
+	require.GreaterOrEqual(t, mergedAssignments, 2)
+}
+
 func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
 	mock := NewMockOptimizer(true)
 

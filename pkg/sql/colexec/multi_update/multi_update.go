@@ -106,6 +106,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 
 	update.ctr.affectedRows = 0
 	update.ctr.flushed = false
+	update.ctr.seenTargetRows = make(map[uint64]map[types.Rowid]struct{})
 	update.getFlushableS3WriterFunc = update.getFlushableS3Writer
 	update.getS3WriterFunc = update.getS3Writer
 	update.addAffectedRowsFunc = update.doAddAffectedRows
@@ -394,7 +395,12 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 		}
 		contextBatch, ok := targetBatches[targetIdx]
 		if !ok {
-			contextBatch, _, err = filterTargetRows(proc, update.MultiUpdateCtx[targetIdx], bat)
+			contextBatch, _, err = filterTargetRows(
+				proc,
+				update.MultiUpdateCtx[targetIdx],
+				bat,
+				update.ctr.seenTargetRows,
+			)
 			if err != nil {
 				return err
 			}
@@ -436,6 +442,7 @@ func filterTargetRows(
 	proc *process.Process,
 	updateCtx *MultiUpdateCtx,
 	input *batch.Batch,
+	seenTargetRows map[uint64]map[types.Rowid]struct{},
 ) (*batch.Batch, bool, error) {
 	if !updateCtx.DedupByTargetRowID {
 		return input, false, nil
@@ -455,14 +462,29 @@ func filterTargetRows(
 	}
 
 	rowNumbers := vector.MustFixedColWithTypeCheck[int64](rowNumberVec)
+	rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](rowIDVec)
 	rowIDNulls := rowIDVec.GetNulls()
 	rowNumberNulls := rowNumberVec.GetNulls()
+	var seenRows map[types.Rowid]struct{}
+	if seenTargetRows != nil {
+		seenRows = seenTargetRows[updateCtx.TableDef.TblId]
+		if seenRows == nil {
+			seenRows = make(map[types.Rowid]struct{})
+			seenTargetRows[updateCtx.TableDef.TblId] = seenRows
+		}
+	}
 	selections := make([]int64, 0, input.RowCount())
 	for i := 0; i < input.RowCount(); i++ {
 		if rowIDNulls.Contains(uint64(i)) ||
 			rowNumberNulls.Contains(uint64(i)) ||
 			rowNumbers[i] != 1 {
 			continue
+		}
+		if seenRows != nil {
+			if _, ok := seenRows[rowIDs[i]]; ok {
+				continue
+			}
+			seenRows[rowIDs[i]] = struct{}{}
 		}
 		selections = append(selections, int64(i))
 	}

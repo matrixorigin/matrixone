@@ -113,8 +113,9 @@ type s3WriterDelegate struct {
 	batchSize      uint64
 	flushThreshold uint64
 
-	checkSizeCols []int
-	buf           bytes.Buffer
+	checkSizeCols  []int
+	buf            bytes.Buffer
+	seenTargetRows map[uint64]map[types.Rowid]struct{}
 
 	memController struct {
 		grantedSize int64
@@ -145,6 +146,7 @@ func newS3Writer(
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		isRemote:            update.IsRemote,
 		rejectZeroTemporal:  update.RejectZeroTemporal,
+		seenTargetRows:      make(map[uint64]map[types.Rowid]struct{}),
 	}
 	for i := range writer.insertFreeLists {
 		writer.insertFreeLists[i] = containers.NewBatchFreeList(nil, nil, true)
@@ -158,9 +160,10 @@ func newS3Writer(
 
 	faultInjected := false
 
-	mainIdx := 0
+	mainIdx := -1
 	for i, updateCtx := range update.MultiUpdateCtx {
-		if update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType == UpdateMainTable {
+		if mainIdx == -1 &&
+			update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType == UpdateMainTable {
 			mainIdx = i
 		}
 
@@ -174,6 +177,9 @@ func newS3Writer(
 	}
 
 	writer.updateCtxs = update.MultiUpdateCtx
+	if mainIdx == -1 {
+		return nil, moerr.NewInternalErrorNoCtx("multi update has no main table context")
+	}
 
 	threshold := InsertWriteS3Threshold
 	if faultInjected {
@@ -185,21 +191,32 @@ func newS3Writer(
 		//update
 		writer.action = actionUpdate
 		writer.flushThreshold = threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.DeleteCols...)
 	} else if len(upCtx.InsertCols) > 0 {
 		//insert
 		writer.action = actionInsert
 		writer.flushThreshold = threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
 	} else {
 		//delete
 		writer.action = actionDelete
 		writer.flushThreshold = DeleteWriteS3Threshold
-		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.DeleteCols...)
 	}
+	writer.checkSizeCols = retainedS3InputCols(writer.updateCtxs, writer.action)
 
 	return writer, nil
+}
+
+func retainedS3InputCols(updateCtxs []*MultiUpdateCtx, action actionType) []int {
+	var cols []int
+	for _, updateCtx := range updateCtxs {
+		if action != actionDelete {
+			cols = append(cols, updateCtx.InsertCols...)
+		}
+		if action != actionInsert && len(updateCtx.DeleteCols) > 0 {
+			deleteColCount := min(2, len(updateCtx.DeleteCols))
+			cols = append(cols, updateCtx.DeleteCols[:deleteColCount]...)
+		}
+	}
+	return cols
 }
 
 // ensureInsertSinkers lazily creates persistent per-table insert sinkers
@@ -276,7 +293,12 @@ func (writer *s3WriterDelegate) append(
 		}
 		targetBatch, ok := targetBatches[targetIdx]
 		if !ok {
-			targetBatch, _, err = filterTargetRows(proc, writer.updateCtxs[targetIdx], inBatch)
+			targetBatch, _, err = filterTargetRows(
+				proc,
+				writer.updateCtxs[targetIdx],
+				inBatch,
+				writer.seenTargetRows,
+			)
 			if err != nil {
 				return err
 			}
@@ -864,6 +886,7 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 		writer.outputBat.CleanOnlyData()
 	}
 
+	clear(writer.seenTargetRows)
 	writer.buf.Reset()
 	return
 }

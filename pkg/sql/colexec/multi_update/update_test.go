@@ -117,22 +117,112 @@ func TestFilterTargetRowsKeepsIndependentWholeRows(t *testing.T) {
 	defer bat.Clean(mp)
 
 	first, clean, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 1},
 		DedupByTargetRowID: true,
 		DeleteCols:         []int{0, 4, 1},
-	}, bat)
+	}, bat, nil)
 	require.NoError(t, err)
 	require.True(t, clean)
 	defer first.Clean(mp)
 	require.Equal(t, []int32{10, 30}, vector.MustFixedColWithTypeCheck[int32](first.Vecs[4]))
 
 	second, clean, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 2},
 		DedupByTargetRowID: true,
 		DeleteCols:         []int{2, 4, 3},
-	}, bat)
+	}, bat, nil)
 	require.NoError(t, err)
 	require.True(t, clean)
 	defer second.Clean(mp)
 	require.Equal(t, []int32{10, 20, 40}, vector.MustFixedColWithTypeCheck[int32](second.Vecs[4]))
+}
+
+func TestFilterTargetRowsDedupsPhysicalRowsAcrossContextsAndBatches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	rowID := types.BuildTestRowid(1, 1)
+	makeBatch := func(value int32) *batch.Batch {
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = testutil.MakeRowIdVector([]types.Rowid{rowID}, nil, mp)
+		bat.Vecs[1] = testutil.NewInt64Vector(
+			1,
+			types.T_int64.ToType(),
+			mp,
+			false,
+			nil,
+			[]int64{1},
+		)
+		bat.Vecs[2] = testutil.NewInt32Vector(
+			1,
+			types.T_int32.ToType(),
+			mp,
+			false,
+			nil,
+			[]int32{value},
+		)
+		bat.SetRowCount(1)
+		return bat
+	}
+	updateCtx := &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 42},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 2, 1},
+	}
+	seen := make(map[uint64]map[types.Rowid]struct{})
+
+	firstInput := makeBatch(10)
+	defer firstInput.Clean(mp)
+	first, clean, err := filterTargetRows(proc, updateCtx, firstInput, seen)
+	require.NoError(t, err)
+	require.True(t, clean)
+	defer first.Clean(mp)
+	require.Equal(t, 1, first.RowCount())
+
+	secondInput := makeBatch(20)
+	defer secondInput.Clean(mp)
+	secondCtx := &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 42},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 2, 1},
+	}
+	second, clean, err := filterTargetRows(proc, secondCtx, secondInput, seen)
+	require.NoError(t, err)
+	require.True(t, clean)
+	defer second.Clean(mp)
+	require.Equal(t, 0, second.RowCount())
+}
+
+func TestRetainedS3InputColsCountsEveryContextCopy(t *testing.T) {
+	updateCtxs := []*MultiUpdateCtx{
+		{
+			InsertCols: []int{0, 1, 2},
+			DeleteCols: []int{3, 4, 9},
+		},
+		{
+			InsertCols: []int{0, 5},
+			DeleteCols: []int{6, 7},
+		},
+		{
+			InsertCols: []int{8, 2},
+			DeleteCols: []int{10, 11},
+		},
+	}
+
+	require.Equal(
+		t,
+		[]int{0, 1, 2, 3, 4, 0, 5, 6, 7, 8, 2, 10, 11},
+		retainedS3InputCols(updateCtxs, actionUpdate),
+	)
+	require.Equal(
+		t,
+		[]int{0, 1, 2, 0, 5, 8, 2},
+		retainedS3InputCols(updateCtxs, actionInsert),
+	)
+	require.Equal(
+		t,
+		[]int{3, 4, 6, 7, 10, 11},
+		retainedS3InputCols(updateCtxs, actionDelete),
+	)
 }
 
 // update table s3

@@ -17,6 +17,7 @@ package multi_update
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -105,6 +106,8 @@ type container struct {
 
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
+
+	seenTargetRows map[uint64]map[types.Rowid]struct{}
 }
 
 type MultiUpdateCtx struct {
@@ -165,6 +168,7 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	if update.ctr.s3Writer != nil {
 		update.ctr.s3Writer.reset(proc)
 	}
+	clear(update.ctr.seenTargetRows)
 
 	update.ctr.state = vm.Build
 }
