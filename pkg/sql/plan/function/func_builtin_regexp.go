@@ -107,32 +107,33 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	selectList *FunctionSelectList,
 	caseInsensitive bool,
 ) error {
-	rs := vector.MustFunctionResult[bool](result)
 	if !parameters[2].IsConst() {
 		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 	}
-	if parameters[2].IsConstNull() {
-		nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
-		return nil
+
+	var escapeBytes []byte
+	escapeIsNull := parameters[2].IsConstNull()
+	if !escapeIsNull {
+		escapeParam := vector.GenerateFunctionStrParameter(parameters[2])
+		var isNull bool
+		escapeBytes, isNull = escapeParam.GetStrValue(0)
+		escapeIsNull = isNull
 	}
 
-	escapeParam := vector.GenerateFunctionStrParameter(parameters[2])
-	escapeBytes, isNull := escapeParam.GetStrValue(0)
-	if isNull {
-		nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
-		return nil
-	}
-	if !utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1 {
-		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
-	}
-	if len(escapeBytes) == 0 && likeNoBackslashEscapes(proc) {
-		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
-	}
-
-	escapeEnabled := len(escapeBytes) != 0
+	escapeEnabled := false
 	var escape rune
-	if escapeEnabled {
-		escape, _ = utf8.DecodeRune(escapeBytes)
+	if !escapeIsNull {
+		if !utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1 {
+			return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
+		}
+		if len(escapeBytes) == 0 && likeNoBackslashEscapes(proc) {
+			return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
+		}
+
+		escapeEnabled = len(escapeBytes) != 0
+		if escapeEnabled {
+			escape, _ = utf8.DecodeRune(escapeBytes)
+		}
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(value, pattern []byte) (bool, error) {
 		return op.regMap.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, caseInsensitive)

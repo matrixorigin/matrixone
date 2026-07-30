@@ -306,14 +306,54 @@ func Test_BuiltIn_LikeWithEscape(t *testing.T) {
 			fn:       newOpBuiltInRegexp().likeFn,
 		},
 		{
-			name: "null escape",
+			name: "null escape disables escaping",
 			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a_b", "axb"}, nil),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a!_b", "a!_b"}, nil),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"", ""}, []bool{true, true}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"axb"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
 			},
-			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false}, []bool{true, true}),
+			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
 			fn:       newOpBuiltInRegexp().likeFn,
+		},
+		{
+			name: "null escape leaves escape byte literal",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a!_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			},
+			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, nil),
+			fn:       newOpBuiltInRegexp().likeFn,
+		},
+		{
+			name: "null escape preserves null value propagation",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			},
+			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}),
+			fn:       newOpBuiltInRegexp().likeFn,
+		},
+		{
+			name: "null escape preserves null pattern propagation",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"axb"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			},
+			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}),
+			fn:       newOpBuiltInRegexp().likeFn,
+		},
+		{
+			name: "ilike null escape disables escaping",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"AXB"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a_b"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			},
+			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
+			fn:       newOpBuiltInRegexp().iLikeFn,
 		},
 		{
 			name: "nonconstant escape",
@@ -398,6 +438,29 @@ func Test_BuiltIn_LikeWithEscapeSQLMode(t *testing.T) {
 			require.True(t, succeed, errInfo)
 		})
 	}
+}
+
+func Test_BuiltIn_LikeWithNullEscapeSQLMode(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().SqlMode = "NO_BACKSLASH_ESCAPES"
+	resolverCalled := false
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		resolverCalled = true
+		return "NO_BACKSLASH_ESCAPES", nil
+	})
+	tcc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"axb"}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a_b"}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
+		newOpBuiltInRegexp().likeFn,
+	)
+	succeed, errInfo := tcc.Run()
+	require.True(t, succeed, errInfo)
+	require.False(t, resolverCalled, "NULL ESCAPE must bypass explicit-empty SQL-mode validation")
 }
 
 func Test_BuiltIn_ILikeRejectsInvalidArity(t *testing.T) {
