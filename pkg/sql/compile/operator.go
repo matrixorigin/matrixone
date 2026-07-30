@@ -358,6 +358,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Partial = t.Partial
 		op.StartIDX = t.StartIDX
 		op.EndIDX = t.EndIDX
+		op.MaterializedSource = t.MaterializedSource
+		op.MaterializedReaderID = t.MaterializedReaderID
 		op.SetInfo(&info)
 		return op
 	case vm.MergeRecursive:
@@ -470,6 +472,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ShuffleRegIdxLocal = sourceArg.ShuffleRegIdxLocal
 		op.ShuffleRegIdxRemote = sourceArg.ShuffleRegIdxRemote
 		op.FuncId = sourceArg.FuncId
+		op.MaterializedSource = sourceArg.MaterializedSource
 		op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
 		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
 		for j := range op.LocalRegs {
@@ -839,11 +842,11 @@ func constructLockOp(node *plan.Node, eng engine.Engine) (*lockop.LockOp, error)
 			partitionColPos = target.PartitionColIdxInBat
 		}
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-		arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+		arg.AddLockTargetWithMode(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 	}
 	for _, target := range node.LockTargets {
 		if target.LockTable {
-			arg.LockTable(target.TableId, false)
+			arg.LockTableWithMode(target.TableId, target.Mode, false)
 		}
 	}
 	return arg, nil
