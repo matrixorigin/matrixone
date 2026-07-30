@@ -1079,6 +1079,24 @@ func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
 	}
 }
 
+func TestCreateTableAsSelectPreservesGroupConcatOrderBy(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(
+		mock,
+		t,
+		"create table ctas_group_concat as select N_REGIONKEY, group_concat(N_NAME order by N_NAME) as names from NATION group by N_REGIONKEY",
+	)
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.Contains(
+		t,
+		createTable.GetCreateAsSelectSql(),
+		"group_concat(`nation`.`N_NAME` order by `N_NAME` separator \",\")",
+	)
+}
+
 func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
 	tests := []struct {
 		name string

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -103,9 +104,13 @@ type container struct {
 	maxAllocSize int64
 
 	// spill support
-	spillEngine       *spillutil.SpillEngine
-	spillThreshold    int64
-	probeBucketActive bool // true while reading probe batches from a bucket
+	spillEngine    *spillutil.SpillEngine
+	spillThreshold int64
+	// Non-nil only for spilled joins, where probe expressions are part of the
+	// shared HashBuild/spill working set. Resident probe expressions remain
+	// under normal process/mpool accounting; this is not a general query budget.
+	probeExpressionLease *hashbuild.ExpressionMemoryLease
+	probeBucketActive    bool // true while reading probe batches from a bucket
 }
 
 type HashJoin struct {
@@ -190,8 +195,15 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
 		hashJoin.Channel <- nil
 	}
-	ctr.resetEqCondExecutors()
+	// SpillEngine borrows the probe executor lease. End that borrow before the
+	// join frees the executors and releases their reservation.
 	ctr.cleanBucketBatches(proc)
+	if ctr.probeExpressionLease != nil {
+		ctr.cleanEqCondExecutors()
+		ctr.releaseProbeExpressionLease()
+	} else {
+		ctr.resetEqCondExecutors()
+	}
 	ctr.cleanHashMap()
 	ctr.resetNonEqCondExecutor()
 	ctr.rightRowsMatched = nil
@@ -215,8 +227,9 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
 	ctr.cleanBatch(proc)
-	ctr.cleanEqCondExecutors()
 	ctr.cleanBucketBatches(proc)
+	ctr.cleanEqCondExecutors()
+	ctr.releaseProbeExpressionLease()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
 }
@@ -273,6 +286,7 @@ func (ctr *container) cleanEqCondExecutors() {
 		}
 	}
 	ctr.eqCondExecs = nil
+	ctr.eqCondVecs = nil
 }
 
 func (ctr *container) resetEqCondExecutors() {
@@ -280,6 +294,13 @@ func (ctr *container) resetEqCondExecutors() {
 		if ctr.eqCondExecs[i] != nil {
 			ctr.eqCondExecs[i].ResetForNextQuery()
 		}
+	}
+}
+
+func (ctr *container) releaseProbeExpressionLease() {
+	if ctr.probeExpressionLease != nil {
+		ctr.probeExpressionLease.Release()
+		ctr.probeExpressionLease = nil
 	}
 }
 
