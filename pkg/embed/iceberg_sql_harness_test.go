@@ -865,7 +865,8 @@ func openIcebergTenantFrontendDB(t *testing.T, c Cluster, accountName string) *s
 	t.Helper()
 	cn0, err := c.GetCNService(0)
 	require.NoError(t, err)
-	dsn := fmt.Sprintf("%s#admin#moadmin:111@tcp(127.0.0.1:%d)/", accountName, cn0.GetServiceConfig().CN.Frontend.Port)
+	dsn := fmt.Sprintf("%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/",
+		accountName, cn0.GetServiceConfig().CN.Frontend.Port)
 	db, err := sql.Open("mysql", dsn)
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)

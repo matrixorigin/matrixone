@@ -73,7 +73,7 @@ func startBasicCluster() (Cluster, error) {
 					func(config *ServiceConfig) {
 						config.CN.LockService.MaxFixedSliceSize = 10001
 						config.CN.LockService.MaxLockRowCount = 10000
-						config.CN.Frontend.SkipCheckUser = true
+						config.CN.Frontend.SkipCheckUser = false
 						config.CN.Frontend.Iceberg.Enable = true
 						config.CN.Frontend.Iceberg.EnableWrite = true
 						config.CN.Frontend.Iceberg.EnableDelete = true
