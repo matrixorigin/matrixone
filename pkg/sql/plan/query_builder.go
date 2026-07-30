@@ -3930,6 +3930,28 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	for i, col := range cols {
 		subCtx.headings[i] = string(col)
 	}
+
+	if len(cteRef.occurrences) == 0 {
+		builder.cteRefs = append(builder.cteRefs, cteRef)
+	}
+	if ctx.bindingNonRecurCte() {
+		cteRef.hasNestedUse = true
+		if ctx.cteState.cte != nil {
+			ctx.cteState.cte.hasNestedRef = true
+		}
+	}
+	types := make([]plan.Type, len(builder.qry.Nodes[nodeID].ProjectList))
+	for i, expr := range builder.qry.Nodes[nodeID].ProjectList {
+		types[i] = expr.Typ
+	}
+	cteRef.occurrences = append(cteRef.occurrences, cteOccurrence{
+		rootID:       nodeID,
+		rootTag:      subCtx.rootTag(),
+		ctx:          subCtx,
+		headings:     append([]string(nil), subCtx.headings...),
+		types:        types,
+		isCorrelated: subCtx.isCorrelated,
+	})
 	return nodeID, nil
 }
 
@@ -4115,7 +4137,18 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		}
 		for i := range n.ProjectList {
 			projTyp := projects[i].GetTyp()
-			n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
+			if projTyp.Id == int32(types.T_char) || projTyp.Id == int32(types.T_varchar) {
+				// MySQL fixes recursive CTE column types from the anchor, but
+				// applies the width policy at execution time: strict sql_mode
+				// rejects an over-width value while non-strict mode truncates it.
+				// The assignment-cast selector uses cast_strict before MORPC v5
+				// so this plan can run on every CN during a rolling upgrade. At
+				// MORPC v5 it uses volatile cast_assign, letting a prepared CTE
+				// observe the sql_mode of each execution.
+				n.ProjectList[i], err = builder.forceAssignmentCastExpr(n.ProjectList[i], projTyp, false)
+			} else {
+				n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
+			}
 			if err != nil {
 				return
 			}
