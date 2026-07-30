@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/assert"
@@ -147,6 +148,91 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 				assert.NotContains(t, got, normalizeSQL(fragment))
 			}
 			_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, got, 1)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestBuildShowAccountsSQL(t *testing.T) {
+	sysAccount := &TenantInfo{Tenant: GetDefaultTenant()}
+	tenantAccount := &TenantInfo{Tenant: "tenant", TenantID: 42}
+	allAccounts := &tree.ShowAccounts{}
+	filtered, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "show accounts like 'tenant%'", 1)
+	require.NoError(t, err)
+	filteredAccounts := filtered.(*tree.ShowAccounts)
+
+	tests := []struct {
+		name            string
+		account         *TenantInfo
+		statement       *tree.ShowAccounts
+		database        string
+		wantObjectCount bool
+		wantContains    []string
+		wantNotContains []string
+	}{
+		{
+			name:            "metrics cron query",
+			account:         sysAccount,
+			statement:       allAccounts,
+			database:        mometric.MetricDBConst,
+			wantObjectCount: true,
+			wantContains: []string{
+				"CAST(0 AS BIGINT) AS object_count",
+			},
+			wantNotContains: []string{
+				"where ma.account_id =",
+			},
+		},
+		{
+			name:      "non metrics database",
+			account:   sysAccount,
+			statement: allAccounts,
+			database:  "mo_catalog",
+			wantNotContains: []string{
+				"AS object_count",
+			},
+		},
+		{
+			name:      "filtered sys query",
+			account:   sysAccount,
+			statement: filteredAccounts,
+			database:  mometric.MetricDBConst,
+			wantContains: []string{
+				"where ma.account_name like 'tenant%'",
+			},
+			wantNotContains: []string{
+				"AS object_count",
+			},
+		},
+		{
+			name:      "tenant query",
+			account:   tenantAccount,
+			statement: filteredAccounts,
+			database:  mometric.MetricDBConst,
+			wantContains: []string{
+				"WHERE md.account_id = 42",
+				"AND mt.account_id = 42",
+				"where ma.account_id = 42",
+			},
+			wantNotContains: []string{
+				"AS object_count",
+				"account_name like",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rawSQL, needObjectCount := buildShowAccountsSQL(test.account, test.statement, test.database)
+			sql := normalizeSQL(rawSQL)
+			require.Equal(t, test.wantObjectCount, needObjectCount)
+			for _, fragment := range test.wantContains {
+				require.Contains(t, sql, normalizeSQL(fragment))
+			}
+			for _, fragment := range test.wantNotContains {
+				require.NotContains(t, sql, normalizeSQL(fragment))
+			}
+			_, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 		})
 	}

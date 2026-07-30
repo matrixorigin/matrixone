@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -342,6 +343,30 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		stubs = gostub.StubFunc(&writeDataToCSVFile, nil)
 		defer stubs.Reset()
 		convey.So(exportDataFromResultSetToCSVFile(ep), convey.ShouldBeNil)
+	})
+}
+
+func TestConstructByteFormatsUnscaledFloat64WithFullPrecision(t *testing.T) {
+	convey.Convey("constructByte formats unscaled float64 with full precision", t, func() {
+		mp := mpool.MustNewZero()
+		vec := testutil.NewVector(1, types.T_float64.ToType(), mp, false, []float64{3.14159265358979})
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vec
+		bat.SetRowCount(1)
+
+		ep := &ExportConfig{
+			userConfig: &tree.ExportParam{
+				Fields: &tree.Fields{EnclosedBy: &tree.EnclosedBy{}},
+			},
+			Symbol:     [][]byte{{'\n'}},
+			ColumnFlag: []bool{false},
+		}
+		bytesChan := make(chan *BatchByte, 1)
+		constructByte(context.Background(), &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, bytesChan, ep)
+
+		result := <-bytesChan
+		convey.So(result.err, convey.ShouldBeNil)
+		convey.So(string(result.writeByte), convey.ShouldEqual, "3.14159265358979\n")
 	})
 }
 
