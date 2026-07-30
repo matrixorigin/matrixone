@@ -462,7 +462,7 @@ SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
 invalid argument operator cast, bad value [DATE BIGINT UNSIGNED]
 SELECT CAST(cast('01-01-01' as date) AS SIGNED);
 ➤ cast(cast(01-01-01 as date) as signed)[-5,64,0]  𝄀
-10101
+20010101
 select cast('1.2' as decimal(3,2));
 ➤ cast(1.2 as decimal(3, 2))[3,3,2]  𝄀
 1.20

@@ -8992,13 +8992,41 @@ func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
 
 func TestExtractFromVarcharTimeIsNotColonDate(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		unit   string
+		expect string
+	}{
+		{unit: "hour_minute", expect: "1011"},
+		{unit: "hour_second", expect: "101112"},
+		{unit: "minute", expect: "11"},
+		{unit: "minute_second", expect: "1112"},
+	} {
+		t.Run(tc.unit, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.unit}, nil),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"10:11:12"}, nil),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.expect}, nil),
+				ExtractFromVarchar,
+			)
+
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestExtractFromVarcharColonDateForDateUnit(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
-			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"hour_minute"}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"year"}, nil),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"10:11:12"}, nil),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1011"}, nil),
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"2010"}, nil),
 		ExtractFromVarchar,
 	)
 
