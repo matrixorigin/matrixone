@@ -65,6 +65,10 @@ func signedUnsignedIntegerCommonType(source []types.Type) (types.Type, bool) {
 	maxWidth := int32(0)
 	for _, typ := range source {
 		switch typ.Oid {
+		case types.T_any:
+			// An untyped NULL branch affects result nullability, but it has no
+			// numeric domain and must not change the common integer type.
+			continue
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 			hasSigned = true
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:

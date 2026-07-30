@@ -121,6 +121,53 @@ func TestBindControlFlowMetadata(t *testing.T) {
 	})
 }
 
+func TestBuildCaseSignedUnsignedMetadataWithNull(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "leading null",
+			sql: `select case
+				when false then null
+				when true then cast(18446744073709551615 as unsigned)
+				else cast(-1 as signed)
+			end`,
+		},
+		{
+			name: "middle null",
+			sql: `select case
+				when false then cast(18446744073709551615 as unsigned)
+				when false then null
+				else cast(-1 as signed)
+			end`,
+		},
+		{
+			name: "trailing null",
+			sql: `select case
+				when true then cast(18446744073709551615 as unsigned)
+				when false then cast(-1 as signed)
+				else null
+			end`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_decimal128), projectList[0].Typ.Id)
+			require.Equal(t, int32(21), projectList[0].Typ.Width)
+			require.Zero(t, projectList[0].Typ.Scale)
+			require.False(t, projectList[0].Typ.NotNullable)
+		})
+	}
+}
+
 func TestBuildControlFlowUTF8MB4BinaryWidth(t *testing.T) {
 	for _, sql := range []string{
 		`select case when 0 then _binary 0x61 else "😀" end as c`,

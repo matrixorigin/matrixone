@@ -373,6 +373,24 @@ drop view v_flow_metadata_columns;
 select if(1, cast(18446744073709551615 as unsigned), cast(-1 as signed)) as if_uint64_signed_max,
        if(0, cast(18446744073709551615 as unsigned), cast(-1 as signed)) as if_uint64_signed_negative,
        case when 1 then cast(18446744073709551615 as unsigned) else cast(-1 as signed) end as case_uint64_signed_max;
+
+-- NULL value arms are neutral when CASE finds a safe common type for signed
+-- and unsigned integers.
+select case
+           when false then null
+           when true then cast(18446744073709551615 as unsigned)
+           else cast(-1 as signed)
+       end as case_leading_null_uint64_max,
+       case
+           when false then cast(18446744073709551615 as unsigned)
+           when false then null
+           else cast(-1 as signed)
+       end as case_middle_null_signed_negative,
+       case
+           when true then cast(18446744073709551615 as unsigned)
+           when false then cast(-1 as signed)
+           else null
+       end as case_trailing_null_uint64_max;
 select hex(case when 1 then _binary 'a' else 'bc' end) as case_binary_hex,
        hex(case when 0 then _binary 'a' else 'bc' end) as case_char_hex;
 
