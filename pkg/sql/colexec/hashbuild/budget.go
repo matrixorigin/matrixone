@@ -341,19 +341,86 @@ func projectedPartialTailReplacementBytes(
 	return peak, retained, nil
 }
 
+// projectedNewDestinationBytes follows CopyIntoBatches for destinations that
+// start empty. Each destination vector is pre-extended to its final row count,
+// and each varlen area is then grown once by UnionBatch.
+func projectedNewDestinationBytes(src *batch.Batch, start, rows int) (uint64, error) {
+	if src == nil || start < 0 || rows < 0 || start > src.RowCount() || rows > src.RowCount()-start {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	end := start + rows
+	var total uint64
+	add := func(value uint64) error {
+		if total > math.MaxUint64-value {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		total += value
+		return nil
+	}
+	for offset := start; offset < end; {
+		segmentRows := end - offset
+		if segmentRows > colexec.DefaultBatchSize {
+			segmentRows = colexec.DefaultBatchSize
+		}
+		wholeSource := offset == 0 && segmentRows == src.RowCount()
+		for _, vec := range src.Vecs {
+			if vec == nil {
+				return 0, process.ErrHashBuildBudgetInvalid
+			}
+			typeSize := vec.GetType().TypeSize()
+			if typeSize < 0 || (typeSize > 0 && segmentRows > math.MaxInt/typeSize) {
+				return 0, process.ErrHashBuildBudgetInvalid
+			}
+			dataCap, ok := mpool.GrowCapacity(0, int64(segmentRows*typeSize))
+			if !ok || dataCap < 0 {
+				return 0, process.ErrHashBuildBudgetInvalid
+			}
+			if err := add(uint64(dataCap)); err != nil {
+				return 0, err
+			}
+			if !vec.GetType().IsVarlen() {
+				continue
+			}
+
+			var areaBytes int
+			var areaErr error
+			switch {
+			case vec.IsConst():
+				areaBytes, areaErr = uniqueAppendAreaBytes(vec, 0, 1, nil)
+			case wholeSource:
+				// UnionBatch's whole-vector fast path copies the complete source
+				// area once and preserves shared offsets.
+				areaBytes = len(vec.GetArea())
+			default:
+				areaBytes, areaErr = uniqueAppendAreaBytes(vec, offset, segmentRows, nil)
+			}
+			if areaErr != nil {
+				return 0, process.ErrHashBuildBudgetInvalid
+			}
+			areaCap, ok := mpool.GrowCapacity(0, int64(areaBytes))
+			if !ok || areaCap < 0 {
+				return 0, process.ErrHashBuildBudgetInvalid
+			}
+			if err := add(uint64(areaCap)); err != nil {
+				return 0, err
+			}
+		}
+		offset += segmentRows
+	}
+	return total, nil
+}
+
 func (hb *HashmapBuilder) projectedBatchCopyBytes(src *batch.Batch) (uint64, error) {
 	if src == nil || src.RowCount() < 0 {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
-	projected := uint64(src.Allocated())
-	if size := uint64(src.Size()); size > projected {
-		projected = size
-	}
 	rows := uint64(src.RowCount())
 	last := len(hb.Batches.Buf) - 1
-	if rows != uint64(colexec.DefaultBatchSize) &&
+	hasPartialTail := rows != uint64(colexec.DefaultBatchSize) &&
 		last >= 0 && hb.Batches.Buf[last] != nil &&
-		hb.Batches.Buf[last].RowCount() != colexec.DefaultBatchSize {
+		hb.Batches.Buf[last].RowCount() != colexec.DefaultBatchSize
+	appendRows := 0
+	if hasPartialTail {
 		// CopyIntoBatches appends into the partial tail. Derive each replacement
 		// from the destination's old capacity and the actual old+append target.
 		// A flat 1.25x multiplier is not a bound: GrowCapacity can take repeated
@@ -362,7 +429,7 @@ func (hb *HashmapBuilder) projectedBatchCopyBytes(src *batch.Batch) (uint64, err
 		if tail.RowCount() < 0 || tail.RowCount() >= colexec.DefaultBatchSize {
 			return 0, process.ErrHashBuildBudgetInvalid
 		}
-		appendRows := colexec.DefaultBatchSize - tail.RowCount()
+		appendRows = colexec.DefaultBatchSize - tail.RowCount()
 		if appendRows > src.RowCount() {
 			appendRows = src.RowCount()
 		}
@@ -370,21 +437,15 @@ func (hb *HashmapBuilder) projectedBatchCopyBytes(src *batch.Batch) (uint64, err
 		if err != nil {
 			return 0, err
 		}
-		projected = replacementPeak
+		projected := replacementPeak
 		if appendRows < src.RowCount() {
 			// After the tail grow finishes, its retained delta stays live while
-			// CopyIntoBatches materializes the remaining source rows. The source
-			// allocation bounds that remainder; when multiple batches already
-			// exist, preserve the existing full-batch preallocation adjustment.
-			remaining := uint64(src.Allocated())
-			if size := uint64(src.Size()); size > remaining {
-				remaining = size
-			}
-			if len(hb.Batches.Buf) > 1 && rows > 0 && rows < uint64(colexec.DefaultBatchSize) {
-				if remaining > math.MaxUint64/uint64(colexec.DefaultBatchSize) {
-					return 0, process.ErrHashBuildBudgetInvalid
-				}
-				remaining = (remaining*uint64(colexec.DefaultBatchSize) + rows - 1) / rows
+			// CopyIntoBatches materializes the remaining source rows.
+			remaining, err := projectedNewDestinationBytes(
+				src, appendRows, src.RowCount()-appendRows,
+			)
+			if err != nil {
+				return 0, err
 			}
 			if retainedDelta > math.MaxUint64-remaining {
 				return 0, process.ErrHashBuildBudgetInvalid
@@ -393,43 +454,32 @@ func (hb *HashmapBuilder) projectedBatchCopyBytes(src *batch.Batch) (uint64, err
 				projected = retained
 			}
 		}
-	} else if len(hb.Batches.Buf) > 1 && rows > 0 && rows < uint64(colexec.DefaultBatchSize) {
-		// Once Batches contains more than one full batch, CopyIntoBatches
-		// preallocates a full DefaultBatchSize destination for a tiny tail.
-		if projected > math.MaxUint64/uint64(colexec.DefaultBatchSize) {
-			return 0, process.ErrHashBuildBudgetInvalid
-		}
-		projected = (projected*uint64(colexec.DefaultBatchSize) + rows - 1) / rows
+		return projectedBatchCopyWithMetadata(src, projected)
 	}
+	projected, err := projectedNewDestinationBytes(src, 0, src.RowCount())
+	if err != nil {
+		return 0, err
+	}
+	return projectedBatchCopyWithMetadata(src, projected)
+}
+
+func projectedBatchCopyWithMetadata(src *batch.Batch, projected uint64) (uint64, error) {
 	// Vector null bitmaps and batch/vector slice metadata live on the Go heap
 	// and are therefore not included in Batch.Allocated. Charge a deliberately
 	// conservative per-row allowance that also scales with the column count.
-	// Allocated/Size, partial-tail high water, and full-batch scaling above
-	// already describe one complete destination allocation. Do not multiply that
-	// bound again: the source remains caller-owned, any retained tail already has
-	// its own reservation, and CopyIntoBatches reconciles this new reservation to
-	// the actual retained delta below.
+	// The source remains caller-owned, any retained tail already has its own
+	// reservation, and CopyIntoBatches reconciles this reservation to the actual
+	// retained delta below.
 	metadata, ok := retainedMetadataAllowance(src)
 	if !ok {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
-	columns := uint64(len(src.Vecs))
-	// CopyIntoBatches can split one source into multiple fixed-size
-	// destinations. Each vector data/area allocation is rounded independently by
-	// mpool, so their retained sum can exceed the already-rounded source by a
-	// bounded number of allocator pages. Keep that structural slack additive
-	// instead of multiplying the complete payload.
-	const perColumnAllocationSlack = uint64(16 << 10)
 	const batchAllocationSlack = uint64(64 << 10)
-	if columns > (math.MaxUint64-batchAllocationSlack)/perColumnAllocationSlack {
-		return 0, process.ErrHashBuildBudgetInvalid
-	}
-	allocationSlack := columns*perColumnAllocationSlack + batchAllocationSlack
 	if projected > math.MaxUint64-metadata ||
-		projected+metadata > math.MaxUint64-allocationSlack {
+		projected+metadata > math.MaxUint64-batchAllocationSlack {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
-	return projected + metadata + allocationSlack, nil
+	return projected + metadata + batchAllocationSlack, nil
 }
 
 func (hb *HashmapBuilder) cleanBatches(proc *process.Process) {

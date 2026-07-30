@@ -237,12 +237,18 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode            []*BindContext
-	nameByColRef         map[[2]int32]string
-	protectedScans       map[int32]int
-	projectSpecialGuards map[int32]*specialIndexGuard
-	indexHintsByScan     map[int32]*indexHintSet
-	indexHintOwnerByNode map[int32]int32
+	ctxByNode                   []*BindContext
+	nameByColRef                map[[2]int32]string
+	protectedScans              map[int32]int
+	projectSpecialGuards        map[int32]*specialIndexGuard
+	indexHintsByScan            map[int32]*indexHintSet
+	indexHintOwnerByNode        map[int32]int32
+	preserveSinkProjection      map[int32]struct{}
+	preserveLockProjection      map[int32]struct{}
+	preservePreInsertProjection map[int32]struct{}
+	preserveInsertProjection    map[int32]struct{}
+	preserveScanProjection      map[int32]struct{}
+	positionalSinkScans         map[int32]struct{}
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -306,6 +312,11 @@ type QueryBuilder struct {
 	// so positions recorded pre-prune (e.g. the REPLACE old-PK key) must be remapped
 	// through this map before use.
 	sinkColRef map[[2]int32]int
+
+	// cteRefs contains only non-recursive CTEs that were actually bound. It is
+	// populated lazily so unused CTE bodies retain their existing lazy-binding
+	// semantics.
+	cteRefs []*CTERef
 }
 
 type OptimizerHints struct {
@@ -339,6 +350,18 @@ type CTERef struct {
 	maskedCTEs     map[string]bool
 	snapshot       *Snapshot
 	declarationCtx *BindContext
+	occurrences    []cteOccurrence
+	hasNestedRef   bool
+	hasNestedUse   bool
+}
+
+type cteOccurrence struct {
+	rootID       int32
+	rootTag      int32
+	ctx          *BindContext
+	headings     []string
+	types        []plan.Type
+	isCorrelated bool
 }
 
 type CteBindState struct {

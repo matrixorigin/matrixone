@@ -1126,10 +1126,13 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 		return "", moerr.NewInternalErrorNoCtxf("clone view SQL is %T, expected *tree.CreateView", stmt)
 	}
 
-	applyRemapDb([]tree.Statement{createView}, map[string]string{srcDBName: dstDBName})
-
 	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
+	original := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
+	applyRemapDb([]tree.Statement{createView}, map[string]string{srcDBName: dstDBName})
 	rewritten := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
+	if rewritten == original {
+		return sql, nil
+	}
 	if !strings.HasSuffix(strings.TrimSpace(rewritten), ";") {
 		rewritten += ";"
 	}

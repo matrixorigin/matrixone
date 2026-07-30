@@ -212,6 +212,21 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 			if takeErr != nil {
 				return takeErr
 			}
+			probeExecutors := make([]colexec.ExpressionExecutor, len(ctr.evecs))
+			for i := range ctr.evecs {
+				probeExecutors[i] = ctr.evecs[i].executor
+			}
+			probeExpressionLease, leaseErr := hashbuild.NewExpressionMemoryLease(
+				budget, rightDedupJoin.Conditions[0], probeExecutors, false)
+			if leaseErr != nil {
+				_ = payload.Close()
+				ctr.mp.Free()
+				ctr.mp = nil
+				ctr.cleanEvalVectors()
+				ctr.releaseProbeExpressionLease()
+				return leaseErr
+			}
+			ctr.probeExpressionLease = probeExpressionLease
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           rightDedupJoin.Conditions[1],
 				ProbeKeyExprs:           rightDedupJoin.Conditions[0],
@@ -219,6 +234,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				NeedsProbeForEmptyBuild: true,
 				MergeProbeBatches:       true,
 				Budget:                  budget,
+				ProbeExpressionLease:    probeExpressionLease,
 			})
 			if len(payload.Files) > 0 {
 				engine.InitFromSpilledFiles(payload.Files)
@@ -278,7 +294,7 @@ func (rightDedupJoin *RightDedupJoin) newEmptyJoinMap(proc *process.Process) (*m
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
-	err := ctr.evalJoinCondition(bat, proc)
+	err := ctr.evalJoinConditionBudgeted(bat, proc)
 	if err != nil {
 		return err
 	}
@@ -402,4 +418,15 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		ctr.evecs[i].vec = vec
 	}
 	return nil
+}
+
+func (ctr *container) evalJoinConditionBudgeted(bat *batch.Batch, proc *process.Process) error {
+	if ctr.probeExpressionLease == nil {
+		return ctr.evalJoinCondition(bat, proc)
+	}
+	return ctr.probeExpressionLease.Eval(proc, []*batch.Batch{bat}, bat.RowCount(), func(i int, vec *vector.Vector) error {
+		ctr.vecs[i] = vec
+		ctr.evecs[i].vec = vec
+		return nil
+	})
 }

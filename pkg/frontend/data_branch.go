@@ -742,9 +742,6 @@ func diffMergeAgency(
 		); err != nil {
 			return
 		}
-		if err = validateProjectedColumns(diffStmt, tblStuff); err != nil {
-			return
-		}
 	} else if mergeStmt != nil {
 		copt.conflictOpt = mergeStmt.ConflictOpt
 		copt.expandUpdate = true
@@ -766,13 +763,12 @@ func diffMergeAgency(
 		); err != nil {
 			return
 		}
-		if tblStuff.def.pkKind == fakeKind {
-			err = moerr.NewNotSupportedNoCtxf(
-				"DATA BRANCH PICK requires a table with a primary key; table %s has no primary key",
-				pickStmt.SrcTable.ObjectName)
-			return
-		}
 	}
+
+	if err = prepareDataBranchWorker(diffStmt, pickStmt, &tblStuff); err != nil {
+		return
+	}
+	defer tblStuff.worker.Release()
 
 	if dagInfo, err = decideLCABranchTSFromBranchDAG(
 		ctx, ses, bh, tblStuff,
@@ -946,6 +942,30 @@ func diffMergeAgency(
 	return err
 }
 
+func prepareDataBranchWorker(
+	diffStmt *tree.DataBranchDiff,
+	pickStmt *tree.DataBranchPick,
+	tblStuff *tableStuff,
+) error {
+	if diffStmt != nil {
+		if err := validateProjectedColumns(diffStmt, *tblStuff); err != nil {
+			return err
+		}
+	}
+	if pickStmt != nil && tblStuff.def.pkKind == fakeKind {
+		return moerr.NewNotSupportedNoCtxf(
+			"DATA BRANCH PICK requires a table with a primary key; table %s has no primary key",
+			pickStmt.SrcTable.ObjectName)
+	}
+
+	worker, err := ants.NewPool(runtime.NumCPU())
+	if err != nil {
+		return err
+	}
+	tblStuff.worker = worker
+	return nil
+}
+
 func handleBranchDiff(
 	execCtx *ExecCtx,
 	ses *Session,
@@ -1018,12 +1038,6 @@ func getTableStuff(
 		tarTblDef  *plan.TableDef
 		baseTblDef *plan.TableDef
 	)
-
-	defer func() {
-		if err == nil {
-			tblStuff.worker, err = ants.NewPool(runtime.NumCPU())
-		}
-	}()
 
 	if tblStuff.tarRel, tblStuff.baseRel, tblStuff.tarSnap, tblStuff.baseSnap, err = getRelations(
 		ctx, ses, bh, srcTable, dstTable,
