@@ -592,6 +592,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 	case *group.Group:
+		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
+			return ctxId, nil, err
+		}
 		in.Agg = &pipeline.Group{
 			NeedEval:     t.NeedEval,
 			SpillMem:     t.SpillMem,
@@ -1106,6 +1109,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsShuffle = t.IsShuffle
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
+		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Limit:
 		op = limit.NewArgument().WithLimit(opr.Limit)
@@ -1322,6 +1326,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.UpdateColExprList = t.UpdateColExprList
 		arg.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
 		arg.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
+		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.RightDedupJoin:
 		arg := rightdedupjoin.NewArgument()
@@ -1340,6 +1345,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
+		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Apply:
 		arg := apply.NewArgument()
@@ -1459,15 +1465,34 @@ func convertToTypes(ts []plan.Type) []types.Type {
 	return result
 }
 
+func validateRemoteAggregateProtocol(
+	proc *process.Process,
+	aggs []aggexec.AggFuncExecExpression,
+) error {
+	for _, agg := range aggs {
+		if agg.GetConfigType() != plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			continue
+		}
+		if proc != nil && supportsRemoteOrderedAggregates(proc.GetService()) {
+			return nil
+		}
+		return moerr.NewNotSupportedNoCtx(
+			"ordered aggregate remote execution requires MORPC protocol version 6",
+		)
+	}
+	return nil
+}
+
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate
 func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
-			Op:     a.GetAggID(),
-			Dist:   a.IsDistinct(),
-			Expr:   a.GetArgExpressions(),
-			Config: a.GetExtraConfig(),
+			Op:         a.GetAggID(),
+			Dist:       a.IsDistinct(),
+			Expr:       a.GetArgExpressions(),
+			Config:     a.GetExtraConfig(),
+			ConfigType: a.GetConfigType(),
 		}
 	}
 	return result
@@ -1477,7 +1502,7 @@ func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipelin
 func convertToAggregates(ags []*pipeline.Aggregate) []aggexec.AggFuncExecExpression {
 	result := make([]aggexec.AggFuncExecExpression, len(ags))
 	for i, a := range ags {
-		result[i] = aggexec.MakeAggFunctionExpression(a.Op, a.Dist, a.Expr, a.Config)
+		result[i] = aggexec.MakeAggFunctionExpression(a.Op, a.Dist, a.Expr, a.Config, a.ConfigType)
 	}
 	return result
 }

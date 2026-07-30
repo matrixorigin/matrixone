@@ -21,9 +21,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -32,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/publication"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -379,4 +383,18 @@ func (s *service) registerExecutorsLocked() {
 		task.TaskCode_SQLTask,
 		taskservice.NewSQLTaskExecutor(ieFactory, ts, s.cfg.UUID).TaskExecutor(),
 	)
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_DataBranchLineageGC,
+		compile.DataBranchLineageGCExecutor(s.sqlExecutor),
+	)
+	ctx := defines.AttachAccount(
+		context.Background(), catalog.System_Account, catalog.System_User, catalog.System_Role,
+	)
+	if err := ts.CreateCronTask(
+		ctx,
+		databranchutils.LineageGCTaskMetadata(),
+		databranchutils.LineageGCTaskCronExpr,
+	); err != nil {
+		s.logger.Error("failed to create data branch lineage GC task", zap.Error(err))
+	}
 }

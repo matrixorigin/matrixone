@@ -5495,11 +5495,14 @@ drop_prepare_stmt:
     }
 
 drop_function_stmt:
-    DROP FUNCTION func_name '(' func_args_list_opt ')'
+    DROP FUNCTION exists_opt func_name '(' func_args_list_opt ')'
     {
-        var name = $3
-        var args = $5
-        $$ = tree.NewDropFunction(name, args)
+        var ifExists = $3
+        var name = $4
+        var args = $6
+        var dropFunction = tree.NewDropFunction(name, args)
+        dropFunction.IfExists = ifExists
+        $$ = dropFunction
     }
 
 drop_procedure_stmt:
@@ -12684,7 +12687,7 @@ function_call_generic:
             Exprs: $3,
         }
     }
-|   VARIANCE '(' func_type_opt expression ')'
+|   VARIANCE '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -12692,6 +12695,7 @@ function_call_generic:
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
 |   NEXTVAL '(' expression_list ')'

@@ -1,6 +1,9 @@
 create function sql_sum (a int, b int) returns int language sql as '$1 + $2';
 select sql_sum(1, 1) as ret;
 drop function sql_sum(int, int);
+create function drop_if_exists (p_id int) returns int language sql as '$1';
+drop function if exists drop_if_exists(p_id int);
+drop function if exists drop_if_exists(p_id int);
 drop database if exists udf_db1;
 create database udf_db1;
 use udf_db1;

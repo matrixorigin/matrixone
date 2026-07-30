@@ -873,6 +873,12 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	}
 	var node *MVCCNode[*TableMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNodeLocked(txn)
+	if !isNewNode && node.HasDropIntent() {
+		// A delete node may share immutable schemas with the previous MVCC
+		// version. Preserve copy-on-write if the same transaction later
+		// reaches this internal update path.
+		node.BaseNode = node.BaseNode.CloneData()
+	}
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {

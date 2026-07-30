@@ -159,6 +159,9 @@ func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression)
 	// We simply cannot spill distinct agg at this moment.
 	for _, ag := range aggs {
 		if ag.IsDistinct() {
+			if ag.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+				continue
+			}
 			// Set to TiB, effectively disabling spill for distinct agg.
 			// If we cannot fix this before TB mem is commonly available
 			// it will be very sad.
