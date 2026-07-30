@@ -243,6 +243,33 @@ func (opts Options) ExtraTxnOptions() []client.TxnOption {
 	return opts.txnOpts
 }
 
+// WithLockWaitTimeout sets a per-execution lock wait budget. It is propagated
+// both to newly created transactions and to the process used by an existing
+// transaction, so background execution can override the global default
+// resolver without changing other sessions.
+func (opts Options) WithLockWaitTimeout(timeout time.Duration) Options {
+	opts.lockWaitTimeout = timeout
+	opts.lockWaitTimeoutSet = true
+	// Txn options are applied in append order. Always append, including for
+	// zero, so a later WithLockWaitTimeout(0) intentionally clears an earlier
+	// value instead of leaving the first option effective.
+	opts.txnOpts = append(opts.txnOpts, client.WithTxnLockWaitTimeout(timeout))
+	return opts
+}
+
+// HasLockWaitTimeout reports whether this execution explicitly supplied a lock
+// wait budget. A zero value is still explicit: it clears a previously supplied
+// value and lets timeout resolution fall back without reusing a stale txn value.
+func (opts Options) HasLockWaitTimeout() bool {
+	return opts.lockWaitTimeoutSet
+}
+
+// LockWaitTimeout returns the per-execution lock wait budget. Callers should
+// check HasLockWaitTimeout before treating a zero value as an explicit budget.
+func (opts Options) LockWaitTimeout() time.Duration {
+	return opts.lockWaitTimeout
+}
+
 func (opts Options) WithEnableTrace() Options {
 	opts.enableTrace = true
 	return opts
@@ -302,6 +329,31 @@ func (opts Options) ResolveVariableFunc() func(varName string, isSystemVar, isGl
 	return opts.resolveVariableFunc
 }
 
+// WithFrontend marks the SQL execution as a frontend session-bound
+// invocation (b=true) versus a background / internal one (b=false).
+// Consumed by pkg/sql/compile/sql_executor.go's NewTopProcess which
+// sets proc.Base.IsFrontend = opts.IsFrontend().
+//
+// The default — `executor.Options{}` with no setter — is background
+// (IsFrontend()=false). Frontend code that uses the internal SQL
+// executor for session-bound queries opts in by calling
+// WithFrontend(true). Background callers (idxcron, ProcessInitSQL,
+// bootstrap, cron tasks, task service, …) don't need to call this —
+// they inherit the default.
+//
+// Takes a bool (rather than a no-arg setter) so callers that wrap an
+// existing proc and re-invoke the executor can carry the flag forward
+// via opts.WithFrontend(proc.Base.IsFrontend) — same shape as
+// WithResolveVariableFunc(proc.GetResolveVariableFunc()).
+func (opts Options) WithFrontend(b bool) Options {
+	opts.isFrontend = b
+	return opts
+}
+
+func (opts Options) IsFrontend() bool {
+	return opts.isFrontend
+}
+
 func (opts StatementOption) HasParams() bool {
 	return len(opts.params) > 0
 }
@@ -310,10 +362,14 @@ func (opts StatementOption) Params(
 	mp *mpool.MPool,
 ) *vector.Vector {
 	vec := vector.NewVec(types.T_varchar.ToType())
+	nulls := opts.paramNulls
+	if len(nulls) != len(opts.params) {
+		nulls = make([]bool, len(opts.params))
+	}
 	vector.AppendStringList(
 		vec,
 		opts.params,
-		make([]bool, len(opts.params)),
+		nulls,
 		mp,
 	)
 	return vec
@@ -323,6 +379,16 @@ func (opts StatementOption) WithParams(
 	values []string,
 ) StatementOption {
 	opts.params = values
+	opts.paramNulls = nil
+	return opts
+}
+
+func (opts StatementOption) WithParamsAndNulls(
+	values []string,
+	nulls []bool,
+) StatementOption {
+	opts.params = values
+	opts.paramNulls = nulls
 	return opts
 }
 

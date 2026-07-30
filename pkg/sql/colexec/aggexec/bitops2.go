@@ -15,6 +15,8 @@
 package aggexec
 
 import (
+	"bytes"
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,6 +41,11 @@ type bitOpExecFixed[T types.Ints | types.UInts] struct {
 type bitOpExecBytes struct {
 	aggExec
 	op bitOp
+	// width is the byte length of the argument type (BINARY(N)/VARBINARY(N)).
+	// It drives the length of the neutral value produced for empty or
+	// all-NULL groups so the result preserves the argument's byte length,
+	// matching MySQL binary-string aggregate semantics.
+	width int32
 }
 
 func (op bitOp) compute(a, b uint64) uint64 {
@@ -151,6 +158,27 @@ func (exec *bitOpExecFixed[T]) Flush() ([]*vector.Vector, error) {
 		exec.state[i].vecs[0] = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
+
+		// Replace NULL entries with neutral values per MySQL semantics:
+		// BIT_AND: neutral is all bits set (max uint64)
+		// BIT_OR, BIT_XOR: neutral is 0
+		if exec.op == bitAnd {
+			aggs := vector.MustFixedColNoTypeCheck[uint64](vecs[i])
+			for j := 0; j < vecs[i].Length(); j++ {
+				if vecs[i].IsNull(uint64(j)) {
+					vecs[i].UnsetNull(uint64(j))
+					aggs[j] = math.MaxUint64
+				}
+			}
+		} else {
+			aggs := vector.MustFixedColNoTypeCheck[uint64](vecs[i])
+			for j := 0; j < vecs[i].Length(); j++ {
+				if vecs[i].IsNull(uint64(j)) {
+					vecs[i].UnsetNull(uint64(j))
+					aggs[j] = 0
+				}
+			}
+		}
 	}
 	return vecs, nil
 }
@@ -176,8 +204,10 @@ func (exec *bitOpExecBytes) BatchFill(offset int, groups []uint64, vectors []*ve
 			x, y := exec.getXY(grp - 1)
 			value := vectors[0].GetBytesAt(int(idx))
 			if exec.state[x].vecs[0].IsNull(uint64(y)) {
+				if err := vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp); err != nil {
+					return err
+				}
 				exec.state[x].vecs[0].UnsetNull(uint64(y))
-				vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp)
 			} else {
 				oldValue := exec.state[x].vecs[0].GetBytesAt(int(y))
 				// computeBytes will update oldValue in place
@@ -209,9 +239,11 @@ func (exec *bitOpExecBytes) BatchMerge(next AggFuncExec, offset int, groups []ui
 			continue
 		}
 		if exec.state[x1].vecs[0].IsNull(uint64(y1)) {
-			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
 			otherValue := other.state[x2].vecs[0].GetBytesAt(int(y2))
-			vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), otherValue, exec.mp)
+			if err := vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), otherValue, exec.mp); err != nil {
+				return err
+			}
+			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
 		} else {
 			oldValue := exec.state[x1].vecs[0].GetBytesAt(int(y1))
 			otherValue := other.state[x2].vecs[0].GetBytesAt(int(y2))
@@ -232,11 +264,40 @@ func (exec *bitOpExecBytes) SetExtraInformation(partialResult any, _ int) error 
 func (exec *bitOpExecBytes) Flush() ([]*vector.Vector, error) {
 	// transfer vector to result
 	vecs := make([]*vector.Vector, len(exec.state))
+
+	// Neutral values for empty or all-NULL groups, per MySQL binary-string
+	// aggregate semantics. The neutral value has the same byte length as the
+	// argument type (BINARY(N)/VARBINARY(N)), driven by exec.width:
+	//   BIT_AND:          all bits set  -> width bytes of 0xFF
+	//   BIT_OR / BIT_XOR: all bits clear -> width bytes of 0x00
+	var neutral []byte
+	if exec.op == bitAnd {
+		neutral = bytes.Repeat([]byte{0xFF}, int(exec.width))
+	} else {
+		neutral = bytes.Repeat([]byte{0x00}, int(exec.width))
+	}
+
 	for i := range vecs {
 		vecs[i] = exec.state[i].vecs[0]
 		exec.state[i].vecs[0] = nil
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
+
+		for j := 0; j < vecs[i].Length(); j++ {
+			if vecs[i].IsNull(uint64(j)) {
+				vecs[i].UnsetNull(uint64(j))
+				if err := vector.SetBytesAt(vecs[i], j, neutral, exec.mp); err != nil {
+					// Ownership of vecs[0..i] has been transferred from
+					// exec.state — free them before returning to avoid leaks.
+					for k := 0; k <= i; k++ {
+						if vecs[k] != nil {
+							vecs[k].Free(exec.mp)
+						}
+					}
+					return nil, err
+				}
+			}
+		}
 	}
 	return vecs, nil
 }
@@ -261,6 +322,7 @@ func makeBitOpExecBytes(mp *mpool.MPool, id int64, param types.Type, op bitOp) A
 	var bitOp bitOpExecBytes
 	bitOp.mp = mp
 	bitOp.op = op
+	bitOp.width = param.Width
 	bitOp.aggInfo = aggInfo{
 		aggId:      id,
 		isDistinct: false,

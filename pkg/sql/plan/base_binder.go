@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -53,13 +54,19 @@ var kAlwaysFalseExpr = &plan.Expr{
 }
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
+	if b.numericParamType != nil && !b.isNumericContextNode(astExpr, depth) {
+		paramType := b.numericParamType
+		b.numericParamType = nil
+		defer func() { b.numericParamType = paramType }()
+		return b.impl.BindExpr(astExpr, depth, isRoot)
+	}
+
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		if d, ok := b.impl.(*DefaultBinder); ok {
-			expr, err = b.bindNumVal(exprImpl, d.typ)
-		} else {
-			expr, err = b.bindNumVal(exprImpl, plan.Type{})
-		}
+		expr, err = b.bindNumVal(exprImpl, b.defaultValueBindType())
+	case *tree.TimeUnitExpr:
+		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
+		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 
@@ -133,16 +140,38 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("serial_extract", []tree.Expr{astExpr}, depth)
 
 	case *tree.CastExpr:
-		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
-		if err != nil {
-			return
-		}
 		var typ Type
 		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
 			return
 		}
-		expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		parentParamType := b.numericParamType
+		b.numericParamType = nil
+		if isNumericArithmeticRoot(exprImpl.Expr) ||
+			b.isGenericNumericFunctionRoot(exprImpl.Expr, depth, &typ) {
+			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
+		} else {
+			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
+		}
+		b.numericParamType = parentParamType
+		if err != nil {
+			return
+		}
+		if b.builder != nil {
+			var rewritten bool
+			expr, rewritten, err = b.builder.rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, expr, typ)
+			if err != nil {
+				return
+			}
+			if rewritten {
+				return
+			}
+		}
+		if useExplicitCastOverload(exprImpl.Type) {
+			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+		} else {
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		}
 
 	case *tree.BitCastExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
@@ -268,6 +297,24 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	return
 }
 
+func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
+	t, ok := typ.(*tree.T)
+	if !ok {
+		return false
+	}
+	internal := t.InternalType
+	switch defines.MysqlType(internal.Oid) {
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return true
+	case defines.MYSQL_TYPE_LONGLONG:
+		family := strings.ToLower(internal.FamilyString)
+		return family == "signed" || family == "integer" ||
+			(internal.Unsigned && (family == "" || family == "unsigned"))
+	default:
+		return false
+	}
+}
+
 func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 	for {
 		paren, ok := astExpr.(*tree.ParenExpr)
@@ -280,14 +327,18 @@ func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
-	return &Expr{
+	param := &Expr{
 		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_P{
 			P: &plan.ParamRef{
 				Pos: int32(astExpr.Offset),
 			},
 		},
-	}, nil
+	}
+	if b.numericParamType != nil {
+		return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
+	}
+	return param, nil
 }
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
@@ -317,7 +368,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	col := astExpr.ColName()
 	table := astExpr.TblName()
 	db := astExpr.DbName()
-	name := tree.String(astExpr, dialect.MYSQL)
+	name := semanticAstKey(astExpr)
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
 		colPos := int32(len(b.ctx.times))
@@ -416,6 +467,23 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 	}
 
+	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok {
+		expr = &plan.Expr{
+			Typ: b.ctx.groups[groupPos].Typ,
+			Expr: &plan.Expr_Corr{
+				Corr: &plan.CorrColRef{
+					RelPos: b.ctx.groupTag,
+					ColPos: groupPos,
+					Depth:  depth,
+				},
+			},
+		}
+		if err != nil {
+			errutil.ReportError(b.GetContext(), err)
+		}
+		return
+	}
+
 	if isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
@@ -506,11 +574,54 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	return
 }
 
+func (b *baseBinder) correlatedGroupByColPos(depth int32, astName, table, col string) (int32, bool) {
+	if depth == 0 || b.ctx == nil || len(b.ctx.groupByAst) == 0 {
+		return 0, false
+	}
+	if pos, ok := b.ctx.groupByAst[astName]; ok && int(pos) < len(b.ctx.groups) {
+		return pos, true
+	}
+	if table != "" {
+		if pos, ok := b.ctx.groupByAst[table+"."+col]; ok && int(pos) < len(b.ctx.groups) {
+			return pos, true
+		}
+	}
+	return 0, false
+}
+
+func (b *baseBinder) corrColRefTargetsGroup(corr *plan.CorrColRef) bool {
+	if corr == nil {
+		return false
+	}
+	ctx := b.ctx
+	for depth := int32(0); depth < corr.Depth && ctx != nil; depth++ {
+		ctx = ctx.parent
+	}
+	return ctx != nil && ctx.groupTag > 0 && corr.RelPos == ctx.groupTag
+}
+
+func (b *baseBinder) corrColRefTargetsCurrentGroup(corr *plan.CorrColRef) bool {
+	return corr != nil && b.ctx != nil && b.ctx.groupTag > 0 && corr.RelPos == b.ctx.groupTag
+}
+
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
 	if b.ctx == nil {
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	if b.numericSubqueryTarget != nil && !astExpr.Exists {
+		subCtx.numericProjectionTypes = []Type{*b.numericSubqueryTarget}
+	}
+
+	// A subquery is a nested SELECT and must not inherit the outer FOR UPDATE
+	// state. MySQL only locks rows in the outer query; rows reached through
+	// EXISTS/IN/scalar subqueries are not locked unless the subquery itself
+	// also specifies FOR UPDATE.
+	savedIsForUpdate := b.builder.isForUpdate
+	b.builder.isForUpdate = false
+	defer func() {
+		b.builder.isForUpdate = savedIsForUpdate
+	}()
 
 	var nodeID int32
 	var err error
@@ -598,6 +709,13 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 }
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if (astExpr.Op == tree.UNARY_MINUS || astExpr.Op == tree.UNARY_PLUS) && b.numericParamType == nil {
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+	}
+	return b.bindUnaryExprWithCurrentContext(astExpr, depth)
+}
+
+func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, depth int32) (*Expr, error) {
 	switch astExpr.Op {
 	case tree.UNARY_MINUS:
 		return b.bindFuncExprImplByAstExpr("unary_minus", []tree.Expr{astExpr.Expr}, depth)
@@ -612,6 +730,13 @@ func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot 
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if isNumericBinaryOp(astExpr.Op) && b.numericParamType == nil {
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+	}
+	return b.bindBinaryExprWithCurrentContext(astExpr, depth)
+}
+
+func (b *baseBinder) bindBinaryExprWithCurrentContext(astExpr *tree.BinaryExpr, depth int32) (*Expr, error) {
 	switch astExpr.Op {
 	case tree.PLUS:
 		return b.bindFuncExprImplByAstExpr("+", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
@@ -637,6 +762,1020 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 		return b.bindFuncExprImplByAstExpr(">>", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	}
 	return nil, moerr.NewNYIf(b.GetContext(), "'%v' operator", astExpr.Op.ToString())
+}
+
+func isNumericBinaryOp(op tree.BinaryOp) bool {
+	switch op {
+	case tree.PLUS, tree.MINUS, tree.MULTI, tree.MOD, tree.DIV, tree.INTEGER_DIV:
+		return true
+	default:
+		return false
+	}
+}
+
+func isNumericContextNode(astExpr tree.Expr) bool {
+	switch expr := astExpr.(type) {
+	case *tree.ParamExpr, *tree.NumVal, *tree.ParenExpr, *tree.CastExpr:
+		return true
+	case *tree.BinaryExpr:
+		return isNumericBinaryOp(expr.Op)
+	case *tree.UnaryExpr:
+		return expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS
+	case *tree.FuncExpr:
+		return isNumericContextFunction(numericAstFunctionName(expr))
+	case *tree.CaseExpr:
+		return true
+	default:
+		return false
+	}
+}
+
+func (b *baseBinder) isNumericContextNode(astExpr tree.Expr, depth int32) bool {
+	if isNumericContextNode(astExpr) {
+		return true
+	}
+	if paren, ok := astExpr.(*tree.ParenExpr); ok {
+		return b.isNumericContextNode(paren.Expr, depth)
+	}
+	functionExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok || b.numericParamType == nil || !b.numericFunctionTarget {
+		return false
+	}
+	_, ok = b.resolveNumericFunctionContext(
+		functionExpr, depth, b.numericAstColumnResolver(), b.numericParamType,
+	)
+	return ok
+}
+
+func (b *baseBinder) isGenericNumericFunctionRoot(astExpr tree.Expr, depth int32, target *Type) bool {
+	if paren, ok := astExpr.(*tree.ParenExpr); ok {
+		return b.isGenericNumericFunctionRoot(paren.Expr, depth, target)
+	}
+	functionExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok {
+		return false
+	}
+	_, ok = b.resolveNumericFunctionContext(functionExpr, depth, b.numericAstColumnResolver(), target)
+	return ok
+}
+
+func isNumericArithmeticRoot(astExpr tree.Expr) bool {
+	switch expr := astExpr.(type) {
+	case *tree.ParenExpr:
+		return isNumericArithmeticRoot(expr.Expr)
+	case *tree.BinaryExpr:
+		return isNumericBinaryOp(expr.Op)
+	case *tree.UnaryExpr:
+		return expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS
+	case *tree.FuncExpr:
+		return numericAstFunctionName(expr) == "mod" && len(expr.Exprs) == 2
+	default:
+		return false
+	}
+}
+
+func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, outer *Type) (*Expr, error) {
+	return b.bindNumericExprWithContextMode(astExpr, depth, outer, true)
+}
+
+func (b *baseBinder) bindNumericExprWithDefaultContext(
+	astExpr tree.Expr,
+	depth int32,
+	outer *Type,
+) (*Expr, error) {
+	return b.bindNumericExprWithContextMode(astExpr, depth, outer, false)
+}
+
+func (b *baseBinder) bindNumericExprWithContextMode(
+	astExpr tree.Expr,
+	depth int32,
+	outer *Type,
+	functionTarget bool,
+) (*Expr, error) {
+	if b.numericParamType != nil {
+		return b.impl.BindExpr(astExpr, depth, false)
+	}
+	if b.builder == nil || !b.builder.isPrepareStatement {
+		return b.bindNumericExprWithoutNewContext(astExpr, depth)
+	}
+
+	scan, err := b.numericAstTypesWithHint(astExpr, depth, outer)
+	if err != nil || !scan.hasParam || scan.incompatible {
+		if err != nil {
+			return nil, err
+		}
+		return b.bindNumericExprWithoutNewContext(astExpr, depth)
+	}
+
+	planType, ok := numericTypeFromAstScan(scan, outer)
+	if !ok {
+		return b.bindNumericExprWithoutNewContext(astExpr, depth)
+	}
+	b.numericParamType = &planType
+	defer func() { b.numericParamType = nil }()
+	previousFunctionTarget := b.numericFunctionTarget
+	b.numericFunctionTarget = functionTarget
+	defer func() { b.numericFunctionTarget = previousFunctionTarget }()
+	previousSubqueryTarget := b.numericSubqueryTarget
+	b.numericSubqueryTarget = &planType
+	defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
+
+	return b.bindNumericExprWithCurrentContext(astExpr, depth)
+}
+
+func (b *baseBinder) bindNumericExprWithoutNewContext(astExpr tree.Expr, depth int32) (*Expr, error) {
+	return b.bindNumericExprWithCurrentContext(astExpr, depth)
+}
+
+func (b *baseBinder) bindNumericExprWithCurrentContext(astExpr tree.Expr, depth int32) (*Expr, error) {
+	if binary, ok := astExpr.(*tree.BinaryExpr); ok {
+		return b.bindBinaryExprWithCurrentContext(binary, depth)
+	}
+	if unary, ok := astExpr.(*tree.UnaryExpr); ok {
+		return b.bindUnaryExprWithCurrentContext(unary, depth)
+	}
+	if function, ok := astExpr.(*tree.FuncExpr); ok && numericAstFunctionName(function) == "mod" {
+		return b.bindFuncExprImplByAstExpr("mod", function.Exprs, depth)
+	}
+	return b.impl.BindExpr(astExpr, depth, false)
+}
+
+type numericAstTypeScan struct {
+	strong       []Type
+	weakDecimals []Type
+	hasParam     bool
+	hasUnknown   bool
+	incompatible bool
+}
+
+func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
+	s.strong = append(s.strong, other.strong...)
+	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
+	s.hasParam = s.hasParam || other.hasParam
+	s.hasUnknown = s.hasUnknown || other.hasUnknown
+	s.incompatible = s.incompatible || other.incompatible
+	return s
+}
+
+func numericAstTypedOperand(typ Type) numericAstTypeScan {
+	oid := types.T(typ.Id)
+	if oid == types.T_any {
+		return numericAstTypeScan{}
+	}
+	if !makeTypeByPlan2Type(typ).IsNumeric() {
+		return numericAstTypeScan{incompatible: true}
+	}
+	return numericAstTypeScan{strong: []Type{typ}}
+}
+
+func shouldActivateWeakDecimal(strong []types.Type, outer *types.Type) bool {
+	for _, typ := range strong {
+		if typ.IsNumeric() {
+			return true
+		}
+	}
+	return outer != nil && (outer.Oid.IsInteger() || outer.Oid.IsDecimal() || outer.Oid == types.T_bit)
+}
+
+func (b *baseBinder) numericAstTypesWithHint(
+	astExpr tree.Expr,
+	depth int32,
+	hint *Type,
+) (numericAstTypeScan, error) {
+	return b.numericAstTypesInternalWithHint(astExpr, depth, b.numericAstColumnResolver(), hint)
+}
+
+func (b *baseBinder) numericAstColumnResolver() numericAstColumnResolver {
+	return func(name *tree.UnresolvedName) (numericAstTypeScan, bool) {
+		typ, ok := b.numericColumnType(name)
+		return numericAstTypedOperand(typ), ok
+	}
+}
+
+type numericAstColumnResolver func(*tree.UnresolvedName) (numericAstTypeScan, bool)
+
+func (b *baseBinder) numericAstTypesInternal(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+) (numericAstTypeScan, error) {
+	return b.numericAstTypesInternalWithHint(astExpr, depth, resolveColumn, nil)
+}
+
+func (b *baseBinder) numericAstTypesInternalWithHint(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
+) (numericAstTypeScan, error) {
+	switch expr := astExpr.(type) {
+	case *tree.ParamExpr:
+		return numericAstTypeScan{hasParam: true}, nil
+	case *tree.Subquery:
+		if expr.Exists {
+			return numericAstTypeScan{}, nil
+		}
+		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
+		// Keep scalar subqueries as deferred parameter-bearing operands even
+		// when their projection type cannot be determined statically. This
+		// preserves assignment-target propagation for expressions whose
+		// parameters are hidden behind unsupported projection shapes.
+		scan.hasParam = true
+		return scan, err
+	case *tree.ParenExpr:
+		return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
+	case *tree.BinaryExpr:
+		if !isNumericBinaryOp(expr.Op) {
+			return numericAstTypeScan{}, nil
+		}
+		left, err := b.numericAstTypesInternalWithHint(expr.Left, depth, resolveColumn, hint)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		right, err := b.numericAstTypesInternalWithHint(expr.Right, depth, resolveColumn, hint)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		return left.merge(right), nil
+	case *tree.UnaryExpr:
+		if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
+			return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
+		}
+		return numericAstTypeScan{}, nil
+	case *tree.CastExpr:
+		typ, err := getTypeFromAst(b.GetContext(), expr.Type)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		return numericAstTypedOperand(typ), nil
+	case *tree.NumVal:
+		bound, err := b.bindNumVal(expr, Type{})
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		if types.T(bound.Typ.Id).IsDecimal() {
+			return numericAstTypeScan{weakDecimals: []Type{bound.Typ}}, nil
+		}
+		return numericAstTypedOperand(bound.Typ), nil
+	case *tree.FuncExpr:
+		name := numericAstFunctionName(expr)
+		indexes, ok := numericFunctionResultArgs(name, len(expr.Exprs))
+		if ok {
+			var scan numericAstTypeScan
+			for _, idx := range indexes {
+				value, err := b.numericAstTypesInternalWithHint(expr.Exprs[idx], depth, resolveColumn, hint)
+				if err != nil {
+					return numericAstTypeScan{}, err
+				}
+				scan = scan.merge(value)
+			}
+			return scan, nil
+		}
+		typ, known, err := b.numericAstStaticType(expr, depth, resolveColumn)
+		if err != nil || !known {
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			resolved, ok := b.resolveNumericFunctionContext(expr, depth, resolveColumn, hint)
+			if ok {
+				var scan numericAstTypeScan
+				if numericFunctionReturnIsStrong(resolved, hint) {
+					scan = numericAstTypedOperand(resolved.returnType)
+				}
+				for _, arg := range expr.Exprs {
+					argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
+					if scanErr != nil {
+						return numericAstTypeScan{}, scanErr
+					}
+					scan.hasParam = scan.hasParam || argScan.hasParam
+				}
+				return scan, nil
+			}
+			var scan numericAstTypeScan
+			for _, arg := range expr.Exprs {
+				argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
+				if scanErr != nil {
+					return numericAstTypeScan{}, scanErr
+				}
+				scan.hasParam = scan.hasParam || argScan.hasParam
+			}
+			return scan, nil
+		}
+		if !makeTypeByPlan2Type(typ).IsNumeric() {
+			return numericAstTypeScan{}, nil
+		}
+		return numericAstTypedOperand(typ), nil
+	case *tree.CaseExpr:
+		var scan numericAstTypeScan
+		for _, when := range expr.Whens {
+			if when == nil || when.Val == nil {
+				continue
+			}
+			value, err := b.numericAstTypesInternalWithHint(when.Val, depth, resolveColumn, hint)
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			scan = scan.merge(value)
+		}
+		if expr.Else != nil {
+			value, err := b.numericAstTypesInternalWithHint(expr.Else, depth, resolveColumn, hint)
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			scan = scan.merge(value)
+		}
+		return scan, nil
+	case *tree.UnresolvedName:
+		if resolveColumn != nil {
+			if scan, ok := resolveColumn(expr); ok {
+				return scan, nil
+			}
+		}
+		return numericAstTypeScan{hasUnknown: true}, nil
+	default:
+		return numericAstTypeScan{}, nil
+	}
+}
+
+func numericFunctionReturnIsStrong(resolved numericFunctionContext, hint *Type) bool {
+	for _, dynamic := range resolved.dynamic {
+		if !dynamic {
+			return true
+		}
+	}
+	if hint == nil {
+		return false
+	}
+	returnOid := types.T(resolved.returnType.Id)
+	hintOid := types.T(hint.Id)
+	return (returnOid == types.T_float32 || returnOid == types.T_float64) &&
+		hintOid != types.T_float32 && hintOid != types.T_float64
+}
+
+func (b *baseBinder) numericAstStaticType(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+) (Type, bool, error) {
+	switch expr := astExpr.(type) {
+	case *tree.ParenExpr:
+		return b.numericAstStaticType(expr.Expr, depth, resolveColumn)
+	case *tree.CastExpr:
+		typ, err := getTypeFromAst(b.GetContext(), expr.Type)
+		return typ, err == nil, err
+	case *tree.NumVal:
+		bound, err := b.bindNumVal(expr, Type{})
+		if err != nil {
+			return Type{}, false, err
+		}
+		return bound.Typ, true, nil
+	case *tree.BinaryExpr:
+		if !isNumericBinaryOp(expr.Op) {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
+		if err != nil || scan.incompatible || scan.hasUnknown ||
+			(scan.hasParam && len(scan.strong) == 0) {
+			return Type{}, false, err
+		}
+		typ, ok := numericTypeFromAstScan(scan, nil)
+		return typ, ok, nil
+	case *tree.UnaryExpr:
+		if expr.Op != tree.UNARY_PLUS && expr.Op != tree.UNARY_MINUS {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
+		if err != nil || scan.incompatible || scan.hasUnknown ||
+			(scan.hasParam && len(scan.strong) == 0) {
+			return Type{}, false, err
+		}
+		typ, ok := numericTypeFromAstScan(scan, nil)
+		return typ, ok, nil
+	case *tree.UnresolvedName:
+		if resolveColumn == nil {
+			return Type{}, false, nil
+		}
+		scan, ok := resolveColumn(expr)
+		if !ok || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+			return Type{}, false, nil
+		}
+		return scan.strong[0], true, nil
+	case *tree.Subquery:
+		if expr.Exists {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
+		if err != nil || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+			return Type{}, false, err
+		}
+		return scan.strong[0], true, nil
+	case *tree.FuncExpr:
+		name := numericAstFunctionName(expr)
+		if name == "" {
+			return Type{}, false, nil
+		}
+		argTypes := make([]types.Type, len(expr.Exprs))
+		for i, arg := range expr.Exprs {
+			typ, known, err := b.numericAstStaticType(arg, depth, resolveColumn)
+			if err != nil || !known {
+				return Type{}, false, err
+			}
+			argTypes[i] = makeTypeByPlan2Type(typ)
+		}
+		resolved, err := function.GetFunctionByName(b.GetContext(), name, argTypes)
+		if err != nil {
+			return Type{}, false, nil
+		}
+		ret := resolved.GetReturnType()
+		return makePlan2Type(&ret), true, nil
+	default:
+		return Type{}, false, nil
+	}
+}
+
+func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
+	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
+	for i := range scan.strong {
+		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
+	}
+	var outerType *types.Type
+	if outer != nil {
+		typ := makeTypeByPlan2Type(*outer)
+		outerType = &typ
+	}
+	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
+		for i := range scan.weakDecimals {
+			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.weakDecimals[i]))
+		}
+	}
+	resolved, ok := function.InferNumericParameterType(typesKnown, outerType)
+	if !ok {
+		return Type{}, false
+	}
+	return makePlan2Type(&resolved), true
+}
+
+func (b *baseBinder) numericScalarSubqueryAstTypes(
+	subquery *tree.Subquery,
+	depth int32,
+) (numericAstTypeScan, error) {
+	var owner *tree.Select
+	switch selectStmt := subquery.Select.(type) {
+	case *tree.Select:
+		owner = selectStmt
+	case *tree.ParenSelect:
+		owner = selectStmt.Select
+	default:
+		return numericAstTypeScan{}, nil
+	}
+	return b.numericScalarSelectAstTypes(owner, owner.Select, depth, make(map[*tree.Select]bool), nil)
+}
+
+func (b *baseBinder) numericScalarSelectAstTypes(
+	owner *tree.Select,
+	stmt tree.SelectStatement,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) (numericAstTypeScan, error) {
+	_, scans, ok, err := b.numericScalarStatementOutputs(owner, stmt, depth, visiting, ctes)
+	if err != nil {
+		return numericAstTypeScan{}, err
+	}
+	if !ok || len(scans) != 1 {
+		return numericAstTypeScan{}, nil
+	}
+	return scans[0], nil
+}
+
+type numericScalarSource struct {
+	alias string
+	name  string
+	cols  []string
+	types []numericAstTypeScan
+	known bool
+}
+
+func numericScalarVisibleCtes(owner *tree.Select, inherited map[string]*tree.CTE) map[string]*tree.CTE {
+	if owner == nil || owner.With == nil || len(owner.With.CTEs) == 0 {
+		return inherited
+	}
+	visible := make(map[string]*tree.CTE, len(inherited)+len(owner.With.CTEs))
+	for name, cte := range inherited {
+		visible[name] = cte
+	}
+	for _, cte := range owner.With.CTEs {
+		visible[strings.ToLower(string(cte.Name.Alias))] = cte
+	}
+	return visible
+}
+
+func numericScalarCteSource(cte *tree.CTE, existingCols tree.IdentifierList) (*tree.Select, tree.IdentifierList) {
+	if len(existingCols) == 0 {
+		existingCols = cte.Name.Cols
+	}
+	switch source := cte.Stmt.(type) {
+	case *tree.Select:
+		return source, existingCols
+	case *tree.ParenSelect:
+		return source.Select, existingCols
+	default:
+		return nil, existingCols
+	}
+}
+
+func (b *baseBinder) numericScalarSources(
+	owner *tree.Select,
+	clause *tree.SelectClause,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) ([]numericScalarSource, bool) {
+	if clause.From == nil {
+		return nil, true
+	}
+	if len(clause.From.Tables) != 1 {
+		return nil, false
+	}
+	infos := collectNumericProjectionSources(clause.From.Tables[0], "", nil)
+	sources := make([]numericScalarSource, len(infos))
+	ctes = numericScalarVisibleCtes(owner, ctes)
+	for i := range infos {
+		sources[i].alias = strings.ToLower(infos[i].alias)
+		sources[i].name = strings.ToLower(infos[i].sourceName)
+		if infos[i].source == nil && infos[i].sourceSchema == "" {
+			if cte := ctes[strings.ToLower(infos[i].sourceName)]; cte != nil {
+				infos[i].source, infos[i].aliasCols = numericScalarCteSource(cte, infos[i].aliasCols)
+			} else {
+				infos[i].source, infos[i].aliasCols = numericProjectionCteSource(
+					owner, b.ctx, infos[i].sourceName, infos[i].aliasCols,
+				)
+			}
+		}
+		if infos[i].source != nil {
+			cols, scans, ok, err := b.numericScalarSelectOutputs(infos[i].source, depth, visiting, ctes)
+			if err != nil {
+				return nil, false
+			}
+			if !ok {
+				continue
+			}
+			sources[i].cols = cols
+			sources[i].types = scans
+			sources[i].known = true
+		} else if infos[i].sourceName != "" && b.builder != nil {
+			cols := numericPhysicalTableVisibleCols(b.builder, infos[i])
+			if cols == nil {
+				continue
+			}
+			for _, col := range cols {
+				sources[i].cols = append(sources[i].cols, strings.ToLower(col.Name))
+				sources[i].types = append(sources[i].types, numericAstTypedOperand(col.Typ))
+			}
+			sources[i].known = true
+		}
+		if !sources[i].known || len(infos[i].aliasCols) == 0 {
+			continue
+		}
+		if len(infos[i].aliasCols) != len(sources[i].cols) {
+			sources[i].known = false
+			continue
+		}
+		for pos := range infos[i].aliasCols {
+			sources[i].cols[pos] = strings.ToLower(string(infos[i].aliasCols[pos]))
+		}
+	}
+	return sources, true
+}
+
+func (b *baseBinder) numericScalarSelectOutputs(
+	owner *tree.Select,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) ([]string, []numericAstTypeScan, bool, error) {
+	if visiting[owner] {
+		return nil, nil, false, nil
+	}
+	visiting[owner] = true
+	defer delete(visiting, owner)
+	return b.numericScalarStatementOutputs(owner, owner.Select, depth, visiting, ctes)
+}
+
+func (b *baseBinder) numericScalarStatementOutputs(
+	owner *tree.Select,
+	stmt tree.SelectStatement,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) ([]string, []numericAstTypeScan, bool, error) {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		sources, sourcesKnown := b.numericScalarSources(owner, selectStmt, depth, visiting, ctes)
+		if !sourcesKnown {
+			sources = nil
+		}
+		cols := make([]string, 0, len(selectStmt.Exprs))
+		scans := make([]numericAstTypeScan, 0, len(selectStmt.Exprs))
+		for _, selectExpr := range selectStmt.Exprs {
+			switch expr := selectExpr.Expr.(type) {
+			case tree.UnqualifiedStar:
+				if !sourcesKnown {
+					return nil, nil, false, nil
+				}
+				starCols, starScans, ok := numericScalarUnqualifiedStarOutputs(selectStmt, sources)
+				if !ok {
+					return nil, nil, false, nil
+				}
+				cols = append(cols, starCols...)
+				scans = append(scans, starScans...)
+				continue
+			case *tree.UnresolvedName:
+				if expr.Star {
+					if !sourcesKnown {
+						return nil, nil, false, nil
+					}
+					starCols, starScans, ok := numericScalarQualifiedStarOutputs(sources, expr.ColName())
+					if !ok {
+						return nil, nil, false, nil
+					}
+					cols = append(cols, starCols...)
+					scans = append(scans, starScans...)
+					continue
+				}
+			}
+			col := ""
+			if selectExpr.As != nil && !selectExpr.As.Empty() {
+				col = strings.ToLower(selectExpr.As.Origin())
+			} else if name, ok := selectExpr.Expr.(*tree.UnresolvedName); ok {
+				col = strings.ToLower(name.ColName())
+			}
+			scan, err := b.numericAstTypesInternal(
+				selectExpr.Expr,
+				depth,
+				func(name *tree.UnresolvedName) (numericAstTypeScan, bool) {
+					return resolveNumericScalarColumn(sources, name)
+				},
+			)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			cols = append(cols, col)
+			scans = append(scans, scan)
+		}
+		return cols, scans, true, nil
+	case *tree.ValuesClause:
+		if len(selectStmt.Rows) == 0 {
+			return nil, nil, false, nil
+		}
+		width := len(selectStmt.Rows[0])
+		cols := make([]string, width)
+		scans := make([]numericAstTypeScan, width)
+		for i := range cols {
+			cols[i] = fmt.Sprintf("column_%d", i)
+		}
+		for _, row := range selectStmt.Rows {
+			if len(row) != width {
+				return nil, nil, false, nil
+			}
+			for i, cell := range row {
+				scan, err := b.numericAstTypesInternal(cell, depth, nil)
+				if err != nil {
+					return nil, nil, false, err
+				}
+				scans[i] = scans[i].merge(scan)
+			}
+		}
+		return cols, scans, true, nil
+	case *tree.UnionClause:
+		leftCols, left, leftOK, err := b.numericScalarStatementOutputs(owner, selectStmt.Left, depth, visiting, ctes)
+		if err != nil || !leftOK {
+			return nil, nil, false, err
+		}
+		_, right, rightOK, err := b.numericScalarStatementOutputs(owner, selectStmt.Right, depth, visiting, ctes)
+		if err != nil || !rightOK || len(left) != len(right) {
+			return nil, nil, false, err
+		}
+		for i := range left {
+			left[i] = left[i].merge(right[i])
+		}
+		return leftCols, left, true, nil
+	case *tree.ParenSelect:
+		return b.numericScalarStatementOutputs(selectStmt.Select, selectStmt.Select.Select, depth, visiting, ctes)
+	default:
+		return nil, nil, false, nil
+	}
+}
+
+func numericScalarProjectionSources(sources []numericScalarSource) []numericProjectionSourceInfo {
+	projectionSources := make([]numericProjectionSourceInfo, len(sources))
+	for i := range sources {
+		projectionSources[i] = numericProjectionSourceInfo{
+			sourceName:  sources[i].name,
+			alias:       sources[i].alias,
+			outputNames: sources[i].cols,
+			outputKnown: sources[i].known,
+		}
+	}
+	return projectionSources
+}
+
+func numericScalarUnqualifiedStarOutputs(
+	clause *tree.SelectClause,
+	sources []numericScalarSource,
+) ([]string, []numericAstTypeScan, bool) {
+	if clause.From == nil || len(clause.From.Tables) != 1 {
+		return nil, nil, false
+	}
+	projectionSources := numericScalarProjectionSources(sources)
+	cursor := 0
+	outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], projectionSources, &cursor)
+	if !ok || cursor != len(sources) {
+		return nil, nil, false
+	}
+	return numericScalarScansFromStarOutputs(outputs, sources)
+}
+
+func numericScalarQualifiedStarOutputs(
+	sources []numericScalarSource,
+	qualifier string,
+) ([]string, []numericAstTypeScan, bool) {
+	source := uniqueNumericStarSource(numericScalarProjectionSources(sources), qualifier)
+	if source < 0 || source >= len(sources) || len(sources[source].cols) != len(sources[source].types) {
+		return nil, nil, false
+	}
+	return append([]string(nil), sources[source].cols...),
+		append([]numericAstTypeScan(nil), sources[source].types...), true
+}
+
+func numericScalarScansFromStarOutputs(
+	outputs []numericProjectionStarOutput,
+	sources []numericScalarSource,
+) ([]string, []numericAstTypeScan, bool) {
+	cols := make([]string, len(outputs))
+	scans := make([]numericAstTypeScan, len(outputs))
+	for i, output := range outputs {
+		if len(output.refs) == 0 {
+			return nil, nil, false
+		}
+		cols[i] = output.name
+		for _, ref := range output.refs {
+			if ref.source < 0 || ref.source >= len(sources) ||
+				ref.pos < 0 || ref.pos >= len(sources[ref.source].types) {
+				return nil, nil, false
+			}
+			scans[i] = scans[i].merge(sources[ref.source].types[ref.pos])
+		}
+	}
+	return cols, scans, true
+}
+
+func resolveNumericScalarColumn(
+	sources []numericScalarSource,
+	name *tree.UnresolvedName,
+) (numericAstTypeScan, bool) {
+	column := strings.ToLower(name.ColName())
+	table := strings.ToLower(name.TblName())
+	found := false
+	var result numericAstTypeScan
+	for _, source := range sources {
+		if table != "" && table != source.alias && table != source.name {
+			continue
+		}
+		if !source.known {
+			return numericAstTypeScan{}, false
+		}
+		for pos, candidate := range source.cols {
+			if candidate != column {
+				continue
+			}
+			if found || pos >= len(source.types) {
+				return numericAstTypeScan{}, false
+			}
+			result = source.types[pos]
+			found = true
+		}
+	}
+	return result, found
+}
+
+func numericAstFunctionName(astExpr *tree.FuncExpr) string {
+	funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName)
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(funcRef.ColName())
+}
+
+type numericFunctionContext struct {
+	returnType Type
+	argTypes   []Type
+	dynamic    []bool
+}
+
+func (b *baseBinder) resolveNumericFunctionContext(
+	expr *tree.FuncExpr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
+) (numericFunctionContext, bool) {
+	return b.resolveNumericFunctionArgs(
+		numericAstFunctionName(expr), expr.Exprs, depth, resolveColumn, hint,
+	)
+}
+
+func (b *baseBinder) resolveNumericFunctionArgs(
+	name string,
+	args []tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
+) (numericFunctionContext, bool) {
+	name = strings.ToLower(name)
+	if !supportsGenericNumericFunctionContext(name) || hint == nil || function.GetFunctionIsAggregateByName(name) ||
+		function.GetFunctionIsWinFunByName(name) {
+		return numericFunctionContext{}, false
+	}
+
+	argTypes := make([]types.Type, len(args))
+	dynamic := make([]bool, len(args))
+	for i, arg := range args {
+		typ, known, err := b.numericAstStaticType(arg, depth, resolveColumn)
+		if err != nil {
+			return numericFunctionContext{}, false
+		}
+		if known {
+			argTypes[i] = makeTypeByPlan2Type(typ)
+			continue
+		}
+		argTypes[i] = makeTypeByPlan2Type(*hint)
+		dynamic[i] = true
+	}
+
+	resolved, err := function.GetFunctionByName(b.GetContext(), name, argTypes)
+	if err != nil || !resolved.GetReturnType().IsNumeric() {
+		return numericFunctionContext{}, false
+	}
+	if targets, shouldCast := resolved.ShouldDoImplicitTypeCast(); shouldCast {
+		if len(targets) != len(argTypes) {
+			return numericFunctionContext{}, false
+		}
+		argTypes = targets
+	}
+
+	returnType := resolved.GetReturnType()
+	context := numericFunctionContext{
+		returnType: makePlan2Type(&returnType),
+		argTypes:   make([]Type, len(argTypes)),
+		dynamic:    dynamic,
+	}
+	for i := range argTypes {
+		context.argTypes[i] = makePlan2Type(&argTypes[i])
+	}
+	return context, true
+}
+
+func supportsGenericNumericFunctionContext(name string) bool {
+	switch name {
+	// These functions' value arguments are in the same numeric domain as their
+	// result. A numeric return type alone is insufficient: FIELD, LENGTH and
+	// similar functions return numbers while their arguments belong to another
+	// domain.
+	case "abs", "ceil", "ceiling", "floor", "round", "truncate",
+		"sqrt", "power", "pow", "exp", "ln", "log", "log2", "log10":
+		return true
+	default:
+		return false
+	}
+}
+
+func isNumericContextFunction(name string) bool {
+	switch name {
+	case "+", "-", "*", "/", "%", "div", "^", "unary_plus", "unary_minus",
+		"mod", "if", "coalesce", "ifnull", "nullif":
+		return true
+	default:
+		return false
+	}
+}
+
+func numericFunctionResultArgs(name string, argCount int) ([]int, bool) {
+	switch name {
+	case "mod":
+		if argCount != 2 {
+			return nil, false
+		}
+		return []int{0, 1}, true
+	case "if":
+		if argCount != 3 {
+			return nil, false
+		}
+		return []int{1, 2}, true
+	case "coalesce", "ifnull":
+		if argCount == 0 {
+			return nil, false
+		}
+		indexes := make([]int, argCount)
+		for i := range indexes {
+			indexes[i] = i
+		}
+		return indexes, true
+	case "nullif":
+		if argCount != 2 {
+			return nil, false
+		}
+		return []int{0}, true
+	default:
+		return nil, false
+	}
+}
+
+func numericFunctionArgKeepsContext(name string, idx, argCount int) bool {
+	if name == "case" {
+		return idx%2 == 1 || idx == argCount-1
+	}
+	indexes, ok := numericFunctionResultArgs(name, argCount)
+	if !ok {
+		return false
+	}
+	for _, resultIdx := range indexes {
+		if idx == resultIdx {
+			return true
+		}
+	}
+	return false
+}
+
+func numericFunctionHasSelectiveContext(name string) bool {
+	switch name {
+	case "case", "if", "ifnull", "nullif":
+		return true
+	default:
+		return false
+	}
+}
+
+func (b *baseBinder) numericColumnType(astExpr *tree.UnresolvedName) (Type, bool) {
+	if b.ctx == nil {
+		return Type{}, false
+	}
+	ctx := b.ctx
+	for ctx != nil {
+		if typ, found, stop := b.numericColumnTypeInContext(ctx, astExpr); found || stop {
+			return typ, found
+		}
+		ctx = ctx.parent
+		for ctx != nil && ctx.binder == nil {
+			ctx = ctx.parent
+		}
+	}
+	return Type{}, false
+}
+
+func (b *baseBinder) numericColumnTypeInContext(
+	ctx *BindContext,
+	astExpr *tree.UnresolvedName,
+) (typ Type, found bool, stop bool) {
+	col := astExpr.ColName()
+	table := astExpr.TblName()
+	if table == "" {
+		if binding, ok := ctx.bindingByCol[col]; ok {
+			if binding == nil {
+				return Type{}, false, true
+			}
+			typ, found = bindingColumnType(binding, col)
+			return typ, found, true
+		}
+		if alias, ok := ctx.aliasMap[col]; ok && int(alias.idx) < len(ctx.projects) {
+			return ctx.projects[alias.idx].Typ, true, true
+		}
+		return Type{}, false, false
+	}
+
+	binding, ok := ctx.bindingByTable[table]
+	if !ok && ctx.remapOption != nil {
+		db := astExpr.DbName()
+		if db == "" && b.builder != nil {
+			db = b.builder.compCtx.DefaultDatabase()
+		}
+		binding, ok = ctx.bindingByTable[db+"."+table]
+	}
+	if !ok {
+		return Type{}, false, false
+	}
+	typ, found = bindingColumnType(binding, col)
+	return typ, found, false
+}
+
+func bindingColumnType(binding *Binding, col string) (Type, bool) {
+	if binding == nil {
+		return Type{}, false
+	}
+	colPos, ok := binding.colIdByName[col]
+	if !ok || colPos < 0 || int(colPos) >= len(binding.types) || binding.types[colPos] == nil {
+		return Type{}, false
+	}
+	return *DeepCopyType(binding.types[colPos]), true
 }
 
 func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -905,6 +2044,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 	case tree.NOT_LIKE:
 		newExpr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
+		newExpr.Escape = astExpr.Escape
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.ILIKE:
@@ -912,6 +2052,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 	case tree.NOT_ILIKE:
 		newExpr := tree.NewComparisonExpr(tree.ILIKE, astExpr.Left, astExpr.Right)
+		newExpr.Escape = astExpr.Escape
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
@@ -1064,11 +2205,15 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 	}
 
-	return b.bindFuncExprImplByAstExpr(op, []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	args := []tree.Expr{astExpr.Left, astExpr.Right}
+	if (op == "like" || op == "ilike") && astExpr.Escape != nil {
+		args = append(args, astExpr.Escape)
+	}
+	return b.bindFuncExprImplByAstExpr(op, args, depth)
 }
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
-	var newExpr *plan.Expr
+	candidates := make([]*plan.Expr, 0, len(rightTuple.Exprs))
 
 	for _, rightVal := range rightTuple.Exprs {
 		rightTupleVal, ok := unwrapParenExpr(rightVal).(*tree.Tuple)
@@ -1079,31 +2224,25 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 			return nil, moerr.NewInternalError(b.GetContext(), "tuple length mismatch")
 		}
 
-		var andExpr *plan.Expr
+		equalities := make([]*plan.Expr, 0, len(leftTuple.Exprs))
 		for i := 0; i < len(leftTuple.Exprs); i++ {
 			eqExpr, err := b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftTuple.Exprs[i], rightTupleVal.Exprs[i]}, depth)
 			if err != nil {
 				return nil, err
 			}
-			if andExpr == nil {
-				andExpr = eqExpr
-			} else {
-				andExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{andExpr, eqExpr})
-				if err != nil {
-					return nil, err
-				}
-			}
+			equalities = append(equalities, eqExpr)
 		}
 
-		if newExpr == nil {
-			newExpr = andExpr
-		} else {
-			var err error
-			newExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{newExpr, andExpr})
-			if err != nil {
-				return nil, err
-			}
+		candidate, err := combinePlanExprsBalanced(b.GetContext(), "and", equalities)
+		if err != nil {
+			return nil, err
 		}
+		candidates = append(candidates, candidate)
+	}
+
+	newExpr, err := combinePlanExprsBalanced(b.GetContext(), "or", candidates)
+	if err != nil {
+		return nil, err
 	}
 
 	if isNot {
@@ -1112,12 +2251,44 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 	return newExpr, nil
 }
 
+// combinePlanExprsBalanced preserves the input order while building a
+// logarithmic-depth boolean tree. Large tuple or mixed-type IN lists used to
+// create a left-deep tree, amplifying binder/optimizer recursion and making
+// otherwise valid statements vulnerable to stack growth.
+func combinePlanExprsBalanced(ctx context.Context, op string, exprs []*plan.Expr) (*plan.Expr, error) {
+	if len(exprs) == 0 {
+		return nil, nil
+	}
+
+	level := exprs
+	for len(level) > 1 {
+		next := make([]*plan.Expr, 0, (len(level)+1)/2)
+		for i := 0; i < len(level); i += 2 {
+			if i+1 == len(level) {
+				next = append(next, level[i])
+				continue
+			}
+
+			combined, err := BindFuncExprImplByPlanExpr(ctx, op, []*plan.Expr{level[i], level[i+1]})
+			if err != nil {
+				return nil, err
+			}
+			next = append(next, combined)
+		}
+		level = next
+	}
+	return level[0], nil
+}
+
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bool) (*Expr, error) {
 	funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName)
 	if !ok {
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
 
@@ -1141,7 +2312,18 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	args := make([]*Expr, 2+len(astExpr.KeyParts))
 
 	mode := int64(astExpr.Mode)
-	args[0] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
+	pattern, err := b.impl.BindExpr(astExpr.Pattern, depth, false)
+	if err != nil {
+		return nil, err
+	}
+	if pattern.Typ.Id != int32(types.T_varchar) {
+		varcharTyp := types.T_varchar.ToType()
+		pattern, err = makePlan2CastExpr(b.GetContext(), pattern, makePlan2Type(&varcharTyp))
+		if err != nil {
+			return nil, err
+		}
+	}
+	args[0] = pattern
 	args[1] = makePlan2Int64ConstExprWithType(mode)
 	for i, k := range astExpr.KeyParts {
 		c, err := b.baseBindColRef(k.ColName, depth, isRoot)
@@ -1155,6 +2337,8 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	isIfNull := name == "ifnull"
+
 	// rewrite some ast Exprs before binding
 	switch name {
 	case "nullif":
@@ -1269,8 +2453,40 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args = []*Expr{serialExpr, idxExpr, typeExpr}
 	} else {
 		args = make([]*Expr, len(astArgs))
+		var functionContext numericFunctionContext
+		hasFunctionContext := false
+		if b.numericFunctionTarget {
+			functionContext, hasFunctionContext = b.resolveNumericFunctionArgs(
+				name, astArgs, depth, b.numericAstColumnResolver(), b.numericParamType,
+			)
+		}
 		for idx, arg := range astArgs {
+			paramType := b.numericParamType
+			subqueryTarget := b.numericSubqueryTarget
+			if paramType != nil && numericFunctionHasSelectiveContext(name) &&
+				!numericFunctionArgKeepsContext(name, idx, len(astArgs)) {
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+			} else if paramType != nil && hasFunctionContext {
+				if functionContext.dynamic[idx] &&
+					makeTypeByPlan2Type(functionContext.argTypes[idx]).IsNumeric() {
+					argTarget := functionContext.argTypes[idx]
+					b.numericParamType = &argTarget
+					b.numericSubqueryTarget = &argTarget
+				} else {
+					b.numericParamType = nil
+					b.numericSubqueryTarget = nil
+				}
+			} else if paramType != nil && !isNumericContextFunction(name) &&
+				!numericFunctionHasSelectiveContext(name) {
+				// A function outside the explicit domain-preserving metadata must
+				// resolve its arguments independently of the assignment target.
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+			}
 			expr, err := b.impl.BindExpr(arg, depth, false)
+			b.numericParamType = paramType
+			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
 				return nil, err
 			}
@@ -1278,10 +2494,48 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	if b.numericParamType != nil {
+		var err error
+		args, err = b.resolvePreparedNumericArgs(name, args)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	//promote interval expr rewrite here
+	if name == "interval" {
+		if len(astArgs) == 2 {
+			//interval expr like 'interval 5 day'
+			if _, ok := astArgs[1].(*tree.TimeUnitExpr); ok {
+				// rewrite interval function to ListExpr, and return directly
+				return &plan.Expr{
+					Typ: plan.Type{
+						Id: int32(types.T_interval),
+					},
+					Expr: &plan.Expr_List{
+						List: &plan.ExprList{
+							List: args,
+						},
+					},
+				}, nil
+			}
+		}
+	}
+	if name == "name_const" {
+		if !validNameConstNameAst(astArgs) || !validNameConstValueAst(astArgs) {
+			return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
+		}
+		if err := validateNameConstArgs(b.GetContext(), args); err != nil {
+			return nil, err
+		}
+	}
 
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
+			if isIfNull {
+				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+			}
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -1292,6 +2546,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// first look for builtin func
 		builtinExpr, err := BindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		if err == nil {
+			if isIfNull {
+				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+			}
 			return builtinExpr, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -1309,6 +2566,35 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	return bindFuncExprImplUdf(b, name, udf, astArgs, depth)
 }
 
+func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
+	if len(args) != 2 {
+		return args, nil
+	}
+
+	left, right, _, ok := function.ResolveNumericBinaryTypes(
+		name,
+		makeTypeByPlan2Expr(args[0]),
+		makeTypeByPlan2Expr(args[1]),
+		nil,
+	)
+	if !ok {
+		return args, nil
+	}
+
+	targets := []types.Type{left, right}
+	for i := range args {
+		if makeTypeByPlan2Expr(args[i]).Eq(targets[i]) {
+			continue
+		}
+		cast, err := appendCastBeforeExpr(b.GetContext(), args[i], makePlan2Type(&targets[i]))
+		if err != nil {
+			return nil, err
+		}
+		args[i] = cast
+	}
+	return args, nil
+}
+
 func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []tree.Expr, depth int32) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
@@ -1317,6 +2603,10 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 	switch udf.Language {
 	case string(tree.SQL):
 		sql := udf.Body
+		parserSQLMode := "PIPES_AS_CONCAT"
+		if udf.SQLMode != nil {
+			parserSQLMode = *udf.SQLMode
+		}
 		// replace sql with actual arg value
 		fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		for i := 0; i < len(args); i++ {
@@ -1332,19 +2622,29 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 
 		if !strings.Contains(sql, "select") {
 			sql = "select " + sql
-			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
+			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
 			if err != nil {
 				return nil, err
 			}
+			defer func() {
+				for _, stmt := range substmts {
+					stmt.Free()
+				}
+			}()
 			expr, err = b.impl.BindExpr(substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, depth, false)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
+			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
 			if err != nil {
 				return nil, err
 			}
+			defer func() {
+				for _, stmt := range substmts {
+					stmt.Free()
+				}
+			}()
 			subquery := tree.NewSubquery(substmts[0], false)
 			expr, err = b.impl.BindSubquery(subquery, false)
 			if err != nil {
@@ -1398,12 +2698,25 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
+	case "nth_value":
+		if err := validateNthValueArgs(ctx, proc, retExpr.GetF().Args); err != nil {
+			return nil, err
+		}
+
 	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
 			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
+		}
+
+	case "name_const":
+		if proc == nil {
+			return nil, moerr.NewInvalidInput(ctx, "can't use name_const without proc")
+		}
+		if err := foldNameConstArgs(ctx, proc, retExpr.GetF().Args); err != nil {
+			return nil, err
 		}
 
 	case "between":
@@ -1533,36 +2846,132 @@ between_fallback:
 	return retExpr, nil
 }
 
-func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
-	var err error
+// validateNthValueArgs enforces MySQL's bind-time contract for NTH_VALUE:
+// the offset must be a constant positive integer. Folding first keeps valid
+// constant expressions, such as 1 + 1, compatible with MySQL.
+func validateNthValueArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
+	if len(args) != 2 || proc == nil {
+		return moerr.NewWrongArguments(ctx, "nth_value")
+	}
 
-	// deal with some special function
-	switch name {
-	case "serial":
-		if len(args) == 1 {
-			if listExpr, ok := args[0].Expr.(*plan.Expr_List); ok {
-				for i, subExpr := range listExpr.List.List {
-					newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, "serial", []*Expr{subExpr})
-					if err != nil {
-						return nil, err
-					}
-					listExpr.List.List[i] = newSubExpr
-				}
-				return args[0], nil
+	offset, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	if err != nil {
+		return err
+	}
+	args[1] = offset
+
+	lit := offset.GetLit()
+	if lit == nil || lit.Isnull || !types.T(offset.Typ.Id).IsInteger() || !isPositiveIntegerLiteral(lit) {
+		return moerr.NewWrongArguments(ctx, "nth_value")
+	}
+	return nil
+}
+
+func isPositiveIntegerLiteral(lit *plan.Literal) bool {
+	switch value := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return value.I8Val > 0
+	case *plan.Literal_I16Val:
+		return value.I16Val > 0
+	case *plan.Literal_I32Val:
+		return value.I32Val > 0
+	case *plan.Literal_I64Val:
+		return value.I64Val > 0
+	case *plan.Literal_U8Val:
+		return value.U8Val > 0
+	case *plan.Literal_U16Val:
+		return value.U16Val > 0
+	case *plan.Literal_U32Val:
+		return value.U32Val > 0
+	case *plan.Literal_U64Val:
+		return value.U64Val > 0
+	default:
+		return false
+	}
+}
+
+func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) (*plan.Expr, bool, error) {
+	if name != function.SerialFunctionName && name != function.SerialFullFunctionName {
+		return nil, false, nil
+	}
+	if len(args) != 1 {
+		return nil, false, nil
+	}
+
+	listExpr, ok := args[0].Expr.(*plan.Expr_List)
+	if !ok {
+		return nil, false, nil
+	}
+	if listExpr.List == nil || len(listExpr.List.List) == 0 {
+		return args[0], true, nil
+	}
+
+	// An IN-list is a set of scalar candidates, not one row-wise vector argument.
+	// Bind serial(v0, v1, ...) as list(serial(v0), serial(v1), ...).
+	for i, subExpr := range listExpr.List.List {
+		newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{subExpr})
+		if err != nil {
+			return nil, true, err
+		}
+		listExpr.List.List[i] = newSubExpr
+		if i == 0 {
+			args[0].Typ = newSubExpr.Typ
+		}
+	}
+	return args[0], true, nil
+}
+
+func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
+	if len(args) != 2 {
+		return nil
+	}
+	percentile := args[1]
+	if percentile == nil || isNullExpr(percentile) || !rule.IsConstant(percentile, false) {
+		return moerr.NewInvalidInput(ctx,
+			"percentile argument of approx_percentile must be a non-null constant")
+	}
+	return nil
+}
+
+// bindMixedInListComparison applies MySQL's REAL comparison semantics for a
+// string left operand and a numeric IN-list value. It is deliberately limited
+// to IN/NOT IN fallback comparisons: applying it to every comparison would
+// lose precision for numeric columns compared with string constants.
+func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr) (*plan.Expr, error) {
+	leftType := makeTypeByPlan2Expr(left)
+	rightType := makeTypeByPlan2Expr(right)
+	if leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool) {
+		targetType := types.T_float64.ToType()
+		operands := []*Expr{left, right}
+		for i := range operands {
+			var err error
+			operands[i], err = appendCastBeforeExpr(ctx, operands[i], makePlan2Type(&targetType))
+			if err != nil {
+				return nil, err
 			}
 		}
-	case "interval":
-		// rewrite interval function to ListExpr, and return directly
-		return &plan.Expr{
-			Typ: plan.Type{
-				Id: int32(types.T_interval),
-			},
-			Expr: &plan.Expr_List{
-				List: &plan.ExprList{
-					List: args,
-				},
-			},
-		}, nil
+		left, right = operands[0], operands[1]
+	}
+	return BindFuncExprImplByPlanExpr(ctx, operator, []*Expr{left, right})
+}
+
+func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
+	var err error
+	if name == NameApproxPercentile {
+		if err = validateApproxPercentileArgs(ctx, args); err != nil {
+			return nil, err
+		}
+	}
+
+	// deal with some special function
+	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
+		return listExpr, err
+	}
+	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
+		return nil, err
+	}
+
+	switch name {
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
@@ -1582,6 +2991,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	case "=", "<", "<=", ">", ">=", "<>":
 		// why not append cast function?
 		if err := convertValueIntoBool(name, args, false); err != nil {
+			return nil, err
+		}
+		if err := adjustJsonOrderingDynamicParamType(ctx, name, args); err != nil {
 			return nil, err
 		}
 
@@ -1682,6 +3094,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
+		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int64) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int32) && intervalUnitIsDayOrLarger(args[0]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) && intervalUnitIsDayOrLarger(args[0]) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_varchar) {
 			name = "concat"
 		}
@@ -1711,6 +3135,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_int64) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		}
 		if err != nil {
 			return nil, err
@@ -1728,6 +3158,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	case "unary_minus":
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
+		if argLit := args[0].GetLit(); args[0].Typ.Id == int32(types.T_uint64) && argLit != nil && argLit.GetU64Val() == 1<<63 {
+			return makePlan2Int64ConstExprWithType(math.MinInt64), nil
 		}
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
@@ -1763,9 +3196,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return nil, err
 			}
 		}
-	case "like":
+	case "like", "ilike":
 		// sql 'select * from t where col like ?'  the ? Expr's type will be T_any
-		if len(args) != 2 {
+		if len(args) != 2 && len(args) != 3 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_any) {
@@ -1773,6 +3206,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
+		}
+		if len(args) == 3 && args[2].Typ.Id == int32(types.T_any) {
+			args[2].Typ.Id = int32(types.T_varchar)
 		}
 		if args[0].Typ.Id == int32(types.T_json) {
 			targetTp := types.T_varchar.ToType()
@@ -1800,11 +3236,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
 			var tp = types.T_date
+			var fsp int
 			if exprC := args[1].GetLit(); exprC != nil {
 				sval := exprC.Value.(*plan.Literal_Sval)
-				tp, _ = ExtractToDateReturnType(sval.Sval)
+				tp, fsp = ExtractToDateReturnType(sval.Sval)
 			}
-			args = append(args, makePlan2DateConstNullExpr(tp))
+			args = append(args, makePlan2DateConstNullExprWithScale(tp, int32(fsp)))
 
 		} else if args[1].Typ.Id == int32(types.T_any) {
 			args = append(args, makePlan2DateConstNullExpr(types.T_datetime))
@@ -1862,9 +3299,17 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
 			typLeft := makeTypeByPlan2Expr(args[0])
+			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
 
 			for _, rightVal := range rightList.List {
+				if _, ok := rightVal.Expr.(*plan.Expr_List); ok && !partitionIn {
+					return nil, moerr.NewOperandColumns(ctx, 1)
+				}
+				if leftIsConstNull && !partitionIn {
+					orExprList = append(orExprList, rightVal)
+					continue
+				}
 				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
 					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
 					if err != nil {
@@ -1904,40 +3349,32 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				orExprList = append(inExprList, orExprList...)
 			}
 
-			//expand the in list to col=a or col=b or ......
+			// Expand values that cannot safely share the typed IN vector. Keep
+			// the expansion balanced so mixed-type lists do not create an
+			// O(N)-deep OR/AND expression tree.
+			expanded := make([]*plan.Expr, 0, len(orExprList)+1)
+			if newExpr != nil {
+				expanded = append(expanded, newExpr)
+			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr)
 					if err != nil {
 						return nil, err
 					}
-					if newExpr == nil {
-						newExpr = tmpExpr
-					} else {
-						newExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
-						if err != nil {
-							return nil, err
-						}
-					}
+					expanded = append(expanded, tmpExpr)
 				}
+				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr)
 					if err != nil {
 						return nil, err
 					}
-					if newExpr == nil {
-						newExpr = tmpExpr
-					} else {
-						newExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
-						if err != nil {
-							return nil, err
-						}
-					}
+					expanded = append(expanded, tmpExpr)
 				}
+				return combinePlanExprsBalanced(ctx, "and", expanded)
 			}
-
-			return newExpr, nil
 		}
 	case "last_day":
 		if len(args) != 1 {
@@ -1947,6 +3384,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
+	case "pow":
+		name = "power"
 	}
 
 	// get args(exprs) & types
@@ -1983,6 +3422,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	adjustControlFlowStringMetadata(name, args, argsType, &returnType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -2076,6 +3516,39 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 	}
 
+	// Geometry constructors with an explicit constant SRID argument record the
+	// SRID in the result type's Width (geometry cells store bare WKB, so SRID
+	// lives in the type). A non-constant SRID cannot be represented this way.
+	if returnType.Oid == types.T_geometry || returnType.Oid == types.T_geometry32 {
+		switch name {
+		case "st_geomfromtext", "st_geomfromwkb", "st_geometryfromtext", "st_pointfromtext",
+			"st_linefromtext", "st_polygonfromtext", "st_mpointfromtext", "st_mlinefromtext",
+			"st_mpolyfromtext", "st_geomcollfromtext", "st_pointfromgeohash",
+			"st_geomfromgeojson":
+			if len(args) >= 2 {
+				// The SRID is carried in the result type's Width, so it must be
+				// a constant known at bind time. A non-constant SRID (column,
+				// parameter, or CAST/arithmetic expression) cannot be
+				// represented this way and is rejected rather than being
+				// silently dropped.
+				lit, ok := args[len(args)-1].Expr.(*plan.Expr_Lit)
+				if !ok || lit.Lit == nil {
+					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
+				}
+				if !lit.Lit.Isnull {
+					iv, ok := lit.Lit.GetValue().(*plan.Literal_I64Val)
+					if !ok {
+						return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
+					}
+					if err := validateGeometrySRID(iv.I64Val); err != nil {
+						return nil, err
+					}
+					returnType.Width = encodeGeometrySRIDWidth(uint32(iv.I64Val), true)
+				}
+			}
+		}
+	}
+
 	if function.GetFunctionIsAggregateByName(name) {
 		if constExpr := args[0].GetLit(); constExpr != nil && constExpr.Isnull {
 			args[0].Typ = makePlan2Type(&returnType)
@@ -2119,6 +3592,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		case *plan.Expr_Col:
 			if argsType[0].IsVarlen() && checkNoNeedCast(argsType[1], argsType[0], args[1]) {
 				argsCastType = []types.Type{argsType[0], argsType[0]}
+				if len(argsType) == 3 {
+					argsCastType = append(argsCastType, argsType[2])
+				}
 				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 				if err != nil {
 					return nil, err
@@ -2153,6 +3629,16 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				if int(argsType[i].Oid) == int(types.T_time) && int(argsCastType[i].Oid) == int(types.T_datetime) {
 					return nil, moerr.NewInvalidInput(ctx, name+" function have invalid input args type")
 				}
+			}
+		}
+
+	case "maketime":
+		// Hex and bit literals are represented as VARCHAR literals carrying
+		// IsBin. They are integral seconds, so they retain TIME(0) metadata even
+		// though the VARCHAR seconds overload normally advertises TIME(6).
+		if len(args) == 3 {
+			if literal := args[2].GetLit(); literal != nil && literal.IsBin {
+				returnType.Scale = 0
 			}
 		}
 
@@ -2191,6 +3677,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(argsCastType) > 0 {
 			argsCastType = argsCastType[:size+1]
 		}
+
+	case "lead", "lag":
+		// For lead/lag window functions, cast the default value (3rd arg)
+		// to match the value type (1st arg).
+		if len(args) >= 3 && !argsType[2].Eq(argsType[0]) {
+			argsCastType = []types.Type{argsType[0], argsType[1], argsType[0]}
+		}
 	}
 
 	if len(argsCastType) != 0 {
@@ -2199,8 +3692,28 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		for idx, castType := range argsCastType {
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
+				// MAKETIME uses the scale on its VARCHAR seconds target only to
+				// derive the TIME return scale. Recasting an already-VARCHAR
+				// argument solely for that metadata clears Literal.IsBin, changing
+				// X'..'/B'..' from a binary number into ordinary text.
+				if name == "maketime" && idx == 2 &&
+					argsType[idx].Oid == types.T_varchar && castType.Oid == types.T_varchar &&
+					argsType[idx].Width == castType.Width {
+					continue
+				}
 				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
 					continue
+				}
+				// A direct BIT-to-text cast preserves the BIT payload bytes. In the
+				// LEAST/GREATEST type lattice BIT is numeric, so stringify its
+				// unsigned value instead when the comparison target is text.
+				if (name == "least" || name == "greatest") && argsType[idx].Oid == types.T_bit &&
+					(castType.Oid == types.T_char || castType.Oid == types.T_varchar || castType.Oid == types.T_text) {
+					uint64Type := types.T_uint64.ToType()
+					args[idx], err = appendCastBeforeExpr(ctx, args[idx], makePlan2Type(&uint64Type))
+					if err != nil {
+						return nil, err
+					}
 				}
 				typ := makePlan2Type(&castType)
 				args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
@@ -2223,6 +3736,258 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func adjustControlFlowStringMetadata(name string, args []*Expr, argTypes []types.Type, returnType *types.Type) {
+	if returnType.Oid != types.T_varchar {
+		return
+	}
+
+	valueIndexes := make([]int, 0, len(args))
+	switch name {
+	case "if", "iff":
+		if len(args) == 3 {
+			valueIndexes = append(valueIndexes, 1, 2)
+		}
+	case "case":
+		for i := 1; i < len(args); i += 2 {
+			valueIndexes = append(valueIndexes, i)
+		}
+		if len(args)%2 == 1 {
+			valueIndexes = append(valueIndexes, len(args)-1)
+		}
+	case "coalesce":
+		for i := range args {
+			valueIndexes = append(valueIndexes, i)
+		}
+	default:
+		return
+	}
+
+	hasString := false
+	hasNumeric := false
+	width := int32(0)
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) {
+			return
+		}
+		typ := argTypes[idx]
+		if typ.Oid.IsMySQLString() {
+			hasString = true
+		} else if typ.Oid.IsInteger() || typ.Oid.IsFloat() || typ.Oid.IsDecimal() {
+			hasNumeric = true
+		} else {
+			continue
+		}
+		if candidate := controlFlowStringWidth(args[idx], typ); candidate > width {
+			width = candidate
+		}
+	}
+	if hasString && hasNumeric && width > 0 {
+		returnType.Width = width
+	}
+}
+
+func controlFlowStringWidth(expr *Expr, typ types.Type) int32 {
+	if typ.Oid.IsMySQLString() {
+		return typ.Width
+	}
+	if typ.Oid.IsDecimal() {
+		return decimalDisplayWidth(typ)
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		switch value := lit.Value.(type) {
+		case *plan.Literal_I8Val:
+			return signedIntegerLiteralWidth(int64(value.I8Val))
+		case *plan.Literal_I16Val:
+			return signedIntegerLiteralWidth(int64(value.I16Val))
+		case *plan.Literal_I32Val:
+			return signedIntegerLiteralWidth(int64(value.I32Val))
+		case *plan.Literal_I64Val:
+			return signedIntegerLiteralWidth(value.I64Val)
+		case *plan.Literal_U8Val:
+			return int32(len(strconv.FormatUint(uint64(value.U8Val), 10)))
+		case *plan.Literal_U16Val:
+			return int32(len(strconv.FormatUint(uint64(value.U16Val), 10)))
+		case *plan.Literal_U32Val:
+			return int32(len(strconv.FormatUint(uint64(value.U32Val), 10)))
+		case *plan.Literal_U64Val:
+			return int32(len(strconv.FormatUint(value.U64Val, 10)))
+		}
+	}
+	if typ.Oid.IsInteger() {
+		width := integerMetadataWidth(typ.Oid)
+		if typ.Oid.IsSignedInt() {
+			width++
+		}
+		return width
+	}
+	return typ.Width
+}
+
+// decimalDisplayWidth returns the maximum byte width of a DECIMAL value after
+// it is converted to a control-flow VARCHAR result. Decimal precision counts
+// only significant digits, so it excludes the optional sign, decimal point,
+// and (for DECIMAL(M, M)) the displayed leading zero.
+func decimalDisplayWidth(typ types.Type) int32 {
+	precision := typ.Width
+	if precision <= 0 {
+		return types.MaxVarcharLen
+	}
+
+	width := int64(precision) // significant digits
+	if typ.Scale > 0 {
+		width++ // decimal point
+		if typ.Scale >= precision {
+			width++ // leading zero before the decimal point
+		}
+	}
+	width++ // optional sign
+	if width > int64(types.MaxVarcharLen) {
+		return types.MaxVarcharLen
+	}
+	return int32(width)
+}
+
+func signedIntegerLiteralWidth(value int64) int32 {
+	width := int32(len(strconv.FormatInt(value, 10)))
+	if value >= 0 {
+		width++
+	}
+	return width
+}
+
+func integerMetadataWidth(oid types.T) int32 {
+	switch oid {
+	case types.T_int8, types.T_uint8:
+		return 3
+	case types.T_int16, types.T_uint16:
+		return 5
+	case types.T_int32, types.T_uint32:
+		return 10
+	case types.T_int64:
+		return 19
+	case types.T_uint64:
+		return 20
+	default:
+		return 0
+	}
+}
+
+// MySQL compares scalar TIME expressions to strings as text, but converts a
+// constant string or direct prepared parameter to TIME(scale) when the TIME
+// side is a column.
+func normalizeTimeStringComparisonArgs(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		if len(args) != 2 || !isTimeStringComparisonPair(args[0], args[1]) {
+			return nil
+		}
+		if isTimeColumnStringLiteralOrDirectParamPair(args[0], args[1]) {
+			return nil
+		}
+	case "between":
+		if len(args) != 3 || !allTimeOrCharacterString(args) {
+			return nil
+		}
+		if args[0].Typ.Id == int32(types.T_time) && args[0].GetCol() != nil &&
+			isTimeValueOrCharacterStringLiteralOrDirectParam(args[1]) &&
+			isTimeValueOrCharacterStringLiteralOrDirectParam(args[2]) {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	varchar := types.T_varchar.ToType()
+	varcharType := makePlan2Type(&varchar)
+	for i, arg := range args {
+		if arg.Typ.Id != int32(types.T_time) {
+			continue
+		}
+		castExpr, err := appendCastBeforeExpr(ctx, arg, varcharType)
+		if err != nil {
+			return err
+		}
+		args[i] = castExpr
+	}
+	return nil
+}
+
+func isTimeStringComparisonPair(left, right *Expr) bool {
+	return (left.Typ.Id == int32(types.T_time) && isCharacterStringType(right.Typ.Id)) ||
+		(right.Typ.Id == int32(types.T_time) && isCharacterStringType(left.Typ.Id))
+}
+
+func isTimeColumnStringLiteralOrDirectParamPair(left, right *Expr) bool {
+	return (left.Typ.Id == int32(types.T_time) && left.GetCol() != nil && isCharacterStringLiteralOrDirectParam(right)) ||
+		(right.Typ.Id == int32(types.T_time) && right.GetCol() != nil && isCharacterStringLiteralOrDirectParam(left))
+}
+
+func allTimeOrCharacterString(args []*Expr) bool {
+	hasTime := false
+	hasString := false
+	for _, arg := range args {
+		switch {
+		case arg.Typ.Id == int32(types.T_time):
+			hasTime = true
+		case isCharacterStringType(arg.Typ.Id):
+			hasString = true
+		default:
+			return false
+		}
+	}
+	return hasTime && hasString
+}
+
+func isCharacterStringLiteral(expr *Expr) bool {
+	return isCharacterStringType(expr.Typ.Id) && expr.GetLit() != nil
+}
+
+func isCharacterStringLiteralOrDirectParam(expr *Expr) bool {
+	return isCharacterStringLiteral(expr) ||
+		(isCharacterStringType(expr.Typ.Id) && isDirectDynamicParam(expr))
+}
+
+func isTimeValueOrCharacterStringLiteralOrDirectParam(expr *Expr) bool {
+	return expr.Typ.Id == int32(types.T_time) || isCharacterStringLiteralOrDirectParam(expr)
+}
+
+func isCharacterStringType(typeID int32) bool {
+	switch types.T(typeID) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
+}
+
+func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "<", "<=", ">", ">=":
+	default:
+		return nil
+	}
+	if len(args) != 2 {
+		return nil
+	}
+
+	if args[0].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[1]) {
+		var err error
+		args[1], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[1]})
+		return err
+	}
+	if args[1].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[0]) {
+		var err error
+		args[0], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[0]})
+		return err
+	}
+	return nil
+}
+
+func isDirectDynamicParam(expr *Expr) bool {
+	_, ok := expr.Expr.(*plan.Expr_P)
+	return ok
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
@@ -2381,8 +4146,21 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}
 		bytes, _ := hex.DecodeString(s)
 		return returnHexNumExpr(string(bytes), true)
+	case tree.P_ScoreBinaryHexnum:
+		s := astExpr.String()[2:]
+		if len(s)%2 != 0 {
+			s = string('0') + s
+		}
+		bytes, _ := hex.DecodeString(s)
+		if !typ.IsEmpty() {
+			return appendCastBeforeExpr(b.GetContext(), makePlan2VarBinaryConstExprWithType(string(bytes)), typ)
+		}
+		return makePlan2VarBinaryConstExprWithType(string(bytes)), nil
 	case tree.P_ScoreBinary:
-		return returnHexNumExpr(astExpr.String(), true)
+		if !typ.IsEmpty() {
+			return appendCastBeforeExpr(b.GetContext(), makePlan2VarBinaryConstExprWithType(astExpr.String()), typ)
+		}
+		return makePlan2VarBinaryConstExprWithType(astExpr.String()), nil
 	case tree.P_bit:
 		s := astExpr.String()[2:]
 		bytes, _ := util.DecodeBinaryString(s)
@@ -2406,12 +4184,29 @@ func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 // --- util functions ----
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 0, isBin...)
+}
+
+func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+}
+
+func appendCastBeforeExprWithOverload(
+	ctx context.Context, expr *Expr, toType Type, overloadID int32, isBin ...bool,
+) (*Expr, error) {
+	expr, rewritten, err := rewriteEnumDisplayValueToJSONCast(ctx, expr, toType)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
+		return expr, nil
+	}
 	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
 	}
-	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
+	fGet, err := function.GetFunctionByNameWithOverload(ctx, "cast", argsType, overloadID)
 	if err != nil {
 		return nil, err
 	}
@@ -2439,9 +4234,45 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 	}, nil
 }
 
+func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType Type) (*Expr, bool, error) {
+	if toType.Id != int32(types.T_json) {
+		return expr, false, nil
+	}
+	if expr.Typ.Id == int32(types.T_enum) {
+		return nil, false, moerr.NewInvalidArg(ctx, "operator cast", "[ENUM JSON]")
+	}
+	if isEnumOrSetDisplayValueExpr(expr) {
+		quoted, err := quoteEnumOrSetDisplayValueAsJSON(ctx, expr)
+		return quoted, err == nil, err
+	}
+	return expr, false, nil
+}
+
+func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil &&
+		(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun)
+}
+
+func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {
+	quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{expr})
+	if err != nil {
+		return nil, err
+	}
+	quoted.Typ.NotNullable = expr.Typ.NotNullable
+	return quoted, nil
+}
+
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return nil, moerr.NewInvalidArg(ctx, "interval expression requires a value and a unit", intervalExpr)
+	}
+	firstExpr := list.List[0]
+	secondExpr := list.List[1]
 
 	// MySQL behavior: INTERVAL NULL SECOND is valid and returns NULL at execution time
 	// Only date_add(..., null) (without INTERVAL) should return syntax error
@@ -2651,8 +4482,12 @@ func resetIntervalFunction(ctx context.Context, intervalExpr *Expr) ([]*Expr, er
 }
 
 func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr, error) {
-	firstExpr := intervalExpr.GetList().List[0]
-	secondExpr := intervalExpr.GetList().List[1]
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return nil, moerr.NewInvalidArg(ctx, "interval expression requires a value and a unit", intervalExpr)
+	}
+	firstExpr := list.List[0]
+	secondExpr := list.List[1]
 
 	// MySQL behavior: INTERVAL NULL SECOND is valid and returns NULL at execution time
 	// NULL values will be handled at execution time (null1 || null2 check)
@@ -2764,9 +4599,21 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 	}, nil
 }
 
+func intervalUnitIsDayOrLarger(intervalExpr *Expr) bool {
+	list := intervalExpr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return false
+	}
+	unitStr := list.List[1].GetLit().GetSval()
+	iTyp, err := types.IntervalTypeOf(unitStr)
+	if err != nil {
+		return false
+	}
+	return types.UnitIsDayOrLarger(iTyp)
+}
+
 func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, rightList *plan.ExprList) (*plan.Expr, error) {
-	var newExpr *plan.Expr
-	var err error
+	candidates := make([]*plan.Expr, 0, len(rightList.List))
 
 	for _, rightVal := range rightList.List {
 		if rightTuple, ok := rightVal.Expr.(*plan.Expr_List); ok {
@@ -2774,7 +4621,7 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 				return nil, moerr.NewInternalError(ctx, "tuple length mismatch")
 			}
 
-			var andExpr *plan.Expr
+			equalities := make([]*plan.Expr, 0, len(leftList.List.List))
 			for i := 0; i < len(leftList.List.List); i++ {
 				leftElem := leftList.List.List[i]
 				rightElem := rightTuple.List.List[i]
@@ -2783,34 +4630,160 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 				if err != nil {
 					return nil, err
 				}
-
-				if andExpr == nil {
-					andExpr = eqExpr
-				} else {
-					andExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{andExpr, eqExpr})
-					if err != nil {
-						return nil, err
-					}
-				}
-
+				equalities = append(equalities, eqExpr)
 			}
 
-			if newExpr == nil {
-				newExpr = andExpr
-			} else {
-				newExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{newExpr, andExpr})
-				if err != nil {
-					return nil, err
-				}
+			candidate, err := combinePlanExprsBalanced(ctx, "and", equalities)
+			if err != nil {
+				return nil, err
 			}
+			candidates = append(candidates, candidate)
 
 		} else {
 			return nil, moerr.NewInternalError(ctx, "IN list must contain tuples")
 		}
 	}
 
+	newExpr, err := combinePlanExprsBalanced(ctx, "or", candidates)
+	if err != nil {
+		return nil, err
+	}
 	if name == "not_in" {
 		return BindFuncExprImplByPlanExpr(ctx, "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
+	if err := validateNameConstArgs(ctx, args); err != nil {
+		return err
+	}
+
+	foldedArg, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	if err != nil {
+		return err
+	}
+	args[1] = foldedArg
+
+	if args[1].GetLit() == nil {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
+}
+
+func validateNameConstArgs(ctx context.Context, args []*plan.Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
+	}
+
+	nameLit := args[0].GetLit()
+	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
+}
+
+func validNameConstValueExpr(arg *plan.Expr) bool {
+	if arg == nil {
+		return false
+	}
+	if arg.GetLit() != nil {
+		return true
+	}
+	if isDecimalLiteralCast(arg) {
+		return true
+	}
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return false
+	}
+	if fn.Func.GetObjName() != "unary_minus" && fn.Func.GetObjName() != "unary_plus" {
+		return false
+	}
+	return fn.Args[0].GetLit() != nil || isDecimalLiteralCast(fn.Args[0])
+}
+
+func validNameConstNameAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	name := stripNameConstParens(args[0])
+	nameLit, ok := name.(*tree.NumVal)
+	return ok && validNameConstNameLiteral(nameLit)
+}
+
+func validNameConstValueAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	return validNameConstLiteralValueAst(args[1])
+}
+
+func validNameConstLiteralValueAst(expr tree.Expr) bool {
+	expr = stripNameConstParens(expr)
+	switch value := expr.(type) {
+	case *tree.NumVal:
+		return true
+	case *tree.UnaryExpr:
+		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
+			return false
+		}
+		_, ok := stripNameConstParens(value.Expr).(*tree.NumVal)
+		return ok
+	default:
+		return false
+	}
+}
+
+func stripNameConstParens(expr tree.Expr) tree.Expr {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	return expr
+}
+
+func isDecimalLiteralCast(arg *plan.Expr) bool {
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return false
+	}
+	if !types.T(arg.Typ.Id).IsDecimal() || fn.Args[0].GetLit() == nil || fn.Args[1].GetT() == nil {
+		return false
+	}
+	lit := fn.Args[0].GetLit()
+	if lit.Isnull || lit.GetSval() == "" {
+		return false
+	}
+	if _, _, err := types.Parse128(lit.GetSval()); err == nil {
+		return true
+	}
+	if _, _, err := types.Parse256(lit.GetSval()); err == nil {
+		return true
+	}
+	return false
+}
+
+// defaultValueBindType returns the target column type carried by a
+// DefaultBinder or ReplaceValueBinder. For other binder implementations it
+// returns an empty Type so literal binding falls back to the generic path.
+func (b *baseBinder) defaultValueBindType() plan.Type {
+	if d, ok := b.impl.(*DefaultBinder); ok {
+		return d.typ
+	}
+	if r, ok := b.impl.(*ReplaceValueBinder); ok {
+		return r.typ
+	}
+	return plan.Type{}
+}
+
+func (b *baseBinder) defaultNumericOuterType() *plan.Type {
+	typ := b.defaultValueBindType()
+	if types.T(typ.Id).ToType().IsNumeric() {
+		return &typ
+	}
+	return nil
 }

@@ -1,9 +1,11 @@
--- Test for STRING to DATE/TIME/TIMESTAMP conversion in Parquet loading
--- Supports: STRING → DATE, TIME, TIMESTAMP
+-- Test for STRING to DATE/TIME/DATETIME/TIMESTAMP conversion in Parquet loading
+-- Supports: STRING → DATE, TIME, DATETIME, TIMESTAMP
 
 drop database if exists test_string_to_datetime;
 create database test_string_to_datetime;
 use test_string_to_datetime;
+set @old_time_zone = @@time_zone;
+set time_zone = '+00:00';
 
 -- Test 1: STRING → DATE
 create table test_string_to_date(
@@ -68,7 +70,18 @@ into table test_datetime_nulls;
 
 select * from test_datetime_nulls order by id;
 
--- Test 7: Special formats (whitespace)
+-- Test 7: optional STRING → DATETIME NULL (issue #24914)
+create table test_string_to_datetime_optional(
+    id int not null,
+    datetime_val datetime
+);
+
+load data infile {'filepath'='$resources/load_data/string_to_datetime_optional.parq', 'format'='parquet'}
+into table test_string_to_datetime_optional parallel 'true';
+
+select * from test_string_to_datetime_optional order by id;
+
+-- Test 8: Special formats (whitespace)
 create table test_datetime_special(
     date_val date not null,
     time_val time not null,
@@ -80,7 +93,7 @@ into table test_datetime_special;
 
 select * from test_datetime_special order by date_val;
 
--- Test 8: Invalid format - should fail
+-- Test 9: Invalid format - should fail
 create table test_datetime_invalid(
     test_case varchar(50),
     date_val date
@@ -90,5 +103,5 @@ load data infile {'filepath'='$resources/load_data/string_to_datetime_invalid.pa
 into table test_datetime_invalid;
 
 -- Cleanup
+set time_zone = @old_time_zone;
 drop database test_string_to_datetime;
-

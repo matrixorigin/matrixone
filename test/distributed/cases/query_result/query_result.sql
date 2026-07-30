@@ -86,10 +86,8 @@ select * from result_scan(last_query_id()) as u;
 select count(*) from meta_scan(last_query_id()) as u;
 /* save_result */show tables;
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue#17598
 /* save_result */show variables like 'tx_isolation';
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue
 /* save_result */show columns from tt;
 select * from result_scan(last_query_id()) as u;
 /* save_result */show grants;
@@ -99,10 +97,8 @@ select * from result_scan(last_query_id()) as u;
 alter table tt add unique index id(a);
 /* save_result */show index from tt;
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue#17598
 /* save_result */show node list;
 select * from result_scan(last_query_id()) as u;
--- @bvt:issue
 create sequence seq_an_03  increment 10 start with 1 no cycle;
 /* save_result */show sequences;
 select * from result_scan(last_query_id()) as u;

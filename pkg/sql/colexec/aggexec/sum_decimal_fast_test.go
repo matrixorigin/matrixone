@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -488,6 +489,52 @@ func TestSumDecimal64Fast_BatchMerge(t *testing.T) {
 	exec2.Free()
 }
 
+func TestSumDecimal64Fast_BatchMergeAcrossChunks(t *testing.T) {
+	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
+	defer mp.Free(nil)
+
+	param := types.New(types.T_decimal64, 15, 2)
+	values := []types.Decimal64{10, 20, 30, 40}
+	vec := vector.NewVec(param)
+	defer vec.Free(mp)
+	for _, value := range values {
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	}
+
+	src := newSumDecimal64FastExec(mp, true, AggIdOfSum, false, param)
+	require.NoError(t, src.GroupGrow(AggBatchSize+2))
+	require.NoError(t, src.BatchFill(0, []uint64{
+		AggBatchSize - 1,
+		AggBatchSize,
+		AggBatchSize + 1,
+		AggBatchSize + 2,
+	}, []*vector.Vector{vec}))
+
+	dst := newSumDecimal64FastExec(mp, true, AggIdOfSum, false, param)
+	require.NoError(t, dst.GroupGrow(AggBatchSize+2))
+	require.NoError(t, dst.BatchMerge(src, AggBatchSize-2, []uint64{
+		1,
+		GroupNotMatched,
+		AggBatchSize + 1,
+		AggBatchSize + 2,
+	}))
+
+	vecs, err := dst.Flush()
+	require.NoError(t, err)
+	defer func() {
+		for _, result := range vecs {
+			result.Free(mp)
+		}
+	}()
+
+	require.Equal(t, uint64(10), vector.GetFixedAtNoTypeCheck[types.Decimal128](vecs[0], 0).B0_63)
+	require.Equal(t, uint64(30), vector.GetFixedAtNoTypeCheck[types.Decimal128](vecs[1], 0).B0_63)
+	require.Equal(t, uint64(40), vector.GetFixedAtNoTypeCheck[types.Decimal128](vecs[1], 1).B0_63)
+
+	dst.Free()
+	src.Free()
+}
+
 func TestSumDecimal64Fast_AVG(t *testing.T) {
 	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
 	defer mp.Free(nil)
@@ -750,4 +797,189 @@ func TestSumDecimal128Fast_BatchMerge_WithOverflowCheck(t *testing.T) {
 
 	exec1.Free()
 	exec2.Free()
+}
+
+func TestSumDecimal64Fast_BulkFillConstNull(t *testing.T) {
+	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
+	defer mp.Free(nil)
+
+	param := types.New(types.T_decimal64, 15, 2)
+	vec := vector.NewConstNull(param, 5, mp)
+	defer vec.Free(mp)
+
+	exec := newSumDecimal64FastExec(mp, true, AggIdOfSum, false, param)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+
+	vecs, err := exec.Flush()
+	require.NoError(t, err)
+	defer func() {
+		for _, v := range vecs {
+			v.Free(mp)
+		}
+	}()
+
+	require.True(t, vecs[0].IsNull(0))
+	exec.Free()
+}
+
+func TestSumDecimal64Fast_BulkFillAvgCountsOnlyNonNullRows(t *testing.T) {
+	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
+	defer mp.Free(nil)
+
+	param := types.New(types.T_decimal64, 15, 2)
+	vec := vector.NewVec(param)
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal64(100), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal64(999), true, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal64(300), false, mp))
+
+	exec := newSumDecimal64FastExec(mp, false, AggIdOfAvg, false, param)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+
+	vecs, err := exec.Flush()
+	require.NoError(t, err)
+	defer func() {
+		for _, v := range vecs {
+			v.Free(mp)
+		}
+	}()
+
+	require.False(t, vecs[0].IsNull(0))
+	got := vector.GetFixedAtNoTypeCheck[types.Decimal128](vecs[0], 0)
+	require.InDelta(t, 2.0, types.Decimal128ToFloat64(got, vecs[0].GetType().Scale), 1e-9)
+	exec.Free()
+}
+
+func TestSumDecimal128Fast_BulkFillMerge(t *testing.T) {
+	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
+	defer mp.Free(nil)
+
+	param := types.New(types.T_decimal128, 38, 2)
+	leftVec := vector.NewVec(param)
+	rightVec := vector.NewVec(param)
+	defer leftVec.Free(mp)
+	defer rightVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(leftVec, types.Decimal128{B0_63: 100}, false, mp))
+	require.NoError(t, vector.AppendFixed(leftVec, types.Decimal128{B0_63: 200}, false, mp))
+	require.NoError(t, vector.AppendFixed(rightVec, types.Decimal128{B0_63: 300}, false, mp))
+	require.NoError(t, vector.AppendFixed(rightVec, types.Decimal128{B0_63: 400}, false, mp))
+
+	left := newSumDecimal128FastExec(mp, true, AggIdOfSum, false, param)
+	right := newSumDecimal128FastExec(mp, true, AggIdOfSum, false, param)
+	require.NoError(t, left.GroupGrow(1))
+	require.NoError(t, right.GroupGrow(1))
+	require.NoError(t, left.BulkFill(0, []*vector.Vector{leftVec}))
+	require.NoError(t, right.BulkFill(0, []*vector.Vector{rightVec}))
+	require.NoError(t, left.Merge(right, 0, 0))
+
+	vecs, err := left.Flush()
+	require.NoError(t, err)
+	defer func() {
+		for _, v := range vecs {
+			v.Free(mp)
+		}
+	}()
+
+	got := vector.GetFixedAtNoTypeCheck[types.Decimal128](vecs[0], 0)
+	require.Equal(t, uint64(1000), got.B0_63)
+	require.Equal(t, uint64(0), got.B64_127)
+	left.Free()
+	right.Free()
+}
+
+func TestSumDecimal128Fast_BulkFillOverflowCheck(t *testing.T) {
+	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
+	defer mp.Free(nil)
+
+	param := types.New(types.T_decimal128, 38, 3)
+	vec := vector.NewVec(param)
+	defer vec.Free(mp)
+
+	nearMax, _, err := types.Parse128("99999999999999999999999999999999999833")
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed(vec, nearMax, false, mp))
+	require.NoError(t, vector.AppendFixed(vec, nearMax, false, mp))
+
+	exec := newSumDecimal128FastExec(mp, true, AggIdOfSum, false, param)
+	require.NoError(t, exec.GroupGrow(1))
+	err = exec.BulkFill(0, []*vector.Vector{vec})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "overflow")
+	exec.Free()
+}
+
+func TestSumDecimal128Fast_BulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
+	mp := mpool.MustNewZero()
+	param := types.New(types.T_decimal128, 38, 0)
+	one := types.Decimal128FromInt64(1)
+	two := types.Decimal128FromInt64(2)
+	seedVal, err := types.Decimal128Max.Sub128(one)
+	require.NoError(t, err)
+
+	seed := vector.NewVec(param)
+	delta := vector.NewVec(param)
+	defer seed.Free(mp)
+	defer delta.Free(mp)
+	require.NoError(t, vector.AppendFixed(seed, seedVal, false, mp))
+	require.NoError(t, vector.AppendFixed(delta, one, false, mp))
+	require.NoError(t, vector.AppendFixed(delta, one, false, mp))
+	require.NoError(t, vector.AppendFixed(delta, two.Minus(), false, mp))
+
+	testCases := []struct {
+		name  string
+		isSum bool
+		aggID int64
+	}{
+		{"sum", true, AggIdOfSum},
+		{"avg", false, AggIdOfAvg},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			batch := newSumDecimal128FastExec(mp, tc.isSum, tc.aggID, false, param)
+			bulk := newSumDecimal128FastExec(mp, tc.isSum, tc.aggID, false, param)
+			defer batch.Free()
+			defer bulk.Free()
+
+			require.NoError(t, batch.GroupGrow(1))
+			require.NoError(t, bulk.GroupGrow(1))
+			require.NoError(t, batch.BatchFill(0, []uint64{1}, []*vector.Vector{seed}))
+			require.NoError(t, bulk.BatchFill(0, []uint64{1}, []*vector.Vector{seed}))
+
+			require.NoError(t, batch.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{delta}))
+			require.NoError(t, bulk.BulkFill(0, []*vector.Vector{delta}))
+			requireSingleAggResultEqual(t, mp, batch, bulk)
+		})
+	}
+}
+
+func TestSumDecimal128Fast_BulkFillAvgCountsOnlyNonNullRows(t *testing.T) {
+	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
+	defer mp.Free(nil)
+
+	param := types.New(types.T_decimal128, 38, 2)
+	vec := vector.NewVec(param)
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: 100}, false, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: 999}, true, mp))
+	require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: 300}, false, mp))
+
+	exec := newSumDecimal128FastExec(mp, false, AggIdOfAvg, false, param)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+
+	vecs, err := exec.Flush()
+	require.NoError(t, err)
+	defer func() {
+		for _, v := range vecs {
+			v.Free(mp)
+		}
+	}()
+
+	require.False(t, vecs[0].IsNull(0))
+	got := vector.GetFixedAtNoTypeCheck[types.Decimal128](vecs[0], 0)
+	require.True(t, math.Abs(types.Decimal128ToFloat64(got, vecs[0].GetType().Scale)-2.0) < 1e-9)
+	exec.Free()
 }

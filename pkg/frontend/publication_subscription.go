@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/publication"
@@ -2151,7 +2152,7 @@ func getDbIdAndTypeForAccount(ctx context.Context, bh BackgroundExec, dbName str
 }
 
 func showTablesFromDb(ctx context.Context, bh BackgroundExec, dbName string) (tables map[string]bool, err error) {
-	sql := "show tables from " + dbName
+	sql := "show tables from " + sqlquote.Ident(dbName)
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {

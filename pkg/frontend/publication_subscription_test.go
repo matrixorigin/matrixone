@@ -115,6 +115,46 @@ func Test_doCreatePublication(t *testing.T) {
 	})
 }
 
+func Test_showTablesFromDbQuotesDatabaseName(t *testing.T) {
+	testCases := []struct {
+		name        string
+		dbName      string
+		expectedSQL string
+	}{
+		{
+			name:        "chinese database name",
+			dbName:      "目标数据",
+			expectedSQL: "show tables from `目标数据`",
+		},
+		{
+			name:        "database name with backtick",
+			dbName:      "a`b",
+			expectedSQL: "show tables from `a``b`",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ctx := context.Background()
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().ClearExecResultSet()
+			bh.EXPECT().Exec(gomock.Any(), tc.expectedSQL).Return(nil)
+
+			er := mock_frontend.NewMockExecResult(ctrl)
+			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("resume_data", nil).AnyTimes()
+			bh.EXPECT().GetExecResultSet().Return([]interface{}{er})
+
+			tables, err := showTablesFromDb(ctx, bh, tc.dbName)
+			require.NoError(t, err)
+			require.True(t, tables["resume_data"])
+		})
+	}
+}
+
 func Test_doAlterPublication(t *testing.T) {
 	mockedAccountsResults := func(ctrl *gomock.Controller) []interface{} {
 		er := mock_frontend.NewMockExecResult(ctrl)

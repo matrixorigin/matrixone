@@ -118,6 +118,115 @@ DEALLOCATE PREPARE stmt;
 
 drop table t2;
 
+-- case 4: repeated alter-copy in the same transaction must preserve cloned index data
+create table t3 (
+    k varchar(32) not null,
+    s varchar(32) not null,
+    body text not null,
+    key idx_k_s (k, s)
+);
+
+insert into t3 (k, s, body) values ('a', 'x', '{}');
+select count(*) from t3 where k = 'a' and s = 'x';
+
+begin;
+alter table t3 add column c int not null default 0;
+alter table t3 modify column body longtext not null;
+commit;
+
+select count(*) from t3 where k = 'a' and s = 'x';
+select count(*) from t3 where binary k = binary 'a' and binary s = binary 'x';
+
+begin;
+alter table t3 add column rollback_flag int not null default 9;
+alter table t3 modify column body text not null;
+rollback;
+
+select count(*) from t3 where k = 'a' and s = 'x';
+select count(*) from t3 where binary k = binary 'a' and binary s = binary 'x';
+
+insert into t3 (k, s, body, c) values ('a', 'x', '{new}', 0);
+select count(*) from t3 where k = 'a' and s = 'x';
+select count(*) from t3 where binary k = binary 'a' and binary s = binary 'x';
+
+drop table t3;
+
+-- case 5: repeated alter-copy with secondary, fulltext, and vector indexes
+create table t4 (
+    id int not null,
+    tenant varchar(16) not null,
+    doc_code varchar(32) not null,
+    shard varchar(16) not null,
+    account_id int not null,
+    category int not null,
+    tag varchar(32) not null,
+    title varchar(128) not null,
+    doc_body text not null,
+    embedding vecf32(3),
+    primary key(id),
+    unique key uk_tenant_doc (tenant, doc_code),
+    key idx_tenant_shard (tenant, shard),
+    key idx_account_category (account_id, category),
+    fulltext key ft_title_body (title, doc_body),
+    key idx_embedding using ivfflat (embedding) lists = 2 op_type 'vector_cosine_ops'
+);
+
+insert into t4 values
+    (1, 'mo', 'doc-001', 's1', 10, 1, 'database', 'matrixone storage', 'matrixone clone keeps index data', '[1,2,3]'),
+    (2, 'mo', 'doc-002', 's1', 10, 2, 'database', 'matrixone transaction', 'transaction alter table clone index', '[1,2,4]'),
+    (3, 'mo', 'doc-003', 's2', 11, 1, 'vector', 'vector search', 'ivfflat vector index clone coverage', '[1,3,5]'),
+    (4, 'mo', 'doc-004', 's2', 11, 2, 'search', 'fulltext search', 'fulltext index clone coverage', '[100,44,50]'),
+    (5, 'cn', 'doc-005', 's1', 12, 1, 'database', 'cn storage', 'secondary index should survive clone', '[120,50,70]'),
+    (6, 'cn', 'doc-006', 's1', 12, 2, 'vector', 'cn vector', 'vector reindex should survive clone', '[130,40,90]');
+
+select count(*) from t4 where tenant = 'mo' and shard = 's1';
+select count(*) from t4 where binary tenant = binary 'mo' and binary shard = binary 's1';
+select count(*) from t4 where match(title, doc_body) against('matrixone');
+select id from t4 order by cosine_distance(embedding, '[1,2,3]') asc limit 3;
+
+begin;
+alter table t4 add column status int not null default 1;
+alter table t4 modify column doc_body longtext not null;
+alter table t4 alter reindex idx_embedding ivfflat lists = 3;
+alter table t4 drop index idx_account_category;
+alter table t4 add index idx_account_status (account_id, status);
+alter table t4 add fulltext index ft_tag_body (tag, doc_body);
+commit;
+
+select count(*) from t4 where tenant = 'mo' and shard = 's1';
+select count(*) from t4 where binary tenant = binary 'mo' and binary shard = binary 's1';
+select count(*) from t4 where tenant = 'mo' and doc_code = 'doc-002';
+select count(*) from t4 where account_id = 10 and status = 1;
+select count(*) from t4 where match(title, doc_body) against('matrixone');
+select count(*) from t4 where match(tag, doc_body) against('vector');
+select id from t4 order by cosine_distance(embedding, '[1,2,3]') asc limit 3;
+
+insert into t4 (id, tenant, doc_code, shard, account_id, category, tag, title, doc_body, embedding, status)
+values (7, 'mo', 'doc-007', 's1', 10, 3, 'database', 'matrixone append', 'append after repeated alter clone', '[1,2,5]', 1);
+
+select count(*) from t4 where tenant = 'mo' and shard = 's1';
+select count(*) from t4 where binary tenant = binary 'mo' and binary shard = binary 's1';
+select count(*) from t4 where account_id = 10 and status = 1;
+select count(*) from t4 where match(title, doc_body) against('matrixone');
+select id from t4 order by cosine_distance(embedding, '[1,2,3]') asc limit 3;
+
+select mi.name,
+       mi.type,
+       group_concat(distinct mi.column_name order by mi.column_name) as columns,
+       mi.algo,
+       group_concat(distinct mi.algo_table_type order by mi.algo_table_type) as algo_tables,
+       case when mi.algo_params is null or mi.algo_params = '' then '-' else mi.algo_params end as algo_params
+from mo_catalog.mo_indexes mi
+         join mo_catalog.mo_tables mt on mi.table_id = mt.rel_id
+where mt.relname = 't4'
+  and mt.reldatabase = 'db'
+  and mi.name in ('uk_tenant_doc', 'idx_tenant_shard', 'idx_account_category', 'idx_account_status', 'ft_title_body', 'ft_tag_body', 'idx_embedding')
+  and mi.column_name not in ('question', 'keyword', '__mo_alias_id')
+group by mi.name, mi.type, mi.algo, case when mi.algo_params is null or mi.algo_params = '' then '-' else mi.algo_params end
+order by mi.name;
+
+drop table t4;
+
 SET experimental_fulltext_index = 0;
 SET experimental_ivf_index = 0;
 SET experimental_hnsw_index = 0;

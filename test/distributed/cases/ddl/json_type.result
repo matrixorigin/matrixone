@@ -103,7 +103,7 @@ invalid input: json text [1, 2,
 insert into json_table_4 values('{"key1": NULL, "": "value2"}');
 invalid input: json text {"key1": NULL, "": "value2"}
 insert into json_table_4 values('');
-invalid input: json text
+invalid input: json text is empty
 create table json_table_5(j1 json primary key,j2 json default '{"x": 17, "x": "red"}',j3 json not null );
 not supported: JSON column 'j1' cannot be in primary key
 create table json_table_5(j1 json) partition by hash(j1);
@@ -245,7 +245,7 @@ json_extract(j1, $.*)
 ["DT_GOODS", "试用规格", 214748, 0, 20768330, "BUY", 1607481718000, 0, 1607481719000, 1608825600000, "market_order", "0CD53B341284A223363FD8E4ACIHWBU98283"]
 select  json_extract(j1,'$**.itemName') from json_table_71;
 json_extract(j1, $**.itemName)
-"试用规格"
+["试用规格"]
 select  json_extract(j1,'$[*]') from json_table_71;
 json_extract(j1, $[*])
 null
@@ -260,7 +260,7 @@ json_extract(j1, $.itemName[2])
 null
 select json_extract(j1,'$**.minOfPeople') from json_table_71;
 json_extract(j1, $**.minOfPeople)
-0
+[0]
 select json_extract(' {"a": [1, "2", {"aa": "bb"}]} ','$.a[2].aa');
 json_extract( {"a": [1, "2", {"aa": "bb"}]} , $.a[2].aa)
 "bb"

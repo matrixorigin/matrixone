@@ -20,9 +20,12 @@ import (
 )
 
 func tokenize(input []byte) []Token {
-	tknz, _ := NewSimpleTokenizer(input)
+	tknz := NewSimpleTokenizer()
 	tokens := make([]Token, 0, 128)
-	for t := range tknz.Tokenize() {
+	for t, err := range tknz.Tokenize(input) {
+		if err != nil {
+			return nil
+		}
 		tokens = append(tokens, t)
 	}
 	return tokens

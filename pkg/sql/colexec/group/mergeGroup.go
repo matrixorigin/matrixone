@@ -28,6 +28,9 @@ import (
 
 func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.state = vm.Build
+	if mergeGroup.ctr.mp != nil {
+		mergeGroup.ctr.free()
+	}
 	mergeGroup.ctr.mp = mpool.MustNew("merge_group_mpool")
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
@@ -53,9 +56,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-
-	mergeGroup.OpAnalyzer.Start()
-	defer mergeGroup.OpAnalyzer.Stop()
 
 	switch mergeGroup.ctr.state {
 	case vm.Build:
@@ -86,7 +86,7 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if needSpill {
-				if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
+				if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, mergeGroup.OpAnalyzer, nil); err != nil {
 					return vm.CancelResult, err
 				} else {
 					mergeGroup.OpAnalyzer.Spill(bytes)
@@ -107,7 +107,7 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		}
 
 		if mergeGroup.ctr.isSpilling() {
-			if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
+			if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, mergeGroup.OpAnalyzer, nil); err != nil {
 				return vm.CancelResult, err
 			} else {
 				mergeGroup.OpAnalyzer.Spill(bytes)
@@ -132,16 +132,17 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
 	var err error
 
-	defer func() {
-		if err != nil {
-			mergeGroup.ctr.freeSpillAggList()
-		}
-	}()
-
+	mergeGroup.ctr.freeSpillAggList()
 	mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
 	if err != nil {
 		return false, err
 	}
+	needCleanupSpillAggList := true
+	defer func() {
+		if needCleanupSpillAggList {
+			mergeGroup.ctr.freeSpillAggList()
+		}
+	}()
 
 	// deserialize extra buf2.
 	if len(bat.ExtraBuf) != 0 {
@@ -201,7 +202,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			// MergeGroup restores nullable-key metadata from the serialized
 			// partial-group payload rather than guessing it from the first batch.
 			mergeGroup.ctr.initGroupKeyTypesFromBatch(bat.Vecs)
-			if err := mergeGroup.ctr.buildHashTable(proc.Ctx); err != nil {
+			if err := mergeGroup.ctr.buildHashTable(proc.Ctx, 0); err != nil {
 				return false, err
 			}
 		}
@@ -243,5 +244,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	}
 
+	mergeGroup.ctr.freeSpillAggList()
+	needCleanupSpillAggList = false
 	return mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer), nil
 }

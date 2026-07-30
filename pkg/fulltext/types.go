@@ -182,7 +182,7 @@ func PatternListToString(ps []*Pattern) string {
 }
 
 func PatternToString(pattern string, mode int64) (string, error) {
-	ps, err := ParsePattern(pattern, mode)
+	ps, err := ParsePattern(pattern, mode, "")
 	if err != nil {
 		return "", err
 	}
@@ -200,7 +200,7 @@ func PatternListToStringWithPosition(ps []*Pattern) string {
 }
 
 func PatternToStringWithPosition(pattern string, mode int64) (string, error) {
-	ps, err := ParsePattern(pattern, mode)
+	ps, err := ParsePattern(pattern, mode, "")
 	if err != nil {
 		return "", err
 	}

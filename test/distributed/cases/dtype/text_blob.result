@@ -115,7 +115,7 @@ t1    t2
 中文123abcd    
 yef&&190     wwww 
 123    7834
-select * from (select * from text_01 where t1 like '%123%');
+select * from (select * from text_01 where t1 like '%123%') as text_sub;
 t1    t2    t3
 中文123abcd        null
 123    7834    commmmmmment
@@ -187,7 +187,7 @@ count(b1)
 select max(b2),min(b3) from blob_01;
 max(b2)    min(b3)
 ä¸­æ    0001-01-01
-select b1||b2 from blob_01;
+select concat(b1,b2) from blob_01;
 concat(b1, b2)
 noä¸­æ
  hhhh@126.com

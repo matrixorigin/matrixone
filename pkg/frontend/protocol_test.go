@@ -16,6 +16,9 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -74,11 +77,13 @@ func Test_SendResponse(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
-		ioses, err := NewIOSession(&testConn{}, pu, "")
+		rawConn := &testConn{}
+		ioses, err := NewIOSession(rawConn, pu, "")
 		convey.ShouldBeNil(err)
 		mp := &MysqlProtocolImpl{}
 		mp.io = iopackage
 		mp.tcpConn = ioses
+		mp.capability = CLIENT_PROTOCOL_41
 		resp := &Response{}
 		resp.category = EoFResponse
 		err = mp.SendResponse(ctx, resp)
@@ -88,6 +93,40 @@ func Test_SendResponse(t *testing.T) {
 		resp.category = ErrorResponse
 		err = mp.SendResponse(ctx, resp)
 		convey.So(err, convey.ShouldBeNil)
+
+		rawConn.data = nil
+		resp.SetData(errors.Join(moerr.NewInvalidInput(ctx, "bad numeric parameter"), errors.New("cleanup")))
+		err = mp.SendResponse(ctx, resp)
+		convey.So(err, convey.ShouldBeNil)
+		packets := splitProtocolPackets(t, rawConn.data)
+		convey.So(len(packets), convey.ShouldEqual, 1)
+		convey.So(binary.LittleEndian.Uint16(packets[0][1:]), convey.ShouldEqual, moerr.ErrInvalidInput)
+		convey.So(string(packets[0][4:9]), convey.ShouldEqual, moerr.MySQLDefaultSqlState)
+		convey.So(string(packets[0][9:]), convey.ShouldEqual,
+			"invalid input: bad numeric parameter\ncleanup")
+
+		rawConn.data = nil
+		resp.SetData(errors.Join(errors.New("rollback failed"),
+			moerr.NewInvalidInput(ctx, "bad numeric parameter")))
+		err = mp.SendResponse(ctx, resp)
+		convey.So(err, convey.ShouldBeNil)
+		packets = splitProtocolPackets(t, rawConn.data)
+		convey.So(len(packets), convey.ShouldEqual, 1)
+		convey.So(binary.LittleEndian.Uint16(packets[0][1:]), convey.ShouldEqual, moerr.ErrInvalidInput)
+		convey.So(string(packets[0][4:9]), convey.ShouldEqual, moerr.MySQLDefaultSqlState)
+		convey.So(string(packets[0][9:]), convey.ShouldEqual,
+			"rollback failed\ninvalid input: bad numeric parameter")
+
+		rawConn.data = nil
+		resp.SetData(fmt.Errorf("execute context: %w", moerr.NewInvalidInput(ctx, "bad numeric parameter")))
+		err = mp.SendResponse(ctx, resp)
+		convey.So(err, convey.ShouldBeNil)
+		packets = splitProtocolPackets(t, rawConn.data)
+		convey.So(len(packets), convey.ShouldEqual, 1)
+		convey.So(binary.LittleEndian.Uint16(packets[0][1:]), convey.ShouldEqual, moerr.ErrInvalidInput)
+		convey.So(string(packets[0][4:9]), convey.ShouldEqual, moerr.MySQLDefaultSqlState)
+		convey.So(string(packets[0][9:]), convey.ShouldEqual,
+			"execute context: invalid input: bad numeric parameter")
 
 		resp.category = -1
 		err = mp.SendResponse(ctx, resp)

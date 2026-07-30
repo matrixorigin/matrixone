@@ -210,6 +210,17 @@ func (l Lock) closeWaiter(w *waiter, logger *log.MOLogger) bool {
 	return canRemove
 }
 
+func (l Lock) removeWaiter(w *waiter, logger *log.MOLogger) (bool, bool) {
+	removed, wasFirst := l.waiters.remove(w)
+	if !removed {
+		return false, l.isEmpty()
+	}
+	if l.holders.size() == 0 && wasFirst && l.waiters.size() > 0 {
+		l.waiters.notify(notifyValue{defChanged: l.isLockTableDefChanged()})
+	}
+	return true, l.isEmpty()
+}
+
 func (l Lock) closeTxn(
 	txn *activeTxn,
 	notify notifyValue) (lockCanRemoved bool) {
@@ -359,17 +370,12 @@ func (h *holders) remove(txnID []byte) {
 func (h *holders) replace(
 	from []byte,
 	to pb.WaitTxn) {
-	find := false
-	for i := range h.txns {
-		if bytes.Equal(h.txns[i].TxnID, from) {
-			h.txns[i] = to
-			find = true
-			continue
-		}
-	}
-	if !find {
+	fromKey := util.UnsafeBytesToString(from)
+	if _, ok := h.txns[fromKey]; !ok {
 		panic("BUG: missing holder")
 	}
+	delete(h.txns, fromKey)
+	h.txns[util.UnsafeBytesToString(to.TxnID)] = to
 }
 
 func (h *holders) clear() {

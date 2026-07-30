@@ -43,6 +43,31 @@ type PKFilter struct {
 	// PrimarySeqnum is the sequence number of the primary key column
 	// in the table schema, used for block-level ZoneMap access.
 	PrimarySeqnum int
+
+	// ReplaySpec carries an optional packed-PK predicate for in-memory row replay.
+	// When present, CollectChanges can use it to avoid scanning the whole
+	// partition-state row tree and instead iterate only the matching PK entries.
+	//
+	// Unlike Segments, ReplaySpec preserves the original logical predicate
+	// (`Op` + `Keys`) rather than just a coarse ZoneMap approximation.
+	ReplaySpec *PKReplaySpec
+}
+
+// PKReplaySpec stores an optional packed primary-key predicate in a form that
+// logtailreplay can apply directly on the in-memory primary-key index.
+type PKReplaySpec struct {
+	Op   int
+	Keys [][]byte
+}
+
+func (f *PKFilter) Valid() bool {
+	if f == nil {
+		return false
+	}
+	if len(f.Segments) > 0 {
+		return true
+	}
+	return f.ReplaySpec != nil && len(f.ReplaySpec.Keys) > 0
 }
 
 type pkFilterContextKey struct{}
@@ -52,7 +77,7 @@ type pkFilterContextKey struct{}
 // Passing nil or a filter with no segments is a no-op and returns
 // the original context.
 func WithPKFilter(ctx context.Context, filter *PKFilter) context.Context {
-	if ctx == nil || filter == nil || len(filter.Segments) == 0 {
+	if ctx == nil || !filter.Valid() {
 		return ctx
 	}
 	return context.WithValue(ctx, pkFilterContextKey{}, filter)

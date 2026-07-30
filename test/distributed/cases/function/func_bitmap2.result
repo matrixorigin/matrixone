@@ -1,0 +1,18 @@
+drop table if exists bitmappanic;
+create table bitmappanic (col2 int);
+insert into bitmappanic values(0),(65536),(131072);
+select
+bitmap_bucket_number(col2) bucket,
+BITMAP_COUNT(bitmap_construct_agg(bitmap_bit_position(col2))) bmp
+from bitmappanic
+group by bucket;
+➤ bucket[-5,64,0]  ¦  bmp[-5,64,0]  𝄀
+0  ¦  1  𝄀
+2  ¦  1  𝄀
+4  ¦  1
+select
+BITMAP_COUNT(bitmap_construct_agg(BITMAP_BUCKET_NUMBER(col2))) bmp
+from bitmappanic;
+➤ bmp[-5,64,0]  𝄀
+3
+drop table if EXISTS bitmappanic;

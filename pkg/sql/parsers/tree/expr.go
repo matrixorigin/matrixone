@@ -954,8 +954,25 @@ type FuncExpr struct {
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
+	funcName := ""
 	if node.FuncName != nil {
-		ctx.WriteString(node.FuncName.Origin())
+		funcName = node.FuncName.Origin()
+	}
+
+	if strings.ToLower(funcName) == "interval" && len(node.Exprs) == 2 {
+		ctx.WriteString("INTERVAL ")
+		node.Exprs[0].Format(ctx)
+		ctx.WriteByte(' ')
+		if nv, ok := node.Exprs[1].(*NumVal); ok {
+			ctx.WriteString(nv.String())
+		} else {
+			node.Exprs[1].Format(ctx)
+		}
+		return
+	}
+
+	if funcName != "" {
+		ctx.WriteString(funcName)
 	} else {
 		node.Func.Format(ctx)
 	}
@@ -965,14 +982,26 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
-	if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
+	isGroupConcat := strings.EqualFold(funcName, "group_concat") ||
+		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat")
+	if isGroupConcat && len(node.Exprs) > 0 {
+		// The parser stores GROUP_CONCAT's separator as the final expression so
+		// binders can consume it uniformly. It is not a concatenated argument.
+		node.Exprs[:len(node.Exprs)-1].Format(ctx)
+		if node.OrderBy != nil {
+			ctx.WriteByte(' ')
+			node.OrderBy.Format(ctx)
+		}
+		ctx.WriteString(" separator ")
+		node.Exprs[len(node.Exprs)-1].Format(ctx)
+	} else if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
 		trimExprsFormat(ctx, node.Exprs)
 	} else {
-		node.Exprs.Format(ctx)
-	}
+		formatFuncExprs(ctx, node)
 
-	if node.OrderBy != nil {
-		node.OrderBy.Format(ctx)
+		if node.OrderBy != nil {
+			node.OrderBy.Format(ctx)
+		}
 	}
 
 	ctx.WriteByte(')')
@@ -981,6 +1010,63 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(" ")
 		node.WindowSpec.Format(ctx)
 	}
+}
+
+func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
+	if !ctx.singleQuoteString || len(node.Exprs) == 0 || node.FuncName == nil {
+		node.Exprs.Format(ctx)
+		return
+	}
+
+	switch strings.ToLower(node.FuncName.Origin()) {
+	case "timestampdiff", "extract":
+		formatExprWithSingleQuoteDisabled(ctx, node.Exprs[0])
+		if len(node.Exprs) > 1 {
+			ctx.WriteString(", ")
+			node.Exprs[1:].Format(ctx)
+		}
+	case "interval":
+		node.Exprs[0].Format(ctx)
+		if len(node.Exprs) > 1 {
+			ctx.WriteString(", ")
+			formatExprWithSingleQuoteDisabled(ctx, node.Exprs[1])
+			if len(node.Exprs) > 2 {
+				ctx.WriteString(", ")
+				node.Exprs[2:].Format(ctx)
+			}
+		}
+	default:
+		node.Exprs.Format(ctx)
+	}
+}
+
+func formatExprWithSingleQuoteDisabled(ctx *FmtCtx, expr Expr) {
+	clone := *ctx
+	clone.singleQuoteString = false
+	expr.Format(&clone)
+}
+
+// TimeUnitExpr preserves SQL time-unit keywords such as HOUR and MINUTE
+// without routing them through string-literal formatting.
+type TimeUnitExpr struct {
+	exprImpl
+	Unit string
+}
+
+func NewTimeUnitExpr(unit string) *TimeUnitExpr {
+	return &TimeUnitExpr{Unit: strings.ToLower(unit)}
+}
+
+func (node *TimeUnitExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString(node.Unit)
+}
+
+func (node *TimeUnitExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	return v.Exit(newNode)
 }
 
 // Accept implements NodeChecker interface
@@ -1605,8 +1691,13 @@ func (node *VarExpr) Format(ctx *FmtCtx) {
 		ctx.WriteByte('@')
 		if node.System {
 			ctx.WriteByte('@')
+			if node.Global {
+				ctx.WriteString("global.")
+			}
+			ctx.WriteString(node.Name)
+		} else {
+			ctx.WriteIdentifier(Identifier(node.Name))
 		}
-		ctx.WriteString(node.Name)
 	}
 }
 
@@ -1632,6 +1723,9 @@ type ParamExpr struct {
 
 func (node *ParamExpr) Format(ctx *FmtCtx) {
 	ctx.WriteByte('?')
+	if ctx.paramExprOffset {
+		ctx.WriteString(strconv.Itoa(node.Offset))
+	}
 }
 
 // Accept implements NodeChecker Accept interface.
@@ -1796,7 +1890,7 @@ type FullTextMatchExpr struct {
 	KeyParts []*KeyPart
 
 	// pattern
-	Pattern string
+	Pattern Expr
 
 	Mode FullTextSearchType
 }
@@ -1828,13 +1922,16 @@ func (node *FullTextMatchExpr) Valid() error {
 	if len(node.KeyParts) == 0 {
 		return moerr.NewSyntaxErrorNoCtx("MATCH(expr list) expression list is empty.")
 	}
-	if len(node.Pattern) == 0 {
+	if node.Pattern == nil {
+		return moerr.NewSyntaxErrorNoCtx("AGAINST('pattern') pattern is empty.")
+	}
+	if val, ok := node.Pattern.(*NumVal); ok && val.ValType == P_char && len(val.String()) == 0 {
 		return moerr.NewSyntaxErrorNoCtx("AGAINST('pattern') pattern is empty.")
 	}
 	return nil
 }
 
-func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern string, mode FullTextSearchType) (*FullTextMatchExpr, error) {
+func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern Expr, mode FullTextSearchType) (*FullTextMatchExpr, error) {
 
 	e := &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Mode: mode}
 	if err := e.Valid(); err != nil {
@@ -1853,7 +1950,35 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
-	ctx.WriteString(node.Pattern)
+	// Post-#24796 the pattern is an Expr: a *NumVal (search_pattern: STRING) for a
+	// literal, or a *ParamExpr (VALUE_ARG) for a prepared '?'. For the string case
+	// (the common one) emit it as a single-quoted, escaped SQL string literal
+	// UNCONDITIONALLY — do NOT route it through NumVal.Format / ctx.WriteValue, which
+	// only quotes when the FmtCtx opts in (quoteString/singleQuoteString). The default
+	// tree.String() path does not opt in, so a bare pattern produced invalid SQL that
+	// failed to re-parse (CREATE TABLE AS SELECT, view expansion, or any other
+	// re-serialization) — #24823. Unconditional quoting is correct precisely because a
+	// string pattern is never a number/null/bool: bare output is never valid SQL here.
+	if val, ok := node.Pattern.(*NumVal); ok && val.ValType == P_char {
+		// origString holds the already-unescaped literal (NewNumVal($1,$1,...)).
+		pat := val.String()
+		ctx.WriteString("'")
+		if ctx.NoBackslashEscape() {
+			// Under NO_BACKSLASH_ESCAPES a backslash is a literal char and only '' escapes
+			// a quote. pat is the already-unescaped value, so routing it through
+			// FormatString (which escapes '\' -> '\\') would double the backslashes on
+			// every parse->format cycle. Emit it verbatim, quote-doubled only, to keep the
+			// format->parse contract idempotent under that mode (#24823 follow-up).
+			ctx.WriteString(strings.ReplaceAll(pat, "'", "''"))
+		} else {
+			ctx.WriteString(strings.ReplaceAll(FormatString(pat), "'", "''"))
+		}
+		ctx.WriteString("'")
+	} else {
+		// A non-string pattern (e.g. a prepared-statement '?' param, #24796) delegates
+		// to its own Format.
+		node.Pattern.Format(ctx)
+	}
 
 	if node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")

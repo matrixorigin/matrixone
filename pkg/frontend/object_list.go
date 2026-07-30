@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -471,8 +472,11 @@ func ResolveSnapshotWithSnapshotNameWithoutSession(
 		return nil, moerr.NewInternalError(ctx, "executor is required for resolving snapshot")
 	}
 
-	// Query mo_snapshots table to get snapshot timestamp
-	sql := fmt.Sprintf(`select ts from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id limit 1;`, strings.ReplaceAll(snapshotName, "'", "''"))
+	// Query mo_snapshots table to get snapshot timestamp. Branch-managed
+	// rows (`kind='branch'`) are internal protection entries and must not
+	// be resolvable through the user-facing `{snapshot='...'}` hint
+	// (review PR#24313 blocking issue #4).
+	sql := fmt.Sprintf(`select ts from mo_catalog.mo_snapshots where sname = '%s' and kind != '%s' order by snapshot_id limit 1;`, strings.ReplaceAll(snapshotName, "'", "''"), databranchutils.BranchSnapshotKind)
 	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(txnOp)
 	result, err := sqlExecutor.Exec(ctx, sql, opts)
 	if err != nil {

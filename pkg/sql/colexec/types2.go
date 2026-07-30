@@ -68,6 +68,7 @@ func (srv *Server) RecordDispatchPipeline(
 	}
 
 	srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key] = value
+	srv.ensureSessionCleanupLocked(session)
 	logutil.Debug("RecordDispatchPipeline registered successfully",
 		zap.Uint64("streamID", streamID),
 		zap.String("receiverUid", dispatchReceiver.Uid.String()))
@@ -96,6 +97,7 @@ func (srv *Server) RecordBuiltPipeline(
 		receiver:    nil,
 	}
 	srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key] = value
+	srv.ensureSessionCleanupLocked(session)
 }
 
 func (srv *Server) CancelPipelineSending(

@@ -14,73 +14,97 @@ insert into t3 select c1, c1, c1 from t1;
 insert into t3 select c1+10000, c1+10000, c1+10000 from t1;
 insert into t3 select c1+20000, c1+20000, c1+20000 from t1;
 select mo_ctl('dn', 'flush', 'd1.t1');
-mo_ctl(dn, flush, d1.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, d1.t1)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select mo_ctl('dn', 'flush', 'd1.t2');
-mo_ctl(dn, flush, d1.t2)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, d1.t2)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 select mo_ctl('dn', 'flush', 'd1.t3');
-mo_ctl(dn, flush, d1.t3)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+➤ mo_ctl(dn, flush, d1.t3)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
 explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
-TP QUERY PLAN
-Project
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
   ->  Table Scan on d1.t2
 explain select t1.c1,t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
-TP QUERY PLAN
-Project
-  ->  Join
-        Join Type: LEFT   hashOnPK
-        Join Cond: (t2.c1 = t1.c1)
-        ->  Table Scan on d1.t2
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: LEFT   hashOnPK  𝄀
+        Join Cond: (t2.c1 = t1.c1)  𝄀
+        ->  Table Scan on d1.t2  𝄀
         ->  Table Scan on d1.t1
 explain select t3.c1 from t3 left join t1 on t1.c1 =t3.c1 and t1.c1 > t3.c2 where t3.c1<10;
-TP QUERY PLAN
-Project
-  ->  Table Scan on d1.t3
-        Filter Cond: (t3.c1 < 10)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Table Scan on d1.t3  𝄀
+        Filter Cond: (t3.c1 < 10)  𝄀
         Block Filter Cond: (t3.c1 < 10)
 explain select t1.c1,t3.c1 from t3 left join t1 on t1.c1 =t3.c1 where t3.c1<10;
-TP QUERY PLAN
-Project
-  ->  Join
-        Join Type: LEFT   hashOnPK
-        Join Cond: (t3.c1 = t1.c1)
-        ->  Table Scan on d1.t3
-              Filter Cond: (t3.c1 < 10)
-              Block Filter Cond: (t3.c1 < 10)
-        ->  Table Scan on d1.t1
-              Filter Cond: (t1.c1 < 10)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: LEFT   hashOnPK  𝄀
+        Join Cond: (t3.c1 = t1.c1)  𝄀
+        ->  Table Scan on d1.t3  𝄀
+              Filter Cond: (t3.c1 < 10)  𝄀
+              Block Filter Cond: (t3.c1 < 10)  𝄀
+        ->  Table Scan on d1.t1  𝄀
+              Filter Cond: (t1.c1 < 10)  𝄀
               Block Filter Cond: (t1.c1 < 10)
 explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c2;
-TP QUERY PLAN
-Project
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
   ->  Table Scan on d1.t2
 explain select t3.c1 from t3 left join t2 on t3.c2=t2.c2;
-TP QUERY PLAN
-Project
-  ->  Join
-        Join Type: LEFT
-        Join Cond: (t3.c2 = t2.c2)
-        ->  Table Scan on d1.t3
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: LEFT  𝄀
+        Join Cond: (t3.c2 = t2.c2)  𝄀
+        ->  Table Scan on d1.t3  𝄀
         ->  Table Scan on d1.t2
 explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1) v1 on t2.c1 =v1.c1 and t2.c2=v1.c2;
-TP QUERY PLAN
-Project
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
   ->  Table Scan on d1.t2
 explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1 limit 5000) v1 on t2.c1 =v1.c1;
-TP QUERY PLAN
-Project
-  ->  Join
-        Join Type: LEFT
-        Join Cond: (t2.c1 = v1.c1)
-        ->  Table Scan on d1.t2
-        ->  Project
-              Limit: 5000
-              ->  Join
-                    Join Type: INNER   hashOnPK
-                    Join Cond: (t3.c1 = t1.c1)
-                    ->  Table Scan on d1.t3
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: LEFT  𝄀
+        Join Cond: (t2.c1 = v1.c1)  𝄀
+        ->  Table Scan on d1.t2  𝄀
+        ->  Project  𝄀
+              Limit: 5000  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER   hashOnPK  𝄀
+                    Join Cond: (t3.c1 = t1.c1)  𝄀
+                    ->  Table Scan on d1.t3  𝄀
                     ->  Table Scan on d1.t1
 drop table if exists parameters;
 CREATE TABLE `parameters` (
@@ -147,9 +171,9 @@ insert into routines values('specific_name01','routine_catalog01','specific_name
 insert into routines values('specific_name02','routine_catalog02','specific_name01','routine_name01','rrr01','data',10,10,10,20,20,'character_set_name','collation','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
 insert into routines values('specific_name01','routine_catalog01','specific_name02','routine_name02','rrr02','data',10,10,10,20,20,'character_set_name','collation','dtd_identifier01','111','routine_definition01','1','external_language01','aaa','bbb','sql_data','sql_path01','111','2020-10-10 12:12:12.000','2021-10-10 12:12:12.000','sql_mode01','routine_comment01','definer01','character_set_client','collation_connection','database_collation');
 SELECT DISTINCT ROUTINE_SCHEMA, ROUTINE_NAME, PARAMS.PARAMETER FROM ROUTINES LEFT JOIN ( SELECT SPECIFIC_SCHEMA, SPECIFIC_NAME, GROUP_CONCAT(CONCAT(DATA_TYPE, ' ', PARAMETER_NAME) ORDER BY ORDINAL_POSITION SEPARATOR ', ') PARAMETER, ROUTINE_TYPE FROM PARAMETERS GROUP BY SPECIFIC_SCHEMA, SPECIFIC_NAME, ROUTINE_TYPE ) PARAMS ON ROUTINES.ROUTINE_SCHEMA = PARAMS.SPECIFIC_SCHEMA AND ROUTINES.ROUTINE_NAME = PARAMS.SPECIFIC_NAME AND ROUTINES.ROUTINE_TYPE = PARAMS.ROUTINE_TYPE WHERE ROUTINE_SCHEMA = 'specific_name01' ORDER BY ROUTINE_SCHEMA;
-ROUTINE_SCHEMA    ROUTINE_NAME    PARAMETER
-specific_name01    routine_name02    null
-specific_name01    routine_name01    data_type01 parametername01
+➤ ROUTINE_SCHEMA[12,-1,0]  ¦  ROUTINE_NAME[12,-1,0]  ¦  PARAMETER[12,0,0]  𝄀
+specific_name01  ¦  routine_name02  ¦  null  𝄀
+specific_name01  ¦  routine_name01  ¦  data_type01 parametername01
 drop table routines;
 drop table parameters;
 create table x1 (a int, b int);
@@ -158,20 +182,20 @@ insert into x1 select 42, result from generate_series(1,20000,1) g;
 insert into x1 values (10, 10), (20, 20);
 create table x2 as select * from x1 order by a limit 10;
 select count(*) from x2 left join x1 on x1.a = x2.a;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 100005
 select * from x2 left join x1 on x1.a = x2.a order by x1.a limit 10;
-a    b    a    b
-1    1    1    1
-2    2    2    2
-3    3    3    3
-10    10    10    10
-20    20    20    20
-42    1    42    1
-42    2    42    1
-42    3    42    1
-42    4    42    1
-42    5    42    1
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2  ¦  2  𝄀
+3  ¦  3  ¦  3  ¦  3  𝄀
+10  ¦  10  ¦  10  ¦  10  𝄀
+20  ¦  20  ¦  20  ¦  20  𝄀
+42  ¦  1  ¦  42  ¦  1  𝄀
+42  ¦  2  ¦  42  ¦  1  𝄀
+42  ¦  3  ¦  42  ¦  1  𝄀
+42  ¦  4  ¦  42  ¦  1  𝄀
+42  ¦  5  ¦  42  ¦  1
 drop table x1;
 drop table x2;
 drop table if exists t_order;
@@ -184,21 +208,21 @@ insert into t_order values (1);
 insert into t_summary values (1);
 insert into t_mapping values (1);
 explain select o.id from t_order o join t_summary d on d.id = o.id left join (select distinct id from t_mapping) m on m.id = o.id where o.id = CAST(d.id AS INT);
-TP QUERY PLAN
-Project
-  ->  Join
-        Join Type: LEFT
-        Join Cond: (o.id = t_mapping.id)
-        ->  Join
-              Join Type: INNER
-              Join Cond: (o.id = cast(d.id AS INT)), (o.id = d.id)
-              ->  Table Scan on d1.t_order
-              ->  Table Scan on d1.t_summary
-        ->  Aggregate
-              Group Key: t_mapping.id
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: LEFT  𝄀
+        Join Cond: (o.id = t_mapping.id)  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (o.id = cast(d.id AS INT)), (o.id = d.id)  𝄀
+              ->  Table Scan on d1.t_order  𝄀
+              ->  Table Scan on d1.t_summary  𝄀
+        ->  Aggregate  𝄀
+              Group Key: t_mapping.id  𝄀
               ->  Table Scan on d1.t_mapping
 select o.id from t_order o join t_summary d on d.id = o.id left join (select distinct id from t_mapping) m on m.id = o.id where o.id = CAST(d.id AS INT);
-id
+➤ id[4,32,0]  𝄀
 1
 drop table t_order;
 drop table t_summary;

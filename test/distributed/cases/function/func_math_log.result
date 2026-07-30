@@ -1,5 +1,6 @@
 select log(exp(10)),log(-1),log(NULL),log(1,1),log(3,9),log(-1,2),log(NULL,2);
-invalid argument ln, bad value -1
+log(exp(10))	log(-1)	log(NULL)	log(1,1)	log(3,9)	log(-1,2)	log(NULL,2)
+10.0	null	null	null	2.0	null	null
 select exp(log(sqrt(10))*2);
 exp(log(sqrt(10))*2)
 10.000000000000002
@@ -7,7 +8,8 @@ SELECT LOG(2);
 LOG(2)
 0.6931471805599453
 SELECT LOG(-2);
-invalid argument ln, bad value -2
+LOG(-2)
+null
 SELECT LOG(2,65536);
 LOG(2,65536)
 16.0
@@ -15,11 +17,14 @@ SELECT LOG(10,100);
 LOG(10,100)
 2.0
 SELECT LOG(1,100);
-invalid argument log base, bad value 1
+LOG(1,100)
+null
 select log(2,-1);
-invalid argument log input, bad value <= 0
+log(2,-1)
+null
 select log(-2,1);
-invalid argument log input, bad value <= 0
+log(-2,1)
+null
 select log(0.00000000000000001);
 log(0.00000000000000001)
 -39.14394658089878
@@ -30,7 +35,8 @@ select log(0.141241241241313, 124314124124.12412341);
 log(0.141241241241313, 124314124124.12412341)
 -13.051786251584149
 select log(-0.141241241241313, -124314124124.12412341);
-invalid argument log input, bad value <= 0
+log(-0.141241241241313, -124314124124.12412341)
+null
 select log(null,2);
 log(null,2)
 null

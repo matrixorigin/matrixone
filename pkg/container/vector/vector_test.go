@@ -62,6 +62,23 @@ func TestLength(t *testing.T) {
 	}
 }
 
+func TestDupOffHeap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("a"), []byte("longer value")}, nil, mp))
+
+	dup, err := vec.DupOffHeap(mp)
+	require.NoError(t, err)
+	require.True(t, dup.offHeap)
+	require.Equal(t, vec.Length(), dup.Length())
+	require.Equal(t, vec.GetBytesAt(0), dup.GetBytesAt(0))
+	require.Equal(t, vec.GetBytesAt(1), dup.GetBytesAt(1))
+
+	dup.Free(mp)
+	vec.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestSize(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int8.ToType())
@@ -422,6 +439,24 @@ func TestDup(t *testing.T) {
 	v.Free(mp)
 	w.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestNewVecWithDataCopyOwnsBackingData(t *testing.T) {
+	mp := mpool.MustNewZero()
+	data := []byte("external-data")
+	area := []byte("external-area")
+	vec, err := NewVecWithDataCopy(types.T_text.ToType(), 1, data, area, mp)
+	require.NoError(t, err)
+	require.Equal(t, data, vec.GetData())
+	require.Equal(t, area, vec.GetArea())
+
+	data[0] = 'X'
+	area[0] = 'Y'
+	require.Equal(t, byte('e'), vec.GetData()[0])
+	require.Equal(t, byte('e'), vec.GetArea()[0])
+	require.NotPanics(t, func() { vec.Free(mp) })
+	require.Nil(t, vec.GetData())
+	require.Nil(t, vec.GetArea())
 }
 
 func TestShrink(t *testing.T) {
@@ -1659,6 +1694,136 @@ func TestMarshalAndUnMarshal(t *testing.T) {
 	v.Free(mp)
 	w.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestUnmarshalBinaryAcceptsNullBitmapCoveragePastLength(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(source, int64(0), false, mp))
+	source.GetNulls().AddRange(0, 1)
+
+	data, err := source.MarshalBinary()
+	require.NoError(t, err)
+
+	target := NewVecFromReuse()
+	require.NoError(t, target.UnmarshalBinary(data))
+	require.Equal(t, 1, target.Length())
+	require.True(t, target.IsNull(0))
+
+	source.Free(mp)
+	target.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestUnmarshalBinaryAcceptsStaleVarlenaInNullRow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(source, []byte("value longer than inline storage"), false, mp))
+	source.SetNull(0)
+	source.ResetArea()
+
+	data, err := source.MarshalBinary()
+	require.NoError(t, err)
+
+	target := NewVecFromReuse()
+	require.NoError(t, target.UnmarshalBinary(data))
+	require.Equal(t, 1, target.Length())
+	require.True(t, target.IsNull(0))
+
+	source.Free(mp)
+	target.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestUnmarshalBinaryRejectsOverflowingNullBitmapLength(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(source, int64(0), true, mp))
+	data, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	nspLenOffset := 1 + types.TSize + 4 + 4 + types.T_int64.TypeLen() + 4
+	nspDataOffset := nspLenOffset + 4
+	corrupted := append([]byte(nil), data[:nspDataOffset+24]...)
+	corrupted = append(corrupted, data[len(data)-1])
+	nspLen := uint32(24)
+	count := int64(0)
+	bitmapLen := ^uint64(0)
+	bitmapDataLen := uint64(0)
+	copy(corrupted[nspLenOffset:nspDataOffset], types.EncodeUint32(&nspLen))
+	copy(corrupted[nspDataOffset:nspDataOffset+8], types.EncodeInt64(&count))
+	copy(corrupted[nspDataOffset+8:nspDataOffset+16], types.EncodeUint64(&bitmapLen))
+	copy(corrupted[nspDataOffset+16:nspDataOffset+24], types.EncodeUint64(&bitmapDataLen))
+
+	target := NewVecFromReuse()
+	require.Error(t, target.UnmarshalBinary(corrupted))
+}
+
+func TestUnmarshalBinaryRejectsMisalignedArrayPayload(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		values     []float32
+		corruptLen func([]byte, int)
+	}{
+		{
+			name:   "out_of_line",
+			values: make([]float32, 10),
+			corruptLen: func(data []byte, varlenOffset int) {
+				misalignedLength := uint32(3)
+				copy(data[varlenOffset+8:varlenOffset+12], types.EncodeUint32(&misalignedLength))
+			},
+		},
+		{
+			name:   "inline",
+			values: []float32{0},
+			corruptLen: func(data []byte, varlenOffset int) {
+				data[varlenOffset] = 3
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := NewVec(types.New(types.T_array_float32, 10, 0))
+			require.NoError(t, AppendArray(source, test.values, false, mp))
+			data, err := source.MarshalBinary()
+			require.NoError(t, err)
+			source.Free(mp)
+
+			// The array payload remains in bounds, but cannot be decoded as a
+			// []float32. Cover both Varlena storage forms.
+			corrupted := append([]byte(nil), data...)
+			varlenOffset := 1 + types.TSize + 4 + 4
+			test.corruptLen(corrupted, varlenOffset)
+
+			target := NewVecFromReuse()
+			var unmarshalErr error
+			require.NotPanics(t, func() {
+				unmarshalErr = target.UnmarshalBinary(corrupted)
+				if unmarshalErr == nil {
+					_ = GetArrayAt[float32](target, 0)
+				}
+			})
+			require.Error(t, unmarshalErr)
+		})
+	}
+}
+
+func TestUnmarshalBinaryRejectsUnsupportedZeroSizeType(t *testing.T) {
+	for _, oid := range []types.T{types.T_interval, types.T_tuple} {
+		t.Run(oid.String(), func(t *testing.T) {
+			source := NewVec(types.Type{Oid: oid})
+			data, err := source.MarshalBinary()
+			require.NoError(t, err)
+
+			target := NewVecFromReuse()
+			var unmarshalErr error
+			require.NotPanics(t, func() {
+				unmarshalErr = target.UnmarshalBinary(data)
+			})
+			require.Error(t, unmarshalErr)
+		})
+	}
 }
 
 func TestStrMarshalAndUnMarshal(t *testing.T) {
@@ -3473,4 +3638,30 @@ func TestFunctionResultAppendNullAfterToConst(t *testing.T) {
 	require.NoError(t, result.AppendBytes(nil, true))
 	result.vec.ToConst()
 	require.True(t, result.vec.IsConstNull()) // must still be recognized as const null
+}
+
+func TestInplaceSortAndCompactMarksUniqueVectorsSorted(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+
+	fixed := NewVec(types.T_int64.ToType())
+	for _, value := range []int64{3, 1, 2} {
+		require.NoError(t, AppendFixed(fixed, value, false, mp))
+	}
+	fixed.InplaceSortAndCompact()
+	require.Equal(t, []int64{1, 2, 3}, MustFixedColNoTypeCheck[int64](fixed))
+	require.True(t, fixed.GetSorted())
+	fixed.Free(mp)
+
+	varlen := NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"c", "a", "b"} {
+		require.NoError(t, AppendBytes(varlen, []byte(value), false, mp))
+	}
+	varlen.InplaceSortAndCompact()
+	require.Equal(t, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, InefficientMustBytesCol(varlen))
+	require.True(t, varlen.GetSorted())
+	varlen.Free(mp)
+
+	unsupported := NewVec(types.T_any.ToType())
+	unsupported.InplaceSortAndCompact()
+	require.False(t, unsupported.GetSorted())
 }

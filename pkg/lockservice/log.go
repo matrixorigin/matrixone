@@ -513,6 +513,46 @@ func logLockAllocatorStartSucc(
 	)
 }
 
+func logAllocatorEpochChanged(
+	logger *log.MOLogger,
+	source string,
+	oldVersion uint64,
+	newVersion uint64,
+	removed int,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"lock allocator epoch changed",
+		getLogOptions(zap.InfoLevel),
+		zap.String("source", source),
+		zap.Uint64("old-version", oldVersion),
+		zap.Uint64("new-version", newVersion),
+		zap.Int("removed", removed),
+	)
+}
+
+func logAllocatorEpochRegression(
+	logger *log.MOLogger,
+	source string,
+	oldVersion uint64,
+	observedVersion uint64,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"lock allocator epoch regression observed",
+		getLogOptions(zap.WarnLevel),
+		zap.String("source", source),
+		zap.Uint64("old-version", oldVersion),
+		zap.Uint64("observed-version", observedVersion),
+	)
+}
+
 func logCheckDeadLockFailed(
 	logger *log.MOLogger,
 	waitingTxn, txn pb.WaitTxn,
@@ -550,6 +590,7 @@ func logKeepRemoteLocksFailed(
 	logger *log.MOLogger,
 	bind pb.LockTable,
 	err error,
+	count int,
 ) {
 	if logger == nil {
 		return
@@ -558,7 +599,8 @@ func logKeepRemoteLocksFailed(
 	logger.Log(
 		"failed to keep remote locks",
 		getLogOptions(zap.ErrorLevel),
-		zap.String("bind", bind.DebugString()),
+		zap.Int("count", count),
+		zap.String("first-bind", bind.DebugString()),
 		zap.Error(err),
 	)
 }

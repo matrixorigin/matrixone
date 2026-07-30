@@ -120,6 +120,32 @@ func TestTop(t *testing.T) {
 	}
 }
 
+func TestMergeTopMaxUint64LimitReturnsAllRows(t *testing.T) {
+	batchRows := 7
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, 1,
+		[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}})
+	tc.arg.Limit = plan2.MakePlan2Uint64ConstExprWithType(^uint64(0))
+
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+
+	bats := []*batch.Batch{
+		newBatch(tc.types, tc.proc, int64(batchRows)),
+	}
+	resetChildren(tc.arg, bats)
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, batchRows, result.Batch.RowCount())
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
 func BenchmarkTop(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs := []testCase{

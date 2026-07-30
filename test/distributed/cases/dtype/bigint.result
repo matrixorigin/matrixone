@@ -140,9 +140,11 @@ select cast(10000002383263201056 as unsigned) mod 50 as result;
 result
 6
 select cast(19999999999999999999 as signed);
-Data truncation: data out of range: data type int64, value '19999999999999999999'
+cast(19999999999999999999 as signed)
+9223372036854775807
 select cast(-19999999999999999999 as signed);
-Data truncation: data out of range: data type int64, value '-19999999999999999999'
+cast(-19999999999999999999 as signed)
+-9223372036854775808
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a BIGINT(20) UNSIGNED,
 b VARCHAR(20));

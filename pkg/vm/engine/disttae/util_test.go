@@ -73,6 +73,50 @@ func TestLinearSearchOffsetByValFactory_Varchar(t *testing.T) {
 	target2.Free(mp)
 }
 
+// narrowArrayLinearSearch exercises LinearSearchOffsetByValFactory for a narrow
+// vector array key type (vecbf16/vecf16/vecint8/vecuint8). Both the key-side map
+// build and the target-side search switch on the element type, so a narrow array
+// must be handled in both or this panics "not supported".
+func narrowArrayLinearSearch[T types.ArrayElement](t *testing.T, mp *mpool.MPool, oid types.T, a, b, c []T) {
+	typ := types.New(oid, int32(len(a)), 0)
+
+	keys := vector.NewVec(typ)
+	require.NoError(t, vector.AppendArray[T](keys, a, false, mp))
+	require.NoError(t, vector.AppendArray[T](keys, b, false, mp))
+	searchFn := LinearSearchOffsetByValFactory(keys)
+
+	// target with no matching key
+	target := vector.NewVec(typ)
+	require.NoError(t, vector.AppendArray[T](target, c, false, mp))
+	require.Empty(t, searchFn(target))
+
+	// target containing key b at index 1
+	target2 := vector.NewVec(typ)
+	require.NoError(t, vector.AppendArray[T](target2, c, false, mp))
+	require.NoError(t, vector.AppendArray[T](target2, b, false, mp))
+	require.Equal(t, []int64{1}, searchFn(target2))
+
+	keys.Free(mp)
+	target.Free(mp)
+	target2.Free(mp)
+}
+
+func TestLinearSearchOffsetByValFactory_NarrowArray(t *testing.T) {
+	mp := mpool.MustNewZero()
+	narrowArrayLinearSearch[types.Float16](t, mp, types.T_array_float16,
+		types.Float32ToFloat16Slice([]float32{1, 1}),
+		types.Float32ToFloat16Slice([]float32{2, 2}),
+		types.Float32ToFloat16Slice([]float32{3, 3}))
+	narrowArrayLinearSearch[types.BF16](t, mp, types.T_array_bf16,
+		types.Float32ToBF16Slice([]float32{1, 1}),
+		types.Float32ToBF16Slice([]float32{2, 2}),
+		types.Float32ToBF16Slice([]float32{3, 3}))
+	narrowArrayLinearSearch[int8](t, mp, types.T_array_int8,
+		[]int8{1, 1}, []int8{2, 2}, []int8{3, 3})
+	narrowArrayLinearSearch[uint8](t, mp, types.T_array_uint8,
+		[]uint8{1, 1}, []uint8{2, 2}, []uint8{3, 3})
+}
+
 func TestLinearSearchOffsetByValFactory_Int64(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -145,26 +189,26 @@ func TestTombstonePKExistsInRange(t *testing.T) {
 	// Case 1: search for PK=200, should find it
 	keys1 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys1, 200, false, proc.GetMPool()))
-	changed, err := tombstonePKExistsInRange(ctx, pState, from, keys1, int32Type, fs)
+	changed, _, err := tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys1, int32Type, fs)
 	require.NoError(t, err)
 	require.True(t, changed)
 
 	// Case 2: search for PK=999, should not find it
 	keys2 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys2, 999, false, proc.GetMPool()))
-	changed, err = tombstonePKExistsInRange(ctx, pState, from, keys2, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys2, int32Type, fs)
 	require.NoError(t, err)
 	require.False(t, changed)
 
 	// Case 3: search for PK=500, should find it in second tombstone
 	keys3 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys3, 500, false, proc.GetMPool()))
-	changed, err = tombstonePKExistsInRange(ctx, pState, from, keys3, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys3, int32Type, fs)
 	require.NoError(t, err)
 	require.True(t, changed)
 
 	// Case 4: no tombstone objects changed after from=25
-	changed, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), keys1, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), types.MaxTs(), keys1, int32Type, fs)
 	require.NoError(t, err)
 	require.False(t, changed)
 }

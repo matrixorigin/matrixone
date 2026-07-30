@@ -1,0 +1,96 @@
+drop table if exists dp;
+create table dp(a double precision, b double precision(10,2), c double);
+show create table dp;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+dp  ¦  CREATE TABLE `dp` (
+  `a` double DEFAULT NULL,
+  `b` double(10,2) DEFAULT NULL,
+  `c` double DEFAULT NULL
+)
+insert into dp values (3.1415926535897, 1234.5678, 2.71828);
+insert into dp values (-1.5e10, 0.01, 0.00001);
+select * from dp order by a;
+➤ a[8,54,0]  ¦  b[8,10,2]  ¦  c[8,54,0]  𝄀
+-1.5E10  ¦  0.01  ¦  1.0E-5  𝄀
+3.1415926535897  ¦  1234.57  ¦  2.71828
+select a + c as s, a * 2 as dbl from dp order by 1;
+➤ s[8,54,0]  ¦  dbl[8,54,0]  𝄀
+-1.499999999999999E10  ¦  -3.0E10  𝄀
+5.8598726535897  ¦  6.2831853071794
+select sum(c) as sc from dp;
+➤ sc[8,54,0]  𝄀
+2.71829
+select cast('3.14' as double precision) as cd;
+➤ cd[8,54,0]  𝄀
+3.14
+select convert('3.14', double precision) as cv;
+➤ cv[8,54,0]  𝄀
+3.14
+select '3.14' :: double precision as cc;
+➤ cc[8,54,0]  𝄀
+3.14
+select abs(cast(-2.5 as double precision)) as ab;
+➤ ab[8,54,0]  𝄀
+2.5
+select cast(7 as double precision(10,2)) as cdp;
+➤ cdp[8,10,2]  𝄀
+7.0
+drop table if exists dp;
+drop table if exists dp2;
+create table dp2(a double precision);
+insert into dp2 values (1.25);
+insert into dp2 select cast(2.5 as double) from dp2;
+select * from dp2 order by a;
+➤ a[8,54,0]  𝄀
+1.25  𝄀
+2.5
+drop table if exists dp2;
+select cast(0.1 as double precision) + cast(0.2 as double precision) as f64_artifact;
+➤ f64_artifact[8,54,0]  𝄀
+0.30000000000000004
+drop table if exists dpb;
+create table dpb(v double precision);
+insert into dpb values (1.7976931348623157e308), (2.2250738585072014e-308), (0);
+select v > 0 as positive from dpb order by v desc;
+➤ positive[-7,1,0]  𝄀
+1  𝄀
+1  𝄀
+0
+drop table if exists dpb;
+create table dperr(a double precision(300));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. Display width for double out of range (max = 255) at line 1 column 42 near "));";
+create table dperr(a double precision(10,40));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. Display scale for double out of range (max = 30) at line 1 column 44 near "));";
+create table dperr(a double precision(5,10));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a')) at line 1 column 43 near "));";
+create table dpres(precision int);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 28 near "precision int);";
+select 1 as precision;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " precision;";
+drop table if exists dpc;
+create table dpc(a double precision unsigned, b double precision zerofill,
+c double precision not null default 1.5 primary key);
+show create table dpc;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+dpc  ¦  CREATE TABLE `dpc` (
+  `a` double DEFAULT NULL,
+  `b` double DEFAULT NULL,
+  `c` double NOT NULL DEFAULT 1.5,
+  PRIMARY KEY (`c`)
+)
+insert into dpc(a, b, c) values (1.5, 2.5, 3.5);
+select * from dpc;
+➤ a[8,54,0]  ¦  b[8,54,0]  ¦  c[8,54,0]  𝄀
+1.5  ¦  2.5  ¦  3.5
+drop table if exists dpc;
+drop table if exists dpa;
+create table dpa(x int);
+alter table dpa add column y double precision;
+alter table dpa modify column x double precision(8,3);
+show create table dpa;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+dpa  ¦  CREATE TABLE `dpa` (
+  `x` double(8,3) DEFAULT NULL,
+  `y` double DEFAULT NULL
+)
+drop table if exists dpa;

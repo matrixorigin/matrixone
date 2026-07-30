@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -35,17 +36,15 @@ var CheckLeaseWithRetry = func(
 	cnTxnClient client.TxnClient,
 ) (ok bool, err error) {
 	defer func() {
-		if err != nil || !ok {
-			logutil.Error(
-				"Publication-Task check lease failed",
-				zap.Error(err),
-				zap.Bool("ok", ok),
-				zap.String("cnUUID", cnUUID),
-			)
+		if err != nil {
+			eventPublicationLeaseCheckFailed.ErrorLazy(func() []zap.Field {
+				return append(logutil.StringFingerprintFields("cn", cnUUID), logutil.ErrorFingerprintFields("error", err)...)
+			})
 		}
 	}()
 	err = retryPublication(
 		ctx,
+		"check-lease",
 		func() error {
 			ok, err = checkLease(ctx, cnUUID, txnEngine, cnTxnClient)
 			return err
@@ -75,26 +74,41 @@ func checkLease(
 		return
 	}
 	defer result.Close()
-	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows != 1 {
-			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
-			return false
-		}
-		runner := cols[0].GetStringAt(0)
-		if runner == "" {
-			err = moerr.NewInternalErrorNoCtx("task runner is null")
-			return false
-		}
-		if runner == cnUUID {
-			ok = true
-		} else {
-			logutil.Errorf(
-				"Publication-Task check lease failed, runner: %s, expected: %s",
-				runner,
-				cnUUID,
-			)
-		}
-		return false
-	})
+	var runner string
+	runner, err = readSingleTaskRunner(result)
+	if err != nil {
+		return
+	}
+	if runner == "" {
+		return
+	}
+	if runner == cnUUID {
+		ok = true
+	} else {
+		eventPublicationLeaseOwnerMismatch.WarnLazy(func() []zap.Field {
+			return append(logutil.StringFingerprintFields("lease-owner", runner), logutil.StringFingerprintFields("cn", cnUUID)...)
+		})
+	}
 	return
+}
+
+func readSingleTaskRunner(result executor.Result) (string, error) {
+	runners := make([]string, 0, 1)
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		runners = append(runners, executor.GetStringRows(cols[0])...)
+		return len(runners) < 2
+	})
+	if len(runners) == 0 {
+		return "", nil
+	}
+	if len(runners) != 1 {
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", len(runners)))
+	}
+	if runners[0] == "" {
+		return "", moerr.NewInternalErrorNoCtx("task runner is null")
+	}
+	return runners[0], nil
 }

@@ -126,7 +126,7 @@ func NewTestDisttaeEngine(
 	de.txnClient.Resume()
 
 	hakeeper := newTestHAKeeperClient()
-	colexec.NewServer(hakeeper)
+	colexec.NewServer("")
 
 	var engineOpts []disttae.EngineOptions
 	if de.insertEntryMaxCount != 0 {
@@ -597,9 +597,15 @@ func (ml *mockLockService) Close() error                                      { 
 func (ml *mockLockService) GetWaitingList(ctx context.Context, txnID []byte) (bool, []lock.WaitTxn, error) {
 	return false, nil, nil
 }
+func (ml *mockLockService) GetLockHolder(ctx context.Context, tableID uint64, row []byte, options lock.LockOptions) (lock.WaitTxn, bool, error) {
+	return lock.WaitTxn{}, false, nil
+}
 func (ml *mockLockService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lock.LockTable) bool) {
 }
 func (ml *mockLockService) GetLockTableBind(group uint32, tableID uint64) (lock.LockTable, error) {
+	return lock.LockTable{}, nil
+}
+func (ml *mockLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
 	return lock.LockTable{}, nil
 }
 func (ml *mockLockService) IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool) {
@@ -680,18 +686,11 @@ func (ha *testHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
 	return ha.id.Add(1), nil
 }
 func (ha *testHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
-	// AllocateIDByKey should return a valid ID (>= MO_RESERVED_MAX=100)
-	// Use the same ID generator as AllocateID to ensure consistency
-	id := ha.id.Add(1)
-	// Ensure the ID is >= MO_RESERVED_MAX (100)
-	const MO_RESERVED_MAX = 100
-	if id < MO_RESERVED_MAX {
-		id = MO_RESERVED_MAX + ha.id.Add(1)
-	}
-	return id, nil
+	// The mock starts from 0x3fff, which is already above MO_RESERVED_MAX.
+	return ha.AllocateID(ctx)
 }
 func (ha *testHAKeeperClient) AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error) {
-	return 0, nil
+	return ha.id.Add(batch) - batch + 1, nil
 }
 func (ha *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logservice2.ClusterDetails, error) {
 	return logservice2.ClusterDetails{}, nil

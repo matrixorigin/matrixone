@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -110,7 +111,7 @@ func TestStartReplicas(t *testing.T) {
 		require.NoError(t, store.close())
 	}()
 	require.NoError(t, store.loadMetadata())
-	require.NoError(t, store.startReplicas())
+	require.NoError(t, store.startReplicas(context.Background()))
 	done := false
 	for i := 0; i < 1000; i++ {
 		hb := store.getHeartbeatMessage()

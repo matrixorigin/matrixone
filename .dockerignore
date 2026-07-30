@@ -34,14 +34,23 @@ __pycache__/
 # Ignore build artifacts
 cgo/*.o
 cgo/*.a
+cgo/*.so
+cgo/*.dylib
+/lib/
+/dict/
+/mo-service
+vendor/
+.proto-vendor/
 
 # Keep what we need
 !etc/
 !proto/
 !pkg/
 !cmd/
-!vendor/
 !go.mod
 !go.sum
 !Makefile
 !thirdparties/
+
+# Never send locally generated native artifacts back into a container build.
+thirdparties/install/

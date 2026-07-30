@@ -94,4 +94,41 @@ select @id;
 @id
 1000
 drop procedure test_inout_param;
+
+drop procedure if exists test_temp_table_lifecycle;
+create procedure test_temp_table_lifecycle() 'begin create temporary table tmp_proc_lifecycle (id int primary key, v int); insert into tmp_proc_lifecycle select id, val from tbh1 where id <= 2; select sum(v) as tmp_sum from tmp_proc_lifecycle; drop table tmp_proc_lifecycle; end';
+call test_temp_table_lifecycle();
+tmp_sum
+30
+drop procedure test_temp_table_lifecycle;
+drop procedure if exists test_temp_table_session_binding;
+create procedure test_temp_table_session_binding() 'begin create temporary table tmp_proc_session (id int primary key, v int); insert into tmp_proc_session select id, val from tbh1 where id <= 2; end';
+call test_temp_table_session_binding();
+select sum(v) as tmp_sum from tmp_proc_session;
+tmp_sum
+30
+drop table tmp_proc_session;
+drop procedure test_temp_table_session_binding;
+
+drop procedure if exists test_nested_temp_table_outer;
+drop procedure if exists test_nested_temp_table_inner;
+create procedure test_nested_temp_table_inner() 'begin create temporary table tmp_nested_proc_session (id int primary key, v int); insert into tmp_nested_proc_session select id, val from tbh1 where id <= 2; end';
+create procedure test_nested_temp_table_outer() 'begin call test_nested_temp_table_inner(); end';
+call test_nested_temp_table_outer();
+select sum(v) as tmp_sum from tmp_nested_proc_session;
+tmp_sum
+30
+drop table tmp_nested_proc_session;
+drop procedure test_nested_temp_table_outer;
+drop procedure test_nested_temp_table_inner;
+
+set sql_mode = 'PIPES_AS_CONCAT';
+create procedure test_sql_mode_pipes() 'begin select ''a''||''b'' as c; end';
+set sql_mode = '';
+call test_sql_mode_pipes();
+c
+ab
+drop procedure test_sql_mode_pipes;
+set sql_mode = default;
+
 drop database if exists procedure_test;

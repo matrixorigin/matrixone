@@ -86,8 +86,9 @@ type s3WriterDelegate struct {
 	deleteBatches []*batch.BatchSet
 	segmentMap    map[string]int32
 
-	action   actionType
-	isRemote bool
+	action             actionType
+	isRemote           bool
+	rejectZeroTemporal bool
 
 	updateCtxs     []*MultiUpdateCtx
 	updateCtxInfos map[string]*updateCtxInfo
@@ -142,6 +143,7 @@ func newS3Writer(
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		isRemote:            update.IsRemote,
+		rejectZeroTemporal:  update.RejectZeroTemporal,
 	}
 	for i := range writer.insertFreeLists {
 		writer.insertFreeLists[i] = containers.NewBatchFreeList(nil, nil, true)
@@ -270,13 +272,37 @@ func (writer *s3WriterDelegate) append(
 
 		tableType := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType
 
+		mainTablePkProjectIdx := -1
+		mainTableNullPkFilter := false
+		if tableType == UpdateMainTable && updateCtx.SkipInsertOnNullPk {
+			mainTablePkProjectIdx = updateCtx.InsertPkColIdx
+			if mainTablePkProjectIdx < 0 || mainTablePkProjectIdx >= len(projBat.Vecs) {
+				return moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
+			}
+			mainTableNullPkFilter = projBat.Vecs[mainTablePkProjectIdx].HasNull()
+		}
+
 		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
 		if tableType == UpdateMainTable {
-			for insertIdx, inputIdx := range updateCtx.InsertCols {
-				col := updateCtx.TableDef.Cols[insertIdx]
-				if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
-					if inBatch.Vecs[inputIdx].HasNull() {
-						return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+			if mainTableNullPkFilter {
+				var checked *batch.Batch
+				if checked, err = projBat.Clone(mp, false); err != nil {
+					return
+				}
+				nulls := checked.Vecs[mainTablePkProjectIdx].GetNulls().GetBitmap().Clone()
+				checked.ShrinkByMask(nulls, true, 0)
+				if err = checkMainTableNotNull(proc, updateCtx, checked); err != nil {
+					checked.Clean(mp)
+					return
+				}
+				checked.Clean(mp)
+			} else {
+				for insertIdx, inputIdx := range updateCtx.InsertCols {
+					col := updateCtx.TableDef.Cols[insertIdx]
+					if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
+						if inBatch.Vecs[inputIdx].HasNull() {
+							return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+						}
 					}
 				}
 			}
@@ -287,17 +313,30 @@ func (writer *s3WriterDelegate) append(
 		needNullFilter := tableType != UpdateMainTable &&
 			!writer.isClusterBys[i] &&
 			writer.sortIndexes[i] > -1
+		if tableType == UpdateMainTable {
+			needNullFilter = mainTableNullPkFilter
+		}
 
-		if needNullFilter && projBat.Vecs[writer.sortIndexes[i]].HasNull() {
+		if needNullFilter && (tableType == UpdateMainTable || projBat.Vecs[writer.sortIndexes[i]].HasNull()) {
 			// Clone because SelectColumns shares vectors, and ShrinkByMask
 			// modifies in-place.
 			var filtered *batch.Batch
 			if filtered, err = projBat.Clone(mp, false); err != nil {
 				return
 			}
-			nulls := filtered.Vecs[writer.sortIndexes[i]].GetNulls().GetBitmap().Clone()
+			nullIdx := writer.sortIndexes[i]
+			if tableType == UpdateMainTable {
+				nullIdx = mainTablePkProjectIdx
+			}
+			nulls := filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone()
 			filtered.ShrinkByMask(nulls, true, 0)
 			if filtered.RowCount() > 0 {
+				if tableType == UpdateMainTable {
+					if err = checkZeroTemporalInStrictMode(writer.rejectZeroTemporal, proc, filtered); err != nil {
+						filtered.Clean(mp)
+						return
+					}
+				}
 				err = writer.insertSinkers[i].Write(proc.Ctx, filtered)
 			}
 			filtered.Clean(mp)
@@ -305,6 +344,12 @@ func (writer *s3WriterDelegate) append(
 				return
 			}
 			continue
+		}
+
+		if tableType == UpdateMainTable {
+			if err = checkZeroTemporalInStrictMode(writer.rejectZeroTemporal, proc, projBat); err != nil {
+				return
+			}
 		}
 
 		if err = writer.insertSinkers[i].Write(proc.Ctx, projBat); err != nil {
@@ -351,6 +396,18 @@ func (writer *s3WriterDelegate) append(
 	writer.memController.grantedSize += int64(increment)
 
 	return
+}
+
+func checkMainTableNotNull(proc *process.Process, updateCtx *MultiUpdateCtx, bat *batch.Batch) error {
+	for insertIdx := range updateCtx.InsertCols {
+		col := updateCtx.TableDef.Cols[insertIdx]
+		if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
+			if bat.Vecs[insertIdx].HasNull() {
+				return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
+			}
+		}
+	}
+	return nil
 }
 
 func (writer *s3WriterDelegate) prepareDeleteBatches(
@@ -533,7 +590,9 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		// When cleanBatchAfterUse is true, the batch is exclusively owned
 		// (cloned), so we can transfer it to the sinker without copying.
 		if cleanBatchAfterUse {
-			owned, writeErr := s3Writer.WriteOwned(writeCtx, bats[i])
+			owned, writeErr := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
+				return s3Writer.WriteOwned(writeCtx, bats[i])
+			})
 			if writeErr != nil {
 				err = writeErr
 				return
@@ -548,7 +607,9 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 			bats[i] = nil
 			continue
 		}
-		if err = s3Writer.Write(writeCtx, bats[i]); err != nil {
+		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return s3Writer.Write(writeCtx, bats[i])
+		}); err != nil {
 			return
 		}
 
@@ -558,13 +619,12 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		bats[i] = nil
 	}
 
-	if _, err = s3Writer.Sync(writeCtx); err != nil {
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		_, syncErr := s3Writer.Sync(writeCtx)
+		return syncErr
+	}); err != nil {
 		return
 	}
-
-	analyzer.AddS3RequestCount(counterSet)
-	analyzer.AddFileServiceCacheInfo(counterSet)
-	analyzer.AddDiskIO(counterSet)
 
 	if blockInfoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return
@@ -652,7 +712,9 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		if s3w == nil {
 			continue
 		}
-		stats, syncErr := s3w.Sync(writeCtx)
+		stats, syncErr := process.MeasureFilesystemWait(analyzer, func() ([]objectio.ObjectStats, error) {
+			return s3w.Sync(writeCtx)
+		})
 		if syncErr != nil {
 			return syncErr
 		}
@@ -671,9 +733,6 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 			return
 		}
 	}
-	analyzer.AddS3RequestCount(counterSet)
-	analyzer.AddFileServiceCacheInfo(counterSet)
-	analyzer.AddDiskIO(counterSet)
 
 	// Flush remaining deletes — always call sortAndSync so that accumulated
 	// deleteBatches are processed through prepareDeleteBatches into

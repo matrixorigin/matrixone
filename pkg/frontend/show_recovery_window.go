@@ -22,7 +22,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -160,7 +162,7 @@ func constructRecoveryWindow(
 
 		snapPitrSearchCond = fmt.Sprintf(
 			"account_name = '%s'",
-			accountName,
+			sqlquote.EscapeString(accountName),
 		)
 	case tree.RECOVERYWINDOWLEVELDATABASE:
 		levelStr = "database"
@@ -168,8 +170,8 @@ func constructRecoveryWindow(
 		snapPitrSearchCond = fmt.Sprintf(
 			"(account_name = '%s' AND database_name = '') OR "+
 				"(account_name = '%s' AND database_name = '%s')",
-			accountName,
-			accountName, databaseName,
+			sqlquote.EscapeString(accountName),
+			sqlquote.EscapeString(accountName), sqlquote.EscapeString(databaseName),
 		)
 	case tree.RECOVERYWINDOWLEVELTABLE:
 		levelStr = "table"
@@ -178,9 +180,9 @@ func constructRecoveryWindow(
 			"(account_name = '%s' AND database_name = '') OR "+
 				"(account_name = '%s' AND database_name = '%s' AND table_name = '') OR "+
 				"(account_name = '%s' AND database_name = '%s' AND table_name = '%s')",
-			accountName,
-			accountName, databaseName,
-			accountName, databaseName, tableName,
+			sqlquote.EscapeString(accountName),
+			sqlquote.EscapeString(accountName), sqlquote.EscapeString(databaseName),
+			sqlquote.EscapeString(accountName), sqlquote.EscapeString(databaseName), sqlquote.EscapeString(tableName),
 		)
 
 	default:
@@ -188,8 +190,9 @@ func constructRecoveryWindow(
 	}
 
 	snapSearchSQL = fmt.Sprintf(
-		"select sname, level, account_name, database_name, table_name, ts from `%s`.`%s` where %s",
+		"select sname, level, account_name, database_name, table_name, ts from `%s`.`%s` where %s and kind != '%s'",
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, snapPitrSearchCond,
+		databranchutils.BranchSnapshotKind,
 	)
 
 	pitrSearchSQL = fmt.Sprintf(

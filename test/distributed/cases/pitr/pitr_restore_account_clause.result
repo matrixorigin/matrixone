@@ -1,0 +1,4 @@
+restore account sys database db01 from pitr pitr_missing '2026-05-24 12:00:00';
+internal error: pitr pitr_missing does not exist
+restore account sys database db01 table t01 from pitr pitr_missing '2026-05-24 12:00:00';
+internal error: pitr pitr_missing does not exist

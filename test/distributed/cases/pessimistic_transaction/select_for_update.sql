@@ -847,3 +847,156 @@ drop table if exists su_join_t2;
 drop table if exists su_join_t3;
 drop table if exists su_join_nat1;
 drop table if exists su_join_nat2;
+
+-- =====================================================================
+-- FOR UPDATE with CTE, derived tables, EXISTS/IN subqueries and aggregates
+-- =====================================================================
+
+drop table if exists su_fu_main;
+drop table if exists su_fu_ref;
+create table su_fu_main(id int primary key, company_id int, status int);
+create table su_fu_ref(id int primary key, province varchar(32));
+insert into su_fu_main values(1,10,1),(2,20,1),(3,30,1),(4,40,1),(5,50,1);
+insert into su_fu_ref values(10,'p1'),(20,'p2'),(30,'p3'),(40,'p4'),(50,'p5');
+
+-- cte + join + for update
+begin;
+with target as (select id, company_id from su_fu_main order by id limit 3)
+select t.id, t.company_id from su_fu_main t join target on t.id = target.id for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 99 where id = 1;
+-- @session}
+commit;
+select * from su_fu_main where id = 1;
+
+-- derived table + for update
+begin;
+select * from (select id, company_id from su_fu_main order by id limit 3) t for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 88 where id = 2;
+-- @session}
+commit;
+select * from su_fu_main where id = 2;
+
+-- derived table joined to a base table + for update; both base tables must be locked
+begin;
+select m.id, m.company_id, r.province from su_fu_main m
+  join (select id, province from su_fu_ref where id < 40) r on m.company_id = r.id
+  for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 33 where id = 1;
+-- @session}
+commit;
+select * from su_fu_main where id = 1;
+
+-- exists subquery + for update
+-- outer table (su_fu_main) is locked; subquery table (su_fu_ref) must NOT be locked
+begin;
+select id, company_id from su_fu_main t
+  where exists (select 1 from su_fu_ref r where r.id = t.company_id)
+  for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_ref set province = 'updated_ref' where id = 10;
+-- @wait:0:commit
+update su_fu_main set status = 77 where id = 3;
+-- @session}
+commit;
+select * from su_fu_main where id = 3;
+select * from su_fu_ref where id = 10;
+
+-- in subquery + for update; the subquery actually reads su_fu_ref ids 10/20/30/40/50,
+-- and even one of those rows must not be locked, while the outer su_fu_main rows must be
+begin;
+select id from su_fu_main where company_id in (select id from su_fu_ref) for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_ref set province = 'in_test' where id = 20;
+-- @wait:0:commit
+update su_fu_main set status = 22 where id = 2;
+-- @session}
+commit;
+select * from su_fu_ref where id = 20;
+select * from su_fu_main where id = 2;
+
+-- aggregate + for update; outer table must be locked
+begin;
+select company_id, count(*) from su_fu_main group by company_id for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 66 where id = 4;
+-- @session}
+commit;
+select * from su_fu_main where id = 4;
+
+-- aggregate + group by + having + for update; outer table must be locked
+begin;
+select company_id, count(*) c from su_fu_main group by company_id having c >= 1 for update;
+-- @session:id=1{
+use select_for_update;
+-- @wait:0:commit
+update su_fu_main set status = 67 where id = 5;
+-- @session}
+commit;
+select * from su_fu_main where id = 5;
+
+-- subquery in select list + for update; the scalar subquery actually reads
+-- su_fu_ref ids 10 (when m.id=1) and 20 (when m.id=2). Concurrently updating
+-- id=10 proves that even rows the subquery actually fetched are not locked.
+begin;
+select id, (select province from su_fu_ref r where r.id = m.company_id) p
+  from su_fu_main m where id <= 2 for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_ref set province = 'scalar_test' where id = 10;
+-- @session}
+commit;
+select * from su_fu_ref where id = 10;
+
+-- cte + join + for update; LIMIT scope must not over-lock rows outside the cte result set
+begin;
+with target as (select id from su_fu_main order by id limit 2)
+select t.id from su_fu_main t join target on t.id = target.id for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_main set status = 55 where id = 5;
+-- @session}
+commit;
+select * from su_fu_main where id = 5;
+
+-- recursive cte + for update is rejected: the body emits SINK_SCAN and the
+-- outer LOCK_OP cannot reach the underlying base tables, so a silent missing
+-- lock is worse than a clean error.
+drop table if exists su_fu_rec;
+create table su_fu_rec(id int primary key, parent int);
+insert into su_fu_rec values(1,0),(2,1),(3,2);
+with recursive walk as (
+  select id, parent from su_fu_rec where id = 1
+  union all
+  select s.id, s.parent from su_fu_rec s join walk on s.parent = walk.id
+) select * from walk for update;
+drop table if exists su_fu_rec;
+
+-- view + for update; view body must not inherit FOR UPDATE state and over-lock
+drop view if exists su_fu_view;
+create view su_fu_view as select id, company_id from su_fu_main order by id limit 2;
+begin;
+select * from su_fu_view for update;
+-- @session:id=1{
+use select_for_update;
+update su_fu_main set status = 44 where id = 5;
+-- @session}
+commit;
+select * from su_fu_main where id = 5;
+drop view if exists su_fu_view;
+
+-- cleanup
+drop table if exists su_fu_main;
+drop table if exists su_fu_ref;

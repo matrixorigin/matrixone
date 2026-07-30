@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -258,6 +260,9 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
+	if types.T(colType.GetId()).IsArrayRelate() {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in primary key", columnName))
+	}
 	if isEnumPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("ENUM column '%s' cannot be in primary key", columnName))
 	}
@@ -404,6 +409,7 @@ func DropColumn(
 	}
 
 	delete(alterCtx.alterColMap, colName)
+	delete(alterCtx.changColDefMap, column.ColId)
 	return column.Primary, nil
 }
 
@@ -438,7 +444,8 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			}
 		} else if !indexInfo.Unique {
 			// handle secondary index
-			switch catalog.ToLower(indexInfo.IndexAlgo) {
+			algo := catalog.ToLower(indexInfo.IndexAlgo)
+			switch algo {
 			case catalog.MoIndexDefaultAlgo.ToString(), catalog.MoIndexBTreeAlgo.ToString(), catalog.MoIndexRTreeAlgo.ToString():
 				// regular secondary index
 				if len(indexInfo.Parts) == 1 &&
@@ -453,25 +460,31 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				} else if len(indexInfo.Parts) == 0 {
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				}
-			case catalog.MoIndexIvfFlatAlgo.ToString():
-				// ivf index
-				if len(indexInfo.Parts) == 0 {
-					// remove 3 index records: metadata, centroids, entries
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+3:]...)
-				}
 			case catalog.MOIndexMasterAlgo.ToString():
 				if len(indexInfo.Parts) == 0 {
 					// TODO: verify this
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				}
-			case catalog.MOIndexFullTextAlgo.ToString():
-				if len(indexInfo.Parts) == 0 {
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
-				}
-			case catalog.MoIndexHnswAlgo.ToString():
-				if len(indexInfo.Parts) == 0 {
-					// remove 2 index records: metadata, storage
-					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+2:]...)
+			default:
+				// Plugin-registered indexes may span multiple hidden IndexDefs;
+				// remove all entries sharing the logical index name when the key
+				// columns are gone or plugin-owned metadata depends on this column.
+				if p, ok := indexplugin.Get(algo); ok {
+					dropIndex := len(indexInfo.Parts) == 0
+					if alterHooks, ok := p.Plan().(planplugin.AlterColumnHooks); ok {
+						affected, err := alterHooks.HandleAlterDropColumn(tbInfo, indexInfo, colName)
+						if err != nil {
+							return err
+						}
+						dropIndex = dropIndex || affected
+					}
+					if !dropIndex {
+						continue
+					}
+					tbInfo.Indexes = RemoveIf[*IndexDef](tbInfo.Indexes, func(def *IndexDef) bool {
+						return def.IndexName == indexInfo.IndexName
+					})
+					i--
 				}
 			}
 		}

@@ -23,10 +23,12 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -50,9 +52,9 @@ func ConstructCreateTableSQL(
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
-	dbTblName := fmt.Sprintf("`%s`", formatStr(tblName))
+	dbTblName := sqlquote.Ident(tblName)
 	if useDbName {
-		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
+		dbTblName = sqlquote.QualifiedIdent(schemaName, tblName)
 	}
 
 	if tableDef.TableType == catalog.SystemExternalRel {
@@ -111,7 +113,7 @@ func ConstructCreateTableSQL(
 		} else {
 			typeStr = strings.ToLower(typeStr)
 		}
-		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
+		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -141,7 +143,7 @@ func ConstructCreateTableSQL(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
+				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString))
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -170,9 +172,9 @@ func ConstructCreateTableSQL(
 		for i, def := range pkDefs {
 			def = colNameToOriginName[def]
 			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`)", formatStr(def))
+				pkStr += fmt.Sprintf("%s)", sqlquote.Ident(def))
 			} else {
-				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
+				pkStr += fmt.Sprintf("%s,", sqlquote.Ident(def))
 			}
 		}
 		if rowCount != 0 {
@@ -202,7 +204,7 @@ func ConstructCreateTableSQL(
 				indexStr += " FULLTEXT "
 
 				if len(indexdef.IndexName) > 0 {
-					indexStr += fmt.Sprintf("`%s`", formatStr(indexdef.IndexName))
+					indexStr += sqlquote.Ident(indexdef.IndexName)
 				}
 				indexStr += "("
 				i := 0
@@ -215,7 +217,7 @@ func ConstructCreateTableSQL(
 					}
 
 					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					indexStr += sqlquote.Ident(part)
 					i++
 				}
 
@@ -264,13 +266,17 @@ func ConstructCreateTableSQL(
 					indexStr = "  KEY "
 					rewriteIndexStr = "  KEY "
 				}
-				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-				rewriteIndexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				indexStr += fmt.Sprintf("%s ", sqlquote.Ident(indexdef.IndexName))
+				rewriteIndexStr += fmt.Sprintf("%s ", sqlquote.Ident(indexdef.IndexName))
 				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) && !catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
 					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 				}
 				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
 					rewriteIndexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
+				}
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexdef.IndexAlgoParams)
+				if err != nil {
+					return "", nil, err
 				}
 				indexStr += "("
 				rewriteIndexStr += "("
@@ -284,9 +290,14 @@ func ConstructCreateTableSQL(
 						rewriteIndexStr += ","
 					}
 
-					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
-					rewriteIndexStr += fmt.Sprintf("`%s`", formatStr(part))
+					originPart := colNameToOriginName[part]
+					indexStr += sqlquote.Ident(originPart)
+					rewriteIndexStr += sqlquote.Ident(originPart)
+					if length, ok := prefixLengths[part]; ok {
+						prefixLength := fmt.Sprintf("(%d)", length)
+						indexStr += prefixLength
+						rewriteIndexStr += prefixLength
+					}
 					i++
 				}
 
@@ -301,6 +312,13 @@ func ConstructCreateTableSQL(
 					indexStr += paramList
 					rewriteIndexStr += paramList
 				}
+				includedColumns, err := indexDefIncludedColumns(indexdef)
+				if err != nil {
+					return "", nil, err
+				}
+				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
+				indexStr += includeList
+				rewriteIndexStr += includeList
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
 						display string
@@ -309,8 +327,8 @@ func ConstructCreateTableSQL(
 				}
 			}
 			if indexdef.Comment != "" {
-				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				formattedComment := formatStr(indexdef.Comment)
+				indexStr += fmt.Sprintf(" COMMENT '%s'", formattedComment)
 				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
 					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
 					rewritePairs[len(rewritePairs)-1] = struct {
@@ -318,7 +336,7 @@ func ConstructCreateTableSQL(
 						rewrite string
 					}{
 						display: indexStr,
-						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment)),
+						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formattedComment),
 					}
 				}
 			}
@@ -348,7 +366,15 @@ func ConstructCreateTableSQL(
 			if _, tempTableDef, err = ctx.Resolve(schemaName, fkDef.Name, snap); err != nil {
 				return err
 			}
-
+			if tempTableDef == nil {
+				enabled, resolveErr := IsForeignKeyChecksEnabled(ctx)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				if !enabled {
+					return nil
+				}
+			}
 			fkDef = tempTableDef
 			return err
 		}
@@ -446,12 +472,17 @@ func ConstructCreateTableSQL(
 			createStr += ",\n"
 		}
 
-		fkRefDbTblName := fmt.Sprintf("`%s`", formatStr(fkTableDef.Name))
-		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
-			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkTableDef.DbName), formatStr(fkTableDef.Name))
+		fkRefDbName := fkTableDef.DbName
+		if cloneStmt != nil && (cloneStmt.StmtType == tree.WithinAccCloneDB || cloneStmt.StmtType == tree.BetweenAccCloneDB) &&
+			cloneStmt.SrcTable.SchemaName.String() == fkTableDef.DbName {
+			fkRefDbName = schemaName
 		}
-		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
-			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
+		fkRefDbTblName := sqlquote.Ident(fkTableDef.Name)
+		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
+			fkRefDbTblName = sqlquote.QualifiedIdent(fkRefDbName, fkTableDef.Name)
+		}
+		createStr += fmt.Sprintf("  CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s) ON DELETE %s ON UPDATE %s",
+			sqlquote.Ident(fk.Name), joinQuotedIdentifiers(colOriginNames), fkRefDbTblName, joinQuotedIdentifiers(fkColOriginNames), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
 	for _, checkDef := range checkDefs {
@@ -554,20 +585,31 @@ func ConstructCreateTableSQL(
 			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			for i, cbName := range cbNames {
 				if i != 0 {
-					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
+					clusterby += fmt.Sprintf(", %s", sqlquote.Ident(cbName))
 				} else {
-					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
+					clusterby += sqlquote.Ident(cbName)
 				}
 			}
 		} else {
 			//single column cluster by
-			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
+			clusterby += sqlquote.Ident(tableDef.ClusterBy.Name)
 		}
 		clusterby += ")"
 		createStr += clusterby
 	}
 
 	if tableDef.TableType == catalog.SystemExternalRel {
+		if env, found, parseErr := sqliceberg.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatIcebergTableOptionsForShowCreate(env)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmt(ctx, createStr)
+			}
+			return createStr, stmt, err
+		}
+
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
 			return "", nil, err
@@ -581,8 +623,7 @@ func ConstructCreateTableSQL(
 				return "", nil, err
 			}
 		}
-		// hide file path
-		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.CompressType, param.Format, param.JsonData)
+		createStr += formatExternalTableOptionsForShowCreate(param)
 
 		fields := ""
 		if param.Tail != nil && param.Tail.Fields != nil {
@@ -590,17 +631,26 @@ func ConstructCreateTableSQL(
 				if param.Tail.Fields.Terminated.Value == "" {
 					fields += " TERMINATED BY \"\""
 				} else {
-					fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+					fields += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotes(param.Tail.Fields.Terminated.Value))
 				}
 			}
 
 			escape := func(value byte) string {
-				if value == byte(0) {
+				switch value {
+				case 0:
 					return ""
-				} else if value == byte('\\') {
+				case '\\':
 					return "\\\\"
+				case '\'':
+					// The byte sits inside a single-quoted SQL literal. Use quote
+					// doubling rather than a backslash escape: the SHOW CREATE
+					// result embeds this string in a double-quoted SELECT literal
+					// that consumes one level of backslashes, and '' survives that
+					// round-trip displayable and re-executable.
+					return "''"
+				default:
+					return fmt.Sprintf("%c", value)
 				}
-				return fmt.Sprintf("%c", value)
 			}
 			if param.Tail.Fields.EnclosedBy != nil {
 				fields += " ENCLOSED BY '" + escape(param.Tail.Fields.EnclosedBy.Value) + "'"
@@ -613,14 +663,10 @@ func ConstructCreateTableSQL(
 		line := ""
 		if param.Tail != nil && param.Tail.Lines != nil {
 			if param.Tail.Lines.StartingBy != "" {
-				line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
+				line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.StartingBy))
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
-				if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
-					line += " TERMINATED BY '\\\\n'"
-				} else {
-					line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
-				}
+				line += fmt.Sprintf(" TERMINATED BY '%s'", formatLinesTerminatedBy(param.Tail.Lines.TerminatedBy.Value))
 			}
 		}
 
@@ -648,6 +694,22 @@ func ConstructCreateTableSQL(
 	return createStr, stmt, err
 }
 
+func indexIncludeColumnsToString(includedColumns []string, colNameToOriginName map[string]string) string {
+	if len(includedColumns) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(includedColumns))
+	for _, colName := range includedColumns {
+		resolvedName := catalog.ResolveAlias(colName)
+		if originName := colNameToOriginName[resolvedName]; originName != "" {
+			resolvedName = originName
+		}
+		names = append(names, fmt.Sprintf("`%s`", formatStr(resolvedName)))
+	}
+	return fmt.Sprintf(" INCLUDE (%s)", strings.Join(names, ", "))
+}
+
 func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 	if tableDef == nil || tableDef.Createsql == "" || tableDef.TableType == catalog.SystemExternalRel {
 		return nil
@@ -670,6 +732,14 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 		}
 	}
 	return checks
+}
+
+func joinQuotedIdentifiers(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = sqlquote.Ident(name)
+	}
+	return strings.Join(quoted, ",")
 }
 
 func extractCreateTableDefsSection(createSQL string) (string, bool) {
@@ -727,10 +797,10 @@ func isTopLevelCheckDef(def string) bool {
 
 	trimmed := strings.TrimSpace(def)
 	upper := strings.ToUpper(trimmed)
-	if strings.HasPrefix(upper, "CHECK") {
+	if hasKeywordAt(upper, "CHECK", 0) {
 		return true
 	}
-	if !strings.HasPrefix(upper, "CONSTRAINT") {
+	if !hasKeywordAt(upper, "CONSTRAINT", 0) {
 		return false
 	}
 	return containsKeywordOutsideQuotes(trimmed, "CHECK")
@@ -772,7 +842,7 @@ func hasKeywordAt(s string, keyword string, pos int) bool {
 }
 
 func isIdentChar(ch byte) bool {
-	return ch == '_' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
+	return ch == '_' || ch == '$' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
 }
 
 func findTopLevelByte(s string, target byte) int {
@@ -866,6 +936,10 @@ func skipBlockComment(s string, start int) int {
 
 // FormatColType Get the formatted description of the column type.
 func FormatColType(colType plan.Type) string {
+	if arrayType := arrayPlanTypeString(&colType); arrayType != "" {
+		return strings.ToUpper(arrayType[:len("array")]) + arrayType[len("array"):]
+	}
+
 	typ := types.T(colType.Id).ToType()
 
 	ts := typ.String()
@@ -878,6 +952,11 @@ func FormatColType(colType plan.Type) string {
 	}
 	if subtype := geometrySubtypeName(&colType); subtype != "" {
 		ts = subtype
+		// A GEOMETRY32 subtype column renders with the "32" suffix (e.g.
+		// POINT32) so SHOW CREATE round-trips the float32 family.
+		if types.T(colType.Id) == types.T_geometry32 {
+			ts += "32"
+		}
 	}
 	if srid, ok := geometrySRIDValue(&colType); ok {
 		ts = fmt.Sprintf("%s SRID %d", ts, srid)
@@ -916,11 +995,187 @@ func FormatColType(colType plan.Type) string {
 	case types.T_bit, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		suffix = fmt.Sprintf("(%d)", colType.Width)
 
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		suffix = fmt.Sprintf("(%d)", colType.Width)
 
 	}
 	return ts + suffix
+}
+
+// formatStrInSingleQuotes escapes s for emission inside a single-quoted SQL
+// string literal. A single quote is written as two single quotes (doubling)
+// rather than backslash-escaped: the
+// SHOW CREATE result embeds the DDL in a double-quoted SELECT literal that
+// consumes one level of backslashes, and quote doubling survives that
+// round-trip both displayable and re-executable.
+func formatStrInSingleQuotes(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `'`, `''`)
+}
+
+// formatLinesTerminatedBy renders a LINES TERMINATED BY value for SHOW CREATE.
+// TerminatedBy.Value holds the raw bytes, so the newline (\n) and CRLF (\r\n)
+// defaults must be emitted as escape sequences — a literal CR/LF byte in the DDL
+// would be an unparseable embedded newline. The backslashes are doubled because
+// the SHOW CREATE result is delivered through a double-quoted SELECT literal that
+// consumes one backslash level before the DDL is re-parsed (mirrors the \n case
+// that already shipped). \n and \r\n must stay distinct so a CRLF table is
+// recreatable as CRLF, not silently downgraded to LF.
+func formatLinesTerminatedBy(value string) string {
+	switch value {
+	case "\n":
+		return `\\n`
+	case "\r\n":
+		return `\\r\\n`
+	default:
+		return formatStrInSingleQuotes(value)
+	}
+}
+
+func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
+	if param.ScanType == tree.S3 {
+		return formatS3ExternalOptionsForShowCreate(param)
+	}
+	return formatInfileExternalOptionsForShowCreate(param)
+}
+
+func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "catalog", value: env.Catalog},
+		{key: "namespace", value: env.Namespace},
+		{key: "table", value: env.Table},
+		{key: "ref", value: env.DefaultRef},
+		{key: "read_mode", value: env.ReadMode},
+		{key: "write_mode", value: env.WriteMode},
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = ICEBERG WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotes(option.value))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
+	if pattern, writable := GetWriteFilePattern(param); writable {
+		// Writable external tables must be recreatable from their own DDL:
+		// snapshot/PITR restore replays SHOW CREATE output, so masking the
+		// read FILEPATH (or emitting empty optional keys, which the read-side
+		// option validator rejects — e.g. 'JSONDATA'='') would silently
+		// produce a table that can write but not read its files.
+		parts := make([]string, 0, 6)
+		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath)
+		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType)
+		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format)
+		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData)
+		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern)
+		// The CSV reader skips lines whose raw prefix matches COMMENT (the writer
+		// encloses colliding first fields), so the marker affects readback and
+		// must round-trip; omitted when unset.
+		appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
+		return " INFILE{" + strings.Join(parts, ",") + "}"
+	}
+	filepath := ""
+	if param.HivePartitioning {
+		filepath = param.Filepath
+	}
+	parts := []string{
+		"'FILEPATH'=" + formatStrLit(filepath),
+		"'COMPRESSION'=" + formatStrLit(param.CompressType),
+		"'FORMAT'=" + formatStrLit(param.Format),
+		"'JSONDATA'=" + formatStrLit(param.JsonData),
+	}
+	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
+	// changes which rows are returned; round-trip it (omitted when unset).
+	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param))
+	appendHivePartitionOptionsForShowCreate(&parts, param, true)
+	return " INFILE{" + strings.Join(parts, ",") + "}"
+}
+
+// appendInfileOptionForShowCreate appends 'KEY'='value' when the value is
+// non-empty (the read-side option validators reject empty values for keys
+// like jsondata, so omitted is the recreatable form of "unset").
+func appendInfileOptionForShowCreate(parts *[]string, key, value string) {
+	if value == "" {
+		return
+	}
+	*parts = append(*parts, "'"+key+"'="+formatStrLit(value))
+}
+
+func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam) string {
+	parts := make([]string, 0, len(param.Option)/2+2)
+	if param.S3Param != nil {
+		appendExternalOptionForShowCreate(&parts, "endpoint", param.S3Param.Endpoint, false)
+		appendExternalOptionForShowCreate(&parts, "region", param.S3Param.Region, false)
+		if hasExternalOption(param, "access_key_id") {
+			appendExternalOptionForShowCreate(&parts, "access_key_id", param.S3Param.APIKey, true)
+		}
+		if hasExternalOption(param, "secret_access_key") {
+			appendExternalOptionForShowCreate(&parts, "secret_access_key", param.S3Param.APISecret, true)
+		}
+		appendExternalOptionForShowCreate(&parts, "bucket", param.S3Param.Bucket, false)
+	}
+	appendExternalOptionForShowCreate(&parts, "filepath", param.Filepath, false)
+	if param.S3Param != nil {
+		appendExternalOptionForShowCreate(&parts, "provider", param.S3Param.Provider, false)
+		appendExternalOptionForShowCreate(&parts, "role_arn", param.S3Param.RoleArn, false)
+		appendExternalOptionForShowCreate(&parts, "external_id", param.S3Param.ExternalId, false)
+	}
+	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false)
+	appendExternalOptionForShowCreate(&parts, "format", param.Format, false)
+	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false)
+	if pattern, ok := GetWriteFilePattern(param); ok {
+		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false)
+	}
+	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
+	// changes which rows are returned; round-trip it (omitted when unset).
+	appendExternalOptionForShowCreate(&parts, CSVCommentKey, GetCSVComment(param), false)
+	appendHivePartitionOptionsForShowCreate(&parts, param, false)
+	return " URL s3option{" + strings.Join(parts, ",") + "}"
+}
+
+func appendHivePartitionOptionsForShowCreate(parts *[]string, param *tree.ExternParam, upperKey bool) {
+	if !param.HivePartitioning {
+		return
+	}
+	hivePartitioningKey := "hive_partitioning"
+	hivePartitionColsKey := "hive_partition_columns"
+	if upperKey {
+		hivePartitioningKey = "HIVE_PARTITIONING"
+		hivePartitionColsKey = "HIVE_PARTITION_COLUMNS"
+	}
+	appendExternalOptionForShowCreate(parts, hivePartitioningKey, "true", false)
+	appendExternalOptionForShowCreate(parts, hivePartitionColsKey, strings.Join(param.HivePartitionCols, ","), false)
+}
+
+func appendExternalOptionForShowCreate(parts *[]string, key, value string, mask bool) {
+	if value == "" && !mask {
+		return
+	}
+	if mask {
+		value = "******"
+	}
+	*parts = append(*parts, formatStrLit(key)+"="+formatStrLit(value))
+}
+
+func hasExternalOption(param *tree.ExternParam, key string) bool {
+	for i := 0; i < len(param.Option); i += 2 {
+		if strings.EqualFold(param.Option[i], key) {
+			return true
+		}
+	}
+	return false
 }
 
 // Character replace mapping maps certain special characters to their escape sequences.
@@ -944,6 +1199,30 @@ func EscapeFormat(s string) string {
 	return buf.String()
 }
 
+func formatStrLit(s string) string {
+	var buf strings.Builder
+	buf.Grow(len(s) + 2)
+	buf.WriteByte('\'')
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			buf.WriteString("\\\\")
+		case '\'':
+			buf.WriteString("''")
+		case '\n':
+			buf.WriteString("\\n")
+		case '\r':
+			buf.WriteString("\\r")
+		case '\x00':
+			buf.WriteString("\\0")
+		default:
+			buf.WriteByte(s[i])
+		}
+	}
+	buf.WriteByte('\'')
+	return buf.String()
+}
+
 func formatStr(str string) string {
 	tmp := strings.Replace(str, "`", "``", -1)
 	strLen := len(tmp)
@@ -954,6 +1233,14 @@ func formatStr(str string) string {
 		return "'" + strings.Replace(tmp[1:strLen-1], "'", "''", -1) + "'"
 	}
 	return strings.Replace(tmp, "'", "''", -1)
+}
+
+func formatDefaultExpr(expr string) string {
+	trimmed := strings.TrimSpace(expr)
+	if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
+		return trimmed
+	}
+	return formatStr(expr)
 }
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {

@@ -24,19 +24,21 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-func FilteredSearchUnsafeWithBloomFilter(
+// FilteredSearchUnsafeWithMembership runs a usearch search that keeps only the
+// candidate keys present in the doc_id membership filter f. f may be any
+// docfilter.MembershipFilter (an exact cbitmap / CRoaring bitset, or a bloom
+// filter); the C predicate tests each candidate key against f's underlying
+// structure via its CHandle/CKind cgo bridge. A nil filter passes all keys.
+func FilteredSearchUnsafeWithMembership(
 	index *usearch.Index,
 	query unsafe.Pointer,
 	limit uint,
-	bf *bloomfilter.CBloomFilter,
+	f docfilter.MembershipFilter,
 ) (keys []usearch.Key, distances []float32, err error) {
 	var errorMessage *C.char
 
@@ -44,11 +46,6 @@ func FilteredSearchUnsafeWithBloomFilter(
 		panic("index is uninitialized")
 	}
 	handle := C.usearch_index_t(index.GetHandle())
-
-	var bfptr unsafe.Pointer
-	if bf != nil {
-		bfptr = unsafe.Pointer(bf.Ptr())
-	}
 
 	if query == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("query pointer cannot be nil")
@@ -58,15 +55,45 @@ func FilteredSearchUnsafeWithBloomFilter(
 		return []usearch.Key{}, []float32{}, nil
 	}
 
+	// Extract the filter's C handle + kind. A nil filter means "unfiltered" and
+	// leaves fptr NULL (the C predicate keeps all). But a non-nil filter that is
+	// invalid, of an unknown kind, or has a nil handle is an ERROR — silently
+	// treating any of those as keep-all would skip intended filtering and return
+	// extra rows.
+	var fptr unsafe.Pointer
+	var kind C.int
+	if f != nil {
+		if !f.Valid() {
+			return nil, nil, moerr.NewInternalErrorNoCtx("usearchex: invalid (non-nil) membership filter")
+		}
+		// The C search predicate needs the underlying handle + kind, which live
+		// on the C-bridge adapter contract (not the general probe interface).
+		cf, ok := f.(docfilter.CFilter)
+		if !ok {
+			return nil, nil, moerr.NewInternalErrorNoCtx("usearchex: membership filter does not support the C search bridge")
+		}
+		switch cf.CKind() {
+		case docfilter.TagBloom, docfilter.TagCRoaring, docfilter.TagCbitmap:
+		default:
+			return nil, nil, moerr.NewInternalErrorNoCtx("usearchex: unknown membership filter kind")
+		}
+		fptr = cf.CHandle()
+		if fptr == nil {
+			return nil, nil, moerr.NewInternalErrorNoCtx("usearchex: membership filter has nil handle")
+		}
+		kind = C.int(cf.CKind())
+	}
+
 	keys = make([]usearch.Key, limit)
 	distances = make([]float32, limit)
 
-	resultCount := uint(C.usearchex_filtered_search_with_bloomfilter(
+	resultCount := uint(C.usearchex_filtered_search_with_membership(
 		handle,
 		query,
 		C.usearch_scalar_kind_t(index.GetConfig().Quantization.CValue()),
 		C.size_t(limit),
-		bfptr,
+		fptr,
+		kind,
 		(*C.usearch_key_t)(&keys[0]),
 		(*C.usearch_distance_t)(&distances[0]),
 		(*C.usearch_error_t)(&errorMessage)))
@@ -75,92 +102,7 @@ func FilteredSearchUnsafeWithBloomFilter(
 		return nil, nil, moerr.NewInternalErrorNoCtx(C.GoString(errorMessage))
 	}
 
-	keys = keys[:resultCount]
-	distances = distances[:resultCount]
-	return keys, distances, nil
-}
-
-func CreateBitSetFromInt64Vector(vec *vector.Vector) (*bitmap.Bitmap, error) {
-
-	if vec.GetType().Oid != types.T_int64 {
-		return nil, moerr.NewInternalErrorNoCtx("CreateBitSetFromInt64Vector: vector type is not int64")
-	}
-
-	var bm bitmap.Bitmap
-	if vec.Length() > 0 {
-		maxID := int64(0)
-		for i := 0; i < vec.Length(); i++ {
-			if vec.IsNull(uint64(i)) {
-				continue
-			}
-			id := vector.GetFixedAtNoTypeCheck[int64](vec, i)
-			if id > maxID {
-				maxID = id
-			}
-		}
-
-		// create bitmap
-		bm.InitWithSize(maxID + 1)
-		for i := 0; i < vec.Length(); i++ {
-			if vec.IsNull(uint64(i)) {
-				continue
-			}
-			id := vector.GetFixedAtNoTypeCheck[int64](vec, i)
-			bm.Add(uint64(id))
-		}
-	}
-
-	return &bm, nil
-}
-
-func FilteredSearchUnsafeWithBitmap(
-	index *usearch.Index,
-	query unsafe.Pointer,
-	limit uint,
-	bm *bitmap.Bitmap,
-) (keys []usearch.Key, distances []float32, err error) {
-	var errorMessage *C.char
-
-	if index.GetHandle() == nil {
-		panic("index is uninitialized")
-	}
-	handle := C.usearch_index_t(index.GetHandle())
-
-	var bmptr *C.uint64_t
-	var bmsize uint64
-
-	if bm != nil {
-		bmptr = (*C.uint64_t)(unsafe.Pointer(bm.Ptr()))
-		bmsize = uint64(bm.Size() / 8) // number of uint64
-	}
-
-	if query == nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("query pointer cannot be nil")
-	}
-
-	if limit == 0 {
-		return []usearch.Key{}, []float32{}, nil
-	}
-
-	keys = make([]usearch.Key, limit)
-	distances = make([]float32, limit)
-
-	resultCount := uint(C.usearchex_filtered_search_with_bitmap(
-		handle,
-		query,
-		C.usearch_scalar_kind_t(index.GetConfig().Quantization.CValue()),
-		C.size_t(limit),
-		bmptr,
-		C.size_t(bmsize),
-		(*C.usearch_key_t)(&keys[0]),
-		(*C.usearch_distance_t)(&distances[0]),
-		(*C.usearch_error_t)(&errorMessage)))
-
-	if errorMessage != nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx(C.GoString(errorMessage))
-	}
-
-	runtime.KeepAlive(bm)
+	runtime.KeepAlive(f)
 	keys = keys[:resultCount]
 	distances = distances[:resultCount]
 	return keys, distances, nil

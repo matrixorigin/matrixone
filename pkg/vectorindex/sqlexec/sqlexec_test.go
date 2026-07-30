@@ -16,6 +16,7 @@ package sqlexec
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -73,4 +74,60 @@ func TestSqlTxn(t *testing.T) {
 		return nil
 	})
 	require.Nil(t, err)
+}
+
+func TestFinishTxnWithCleanupContextUsesFreshContext(t *testing.T) {
+	bodyErr := context.Canceled
+	var rollbackTenant any
+
+	err := finishTxnWithCleanupContext(
+		42,
+		bodyErr,
+		func(context.Context) error {
+			t.Fatal("commit must not run on body error")
+			return nil
+		},
+		func(ctx context.Context) error {
+			require.NoError(t, ctx.Err())
+			rollbackTenant = ctx.Value(defines.TenantIDKey{})
+			return nil
+		},
+	)
+	require.ErrorIs(t, err, bodyErr)
+	require.Equal(t, uint32(42), rollbackTenant)
+
+	rollbackErr := errors.New("rollback failed")
+	err = finishTxnWithCleanupContext(
+		42,
+		bodyErr,
+		func(context.Context) error {
+			t.Fatal("commit must not run on body error")
+			return nil
+		},
+		func(context.Context) error {
+			return rollbackErr
+		},
+	)
+	require.ErrorIs(t, err, bodyErr)
+	require.ErrorIs(t, err, rollbackErr)
+}
+
+func TestFinishTxnWithCleanupContextCommitsWithFreshContext(t *testing.T) {
+	var commitTenant any
+
+	err := finishTxnWithCleanupContext(
+		42,
+		nil,
+		func(ctx context.Context) error {
+			require.NoError(t, ctx.Err())
+			commitTenant = ctx.Value(defines.TenantIDKey{})
+			return nil
+		},
+		func(context.Context) error {
+			t.Fatal("rollback must not run without body error")
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), commitTenant)
 }

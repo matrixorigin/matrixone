@@ -223,6 +223,20 @@ func fixedDirectlyTypeMatch(overload []overload, inputs []types.Type) checkResul
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
+func unaryTildeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		switch inputs[0].Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			for i, overload := range overloads {
+				if len(overload.args) == 1 && overload.args[0] == types.T_int64 {
+					return newCheckResultWithCast(i, []types.Type{types.T_int64.ToType()})
+				}
+			}
+		}
+	}
+	return fixedDirectlyTypeMatch(overloads, inputs)
+}
+
 // return whether `from` can match `to` implicitly, and match cost.
 func tryToMatch(from []types.Type, to []types.T) (sta matchCheckStatus, cost int) {
 	if len(from) != len(to) {
@@ -398,6 +412,108 @@ func setMaxScaleFromSource(t *types.Type, source []types.Type) {
 	}
 }
 
+func setSafeDecimalWidthAndScaleFromSource(t *types.Type, source []types.Type) bool {
+	if !t.Oid.IsDecimal() {
+		return true
+	}
+	hasDecimalOrInteger := false
+	maxScale := int32(0)
+	maxIntegralWidth := int32(0)
+
+	for i := range source {
+		if source[i].Oid.IsDecimal() {
+			if !hasDecimalOrInteger {
+				maxScale = source[i].Scale
+				maxIntegralWidth = source[i].Width - source[i].Scale
+				if maxIntegralWidth < 0 {
+					maxIntegralWidth = 0
+				}
+				hasDecimalOrInteger = true
+			}
+			if source[i].Scale > maxScale {
+				maxScale = source[i].Scale
+			}
+			integralWidth := source[i].Width - source[i].Scale
+			if integralWidth > maxIntegralWidth {
+				maxIntegralWidth = integralWidth
+			}
+			continue
+		}
+
+		if source[i].IsIntOrUint() {
+			hasDecimalOrInteger = true
+			if integralWidth := integerIntegralWidth(source[i].Oid); integralWidth > maxIntegralWidth {
+				maxIntegralWidth = integralWidth
+			}
+		}
+	}
+	if !hasDecimalOrInteger {
+		return true
+	}
+
+	requiredWidth := maxIntegralWidth + maxScale
+	oid, ok := decimalTypeForRequiredWidth(t.Oid, requiredWidth)
+	if !ok {
+		return false
+	}
+	t.Oid = oid
+	t.Size = int32(t.Oid.TypeLen())
+	t.Scale = maxScale
+	t.Width = requiredWidth
+	return true
+}
+
+func decimalTypeForRequiredWidth(oid types.T, requiredWidth int32) (types.T, bool) {
+	switch oid {
+	case types.T_decimal64:
+		if requiredWidth <= types.T_decimal64.ToType().Width {
+			return types.T_decimal64, true
+		}
+		if requiredWidth <= types.T_decimal128.ToType().Width {
+			return types.T_decimal128, true
+		}
+		if requiredWidth <= types.T_decimal256.ToType().Width {
+			return types.T_decimal256, true
+		}
+		return oid, false
+	case types.T_decimal128:
+		if requiredWidth <= types.T_decimal128.ToType().Width {
+			return types.T_decimal128, true
+		}
+		if requiredWidth <= types.T_decimal256.ToType().Width {
+			return types.T_decimal256, true
+		}
+		return oid, false
+	case types.T_decimal256:
+		return types.T_decimal256, requiredWidth <= types.T_decimal256.ToType().Width
+	default:
+		return oid, true
+	}
+}
+
+func integerIntegralWidth(oid types.T) int32 {
+	switch oid {
+	case types.T_int8:
+		return 3
+	case types.T_uint8:
+		return 3
+	case types.T_int16:
+		return 5
+	case types.T_uint16:
+		return 5
+	case types.T_int32:
+		return 10
+	case types.T_uint32:
+		return 10
+	case types.T_int64:
+		return 19
+	case types.T_uint64:
+		return 20
+	default:
+		return 0
+	}
+}
+
 func setMaxWidthFromSource(t *types.Type, source []types.Type) {
 	t.Width = -1
 	for i := range source {
@@ -489,8 +605,8 @@ func initFixed1() {
 		{types.T_int8, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_int8, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int8, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_int8, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_int8, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_int8, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_int8, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_int8, types.T_char, types.T_int8, types.T_int8},
 		{types.T_int8, types.T_varchar, types.T_int8, types.T_int8},
 		{types.T_int8, types.T_binary, types.T_int8, types.T_int8},
@@ -512,8 +628,8 @@ func initFixed1() {
 		{types.T_int16, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_int16, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int16, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_int16, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_int16, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_int16, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_int16, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_int16, types.T_char, types.T_int16, types.T_int16},
 		{types.T_int16, types.T_varchar, types.T_int16, types.T_int16},
 		{types.T_int16, types.T_binary, types.T_int16, types.T_int16},
@@ -535,8 +651,8 @@ func initFixed1() {
 		{types.T_int32, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_int32, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int32, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_int32, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_int32, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_int32, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_int32, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_int32, types.T_char, types.T_int32, types.T_int32},
 		{types.T_int32, types.T_varchar, types.T_int32, types.T_int32},
 		{types.T_int32, types.T_binary, types.T_int32, types.T_int32},
@@ -559,8 +675,8 @@ func initFixed1() {
 		{types.T_int64, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_year, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_int64, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_int64, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_int64, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_int64, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_int64, types.T_char, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_varchar, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_binary, types.T_int64, types.T_int64},
@@ -582,8 +698,8 @@ func initFixed1() {
 		{types.T_uint8, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_uint8, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint8, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_uint8, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_uint8, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_uint8, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_uint8, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_uint8, types.T_char, types.T_uint8, types.T_uint8},
 		{types.T_uint8, types.T_varchar, types.T_uint8, types.T_uint8},
 		{types.T_uint8, types.T_binary, types.T_uint8, types.T_uint8},
@@ -605,8 +721,8 @@ func initFixed1() {
 		{types.T_uint16, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_uint16, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint16, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_uint16, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_uint16, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_uint16, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_uint16, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_uint16, types.T_char, types.T_uint16, types.T_uint16},
 		{types.T_uint16, types.T_varchar, types.T_uint16, types.T_uint16},
 		{types.T_uint16, types.T_binary, types.T_uint16, types.T_uint16},
@@ -628,8 +744,8 @@ func initFixed1() {
 		{types.T_uint32, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_uint32, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint32, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_uint32, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_uint32, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_uint32, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_uint32, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_uint32, types.T_char, types.T_uint32, types.T_uint32},
 		{types.T_uint32, types.T_varchar, types.T_uint32, types.T_uint32},
 		{types.T_uint32, types.T_binary, types.T_uint32, types.T_uint32},
@@ -651,8 +767,8 @@ func initFixed1() {
 		{types.T_uint64, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_uint64, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint64, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_uint64, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_uint64, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_uint64, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_uint64, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_uint64, types.T_char, types.T_uint64, types.T_uint64},
 		{types.T_uint64, types.T_varchar, types.T_uint64, types.T_uint64},
 		{types.T_uint64, types.T_binary, types.T_uint64, types.T_uint64},
@@ -810,14 +926,14 @@ func initFixed1() {
 		{types.T_time, types.T_blob, types.T_time, types.T_time},
 		{types.T_time, types.T_text, types.T_time, types.T_time},
 		{types.T_datetime, types.T_any, types.T_datetime, types.T_datetime},
-		{types.T_datetime, types.T_int8, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_int16, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_int32, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_int64, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_uint8, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_uint16, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_uint32, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_uint64, types.T_decimal64, types.T_decimal64},
+		{types.T_datetime, types.T_int8, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_int16, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_int32, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_int64, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_uint8, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_uint16, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_uint32, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_uint64, types.T_decimal128, types.T_decimal128},
 		{types.T_datetime, types.T_decimal64, types.T_decimal64, types.T_decimal64},
 		{types.T_datetime, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_datetime, types.T_date, types.T_datetime, types.T_datetime},
@@ -829,14 +945,14 @@ func initFixed1() {
 		{types.T_datetime, types.T_blob, types.T_datetime, types.T_datetime},
 		{types.T_datetime, types.T_text, types.T_datetime, types.T_datetime},
 		{types.T_timestamp, types.T_any, types.T_timestamp, types.T_timestamp},
-		{types.T_timestamp, types.T_int8, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_int16, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_int32, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_int64, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_uint8, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_uint16, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_uint32, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_uint64, types.T_decimal64, types.T_decimal64},
+		{types.T_timestamp, types.T_int8, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_int16, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_int32, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_int64, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_uint8, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_uint16, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_uint32, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_uint64, types.T_decimal128, types.T_decimal128},
 		{types.T_timestamp, types.T_decimal64, types.T_decimal64, types.T_decimal64},
 		{types.T_timestamp, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_timestamp, types.T_date, types.T_timestamp, types.T_timestamp},
@@ -919,6 +1035,10 @@ func initFixed1() {
 		{types.T_varchar, types.T_text, types.T_varchar, types.T_varchar},
 		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
+		{types.T_varchar, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_varchar, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_varchar, types.T_array_int8, types.T_array_int8, types.T_array_int8},
+		{types.T_varchar, types.T_array_uint8, types.T_array_uint8, types.T_array_uint8},
 		{types.T_json, types.T_any, types.T_json, types.T_json},
 		{types.T_json, types.T_bool, types.T_bool, types.T_bool},
 		{types.T_json, types.T_int8, types.T_int8, types.T_int8},
@@ -972,9 +1092,9 @@ func initFixed1() {
 		{types.T_binary, types.T_char, types.T_char, types.T_char},
 		{types.T_binary, types.T_varchar, types.T_varchar, types.T_varchar},
 		{types.T_binary, types.T_uuid, types.T_uuid, types.T_uuid},
-		{types.T_binary, types.T_varbinary, types.T_binary, types.T_binary},
-		{types.T_binary, types.T_blob, types.T_binary, types.T_binary},
-		{types.T_binary, types.T_text, types.T_binary, types.T_binary},
+		{types.T_binary, types.T_varbinary, types.T_varbinary, types.T_varbinary},
+		{types.T_binary, types.T_blob, types.T_blob, types.T_blob},
+		{types.T_binary, types.T_text, types.T_blob, types.T_blob},
 		{types.T_varbinary, types.T_any, types.T_varbinary, types.T_varbinary},
 		{types.T_varbinary, types.T_bool, types.T_bool, types.T_bool},
 		{types.T_varbinary, types.T_int8, types.T_int8, types.T_int8},
@@ -997,7 +1117,7 @@ func initFixed1() {
 		{types.T_varbinary, types.T_char, types.T_char, types.T_char},
 		{types.T_varbinary, types.T_varchar, types.T_varchar, types.T_varchar},
 		{types.T_varbinary, types.T_uuid, types.T_uuid, types.T_uuid},
-		{types.T_varbinary, types.T_binary, types.T_binary, types.T_binary},
+		{types.T_varbinary, types.T_binary, types.T_varbinary, types.T_varbinary},
 		{types.T_varbinary, types.T_blob, types.T_varbinary, types.T_varbinary},
 		{types.T_varbinary, types.T_text, types.T_varbinary, types.T_varbinary},
 		{types.T_blob, types.T_any, types.T_blob, types.T_blob},
@@ -1022,7 +1142,7 @@ func initFixed1() {
 		{types.T_blob, types.T_char, types.T_char, types.T_char},
 		{types.T_blob, types.T_varchar, types.T_varchar, types.T_varchar},
 		{types.T_blob, types.T_uuid, types.T_uuid, types.T_uuid},
-		{types.T_blob, types.T_binary, types.T_binary, types.T_binary},
+		{types.T_blob, types.T_binary, types.T_blob, types.T_blob},
 		{types.T_blob, types.T_varbinary, types.T_varbinary, types.T_varbinary},
 		{types.T_blob, types.T_text, types.T_blob, types.T_blob},
 		{types.T_text, types.T_any, types.T_text, types.T_text},
@@ -1047,7 +1167,7 @@ func initFixed1() {
 		{types.T_text, types.T_char, types.T_char, types.T_char},
 		{types.T_text, types.T_varchar, types.T_varchar, types.T_varchar},
 		{types.T_text, types.T_uuid, types.T_uuid, types.T_uuid},
-		{types.T_text, types.T_binary, types.T_binary, types.T_binary},
+		{types.T_text, types.T_binary, types.T_blob, types.T_blob},
 		{types.T_text, types.T_varbinary, types.T_varbinary, types.T_varbinary},
 		{types.T_text, types.T_blob, types.T_blob, types.T_blob},
 		{types.T_array_float32, types.T_varchar, types.T_array_float32, types.T_array_float32},
@@ -1058,6 +1178,21 @@ func initFixed1() {
 		{types.T_text, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_array_float64, types.T_text, types.T_array_float64, types.T_array_float64},
 		{types.T_text, types.T_array_float64, types.T_array_float64, types.T_array_float64},
+		// narrow vector types: string<->narrow for comparison/equality only.
+		// (No scalar-arithmetic rules below are added for these types, so + - * /
+		// still fail to resolve — arithmetic requires an explicit CAST to vecf32.)
+		{types.T_array_bf16, types.T_varchar, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_bf16, types.T_text, types.T_array_bf16, types.T_array_bf16},
+		{types.T_text, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_float16, types.T_varchar, types.T_array_float16, types.T_array_float16},
+		{types.T_array_float16, types.T_text, types.T_array_float16, types.T_array_float16},
+		{types.T_text, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_array_int8, types.T_varchar, types.T_array_int8, types.T_array_int8},
+		{types.T_array_int8, types.T_text, types.T_array_int8, types.T_array_int8},
+		{types.T_text, types.T_array_int8, types.T_array_int8, types.T_array_int8},
+		{types.T_array_uint8, types.T_varchar, types.T_array_uint8, types.T_array_uint8},
+		{types.T_array_uint8, types.T_text, types.T_array_uint8, types.T_array_uint8},
+		{types.T_text, types.T_array_uint8, types.T_array_uint8, types.T_array_uint8},
 
 		/** VEC <Op> Scalar => VEC **/
 		// VECF32 <Op> Scalar => VECF32
@@ -1226,8 +1361,8 @@ func initFixed2() {
 		{types.T_int8, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_int8, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int8, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_int8, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_int8, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_int8, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_int8, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_int8, types.T_char, types.T_float64, types.T_float64},
 		{types.T_int8, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_int8, types.T_binary, types.T_float64, types.T_float64},
@@ -1250,8 +1385,8 @@ func initFixed2() {
 		{types.T_int16, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_int16, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int16, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_int16, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_int16, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_int16, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_int16, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_int16, types.T_char, types.T_float64, types.T_float64},
 		{types.T_int16, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_int16, types.T_binary, types.T_float64, types.T_float64},
@@ -1274,8 +1409,8 @@ func initFixed2() {
 		{types.T_int32, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_int32, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int32, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_int32, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_int32, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_int32, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_int32, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_int32, types.T_char, types.T_float64, types.T_float64},
 		{types.T_int32, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_int32, types.T_binary, types.T_float64, types.T_float64},
@@ -1291,7 +1426,7 @@ func initFixed2() {
 		{types.T_int64, types.T_uint8, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_uint16, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_uint32, types.T_int64, types.T_int64},
-		{types.T_int64, types.T_uint64, types.T_int64, types.T_int64},
+		{types.T_int64, types.T_uint64, types.T_decimal128, types.T_decimal128},
 		{types.T_int64, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_int64, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_int64, types.T_decimal64, types.T_decimal128, types.T_decimal128},
@@ -1299,8 +1434,8 @@ func initFixed2() {
 		{types.T_int64, types.T_date, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_year, types.T_int64, types.T_int64},
 		{types.T_int64, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_int64, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_int64, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_int64, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_int64, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_int64, types.T_char, types.T_float64, types.T_float64},
 		{types.T_int64, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_int64, types.T_binary, types.T_float64, types.T_float64},
@@ -1323,8 +1458,8 @@ func initFixed2() {
 		{types.T_uint8, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_uint8, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint8, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_uint8, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_uint8, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_uint8, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_uint8, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_uint8, types.T_char, types.T_float64, types.T_float64},
 		{types.T_uint8, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_uint8, types.T_binary, types.T_float64, types.T_float64},
@@ -1347,8 +1482,8 @@ func initFixed2() {
 		{types.T_uint16, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_uint16, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint16, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_uint16, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_uint16, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_uint16, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_uint16, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_uint16, types.T_char, types.T_float64, types.T_float64},
 		{types.T_uint16, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_uint16, types.T_binary, types.T_float64, types.T_float64},
@@ -1371,8 +1506,8 @@ func initFixed2() {
 		{types.T_uint32, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_uint32, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint32, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_uint32, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_uint32, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_uint32, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_uint32, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_uint32, types.T_char, types.T_float64, types.T_float64},
 		{types.T_uint32, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_uint32, types.T_binary, types.T_float64, types.T_float64},
@@ -1384,7 +1519,7 @@ func initFixed2() {
 		{types.T_uint64, types.T_int8, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_int16, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_int32, types.T_float64, types.T_float64},
-		{types.T_uint64, types.T_int64, types.T_int64, types.T_int64},
+		{types.T_uint64, types.T_int64, types.T_decimal128, types.T_decimal128},
 		{types.T_uint64, types.T_uint8, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_uint16, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_uint32, types.T_float64, types.T_float64},
@@ -1395,8 +1530,8 @@ func initFixed2() {
 		{types.T_uint64, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_uint64, types.T_date, types.T_int64, types.T_int64},
 		{types.T_uint64, types.T_time, types.T_decimal64, types.T_decimal64},
-		{types.T_uint64, types.T_datetime, types.T_decimal64, types.T_decimal64},
-		{types.T_uint64, types.T_timestamp, types.T_decimal64, types.T_decimal64},
+		{types.T_uint64, types.T_datetime, types.T_decimal128, types.T_decimal128},
+		{types.T_uint64, types.T_timestamp, types.T_decimal128, types.T_decimal128},
 		{types.T_uint64, types.T_char, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_uint64, types.T_binary, types.T_float64, types.T_float64},
@@ -1536,25 +1671,25 @@ func initFixed2() {
 		{types.T_time, types.T_decimal64, types.T_decimal64, types.T_decimal64},
 		{types.T_time, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_datetime, types.T_any, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_int8, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_int16, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_int32, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_int64, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_uint8, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_uint16, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_uint32, types.T_decimal64, types.T_decimal64},
-		{types.T_datetime, types.T_uint64, types.T_decimal64, types.T_decimal64},
+		{types.T_datetime, types.T_int8, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_int16, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_int32, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_int64, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_uint8, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_uint16, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_uint32, types.T_decimal128, types.T_decimal128},
+		{types.T_datetime, types.T_uint64, types.T_decimal128, types.T_decimal128},
 		{types.T_datetime, types.T_decimal64, types.T_decimal64, types.T_decimal64},
 		{types.T_datetime, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_timestamp, types.T_any, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_int8, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_int16, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_int32, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_int64, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_uint8, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_uint16, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_uint32, types.T_decimal64, types.T_decimal64},
-		{types.T_timestamp, types.T_uint64, types.T_decimal64, types.T_decimal64},
+		{types.T_timestamp, types.T_int8, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_int16, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_int32, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_int64, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_uint8, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_uint16, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_uint32, types.T_decimal128, types.T_decimal128},
+		{types.T_timestamp, types.T_uint64, types.T_decimal128, types.T_decimal128},
 		{types.T_timestamp, types.T_decimal64, types.T_decimal64, types.T_decimal64},
 		{types.T_timestamp, types.T_decimal128, types.T_decimal128, types.T_decimal128},
 		{types.T_year, types.T_any, types.T_float64, types.T_float64},
@@ -1601,6 +1736,10 @@ func initFixed2() {
 		//A
 		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
+		{types.T_varchar, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_varchar, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_varchar, types.T_array_int8, types.T_array_int8, types.T_array_int8},
+		{types.T_varchar, types.T_array_uint8, types.T_array_uint8, types.T_array_uint8},
 		{types.T_binary, types.T_any, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int8, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int16, types.T_float64, types.T_float64},
@@ -1675,6 +1814,15 @@ func initFixed2() {
 		{types.T_array_float32, types.T_array_float32, types.T_array_float32, types.T_array_float32},
 		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
 		{types.T_array_float64, types.T_array_float32, types.T_array_float64, types.T_array_float64},
+		// narrow vector types: narrow<->string for comparison/equality only.
+		{types.T_array_bf16, types.T_varchar, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_bf16, types.T_array_bf16, types.T_array_bf16, types.T_array_bf16},
+		{types.T_array_float16, types.T_varchar, types.T_array_float16, types.T_array_float16},
+		{types.T_array_float16, types.T_array_float16, types.T_array_float16, types.T_array_float16},
+		{types.T_array_int8, types.T_varchar, types.T_array_int8, types.T_array_int8},
+		{types.T_array_int8, types.T_array_int8, types.T_array_int8, types.T_array_int8},
+		{types.T_array_uint8, types.T_varchar, types.T_array_uint8, types.T_array_uint8},
+		{types.T_array_uint8, types.T_array_uint8, types.T_array_uint8, types.T_array_uint8},
 		/** VEC <Op> Scalar => VEC **/
 		// VECF32 <Op> Scalar => VECF32
 		{types.T_array_float32, types.T_int32, types.T_array_float32, types.T_float32},
@@ -1734,6 +1882,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1759,6 +1908,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1784,6 +1934,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1809,6 +1960,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1834,6 +1986,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1859,6 +2012,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1884,6 +2038,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1909,6 +2064,7 @@ func initFixed3() {
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -1978,6 +2134,7 @@ func initFixed3() {
 				{toType: types.T_float32, preferLevel: 2},
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal128, preferLevel: 1},
+				{toType: types.T_decimal256, preferLevel: 1},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -2003,6 +2160,33 @@ func initFixed3() {
 				{toType: types.T_float32, preferLevel: 2},
 				{toType: types.T_float64, preferLevel: 1},
 				{toType: types.T_decimal64, preferLevel: 2},
+				{toType: types.T_decimal256, preferLevel: 1},
+				{toType: types.T_timestamp, preferLevel: 2},
+				{toType: types.T_char, preferLevel: 2},
+				{toType: types.T_varchar, preferLevel: 2},
+				{toType: types.T_binary, preferLevel: 2},
+				{toType: types.T_varbinary, preferLevel: 2},
+				{toType: types.T_blob, preferLevel: 2},
+				{toType: types.T_text, preferLevel: 2},
+			},
+		},
+
+		{
+			from: types.T_decimal256,
+			toList: []toRule{
+				{toType: types.T_bool, preferLevel: 2},
+				{toType: types.T_int8, preferLevel: 2},
+				{toType: types.T_int16, preferLevel: 2},
+				{toType: types.T_int32, preferLevel: 2},
+				{toType: types.T_int64, preferLevel: 2},
+				{toType: types.T_uint8, preferLevel: 2},
+				{toType: types.T_uint16, preferLevel: 2},
+				{toType: types.T_uint32, preferLevel: 2},
+				{toType: types.T_uint64, preferLevel: 2},
+				{toType: types.T_float32, preferLevel: 2},
+				{toType: types.T_float64, preferLevel: 1},
+				{toType: types.T_decimal64, preferLevel: 2},
+				{toType: types.T_decimal128, preferLevel: 2},
 				{toType: types.T_timestamp, preferLevel: 2},
 				{toType: types.T_char, preferLevel: 2},
 				{toType: types.T_varchar, preferLevel: 2},
@@ -2137,6 +2321,10 @@ func initFixed3() {
 				//C
 				{toType: types.T_array_float32, preferLevel: 2},
 				{toType: types.T_array_float64, preferLevel: 2},
+				{toType: types.T_array_bf16, preferLevel: 2},
+				{toType: types.T_array_float16, preferLevel: 2},
+				{toType: types.T_array_int8, preferLevel: 2},
+				{toType: types.T_array_uint8, preferLevel: 2},
 			},
 		},
 
@@ -2255,6 +2443,10 @@ func initFixed3() {
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_array_float32, preferLevel: 2},
 				{toType: types.T_array_float64, preferLevel: 2},
+				{toType: types.T_array_bf16, preferLevel: 2},
+				{toType: types.T_array_float16, preferLevel: 2},
+				{toType: types.T_array_int8, preferLevel: 2},
+				{toType: types.T_array_uint8, preferLevel: 2},
 			},
 		},
 		{

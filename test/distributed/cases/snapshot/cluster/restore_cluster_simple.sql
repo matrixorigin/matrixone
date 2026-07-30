@@ -4,6 +4,8 @@ drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 drop account if exists acc03;
 create account acc03 admin_name = 'test_account' identified by '111';
+drop database if exists restore_cluster_transient_1;
+drop database if exists restore_cluster_transient_2;
 
 
 create database if not exists snapshot_read;
@@ -511,6 +513,16 @@ show snapshots;
 create snapshot cluster_sp for cluster;
 -- @ignore:1
 show snapshots;
+
+-- These databases are absent from the snapshot. Cluster restore must drop both
+-- in the same restore transaction before rebuilding the snapshot state.
+create database restore_cluster_transient_1;
+create table restore_cluster_transient_1.t1 (id int primary key);
+insert into restore_cluster_transient_1.t1 values (1);
+create database restore_cluster_transient_2;
+create table restore_cluster_transient_2.t2 (id int primary key);
+insert into restore_cluster_transient_2.t2 values (2);
+
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 
@@ -530,6 +542,9 @@ drop database if exists test_snapshot_restore_3;
 -- @session
 
 restore cluster{snapshot="cluster_sp"};
+
+select count(*) from mo_catalog.mo_database
+where datname in ('restore_cluster_transient_1', 'restore_cluster_transient_2');
 
 select count(*) from snapshot_read.test_snapshot_read;
 select count(*) from snapshot_read.users;

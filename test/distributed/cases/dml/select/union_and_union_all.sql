@@ -195,7 +195,7 @@ SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END;
 select 'case+union+tet' union
 SELECT CASE '1' WHEN '1' THEN 'BUG' ELSE 'nobug' END;
 
-SELECT 1, 2 UNION SELECT 'a', 'b';
+SELECT 1, 2 UNION SELECT 'a', 'b' ORDER BY 1;
 
 
 -- test union and concat function
@@ -365,4 +365,4 @@ select A.NAME, A.PHONE, B.NAME, B.PHONE from t17 B left join t17 A on B.NAME = A
 where B.IID = 2 and (A.PHONE <> B.PHONE or A.NAME is null);
 
 drop table t17;
-select * from (select 'tb1' as name, 1 as count union all select 'tb3' as name, 3 as count union all select 'tb2' as name, 2 as count) order by count;
+select * from (select 'tb1' as name, 1 as count union all select 'tb3' as name, 3 as count union all select 'tb2' as name, 2 as count) as u order by count;

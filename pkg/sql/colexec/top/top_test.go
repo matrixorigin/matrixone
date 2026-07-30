@@ -237,6 +237,39 @@ func TestTopSpillInsufficientRows(t *testing.T) {
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
 
+func TestTopSpillMaxUint64LimitReturnsAllRows(t *testing.T) {
+	batchRows := 7
+	tc := newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, 1,
+		[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}})
+	tc.arg.Limit = plan2.MakePlan2Uint64ConstExprWithType(^uint64(0))
+
+	err := tc.arg.Prepare(tc.proc)
+	require.NoError(t, err)
+	require.True(t, tc.arg.ctr.spilling)
+
+	inputBats := []*batch.Batch{
+		newBatch(tc.types, tc.proc, int64(batchRows)),
+		batch.EmptyBatch,
+	}
+	resetChildren(tc.arg, inputBats)
+
+	var totalRows int
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch == nil || result.Status == vm.ExecStop {
+			break
+		}
+		totalRows += result.Batch.RowCount()
+	}
+	require.Equal(t, batchRows, totalRows)
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
 func BenchmarkTop(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs := []testCase{

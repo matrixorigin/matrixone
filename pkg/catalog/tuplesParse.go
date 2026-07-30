@@ -317,7 +317,11 @@ func genTableDefs(row []any) (engine.TableDef, error) {
 
 	attr.Name = string(row[MO_COLUMNS_ATTNAME_IDX].([]byte))
 	attr.Alg = compress.Lz4
-	if err := types.Decode(row[MO_COLUMNS_ATTTYP_IDX].([]byte), &attr.Type); err != nil {
+	// Call the concrete Unmarshal method rather than types.Decode: passing
+	// &attr.Type through the encoding.BinaryUnmarshaler interface forces the
+	// whole attr local to escape to the heap. The direct method call avoids
+	// the extra standalone allocation per column.
+	if err := attr.Type.Unmarshal(row[MO_COLUMNS_ATTTYP_IDX].([]byte)); err != nil {
 		return nil, err
 	}
 	if row[MO_COLUMNS_ATTHASDEF_IDX].(int8) == 1 {

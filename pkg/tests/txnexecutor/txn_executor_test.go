@@ -26,8 +26,11 @@ import (
 )
 
 func Test_TxnExecutorExec(t *testing.T) {
-	c, err := embed.NewCluster(embed.WithCNCount(1))
+	c, err := embed.NewCluster(embed.WithCNCount(1), embed.WithTesting())
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, c.Close())
+	})
 	require.NoError(t, c.Start())
 
 	svc, err := c.GetCNService(0)
@@ -48,7 +51,7 @@ func Test_TxnExecutorExec(t *testing.T) {
 }
 
 func TestPreparedParams(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)

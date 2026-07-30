@@ -15,7 +15,9 @@
 package lockop
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -29,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -38,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -64,6 +68,243 @@ var testFunc = func(
 var (
 	sid = ""
 )
+
+func forceLockRetryMemoryPressure(t *testing.T, level lockRetryMemoryPressureLevel) {
+	oldPressure := getLockRetryMemoryPressureLevel
+	getLockRetryMemoryPressureLevel = func() lockRetryMemoryPressureLevel {
+		return level
+	}
+	t.Cleanup(func() {
+		getLockRetryMemoryPressureLevel = oldPressure
+	})
+}
+
+func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txnpb.TxnOptions{
+		LockWaitTimeout: int64(60 * time.Second),
+	}).AnyTimes()
+
+	proc := process.NewTopProcess(
+		context.Background(),
+		mpool.MustNewZero(),
+		nil,
+		txnOp,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil)
+	proc.Base.IsFrontend = true
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		require.Equal(t, "lock_wait_timeout", varName)
+		require.True(t, isSystemVar)
+		require.False(t, isGlobalVar)
+		return int64(2), nil
+	})
+	require.Equal(t, 2*time.Second, lockWaitTimeout(proc, txnOp))
+
+	proc.SetResolveVariableFunc(nil)
+	proc.GetSessionInfo().LockWaitTimeout = 3
+	require.Equal(t, 3*time.Second, lockWaitTimeout(proc, txnOp))
+
+	proc.GetSessionInfo().LockWaitTimeout = 0
+	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp))
+
+	proc.Base.IsFrontend = false
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(2), nil
+	})
+	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp),
+		"background per-execution txn option must override the default resolver")
+	proc.GetSessionInfo().LockWaitTimeout = 4
+	require.Equal(t, 4*time.Second, lockWaitTimeout(proc, txnOp),
+		"background process-level per-execution option must have highest priority")
+
+	proc.GetSessionInfo().LockWaitTimeout = 0
+	proc.GetSessionInfo().LockWaitTimeoutSet = true
+	require.Equal(t, 2*time.Second, lockWaitTimeout(proc, txnOp),
+		"clearing an existing transaction override must fall back to the resolver")
+	proc.SetResolveVariableFunc(nil)
+	require.Equal(t,
+		time.Duration(defines.DefaultLockWaitTimeoutSeconds)*time.Second,
+		lockWaitTimeout(proc, txnOp),
+		"clearing without a resolver must use the rolling-upgrade-safe fallback, not the existing transaction timeout")
+}
+
+func TestLockOpHelpers(t *testing.T) {
+	op := NewArgument()
+	defer op.Release()
+
+	require.Equal(t, opName, op.TypeName())
+
+	var buf bytes.Buffer
+	op.String(&buf)
+	require.Equal(t, opName+": lock-op()", buf.String())
+
+	parker := types.NewPacker()
+	defer parker.Close()
+	opts := DefaultLockOptions(parker).
+		WithLockSharding(lock.Sharding_ByRow).
+		WithLockGroup(7).
+		WithLockMode(lock.LockMode_Shared).
+		WithLockTable(true, true)
+	require.Equal(t, lock.Sharding_ByRow, opts.sharding)
+	require.Equal(t, uint32(7), opts.group)
+	require.Equal(t, lock.LockMode_Shared, opts.mode)
+	require.True(t, opts.lockTable)
+	require.True(t, opts.changeDef)
+}
+
+func TestRefreshLockWaitOptionsUsesRemainingDeadline(t *testing.T) {
+	options := lock.LockOptions{
+		LockWaitDeadline: time.Now().Add(1500 * time.Millisecond).UnixNano(),
+		LockWaitTimeout:  60,
+	}
+
+	refreshed, err := refreshLockWaitOptions(options)
+	require.NoError(t, err)
+	require.Greater(t, refreshed.LockWaitTimeout, int64(0))
+	require.LessOrEqual(t, refreshed.LockWaitTimeout, int64(2))
+	require.Equal(t, options.LockWaitDeadline, refreshed.LockWaitDeadline)
+}
+
+func TestRefreshLockWaitOptionsReturnsTimeoutAfterDeadline(t *testing.T) {
+	options := lock.LockOptions{LockWaitDeadline: time.Now().Add(-time.Second).UnixNano()}
+
+	_, err := refreshLockWaitOptions(options)
+	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
+}
+
+func TestLockWaitTimeoutIsNotRetryable(t *testing.T) {
+	require.False(t, isRetryLockError(lockservice.ErrLockTimeout))
+}
+
+func TestLockOpTargetHelpers(t *testing.T) {
+	op := NewArgument()
+	defer op.Release()
+
+	expr := plan2.MakePlan2Int32ConstExprWithType(1)
+	op.AddLockTarget(11, &plan.ObjectRef{SchemaName: "db", ObjName: "t1"}, 0, types.T_int32.ToType(), -1, -1, expr, false)
+	op.AddLockTarget(22, &plan.ObjectRef{SchemaName: "db", ObjName: "t2"}, 1, types.T_int64.ToType(), -1, -1, nil, true)
+
+	require.Equal(t, []*plan.Expr{expr}, op.GetLockRowsExpressions())
+
+	folded, err := op.RewriteLockRowsExpressions(func(e *plan.Expr) (*plan.Expr, bool, error) {
+		return plan2.MakePlan2Int32ConstExprWithType(2), true, nil
+	})
+	require.NoError(t, err)
+	require.True(t, folded)
+	require.NotNil(t, op.targets[0].lockRows)
+	require.NotNil(t, op.targets[1].objRef)
+
+	folded, err = op.RewriteLockRowsExpressions(func(e *plan.Expr) (*plan.Expr, bool, error) {
+		return e, false, nil
+	})
+	require.NoError(t, err)
+	require.False(t, folded)
+
+	dst := NewArgument()
+	defer dst.Release()
+	dst.CopyTargetsFrom(op)
+	require.Equal(t, len(op.targets), len(dst.targets))
+	require.Equal(t, op.targets[0].tableID, dst.targets[0].tableID)
+	require.Equal(t, op.targets[1].objRef.ObjName, dst.targets[1].objRef.ObjName)
+
+	pipelineTargets := op.CopyToPipelineTarget()
+	require.Len(t, pipelineTargets, 2)
+	require.Equal(t, uint64(11), pipelineTargets[0].TableId)
+	require.Equal(t, uint64(22), pipelineTargets[1].TableId)
+
+	op.LockTable(11, true)
+	require.True(t, op.targets[0].lockTable)
+	require.True(t, op.targets[0].changeDef)
+	require.Equal(t, lock.LockMode_Exclusive, op.targets[0].mode)
+
+	op.LockTableWithMode(22, lock.LockMode_Shared, false)
+	require.True(t, op.targets[1].lockTable)
+	require.False(t, op.targets[1].changeDef)
+	require.Equal(t, lock.LockMode_Shared, op.targets[1].mode)
+}
+
+func TestAddLockTargetWithPartitionAndMode(t *testing.T) {
+	op := NewArgument()
+	defer op.Release()
+
+	one := op.AddLockTargetWithPartitionAndMode(
+		[]uint64{33},
+		lock.LockMode_Shared,
+		0,
+		types.T_int32.ToType(),
+		1,
+		nil,
+		true,
+		2,
+	)
+	require.Len(t, one.targets, 1)
+	require.Equal(t, uint64(33), one.targets[0].tableID)
+	require.Equal(t, int32(-1), one.targets[0].partitionColumnIndexInBatch)
+
+	many := op.AddLockTargetWithPartition(
+		[]uint64{44, 55},
+		0,
+		types.T_int64.ToType(),
+		1,
+		nil,
+		false,
+		3,
+	)
+	require.Len(t, many.targets, 3)
+	require.Equal(t, uint64(44), many.targets[1].tableID)
+	require.Equal(t, uint64(55), many.targets[2].tableID)
+	require.Equal(t, int32(3), many.targets[1].filterColIndexInBatch)
+	require.NotNil(t, many.targets[1].filter)
+}
+
+func TestHasNewVersionInRange(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
+	proc := process.NewTopProcess(
+		context.Background(),
+		mpool.MustNewZero(),
+		nil,
+		txnOp,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	analyzer := process.NewTempAnalyzer()
+	bat := batch.New(nil)
+
+	changed, err := hasNewVersionInRange(proc, rel, analyzer, 1, eng, nil, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(2)).Return("", "", nil, assert.AnError)
+	changed, err = hasNewVersionInRange(proc, nil, analyzer, 2, eng, bat, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	require.Error(t, err)
+	require.False(t, changed)
+
+	eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(3)).Return("", "", rel, nil)
+	rel.EXPECT().PrimaryKeysMayBeModified(gomock.Any(), gomock.Any(), gomock.Any(), bat, int32(0), int32(-1)).Return(true, nil)
+	changed, err = hasNewVersionInRange(proc, nil, analyzer, 3, eng, bat, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.True(t, changed)
+}
 
 func TestLockWithRetryReturnsBackendErrorWhenDeadlineExceededStopsBoundedRetry(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -172,6 +413,8 @@ func TestLockWithRetryReturnsBackendErrorWhenContextCanceledDuringRetryWait(t *t
 }
 
 func TestLockWithRetryStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -224,6 +467,8 @@ func TestLockWithRetryStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
 }
 
 func TestLockWithRetryDoesNotResetBackendRetryBudgetAfterBindChange(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -271,6 +516,8 @@ func TestLockWithRetryDoesNotResetBackendRetryBudgetAfterBindChange(t *testing.T
 }
 
 func TestLockWithRetryStopsWhenRollingRestartRetryBudgetExceeded(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -361,6 +608,318 @@ func TestLockWithRetryDoesNotRetryBackendErrorWhenLockTableAlreadyHeld(t *testin
 	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
 }
 
+func TestLockWithRetryRetriesBindChangedInExplicitUserTxnBeforeLockHeld(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	oldWait := defaultWaitTimeOnRetryLock
+	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+	}()
+
+	ctx := context.Background()
+	expected := lock.Result{HasConflict: true}
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(expected, nil),
+	)
+
+	result, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, expected, result)
+}
+
+func TestLockWithRetryRetriesBindChangedInBeginTxnBeforeLockHeld(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	oldWait := defaultWaitTimeOnRetryLock
+	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+	}()
+
+	ctx := context.Background()
+	expected := lock.Result{HasConflict: true}
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(expected, nil),
+	)
+
+	result, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, expected, result)
+}
+
+func TestLockWithRetryRetriesBindChangedInAutocommitTxn(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	oldWait := defaultWaitTimeOnRetryLock
+	defaultWaitTimeOnRetryLock = time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+	}()
+
+	ctx := context.Background()
+	expected := lock.Result{HasConflict: true}
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(expected, nil),
+	)
+
+	result, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, expected, result)
+}
+
+func TestLockWithRetryDoesNotRetryBindChangedWhenLockTableAlreadyHeld(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+
+	oldWait := defaultWaitTimeOnRetryLock
+	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+	}()
+
+	ctx := context.Background()
+	expectedErr := moerr.NewLockTableBindChangedNoCtx()
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, expectedErr),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(true),
+	)
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
+}
+
+func TestLockWithRetryStopsWhenBindChangedRetryBudgetExceeded(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
+
+	budget := 10 * time.Millisecond
+	oldWait := defaultWaitTimeOnRetryLock
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	defaultWaitTimeOnRetryLock = 50 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendLock = budget
+	defer func() {
+		defaultWaitTimeOnRetryLock = oldWait
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+	}()
+
+	ctx := context.Background()
+	expectedErr := moerr.NewLockTableBindChangedNoCtx()
+
+	gomock.InOrder(
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, expectedErr),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().
+			Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, expectedErr),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+	)
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		ctx,
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	elapsed := time.Since(start)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+	require.GreaterOrEqual(t, elapsed, budget)
+	require.Less(t, elapsed, 100*time.Millisecond)
+}
+
+func TestLockRetryBacksOffUnderHighMemoryPressure(t *testing.T) {
+	oldPressure := getLockRetryMemoryPressureLevel
+	oldBackoff := lockRetryMemoryBackoff
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	defer func() {
+		getLockRetryMemoryPressureLevel = oldPressure
+		lockRetryMemoryBackoff = oldBackoff
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+	}()
+
+	getLockRetryMemoryPressureLevel = func() lockRetryMemoryPressureLevel {
+		return lockRetryMemoryPressureHigh
+	}
+	lockRetryMemoryBackoff = 25 * time.Millisecond
+	defaultMaxWaitTimeOnRetryBackendLock = time.Second
+
+	state := lockRetryState{}
+	wait, ok := getRetryWaitDuration(moerr.NewLockTableBindChangedNoCtx(), &state)
+	require.True(t, ok)
+	require.Equal(t, lockRetryMemoryBackoff, wait)
+	require.True(t, state.useMemoryRetrySlot)
+}
+
+func TestLockRetryHighMemoryUsesBoundedQueue(t *testing.T) {
+	oldSlots := lockRetryHighMemorySlots
+	defer func() {
+		lockRetryHighMemorySlots = oldSlots
+	}()
+
+	lockRetryHighMemorySlots = make(chan struct{}, 1)
+	lockRetryHighMemorySlots <- struct{}{}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		<-lockRetryHighMemorySlots
+	}()
+
+	state := lockRetryState{
+		backendRetryDeadline: time.Now().Add(time.Second),
+		useMemoryRetrySlot:   true,
+	}
+	start := time.Now()
+	require.True(t, waitToRetryLock(context.Background(), time.Millisecond, &state))
+	require.GreaterOrEqual(t, time.Since(start), 20*time.Millisecond)
+}
+
+func TestLockRetryHighMemoryQueueHonorsBackendRetryDeadline(t *testing.T) {
+	oldSlots := lockRetryHighMemorySlots
+	defer func() {
+		lockRetryHighMemorySlots = oldSlots
+	}()
+
+	lockRetryHighMemorySlots = make(chan struct{}, 1)
+	lockRetryHighMemorySlots <- struct{}{}
+
+	state := lockRetryState{
+		backendRetryDeadline: time.Now().Add(20 * time.Millisecond),
+		useMemoryRetrySlot:   true,
+	}
+	start := time.Now()
+	require.False(t, waitToRetryLock(context.Background(), time.Second, &state))
+	require.GreaterOrEqual(t, time.Since(start), 20*time.Millisecond)
+	require.Less(t, time.Since(start), 100*time.Millisecond)
+}
+
+func TestLockRetryStopsUnderCriticalMemoryPressure(t *testing.T) {
+	oldPressure := getLockRetryMemoryPressureLevel
+	oldBudget := defaultMaxWaitTimeOnRetryBackendLock
+	defer func() {
+		getLockRetryMemoryPressureLevel = oldPressure
+		defaultMaxWaitTimeOnRetryBackendLock = oldBudget
+	}()
+
+	getLockRetryMemoryPressureLevel = func() lockRetryMemoryPressureLevel {
+		return lockRetryMemoryPressureCritical
+	}
+	defaultMaxWaitTimeOnRetryBackendLock = time.Second
+
+	state := lockRetryState{}
+	_, ok := getRetryWaitDuration(moerr.NewLockTableBindChangedNoCtx(), &state)
+	require.False(t, ok)
+}
+
 func TestLockWithRetryFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -407,6 +966,8 @@ func TestLockWithRetryFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 }
 
 func TestLockWithRetryRetriesInsideLoopAndReturnsSecondResult(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -548,8 +1109,9 @@ func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {
 				IsFirst: false,
 				IsLast:  false,
 			}
-			arg.AddLockTarget(tableID, nil, 0, pkType, -1, -1, nil, true)
-			arg.LockTable(tableID, false)
+			arg.AddLockTargetWithMode(
+				tableID, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, true)
+			arg.LockTableWithMode(tableID, lock.LockMode_Shared, false)
 			resetChildren(arg, nil)
 			defer arg.Free(proc, false, nil)
 
@@ -557,6 +1119,16 @@ func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {
 			_, err := vm.Exec(arg, proc)
 			require.NoError(t, err)
 			require.True(t, proc.GetTxnOperator().HasLockTable(tableID))
+
+			sharedTxn, err := proc.Base.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, sharedTxn.Rollback(proc.Ctx)) }()
+			sharedProc := process.NewTopProcess(proc.Ctx, mpool.MustNewZero(), proc.Base.TxnClient,
+				sharedTxn, nil, proc.GetLockService(), nil, nil, nil, nil, nil)
+			require.NoError(t, LockTableWithMode(
+				nil, sharedProc, tableID, pkType, lock.LockMode_Shared, false))
+			require.NoError(t, LockTable(nil, proc, tableID+1, pkType, false))
+			require.True(t, proc.GetTxnOperator().HasLockTable(tableID+1))
 		},
 	)
 }
@@ -780,7 +1352,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 				resetChildren(arg2, child.GetBatchs()[0])
 				defer arg2.ctr.parker.Close()
 
-				proc.GetTxnOperator().TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
+				proc.GetTxnOperator().SetSnapshotTS(timestamp.Timestamp{PhysicalTime: math.MaxInt64})
 
 				_, err = vm.Exec(arg2, proc)
 				assert.NoError(t, err)
@@ -843,12 +1415,48 @@ func TestLockOpResetClearsLockCount(t *testing.T) {
 	arg.ctr.lockCount = 7
 	arg.ctr.defChanged = true
 	arg.ctr.retryError = moerr.NewTxnNeedRetryNoCtx()
+	arg.ctr.relations = []engine.Relation{nil}
 
 	arg.Reset(nil, false, nil)
 
 	require.Equal(t, int64(0), arg.ctr.lockCount)
 	require.False(t, arg.ctr.defChanged)
 	require.Nil(t, arg.ctr.retryError)
+	require.Len(t, arg.ctr.relations, 1)
+}
+
+func TestLockOpPrepareRecoversFromPartialRelationInitialization(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation1 := mock_frontend.NewMockRelation(ctrl)
+	relation2 := mock_frontend.NewMockRelation(ctrl)
+	lookupErr := errors.New("lookup t2")
+
+	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil).AnyTimes()
+	database.EXPECT().Relation(gomock.Any(), "t1", gomock.Any()).Return(relation1, nil).Times(1)
+	database.EXPECT().Relation(gomock.Any(), "t2", gomock.Any()).Return(nil, lookupErr).Times(1)
+	database.EXPECT().Relation(gomock.Any(), "t2", gomock.Any()).Return(relation2, nil).Times(1)
+	relation1.EXPECT().Reset(gomock.Any()).Return(nil).Times(1)
+
+	arg := NewArgumentByEngine(eng)
+	arg.AddLockTarget(1, &plan.ObjectRef{SchemaName: "db", ObjName: "t1"}, 0, types.T_int64.ToType(), -1, -1, nil, false)
+	arg.AddLockTarget(2, &plan.ObjectRef{SchemaName: "db", ObjName: "t2"}, 0, types.T_int64.ToType(), -1, -1, nil, false)
+	proc := testutil.NewProc(t)
+
+	require.ErrorIs(t, arg.Prepare(proc), lookupErr)
+	require.Same(t, relation1, arg.ctr.relations[0])
+	require.Nil(t, arg.ctr.relations[1])
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Same(t, relation1, arg.ctr.relations[0])
+	require.Same(t, relation2, arg.ctr.relations[1])
+
+	arg.Free(proc, true, lookupErr)
+	arg.Release()
+	proc.Free()
 }
 
 func runLockNonBlockingOpTest(
@@ -1041,8 +1649,194 @@ func TestLockTableIfLockCountIsZeroWithLockRows(t *testing.T) {
 		require.NoError(t, arg.Prepare(proc))
 		arg.ctr.hasNewVersionInRange = testFunc
 
+		arg.OpAnalyzer.Start()
 		require.NoError(t, lockTalbeIfLockCountIsZero(proc, arg))
+		arg.OpAnalyzer.Stop()
+		require.Equal(t, 1, arg.OpAnalyzer.GetOpStats().CallNum)
+		require.Zero(t, arg.OpAnalyzer.GetOpStats().ResourceDelta().Quality)
 
+		arg.Free(proc, false, nil)
+	})
+}
+
+func TestDedupLockRows(t *testing.T) {
+	cases := []struct {
+		name string
+		in   [][]byte
+		want [][]byte
+	}{
+		{
+			name: "nil",
+			in:   nil,
+			want: nil,
+		},
+		{
+			name: "empty",
+			in:   [][]byte{},
+			want: [][]byte{},
+		},
+		{
+			name: "single",
+			in:   [][]byte{{0x01}},
+			want: [][]byte{{0x01}},
+		},
+		{
+			name: "no-dup-already-sorted",
+			in:   [][]byte{{0x01}, {0x02}, {0x03}},
+			want: [][]byte{{0x01}, {0x02}, {0x03}},
+		},
+		{
+			name: "no-dup-unsorted-output-sorted",
+			in:   [][]byte{{0x03}, {0x01}, {0x02}},
+			want: [][]byte{{0x01}, {0x02}, {0x03}},
+		},
+		{
+			name: "with-dup-mixed",
+			in:   [][]byte{{0x02}, {0x01}, {0x02}, {0x03}, {0x01}},
+			want: [][]byte{{0x01}, {0x02}, {0x03}},
+		},
+		{
+			name: "all-dup",
+			in:   [][]byte{{0x05}, {0x05}, {0x05}},
+			want: [][]byte{{0x05}},
+		},
+		{
+			name: "multibyte-keys",
+			in:   [][]byte{{0x01, 0x02}, {0x01, 0x01}, {0x01, 0x02}},
+			want: [][]byte{{0x01, 0x01}, {0x01, 0x02}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := dedupLockRows(c.in)
+			require.Equal(t, c.want, got)
+		})
+	}
+}
+
+func TestDedupLockRows_PreservesSetSemantics(t *testing.T) {
+	a := [][]byte{{0x03}, {0x01}, {0x02}, {0x01}, {0x03}}
+	b := [][]byte{{0x01}, {0x02}, {0x03}, {0x02}, {0x01}}
+
+	require.Equal(t, dedupLockRows(a), dedupLockRows(b),
+		"different orderings of the same multiset must dedupe to the same slice")
+}
+
+func TestDedupLockRows_Idempotent(t *testing.T) {
+	in := [][]byte{{0x01}, {0x02}, {0x03}, {0x04}}
+	once := dedupLockRows(in)
+	twice := dedupLockRows(append([][]byte(nil), once...))
+	require.Equal(t, once, twice)
+}
+
+func TestLockOpMergeableTargetsRemainStreaming(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		makeBatch := func(left, right int32) *batch.Batch {
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{left}, nil, proc.Mp())
+			bat.Vecs[1] = testutil.MakeInt32Vector([]int32{right}, nil, proc.Mp())
+			bat.SetRowCount(1)
+			return bat
+		}
+		first := makeBatch(2, 1)
+		second := makeBatch(1, 2)
+		defer first.Clean(proc.Mp())
+		defer second.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, first, result.Batch)
+		require.True(t, proc.GetTxnOperator().HasLockTable(uint64(1)))
+		result, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, second, result.Batch)
+		result, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Nil(t, result.Batch)
+		arg.Free(proc, false, nil)
+	})
+}
+
+func TestLockOpMergeableTargetsSkipLeadingAllNull(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{0}, []uint64{0}, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector([]int32{42}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		defer bat.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, bat, result.Batch)
+		require.True(t, proc.GetTxnOperator().HasLockTable(uint64(1)))
+		arg.Free(proc, false, nil)
+	})
+}
+
+func TestLockOpMergedTargetChecksEveryVersionRange(t *testing.T) {
+	arg := NewArgumentByEngine(nil)
+	pkType := types.T_int32.ToType()
+	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 3, pkType, -1, -1, nil, false)
+	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 7, pkType, -1, -1, nil, false)
+	arg.ctr.relations = make([]engine.Relation, len(arg.targets))
+	var checked []int32
+	arg.ctr.hasNewVersionInRange = func(
+		_ *process.Process,
+		_ engine.Relation,
+		_ process.Analyzer,
+		_ uint64,
+		_ engine.Engine,
+		_ *batch.Batch,
+		idx int32,
+		_ int32,
+		_, _ timestamp.Timestamp,
+	) (bool, error) {
+		checked = append(checked, idx)
+		return idx == 7, nil
+	}
+
+	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1})(
+		nil, nil, nil, 1, nil, nil, -1, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []int32{3, 7}, checked)
+}
+
+func TestLockOpExclusiveTargetsStayRowLocked(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		defer bat.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Exclusive, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Exclusive, 1, pkType, -1, -1, nil, false)
+		require.False(t, mergeableLockTargets(arg.targets[0], arg.targets[1]))
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		_, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
 		arg.Free(proc, false, nil)
 	})
 }

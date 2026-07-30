@@ -39,6 +39,8 @@ drop view if exists v1;
 
 use db1;
 drop index if exists idx1 on t1;
+drop index if exists idx1 on t1;
+drop index idx1 on t1;
 show index from t1;
 drop view if exists v1;
 drop table if exists t1;
@@ -62,7 +64,6 @@ select disable_fault_injection();
 commit;
 
 drop database test;
-
 
 
 

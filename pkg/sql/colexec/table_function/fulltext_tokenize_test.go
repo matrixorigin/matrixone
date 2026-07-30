@@ -132,6 +132,77 @@ func TestFullTextTokenizeCall(t *testing.T) {
 	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
 }
 
+// TestFullTextTokenizeCallGojieba verifies that the tokenize TVF, when
+// given parser="gojieba", segments Chinese input via jieba and emits one
+// row per word plus the trailing __DocLen marker — matching what the index
+// rows actually contain, so query-time phrase JOINs can land on real rows.
+func TestFullTextTokenizeCallGojieba(t *testing.T) {
+
+	ut := newFTTTestCase(t, mpool.MustNewZero(), fttdefaultAttrs, `{"parser":"gojieba"}`)
+
+	inbat := makeBatchGojiebaFTT(ut.proc)
+
+	ut.arg.Args = makeConstInputGojiebaExprsFTT()
+
+	err := ut.arg.Prepare(ut.proc)
+	require.Nil(t, err)
+
+	for i := range ut.arg.ctr.executorsForArgs {
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.Nil(t, err)
+	}
+
+	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
+	require.Nil(t, err)
+
+	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.Nil(t, err)
+	require.Equal(t, result.Status, vm.ExecNext)
+
+	// Input "我来到北京" → jieba HMM=false yields 3 tokens (我, 来到, 北京);
+	// fulltext_index_tokenize appends one __DocLen marker → 4 rows total.
+	require.Equal(t, 4, result.Batch.RowCount())
+
+	wordVec := result.Batch.Vecs[2]
+	got := make([]string, result.Batch.RowCount())
+	for i := 0; i < result.Batch.RowCount(); i++ {
+		got[i] = wordVec.GetStringAt(i)
+	}
+	require.Equal(t, []string{"我", "来到", "北京", "__DocLen"}, got)
+
+	ut.arg.ctr.state.reset(ut.arg, ut.proc)
+	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
+}
+
+func makeConstInputGojiebaExprsFTT() []*plan.Expr {
+	return []*plan.Expr{
+		{
+			Typ: plan.Type{Id: int32(types.T_int32)},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 1}},
+			},
+		},
+		{
+			Typ: plan.Type{Id: int32(types.T_varchar), Width: 128},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "我来到北京"}},
+			},
+		},
+	}
+}
+
+func makeBatchGojiebaFTT(proc *process.Process) *batch.Batch {
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0))
+
+	vector.AppendFixed[int32](bat.Vecs[0], int32(1), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[1], []byte("我来到北京"), false, proc.Mp())
+
+	bat.SetRowCount(1)
+	return bat
+}
+
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextTokenizeCallJSON(t *testing.T) {
 

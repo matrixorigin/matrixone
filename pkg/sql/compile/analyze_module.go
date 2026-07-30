@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -42,14 +44,35 @@ type AnalyzeModule struct {
 	phyPlan        *models.PhyPlan
 	remotePhyPlans []models.PhyPlan
 	// Added read-write lock
-	mu               sync.RWMutex
-	retryTimes       int
-	explainPhyBuffer *bytes.Buffer
+	mu                         sync.RWMutex
+	retryTimes                 int
+	explainPhyBuffer           *bytes.Buffer
+	remoteUsage                resource.Usage
+	remoteMemory               resource.MemoryTotals
+	remoteQuality              resource.QualityFlags
+	remoteMissingFragments     uint64
+	remoteMissingMemoryDomains uint64
+	remoteReports              uint64
+}
+
+// remoteResourceSnapshot is a by-value view of the terminal resource facts
+// received from descendant remote runs. The direct report count is kept
+// separately from the nested missing counts so each hop can account for the
+// remote scopes it expected to hear from exactly once.
+type remoteResourceSnapshot struct {
+	Usage                    resource.Usage
+	Memory                   resource.MemoryTotals
+	Quality                  resource.QualityFlags
+	MissingFragmentCount     uint64
+	MissingMemoryDomainCount uint64
+	DirectReportCount        uint64
 }
 
 // Reset When Compile reused, reset AnalyzeModule to prevent resource accumulation
 func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 	if anal != nil {
+		anal.mu.Lock()
+		defer anal.mu.Unlock()
 		if !isPrepare {
 			anal.phyPlan = nil
 		}
@@ -57,15 +80,61 @@ func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 		anal.remotePhyPlans = nil
 		anal.explainPhyBuffer = nil
 		anal.retryTimes = 0
-		for _, node := range anal.qry.Nodes {
-			if node.AnalyzeInfo == nil {
-				node.AnalyzeInfo = new(plan.AnalyzeInfo)
-			} else {
-				node.AnalyzeInfo.Reset()
+		anal.remoteUsage = resource.Usage{}
+		anal.remoteMemory = resource.MemoryTotals{}
+		anal.remoteQuality = 0
+		anal.remoteMissingFragments = 0
+		anal.remoteMissingMemoryDomains = 0
+		anal.remoteReports = 0
+		if anal.qry != nil {
+			for _, node := range anal.qry.Nodes {
+				if node.AnalyzeInfo == nil {
+					node.AnalyzeInfo = new(plan.AnalyzeInfo)
+				} else {
+					node.AnalyzeInfo.Reset()
+				}
 			}
 		}
 	}
 
+}
+
+func (anal *AnalyzeModule) appendRemoteResource(
+	delta resource.Delta,
+	memory resource.MemoryTotals,
+	missingFragments uint64,
+	missingMemoryDomains uint64,
+) {
+	if anal == nil {
+		return
+	}
+	anal.mu.Lock()
+	defer anal.mu.Unlock()
+	quality := delta.Quality
+	quality |= resource.MergeUsage(&anal.remoteUsage, delta.Usage)
+	quality |= resource.MergeMemoryTotals(&anal.remoteMemory, memory)
+	anal.remoteMissingFragments, quality = addCheckedRemoteCounter(
+		anal.remoteMissingFragments, missingFragments, quality)
+	anal.remoteMissingMemoryDomains, quality = addCheckedRemoteCounter(
+		anal.remoteMissingMemoryDomains, missingMemoryDomains, quality)
+	anal.remoteReports, quality = addCheckedRemoteCounter(anal.remoteReports, 1, quality)
+	anal.remoteQuality |= quality
+}
+
+func (anal *AnalyzeModule) remoteResourceSummary() remoteResourceSnapshot {
+	if anal == nil {
+		return remoteResourceSnapshot{}
+	}
+	anal.mu.RLock()
+	defer anal.mu.RUnlock()
+	return remoteResourceSnapshot{
+		Usage:                    anal.remoteUsage,
+		Memory:                   anal.remoteMemory,
+		Quality:                  anal.remoteQuality,
+		MissingFragmentCount:     anal.remoteMissingFragments,
+		MissingMemoryDomainCount: anal.remoteMissingMemoryDomains,
+		DirectReportCount:        anal.remoteReports,
+	}
 }
 
 func (anal *AnalyzeModule) AppendRemotePhyPlan(remotePhyPlan models.PhyPlan) {
@@ -170,16 +239,13 @@ func applyOpStatsToNode(op *models.PhyOperator, qry *plan.Query, nodes []*plan.N
 			node.AnalyzeInfo.OutrowsMax = max(node.AnalyzeInfo.OutrowsMax, op.OpStats.OutputRows)
 		}
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TimeConsumed
-
 		node.AnalyzeInfo.MemorySize += op.OpStats.MemorySize
 		node.AnalyzeInfo.MemoryMax = max(node.AnalyzeInfo.MemoryMax, op.OpStats.MemorySize)
+
 		node.AnalyzeInfo.SpillSize += op.OpStats.SpillSize
 		node.AnalyzeInfo.SpillRows += op.OpStats.SpillRows
 		node.AnalyzeInfo.SpillMax = max(node.AnalyzeInfo.SpillMax, op.OpStats.SpillSize)
 
-		// handle mem min/max,
-		// This is FUBAR.   One node may have several ops (therefore the op.isLast, whatever it means).
-		// Min is NOT idempotent, a 0 will reset it.   So we only update when IsLast.
 		if op.IsLast {
 			if node.AnalyzeInfo.MemoryMin == 0 {
 				node.AnalyzeInfo.MemoryMin = op.OpStats.MemorySize
@@ -327,6 +393,9 @@ func UpdatePreparePhyScope(scope *Scope, phyScope models.PhyScope) bool {
 		phyScope.PrepareTimeConsumed = scope.ScopeAnalyzer.TimeConsumed
 	}
 
+	if len(scope.PreScopes) != len(phyScope.PreScopes) {
+		return false
+	}
 	for i, preScope := range scope.PreScopes {
 		res = UpdatePreparePhyScope(preScope, phyScope.PreScopes[i])
 		if !res {
@@ -361,44 +430,85 @@ func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.Wai
 	return receivers
 }
 
-// ConvertOperatorToPhyOperator Convert Operator to PhyOperator
+// phyOpArena pre-allocates backing storage for PhyOperator nodes and their
+// Children pointer slices, reducing per-node heap allocations to zero.
+type phyOpArena struct {
+	nodes    []models.PhyOperator
+	childBuf []*models.PhyOperator
+}
+
+// ConvertOperatorToPhyOperator converts an Operator tree to a PhyOperator tree.
+// All PhyOperator nodes and child-pointer slices are allocated from a single
+// arena to minimize heap allocations and reduce GC pressure.
 func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]int) *models.PhyOperator {
 	if op == nil {
 		return nil
 	}
+	n := countOperators(op)
+	arena := phyOpArena{
+		nodes:    make([]models.PhyOperator, 0, n),
+		childBuf: make([]*models.PhyOperator, 0, n),
+	}
+	return convertOperatorToPhyOperator(op, rmp, &arena)
+}
 
-	phyOp := &models.PhyOperator{
-		OpName:       op.OpType().String(),
-		NodeIdx:      op.GetOperatorBase().Idx,
-		DestReceiver: getDestReceiver(op, rmp),
-		IsFirst:      op.GetOperatorBase().IsFirst,
-		IsLast:       op.GetOperatorBase().IsLast,
+func countOperators(op vm.Operator) int {
+	if op == nil {
+		return 0
+	}
+	n := 1
+	for _, child := range op.GetOperatorBase().Children {
+		n += countOperators(child)
+	}
+	return n
+}
+
+func convertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]int, arena *phyOpArena) *models.PhyOperator {
+	if op == nil {
+		return nil
 	}
 
-	if op.GetOperatorBase().IsFirst {
+	base := op.GetOperatorBase()
+	arena.nodes = append(arena.nodes, models.PhyOperator{
+		OpName:       op.OpType().String(),
+		NodeIdx:      base.Idx,
+		DestReceiver: getDestReceiver(op, rmp),
+		IsFirst:      base.IsFirst,
+		IsLast:       base.IsLast,
+	})
+	phyOp := &arena.nodes[len(arena.nodes)-1]
+
+	if base.IsFirst {
 		phyOp.Status |= 1 << 0
 	}
-	if op.GetOperatorBase().IsLast {
+	if base.IsLast {
 		phyOp.Status |= 1 << 1
 	}
 
-	if op.GetOperatorBase().OpAnalyzer != nil {
-		phyOp.OpStats = op.GetOperatorBase().OpAnalyzer.GetOpStats()
+	if base.OpAnalyzer != nil {
+		phyOp.OpStats = base.OpAnalyzer.GetOpStats()
 	}
 
-	children := op.GetOperatorBase().Children
-	phyChildren := make([]*models.PhyOperator, len(children))
-	for i, child := range children {
-		phyChildren[i] = ConvertOperatorToPhyOperator(child, rmp)
+	children := base.Children
+	if len(children) > 0 {
+		start := len(arena.childBuf)
+		for range children {
+			arena.childBuf = append(arena.childBuf, nil)
+		}
+		phyOp.Children = arena.childBuf[start : start+len(children)]
+		for i, child := range children {
+			phyOp.Children[i] = convertOperatorToPhyOperator(child, rmp, arena)
+		}
 	}
-
-	phyOp.Children = phyChildren
 	return phyOp
 }
 
 func UpdatePreparePhyOperator(op vm.Operator, phyOp *models.PhyOperator) bool {
 	if op == nil {
 		return true
+	}
+	if phyOp == nil {
+		return false
 	}
 
 	if op.GetOperatorBase().OpAnalyzer != nil {
@@ -418,49 +528,35 @@ func UpdatePreparePhyOperator(op vm.Operator, phyOp *models.PhyOperator) bool {
 	return true
 }
 
-// getDestReceiver returns the DestReceiver of the current Operator
+// getDestReceiver returns the DestReceiver of the current Operator.
+// Returns nil for operators that have no receivers (the common case).
 func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.PhyReceiver {
-	receivers := make([]models.PhyReceiver, 0)
 	id := op.OpType()
-	_, ok := debugInstructionNames[id]
-	if ok {
-		if id == vm.Connector {
-			arg := op.(*connector.Connector)
-			if receiverId, okk := mp[arg.Reg]; okk {
-				//receivers = append(receivers, receiverId)
-				receivers = append(receivers, models.PhyReceiver{
-					Idx:        receiverId,
-					RemoteUuid: "",
-				})
-			}
-		} else if id == vm.Dispatch {
-			arg := op.(*dispatch.Dispatch)
-			for i := range arg.LocalRegs {
-				if receiverId, okk := mp[arg.LocalRegs[i]]; okk {
-					//receivers = append(receivers, receiverId)
-					receivers = append(receivers, models.PhyReceiver{
-						Idx:        receiverId,
-						RemoteUuid: "",
-					})
-				} else {
-					receivers = append(receivers, models.PhyReceiver{
-						Idx:        -1,
-						RemoteUuid: "",
-					})
-				}
-			}
-
-			if len(arg.RemoteRegs) != 0 {
-				for _, reg := range arg.RemoteRegs {
-					receivers = append(receivers, models.PhyReceiver{
-						Idx:        -2, // reg.NodeAddr
-						RemoteUuid: reg.Uuid.String(),
-					})
-				}
+	switch id {
+	case vm.Connector:
+		arg := op.(*connector.Connector)
+		if receiverId, ok := mp[arg.Reg]; ok {
+			return []models.PhyReceiver{{Idx: receiverId}}
+		}
+	case vm.Dispatch:
+		arg := op.(*dispatch.Dispatch)
+		receivers := make([]models.PhyReceiver, 0, len(arg.LocalRegs)+len(arg.RemoteRegs))
+		for i := range arg.LocalRegs {
+			if receiverId, ok := mp[arg.LocalRegs[i]]; ok {
+				receivers = append(receivers, models.PhyReceiver{Idx: receiverId})
+			} else {
+				receivers = append(receivers, models.PhyReceiver{Idx: -1})
 			}
 		}
+		for _, reg := range arg.RemoteRegs {
+			receivers = append(receivers, models.PhyReceiver{
+				Idx:        -2,
+				RemoteUuid: reg.Uuid.String(),
+			})
+		}
+		return receivers
 	}
-	return receivers
+	return nil
 }
 
 func ConvertSourceToPhySource(source *Source) *models.PhySource {
@@ -479,7 +575,11 @@ func (c *Compile) UpdatePreparePhyPlan(runC *Compile) bool {
 	//------------------------------------------------------------------------------------------------------
 	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
 	c.anal.curNodeIdx = runC.anal.curNodeIdx
+	c.attachResourceSummary(c.anal.phyPlan)
 
+	if len(runC.scopes) != len(c.anal.phyPlan.LocalScope) {
+		return false
+	}
 	if len(runC.scopes) > 0 {
 		for i := range runC.scopes {
 			res := UpdatePreparePhyScope(runC.scopes[i], c.anal.phyPlan.LocalScope[i])
@@ -514,6 +614,19 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 	for _, remotePhy := range runC.anal.remotePhyPlans {
 		c.anal.phyPlan.RemoteScope = append(c.anal.phyPlan.RemoteScope, remotePhy.LocalScope[0])
 	}
+	c.attachResourceSummary(c.anal.phyPlan)
+}
+
+func (c *Compile) attachResourceSummary(plan *models.PhyPlan) {
+	if c == nil || c.proc == nil || plan == nil {
+		return
+	}
+	root := resource.RootFromContext(c.proc.GetTopContext())
+	if root == nil {
+		return
+	}
+	summary := root.PreResponseSummary()
+	plan.Resource = &summary
 }
 
 type ParallelScopeInfo struct {
@@ -584,14 +697,33 @@ func explainResourceOverview(
 	if option.Analyze || option.Verbose {
 		gblStats := models.ExtractPhyPlanGlbStats(anal.phyPlan)
 		buffer.WriteString("Overview:\n")
-		fmt.Fprintf(buffer,
-			"\tMemoryUsage:%dB,  SpillSize:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB, AffectedRows: %d",
-			gblStats.MemorySize,
-			gblStats.SpillSize,
-			gblStats.DiskIOSize,
-			gblStats.NetWorkSize,
-			queryResult.AffectRows,
-		)
+		if summary := anal.phyPlan.Resource; summary != nil {
+			waitNS, waitQuality := summary.Usage.TotalWaitNS()
+			quality := summary.Quality | waitQuality
+			fmt.Fprintf(buffer,
+				"\tActiveTime:%dns, WaitTime:%dns, MaxDomainPeakMemory:%s, SumDomainPeakMemoryBound:%s, OperatorMemorySum:%dB, Spill:%dB, S3Read:%dB, S3Write:%dB, Attempts:%d, Quality:%s, AffectedRows:%d",
+				summary.Usage.ExclusiveActiveNS,
+				waitNS,
+				common.ConvertUint64BytesToHumanReadable(summary.Memory.MaxDomainPeakLiveBytes),
+				common.ConvertUint64BytesToHumanReadable(summary.Memory.SumDomainPeakLiveBytesBound),
+				gblStats.MemorySize,
+				summary.Usage.SpillBytes,
+				summary.Usage.S3ReadBytes,
+				summary.Usage.S3WriteBytes,
+				summary.AttemptCount,
+				quality,
+				queryResult.AffectRows,
+			)
+		} else {
+			fmt.Fprintf(buffer,
+				"\tMemoryUsage:%dB,  SpillSize:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB, AffectedRows: %d",
+				gblStats.MemorySize,
+				gblStats.SpillSize,
+				gblStats.DiskIOSize,
+				gblStats.NetWorkSize,
+				queryResult.AffectRows,
+			)
+		}
 
 		if statsInfo != nil {
 			buffer.WriteString("\n")
@@ -610,7 +742,6 @@ func explainResourceOverview(
 				statsInfo.PrepareRunStage.ScopePrepareDuration + statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
 				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock - statsInfo.PlanStage.BuildPlanStatsIOConsumption -
 				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
-
 			buffer.WriteString("\tCPU Usage: \n")
 			fmt.Fprintf(buffer, "\t\t- Total CPU Time: %dns \n", cpuTimeVal)
 			fmt.Fprintf(buffer, "\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d)\n",
@@ -623,12 +754,12 @@ func explainResourceOverview(
 				statsInfo.PlanStage.BuildPlanStatsIOConsumption,
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
-			fmt.Fprintf(buffer, "\t\t- Permission Authentication Stats Array: %v \n", statsInfo.PermissionAuth)
+			fmt.Fprintf(buffer, "\t\t- Permission Authentication Stats Array: %v\n", statsInfo.PermissionAuth)
 
 			//-------------------------------------------------------------------------------------------------------
 			if option.Analyze {
 				buffer.WriteString("\tQuery Build Plan Stage:\n")
-				fmt.Fprintf(buffer, "\t\t- CPU Time: %dns \n", int64(statsInfo.PlanStage.PlanDuration)-statsInfo.PlanStage.BuildPlanStatsIOConsumption)
+				fmt.Fprintf(buffer, "\t\t- CPU Time: %dns \n", diagnosticExclusiveNS(int64(statsInfo.PlanStage.PlanDuration), statsInfo.PlanStage.BuildPlanStatsIOConsumption))
 				fmt.Fprintf(buffer, "\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.PlanStage.BuildPlanS3Request.List,
 					statsInfo.PlanStage.BuildPlanS3Request.Head,
@@ -665,7 +796,7 @@ func explainResourceOverview(
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Prepare Exec Stage:\n")
-				fmt.Fprintf(buffer, "\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration-statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock)
+				fmt.Fprintf(buffer, "\t\t- CPU Time: %dns \n", diagnosticExclusiveNS(gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration, statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))
 				fmt.Fprintf(buffer, "\t\t- CompilePreRunOnce Duration: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceDuration)
 				fmt.Fprintf(buffer, "\t\t- PreRunOnce WaitLock: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock)
 				fmt.Fprintf(buffer, "\t\t- ScopePrepareTimeConsumed: %dns \n", gblStats.ScopePrepareTimeConsumed)
@@ -702,6 +833,14 @@ func explainResourceOverview(
 			buffer.WriteString("Physical Plan Deployment:")
 		}
 	}
+}
+
+func diagnosticExclusiveNS(wall, wait int64) uint64 {
+	if wall < 0 || wait < 0 {
+		return 0
+	}
+	active, _ := resource.ExclusiveActive(uint64(wall), uint64(wait), 0)
+	return active
 }
 
 func explainScopes(scopes []*Scope, gap int, rmp map[*process.WaitRegister]int, option *ExplainOption, buffer *bytes.Buffer) {

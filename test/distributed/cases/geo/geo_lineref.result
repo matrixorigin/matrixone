@@ -1,0 +1,30 @@
+select st_astext(st_lineinterpolatepoint(st_geomfromtext('LINESTRING(0 0, 10 0)'), 0.5)) as mid;
+mid
+POINT(5 0)
+select st_astext(st_lineinterpolatepoint(st_geomfromtext('LINESTRING(0 0, 10 0, 10 10)'), 0.75)) as quarter3;
+quarter3
+POINT(10 5)
+select st_astext(st_lineinterpolatepoint(st_geomfromtext('LINESTRING(0 0, 10 0)'), 0)) as start_pt;
+start_pt
+POINT(0 0)
+select st_astext(st_lineinterpolatepoint(st_geomfromtext('LINESTRING(0 0, 10 0)'), 1)) as end_pt;
+end_pt
+POINT(10 0)
+select st_astext(st_lineinterpolatepoints(st_geomfromtext('LINESTRING(0 0, 10 0)'), 0.25)) as quarters;
+quarters
+MULTIPOINT(2.5 0,5 0,7.5 0,10 0)
+select st_astext(st_lineinterpolatepoints(st_geomfromtext('LINESTRING(0 0, 10 0)'), 1.0)) as just_end;
+just_end
+POINT(10 0)
+select st_astext(st_pointatdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), 3)) as at3;
+at3
+POINT(3 0)
+select st_astext(st_pointatdistance(st_geomfromtext('LINESTRING(0 0, 10 0, 10 10)'), 15)) as at15;
+at15
+POINT(10 5)
+select st_pointatdistance(st_geomfromtext('LINESTRING(0 0, 10 0)'), 99);
+invalid input: ST_PointAtDistance: distance is out of range
+select st_lineinterpolatepoints(st_geomfromtext('LINESTRING(0 0, 10 0)'), 0);
+invalid input: ST_LineInterpolatePoints: fraction must be in (0, 1]
+select st_lineinterpolatepoint(st_geomfromtext('POINT(1 1)'), 0.5);
+invalid input: geometry is not a LINESTRING

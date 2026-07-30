@@ -17,13 +17,13 @@ package function
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -58,7 +59,7 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || v1 == types.ZeroDate || v2 == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -185,6 +186,66 @@ func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
+// parseLeadingInteger extracts and parses the longest leading integer prefix
+// from s. Leading whitespace must already be stripped by the caller.
+// Returns (0, false) when s has no leading digits, matching MySQL's
+// CHAR('abc') → 0x00 behavior.
+func parseLeadingInteger(s string) (int64, bool) {
+	if len(s) == 0 {
+		return 0, false
+	}
+	start := 0
+	// optional sign
+	if s[0] == '+' || s[0] == '-' {
+		start = 1
+	}
+	// scan digits
+	end := start
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == start {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(s[:end], 10, 64)
+	if err != nil {
+		// overflow → clamp and let the caller's mod-256 wrap handle it
+		if s[0] == '-' {
+			return -1 << 63, true
+		}
+		return 1<<63 - 1, true
+	}
+	return v, true
+}
+
+// encodeCharBytes converts an int64 argument for MySQL CHAR() into big-endian
+// bytes. MySQL treats CHAR(N) values as unsigned 32-bit integers and expands
+// values > 255 into multiple big-endian bytes:
+//
+//	CHAR(256)   → 0x0100       (two bytes)
+//	CHAR(65536) → 0x010000     (three bytes)
+//	CHAR(-1)    → 0xFFFFFFFF   (four bytes, via two's complement uint32)
+//
+// See MySQL docs: https://dev.mysql.com/doc/refman/8.4/en/string-functions.html#function_char
+func encodeCharBytes(v int64) []byte {
+	uv := uint32(v)
+	if uv == 0 {
+		return []byte{0}
+	}
+	// Encode as big-endian 32-bit, then strip leading zero bytes.
+	var buf [4]byte
+	buf[0] = byte(uv >> 24)
+	buf[1] = byte(uv >> 16)
+	buf[2] = byte(uv >> 8)
+	buf[3] = byte(uv)
+
+	start := 0
+	for start < 3 && buf[start] == 0 {
+		start++
+	}
+	return buf[start:]
+}
+
 const (
 	onUpdateExpr = iota
 	defaultExpr
@@ -194,6 +255,40 @@ const (
 	generatedExprOrigin  uint8 = 5 // generated column expression origin string
 	generatedExprExtra   uint8 = 6 // generated column Extra: "STORED GENERATED" or "VIRTUAL GENERATED"
 )
+
+// Geometry subtype and SRID live in the column type's Scale and Width (see
+// pkg/sql/plan/mysql_special_types.go): Scale holds the geo.Subtype enum and
+// Width holds srid+1 when an SRID is declared (0 means undeclared). These two
+// helpers mirror that rendering for information_schema.COLUMNS / desc, matching
+// what SHOW CREATE TABLE produces via plan.FormatColType.
+
+// geometryShowDataType renders the DATA_TYPE of a geometry column: the subtype
+// name (POINT, LINESTRING, ...) or the base family when the subtype is generic.
+func geometryShowDataType(typ *types.Type) string {
+	base := "GEOMETRY"
+	if typ.Oid == types.T_geometry32 {
+		base = "GEOMETRY32"
+	}
+	sub := geo.Subtype(typ.Scale)
+	if sub == geo.GENERIC {
+		return base
+	}
+	name := sub.String()
+	if typ.Oid == types.T_geometry32 {
+		name += "32"
+	}
+	return name
+}
+
+// geometryShowColumnType is geometryShowDataType plus a " SRID n" suffix when
+// the column declares an SRID (Width holds srid+1; 0 means undeclared).
+func geometryShowColumnType(typ *types.Type) string {
+	ts := geometryShowDataType(typ)
+	if typ.Width > 0 {
+		ts = fmt.Sprintf("%s SRID %d", ts, uint32(typ.Width-1))
+	}
+	return ts
+}
 
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -240,8 +335,8 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
 			}
-			if typ.Oid == types.T_geometry {
-				return functionUtil.QuickStrToBytes("GEOMETRY"), nil
+			if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
+				return functionUtil.QuickStrToBytes(geometryShowDataType(typ)), nil
 			}
 
 			return functionUtil.QuickStrToBytes(ts), nil
@@ -260,8 +355,8 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
 				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
-			} else if typ.Oid == types.T_geometry {
-				ret = "GEOMETRY"
+			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
+				ret = geometryShowColumnType(typ)
 			} else {
 				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}
@@ -291,6 +386,10 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			}
 			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
 				return nil, nil
+			}
+			trimmed := strings.TrimSpace(def.OriginString)
+			if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
+				return functionUtil.QuickStrToBytes(trimmed), nil
 			}
 
 			fStr := formatStr(def.OriginString)
@@ -361,7 +460,9 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, err
 		}
 		typeName := "ENUM"
-		if typ.Oid == types.T_uint64 {
+		if typ.Oid == types.T_json && strings.HasPrefix(strings.ToLower(strings.TrimSpace(enumStr)), "array(") {
+			return functionUtil.QuickStrToBytes(enumStr), nil
+		} else if typ.Oid == types.T_uint64 {
 			typeName = "SET"
 		} else if typ.Oid == types.T_geometry {
 			subtype := ""
@@ -485,8 +586,12 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsMySQLString() {
@@ -509,8 +614,12 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsMySQLString() {
@@ -533,8 +642,12 @@ func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsDecimal() {
@@ -557,8 +670,12 @@ func builtInInternalNumericScale(parameters []*vector.Vector, result vector.Func
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsDecimal() {
@@ -581,8 +698,12 @@ func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.Fun
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid == types.T_datetime {
@@ -605,8 +726,12 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
@@ -683,8 +808,286 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+func builtInIntervalCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) < 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	for _, source := range inputs {
+		if !intervalTypeSupported(source) {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+func intervalTypeSupported(source types.Type) bool {
+	return source.IsIntOrUint() ||
+		source.IsFloat() ||
+		source.Oid == types.T_decimal64 ||
+		source.Oid == types.T_decimal128 ||
+		source.Oid.IsMySQLString() ||
+		source.Oid == types.T_any
+}
+
+func builtInInterval(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	args := make([]intervalParam, len(parameters))
+	for i := range parameters {
+		var err error
+		args[i], err = makeIntervalParam(parameters[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		n, null, err := args[0].float(i)
+		if err != nil {
+			return err
+		}
+		if null {
+			if err := rs.Append(-1, false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var nDec types.Decimal128
+		useDecimalComparison := args[0].useDecimalComparison()
+		if useDecimalComparison {
+			nDec, _, err = args[0].decimal(i)
+			if err != nil {
+				return err
+			}
+		}
+
+		ret := len(args) - 1
+		for j := 1; j < len(args); j++ {
+			var cmp int
+			if useDecimalComparison && args[j].canCompareAsDecimal() {
+				var vDec types.Decimal128
+				vDec, null, err = args[j].decimal(i)
+				if err != nil {
+					return err
+				}
+				if null {
+					continue
+				}
+				cmp = types.CompareDecimal128WithScale(vDec, nDec, args[j].decimalScale(), args[0].decimalScale())
+			} else {
+				var v float64
+				v, null, err = args[j].float(i)
+				if err != nil {
+					return err
+				}
+				if null {
+					continue
+				}
+				switch {
+				case v > n:
+					cmp = 1
+				case v < n:
+					cmp = -1
+				default:
+					cmp = 0
+				}
+			}
+			if cmp > 0 {
+				ret = j - 1
+				break
+			}
+		}
+
+		if err := rs.Append(int64(ret), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type intervalParam struct {
+	float             func(uint64) (float64, bool, error)
+	decimal           func(uint64) (types.Decimal128, bool, error)
+	useDecimalCompare bool
+	canDecimalCompare bool
+	decScale          int32
+}
+
+func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
+	typ := *v.GetType()
+	p := intervalParam{
+		useDecimalCompare: typ.IsIntOrUint() || typ.IsDecimal(),
+		canDecimalCompare: typ.IsIntOrUint() || typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128,
+	}
+	if typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128 {
+		p.decScale = typ.Scale
+	}
+
+	switch typ.Oid {
+	case types.T_float64:
+		fp := vector.GenerateFunctionFixedTypeParameter[float64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return v, null, nil
+		}
+	case types.T_float32:
+		fp := vector.GenerateFunctionFixedTypeParameter[float32](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+	case types.T_int64:
+		fp := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(v), null, nil
+		}
+	case types.T_int32:
+		fp := vector.GenerateFunctionFixedTypeParameter[int32](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_int16:
+		fp := vector.GenerateFunctionFixedTypeParameter[int16](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_int8:
+		fp := vector.GenerateFunctionFixedTypeParameter[int8](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_uint64:
+		fp := vector.GenerateFunctionFixedTypeParameter[uint64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			if v <= math.MaxInt64 {
+				return types.Decimal128FromInt64(int64(v)), null, nil
+			}
+			d, err := types.ParseDecimal128(strconv.FormatUint(v, 10), 38, 0)
+			return d, null, err
+		}
+	case types.T_uint32:
+		fp := vector.GenerateFunctionFixedTypeParameter[uint32](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_uint16:
+		fp := vector.GenerateFunctionFixedTypeParameter[uint16](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_uint8:
+		fp := vector.GenerateFunctionFixedTypeParameter[uint8](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromInt64(int64(v)), null, nil
+		}
+	case types.T_decimal64:
+		fp := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal64ToFloat64(v, typ.Scale), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128FromDecimal64(v, typ.Scale), null, nil
+		}
+	case types.T_decimal128:
+		fp := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return types.Decimal128ToFloat64(v, typ.Scale), null, nil
+		}
+		p.decimal = func(idx uint64) (types.Decimal128, bool, error) {
+			v, null := fp.GetValue(idx)
+			return v, null, nil
+		}
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+		fp := vector.GenerateFunctionStrParameter(v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetStrValue(idx)
+			if null {
+				return 0, true, nil
+			}
+			f, err := strconv.ParseFloat(string(v), 64)
+			if err != nil {
+				return 0, false, moerr.NewInvalidArgNoCtx("cast to double", fmt.Sprintf("bad value %s", string(v)))
+			}
+			return f, false, nil
+		}
+	case types.T_any:
+		fp := vector.GenerateFunctionFixedTypeParameter[int64](v)
+		p.float = func(idx uint64) (float64, bool, error) {
+			v, null := fp.GetValue(idx)
+			return float64(v), null, nil
+		}
+	default:
+		return p, moerr.NewInvalidInputNoCtxf("interval function have invalid input args type %s", typ.Oid.String())
+	}
+	return p, nil
+}
+
+func (p intervalParam) useDecimalComparison() bool {
+	return p.useDecimalCompare
+}
+
+func (p intervalParam) canCompareAsDecimal() bool {
+	return p.canDecimalCompare
+}
+
+func (p intervalParam) decimalScale() int32 {
+	return p.decScale
+}
+
 func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
-	// CHAR accepts one or more integer arguments
+	// CHAR accepts one or more arguments, which MySQL interprets as integers.
+	// MySQL coerces arguments differently depending on their type:
+	//   - integer types  : used as-is
+	//   - numeric types (float/decimal/bool/bit/...) : rounded to nearest integer
+	//   - string types   : the leading numeric prefix is truncated to an integer
+	//     (e.g. '65.9' -> 65, not 66)
+	// To preserve this distinction we keep integers, cast string types to varchar
+	// (parsed & truncated in builtInChar), and cast every other numeric type to
+	// int64 (the numeric->int64 cast rounds, matching MySQL).
 	if len(inputs) < 1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
@@ -692,19 +1095,23 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 	shouldCast := false
 	ret := make([]types.Type, len(inputs))
 	for i, source := range inputs {
-		// Check if it's an integer type
-		if !source.Oid.IsInteger() {
-			// Try to cast to int64
+		switch {
+		case source.Oid.IsInteger():
+			ret[i] = source
+		case source.Oid == types.T_varchar:
+			ret[i] = source
+		case source.Oid.IsMySQLString():
+			// char/text/blob/binary/varbinary -> varchar (truncated in builtInChar)
+			shouldCast = true
+			ret[i] = types.T_varchar.ToType()
+		default:
+			// float/decimal/bool/bit/... -> int64 (rounded by the cast, like MySQL)
 			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
 			if c == matchFailed {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
-			if c == matchByCast {
-				shouldCast = true
-				ret[i] = types.T_int64.ToType()
-			}
-		} else {
-			ret[i] = source
+			shouldCast = true
+			ret[i] = types.T_int64.ToType()
 		}
 	}
 	if shouldCast {
@@ -716,8 +1123,11 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// Create getter functions for each parameter that handle different integer types
-	getters := make([]func(uint64) (int64, bool), len(parameters))
+	// After builtInCharCheck, parameters are either integer types or varchar.
+	// (numeric types were cast to int64, string types to varchar).
+	// Each getter returns an int64 value and a null flag.
+	type intGetter func(uint64) (int64, bool)
+	getters := make([]intGetter, len(parameters))
 	for i, param := range parameters {
 		paramType := param.GetType().Oid
 		switch paramType {
@@ -770,11 +1180,39 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				return int64(val), null
 			}
 		default:
-			// For non-integer types, try to cast to int64
-			p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+			// varchar: parse the leading numeric prefix as an integer.
+			// MySQL parses the longest leading integer prefix
+			// (e.g. CHAR('65xyz') → 0x41, CHAR('77.3') → 77).
+			// Direct integer parsing avoids float64 precision loss
+			// for large values (e.g. '9007199254740993').
+			sp := vector.GenerateFunctionStrParameter(param)
+			isBin := param.GetIsBin()
 			getters[i] = func(idx uint64) (int64, bool) {
-				val, null := p.GetValue(idx)
-				return val, null
+				v, null := sp.GetStrValue(idx)
+				if null {
+					return 0, true
+				}
+				if isBin {
+					// hex/bit literals (e.g. 0x41, b'01000001') arrive as raw
+					// bytes with IsBin set; interpret them as a big-endian
+					// integer, mirroring the varchar->int64 cast path
+					// (strToSigned) that CHAR used before.
+					if len(v) > 8 {
+						// MySQL: truncated incorrect BINARY value -> 0
+						return 0, false
+					}
+					var num uint64
+					for _, b := range v {
+						num = num<<8 | uint64(b)
+					}
+					return int64(num), false
+				}
+				s := strings.TrimSpace(string(v))
+				if len(s) == 0 {
+					return 0, false
+				}
+				val, _ := parseLeadingInteger(s)
+				return val, false
 			}
 		}
 	}
@@ -788,38 +1226,25 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 
 		var resultBytes []byte
-		hasNull := false
 
-		// Process all integer arguments
+		// Process all arguments
 		for _, getter := range getters {
 			v, null := getter(i)
 			if null {
-				hasNull = true
-				break
+				// MySQL skips NULL arguments instead of returning NULL
+				continue
 			}
-			// Convert integer to byte value (0-255)
-			// MySQL CHAR function interprets integers as byte values in UTF-8 encoding
-			// For example: CHAR(228, 184, 173) returns "中" (the UTF-8 bytes for U+4E2D)
-			if v < 0 {
-				// Negative values are treated as 0
-				resultBytes = append(resultBytes, 0)
-			} else if v > 255 {
-				// Values > 255 are treated modulo 256
-				resultBytes = append(resultBytes, byte(v&0xFF))
-			} else {
-				resultBytes = append(resultBytes, byte(v))
-			}
+			// Convert argument to big-endian multi-byte sequence.
+			// MySQL treats CHAR(N) as unsigned 32-bit ints and expands
+			// values > 255 into multiple big-endian bytes (CHAR(256) → 0x0100).
+			// Negative values use two's complement uint32 (CHAR(-1) → 0xFFFFFFFF).
+			resultBytes = append(resultBytes, encodeCharBytes(v)...)
 		}
 
-		if hasNull {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			// Convert byte slice to string (UTF-8 decoding happens automatically)
-			if err := rs.AppendBytes(resultBytes, false); err != nil {
-				return err
-			}
+		// resultBytes is empty only when every argument was NULL. MySQL returns
+		// an empty (non-NULL) string in that case, e.g. CHAR(NULL, NULL) -> ''.
+		if err := rs.AppendBytes(resultBytes, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1229,6 +1654,292 @@ func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return nil
 }
 
+func builtInIsUUID(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[bool](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetStrValue(i)
+		if null {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.Append(isUUIDString(functionUtil.QuickBytesToStr(v)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInUUIDToBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	var getSwapFlag func(uint64) (bool, bool, error)
+	if len(parameters) == 2 {
+		getSwapFlag = makeBoolParamGetter(parameters[1])
+	}
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		uuidBytes, null := p1.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		swapFlag := false
+		if getSwapFlag != nil {
+			var null2 bool
+			var err error
+			swapFlag, null2, err = getSwapFlag(i)
+			if err != nil {
+				return err
+			}
+			if null2 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		u, err := parseUUIDString(functionUtil.QuickBytesToStr(uuidBytes))
+		if err != nil {
+			return moerr.NewInvalidArg(proc.Ctx, "uuid_to_bin", functionUtil.QuickBytesToStr(uuidBytes))
+		}
+		out := uuidToBin(u, swapFlag)
+		if err := rs.AppendBytes(out[:], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInBinToUUID(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	var getSwapFlag func(uint64) (bool, bool, error)
+	if len(parameters) == 2 {
+		getSwapFlag = makeBoolParamGetter(parameters[1])
+	}
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		bin, null := p1.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		swapFlag := false
+		if getSwapFlag != nil {
+			var null2 bool
+			var err error
+			swapFlag, null2, err = getSwapFlag(i)
+			if err != nil {
+				return err
+			}
+			if null2 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if len(bin) != 16 {
+			return moerr.NewInvalidArg(proc.Ctx, "bin_to_uuid", len(bin))
+		}
+		var u types.Uuid
+		copy(u[:], bin)
+		if swapFlag {
+			u = unswapUUIDTimeParts(u)
+		}
+		if err := rs.AppendBytes([]byte(u.String()), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func makeBoolParamGetter(param *vector.Vector) func(uint64) (bool, bool, error) {
+	switch param.GetType().Oid {
+	case types.T_bool:
+		p := vector.GenerateFunctionFixedTypeParameter[bool](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v, null, nil
+		}
+	case types.T_int8:
+		p := vector.GenerateFunctionFixedTypeParameter[int8](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_int16:
+		p := vector.GenerateFunctionFixedTypeParameter[int16](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_int32:
+		p := vector.GenerateFunctionFixedTypeParameter[int32](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_int64:
+		p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_uint8:
+		p := vector.GenerateFunctionFixedTypeParameter[uint8](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_uint16:
+		p := vector.GenerateFunctionFixedTypeParameter[uint16](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_uint32:
+		p := vector.GenerateFunctionFixedTypeParameter[uint32](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_uint64:
+		p := vector.GenerateFunctionFixedTypeParameter[uint64](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_float32:
+		p := vector.GenerateFunctionFixedTypeParameter[float32](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_float64:
+		p := vector.GenerateFunctionFixedTypeParameter[float64](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_decimal64:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v != 0, null, nil
+		}
+	case types.T_decimal128:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v.Compare(types.Decimal128{}) != 0, null, nil
+		}
+	case types.T_decimal256:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetValue(idx)
+			return v.Compare(types.Decimal256{}) != 0, null, nil
+		}
+	default:
+		p := vector.GenerateFunctionStrParameter(param)
+		return func(idx uint64) (bool, bool, error) {
+			v, null := p.GetStrValue(idx)
+			if null {
+				return false, true, nil
+			}
+			f, err := strconv.ParseFloat(strings.TrimSpace(functionUtil.QuickBytesToStr(v)), 64)
+			if err != nil {
+				return false, false, moerr.NewInvalidInputNoCtxf("'%s' cannot be converted into boolean value", v)
+			}
+			return f != 0, false, nil
+		}
+	}
+}
+
+func isUUIDString(s string) bool {
+	_, err := parseUUIDString(s)
+	return err == nil
+}
+
+func parseUUIDString(s string) (types.Uuid, error) {
+	if !isMySQLUUIDFormat(s) {
+		return types.Uuid{}, moerr.NewInvalidInputNoCtx("invalid uuid")
+	}
+	if len(s) == 38 {
+		s = s[1:37]
+	}
+	return types.ParseUuid(s)
+}
+
+func isMySQLUUIDFormat(s string) bool {
+	switch len(s) {
+	case 32:
+		return allUUIDHex(s)
+	case 36:
+		return isDashedUUIDFormat(s)
+	case 38:
+		return s[0] == '{' && s[37] == '}' && isDashedUUIDFormat(s[1:37])
+	default:
+		return false
+	}
+}
+
+func isDashedUUIDFormat(s string) bool {
+	if s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
+		return false
+	}
+	return allUUIDHex(s[:8]) &&
+		allUUIDHex(s[9:13]) &&
+		allUUIDHex(s[14:18]) &&
+		allUUIDHex(s[19:23]) &&
+		allUUIDHex(s[24:])
+}
+
+func allUUIDHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isUUIDHex(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isUUIDHex(c byte) bool {
+	return ('0' <= c && c <= '9') ||
+		('a' <= c && c <= 'f') ||
+		('A' <= c && c <= 'F')
+}
+
+func uuidToBin(u types.Uuid, swap bool) [16]byte {
+	if !swap {
+		return [16]byte(u)
+	}
+	return swapUUIDTimeParts(u)
+}
+
+func swapUUIDTimeParts(u types.Uuid) [16]byte {
+	return [16]byte{
+		u[6], u[7],
+		u[4], u[5],
+		u[0], u[1], u[2], u[3],
+		u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
+	}
+}
+
+func unswapUUIDTimeParts(u types.Uuid) types.Uuid {
+	return types.Uuid{
+		u[4], u[5], u[6], u[7],
+		u[2], u[3],
+		u[0], u[1],
+		u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
+	}
+}
+
 func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	if len(parameters) == 0 {
@@ -1245,7 +1956,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		val := v1.Unix()
-		if val < 0 || null1 {
+		if v1 == types.ZeroTimestamp || val < 0 || null1 {
 			// XXX v1 < 0 need to raise error here.
 			if err := rs.Append(0, true); err != nil {
 				return err
@@ -1262,7 +1973,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 func mustTimestamp(loc *time.Location, s string) types.Timestamp {
 	ts, err := types.ParseTimestamp(loc, s, 6)
 	if err != nil {
-		ts = 0
+		ts = types.ZeroTimestamp
 	}
 	return ts
 }
@@ -1278,8 +1989,9 @@ func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vect
 				return err
 			}
 		} else {
-			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1)).Unix()
-			if val < 0 {
+			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			val := timestamp.Unix()
+			if timestamp == types.ZeroTimestamp || val < 0 {
 				if err := rs.Append(0, true); err != nil {
 					return err
 				}
@@ -1307,7 +2019,14 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 			}
 		} else {
 			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
-			if err := rs.Append(val.UnixToFloat(), false); err != nil {
+			unix := val.UnixToFloat()
+			if val == types.ZeroTimestamp || unix < 0 {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := rs.Append(unix, false); err != nil {
 				return err
 			}
 		}
@@ -1327,7 +2046,14 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				return err
 			}
 		} else {
-			val, err := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1)).UnixToDecimal128()
+			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			if timestamp == types.ZeroTimestamp {
+				if err := rs.Append(d, true); err != nil {
+					return err
+				}
+				continue
+			}
+			val, err := timestamp.UnixToDecimal128()
 			if err != nil {
 				return err
 			}
@@ -1335,6 +2061,7 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				if err := rs.Append(d, true); err != nil {
 					return err
 				}
+				continue
 			}
 			if err = rs.Append(val, false); err != nil {
 				return err
@@ -1770,7 +2497,9 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 		}, nil
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_geometry,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_datalink:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := v.GetBytesAt(idx)
 			ps.EncodeStringType(val)
@@ -2186,7 +2915,9 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		}
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_geometry,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_datalink:
 		if hasNull {
 			fv := vector.GenerateFunctionStrParameter(v)
 			for i, j := uint64(0), uint64(v.Length()); i < j; i++ {
@@ -2275,9 +3006,15 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_uuid:
+		rs := vector.MustFunctionResult[types.Uuid](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 
 	case types.T_json, types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry, types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry,
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
 	}
@@ -2295,7 +3032,7 @@ func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
 	return 0, false
 }
 
-func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp](
+func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2488,7 +3225,13 @@ func builtInToDays(parameters []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
-		rs.Append(DateTimeDiff(intervalUnitDAY, types.ZeroDatetime, datetimeValue)+ADZeroDays, false)
+		if datetimeValue == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		rs.Append(DateTimeDiff(intervalUnitDAY, types.DatetimeEpoch, datetimeValue)+ADZeroDays, false)
 	}
 	return nil
 }
@@ -2507,12 +3250,12 @@ func builtInFromDays(parameters []*vector.Vector, result vector.FunctionResultWr
 			}
 			continue
 		}
-		// TO_DAYS(date) = DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) + ADZeroDays
+		// TO_DAYS(date) = DateTimeDiff(intervalUnitDAY, DatetimeEpoch, date) + ADZeroDays
 		// So FROM_DAYS(N) should reverse this:
-		// DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) = N - ADZeroDays
-		// date = ZeroDatetime + (N - ADZeroDays) days
+		// DateTimeDiff(intervalUnitDAY, DatetimeEpoch, date) = N - ADZeroDays
+		// date = DatetimeEpoch + (N - ADZeroDays) days
 		daysToAdd := dayNumber - ADZeroDays
-		dt, success := types.ZeroDatetime.AddInterval(daysToAdd, types.Day, types.DateTimeType)
+		dt, success := types.DatetimeEpoch.AddInterval(daysToAdd, types.Day, types.DateTimeType)
 		if !success {
 			if err := rs.Append(types.Date(0), true); err != nil {
 				return err
@@ -2682,7 +3425,13 @@ func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultW
 			}
 			continue
 		}
-		rs.Append(DateTimeDiff(intervalUnitSECOND, types.ZeroDatetime, datetimeValue)+ADZeroSeconds, false)
+		if datetimeValue == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		rs.Append(DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetimeValue)+ADZeroSeconds, false)
 	}
 	return nil
 }
@@ -2694,7 +3443,7 @@ func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nu
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		res[idx] = DateTimeDiff(intervalUnitSECOND, types.ZeroDatetime, datetime) + ADZeroSeconds
+		res[idx] = DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetime) + ADZeroSeconds
 	}
 	return res, nil
 }
@@ -2766,25 +3515,12 @@ func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func builtInCot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			sinValue, err := momath.Cot(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(sinValue, false); err != nil {
-				return err
-			}
+	return opUnaryFixedToFixedWithErrorCheck[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		if v == 0 {
+			return 0, moerr.NewOutOfRangeNoCtxf("float64", "DOUBLE value is out of range in 'cot(0)'")
 		}
-	}
-	return nil
+		return momath.Cot(v)
+	}, selectList)
 }
 
 func builtInTan(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2832,13 +3568,13 @@ func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func builtInSqrt(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Sqrt(v)
 	}, selectList)
 }
 
 func builtInSqrtArray[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytesWithErrorCheck(parameters, result, proc, length, func(in []byte) (out []byte, err error) {
+	return opUnaryBytesToBytesWithNullOnError(parameters, result, proc, length, func(in []byte) (out []byte, err error) {
 		_in := types.BytesToArray[T](in)
 
 		_out, err := moarray.Sqrt(_in)
@@ -2851,47 +3587,15 @@ func builtInSqrtArray[T types.RealNumbers](parameters []*vector.Vector, result v
 }
 
 func builtInACos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			sinValue, err := momath.Acos(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(sinValue, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Acos(v)
+	}, selectList)
 }
 
 func builtInASin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			asinValue, err := momath.Asin(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(asinValue, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Asin(v)
+	}, selectList)
 }
 
 func builtInATan(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2952,100 +3656,38 @@ func builtInRadians(parameters []*vector.Vector, result vector.FunctionResultWra
 }
 
 func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			sinValue, err := momath.Ln(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(sinValue, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Ln(v)
+	}, selectList)
 }
 
 func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[1])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if v1 == float64(1) {
-				return moerr.NewInvalidArg(proc.Ctx, "log base", 1)
-			}
-			tempV1, err := momath.Ln(v1)
-			if err != nil {
-				return moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
-			}
-			tempV2, err := momath.Ln(v2)
-			if err != nil {
-				return moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
-			}
-			if err = rs.Append(tempV2/tempV1, false); err != nil {
-				return err
-			}
+	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+		if v1 == 1 {
+			return 0, moerr.NewInvalidArg(proc.Ctx, "log base", 1)
 		}
-	}
-	return nil
+		tempV1, err := momath.Ln(v1)
+		if err != nil {
+			return 0, moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
+		}
+		tempV2, err := momath.Ln(v2)
+		if err != nil {
+			return 0, moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
+		}
+		return tempV2 / tempV1, nil
+	}, selectList)
 }
 
 func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			log2Value, err := momath.Log2(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(log2Value, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Log2(v)
+	}, selectList)
 }
 
 func builtInLog10(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
-	rs := vector.MustFunctionResult[float64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			log10Value, err := momath.Lg(v)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(log10Value, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		return momath.Lg(v)
+	}, selectList)
 }
 
 type opBuiltInRand struct {
@@ -3094,11 +3736,59 @@ func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.
 	return nil
 }
 
-func builtInConvertFake(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// ignore the second parameter and just set result the same to the first parameter.
-	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
-		return v
-	}, selectList)
+func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, parameters[1])
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		valueRow := i
+		if parameters[0].IsConst() {
+			valueRow = 0
+		}
+		charsetRow := i
+		if parameters[1].IsConst() {
+			charsetRow = 0
+		}
+
+		value, valueNull := p1.GetStrValue(valueRow)
+		charset, charsetNull := p2.GetStrValue(charsetRow)
+		if valueNull || charsetNull {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if isUTF8Charset(charset) && !utf8.Valid(value) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendMustBytesValue(value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isUTF8Charset(charset []byte) bool {
+	return strings.EqualFold(string(charset), "utf8") || strings.EqualFold(string(charset), "utf8mb4")
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -3115,13 +3805,13 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 
 // buildInMOCU extract cu or calculate cu from parameters
 // example:
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123)
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'total')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'cpu')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'mem')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioin')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioout')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'network')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123)
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'total')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'cpu')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'mem')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'ioin')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'ioout')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'network')
 func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return buildInMOCUWithCfg(parameters, result, proc, length, nil)
 }
@@ -3167,12 +3857,26 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 			continue
 		}
 
-		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
+		decoded, err := statistic.DecodeStatsArray(statsJsonArrayStr)
+		if err != nil {
 			rs.Append(float64(0), true)
-			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
+			continue
+		}
+		stats = decoded
+
+		targetName := util.UnsafeBytesToString(target)
+		if stats.GetVersion() >= statistic.StatsArrayVersion6 {
+			if stats.IsAggregated() && (targetName != "total" || cfg != nil) {
+				rs.Append(float64(0), true)
+				continue
+			}
+			if targetName == "total" && cfg == nil {
+				rs.Append(stats.GetCU(), false)
+				continue
+			}
 		}
 
-		switch util.UnsafeBytesToString(target) {
+		switch targetName {
 		case "cpu":
 			cu = motrace.CalculateCUCpu(int64(stats.GetTimeConsumed()), cfg)
 		case "mem":

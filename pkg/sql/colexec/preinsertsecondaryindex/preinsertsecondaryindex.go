@@ -70,7 +70,11 @@ func (preInsertSecIdx *PreInsertSecIdx) initBuf(bat *batch.Batch, secondaryColum
 	}
 
 	if len(secondaryColumnPos) == 1 {
-		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(*bat.Vecs[secondaryColumnPos[0]].GetType())
+		ukType := preInsertSecIdx.PreInsertCtx.UkType
+		keyType := types.T(ukType.Id).ToType()
+		keyType.Width = ukType.Width
+		keyType.Scale = ukType.Scale
+		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(keyType)
 	} else {
 		preInsertSecIdx.ctr.buf.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	}
@@ -124,7 +128,14 @@ func (preInsertSecIdx *PreInsertSecIdx) Call(proc *process.Process) (vm.CallResu
 
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
-		if err = preInsertSecIdx.ctr.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp()); err != nil {
+		if bitMap.IsEmpty() {
+			err = preInsertSecIdx.ctr.buf.Vecs[rowIdColPos].UnionBatch(
+				inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
+		} else {
+			err = util.CompactRowIdCol(
+				inputBat.Vecs[rowIdInBat], preInsertSecIdx.ctr.buf.Vecs[rowIdColPos], bitMap, proc)
+		}
+		if err != nil {
 			return result, err
 		}
 	}

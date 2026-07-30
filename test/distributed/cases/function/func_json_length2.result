@@ -1,0 +1,97 @@
+select json_length('[1, 2, {"a": 3}]');
+➤ json_length([1, 2, {"a": 3}])[-5,64,0]  𝄀
+3
+select json_length('{"a": 1, "b": {"c": 30}}');
+➤ json_length({"a": 1, "b": {"c": 30}})[-5,64,0]  𝄀
+2
+select json_length('{"a": 1, "b": {"c": 30}}', '$.b');
+➤ json_length({"a": 1, "b": {"c": 30}}, $.b)[-5,64,0]  𝄀
+1
+select json_length('"hello"');
+➤ json_length("hello")[-5,64,0]  𝄀
+1
+select json_length('42');
+➤ json_length(42)[-5,64,0]  𝄀
+1
+select json_length('true');
+➤ json_length(true)[-5,64,0]  𝄀
+1
+select json_length('null');
+➤ json_length(null)[-5,64,0]  𝄀
+null
+select json_length('[]');
+➤ json_length([])[-5,64,0]  𝄀
+0
+select json_length('[1]');
+➤ json_length([1])[-5,64,0]  𝄀
+1
+select json_length('[1,2,3,4,5]');
+➤ json_length([1,2,3,4,5])[-5,64,0]  𝄀
+5
+select json_length('{}');
+➤ json_length({})[-5,64,0]  𝄀
+0
+select json_length('{"a":1}');
+➤ json_length({"a":1})[-5,64,0]  𝄀
+1
+select json_length('{"a":1,"b":2,"c":3}');
+➤ json_length({"a":1,"b":2,"c":3})[-5,64,0]  𝄀
+3
+select json_length('{"a": [1,2,3], "b": {"c": [4,5]}}', '$.a');
+➤ json_length({"a": [1,2,3], "b": {"c": [4,5]}}, $.a)[-5,64,0]  𝄀
+3
+select json_length('{"a": [1,2,3], "b": {"c": [4,5]}}', '$.b.c');
+➤ json_length({"a": [1,2,3], "b": {"c": [4,5]}}, $.b.c)[-5,64,0]  𝄀
+2
+select json_length('{"a": [1,2,3], "b": {"c": [4,5]}}', '$.b');
+➤ json_length({"a": [1,2,3], "b": {"c": [4,5]}}, $.b)[-5,64,0]  𝄀
+1
+select json_length('{"a": 1}', '$.b');
+➤ json_length({"a": 1}, $.b)[-5,64,0]  𝄀
+null
+select json_length(null);
+➤ json_length(null)[-5,64,0]  𝄀
+null
+select json_length('[1,2]', null);
+➤ json_length([1,2], null)[-5,64,0]  𝄀
+null
+select json_length('invalid');  -- should error
+invalid input: json text invalid
+select json_length(json_array(1, 2, 3));
+➤ json_length(json_array(1, 2, 3))[-5,64,0]  𝄀
+3
+select json_length(json_object('a', 1, 'b', 2));
+➤ json_length(json_object(a, 1, b, 2))[-5,64,0]  𝄀
+2
+drop table if exists t1;
+create table t1 (a varchar(100));
+insert into t1 values ('[1,2,3]'), ('{"a":1,"b":2}'), ('"hello"'), (null);
+select a, json_length(a) from t1;
+➤ a[12,-1,0]  ¦  json_length(a)[-5,64,0]  𝄀
+[1,2,3]  ¦  3  𝄀
+{"a":1,"b":2}  ¦  2  𝄀
+"hello"  ¦  1  𝄀
+null  ¦  null
+drop table if exists t2;
+create table t2 (a json);
+insert into t2 values ('[1,2,3]'), ('{"a":1,"b":2}'), ('"hello"'), ('null');
+select a, json_length(a) from t2;
+➤ a[-1,2147483647,0]  ¦  json_length(a)[-5,64,0]  𝄀
+[1, 2, 3]  ¦  3  𝄀
+{"a": 1, "b": 2}  ¦  2  𝄀
+"hello"  ¦  1  𝄀
+null  ¦  null
+drop table t1;
+select json_length(json_array(1, 2, 3));
+➤ json_length(json_array(1, 2, 3))[-5,64,0]  𝄀
+3
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)));
+➤ json_length(json_object(a, json_array(1, 2, 3), b, json_object(x, 1)))[-5,64,0]  𝄀
+2
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)), '$.a');
+➤ json_length(json_object(a, json_array(1, 2, 3), b, json_object(x, 1)), $.a)[-5,64,0]  𝄀
+3
+select json_length(json_object('a', json_array(1, 2, 3), 'b', json_object('x', 1)), '$.b');
+➤ json_length(json_object(a, json_array(1, 2, 3), b, json_object(x, 1)), $.b)[-5,64,0]  𝄀
+1
+drop table t2;

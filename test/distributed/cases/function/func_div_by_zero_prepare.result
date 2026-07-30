@@ -1,0 +1,278 @@
+DROP TABLE IF EXISTS t_prepare_div;
+CREATE TABLE t_prepare_div (id INT PRIMARY KEY, a INT, b INT, c DECIMAL(10,2), e FLOAT);
+SET sql_mode = '';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+
+PREPARE p_ins1 FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10/0)';
+SET @id = 1;
+EXECUTE p_ins1 USING @id;
+PREPARE p_ins2 FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10 DIV 0)';
+SET @id = 2;
+EXECUTE p_ins2 USING @id;
+PREPARE p_ins3 FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10 % 0)';
+SET @id = 3;
+EXECUTE p_ins3 USING @id;
+SELECT id, a FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_ins1;
+DEALLOCATE PREPARE p_ins2;
+DEALLOCATE PREPARE p_ins3;
+SET sql_mode = 'STRICT_TRANS_TABLES';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+STRICT_TRANS_TABLES
+PREPARE p_ins1 FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10/0)';
+SET @id = 1;
+EXECUTE p_ins1 USING @id;
+PREPARE p_ins2 FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10 DIV 0)';
+SET @id = 2;
+EXECUTE p_ins2 USING @id;
+PREPARE p_ins3 FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10 % 0)';
+SET @id = 3;
+EXECUTE p_ins3 USING @id;
+SELECT id, a FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_ins1;
+DEALLOCATE PREPARE p_ins2;
+DEALLOCATE PREPARE p_ins3;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+ERROR_FOR_DIVISION_BY_ZERO,STRICT_TRANS_TABLES
+PREPARE p_ins1 FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10/0)';
+SET @id = 1;
+EXECUTE p_ins1 USING @id;
+Data truncation: division by zero
+PREPARE p_ins2 FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10 DIV 0)';
+SET @id = 2;
+EXECUTE p_ins2 USING @id;
+Data truncation: division by zero
+PREPARE p_ins3 FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10 % 0)';
+SET @id = 3;
+EXECUTE p_ins3 USING @id;
+Data truncation: division by zero
+SELECT COUNT(*) FROM t_prepare_div;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_ins1;
+DEALLOCATE PREPARE p_ins2;
+DEALLOCATE PREPARE p_ins3;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+SELECT @@sql_mode;
+➤ @@sql_mode[12,0,0]  𝄀
+ERROR_FOR_DIVISION_BY_ZERO,STRICT_TRANS_TABLES
+PREPARE p_ign1 FROM 'INSERT IGNORE INTO t_prepare_div (id, a) VALUES (?, 10/0)';
+SET @id = 1;
+EXECUTE p_ign1 USING @id;
+PREPARE p_ign2 FROM 'INSERT IGNORE INTO t_prepare_div (id, a) VALUES (?, 10 DIV 0)';
+SET @id = 2;
+EXECUTE p_ign2 USING @id;
+PREPARE p_ign3 FROM 'INSERT IGNORE INTO t_prepare_div (id, a) VALUES (?, 10 % 0)';
+SET @id = 3;
+EXECUTE p_ign3 USING @id;
+SELECT id, a FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_ign1;
+DEALLOCATE PREPARE p_ign2;
+DEALLOCATE PREPARE p_ign3;
+SET sql_mode = '';
+PREPARE p_param FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10/?)';
+SET @id = 1, @divisor = 0;
+EXECUTE p_param USING @id, @divisor;
+SET @id = 2, @divisor = 2;
+EXECUTE p_param USING @id, @divisor;
+SELECT id, a FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  5
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_param;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE p_param FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10/?)';
+SET @id = 1, @divisor = 0;
+EXECUTE p_param USING @id, @divisor;
+Data truncation: division by zero
+SET @id = 2, @divisor = 2;
+EXECUTE p_param USING @id, @divisor;
+SELECT id, a FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+2  ¦  5
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_param;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE p_ign_param FROM 'INSERT IGNORE INTO t_prepare_div (id, a) VALUES (?, 10/?)';
+SET @id = 1, @divisor = 0;
+EXECUTE p_ign_param USING @id, @divisor;
+SET @id = 2, @divisor = 0;
+EXECUTE p_ign_param USING @id, @divisor;
+SET @id = 3, @divisor = 5;
+EXECUTE p_ign_param USING @id, @divisor;
+SELECT id, a FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  2
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_ign_param;
+SET sql_mode = '';
+PREPARE p_dec FROM 'INSERT INTO t_prepare_div (id, c) VALUES (?, CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2)))';
+SET @id = 1;
+EXECUTE p_dec USING @id;
+SELECT id, c FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  c[3,10,2]  𝄀
+1  ¦  null
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_dec;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE p_dec FROM 'INSERT INTO t_prepare_div (id, c) VALUES (?, CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2)))';
+SET @id = 1;
+EXECUTE p_dec USING @id;
+Data truncation: division by zero
+SELECT COUNT(*) FROM t_prepare_div;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_dec;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE p_dec_ign FROM 'INSERT IGNORE INTO t_prepare_div (id, c) VALUES (?, CAST(10.5 AS DECIMAL(10,2)) / CAST(0 AS DECIMAL(10,2)))';
+SET @id = 1;
+EXECUTE p_dec_ign USING @id;
+SELECT id, c FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  c[3,10,2]  𝄀
+1  ¦  null
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_dec_ign;
+SET sql_mode = '';
+PREPARE p_flt FROM 'INSERT INTO t_prepare_div (id, e) VALUES (?, 10.5 / 0.0)';
+SET @id = 1;
+EXECUTE p_flt USING @id;
+SELECT id, e FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  e[7,24,0]  𝄀
+1  ¦  null
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_flt;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE p_flt FROM 'INSERT INTO t_prepare_div (id, e) VALUES (?, 10.5 / 0.0)';
+SET @id = 1;
+EXECUTE p_flt USING @id;
+Data truncation: division by zero
+SELECT COUNT(*) FROM t_prepare_div;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_flt;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE p_flt_ign FROM 'INSERT IGNORE INTO t_prepare_div (id, e) VALUES (?, 10.5 / 0.0)';
+SET @id = 1;
+EXECUTE p_flt_ign USING @id;
+SELECT id, e FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  e[7,24,0]  𝄀
+1  ¦  null
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_flt_ign;
+SET sql_mode = '';
+PREPARE p_multi FROM 'INSERT INTO t_prepare_div (id, a, b) VALUES (?, 10/0, 5), (?, 20, 10/0), (?, 30, 6)';
+SET @id1 = 1, @id2 = 2, @id3 = 3;
+EXECUTE p_multi USING @id1, @id2, @id3;
+SELECT id, a, b FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  5  𝄀
+2  ¦  20  ¦  null  𝄀
+3  ¦  30  ¦  6
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_multi;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE p_multi FROM 'INSERT INTO t_prepare_div (id, a, b) VALUES (?, 10/0, 5), (?, 20, 10/0), (?, 30, 6)';
+SET @id1 = 1, @id2 = 2, @id3 = 3;
+EXECUTE p_multi USING @id1, @id2, @id3;
+Data truncation: division by zero
+SELECT COUNT(*) FROM t_prepare_div;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_multi;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE p_multi_ign FROM 'INSERT IGNORE INTO t_prepare_div (id, a, b) VALUES (?, 10/0, 5), (?, 20, 10/0), (?, 30, 6)';
+SET @id1 = 1, @id2 = 2, @id3 = 3;
+EXECUTE p_multi_ign USING @id1, @id2, @id3;
+SELECT id, a, b FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null  ¦  5  𝄀
+2  ¦  20  ¦  null  𝄀
+3  ¦  30  ¦  6
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_multi_ign;
+SET sql_mode = '';
+PREPARE p_reuse FROM 'INSERT INTO t_prepare_div (id, a) VALUES (?, 10/?)';
+SET @id = 1, @divisor = 0;
+EXECUTE p_reuse USING @id, @divisor;
+SET @id = 2, @divisor = 2;
+EXECUTE p_reuse USING @id, @divisor;
+SET @id = 3, @divisor = 0;
+EXECUTE p_reuse USING @id, @divisor;
+SET @id = 4, @divisor = 5;
+EXECUTE p_reuse USING @id, @divisor;
+SELECT id, a FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  5  𝄀
+3  ¦  null  𝄀
+4  ¦  2
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_reuse;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE p_reuse_ign FROM 'INSERT IGNORE INTO t_prepare_div (id, a) VALUES (?, 10/?)';
+SET @id = 1, @divisor = 0;
+EXECUTE p_reuse_ign USING @id, @divisor;
+SET @id = 2, @divisor = 2;
+EXECUTE p_reuse_ign USING @id, @divisor;
+SET @id = 3, @divisor = 0;
+EXECUTE p_reuse_ign USING @id, @divisor;
+SET @id = 4, @divisor = 5;
+EXECUTE p_reuse_ign USING @id, @divisor;
+SELECT id, a FROM t_prepare_div ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  5  𝄀
+3  ¦  null  𝄀
+4  ¦  2
+TRUNCATE TABLE t_prepare_div;
+DEALLOCATE PREPARE p_reuse_ign;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE p_sel1 FROM 'SELECT 10/0 AS div_result';
+EXECUTE p_sel1;
+➤ div_result[8,54,0]  𝄀
+null
+DEALLOCATE PREPARE p_sel1;
+PREPARE p_sel2 FROM 'SELECT 10 DIV 0 AS intdiv_result';
+EXECUTE p_sel2;
+➤ intdiv_result[-5,64,0]  𝄀
+null
+DEALLOCATE PREPARE p_sel2;
+PREPARE p_sel3 FROM 'SELECT 10 % 0 AS mod_result';
+EXECUTE p_sel3;
+➤ mod_result[-5,64,0]  𝄀
+null
+DEALLOCATE PREPARE p_sel3;
+PREPARE p_sel_param FROM 'SELECT 10/? AS div_result';
+SET @divisor = 0;
+EXECUTE p_sel_param USING @divisor;
+➤ div_result[8,54,0]  𝄀
+null
+SET @divisor = 2;
+EXECUTE p_sel_param USING @divisor;
+➤ div_result[8,54,0]  𝄀
+5.0
+DEALLOCATE PREPARE p_sel_param;
+DROP TABLE t_prepare_div;
+SET sql_mode = DEFAULT;

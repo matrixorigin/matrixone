@@ -15,14 +15,28 @@
 package plan
 
 import (
+	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type fixedProcessCompilerContext struct {
+	*MockCompilerContext
+	proc *process.Process
+}
+
+func (c *fixedProcessCompilerContext) GetProcess() *process.Process {
+	return c.proc
+}
 
 func setupLeftJoinBase(t *testing.T) (*MockCompilerContext, *QueryBuilder, *plan.Expr, *plan.Expr, *plan.Expr) {
 	t.Helper()
@@ -30,8 +44,8 @@ func setupLeftJoinBase(t *testing.T) (*MockCompilerContext, *QueryBuilder, *plan
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 
-	leftTag := builder.genNewBindTag()
-	rightTag := builder.genNewBindTag()
+	leftTag := builder.GenNewBindTag()
+	rightTag := builder.GenNewBindTag()
 
 	intType := Type{Id: int32(types.T_int64)}
 
@@ -228,12 +242,191 @@ func TestLeftJoinOrFilterWithAndKeepsLeftJoin(t *testing.T) {
 	require.Len(t, cantPushdown, 1)
 }
 
+func TestJoinOrderPushdownKeepsOuterScopeFilterAtJoin(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+
+	leftTag := builder.genNewBindTag()
+	rightTag := builder.genNewBindTag()
+	outerTag := builder.genNewBindTag()
+	intType := Type{Id: int32(types.T_int64)}
+
+	leftCol := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: leftTag, ColPos: 0},
+		},
+	}
+	rightCol := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: rightTag, ColPos: 0},
+		},
+	}
+	outerCol := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: outerTag, ColPos: 0},
+		},
+	}
+	filterExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{
+		DeepCopyExpr(leftCol),
+		DeepCopyExpr(outerCol),
+	})
+	require.NoError(t, err)
+
+	builder.qry.Nodes = []*plan.Node{
+		{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{leftTag},
+			ProjectList: []*plan.Expr{DeepCopyExpr(leftCol)},
+			Stats:       &plan.Stats{Outcnt: 10},
+		},
+		{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{rightTag},
+			ProjectList: []*plan.Expr{DeepCopyExpr(rightCol)},
+			Stats:       &plan.Stats{Outcnt: 10},
+		},
+		{
+			NodeType:    plan.Node_JOIN,
+			JoinType:    plan.Node_INNER,
+			Children:    []int32{0, 1},
+			ProjectList: []*plan.Expr{DeepCopyExpr(leftCol), DeepCopyExpr(rightCol)},
+			Stats:       &plan.Stats{Outcnt: 10},
+		},
+	}
+
+	nodeID, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filterExpr}, true)
+	require.Equal(t, int32(2), nodeID)
+	require.Empty(t, cantPushdown)
+	require.Empty(t, builder.qry.Nodes[0].FilterList)
+	require.Empty(t, builder.qry.Nodes[1].FilterList)
+	require.Len(t, builder.qry.Nodes[2].OnList, 1)
+	require.Same(t, filterExpr, builder.qry.Nodes[2].OnList[0])
+}
+
+func TestJoinOrderPushdownKeepsOuterScopeFilterAtJoinWithExistingOnList(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+
+	leftTag := builder.genNewBindTag()
+	rightTag := builder.genNewBindTag()
+	outerTag := builder.genNewBindTag()
+	intType := Type{Id: int32(types.T_int64)}
+
+	leftCol := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: leftTag, ColPos: 0},
+		},
+	}
+	rightCol := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: rightTag, ColPos: 0},
+		},
+	}
+	outerCol := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: outerTag, ColPos: 0},
+		},
+	}
+	onExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{
+		DeepCopyExpr(leftCol),
+		DeepCopyExpr(rightCol),
+	})
+	require.NoError(t, err)
+	filterExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{
+		DeepCopyExpr(leftCol),
+		DeepCopyExpr(outerCol),
+	})
+	require.NoError(t, err)
+
+	builder.qry.Nodes = []*plan.Node{
+		{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{leftTag},
+			ProjectList: []*plan.Expr{DeepCopyExpr(leftCol)},
+			Stats:       &plan.Stats{Outcnt: 10},
+		},
+		{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{rightTag},
+			ProjectList: []*plan.Expr{DeepCopyExpr(rightCol)},
+			Stats:       &plan.Stats{Outcnt: 10},
+		},
+		{
+			NodeType:    plan.Node_JOIN,
+			JoinType:    plan.Node_INNER,
+			Children:    []int32{0, 1},
+			OnList:      []*plan.Expr{onExpr},
+			ProjectList: []*plan.Expr{DeepCopyExpr(leftCol), DeepCopyExpr(rightCol)},
+			Stats:       &plan.Stats{Outcnt: 10},
+		},
+	}
+
+	nodeID, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filterExpr}, true)
+	require.Equal(t, int32(2), nodeID)
+	require.Len(t, cantPushdown, 1)
+	require.Same(t, filterExpr, cantPushdown[0])
+	require.Empty(t, builder.qry.Nodes[0].FilterList)
+	require.Empty(t, builder.qry.Nodes[1].FilterList)
+	require.Len(t, builder.qry.Nodes[2].OnList, 1)
+	require.Same(t, onExpr, builder.qry.Nodes[2].OnList[0])
+}
+
+func TestJoinOrderPushdownDetectsOuterScopeTagInsideExprList(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+
+	leftTag := builder.genNewBindTag()
+	rightTag := builder.genNewBindTag()
+	outerTag := builder.genNewBindTag()
+	intType := Type{Id: int32(types.T_int64)}
+
+	leftCol := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: leftTag, ColPos: 0},
+		},
+	}
+	outerCol := &plan.Expr{
+		Typ: intType,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: outerTag, ColPos: 0},
+		},
+	}
+	filterExpr := &plan.Expr{
+		Typ: Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "="},
+			Args: []*plan.Expr{
+				DeepCopyExpr(leftCol),
+				{
+					Typ: intType,
+					Expr: &plan.Expr_List{List: &plan.ExprList{
+						List: []*plan.Expr{DeepCopyExpr(outerCol)},
+					}},
+				},
+			},
+		}},
+	}
+
+	leftTags := map[int32]bool{leftTag: true}
+	rightTags := map[int32]bool{rightTag: true}
+
+	require.Equal(t, int8(JoinSideLeft|JoinSideOuter), getJoinSideWithOuterScope(filterExpr, leftTags, rightTags, 0))
+	require.False(t, containsOnlyTags(filterExpr, leftTags))
+}
+
 func TestWindowFilterPushesDownToOwningWindowNode(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 
-	baseTag := builder.genNewBindTag()
-	windowTag := builder.genNewBindTag()
+	baseTag := builder.GenNewBindTag()
+	windowTag := builder.GenNewBindTag()
 	intType := Type{Id: int32(types.T_int64)}
 
 	baseCol := &plan.Expr{
@@ -327,8 +520,8 @@ func TestWindowNonPartitionFilterNotPushedDown(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 
-	baseTag := builder.genNewBindTag()
-	windowTag := builder.genNewBindTag()
+	baseTag := builder.GenNewBindTag()
+	windowTag := builder.GenNewBindTag()
 	intType := Type{Id: int32(types.T_int64)}
 
 	// col-a: partition-by column
@@ -392,9 +585,32 @@ func TestWindowNonPartitionFilterNotPushedDown(t *testing.T) {
 	require.Empty(t, builder.qry.Nodes[1].FilterList)
 }
 
+func TestFunctionScanDoesNotDropMixedTagFilter(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	childTag := builder.GenNewBindTag()
+	functionTag := builder.GenNewBindTag()
+	intType := Type{Id: int32(types.T_int64)}
+	childCol := GetColExpr(intType, childTag, 0)
+	functionCol := GetColExpr(intType, functionTag, 0)
+	filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{childCol, functionCol})
+	require.NoError(t, err)
+
+	builder.qry.Nodes = []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{childTag}},
+		{NodeType: plan.Node_FUNCTION_SCAN, BindingTags: []int32{functionTag}, Children: []int32{0}},
+	}
+
+	_, cantPushdown := builder.pushdownFilters(1, []*plan.Expr{filter}, false)
+	require.Len(t, cantPushdown, 1)
+	require.True(t, exprStructuralEqual(filter, cantPushdown[0]))
+	require.Empty(t, builder.qry.Nodes[0].FilterList)
+	require.Empty(t, builder.qry.Nodes[1].FilterList)
+}
+
 func makeVectorTopPushdownBuilder(limit uint64) (*QueryBuilder, *plan.Node, *plan.Node) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	scanTag := builder.genNewBindTag()
+	scanTag := builder.GenNewBindTag()
 
 	vectorCol := &plan.Expr{
 		Typ: Type{Id: int32(types.T_array_float32), Width: 2},
@@ -468,4 +684,74 @@ func TestPushdownVectorIndexTopToTableScanKeepsSupportedLimit(t *testing.T) {
 	require.NotNil(t, scanNode.IndexReaderParam)
 	require.Equal(t, uint64(8), scanNode.IndexReaderParam.Limit.GetLit().GetU64Val())
 	require.NotNil(t, projNode.ProjectList[0].GetCol())
+}
+
+func TestPushdownVectorIndexTopToTableScanPropagatesExactPkIvfReaderParam(t *testing.T) {
+	scanNode := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+	}
+	readerParam := &plan.IndexReaderParam{
+		Limit:        MakePlan2Uint64ConstExprWithType(10),
+		OrigFuncName: metric.DistFn_L2Distance,
+		DistRange: &plan.DistRange{
+			LowerBoundType: plan.BoundType_INCLUSIVE,
+			LowerBound:     MakePlan2Int64ConstExprWithType(7),
+		},
+		PartitionCnCnt: 2,
+		PartitionCnIdx: 1,
+	}
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.IvfReaderParam{}, readerParam)
+	compilerCtx := &fixedProcessCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		proc:                proc,
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, compilerCtx, false, true)
+	builder.qry.Nodes = []*plan.Node{scanNode}
+
+	builder.pushdownVectorIndexTopToTableScan(0)
+
+	require.NotNil(t, scanNode.IndexReaderParam)
+	require.Nil(t, scanNode.IndexReaderParam.Limit)
+	require.Equal(t, metric.DistFn_L2Distance, scanNode.IndexReaderParam.OrigFuncName)
+	require.Equal(t, readerParam.DistRange, scanNode.IndexReaderParam.DistRange)
+	require.Equal(t, int32(2), scanNode.IndexReaderParam.PartitionCnCnt)
+	require.Equal(t, int32(1), scanNode.IndexReaderParam.PartitionCnIdx)
+	require.True(t, IsIvfSearchEntriesInternalScan(scanNode))
+}
+
+func TestPushdownVectorIndexTopToTableScanSkipsDynamicLimit(t *testing.T) {
+	builder, scanNode, projNode := makeVectorTopPushdownBuilder(8)
+	builder.qry.Nodes[2].Limit = &plan.Expr{
+		Typ:  Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+
+	require.NotPanics(t, func() { builder.pushdownVectorIndexTopToTableScan(2) })
+	require.Nil(t, scanNode.IndexReaderParam)
+	require.NotNil(t, projNode.ProjectList[0].GetF())
+}
+
+func TestPushdownTopThroughLeftJoinSkipsOverflowingCandidateLimit(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	leftTag := builder.GenNewBindTag()
+	left := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NodeId: 0, BindingTags: []int32{leftTag}}
+	right := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NodeId: 1}
+	join := &plan.Node{NodeType: plan.Node_JOIN, NodeId: 2, JoinType: plan.Node_LEFT, Children: []int32{0, 1}}
+	sort := &plan.Node{
+		NodeType: plan.Node_SORT,
+		NodeId:   3,
+		Children: []int32{2},
+		OrderBy: []*plan.OrderBySpec{{Expr: &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: leftTag, ColPos: 0}},
+		}}},
+		Limit:  MakePlan2Uint64ConstExprWithType(math.MaxUint64),
+		Offset: MakePlan2Uint64ConstExprWithType(1),
+	}
+	builder.qry.Nodes = []*plan.Node{left, right, join, sort}
+
+	require.NotPanics(t, func() { builder.pushdownTopThroughLeftJoin(3) })
+	require.Equal(t, []int32{0, 1}, join.Children)
+	require.Len(t, builder.qry.Nodes, 4)
 }

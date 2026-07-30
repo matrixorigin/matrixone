@@ -56,6 +56,7 @@ func ReadExtent(
 		ToCacheData: factory(int64(extent.OriginSize()), extent.Alg()),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
+		ioVec.ReleaseReadResultOnError()
 		return
 	}
 	if ioVec.Entries[0].CachedData == nil {
@@ -146,6 +147,14 @@ func ReadOneBlockWithMeta(
 		Entries:  make([]fileservice.IOEntry, 0, len(seqnums)),
 		Policy:   policy,
 	}
+	var generatedIOVec fileservice.IOVector
+	defer func() {
+		if err != nil {
+			ioVec.ReleaseReadResultOnError()
+			generatedIOVec.ReleaseReadResultOnError()
+			ioVec = fileservice.IOVector{}
+		}
+	}()
 
 	var filledEntries []fileservice.IOEntry
 	putFillHolder := func(i int, seqnum uint16) {
@@ -153,7 +162,7 @@ func ReadOneBlockWithMeta(
 			filledEntries = make([]fileservice.IOEntry, len(seqnums))
 		}
 		filledEntries[i] = fileservice.IOEntry{
-			Size: int64(seqnum), // a marker, it can not be zero
+			Size: int64(seqnum) + 1, // a marker, it must not be zero
 		}
 	}
 
@@ -165,17 +174,24 @@ func ReadOneBlockWithMeta(
 			metaColCnt := blkmeta.GetMetaColumnCount()
 			switch seqnum {
 			case SEQNUM_COMMITTS:
+				if metaColCnt == 0 {
+					putFillHolder(i, 0)
+					continue
+				}
 				seqnum = metaColCnt - 1
 			case SEQNUM_ABORT:
 				panic("not support")
 			default:
 				panic(fmt.Sprintf("bad path to read special column %d", seqnum))
 			}
-			// if the last column is not commits, do not read it
+			// Type alone is insufficient: the last user column may itself be
+			// T_TS. A hidden commit-TS column must sit beyond MaxSeqnum.
+			// If the last column is not commits, do not read it:
 			//  1. created by cn
 			//  2. old version tn nonappendable block
 			col := blkmeta.ColumnMeta(seqnum)
-			if col.DataType() != uint8(types.T_TS) {
+			hasHiddenColumn := metaColCnt > maxSeqnum+1
+			if !hasHiddenColumn || col.DataType() != uint8(types.T_TS) {
 				putFillHolder(i, seqnum)
 			} else {
 				ext := col.Location()
@@ -245,6 +261,9 @@ func ReadOneBlockWithMeta(
 				}
 				cacheData := fileservice.DefaultCacheDataAllocator().CopyToCacheData(ctx, buf.Bytes())
 				filledEntries[i].CachedData = cacheData
+				generatedIOVec.Entries = append(generatedIOVec.Entries, fileservice.IOEntry{
+					CachedData: cacheData,
+				})
 			}
 		}
 		ioVec.Entries = filledEntries
@@ -288,6 +307,11 @@ func ReadAllBlocksWithMeta(
 	}
 
 	err = fs.Read(ctx, &ioVec)
+	if err != nil {
+		ioVec.ReleaseReadResultOnError()
+		ioVec = fileservice.IOVector{}
+		return
+	}
 	//TODO when to call ioVec.Release?
 	return
 }
@@ -320,6 +344,7 @@ func ReadOneBlockAllColumns(
 
 	err = fs.Read(ctx, ioVec)
 	if err != nil {
+		ioVec.ReleaseReadResultOnError()
 		return nil, err
 	}
 	defer ioVec.Release()

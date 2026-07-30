@@ -67,7 +67,7 @@ func ParsePath(s string) (path Path, err error) {
 			continue
 		}
 		switch r {
-		case '!', '-', '_', '.', '*', '\'', '(', ')', '@', '/', '=':
+		case '!', '-', '_', '.', '*', '\'', '(', ')', '@', '/', '=', '%':
 			continue
 		}
 		// printable non-ASCII characters
@@ -81,6 +81,18 @@ func ParsePath(s string) (path Path, err error) {
 	path.File = strings.TrimLeft(path.File, "/") // trim leading /
 
 	return
+}
+
+func canonicalFilePaths(paths []string) ([]string, error) {
+	canonical := make([]string, 0, len(paths))
+	for _, value := range paths {
+		path, err := ParsePath(value)
+		if err != nil {
+			return nil, err
+		}
+		canonical = append(canonical, path.File)
+	}
+	return canonical, nil
 }
 
 func parseService(str string) (service string, arguments []string, err error) {

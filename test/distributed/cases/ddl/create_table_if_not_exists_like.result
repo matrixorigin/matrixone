@@ -1,0 +1,43 @@
+drop database if exists t25119;
+create database t25119;
+use t25119;
+create table foo (id int, name varchar(20));
+insert into foo values (1,'a'),(2,'b');
+create table if not exists foo_shadow like foo;
+show create table foo_shadow;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+foo_shadow  ¦  CREATE TABLE `foo_shadow` (
+  `id` int DEFAULT NULL,
+  `name` varchar(20) DEFAULT NULL
+)
+create table if not exists foo_shadow like foo;
+create table if not exists foo_shadow like foo;
+show tables;
+➤ Tables_in_t25119[12,-1,0]  𝄀
+foo  𝄀
+foo_shadow
+desc foo_shadow;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+name  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select count(*) from foo_shadow;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table foo_shadow like foo;
+table foo_shadow already exists
+create table if not exists foo_shadow2 like foo;
+show tables;
+➤ Tables_in_t25119[12,-1,0]  𝄀
+foo  𝄀
+foo_shadow  𝄀
+foo_shadow2
+create temporary table if not exists foo_tmp like foo;
+create temporary table if not exists foo_tmp like foo;
+select count(*) from foo_tmp;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table if exists foo_tmp;
+drop table foo_shadow2;
+drop table foo_shadow;
+drop table foo;
+drop database t25119;

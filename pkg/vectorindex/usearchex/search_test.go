@@ -19,7 +19,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -54,109 +54,43 @@ func generateTestVector(dimensions uint) []float32 {
 	return vector
 }
 
-func TestFilteredSearch(t *testing.T) {
-
-	index := createTestIndex(t, defaultTestDimensions, usearch.F32)
-	defer func() {
-		if err := index.Destroy(); err != nil {
-			t.Errorf("Failed to destroy index: %v", err)
-		}
-	}()
-
-	// Ensure capacity before first add
-	if err := index.Reserve(1); err != nil {
-		t.Fatalf("Failed to reserve capacity: %v", err)
+// buildMembership builds a docfilter.MembershipFilter from a set of int64 keys
+// (the doc_id PK type usearch keys map to). docfilter selects the structure:
+// a dense cbitmap for a bounded id range, else the compact CRoaring bitset.
+func buildMembership(t *testing.T, mp *mpool.MPool, keys []int64) docfilter.MembershipFilter {
+	v := vector.NewVec(types.T_int64.ToType())
+	defer v.Free(mp)
+	for _, k := range keys {
+		require.NoError(t, vector.AppendFixed(v, k, false, mp))
 	}
-
-	// Add a vector
-	vector := generateTestVector(defaultTestDimensions)
-	vector[0] = 42.0
-	vector[1] = 24.0
-
-	foundkey := uint64(100)
-
-	err := index.Add(foundkey, vector)
-	if err != nil {
-		t.Fatalf("Failed to add vector: %v", err)
-	}
-
-	// Test Contains
-	found, err := index.Contains(100)
-	if err != nil {
-		t.Fatalf("Contains check failed: %v", err)
-	}
-	if !found {
-		t.Fatalf("Expected to find key 100")
-	}
-
-	limit := uint(10)
-	count := int64(100)
-
-	bf := bloomfilter.NewCBloomFilterWithProbability(int64(count), 0.001)
-	require.NotNil(t, bf)
-	defer bf.Free()
-
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, uint64(foundkey))
-	bf.Add(b)
-
-	keys, distances, err := FilteredSearchUnsafeWithBloomFilter(index, unsafe.Pointer(&vector[0]), limit, bf)
+	payload, err := docfilter.Build(v)
 	require.NoError(t, err)
-	_ = distances
-
-	require.Equal(t, len(keys), 1)
-	require.Equal(t, keys[0], foundkey)
+	f, err := docfilter.New(payload)
+	require.NoError(t, err)
+	return f
 }
 
-func TestFilteredSearchEdges(t *testing.T) {
-	index := createTestIndex(t, defaultTestDimensions, usearch.F32)
-	defer func() {
-		if err := index.Destroy(); err != nil {
-			t.Errorf("Failed to destroy index: %v", err)
-		}
-	}()
-
-	if err := index.Reserve(1); err != nil {
-		t.Fatalf("Failed to reserve capacity: %v", err)
+// buildBloomMembership builds a CBloomFilter-backed MembershipFilter (the
+// approximate, non-integer-PK path). usearch keys are uint64, so we feed
+// docfilter.Build a varchar column whose values are the raw 8-byte
+// little-endian keys — exactly the bytes the C predicate tests (&key, 8).
+func buildBloomMembership(t *testing.T, mp *mpool.MPool, keys []uint64) docfilter.MembershipFilter {
+	v := vector.NewVec(types.T_varchar.ToType())
+	defer v.Free(mp)
+	for _, k := range keys {
+		b := make([]byte, 8)
+		binary.LittleEndian.PutUint64(b, k)
+		require.NoError(t, vector.AppendBytes(v, b, false, mp))
 	}
-
-	vector := generateTestVector(defaultTestDimensions)
-	foundkey := uint64(100)
-	err := index.Add(foundkey, vector)
+	payload, err := docfilter.Build(v)
 	require.NoError(t, err)
-
-	// Case 1: Nil query pointer
-	_, _, err = FilteredSearchUnsafeWithBloomFilter(index, nil, 10, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "query pointer cannot be nil")
-
-	// Case 2: Limit 0
-	keys, distances, err := FilteredSearchUnsafeWithBloomFilter(index, unsafe.Pointer(&vector[0]), 0, nil)
+	require.Equal(t, docfilter.TagBloom, payload[0])
+	f, err := docfilter.New(payload)
 	require.NoError(t, err)
-	require.Empty(t, keys)
-	require.Empty(t, distances)
-
-	// Case 3: Nil BloomFilter (should act as normal search)
-	keys, _, err = FilteredSearchUnsafeWithBloomFilter(index, unsafe.Pointer(&vector[0]), 10, nil)
-	require.NoError(t, err)
-	require.Contains(t, keys, foundkey)
-
-	// Case 4: BloomFilter excluding the key
-	bf := bloomfilter.NewCBloomFilterWithProbability(100, 0.001)
-	require.NotNil(t, bf)
-	defer bf.Free()
-
-	// Add a different key to BF
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, uint64(999))
-	bf.Add(b)
-
-	keys, _, err = FilteredSearchUnsafeWithBloomFilter(index, unsafe.Pointer(&vector[0]), 10, bf)
-	require.NoError(t, err)
-	require.NotContains(t, keys, foundkey)
+	return f
 }
 
-func TestFilteredSearchWithBitmap(t *testing.T) {
+func TestFilteredSearchMembership(t *testing.T) {
 	mp := mpool.MustNewZero()
 	index := createTestIndex(t, defaultTestDimensions, usearch.F32)
 	defer func() {
@@ -165,81 +99,118 @@ func TestFilteredSearchWithBitmap(t *testing.T) {
 		}
 	}()
 
-	// Ensure capacity before first add
 	if err := index.Reserve(1); err != nil {
 		t.Fatalf("Failed to reserve capacity: %v", err)
 	}
 
-	// Add a vector
-	vectorData := generateTestVector(defaultTestDimensions)
-	vectorData[0] = 42.0
-	vectorData[1] = 24.0
-
+	vec := generateTestVector(defaultTestDimensions)
+	vec[0] = 42.0
+	vec[1] = 24.0
 	foundkey := uint64(100)
-
-	err := index.Add(foundkey, vectorData)
-	if err != nil {
-		t.Fatalf("Failed to add vector: %v", err)
-	}
+	require.NoError(t, index.Add(foundkey, vec))
 
 	limit := uint(10)
 
-	// Case 1: Filter includes the key
-	uniqkeys := vector.NewVec(types.T_int64.ToType())
-	defer uniqkeys.Free(mp)
-	err = vector.AppendFixed(uniqkeys, int64(foundkey), false, mp)
-	require.NoError(t, err)
-
-	bm, err := CreateBitSetFromInt64Vector(uniqkeys)
-	require.NoError(t, err)
-
-	keys, distances, err := FilteredSearchUnsafeWithBitmap(index, unsafe.Pointer(&vectorData[0]), limit, bm)
+	// cbitmap (dense, bounded id range): filter includes the key.
+	f := buildMembership(t, mp, []int64{100})
+	require.True(t, f.Exact())
+	keys, distances, err := FilteredSearchUnsafeWithMembership(index, unsafe.Pointer(&vec[0]), limit, f)
 	require.NoError(t, err)
 	_ = distances
-
 	require.Equal(t, 1, len(keys))
 	require.Equal(t, foundkey, keys[0])
+	f.Free()
 
-	// Case 2: Filter excludes the key
-	uniqkeys2 := vector.NewVec(types.T_int64.ToType())
-	defer uniqkeys2.Free(mp)
-	err = vector.AppendFixed(uniqkeys2, int64(999), false, mp) // Different key
+	// cbitmap: filter excludes the key.
+	f2 := buildMembership(t, mp, []int64{999})
+	keys2, _, err := FilteredSearchUnsafeWithMembership(index, unsafe.Pointer(&vec[0]), limit, f2)
 	require.NoError(t, err)
+	require.NotContains(t, keys2, foundkey)
+	f2.Free()
 
-	bm2, err := CreateBitSetFromInt64Vector(uniqkeys2)
+	// CRoaring (sparse id range > MaxCbitmapBits): includes the key.
+	f3 := buildMembership(t, mp, []int64{100, int64(docfilter.MaxCbitmapBits) + 10})
+	keys3, _, err := FilteredSearchUnsafeWithMembership(index, unsafe.Pointer(&vec[0]), limit, f3)
 	require.NoError(t, err)
+	require.Contains(t, keys3, foundkey)
+	f3.Free()
+}
 
-	keys2, _, err := FilteredSearchUnsafeWithBitmap(index, unsafe.Pointer(&vectorData[0]), limit, bm2)
+func TestFilteredSearchMembershipBloom(t *testing.T) {
+	mp := mpool.MustNewZero()
+	index := createTestIndex(t, defaultTestDimensions, usearch.F32)
+	defer func() {
+		if err := index.Destroy(); err != nil {
+			t.Errorf("Failed to destroy index: %v", err)
+		}
+	}()
+
+	if err := index.Reserve(1); err != nil {
+		t.Fatalf("Failed to reserve capacity: %v", err)
+	}
+
+	vec := generateTestVector(defaultTestDimensions)
+	vec[0] = 42.0
+	vec[1] = 24.0
+	foundkey := uint64(100)
+	require.NoError(t, index.Add(foundkey, vec))
+
+	limit := uint(10)
+
+	// bloom (approximate): filter includes the key -> found.
+	f := buildBloomMembership(t, mp, []uint64{foundkey})
+	require.False(t, f.Exact())
+	keys, _, err := FilteredSearchUnsafeWithMembership(index, unsafe.Pointer(&vec[0]), limit, f)
 	require.NoError(t, err)
-	require.Empty(t, keys2)
+	require.Contains(t, keys, foundkey)
+	f.Free()
 
-	// Case 3: Empty filter. Should return no results as the filter set is empty.
-	uniqkeys3 := vector.NewVec(types.T_int64.ToType())
-	defer uniqkeys3.Free(mp)
-
-	bm3, err := CreateBitSetFromInt64Vector(uniqkeys3)
+	// bloom: filter built from a different key -> the key is excluded (no bloom
+	// false positive for this single, well-sized filter).
+	f2 := buildBloomMembership(t, mp, []uint64{999})
+	keys2, _, err := FilteredSearchUnsafeWithMembership(index, unsafe.Pointer(&vec[0]), limit, f2)
 	require.NoError(t, err)
+	require.NotContains(t, keys2, foundkey)
+	f2.Free()
+}
 
-	keys3, _, err := FilteredSearchUnsafeWithBitmap(index, unsafe.Pointer(&vectorData[0]), limit, bm3)
-	require.NoError(t, err)
-	require.Empty(t, keys3)
+func TestFilteredSearchMembershipEdges(t *testing.T) {
+	mp := mpool.MustNewZero()
+	index := createTestIndex(t, defaultTestDimensions, usearch.F32)
+	defer func() {
+		if err := index.Destroy(); err != nil {
+			t.Errorf("Failed to destroy index: %v", err)
+		}
+	}()
 
-	// Case 4: Incorrect vector type for unique keys
-	badVec := vector.NewVec(types.T_int32.ToType())
-	defer badVec.Free(mp)
+	if err := index.Reserve(1); err != nil {
+		t.Fatalf("Failed to reserve capacity: %v", err)
+	}
 
-	_, err = CreateBitSetFromInt64Vector(badVec)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "vector type is not int64")
+	vec := generateTestVector(defaultTestDimensions)
+	foundkey := uint64(100)
+	require.NoError(t, index.Add(foundkey, vec))
 
-	// Case 5: Nil query pointer
-	_, _, err = FilteredSearchUnsafeWithBitmap(index, nil, limit, bm)
+	// Case 1: nil query pointer.
+	_, _, err := FilteredSearchUnsafeWithMembership(index, nil, 10, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "query pointer cannot be nil")
 
-	// Case 6: Zero limit
-	keys4, distances4, err := FilteredSearchUnsafeWithBitmap(index, unsafe.Pointer(&vectorData[0]), 0, bm)
+	// Case 2: zero limit.
+	keys, distances, err := FilteredSearchUnsafeWithMembership(index, unsafe.Pointer(&vec[0]), 0, nil)
 	require.NoError(t, err)
-	require.Empty(t, keys4)
-	require.Empty(t, distances4)
+	require.Empty(t, keys)
+	require.Empty(t, distances)
+
+	// Case 3: nil filter acts as a normal (unfiltered) search.
+	keys, _, err = FilteredSearchUnsafeWithMembership(index, unsafe.Pointer(&vec[0]), 10, nil)
+	require.NoError(t, err)
+	require.Contains(t, keys, foundkey)
+
+	// Case 4: empty filter matches nothing.
+	fe := buildMembership(t, mp, []int64{})
+	keys, _, err = FilteredSearchUnsafeWithMembership(index, unsafe.Pointer(&vec[0]), 10, fe)
+	require.NoError(t, err)
+	require.Empty(t, keys)
+	fe.Free()
 }

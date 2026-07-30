@@ -71,7 +71,7 @@ func (m *mockClientSession) GetCache(cacheID uint64) (morpc.MessageCache, error)
 // dispatch receivers, causing "remote receiver is already done" errors.
 func TestCancelPipelineSending_ShouldNotCancelDispatchReceiver(t *testing.T) {
 	// Setup: Create a server
-	srv := NewServer(nil)
+	srv := NewServer("")
 	require.NotNil(t, srv)
 
 	// Create a mock client session
@@ -119,7 +119,7 @@ func TestCancelPipelineSending_ShouldNotCancelDispatchReceiver(t *testing.T) {
 
 // TestRecordDispatchPipeline tests RecordDispatchPipeline function
 func TestRecordDispatchPipeline(t *testing.T) {
-	srv := NewServer(nil)
+	srv := NewServer("")
 	require.NotNil(t, srv)
 
 	session := &mockClientSession{remoteAddr: "test-addr"}
@@ -242,7 +242,7 @@ func TestRecordDispatchPipeline(t *testing.T) {
 
 // TestRecordBuiltPipeline tests RecordBuiltPipeline function
 func TestRecordBuiltPipeline(t *testing.T) {
-	srv := NewServer(nil)
+	srv := NewServer("")
 	require.NotNil(t, srv)
 
 	session := &mockClientSession{remoteAddr: "test-addr"}
@@ -297,7 +297,7 @@ func TestRecordBuiltPipeline(t *testing.T) {
 
 // TestCancelPipelineSending tests CancelPipelineSending function
 func TestCancelPipelineSending(t *testing.T) {
-	srv := NewServer(nil)
+	srv := NewServer("")
 	require.NotNil(t, srv)
 
 	session := &mockClientSession{remoteAddr: "test-addr"}
@@ -354,7 +354,7 @@ func TestCancelPipelineSending(t *testing.T) {
 
 // TestRemoveRelatedPipeline tests RemoveRelatedPipeline function
 func TestRemoveRelatedPipeline(t *testing.T) {
-	srv := NewServer(nil)
+	srv := NewServer("")
 	require.NotNil(t, srv)
 
 	session := &mockClientSession{remoteAddr: "test-addr"}
@@ -393,7 +393,7 @@ func TestRemoveRelatedPipeline(t *testing.T) {
 }
 
 func TestCancelPipelineSending_TombstoneAllowsDispatchRegistration(t *testing.T) {
-	srv := NewServer(nil)
+	srv := NewServer("")
 	require.NotNil(t, srv)
 
 	session := &mockClientSession{remoteAddr: "test-addr"}
@@ -425,7 +425,7 @@ func TestCancelPipelineSending_TombstoneAllowsDispatchRegistration(t *testing.T)
 }
 
 func TestCancelPipelineSending_TombstoneCleansOnSessionClose(t *testing.T) {
-	srv := NewServer(nil)
+	srv := NewServer("")
 	require.NotNil(t, srv)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -459,7 +459,7 @@ func TestCancelPipelineSending_TombstoneCleansOnSessionClose(t *testing.T) {
 }
 
 func TestCleanupPipelinesForSession_CancelsRegisteredPipelines(t *testing.T) {
-	srv := NewServer(nil)
+	srv := NewServer("")
 	require.NotNil(t, srv)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -486,4 +486,83 @@ func TestCleanupPipelinesForSession_CancelsRegisteredPipelines(t *testing.T) {
 	require.False(t, exists, "Session cleanup should remove registered pipeline records")
 	require.Equal(t, 0, waiterCount, "Session cleanup should remove the waiter registration")
 	require.NotNil(t, proc.GetQueryContextError(), "Session cleanup should cancel registered non-dispatch pipelines")
+}
+
+func TestRecordBuiltPipeline_CleansOnSessionClose(t *testing.T) {
+	srv := NewServer("")
+	require.NotNil(t, srv)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &mockClientSession{remoteAddr: "test-addr", ctx: ctx}
+	streamID := uint64(15)
+
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+	queryCtx, queryCancel := context.WithCancel(context.Background())
+	defer queryCancel()
+	proc.Base.GetContextBase().BuildQueryCtx(queryCtx)
+
+	srv.RecordBuiltPipeline(session, streamID, proc)
+
+	key := generateRecordKey(session, streamID)
+	srv.receivedRunningPipeline.Lock()
+	_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+	_, waiterExists := srv.receivedRunningPipeline.sessionCleanupWaiters[session]
+	srv.receivedRunningPipeline.Unlock()
+
+	require.True(t, exists, "Registered pipeline should be tracked")
+	require.True(t, waiterExists, "Registered pipeline should install session cleanup")
+
+	cancel()
+
+	require.Eventually(t, func() bool {
+		srv.receivedRunningPipeline.Lock()
+		_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+		_, waiterExists := srv.receivedRunningPipeline.sessionCleanupWaiters[session]
+		srv.receivedRunningPipeline.Unlock()
+		return !exists && !waiterExists && proc.GetQueryContextError() != nil
+	}, time.Second, 10*time.Millisecond, "Session close should remove and cancel registered pipelines")
+}
+
+func TestRecordDispatchPipeline_MarksReceiverDoneOnSessionClose(t *testing.T) {
+	srv := NewServer("")
+	require.NotNil(t, srv)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &mockClientSession{remoteAddr: "test-addr", ctx: ctx}
+	streamID := uint64(16)
+
+	dispatchReceiver := &process.WrapCs{
+		ReceiverDone: false,
+		MsgId:        streamID,
+		Uid:          uuid.Must(uuid.NewV7()),
+		Cs:           session,
+		Err:          make(chan error, 1),
+	}
+
+	srv.RecordDispatchPipeline(session, streamID, dispatchReceiver)
+
+	key := generateRecordKey(session, streamID)
+	srv.receivedRunningPipeline.Lock()
+	_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+	_, waiterExists := srv.receivedRunningPipeline.sessionCleanupWaiters[session]
+	srv.receivedRunningPipeline.Unlock()
+
+	require.True(t, exists, "Dispatch receiver should be tracked")
+	require.True(t, waiterExists, "Dispatch receiver should install session cleanup")
+
+	cancel()
+
+	require.Eventually(t, func() bool {
+		srv.receivedRunningPipeline.Lock()
+		_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
+		_, waiterExists := srv.receivedRunningPipeline.sessionCleanupWaiters[session]
+		srv.receivedRunningPipeline.Unlock()
+
+		dispatchReceiver.RLock()
+		receiverDone := dispatchReceiver.ReceiverDone
+		dispatchReceiver.RUnlock()
+
+		return !exists && !waiterExists && receiverDone
+	}, time.Second, 10*time.Millisecond, "Session close should remove and mark registered dispatch receivers done")
 }

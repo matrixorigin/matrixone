@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -52,8 +54,20 @@ var (
 	bootstrapKey = "_mo_bootstrap"
 )
 
+const bootstrapRetryInterval = 100 * time.Millisecond
+
 var (
-	bootstrappedCheckerDB = catalog.MOTaskDB
+	bootstrappedCheckerDB        = catalog.MOTaskDB
+	bootstrappedVersionCheckerDB = catalog.MO_CATALOG
+	bootstrappedCheckerTables    = []string{
+		catalog.MOSysAsyncTask,
+		"sys_cron_task",
+		catalog.MOSysDaemonTask,
+	}
+	upgradeManagedBootstrapTables = []string{
+		catalog.MOSQLTask,
+		catalog.MOSQLTaskRun,
+	}
 	// Note: The following tables belong to data dictionary table, and system tables's creation will depend on
 	// the following system tables. Therefore, when creating tenants, they must be created first
 	step1InitSQLs = []string{
@@ -68,6 +82,8 @@ var (
 		frontend.MoTaskSysAsyncTaskDDL,
 		frontend.MoTaskSysCronTaskDDL,
 		frontend.MoTaskSysDaemonTaskDDL,
+		frontend.MoTaskSQLTaskDDL,
+		frontend.MoTaskSQLTaskRunDDL,
 
 		fmt.Sprintf(`create index idx_account_id on %s.sys_daemon_task(account_id)`,
 			catalog.MOTaskDB),
@@ -168,7 +184,7 @@ func NewService(
 func (s *service) Bootstrap(ctx context.Context) error {
 	s.logger.Info("start to check bootstrap state")
 
-	if ok, err := s.checkAlreadyBootstrapped(ctx); ok {
+	if ok, err := s.checkAlreadyBootstrappedWithRetry(ctx); ok {
 		s.logger.Info("mo already bootstrapped")
 		return nil
 	} else if err != nil {
@@ -182,8 +198,11 @@ func (s *service) Bootstrap(ctx context.Context) error {
 
 	// current node get the bootstrap privilege
 	if ok {
-		// the auto-increment service has already been initialized at current time
-		return s.execBootstrap(ctx)
+		// The auto-increment service has already been initialized. Retry only the
+		// owner work so the lock allocation is never repeated after its outcome is
+		// known. Retrying Locker.Get would consume another keyed ID and turn an
+		// owner into a waiter.
+		return s.execBootstrapWithRetry(ctx)
 	}
 
 	// otherwise, wait bootstrap completed
@@ -193,12 +212,100 @@ func (s *service) Bootstrap(ctx context.Context) error {
 			return ctx.Err()
 		case <-time.After(time.Second):
 		}
-		if ok, err := s.checkAlreadyBootstrapped(ctx); ok || err != nil {
+		if ok, err := s.checkAlreadyBootstrappedWithRetry(ctx); ok || err != nil {
 			s.logger.Info("waiting bootstrap completed",
 				zap.Bool("result", ok),
 				zap.Error(err))
 			return err
 		}
+	}
+}
+
+func (s *service) execBootstrapWithRetry(ctx context.Context) error {
+	for {
+		txnBodyCompleted, err := s.execBootstrap(ctx)
+		if err == nil || !isBootstrapRetryableError(err) {
+			return err
+		}
+
+		if txnBodyCompleted {
+			// Once the transaction body has completed, an ExecTxn connection or
+			// unknown-transaction error can come from Commit after the transaction
+			// became durable. A negative read at the local clock is not proof that
+			// the commit failed, so never replay the non-idempotent init SQLs from
+			// this phase. Wait until the committed bootstrap marker is visible or
+			// the caller's context ends.
+			return s.reconcileUncertainBootstrapTxn(ctx)
+		}
+
+		// The transaction body returned before Commit was attempted. Retrying the
+		// complete transaction is safe and retains the already-acquired owner
+		// privilege.
+		if err := waitBootstrapRetry(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+func isBootstrapRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if morpc.IsConnectionError(err) || moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+		return true
+	}
+
+	// SQLExecutor joins a transaction body error with rollback's result. The
+	// first child is the body error, while later children are rollback errors;
+	// only the body error decides whether bootstrap can be retried.
+	switch err := err.(type) {
+	case interface{ Unwrap() []error }:
+		children := err.Unwrap()
+		if len(children) > 0 {
+			return isBootstrapRetryableError(children[0])
+		}
+	case interface{ Unwrap() error }:
+		return isBootstrapRetryableError(err.Unwrap())
+	}
+	return false
+}
+
+func (s *service) reconcileUncertainBootstrapTxn(ctx context.Context) error {
+	for {
+		bootstrapped, err := s.checkAlreadyBootstrappedWithRetry(ctx)
+		if err != nil {
+			return err
+		}
+		if bootstrapped {
+			s.completeBootstrap()
+			return nil
+		}
+		if err := waitBootstrapRetry(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+func (s *service) checkAlreadyBootstrappedWithRetry(ctx context.Context) (bool, error) {
+	for {
+		ok, err := s.checkAlreadyBootstrapped(ctx)
+		if err == nil || !isBootstrapRetryableError(err) {
+			return ok, err
+		}
+		if err := waitBootstrapRetry(ctx); err != nil {
+			return false, err
+		}
+	}
+}
+
+func waitBootstrapRetry(ctx context.Context) error {
+	timer := time.NewTimer(bootstrapRetryInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -216,7 +323,7 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 	})
 	for _, db := range dbs {
 		if strings.EqualFold(db, bootstrappedCheckerDB) {
-			return true, nil
+			return s.checkBootstrapTables(ctx)
 		}
 	}
 	// todo: these should do a log here to indicate that the system is not bootstrapped like the following
@@ -224,7 +331,54 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-func (s *service) execBootstrap(ctx context.Context) error {
+func (s *service) checkBootstrapTables(ctx context.Context) (bool, error) {
+	res, err := s.exec.Exec(ctx, fmt.Sprintf("show tables from %s", bootstrappedCheckerDB), executor.Options{}.WithMinCommittedTS(s.now()))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	tables := make(map[string]struct{})
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		for _, table := range executor.GetStringRows(cols[0]) {
+			tables[strings.ToLower(table)] = struct{}{}
+		}
+		return true
+	})
+	for _, table := range bootstrappedCheckerTables {
+		if _, ok := tables[strings.ToLower(table)]; !ok {
+			return false, nil
+		}
+	}
+	for _, table := range upgradeManagedBootstrapTables {
+		if _, ok := tables[strings.ToLower(table)]; !ok {
+			return s.checkBootstrapVersionTable(ctx)
+		}
+	}
+	return true, nil
+}
+
+func (s *service) checkBootstrapVersionTable(ctx context.Context) (bool, error) {
+	res, err := s.exec.Exec(ctx, fmt.Sprintf("show tables from %s", bootstrappedVersionCheckerDB), executor.Options{}.WithMinCommittedTS(s.now()))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	var bootstrapped bool
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		for _, table := range executor.GetStringRows(cols[0]) {
+			if strings.EqualFold(table, catalog.MOVersionTable) {
+				bootstrapped = true
+				return false
+			}
+		}
+		return true
+	})
+	return bootstrapped, nil
+}
+
+func (s *service) execBootstrap(ctx context.Context) (bool, error) {
 	opts := executor.Options{}.
 		WithMinCommittedTS(s.now()).
 		WithDisableTrace().
@@ -232,6 +386,7 @@ func (s *service) execBootstrap(ctx context.Context) error {
 		WithTimeZone(time.Local).
 		WithAccountID(catalog.System_Account)
 
+	txnBodyCompleted := false
 	err := s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		if err := initPreprocessSQL(ctx, txn, s.GetFinalVersion(), s.GetFinalVersionOffset()); err != nil {
 			return err
@@ -248,13 +403,19 @@ func (s *service) execBootstrap(ctx context.Context) error {
 		if err := motrace.InitSchemaWithTxn(ctx, txn); err != nil {
 			return err
 		}
+		txnBodyCompleted = true
 		return nil
 	}, opts)
 
 	if err != nil {
 		s.logger.Error("bootstrap system init failed", zap.Error(err))
-		return err
+		return txnBodyCompleted, err
 	}
+	s.completeBootstrap()
+	return true, nil
+}
+
+func (s *service) completeBootstrap() {
 	s.logger.Info("bootstrap system init completed")
 
 	if s.client != nil {
@@ -266,7 +427,6 @@ func (s *service) execBootstrap(ctx context.Context) error {
 	}
 
 	s.logger.Info("successfully completed bootstrap")
-	return nil
 }
 
 func (s *service) now() timestamp.Timestamp {

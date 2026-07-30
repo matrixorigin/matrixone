@@ -1,0 +1,70 @@
+select json_keys('{"a": 1, "b": {"c": 30}}');
+json_keys({"a": 1, "b": {"c": 30}})
+["a", "b"]
+select json_keys('{"a": 1, "b": {"c": 30}}', '$.b');
+json_keys({"a": 1, "b": {"c": 30}}, $.b)
+["c"]
+select json_keys('{}');
+json_keys({})
+[]
+select json_keys('{"a":1}');
+json_keys({"a":1})
+["a"]
+select json_keys('{"a":1,"b":2,"c":3}');
+json_keys({"a":1,"b":2,"c":3})
+["a", "b", "c"]
+select json_keys('[1,2,3]');
+json_keys([1,2,3])
+null
+select json_keys('"hello"');
+json_keys("hello")
+null
+select json_keys('42');
+json_keys(42)
+null
+select json_keys('{"a": [1,2,3]}', '$.a');
+json_keys({"a": [1,2,3]}, $.a)
+null
+select json_keys('{"a": 1}', '$.b');
+json_keys({"a": 1}, $.b)
+null
+select json_keys(null);
+json_keys(null)
+null
+select json_keys('{"a":1}', null);
+json_keys({"a":1}, null)
+null
+select json_keys(json_object('a', 1, 'b', 2));
+json_keys(json_object(a, 1, b, 2))
+["a", "b"]
+select json_array(json_keys('{"a":1,"b":2}'));
+json_array(json_keys({"a":1,"b":2}))
+[["a", "b"]]
+drop table if exists t1;
+create table t1 (a varchar(100));
+insert into t1 values ('{"a":1,"b":2}'), ('[1,2]'), ('{}'), ('"hello"'), (null);
+select a, json_keys(a) from t1;
+a    json_keys(a)
+{"a":1,"b":2}    ["a", "b"]
+[1,2]    null
+{}    []
+"hello"    null
+null    null
+drop table if exists t2;
+create table t2 (a json);
+insert into t2 values ('{"a":1,"b":2}'), ('[1,2]'), ('{}'), ('"hello"'), ('null');
+select a, json_keys(a) from t2;
+a    json_keys(a)
+{"a": 1, "b": 2}    ["a", "b"]
+[1, 2]    null
+{}    []
+"hello"    null
+null    null
+drop table t1;
+select json_keys(json_object('a', json_object('x', 1), 'b', 2));
+json_keys(json_object(a, json_object(x, 1), b, 2))
+["a", "b"]
+select json_keys(json_object('a', json_object('x', 1), 'b', 2), '$.a');
+json_keys(json_object(a, json_object(x, 1), b, 2), $.a)
+["x"]
+drop table t2;

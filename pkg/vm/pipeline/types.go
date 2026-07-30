@@ -15,6 +15,7 @@
 package pipeline
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -31,6 +32,81 @@ type Pipeline struct {
 	rootOp vm.Operator
 }
 
+type deferredSpoolCleaner interface {
+	CleanupDeferredSpool()
+}
+
+type resetBeforeChildren interface {
+	ResetBeforeChildren() bool
+}
+
+func resetOperatorTree(
+	op vm.Operator,
+	skip vm.Operator,
+	resetDone map[vm.Operator]struct{},
+	proc *process.Process,
+	pipelineFailed bool,
+	err error,
+) {
+	if op == nil || op == skip {
+		return
+	}
+	_, alreadyReset := resetDone[op]
+	resetFirst, ok := op.(resetBeforeChildren)
+	resetFirstEnabled := !alreadyReset && ok && resetFirst.ResetBeforeChildren()
+	if resetFirstEnabled {
+		op.Reset(proc, pipelineFailed, err)
+		resetDone[op] = struct{}{}
+	}
+	for _, child := range op.GetOperatorBase().Children {
+		resetOperatorTree(child, skip, resetDone, proc, pipelineFailed, err)
+	}
+	if !alreadyReset && !resetFirstEnabled {
+		op.Reset(proc, pipelineFailed, err)
+		resetDone[op] = struct{}{}
+	}
+}
+
+// resetChildOwners seals asynchronous child-owning operators before any
+// special sender/receiver cleanup resets a descendant out of traversal order.
+func resetChildOwners(
+	op vm.Operator,
+	resetDone map[vm.Operator]struct{},
+	proc *process.Process,
+	pipelineFailed bool,
+	err error,
+) {
+	if op == nil {
+		return
+	}
+	if _, ok := resetDone[op]; ok {
+		return
+	}
+	if resetFirst, ok := op.(resetBeforeChildren); ok && resetFirst.ResetBeforeChildren() {
+		op.Reset(proc, pipelineFailed, err)
+		resetDone[op] = struct{}{}
+	}
+	for _, child := range op.GetOperatorBase().Children {
+		resetChildOwners(child, resetDone, proc, pipelineFailed, err)
+	}
+}
+
+func cleanupDeferredSpool(op vm.Operator) {
+	if cleaner, ok := op.(deferredSpoolCleaner); ok {
+		cleaner.CleanupDeferredSpool()
+	}
+}
+
+func cleanupDeferredSpools(root vm.Operator) {
+	if root == nil {
+		return
+	}
+	_ = vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		cleanupDeferredSpool(op)
+		return nil
+	})
+}
+
 func IsCtePipelineAtLoop(rootOp vm.Operator) (isMergeCte bool, atLoop bool) {
 	// required:
 	// 1. it is a linked tree.
@@ -41,6 +117,32 @@ func IsCtePipelineAtLoop(rootOp vm.Operator) (isMergeCte bool, atLoop bool) {
 	return false, false
 }
 
+func getLeafMerge(root vm.Operator) (*merge.Merge, bool) {
+	if root == nil {
+		return nil, false
+	}
+	for {
+		children := root.GetOperatorBase().Children
+		if len(children) == 0 {
+			m, ok := root.(*merge.Merge)
+			return m, ok
+		}
+		if len(children) != 1 {
+			return nil, false
+		}
+		root = children[0]
+	}
+}
+
+func isTerminalSender(root vm.Operator) bool {
+	switch root.(type) {
+	case *connector.Connector, *dispatch.Dispatch:
+		return true
+	default:
+		return false
+	}
+}
+
 // CleanRootOperator only do free or reset work for the last operator.
 // this is just used for RemoteRun because we kept the root operator of remote-pipeline at local.
 func (p *Pipeline) CleanRootOperator(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
@@ -48,6 +150,7 @@ func (p *Pipeline) CleanRootOperator(proc *process.Process, pipelineFailed bool,
 		return
 	}
 	p.rootOp.Reset(proc, pipelineFailed, err)
+	cleanupDeferredSpool(p.rootOp)
 	if !isPrepare {
 		p.rootOp.Free(proc, pipelineFailed, err)
 	}
@@ -58,28 +161,96 @@ func (p *Pipeline) CleanRootOperator(proc *process.Process, pipelineFailed bool,
 func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
 	// cancel the context to stop its pre-pipelines.
 	proc.Cancel(err)
+	resetDone := make(map[vm.Operator]struct{})
+	resetChildOwners(p.rootOp, resetDone, proc, pipelineFailed, err)
 
 	// do special cleanup for the pipeline at a loop.
-	if isMergeCte, isSpecial := IsCtePipelineAtLoop(p.rootOp); isSpecial {
+	isMergeCte, isSpecial := IsCtePipelineAtLoop(p.rootOp)
+	if isSpecial {
 		if proc.Base.GetContextBase().DoSpecialCleanUp(isMergeCte) {
-			p.cleanupLoopPipeline(proc, pipelineFailed, isPrepare, err)
+			p.cleanupLoopPipeline(proc, pipelineFailed, isPrepare, err, resetDone)
 			return
 		}
 	}
 
-	p.cleanupInOrder(proc, pipelineFailed, isPrepare, err)
+	if !isSpecial && isTerminalSender(p.rootOp) {
+		if mergeOperator, ok := getLeafMerge(p.rootOp); ok {
+			p.cleanupSenderReceiverPipeline(proc, pipelineFailed, isPrepare, err, mergeOperator, resetDone)
+			return
+		}
+	}
+
+	p.cleanupInOrder(proc, pipelineFailed, isPrepare, err, resetDone)
 }
 
 // cleanupInOrder call reset and free methods of operator from first index to the last.
-func (p *Pipeline) cleanupInOrder(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
+func (p *Pipeline) cleanupInOrder(
+	proc *process.Process,
+	pipelineFailed bool,
+	isPrepare bool,
+	err error,
+	resetDone map[vm.Operator]struct{},
+) {
 	if root := p.rootOp; root != nil {
-		_ = vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
-			op.Reset(proc, pipelineFailed, err)
-			return nil
-		})
+		resetOperatorTree(p.rootOp, nil, resetDone, proc, pipelineFailed, err)
+		cleanupDeferredSpools(root)
 
 		if !isPrepare {
 			_ = vm.HandleAllOp(p.rootOp, func(aprentOp vm.Operator, op vm.Operator) error {
+				op.Free(proc, pipelineFailed, err)
+				return nil
+			})
+		}
+	}
+}
+
+func (p *Pipeline) cleanupSenderReceiverPipeline(
+	proc *process.Process,
+	pipelineFailed bool,
+	isPrepare bool,
+	err error,
+	mergeOperator *merge.Merge,
+	resetDone map[vm.Operator]struct{}) {
+	// This cleanup order assumes the terminal sender Reset
+	// (Connector/Dispatch) does not read child operator state. It only sends
+	// terminal signals to unblock the leaf Merge, then the remaining children
+	// are reset in their original post-order.
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		mergeOperator.Reset(proc, pipelineFailed, err)
+		if !isPrepare {
+			mergeOperator.Free(proc, pipelineFailed, err)
+		}
+	}()
+
+	p.rootOp.Reset(proc, pipelineFailed, err)
+	if !isPrepare {
+		p.rootOp.Free(proc, pipelineFailed, err)
+	}
+	wg.Wait()
+	cleanupDeferredSpool(p.rootOp)
+
+	p.cleanupChildrenExceptMerge(proc, pipelineFailed, isPrepare, err, mergeOperator, resetDone)
+}
+
+func (p *Pipeline) cleanupChildrenExceptMerge(
+	proc *process.Process,
+	pipelineFailed bool,
+	isPrepare bool,
+	err error,
+	skip *merge.Merge,
+	resetDone map[vm.Operator]struct{}) {
+	for _, child := range p.rootOp.GetOperatorBase().Children {
+		resetOperatorTree(child, skip, resetDone, proc, pipelineFailed, err)
+		cleanupDeferredSpools(child)
+		if !isPrepare {
+			_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
+				if op == skip {
+					return nil
+				}
 				op.Free(proc, pipelineFailed, err)
 				return nil
 			})
@@ -92,7 +263,13 @@ func (p *Pipeline) cleanupInOrder(proc *process.Process, pipelineFailed bool, is
 // pipeline-loop, for example,
 // pipelineA send data to pipelineB and pipelineC, pipelineB send data to pipelineA.
 // pipelineA and pipelineB is a pipeline-loop.
-func (p *Pipeline) cleanupLoopPipeline(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
+func (p *Pipeline) cleanupLoopPipeline(
+	proc *process.Process,
+	pipelineFailed bool,
+	isPrepare bool,
+	err error,
+	resetDone map[vm.Operator]struct{},
+) {
 
 	// get Merge and Dispatch operators from pipeline.
 	var mergeOperator *merge.Merge
@@ -112,11 +289,11 @@ func (p *Pipeline) cleanupLoopPipeline(proc *process.Process, pipelineFailed boo
 	wg.Add(1)
 
 	go func() {
+		defer wg.Done()
 		mergeOperator.Reset(proc, pipelineFailed, err)
 		if !isPrepare {
 			mergeOperator.Free(proc, pipelineFailed, err)
 		}
-		wg.Done()
 	}()
 
 	dispatchOperator.Reset(proc, pipelineFailed, err)
@@ -124,19 +301,9 @@ func (p *Pipeline) cleanupLoopPipeline(proc *process.Process, pipelineFailed boo
 		dispatchOperator.Free(proc, pipelineFailed, err)
 	}
 	wg.Wait()
+	cleanupDeferredSpool(dispatchOperator)
 
 	// from first to last to clean up the left operators.
 
-	for _, child := range p.rootOp.GetOperatorBase().Children {
-		_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
-			op.Reset(proc, pipelineFailed, err)
-			return nil
-		})
-		if !isPrepare {
-			_ = vm.HandleAllOp(child, func(_ vm.Operator, op vm.Operator) error {
-				op.Free(proc, pipelineFailed, err)
-				return nil
-			})
-		}
-	}
+	p.cleanupChildrenExceptMerge(proc, pipelineFailed, isPrepare, err, mergeOperator, resetDone)
 }

@@ -38,7 +38,6 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Filter:                  "filter",
 	vm.Dispatch:                "dispatch",
 	vm.Shuffle:                 "shuffle",
-	vm.ShuffleV2:               "shuffleV2",
 	vm.Connector:               "connect",
 	vm.Projection:              "projection",
 	vm.HashJoin:                "hash join",
@@ -76,12 +75,12 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.TableScan:               "tablescan",
 	vm.ValueScan:               "valuescan",
 	vm.TableFunction:           "tablefunction",
-	vm.OnDuplicateKey:          "on duplicate key",
 	vm.DedupJoin:               "dedup join",
 	vm.RightDedupJoin:          "right dedup join",
 	vm.Apply:                   "apply",
 	vm.MultiUpdate:             "multi update",
 	vm.PostDml:                 "postdml",
+	vm.TableClone:              "table clone",
 }
 
 var debugMagicNames = map[magicType]string{

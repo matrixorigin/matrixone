@@ -62,6 +62,7 @@ func (e TxnIndexEntry) Less(other TxnIndexEntry) bool {
 //  2. OnFileWritten: clears isWriting; if already committed, deletes the entry
 //  3. OnTxnCommit: marks committed=true; if not isWriting, deletes the entry
 //  4. OnTxnRollback: removes txnID; if last txnID and not committed, GCs the file
+//  5. OnTxnUnknownResult: removes cache tracking without deleting the file
 type CCPRTxnCache struct {
 	mu sync.Mutex
 	// items is a BTree mapping object_name to a list of txnIDs that reference this object
@@ -202,6 +203,65 @@ func (c *CCPRTxnCache) OnTxnCommit(txnID []byte) {
 	}
 
 	c.txnIndex.Delete(txnEntry)
+}
+
+// OnTxnUnknownResult is called when the transaction commit result is unknown.
+// The object may already be committed, so this path must not GC object files.
+// It removes cache tracking for affected objects so later rollback cleanup
+// cannot delete a possibly-committed object through stale CCPR references.
+func (c *CCPRTxnCache) OnTxnUnknownResult(txnID []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	txnEntry, exists := c.txnIndex.Get(TxnIndexEntry{txnID: txnID})
+	if !exists {
+		return
+	}
+
+	objectNames := make(map[string]struct{}, len(txnEntry.objectNames))
+	for _, objectName := range txnEntry.objectNames {
+		objectNames[objectName] = struct{}{}
+		if entry, found := c.items.Get(ItemEntry{objectName: objectName}); found {
+			c.items.Delete(entry)
+		}
+	}
+	c.removeObjectsFromTxnIndexLocked(objectNames)
+}
+
+func (c *CCPRTxnCache) removeObjectsFromTxnIndexLocked(objectNames map[string]struct{}) {
+	if len(objectNames) == 0 {
+		return
+	}
+
+	var updates []TxnIndexEntry
+	var deletes []TxnIndexEntry
+	c.txnIndex.Ascend(TxnIndexEntry{}, func(entry TxnIndexEntry) bool {
+		filtered := make([]string, 0, len(entry.objectNames))
+		changed := false
+		for _, objectName := range entry.objectNames {
+			if _, ok := objectNames[objectName]; ok {
+				changed = true
+				continue
+			}
+			filtered = append(filtered, objectName)
+		}
+		if changed {
+			if len(filtered) == 0 {
+				deletes = append(deletes, entry)
+			} else {
+				entry.objectNames = filtered
+				updates = append(updates, entry)
+			}
+		}
+		return true
+	})
+
+	for _, entry := range deletes {
+		c.txnIndex.Delete(entry)
+	}
+	for _, entry := range updates {
+		c.txnIndex.Set(entry)
+	}
 }
 
 // OnTxnRollback is called when a transaction rolls back.

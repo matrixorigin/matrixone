@@ -22,6 +22,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestObjectStorageSemaphoreCopyObject(t *testing.T) {
+	src := &testObjectCopyStorage{}
+	upstream := &testObjectCopyStorage{}
+	wrapped := newObjectStorageSemaphore(upstream, 1)
+
+	copied, err := wrapped.CopyObject(context.Background(), src, "source", "destination")
+	require.NoError(t, err)
+	require.True(t, copied)
+	require.Same(t, src, upstream.src)
+	require.Equal(t, "source", upstream.srcKey)
+	require.Equal(t, "destination", upstream.dstKey)
+
+	copied, err = newObjectStorageSemaphore(dummyObjectStorage{}, 1).CopyObject(
+		context.Background(), src, "source", "destination",
+	)
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	blocked := newObjectStorageSemaphore(upstream, 1)
+	blocked.semaphore <- struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	copied, err = blocked.CopyObject(ctx, src, "source", "destination")
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, copied)
+	<-blocked.semaphore
+}
+
+func TestObjectStorageSemaphoreDeleteObservesContextWhileWaiting(t *testing.T) {
+	wrapped := newObjectStorageSemaphore(dummyObjectStorage{}, 1)
+	wrapped.semaphore <- struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := wrapped.Delete(ctx, "object")
+	require.ErrorIs(t, err, context.Canceled)
+	<-wrapped.semaphore
+}
+
 func TestObjectStorageSemaphoreSerializes(t *testing.T) {
 	start := make(chan struct{}, 2)
 	wait := make(chan struct{})

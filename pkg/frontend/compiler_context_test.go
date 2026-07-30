@@ -15,10 +15,52 @@
 package frontend
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestExecCtxWithRootSQLRestoresScopedValues(t *testing.T) {
+	ses := &Session{}
+	ses.SetSql("session SQL")
+	execCtx := &ExecCtx{ses: ses}
+	tcc := &TxnCompilerContext{execCtx: execCtx}
+	wantErr := errors.New("stop")
+
+	require.NoError(t, execCtx.withRootSQL("outer SQL", func() error {
+		require.Equal(t, "outer SQL", tcc.GetRootSql())
+		require.ErrorIs(t, execCtx.withRootSQL("inner SQL", func() error {
+			require.Equal(t, "inner SQL", tcc.GetRootSql())
+			return wantErr
+		}), wantErr)
+		require.Equal(t, "outer SQL", tcc.GetRootSql())
+		return nil
+	}))
+	require.Equal(t, "session SQL", tcc.GetRootSql())
+}
+
+func TestExecCtxWithRootSQLRestoresAfterPanic(t *testing.T) {
+	ses := &Session{}
+	ses.SetSql("session SQL")
+	execCtx := &ExecCtx{ses: ses}
+	tcc := &TxnCompilerContext{execCtx: execCtx}
+
+	require.PanicsWithValue(t, "boom", func() {
+		_ = execCtx.withRootSQL("prepared SQL", func() error {
+			require.Equal(t, "prepared SQL", tcc.GetRootSql())
+			panic("boom")
+		})
+	})
+	require.Equal(t, "session SQL", tcc.GetRootSql())
+}
+
+func TestExecCtxCloseClearsRootSQLOverride(t *testing.T) {
+	rootSQL := "prepared SQL"
+	execCtx := &ExecCtx{rootSQLOverride: &rootSQL}
+	execCtx.Close()
+	require.Nil(t, execCtx.rootSQLOverride)
+}
 
 func TestGetConfig(t *testing.T) {
 	tcc := &TxnCompilerContext{

@@ -21,6 +21,7 @@ import (
 	"io"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -115,6 +116,9 @@ func (r *CsvReader) Close() error {
 // makeBatchRows reads rows from CSV/JSONLINE into the batch.
 // Migrated from external.go makeBatchRows, with state from CsvReader.
 func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (fileFinished bool, err error) {
+	if bat == nil || bat.VectorCount() == 0 {
+		return false, moerr.NewInternalError(proc.Ctx, "external CSV reader requires at least one materialized column")
+	}
 	param := r.param
 	ctx := proc.Ctx
 	csvReader := r.plh.csvReader
@@ -213,10 +217,25 @@ func (r *CsvReader) transJson2Lines(ctx context.Context, str string, attrs []pla
 }
 
 func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs []plan.ExternAttr, cols []*plan.ColDef) ([]csvparser.Field, error) {
-	var (
-		err error
-		res = make([]csvparser.Field, 0, len(attrs))
-	)
+	resultSize := 0
+	for idx, attr := range attrs {
+		if catalog.ContainExternalHidenCol(attr.ColName) {
+			continue
+		}
+		if idx >= len(cols) || cols[idx] == nil {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"missing external column definition for attribute %s", attr.ColName)
+		}
+		if cols[idx].Hidden {
+			continue
+		}
+		if attr.ColFieldIndex < 0 || attr.ColFieldIndex >= int32(plan.TableColumnCountLimit) {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"invalid external field index %d for column %s", attr.ColFieldIndex, attr.ColName)
+		}
+		resultSize = max(resultSize, int(attr.ColFieldIndex)+1)
+	}
+	res := make([]csvparser.Field, resultSize)
 	if r.prevStr != "" {
 		str = r.prevStr + str
 		r.prevStr = ""
@@ -236,7 +255,7 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
 	for idx, attr := range attrs {
-		if cols[idx].Hidden {
+		if catalog.ContainExternalHidenCol(attr.ColName) || cols[idx].Hidden {
 			continue
 		}
 		ki := slices.Index(g.Keys, attr.ColName)
@@ -246,7 +265,7 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 
 		valN := g.Values[ki]
 		if valN.V == nil {
-			res = append(res, csvparser.Field{IsNull: true})
+			res[attr.ColFieldIndex] = csvparser.Field{IsNull: true}
 			continue
 		}
 
@@ -256,12 +275,12 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 			if err != nil {
 				return nil, err
 			}
-			res = append(res, csvparser.Field{Val: string(data)})
+			res[attr.ColFieldIndex] = csvparser.Field{Val: string(data)}
 			continue
 		}
 
 		val := fmt.Sprint(valN)
-		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
+		res[attr.ColFieldIndex] = csvparser.Field{Val: val, IsNull: val == JsonNull}
 	}
 	return res, nil
 }

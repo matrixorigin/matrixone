@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"testing"
 	"time"
 
@@ -34,6 +35,106 @@ import (
 
 	usearch "github.com/unum-cloud/usearch/golang"
 )
+
+// TestSaveToFileNoFDLeak covers #25630: SaveToFile creates a temp file via os.CreateTemp but
+// must not leak the returned file descriptor. GC is disabled so a leaked *os.File is not closed
+// by its finalizer, making the leak observable as a growing open-fd count.
+func TestSaveToFileNoFDLeak(t *testing.T) {
+	// /dev/fd lists the current process's open descriptors on both Linux (symlink to
+	// /proc/self/fd) and macOS; skip anywhere it is unavailable. Use Readdirnames (not
+	// os.ReadDir) so we don't fstat each fd entry — stat-ing the directory's own transient
+	// fd fails on macOS. The open /dev/fd handle itself is counted, but cancels out of the
+	// before/after delta.
+	countFDs := func() (int, error) {
+		f, err := os.Open("/dev/fd")
+		if err != nil {
+			return 0, err
+		}
+		defer f.Close()
+		names, err := f.Readdirnames(-1)
+		if err != nil {
+			return 0, err
+		}
+		return len(names), nil
+	}
+	if _, err := countFDs(); err != nil {
+		t.Skipf("/dev/fd unavailable on this platform: %v", err)
+	}
+
+	// Disable GC so leaked file descriptors are NOT reclaimed by *os.File finalizers.
+	oldGC := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(oldGC)
+
+	saveOnce := func() {
+		idxcfg := usearch.DefaultConfig(3)
+		idxcfg.Metric = usearch.L2sq
+		uidx, err := usearch.NewIndex(idxcfg)
+		require.NoError(t, err)
+		require.NoError(t, uidx.Reserve(1))
+		require.NoError(t, uidx.Add(usearch.Key(0), []float32{1, 2, 3}))
+
+		model := &HnswModel[float32]{Index: uidx}
+		model.Dirty.Store(true)
+		require.NoError(t, model.SaveToFile())
+		// SaveToFile destroyed the in-memory index and wrote model.Path; drop the temp file
+		// so disk/inode churn doesn't confound the fd measurement.
+		if model.Path != "" {
+			require.NoError(t, os.Remove(model.Path))
+		}
+	}
+
+	// Warm up once so first-time allocations don't skew the baseline.
+	saveOnce()
+
+	before, err := countFDs()
+	require.NoError(t, err)
+
+	const n = 20
+	for i := 0; i < n; i++ {
+		saveOnce()
+	}
+
+	after, err := countFDs()
+	require.NoError(t, err)
+
+	// Before the fix each SaveToFile leaked exactly one fd (the CreateTemp handle), so the
+	// delta would be ~20. Allow a small slack for unrelated runtime fd churn.
+	require.LessOrEqualf(t, after-before, 2,
+		"SaveToFile leaked file descriptors: before=%d after=%d (expected ~0, pre-fix ~%d)", before, after, n)
+}
+
+// TestSaveToFileCleanupOnError covers #25630's failure path: when a step after the temp file is
+// created fails (CheckSum here, forced via the injectable saveToFileCheckSum hook), SaveToFile
+// must remove the temp file (no orphan) via the deferred cleanup and leave idx.Path unset.
+func TestSaveToFileCleanupOnError(t *testing.T) {
+	orig := saveToFileCheckSum
+	defer func() { saveToFileCheckSum = orig }()
+	saveToFileCheckSum = func(string) (string, error) {
+		return "", moerr.NewInternalErrorNoCtx("mock checksum failure")
+	}
+
+	before := len(hnswTempFiles())
+
+	idxcfg := usearch.DefaultConfig(3)
+	idxcfg.Metric = usearch.L2sq
+	uidx, err := usearch.NewIndex(idxcfg)
+	require.NoError(t, err)
+	require.NoError(t, uidx.Reserve(1))
+	require.NoError(t, uidx.Add(usearch.Key(0), []float32{1, 2, 3}))
+
+	model := &HnswModel[float32]{Index: uidx}
+	model.Dirty.Store(true)
+
+	err = model.SaveToFile()
+	require.Error(t, err, "SaveToFile must propagate the checksum failure")
+	require.Empty(t, model.Path, "Path must stay unset on failure")
+	require.Equal(t, before, len(hnswTempFiles()), "SaveToFile orphaned a temp file on the error path")
+
+	// the save failed before Destroy, so the index is still live — clean it up.
+	if model.Index != nil {
+		require.NoError(t, model.Index.Destroy())
+	}
+}
 
 // give blob
 func mock_runSql_streaming_error(
@@ -440,9 +541,9 @@ func TestLoadIndex_NewlyCreated(t *testing.T) {
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.IndexCapacity = 64
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
-		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
-		IndexCapacity: 64}
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
 	// FileSize=0, Path="" triggers the initIndex path.
 	idx := &HnswModel[float32]{MaxCapacity: 64, NThread: 1}
@@ -570,9 +671,9 @@ func TestCorruptedIndexFile(t *testing.T) {
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.IndexCapacity = 64
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src",
-		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index",
-		IndexCapacity: 64}
+		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
 	garbage := []byte{}
 

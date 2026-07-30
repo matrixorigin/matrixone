@@ -15,8 +15,9 @@
 package backup
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -153,8 +154,8 @@ func (m *Metas) orderTypes() []int {
 	for i := range m.metas {
 		idx = append(idx, i)
 	}
-	sort.Slice(idx, func(i, j int) bool {
-		return m.metas[idx[i]].Typ < m.metas[idx[j]].Typ
+	slices.SortFunc(idx, func(a, b int) int {
+		return cmp.Compare(m.metas[a].Typ, m.metas[b].Typ)
 	})
 	return idx
 }
@@ -264,6 +265,10 @@ type filesystemConfig struct {
 type pathConfig struct {
 	isS3   bool
 	forETL bool
+	// backend is the on-disk format of a local (filesystem) backup target,
+	// derived from the cluster's data fileservice so the archive matches it:
+	// "DISK-V2" for raw, "DISK" for legacy CRC.
+	backend string
 	s3Config
 	filesystemConfig
 }

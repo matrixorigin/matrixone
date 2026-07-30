@@ -110,6 +110,32 @@ load data infile '$resources/load_data/float_3.csv' into table t3 fields termina
 
 drop table t3;
 
+-- Unscaled DOUBLE values must be exported with enough digits to round-trip.
+drop table if exists double_outfile_src;
+drop table if exists double_outfile_dst;
+create table double_outfile_src (
+    id bigint primary key,
+    f double,
+    d date,
+    s varchar(200)
+);
+insert into double_outfile_src values
+    (1, 3.14159265358979, '2024-01-15', 'hello "world"'),
+    (2, null, null, null);
+select * from double_outfile_src order by id
+    into outfile '$resources/into_outfile/outfile_double_roundtrip.csv';
+create table double_outfile_dst like double_outfile_src;
+load data infile '$resources/into_outfile/outfile_double_roundtrip.csv'
+    into table double_outfile_dst
+    fields terminated by ',' enclosed by '"'
+    lines terminated by '\n'
+    ignore 1 lines;
+select s.id, s.f as src_f, d.f as dst_f, s.f = d.f as f_equal
+from double_outfile_src s join double_outfile_dst d on s.id = d.id
+order by s.id;
+drop table double_outfile_dst;
+drop table double_outfile_src;
+
 -- test load data, Time and Date type
 drop table if exists t4;
 create table t4(
@@ -459,6 +485,12 @@ drop database test_load_db;
 -- @session
 drop account test_load;
 
+-- These historical LOAD fixtures intentionally load values wider than the target
+-- CHAR/VARCHAR columns and rely on the legacy lenient (truncating) behavior. Run
+-- them under non-strict sql_mode so strict-mode width rejection does not change
+-- their expected results.
+set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY";
+
 drop table if exists load_data_t9;
 create table load_data_t9(col1 int, col2 varchar(100), col3 varchar(100));
 load data infile '$resources/load_data/test_parallel.csv' into table load_data_t9 fields terminated by ',' parallel 'true';
@@ -610,6 +642,7 @@ delete from load_data_0303;
 LOAD DATA INFILE '$resources/load_data/test_parse_newline.csv' INTO TABLE load_data_0303 FIELDS TERMINATED BY ',';
 select count(*) from load_data_0303;
 drop table load_data_0303;
+set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 
 drop database if exists test;
 create database test;

@@ -7,6 +7,9 @@ positive_value
 SELECT ASIN(1) AS max_value;
 max_value
 1.5707963267948966
+SELECT ASIN(1.0001) AS overflow_value;
+overflow_value
+null
 SELECT ASIN(-0.5) AS negative_value;
 negative_value
 -0.5235987755982989

@@ -43,4 +43,14 @@ explain (analyze true, check '["= 5"]') select * from t4 where c1 + 2 = 5;
 -- @regex("Sort",true)
 explain (check '["% 2", "Sort", "Limit: 10", "% 3"]') select * from (select * from t1 where c1%3=0 order by c1 desc limit 10) tmpt where c1 % 2 = 0;
 
+-- issue #23121: EXPLAIN ANALYZE should resolve table-alias column references in grouped joins
+drop table if exists issue_23121_company;
+drop table if exists issue_23121_company_patent;
+create table issue_23121_company(id int primary key, full_name varchar(100), province varchar(50));
+create table issue_23121_company_patent(id int primary key, company_id int);
+insert into issue_23121_company values (1, 'acme shanghai', 'Shanghai'), (2, 'other', 'Beijing');
+insert into issue_23121_company_patent values (1,1),(2,1),(3,1),(4,1),(5,1),(6,1),(7,2);
+-- @regex("invalid input: column 'c\\.full_name' does not exist",false)
+explain (analyze true, check '["Aggregate", "Group Key: c.id, c.full_name", "Join Type: LEFT", "Filter Cond"]') select c.id, c.full_name, count(cp.id) as patent_cnt from issue_23121_company c left join issue_23121_company_patent cp on c.id = cp.company_id where c.province = 'Shanghai' group by c.id, c.full_name having count(cp.id) > 5 limit 20;
+
 drop database if exists d1;

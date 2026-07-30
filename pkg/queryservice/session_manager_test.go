@@ -83,6 +83,28 @@ func TestSessionManagerMain(t *testing.T) {
 	assert.Equal(t, 0, len(ss))
 }
 
+func TestSessionManagerReplacesSameUUID(t *testing.T) {
+	sm := NewSessionManager()
+	oldSession := &mockSession{id: "same-id", tenant: "old-tenant"}
+	newSession := &mockSession{id: "same-id", tenant: "new-tenant"}
+
+	sm.AddSession(oldSession)
+	sm.AddSession(newSession)
+
+	assert.Equal(t, []Session{newSession}, sm.GetAllSessions())
+	assert.Empty(t, sm.GetSessionsByTenant("old-tenant"))
+	assert.Equal(t, []Session{newSession}, sm.GetSessionsByTenant("new-tenant"))
+
+	// An old session must not remove the replacement from the UUID index.
+	sm.RemoveSession(oldSession)
+	assert.Equal(t, []Session{newSession}, sm.GetAllSessions())
+	assert.Equal(t, []Session{newSession}, sm.GetSessionsByTenant("new-tenant"))
+
+	sm.RemoveSession(newSession)
+	assert.Empty(t, sm.GetAllSessions())
+	assert.Empty(t, sm.GetSessionsByTenant("new-tenant"))
+}
+
 func TestSessionManagerParallel(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	sm := NewSessionManager()

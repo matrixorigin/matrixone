@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -34,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -44,13 +44,81 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu int
-	Id   string `json:"id"`
-	Addr string `json:"address"`
+	Mcpu      int
+	Id        string             `json:"id"`
+	Addr      string             `json:"address"`
+	WorkState metadata.WorkState `json:"-"`
 	//TODO::change RelData to Tombstoner, since only Tombstones ned to be serialized.
 	Data  RelData
 	CNCNT int32 // number of all cns
 	CNIDX int32 // cn index , starts from 0
+}
+
+// QueryCandidate is a CN discovered before tenant and label pool resolution.
+// Service keeps the control-plane metadata needed by pool policy; Mcpu is the
+// CN-advertised CPU capacity normalized to at least one.
+type QueryCandidate struct {
+	Service metadata.CNService
+	Mcpu    int
+}
+
+type QueryCandidates []QueryCandidate
+
+// QueryCandidatePoolRequest contains statement/session constraints used to
+// resolve the allowed CN pool. It deliberately contains no worker-selection
+// policy such as subset size or ranking.
+type QueryCandidatePoolRequest struct {
+	IsInternal     bool
+	Tenant         string
+	Username       string
+	CNLabel        map[string]string
+	RequestedPool  string
+	FallbackPolicy QueryPoolFallbackPolicy
+}
+
+type QueryPoolFallbackPolicy uint8
+
+const (
+	QueryPoolFallbackLegacyCompatible QueryPoolFallbackPolicy = iota
+	QueryPoolFallbackStrict
+)
+
+func (p QueryPoolFallbackPolicy) Valid() bool {
+	return p == QueryPoolFallbackLegacyCompatible || p == QueryPoolFallbackStrict
+}
+
+type QueryPoolResolution string
+
+const (
+	QueryPoolResolutionUnspecified      QueryPoolResolution = "unspecified"
+	QueryPoolResolutionAllCompatible    QueryPoolResolution = "all-compatible"
+	QueryPoolResolutionExactLabels      QueryPoolResolution = "exact-labels"
+	QueryPoolResolutionNonAccountLabels QueryPoolResolution = "non-account-labels"
+	QueryPoolResolutionSharedUnlabeled  QueryPoolResolution = "shared-unlabeled"
+	QueryPoolResolutionPrivilegedAny    QueryPoolResolution = "privileged-any"
+	QueryPoolResolutionNoMatch          QueryPoolResolution = "no-match"
+)
+
+type ResolvedQueryPool struct {
+	Nodes             Nodes
+	RequestedIdentity string
+	Identity          string
+	Resolution        QueryPoolResolution
+	Fallback          bool
+	FallbackReason    string
+}
+
+// QueryCandidateDiscoverer is an optional engine capability. Implementations
+// return an unpooled cluster snapshot and must not apply tenant or label policy.
+type QueryCandidateDiscoverer interface {
+	DiscoverQueryCandidates(context.Context) (QueryCandidates, error)
+}
+
+// QueryCandidatePoolResolver is the matching optional capability that applies
+// tenant and label policy to an already-discovered candidate snapshot.
+// Implementations must treat candidates and request.CNLabel as read-only.
+type QueryCandidatePoolResolver interface {
+	ResolveQueryCandidatePool(context.Context, QueryCandidates, QueryCandidatePoolRequest) (ResolvedQueryPool, error)
 }
 
 func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
@@ -116,7 +184,9 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag: tableDef.FeatureFlag,
+		FeatureFlag:    tableDef.FeatureFlag,
+		AutoIncrOffset: tableDef.AutoIncrOffset,
+		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
@@ -455,9 +525,8 @@ const (
 type EngineType int8
 
 const (
-	Disttae EngineType = iota
-	Memory
-	UNKNOWN
+	Disttae EngineType = 0
+	UNKNOWN EngineType = 2
 )
 
 func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
@@ -817,10 +886,9 @@ type Tombstoner interface {
 type RelDataType uint8
 
 const (
-	RelDataEmpty RelDataType = iota
-	RelDataShardIDList
-	RelDataBlockList
-	RelDataObjList
+	RelDataEmpty     RelDataType = 0
+	RelDataBlockList RelDataType = 2
+	RelDataObjList   RelDataType = 3
 )
 
 type RelData interface {
@@ -837,14 +905,6 @@ type RelData interface {
 	BuildEmptyRelData(preAllocSize int) RelData
 	DataCnt() int
 
-	// specified interface
-
-	// for memory engine shard id list
-	GetShardIDList() []uint64
-	GetShardID(i int) uint64
-	SetShardID(i int, id uint64)
-	AppendShardID(id uint64)
-
 	// for block info list
 	Split(i int) []RelData
 	GetBlockInfoSlice() objectio.BlockInfoSlice
@@ -852,22 +912,6 @@ type RelData interface {
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
 	AppendBlockInfo(blk *objectio.BlockInfo)
 	AppendBlockInfoSlice(objectio.BlockInfoSlice)
-}
-
-// ForRangeShardID [begin, end)
-func ForRangeShardID(
-	begin, end int,
-	relData RelData,
-	onShardID func(shardID uint64) (bool, error)) error {
-	slice := relData.GetShardIDList()
-
-	for idx := begin; idx < end; idx++ {
-		if ok, err := onShardID(slice[idx]); !ok || err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // ForRangeBlockInfo [begin, end)
@@ -972,10 +1016,13 @@ type ChangesHandle interface {
 
 type RangesShuffleParam struct {
 	// these are for shuffle objects
-	Node               *plan.Node
-	CNCNT              int32 // number of all cns
-	CNIDX              int32 // cn index , starts from 0
-	IsLocalCN          bool
+	Node      *plan.Node
+	CNCNT     int32 // number of all cns
+	CNIDX     int32 // cn index , starts from 0
+	IsLocalCN bool
+	// ShuffleByObjectID assigns IVF persisted and appendable objects to the
+	// same physical CN owner.
+	ShuffleByObjectID  bool
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64
 	Init               bool
@@ -998,6 +1045,7 @@ var DefaultRangesParam RangesParam = RangesParam{
 	DontSupportRelData: true,
 }
 
+// Relation is bound to the transaction operator used to open its Database.
 type Relation interface {
 	Statistics
 
@@ -1104,8 +1152,26 @@ type Relation interface {
 	// GetFlushTS returns the flush timestamp of the relation.
 	GetFlushTS(ctx context.Context) (types.TS, error)
 
-	// Reset resets the relation.
+	// Reset rebinds an exclusively owned relation handle to op. Reset must not
+	// be called on a relation shared by multiple operators.
 	Reset(op client.TxnOperator) error
+}
+
+// RelationHandleFactory is implemented by engines whose cached relations are
+// shared and therefore cannot be reset directly. NewRelationHandle returns an
+// exclusively owned, reusable handle over the shared relation.
+type RelationHandleFactory interface {
+	NewRelationHandle() Relation
+}
+
+// NewRelationHandle returns an exclusively owned handle when the engine
+// supports one. Engines with immutable or already-exclusive relations may
+// return the relation itself by not implementing RelationHandleFactory.
+func NewRelationHandle(rel Relation) Relation {
+	if factory, ok := rel.(RelationHandleFactory); ok {
+		return factory.NewRelationHandle()
+	}
+	return rel
 }
 
 type BaseReader interface {
@@ -1205,6 +1271,12 @@ type Engine interface {
 type VectorPool interface {
 	PutBatch(bat *batch.Batch)
 	GetVector(typ types.Type) *vector.Vector
+}
+
+// CatalogCacheGCer is an optional interface for engines that support
+// on-demand GC of the in-memory catalog cache.
+type CatalogCacheGCer interface {
+	GCCatalogCache(ctx context.Context, ago time.Duration) error
 }
 
 type Hints struct {
@@ -1334,8 +1406,35 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 	return true, regexps
 }
 
+// MembershipFilter is a membership filter over the indexed primary-key values
+// (fulltext calls this PK doc_id) used to prune an index scan to the candidate
+// rows that pass the surrounding relational predicate. It is implemented in
+// pkg/common/docfilter by an exact bitset (cbitmap / CRoaring) for integer PKs
+// and by a CBloomFilter (approximate) for non-integer PKs.
+//
+// This is the CONSUMER (probe) view, so it deliberately omits Share() — a plain
+// *bloomfilter.CBloomFilter satisfies it directly. The PRODUCER superset is
+// docfilter.MembershipFilter, which adds Share() and is assignable to this
+// interface (enforced by a compile-time assertion in package disttae, where
+// both packages are imported). Keep the shared method set here as the single
+// source of truth; docfilter's interface only adds to it.
+type MembershipFilter interface {
+	// Test reports whether the raw fixed bytes of a single key may be present.
+	Test(data []byte) bool
+	// TestVector tests every row of a key vector, invoking cb(exist, isnull, row).
+	TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8
+	// Valid reports whether the filter is usable.
+	Valid() bool
+	// Exact reports whether membership is exact (a bitset, no false positives)
+	// rather than approximate (a bloom filter). Callers can skip downstream
+	// re-verification when this is true.
+	Exact() bool
+	// Free releases any resources held by the filter.
+	Free()
+}
+
 type FilterHint struct {
-	Must        bool
-	BloomFilter []byte
-	BF          *bloomfilter.CBloomFilter
+	Must                  bool
+	MembershipFilterBytes []byte
+	BF                    MembershipFilter
 }

@@ -16,11 +16,12 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"io"
 	"iter"
 	pathpkg "path"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -168,8 +169,8 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 		}
 	}
 
-	sort.Slice(vector.Entries, func(i, j int) bool {
-		return vector.Entries[i].Offset < vector.Entries[j].Offset
+	slices.SortFunc(vector.Entries, func(a, b IOEntry) int {
+		return cmp.Compare(a.Offset, b.Offset)
 	})
 
 	r := newIOEntriesReader(ctx, vector.Entries)

@@ -26,11 +26,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -175,21 +174,21 @@ func getSqlForCheckDupPitrFormat(accountId, objId uint64) string {
 }
 
 func getPubInfoWithPitr(ts int64, accountId uint32, dbName string) string {
-	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, dbName)
+	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, sqlquote.EscapeString(dbName))
 }
 
 func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64, ts int64) string {
-	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, ts, accountName, objId)
+	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, ts, sqlquote.EscapeString(accountName), objId)
 }
 
 func getSqlForGetLengthAndUnitFmt(accountId uint32, level, accName, dbName, tblName string) string {
 	sql := fmt.Sprintf(getLengthAndUnitFmt, accountId, level)
 	if level == "account" {
-		sql += fmt.Sprintf(" and account_name = '%s'", accName)
+		sql += fmt.Sprintf(" and account_name = '%s'", sqlquote.EscapeString(accName))
 	} else if level == "database" {
-		sql += fmt.Sprintf(" and database_name = '%s'", dbName)
+		sql += fmt.Sprintf(" and database_name = '%s'", sqlquote.EscapeString(dbName))
 	} else if level == "table" {
-		sql += fmt.Sprintf(" and table_name = '%s'", tblName)
+		sql += fmt.Sprintf(" and table_name = '%s'", sqlquote.EscapeString(tblName))
 	}
 	return sql
 }
@@ -232,14 +231,14 @@ func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *t
 		return getSqlForCheckDupPitrFormat(createAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if len(stmt.AccountName) > 0 {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", stmt.AccountName)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.AccountName)))
 		} else {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createAccount)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", sqlquote.EscapeString(createAccount))
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", stmt.DatabaseName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.DatabaseName)))
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", stmt.DatabaseName, stmt.TableName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.DatabaseName)), sqlquote.EscapeString(string(stmt.TableName)))
 	}
 	return sql
 }
@@ -276,9 +275,8 @@ func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string
 	return false, nil
 }
 
-func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) error {
+func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err error) {
 	var (
-		err            error
 		pitrLevel      tree.PitrLevel
 		pitrForAccount string
 		pitrName       string
@@ -306,6 +304,13 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+
+	// Hold the stable owner-publication write barrier through PITR creation.
+	// COPY ALTER crosses the same barrier before probing historical owners, so
+	// an empty probe cannot race a PITR whose create time was already chosen.
+	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
 		return err
 	}
 
@@ -834,6 +839,9 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 				return err
 			}
 		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -904,6 +912,9 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 
 		err = bh.Exec(ctx, sql)
 		if err != nil {
+			return err
+		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
 			return err
 		}
 	}
@@ -982,7 +993,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, err
 	}
 
-	if len(accountName) > 0 {
+	if stmt.Level == tree.RESTORELEVELACCOUNT && len(accountName) > 0 {
 		restoreOtherAccount := func() (rtnErr error) {
 			fromAccount := string(stmt.SrcAccountName)
 			var (
@@ -1096,8 +1107,22 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return
 	}
 
+	sourceTableInfos, err := collectRestoreSourceTableInfos(
+		dbName,
+		tblName,
+		func() ([]string, error) {
+			return showDatabasesWithPitr(ctx, ses.GetService(), bh, pitrName, ts)
+		},
+		func(sourceDBName string, sourceTblName string) ([]*tableInfo, error) {
+			return getTableInfoWithPitr(ctx, ses.GetService(), bh, pitrName, ts, sourceDBName, sourceTblName)
+		},
+	)
+	if err != nil {
+		return
+	}
+
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, ts, dbName, tblName)
+	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, ts, dbName, tblName, sourceTableInfos)
 	if err != nil {
 		return
 	}
@@ -1389,7 +1414,7 @@ func restoreToDatabaseOrTableWithPitr(
 
 		return
 	} else {
-		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
+		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", pitrName, dbName, createDbSql))
 		if err = bh.Exec(ctx, createDbSql); err != nil {
@@ -1416,6 +1441,15 @@ func restoreToDatabaseOrTableWithPitr(
 
 		// skip table which is foreign key related
 		if _, ok := fkTableMap[key]; ok {
+			continue
+		}
+
+		// external table data is stored outside MO and cannot be restored by clone.
+		if shouldSkipRestoreTableInBulk(tblInfo) {
+			if restoreToTbl {
+				return newExternalTableRestoreError(ctx, tblInfo, "pitr")
+			}
+			getLogger(sid).Info(fmt.Sprintf("[%s] skip restore external table: %v.%v", pitrName, tblInfo.dbName, tblInfo.tblName))
 			continue
 		}
 
@@ -1457,6 +1491,10 @@ func reCreateTableWithPitr(
 	pitrName string,
 	ts int64,
 	tblInfo *tableInfo) (err error) {
+	if isExternalTable(tblInfo) {
+		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
+	}
+
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
 
 	var isMasterTable bool
@@ -1467,12 +1505,12 @@ func reCreateTableWithPitr(
 		return
 	}
 
-	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
+	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 		return
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: '%v',", pitrName, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
+	if err = bh.Exec(ctx, dropTableIfExistsSQL("", tblInfo.tblName)); err != nil {
 		return
 	}
 
@@ -1489,7 +1527,7 @@ func reCreateTableWithPitr(
 	}
 
 	// insert data
-	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, ts)
+	insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, ts)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to insert select table: '%v', insert sql: %s", pitrName, tblInfo.tblName, insertIntoSql))
 	if err = bh.Exec(ctx, insertIntoSql); err != nil {
@@ -1524,13 +1562,14 @@ func getTableInfoWithPitr(
 		return nil, err
 	}
 
-	for _, tblInfo := range tableInfos {
-		if tblInfo.createSql, err = getCreateTableSqlWithTs(ctx, bh, ts, dbName, tblInfo.tblName); err != nil {
-			return nil, err
-		}
-	}
-
-	return tableInfos, nil
+	return fillTableCreateSQLsForRestore(
+		sid,
+		pitrName,
+		tableInfos,
+		func(tblInfo *tableInfo) (string, error) {
+			return getCreateTableSqlWithTs(ctx, bh, ts, tblInfo.dbName, tblInfo.tblName)
+		},
+	)
 }
 
 func showFullTablesWitsTs(
@@ -1541,16 +1580,14 @@ func showFullTablesWitsTs(
 	ts int64,
 	dbName string,
 	tblName string) ([]*tableInfo, error) {
-	sql := fmt.Sprintf("show full tables from `%s`", dbName)
-	if len(tblName) > 0 {
-		sql += fmt.Sprintf(" like '%s'", tblName)
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if ts > 0 {
-		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
-	}
+	sql := buildTableInfoListSQL(dbName, tblName, ts, accountId)
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s` sql: %s ", pitrName, dbName, tblName, sql))
-	// cols: table name, table type
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	// cols: table name, table type, relkind, view definition
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -1561,6 +1598,8 @@ func showFullTablesWitsTs(
 			dbName:  dbName,
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
+			relKind: cols[2],
+			viewDef: cols[3],
 		}
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", pitrName, dbName, tblName, len(ans)))
@@ -1568,7 +1607,7 @@ func showFullTablesWitsTs(
 }
 
 func getCreateTableSqlWithTs(ctx context.Context, bh BackgroundExec, ts int64, dbName string, tblName string) (string, error) {
-	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
+	sql := showCreateTableSQL(dbName, tblName)
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
@@ -1623,7 +1662,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 	)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, 0, dbName, tblName)
+	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, 0, dbName, tblName, nil)
 	if err != nil {
 		return
 	}
@@ -1646,7 +1685,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 			}
 
 			getLogger(sid).Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, dropTableIfExistsSQL(tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1659,25 +1698,14 @@ func fkTablesTopoSortInPitrRestore(
 	bh BackgroundExec,
 	ts int64,
 	dbName string,
-	tblName string) (sortedTbls []string, err error) {
-	// get foreign key deps from mo_catalog.mo_foreign_keys
+	tblName string,
+	tableInfos []*tableInfo,
+) (sortedTbls []string, err error) {
 	fkDeps, err := getFkDepsInPitrRestore(ctx, bh, ts, dbName, tblName)
 	if err != nil {
 		return
 	}
-
-	g := toposort{next: make(map[string][]string)}
-	for key, deps := range fkDeps {
-		g.addVertex(key)
-		for _, depTbl := range deps {
-			// exclude self dep
-			if key != depTbl {
-				g.addEdge(depTbl, key)
-			}
-		}
-	}
-	sortedTbls, err = g.sort()
-	return
+	return topoSortRestoreFkDeps(ctx, fkDeps, tableInfos)
 }
 
 func restoreTablesWithFkByPitr(
@@ -1716,7 +1744,6 @@ func restoreViewsWithPitr(
 	getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore views", pitrName))
 	var (
 		err         error
-		stmts       []tree.Statement
 		sortedViews []string
 		snapshot    *pbplan.Snapshot
 		oldSnapshot *pbplan.Snapshot
@@ -1739,7 +1766,7 @@ func restoreViewsWithPitr(
 	g := toposort{next: make(map[string][]string)}
 	for key, viewEntry := range viewMap {
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore view: %v", pitrName, viewEntry.tblName))
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 1)
+		stmts, err := parseViewCreateSQLForRestore(ctx, viewEntry, 1)
 		if err != nil {
 			return err
 		}
@@ -1747,9 +1774,14 @@ func restoreViewsWithPitr(
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
 		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		freeStatements(stmts)
 		if err != nil {
-			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
+			stmts, err = parseViewCreateSQLForRestore(ctx, viewEntry, 0)
+			if err != nil {
+				return err
+			}
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			freeStatements(stmts)
 			if err != nil {
 				return err
 			}
@@ -1757,6 +1789,10 @@ func restoreViewsWithPitr(
 
 		g.addVertex(key)
 		for _, depView := range compCtx.GetViews() {
+			depView, err = normalizeViewDependencyKey(depView)
+			if err != nil {
+				return err
+			}
 			g.addEdge(depView, key)
 		}
 	}
@@ -1774,15 +1810,15 @@ func restoreViewsWithPitr(
 		if tblInfo, ok := viewMap[key]; ok {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore view: %v, restore timestamp: %d", pitrName, tblInfo.tblName, ts))
 
-			if err = bh.Exec(ctx, "use `"+tblInfo.dbName+"`"); err != nil {
+			if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 				return err
 			}
 
-			if err = bh.Exec(ctx, "drop view if exists "+tblInfo.tblName); err != nil {
+			if err = bh.Exec(ctx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 
-			if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+			if err = executeViewCreateSQLForRestore(ctx, bh, tblInfo); err != nil {
 				return err
 			}
 		}
@@ -2076,6 +2112,9 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		if pitrRecord.level == tree.PITRLEVELTABLE.String() {
 			return moerr.NewInternalErrorNoCtxf("restore level %v is not allowed for database restore", pitrRecord.level)
 		}
+		if len(stmt.AccountName) > 0 && string(stmt.AccountName) != tenantInfo.GetTenant() {
+			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore database %v", string(stmt.AccountName), string(stmt.DatabaseName))
+		}
 		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName))
 		}
@@ -2086,6 +2125,9 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		// check the level
 		if pitrRecord.level == tree.PITRLEVELCLUSTER.String() {
 			return moerr.NewInternalErrorNoCtxf("cluster level pitr `%v` is not allowed for table restore", pitrRecord.level)
+		}
+		if len(stmt.AccountName) > 0 && string(stmt.AccountName) != tenantInfo.GetTenant() {
+			return moerr.NewInternalErrorNoCtxf("account %s is not allowed to restore table %v.%v", string(stmt.AccountName), string(stmt.DatabaseName), string(stmt.TableName))
 		}
 		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v table %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName), string(stmt.TableName))
@@ -2113,9 +2155,9 @@ func getFkDepsInPitrRestore(
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
 	if len(dbName) > 0 {
-		sql += fmt.Sprintf(" where db_name = '%s'", dbName)
+		sql += fmt.Sprintf(" where db_name = %s", quoteSQLStringLiteral(dbName))
 		if len(tblName) > 0 {
-			sql += fmt.Sprintf(" and table_name = '%s'", tblName)
+			sql += fmt.Sprintf(" and table_name = %s", quoteSQLStringLiteral(tblName))
 		}
 	}
 

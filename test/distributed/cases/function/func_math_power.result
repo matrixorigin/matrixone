@@ -19,6 +19,16 @@ result5
 SELECT POWER(4, 0.5) AS result6;
 result6
 2.0
+SELECT POW(-2, 0.5);
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'pow(-2,0.5)'
+SELECT POWER(0, -1);
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'pow(0,-1)'
+SELECT IF(0, POW(-2, 0.5), 1);
+IF(0, POW(-2, 0.5), 1)
+1.0
+SELECT CASE WHEN 0 THEN POWER(0, -1) ELSE 1 END;
+case when 0 then POWER(0, -1) else 1 end
+1.0
 SELECT POW(2, 3) = POWER(2, 3) AS same_result;
 same_result
 1

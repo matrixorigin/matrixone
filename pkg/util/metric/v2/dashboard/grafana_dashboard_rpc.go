@@ -34,6 +34,7 @@ func (c *DashboardCreator) initRPCDashboard() error {
 			c.initRPCRequestMetricsRow(),
 			c.initRPCConnectionMetricsRow(),
 			c.initRPCBackendHealthRow(),
+			c.initRPCTimeoutErrorRow(),
 			c.initRPCCircuitBreakerRow(),
 			c.initRPCNetworkMetricsRow(),
 			c.initRPCPerformanceMetricsRow(),
@@ -44,6 +45,26 @@ func (c *DashboardCreator) initRPCDashboard() error {
 	}
 	_, err = c.cli.UpsertDashboard(context.Background(), folder, build)
 	return err
+}
+
+func (c *DashboardCreator) initRPCTimeoutErrorRow() dashboard.Option {
+	return dashboard.Row(
+		"RPC Timeout & Backend Errors",
+		c.withGraph(
+			"MORPC Backend Errors",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_error_total", "")+`[$interval])) by (name, phase, error_type)`,
+			"{{ name }} {{ phase }} {{ error_type }}",
+			axis.Unit("errors/s"),
+			axis.Min(0)),
+		c.withGraph(
+			"Lockservice Remote RPC Errors",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_lockservice_remote_rpc_error_total", "")+`[$interval])) by (method, error_type)`,
+			"{{ method }} {{ error_type }}",
+			axis.Unit("errors/s"),
+			axis.Min(0)),
+	)
 }
 
 // initRPCKeyMetricsRow shows the most critical metrics at a glance (Four Golden Signals)

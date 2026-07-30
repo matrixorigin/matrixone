@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -201,7 +202,7 @@ func TestFlushErrorMsg(t *testing.T) {
 		[]*iscp.JobStatus{{}},
 		types.MaxTs(),
 		"test",
-		[]uint64{1},
+		[]uint64{0},
 	)
 	require.NoError(t, err)
 }
@@ -406,6 +407,15 @@ func checkInsertBatch(userBatch *containers.Batch, bat *batch.Batch, t *testing.
 	assert.Equal(t, bat.Vecs[len(userBatch.Vecs)].Length(), length)
 }
 
+func changesHandleTestRowCount() int {
+	if testing.Short() {
+		// Four blocks still cover compaction plus snapshot/tail iteration while
+		// keeping the race-enabled PR test bounded.
+		return objectio.BlockMaxRows * 4
+	}
+	return objectio.BlockMaxRows * 20
+}
+
 func TestChangesHandle3(t *testing.T) {
 	catalog.SetupDefines("")
 
@@ -429,7 +439,8 @@ func TestChangesHandle3(t *testing.T) {
 	startTS := taeHandler.GetDB().TxnMgr.Now()
 	schema := catalog2.MockSchemaAll(23, 9)
 	schema.Name = tableName
-	bat := catalog2.MockBatch(schema, 163840)
+	rowCount := changesHandleTestRowCount()
+	bat := catalog2.MockBatch(schema, rowCount)
 	mp := common.DebugAllocator
 
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
@@ -443,9 +454,11 @@ func TestChangesHandle3(t *testing.T) {
 	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
 	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	iter := rel.MakeObjectIt(false)
+	deletedRows := 0
 	for iter.Next() {
 		obj := iter.GetObject()
 		err = rel.RangeDelete(obj.Fingerprint(), 0, 0, handle.DT_Normal)
+		deletedRows++
 	}
 	require.Nil(t, err)
 	require.Nil(t, txn.Commit(ctx))
@@ -477,12 +490,13 @@ func TestChangesHandle3(t *testing.T) {
 			totalRows += data.Vecs[0].Length()
 			data.Clean(mp)
 		}
-		assert.Equal(t, totalRows, 163820)
+		assert.Equal(t, rowCount-deletedRows, totalRows)
 		assert.NoError(t, handle.Close())
 
 		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows = 0
+		totalTombstones := 0
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if data == nil && tombstone == nil {
@@ -492,7 +506,7 @@ func TestChangesHandle3(t *testing.T) {
 			if tombstone != nil {
 				assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 				checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
-				assert.Equal(t, tombstone.Vecs[0].Length(), 20)
+				totalTombstones += tombstone.Vecs[0].Length()
 				tombstone.Clean(mp)
 			}
 			if data != nil {
@@ -501,7 +515,8 @@ func TestChangesHandle3(t *testing.T) {
 				data.Clean(mp)
 			}
 		}
-		assert.Equal(t, totalRows, 163840)
+		assert.Equal(t, deletedRows, totalTombstones)
+		assert.Equal(t, rowCount, totalRows)
 		assert.NoError(t, handle.Close())
 	}
 }
@@ -1146,7 +1161,8 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 	startTS := taeHandler.GetDB().TxnMgr.Now()
 	schema := catalog2.MockSchemaAll(23, 9)
 	schema.Name = tableName
-	bat := catalog2.MockBatch(schema, 163840)
+	rowCount := changesHandleTestRowCount()
+	bat := catalog2.MockBatch(schema, rowCount)
 	mp := common.DebugAllocator
 
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
@@ -1160,9 +1176,11 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
 	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	iter := rel.MakeObjectIt(false)
+	deletedRows := 0
 	for iter.Next() {
 		obj := iter.GetObject()
 		err = rel.RangeDelete(obj.Fingerprint(), 0, 0, handle.DT_Normal)
+		deletedRows++
 	}
 	require.Nil(t, err)
 	require.Nil(t, txn.Commit(ctx))
@@ -1181,6 +1199,7 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows := 0
+		totalTombstones := 0
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if data == nil && tombstone == nil {
@@ -1190,7 +1209,7 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 			if tombstone != nil {
 				assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 				checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
-				assert.Equal(t, tombstone.Vecs[0].Length(), 20)
+				totalTombstones += tombstone.Vecs[0].Length()
 				tombstone.Clean(mp)
 			}
 			if data != nil {
@@ -1199,7 +1218,8 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 				data.Clean(mp)
 			}
 		}
-		assert.Equal(t, totalRows, 163840)
+		assert.Equal(t, deletedRows, totalTombstones)
+		assert.Equal(t, rowCount, totalRows)
 		assert.NoError(t, handle.Close())
 	}
 }
@@ -2399,7 +2419,7 @@ func TestISCPExecutor4(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	txn.Commit(ctxWithTimeout)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
 	// init cdc executor
 	checkLeaseStub := gostub.Stub(
@@ -2431,11 +2451,75 @@ func TestISCPExecutor4(t *testing.T) {
 	require.NoError(t, err)
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
-	cdcExecutor.Start()
+	require.NoError(t, cdcExecutor.Start())
 	defer cdcExecutor.Stop()
 
-	fault.Enable()
-	defer fault.Disable()
+	require.True(t, fault.Enable(), "fault injection was already enabled before TestISCPExecutor4")
+	t.Cleanup(func() {
+		fault.Disable()
+	})
+
+	registerFaultCleanup := func(remove func() (bool, error)) func() {
+		var (
+			once      sync.Once
+			removeOK  bool
+			removeErr error
+		)
+		cleanup := func() {
+			once.Do(func() {
+				removeOK, removeErr = remove()
+			})
+			require.NoError(t, removeErr)
+			require.True(t, removeOK)
+		}
+		t.Cleanup(cleanup)
+		return cleanup
+	}
+
+	addFaultPoint := func(name, action, arg string) func() {
+		require.NoError(t, fault.AddFaultPoint(
+			ctx,
+			name,
+			":::",
+			action,
+			0,
+			arg,
+			false,
+		))
+		return registerFaultCleanup(func() (bool, error) {
+			return fault.RemoveFaultPoint(context.Background(), name)
+		})
+	}
+
+	injectCDCExecutorFault := func(name string) (waitUntilHit func(time.Time), remove func()) {
+		waitKey := objectio.ISCPExecutorFaultWaitKey(name)
+		waitersKey := waitKey + ":waiters"
+		removeWait := addFaultPoint(waitKey, "wait", "")
+		removeWaitersProbe := addFaultPoint(waitersKey, "getwaiters", waitKey)
+
+		removeInjection, err := objectio.InjectCDCExecutor(name)
+		require.NoError(t, err)
+		removeInjectedFault := registerFaultCleanup(removeInjection)
+
+		waitUntilHit = func(deadline time.Time) {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				require.FailNowf(t, "ISCP fault phase budget exhausted", "fault=%s", name)
+			}
+			require.Eventually(t, func() bool {
+				waiters, _, ok := fault.TriggerFault(waitersKey)
+				return ok && waiters > 0
+			}, remaining, 10*time.Millisecond, "ISCP worker did not reach injected fault %s", name)
+		}
+		remove = func() {
+			// Stop new failures before releasing the worker already parked at
+			// the exact injected failure point.
+			removeInjectedFault()
+			removeWait()
+			removeWaitersProbe()
+		}
+		return waitUntilHit, remove
+	}
 
 	registerFn := func(jobName string) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
@@ -2454,39 +2538,96 @@ func TestISCPExecutor4(t *testing.T) {
 			},
 			false,
 		)
-		assert.True(t, ok)
-		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit(ctxWithTimeout))
+		require.True(t, ok)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctxWithTimeout))
 	}
 
-	appendFn := func(idx int) {
+	appendFn := func(idx int) types.TS {
 		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
-		require.Nil(t, err)
+		require.NoError(t, err)
 
 		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]))
-		require.Nil(t, err)
+		require.NoError(t, err)
 
-		txn.Commit(ctxWithTimeout)
+		require.NoError(t, txn.Commit(ctxWithTimeout))
+		return types.TimestampToTS(txn.Txn().CommitTS)
 	}
 
-	checkWaterMarkFn := func(indexName string, waitTime int, expectResult bool) {
-		now := taeHandler.GetDB().TxnMgr.Now()
-		testutils.WaitExpect(
-			waitTime,
-			func() bool {
-				ts, _ := cdcExecutor.GetWatermark(accountId, tableID, indexName)
-				return ts.GE(&now)
-			},
-		)
-		ts, _ := cdcExecutor.GetWatermark(accountId, tableID, indexName)
-		if expectResult {
-			assert.True(t, ts.GE(&now), indexName)
-		} else {
-			assert.False(t, ts.GE(&now), indexName)
+	const (
+		indexCount = 3
+		// Observable state transitions, rather than this duration, are the
+		// correctness oracle. This only bounds a broken asynchronous phase;
+		// successful phases return as soon as every watermark is durable.
+		iscpPhaseHangGuard = 30 * time.Second
+	)
+	waitForAllWatermarks := func(target types.TS, deadline time.Time) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			require.FailNowf(
+				t,
+				"ISCP phase budget exhausted before watermark wait",
+				"account=%d table=%d target=%s",
+				accountId,
+				tableID,
+				target.ToString(),
+			)
 		}
+
+		reached := assert.Eventually(t, func() bool {
+			for i := 0; i < indexCount; i++ {
+				current, found := cdcExecutor.GetWatermark(
+					accountId,
+					tableID,
+					fmt.Sprintf("hnsw_idx_%d", i),
+				)
+				if !found || current.LT(&target) {
+					return false
+				}
+			}
+			return true
+		}, remaining, 10*time.Millisecond)
+		if reached {
+			return
+		}
+
+		for i := 0; i < indexCount; i++ {
+			indexName := fmt.Sprintf("hnsw_idx_%d", i)
+			current, found := cdcExecutor.GetWatermark(accountId, tableID, indexName)
+			t.Logf(
+				"ISCP watermark timeout: account=%d table=%d job=%s found=%t current=%s target=%s",
+				accountId,
+				tableID,
+				indexName,
+				found,
+				current.ToString(),
+				target.ToString(),
+			)
+		}
+		require.FailNow(t, "not all ISCP watermarks reached the target")
 	}
 
-	indexCount := 3
+	exerciseFaultRecovery := func(name string, batchIndex int) {
+		deadline := time.Now().Add(iscpPhaseHangGuard)
+		waitUntilHit, removeFault := injectCDCExecutorFault(name)
+		target := appendFn(batchIndex)
+		waitUntilHit(deadline)
+
+		current, found := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx_0")
+		require.True(t, found)
+		require.Truef(
+			t,
+			current.LT(&target),
+			"fault %s did not stop hnsw_idx_0 before target: current=%s target=%s",
+			name,
+			current.ToString(),
+			target.ToString(),
+		)
+
+		removeFault()
+		waitForAllWatermarks(target, deadline)
+	}
+
 	for i := 0; i < indexCount; i++ {
 		registerFn(fmt.Sprintf("hnsw_idx_%d", i))
 	}
@@ -2495,52 +2636,21 @@ func TestISCPExecutor4(t *testing.T) {
 	appendFn(1)
 
 	// insertAsyncIndexIterations failed
-	appendFn(2)
-	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 4000, true)
-	}
+	deadline := time.Now().Add(iscpPhaseHangGuard)
+	target := appendFn(2)
+	waitForAllWatermarks(target, deadline)
 
 	// collectChanges failed
-	rmFn, err := objectio.InjectCDCExecutor("collectChanges")
-	assert.NoError(t, err)
-	appendFn(3)
-	checkWaterMarkFn("hnsw_idx_0", 100, false)
-	rmFn()
-	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 4000, true)
-	}
+	exerciseFaultRecovery("collectChanges", 3)
 
 	// changesNext failed
-	rmFn, err = objectio.InjectCDCExecutor("changesNext")
-	assert.NoError(t, err)
-	appendFn(6)
-	checkWaterMarkFn("hnsw_idx_0", 100, false)
-	rmFn()
-	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
-	}
+	exerciseFaultRecovery("changesNext", 6)
 
 	// consume failed
-	rmFn, err = objectio.InjectCDCExecutor("consume")
-	assert.NoError(t, err)
-	appendFn(7)
-	checkWaterMarkFn("hnsw_idx_0", 100, false)
-	rmFn()
-	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
-	}
+	exerciseFaultRecovery("consume", 7)
+
 	// consume, firstTxn failed
-	rmFn, err = objectio.InjectCDCExecutor("consumeWithJobName:hnsw_idx_0")
-	assert.NoError(t, err)
-	appendFn(8)
-	checkWaterMarkFn("hnsw_idx_0", 100, false)
-	// for i := 1; i < indexCount; i++ {
-	// 	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, fmt.Sprintf("hnsw_idx_%d", i))
-	// }
-	rmFn()
-	for i := 1; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
-	}
+	exerciseFaultRecovery("consumeWithJobName:hnsw_idx_0", 8)
 
 	for i := 0; i < indexCount; i++ {
 		CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, fmt.Sprintf("hnsw_idx_%d", i))
@@ -2935,6 +3045,126 @@ func TestISCPExecutor7(t *testing.T) {
 
 }
 
+type iscpWatermarkSnapshot struct {
+	current types.TS
+	found   bool
+}
+
+func waitForISCPWatermark(
+	t require.TestingT,
+	getWatermark func() (types.TS, bool),
+	target types.TS,
+	waitFor time.Duration,
+	tick time.Duration,
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+) {
+	var lastCompleted atomic.Pointer[iscpWatermarkSnapshot]
+	reached := assert.Eventually(t, func() bool {
+		current, found := getWatermark()
+		lastCompleted.Store(&iscpWatermarkSnapshot{
+			current: current,
+			found:   found,
+		})
+		return found && current.GE(&target)
+	}, waitFor, tick)
+	if reached {
+		return
+	}
+
+	var (
+		current  types.TS
+		found    bool
+		observed bool
+	)
+	if snapshot := lastCompleted.Load(); snapshot != nil {
+		current = snapshot.current
+		found = snapshot.found
+		observed = true
+	}
+	require.FailNowf(
+		t,
+		"ISCP watermark did not reach target",
+		"account=%d table=%d job=%s observed=%t found=%t current=%s target=%s",
+		accountID,
+		tableID,
+		jobName,
+		observed,
+		found,
+		current.ToString(),
+		target.ToString(),
+	)
+}
+
+type failNowPanicTestingT struct{}
+
+func (failNowPanicTestingT) Errorf(string, ...any) {}
+
+func (failNowPanicTestingT) FailNow() {
+	panic("fail now")
+}
+
+func TestWaitForISCPWatermarkTimeoutDoesNotWaitForBlockedGetter(t *testing.T) {
+	var tableMu sync.RWMutex
+	tableMu.Lock()
+	var unlockOnce sync.Once
+	unlockTable := func() {
+		unlockOnce.Do(tableMu.Unlock)
+	}
+	defer unlockTable()
+
+	conditionEntered := make(chan struct{})
+	conditionExited := make(chan struct{})
+	var calls atomic.Int32
+
+	getWatermark := func() (types.TS, bool) {
+		calls.Add(1)
+		close(conditionEntered)
+		tableMu.RLock()
+		defer tableMu.RUnlock()
+		close(conditionExited)
+		return types.BuildTS(1, 0), true
+	}
+
+	helperResult := make(chan any, 1)
+	go func() {
+		defer func() {
+			helperResult <- recover()
+		}()
+		waitForISCPWatermark(
+			failNowPanicTestingT{},
+			getWatermark,
+			types.BuildTS(2, 0),
+			100*time.Millisecond,
+			time.Millisecond,
+			1,
+			2,
+			"blocked-job",
+		)
+	}()
+
+	select {
+	case <-conditionEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watermark condition did not enter the blocked getter")
+	}
+	select {
+	case recovered := <-helperResult:
+		require.Equal(t, "fail now", recovered)
+		require.Equal(t, int32(1), calls.Load())
+	case <-time.After(5 * time.Second):
+		t.Fatal("watermark timeout waited for the blocked getter")
+	}
+
+	unlockTable()
+	select {
+	case <-conditionExited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked watermark condition did not exit after lock release")
+	}
+}
+
 // test delete
 func TestISCPExecutor8(t *testing.T) {
 	catalog.SetupDefines("")
@@ -2979,9 +3209,9 @@ func TestISCPExecutor8(t *testing.T) {
 	tableID := rel.GetTableID(ctxWithTimeout)
 
 	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
-	require.Nil(t, err)
+	require.NoError(t, err)
 
-	txn.Commit(ctxWithTimeout)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
 	// init cdc executor
 	checkLeaseStub := gostub.Stub(
@@ -3013,7 +3243,7 @@ func TestISCPExecutor8(t *testing.T) {
 	require.NoError(t, err)
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
-	cdcExecutor.Start()
+	require.NoError(t, cdcExecutor.Start())
 	defer cdcExecutor.Stop()
 
 	// register cdc job
@@ -3033,35 +3263,31 @@ func TestISCPExecutor8(t *testing.T) {
 		},
 		false,
 	)
-	assert.True(t, ok)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(ctxWithTimeout))
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
-	now := taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		4000,
-		func() bool {
-			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-			return ok && ts.GE(&now)
-		},
-	)
-	ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-	assert.True(t, ok)
-	assert.True(t, ts.GE(&now))
+	const jobName = "hnsw_idx"
+	waitForWatermark := func(target types.TS) {
+		waitForISCPWatermark(
+			t,
+			func() (types.TS, bool) {
+				return cdcExecutor.GetWatermark(accountId, tableID, jobName)
+			},
+			target,
+			10*time.Second,
+			10*time.Millisecond,
+			accountId,
+			tableID,
+			jobName,
+		)
+	}
+
+	waitForWatermark(taeHandler.GetDB().TxnMgr.Now())
 
 	testutil2.DeleteAll(t, accountId, taeHandler.GetDB(), "srcdb", "src_table")
 
-	now = taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		4000,
-		func() bool {
-			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-			return ok && ts.GE(&now)
-		},
-	)
-	ts, ok = cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-	assert.True(t, ok)
-	assert.True(t, ts.GE(&now))
+	waitForWatermark(taeHandler.GetDB().TxnMgr.Now())
 
 }
 
@@ -4431,19 +4657,13 @@ func TestApplyISCPLog(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestISCPReplay(t *testing.T) {
-
+func TestISCPResumeRecoversAcceptedIteration(t *testing.T) {
 	catalog.SetupDefines("")
-
-	// idAllocator := common.NewIdAllocator(1000)
-
-	var (
-		accountId = catalog.System_Account
-	)
+	accountID := catalog.System_Account
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 
@@ -4460,25 +4680,32 @@ func TestISCPReplay(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
-	// create database and table
 
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	bats := bat.Split(10)
 	defer bat.Close()
 
-	// append 1 row
 	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
-	require.Nil(t, err)
+	require.NoError(t, err)
+	tableID := rel.GetTableID(ctxWithTimeout)
+	require.NoError(t, rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0])))
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+	minimumRecoveredWatermark := taeHandler.GetDB().TxnMgr.Now()
 
-	// tableID := rel.GetTableID(ctxWithTimeout)
+	// Fail after admission but before FlushJobStatusOnIterationState persists
+	// Running. This creates the original divergence deterministically: memory is
+	// Pending at LSN 1 while storage is still Completed at LSN 0.
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectCDCExecutor("iteration:src_table")
+	require.NoError(t, err)
+	faultRemoved := false
+	defer func() {
+		if !faultRemoved {
+			_, _ = rmFault()
+		}
+	}()
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
-	require.Nil(t, err)
-
-	txn.Commit(ctxWithTimeout)
-
-	// init cdc executor
 	checkLeaseStub := gostub.Stub(
 		&iscp.CheckLeaseWithRetry,
 		func(
@@ -4508,36 +4735,79 @@ func TestISCPReplay(t *testing.T) {
 	require.NoError(t, err)
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
-	cdcExecutor.Start()
+	require.NoError(t, cdcExecutor.Start())
 	defer cdcExecutor.Stop()
 
-	registerFn := func(indexName string) {
-		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
-		require.NoError(t, err)
-		ok, err := iscp.RegisterJob(
-			ctx, "", txn,
-			&iscp.JobSpec{
-				ConsumerInfo: iscp.ConsumerInfo{
-					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-				},
-			},
-			&iscp.JobID{
-				JobName:   indexName,
-				DBName:    "srcdb",
-				TableName: "src_table",
-			},
-			true,
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err := iscp.RegisterJob(
+		ctx,
+		"",
+		txn,
+		&iscp.JobSpec{ConsumerInfo: iscp.ConsumerInfo{ConsumerType: int8(iscp.ConsumerType_CNConsumer)}},
+		&iscp.JobID{JobName: "replay_job", DBName: "srcdb", TableName: "src_table"},
+		false,
+	)
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+
+	require.Eventually(t, func() bool {
+		lsn, state, found := cdcExecutor.GetJobState(accountID, tableID, "replay_job")
+		return found && lsn == 1 && state == iscp.ISCPJobState_Pending
+	}, 4*time.Second, 10*time.Millisecond)
+
+	readPersistedState := func() (int8, uint64) {
+		readTxn, readErr := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+		require.NoError(t, readErr)
+		result, readErr := iscp.ExecWithResult(
+			ctxWithTimeout,
+			fmt.Sprintf(
+				"SELECT job_state, job_status FROM `mo_catalog`.`mo_iscp_log` WHERE account_id = %d AND table_id = %d AND job_name = 'replay_job'",
+				accountID,
+				tableID,
+			),
+			"",
+			readTxn,
 		)
-		assert.True(t, ok)
-		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit(ctxWithTimeout))
+		require.NoError(t, readErr)
+		defer result.Close()
+
+		var state int8
+		var lsn uint64
+		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			require.Equal(t, 1, rows)
+			state = vector.MustFixedColWithTypeCheck[int8](cols[0])[0]
+			status, statusErr := iscp.UnmarshalJobStatus(cols[1].GetBytesAt(0))
+			require.NoError(t, statusErr)
+			lsn = status.LSN
+			return true
+		})
+		require.NoError(t, readTxn.Commit(ctxWithTimeout))
+		return state, lsn
 	}
 
-	for i := 0; i < 10; i++ {
-		registerFn(fmt.Sprintf("hnsw_idx_%d", i))
-	}
+	persistedState, persistedLSN := readPersistedState()
+	require.Equal(t, iscp.ISCPJobState_Completed, persistedState)
+	require.Zero(t, persistedLSN)
+
 	cdcExecutor.Stop()
-	cdcExecutor.Start()
+	_, err = rmFault()
+	require.NoError(t, err)
+	faultRemoved = true
+	require.NoError(t, cdcExecutor.Resume())
+
+	require.Eventually(t, func() bool {
+		lsn, state, found := cdcExecutor.GetJobState(accountID, tableID, "replay_job")
+		watermark, watermarkFound := cdcExecutor.GetWatermark(accountID, tableID, "replay_job")
+		return found && watermarkFound &&
+			lsn == 1 && state == iscp.ISCPJobState_Completed &&
+			watermark.GE(&minimumRecoveredWatermark)
+	}, 10*time.Second, 10*time.Millisecond)
+
+	persistedState, persistedLSN = readPersistedState()
+	require.Equal(t, iscp.ISCPJobState_Completed, persistedState)
+	require.Equal(t, uint64(1), persistedLSN)
 }
 
 func TestRenameSrcTable(t *testing.T) {
@@ -4768,9 +5038,11 @@ func TestISCPExecutorStartError(t *testing.T) {
 	assert.NoError(t, err)
 	err = cdcExecutor.Resume()
 	require.Error(t, err)
+	require.False(t, cdcExecutor.IsRunning())
 	rmFn()
 	err = cdcExecutor.Resume()
 	require.NoError(t, err)
+	require.True(t, cdcExecutor.IsRunning())
 }
 
 func TestStaleRead(t *testing.T) {
@@ -5643,7 +5915,7 @@ func TestIterationError(t *testing.T) {
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	encoded := base64.StdEncoding.EncodeToString([]byte("invalid sql"))
-	err = iscp.ProcessInitSQL(ctx, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(), encoded)
+	err = iscp.ProcessInitSQL(ctx, "", disttaeEngine.Engine, disttaeEngine.GetTxnClient(), encoded, "", "", "")
 	require.Error(t, err)
 }
 

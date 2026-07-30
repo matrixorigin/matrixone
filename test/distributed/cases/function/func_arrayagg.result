@@ -42,9 +42,9 @@ JSON_OBJECT(
 FROM employees
 GROUP BY department;
 ➤ department[12,-1,0]  ¦  employees_details[-1,2147483647,0]  𝄀
-Engineering  ¦  [{"hire_date": "2020-03-15", "id": 1, "name": "Alice Johnson", "salary": 75000}, {"hire_date": "2019-07-22", "id": 2, "name": "Bob Smith", "salary": 68000}, {"hire_date": "2018-11-08", "id": 3, "name": "Carol Davis", "salary": 82000}]  𝄀
-Marketing  ¦  [{"hire_date": "2021-01-10", "id": 4, "name": "David Wilson", "salary": 55000}, {"hire_date": "2020-09-05", "id": 5, "name": "Eva Brown", "salary": 62000}]  𝄀
-Sales  ¦  [{"hire_date": "2021-06-18", "id": 6, "name": "Frank Miller", "salary": 48000}, {"hire_date": "2020-12-03", "id": 7, "name": "Grace Lee", "salary": 51000}]
+Engineering  ¦  [{"hire_date": "2020-03-15", "id": 1, "name": "Alice Johnson", "salary": 75000.00}, {"hire_date": "2019-07-22", "id": 2, "name": "Bob Smith", "salary": 68000.00}, {"hire_date": "2018-11-08", "id": 3, "name": "Carol Davis", "salary": 82000.00}]  𝄀
+Marketing  ¦  [{"hire_date": "2021-01-10", "id": 4, "name": "David Wilson", "salary": 55000.00}, {"hire_date": "2020-09-05", "id": 5, "name": "Eva Brown", "salary": 62000.00}]  𝄀
+Sales  ¦  [{"hire_date": "2021-06-18", "id": 6, "name": "Frank Miller", "salary": 48000.00}, {"hire_date": "2020-12-03", "id": 7, "name": "Grace Lee", "salary": 51000.00}]
 SELECT
 department,
 JSON_ARRAYAGG(name) as employees_by_salary
@@ -133,7 +133,7 @@ FROM employees
 GROUP BY department
 ) dept_summary;
 ➤ company_structure[-1,2147483647,0]  𝄀
-{"departments": {"Engineering": {"avg_salary": 75000, "employee_count": 3, "employees": ["Alice Johnson", "Bob Smith", "Carol Davis"]}, "Marketing": {"avg_salary": 58500, "employee_count": 2, "employees": ["David Wilson", "Eva Brown"]}, "Sales": {"avg_salary": 49500, "employee_count": 2, "employees": ["Frank Miller", "Grace Lee"]}}}
+{"departments": {"Engineering": {"avg_salary": 75000.00000000, "employee_count": 3, "employees": ["Alice Johnson", "Bob Smith", "Carol Davis"]}, "Marketing": {"avg_salary": 58500.00000000, "employee_count": 2, "employees": ["David Wilson", "Eva Brown"]}, "Sales": {"avg_salary": 49500.00000000, "employee_count": 2, "employees": ["Frank Miller", "Grace Lee"]}}}
 drop table if exists user_permissions;
 CREATE TABLE user_permissions (
 user_id INT,
@@ -249,8 +249,8 @@ ORDER BY product_id, sale_date
 ) ordered_sales
 GROUP BY product_id;
 ➤ product_id[4,32,0]  ¦  sales_timeline[-1,2147483647,0]  𝄀
-1  ¦  [{"amount": 1500, "date": "2024-01-01"}, {"amount": 1200, "date": "2024-01-02"}, {"amount": 1800, "date": "2024-01-03"}, {"amount": 1350, "date": "2024-01-04"}]  𝄀
-2  ¦  [{"amount": 800, "date": "2024-01-01"}, {"amount": 950, "date": "2024-01-02"}, {"amount": 1100, "date": "2024-01-03"}, {"amount": 750, "date": "2024-01-04"}]
+1  ¦  [{"amount": 1500.00, "date": "2024-01-01"}, {"amount": 1200.00, "date": "2024-01-02"}, {"amount": 1800.00, "date": "2024-01-03"}, {"amount": 1350.00, "date": "2024-01-04"}]  𝄀
+2  ¦  [{"amount": 800.00, "date": "2024-01-01"}, {"amount": 950.00, "date": "2024-01-02"}, {"amount": 1100.00, "date": "2024-01-03"}, {"amount": 750.00, "date": "2024-01-04"}]
 CREATE TABLE role_permissions (
 role_name VARCHAR(30),
 permission VARCHAR(50)

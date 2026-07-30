@@ -18,18 +18,22 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 func TestCreateAndDropPitr(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -73,7 +77,7 @@ func TestCreateAndDropPitr(t *testing.T) {
 }
 
 func TestPitrCases(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -183,7 +187,18 @@ func TestPitrCases(t *testing.T) {
 }
 
 func TestCDCCases(t *testing.T) {
-	embed.RunBaseClusterTests(
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
+		t.Skip("skipping CDC integration test on GitHub Actions; it requires an external MySQL endpoint")
+	}
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		return db, nil
+	})
+	defer stubOpenDbConn.Reset()
+
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -406,7 +421,7 @@ func TestCDCCases(t *testing.T) {
 }
 
 func TestAlterRoleCases(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()

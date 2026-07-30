@@ -1,0 +1,43 @@
+{
+  "source": "Spark/Iceberg schema evolution fixture used by Tier A evolution.users.",
+  "tables": [
+    {
+      "expected_field_ids": [
+        {
+          "field_id": 1,
+          "name": "id"
+        },
+        {
+          "field_id": 2,
+          "name": "full_name",
+          "previous_name": "user_name"
+        },
+        {
+          "field_id": 3,
+          "name": "age"
+        },
+        {
+          "field_id": 4,
+          "name": "score"
+        },
+        {
+          "field_id": 5,
+          "name": "credit"
+        },
+        {
+          "field_id": 6,
+          "name": "region"
+        }
+      ],
+      "schema_changes": [
+        "rename user_name -> full_name",
+        "add region",
+        "reorder region after full_name",
+        "age int -> long",
+        "score float -> double",
+        "credit decimal(9,2) -> decimal(12,2)"
+      ],
+      "table": "evolution.users"
+    }
+  ]
+}

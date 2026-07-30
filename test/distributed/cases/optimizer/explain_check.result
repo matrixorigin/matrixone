@@ -98,4 +98,30 @@ Project  𝄀
                     Sort Key: t1.c1 DESC  𝄀
                     Filter Cond: ((cast(t1.c1 AS BIGINT) % 3) = 0)  𝄀
                     Recv Message: [tag 1 , type MsgTopValue]
+drop table if exists issue_23121_company;
+drop table if exists issue_23121_company_patent;
+create table issue_23121_company(id int primary key, full_name varchar(100), province varchar(50));
+create table issue_23121_company_patent(id int primary key, company_id int);
+insert into issue_23121_company values (1, 'acme shanghai', 'Shanghai'), (2, 'other', 'Beijing');
+insert into issue_23121_company_patent values (1,1),(2,1),(3,1),(4,1),(5,1),(6,1),(7,2);
+explain (analyze true, check '["Aggregate", "Group Key: c.id, c.full_name", "Join Type: LEFT", "Filter Cond"]') select c.id, c.full_name, count(cp.id) as patent_cnt from issue_23121_company c left join issue_23121_company_patent cp on c.id = cp.company_id where c.province = 'Shanghai' group by c.id, c.full_name having count(cp.id) > 5 limit 20;
+-- @regex("invalid input: column 'c\\.full_name' does not exist", false)
+tp query plan  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=36 bytes OutputSize=36 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=36 bytes (min=0 bytes, max=36 bytes)  𝄀
+  Limit: 20  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=192 bytes OutputSize=36 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=352.04 KiB (min=36 bytes, max=352.00 KiB)  𝄀
+        Group Key: c.id, c.full_name  𝄀
+        Aggregate Functions: count(cp.id)  𝄀
+        Filter Cond: (count(cp.id) > 5)  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=8 outputRows=6 (min=6, max=6) InputSize=84 bytes OutputSize=192 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.21 KiB (min=16.06 KiB, max=16.15 KiB)  𝄀
+              Join Type: LEFT  𝄀
+              Join Cond: (c.id = cp.company_id)  𝄀
+              ->  Table Scan on d1.issue_23121_company  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=2 outputRows=1 (min=1, max=1) InputSize=104 bytes OutputSize=28 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=134 bytes (min=134 bytes, max=134 bytes)  𝄀
+                    Filter Cond: (c.province = 'Shanghai')  𝄀
+              ->  Table Scan on d1.issue_23121_company_patent  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=7 outputRows=7 (min=7, max=7) InputSize=56 bytes OutputSize=56 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=112 bytes (min=112 bytes, max=112 bytes)
 drop database if exists d1;

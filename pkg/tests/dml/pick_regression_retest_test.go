@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 func openRetestSQLDB(t *testing.T, c embed.Cluster) *sql.DB {
@@ -41,7 +42,7 @@ func openRetestSQLDB(t *testing.T, c embed.Cluster) *sql.DB {
 }
 
 func TestDataBranchPickRetestCompositePKChunkProbe(t *testing.T) {
-	embed.RunBaseClusterTests(func(c embed.Cluster) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 		defer cancel()
 
@@ -53,8 +54,10 @@ func TestDataBranchPickRetestCompositePKChunkProbe(t *testing.T) {
 		defer cleanup()
 
 		execSQLDB(t, ctx, db, "create table base (k1 int, k2 int, val bigint, primary key (k1, k2))")
-		execSQLDB(t, ctx, db,
-			"insert into base select 1, result, result * 10 from generate_series(1,1000000) g")
+		baseRows := dataBranchScaleRows(1000000, int(objectio.BlockMaxRows)*4)
+		execSQLDB(t, ctx, db, fmt.Sprintf(
+			"insert into base select 1, result, result * 10 from generate_series(1,%d) g",
+			baseRows))
 
 		execSQLDB(t, ctx, db, "data branch create table src from base")
 		execSQLDB(t, ctx, db, "data branch create table dst from base")
@@ -89,7 +92,7 @@ func TestDataBranchPickRetestCompositePKChunkProbe(t *testing.T) {
 }
 
 func TestDataBranchPickRetestNoPKSubqueryFakePK(t *testing.T) {
-	embed.RunBaseClusterTests(func(c embed.Cluster) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 
@@ -121,7 +124,7 @@ func TestDataBranchPickRetestNoPKSubqueryFakePK(t *testing.T) {
 }
 
 func TestDataBranchPickRetestDatePKLiteral(t *testing.T) {
-	embed.RunBaseClusterTests(func(c embed.Cluster) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 

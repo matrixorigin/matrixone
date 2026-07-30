@@ -171,11 +171,17 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	model.WriteTransferPage(ctx, transferFS, pages, *ioVector, marshalBufs)
 	now := time.Now()
+	writeErr := model.WriteTransferPage(ctx, transferFS, pages, *ioVector, marshalBufs)
+	if writeErr != nil {
+		logutil.Warnf("[FlushTableTail] persist transfer page failed (page count %d), keeping in-memory pages: %v",
+			len(pages), writeErr)
+	}
 	for _, page := range pages {
-		if page.BornTS() != bts {
-			page.SetBornTS(now.Add(time.Minute))
+		if writeErr != nil {
+			// Extend bornTS so in-memory hashmap survives the full diskTTL
+			// window instead of being evicted after the short ttl (5s).
+			page.SetBornTS(now.Add(model.GetDiskTTL() - model.GetTTL()))
 		} else {
 			page.SetBornTS(now)
 		}
@@ -191,6 +197,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 func (entry *flushTableTailEntry) collectDelsAndTransfer(
 	ctx context.Context, from, to types.TS,
 ) (transCnt int, err error) {
+	scanStart := from.Next()
 	if len(entry.aobjHandles) == 0 {
 		return
 	}
@@ -220,7 +227,7 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 			ctx,
 			entry.tableEntry,
 			*obj.ID(),
-			from.Next(), // NOTE HERE
+			scanStart, // NOTE HERE
 			to,
 			common.MergeAllocator,
 			entry.rt.VectorPool.Small,
@@ -279,7 +286,12 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		return nil
 	}
 	ctx := context.Background()
-	trans, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, entry.txn.GetPrepareTS().Prev())
+	txnStart := entry.txn.GetStartTS()
+	flushScanStart := txnStart.Next()
+	commitScanStart := entry.collectTs.Next()
+	prepareTS := entry.txn.GetPrepareTS()
+	preparePrev := prepareTS.Prev()
+	trans, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, preparePrev)
 	if err != nil {
 		return err
 	}
@@ -288,7 +300,14 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		logutil.Info(
 			"[FLUSH-PREPARE-COMMIT]",
 			zap.String("task", entry.taskName),
-			zap.String("commit-ts", entry.txn.GetPrepareTS().ToString()),
+			zap.String("commit-ts", prepareTS.ToString()),
+			zap.String("transfer-split-ts", entry.collectTs.ToString()),
+			zap.String("flush-range-from", txnStart.ToString()),
+			zap.String("flush-range-scan-start", flushScanStart.ToString()),
+			zap.String("flush-range-to", entry.collectTs.ToString()),
+			zap.String("commit-range-from", entry.collectTs.ToString()),
+			zap.String("commit-range-scan-start", commitScanStart.ToString()),
+			zap.String("commit-range-to", preparePrev.ToString()),
 			zap.Int("ablks", aconflictCnt),
 			zap.Int("transfer-rows", totalTrans),
 			zap.Int("in-queue-transfers", trans),

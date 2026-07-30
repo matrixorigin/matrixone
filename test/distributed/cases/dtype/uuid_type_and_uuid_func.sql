@@ -36,6 +36,14 @@ insert into t4 values (uuid());
 select length(cast(a as varchar)) from t4;
 drop table t4;
 
+-- test MySQL 8 expression default uuid on string column
+drop table if exists t5;
+create table t5 (id varchar(191) not null default (uuid()), n varchar(50), primary key(id));
+show create table t5;
+insert into t5(n) values('a'),('b');
+select length(id), n from t5 order by n;
+drop table t5;
+
 
 -- test cast string
 select length(cast(uuid() as varchar));

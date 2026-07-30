@@ -35,6 +35,13 @@ select (1,2) in ((1,null),(1,2));
 select (1,2) not in ((1,null));
 select (1,null) in ((1,null));
 select (1,2) not in ((1,null),(2,2));
+select null in (1, null) as r;
+select null not in (1, null) as r;
+create sequence seq_null_in;
+select null in (nextval('seq_null_in')) as r;
+select currval('seq_null_in') as v;
+drop sequence seq_null_in;
+select null in ((1,2));
 
 -- + - * / % mod
 select (1,2,3) > (-1,-3+2,2*3);

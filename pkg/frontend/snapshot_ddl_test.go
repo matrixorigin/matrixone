@@ -87,6 +87,9 @@ func TestSnapshotDdlCoverage_GetSnapshotTsByName(t *testing.T) {
 			// Return one row
 			erResult := mock_frontend.NewMockExecResult(ctrl)
 			erResult.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			// Pre-kind-column schema (8 columns). getSnapshotRecords only
+			// reads the kind column (index 8) when ColumnCount > 8.
+			erResult.EXPECT().GetColumnCount().Return(uint64(8)).AnyTimes()
 			erResult.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("snap-id", nil)
 			erResult.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("snap_ok", nil)
 			erResult.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(12345), nil)
@@ -845,7 +848,7 @@ func setupHandlerTestSession(
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
@@ -958,6 +961,10 @@ func TestSnapshotDdlCoverage_handleGetSnapshotTs(t *testing.T) {
 
 			erResult := mock_frontend.NewMockExecResult(ctrl)
 			erResult.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+			// Pre-kind-column schema (8 columns): getSnapshotRecords skips
+			// the kind read when ColumnCount <= 8, so no GetString(ctx,0,8)
+			// mock is needed.
+			erResult.EXPECT().GetColumnCount().Return(uint64(8)).AnyTimes()
 			erResult.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("snap-id", nil).AnyTimes()
 			erResult.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("snap_ok", nil).AnyTimes()
 			erResult.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(99999), nil).AnyTimes()

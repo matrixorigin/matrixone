@@ -47,6 +47,33 @@ func getVal(val any) string {
 	}
 }
 
+func rejectZeroTemporalInStrictMode(proc *process.Process, value, typ string) error {
+	reject, err := RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return err
+	}
+	if reject {
+		return moerr.NewTruncatedValueForField(proc.Ctx, typ, value, "value", 1)
+	}
+	return nil
+}
+
+func RejectZeroTemporalWritePolicy(proc *process.Process) (bool, error) {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return false, nil
+	}
+
+	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	if err != nil {
+		return false, err
+	}
+	statementIgnore := false
+	if sp := proc.GetStmtProfile(); sp != nil {
+		statementIgnore = sp.GetStatementIgnore()
+	}
+	return process.IsStrictNoZeroDateMode(mode) && !statementIgnore, nil
+}
+
 func HexToInt(hex string) (uint64, error) {
 	s := hex[2:]
 	return strconv.ParseUint(s, 16, 64)
@@ -323,6 +350,11 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			if err != nil {
 				return false, false, res, err
 			}
+			if res == types.ZeroTimestamp {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "datetime"); err != nil {
+					return false, false, res, err
+				}
+			}
 			// Validate TIMESTAMP minimum value: '1970-01-01 00:00:01.000000' (MySQL behavior)
 			// Note: We don't enforce maximum value limit to allow values beyond MySQL's 2038 limit
 			// MySQL behavior: TIMESTAMP column valid range is always UTC [1970-01-01 00:00:01, 2038-01-19 03:14:07]
@@ -330,7 +362,7 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			// The value 'res' is already the UTC timestamp after conversion from the session timezone.
 			// So we directly compare 'res' with TimestampMinValue (which is also in UTC).
 			// This matches MySQL: timezones further west (smaller UTC offset) allow earlier local dates.
-			if res < types.TimestampMinValue {
+			if !types.ValidTimestamp(res) {
 				// MySQL error format: "Incorrect datetime value: 'value' for column 'column' at row 1"
 				// Use row 1 as default since we don't have row number in this context
 				return false, false, res, moerr.NewTruncatedValueForField(proc.Ctx, "datetime", s, "ts_min", 1)
@@ -378,6 +410,11 @@ func SetInsertValueDateTime(proc *process.Process, numVal *tree.NumVal, typ *typ
 			isnull = true
 		} else {
 			res, err = types.ParseDatetime(s, typ.Scale)
+			if err == nil && res == types.ZeroDatetime {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "datetime"); err != nil {
+					canInsert = false
+				}
+			}
 		}
 
 	case tree.P_bool:
@@ -489,6 +526,10 @@ func SetInsertValueDate(proc *process.Process, numVal *tree.NumVal, typ *types.T
 			res, err = types.ParseDateCast(s)
 			if err != nil {
 				canInsert = false
+			} else if res == types.ZeroDate {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "date"); err != nil {
+					canInsert = false
+				}
 			}
 		}
 
@@ -547,10 +588,21 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types.Type) (canInsert bool, val []byte, err error) {
 	canInsert = true
 
-	checkStrLen := func(s string) ([]byte, error) {
+	checkStrLen := func(s string, binaryLiteral bool) ([]byte, error) {
 		destLen := int(typ.Width)
-		if typ.Oid != types.T_text && typ.Oid != types.T_datalink && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
-			if utf8.RuneCountInString(s) > destLen {
+		// CHAR/VARCHAR width is enforced at runtime by the assignment cast
+		// (cast_assign), which honors sql_mode, the trailing-space exemption and
+		// the INSERT IGNORE downgrade. Excluding them here avoids a plan-time
+		// hard rejection that would ignore sql_mode.
+		checkWidth := typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
+			typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
+			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArrayRelate()
+		if checkWidth {
+			srcLen := utf8.RuneCountInString(s)
+			if binaryLiteral && (typ.Oid == types.T_binary || typ.Oid == types.T_varbinary) {
+				srcLen = len(s)
+			}
+			if srcLen > destLen {
 				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 		}
@@ -589,6 +641,54 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 				}
 
 				v = types.ArrayToBytes[float64](_v)
+
+			case types.T_array_bf16:
+				_v, err := types.StringToArray[types.BF16](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[types.BF16](_v)
+
+			case types.T_array_float16:
+				_v, err := types.StringToArray[types.Float16](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[types.Float16](_v)
+
+			case types.T_array_int8:
+				_v, err := types.StringToArray[int8](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[int8](_v)
+
+			case types.T_array_uint8:
+				_v, err := types.StringToArray[uint8](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[uint8](_v)
 			default:
 				return nil, moerr.NewInternalErrorNoCtxf("%s is not supported array type", typ.String())
 
@@ -615,21 +715,28 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		} else {
 			s = "0"
 		}
-		if val, err = checkStrLen(s); err != nil {
+		if val, err = checkStrLen(s, false); err != nil {
 			canInsert = false
 		}
 		return
 
 	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64:
 		s := numVal.String()
-		if val, err = checkStrLen(s); err != nil {
+		if val, err = checkStrLen(s, false); err != nil {
 			canInsert = false
 		}
 		return
 
 	case tree.P_hexnum:
 		s := numVal.String()[2:]
+		if len(s)%2 != 0 {
+			s = "0" + s
+		}
 		if val, err = hex.DecodeString(s); err != nil {
+			canInsert = false
+			return
+		}
+		if val, err = checkStrLen(string(val), true); err != nil {
 			canInsert = false
 		}
 		return

@@ -345,6 +345,10 @@ func (node *Update) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
+func (node *Merge) StmtKind() StmtKind {
+	return defaultStatusTyp
+}
+
 func (node *CreateDatabase) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
@@ -567,7 +571,7 @@ func (node *DropIndex) StmtKind() StmtKind {
 }
 
 func (node *AnalyzeStmt) StmtKind() StmtKind {
-	return frontendStatusTyp
+	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_BY_SITUATION, EXEC_IN_FRONTEND)
 }
 
 func (node *SetRole) StmtKind() StmtKind {
@@ -624,6 +628,30 @@ func (node *CancelDaemonTask) StmtKind() StmtKind {
 
 func (node *PauseDaemonTask) StmtKind() StmtKind {
 	return frontendStatusTyp
+}
+
+func (node *CreateSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *AlterSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *DropSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ExecuteSQLTask) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ShowSQLTasks) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *ShowSQLTaskRuns) StmtKind() StmtKind {
+	return compositeResRowType
 }
 
 func (node *PrepareString) StmtKind() StmtKind {

@@ -33,7 +33,7 @@ import (
 
 func ParseFromString(s string) (ret ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtxf("json text %s", s)
+		err = moerr.NewInvalidInputNoCtx("json text is empty")
 		return
 	}
 	data := util.UnsafeStringToBytes(s)
@@ -43,7 +43,7 @@ func ParseFromString(s string) (ret ByteJson, err error) {
 
 func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtxf("json text %s", string(s))
+		err = moerr.NewInvalidInputNoCtx("json text is empty")
 		return
 	}
 	if !json.Valid(s) {
@@ -265,17 +265,6 @@ func (r UnnestResult) String() string {
 		buf.WriteString(string(val))
 	}
 	return buf.String()
-}
-
-func checkAllNull(vals []ByteJson) bool {
-	allNull := true
-	for _, val := range vals {
-		if !val.IsNull() {
-			allNull = false
-			break
-		}
-	}
-	return allNull
 }
 
 // NumberParts is the result of parsing out a valid JSON number. It contains

@@ -15,13 +15,17 @@
 package plan
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -133,6 +137,21 @@ func Test_buildTestShowCreateTable(t *testing.T) {
                                 FULLTEXT idx02(json1,json2) WITH PARSER json)`,
 			want: "CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `json1` json DEFAULT NULL,\n  `json2` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `idx01`(`json1`) WITH PARSER json ASYNC,\n FULLTEXT `idx02`(`json1`,`json2`) WITH PARSER json\n)",
 		},
+		{
+			name: "array column metadata",
+			sql: `CREATE TABLE vec_json_case (
+				doc_id BIGINT PRIMARY KEY,
+				embedding VECF32(3),
+				payload JSON,
+				tags ARRAY(VARCHAR(20))
+			)`,
+			want: "CREATE TABLE `vec_json_case` (\n  `doc_id` bigint NOT NULL,\n  `embedding` vecf32(3) DEFAULT NULL,\n  `payload` json DEFAULT NULL,\n  `tags` array(varchar(20)) DEFAULT NULL,\n  PRIMARY KEY (`doc_id`)\n)",
+		},
+		{
+			name: "expression default preserves string literals",
+			sql:  `CREATE TABLE t_expr_default (id INT, c VARCHAR(10) DEFAULT (concat('x','y')), s VARCHAR(10) DEFAULT 'plain')`,
+			want: "CREATE TABLE `t_expr_default` (\n  `id` int DEFAULT NULL,\n  `c` varchar(10) DEFAULT (concat('x', 'y')),\n  `s` varchar(10) DEFAULT 'plain'\n)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -167,6 +186,163 @@ func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
 	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, "CREATE TABLE `spatial_src` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)", got)
+}
+
+func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE prefix_show_src (
+		id INT PRIMARY KEY,
+		name VARCHAR(191),
+		t TEXT,
+		b BLOB,
+		KEY idx_t(t(100)),
+		UNIQUE KEY uq_b(b(20)),
+		KEY idx_mix(name, t(30))
+	)`)
+	require.NoError(t, err)
+
+	var snapshot *plan.Snapshot
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "KEY `idx_t` (`t`(100))")
+	require.Contains(t, got, "UNIQUE KEY `uq_b` (`b`(20))")
+	require.Contains(t, got, "KEY `idx_mix` (`name`,`t`(30))")
+}
+
+func TestConstructCreateTableSQLDoesNotMutateIndexComments(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE comment_src (
+		id INT PRIMARY KEY,
+		KEY idx_id (id)
+	)`)
+	require.NoError(t, err)
+	require.NotEmpty(t, tableDef.Indexes)
+
+	tableDef.Indexes[0].Comment = "O'Reilly"
+	first, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	second, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+
+	require.Equal(t, first, second)
+	require.Equal(t, "O'Reilly", tableDef.Indexes[0].Comment)
+	require.Contains(t, first, `COMMENT 'O''Reilly'`)
+}
+
+func Test_ShowCreateTableUsesIncludedColumnsFromIndexDef(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src (
+		id INT NOT NULL,
+		embedding VECF32(3),
+		title VARCHAR(20),
+		category INT,
+		PRIMARY KEY (id)
+	)`)
+	require.NoError(t, err)
+
+	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+		IndexName:       "idx_vec",
+		Parts:           []string{"embedding"},
+		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
+		IncludedColumns: []string{"title", "category"},
+	})
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "KEY `idx_vec` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (`title`, `category`)")
+}
+
+func Test_ShowCreateTableQuotesIncludedColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_reserved (
+		id INT NOT NULL,
+		embedding VECF32(3),
+		status INT,
+		PRIMARY KEY (id)
+	)`)
+	require.NoError(t, err)
+
+	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+		IndexName:       "idx_vec_reserved",
+		Parts:           []string{"embedding"},
+		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
+		IncludedColumns: []string{"status"},
+	})
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "INCLUDE (`status`)")
+}
+
+func Test_ShowCreateTableRendersSingleIncludeWhenAlgoParamsAlsoCarryIncludeColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		algo string
+	}{
+		{name: "cagra", algo: catalog.MoIndexCagraAlgo.ToString()},
+		{name: "ivfpq", algo: catalog.MoIndexIvfpqAlgo.ToString()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_gpu (
+				id INT NOT NULL,
+				embedding VECF32(3),
+				price INT,
+				category BIGINT,
+				PRIMARY KEY (id)
+			)`)
+			require.NoError(t, err)
+
+			tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+				IndexName:       "idx_vec_gpu",
+				Parts:           []string{"embedding"},
+				IndexAlgo:       tc.algo,
+				IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"price,category"}`,
+				IncludedColumns: []string{"price", "category"},
+			})
+
+			got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, strings.Count(got, "INCLUDE"))
+			require.Contains(t, got, "INCLUDE (`price`, `category`)")
+		})
+	}
+}
+
+func Test_ShowCreateTableRendersLegacyAlgoParamsIncludeColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		algo string
+	}{
+		{name: "cagra", algo: catalog.MoIndexCagraAlgo.ToString()},
+		{name: "ivfpq", algo: catalog.MoIndexIvfpqAlgo.ToString()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE vector_src_gpu (
+				id INT NOT NULL,
+				embedding VECF32(3),
+				price INT,
+				category BIGINT,
+				PRIMARY KEY (id)
+			)`)
+			require.NoError(t, err)
+
+			tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+				IndexName:       "idx_vec_gpu",
+				Parts:           []string{"embedding"},
+				IndexAlgo:       tc.algo,
+				IndexAlgoParams: `{"op_type":"vector_l2_ops","included_columns":"price,category"}`,
+			})
+
+			got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, strings.Count(got, "INCLUDE"))
+			require.Contains(t, got, "INCLUDE (`price`, `category`)")
+		})
+	}
 }
 
 func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
@@ -217,6 +393,24 @@ func Test_extractTopLevelCheckDefs(t *testing.T) {
 	if checks[1] != "CHECK(score>0)" {
 		t.Fatalf("unexpected second check def: %s", checks[1])
 	}
+}
+
+func TestExtractTopLevelCheckDefsIgnoresCheckPrefixedColumns(t *testing.T) {
+	tableDef := &plan.TableDef{Createsql: `CREATE TABLE t_check_cpk (
+		run_id varchar(64) not null,
+		user_id varchar(128) not null,
+		retry_scope varchar(16) not null default 'node',
+		checkpoint_version varchar(32) null,
+		checkpoint_json longtext null,
+		check$point varchar(32) null,
+		error_code varchar(128) null,
+		constraint chk_scope check (retry_scope in ('node','subtree','siblings')),
+		primary key(user_id, run_id)
+	)`}
+	require.Equal(t,
+		[]string{"constraint chk_scope check (retry_scope in ('node','subtree','siblings'))"},
+		extractTopLevelCheckDefs(tableDef),
+	)
 }
 
 func Test_SingleShowCreateTable(t *testing.T) {
@@ -289,10 +483,145 @@ func buildTestShowCreateTable(sql string) (string, error) {
 	return showSQL, nil
 }
 
+func buildTestShowCreateExternalTable(t *testing.T, tableName string, param *tree.ExternParam) string {
+	t.Helper()
+	mock := NewMockOptimizer(false)
+	jsonBytes, err := json.Marshal(param)
+	require.NoError(t, err)
+
+	tableDef := &plan.TableDef{
+		Name:      tableName,
+		TableType: catalog.SystemExternalRel,
+		Createsql: string(jsonBytes),
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int32)},
+				Default: &plan.Default{NullAbility: true},
+			},
+			{
+				Name:    "part_id",
+				Typ:     plan.Type{Id: int32(types.T_int32)},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+	}
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	return showSQL
+}
+
+func TestShowCreateIcebergExternalTable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := &plan.TableDef{
+		Name:      "gold_orders",
+		TableType: catalog.SystemExternalRel,
+		Createsql: sqliceberg.BuildCreateSQLEnvelope(model.TableMapping{
+			Namespace:  "sales",
+			TableName:  "orders",
+			DefaultRef: model.DefaultRefMain,
+			ReadMode:   model.ReadModeAppendOnly,
+			WriteMode:  model.WriteModeReadOnly,
+		}, "ksa_gold"),
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int32)},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+	}
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, "CREATE EXTERNAL TABLE `gold_orders` (\n  `id` int DEFAULT NULL\n) ENGINE = ICEBERG WITH (\"catalog\" = 'ksa_gold', \"namespace\" = 'sales', \"table\" = 'orders', \"ref\" = 'main', \"read_mode\" = 'append_only', \"write_mode\" = 'read_only')", showSQL)
+}
+
+func TestShowCreateLegacyExternalTablesIgnoreIcebergEnvelope(t *testing.T) {
+	tests := []struct {
+		name   string
+		format string
+		option []string
+	}{
+		{name: "csv", format: tree.CSV, option: []string{"format", tree.CSV}},
+		{name: "jsonline", format: tree.JSONLINE, option: []string{"format", tree.JSONLINE, "jsondata", "object"}},
+		{name: "parquet", format: tree.PARQUET, option: []string{"format", tree.PARQUET}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildTestShowCreateExternalTable(t, "legacy_"+tt.name, &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{
+					ScanType: tree.INFILE,
+					Filepath: "/data/legacy/*." + tt.name,
+					Format:   tt.format,
+					Option:   tt.option,
+				},
+			})
+			require.Contains(t, got, "CREATE EXTERNAL TABLE `legacy_"+tt.name+"`")
+			require.Contains(t, got, "'FORMAT'='"+tt.format+"'")
+			require.NotContains(t, got, "ENGINE = ICEBERG")
+			require.NotContains(t, got, sqliceberg.CreateSQLEnvelopePrefix)
+		})
+	}
+}
+
+func TestShowCreateHiveExternalTableKeepsFilepath(t *testing.T) {
+	got := buildTestShowCreateExternalTable(t, "test_show_ddl", &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Option: []string{
+				"filepath", "/data/test/",
+				"format", "parquet",
+				"hive_partitioning", "true",
+				"hive_partition_columns", "part_id",
+			},
+		},
+	})
+	require.Contains(t, got, "CREATE EXTERNAL TABLE `test_show_ddl`")
+	require.Contains(t, got, "'FILEPATH'='/data/test/'")
+	require.Contains(t, got, "'FORMAT'='parquet'")
+	require.Contains(t, got, "'HIVE_PARTITIONING'='true'")
+	require.Contains(t, got, "'HIVE_PARTITION_COLUMNS'='part_id'")
+}
+
+func TestShowCreateS3HiveExternalTableUsesS3Options(t *testing.T) {
+	got := buildTestShowCreateExternalTable(t, "test_show_ddl_s3", &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Option: []string{
+				"endpoint", "http://minio.local",
+				"access_key_id", "AK",
+				"secret_access_key", "SK",
+				"bucket", "my-bucket",
+				"filepath", "data/test/",
+				"region", "us-east-1",
+				"provider", "minio",
+				"format", "parquet",
+				"hive_partitioning", "true",
+				"hive_partition_columns", "part_id",
+			},
+		},
+	})
+	require.Contains(t, got, " URL s3option{")
+	require.Contains(t, got, "'endpoint'='http://minio.local'")
+	require.Contains(t, got, "'access_key_id'='******'")
+	require.Contains(t, got, "'secret_access_key'='******'")
+	require.Contains(t, got, "'bucket'='my-bucket'")
+	require.Contains(t, got, "'filepath'='data/test/'")
+	require.Contains(t, got, "'region'='us-east-1'")
+	require.Contains(t, got, "'provider'='minio'")
+	require.Contains(t, got, "'format'='parquet'")
+	require.Contains(t, got, "'hive_partitioning'='true'")
+	require.Contains(t, got, "'hive_partition_columns'='part_id'")
+	require.NotContains(t, got, " INFILE{")
+}
+
 func TestFormatColTypeGeometrySubtype(t *testing.T) {
+	// Subtype lives in Scale, SRID in Width (srid+1 when defined).
 	require.Equal(t, "POINT", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "POINT",
+		Id:    int32(types.T_geometry),
+		Scale: int32(geometrySubtypeEnum("POINT")),
 	}))
 
 	require.Equal(t, "GEOMETRY", FormatColType(plan.Type{
@@ -300,12 +629,144 @@ func TestFormatColTypeGeometrySubtype(t *testing.T) {
 	}))
 
 	require.Equal(t, "POINT SRID 4326", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "POINT;SRID=4326",
+		Id:    int32(types.T_geometry),
+		Scale: int32(geometrySubtypeEnum("POINT")),
+		Width: encodeGeometrySRIDWidth(4326, true),
 	}))
 
 	require.Equal(t, "GEOMETRY SRID 0", FormatColType(plan.Type{
-		Id:         int32(types.T_geometry),
-		Enumvalues: "SRID=0",
+		Id:    int32(types.T_geometry),
+		Width: encodeGeometrySRIDWidth(0, true),
 	}))
+
+	// GEOMETRY32 family renders with the "32" suffix.
+	require.Equal(t, "GEOMETRY32", FormatColType(plan.Type{
+		Id: int32(types.T_geometry32),
+	}))
+	require.Equal(t, "POINT32", FormatColType(plan.Type{
+		Id:    int32(types.T_geometry32),
+		Scale: int32(geometrySubtypeEnum("POINT")),
+	}))
+}
+
+func TestFormatColTypeArrayMetadata(t *testing.T) {
+	require.Equal(t, "ARRAY(varchar(20))", FormatColType(plan.Type{
+		Id:         int32(types.T_json),
+		Enumvalues: "array(varchar(20))",
+	}))
+}
+
+func TestFormatColTypeVector(t *testing.T) {
+	// Every vector type must round-trip its dimension in SHOW CREATE, not just
+	// f32/f64 (the narrow types were previously missing the (N) suffix).
+	require.Equal(t, "VECF32(3)", FormatColType(plan.Type{Id: int32(types.T_array_float32), Width: 3}))
+	require.Equal(t, "VECF64(3)", FormatColType(plan.Type{Id: int32(types.T_array_float64), Width: 3}))
+	require.Equal(t, "VECBF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_bf16), Width: 3}))
+	require.Equal(t, "VECF16(3)", FormatColType(plan.Type{Id: int32(types.T_array_float16), Width: 3}))
+	require.Equal(t, "VECINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_int8), Width: 3}))
+	require.Equal(t, "VECUINT8(3)", FormatColType(plan.Type{Id: int32(types.T_array_uint8), Width: 3}))
+}
+
+// TestShowCreateExternalWriteFilePattern ensures SHOW CREATE TABLE formatting
+// keeps WRITE_FILE_PATTERN for writable external tables, in both the INFILE
+// and the URL s3option forms; without it the recreated table silently degrades
+// to read-only.
+func TestShowCreateExternalWriteFilePattern(t *testing.T) {
+	pattern := "stage://s/part-%U.csv"
+
+	// INFILE{...} form (ScanType != S3). Writable tables must be recreatable
+	// from the emitted DDL: the read FILEPATH is preserved (not masked) and
+	// empty optional keys are omitted (the read-side validator rejects
+	// 'JSONDATA'='').
+	p := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "stage://s/part-*.csv",
+		Option:   []string{"format", "csv", "write_file_pattern", pattern},
+	}}
+	out := formatInfileExternalOptionsForShowCreate(p)
+	require.Contains(t, out, "'WRITE_FILE_PATTERN'='"+pattern+"'")
+	require.Contains(t, out, "'FILEPATH'='stage://s/part-*.csv'")
+	require.NotContains(t, out, "JSONDATA")
+	require.NotContains(t, out, "''")
+
+	// Read-only table: legacy output unchanged — no WRITE_FILE_PATTERN key,
+	// FILEPATH masked, empty keys present.
+	ro := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv"},
+	}}
+	roOut := formatInfileExternalOptionsForShowCreate(ro)
+	require.NotContains(t, roOut, "WRITE_FILE_PATTERN")
+	require.Contains(t, roOut, "'FILEPATH'=''")
+	require.NotContains(t, roOut, "/local/path.csv")
+	require.Contains(t, roOut, "'JSONDATA'=''")
+
+	// URL s3option{...} form.
+	s3 := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Format:   tree.CSV,
+			Option:   []string{"format", "csv", "write_file_pattern", pattern},
+		},
+		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
+	}
+	out = formatS3ExternalOptionsForShowCreate(s3)
+	require.Contains(t, out, "'write_file_pattern'='"+pattern+"'")
+}
+
+// TestShowCreateExternalCommentRoundTrip: the CSV reader skips lines whose raw
+// prefix matches the COMMENT marker, so SHOW CREATE must round-trip it for
+// read-only external tables (writable tables reject a non-empty marker, so they
+// never carry one). Omitted entirely when unset.
+func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
+	// INFILE read-only table with a comment marker
+	ro := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv", "comment", "#"},
+	}}
+	out := formatInfileExternalOptionsForShowCreate(ro)
+	require.Contains(t, out, "'COMMENT'='#'")
+
+	// no comment option => no COMMENT key
+	noComment := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+		Format:   tree.CSV,
+		Filepath: "/local/path.csv",
+		Option:   []string{"format", "csv"},
+	}}
+	require.NotContains(t, formatInfileExternalOptionsForShowCreate(noComment), "COMMENT")
+
+	// S3 read-only table with a comment marker
+	s3 := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Format:   tree.CSV,
+			Option:   []string{"format", "csv", "comment", "REM"},
+		},
+		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
+	}
+	require.Contains(t, formatS3ExternalOptionsForShowCreate(s3), "'comment'='REM'")
+}
+
+// TestFormatStrInSingleQuotes: FIELDS/LINES values emitted by SHOW CREATE must
+// be valid inside single-quoted SQL literals (a custom LINES TERMINATED BY
+// used to render as the Go struct '&{#EOL#}', and a single-quote enclosure as
+// an unescaped single quote).
+func TestFormatStrInSingleQuotes(t *testing.T) {
+	require.Equal(t, "#EOL#", formatStrInSingleQuotes("#EOL#"))
+	require.Equal(t, `a''b`, formatStrInSingleQuotes("a'b"))
+	require.Equal(t, `a\\b`, formatStrInSingleQuotes(`a\b`))
+	require.Equal(t, `\\''`, formatStrInSingleQuotes(`\'`))
+}
+
+// TestFormatLinesTerminatedBy: SHOW CREATE must keep \n and \r\n distinct so a
+// CRLF writable external table recreates as CRLF (not silently downgraded to
+// LF). Both render as doubled-backslash escape sequences; other values flow
+// through formatStrInSingleQuotes.
+func TestFormatLinesTerminatedBy(t *testing.T) {
+	require.Equal(t, `\\n`, formatLinesTerminatedBy("\n"))
+	require.Equal(t, `\\r\\n`, formatLinesTerminatedBy("\r\n"))
+	require.NotEqual(t, formatLinesTerminatedBy("\n"), formatLinesTerminatedBy("\r\n"))
+	require.Equal(t, "#EOL#", formatLinesTerminatedBy("#EOL#"))
 }

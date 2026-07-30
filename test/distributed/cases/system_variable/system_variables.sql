@@ -40,11 +40,14 @@ set interactive_timeout = 36600;
 show variables like 'interactive_timeout';
 set interactive_timeout = 30000+100;
 show variables like 'interactive_timeout';
+set global interactive_timeout = default;
 set @g_interactive_timeout_before = @@global.interactive_timeout;
 set global interactive_timeout = 30000+100;
 select @@global.interactive_timeout = @g_interactive_timeout_before;
+show global variables like 'interactive_timeout';
+set global interactive_timeout = default;
 select @@session.interactive_timeout;
--- boundary tests (cloud policy: session only)
+-- boundary tests
 set interactive_timeout = 0;
 set interactive_timeout = 1;
 show variables like 'interactive_timeout';
@@ -81,7 +84,7 @@ set wait_timeout = 33600;
 show variables like 'wait_timeout';
 set wait_timeout = 10;
 show variables like 'wait_timeout';
--- boundary tests (cloud policy: session only)
+-- boundary tests
 set wait_timeout = 0;
 set wait_timeout = 1;
 show variables like 'wait_timeout';

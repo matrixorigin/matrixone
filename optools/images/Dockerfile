@@ -1,12 +1,14 @@
-FROM matrixorigin/golang:1.25-ubuntu22.04 AS builder
+FROM matrixorigin/golang:1.26.4-ubuntu22.04 AS builder
 
 # goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"
+ENV GOWORK=off
 RUN go env -w GOPROXY=${GOPROXY}
 
 # Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
 # Default: 0 (disabled), set to 1 to enable
 ARG TYPECHECK=0
+ARG GOBUILD_OPT=""
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
@@ -17,14 +19,19 @@ COPY go.sum go.sum
 
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
-RUN go mod download
+RUN module_files="$(sha256sum go.mod go.sum)" && \
+    go mod download && \
+    if [ "$module_files" != "$(sha256sum go.mod go.sum)" ]; then \
+        echo "go mod download changed go.mod/go.sum; run make mod-tidy"; \
+        exit 1; \
+    fi
 
 COPY . .
 
 RUN if [ "$TYPECHECK" = "1" ]; then \
-        make clean && make build TYPECHECK=1; \
+        make clean && make build TYPECHECK=1 GOBUILD_OPT="${GOBUILD_OPT}"; \
     else \
-        make clean && make build; \
+        make clean && make build GOBUILD_OPT="${GOBUILD_OPT}"; \
     fi
 
 FROM matrixorigin/ubuntu:22.04
@@ -32,9 +39,13 @@ FROM matrixorigin/ubuntu:22.04
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/local/lib
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/cgo/*.so /usr/local/lib
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/pkg/monlp/tokenizer/dict /usr/local/share/jieba
+ENV MO_JIEBA_DICT_DIR=/usr/local/share/jieba
 
-# ldconfig and run mo-service to check if the shared library is found
-RUN ldconfig && /mo-service -h
+# ldconfig and run mo-service to check if the shared library is found. A
+# coverage-instrumented binary requires a writable GOCOVERDIR even for -h.
+RUN mkdir -p /tmp/coverage && ldconfig && GOCOVERDIR=/tmp/coverage /mo-service -h
 
 WORKDIR /
 

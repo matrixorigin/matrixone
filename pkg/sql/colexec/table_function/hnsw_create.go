@@ -24,15 +24,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	hnswrt "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
+
+// hnswCatalogHooks is the shared (stateless) catalog-hooks instance used for
+// plugin-declared type validation (see pkg/indexplugin/catalog).
+var hnswCatalogHooks = hnswrt.CatalogHooks{}
 
 var hnsw_runSql = sqlexec.RunSql
 
@@ -190,12 +197,23 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 			return err
 		}
 
-		if u.tblcfg.IndexCapacity <= 0 {
+		// max_index_capacity: flat algo_params key (set in CREATE INDEX) wins;
+		// otherwise the session variable controls it, then the hardcoded
+		// default. Sourced only when the cfg didn't already carry one.
+		if u.idxcfg.IndexCapacity <= 0 {
+			u.idxcfg.IndexCapacity, err = indexplugin.AlgoParamInt(u.param.MaxIndexCapacity,
+				proc.GetResolveVariableFunc(), "hnsw_max_index_capacity", hnswrt.DefaultMaxIndexCapacity)
+			if err != nil {
+				return err
+			}
+		}
+
+		if u.idxcfg.IndexCapacity <= 0 {
 			return moerr.NewInvalidInput(proc.Ctx, "Index Capacity must be greater than 0")
 		}
 
 		idVec := tf.ctr.argVecs[1]
-		if idVec.GetType().Oid != types.T_int64 {
+		if !catalogplugin.SupportsPrimaryKeyType(hnswCatalogHooks, idVec.GetType().Oid) {
 			return moerr.NewInvalidInput(proc.Ctx, "Second argument (pkid must be a bigint")
 		}
 

@@ -32,6 +32,7 @@ import (
 
 func Test_objGetArg(t *testing.T) {
 	get := objGetArg{}
+	get.s3 = true // offline format must be stated explicitly (--local/--s3/--local2)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	err := get.InitReader(ctx, "abc")
@@ -85,14 +86,10 @@ func Test_gcArg(t *testing.T) {
 	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
 
 	tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
-	testutils.WaitExpect(2000, func() bool {
-		return tae.AllCheckpointsFinished()
-	})
+	tae.WaitAllCheckpointsFinished()
 
 	tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), 5*time.Second)
-	testutils.WaitExpect(1000, func() bool {
-		return tae.AllCheckpointsFinished()
-	})
+	tae.WaitAllCheckpointsFinished()
 
 	assert.NoError(t, txn.Commit(context.Background()))
 	tae.DB.BGCheckpointRunner.DisableCheckpoint(ctx)

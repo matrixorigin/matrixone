@@ -99,6 +99,22 @@ var (
 			Name:      "storage_usage_cache_size",
 			Help:      "Size of the storage usage cache used",
 		})
+
+	TaskMergeOOMPauseCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "merge_oom_pause_total",
+			Help:      "Total number of DN merge scheduler pauses caused by low available memory.",
+		})
+
+	TaskMergeAvailableMemoryGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "merge_available_memory_bytes",
+			Help:      "Available memory observed by the DN merge scheduler.",
+		})
 )
 
 // transfer page metrics
@@ -131,6 +147,16 @@ var (
 	TransferTableRunTTLDurationHistogram = transferDurationHistogram.WithLabelValues("table_run_ttl_duration")
 	TransferPageFlushLatencyHistogram    = transferDurationHistogram.WithLabelValues("page_flush_latency")
 	TransferPageMergeLatencyHistogram    = transferDurationHistogram.WithLabelValues("page_merge_latency")
+
+	transferPageWriteCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "mo",
+		Subsystem: "task",
+		Name:      "transfer_page_write_retry_total",
+		Help:      "Total number of transfer page write retries by outcome.",
+	}, []string{"outcome"})
+
+	TransferPageWriteRetrySucceededCounter = transferPageWriteCounter.WithLabelValues("succeeded")
+	TransferPageWriteRetryExhaustedCounter = transferPageWriteCounter.WithLabelValues("exhausted")
 
 	transferShortDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "mo",

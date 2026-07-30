@@ -43,10 +43,11 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 	if err != nil {
 		return nil, err
 	}
+	builder.skipStats = skipStats
+	rootId = builder.reuseMultiReferenceCTEs(rootId)
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
-	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
@@ -73,7 +74,15 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 
 	rootId, err := builder.bindInsert(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
+		// never fall back to the legacy ODKU operator. Two exceptions still fall
+		// back: plain INSERT (e.g. inserting into a system index table); and the
+		// degenerate ODKU on a table with no primary/unique key (no dedup key to
+		// represent the upsert; legacy treats it as a plain INSERT and preserves
+		// the prepared-statement parameters).
+		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
+			(len(stmt.OnDuplicateUpdate) == 0 ||
+				err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
 		}
 		return nil, err
@@ -86,6 +95,38 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	if err != nil {
 		return nil, err
 	}
+
+	// Append synchronous IVF/fulltext index maintenance (modern path, no legacy
+	// fallback) from the materialized new-row image; no-op without such indexes.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
+	// Enforce foreign key constraints for the modern insert path. The child→parent
+	// parent-existence check is row-scoped and in-plan for every conflict action:
+	// plain INSERT / ON DUPLICATE KEY UPDATE assert over the materialized image (see
+	// modernInsertFkCheckEnabled / appendForeignConstrantPlan), and INSERT IGNORE
+	// drops the offending rows (see buildInsertIgnoreFkFilter). Only self-referencing
+	// FKs still need a post-execution DetectSql, generated here for all of them.
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
+		enabled, err := IsForeignKeyChecksEnabled(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if enabled {
+			sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(), tblInfo.objRef[0].SchemaName,
+				tblInfo.tableDefs[0].Name, tblInfo.tableDefs[0].Cols, tblInfo.tableDefs[0].Fkeys)
+			if err != nil {
+				return nil, err
+			}
+			query.DetectSqls = sqls
+		}
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -108,6 +149,18 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 
 	rootId, err := builder.bindReplace(stmt, bindCtx)
 	if err != nil {
+		// REPLACE is the one DML entry point with no legacy-planner fallback:
+		// map the resolver's external-table fallback sentinel (raised for
+		// writable external tables) to the user-facing error every other DML
+		// kind produces, instead of leaking the internal signal to the client.
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
+			switch err.Error() {
+			case icebergRowLevelDMLUnsupportedMsg:
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "Iceberg row-level DML is not implemented")
+			case externalTableUnsupportedDMLMsg:
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
+			}
+		}
 		return nil, err
 	}
 	ctx.SetViews(bindCtx.views)
@@ -119,12 +172,40 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		return nil, err
 	}
 
+	// Append synchronous IVF/fulltext index maintenance (delete the conflicting
+	// rows' old entries + insert the new ones) from the materialized image; no-op
+	// without such indexes. Fixes issue #25000.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
 	// Generate DetectSqls for self-referencing FK constraint checks.
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
 	if err != nil {
 		return nil, err
 	}
-	if len(tblInfo.tableDefs) == 1 {
+	// FK checks/actions are all disabled when foreign_key_checks is off, the
+	// same way MySQL skips foreign-key enforcement. Gate every FK SQL below
+	// (self-referencing checks, the RESTRICT pre-check, and the non-self
+	// parent-side actions) under one guard so the behavior is consistent.
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 &&
+		(len(tblInfo.tableDefs[0].Fkeys) > 0 || len(tblInfo.tableDefs[0].RefChildTbls) > 0) {
+		// The presence or absence of DetectSqls depends on the session's
+		// foreign_key_checks value. Keep the plan FK-sensitive even when the
+		// variable is currently off, otherwise a cached plan built without the
+		// checks could survive after they are enabled.
+		query.HasForeignKeyAction = true
+	}
+	if fkChecksEnabled && len(tblInfo.tableDefs) == 1 {
+		if len(tblInfo.tableDefs[0].RefChildTbls) > 0 {
+			// Parent-side actions are part of the modern REPLACE plan. Keep a
+			// marker solely for the optimistic-transaction fail-closed guard.
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_PLAN:")
+		}
 		sqls, err := genSqlsForCheckFKSelfRefer(
 			ctx.GetContext(),
 			tblInfo.objRef[0].SchemaName,
@@ -135,7 +216,7 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		if err != nil {
 			return nil, err
 		}
-		query.DetectSqls = sqls
+		query.DetectSqls = append(query.DetectSqls, sqls...)
 
 		// Generate pre-check SQLs for parent→child safety (RESTRICT).
 		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
@@ -189,6 +270,13 @@ func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStm
 	if err != nil {
 		return nil, err
 	}
+
+	// Append synchronous IVF/fulltext index maintenance (modern path, no legacy
+	// fallback) from the materialized new-row image; no-op without such indexes.
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -211,6 +299,9 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	rootId, err := builder.bindDelete(ctx, stmt, bindCtx)
 	if err != nil {
 		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
+				return buildIcebergDeletePlan(stmt, ctx, isPrepareStmt)
+			}
 			return buildDelete(stmt, ctx, isPrepareStmt)
 		}
 		return nil, err
@@ -235,6 +326,9 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if err := validateMultiTableUpdateClauses(ctx, stmt); err != nil {
+		return nil, err
+	}
 
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
@@ -244,10 +338,19 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 
 	rootId, err := builder.bindUpdate(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		route, reason, routedErr := classifyUpdatePlannerError(err)
+		switch route {
+		case updatePlannerLegacy:
+			recordUpdatePlannerRoute(route, reason, "selected")
 			return buildTableUpdate(stmt, ctx, isPrepareStmt)
+		case updatePlannerSpecialized:
+			recordUpdatePlannerRoute(route, reason, "selected")
+			return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
+		case updatePlannerRejected, updatePlannerUnknown:
+			recordUpdatePlannerRoute(route, reason, "rejected")
+			return nil, routedErr
 		}
-		return nil, err
+		return nil, routedErr
 	}
 	ctx.SetViews(bindCtx.views)
 
@@ -257,6 +360,7 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err != nil {
 		return nil, err
 	}
+	recordUpdatePlannerRoute(updatePlannerModern, updateRouteReasonNone, "selected")
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -315,6 +419,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
 	case *tree.ParenSelect:
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
+	case *tree.ExplainStmt:
+		return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.ExplainPhyPlan:
@@ -327,6 +433,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Delete:
 		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false)
+	case *tree.Merge:
+		return bindAndOptimizeMergeQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.BeginTransaction:
 		return buildBeginTransaction(stmt, ctx)
 	case *tree.CommitTransaction:
@@ -338,7 +446,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.DropDatabase:
 		return buildDropDatabase(stmt, ctx)
 	case *tree.CreateTable:
-		return buildCreateTable(ctx, stmt, nil)
+		return buildCreateTable(ctx, stmt, nil, isPrepareStmt)
 	case *tree.CreatePitr:
 		return buildCreatePitr(stmt, ctx)
 	case *tree.CreateCDC:
@@ -416,7 +524,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.ShowRolesStmt:
 		return buildShowRoles(stmt, ctx)
 	case *tree.SetVar:
-		return buildSetVariables(stmt, ctx)
+		return buildSetVariables(stmt, ctx, isPrepareStmt)
 	case *tree.Execute:
 		return buildExecute(stmt, ctx)
 	case *tree.Deallocate:
@@ -425,6 +533,11 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return bindAndOptimizeLoadQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
+	case *tree.CallStmt:
+		if isIcebergBuiltinCall(stmt) {
+			return buildIcebergBuiltinCall(stmt, ctx)
+		}
+		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	case *tree.Do, *tree.Declare:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), tree.String(stmt, dialect.MYSQL))
 	case *tree.ValuesStatement:
@@ -504,6 +617,8 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				{Typ: typ, Name: "Variable_name"},
 				{Typ: typ, Name: "Value"},
 			}
+		case plan.DataDefinition_CREATE_TABLE:
+			return nil
 		default:
 			// show statement(except show variables) will return a query
 			if logicPlan.Ddl.Query != nil {

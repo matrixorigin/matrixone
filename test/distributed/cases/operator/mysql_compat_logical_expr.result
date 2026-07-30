@@ -1,0 +1,50 @@
+drop database if exists mysql_compat_logical_expr;
+create database mysql_compat_logical_expr;
+use mysql_compat_logical_expr;
+select '1' and 2 as str_true_and_num_true,
+'0' and 2 as str_zero_and_true,
+null and 1 as null_and_true,
+null and 0 as null_and_false;
+str_true_and_num_true    str_zero_and_true    null_and_true    null_and_false
+1    0    null    0
+select '1' or 0 as str_true_or_false,
+'0' or 0 as str_zero_or_false,
+null or 1 as null_or_true,
+null or 0 as null_or_false;
+str_true_or_false    str_zero_or_false    null_or_true    null_or_false
+1    0    1    null
+select '1' xor 0 as str_true_xor_false,
+'1' xor 1 as str_true_xor_true,
+'0' xor 0 as str_zero_xor_false,
+null xor 1 as null_xor_true;
+str_true_xor_false    str_true_xor_true    str_zero_xor_false    null_xor_true
+1    0    0    null
+select not '1' as not_str_true,
+not '0' as not_str_zero,
+not null as not_null;
+not_str_true    not_str_zero    not_null
+0    1    null
+drop table if exists t_logical_mixed;
+create table t_logical_mixed (
+id int primary key,
+s varchar(16),
+n int
+);
+insert into t_logical_mixed values
+(1, '1', 1),
+(2, '0', 0),
+(3, null, 0),
+(4, '2', null);
+select id, s, n,
+s and n as s_and_n,
+s or n as s_or_n,
+s xor n as s_xor_n,
+not s as not_s
+from t_logical_mixed
+order by id;
+id    s    n    s_and_n    s_or_n    s_xor_n    not_s
+1    1    1    1    1    0    0
+2    0    0    0    0    0    1
+3    null    0    0    null    null    null
+4    2    null    null    1    null    0
+drop database mysql_compat_logical_expr;

@@ -28,7 +28,9 @@ var (
 	defaultKeepRemoteLockDuration = time.Second
 	defaultKeepBindTimeout        = time.Second * 10
 	defaultRemoteLockTimeout      = time.Minute * 10
+	defaultRemoteLockOwnerTimeout = time.Minute * 2
 	defaultRemoteTxnTimeout       = time.Second * 10
+	defaultMaxLockWaitDuration    = time.Hour
 )
 
 // Config lock service config
@@ -60,6 +62,15 @@ type Config struct {
 	// RemoteLockTimeout how long does it take to receive a heartbeat that maintains the
 	// remote lock before releasing the lock
 	RemoteLockTimeout toml.Duration `toml:"remote-lock-timeout"`
+	// RemoteLockOwnerWaitTimeout is the owner-side wait cap for remote Lock RPC
+	// handling. A nil value uses the default. A non-nil zero duration disables it.
+	RemoteLockOwnerWaitTimeout *toml.Duration `toml:"remote-lock-owner-wait-timeout"`
+	// MaxLockWaitDuration is the lockservice safety ceiling for a waiter. It
+	// applies when the caller omits LockWaitTimeout and caps larger caller
+	// values. This keeps every lockservice wait bounded even if an internal
+	// execution path forgets to propagate a session or task deadline. Callers
+	// that retry across Lock calls still need to own and propagate a deadline.
+	MaxLockWaitDuration toml.Duration `toml:"max-lock-wait-duration"`
 	// MaxLockRowCount each time a lock is added, some LockRow is stored in the lockservice, if
 	// too many LockRows are put in each time, it will cause too much memory overhead, this value
 	// limits the maximum count of LocRow put into the LockService each time, beyond this value it
@@ -102,6 +113,15 @@ func (c *Config) Validate() {
 	}
 	if c.RemoteLockTimeout.Duration == 0 {
 		c.RemoteLockTimeout.Duration = defaultRemoteLockTimeout
+	}
+	if c.RemoteLockOwnerWaitTimeout == nil {
+		c.RemoteLockOwnerWaitTimeout = &toml.Duration{Duration: defaultRemoteLockOwnerTimeout}
+	}
+	if c.MaxLockWaitDuration.Duration < 0 {
+		panic("max-lock-wait-duration must not be negative")
+	}
+	if c.MaxLockWaitDuration.Duration == 0 {
+		c.MaxLockWaitDuration.Duration = defaultMaxLockWaitDuration
 	}
 	if c.KeepBindTimeout.Duration == 0 {
 		c.KeepBindTimeout.Duration = defaultKeepBindTimeout

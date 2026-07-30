@@ -151,6 +151,10 @@ message ObjectRef {
   string subscription_name = 9;
   PubInfo pub_info = 10;
   bool not_lock_meta = 11;
+  // snapshot preserves the catalog identity used to resolve this dependency.
+  // Prepared statements must validate historical dependencies in the same
+  // snapshot instead of resolving the current object.
+  Snapshot snapshot = 12;
 }
 
 message PubInfo {
@@ -173,6 +177,11 @@ message IndexScanInfo {
   repeated string parts = 4;
   bool is_unique = 5;
   string index_table_name = 6;
+}
+
+enum AggregateConfigType {
+  AGG_CONFIG_NONE = 0;
+  AGG_CONFIG_GROUP_CONCAT_ORDER = 1;
 }
 
 message Function {
@@ -206,6 +215,8 @@ message Function {
 
   ObjectRef func = 1;
   repeated Expr args = 2;
+  bytes agg_config = 3;
+  AggregateConfigType agg_config_type = 4;
 }
 
 message Expr {
@@ -346,6 +357,8 @@ message IndexDef {
   string index_algo = 10;
   string index_algo_table_type = 11;
   string index_algo_params = 12;
+  // Logical INCLUDE columns of the index, letter case: lower.
+  repeated string included_columns = 13;
 }
 
 message ForeignKeyDef {
@@ -453,6 +466,8 @@ message TableDef {
   uint64 FeatureFlag = 35;
   uint64 logical_id = 36;
   string original_name = 37;
+  // Persistent cache epoch for AUTO_INCREMENT allocation.
+  uint32 auto_incr_epoch = 38;
 }
 
 message TableFunction {
@@ -580,19 +595,8 @@ message FrameBound {
   Expr val = 3;
 }
 
-message OnDuplicateKeyCtx {
-  // letter case: origin
-  repeated string attrs = 1;
-  int32 insert_col_count = 2;
-  repeated Expr unique_col_check_expr = 3;
-  repeated string unique_cols = 4;
-  repeated int32 on_duplicate_idx = 5;
-  map<string, Expr> on_duplicate_expr = 6;
-  bool is_ignore = 7;
-  string table_name = 8;
-  uint64 table_id = 9;
-  uint32 table_version = 10;
-}
+// OnDuplicateKeyCtx removed: legacy ON DUPLICATE KEY operator path eliminated.
+// ON DUPLICATE KEY UPDATE is now planned on the DEDUP JOIN + MULTI_UPDATE path.
 
 message OldColCapture {
   // build_placeholder: position on the DEDUP JOIN build (right) side that
@@ -614,6 +618,9 @@ message DedupJoinCtx {
   // and emits them in finalize() into the build-side placeholder slots,
   // eliminating the need for a preceding LEFT JOIN to fetch old row data.
   repeated OldColCapture old_col_capture_list = 4 [(gogoproto.nullable) = false];
+  // dedup_build_keep_last is set only by REPLACE INTO. It allows duplicate
+  // keys on the DEDUP JOIN build side and keeps the last source row.
+  bool dedup_build_keep_last = 5;
 }
 
 message UpdateCtx {
@@ -623,6 +630,9 @@ message UpdateCtx {
   repeated ColRef insert_cols = 7 [(gogoproto.nullable) = false];
   repeated ColRef delete_cols = 8 [(gogoproto.nullable) = false];
   repeated ColRef partition_cols = 9 [(gogoproto.nullable) = false];
+  bool skip_insert_on_null_pk = 10;
+  int32 insert_pk_col_idx = 11;
+  bool count_delete_affect_rows = 12;
 }
 
 message InsertCtx {
@@ -721,6 +731,8 @@ message IndexReaderParam {
   Expr limit = 2;
   string orig_func_name = 3;
   DistRange dist_range = 4;
+  int32 partition_cn_cnt = 5;
+  int32 partition_cn_idx = 6;
 }
 
 message Node {
@@ -760,7 +772,8 @@ message Node {
     // REPLACE = 32; // removed: legacy REPLACE path eliminated
     reserved 32;
     LOCK_OP = 33;
-    ON_DUPLICATE_KEY = 34;
+    // ON_DUPLICATE_KEY = 34; // removed: legacy ON DUPLICATE KEY operator path eliminated
+    reserved 34;
     PRE_INSERT = 35;
 
     FUZZY_FILTER = 37;
@@ -890,7 +903,8 @@ message Node {
   // build unique key batch before insert into hidden table which keep the
   // unique key
   PreInsertUkCtx pre_insert_uk_ctx = 35;
-  OnDuplicateKeyCtx on_duplicate_key = 36;
+  // OnDuplicateKeyCtx on_duplicate_key = 36; // removed: legacy ON DUPLICATE KEY operator path eliminated
+  reserved 36;
 
   bool IsEnd = 37;
   repeated LockTarget lock_targets = 38;
@@ -942,6 +956,17 @@ message Node {
   int64 spill_mem = 70;
   repeated string origin_views = 71;
   string direct_view = 72;
+
+  // TIME_WINDOW only: the GROUP BY columns other than the window's own
+  // timestamp key. The operator restarts its window state whenever these
+  // change, so each group gets its own windows instead of one global stream.
+  repeated Expr time_window_partition_by = 73;
+
+  // FILL only: positions of the partition keys inside this node's input batch
+  // (the child TIME_WINDOW's projection). fill(prev/next/linear) must not
+  // carry values across a partition boundary, so the operator compares these
+  // columns to find where one group ends and the next begins.
+  repeated int32 time_window_partition_col_pos = 74;
 }
 
 message SnapshotExtraInfo {
@@ -970,6 +995,7 @@ enum ExternType {
   LOAD = 0;
   EXTERNAL_TB = 1;
   RESULT_SCAN = 2;
+  ICEBERG_TB = 3;
 }
 
 message ExternScan {
@@ -983,6 +1009,20 @@ message ExternScan {
   string json_type = 8;
   bytes escaped_by = 9;
   map<string, int32> TbColToDataCol = 10;
+  IcebergScan iceberg_scan = 11;
+}
+
+message IcebergScan {
+  uint64 mapping_id = 1;
+  uint64 catalog_id = 2;
+  string namespace = 3;
+  string table = 4;
+  string ref = 5;
+  int64 snapshot_id = 6;
+  int64 timestamp_as_of = 7;
+  string read_mode = 8;
+  repeated int32 projected_field_ids = 9;
+  string filter_digest = 10;
 }
 
 message ExternAttr {
@@ -1034,7 +1074,7 @@ message RuntimeFilterSpec {
   int32 upper_limit = 3;
   Expr expr = 4;
   bool not_on_pk = 5;
-  bool use_bloom_filter = 6;
+  bool use_membership_filter = 6;
 }
 
 message IdList {
@@ -1121,6 +1161,13 @@ message Query {
 
   // run time config that can change query behaviors
   int64 maxDop = 10;
+
+  // True when the planner generated recursive FK side-effect DML for this query.
+  bool has_foreign_key_action = 11;
+
+  // Catalog objects that a rewrite depends on even when the final plan no
+  // longer contains the scans that originally carried those objects.
+  repeated ObjectRef catalog_dependencies = 12;
 }
 
 message TransationControl {

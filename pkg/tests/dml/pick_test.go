@@ -32,7 +32,7 @@ import (
 )
 
 func TestDataBranchPick(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*360)
 			defer cancel()
@@ -902,7 +902,7 @@ func runPickRejectExplicitTransaction(t *testing.T, parentCtx context.Context, d
 
 	execSQLDB(t, ctx, db, "begin")
 	errMsg := execExpectError(t, ctx, db, "data branch pick src into base keys(2)")
-	require.Contains(t, strings.ToLower(errMsg), "explicit transactions")
+	require.Contains(t, strings.ToLower(errMsg), "data branch merge/pick is not supported in transactions")
 	execSQLDB(t, ctx, db, "rollback")
 
 	require.Equal(t, []int{1}, queryIntColumn(t, ctx, db, "select a from base order by a"))

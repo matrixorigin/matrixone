@@ -109,7 +109,8 @@ drop table if exists big;
 -- @label:bvt
 SELECT 'case+union+test'
 UNION
-SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END;
+SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END
+ORDER BY 1;
 
 -- @case
 -- @desc:test for case_when expression in where filter
@@ -168,3 +169,250 @@ create table t1(a varchar(100));
 insert into t1 values ("a");
 select a, case when a="a" then 1 when upper(a)="b" then 2 end from t1;
 drop table if exists t1;
+
+-- @case
+-- @desc:test for case_when expression with mixed decimal scales
+-- @label:bvt
+SELECT
+  7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul,
+  CASE WHEN 'USD' = 'RMB'
+       THEN CAST(-58140.00 AS DECIMAL(23,2))
+       ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+  END AS bug_case;
+
+-- @case
+-- @desc:test for case_when expression with then branch decimal cast
+-- @label:bvt
+SELECT
+  CASE WHEN 'USD' = 'USD'
+       THEN CAST(-58140.00 AS DECIMAL(23,2))
+       ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+  END AS bug_case_then;
+
+-- @case
+-- @desc:test for iff expression with mixed decimal scales
+-- @label:bvt
+SELECT
+  IFF('USD' = 'USD',
+      CAST(-58140.00 AS DECIMAL(23,2)),
+      7.01970 * CAST(-58140.00 AS DECIMAL(23,2))) AS bug_iff;
+
+-- @case
+-- @desc:test for case_when expression with decimal128 branches promoting to decimal256 result type
+-- @label:bvt
+SELECT
+  CASE WHEN 1 = 1
+       THEN CAST(1 AS DECIMAL(38,0))
+       ELSE CAST(0 AS DECIMAL(38,20))
+  END AS case_decimal256_then;
+SELECT
+  CASE WHEN 1 = 2
+       THEN CAST(1 AS DECIMAL(38,0))
+       ELSE CAST(0 AS DECIMAL(38,20))
+  END AS case_decimal256_else;
+
+-- @case
+-- @desc:test for iff expression with decimal128 branches promoting to decimal256 result type
+-- @label:bvt
+SELECT
+  IFF(1 = 1,
+      CAST(1 AS DECIMAL(38,0)),
+      CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_true;
+SELECT
+  IFF(1 = 2,
+      CAST(1 AS DECIMAL(38,0)),
+      CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_false;
+
+-- @case
+-- @desc:test for coalesce over decimal branches with different scales aligns scale/width
+-- @label:bvt
+SELECT 7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul;
+SELECT COALESCE(
+  CAST(NULL AS DECIMAL(23,2)),
+  7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+) AS coalesce_decimal_scale;
+SELECT COALESCE(
+  CAST(1.23 AS DECIMAL(23,2)),
+  7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
+) AS coalesce_first_non_null;
+
+-- @case
+-- @desc:test for comparing a decimal256 case result with a decimal128 value
+-- @label:bvt
+SELECT (CASE WHEN 1 = 1 THEN CAST(1 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     = CAST(1 AS DECIMAL(38,20)) AS decimal256_eq_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     > CAST(1 AS DECIMAL(38,20)) AS decimal256_gt_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     < CAST(1 AS DECIMAL(38,20)) AS decimal256_lt_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     != CAST(1 AS DECIMAL(38,20)) AS decimal256_ne_decimal128;
+SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
+             ELSE CAST(0 AS DECIMAL(38,20)) END)
+     BETWEEN CAST(1 AS DECIMAL(38,20)) AND CAST(10 AS DECIMAL(38,20)) AS decimal256_between;
+
+-- @case
+-- @desc:test for coalesce promoting decimal branches to decimal256 when integral+scale overflows decimal128
+-- @label:bvt
+SELECT COALESCE(CAST(1 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_decimal256;
+SELECT COALESCE(CAST(12345678901234567890123456789012345678 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_bignum;
+
+-- @case
+-- @desc:test for column-based coalesce over decimal branches with null and non-null rows
+-- @label:bvt
+drop table if exists t_coalesce_col;
+create table t_coalesce_col (id int, a decimal(23,2), b decimal(38,7));
+insert into t_coalesce_col values (1, null, 7.01970 * cast(-58140.00 as decimal(23,2))), (2, 1.23, 7.01970 * cast(-58140.00 as decimal(23,2)));
+select id, coalesce(a, b) as col_coalesce from t_coalesce_col order by id;
+drop table t_coalesce_col;
+
+-- @case
+-- @desc:test for coalesce over mixed integer and decimal branches
+-- @label:bvt
+drop table if exists t_coalesce_mix;
+create table t_coalesce_mix (id int, i int, d decimal(20,5));
+insert into t_coalesce_mix values (1, null, 1.50000), (2, 10, 2.50000);
+select id, coalesce(i, d) as mix_coalesce from t_coalesce_mix order by id;
+drop table t_coalesce_mix;
+select coalesce(null, 1, cast(0.5 as decimal(10,5))) as mix_const_coalesce;
+
+-- @case
+-- @desc:test for coalesce over three or more decimal branches
+-- @label:bvt
+select coalesce(null, cast(1.23 as decimal(23,2)), cast(4.56780 as decimal(38,7))) as three_branch;
+select coalesce(cast(null as decimal(23,2)), cast(null as decimal(20,5)), 7.01970 * cast(-58140.00 as decimal(23,2))) as three_branch_all_decimal;
+
+-- @case
+-- @desc:test for visible inferred decimal type of a coalesce result via view metadata
+-- @label:bvt
+drop view if exists v_coalesce_meta;
+create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
+desc v_coalesce_meta;
+drop view v_coalesce_meta;
+
+-- @case
+-- @desc:test control-flow view metadata across mixed type and nullability rules
+-- @label:bvt
+drop view if exists v_flow_metadata_safe;
+create view v_flow_metadata_safe as
+select if(1, '2', 3) as if_str_num,
+       if(1, cast(1 as unsigned), cast(-1 as signed)) as if_unsigned_signed,
+       case when 1 then cast('2024-01-01' as date) else cast('2024-01-02 03:04:05' as datetime) end as case_date_dt,
+       case when 1 then _binary 'a' else 'bc' end as case_binary_char,
+       ifnull(null, 9.5) as ifnull_decimal,
+       nullif('01', 1) as nullif_mixed,
+       coalesce(null, '8', 9) as coalesce_str_num,
+       greatest(cast('2024-01-02' as date), cast('2023-12-31' as date)) as greatest_date;
+desc v_flow_metadata_safe;
+select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
+from information_schema.columns
+where table_schema = database() and table_name = 'v_flow_metadata_safe'
+order by ordinal_position;
+select * from v_flow_metadata_safe;
+drop view v_flow_metadata_safe;
+
+-- @case
+-- @desc:test DATE to DATETIME CASE promotion in the ELSE branch
+-- @label:bvt
+drop view if exists v_case_temporal_else;
+create view v_case_temporal_else as
+select case when 0 then cast('2024-01-02 03:04:05' as datetime) else cast('2024-01-01' as date) end as case_date_dt_else;
+desc v_case_temporal_else;
+select * from v_case_temporal_else;
+drop view v_case_temporal_else;
+
+-- @case
+-- @desc:test IF binary and character branch metadata
+-- @label:bvt
+drop view if exists v_if_binary_char;
+create view v_if_binary_char as
+select if(1, _binary 'a', 'bc') as if_binary_char;
+desc v_if_binary_char;
+select hex(if_binary_char) as if_binary_char_hex from v_if_binary_char;
+drop view v_if_binary_char;
+
+-- @case
+-- @desc:test control-flow metadata and values with nullable and not-null columns
+-- @label:bvt
+drop table if exists t_flow_metadata;
+create table t_flow_metadata (
+    id int primary key,
+    n_nullable int,
+    n_notnull int not null,
+    d_nullable date,
+    d_notnull date not null
+);
+insert into t_flow_metadata values
+    (1, null, 7, null, '2024-01-02'),
+    (2, 5, 8, '2024-01-03', '2024-01-04');
+
+drop view if exists v_flow_metadata_columns;
+create view v_flow_metadata_columns as
+select ifnull(null, 9.5) as ifnull_null_first,
+       ifnull(n_nullable, 9.5) as ifnull_nullable_col,
+       ifnull(n_notnull, 9.5) as ifnull_notnull_col,
+       coalesce(null, '8', 9) as coalesce_null_first,
+       coalesce(n_nullable, 9) as coalesce_nullable_col,
+       coalesce(n_notnull, 9) as coalesce_notnull_col,
+       greatest(cast('2024-01-02' as date), cast('2023-12-31' as date)) as greatest_const,
+       greatest(d_nullable, cast('2023-12-31' as date)) as greatest_nullable_col,
+       greatest(d_notnull, cast('2023-12-31' as date)) as greatest_notnull_col
+from t_flow_metadata;
+desc v_flow_metadata_columns;
+select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
+from information_schema.columns
+where table_schema = database() and table_name = 'v_flow_metadata_columns'
+order by ordinal_position;
+select * from v_flow_metadata_columns order by ifnull_notnull_col;
+drop view v_flow_metadata_columns;
+
+select if(1, cast(18446744073709551615 as unsigned), cast(-1 as signed)) as if_uint64_signed_max,
+       if(0, cast(18446744073709551615 as unsigned), cast(-1 as signed)) as if_uint64_signed_negative,
+       case when 1 then cast(18446744073709551615 as unsigned) else cast(-1 as signed) end as case_uint64_signed_max;
+
+-- NULL value arms are neutral when CASE finds a safe common type for signed
+-- and unsigned integers.
+select case
+           when false then null
+           when true then cast(18446744073709551615 as unsigned)
+           else cast(-1 as signed)
+       end as case_leading_null_uint64_max,
+       case
+           when false then cast(18446744073709551615 as unsigned)
+           when false then null
+           else cast(-1 as signed)
+       end as case_middle_null_signed_negative,
+       case
+           when true then cast(18446744073709551615 as unsigned)
+           when false then cast(-1 as signed)
+           else null
+       end as case_trailing_null_uint64_max;
+select hex(case when 1 then _binary 'a' else 'bc' end) as case_binary_hex,
+       hex(case when 0 then _binary 'a' else 'bc' end) as case_char_hex;
+
+drop view if exists v_case_binary_utf8;
+create view v_case_binary_utf8 as
+select case when 1 then _binary 'a' else '中文' end as case_binary_utf8;
+desc v_case_binary_utf8;
+select hex(case when 0 then _binary 'a' else '中文' end) as case_utf8_hex;
+drop view v_case_binary_utf8;
+
+-- @case
+-- @desc:test CASE binary metadata with NULL value branches
+-- @label:bvt
+drop view if exists v_case_binary_null;
+create view v_case_binary_null as
+select case when 1 then null else cast('a' as binary(4)) end as fixed_leading_null,
+       case when 1 then cast('a' as binary(4)) else null end as fixed_trailing_null,
+       case when 0 then cast('a' as binary(4)) when 1 then null else cast('b' as binary(4)) end as fixed_middle_null,
+       case when 1 then null else cast('a' as varbinary(4)) end as var_leading_null,
+       case when 1 then cast('a' as varbinary(4)) else null end as var_trailing_null,
+       case when 0 then cast('a' as varbinary(4)) when 1 then null else cast('b' as varbinary(4)) end as var_middle_null;
+desc v_case_binary_null;
+drop view v_case_binary_null;
+
+drop table t_flow_metadata;

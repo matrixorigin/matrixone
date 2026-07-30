@@ -36,6 +36,312 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+type rootSQLCompilerContext struct {
+	*MockCompilerContext
+	rootSQL string
+	calls   int
+}
+
+func TestBuildDropTemporaryTableOnlyTargetsTemporaryTable(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "drop temporary table nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	_, err = BuildPlan(ctx, stmt, false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+
+	ctx.tables["nation"].IsTemporary = true
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.True(t, p.GetDdl().GetDropTable().GetTableDef().GetIsTemporary())
+	require.Empty(t, p.GetDdl().GetDropTable().GetUpdateFkSqls())
+}
+
+func TestBuildDropTemporaryTableIfExistsDoesNotTargetPermanentTable(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "drop temporary table if exists nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	require.Nil(t, p.GetDdl().GetDropTable().GetTableDef())
+}
+
+func (c *rootSQLCompilerContext) GetRootSql() string {
+	c.calls++
+	return c.rootSQL
+}
+
+func tableDefCreateSQL(tableDef *plan.TableDef) string {
+	for _, def := range tableDef.GetDefs() {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.GetKey() == catalog.SystemRelAttr_CreateSQL {
+				return property.GetValue()
+			}
+		}
+	}
+	return ""
+}
+
+func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
+	const rootSQL = "create view v as select 1"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, ctx.calls)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Equal(t, rootSQL, viewData.Stmt)
+
+	var createSQL string
+	for _, def := range tableDef.GetDefs() {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.GetKey() == catalog.SystemRelAttr_CreateSQL {
+				createSQL = property.GetValue()
+			}
+		}
+	}
+	require.Equal(t, rootSQL, createSQL)
+}
+
+func TestBuildCreateViewExplicitColumnList(t *testing.T) {
+	t.Run("applies explicit names", func(t *testing.T) {
+		const rootSQL = "create view v (`alias#one`, alias_two) as select 1, 2"
+		ctx := &rootSQLCompilerContext{
+			MockCompilerContext: NewMockCompilerContext(false),
+			rootSQL:             rootSQL,
+		}
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		p, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		cols := p.GetDdl().GetCreateView().GetTableDef().GetCols()
+		require.Len(t, cols, 2)
+		require.Equal(t, "alias#one", cols[0].GetName())
+		require.Equal(t, "alias#one", cols[0].GetOriginName())
+		require.Equal(t, "alias_two", cols[1].GetName())
+		require.Equal(t, "alias_two", cols[1].GetOriginName())
+	})
+
+	t.Run("rejects cardinality mismatch", func(t *testing.T) {
+		const rootSQL = "create view v (only_one) as select 1, 2"
+		ctx := &rootSQLCompilerContext{
+			MockCompilerContext: NewMockCompilerContext(false),
+			rootSQL:             rootSQL,
+		}
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		_, err = BuildPlan(ctx, stmt, false)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrViewWrongList))
+		require.Equal(t, uint16(moerr.ER_VIEW_WRONG_LIST), err.(*moerr.Error).MySQLCode())
+	})
+}
+
+func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
+	const rootSQL = "create temporary table temp_marked (id int, unique key uk_id (id))"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	createTable := p.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.NotEmpty(t, createTable.IndexTables)
+
+	requireTemporaryCatalogRelkind(t, createTable.TableDef)
+	for _, tableDef := range createTable.IndexTables {
+		requireIndexCatalogRelkind(t, tableDef)
+	}
+
+	require.Equal(t, rootSQL, tableDefCreateSQL(createTable.TableDef))
+}
+
+func TestBuildCreateTablePreservesSingleStatementSQL(t *testing.T) {
+	const rootSQL = "/* before */ CREATE TABLE /* table */ t_check (id INT, CONSTRAINT chk_id CHECK (id > 0));"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, rootSQL, tableDefCreateSQL(p.GetDdl().GetCreateTable().GetTableDef()))
+}
+
+func TestBuildPartitionedTablePersistsCanonicalSingleStatementSQL(t *testing.T) {
+	const rootSQL = "/* before */ CREATE TABLE partitioned_t (category VARCHAR(20)) PARTITION BY LIST COLUMNS (category) (PARTITION p0 VALUES IN ('A'));"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	createTable := p.GetDdl().GetCreateTable()
+	require.Equal(t, createTable.GetRawSQL(), tableDefCreateSQL(createTable.GetTableDef()))
+	require.NotEqual(t, rootSQL, createTable.GetRawSQL())
+}
+
+func TestBuildCreateTablePersistsStatementCanonicalSQL(t *testing.T) {
+	tests := []struct {
+		name    string
+		rootSQL string
+		wantTmp []bool
+	}{
+		{
+			name:    "temporary then permanent",
+			rootSQL: "CREATE TEMPORARY TABLE temp_t(id int); CREATE TABLE permanent_t(id int)",
+			wantTmp: []bool{true, false},
+		},
+		{
+			name:    "permanent then temporary",
+			rootSQL: "CREATE TABLE permanent_t(id int); CREATE TEMPORARY TABLE temp_t(id int)",
+			wantTmp: []bool{false, true},
+		},
+		{
+			name:    "comments between keywords",
+			rootSQL: "CREATE /* first */ TEMPORARY -- second\n TABLE temp_t(id int); CREATE TABLE permanent_t(id int)",
+			wantTmp: []bool{true, false},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			statements, err := parsers.Parse(context.Background(), dialect.MYSQL, test.rootSQL, 1)
+			require.NoError(t, err)
+			require.Len(t, statements, len(test.wantTmp))
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				rootSQL:             test.rootSQL,
+			}
+			for i, statement := range statements {
+				createStmt := statement.(*tree.CreateTable)
+				p, err := BuildPlan(ctx, createStmt, false)
+				require.NoError(t, err)
+				tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+				require.Equal(t, test.wantTmp[i], tableDef.GetTableType() == catalog.SystemTemporaryTable)
+				require.False(t, tableDef.GetIsTemporary())
+				require.Equal(t, canonicalCreateTableSQL(createStmt), tableDefCreateSQL(tableDef))
+			}
+		})
+	}
+}
+
+func TestBuildTemporaryTableIndexDDLKeepsIndexRelkind(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		indexTables func(*plan.Plan) []*plan.TableDef
+	}{
+		{
+			name: "create index",
+			sql:  "create unique index uk_name on tpch.nation (n_name)",
+			indexTables: func(p *plan.Plan) []*plan.TableDef {
+				return p.GetDdl().GetCreateIndex().GetIndex().GetIndexTables()
+			},
+		},
+		{
+			name: "alter table add index",
+			sql:  "alter table tpch.nation add unique index uk_name (n_name)",
+			indexTables: func(p *plan.Plan) []*plan.TableDef {
+				actions := p.GetDdl().GetAlterTable().GetActions()
+				require.Len(t, actions, 1)
+				return actions[0].GetAddIndex().GetIndexInfo().GetIndexTables()
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			catalog.MarkTableDefTemporary(ctx.tables["nation"])
+			// Resolve supplies this contextual bit for an existing temporary
+			// table; the durable-marker helper intentionally does not.
+			ctx.tables["nation"].IsTemporary = true
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			indexTables := test.indexTables(p)
+			require.NotEmpty(t, indexTables)
+			for _, tableDef := range indexTables {
+				requireIndexCatalogRelkind(t, tableDef)
+			}
+		})
+	}
+}
+
+func requireIndexCatalogRelkind(t *testing.T, tableDef *plan.TableDef) {
+	t.Helper()
+	require.NotEqual(t, catalog.SystemTemporaryTable, tableDef.TableType)
+	require.False(t, tableDef.IsTemporary)
+
+	kindCount := 0
+	for _, def := range tableDef.Defs {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.Key == catalog.SystemRelAttr_Kind {
+				kindCount++
+				require.Equal(t, catalog.SystemIndexRel, property.Value)
+			}
+		}
+	}
+	require.Equal(t, 1, kindCount)
+}
+
+func requireTemporaryCatalogRelkind(t *testing.T, tableDef *plan.TableDef) {
+	t.Helper()
+	require.Equal(t, catalog.SystemTemporaryTable, tableDef.TableType)
+	// IsTemporary is populated only when a session alias is resolved. CREATE
+	// persists the TableType/relkind marker without manufacturing session state.
+	require.False(t, tableDef.IsTemporary)
+
+	kindCount := 0
+	for _, def := range tableDef.Defs {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.Key == catalog.SystemRelAttr_Kind {
+				kindCount++
+				require.Equal(t, catalog.SystemTemporaryTable, property.Value)
+			}
+		}
+	}
+	require.Equal(t, 1, kindCount)
+}
+
 func TestBuildAlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -331,6 +637,10 @@ func TestBuildCreateTable(t *testing.T) {
 					UNIQUE KEY (col1, col3)
 				);`,
 
+		`CREATE TABLE set_auto_increment (
+			id SET('one', 'two') AUTO_INCREMENT
+		);`,
+
 		`CREATE TABLE t1 (
 			col1 INT NOT NULL,
 			col2 DATE NOT NULL,
@@ -414,6 +724,10 @@ func TestBuildCreateTableError(t *testing.T) {
 			col4 INT NOT NULL,
 			UNIQUE KEY uk1 ((col1 + col3))
 		);`,
+
+		`CREATE TABLE enum_auto_increment (
+			id ENUM('one', 'two') AUTO_INCREMENT
+		);`,
 	}
 	runTestShouldError(mock, t, sqlerrs)
 }
@@ -433,6 +747,55 @@ func TestBuildAlterTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCreateIndexOnExternalTableError(t *testing.T) {
+	mock := NewEmptyMockOptimizer()
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.objects["ext_idx"] = &plan.ObjectRef{
+		SchemaName: "tpch",
+		ObjName:    "ext_idx",
+	}
+	ctx.tables["ext_idx"] = &plan.TableDef{
+		Name:      "ext_idx",
+		TableType: catalog.SystemExternalRel,
+		Cols: []*plan.ColDef{
+			{Name: "col_int32", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "col_varchar", Typ: plan.Type{Id: int32(types.T_varchar), Width: 100}},
+			{Name: "part_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+	}
+
+	sqls := []string{
+		"CREATE INDEX idx_ext ON ext_idx(col_int32);",
+		"CREATE UNIQUE INDEX uidx_ext ON ext_idx(col_int32);",
+		"CREATE FULLTEXT INDEX fidx_ext ON ext_idx(col_varchar);",
+		"ALTER TABLE ext_idx ADD INDEX idx_ext2 (col_int32);",
+		"ALTER TABLE ext_idx ADD UNIQUE (col_varchar);",
+		"ALTER TABLE ext_idx ADD FULLTEXT INDEX fidx_ext2 (col_varchar);",
+	}
+	for _, sql := range sqls {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "cannot create index on external table", sql)
+	}
+}
+
+func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE EXTERNAL TABLE ext_inline_col_key (id INT KEY) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_col_unique (id INT UNIQUE) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_col_pk (id INT PRIMARY KEY) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_key (id INT, KEY (id)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_unique (id INT, UNIQUE KEY uk_id (id)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+		"CREATE EXTERNAL TABLE ext_inline_table_fulltext (doc VARCHAR(100), FULLTEXT ft_doc (doc)) INFILE {'filepath'='data.txt', 'format'='csv'};",
+	}
+	for _, sql := range sqls {
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		require.Contains(t, err.Error(), "cannot create index on external table", sql)
+	}
+}
+
 func TestBuildAlterTableError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// should pass
@@ -442,6 +805,93 @@ func TestBuildAlterTableError(t *testing.T) {
 		"ALTER TABLE emp ADD UNIQUE INDEX idx1 ((empno+20), (sal*30));",
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestBuildIndexAllowsEnumAndTextBlobPrefix(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE enum_idx_ok1 (id VARCHAR(191) PRIMARY KEY, role ENUM('a','b','c'), INDEX idx_role(role));",
+		"CREATE TABLE enum_idx_ok2 (id VARCHAR(191) PRIMARY KEY, role ENUM('a','b','c'), UNIQUE INDEX uq_role(role));",
+		"CREATE TABLE enum_idx_ok3 (id VARCHAR(191) PRIMARY KEY, name VARCHAR(191), role ENUM('a','b','c'), INDEX idx_name_role(name, role));",
+		"CREATE TABLE text_prefix_ok1 (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t(100)));",
+		"CREATE TABLE text_prefix_ok2 (id INT PRIMARY KEY, t TEXT, UNIQUE INDEX uq_t(t(100)));",
+		"CREATE TABLE blob_prefix_ok1 (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b(100)));",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestBuildIndexRejectsTextBlobPlainIndex(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqlerrs := []string{
+		"CREATE TABLE text_plain_err1 (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t));",
+		"CREATE TABLE text_plain_err2 (id INT PRIMARY KEY, t TEXT, UNIQUE INDEX uq_t(t));",
+		"CREATE TABLE text_comp_pk_err (id INT, t TEXT, PRIMARY KEY(id, t));",
+		"CREATE TABLE blob_plain_err1 (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b));",
+		"CREATE TABLE blob_comp_pk_err (b BLOB, id INT, PRIMARY KEY(b, id));",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
+func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name   string
+		sql    string
+		column string
+		length int
+	}{
+		{
+			name:   "text",
+			sql:    "CREATE TABLE text_prefix_secondary_ok (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t(100)));",
+			column: "t",
+			length: 100,
+		},
+		{
+			name:   "blob",
+			sql:    "CREATE TABLE blob_prefix_secondary_ok (id INT PRIMARY KEY, b BLOB, INDEX idx_b(b(100)));",
+			column: "b",
+			length: 100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tt.sql)
+			require.NoError(t, err)
+
+			createTable := logicPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			require.Len(t, createTable.GetTableDef().GetIndexes(), 1)
+
+			indexDef := createTable.GetTableDef().GetIndexes()[0]
+			prefixLengths := catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams)
+			require.Equal(t, tt.length, prefixLengths[tt.column])
+		})
+	}
+}
+
+func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE vec_idx_ok1 (id INT PRIMARY KEY, embedding VECF32(3), KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops');",
+		"CREATE TABLE vec_idx_ok2 (id INT PRIMARY KEY, embedding VECF64(3), KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops');",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	sqlerrs := []string{
+		"CREATE TABLE vec_idx_err1 (id INT PRIMARY KEY, embedding VECF32(3), KEY idx_emb (embedding));",
+		"CREATE TABLE vec_idx_err2 (id INT PRIMARY KEY, embedding VECF64(3), KEY idx_emb (embedding));",
+	}
+	runTestShouldError(mock, t, sqlerrs)
+}
+
+func TestBuildIndexAllowsRTreeGeometry(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"CREATE TABLE geo_spatial_ok (id INT PRIMARY KEY, g POINT NOT NULL, KEY idx_g USING RTREE (g));",
+		"CREATE TABLE geo_spatial_nullable_ok (id INT PRIMARY KEY, g POINT, KEY idx_g USING RTREE (g));",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
 }
 
 func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
@@ -457,7 +907,6 @@ func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
 		"CREATE TABLE geo_pk_err (g GEOMETRY PRIMARY KEY);",
 		"CREATE TABLE geo_uk_err (g GEOMETRY UNIQUE KEY);",
 		"CREATE TABLE geo_idx_err (g GEOMETRY, KEY(g));",
-		"CREATE TABLE geo_spatial_nullable_err (id INT PRIMARY KEY, g POINT, KEY idx_g USING RTREE (g));",
 		"ALTER TABLE emp ADD COLUMN g GEOMETRY UNIQUE KEY;",
 		"ALTER TABLE emp ADD COLUMN g GEOMETRY PRIMARY KEY;",
 	}
@@ -493,6 +942,229 @@ func TestCreateTableAsSelect(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
+	tests := []struct {
+		name       string
+		literal    string
+		castType   string
+		oid        types.T
+		precision  int32
+		columnName string
+	}{
+		{name: "time", literal: "07:08:09.123456", castType: "time(3)", oid: types.T_time, precision: 3, columnName: "time_lit"},
+		{name: "datetime", literal: "2025-05-06 07:08:09.123456", castType: "datetime(6)", oid: types.T_datetime, precision: 6, columnName: "datetime_lit"},
+		{name: "timestamp", literal: "2025-05-06 07:08:09.123456", castType: "timestamp(6)", oid: types.T_timestamp, precision: 6, columnName: "timestamp_lit"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			sql := "create table ctas_" + test.name + " as select cast('" + test.literal + "' as " + test.castType + ") as " + test.columnName
+			plan, err := buildSingleStmt(mock, t, sql)
+			require.NoError(t, err)
+
+			createTable := plan.GetDdl().GetCreateTable()
+			require.NotEmpty(t, createTable.TableDef.Cols)
+			column := createTable.TableDef.Cols[0]
+			require.Equal(t, test.columnName, column.Name)
+			require.Equal(t, int32(test.oid), column.Typ.Id)
+			require.Equal(t, test.precision, column.Typ.Width)
+			require.Equal(t, test.precision, column.Typ.Scale)
+			if test.oid == types.T_datetime {
+				require.True(t, column.Default.NullAbility)
+			}
+
+			createAsSelect := createTable.GetCreateAsSelectSql()
+			require.Contains(t, createAsSelect, " as "+test.castType+")")
+			require.NotContains(t, createAsSelect, test.castType[:len(test.castType)-1]+",")
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, createAsSelect, 1)
+			require.NoError(t, err)
+			stmt.Free()
+		})
+	}
+}
+
+func TestCreateTableAsSelectKeepsNonTemporalLiteralNotNull(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	plan, err := buildSingleStmt(mock, t, "create table ctas_literal as select 1 as n")
+	require.NoError(t, err)
+
+	column := plan.GetDdl().GetCreateTable().TableDef.Cols[0]
+	require.False(t, column.Default.NullAbility)
+}
+
+func TestCreateTableAsSelectTemporalInsertKeepsTargetScale(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctas, err := buildSingleStmt(mock, t, "create table ctas_datetime6 as select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt")
+	require.NoError(t, err)
+
+	createTable := ctas.GetDdl().GetCreateTable()
+	tableDef := createTable.GetTableDef()
+	tableDef.TblId = 99101
+	mock.ctxt.objects[tableDef.Name] = &ObjectRef{SchemaName: "tpch", ObjName: tableDef.Name, Obj: int64(tableDef.TblId)}
+	mock.ctxt.tables[tableDef.Name] = tableDef
+	mock.ctxt.id2name[tableDef.TblId] = tableDef.Name
+	mock.ctxt.pks[tableDef.Name] = nil
+
+	insertPlan, err := runOneStmt(mock, t, createTable.GetCreateAsSelectSql())
+	require.NoError(t, err)
+
+	var found bool
+	for _, node := range insertPlan.GetQuery().GetNodes() {
+		for _, expr := range node.GetProjectList() {
+			if types.T(expr.GetTyp().Id) == types.T_datetime {
+				found = true
+				require.Equal(t, int32(6), expr.GetTyp().Scale)
+			}
+		}
+	}
+	require.True(t, found)
+}
+
+func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	prepared, err := runOneStmt(mock, t, "prepare stmt_ctas from 'create table ctas_p as select ? as a, ? as b'")
+	require.NoError(t, err)
+	prepare := prepared.GetDcl().GetPrepare()
+	require.Len(t, prepare.GetParamTypes(), 2)
+	require.NotNil(t, prepare.GetPlan().GetDdl().GetQuery())
+	require.Empty(t, GetResultColumnsFromPlan(prepare.GetPlan()))
+
+	prepared, err = runOneStmt(mock, t, "prepare stmt_ctas_where from 'create table ctas_where as select N_NAME from NATION where N_REGIONKEY = ?'")
+	require.NoError(t, err)
+	prepare = prepared.GetDcl().GetPrepare()
+	require.Len(t, prepare.GetParamTypes(), 1)
+	require.NotEmpty(t, prepare.GetSchemas())
+
+	_, err = runOneStmt(mock, t, "create table ctas_unprepared as select ? as a")
+	require.ErrorContains(t, err, "only prepare statement can use ? expr")
+}
+
+func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "non-ASCII select alias",
+			sql:  "CREATE TABLE ctas_alias AS SELECT N_NAME AS `中文别名` FROM NATION",
+			want: "insert into `tpch`.`ctas_alias` select * from (select `nation`.`N_NAME` as `中文别名` from `nation`) as __mo_ctas_source",
+		},
+		{
+			name: "reserved table alias",
+			sql:  "CREATE TABLE ctas_alias AS SELECT `order`.N_NAME AS `select` FROM NATION AS `order`",
+			want: "insert into `tpch`.`ctas_alias` select * from (select `order`.`N_NAME` as `select` from `nation` as `order`) as __mo_ctas_source",
+		},
+		{
+			name: "embedded backtick in target name",
+			sql:  "CREATE TABLE `ctas``alias` AS SELECT N_NAME FROM NATION",
+			want: "insert into `tpch`.`ctas``alias` select * from (select `nation`.`N_NAME` from `nation`) as __mo_ctas_source",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			createTable := logicPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			require.Equal(t, test.want, createTable.GetCreateAsSelectSql())
+		})
+	}
+}
+
+func TestCreateTableAsSelectPreservesGroupConcatOrderBy(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(
+		mock,
+		t,
+		"create table ctas_group_concat as select N_REGIONKEY, group_concat(N_NAME order by N_NAME) as names from NATION group by N_REGIONKEY",
+	)
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.Contains(
+		t,
+		createTable.GetCreateAsSelectSql(),
+		"group_concat(`nation`.`N_NAME` order by `N_NAME` separator \",\")",
+	)
+}
+
+func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "interval expressions",
+			sql:  "select date_add(col2, interval(45, day)), date_sub(col2, interval(5, day)) from time01",
+			want: "select date_add(col2, interval 45 day), date_sub(col2, interval 5 day) from time01",
+		},
+		{
+			name: "interval text in identifier",
+			sql:  "select `interval(x,day)` from src as `interval(y,month)`",
+			want: "select `interval(x,day)` from src as `interval(y,month)`",
+		},
+		{
+			name: "doubled backtick in identifier",
+			sql:  "select `a``interval(x,day)` from src",
+			want: "select `a``interval(x,day)` from src",
+		},
+		{
+			name: "unclosed backtick",
+			sql:  "select `interval(x,day)",
+			want: "select `interval(x,day)",
+		},
+		{
+			name: "quoted interval operand",
+			sql:  "select date_add(col2, interval(`a,b)`, day)) from src",
+			want: "select date_add(col2, interval `a,b)` day) from src",
+		},
+		{
+			name: "single quoted string",
+			sql:  "select 'interval(1,day)' as c",
+			want: "select 'interval(1,day)' as c",
+		},
+		{
+			name: "double quoted string",
+			sql:  `select "interval(1,day)" as c`,
+			want: `select "interval(1,day)" as c`,
+		},
+		{
+			name: "doubled quote in string",
+			sql:  "select 'a''interval(1,day)' as c",
+			want: "select 'a''interval(1,day)' as c",
+		},
+		{
+			name: "backslash escaped quote in string",
+			sql:  `select 'a\'interval(1,day)' as c`,
+			want: `select 'a\'interval(1,day)' as c`,
+		},
+		{
+			name: "unclosed quoted string",
+			sql:  "select 'interval(1,day)",
+			want: "select 'interval(1,day)",
+		},
+		{
+			name: "identifier prefix",
+			sql:  "select myinterval(1, day), $interval(2, day), 中文interval(3, day)",
+			want: "select myinterval(1, day), $interval(2, day), 中文interval(3, day)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, restoreIntervalSyntaxForCTAS(test.sql))
+		})
+	}
 }
 
 func TestParseDuration(t *testing.T) {
@@ -834,4 +1506,49 @@ func TestConstructAddedPartitionDefsErrors(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "LIST PARTITIONING values must be unique across partitions")
 	})
+}
+
+func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
+	ctx := &sqlModeMockCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		sqlMode:             "ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+	}
+	const createSQL = `create table "partition_mode" ("category" varchar(20)) partition by list columns ("category") (partition "select" values in ('A\\B')) cluster by ("category")`
+	stmt, err := parsers.ParseOneWithSQLMode(context.Background(), dialect.MYSQL, createSQL, 1, ctx.sqlMode)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	createTablePlan := p.GetDdl().GetCreateTable()
+	tableDef := createTablePlan.GetTableDef()
+	require.NotNil(t, tableDef)
+	for _, def := range tableDef.Defs {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.Key == catalog.SystemRelAttr_CreateSQL {
+				tableDef.Createsql = property.Value
+			}
+		}
+	}
+	require.Contains(t, tableDef.Createsql, "`partition_mode`")
+	require.Contains(t, tableDef.Createsql, "`category`")
+	require.Contains(t, tableDef.Createsql, "partition `select`")
+	require.Contains(t, tableDef.Createsql, "cluster by (`category`)")
+	require.Contains(t, tableDef.Createsql, `'A\\\\B'`)
+	require.NotContains(t, tableDef.Createsql, `"`)
+	require.Equal(t, tableDef.Createsql, createTablePlan.RawSQL)
+
+	newValue := tree.NewNumVal("C\\D", "C\\D", false, tree.P_char)
+	clause := tree.NewAlterPartitionAddPartitionClause(
+		tree.AlterPartitionAddPartition,
+		[]*tree.Partition{{
+			Name:   tree.Identifier("p1"),
+			Values: tree.NewValuesIn(tree.Exprs{newValue}),
+		}},
+	)
+	defer clause.Free()
+
+	defs, err := constructAddedPartitionDefs(ctx, tableDef, clause)
+	require.NoError(t, err)
+	require.Len(t, defs, 1)
 }

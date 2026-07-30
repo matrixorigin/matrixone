@@ -17,6 +17,7 @@ package merge
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -25,7 +26,9 @@ import (
 var _ vm.Operator = new(Merge)
 
 type container struct {
-	receiver *process.PipelineSignalReceiver
+	receiver             *process.PipelineSignalReceiver
+	materializedPosition int
+	materializedReleased bool
 }
 
 type Merge struct {
@@ -34,6 +37,9 @@ type Merge struct {
 	Partial  bool  // false means listening on all merge receivers
 	StartIDX int32 // if partial, listening on receivers[start:end]
 	EndIDX   int32
+
+	MaterializedSource   *materialized.Source
+	MaterializedReaderID int
 	vm.OperatorBase
 }
 
@@ -81,10 +87,30 @@ func (merge *Merge) Release() {
 }
 
 func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if merge.MaterializedSource != nil {
+		if !merge.ctr.materializedReleased {
+			merge.MaterializedSource.ReleaseReader(merge.MaterializedReaderID)
+			merge.ctr.materializedReleased = true
+		}
+		return
+	}
 	if merge.ctr.receiver == nil {
 		_ = merge.Prepare(proc)
 	}
-	merge.ctr.receiver.WaitingEnd()
+	if !merge.ctr.receiver.WaitingEndWithTimeout(process.PipelineCleanupWaitTimeout) {
+		state := merge.ctr.receiver.State()
+		process.WarnPipelineCleanupf(
+			proc,
+			"merge_cleanup_wait_end_timeout",
+			"merge cleanup timed out waiting for pipeline end signals: timeout=%s alive=%d nil_batch_count=%v channel_len=%v channel_cap=%v pipeline_failed=%t err=%v",
+			process.PipelineCleanupWaitTimeout,
+			state.Alive,
+			state.NilBatches,
+			state.ChannelLen,
+			state.ChannelCap,
+			pipelineFailed,
+			err)
+	}
 }
 
 func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {

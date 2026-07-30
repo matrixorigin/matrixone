@@ -391,7 +391,7 @@ func (s *service) performUpgrade(
 		case versions.StateUpgradingTenant:
 			// we must wait all tenant upgrade completed, and then upgrade to
 			// next version
-			s.logger.Info("upgrade version in tenant upgrading",
+			s.logger.Debug("upgrade version in tenant upgrading",
 				zap.String("upgrade", u.String()),
 				zap.String("final", final.Version))
 			return false, nil

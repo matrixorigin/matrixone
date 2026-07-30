@@ -298,7 +298,7 @@ a
 4
 SELECT a FROM t1 GROUP BY a
 HAVING EXISTS(SELECT c FROM t2 GROUP BY c HAVING SUM(a) = c);
-SQL syntax error: column "a" must appear in the GROUP BY clause or be used in an aggregate function
+correlated columns in aggregate function is not yet implemented
 SELECT a FROM t1
 WHERE a < 3 AND
 EXISTS(SELECT c FROM t2 GROUP BY c HAVING SUM(a) != c) GROUP BY a;
@@ -519,3 +519,30 @@ SELECT * FROM t1  WHERE EXISTS (SELECT DISTINCT a FROM t2 WHERE t1.a < t2.a ORDE
 SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
 drop table if exists t1;
 drop table if exists t2;
+drop table if exists corr_exists_t1;
+drop table if exists corr_exists_t2;
+drop table if exists corr_exists_t3;
+create table corr_exists_t1(id int);
+create table corr_exists_t2(id int);
+create table corr_exists_t3(id int);
+insert into corr_exists_t1 values (1), (2), (3);
+insert into corr_exists_t2 values (1), (2);
+insert into corr_exists_t3 values (1);
+select c1.id from corr_exists_t1 c1 where exists (
+select 1 from corr_exists_t2 c2 where exists (
+select 1 from corr_exists_t3 c3 where c3.id = c2.id and c2.id = c1.id
+)
+) order by c1.id;
+id
+1
+select c1.id from corr_exists_t1 c1 where not exists (
+select 1 from corr_exists_t2 c2 where exists (
+select 1 from corr_exists_t3 c3 where c3.id = c2.id and c2.id = c1.id
+)
+) order by c1.id;
+id
+2
+3
+drop table if exists corr_exists_t1;
+drop table if exists corr_exists_t2;
+drop table if exists corr_exists_t3;

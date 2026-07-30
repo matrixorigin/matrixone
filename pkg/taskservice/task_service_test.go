@@ -290,6 +290,80 @@ func TestCompleted(t *testing.T) {
 	assert.Equal(t, task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"}, *v.ExecuteResult)
 }
 
+func TestCompleteSQLTaskAsyncFailureRepairsRunningRun(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	sqlTask := newTestSQLTask("task-repair", 1)
+	mustAddTestSQLTask(t, store, 1, sqlTask)
+	sqlTask = mustGetTestSQLTask(t, store, 1)[0]
+
+	run := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+	run.StartedAt = time.Now().Add(-time.Minute)
+	run.RunnerCN = "r1"
+	runID, err := store.AcquireSQLTaskRun(ctx, sqlTask, run)
+	assert.NoError(t, err)
+
+	asyncTask := newTaskFromMetadata(BuildSQLTaskMetadata(newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled)))
+	asyncTask.Status = task.TaskStatus_Created
+	asyncTask.TaskRunner = "r1"
+	mustAddTestAsyncTask(t, store, 1, asyncTask)
+	asyncTask = mustGetTestAsyncTask(t, store, 1)[0]
+	assert.NoError(t, s.Allocate(ctx, asyncTask, "r1"))
+	asyncTask = mustGetTestAsyncTask(t, store, 1)[0]
+
+	assert.NoError(t, s.Complete(ctx, "r1", asyncTask,
+		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "heartbeat expired"}))
+
+	runs := mustGetTestSQLTaskRun(t, store, 1, WithSQLTaskRunIDCond(EQ, runID))
+	assert.Equal(t, SQLTaskStatusFailed, runs[0].Status)
+	assert.Equal(t, "heartbeat expired", runs[0].ErrorMessage)
+	assert.False(t, runs[0].FinishedAt.IsZero())
+}
+
+func TestCompleteSQLTaskStaleRunnerDoesNotFailLiveRun(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	sqlTask := newTestSQLTask("task-stale-runner", 1)
+	mustAddTestSQLTask(t, store, 1, sqlTask)
+	sqlTask = mustGetTestSQLTask(t, store, 1)[0]
+
+	liveRun := newTestSQLTaskRun(sqlTask.TaskID, sqlTask.TaskName, SQLTaskStatusRunning)
+	liveRun.RunnerCN = "r2"
+	mustAddTestSQLTaskRun(t, store, 1, liveRun)
+
+	asyncTask := newTaskFromMetadata(BuildSQLTaskMetadata(newSQLTaskContextForTest(sqlTask, SQLTaskTriggerScheduled)))
+	asyncTask.Status = task.TaskStatus_Running
+	asyncTask.TaskRunner = "r2"
+	asyncTask.Epoch = 2
+	mustAddTestAsyncTask(t, store, 1, asyncTask)
+
+	staleTask := asyncTask
+	staleTask.TaskRunner = "r1"
+	staleTask.Epoch = 1
+	err := s.Complete(ctx, "r1", staleTask,
+		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "stale runner failed"})
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
+
+	runs := mustGetTestSQLTaskRun(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))
+	assert.Equal(t, SQLTaskStatusRunning, runs[0].Status)
+	assert.Equal(t, "r2", runs[0].RunnerCN)
+	assert.Empty(t, runs[0].ErrorMessage)
+}
+
 func TestCompletedWithInvalidStatus(t *testing.T) {
 	store := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), store)

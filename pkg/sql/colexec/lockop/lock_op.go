@@ -19,15 +19,19 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -39,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -52,7 +57,12 @@ var (
 	defaultWaitTimeOnRetryLock = time.Second
 	// Keep backend/CN-restart retries bounded so abnormal txns fail instead of
 	// holding CN resources for hours while the outer statement context is still alive.
-	defaultMaxWaitTimeOnRetryBackendLock = 30 * time.Second
+	defaultMaxWaitTimeOnRetryBackendLock = 10 * time.Second
+	lockRetryMemoryBackoff               = 5 * time.Second
+	lockRetryHighMemoryPercent           = uint64(80)
+	lockRetryCriticalMemoryPercent       = uint64(90)
+	getLockRetryMemoryPressureLevel      = defaultLockRetryMemoryPressureLevel
+	lockRetryHighMemorySlots             = make(chan struct{}, 16)
 )
 
 const opName = "lock_op"
@@ -94,26 +104,26 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 	}
 	if len(lockOp.ctr.relations) == 0 {
 		lockOp.ctr.relations = make([]engine.Relation, len(lockOp.targets))
-		for i, target := range lockOp.targets {
-			if target.objRef != nil {
-				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
-				if err != nil {
-					return err
-				}
-				lockOp.ctr.relations[i] = rel
-			}
+	}
+	for i, target := range lockOp.targets {
+		if target.objRef == nil {
+			continue
 		}
-	} else {
-		for i, target := range lockOp.targets {
-			if target.objRef != nil {
-				err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator())
-				if err != nil {
-					return err
-				}
+		if lockOp.ctr.relations[i] == nil {
+			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
+			if err != nil {
+				return err
 			}
+			lockOp.ctr.relations[i] = rel
+		} else if err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator()); err != nil {
+			return err
 		}
 	}
-	lockOp.ctr.parker = types.NewPacker()
+	if lockOp.ctr.parker == nil {
+		lockOp.ctr.parker = types.NewPacker()
+	} else {
+		lockOp.ctr.parker.Reset()
+	}
 	return nil
 }
 
@@ -166,6 +176,51 @@ func callNonBlocking(
 	return result, nil
 }
 
+func mergeableLockTargets(left, right lockTarget) bool {
+	return left.mode == lock.LockMode_Shared && right.mode == lock.LockMode_Shared &&
+		left.tableID == right.tableID &&
+		left.primaryColumnType == right.primaryColumnType && left.filter == nil && right.filter == nil &&
+		!left.lockTable && !right.lockTable && left.lockRows == nil && right.lockRows == nil &&
+		left.changeDef == right.changeDef &&
+		left.partitionColumnIndexInBatch == right.partitionColumnIndexInBatch &&
+		left.refreshTimestampIndexInBatch == right.refreshTimestampIndexInBatch
+}
+
+func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionInRangeFunc {
+	return func(
+		proc *process.Process,
+		_ engine.Relation,
+		analyzer process.Analyzer,
+		tableID uint64,
+		eng engine.Engine,
+		bat *batch.Batch,
+		_ int32,
+		_ int32,
+		from timestamp.Timestamp,
+		to timestamp.Timestamp,
+	) (bool, error) {
+		for _, groupIdx := range group {
+			groupTarget := lockOp.targets[groupIdx]
+			changed, err := lockOp.ctr.hasNewVersionInRange(
+				proc,
+				lockOp.ctr.relations[groupIdx],
+				analyzer,
+				tableID,
+				eng,
+				bat,
+				groupTarget.primaryColumnIndexInBatch,
+				groupTarget.partitionColumnIndexInBatch,
+				from,
+				to,
+			)
+			if err != nil || changed {
+				return changed, err
+			}
+		}
+		return false, nil
+	}
+}
+
 // if input vec is not allnull and has null, return a copy vector without null value
 func getVec(proc *process.Process, vec *vector.Vector) (*vector.Vector, error) {
 	if vec.HasNull() {
@@ -196,12 +251,42 @@ func performLock(
 	targetIdx int,
 ) error {
 	needRetry := false
+	consumed := make([]bool, len(lockOp.targets))
 	for idx, target := range lockOp.targets {
+		if consumed[idx] {
+			continue
+		}
 		if targetIdx != -1 && targetIdx != idx {
 			continue
 		}
+		group := []int{idx}
+		if targetIdx == -1 && target.filter == nil && !target.lockTable && target.lockRows == nil {
+			for next := idx + 1; next < len(lockOp.targets); next++ {
+				candidate := lockOp.targets[next]
+				if !mergeableLockTargets(target, candidate) {
+					continue
+				}
+				group = append(group, next)
+				consumed[next] = true
+			}
+		}
+		primaryIdx := idx
+		if len(group) > 1 {
+			primaryIdx = -1
+			for _, groupIdx := range group {
+				vec := bat.GetVector(lockOp.targets[groupIdx].primaryColumnIndexInBatch)
+				if vec != nil && !vec.AllNull() {
+					primaryIdx = groupIdx
+					break
+				}
+			}
+			if primaryIdx == -1 {
+				continue
+			}
+		}
+		target = lockOp.targets[primaryIdx]
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
-			return nil
+			continue
 		}
 		lockOp.logger.Debug("lock",
 			zap.Uint64("table", target.tableID),
@@ -228,11 +313,21 @@ func performLock(
 				}
 			}
 		} */
+		fetchRows := lockOp.ctr.fetchers[primaryIdx]
+		// Multiple targets in one physical lock namespace cannot be locked
+		// incrementally without making the result depend on target and input-batch
+		// order. Use one full-domain range lock for the group. This keeps the
+		// operator streaming and bounds memory independently of input size.
+		lockTable := target.lockTable || len(group) > 1
+		hasNewVersionInRangeFunc := lockOp.ctr.hasNewVersionInRange
+		if len(group) > 1 {
+			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group)
+		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
 			analyzer,
-			lockOp.ctr.relations[idx],
+			lockOp.ctr.relations[primaryIdx],
 			target.tableID,
 			proc,
 			bat,
@@ -240,12 +335,12 @@ func performLock(
 			target.primaryColumnType,
 			target.partitionColumnIndexInBatch,
 			DefaultLockOptions(lockOp.ctr.parker).
-				WithLockMode(lock.LockMode_Exclusive).
-				WithFetchLockRowsFunc(lockOp.ctr.fetchers[idx]).
+				WithLockMode(target.mode).
+				WithFetchLockRowsFunc(fetchRows).
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
-				WithLockTable(target.lockTable, target.changeDef).
-				WithHasNewVersionInRangeFunc(lockOp.ctr.hasNewVersionInRange),
+				WithLockTable(lockTable, target.changeDef).
+				WithHasNewVersionInRangeFunc(hasNewVersionInRangeFunc),
 		)
 		if lockOp.logger.Enabled(zap.DebugLevel) {
 			lockOp.logger.Debug("lock result",
@@ -305,6 +400,42 @@ func LockTable(
 	tableID uint64,
 	pkType types.Type,
 	changeDef bool) error {
+	return LockTableWithContext(proc.Ctx, eng, proc, tableID, pkType, changeDef)
+}
+
+// LockTableWithContext locks a table using the caller-owned statement context.
+// Self-handled statements do not build a pipeline, so proc.Ctx may still refer
+// to an already-finished pipeline from the preceding statement.
+func LockTableWithContext(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	changeDef bool) error {
+	return lockTableWithModeAndContext(
+		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef)
+}
+
+// LockTableWithMode locks all rows in a table with the specified lock mode.
+func LockTableWithMode(
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	mode lock.LockMode,
+	changeDef bool) error {
+	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef)
+}
+
+func lockTableWithModeAndContext(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	mode lock.LockMode,
+	changeDef bool) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -312,7 +443,7 @@ func LockTable(
 	parker := types.NewPacker()
 	defer parker.Close()
 
-	stats := statistic.StatsInfoFromContext(proc.Ctx)
+	stats := statistic.StatsInfoFromContext(ctx)
 	analyzer := process.NewTempAnalyzer()
 	defer func() {
 		waitLockTime := analyzer.GetOpStats().GetMetricByKey(process.OpWaitLockTime)
@@ -328,10 +459,11 @@ func LockTable(
 	}()
 
 	opts := DefaultLockOptions(parker).
+		WithLockMode(mode).
 		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
-		proc.Ctx,
+		ctx,
 		eng,
 		analyzer,
 		nil,
@@ -514,6 +646,10 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	if g == lock.Granularity_Row && len(rows) > 1 {
+		rows = dedupLockRows(rows)
+	}
+
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
 		Granularity:     g,
@@ -533,6 +669,15 @@ func doLock(
 		// FIXME: in launch model, multi-cn will use same process level runtime. So lockservice will be wrong.
 		if txn.LockService != lockService.GetServiceID() {
 			lockService = lockservice.GetLockServiceByServiceID(txn.LockService)
+		}
+	}
+
+	// Attach the current statement/session lock_wait_timeout to the lock options.
+	if d := lockWaitTimeout(proc, txnOp); d > 0 {
+		options.LockWaitDeadline = time.Now().Add(d).UnixNano()
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
 		}
 	}
 
@@ -763,6 +908,74 @@ func doLock(
 
 type lockRetryState struct {
 	backendRetryDeadline time.Time
+	useMemoryRetrySlot   bool
+}
+
+func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
+	txnTimeout := client.LockWaitTimeoutFromTxn(txnOp)
+	var explicitProcessTimeout bool
+	// Background/internal execution may carry a per-execution value in the
+	// process or txn options while its resolver only exposes compiled global
+	// defaults. Prefer the caller-owned budget in that case. Frontend execution
+	// keeps resolver-first semantics so SET SESSION and statement overrides are
+	// observed even after a transaction has started.
+	if proc != nil && proc.Base != nil && !proc.Base.IsFrontend {
+		if proc.GetSessionInfo() != nil {
+			explicitProcessTimeout = proc.GetSessionInfo().LockWaitTimeoutSet
+			if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+				return time.Duration(seconds) * time.Second
+			}
+		}
+		if !explicitProcessTimeout && txnTimeout > 0 {
+			return txnTimeout
+		}
+	}
+	if proc != nil && proc.GetResolveVariableFunc() != nil {
+		if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
+			switch n := v.(type) {
+			case int64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case int:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case uint64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			}
+		}
+	}
+	if proc != nil && proc.GetSessionInfo() != nil {
+		if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	if explicitProcessTimeout {
+		// Explicit zero means "clear this execution's override", not
+		// "wait forever". Use the shared product fallback when no resolver is
+		// installed. This also matches the positive legacy value serialized for
+		// old pipeline peers that do not understand LockWaitTimeoutSet.
+		return time.Duration(defines.DefaultLockWaitTimeoutSeconds) * time.Second
+	}
+	return txnTimeout
+}
+
+func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) {
+	if options.LockWaitDeadline <= 0 {
+		return options, nil
+	}
+	remaining := time.Until(time.Unix(0, options.LockWaitDeadline))
+	if remaining <= 0 {
+		return options, lockservice.ErrLockTimeout
+	}
+	options.LockWaitTimeout = int64(math.Ceil(remaining.Seconds()))
+	if options.LockWaitTimeout <= 0 {
+		options.LockWaitTimeout = 1
+	}
+	return options, nil
 }
 
 func lockWithRetry(
@@ -782,12 +995,20 @@ func lockWithRetry(
 	var err error
 	retryState := lockRetryState{}
 
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return result, err
+	}
 	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
 	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 		return result, getLockRetryExitError(ctx, err)
 	}
 
 	for {
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return result, err
+		}
 		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
 		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 			return result, getLockRetryExitError(ctx, err)
@@ -807,6 +1028,11 @@ func LockWithMayUpgrade(
 	opts LockOptions,
 	pkType types.Type,
 ) (lock.Result, error) {
+	var err error
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
 	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
 		return result, err
@@ -825,6 +1051,10 @@ func LockWithMayUpgrade(
 		opts.filterCols,
 	)
 	options.Granularity = ng
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	return lockService.Lock(ctx, tableID, nrows, txnID, options)
 }
 
@@ -841,8 +1071,9 @@ func canRetryLock(
 	if !shouldBypassHeldLockTableCheck(err) &&
 		txn.HasLockTable(table) {
 		// Once this CN already recorded the lock table, backend availability errors
-		// should fail fast and let whole-txn rollback tear the txn down. Continuing
-		// to retry here only extends the lifetime of an already broken explicit txn.
+		// or bind changes should fail fast and let whole-txn rollback tear the txn
+		// down. Continuing to retry here only extends the lifetime of an already
+		// broken explicit txn.
 		return false
 	}
 
@@ -851,10 +1082,44 @@ func canRetryLock(
 		logLockRetryBudgetStop(err, table, txn, *retryState)
 		return false
 	}
-	return waitToRetryLock(ctx, wait)
+	return waitToRetryLock(ctx, wait, retryState)
 }
 
-func waitToRetryLock(ctx context.Context, wait time.Duration) bool {
+func waitToRetryLock(ctx context.Context, wait time.Duration, retryState *lockRetryState) bool {
+	if retryState.useMemoryRetrySlot {
+		if !retryState.backendRetryDeadline.IsZero() {
+			remaining := time.Until(retryState.backendRetryDeadline)
+			if remaining <= 0 {
+				return false
+			}
+			deadlineTimer := time.NewTimer(remaining)
+			defer deadlineTimer.Stop()
+			select {
+			case lockRetryHighMemorySlots <- struct{}{}:
+				defer func() { <-lockRetryHighMemorySlots }()
+			case <-ctx.Done():
+				return false
+			case <-deadlineTimer.C:
+				return false
+			}
+
+			remaining = time.Until(retryState.backendRetryDeadline)
+			if remaining <= 0 {
+				return false
+			}
+			if remaining < wait {
+				wait = remaining
+			}
+		} else {
+			select {
+			case lockRetryHighMemorySlots <- struct{}{}:
+				defer func() { <-lockRetryHighMemorySlots }()
+			case <-ctx.Done():
+				return false
+			}
+		}
+	}
+
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 
@@ -869,6 +1134,7 @@ func waitToRetryLock(ctx context.Context, wait time.Duration) bool {
 }
 
 func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration, bool) {
+	retryState.useMemoryRetrySlot = false
 	if defaultMaxWaitTimeOnRetryBackendLock <= 0 {
 		return 0, false
 	}
@@ -885,6 +1151,17 @@ func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration,
 	}
 
 	remaining := time.Until(retryState.backendRetryDeadline)
+	switch getLockRetryMemoryPressureLevel() {
+	case lockRetryMemoryPressureCritical:
+		logLockRetryMemoryPressureStop(err, *retryState)
+		return 0, false
+	case lockRetryMemoryPressureHigh:
+		retryState.useMemoryRetrySlot = true
+		if remaining < lockRetryMemoryBackoff {
+			return remaining, true
+		}
+		return lockRetryMemoryBackoff, true
+	}
 	if remaining < defaultWaitTimeOnRetryLock {
 		return remaining, true
 	}
@@ -914,10 +1191,34 @@ func shouldBypassHeldLockTableCheck(err error) bool {
 }
 
 func isBoundedRetryLockError(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend)
+}
+
+type lockRetryMemoryPressureLevel int
+
+const (
+	lockRetryMemoryPressureNormal lockRetryMemoryPressureLevel = iota
+	lockRetryMemoryPressureHigh
+	lockRetryMemoryPressureCritical
+)
+
+func defaultLockRetryMemoryPressureLevel() lockRetryMemoryPressureLevel {
+	total := system.MemoryTotal()
+	if total == 0 {
+		return lockRetryMemoryPressureNormal
+	}
+	used := system.MemoryUsed()
+	if used >= total*lockRetryCriticalMemoryPercent/100 {
+		return lockRetryMemoryPressureCritical
+	}
+	if used >= total*lockRetryHighMemoryPercent/100 {
+		return lockRetryMemoryPressureHigh
+	}
+	return lockRetryMemoryPressureNormal
 }
 
 func logLockRetryBudgetStop(
@@ -940,6 +1241,20 @@ func logLockRetryBudgetStop(
 	}
 	fields = append(fields, zap.Time("retry-deadline", retryState.backendRetryDeadline))
 	logutil.Warn("lock retry budget exhausted for backend availability error", fields...)
+}
+
+func logLockRetryMemoryPressureStop(
+	err error,
+	retryState lockRetryState,
+) {
+	fields := []zap.Field{
+		zap.Error(err),
+		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendLock),
+	}
+	if !retryState.backendRetryDeadline.IsZero() {
+		fields = append(fields, zap.Time("retry-deadline", retryState.backendRetryDeadline))
+	}
+	logutil.Warn("lock retry stopped under memory pressure", fields...)
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to
@@ -1112,6 +1427,39 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 	return lockOp
 }
 
+func (lockOp *LockOp) GetLockRowsExpressions() []*plan.Expr {
+	exprs := make([]*plan.Expr, 0, len(lockOp.targets))
+	for i := range lockOp.targets {
+		if lockOp.targets[i].lockRows != nil {
+			exprs = append(exprs, lockOp.targets[i].lockRows)
+		}
+	}
+	return exprs
+}
+
+func (lockOp *LockOp) RewriteLockRowsExpressions(rewrite func(*plan.Expr) (*plan.Expr, bool, error)) (bool, error) {
+	folded := false
+	targets := make([]lockTarget, len(lockOp.targets))
+	copy(targets, lockOp.targets)
+	for i := range targets {
+		if targets[i].lockRows == nil {
+			continue
+		}
+		expr, exprFolded, err := rewrite(targets[i].lockRows)
+		if err != nil {
+			return false, err
+		}
+		if exprFolded {
+			targets[i].lockRows = expr
+			folded = true
+		}
+	}
+	if folded {
+		lockOp.targets = targets
+	}
+	return folded, nil
+}
+
 // LockTable lock all table, used for delete, truncate and drop table
 func (lockOp *LockOp) LockTable(
 	tableID uint64,
@@ -1241,6 +1589,22 @@ func (lockOp *LockOp) cleanParker() {
 	}
 }
 
+func dedupLockRows(rows [][]byte) [][]byte {
+	if len(rows) <= 1 {
+		return rows
+	}
+	slices.SortFunc(rows, func(a, b []byte) int {
+		return bytes.Compare(a, b)
+	})
+	deduped := rows[:1]
+	for i := 1; i < len(rows); i++ {
+		if !bytes.Equal(rows[i], rows[i-1]) {
+			deduped = append(deduped, rows[i])
+		}
+	}
+	return deduped
+}
+
 func getRowsFilter(
 	tableID uint64,
 	partitionTables []uint64) RowsFilter {
@@ -1283,25 +1647,20 @@ func hasNewVersionInRange(
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	defer func() {
-		if analyzer != nil {
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
-		}
-	}()
 
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
 
-	changed, err := rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+	changed, err := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
+		return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+	})
 
 	return changed, err
 }
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
 	if analyzer != nil {
-		analyzer.WaitStop(start)
+		process.StopAnalyzerWait(analyzer, start, resource.WaitLock)
 		analyzer.AddWaitLockTime(start)
 	}
 }
@@ -1325,7 +1684,8 @@ func lockTalbeIfLockCountIsZero(
 			if !target.lockTableAtTheEnd {
 				continue
 			}
-			err := LockTable(lockOp.engine, proc, target.tableID, target.primaryColumnType, false)
+			err := LockTableWithMode(
+				lockOp.engine, proc, target.tableID, target.primaryColumnType, target.mode, false)
 			if err != nil {
 				return err
 			}
@@ -1352,8 +1712,5 @@ func lockTargetWithRows(
 	bat.Vecs[target.primaryColumnIndexInBatch] = vec
 	bat.SetRowCount(vec.Length())
 
-	anal := lockOp.OpAnalyzer
-	anal.Start()
-	defer anal.Stop()
-	return performLock(bat, proc, lockOp, anal, idx)
+	return performLock(bat, proc, lockOp, lockOp.OpAnalyzer, idx)
 }

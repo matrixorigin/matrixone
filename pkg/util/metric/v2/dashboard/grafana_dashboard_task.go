@@ -35,6 +35,7 @@ func (c *DashboardCreator) initTaskDashboard() error {
 		c.withRowOptions(
 			c.initTaskFlushTableTailRow(),
 			c.initTaskMergeRow(),
+			c.initTaskMergeOOMRow(),
 			c.initTaskMergeTransferPageRow(),
 			c.initTaskCheckpointRow(),
 			c.initTaskStorageUsageRow(),
@@ -111,6 +112,33 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			SpanNulls(true),
 			timeseries.Span(3),
+		),
+	)
+}
+
+func (c *DashboardCreator) initTaskMergeOOMRow() dashboard.Option {
+	return dashboard.Row(
+		"Merge OOM Governor",
+		c.getTimeSeries(
+			"OOM Pause Count",
+			[]string{fmt.Sprintf(
+				"sum (increase(%s[$interval])) by (%s)",
+				c.getMetricWithFilter(`mo_task_merge_oom_pause_total`, ""),
+				c.by,
+			)},
+			[]string{"{{ " + c.by + " }}"},
+			timeseries.Span(6),
+		),
+		c.getTimeSeries(
+			"Available Memory",
+			[]string{fmt.Sprintf(
+				"sum (%s) by (%s)",
+				c.getMetricWithFilter(`mo_task_merge_available_memory_bytes`, ""),
+				c.by,
+			)},
+			[]string{"{{ " + c.by + " }}"},
+			timeseries.Span(6),
+			timeseries.Axis(tsaxis.Unit("decbytes")),
 		),
 	)
 }

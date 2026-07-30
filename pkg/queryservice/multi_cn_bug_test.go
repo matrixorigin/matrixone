@@ -17,18 +17,13 @@ package queryservice
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -340,7 +335,8 @@ func TestRequestMultipleCn_EmptyNodeAddress(t *testing.T) {
 	})
 }
 
-// TestRequestMultipleCn_ConcurrentSafety verifies no race conditions
+// TestRequestMultipleCn_ConcurrentSafety verifies that concurrent requests can
+// create and share the client's backend for the target CN without races.
 func TestRequestMultipleCn_ConcurrentSafety(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
@@ -349,10 +345,10 @@ func TestRequestMultipleCn_ConcurrentSafety(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		// Multiple nodes to increase concurrency
+		// Keep the backend cold so these requests exercise concurrent backend
+		// creation and waiter wakeup as well as concurrent Send calls.
 		nodes := []string{addr, addr, addr}
 
-		var mu sync.Mutex
 		var successCount int
 		genRequest := func() *pb.Request {
 			req := cli.NewRequest(pb.CmdMethod_GetCacheInfo)
@@ -362,19 +358,13 @@ func TestRequestMultipleCn_ConcurrentSafety(t *testing.T) {
 
 		handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
 			if rsp != nil && rsp.GetCacheInfoResponse != nil {
-				// Concurrent access to shared state
-				mu.Lock()
 				successCount++
-				mu.Unlock()
-				// Simulate some work
-				time.Sleep(1 * time.Millisecond)
 			}
 		}
 
-		// Execute: concurrent processing
+		// Execute concurrent sends.
 		err := RequestMultipleCn(ctx, nodes, cli, genRequest, handleValidResponse, nil)
 
-		// Verify no race conditions (test with -race flag)
 		assert.NoError(t, err)
 		assert.Equal(t, 3, successCount, "All nodes should succeed")
 	})
@@ -675,133 +665,48 @@ func TestRequestMultipleCn_TimeoutOverrideLogging(t *testing.T) {
 	})
 }
 
-// TestRequestMultipleCn_ResponseErrorWithDeadlineExceeded verifies that when a response
-// returns with context.DeadlineExceeded error, the code path at query_service.go:202-206
-// is correctly executed.
-//
-// This test covers the specific code path:
-//
-//	if ctx.Err() == context.DeadlineExceeded || errors.Is(res.err, context.DeadlineExceeded) {
-//		// Context has timed out, prioritize timeout error
-//		if retErr == nil {
-//			retErr = moerr.NewInternalError(ctx, "RequestMultipleCn : context deadline exceeded")
-//		}
-//	}
-//
-// The test ensures:
-// 1. SendMessage returns context.DeadlineExceeded error (or ctx.Err() == context.DeadlineExceeded)
-// 2. retErr == nil (this is the first error)
-// 3. The timeout error is correctly set
-//
-// Strategy: Create a slow handler that doesn't respond in time, causing context timeout.
-// The test waits for RequestMultipleCn to complete with a reasonable timeout.
+type deadlineExceededQueryClient struct{}
+
+var _ client.QueryClient = deadlineExceededQueryClient{}
+
+func (deadlineExceededQueryClient) ServiceID() string { return "deadline-exceeded-test" }
+
+func (deadlineExceededQueryClient) SendMessage(
+	context.Context,
+	string,
+	*pb.Request,
+) (*pb.Response, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func (deadlineExceededQueryClient) NewRequest(method pb.CmdMethod) *pb.Request {
+	return &pb.Request{CmdMethod: method}
+}
+
+func (deadlineExceededQueryClient) Release(*pb.Response) {}
+
+func (deadlineExceededQueryClient) Close() error { return nil }
+
+// TestRequestMultipleCn_ResponseErrorWithDeadlineExceeded verifies that a
+// deadline error returned by QueryClient is promoted to the distributed
+// request's deadline error, even when the caller context is still active.
 func TestRequestMultipleCn_ResponseErrorWithDeadlineExceeded(t *testing.T) {
-	cn := metadata.CNService{ServiceID: "test_response_deadline_exceeded"}
-	sid := ""
-	runtime.RunTest(
-		sid,
-		func(rt runtime.Runtime) {
-			runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-			runtime.SetupServiceBasedRuntime(cn.ServiceID, runtime.ServiceRuntime(sid))
-			address := fmt.Sprintf("unix:///tmp/cn-%d-%s.sock",
-				time.Now().Nanosecond(), cn.ServiceID)
+	qt := deadlineExceededQueryClient{}
+	var successCount int
 
-			if err := os.RemoveAll(address[7:]); err != nil {
-				panic(err)
-			}
-
-			qs, err := NewQueryService(cn.ServiceID, address, morpc.Config{})
-			assert.NoError(t, err)
-
-			qt, err := client.NewQueryClient(cn.ServiceID, morpc.Config{})
-			assert.NoError(t, err)
-
-			// Event-driven: signal when handler is called
-			handlerCalled := make(chan struct{})
-
-			// Handler blocks until context is canceled
-			qs.AddHandleFunc(pb.CmdMethod_GetCacheInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
-				// Signal handler called (non-blocking)
-				select {
-				case handlerCalled <- struct{}{}:
-				default:
-				}
-				// Block until context canceled
-				<-ctx.Done()
-				return ctx.Err()
-			}, false)
-
-			err = qs.Start()
-			assert.NoError(t, err)
-			defer func() {
-				err = qs.Close()
-				assert.NoError(t, err)
-				err = qt.Close()
-				assert.NoError(t, err)
-			}()
-
-			// Long timeout - we'll cancel explicitly after handler called
-			// This accommodates slow CI (up to 2s) without test failure
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			var successCount int
-			genRequest := func() *pb.Request {
-				req := qt.NewRequest(pb.CmdMethod_GetCacheInfo)
-				req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
-				return req
-			}
-
-			handleValidResponse := func(nodeAddr string, rsp *pb.Response) {
-				if rsp != nil && rsp.GetCacheInfoResponse != nil {
-					successCount++
-				}
-			}
-
-			// Execute in goroutine
-			var errResult error
-			done := make(chan struct{})
-			go func() {
-				errResult = RequestMultipleCn(ctx, []string{address}, qt, genRequest, handleValidResponse, nil)
-				close(done)
-			}()
-
-			// Event-driven execution with protection:
-			// Wait for handler to be called (adapts to CI speed: 10ms - 2s)
-			select {
-			case <-handlerCalled:
-				// Handler called, proceed to cancel
-			case <-time.After(10 * time.Second):
-				t.Fatal("Handler not called within 10s - connection issue")
-			}
-
-			// Cancel context immediately (precise control)
-			cancel()
-
-			// Wait for completion with 10s protection (only for hung)
-			select {
-			case <-done:
-				// Success: fast env ~20ms, slow env ~2s
-			case <-time.After(10 * time.Second):
-				t.Fatal("Test hung after context cancel - 10s protection triggered")
-			}
-
-			// Verify that an error is returned
-			assert.Error(t, errResult, "Should return error when context deadline exceeded")
-			// Accept multiple error types that can occur in different environments:
-			// - "context deadline exceeded": normal timeout path
-			// - "context canceled": when cancel() is called explicitly
-			// - "failed to get result": connection error during timeout
-			// - "EOF": connection closed by server during timeout
-			// All of these indicate the timeout/cancellation was handled correctly
-			errStr := errResult.Error()
-			assert.True(t,
-				strings.Contains(errStr, "context deadline exceeded") ||
-					strings.Contains(errStr, "context canceled") ||
-					strings.Contains(errStr, "failed to get result") ||
-					strings.Contains(errStr, "EOF"),
-				"Error should indicate timeout/cancellation or connection error, got: %s", errStr)
-			assert.Equal(t, 0, successCount, "No nodes should succeed due to timeout")
+	err := RequestMultipleCn(
+		context.Background(),
+		[]string{"deadline-cn"},
+		qt,
+		func() *pb.Request {
+			return qt.NewRequest(pb.CmdMethod_GetCacheInfo)
 		},
+		func(string, *pb.Response) {
+			successCount++
+		},
+		nil,
 	)
+
+	assert.EqualError(t, err, "internal error: RequestMultipleCn : context deadline exceeded")
+	assert.Zero(t, successCount, "deadline responses must not invoke the valid response handler")
 }

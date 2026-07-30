@@ -90,7 +90,7 @@ Build MatrixOne from source for development or customization.
 
 ### Prerequisites
 
-**1. Install Go (version 1.22 required)**
+**1. Install Go (version 1.26.4 or later required)**
 
 Follow the [official Go installation guide](https://go.dev/doc/install).
 
@@ -122,7 +122,7 @@ cd matrixone
 **Step 2: Prepare Dependencies**
 
 ```bash
-go mod vendor
+make config
 ```
 
 **Step 3: Build MatrixOne**
@@ -255,7 +255,7 @@ Restart MatrixOne after configuration changes.
 
 ### Build Issues
 
-- Ensure Go version 1.22 is installed: `go version`
+- Ensure Go version 1.26.4 or later is installed: `go version`
 - Verify GCC is available: `gcc --version`
 - Check disk space and memory availability
 
@@ -263,4 +263,3 @@ For more help, visit:
 - [MatrixOne Documentation](https://docs.matrixorigin.cn/en/latest/)
 - [GitHub Issues](https://github.com/matrixorigin/matrixone/issues)
 - [Community Slack](http://matrixoneworkspace.slack.com)
-

@@ -12,10 +12,34 @@ SELECT CHAR(0) AS null_char;
 SELECT CHAR(32) AS space;
 SELECT CHAR(65, 66, 67, 68, 69) AS abcde;
 
-# NULL handling
+# NULL handling (MySQL skips NULL arguments)
 SELECT CHAR(65, 66, NULL) AS with_null;
 SELECT CHAR(NULL, 66, 67) AS null_first;
 SELECT CHAR(65, NULL, 67) AS null_middle;
+SELECT CHAR(NULL, NULL) AS all_null;
+
+# Non-integer arguments (MySQL coerces to integer)
+SELECT HEX(CHAR(77, 77.3, '77.3')) AS char_noninteger;
+SELECT HEX(CHAR(NULL, 65, 66)) AS char_skip_null;
+SELECT CHAR(65.9, 66.1) AS float_arg;
+SELECT CHAR('65', '66') AS string_arg;
+
+# Multi-byte expansion (MySQL: CHAR(256) → 0x0100)
+SELECT HEX(CHAR(256)) AS char_256;
+SELECT HEX(CHAR(65536)) AS char_65536;
+SELECT HEX(CHAR(-1)) AS char_neg1;
+SELECT HEX(CHAR('256')) AS char_str256;
+SELECT CHAR(NULL) AS single_null;
+
+# String arguments with leading numeric prefix (MySQL parses leading digits)
+SELECT HEX(CHAR('65xyz')) AS char_prefix_num;
+SELECT HEX(CHAR('9007199254740993')) AS char_large_int_str;
+SELECT HEX(CHAR('77abc')) AS char_mixed_str;
+
+# Binary hex/bit literals (MySQL interprets raw bytes as big-endian integer)
+SELECT HEX(CHAR(0x41)) AS char_hex_lit;
+SELECT HEX(CHAR(0x0100)) AS char_hex_multi;
+SELECT HEX(CHAR(b'01000001')) AS char_bit_lit;
 
 # Different integer types (should be cast to int64)
 SELECT CHAR(CAST(65 AS INT), CAST(66 AS INT)) AS int_type;
@@ -32,4 +56,10 @@ CREATE TABLE t1(a INT, b INT, c INT);
 INSERT INTO t1 VALUES (65, 66, 67), (72, 101, 108), (48, 49, 50);
 SELECT * FROM t1 WHERE CHAR(a, b, c) = 'ABC';
 DROP TABLE t1;
+
+# Nullable column NULL path (MySQL skips NULL per row)
+CREATE TABLE t2(a INT, b INT);
+INSERT INTO t2 VALUES (65, 66), (NULL, 67), (68, NULL), (NULL, NULL);
+SELECT a, b, CHAR(a, b) AS char_nullable FROM t2;
+DROP TABLE t2;
 

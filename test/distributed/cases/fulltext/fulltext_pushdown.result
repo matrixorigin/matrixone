@@ -109,5 +109,22 @@ where match(title, body) against('machine learning')
 and category = 'tech';
 count(*)
 10
+select count(*) from (
+select id from articles
+where match(title, body) against('machine learning')
+limit 5 offset 3
+) as page;
+count(*)
+5
+select id from articles
+where match(title, body) against('machine learning')
+order by id
+limit 5 offset 3;
+id
+10
+11
+14
+19
+24
 set fulltext_bloom_filter_pushdown = 0;
 drop database ft_pushdown_test;

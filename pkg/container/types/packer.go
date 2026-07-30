@@ -285,6 +285,15 @@ func (p *Packer) EncodeDecimal128(e Decimal128) {
 	}
 }
 
+func (p *Packer) EncodeDecimal256(e Decimal256) {
+	p.putByte(decimal256Code)
+	b := *(*[32]byte)(unsafe.Pointer(&e))
+	b[31] ^= 0x80
+	for i := 31; i >= 0; i-- {
+		p.putByte(b[i])
+	}
+}
+
 func (p *Packer) EncodeStringType(e []byte) {
 	p.putByte(stringTypeCode)
 	p.encodeBytes(bytesCode, e)

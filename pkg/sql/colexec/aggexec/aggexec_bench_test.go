@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -193,7 +194,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 		vectors := []*vector.Vector{intVec}
 		b.StopTimer()
 		for i := 0; i < b.N; i++ {
-			exec := newCountColumnExec(mp, AggIdOfCountColumn, false, types.T_int64.ToType())
+			exec := newCountColumnExec(mp, AggIdOfCountColumn, false, []types.Type{types.T_int64.ToType()})
 			if err := exec.GroupGrow(groupSize); err != nil {
 				b.Fatal(err)
 			}
@@ -240,7 +241,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 	b.Run("CountColumn/BatchMerge", func(b *testing.B) {
 		b.ReportAllocs()
 		b.StopTimer()
-		source := newCountColumnExec(mp, AggIdOfCountColumn, false, types.T_int64.ToType())
+		source := newCountColumnExec(mp, AggIdOfCountColumn, false, []types.Type{types.T_int64.ToType()})
 		if err := source.GroupGrow(groupSize); err != nil {
 			b.Fatal(err)
 		}
@@ -255,7 +256,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 		}
 
 		for i := 0; i < b.N; i++ {
-			target := newCountColumnExec(mp, AggIdOfCountColumn, false, types.T_int64.ToType())
+			target := newCountColumnExec(mp, AggIdOfCountColumn, false, []types.Type{types.T_int64.ToType()})
 			if err := target.GroupGrow(groupSize); err != nil {
 				b.Fatal(err)
 			}
@@ -338,6 +339,118 @@ func BenchmarkAggExecPaths(b *testing.B) {
 	})
 }
 
+func BenchmarkSumDecimal64FastCardinality(b *testing.B) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		if mp.CurrNB() != 0 {
+			b.Fatalf("memory leak detected: %d bytes", mp.CurrNB())
+		}
+	}()
+
+	const rows = AggBatchSize
+	values := make([]types.Decimal64, rows)
+	for i := range values {
+		values[i] = types.Decimal64(i + 1)
+	}
+	vec := testutil.NewDecimal64Vector(
+		rows, types.New(types.T_decimal64, 15, 2), mp, false, nil, values)
+	defer vec.Free(mp)
+	vectors := []*vector.Vector{vec}
+
+	cases := []struct {
+		name       string
+		groupCount int
+		groupAt    func(int) uint64
+	}{
+		{"Compact64", 64, func(i int) uint64 { return uint64(i%64 + 1) }},
+		{"Scattered64", 1 << 20, func(i int) uint64 {
+			return uint64((i%64)*(1<<14) + 1)
+		}},
+		{"Compact256", 256, func(i int) uint64 { return uint64(i%256 + 1) }},
+		{"Scattered256", 1 << 20, func(i int) uint64 {
+			return uint64((i%256)*(1<<12) + 1)
+		}},
+		{"Compact1024", 1024, func(i int) uint64 { return uint64(i%1024 + 1) }},
+		{"Compact" + strconv.Itoa(rows), rows, func(i int) uint64 { return uint64(i + 1) }},
+		{"Scattered" + strconv.Itoa(rows), 1 << 20, func(i int) uint64 {
+			return uint64((i*65537)&((1<<20)-1) + 1)
+		}},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			groups := make([]uint64, rows)
+			for i := range groups {
+				groups[i] = tc.groupAt(i)
+			}
+			exec := newSumDecimal64FastExec(
+				mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 15, 2))
+			if err := exec.GroupGrow(tc.groupCount); err != nil {
+				b.Fatal(err)
+			}
+			defer exec.Free()
+
+			b.ReportAllocs()
+			b.SetBytes(rows * 8)
+			b.ResetTimer()
+			for range b.N {
+				if err := exec.BatchFill(0, groups, vectors); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkSumDecimal64FastBatchMerge(b *testing.B) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		if mp.CurrNB() != 0 {
+			b.Fatalf("memory leak detected: %d bytes", mp.CurrNB())
+		}
+	}()
+
+	const rows = AggBatchSize
+	cases := []struct {
+		name       string
+		groupCount int
+		groupAt    func(int) uint64
+	}{
+		{"Compact", rows, func(i int) uint64 { return uint64(i + 1) }},
+		{"Scattered", 1 << 20, func(i int) uint64 {
+			return uint64((i*65537)&((1<<20)-1) + 1)
+		}},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			groups := make([]uint64, rows)
+			for i := range groups {
+				groups[i] = tc.groupAt(i)
+			}
+			dst := newSumDecimal64FastExec(
+				mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 15, 2))
+			src := newSumDecimal64FastExec(
+				mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 15, 2))
+			if err := dst.GroupGrow(tc.groupCount); err != nil {
+				b.Fatal(err)
+			}
+			if err := src.GroupGrow(rows); err != nil {
+				b.Fatal(err)
+			}
+			defer dst.Free()
+			defer src.Free()
+
+			b.ReportAllocs()
+			b.SetBytes(rows * 8)
+			b.ResetTimer()
+			for range b.N {
+				if err := dst.BatchMerge(src, 0, groups); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 // TestLocalAccumulatorOverflow exercises the direct-scatter fallback path
 // that triggers when a single BatchFill has more than 255 distinct groups.
 func TestLocalAccumulatorOverflow(t *testing.T) {
@@ -366,7 +479,7 @@ func TestLocalAccumulatorOverflow(t *testing.T) {
 	defer intVec.Free(mp)
 
 	t.Run("SumInt64", func(t *testing.T) {
-		exec := newSumAvgExec[int64, int64](mp, int64OfCheck, true, AggIdOfSum, false, types.T_int64.ToType())
+		exec := makeSumAvgExec(mp, true, AggIdOfSum, false, types.T_int64.ToType())
 		if err := exec.GroupGrow(numGroups); err != nil {
 			t.Fatal(err)
 		}
@@ -380,11 +493,11 @@ func TestLocalAccumulatorOverflow(t *testing.T) {
 		// Verify: each group g (0-indexed) gets values (g+1) and (g+1+512).
 		// sum = (g+1) + (g+1+512) = 2g + 514
 		for _, vec := range results {
-			vals := vector.MustFixedColNoTypeCheck[int64](vec)
+			vals := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)
 			for g := 0; g < numGroups; g++ {
-				expected := int64(2*g + 514)
+				expected := types.Decimal128FromInt64(int64(2*g + 514))
 				if vals[g] != expected {
-					t.Fatalf("group %d: got %d, want %d", g, vals[g], expected)
+					t.Fatalf("group %d: got %v, want %v", g, vals[g], expected)
 				}
 			}
 			vec.Free(mp)
@@ -393,7 +506,7 @@ func TestLocalAccumulatorOverflow(t *testing.T) {
 	})
 
 	t.Run("CountColumn", func(t *testing.T) {
-		exec := newCountColumnExec(mp, AggIdOfCountColumn, false, types.T_int64.ToType())
+		exec := newCountColumnExec(mp, AggIdOfCountColumn, false, []types.Type{types.T_int64.ToType()})
 		if err := exec.GroupGrow(numGroups); err != nil {
 			t.Fatal(err)
 		}
@@ -501,7 +614,7 @@ func TestConstVectorAccumulator(t *testing.T) {
 		}
 		defer constVec.Free(mp)
 
-		exec := newSumAvgExec[int64, int64](mp, int64OfCheck, true, AggIdOfSum, false, types.T_int64.ToType())
+		exec := makeSumAvgExec(mp, true, AggIdOfSum, false, types.T_int64.ToType())
 		if err := exec.GroupGrow(numGroups); err != nil {
 			t.Fatal(err)
 		}
@@ -513,12 +626,12 @@ func TestConstVectorAccumulator(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, vec := range results {
-			vals := vector.MustFixedColNoTypeCheck[int64](vec)
+			vals := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)
 			for g := 0; g < numGroups; g++ {
 				// Each group gets rows/numGroups = 4 rows, each with value 7.
-				expected := int64(4 * 7)
+				expected := types.Decimal128FromInt64(4 * 7)
 				if vals[g] != expected {
-					t.Fatalf("group %d: got %d, want %d", g, vals[g], expected)
+					t.Fatalf("group %d: got %v, want %v", g, vals[g], expected)
 				}
 			}
 			vec.Free(mp)

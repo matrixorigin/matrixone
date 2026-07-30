@@ -1,0 +1,74 @@
+-- UPDATE IGNORE must not treat the target row as a duplicate when a primary
+-- or unique key assignment preserves its existing value.
+drop table if exists update_ignore_regression;
+create table update_ignore_regression (
+    id int primary key,
+    a int unique,
+    v int
+);
+insert into update_ignore_regression values (1, 10, 0), (2, 20, 0);
+
+-- Primary-key self-assignment must still apply the non-key update.
+update ignore update_ignore_regression set id = id, v = v + 1 where id = 1;
+select * from update_ignore_regression order by id;
+
+-- The same rule applies to a secondary unique key.
+update ignore update_ignore_regression set a = a, v = v + 1 where id = 2;
+select * from update_ignore_regression order by id;
+
+-- A real conflicting key must still be ignored, leaving the target row intact.
+update ignore update_ignore_regression set id = 2, v = 99 where id = 1;
+select * from update_ignore_regression order by id;
+
+drop table update_ignore_regression;
+
+-- A row that is ignored by a later unique-key check must not release its old
+-- primary key for another candidate in the same statement.
+drop table if exists update_ignore_multi_unique;
+create table update_ignore_multi_unique (
+    id int primary key,
+    u int unique
+);
+insert into update_ignore_multi_unique values (1, 10), (2, 20), (3, 30);
+update ignore update_ignore_multi_unique
+set id = case id when 1 then 4 when 3 then 1 else id end,
+    u = case id when 1 then 20 else u end
+where id in (1, 3);
+select * from update_ignore_multi_unique order by id;
+drop table update_ignore_multi_unique;
+
+-- Key swaps conflict with the original snapshot row-by-row; neither target
+-- may borrow the other target's old key merely because both are candidates.
+drop table if exists update_ignore_key_swap;
+create table update_ignore_key_swap (id int primary key, v int);
+insert into update_ignore_key_swap values (1, 10), (2, 20);
+update ignore update_ignore_key_swap set id = 3 - id;
+select * from update_ignore_key_swap order by id;
+drop table update_ignore_key_swap;
+
+-- When multiple candidates produce one key, the row that already owns that
+-- key must survive regardless of candidate order.
+drop table if exists update_ignore_owner_wins;
+create table update_ignore_owner_wins (id int primary key, v int);
+insert into update_ignore_owner_wins values (1, 10), (2, 20);
+update ignore update_ignore_owner_wins set id = 2, v = v + 1;
+select * from update_ignore_owner_wins order by id;
+drop table update_ignore_owner_wins;
+
+-- NULL unique keys do not create hash groups; conflict filtering must still
+-- map a non-NULL group back to its physical candidate row.
+drop table if exists update_ignore_nullable_unique;
+create table update_ignore_nullable_unique (id int primary key, a int unique, v int);
+insert into update_ignore_nullable_unique values (1, null, 0), (2, 20, 0), (3, 10, 0);
+update ignore update_ignore_nullable_unique
+set a = case id when 2 then 10 else a end,
+    v = v + 1
+where id in (1, 2);
+select * from update_ignore_nullable_unique order by id;
+drop table update_ignore_nullable_unique;
+
+create table update_ignore_owner_wins (id int primary key, v int);
+insert into update_ignore_owner_wins values (1, 10), (2, 20);
+update ignore update_ignore_owner_wins set id = 2, v = v + 1 order by id desc;
+select * from update_ignore_owner_wins order by id;
+drop table update_ignore_owner_wins;

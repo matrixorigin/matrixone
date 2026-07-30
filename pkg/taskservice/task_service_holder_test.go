@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -70,6 +71,78 @@ func TestTaskHolderNotCreatedCanClose(t *testing.T) {
 			return NewFixedTaskStorageFactory(store)
 		})
 	assert.NoError(t, h.Close())
+}
+
+func TestTaskHolderRejectsCreateAfterClose(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	store := NewMemTaskStorage()
+	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "", nil },
+		func(string, string, string) TaskStorageFactory {
+			return NewFixedTaskStorageFactory(store)
+		})
+
+	require.NoError(t, h.Close())
+	err := h.Create(logservicepb.CreateTaskService{
+		User:         logservicepb.TaskTableUser{Username: "u", Password: "p"},
+		TaskDatabase: "d",
+	})
+	service, ok := h.Get()
+	if ok {
+		defer func() {
+			require.NoError(t, service.Close())
+		}()
+	}
+	require.ErrorIs(t, err, ErrNotReady)
+	require.False(t, ok)
+	require.Nil(t, service)
+}
+
+func TestTaskHolderConcurrentCreateAndClose(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	command := logservicepb.CreateTaskService{
+		User:         logservicepb.TaskTableUser{Username: "u", Password: "p"},
+		TaskDatabase: "d",
+	}
+
+	for range 50 {
+		store := NewMemTaskStorage()
+		h := NewTaskServiceHolderWithTaskStorageFactorySelector(
+			runtime.DefaultRuntime(),
+			func(context.Context, bool) (string, error) { return "", nil },
+			func(string, string, string) TaskStorageFactory {
+				return NewFixedTaskStorageFactory(store)
+			})
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		var createErr, closeErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			createErr = h.Create(command)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			closeErr = h.Close()
+		}()
+		close(start)
+		wg.Wait()
+
+		require.NoError(t, closeErr)
+		if createErr != nil {
+			require.ErrorIs(t, createErr, ErrNotReady)
+		}
+		service, ok := h.Get()
+		if ok {
+			require.NoError(t, service.Close())
+		}
+		require.False(t, ok)
+		require.Nil(t, service)
+	}
 }
 
 func TestTaskHolderCanClose(t *testing.T) {
@@ -260,6 +333,26 @@ func TestRefreshTaskStorageErrNotReadyBranches(t *testing.T) {
 	_, err = s.QueryDaemonTask(ctx)
 	require.ErrorIs(t, err, ErrNotReady)
 	_, err = s.HeartbeatDaemonTask(ctx, []task.DaemonTask{newTestDaemonTask(1, "d3")})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.AddSQLTask(ctx, newTestSQLTask("task-1", 1))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.UpdateSQLTask(ctx, []SQLTask{newTestSQLTask("task-2", 1)})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.DeleteSQLTask(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.QuerySQLTask(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.AddSQLTaskRun(ctx, newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.UpdateSQLTaskRun(ctx, []SQLTaskRun{newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess)})
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.QuerySQLTaskRun(ctx)
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.AcquireSQLTaskRun(ctx, newTestSQLTask("task-1", 1), newTestSQLTaskRun(1, "task-1", SQLTaskStatusRunning))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.CompleteSQLTaskRun(ctx, newTestSQLTaskRun(1, "task-1", SQLTaskStatusSuccess))
+	require.ErrorIs(t, err, ErrNotReady)
+	_, err = s.TriggerSQLTask(ctx, newTestSQLTask("task-1", 1), newTestAsyncTask("task-1:1"))
 	require.ErrorIs(t, err, ErrNotReady)
 }
 

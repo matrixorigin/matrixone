@@ -143,7 +143,7 @@ f1    f11    f2    f22
 1    1    1    1
 3    3    3    3
 SELECT * FROM v3 JOIN v4 ON f1=f2;
-invalid input: ambiguouse column reference to 'f1'
+invalid input: ambiguous column reference to 'f1'
 SELECT * FROM v4 WHERE f2 IN (1,3);
 invalid input: column f2 does not exist
 DROP TABLE if exists t2;

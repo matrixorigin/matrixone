@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -50,6 +51,16 @@ func (update *MultiUpdate) insert_main_table(
 		}
 		bat.SetAttributes(attrs)
 		ctr.insertBuf[tableIndex] = bat
+	}
+
+	if updateCtx.SkipInsertOnNullPk {
+		pkColIdx, ok := mainTableInsertPkInputIdx(updateCtx)
+		if !ok || pkColIdx >= len(inputBatch.Vecs) {
+			return moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
+		}
+		if inputBatch.Vecs[pkColIdx].HasNull() {
+			return update.check_null_and_insert_main_table(proc, analyzer, updateCtx, inputBatch, ctr.insertBuf[tableIndex])
+		}
 	}
 
 	// preinsert: check not null column
@@ -93,6 +104,58 @@ func (update *MultiUpdate) insert_unique_index_table(
 	return
 }
 
+func (update *MultiUpdate) check_null_and_insert_main_table(
+	proc *process.Process,
+	analyzer process.Analyzer,
+	updateCtx *MultiUpdateCtx,
+	inputBatch *batch.Batch,
+	insertBatch *batch.Batch,
+) (err error) {
+	pkPos, ok := mainTableInsertPkInputIdx(updateCtx)
+	if !ok || pkPos >= len(inputBatch.Vecs) {
+		return moerr.NewInternalError(proc.Ctx, "invalid main table insert pk column index")
+	}
+	pkNulls := inputBatch.Vecs[pkPos].GetNulls()
+
+	insertBatch.CleanOnlyData()
+	rowCount := uint64(inputBatch.RowCount())
+	for i := uint64(0); i < rowCount; i++ {
+		if pkNulls.Contains(i) {
+			continue
+		}
+		for insertIdx, inputIdx := range updateCtx.InsertCols {
+			if err = insertBatch.Vecs[insertIdx].UnionOne(inputBatch.Vecs[inputIdx], int64(i), proc.Mp()); err != nil {
+				return err
+			}
+		}
+	}
+
+	newRowCount := insertBatch.Vecs[0].Length()
+	if newRowCount == 0 {
+		return nil
+	}
+	insertBatch.SetRowCount(newRowCount)
+	if err = checkMainTableNotNull(proc, updateCtx, insertBatch); err != nil {
+		return err
+	}
+	if err = checkZeroTemporalInStrictMode(update.RejectZeroTemporal, proc, insertBatch); err != nil {
+		return err
+	}
+	tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+	update.addInsertAffectRows(tableType, uint64(newRowCount))
+	source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
+
+	crs := analyzer.GetOpCounterSet()
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return source.Write(newCtx, insertBatch)
+	}); err != nil {
+		return err
+	}
+	analyzer.AddWrittenRows(int64(newRowCount))
+	return nil
+}
+
 func (update *MultiUpdate) insert_secondary_index_table(
 	proc *process.Process,
 	analyzer process.Analyzer,
@@ -132,33 +195,118 @@ func (update *MultiUpdate) insert_table(
 	inputBatch *batch.Batch,
 	insertBatch *batch.Batch,
 ) (err error) {
+	rowCount := inputBatch.RowCount()
+	if rowCount == 0 {
+		return
+	}
 
-	insertBatch.CleanOnlyData()
-	for insertIdx, inputIdx := range updateCtx.InsertCols {
-		err = insertBatch.Vecs[insertIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
-		if err != nil {
+	info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
+	writeBatch := insertBatch
+	if info.isContiguous {
+		if info.refBatch == nil {
+			info.refBatch = batch.NewOffHeapWithSize(len(updateCtx.InsertCols))
+			info.refBatch.SetAttributes(insertBatch.Attrs)
+		}
+		for insertIdx, inputIdx := range updateCtx.InsertCols {
+			info.refBatch.Vecs[insertIdx] = inputBatch.Vecs[inputIdx]
+		}
+		info.refBatch.SetRowCount(rowCount)
+		writeBatch = info.refBatch
+	} else {
+		insertBatch.CleanOnlyData()
+		for insertIdx, inputIdx := range updateCtx.InsertCols {
+			err = insertBatch.Vecs[insertIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
+			if err != nil {
+				return err
+			}
+		}
+		insertBatch.SetRowCount(insertBatch.Vecs[0].Length())
+	}
+	if info.tableType == UpdateMainTable {
+		if err = checkZeroTemporalInStrictMode(update.RejectZeroTemporal, proc, writeBatch); err != nil {
 			return err
 		}
 	}
-	rowCount := insertBatch.Vecs[0].Length()
-	if rowCount > 0 {
-		insertBatch.SetRowCount(rowCount)
-		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-		update.addInsertAffectRows(tableType, uint64(rowCount))
-		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
 
-		crs := analyzer.GetOpCounterSet()
-		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		err = source.Write(newCtx, insertBatch)
-		if err != nil {
-			return err
-		}
-		analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
+	update.addInsertAffectRows(info.tableType, uint64(writeBatch.RowCount()))
+
+	crs := analyzer.GetOpCounterSet()
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return info.Source.Write(newCtx, writeBatch)
+	})
+	if err != nil {
+		return err
 	}
+	analyzer.AddWrittenRows(int64(writeBatch.RowCount()))
 	return
+}
+
+// checkZeroTemporalInStrictMode also enforces the unconditional lower bound for
+// non-zero TIMESTAMP values that can reach MultiUpdate through parallel LOAD.
+func checkZeroTemporalInStrictMode(reject bool, proc *process.Process, bat *batch.Batch) error {
+	if proc == nil || bat == nil {
+		return nil
+	}
+
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		switch vec.GetType().Oid {
+		case types.T_timestamp:
+		case types.T_date, types.T_datetime:
+			if !reject {
+				continue
+			}
+		default:
+			continue
+		}
+		for row := 0; row < vec.Length(); row++ {
+			if vec.IsNull(uint64(row)) {
+				continue
+			}
+			switch vec.GetType().Oid {
+			case types.T_date:
+				if reject && vector.GetFixedAtNoTypeCheck[types.Date](vec, row) == types.ZeroDate {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "date", "0000-00-00", "value", row+1)
+				}
+			case types.T_datetime:
+				if reject && vector.GetFixedAtNoTypeCheck[types.Datetime](vec, row) == types.ZeroDatetime {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			case types.T_timestamp:
+				timestamp := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
+				if !types.ValidTimestamp(timestamp) {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", fmt.Sprintf("%d", int64(timestamp)), "value", row+1)
+				}
+				if reject && timestamp == types.ZeroTimestamp {
+					return moerr.NewTruncatedValueForField(proc.Ctx, "datetime", "0000-00-00 00:00:00", "value", row+1)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func isContiguousMapping(cols []int) bool {
+	if len(cols) == 0 {
+		return false
+	}
+	base := cols[0]
+	for i, col := range cols {
+		if col != base+i {
+			return false
+		}
+	}
+	return true
+}
+
+func mainTableInsertPkInputIdx(updateCtx *MultiUpdateCtx) (int, bool) {
+	if updateCtx.InsertPkColIdx < 0 || updateCtx.InsertPkColIdx >= len(updateCtx.InsertCols) {
+		return 0, false
+	}
+	return updateCtx.InsertCols[updateCtx.InsertPkColIdx], true
 }
 
 func (update *MultiUpdate) check_null_and_insert_table(
@@ -199,14 +347,13 @@ func (update *MultiUpdate) check_null_and_insert_table(
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		err = source.Write(newCtx, insertBatch)
+		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return source.Write(newCtx, insertBatch)
+		})
 		if err != nil {
 			return err
 		}
 		analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
 	}
 	return
 }

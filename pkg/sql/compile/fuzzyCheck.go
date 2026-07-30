@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -295,10 +296,6 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 				}
 			}
 		} else {
-			scales := make([]int32, len(f.compoundCols))
-			for i, c := range f.compoundCols {
-				scales[i] = c.Typ.Scale
-			}
 			for i := 0; i < toCheck.Length(); i++ {
 				if toCheck.GetNulls().Contains(uint64(i)) {
 					continue
@@ -308,7 +305,10 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 				if err != nil {
 					return nil, err
 				}
-				s := t.SQLStrings(scales)
+				s, err := f.formatCompoundCollisionKey(t)
+				if err != nil {
+					return nil, err
+				}
 				for j := 0; j < len(s); j++ {
 					keys[j] = append(keys[j], s[j])
 				}
@@ -323,6 +323,42 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 	}
 
 	return keys, nil
+}
+
+func (f *fuzzyCheck) formatCompoundCollisionKey(t types.Tuple) ([]string, error) {
+	if len(t) != len(f.compoundCols) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"compound key width %d does not match column count %d",
+			len(t), len(f.compoundCols),
+		)
+	}
+
+	scales := make([]int32, len(f.compoundCols))
+	for i, c := range f.compoundCols {
+		if c == nil {
+			return nil, moerr.NewInternalErrorNoCtx("compoundCols should not have nil element")
+		}
+		scales[i] = c.Typ.Scale
+	}
+
+	values := t.SQLStrings(scales)
+	for i, c := range f.compoundCols {
+		if fuzzyCheckSQLValueNeedsQuote(types.T(c.Typ.Id)) {
+			values[i] = sqlquote.String(values[i])
+		}
+	}
+	return values, nil
+}
+
+func fuzzyCheckSQLValueNeedsQuote(typ types.T) bool {
+	switch typ {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+		types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_text, types.T_blob, types.T_uuid, types.T_datalink:
+		return true
+	default:
+		return false
+	}
 }
 
 // backgroundSQLCheck launches a background SQL to check if there are any duplicates
@@ -433,14 +469,14 @@ func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 	// date and time
 	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year:
 		for i, str := range ss {
-			ss[i] = strconv.Quote(str)
+			ss[i] = sqlquote.String(str)
 		}
 		return ss, nil
 
 	// string family but not include binary
 	case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid, types.T_binary, types.T_datalink:
 		for i, str := range ss {
-			ss[i] = strconv.Quote(str)
+			ss[i] = sqlquote.String(str)
 		}
 		return ss, nil
 	default:

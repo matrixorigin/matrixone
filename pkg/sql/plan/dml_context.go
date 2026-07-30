@@ -48,7 +48,7 @@ func NewDMLContext() *DMLContext {
 func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Update) error {
 	err := dmlCtx.ResolveTables(ctx, stmt.Tables, stmt.With, nil, false)
 	if err != nil {
-		return err
+		return classifyUpdateTableResolutionError(ctx, stmt, err)
 	}
 
 	// check update field and set updateKeys
@@ -115,7 +115,10 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	}
 
 	if len(usedTbl) > 1 {
-		return moerr.NewUnsupportedDML(ctx.GetContext(), "multi-table update")
+		return newLegacyUpdatePlannerRouteError(
+			updateRouteReasonMultiTarget,
+			moerr.NewUnsupportedDML(ctx.GetContext(), "multi-table update"),
+		)
 	}
 
 	dmlCtx.updateCol2Expr = make([]map[string]tree.Expr, len(dmlCtx.tableDefs))
@@ -128,6 +131,92 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 
 	return nil
 }
+
+func classifyUpdateTableResolutionError(ctx CompilerContext, stmt *tree.Update, err error) error {
+	if !moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
+		return err
+	}
+
+	switch err.Error() {
+	case icebergRowLevelDMLUnsupportedMsg:
+		return newUpdatePlannerRouteError(
+			updatePlannerSpecialized,
+			updateRouteReasonIceberg,
+			err,
+		)
+	case externalTableUnsupportedDMLMsg:
+		return newUpdatePlannerRouteError(
+			updatePlannerRejected,
+			updateRouteReasonExternalTable,
+			moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table"),
+		)
+	case foreignKeyUnsupportedDMLMsg:
+		return newLegacyUpdatePlannerRouteError(updateRouteReasonForeignKey, err)
+	case unsupportedTableTypeDMLMsg:
+		if updateHasMultiTableTargetShape(stmt) {
+			return newLegacyUpdatePlannerRouteError(updateRouteReasonMultiTarget, err)
+		}
+		return newUpdatePlannerRouteError(
+			updatePlannerRejected,
+			updateRouteReasonTableForm,
+			err,
+		)
+	case emptyTableNameDMLMsg:
+		return newUpdatePlannerRouteError(
+			updatePlannerRejected,
+			updateRouteReasonEmptyTableName,
+			err,
+		)
+	default:
+		return err
+	}
+}
+
+func updateHasMultiTableTargetShape(stmt *tree.Update) bool {
+	if stmt == nil {
+		return false
+	}
+	if len(stmt.Tables) > 1 {
+		return true
+	}
+	for _, tableExpr := range stmt.Tables {
+		if tableExprContainsJoin(tableExpr) {
+			return true
+		}
+	}
+	return false
+}
+
+// externalTableUnsupportedDMLCause is the cause string of the fallback sentinel
+// ResolveSingleTable raises for writable external tables; entry points without
+// a legacy fallback (REPLACE) match the full message to convert it into a
+// user-facing error.
+const externalTableUnsupportedDMLCause = "external table"
+
+// externalTableUnsupportedDMLMsg is the full message of that sentinel, as
+// moerr.NewUnsupportedDML formats it ("unsupported DML: %s").
+const externalTableUnsupportedDMLMsg = "unsupported DML: " + externalTableUnsupportedDMLCause
+
+// noPkOnDupUpdateCause is the cause bindInsert raises for ON DUPLICATE KEY
+// UPDATE on a table with neither a primary key nor a unique key: the modern
+// dedup+MULTI_UPDATE has no key to represent the upsert, so this degenerate
+// corner (semantically a plain INSERT) is deferred to the legacy planner. The
+// INSERT entry point matches the full message to allow the fallback for this
+// case only, without re-routing real PK/unique-key ODKU off the modern path.
+const noPkOnDupUpdateCause = "on duplicate key update without primary or unique key"
+const noPkOnDupUpdateMsg = "unsupported DML: " + noPkOnDupUpdateCause
+
+const icebergRowLevelDMLUnsupportedCause = "Iceberg row-level DML"
+
+const icebergRowLevelDMLUnsupportedMsg = "unsupported DML: " + icebergRowLevelDMLUnsupportedCause
+
+const foreignKeyUnsupportedDMLCause = "foreign key constraint"
+
+const foreignKeyUnsupportedDMLMsg = "unsupported DML: " + foreignKeyUnsupportedDMLCause
+
+const unsupportedTableTypeDMLMsg = "unsupported DML: unsupported table type"
+
+const emptyTableNameDMLMsg = "unsupported DML: empty table name"
 
 func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
@@ -208,7 +297,26 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	if err := checkTableType(ctx.GetContext(), tableDef); err != nil {
+	// External tables are not handled by the modern DML binder. Writable ones
+	// (WRITE_FILE_PATTERN) defer to the legacy planner, whose buildInsert /
+	// buildLoad implement INSERT/LOAD into them; read-only ones reject all DML
+	// directly with the user-facing error, so statement kinds without a legacy
+	// fallback (REPLACE) don't leak the internal fallback sentinel.
+	if tableDef.TableType == catalog.SystemExternalRel {
+		isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+		if err != nil {
+			return err
+		}
+		if isIceberg {
+			return moerr.NewUnsupportedDML(ctx.GetContext(), icebergRowLevelDMLUnsupportedCause)
+		}
+		if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
+			return moerr.NewUnsupportedDML(ctx.GetContext(), externalTableUnsupportedDMLCause)
+		}
+		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
+	}
+
+	if err := checkTableType(ctx.GetContext(), tableDef, ""); err != nil {
 		return err
 	}
 
@@ -221,7 +329,7 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 	}
 
 	if checkFK && (len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0) {
-		return moerr.NewUnsupportedDML(ctx.GetContext(), "foreign key constraint")
+		return moerr.NewUnsupportedDML(ctx.GetContext(), foreignKeyUnsupportedDMLCause)
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
@@ -233,9 +341,6 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table")
 	}
 
-	if util.TableIsClusterTable(tableDef.GetTableType()) && accountId != catalog.System_Account {
-		return moerr.NewInternalErrorf(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
-	}
 	if objRef.PubInfo != nil {
 		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
 	}

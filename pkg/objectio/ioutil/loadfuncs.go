@@ -37,31 +37,14 @@ func LoadColumnsData(
 	cacheVectors containers.Vectors, // cacheVectors.Allocated() must be 0
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (dataMeta objectio.ObjectDataMeta, release func(), err error) {
+) (dataMeta objectio.ObjectDataMeta, release func(), fromCache bool, err error) {
+	name := location.Name().UnsafeString()
 	var meta objectio.ObjectMeta
+	var vectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
-	release, err = LoadColumnsWithMeta(ctx, columns, typs, fs, location, dataMeta, cacheVectors, m, policy)
-	return
-}
-
-// LoadColumnsWithMeta loads block columns using object metadata the caller has
-// already fetched.
-func LoadColumnsWithMeta(
-	ctx context.Context,
-	columns []uint16,
-	typs []types.Type,
-	fs fileservice.FileService,
-	location objectio.Location,
-	dataMeta objectio.ObjectDataMeta,
-	cacheVectors containers.Vectors, // cacheVectors.Allocated() must be 0
-	m *mpool.MPool,
-	policy fileservice.Policy,
-) (release func(), err error) {
-	name := location.Name().UnsafeString()
-	var vectors fileservice.IOVector
 	if vectors, err = objectio.ReadOneBlock(
 		ctx,
 		&dataMeta,
@@ -75,13 +58,21 @@ func LoadColumnsWithMeta(
 	); err != nil {
 		return
 	}
+	// fromCache is true only when every entry was served from cache.
+	fromCache = len(vectors.Entries) > 0
+	for _, entry := range vectors.Entries {
+		if !entry.WasFromCache() {
+			fromCache = false
+			break
+		}
+	}
 	release = func() {
 		objectio.ReleaseIOVector(&vectors)
 		cacheVectors.Free(m)
 	}
 	for i := range columns {
 		if err = objectio.MustVectorTo(&cacheVectors[i], vectors.Entries[i].CachedData.Bytes()); err != nil {
-			logutil.Errorf("LoadColumnsWithMeta %s error: %v", location.String(), err.Error())
+			logutil.Errorf("LoadColumnsData %s error: %v", location.String(), err.Error())
 			release()
 			release = nil
 			return
@@ -171,9 +162,10 @@ func LoadTombstoneColumns(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (meta objectio.ObjectDataMeta, release func(), err error) {
-	return LoadColumnsData(
+	meta, release, _, err = LoadColumnsData(
 		ctx, cols, typs, fs, location, cacheVectors, m, policy,
 	)
+	return
 }
 
 func LoadColumns(
@@ -185,8 +177,8 @@ func LoadColumns(
 	cacheVectors containers.Vectors, // Allocated() must be 0
 	m *mpool.MPool,
 	policy fileservice.Policy,
-) (release func(), err error) {
-	_, release, err = LoadColumnsData(
+) (release func(), fromCache bool, err error) {
+	_, release, fromCache, err = LoadColumnsData(
 		ctx, cols, typs, fs, location, cacheVectors, m, policy,
 	)
 	return

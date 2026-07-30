@@ -23,9 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -127,6 +129,123 @@ func TestPreInsertSecondaryIndex(t *testing.T) {
 		require.NoError(t, err)
 		tc.arg.Free(proc, false, nil)
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}
+}
+
+func TestPreInsertSecondarySingleVarcharUsesSizedUkType(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("CODE001"), false, proc.Mp()))
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	arg := &PreInsertSecIdx{
+		PreInsertCtx: &plan.PreInsertUkCtx{
+			Columns:  []int32{1},
+			PkColumn: 0,
+			UkType: plan.Type{
+				Id:    int32(types.T_varchar),
+				Width: 50,
+			},
+		},
+	}
+	arg.initBuf(bat, arg.PreInsertCtx.Columns, int(arg.PreInsertCtx.PkColumn), false)
+	defer arg.Free(proc, false, nil)
+
+	require.NotZero(t, arg.ctr.buf.Vecs[indexColPos].GetType().TypeSize())
+	_, err := util.CompactSingleIndexCol(bat.Vecs[1], arg.ctr.buf.Vecs[indexColPos], proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, arg.ctr.buf.Vecs[indexColPos].Length())
+}
+
+func TestPreInsertSecondaryUpdateKeepsRowsAligned(t *testing.T) {
+	testCases := []struct {
+		name         string
+		indexColumns [][]int64
+		nullRows     [][]bool
+		expectedRows []int
+	}{
+		{
+			name:         "single column filters nulls",
+			indexColumns: [][]int64{{100, 200, 300, 400}},
+			nullRows:     [][]bool{{true, false, true, false}},
+			expectedRows: []int{1, 3},
+		},
+		{
+			name: "composite key retains nulls",
+			indexColumns: [][]int64{
+				{100, 200, 300, 400},
+				{101, 201, 301, 401},
+			},
+			nullRows: [][]bool{
+				{true, false, false, false},
+				{false, false, true, false},
+			},
+			expectedRows: []int{0, 1, 2, 3},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			pks := []int64{10, 20, 30, 40}
+			rowIDs := []types.Rowid{
+				types.BuildTestRowid(1, 1),
+				types.BuildTestRowid(1, 2),
+				types.BuildTestRowid(1, 3),
+				types.BuildTestRowid(1, 4),
+			}
+			input := batch.NewWithSize(len(tc.indexColumns) + 2)
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(input.Vecs[0], pks, nil, proc.Mp()))
+			for colIdx, values := range tc.indexColumns {
+				input.Vecs[colIdx+1] = vector.NewVec(types.T_int64.ToType())
+				for rowIdx, value := range values {
+					require.NoError(t, vector.AppendFixed(
+						input.Vecs[colIdx+1], value, tc.nullRows[colIdx][rowIdx], proc.Mp()))
+				}
+			}
+			input.Vecs[len(input.Vecs)-1] = vector.NewVec(types.T_Rowid.ToType())
+			require.NoError(t, vector.AppendFixedList(input.Vecs[len(input.Vecs)-1], rowIDs, nil, proc.Mp()))
+			input.SetRowCount(len(pks))
+			defer input.Clean(proc.Mp())
+
+			indexPositions := make([]int32, len(tc.indexColumns))
+			for i := range indexPositions {
+				indexPositions[i] = int32(i + 1)
+			}
+			arg := &PreInsertSecIdx{
+				PreInsertCtx: &plan.PreInsertUkCtx{
+					Columns:  indexPositions,
+					PkColumn: 0,
+					UkType:   plan.Type{Id: int32(types.T_int64)},
+				},
+			}
+			arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+			require.NoError(t, arg.Prepare(proc))
+			defer arg.Free(proc, false, nil)
+
+			result, err := arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, len(tc.expectedRows), result.Batch.RowCount())
+			for _, vec := range result.Batch.Vecs {
+				require.Equal(t, result.Batch.RowCount(), vec.Length())
+			}
+
+			var expectedPKs []int64
+			var expectedRowIDs []types.Rowid
+			for _, inputRow := range tc.expectedRows {
+				expectedPKs = append(expectedPKs, pks[inputRow])
+				expectedRowIDs = append(expectedRowIDs, rowIDs[inputRow])
+			}
+			require.Equal(t, expectedPKs,
+				vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[pkColPos]))
+			require.Equal(t, expectedRowIDs,
+				vector.MustFixedColNoTypeCheck[types.Rowid](result.Batch.Vecs[rowIdColPos]))
+		})
 	}
 }
 

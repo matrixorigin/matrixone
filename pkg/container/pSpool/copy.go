@@ -105,7 +105,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 
 		if vec.IsConst() {
 			if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
-				dst.Clean(cb.mp)
+				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
 
@@ -116,7 +116,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 			if err = vector.GetUnionAllFunction(typ, cb.mp)(
 				dst.Vecs[i],
 				vec); err != nil {
-				dst.Clean(cb.mp)
+				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
 

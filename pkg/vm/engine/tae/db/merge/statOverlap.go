@@ -15,9 +15,10 @@
 package merge
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -139,7 +140,7 @@ func MakePointEventsSortedMap(
 
 	scale, typ := GetScaleAndType(statsList)
 	if typ == types.T_any {
-		return nil, 0, 0, moerr.NewInternalError(ctx, "no valid intervals with initialized zonemaps")
+		return nil, 0, len(statsList), nil
 	}
 
 	events := btree.NewBTreeG(func(a *pointEvent, b *pointEvent) bool {
@@ -283,6 +284,12 @@ func CalculateOverlapStats(
 	if err != nil {
 		return nil, err
 	}
+	if events == nil {
+		ret.ConstantObj = constantObjCnt
+		ret.UniniteddObj = uninitialized
+		ret.ScanObj = len(statsList)
+		return ret, nil
+	}
 	ret.ConstantObj = constantObjCnt
 	ret.UniniteddObj = uninitialized
 	ret.ScanObj = len(statsList)
@@ -388,6 +395,9 @@ func CalculateOverlapStats(
 	}
 
 	processed := ret.ScanObj - ret.ConstantObj - ret.UniniteddObj
+	if processed <= 0 {
+		return
+	}
 	totalOverlap := 0
 	totalPointDepth := 0
 	for _, record := range ret.StatsRecords {
@@ -423,11 +433,11 @@ func splitTasksOnSpan(
 	records := overlapStats.StatsRecords
 
 	// sort by overlap ratio descending
-	sort.Slice(candidatesIdx, func(i, j int) bool {
-		r1, r2 := records[candidatesIdx[i]], records[candidatesIdx[j]]
+	slices.SortFunc(candidatesIdx, func(a, b int) int {
+		r1, r2 := records[a], records[b]
 		overlapRatio1 := float64(r1.overlap) / float64(r1.depth)
 		overlapRatio2 := float64(r2.overlap) / float64(r2.depth)
-		return overlapRatio1 > overlapRatio2
+		return cmp.Compare(overlapRatio2, overlapRatio1)
 	})
 
 	pushToRationLessThan := func(idx int, ration float64) int {
@@ -498,6 +508,9 @@ func GatherOverlapMergeTasks(
 	overlapStats, err := CalculateOverlapStats(ctx, statsList, opts)
 	if err != nil {
 		return nil, err
+	}
+	if overlapStats.PointEvents == nil {
+		return nil, nil
 	}
 	events := overlapStats.PointEvents
 	openingObjs := make(map[int]*objectio.ObjectStats)

@@ -26,8 +26,13 @@ const (
 	CDCWatermarkErrMsgMaxLen = 256
 
 	CDCState_Running = "running"
-	CDCState_Paused  = "paused"
-	CDCState_Failed  = "failed"
+	// CDCState_Restarting is the durable admission marker for a restart. It
+	// distinguishes the state observed by a replacement startup from a later
+	// pause, which may also end in paused.
+	CDCState_Restarting = "restarting"
+	CDCState_Pausing    = "pausing"
+	CDCState_Paused     = "paused"
+	CDCState_Failed     = "failed"
 )
 
 var CDCSQLBuilder = cdcSQLBuilder{}
@@ -99,6 +104,11 @@ const (
 		"FROM `mo_catalog`.`mo_cdc_task` " +
 		"WHERE 1=1 AND account_id = %d"
 
+	CDCGetCdcTaskStateSqlTemplate = "SELECT " +
+		"state " +
+		"FROM `mo_catalog`.`mo_cdc_task` " +
+		"WHERE 1=1 AND account_id = %d AND task_id = '%s'"
+
 	CDCDeleteTaskSqlTemplate = "DELETE " +
 		"FROM " +
 		"`mo_catalog`.`mo_cdc_task` " +
@@ -116,6 +126,24 @@ const (
 		"SET state = '%s', err_msg = '%s' " +
 		"WHERE " +
 		"1=1 AND account_id = %d AND task_id = '%s'"
+
+	CDCUpdateTaskStateAndErrMsgByStateSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = '%s', err_msg = '%s' " +
+		"WHERE " +
+		"1=1 AND account_id = %d AND task_id = '%s' AND state = '%s'"
+
+	CDCUpdateTaskStateByTaskIdSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = '%s' " +
+		"WHERE " +
+		"1=1 AND account_id = %d AND task_id = '%s'"
+
+	CDCUpdateTaskStateByTaskIdAndStateSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_task` " +
+		"SET state = '%s' " +
+		"WHERE " +
+		"1=1 AND account_id = %d AND task_id = '%s' AND state = '%s'"
 
 	CDCGetDataKeySqlTemplate = "SELECT " +
 		"encrypted_key " +
@@ -224,19 +252,20 @@ const (
 		"table_name = '%s'"
 
 	CDCCollectTableInfoSqlTemplate = "SELECT " +
-		" rel_id, " +
-		" relname, " +
-		" reldatabase_id, " +
-		" reldatabase, " +
-		" rel_createsql, " +
-		" account_id " +
-		"FROM `mo_catalog`.`mo_tables` " +
+		" tbl.rel_id, " +
+		" tbl.relname, " +
+		" tbl.reldatabase_id, " +
+		" tbl.reldatabase, " +
+		" tbl.rel_createsql, " +
+		" tbl.account_id, " +
+		" tbl.`constraint` " +
+		"FROM `mo_catalog`.`mo_tables` tbl " +
 		"WHERE " +
-		" account_id IN (%s) " +
+		" tbl.account_id IN (%s) " +
 		"%s" +
 		"%s" +
-		" AND relkind = '%s' " +
-		" AND reldatabase NOT IN (%s)"
+		" AND tbl.relkind = '%s' " +
+		" AND tbl.reldatabase NOT IN (%s)"
 	CDCInsertMOISCPLogSqlTemplate = `REPLACE INTO mo_catalog.mo_iscp_log (` +
 		`account_id,` +
 		`table_id,` +
@@ -333,8 +362,12 @@ const (
 	CDCSelectMOISCPLogByTableSqlTemplate_Idx        = 27
 	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx        = 28
 	CDCGetTableIDTemplate_Idx                       = 29
+	CDCUpdateTaskStateByTaskIdSQL_Idx               = 30
+	CDCUpdateTaskStateByTaskIdAndStateSQL_Idx       = 31
+	CDCUpdateTaskStateAndErrMsgByStateSQL_Idx       = 32
+	CDCGetTaskStateSqlTemplate_Idx                  = 33
 
-	CDCSqlTemplateCount = 30
+	CDCSqlTemplateCount = 34
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -381,6 +414,19 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCUpdateTaskStateAndErrMsgSQL_Idx: {
 		SQL: CDCUpdateTaskStateAndErrMsgSqlTemplate,
+	},
+	CDCUpdateTaskStateAndErrMsgByStateSQL_Idx: {
+		SQL: CDCUpdateTaskStateAndErrMsgByStateSqlTemplate,
+	},
+	CDCUpdateTaskStateByTaskIdSQL_Idx: {
+		SQL: CDCUpdateTaskStateByTaskIdSqlTemplate,
+	},
+	CDCUpdateTaskStateByTaskIdAndStateSQL_Idx: {
+		SQL: CDCUpdateTaskStateByTaskIdAndStateSqlTemplate,
+	},
+	CDCGetTaskStateSqlTemplate_Idx: {
+		SQL:         CDCGetCdcTaskStateSqlTemplate,
+		OutputAttrs: []string{"state"},
 	},
 	CDCInsertWatermarkSqlTemplate_Idx: {
 		SQL: CDCInsertWatermarkSqlTemplate,
@@ -434,6 +480,7 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"reldatabase",
 			"rel_createsql",
 			"account_id",
+			"constraint",
 		},
 	},
 	CDCGetWatermarkWhereSqlTemplate_Idx: {
@@ -628,10 +675,55 @@ func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgSQL(
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCUpdateTaskStateAndErrMsgSQL_Idx].SQL,
+		escapeSQLString(state),
+		escapeSQLString(errMsg),
+		accountId,
+		escapeSQLString(taskId),
+	)
+}
+
+func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgByStateSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+	errMsg string,
+	currentState string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateTaskStateAndErrMsgByStateSQL_Idx].SQL,
+		escapeSQLString(state),
+		escapeSQLString(errMsg),
+		accountId,
+		escapeSQLString(taskId),
+		escapeSQLString(currentState),
+	)
+}
+
+func (b cdcSQLBuilder) UpdateTaskStateByTaskIdSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateTaskStateByTaskIdSQL_Idx].SQL,
 		state,
-		errMsg,
 		accountId,
 		taskId,
+	)
+}
+
+func (b cdcSQLBuilder) UpdateTaskStateByTaskIdAndStateSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+	currentState string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateTaskStateByTaskIdAndStateSQL_Idx].SQL,
+		state,
+		accountId,
+		taskId,
+		currentState,
 	)
 }
 
@@ -650,6 +742,17 @@ func (b cdcSQLBuilder) GetTaskIdSQL(
 		)
 	}
 	return sql
+}
+
+func (b cdcSQLBuilder) GetTaskStateSQL(
+	accountId uint64,
+	taskId string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCGetTaskStateSqlTemplate_Idx].SQL,
+		accountId,
+		escapeSQLString(taskId),
+	)
 }
 
 // ClearTaskTableErrorsSQL generates SQL to clear error messages for all tables in a task
@@ -974,13 +1077,13 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 			if dbNames == "*" {
 				return ""
 			}
-			return " AND reldatabase IN (" + dbNames + ") "
+			return " AND tbl.reldatabase IN (" + dbNames + ") "
 		}(),
 		func() string {
 			if tableNames == "*" {
 				return ""
 			}
-			return " AND relname IN (" + tableNames + ") "
+			return " AND tbl.relname IN (" + tableNames + ") "
 		}(),
 		catalog.SystemOrdinaryRel,
 		AddSingleQuotesJoin(catalog.SystemDatabases),

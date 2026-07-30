@@ -1,0 +1,48 @@
+select st_astext(st_pointfromtext('POINT(1 2)')) as p;
+p
+POINT(1 2)
+select st_astext(st_linefromtext('LINESTRING(0 0,1 1)')) as l;
+l
+LINESTRING(0 0,1 1)
+select st_astext(st_polyfromtext('POLYGON((0 0,1 0,1 1,0 0))')) as poly;
+poly
+POLYGON((0 0,1 0,1 1,0 0))
+select st_astext(st_mpointfromtext('MULTIPOINT(1 1,2 2)')) as mp;
+mp
+MULTIPOINT(1 1,2 2)
+select st_astext(st_mlinefromtext('MULTILINESTRING((0 0,1 1),(2 2,3 3))')) as ml;
+ml
+MULTILINESTRING((0 0,1 1),(2 2,3 3))
+select st_astext(st_mpolyfromtext('MULTIPOLYGON(((0 0,1 0,1 1,0 0)))')) as mpoly;
+mpoly
+MULTIPOLYGON(((0 0,1 0,1 1,0 0)))
+select st_astext(st_geomcollfromtext('GEOMETRYCOLLECTION(POINT(1 1))')) as gc;
+gc
+GEOMETRYCOLLECTION(POINT(1 1))
+select st_astext(st_linestringfromtext('LINESTRING(0 0,2 2)')) as l2;
+l2
+LINESTRING(0 0,2 2)
+select st_astext(st_polygonfromtext('POLYGON((0 0,1 0,1 1,0 0))')) as poly2;
+poly2
+POLYGON((0 0,1 0,1 1,0 0))
+select st_astext(st_geometryfromtext('POINT(3 4)')) as gft;
+gft
+POINT(3 4)
+select st_pointfromtext('LINESTRING(0 0,1 1)');
+invalid input: geometry is not a POINT
+select st_polyfromtext('POINT(1 2)');
+invalid input: geometry is not a POLYGON
+select st_astext(st_pointfromwkb(st_aswkb(st_geomfromtext('POINT(5 6)')))) as wp;
+wp
+POINT(5 6)
+select st_astext(st_polyfromwkb(st_aswkb(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 0))')))) as wpoly;
+wpoly
+POLYGON((0 0,2 0,2 2,0 0))
+select st_astext(st_geomfromwkb(st_aswkb(st_geomfromtext('LINESTRING(0 0,1 1)')))) as wg;
+wg
+LINESTRING(0 0,1 1)
+select st_pointfromwkb(st_aswkb(st_geomfromtext('LINESTRING(0 0,1 1)')));
+invalid input: geometry is not a POINT
+select st_numinteriorring(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 1))')) as nir;
+nir
+1

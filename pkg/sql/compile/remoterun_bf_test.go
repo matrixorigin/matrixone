@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TestBloomFilterSourcePropagation(t *testing.T) {
+func TestMembershipFilterSourcePropagation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -38,7 +38,7 @@ func TestBloomFilterSourcePropagation(t *testing.T) {
 
 	// 1. Setup Source and Process
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	ctx = context.WithValue(ctx, defines.IvfBloomFilter{}, expectedBF)
+	ctx = context.WithValue(ctx, defines.IvfMembershipFilter{}, expectedBF)
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
@@ -66,17 +66,17 @@ func TestBloomFilterSourcePropagation(t *testing.T) {
 	err = p.Unmarshal(data)
 	require.NoError(t, err)
 	require.NotNil(t, p.DataSource)
-	require.Equal(t, expectedBF, p.DataSource.BloomFilter, "Serialized Source should carry the Bloom Filter")
+	require.Equal(t, expectedBF, p.DataSource.MembershipFilter, "Serialized Source should carry the membership filter")
 
-	// 3. Decode Scope: generateScope should populate compile.Source.BloomFilter
+	// 3. Decode Scope: generateScope should populate compile.Source.MembershipFilterBytes
 	remoteProc := process.NewTopProcess(context.Background(), nil, nil, txnOperator, nil, nil, nil, nil, nil, nil, nil)
 	decodedScope, err := generateScope(remoteProc, &p, &scopeContext{}, true)
 	require.NoError(t, err)
 	require.NotNil(t, decodedScope.DataSource)
-	require.Equal(t, expectedBF, decodedScope.DataSource.BloomFilter, "Decoded Source should have the Bloom Filter")
+	require.Equal(t, expectedBF, decodedScope.DataSource.MembershipFilterBytes, "Decoded Source should have the membership filter")
 }
 
-func TestBloomFilterSourceDirectPropagation(t *testing.T) {
+func TestMembershipFilterSourceDirectPropagation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -94,7 +94,7 @@ func TestBloomFilterSourceDirectPropagation(t *testing.T) {
 	s := &Scope{
 		Proc: proc,
 		DataSource: &Source{
-			BloomFilter: expectedBF, // BF is set DIRECTLY in DataSource
+			MembershipFilterBytes: expectedBF, // BF is set DIRECTLY in DataSource
 			node: &plan.Node{
 				TableDef: &plan.TableDef{
 					TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
@@ -103,7 +103,7 @@ func TestBloomFilterSourceDirectPropagation(t *testing.T) {
 		},
 	}
 
-	// 2. Encode Scope: fillPipeline should prioritize s.DataSource.BloomFilter
+	// 2. Encode Scope: fillPipeline should prioritize s.DataSource.MembershipFilterBytes
 	data, err := encodeScope(s)
 	require.NoError(t, err)
 
@@ -112,12 +112,12 @@ func TestBloomFilterSourceDirectPropagation(t *testing.T) {
 	err = p.Unmarshal(data)
 	require.NoError(t, err)
 	require.NotNil(t, p.DataSource)
-	require.Equal(t, expectedBF, p.DataSource.BloomFilter, "Serialized Source should carry the Bloom Filter (from DataSource)")
+	require.Equal(t, expectedBF, p.DataSource.MembershipFilter, "Serialized Source should carry the membership filter (from DataSource)")
 
-	// 3. Decode Scope: generateScope should populate compile.Source.BloomFilter
+	// 3. Decode Scope: generateScope should populate compile.Source.MembershipFilterBytes
 	remoteProc := process.NewTopProcess(context.Background(), nil, nil, txnOperator, nil, nil, nil, nil, nil, nil, nil)
 	decodedScope, err := generateScope(remoteProc, &p, &scopeContext{}, true)
 	require.NoError(t, err)
 	require.NotNil(t, decodedScope.DataSource)
-	require.Equal(t, expectedBF, decodedScope.DataSource.BloomFilter, "Decoded Source should have the Bloom Filter")
+	require.Equal(t, expectedBF, decodedScope.DataSource.MembershipFilterBytes, "Decoded Source should have the membership filter")
 }

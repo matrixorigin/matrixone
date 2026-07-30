@@ -16,6 +16,12 @@ package lockservice
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -35,8 +41,17 @@ import (
 var (
 	defaultRPCTimeout          = time.Second * 10
 	defaultRPCWriteTimeout     = time.Second * 3
+	defaultRPCEnqueueTimeout   = time.Second * 5
 	defaultHandleWorkers       = 12
 	defaultHandleGetTxnWorkers = 4
+	// Recovery endpoints are hints: eviction safely falls back to service
+	// discovery and the negative-response confirmation path. Keep a hard bound
+	// so historical CN UUID churn cannot grow the client for its whole lifetime.
+	maxRecoveryBackendEntries = 4096
+	// The system resolver may retain a container hostname across endpoint
+	// recreation in a long-lived CGO process. Recovery must query DNS again;
+	// the pure-Go resolver has no cross-request result cache.
+	recoveryResolver = &net.Resolver{PreferGo: true, StrictErrors: true}
 )
 
 func acquireRequest() *pb.Request {
@@ -61,6 +76,29 @@ type client struct {
 	cfg     *morpc.Config
 	cluster clusterservice.MOCluster
 	client  morpc.RPCClient
+	// Control traffic is ping/pong only and uses a separate MORPC client. A
+	// data read timeout can therefore verify peer liveness without queueing
+	// behind the data TCP, writer, Flush, or reconnect lifecycle it diagnoses.
+	controlClient morpc.ControlClient
+	// Active-txn identity probes may deliberately reset their transport after
+	// detecting a stale CN incarnation. Keep them isolated so recovery cannot
+	// interrupt concurrent Lock/Unlock traffic on the normal client.
+	activeTxnClient morpc.RPCClient
+	// Periodic remote-lock keepalives use an independent MORPC client so their
+	// queue, writer, Flush, read timeout, and reconnect lifecycle cannot be
+	// blocked by Lock/Unlock traffic on the normal client.
+	keeperClient morpc.RPCClient
+
+	recoveryResetOnce sync.Once
+	recoveryResetC    chan struct{} // context-aware serialization of slow reset work
+	recoveryMu        sync.RWMutex
+	recoveryBackends  map[string]recoveryBackend // CN UUID -> recovery endpoint
+	resolveBackend    func(context.Context, string) (string, error)
+}
+
+type recoveryBackend struct {
+	discovered string
+	endpoint   string
 }
 
 type ClientOption func(c *client)
@@ -77,10 +115,12 @@ func NewClient(
 	opts ...ClientOption,
 ) (Client, error) {
 	c := &client{
-		logger:  getLogger(service),
-		service: service,
-		cfg:     &cfg,
+		logger:           getLogger(service),
+		service:          service,
+		cfg:              &cfg,
+		recoveryBackends: make(map[string]recoveryBackend),
 	}
+	c.resolveBackend = resolveTCP4Endpoint
 	for _, applyFn := range opts {
 		applyFn(c)
 	}
@@ -105,22 +145,67 @@ func NewClient(
 	c.cfg.ClientOptions = append(c.cfg.ClientOptions,
 		morpc.WithClientAutoCreateWaitTimeout(500*time.Millisecond))
 
+	controlClient, err := c.cfg.NewControlClient(
+		service,
+		"lock-control-client",
+		func() morpc.Message { return acquireResponse() })
+	if err != nil {
+		return nil, err
+	}
+	c.controlClient = controlClient
+	c.cfg.BackendOptions = append(
+		c.cfg.BackendOptions,
+		morpc.WithBackendLivenessProbe(func(ctx context.Context, remote string) error {
+			return controlClient.Ping(ctx, remote)
+		}),
+	)
+
 	client, err := c.cfg.NewClient(
 		service,
 		"lock-client",
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
+		_ = controlClient.Close()
 		return nil, err
 	}
 	c.client = client
+	activeTxnClient, err := c.cfg.NewClient(
+		service,
+		"lock-active-txn-client",
+		func() morpc.Message { return acquireResponse() })
+	if err != nil {
+		_ = client.Close()
+		_ = controlClient.Close()
+		return nil, err
+	}
+	c.activeTxnClient = activeTxnClient
+	keeperConfig := *c.cfg
+	keeperConfig.BackendOptions = append(
+		append([]morpc.BackendOption(nil), c.cfg.BackendOptions...),
+		morpc.WithBackendRequestRelease(func(message morpc.Message) {
+			releaseRequest(message.(*pb.Request))
+		}),
+	)
+	keeperClient, err := keeperConfig.NewClient(
+		service,
+		"lock-keeper-client",
+		func() morpc.Message { return acquireResponse() })
+	if err != nil {
+		_ = activeTxnClient.Close()
+		_ = client.Close()
+		_ = controlClient.Close()
+		return nil, err
+	}
+	c.keeperClient = keeperClient
 	return c, nil
 }
 
 func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, error) {
+	method := request.Method
 	if err := checkMethodVersion(ctx, c.service, request); err != nil {
 		return nil, err
 	}
-	f, err := c.AsyncSend(ctx, request)
+	f, err := c.asyncSend(ctx, request, false)
 	if err != nil {
 		return nil, err
 	}
@@ -128,10 +213,12 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 
 	v, err := f.Get()
 	if err != nil {
+		observeLockserviceRemoteRPCError(method, err)
 		return nil, err
 	}
 	resp := v.(*pb.Response)
 	if err := resp.UnwrapError(); err != nil {
+		observeLockserviceRemoteRPCError(method, err)
 		releaseResponse(resp)
 		// uuid and ip changed, async refresh cluster
 		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
@@ -151,17 +238,48 @@ func checkMethodVersion(
 }
 
 func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Future, error) {
+	return c.asyncSend(ctx, request, true)
+}
+
+func (c *client) asyncSend(
+	ctx context.Context,
+	request *pb.Request,
+	useKeeperTransport bool,
+) (*morpc.Future, error) {
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.client.send")
 	defer span.End()
 
+	method := request.Method
+	keeperOwnsRequest := useKeeperTransport && method == pb.Method_KeepRemoteLock
+	returnError := func(err error) (*morpc.Future, error) {
+		err = moerr.AttachCause(ctx, err)
+		observeLockserviceRemoteRPCError(method, err)
+		if keeperOwnsRequest {
+			releaseRequest(request)
+		}
+		return nil, err
+	}
+	lookupCN := func(
+		selector clusterservice.Selector,
+		apply func(metadata.CNService) bool,
+	) error {
+		return clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+			ctx,
+			c.cluster,
+			selector,
+			apply,
+		)
+	}
+
 	var sid = ""
 	var address string
 	for i := 0; i < 2; i++ {
+		var lookupErr error
 		switch request.Method {
 		case pb.Method_ForwardLock:
 			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -170,9 +288,10 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		case pb.Method_Lock,
 			pb.Method_Unlock,
 			pb.Method_GetTxnLock,
+			pb.Method_GetLockHolder,
 			pb.Method_KeepRemoteLock:
 			sid = getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -180,7 +299,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_ValidateService:
 			sid = getUUIDFromServiceIdentifier(request.ValidateService.ServiceID)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -188,7 +307,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_GetWaitingList:
 			sid = getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -196,7 +315,15 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_GetActiveTxn:
 			sid = getUUIDFromServiceIdentifier(request.GetActiveTxn.ServiceID)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		case pb.Method_CheckActiveTxn:
+			sid = getUUIDFromServiceIdentifier(request.CheckActiveTxn.ServiceID)
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -204,7 +331,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_AbortRemoteDeadlockTxn:
 			sid = getUUIDFromServiceIdentifier(request.AbortRemoteDeadlockTxn.Txn.WaiterAddress)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -216,32 +343,417 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				address = values[0].LockServiceAddress
 			}
 		}
+		if lookupErr != nil {
+			return returnError(lookupErr)
+		}
 		if address != "" {
 			break
 		}
 		if i == 0 {
-			c.cluster.ForceRefresh(true)
+			if refresher, ok := c.cluster.(interface {
+				Refresh(context.Context) error
+			}); ok {
+				if err := refresher.Refresh(ctx); err != nil {
+					return returnError(err)
+				}
+			} else {
+				// External cluster implementations do not expose a cancellable
+				// refresh contract. Request an asynchronous refresh instead of
+				// blocking an RPC past its context.
+				c.cluster.ForceRefresh(false)
+			}
 		}
 	}
 	if address == "" {
 		var cns []string
-		c.cluster.GetCNServiceWithoutWorkingState(
+		if err := lookupCN(
 			clusterservice.NewSelectAll(),
 			func(s metadata.CNService) bool {
 				cns = append(cns, s.ServiceID)
 				return true
-			})
+			}); err != nil {
+			return returnError(err)
+		}
 		c.logger.Error("cannot find lockservice address",
 			zap.String("target", sid),
 			zap.Any("cns", cns),
 			zap.String("request", request.DebugString()))
 
 	}
-	return c.client.Send(ctx, address, request)
+	transport := c.client
+	if keeperOwnsRequest {
+		transport = c.keeperTransport()
+	} else if isActiveTxnMethod(request.Method) {
+		address = c.activeTxnBackend(sid, address)
+		transport = c.activeTxnTransport()
+	}
+	f, err := transport.Send(ctx, address, request)
+	if err != nil {
+		return returnError(err)
+	}
+	return f, err
+}
+
+func observeLockserviceRemoteRPCError(method pb.Method, err error) {
+	if errorType := lockserviceRemoteRPCErrorType(err); errorType != "" {
+		v2.NewLockserviceRemoteRPCErrorCounter(method.String(), errorType).Inc()
+	}
+}
+
+func lockserviceRemoteRPCErrorType(err error) string {
+	if err == nil {
+		return ""
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) {
+		return "rpc_timeout"
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+		return "backend_cannot_connect"
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
+		return "backend_closed"
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return "unexpected_eof"
+	}
+	if errors.Is(err, io.EOF) {
+		return "eof"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ""
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	errText := err.Error()
+	switch {
+	case strings.Contains(errText, "i/o timeout"),
+		strings.Contains(errText, "deadline exceeded"),
+		strings.Contains(errText, "timeout"):
+		return "timeout"
+	case strings.Contains(errText, "unexpected EOF"):
+		return "unexpected_eof"
+	case strings.Contains(errText, "EOF"):
+		return "eof"
+	}
+	return ""
 }
 
 func (c *client) Close() error {
-	return c.client.Close()
+	var normalErr, activeTxnErr, keeperErr, controlErr error
+	if c.client != nil {
+		normalErr = c.client.Close()
+	}
+	if c.activeTxnClient != nil && c.activeTxnClient != c.client {
+		activeTxnErr = c.activeTxnClient.Close()
+	}
+	if c.keeperClient != nil &&
+		c.keeperClient != c.client &&
+		c.keeperClient != c.activeTxnClient {
+		keeperErr = c.keeperClient.Close()
+	}
+	if c.controlClient != nil {
+		controlErr = c.controlClient.Close()
+	}
+	return errors.Join(normalErr, activeTxnErr, keeperErr, controlErr)
+}
+
+func isActiveTxnMethod(method pb.Method) bool {
+	return method == pb.Method_GetActiveTxn || method == pb.Method_CheckActiveTxn
+}
+
+func (c *client) activeTxnTransport() morpc.RPCClient {
+	if c.activeTxnClient != nil {
+		return c.activeTxnClient
+	}
+	// Preserve compatibility for tests and embedders that construct client
+	// directly. Production NewClient always installs the isolated transport.
+	return c.client
+}
+
+func (c *client) keeperTransport() morpc.RPCClient {
+	if c.keeperClient != nil {
+		return c.keeperClient
+	}
+	// Preserve compatibility for tests and embedders that construct client
+	// directly. Production NewClient always installs the isolated transport.
+	return c.client
+}
+
+// ResetBackend detaches the pooled connection for one CN incarnation. The
+// address can remain unchanged across a hot recreate, so service discovery
+// refresh alone is insufficient to prevent reuse of the stale backend.
+func (c *client) ResetBackend(parent context.Context, serviceID string) (err error) {
+	sid := getUUIDFromServiceIdentifier(serviceID)
+	started := time.Now()
+	var staleAddress, address, endpoint string
+	defer func() {
+		result := "success"
+		if err != nil {
+			result = "failure"
+		}
+		v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("backend-reset-" + result).Inc()
+		if c.logger == nil {
+			return
+		}
+		fields := []zap.Field{
+			zap.String("service-id", serviceID),
+			zap.String("cn-id", sid),
+			zap.String("stale-address", staleAddress),
+			zap.String("discovered-address", address),
+			zap.String("resolved-endpoint", endpoint),
+			zap.Duration("duration", time.Since(started)),
+		}
+		if err != nil {
+			c.logger.Warn("active-txn recovery backend reset failed",
+				append(fields, zap.Error(err))...)
+			return
+		}
+		c.logger.Info("active-txn recovery backend reset completed", fields...)
+	}()
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeoutCause(
+		parent,
+		defaultRPCTimeout,
+		moerr.CauseResetLockServiceBackend,
+	)
+	defer cancel()
+
+	// Discovery refresh, DNS, and backend shutdown can all be slow. Serialize
+	// resets separately and context-aware, so one slow recovery cannot make
+	// later probes wait past their own deadline.
+	if err := c.acquireRecoveryReset(ctx); err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	defer c.releaseRecoveryReset()
+	resetter, ok := c.activeTxnTransport().(interface {
+		CloseBackendFor(string) error
+	})
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("morpc client does not support targeted backend reset")
+	}
+
+	// A reset is triggered only after the current active-txn route has become
+	// suspect. Remove the pinned override before any discovery operation that
+	// can fail, so an early return cannot keep routing later probes to a
+	// known-stale endpoint.
+	c.recoveryMu.Lock()
+	old, hadOld := c.recoveryBackends[sid]
+	if hadOld {
+		delete(c.recoveryBackends, sid)
+	}
+	c.recoveryMu.Unlock()
+
+	seen := make(map[string]struct{}, 5)
+	var closeErr error
+	closeCandidate := func(candidate string) {
+		if candidate == "" {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		closeErr = errors.Join(closeErr, resetter.CloseBackendFor(candidate))
+	}
+	if hadOld {
+		closeCandidate(old.discovered)
+		closeCandidate(old.endpoint)
+	}
+
+	lookupAddress := func() (string, error) {
+		var address string
+		err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+			ctx,
+			c.cluster,
+			clusterservice.NewServiceIDSelector(sid),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			})
+		if err != nil {
+			return "", moerr.AttachCause(ctx, err)
+		}
+		return address, nil
+	}
+
+	// A negative response proves that the route used for the first check may be
+	// stale even when the cached address is non-empty. Refresh synchronously so
+	// the confirming request cannot be sent to an old CN address after a hot
+	// recreate or address reassignment.
+	staleAddress, err = lookupAddress()
+	if err != nil {
+		return errors.Join(closeErr, err)
+	}
+	// Detach the pre-refresh hostname backend before refreshing. Even without a
+	// pinned IP, the first negative response proves this connection is suspect.
+	closeCandidate(staleAddress)
+	refresher, ok := c.cluster.(clusterservice.AuthoritativeRefresher)
+	if !ok {
+		return errors.Join(
+			closeErr,
+			moerr.NewInternalErrorNoCtx(
+				"cluster service does not support authoritative refresh"),
+		)
+	}
+	refreshErr := refresher.Refresh(ctx)
+	closePreRefreshCandidates := func() {
+		if hadOld {
+			closeCandidate(old.discovered)
+			closeCandidate(old.endpoint)
+		}
+		closeCandidate(staleAddress)
+	}
+	if refreshErr != nil {
+		// Error exits still need a second phase after the refresh attempt:
+		// known routes can be recreated while Refresh is blocked.
+		seen = make(map[string]struct{}, 3)
+		closePreRefreshCandidates()
+		return errors.Join(closeErr, refreshErr)
+	}
+	address, err = lookupAddress()
+	if err != nil {
+		seen = make(map[string]struct{}, 3)
+		closePreRefreshCandidates()
+		return errors.Join(closeErr, err)
+	}
+
+	var resolveErr error
+	if address != "" {
+		if c.resolveBackend == nil {
+			resolveErr = moerr.NewInternalErrorNoCtx("lockservice recovery resolver is not configured")
+		} else {
+			endpoint, resolveErr = c.resolveBackend(ctx, address)
+		}
+	}
+
+	// This is the successful path's true final barrier. Discovery lookup and
+	// DNS resolution can both block and permit a route closed in an earlier
+	// phase to be recreated, so start a fresh de-duplication set only after both
+	// have completed. Detach every old and new name accepted by MORPC before
+	// publishing the replacement override.
+	seen = make(map[string]struct{}, 5)
+	closePreRefreshCandidates()
+	closeCandidate(address)
+	closeCandidate(endpoint)
+	if address == "" {
+		return errors.Join(
+			closeErr,
+			moerr.NewInternalErrorNoCtx("cannot find lockservice address for "+sid),
+		)
+	}
+	if resolveErr != nil || closeErr != nil {
+		return errors.Join(resolveErr, closeErr)
+	}
+
+	if endpoint == address {
+		return nil
+	}
+	c.recoveryMu.Lock()
+	c.storeRecoveryBackendLocked(sid, recoveryBackend{
+		discovered: address,
+		endpoint:   endpoint,
+	})
+	c.recoveryMu.Unlock()
+	return nil
+}
+
+func (c *client) acquireRecoveryReset(ctx context.Context) error {
+	c.recoveryResetOnce.Do(func() {
+		c.recoveryResetC = make(chan struct{}, 1)
+		c.recoveryResetC <- struct{}{}
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.recoveryResetC:
+		return nil
+	}
+}
+
+func (c *client) releaseRecoveryReset() {
+	c.recoveryResetC <- struct{}{}
+}
+
+func (c *client) storeRecoveryBackendLocked(serviceID string, backend recoveryBackend) {
+	if c.recoveryBackends == nil {
+		c.recoveryBackends = make(map[string]recoveryBackend)
+	}
+	if _, exists := c.recoveryBackends[serviceID]; !exists &&
+		len(c.recoveryBackends) >= maxRecoveryBackendEntries {
+		// Any victim is safe: this cache is only a recovery hint, and a miss
+		// re-enters discovery plus the reset/confirmation path.
+		for victim := range c.recoveryBackends {
+			delete(c.recoveryBackends, victim)
+			break
+		}
+	}
+	c.recoveryBackends[serviceID] = backend
+}
+
+func (c *client) activeTxnBackend(serviceID, discovered string) string {
+	c.recoveryMu.RLock()
+	backend, ok := c.recoveryBackends[serviceID]
+	if ok && backend.discovered == discovered {
+		endpoint := backend.endpoint
+		c.recoveryMu.RUnlock()
+		return endpoint
+	}
+	c.recoveryMu.RUnlock()
+	if ok {
+		c.recoveryMu.Lock()
+		if current, exists := c.recoveryBackends[serviceID]; exists && current == backend {
+			delete(c.recoveryBackends, serviceID)
+		}
+		c.recoveryMu.Unlock()
+	}
+	return discovered
+}
+
+func resolveTCP4Endpoint(ctx context.Context, address string) (string, error) {
+	return resolveTCP4EndpointWithLookup(ctx, address, recoveryResolver.LookupIP)
+}
+
+func resolveTCP4EndpointWithLookup(
+	ctx context.Context,
+	address string,
+	lookup func(context.Context, string, string) ([]net.IP, error),
+) (string, error) {
+	if strings.Contains(address, "://") {
+		return address, nil
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || net.ParseIP(host) != nil {
+		return address, err
+	}
+	ips, err := lookup(ctx, "ip4", host)
+	if err != nil {
+		return address, err
+	}
+	// Without a concrete service-identity endpoint, a second Valid=false may
+	// still come from a stale or different CN behind the same multi-A name.
+	// Preserve the caller's unknown state instead of claiming reset success.
+	if len(ips) != 1 {
+		return address, moerr.NewInternalErrorNoCtxf(
+			"lockservice recovery requires one IPv4 endpoint for %s, got %d",
+			host,
+			len(ips),
+		)
+	}
+	ip := ips[0].To4()
+	if ip == nil {
+		return address, moerr.NewInternalErrorNoCtxf(
+			"lockservice recovery requires a valid IPv4 endpoint for %s",
+			host,
+		)
+	}
+	return net.JoinHostPort(ip.String(), port), nil
 }
 
 // WithServerMessageFilter set filter func. Requests can be modified or filtered out by the filter
@@ -259,9 +771,10 @@ type server struct {
 	rpc      morpc.RPCServer
 	handlers map[pb.Method]RequestHandleFunc
 
-	requests             chan requestCtx
-	getActiveTxnRequests chan requestCtx
-	stopper              *stopper.Stopper
+	requests              chan requestCtx
+	getActiveTxnRequests  chan requestCtx
+	requestEnqueueTimeout time.Duration
+	stopper               *stopper.Stopper
 
 	options struct {
 		filter func(*pb.Request) bool
@@ -277,12 +790,13 @@ func NewServer(
 ) (Server, error) {
 	logger := getLogger(service)
 	s := &server{
-		logger:               logger,
-		cfg:                  &cfg,
-		address:              address,
-		handlers:             make(map[pb.Method]RequestHandleFunc),
-		requests:             make(chan requestCtx, 10240),
-		getActiveTxnRequests: make(chan requestCtx, 10240),
+		logger:                logger,
+		cfg:                   &cfg,
+		address:               address,
+		handlers:              make(map[pb.Method]RequestHandleFunc),
+		requests:              make(chan requestCtx, 10240),
+		getActiveTxnRequests:  make(chan requestCtx, 10240),
+		requestEnqueueTimeout: defaultRPCEnqueueTimeout,
 		stopper: stopper.NewStopper("lock-service-rpc-server",
 			stopper.WithLogger(logger.RawLogger())),
 	}
@@ -317,6 +831,8 @@ func (s *server) Close() error {
 		return err
 	}
 	s.stopper.Stop()
+	releaseQueuedRequests(s.requests)
+	releaseQueuedRequests(s.getActiveTxnRequests)
 	close(s.requests)
 	close(s.getActiveTxnRequests)
 	return nil
@@ -382,24 +898,90 @@ func (s *server) onMessage(
 			s.logger.Debug("skip request by timeout",
 				zap.String("request", req.DebugString()))
 		}
+		if msg.Cancel != nil {
+			msg.Cancel()
+		}
 		releaseRequest(req)
 		return nil
 	default:
 	}
 
 	c := s.requests
-	if req.Method == pb.Method_GetActiveTxn {
+	if req.Method == pb.Method_GetActiveTxn ||
+		req.Method == pb.Method_CheckActiveTxn {
 		c = s.getActiveTxnRequests
 	}
-	c <- requestCtx{
+	queuedRequest := requestCtx{
 		req:     req,
 		handler: handler,
 		cs:      cs,
 		cancel:  msg.Cancel,
 		ctx:     ctx,
 	}
-	v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
-	return nil
+	select {
+	case c <- queuedRequest:
+		v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
+		return nil
+	default:
+	}
+
+	// Keep the connection read goroutine bounded when all workers and the
+	// request queue are saturated. Returning an error from this handler would
+	// close the shared MORPC session, so reject only this request with a normal
+	// RPC error response instead.
+	timer := time.NewTimer(s.requestEnqueueTimeout)
+	defer timer.Stop()
+	var sessionDone <-chan struct{}
+	if sessionCtx := cs.SessionCtx(); sessionCtx != nil {
+		sessionDone = sessionCtx.Done()
+	}
+	select {
+	case c <- queuedRequest:
+		v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
+		return nil
+	case <-ctx.Done():
+		v2.TxnLockRPCQueueRejectCounter.WithLabelValues("request-canceled").Inc()
+		if msg.Cancel != nil {
+			msg.Cancel()
+		}
+		releaseRequest(req)
+		return nil
+	case <-sessionDone:
+		v2.TxnLockRPCQueueRejectCounter.WithLabelValues("session-closed").Inc()
+		if msg.Cancel != nil {
+			msg.Cancel()
+		}
+		releaseRequest(req)
+		return nil
+	case <-timer.C:
+		v2.TxnLockRPCQueueRejectCounter.WithLabelValues("queue-timeout").Inc()
+		writeResponse(
+			s.logger,
+			msg.Cancel,
+			getResponse(req),
+			moerr.NewInternalErrorNoCtx("lock service request queue full"),
+			cs,
+		)
+		releaseRequest(req)
+		return nil
+	}
+}
+
+func releaseQueuedRequests(requests chan requestCtx) {
+	for {
+		select {
+		case request, ok := <-requests:
+			if !ok {
+				return
+			}
+			if request.cancel != nil {
+				request.cancel()
+			}
+			releaseRequest(request.req)
+		default:
+			return
+		}
+	}
 }
 
 func (s *server) handle(
@@ -443,7 +1025,7 @@ func writeResponse(
 	err error,
 	cs morpc.ClientSession,
 ) {
-	_ = writeResponseWithDeadline(logger, cancel, resp, err, cs, defaultRPCWriteTimeout)
+	_ = writeResponseWithDeadline(logger, cancel, resp, err, cs, defaultRPCWriteTimeout, nil)
 }
 
 func writeResponseWithDeadline(
@@ -453,6 +1035,7 @@ func writeResponseWithDeadline(
 	err error,
 	cs morpc.ClientSession,
 	timeout time.Duration,
+	extraFields func() []zap.Field,
 ) error {
 	if cancel != nil {
 		defer cancel()
@@ -467,6 +1050,9 @@ func writeResponseWithDeadline(
 		logger.Debug("handle request completed",
 			zap.String("response", detail))
 	}
+	requestID := resp.RequestID
+	method := resp.Method.String()
+	remote := cs.RemoteAddress()
 
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), timeout)
 	defer writeCancel()
@@ -475,9 +1061,31 @@ func writeResponseWithDeadline(
 		defer stop()
 	}
 	if err := cs.Write(writeCtx, resp); err != nil {
-		logger.Error("write response failed",
+		var extra []zap.Field
+		if extraFields != nil {
+			extra = extraFields()
+		}
+		fields := []zap.Field{
 			zap.Error(err),
-			zap.String("response", detail))
+			zap.Uint64("request-id", requestID),
+			zap.String("method", method),
+			zap.String("remote", remote),
+			zap.String("response", detail),
+		}
+		fields = append(fields, extra...)
+		logger.Error("write response failed", fields...)
+		// A dropped response leaves the peer's Future waiting unless the
+		// session is closed and the client-side backend fails pending futures.
+		if closeErr := cs.Close(); closeErr != nil {
+			closeFields := []zap.Field{
+				zap.Error(closeErr),
+				zap.Uint64("request-id", requestID),
+				zap.String("method", method),
+				zap.String("remote", remote),
+			}
+			closeFields = append(closeFields, extra...)
+			logger.Error("close client session after write response failed", closeFields...)
+		}
 		return err
 	}
 	return nil

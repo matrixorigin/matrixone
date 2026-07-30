@@ -86,21 +86,155 @@ func mock_runSql_streaming_2files(
 	return executor.Result{}, nil
 }
 
+func TestHnswSearchFloat32(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+
+	s := NewHnswSearch[float32](idxcfg, tblcfg)
+	// mock Search call by providing a minimal environment where Search might return nil or some values
+	// Since s.Indexes is empty, Search will return nil, nil, nil or error.
+
+	rt := vectorindex.RuntimeConfig{Limit: 4}
+	query := []float32{1, 2, 3}
+
+	// 1. Test with nil results (no indexes loaded)
+	outKeys := make([]int64, 4)
+	outDists := make([]float32, 4)
+	err := s.SearchFloat32(sqlproc, query, rt, outKeys, outDists)
+	require.NoError(t, err)
+
+	// 2. Mock some indexes to test copying logic
+	idx, err := usearch.NewIndex(idxcfg.Usearch)
+	require.NoError(t, err)
+	defer idx.Destroy()
+
+	err = idx.Reserve(1)
+	require.NoError(t, err)
+	err = idx.Add(0, []float32{1, 2, 3})
+	require.NoError(t, err)
+
+	s.Indexes = []*HnswModel[float32]{
+		{
+			Id:    "abc-0",
+			Index: idx,
+		},
+	}
+
+	keysAny, dists64, err := s.Search(sqlproc, query, rt)
+	require.NoError(t, err)
+	expectedKeys := keysAny.([]int64)
+
+	err = s.SearchFloat32(sqlproc, query, rt, outKeys, outDists)
+	require.NoError(t, err)
+
+	require.Equal(t, expectedKeys, outKeys[:len(expectedKeys)])
+	for i := range dists64 {
+		require.InDelta(t, dists64[i], float64(outDists[i]), 1e-5)
+	}
+}
+
+func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{}
+
+	s := NewHnswSearch[float32](idxcfg, tblcfg)
+	rt := vectorindex.RuntimeConfig{Limit: 1}
+
+	// pass non-[]float32 query — Search returns error, SearchFloat32 propagates it
+	err := s.SearchFloat32(sqlproc, "wrong", rt, nil, nil)
+	require.Error(t, err)
+}
+
+func TestBoundedHnswSearchLimits(t *testing.T) {
+	// requested >= every file: each file returns its full cardinality, result = total.
+	perIndex, resultLimit := boundedHnswSearchLimits([]uint{3, 7}, ^uint(0))
+	require.Equal(t, []uint{3, 7}, perIndex)
+	require.Equal(t, uint(10), resultLimit)
+
+	// requested caps each per-file limit and the result; the heap bound is this resultLimit
+	// (5), NOT the sum of per-file limits (8) — that was the shard_count*LIMIT bug (#25637).
+	perIndex, resultLimit = boundedHnswSearchLimits([]uint{3, 7}, 5)
+	require.Equal(t, []uint{3, 5}, perIndex)
+	require.Equal(t, uint(5), resultLimit)
+
+	// total overflows to saturate; resultLimit is capped by requested.
+	_, resultLimit = boundedHnswSearchLimits([]uint{^uint(0), ^uint(0)}, ^uint(0))
+	require.Equal(t, ^uint(0), resultLimit)
+}
+
+func TestHnswSearchUnlockSynchronizesWithWaitPredicate(t *testing.T) {
+	s := NewHnswSearch[float32](vectorindex.IndexConfig{}, vectorindex.IndexTableConfig{ThreadsSearch: 1})
+	s.Concurrency.Store(1)
+	s.Cond.L.Lock()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		s.unlock()
+		close(done)
+	}()
+	<-started
+
+	select {
+	case <-done:
+		t.Fatal("unlock changed the predicate without acquiring the condition lock")
+	case <-time.After(20 * time.Millisecond):
+	}
+	s.Cond.L.Unlock()
+	<-done
+	require.Zero(t, s.Concurrency.Load())
+}
+
+func TestHnswSearchUpdateConfig(t *testing.T) {
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	tblcfg := vectorindex.IndexTableConfig{}
+	s := NewHnswSearch[float32](idxcfg, tblcfg)
+	require.NoError(t, s.UpdateConfig(nil))
+}
+
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	// stub runSql function
+	oldRunSQL := runSql
+	oldRunSQLStreaming := runSql_streaming
+	oldTTL := cache.VectorIndexCacheTTL
+	oldCache := cache.Cache
+
+	// Stub the SQL functions and isolate the process-global cache state.
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
-
-	// init cache
-	cache.VectorIndexCacheTTL = 2 * time.Second
-	cache.VectorIndexCacheTTL = 2 * time.Second
-	cache.Cache = cache.NewVectorIndexCache()
-
-	time.Sleep(1999 * time.Millisecond)
+	cacheTTL := 2 * time.Second
+	nthread := 64
+	iterations := 20000
+	if testing.Short() {
+		// PR CI needs the concurrent load/search/expiry transitions, not the
+		// production-scale stress count.
+		cacheTTL = 100 * time.Millisecond
+		nthread = 16
+		iterations = 1000
+	}
+	cache.VectorIndexCacheTTL = cacheTTL
+	testCache := cache.NewVectorIndexCache()
+	cache.Cache = testCache
+	t.Cleanup(func() {
+		testCache.Destroy()
+		cache.Cache = oldCache
+		cache.VectorIndexCacheTTL = oldTTL
+		runSql = oldRunSQL
+		runSql_streaming = oldRunSQLStreaming
+	})
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -108,13 +242,12 @@ func TestHnsw(t *testing.T) {
 	fp32a := []float32{0, 1, 2}
 
 	var wg sync.WaitGroup
-	nthread := 64
 
 	for i := 0; i < nthread; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 20000; j++ {
+			for j := 0; j < iterations; j++ {
 				cache.Cache.Once()
 
 				algo := NewHnswSearch[float32](idxcfg, tblcfg)
@@ -133,8 +266,14 @@ func TestHnsw(t *testing.T) {
 
 	wg.Wait()
 
-	time.Sleep(3 * time.Second)
-	cache.Cache.Destroy()
+	require.Eventually(t, func() bool {
+		empty := true
+		testCache.IndexMap.Range(func(_, _ any) bool {
+			empty = false
+			return false
+		})
+		return empty
+	}, 3*cacheTTL, 10*time.Millisecond, "cache entry must expire after searches stop")
 }
 
 func makeMetaBatch(proc *process.Process) *batch.Batch {

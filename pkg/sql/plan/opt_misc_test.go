@@ -20,8 +20,101 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDetermineHashOnPKRequiresNonNullableJoinKeys(t *testing.T) {
+	tests := []struct {
+		name             string
+		leftNotNullable  bool
+		rightNotNullable bool
+		wantHashOnPK     bool
+	}{
+		{
+			name:             "both join keys are not nullable",
+			leftNotNullable:  true,
+			rightNotNullable: true,
+			wantHashOnPK:     true,
+		},
+		{
+			name:             "left join key is nullable",
+			leftNotNullable:  false,
+			rightNotNullable: true,
+			wantHashOnPK:     true,
+		},
+		{
+			name:             "right primary key join key is nullable",
+			leftNotNullable:  true,
+			rightNotNullable: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := buildHashOnPKTestBuilder(tt.leftNotNullable, tt.rightNotNullable)
+
+			determineHashOnPK(2, builder)
+
+			require.Equal(t, tt.wantHashOnPK, builder.qry.Nodes[2].Stats.HashmapStats.HashOnPK)
+		})
+	}
+}
+
+func buildHashOnPKTestBuilder(leftNotNullable bool, rightNotNullable bool) *QueryBuilder {
+	leftType := plan.Type{Id: int32(types.T_int64), NotNullable: leftNotNullable}
+	rightType := plan.Type{Id: int32(types.T_int64), NotNullable: rightNotNullable}
+
+	leftExpr := GetColExpr(leftType, 1, 0)
+	rightExpr := GetColExpr(rightType, 2, 0)
+	eqExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: getFunctionObjRef(function.EncodeOverloadID(int32(function.EQUAL), 0), "="),
+				Args: []*plan.Expr{leftExpr, rightExpr},
+			},
+		},
+	}
+
+	return &QueryBuilder{
+		qry: &plan.Query{
+			Nodes: []*plan.Node{
+				{
+					NodeType:    plan.Node_TABLE_SCAN,
+					NodeId:      0,
+					BindingTags: []int32{1},
+					TableDef: &plan.TableDef{
+						Name:          "left_t",
+						Cols:          []*plan.ColDef{{Name: "l_col", Typ: leftType}},
+						Name2ColIndex: map[string]int32{"l_col": 0},
+					},
+				},
+				{
+					NodeType:    plan.Node_TABLE_SCAN,
+					NodeId:      1,
+					BindingTags: []int32{2},
+					TableDef: &plan.TableDef{
+						Name:          "right_t",
+						Cols:          []*plan.ColDef{{Name: "r_pk", Typ: rightType}},
+						Name2ColIndex: map[string]int32{"r_pk": 0},
+						Pkey:          &plan.PrimaryKeyDef{PkeyColName: "r_pk", Names: []string{"r_pk"}},
+					},
+				},
+				{
+					NodeType: plan.Node_JOIN,
+					NodeId:   2,
+					Stats: &plan.Stats{
+						HashmapStats: &plan.HashMapStats{},
+					},
+					Children: []int32{0, 1},
+					JoinType: plan.Node_INNER,
+					OnList:   []*plan.Expr{eqExpr},
+				},
+			},
+		},
+	}
+}
 
 func TestRemapWindowClause(t *testing.T) {
 	b := &QueryBuilder{
@@ -188,6 +281,78 @@ func TestRemapWindowClause(t *testing.T) {
 		t.Log(err)
 		require.Error(t, err)
 	})
+}
+
+func TestRemapHavingClause(t *testing.T) {
+	b := &QueryBuilder{
+		compCtx: &MockCompilerContext{ctx: context.Background()},
+		nameByColRef: map[[2]int32]string{
+			{1, 0}: "group_key",
+			{2, 2}: "kept_aggregate",
+		},
+	}
+
+	t.Run("remaps compacted aggregate inside list", func(t *testing.T) {
+		expr := &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0),
+			GetColExpr(plan.Type{Id: int32(types.T_int64)}, 2, 2),
+		}}}}
+
+		err := b.remapHavingClause(expr, 1, 2, 1, 3, []int32{-1, -1, 0})
+		require.NoError(t, err)
+		require.Equal(t, int32(-1), expr.GetList().List[0].GetCol().RelPos)
+		require.Equal(t, int32(0), expr.GetList().List[0].GetCol().ColPos)
+		require.Equal(t, int32(-2), expr.GetList().List[1].GetCol().RelPos)
+		require.Equal(t, int32(1), expr.GetList().List[1].GetCol().ColPos)
+	})
+
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+	}{
+		{
+			name: "rejects out of range aggregate slot",
+			expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 2, 3),
+		},
+		{
+			name: "rejects pruned aggregate slot",
+			expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 2, 0),
+		},
+		{
+			name: "rejects invalid group slot",
+			expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 1),
+		},
+		{
+			name: "rejects unknown relation tag",
+			expr: GetColExpr(plan.Type{Id: int32(types.T_int64)}, 3, 0),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := b.remapHavingClause(tc.expr, 1, 2, 1, 3, []int32{-1, -1, 0})
+			require.Error(t, err)
+		})
+	}
+
+	t.Run("rejects inconsistent aggregate position map", func(t *testing.T) {
+		expr := GetColExpr(plan.Type{Id: int32(types.T_int64)}, 2, 2)
+		err := b.remapHavingClause(expr, 1, 2, 1, 3, []int32{0})
+		require.Error(t, err)
+	})
+}
+
+func TestAggregateDependsOnInputOrder(t *testing.T) {
+	makeAgg := func(name string) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: name}}}}
+	}
+
+	for _, name := range []string{"group_concat", "json_arrayagg", "json_objectagg"} {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, aggregateDependsOnInputOrder(makeAgg(name)))
+		})
+	}
+	require.False(t, aggregateDependsOnInputOrder(makeAgg("sum")))
+	require.False(t, aggregateDependsOnInputOrder(GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)))
+	require.False(t, aggregateDependsOnInputOrder(&plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}))
 }
 
 func TestBuildWindowFilterOnNonProjectedColumns(t *testing.T) {

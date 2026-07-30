@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -261,8 +262,11 @@ func GetSnapshotInfoByName(ctx context.Context, sqlExecutor executor.SQLExecutor
 		return nil, err
 	}
 
-	// Query all snapshot fields: snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id
-	querySQL := fmt.Sprintf(`select snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id from mo_catalog.mo_snapshots where sname = '%s' order by snapshot_id limit 1;`, strings.ReplaceAll(snapshotName, "'", "''"))
+	// Query all snapshot fields: snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id.
+	// Branch-managed rows (`kind='branch'`) are internal protection entries
+	// and must never surface to user-facing callers (review PR#24313
+	// blocking issue #4).
+	querySQL := fmt.Sprintf(`select snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id from mo_catalog.mo_snapshots where sname = '%s' and kind != '%s' order by snapshot_id limit 1;`, strings.ReplaceAll(snapshotName, "'", "''"), databranchutils.BranchSnapshotKind)
 	opts := executor.Options{}.WithDisableIncrStatement().WithTxn(txnOp)
 	queryResult, err := sqlExecutor.Exec(ctx, querySQL, opts)
 	if err != nil {

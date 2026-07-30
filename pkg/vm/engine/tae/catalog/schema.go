@@ -16,11 +16,12 @@ package catalog
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -118,7 +119,7 @@ func (cpk *SortKey) AddDef(def *ColDef) (ok bool) {
 		cpk.isPrimary = true
 	}
 	cpk.Defs = append(cpk.Defs, def)
-	sort.Slice(cpk.Defs, func(i, j int) bool { return cpk.Defs[i].SortIdx < cpk.Defs[j].SortIdx })
+	slices.SortFunc(cpk.Defs, func(a, b *ColDef) int { return cmp.Compare(a.SortIdx, b.SortIdx) })
 	cpk.search[def.Idx] = int(def.SortIdx)
 	return true
 }
@@ -204,6 +205,17 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Constraint = req.GetUpdateCstr().GetConstraints()
 	case apipb.AlterKind_UpdateComment:
 		s.Comment = req.GetUpdateComment().GetComment()
+	case apipb.AlterKind_UpdateAutoIncrement:
+		if s.Extra.AutoIncrEpoch == math.MaxUint32 ||
+			req.GetUpdateAutoIncrement().GetEpoch() != s.Extra.AutoIncrEpoch+1 {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid AUTO_INCREMENT epoch transition %d -> %d",
+				s.Extra.AutoIncrEpoch,
+				req.GetUpdateAutoIncrement().GetEpoch(),
+			)
+		}
+		s.Extra.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
+		s.Extra.AutoIncrEpoch = req.GetUpdateAutoIncrement().GetEpoch()
 	case apipb.AlterKind_RenameColumn:
 		rename := req.GetRenameCol()
 		var targetCol *ColDef
@@ -342,9 +354,11 @@ func (s *Schema) HasFakePK() bool {
 }
 
 func (s *Schema) MustGetExtraBytes() []byte {
-	// Sync FromPublication to Extra before serialization
-	s.Extra.FromPublication = s.FromPublication
-	data, err := s.Extra.Marshal()
+	// Schema is immutable after publication. Keep serialization read-only so
+	// MVCC versions can safely share the same schema.
+	extra := *s.Extra
+	extra.FromPublication = s.FromPublication
+	data, err := extra.Marshal()
 	if err != nil {
 		panic(err)
 	}

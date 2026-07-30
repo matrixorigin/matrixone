@@ -76,32 +76,6 @@ func doGetBindings(expr *plan.Expr) map[int32]bool {
 	return res
 }
 
-func hasParam(expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_P:
-		return true
-
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			if hasParam(arg) {
-				return true
-			}
-		}
-		return false
-
-	case *plan.Expr_List:
-		for _, arg := range exprImpl.List.List {
-			if hasParam(arg) {
-				return true
-			}
-		}
-		return false
-
-	default:
-		return false
-	}
-}
-
 func hasCorrCol(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Corr:
@@ -247,6 +221,37 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag in
 	return
 }
 
+func getJoinSideWithOuterScope(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag int32) (side int8) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
+		}
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			side |= getJoinSideWithOuterScope(arg, leftTags, rightTags, markTag)
+		}
+
+	case *plan.Expr_Col:
+		tag := exprImpl.Col.RelPos
+		if leftTags[tag] {
+			side = JoinSideLeft
+		} else if rightTags[tag] {
+			side = JoinSideRight
+		} else if tag == markTag {
+			side = JoinSideMark
+		} else {
+			side = JoinSideOuter
+		}
+
+	case *plan.Expr_Corr:
+		side = JoinSideCorrelated
+	}
+
+	return
+}
+
 func containsTag(expr *plan.Expr, tag int32) bool {
 	if expr == nil {
 		return false
@@ -291,6 +296,36 @@ func containsTag(expr *plan.Expr, tag int32) bool {
 	}
 
 	return false
+}
+
+func containsOnlyTags(expr *plan.Expr, tags map[int32]bool) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if !containsOnlyTags(arg, tags) {
+				return false
+			}
+		}
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if !containsOnlyTags(arg, tags) {
+				return false
+			}
+		}
+
+	case *plan.Expr_Col:
+		return tags[exprImpl.Col.RelPos]
+
+	case *plan.Expr_Corr, *plan.Expr_Sub:
+		return false
+	}
+
+	return true
 }
 
 func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
@@ -382,6 +417,12 @@ func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 
 // applyDistributivity (X AND B) OR (X AND C) OR (X AND D) => X AND (B OR C OR D)
 // TODO: move it into optimizer
+//
+// Conjuncts are compared via a structural fingerprint (exprStructuralHash +
+// exprStructuralEqual) rather than proto serialization. For deeply nested
+// IN/OR trees the old Marshal path walked every expression twice (ProtoSize
+// + writeTo) per lookup and dominated CPU; hashing traverses once with no
+// allocation and collisions are rare enough that Equal rarely runs.
 func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -396,11 +437,24 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		leftConds := splitPlanConjunction(exprImpl.F.Args[0])
 		rightConds := splitPlanConjunction(exprImpl.F.Args[1])
 
-		condMap := make(map[string]int)
+		// Bucket right conjuncts by structural hash. Each bucket stores the
+		// original expr + the per-bucket side state, so the left scan can
+		// collision-check with exprStructuralEqual against the few conds
+		// sharing a hash (normally 1).
+		type rightEntry struct {
+			cond *plan.Expr
+			side int
+		}
+		rightBuckets := make(map[uint64][]*rightEntry, len(rightConds))
+		rightEntries := make([]*rightEntry, len(rightConds))
 
 		relPos := int32(-1)
-		for _, cond := range rightConds {
-			condMap[cond.ExprString()] = JoinSideRight
+		for i, cond := range rightConds {
+			h := exprStructuralHash(cond)
+			entry := &rightEntry{cond: cond, side: JoinSideRight}
+			rightEntries[i] = entry
+			rightBuckets[h] = append(rightBuckets[h], entry)
+
 			args := cond.GetF().GetArgs()
 			if len(args) != 2 {
 				continue
@@ -420,19 +474,28 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		var commonConds, leftOnlyConds, rightOnlyConds []*plan.Expr
 
 		for _, cond := range leftConds {
-			exprStr := cond.ExprString()
-
-			if condMap[exprStr] == JoinSideRight {
+			h := exprStructuralHash(cond)
+			bucket := rightBuckets[h]
+			var matched *rightEntry
+			for _, entry := range bucket {
+				if entry.side != JoinSideRight {
+					continue
+				}
+				if exprStructuralEqual(entry.cond, cond) {
+					matched = entry
+					break
+				}
+			}
+			if matched != nil {
 				commonConds = append(commonConds, cond)
-				condMap[exprStr] = JoinSideBoth
+				matched.side = JoinSideBoth
 			} else {
 				leftOnlyConds = append(leftOnlyConds, cond)
-				condMap[exprStr] = JoinSideLeft
 			}
 		}
 
-		for _, cond := range rightConds {
-			if condMap[cond.ExprString()] == JoinSideRight {
+		for i, cond := range rightConds {
+			if rightEntries[i].side == JoinSideRight {
 				rightOnlyConds = append(rightOnlyConds, cond)
 			}
 		}
@@ -895,6 +958,10 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
+			increaseRefCnt(arg, inc, colRefCnt)
+		}
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
 			increaseRefCnt(arg, inc, colRefCnt)
 		}
 	case *plan.Expr_W:
@@ -1395,7 +1462,10 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 		defer vec.Free(proc.Mp())
 
-		vec.InplaceSortAndCompact()
+		// Nullable IN-lists must keep their null bitmap aligned with values.
+		if !vec.IsConstNull() && !vec.GetNulls().Any() {
+			vec.InplaceSortAndCompact()
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err
@@ -1829,9 +1899,66 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 
 }
 
+// parseHiveOptionKV handles hive_partitioning / hive_partition_columns keys in
+// Init*Param. It is defensive against legacy JSON where stripHiveOptionKeys
+// (build_ddl.go) had not run; when the param already has values normalized
+// during DDL, the legacy option is skipped to avoid case-flip or type drift.
+//
+// Each key's skip guard MUST inspect only its own field. An earlier version
+// coupled the hive_partitioning guard to HivePartitionCols; for legacy option
+// orders like "hive_partition_columns=year, hive_partitioning=true" that caused
+// hive_partitioning to be silently skipped after cols was populated, leaving
+// HivePartitioning=false and the table mis-classified as non-hive.
+//
+// Returns (handled, err):
+//   - (false, nil)  : key is not a hive key; caller should fall through to its own switch
+//   - (true, nil)   : key handled (either applied or intentionally skipped)
+//   - (true, err)   : key handled but value invalid
+func parseHiveOptionKV(param *tree.ExternParam, key, val string) (bool, error) {
+	switch key {
+	case "hive_partitioning":
+		// Guard only on HivePartitioning itself — do NOT consult HivePartitionCols.
+		if param.HivePartitioning {
+			return true, nil
+		}
+		v := strings.ToLower(val)
+		if v != "true" && v != "false" {
+			return true, moerr.NewBadConfigf(param.Ctx, "hive_partitioning must be 'true' or 'false'")
+		}
+		param.HivePartitioning = (v == "true")
+		return true, nil
+	case "hive_partition_columns":
+		if len(param.HivePartitionCols) > 0 {
+			return true, nil
+		}
+		for _, p := range strings.Split(val, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				param.HivePartitionCols = append(param.HivePartitionCols, strings.ToLower(p))
+			}
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func validateHiveOptionConsistency(param *tree.ExternParam) error {
+	if !param.HivePartitioning && len(param.HivePartitionCols) > 0 {
+		return moerr.NewBadConfig(param.Ctx, "hive_partition_columns requires hive_partitioning='true'")
+	}
+	return nil
+}
+
 func InitInfileParam(param *tree.ExternParam) error {
 	for i := 0; i < len(param.Option); i += 2 {
-		switch strings.ToLower(param.Option[i]) {
+		key := strings.ToLower(param.Option[i])
+		if handled, err := parseHiveOptionKV(param, key, param.Option[i+1]); handled {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		switch key {
 		case "filepath":
 			param.Filepath = param.Option[i+1]
 		case "compression":
@@ -1849,9 +1976,15 @@ func InitInfileParam(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case ExternalWriteFilePatternKey, CSVCommentKey:
+			// write_file_pattern is write-only; comment is read at parse time. Both
+			// are kept in Option and consumed elsewhere, ignored here.
 		default:
-			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
+	}
+	if err := validateHiveOptionConsistency(param); err != nil {
+		return err
 	}
 	if len(param.Filepath) == 0 {
 		return moerr.NewBadConfig(param.Ctx, "the filepath must be specified")
@@ -1868,7 +2001,14 @@ func InitInfileParam(param *tree.ExternParam) error {
 func InitS3Param(param *tree.ExternParam) error {
 	param.S3Param = &tree.S3Parameter{}
 	for i := 0; i < len(param.Option); i += 2 {
-		switch strings.ToLower(param.Option[i]) {
+		key := strings.ToLower(param.Option[i])
+		if handled, err := parseHiveOptionKV(param, key, param.Option[i+1]); handled {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		switch key {
 		case "endpoint":
 			param.S3Param.Endpoint = param.Option[i+1]
 		case "region":
@@ -1902,10 +2042,15 @@ func InitS3Param(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
-
+		case ExternalWriteFilePatternKey, CSVCommentKey:
+			// write_file_pattern is write-only; comment is read at parse time. Both
+			// are kept in Option and consumed elsewhere, ignored here.
 		default:
-			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
+	}
+	if err := validateHiveOptionConsistency(param); err != nil {
+		return err
 	}
 	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
 		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
@@ -1927,6 +2072,44 @@ func GetFilePathFromParam(param *tree.ExternParam) string {
 	}
 
 	return fpath
+}
+
+// ExternalWriteFilePatternKey is the external-table option that turns the table
+// into a writable external table. Its value is a strftime template (with the
+// %nN and %U MatrixOne extensions) that must resolve to a stage:// path.
+const ExternalWriteFilePatternKey = "write_file_pattern"
+
+// GetWriteFilePattern returns the WRITE_FILE_PATTERN option of an external table
+// and whether it was set. An external table is writable iff this returns ok.
+func GetWriteFilePattern(param *tree.ExternParam) (string, bool) {
+	if param == nil {
+		return "", false
+	}
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.ToLower(param.Option[i]) == ExternalWriteFilePatternKey {
+			return param.Option[i+1], true
+		}
+	}
+	return "", false
+}
+
+// CSVCommentKey is the external-table option that sets the CSV reader's comment
+// marker: a line whose raw prefix (before unquoting) equals it is skipped on
+// read. The default (option absent or empty) is no marker — every line is data.
+const CSVCommentKey = "comment"
+
+// GetCSVComment returns the COMMENT option of an external table (empty when
+// unset, meaning no comment marker).
+func GetCSVComment(param *tree.ExternParam) string {
+	if param == nil {
+		return ""
+	}
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.ToLower(param.Option[i]) == CSVCommentKey {
+			return param.Option[i+1]
+		}
+	}
+	return ""
 }
 
 func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
@@ -1975,8 +2158,26 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 	param.S3Param.Provider, _ = s.GetCredentials(stage.PARAMKEY_PROVIDER, stage.S3_PROVIDER_AMAZON)
 	param.CompressType, _ = s.GetCredentials(stage.PARAMKEY_COMPRESSION, "auto")
 
+	// Note: the parseHiveOptionKV call below is kept for parity with the other
+	// two Init*Param functions, but hive_partitioning on a stage external table
+	// is rejected at DDL (build_ddl.go validateAndSetHivePartitionOptions). The
+	// hive branch here is therefore unreachable via normal DDL; it exists only
+	// so every Init*Param follows the same shape and would tolerate legacy JSON
+	// that snuck hive keys past validation.
 	for i := 0; i < len(param.Option); i += 2 {
-		switch strings.ToLower(param.Option[i]) {
+		key := strings.ToLower(param.Option[i])
+		if handled, err := parseHiveOptionKV(param, key, param.Option[i+1]); handled {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		switch key {
+		case "filepath":
+			// stage:// paths have already been expanded to s.Url by
+			// InitInfileOrStageParam. Keep the raw option for show/serialization
+			// compatibility, but never let it override the resolved S3 prefix.
+			continue
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
 			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
@@ -1990,12 +2191,17 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
-
+		case ExternalWriteFilePatternKey, CSVCommentKey:
+			// write_file_pattern is write-only; comment is read at parse time. Both
+			// are kept in Option and consumed elsewhere, ignored here.
 		default:
-			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", strings.ToLower(param.Option[i]))
+			return moerr.NewBadConfigf(param.Ctx, "the keyword '%s' is not support", key)
 		}
 	}
 
+	if err := validateHiveOptionConsistency(param); err != nil {
+		return err
+	}
 	if param.Format == tree.JSONLINE && len(param.JsonData) == 0 {
 		return moerr.NewBadConfig(param.Ctx, "the jsondata must be specified")
 	}
@@ -2516,9 +2722,144 @@ func detectedExprWhetherTimeRelated(expr *plan.Expr) bool {
 }
 
 func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef, []int32, error) {
+	return resetPreparePlan(ctx, preparePlan, nil)
+}
+
+// NormalizePrepareParamRefs converts the parser's one-based parameter ordinals
+// to execution-time zero-based positions without compacting gaps.
+func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	rule := &decrementParamOrdinalRule{seen: make(map[*plan.ParamRef]struct{})}
+	visit := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
+	if err := visit.Visit(ctx); err != nil {
+		return err
+	}
+	return visitMissingNodeExprs(
+		preparePlan.GetQuery(), preparePlan.GetQuery().Steps, []VisitPlanRule{rule})
+}
+
+func resetPreparePlan(
+	ctx CompilerContext,
+	preparePlan *Plan,
+	transientQuery *Query,
+) ([]*plan.ObjectRef, []int32, error) {
 	// dcl tcl is not support
 	var schemas []*plan.ObjectRef
 	var paramTypes []int32
+	resolveIndexDependencies := func(getParamRule *GetParamRule) ([]*plan.ObjectRef, error) {
+		querySchemas := getParamRule.schemas
+		for _, dependency := range getParamRule.indexDependencies {
+			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
+			if err != nil {
+				return nil, err
+			}
+			if objRef == nil || tableDef == nil {
+				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "resolved index table %q without catalog metadata", dependency.tableName)
+			}
+			querySchemas = appendPrepareSchemas(querySchemas,
+				prepareSchemaRefWithSnapshot(objRef, tableDef, dependency.snapshot))
+		}
+		return querySchemas, nil
+	}
+	resetQuery := func(query *Query) ([]*plan.ObjectRef, []int32, error) {
+		queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
+		getParamRule := NewGetParamRule()
+		visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule})
+		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
+			return nil, nil, err
+		}
+
+		getParamRule.SetParamOrder()
+		args := getParamRule.params
+		querySchemas, err := resolveIndexDependencies(getParamRule)
+		if err != nil {
+			return nil, nil, err
+		}
+		querySchemas = appendPrepareSchemas(querySchemas, query.GetCatalogDependencies()...)
+
+		resetParamRule := NewResetParamOrderRule(args)
+		visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
+		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
+			return nil, nil, err
+		}
+		return querySchemas, getParamRule.paramTypes, nil
+	}
+	resetSetVariables := func(setVars *plan.SetVariables) ([]*plan.ObjectRef, []int32, error) {
+		getParamRule := NewGetParamRule()
+		subqueryRoots := newSubqueryRootRule()
+		for _, item := range setVars.Items {
+			var err error
+			item.Value, err = subqueryRoots.ApplyExpr(item.Value)
+			if err != nil {
+				return nil, nil, err
+			}
+			item.Value, err = getParamRule.ApplyExpr(item.Value)
+			if err != nil {
+				return nil, nil, err
+			}
+			if item.Reserved != nil {
+				item.Reserved, err = subqueryRoots.ApplyExpr(item.Reserved)
+				if err != nil {
+					return nil, nil, err
+				}
+				item.Reserved, err = getParamRule.ApplyExpr(item.Reserved)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		visitedRoots := make(map[int32]struct{})
+		for len(subqueryRoots.pending) > 0 {
+			root := subqueryRoots.pending[0]
+			subqueryRoots.pending = subqueryRoots.pending[1:]
+			if _, ok := visitedRoots[root]; ok {
+				continue
+			}
+			if transientQuery == nil || root < 0 || int(root) >= len(transientQuery.Nodes) {
+				return nil, nil, moerr.NewInternalErrorf(
+					ctx.GetContext(), "missing transient query root %d for prepared SET", root)
+			}
+			visitedRoots[root] = struct{}{}
+			query := *transientQuery
+			query.Steps = []int32{root}
+			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: &query}}
+			visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule, subqueryRoots})
+			if err := visitQuery.Visit(ctx.GetContext()); err != nil {
+				return nil, nil, err
+			}
+			if err := visitMissingNodeExprs(
+				&query, query.Steps, []VisitPlanRule{getParamRule, subqueryRoots},
+			); err != nil {
+				return nil, nil, err
+			}
+		}
+		getParamRule.SetParamOrder()
+		resetRule := NewResetParamOrderRule(getParamRule.params)
+		for _, item := range setVars.Items {
+			var err error
+			item.Value, err = resetRule.ApplyExpr(item.Value)
+			if err != nil {
+				return nil, nil, err
+			}
+			if item.Reserved != nil {
+				item.Reserved, err = resetRule.ApplyExpr(item.Reserved)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		querySchemas, err := resolveIndexDependencies(getParamRule)
+		if err != nil {
+			return nil, nil, err
+		}
+		if transientQuery != nil {
+			querySchemas = appendPrepareSchemas(
+				querySchemas, transientQuery.GetCatalogDependencies()...)
+		}
+		return querySchemas, getParamRule.paramTypes, nil
+	}
 
 	switch pp := preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl:
@@ -2529,45 +2870,22 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 			plan.DataControl_ALTER_ACCOUNT,
 			plan.DataControl_DROP_ACCOUNT:
 			return nil, pp.Dcl.GetOther().GetParamTypes(), nil
+		case plan.DataControl_SET_VARIABLES:
+			schemas, paramTypes, err := resetSetVariables(pp.Dcl.GetSetVariables())
+			if err != nil {
+				return nil, nil, err
+			}
+			return schemas, paramTypes, nil
 		default:
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 		}
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			getParamRule := NewGetParamRule()
-			VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
-			err := VisitQuery.Visit(ctx.GetContext())
-			if err != nil {
-				return nil, nil, err
-			}
-			// TODO : need confirm
-			if len(getParamRule.params) > 0 {
-				return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot plan DDL statement")
-			}
+			return resetQuery(pp.Ddl.Query)
 		}
 
 	case *plan.Plan_Query:
-		// collect args
-		getParamRule := NewGetParamRule()
-		VisitQuery := NewVisitPlan(preparePlan, []VisitPlanRule{getParamRule})
-		err := VisitQuery.Visit(ctx.GetContext())
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// sort arg
-		getParamRule.SetParamOrder()
-		args := getParamRule.params
-		schemas = getParamRule.schemas
-		paramTypes = getParamRule.paramTypes
-
-		// reset arg order
-		resetParamRule := NewResetParamOrderRule(args)
-		VisitQuery = NewVisitPlan(preparePlan, []VisitPlanRule{resetParamRule})
-		err = VisitQuery.Visit(ctx.GetContext())
-		if err != nil {
-			return nil, nil, err
-		}
+		return resetQuery(pp.Query)
 	}
 	return schemas, paramTypes, nil
 }
@@ -2794,22 +3112,24 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matc
 
 // FillValuesOfParamsInPlan replaces the params by their values
 func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
-	copied := preparePlan
-
-	switch pp := copied.Plan.(type) {
+	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
+	}
+
+	copied := DeepCopyPlan(preparePlan)
+	switch pp := copied.Plan.(type) {
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			err := replaceParamVals(ctx, preparePlan, paramVals)
+			err := replaceParamVals(ctx, copied, paramVals)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 	case *plan.Plan_Query:
-		err := replaceParamVals(ctx, preparePlan, paramVals)
+		err := replaceParamVals(ctx, copied, paramVals)
 		if err != nil {
 			return nil, err
 		}
@@ -2817,9 +3137,19 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return copied, nil
 }
 
+type ParamValue struct {
+	Value any
+	IsBin bool
+}
+
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
+		isBin := false
+		if param, ok := val.(ParamValue); ok {
+			val = param.Value
+			isBin = param.IsBin
+		}
 		if val == nil {
 			pc := &plan.Literal{
 				Isnull: true,
@@ -2831,7 +3161,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 				},
 			}
 		} else {
-			pc := &plan.Literal{}
+			pc := &plan.Literal{IsBin: isBin}
 			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
 			params[i] = &plan.Expr{
 				Expr: &plan.Expr_Lit{
@@ -3035,7 +3365,8 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			if err != nil {
 				return err
 			}
-			if !vec.IsConstNull() {
+			// Nullable folded lists must keep their null bitmap aligned with values.
+			if !vec.IsConstNull() && !vec.GetNulls().Any() {
 				vec.InplaceSortAndCompact()
 			}
 			data, err = vec.MarshalBinary()

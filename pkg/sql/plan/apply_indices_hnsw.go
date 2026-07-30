@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -38,6 +39,24 @@ type hnswIndexContext struct {
 	pkType       plan.Type
 	params       string
 	nThread      int64
+}
+
+func buildHnswTableFuncArgs(tblCfgStr string, vecLitArg *plan.Expr) []*plan.Expr {
+	return []*plan.Expr{
+		{
+			Typ: plan.Type{
+				Id: int32(types.T_varchar),
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_Sval{
+						Sval: tblCfgStr,
+					},
+				},
+			},
+		},
+		DeepCopyExpr(vecLitArg),
+	}
 }
 
 func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*hnswIndexContext, error) {
@@ -80,9 +99,22 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		return nil, nil
 	}
 
+	if len(idxDef.Parts) == 0 {
+		return nil, nil
+	}
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
-	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	var vecLitArg *plan.Expr
+	var found bool
+	if vecCtx.vecArgExpr != nil {
+		_, vecLitArg, found = builder.getArgsFromDistFnForJoin(
+			vecCtx.distFnExpr,
+			partPos,
+			vecCtx.scanNode.BindingTags[0],
+		)
+	} else {
+		_, vecLitArg, found = builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
+	}
 	if !found {
 		return nil, nil
 	}
@@ -111,13 +143,12 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 
 func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (int32, error) {
 
-	if vecCtx == nil || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
+	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
 
 	ctx := builder.ctxByNode[nodeID]
 	projNode := vecCtx.projNode
-	sortNode := vecCtx.sortNode
 	scanNode := vecCtx.scanNode
 	childNode := vecCtx.childNode
 	orderExpr := vecCtx.orderExpr
@@ -145,27 +176,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  kHNSWSearchFuncName,
+				Name:  hnswplan.HNSWSearchFuncName,
 				Param: []byte(hnswCtx.params),
 			},
-			Cols: DeepCopyColDefList(kHNSWSearchColDefs),
+			Cols: DeepCopyColDefList(hnswplan.HNSWSearchColDefs),
 		},
-		BindingTags: []int32{tableFuncTag},
-		TblFuncExprList: []*plan.Expr{
-			{
-				Typ: plan.Type{
-					Id: int32(types.T_varchar),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_Sval{
-							Sval: tblCfgStr,
-						},
-					},
-				},
-			},
-			DeepCopyExpr(hnswCtx.vecLitArg),
-		},
+		BindingTags:     []int32{tableFuncTag},
+		Children:        vectorSearchProviderChildren(vecCtx),
+		TblFuncExprList: buildHnswTableFuncArgs(tblCfgStr, hnswCtx.vecLitArg),
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
@@ -186,7 +204,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			// Use shared function to calculate over-fetch factor
 			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
 
-			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
 			tableFuncNode.Limit = &Expr{
 				Typ: limit.Typ,
 				Expr: &plan.Expr_Lit{
@@ -257,13 +275,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			Flag: vecCtx.sortDirection,
 		},
 	}
+	resultLimit, resultOffset := vectorResultPagination(vecCtx)
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{joinNodeID},
 		OrderBy:  orderByScore,
-		Limit:    limit,                         // Apply LIMIT after sorting
-		Offset:   DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
+		Limit:    resultLimit,
+		Offset:   resultOffset,
+		SpillMem: builder.sortSpillMem,
 	}, ctx)
 
 	projNode.Children[0] = sortByID
@@ -292,7 +312,10 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	}
 
 	distFnArgs := distFnExpr.Args
-	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) && distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
+	// Accept any vector element type (f32/f64 and the narrow bf16/f16/int8/uint8),
+	// so a direct ivf index on a narrow-base column also pushes down rather than
+	// brute-forcing.
+	if !types.T(distFnArgs[0].Typ.GetId()).IsArrayRelate() {
 		return
 	}
 
@@ -327,4 +350,32 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	}
 
 	return vecColArg, vecLitArg, true
+}
+
+func (builder *QueryBuilder) getArgsFromDistFnForJoin(
+	distFnExpr *plan.Function,
+	partPos int32,
+	scanTag int32,
+) (key *plan.Expr, value *plan.Expr, found bool) {
+	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+		return
+	}
+
+	distFnArgs := distFnExpr.Args
+	// Accept any vector element type (f32/f64 and the narrow bf16/f16/int8/uint8),
+	// mirroring the direct-match getArgsFromDistFn, so IVFFLAT/HNSW vector JOINs on a
+	// narrow-base column also push down rather than brute-forcing.
+	if !types.T(distFnArgs[0].Typ.GetId()).IsArrayRelate() {
+		return
+	}
+
+	if col := distFnArgs[0].GetCol(); col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+		distFnArgs[1].Typ = distFnArgs[0].Typ
+		return distFnArgs[0], distFnArgs[1], true
+	}
+	if col := distFnArgs[1].GetCol(); col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+		distFnArgs[0].Typ = distFnArgs[1].Typ
+		return distFnArgs[1], distFnArgs[0], true
+	}
+	return
 }

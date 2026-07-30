@@ -252,6 +252,8 @@ type moObjStatArg struct {
 	reader *objectio.ObjectReader
 	res    string
 	local  bool
+	s3     bool
+	local2 bool
 }
 
 func (c *moObjStatArg) PrepareCommand() *cobra.Command {
@@ -268,7 +270,9 @@ func (c *moObjStatArg) PrepareCommand() *cobra.Command {
 	statCmd.Flags().IntP("col", "c", invalidId, "column id")
 	statCmd.Flags().IntP("level", "l", brief, "level")
 	statCmd.Flags().StringP("name", "n", "", "name")
-	statCmd.Flags().BoolP("local", "", false, "local")
+	statCmd.Flags().BoolP("local", "", false, "local DISK (CRC) format")
+	statCmd.Flags().BoolP("s3", "", false, "S3 (raw) format")
+	statCmd.Flags().BoolP("local2", "", false, "local DISK-V2 (raw) format")
 
 	return statCmd
 }
@@ -278,6 +282,8 @@ func (c *moObjStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.col, _ = cmd.Flags().GetInt("col")
 	c.level, _ = cmd.Flags().GetInt("level")
 	c.local, _ = cmd.Flags().GetBool("local")
+	c.s3, _ = cmd.Flags().GetBool("s3")
+	c.local2, _ = cmd.Flags().GetBool("local2")
 	path, _ := cmd.Flags().GetString("name")
 	c.dir, c.name = filepath.Split(path)
 	if cmd.Flag("ictx") != nil {
@@ -339,16 +345,20 @@ func (c *moObjStatArg) Run() (err error) {
 }
 
 func (c *moObjStatArg) initFs(
-	ctx context.Context, local bool,
+	ctx context.Context, kind string,
 ) (err error) {
-	fromS3 := !local
-	c.fs, err = objectio.NewOfflineFS(ctx, c.dir, fromS3)
+	c.fs, err = objectio.NewOfflineFS(ctx, c.dir, kind)
 	return
 }
 
 func (c *moObjStatArg) InitReader(ctx context.Context, name string) (err error) {
 	if c.fs == nil {
-		if err = c.initFs(ctx, c.local); err != nil {
+		// exactly one of --local/--s3/--local2 must state the data dir's format
+		kind, kerr := objectio.OfflineKindStrict(c.local, c.s3, c.local2)
+		if kerr != nil {
+			return kerr
+		}
+		if err = c.initFs(ctx, kind); err != nil {
 			return
 		}
 	}
@@ -603,6 +613,8 @@ type objGetArg struct {
 	reader     *objectio.ObjectReader
 	res        string
 	local      bool
+	s3         bool
+	local2     bool
 }
 
 func (c *objGetArg) PrepareCommand() *cobra.Command {
@@ -619,7 +631,9 @@ func (c *objGetArg) PrepareCommand() *cobra.Command {
 	getCmd.Flags().StringP("name", "n", "", "name")
 	getCmd.Flags().StringP("col", "c", "", "col")
 	getCmd.Flags().StringP("row", "r", "", "row")
-	getCmd.Flags().BoolP("local", "", false, "local")
+	getCmd.Flags().BoolP("local", "", false, "local DISK (CRC) format")
+	getCmd.Flags().BoolP("s3", "", false, "S3 (raw) format")
+	getCmd.Flags().BoolP("local2", "", false, "local DISK-V2 (raw) format")
 
 	return getCmd
 }
@@ -629,6 +643,8 @@ func (c *objGetArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.col, _ = cmd.Flags().GetString("col")
 	c.row, _ = cmd.Flags().GetString("row")
 	c.local, _ = cmd.Flags().GetBool("local")
+	c.s3, _ = cmd.Flags().GetBool("s3")
+	c.local2, _ = cmd.Flags().GetBool("local2")
 	path, _ := cmd.Flags().GetString("name")
 	c.dir, c.name = filepath.Split(path)
 	if cmd.Flag("ictx") != nil {
@@ -687,16 +703,20 @@ func (c *objGetArg) Run() (err error) {
 }
 
 func (c *objGetArg) initFs(
-	ctx context.Context, local bool,
+	ctx context.Context, kind string,
 ) (err error) {
-	fromS3 := !local
-	c.fs, err = objectio.NewOfflineFS(ctx, c.dir, fromS3)
+	c.fs, err = objectio.NewOfflineFS(ctx, c.dir, kind)
 	return
 }
 
 func (c *objGetArg) InitReader(ctx context.Context, name string) (err error) {
 	if c.fs == nil {
-		if err = c.initFs(ctx, c.local); err != nil {
+		// exactly one of --local/--s3/--local2 must state the data dir's format
+		kind, kerr := objectio.OfflineKindStrict(c.local, c.s3, c.local2)
+		if kerr != nil {
+			return kerr
+		}
+		if err = c.initFs(ctx, kind); err != nil {
 			return
 		}
 	}
@@ -1055,6 +1075,8 @@ func (c *storageCkpArg) Run() error {
 type storageCkpBaseArg struct {
 	ctx         *inspectContext
 	fromS3      bool
+	local       bool
+	local2      bool
 	dir, name   string
 	tid         int
 	res         string
@@ -1083,19 +1105,23 @@ func (c *storageCkpBaseArg) FromCommand(cmd *cobra.Command) (err error) {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	}
 	c.fromS3, _ = cmd.Flags().GetBool("s3")
+	c.local, _ = cmd.Flags().GetBool("local")
+	c.local2, _ = cmd.Flags().GetBool("local2")
 	c.dir, _ = cmd.Flags().GetString("dir")
 	c.name, _ = cmd.Flags().GetString("name")
 	c.tid, _ = cmd.Flags().GetInt("tid")
-	// TODO: from s3 dir
 	return nil
 }
 
 func (c *storageCkpBaseArg) initOfflineFS(
 	ctx context.Context,
 ) (err error) {
-	c.fs, err = objectio.NewOfflineFS(
-		ctx, c.dir, c.fromS3,
-	)
+	// exactly one of --local/--s3/--local2 must state the data dir's format
+	kind, kerr := objectio.OfflineKindStrict(c.local, c.fromS3, c.local2)
+	if kerr != nil {
+		return kerr
+	}
+	c.fs, err = objectio.NewOfflineFS(ctx, c.dir, kind)
 	return
 }
 
@@ -1135,7 +1161,9 @@ func (c *storageCkpStatArg) PrepareCommand() *cobra.Command {
 
 	statCmd.Flags().StringP("name", "n", "", "name")
 	statCmd.Flags().StringP("dir", "d", "", "dir")
-	statCmd.Flags().BoolP("s3", "", false, "from s3")
+	statCmd.Flags().BoolP("s3", "", false, "S3 (raw) format")
+	statCmd.Flags().BoolP("local", "", false, "local DISK (CRC) format")
+	statCmd.Flags().BoolP("local2", "", false, "local DISK-V2 (raw) format")
 	statCmd.Flags().IntP("tid", "t", invalidId, "table id")
 
 	return statCmd
@@ -1285,7 +1313,9 @@ func (c *storageCkpListArg) PrepareCommand() *cobra.Command {
 	listCmd.SetUsageTemplate(c.Usage())
 
 	listCmd.Flags().StringP("name", "n", "", "name")
-	listCmd.Flags().BoolP("s3", "", false, "from s3")
+	listCmd.Flags().BoolP("s3", "", false, "S3 (raw) format")
+	listCmd.Flags().BoolP("local", "", false, "local DISK (CRC) format")
+	listCmd.Flags().BoolP("local2", "", false, "local DISK-V2 (raw) format")
 	listCmd.Flags().StringP("dir", "d", "", "dir")
 
 	return listCmd

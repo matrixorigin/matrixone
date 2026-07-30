@@ -15,8 +15,10 @@
 package databranchutils
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -450,6 +452,108 @@ func TestBranchHashmapProjectChangeKey(t *testing.T) {
 	require.Equal(t, []byte("c"), row[1])
 }
 
+func TestBranchHashmapDecimal256DecodedReencodePaths(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	decimalTyp := types.New(types.T_decimal256, 65, 30)
+	amountA := mustParseDecimal256(t, decimalTyp, "12345678901234567890123456789012345.123456789012345678901234567890")
+	amountB := mustParseDecimal256(t, decimalTyp, "-22345678901234567890123456789012345.123456789012345678901234567890")
+
+	t.Run("project", func(t *testing.T) {
+		idVec := buildInt64Vector(t, mp, []int64{1, 2})
+		amountVec := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA, amountB})
+		payloadVec := buildStringVector(t, mp, []string{"a", "b"})
+		defer idVec.Free(mp)
+		defer amountVec.Free(mp)
+		defer payloadVec.Free(mp)
+
+		bh, err := NewBranchHashmap()
+		require.NoError(t, err)
+		defer bh.Close()
+
+		require.NoError(t, bh.PutByVectors([]*vector.Vector{idVec, amountVec, payloadVec}, []int{0}))
+
+		projected, err := bh.Project([]int{1}, 1)
+		require.NoError(t, err)
+		defer projected.Close()
+
+		probe := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA})
+		defer probe.Free(mp)
+
+		results, err := projected.GetByVectors([]*vector.Vector{probe})
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		require.True(t, results[0].Exists)
+		require.Len(t, results[0].Rows, 1)
+
+		tuple, _, err := projected.DecodeRow(results[0].Rows[0])
+		require.NoError(t, err)
+		require.Equal(t, types.EncodeDecimal256(&amountA), tuple[1])
+	})
+
+	t.Run("pop full value", func(t *testing.T) {
+		amountVec := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA, amountB})
+		payloadVec := buildStringVector(t, mp, []string{"a", "b"})
+		defer amountVec.Free(mp)
+		defer payloadVec.Free(mp)
+
+		bh, err := NewBranchHashmap()
+		require.NoError(t, err)
+		defer bh.Close()
+
+		require.NoError(t, bh.PutByVectors([]*vector.Vector{amountVec, payloadVec}, []int{0}))
+
+		probe := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA})
+		defer probe.Free(mp)
+
+		results, err := bh.GetByVectors([]*vector.Vector{probe})
+		require.NoError(t, err)
+		require.True(t, results[0].Exists)
+		require.Len(t, results[0].Rows, 1)
+
+		removed, err := bh.PopByEncodedFullValue(results[0].Rows[0], true)
+		require.NoError(t, err)
+		require.True(t, removed.Exists)
+		require.Len(t, removed.Rows, 1)
+
+		after, err := bh.GetByVectors([]*vector.Vector{probe})
+		require.NoError(t, err)
+		require.False(t, after[0].Exists)
+	})
+
+	t.Run("pop exact full value", func(t *testing.T) {
+		amountVec := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA, amountA})
+		payloadVec := buildStringVector(t, mp, []string{"one", "two"})
+		defer amountVec.Free(mp)
+		defer payloadVec.Free(mp)
+
+		bh, err := NewBranchHashmap()
+		require.NoError(t, err)
+		defer bh.Close()
+
+		require.NoError(t, bh.PutByVectors([]*vector.Vector{amountVec, payloadVec}, []int{0}))
+
+		probe := buildDecimal256Vector(t, mp, decimalTyp, []types.Decimal256{amountA})
+		defer probe.Free(mp)
+
+		results, err := bh.GetByVectors([]*vector.Vector{probe})
+		require.NoError(t, err)
+		require.True(t, results[0].Exists)
+		require.Len(t, results[0].Rows, 2)
+
+		valueCopy := append([]byte(nil), results[0].Rows[0]...)
+		removed, err := bh.PopByEncodedFullValueExact(valueCopy, false)
+		require.NoError(t, err)
+		require.Equal(t, 1, removed)
+
+		after, err := bh.GetByVectors([]*vector.Vector{probe})
+		require.NoError(t, err)
+		require.True(t, after[0].Exists)
+		require.Len(t, after[0].Rows, 1)
+	})
+}
+
 func TestBranchHashmapPopByEncodedFullValues(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -679,6 +783,88 @@ func TestBranchHashmapProjectClosed(t *testing.T) {
 
 	_, err = bh.Project([]int{0}, 0)
 	require.Nil(t, err)
+}
+
+func TestBranchHashmapPutRejectsAllocationCompletedAfterClose(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	allocator := newBlockingAllocator()
+	bh, err := NewBranchHashmap(WithBranchHashmapAllocator(allocator))
+	require.NoError(t, err)
+
+	key := buildInt64Vector(t, mp, []int64{1})
+	defer key.Free(mp)
+
+	putDone := make(chan error, 1)
+	go func() {
+		putDone <- bh.PutByVectors([]*vector.Vector{key}, []int{0})
+	}()
+
+	select {
+	case <-allocator.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("PutByVectors did not reach allocator")
+	}
+
+	require.NoError(t, bh.Close())
+	close(allocator.release)
+
+	select {
+	case err := <-putDone:
+		require.ErrorContains(t, err, "branchHashmap is closed")
+	case <-time.After(5 * time.Second):
+		t.Fatal("PutByVectors did not return after allocator was released")
+	}
+
+	require.NoError(t, bh.Close())
+	require.Zero(t, allocator.retainedBytes())
+}
+
+func TestBranchHashmapPutDoesNotSpillAfterClose(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	allocator := newBlockingNilFirstAllocator()
+	spillRoot := t.TempDir()
+	bh, err := NewBranchHashmap(
+		WithBranchHashmapAllocator(allocator),
+		WithBranchHashmapSpillRoot(spillRoot),
+	)
+	require.NoError(t, err)
+
+	key := buildInt64Vector(t, mp, []int64{1})
+	defer key.Free(mp)
+
+	putDone := make(chan error, 1)
+	go func() {
+		putDone <- bh.PutByVectors([]*vector.Vector{key}, []int{0})
+	}()
+
+	select {
+	case <-allocator.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("PutByVectors did not reach allocator")
+	}
+
+	require.NoError(t, bh.Close())
+	close(allocator.release)
+
+	select {
+	case err := <-putDone:
+		require.ErrorContains(t, err, "branchHashmap is closed")
+	case <-time.After(5 * time.Second):
+		t.Fatal("PutByVectors did not return after allocator was released")
+	}
+
+	entries, err := os.ReadDir(spillRoot)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	for _, shard := range bh.(*branchHashmap).shards {
+		require.Nil(t, shard.spill)
+		require.Empty(t, shard.spillDir)
+	}
+	require.Zero(t, allocator.retainedBytes())
 }
 
 func TestBranchHashmapItemCountSpilled(t *testing.T) {
@@ -1090,6 +1276,53 @@ func TestBranchHashmapPopByVectorsStreamInMemory(t *testing.T) {
 	require.False(t, after[1].Exists)
 }
 
+func TestBranchHashmapPopByVectorsStreamInMemoryCallbackError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	keyVec := buildInt64Vector(t, mp, []int64{1, 1, 2})
+	valVec := buildStringVector(t, mp, []string{"one", "uno", "two"})
+	defer keyVec.Free(mp)
+	defer valVec.Free(mp)
+
+	bh, err := NewBranchHashmap()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{keyVec, valVec}, []int{0}))
+
+	probe := buildInt64Vector(t, mp, []int64{1})
+	defer probe.Free(mp)
+
+	callbackErr := errors.New("callback failed")
+	callbackCount := 0
+	var deliveredValue string
+	removed, err := bh.PopByVectorsStream([]*vector.Vector{probe}, true, func(_ int, _ []byte, row []byte) error {
+		callbackCount++
+		tuple, _, err := bh.DecodeRow(row)
+		require.NoError(t, err)
+		valueBytes, ok := tuple[1].([]byte)
+		require.True(t, ok)
+		deliveredValue = string(valueBytes)
+		return callbackErr
+	})
+	require.ErrorIs(t, err, callbackErr)
+	require.Equal(t, 1, callbackCount)
+	require.Equal(t, 1, removed)
+	require.Equal(t, int64(2), bh.ItemCount())
+
+	after, err := bh.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.True(t, after[0].Exists)
+	require.Len(t, after[0].Rows, 1)
+	remaining, _, err := bh.DecodeRow(after[0].Rows[0])
+	require.NoError(t, err)
+	valueBytes, ok := remaining[1].([]byte)
+	require.True(t, ok)
+	require.NotEqual(t, deliveredValue, string(valueBytes))
+}
+
 func TestBranchHashmapPopByVectorsStreamSpilled(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -1129,6 +1362,70 @@ func TestBranchHashmapPopByVectorsStreamSpilled(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, after[0].Exists)
 	require.False(t, after[1].Exists)
+}
+
+func TestBranchHashmapPopByVectorsStreamSpilledCallbackError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	allocator := newLimitedAllocator(80)
+	bh, err := NewBranchHashmap(
+		WithBranchHashmapAllocator(allocator),
+		WithBranchHashmapSpillRoot(t.TempDir()),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, bh.Close())
+	}()
+
+	key := buildInt64Vector(t, mp, []int64{1, 1})
+	value := buildStringVector(t, mp, []string{"one", "uno"})
+	defer key.Free(mp)
+	defer value.Free(mp)
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{key, value}, []int{0}))
+
+	fillerKey := buildInt64Vector(t, mp, []int64{2, 3, 4, 5, 6, 7, 8, 9, 10})
+	fillerValue := buildStringVector(t, mp, []string{"two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"})
+	defer fillerKey.Free(mp)
+	defer fillerValue.Free(mp)
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{fillerKey, fillerValue}, []int{0}))
+
+	probe := buildInt64Vector(t, mp, []int64{1})
+	defer probe.Free(mp)
+
+	callbackErr := errors.New("callback failed")
+	callbackCount := 0
+	var deliveredValue string
+	removed, err := bh.PopByVectorsStream([]*vector.Vector{probe}, true, func(_ int, _ []byte, row []byte) error {
+		callbackCount++
+		tuple, _, err := bh.DecodeRow(row)
+		require.NoError(t, err)
+		valueBytes, ok := tuple[1].([]byte)
+		require.True(t, ok)
+		deliveredValue = string(valueBytes)
+		return callbackErr
+	})
+	require.ErrorIs(t, err, callbackErr)
+	require.Equal(t, 1, callbackCount)
+	var spilledRemoved uint64
+	for _, shard := range bh.(*branchHashmap).shards {
+		if shard.spill != nil {
+			spilledRemoved += shard.spill.stats.removedEntries
+		}
+	}
+	require.Equal(t, uint64(1), spilledRemoved)
+	require.Equal(t, 1, removed)
+	require.Equal(t, int64(10), bh.ItemCount())
+
+	after, err := bh.GetByVectors([]*vector.Vector{probe})
+	require.NoError(t, err)
+	require.True(t, after[0].Exists)
+	require.Len(t, after[0].Rows, 1)
+	remaining, _, err := bh.DecodeRow(after[0].Rows[0])
+	require.NoError(t, err)
+	valueBytes, ok := remaining[1].([]byte)
+	require.True(t, ok)
+	require.NotEqual(t, deliveredValue, string(valueBytes))
 }
 
 func TestBranchHashmapCursorGetAndPopByEncodedValueDuringIteration(t *testing.T) {
@@ -1634,6 +1931,16 @@ func TestEncodeRowCoversManyTypes(t *testing.T) {
 			},
 		},
 		{
+			name: "year",
+			typ:  types.T_year.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, types.MoYear(2024), false, mp))
+			},
+			assert: func(v any) {
+				require.Equal(t, types.MoYear(2024), v.(types.MoYear))
+			},
+		},
+		{
 			name: "bit",
 			typ:  types.T_bit.ToType(),
 			append: func(vec *vector.Vector) {
@@ -1650,7 +1957,7 @@ func TestEncodeRowCoversManyTypes(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(vec, types.Enum(42), false, mp))
 			},
 			assert: func(v any) {
-				require.Equal(t, uint16(42), uint16(v.(uint16)))
+				require.Equal(t, types.Enum(42), v.(types.Enum))
 			},
 		},
 		{
@@ -1762,10 +2069,82 @@ func buildInt32Vector(tb testing.TB, mp *mpool.MPool, values []int32) *vector.Ve
 	return vec
 }
 
+func buildDecimal256Vector(tb testing.TB, mp *mpool.MPool, typ types.Type, values []types.Decimal256) *vector.Vector {
+	tb.Helper()
+	vec := vector.NewVec(typ)
+	require.NoError(tb, vector.AppendFixedList(vec, values, nil, mp))
+	return vec
+}
+
+func mustParseDecimal256(tb testing.TB, typ types.Type, s string) types.Decimal256 {
+	tb.Helper()
+	val, err := types.ParseDecimal256(s, typ.Width, typ.Scale)
+	require.NoError(tb, err)
+	return val
+}
+
 type limitedAllocator struct {
 	mu    sync.Mutex
 	limit uint64
 	used  uint64
+}
+
+type blockingAllocator struct {
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
+	used     uint64
+	allocs   int
+	nilFirst bool
+}
+
+func newBlockingAllocator() *blockingAllocator {
+	return &blockingAllocator{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func newBlockingNilFirstAllocator() *blockingAllocator {
+	allocator := newBlockingAllocator()
+	allocator.nilFirst = true
+	return allocator
+}
+
+func (a *blockingAllocator) Allocate(size uint64, _ malloc.Hints) ([]byte, malloc.Deallocator, error) {
+	a.once.Do(func() { close(a.entered) })
+	<-a.release
+	a.mu.Lock()
+	a.allocs++
+	if a.nilFirst && a.allocs == 1 {
+		a.mu.Unlock()
+		return nil, nil, nil
+	}
+	a.used += size
+	a.mu.Unlock()
+	return make([]byte, int(size)), &blockingDeallocator{allocator: a, size: size}, nil
+}
+
+func (a *blockingAllocator) retainedBytes() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.used
+}
+
+type blockingDeallocator struct {
+	allocator *blockingAllocator
+	size      uint64
+}
+
+func (d *blockingDeallocator) Deallocate() {
+	d.allocator.mu.Lock()
+	d.allocator.used -= d.size
+	d.allocator.mu.Unlock()
+}
+
+func (d *blockingDeallocator) As(malloc.Trait) bool {
+	return false
 }
 
 func newLimitedAllocator(limit uint64) *limitedAllocator {
@@ -2081,6 +2460,10 @@ func TestEncodeDecodedValue_AllTypes(t *testing.T) {
 	p := types.NewPacker()
 	defer p.Close()
 
+	decimal256Typ := types.New(types.T_decimal256, 65, 30)
+	decimal256Val := mustParseDecimal256(t, decimal256Typ, "12345678901234567890123456789012345.123456789012345678901234567890")
+	decimal256Raw := append([]byte(nil), types.EncodeDecimal256(&decimal256Val)...)
+
 	stringTypeOids := []types.T{
 		types.T_char,
 		types.T_varchar,
@@ -2118,10 +2501,12 @@ func TestEncodeDecodedValue_AllTypes(t *testing.T) {
 		{name: "timestamp", typ: types.T_timestamp.ToType(), value: types.Timestamp(456), expect: types.Timestamp(456)},
 		{name: "decimal64", typ: types.T_decimal64.ToType(), value: types.Decimal64(123456), expect: types.Decimal64(123456)},
 		{name: "decimal128", typ: types.T_decimal128.ToType(), value: types.Decimal128{B0_63: 1, B64_127: 2}, expect: types.Decimal128{B0_63: 1, B64_127: 2}},
+		{name: "decimal256_typed", typ: decimal256Typ, value: decimal256Val, expect: decimal256Raw},
+		{name: "decimal256_raw", typ: decimal256Typ, value: decimal256Raw, expect: decimal256Raw},
 		{name: "uuid", typ: types.T_uuid.ToType(), value: types.Uuid{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, expect: types.Uuid{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}},
 		{name: "bit", typ: types.T_bit.ToType(), value: uint64(10), expect: uint64(10)},
-		{name: "enum_value", typ: types.T_enum.ToType(), value: types.Enum(7), expect: uint16(7)},
-		{name: "enum_uint16", typ: types.T_enum.ToType(), value: uint16(9), expect: uint16(9)},
+		{name: "enum_value", typ: types.T_enum.ToType(), value: types.Enum(7), expect: types.Enum(7)},
+		{name: "enum_uint16", typ: types.T_enum.ToType(), value: uint16(9), expect: types.Enum(9)},
 		{name: "ts_bytes", typ: types.T_TS.ToType(), value: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, expect: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
 		{name: "default_bytes", typ: types.T_any.ToType(), value: []byte("fallback"), expect: []byte("fallback")},
 	}
@@ -2164,6 +2549,7 @@ func TestEncodeDecodedValue_TypeMismatch(t *testing.T) {
 		{name: "int8_from_int16", typ: types.T_int8.ToType(), value: int16(1)},
 		{name: "string_from_string", typ: types.T_varchar.ToType(), value: "not-bytes"},
 		{name: "enum_invalid_type", typ: types.T_enum.ToType(), value: int32(3)},
+		{name: "decimal256_invalid_raw", typ: types.New(types.T_decimal256, 65, 30), value: []byte{1, 2, 3}},
 	}
 
 	for _, tc := range cases {

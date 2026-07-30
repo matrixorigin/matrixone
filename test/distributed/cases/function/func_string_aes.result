@@ -33,7 +33,7 @@ special_chars
 Hello@#$%^&*()
 SELECT AES_DECRYPT(AES_ENCRYPT('MatrixOne数据库', 'key'), 'key') AS unicode_chars;
 unicode_chars
-MatrixOne数据库
+MatrixOneæ°æ®åº
 SELECT AES_ENCRYPT(NULL, 'key') AS null_input;
 null_input
 null

@@ -15,6 +15,7 @@ package incrservice
 
 import (
 	"context"
+	"math"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -138,12 +139,22 @@ func (tls *testLockService) GetWaitingList(ctx context.Context, txnID []byte) (b
 	panic("implement me")
 }
 
+func (tls *testLockService) GetLockHolder(ctx context.Context, tableID uint64, row []byte, options lock.LockOptions) (lock.WaitTxn, bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (tls *testLockService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lock.LockTable) bool) {
 	//TODO implement me
 	panic("implement me")
 }
 
 func (tls *testLockService) GetLockTableBind(group uint32, tableID uint64) (lock.LockTable, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tls *testLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -214,6 +225,10 @@ func (tTxnOp *testTxnOperator) SnapshotTS() timestamp.Timestamp {
 	return tTxnOp.snapshotTS
 }
 
+func (tTxnOp *testTxnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
+	tTxnOp.snapshotTS = ts
+}
+
 func (tTxnOp *testTxnOperator) CreateTS() timestamp.Timestamp {
 	//TODO implement me
 	panic("implement me")
@@ -264,6 +279,10 @@ func (tTxnOp *testTxnOperator) HasLockTable(table uint64) bool {
 	panic("implement me")
 }
 
+func (tTxnOp *testTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	return nil
+}
+
 func (tTxnOp *testTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
 	//TODO implement me
 	panic("implement me")
@@ -311,7 +330,7 @@ func (tTxnOp *testTxnOperator) NextSequence() uint64 {
 
 func (tTxnOp *testTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	//TODO implement me
-	panic("implement me")
+	return 1
 }
 
 func (tTxnOp *testTxnOperator) ExitRunSqlWithToken(_ uint64) {
@@ -382,7 +401,7 @@ func Test_Allocate(t *testing.T) {
 						memRes := executor.NewMemResult(
 							typs,
 							mpool.MustNewZero())
-						memRes.NewBatch()
+						memRes.NewBatchWithRowCount(1)
 						executor.AppendFixedRows(memRes, 0, []uint64{1})
 						executor.AppendFixedRows(memRes, 1, []uint64{1})
 						return memRes.GetResult(), nil
@@ -440,7 +459,7 @@ func TestAllocateWithEmptyCommitTS(t *testing.T) {
 						memRes := executor.NewMemResult(
 							typs,
 							mpool.MustNewZero())
-						memRes.NewBatch()
+						memRes.NewBatchWithRowCount(1)
 						executor.AppendFixedRows(memRes, 0, []uint64{1})
 						executor.AppendFixedRows(memRes, 1, []uint64{1})
 						return memRes.GetResult(), nil
@@ -501,7 +520,7 @@ func TestAllocateWithValidCommitTS(t *testing.T) {
 						memRes := executor.NewMemResult(
 							typs,
 							mpool.MustNewZero())
-						memRes.NewBatch()
+						memRes.NewBatchWithRowCount(1)
 						executor.AppendFixedRows(memRes, 0, []uint64{1})
 						executor.AppendFixedRows(memRes, 1, []uint64{1})
 						return memRes.GetResult(), nil
@@ -566,7 +585,7 @@ func Test_Allocate_Retry_When_Rows_Count_Invalid(t *testing.T) {
 				memRes := executor.NewMemResult(
 					typs,
 					mpool.MustNewZero())
-				memRes.NewBatch()
+				memRes.NewBatchWithRowCount(1)
 				executor.AppendFixedRows(memRes, 0, []uint64{1})
 				executor.AppendFixedRows(memRes, 1, []uint64{1})
 				return memRes.GetResult(), nil
@@ -612,7 +631,7 @@ func Test_Allocate_Retry_When_AffectedRows_Invalid(t *testing.T) {
 				memRes := executor.NewMemResult(
 					typs,
 					mpool.MustNewZero())
-				memRes.NewBatch()
+				memRes.NewBatchWithRowCount(1)
 				executor.AppendFixedRows(memRes, 0, []uint64{1})
 				executor.AppendFixedRows(memRes, 1, []uint64{1})
 				return memRes.GetResult(), nil
@@ -637,4 +656,78 @@ func Test_Allocate_Retry_When_AffectedRows_Invalid(t *testing.T) {
 	_, _, _, err := s.Allocate(ctx, 10, "a", 1, nil)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), updateCnt.Load())
+}
+
+func TestSQLStoreSetOffset(t *testing.T) {
+	ctx := context.TODO()
+	ctx = defines.AttachAccountId(ctx, 12)
+
+	txnOp := &testTxnOperator{}
+	var executedSQLs []string
+	sqlExecutor := executor.NewMemExecutor2(
+		func(sql string) (executor.Result, error) {
+			executedSQLs = append(executedSQLs, sql)
+			return executor.Result{}, nil
+		},
+		txnOp,
+	)
+
+	s := &sqlStore{
+		exec: sqlExecutor,
+	}
+
+	require.NoError(t, s.SetOffset(ctx, 10, "auto_col", 99, nil))
+	require.NoError(t, s.SetOffset(ctx, 10, "auto_col", 100, txnOp))
+	require.NoError(t, s.ForceSetOffset(ctx, 10, "auto_col", math.MaxUint64, txnOp))
+	require.Len(t, executedSQLs, 3)
+	require.Contains(t, executedSQLs[0], "update mo_increment_columns set offset = 99")
+	require.Contains(t, executedSQLs[0], "table_id = 10")
+	require.Contains(t, executedSQLs[0], "col_name = 'auto_col'")
+	require.Contains(t, executedSQLs[1], "update mo_increment_columns set offset = 100")
+	require.Contains(t, executedSQLs[2], "update mo_increment_columns set offset = 18446744073709551615")
+}
+
+func TestSQLStoreSetOffsetEscapesColumnNameLiteral(t *testing.T) {
+	ctx := context.TODO()
+	ctx = defines.AttachAccountId(ctx, 12)
+
+	var executedSQLs []string
+	sqlExecutor := executor.NewMemExecutor2(
+		func(sql string) (executor.Result, error) {
+			executedSQLs = append(executedSQLs, sql)
+			return executor.Result{}, nil
+		},
+		nil,
+	)
+
+	s := &sqlStore{
+		exec: sqlExecutor,
+	}
+
+	require.NoError(t, s.SetOffset(ctx, 10, "1id", 99, nil))
+	require.NoError(t, s.SetOffset(ctx, 10, "auto'col\\x", 100, nil))
+	require.NoError(t, s.ForceSetOffset(ctx, 10, "auto'col\\x", 101, nil))
+	require.Len(t, executedSQLs, 3)
+	require.Contains(t, executedSQLs[0], "col_name = '1id'")
+	require.Contains(t, executedSQLs[1], `col_name = 'auto''col\\x'`)
+	require.Contains(t, executedSQLs[2], `col_name = 'auto''col\\x'`)
+}
+
+func TestSQLStoreSetOffsetReturnsExecError(t *testing.T) {
+	ctx := context.TODO()
+	ctx = defines.AttachAccountId(ctx, 12)
+
+	expected := moerr.NewInternalError(ctx, "set offset failed")
+	sqlExecutor := executor.NewMemExecutor2(
+		func(sql string) (executor.Result, error) {
+			return executor.Result{}, expected
+		},
+		nil,
+	)
+
+	s := &sqlStore{
+		exec: sqlExecutor,
+	}
+
+	require.ErrorIs(t, s.SetOffset(ctx, 10, "auto_col", 99, nil), expected)
 }

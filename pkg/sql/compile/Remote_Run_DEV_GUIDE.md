@@ -49,7 +49,8 @@ func (s *Scope) RemoteRun(c *Compile) error {
     
     // Check if pipeline can be executed standalone at remote
     if !checkPipelineStandaloneExecutableAtRemote(s) {
-        return s.MergeRun(c)  // Fallback to local execution
+        return s.failRemoteRunBeforeStart(c,
+            moerr.NewInternalErrorNoCtx("remote pipeline is not standalone executable"))
     }
     
     // Create pipeline and send to remote node
@@ -76,7 +77,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 - Check if same address (execute locally via `MergeRun`)
 - Check if any operator cannot be executed remotely via `holdAnyCannotRemoteOperator()`
 - Check if pipeline can be executed standalone at remote via `checkPipelineStandaloneExecutableAtRemote`
-- If not standalone executable, fallback to local execution (`MergeRun`)
+- If not standalone executable, fail before start, cancel sibling pipelines, and clean up
+- Never silently execute a remote-selected tree on the coordinator: dispatch/connector
+  receiver locality is part of the compiled topology, and changing it can hang the query
 - Create pipeline and call `remoteRun` to send
 - Use `CleanRootOperator` for cleanup (not general cleanup)
 
@@ -371,7 +374,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool,
 **File:** `pkg/sql/compile/remoterunServer.go:501-544`
 
 ```go
-func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, error) {
+func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClient) (processHelper, error) {
     // Deserialize ProcessInfo
     procInfo := &pipeline.ProcessInfo{}
     err := procInfo.Unmarshal(data)
@@ -390,7 +393,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
     }
     
     // Rebuild txnOperator from snapshot
-    result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
+    result.txnOperator, err = cli.NewWithSnapshot(ctx, procInfo.Snapshot)
     
     // Convert SessionInfo
     result.sessionInfo, err = process.ConvertToProcessSessionInfo(procInfo.SessionInfo)

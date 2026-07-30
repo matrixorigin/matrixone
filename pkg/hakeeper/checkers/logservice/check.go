@@ -15,8 +15,9 @@
 package logservice
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -421,20 +422,20 @@ func (t *checkAddShard) check() []*operator.Operator {
 		stores = append(stores, store)
 	}
 
-	sort.Slice(stores, func(i, j int) bool {
-		_, ok1 := t.lc.logState.Stores[stores[i]]
-		_, ok2 := t.lc.logState.Stores[stores[j]]
+	slices.SortFunc(stores, func(a, b string) int {
+		_, ok1 := t.lc.logState.Stores[a]
+		_, ok2 := t.lc.logState.Stores[b]
 		if !ok1 && !ok2 {
-			return false
+			return 0
 		}
 		if !ok1 && ok2 {
-			return false
+			return 1
 		}
 		if ok1 && !ok2 {
-			return true
+			return -1
 		}
-		return t.lc.logState.Stores[stores[i]].Tick >
-			t.lc.logState.Stores[stores[j]].Tick
+		return cmp.Compare(t.lc.logState.Stores[b].Tick,
+			t.lc.logState.Stores[a].Tick)
 	})
 
 	var maxShardID uint64

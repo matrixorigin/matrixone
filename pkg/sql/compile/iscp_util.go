@@ -16,22 +16,40 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 var (
-	iscpRegisterJobFunc   = iscp.RegisterJob
-	iscpUnregisterJobFunc = iscp.UnregisterJob
-	isTableInCCPRFunc     = isTableInCCPRImpl
+	iscpRegisterJobFunc     = iscp.RegisterJob
+	iscpUnregisterJobFunc   = iscp.UnregisterJob
+	iscpLookupJobLogFunc    = iscp.LookupJobLog
+	iscpGetExecutorFunc     = iscp.GetExecutorRuntime
+	iscpGetTaskRunnerFunc   = iscp.GetTaskRunner
+	iscpGetCNQueryAddress   = getCNQueryAddress
+	iscpDrainReadyTimeout   = 10 * time.Second
+	iscpDrainRetryInterval  = 100 * time.Millisecond
+	iscpFenceCleanupTimeout = 5 * time.Second
+	isTableInCCPRFunc       = isTableInCCPRImpl
 )
 
 /* CDC APIs */
@@ -58,25 +76,23 @@ func DeleteCdcTask(c *Compile, job *iscp.JobID) (bool, error) {
 }
 
 func checkValidIndexCdcByIndexdef(idx *plan.IndexDef) (bool, error) {
-	var err error
-
-	if idx.TableExist &&
-		(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
-			catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
-			catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-		async := false
-		if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
-			// HNSW always async
-			async = true
-		} else {
-			async, err = catalog.IsIndexAsync(idx.IndexAlgoParams)
-			if err != nil {
-				return false, err
-			}
-		}
-
-		return async, nil
+	if !idx.TableExist {
+		return false, nil
 	}
+
+	// Plugin-registered algorithms (vector + fulltext) describe their
+	// CDC participation via SyncDescriptor().
+	if p, ok := indexplugin.Get(idx.IndexAlgo); ok {
+		d := p.Catalog().SyncDescriptor()
+		if !d.UsesCDC {
+			return false, nil
+		}
+		if d.AlwaysAsync {
+			return true, nil
+		}
+		return catalog.IsIndexAsync(idx.IndexAlgoParams)
+	}
+
 	return false, nil
 }
 
@@ -194,6 +210,512 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	return nil
 }
 
+func DrainIndexCdcTaskConsumer(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string) error {
+	return drainIndexCdcTaskConsumer(c, tableDef, dbname, tablename, indexname)
+}
+
+func drainIndexCdcTaskConsumer(
+	c *Compile,
+	tableDef *plan.TableDef,
+	dbname string,
+	tablename string,
+	indexname string,
+) error {
+	valid, err := checkValidIndexCdc(tableDef, indexname)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return nil
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	jobName := genCdcTaskJobID(indexname)
+	_, tableID, jobID, exists, _, err := iscpLookupJobLogFunc(
+		c.proc.Ctx,
+		c.proc.GetService(),
+		c.proc.GetTxnOperator(),
+		&iscp.JobID{DBName: dbname, TableName: tablename, JobName: jobName},
+	)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		logutil.Infof("skip draining index cdc task consumer, iscp job not found: tableID=%d index=%s", tableDef.TblId, indexname)
+		return nil
+	}
+	if tableID == 0 {
+		tableID = tableDef.TblId
+	}
+	key := iscp.NewJobRuntimeKey(accountID, tableID, jobName, jobID)
+	logutil.Infof("drain index cdc task consumer: accountID=%d tableID=%d jobName=%s jobID=%d", accountID, tableID, jobName, jobID)
+	readyCtx, cancel := context.WithTimeout(c.proc.Ctx, iscpDrainReadyTimeout)
+	defer cancel()
+	var runnerCN string
+	fencedRunners := make(map[string]struct{})
+	fencedTargets := newISCPDrainTargetSet()
+	txnOp := c.proc.GetTxnOperator()
+	var lease iscpJobFenceLease
+	leaseStarted := false
+	startLease := func() {
+		if leaseStarted || txnOp == nil {
+			return
+		}
+		leaseStarted = true
+		lease = startISCPJobFenceLease(func(leaseCtx context.Context) error {
+			ttl := iscp.RollbackFenceTTL()
+			renewCtx, renewCancel := context.WithTimeoutCause(
+				leaseCtx,
+				iscpFenceRenewTimeout(ttl),
+				moerr.NewInternalErrorNoCtx("iscp fence lease renew timeout"),
+			)
+			defer renewCancel()
+			return renewISCPDrainTargetFences(
+				renewCtx,
+				fencedTargets.Snapshot(),
+				accountID,
+				tableID,
+				jobName,
+				jobID,
+			)
+		})
+	}
+	addFencedTarget := func(target iscpDrainTarget) {
+		fencedTargets.Add(target)
+		// Start renewal as soon as the first CN has installed a fence. Later
+		// targets are incorporated through the synchronized snapshot.
+		startLease()
+	}
+	notReadyErr := func() error {
+		if c.proc.Ctx.Err() != nil {
+			return c.proc.Ctx.Err()
+		}
+		target := runnerCN
+		if target == "" {
+			target = "<unknown>"
+		}
+		return moerr.NewInternalErrorf(
+			c.proc.Ctx,
+			"ISCP executor on task runner %s did not become ready within %s for tableID=%d jobName=%s jobID=%d",
+			target,
+			iscpDrainReadyTimeout,
+			tableID,
+			jobName,
+			jobID,
+		)
+	}
+	cleanupAfterFailure := func(cause error, uncertainTarget *iscpDrainTarget) error {
+		lease.Stop()
+		if uncertainTarget != nil {
+			fencedTargets.Add(*uncertainTarget)
+		}
+		targets := fencedTargets.Snapshot()
+		if len(targets) == 0 {
+			return cause
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeoutCause(
+			context.Background(),
+			iscpFenceCleanupTimeout,
+			moerr.NewInternalErrorNoCtx("iscp failed-drain fence cleanup timeout"),
+		)
+		defer cleanupCancel()
+		if cleanupErr := removeISCPDrainTargetFences(
+			cleanupCtx,
+			targets,
+			accountID,
+			tableID,
+			jobName,
+			jobID,
+		); cleanupErr != nil {
+			// The operation error is authoritative for frontend transaction
+			// classification. Fence cleanup is best effort and the TTL remains
+			// the fail-closed fallback.
+			logutil.Warnf("failed to clean ISCP fences after drain failure: %v", cleanupErr)
+		}
+		return cause
+	}
+	for {
+		if readyCtx.Err() != nil {
+			return cleanupAfterFailure(notReadyErr(), nil)
+		}
+		// The daemon-task assignment is independent of the DDL transaction.
+		// Use a fresh internal transaction on every attempt so a runner handoff
+		// after the DDL snapshot can be observed.
+		runnerCN, err = iscpGetTaskRunnerFunc(readyCtx, c.proc.GetService(), nil)
+		if err != nil {
+			if readyCtx.Err() != nil {
+				return cleanupAfterFailure(notReadyErr(), nil)
+			}
+			return cleanupAfterFailure(err, nil)
+		}
+		if readyCtx.Err() != nil {
+			return cleanupAfterFailure(notReadyErr(), nil)
+		}
+		if runnerCN == "" {
+			runnerCN = c.proc.GetService()
+		}
+		// A successful drain is not the ownership linearization point: the daemon
+		// task can move while the request is in flight. Converge only after a
+		// fresh runner read observes an owner this DDL already fenced.
+		if _, ok := fencedRunners[runnerCN]; ok {
+			break
+		}
+
+		var target iscpDrainTarget
+		_, _, forceRemote := fault.TriggerFault(objectio.FJ_ISCPCancelForceRemote)
+		if localExec, ok := iscpGetExecutorFunc(runnerCN); !forceRemote && ok && localExec != nil {
+			target = iscpDrainTarget{runnerCN: runnerCN, exec: localExec}
+			err = localExec.CancelAndDrainJobConsumer(c.proc.Ctx, accountID, tableID, jobName, jobID)
+			if err != nil {
+				localExec.RemoveJobFence(key)
+				return cleanupAfterFailure(err, nil)
+			}
+		} else {
+			qc := c.proc.GetQueryClient()
+			if qc == nil {
+				return cleanupAfterFailure(
+					moerr.NewInternalErrorf(
+						c.proc.Ctx,
+						"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
+						runnerCN,
+						tableID,
+						jobName,
+						jobID,
+					),
+					nil,
+				)
+			}
+			queryAddress, addressErr := iscpGetCNQueryAddress(readyCtx, c.proc.GetService(), runnerCN)
+			if addressErr != nil {
+				if readyCtx.Err() != nil {
+					return cleanupAfterFailure(notReadyErr(), nil)
+				}
+				return cleanupAfterFailure(addressErr, nil)
+			}
+			if readyCtx.Err() != nil {
+				return cleanupAfterFailure(notReadyErr(), nil)
+			}
+			target = iscpDrainTarget{
+				runnerCN:     runnerCN,
+				qc:           qc,
+				queryAddress: queryAddress,
+			}
+			// Do not apply the readiness deadline to the actual drain. Once the
+			// executor is ready, draining an active consumer is bounded by the
+			// statement context and may legitimately take longer.
+			err = sendISCPDrainConsumerRequest(c.proc.Ctx, qc, queryAddress, accountID, tableID, jobName, jobID, false, false)
+			if err != nil {
+				if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+					// The handler may have fenced the consumer before its response
+					// was lost. Treat this target as uncertain and remove its fence
+					// while unwinding all earlier successful targets.
+					return cleanupAfterFailure(err, &target)
+				}
+				// The handler installs the CN-scoped fence before returning the
+				// retryable not-ready error. Track and renew that pending fence
+				// while waiting for the executor generation to publish.
+				addFencedTarget(target)
+				if readyCtx.Err() != nil {
+					return cleanupAfterFailure(notReadyErr(), nil)
+				}
+				timer := time.NewTimer(iscpDrainRetryInterval)
+				select {
+				case <-readyCtx.Done():
+					timer.Stop()
+					return cleanupAfterFailure(notReadyErr(), nil)
+				case <-timer.C:
+				}
+				continue
+			}
+		}
+
+		fencedRunners[runnerCN] = struct{}{}
+		addFencedTarget(target)
+
+		// Start a new bounded readiness generation after every successful drain.
+		// The drain itself may legitimately outlive the previous readiness window.
+		cancel()
+		readyCtx, cancel = context.WithTimeout(c.proc.Ctx, iscpDrainReadyTimeout)
+		defer cancel()
+	}
+	if txnOp != nil {
+		cleanup := client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+			lease.Stop()
+			if !event.CostEvent {
+				return nil
+			}
+			cleanupCtx, cancel := context.WithTimeoutCause(
+				context.Background(),
+				iscpFenceCleanupTimeout,
+				moerr.NewInternalErrorNoCtx("iscp rollback fence cleanup timeout"),
+			)
+			defer cancel()
+			if cleanupErr := removeISCPDrainTargetFences(
+				cleanupCtx,
+				fencedTargets.Snapshot(),
+				accountID,
+				tableID,
+				jobName,
+				jobID,
+			); cleanupErr != nil {
+				logutil.Warnf("failed to clean ISCP fences after rollback: %v", cleanupErr)
+			}
+			return nil
+		})
+		txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
+		txnOp.AppendEventCallback(client.CommitEvent, client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+			if !event.CostEvent {
+				lease.Stop()
+			}
+			return nil
+		}))
+	}
+	return nil
+}
+
+type iscpDrainTarget struct {
+	runnerCN     string
+	exec         *iscp.ISCPTaskExecutor
+	qc           qclient.QueryClient
+	queryAddress string
+}
+
+type iscpDrainTargetSet struct {
+	mu      sync.RWMutex
+	order   []string
+	targets map[string]iscpDrainTarget
+}
+
+func newISCPDrainTargetSet() *iscpDrainTargetSet {
+	return &iscpDrainTargetSet{
+		targets: make(map[string]iscpDrainTarget),
+	}
+}
+
+func (s *iscpDrainTargetSet) Add(target iscpDrainTarget) {
+	s.mu.Lock()
+	if _, ok := s.targets[target.runnerCN]; !ok {
+		s.order = append(s.order, target.runnerCN)
+	}
+	s.targets[target.runnerCN] = target
+	s.mu.Unlock()
+}
+
+func (s *iscpDrainTargetSet) Snapshot() []iscpDrainTarget {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	targets := make([]iscpDrainTarget, 0, len(s.order))
+	for _, runnerCN := range s.order {
+		targets = append(targets, s.targets[runnerCN])
+	}
+	return targets
+}
+
+func renewISCPDrainTargetFences(
+	ctx context.Context,
+	targets []iscpDrainTarget,
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+) error {
+	key := iscp.NewJobRuntimeKey(accountID, tableID, jobName, jobID)
+	return runISCPDrainTargetOperations(targets, func(target iscpDrainTarget) error {
+		var err error
+		if target.exec != nil {
+			if !target.exec.RenewJobFence(key, iscp.RollbackFenceTTL()) {
+				err = moerr.NewInternalErrorf(
+					ctx,
+					"cannot renew ISCP consumer quiescence fence on CN %s for tableID=%d jobName=%s jobID=%d",
+					target.runnerCN,
+					tableID,
+					jobName,
+					jobID,
+				)
+			}
+		} else {
+			err = sendISCPDrainConsumerRequest(
+				ctx,
+				target.qc,
+				target.queryAddress,
+				accountID,
+				tableID,
+				jobName,
+				jobID,
+				false,
+				true,
+			)
+		}
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "renew ISCP fence on runner %s: %v", target.runnerCN, err)
+		}
+		return nil
+	})
+}
+
+func removeISCPDrainTargetFences(
+	ctx context.Context,
+	targets []iscpDrainTarget,
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+) error {
+	key := iscp.NewJobRuntimeKey(accountID, tableID, jobName, jobID)
+	return runISCPDrainTargetOperations(targets, func(target iscpDrainTarget) error {
+		var err error
+		if target.exec != nil {
+			target.exec.RemoveJobFence(key)
+		} else {
+			err = sendISCPDrainConsumerRequest(
+				ctx,
+				target.qc,
+				target.queryAddress,
+				accountID,
+				tableID,
+				jobName,
+				jobID,
+				true,
+				false,
+			)
+		}
+		if err != nil {
+			return moerr.NewInternalErrorf(ctx, "remove ISCP fence on runner %s: %v", target.runnerCN, err)
+		}
+		return nil
+	})
+}
+
+func runISCPDrainTargetOperations(
+	targets []iscpDrainTarget,
+	operation func(iscpDrainTarget) error,
+) error {
+	// Every caller supplies one overall deadline. Start all targets before
+	// waiting so an unreachable runner cannot consume another runner's entire
+	// opportunity to renew or remove its fence.
+	results := make([]error, len(targets))
+	var wg sync.WaitGroup
+	wg.Add(len(targets))
+	for i := range targets {
+		go func() {
+			defer wg.Done()
+			results[i] = operation(targets[i])
+		}()
+	}
+	wg.Wait()
+	return errors.Join(results...)
+}
+
+type iscpJobFenceLease struct {
+	stop func()
+}
+
+func startISCPJobFenceLease(renew func(context.Context) error) iscpJobFenceLease {
+	ttl := iscp.RollbackFenceTTL()
+	if ttl <= 0 || renew == nil {
+		return iscpJobFenceLease{stop: func() {}}
+	}
+	interval := ttl / 2
+	if interval < 10*time.Millisecond {
+		interval = 10 * time.Millisecond
+	}
+	leaseCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var once sync.Once
+	go func() {
+		defer close(done)
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				if err := renew(leaseCtx); err != nil && leaseCtx.Err() == nil {
+					logutil.Warnf("failed to renew ISCP job fence lease: %v", err)
+				}
+				timer.Reset(interval)
+			case <-leaseCtx.Done():
+				return
+			}
+		}
+	}()
+	return iscpJobFenceLease{stop: func() {
+		once.Do(func() {
+			cancel()
+			<-done
+		})
+	}}
+}
+
+func iscpFenceRenewTimeout(ttl time.Duration) time.Duration {
+	timeout := ttl / 4
+	if timeout < 10*time.Millisecond {
+		timeout = 10 * time.Millisecond
+	}
+	return timeout
+}
+
+func (l iscpJobFenceLease) Stop() {
+	if l.stop != nil {
+		l.stop()
+	}
+}
+
+func getCNQueryAddress(ctx context.Context, service string, cnUUID string) (string, error) {
+	cluster, err := clusterservice.GetMOClusterWithContext(ctx, service)
+	if err != nil {
+		return "", err
+	}
+	var queryAddress string
+	err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+		ctx,
+		cluster,
+		clusterservice.NewServiceIDSelector(cnUUID),
+		func(cn metadata.CNService) bool {
+			queryAddress = cn.QueryAddress
+			return false
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+	if queryAddress == "" {
+		return "", moerr.NewInternalErrorf(ctx, "cannot find query address for CN %s", cnUUID)
+	}
+	return queryAddress, nil
+}
+
+func sendISCPDrainConsumerRequest(
+	ctx context.Context,
+	qc qclient.QueryClient,
+	queryAddress string,
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	removeFenceOnly bool,
+	renewFenceOnly bool,
+) error {
+	req := qc.NewRequest(query.CmdMethod_ISCPDrainConsumer)
+	req.ISCPDrainConsumerRequest = &query.ISCPDrainConsumerRequest{
+		AccountID:       accountID,
+		TableID:         tableID,
+		JobName:         jobName,
+		JobID:           jobID,
+		RemoveFenceOnly: removeFenceOnly,
+		RenewFenceOnly:  renewFenceOnly,
+	}
+	resp, err := qc.SendMessage(ctx, queryAddress, req)
+	if err != nil {
+		return err
+	}
+	if resp != nil {
+		qc.Release(resp)
+	}
+	return nil
+}
+
 // drop all cdc tasks according to tableDef
 func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) error {
 	idxmap := make(map[string]bool)
@@ -216,18 +738,19 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 			if e != nil {
 				return e
 			}
+			if e = drainIndexCdcTaskConsumer(c, tabledef, dbname, tablename, idx.IndexName); e != nil {
+				return e
+			}
 		}
 	}
 	return nil
 }
 
 func getSinkerTypeFromAlgo(algo string) int8 {
-	if catalog.IsHnswIndexAlgo(algo) {
-		return int8(iscp.ConsumerType_IndexSync)
-	} else if catalog.IsIvfIndexAlgo(algo) {
-		return int8(iscp.ConsumerType_IndexSync)
-	} else if catalog.IsFullTextIndexAlgo(algo) {
-		return int8(iscp.ConsumerType_IndexSync)
+	if p, ok := indexplugin.Get(algo); ok {
+		if d := p.Catalog().SyncDescriptor(); d.UsesCDC {
+			return d.SinkerType
+		}
 	}
 	panic("getSinkerTypeFromAlgo: invalid sinker type")
 }
@@ -258,132 +781,81 @@ func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string,
 	return nil
 }
 
-func getIvfflatMetadata(c *Compile) (metadata []byte, frontend bool, err error) {
-	var val any
-
-	// only frontend has ivf_threads_search variable declared
-	_, err = c.proc.GetResolveVariableFunc()("ivf_threads_search", true, false)
-	if err == nil {
-		frontend = true
-	}
-
-	// When Clone, variables are nil. Set variable to default value
-	val, err = c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
-	if err != nil {
-		return
-	}
-	threadsBuild := int64(0)
-	if val != nil {
-		threadsBuild = val.(int64)
-	}
-
-	val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
-	if err != nil {
-		return
-	}
-	kmeansTrainPercent := float64(10)
-	if val != nil {
-		kmeansTrainPercent = val.(float64)
-	}
-
-	val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
-	if err != nil {
-		return
-	}
-	kmeansMaxIteration := int64(20)
-	if val != nil {
-		kmeansMaxIteration = val.(int64)
-	}
-
-	val, err = c.proc.GetResolveVariableFunc()("lower_case_table_names", true, false)
-	if err != nil {
-		return
-	}
-	lowerCaseTableNames := int64(1)
-	if val != nil {
-		lowerCaseTableNames = val.(int64)
-	}
-
-	val, err = c.proc.GetResolveVariableFunc()("experimental_ivf_index", true, false)
-	if err != nil {
-		return
-	}
-	experimentalIvfIndex := int8(1)
-	if val != nil {
-		experimentalIvfIndex = val.(int8)
-	}
-
-	w := sqlexec.NewMetadataWriter()
-	w.AddInt("ivf_threads_build", threadsBuild)
-	w.AddFloat("kmeans_train_percent", kmeansTrainPercent)
-	w.AddInt("kmeans_max_iteration", kmeansMaxIteration)
-	w.AddInt("lower_case_table_names", lowerCaseTableNames)
-	w.AddInt8("experimental_ivf_index", experimentalIvfIndex)
-
-	metadata, err = w.Marshal()
-	if err != nil {
-		return
-	}
-
-	return
-}
-
 func checkValidIndexUpdateByIndexdef(idx *plan.IndexDef) (bool, error) {
-	if idx.TableExist && catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
-		return true, nil
+	if !idx.TableExist {
+		return false, nil
+	}
+	if p, ok := indexplugin.Get(idx.IndexAlgo); ok {
+		return p.Catalog().SyncDescriptor().IdxcronAction != "", nil
 	}
 	return false, nil
 }
 
 // idxcron function
 func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string, tableid uint64) (err error) {
-	var (
-		ivf_metadata []byte
-	)
-
-	if c.proc.GetResolveVariableFunc() == nil {
+	// Background re-entry (idxcron's own ALTER REINDEX, ProcessInitSQL,
+	// or any internal-SQL caller whose proc has IsFrontend=false) must
+	// not re-register idxcron tasks here — IdxcronMetadata returns
+	// (nil,nil) in background, the resulting string(metadata) is "",
+	// and the REPLACE INTO mo_index_update would fail when its JSON
+	// column rejects the empty literal. Mirror the alter.go /
+	// ddl.go::AlterTableInplace IsFrontend gates (commit 2c8a55957).
+	if !c.proc.Base.IsFrontend {
 		return
 	}
 
 	idxmap := make(map[string]bool)
+	// cctx is loop-invariant (depends only on c) — lazy-init so we
+	// don't allocate when no index reaches the metadata fetch.
+	var cctx *pluginCompileCtx
 	for _, idx := range indexes {
-		_, ok := idxmap[idx.IndexName]
-		if ok {
+		if _, ok := idxmap[idx.IndexName]; ok {
+			continue
+		}
+		if len(idx.IndexName) == 0 {
+			// alter reindex SQL doesn't support empty index names; skip.
 			continue
 		}
 
-		valid := false
-		valid, err = checkValidIndexUpdateByIndexdef(idx)
-		if err != nil {
+		p, ok := indexplugin.Get(idx.IndexAlgo)
+		if !ok {
+			continue
+		}
+		d := p.Catalog().SyncDescriptor()
+		if d.IdxcronAction == "" {
+			continue
+		}
+		if cctx == nil {
+			cctx = newPluginCompileCtxForSync(c)
+		}
+		metadata, mErr := p.Compile().IdxcronMetadata(cctx)
+		if mErr != nil {
+			err = mErr
 			return
 		}
-		if valid {
-			idxmap[idx.IndexName] = true
+		// IsFrontend gate above covers the background re-entry case, but
+		// BuildIdxcronMetadata can also return nil in frontend mode when
+		// FrontendProbeVar resolves to nil (sub-Compile inheriting a
+		// partial frontend resolver, e.g. CREATE TABLE CLONE). Passing
+		// "" to RegisterUpdate would trip mo_index_update.metadata's
+		// JSON NOT NULL — mirror the per-plugin registerIdxcronUpdate
+		// guard and skip.
+		if len(metadata) == 0 {
+			continue
+		}
 
-			if len(idx.IndexName) == 0 {
-				// skip empty index name because alter reindex sql don't support empty index name
-				continue
-			}
-
-			if ivf_metadata == nil {
-				ivf_metadata, _, err = getIvfflatMetadata(c)
-				if err != nil {
-					return
-				}
-			}
-
-			err = idxcron.RegisterUpdate(c.proc.Ctx,
-				c.proc.GetService(),
-				c.proc.GetTxnOperator(),
-				tableid,
-				dbname,
-				tablename,
-				idx.IndexName,
-				idxcron.Action_Ivfflat_Reindex,
-				string(ivf_metadata))
-			if err != nil {
-				return
-			}
+		idxmap[idx.IndexName] = true
+		err = idxcron.RegisterUpdate(c.proc.Ctx,
+			c.proc.GetService(),
+			c.proc.GetTxnOperator(),
+			tableid,
+			dbname,
+			tablename,
+			idx.IndexName,
+			d.IdxcronAction,
+			string(metadata))
+		if err != nil {
+			return
 		}
 	}
 	return
@@ -393,30 +865,29 @@ func CreateAllIndexUpdateTasks(c *Compile, indexes []*plan.IndexDef, dbname stri
 func DropAllIndexUpdateTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) (err error) {
 	idxmap := make(map[string]bool)
 	for _, idx := range tabledef.Indexes {
-
-		_, ok := idxmap[idx.IndexName]
-		if ok {
+		if _, ok := idxmap[idx.IndexName]; ok {
 			continue
 		}
 
-		valid := false
-		valid, err = checkValidIndexUpdateByIndexdef(idx)
+		p, ok := indexplugin.Get(idx.IndexAlgo)
+		if !ok {
+			continue
+		}
+		d := p.Catalog().SyncDescriptor()
+		if d.IdxcronAction == "" {
+			continue
+		}
+		action := d.IdxcronAction
+
+		idxmap[idx.IndexName] = true
+		err = idxcron.UnregisterUpdate(c.proc.Ctx,
+			c.proc.GetService(),
+			c.proc.GetTxnOperator(),
+			tabledef.TblId,
+			idx.IndexName,
+			action)
 		if err != nil {
 			return
-		}
-		if valid {
-			idxmap[idx.IndexName] = true
-			//hasindex = true
-
-			err = idxcron.UnregisterUpdate(c.proc.Ctx,
-				c.proc.GetService(),
-				c.proc.GetTxnOperator(),
-				tabledef.TblId,
-				idx.IndexName,
-				idxcron.Action_Ivfflat_Reindex)
-			if err != nil {
-				return
-			}
 		}
 	}
 	return

@@ -57,6 +57,15 @@ func fToDec128(f float64, scale int32) (types.Decimal128, error) {
 	return types.Decimal128FromFloat64(f, 38, scale)
 }
 
+func VarStdDevReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_decimal64, types.T_decimal128:
+		return AvgReturnType(typs)
+	default:
+		return types.T_float64.ToType()
+	}
+}
+
 func (exec *varStdDevExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
 }
@@ -220,18 +229,21 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 	if exec.IsDistinct() {
 		for i := range vecs {
 			for j := 0; j < int(exec.state[i].length); j++ {
-				if exec.state[i].argCnt[j] == 0 {
-					if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
-						return nil, err
+				cnt := int64(exec.state[i].argCnt[j])
+				if cnt <= 1 {
+					// cnt == 1 && exec is samp
+					if cnt == 0 || !exec.isPop {
+						if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
+							return nil, err
+						}
+						continue
 					}
-					continue
-				} else if exec.state[i].argCnt[j] == 1 {
 					z, _ := exec.f2t(0, exec.aggInfo.retType.Scale)
 					if err := vector.AppendFixed(vecs[i], z, false, exec.mp); err != nil {
 						return nil, err
 					}
+					continue
 				} else {
-					cnt := int64(exec.state[i].argCnt[j])
 					s := float64(0)
 					s2 := float64(0)
 					err := exec.state[i].iter(uint16(j), func(k []byte) error {
@@ -265,10 +277,12 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 			sums := vector.MustFixedColNoTypeCheck[float64](exec.state[i].vecs[1])
 			sumsqs := vector.MustFixedColNoTypeCheck[float64](exec.state[i].vecs[2])
 			for j, cnt := range cnts {
-				if cnt == 0 {
-					vector.AppendNull(vecs[i], exec.mp)
-					continue
-				} else if cnt == 1 {
+				if cnt <= 1 {
+					// cnt == 1 && exec is samp
+					if cnt == 0 || !exec.isPop {
+						vector.AppendNull(vecs[i], exec.mp)
+						continue
+					}
 					z, _ := exec.f2t(0, exec.aggInfo.retType.Scale)
 					vector.AppendFixed(vecs[i], z, false, exec.mp)
 				} else {
@@ -327,12 +341,12 @@ func newVarStdDevExec[T float64 | types.Decimal128, A types.Ints | types.UInts |
 	exec.a2f = a2f
 	exec.f2t = f2t
 
-	avgTyp := AvgReturnType([]types.Type{param})
+	retType := VarStdDevReturnType([]types.Type{param})
 	exec.aggInfo = aggInfo{
 		aggId:      aggID,
 		isDistinct: isDistinct,
 		argTypes:   []types.Type{param},
-		retType:    avgTyp,
+		retType:    retType,
 		stateTypes: []types.Type{types.T_int64.ToType(), types.T_float64.ToType(), types.T_float64.ToType()},
 		emptyNull:  false,
 		saveArg:    isDistinct,

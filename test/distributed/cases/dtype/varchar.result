@@ -242,9 +242,9 @@ Sale Manager (EMEA)    5
 Sales Manager (NA)    6
 Sales Rep    7
 select e.jobTitle,sum(jobid) from employees e join job j on e.jobTitle=j.jobTitle group by jobTitle having sum(jobid)>5;
-invalid input: ambiguouse column reference to 'jobTitle'
+invalid input: ambiguous column reference to 'jobTitle'
 select e.jobTitle,sum(jobid) from employees e join job j on e.jobTitle=j.jobTitle group by jobTitle having sum(jobid)>5 order by 2 desc;
-invalid input: ambiguouse column reference to 'jobTitle'
+invalid input: ambiguous column reference to 'jobTitle'
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

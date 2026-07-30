@@ -34,4 +34,31 @@ create table transactions (trans_id int, user_id int, amount decimal(10,2), tran
 insert into transactions values (1, 1, 100.00, '2024-01-01', 'purchase'), (2, 1, 200.00, '2024-01-01', 'purchase'), (3, 2, 50.00, '2024-01-01', 'refund'), (4, 2, 300.00, '2024-01-02', 'purchase'), (5, 3, 150.00, '2024-01-02', 'purchase'), (6, 1, 75.00, '2024-01-03', 'refund');
 /*+ { "rewrites": { "hint_test.daily_summary": "SELECT trans_date, trans_type, COUNT(*) as trans_count, SUM(amount) as total_amount FROM transactions GROUP BY trans_date, trans_type" } } */ select trans_date, trans_type, total_amount from daily_summary where trans_type = 'purchase' order by trans_date;
 drop database if exists hint_test;
+
+-- issue #25186: INSERT...SELECT with rewrite hint — basic filter
+create database issue25186;
+use issue25186;
+create table src (a int, b int);
+create table dst (a int, b int);
+insert into src values (1, 100), (2, 200), (3, 300);
+/*+ { "rewrites": { "issue25186.src": "select a, b from issue25186.src where a > 1" } } */
+insert into dst select * from src;
+select * from dst order by a;
+
+-- issue #25186: INSERT...SELECT with rewrite — column subset
+drop table if exists dst2;
+create table dst2 (a int);
+/*+ { "rewrites": { "issue25186.src": "select a from issue25186.src where a = 3" } } */
+insert into dst2 select * from src;
+select * from dst2 order by a;
+
+-- issue #25186: INSERT...ON DUPLICATE KEY UPDATE with rewrite
+drop table if exists dst3;
+create table dst3 (a int primary key, b int);
+insert into dst3 values (2, 0);
+/*+ { "rewrites": { "issue25186.src": "select a, b from issue25186.src where a >= 2" } } */
+insert into dst3 select * from src on duplicate key update b = values(b);
+select * from dst3 order by a;
+
+drop database issue25186;
 set enable_remap_hint = 0;

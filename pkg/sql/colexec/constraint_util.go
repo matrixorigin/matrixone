@@ -139,7 +139,7 @@ func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.E
 		return nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, objName)
 	}
 
-	return relation, nil
+	return engine.NewRelationHandle(relation), nil
 }
 
 func GetRelAndPartitionRelsByObjRef(

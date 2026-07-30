@@ -35,7 +35,20 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(cc *clientConn, addr string)) {
+func runTestWithQueryService(
+	t *testing.T,
+	cn metadata.CNService,
+	fn func(cc *clientConn, addr string),
+) {
+	runTestWithQueryServiceHandler(t, cn, nil, fn)
+}
+
+func runTestWithQueryServiceHandler(
+	t *testing.T,
+	cn metadata.CNService,
+	migrateConnToHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	fn func(cc *clientConn, addr string),
+) {
 	sid := ""
 	runtime.RunTest(
 		sid,
@@ -73,19 +86,28 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(cc *cl
 					return moerr.NewInternalError(ctx, "bad request")
 				}
 				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
-					DB: "d1",
+					DB:                            "d1",
+					LastAffectedRows:              7,
+					UserLevelLockReleaseSupported: true,
 				}
 				return nil
 			}, false)
-			qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
-				if req.MigrateConnToRequest == nil {
-					return moerr.NewInternalError(ctx, "bad request")
+			if migrateConnToHandler == nil {
+				migrateConnToHandler = func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+					if req.MigrateConnToRequest == nil {
+						return moerr.NewInternalError(ctx, "bad request")
+					}
+					if req.MigrateConnToRequest.LastAffectedRows != 7 {
+						return moerr.NewInternalErrorf(ctx, "unexpected last affected rows: %d",
+							req.MigrateConnToRequest.LastAffectedRows)
+					}
+					resp.MigrateConnToResponse = &pb.MigrateConnToResponse{
+						Success: true,
+					}
+					return nil
 				}
-				resp.MigrateConnToResponse = &pb.MigrateConnToResponse{
-					Success: true,
-				}
-				return nil
-			}, false)
+			}
+			qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, migrateConnToHandler, false)
 			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 				if req.ResetSessionRequest == nil {
 					return moerr.NewInternalError(ctx, "bad request")
@@ -122,6 +144,7 @@ func TestQueryServiceMigrateFrom(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 		assert.Equal(t, "d1", resp.DB)
+		assert.Equal(t, int64(7), resp.LastAffectedRows)
 	})
 }
 
@@ -139,4 +162,199 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 		err = cc.migrateConnTo(sc, resp)
 		assert.NoError(t, err)
 	})
+}
+
+func TestMigrateConnToUsesTransferDeadline(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	transferDeadline := make(chan time.Time, 1)
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		if req.MigrateConnToRequest == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		expectedDeadline := <-transferDeadline
+		actualDeadline, ok := ctx.Deadline()
+		if !ok {
+			return moerr.NewInternalError(ctx, "missing migration deadline")
+		}
+		if actualDeadline.Before(expectedDeadline.Add(-time.Millisecond)) {
+			return moerr.NewInternalErrorf(ctx,
+				"migration deadline %s is earlier than transfer deadline %s",
+				actualDeadline, expectedDeadline)
+		}
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := newMockServerConn(local)
+		defer sc.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), defaultTransferTimeout)
+		defer cancel()
+		deadline, ok := ctx.Deadline()
+		assert.True(t, ok)
+		transferDeadline <- deadline
+		err := cc.migrateConnToContext(ctx, sc, &pb.MigrateConnFromResponse{})
+		assert.NoError(t, err)
+	})
+}
+
+func TestMigrateConnToPropagatesCancellation(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	handlerEntered := make(chan struct{})
+	handlerRelease := make(chan struct{})
+	handlerDone := make(chan struct{})
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		defer close(handlerDone)
+		if req.MigrateConnToRequest == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		close(handlerEntered)
+		<-handlerRelease
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := newMockServerConn(local)
+		defer sc.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		result := make(chan error, 1)
+		go func() {
+			result <- cc.migrateConnToContext(ctx, sc, &pb.MigrateConnFromResponse{})
+		}()
+
+		handlerReleased := false
+		defer func() {
+			if !handlerReleased {
+				close(handlerRelease)
+			}
+		}()
+		select {
+		case <-handlerEntered:
+		case <-time.After(time.Second):
+			t.Fatal("MigrateConnTo handler was not called")
+		}
+
+		cancel()
+		select {
+		case err := <-result:
+			assert.ErrorIs(t, err, context.Canceled)
+		case <-time.After(time.Second):
+			t.Fatal("MigrateConnTo ignored transfer cancellation")
+		}
+
+		close(handlerRelease)
+		handlerReleased = true
+		select {
+		case <-handlerDone:
+		case <-time.After(time.Second):
+			t.Fatal("MigrateConnTo handler did not finish")
+		}
+	})
+}
+
+func TestMigrateConnToContextCancelsReplay(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	blocked := newBlockingContextServerConn(local)
+	defer blocked.Close()
+	cc := &clientConn{}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- cc.migrateConnToContext(ctx, blocked, &pb.MigrateConnFromResponse{})
+	}()
+
+	select {
+	case <-blocked.entered:
+	case <-time.After(time.Second):
+		t.Fatal("migration replay did not enter backend ExecStmt")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("migration replay ignored transfer cancellation")
+	}
+}
+
+type migrationUserLockQueryClient struct {
+	userLevelLocks                []*pb.UserLevelLock
+	userLevelLockReleaseSupported bool
+}
+
+func (c *migrationUserLockQueryClient) ServiceID() string {
+	return "s1"
+}
+
+func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error) {
+	switch req.CmdMethod {
+	case pb.CmdMethod_MigrateConnFrom:
+		return &pb.Response{MigrateConnFromResponse: &pb.MigrateConnFromResponse{
+			DB:                            "d1",
+			UserLevelLocks:                c.userLevelLocks,
+			UserLevelLockReleaseSupported: c.userLevelLockReleaseSupported,
+		}}, nil
+	default:
+		return nil, moerr.NewInternalError(ctx, "unexpected request")
+	}
+}
+
+func (c *migrationUserLockQueryClient) NewRequest(method pb.CmdMethod) *pb.Request {
+	return &pb.Request{CmdMethod: method}
+}
+
+func (c *migrationUserLockQueryClient) Release(response *pb.Response) {}
+
+func (c *migrationUserLockQueryClient) Close() error {
+	return nil
+}
+
+func TestMigrateConnContextRejectsUserLevelLocks(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	ccc.queryClient = &migrationUserLockQueryClient{
+		userLevelLocks:                []*pb.UserLevelLock{{Name: "migration_lock", Count: 1}},
+		userLevelLockReleaseSupported: true,
+	}
+	ccc.moCluster = cluster
+
+	err := ccc.migrateConnContext(context.Background(), "pipe", nil)
+	assert.ErrorContains(t, err, "cannot migrate connection while user-level locks are held")
+}
+
+func TestMigrateConnContextRejectsOldUserLevelLockProtocol(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	ccc.queryClient = &migrationUserLockQueryClient{}
+	ccc.moCluster = cluster
+
+	err := ccc.migrateConnContext(context.Background(), "pipe", nil)
+	assert.ErrorContains(t, err, "cannot migrate connection from CN without user-level lock release support")
 }

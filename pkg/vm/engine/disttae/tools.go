@@ -173,14 +173,16 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		return nil, err
 	}
 	return &api.Entry{
-		Bat:          bat,
-		EntryType:    typ,
-		TableId:      e.tableId,
-		DatabaseId:   e.databaseId,
-		TableName:    e.tableName,
-		DatabaseName: e.databaseName,
-		FileName:     e.fileName,
-		PkCheckByTn:  int32(e.pkChkByTN),
+		Bat:                bat,
+		EntryType:          typ,
+		TableId:            e.tableId,
+		DatabaseId:         e.databaseId,
+		TableName:          e.tableName,
+		DatabaseName:       e.databaseName,
+		FileName:           e.fileName,
+		PkCheckByTn:        int32(e.pkChkByTN),
+		AutoIncrEpoch:      e.autoIncrEpoch,
+		AutoIncrEpochKnown: e.autoIncrEpochKnown,
 	}, nil
 }
 
@@ -221,6 +223,13 @@ func getAccessInfo(ctx context.Context) (uint32, uint32, uint32, error) {
 	userId = defines.GetUserId(ctx)
 	roleId = defines.GetRoleId(ctx)
 	return accountId, userId, roleId, nil
+}
+
+func getDDLOwnerRoleId(ctx context.Context) uint32 {
+	if ownerRoleId, ok := defines.GetDDLOwnerRoleId(ctx); ok {
+		return ownerRoleId
+	}
+	return defines.GetRoleId(ctx)
 }
 
 func genDatabaseKey(id uint32, name string) databaseKey {

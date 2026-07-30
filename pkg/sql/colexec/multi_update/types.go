@@ -74,8 +74,9 @@ type MultiUpdate struct {
 	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
 	IsRemote               bool
-
-	Engine engine.Engine
+	CountDeleteAffectRows  bool
+	RejectZeroTemporal     bool
+	Engine                 engine.Engine
 
 	getS3WriterFunc          func(sid string, id uint64) (*s3WriterDelegate, error)
 	getFlushableS3WriterFunc func() *s3WriterDelegate
@@ -85,9 +86,11 @@ type MultiUpdate struct {
 }
 
 type updateCtxInfo struct {
-	Source      engine.Relation
-	tableType   UpdateTableType
-	insertAttrs []string
+	Source       engine.Relation
+	tableType    UpdateTableType
+	insertAttrs  []string
+	isContiguous bool
+	refBatch     *batch.Batch
 }
 
 type container struct {
@@ -105,11 +108,15 @@ type container struct {
 }
 
 type MultiUpdateCtx struct {
-	ObjRef        *plan.ObjectRef
-	TableDef      *plan.TableDef
-	InsertCols    []int
-	DeleteCols    []int
-	PartitionCols []int
+	ObjRef             *plan.ObjectRef
+	TableDef           *plan.TableDef
+	InsertCols         []int
+	DeleteCols         []int
+	PartitionCols      []int
+	SkipInsertOnNullPk bool
+	// InsertPkColIdx is the PK column's index within InsertCols. It is only
+	// used with SkipInsertOnNullPk for REPLACE delete-only rows.
+	InsertPkColIdx int
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -128,6 +135,13 @@ func (update *MultiUpdate) Release() {
 
 func (update *MultiUpdate) GetOperatorBase() *vm.OperatorBase {
 	return &update.OperatorBase
+}
+
+func (update *MultiUpdate) SetRejectZeroTemporal(reject bool) {
+	update.RejectZeroTemporal = reject
+	if update.ctr.s3Writer != nil {
+		update.ctr.s3Writer.rejectZeroTemporal = reject
+	}
 }
 
 func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -205,18 +219,13 @@ func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCou
 	if tableType != UpdateMainTable {
 		return
 	}
-	// For REPLACE INTO, we don't count DELETE rows in affected rows
-	// REPLACE INTO should only return the number of INSERT rows
-	// Only count DELETE rows for regular UPDATE operations
 	switch update.ctr.action {
 	case actionDelete:
-		// Regular DELETE operation, count it
 		update.addAffectedRowsFunc(rowCount)
 	case actionUpdate:
-		// For UPDATE operations (not REPLACE INTO), count DELETE rows
-		// But for REPLACE INTO, this should not be called or should be ignored
-		// REPLACE INTO uses actionUpdate but should only count INSERT
-		// So we don't count DELETE here for actionUpdate
+		if update.CountDeleteAffectRows {
+			update.addAffectedRowsFunc(rowCount)
+		}
 	}
 }
 

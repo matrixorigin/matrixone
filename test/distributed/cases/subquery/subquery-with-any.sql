@@ -335,6 +335,88 @@ DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t1s;
 DROP TABLE IF EXISTS t2s;
 
+-- @case
+-- @desc:test for nested correlated ANY and ALL subquery
+-- @label:bvt
+DROP TABLE IF EXISTS corr_any_t1;
+DROP TABLE IF EXISTS corr_any_t2;
+DROP TABLE IF EXISTS corr_any_t3;
+create table corr_any_t1(id int);
+create table corr_any_t2(id int);
+create table corr_any_t3(id int);
+insert into corr_any_t1 values (1), (2), (3);
+insert into corr_any_t2 values (1), (2);
+insert into corr_any_t3 values (1);
+select c1.id from corr_any_t1 c1 where c1.id = any (
+    select c2.id from corr_any_t2 c2 where c2.id = any (
+        select c3.id from corr_any_t3 c3 where c3.id = c2.id and c2.id = c1.id
+    )
+) order by c1.id;
+select c1.id from corr_any_t1 c1 where c1.id > any (
+    select c2.id from corr_any_t2 c2 where c2.id = any (
+        select c3.id from corr_any_t3 c3 where c3.id = c2.id and c2.id < c1.id
+    )
+) order by c1.id;
+select c1.id from corr_any_t1 c1 where c1.id > all (
+    select c2.id from corr_any_t2 c2 where c2.id = any (
+        select c3.id from corr_any_t3 c3 where c3.id = c2.id and c2.id < c1.id
+    )
+) order by c1.id;
+DROP TABLE IF EXISTS corr_any_t1;
+DROP TABLE IF EXISTS corr_any_t2;
+DROP TABLE IF EXISTS corr_any_t3;
+
+-- @case
+-- @desc:test nested correlated ANY/ALL/NOT IN quantifier semantics with NULL and empty set
+-- @label:bvt
+DROP TABLE IF EXISTS corr_quant_outer;
+DROP TABLE IF EXISTS corr_quant_mid;
+DROP TABLE IF EXISTS corr_quant_inner;
+create table corr_quant_outer(id int, grp int);
+create table corr_quant_mid(grp int, val int);
+create table corr_quant_inner(grp int, val int);
+insert into corr_quant_outer values (1, 1), (2, 1), (4, 1), (5, 9), (7, 3);
+insert into corr_quant_mid values (1, 1), (1, 3), (3, null);
+insert into corr_quant_inner values (1, 1), (1, 3), (3, null);
+select o.id from corr_quant_outer o where o.grp = 1 and o.id > any (
+    select m.val from corr_quant_mid m where m.val = any (
+        select i.val from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+    )
+) order by o.id;
+select o.id from corr_quant_outer o where o.grp = 1 and o.id > all (
+    select m.val from corr_quant_mid m where m.val = any (
+        select i.val from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+    )
+) order by o.id;
+select o.id from corr_quant_outer o where o.grp = 9 and o.id > any (
+    select m.val from corr_quant_mid m where m.val = any (
+        select i.val from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+    )
+) order by o.id;
+select o.id from corr_quant_outer o where o.grp = 9 and o.id > all (
+    select m.val from corr_quant_mid m where m.val = any (
+        select i.val from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+    )
+) order by o.id;
+select o.id from corr_quant_outer o where o.grp = 3 and (o.id = any (
+    select m.val from corr_quant_mid m where m.grp = any (
+        select i.grp from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+    )
+)) is null order by o.id;
+select o.id from corr_quant_outer o where o.grp = 3 and (o.id > all (
+    select m.val from corr_quant_mid m where m.grp = any (
+        select i.grp from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+    )
+)) is null order by o.id;
+select o.id from corr_quant_outer o where o.grp = 3 and (o.id not in (
+    select m.val from corr_quant_mid m where m.grp = any (
+        select i.grp from corr_quant_inner i where i.grp = m.grp and m.grp = o.grp
+    )
+)) is null order by o.id;
+DROP TABLE IF EXISTS corr_quant_outer;
+DROP TABLE IF EXISTS corr_quant_mid;
+DROP TABLE IF EXISTS corr_quant_inner;
+
 
 
 

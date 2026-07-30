@@ -1,0 +1,53 @@
+drop table if exists zsd04;
+create table zsd04(vgbel varchar(20), vgpos varchar(10), kwmeng int, vbeln varchar(20), lfimg int);
+insert into zsd04 values
+('2023102053','10',5,'x',1),
+('2023102053','20',7,'2023102053',2),
+('2023102053','10',3,'y',4),
+('2023102053','20',9,'z',6);
+SELECT CAST(vgpos AS UNSIGNED) AS line_item_no, MAX(COALESCE(kwmeng,0)) AS ordered_qty
+FROM zsd04 WHERE vgbel='2023102053'
+GROUP BY CAST(vgpos AS UNSIGNED)
+ORDER BY CAST(vgpos AS UNSIGNED);
+➤ line_item_no[-5,64,0]  ¦  ordered_qty[-5,64,0]  𝄀
+10  ¦  5  𝄀
+20  ¦  9
+SELECT CAST(vgpos AS UNSIGNED) AS line_item_no,
+SUM(CASE WHEN vbeln = vgbel THEN 0 ELSE COALESCE(lfimg,0) END) AS delivered_qty
+FROM zsd04 WHERE vgbel='2023102053'
+GROUP BY CAST(vgpos AS UNSIGNED)
+ORDER BY CAST(vgpos AS UNSIGNED);
+➤ line_item_no[-5,64,0]  ¦  delivered_qty[-5,64,0]  𝄀
+10  ¦  5  𝄀
+20  ¦  6
+SELECT CAST(vgpos AS SIGNED) AS n, COUNT(*) AS c
+FROM zsd04
+GROUP BY CAST(vgpos AS SIGNED)
+ORDER BY CAST(vgpos AS SIGNED);
+➤ n[-5,64,0]  ¦  c[-5,64,0]  𝄀
+10  ¦  2  𝄀
+20  ¦  2
+SELECT CAST(vgpos AS UNSIGNED INTEGER) AS n
+FROM zsd04
+GROUP BY CAST(vgpos AS UNSIGNED INTEGER)
+ORDER BY CAST(vgpos AS UNSIGNED INTEGER);
+➤ n[-5,64,0]  𝄀
+10  𝄀
+20
+SELECT CAST(vgpos AS UNSIGNED) AS n, MAX(kwmeng)
+FROM zsd04
+GROUP BY CAST(vgpos AS UNSIGNED)
+ORDER BY CAST(vgpos AS UNSIGNED) DESC;
+➤ n[-5,64,0]  ¦  MAX(kwmeng)[4,32,0]  𝄀
+20  ¦  9  𝄀
+10  ¦  5
+SELECT CAST(kwmeng AS UNSIGNED) AS k, COUNT(*)
+FROM zsd04
+GROUP BY CAST(kwmeng AS UNSIGNED)
+ORDER BY CAST(kwmeng AS UNSIGNED);
+➤ k[-5,64,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+3  ¦  1  𝄀
+5  ¦  1  𝄀
+7  ¦  1  𝄀
+9  ¦  1
+drop table if exists zsd04;

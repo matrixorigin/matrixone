@@ -19,12 +19,13 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -159,7 +160,8 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 		centers[i] = c
 	}
 
-	algo, err := brute_force.NewBruteForceIndex[T](centers, uint(dim), ctr.metrictype, elemSize, 1)
+	gpuMode := gpumode.EffectiveGpuMode(ctr.sqlproc.GetResolveVariableFunc())
+	algo, err := brute_force.NewBruteForceIndex[T](centers, uint(dim), ctr.metrictype, elemSize, 1, gpuMode)
 	if err != nil {
 		return nil, err
 	}
@@ -174,9 +176,9 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 
 func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &productl2.ctr
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-	mp, err := message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	mp, err := process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	})
 	if err != nil {
 		return err
 	}
@@ -221,6 +223,10 @@ var (
 	pool1DF64 = sync.Pool{New: func() any { x := make([]float64, 0); return &x }}
 	pool2DF32 = sync.Pool{New: func() any { x := make([][]float32, 0); return &x }}
 	pool2DF64 = sync.Pool{New: func() any { x := make([][]float64, 0); return &x }}
+
+	// Pooled output buffers for SearchFloat32 in probeRun.
+	bruteForceKeysPool  = sync.Pool{New: func() any { x := make([]int64, 0); return &x }}
+	bruteForceDistsPool = sync.Pool{New: func() any { x := make([]float32, 0); return &x }}
 )
 
 func get1D[T any](pool *sync.Pool, n int) *[]T {
@@ -268,27 +274,55 @@ func newMat[T types.RealNumbers](ctr *container, ap *Productl2, probes [][]T, nu
 		}
 	}
 
+	// T is the centroid (index) element type. T==float32 covers f32 centroids,
+	// which a base of any type (f32/f64/narrow) is decoded to; T==float64 is the
+	// plain f64 index where the base is f64 and reinterpreted directly.
+	_, toF32 := any(*new(T)).(float32)
+	oid := tblColVec.GetType().Oid
 	for j := 0; j < probeCount; j++ {
 		if tblColVec.IsNull(uint64(j)) {
 			probes[j] = nullvec
 			continue
 		}
-		v := types.BytesToArray[T](tblColVec.GetBytesAt(j))
-		probes[j] = v
+		b := tblColVec.GetBytesAt(j)
+		if !toF32 {
+			probes[j] = types.BytesToArray[T](b) // f64 centroids: base is f64
+			continue
+		}
+		var f32 []float32
+		switch oid {
+		case types.T_array_float64:
+			f64 := types.BytesToArray[float64](b)
+			f32 = make([]float32, len(f64))
+			for i, x := range f64 {
+				f32[i] = float32(x)
+			}
+		case types.T_array_bf16:
+			f32 = types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](b))
+		case types.T_array_float16:
+			f32 = types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](b))
+		case types.T_array_int8:
+			f32 = types.Int8ToFloat32Slice(types.BytesToArray[int8](b))
+		case types.T_array_uint8:
+			f32 = types.Uint8ToFloat32Slice(types.BytesToArray[uint8](b))
+		default: // T_array_float32
+			f32 = types.BytesToArray[float32](b)
+		}
+		probes[j] = any(f32).([]T)
 	}
 
 	return probes, nil
 }
 
 func (ctr *container) probe(ap *Productl2, proc *process.Process, result *vm.CallResult) error {
-	tblColPos := ap.OnExpr.GetF().GetArgs()[1].GetCol().GetColPos()
-	switch ctr.inBat.Vecs[tblColPos].GetType().Oid {
-	case types.T_array_float32:
-		return probeRun[float32](ctr, ap, proc, result)
-	case types.T_array_float64:
+	// Dispatch on the CENTROID (index) type, not the base type: under QUANTIZATION
+	// an f64/narrow base is assigned against f32 centroids, so the base must be
+	// decoded to f32 (in newMat) to match. Only a plain f64 index keeps f64.
+	centroidColPos := ap.OnExpr.GetF().GetArgs()[0].GetCol().GetColPos()
+	if ctr.bat.Vecs[centroidColPos].GetType().Oid == types.T_array_float64 {
 		return probeRun[float64](ctr, ap, proc, result)
 	}
-	return nil
+	return probeRun[float32](ctr, ap, proc, result)
 }
 
 func (ctr *container) release() {
@@ -365,13 +399,16 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 
 	rt := vectorindex.RuntimeConfig{Limit: 1, NThreads: uint(ncpu)}
 
-	anykeys, distances, err := ctr.brute_force.Search(ctr.sqlproc, probes, rt)
-	if err != nil {
+	keysPtr := get1D[int64](&bruteForceKeysPool, probeCount)
+	distsPtr := get1D[float32](&bruteForceDistsPool, probeCount)
+	defer put1D(&bruteForceKeysPool, keysPtr)
+	defer put1D(&bruteForceDistsPool, distsPtr)
+
+	if err := ctr.brute_force.SearchFloat32(ctr.sqlproc, probes, rt, *keysPtr, *distsPtr); err != nil {
 		return err
 	}
-	_ = distances
 
-	leastClusterIndex := anykeys.([]int64)
+	leastClusterIndex := *keysPtr
 	// BCE Hint
 	if len(leastClusterIndex) != probeCount {
 		return moerr.NewInternalErrorNoCtx("leastClusterIndex size != probeCount")

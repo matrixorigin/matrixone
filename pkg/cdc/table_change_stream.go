@@ -497,8 +497,11 @@ func (s *TableChangeStream) Run(ctx context.Context, ar *ActiveRoutine) {
 			if !retryable || retryCount > s.maxRetryCount {
 				// Ensure cleanup is called before stopping (processWithTxn's defer should have already called it,
 				// but we call it again here to be safe, especially for the case where retryCount > maxRetryCount)
-				// This ensures sinker errors are cleared even if we stop due to exceeding max retry count
-				_ = s.txnManager.EnsureCleanup(streamCtx)
+				// This ensures sinker errors are cleared even if we stop due to exceeding max retry count.
+				// Skip cleanup for control signals (pause/cancel) — the stream is shutting down intentionally.
+				if !IsPauseOrCancelError(err.Error()) {
+					_ = s.txnManager.EnsureCleanup(streamCtx)
+				}
 
 				// Preserve original error for deterministic error reporting
 				// This ensures the error that triggered retry is preserved in lastError,
@@ -584,6 +587,10 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	)
 	defer s.wg.Done()
 	defer func() {
+		// Keep ownership until cleanup finishes so a replacement reader cannot
+		// start while this stream is still closing its sinker/watermark state.
+		s.runningReaders.CompareAndDelete(s.runningReaderKey, s)
+
 		// Decrement table stream state gauge on cleanup
 		if s.progressTracker != nil {
 			state, _ := s.progressTracker.GetState()
@@ -599,9 +606,6 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 			zap.Duration("cost", time.Since(startTime)),
 		)
 	}()
-
-	// Remove from running readers
-	s.runningReaders.Delete(s.runningReaderKey)
 
 	// Remove watermark cache
 	removeStart := time.Now()
@@ -739,9 +743,14 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	if err != nil {
 		return err
 	}
-	defer FinishTxnOp(ctx, err, txnOp, s.cnEngine)
+	defer func() {
+		FinishTxnOp(ctx, err, txnOp, s.cnEngine)
+	}()
 
-	finishRunSQL := EnterRunSql(ctx, txnOp, "<cdc.table_change_stream>")
+	finishRunSQL, err := TryEnterRunSql(ctx, txnOp, "<cdc.table_change_stream>")
+	if err != nil {
+		return err
+	}
 	defer finishRunSQL()
 
 	if err = GetTxn(ctx, s.cnEngine, txnOp); err != nil {
@@ -1232,6 +1241,9 @@ func (s *TableChangeStream) processWithTxn(
 	// Ensure cleanup on any error
 	defer func() {
 		if err != nil || ctx.Err() != nil {
+			if err != nil && IsPauseOrCancelError(err.Error()) {
+				return // Skip cleanup for control signals; caller handles shutdown
+			}
 			if cleanupErr := s.txnManager.EnsureCleanup(ctx); cleanupErr != nil {
 				logutil.Error(
 					"cdc.table_stream.ensure_cleanup_failed",

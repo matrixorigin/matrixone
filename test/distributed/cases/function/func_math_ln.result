@@ -5,9 +5,11 @@ SELECT ln(2);
 ln(2)
 0.6931471805599453
 SELECT ln(-2);
-invalid argument ln, bad value -2
+ln(-2)
+null
 SELECT ln(0);
-invalid argument ln, bad value 0
+ln(0)
+null
 select ln(0.00000000000000001);
 ln(0.00000000000000001)
 -39.14394658089878
@@ -18,7 +20,8 @@ select ln(0.141241241241313);
 ln(0.141241241241313)
 -1.9572859197892771
 select ln(-124314124124.12412341);
-invalid argument ln, bad value -1.2431412412412413e+11
+ln(-124314124124.12412341)
+null
 select ln(null);
 ln(null)
 null

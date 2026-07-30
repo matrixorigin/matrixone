@@ -109,7 +109,6 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 					version, currentCN.Version)
 			}
 
-			// arrive here means tenant version <= current cn version, need upgrade.
 			latestVersion, err := versions.GetLatestVersion(txn)
 			if err != nil {
 				return err
@@ -120,6 +119,18 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 					") must equal cluster latest version(" +
 					latestVersion.Version +
 					")")
+			}
+			if currentCN.Version == version {
+				if latestVersion.VersionOffset != currentCN.VersionOffset {
+					return nil
+				}
+				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, false)
+				if err != nil {
+					return err
+				}
+				if len(upgrades) == 0 {
+					return nil
+				}
 			}
 
 			for {

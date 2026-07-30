@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -110,6 +111,66 @@ func Test_checkPitrInValidDurtion(t *testing.T) {
 		err := checkPitrInValidDurtion(time.Now().Add(time.Duration(25)*time.Hour).UnixNano(), pitr)
 		assert.Error(t, err)
 	})
+}
+
+func Test_checkPitrValidOrNot_AllowsExplicitCurrentAccountForScopedRestore(t *testing.T) {
+	tenant := &TenantInfo{
+		Tenant:   "acc01",
+		TenantID: 101,
+	}
+	pitr := &pitrRecord{
+		pitrName:     "pitr01",
+		level:        tree.PITRLEVELACCOUNT.String(),
+		accountId:    101,
+		accountName:  "acc01",
+		databaseName: "db01",
+		tableName:    "t01",
+	}
+
+	err := checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELDATABASE,
+		AccountName:  "acc01",
+		DatabaseName: "db01",
+	}, tenant)
+	require.NoError(t, err)
+
+	err = checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  "acc01",
+		DatabaseName: "db01",
+		TableName:    "t01",
+	}, tenant)
+	require.NoError(t, err)
+}
+
+func Test_checkPitrValidOrNot_RejectsOtherAccountForScopedRestore(t *testing.T) {
+	tenant := &TenantInfo{
+		Tenant:   "acc01",
+		TenantID: 101,
+	}
+	pitr := &pitrRecord{
+		pitrName:     "pitr01",
+		level:        tree.PITRLEVELACCOUNT.String(),
+		accountId:    101,
+		accountName:  "acc01",
+		databaseName: "db01",
+		tableName:    "t01",
+	}
+
+	err := checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELDATABASE,
+		AccountName:  "acc02",
+		DatabaseName: "db01",
+	}, tenant)
+	require.Error(t, err)
+
+	err = checkPitrValidOrNot(pitr, &tree.RestorePitr{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  "acc02",
+		DatabaseName: "db01",
+		TableName:    "t01",
+	}, tenant)
+	require.Error(t, err)
 }
 
 func Test_createPubByPitr(t *testing.T) {
@@ -1483,14 +1544,14 @@ func Test_doRestorePitr_Account(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
 		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 
-		sql = fmt.Sprintf(checkDatabaseIsMasterFormat, "db1", "db1")
+		sql = fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral("db1"), quoteSQLStringLiteral("db1"))
 		mrs = newMrsForPitrRecord([][]interface{}{{"db2"}})
 		bh.sql2result[sql] = mrs
 
@@ -1609,7 +1670,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -1732,7 +1793,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -1849,7 +1910,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -1973,7 +2034,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2091,7 +2152,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2219,7 +2280,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2341,7 +2402,7 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -2463,25 +2524,25 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("show full tables from `db1` {MO_TS = %d}", resovleTs)
+		sql = buildTableInfoListSQL("db1", "", resovleTs, uint32(sysAccountID))
 		mrs = newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
 		_, err = doRestorePitr(ctx, ses, stmt)
 		assert.Error(t, err)
 
-		sql = fmt.Sprintf("show full tables from `mo_catalog` {MO_TS = %d}", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{"mo_user", "BASE TABLE"},
+		sql = buildTableInfoListSQL(moCatalog, "", resovleTs, uint32(sysAccountID))
+		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
+			{"mo_user", "BASE TABLE", "r"},
 		})
 		bh.sql2result[sql] = mrs
 
 		err = restoreSystemDatabaseWithPitr(ctx, "", bh, "pitr01", resovleTs, 0)
 		assert.Error(t, err)
 
-		sql = fmt.Sprintf("show full tables from `mo_catalog` {snapshot = '%s'}", "pitr01")
-		mrs = newMrsForPitrRecord([][]interface{}{
-			{"mo_user", "BASE TABLE"},
+		sql = buildTableInfoListSQL(moCatalog, "", resovleTs, uint32(sysAccountID))
+		mrs = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
+			{"mo_user", "BASE TABLE", "r"},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -2618,6 +2679,11 @@ func Test_doCreatePitr(t *testing.T) {
 
 		err = doCreatePitr(ctx, ses, stmt)
 		assert.NoError(t, err)
+
+		commitErr := errors.New("pitr commit conflict")
+		bh.sql2err["commit;"] = commitErr
+		err = doCreatePitr(ctx, ses, stmt)
+		assert.ErrorIs(t, err, commitErr)
 	})
 
 }
@@ -2959,7 +3025,7 @@ func Test_restoreViews(t *testing.T) {
 
 		sql := "select * from mo_catalog.mo_snapshots where sname = 'sp01'"
 		// string/ string/ int64/ string/ string/ string/ string/ uint64
-		mrs := newMrsForPitrRecord([][]interface{}{{"1", "sp01", int64(0), "ACCOUNT", "sys", "", "", uint64(1)}})
+		mrs := newMrsForSnapshotRecord("1", "sp01", int64(0), "ACCOUNT", "sys", "", "", uint64(1))
 		bh.sql2result[sql] = mrs
 
 		sql = "select account_id, account_name, status, version, suspended_time from mo_catalog.mo_account where 1=1 and account_name = 'sys'"
@@ -2972,6 +3038,25 @@ func Test_restoreViews(t *testing.T) {
 
 		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
 		assert.NoError(t, err)
+
+		viewMap = map[string]*tableInfo{
+			genKey("quote`db", "quote view"): {
+				dbName:    "quote`db",
+				tblName:   "quote view",
+				typ:       "VIEW",
+				createSql: "create view `quote``db`.`quote view` as select 1",
+			},
+		}
+		sortedViews = []string{genKey("quote`db", "quote view")}
+		bh.executedSQLs = nil
+
+		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
+		require.NoError(t, err)
+		require.Equal(t, []string{
+			"use `quote``db`",
+			"drop view if exists `quote view`",
+			"create view `quote``db`.`quote view` as select 1",
+		}, bh.executedSQLs)
 
 		viewMap = map[string]*tableInfo{
 			"view01": {
@@ -3574,4 +3659,70 @@ func Test_getPitrLengthAndUnit(t *testing.T) {
 
 	_, _, _, err = getPitrLengthAndUnit(ctx, bh, "table", "", "", "tbl")
 	assert.Error(t, err)
+}
+
+func newPitrLifecycleTestSession(
+	t *testing.T,
+) (*Session, *backgroundExecTest, context.Context) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	bh := &backgroundExecTest{}
+	bh.init()
+	registerEmptyHistoricalLineageResults(bh)
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	t.Cleanup(func() {
+		bhStub.Reset()
+		ses.Close()
+		ctrl.Finish()
+	})
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	})
+
+	bh.sql2result["begin;"] = nil
+	bh.sql2result["commit;"] = nil
+	bh.sql2result["rollback;"] = nil
+	return ses, bh, ctx
+}
+
+func TestDoDropPitrCompactsHistoricalAlterLineage(t *testing.T) {
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	stmt := &tree.DropPitr{Name: "pitr01"}
+
+	checkSQL, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	bh.sql2result[getSqlForDropPitr("pitr01", sysAccountID)] = nil
+	otherSQL := fmt.Sprintf(getPitrFormat+" where pitr_name != '%s';", SYSMOCATALOGPITR)
+	bh.sql2result[otherSQL] = newMrsForPitrRecord(nil)
+	bh.sql2result[getSqlForDropPitr(SYSMOCATALOGPITR, sysAccountID)] = nil
+
+	require.NoError(t, doDropPitr(ctx, ses, stmt))
+	require.Contains(t, bh.executedSQLs, historicalAlterLineageMetadataSQL())
+}
+
+func TestDoAlterPitrCompactsHistoricalAlterLineage(t *testing.T) {
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	stmt := &tree.AlterPitr{Name: "pitr01", PitrValue: 1, PitrUnit: "h"}
+
+	checkSQL, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+
+	require.NoError(t, doAlterPitr(ctx, ses, stmt))
+	require.Contains(t, bh.executedSQLs, historicalAlterLineageMetadataSQL())
 }

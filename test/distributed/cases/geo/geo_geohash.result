@@ -1,0 +1,29 @@
+select st_geohash(st_geomfromtext('POINT(-5.603 42.605)'), 5) as gh_point;
+gh_point
+ezs42
+select st_geohash(-5.603, 42.605, 5) as gh_lonlat;
+gh_lonlat
+ezs42
+select st_geohash(0, 0, 11) as gh_origin;
+gh_origin
+s0000000000
+select st_latfromgeohash('ezs42') as lat;
+lat
+42.60498046875
+select st_longfromgeohash('ezs42') as lon;
+lon
+-5.60302734375
+select st_astext(st_pointfromgeohash('ezs42', 4326)) as pt;
+pt
+POINT(-5.60302734375 42.60498046875)
+select st_srid(st_pointfromgeohash('ezs42', 4326)) as pt_srid;
+pt_srid
+4326
+select st_longfromgeohash(st_geohash(12.5, -7.25, 20)) as rt_lon;
+rt_lon
+12.499999999999876
+select st_latfromgeohash(st_geohash(12.5, -7.25, 20)) as rt_lat;
+rt_lat
+-7.249999999999934
+select st_latfromgeohash('ail');
+invalid input: invalid geohash

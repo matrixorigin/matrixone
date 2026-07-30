@@ -84,8 +84,9 @@ type faultEntry struct {
 	constant         bool
 
 	nWaiters int
+	waiters  []chan struct{}
+	removed  bool
 	mutex    sync.Mutex
-	cond     *sync.Cond
 	scope    Domain
 }
 
@@ -115,11 +116,23 @@ func (fm *faultMap) run() {
 			}
 		case REMOVE:
 			if e.name == "all" {
+				for _, v := range fm.faultPoints {
+					if v.action == WAIT {
+						v.mutex.Lock()
+						v.removeAllWaitersLocked()
+						v.mutex.Unlock()
+					}
+				}
 				fm.faultPoints = make(map[string]*faultEntry)
 				fm.chOut <- e
 				continue
 			}
 			if v, ok := fm.faultPoints[e.name]; ok {
+				if v.action == WAIT {
+					v.mutex.Lock()
+					v.removeAllWaitersLocked()
+					v.mutex.Unlock()
+				}
 				delete(fm.faultPoints, e.name)
 				fm.chOut <- v
 			} else {
@@ -159,11 +172,10 @@ func (e *faultEntry) do() (int64, string) {
 			return int64(ee.cnt), ""
 		}
 	case WAIT:
-		e.mutex.Lock()
-		e.nWaiters += 1
-		e.cond.Wait()
-		e.nWaiters -= 1
-		e.mutex.Unlock()
+		waiter := e.registerWaiter()
+		if waiter != nil {
+			<-waiter
+		}
 	case GETWAITERS:
 		if ee := lookup(e.scope, e.sarg); ee != nil {
 			ee.mutex.Lock()
@@ -173,11 +185,15 @@ func (e *faultEntry) do() (int64, string) {
 		}
 	case NOTIFY:
 		if ee := lookup(e.scope, e.sarg); ee != nil {
-			ee.cond.Signal()
+			ee.mutex.Lock()
+			ee.releaseOneWaiterLocked()
+			ee.mutex.Unlock()
 		}
 	case NOTIFYALL:
 		if ee := lookup(e.scope, e.sarg); ee != nil {
-			ee.cond.Broadcast()
+			ee.mutex.Lock()
+			ee.releaseAllWaitersLocked()
+			ee.mutex.Unlock()
 		}
 	case PANIC:
 		switch e.iarg {
@@ -188,6 +204,83 @@ func (e *faultEntry) do() (int64, string) {
 		}
 	case ECHO:
 		return e.iarg, e.sarg
+	}
+	return 0, ""
+}
+
+func (e *faultEntry) registerWaiter() chan struct{} {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	if e.removed {
+		return nil
+	}
+	waiter := make(chan struct{})
+	e.waiters = append(e.waiters, waiter)
+	e.nWaiters += 1
+	return waiter
+}
+
+func (e *faultEntry) removeWaiterLocked(waiter chan struct{}) bool {
+	for i, candidate := range e.waiters {
+		if candidate == waiter {
+			copy(e.waiters[i:], e.waiters[i+1:])
+			e.waiters[len(e.waiters)-1] = nil
+			e.waiters = e.waiters[:len(e.waiters)-1]
+			e.nWaiters -= 1
+			return true
+		}
+	}
+	return false
+}
+
+func (e *faultEntry) releaseOneWaiterLocked() {
+	if len(e.waiters) == 0 {
+		return
+	}
+	waiter := e.waiters[0]
+	copy(e.waiters[0:], e.waiters[1:])
+	e.waiters[len(e.waiters)-1] = nil
+	e.waiters = e.waiters[:len(e.waiters)-1]
+	e.nWaiters -= 1
+	close(waiter)
+}
+
+func (e *faultEntry) releaseAllWaitersLocked() {
+	for _, waiter := range e.waiters {
+		close(waiter)
+	}
+	e.waiters = nil
+	e.nWaiters = 0
+}
+
+func (e *faultEntry) removeAllWaitersLocked() {
+	e.removed = true
+	e.releaseAllWaitersLocked()
+}
+
+func (e *faultEntry) doWithContext(ctx context.Context) (int64, string) {
+	if e.action == SLEEP {
+		timer := time.NewTimer(time.Duration(e.iarg) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+		}
+		return 0, ""
+	}
+	if e.action != WAIT {
+		return e.do()
+	}
+	waiter := e.registerWaiter()
+	if waiter == nil {
+		return 0, ""
+	}
+	select {
+	case <-waiter:
+	case <-ctx.Done():
+		e.mutex.Lock()
+		e.removeWaiterLocked(waiter)
+		e.mutex.Unlock()
 	}
 	return 0, ""
 }
@@ -276,7 +369,19 @@ func TriggerFault(name string) (iret int64, sret string, exist bool) {
 	return TriggerFaultInDomain(DomainDefault, name)
 }
 
+func TriggerFaultWithContext(ctx context.Context, name string) (iret int64, sret string, exist bool) {
+	return TriggerFaultInDomainWithContext(ctx, DomainDefault, name)
+}
+
 func TriggerFaultInDomain(domain Domain, name string) (iret int64, sret string, exist bool) {
+	return triggerFaultInDomain(context.Background(), domain, name, false)
+}
+
+func TriggerFaultInDomainWithContext(ctx context.Context, domain Domain, name string) (iret int64, sret string, exist bool) {
+	return triggerFaultInDomain(ctx, domain, name, true)
+}
+
+func triggerFaultInDomain(ctx context.Context, domain Domain, name string, useCtx bool) (iret int64, sret string, exist bool) {
 	fm := enabled[domain].Load()
 	if fm == nil {
 		return
@@ -296,7 +401,11 @@ func TriggerFaultInDomain(domain Domain, name string) (iret int64, sret string, 
 		return
 	}
 	exist = true
-	iret, sret = out.do()
+	if useCtx {
+		iret, sret = out.doWithContext(ctx)
+	} else {
+		iret, sret = out.do()
+	}
 	return
 }
 
@@ -384,10 +493,6 @@ func AddFaultPointInDomain(ctx context.Context, domain Domain, name string, freq
 	msg.iarg = iarg
 	msg.sarg = sarg
 	msg.constant = constant
-
-	if msg.action == WAIT {
-		msg.cond = sync.NewCond(&msg.mutex)
-	}
 
 	fm.chIn <- &msg
 	out := <-fm.chOut

@@ -53,6 +53,7 @@ EXPLAIN SELECT * FROM t_float32 WHERE val = 9;
 
 -- Should NOT have cast on column: FLOAT32 >= INT
 -- @separator:table
+-- @regex("Index Table Scan.*idx_val",true)
 EXPLAIN SELECT * FROM t_float32 WHERE val >= 9;
 
 -- Verify results

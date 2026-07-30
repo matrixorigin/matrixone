@@ -590,8 +590,9 @@ select count(*) from t1 where a = null;
 select 1 > 0;
 ➤ 1 > 0[-7,1,0]  𝄀
 1
-SELECT TABLE_SCHEMA AS TABLE_CAT, NULL AS TABLE_SCHEM, TABLE_NAME, CASE WHEN TABLE_TYPE='BASE TABLE' THEN CASE WHEN TABLE_SCHEMA = 'mysql' OR TABLE_SCHEMA = 'performance_schema' THEN 'SYSTEM TABLE' ELSE 'TABLE' END WHEN TABLE_TYPE='TEMPORARY' THEN 'LOCAL_TEMPORARY' ELSE TABLE_TYPE END AS TABLE_TYPE, TABLE_COMMENT AS REMARKS, NULL AS TYPE_CAT, NULL AS TYPE_SCHEM, NULL AS TYPE_NAME, NULL AS SELF_REFERENCING_COL_NAME, NULL AS REF_GENERATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'abc' group by null HAVING TABLE_TYPE IN ('LOCAL TEMPORARY','TABLE','VIEW',null,null) ORDER BY TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME;
-SQL syntax error: non-integer constant in GROUP BY
+select count(*) from t1 group by null;
+➤ count(*)[-5,64,0]  𝄀
+5
 use db1;
 drop table if exists t11;
 create table t11 (a int, b int, primary key (a));
@@ -656,14 +657,14 @@ select * from t1 where a in (3,3,3,2,1);
 3  ¦  3
 drop table if exists t1;
 create table t1 (a int, b varchar, c int, primary key (c,a), key idx_b(b));
-insert into t1 select result, result || "_a",result+100000000 from generate_series(1,10000) g;
+insert into t1 select result, concat(result, '_a'),result+100000000 from generate_series(1,10000) g;
 select * from t1 where b in ("11_a","21_a");
 ➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[4,32,0]  𝄀
 11  ¦  11_a  ¦  100000011  𝄀
 21  ¦  21_a  ¦  100000021
 drop table if exists t1;
 create table t1(a int primary key, b int, c varchar(200));
-insert into t1 select result, result, "aabbccddeeffgghhii_"||result from generate_series (1, 100000)g;
+insert into t1 select result, result, concat('aabbccddeeffgghhii_', result) from generate_series (1, 100000)g;
 select a from t1 where c in ("123456789012345678901234567890","123456789012345678901234567890","aabbccddeeffgghhii_100000");
 ➤ a[4,32,0]  𝄀
 100000

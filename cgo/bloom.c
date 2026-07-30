@@ -355,6 +355,20 @@ bloomfilter_t* bloomfilter_unmarshal(const uint8_t *buf, size_t len) {
     if (memcmp(bf->magic, BLOOM_MAGIC, 4) != 0) {
         return NULL;
     }
+    // Validate the header-declared bitmap size against the actual buffer BEFORE
+    // any probe trusts bf->nbits. bloom_calculate_pos masks with (nbits-1) and
+    // bitmap_test indexes bitmap[pos>>6] unbounded, so a corrupt/forged payload
+    // with a large nbits but a short buffer would read far out of bounds. nbits
+    // must be a nonzero power of two (bloomfilter_init rounds via next_pow2_64
+    // and the (nbits-1) mask requires it); that also bounds nbits <= 2^63 so the
+    // size math below cannot overflow. The length must match bloomfilter_marshal.
+    uint64_t nbits = bf->nbits;
+    if (nbits == 0 || (nbits & (nbits - 1)) != 0) {
+        return NULL;
+    }
+    if (len < sizeof(bloomfilter_t) + bitmap_nbyte(nbits)) {
+        return NULL;
+    }
     return bf;
 }
 

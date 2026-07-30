@@ -16,6 +16,8 @@ package aggexec
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring/v2"
@@ -26,6 +28,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+type errMarshalerUnmarshaler struct {
+	err error
+}
+
+func (e errMarshalerUnmarshaler) MarshalBinary() ([]byte, error) {
+	return nil, e.err
+}
+
+func (e errMarshalerUnmarshaler) UnmarshalBinary([]byte) error {
+	return e.err
+}
+
+func (e errMarshalerUnmarshaler) UnmarshalFromReader(io.Reader) error {
+	return e.err
+}
 
 func buildTestBitmapVecs(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector) {
 	nulls := []bool{false, false, false, false, true, false, false, false, false, true}
@@ -83,6 +101,54 @@ func TestBitmapConstructExec(t *testing.T) {
 		require.Equal(t, curNB, mp.CurrNB())
 	})
 
+	t.Run("MarshalNilState", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			save func(*bmpConstructExec, *bytes.Buffer) error
+		}{
+			{
+				name: "chunk",
+				save: func(exec *bmpConstructExec, buf *bytes.Buffer) error {
+					return exec.SaveIntermediateResultOfChunk(0, buf)
+				},
+			},
+			{
+				name: "flags",
+				save: func(exec *bmpConstructExec, buf *bytes.Buffer) error {
+					return exec.SaveIntermediateResult(2, [][]uint8{{1, 1}}, buf)
+				},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				curNB := mp.CurrNB()
+				vec := testutil.NewUInt64Vector(2, types.T_uint64.ToType(), mp, false, []bool{false, true}, []uint64{42, 99})
+				exec := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+				restored := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+
+				require.NoError(t, exec.GroupGrow(2))
+				require.NoError(t, exec.BatchFill(0, []uint64{1, 2}, []*vector.Vector{vec}))
+
+				buf := bytes.NewBuffer(make([]byte, 0, common.MiB))
+				require.NoError(t, tc.save(exec, buf))
+				require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+
+				results, err := restored.Flush()
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				checkBitmap(t, results[0], 0, []uint32{42})
+				require.True(t, results[0].IsNull(1))
+
+				vec.Free(mp)
+				exec.Free()
+				restored.Free()
+				for _, result := range results {
+					result.Free(mp)
+				}
+				require.Equal(t, curNB, mp.CurrNB())
+			})
+		}
+	})
+
 	t.Run("Merge", func(t *testing.T) {
 		curNB := mp.CurrNB()
 		execa1 := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
@@ -134,6 +200,37 @@ func TestBitmapConstructExec(t *testing.T) {
 		require.Equal(t, curNB, mp.CurrNB())
 	})
 
+	t.Run("SaveIntermediateWithNilMobs", func(t *testing.T) {
+		curNB := mp.CurrNB()
+		exec := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+		require.NoError(t, exec.GroupGrow(4))
+		// Only fill groups 1 and 3, leaving groups 2 and 4 with nil mobs entries.
+		require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []*vector.Vector{vec1}))
+		require.NoError(t, exec.BatchFill(0, []uint64{3, 3, 3, 3, 3, 3, 3, 3, 3, 3}, []*vector.Vector{vec2}))
+
+		buf := bytes.NewBuffer(make([]byte, 0, common.MiB))
+		require.NoError(t, exec.SaveIntermediateResultOfChunk(0, buf))
+
+		execb := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+		r := bytes.NewReader(buf.Bytes())
+		require.NoError(t, execb.UnmarshalFromReader(r, mp))
+
+		results, err := execb.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		checkBitmap(t, results[0], 0, []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+		require.True(t, results[0].IsNull(1))
+		checkBitmap(t, results[0], 2, []uint32{3, 4, 5, 6, 8, 9, 10, 11})
+		require.True(t, results[0].IsNull(3))
+
+		exec.Free()
+		execb.Free()
+		for _, result := range results {
+			result.Free(mp)
+		}
+		require.Equal(t, curNB, mp.CurrNB())
+	})
+
 	t.Run("BatchMerge", func(t *testing.T) {
 		curNB := mp.CurrNB()
 		execa1 := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
@@ -176,5 +273,93 @@ func TestBitmapConstructExec(t *testing.T) {
 			result.Free(mp)
 		}
 		require.Equal(t, curNB, mp.CurrNB())
+	})
+}
+
+func TestBitmapConstructSaveIntermediateResultOfChunkMinimal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := testutil.NewUInt64Vector(
+		1,
+		types.T_uint64.ToType(),
+		mp,
+		false,
+		nil,
+		[]uint64{42},
+	)
+
+	exec := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}))
+
+	var buf bytes.Buffer
+	require.NoError(t, exec.SaveIntermediateResultOfChunk(0, &buf))
+
+	vec.Free(mp)
+	exec.Free()
+}
+
+func TestAggStateMarshalerUnmarshalerErrorPaths(t *testing.T) {
+	mp := mpool.MustNewZero()
+	expectedErr := errors.New("expected marshaler error")
+	info := aggInfo{
+		makeMarshalerUnmarshaler: makeBmpMarshalerUnmarshaler,
+	}
+
+	t.Run("write flagged state", func(t *testing.T) {
+		ag := aggState{
+			length:   1,
+			capacity: 1,
+			mobs:     []MarshalerUnmarshaler{errMarshalerUnmarshaler{err: expectedErr}},
+		}
+
+		var buf bytes.Buffer
+		err := ag.writeStateToBuf(mp, &info, []uint8{1}, &buf)
+		require.ErrorIs(t, err, expectedErr)
+	})
+
+	t.Run("write whole chunk", func(t *testing.T) {
+		ag := aggState{
+			length:   1,
+			capacity: 1,
+			mobs:     []MarshalerUnmarshaler{errMarshalerUnmarshaler{err: expectedErr}},
+		}
+
+		var buf bytes.Buffer
+		err := ag.writeAllStatesToBuf(&buf, &info)
+		require.ErrorIs(t, err, expectedErr)
+	})
+
+	t.Run("make marshaler while reading", func(t *testing.T) {
+		info := aggInfo{
+			makeMarshalerUnmarshaler: func(*mpool.MPool) (MarshalerUnmarshaler, error) {
+				return nil, expectedErr
+			},
+		}
+
+		var buf bytes.Buffer
+		require.NoError(t, types.WriteInt32(&buf, 1))
+		require.NoError(t, types.WriteInt32(&buf, 1))
+		require.NoError(t, buf.WriteByte(0))
+
+		var ag aggState
+		_, err := ag.readState(mp, &buf, &info)
+		require.ErrorIs(t, err, expectedErr)
+	})
+
+	t.Run("unmarshal marshaler while reading", func(t *testing.T) {
+		info := aggInfo{
+			makeMarshalerUnmarshaler: func(*mpool.MPool) (MarshalerUnmarshaler, error) {
+				return errMarshalerUnmarshaler{err: expectedErr}, nil
+			},
+		}
+
+		var buf bytes.Buffer
+		require.NoError(t, types.WriteInt32(&buf, 1))
+		require.NoError(t, types.WriteInt32(&buf, 1))
+		require.NoError(t, buf.WriteByte(0))
+
+		var ag aggState
+		_, err := ag.readState(mp, &buf, &info)
+		require.ErrorIs(t, err, expectedErr)
 	})
 }

@@ -165,6 +165,9 @@ INSERT INTO group_concat_12 values (3, 3);
 SELECT group_concat(c) FROM group_concat_11;
 SELECT group_concat_12.a,group_concat_12.c FROM group_concat_12,group_concat_11 where group_concat_12.a=group_concat_11.a;
 SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc) as grp FROM group_concat_11;
+SELECT group_concat((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a) order by 1) as grp FROM group_concat_11;
+SELECT group_concat(coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '') order by 1) as grp FROM group_concat_11;
+SELECT group_concat(group_concat_11.c order by coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '')) as grp FROM group_concat_11;
 
 
 -- @suite
@@ -237,3 +240,76 @@ drop table if exists g18;
 create table g18 (a int);
 select group_concat(a order by a) from g18;
 drop table if exists g18;
+
+-- @suite
+-- @setup
+DROP TABLE IF EXISTS group_concat_ordered;
+CREATE TABLE group_concat_ordered (
+    grp INT,
+    val VARCHAR(20),
+    suffix VARCHAR(20),
+    x INT,
+    y INT
+);
+INSERT INTO group_concat_ordered VALUES
+    (1, 'a', 's3', 3, 1),
+    (1, 'b', 's2', 2, 3),
+    (1, 'c', 's1', 1, 2),
+    (2, 'a', 'late', 3, 0),
+    (2, 'b', 'middle', 2, 0),
+    (2, 'a', 'early', 1, 0),
+    (3, 'null-key', 'n', NULL, 1),
+    (3, 'one', 'o', 1, 2),
+    (3, 'two', 't', 2, 3),
+    (3, NULL, 'skip', 0, 4);
+
+-- independent aggregate ordering
+SELECT
+    GROUP_CONCAT(val, ':', suffix ORDER BY x),
+    GROUP_CONCAT(val ORDER BY y DESC)
+FROM group_concat_ordered
+WHERE grp = 1;
+
+-- sorting precedes distinct elimination
+SELECT GROUP_CONCAT(DISTINCT val ORDER BY x)
+FROM group_concat_ordered
+WHERE grp = 2;
+
+-- default null placement
+SELECT
+    GROUP_CONCAT(val ORDER BY x ASC),
+    GROUP_CONCAT(val ORDER BY x DESC)
+FROM group_concat_ordered
+WHERE grp = 3;
+
+-- grouped multi-key ordering with a custom separator
+SELECT
+    grp,
+    GROUP_CONCAT(val, ':', suffix ORDER BY x % 2 ASC, y DESC SEPARATOR '|')
+FROM group_concat_ordered
+WHERE grp = 1
+GROUP BY grp;
+
+PREPARE group_concat_ordered_stmt FROM
+    'SELECT GROUP_CONCAT(val ORDER BY x) FROM group_concat_ordered WHERE grp = ?';
+SET @group_concat_ordered_grp = 1;
+EXECUTE group_concat_ordered_stmt USING @group_concat_ordered_grp;
+DEALLOCATE PREPARE group_concat_ordered_stmt;
+
+DROP TABLE group_concat_ordered;
+
+-- group_concat_max_len
+drop table if exists group_concat_max_len_01;
+create table group_concat_max_len_01 (id int primary key, s varchar(16));
+insert into group_concat_max_len_01 values (1, 'aa'), (2, 'bb'), (3, 'cc');
+set session group_concat_max_len = 1024;
+prepare group_concat_max_len_stmt from 'select group_concat(s order by s separator "") from group_concat_max_len_01';
+set session group_concat_max_len = 5;
+execute group_concat_max_len_stmt;
+set session group_concat_max_len = 1024;
+execute group_concat_max_len_stmt;
+deallocate prepare group_concat_max_len_stmt;
+set session group_concat_max_len = 5;
+select group_concat(s order by s separator '') from group_concat_max_len_01;
+set session group_concat_max_len = 1024;
+drop table group_concat_max_len_01;

@@ -62,9 +62,10 @@ type snapshotScanReaderConfig struct {
 // ScanSnapshotWithCurrentRanges reads rows at snapshotTS by reusing the current
 // relation handle and its current-view ranges.
 //
-// Snapshot scan reuses current-view disk ranges, but materializes the latest
-// committed in-memory rows separately so reader fallback does not need to lazily
-// consult historical pState state during scan execution.
+// Snapshot scan reuses current-view disk ranges and the immutable partition
+// state embedded in those ranges. This keeps persisted objects, committed
+// in-memory rows, and tombstones on one consistent view even if a flush swaps
+// the table's latest partition state while the scan is running.
 //
 // Serial path uses a hybrid source that emits committed in-memory rows first,
 // then reads persisted blocks through RemoteDataSource. Parallel path emits the
@@ -109,11 +110,20 @@ func ScanSnapshotWithCurrentRanges(
 		)
 	}
 
-	pState, err := tbl.getPartitionState(ctx)
+	var pState *logtailreplay.PartitionState
+	if relData == nil {
+		pState, err = tbl.getPartitionState(ctx)
+	} else {
+		pState, err = extractPStateFromRelData(ctx, tbl, relData)
+	}
 	if err != nil {
 		return err
 	}
 	currentTS := types.TimestampToTS(tbl.db.op.SnapshotTS())
+	tombstones, err := collectSnapshotScanTombstones(pState, currentTS)
+	if err != nil {
+		return err
+	}
 
 	// Strip the EmptyBlockInfo marker that Ranges() may prepend.
 	if relData != nil && relData.DataCnt() > 0 {
@@ -137,11 +147,6 @@ func ScanSnapshotWithCurrentRanges(
 		zap.String("snapshot-ts", snapshotTS.ToString()),
 		zap.Int("disk-block-cnt", diskBlockCnt),
 	)
-
-	tombstones, err := tbl.CollectTombstones(ctx, 0, engine.Policy_CollectCommittedTombstones)
-	if err != nil {
-		return err
-	}
 
 	readerCfg, err := buildSnapshotScanReaderConfig(
 		tbl.tableDef,
@@ -216,6 +221,41 @@ func ScanSnapshotWithCurrentRanges(
 		ctx, eng.fs, pState, currentTS, snapshotTS, relData, tombstones,
 		readerCfg, mp, onBatch,
 	)
+}
+
+func collectSnapshotScanTombstones(
+	pState *logtailreplay.PartitionState,
+	snapshotTS types.TS,
+) (engine.Tombstoner, error) {
+	tombstones := readutil.NewEmptyTombstoneData()
+	if pState == nil {
+		return tombstones, nil
+	}
+
+	iter := pState.NewRowsIter(snapshotTS, nil, true)
+	for iter.Next() {
+		if err := tombstones.AppendInMemory(iter.Entry().RowID); err != nil {
+			_ = iter.Close()
+			return nil, err
+		}
+	}
+	if err := iter.Close(); err != nil {
+		return nil, err
+	}
+
+	var appendErr error
+	if err := pState.CollectTombstoneObjects(snapshotTS, func(stats *objectio.ObjectStats) {
+		if appendErr == nil {
+			appendErr = tombstones.AppendFiles(*stats)
+		}
+	}); err != nil {
+		return nil, err
+	}
+	if appendErr != nil {
+		return nil, appendErr
+	}
+	tombstones.SortInMemory()
+	return tombstones, nil
 }
 
 func getSnapshotScanSubmitPool() (*ants.Pool, error) {
@@ -534,6 +574,7 @@ func buildSnapshotBlockFilter(
 		colIdx, ok = tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 	}
 	if !ok || colIdx < 0 || int(colIdx) >= len(tableDef.Cols) {
+		baseFilter.Cleanup()
 		return objectio.BlockReadFilter{}, 0, types.Type{}, false, moerr.NewInternalErrorNoCtxf(
 			"snapshot scan: cannot resolve primary key column %q",
 			tableDef.Pkey.PkeyColName,

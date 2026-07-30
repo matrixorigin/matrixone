@@ -22,10 +22,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -78,6 +81,7 @@ type IvfflatSqlWriter struct {
 	entries_tbl   string
 	meta_tbl      string
 	ivfparam      vectorindex.IvfParam
+	includeCols   []string
 }
 
 // Hnsw Sql Writer.  Use the vectorindex.VectorIndeXCdc JSON format
@@ -102,20 +106,17 @@ var _ IndexSqlWriter = new(FulltextSqlWriter)
 var _ IndexSqlWriter = new(IvfflatSqlWriter)
 var _ IndexSqlWriter = new(HnswSqlWriter[float32])
 
-// check algo type to return the correct sql writer
+// NewIndexSqlWriter dispatches to the per-algorithm writer via the
+// iscp Hooks registry. Replaces the hardcoded fulltext / ivfflat /
+// hnsw switch — new algorithms register a Hooks impl (see
+// pkg/sql/compile/iscp_register.go) and slot in automatically.
 func NewIndexSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
-	algo = catalog.ToLower(algo)
-	switch algo {
-	case catalog.MOIndexFullTextAlgo.ToString():
-		return NewFulltextSqlWriter(algo, jobID, info, tabledef, indexdef)
-	case catalog.MoIndexIvfFlatAlgo.ToString():
-		return NewIvfflatSqlWriter(algo, jobID, info, tabledef, indexdef)
-	case catalog.MoIndexHnswAlgo.ToString():
-		return NewHnswSqlWriter(algo, jobID, info, tabledef, indexdef)
-	default:
-		return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx(fmt.Sprintf("IndexSqlWriter: invalid algo type: %s", algo))
-
+	logutil.Infof("[plugin] iscp NewIndexSqlWriter: algo=%s db=%s table=%s index=%s", algo, info.DBName, info.TableName, info.IndexName)
+	h, ok := GetHooks(algo)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("IndexSqlWriter: no iscp.Hooks registered for algo %s", algo))
 	}
+	return h.NewSqlWriter(jobID, info, tabledef, indexdef)
 }
 
 // Implementation of Base Index SqlWriter
@@ -304,7 +305,7 @@ func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
 }
 
 func (w *FulltextSqlWriter) toFulltextDelete() ([]byte, error) {
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.info.DBName, w.indexTableName, catalog.FullTextIndex_TabCol_Id, string(w.vbuf))
+	sql := fmt.Sprintf("DELETE FROM %s WHERE `%s` IN (%s)", sqlquote.QualifiedIdent(w.info.DBName, w.indexTableName), catalog.FullTextIndex_TabCol_Id, string(w.vbuf))
 	return []byte(sql), nil
 }
 
@@ -316,7 +317,12 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	cnames := make([]string, 0, len(w.srcPos))
 	for i, pos := range w.srcPos {
 		typstr := w.srcType[i].DescString()
-		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as `%s`", i, typstr, w.tabledef.Cols[pos].Name))
+		// Alias is quoted (byte-identical to the old `name` wrapping for ordinary
+		// names, safe for special chars). cnames keeps the RAW name: it feeds the
+		// column references in fulltext_index_tokenize(...) below, and quoting
+		// those would change that call's SQL for every column — keep it identical
+		// to the original.
+		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as %s", i, typstr, sqlquote.Ident(w.tabledef.Cols[pos].Name)))
 		cnames = append(cnames, w.tabledef.Cols[pos].Name)
 	}
 
@@ -324,14 +330,14 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	cnames_str := strings.Join(cnames, ", ")
 
 	if upsert {
-		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.dbName, w.indexTableName)
+		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.dbName, w.indexTableName))
 	} else {
 		// IMPORTANT: even it is a INSERT but we still use REPLACE
 		// sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.dbName, w.indexTableName)
-		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.dbName, w.indexTableName)
+		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.dbName, w.indexTableName))
 	}
 
-	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
+	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s) as __mo_iscp_values) ", cols, string(w.vbuf))
 	sql += fmt.Sprintf("SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('%s', %d, %s) as f", w.param, w.pkType.Oid, cnames_str)
 
 	return []byte(sql), nil
@@ -481,7 +487,7 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 		return nil
 	}
 
-	w.cdc.Insert(key, v)
+	w.cdc.Insert(key, v, nil)
 	return nil
 }
 
@@ -509,7 +515,7 @@ func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
 		return nil
 	}
 
-	w.cdc.Upsert(key, v)
+	w.cdc.Upsert(key, v, nil)
 	return nil
 }
 
@@ -584,17 +590,36 @@ func NewIvfflatSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef 
 	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
 
 	nparts := len(w.indexdef[0].Parts)
-	w.partsPos = make([]int32, nparts)
-	w.partsType = make([]*types.Type, nparts)
+	includeCols, err := ivfflatIncludeColumnsFromIndexDefs(w.indexdef)
+	if err != nil {
+		return nil, err
+	}
+	w.includeCols = append(w.includeCols[:0], includeCols...)
+	w.partsPos = make([]int32, nparts+len(includeCols))
+	w.partsType = make([]*types.Type, nparts+len(includeCols))
 
 	for i, part := range w.indexdef[0].Parts {
 		w.partsPos[i] = tabledef.Name2ColIndex[part]
 		typ = tabledef.Cols[w.partsPos[i]].Typ
 		w.partsType[i] = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
 	}
+	for i, includeCol := range includeCols {
+		pos, ok := tabledef.Name2ColIndex[includeCol]
+		if !ok {
+			resolvedCol := catalog.ResolveAlias(includeCol)
+			pos, ok = tabledef.Name2ColIndex[resolvedCol]
+		}
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("ivfflat include column %q not found in source table", includeCol)
+		}
+		dst := nparts + i
+		w.partsPos[dst] = pos
+		typ = tabledef.Cols[pos].Typ
+		w.partsType[dst] = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+	}
 
-	w.srcPos = make([]int32, nparts+1)
-	w.srcType = make([]*types.Type, nparts+1)
+	w.srcPos = make([]int32, len(w.partsPos)+1)
+	w.srcType = make([]*types.Type, len(w.partsType)+1)
 
 	w.srcPos[0] = w.pkPos
 	w.srcType[0] = w.pkType
@@ -610,6 +635,36 @@ func NewIvfflatSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef 
 	return w, nil
 }
 
+func ivfflatIncludeColumnsFromIndexDefs(indexdefs []*plan.IndexDef) ([]string, error) {
+	for _, idx := range indexdefs {
+		if idx != nil && len(idx.IncludedColumns) > 0 {
+			return idx.IncludedColumns, nil
+		}
+	}
+	for _, idx := range indexdefs {
+		if idx == nil || idx.IndexAlgoParams == "" {
+			continue
+		}
+		params, err := catalog.IndexParamsStringToMap(idx.IndexAlgoParams)
+		if err != nil {
+			return nil, err
+		}
+		raw := params[catalog.IncludedColumns]
+		if raw == "" {
+			raw = params["include_columns"]
+		}
+		if raw == "" {
+			continue
+		}
+		cols, err := catalog.ParseIncludeColumnsValue(raw)
+		if err != nil {
+			return nil, err
+		}
+		return cols, nil
+	}
+	return nil, nil
+}
+
 // REPLACE INTO __mo_index_secondary_0197786c-285f-70cb-9337-e484a3ff92c4(__mo_index_centroid_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col, __mo_index_centroid_fk_entry)
 // with centroid as (select * from __mo_index_secondary_0197786c-285f-70bb-b277-2cef56da590a where __mo_index_centroid_version = 0),
 // src as (select column_0 as id, cast(column_1 as vecf32(3)) as embed from (values row(2005,'[0.4532634, 0.7297859, 0.48885703]'), row(2009, '[0.68150306, 0.6950923, 0.16590895] ')))
@@ -620,6 +675,13 @@ func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
 	if len(w.lastCdcOp) == 0 {
 		return nil, nil
 	}
+
+	// Per-batch OUT marker — analogous to the cuvs Sync.Save OUT
+	// line in pkg/vectorindex/{cagra,ivfpq}/sync.go. IN-side is the
+	// existing [plugin] iscp NewIndexSqlWriter marker fired once per
+	// consumer construction (pkg/iscp/index_sqlwriter.go:111).
+	logutil.Infof("[plugin] ivfflat IvfflatSqlWriter.ToSql OUT: index=%s op=%s events=%d",
+		w.info.IndexName, w.lastCdcOp, w.ndata)
 
 	switch w.lastCdcOp {
 	case vectorindex.CDC_DELETE:
@@ -637,7 +699,7 @@ func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
 // catalog.SystemSI_IVFFLAT_TblCol_Entries_pk
 // catalog.CPrimaryKeyColName
 func (w *IvfflatSqlWriter) toIvfflatDelete() ([]byte, error) {
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.info.DBName, w.entries_tbl,
+	sql := fmt.Sprintf("DELETE FROM %s WHERE `%s` IN (%s)", sqlquote.QualifiedIdent(w.info.DBName, w.entries_tbl),
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		string(w.vbuf))
 	return []byte(sql), nil
@@ -653,31 +715,69 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	for i := range w.srcPos {
 		typstr := w.srcType[i].DescString()
 		cnames = append(cnames, fmt.Sprintf("src%d", i))
-		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as `%s`", i, typstr, cnames[i]))
+		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as %s", i, typstr, sqlquote.Ident(cnames[i])))
 	}
 
 	cols := strings.Join(coldefs, ", ")
-	cnames_str := strings.Join(cnames, ", ")
+
+	// Entry projection. The last src column is the vector that becomes the entry.
+	// For int8 QUANTIZATION the entry must be scaled by the trained quantizer
+	// (q(x)=x*mul+add, mul=255/(max-min), add=-min*mul-128) just like the
+	// synchronous build (compile.go) and search; otherwise the implicit
+	// vecf32->vecint8 cast on REPLACE does identity round+clamp and every
+	// CDC-maintained row gets wrong int8 codes. min/max come from the metadata
+	// table; COALESCE falls back to identity (mul=1,add=0) when they are absent
+	// (pure-async indexes that never trained bounds — search also uses identity
+	// there, so the two stay consistent). float16/bf16 narrow losslessly via the
+	// implicit cast, so only int8 needs this.
+	entryProj := cnames[len(cnames)-1]
+	if qt, ok := quantizer.ToVectorType(w.ivfparam.Quantization); ok && (qt == types.T_array_int8 || qt == types.T_array_uint8) {
+		metaTbl := sqlquote.QualifiedIdent(w.info.DBName, w.meta_tbl)
+		sub := func(k string) string {
+			return fmt.Sprintf("(SELECT CAST(`%s` AS DOUBLE) FROM %s WHERE `%s` = '%s')",
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, metaTbl,
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, k)
+		}
+		minS := sub(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin)
+		maxS := sub(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax)
+		if qt == types.T_array_uint8 {
+			entryProj = quantizer.Uint8EntrySQLFromBounds(cnames[len(cnames)-1], minS, maxS, w.partsType[0].Width)
+		} else {
+			entryProj = quantizer.Int8EntrySQLFromBounds(cnames[len(cnames)-1], minS, maxS, w.partsType[0].Width)
+		}
+	}
+	projCols := append([]string(nil), cnames...)
+	projCols[len(projCols)-1] = entryProj
+	cnames_str := strings.Join(projCols, ", ")
 
 	if upsert {
-		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
+		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.info.DBName, w.entries_tbl))
 	} else {
 		// IMPORTANT: even it is a INSERT but we still use REPLACE
 		//	sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
-		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
+		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.info.DBName, w.entries_tbl))
 	}
 
-	sql += fmt.Sprintf("(`%s`, `%s`, `%s`, `%s`) ",
+	targetCols := []string{
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+	}
+	for _, includeCol := range w.includeCols {
+		targetCols = append(targetCols, catalog.SystemSI_IVFFLAT_IncludeColPrefix+includeCol)
+	}
+	quotedTargetCols := make([]string, 0, len(targetCols))
+	for _, col := range targetCols {
+		quotedTargetCols = append(quotedTargetCols, sqlquote.Ident(col))
+	}
+	sql += fmt.Sprintf("(%s) ", strings.Join(quotedTargetCols, ", "))
 
-	versql := fmt.Sprintf("SELECT CAST(%s as BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'", catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		w.info.DBName, w.meta_tbl, catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
+	versql := fmt.Sprintf("SELECT CAST(%s as BIGINT) FROM %s WHERE `%s` = 'version'", catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		sqlquote.QualifiedIdent(w.info.DBName, w.meta_tbl), catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
 
-	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM `%s`.`%s` WHERE `%s` = (%s) ), ", w.info.DBName, w.centroids_tbl, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, versql)
-	sql += fmt.Sprintf("src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
+	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM %s WHERE `%s` = (%s) ), ", sqlquote.QualifiedIdent(w.info.DBName, w.centroids_tbl), catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, versql)
+	sql += fmt.Sprintf("src as (SELECT %s FROM (VALUES %s) as __mo_iscp_values) ", cols, string(w.vbuf))
 	sql += fmt.Sprintf("SELECT `%s`, `%s`, %s FROM src CENTROIDX('%s') JOIN centroid using (`%s`, `%s`)",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
