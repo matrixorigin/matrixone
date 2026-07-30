@@ -1547,10 +1547,10 @@ var (
 			input: "select cast(variance(ff) as decimal(10, 3)) from t2",
 		}, {
 			input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
-			output: "select GROUP_CONCAT(distinct 2, ,) from t1",
+			output: "select GROUP_CONCAT(distinct 2 separator ,) from t1",
 		}, {
 			input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
-			output: "select GROUP_CONCAT(distinct a, ,order by a) from t1",
+			output: "select GROUP_CONCAT(distinct a order by a separator ,) from t1",
 		}, {
 			input: "select variance(2) from t1",
 		}, {
@@ -2610,7 +2610,7 @@ var (
 			input: "create table t (a float(20, 20) not null, b int(20) null, c int(30) null)",
 		}, {
 			input:  "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
-			output: "create table t1 (t time(3, 3) null, dt datetime(6, 6) null, ts timestamp(1, 1) null)",
+			output: "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
 		}, {
 			input:  "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
 			output: "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
@@ -4491,6 +4491,27 @@ func TestValid(t *testing.T) {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
 		ast.StmtKind()
+	}
+}
+
+func TestGroupConcatDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select group_concat(v order by v) from t",
+		"select group_concat(distinct v order by v desc separator '|') from t",
+	} {
+		ast, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		ast.Format(fmtCtx)
+		formatted := fmtCtx.String()
+		require.Contains(t, formatted, " separator ")
+
+		roundTripped, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		roundTripFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		roundTripped.Format(roundTripFmtCtx)
+		require.Equal(t, formatted, roundTripFmtCtx.String())
 	}
 }
 

@@ -944,6 +944,85 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
+	tests := []struct {
+		name       string
+		literal    string
+		castType   string
+		oid        types.T
+		precision  int32
+		columnName string
+	}{
+		{name: "time", literal: "07:08:09.123456", castType: "time(3)", oid: types.T_time, precision: 3, columnName: "time_lit"},
+		{name: "datetime", literal: "2025-05-06 07:08:09.123456", castType: "datetime(6)", oid: types.T_datetime, precision: 6, columnName: "datetime_lit"},
+		{name: "timestamp", literal: "2025-05-06 07:08:09.123456", castType: "timestamp(6)", oid: types.T_timestamp, precision: 6, columnName: "timestamp_lit"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			sql := "create table ctas_" + test.name + " as select cast('" + test.literal + "' as " + test.castType + ") as " + test.columnName
+			plan, err := buildSingleStmt(mock, t, sql)
+			require.NoError(t, err)
+
+			createTable := plan.GetDdl().GetCreateTable()
+			require.NotEmpty(t, createTable.TableDef.Cols)
+			column := createTable.TableDef.Cols[0]
+			require.Equal(t, test.columnName, column.Name)
+			require.Equal(t, int32(test.oid), column.Typ.Id)
+			require.Equal(t, test.precision, column.Typ.Width)
+			require.Equal(t, test.precision, column.Typ.Scale)
+			if test.oid == types.T_datetime {
+				require.True(t, column.Default.NullAbility)
+			}
+
+			createAsSelect := createTable.GetCreateAsSelectSql()
+			require.Contains(t, createAsSelect, " as "+test.castType+")")
+			require.NotContains(t, createAsSelect, test.castType[:len(test.castType)-1]+",")
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, createAsSelect, 1)
+			require.NoError(t, err)
+			stmt.Free()
+		})
+	}
+}
+
+func TestCreateTableAsSelectKeepsNonTemporalLiteralNotNull(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	plan, err := buildSingleStmt(mock, t, "create table ctas_literal as select 1 as n")
+	require.NoError(t, err)
+
+	column := plan.GetDdl().GetCreateTable().TableDef.Cols[0]
+	require.False(t, column.Default.NullAbility)
+}
+
+func TestCreateTableAsSelectTemporalInsertKeepsTargetScale(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctas, err := buildSingleStmt(mock, t, "create table ctas_datetime6 as select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt")
+	require.NoError(t, err)
+
+	createTable := ctas.GetDdl().GetCreateTable()
+	tableDef := createTable.GetTableDef()
+	tableDef.TblId = 99101
+	mock.ctxt.objects[tableDef.Name] = &ObjectRef{SchemaName: "tpch", ObjName: tableDef.Name, Obj: int64(tableDef.TblId)}
+	mock.ctxt.tables[tableDef.Name] = tableDef
+	mock.ctxt.id2name[tableDef.TblId] = tableDef.Name
+	mock.ctxt.pks[tableDef.Name] = nil
+
+	insertPlan, err := runOneStmt(mock, t, createTable.GetCreateAsSelectSql())
+	require.NoError(t, err)
+
+	var found bool
+	for _, node := range insertPlan.GetQuery().GetNodes() {
+		for _, expr := range node.GetProjectList() {
+			if types.T(expr.GetTyp().Id) == types.T_datetime {
+				found = true
+				require.Equal(t, int32(6), expr.GetTyp().Scale)
+			}
+		}
+	}
+	require.True(t, found)
+}
+
 func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
@@ -998,6 +1077,24 @@ func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
 			require.Equal(t, test.want, createTable.GetCreateAsSelectSql())
 		})
 	}
+}
+
+func TestCreateTableAsSelectPreservesGroupConcatOrderBy(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(
+		mock,
+		t,
+		"create table ctas_group_concat as select N_REGIONKEY, group_concat(N_NAME order by N_NAME) as names from NATION group by N_REGIONKEY",
+	)
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.Contains(
+		t,
+		createTable.GetCreateAsSelectSql(),
+		"group_concat(`nation`.`N_NAME` order by `N_NAME` separator \",\")",
+	)
 }
 
 func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
