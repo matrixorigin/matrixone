@@ -4115,7 +4115,18 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		}
 		for i := range n.ProjectList {
 			projTyp := projects[i].GetTyp()
-			n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
+			if projTyp.Id == int32(types.T_char) || projTyp.Id == int32(types.T_varchar) {
+				// MySQL fixes recursive CTE column types from the anchor, but
+				// applies the width policy at execution time: strict sql_mode
+				// rejects an over-width value while non-strict mode truncates it.
+				// The assignment-cast selector uses cast_strict before MORPC v5
+				// so this plan can run on every CN during a rolling upgrade. At
+				// MORPC v5 it uses volatile cast_assign, letting a prepared CTE
+				// observe the sql_mode of each execution.
+				n.ProjectList[i], err = builder.forceAssignmentCastExpr(n.ProjectList[i], projTyp, false)
+			} else {
+				n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
+			}
 			if err != nil {
 				return
 			}
