@@ -75,6 +75,118 @@ update self_ref set parent_id = 2 where id = 2;
 update self_ref set parent_id = 99 where id = 2;
 select * from self_ref order by id;
 
+create table parent_restrict (
+    id int primary key
+);
+
+create table child_restrict (
+    id int primary key,
+    parent_id int,
+    constraint fk_parent_restrict foreign key (parent_id)
+        references parent_restrict(id) on update restrict
+);
+
+insert into parent_restrict values (1), (2);
+insert into child_restrict values (10, 1);
+update parent_restrict set id = id where id = 1;
+update parent_restrict set id = 11 where id = 1;
+select * from parent_restrict order by id;
+select * from child_restrict order by id;
+
+create table parent_cascade (
+    id int primary key
+);
+
+create table child_cascade (
+    id int primary key,
+    parent_id int,
+    note varchar(32),
+    unique key uk_cascade_note(note),
+    key idx_cascade_parent(parent_id),
+    constraint fk_parent_cascade foreign key (parent_id)
+        references parent_cascade(id) on update cascade
+);
+
+insert into parent_cascade values (1), (2);
+insert into child_cascade values (10, 1, 'a'), (20, 1, 'b'), (30, 2, 'c');
+update parent_cascade set id = 11 where id = 1;
+select row_count();
+select * from parent_cascade order by id;
+select * from child_cascade order by id;
+update child_cascade set note = 'd' where id = 10;
+insert into child_cascade values (40, 11, 'a');
+select * from child_cascade order by id;
+
+create table parent_set_null (
+    id int primary key
+);
+
+create table child_set_null (
+    id int primary key,
+    parent_id int,
+    key idx_set_null_parent(parent_id),
+    constraint fk_parent_set_null foreign key (parent_id)
+        references parent_set_null(id) on update set null
+);
+
+insert into parent_set_null values (1), (2);
+insert into child_set_null values (10, 1), (20, 1), (30, 2);
+update parent_set_null set id = 11 where id = 1;
+select * from parent_set_null order by id;
+select * from child_set_null order by id;
+
+create table parent_composite_action (
+    a int,
+    b int,
+    primary key (a, b)
+);
+
+create table child_composite_action (
+    id int primary key,
+    a int,
+    b int,
+    generated_sum int as (a + b),
+    key idx_composite_action(a, b),
+    key idx_generated_sum(generated_sum),
+    constraint fk_composite_action foreign key (a, b)
+        references parent_composite_action(a, b) on update cascade
+);
+
+insert into parent_composite_action values (1, 2), (3, 4);
+insert into child_composite_action(id, a, b) values (10, 1, 2), (20, 3, 4);
+update parent_composite_action set a = 11, b = 12 where a = 1 and b = 2;
+select row_count();
+select * from parent_composite_action order by a, b;
+select * from child_composite_action order by id;
+
+create table child_second_cascade (
+    id int primary key,
+    parent_id int,
+    constraint fk_second_cascade foreign key (parent_id)
+        references parent_cascade(id) on update cascade
+);
+
+insert into child_second_cascade values (1, 11), (2, 2);
+update parent_cascade set id = 111 where id = 11;
+select row_count();
+select * from child_cascade order by id;
+select * from child_second_cascade order by id;
+
+set foreign_key_checks = 0;
+update parent_cascade set id = 22 where id = 2;
+set foreign_key_checks = 1;
+select * from parent_cascade order by id;
+select * from child_cascade order by id;
+
+drop table child_second_cascade;
+drop table child_composite_action;
+drop table parent_composite_action;
+drop table child_set_null;
+drop table parent_set_null;
+drop table child_cascade;
+drop table parent_cascade;
+drop table child_restrict;
+drop table parent_restrict;
 drop table self_ref;
 drop table child_composite;
 drop table parent_composite;

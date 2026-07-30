@@ -78,6 +78,14 @@ func TestUpsertAffectRowsAccounting(t *testing.T) {
 		require.EqualValues(t, 0, op.GetAffectedRows())
 	})
 
+	t.Run("foreign key side effects never affect rows", func(t *testing.T) {
+		op := newAffectRowsTestOp(actionUpdate, true)
+		op.MultiUpdateCtx = []*MultiUpdateCtx{{IgnoreAffectedRows: true}}
+		op.addInsertAffectRows(UpdateMainTable, 4)
+		op.addDeleteAffectRows(UpdateMainTable, 3)
+		require.EqualValues(t, 0, op.GetAffectedRows())
+	})
+
 	t.Run("batch upsert: new + updated rows", func(t *testing.T) {
 		// 2 brand new rows (INSERT only) + 3 conflicting rows (DELETE + INSERT):
 		// inserts cover all 5 rows, deletes cover the 3 conflicts => 5 + 3 = 8.

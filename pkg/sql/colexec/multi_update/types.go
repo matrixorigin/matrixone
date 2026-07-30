@@ -116,7 +116,8 @@ type MultiUpdateCtx struct {
 	SkipInsertOnNullPk bool
 	// InsertPkColIdx is the PK column's index within InsertCols. It is only
 	// used with SkipInsertOnNullPk for REPLACE delete-only rows.
-	InsertPkColIdx int
+	InsertPkColIdx     int
+	IgnoreAffectedRows bool
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -230,5 +231,8 @@ func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCou
 }
 
 func (update *MultiUpdate) doAddAffectedRows(affectedRows uint64) {
+	if len(update.MultiUpdateCtx) > 0 && update.MultiUpdateCtx[0].IgnoreAffectedRows {
+		return
+	}
 	update.ctr.affectedRows += affectedRows
 }

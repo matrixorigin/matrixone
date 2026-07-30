@@ -317,26 +317,73 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.True(t, hasAssert)
 	})
 
-	t.Run("affected referenced parent key keeps typed legacy route", func(t *testing.T) {
+	t.Run("affected restricted parent key stays modern with child probe", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
 
-		stmt, err := parsers.ParseOne(
-			mock.CurrentContext().GetContext(),
-			dialect.MYSQL,
-			"UPDATE dept SET deptno = 2",
-			1,
-		)
+		logicPlan, err := runOneStmt(mock, t, "UPDATE dept SET deptno = 2")
 		require.NoError(t, err)
-		defer stmt.Free()
-
-		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.Error(t, err)
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonForeignKey, reason)
+		query := logicPlan.GetQuery()
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		require.Equal(t, 1, countUpdateFkMarkJoins(query))
+		require.Equal(t, 1, countUpdateFkAsserts(query))
+		require.True(t, updateFkPlanContainsFunc(query, "<=>"))
 	})
+
+	t.Run("set default preserves restrict compatibility on modern path", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		mock.ctxt.tables["emp"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_SET_DEFAULT
+
+		logicPlan, err := runOneStmt(mock, t, "UPDATE dept SET deptno = 2")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		require.Equal(t, 1, countUpdateFkMarkJoins(query))
+		require.Equal(t, 1, countUpdateFkAsserts(query))
+	})
+
+	for _, test := range []struct {
+		name   string
+		action planpb.ForeignKeyDef_RefAction
+	}{
+		{name: "cascade parent key builds child multi update", action: planpb.ForeignKeyDef_CASCADE},
+		{name: "set null parent key builds child multi update", action: planpb.ForeignKeyDef_SET_NULL},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			prepareEmpDept(mock)
+			emp := mock.ctxt.tables["emp"]
+			emp.Fkeys[0].OnUpdate = test.action
+
+			logicPlan, err := runOneStmt(mock, t, "UPDATE dept SET deptno = 2")
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Equal(t, 2, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+			require.True(t, query.HasForeignKeyAction)
+			require.True(t, updateFkPlanContainsFunc(query, "<=>"))
+			hasIndexedChildAction := false
+			for _, node := range query.Nodes {
+				if node.NodeType == planpb.Node_MULTI_UPDATE && len(node.UpdateCtxList) > 1 {
+					hasIndexedChildAction = true
+				}
+				if node.NodeType != planpb.Node_MULTI_UPDATE {
+					continue
+				}
+				if len(node.UpdateCtxList) > 0 && node.UpdateCtxList[0].ObjRef.ObjName == "emp" {
+					for _, updateCtx := range node.UpdateCtxList {
+						require.True(t, updateCtx.IgnoreAffectedRows)
+					}
+				}
+				if len(node.UpdateCtxList) > 0 && node.UpdateCtxList[0].ObjRef.ObjName == "dept" {
+					for _, updateCtx := range node.UpdateCtxList {
+						require.False(t, updateCtx.IgnoreAffectedRows)
+					}
+				}
+			}
+			require.True(t, hasIndexedChildAction)
+		})
+	}
 
 	t.Run("disabled checks skip child probe and parent fallback", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
@@ -413,9 +460,22 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		require.Equal(t, 1, countUpdateFkAsserts(logicPlan.GetQuery()))
 	})
 
-	t.Run("referenced key keeps typed legacy route", func(t *testing.T) {
+	t.Run("restricted referenced key stays modern with self probe", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareSelfRef(mock)
+		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET id = 2")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		require.Equal(t, 1, countUpdateFkMarkJoins(query))
+		require.Equal(t, 1, countUpdateFkAsserts(query))
+		require.True(t, updateFkPlanContainsFunc(query, "<=>"))
+	})
+
+	t.Run("self cascade is rejected explicitly without legacy fallback", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareSelfRef(mock)
+		mock.ctxt.tables["self_ref"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
 		stmt, err := parsers.ParseOne(
 			mock.CurrentContext().GetContext(),
 			dialect.MYSQL,
@@ -428,9 +488,8 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
 		require.Error(t, err)
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonForeignKey, reason)
+		route, _, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerRejected, route)
 	})
 }
 
