@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	mock_executor "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 )
 
 var _ client.TxnOperator = new(testTxnOperator)
@@ -360,6 +361,187 @@ func TestBootstrapRetriesOwnerInitializationWithoutReacquiringLock(t *testing.T)
 	)
 }
 
+func TestBootstrapRetriesInitialStateCheckBeforeLock(t *testing.T) {
+	tests := []struct {
+		name string
+		err  func() error
+	}{
+		{
+			name: "connection reset",
+			err:  func() error { return moerr.NewConnectionResetNoCtx() },
+		},
+		{
+			name: "transaction unknown",
+			err: func() error {
+				return moerr.NewTxnUnknown(context.Background(), "bootstrap check")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sid := ""
+			runtime.RunTest(
+				sid,
+				func(rt runtime.Runtime) {
+					var stateChecks atomic.Uint32
+					var initAttempts atomic.Uint32
+					locker := &memLocker{}
+					exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+						if sql == "show databases" {
+							if stateChecks.Add(1) == 1 {
+								return executor.Result{}, test.err()
+							}
+							return executor.Result{}, nil
+						}
+						if sql == initSQLs[0] {
+							initAttempts.Add(1)
+						}
+						return newBootstrapStringResult("mo_catalog", "mo_catalog"), nil
+					})
+
+					b := NewService(
+						sid,
+						locker,
+						clock.NewHLCClock(func() int64 { return 0 }, 0),
+						nil,
+						exec,
+					)
+					ctx, cancel := newBootstrapTestContext(time.Second)
+					defer cancel()
+
+					require.NoError(t, b.Bootstrap(ctx))
+					require.Equal(t, uint32(2), stateChecks.Load())
+					require.Equal(t, uint32(1), initAttempts.Load())
+					require.Equal(t, uint64(1), locker.ids[bootstrapKey])
+				},
+			)
+		})
+	}
+}
+
+func TestBootstrapReconcilesUncertainTxnWithoutReplay(t *testing.T) {
+	tests := []struct {
+		name string
+		err  func(context.Context) error
+	}{
+		{
+			name: "connection reset",
+			err:  func(context.Context) error { return moerr.NewConnectionResetNoCtx() },
+		},
+		{
+			name: "transaction unknown",
+			err:  func(ctx context.Context) error { return moerr.NewTxnUnknown(ctx, "bootstrap") },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sid := ""
+			runtime.RunTest(
+				sid,
+				func(rt runtime.Runtime) {
+					ctrl := gomock.NewController(t)
+					exec := mock_executor.NewMockSQLExecutor(ctrl)
+					locker := &memLocker{}
+					var initAttempts atomic.Uint32
+
+					gomock.InOrder(
+						exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+							Return(executor.Result{}, nil),
+						exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).
+							DoAndReturn(func(
+								ctx context.Context,
+								execFunc func(executor.TxnExecutor) error,
+								opts executor.Options,
+							) error {
+								txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+									if sql == initSQLs[0] {
+										initAttempts.Add(1)
+									}
+									return newBootstrapStringResult("mo_catalog", "mo_catalog"), nil
+								}, nil)
+								require.NoError(t, execFunc(txn))
+								return test.err(ctx)
+							}),
+						exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+							Return(executor.Result{}, nil),
+						exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+							Return(executor.Result{}, moerr.NewConnectionResetNoCtx()),
+						exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+							Return(newBootstrapStringResult(bootstrappedCheckerDB), nil),
+						exec.EXPECT().Exec(
+							gomock.Any(),
+							fmt.Sprintf("show tables from %s", bootstrappedCheckerDB),
+							gomock.Any(),
+						).Return(newBootstrapStringResult(allBootstrappedCheckerTables()...), nil),
+					)
+
+					b := NewService(
+						sid,
+						locker,
+						clock.NewHLCClock(func() int64 { return 0 }, 0),
+						nil,
+						exec,
+					)
+					ctx, cancel := newBootstrapTestContext(time.Second)
+					defer cancel()
+
+					require.NoError(t, b.Bootstrap(ctx))
+					require.Equal(t, uint32(1), initAttempts.Load())
+					require.Equal(t, uint64(1), locker.ids[bootstrapKey])
+				},
+			)
+		})
+	}
+}
+
+func TestBootstrapUncertainTxnStopsAtContextWithoutReplay(t *testing.T) {
+	sid := ""
+	runtime.RunTest(
+		sid,
+		func(rt runtime.Runtime) {
+			ctrl := gomock.NewController(t)
+			exec := mock_executor.NewMockSQLExecutor(ctrl)
+			locker := &memLocker{}
+			var initAttempts atomic.Uint32
+
+			exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).
+				Return(executor.Result{}, nil).AnyTimes()
+			exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).
+				DoAndReturn(func(
+					ctx context.Context,
+					execFunc func(executor.TxnExecutor) error,
+					opts executor.Options,
+				) error {
+					txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+						if sql == initSQLs[0] {
+							initAttempts.Add(1)
+						}
+						return newBootstrapStringResult("mo_catalog", "mo_catalog"), nil
+					}, nil)
+					require.NoError(t, execFunc(txn))
+					return moerr.NewTxnUnknown(ctx, "bootstrap")
+				}).Times(1)
+
+			b := NewService(
+				sid,
+				locker,
+				clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil,
+				exec,
+			)
+			ctx, cancel := newBootstrapTestContext(250 * time.Millisecond)
+			defer cancel()
+
+			err := b.Bootstrap(ctx)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Equal(t, uint32(1), initAttempts.Load())
+			require.Equal(t, uint64(1), locker.ids[bootstrapKey])
+		},
+	)
+}
+
 func TestBootstrapDoesNotRetryUncertainLockAllocation(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -478,6 +660,14 @@ func newBootstrapStringResult(values ...string) executor.Result {
 	memRes.NewBatchWithRowCount(len(values))
 	executor.AppendStringRows(memRes, 0, values)
 	return memRes.GetResult()
+}
+
+func newBootstrapTestContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	frontendParameters := &config.FrontendParameters{}
+	frontendParameters.SetDefaultValues()
+	return context.WithValue(ctx, config.ParameterUnitKey,
+		config.NewParameterUnit(frontendParameters, nil, nil, nil)), cancel
 }
 
 type memLocker struct {
