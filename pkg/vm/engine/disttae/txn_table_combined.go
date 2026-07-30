@@ -28,6 +28,7 @@ import (
 	splan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
 var _ engine.Relation = (*combinedTxnTable)(nil)
@@ -169,7 +170,7 @@ func (t *combinedTxnTable) BuildReaders(
 			}
 			readers = append(readers, r...)
 		}
-		return readers, nil
+		return ensureReaders(readers, num), nil
 	}
 
 	r := relData.(*CombinedRelData)
@@ -191,7 +192,18 @@ func (t *combinedTxnTable) BuildReaders(
 		}
 		readers = append(readers, r...)
 	}
-	return readers, nil
+	return ensureReaders(readers, num), nil
+}
+
+func ensureReaders(readers []engine.Reader, num int) []engine.Reader {
+	if len(readers) > 0 {
+		return readers
+	}
+	readers = make([]engine.Reader, num)
+	for i := range readers {
+		readers[i] = new(readutil.EmptyReader)
+	}
+	return readers
 }
 
 func (t *combinedTxnTable) BuildShardingReaders(

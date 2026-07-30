@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -264,6 +265,61 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Equal(t, assert.AnError, err)
+	})
+
+	t.Run("AllNilRelationsUseEmptyReaders", func(t *testing.T) {
+		table := newCombinedTxnTable(
+			nil,
+			func() ([]engine.Relation, error) {
+				return []engine.Relation{nil, nil}, nil
+			},
+			func(context.Context, engine.RangesParam) ([]engine.Relation, error) {
+				return []engine.Relation{nil, nil}, nil
+			},
+			func(*batch.Batch, int32) ([]engine.Relation, error) {
+				return nil, nil
+			},
+		)
+
+		relData, err := table.Ranges(ctx, engine.RangesParam{})
+		assert.NoError(t, err)
+
+		result, err := table.BuildReaders(
+			ctx,
+			nil,
+			nil,
+			relData,
+			3,
+			0,
+			false,
+			engine.Policy_CheckAll,
+			engine.FilterHint{},
+		)
+		assert.NoError(t, err)
+		assert.Len(t, result, 3)
+		for _, reader := range result {
+			assert.IsType(t, new(readutil.EmptyReader), reader)
+			end, err := reader.Read(ctx, nil, nil, nil, nil)
+			assert.NoError(t, err)
+			assert.True(t, end)
+		}
+
+		result, err = table.BuildReaders(
+			ctx,
+			nil,
+			nil,
+			nil,
+			2,
+			0,
+			false,
+			engine.Policy_CheckAll,
+			engine.FilterHint{},
+		)
+		assert.NoError(t, err)
+		assert.Len(t, result, 2)
+		for _, reader := range result {
+			assert.IsType(t, new(readutil.EmptyReader), reader)
+		}
 	})
 }
 
