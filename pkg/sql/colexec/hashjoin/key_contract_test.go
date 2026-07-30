@@ -17,21 +17,30 @@ package hashjoin
 import (
 	"context"
 	"math"
+	"sort"
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	joinKeyContractBuildRows      = hashmap.UnitLimit + 1
+	joinKeyContractEquivalentFrom = hashmap.UnitLimit / 2
 )
 
 type joinKeyContractValue struct {
@@ -47,6 +56,7 @@ type joinKeyContractCase struct {
 	sqlEquality     string
 	skipReason      string
 	makeBuildFiller func(int) joinKeyContractValue
+	makeEquivalent  func(int) joinKeyContractValue
 }
 
 type joinKeyExecutionMode struct {
@@ -59,7 +69,7 @@ type joinKeyExecutionMode struct {
 
 var joinKeyExecutionModes = []joinKeyExecutionMode{
 	{name: "resident"},
-	{name: "initial-spill", shuffle: true, spillThreshold: 64, wantInitialSpill: true},
+	{name: "initial-spill", shuffle: true, spillThreshold: joinKeyContractBuildRows, wantInitialSpill: true},
 	{name: "re-spill", shuffle: true, spillThreshold: 2, wantInitialSpill: true, wantReSpill: true},
 }
 
@@ -74,10 +84,10 @@ func TestHashJoinKeyEqualityContract(t *testing.T) {
 			if tc.skipReason != "" {
 				t.Skipf("#26432: %s", tc.skipReason)
 			}
-			wantMatch := tc.sqlEquality == "TRUE"
+			wantPayloads := expectedJoinKeyContractPayloads(tc)
 			for _, mode := range joinKeyExecutionModes {
 				t.Run(mode.name, func(t *testing.T) {
-					require.Equal(t, wantMatch, runHashJoinKeyContract(t, tc, mode))
+					require.Equal(t, wantPayloads, runHashJoinKeyContract(t, tc, mode))
 				})
 			}
 		})
@@ -101,6 +111,12 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: float64(i + 1)}
 			},
+			makeEquivalent: func(i int) joinKeyContractValue {
+				if i%2 == 0 {
+					return joinKeyContractValue{value: float64(0)}
+				}
+				return joinKeyContractValue{value: math.Copysign(0, -1)}
+			},
 		},
 		{
 			name:        "scaled-float32",
@@ -111,6 +127,12 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 			skipReason:  "scaled FLOAT32 key encoding is pending",
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: float32(i + 10)}
+			},
+			makeEquivalent: func(i int) joinKeyContractValue {
+				if i%2 == 0 {
+					return joinKeyContractValue{value: float32(1.234)}
+				}
+				return joinKeyContractValue{value: float32(1.23)}
 			},
 		},
 		{
@@ -123,6 +145,12 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: strconv.Itoa(i + 100)}
 			},
+			makeEquivalent: func(i int) joinKeyContractValue {
+				if i%2 == 0 {
+					return joinKeyContractValue{value: "1"}
+				}
+				return joinKeyContractValue{value: "1.0"}
+			},
 		},
 		{
 			name:        "vecf32-signed-zero",
@@ -133,6 +161,12 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 			skipReason:  "VECF32 element key encoding is pending",
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: []float32{float32(i + 1), 1, 2, 3, 4, 5, 6, 7}}
+			},
+			makeEquivalent: func(i int) joinKeyContractValue {
+				if i%2 == 0 {
+					return joinKeyContractValue{value: vectorZero}
+				}
+				return joinKeyContractValue{value: vectorNegativeZero}
 			},
 		},
 		{
@@ -145,6 +179,9 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: float64(i + 1)}
 			},
+			makeEquivalent: func(int) joinKeyContractValue {
+				return joinKeyContractValue{value: math.Float64frombits(0x7ff8000000000001)}
+			},
 		},
 		{
 			name:        "double-null",
@@ -155,8 +192,22 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: float64(i + 1)}
 			},
+			makeEquivalent: func(int) joinKeyContractValue {
+				return joinKeyContractValue{null: true}
+			},
 		},
 	}
+}
+
+func expectedJoinKeyContractPayloads(tc joinKeyContractCase) []int32 {
+	if tc.sqlEquality != "TRUE" {
+		return nil
+	}
+	payloads := make([]int32, 0, joinKeyContractBuildRows-joinKeyContractEquivalentFrom)
+	for row := joinKeyContractEquivalentFrom; row < joinKeyContractBuildRows; row++ {
+		payloads = append(payloads, int32(row))
+	}
+	return payloads
 }
 
 func runScalarEqualityOracle(t *testing.T, tc joinKeyContractCase) string {
@@ -200,65 +251,96 @@ func runScalarEqualityOracle(t *testing.T, tc joinKeyContractCase) string {
 	return got
 }
 
-func runHashJoinKeyContract(t *testing.T, keyCase joinKeyContractCase, mode joinKeyExecutionMode) bool {
+func runHashJoinKeyContract(
+	t *testing.T,
+	keyCase joinKeyContractCase,
+	mode joinKeyExecutionMode,
+) []int32 {
 	keyExprs := [][]*plan.Expr{
 		{newExpr(0, keyCase.typ)},
 		{newExpr(0, keyCase.typ)},
 	}
-	tc := newTestCase(
-		t,
-		[]bool{true},
-		[]types.Type{keyCase.typ},
-		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
-		keyExprs,
-	)
-	tc.proc.Base.Lim.Size = 8 << 20
-	tc.proc.Base.Lim.SpillSize = 64 << 20
+	proc := testutil.NewProcess(t)
+	proc.SetMessageBoard(message.NewMessageBoard())
+	proc.Base.Lim.Size = 8 << 20
+	proc.Base.Lim.SpillSize = 64 << 20
+	tag++
+	joinMapTag := tag
+	payloadType := types.T_int32.ToType()
+	arg := &HashJoin{
+		LeftTypes:      []types.Type{keyCase.typ},
+		RightTypes:     []types.Type{keyCase.typ, payloadType},
+		ResultCols:     []colexec.ResultPos{colexec.NewResultPos(1, 1)},
+		EqConds:        keyExprs,
+		NumCPU:         1,
+		IsMerger:       true,
+		IsShuffle:      mode.shuffle,
+		ShuffleIdx:     0,
+		SpillThreshold: mode.spillThreshold,
+		JoinMapTag:     joinMapTag,
+	}
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:      true,
+		NeedBatches:      true,
+		NeedAllocateSels: true,
+		Conditions:       keyExprs[1],
+		IsShuffle:        mode.shuffle,
+		ShuffleIdx:       0,
+		SpillThreshold:   mode.spillThreshold,
+		JoinMapTag:       joinMapTag,
+		JoinMapRefCnt:    1,
+	}
+	if mode.shuffle {
+		buildArg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: joinMapTag + 7000}
+	}
 	var build, probe *batch.Batch
 	defer func() {
-		tc.arg.Free(tc.proc, false, nil)
-		tc.barg.Free(tc.proc, false, nil)
+		arg.Free(proc, false, nil)
+		buildArg.Free(proc, false, nil)
 		if build != nil {
-			build.Clean(tc.proc.Mp())
+			build.Clean(proc.Mp())
 		}
 		if probe != nil {
-			probe.Clean(tc.proc.Mp())
+			probe.Clean(proc.Mp())
 		}
-		budget, err := tc.proc.GetHashBuildBudget()
-		require.NoError(t, err)
-		require.Zero(t, budget.Used())
-		require.Zero(t, budget.SpillDiskUsed())
-		require.Zero(t, budget.SpillFDUsed())
-		tc.proc.Free()
-		require.Zero(t, tc.proc.Mp().CurrNB())
+		budget, budgetErr := proc.GetHashBuildBudget()
+		var used, diskUsed, fdUsed uint64
+		if budgetErr == nil {
+			used = budget.Used()
+			diskUsed = budget.SpillDiskUsed()
+			fdUsed = budget.SpillFDUsed()
+		}
+		proc.Free()
+		mpoolBytes := proc.Mp().CurrNB()
+		require.NoError(t, budgetErr)
+		require.Zero(t, used)
+		require.Zero(t, diskUsed)
+		require.Zero(t, fdUsed)
+		require.Zero(t, mpoolBytes)
 	}()
 
-	const buildRows = 256
-	buildValues := make([]joinKeyContractValue, buildRows)
-	buildValues[0] = keyCase.build
-	for i := 1; i < buildRows; i++ {
-		buildValues[i] = keyCase.makeBuildFiller(i)
+	buildValues := make([]joinKeyContractValue, joinKeyContractBuildRows)
+	buildPayloads := make([]int32, joinKeyContractBuildRows)
+	for row := 0; row < hashmap.UnitLimit; row++ {
+		if row < joinKeyContractEquivalentFrom {
+			buildValues[row] = keyCase.makeBuildFiller(row)
+		} else {
+			buildValues[row] = keyCase.makeEquivalent(row - joinKeyContractEquivalentFrom)
+		}
+		buildPayloads[row] = int32(row)
 	}
-	build = batch.NewWithSize(1)
-	build.Vecs[0] = makeJoinKeyVector(t, tc.proc, keyCase.typ, buildValues)
-	build.SetRowCount(buildRows)
+	buildValues[hashmap.UnitLimit] = keyCase.build
+	buildPayloads[hashmap.UnitLimit] = hashmap.UnitLimit
+	build = batch.NewWithSize(2)
+	build.Vecs[0] = makeJoinKeyVector(t, proc, keyCase.typ, buildValues)
+	build.Vecs[1] = testutil.MakeInt32Vector(buildPayloads, nil, proc.Mp())
+	build.SetRowCount(joinKeyContractBuildRows)
 	probe = batch.NewWithSize(1)
-	probe.Vecs[0] = makeJoinKeyVector(t, tc.proc, keyCase.typ, []joinKeyContractValue{keyCase.probe})
+	probe.Vecs[0] = makeJoinKeyVector(t, proc, keyCase.typ, []joinKeyContractValue{keyCase.probe})
 	probe.SetRowCount(1)
 
-	tc.arg.NonEqCond = nil
-	tc.arg.IsShuffle = mode.shuffle
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = mode.spillThreshold
-	tc.barg.IsShuffle = mode.shuffle
-	tc.barg.ShuffleIdx = 0
-	tc.barg.SpillThreshold = mode.spillThreshold
-	tc.barg.NeedBatches = false
-	if mode.shuffle {
-		tc.barg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 7000}
-	}
-	resetChildrenWithBatch(tc.arg, probe)
-	resetHashBuildChildrenWithBatch(tc.barg, build)
+	resetChildrenWithBatch(arg, probe)
+	resetHashBuildChildrenWithBatch(buildArg, build)
 
 	spillBefore := promtestutil.ToFloat64(
 		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"),
@@ -266,18 +348,22 @@ func runHashJoinKeyContract(t *testing.T, keyCase joinKeyContractCase, mode join
 	reSpillBefore := promtestutil.ToFloat64(
 		metricv2.HashBuildSpillDepthCounter.WithLabelValues("respill", "2"),
 	)
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-	require.NoError(t, tc.barg.Prepare(tc.proc))
-	buildResult, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, arg.Prepare(proc))
+	require.NoError(t, buildArg.Prepare(proc))
+	buildResult, err := vm.Exec(buildArg, proc)
 	require.NoError(t, err)
 	require.Nil(t, buildResult.Batch)
 
-	resultRows := 0
+	var resultPayloads []int32
 	for {
-		result, execErr := vm.Exec(tc.arg, tc.proc)
+		result, execErr := vm.Exec(arg, proc)
 		require.NoError(t, execErr)
 		if result.Batch != nil {
-			resultRows += result.Batch.RowCount()
+			require.Len(t, result.Batch.Vecs, 1)
+			require.True(t, result.Batch.Vecs[0].GetNulls().IsEmpty())
+			payloads := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
+			require.Len(t, payloads, result.Batch.RowCount())
+			resultPayloads = append(resultPayloads, payloads...)
 		}
 		if result.Status == vm.ExecStop {
 			break
@@ -301,7 +387,10 @@ func runHashJoinKeyContract(t *testing.T, keyCase joinKeyContractCase, mode join
 		require.Equal(t, reSpillBefore, reSpillAfter)
 	}
 
-	return resultRows == 1
+	sort.Slice(resultPayloads, func(i, j int) bool {
+		return resultPayloads[i] < resultPayloads[j]
+	})
+	return resultPayloads
 }
 
 func makeJoinKeyVector(

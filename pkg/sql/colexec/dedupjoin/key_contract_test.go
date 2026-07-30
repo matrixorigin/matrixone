@@ -16,14 +16,17 @@ package dedupjoin
 
 import (
 	"math"
+	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -38,22 +41,44 @@ type dedupKeyContractMode struct {
 	wantReSpill      bool
 }
 
+type dedupKeyContractRow struct {
+	keyBits      uint64
+	captured     int32
+	capturedNull bool
+}
+
 func TestDedupJoinDoubleSignedZeroContract(t *testing.T) {
-	// Scalar DOUBLE equality treats +0 and -0 as equal, so every execution mode
-	// must capture the matching probe value.
+	// Scalar DOUBLE equality treats +0 and -0 as equal. Every execution mode
+	// must preserve the complete build row set and capture exactly that target.
 	modes := []dedupKeyContractMode{
 		{name: "resident"},
-		{name: "initial-spill", shuffle: true, spillThreshold: 64, wantInitialSpill: true},
+		{name: "initial-spill", shuffle: true, spillThreshold: hashmap.UnitLimit + 1, wantInitialSpill: true},
 		{name: "re-spill", shuffle: true, spillThreshold: 2, wantInitialSpill: true, wantReSpill: true},
 	}
+	want := expectedDedupJoinDoubleSignedZeroRows()
 	for _, mode := range modes {
 		t.Run(mode.name, func(t *testing.T) {
-			require.True(t, runDedupJoinDoubleSignedZeroContract(t, mode))
+			require.Equal(t, want, runDedupJoinDoubleSignedZeroContract(t, mode))
 		})
 	}
 }
 
-func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMode) bool {
+func expectedDedupJoinDoubleSignedZeroRows() []dedupKeyContractRow {
+	rows := make([]dedupKeyContractRow, hashmap.UnitLimit+1)
+	for key := 0; key <= hashmap.UnitLimit; key++ {
+		rows[key] = dedupKeyContractRow{
+			keyBits:      math.Float64bits(float64(key)),
+			capturedNull: key != 0,
+		}
+	}
+	rows[0].captured = 42
+	return rows
+}
+
+func runDedupJoinDoubleSignedZeroContract(
+	t *testing.T,
+	mode dedupKeyContractMode,
+) []dedupKeyContractRow {
 	proc, ctrl := newCaptureTestProc(t)
 	defer ctrl.Finish()
 	proc.Base.Lim.Size = 8 << 20
@@ -74,13 +99,20 @@ func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMod
 		if probeBatch != nil {
 			probeBatch.Clean(proc.Mp())
 		}
-		budget, err := proc.GetHashBuildBudget()
-		require.NoError(t, err)
-		require.Zero(t, budget.Used())
-		require.Zero(t, budget.SpillDiskUsed())
-		require.Zero(t, budget.SpillFDUsed())
+		budget, budgetErr := proc.GetHashBuildBudget()
+		var used, diskUsed, fdUsed uint64
+		if budgetErr == nil {
+			used = budget.Used()
+			diskUsed = budget.SpillDiskUsed()
+			fdUsed = budget.SpillFDUsed()
+		}
 		proc.Free()
-		require.Zero(t, proc.Mp().CurrNB())
+		mpoolBytes := proc.Mp().CurrNB()
+		require.NoError(t, budgetErr)
+		require.Zero(t, used)
+		require.Zero(t, diskUsed)
+		require.Zero(t, fdUsed)
+		require.Zero(t, mpoolBytes)
 	}()
 
 	floatType := types.T_float64.ToType()
@@ -92,19 +124,23 @@ func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMod
 	tag++
 	joinMapTag := tag
 
-	const buildRows = 256
+	const buildRows = hashmap.UnitLimit + 1
 	buildKeys := vector.NewVec(floatType)
 	buildPlaceholder := vector.NewVec(intType)
-	require.NoError(t, vector.AppendFixed(buildKeys, float64(0), false, proc.Mp()))
-	require.NoError(t, vector.AppendFixed(buildPlaceholder, int32(0), true, proc.Mp()))
-	for i := 1; i < buildRows; i++ {
-		require.NoError(t, vector.AppendFixed(buildKeys, float64(i), false, proc.Mp()))
+	for key := 1; key < buildRows; key++ {
+		require.NoError(t, vector.AppendFixed(buildKeys, float64(key), false, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(buildPlaceholder, int32(0), true, proc.Mp()))
 	}
+	// Keep the equality target in the second hashmap chunk (start=UnitLimit).
+	require.NoError(t, vector.AppendFixed(buildKeys, float64(0), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(buildPlaceholder, int32(0), true, proc.Mp()))
 	buildBatch = batch.NewWithSize(2)
 	buildBatch.Vecs[0] = buildKeys
 	buildBatch.Vecs[1] = buildPlaceholder
 	buildBatch.SetRowCount(buildRows)
+	if mode.wantReSpill {
+		requireDedupTargetBucketReSpills(t, buildKeys, buildRows-1, mode.spillThreshold)
+	}
 
 	probeBatch = batch.NewWithSize(2)
 	probeBatch.Vecs[0] = vector.NewVec(floatType)
@@ -167,19 +203,28 @@ func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMod
 	require.NoError(t, err)
 	require.Nil(t, buildResult.Batch)
 
-	targetCaptured := false
+	resultRows := make([]dedupKeyContractRow, 0, buildRows)
 	for {
 		result, execErr := vm.Exec(dedupArg, proc)
 		require.NoError(t, execErr)
 		if result.Batch != nil {
+			require.Len(t, result.Batch.Vecs, 2)
+			require.True(t, result.Batch.Vecs[0].GetNulls().IsEmpty())
 			keys := vector.MustFixedColNoTypeCheck[float64](result.Batch.Vecs[0])
 			capturedValues := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])
+			require.Len(t, keys, result.Batch.RowCount())
+			require.Len(t, capturedValues, result.Batch.RowCount())
 			for i, key := range keys {
-				if key == 0 &&
-					!result.Batch.Vecs[1].GetNulls().Contains(uint64(i)) &&
-					capturedValues[i] == 42 {
-					targetCaptured = true
+				capturedNull := result.Batch.Vecs[1].GetNulls().Contains(uint64(i))
+				captured := int32(0)
+				if !capturedNull {
+					captured = capturedValues[i]
 				}
+				resultRows = append(resultRows, dedupKeyContractRow{
+					keyBits:      math.Float64bits(key),
+					captured:     captured,
+					capturedNull: capturedNull,
+				})
 			}
 		}
 		if result.Status == vm.ExecStop {
@@ -204,5 +249,27 @@ func runDedupJoinDoubleSignedZeroContract(t *testing.T, mode dedupKeyContractMod
 		require.Equal(t, reSpillBefore, reSpillAfter)
 	}
 
-	return targetCaptured
+	sort.Slice(resultRows, func(i, j int) bool {
+		return resultRows[i].keyBits < resultRows[j].keyBits
+	})
+	return resultRows
+}
+
+func requireDedupTargetBucketReSpills(
+	t *testing.T,
+	keys *vector.Vector,
+	targetRow int,
+	spillThreshold int64,
+) {
+	hashes := make([]uint64, keys.Length())
+	spillutil.ComputeXXHash([]*vector.Vector{keys}, hashes, 0)
+	mask := uint64(spillutil.SpillNumBuckets - 1)
+	targetBucket := hashes[targetRow] & mask
+	var bucketRows int64
+	for _, hash := range hashes {
+		if hash&mask == targetBucket {
+			bucketRows++
+		}
+	}
+	require.GreaterOrEqual(t, bucketRows, spillThreshold)
 }
