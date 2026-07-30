@@ -173,6 +173,29 @@ func Test_rewriteCloneViewInfosOnlyRemapsDatabaseQualifiers(t *testing.T) {
 	)
 }
 
+func Test_rewriteCloneViewInfosPreservesSQLWhenNoQualifierChanges(t *testing.T) {
+	const createSQL = "create view v1 as select * from t1;"
+	viewMap := map[string]*tableInfo{
+		genKey("sales", "v1"): {
+			dbName:    "sales",
+			tblName:   "v1",
+			typ:       view,
+			createSql: createSQL,
+		},
+	}
+
+	rewrittenViewMap, _, err := rewriteCloneViewInfos(
+		context.Background(),
+		1,
+		viewMap,
+		[]string{genKey("sales", "v1")},
+		"sales",
+		"staging",
+	)
+	require.NoError(t, err)
+	require.Equal(t, createSQL, rewrittenViewMap[genKey("staging", "v1")].createSql)
+}
+
 func Test_rewriteCloneViewInfosRejectsInvalidCreateSQL(t *testing.T) {
 	viewMap := map[string]*tableInfo{
 		genKey("sales", "v"): {

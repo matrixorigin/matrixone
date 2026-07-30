@@ -676,13 +676,20 @@ func rewriteCloneViewInfos(
 				info.tblName,
 			)
 		}
+		formatCreateView := func() string {
+			return tree.StringWithOpts(
+				createView,
+				dialect.MYSQL,
+				tree.WithQuoteIdentifier(),
+				tree.WithSingleQuoteString(),
+			)
+		}
+		originalCreateView := formatCreateView()
 		remapDbInStmt(createView, map[string]string{srcDBName: dstDBName})
-		clonedInfo.createSql = tree.StringWithOpts(
-			createView,
-			dialect.MYSQL,
-			tree.WithQuoteIdentifier(),
-			tree.WithSingleQuoteString(),
-		)
+		remappedCreateView := formatCreateView()
+		if remappedCreateView != originalCreateView {
+			clonedInfo.createSql = remappedCreateView
+		}
 		freeStatements(stmts)
 		rewrittenViewMap[key] = &clonedInfo
 	}
