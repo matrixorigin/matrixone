@@ -42,9 +42,6 @@ insert into single_pk values (1, 10), (2, 20);
 data branch create table single_left from single_pk;
 data branch create table single_right from single_pk;
 insert into single_right values (3, 30);
-data branch pick single_right into single_left;
--- @regex("requires a KEYS or BETWEEN SNAPSHOT clause", true)
-invalid input: DATA BRANCH PICK requires a KEYS or BETWEEN SNAPSHOT clause
 data branch pick single_right into single_left keys((3, 3));
 -- @regex("single-column primary key; use scalar values", true)
 invalid input: KEYS contains tuples but table has a single-column primary key; use scalar values

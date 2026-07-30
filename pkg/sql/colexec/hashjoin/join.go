@@ -332,22 +332,9 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
-			files := ctr.mp.TakeSpillBuildFiles()
-			var budget *process.HashBuildBudgetGeneration
-			if files != nil {
-				var ok bool
-				budget, ok = ctr.mp.TakeSpillBudget().(*process.HashBuildBudgetGeneration)
-				if !ok || budget == nil {
-					for _, file := range files {
-						_ = file.Close()
-					}
-					return moerr.NewInternalError(proc.Ctx, "spilled join map is missing its producer budget generation")
-				}
-			} else {
-				budget, err = proc.GetHashBuildBudget()
-				if err != nil {
-					return err
-				}
+			payload, budget, takeErr := spillutil.TakeSpillBuildPayload(proc, ctr.mp)
+			if takeErr != nil {
+				return takeErr
 			}
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           hashJoin.EqConds[1],
@@ -360,10 +347,10 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				NeedBatches:             hashJoin.NeedBuildBatches(),
 				Budget:                  budget,
 			})
-			if files != nil {
-				engine.InitFromSpilledFiles(files)
+			if len(payload.Files) > 0 {
+				engine.InitFromSpilledFiles(payload.Files)
 			} else {
-				engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+				engine.InitFromSpilledMap(payload.LegacyFds)
 			}
 			if err := engine.ScatterProbeTable(proc,
 				func() (*batch.Batch, error) {
@@ -542,7 +529,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 			if z == 0 || v == 0 {
 				if ctr.probeEmitUnmatched {
-					ctr.appendOneNotMatch(hashJoin, proc, row)
+					if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+						return err
+					}
 					resRowCnt++
 				}
 
@@ -618,7 +607,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 					} else if ctr.probeLeftSemi {
-						ctr.appendOneNotMatch(hashJoin, proc, row)
+						if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+							return err
+						}
 						resRowCnt++
 						ctr.sels = nil
 					} else if ctr.probeLeftAnti {
@@ -704,7 +695,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						ctr.leftRowMatched = true
 
 						if ctr.probeRightSemiAnti {
-							ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2)
+							if err = ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2); err != nil {
+								return err
+							}
 							resRowCnt++
 						}
 
@@ -717,7 +710,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 				if len(ctr.sels) == 0 &&
 					!ctr.leftRowMatched && ctr.probeEmitUnmatched {
-					ctr.appendOneNotMatch(hashJoin, proc, int64(row))
+					if err = ctr.appendOneNotMatch(hashJoin, proc, int64(row)); err != nil {
+						return err
+					}
 					resRowCnt++
 				}
 			}

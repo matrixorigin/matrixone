@@ -105,6 +105,7 @@ func (s *Scope) Reset(c *Compile) error {
 }
 
 func (s *Scope) reset(c *Compile, rejectZeroTemporal bool) error {
+	s.releaseParallelGenerations(c)
 	if err := refreshZeroTemporalWritePolicy(s.RootOp, rejectZeroTemporal); err != nil {
 		return err
 	}
@@ -118,6 +119,65 @@ func (s *Scope) reset(c *Compile, rejectZeroTemporal bool) error {
 		}
 	}
 	return nil
+}
+
+// releaseParallelGenerations closes the ownership interval that starts in
+// newParallelScope. The trees must remain reachable through PreScopes until
+// AnalyzeExecPlan has consumed their physical shape and runtime statistics,
+// so the next Compile.Reset is the first safe generation boundary.
+func (s *Scope) releaseParallelGenerations(c *Compile) {
+	if s == nil || len(s.parallelGenerations) == 0 {
+		return
+	}
+	generations := s.parallelGenerations
+	s.parallelGenerations = nil
+	for _, generation := range generations {
+		if generation == nil {
+			continue
+		}
+		if idx := slices.Index(s.PreScopes, generation); idx >= 0 {
+			s.PreScopes = slices.Delete(s.PreScopes, idx, idx+1)
+		}
+		// Prepared pipeline cleanup intentionally Reset-only. These clones are
+		// execution-local rather than reusable templates, so finish their
+		// physical ownership before returning them to the reuse pools.
+		if c != nil && c.isPrepare {
+			generation.freeOperatorsWithOwnProcess()
+		}
+		generation.release()
+	}
+}
+
+func (s *Scope) freeOperatorsWithOwnProcess() {
+	if s == nil {
+		return
+	}
+	for _, preScope := range s.PreScopes {
+		preScope.freeOperatorsWithOwnProcess()
+	}
+	if s.Proc == nil {
+		return
+	}
+	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		op.Free(s.Proc, false, nil)
+		return nil
+	})
+}
+
+// discardParallelGeneration handles construction failure before a generated
+// tree can contribute execution statistics. It removes both ownership links
+// and releases the complete tree exactly once.
+func (s *Scope) discardParallelGeneration(generation *Scope) {
+	if s == nil || generation == nil {
+		return
+	}
+	if idx := slices.Index(s.PreScopes, generation); idx >= 0 {
+		s.PreScopes = slices.Delete(s.PreScopes, idx, idx+1)
+	}
+	if idx := slices.Index(s.parallelGenerations, generation); idx >= 0 {
+		s.parallelGenerations = slices.Delete(s.parallelGenerations, idx, idx+1)
+	}
+	generation.release()
 }
 
 type zeroTemporalWritePolicySetter interface {
@@ -687,7 +747,7 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			isConst: true,
 		}
 		if err := ss[i].initDataSource(c); err != nil {
-			ReleaseScopes(ss)
+			s.discardParallelGeneration(ms)
 			return nil, err
 		}
 	}
@@ -968,6 +1028,7 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 
 	rs.PreScopes = parallelScopes
 	s.PreScopes = append(s.PreScopes, rs)
+	s.parallelGenerations = append(s.parallelGenerations, rs)
 
 	// after parallelScope
 	// s(fake)
