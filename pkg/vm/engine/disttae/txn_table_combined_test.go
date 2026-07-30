@@ -41,6 +41,72 @@ func newMockCombinedTxnTable() *combinedTxnTable {
 	}
 }
 
+func TestNewCombinedTxnTableFiltersNilRelations(t *testing.T) {
+	valid := &mockRelation{}
+	expected := []engine.Relation{valid}
+	returned := []engine.Relation{valid, nil}
+	table := newCombinedTxnTable(
+		nil,
+		func() ([]engine.Relation, error) {
+			return returned, nil
+		},
+		func(context.Context, engine.RangesParam) ([]engine.Relation, error) {
+			return returned, nil
+		},
+		func(*batch.Batch, int32) ([]engine.Relation, error) {
+			return returned, nil
+		},
+	)
+
+	relations, err := table.tablesFunc()
+	assert.NoError(t, err)
+	assert.Equal(t, expected, relations)
+
+	relations, err = table.pruneFunc(context.Background(), engine.RangesParam{})
+	assert.NoError(t, err)
+	assert.Equal(t, expected, relations)
+
+	relations, err = table.prunePKFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, relations)
+
+	relations, err = table.tablesFunc()
+	assert.NoError(t, err)
+	assert.Equal(t, expected, relations)
+	assert.Equal(t, []engine.Relation{valid, nil}, returned)
+
+	assert.Empty(t, filterNilRelations([]engine.Relation{nil, nil}))
+	withoutNil := []engine.Relation{valid}
+	assert.Equal(t, withoutNil, filterNilRelations(withoutNil))
+}
+
+func TestNewCombinedTxnTablePreservesRelationErrors(t *testing.T) {
+	table := newCombinedTxnTable(
+		nil,
+		func() ([]engine.Relation, error) {
+			return []engine.Relation{nil}, assert.AnError
+		},
+		func(context.Context, engine.RangesParam) ([]engine.Relation, error) {
+			return []engine.Relation{nil}, assert.AnError
+		},
+		func(*batch.Batch, int32) ([]engine.Relation, error) {
+			return []engine.Relation{nil}, assert.AnError
+		},
+	)
+
+	relations, err := table.tablesFunc()
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, relations)
+
+	relations, err = table.pruneFunc(context.Background(), engine.RangesParam{})
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, relations)
+
+	relations, err = table.prunePKFunc(nil, 0)
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, relations)
+}
+
 func TestCombinedTxnTable_BuildShardingReaders(t *testing.T) {
 	table := newMockCombinedTxnTable()
 
@@ -1048,6 +1114,35 @@ func TestCombinedTxnTable_Rows(t *testing.T) {
 	})
 }
 
+func TestCombinedTxnTable_Stats(t *testing.T) {
+	stats := &statsinfo.StatsInfo{
+		BlockNumber:        1,
+		ApproxObjectNumber: 2,
+		TableCnt:           3,
+	}
+	table := newCombinedTxnTable(
+		nil,
+		func() ([]engine.Relation, error) {
+			return []engine.Relation{
+				nil,
+				&mockRelation{
+					statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) {
+						return stats, nil
+					},
+				},
+			}, nil
+		},
+		nil,
+		nil,
+	)
+
+	result, err := table.Stats(context.Background(), false)
+	assert.NoError(t, err)
+	assert.Equal(t, stats.BlockNumber, result.BlockNumber)
+	assert.Equal(t, stats.ApproxObjectNumber, result.ApproxObjectNumber)
+	assert.Equal(t, stats.TableCnt, result.TableCnt)
+}
+
 // Test CombinedRelData panic methods
 func TestCombinedRelData_GetType(t *testing.T) {
 	data := &CombinedRelData{}
@@ -1294,6 +1389,7 @@ type mockRelation struct {
 	collectTombstonesFunc               func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error)
 	sizeFunc                            func(ctx context.Context, columnName string) (uint64, error)
 	rowsFunc                            func(ctx context.Context) (uint64, error)
+	statsFunc                           func(ctx context.Context, sync bool) (*statsinfo.StatsInfo, error)
 	starCountFunc                       func(ctx context.Context) (uint64, error)
 	estimateCommittedTombstoneCountFunc func(ctx context.Context) (int, error)
 	buildReadersFunc                    func(ctx context.Context, proc any, expr *plan.Expr, relData engine.RelData, num int, txnOffset int, orderBy bool, policy engine.TombstoneApplyPolicy, filterHint engine.FilterHint) ([]engine.Reader, error)
@@ -1323,6 +1419,9 @@ func (m *mockRelation) Rows(ctx context.Context) (uint64, error) {
 }
 
 func (m *mockRelation) Stats(ctx context.Context, sync bool) (*statsinfo.StatsInfo, error) {
+	if m.statsFunc != nil {
+		return m.statsFunc(ctx, sync)
+	}
 	return nil, nil
 }
 

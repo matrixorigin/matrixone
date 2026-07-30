@@ -59,9 +59,61 @@ func newCombinedTxnTable(
 ) *combinedTxnTable {
 	return &combinedTxnTable{
 		primary:     primary,
-		pruneFunc:   pruneFunc,
-		tablesFunc:  tablesFunc,
-		prunePKFunc: prunePKFunc,
+		pruneFunc:   filterNilPrunedRelations(pruneFunc),
+		tablesFunc:  filterNilTableRelations(tablesFunc),
+		prunePKFunc: filterNilPKPrunedRelations(prunePKFunc),
+	}
+}
+
+func filterNilRelations(relations []engine.Relation) []engine.Relation {
+	for i, rel := range relations {
+		if rel == nil {
+			filtered := make([]engine.Relation, 0, len(relations)-1)
+			filtered = append(filtered, relations[:i]...)
+			for _, remaining := range relations[i+1:] {
+				if remaining != nil {
+					filtered = append(filtered, remaining)
+				}
+			}
+			return filtered
+		}
+	}
+	return relations
+}
+
+func filterNilTableRelations(fn tablesFunc) tablesFunc {
+	return func() ([]engine.Relation, error) {
+		relations, err := fn()
+		if err != nil {
+			return nil, err
+		}
+		return filterNilRelations(relations), nil
+	}
+}
+
+func filterNilPrunedRelations(fn pruneFunc) pruneFunc {
+	return func(
+		ctx context.Context,
+		param engine.RangesParam,
+	) ([]engine.Relation, error) {
+		relations, err := fn(ctx, param)
+		if err != nil {
+			return nil, err
+		}
+		return filterNilRelations(relations), nil
+	}
+}
+
+func filterNilPKPrunedRelations(fn prunePKFunc) prunePKFunc {
+	return func(
+		bat *batch.Batch,
+		partitionIndex int32,
+	) ([]engine.Relation, error) {
+		relations, err := fn(bat, partitionIndex)
+		if err != nil {
+			return nil, err
+		}
+		return filterNilRelations(relations), nil
 	}
 }
 
