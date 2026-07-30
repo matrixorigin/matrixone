@@ -62,6 +62,21 @@ select * from child_composite order by id;
 update child_composite set a = 98, b = 98 where id = 3;
 select * from child_composite order by id;
 
+create table parent_auto_fk (
+    id int primary key
+);
+
+create table child_auto_fk (
+    parent_id int auto_increment unique,
+    constraint fk_auto foreign key (parent_id) references parent_auto_fk(id)
+);
+
+insert into parent_auto_fk values (1);
+insert into child_auto_fk values (0);
+update child_auto_fk
+set parent_id = if(parent_id = 1, null, parent_id);
+select * from child_auto_fk;
+
 create table self_ref (
     id int primary key,
     parent_id int,
@@ -76,6 +91,8 @@ update self_ref set parent_id = 99 where id = 2;
 select * from self_ref order by id;
 
 drop table self_ref;
+drop table child_auto_fk;
+drop table parent_auto_fk;
 drop table child_composite;
 drop table parent_composite;
 drop table child_single;

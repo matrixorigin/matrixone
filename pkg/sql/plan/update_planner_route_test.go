@@ -315,6 +315,34 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.True(t, hasParentScan)
 		require.True(t, hasMarkJoin)
 		require.True(t, hasAssert)
+		require.Equal(t, 3, len(findUpdateFkAssert(logicPlan.GetQuery()).GetF().Args))
+	})
+
+	t.Run("auto increment child key uses legacy final row validation", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		emp := mock.ctxt.tables["emp"]
+		for _, col := range emp.Cols {
+			if col.Name == "deptno" {
+				col.Typ.AutoIncr = true
+			}
+		}
+
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(),
+			dialect.MYSQL,
+			"UPDATE emp SET deptno = if(empno = 1, null, deptno)",
+			1,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.Error(t, err)
+		route, reason, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerLegacy, route)
+		require.Equal(t, updateRouteReasonAutoIncrement, reason)
 	})
 
 	t.Run("affected referenced parent key keeps typed legacy route", func(t *testing.T) {
@@ -499,6 +527,17 @@ func countUpdateFkAsserts(query *planpb.Query) int {
 		}
 	}
 	return count
+}
+
+func findUpdateFkAssert(query *planpb.Query) *planpb.Expr {
+	for _, node := range query.Nodes {
+		for _, filter := range node.FilterList {
+			if filter.GetF() != nil && filter.GetF().Func.ObjName == "assert" {
+				return filter
+			}
+		}
+	}
+	return nil
 }
 
 func updateFkPlanContainsFunc(query *planpb.Query, name string) bool {

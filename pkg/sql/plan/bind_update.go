@@ -421,6 +421,19 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
+	for i, tableDef := range dmlCtx.tableDefs {
+		if updateAutoIncrCols[i] &&
+			len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 {
+			return 0, newLegacyUpdatePlannerRouteError(
+				updateRouteReasonAutoIncrement,
+				moerr.NewUnsupportedDML(
+					builder.compCtx.GetContext(),
+					"auto_increment foreign key update",
+				),
+			)
+		}
+	}
+
 	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(
 		bindCtx,
 		dmlCtx,
