@@ -16,7 +16,11 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/stretchr/testify/assert"
 
@@ -33,11 +37,14 @@ type testHAKClient struct {
 	cfg *cnservice.Config
 	mod int
 	cnt int
+
+	closeCount int
+	closeErr   error
 }
 
 func (client *testHAKClient) Close() error {
-	//TODO implement me
-	panic("implement me")
+	client.closeCount++
+	return client.closeErr
 }
 
 func (client *testHAKClient) AllocateID(ctx context.Context) (uint64, error) {
@@ -144,6 +151,55 @@ func Test_waitHAKeeperRunningLocked(t *testing.T) {
 
 	err = op.waitHAKeeperRunningLocked(client)
 	assert.Error(t, err)
+}
+
+func TestHAKeeperRunningTimeout(t *testing.T) {
+	assert.Equal(t, 2*time.Minute, (&operator{}).hakeeperRunningTimeout())
+	assert.Equal(t, 5*time.Minute, (&operator{testing: true}).hakeeperRunningTimeout())
+}
+
+func TestWaitClusterConditionClosesHAKeeperClient(t *testing.T) {
+	waitErr := errors.New("wait failed")
+	closeErr := errors.New("close failed")
+	tests := []struct {
+		name     string
+		waitErr  error
+		closeErr error
+	}{
+		{
+			name: "wait success",
+		},
+		{
+			name:     "wait failure preserves primary error",
+			waitErr:  waitErr,
+			closeErr: closeErr,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &testHAKClient{closeErr: tt.closeErr}
+			op := &operator{}
+			op.reset.logger = zap.NewNop()
+
+			err := op.waitClusterConditionWithClientFactory(
+				func() (logservice.CNHAKeeperClient, error) {
+					return client, nil
+				},
+				func(got logservice.CNHAKeeperClient) error {
+					assert.Same(t, client, got)
+					return tt.waitErr
+				},
+			)
+
+			if tt.waitErr == nil {
+				assert.NoError(t, err)
+			} else {
+				assert.Same(t, tt.waitErr, err)
+			}
+			assert.Equal(t, 1, client.closeCount)
+		})
+	}
 }
 
 func Test_waitAnyShardReadyLocked(t *testing.T) {
