@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbtimestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
@@ -80,6 +83,104 @@ func TestDataBranchOutputMakeFileName(t *testing.T) {
 		tblStuff,
 	)
 	require.Regexp(t, regexp.MustCompile(`^diff_t2_sp2_t1_sp1_\d{8}_\d{6}$`), got)
+}
+
+func TestDataBranchOutputFileNameAndHintQuotePathSeparators(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	ctrl := gomock.NewController(t)
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("base/name`quoted").AnyTimes()
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "db/name`quoted",
+		Name:   "base/name`quoted",
+	}).AnyTimes()
+	tarRel.EXPECT().GetTableName().Return(`child\name:quoted`).AnyTimes()
+
+	outputDir := t.TempDir()
+	stmt := &tree.DataBranchDiff{
+		BaseTable: tree.TableName{
+			AtTsExpr: &tree.AtTimeStamp{SnapshotName: "base/snapshot 1"},
+		},
+		TargetTable: tree.TableName{
+			AtTsExpr: &tree.AtTimeStamp{SnapshotName: `target\snapshot%1`},
+		},
+		OutputOpt: &tree.DiffOutputOpt{DirPath: outputDir},
+	}
+	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
+
+	filePath, hint, _, release, cleanup, err := prepareFSForDiffAsFile(ctx, ses, stmt, tblStuff)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	require.NotNil(t, cleanup)
+	t.Cleanup(release)
+	t.Cleanup(cleanup)
+
+	require.Equal(t, outputDir, filepath.Dir(filePath))
+	require.Regexp(t, regexp.MustCompile(
+		`^diff_child@5Cname@3Aquoted_target@5Csnapshot@251_base@2Fname@60quoted_base@2Fsnapshot@201_\d{8}_\d{6}\.sql$`,
+	), filepath.Base(filePath))
+	require.Equal(t,
+		"DELETE FROM `db/name``quoted`.`base/name``quoted`, INSERT INTO `db/name``quoted`.`base/name``quoted`",
+		hint,
+	)
+}
+
+func TestDataBranchOutputFileNameSurvivesCSVFormattingAndLengthLimit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	t.Run("valid and invalid UTF-8", func(t *testing.T) {
+		require.Equal(t, "a�b", encodeDiffFileNamePart("a�b"))
+		require.Equal(t, "a@FFb", encodeDiffFileNamePart(string([]byte{'a', 0xff, 'b'})))
+	})
+
+	t.Run("CSV format string", func(t *testing.T) {
+		for _, name := range []string{"Ād", "x%d", "x d", "x`d"} {
+			t.Run(name, func(t *testing.T) {
+				baseRel := mock_frontend.NewMockRelation(ctrl)
+				tarRel := mock_frontend.NewMockRelation(ctrl)
+				baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
+				tarRel.EXPECT().GetTableName().Return(name).AnyTimes()
+
+				fileName := makeFileName(nil, nil, tableStuff{baseRel: baseRel, tarRel: tarRel}) + ".csv"
+				require.Equal(t, fileName, getExportFilePath(fileName, 0))
+			})
+		}
+	})
+
+	t.Run("long Unicode components", func(t *testing.T) {
+		ctx := context.Background()
+		ses := newValidateSession(t)
+		longName := strings.Repeat("中", 100)
+
+		baseRel := mock_frontend.NewMockRelation(ctrl)
+		tarRel := mock_frontend.NewMockRelation(ctrl)
+		baseRel.EXPECT().GetTableName().Return(longName).AnyTimes()
+		baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+			DbName: "unicode_db",
+			Name:   longName,
+		}).AnyTimes()
+		tarRel.EXPECT().GetTableName().Return(longName).AnyTimes()
+
+		outputDir := t.TempDir()
+		stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{DirPath: outputDir}}
+		filePath, _, _, release, cleanup, err := prepareFSForDiffAsFile(
+			ctx, ses, stmt, tableStuff{baseRel: baseRel, tarRel: tarRel},
+		)
+		require.NoError(t, err)
+		require.NotNil(t, release)
+		require.NotNil(t, cleanup)
+		t.Cleanup(release)
+		t.Cleanup(cleanup)
+
+		baseName := filepath.Base(filePath)
+		require.LessOrEqual(t, len(baseName), maxDiffFileNameStemBytes+len(".sql"))
+		require.True(t, utf8.ValidString(baseName))
+		require.Regexp(t, regexp.MustCompile(`_[0-9a-f]{32}_\d{8}_\d{6}\.sql$`), baseName)
+		require.Equal(t, outputDir, filepath.Dir(filePath))
+	})
 }
 
 func TestDataBranchOutputTableSpec(t *testing.T) {
@@ -175,6 +276,36 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int{1, 0}, output.projectedIdxes)
 		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "name", "id"}, output.columnNames)
+	})
+
+	t.Run("target-only column uses target type and remains nullable", func(t *testing.T) {
+		targetDef := tarRel.GetTableDef(ctx)
+		targetDef.Cols = append(targetDef.Cols, &plan.ColDef{
+			Name: "extra", ColId: 5, Seqnum: 4,
+			Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true},
+		})
+		defer func() { targetDef.Cols = targetDef.Cols[:len(targetDef.Cols)-1] }()
+
+		targetOnlyTblStuff := tblStuff
+		targetOnlyTblStuff.def.colNames = append(
+			append([]string(nil), tblStuff.def.colNames...), "extra",
+		)
+		targetOnlyTblStuff.def.colTypes = append(
+			append([]types.Type(nil), tblStuff.def.colTypes...), types.T_int32.ToType(),
+		)
+		targetOnlyTblStuff.def.visibleIdxes = append(
+			append([]int(nil), tblStuff.def.visibleIdxes...), 4,
+		)
+		targetOnlyTblStuff.def.tarOnlyIdxes = []int{4}
+
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+		}, targetOnlyTblStuff)
+		require.NoError(t, err)
+		sql, err := output.createSQL(ctx, targetOnlyTblStuff)
+		require.NoError(t, err)
+		require.Contains(t, sql, "`extra` INT default null")
+		require.NotContains(t, sql, "`extra` INT not null")
 	})
 
 	t.Run("renamed target column retains target name and base type", func(t *testing.T) {
@@ -770,6 +901,126 @@ func TestDataBranchOutputShouldDiffAsCSV(t *testing.T) {
 	})
 }
 
+func TestSubmitCSVBatchForConversionReturnsCopyErrorBeforeSubmit(t *testing.T) {
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+
+	dstMP, err := mpool.NewMPool("data-branch-csv-copy-failure", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mpool.DeleteMPool(dstMP)
+	})
+
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], make([]byte, 2<<20), false, srcMP))
+	bat.SetRowCount(1)
+	t.Cleanup(func() {
+		bat.Clean(srcMP)
+	})
+
+	ses := &Session{proc: testutil.NewProcessWithMPool(t, "", dstMP)}
+	ep := &ExportConfig{}
+	var workerWg sync.WaitGroup
+
+	_, wantErr := bat.Dup(dstMP)
+	require.Error(t, wantErr)
+	require.Zero(t, dstMP.CurrNB())
+
+	err = submitCSVBatchForConversion(
+		context.Background(), ses, tableStuff{}, bat, ep, &workerWg,
+	)
+	require.EqualError(t, err, wantErr.Error())
+	require.Zero(t, ep.Index.Load())
+	require.Zero(t, dstMP.CurrNB())
+	workerWg.Wait()
+}
+
+func TestSubmitCSVBatchForConversionCleansCopyOnSubmitError(t *testing.T) {
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	dstMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(dstMP)
+	})
+
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("value"), false, srcMP))
+	bat.SetRowCount(1)
+	t.Cleanup(func() {
+		bat.Clean(srcMP)
+	})
+
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	worker.Release()
+
+	ses := &Session{proc: testutil.NewProcessWithMPool(t, "", dstMP)}
+	ep := &ExportConfig{}
+	var workerWg sync.WaitGroup
+
+	err = submitCSVBatchForConversion(
+		context.Background(), ses, tableStuff{worker: worker}, bat, ep, &workerWg,
+	)
+	require.Error(t, err)
+	require.Zero(t, ep.Index.Load())
+	require.Zero(t, dstMP.CurrNB())
+	workerWg.Wait()
+}
+
+func TestFlushRemainingCSVBatchBytesSkipsCanceledIndexGap(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ep := &ExportConfig{}
+	ep.Index.Store(1)
+	ep.ByteChan = make(chan *BatchByte)
+	close(ep.ByteChan)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- flushRemainingCSVBatchBytes(ctx, ep)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("canceled CSV writer waited for a batch index that cannot be produced")
+	}
+}
+
+func TestWaitForCSVConversionWorkersReturnsLateCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var workerWg sync.WaitGroup
+	workerWg.Add(1)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- waitForCSVConversionWorkers(ctx, &workerWg)
+	}()
+
+	cancel()
+	workerWg.Done()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("waiting for CSV conversion workers did not terminate")
+	}
+}
+
+func TestJoinCSVInputErrorDoesNotDuplicateObservedCancellation(t *testing.T) {
+	require.EqualError(t, joinCSVInputError(context.Canceled, context.Canceled), context.Canceled.Error())
+	require.ErrorIs(t, joinCSVInputError(nil, context.Canceled), context.Canceled)
+}
+
 func TestDataBranchOutputWriteRowValues(t *testing.T) {
 	tblStuff := tableStuff{}
 	tblStuff.def.colNames = []string{"id", "name"}
@@ -781,7 +1032,7 @@ func TestDataBranchOutputWriteRowValues(t *testing.T) {
 	row := []any{int64(7), "alice"}
 
 	insertBuf := &bytes.Buffer{}
-	require.NoError(t, writeInsertRowValues(nil, tblStuff, row, insertBuf))
+	require.NoError(t, writeInsertRowValues(nil, tblStuff, row, insertBuf, tblStuff.def.visibleIdxes))
 	require.Equal(t, "(7,'alice')", insertBuf.String())
 
 	deleteBuf := &bytes.Buffer{}
@@ -1294,6 +1545,31 @@ func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
 
 	_, _, err = newSingleWriteAppender(ctx, pool, etlFS, "diff.sql", nil)
 	require.Error(t, err)
+}
+
+func TestNewApplyBatchInfoUsesCommonVisibleColumnsForEvolvedSchema(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"a", "__mo_cbkey_001a", "c", "b"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 2, 3}
+	tblStuff.def.commonIdxes = []int{0, 1, 3}
+	tblStuff.def.commonVisibleIdxes = []int{0, 3}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+
+	info := newApplyBatchInfo(ctx, ses, tblStuff, []int{0}, false)
+	require.NotNil(t, info)
+	require.Equal(t, []string{"a"}, info.deleteKeyNames)
+	require.Equal(t, []string{"a", "b"}, info.visibleNames)
 }
 
 func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {

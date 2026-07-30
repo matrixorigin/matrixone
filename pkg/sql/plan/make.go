@@ -648,13 +648,13 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 }
 
 // makePlan2AssignmentCastExpr builds a cast used when validating/storing a value
-// against a real column type (e.g. column DEFAULT / ON UPDATE). For CHAR/VARCHAR
-// targets it uses the strict cast so an over-length value is rejected instead of
-// being silently truncated, mirroring forceAssignmentCastExpr. Explicit SQL CAST
-// keeps the lenient generic cast (MySQL-compatible truncation).
+// against a real column type at the DDL layer (e.g. column DEFAULT / ON UPDATE).
+// It uses cast_strict for CHAR/VARCHAR width checks and temporal zero-date
+// preservation. DDL-specific error mapping is applied by the DDL validation
+// layer rather than changing cast_strict's execution contract.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	funcName := "cast"
-	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
+	if useAssignmentStrictCast(targetType) {
 		funcName = "cast_strict"
 	}
 	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)
@@ -664,6 +664,14 @@ func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type,
 	var err error
 	if expr == nil {
 		return nil, moerr.NewInvalidInput(ctx, "nil expression in cast")
+	}
+	var rewritten bool
+	expr, rewritten, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
+		return expr, nil
 	}
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil

@@ -11,7 +11,7 @@ insert into test_sp01 values (3, null, 'database management system');
 insert into test_sp01 values (4, 10, null);
 insert into test_sp01 values (1, -321.321, null);
 select count(*) from test_sp01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 5
 drop view if exists v01;
 create view v01 as select * from test_sp01;
@@ -43,86 +43,102 @@ insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
 insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
 create snapshot spsp01 for database sp_test;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp01    2025-07-19 05:52:25.870071    database    sys    sp_test
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
+spsp01  ¦  2026-07-27 03:59:41.943381033  ¦  database  ¦  sys  ¦  sp_test  ¦  
 drop database sp_test;
 restore database sp_test{snapshot="spsp01"};
 show databases;
-Database
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-sp_test
-sys_create_snapshot_for_sys_db_table_level
-system
+➤ Database[12,-1,0]  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mo_debug  𝄀
+mo_task  𝄀
+mysql  𝄀
+sp_test  𝄀
+sys_create_snapshot_for_sys_db_table_level  𝄀
+system  𝄀
 system_metrics
 use sp_test;
 show tables;
-Tables_in_sp_test
-aff01
-pri01
-test_sp01
+➤ Tables_in_sp_test[12,-1,0]  𝄀
+aff01  𝄀
+pri01  𝄀
+test_sp01  𝄀
 v01
 show create table test_sp01;
-Table    Create Table
-test_sp01    CREATE TABLE `test_sp01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(6,0) DEFAULT NULL,\n  `col3` varchar(30) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+test_sp01  ¦  CREATE TABLE `test_sp01` (
+  `col1` int DEFAULT NULL,
+  `col2` decimal(6,0) DEFAULT NULL,
+  `col3` varchar(30) DEFAULT NULL
+)
 show create table aff01;
-Table    Create Table
-aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+aff01  ¦  CREATE TABLE `aff01` (
+  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',
+  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',
+  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',
+  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',
+  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',
+  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',
+  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',
+  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',
+  PRIMARY KEY (`empno`),
+  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `deptno` int unsigned NOT NULL COMMENT '部门编号',
+  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',
+  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',
+  PRIMARY KEY (`deptno`)
+) COMMENT='部门表'
 select * from test_sp01;
-col1    col2    col3
-1    null    database
-2    38291    database
-3    null    database management system
-4    10    null
-1    -321    null
+➤ col1[4,32,0]  ¦  col2[3,6,0]  ¦  col3[12,-1,0]  𝄀
+1  ¦  null  ¦  database  𝄀
+2  ¦  38291  ¦  database  𝄀
+3  ¦  null  ¦  database management system  𝄀
+4  ¦  10  ¦  null  𝄀
+1  ¦  -321  ¦  null
 select * from pri01;
-deptno    dname    loc
-10    ACCOUNTING    NEW YORK
-20    RESEARCH    DALLAS
-30    SALES    CHICAGO
-40    OPERATIONS    BOSTON
+➤ deptno[4,32,0]  ¦  dname[12,-1,0]  ¦  loc[12,-1,0]  𝄀
+10  ¦  ACCOUNTING  ¦  NEW YORK  𝄀
+20  ¦  RESEARCH  ¦  DALLAS  𝄀
+30  ¦  SALES  ¦  CHICAGO  𝄀
+40  ¦  OPERATIONS  ¦  BOSTON
 select * from aff01;
-empno    ename    job    mgr    hiredate    sal    comm    deptno
-7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
-7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
+➤ empno[4,32,0]  ¦  ename[12,-1,0]  ¦  job[12,-1,0]  ¦  mgr[4,32,0]  ¦  hiredate[91,64,0]  ¦  sal[3,7,2]  ¦  comm[3,7,2]  ¦  deptno[4,32,0]  𝄀
+7369  ¦  SMITH  ¦  CLERK  ¦  7902  ¦  1980-12-17  ¦  800.00  ¦  null  ¦  20  𝄀
+7499  ¦  ALLEN  ¦  SALESMAN  ¦  7698  ¦  1981-02-20  ¦  1600.00  ¦  300.00  ¦  30
 desc test_sp01;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null
-col2    DECIMAL(6,0)    YES        null
-col3    VARCHAR(30)    YES        null
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col2  ¦  DECIMAL(6,0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  VARCHAR(30)  ¦  YES  ¦    ¦  null  ¦    ¦  
 desc aff01;
-Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    雇员编号
-ename    VARCHAR(15)    YES        null        雇员姓名
-job    VARCHAR(10)    YES        null        雇员职位
-mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
-hiredate    DATE(0)    YES        null        雇员的雇佣日期
-sal    DECIMAL(7,2)    YES        null        雇员的基本工资
-comm    DECIMAL(7,2)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES    MUL    null        所在部门
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+empno  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦  雇员编号  𝄀
+ename  ¦  VARCHAR(15)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员姓名  𝄀
+job  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员职位  𝄀
+mgr  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员对应的领导的编号  𝄀
+hiredate  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员的雇佣日期  𝄀
+sal  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  雇员的基本工资  𝄀
+comm  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  奖金  𝄀
+deptno  ¦  INT UNSIGNED(32)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  所在部门
 desc pri01;
-Field    Type    Null    Key    Default    Extra    Comment
-deptno    INT UNSIGNED(32)    NO    PRI    null        部门编号
-dname    VARCHAR(15)    YES        null        部门名称
-loc    VARCHAR(50)    YES        null        部门所在位置
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+deptno  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  部门编号  𝄀
+dname  ¦  VARCHAR(15)  ¦  YES  ¦    ¦  null  ¦    ¦  部门名称  𝄀
+loc  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦  部门所在位置
 drop database sp_test;
 drop snapshot spsp01;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]
 drop database if exists sp_test01;
-
 create database sp_test01;
-
 use sp_test01;
-
 drop table if exists partition01;
-
 create table partition01 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -137,40 +153,30 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
-
 insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
-
 drop snapshot if exists spsp02;
-
 create snapshot spsp02 for database sp_test01;
-
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp02    2025-07-17 19:15:34.177971    database    sys    sp_test01
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
+spsp02  ¦  2026-07-27 03:59:42.233472552  ¦  database  ¦  sys  ¦  sp_test01  ¦  
 delete from partition01 where birth_date = '1980-12-17';
-
 select * from partition01;
-emp_no    birth_date    first_name    last_name    gender    hire_date
-9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
+➤ emp_no[4,32,0]  ¦  birth_date[91,64,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  gender[12,-1,0]  ¦  hire_date[91,64,0]  𝄀
+9002  ¦  1981-02-20  ¦  ALLEN  ¦  SALESMAN  ¦  F  ¦  2008-02-20
 restore database sp_test01{snapshot="spsp02"};
-
 select * from partition01;
-emp_no    birth_date    first_name    last_name    gender    hire_date
-9001    1980-12-17    SMITH    CLERK    F    2008-12-17
-9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
+➤ emp_no[4,32,0]  ¦  birth_date[91,64,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  gender[12,-1,0]  ¦  hire_date[91,64,0]  𝄀
+9001  ¦  1980-12-17  ¦  SMITH  ¦  CLERK  ¦  F  ¦  2008-12-17  𝄀
+9002  ¦  1981-02-20  ¦  ALLEN  ¦  SALESMAN  ¦  F  ¦  2008-02-20
 drop table partition01;
-
 restore table sp_test01.partition01{snapshot="spsp02"};
-
 select * from partition01;
-emp_no    birth_date    first_name    last_name    gender    hire_date
-9001    1980-12-17    SMITH    CLERK    F    2008-12-17
-9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
+➤ emp_no[4,32,0]  ¦  birth_date[91,64,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  gender[12,-1,0]  ¦  hire_date[91,64,0]  𝄀
+9001  ¦  1980-12-17  ¦  SMITH  ¦  CLERK  ¦  F  ¦  2008-12-17  𝄀
+9002  ¦  1981-02-20  ¦  ALLEN  ¦  SALESMAN  ¦  F  ¦  2008-02-20
 drop database sp_test01;
-
 drop snapshot spsp02;
-
 drop database if exists sp_test02;
 create database sp_test02;
 use sp_test02;
@@ -178,11 +184,11 @@ create table test01(col1 int, col2 decimal);
 drop snapshot if exists `SELECT`;
 create snapshot `SELECT` for database sp_test02;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-select    2025-07-19 05:52:26.022949    database    sys    sp_test02
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
-sname    level    account_name    database_name    table_name
-select    database    sys    sp_test02
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
+select  ¦  2026-07-27 03:59:42.552359315  ¦  database  ¦  sys  ¦  sp_test02  ¦  
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user';
+➤ sname[12,-1,0]  ¦  level[12,-1,0]  ¦  account_name[12,-1,0]  ¦  database_name[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
+select  ¦  database  ¦  sys  ¦  sp_test02  ¦  
 drop snapshot `SELECT`;
 drop database sp_test02;
 drop database if exists sp_test03;
@@ -192,11 +198,11 @@ create table test01(col1 int, col2 decimal);
 drop snapshot if exists AUTO_INCREMENT;
 create snapshot AUTO_INCREMENT for database sp_test03;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-auto_increment    2025-07-19 05:52:26.069177    database    sys    sp_test03
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
-sname    level    account_name    database_name    table_name
-auto_increment    database    sys    sp_test03
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
+auto_increment  ¦  2026-07-27 03:59:42.626178238  ¦  database  ¦  sys  ¦  sp_test03  ¦  
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user';
+➤ sname[12,-1,0]  ¦  level[12,-1,0]  ¦  account_name[12,-1,0]  ¦  database_name[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
+auto_increment  ¦  database  ¦  sys  ¦  sp_test03  ¦  
 drop snapshot AUTO_INCREMENT;
 drop database sp_test03;
 drop database if exists sp_Test03;
@@ -209,20 +215,20 @@ create snapshot SP01 for database sp_Test03;
 drop database sp_Test03;
 restore database sp_Test03{snapshot="SP01"};
 show databases;
-Database
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-sp_test03
-sys_create_snapshot_for_sys_db_table_level
-system
+➤ Database[12,-1,0]  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mo_debug  𝄀
+mo_task  𝄀
+mysql  𝄀
+sp_test03  𝄀
+sys_create_snapshot_for_sys_db_table_level  𝄀
+system  𝄀
 system_metrics
 use sp_Test03;
 show tables;
-Tables_in_sp_test03
-test01
+➤ Tables_in_sp_test03[12,-1,0]  𝄀
+test01  𝄀
 test02
 drop database sp_Test03;
 drop snapshot SP01;
@@ -248,15 +254,15 @@ drop snapshot if exists spsp03;
 create snapshot spsp02 for database db02;
 create snapshot spsp03 for table db02 table01;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp03    2025-07-19 05:52:26.26781    table    sys    db02    table01
-spsp02    2025-07-19 05:52:26.260618    database    sys    db02
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'database';
-sname    level    account_name    database_name    table_name
-spsp02    database    sys    db02
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'table';
-sname    level    account_name    database_name    table_name
-spsp03    table    sys    db02    table01
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
+spsp03  ¦  2026-07-27 03:59:42.93179401  ¦  table  ¦  sys  ¦  db02  ¦  table01  𝄀
+spsp02  ¦  2026-07-27 03:59:42.92161909  ¦  database  ¦  sys  ¦  db02  ¦  
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user' and level = 'database';
+➤ sname[12,-1,0]  ¦  level[12,-1,0]  ¦  account_name[12,-1,0]  ¦  database_name[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
+spsp02  ¦  database  ¦  sys  ¦  db02  ¦  
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user' and level = 'table';
+➤ sname[12,-1,0]  ¦  level[12,-1,0]  ¦  account_name[12,-1,0]  ¦  database_name[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
+spsp03  ¦  table  ¦  sys  ¦  db02  ¦  table01
 drop snapshot spsp02;
 drop snapshot spsp03;
 drop database db02;
@@ -285,10 +291,10 @@ drop table if exists t1;
 create cluster table t1(a int);
 insert into t1 values(1,6),(2,6),(3,6);
 select * from t1;
-a    account_id
-1    6
-2    6
-3    6
+➤ a[4,32,0]  ¦  account_id[4,32,0]  𝄀
+1  ¦  6  𝄀
+2  ¦  6  𝄀
+3  ¦  6
 drop snapshot if exists spsp07;
 create snapshot spsp07 for table mo_catalog t1;
 internal error: can not create snapshot for cluster table mo_catalog.t1
@@ -319,11 +325,23 @@ col2 int,
 col3 int primary key,
 constraint `c1` foreign key(col1) references pri01(col1));
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `col1` int NOT NULL,
+  `col2` varchar(20) DEFAULT NULL,
+  `col3` int DEFAULT NULL,
+  `col4` bigint DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 show create table aff01;
-Table    Create Table
-aff01    CREATE TABLE `aff01` (\n  `col1` int DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` int NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `pri01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+aff01  ¦  CREATE TABLE `aff01` (
+  `col1` int DEFAULT NULL,
+  `col2` int DEFAULT NULL,
+  `col3` int NOT NULL,
+  PRIMARY KEY (`col3`),
+  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `pri01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 insert into pri01 values(1,'sfhuwe',1,1);
 insert into pri01 values(2,'37829901k3d',2,2);
 insert into aff01 values(1,6,6);
@@ -334,41 +352,41 @@ drop table aff01;
 drop table pri01;
 restore database db06{snapshot="spsp06"};
 select * from pri01;
-col1    col2    col3    col4
-1    sfhuwe    1    1
-2    37829901k3d    2    2
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[4,32,0]  ¦  col4[-5,64,0]  𝄀
+1  ¦  sfhuwe  ¦  1  ¦  1  𝄀
+2  ¦  37829901k3d  ¦  2  ¦  2
 select * from aff01;
-col1    col2    col3
-2    6    3
-1    6    6
+➤ col1[4,32,0]  ¦  col2[4,32,0]  ¦  col3[4,32,0]  𝄀
+2  ¦  6  ¦  3  𝄀
+1  ¦  6  ¦  6
 drop table aff01;
 drop table pri01;
 restore table db06.aff01{snapshot="spsp06"};
 restore table db06.pri01{snapshot="spsp06"};
 restore table db06.aff01{snapshot="spsp06"};
 show tables;
-Tables_in_db06
-aff01
+➤ Tables_in_db06[12,-1,0]  𝄀
+aff01  𝄀
 pri01
 select * from aff01;
-col1    col2    col3
-2    6    3
-1    6    6
+➤ col1[4,32,0]  ¦  col2[4,32,0]  ¦  col3[4,32,0]  𝄀
+2  ¦  6  ¦  3  𝄀
+1  ¦  6  ¦  6
 select * from pri01;
-col1    col2    col3    col4
-1    sfhuwe    1    1
-2    37829901k3d    2    2
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[4,32,0]  ¦  col4[-5,64,0]  𝄀
+1  ¦  sfhuwe  ¦  1  ¦  1  𝄀
+2  ¦  37829901k3d  ¦  2  ¦  2
 desc aff01;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES    MUL    null
-col2    INT(32)    YES        null
-col3    INT(32)    NO    PRI    null
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  INT(32)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+col2  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 desc pri01;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO    PRI    null
-col2    VARCHAR(20)    YES        null
-col3    INT(32)    YES        null
-col4    BIGINT(64)    YES        null
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+col2  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col4  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop database db06;
 drop snapshot spsp06;
 drop database if exists db07;
@@ -389,45 +407,45 @@ insert into fulltext01 VALUES('Johnson', 'David','M','Engineering',66);
 insert into fulltext01 VALUES('Sharma', 'Bradley','M','Production',27);
 insert into fulltext01 VALUES('Rapier', 'Abigail','F',	'Human Resources',38);
 select * from fulltext01;
-lastname    firstname    gender    departmentname    age
-Gilbert    Kevin    M    Tool Design    33
-Tamburello    Andrea    F    Marketing    45
-Johnson    David    M    Engineering    66
-Sharma    Bradley    M    Production    27
-Rapier    Abigail    F    Human Resources    38
+➤ lastname[1,10,0]  ¦  firstname[1,10,0]  ¦  gender[1,1,0]  ¦  departmentname[1,20,0]  ¦  age[4,32,0]  𝄀
+Gilbert  ¦  Kevin  ¦  M  ¦  Tool Design  ¦  33  𝄀
+Tamburello  ¦  Andrea  ¦  F  ¦  Marketing  ¦  45  𝄀
+Johnson  ¦  David  ¦  M  ¦  Engineering  ¦  66  𝄀
+Sharma  ¦  Bradley  ¦  M  ¦  Production  ¦  27  𝄀
+Rapier  ¦  Abigail  ¦  F  ¦  Human Resources  ¦  38
 drop snapshot if exists spsp08;
 create snapshot spsp08 for database db07;
 drop database db07;
 restore database db07{snapshot="spsp08"};
 show databases;
-Database
-db07
-information_schema
-mo_catalog
-mo_debug
-mo_task
-mysql
-sys_create_snapshot_for_sys_db_table_level
-system
+➤ Database[12,-1,0]  𝄀
+db07  𝄀
+information_schema  𝄀
+mo_catalog  𝄀
+mo_debug  𝄀
+mo_task  𝄀
+mysql  𝄀
+sys_create_snapshot_for_sys_db_table_level  𝄀
+system  𝄀
 system_metrics
 select * from db07.fulltext01;
-lastname    firstname    gender    departmentname    age
-Gilbert    Kevin    M    Tool Design    33
-Johnson    David    M    Engineering    66
-Rapier    Abigail    F    Human Resources    38
-Sharma    Bradley    M    Production    27
-Tamburello    Andrea    F    Marketing    45
+➤ lastname[1,10,0]  ¦  firstname[1,10,0]  ¦  gender[1,1,0]  ¦  departmentname[1,20,0]  ¦  age[4,32,0]  𝄀
+Gilbert  ¦  Kevin  ¦  M  ¦  Tool Design  ¦  33  𝄀
+Johnson  ¦  David  ¦  M  ¦  Engineering  ¦  66  𝄀
+Rapier  ¦  Abigail  ¦  F  ¦  Human Resources  ¦  38  𝄀
+Sharma  ¦  Bradley  ¦  M  ¦  Production  ¦  27  𝄀
+Tamburello  ¦  Andrea  ¦  F  ¦  Marketing  ¦  45
 drop database db07;
 restore table db07.fulltext01{snapshot="spsp08"};
 select * from db07.fulltext01;
-lastname    firstname    gender    departmentname    age
-Gilbert    Kevin    M    Tool Design    33
-Johnson    David    M    Engineering    66
-Rapier    Abigail    F    Human Resources    38
-Sharma    Bradley    M    Production    27
-Tamburello    Andrea    F    Marketing    45
+➤ lastname[1,10,0]  ¦  firstname[1,10,0]  ¦  gender[1,1,0]  ¦  departmentname[1,20,0]  ¦  age[4,32,0]  𝄀
+Gilbert  ¦  Kevin  ¦  M  ¦  Tool Design  ¦  33  𝄀
+Johnson  ¦  David  ¦  M  ¦  Engineering  ¦  66  𝄀
+Rapier  ¦  Abigail  ¦  F  ¦  Human Resources  ¦  38  𝄀
+Sharma  ¦  Bradley  ¦  M  ¦  Production  ¦  27  𝄀
+Tamburello  ¦  Andrea  ¦  F  ¦  Marketing  ¦  45
 select count(*) from db07.fulltext01;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 5
 drop database db07;
 drop snapshot spsp08;
@@ -439,32 +457,42 @@ create table pri01 (col1 int, col2 text);
 insert into pri01 (col1, col2) values (1,"database");
 insert into pri01 values (234, "database management");
 select * from pri01;
-col1    col2
-1    database
-234    database management
+➤ col1[4,32,0]  ¦  col2[12,0,0]  𝄀
+1  ¦  database  𝄀
+234  ¦  database management
 drop snapshot if exists spsp09;
 create snapshot spsp09 for table db08 pri01;
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int DEFAULT NULL,\n  `col2` text DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `col1` int DEFAULT NULL,
+  `col2` text DEFAULT NULL
+)
 select * from pri01;
-col1    col2
-1    database
-234    database management
+➤ col1[4,32,0]  ¦  col2[12,0,0]  𝄀
+1  ¦  database  𝄀
+234  ¦  database management
 alter table pri01 add constraint primary key(col1);
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int NOT NULL,\n  `col2` text DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `col1` int NOT NULL,
+  `col2` text DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 restore table db08.pri01{snapshot="spsp09"};
 show create table pri01;
-Table    Create Table
-pri01    CREATE TABLE `pri01` (\n  `col1` int DEFAULT NULL,\n  `col2` text DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+pri01  ¦  CREATE TABLE `pri01` (
+  `col1` int DEFAULT NULL,
+  `col2` text DEFAULT NULL
+)
 insert into pri01 values(234, 'db');
 select * from pri01;
-col1    col2
-234    db
-1    database
-234    database management
+➤ col1[4,32,0]  ¦  col2[12,0,0]  𝄀
+234  ¦  db  𝄀
+1  ¦  database  𝄀
+234  ¦  database management
 drop database db08;
 drop snapshot spsp09;
 drop database if exists db10;
@@ -474,20 +502,22 @@ drop table if exists test01;
 create table test01 (col1 int, col2 datalink);
 insert into test01 values (1, 'file://$resources/load_data/time_date_1.csv');
 select col1, load_file(col2) from test01;
-col1    load_file(col2)
-1    1000-01-01,0001-01-01,1970-01-01 00:00:01,0\n9999-12-31,9999-12-31,2038-01-19,1\n
+➤ col1[4,32,0]  ¦  load_file(col2)[12,0,0]  𝄀
+1  ¦  1000-01-01,0001-01-01,1970-01-02 00:00:01,0
+9999-12-31,9999-12-31,2038-01-19,1
+
 select * from test01;
-col1    col2
-1    file:///Users/fengttt/m/matrixone/test/distributed/resources/load_data/time_date_1.csv
+➤ col1[4,32,0]  ¦  col2[12,0,0]  𝄀
+1  ¦  file:///mnt/fastdata/temp/matrixone/test/distributed/resources/load_data/time_date_1.csv
 drop snapshot if exists spsp10;
 create snapshot spsp10 for database db10;
 drop table test01;
 restore table db10.test01{snapshot="spsp10"};
 select * from db10.test01;
-col1    col2
-1    file:///Users/fengttt/m/matrixone/test/distributed/resources/load_data/time_date_1.csv
+➤ col1[4,32,0]  ¦  col2[12,0,0]  𝄀
+1  ¦  file:///mnt/fastdata/temp/matrixone/test/distributed/resources/load_data/time_date_1.csv
 drop database db10;
 drop snapshot spsp10;
 drop account acc01;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]

@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 
@@ -41,6 +43,37 @@ import (
 type winTestCase struct {
 	arg  *Window
 	proc *process.Process
+}
+
+type cancelAfterDoneChecksContext struct {
+	context.Context
+	done      chan struct{}
+	remaining atomic.Int32
+}
+
+func newCancelAfterDoneChecksContext(parent context.Context, checks int32) *cancelAfterDoneChecksContext {
+	ctx := &cancelAfterDoneChecksContext{
+		Context: parent,
+		done:    make(chan struct{}),
+	}
+	ctx.remaining.Store(checks)
+	return ctx
+}
+
+func (c *cancelAfterDoneChecksContext) Done() <-chan struct{} {
+	if c.remaining.Add(-1) == 0 {
+		close(c.done)
+	}
+	return c.done
+}
+
+func (c *cancelAfterDoneChecksContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
 }
 
 func makeTestCases(t *testing.T) []winTestCase {
@@ -114,6 +147,61 @@ func TestWin(t *testing.T) {
 	}
 }
 
+func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = cancellationCheckInterval * 2
+	values := make([]int32, rows)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeWindowSpec()},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+
+	arg.ctr.batAggs = make([]aggexec.AggFuncExec, 1)
+	var err error
+	arg.ctr.batAggs[0], err = aggexec.MakeAgg(
+		proc.Mp(),
+		arg.Aggs[0].GetAggID(),
+		arg.Aggs[0].IsDistinct(),
+		types.T_int32.ToType(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, arg.ctr.batAggs[0].GroupGrow(bat.RowCount()))
+
+	// processFunc checks once at the outer row, then every 1024 frame rows.
+	// Cancel on the third check so the test proves an already-running frame is
+	// interrupted, rather than only proving that a pre-canceled call is rejected.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 3)
+
+	err = arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
+	require.ErrorIs(t, err, context.Canceled)
+
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowCallHonorsPreCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	cancel()
+
+	arg := &Window{}
+	result, err := arg.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, vm.CancelResult, result)
+
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func resetChildren(arg *Window, m *mpool.MPool) {
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
@@ -140,6 +228,309 @@ func makeCurrentRowFrame() *plan.FrameClause {
 		Type:  plan.FrameClause_ROWS,
 		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
 		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+}
+
+func makePreparedRowsBoundExpr(t *testing.T, pos int32) *plan.Expr {
+	t.Helper()
+	param := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
+	}
+	targetType := plan.Type{Id: int32(types.T_uint64), NotNullable: true}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		param,
+		{Typ: targetType, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+	})
+	require.NoError(t, err)
+	return expr
+}
+
+func makePreparedRowsFrame(t *testing.T, startPos, endPos int32) *plan.FrameClause {
+	t.Helper()
+	return &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  makePreparedRowsBoundExpr(t, startPos),
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  makePreparedRowsBoundExpr(t, endPos),
+		},
+	}
+}
+
+func makeWindowWithFrame(frame *plan.FrameClause) *Window {
+	spec := makeWindowSpec()
+	spec.GetW().Frame = frame
+	return &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+}
+
+func setWindowPrepareParams(t *testing.T, proc *process.Process, values ...*string) *vector.Vector {
+	t.Helper()
+	params := vector.NewVec(types.T_text.ToType())
+	for _, value := range values {
+		var raw []byte
+		isNull := value == nil
+		if value != nil {
+			raw = []byte(*value)
+		}
+		require.NoError(t, vector.AppendBytes(params, raw, isNull, proc.Mp()))
+	}
+	proc.SetPrepareParams(params)
+	return params
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
+func requirePreparedRowsBoundUnchanged(t *testing.T, expr *plan.Expr, pos int32) {
+	t.Helper()
+	require.NotNil(t, expr.GetF())
+	require.NotEmpty(t, expr.GetF().Args)
+	require.NotNil(t, expr.GetF().Args[0].GetP())
+	require.Equal(t, pos, expr.GetF().Args[0].GetP().Pos)
+}
+
+func TestWindowPrepareMaterializesRowsFrameBounds(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := makePreparedRowsFrame(t, 0, 1)
+	arg := makeWindowWithFrame(planned)
+	firstParams := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("2"))
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.runtimeFrames, 1)
+	require.NotSame(t, planned, arg.ctr.runtimeFrames[0])
+	require.Equal(t, uint64(1), arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetU64Val())
+	require.Equal(t, uint64(2), arg.ctr.runtimeFrames[0].End.Val.GetLit().GetU64Val())
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.runtimeFrames)
+
+	proc.SetPrepareParams(nil)
+	firstParams.Free(proc.Mp())
+	secondParams := setWindowPrepareParams(t, proc, stringPtr("3"), stringPtr("4"))
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, uint64(3), arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetU64Val())
+	require.Equal(t, uint64(4), arg.ctr.runtimeFrames[0].End.Val.GetLit().GetU64Val())
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Free(proc, false, nil)
+	require.Nil(t, arg.ctr.runtimeFrames)
+	proc.SetPrepareParams(nil)
+	secondParams.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareValidatesRowsFrameBounds(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      *string
+		missing    bool
+		emptyParam bool
+		want       uint64
+		wantErr    bool
+	}{
+		{name: "zero", value: stringPtr("0"), want: 0},
+		{name: "maximum", value: stringPtr("18446744073709551615"), want: math.MaxUint64},
+		{name: "negative", value: stringPtr("-1"), wantErr: true},
+		{name: "fractional", value: stringPtr("1.5"), wantErr: true},
+		{name: "null", value: nil, wantErr: true},
+		{name: "overflow", value: stringPtr("18446744073709551616"), wantErr: true},
+		{name: "conversion failure", value: stringPtr("not-a-number"), wantErr: true},
+		{name: "missing vector", missing: true, wantErr: true},
+		{name: "missing element", emptyParam: true, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			planned := makePreparedRowsFrame(t, 0, 0)
+			arg := makeWindowWithFrame(planned)
+			var params *vector.Vector
+			switch {
+			case test.missing:
+				proc.SetPrepareParams(nil)
+			case test.emptyParam:
+				params = setWindowPrepareParams(t, proc)
+			default:
+				params = setWindowPrepareParams(t, proc, test.value)
+			}
+
+			err := arg.Prepare(proc)
+			if test.wantErr {
+				require.Error(t, err)
+				require.Nil(t, arg.ctr.runtimeFrames)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, test.want, arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetU64Val())
+				require.Equal(t, test.want, arg.ctr.runtimeFrames[0].End.Val.GetLit().GetU64Val())
+			}
+			requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+			requirePreparedRowsBoundUnchanged(t, planned.End.Val, 0)
+
+			arg.Free(proc, false, nil)
+			proc.SetPrepareParams(nil)
+			if params != nil {
+				params.Free(proc.Mp())
+			}
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestWindowPrepareClearsPartialRowsFrameBoundsOnError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	valid := makePreparedRowsFrame(t, 0, 0)
+	invalid := makePreparedRowsFrame(t, 1, 1)
+	arg := makeWindowWithFrame(valid)
+	secondSpec := makeWindowSpec()
+	secondSpec.GetW().Frame = invalid
+	arg.WinSpecList = append(arg.WinSpecList, secondSpec)
+	arg.Aggs = append(arg.Aggs, newAggExpr())
+	params := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("-1"))
+
+	require.Error(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.runtimeFrames)
+	requirePreparedRowsBoundUnchanged(t, valid.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, invalid.Start.Val, 1)
+
+	arg.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareHandlesNilAndLiteralFrameBounds(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	literal := &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  plan2.MakePlan2Uint64ConstExprWithType(1),
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  plan2.MakePlan2Uint64ConstExprWithType(2),
+		},
+	}
+	arg := makeWindowWithFrame(nil)
+	secondSpec := makeWindowSpec()
+	secondSpec.GetW().Frame = literal
+	arg.WinSpecList = append(arg.WinSpecList, secondSpec)
+	arg.Aggs = append(arg.Aggs, newAggExpr())
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.runtimeFrames, 2)
+	require.Nil(t, arg.ctr.runtimeFrames[0])
+	require.NotSame(t, literal, arg.ctr.runtimeFrames[1])
+	require.NotSame(t, literal.Start, arg.ctr.runtimeFrames[1].Start)
+	require.NotSame(t, literal.End, arg.ctr.runtimeFrames[1].End)
+	require.Same(t, literal.Start.Val, arg.ctr.runtimeFrames[1].Start.Val)
+	require.Same(t, literal.End.Val, arg.ctr.runtimeFrames[1].End.Val)
+
+	arg.Free(proc, false, nil)
+	require.Nil(t, arg.ctr.runtimeFrames)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareFrameBoundsStayUnpublishedAfterLaterError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := makePreparedRowsFrame(t, 0, 0)
+	arg := makeWindowWithFrame(planned)
+	aggID := arg.Aggs[0].GetAggID()
+	arg.Aggs[0] = aggexec.MakeAggFunctionExpression(aggID, false, []*plan.Expr{{}}, nil)
+	params := setWindowPrepareParams(t, proc, stringPtr("1"))
+
+	require.Error(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.runtimeFrames)
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 0)
+
+	arg.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareFrameBoundsFeedAggregateConsumer(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := makePreparedRowsFrame(t, 0, 1)
+	arg := makeWindowWithFrame(planned)
+	bat := makeInt32Batch(proc.Mp(), []int32{10, 20, 30, 40})
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+	params := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("1"))
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{30, 60, 90, 70},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareFrameBoundsFeedValueConsumers(t *testing.T) {
+	tests := []struct {
+		name string
+		want []int32
+	}{
+		{name: "first_value", want: []int32{10, 10, 20, 30}},
+		{name: "last_value", want: []int32{20, 30, 40, 40}},
+		{name: "nth_value", want: []int32{10, 10, 20, 30}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			planned := makePreparedRowsFrame(t, 0, 1)
+			spec := makeValueWindowSpecWithName(test.name, int32(types.T_int32))
+			spec.GetW().Frame = planned
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs:        []aggexec.AggFuncExecExpression{makeValueWindowAggExpr(test.name)},
+			}
+			bat := makeInt32Batch(proc.Mp(), []int32{10, 20, 30, 40})
+			op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+			arg.AppendChild(op)
+			params := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("1"))
+
+			require.NoError(t, arg.Prepare(proc))
+			result, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.Equal(t, test.want,
+				vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1]))
+			requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+			requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+			arg.Free(proc, false, nil)
+			op.Free(proc, false, nil)
+			proc.SetPrepareParams(nil)
+			params.Free(proc.Mp())
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
 	}
 }
 
@@ -536,6 +927,113 @@ func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowOrdersPartitionedInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 1, 2, 1}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10, 10, 20}, nil, proc.Mp())
+	bat.SetRowCount(4)
+
+	partitionExpr := newColExpr(0)
+	orderExpr := newColExpr(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{partitionExpr},
+				// The planner presents partition expressions before the explicit
+				// ORDER BY expressions to the physical window operator.
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: partitionExpr, Flag: plan.OrderBySpec_NULLS_FIRST},
+					{Expr: orderExpr, Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_LAST},
+				},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.Equal(t, vm.Window, arg.OpType())
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int32{1, 1, 2, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	require.Equal(t, []int32{20, 10, 20, 10},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1]))
+	require.Len(t, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]), 4)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowOrderHonorsCancellation(t *testing.T) {
+	testCases := []struct {
+		name   string
+		checks int32
+	}{
+		{name: "building selections", checks: 1},
+		{name: "before first sort", checks: 2},
+		{name: "after first sort", checks: 3},
+		{name: "before secondary sort", checks: 4},
+		{name: "during partition sort", checks: 5},
+		{name: "after secondary sort", checks: 6},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 1, 2, 1}, nil, proc.Mp())
+			bat.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10, 10, 20}, nil, proc.Mp())
+			bat.SetRowCount(4)
+
+			partitionExpr := newColExpr(0)
+			orderExpr := newColExpr(1)
+			spec := &plan.Expr{
+				Expr: &plan.Expr_W{W: &plan.WindowSpec{
+					Name:        "row_number",
+					WindowFunc:  newFunExpr("row_number"),
+					PartitionBy: []*plan.Expr{partitionExpr},
+					OrderBy: []*plan.OrderBySpec{
+						{Expr: partitionExpr},
+						{Expr: orderExpr},
+					},
+				}},
+			}
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs:        []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+			}
+			require.NoError(t, arg.Prepare(proc))
+			arg.Fs = makeOrderBy(spec)
+			arg.ctr.orderVecs = make([]colexec.ExprEvalVector, len(arg.Fs))
+			for i := range arg.Fs {
+				var err error
+				arg.ctr.orderVecs[i], err = colexec.MakeEvalVector(proc, []*plan.Expr{arg.Fs[i].Expr})
+				require.NoError(t, err)
+			}
+
+			proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, tc.checks)
+			_, err := arg.ctr.processOrder(0, arg, bat, proc)
+			require.ErrorIs(t, err, context.Canceled)
+
+			arg.Free(proc, true, err)
+			bat.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
 }
 
 func newFunExpr(name string) *plan.Expr {
@@ -1200,5 +1698,72 @@ func TestSearchLeftRightDateTimeTypes(t *testing.T) {
 		r, err = searchRight(0, 4, 0, vec2, nil, false, true)
 		require.NoError(t, err)
 		require.Equal(t, 1, r)
+	})
+}
+
+func intervalExpr(diff int64, unit types.IntervalType) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: diff},
+			}}},
+			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: int64(unit)},
+			}}},
+		}}},
+	}
+}
+
+func assertIntervalSearches(t *testing.T, vec *vector.Vector, expr *plan.Expr, wantLeftSub, wantLeftAdd, wantRightSub, wantRightAdd int) {
+	t.Helper()
+	left, err := searchLeft(0, vec.Length(), 1, vec, expr, false, false)
+	require.NoError(t, err)
+	require.Equal(t, wantLeftSub, left)
+	left, err = searchLeft(0, vec.Length(), 1, vec, expr, true, false)
+	require.NoError(t, err)
+	require.Equal(t, wantLeftAdd, left)
+
+	right, err := searchRight(0, vec.Length(), 1, vec, expr, true, false)
+	require.NoError(t, err)
+	require.Equal(t, wantRightSub, right)
+	right, err = searchRight(0, vec.Length(), 1, vec, expr, false, false)
+	require.NoError(t, err)
+	require.Equal(t, wantRightAdd, right)
+}
+
+func TestSearchLeftRightDateTimeIntervals(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	t.Run("date", func(t *testing.T) {
+		vec := testutil.NewDateVector(0, types.T_date.ToType(), mp, false, nil,
+			[]string{"2024-01-01", "2024-01-02", "2024-01-02", "2024-01-04"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
+	})
+
+	t.Run("datetime", func(t *testing.T) {
+		vec := testutil.NewDatetimeVector(0, types.T_datetime.ToType(), mp, false, nil,
+			[]string{"2024-01-01 10:00:00", "2024-01-02 10:00:00", "2024-01-02 10:00:00", "2024-01-04 10:00:00"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
+	})
+
+	t.Run("time", func(t *testing.T) {
+		vec := testutil.NewTimeVector(0, types.T_time.ToType(), mp, false, nil,
+			[]string{"10:00:00", "12:00:00", "12:00:00", "14:00:00"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(2, types.Hour), 0, 3, 1, 4)
+	})
+
+	t.Run("timestamp", func(t *testing.T) {
+		vec := testutil.NewTimestampVector(0, types.T_timestamp.ToType(), mp, false, nil,
+			[]string{"2024-01-01 10:00:00", "2024-01-02 10:00:00", "2024-01-02 10:00:00", "2024-01-04 10:00:00"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
 	})
 }

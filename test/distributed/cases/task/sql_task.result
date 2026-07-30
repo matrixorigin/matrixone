@@ -263,10 +263,10 @@ create table tenant_sink(v int primary key);
 create task tenant_task_show schedule '0 0 0 1 1 *' timezone 'UTC' when (1) timeout '30s' as begin insert into tenant_sink select 1 where not exists (select 1 from tenant_sink where v = 1); end;
 execute task tenant_task_show;
 alter task tenant_task_show set when (0);
-execute task tenant_task_show;
 show tasks;
 task_name    schedule    enabled    gate_condition    retry_limit    timeout    created_at    last_run_status    last_run_time
-tenant_task_show    CRON_TZ=UTC 0 0 0 1 1 *    1    0    0    30s    2026-04-13 18:03:43 +0800 CST    SKIPPED    2026-04-13 18:03:43 +0800 CST
+tenant_task_show    CRON_TZ=UTC 0 0 0 1 1 *    1    0    0    30s    2026-04-13 18:03:43 +0800 CST    SUCCESS    2026-04-13 18:03:43 +0800 CST
+execute task tenant_task_show;
 show task runs for tenant_task_show limit 2;
 run_id    task_name    trigger_type    status    started_at    finished_at    duration    attempt    rows_affected    error_message
 180107    tenant_task_show    MANUAL    SKIPPED    2026-04-13 18:03:43 +0800 CST    2026-04-13 18:03:43 +0800 CST    0.00989425    1    0    

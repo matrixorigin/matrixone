@@ -690,7 +690,7 @@ func sqlTaskInt64(v any) int64 {
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope diff_columns_opt
 %type <insertPartition> insert_partition_clause_opt
 %type <partitionValues> insert_partition_value_list
-%type <joinCond> join_condition join_condition_opt on_expression_opt
+%type <joinCond> join_condition join_condition_opt
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
 %type <analyzeTableEntries> analyze_table_list
@@ -5443,11 +5443,13 @@ drop_index_stmt:
     }
 
 drop_table_stmt:
-    DROP TABLE temporary_opt exists_opt table_name_list drop_table_opt
+    DROP temporary_opt TABLE exists_opt table_name_list drop_table_opt
     {
         var ifExists = $4
         var names = $5
-        $$ = tree.NewDropTable(ifExists, names)
+        var stmt = tree.NewDropTable(ifExists, names)
+        stmt.Temporary = $2
+        $$ = stmt
     }
 |   DROP SOURCE exists_opt table_name_list
     {
@@ -5493,11 +5495,14 @@ drop_prepare_stmt:
     }
 
 drop_function_stmt:
-    DROP FUNCTION func_name '(' func_args_list_opt ')'
+    DROP FUNCTION exists_opt func_name '(' func_args_list_opt ')'
     {
-        var name = $3
-        var args = $5
-        $$ = tree.NewDropFunction(name, args)
+        var ifExists = $3
+        var name = $4
+        var args = $6
+        var dropFunction = tree.NewDropFunction(name, args)
+        dropFunction.IfExists = ifExists
+        $$ = dropFunction
     }
 
 drop_procedure_stmt:
@@ -6519,11 +6524,11 @@ nulls_first_last_opt:
     }
 |   NULLS FIRST
     {
-        $$ = tree.NullsFirst
+        yylex.Error("NULLS FIRST is not supported in MySQL syntax"); return 1
     }
 |   NULLS LAST
     {
-        $$ = tree.NullsLast
+        yylex.Error("NULLS LAST is not supported in MySQL syntax"); return 1
     }
 
 select_lock_opt:
@@ -6944,6 +6949,14 @@ table_references:
 
 escaped_table_reference:
     table_reference %prec LOWER_THAN_SET
+|   '{' ID table_reference '}'
+    {
+        if !strings.EqualFold($2, "OJ") {
+            yylex.Error("expected OJ in table reference escape")
+            goto ret1
+        }
+        $$ = $3
+    }
 
 table_reference:
     table_factor
@@ -6977,7 +6990,7 @@ join_table:
         	}
 	}
     }
-|   table_reference straight_join table_factor on_expression_opt
+|   table_reference straight_join table_factor join_condition_opt
     {
         $$ = &tree.JoinTableExpr{
             Left: $1,
@@ -7110,16 +7123,6 @@ row_constructor:
     ROW '(' data_values ')'
     {
         $$ = $3
-    }
-
-on_expression_opt:
-    %prec JOIN
-    {
-        $$ = nil
-    }
-|   ON expression
-    {
-        $$ = &tree.OnJoinCond{Expr: $2}
     }
 
 optype:
@@ -10393,7 +10396,7 @@ table_option:
     }
 |   AUTO_INCREMENT equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionAutoIncrement(uint64($3.(int64)))
+        $$ = tree.NewTableOptionAutoIncrement(integralToUint64($3))
     }
 |   AVG_ROW_LENGTH equal_opt INTEGRAL
     {
@@ -12030,6 +12033,18 @@ mo_cast_type:
 
 mysql_cast_type:
     decimal_type
+|   JSON
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family:       tree.JsonFamily,
+                FamilyString: $1,
+                Locale:       &locale,
+                Oid:          uint32(defines.MYSQL_TYPE_JSON),
+            },
+        }
+    }
 |   BINARY length_option_opt
     {
         locale := ""
@@ -12169,6 +12184,10 @@ frame_bound:
     {
         $$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
     }
+|   VALUE_ARG FOLLOWING
+    {
+        $$ = &tree.FrameBound{Type: tree.Following, Expr: tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())}
+    }
 |	interval_expr FOLLOWING
 	{
 		$$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
@@ -12186,6 +12205,10 @@ frame_bound_start:
 |   num_literal PRECEDING
     {
         $$ = &tree.FrameBound{Type: tree.Preceding, Expr: $1}
+    }
+|   VALUE_ARG PRECEDING
+    {
+        $$ = &tree.FrameBound{Type: tree.Preceding, Expr: tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())}
     }
 |	interval_expr PRECEDING
 	{
@@ -12664,7 +12687,7 @@ function_call_generic:
             Exprs: $3,
         }
     }
-|   VARIANCE '(' func_type_opt expression ')'
+|   VARIANCE '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -12672,6 +12695,7 @@ function_call_generic:
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
 |   NEXTVAL '(' expression_list ')'

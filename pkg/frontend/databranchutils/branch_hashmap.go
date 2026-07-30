@@ -420,6 +420,17 @@ func (bh *branchHashmap) flushPreparedEntries(shardEntries [][]int, chunk []prep
 		shardIdx := int(hash % uint64(bh.shardCount))
 		shardEntries[shardIdx] = append(shardEntries[shardIdx], i)
 	}
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		for range entries {
+			block.release()
+		}
+		return moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	defer bh.metaMu.RUnlock()
+
 	for idx, entryIdxs := range shardEntries {
 		if len(entryIdxs) == 0 {
 			continue
@@ -541,34 +552,44 @@ func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll 
 		}
 		shard.lock()
 		var removedTotal int64
+		finishShard := func() {
+			if removedTotal > 0 {
+				atomic.AddInt64(&shard.items, -removedTotal)
+				totalRemoved += removedTotal
+			}
+			shard.unlock()
+		}
 		for _, probe := range probes {
-			rows, removedBytes, removedCount := shard.mem.collect(probe.hash, probe.key, probe.plan, true, collectValues)
+			var (
+				removedBytes uint64
+				removedCount int
+				err          error
+			)
+			if collectValues {
+				removedBytes, removedCount, err = shard.mem.collectStream(probe.hash, probe.key, probe.plan, func(row []byte) error {
+					return fn(probe.idx, probe.key, row)
+				})
+			} else {
+				_, removedBytes, removedCount = shard.mem.collect(probe.hash, probe.key, probe.plan, true, false)
+			}
 			if removedBytes > 0 {
 				shard.memInUse -= removedBytes
 			}
 			if removedCount > 0 {
 				removedTotal += int64(removedCount)
 			}
-			if collectValues {
-				for _, row := range rows {
-					if err := fn(probe.idx, probe.key, row); err != nil {
-						shard.unlock()
-						return int(totalRemoved), err
-					}
-				}
+			if err != nil {
+				finishShard()
+				return int(totalRemoved), err
 			}
 		}
 		if shard.spill != nil {
 			if err := collectSpillPopStream(shard, probes, removeAll, fn, &removedTotal, collectValues); err != nil {
-				shard.unlock()
+				finishShard()
 				return int(totalRemoved), err
 			}
 		}
-		if removedTotal > 0 {
-			atomic.AddInt64(&shard.items, -removedTotal)
-			totalRemoved += removedTotal
-		}
-		shard.unlock()
+		finishShard()
 	}
 
 	return int(totalRemoved), nil
@@ -1514,7 +1535,14 @@ func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator
 		return nil, nil, err
 	}
 	if buf == nil {
-		if err := bh.spill(size); err != nil {
+		bh.metaMu.RLock()
+		if bh.closed {
+			bh.metaMu.RUnlock()
+			return nil, nil, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+		}
+		err = bh.spill(size)
+		bh.metaMu.RUnlock()
+		if err != nil {
 			return nil, nil, err
 		}
 		buf, deallocator, err = bh.allocator.Allocate(size, malloc.NoClear)
@@ -2237,6 +2265,40 @@ func (ms *memStore) collect(hash uint64, key []byte, plan *removalPlan, copyValu
 		slot = (slot + 1) & mask
 	}
 	return rows, removedBytes, removedCount
+}
+
+func (ms *memStore) collectStream(hash uint64, key []byte, plan *removalPlan, fn func(row []byte) error) (uint64, int, error) {
+	if len(ms.index) == 0 || ms.count == 0 {
+		return 0, 0, nil
+	}
+	var (
+		removedCount int
+		removedBytes uint64
+	)
+	mask := len(ms.index) - 1
+	slot := int(hash & uint64(mask))
+	for {
+		cur := ms.index[slot]
+		if cur == memSlotEmpty {
+			break
+		}
+		if cur >= 0 {
+			entry := &ms.entries[cur]
+			if entry.inUse && entry.hash == hash && bytes.Equal(entry.keyBytes(), key) &&
+				plan.matchesValue(entry.valueBytes()) && plan.take() {
+				value := entry.valueBytes()
+				payload := make([]byte, len(value))
+				copy(payload, value)
+				removedCount++
+				removedBytes += ms.removeEntry(cur)
+				if err := fn(payload); err != nil {
+					return removedBytes, removedCount, err
+				}
+			}
+		}
+		slot = (slot + 1) & mask
+	}
+	return removedBytes, removedCount, nil
 }
 
 func (ms *memStore) forEach(fn func(entry *memEntry) error) error {

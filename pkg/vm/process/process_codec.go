@@ -105,7 +105,13 @@ func (proc *Process) BuildProcessInfo(
 			LockWaitTimeout:     resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:  proc.Base.SessionInfo.LockWaitTimeoutSet,
 			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
+			SqlMode:             resolveSqlMode(proc),
 		}
+		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.SessionInfo.ExplicitZeroTemporalCastReturnsNull = nullifyZeroTemporal
 	}
 	{ // log info
 		stmtId := proc.GetStmtProfile().GetStmtId()
@@ -255,6 +261,7 @@ func convertToPipelineLimitation(lim Limitation) pipeline.ProcessLimitation {
 		BatchSize:     lim.BatchSize,
 		PartitionRows: lim.PartitionRows,
 		ReaderSize:    lim.ReaderSize,
+		SpillSize:     lim.SpillSize,
 	}
 }
 
@@ -301,6 +308,7 @@ func ConvertToProcessLimitation(
 		BatchSize:     lim.BatchSize,
 		PartitionRows: lim.PartitionRows,
 		ReaderSize:    lim.ReaderSize,
+		SpillSize:     lim.SpillSize,
 	}
 }
 
@@ -309,17 +317,19 @@ func ConvertToProcessSessionInfo(
 	sei pipeline.SessionInfo,
 ) (SessionInfo, error) {
 	sessionInfo := SessionInfo{
-		User:                sei.User,
-		Host:                sei.Host,
-		Role:                sei.Role,
-		ConnectionID:        sei.ConnectionId,
-		Database:            sei.Database,
-		Version:             sei.Version,
-		Account:             sei.Account,
-		QueryId:             sei.QueryId,
-		LockWaitTimeout:     sei.LockWaitTimeout,
-		LockWaitTimeoutSet:  sei.LockWaitTimeoutSet,
-		MatrixOneNativeMode: sei.MatrixoneNativeMode,
+		User:                                sei.User,
+		Host:                                sei.Host,
+		Role:                                sei.Role,
+		ConnectionID:                        sei.ConnectionId,
+		Database:                            sei.Database,
+		Version:                             sei.Version,
+		Account:                             sei.Account,
+		QueryId:                             sei.QueryId,
+		LockWaitTimeout:                     sei.LockWaitTimeout,
+		LockWaitTimeoutSet:                  sei.LockWaitTimeoutSet,
+		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
+		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
+		SqlMode:                             sei.SqlMode,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
@@ -328,6 +338,26 @@ func ConvertToProcessSessionInfo(
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
+}
+
+func resolveSqlMode(proc *Process) string {
+	if proc == nil {
+		return ""
+	}
+	if f := proc.GetResolveVariableFunc(); f != nil {
+		if v, err := f("sql_mode", true, false); err == nil {
+			if s, ok := v.(string); ok {
+				if s == "" {
+					return EmptySqlModeSentinel // explicitly non-strict
+				}
+				return s
+			}
+		}
+	}
+	// Resolver is nil on a remote CN (no session). Fall back to the sql_mode
+	// captured from the upstream CN so it survives a second forward
+	// (encode -> decode -> encode); otherwise the next hop defaults to strict.
+	return proc.Base.SessionInfo.SqlMode
 }
 
 func resolveLockWaitTimeoutSeconds(proc *Process) int64 {

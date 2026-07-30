@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
@@ -185,6 +186,16 @@ func WildcardMatch(pattern, target string) bool {
 
 // getExprValue executes the expression and returns the value.
 func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
+	return getExprValueWithPrepareMode(e, ses, execCtx, false, isBin...)
+}
+
+func getExprValueWithPrepareMode(
+	e tree.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	preparedExpression bool,
+	isBin ...*bool,
+) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -236,7 +247,8 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 		ses:    ses,
 	}
 	defer tempExecCtx.Close()
-	err = executeStmtInSameSession(tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect)
+	err = executeStmtInSameSession(
+		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
 	if err != nil {
 		return nil, err
 	}
@@ -275,10 +287,8 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
 	if oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256 {
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
-		bindContext := plan2.NewBindContext(builder, nil)
-		binder := plan2.NewSetVarBinder(builder, bindContext)
-		planExpr, err = binder.BindExpr(e, 0, false)
+		planExpr, err = bindSetVariableResultExpr(
+			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
 			return nil, err
 		}
@@ -288,6 +298,18 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 		*isBin[0] = resultVec.GetIsBin()
 	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+}
+
+func bindSetVariableResultExpr(
+	e tree.Expr,
+	compilerContext plan2.CompilerContext,
+	preparedExpression bool,
+) (*plan.Expr, error) {
+	builder := plan2.NewQueryBuilder(
+		plan.Query_SELECT, compilerContext, preparedExpression, false)
+	bindContext := plan2.NewBindContext(builder, nil)
+	binder := plan2.NewSetVarBinder(builder, bindContext)
+	return binder.BindExpr(e, 0, false)
 }
 
 // only support single value and unary minus
@@ -1692,6 +1714,12 @@ type UserInput struct {
 	sqlSourceType             []string
 	isRestore                 bool
 	isBinaryProtExecute       bool
+	// isSetExpression marks an AST-only SELECT synthesized to evaluate a SET
+	// assignment. Such statements have no stable SQL cache key.
+	isSetExpression bool
+	// isPreparedExpression marks a nested SET-derived expression that is being
+	// evaluated as part of prepared-statement execution.
+	isPreparedExpression bool
 	// isInternalInput mark this UserInput is come from mo internal.
 	// replace old logic: (stmt != nil)
 	// cc isInternal()
@@ -1737,6 +1765,14 @@ func (ui *UserInput) getSqlSourceTypes() []string {
 // currently, we use it to handle the 'set_var' statement.
 func (ui *UserInput) isInternal() bool {
 	return ui.isInternalInput
+}
+
+func (ui *UserInput) isPreparedExpr() bool {
+	return ui != nil && ui.isPreparedExpression
+}
+
+func (ui *UserInput) canUsePlanCache() bool {
+	return ui != nil && !ui.isSetExpression
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {
@@ -1885,18 +1921,22 @@ func attachValue(ctx context.Context, key, val any) context.Context {
 	return context.WithValue(ctx, key, val)
 }
 
-const KeySep = "#"
+const KeySep = objectkey.Separator
 
 func genKey(dbName, tblName string) string {
-	return fmt.Sprintf("%s%s%s", dbName, KeySep, tblName)
+	return objectkey.Encode(dbName, tblName)
+}
+
+func normalizeViewDependencyKey(key string) (string, error) {
+	databaseName, viewName, _, err := plan2.ParseViewDependencyKey(key)
+	if err != nil {
+		return "", err
+	}
+	return genKey(databaseName, viewName), nil
 }
 
 func splitKey(key string) (string, string) {
-	parts := strings.Split(key, KeySep)
-	if len(parts) >= 2 {
-		return parts[0], parts[1]
-	}
-	return parts[0], ""
+	return objectkey.Decode(key)
 }
 
 type toposort struct {

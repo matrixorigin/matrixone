@@ -75,6 +75,7 @@ type MultiUpdate struct {
 	IsOnduplicateKeyUpdate bool
 	IsRemote               bool
 	CountDeleteAffectRows  bool
+	RejectZeroTemporal     bool
 	Engine                 engine.Engine
 
 	getS3WriterFunc          func(sid string, id uint64) (*s3WriterDelegate, error)
@@ -134,6 +135,13 @@ func (update *MultiUpdate) Release() {
 
 func (update *MultiUpdate) GetOperatorBase() *vm.OperatorBase {
 	return &update.OperatorBase
+}
+
+func (update *MultiUpdate) SetRejectZeroTemporal(reject bool) {
+	update.RejectZeroTemporal = reject
+	if update.ctr.s3Writer != nil {
+		update.ctr.s3Writer.rejectZeroTemporal = reject
+	}
 }
 
 func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err error) {

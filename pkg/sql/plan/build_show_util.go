@@ -311,6 +311,13 @@ func ConstructCreateTableSQL(
 					indexStr += paramList
 					rewriteIndexStr += paramList
 				}
+				includedColumns, err := indexDefIncludedColumns(indexdef)
+				if err != nil {
+					return "", nil, err
+				}
+				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
+				indexStr += includeList
+				rewriteIndexStr += includeList
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
 						display string
@@ -358,7 +365,15 @@ func ConstructCreateTableSQL(
 			if _, tempTableDef, err = ctx.Resolve(schemaName, fkDef.Name, snap); err != nil {
 				return err
 			}
-
+			if tempTableDef == nil {
+				enabled, resolveErr := IsForeignKeyChecksEnabled(ctx)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				if !enabled {
+					return nil
+				}
+			}
 			fkDef = tempTableDef
 			return err
 		}
@@ -456,9 +471,14 @@ func ConstructCreateTableSQL(
 			createStr += ",\n"
 		}
 
+		fkRefDbName := fkTableDef.DbName
+		if cloneStmt != nil && (cloneStmt.StmtType == tree.WithinAccCloneDB || cloneStmt.StmtType == tree.BetweenAccCloneDB) &&
+			cloneStmt.SrcTable.SchemaName.String() == fkTableDef.DbName {
+			fkRefDbName = schemaName
+		}
 		fkRefDbTblName := fmt.Sprintf("`%s`", formatStr(fkTableDef.Name))
 		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
-			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkTableDef.DbName), formatStr(fkTableDef.Name))
+			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkRefDbName), formatStr(fkTableDef.Name))
 		}
 		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
 			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
@@ -671,6 +691,22 @@ func ConstructCreateTableSQL(
 		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
 	}
 	return createStr, stmt, err
+}
+
+func indexIncludeColumnsToString(includedColumns []string, colNameToOriginName map[string]string) string {
+	if len(includedColumns) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(includedColumns))
+	for _, colName := range includedColumns {
+		resolvedName := catalog.ResolveAlias(colName)
+		if originName := colNameToOriginName[resolvedName]; originName != "" {
+			resolvedName = originName
+		}
+		names = append(names, fmt.Sprintf("`%s`", formatStr(resolvedName)))
+	}
+	return fmt.Sprintf(" INCLUDE (%s)", strings.Join(names, ", "))
 }
 
 func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {

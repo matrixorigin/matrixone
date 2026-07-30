@@ -526,16 +526,17 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *preinsert.PreInsert:
 		in.PreInsert = &pipeline.PreInsert{
-			SchemaName:        t.SchemaName,
-			TableDef:          t.TableDef,
-			HasAutoCol:        t.HasAutoCol,
-			IsOldUpdate:       t.IsOldUpdate,
-			IsNewUpdate:       t.IsNewUpdate,
-			Attrs:             t.Attrs,
-			EstimatedRowCount: int64(t.EstimatedRowCount),
-			CompPkeyExpr:      t.CompPkeyExpr,
-			ClusterByExpr:     t.ClusterByExpr,
-			ColOffset:         t.ColOffset,
+			SchemaName:         t.SchemaName,
+			TableDef:           t.TableDef,
+			HasAutoCol:         t.HasAutoCol,
+			IsOldUpdate:        t.IsOldUpdate,
+			IsNewUpdate:        t.IsNewUpdate,
+			Attrs:              t.Attrs,
+			EstimatedRowCount:  int64(t.EstimatedRowCount),
+			CompPkeyExpr:       t.CompPkeyExpr,
+			ClusterByExpr:      t.ClusterByExpr,
+			ColOffset:          t.ColOffset,
+			RejectZeroTemporal: t.RejectZeroTemporal,
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
@@ -591,6 +592,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 	case *group.Group:
+		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
+			return ctxId, nil, err
+		}
 		in.Agg = &pipeline.Group{
 			NeedEval:     t.NeedEval,
 			SpillMem:     t.SpillMem,
@@ -711,6 +715,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IndexReaderParam:       t.IndexReaderParam,
 			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
 		}
+		in.Limit = t.Limit
 
 	case *external.External:
 		in.ExternalScan = &pipeline.ExternalScan{
@@ -885,9 +890,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 		in.MultiUpdate = &pipeline.MultiUpdate{
-			AffectedRows:  t.GetAffectedRows(),
-			Action:        uint32(t.Action),
-			UpdateCtxList: updateCtxList,
+			AffectedRows:       t.GetAffectedRows(),
+			Action:             uint32(t.Action),
+			UpdateCtxList:      updateCtxList,
+			RejectZeroTemporal: t.RejectZeroTemporal,
 		}
 	case *postdml.PostDml:
 		in.PostDml = &pipeline.PostDml{
@@ -986,6 +992,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.CompPkeyExpr = t.CompPkeyExpr
 		arg.ClusterByExpr = t.ClusterByExpr
 		arg.ColOffset = t.ColOffset
+		arg.RejectZeroTemporal = t.GetRejectZeroTemporal()
 		op = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
@@ -1205,6 +1212,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsSingle = opr.TableFunction.IsSingle
 		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
+		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
@@ -1358,6 +1366,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SetAffectedRows(t.AffectedRows)
 		arg.Action = multi_update.UpdateAction(t.Action)
 		arg.IsRemote = true //only remote CN use this function to rebuild MultiUpdate
+		arg.RejectZeroTemporal = t.RejectZeroTemporal
 		arg.Engine = eng
 
 		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))
@@ -1453,15 +1462,34 @@ func convertToTypes(ts []plan.Type) []types.Type {
 	return result
 }
 
+func validateRemoteAggregateProtocol(
+	proc *process.Process,
+	aggs []aggexec.AggFuncExecExpression,
+) error {
+	for _, agg := range aggs {
+		if agg.GetConfigType() != plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			continue
+		}
+		if proc != nil && supportsRemoteOrderedAggregates(proc.GetService()) {
+			return nil
+		}
+		return moerr.NewNotSupportedNoCtx(
+			"ordered aggregate remote execution requires MORPC protocol version 6",
+		)
+	}
+	return nil
+}
+
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate
 func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
-			Op:     a.GetAggID(),
-			Dist:   a.IsDistinct(),
-			Expr:   a.GetArgExpressions(),
-			Config: a.GetExtraConfig(),
+			Op:         a.GetAggID(),
+			Dist:       a.IsDistinct(),
+			Expr:       a.GetArgExpressions(),
+			Config:     a.GetExtraConfig(),
+			ConfigType: a.GetConfigType(),
 		}
 	}
 	return result
@@ -1471,7 +1499,7 @@ func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipelin
 func convertToAggregates(ags []*pipeline.Aggregate) []aggexec.AggFuncExecExpression {
 	result := make([]aggexec.AggFuncExecExpression, len(ags))
 	for i, a := range ags {
-		result[i] = aggexec.MakeAggFunctionExpression(a.Op, a.Dist, a.Expr, a.Config)
+		result[i] = aggexec.MakeAggFunctionExpression(a.Op, a.Dist, a.Expr, a.Config, a.ConfigType)
 	}
 	return result
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -38,6 +39,71 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateBetweenSnapshotRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		from    *types.TS
+		to      *types.TS
+		wantErr string
+	}{
+		{
+			name: "forward physical range",
+			from: types.BuildTSForTest(1, 0),
+			to:   types.BuildTSForTest(2, 0),
+		},
+		{
+			name: "equal range",
+			from: types.BuildTSForTest(1, 1),
+			to:   types.BuildTSForTest(1, 1),
+		},
+		{
+			name:    "reversed physical range",
+			from:    types.BuildTSForTest(2, 0),
+			to:      types.BuildTSForTest(1, 0),
+			wantErr: "start snapshot 'from' is later than end snapshot 'to'",
+		},
+		{
+			name:    "reversed logical range",
+			from:    types.BuildTSForTest(1, 2),
+			to:      types.BuildTSForTest(1, 1),
+			wantErr: "start snapshot 'from' is later than end snapshot 'to'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBetweenSnapshotRange("from", "to", tt.from, tt.to)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestResolveBetweenSnapshotsReversedRange(t *testing.T) {
+	earlyTS := types.BuildTSForTest(1, 0).ToTimestamp()
+	lateTS := types.BuildTSForTest(2, 0).ToTimestamp()
+	snapshots := map[string]*pbplan.Snapshot{
+		"early": {TS: &earlyTS},
+		"late":  {TS: &lateTS},
+	}
+	originalResolver := resolveSnapshotForBetween
+	resolveSnapshotForBetween = func(_ *Session, atTs *tree.AtTimeStamp) (*pbplan.Snapshot, error) {
+		return snapshots[atTs.SnapshotName], nil
+	}
+	t.Cleanup(func() {
+		resolveSnapshotForBetween = originalResolver
+	})
+
+	from, to, err := resolveBetweenSnapshots(nil, "late", "early")
+
+	require.Nil(t, from)
+	require.Nil(t, to)
+	require.ErrorContains(t, err, "start snapshot 'late' is later than end snapshot 'early'")
+}
 
 func TestSegmentBuilder_SingleValue(t *testing.T) {
 	pkType := types.T_int32.ToType()
@@ -100,6 +166,29 @@ func TestSegmentBuilder_LargeGap_SplitsSegment(t *testing.T) {
 	zm1 := index.ZM(segments[1])
 	require.Equal(t, int64(1000000), types.DecodeInt64(zm1.GetMinBuf()))
 	require.Equal(t, int64(1000004), types.DecodeInt64(zm1.GetMaxBuf()))
+}
+
+func TestSegmentBuilder_LargeGapResetsGapStatistics(t *testing.T) {
+	pkType := types.T_int64.ToType()
+	sb := newSegmentBuilder(pkType)
+
+	for _, value := range []int64{
+		1, 2, 3, 4, 5,
+		1000000, 1000100, 1000200, 1000300, 1000400,
+	} {
+		sb.observe(types.EncodeInt64(&value))
+	}
+
+	segments := sb.finalize()
+	require.Len(t, segments, 2)
+
+	first := index.ZM(segments[0])
+	require.Equal(t, int64(1), types.DecodeInt64(first.GetMinBuf()))
+	require.Equal(t, int64(5), types.DecodeInt64(first.GetMaxBuf()))
+
+	second := index.ZM(segments[1])
+	require.Equal(t, int64(1000000), types.DecodeInt64(second.GetMinBuf()))
+	require.Equal(t, int64(1000400), types.DecodeInt64(second.GetMaxBuf()))
 }
 
 func TestSegmentBuilder_StringType_CountBased(t *testing.T) {
@@ -341,6 +430,15 @@ func TestAppendNumericStringToVec_AllTypes(t *testing.T) {
 		input  string
 		verify func(*vector.Vector)
 	}{
+		{"bool_true", types.Type{}, types.T_bool, "true", func(v *vector.Vector) {
+			require.True(t, vector.GetFixedAtNoTypeCheck[bool](v, 0))
+		}},
+		{"bool_numeric_false", types.Type{}, types.T_bool, "0", func(v *vector.Vector) {
+			require.False(t, vector.GetFixedAtNoTypeCheck[bool](v, 0))
+		}},
+		{"bit", types.New(types.T_bit, 8, 0), types.T_bit, "255", func(v *vector.Vector) {
+			require.Equal(t, uint64(255), vector.GetFixedAtNoTypeCheck[uint64](v, 0))
+		}},
 		{"int8", types.Type{}, types.T_int8, "42", func(v *vector.Vector) {
 			require.Equal(t, int8(42), vector.GetFixedAtNoTypeCheck[int8](v, 0))
 		}},
@@ -417,6 +515,20 @@ func TestAppendNumericStringToVec_AllTypes(t *testing.T) {
 	}
 }
 
+func TestAppendNumericStringToVec_BitOutOfRange(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.New(types.T_bit, 8, 0)
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+
+	err = appendNumericStringToVec(vec, "256", pkType, time.UTC, mp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bit(8)")
+}
+
 func TestAppendNumericStringToVec_UnsupportedType(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
@@ -458,6 +570,21 @@ func TestAppendExprToVec_StrVal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, vec.Length())
 	require.Equal(t, []byte("test_value"), vec.GetBytesAt(0))
+}
+
+func TestAppendExprToVec_BoolLiteral(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.T_bool.ToType()
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+
+	expr := tree.NewNumVal(true, "true", false, tree.P_bool)
+	err = appendExprToVec(vec, expr, pkType, time.UTC, mp)
+	require.NoError(t, err)
+	require.True(t, vector.GetFixedAtNoTypeCheck[bool](vec, 0))
 }
 
 func TestAppendExprToVec_UnaryMinus(t *testing.T) {

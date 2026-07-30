@@ -51,11 +51,13 @@ func init() {
 	initProxyMetrics()
 	initFrontendMetrics()
 	initPipelineMetrics()
+	initSQLMetrics()
 	initScheduleMetrics()
 	initLogServiceMetrics()
 	initShardingMetrics()
 	initGCMetrics()
 	initCCPRMetrics()
+	initHashBuildMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -255,6 +257,7 @@ func initProxyMetrics() {
 	registry.MustRegister(ProxyCNHealthCounter)
 	registry.MustRegister(ProxyBackendHandshakeDurationHistogram)
 	registry.MustRegister(ProxyBackendHandshakeInflightGauge)
+	registry.MustRegister(ProxyBackendHandshakeEventCounter)
 }
 
 func initFrontendMetrics() {

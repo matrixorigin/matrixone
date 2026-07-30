@@ -160,7 +160,7 @@ func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
 	return fmtCtx.String()
 }
 
-func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
+func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 
 	// check view statement
@@ -180,12 +180,23 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	}
 
 	query := stmtPlan.GetQuery()
-	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
-	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
+	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+	if len(colNames) > 0 && len(colNames) != len(projectList) {
+		return nil, moerr.NewViewWrongList(ctx.GetContext())
+	}
+	cols := make([]*plan.ColDef, len(projectList))
+	for idx, expr := range projectList {
+		name := query.Headings[idx]
+		originName := ""
+		if len(colNames) > 0 {
+			originName = string(colNames[idx])
+			name = originName
+		}
 		cols[idx] = &plan.ColDef{
-			Name: strings.ToLower(query.Headings[idx]),
-			Alg:  plan.CompressType_Lz4,
-			Typ:  expr.Typ,
+			Name:       strings.ToLower(name),
+			OriginName: originName,
+			Alg:        plan.CompressType_Lz4,
+			Typ:        expr.Typ,
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
@@ -449,7 +460,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
 	}
 
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
 	if err != nil {
 		return nil, err
 	}
@@ -822,8 +833,8 @@ func buildCreateTable(
 		var err error
 		oldTable := stmt.LikeTableName
 		newTable := stmt.Table
-		tblName := formatStr(string(oldTable.ObjectName))
-		dbName := formatStr(string(oldTable.SchemaName))
+		tblName := string(oldTable.ObjectName)
+		dbName := string(oldTable.SchemaName)
 
 		snapshot := ctx.GetSnapshot()
 
@@ -1548,6 +1559,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString("*")
 
 		// from
+		// The generated INSERT ... SELECT is re-parsed by the internal SQL
+		// executor, which always parses in DEFAULT sql_mode (parsers.Parse
+		// passes an empty mode) regardless of the session's mode. So string
+		// literals here must be default-escaped: a backslash stored literally
+		// under a NO_BACKSLASH_ESCAPES session is emitted doubled and the
+		// default-mode reparse reduces it back to the original literal. Do
+		// NOT make this formatting session-mode-aware unless the internal
+		// executor's parse becomes session-mode-aware too (#24823).
 		fmtCtx := tree.NewFmtCtx(
 			dialect.MYSQL,
 			tree.WithQuoteString(true),
@@ -2599,6 +2618,18 @@ func validateIncludeColumns(ctx CompilerContext,
 	return nil
 }
 
+func getVectorIndexIncludeColumnNames(indexInfo *tree.Index) []string {
+	if indexInfo == nil || indexInfo.IndexOption == nil || len(indexInfo.IndexOption.IncludeColumns) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(indexInfo.IndexOption.IncludeColumns))
+	for _, col := range indexInfo.IndexOption.IncludeColumns {
+		names = append(names, col.ColName())
+	}
+	return names
+}
+
 func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 	indexTableName, indexAlgoTableType string,
 	indexParts []string, isUnique bool) (*plan.IndexDef, error) {
@@ -2609,6 +2640,7 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 
 	indexDef.IndexTableName = indexTableName
 	indexDef.Parts = indexParts
+	indexDef.IncludedColumns = getVectorIndexIncludeColumnNames(indexInfo)
 
 	indexDef.Unique = isUnique
 	indexDef.TableExist = true
@@ -2799,7 +2831,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 
 func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	if len(stmt.Names) == 1 {
-		dropTable, err := buildDropTableSingle(stmt.IfExists, stmt.Names[0], ctx)
+		dropTable, err := buildDropTableSingle(stmt.IfExists, stmt.Temporary, stmt.Names[0], ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -2820,7 +2852,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		Tables:   make([]*plan.DropTable, 0, len(stmt.Names)),
 	}
 	for _, name := range stmt.Names {
-		entry, err := buildDropTableSingle(stmt.IfExists, name, ctx)
+		entry, err := buildDropTableSingle(stmt.IfExists, stmt.Temporary, name, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -2838,7 +2870,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerContext) (*plan.DropTable, error) {
+func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, ctx CompilerContext) (*plan.DropTable, error) {
 	dropTable := &plan.DropTable{
 		IfExists: ifExists,
 	}
@@ -2860,7 +2892,10 @@ func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerConte
 		return nil, err
 	}
 
-	if tableDef == nil {
+	// DROP TEMPORARY TABLE must never fall through to a same-named permanent
+	// table. Resolve prefers a session temporary table when one exists, so a
+	// non-temporary result means that the requested temporary table is absent.
+	if tableDef == nil || (temporary && !tableDef.IsTemporary) {
 		if !dropTable.IfExists {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
@@ -2956,7 +2991,9 @@ func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerConte
 	}
 
 	dropTable.TableDef = tableDef
-	dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
+	if !tableDef.IsTemporary {
+		dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
+	}
 	return dropTable, nil
 }
 
@@ -3344,7 +3381,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	defer func() {
 		ctx.SetBuildingAlterView(false, "", "")
 	}()
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
 	if err != nil {
 		return nil, err
 	}

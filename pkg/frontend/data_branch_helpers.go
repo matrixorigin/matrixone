@@ -180,18 +180,33 @@ func runSql(
 	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
 	streamChan chan executor.Result, errChan chan error,
 ) (sqlRet executor.Result, err error) {
+	return runSqlWithMode(ctx, ses, bh, sql, streamChan, errChan, false)
+}
 
-	useBackExec := false
+func runSqlWithBackExec(
+	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
+) (sqlRet executor.Result, err error) {
+	// Locking reads must use the statement execution path so an RC snapshot
+	// refresh after a lock wait can retry within the caller's transaction.
+	return runSqlWithMode(ctx, ses, bh, sql, nil, nil, true)
+}
+
+func runSqlWithMode(
+	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
+	streamChan chan executor.Result, errChan chan error, forceBackExec bool,
+) (sqlRet executor.Result, err error) {
+
+	useBackExec := forceBackExec
 	trimmedLower := strings.ToLower(strings.TrimSpace(sql))
-	if strings.HasPrefix(trimmedLower, "drop database") {
+	if !useBackExec && strings.HasPrefix(trimmedLower, "drop database") {
 		// Internal executor does not support DROP DATABASE (IsPublishing panics).
 		useBackExec = true
-	} else if dataBranchTempSQLNeedsBackExec(trimmedLower) {
+	} else if !useBackExec && dataBranchTempSQLNeedsBackExec(trimmedLower) {
 		// Branch diff/merge/pick temp tables do repeated DDL/DML in one shared txn.
 		// The internal SQL fast path skips per-statement workspace increments and can
 		// hit ErrTxnNeedRetryWithDefChanged in RC mode while these temp definitions churn.
 		useBackExec = true
-	} else if strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
+	} else if !useBackExec && strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
 		// SQLExecutor cannot resolve snapshot by name.
 		useBackExec = true
 	}
@@ -212,19 +227,29 @@ func runSql(
 	}
 
 	if useBackExec {
+		_, realBackExec := bh.(*backExec)
+		if forceBackExec && realBackExec {
+			bh.ClearExecResultBatches()
+		}
 		// export as CSV need this
 		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
 		//for range tblStuff.def.visibleIdxes {
 		//	bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
 		//}
 		if err = bh.Exec(ctx, sql); err != nil {
+			if forceBackExec && realBackExec {
+				bh.ClearExecResultBatches()
+			}
 			return
 		}
-		if _, ok := bh.(*backExec); ok {
+		if realBackExec {
 			bh.ClearExecResultSet()
-			sqlRet.Mp = ses.proc.Mp()
-			sqlRet.Batches = bh.GetExecResultBatches()
-			return
+			if !forceBackExec {
+				sqlRet.Mp = ses.proc.Mp()
+				sqlRet.Batches = bh.GetExecResultBatches()
+				return
+			}
+			return copyAndClearBackExecResult(ses, bh)
 		}
 
 		rs := bh.GetExecResultSet()
@@ -279,6 +304,24 @@ func runSql(
 	return sqlRet, nil
 }
 
+func copyAndClearBackExecResult(
+	ses *Session,
+	bh BackgroundExec,
+) (sqlRet executor.Result, err error) {
+	sqlRet.Mp = ses.proc.Mp()
+	defer bh.ClearExecResultBatches()
+
+	for _, bat := range bh.GetExecResultBatches() {
+		var copied *batch.Batch
+		if copied, err = bat.Dup(sqlRet.Mp); err != nil {
+			sqlRet.Close()
+			return executor.Result{}, err
+		}
+		sqlRet.Batches = append(sqlRet.Batches, copied)
+	}
+	return sqlRet, nil
+}
+
 // shouldUseLCAReaderFallback returns true only for recoverable snapshot-read
 // failures where an engine reader based fallback can preserve LCA semantics.
 // After GC, time travelling by account/db/table name can fail if no snapshot or
@@ -317,6 +360,29 @@ func scanSnapshotRelationByID(
 	scanParallelism int,
 	onBatch func(*batch.Batch) error,
 ) error {
+	return scanSnapshotRelationByIDWithFallback(
+		ctx, caller, ses, tableID, snapshotTS, nil,
+		attrs, colTypes, filterExpr, scanParallelism, onBatch,
+	)
+}
+
+// scanSnapshotRelationByIDWithFallback prefers current-view ranges, but can
+// fall back to a relation that was already opened at snapshotTS. ALTER drops
+// replaced physical generations from the current catalog, while bounded data
+// branch operations may still need to hydrate rows from such a generation.
+func scanSnapshotRelationByIDWithFallback(
+	ctx context.Context,
+	caller string,
+	ses *Session,
+	tableID uint64,
+	snapshotTS types.TS,
+	fallbackRangeRel engine.Relation,
+	attrs []string,
+	colTypes []types.Type,
+	filterExpr *plan.Expr,
+	scanParallelism int,
+	onBatch func(*batch.Batch) error,
+) error {
 	if len(attrs) == 0 {
 		return nil
 	}
@@ -346,15 +412,26 @@ func scanSnapshotRelationByID(
 		zap.Int("scan-parallelism", scanParallelism),
 	)
 
-	_, _, rangeRel, err := storage.GetRelationById(ctx, rangeTxnOp, tableID)
-	if err != nil {
-		return err
-	}
-	if rangeRel == nil {
-		return moerr.NewInternalErrorNoCtxf(
-			"scanSnapshotRelationByID: cannot resolve range relation by id %d at snapshot %s",
-			tableID, rangeTS.ToString(),
+	_, _, rangeRel, resolveErr := storage.GetRelationById(ctx, rangeTxnOp, tableID)
+	if resolveErr != nil || rangeRel == nil {
+		if fallbackRangeRel == nil {
+			if resolveErr != nil {
+				return resolveErr
+			}
+			return moerr.NewInternalErrorNoCtxf(
+				"scanSnapshotRelationByID: cannot resolve range relation by id %d at snapshot %s",
+				tableID, rangeTS.ToString(),
+			)
+		}
+		logutil.Info(
+			"DataBranch-SnapshotScan-HistoricalRangeFallback",
+			zap.String("caller", caller),
+			zap.Uint64("table-id", tableID),
+			zap.String("snapshot-ts", snapshotTS.ToString()),
+			zap.Error(resolveErr),
 		)
+		rangeRel = fallbackRangeRel
+		rangeTS = snapshotTS
 	}
 
 	rangesParam := engine.DefaultRangesParam
@@ -642,7 +719,7 @@ func extractDataBranchSQLRowValue(
 	row []any,
 	rowIdx int,
 ) error {
-	if vec.GetNulls().Contains(uint64(rowIdx)) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIdx)) {
 		row[colIdx] = nil
 		return nil
 	}
@@ -651,6 +728,9 @@ func extractDataBranchSQLRowValue(
 	case types.T_datetime, types.T_timestamp, types.T_decimal64,
 		types.T_decimal128, types.T_decimal256, types.T_time:
 		row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
+		return nil
+	case types.T_array_uint8:
+		row[colIdx] = vector.GetArrayAt[uint8](vec, rowIdx)
 		return nil
 	default:
 		return extractRowFromVector(ctx, ses, vec, colIdx, row, rowIdx, false)

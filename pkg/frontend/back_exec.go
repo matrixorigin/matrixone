@@ -395,6 +395,7 @@ func doComQueryInBack(
 		getPu(backSes.GetService()).GetTaskService())
 	proc.Base.Id = backSes.getNextProcessId()
 	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	proc.Base.Lim.SpillSize = pu.SV.ProcessLimitationSpillSize
 	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
@@ -866,7 +867,13 @@ func executeSQLInBackgroundSession(reqCtx context.Context, bh BackgroundExec, sq
 // executeStmtInSameSession executes the statement in the same session.
 // To be clear, only for the select statement derived from the set_var statement
 // in an independent transaction
-func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCtx, stmt tree.Statement) error {
+func executeStmtInSameSession(
+	ctx context.Context,
+	ses *Session,
+	execCtx *ExecCtx,
+	stmt tree.Statement,
+	preparedExpression bool,
+) error {
 	ses.EnterFPrint(FPExecStmtInSameSession)
 	defer ses.ExitFPrint(FPExecStmtInSameSession)
 	switch stmt.(type) {
@@ -915,7 +922,12 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	ses.Debug(ctx, "query trace(ExecStmtInSameSession)",
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
-	return doComQuery(ses, execCtx, &UserInput{stmt: stmt, isInternalInput: true})
+	return doComQuery(ses, execCtx, &UserInput{
+		stmt:                 stmt,
+		isInternalInput:      true,
+		isSetExpression:      true,
+		isPreparedExpression: preparedExpression,
+	})
 }
 
 // fakeDataSetFetcher2 gets the result set from the pipeline and save it in the session.
@@ -997,6 +1009,7 @@ type backSession struct {
 	parentBackSession               *backSession
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
+	forcePessimisticRC              bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64
@@ -1225,8 +1238,8 @@ func (backSes *backSession) GetLastInsertID() uint64 {
 func (backSes *backSession) SetShowStmtType(statement ShowStatementType) {
 }
 
-func (backSes *backSession) RemovePrepareStmt(name string) {
-
+func (backSes *backSession) RemovePrepareStmt(name string) bool {
+	return false
 }
 
 func (backSes *backSession) CountPayload(i int) {
@@ -1322,7 +1335,7 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		return int64(1), nil
 	case "sql_mode":
 		return "", nil
-	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
+	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
 	return nil, nil

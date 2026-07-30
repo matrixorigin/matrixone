@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -59,6 +61,27 @@ func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
 	want := moerr.NewBadDB(context.Background(), "db1")
 	got := convertDBEOBToNoSuchTable(context.Background(), want, "db1", "t2")
 	require.Same(t, want, got)
+}
+
+func TestIsMissingCCPRMetadataTable(t *testing.T) {
+	tableName := catalog.MO_CCPR_TABLES
+
+	require.True(t, isMissingCCPRMetadataTable(
+		moerr.NewNoSuchTableNoCtx(catalog.MO_CATALOG, tableName),
+		tableName,
+	))
+	require.True(t, isMissingCCPRMetadataTable(
+		moerr.NewParseErrorNoCtx(fmt.Sprintf("table %q does not exist", tableName)),
+		tableName,
+	))
+	require.False(t, isMissingCCPRMetadataTable(
+		moerr.NewParseErrorNoCtx(`table "another_table" does not exist`),
+		tableName,
+	))
+	require.False(t, isMissingCCPRMetadataTable(
+		moerr.NewInternalErrorNoCtx("ccpr metadata query failed"),
+		tableName,
+	))
 }
 
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
@@ -191,6 +214,23 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 			Table:    "t2",
 		})
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("TemporaryPlanDoesNotFallThroughToPermanentTable", func(t *testing.T) {
+		c := newCompileWithStubEngine(t, newStubEngine(), "drop temporary table t2")
+		c.proc.Session = &testInternalExecutorSession{}
+		s := &Scope{}
+		qry := &plan2.DropTable{
+			Database: "db1",
+			Table:    "t2",
+			TableDef: &plan2.TableDef{IsTemporary: true},
+		}
+
+		err := s.dropTableSingle(c, qry)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+
+		qry.IfExists = true
+		require.NoError(t, s.dropTableSingle(c, qry))
 	})
 }
 func Test_lockIndexTable(t *testing.T) {
@@ -497,6 +537,94 @@ func TestScope_CreateTable(t *testing.T) {
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.CreateTable(c))
 	})
+}
+
+func TestScopeCreateTemporaryTableRestoresCachedPlanOnError(t *testing.T) {
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&engine.PlanDefsToExeDefs, func(_ *plan2.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("stop after temporary names are rewritten")
+	})
+
+	indexTable := &plan2.TableDef{
+		Name: "idx_table", TableType: catalog.SystemOrdinaryRel, TblId: 42,
+	}
+	index := &plan2.IndexDef{IndexTableName: indexTable.Name}
+	createTable := &plan2.CreateTable{
+		Database: "test", Temporary: true,
+		TableDef:    &plan2.TableDef{Name: "temporary_table", Indexes: []*plan2.IndexDef{index}},
+		IndexTables: []*plan2.TableDef{indexTable},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_CreateTable{CreateTable: createTable},
+	}}}}
+	proc := testutil.NewProcess(t)
+	proc.Session = &testInternalExecutorSession{}
+	c := NewCompile("test", "test", "create temporary table temporary_table (a int)", "", "", nil, proc, nil, false, nil, time.Now())
+
+	require.Error(t, s.CreateTable(c))
+	require.Equal(t, "temporary_table", createTable.TableDef.Name)
+	require.Equal(t, "idx_table", indexTable.Name)
+	require.Equal(t, catalog.SystemOrdinaryRel, indexTable.TableType)
+	require.False(t, indexTable.IsTemporary)
+	require.Equal(t, uint64(42), indexTable.TblId)
+	require.Equal(t, "idx_table", index.IndexTableName)
+}
+
+type trackingTempTableSession struct {
+	tables map[string]string
+}
+
+func (s *trackingTempTableSession) GetTempTable(dbName, alias string) (string, bool) {
+	realName, ok := s.tables[dbName+"."+alias]
+	return realName, ok
+}
+
+func (s *trackingTempTableSession) AddTempTable(dbName, alias, realName string) {
+	s.tables[dbName+"."+alias] = realName
+}
+
+func (s *trackingTempTableSession) RemoveTempTable(dbName, alias string) {
+	delete(s.tables, dbName+"."+alias)
+}
+
+func (s *trackingTempTableSession) RemoveTempTableByRealName(string) {}
+
+func (s *trackingTempTableSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	return false, false
+}
+
+func TestScopeCreateTemporaryTableRollsBackAliasAfterLateFailure(t *testing.T) {
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&engine.PlanDefsToExeDefs, func(_ *plan2.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
+		return nil, &api.SchemaExtra{}, nil
+	})
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	stubs.Stub(&checkIndexInitializable, func(string, string) bool { return false })
+	stubs.Stub(&maybeCreateAutoIncrement, func(
+		context.Context, string, engine.Database, *plan2.TableDef, client.TxnOperator, func() string,
+	) error {
+		return moerr.NewInternalErrorNoCtx("late failure")
+	})
+
+	createTable := &plan2.CreateTable{
+		Database: "test", Temporary: true, TableDef: &plan2.TableDef{Name: "temporary_table"},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_CreateTable{CreateTable: createTable},
+	}}}}
+	proc := testutil.NewProcess(t)
+	session := &trackingTempTableSession{tables: make(map[string]string)}
+	proc.Session = session
+	eng := newStubEngine()
+	eng.dbs["test"] = newStubDatabase("test")
+	c := NewCompile("test", "test", "create temporary table temporary_table (a int)", "", "", eng, proc, nil, false, nil, time.Now())
+
+	require.Error(t, s.CreateTable(c))
+	_, exists := session.GetTempTable("test", "temporary_table")
+	require.False(t, exists)
 }
 
 func TestScope_CreateView(t *testing.T) {
@@ -809,6 +937,79 @@ func Test_getSqlForCheckPitrDup(t *testing.T) {
 	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), false)), "account_name = 'curacc'")
 	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELDATABASE), false)), "database_name = 'db'")
 	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false)), "table_name = 'tb'")
+}
+
+func TestPreparePitrPublicationSerializesCopyAlter(t *testing.T) {
+	var publicationLock sync.Mutex
+	currentTableID := uint64(1)
+	copyHasLock := make(chan struct{})
+	releaseCopy := make(chan struct{})
+	copyDone := make(chan struct{})
+
+	go func() {
+		publicationLock.Lock()
+		close(copyHasLock)
+		<-releaseCopy
+		currentTableID = 2
+		publicationLock.Unlock()
+		close(copyDone)
+	}()
+	<-copyHasLock
+
+	pitrTriedLock := make(chan struct{})
+	pitrResult := make(chan uint64, 1)
+	pitrErr := make(chan error, 1)
+	go func() {
+		objectID, err := preparePitrPublication(
+			func() error {
+				close(pitrTriedLock)
+				publicationLock.Lock()
+				return nil
+			},
+			func() error { return nil },
+			func() (uint64, error) { return currentTableID, nil },
+		)
+		if err != nil {
+			pitrErr <- err
+			return
+		}
+		pitrResult <- objectID
+	}()
+	<-pitrTriedLock
+
+	select {
+	case objectID := <-pitrResult:
+		publicationLock.Unlock()
+		t.Fatalf("PITR resolved table ID %d before COPY ALTER released the publication barrier", objectID)
+	default:
+	}
+
+	close(releaseCopy)
+	<-copyDone
+	select {
+	case err := <-pitrErr:
+		t.Fatal(err)
+	case objectID := <-pitrResult:
+		require.Equal(t, uint64(2), objectID)
+		publicationLock.Unlock()
+	}
+}
+
+func TestResolveCurrentPitrObjectIDRefreshesPlannedTableID(t *testing.T) {
+	eng := newStubEngine()
+	db := newStubDatabase("db")
+	db.rels["tbl"] = newStubRelation("tbl")
+	eng.dbs["db"] = db
+	c := &Compile{e: eng, proc: testutil.NewProc(t)}
+
+	objectID, err := c.resolveCurrentPitrObjectID(&plan2.CreatePitr{
+		Level:        int32(tree.PITRLEVELTABLE),
+		DatabaseName: "db",
+		TableName:    "tbl",
+		TableId:      99,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), objectID)
 }
 
 func TestCheckSysMoCatalogPitrResult(t *testing.T) {

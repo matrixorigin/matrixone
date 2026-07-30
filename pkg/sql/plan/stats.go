@@ -616,6 +616,9 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 			// Invalid modValue (zero, negative, or overflow), fallback to column NDV
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		default:
+			if len(exprImpl.F.Args) == 0 {
+				return -1
+			}
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
 	case *plan.Expr_Col:
@@ -2482,9 +2485,11 @@ func getOverlap(s *pb.StatsInfo, colname string) float64 {
 
 func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr) float64 {
 	sel := expr.Selectivity
-	switch expr.GetF().Func.ObjName {
-	case "isnull", "is_null", "prefix_eq", "prefix_in", "prefix_between", "prefix_in_range": //special handle
-		return sel
+	if fn := expr.GetF(); fn != nil {
+		switch fn.Func.ObjName {
+		case "isnull", "is_null", "prefix_eq", "prefix_in", "prefix_between", "prefix_in_range": //special handle
+			return sel
+		}
 	}
 	overlap := getOverlap(s, colname)
 	if overlap < overlapThreshold/3 {

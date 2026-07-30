@@ -316,6 +316,17 @@ type PrepareStmt struct {
 	// tempTableVersion is the session temporary-table mapping version used to
 	// build PreparePlan and compile.
 	tempTableVersion uint64
+	// ddlVersion is the session DDL generation used to build the cached plan.
+	ddlVersion uint64
+	// preparedMetadataCheckTS stores the catalog metadata high-watermark
+	// observed by the last successful dependency validation.
+	preparedMetadataCheckTS timestamp.Timestamp
+	// cloneSQL is an immutable, fully qualified SQL representation captured
+	// before clone planning can mutate the parsed AST.
+	cloneSQL string
+	// protocolVersion is the cluster protocol used to build PreparePlan.
+	// A version change can alter internal function IDs in generated DML plans.
+	protocolVersion int64
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
@@ -615,7 +626,8 @@ func execResultArrayHasData(arr []ExecResult) bool {
 }
 
 type BackgroundExecOption struct {
-	fromRealUser bool
+	fromRealUser       bool
+	forcePessimisticRC bool
 }
 
 // BackgroundExec executes the sql in background session without network output.
@@ -811,7 +823,7 @@ type FeSession interface {
 	IsBackgroundSession() bool
 	GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error)
 	CountPayload(i int)
-	RemovePrepareStmt(name string)
+	RemovePrepareStmt(name string) bool
 	SetShowStmtType(statement ShowStatementType)
 	SetSql(sql string)
 	GetMemPool() *mpool.MPool
@@ -892,6 +904,11 @@ type ExecCtx struct {
 	rootSQLOverride *string
 	//stmt will be replaced by the Execute
 	stmt tree.Statement
+	// persistentDropTableTargets captures the per-target classification before
+	// DROP TABLE executes. Temporary aliases are removed during execution, so
+	// post-execution persistent side effects must consume this snapshot instead
+	// of resolving the statement names again.
+	persistentDropTableTargets tree.TableNames
 	//isLastStmt : true denotes the last statement in the query
 	isLastStmt bool
 	// tenant name
@@ -943,6 +960,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.runResult = nil
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
+	execCtx.persistentDropTableTargets = nil
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
@@ -1028,7 +1046,10 @@ type feSessionImpl struct {
 	// reserved because the connection is still in use in proxy's connection cache.
 	// Default is false, means that the network connection should be closed.
 	reserveConn bool
-	service     string
+	// userLevelLocksMigrated is set after proxy restores this connection on
+	// another CN. The old backend session must not release the migrated locks.
+	userLevelLocksMigrated bool
+	service                string
 
 	//fromRealUser distinguish the sql that the user inputs from the one
 	//that the internal or background program executes

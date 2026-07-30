@@ -1837,7 +1837,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					types.Decimal64(0),
 				)
 			}
-		} else if isDecimalLogicalType(lt) || useRawIntegerDecimalMapping(st, precision, scale) {
+		} else if canUseRawDecimalMapping(st, precision, scale) {
 			// Binary DECIMAL
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				kind := st.Kind()
@@ -1858,6 +1858,12 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				indexes := data.Int32()
 				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal64 {
 					return dictValues[int(idx)]
+				})
+			}
+		} else if isDecimalLogicalType(lt) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Decimal64(0), func(v parquet.Value) (types.Decimal64, error) {
+					return parquetDecimalValueToDecimal64(proc.Ctx, st, v, precision, scale)
 				})
 			}
 		} else if isParquetDecimalCastSource(st) {
@@ -1889,7 +1895,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					types.Decimal128{},
 				)
 			}
-		} else if isDecimalLogicalType(lt) || useRawIntegerDecimalMapping(st, precision, scale) {
+		} else if canUseRawDecimalMapping(st, precision, scale) {
 			// Binary DECIMAL (INT32/INT64/FixedLenByteArray/ByteArray with DECIMAL LogicalType)
 			// PyArrow stores DECIMAL as FixedLenByteArray with DECIMAL LogicalType (big-endian two's complement)
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
@@ -1911,6 +1917,12 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				indexes := data.Int32()
 				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal128 {
 					return dictValues[int(idx)]
+				})
+			}
+		} else if isDecimalLogicalType(lt) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Decimal128{}, func(v parquet.Value) (types.Decimal128, error) {
+					return parquetDecimalValueToDecimal128(proc.Ctx, st, v, precision, scale)
 				})
 			}
 		} else if isParquetDecimalCastSource(st) {
@@ -1937,7 +1949,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					types.Decimal256{},
 				)
 			}
-		} else if isDecimalLogicalType(lt) || useRawIntegerDecimalMapping(st, precision, scale) {
+		} else if canUseRawDecimalMapping(st, precision, scale) {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				kind := st.Kind()
 				data := page.Data()
@@ -1957,6 +1969,12 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				indexes := data.Int32()
 				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal256 {
 					return dictValues[int(idx)]
+				})
+			}
+		} else if isDecimalLogicalType(lt) {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, types.Decimal256{}, func(v parquet.Value) (types.Decimal256, error) {
+					return parquetDecimalValueToDecimal256(proc.Ctx, st, v, precision, scale)
 				})
 			}
 		} else if isParquetDecimalCastSource(st) {
@@ -2830,6 +2848,14 @@ func isParquetDecimalCastSource(st parquet.Type) bool {
 	}
 }
 
+func canUseRawDecimalMapping(st parquet.Type, precision, scale int32) bool {
+	if lt := st.LogicalType(); isDecimalLogicalType(lt) {
+		return parquetDecimalScale(st) == scale &&
+			(precision == 0 || lt.Decimal.Precision <= precision)
+	}
+	return useRawIntegerDecimalMapping(st, precision, scale)
+}
+
 func useRawIntegerDecimalMapping(st parquet.Type, precision, scale int32) bool {
 	if precision != 0 || scale != 0 || isDecimalLogicalType(st.LogicalType()) {
 		return false
@@ -2986,6 +3012,122 @@ func parquetDecimalValueToBigInt(ctx context.Context, st parquet.Type, v parquet
 	default:
 		return nil, moerr.NewInvalidInputf(ctx, "unsupported parquet physical type %s for decimal integer conversion", st.Kind())
 	}
+}
+
+func parquetDecimalValueToTargetBigInt(
+	ctx context.Context,
+	st parquet.Type,
+	v parquet.Value,
+	precision int32,
+	targetScale int32,
+) (*big.Int, error) {
+	sourceScale := parquetDecimalScale(st)
+	if sourceScale < 0 || targetScale < 0 {
+		return nil, moerr.NewInvalidInputf(ctx, "cannot convert parquet decimal scale %d to target scale %d", sourceScale, targetScale)
+	}
+
+	unscaled, err := parquetDecimalValueToBigInt(ctx, st, v)
+	if err != nil {
+		return nil, err
+	}
+
+	scaleDiff := int64(targetScale) - int64(sourceScale)
+	var targetUnscaled *big.Int
+	switch {
+	case scaleDiff < 0:
+		targetUnscaled = roundScaledDecimalBigInt(unscaled, int32(-scaleDiff))
+	case scaleDiff > 0:
+		targetUnscaled = new(big.Int).Set(unscaled)
+		if targetUnscaled.Sign() != 0 {
+			if precision > 0 && int64(decimalBigIntPrecision(targetUnscaled))+scaleDiff > int64(precision) {
+				return nil, parquetDecimalPrecisionOverflow(ctx, precision, targetScale)
+			}
+			factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(scaleDiff), nil)
+			targetUnscaled.Mul(targetUnscaled, factor)
+		}
+	default:
+		targetUnscaled = new(big.Int).Set(unscaled)
+	}
+
+	if precision > 0 && decimalBigIntPrecision(targetUnscaled) > int(precision) {
+		return nil, parquetDecimalPrecisionOverflow(ctx, precision, targetScale)
+	}
+	return targetUnscaled, nil
+}
+
+func parquetDecimalValueToDecimal64(
+	ctx context.Context,
+	st parquet.Type,
+	v parquet.Value,
+	precision int32,
+	scale int32,
+) (types.Decimal64, error) {
+	value, err := parquetDecimalValueToTargetBigInt(ctx, st, v, precision, scale)
+	if err != nil {
+		return 0, err
+	}
+	if value.Cmp(minInt64Big) < 0 || value.Cmp(maxInt64Big) > 0 {
+		return 0, parquetDecimalPrecisionOverflow(ctx, precision, scale)
+	}
+	return types.Decimal64(value.Int64()), nil
+}
+
+func parquetDecimalValueToDecimal128(
+	ctx context.Context,
+	st parquet.Type,
+	v parquet.Value,
+	precision int32,
+	scale int32,
+) (types.Decimal128, error) {
+	value, err := parquetDecimalValueToTargetBigInt(ctx, st, v, precision, scale)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	if value.Cmp(minInt128Big) < 0 || value.Cmp(maxInt128Big) > 0 {
+		return types.Decimal128{}, parquetDecimalPrecisionOverflow(ctx, precision, scale)
+	}
+	buf, err := bigIntToTwosComplementBytes(ctx, value, 16)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	return types.Decimal128{
+		B0_63:   binary.BigEndian.Uint64(buf[8:]),
+		B64_127: binary.BigEndian.Uint64(buf[:8]),
+	}, nil
+}
+
+func parquetDecimalValueToDecimal256(
+	ctx context.Context,
+	st parquet.Type,
+	v parquet.Value,
+	precision int32,
+	scale int32,
+) (types.Decimal256, error) {
+	value, err := parquetDecimalValueToTargetBigInt(ctx, st, v, precision, scale)
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	if value.Cmp(minInt256Big) < 0 || value.Cmp(maxInt256Big) > 0 {
+		return types.Decimal256{}, parquetDecimalPrecisionOverflow(ctx, precision, scale)
+	}
+	buf, err := bigIntToTwosComplementBytes(ctx, value, 32)
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	return types.Decimal256{
+		B0_63:    binary.BigEndian.Uint64(buf[24:]),
+		B64_127:  binary.BigEndian.Uint64(buf[16:24]),
+		B128_191: binary.BigEndian.Uint64(buf[8:16]),
+		B192_255: binary.BigEndian.Uint64(buf[:8]),
+	}, nil
+}
+
+func decimalBigIntPrecision(value *big.Int) int {
+	return len(new(big.Int).Abs(value).Text(10))
+}
+
+func parquetDecimalPrecisionOverflow(ctx context.Context, precision, scale int32) error {
+	return moerr.NewInvalidInputf(ctx, "parquet decimal value overflows DECIMAL(%d,%d)", precision, scale)
 }
 
 func roundScaledDecimalBigInt(unscaled *big.Int, scale int32) *big.Int {

@@ -989,6 +989,14 @@ func resolveServerID(ses *Session) string {
 
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
+	m.Lock()
+	sysVars, ok := m.accountsGlobalSysVarsMap[accountId]
+	var mutationGeneration uint64
+	if ok {
+		mutationGeneration = sysVars.getMutationGeneration()
+	}
+	m.Unlock()
+
 	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
 	if err != nil {
 		return nil, err
@@ -1000,15 +1008,20 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 
 	m.Lock()
 	defer m.Unlock()
-
-	if sysVars, ok := m.accountsGlobalSysVarsMap[accountId]; ok {
-		sysVars.mu.Lock()
-		sysVars.mp = sysVarsMp
-		sysVars.mu.Unlock()
-	} else {
-		m.accountsGlobalSysVarsMap[accountId] = &SystemVariables{mp: sysVarsMp}
+	current, exists := m.accountsGlobalSysVarsMap[accountId]
+	if !exists {
+		current = &SystemVariables{mp: sysVarsMp}
+		m.accountsGlobalSysVarsMap[accountId] = current
+		return current, nil
 	}
-	return m.accountsGlobalSysVarsMap[accountId], nil
+	// The account entry was created or replaced while the catalog read was in
+	// flight. Keep the currently published object instead of updating a stale,
+	// detached one.
+	if !ok || current != sysVars {
+		return current, nil
+	}
+	current.replaceIfMutationGeneration(mutationGeneration, sysVarsMp)
+	return current, nil
 }
 
 func (m *GlobalSysVarsMgr) Put(accountId uint32, vars *SystemVariables) {
@@ -1026,6 +1039,27 @@ type SystemVariables struct {
 	mu sync.Mutex
 	// name -> value/default
 	mp map[string]interface{}
+	// mutationGeneration advances only on successful local mutations. A
+	// refresh is derived from the catalog and must not invalidate another
+	// refresh that observed the same local generation.
+	mutationGeneration uint64
+}
+
+func (sv *SystemVariables) getMutationGeneration() uint64 {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	return sv.mutationGeneration
+}
+
+// replaceIfMutationGeneration publishes a refreshed snapshot only when no
+// local mutation has been applied since the refresh started.
+func (sv *SystemVariables) replaceIfMutationGeneration(generation uint64, mp map[string]interface{}) {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	if sv.mutationGeneration != generation {
+		return
+	}
+	sv.mp = mp
 }
 
 // Clone returns a copy of sv
@@ -1051,11 +1085,13 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 	defer sv.mu.Unlock()
 	name = strings.ToLower(name)
 	sv.mp[name] = value
+	sv.mutationGeneration++
 }
 
 // definitions of system variables
 const (
 	enableExplainScheduling = "enable_explain_scheduling"
+	maxPreparedStmtCount    = "max_prepared_stmt_count"
 	queryMaxWorkers         = "query_max_workers"
 	queryPoolStrict         = "query_pool_strict"
 )
@@ -1992,7 +2028,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("group_concat_max_len", 4, math.MaxInt64, false),
-		Default:           int64(4),
+		Default:           int64(1024),
 	},
 	"have_ssl": {
 		Name:              "have_ssl",
@@ -2428,12 +2464,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("max_points_in_geometry", 3, 1048576, false),
 		Default:           int64(65536),
 	},
-	"max_prepared_stmt_count": {
-		Name:              "max_prepared_stmt_count",
+	maxPreparedStmtCount: {
+		Name:              maxPreparedStmtCount,
 		Scope:             ScopeGlobal,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("max_prepared_stmt_count", 0, 4194304, false),
+		Type:              InitSystemVariableIntType(maxPreparedStmtCount, 0, 4194304, false),
 		Default:           int64(16382),
 	},
 	"max_seeks_for_key": {

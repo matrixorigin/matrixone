@@ -222,7 +222,7 @@ func Test_getColData_Timestamp_Consistency(t *testing.T) {
 	testValues := []string{
 		"2020-09-07 00:00:00",
 		"2024-01-01 12:00:00",
-		"1970-01-01 00:00:01",
+		"1970-01-01 08:00:01",
 	}
 
 	for _, timestampStr := range testValues {

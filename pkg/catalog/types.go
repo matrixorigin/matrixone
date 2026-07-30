@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -40,6 +42,10 @@ const (
 	PartitionSubTableWildcard = "\\%!\\%%\\%!\\%%"
 
 	ExternalFilePath = "__mo_filepath"
+	// ExternalFilePathColId identifies the synthetic filepath column that the
+	// query builder appends to external scans. It survives column-position
+	// remapping, unlike TbColToDataCol's original file-field indexes.
+	ExternalFilePathColId = ^uint64(0)
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
@@ -402,6 +408,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
+	SystemSI_IVFFLAT_IncludeColPrefix       = "__mo_index_include_"
 
 	/************ 3. FULLTEXT Index **************/
 
@@ -1003,11 +1010,32 @@ var SystemDatabases = []string{
 }
 
 func IsUniqueIndexTable(name string) bool {
-	return strings.HasPrefix(name, UniqueIndexTableNamePrefix)
+	return isIndexTableWithPrefix(name, UniqueIndexTableNamePrefix)
 }
 
 func IsSecondaryIndexTable(name string) bool {
-	return strings.HasPrefix(name, SecondaryIndexTableNamePrefix)
+	return isIndexTableWithPrefix(name, SecondaryIndexTableNamePrefix)
+}
+
+func isIndexTableWithPrefix(name, prefix string) bool {
+	if strings.HasPrefix(name, prefix) {
+		return true
+	}
+	if !defines.IsTempTableName(name) {
+		return false
+	}
+
+	// A temporary index table is stored as
+	// __mo_tmp_<session>_<database>_<original-index-table-name>. Keep using the
+	// generated index UUID as the discriminator: database and table names may
+	// legally contain the internal-looking prefix too.
+	marker := "_" + prefix
+	markerPos := strings.LastIndex(name, marker)
+	if markerPos < 0 {
+		return false
+	}
+	_, err := uuid.Parse(name[markerPos+len(marker):])
+	return err == nil
 }
 
 func IsFullTextIndexTableType(tableType string, tableName string) bool {

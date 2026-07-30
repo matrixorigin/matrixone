@@ -31,6 +31,9 @@ import (
 )
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
+	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
+	// CHAR/VARCHAR writes to truncation instead of rejection.
+	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
 	dmlCtx := NewDMLContext()
 	// Allow FK tables on the modern insert path: bypass the generic FK-table
 	// rejection in ResolveTables via IgnoreForeignKey, then enforce parent
@@ -840,8 +843,31 @@ func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, 
 	}
 	reduceSinkSinkScanNodes(query)
 	builder.tempOptimizeForDML()
+	builder.determineShuffleForDMLSteps()
 	reCheckifNeedLockWholeTable(builder)
 	return nil
+}
+
+func (builder *QueryBuilder) determineShuffleForDMLSteps() {
+	// Irregular-index maintenance is appended after createQuery, while the normal
+	// shuffle passes run inside createQuery. tempOptimizeForDML recalculates every
+	// final step with HashmapStats reset, so rerun the passes for the complete,
+	// reduced graph after statistics are final; otherwise both existing joins and
+	// late IVF/fulltext joins retain Shuffle=false and build a broadcast hash table.
+	for i := range builder.qry.Steps {
+		rootID := builder.qry.Steps[i]
+		determineShuffleMethodAfterRemap(rootID, builder)
+		determineShuffleMethod2(rootID, -1, builder)
+		builder.forceJoinOnOneCN(rootID, false)
+	}
+
+	// createQuery generates runtime filters after the final shuffle decision.
+	// Repeat that pass only after every late DML step has finalized shuffle:
+	// shuffle hashbuild requires a (PASS) runtime-filter spec even when the probe
+	// side is a SINK_SCAN and no data filtering can be pushed into it.
+	for i := range builder.qry.Steps {
+		builder.generateRuntimeFilters(builder.qry.Steps[i])
+	}
 }
 
 // buildOnDupTargetPkResolution builds the conflict-resolution subgraph for
@@ -1328,7 +1354,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 
-			updateExpr, err = forceAssignmentCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
+			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, false)
 			if err != nil {
 				return 0, err
 			}
@@ -1379,7 +1405,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if col.GeneratedCol == nil {
 				continue
 			}
-			genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, finalRowExprs, 0)
+			genExpr := builder.applyGeneratedColumnAssignmentCast(
+				DeepCopyExpr(col.GeneratedCol.Expr),
+				builder.isInsertIgnore,
+			)
+			genExpr = substituteColRefsInExpr(genExpr, finalRowExprs, 0)
 			finalRowExprs[i] = genExpr
 			updateExprs[col.Name] = genExpr
 		}
@@ -2764,7 +2794,8 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 				return 0, nil, nil, err
 			}
 		} else {
-			projExpr, err = forceAssignmentCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			projExpr, err = builder.forceProjectedAssignmentCastExpr(
+				projExpr, lastNode.ProjectList[i], tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, nil, err
 			}
@@ -2925,7 +2956,10 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 
 	for _, i := range generatedColIdxs {
 		col := tableDef.Cols[i]
-		genExpr := DeepCopyExpr(col.GeneratedCol.Expr)
+		genExpr := builder.applyGeneratedColumnAssignmentCast(
+			DeepCopyExpr(col.GeneratedCol.Expr),
+			builder.isInsertIgnore,
+		)
 		inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
 		proj1Pos := genColIdxToProj1Pos[i]
 		projList1[proj1Pos] = genExpr
@@ -3063,7 +3097,7 @@ func (builder *QueryBuilder) buildValueScan(
 			if err != nil {
 				return 0, err
 			}
-			defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 			if err != nil {
 				return 0, err
 			}
@@ -3099,7 +3133,7 @@ func (builder *QueryBuilder) buildValueScan(
 			}
 			for _, r := range stmt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
-					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp)
+					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return 0, err
 					}
@@ -3180,7 +3214,7 @@ func (builder *QueryBuilder) buildValueScan(
 						}
 					}
 				}
-				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
+				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
 					return 0, err
 				}

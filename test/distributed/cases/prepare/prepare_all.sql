@@ -527,5 +527,34 @@ DEALLOCATE PREPARE rp2;
 drop table if exists replace_prepare;
 drop table if exists replace_prepare_src;
 
+-- test prepared ROWS frame bounds are evaluated for every execution
+drop table if exists prepared_window_frame;
+create table prepared_window_frame(id int primary key, n int);
+insert into prepared_window_frame values (1,10),(2,20),(3,30);
+prepare prepared_rows_frame from 'select id, sum(n) over (order by id rows between ? preceding and ? following) from prepared_window_frame order by id';
+set @before = 1, @after = 1;
+execute prepared_rows_frame using @before, @after;
+set @before = 0, @after = 0;
+execute prepared_rows_frame using @before, @after;
+deallocate prepare prepared_rows_frame;
+drop table prepared_window_frame;
+
+-- @case
+-- @desc:Prepared SET statements retain literal and parameterized expressions
+-- @label:bvt
+set @input = 41;
+prepare prepared_set_literal from 'set @prepared_literal = 41 + 1';
+execute prepared_set_literal;
+select @prepared_literal;
+
+prepare prepared_set_param from 'set @prepared_param = ? + 1';
+execute prepared_set_param using @input;
+select @prepared_param;
+set @input = 9;
+execute prepared_set_param using @input;
+select @prepared_param;
+deallocate prepare prepared_set_literal;
+deallocate prepare prepared_set_param;
+
 # reset
 SET TIME_ZONE = "SYSTEM";

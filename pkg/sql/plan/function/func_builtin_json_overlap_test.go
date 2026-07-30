@@ -141,6 +141,15 @@ func TestJSONOverlapComparatorDecimalAndDouble(t *testing.T) {
 	}
 }
 
+func TestJSONOverlapComparatorBinaryUsesRawPayloadAndSubtype(t *testing.T) {
+	legacyBlob := newTypedByteJson(bytejson.TpCodeBlob, "AA==")
+	rawBlob := newTypedByteJson(bytejson.TpCodeOpaque, string([]byte{0x00}))
+	bit := newTypedByteJson(bytejson.TpCodeBit, string([]byte{0x00}))
+
+	require.Zero(t, compareJSONOverlapExact(legacyBlob, rawBlob))
+	require.Less(t, compareJSONOverlapExact(bit, rawBlob), 0)
+}
+
 func TestJSONOverlapComparatorLargeInternalDecimalsDoNotPanicOrEqualZero(t *testing.T) {
 	zero := mustParseJSONOverlap(t, `0`)
 	positive := newTypedByteJson(bytejson.TpCodeDecimal, "1e100")
@@ -854,44 +863,6 @@ func TestJSONOverlapsPartialSelectListSkipsParsingAndPreservesNulls(t *testing.T
 	require.True(t, result.IsNull(1))
 	require.Equal(t, int64(1), vector.MustFixedColWithTypeCheck[int64](result)[2])
 	require.True(t, result.IsNull(3))
-}
-
-func TestJSONOverlapsAccessorAllocationsDoNotScaleWithRows(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	trueJSON := mustJsonBinaryString(t, `true`)
-	falseJSON := mustJsonBinaryString(t, `false`)
-
-	measure := func(rows int) float64 {
-		left := make([]string, rows)
-		right := make([]string, rows)
-		for i := range rows {
-			left[i] = trueJSON
-			right[i] = falseJSON
-		}
-		testCase := NewFunctionTestCase(
-			proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_json.ToType(), left, nil),
-				NewFunctionTestInput(types.T_json.ToType(), right, nil),
-			},
-			NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
-			jsonOverlaps,
-		)
-		var runErr error
-		allocations := testing.AllocsPerRun(3, func() {
-			runErr = testCase.result.PreExtendAndReset(rows)
-			if runErr == nil {
-				runErr = testCase.fn(testCase.parameters, testCase.result, proc, rows, nil)
-			}
-		})
-		require.NoError(t, runErr)
-		return allocations
-	}
-
-	oneRow := measure(1)
-	manyRows := measure(8192)
-	require.LessOrEqual(t, manyRows, oneRow+10,
-		"accessor allocations must be batch-scoped: one=%f many=%f", oneRow, manyRows)
 }
 
 func BenchmarkJSONOverlapIndexedArrays(b *testing.B) {

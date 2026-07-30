@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 func Test_runSql(t *testing.T) {
@@ -55,6 +56,22 @@ func Test_runSql(t *testing.T) {
 
 	_, err := runSql(compilerContext, "")
 	require.Error(t, err, "internal error: no account id in context")
+}
+
+func TestGetSqlForTransferAlterCopyFk(t *testing.T) {
+	prepare, finalize := GetSqlForTransferAlterCopyFk(
+		"db'1",
+		"source'child",
+		"copy'child",
+	)
+
+	require.Equal(t, []string{
+		"delete from `mo_catalog`.`mo_foreign_keys` where db_name = 'db''1' and table_name = 'copy''child'",
+		"update `mo_catalog`.`mo_foreign_keys` set table_name = 'copy''child' where db_name = 'db''1' and table_name = 'source''child'",
+	}, prepare)
+	require.Equal(t, []string{
+		"update `mo_catalog`.`mo_foreign_keys` set table_name = 'source''child' where db_name = 'db''1' and table_name = 'copy''child'",
+	}, finalize)
 }
 
 func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
@@ -109,7 +126,7 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	colType := types.T_geometry.ToType()
 	numVal := tree.NewNumVal("POINT(1 1)", "POINT(1 1)", false, tree.P_char)
 
-	expr, err := MakeInsertValueConstExpr(proc, numVal, &colType)
+	expr, err := MakeInsertValueConstExpr(proc, numVal, &colType, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_geometry), expr.Typ.Id)
 
@@ -160,7 +177,7 @@ func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			numVal := tree.NewNumVal(tc.literal, tc.literal, false, tree.P_hexnum)
-			expr, err := MakeInsertValueConstExpr(proc, numVal, &tc.colType)
+			expr, err := MakeInsertValueConstExpr(proc, numVal, &tc.colType, false)
 			if tc.expectError {
 				require.Error(t, err)
 				return
@@ -596,4 +613,57 @@ func exprContainsColumn(expr *plan.Expr, colName string) bool {
 
 func columnNameMatches(got, want string) bool {
 	return got == want || strings.HasSuffix(got, "."+want)
+}
+
+func TestIndexNeedsRewriteForUpdateIvfColumns(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: "title", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "category", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "note", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+	}
+	posMap := map[string]int{
+		"id":        0,
+		"embedding": 1,
+		"title":     2,
+		"category":  3,
+		"note":      4,
+	}
+	colMap := make(map[string]*plan.ColDef, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		colMap[col.Name] = col
+	}
+	indexDef := &plan.IndexDef{
+		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+		Parts:           []string{"embedding"},
+		IndexAlgoParams: `{"lists":"2","op_type":"` + metric.DistFuncOpTypes["l2_distance"] + `"}`,
+		IncludedColumns: []string{"title", "category"},
+	}
+
+	tests := []struct {
+		name       string
+		updateCols map[string]int
+		want       bool
+	}{
+		{name: "unrelated column does not rewrite ivf", updateCols: map[string]int{"note": 4}, want: false},
+		{name: "vector key rewrites ivf", updateCols: map[string]int{"embedding": 1}, want: true},
+		{name: "primary key rewrites ivf", updateCols: map[string]int{"id": 0}, want: true},
+		{name: "first include column rewrites ivf", updateCols: map[string]int{"title": 2}, want: true},
+		{name: "second include column rewrites ivf", updateCols: map[string]int{"category": 3}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := indexNeedsRewriteForUpdate(tableDef, indexDef, tt.updateCols, posMap, colMap)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
 }

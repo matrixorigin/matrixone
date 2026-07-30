@@ -539,6 +539,12 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 		}
 
 		f, err := b.Send(ctx, request)
+		if errors.Is(err, backendDraining) {
+			// Drain is a healthy generation handoff, not a peer failure. Retry
+			// selection so new work moves to the replacement without closing
+			// the old backend or poisoning the circuit breaker.
+			continue
+		}
 		if isBackendClosedError(err) {
 			c.retireBackend(backend, b)
 			breaker.RecordFailure()
@@ -679,6 +685,9 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 			// client remains the owner and must release it.
 			b.Unlock()
 		}
+		if errors.Is(err, backendDraining) {
+			continue
+		}
 		if isBackendClosedError(err) {
 			c.retireBackend(backend, b)
 			breaker.RecordFailure()
@@ -801,6 +810,9 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
 		if err != nil {
+			if errors.Is(err, backendDraining) {
+				continue
+			}
 			if isBackendClosedError(err) {
 				c.retireBackend(backend, b)
 				breaker.RecordFailure()
@@ -963,13 +975,22 @@ func (c *client) getBackendForOperation(
 	// after selection misses; doing a full slice rewrite before every Send/Ping
 	// would add avoidable work to the per-operation hot path.
 	b, err := c.getBackendLockedWithCreate(backend, lock, false)
-	inactive := 0
 	if b == nil && (err == nil || isBackendClosedError(err)) {
-		inactive = c.detachInactiveForCleanupLocked(backend)
-		if inactive > 0 {
-			// Re-evaluate selection and capacity in the same client-state snapshot
-			// after terminal entries have been removed.
+		if c.detachInactiveForCleanupLocked(backend) > 0 {
+			// Re-evaluate selection and capacity in the same client-state
+			// snapshot after terminal entries have been removed.
 			b, err = c.getBackendLockedWithCreate(backend, lock, false)
+		}
+		if b == nil &&
+			(err == nil || isBackendClosedError(err)) &&
+			!c.canCreateLocked(backend) {
+			// At most one draining generation may temporarily exceed the
+			// configured active capacity. If its replacement also loses data
+			// progress, retire the oldest drain rather than make the remote
+			// permanently unavailable or grow generations without bound.
+			if c.detachOldestDrainingForCleanupLocked(backend) > 0 {
+				b, err = c.getBackendLockedWithCreate(backend, lock, false)
+			}
 		}
 	}
 	// Cleanup ownership was transferred before each backend was detached. The
@@ -1071,7 +1092,9 @@ func (c *client) getBackendLockedWithCreate(
 		for i := uint64(0); i < n; i++ {
 			seq := c.mu.ops[backend].next()
 			b = backends[seq%n]
-			if !b.Locked() && b.LastActiveTime() != (time.Time{}) {
+			if !b.Locked() &&
+				b.LastActiveTime() != (time.Time{}) &&
+				backendAdmissionAvailable(b) {
 				break
 			}
 
@@ -1496,6 +1519,19 @@ func (c *client) detachInactiveForCleanupLocked(remote string) int {
 	return detached
 }
 
+// detachOldestDrainingForCleanupLocked keeps replacement growth bounded. It is
+// used only after selection found no admissible backend and the one-generation
+// drain allowance is already full.
+func (c *client) detachOldestDrainingForCleanupLocked(remote string) int {
+	for _, backend := range c.mu.backends[remote] {
+		if !backendAdmissionAvailable(backend) &&
+			c.detachBackendForCleanupLocked(remote, backend) {
+			return 1
+		}
+	}
+	return 0
+}
+
 // doRemoveInactiveAll removes all explicitly closed (inactive) backends for every remote.
 // Used by the periodic GC to clean up closed backends within ~10s without waiting for
 // the idle timeout (e.g. 1 minute). Safe to call on closed client (no-op).
@@ -1526,8 +1562,17 @@ func (c *client) closeIdleBackends() int {
 	for k, backends := range c.mu.backends {
 		newBackends := backends[:0]
 		for _, b := range backends {
+			lastActive := b.LastActiveTime()
+			if !backendAdmissionAvailable(b) &&
+				lastActive != (time.Time{}) {
+				// A draining generation still owns Futures/streams. Their
+				// contexts, terminal responses, or explicit Close own the
+				// lifetime; idle GC must not cancel them.
+				newBackends = append(newBackends, b)
+				continue
+			}
 			if !b.Locked() &&
-				time.Since(b.LastActiveTime()) > c.options.maxIdleDuration &&
+				time.Since(lastActive) > c.options.maxIdleDuration &&
 				c.tryStartBackendCleanupLocked(b) {
 				closed++
 				continue
@@ -1570,7 +1615,27 @@ func (c *client) doCreate(backend string) (Backend, error) {
 }
 
 func (c *client) canCreateLocked(backend string) bool {
-	return len(c.mu.backends[backend]) < c.options.maxBackendsPerHost
+	backends := c.mu.backends[backend]
+	admissible := 0
+	for _, backend := range backends {
+		if backendAdmissionAvailable(backend) {
+			admissible++
+		}
+	}
+	// Permit one draining generation beyond the configured active capacity so
+	// a valid slow request can finish while new traffic moves to a fresh data
+	// transport. The extra physical generation is a hard per-remote bound.
+	return admissible < c.options.maxBackendsPerHost &&
+		len(backends) < c.options.maxBackendsPerHost+1
+}
+
+type backendAdmission interface {
+	admissionAvailable() bool
+}
+
+func backendAdmissionAvailable(backend Backend) bool {
+	value, ok := backend.(backendAdmission)
+	return !ok || value.admissionAvailable()
 }
 
 func (c *client) updatePoolSizeMetricsLocked() {

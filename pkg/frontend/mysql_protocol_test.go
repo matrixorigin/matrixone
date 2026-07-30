@@ -37,7 +37,11 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
+	molog "github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -48,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -61,6 +66,70 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func newObservedProtocolSession() (*Session, *observer.ObservedLogs) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	ses := &Session{
+		logger:   molog.GetServiceLogger(zap.New(core), metadata.ServiceType_CN, "test"),
+		logLevel: zapcore.DebugLevel,
+	}
+	ses.loggerOnce.Do(func() {})
+	return ses, logs
+}
+
+func TestMysqlProtocolReceiveExtraInfoLogLevel(t *testing.T) {
+	t.Run("timeout is debug", func(t *testing.T) {
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		defer serverConn.Close()
+
+		ses, logs := newObservedProtocolSession()
+		proto := &MysqlProtocolImpl{
+			ctx: context.Background(),
+			ses: ses,
+		}
+		proto.receiveExtraInfo(&Conn{conn: serverConn})
+
+		entries := logs.FilterMessage("cannot get salt, maybe not use proxy").All()
+		require.Len(t, entries, 1)
+		require.Equal(t, zap.DebugLevel, entries[0].Level)
+
+		writeErr := make(chan error, 1)
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			_, err := clientConn.Write([]byte{1})
+			writeErr <- err
+		}()
+		var buf [1]byte
+		_, err := serverConn.Read(buf[:])
+		require.NoError(t, err, "ExtraInfo timeout must not leak into the MySQL handshake")
+		require.NoError(t, <-writeErr)
+	})
+
+	t.Run("malformed extra info is error", func(t *testing.T) {
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		defer serverConn.Close()
+
+		writeErr := make(chan error, 1)
+		go func() {
+			_, err := clientConn.Write([]byte{1, 0, 0xff})
+			writeErr <- err
+		}()
+
+		ses, logs := newObservedProtocolSession()
+		proto := &MysqlProtocolImpl{
+			ctx: context.Background(),
+			ses: ses,
+		}
+		proto.receiveExtraInfo(&Conn{conn: serverConn})
+		require.NoError(t, <-writeErr)
+
+		entries := logs.FilterMessage("failed to get extra info").All()
+		require.Len(t, entries, 1)
+		require.Equal(t, zap.ErrorLevel, entries[0].Level)
+	})
+}
 
 func registerConn(clientConn net.Conn) {
 	mysqlDriver.RegisterDialContext("custom", func(ctx context.Context, addr string) (net.Conn, error) {
@@ -2515,6 +2584,50 @@ func TestSendPrepareResponse(t *testing.T) {
 	})
 }
 
+func TestPreparedSetBinaryProtocolReportsAndReplacesParameters(t *testing.T) {
+	ctx := context.TODO()
+	conn := &prepareResponseCaptureConn{}
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(
+		t, "set @first = ? + 1, @second = ?", conn)
+	proto.capability &^= CLIENT_DEPRECATE_EOF
+	defer func() {
+		proc.SetPrepareParams(nil)
+		prepareStmt.clearBinaryParamState(proc)
+	}()
+
+	prepare := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	require.Len(t, prepare.ParamTypes, 2)
+	require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+	packets := splitProtocolPackets(t, conn.writes)
+	require.Len(t, packets, 4)
+	require.Equal(t, uint16(0), binary.LittleEndian.Uint16(packets[0][5:]))
+	require.Equal(t, uint16(2), binary.LittleEndian.Uint16(packets[0][7:]))
+	for _, payload := range packets[1:3] {
+		column := parsePrepareColumnDefinition(t, payload)
+		require.Equal(t, "?", column.name)
+	}
+	require.Equal(t, byte(defines.EOFHeader), packets[3][0])
+
+	// The first execution supplies a numeric value and text value. The second
+	// supplies a different numeric value and NULL, proving that no old text
+	// parameter is appended to or reused by the prepared SET statement.
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildPreparedSetExecutePacket(proto, 0, 41, "first"), 0))
+	proc.SetPrepareParams(prepareStmt.params)
+	require.Equal(t, 2, proc.GetPrepareParams().Length())
+	require.Equal(t, "41", proc.GetPrepareParams().GetStringAt(0))
+	require.Equal(t, "first", proc.GetPrepareParams().GetStringAt(1))
+	require.False(t, proc.GetPrepareParams().GetNulls().Contains(1))
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildPreparedSetExecutePacket(proto, 1<<1, 9, ""), 0))
+	proc.SetPrepareParams(prepareStmt.params)
+	require.Equal(t, 2, proc.GetPrepareParams().Length())
+	require.Equal(t, "9", proc.GetPrepareParams().GetStringAt(0))
+	require.True(t, proc.GetPrepareParams().GetNulls().Contains(1))
+}
+
 func FuzzParseExecuteData(f *testing.F) {
 	ctx := context.TODO()
 	proc := testutil.NewProcess(f)
@@ -2585,6 +2698,10 @@ func FuzzParseExecuteData(f *testing.F) {
 }
 
 func newBinaryPrepareProtocolTestCase(t *testing.T, sql string) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
+	return newBinaryPrepareProtocolTestCaseWithConn(t, sql, &testConn{})
+}
+
+func newBinaryPrepareProtocolTestCaseWithConn(t *testing.T, sql string, conn net.Conn) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
 	t.Helper()
 	ctx := context.TODO()
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2596,10 +2713,11 @@ func newBinaryPrepareProtocolTestCase(t *testing.T, sql string) (*MysqlProtocolI
 	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 
-	ioses, err := NewIOSession(&testConn{}, pu, "")
+	ioses, err := NewIOSession(conn, pu, "")
 	require.NoError(t, err)
 
 	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	proto.SetSession(&Session{feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}}})
 	proc := testutil.NewProcess(t)
 
 	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), sql)
@@ -2755,6 +2873,25 @@ func buildLongLongExecutePacket(value uint64, unsigned bool) []byte {
 
 func buildNullExecutePacket(tp defines.MysqlType) []byte {
 	data := []byte{0, 0, 0, 0, 0, 1, 1, byte(tp), 0}
+	return data
+}
+
+func buildPreparedSetExecutePacket(proto *MysqlProtocolImpl, nullBitmap byte, first uint32, second string) []byte {
+	data := []byte{
+		0, 0, 0, 0, 0, // cursor flags and iteration count
+		nullBitmap,
+		1, // new parameters bound
+		byte(defines.MYSQL_TYPE_LONG), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+	firstValue := make([]byte, 4)
+	binary.LittleEndian.PutUint32(firstValue, first)
+	data = append(data, firstValue...)
+	if nullBitmap&(1<<1) == 0 {
+		pos := len(data)
+		data = append(data, make([]byte, len(second)+9)...)
+		data = data[:proto.writeStringLenEnc(data, pos, second)]
+	}
 	return data
 }
 
@@ -5475,6 +5612,58 @@ func Test_appendResultSetBinaryRow2_DateTimeHandling(t *testing.T) {
 			err := proto.appendResultSetBinaryRow2(rs, colSlices, 0)
 			convey.So(err, convey.ShouldBeNil)
 		})
+	})
+}
+
+func TestBinaryProtocolZeroTemporalEncoding(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+	tc := &testConn{}
+	ioses, err := NewIOSession(tc, pu, "")
+	require.NoError(t, err)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+	encode := func(t *testing.T, appendValue func() error) []byte {
+		t.Helper()
+		tc.data = tc.data[:0]
+		require.NoError(t, proto.beginPacket())
+		require.NoError(t, appendValue())
+		require.NoError(t, proto.finishedPacket())
+		require.NoError(t, proto.flush())
+		require.Greater(t, len(tc.data), 4)
+		payloadLen := int(uint32(tc.data[0]) | uint32(tc.data[1])<<8 | uint32(tc.data[2])<<16)
+		payload := tc.data[4:]
+		require.Len(t, payload, payloadLen)
+		return payload
+	}
+
+	t.Run("zero date uses zero-length encoding", func(t *testing.T) {
+		require.Equal(t, []byte{0}, encode(t, func() error {
+			return proto.appendDate(types.ZeroDate)
+		}))
+	})
+
+	t.Run("minimum date keeps its calendar fields", func(t *testing.T) {
+		require.Equal(t, []byte{4, 1, 0, 1, 1}, encode(t, func() error {
+			return proto.appendDate(types.Date(0))
+		}))
+	})
+
+	t.Run("zero datetime uses zero-length encoding", func(t *testing.T) {
+		require.Equal(t, []byte{0}, encode(t, func() error {
+			return proto.appendDatetime(types.ZeroDatetime)
+		}))
+	})
+
+	t.Run("minimum datetime keeps its calendar fields", func(t *testing.T) {
+		require.Equal(t, []byte{4, 1, 0, 1, 1}, encode(t, func() error {
+			return proto.appendDatetime(types.Datetime(0))
+		}))
 	})
 }
 

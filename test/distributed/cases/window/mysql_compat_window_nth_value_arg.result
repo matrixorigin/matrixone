@@ -1,0 +1,31 @@
+drop database if exists mysql_compat_window_nth_value_arg;
+create database mysql_compat_window_nth_value_arg;
+use mysql_compat_window_nth_value_arg;
+create table t (id int primary key, grp varchar(8), txt text);
+insert into t values
+(1,'A','alpha'),(2,'A','beta'),(3,'A','gamma'),
+(4,'B','delta'),(5,'B','epsilon');
+select nth_value(txt, id - 1) over (
+partition by grp order by id
+rows between unbounded preceding and unbounded following
+) nth_txt
+from t;
+Incorrect arguments to nth_value
+select nth_value(txt, 0) over (
+partition by grp order by id
+rows between unbounded preceding and unbounded following
+) nth_txt
+from t;
+Incorrect arguments to nth_value
+select id, nth_value(id, 1 + 1) over (
+partition by grp order by id
+rows between unbounded preceding and unbounded following
+) nth_id
+from t order by grp, id;
+➤ id[4,32,0]  ¦  nth_id[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+3  ¦  2  𝄀
+4  ¦  5  𝄀
+5  ¦  5
+drop database mysql_compat_window_nth_value_arg;

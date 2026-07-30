@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"net"
 	"slices"
 	"strconv"
@@ -38,11 +39,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -94,12 +97,106 @@ func (s *Scope) release() {
 }
 
 func (s *Scope) Reset(c *Compile) error {
+	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(c.proc)
+	if err != nil {
+		return err
+	}
+	return s.reset(c, rejectZeroTemporal)
+}
+
+func (s *Scope) reset(c *Compile, rejectZeroTemporal bool) error {
+	if err := refreshZeroTemporalWritePolicy(s.RootOp, rejectZeroTemporal); err != nil {
+		return err
+	}
 	err := s.resetForReuse(c)
 	if err != nil {
 		return err
 	}
 	for _, scope := range s.PreScopes {
-		if err = scope.Reset(c); err != nil {
+		if err = scope.reset(c, rejectZeroTemporal); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type zeroTemporalWritePolicySetter interface {
+	SetRejectZeroTemporal(bool)
+}
+
+func refreshZeroTemporalWritePolicy(root vm.Operator, reject bool) error {
+	if root == nil {
+		return nil
+	}
+	return vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		if setter, ok := op.(zeroTemporalWritePolicySetter); ok {
+			setter.SetRejectZeroTemporal(reject)
+		}
+		return nil
+	})
+}
+
+func refreshGroupConcatMaxLen(scopes []*Scope, proc *process.Process) error {
+	var maxLen uint64
+	resolved := false
+	visited := make(map[*Scope]struct{})
+
+	var refreshScope func(*Scope) error
+	refreshScope = func(scope *Scope) error {
+		if scope == nil {
+			return nil
+		}
+		if _, ok := visited[scope]; ok {
+			return nil
+		}
+		visited[scope] = struct{}{}
+
+		if err := vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			var aggs []aggexec.AggFuncExecExpression
+			switch arg := op.(type) {
+			case *group.Group:
+				aggs = arg.Aggs
+			case *group.MergeGroup:
+				aggs = arg.Aggs
+			case *window.Window:
+				aggs = arg.Aggs
+			}
+
+			for i := range aggs {
+				if aggs[i].GetAggID() != aggexec.AggIdOfGroupConcat {
+					continue
+				}
+				if !resolved {
+					value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
+					if err != nil {
+						return err
+					}
+					sessionMaxLen, ok := value.(int64)
+					if !ok || sessionMaxLen < 0 {
+						return moerr.NewInternalErrorNoCtxf(
+							"group_concat_max_len has invalid value %v", value)
+					}
+					maxLen = uint64(sessionMaxLen)
+					resolved = true
+				}
+				aggs[i].SetExtraConfig(aggexec.RefreshGroupConcatConfigMaxLen(
+					aggs[i].GetExtraConfig(), maxLen))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		for _, preScope := range scope.PreScopes {
+			if err := refreshScope(preScope); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, scope := range scopes {
+		if err := refreshScope(scope); err != nil {
 			return err
 		}
 	}
@@ -281,7 +378,7 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 //	2. send notify message to remote node for its data producer.
 //	3. run itself.
 //	4. listen to all running pipelines, once any error occurs, stop the NormalMergeRun asap.
-func (s *Scope) MergeRun(c *Compile) error {
+func (s *Scope) MergeRun(c *Compile) (err error) {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -301,7 +398,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	// Merge Run normally.
 	var wg sync.WaitGroup
-	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
+	preScopeResultReceiveChan := make(chan scopeRunResult, len(s.PreScopes))
 
 	// step 1.
 	for i := range s.PreScopes {
@@ -326,7 +423,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
 				}
 				s.cancelMergeSiblingsOnError(err)
-				preScopeResultReceiveChan <- err
+				preScopeResultReceiveChan <- newScopeRunResult(err, scope)
 			})
 
 		// build routine failed.
@@ -334,7 +431,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			wg.Done() // this is necessary, because the submitPreScope may panic.
 			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
 			s.cancelMergeSiblingsOnError(submitPreScope)
-			preScopeResultReceiveChan <- submitPreScope
+			preScopeResultReceiveChan <- newScopeRunResult(submitPreScope, scope)
 		}
 	}
 
@@ -349,24 +446,18 @@ func (s *Scope) MergeRun(c *Compile) error {
 	defer func() {
 		// should wait all the notify-message-routine and preScopes done.
 		wg.Wait()
-
-		// not necessary, but we still clean the preScope error channel here.
-		for len(preScopeResultReceiveChan) > 0 {
-			<-preScopeResultReceiveChan
-		}
-
-		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
-		for len(notifyMessageResultReceiveChan) > 0 {
-			result := <-notifyMessageResultReceiveChan
-			result.clean(s.Proc)
-		}
+		err = collectMergeRunResults(
+			s.Proc,
+			scopeRunResult{err: err, ctx: s.Proc.Ctx},
+			preScopeResultReceiveChan,
+			notifyMessageResultReceiveChan)
 	}()
 
 	preScopeCount := len(s.PreScopes)
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
 	//after parallelRun, prescope count may change. we need to save this before parallelRun
 
-	err := s.ParallelRun(c)
+	err = s.ParallelRun(c)
 	if err != nil {
 		return s.cancelMergeSiblingsOnError(err)
 	}
@@ -374,7 +465,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 	// receive and check error from pre-scopes and remote scopes.
 	if remoteScopeCount == 0 {
 		for i := 0; i < preScopeCount; i++ {
-			if err = <-preScopeResultReceiveChan; err != nil {
+			result := <-preScopeResultReceiveChan
+			result, _ = result.resolveCancelCause()
+			if err = result.err; err != nil {
 				return err
 			}
 		}
@@ -383,7 +476,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	for {
 		select {
-		case err := <-preScopeResultReceiveChan:
+		case result := <-preScopeResultReceiveChan:
+			result, _ = result.resolveCancelCause()
+			err := result.err
 			if err != nil {
 				return s.cancelMergeSiblingsOnError(err)
 			}
@@ -401,6 +496,28 @@ func (s *Scope) MergeRun(c *Compile) error {
 			return nil
 		}
 	}
+}
+
+// collectMergeRunResults consumes results left behind after MergeRun returns
+// early. A terminal-signal delivery fallback from the merge pipeline is
+// secondary when a producer or remote notifier reports the execution error
+// that caused cleanup to race a full pipeline channel.
+func collectMergeRunResults(
+	proc *process.Process,
+	current scopeRunResult,
+	preScopeResults <-chan scopeRunResult,
+	notifyResults <-chan notifyMessageResult,
+) error {
+	for len(preScopeResults) > 0 {
+		current = preferPrimaryScopeResult(current, <-preScopeResults)
+	}
+	for len(notifyResults) > 0 {
+		result := <-notifyResults
+		current = preferPrimaryScopeResult(current, scopeRunResult{err: result.err, ctx: proc.Ctx})
+		result.clean(proc)
+	}
+	current, _ = current.resolveCancelCause()
+	return current.err
 }
 
 // cancelMergeSiblingsOnError breaks the wait-for cycle between a failed
@@ -976,7 +1093,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
+		err = suppressRemoteNotifyCancelError(s.Proc.Ctx, err)
 		s.cancelMergeSiblingsOnError(err)
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
@@ -1108,6 +1225,17 @@ func logRemoteNotifyCleanupSendFailure(
 }
 
 func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if procCtx != nil && procCtx.Err() != nil &&
+		(moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) || errors.Is(err, context.Canceled)) {
+		return nil
+	}
+	return err
+}
+
+func suppressRemoteNotifyCancelError(procCtx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}

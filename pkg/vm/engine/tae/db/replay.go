@@ -30,6 +30,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
@@ -144,6 +145,15 @@ type WalReplayer struct {
 	maxLSN        atomic.Uint64
 
 	lsn uint64
+
+	replayAObjectCreates map[replayAObjectCreateKey]types.TS
+}
+
+type replayAObjectCreateKey struct {
+	dbID        uint64
+	tableID     uint64
+	objectID    objectio.ObjectId
+	isTombstone bool
 }
 
 func newWalReplayer(
@@ -152,9 +162,10 @@ func newWalReplayer(
 	lsn uint64,
 ) *WalReplayer {
 	replayer := &WalReplayer{
-		db:     db,
-		fromTS: fromTS,
-		lsn:    lsn,
+		db:                   db,
+		fromTS:               fromTS,
+		lsn:                  lsn,
+		replayAObjectCreates: make(map[replayAObjectCreateKey]types.TS),
 	}
 	replayer.OnTimeStamp(fromTS)
 	return replayer
@@ -184,6 +195,28 @@ func (replayer *WalReplayer) PreReplayWal() {
 }
 
 func (replayer *WalReplayer) postReplayWal() error {
+	for key, createTS := range replayer.replayAObjectCreates {
+		dbEntry, err := replayer.db.Catalog.GetDatabaseByID(key.dbID)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				continue
+			}
+			return err
+		}
+		tableEntry, err := dbEntry.GetTableEntryByID(key.tableID)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				continue
+			}
+			return err
+		}
+		if err = tableEntry.UpdateObjectCreateTS(&key.objectID, key.isTombstone, createTS); err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				continue
+			}
+			return err
+		}
+	}
 	processor := new(catalog.LoopProcessor)
 	processor.ObjectFn = func(entry *catalog.ObjectEntry) (err error) {
 		if skippedTbl[entry.GetTable().ID] {
@@ -195,6 +228,19 @@ func (replayer *WalReplayer) postReplayWal() error {
 		return
 	}
 	return replayer.db.Catalog.RecurLoop(processor)
+}
+
+func (replayer *WalReplayer) RecordReplayAObjectCreate(id *common.ID, isTombstone bool, ts types.TS) {
+	key := replayAObjectCreateKey{
+		dbID:        id.DbID,
+		tableID:     id.TableID,
+		objectID:    *id.ObjectID(),
+		isTombstone: isTombstone,
+	}
+	old, ok := replayer.replayAObjectCreates[key]
+	if !ok || ts.LT(&old) {
+		replayer.replayAObjectCreates[key] = ts
+	}
 }
 
 func (replayer *WalReplayer) Schedule(
