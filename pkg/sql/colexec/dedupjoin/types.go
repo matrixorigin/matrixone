@@ -255,8 +255,8 @@ type container struct {
 	buf          []*batch.Batch
 
 	// Spill support for large build sides.
-	spillEngine          *spillutil.SpillEngine
-	spillThreshold       int64
+	spillEngine    *spillutil.SpillEngine
+	spillThreshold int64
 	// Non-nil only for spilled joins, where probe expressions are part of the
 	// shared HashBuild/spill working set. Resident probe expressions remain
 	// under normal process/mpool accounting; this is not a general query budget.
