@@ -55,6 +55,126 @@ func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: true}))
 }
 
+func TestReplaceRefChildTableID(t *testing.T) {
+	t.Run("replace altered child and preserve siblings", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
+		}}
+		replaceRefChildTableID(constraintDef, 20, 21)
+		require.Equal(t, []uint64{10, 21, 30}, canonicalRefChildTableIDs(constraintDef))
+	})
+
+	t.Run("do not invent a missing child reference", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 30}},
+		}}
+		replaceRefChildTableID(constraintDef, 20, 21)
+		require.Equal(t, []uint64{10, 30}, canonicalRefChildTableIDs(constraintDef))
+	})
+
+	t.Run("canonicalize duplicate definitions and table ids", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20, 21}},
+			&engine.RefChildTableDef{Tables: []uint64{20, 30, 0}},
+			&engine.RefChildTableDef{Tables: []uint64{0}},
+		}}
+		replaceRefChildTableID(constraintDef, 20, 21)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{10, 21, 30, 0},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+
+	t.Run("keep an empty reference list empty", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{}
+		replaceRefChildTableID(constraintDef, 20, 21)
+		require.Len(t, constraintDef.Cts, 1)
+		require.Empty(t, canonicalRefChildTableIDs(constraintDef))
+	})
+}
+
+func TestTruncateRefChildTableIDReplacementCanonicalizesLegacyState(t *testing.T) {
+	constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.RefChildTableDef{Tables: []uint64{0, 10, 20}},
+		&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
+		&engine.RefChildTableDef{Tables: []uint64{0}},
+	}}
+
+	replaceRefChildTableID(constraintDef, 20, 21)
+
+	require.Len(t, constraintDef.Cts, 1)
+	require.Equal(
+		t,
+		[]uint64{0, 10, 21, 30},
+		constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+	)
+}
+
+func TestCanonicalRefChildTableIDMutations(t *testing.T) {
+	t.Run("add merges definitions and deduplicates sentinel", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{0, 10}},
+			&engine.RefChildTableDef{Tables: []uint64{10, 20}},
+		}}
+
+		addRefChildTableIDs(constraintDef, []uint64{0, 20, 30})
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{0, 10, 20, 30},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+
+	t.Run("remove deletes every duplicate and keeps other ids", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{0, 10, 20}},
+			&engine.RefChildTableDef{Tables: []uint64{10, 30}},
+		}}
+
+		removeRefChildTableID(constraintDef, 10)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{0, 20, 30},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+}
+
+func TestReconcileParentRefChildTableID(t *testing.T) {
+	t.Run("replace child in existing reverse reference", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
+		}}
+		reconcileParentRefChildTableID(constraintDef, 20, 21)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{10, 21, 30},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+
+	t.Run("restore reverse reference removed while dropping old child", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{}
+		reconcileParentRefChildTableID(constraintDef, 20, 21)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{21},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+}
+
 type alterCopyInsertSpyExecutor struct {
 	insertSQL    string
 	insertErr    error
