@@ -248,7 +248,26 @@ func (s *service) execBootstrapWithRetry(ctx context.Context) error {
 }
 
 func isBootstrapRetryableError(err error) bool {
-	return morpc.IsConnectionError(err) || moerr.IsMoErrCode(err, moerr.ErrTxnUnknown)
+	if err == nil {
+		return false
+	}
+	if morpc.IsConnectionError(err) || moerr.IsMoErrCode(err, moerr.ErrTxnUnknown) {
+		return true
+	}
+
+	// SQLExecutor joins a transaction body error with rollback's result. The
+	// first child is the body error, while later children are rollback errors;
+	// only the body error decides whether bootstrap can be retried.
+	switch err := err.(type) {
+	case interface{ Unwrap() []error }:
+		children := err.Unwrap()
+		if len(children) > 0 {
+			return isBootstrapRetryableError(children[0])
+		}
+	case interface{ Unwrap() error }:
+		return isBootstrapRetryableError(err.Unwrap())
+	}
+	return false
 }
 
 func (s *service) reconcileUncertainBootstrapTxn(ctx context.Context) error {
