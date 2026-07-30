@@ -1281,6 +1281,18 @@ func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, 
 
 func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
 	switch pkType.Oid {
+	case types.T_bool:
+		v, err := types.ParseBool(s)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_bit:
+		v, err := strconv.ParseUint(s, 10, int(pkType.Width))
+		if err != nil {
+			return moerr.NewOutOfRangeNoCtxf(fmt.Sprintf("bit(%d)", pkType.Width), "value '%s'", s)
+		}
+		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_int8:
 		v, err := strconv.ParseInt(s, 10, 8)
 		if err != nil {

@@ -275,9 +275,8 @@ func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string
 	return false, nil
 }
 
-func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) error {
+func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err error) {
 	var (
-		err            error
 		pitrLevel      tree.PitrLevel
 		pitrForAccount string
 		pitrName       string
@@ -305,6 +304,13 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+
+	// Hold the stable owner-publication write barrier through PITR creation.
+	// COPY ALTER crosses the same barrier before probing historical owners, so
+	// an empty probe cannot race a PITR whose create time was already chosen.
+	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
 		return err
 	}
 
@@ -833,6 +839,9 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 				return err
 			}
 		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -903,6 +912,9 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 
 		err = bh.Exec(ctx, sql)
 		if err != nil {
+			return err
+		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
 			return err
 		}
 	}

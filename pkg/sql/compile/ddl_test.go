@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -954,6 +955,79 @@ func TestPitrInternalSQLEscapesStringLiterals(t *testing.T) {
 	sql := getSqlForCheckPitrDup(p)
 	assert.Contains(t, sql, "database_name = 'db''name'")
 	assert.Contains(t, sql, "table_name = 'tb\\\\name'")
+}
+
+func TestPreparePitrPublicationSerializesCopyAlter(t *testing.T) {
+	var publicationLock sync.Mutex
+	currentTableID := uint64(1)
+	copyHasLock := make(chan struct{})
+	releaseCopy := make(chan struct{})
+	copyDone := make(chan struct{})
+
+	go func() {
+		publicationLock.Lock()
+		close(copyHasLock)
+		<-releaseCopy
+		currentTableID = 2
+		publicationLock.Unlock()
+		close(copyDone)
+	}()
+	<-copyHasLock
+
+	pitrTriedLock := make(chan struct{})
+	pitrResult := make(chan uint64, 1)
+	pitrErr := make(chan error, 1)
+	go func() {
+		objectID, err := preparePitrPublication(
+			func() error {
+				close(pitrTriedLock)
+				publicationLock.Lock()
+				return nil
+			},
+			func() error { return nil },
+			func() (uint64, error) { return currentTableID, nil },
+		)
+		if err != nil {
+			pitrErr <- err
+			return
+		}
+		pitrResult <- objectID
+	}()
+	<-pitrTriedLock
+
+	select {
+	case objectID := <-pitrResult:
+		publicationLock.Unlock()
+		t.Fatalf("PITR resolved table ID %d before COPY ALTER released the publication barrier", objectID)
+	default:
+	}
+
+	close(releaseCopy)
+	<-copyDone
+	select {
+	case err := <-pitrErr:
+		t.Fatal(err)
+	case objectID := <-pitrResult:
+		require.Equal(t, uint64(2), objectID)
+		publicationLock.Unlock()
+	}
+}
+
+func TestResolveCurrentPitrObjectIDRefreshesPlannedTableID(t *testing.T) {
+	eng := newStubEngine()
+	db := newStubDatabase("db")
+	db.rels["tbl"] = newStubRelation("tbl")
+	eng.dbs["db"] = db
+	c := &Compile{e: eng, proc: testutil.NewProc(t)}
+
+	objectID, err := c.resolveCurrentPitrObjectID(&plan2.CreatePitr{
+		Level:        int32(tree.PITRLEVELTABLE),
+		DatabaseName: "db",
+		TableName:    "tbl",
+		TableId:      99,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), objectID)
 }
 
 func TestCheckSysMoCatalogPitrResult(t *testing.T) {

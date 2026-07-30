@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -33,6 +34,16 @@ func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
 	}
 
 	require.Equal(t, int64(2), source.branchTableCount())
+}
+
+func TestLockDataBranchCloneDatabaseSourcesSkipsSourcesWithoutTables(t *testing.T) {
+	ctx := context.WithValue(context.Background(), dataBranchCloneLockCtxKey{}, true)
+	for _, source := range []cloneDatabaseSource{
+		{},
+		{srcTblInfos: []*tableInfo{{tblName: "view", typ: view}}},
+	} {
+		require.NoError(t, lockDataBranchCloneDatabaseSources(ctx, nil, nil, source))
+	}
 }
 
 func TestCloneFkTableOrder(t *testing.T) {
@@ -78,4 +89,20 @@ func TestCloneSnapshotTxnOperator(t *testing.T) {
 		})
 		require.Same(t, branchTxn, cloneSnapshotTxnOperator(ses, bh))
 	})
+}
+
+func TestDataBranchCloneLockProcessUsesOwningBackgroundTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	outerTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	branchTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	ses := newFeatureLimitTestSession(t)
+	ses.proc.Base.TxnOperator = outerTxn
+	bh := ses.InitBackExec(branchTxn, "", fakeDataSetFetcher2, &BackgroundExecOption{
+		forcePessimisticRC: true,
+	})
+
+	lockProc := newDataBranchCloneLockProcess(context.Background(), ses, bh)
+	defer lockProc.Free()
+	require.Same(t, branchTxn, lockProc.GetTxnOperator())
+	require.Same(t, outerTxn, ses.proc.GetTxnOperator())
 }

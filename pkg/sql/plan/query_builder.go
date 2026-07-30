@@ -3546,6 +3546,30 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						},
 					},
 				}
+			case groupingOrderResolve != nil && oi < len(groupingOrderResolve.bindVisible) && groupingOrderResolve.bindVisible[oi]:
+				// Rebind an expression that exactly matches a visible select item
+				// against the first grouping-set branch. The branch retains source
+				// bindings and knows the post-star-expansion projection position.
+				branchCtx := subCtxList[0]
+				branchProjectionBinder := NewProjectionBinder(builder, branchCtx, NewHavingBinder(builder, branchCtx))
+				branchOrderBinder := NewOrderBinder(branchProjectionBinder, nil)
+				branchExpr, bindErr := branchOrderBinder.BindExpr(groupingOrderResolve.visibleExpr[oi])
+				if bindErr != nil {
+					return 0, bindErr
+				}
+				branchCol := branchExpr.GetCol()
+				if branchCol == nil || branchCol.RelPos != branchCtx.projectTag ||
+					branchCol.ColPos < 0 || int(branchCol.ColPos) >= resultLen {
+					return 0, moerr.NewInternalError(
+						builder.GetContext(),
+						"visible grouping order expression did not resolve to a visible projection",
+					)
+				}
+				expr = GetColExpr(
+					ctx.projects[branchCol.ColPos].Typ,
+					ctx.projectTag,
+					branchCol.ColPos,
+				)
 			case groupingOrderResolve != nil && oi < len(groupingOrderResolve.bindDistinct) && groupingOrderResolve.bindDistinct[oi]:
 				// Bind against the first generated grouping-set branch, where
 				// table bindings and grouping-column identities are available,
@@ -3809,6 +3833,28 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	for i, col := range cols {
 		subCtx.headings[i] = string(col)
 	}
+
+	if len(cteRef.occurrences) == 0 {
+		builder.cteRefs = append(builder.cteRefs, cteRef)
+	}
+	if ctx.bindingNonRecurCte() {
+		cteRef.hasNestedUse = true
+		if ctx.cteState.cte != nil {
+			ctx.cteState.cte.hasNestedRef = true
+		}
+	}
+	types := make([]plan.Type, len(builder.qry.Nodes[nodeID].ProjectList))
+	for i, expr := range builder.qry.Nodes[nodeID].ProjectList {
+		types[i] = expr.Typ
+	}
+	cteRef.occurrences = append(cteRef.occurrences, cteOccurrence{
+		rootID:       nodeID,
+		rootTag:      subCtx.rootTag(),
+		ctx:          subCtx,
+		headings:     append([]string(nil), subCtx.headings...),
+		types:        types,
+		isCorrelated: subCtx.isCorrelated,
+	})
 	return nodeID, nil
 }
 
@@ -6571,6 +6617,15 @@ type groupingSetOrderResolution struct {
 	// hiddenIdx[i] >= 0: ORDER BY entry i references the k-th appended hidden
 	// grouping sort key, resolved to ColPos = resultLen + k. -1 otherwise.
 	hiddenIdx []int
+	// bindVisible[i] is true when a non-DISTINCT ORDER BY expression exactly
+	// matches a selected expression. It must be rebound against a generated
+	// branch so star expansion and source relation identity resolve to the
+	// correct visible UNION column without evaluating the expression twice.
+	bindVisible []bool
+	// visibleExpr[i] is the selected AST expression matched by ORDER BY entry i.
+	// Rebinding the selected spelling avoids reintroducing case-sensitive AST
+	// lookup differences after semantic identifier matching has succeeded.
+	visibleExpr []tree.Expr
 	// bindDistinct[i] is true when a DISTINCT grouping-related ORDER BY entry
 	// must be resolved after the first generated grouping-set branch is fully
 	// bound. Binding there preserves source relation identity and normal
@@ -6710,6 +6765,8 @@ func prepareGroupingSetOrderByProjects(
 	// the visible column count; that check lives in buildUnionWithResultLen.
 	resolve := &groupingSetOrderResolution{
 		hiddenIdx:    make([]int, len(astOrderBy)),
+		bindVisible:  make([]bool, len(astOrderBy)),
+		visibleExpr:  make([]tree.Expr, len(astOrderBy)),
 		bindDistinct: make([]bool, len(astOrderBy)),
 	}
 	for i := range resolve.hiddenIdx {
@@ -6728,13 +6785,41 @@ func prepareGroupingSetOrderByProjects(
 		orderCopy.Expr = cloneTreeExpr(order.Expr)
 		unionOrderBy[i] = &orderCopy
 
-		if _, isOrdinal := order.Expr.(*tree.NumVal); isOrdinal || !containsGroupingFunction(order.Expr) {
+		if _, isOrdinal := order.Expr.(*tree.NumVal); isOrdinal {
 			continue
 		}
 
 		if distinct {
-			resolve.bindDistinct[i] = true
+			if containsGroupingFunction(order.Expr) {
+				resolve.bindDistinct[i] = true
+			}
 			continue
+		}
+
+		if !containsGroupingFunction(order.Expr) {
+			matchedSelectExpr, matchesSelect, matchErr := groupingSetOrderMatchesSelectExpr(builder, selectList, order.Expr)
+			if matchErr != nil {
+				return nil, nil, nil, matchErr
+			}
+			if matchesSelect {
+				resolve.bindVisible[i] = true
+				if groupingSetOrderExprEqual(order.Expr, matchedSelectExpr) {
+					// The ORDER BY syntax itself names the selected expression.
+					// Rebind the SELECT spelling so identifier-case differences
+					// cannot miss the branch projection's AST key.
+					resolve.visibleExpr[i] = cloneTreeExpr(matchedSelectExpr)
+				} else {
+					// The match was produced by AliasBeforeColumn rewriting.
+					// Preserve the ORDER BY alias so the branch binder resolves
+					// it to the visible projection rather than recomputing the
+					// selected expression against source columns.
+					resolve.visibleExpr[i] = cloneTreeExpr(order.Expr)
+				}
+				continue
+			}
+			if !groupingSetOrderNeedsHiddenProject(selectList, order.Expr) {
+				continue
+			}
 		}
 
 		hiddenExpr, err := qualifyGroupingOrderExpr(builder, selectList, order.Expr, true)
@@ -6748,6 +6833,85 @@ func prepareGroupingSetOrderByProjects(
 		branchSelectList = append(branchSelectList, tree.SelectExpr{Expr: hiddenExpr})
 	}
 	return branchSelectList, unionOrderBy, resolve, nil
+}
+
+func groupingSetOrderMatchesSelectExpr(
+	builder *QueryBuilder,
+	selectList tree.SelectExprs,
+	astExpr tree.Expr,
+) (tree.Expr, bool, error) {
+	qualifiedOrder, err := qualifyGroupingOrderExpr(builder, selectList, astExpr, true)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, selectExpr := range selectList {
+		if groupingSetOrderExprEqual(qualifiedOrder, selectExpr.Expr) {
+			return selectExpr.Expr, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func groupingSetOrderExprEqual(left, right tree.Expr) bool {
+	normalizeIdentifiers := func(expr tree.Expr) tree.Expr {
+		normalized := cloneTreeExpr(expr)
+		walkGroupingSetOrderByExpr(normalized, func(node tree.Expr) bool {
+			name, ok := node.(*tree.UnresolvedName)
+			if !ok {
+				return true
+			}
+			for i := 0; i < name.NumParts; i++ {
+				if name.CStrParts[i] != nil {
+					name.CStrParts[i] = tree.NewCStr(name.CStrParts[i].Compare(), 0)
+				}
+			}
+			return true
+		})
+		return unwrapParenExpr(normalized)
+	}
+
+	return reflect.DeepEqual(normalizeIdentifiers(left), normalizeIdentifiers(right))
+}
+
+func groupingSetOrderNeedsHiddenProject(selectList tree.SelectExprs, astExpr tree.Expr) bool {
+	availableNames := make(map[string]struct{})
+	for _, selectExpr := range selectList {
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			availableNames[selectExpr.As.Compare()] = struct{}{}
+			continue
+		}
+		name, ok := unwrapParenExpr(selectExpr.Expr).(*tree.UnresolvedName)
+		if ok && !name.Star {
+			availableNames[name.ColName()] = struct{}{}
+		}
+	}
+
+	needsHidden := false
+	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+		switch typedExpr := expr.(type) {
+		case *tree.Subquery:
+			// A scalar subquery may contain correlated references to grouping
+			// columns. Those bindings exist in each generated grouping-set
+			// branch, but not above the UNION, so materialize the complete
+			// subquery while its outer source scope is still available.
+			needsHidden = true
+			return false
+		case *tree.UnresolvedName:
+			if typedExpr.Star {
+				return true
+			}
+			if typedExpr.NumParts != 1 {
+				needsHidden = true
+				return false
+			}
+			if _, ok := availableNames[typedExpr.ColName()]; !ok {
+				needsHidden = true
+				return false
+			}
+		}
+		return !needsHidden
+	})
+	return needsHidden
 }
 
 // qualifyGroupingOrderExpr clones astExpr and canonicalizes it the same way a
