@@ -19,11 +19,15 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/stretchr/testify/require"
 )
+
+const authenticatedClusterHeartbeatTimeout = 30 * time.Second
 
 var authenticatedClusterSuite struct {
 	once    sync.Once
@@ -43,13 +47,8 @@ func runAuthenticatedClusterTest(t *testing.T, fn func(embed.Cluster)) {
 			embed.WithCNCount(1),
 			embed.WithTesting(),
 			embed.WithPreStart(func(svc embed.ServiceOperator) {
-				if svc.ServiceType() != metadata.ServiceType_CN {
-					return
-				}
 				svc.Adjust(func(cfg *embed.ServiceConfig) {
-					cfg.CN.LockService.MaxFixedSliceSize = 10001
-					cfg.CN.LockService.MaxLockRowCount = 10000
-					cfg.CN.Frontend.SkipCheckUser = false
+					adjustAuthenticatedClusterServiceConfig(svc.ServiceType(), cfg)
 				})
 			}),
 		)
@@ -61,6 +60,62 @@ func runAuthenticatedClusterTest(t *testing.T, fn func(embed.Cluster)) {
 
 	require.NoError(t, authenticatedClusterSuite.err)
 	fn(authenticatedClusterSuite.cluster)
+}
+
+func adjustAuthenticatedClusterServiceConfig(serviceType metadata.ServiceType, cfg *embed.ServiceConfig) {
+	switch serviceType {
+	case metadata.ServiceType_CN:
+		cfg.CN.LockService.MaxFixedSliceSize = 10001
+		cfg.CN.LockService.MaxLockRowCount = 10000
+		cfg.CN.Frontend.SkipCheckUser = false
+		cfg.CN.HAKeeper.HeatbeatTimeout.Duration = authenticatedClusterHeartbeatTimeout
+	case metadata.ServiceType_TN:
+		if cfg.TN_please_use_getTNServiceConfig != nil {
+			cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration =
+				authenticatedClusterHeartbeatTimeout
+		}
+		if cfg.TNCompatible != nil {
+			cfg.TNCompatible.HAKeeper.HeatbeatTimeout.Duration = authenticatedClusterHeartbeatTimeout
+		}
+	}
+}
+
+func TestAdjustAuthenticatedClusterServiceConfig(t *testing.T) {
+	t.Run("cn", func(t *testing.T) {
+		cfg := &embed.ServiceConfig{}
+
+		adjustAuthenticatedClusterServiceConfig(metadata.ServiceType_CN, cfg)
+
+		require.EqualValues(t, 10001, cfg.CN.LockService.MaxFixedSliceSize)
+		require.EqualValues(t, 10000, cfg.CN.LockService.MaxLockRowCount)
+		require.False(t, cfg.CN.Frontend.SkipCheckUser)
+		require.Equal(t, authenticatedClusterHeartbeatTimeout, cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+	})
+
+	t.Run("tn", func(t *testing.T) {
+		cfg := &embed.ServiceConfig{
+			TN_please_use_getTNServiceConfig: &tnservice.Config{},
+			TNCompatible:                     &tnservice.Config{},
+		}
+
+		adjustAuthenticatedClusterServiceConfig(metadata.ServiceType_TN, cfg)
+
+		require.Equal(t, authenticatedClusterHeartbeatTimeout,
+			cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration)
+		require.Equal(t, authenticatedClusterHeartbeatTimeout,
+			cfg.TNCompatible.HAKeeper.HeatbeatTimeout.Duration)
+	})
+
+	t.Run("unrelated service", func(t *testing.T) {
+		cfg := &embed.ServiceConfig{
+			TN_please_use_getTNServiceConfig: &tnservice.Config{},
+		}
+
+		adjustAuthenticatedClusterServiceConfig(metadata.ServiceType_LOG, cfg)
+
+		require.Zero(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+		require.Zero(t, cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration)
+	})
 }
 
 func TestMain(m *testing.M) {
