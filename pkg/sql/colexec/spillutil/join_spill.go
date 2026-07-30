@@ -25,9 +25,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -969,55 +969,14 @@ func writeBucketPayload(proc *process.Process, payload []byte, rows int64, w *Bu
 
 // hashCombine merges a new hash value into a running hash state (Boost-style).
 func hashCombine(h, val uint64) uint64 {
-	return h ^ (val + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2))
+	return keycodec.HashCombine(h, val)
 }
 
 // ComputeXXHash evaluates key vectors and computes XXHash64 values using
 // column-at-a-time processing for better cache locality. seed initialises every
 // hash slot so different spill depths produce different bucket distributions.
 func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
-	if len(hashValues) == 0 {
-		return
-	}
-
-	rowCount := len(hashValues)
-	for i := 0; i < rowCount; i++ {
-		hashValues[i] = seed
-	}
-	if len(keyVecs) == 0 {
-		return
-	}
-
-	for _, vec := range keyVecs {
-		if vec.IsConst() {
-			colHash := uint64(0)
-			if !vec.IsConstNull() {
-				colHash = xxhash.Sum64(vec.GetRawBytesAt(0))
-			}
-			for i := 0; i < rowCount; i++ {
-				hashValues[i] = hashCombine(hashValues[i], colHash)
-			}
-		} else {
-			n := rowCount
-			if vec.Length() < n {
-				n = vec.Length()
-			}
-			if vec.GetNulls().Any() {
-				nulls := vec.GetNulls()
-				for i := 0; i < n; i++ {
-					if nulls.Contains(uint64(i)) {
-						hashValues[i] = hashCombine(hashValues[i], 0)
-					} else {
-						hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
-					}
-				}
-			} else {
-				for i := 0; i < n; i++ {
-					hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
-				}
-			}
-		}
-	}
+	keycodec.ComputeXXHash(keyVecs, hashValues, seed)
 }
 
 // classifyRows computes bucket counts, prefix offsets, and one contiguous row
