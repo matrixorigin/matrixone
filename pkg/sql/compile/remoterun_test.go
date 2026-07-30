@@ -611,7 +611,13 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &table_function.TableFunction{
 			FuncName: "ivf_search",
 			RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
-				{Tag: 42, MatchPrefix: true, UpperLimit: 128, NotOnPk: true},
+				{
+					Tag:         42,
+					MatchPrefix: true,
+					UpperLimit:  128,
+					NotOnPk:     true,
+					KeyEncoding: planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED,
+				},
 			},
 			IndexReaderParam: &planpb.IndexReaderParam{
 				PartitionCnCnt: 2,
@@ -629,6 +635,8 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetMatchPrefix())
 		require.Equal(t, int32(128), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetUpperLimit())
 		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetNotOnPk())
+		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED,
+			pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetKeyEncoding())
 
 		wireBytes, err := pipeInstr.Marshal()
 		require.NoError(t, err)
@@ -648,6 +656,8 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetMatchPrefix())
 		require.Equal(t, int32(128), restoredOp.RuntimeFilterSpecs[0].GetUpperLimit())
 		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetNotOnPk())
+		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED,
+			restoredOp.RuntimeFilterSpecs[0].GetKeyEncoding())
 	})
 
 	t.Run("TableFunction_Limit", func(t *testing.T) {

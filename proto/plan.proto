@@ -1150,6 +1150,17 @@ message PreInsertCtx {
   bool is_new_update = 8;
 }
 
+// RuntimeFilterKeyEncoding records the producer-side closure guaranteed by an
+// exact runtime-filter payload.  RAW is the legacy/default representation.
+// FLOAT_ZERO_CLOSED means that a floating-point payload contains both physical
+// representations of zero whenever zero is present, so raw Bloom-filter
+// consumers cannot reject a SQL-equal signed zero.  Old plans decode to RAW
+// and therefore cannot accidentally claim the stronger contract.
+enum RuntimeFilterKeyEncoding {
+  RUNTIME_FILTER_KEY_RAW = 0;
+  RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED = 1;
+}
+
 message RuntimeFilterSpec {
   int32 tag = 1;
   bool match_prefix = 2;
@@ -1157,6 +1168,7 @@ message RuntimeFilterSpec {
   Expr expr = 4;
   bool not_on_pk = 5;
   bool use_membership_filter = 6;
+  RuntimeFilterKeyEncoding key_encoding = 7;
 }
 
 message IdList {

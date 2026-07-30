@@ -76,6 +76,28 @@ func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
 	require.Equal(t, byte(1), source.GetF().AggConfig[0])
 }
 
+func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
+	source := &planpb.RuntimeFilterSpec{
+		Tag:                 7,
+		MatchPrefix:         true,
+		UpperLimit:          11,
+		Expr:                MakePlan2Int64ConstExprWithType(1),
+		NotOnPk:             true,
+		UseMembershipFilter: true,
+		KeyEncoding:         planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED,
+	}
+
+	cloned := DeepCopyRuntimeFilterSpec(source)
+
+	require.Equal(t, source.Tag, cloned.Tag)
+	require.Equal(t, source.MatchPrefix, cloned.MatchPrefix)
+	require.Equal(t, source.UpperLimit, cloned.UpperLimit)
+	require.Equal(t, source.NotOnPk, cloned.NotOnPk)
+	require.Equal(t, source.UseMembershipFilter, cloned.UseMembershipFilter)
+	require.Equal(t, source.KeyEncoding, cloned.KeyEncoding)
+	require.NotSame(t, source.Expr, cloned.Expr)
+}
+
 var clonedTableDef *planpb.TableDef
 
 func BenchmarkCloneTableDefForPlan(b *testing.B) {

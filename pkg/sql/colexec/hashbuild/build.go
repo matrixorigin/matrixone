@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -385,15 +386,20 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 		needUniqueVec := false
 		if !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil && hashBuild.RuntimeFilterSpec.Expr != nil {
-			specType := types.T(hashBuild.RuntimeFilterSpec.Expr.Typ.Id)
+			specType := types.New(
+				types.T(hashBuild.RuntimeFilterSpec.Expr.Typ.Id),
+				hashBuild.RuntimeFilterSpec.Expr.Typ.Width,
+				hashBuild.RuntimeFilterSpec.Expr.Typ.Scale,
+			)
+			encoding := exactRuntimeFilterEncoding(hashBuild.RuntimeFilterSpec, specType)
 			// Membership-filter consumers own a separate typed-key contract.
-			// Ordinary exact filters collect unique keys only when every raw
-			// payload consumer can preserve the join equality relation. Both
-			// paths already fall back to PASS for composite expressions, so do
-			// not retain keys which can never be serialized.
+			// Ordinary exact filters collect unique keys only when the plan
+			// advertises every producer-side closure required by their payload
+			// consumers. Both paths already fall back to PASS for composite
+			// expressions, so do not retain keys which cannot be serialized.
 			needUniqueVec = hashBuild.RuntimeFilterSpec.Expr.GetF() == nil &&
 				(hashBuild.RuntimeFilterSpec.UseMembershipFilter ||
-					keycodec.SupportsExactRawRuntimeFilter(specType))
+					encoding != keycodec.ExactRuntimeFilterUnsupported)
 		}
 
 		err := ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc)
@@ -579,17 +585,6 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		return nil
 	}
 
-	// Plans produced by current optimizers reject these types before HashBuild.
-	// Keep this execution-side check because plans can be cached, deserialized,
-	// or constructed by another version. An exact filter is optional; PASS is
-	// correct when its raw payload cannot preserve join equality.
-	specType := types.New(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale)
-	if !keycodec.SupportsExactRawRuntimeFilter(specType.Oid) {
-		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
-		return nil
-	}
-
 	if spec.Expr.GetF() != nil {
 		// Composite runtime-filter expression evaluation has no sound peak
 		// estimator yet. PASS preserves query correctness without collecting or
@@ -615,7 +610,8 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 	}
 
 	keyType := ctr.hashmapBuilder.UniqueJoinKeys[0].GetType()
-	if !keycodec.SupportsExactRawRuntimeFilterPair(specType, *keyType) {
+	encoding := exactRuntimeFilterEncoding(spec, *keyType)
+	if encoding == keycodec.ExactRuntimeFilterUnsupported {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
@@ -629,10 +625,24 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		return nil
 	}
 
-	rowCount := ctr.hashmapBuilder.UniqueJoinKeys[0].Length()
-	ctr.hashmapBuilder.UniqueJoinKeys[0].GetNulls().Reset()
-	ctr.hashmapBuilder.UniqueJoinKeys[0].InplaceSort()
-	data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(ctr.hashmapBuilder.UniqueJoinKeys[0])
+	keyVec := ctr.hashmapBuilder.UniqueJoinKeys[0]
+	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
+		if err := closeFloatRuntimeFilterSignedZero(&ctr.hashmapBuilder, keyVec, proc); err != nil {
+			if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(err, &runtimeFilter, spec, proc) {
+				return nil
+			}
+			return err
+		}
+	}
+	rowCount := keyVec.Length()
+	if rowCount > int(inFilterCardLimit) {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+		return nil
+	}
+	keyVec.GetNulls().Reset()
+	keyVec.InplaceSort()
+	data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(keyVec)
 	if err != nil {
 		if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(err, &runtimeFilter, spec, proc) {
 			return nil
@@ -647,6 +657,91 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 	hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 	ctr.runtimeFilterIn = true
 	return nil
+}
+
+func exactRuntimeFilterEncoding(
+	spec *plan.RuntimeFilterSpec,
+	payloadType types.Type,
+) keycodec.ExactRuntimeFilterEncoding {
+	if spec == nil || spec.Expr == nil {
+		return keycodec.ExactRuntimeFilterUnsupported
+	}
+	specType := types.New(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale)
+	encoding := keycodec.ExactRuntimeFilterEncodingForPair(specType, payloadType)
+	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed &&
+		spec.KeyEncoding != plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED {
+		// Legacy plans did not carry the probe/build float contract. Fail open
+		// instead of assuming that an unmarked payload was generated from
+		// unscaled operands.
+		return keycodec.ExactRuntimeFilterUnsupported
+	}
+	return encoding
+}
+
+func closeFloatRuntimeFilterSignedZero(
+	builder *HashmapBuilder,
+	vec *vector.Vector,
+	proc *process.Process,
+) error {
+	var hasPositiveZero, hasNegativeZero bool
+	nulls := vec.GetNulls()
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		for i, value := range vector.MustFixedColNoTypeCheck[float32](vec) {
+			if nulls.Contains(uint64(i)) {
+				continue
+			}
+			bits := math.Float32bits(value)
+			if bits<<1 != 0 {
+				continue
+			}
+			if bits>>31 == 0 {
+				hasPositiveZero = true
+			} else {
+				hasNegativeZero = true
+			}
+		}
+	case types.T_float64:
+		for i, value := range vector.MustFixedColNoTypeCheck[float64](vec) {
+			if nulls.Contains(uint64(i)) {
+				continue
+			}
+			bits := math.Float64bits(value)
+			if bits<<1 != 0 {
+				continue
+			}
+			if bits>>63 == 0 {
+				hasPositiveZero = true
+			} else {
+				hasNegativeZero = true
+			}
+		}
+	default:
+		return process.ErrHashBuildBudgetInvalid
+	}
+	if hasPositiveZero == hasNegativeZero {
+		return nil
+	}
+
+	overlap, err := builder.reserveUniqueAppendOverlap(vec, 1, 0)
+	if err != nil {
+		return err
+	}
+	if overlap != nil {
+		defer overlap.Release()
+	}
+	if vec.GetType().Oid == types.T_float32 {
+		value := float32(0)
+		if hasPositiveZero {
+			value = math.Float32frombits(uint32(1) << 31)
+		}
+		return vector.AppendFixed(vec, value, false, proc.Mp())
+	}
+	value := float64(0)
+	if hasPositiveZero {
+		value = math.Float64frombits(uint64(1) << 63)
+	}
+	return vector.AppendFixed(vec, value, false, proc.Mp())
 }
 
 // Runtime filters are optional probe-side optimizations. If serializing one

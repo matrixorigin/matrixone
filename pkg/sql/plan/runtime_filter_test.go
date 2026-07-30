@@ -191,24 +191,50 @@ func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 	})
 }
 
-func TestUnsoundRuntimeFilterIsNotGenerated(t *testing.T) {
-	for _, oid := range []types.T{types.T_float32, types.T_float64} {
-		t.Run(oid.String(), func(t *testing.T) {
+func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
+	tests := []struct {
+		name     string
+		typ      planpb.Type
+		want     bool
+		encoding planpb.RuntimeFilterKeyEncoding
+	}{
+		{
+			name: "scaled FLOAT32 is omitted",
+			typ:  planpb.Type{Id: int32(types.T_float32), Width: 5, Scale: 2},
+		},
+		{
+			name:     "unscaled FLOAT32 closes signed zero",
+			typ:      planpb.Type{Id: int32(types.T_float32)},
+			want:     true,
+			encoding: planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED,
+		},
+		{
+			name:     "FLOAT64 closes signed zero",
+			typ:      planpb.Type{Id: int32(types.T_float64)},
+			want:     true,
+			encoding: planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			builder := newRuntimeFilterSingleTestBuilder(true)
-			floatType := planpb.Type{Id: int32(oid), Width: 10, Scale: 2}
-			if oid == types.T_float64 {
-				floatType.Scale = 0
-			}
-			builder.qry.Nodes[0].TableDef.Cols[0].Typ = floatType
-			builder.qry.Nodes[1].TableDef.Cols[0].Typ = floatType
+			builder.qry.Nodes[0].TableDef.Cols[0].Typ = test.typ
+			builder.qry.Nodes[1].TableDef.Cols[0].Typ = test.typ
 			builder.qry.Nodes[2].OnList = []*planpb.Expr{
-				makeRuntimeFilterTestEq(floatType, 1, 2, 0, 0),
+				makeRuntimeFilterTestEq(test.typ, 1, 2, 0, 0),
 			}
 
 			builder.generateRuntimeFilters(2)
 
-			require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
-			require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
+			if !test.want {
+				require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
+				require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
+				return
+			}
+			require.Len(t, builder.qry.Nodes[2].RuntimeFilterBuildList, 1)
+			require.Len(t, builder.qry.Nodes[0].RuntimeFilterProbeList, 1)
+			require.Equal(t, test.encoding,
+				builder.qry.Nodes[2].RuntimeFilterBuildList[0].KeyEncoding)
 		})
 	}
 

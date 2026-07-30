@@ -229,16 +229,19 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		return
 	}
 
+	exactEncoding := keycodec.ExactRuntimeFilterUnsupported
 	for i := range probeExprs {
 		probeType := makeTypeByPlan2Expr(probeExprs[i])
 		buildType := makeTypeByPlan2Expr(buildExprs[i])
 		// Exact runtime-filter payloads eventually reach consumers which compare
 		// physical bytes (notably persistent Bloom filters). Generate one only
-		// when raw representation is a sound identity for both join operands and
-		// both sides have the same physical type contract.
-		if !keycodec.SupportsExactRawRuntimeFilterPair(probeType, buildType) {
+		// when the producer can close every SQL-equal physical representation
+		// for both operands.
+		encoding := keycodec.ExactRuntimeFilterEncodingForPair(probeType, buildType)
+		if encoding == keycodec.ExactRuntimeFilterUnsupported {
 			return
 		}
+		exactEncoding = encoding
 		args := []types.Type{probeType, probeType}
 		_, err := function.GetFunctionByName(builder.GetContext(), "in", args)
 		if err != nil {
@@ -324,6 +327,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		rfTag := builder.genNewMsgTag()
 		probeSpec := MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0]), notOnPk)
 		buildSpec := MakeRuntimeFilter(rfTag, false, inLimit, buildExpr, notOnPk)
+		if exactEncoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
+			buildSpec.KeyEncoding = plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED
+		}
 		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, probeSpec)
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, buildSpec)
 		// SINGLE output cardinality belongs to its semantic preserved side.  Do

@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -511,6 +513,141 @@ func TestHashBuildFloatRuntimeFilterFallsBackToPass(t *testing.T) {
 	require.False(t, joinMap.PushedRuntimeFilterIn())
 	joinMap.Free()
 	require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
+}
+
+func TestHashBuildFloatRuntimeFilterClosesSignedZero(t *testing.T) {
+	tests := []struct {
+		name         string
+		typ          types.Type
+		negativeZero bool
+	}{
+		{name: "FLOAT32/positive-representative", typ: types.T_float32.ToType()},
+		{name: "FLOAT32/negative-representative", typ: types.T_float32.ToType(), negativeZero: true},
+		{name: "FLOAT64/positive-representative", typ: types.T_float64.ToType()},
+		{name: "FLOAT64/negative-representative", typ: types.T_float64.ToType(), negativeZero: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := newTestCase(
+				t,
+				[]bool{false},
+				[]types.Type{test.typ},
+				[]*plan.Expr{newExpr(0, test.typ)},
+			)
+			defer func() {
+				tc.arg.Free(tc.proc, false, nil)
+				tc.proc.GetMessageBoard().Reset()
+				tc.proc.Free()
+				require.Zero(t, tc.proc.Mp().CurrNB())
+			}()
+			spec := &plan.RuntimeFilterSpec{
+				Tag:         104,
+				UpperLimit:  100,
+				Expr:        newExpr(0, test.typ),
+				KeyEncoding: plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED,
+			}
+			tc.arg.RuntimeFilterSpec = spec
+			tc.arg.SetChildren([]vm.Operator{tc.marg})
+			require.NoError(t, tc.marg.Prepare(tc.proc))
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+
+			build := batch.NewWithSize(1)
+			build.Vecs[0] = vector.NewVec(test.typ)
+			switch test.typ.Oid {
+			case types.T_float32:
+				zero := float32(0)
+				if test.negativeZero {
+					zero = math.Float32frombits(uint32(1) << 31)
+				}
+				require.NoError(t, vector.AppendFixed(build.Vecs[0], zero, false, tc.proc.Mp()))
+				require.NoError(t, vector.AppendFixed(build.Vecs[0], float32(1.25), false, tc.proc.Mp()))
+			case types.T_float64:
+				zero := float64(0)
+				if test.negativeZero {
+					zero = math.Float64frombits(uint64(1) << 63)
+				}
+				require.NoError(t, vector.AppendFixed(build.Vecs[0], zero, false, tc.proc.Mp()))
+				require.NoError(t, vector.AppendFixed(build.Vecs[0], float64(1.25), false, tc.proc.Mp()))
+			}
+			build.SetRowCount(2)
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+
+			result, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, result.Status)
+			require.True(t, tc.arg.ctr.runtimeFilterIn)
+
+			receiver := message.NewMessageReceiver(
+				[]int32{spec.Tag},
+				message.AddrBroadCastOnCurrentCN(),
+				tc.proc.GetMessageBoard(),
+			)
+			msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+			require.NoError(t, err)
+			require.False(t, done)
+			require.Len(t, msgs, 1)
+			runtimeFilter, ok := msgs[0].(message.RuntimeFilterMessage)
+			require.True(t, ok)
+			require.Equal(t, int32(message.RuntimeFilter_IN), runtimeFilter.Typ)
+			require.Equal(t, int32(3), runtimeFilter.Card)
+
+			payload := vector.NewVec(types.T_any.ToType())
+			require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
+			require.Equal(t, test.typ.Oid, payload.GetType().Oid)
+			require.Equal(t, 3, payload.Length())
+			var positiveZero, negativeZero bool
+			switch test.typ.Oid {
+			case types.T_float32:
+				for _, value := range vector.MustFixedColNoTypeCheck[float32](payload) {
+					if math.Float32bits(value) == 0 {
+						positiveZero = true
+					}
+					if math.Float32bits(value) == uint32(1)<<31 {
+						negativeZero = true
+					}
+				}
+			case types.T_float64:
+				for _, value := range vector.MustFixedColNoTypeCheck[float64](payload) {
+					if math.Float64bits(value) == 0 {
+						positiveZero = true
+					}
+					if math.Float64bits(value) == uint64(1)<<63 {
+						negativeZero = true
+					}
+				}
+			}
+			require.True(t, positiveZero)
+			require.True(t, negativeZero)
+			payload.Free(tc.proc.Mp())
+			runtimeFilter.Destroy()
+
+			joinResult, err := message.ReceiveJoinMapResult(
+				tc.arg.JoinMapTag,
+				false,
+				0,
+				tc.proc.GetMessageBoard(),
+				tc.proc.Ctx,
+			)
+			require.NoError(t, err)
+			require.True(t, joinResult.IsSuccess())
+			require.Equal(t, uint64(2), joinResult.JoinMap().GetGroupCount())
+			joinResult.JoinMap().Free()
+			require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
+		})
+	}
+}
+
+func TestExactRuntimeFilterEncodingRequiresFloatPlanMarker(t *testing.T) {
+	floatType := types.T_float64.ToType()
+	spec := &plan.RuntimeFilterSpec{Expr: newExpr(0, floatType)}
+	require.Equal(t, keycodec.ExactRuntimeFilterUnsupported,
+		exactRuntimeFilterEncoding(spec, floatType))
+
+	spec.KeyEncoding = plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED
+	require.Equal(t, keycodec.ExactRuntimeFilterFloatZeroClosed,
+		exactRuntimeFilterEncoding(spec, floatType))
 }
 
 func TestRuntimeFilterPayloadStateContract(t *testing.T) {

@@ -75,6 +75,23 @@ func TestSupportsExactRawRuntimeFilter(t *testing.T) {
 	require.False(t, SupportsExactRawRuntimeFilterPair(decimal10Scale2, decimal18Scale3))
 	require.False(t, SupportsExactRawRuntimeFilterPair(types.T_int32.ToType(), types.T_int64.ToType()))
 	require.False(t, SupportsExactRawRuntimeFilterPair(types.T_float32.ToType(), types.T_float32.ToType()))
+
+	require.Equal(t, ExactRuntimeFilterFloatZeroClosed,
+		ExactRuntimeFilterEncodingForPair(types.T_float64.ToType(), types.T_float64.ToType()))
+	require.Equal(t, ExactRuntimeFilterFloatZeroClosed,
+		ExactRuntimeFilterEncodingForPair(types.T_float32.ToType(), types.T_float32.ToType()))
+
+	unscaledNegative := types.T_float32.ToType()
+	unscaledNegative.Scale = -1
+	require.Equal(t, ExactRuntimeFilterFloatZeroClosed,
+		ExactRuntimeFilterEncodingForPair(unscaledNegative, types.T_float32.ToType()))
+
+	scaledFloat32 := types.T_float32.ToType()
+	scaledFloat32.Scale = 2
+	require.Equal(t, ExactRuntimeFilterUnsupported,
+		ExactRuntimeFilterEncodingForPair(scaledFloat32, types.T_float32.ToType()))
+	require.Equal(t, ExactRuntimeFilterUnsupported,
+		ExactRuntimeFilterEncodingForPair(types.T_float32.ToType(), scaledFloat32))
 }
 
 func TestComputeXXHashScaledFloat32Contract(t *testing.T) {

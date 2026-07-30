@@ -31,17 +31,21 @@ type Float32Codec struct {
 	normalizer types.Float32ScaleNormalizer
 }
 
+// ExactRuntimeFilterEncoding describes the closure a runtime-filter producer
+// must apply before raw IN, zonemap, and persistent Bloom-filter consumers may
+// use its payload.
+type ExactRuntimeFilterEncoding uint8
+
+const (
+	ExactRuntimeFilterUnsupported ExactRuntimeFilterEncoding = iota
+	ExactRuntimeFilterRaw
+	ExactRuntimeFilterFloatZeroClosed
+)
+
 // SupportsExactRawRuntimeFilter reports whether a raw vector payload can be
-// used as an exact join runtime filter for this type. Exact filters are
-// evaluated by several consumers, including persistent Bloom filters which
-// hash the physical bytes. Keep this as an explicit allowlist: a new type must
-// prove that its raw representation preserves SQL join equality before it can
-// participate in an exact filter.
-//
-// Floating-point types deliberately remain unsupported. Signed zeros compare
-// equal despite having different bytes, and scaled FLOAT32 values are
-// normalized by the join key contract. PASS is the only conservative result
-// for them until every runtime-filter consumer shares the canonical codec.
+// used as an exact join runtime filter for this type without transformation.
+// Keep this as an explicit allowlist: a new type must prove that its raw
+// representation preserves SQL join equality before it can opt in.
 func SupportsExactRawRuntimeFilter(oid types.T) bool {
 	switch oid {
 	case types.T_bool,
@@ -58,23 +62,46 @@ func SupportsExactRawRuntimeFilter(oid types.T) bool {
 	}
 }
 
-// SupportsExactRawRuntimeFilterPair reports whether a payload encoded with
-// payloadType can conservatively filter probeType. OIDs must match because the
-// runtime message does not carry a cross-type conversion contract. Width is
-// representational metadata for the allowed string and fixed-width types, but
-// decimal scale changes the numeric value represented by the same integer
-// bytes and therefore must match.
-func SupportsExactRawRuntimeFilterPair(probeType, payloadType types.Type) bool {
-	if probeType.Oid != payloadType.Oid ||
-		!SupportsExactRawRuntimeFilter(probeType.Oid) {
-		return false
+// ExactRuntimeFilterEncodingForPair returns the least transformation which
+// makes payloadType a conservative exact filter for probeType. OIDs must match
+// because the runtime message has no cross-type conversion contract. Width is
+// representational metadata for the allowed string and fixed-width types.
+//
+// FLOAT64 and unscaled FLOAT32 need only signed-zero closure: non-NaN SQL
+// equality otherwise implies identical bits. Scaled FLOAT32 remains
+// unsupported because one rounded SQL value can cover many physical values;
+// neither a raw IN vector nor a persisted Bloom filter can represent that
+// interval without false negatives.
+func ExactRuntimeFilterEncodingForPair(probeType, payloadType types.Type) ExactRuntimeFilterEncoding {
+	if probeType.Oid != payloadType.Oid {
+		return ExactRuntimeFilterUnsupported
+	}
+	switch probeType.Oid {
+	case types.T_float32:
+		if probeType.Scale <= 0 && payloadType.Scale <= 0 {
+			return ExactRuntimeFilterFloatZeroClosed
+		}
+		return ExactRuntimeFilterUnsupported
+	case types.T_float64:
+		return ExactRuntimeFilterFloatZeroClosed
+	}
+	if !SupportsExactRawRuntimeFilter(probeType.Oid) {
+		return ExactRuntimeFilterUnsupported
 	}
 	switch probeType.Oid {
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
-		return probeType.Scale == payloadType.Scale
+		if probeType.Scale != payloadType.Scale {
+			return ExactRuntimeFilterUnsupported
+		}
 	default:
-		return true
 	}
+	return ExactRuntimeFilterRaw
+}
+
+// SupportsExactRawRuntimeFilterPair reports whether no payload transformation
+// is required for the pair.
+func SupportsExactRawRuntimeFilterPair(probeType, payloadType types.Type) bool {
+	return ExactRuntimeFilterEncodingForPair(probeType, payloadType) == ExactRuntimeFilterRaw
 }
 
 // NewFloat32Codec returns the canonical key codec for a FLOAT32 scale.
