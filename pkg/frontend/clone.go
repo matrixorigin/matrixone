@@ -763,7 +763,15 @@ func handleCloneTable(
 			return
 		}
 	}
-	sql = cloneTableRestoreSQL(stmt, snapshotTS)
+	restoreSnapshotTS := snapshotTS
+	if ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN) {
+		// A timestamp hint resolves through a cloned snapshot transaction and
+		// cannot see tables created earlier in the current transaction. Keep
+		// snapshotTS for branch bookkeeping, but let the shared transaction
+		// resolve and scan its own uncommitted source table.
+		restoreSnapshotTS = 0
+	}
+	sql = cloneTableRestoreSQL(stmt, restoreSnapshotTS)
 
 	if stmt.CopyGrants && stmt.CreateTable.IfNotExists {
 		if dstTableExistedBeforeRestore, err = cloneTargetTableExists(
@@ -782,7 +790,7 @@ func handleCloneTable(
 	}
 
 	if stmt.CopyGrants && !dstTableExistedBeforeRestore {
-		copyGrantsSnapshotTS := snapshotTS
+		copyGrantsSnapshotTS := restoreSnapshotTS
 		if snapshot != nil && snapshot.TS != nil {
 			copyGrantsSnapshotTS = snapshot.TS.PhysicalTime
 		}
