@@ -15,20 +15,23 @@ data branch create table missing_branch from missing_base;
 data branch create table br from base;
 -- @regex("column \"missing\" not found",true)
 data branch diff br against base columns (missing);
--- @bvt:issue#24924
 -- @regex("table \"missing_branch\" does not exist",true)
 data branch diff missing_branch against base;
--- @bvt:issue
--- @bvt:issue#24924
 -- @regex("table \"missing_base\" does not exist",true)
 data branch diff br against missing_base;
--- @bvt:issue
 
 alter table br add column c int default 0;
--- @regex("schema is not equivalent",true)
+-- Schema evolution (added column) now supports diff/merge.
 data branch diff br against base;
--- @regex("schema is not equivalent",true)
 data branch merge br into base;
+
+-- Type mismatch on a common column is still rejected.
+create table type_base(a int primary key, b int);
+insert into type_base values (1, 10);
+create table type_branch(a int primary key, b varchar(20));
+insert into type_branch values (1, '10');
+-- @regex("schema compatibility check: column 'b' exists in both schemas but has different types",true)
+data branch diff type_branch against type_base;
 
 create table no_pk(a int, b int);
 insert into no_pk values (1, 10), (2, 20);
@@ -41,18 +44,12 @@ insert into single_pk values (1, 10), (2, 20);
 data branch create table single_left from single_pk;
 data branch create table single_right from single_pk;
 insert into single_right values (3, 30);
--- @bvt:issue#24924
--- @regex("requires a KEYS or BETWEEN SNAPSHOT clause",true)
-data branch pick single_right into single_left;
--- @bvt:issue
 -- @regex("single-column primary key; use scalar values",true)
 data branch pick single_right into single_left keys((3, 3));
 -- @regex("KEYS subquery returned NULL",true)
 data branch pick single_right into single_left keys(select cast(null as int));
--- @bvt:issue#24924
 -- @regex("KEYS subquery returns 2 columns but table has a single-column primary key",true)
 data branch pick single_right into single_left keys(select a, b from single_right);
--- @bvt:issue
 create snapshot br_unhappy_single_sp for table br_unhappy single_left;
 -- @regex("destination snapshot option is not supported",true)
 data branch pick single_right into single_left{snapshot='br_unhappy_single_sp'} keys(3);
@@ -67,10 +64,8 @@ data branch pick comp_right into comp_left keys(3);
 -- @regex("KEYS tuple has 3 elements but composite primary key has 2 columns",true)
 data branch pick comp_right into comp_left keys((3, 3, 3));
 
--- @bvt:issue#24924
 -- @regex("snapshot 'missing_from' not found",true)
 data branch pick single_right into single_left between snapshot missing_from and missing_to keys(3);
--- @bvt:issue
 
 create table exists_base(a int primary key);
 create table exists_target(a int primary key);
@@ -103,8 +98,6 @@ create table t(a int primary key);
 insert into t values (1);
 create view v_literal as select 'br_view_literal_src' as marker, a from t;
 data branch create database br_view_literal_copy from br_view_literal_src;
--- @bvt:issue#24924
 select marker from br_view_literal_copy.v_literal;
--- @bvt:issue
 drop database br_view_literal_copy;
 drop database br_view_literal_src;

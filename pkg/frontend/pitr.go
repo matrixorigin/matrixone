@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -173,21 +174,21 @@ func getSqlForCheckDupPitrFormat(accountId, objId uint64) string {
 }
 
 func getPubInfoWithPitr(ts int64, accountId uint32, dbName string) string {
-	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, dbName)
+	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, sqlquote.EscapeString(dbName))
 }
 
 func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64, ts int64) string {
-	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, ts, accountName, objId)
+	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, ts, sqlquote.EscapeString(accountName), objId)
 }
 
 func getSqlForGetLengthAndUnitFmt(accountId uint32, level, accName, dbName, tblName string) string {
 	sql := fmt.Sprintf(getLengthAndUnitFmt, accountId, level)
 	if level == "account" {
-		sql += fmt.Sprintf(" and account_name = '%s'", accName)
+		sql += fmt.Sprintf(" and account_name = '%s'", sqlquote.EscapeString(accName))
 	} else if level == "database" {
-		sql += fmt.Sprintf(" and database_name = '%s'", dbName)
+		sql += fmt.Sprintf(" and database_name = '%s'", sqlquote.EscapeString(dbName))
 	} else if level == "table" {
-		sql += fmt.Sprintf(" and table_name = '%s'", tblName)
+		sql += fmt.Sprintf(" and table_name = '%s'", sqlquote.EscapeString(tblName))
 	}
 	return sql
 }
@@ -230,14 +231,14 @@ func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *t
 		return getSqlForCheckDupPitrFormat(createAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if len(stmt.AccountName) > 0 {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", stmt.AccountName)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.AccountName)))
 		} else {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createAccount)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", sqlquote.EscapeString(createAccount))
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", stmt.DatabaseName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.DatabaseName)))
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", stmt.DatabaseName, stmt.TableName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.DatabaseName)), sqlquote.EscapeString(string(stmt.TableName)))
 	}
 	return sql
 }
@@ -274,9 +275,8 @@ func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string
 	return false, nil
 }
 
-func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) error {
+func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err error) {
 	var (
-		err            error
 		pitrLevel      tree.PitrLevel
 		pitrForAccount string
 		pitrName       string
@@ -304,6 +304,13 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+
+	// Hold the stable owner-publication write barrier through PITR creation.
+	// COPY ALTER crosses the same barrier before probing historical owners, so
+	// an empty probe cannot race a PITR whose create time was already chosen.
+	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
 		return err
 	}
 
@@ -832,6 +839,9 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 				return err
 			}
 		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -902,6 +912,9 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 
 		err = bh.Exec(ctx, sql)
 		if err != nil {
+			return err
+		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
 			return err
 		}
 	}

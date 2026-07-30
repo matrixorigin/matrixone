@@ -12687,7 +12687,7 @@ function_call_generic:
             Exprs: $3,
         }
     }
-|   VARIANCE '(' func_type_opt expression ')'
+|   VARIANCE '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -12695,6 +12695,7 @@ function_call_generic:
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$4},
             Type: $3,
+            WindowSpec: $6,
         }
     }
 |   NEXTVAL '(' expression_list ')'
