@@ -217,6 +217,30 @@ func TestReplaySkipsCheckpointGCedDirtyTables(t *testing.T) {
 	assert.Equal(t, commitTS, tableEntry.GetLatestKnownDMLPrepare())
 }
 
+func TestReplayTxnStoreLifecycle(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	mgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(c), catalog.MockTxnFactory(c), types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+
+	ctx := context.WithValue(context.Background(), struct{}{}, "replay")
+	txnCtx := txnbase.NewTxnCtx([]byte("replay-lifecycle"), types.BuildTS(10, 0), types.TS{})
+	cmd := &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}
+	replayTxn := MakeReplayTxn(ctx, mgr, txnCtx, 42, cmd, noopReplayObserver{}, c)
+	store := replayTxn.GetStore().(*replayTxnStore)
+
+	assert.Same(t, ctx, store.GetContext())
+	assert.False(t, store.IsOffline())
+	assert.False(t, store.IsReadonly())
+	assert.Equal(t, uint64(42), replayTxn.GetLsn())
+	assert.NoError(t, store.prepareCommit(replayTxn))
+	assert.NoError(t, store.applyRollback(replayTxn))
+	assert.Panics(t, func() {
+		_ = store.prepareRollback(replayTxn)
+	})
+}
+
 type waitingSchemaTxn struct {
 	txnif.TxnReader
 	prepareTS types.TS
