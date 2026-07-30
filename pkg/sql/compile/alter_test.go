@@ -1191,7 +1191,7 @@ func TestLoadAlterDataBranchHistoricalSourcesUsesPitrCatalogType(t *testing.T) {
 			[]string{"db_hour", "db_day"},
 			[]string{"", "tbl"},
 			[]uint64{101, 102},
-			[]uint8{1, 2},
+			[]uint8{1, 100},
 			[]string{"h", "d"},
 		),
 	}
@@ -1219,7 +1219,7 @@ func TestLoadAlterDataBranchHistoricalSourcesUsesPitrCatalogType(t *testing.T) {
 			DatabaseName: "db_day",
 			TableName:    "tbl",
 			ObjectID:     102,
-			OldestTS:     now.AddDate(0, 0, -2).UnixNano(),
+			OldestTS:     now.AddDate(0, 0, -100).UnixNano(),
 		},
 	}, sources)
 }
