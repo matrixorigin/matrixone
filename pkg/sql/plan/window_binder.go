@@ -363,7 +363,7 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		}
 		typ = &w.OrderBy[0].Expr.Typ
 		t := types.Type{Oid: types.T(typ.Id)}
-		if !function.GetFunctionIsWinOrderFunByName(funcName) && !t.IsNumericOrTemporal() {
+		if !function.GetFunctionIsWinOrderFunByName(funcName) && isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type")
 		}
 	case tree.Groups:
