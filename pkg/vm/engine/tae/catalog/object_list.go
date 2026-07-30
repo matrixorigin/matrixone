@@ -574,13 +574,40 @@ func makeObjectListKey(group ObjectListGroup, ts types.TS, id *objectio.ObjectId
 	return key
 }
 
+var (
+	// These immutable pivots are shared by hot visibility scans. BTree Seek only
+	// compares a pivot and never retains or mutates it.
+	objectListUncommittedMinKeys = makeObjectListUncommittedKeys(false)
+	objectListUncommittedMaxKeys = makeObjectListUncommittedKeys(true)
+)
+
+func makeObjectListUncommittedKeys(maxID bool) [ObjectListGroupNonAppendableDrop + 1]*ObjectEntry {
+	var id objectio.ObjectId
+	if maxID {
+		for i := range id {
+			id[i] = 0xff
+		}
+	}
+	var keys [ObjectListGroupNonAppendableDrop + 1]*ObjectEntry
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+		keys[group] = makeObjectListKey(group, txnif.UncommitTS, &id)
+	}
+	return keys
+}
+
 func SeekObjectListGroup(
 	it *btree.IterG[*ObjectEntry],
 	group ObjectListGroup,
 	ts types.TS,
 ) bool {
-	var minID objectio.ObjectId
-	if !it.Seek(makeObjectListKey(group, ts, &minID)) {
+	var key *ObjectEntry
+	if ts == txnif.UncommitTS && group <= ObjectListGroupNonAppendableDrop {
+		key = objectListUncommittedMinKeys[group]
+	} else {
+		var minID objectio.ObjectId
+		key = makeObjectListKey(group, ts, &minID)
+	}
+	if !it.Seek(key) {
 		return false
 	}
 	return it.Item().ObjectListGroup() == group
@@ -607,11 +634,17 @@ func SeekObjectListGroupReverse(
 	group ObjectListGroup,
 	ts types.TS,
 ) bool {
-	var maxID objectio.ObjectId
-	for i := range maxID {
-		maxID[i] = 0xff
+	var key *ObjectEntry
+	if ts == txnif.UncommitTS && group <= ObjectListGroupNonAppendableDrop {
+		key = objectListUncommittedMaxKeys[group]
+	} else {
+		var maxID objectio.ObjectId
+		for i := range maxID {
+			maxID[i] = 0xff
+		}
+		key = makeObjectListKey(group, ts, &maxID)
 	}
-	if it.Seek(makeObjectListKey(group, ts, &maxID)) {
+	if it.Seek(key) {
 		item := it.Item()
 		if item.ObjectListGroup() == group {
 			commitTS := item.ObjectListCommitTS()

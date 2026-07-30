@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -5007,7 +5008,7 @@ func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
 	}
 }
 
-func TestAggregateArgumentScalarSubqueryFlattenedBeforeGroupConcatSort(t *testing.T) {
+func TestAggregateArgumentScalarSubqueryFlattenedBeforeOrderedGroupConcat(t *testing.T) {
 	sql := `SELECT n.N_REGIONKEY,
 	               GROUP_CONCAT(n.N_NAME ORDER BY n.N_NAME),
 	               AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
@@ -5023,28 +5024,34 @@ func TestAggregateArgumentScalarSubqueryFlattenedBeforeGroupConcatSort(t *testin
 			continue
 		}
 
-		hasGroupConcat := false
+		var groupConcat *plan.Function
 		for _, agg := range node.AggList {
 			if f := agg.GetF(); f != nil && f.Func.ObjName == NameGroupConcat {
-				hasGroupConcat = true
+				groupConcat = f
 				break
 			}
 		}
-		if !hasGroupConcat {
+		if groupConcat == nil {
 			continue
 		}
 
 		foundGroupConcatAgg = true
+		require.False(t, hasSubquery(&plan.Expr{
+			Expr: &plan.Expr_F{F: groupConcat},
+		}), "GROUP_CONCAT contains an executable Expr_Sub")
+		require.Len(t, groupConcat.Args, 2)
+		require.Equal(
+			t,
+			plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+			groupConcat.AggConfigType,
+		)
+		require.Equal(t, groupConcatOrderConfigVersion, groupConcat.AggConfig[0])
+
 		require.Len(t, node.Children, 1)
-		sortNode := query.Nodes[node.Children[0]]
-		require.Equal(t, plan.Node_SORT, sortNode.NodeType, "GROUP_CONCAT input must be sorted after subquery joins")
-		for _, orderBy := range sortNode.OrderBy {
-			require.False(t, hasSubquery(orderBy.Expr), "SORT contains an executable Expr_Sub")
-		}
-		require.Len(t, sortNode.Children, 1)
-		require.Equal(t, plan.Node_JOIN, query.Nodes[sortNode.Children[0]].NodeType)
+		require.Equal(t, plan.Node_JOIN, query.Nodes[node.Children[0]].NodeType)
 	}
 	require.True(t, foundGroupConcatAgg)
+	require.Empty(t, collectReachableSortNodes(query))
 }
 
 func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
@@ -5082,6 +5089,85 @@ func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
 			require.Contains(t, err.Error(), "subquery in group_concat ORDER BY")
 		})
 	}
+}
+
+func TestGroupConcatOrdinalReusesArgument(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"SELECT GROUP_CONCAT(RAND() ORDER BY 1) FROM NATION",
+	)
+	require.NoError(t, err)
+
+	var fn *plan.Function
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 {
+			fn = node.AggList[0].GetF()
+			break
+		}
+	}
+	require.NotNil(t, fn)
+	require.Len(t, fn.Args, 1, "ORDER BY ordinal must not add a second RAND evaluator")
+	require.Equal(t, groupConcatOrderConfigVersion, fn.AggConfig[0])
+
+	pos := 1 + 4
+	require.Equal(t, uint32(1), binary.BigEndian.Uint32(fn.AggConfig[pos:pos+4]))
+	pos += 4 + 1
+	require.Equal(t, uint32(0), binary.BigEndian.Uint32(fn.AggConfig[pos:pos+4]))
+}
+
+func TestGroupConcatAcceptsConstantOrderExpressions(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY NULL) FROM NATION",
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY 'constant') FROM NATION",
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY 1.5) FROM NATION",
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY -1) FROM NATION",
+	} {
+		_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestGroupConcatRejectsUnsupportedOrderKeyType(t *testing.T) {
+	_, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY (N_REGIONKEY, N_NAME)) FROM NATION",
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "group_concat ORDER BY type TUPLE")
+	require.NotContains(t, err.Error(), "internal error")
+}
+
+func TestOrderedGroupConcatInNonEquiCorrelatedScalarSubqueryKeepsConfig(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`SELECT o.N_REGIONKEY, o.N_NAME,
+		        (SELECT GROUP_CONCAT(i.N_NAME ORDER BY i.N_NATIONKEY DESC SEPARATOR '~')
+		           FROM NATION i
+		          WHERE i.N_REGIONKEY < o.N_REGIONKEY)
+		   FROM NATION o`,
+	)
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, agg := range node.AggList {
+			fn := agg.GetF()
+			if fn == nil || fn.Func.ObjName != NameGroupConcat {
+				continue
+			}
+			found = true
+			require.Equal(
+				t,
+				plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+				fn.AggConfigType,
+			)
+			require.NotEmpty(t, fn.AggConfig)
+		}
+	}
+	require.True(t, found)
 }
 
 func TestMysqlCompatibilityMode(t *testing.T) {

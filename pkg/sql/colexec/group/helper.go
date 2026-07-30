@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,6 +42,47 @@ type ResHashRelated struct {
 	Hash     hashmap.HashMap
 	Itr      hashmap.Iterator
 	inserted []uint8
+}
+
+func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {
+	if !group.NeedEval || group.ctr.mtyp != H0 {
+		return
+	}
+	group.configureOrderedAggSpill(proc, group.ctr.aggList)
+}
+
+func (group *Group) configureOrderedAggSpill(proc *process.Process, aggs []aggexec.AggFuncExec) {
+	group.ctr.configureOrderedAggSpill(proc, group.OpAnalyzer, aggs)
+}
+
+func (ctr *container) configureOrderedAggSpill(
+	proc *process.Process,
+	opAnalyzer process.Analyzer,
+	aggs []aggexec.AggFuncExec,
+) {
+	for _, agg := range aggs {
+		aggexec.ConfigureGroupConcatH0Spill(
+			agg,
+			ctr.spillMem,
+			proc.Ctx,
+			func() (*os.File, error) {
+				spillFS, err := proc.GetSpillFileService()
+				if err != nil {
+					return nil, err
+				}
+				id, _ := uuid.NewV7()
+				return spillFS.CreateAndRemoveFile(
+					proc.Ctx,
+					fmt.Sprintf("group_concat_run_%s", id.String()),
+				)
+			},
+			func(bytes, rows, retainedMemory int64) {
+				opAnalyzer.Spill(bytes)
+				opAnalyzer.SpillRows(rows)
+				opAnalyzer.SetMemUsed(max(ctr.memUsed(), retainedMemory))
+			},
+		)
+	}
 }
 
 func (hr *ResHashRelated) IsEmpty() bool {
@@ -508,6 +550,9 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 			if err != nil {
 				return false, err
 			}
+			if bkt.lv >= spillMaxPass {
+				ctr.configureOrderedAggSpill(proc, opAnalyzer, ctr.aggList)
+			}
 		}
 		if len(ctr.spillAggList) != len(aggExprs) {
 			ctr.spillAggList, err = ctr.makeAggList(aggExprs)
@@ -674,7 +719,7 @@ func (ctr *container) getNextFinalResult(proc *process.Process) (vm.CallResult, 
 	if curr == 0 {
 		// flush aggs final result to vectors, all aggs follow groupby columns.
 		for _, ag := range ctr.aggList {
-			vecs, err := ag.Flush()
+			vecs, err := aggexec.FlushWithContext(proc.Ctx, ag)
 			if err != nil {
 				return vm.CancelResult, err
 			}
@@ -718,6 +763,11 @@ func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer proc
 
 func (ctr *container) memUsed() int64 {
 	sz := ctr.mp.CurrNB()
+	for _, agg := range ctr.aggList {
+		if heapSized, ok := agg.(interface{ AdditionalMemorySize() int64 }); ok {
+			sz += heapSized.AdditionalMemorySize()
+		}
+	}
 	return sz
 }
 
@@ -752,7 +802,7 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
-		if config := agExpr.GetExtraConfig(); config != nil {
+		if config := agExpr.GetExtraInformation(); config != nil {
 			if err := aggList[i].SetExtraInformation(config, 0); err != nil {
 				freeAggListPartial(aggList, i+1)
 				return nil, err
