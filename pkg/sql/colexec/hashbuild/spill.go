@@ -670,16 +670,8 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 		return err
 	}
 	keyVecs := ctr.spillKeyVecs[:len(executors)]
-	expressionReservation, err := ctr.reserveSpillExpressionPeak(proc, bat.RowCount())
-	if err != nil {
-		return err
-	}
-	expressionEvaluated := false
 	var selected *batch.Batch
 	defer func() {
-		if !expressionEvaluated && expressionReservation != nil {
-			expressionReservation.Release()
-		}
 		if selected != nil {
 			selected.Clean(proc.Mp())
 		}
@@ -687,25 +679,35 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 			ctr.spillKeyVecs[i] = nil
 		}
 	}()
-	for i, exec := range executors {
-		vec, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			// Eval may leave newly allocated child/result vectors cached in the
-			// executor tree. Destroy that tree while both the previous and
-			// candidate reservations are still charged.
-			ctr.freeSpillExprExecs()
-			return err
+	evalOne := func(i int) error {
+		vec, evalErr := executors[i].Eval(proc, []*batch.Batch{bat}, nil)
+		if evalErr == nil {
+			keyVecs[i] = vec
 		}
-		keyVecs[i] = vec
+		return evalErr
+	}
+	if ctr.spillExprLease != nil {
+		if ctr.spillExprLease.Len() != len(executors) {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		err = ctr.spillExprLease.Run(proc, bat.RowCount(), evalOne)
+	} else {
+		for i := range executors {
+			if err = evalOne(i); err != nil {
+				break
+			}
+		}
+	}
+	if err != nil {
+		// Eval may leave newly allocated child/result vectors cached in the
+		// executor tree. Destroy that tree while both the previous and
+		// candidate reservations are still charged.
+		ctr.freeSpillExprExecs()
+		return err
 	}
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
-	if old := ctr.spillExprReservation; old != nil {
-		old.Release()
-	}
-	ctr.spillExprReservation = expressionReservation
-	expressionEvaluated = true
 	ctr.hashmapBuilder.observeNullKeys(keyVecs)
 
 	// Reuse hashValues buffer
@@ -951,32 +953,31 @@ func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*pl
 		}
 	}
 	if len(ctr.spillExprExecs) != len(conditions) {
-		execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, conditions)
+		execs, lease, err := NewBudgetedExpressionExecutors(
+			proc,
+			ctr.hashmapBuilder.budget,
+			conditions,
+			false,
+		)
 		if err != nil {
 			return nil, err
 		}
 		ctr.freeSpillExprExecs()
 		ctr.spillExprExecs = execs
+		ctr.spillExprLease = lease
+	} else if ctr.spillExprLease == nil {
+		lease, err := NewExpressionMemoryLease(
+			ctr.hashmapBuilder.budget,
+			conditions,
+			ctr.spillExprExecs,
+			false,
+		)
+		if err != nil {
+			return nil, err
+		}
+		ctr.spillExprLease = lease
 	}
 	return ctr.spillExprExecs, nil
-}
-
-func (ctr *container) reserveSpillExpressionPeak(proc *process.Process, rows int) (*process.HashBuildReservation, error) {
-	if ctr.hashmapBuilder.budget == nil {
-		return nil, nil
-	}
-	var peak uint64
-	for _, expr := range ctr.hashmapBuilder.keyExprs {
-		exprPeak, err := expressionVectorPeak(proc, expr, rows, false)
-		if err != nil || peak > math.MaxUint64-exprPeak {
-			return nil, process.ErrHashBuildBudgetInvalid
-		}
-		peak += exprPeak
-	}
-	if peak == 0 {
-		return nil, nil
-	}
-	return ctr.hashmapBuilder.budget.Reserve(peak)
 }
 
 // freeSpillExprExecs frees all cached spill expression executors.
@@ -987,9 +988,9 @@ func (ctr *container) freeSpillExprExecs() {
 		}
 	}
 	ctr.spillExprExecs = nil
-	if ctr.spillExprReservation != nil {
-		ctr.spillExprReservation.Release()
-		ctr.spillExprReservation = nil
+	if ctr.spillExprLease != nil {
+		ctr.spillExprLease.Release()
+		ctr.spillExprLease = nil
 	}
 }
 
