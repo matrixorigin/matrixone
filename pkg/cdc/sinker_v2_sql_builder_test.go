@@ -287,6 +287,37 @@ func TestCDCStatementBuilder_BuildInsertSQL(t *testing.T) {
 	})
 }
 
+func TestCDCStatementBuilder_buildAtomicInsertSQL(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	builder, err := NewCDCStatementBuilder("test_db", "test", createStandardTableDef(), 1024*1024, false)
+	require.NoError(t, err)
+
+	atmBatch := NewAtomicBatch(mp)
+	defer atmBatch.Close()
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	// Append source batches in reverse commit order. The atomic iterator must
+	// preserve commit order when it builds a single coalesced statement.
+	atmBatch.Append(packer, createTestBatchForAtomicBatch(t, mp, types.BuildTS(3, 0), []int32{3}), 2, 0)
+	atmBatch.Append(packer, createTestBatchForAtomicBatch(t, mp, types.BuildTS(2, 0), []int32{1, 2}), 2, 0)
+
+	sqls, err := builder.buildAtomicInsertSQL(context.Background(), atmBatch, types.BuildTS(1, 0), types.BuildTS(4, 0))
+	require.NoError(t, err)
+	require.Len(t, sqls, 1)
+
+	sql := string(sqls[0][v2SQLBufReserved:])
+	first := strings.Index(sql, "(1,'test')")
+	second := strings.Index(sql, "(2,'test')")
+	third := strings.Index(sql, "(3,'test')")
+	require.GreaterOrEqual(t, first, 0)
+	require.Greater(t, second, first)
+	require.Greater(t, third, second)
+}
+
 func TestCDCStatementBuilder_BuildInsertSQL_SizeLimit(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)

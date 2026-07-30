@@ -999,11 +999,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+			lockArg.AddLockTargetWithMode(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
-				lockArg.LockTable(target.TableId, target.ChangeDef)
+				lockArg.LockTableWithMode(target.TableId, target.Mode, target.ChangeDef)
 			}
 		}
 		op = lockArg
@@ -1109,6 +1109,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsShuffle = t.IsShuffle
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
+		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Limit:
 		op = limit.NewArgument().WithLimit(opr.Limit)
@@ -1325,6 +1326,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.UpdateColExprList = t.UpdateColExprList
 		arg.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
 		arg.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
+		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.RightDedupJoin:
 		arg := rightdedupjoin.NewArgument()
@@ -1343,6 +1345,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
+		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Apply:
 		arg := apply.NewArgument()

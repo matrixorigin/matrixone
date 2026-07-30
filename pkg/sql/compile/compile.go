@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -75,7 +74,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
-	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -341,16 +339,6 @@ func (c *Compile) clear() {
 	for k := range c.stepRegs {
 		delete(c.stepRegs, k)
 	}
-	for k := range c.materializedSinkScanNodes {
-		delete(c.materializedSinkScanNodes, k)
-	}
-	for k, source := range c.materializedSources {
-		source.Close()
-		delete(c.materializedSources, k)
-	}
-	for k := range c.materializedReaderIDs {
-		delete(c.materializedReaderIDs, k)
-	}
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
@@ -595,17 +583,6 @@ func (c *Compile) prePipelineInitializer() (err error) {
 			return err
 		}
 	}
-	for _, source := range c.materializedSources {
-		if err = source.Begin(c.proc.Mp(), func(name string) (*os.File, error) {
-			spillFS, spillErr := c.proc.GetSpillFileService()
-			if spillErr != nil {
-				return nil, spillErr
-			}
-			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
-		}); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -620,12 +597,21 @@ func (c *Compile) runOnce() (err error) {
 		c.proc.Base.StageCache.Clear()
 	}()
 
-	// Pre-check: REPLACE parent→child FK RESTRICT constraints must be
-	// verified before the REPLACE execution modifies any rows.
+	// REPLACE parent checks and actions run before the main pipeline.
 	query := c.pn.GetQuery()
 	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
+		if err = validateReplaceParentTxnMode(
+			c.proc.Ctx, query, c.proc.GetTxnOperator().Txn().IsPessimistic()); err != nil {
+			return err
+		}
 		for _, sql := range query.DetectSqls {
-			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
+				continue
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
+				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_LOCK:")); err != nil {
+					return err
+				}
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
 				if err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")); err != nil {
 					// Only translate the "check returned false" signal into the
 					// parent-row-referenced error; pass through real execution
@@ -634,6 +620,10 @@ func (c *Compile) runOnce() (err error) {
 					if moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2) {
 						return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
 					}
+					return err
+				}
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
+				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")); err != nil {
 					return err
 				}
 			}
@@ -732,12 +722,14 @@ func (c *Compile) runOnce() (err error) {
 	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		// Filter out pre-check SQLs (already executed before the main operation).
-		// The modern INSERT path enforces child→parent existence in-plan now, so the
-		// remaining DetectSqls are self-referencing FK checks (plain 1452 message).
+		// Filter out REPLACE parent-side checks and actions already executed before
+		// the main operation.
 		var postCheckSqls []string
 		for _, sql := range query.DetectSqls {
-			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
 				continue
 			}
 			postCheckSqls = append(postCheckSqls, sql)
@@ -752,6 +744,20 @@ func (c *Compile) runOnce() (err error) {
 		}
 	}
 	return err
+}
+
+func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
+	if pessimistic || query == nil {
+		return nil
+	}
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
+			strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
+			return moerr.NewNotSupported(ctx,
+				"REPLACE on a referenced parent table in optimistic transaction mode")
+		}
+	}
+	return nil
 }
 
 // add log to check if background sql return NeedRetry error when origin sql execute successfully
@@ -905,11 +911,12 @@ func (c *Compile) lockTable() error {
 	for _, tableID := range tableIDs {
 		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
-		if err := lockop.LockTable(
+		if err := lockop.LockTableWithMode(
 			c.e,
 			c.proc,
 			tbl.TableId,
 			typ,
+			tbl.Mode,
 			false); err != nil {
 			return err
 		}
@@ -1036,34 +1043,9 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 				edge = process.NewPipelineEdge(1, 0)
 			}
 			c.appendStepRegs(s, nodeId, edge)
-			if n.NodeType == plan.Node_SINK_SCAN && len(n.SourceStep) == 1 &&
-				c.isMaterializedCTEStep(qry, s) {
-				if c.materializedSinkScanNodes == nil {
-					c.materializedSinkScanNodes = make(map[int32][]int32)
-				}
-				if c.materializedReaderIDs == nil {
-					c.materializedReaderIDs = make(map[[2]int32]int)
-				}
-				readerID := len(c.materializedSinkScanNodes[s])
-				c.materializedSinkScanNodes[s] = append(c.materializedSinkScanNodes[s], nodeId)
-				c.materializedReaderIDs[[2]int32{s, nodeId}] = readerID
-			}
 		}
 	}
 	return nil
-}
-
-func (c *Compile) isMaterializedCTEStep(qry *plan.Query, step int32) bool {
-	if qry == nil || step < 0 || int(step) >= len(qry.Steps) {
-		return false
-	}
-	nodeID := qry.Steps[step]
-	if nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
-		return false
-	}
-	sink := qry.Nodes[nodeID]
-	return sink.NodeType == plan.Node_SINK && !sink.RecursiveSink && !sink.RecursiveCte &&
-		sink.ExtraOptions == materialized.CTESinkOption
 }
 
 func (c *Compile) isAdaptiveVectorSearch(qry *plan.Query) bool {
@@ -1565,25 +1547,6 @@ func (c *Compile) getStepRegs(step int32) []*process.WaitRegister {
 		wrs[i] = c.nodeRegs[sn]
 	}
 	return wrs
-}
-
-func (c *Compile) getMaterializedSource(step int32) *materialized.Source {
-	if c.materializedSinkScanNodes == nil {
-		return nil
-	}
-	readers := c.materializedSinkScanNodes[step]
-	if len(readers) < 2 {
-		return nil
-	}
-	if source := c.materializedSources[step]; source != nil {
-		return source
-	}
-	source := materialized.NewSource(len(readers))
-	if c.materializedSources == nil {
-		c.materializedSources = make(map[int32]*materialized.Source)
-	}
-	c.materializedSources[step] = source
-	return source
 }
 
 func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
@@ -5533,13 +5496,6 @@ func (c *Compile) compileSinkScanNode(node *plan.Node, curNodeIdx int32) ([]*Sco
 
 	currentFirstFlag := c.anal.isFirst
 	mergeArg := merge.NewArgument().WithSinkScan(true)
-	if len(node.SourceStep) == 1 {
-		step := node.SourceStep[0]
-		if source := c.getMaterializedSource(step); source != nil {
-			mergeArg.MaterializedSource = source
-			mergeArg.MaterializedReaderID = c.materializedReaderIDs[[2]int32{step, curNodeIdx}]
-		}
-	}
 	c.hasMergeOp = true
 	mergeArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergeArg)
@@ -5555,14 +5511,8 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 		return nil, moerr.NewInternalError(c.proc.Ctx, "no data receiver for sink node")
 	}
 
-	materializedSource := c.getMaterializedSource(step)
 	var rs *Scope
-	if materializedSource != nil {
-		// The materialized source is process-local state. Always terminate the
-		// producer at a local merge scope so it is never serialized as part of a
-		// remote scope without its consumers.
-		rs = c.newMergeScope(ss)
-	} else if c.IsSingleScope(ss) {
+	if c.IsSingleScope(ss) {
 		rs = ss[0]
 	} else {
 		rs = c.newMergeScope(ss)
@@ -5570,7 +5520,6 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 
 	currentFirstFlag := c.anal.isFirst
 	dispatchLocal := constructDispatchLocal(true, true, node.RecursiveSink, node.RecursiveCte, receivers)
-	dispatchLocal.MaterializedSource = materializedSource
 	dispatchLocal.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(dispatchLocal)
 	c.anal.isFirst = false

@@ -37,7 +37,7 @@ SELECT d_1, SUM(cnt) FROM (
         BITMAP_COUNT(BITMAP_OR_AGG(bmp)) cnt
     FROM precompute
     GROUP BY d_1, bucket
-)
+) AS counts
 GROUP BY d_1;
 
 drop table my_table;
@@ -81,7 +81,7 @@ select bitmap_bucket_number(val) as bitmap_id,
     bitmap_count(bitmap_construct_agg(bitmap_bit_position(val))) as distinct_values
     from bitmap02
     group by bitmap_id
-);
+) AS counts;
 drop table bitmap02;
 
 drop table if exists bitmap03;
@@ -110,7 +110,7 @@ select bitmap_bucket_number(val) as bitmap_id,
     bitmap_count(bitmap_construct_agg(bitmap_bit_position(val))) as distinct_values
     from bitmap03
     group by bitmap_id
-);
+) AS counts;
 drop table bitmap03;
 
 -- issue #24288: bitmap_construct_agg panic when some groups have no matching rows

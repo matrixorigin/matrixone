@@ -475,7 +475,7 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 		{
 			name: "outer parameter follows scalar cte column double domain",
 			sql: "insert into constraint_test.emp (sal) select " +
-				"(select x from (with c as (select cast(1 as double) as x) select x from c)) + ?",
+				"(select x from (with c as (select cast(1 as double) as x) select x from c) d) + ?",
 			want:       types.T_float64,
 			paramCount: 1,
 		},
@@ -483,7 +483,7 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			name: "outer parameter follows scalar cte star double domain",
 			sql: "insert into constraint_test.emp (sal) select " +
 				"(select x from (with c as (select cast(1 as double) as x), " +
-				"d as (select * from c) select x from d)) + ?",
+				"d as (select * from c) select x from d) q) + ?",
 			want:       types.T_float64,
 			paramCount: 1,
 		},
