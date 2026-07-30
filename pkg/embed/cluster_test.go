@@ -104,6 +104,30 @@ func TestBasicCluster(t *testing.T) {
 	require.Equal(t, cn, v)
 }
 
+func TestWithHAKeeperHeartbeatTimeout(t *testing.T) {
+	timeout := 15 * time.Second
+	clusterValue, err := NewCluster(
+		WithCNCount(2),
+		WithHAKeeperHeartbeatTimeout(timeout),
+	)
+	require.NoError(t, err)
+	c := clusterValue.(*cluster)
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
+
+	for _, svc := range c.services {
+		cfg := svc.GetServiceConfig()
+		switch svc.ServiceType() {
+		case metadata.ServiceType_CN:
+			require.Equal(t, timeout, cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+		case metadata.ServiceType_TN:
+			require.NotNil(t, cfg.TN_please_use_getTNServiceConfig)
+			require.Equal(t, timeout, cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration)
+		}
+	}
+}
+
 func TestSingleCNCluster(t *testing.T) {
 	c, err := NewCluster()
 	require.NoError(t, err)

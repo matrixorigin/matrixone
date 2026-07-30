@@ -60,11 +60,12 @@ type cluster struct {
 	pendingCleanup []*operator
 
 	options struct {
-		dataPath  string
-		cn        int
-		withProxy bool
-		preStart  func(ServiceOperator)
-		testing   bool
+		dataPath         string
+		cn               int
+		withProxy        bool
+		preStart         func(ServiceOperator)
+		testing          bool
+		heartbeatTimeout time.Duration
 	}
 
 	ports struct {
@@ -336,6 +337,18 @@ func (c *cluster) createServiceOperators(from int) error {
 		)
 		if err != nil {
 			return err
+		}
+		if c.options.heartbeatTimeout > 0 {
+			s.Adjust(func(cfg *ServiceConfig) {
+				switch s.serviceType {
+				case metadata.ServiceType_CN:
+					cfg.CN.HAKeeper.HeatbeatTimeout.Duration = c.options.heartbeatTimeout
+				case metadata.ServiceType_TN:
+					if cfg.TN_please_use_getTNServiceConfig != nil {
+						cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration = c.options.heartbeatTimeout
+					}
+				}
+			})
 		}
 
 		if c.options.preStart != nil {
