@@ -108,7 +108,8 @@ set session sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
 replace into parent_auto_zero values (0, 'explicit-zero');
 select * from parent_auto_zero order by id;
 select * from child_auto_zero;
-set session sql_mode = '';
+set session sql_mode = default;
+select @@sql_mode;
 
 create table parent_cached(id int primary key, v int);
 create table child_cached(id int primary key, parent_id int,
