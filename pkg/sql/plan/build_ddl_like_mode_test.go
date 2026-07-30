@@ -41,6 +41,12 @@ func TestCreateTableLikePreservesCheckAcrossSQLModes(t *testing.T) {
 			likeMode:   "NO_BACKSLASH_ESCAPES",
 			createSQL:  `create table source_t(s varchar(10), check (s = 'a\\nb'))`,
 		},
+		{
+			name:       "no backslash escapes trailing backslash",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			likeMode:   "",
+			createSQL:  `create table source_t(s varchar(20), check (s = 'a\'))`,
+		},
 	}
 
 	build := func(t *testing.T, mock *MockOptimizer, sql, mode string) *plan.TableDef {

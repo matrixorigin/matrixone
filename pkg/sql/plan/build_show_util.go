@@ -41,14 +41,27 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
+	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+}
 
+func constructCreateTableSQL(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+	useDbName bool,
+	cloneStmt *tree.CloneTable,
+	includeChecks bool,
+) (string, tree.Statement, error) {
 	var err error
 	var createStr string
 	rewritePairs := make([]struct {
 		display string
 		rewrite string
 	}, 0)
-	checkDefs := constructCheckDefs(tableDef)
+	var checkDefs []string
+	if includeChecks {
+		checkDefs = constructCheckDefs(tableDef)
+	}
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName

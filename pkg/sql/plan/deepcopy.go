@@ -645,9 +645,13 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		Params:              DeepCopyExprList(qry.Params),
 		Headings:            qry.Headings,
 		HasForeignKeyAction: qry.HasForeignKeyAction,
+		CatalogDependencies: make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)
+	}
+	for idx, dependency := range qry.CatalogDependencies {
+		newQry.CatalogDependencies[idx] = DeepCopyObjectRef(dependency)
 	}
 	return newQry
 }

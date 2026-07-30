@@ -822,36 +822,30 @@ func preserveIndexSessionVars(p *Plan, src *plan.TableDef) error {
 	return nil
 }
 
-// preserveChecksForCreateLike replaces CHECK expressions rebuilt through SQL
-// text with deep copies of the source table's structured metadata. OriginSql is
-// formatted for the source table's creation SQL mode, so reparsing it in the
-// LIKE session's mode can change string literal semantics. Keep the names
-// produced by the LIKE build because that path owns constraint renaming.
-func preserveChecksForCreateLike(ctx context.Context, p *Plan, src *plan.TableDef) error {
+// preserveChecksForCreateLike installs deep copies of the source table's
+// structured CHECK metadata after the LIKE table skeleton has been rebuilt.
+// OriginSql is formatted for the source table's creation SQL mode, so it must
+// not be reparsed in the LIKE session's mode.
+func preserveChecksForCreateLike(p *Plan, src *plan.TableDef) {
 	if p == nil || src == nil || len(src.Checks) == 0 {
-		return nil
+		return
 	}
 	ct := p.GetDdl().GetCreateTable()
 	if ct == nil || ct.GetTableDef() == nil {
-		return nil
+		return
 	}
-	dstChecks := ct.GetTableDef().Checks
-	if len(dstChecks) != len(src.Checks) {
-		return moerr.NewInternalErrorf(
-			ctx,
-			"create table like rebuilt %d check constraints, expected %d",
-			len(dstChecks),
-			len(src.Checks),
-		)
-	}
+	dstChecks := make([]*plan.CheckDef, len(src.Checks))
 	for i, srcCheck := range src.Checks {
-		if srcCheck == nil || dstChecks[i] == nil {
-			return moerr.NewInternalError(ctx, "create table like rebuilt an invalid check constraint")
+		if srcCheck == nil {
+			continue
 		}
-		dstChecks[i].Check = DeepCopyExpr(srcCheck.Check)
-		dstChecks[i].OriginSql = srcCheck.OriginSql
+		dstChecks[i] = &plan.CheckDef{
+			Name:      srcCheck.Name,
+			Check:     DeepCopyExpr(srcCheck.Check),
+			OriginSql: srcCheck.OriginSql,
+		}
 	}
-	return nil
+	ct.GetTableDef().Checks = dstChecks
 }
 
 func buildCreateTable(
@@ -912,7 +906,10 @@ func buildCreateTable(
 		}
 		tableDef.IsTemporary = stmt.Temporary
 
-		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true, cloneStmt)
+		// CHECK expressions are stored in source-session SQL syntax. Exclude them
+		// from the temporary SQL skeleton because the rewrite parser uses the
+		// current/default SQL mode, then restore the structured metadata below.
+		_, newStmt, err := constructCreateTableSQL(ctx, tableDef, snapshot, true, cloneStmt, false)
 		if err != nil {
 			return nil, err
 		}
@@ -934,9 +931,7 @@ func buildCreateTable(
 			if err := preserveIndexSessionVars(p, tableDef); err != nil {
 				return nil, err
 			}
-			if err := preserveChecksForCreateLike(ctx.GetContext(), p, tableDef); err != nil {
-				return nil, err
-			}
+			preserveChecksForCreateLike(p, tableDef)
 			return p, nil
 		}
 
