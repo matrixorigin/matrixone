@@ -1094,7 +1094,7 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
 			t,
-			"select timestampdiff(second, t1, t2), a from (select sysdate() as t1, sleep(2) as a, sysdate() as t2)",
+			"select timestampdiff(second, t1, t2), a from (select sysdate() as t1, sleep(2) as a, sysdate() as t2) as times",
 		)
 		require.NoError(t, err)
 
