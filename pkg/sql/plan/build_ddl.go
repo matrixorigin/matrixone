@@ -822,6 +822,38 @@ func preserveIndexSessionVars(p *Plan, src *plan.TableDef) error {
 	return nil
 }
 
+// preserveChecksForCreateLike replaces CHECK expressions rebuilt through SQL
+// text with deep copies of the source table's structured metadata. OriginSql is
+// formatted for the source table's creation SQL mode, so reparsing it in the
+// LIKE session's mode can change string literal semantics. Keep the names
+// produced by the LIKE build because that path owns constraint renaming.
+func preserveChecksForCreateLike(ctx context.Context, p *Plan, src *plan.TableDef) error {
+	if p == nil || src == nil || len(src.Checks) == 0 {
+		return nil
+	}
+	ct := p.GetDdl().GetCreateTable()
+	if ct == nil || ct.GetTableDef() == nil {
+		return nil
+	}
+	dstChecks := ct.GetTableDef().Checks
+	if len(dstChecks) != len(src.Checks) {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"create table like rebuilt %d check constraints, expected %d",
+			len(dstChecks),
+			len(src.Checks),
+		)
+	}
+	for i, srcCheck := range src.Checks {
+		if srcCheck == nil || dstChecks[i] == nil {
+			return moerr.NewInternalError(ctx, "create table like rebuilt an invalid check constraint")
+		}
+		dstChecks[i].Check = DeepCopyExpr(srcCheck.Check)
+		dstChecks[i].OriginSql = srcCheck.OriginSql
+	}
+	return nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -900,6 +932,9 @@ func buildCreateTable(
 			// restore reindex loses the captured build-time vars (e.g.
 			// kmeans_train_percent) and falls back to defaults.
 			if err := preserveIndexSessionVars(p, tableDef); err != nil {
+				return nil, err
+			}
+			if err := preserveChecksForCreateLike(ctx.GetContext(), p, tableDef); err != nil {
 				return nil, err
 			}
 			return p, nil
