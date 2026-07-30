@@ -110,6 +110,18 @@ desc view_alter_column_metadata.udf_v;
 drop function view_alter_column_metadata.refresh_udf();
 drop snapshot view_alter_column_metadata_sn;
 
+create table deleted_snapshot_live (a int);
+create table deleted_snapshot_frozen (b int);
+create snapshot deleted_snapshot_sn for account sys;
+create view deleted_snapshot_v as
+select live.a, frozen.b
+from deleted_snapshot_live live,
+deleted_snapshot_frozen {snapshot = 'deleted_snapshot_sn'} frozen;
+drop snapshot deleted_snapshot_sn;
+alter table deleted_snapshot_live modify column a bigint;
+-- @ignore:5,6
+desc deleted_snapshot_v;
+
 drop database view_alter_column_metadata;
 drop database view_alter_column_metadata_cross;
 

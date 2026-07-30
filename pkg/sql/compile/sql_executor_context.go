@@ -118,6 +118,9 @@ func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.
 }
 
 func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
+	if resolver, ok := c.ctx.Value(viewMetadataResolverKey{}).(viewMetadataResolver); ok {
+		return resolver.ResolveSnapshot(c.GetContext(), snapshotName)
+	}
 	delegate := c.viewMetadataCompilerContext()
 	if delegate == nil {
 		return nil, moerr.NewNYI(c.GetContext(), "snapshot resolution in internal sql executor")
@@ -150,6 +153,9 @@ func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
 }
 
 func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
+	if resolver, ok := c.ctx.Value(viewMetadataResolverKey{}).(viewMetadataResolver); ok {
+		return resolver.ResolveUdf(c.GetContext(), name, ast)
+	}
 	delegate := c.viewMetadataCompilerContext()
 	if delegate == nil {
 		return nil, moerr.NewNYI(c.GetContext(), "UDF resolution in internal sql executor")

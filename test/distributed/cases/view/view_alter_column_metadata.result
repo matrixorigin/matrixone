@@ -153,6 +153,19 @@ a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 udf_value  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦
 drop function view_alter_column_metadata.refresh_udf();
 drop snapshot view_alter_column_metadata_sn;
+create table deleted_snapshot_live (a int);
+create table deleted_snapshot_frozen (b int);
+create snapshot deleted_snapshot_sn for account sys;
+create view deleted_snapshot_v as
+select live.a, frozen.b
+from deleted_snapshot_live live,
+deleted_snapshot_frozen {snapshot = 'deleted_snapshot_sn'} frozen;
+drop snapshot deleted_snapshot_sn;
+alter table deleted_snapshot_live modify column a bigint;
+desc deleted_snapshot_v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 drop database view_alter_column_metadata;
 drop database view_alter_column_metadata_cross;
 drop account if exists view_alter_pub;

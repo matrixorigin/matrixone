@@ -226,10 +226,11 @@ func TestHashMarkJoinSpilledEmptyBuild(t *testing.T) {
 	resetChildrenWithBatch(tc.arg, probe)
 
 	jm := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, tc.proc.Mp())
-	jm.Spilled = true
-	jm.SpillBuildFds = make([]*os.File, spillutil.SpillNumBuckets)
 	jm.SetRowCount(0)
 	jm.IncRef(1)
+	require.NoError(t, jm.SetSpillBuildPayload(message.SpillBuildPayload{
+		LegacyFds: make([]*os.File, spillutil.SpillNumBuckets),
+	}))
 	message.SendMessage(message.JoinMapMsg{
 		JoinMapPtr: jm,
 		IsShuffle:  true,

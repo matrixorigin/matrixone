@@ -468,9 +468,22 @@ func marshalSpillRecord(bat *batch.Batch, buf *bytes.Buffer) (int64, error) {
 	return cnt, nil
 }
 
-func (ctr *container) writeSpillPayload(file *os.File, payload []byte, rows int64, analyzer process.Analyzer) error {
+func (ctr *container) writeSpillPayload(
+	proc *process.Process,
+	file *os.File,
+	payload []byte,
+	rows int64,
+	analyzer process.Analyzer,
+) error {
 	if file == nil || len(payload) == 0 {
 		return process.ErrHashBuildBudgetInvalid
+	}
+	// All initial-spill writes funnel through this helper. Check after any
+	// vector projection/marshal and immediately before the physical write so a
+	// cancellation that raced lazy file creation or serialization does not
+	// start stale I/O. An already-running os.File.Write is not interruptible.
+	if err := checkHashBuildCanceled(proc); err != nil {
+		return err
 	}
 
 	var err error
@@ -482,6 +495,9 @@ func (ctr *container) writeSpillPayload(file *os.File, payload []byte, rows int6
 		if err != nil {
 			return err
 		}
+	}
+	if err := checkHashBuildCanceled(proc); err != nil {
+		return err
 	}
 	written, err := file.Write(payload)
 	if err != nil {
@@ -512,7 +528,7 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	if err != nil {
 		return 0, err
 	}
-	if err := ctr.writeSpillPayload(file, ctr.spillWriteBuf.Bytes(), cnt, analyzer); err != nil {
+	if err := ctr.writeSpillPayload(proc, file, ctr.spillWriteBuf.Bytes(), cnt, analyzer); err != nil {
 		return 0, err
 	}
 	return cnt, nil
@@ -579,6 +595,9 @@ func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, b
 func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch, files []*os.File, executors []colexec.ExpressionExecutor, analyzer process.Analyzer, sourceAlreadyCharged bool) error {
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
+	}
+	if err := checkHashBuildCanceled(proc); err != nil {
+		return err
 	}
 	need, err := spillScratchBudgetBytes(bat, sourceAlreadyCharged)
 	if err != nil {
@@ -679,6 +698,9 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 		}
 		keyVecs[i] = vec
 	}
+	if err := checkHashBuildCanceled(proc); err != nil {
+		return err
+	}
 	if old := ctr.spillExprReservation; old != nil {
 		old.Release()
 	}
@@ -689,6 +711,9 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	// Reuse hashValues buffer
 	hashes := ctr.spillHashValues[:rows]
 	computeXXHash(keyVecs, hashes)
+	if err := checkHashBuildCanceled(proc); err != nil {
+		return err
+	}
 	// Keep the legacy spillSelection field as an alias for callers/tests that
 	// inspect it. It intentionally points at the same backing array: no second
 	// row-id allocation is made.
@@ -717,6 +742,9 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	}
 
 	for bucket := 0; bucket < spillNumBuckets; bucket++ {
+		if err := checkHashBuildCanceled(proc); err != nil {
+			return err
+		}
 		start, end := offsets[bucket], offsets[bucket+1]
 		if start == end {
 			continue
@@ -752,7 +780,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 			var file *os.File
 			file, spillErr = ctr.ensureSpillFile(proc, files, int(bucket))
 			if spillErr == nil {
-				spillErr = ctr.appendSpillRecord(file, int(bucket), selected, need, analyzer)
+				spillErr = ctr.appendSpillRecord(proc, file, int(bucket), selected, need, analyzer)
 			}
 		}
 		selected.CleanOnlyData()
@@ -767,7 +795,14 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 // buffer. Full buffers are written before accepting the next record. A record
 // larger than the coalescing target is written directly, so no unbounded
 // temporary copy can be retained.
-func (ctr *container) appendSpillRecord(file *os.File, bucket int, bat *batch.Batch, scratchNeed uint64, analyzer process.Analyzer) error {
+func (ctr *container) appendSpillRecord(
+	proc *process.Process,
+	file *os.File,
+	bucket int,
+	bat *batch.Batch,
+	scratchNeed uint64,
+	analyzer process.Analyzer,
+) error {
 	if bucket < 0 || bucket >= spillNumBuckets {
 		return process.ErrHashBuildBudgetInvalid
 	}
@@ -797,16 +832,16 @@ func (ctr *container) appendSpillRecord(file *os.File, bucket int, bat *batch.Ba
 	payload := ctr.spillWriteBuf.Bytes()
 	buf := &ctr.spillBucketWriteBufs[bucket]
 	if buf.Len() > 0 && buf.Len()+len(payload) > spillWriteCoalesceSize {
-		if err := ctr.flushPendingSpillBucket(file, bucket, analyzer); err != nil {
+		if err := ctr.flushPendingSpillBucket(proc, file, bucket, analyzer); err != nil {
 			return err
 		}
 	}
 	if len(payload) > spillWriteCoalesceSize {
-		return ctr.writeSpillPayload(file, payload, cnt, analyzer)
+		return ctr.writeSpillPayload(proc, file, payload, cnt, analyzer)
 	}
 	if buf.Len() == 0 {
 		if !ctr.ensureSpillCoalesceCapacity(buf, analyzer) {
-			return ctr.writeSpillPayload(file, payload, cnt, analyzer)
+			return ctr.writeSpillPayload(proc, file, payload, cnt, analyzer)
 		}
 		if buf.Cap() < spillWriteCoalesceSize {
 			*buf = *bytes.NewBuffer(make([]byte, 0, spillWriteCoalesceSize))
@@ -815,7 +850,7 @@ func (ctr *container) appendSpillRecord(file *os.File, bucket int, bat *batch.Ba
 	_, _ = buf.Write(payload)
 	ctr.spillBucketWriteRows[bucket] += cnt
 	if buf.Len() >= spillWriteCoalesceSize {
-		return ctr.flushPendingSpillBucket(file, bucket, analyzer)
+		return ctr.flushPendingSpillBucket(proc, file, bucket, analyzer)
 	}
 	return nil
 }
@@ -837,7 +872,12 @@ func (ctr *container) ensureSpillCoalesceCapacity(buf *bytes.Buffer, analyzer pr
 	return true
 }
 
-func (ctr *container) flushPendingSpillBucket(file *os.File, bucket int, analyzer process.Analyzer) error {
+func (ctr *container) flushPendingSpillBucket(
+	proc *process.Process,
+	file *os.File,
+	bucket int,
+	analyzer process.Analyzer,
+) error {
 	if bucket < 0 || bucket >= spillNumBuckets {
 		return process.ErrHashBuildBudgetInvalid
 	}
@@ -847,7 +887,7 @@ func (ctr *container) flushPendingSpillBucket(file *os.File, bucket int, analyze
 	}
 	rows := ctr.spillBucketWriteRows[bucket]
 	payload := buf.Bytes()
-	err := ctr.writeSpillPayload(file, payload, rows, analyzer)
+	err := ctr.writeSpillPayload(proc, file, payload, rows, analyzer)
 	// Clear even on a failed/partial write. A caller's enclosing failure path
 	// owns cleanup, and retrying the same bytes could duplicate records.
 	buf.Reset()
@@ -856,12 +896,24 @@ func (ctr *container) flushPendingSpillBucket(file *os.File, bucket int, analyze
 }
 
 // flushSpillBuffers writes all pending bucket records before files are rewound
-// or handed to JoinMap. Continue after an individual failure so every buffer
-// reaches a terminal state; the first error is returned to the caller.
-func (ctr *container) flushSpillBuffers(files []*os.File, analyzer process.Analyzer) error {
+// or handed to JoinMap. Cancellation is checked between physical writes. After
+// the first error, the remaining buffers are discarded rather than written, so
+// every buffer still reaches a terminal state without doing doomed I/O.
+func (ctr *container) flushSpillBuffers(proc *process.Process, files []*os.File, analyzer process.Analyzer) error {
 	var firstErr error
 	for bucket := 0; bucket < spillNumBuckets; bucket++ {
 		if ctr.spillBucketWriteBufs[bucket].Len() == 0 {
+			continue
+		}
+		if firstErr != nil {
+			ctr.spillBucketWriteBufs[bucket].Reset()
+			ctr.spillBucketWriteRows[bucket] = 0
+			continue
+		}
+		if err := checkHashBuildCanceled(proc); err != nil {
+			firstErr = err
+			ctr.spillBucketWriteBufs[bucket].Reset()
+			ctr.spillBucketWriteRows[bucket] = 0
 			continue
 		}
 		var file *os.File
@@ -869,14 +921,12 @@ func (ctr *container) flushSpillBuffers(files []*os.File, analyzer process.Analy
 			file = files[bucket]
 		}
 		if file == nil {
-			if firstErr == nil {
-				firstErr = process.ErrHashBuildBudgetInvalid
-			}
+			firstErr = process.ErrHashBuildBudgetInvalid
 			ctr.spillBucketWriteBufs[bucket].Reset()
 			ctr.spillBucketWriteRows[bucket] = 0
 			continue
 		}
-		if err := ctr.flushPendingSpillBucket(file, bucket, analyzer); err != nil && firstErr == nil {
+		if err := ctr.flushPendingSpillBucket(proc, file, bucket, analyzer); err != nil {
 			firstErr = err
 		}
 	}

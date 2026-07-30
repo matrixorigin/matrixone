@@ -441,12 +441,19 @@ func TestRestoreExternalTableDefensiveCloneGuards(t *testing.T) {
 }
 
 func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
-	sql := buildTableInfoListSQL("db'name", "tbl'name", 0, uint32(sysAccountID))
-	if !strings.Contains(sql, "reldatabase = 'db''name'") {
-		t.Fatalf("database name was not escaped in SQL: %s", sql)
-	}
-	if !strings.Contains(sql, "relname like 'tbl''name'") {
-		t.Fatalf("table name was not escaped in SQL: %s", sql)
+	for _, tableName := range []string{"tbl'name", "a_b", "a%b", `child\fk`} {
+		t.Run(tableName, func(t *testing.T) {
+			sql := buildTableInfoListSQL("db'name", tableName, 0, uint32(sysAccountID))
+			if !strings.Contains(sql, "reldatabase = 'db''name'") {
+				t.Fatalf("database name was not escaped in SQL: %s", sql)
+			}
+			if !strings.Contains(sql, "relname = "+quoteSQLStringLiteral(tableName)) {
+				t.Fatalf("table name was not matched exactly in SQL: %s", sql)
+			}
+			if strings.Contains(sql, "relname like "+quoteSQLStringLiteral(tableName)) {
+				t.Fatalf("table name was treated as a LIKE pattern in SQL: %s", sql)
+			}
+		})
 	}
 }
 
@@ -1111,7 +1118,7 @@ func Test_handleGetSnapshotTs(t *testing.T) {
 
 		err := handleGetSnapshotTs(ses, execCtx, ic)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err.Error(), convey.ShouldContainSubstring, "find 0 snapshot records")
+		convey.So(err.Error(), convey.ShouldContainSubstring, "snapshot nonexistent_snapshot does not exist")
 	})
 
 	convey.Convey("handleGetSnapshotTs publication permission denied", t, func() {
@@ -1358,7 +1365,7 @@ func Test_handleGetDatabases(t *testing.T) {
 
 		err := handleGetDatabases(ses, execCtx, ic)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err.Error(), convey.ShouldContainSubstring, "find 0 snapshot records")
+		convey.So(err.Error(), convey.ShouldContainSubstring, "snapshot nonexistent_snapshot does not exist")
 	})
 
 	convey.Convey("handleGetDatabases permission denied", t, func() {

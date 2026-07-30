@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -15364,6 +15365,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		registerEmptyHistoricalLineageResults(bh)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -15414,6 +15416,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		err := doDropSnapshot(ctx, ses, ds)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(bh.executedSQLs, convey.ShouldContain, historicalAlterLineageMetadataSQL())
 	})
 
 	convey.Convey("doDropSnapshot success", t, func() {
@@ -15425,6 +15428,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		registerEmptyHistoricalLineageResults(bh)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -15646,6 +15650,11 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldBeNil)
+
+		commitErr := errors.New("snapshot commit conflict")
+		bh.sql2err["commit;"] = commitErr
+		err = doCreateSnapshot(ctx, ses, cs)
+		convey.So(err, convey.ShouldEqual, commitErr)
 	})
 
 	// non-system tenant can't create cluster level snapshot

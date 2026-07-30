@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -43,6 +44,26 @@ import (
 
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 )
+
+type snapshotNotFoundError struct {
+	cause error
+}
+
+func (e *snapshotNotFoundError) Error() string {
+	if e.cause == nil {
+		return ""
+	}
+	return e.cause.Error()
+}
+
+func (e *snapshotNotFoundError) Unwrap() error {
+	return e.cause
+}
+
+func IsSnapshotNotFound(err error) bool {
+	var target *snapshotNotFoundError
+	return errors.As(err, &target)
+}
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
 	//
@@ -3812,28 +3833,6 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	for i, col := range cols {
 		subCtx.headings[i] = string(col)
 	}
-
-	if len(cteRef.occurrences) == 0 {
-		builder.cteRefs = append(builder.cteRefs, cteRef)
-	}
-	if ctx.bindingNonRecurCte() {
-		cteRef.hasNestedUse = true
-		if ctx.cteState.cte != nil {
-			ctx.cteState.cte.hasNestedRef = true
-		}
-	}
-	types := make([]plan.Type, len(builder.qry.Nodes[nodeID].ProjectList))
-	for i, expr := range builder.qry.Nodes[nodeID].ProjectList {
-		types[i] = expr.Typ
-	}
-	cteRef.occurrences = append(cteRef.occurrences, cteOccurrence{
-		rootID:       nodeID,
-		rootTag:      subCtx.rootTag(),
-		ctx:          subCtx,
-		headings:     append([]string(nil), subCtx.headings...),
-		types:        types,
-		isCorrelated: subCtx.isCorrelated,
-	})
 	return nodeID, nil
 }
 
@@ -8670,8 +8669,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		derivedSelect := numericProjectionTableSelect(tbl.Expr)
-		if _, directSelect := tbl.Expr.(*tree.Select); directSelect && tbl.As.Alias == "" {
-			return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "subquery in FROM must have an alias: %T", stmt)
+		if derivedSelect != nil && tbl.As.Alias == "" {
+			return 0, moerr.NewDerivedMustHaveAlias(builder.GetContext())
 		}
 		targets := ctx.numericTableProjectionTypes[strings.ToLower(string(tbl.As.Alias))]
 		if derivedSelect != nil && len(targets) > 0 {
@@ -8692,6 +8691,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 		if err != nil {
 			return
+		}
+
+		if derivedSelect != nil && len(tbl.As.Cols) > 0 {
+			derivedCtx := builder.ctxByNode[nodeID]
+			if len(tbl.As.Cols) != len(derivedCtx.headings) {
+				return 0, moerr.NewViewWrongList(builder.GetContext())
+			}
 		}
 
 		err = builder.addBinding(nodeID, tbl.As, ctx)
@@ -9394,7 +9400,11 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
 			}
 		} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
-			return builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
+			snapshot, err = builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
+			if err != nil && strings.Contains(err.Error(), "find 0 snapshot records") {
+				err = &snapshotNotFoundError{cause: err}
+			}
+			return
 		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
 			// try human-readable datetime first, fall back to debug timestamp format
 			if ts, err2 := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval); err2 == nil {

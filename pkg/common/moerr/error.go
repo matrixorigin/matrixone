@@ -96,6 +96,8 @@ const (
 	ErrUnknownStmtHandler   uint16 = 20317
 	ErrViewWrongList        uint16 = 20318
 	ErrWrongArguments       uint16 = 20319
+	ErrDerivedMustHaveAlias uint16 = 20320
+	ErrSnapshotNotFound     uint16 = 20321
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -418,6 +420,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrUnknownStmtHandler:   {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
 	ErrViewWrongList:        {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
 	ErrWrongArguments:       {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
+	ErrDerivedMustHaveAlias: {ER_DERIVED_MUST_HAVE_ALIAS, []string{"42000"}, "Every derived table must have its own alias"},
+	ErrSnapshotNotFound:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "snapshot %s does not exist"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1471,6 +1475,14 @@ func NewOperandColumns(ctx context.Context, columns int) *Error {
 
 func NewErrSubqueryNo1Row(ctx context.Context) *Error {
 	return newError(ctx, ErrSubqueryNo1Row)
+}
+
+func NewDerivedMustHaveAlias(ctx context.Context) *Error {
+	return newError(ctx, ErrDerivedMustHaveAlias)
+}
+
+func NewSnapshotNotFound(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrSnapshotNotFound, name)
 }
 
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
