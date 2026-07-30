@@ -186,7 +186,7 @@ create snapshot `SELECT` for database sp_test02;
 show snapshots;
 ➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
 select  ¦  2026-07-27 03:59:42.552359315  ¦  database  ¦  sys  ¦  sp_test02  ¦  
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user';
 ➤ sname[12,-1,0]  ¦  level[12,-1,0]  ¦  account_name[12,-1,0]  ¦  database_name[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
 select  ¦  database  ¦  sys  ¦  sp_test02  ¦  
 drop snapshot `SELECT`;
@@ -200,7 +200,7 @@ create snapshot AUTO_INCREMENT for database sp_test03;
 show snapshots;
 ➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
 auto_increment  ¦  2026-07-27 03:59:42.626178238  ¦  database  ¦  sys  ¦  sp_test03  ¦  
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user';
 ➤ sname[12,-1,0]  ¦  level[12,-1,0]  ¦  account_name[12,-1,0]  ¦  database_name[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
 auto_increment  ¦  database  ¦  sys  ¦  sp_test03  ¦  
 drop snapshot AUTO_INCREMENT;
@@ -257,10 +257,10 @@ show snapshots;
 ➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
 spsp03  ¦  2026-07-27 03:59:42.93179401  ¦  table  ¦  sys  ¦  db02  ¦  table01  𝄀
 spsp02  ¦  2026-07-27 03:59:42.92161909  ¦  database  ¦  sys  ¦  db02  ¦  
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'database';
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user' and level = 'database';
 ➤ sname[12,-1,0]  ¦  level[12,-1,0]  ¦  account_name[12,-1,0]  ¦  database_name[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
 spsp02  ¦  database  ¦  sys  ¦  db02  ¦  
-select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'table';
+select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where kind = 'user' and level = 'table';
 ➤ sname[12,-1,0]  ¦  level[12,-1,0]  ¦  account_name[12,-1,0]  ¦  database_name[12,-1,0]  ¦  table_name[12,-1,0]  𝄀
 spsp03  ¦  table  ¦  sys  ¦  db02  ¦  table01
 drop snapshot spsp02;

@@ -15,7 +15,6 @@
 package morpc
 
 import (
-	"math"
 	"runtime"
 	"time"
 
@@ -24,6 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap"
+)
+
+const (
+	defaultMinServerWorkers    = 100
+	defaultServerWorkersPerCPU = 8
 )
 
 var (
@@ -110,7 +114,9 @@ func (c *Config) Adjust() {
 		c.SendQueueSize = 100000
 	}
 	if c.ServerWorkers == 0 {
-		c.ServerWorkers = int(math.Max(100, float64(8*runtime.NumCPU())))
+		// GOMAXPROCS reflects container CPU quotas and explicit scheduler limits,
+		// while NumCPU can expose all CPUs on the host.
+		c.ServerWorkers = defaultServerWorkers(runtime.GOMAXPROCS(0))
 	}
 	if c.ServerBufferQueueSize == 0 {
 		c.ServerBufferQueueSize = 100000
@@ -124,6 +130,14 @@ func (c *Config) Adjust() {
 	if c.GCChannelBufferSize == 0 {
 		c.GCChannelBufferSize = DefaultGCChannelBufferSize
 	}
+}
+
+func defaultServerWorkers(maxProcs int) int {
+	workers := defaultServerWorkersPerCPU * maxProcs
+	if workers < defaultMinServerWorkers {
+		return defaultMinServerWorkers
+	}
+	return workers
 }
 
 // NewClient create client from config

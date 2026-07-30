@@ -180,8 +180,7 @@ func NewSubDbRestoreRecord(dbName string, account uint32, createSql string, spTs
 	}
 }
 
-func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
-	var err error
+func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) (err error) {
 	var snapshotLevel tree.SnapshotLevel
 	var snapshotForAccount string
 	var snapshotName string
@@ -247,6 +246,13 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		} else {
 			return nil
 		}
+	}
+
+	// Serialize the timestamp choice and owner-row publication with COPY ALTER.
+	// Unlike locking mo_snapshots itself, this stable catalog write also covers
+	// an empty owner set and forces an optimistic loser to retry.
+	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
+		return err
 	}
 
 	// 3.1 generate snapshot id
@@ -565,6 +571,9 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 		sql = getSqlForDropSnapshot(string(stmt.Name))
 		err = bh.Exec(ctx, sql)
 		if err != nil {
+			return err
+		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
 			return err
 		}
 	}
@@ -2014,7 +2023,7 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 		)
 	}
 	if len(tblName) > 0 {
-		whereClause += fmt.Sprintf(" and relname like %s", quoteSQLStringLiteral(tblName))
+		whereClause += fmt.Sprintf(" and relname = %s", quoteSQLStringLiteral(tblName))
 	}
 	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
 	return whereClause

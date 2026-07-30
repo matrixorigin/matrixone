@@ -9937,8 +9937,13 @@ func TestActiveUserLevelLockOwnersBoundRetainedCloseCleanupGrowth(t *testing.T) 
 			userLevelLocks.byOwner[owner] = map[string]struct{}{name: {}}
 			userLevelLocks.ownerSessions[owner] = fmt.Sprintf("session-active-close-cap-%d", i)
 		}
-		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, retainedUserLevelLockCleanupEntryCountLocked())
+		// This test inspects admission accounting, not asynchronous cleanup.
+		// Keep the worker stopped so it cannot consume the retained entry while
+		// the capacity invariants are being observed.
+		userLevelLocks.retainedCleanupStarted = true
+		entryCount := retainedUserLevelLockCleanupEntryCountLocked()
 		userLevelLocks.Unlock()
+		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, entryCount)
 
 		proc := newUserLevelLockTestProcess(t, services[0], "acc")
 		v, err := getUserLevelLock("active_close_cap_rejected", 0, proc)
@@ -9956,8 +9961,9 @@ func TestActiveUserLevelLockOwnersBoundRetainedCloseCleanupGrowth(t *testing.T) 
 			1,
 		))
 		userLevelLocks.Lock()
-		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, retainedUserLevelLockCleanupEntryCountLocked())
+		entryCount = retainedUserLevelLockCleanupEntryCountLocked()
 		userLevelLocks.Unlock()
+		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, entryCount)
 
 		require.False(t, retainUserLevelLockCloseCleanup(
 			service,
@@ -9967,9 +9973,12 @@ func TestActiveUserLevelLockOwnersBoundRetainedCloseCleanupGrowth(t *testing.T) 
 			9999,
 		))
 		userLevelLocks.Lock()
-		require.Len(t, userLevelLocks.retainedCloseCleanups, 1)
-		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, retainedUserLevelLockCleanupEntryCountLocked())
+		retainedCloseCleanupCount := len(userLevelLocks.retainedCloseCleanups)
+		entryCount = retainedUserLevelLockCleanupEntryCountLocked()
+		userLevelLocks.retainedCleanupStarted = false
 		userLevelLocks.Unlock()
+		require.Equal(t, 1, retainedCloseCleanupCount)
+		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, entryCount)
 	})
 }
 

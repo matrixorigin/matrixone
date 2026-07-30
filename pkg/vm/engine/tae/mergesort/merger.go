@@ -32,6 +32,14 @@ type Merger interface {
 	merge(context.Context) error
 }
 
+type failedMerger struct {
+	err error
+}
+
+func (m failedMerger) merge(context.Context) error {
+	return m.err
+}
+
 type releasableBatch struct {
 	bat      *batch.Batch
 	releaseF func()
@@ -108,7 +116,12 @@ type merger[T comparable] struct {
 	blockActive  []bool
 }
 
-func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, df dataFetcher[T]) Merger {
+func newMerger[T comparable](
+	host MergeTaskHost,
+	lessFunc sort.LessFunc[T],
+	sortKeyPos int,
+	df dataFetcher[T],
+) Merger {
 	size := host.GetObjectCnt()
 	m := &merger[T]{
 		host:   host,
@@ -138,7 +151,11 @@ func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sort
 	if host.DoTransfer() {
 		slabSize := totalBlkCnt * int(m.rowPerBlk)
 		if slabSize > 0 {
-			m.transferSlab = getTransferSlab(slabSize)
+			var err error
+			m.transferSlab, err = getTransferSlab(slabSize)
+			if err != nil {
+				return failedMerger{err: err}
+			}
 			m.blockActive = make([]bool, totalBlkCnt)
 		}
 	}
