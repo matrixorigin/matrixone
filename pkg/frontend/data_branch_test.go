@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -47,6 +48,40 @@ func TestDataBranchUserVisibleColumn(t *testing.T) {
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.CPrimaryKeyColName, Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "__mo_cbkey_006tenant003seq", Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.Row_ID, Hidden: true}))
+}
+
+func TestPrepareDataBranchWorkerValidatesBeforeAllocation(t *testing.T) {
+	t.Run("invalid diff projection", func(t *testing.T) {
+		tblStuff := tableStuff{}
+		tblStuff.def.colNames = []string{"id"}
+		tblStuff.def.visibleIdxes = []int{0}
+		stmt := &tree.DataBranchDiff{
+			Columns: tree.IdentifierList{tree.Identifier("missing")},
+		}
+
+		err := prepareDataBranchWorker(stmt, nil, &tblStuff)
+		require.Error(t, err)
+		require.Nil(t, tblStuff.worker)
+	})
+
+	t.Run("pick without primary key", func(t *testing.T) {
+		tblStuff := tableStuff{}
+		tblStuff.def.pkKind = fakeKind
+		stmt := &tree.DataBranchPick{}
+
+		err := prepareDataBranchWorker(nil, stmt, &tblStuff)
+		require.ErrorContains(t, err, "requires a table with a primary key")
+		require.Nil(t, tblStuff.worker)
+	})
+
+	t.Run("valid statement creates releasable worker", func(t *testing.T) {
+		tblStuff := tableStuff{}
+
+		require.NoError(t, prepareDataBranchWorker(nil, nil, &tblStuff))
+		require.NotNil(t, tblStuff.worker)
+		tblStuff.worker.Release()
+		require.True(t, tblStuff.worker.IsClosed())
+	})
 }
 
 func TestValidateDataBranchCreateTxn(t *testing.T) {
