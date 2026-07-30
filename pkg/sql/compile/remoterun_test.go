@@ -926,12 +926,14 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:         &plan.ObjectRef{ObjName: "t1"},
-					TableDef:       &plan.TableDef{Name: "t1"},
-					InsertCols:     []int{0, 1, 2},
-					DeleteCols:     []int{3, 4},
-					PartitionCols:  []int{5, 6},
-					InsertPkColIdx: 1,
+					ObjRef:             &plan.ObjectRef{ObjName: "t1"},
+					TableDef:           &plan.TableDef{Name: "t1"},
+					InsertCols:         []int{0, 1, 2},
+					DeleteCols:         []int{3, 4, 8},
+					PartitionCols:      []int{5, 6},
+					InsertPkColIdx:     1,
+					DedupByTargetRowID: true,
+					TargetUpdateCtxIdx: 0,
 				},
 			},
 			Action: multi_update.UpdateWriteTable,
@@ -945,8 +947,10 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		restoredOp := restored.(*multi_update.MultiUpdate)
 		require.Equal(t, []int{5, 6}, restoredOp.MultiUpdateCtx[0].PartitionCols)
 		require.Equal(t, []int{0, 1, 2}, restoredOp.MultiUpdateCtx[0].InsertCols)
-		require.Equal(t, []int{3, 4}, restoredOp.MultiUpdateCtx[0].DeleteCols)
+		require.Equal(t, []int{3, 4, 8}, restoredOp.MultiUpdateCtx[0].DeleteCols)
 		require.Equal(t, 1, restoredOp.MultiUpdateCtx[0].InsertPkColIdx)
+		require.True(t, restoredOp.MultiUpdateCtx[0].DedupByTargetRowID)
+		require.Equal(t, 0, restoredOp.MultiUpdateCtx[0].TargetUpdateCtxIdx)
 		require.True(t, restoredOp.IsRemote)
 		require.False(t, restoredOp.CountDeleteAffectRows,
 			"CountDeleteAffectRows must stay false when the source op did not set it")

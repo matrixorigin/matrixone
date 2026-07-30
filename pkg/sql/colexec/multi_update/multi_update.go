@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -376,33 +378,102 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 }
 
 func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer process.Analyzer, bat *batch.Batch) (err error) {
+	targetBatches := make(map[int]*batch.Batch)
+	defer func() {
+		for _, targetBatch := range targetBatches {
+			if targetBatch != bat {
+				targetBatch.Clean(proc.Mp())
+			}
+		}
+	}()
+
 	for i, updateCtx := range update.MultiUpdateCtx {
+		targetIdx := updateCtx.TargetUpdateCtxIdx
+		if targetIdx < 0 || targetIdx >= len(update.MultiUpdateCtx) {
+			return moerr.NewInternalError(proc.Ctx, "invalid multi-target update context index")
+		}
+		contextBatch, ok := targetBatches[targetIdx]
+		if !ok {
+			contextBatch, _, err = filterTargetRows(proc, update.MultiUpdateCtx[targetIdx], bat)
+			if err != nil {
+				return err
+			}
+			targetBatches[targetIdx] = contextBatch
+		}
+		if contextBatch.RowCount() == 0 {
+			continue
+		}
+
 		// delete rows
 		if len(updateCtx.DeleteCols) > 0 {
-			err = update.delete_table(proc, analyzer, updateCtx, bat, i)
-			if err != nil {
-				return
+			if err = update.delete_table(proc, analyzer, updateCtx, contextBatch, i); err != nil {
+				return err
 			}
 		}
 
 		// insert rows
-		if len(updateCtx.InsertCols) > 0 {
-			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-			switch tableType {
-			case UpdateMainTable:
-				err = update.insert_main_table(proc, analyzer, i, bat)
-			case UpdateUniqueIndexTable:
-				err = update.insert_unique_index_table(proc, analyzer, i, bat)
-			case UpdateSecondaryIndexTable:
-				err = update.insert_secondary_index_table(proc, analyzer, i, bat)
-			}
-			if err != nil {
-				return
-			}
+		if len(updateCtx.InsertCols) == 0 {
+			continue
+		}
+		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
+		switch tableType {
+		case UpdateMainTable:
+			err = update.insert_main_table(proc, analyzer, i, contextBatch)
+		case UpdateUniqueIndexTable:
+			err = update.insert_unique_index_table(proc, analyzer, i, contextBatch)
+		case UpdateSecondaryIndexTable:
+			err = update.insert_secondary_index_table(proc, analyzer, i, contextBatch)
+		}
+		if err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+func filterTargetRows(
+	proc *process.Process,
+	updateCtx *MultiUpdateCtx,
+	input *batch.Batch,
+) (*batch.Batch, bool, error) {
+	if !updateCtx.DedupByTargetRowID {
+		return input, false, nil
+	}
+	if len(updateCtx.DeleteCols) < 3 ||
+		updateCtx.DeleteCols[0] < 0 ||
+		updateCtx.DeleteCols[0] >= len(input.Vecs) ||
+		updateCtx.DeleteCols[2] < 0 ||
+		updateCtx.DeleteCols[2] >= len(input.Vecs) {
+		return nil, false, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector columns")
+	}
+
+	rowIDVec := input.Vecs[updateCtx.DeleteCols[0]]
+	rowNumberVec := input.Vecs[updateCtx.DeleteCols[2]]
+	if rowIDVec.GetType().Oid != types.T_Rowid || rowNumberVec.GetType().Oid != types.T_int64 {
+		return nil, false, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector types")
+	}
+
+	rowNumbers := vector.MustFixedColWithTypeCheck[int64](rowNumberVec)
+	rowIDNulls := rowIDVec.GetNulls()
+	rowNumberNulls := rowNumberVec.GetNulls()
+	selections := make([]int64, 0, input.RowCount())
+	for i := 0; i < input.RowCount(); i++ {
+		if rowIDNulls.Contains(uint64(i)) ||
+			rowNumberNulls.Contains(uint64(i)) ||
+			rowNumbers[i] != 1 {
+			continue
+		}
+		selections = append(selections, int64(i))
+	}
+
+	filtered, err := input.Clone(proc.Mp(), false)
+	if err != nil {
+		return nil, false, err
+	}
+	filtered.Shrink(selections, false)
+	filtered.SetRowCount(len(selections))
+	return filtered, true, nil
 }
 
 func (update *MultiUpdate) resetMultiUpdateCtxs() {

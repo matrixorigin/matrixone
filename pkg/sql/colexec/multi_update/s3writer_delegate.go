@@ -260,6 +260,30 @@ func (writer *s3WriterDelegate) append(
 	}
 
 	mp := proc.Mp()
+	targetBatches := make(map[int]*batch.Batch)
+	defer func() {
+		for _, targetBatch := range targetBatches {
+			if targetBatch != inBatch {
+				targetBatch.Clean(mp)
+			}
+		}
+	}()
+	contextBatches := make([]*batch.Batch, len(writer.updateCtxs))
+	for i, updateCtx := range writer.updateCtxs {
+		targetIdx := updateCtx.TargetUpdateCtxIdx
+		if targetIdx < 0 || targetIdx >= len(writer.updateCtxs) {
+			return moerr.NewInternalError(proc.Ctx, "invalid multi-target update context index")
+		}
+		targetBatch, ok := targetBatches[targetIdx]
+		if !ok {
+			targetBatch, _, err = filterTargetRows(proc, writer.updateCtxs[targetIdx], inBatch)
+			if err != nil {
+				return err
+			}
+			targetBatches[targetIdx] = targetBatch
+		}
+		contextBatches[i] = targetBatch
+	}
 
 	// Route insert columns directly to per-table sinkers (no clone).
 	// Auto-spill S3 writes during Write use proc.Ctx; perfcounter tracking
@@ -268,8 +292,12 @@ func (writer *s3WriterDelegate) append(
 		if len(updateCtx.InsertCols) == 0 || writer.insertSinkers[i] == nil {
 			continue
 		}
+		contextBatch := contextBatches[i]
+		if contextBatch.RowCount() == 0 {
+			continue
+		}
 		insertAttrs := writer.updateCtxInfos[updateCtx.TableDef.Name].insertAttrs
-		projBat := inBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
+		projBat := contextBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
 
 		tableType := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType
 
@@ -303,7 +331,7 @@ func (writer *s3WriterDelegate) append(
 				for insertIdx, inputIdx := range updateCtx.InsertCols {
 					col := updateCtx.TableDef.Cols[insertIdx]
 					if col.Default != nil && !col.Default.NullAbility && !strings.HasPrefix(col.Name, catalog.PrefixCBColName) {
-						if inBatch.Vecs[inputIdx].HasNull() {
+						if contextBatch.Vecs[inputIdx].HasNull() {
 							return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
 						}
 					}
@@ -367,10 +395,14 @@ func (writer *s3WriterDelegate) append(
 		if len(updateCtx.DeleteCols) == 0 {
 			continue
 		}
+		contextBatch := contextBatches[i]
+		if contextBatch.RowCount() == 0 {
+			continue
+		}
 		if writer.deleteBatches[i] == nil {
 			writer.deleteBatches[i] = batch.NewBatchSet(objectio.BlockMaxRows)
 		}
-		projBat := inBatch.SelectColumns(updateCtx.DeleteCols, DeleteBatchAttrs)
+		projBat := contextBatch.SelectColumns(updateCtx.DeleteCols[:2], DeleteBatchAttrs)
 		if _, err = writer.deleteBatches[i].Extend(mp, projBat, nil); err != nil {
 			return
 		}

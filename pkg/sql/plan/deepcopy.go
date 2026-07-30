@@ -108,6 +108,8 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			InsertPkColIdx:        ctx.InsertPkColIdx,
 			CountDeleteAffectRows: ctx.CountDeleteAffectRows,
 			IgnoreAffectedRows:    ctx.IgnoreAffectedRows,
+			DedupByTargetRowId:    ctx.DedupByTargetRowId,
+			TargetUpdateCtxIdx:    ctx.TargetUpdateCtxIdx,
 		}
 	}
 

@@ -114,13 +114,6 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		}
 	}
 
-	if len(usedTbl) > 1 {
-		return newLegacyUpdatePlannerRouteError(
-			updateRouteReasonMultiTarget,
-			moerr.NewUnsupportedDML(ctx.GetContext(), "multi-table update"),
-		)
-	}
-
 	dmlCtx.updateCol2Expr = make([]map[string]tree.Expr, len(dmlCtx.tableDefs))
 	for alias, columnMap := range usedTbl {
 		idx := dmlCtx.aliasMap[alias]
@@ -288,17 +281,27 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 		}
 	}
 
-	//if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
-	//	dmlCtx.needAggFilter = true
-	//	err := setTableExprToDmlTableInfo(ctx, joinTbl.Left, dmlCtx, aliasMap, withMap)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	if joinTbl.Right != nil {
-	//		return setTableExprToDmlTableInfo(ctx, joinTbl.Right, dmlCtx, aliasMap, withMap)
-	//	}
-	//	return nil
-	//}
+	if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
+		if err := dmlCtx.ResolveSingleTable(
+			ctx,
+			joinTbl.Left,
+			aliasMap,
+			withMap,
+			respectFKCheck,
+		); err != nil {
+			return err
+		}
+		if joinTbl.Right != nil {
+			return dmlCtx.ResolveSingleTable(
+				ctx,
+				joinTbl.Right,
+				aliasMap,
+				withMap,
+				respectFKCheck,
+			)
+		}
+		return nil
+	}
 
 	if baseTbl, ok := tbl.(*tree.TableName); ok {
 		dbName = string(baseTbl.SchemaName)

@@ -444,6 +444,8 @@ func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
 		SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
 		InsertPkColIdx:     ctx.InsertPkColIdx,
 		IgnoreAffectedRows: ctx.IgnoreAffectedRows,
+		DedupByTargetRowID: ctx.DedupByTargetRowID,
+		TargetUpdateCtxIdx: ctx.TargetUpdateCtxIdx,
 	}
 	objRef := *ctx.ObjRef
 	def := *ctx.TableDef

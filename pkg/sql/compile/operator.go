@@ -918,6 +918,8 @@ func constructMultiUpdate(
 			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
 			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
 			IgnoreAffectedRows: updateCtx.IgnoreAffectedRows,
+			DedupByTargetRowID: updateCtx.DedupByTargetRowId,
+			TargetUpdateCtxIdx: int(updateCtx.TargetUpdateCtxIdx),
 		}
 	}
 	arg.Action = action

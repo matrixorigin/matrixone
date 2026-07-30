@@ -665,6 +665,8 @@ message UpdateCtx {
   int32 insert_pk_col_idx = 11;
   bool count_delete_affect_rows = 12;
   bool ignore_affected_rows = 13;
+  bool dedup_by_target_row_id = 14;
+  int32 target_update_ctx_idx = 15;
 }
 
 message InsertCtx {

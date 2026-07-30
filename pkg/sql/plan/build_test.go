@@ -2534,6 +2534,73 @@ func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
 	}
 }
 
+func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey "+
+			"SET n.n_name = n2.n_name, n2.n_comment = n.n_comment",
+	)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	var multiUpdate *plan.Node
+	rowNumberWindows := 0
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_WINDOW {
+			for _, specExpr := range node.WinSpecList {
+				if spec := specExpr.GetW(); spec != nil &&
+					spec.Name == "row_number" &&
+					len(spec.PartitionBy) == 1 {
+					rowNumberWindows++
+				}
+			}
+		}
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdate = node
+		}
+	}
+	require.NotNil(t, multiUpdate)
+	require.Equal(t, 2, rowNumberWindows)
+
+	mainCtxs := make(map[string]*plan.UpdateCtx)
+	for _, updateCtx := range multiUpdate.UpdateCtxList {
+		if updateCtx.TableDef == nil {
+			continue
+		}
+		if updateCtx.TableDef.Name == "nation" || updateCtx.TableDef.Name == "nation2" {
+			mainCtxs[updateCtx.TableDef.Name] = updateCtx
+		}
+	}
+	require.Len(t, mainCtxs, 2)
+	for _, name := range []string{"nation", "nation2"} {
+		updateCtx := mainCtxs[name]
+		require.NotNil(t, updateCtx)
+		require.True(t, updateCtx.DedupByTargetRowId)
+		require.Len(t, updateCtx.DeleteCols, 3)
+		require.NotEqual(t, updateCtx.DeleteCols[0].ColPos, updateCtx.DeleteCols[2].ColPos)
+	}
+	require.NotEqual(
+		t,
+		mainCtxs["nation"].DeleteCols[0].ColPos,
+		mainCtxs["nation2"].DeleteCols[0].ColPos,
+	)
+
+	require.Len(t, multiUpdate.Children, 1)
+	lockNode := query.Nodes[multiUpdate.Children[0]]
+	require.Equal(t, plan.Node_LOCK_OP, lockNode.NodeType)
+	for i := 1; i < len(lockNode.LockTargets); i++ {
+		previous := lockNode.LockTargets[i-1]
+		current := lockNode.LockTargets[i]
+		require.True(t,
+			previous.TableId < current.TableId ||
+				(previous.TableId == current.TableId &&
+					previous.PrimaryColIdxInBat <= current.PrimaryColIdxInBat),
+		)
+	}
+}
+
 func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
 	mock := NewMockOptimizer(true)
 

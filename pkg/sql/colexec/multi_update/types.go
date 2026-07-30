@@ -118,6 +118,11 @@ type MultiUpdateCtx struct {
 	// used with SkipInsertOnNullPk for REPLACE delete-only rows.
 	InsertPkColIdx     int
 	IgnoreAffectedRows bool
+	// DedupByTargetRowID makes this context consume only the whole input row
+	// selected for its physical target row. The planner supplies an independent
+	// row_number() partition for every updated target table.
+	DedupByTargetRowID bool
+	TargetUpdateCtxIdx int
 }
 
 func (update MultiUpdate) TypeName() string {
