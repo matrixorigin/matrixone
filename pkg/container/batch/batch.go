@@ -208,7 +208,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	if rowCount < 0 || int64(int(rowCount)) != rowCount {
 		return moerr.NewInvalidInputNoCtx("invalid batch row count")
 	}
-	bat.rowCount = int(rowCount)
+	decodedRowCount := int(rowCount)
 
 	l, err := cursor.readInt32()
 	if err != nil {
@@ -226,6 +226,13 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	// This ensures Vecs are properly reset and prevents stale data from previous unmarshal operations
 	if firstTime || vecsLenChanged {
 		if vecsLenChanged && len(bat.Vecs) > 0 {
+			if mp == nil {
+				for _, vec := range bat.Vecs {
+					if vec != nil && !vec.NeedDup() {
+						return moerr.NewInvalidInputNoCtx("cannot unmarshal into an owned batch vector without a memory pool")
+					}
+				}
+			}
 			bat.Clean(mp)
 		}
 		bat.Vecs = make([]*vector.Vector, vecsLen)
@@ -358,7 +365,11 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		return err
 	}
 	bat.ShuffleIDX, err = cursor.readInt32()
-	return err
+	if err != nil {
+		return err
+	}
+	bat.rowCount = decodedRowCount
+	return nil
 }
 
 func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) {

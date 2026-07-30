@@ -285,6 +285,77 @@ func TestBatchUnmarshalPreservesIndependentRowCount(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestBatchUnmarshalPreservesShortNonEmptyVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("object stats"), false, mp))
+	source.SetRowCount(6)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewOffHeapEmpty()
+	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+	require.Equal(t, 6, target.RowCount())
+	require.Equal(t, 1, target.Vecs[0].Length())
+	require.Equal(t, []byte("object stats"), target.Vecs[0].GetBytesAt(0))
+	target.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestBatchUnmarshalRetainsRowCountWhenVectorCountChanges(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	for i := range source.Vecs {
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+	}
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewOffHeapWithSize(1)
+	target.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
+
+	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+	require.Equal(t, 1, target.RowCount())
+	require.Len(t, target.Vecs, 2)
+	require.Equal(t, int64(1), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[0], 0))
+	require.Equal(t, int64(2), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[1], 0))
+	target.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestBatchUnmarshalRejectsOwnedVectorCountChangeWithoutMpool(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	for i := range source.Vecs {
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+	}
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewWithSize(1)
+	target.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
+	t.Cleanup(func() {
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+
+	var unmarshalErr error
+	require.NotPanics(t, func() {
+		unmarshalErr = target.UnmarshalBinary(encoded)
+	})
+	require.Error(t, unmarshalErr)
+}
+
 func TestBatchShrink(t *testing.T) {
 	bat := newBatch([]types.Type{types.T_int8.ToType()}, 4)
 	bat.Shrink([]int64{0}, true)
