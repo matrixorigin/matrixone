@@ -160,6 +160,121 @@ func TestCreateQueueFullReturnsLocalCongestion(t *testing.T) {
 		"process-local queue congestion must not poison a peer breaker")
 }
 
+func TestHalfOpenCreateQueueCongestionReleasesProbe(t *testing.T) {
+	operations := []struct {
+		name string
+		call func(RPCClient, string) error
+	}{
+		{
+			name: "send",
+			call: func(c RPCClient, remote string) error {
+				_, err := c.Send(
+					context.Background(),
+					remote,
+					&testMessage{id: 1},
+				)
+				return err
+			},
+		},
+		{
+			name: "new-stream",
+			call: func(c RPCClient, remote string) error {
+				stream, err := c.NewStream(context.Background(), remote, false)
+				if stream != nil {
+					_ = stream.Close(false)
+				}
+				return err
+			},
+		},
+		{
+			name: "ping",
+			call: func(c RPCClient, remote string) error {
+				return c.Ping(context.Background(), remote)
+			},
+		},
+	}
+	congestionCases := []struct {
+		name      string
+		queueSize int
+		fillQueue bool
+		wantErr   error
+		queueWait time.Duration
+	}{
+		{
+			name:      "queue-full",
+			queueSize: 1,
+			fillQueue: true,
+			wantErr:   ErrBackendCreateQueueFull,
+		},
+		{
+			name:      "queue-timeout",
+			queueSize: 2,
+			wantErr:   ErrBackendCreateQueueTimeout,
+			queueWait: 10 * time.Millisecond,
+		},
+	}
+
+	for _, operation := range operations {
+		for _, congestion := range congestionCases {
+			t.Run(operation.name+"/"+congestion.name, func(t *testing.T) {
+				factory := &failingCreateFactory{}
+				rpcClient, err := NewClient(
+					"half-open-"+operation.name+"-"+congestion.name,
+					factory,
+					WithClientEnableAutoCreateBackend(),
+					WithClientAutoCreateQueueWaitTimeout(congestion.queueWait),
+					WithClientCircuitBreaker(CircuitBreakerConfig{
+						Enabled:             true,
+						FailureThreshold:    1,
+						ResetTimeout:        0,
+						HalfOpenMaxRequests: 3,
+					}),
+				)
+				require.NoError(t, err)
+				defer func() {
+					require.NoError(t, rpcClient.Close())
+				}()
+				c := rpcClient.(*client)
+
+				congested := newClientGCManager()
+				congested.createC = make(chan createRequest, congestion.queueSize)
+				if congestion.fillQueue {
+					c.mu.Lock()
+					generation := c.backendGenerationLocked("occupied")
+					state := newBackendCreateState(generation)
+					c.mu.creating["occupied"] = state
+					c.mu.Unlock()
+					congested.createC <- createRequest{
+						c:       c,
+						backend: "occupied",
+						state:   state,
+					}
+				}
+
+				original := c.gcManager
+				c.gcManager = congested
+				defer func() {
+					c.gcManager = original
+					congested.stop()
+				}()
+
+				const remote = "target"
+				c.circuitBreakers.RecordFailure(remote)
+				for range 2 {
+					err := operation.call(rpcClient, remote)
+					require.ErrorIs(t, err, congestion.wantErr)
+				}
+
+				stats := c.circuitBreakers.GetBreaker(remote).Stats()
+				require.Equal(t, CircuitHalfOpen, stats.State)
+				require.EqualValues(t, 1, stats.FailureCount,
+					"local congestion must neither fail nor exhaust half-open probes")
+				require.Zero(t, factory.attempts.Load())
+			})
+		}
+	}
+}
+
 // TestExplicitCreateRespectsLimits verifies that explicit synchronous creation
 // still respects pool limits.
 func TestExplicitCreateRespectsLimits(t *testing.T) {

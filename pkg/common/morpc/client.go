@@ -518,9 +518,10 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	// Pin the breaker incarnation for this request. A targeted backend reset
 	// detaches it, so a late result cannot affect the replacement generation.
 	breaker := c.circuitBreakers.newHandle(backend)
-	if !breaker.Allow() {
-		return nil, breaker.Error()
-	}
+	var permit circuitBreakerPermit
+	defer func() {
+		permit.Release()
+	}()
 
 	policy := c.options.retryPolicy
 	var backoff time.Duration
@@ -528,18 +529,14 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	var creationStart time.Time
 
 	for {
-		// Check circuit breaker before each retry attempt
-		if !breaker.Allow() {
-			// Don't record failure - circuit is already open
-			return nil, breaker.Error()
+		var admitErr error
+		permit, admitErr = breaker.Admit()
+		if admitErr != nil {
+			return nil, admitErr
 		}
 
 		b, backendCreate, err := c.getBackendForOperation(backend, false)
 		if err != nil {
-			// Handle circuit breaker errors - both open and half-open (exhausted probes) reject immediately
-			if errors.Is(err, ErrCircuitOpen) || errors.Is(err, ErrCircuitHalfOpen) {
-				return nil, err
-			}
 			// A full process-local create queue is backpressure, not evidence
 			// that this peer failed. Return it to the caller without poisoning
 			// the peer's breaker generation.
@@ -564,7 +561,10 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 				)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
-					breaker.RecordFailure()
+					if !errors.Is(waitErr, context.Canceled) &&
+						!errors.Is(waitErr, context.DeadlineExceeded) {
+						permit.RecordFailure()
+					}
 					return nil, waitErr
 				}
 
@@ -576,7 +576,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 						zap.Int("retries", retryCount),
 						zap.Error(err))
 					// Record circuit breaker failure on max retries
-					breaker.RecordFailure()
+					permit.RecordFailure()
 					return nil, err
 				}
 
@@ -592,17 +592,18 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 					if !errors.Is(waitErr, context.Canceled) &&
 						!errors.Is(waitErr, context.DeadlineExceeded) &&
 						!isBackendCreateQueueCongestion(waitErr) {
-						breaker.RecordFailure()
+						permit.RecordFailure()
 					}
 					return nil, waitErr
 				}
+				permit.Release()
 				continue
 			}
 
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			// Only count backend-related errors
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
-				breaker.RecordFailure()
+				permit.RecordFailure()
 			}
 			return nil, err
 		}
@@ -612,11 +613,12 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			// Drain is a healthy generation handoff, not a peer failure. Retry
 			// selection so new work moves to the replacement without closing
 			// the old backend or poisoning the circuit breaker.
+			permit.Release()
 			continue
 		}
 		if isBackendClosedError(err) {
 			c.retireBackend(backend, b)
-			breaker.RecordFailure()
+			permit.RecordFailure()
 			retryCount++
 			// Check if max retries exceeded (0 means unlimited)
 			if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
@@ -625,11 +627,6 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 					zap.Int("retries", retryCount),
 					zap.Error(err))
 				return nil, err
-			}
-
-			// Check circuit breaker after failure
-			if !breaker.Allow() {
-				return nil, breaker.Error()
 			}
 
 			// Calculate next backoff with jitter
@@ -651,9 +648,9 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			continue
 		}
 		if err == nil {
-			breaker.RecordSuccess()
+			permit.RecordSuccess()
 		} else {
-			breaker.RecordFailure()
+			permit.RecordFailure()
 		}
 		return f, err
 	}
@@ -665,9 +662,10 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 	}
 
 	breaker := c.circuitBreakers.newHandle(backend)
-	if !breaker.Allow() {
-		return nil, breaker.Error()
-	}
+	var permit circuitBreakerPermit
+	defer func() {
+		permit.Release()
+	}()
 
 	policy := c.options.retryPolicy
 	var backoff time.Duration
@@ -675,12 +673,6 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 	var creationStart time.Time
 
 	for {
-		// Check circuit breaker before each retry attempt
-		if !breaker.Allow() {
-			// Don't record failure - circuit is already open
-			return nil, breaker.Error()
-		}
-
 		// Check context before attempting
 		select {
 		case <-ctx.Done():
@@ -688,12 +680,14 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 		default:
 		}
 
+		var admitErr error
+		permit, admitErr = breaker.Admit()
+		if admitErr != nil {
+			return nil, admitErr
+		}
+
 		b, backendCreate, err := c.getBackendForOperation(backend, lock)
 		if err != nil {
-			// Handle circuit breaker errors - both open and half-open (exhausted probes) reject immediately
-			if errors.Is(err, ErrCircuitOpen) || errors.Is(err, ErrCircuitHalfOpen) {
-				return nil, err
-			}
 			if isBackendCreateQueueCongestion(err) {
 				return nil, err
 			}
@@ -715,7 +709,10 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 				)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
-					breaker.RecordFailure()
+					if !errors.Is(waitErr, context.Canceled) &&
+						!errors.Is(waitErr, context.DeadlineExceeded) {
+						permit.RecordFailure()
+					}
 					return nil, waitErr
 				}
 
@@ -727,7 +724,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 						zap.Int("retries", retryCount),
 						zap.Error(err))
 					// Record circuit breaker failure on max retries
-					breaker.RecordFailure()
+					permit.RecordFailure()
 					return nil, err
 				}
 
@@ -743,16 +740,17 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 					if !errors.Is(waitErr, context.Canceled) &&
 						!errors.Is(waitErr, context.DeadlineExceeded) &&
 						!isBackendCreateQueueCongestion(waitErr) {
-						breaker.RecordFailure()
+						permit.RecordFailure()
 					}
 					return nil, waitErr
 				}
+				permit.Release()
 				continue
 			}
 
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
-				breaker.RecordFailure()
+				permit.RecordFailure()
 			}
 			return nil, err
 		}
@@ -765,11 +763,12 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 			b.Unlock()
 		}
 		if errors.Is(err, backendDraining) {
+			permit.Release()
 			continue
 		}
 		if isBackendClosedError(err) {
 			c.retireBackend(backend, b)
-			breaker.RecordFailure()
+			permit.RecordFailure()
 			retryCount++
 			// Check if max retries exceeded
 			if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
@@ -778,11 +777,6 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 					zap.Int("retries", retryCount),
 					zap.Error(err))
 				return nil, err
-			}
-
-			// Check circuit breaker after failure
-			if !breaker.Allow() {
-				return nil, breaker.Error()
 			}
 
 			// Calculate next backoff with jitter
@@ -804,9 +798,9 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 			continue
 		}
 		if err == nil {
-			breaker.RecordSuccess()
+			permit.RecordSuccess()
 		} else {
-			breaker.RecordFailure()
+			permit.RecordFailure()
 		}
 		return st, err
 	}
@@ -818,9 +812,10 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 	}
 
 	breaker := c.circuitBreakers.newHandle(backend)
-	if !breaker.Allow() {
-		return breaker.Error()
-	}
+	var permit circuitBreakerPermit
+	defer func() {
+		permit.Release()
+	}()
 
 	policy := c.options.retryPolicy
 	var backoff time.Duration
@@ -828,12 +823,20 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 	var creationStart time.Time
 
 	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		var admitErr error
+		permit, admitErr = breaker.Admit()
+		if admitErr != nil {
+			return admitErr
+		}
+
 		b, backendCreate, err := c.getBackendForOperation(backend, false)
 		if err != nil {
-			// Handle circuit breaker errors - both open and half-open (exhausted probes) reject immediately
-			if errors.Is(err, ErrCircuitOpen) || errors.Is(err, ErrCircuitHalfOpen) {
-				return err
-			}
 			if isBackendCreateQueueCongestion(err) {
 				return err
 			}
@@ -855,7 +858,10 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 				)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
-					breaker.RecordFailure()
+					if !errors.Is(waitErr, context.Canceled) &&
+						!errors.Is(waitErr, context.DeadlineExceeded) {
+						permit.RecordFailure()
+					}
 					return waitErr
 				}
 
@@ -867,7 +873,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 						zap.Int("retries", retryCount),
 						zap.Error(err))
 					// Record circuit breaker failure on max retries
-					breaker.RecordFailure()
+					permit.RecordFailure()
 					return err
 				}
 
@@ -883,16 +889,17 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 					if !errors.Is(waitErr, context.Canceled) &&
 						!errors.Is(waitErr, context.DeadlineExceeded) &&
 						!isBackendCreateQueueCongestion(waitErr) {
-						breaker.RecordFailure()
+						permit.RecordFailure()
 					}
 					return waitErr
 				}
+				permit.Release()
 				continue
 			}
 
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
-				breaker.RecordFailure()
+				permit.RecordFailure()
 			}
 			return err
 		}
@@ -900,11 +907,12 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
 		if err != nil {
 			if errors.Is(err, backendDraining) {
+				permit.Release()
 				continue
 			}
 			if isBackendClosedError(err) {
 				c.retireBackend(backend, b)
-				breaker.RecordFailure()
+				permit.RecordFailure()
 				retryCount++
 				// Check if max retries exceeded
 				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
@@ -913,11 +921,6 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 						zap.Int("retries", retryCount),
 						zap.Error(err))
 					return err
-				}
-
-				// Check circuit breaker after failure
-				if !breaker.Allow() {
-					return breaker.Error()
 				}
 
 				// Calculate next backoff with jitter
@@ -938,15 +941,15 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 				}
 				continue
 			}
-			breaker.RecordFailure()
+			permit.RecordFailure()
 			return err
 		}
 		_, err = f.Get()
 		f.Close()
 		if err == nil {
-			breaker.RecordSuccess()
+			permit.RecordSuccess()
 		} else {
-			breaker.RecordFailure()
+			permit.RecordFailure()
 		}
 		return err
 	}
@@ -1070,6 +1073,13 @@ func (c *client) CloseBackendFor(remote string) error {
 }
 
 func (c *client) getBackend(backend string, lock bool) (Backend, error) {
+	breaker := c.circuitBreakers.newHandle(backend)
+	permit, err := breaker.Admit()
+	if err != nil {
+		return nil, err
+	}
+	defer permit.Release()
+
 	b, _, err := c.getBackendForOperation(backend, lock)
 	return b, err
 }
@@ -1082,12 +1092,6 @@ func (c *client) getBackendForOperation(
 	backend string,
 	lock bool,
 ) (Backend, *backendCreateState, error) {
-	// Fast-fail: check circuit breaker before acquiring lock
-	// This prevents blocking on lock acquisition for known-bad backends
-	if !c.circuitBreakers.Allow(backend) {
-		return nil, nil, c.circuitBreakers.GetError(backend)
-	}
-
 	c.mu.Lock()
 	// Preserve the healthy-backend fast path. Only compact terminal capacity
 	// after selection misses; doing a full slice rewrite before every Send/Ping
