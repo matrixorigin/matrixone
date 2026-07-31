@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +43,72 @@ func newMockCombinedTxnTable() *combinedTxnTable {
 		tablesFunc:  func() ([]engine.Relation, error) { return nil, nil },
 		prunePKFunc: func(bat *batch.Batch, partitionIndex int32) ([]engine.Relation, error) { return nil, nil },
 	}
+}
+
+func TestNewCombinedTxnTableFiltersNilRelations(t *testing.T) {
+	valid := &mockRelation{}
+	expected := []engine.Relation{valid}
+	returned := []engine.Relation{valid, nil}
+	table := newCombinedTxnTable(
+		nil,
+		func() ([]engine.Relation, error) {
+			return returned, nil
+		},
+		func(context.Context, engine.RangesParam) ([]engine.Relation, error) {
+			return returned, nil
+		},
+		func(*batch.Batch, int32) ([]engine.Relation, error) {
+			return returned, nil
+		},
+	)
+
+	relations, err := table.tablesFunc()
+	assert.NoError(t, err)
+	assert.Equal(t, expected, relations)
+
+	relations, err = table.pruneFunc(context.Background(), engine.RangesParam{})
+	assert.NoError(t, err)
+	assert.Equal(t, expected, relations)
+
+	relations, err = table.prunePKFunc(nil, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, relations)
+
+	relations, err = table.tablesFunc()
+	assert.NoError(t, err)
+	assert.Equal(t, expected, relations)
+	assert.Equal(t, []engine.Relation{valid, nil}, returned)
+
+	assert.Empty(t, filterNilRelations([]engine.Relation{nil, nil}))
+	withoutNil := []engine.Relation{valid}
+	assert.Equal(t, withoutNil, filterNilRelations(withoutNil))
+}
+
+func TestNewCombinedTxnTablePreservesRelationErrors(t *testing.T) {
+	table := newCombinedTxnTable(
+		nil,
+		func() ([]engine.Relation, error) {
+			return []engine.Relation{nil}, assert.AnError
+		},
+		func(context.Context, engine.RangesParam) ([]engine.Relation, error) {
+			return []engine.Relation{nil}, assert.AnError
+		},
+		func(*batch.Batch, int32) ([]engine.Relation, error) {
+			return []engine.Relation{nil}, assert.AnError
+		},
+	)
+
+	relations, err := table.tablesFunc()
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, relations)
+
+	relations, err = table.pruneFunc(context.Background(), engine.RangesParam{})
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, relations)
+
+	relations, err = table.prunePKFunc(nil, 0)
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, relations)
 }
 
 func TestCombinedTxnTable_BuildShardingReaders(t *testing.T) {
@@ -879,6 +946,61 @@ func TestCombinedTxnTable_BuildReaders(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Equal(t, assert.AnError, err)
+	})
+
+	t.Run("AllNilRelationsUseEmptyReaders", func(t *testing.T) {
+		table := newCombinedTxnTable(
+			nil,
+			func() ([]engine.Relation, error) {
+				return []engine.Relation{nil, nil}, nil
+			},
+			func(context.Context, engine.RangesParam) ([]engine.Relation, error) {
+				return []engine.Relation{nil, nil}, nil
+			},
+			func(*batch.Batch, int32) ([]engine.Relation, error) {
+				return nil, nil
+			},
+		)
+
+		relData, err := table.Ranges(ctx, engine.RangesParam{})
+		assert.NoError(t, err)
+
+		result, err := table.BuildReaders(
+			ctx,
+			nil,
+			nil,
+			relData,
+			3,
+			0,
+			false,
+			engine.Policy_CheckAll,
+			engine.FilterHint{},
+		)
+		assert.NoError(t, err)
+		assert.Len(t, result, 3)
+		for _, reader := range result {
+			assert.IsType(t, new(readutil.EmptyReader), reader)
+			end, err := reader.Read(ctx, nil, nil, nil, nil)
+			assert.NoError(t, err)
+			assert.True(t, end)
+		}
+
+		result, err = table.BuildReaders(
+			ctx,
+			nil,
+			nil,
+			nil,
+			2,
+			0,
+			false,
+			engine.Policy_CheckAll,
+			engine.FilterHint{},
+		)
+		assert.NoError(t, err)
+		assert.Len(t, result, 2)
+		for _, reader := range result {
+			assert.IsType(t, new(readutil.EmptyReader), reader)
+		}
 	})
 }
 
@@ -1729,6 +1851,35 @@ func TestCombinedTxnTable_Rows(t *testing.T) {
 	})
 }
 
+func TestCombinedTxnTable_Stats(t *testing.T) {
+	stats := &statsinfo.StatsInfo{
+		BlockNumber:        1,
+		ApproxObjectNumber: 2,
+		TableCnt:           3,
+	}
+	table := newCombinedTxnTable(
+		nil,
+		func() ([]engine.Relation, error) {
+			return []engine.Relation{
+				nil,
+				&mockRelation{
+					statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) {
+						return stats, nil
+					},
+				},
+			}, nil
+		},
+		nil,
+		nil,
+	)
+
+	result, err := table.Stats(context.Background(), false)
+	assert.NoError(t, err)
+	assert.Equal(t, stats.BlockNumber, result.BlockNumber)
+	assert.Equal(t, stats.ApproxObjectNumber, result.ApproxObjectNumber)
+	assert.Equal(t, stats.TableCnt, result.TableCnt)
+}
+
 // Test CombinedRelData panic methods
 func TestCombinedRelData_GetType(t *testing.T) {
 	data := &CombinedRelData{}
@@ -2032,6 +2183,7 @@ type mockRelation struct {
 	collectTombstonesFunc               func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error)
 	sizeFunc                            func(ctx context.Context, columnName string) (uint64, error)
 	rowsFunc                            func(ctx context.Context) (uint64, error)
+	statsFunc                           func(ctx context.Context, sync bool) (*statsinfo.StatsInfo, error)
 	starCountFunc                       func(ctx context.Context) (uint64, error)
 	estimateCommittedTombstoneCountFunc func(ctx context.Context) (int, error)
 	collectChangesFunc                  func(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (engine.ChangesHandle, error)
@@ -2062,6 +2214,9 @@ func (m *mockRelation) Rows(ctx context.Context) (uint64, error) {
 }
 
 func (m *mockRelation) Stats(ctx context.Context, sync bool) (*statsinfo.StatsInfo, error) {
+	if m.statsFunc != nil {
+		return m.statsFunc(ctx, sync)
+	}
 	return nil, nil
 }
 

@@ -186,6 +186,13 @@ func TestApplyRemapDb(t *testing.T) {
 		require.Contains(t, out, "dbyyy.t")
 		require.NotContains(t, out, "dbxxx")
 	})
+
+	t.Run("create view with qualified column", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "create view dbxxx.v as select dbxxx.t.id from dbxxx.t", remap)
+		require.Contains(t, out, "dbyyy.t.id")
+		require.Contains(t, out, "from dbyyy.t")
+		require.NotContains(t, out, "dbxxx")
+	})
 	t.Run("create index", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "create index ix on dbxxx.t(id)", remap)
 		require.Contains(t, out, "dbyyy.t")

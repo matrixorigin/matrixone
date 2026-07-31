@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -336,6 +337,17 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			if takeErr != nil {
 				return takeErr
 			}
+			probeExpressionLease, leaseErr := hashbuild.NewExpressionMemoryLease(
+				budget, hashJoin.EqConds[0], ctr.eqCondExecs, false)
+			if leaseErr != nil {
+				_ = payload.Close()
+				ctr.mp.Free()
+				ctr.mp = nil
+				ctr.cleanEqCondExecutors()
+				ctr.releaseProbeExpressionLease()
+				return leaseErr
+			}
+			ctr.probeExpressionLease = probeExpressionLease
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           hashJoin.EqConds[1],
 				ProbeKeyExprs:           hashJoin.EqConds[0],
@@ -346,6 +358,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				NeedAllocateSels:        !hashJoin.HashOnPK,
 				NeedBatches:             hashJoin.NeedBuildBatches(),
 				Budget:                  budget,
+				ProbeExpressionLease:    probeExpressionLease,
 			})
 			if len(payload.Files) > 0 {
 				engine.InitFromSpilledFiles(payload.Files)
@@ -458,7 +471,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 }
 
 func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
-	err := ctr.evalJoinCondition(ctr.leftBat, proc)
+	err := ctr.evalJoinConditionBudgeted(ctr.leftBat, proc)
 	if err != nil {
 		return err
 	}
@@ -774,7 +787,7 @@ func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc 
 		return vector.SetConstNull(marker, rowCnt, proc.Mp())
 	}
 
-	if err := ctr.evalJoinCondition(ctr.leftBat, proc); err != nil {
+	if err := ctr.evalJoinConditionBudgeted(ctr.leftBat, proc); err != nil {
 		return err
 	}
 	if err := vector.AppendMultiFixed(marker, false, false, rowCnt, proc.Mp()); err != nil {
@@ -969,6 +982,16 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		ctr.eqCondVecs[i] = vec
 	}
 	return nil
+}
+
+func (ctr *container) evalJoinConditionBudgeted(bat *batch.Batch, proc *process.Process) error {
+	if ctr.probeExpressionLease == nil {
+		return ctr.evalJoinCondition(bat, proc)
+	}
+	return ctr.probeExpressionLease.Eval(proc, []*batch.Batch{bat}, bat.RowCount(), func(i int, vec *vector.Vector) error {
+		ctr.eqCondVecs[i] = vec
+		return nil
+	})
 }
 
 func (hashJoin *HashJoin) resetResultBat() {

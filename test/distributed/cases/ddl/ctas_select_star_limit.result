@@ -1,0 +1,36 @@
+drop database if exists ctas_select_star_limit;
+create database ctas_select_star_limit;
+use ctas_select_star_limit;
+create table src (a int, b varchar(8));
+insert into src values (1, 'x');
+create table dst_empty as select * from src limit 0;
+desc dst_empty;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from dst_empty;
+➤ a[4,32,0]  ¦  b[12,-1,0]
+create table dst_rows as select * from src;
+select * from dst_rows;
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+1  ¦  x
+create table src_key (id int primary key, v varchar(8), unique key(v));
+insert into src_key values (1, 'k');
+create table dst_key_empty as select * from src_key limit 0;
+desc dst_key_empty;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+v  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦  
+create table dst_explicit as select a, b from src limit 0;
+desc dst_explicit;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦  
+create table dst_missing as select * from missing_src limit 0;
+no such table ctas_select_star_limit.missing_src
+show tables like 'dst_missing';
+➤ Tables_in_ctas_select_star_limit[12,-1,0]
+select count(*) from src;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop database ctas_select_star_limit;

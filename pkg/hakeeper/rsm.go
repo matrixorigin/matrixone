@@ -434,6 +434,12 @@ func (s *stateMachine) assignIDByKey(key string) uint64 {
 	return s.state.NextIDByKey[key]
 }
 
+const bootstrapAllocationRequestPrefix = "\x00bootstrap-allocation-request/"
+
+func bootstrapAllocationRequestKey(key, requestID string) string {
+	return bootstrapAllocationRequestPrefix + key + "\x00" + requestID
+}
+
 func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	data := cmd[headerSize:]
 	var b pb.CommandBatch
@@ -608,6 +614,18 @@ func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
 		s.state.NextID++
 		v := s.state.NextID
 		s.state.NextID += allocIDCmd.Batch - 1
+		return sm.Result{Value: v}
+	}
+
+	if allocIDCmd.RequestID != "" {
+		requestKey := bootstrapAllocationRequestKey(allocIDCmd.Key, allocIDCmd.RequestID)
+		if id, ok := s.state.NextIDByKey[requestKey]; ok {
+			return sm.Result{Value: id}
+		}
+
+		v := s.assignIDByKey(allocIDCmd.Key)
+		s.state.NextIDByKey[allocIDCmd.Key] += allocIDCmd.Batch - 1
+		s.state.NextIDByKey[requestKey] = v
 		return sm.Result{Value: v}
 	}
 

@@ -12168,6 +12168,77 @@ func TestRollbackMergeAfterTransferredDeleteError(t *testing.T) {
 	require.Equal(t, 3, rel.GetMeta().(*catalog.TableEntry).ObjectCnt(false) /*Aobj(created + deleted), Nobj(rollbacked)*/)
 }
 
+func transferSlabCurrBytes(t *testing.T) int64 {
+	t.Helper()
+	var reports []map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(mpool.ReportMemUsage("transfer-slab")), &reports))
+	for _, report := range reports {
+		raw, ok := report["transfer-slab"]
+		if !ok || string(raw) == `""` {
+			continue
+		}
+		var stats struct {
+			CurrBytes int64 `json:"currBytes"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &stats))
+		return stats.CurrBytes
+	}
+	return 0
+}
+
+func TestRollbackMergeBeforeRegistrationCleansTransferState(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	mergesort.DrainTransferSlabPool()
+	before := transferSlabCurrBytes(t)
+	t.Cleanup(mergesort.DrainTransferSlabPool)
+
+	txn, rel := tae.GetRelation()
+	defer func() {
+		assert.NoError(t, txn.Rollback(ctx))
+	}()
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	require.NoError(t, err)
+
+	// Commit the delete before the merge entry is built so phase-1 transfer
+	// writes TransferDelsMap during NewMergeObjectsEntry.
+	require.NoError(t, tae.DeleteAll(true))
+
+	const injectedErr = "mock pre-registration transfer error"
+	require.True(t, fault.Enable())
+	t.Cleanup(func() {
+		assert.True(t, fault.Disable())
+	})
+	require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_TransferErrorAfterTransfer, ":::", "echo", 0, injectedErr, false))
+	t.Cleanup(func() {
+		removed, err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferErrorAfterTransfer)
+		assert.NoError(t, err)
+		assert.True(t, removed)
+	})
+
+	require.ErrorContains(t, task.OnExec(ctx), injectedErr)
+
+	created := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[0])
+	createdBlk := objectio.NewBlockidWithObjectID(created.ObjectName().ObjectId(), 0)
+	require.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(createdBlk))
+
+	mergesort.DrainTransferSlabPool()
+	require.Equal(t, before, transferSlabCurrBytes(t))
+}
+
 func TestTransferInMerge(t *testing.T) {
 	ctx := context.Background()
 

@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -1007,6 +1008,8 @@ var (
 		icebergsql.TablePublishJobs:     0,
 		icebergsql.TableOrphanFiles:     0,
 		icebergsql.TableMaintenanceJobs: 0,
+		mongodb.TableConnections:        0,
+		mongodb.TableMappings:           0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1065,6 +1068,8 @@ var (
 		icebergsql.PublishJobsDDL,
 		icebergsql.OrphanFilesDDL,
 		icebergsql.MaintenanceJobsDDL,
+		mongodb.ConnectionsDDL,
+		mongodb.MappingsDDL,
 	}
 
 	// drop tables for the tenant
@@ -1095,6 +1100,10 @@ var (
 		`drop table if exists mo_catalog.mo_iceberg_residency_policy;`,
 		`drop table if exists mo_catalog.mo_iceberg_principal_map;`,
 		`drop table if exists mo_catalog.mo_iceberg_catalogs;`,
+	}
+	dropMongoDBSqls = []string{
+		`drop table if exists mo_catalog.mo_mongodb_tables;`,
+		`drop table if exists mo_catalog.mo_mongodb_connections;`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
@@ -1376,15 +1385,15 @@ const (
        									    and privilege_id = %d 
        									    and privilege_level = "%s";`
 
-	checkDatabaseFormat          = `select dat_id from mo_catalog.mo_database where datname = "%s";`
-	checkDatabaseByAccountFormat = `select dat_id from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
+	checkDatabaseFormat          = `select dat_id from mo_catalog.mo_database where datname = %s;`
+	checkDatabaseByAccountFormat = `select dat_id from mo_catalog.mo_database where datname = %s and account_id = %d;`
 
-	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
+	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = %s and account_id = %d;`
 
-	checkDatabaseViewFormat = `select rel_logical_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
+	checkDatabaseViewFormat = `select rel_logical_id from mo_catalog.mo_tables where relname = %s and reldatabase = %s and relkind = "v" and account_id = %d;`
 
-	getViewMetaFormat             = `select viewdef, owner from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
-	getViewMetaWithSnapshotFormat = `select viewdef, owner from mo_catalog.mo_tables {MO_TS = %d} where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
+	getViewMetaFormat             = `select viewdef, owner from mo_catalog.mo_tables where relname = %s and reldatabase = %s and relkind = "v" and account_id = %d;`
+	getViewMetaWithSnapshotFormat = `select viewdef, owner from mo_catalog.mo_tables {MO_TS = %d} where relname = %s and reldatabase = %s and relkind = "v" and account_id = %d;`
 
 	// TODO:fix privilege_level string and obj_type string
 	// For object_type : table, privilege_level : *.*
@@ -1407,7 +1416,7 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s"
-					and d.datname = "%s"
+					and d.datname = %s
 					and rp.with_grant_option = true;`
 
 	// For object_type : table, privilege_level : db.table
@@ -1419,8 +1428,8 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s"
-					and d.datname = "%s"
-					and t.relname = "%s"
+					and d.datname = %s
+					and t.relname = %s
 					and rp.with_grant_option = true;`
 
 	// For object_type : database, privilege_level : *
@@ -1454,7 +1463,7 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s"
-					and  d.datname = "%s"
+					and  d.datname = %s
 					and rp.with_grant_option = true;`
 
 	// For object_type : account, privilege_level : *
@@ -1478,8 +1487,8 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level in ("%s","%s")
-					and d.datname = "%s"
-					and t.relname = "%s";`
+					and d.datname = %s
+					and t.relname = %s;`
 
 	// for database.* or *
 	checkRoleHasTableLevelForDatabaseStarFormat = `select rp.privilege_id,rp.with_grant_option
@@ -1489,7 +1498,7 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level in ("%s","%s")
-					and d.datname = "%s";`
+					and d.datname = %s;`
 
 	// for *.*
 	checkRoleHasTableLevelForStarStarFormat = `select rp.privilege_id,rp.with_grant_option
@@ -1517,7 +1526,7 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s"
-					and d.datname = "%s";`
+					and d.datname = %s;`
 
 	// for *
 	checkRoleHasAccountLevelForStarFormat = `select rp.privilege_id,rp.with_grant_option
@@ -1994,20 +2003,14 @@ func getSqlForCheckWithGrantOptionForTableStarStarWithObjType(objType objectType
 	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, objType, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckWithGrantOptionForTableDatabaseStarWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, objType, roleId, privId, privilegeLevelDatabaseStar, dbName), nil
+func getSqlForCheckWithGrantOptionForTableDatabaseStarWithObjType(_ context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, objType, roleId, privId,
+		privilegeLevelDatabaseStar, escapeSQLString(dbName)), nil
 }
 
-func getSqlForCheckWithGrantOptionForTableDatabaseTableWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName, tableName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, objType, roleId, privId, privilegeLevelDatabaseTable, dbName, tableName), nil
+func getSqlForCheckWithGrantOptionForTableDatabaseTableWithObjType(_ context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, objType, roleId, privId,
+		privilegeLevelDatabaseTable, escapeSQLString(dbName), escapeSQLString(tableName)), nil
 }
 
 func getSqlForCheckWithGrantOptionForDatabaseStar(roleId int64, privId PrivilegeType) string {
@@ -2018,36 +2021,28 @@ func getSqlForCheckWithGrantOptionForDatabaseStarStar(roleId int64, privId Privi
 	return fmt.Sprintf(checkWithGrantOptionForDatabaseStarStar, objectTypeDatabase, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckWithGrantOptionForDatabaseDB(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkWithGrantOptionForDatabaseDB, objectTypeDatabase, roleId, privId, privilegeLevelDatabase, dbName), nil
+func getSqlForCheckWithGrantOptionForDatabaseDB(_ context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseDB, objectTypeDatabase, roleId, privId,
+		privilegeLevelDatabase, escapeSQLString(dbName)), nil
 }
 
 func getSqlForCheckWithGrantOptionForAccountStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkWithGrantOptionForAccountStar, objectTypeAccount, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName, tableName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objType, roleId, privId, privilegeLevelDatabaseTable, privilegeLevelTable, dbName, tableName), nil
+func getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(_ context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
+	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objType, roleId, privId,
+		privilegeLevelDatabaseTable, privilegeLevelTable,
+		escapeSQLString(dbName), escapeSQLString(tableName)), nil
 }
 
 func getSqlForCheckRoleHasTableLevelPrivilege(ctx context.Context, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
 	return getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, objectTypeTable, roleId, privId, dbName, tableName)
 }
 
-func getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkRoleHasTableLevelForDatabaseStarFormat, objType, roleId, privId, privilegeLevelDatabaseStar, privilegeLevelStar, dbName), nil
+func getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(_ context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	return fmt.Sprintf(checkRoleHasTableLevelForDatabaseStarFormat, objType, roleId, privId,
+		privilegeLevelDatabaseStar, privilegeLevelStar, escapeSQLString(dbName)), nil
 }
 
 func getSqlForCheckRoleHasTableLevelForStarStarWithObjType(objType objectType, roleId int64, privId PrivilegeType) string {
@@ -2058,12 +2053,9 @@ func getSqlForCheckRoleHasDatabaseLevelForStarStar(roleId int64, privId Privileg
 	return fmt.Sprintf(checkRoleHasDatabaseLevelForStarStarFormat, objectTypeDatabase, roleId, privId, level)
 }
 
-func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkRoleHasDatabaseLevelForDatabaseFormat, objectTypeDatabase, roleId, privId, privilegeLevelDatabase, dbName), nil
+func getSqlForCheckRoleHasDatabaseLevelForDatabase(_ context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	return fmt.Sprintf(checkRoleHasDatabaseLevelForDatabaseFormat, objectTypeDatabase, roleId, privId,
+		privilegeLevelDatabase, escapeSQLString(dbName)), nil
 }
 
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
@@ -2113,32 +2105,20 @@ func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, e
 	return fmt.Sprintf(getTableColumnDefFormat, accountId, dbName, tableName), nil
 }
 
-func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkDatabaseFormat, dbName), nil
+func getSqlForCheckDatabase(_ context.Context, dbName string) (string, error) {
+	return fmt.Sprintf(checkDatabaseFormat, escapeSQLString(dbName)), nil
 }
 
 func getSqlForCheckDatabaseByAccount(ctx context.Context, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkDatabaseByAccountFormat, dbName, accountID), nil
+	return fmt.Sprintf(checkDatabaseByAccountFormat, escapeSQLString(dbName), accountID), nil
 }
 
-func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string, accountId int64) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkDatabaseWithOwnerFormat, dbName, accountId), nil
+func getSqlForCheckDatabaseWithOwner(_ context.Context, dbName string, accountId int64) (string, error) {
+	return fmt.Sprintf(checkDatabaseWithOwnerFormat, escapeSQLString(dbName), accountId), nil
 }
 
 func getSqlForCheckDatabaseTable(
@@ -2160,17 +2140,12 @@ func getSqlForCheckDatabaseTable(
 }
 
 func getSqlForCheckDatabaseTableWithSnapshot(
-	ctx context.Context,
+	_ context.Context,
 	dbName string,
 	tableName string,
 	account uint32,
 	snapshotTS int64,
 ) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName, tableName)
-	if err != nil {
-		return "", err
-	}
-
 	snapshotSpec := ""
 	if snapshotTS != 0 {
 		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
@@ -2178,8 +2153,8 @@ func getSqlForCheckDatabaseTableWithSnapshot(
 
 	// The account id disambiguates identical database/table names across tenants.
 	return fmt.Sprintf(
-		`select rel_logical_id from mo_catalog.mo_tables%s where relname = "%s" and reldatabase = "%s" and account_id = %d;`,
-		snapshotSpec, tableName, dbName, account,
+		`select rel_logical_id from mo_catalog.mo_tables%s where relname = %s and reldatabase = %s and account_id = %d;`,
+		snapshotSpec, escapeSQLString(tableName), escapeSQLString(dbName), account,
 	), nil
 }
 
@@ -2188,11 +2163,6 @@ func getSqlForCheckDatabaseView(
 	dbName string,
 	viewName string,
 ) (string, error) {
-
-	err := inputNameIsInvalid(ctx, dbName, viewName)
-	if err != nil {
-		return "", err
-	}
 
 	var (
 		account uint32
@@ -2206,7 +2176,8 @@ func getSqlForCheckDatabaseView(
 
 	// we need the account id here to filter out the same dbName and viewName that exist in the
 	// different accounts.
-	return fmt.Sprintf(checkDatabaseViewFormat, viewName, dbName, account), nil
+	return fmt.Sprintf(checkDatabaseViewFormat,
+		escapeSQLString(viewName), escapeSQLString(dbName), account), nil
 }
 
 func getSqlForCheckViewMeta(
@@ -2214,10 +2185,6 @@ func getSqlForCheckViewMeta(
 	dbName string,
 	viewName string,
 ) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName, viewName)
-	if err != nil {
-		return "", err
-	}
 
 	var (
 		account uint32
@@ -2229,7 +2196,8 @@ func getSqlForCheckViewMeta(
 		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
 	}
 
-	return fmt.Sprintf(getViewMetaFormat, viewName, dbName, account), nil
+	return fmt.Sprintf(getViewMetaFormat,
+		escapeSQLString(viewName), escapeSQLString(dbName), account), nil
 }
 
 func getSqlForCheckViewMetaWithSnapshot(
@@ -2238,10 +2206,6 @@ func getSqlForCheckViewMetaWithSnapshot(
 	viewName string,
 	snapshotTs int64,
 ) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName, viewName)
-	if err != nil {
-		return "", err
-	}
 
 	var (
 		account uint32
@@ -2253,7 +2217,8 @@ func getSqlForCheckViewMetaWithSnapshot(
 		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
 	}
 
-	return fmt.Sprintf(getViewMetaWithSnapshotFormat, snapshotTs, viewName, dbName, account), nil
+	return fmt.Sprintf(getViewMetaWithSnapshotFormat, snapshotTs,
+		escapeSQLString(viewName), escapeSQLString(dbName), account), nil
 }
 
 func getSqlForDeleteRole(roleId int64) []string {
@@ -4279,6 +4244,14 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
+		for _, sql = range dropMongoDBSqls {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+			rtnErr = bh.Exec(deleteCtx, sql)
+			if rtnErr != nil {
+				return rtnErr
+			}
+		}
+
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getSubsSql)
 		// alter sub_account field in mo_pubs which contains accountName
 		subInfos, rtnErr := getSubInfosFromSub(deleteCtx, bh, "")
@@ -4430,6 +4403,9 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 	if !hasAccount {
 		return err
+	}
+	if !inTxn {
+		retireMongoDBClients(ctx, ses.GetService(), mongodb.ClientRetirement{AccountID: uint32(accountId)})
 	}
 	// if drop the account, add the account to kill queue
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
@@ -6388,7 +6364,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseAndTableDirectly = true
 		dbName = string(st.Name)
 		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
-	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
+	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog,
+		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection, *tree.DropMongoDBConnection:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
@@ -9952,6 +9929,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			*tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
 			yes, err := checkIcebergCatalogPrivilege()
 			return yes, stats, err
+		case *tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection, *tree.DropMongoDBConnection,
+			*tree.ShowMongoDBConnections:
+			return tenant.IsAdminRole(), stats, nil
 		}
 	}
 

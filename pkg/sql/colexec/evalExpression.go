@@ -1125,7 +1125,7 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 		case *plan.Literal_Timestampval:
 			scale := typ.Scale
 			if scale < 0 || scale > 6 {
-				return nil, moerr.NewErrTooBigPrecision(proc.Ctx, scale, "TIMESTAMP", 6)
+				return nil, moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "TIMESTAMP", 6)
 			}
 			vec, err = vector.NewConstFixed(constTimestampTypes[scale], types.Timestamp(val.Timestampval), 1, proc.Mp())
 		case *plan.Literal_Sval:
@@ -1255,7 +1255,7 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 			case *plan.Literal_Timestampval:
 				scale := expr.Typ.Scale
 				if scale < 0 || scale > 6 {
-					return nil, moerr.NewErrTooBigPrecision(proc.Ctx, scale, "TIMESTAMP", 6)
+					return nil, moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "TIMESTAMP", 6)
 				}
 				veccol := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 				veccol[i] = types.Timestamp(val.Timestampval)
@@ -1397,7 +1397,7 @@ func getConstZM(
 		v := val.Timestampval
 		scale := typ.Scale
 		if scale < 0 || scale > 6 {
-			err = moerr.NewErrTooBigPrecision(proc.Ctx, scale, "TIMESTAMP", 6)
+			err = moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "TIMESTAMP", 6)
 			return
 		}
 		zm = index.NewZM(constTimestampTypes[0].Oid, scale)

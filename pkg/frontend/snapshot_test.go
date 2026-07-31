@@ -294,7 +294,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 
 		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(restoreTestExecutedSQLContains(bh, fmt.Sprintf(restoreTableDataByTsFmt, dbName, "base_t", dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
+		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
 	})
 
@@ -349,7 +349,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 
 		err := restoreDatabaseFromTS(ctx, "", bh, dbName, snapshotTs, fromAccount, toAccount, map[string]*tableInfo{}, map[string]*tableInfo{}, false, nil)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(restoreTestExecutedSQLContains(bh, fmt.Sprintf(restoreTableDataByTsFmt, dbName, "base_t", dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
+		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
 	})
 }
@@ -383,7 +383,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 
 		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, "", map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID))
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(restoreTestExecutedSQLContains(bh, fmt.Sprintf(restoreTableDataByTsFmt, dbName, "base_t", dbName, "base_t", ts)), convey.ShouldBeTrue)
+		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", ts)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
 	})
 
@@ -452,6 +452,18 @@ func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
 			}
 			if strings.Contains(sql, "relname like "+quoteSQLStringLiteral(tableName)) {
 				t.Fatalf("table name was treated as a LIKE pattern in SQL: %s", sql)
+			}
+			if !strings.Contains(sql, "relkind = 'temporary_table'") {
+				t.Fatalf("temporary tables were not filtered by catalog marker: %s", sql)
+			}
+			if !strings.Contains(sql, "mo_is_legacy_temporary_table(coalesce(relkind, ''), coalesce(relname, ''), coalesce(reldatabase, ''), coalesce(rel_createsql, ''), coalesce(extra_info, ''))") {
+				t.Fatalf("legacy temporary base tables were not filtered by CREATE SQL: %s", sql)
+			}
+			if !strings.Contains(sql, "coalesce(relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and regexp_like(relname, '^__mo_tmp_[0-9a-f]{32}_')") {
+				t.Fatalf("legacy temporary derived objects were not filtered by exact physical name: %s", sql)
+			}
+			if strings.Contains(sql, "relname not like '__mo_tmp_%'") {
+				t.Fatalf("temporary tables were filtered by the broad legal name prefix: %s", sql)
 			}
 		})
 	}
@@ -622,6 +634,29 @@ func restoreTestExecutedSQLContains(bh *backgroundExecTest, needle string) bool 
 		}
 	}
 	return false
+}
+
+func TestRestoreSQLQuotesEmbeddedBackticks(t *testing.T) {
+	const (
+		dbName       = "db`name"
+		tableName    = "table`name"
+		viewName     = "view`name"
+		snapshotName = "snapshot'name"
+	)
+	qualifiedName := "`db``name`.`table``name`"
+
+	require.Equal(t, "show create table "+qualifiedName, showCreateTableSQL(dbName, tableName))
+	require.Equal(t, "use `db``name`", useDatabaseSQL(dbName))
+	require.Equal(t, "CREATE DATABASE IF NOT EXISTS `db``name`", createDatabaseIfNotExistsSQL(dbName))
+	require.Equal(t, "drop database if exists `db``name`", dropDatabaseIfExistsSQL(dbName))
+	require.Equal(t, "drop table if exists "+qualifiedName, dropTableIfExistsSQL(dbName, tableName))
+	require.Equal(t, "drop view if exists `view``name`", dropViewIfExistsSQL(viewName))
+	require.Equal(t,
+		"create table "+qualifiedName+" clone "+qualifiedName+" {MO_TS = 123 }",
+		restoreTableDataByTsSQL(dbName, tableName, 123))
+	require.Equal(t,
+		"create table "+qualifiedName+" clone "+qualifiedName+" {SNAPSHOT = 'snapshot\\'name'}",
+		restoreTableDataByNameSQL(dbName, tableName, snapshotName))
 }
 
 func Test_fkTablesTopoSortWithTS(t *testing.T) {

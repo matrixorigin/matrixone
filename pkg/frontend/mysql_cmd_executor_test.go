@@ -85,6 +85,88 @@ func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	return ctx, stubs
 }
 
+func TestDoComQueryParseErrorReplacesPreviousDiagnostics(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	err := doComQuery(ses, execCtx, &UserInput{sql: "select from"})
+	require.Error(t, err)
+	// sendErrPacket records the final client-facing error after doComQuery
+	// returns. Mirror that protocol step here so this test exercises the same
+	// diagnostics lifecycle without opening a network connection.
+	ses.appendErrorDiagnostic(1064, err.Error())
+
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, 1, info.length())
+	require.Equal(t, []uint16{1064}, info.codes)
+	require.NotContains(t, info.msgs, "stale diagnostic marker")
+}
+
+func TestDoComQueryPrepareMultiReplacesPreviousDiagnostics(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	ses.SetCmd(COM_STMT_PREPARE)
+	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	err := doComQuery(ses, execCtx, &UserInput{sql: "prepare __mo_stmt_1 from select 1; select 2"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "prepare multi statements")
+	ses.appendErrorDiagnostic(1235, err.Error())
+
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, 1, info.length())
+	require.Equal(t, []uint16{1235}, info.codes)
+	require.NotContains(t, info.msgs, "stale diagnostic marker")
+}
+
+func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	execCtx := &ExecCtx{}
+	input := &UserInput{}
+
+	ses.appendErrorDiagnostic(1000, "previous error")
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.ShowWarnings{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.ShowErrors{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Select{})
+	require.Zero(t, ses.diagnosticsSnapshot().length())
+
+	ses.appendErrorDiagnostic(1001, "internal error")
+	input.isInternalInput = true
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.ShowWarnings{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Select{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	input.isInternalInput = false
+
+	execCtx.inMigration = true
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Select{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	execCtx.inMigration = false
+
+	ses.ReplaceDerivedStmt(true)
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Select{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	ses.ReplaceDerivedStmt(false)
+
+	snapshot := ses.diagnosticsSnapshot()
+	snapshot.codes[0] = 2000
+	require.Equal(t, uint16(1001), ses.diagnosticsSnapshot().codes[0])
+}
+
 func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
 	ctx := context.Background()
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
@@ -2515,6 +2597,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 
 	ses := newTestSession(t, ctrl)
 	ec := newTestExecCtx(ctx, ctrl)
+	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
 	stmtID := uint32(321)
 	stmtName := getPrepareStmtName(stmtID)
 	st := tree.NewPrepareString(tree.Identifier(stmtName), "select ?, ?")
@@ -2556,6 +2639,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	require.Equal(t, ErrorResponse, resp.category)
 	require.Nil(t, prepareStmt.params)
 	require.Empty(t, prepareStmt.getFromSendLongData)
+	require.Zero(t, ses.diagnosticsSnapshot().length())
 }
 
 func Test_CMD_FIELD_LIST(t *testing.T) {
@@ -5554,6 +5638,7 @@ func Test_ExecRequest_SidecarSuccess(t *testing.T) {
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
 	setRowCount(ses, ses.GetProc(), 7)
+	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
@@ -5567,6 +5652,7 @@ func Test_ExecRequest_SidecarSuccess(t *testing.T) {
 	assert.Equal(t, ResultResponse, resp.category)
 	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
 	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+	assert.Zero(t, ses.diagnosticsSnapshot().length())
 }
 
 func Test_ExecRequest_SidecarError(t *testing.T) {
@@ -5591,6 +5677,7 @@ func Test_ExecRequest_SidecarError(t *testing.T) {
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
 	setRowCount(ses, ses.GetProc(), 7)
+	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
@@ -5605,6 +5692,9 @@ func Test_ExecRequest_SidecarError(t *testing.T) {
 	assert.Equal(t, ErrorResponse, resp.category)
 	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
 	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+	// Sending the response records the current sidecar error later; ExecRequest
+	// must first discard diagnostics from the preceding statement.
+	assert.Zero(t, ses.diagnosticsSnapshot().length())
 }
 
 func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
@@ -5619,6 +5709,7 @@ func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 			ses.rewriteEnabled.Store(true)
 			ses.ruleCache = map[string]string{}
 			setRowCount(ses, ses.GetProc(), 7)
+			ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
 
 			ec := newTestExecCtx(ctx, ctrl)
 			req := &Request{
@@ -5631,6 +5722,7 @@ func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 			assert.Equal(t, ErrorResponse, resp.category)
 			assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
 			assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+			assert.Zero(t, ses.diagnosticsSnapshot().length())
 		})
 	}
 }

@@ -532,7 +532,7 @@ func loadAlterDataBranchHistoricalSourcesWithQuery(
 	err = appendAlterDataBranchHistoricalSources(
 		res,
 		func(i int, cols []*vector.Vector) (int64, error) {
-			lengths := vector.MustFixedColNoTypeCheck[int64](cols[5])
+			lengths := vector.MustFixedColWithTypeCheck[uint8](cols[5])
 			units := executor.GetStringRows(cols[6])
 			return databranchutils.PitrRetentionLowerBound(now, int(lengths[i]), units[i])
 		},

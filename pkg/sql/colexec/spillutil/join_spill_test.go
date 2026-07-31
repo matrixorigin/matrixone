@@ -2139,26 +2139,25 @@ func TestScatterProbeAdmitsExpressionBeforeEvaluation(t *testing.T) {
 		[]*plan.Expr{col, plan2.MakePlan2Int32ConstExprWithType(2)},
 	)
 	require.NoError(t, err)
+	execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, []*plan.Expr{modulo})
+	require.NoError(t, err)
 	budget, err := process.NewHashBuildBudget(8<<20, 8<<20)
 	require.NoError(t, err)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
+	probeLease, err := hashbuild.NewExpressionMemoryLease(
+		generation, []*plan.Expr{modulo}, execs, false)
+	require.NoError(t, err)
 	engine := NewSpillEngine(SpillEngineConfig{
-		ProbeKeyExprs: []*plan.Expr{modulo},
-		Budget:        generation,
+		ProbeKeyExprs:        []*plan.Expr{modulo},
+		Budget:               generation,
+		ProbeExpressionLease: probeLease,
 	})
 	engine.InitFromSpilledMap(make([]*os.File, SpillNumBuckets))
-	execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, []*plan.Expr{modulo})
-	require.NoError(t, err)
-	defer func() {
-		for _, exec := range execs {
-			exec.Free()
-		}
-	}()
 	input := makeInt32Batch(proc, []int32{1, 2, 3, 4})
 	defer input.Clean(proc.Mp())
 	childrenCalls := 0
-	evalCalled := false
+	fallbackCalled := false
 	err = engine.ScatterProbeTable(
 		proc,
 		func() (*batch.Batch, error) {
@@ -2169,18 +2168,22 @@ func TestScatterProbeAdmitsExpressionBeforeEvaluation(t *testing.T) {
 			return nil, nil
 		},
 		process.NewAnalyzer(0, false, false, "test"),
-		func(bat *batch.Batch) ([]*vector.Vector, error) {
-			evalCalled = true
-			vec, evalErr := execs[0].Eval(proc, []*batch.Batch{bat}, nil)
-			return []*vector.Vector{vec}, evalErr
+		func(*batch.Batch) ([]*vector.Vector, error) {
+			fallbackCalled = true
+			return nil, errors.New("budgeted probe must evaluate its leased executors")
 		},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 2, childrenCalls)
-	require.True(t, evalCalled)
-	require.NotNil(t, engine.probeExprReservation)
+	require.False(t, fallbackCalled)
+	require.Positive(t, probeLease.Reserved())
 	require.Positive(t, generation.Used())
 	engine.Cleanup(proc)
+	require.Positive(t, generation.Used(), "SpillEngine only borrows the probe lease")
+	for _, exec := range execs {
+		exec.Free()
+	}
+	probeLease.Release()
 	require.Zero(t, generation.Used())
 }
 
@@ -2197,13 +2200,24 @@ func TestScatterProbeExpressionAdmissionRejectsBeforeEval(t *testing.T) {
 		[]*plan.Expr{col, plan2.MakePlan2Int32ConstExprWithType(2)},
 	)
 	require.NoError(t, err)
-	budget, err := process.NewHashBuildBudget(1, 1)
+	execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, []*plan.Expr{modulo})
+	require.NoError(t, err)
+	retained, ok := colexec.ExpressionExecutorsRetainedBytes(execs)
+	require.True(t, ok)
+	peak, err := hashbuild.ExpressionVectorPeak(proc, modulo, 4, false)
+	require.NoError(t, err)
+	budgetCap := retained + peak - 1
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
 	require.NoError(t, err)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
+	probeLease, err := hashbuild.NewExpressionMemoryLease(
+		generation, []*plan.Expr{modulo}, execs, false)
+	require.NoError(t, err)
 	engine := NewSpillEngine(SpillEngineConfig{
-		ProbeKeyExprs: []*plan.Expr{modulo},
-		Budget:        generation,
+		ProbeKeyExprs:        []*plan.Expr{modulo},
+		Budget:               generation,
+		ProbeExpressionLease: probeLease,
 	})
 	engine.InitFromSpilledMap(make([]*os.File, SpillNumBuckets))
 	input := makeInt32Batch(proc, []int32{1, 2, 3, 4})
@@ -2229,6 +2243,10 @@ func TestScatterProbeExpressionAdmissionRejectsBeforeEval(t *testing.T) {
 	require.Equal(t, 1, childrenCalls)
 	require.False(t, evalCalled)
 	engine.Cleanup(proc)
+	for _, exec := range execs {
+		exec.Free()
+	}
+	probeLease.Release()
 	require.Zero(t, generation.Used())
 }
 
@@ -3072,6 +3090,62 @@ func TestReSpillBucket(t *testing.T) {
 	}
 
 	engine.Cleanup(proc)
+}
+
+func TestReSpillReleasesBuilderExecutorsBeforeReplacementAdmission(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	col := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	modulo, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx,
+		"%",
+		[]*plan.Expr{col, plan2.MakePlan2Int32ConstExprWithType(2)},
+	)
+	require.NoError(t, err)
+	exprs := []*plan.Expr{modulo}
+
+	probeExecs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, exprs)
+	require.NoError(t, err)
+	retained, ok := colexec.ExpressionExecutorsRetainedBytes(probeExecs)
+	require.True(t, ok)
+	require.Positive(t, retained)
+	for _, executor := range probeExecs {
+		executor.Free()
+	}
+
+	// The cap intentionally fits exactly one executor set. reSpillBucket must
+	// release the failed builder's equivalent set before constructing its own.
+	budget := process.MustNewHashBuildBudget(retained, retained)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	builder := &hashbuild.HashmapBuilder{}
+	builder.SetBudget(generation)
+	require.NoError(t, builder.Prepare(exprs, -1, -1, nil, proc))
+	require.Equal(t, retained, generation.Used())
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: exprs,
+		Budget:        generation,
+	})
+	subBuckets, err := engine.reSpillBucket(
+		proc,
+		process.NewAnalyzer(0, false, false, "test"),
+		SpillBucket{},
+		builder,
+		&BucketReader{},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Empty(t, subBuckets)
+	require.Equal(t, retained, generation.Used())
+	require.NotNil(t, engine.buildExprLease)
+
+	builder.Free(proc)
+	engine.Cleanup(proc)
+	require.Zero(t, generation.Used())
 }
 
 func TestReSpillBucketReleasesDrainedBatchBudget(t *testing.T) {

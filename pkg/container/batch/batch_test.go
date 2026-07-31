@@ -16,6 +16,7 @@ package batch
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -95,6 +96,335 @@ func TestBatch(t *testing.T) {
 			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
 		}
 	}
+}
+
+// TestBatchUnmarshalWithAnyMpRejectsTruncatedData verifies that every truncated
+// prefix of a valid batch encoding is rejected without panicking. Mutation
+// protected: deleting any boundary check makes a truncated valid MarshalBinary
+// encoding panic or return nil.
+func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	source := NewWithSize(1)
+	source.Attrs = []string{"value"}
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, mp))
+	source.SetRowCount(1)
+
+	data, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	for end := len(data) - 1; end >= 0; end-- {
+		target := new(Batch)
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(data[:end], mp)
+		}, "truncated at %d bytes", end)
+		require.Error(t, unmarshalErr, "truncated at %d bytes", end)
+
+		require.NoError(t, target.UnmarshalBinaryWithAnyMp(data, mp), "reuse after truncation at %d bytes", end)
+		target.Clean(mp)
+	}
+
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	vectorEnd := 16 + int(types.DecodeUint32(data[12:16]))
+	t.Run("malformed_vector_framing", func(t *testing.T) {
+		for _, mutate := range []func([]byte){
+			func(corrupted []byte) {
+				zero := uint32(0)
+				copy(corrupted[12:16], types.EncodeUint32(&zero))
+			},
+			func(corrupted []byte) {
+				oversized := uint32(len(data))
+				dataLenOffset := 16 + 1 + types.TSize + 4
+				copy(corrupted[dataLenOffset:dataLenOffset+4], types.EncodeUint32(&oversized))
+			},
+		} {
+			corrupted := append([]byte(nil), data...)
+			mutate(corrupted)
+			target := NewOffHeapEmpty()
+			var unmarshalErr error
+			require.NotPanics(t, func() {
+				unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+			})
+			require.Error(t, unmarshalErr)
+			target.Clean(mp)
+			require.Equal(t, int64(0), mp.CurrNB())
+		}
+	})
+	t.Run("undersized_fixed_vector_payload", func(t *testing.T) {
+		corrupted := append([]byte(nil), data...)
+		rowCount := int64(2)
+		vectorLength := uint32(2)
+		copy(corrupted[:8], types.EncodeInt64(&rowCount))
+		vectorLengthOffset := 16 + 1 + types.TSize
+		copy(corrupted[vectorLengthOffset:vectorLengthOffset+4], types.EncodeUint32(&vectorLength))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+	t.Run("forged_fixed_vector_type_size", func(t *testing.T) {
+		corrupted := append([]byte(nil), data...)
+		rowCount := int64(2)
+		vectorLength := uint32(2)
+		forgedTypeSize := int32(1)
+		copy(corrupted[:8], types.EncodeInt64(&rowCount))
+		vectorLengthOffset := 16 + 1 + types.TSize
+		copy(corrupted[vectorLengthOffset:vectorLengthOffset+4], types.EncodeUint32(&vectorLength))
+		vectorTypeSizeOffset := 16 + 1 + 4
+		copy(corrupted[vectorTypeSizeOffset:vectorTypeSizeOffset+4], types.EncodeInt32(&forgedTypeSize))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+	t.Run("invalid_null_bitmap_metadata", func(t *testing.T) {
+		source := NewWithSize(1)
+		source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(0), true, mp))
+		source.SetRowCount(1)
+		corrupted, err := source.MarshalBinary()
+		require.NoError(t, err)
+		source.Clean(mp)
+
+		vectorDataOffset := 16
+		dataLenOffset := vectorDataOffset + 1 + types.TSize + 4
+		dataLen := int(types.DecodeUint32(corrupted[dataLenOffset : dataLenOffset+4]))
+		areaLenOffset := dataLenOffset + 4 + dataLen
+		areaLen := int(types.DecodeUint32(corrupted[areaLenOffset : areaLenOffset+4]))
+		nspDataOffset := areaLenOffset + 4 + areaLen + 4
+		bitmapLen := uint64(64)
+		bitmapDataLen := uint64(0)
+		copy(corrupted[nspDataOffset+8:nspDataOffset+16], types.EncodeUint64(&bitmapLen))
+		copy(corrupted[nspDataOffset+16:nspDataOffset+24], types.EncodeUint64(&bitmapDataLen))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+	t.Run("varlen_offsets_must_stay_within_area", func(t *testing.T) {
+		source := NewWithSize(1)
+		source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(source.Vecs[0], bytes.Repeat([]byte("x"), types.VarlenaInlineSize+1), false, mp))
+		source.SetRowCount(1)
+		corrupted, err := source.MarshalBinary()
+		require.NoError(t, err)
+		source.Clean(mp)
+
+		vectorDataOffset := 16
+		varlenaOffset := vectorDataOffset + 1 + types.TSize + 4 + 4
+		invalidAreaOffset := uint32(len(corrupted))
+		copy(corrupted[varlenaOffset+4:varlenaOffset+8], types.EncodeUint32(&invalidAreaOffset))
+
+		target := NewOffHeapEmpty()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(corrupted, mp)
+		})
+		require.Error(t, unmarshalErr)
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+	t.Run("preallocated_nil_vector", func(t *testing.T) {
+		target := NewWithSize(1)
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(data[:vectorEnd], mp)
+		})
+		require.Error(t, unmarshalErr)
+
+		require.NoError(t, target.UnmarshalBinaryWithAnyMp(data, mp))
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+
+	t.Run("owned_vector", func(t *testing.T) {
+		target := NewOffHeapWithSize(1)
+		target.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
+		require.Positive(t, mp.CurrNB())
+
+		require.Error(t, target.UnmarshalBinaryWithAnyMp(data[:vectorEnd], mp))
+		require.NoError(t, target.UnmarshalBinaryWithAnyMp(data, mp))
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+}
+
+func TestBatchUnmarshalPreservesIndependentRowCount(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewOffHeapEmpty()
+	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+	require.Equal(t, 1, target.RowCount())
+	require.Zero(t, target.Vecs[0].Length())
+	target.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestBatchUnmarshalPreservesShortNonEmptyVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("object stats"), false, mp))
+	source.SetRowCount(6)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewOffHeapEmpty()
+	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+	require.Equal(t, 6, target.RowCount())
+	require.Equal(t, 1, target.Vecs[0].Length())
+	require.Equal(t, []byte("object stats"), target.Vecs[0].GetBytesAt(0))
+	target.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestBatchUnmarshalRetainsRowCountWhenVectorCountChanges(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	for i := range source.Vecs {
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+	}
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewOffHeapWithSize(1)
+	target.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
+
+	require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+	require.Equal(t, 1, target.RowCount())
+	require.Len(t, target.Vecs, 2)
+	require.Equal(t, int64(1), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[0], 0))
+	require.Equal(t, int64(2), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[1], 0))
+	target.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestBatchUnmarshalRejectsOwnedVectorCountChangeWithoutMpool(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	for i := range source.Vecs {
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+	}
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	target := NewWithSize(1)
+	target.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
+	t.Cleanup(func() {
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+
+	var unmarshalErr error
+	require.NotPanics(t, func() {
+		unmarshalErr = target.UnmarshalBinary(encoded)
+	})
+	require.Error(t, unmarshalErr)
+}
+
+func TestBatchUnmarshalSeparatesAliasedReuseVectors(t *testing.T) {
+	for _, columnCount := range []int{2, 3} {
+		t.Run(fmt.Sprintf("%d_columns", columnCount), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := NewWithSize(columnCount)
+			for i := range source.Vecs {
+				source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+			}
+			source.SetRowCount(1)
+			encoded, err := source.MarshalBinary()
+			require.NoError(t, err)
+			source.Clean(mp)
+
+			target := NewOffHeapWithSize(columnCount)
+			shared := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(shared, int64(-1), false, mp))
+			for i := range target.Vecs {
+				target.Vecs[i] = shared
+			}
+			t.Cleanup(func() {
+				target.Clean(mp)
+				require.Equal(t, int64(0), mp.CurrNB())
+			})
+
+			require.NoError(t, target.UnmarshalBinaryWithAnyMp(encoded, mp))
+			for i := range target.Vecs {
+				require.Equal(t, int64(i+1), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[i], 0))
+				if i > 0 {
+					require.NotSame(t, target.Vecs[i-1], target.Vecs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestBatchUnmarshalSeparatesBorrowedAliasedReuseVectorsWithoutMpool(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	for i := range source.Vecs {
+		source.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i+1), false, mp))
+	}
+	source.SetRowCount(1)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	seed := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(seed, int64(-1), false, mp))
+	seedData, err := seed.MarshalBinary()
+	require.NoError(t, err)
+	seed.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	shared := vector.NewVecFromReuse()
+	require.NoError(t, shared.UnmarshalBinary(seedData))
+	target := NewWithSize(2)
+	target.Vecs[0] = shared
+	target.Vecs[1] = shared
+	t.Cleanup(func() {
+		target.Clean(nil)
+	})
+
+	require.NoError(t, target.UnmarshalBinary(encoded))
+	require.NotSame(t, target.Vecs[0], target.Vecs[1])
+	require.Equal(t, int64(1), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[0], 0))
+	require.Equal(t, int64(2), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[1], 0))
 }
 
 func TestBatchShrink(t *testing.T) {

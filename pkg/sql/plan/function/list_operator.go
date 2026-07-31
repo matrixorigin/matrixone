@@ -538,6 +538,48 @@ var supportedOperators = []FuncNew{
 					return newOpBuiltInRegexp().likeFn
 				},
 			},
+			{
+				overloadId: 3,
+				args: []types.T{
+					types.T_char,
+					types.T_char,
+					types.T_varchar,
+				},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().likeFn
+				},
+			},
+			{
+				overloadId: 4,
+				args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+					types.T_varchar,
+				},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().likeFn
+				},
+			},
+			{
+				overloadId: 5,
+				args: []types.T{
+					types.T_text,
+					types.T_text,
+					types.T_varchar,
+				},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().likeFn
+				},
+			},
 		},
 	},
 

@@ -57,6 +57,9 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
+	if err = validateUpdateTargetSubqueries(ctx, stmt, tblInfo.objRef, tblInfo.tableDefs); err != nil {
+		return nil, err
+	}
 
 	// A synchronously-maintained FULLTEXT/IVF index keys its hidden table(s) by the source
 	// primary key but is updated inline; an UPDATE that changes a primary key column would

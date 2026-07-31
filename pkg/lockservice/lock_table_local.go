@@ -448,10 +448,24 @@ func (l *localLockTable) getBind() pb.LockTable {
 
 func (l *localLockTable) close(reason closeReason) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	if l.mu.closed {
+		l.mu.Unlock()
+		return
+	}
 	l.mu.closed = true
 
-	l.mu.store.Iter(func(key []byte, lock Lock) bool {
+	// Detach the terminal snapshot while holding l.mu, then notify waiters
+	// outside the lock. Async waiter notification can block on waiterEvents'
+	// bounded admission queue, while its consumers may need l.mu to finish the
+	// notified lock context. Holding l.mu across notification would therefore
+	// create a close -> eventC -> worker -> l.mu wait cycle.
+	store := l.mu.store
+	l.mu.store = newBtreeBasedStorage()
+	ownerLocalWaits := l.mu.ownerLocalWaits
+	l.mu.ownerLocalWaits = make(map[ownerLocalTxnKey][]ownerLocalWaitEdge)
+	l.mu.Unlock()
+
+	store.Iter(func(key []byte, lock Lock) bool {
 		if lock.isLockRow() || lock.isLockRangeEnd() {
 			// if there are waiters in the current lock, just notify
 			// the head, and the subsequent waiters will be notified
@@ -460,8 +474,8 @@ func (l *localLockTable) close(reason closeReason) {
 		}
 		return true
 	})
-	clear(l.mu.ownerLocalWaits)
-	l.mu.store.Clear()
+	clear(ownerLocalWaits)
+	store.Clear()
 	logLockTableClosed(l.logger, l.bind, false, reason)
 }
 

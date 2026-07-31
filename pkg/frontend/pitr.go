@@ -931,12 +931,13 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}()
 
 	var (
-		restoreLevel  tree.RestoreLevel
-		ts            int64
-		pitrExist     bool
-		sortedFkTbls  []string
-		fkTableMap    map[string]*tableInfo
-		accountRecord *accountRecord
+		restoreLevel             tree.RestoreLevel
+		ts                       int64
+		pitrExist                bool
+		sortedFkTbls             []string
+		fkTableMap               map[string]*tableInfo
+		accountRecord            *accountRecord
+		retiredMongoDBAccountIDs []uint32
 	)
 	// resolve timestamp
 	ts, err = doResolveTimeStamp(stmt.TimeStamp)
@@ -958,7 +959,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, err
 	}
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
 
 	// check if the pitr exists
@@ -1080,6 +1081,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			if rtnErr = CancelCheck(ctx); rtnErr != nil {
 				return
 			}
+			markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 			return rtnErr
 		}
 
@@ -1141,7 +1143,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	case tree.RESTORELEVELCLUSTER:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
-		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore, &retiredMongoDBAccountIDs); err != nil {
 			return
 		}
 		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, pitrName, ts); err != nil {
@@ -1159,6 +1161,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
+		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, tenantInfo.TenantID)
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 		if err = restoreToDatabaseWithPitr(ctx, ses.GetService(), bh, pitrName, ts, dbName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
@@ -1414,7 +1417,7 @@ func restoreToDatabaseOrTableWithPitr(
 
 		return
 	} else {
-		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
+		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", pitrName, dbName, createDbSql))
 		if err = bh.Exec(ctx, createDbSql); err != nil {
@@ -1505,12 +1508,12 @@ func reCreateTableWithPitr(
 		return
 	}
 
-	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
+	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 		return
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: '%v',", pitrName, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
+	if err = bh.Exec(ctx, dropTableIfExistsSQL("", tblInfo.tblName)); err != nil {
 		return
 	}
 
@@ -1527,7 +1530,7 @@ func reCreateTableWithPitr(
 	}
 
 	// insert data
-	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, ts)
+	insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, ts)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to insert select table: '%v', insert sql: %s", pitrName, tblInfo.tblName, insertIntoSql))
 	if err = bh.Exec(ctx, insertIntoSql); err != nil {
@@ -1607,7 +1610,7 @@ func showFullTablesWitsTs(
 }
 
 func getCreateTableSqlWithTs(ctx context.Context, bh BackgroundExec, ts int64, dbName string, tblName string) (string, error) {
-	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
+	sql := showCreateTableSQL(dbName, tblName)
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
@@ -1685,7 +1688,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 			}
 
 			getLogger(sid).Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, dropTableIfExistsSQL(tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1810,11 +1813,11 @@ func restoreViewsWithPitr(
 		if tblInfo, ok := viewMap[key]; ok {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore view: %v, restore timestamp: %d", pitrName, tblInfo.tblName, ts))
 
-			if err = bh.Exec(ctx, "use `"+tblInfo.dbName+"`"); err != nil {
+			if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 				return err
 			}
 
-			if err = bh.Exec(ctx, "drop view if exists "+tblInfo.tblName); err != nil {
+			if err = bh.Exec(ctx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 

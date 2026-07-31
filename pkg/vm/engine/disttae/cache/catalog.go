@@ -932,6 +932,8 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
 	}
 
+	// IsTemporary is session state, not a projection of the durable marker.
+	// The compiler sets it only after resolving a session's temporary alias.
 	return &plan.TableDef{
 		TblId:          tblItem.Id,
 		Name:           tblItem.Name,

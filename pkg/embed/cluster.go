@@ -60,11 +60,12 @@ type cluster struct {
 	pendingCleanup []*operator
 
 	options struct {
-		dataPath  string
-		cn        int
-		withProxy bool
-		preStart  func(ServiceOperator)
-		testing   bool
+		dataPath         string
+		cn               int
+		withProxy        bool
+		preStart         func(ServiceOperator)
+		testing          bool
+		heartbeatTimeout time.Duration
 	}
 
 	ports struct {
@@ -337,6 +338,11 @@ func (c *cluster) createServiceOperators(from int) error {
 		if err != nil {
 			return err
 		}
+		if c.options.heartbeatTimeout > 0 {
+			s.Adjust(func(cfg *ServiceConfig) {
+				applyHAKeeperHeartbeatTimeout(cfg, s.serviceType, c.options.heartbeatTimeout)
+			})
+		}
 
 		if c.options.preStart != nil {
 			c.options.preStart(s)
@@ -344,6 +350,28 @@ func (c *cluster) createServiceOperators(from int) error {
 		c.services = append(c.services, s)
 	}
 	return nil
+}
+
+func applyHAKeeperHeartbeatTimeout(
+	cfg *ServiceConfig,
+	serviceType metadata.ServiceType,
+	timeout time.Duration,
+) {
+	switch serviceType {
+	case metadata.ServiceType_CN:
+		cfg.CN.HAKeeper.HeatbeatTimeout.Duration = timeout
+	case metadata.ServiceType_TN:
+		// Keep the legacy [dn] alias effective for callers that still use it.
+		if cfg.TN_please_use_getTNServiceConfig == nil {
+			cfg.TN_please_use_getTNServiceConfig = cfg.TNCompatible
+		}
+		if cfg.TN_please_use_getTNServiceConfig != nil {
+			cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration = timeout
+		}
+		if cfg.TNCompatible != nil && cfg.TNCompatible != cfg.TN_please_use_getTNServiceConfig {
+			cfg.TNCompatible.HAKeeper.HeatbeatTimeout.Duration = timeout
+		}
+	}
 }
 
 func (c *cluster) initConfigs() error {

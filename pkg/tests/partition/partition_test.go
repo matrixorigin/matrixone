@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -173,6 +174,10 @@ func runPartitionClusterTestWithReuse(
 			[]embed.Option{
 				embed.WithCNCount(3),
 				embed.WithTesting(),
+				// The shared test cluster runs one TN and three CNs on the same
+				// CI worker. Keep the test-only RPC deadline above transient
+				// scheduling stalls without changing production defaults.
+				embed.WithHAKeeperHeartbeatTimeout(15 * time.Second),
 			},
 			options...,
 		)

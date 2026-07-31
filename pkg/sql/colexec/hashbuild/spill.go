@@ -21,7 +21,7 @@ import (
 	"math"
 	"os"
 
-	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -670,16 +670,8 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 		return err
 	}
 	keyVecs := ctr.spillKeyVecs[:len(executors)]
-	expressionReservation, err := ctr.reserveSpillExpressionPeak(proc, bat.RowCount())
-	if err != nil {
-		return err
-	}
-	expressionEvaluated := false
 	var selected *batch.Batch
 	defer func() {
-		if !expressionEvaluated && expressionReservation != nil {
-			expressionReservation.Release()
-		}
 		if selected != nil {
 			selected.Clean(proc.Mp())
 		}
@@ -687,25 +679,35 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 			ctr.spillKeyVecs[i] = nil
 		}
 	}()
-	for i, exec := range executors {
-		vec, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			// Eval may leave newly allocated child/result vectors cached in the
-			// executor tree. Destroy that tree while both the previous and
-			// candidate reservations are still charged.
-			ctr.freeSpillExprExecs()
-			return err
+	evalOne := func(i int) error {
+		vec, evalErr := executors[i].Eval(proc, []*batch.Batch{bat}, nil)
+		if evalErr == nil {
+			keyVecs[i] = vec
 		}
-		keyVecs[i] = vec
+		return evalErr
+	}
+	if ctr.spillExprLease != nil {
+		if ctr.spillExprLease.Len() != len(executors) {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		err = ctr.spillExprLease.Run(proc, bat.RowCount(), evalOne)
+	} else {
+		for i := range executors {
+			if err = evalOne(i); err != nil {
+				break
+			}
+		}
+	}
+	if err != nil {
+		// Eval may leave newly allocated child/result vectors cached in the
+		// executor tree. Destroy that tree while both the previous and
+		// candidate reservations are still charged.
+		ctr.freeSpillExprExecs()
+		return err
 	}
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
-	if old := ctr.spillExprReservation; old != nil {
-		old.Release()
-	}
-	ctr.spillExprReservation = expressionReservation
-	expressionEvaluated = true
 	ctr.hashmapBuilder.observeNullKeys(keyVecs)
 
 	// Reuse hashValues buffer
@@ -951,32 +953,31 @@ func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*pl
 		}
 	}
 	if len(ctr.spillExprExecs) != len(conditions) {
-		execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, conditions)
+		execs, lease, err := NewBudgetedExpressionExecutors(
+			proc,
+			ctr.hashmapBuilder.budget,
+			conditions,
+			false,
+		)
 		if err != nil {
 			return nil, err
 		}
 		ctr.freeSpillExprExecs()
 		ctr.spillExprExecs = execs
+		ctr.spillExprLease = lease
+	} else if ctr.spillExprLease == nil {
+		lease, err := NewExpressionMemoryLease(
+			ctr.hashmapBuilder.budget,
+			conditions,
+			ctr.spillExprExecs,
+			false,
+		)
+		if err != nil {
+			return nil, err
+		}
+		ctr.spillExprLease = lease
 	}
 	return ctr.spillExprExecs, nil
-}
-
-func (ctr *container) reserveSpillExpressionPeak(proc *process.Process, rows int) (*process.HashBuildReservation, error) {
-	if ctr.hashmapBuilder.budget == nil {
-		return nil, nil
-	}
-	var peak uint64
-	for _, expr := range ctr.hashmapBuilder.keyExprs {
-		exprPeak, err := expressionVectorPeak(proc, expr, rows, false)
-		if err != nil || peak > math.MaxUint64-exprPeak {
-			return nil, process.ErrHashBuildBudgetInvalid
-		}
-		peak += exprPeak
-	}
-	if peak == 0 {
-		return nil, nil
-	}
-	return ctr.hashmapBuilder.budget.Reserve(peak)
 }
 
 // freeSpillExprExecs frees all cached spill expression executors.
@@ -987,9 +988,9 @@ func (ctr *container) freeSpillExprExecs() {
 		}
 	}
 	ctr.spillExprExecs = nil
-	if ctr.spillExprReservation != nil {
-		ctr.spillExprReservation.Release()
-		ctr.spillExprReservation = nil
+	if ctr.spillExprLease != nil {
+		ctr.spillExprLease.Release()
+		ctr.spillExprLease = nil
 	}
 }
 
@@ -1012,11 +1013,6 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 	return colexec.ShouldSpill(ctr.memUsed(), int64(ctr.hashmapBuilder.InputBatchRowCount), ctr.spillThreshold)
 }
 
-// hashCombine merges a new hash value into a running hash state (Boost-style).
-func hashCombine(h, val uint64) uint64 {
-	return h ^ (val + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2))
-}
-
 // computeXXHash computes hash values for spill-partitioning using
 // column-at-a-time processing for better cache locality.
 // Each column is processed in a tight loop over all rows, avoiding
@@ -1025,41 +1021,5 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64) {
 	if len(keyVecs) == 0 || len(hashValues) == 0 {
 		return
 	}
-
-	rowCount := len(hashValues)
-	for i := 0; i < rowCount; i++ {
-		hashValues[i] = 0
-	}
-
-	for _, vec := range keyVecs {
-		if vec.IsConst() {
-			colHash := uint64(0)
-			if !vec.IsConstNull() {
-				colHash = xxhash.Sum64(vec.GetRawBytesAt(0))
-			}
-			for i := 0; i < rowCount; i++ {
-				hashValues[i] = hashCombine(hashValues[i], colHash)
-			}
-		} else {
-			n := rowCount
-			if vec.Length() < n {
-				n = vec.Length()
-			}
-			if vec.GetNulls().Any() {
-				nulls := vec.GetNulls()
-				for i := 0; i < n; i++ {
-					if nulls.Contains(uint64(i)) {
-						hashValues[i] = hashCombine(hashValues[i], 0)
-					} else {
-						hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
-					}
-				}
-			} else {
-				for i := 0; i < n; i++ {
-					hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
-				}
-			}
-		}
-	}
-
+	keycodec.ComputeXXHash(keyVecs, hashValues, 0)
 }

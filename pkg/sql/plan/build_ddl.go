@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -138,7 +139,7 @@ func parserSQLModeFromContext(ctx CompilerContext) *string {
 	return &sqlMode
 }
 
-func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
+func canonicalCreateTableSQL(stmt *tree.CreateTable) string {
 	fmtCtx := tree.NewFmtCtx(
 		dialect.MYSQL,
 		tree.WithQuoteIdentifier(),
@@ -158,6 +159,39 @@ func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
 		fmtCtx.WriteByte(')')
 	}
 	return fmtCtx.String()
+}
+
+// createTableSQLForCatalog preserves the historical rel_createsql contract for
+// a single-statement request, including comments, constraint names, and exact
+// formatting consumed by SHOW CREATE TABLE. For a multi-statement COM_QUERY,
+// GetRootSql contains the whole request and cannot identify the row's creating
+// statement, so persist this statement's canonical AST instead.
+func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) string {
+	// Partition metadata is parsed again by ALTER TABLE ADD PARTITION. Keep it
+	// independent of the creating session's SQL mode, even when the request
+	// contains only this statement.
+	if stmt.PartitionOption != nil {
+		return canonicalCreateTableSQL(stmt)
+	}
+
+	rootSQL := ctx.GetRootSql()
+	if rootSQL != "" {
+		sqlMode := parserSQLModeFromContext(ctx)
+		statements, err := parsers.ParseWithSQLMode(
+			ctx.GetContext(), dialect.MYSQL, rootSQL, 1, *sqlMode,
+		)
+		if err == nil {
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+			if len(statements) == 1 {
+				return rootSQL
+			}
+		}
+	}
+	return canonicalCreateTableSQL(stmt)
 }
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
@@ -305,13 +339,26 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			Alg:  plan.CompressType_Lz4,
 			Typ:  *typ,
 			Default: &plan.Default{
-				NullAbility:  !expr.Typ.NotNullable,
+				NullAbility:  ctasExprCanBeNull(expr),
 				Expr:         nil,
 				OriginString: defaultVal,
 			},
 		}
 	}
 	return cols, builder.qry, nil
+}
+
+func ctasExprCanBeNull(expr *Expr) bool {
+	if !expr.Typ.NotNullable {
+		return true
+	}
+
+	// MySQL CTAS creates nullable columns for explicit DATETIME casts, even
+	// when the source expression is a non-NULL literal. Keep this CTAS-only
+	// metadata rule separate from normal expression nullability propagation.
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
+		types.T(expr.Typ.Id) == types.T_datetime
 }
 
 func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
@@ -917,7 +964,7 @@ func buildCreateTable(
 	}
 
 	if stmt.PartitionOption != nil {
-		createTable.RawSQL = canonicalPartitionedCreateTableSQL(stmt)
+		createTable.RawSQL = canonicalCreateTableSQL(stmt)
 		createTable.TableDef.FeatureFlag |= features.Partitioned
 	}
 
@@ -1061,6 +1108,24 @@ func buildCreateTable(
 					Properties: properties,
 				},
 			}})
+	} else if stmt.MongoDBParam != nil {
+		if err := ensureMongoDBTableSurfaceEnabled(ctx.GetContext()); err != nil {
+			return nil, err
+		}
+		spec, err := sqlmongodb.ParseTableMappingSpec(ctx.GetContext(), stmt.MongoDBParam, stmt.Defs, createTable.TableDef)
+		if err != nil {
+			return nil, err
+		}
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqlmongodb.BuildCreateSQLEnvelope(spec.Mapping)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
 	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
@@ -1111,10 +1176,7 @@ func buildCreateTable(
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
-		createSQL := ctx.GetRootSql()
-		if stmt.PartitionOption != nil {
-			createSQL = canonicalPartitionedCreateTableSQL(stmt)
-		}
+		createSQL := createTableSQLForCatalog(ctx, stmt)
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
@@ -1165,7 +1227,7 @@ func buildCreateTable(
 	}
 
 	if stmt.Temporary {
-		createTable.TableDef.TableType = catalog.SystemTemporaryTable
+		catalog.MarkTableDefTemporary(createTable.TableDef)
 	}
 	if !isPrepareStmt {
 		asSelectQuery = nil
@@ -1195,7 +1257,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
 
-	if stmt.Param != nil || stmt.IcebergParam != nil {
+	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
 			return err
 		}

@@ -120,6 +120,15 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			}
 		}
 
+	case plan.Node_LOCK_OP:
+		for i, childID := range node.Children {
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, true, colRefCnt)
+			node.Children[i] = newChildID
+			for ref, expr := range childProjMap {
+				projMap[ref] = expr
+			}
+		}
+
 	default:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
@@ -1061,6 +1070,12 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 		expr := node.FilterList[i]
 		fun := expr.GetF()
 		if fun != nil && fun.Func.ObjName == "like" {
+			// Explicit ESCAPE changes how wildcard bytes are interpreted. Keep
+			// the original predicate intact instead of applying the two-argument
+			// prefix rewrite with its hard-coded default escape semantics.
+			if len(fun.Args) != 2 {
+				continue
+			}
 			col := fun.Args[0].GetCol()
 			if col == nil {
 				continue

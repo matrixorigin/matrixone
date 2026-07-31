@@ -1574,6 +1574,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			name2index[catalog.Row_ID] = int32(len(cols) - 1)
 		}
 
+		// IsTemporary is session state, not a projection of the durable marker.
+		// The compiler sets it only after resolving a session's temporary alias.
 		tbl.tableDef = &plan.TableDef{
 			TblId:         tbl.tableId,
 			Name:          tbl.tableName,

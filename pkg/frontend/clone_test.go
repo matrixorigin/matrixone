@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 func TestWithDataBranchCloneLockContext(t *testing.T) {
@@ -630,7 +631,7 @@ func Test_rewriteCloneCreateSQL_PreservesUnqualifiedViewFormat(t *testing.T) {
 		1,
 	)
 	require.NoError(t, err)
-	require.Equal(t, "create view `v1` as select * from `t1`;", got)
+	require.Equal(t, "create view v1 as select * from t1;", got)
 }
 
 func Test_rewriteCloneCreateSQL_QuotesUserViewIdentifiers(t *testing.T) {
@@ -657,6 +658,21 @@ func Test_rewriteCloneCreateSQL_QuotesSystemViewIdentifiers(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, got, "`mt`.`constraint`")
 	require.NotContains(t, got, "mt.constraint")
+
+	_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
+	require.NoError(t, err)
+}
+
+func Test_rewriteCloneCreateSQL_RoundTripsInformationSchemaTables(t *testing.T) {
+	got, err := rewriteCloneCreateSQL(
+		sysview.InformationSchemaTablesDDL,
+		"information_schema",
+		"information_schema_new",
+		1,
+	)
+	require.NoError(t, err)
+	require.NotContains(t, got, " reg_match ")
+	require.Contains(t, got, "regexp_like(")
 
 	_, err = rewriteCloneCreateSQL(got, "information_schema_new", "information_schema_next", 1)
 	require.NoError(t, err)

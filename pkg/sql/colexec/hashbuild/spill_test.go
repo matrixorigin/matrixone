@@ -701,6 +701,49 @@ func TestBufferReuse(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSpillExpressionLeaseRetainsLargeBatchHighWater(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewHashBuildBudget(256<<20, 256<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	files := make([]*os.File, spillNumBuckets)
+	defer func() {
+		for _, file := range files {
+			if file != nil {
+				_ = file.Close()
+			}
+		}
+	}()
+	expr := makeExpressionLeaseTestExpr(t, proc)
+	ctr := &container{spillUUID: t.Name()}
+	ctr.hashmapBuilder.setBudget(generation)
+	executors, err := ctr.initSpillExprExecs(proc, []*plan.Expr{expr})
+	require.NoError(t, err)
+	require.NotNil(t, ctr.spillExprLease)
+	defer ctr.freeSpillExprExecs()
+	defer ctr.dropSpillScratchBuffers()
+	defer ctr.releaseSpillScratchReservation()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	large := makeExpressionLeaseTestBatch(proc, colexec.DefaultBatchSize)
+	defer large.Clean(proc.Mp())
+	require.NoError(t, ctr.spillBatchBounded(proc, large, files, executors, analyzer, false))
+	largeReserved := ctr.spillExprLease.Reserved()
+	require.Positive(t, largeReserved)
+
+	small := makeExpressionLeaseTestBatch(proc, 1)
+	defer small.Clean(proc.Mp())
+	require.NoError(t, ctr.spillBatchBounded(proc, small, files, executors, analyzer, false))
+	require.Equal(t, largeReserved, ctr.spillExprLease.Reserved(),
+		"a small spill batch must not release retained executor headroom")
+	retained, ok := ctr.spillExprLease.Retained()
+	require.True(t, ok)
+	require.LessOrEqual(t, retained, ctr.spillExprLease.Reserved())
+}
+
 func TestSpillWriteCoalescesAcrossBatches(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

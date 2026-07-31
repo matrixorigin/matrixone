@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/bits"
 	"slices"
 	"sort"
 	"time"
@@ -794,53 +795,196 @@ func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 }
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
-	// read class
-	v.class = int(data[0])
-	data = data[1:]
-
-	// read typ
-	v.typ = types.DecodeType(data[:types.TSize])
-	data = data[types.TSize:]
-
-	// read length
-	v.length = int(types.DecodeUint32(data[:4]))
-	data = data[4:]
-
-	// read data
-	dataLen := types.DecodeUint32(data[:4])
-	data = data[4:]
-	if dataLen > 0 {
-		v.data = data[:dataLen]
-		data = data[dataLen:]
+	read := func(size int) ([]byte, error) {
+		if size < 0 || size > len(data) {
+			return nil, io.ErrUnexpectedEOF
+		}
+		value := data[:size]
+		data = data[size:]
+		return value, nil
+	}
+	readUint32 := func() (uint32, error) {
+		value, err := read(4)
+		if err != nil {
+			return 0, err
+		}
+		return types.DecodeUint32(value), nil
 	}
 
-	// read area
-	areaLen := types.DecodeUint32(data[:4])
-	data = data[4:]
-	if areaLen > 0 {
-		v.area = data[:areaLen]
-		data = data[areaLen:]
+	class, err := read(1)
+	if err != nil {
+		return err
+	}
+	typ, err := read(types.TSize)
+	if err != nil {
+		return err
+	}
+	length, err := readUint32()
+	if err != nil {
+		return err
+	}
+	dataLen, err := readUint32()
+	if err != nil {
+		return err
+	}
+	vecData, err := read(int(dataLen))
+	if err != nil {
+		return err
+	}
+	areaLen, err := readUint32()
+	if err != nil {
+		return err
+	}
+	area, err := read(int(areaLen))
+	if err != nil {
+		return err
+	}
+	nspLen, err := readUint32()
+	if err != nil {
+		return err
+	}
+	nspData, err := read(int(nspLen))
+	if err != nil {
+		return err
+	}
+	sorted, err := read(1)
+	if err != nil {
+		return err
 	}
 
-	// read nsp
-	nspLen := types.DecodeUint32(data[:4])
-	data = data[4:]
-	if nspLen > 0 {
-		if err := v.nsp.ReadNoCopy(data[:nspLen]); err != nil {
+	decodedType := types.DecodeType(typ)
+	if err := validateVectorNullBitmap(nspData); err != nil {
+		return err
+	}
+	var nsp nulls.Nulls
+	if len(nspData) > 0 {
+		if err := nsp.ReadNoCopy(nspData); err != nil {
 			return err
 		}
-		data = data[nspLen:]
-	} else {
-		v.nsp.Reset()
 	}
-
-	v.sorted = types.DecodeBool(data[:1])
-	//data = data[1:]
+	if err := validateVectorBinary(class[0], decodedType, length, vecData, area, &nsp); err != nil {
+		return err
+	}
+	v.class = int(class[0])
+	v.typ = decodedType
+	v.length = int(length)
+	v.data = vecData
+	v.area = area
+	v.nsp = nsp
+	v.sorted = types.DecodeBool(sorted)
 
 	v.cantFreeData = true
 	v.cantFreeArea = true
 
 	return nil
+}
+
+func validateVectorBinary(class byte, typ types.Type, length uint32, data, area []byte, nsp *nulls.Nulls) error {
+	if class > DIST {
+		return moerr.NewInvalidInputNoCtx("invalid vector class")
+	}
+	typeSize, err := canonicalVectorTypeSize(typ)
+	if err != nil {
+		return err
+	}
+	if class == CONSTANT {
+		if len(data) != 0 && len(data) != typeSize {
+			return moerr.NewInvalidInputNoCtx("invalid constant vector data size")
+		}
+	} else if uint64(len(data)) != uint64(length)*uint64(typeSize) {
+		return moerr.NewInvalidInputNoCtx("invalid vector data size")
+	}
+	if typ.IsVarlen() {
+		values := types.DecodeSlice[types.Varlena](data)
+		arrayElementSize := 0
+		switch typ.Oid {
+		case types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+			types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+			arrayElementSize = typ.GetArrayElementSize()
+		}
+		for i := range values {
+			// Null varlen slots may retain stale offset/length metadata. The
+			// payload is never dereferenced, so only validate live values.
+			if nsp.Contains(uint64(i)) {
+				continue
+			}
+			var payloadLen uint32
+			if values[i].IsSmall() {
+				payloadLen = uint32(values[i][0])
+			} else {
+				offset, size := values[i].OffsetLen()
+				if uint64(offset) > uint64(len(area)) || uint64(size) > uint64(len(area))-uint64(offset) {
+					return moerr.NewInvalidInputNoCtx("invalid vector varlen offset")
+				}
+				payloadLen = size
+			}
+			if arrayElementSize > 0 && payloadLen%uint32(arrayElementSize) != 0 {
+				return moerr.NewInvalidInputNoCtx("invalid vector array payload size")
+			}
+		}
+	}
+	return nil
+}
+
+// The bitmap length tracks allocated coverage and may exceed the vector's
+// logical length after range operations or reuse. Validate only the bitmap's
+// own representation invariants here.
+func validateVectorNullBitmap(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if len(data) < 24 {
+		return io.ErrUnexpectedEOF
+	}
+	count := types.DecodeInt64(data[:8])
+	bitmapLen := types.DecodeUint64(data[8:16])
+	bitmapDataLen := types.DecodeUint64(data[16:24])
+	if count < 0 || bitmapLen > uint64(1<<63-1) ||
+		bitmapDataLen%8 != 0 || bitmapDataLen != uint64(len(data)-24) {
+		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap")
+	}
+	if bitmapDataLen != ((bitmapLen+63)/64)*8 {
+		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap size")
+	}
+	words := types.DecodeSlice[uint64](data[24:])
+	actualCount := int64(0)
+	for i, word := range words {
+		if i == len(words)-1 && bitmapLen%64 != 0 && word>>uint(bitmapLen%64) != 0 {
+			return moerr.NewInvalidInputNoCtx("invalid vector null bitmap bits")
+		}
+		actualCount += int64(bits.OnesCount64(word))
+	}
+	if actualCount != count {
+		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap count")
+	}
+	return nil
+}
+
+func canonicalVectorTypeSize(typ types.Type) (int, error) {
+	switch typ.Oid {
+	case types.T_any,
+		types.T_bit,
+		types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+		types.T_char, types.T_varchar, types.T_json, types.T_uuid,
+		types.T_binary, types.T_varbinary, types.T_enum, types.T_geometry, types.T_geometry32,
+		types.T_blob, types.T_text, types.T_datalink,
+		types.T_TS, types.T_Rowid, types.T_Blockid,
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8:
+	default:
+		return 0, moerr.NewInvalidInputNoCtx("unknown vector type")
+	}
+
+	canonicalSize := typ.Oid.TypeLen()
+	if typ.TypeSize() != canonicalSize {
+		return 0, moerr.NewInvalidInputNoCtx("invalid vector type size")
+	}
+	return canonicalSize, nil
 }
 
 func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
@@ -2953,13 +3097,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			// inline varlena has s[0] <= 23 (its length byte), never the 0xffffffff
 			// big-header sentinel, so the check is exact.
 			if baseOff != 0 && len(w.area) > 0 {
-				p := unsafe.Pointer(&vCol[oldLen])
-				for i := 0; i < cnt; i++ {
-					s := (*[6]uint32)(p)
-					if s[0] == types.VarlenaBigHdr {
-						s[1] += uint32(baseOff)
+				for i := oldLen; i < oldLen+cnt; i++ {
+					if !vCol[i].IsSmall() {
+						offset, length := vCol[i].OffsetLen()
+						vCol[i].SetOffsetLen(offset+uint32(baseOff), length)
 					}
-					p = unsafe.Add(p, types.VarlenaSize)
 				}
 			}
 			// propagate grouping bits (value is still real for these rows).

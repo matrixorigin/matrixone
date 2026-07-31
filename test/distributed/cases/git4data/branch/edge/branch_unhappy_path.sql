@@ -89,8 +89,9 @@ select count(*) as comp_left_rows from comp_left;
 drop snapshot br_unhappy_single_sp;
 drop database br_unhappy;
 
--- Known bug repro: database-branch view SQL rewrite must not alter string literals.
+-- Database clone and branch view SQL rewrite must only alter database qualifiers.
 drop database if exists br_view_literal_copy;
+drop database if exists clone_view_literal_copy;
 drop database if exists br_view_literal_src;
 create database br_view_literal_src;
 use br_view_literal_src;
@@ -99,5 +100,25 @@ insert into t values (1);
 create view v_literal as select 'br_view_literal_src' as marker, a from t;
 data branch create database br_view_literal_copy from br_view_literal_src;
 select marker from br_view_literal_copy.v_literal;
+show create view br_view_literal_copy.v_literal;
+create database clone_view_literal_copy clone br_view_literal_src;
+select marker from clone_view_literal_copy.v_literal;
+drop database clone_view_literal_copy;
 drop database br_view_literal_copy;
 drop database br_view_literal_src;
+
+drop database if exists staging;
+drop database if exists sales;
+create database sales;
+create table sales.orders(id int primary key);
+create table sales.sales_data(id int primary key);
+insert into sales.orders values (1);
+insert into sales.sales_data values (2);
+create view sales.v_ok as select id from sales.orders;
+create view sales.v_bad as select id from sales.sales_data;
+data branch create database staging from sales;
+show full tables from staging;
+select * from staging.v_ok;
+select * from staging.v_bad;
+drop database staging;
+drop database sales;

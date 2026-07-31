@@ -1175,6 +1175,55 @@ func newAlterCopyFixedResult[T any](t *testing.T, mp *mpool.MPool, typ types.Typ
 	return memRes.GetResult()
 }
 
+func TestLoadAlterDataBranchHistoricalSourcesUsesPitrCatalogType(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	mp := c.proc.Mp()
+	results := map[string]executor.Result{
+		alterDataBranchSnapshotSourceSQL(): newAlterLineageSnapshotSourceResult(
+			t, mp, nil, nil, nil, nil, nil, nil,
+		),
+		alterDataBranchPitrSourceSQL(): newAlterLineagePitrSourceResult(
+			t, mp,
+			[]string{"database", "table"},
+			[]string{"tenant", "tenant"},
+			[]string{"db_hour", "db_day"},
+			[]string{"", "tbl"},
+			[]uint64{101, 102},
+			[]uint8{1, 100},
+			[]string{"h", "d"},
+		),
+	}
+
+	sources, err := loadAlterDataBranchHistoricalSourcesWithQuery(
+		func(sql string) (executor.Result, error) {
+			res, ok := results[sql]
+			require.True(t, ok, "unexpected lineage source query: %s", sql)
+			return res, nil
+		},
+		now,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []databranchutils.HistoricalSource{
+		{
+			Level:        "database",
+			AccountName:  "tenant",
+			DatabaseName: "db_hour",
+			ObjectID:     101,
+			OldestTS:     now.Add(-time.Hour).UnixNano(),
+		},
+		{
+			Level:        "table",
+			AccountName:  "tenant",
+			DatabaseName: "db_day",
+			TableName:    "tbl",
+			ObjectID:     102,
+			OldestTS:     now.AddDate(0, 0, -100).UnixNano(),
+		},
+	}, sources)
+}
+
 func TestCompactExpiredAlterDataBranchLineage(t *testing.T) {
 	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
 	cloneTS := now.Add(-48 * time.Hour).UnixNano()
@@ -1187,7 +1236,7 @@ func TestCompactExpiredAlterDataBranchLineage(t *testing.T) {
 
 	for _, tc := range []struct {
 		name          string
-		pitrLength    int64
+		pitrLength    uint8
 		wantDeletes   bool
 		wantSQLSuffix []string
 	}{
@@ -1223,7 +1272,7 @@ func TestCompactExpiredAlterDataBranchLineage(t *testing.T) {
 			spyExec.results[snapshotSQL] = newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil)
 			spyExec.results[pitrSQL] = newAlterLineagePitrSourceResult(
 				t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
-				[]uint64{1}, []int64{tc.pitrLength}, []string{"h"},
+				[]uint64{1}, []uint8{tc.pitrLength}, []string{"h"},
 			)
 
 			require.NoError(t, c.compactExpiredAlterDataBranchLineage(now))
@@ -1259,7 +1308,7 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
 		alterDataBranchSnapshotSourceSQL(): newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil),
 		alterDataBranchPitrSourceSQL(): newAlterLineagePitrSourceResult(
 			t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
-			[]uint64{1}, []int64{24}, []string{"h"},
+			[]uint64{1}, []uint8{24}, []string{"h"},
 		),
 	}
 	var executed []string
@@ -1334,7 +1383,7 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutorPropagatesDeleteError(t
 		alterDataBranchSnapshotSourceSQL(): newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil),
 		alterDataBranchPitrSourceSQL(): newAlterLineagePitrSourceResult(
 			t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
-			[]uint64{1}, []int64{24}, []string{"h"},
+			[]uint64{1}, []uint8{24}, []string{"h"},
 		),
 	}
 	wantErr := errors.New("delete failed")
@@ -1423,12 +1472,12 @@ func newAlterLineagePitrSourceResult(
 	mp *mpool.MPool,
 	levels, accounts, databases, tables []string,
 	objectIDs []uint64,
-	lengths []int64,
+	lengths []uint8,
 	units []string,
 ) executor.Result {
 	memRes := executor.NewMemResult([]types.Type{
 		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
-		types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_int64.ToType(),
+		types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_uint8.ToType(),
 		types.T_varchar.ToType(),
 	}, mp)
 	memRes.NewBatchWithRowCount(len(levels))

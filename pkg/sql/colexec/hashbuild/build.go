@@ -222,6 +222,11 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			ctr.spillBundle = nil
 		}
 		ctr.freeSpillExprExecs()
+		// Build-key executors are producer scratch. No consumer reads them after
+		// build() returns, so release their retained vectors and expression lease
+		// here instead of holding both until pipeline Reset.
+		ctr.hashmapBuilder.FreeTemporaryVectors(proc)
+		ctr.hashmapBuilder.FreeExecutors()
 		ctr.dropSpillScratchBuffers()
 		ctr.releaseSpillScratchReservation()
 	}()
