@@ -6,7 +6,8 @@
 - Architecture:
   [Allocation-Accounted Memory Admission RFC](../rfcs/00000000_allocation_accounted_memory_admission.md)
 - Baseline at plan creation: `main` at `38ce3a774`
-- Rebased implementation baseline: `main` at `43c896462`
+- Rebased implementation baseline: `main` at `60e36bef64`
+- Current dormant PR 3 head: `fd2fcc953b`
 - Merged prerequisite: #26455 at `93e8b22d2`
 - Independent design review: completed against RFC commit `a7d54cb5f`
 - Activation status: blocked until PRs 1--4 and the selected owner's
@@ -102,14 +103,21 @@ working ledger is allocation-site based:
 | IFF/CASE/COALESCE selection arrays | allocation-accounted off-heap `[]bool`; one or two arrays of `rows`, retained by executor | executor `Free`/reuse | D | A after expression ledger closure |
 | selected row IDs | allocation-accounted off-heap `[]int64`; capacity up to `rows`, retained by executor | executor `Free`/reuse | D | A after expression ledger closure |
 | selected parameter/result vectors | allocation-accounted off-heap Vector capacities | executor `Free` | D | A after expression ledger closure |
-| `JSON_ROW` per-row encoders and buffers | one Go `bytes.Buffer` per output row, each retaining its row payload | function operator reuse / GC | R | one reusable row encoder now streams directly to the accounted result; parameter closures are arity-bounded and cleared after every call |
+| `JSON_ROW` output | one retained allocation-accounted function scratch buffer, then copy into the admitted result; both physical capacities are charged | `FunctionResult.Free`; row publication copies synchronously | D | A after expression-owner activation; arity-bounded column closures are cleared after every call |
 | float array-distance row descriptors and result scratch | Go `[][]T` with one descriptor per row plus `[]float32` with one value per row | call return / GC | R | caller row accessor plus the upper half of the admitted `[]float64` result backing |
-| GPU array-distance flattened inputs | C allocator; `query bytes + rows*dimension*4` for the SQL float32 GPU path | GPU job Wait or launch rollback | L | external allocation remains data-scaled and blocks expression activation until it is admitted or the activated owner excludes GPU dispatch |
+| GPU array-distance flattened inputs | allocation-accounted caller scratch; `query bytes + rows*dimension*4` for the SQL float32 GPU path; legacy callers retain the C allocator | GPU job retains the caller slice until Wait; launch failure rolls back before return | D | A only after the GPU-tag build/tests pass; the legacy API remains unaccounted and is not an activated owner |
 | `NORMALIZE_L2` output scratch | pooled or per-row Go arrays with one output element per input element | pool / call return and GC | R | normalize directly into admitted varlen result storage |
 | AES/ENCODE/DECODE output scratch | Go payload slices, one plaintext/ciphertext-sized allocation per row; AES padding could append into spare input capacity | call return / GC | R | validate size/padding first and write directly into admitted result storage |
-| JQ object sort keys and gojq value graph | Go slices/maps/interfaces proportional to input JSON structure | row completion / GC | L | requires a separately bounded or allocation-accounted JSON execution owner |
-| JSON typed-array/value builders and pretty-print buffer | Go `[]any`, ByteJson payloads, and `bytes.Buffer` proportional to row input/output | row completion / GC | L | direct ByteJson/result builders or an admitted reusable JSON scratch owner |
+| JQ visible output | one retained allocation-accounted function scratch buffer, then copy into the admitted result | `FunctionResult.Free`; row publication copies synchronously | D | A after expression-owner activation; `TRY_JQ` propagates infrastructure/account rejection instead of converting it to SQL NULL |
+| JQ object sort keys and gojq value graph | Go slices/maps/interfaces proportional to input JSON structure | row completion / GC | L | requires a separately bounded or allocation-accounted JSON execution owner; blocks JQ activation |
+| JSON_ARRAY/OBJECT/KEYS/PRETTY output and object-key scratch | direct storage-compatible ByteJSON/result builders; JSON_OBJECT keys use retained allocation-accounted function scratch | result or `FunctionResult.Free` | D | A after expression-owner activation |
+| JSON parse/path/modify/merge/schema execution | Go strings, paths, maps/slices, ByteJson modification payloads, and schema graphs proportional to row input | row completion / GC | L | requires an admitted JSON execution arena or streaming algorithms; blocks these functions from activation |
+| HASH/IN/PREFIX_IN/narrow-array conversion scratch | retained allocation-accounted function scratch, bounded per hash chunk or exact tuple/array bytes | `FunctionResult.Free` | D | A after expression-owner activation |
+| codec output (HEX/base64/MD5/COMPRESS/UNCOMPRESS/random/quote/date formatting) | writes directly into admitted result backing; flate's fixed codec state remains Go/runtime memory | result Free; codec state ends at call return | D | A after result activation; flate state needs an explicit fixed-headroom measurement before H classification |
 | geometry parse/overlay scratch | Go point/ring/interval/match slices proportional to geometry payload | row completion / GC | L | admitted per-row geometry workspace or streaming algorithm; remains an activation blocker |
+| regexp compile/match/output scratch | Go regexp program and match/output buffers proportional to pattern/input | operator cache / row completion / GC | L | bounded regexp owner or exclusion from expression activation |
+| H3/S2 neighborhood scratch | Go slices; some S2 paths are statically bounded, H3 grid-disk output scales with radius | row completion / GC | L | split proved fixed bounds from data-scaled paths before activation |
+| JSON cast visible serialization | `MarshalJSON` payload slices proportional to the JSON value | row completion / GC | L | direct visible writer or exclusion from expression activation |
 | hash-table initial cell block | off-heap `mpool.MakeSlice(..., true)`; 16 KiB int / 32 KiB string | hash map / `JoinMap.FreeMemory` | L | A in first activation |
 | hash-table replacement/appended cell blocks | off-heap blocks, at most 4 MiB each; old+new overlap is physically visible | hash map / `JoinMap.FreeMemory` | L | A in first activation |
 | hash-table `cells`/`newBlocks` descriptors | Go `[][]Cell`; 24 bytes per block header plus geometric resize backing arrays; GC is not treated as synchronous Free | hash map lifetime / GC | L | replace with an owning off-heap descriptor buffer and account its initial/replacement capacity; blocks first activation |
@@ -599,13 +607,21 @@ Gate:
 - all migrated rows become `D`; production rows remain `L`.
 
 The current dormant PR 3 candidate is
-`feature/26459-expression-propagation` at commit `ad71c4fb50`, stacked on PR 2
-commit `dbfee20ecc`. Its closure commits are `03296c5246` (expressions),
-`0b4a7b5bb5` (spill vectors/scratch), `a0754a6beb` (streaming buffers),
-`9f88a0e83e` (spill serialization), and `1f82b218c2` (spool/type-change
-ownership), followed by `a63c68b07b` (Vector bitmaps and decimal conversion
-scratch), `0fd87ffebe` (direct-output Field/VALUES paths), and `ad71c4fb50`
-(direct-output function scratch).
+`feature/26459-expression-propagation` at commit `fd2fcc953b`, rebased on
+`main` commit `60e36bef64`. Its ordered closure commits are:
+
+- `06d39287e4`: generic allocation-accounted MPool ownership;
+- `968c68df4c`: dormant HashBuild budget bridge;
+- `941212edf0`: Vector propagation;
+- `61a6e7a0e2`: expression propagation;
+- `b03ec24c2f`, `309d070c71`, and `556d64d5ba`: spill scratch, streaming,
+  and serialization;
+- `86e041ff53`: retained Vector/spool ownership gaps;
+- `2b05fdac79`: Vector bitmap and conversion scratch;
+- `24b5f6fef7` and `57940c8f0f`: direct-output row/function scratch removal;
+- `674f78dea9`: general retained function-scratch provenance;
+- `fd2fcc953b`: direct codecs, HASH/IN/PREFIX, GPU SQL flattening, and
+  ByteJSON/JQ/JSON output closure.
 
 Its propagation call chains are:
 
@@ -613,7 +629,7 @@ Its propagation call chains are:
 NewExpressionExecutorWithAllocation
   -> recursive expression construction
   -> constant/result/scratch bitmap-aware AllocationAccountSelection
-  -> FunctionResult result/parameter scratch or selected/decode Vector growth
+  -> FunctionResult result/parameter/function scratch or selected/decode Vector growth
   -> MPool AllocAccounted/Grow/Free
 
 NewSpillEngineWithAllocation
@@ -670,16 +686,21 @@ descriptor. `SetTypeAndFixData` publishes a fixed-width type change only after
 growth succeeds and propagates its error through all four callers.
 
 The first syntax inventory over non-test expression/builtin and spill sources
-found 484 candidate lines. Because one line can match more than one category,
-the overlapping counts are 233 `make([]...)`, 205 capacity-growing or
-potentially growing `append`, 44 `bytes.Buffer`/`NewBuffer`, and 5
-`strings.Builder` sites. This is a review queue, not proof that every match is
-data-scaled or reachable. The currently closed rows are the ones marked `D`
-in the ledger above. Vector null/group backing and decimal parameter conversion
-no longer block activation. Expression activation remains blocked by
-data-scaled function-specific Go-heap scratch identified by the remaining
-built-in scan; the dormant constructor is not a license to enable partial
-accounting.
+found 484 candidate lines. The latest focused function scan still reports
+candidate syntax, not live-byte proof: the largest `make([]...)` concentrations
+are `func_unary.go` and `func_binary.go` (28 each) and
+`func_builtin_json.go` (26); the largest potentially growing `append` groups
+are `func_unary.go` (37), `func_builtin.go` (36), `func_cast.go` (16), and
+`func_builtin_json.go`/`func_binary.go` (13 each). Buffer/builder and JSON
+serialization scans are recorded in the site rows above. Admin/CTL/UDF code,
+arity-only slices, fixed stack buffers, and legacy-only branches are not
+silently counted as controlled payload, but each must be explicitly excluded
+or bounded before activation. Vector null/group backing, decimal conversion,
+direct codecs, HASH/IN/PREFIX scratch, SQL GPU flattening, and visible
+JSON/JQ output no longer create data-scaled unaccounted payload on the dormant
+path. JQ graphs, JSON parse/modify/schema, geometry, regexp, scalable H3, and
+JSON cast serialization remain explicit activation blockers; the dormant
+constructor is not a license to enable partial accounting.
 
 The first follow-up scan also removed two allocations instead of moving them:
 `FIELD` now writes directly into its pre-extended result and retains
@@ -693,15 +714,20 @@ The second follow-up removes rather than accounts four more scratch families:
 
 - `JSON_ROW` no longer owns one encoder and buffer per row. It prepares
   arity-bounded typed column closures once, streams one complete row through a
-  single reusable encoder, appends it to the admitted result, and clears every
-  closure on success, error, or panic. The unsigned path now preserves the full
-  `uint64` range.
+  single reusable encoder, and clears every closure on success, error, or
+  panic. Legacy execution reuses one `bytes.Buffer`; dormant exact execution
+  uses one retained allocation-accounted function buffer and then copies the
+  completed row into the admitted result. The scratch and result capacities
+  are both physical and therefore both charged. The unsigned path preserves
+  the full `uint64` range.
 - float array distance no longer materializes one `[]T` descriptor per input
   row or a second result slice. The metric layer accepts a synchronous row
   accessor and caller-owned output; SQL uses the upper half of its already
   admitted `[]float64` result bytes as `[]float32` scratch and converts forward
-  only after Wait. GPU launch still copies flattened inputs into the existing C
-  allocator and therefore remains a named activation blocker.
+  only after Wait. The SQL float32 GPU path now flattens query and row inputs
+  into caller-owned allocation-accounted function scratch, and the GPU job
+  retains that slice until Wait. The public legacy GPU API keeps its C-allocator
+  behavior and is not part of the activated owner.
 - `NORMALIZE_L2` writes float32, float64, BF16, Float16, int8, and uint8 results
   directly into admitted varlen storage. The old float pools and per-row
   widened/narrowed arrays are deleted.
@@ -710,36 +736,70 @@ The second follow-up removes rather than accounts four more scratch families:
   and padding is assembled in one stack block, removing both payload copies
   and the old possibility that `append` modified spare input-vector capacity.
 
-`FunctionResult.AppendBytesWithFill` is the shared publication primitive. It
-admits result data/area capacity before exposing a row, publishes length only
-after the callback finishes, and restores the unpublished varlena header and
-area length on panic. Capacity acquired before a callback panic remains owned
-and charged to the result until normal reuse or `Free`; no allocation is
-released without its terminal owner.
+The final dormant closure adds one retained `FunctionResult` scratch owner with
+a site distinct from decimal parameter conversion. Detection is allocation-free;
+the first nonzero resize admits physical capacity, geometric growth charges old
+and replacement capacity until publication, Reset retains it, and
+`FunctionResult.Free` is the sole terminal release. It is used for exact HASH
+key chunks, fixed/string IN tuples, PREFIX_IN entries, narrow array conversion,
+JSON_OBJECT keys, JQ/JSON_ROW visible output, JSON modify value
+pre-materialization, and SQL float32 GPU flattening. One-byte-short tests cover
+the generic allocator boundaries, and capacity-rejection tests cover each
+new scalable function family. `TRY_JQ` suppresses jq/domain errors but never an output
+allocation failure.
+
+Storage-compatible ByteJSON encoders now write scalar, array, object,
+object-key-array, typed, opaque, bit, and nested values directly into Vector
+area backing. JSON_ARRAY, JSON_OBJECT, JSON_KEYS, JSON_PRETTY, JSON_QUOTE, and
+JSON_ROW no longer build a second output-sized ByteJSON or visible-text slice.
+JSON_EXTRACT no longer retains `rows * path-count` path arrays: nonconstant
+paths are parsed one row at a time into arity-sized reusable storage. This does
+not close the parser/modifier/schema graphs themselves; those remain `L`.
+
+HEX/UNHEX, MD5, base64, vector-base64, COMPRESS/UNCOMPRESS, RANDOM_BYTES,
+CHAR, MAKE_SET, EXPORT_SET, bitwise strings, array casts, quote, date/time
+formatting, and FROM_UNIXTIME now publish directly into admitted result
+capacity. The legacy production path for two-pass-capable formatting remains
+one-pass; exact two-pass sizing is selected only by the dormant allocation
+owner, so this PR does not impose duplicate formatting work before activation.
+
+`FunctionResult.AppendBytesWithBuilder` is the shared publication primitive;
+`AppendBytesWithFill` is its exact-size convenience wrapper. It admits result
+data/area capacity before exposing a row, accepts an actual length no larger
+than the admitted capacity, collapses a short result into inline storage when
+possible, and publishes length only after successful completion. Error,
+invalid-length, and panic paths restore the unpublished varlena header and area
+length. Capacity acquired before rollback remains owned and charged to the
+result until normal reuse or `Free`; no allocation is released without its
+terminal owner.
 
 Fresh five-run benchmarks on linux/amd64, Go 1.26.4, i7-11700:
 
-| 8,192-row function path | Before median | `ad71c4fb50` median | Before allocation | `ad71c4fb50` allocation |
+| 8,192-row function path | Before median | `fd2fcc953b` median | Before allocation | `fd2fcc953b` allocation |
 | --- | ---: | ---: | ---: | ---: |
-| float32 L2-squared batch distance, 128 dimensions | about 483 us | 429.5 us | 229,488 B/op, 6 allocs/op | 112 B/op, 4 allocs/op |
-| `JSON_ROW`, fresh operator | about 838 us | 449.6 us | 1,704,081 B/op, 16,387 allocs/op | 440 B/op, 7 allocs/op |
-| `JSON_ROW`, reused operator | about 474.7 us | 450.9 us | about 831 B/op, 8 allocs/op | 200 B/op, 4 allocs/op |
+| float32 L2-squared batch distance, 128 dimensions | about 483 us | 437.8 us | 229,488 B/op, 6 allocs/op | 112 B/op, 4 allocs/op |
+| `JSON_ROW`, fresh operator | about 838 us | 472.7 us | 1,704,081 B/op, 16,387 allocs/op | 520 B/op, 8 allocs/op |
+| `JSON_ROW`, reused operator | about 474.7 us | 471.4 us | about 831 B/op, 8 allocs/op | 264 B/op, 5 allocs/op |
 
 The direct-output candidate passed each new or directly affected behavioral
-test separately under `-race -count=100` with the default 30-second adaptive
-budget (the measured exact-test durations were 0 or 0.01 seconds, so the
-100-run cap applied). Vector, metric, Function, and colexec passed complete
-normal and race runs; the same package closure passed build and vet. The
-unsafe result alias has its own functional test, and callback panic rollback
-proves result length, area length, reuse, and final account zero.
+test separately under race with a 30-second adaptive budget. Every measured
+test used `-count=100` except the 0.35-second incompressible DEFLATE-bound test,
+which used `-count=85`; no empty regex was accepted as stress evidence.
+ByteJSON, Vector, metric, Function, and colexec passed complete normal and race
+runs; the same package closure passed vet and `golangci-lint` with zero issues.
+Coverage for that closure is 78.3% ByteJSON, 50.9% Vector, 90.3% metric, 54.8%
+Function, and 64.3% colexec. The unsafe result alias has its own functional
+test, and error/invalid-length/panic rollback proves result length, area
+length, reuse, and final account zero.
 
-The GPU source path passed manual ownership review: dimension or allocation
-failure releases every C buffer locally, successful launch transfers both
-buffers to the job, and Wait deallocates them after the asynchronous kernel
-terminates. This host has neither `nvcc` nor a CUDA conda environment, so the
-GPU-tag build and tests were not run locally. That validation gap and the
-data-scaled C allocation both remain explicit merge/activation gates; CPU
-success is not treated as GPU evidence.
+The GPU source path passed manual ownership review: exact SQL execution sizes
+and fills caller-owned scratch before launch, a successful launch transfers a
+retained slice reference to the job, Wait drops it only after the asynchronous
+kernel terminates, and dimension/launch failure publishes no job owner. The
+legacy nil-scratch API keeps its existing C-buffer allocate/rollback/Wait
+contract. This host has neither `nvcc` nor a CUDA conda environment, so the
+GPU-tag build and tests were not run locally. That validation gap remains an
+explicit merge/activation gate; CPU success is not treated as GPU evidence.
 
 Fresh local validation on linux/amd64 with CGO and the repository-built
 third-party artifacts passes:
