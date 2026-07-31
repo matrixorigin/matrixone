@@ -63,14 +63,30 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 			vec.Free(mp)
 		}
 
-		data := vector.GetAndClearVecData(vec)
-		area := vector.GetAndClearVecArea(vec)
-
-		if data != nil {
-			b.bytesCache[id].bs = append(b.bytesCache[id].bs, data)
-		}
-		if area != nil {
-			b.bytesCache[id].bs = append(b.bytesCache[id].bs, area)
+		if vec.AllocationAccountSelection() == nil {
+			data := vector.DetachLegacyVectorData(vec)
+			area := vector.DetachLegacyVectorArea(vec)
+			if data != nil {
+				b.bytesCache[id].bs = append(b.bytesCache[id].bs, data)
+			}
+			if area != nil {
+				b.bytesCache[id].bs = append(b.bytesCache[id].bs, area)
+			}
+		} else {
+			data := vector.DetachVectorData(vec)
+			area := vector.DetachVectorArea(vec)
+			if data.Capacity() != 0 {
+				b.bytesCache[id].buffers = append(
+					b.bytesCache[id].buffers,
+					data,
+				)
+			}
+			if area.Capacity() != 0 {
+				b.bytesCache[id].buffers = append(
+					b.bytesCache[id].buffers,
+					area,
+				)
+			}
 		}
 
 		bat.ReplaceVector(vec, nil, i)
@@ -103,5 +119,9 @@ func (b *spoolBuffer) clean(mp *mpool.MPool) {
 			mp.Free(b.bytesCache[i].bs[j])
 		}
 		b.bytesCache[i].bs = nil
+		for j := range b.bytesCache[i].buffers {
+			b.bytesCache[i].buffers[j].Free(mp)
+		}
+		b.bytesCache[i].buffers = nil
 	}
 }

@@ -36,8 +36,10 @@ type cachedBatch struct {
 }
 
 type oneBatchMemoryCache struct {
-	// bytes to copy vector's data and area to.
+	// bs keeps the allocation-unaccounted production fast path unchanged.
 	bs [][]byte
+	// buffers copy vector data and area while preserving allocation provenance.
+	buffers []vector.DetachedBuffer
 }
 
 func initCachedBatch(mp *mpool.MPool, capacity uint32) *cachedBatch {
@@ -73,6 +75,12 @@ func (cb *cachedBatch) GetCopiedBatch(
 	cacheID, dst = cb.buffer.getCacheID()
 	dst.Recursive = src.Recursive
 	dst.ShuffleIDX = src.ShuffleIDX
+	if sourceSelection := src.AllocationAccountSelection(); sourceSelection != dst.AllocationAccountSelection() {
+		if err = dst.SetAllocationAccount(sourceSelection); err != nil {
+			cb.CacheBatch(true, cacheID, dst)
+			return nil, false, 0, err
+		}
+	}
 
 	if cap(dst.Vecs) >= len(src.Vecs) {
 		dst.Vecs = dst.Vecs[:len(src.Vecs)]
@@ -101,7 +109,19 @@ func (cb *cachedBatch) GetCopiedBatch(
 		}
 
 		typ := *vec.GetType()
-		dst.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+		selection := vec.AllocationAccountSelection()
+		if selection == nil {
+			dst.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+		} else {
+			dst.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(
+				typ,
+				selection,
+			)
+			if err != nil {
+				cb.CacheBatch(true, cacheID, dst)
+				return nil, false, 0, err
+			}
+		}
 
 		if vec.IsConst() {
 			if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
@@ -110,8 +130,15 @@ func (cb *cachedBatch) GetCopiedBatch(
 			}
 
 		} else {
-			cb.buffer.bytesCache[cacheID].setSuitableDataAreaToVector(
-				len(vec.GetData()), len(vec.GetArea()), dst.Vecs[i])
+			if err = cb.buffer.bytesCache[cacheID].
+				setSuitableDataAreaToVector(
+					len(vec.GetData()),
+					len(vec.GetArea()),
+					dst.Vecs[i],
+				); err != nil {
+				cb.CacheBatch(true, cacheID, dst)
+				return nil, false, 0, err
+			}
 			dst.Vecs[i].Reset(typ)
 			if err = vector.GetUnionAllFunction(typ, cb.mp)(
 				dst.Vecs[i],
@@ -144,25 +171,48 @@ func (cb *cachedBatch) GetCopiedBatch(
 // setSuitableDataAreaToVector get two long-enough bytes slices from the cache, and set them to the vector.
 // if not found, set the last one to the vector.
 func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
-	dataSize, areaSize int, vec *vector.Vector) {
+	dataSize, areaSize int,
+	vec *vector.Vector,
+) error {
+	if vec.AllocationAccountSelection() == nil {
+		mc.setSuitableLegacyDataAreaToVector(dataSize, areaSize, vec)
+		return nil
+	}
+	return mc.setSuitableAccountedDataAreaToVector(
+		dataSize,
+		areaSize,
+		vec,
+	)
+}
+
+func (mc *oneBatchMemoryCache) setSuitableAccountedDataAreaToVector(
+	dataSize, areaSize int,
+	vec *vector.Vector,
+) error {
 	// return directly once cache was empty.
-	if len(mc.bs) == 0 {
-		return
+	if len(mc.buffers) == 0 {
+		return nil
 	}
 
 	setDataFirst := dataSize >= areaSize
 
 	first, second := dataSize, areaSize
+	firstKind := vector.DetachedDataBuffer
+	secondKind := vector.DetachedAreaBuffer
 	if !setDataFirst {
 		first, second = areaSize, dataSize
+		firstKind, secondKind = secondKind, firstKind
 	}
 
 	if first > 0 {
 		suitIdx := -1
 		suitDifference := math.MaxInt
 
-		for i, bs := range mc.bs {
-			if difference := cap(bs) - first; difference > 0 {
+		for i := range mc.buffers {
+			if !mc.buffers[i].CanAttachTo(vec, firstKind) {
+				continue
+			}
+			if difference := mc.buffers[i].Capacity() - first; difference > 0 {
 				if difference < suitDifference {
 					suitIdx = i
 					suitDifference = difference
@@ -172,10 +222,9 @@ func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
 
 		if suitIdx != -1 {
 			mem := mc.removeItemAndArrange(suitIdx)
-			if setDataFirst {
-				vector.SetVecData(vec, mem)
-			} else {
-				vector.SetVecArea(vec, mem)
+			if err := mem.AttachTo(vec, firstKind); err != nil {
+				mc.buffers = append(mc.buffers, mem)
+				return err
 			}
 		}
 	}
@@ -184,8 +233,11 @@ func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
 		suitIdx := -1
 		suitDifference := math.MaxInt
 
-		for i, bs := range mc.bs {
-			if difference := cap(bs) - second; difference > 0 {
+		for i := range mc.buffers {
+			if !mc.buffers[i].CanAttachTo(vec, secondKind) {
+				continue
+			}
+			if difference := mc.buffers[i].Capacity() - second; difference > 0 {
 				if difference < suitDifference {
 					suitIdx = i
 					suitDifference = difference
@@ -195,34 +247,136 @@ func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
 
 		if suitIdx != -1 {
 			mem := mc.removeItemAndArrange(suitIdx)
-			if setDataFirst {
-				vector.SetVecArea(vec, mem)
-			} else {
-				vector.SetVecData(vec, mem)
+			if err := mem.AttachTo(vec, secondKind); err != nil {
+				mc.buffers = append(mc.buffers, mem)
+				return err
 			}
 		}
 	}
 
+	if cap(vec.GetData()) == 0 && dataSize > 0 {
+		if idx := mc.lastAttachable(
+			vec,
+			vector.DetachedDataBuffer,
+		); idx >= 0 {
+			mem := mc.removeItemAndArrange(idx)
+			if err := mem.AttachTo(
+				vec,
+				vector.DetachedDataBuffer,
+			); err != nil {
+				mc.buffers = append(mc.buffers, mem)
+				return err
+			}
+		}
+	}
+	if cap(vec.GetArea()) == 0 && areaSize > 0 {
+		if idx := mc.lastAttachable(
+			vec,
+			vector.DetachedAreaBuffer,
+		); idx >= 0 {
+			mem := mc.removeItemAndArrange(idx)
+			if err := mem.AttachTo(
+				vec,
+				vector.DetachedAreaBuffer,
+			); err != nil {
+				mc.buffers = append(mc.buffers, mem)
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (mc *oneBatchMemoryCache) setSuitableLegacyDataAreaToVector(
+	dataSize, areaSize int,
+	vec *vector.Vector,
+) {
+	if len(mc.bs) == 0 {
+		return
+	}
+
+	setDataFirst := dataSize >= areaSize
+	first, second := dataSize, areaSize
+	if !setDataFirst {
+		first, second = areaSize, dataSize
+	}
+
+	if first > 0 {
+		if idx := mc.bestLegacyBuffer(first); idx >= 0 {
+			mem := mc.removeLegacyBuffer(idx)
+			if setDataFirst {
+				vector.AttachLegacyVectorData(vec, mem)
+			} else {
+				vector.AttachLegacyVectorArea(vec, mem)
+			}
+		}
+	}
+	if second > 0 {
+		if idx := mc.bestLegacyBuffer(second); idx >= 0 {
+			mem := mc.removeLegacyBuffer(idx)
+			if setDataFirst {
+				vector.AttachLegacyVectorArea(vec, mem)
+			} else {
+				vector.AttachLegacyVectorData(vec, mem)
+			}
+		}
+	}
 	if len(mc.bs) > 0 && cap(vec.GetData()) == 0 && dataSize > 0 {
-		vector.SetVecData(vec, mc.bs[len(mc.bs)-1])
-		mc.bs = mc.bs[:len(mc.bs)-1]
+		vector.AttachLegacyVectorData(vec, mc.removeLegacyBuffer(len(mc.bs)-1))
 	}
 	if len(mc.bs) > 0 && cap(vec.GetArea()) == 0 && areaSize > 0 {
-		vector.SetVecArea(vec, mc.bs[len(mc.bs)-1])
-		mc.bs = mc.bs[:len(mc.bs)-1]
+		vector.AttachLegacyVectorArea(vec, mc.removeLegacyBuffer(len(mc.bs)-1))
 	}
 }
 
-// removeItemAndArrange return and remove the idx item of cache.
-func (mc *oneBatchMemoryCache) removeItemAndArrange(idx int) []byte {
-	last := len(mc.bs) - 1
-	dst := mc.bs[idx]
+func (mc *oneBatchMemoryCache) bestLegacyBuffer(size int) int {
+	best := -1
+	difference := math.MaxInt
+	for i, buffer := range mc.bs {
+		if current := cap(buffer) - size; current > 0 &&
+			current < difference {
+			best = i
+			difference = current
+		}
+	}
+	return best
+}
 
+func (mc *oneBatchMemoryCache) removeLegacyBuffer(idx int) []byte {
+	last := len(mc.bs) - 1
+	buffer := mc.bs[idx]
 	if idx != last {
 		mc.bs[idx] = mc.bs[last]
-		mc.bs = mc.bs[:last]
 	}
+	mc.bs[last] = nil
 	mc.bs = mc.bs[:last]
+	return buffer
+}
+
+func (mc *oneBatchMemoryCache) lastAttachable(
+	vec *vector.Vector,
+	kind vector.DetachedBufferKind,
+) int {
+	for i := len(mc.buffers) - 1; i >= 0; i-- {
+		if mc.buffers[i].CanAttachTo(vec, kind) {
+			return i
+		}
+	}
+	return -1
+}
+
+// removeItemAndArrange return and remove the idx item of cache.
+func (mc *oneBatchMemoryCache) removeItemAndArrange(
+	idx int,
+) vector.DetachedBuffer {
+	last := len(mc.buffers) - 1
+	dst := mc.buffers[idx]
+
+	if idx != last {
+		mc.buffers[idx] = mc.buffers[last]
+	}
+	mc.buffers[last] = vector.DetachedBuffer{}
+	mc.buffers = mc.buffers[:last]
 	return dst
 }
 

@@ -487,6 +487,119 @@ func TestVectorAllocationAccountErrorsAreTyped(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestDetachedBufferPreservesAllocationProvenance(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 8)
+	mp := mpool.MustNewZero()
+	source := newAccountedTestVector(
+		t,
+		types.T_varchar.ToType(),
+		state.selection,
+	)
+	require.NoError(t, AppendBytes(
+		source,
+		[]byte("detached allocation payload that uses the vector area"),
+		false,
+		mp,
+	))
+	used := state.account.Snapshot().Used
+	require.Positive(t, used)
+	require.Panics(t, func() {
+		DetachLegacyVectorData(source)
+	})
+	require.Panics(t, func() {
+		DetachLegacyVectorArea(source)
+	})
+
+	data := DetachVectorData(source)
+	area := DetachVectorArea(source)
+	require.Positive(t, data.Capacity())
+	require.Positive(t, area.Capacity())
+	source.Free(mp)
+	require.Equal(t, used, state.account.Snapshot().Used)
+
+	destination := newAccountedTestVector(
+		t,
+		types.T_varchar.ToType(),
+		state.selection,
+	)
+	require.True(t, data.CanAttachTo(destination, DetachedDataBuffer))
+	require.False(t, data.CanAttachTo(destination, DetachedAreaBuffer))
+	require.NoError(t, data.AttachTo(destination, DetachedDataBuffer))
+	require.NoError(t, area.AttachTo(destination, DetachedAreaBuffer))
+	require.Zero(t, data.Capacity())
+	require.Zero(t, area.Capacity())
+	require.Equal(t, used, state.account.Snapshot().Used)
+
+	destination.Free(mp)
+	require.Zero(t, state.account.Snapshot().Used)
+	data.Free(mp)
+	area.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestSetTypeAndFixDataAllocationFailureIsAtomic(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 512, 4)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(
+		t,
+		types.T_date.ToType(),
+		state.selection,
+	)
+	require.NoError(t, vec.PreExtend(128, mp))
+	vec.SetLength(128)
+	used := state.account.Snapshot().Used
+	require.Equal(t, uint64(512), used)
+
+	err := vec.SetTypeAndFixData(types.T_datetime.ToType(), mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Equal(t, types.T_date, vec.GetType().Oid)
+	require.Equal(t, 128, vec.Length())
+	require.Equal(t, used, state.account.Snapshot().Used)
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestDetachedLegacyBufferAndTypeChange(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(
+		source,
+		[]byte("legacy detached allocation payload"),
+		false,
+		mp,
+	))
+	data := DetachLegacyVectorData(source)
+	area := DetachLegacyVectorArea(source)
+	source.Free(mp)
+
+	destination := NewOffHeapVecWithType(types.T_varchar.ToType())
+	AttachLegacyVectorData(destination, data)
+	AttachLegacyVectorArea(destination, area)
+	destination.Free(mp)
+	require.Zero(t, mp.CurrNB())
+
+	fixed := NewOffHeapVecWithType(types.T_date.ToType())
+	require.NoError(t, AppendFixed(
+		fixed,
+		types.Date(1),
+		false,
+		mp,
+	))
+	require.NoError(t, fixed.SetTypeAndFixData(
+		types.T_datetime.ToType(),
+		mp,
+	))
+	require.Equal(t, types.T_datetime, fixed.GetType().Oid)
+	require.Equal(t, 1, fixed.Length())
+	require.Error(t, fixed.SetTypeAndFixData(
+		types.T_varchar.ToType(),
+		mp,
+	))
+	fixed.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestVectorAllocationAccountHelperBoundaries(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 8)
 	mp := mpool.MustNewZero()

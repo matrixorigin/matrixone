@@ -212,25 +212,35 @@ func (v *Vector) SetType(typ types.Type) {
 	v.typ = typ
 }
 
-// Bug #23240
-// Neither this function, nor the SetType function are good
-// Maybe we should just disallow.
-func (v *Vector) SetTypeAndFixData(typ types.Type, mp *mpool.MPool) {
+// SetTypeAndFixData changes a fixed-width result type and grows its owned data
+// before publishing the new type. A failed growth leaves the original vector
+// type, length, and backing allocation intact.
+func (v *Vector) SetTypeAndFixData(
+	typ types.Type,
+	mp *mpool.MPool,
+) error {
 	if v.typ.IsVarlen() && typ.IsVarlen() {
 		v.typ = typ
-		return
+		return nil
 	}
 
 	if v.typ.IsVarlen() || typ.IsVarlen() {
-		// this is a weird thing to do, we should not allow it.
-		panic("SetTypeAndFixData is not allowed to change from/to varlen type")
+		return moerr.NewInvalidInputNoCtx(
+			"SetTypeAndFixData cannot change from or to a varlen type",
+		)
 	}
 
+	oldType := v.typ
 	v.typ = typ
 	oldLength := v.length
 	v.length = 0
-	extend(v, oldLength, mp)
+	if err := extend(v, oldLength, mp); err != nil {
+		v.typ = oldType
+		v.length = oldLength
+		return err
+	}
 	v.length = oldLength
+	return nil
 }
 
 func (v *Vector) SetOffHeap(offHeap bool) {
