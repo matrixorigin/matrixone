@@ -67,31 +67,6 @@ func (r *boundaryCancelReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// FlushBucketBatch writes one legacy-format spill record. Production
-// scatter goes through SpillEngine.scatterBatchBounded; tests that construct a
-// reader fixture directly need only this codec/writer composition.
-func FlushBucketBatch(
-	proc *process.Process,
-	bat *batch.Batch,
-	w *BucketWriter,
-	bucketBuf *bytes.Buffer,
-	analyzer process.Analyzer,
-) error {
-	if bat == nil || bat.RowCount() == 0 {
-		return nil
-	}
-	if err := marshalSpillRecord(bat, bucketBuf); err != nil {
-		return err
-	}
-	return writeBucketPayload(
-		proc,
-		bucketBuf.Bytes(),
-		int64(bat.RowCount()),
-		w,
-		analyzer,
-	)
-}
-
 // scatterImpl retains the former buffered implementation solely as a
 // compatibility oracle. It is intentionally test-only: production owns one
 // selected batch at a time in SpillEngine.scatterBatchBounded.

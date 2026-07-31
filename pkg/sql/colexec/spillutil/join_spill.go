@@ -879,6 +879,32 @@ func MakeBucketWriters(prefix string) []BucketWriter {
 	return writers
 }
 
+// FlushBucketBatch writes one framed batch to w. It remains the low-level
+// fixture/compatibility boundary for callers that already own a spill writer;
+// production scatter uses SpillEngine so its retained buffers and pressure
+// retries stay under the statement allocation owner.
+func FlushBucketBatch(
+	proc *process.Process,
+	bat *batch.Batch,
+	w *BucketWriter,
+	bucketBuf *bytes.Buffer,
+	analyzer process.Analyzer,
+) error {
+	if bat == nil || bat.RowCount() == 0 {
+		return nil
+	}
+	if err := marshalSpillRecord(bat, bucketBuf); err != nil {
+		return err
+	}
+	return writeBucketPayload(
+		proc,
+		bucketBuf.Bytes(),
+		int64(bat.RowCount()),
+		w,
+		analyzer,
+	)
+}
+
 type spillRecordBuffer interface {
 	io.Writer
 	Bytes() []byte
