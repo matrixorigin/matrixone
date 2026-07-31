@@ -3688,6 +3688,60 @@ func TestReplaceSelfRefPlanStructure(t *testing.T) {
 	assert.True(t, hasMultiUpdate, "self-ref FK REPLACE should contain MULTI_UPDATE node")
 }
 
+func TestDeleteSelfReferSetNull(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["self_ref_cascade"]
+	tableDef.Fkeys[0].OnDelete = plan.ForeignKeyDef_SET_NULL
+	tableDef.Fkeys[0].OnUpdate = plan.ForeignKeyDef_SET_NULL
+
+	logicPlan, err := runOneStmt(mock, t, "DELETE FROM self_ref_cascade WHERE id = 2")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	assert.True(t, query.GetHasForeignKeyAction())
+	assert.True(t, queryUpdatesTable(query, "self_ref_cascade"))
+	requireQueryStepDependenciesAcyclic(t, query)
+}
+
+func requireQueryStepDependenciesAcyclic(t *testing.T, query *plan.Query) {
+	t.Helper()
+	state := make([]uint8, len(query.Steps))
+	var visitStep func(int)
+	visitStep = func(step int) {
+		require.GreaterOrEqual(t, step, 0)
+		require.Less(t, step, len(query.Steps))
+		if state[step] == 1 {
+			t.Fatalf("query step dependency cycle contains step %d", step)
+		}
+		if state[step] == 2 {
+			return
+		}
+		state[step] = 1
+		seenNodes := make(map[int32]struct{})
+		var visitNode func(int32)
+		visitNode = func(nodeID int32) {
+			require.GreaterOrEqual(t, nodeID, int32(0))
+			require.Less(t, int(nodeID), len(query.Nodes))
+			if _, ok := seenNodes[nodeID]; ok {
+				return
+			}
+			seenNodes[nodeID] = struct{}{}
+			node := query.Nodes[nodeID]
+			for _, sourceStep := range node.SourceStep {
+				visitStep(int(sourceStep))
+			}
+			for _, childID := range node.Children {
+				visitNode(childID)
+			}
+		}
+		visitNode(query.Steps[step])
+		state[step] = 2
+	}
+	for step := range query.Steps {
+		visitStep(step)
+	}
+}
+
 func TestReplaceSelfRefCascade(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
@@ -4989,6 +5043,55 @@ func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
 		}
 		require.True(t, foundAgg, sql)
 	}
+}
+
+func TestIssue23154VectorScalarSubqueryFlattenedEverywhere(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	vectorCol := mock.ctxt.tables["nation"].Cols[3]
+	vectorCol.Typ = plan.Type{Id: int32(types.T_array_float64), Width: 1024}
+
+	sql := `SELECT COUNT(*) AS count,
+	               AVG(cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref'))) AS avg_similarity,
+	               MAX(cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref'))) AS max_similarity,
+	               MIN(cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref'))) AS min_similarity
+	          FROM nation
+	         WHERE n_comment IS NOT NULL
+	           AND n_name != 'ref'
+	           AND cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref')) >= 0.9`
+	logicPlan, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+
+	foundAgg := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			foundAgg = true
+		}
+		for _, exprs := range [][]*plan.Expr{
+			node.AggList,
+			node.FilterList,
+			node.ProjectList,
+			node.OnList,
+			node.GroupBy,
+		} {
+			for _, expr := range exprs {
+				require.False(t, hasSubquery(expr),
+					"executable plan expression contains Expr_Sub: %s", sql)
+			}
+		}
+		for _, orderBy := range node.OrderBy {
+			require.False(t, hasSubquery(orderBy.Expr),
+				"executable ORDER BY expression contains Expr_Sub: %s", sql)
+		}
+	}
+	require.True(t, foundAgg)
 }
 
 func TestIssue23157VectorScoreScalarSubqueryFlattened(t *testing.T) {
