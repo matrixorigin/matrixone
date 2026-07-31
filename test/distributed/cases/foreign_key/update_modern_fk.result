@@ -39,6 +39,28 @@ id    parent_id    note
 10    99    orphan
 20    2    NULL
 update child_single set parent_id = 1 where id = 10;
+set foreign_key_checks = 0;
+prepare fk_enable_checks from
+'update child_single set parent_id = ? where id = ?';
+set @fk_parent_id = 98;
+set @fk_child_id = 10;
+set foreign_key_checks = 1;
+execute fk_enable_checks using @fk_parent_id, @fk_child_id;
+Cannot add or update a child row: a foreign key constraint fails
+select * from child_single where id = 10;
+id    parent_id    note
+10    1    orphan
+deallocate prepare fk_enable_checks;
+prepare fk_disable_checks from
+'update child_single set parent_id = ? where id = ?';
+set foreign_key_checks = 0;
+execute fk_disable_checks using @fk_parent_id, @fk_child_id;
+set foreign_key_checks = 1;
+select * from child_single where id = 10;
+id    parent_id    note
+10    98    orphan
+deallocate prepare fk_disable_checks;
+update child_single set parent_id = 1 where id = 10;
 update child_single set parent_id = case id when 10 then 2 else 98 end;
 Cannot add or update a child row: a foreign key constraint fails
 select * from child_single order by id;

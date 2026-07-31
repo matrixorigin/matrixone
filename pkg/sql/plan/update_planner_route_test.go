@@ -253,6 +253,18 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		dept.RefChildTbls = []uint64{emp.TblId}
 		mock.ctxt.id2name[emp.TblId] = "emp"
 	}
+	disableForeignKeyChecks := func(mock *MockOptimizer) {
+		mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+			switch name {
+			case "foreign_key_checks":
+				return int64(0), nil
+			case "sql_mode":
+				return "", nil
+			default:
+				return nil, moerr.NewInternalError(context.Background(), "unexpected variable")
+			}
+		}
+	}
 
 	t.Run("unrelated child column uses multi update without parent probe", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
@@ -318,6 +330,21 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.Equal(t, 3, len(findUpdateFkAssert(logicPlan.GetQuery()).GetF().Args))
 	})
 
+	t.Run("disabled checks keep affected child plan sensitive without validation", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		disableForeignKeyChecks(mock)
+
+		logicPlan, err := runOneStmt(mock, t, "UPDATE emp SET deptno = 2")
+		require.NoError(t, err)
+
+		query := logicPlan.GetQuery()
+		require.True(t, query.GetHasForeignKeyAction())
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		require.Equal(t, 0, countUpdateFkMarkJoins(query))
+		require.Nil(t, findUpdateFkAssert(query))
+	})
+
 	t.Run("auto increment child key uses legacy final row validation", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
@@ -343,6 +370,31 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		route, reason, _ := classifyUpdatePlannerError(err)
 		require.Equal(t, updatePlannerLegacy, route)
 		require.Equal(t, updateRouteReasonAutoIncrement, reason)
+	})
+
+	t.Run("disabled checks keep auto increment child key on modern route", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		disableForeignKeyChecks(mock)
+		emp := mock.ctxt.tables["emp"]
+		for _, col := range emp.Cols {
+			if col.Name == "deptno" {
+				col.Typ.AutoIncr = true
+			}
+		}
+
+		logicPlan, err := runOneStmt(
+			mock,
+			t,
+			"UPDATE emp SET deptno = if(empno = 1, null, deptno)",
+		)
+		require.NoError(t, err)
+
+		query := logicPlan.GetQuery()
+		require.True(t, query.GetHasForeignKeyAction())
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT))
+		require.Equal(t, 0, countUpdateFkMarkJoins(query))
 	})
 
 	t.Run("affected referenced parent key keeps typed legacy route", func(t *testing.T) {

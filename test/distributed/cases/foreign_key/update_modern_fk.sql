@@ -35,6 +35,26 @@ insert into child_single values (30, 1, 'orphan');
 select * from child_single order by id;
 
 update child_single set parent_id = 1 where id = 10;
+
+set foreign_key_checks = 0;
+prepare fk_enable_checks from
+    'update child_single set parent_id = ? where id = ?';
+set @fk_parent_id = 98;
+set @fk_child_id = 10;
+set foreign_key_checks = 1;
+execute fk_enable_checks using @fk_parent_id, @fk_child_id;
+select * from child_single where id = 10;
+deallocate prepare fk_enable_checks;
+
+prepare fk_disable_checks from
+    'update child_single set parent_id = ? where id = ?';
+set foreign_key_checks = 0;
+execute fk_disable_checks using @fk_parent_id, @fk_child_id;
+set foreign_key_checks = 1;
+select * from child_single where id = 10;
+deallocate prepare fk_disable_checks;
+update child_single set parent_id = 1 where id = 10;
+
 update child_single set parent_id = case id when 10 then 2 else 98 end;
 select * from child_single order by id;
 

@@ -2523,11 +2523,19 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 }
 
 func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
-	t.Run("ordinary child update keeps prepare cacheable", func(t *testing.T) {
+	t.Run("affected child key marks prepare uncacheable", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
 
 		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set deptno = ? where empno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("unrelated child column keeps prepare cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set sal = ? where empno = ?")
 		require.False(t, query.GetHasForeignKeyAction())
 	})
 

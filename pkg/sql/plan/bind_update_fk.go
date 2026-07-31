@@ -28,15 +28,13 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 	selectNodeTag int32,
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
+	enabled bool,
 ) (int32, int32, *plan.Node, error) {
-	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
-	if err != nil {
-		return 0, 0, nil, err
-	}
 	if !enabled {
 		return lastNodeID, selectNodeTag, builder.qry.Nodes[lastNodeID], nil
 	}
 
+	var err error
 	for i, tableDef := range dmlCtx.tableDefs {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
@@ -160,6 +158,22 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 	}
 
 	return lastNodeID, selectNodeTag, builder.qry.Nodes[lastNodeID], nil
+}
+
+func updateMayDependOnForeignKeys(
+	dmlCtx *DMLContext,
+	newColName2Idx map[string]int32,
+) bool {
+	for i, tableDef := range dmlCtx.tableDefs {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
+			continue
+		}
+		if len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 ||
+			len(tableDef.RefChildTbls) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func affectedUpdateChildFks(

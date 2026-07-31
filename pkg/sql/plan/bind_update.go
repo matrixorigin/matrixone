@@ -424,16 +424,28 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
-	for i, tableDef := range dmlCtx.tableDefs {
-		if updateAutoIncrCols[i] &&
-			len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 {
-			return 0, newLegacyUpdatePlannerRouteError(
-				updateRouteReasonAutoIncrement,
-				moerr.NewUnsupportedDML(
-					builder.compCtx.GetContext(),
-					"auto_increment foreign key update",
-				),
-			)
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+	if err != nil {
+		return 0, err
+	}
+	if updateMayDependOnForeignKeys(dmlCtx, newColName2Idx) {
+		// The plan shape and planner route depend on foreign_key_checks.
+		// Preserve that dependency even while checks are disabled so prepared
+		// and generic plan caches rebuild after either session-state transition.
+		builder.qry.HasForeignKeyAction = true
+	}
+	if fkChecksEnabled {
+		for i, tableDef := range dmlCtx.tableDefs {
+			if updateAutoIncrCols[i] &&
+				len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 {
+				return 0, newLegacyUpdatePlannerRouteError(
+					updateRouteReasonAutoIncrement,
+					moerr.NewUnsupportedDML(
+						builder.compCtx.GetContext(),
+						"auto_increment foreign key update",
+					),
+				)
+			}
 		}
 	}
 
@@ -444,6 +456,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		selectNodeTag,
 		oldColName2Idx,
 		newColName2Idx,
+		fkChecksEnabled,
 	)
 	if err != nil {
 		return 0, err
