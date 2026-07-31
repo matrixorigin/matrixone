@@ -129,7 +129,7 @@ func getLegacyForeignKeyTableDefinitions(tenantID int32, txn executor.TxnExecuto
 func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition) ([]string, error) {
 	statements, err := mysql.Parse(context.Background(), definition.createSQL, 1)
 	if err != nil {
-		return nil, fmt.Errorf("parse legacy foreign-key table %s.%s: %w", definition.database, definition.table, err)
+		return nil, moerr.NewInternalErrorNoCtxf("parse legacy foreign-key table %s.%s: %v", definition.database, definition.table, err)
 	}
 	defer func() {
 		for _, statement := range statements {
@@ -138,11 +138,11 @@ func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition)
 	}()
 
 	if len(statements) != 1 {
-		return nil, fmt.Errorf("legacy foreign-key table %s.%s has %d statements", definition.database, definition.table, len(statements))
+		return nil, moerr.NewInternalErrorNoCtxf("legacy foreign-key table %s.%s has %d statements", definition.database, definition.table, len(statements))
 	}
 	createTable, ok := statements[0].(*tree.CreateTable)
 	if !ok {
-		return nil, fmt.Errorf("legacy foreign-key table %s.%s does not have a CREATE TABLE definition", definition.database, definition.table)
+		return nil, moerr.NewInternalErrorNoCtxf("legacy foreign-key table %s.%s does not have a CREATE TABLE definition", definition.database, definition.table)
 	}
 
 	updates := make([]string, 0)
@@ -152,7 +152,7 @@ func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition)
 			continue
 		}
 		if foreignKey.ConstraintSymbol == "" || foreignKey.Refer == nil {
-			return nil, fmt.Errorf("legacy foreign key in %s.%s has incomplete persisted definition", definition.database, definition.table)
+			return nil, moerr.NewInternalErrorNoCtxf("legacy foreign key in %s.%s has incomplete persisted definition", definition.database, definition.table)
 		}
 		for ordinal, keyPart := range foreignKey.KeyParts {
 			updates = append(updates, fmt.Sprintf(
