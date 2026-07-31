@@ -67,8 +67,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		}
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
-	case plan.Node_SOURCE_SCAN:
-		pname = "Source Scan"
 	case plan.Node_MATERIAL_SCAN:
 		pname = "Material Scan"
 	case plan.Node_PROJECT:
@@ -164,7 +162,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")
-		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_SOURCE_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
 				if ndesc.Node.IndexScanInfo.IsIndexScan {

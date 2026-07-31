@@ -2077,8 +2077,6 @@ name VARCHAR(20) NOT NULL,
 price DECIMAL,
 PRIMARY KEY (category, id)
 );
-create dynamic table dt_test as select * from tx1;
-lack of option type
 drop table tx1;
 drop database db9;
 drop database if exists repro_ctas_datetime6;
