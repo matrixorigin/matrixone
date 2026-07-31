@@ -992,33 +992,49 @@ func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableD
 		return nil
 	}
 
-	defaultChecks, defaultParsed, defaultErr := bindLegacyChecksForCreateLike(ctx, tableDef, "")
-	nbeChecks, nbeParsed, nbeErr := bindLegacyChecksForCreateLike(
-		ctx,
-		tableDef,
-		"NO_BACKSLASH_ESCAPES",
-	)
-	switch {
-	case defaultParsed && defaultErr != nil:
-		return defaultErr
-	case nbeParsed && nbeErr != nil:
-		return nbeErr
-	case defaultParsed && nbeParsed:
-		if !equalCheckDefs(defaultChecks, nbeChecks) {
+	var canonicalChecks []*plan.CheckDef
+	var firstParseErr error
+	var firstBindErr error
+	parsedModes := 0
+	successfulModes := 0
+	for _, sqlMode := range mysql.ParserSQLModeCombinations() {
+		checks, parsed, err := bindLegacyChecksForCreateLike(ctx, tableDef, sqlMode)
+		if !parsed {
+			if firstParseErr == nil {
+				firstParseErr = err
+			}
+			continue
+		}
+		parsedModes++
+		if err != nil {
+			if firstBindErr == nil {
+				firstBindErr = err
+			}
+			continue
+		}
+		if successfulModes == 0 {
+			canonicalChecks = checks
+		} else if !equalCheckDefs(canonicalChecks, checks) {
 			return moerr.NewInvalidInput(
 				ctx.GetContext(),
 				"cannot recover legacy CHECK constraints with ambiguous SQL mode",
 			)
 		}
-		tableDef.Checks = defaultChecks
-	case defaultParsed:
-		tableDef.Checks = defaultChecks
-	case nbeParsed:
-		tableDef.Checks = nbeChecks
-	case defaultErr != nil:
-		return defaultErr
+		successfulModes++
+	}
+
+	switch {
+	case successfulModes > 0 && firstBindErr != nil:
+		return moerr.NewInvalidInput(
+			ctx.GetContext(),
+			"cannot recover legacy CHECK constraints with ambiguous SQL mode",
+		)
+	case successfulModes > 0:
+		tableDef.Checks = canonicalChecks
+	case parsedModes > 0:
+		return firstBindErr
 	default:
-		return nbeErr
+		return firstParseErr
 	}
 	return nil
 }

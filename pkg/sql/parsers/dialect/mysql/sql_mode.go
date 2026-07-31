@@ -21,6 +21,20 @@ type SQLModeFlag uint8
 const SQLModeMatrixOneNative = "MATRIXONE_NATIVE"
 
 const (
+	sqlModeANSIQuotes         = "ANSI_QUOTES"
+	sqlModePipesAsConcat      = "PIPES_AS_CONCAT"
+	sqlModeNoBackslashEscapes = "NO_BACKSLASH_ESCAPES"
+	sqlModeRealAsFloat        = "REAL_AS_FLOAT"
+)
+
+var parserSQLModeTokens = []string{
+	sqlModeANSIQuotes,
+	sqlModePipesAsConcat,
+	sqlModeNoBackslashEscapes,
+	sqlModeRealAsFloat,
+}
+
+const (
 	SQLModeANSIQuotes SQLModeFlag = 1 << iota
 	SQLModePipesAsConcat
 	SQLModeNoBackslashEscapes
@@ -35,13 +49,13 @@ func ParseSQLModeFlags(mode string) SQLModeFlags {
 		switch strings.ToUpper(strings.TrimSpace(part)) {
 		case "ANSI":
 			flags |= SQLModeFlags(SQLModeANSIQuotes | SQLModePipesAsConcat | SQLModeRealAsFloat)
-		case "ANSI_QUOTES":
+		case sqlModeANSIQuotes:
 			flags |= SQLModeFlags(SQLModeANSIQuotes)
-		case "PIPES_AS_CONCAT":
+		case sqlModePipesAsConcat:
 			flags |= SQLModeFlags(SQLModePipesAsConcat)
-		case "NO_BACKSLASH_ESCAPES":
+		case sqlModeNoBackslashEscapes:
 			flags |= SQLModeFlags(SQLModeNoBackslashEscapes)
-		case "REAL_AS_FLOAT":
+		case sqlModeRealAsFloat:
 			flags |= SQLModeFlags(SQLModeRealAsFloat)
 		}
 	}
@@ -50,6 +64,24 @@ func ParseSQLModeFlags(mode string) SQLModeFlags {
 
 func SessionSQLModeForParser(mode string) string {
 	return mode
+}
+
+// ParserSQLModeCombinations returns every distinct combination of SQL modes
+// that can change parser output. Callers that recover syntax without the
+// original session mode must consider the complete set rather than assuming a
+// single default interpretation.
+func ParserSQLModeCombinations() []string {
+	modes := make([]string, 0, 1<<len(parserSQLModeTokens))
+	for mask := 0; mask < 1<<len(parserSQLModeTokens); mask++ {
+		parts := make([]string, 0, len(parserSQLModeTokens))
+		for bit, token := range parserSQLModeTokens {
+			if mask&(1<<bit) != 0 {
+				parts = append(parts, token)
+			}
+		}
+		modes = append(modes, strings.Join(parts, ","))
+	}
+	return modes
 }
 
 func HasSQLMode(mode string, token string) bool {

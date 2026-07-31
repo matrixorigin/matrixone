@@ -166,6 +166,26 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 			legacySQL:     `create table source_t(s varchar(10), check (s = 'a\\nb'))`,
 			wantAmbiguous: true,
 		},
+		{
+			name:          "pipes as concat source",
+			baseSQL:       "create table source_t(s varchar(10))",
+			legacySQL:     "create table source_t(s varchar(10), check (s = 'a' || 'b'))",
+			wantAmbiguous: true,
+		},
+		{
+			name:          "ansi quotes source",
+			baseSQL:       "create table source_t(a int)",
+			legacySQL:     `create table source_t(a int, check ("a" > 0))`,
+			wantAmbiguous: true,
+		},
+		{
+			name:          "real as float uses catalog column type",
+			baseSQL:       "create table source_t(r float)",
+			legacySQL:     "create table source_t(r real, check (r > 0))",
+			checkName:     "__mo_chk_1",
+			checkOrigin:   "`r` > 0",
+			persistedText: "constraint __mo_chk_1 check (`r` > 0) enforced",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false)
