@@ -200,6 +200,7 @@ func (c *batchUnmarshalCursor) readUint32() (uint32, error) {
 }
 
 func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
+	allocationAccount := bat.allocationAccount
 	cursor := batchUnmarshalCursor{data: data}
 	rowCount, err := cursor.readInt64()
 	if err != nil {
@@ -234,6 +235,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 				}
 			}
 			bat.Clean(mp)
+			bat.allocationAccount = allocationAccount
 		}
 		bat.Vecs = make([]*vector.Vector, vecsLen)
 	}
@@ -289,6 +291,14 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 				return moerr.NewInvalidInputNoCtx("cannot unmarshal into an owned batch vector without a memory pool")
 			}
 			vecs[i].Free(mp)
+		}
+		// UnmarshalBinary installs aliases into vecData. An empty accounted
+		// receiver must explicitly drop its future-allocation selection first;
+		// the Batch retains the destination context for a later owned copy.
+		if vecs[i].AllocationAccountSelection() != nil {
+			if err := vecs[i].SetAllocationAccount(nil); err != nil {
+				return err
+			}
 		}
 		if err := vecs[i].UnmarshalBinary(vecData); err != nil {
 			return err
@@ -400,6 +410,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 }
 
 func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) {
+	allocationAccount := bat.allocationAccount
 	i64, err := types.ReadInt64(r)
 	if err != nil {
 		return err
@@ -413,11 +424,17 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 	if l != len(bat.Vecs) {
 		if len(bat.Vecs) > 0 {
 			bat.Clean(mp)
+			bat.allocationAccount = allocationAccount
 		}
 		bat.Vecs = make([]*vector.Vector, l)
 		for i := range bat.Vecs {
 			if bat.offHeap {
 				bat.Vecs[i] = vector.NewOffHeapVec()
+				if allocationAccount != nil {
+					if err := bat.Vecs[i].SetAllocationAccount(allocationAccount); err != nil {
+						return err
+					}
+				}
 			} else {
 				bat.Vecs[i] = vector.NewVecFromReuse()
 			}
@@ -544,27 +561,70 @@ func (bat *Batch) SetAttributes(attrs []string) {
 	bat.Attrs = attrs
 }
 
+// AllocationAccountSelection returns the immutable destination selection used
+// by this batch's owned off-heap vectors.
+func (bat *Batch) AllocationAccountSelection() *vector.AllocationAccountSelection {
+	if bat == nil {
+		return nil
+	}
+	return bat.allocationAccount
+}
+
+// SetAllocationAccount configures every existing empty destination vector as
+// one transaction. Existing physical allocations are never relabeled.
+func (bat *Batch) SetAllocationAccount(
+	selection *vector.AllocationAccountSelection,
+) error {
+	if bat == nil || (selection != nil && !bat.offHeap) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			if err := vec.CanSetAllocationAccount(selection); err != nil {
+				return err
+			}
+		}
+	}
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			if err := vec.SetAllocationAccount(selection); err != nil {
+				panic(err)
+			}
+		}
+	}
+	bat.allocationAccount = selection
+	return nil
+}
+
+func (bat *Batch) configureOwnedVector(vec *vector.Vector) {
+	if vec == nil {
+		return
+	}
+	vec.SetOffHeap(bat.offHeap)
+	if bat.allocationAccount != nil {
+		if err := vec.SetAllocationAccount(bat.allocationAccount); err != nil {
+			panic(err)
+		}
+	}
+}
+
 func (bat *Batch) InsertVector(
 	pos int32,
 	attr string,
 	vec *vector.Vector,
 ) {
+	bat.configureOwnedVector(vec)
 	bat.Vecs = append(bat.Vecs, nil)
 	copy(bat.Vecs[pos+1:], bat.Vecs[pos:])
 	bat.Vecs[pos] = vec
-	if vec != nil {
-		vec.SetOffHeap(bat.offHeap)
-	}
 	bat.Attrs = append(bat.Attrs, "")
 	copy(bat.Attrs[pos+1:], bat.Attrs[pos:])
 	bat.Attrs[pos] = attr
 }
 
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
+	bat.configureOwnedVector(vec)
 	bat.Vecs[pos] = vec
-	if vec != nil {
-		vec.SetOffHeap(bat.offHeap)
-	}
 }
 
 func (bat *Batch) GetVector(pos int32) *vector.Vector {
@@ -585,6 +645,11 @@ func (bat *Batch) CloneSelectedColumns(
 			cloned.Vecs[idx] = vector.NewOffHeapVecWithType(typ)
 		} else {
 			cloned.Vecs[idx] = vector.NewVec(typ)
+		}
+	}
+	if bat.allocationAccount != nil {
+		if err = cloned.SetAllocationAccount(bat.allocationAccount); err != nil {
+			return nil, err
 		}
 	}
 	if err = bat.CloneSelectedColumnsTo(selectCols, cloned, mp); err != nil {
@@ -626,6 +691,7 @@ func (bat *Batch) SelectColumns(cols []int, attrs []string) *Batch {
 	rbat := NewWithSize(len(cols))
 	rbat.Attrs = attrs
 	rbat.offHeap = bat.offHeap
+	rbat.allocationAccount = bat.allocationAccount
 	for i, col := range cols {
 		rbat.Vecs[i] = bat.Vecs[col]
 	}
@@ -650,6 +716,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	bat.Attrs = nil
 	bat.ExtraBuf = nil
 	bat.SetRowCount(0)
+	bat.allocationAccount = nil
 }
 
 func (bat *Batch) Last() bool {
@@ -681,6 +748,11 @@ func (bat *Batch) FreeColumns(m *mpool.MPool) {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Free(m)
+			if bat.allocationAccount != nil {
+				if err := vec.SetAllocationAccount(bat.allocationAccount); err != nil {
+					panic(err)
+				}
+			}
 		}
 	}
 }
@@ -705,11 +777,19 @@ func (bat *Batch) GetSchema() (attrs []string, attrTypes []types.Type) {
 }
 
 func (bat *Batch) Clone(mp *mpool.MPool, offHeap bool) (*Batch, error) {
+	if bat.allocationAccount != nil && !offHeap {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
 	var (
 		cloned           *Batch
 		attrs, attrTypes = bat.GetSchema()
 	)
 	cloned = NewWithSchema(offHeap, attrs, attrTypes)
+	if offHeap && bat.allocationAccount != nil {
+		if err := cloned.SetAllocationAccount(bat.allocationAccount); err != nil {
+			return nil, err
+		}
+	}
 	cloned.Recursive = bat.Recursive
 	err := bat.CloneTo(cloned, mp)
 	if err != nil {
@@ -870,6 +950,8 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 	b := NewWithSize(len(bat.Vecs))
 	var err error
 	b.Attrs = bat.Attrs
+	b.offHeap = bat.offHeap
+	b.allocationAccount = bat.allocationAccount
 	for i, vec := range bat.Vecs {
 		b.Vecs[i], err = vec.Window(start, end)
 		if err != nil {

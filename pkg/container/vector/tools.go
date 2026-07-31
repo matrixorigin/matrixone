@@ -210,7 +210,7 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 	tgtLen := v.length + rows
 	tgtDataCap := tgtLen * v.typ.TypeSize()
 	if tgtDataCap > cap(v.data) {
-		ndata, err := m.Grow(v.data, tgtDataCap, v.offHeap)
+		ndata, err := v.growData(m, tgtDataCap)
 		if err != nil {
 			return err
 		}

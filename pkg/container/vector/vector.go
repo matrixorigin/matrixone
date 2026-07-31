@@ -67,6 +67,10 @@ type Vector struct {
 	isBin bool
 
 	offHeap bool
+
+	// allocationAccount selects the account for this vector's first owned
+	// off-heap data and area allocations. Physical MPool metadata owns release.
+	allocationAccount *AllocationAccountSelection
 }
 
 func toSliceOfLengthNoTypeCheck[T any](vec *Vector, length int) []T {
@@ -230,6 +234,9 @@ func (v *Vector) SetTypeAndFixData(typ types.Type, mp *mpool.MPool) {
 }
 
 func (v *Vector) SetOffHeap(offHeap bool) {
+	if !offHeap && v.allocationAccount != nil {
+		panic("allocation-accounted vector must remain off-heap")
+	}
 	v.offHeap = offHeap
 }
 
@@ -520,7 +527,7 @@ func NewVecWithDataCopy(
 	vec.length = length
 	var err error
 	if len(data) > 0 {
-		vec.data, err = mp.Alloc(len(data), false)
+		vec.data, err = vec.allocData(mp, len(data))
 		if err != nil {
 			vec.Free(mp)
 			return nil, err
@@ -528,7 +535,7 @@ func NewVecWithDataCopy(
 		copy(vec.data, data)
 	}
 	if len(area) > 0 {
-		vec.area, err = mp.Alloc(len(area), false)
+		vec.area, err = vec.allocArea(mp, len(area))
 		if err != nil {
 			vec.Free(mp)
 			return nil, err
@@ -727,6 +734,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.gsp.Reset()
 	v.sorted = false
 	v.isBin = false
+	v.allocationAccount = nil
 
 	// if !v.OnUsed || v.OnPut {
 	// 	panic("free vector which unalloc or in put list")
@@ -820,6 +828,12 @@ func (v *Vector) UnmarshalBinaryTrusted(data []byte) error {
 }
 
 func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
+	if v.allocationAccount != nil {
+		return fmt.Errorf(
+			"%w: cannot install aliases in an accounted vector",
+			mpool.ErrAllocationAccountInvalid,
+		)
+	}
 	read := func(size int) ([]byte, error) {
 		if size < 0 || size > len(data) {
 			return nil, io.ErrUnexpectedEOF
@@ -900,6 +914,9 @@ func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 
 	v.cantFreeData = true
 	v.cantFreeArea = true
+	// The decoded buffers alias the input byte slice. They have no physical
+	// MPool ownership and therefore cannot retain an allocation selection.
+	v.allocationAccount = nil
 
 	return nil
 }
@@ -1023,6 +1040,12 @@ func canonicalVectorTypeSize(typ types.Type) (int, error) {
 }
 
 func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
+	if v.allocationAccount != nil && v.hasBackingStorage() {
+		return fmt.Errorf(
+			"%w: cannot replace accounted vector storage without Free",
+			mpool.ErrAllocationAccountInvalid,
+		)
+	}
 	var err error
 
 	// read class
@@ -1041,7 +1064,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	dataLen := int(types.DecodeUint32(data[:4]))
 	data = data[4:]
 	if dataLen > 0 {
-		v.data, err = mp.Alloc(dataLen, v.offHeap)
+		v.data, err = v.allocData(mp, dataLen)
 		if err != nil {
 			return err
 		}
@@ -1053,7 +1076,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	areaLen := int(types.DecodeUint32(data[:4]))
 	data = data[4:]
 	if areaLen > 0 {
-		v.area, err = mp.Alloc(areaLen, v.offHeap)
+		v.area, err = v.allocArea(mp, areaLen)
 		if err != nil {
 			return err
 		}
@@ -1095,7 +1118,7 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 	}
 
 	// read data
-	dataLen, dataBuf, err := types.ReadSizeBytesMp(r, v.data, mp, v.offHeap)
+	dataLen, dataBuf, err := v.readSizeBytes(r, mp, true)
 	if err != nil {
 		return err
 	}
@@ -1104,7 +1127,7 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 	}
 
 	// read area
-	areaLen, areaBuf, err := types.ReadSizeBytesMp(r, v.area, mp, v.offHeap)
+	areaLen, areaBuf, err := v.readSizeBytes(r, mp, false)
 	if err != nil {
 		return err
 	}
@@ -1170,7 +1193,7 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 	// grow area
 	var err error
 	oldSz := len(area1)
-	area1, err = mp.Grow(area1, voff+extraAreaSize, v.offHeap)
+	area1, err = v.growArea(mp, voff+extraAreaSize)
 	if err != nil {
 		return err
 	}
@@ -1184,29 +1207,53 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 
 // Dup use to copy an identical vector
 func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
-	return v.dup(mp, false, v.offHeap)
+	if v.allocationAccount != nil {
+		return nil, fmt.Errorf(
+			"%w: accounted vector duplication requires an off-heap destination",
+			mpool.ErrAllocationAccountInvalid,
+		)
+	}
+	return v.dup(mp, false, v.offHeap, nil)
 }
 
 // DupOffHeap copies a vector with all owned backing data allocated off-heap.
 func (v *Vector) DupOffHeap(mp *mpool.MPool) (*Vector, error) {
-	return v.dup(mp, true, true)
+	return v.dup(mp, true, true, v.allocationAccount)
 }
 
-func (v *Vector) dup(mp *mpool.MPool, offHeap, areaOffHeap bool) (*Vector, error) {
-	if v.IsConstNull() {
-		return NewConstNull(v.typ, v.Length(), mp), nil
-	}
+// DupOffHeapWithAllocation copies a vector into an explicitly selected
+// destination account. Passing nil creates a legacy unaccounted destination.
+func (v *Vector) DupOffHeapWithAllocation(
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	return v.dup(mp, true, true, selection)
+}
 
-	var err error
-
+func (v *Vector) dup(
+	mp *mpool.MPool,
+	offHeap bool,
+	areaOffHeap bool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
 	w := NewVecFromReuse()
 	w.offHeap = offHeap
+	if selection != nil {
+		if err := w.SetAllocationAccount(selection); err != nil {
+			return nil, err
+		}
+	}
 	w.class = v.class
 	w.typ = v.typ
 	w.length = v.length
 	w.sorted = v.sorted
 	w.GetNulls().InitWith(v.GetNulls())
 
+	if v.IsConstNull() {
+		return w, nil
+	}
+
+	var err error
 	dataLen := v.typ.TypeSize()
 	if v.IsConst() {
 		if err := extend(w, 1, mp); err != nil {
@@ -1223,7 +1270,7 @@ func (v *Vector) dup(mp *mpool.MPool, offHeap, areaOffHeap bool) (*Vector, error
 	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
-		if w.area, err = mp.Alloc(len(v.area), areaOffHeap); err != nil {
+		if w.area, err = w.allocOwned(mp, len(v.area), areaOffHeap, false); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
@@ -1236,7 +1283,37 @@ func (v *Vector) dup(mp *mpool.MPool, offHeap, areaOffHeap bool) (*Vector, error
 // retains varlen payload referenced by the vector's logical rows, so stale or
 // unreferenced bytes in area are not propagated into batch memory accounting.
 func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
-	w := NewVec(v.typ)
+	if v.allocationAccount != nil {
+		return nil, fmt.Errorf(
+			"%w: accounted compact clone requires a destination selection",
+			mpool.ErrAllocationAccountInvalid,
+		)
+	}
+	return v.cloneToFlatCompact(mp, nil)
+}
+
+// CloneToFlatCompactWithAllocation creates an off-heap compact copy under the
+// explicit destination selection.
+func (v *Vector) CloneToFlatCompactWithAllocation(
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	return v.cloneToFlatCompact(mp, selection)
+}
+
+func (v *Vector) cloneToFlatCompact(
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	var w *Vector
+	if selection == nil {
+		w = NewVec(v.typ)
+	} else {
+		w = NewOffHeapVecWithType(v.typ)
+		if err := w.SetAllocationAccount(selection); err != nil {
+			return nil, err
+		}
+	}
 	if v.class != FLAT || (!v.typ.IsFixedLen() && !v.typ.IsVarlen()) {
 		if err := GetUnionAllFunction(v.typ, mp)(w, v); err != nil {
 			w.Free(mp)
@@ -1276,7 +1353,7 @@ func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
 	}
 	if totalArea > 0 {
 		var err error
-		w.area, err = mp.Alloc(totalArea, w.offHeap)
+		w.area, err = w.allocArea(mp, totalArea)
 		if err != nil {
 			w.Free(mp)
 			return nil, err
@@ -2391,7 +2468,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				return err
 			}
 			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
-				area, err := mp.Grow(v.area, sz, v.offHeap)
+				area, err := v.growArea(mp, sz)
 				if err != nil {
 					return err
 				}
@@ -2796,7 +2873,7 @@ func pregrowVarlenaArea(vec *Vector, totalBytes int, mp *mpool.MPool) error {
 		return nil
 	}
 	origLen := len(vec.area)
-	grown, err := mp.Grow(vec.area, need, vec.offHeap)
+	grown, err := vec.growArea(mp, need)
 	if err != nil {
 		return err
 	}
@@ -3120,10 +3197,20 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			if len(w.area) > 0 {
 				// preserve mpool semantics: append within cap, else mpool Grow2 (so
 				// v.area stays mpool-tracked rather than escaping to the Go heap).
-				if baseOff+len(w.area) <= cap(v.area) || mp == nil {
+				if baseOff+len(w.area) <= cap(v.area) {
 					v.area = append(v.area, w.area...)
-				} else if v.area, err = mp.Grow2(v.area, w.area, baseOff+len(w.area), v.offHeap); err != nil {
-					return err
+				} else if mp == nil {
+					if v.allocationAccount != nil {
+						return moerr.NewInternalErrorNoCtx(
+							"accounted vector area growth does not have a mpool",
+						)
+					}
+					v.area = append(v.area, w.area...)
+				} else {
+					v.area, err = v.growArea2(mp, w.area, baseOff+len(w.area))
+					if err != nil {
+						return err
+					}
 				}
 			}
 			// one memmove of the header array; inline varlenas carry their bytes here.
@@ -4244,7 +4331,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	ns := len(sels)
 	var vs []T
 	ToFixedColNoTypeCheck(v, &vs)
-	data, err := mp.Alloc(ns*v.GetType().TypeSize(), v.offHeap)
+	data, err := v.allocData(mp, ns*v.GetType().TypeSize())
 	if err != nil {
 		return err
 	}
@@ -4341,31 +4428,44 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.
 func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
+	return v.CloneWindowWithAllocation(
+		start,
+		end,
+		mp,
+		v.allocationAccount,
+	)
+}
+
+// CloneWindowWithAllocation deep-copies a window into an explicitly selected
+// off-heap destination account.
+func (v *Vector) CloneWindowWithAllocation(
+	start int,
+	end int,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
 	if start == end {
-		return NewOffHeapVecWithType(v.typ), nil
+		w := NewOffHeapVecWithType(v.typ)
+		if selection != nil {
+			if err := w.SetAllocationAccount(selection); err != nil {
+				return nil, err
+			}
+		}
+		return w, nil
 	}
 	if end > v.Length() {
 		panic(fmt.Sprintf("CloneWindow end %d >= length %d", end, v.Length()))
 	}
-	if v.IsConstNull() {
-		return NewConstNull(v.typ, end-start, mp), nil
-	} else if v.IsConst() {
-		if v.typ.IsVarlen() {
-			return NewConstBytes(v.typ, v.GetBytesAt(0), end-start, mp)
-		} else {
-			vec := NewOffHeapVecWithType(v.typ)
-			vec.class = v.class
-			vec.data = make([]byte, len(v.data))
-			copy(vec.data, v.data)
-			vec.length = end - start
-			vec.cantFreeArea = true
-			vec.cantFreeData = true
-			vec.sorted = v.sorted
-			return vec, nil
+	w := NewOffHeapVecWithType(v.typ)
+	if selection != nil {
+		if err := w.SetAllocationAccount(selection); err != nil {
+			return nil, err
 		}
 	}
-	w := NewOffHeapVecWithType(v.typ)
 	if err := v.CloneWindowTo(w, start, end, mp); err != nil {
+		if mp != nil {
+			w.Free(mp)
+		}
 		return nil, err
 	}
 	return w, nil
@@ -4383,15 +4483,24 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 	} else if v.IsConst() {
 		if v.typ.IsVarlen() {
 			w.class = CONSTANT
-			SetConstBytes(v, v.GetBytesAt(0), end-start, mp)
-			return nil
+			return SetConstBytes(w, v.GetBytesAt(0), end-start, mp)
 		} else {
+			if mp == nil {
+				if w.allocationAccount != nil {
+					return moerr.NewInternalErrorNoCtx(
+						"accounted vector clone does not have a mpool",
+					)
+				}
+				w.data = make([]byte, len(v.data))
+				w.cantFreeData = true
+			} else {
+				if err := w.PreExtend(1, mp); err != nil {
+					return err
+				}
+				copy(w.data, v.data)
+			}
 			w.class = v.class
-			w.data = make([]byte, len(v.data))
-			copy(w.data, v.data)
 			w.length = end - start
-			w.cantFreeArea = true
-			w.cantFreeData = true
 			w.sorted = v.sorted
 			return nil
 		}
@@ -4399,6 +4508,11 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	length := (end - start) * v.typ.TypeSize()
 	if mp == nil {
+		if w.allocationAccount != nil {
+			return moerr.NewInternalErrorNoCtx(
+				"accounted vector clone does not have a mpool",
+			)
+		}
 		w.data = make([]byte, length)
 		copy(w.data, v.data[start*v.typ.TypeSize():end*v.typ.TypeSize()])
 		w.length = end - start
@@ -5482,14 +5596,25 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 	vlen := len(*bs)
 	area1 := vec.GetArea()
 	voff := len(area1)
-	if voff+vlen <= cap(area1) || m == nil {
+	if voff+vlen <= cap(area1) {
+		area1 = append(area1, *bs...)
+		v1.SetOffsetLen(uint32(voff), uint32(vlen))
+		vec.area = area1
+		return nil
+	}
+	if m == nil {
+		if vec.allocationAccount != nil {
+			return moerr.NewInternalErrorNoCtx(
+				"accounted vector area growth does not have a mpool",
+			)
+		}
 		area1 = append(area1, *bs...)
 		v1.SetOffsetLen(uint32(voff), uint32(vlen))
 		vec.area = area1
 		return nil
 	}
 	var err error
-	area1, err = m.Grow2(area1, *bs, voff+vlen, vec.offHeap)
+	area1, err = vec.growArea2(m, *bs, voff+vlen)
 	if err != nil {
 		return err
 	}
@@ -5507,13 +5632,18 @@ func BuildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 	if voff+vlen > cap(area1) && m != nil {
 		// Pass nil to Grow2, we can grow area1 to voff+vlen without
 		// copy bytejson data.
-		area1, err = m.Grow2(area1, nil, voff+vlen, vec.offHeap)
+		area1, err = vec.growArea2(m, nil, voff+vlen)
 		if err != nil {
 			return err
 		}
 		area1[voff] = byte(bj.Type)
 		copy(area1[voff+1:voff+vlen], bj.Data)
 	} else {
+		if voff+vlen > cap(area1) && vec.allocationAccount != nil {
+			return moerr.NewInternalErrorNoCtx(
+				"accounted vector area growth does not have a mpool",
+			)
+		}
 		area1 = append(area1, byte(bj.Type))
 		area1 = append(area1, bj.Data...)
 	}
@@ -5606,7 +5736,7 @@ func BuildVarlenaFromByteJsonEncoded(
 	}
 
 	if int(newAreaLen) > cap(vec.area) {
-		newArea, err := m.Grow2(vec.area, nil, int(newAreaLen), vec.offHeap)
+		newArea, err := vec.growArea2(m, nil, int(newAreaLen))
 		if err != nil {
 			return err
 		}
