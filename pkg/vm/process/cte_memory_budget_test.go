@@ -152,3 +152,28 @@ func TestCTEMemoryBudgetConcurrentCloseAndOverflow(t *testing.T) {
 	require.ErrorIs(t, statementReservation.Resize(context.Background(), 0), ErrCTEMemoryBudgetClosed)
 	statementReservation.Release()
 }
+
+func TestCTEMemoryBudgetNilBoundaries(t *testing.T) {
+	var budget *CTEMemoryBudget
+	reservation, err := budget.Reserve(context.Background(), 1)
+	require.Nil(t, reservation)
+	require.ErrorIs(t, err, ErrCTEMemoryBudgetInvalid)
+
+	budget.Close()
+	limit, used, closed := budget.Snapshot()
+	require.Zero(t, limit)
+	require.Zero(t, used)
+	require.True(t, closed)
+
+	var reservationHandle *CTEMemoryReservation
+	require.ErrorIs(t, reservationHandle.Resize(context.Background(), 1), ErrCTEMemoryReservationInactive)
+	reservationHandle.Release()
+	require.Zero(t, reservationHandle.Bytes())
+	require.Nil(t, reservationHandle.Budget())
+
+	var proc *Process
+	limit, used, closed = proc.GetCTEMemoryBudget().Snapshot()
+	require.Equal(t, DefaultCTEMemoryQuotaBytes, limit)
+	require.Zero(t, used)
+	require.False(t, closed)
+}
