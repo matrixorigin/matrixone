@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -303,6 +304,34 @@ func TestFormatValIntoString_Nil(t *testing.T) {
 
 	require.NoError(t, formatValIntoString(ses, nil, types.New(types.T_varchar, 0, 0), &buf))
 	require.Equal(t, "NULL", buf.String())
+}
+
+func TestFormatValIntoString_FloatLiterals(t *testing.T) {
+	tests := []struct {
+		name string
+		val  any
+		typ  types.Type
+		want string
+	}{
+		{"float32 finite", float32(1.25), types.T_float32.ToType(), "1.25"},
+		{"float32 negative zero", float32(math.Copysign(0, -1)), types.T_float32.ToType(), "-0"},
+		{"float32 NaN", float32(math.NaN()), types.T_float32.ToType(), "cast('NaN' as float)"},
+		{"float32 positive infinity", float32(math.Inf(1)), types.T_float32.ToType(), "cast('+Inf' as float)"},
+		{"float32 negative infinity", float32(math.Inf(-1)), types.T_float32.ToType(), "cast('-Inf' as float)"},
+		{"float64 finite", 1.25, types.T_float64.ToType(), "1.25"},
+		{"float64 negative zero", math.Copysign(0, -1), types.T_float64.ToType(), "-0"},
+		{"float64 NaN", math.NaN(), types.T_float64.ToType(), "cast('NaN' as double)"},
+		{"float64 positive infinity", math.Inf(1), types.T_float64.ToType(), "cast('+Inf' as double)"},
+		{"float64 negative infinity", math.Inf(-1), types.T_float64.ToType(), "cast('-Inf' as double)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, formatValIntoString(&Session{}, tt.val, tt.typ, &buf))
+			require.Equal(t, tt.want, buf.String())
+		})
+	}
 }
 
 func TestFormatValIntoString_DataBranchSpecialTypes(t *testing.T) {

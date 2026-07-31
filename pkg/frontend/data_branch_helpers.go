@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -527,7 +528,15 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.Write(strconv.AppendUint(scratch[:0], v, 10))
 	}
 
-	writeFloat := func(v float64, bitSize int) {
+	writeFloat := func(v float64, bitSize int, sqlType string) {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			buf.WriteString("cast('")
+			buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
+			buf.WriteString("' as ")
+			buf.WriteString(sqlType)
+			buf.WriteByte(')')
+			return
+		}
 		buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
 	}
 
@@ -664,9 +673,9 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	case types.T_int64:
 		writeInt(val.(int64))
 	case types.T_float32:
-		writeFloat(float64(val.(float32)), 32)
+		writeFloat(float64(val.(float32)), 32, "float")
 	case types.T_float64:
-		writeFloat(val.(float64), 64)
+		writeFloat(val.(float64), 64, "double")
 	case types.T_array_float32:
 		buf.WriteString("'")
 		buf.WriteString(types.ArrayToString[float32](val.([]float32)))
