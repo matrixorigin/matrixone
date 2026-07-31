@@ -105,6 +105,8 @@ enum CmdMethod {
   ISCPDrainConsumer = 37;
   // IcebergCacheInvalidate invalidates Iceberg metadata/manifest cache after commit.
   IcebergCacheInvalidate = 38;
+  // MongoDBClientRetire drains obsolete MongoDB driver clients after catalog DDL.
+  MongoDBClientRetire = 39;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -247,6 +249,7 @@ message Request {
   CtlPrefetchOnSubscribedRequest CtlPrefetchOnSubscribedRequest = 38;
   ISCPDrainConsumerRequest ISCPDrainConsumerRequest = 39;
   IcebergCacheInvalidateRequest IcebergCacheInvalidateRequest = 40 [ (gogoproto.nullable) = false ];
+  MongoDBClientRetireRequest MongoDBClientRetireRequest = 41 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -314,6 +317,7 @@ message Response {
   CtlPrefetchOnSubscribedResponse CtlPrefetchOnSubscribedResponse = 39;
   ISCPDrainConsumerResponse ISCPDrainConsumerResponse = 40;
   IcebergCacheInvalidateResponse IcebergCacheInvalidateResponse = 41 [ (gogoproto.nullable) = false ];
+  MongoDBClientRetireResponse MongoDBClientRetireResponse = 42 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -724,4 +728,16 @@ message WorkspaceThresholdResponse {
 message MinTimestampResponse {
   // LatestCommitTS update latest commit ts.
   timestamp.Timestamp MinTimestamp = 1 [(gogoproto.nullable) = false];
+}
+
+message MongoDBClientRetireRequest {
+  uint32 AccountID = 1;
+  // Zero retires every MongoDB client for AccountID.
+  uint64 ConnectionID = 2;
+  // Zero retires the whole connection; otherwise generations below this value.
+  uint64 VersionExclusive = 3;
+}
+
+message MongoDBClientRetireResponse {
+  bool Success = 1;
 }

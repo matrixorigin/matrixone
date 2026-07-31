@@ -1,0 +1,93 @@
+drop database if exists time_window_gapfill_bvt;
+create database time_window_gapfill_bvt;
+use time_window_gapfill_bvt;
+create table readings(pump varchar(8), ts datetime, value int);
+insert into readings values
+('p1', '2026-01-01 10:00:00', 1),
+('p1', '2026-01-01 10:02:00', 3),
+('p2', '2026-01-01 11:00:00', 7),
+('p3', '2026-01-01 23:59:00', 10),
+('p3', '2026-01-02 00:01:00', 30);
+select pump, _wstart, _wend, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition)
+order by pump, _wstart;
+➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+p1  ¦  2026-01-01 10:00:00  ¦  2026-01-01 10:01:00  ¦  1  𝄀
+p1  ¦  2026-01-01 10:01:00  ¦  2026-01-01 10:02:00  ¦  null  𝄀
+p1  ¦  2026-01-01 10:02:00  ¦  2026-01-01 10:03:00  ¦  3  𝄀
+p2  ¦  2026-01-01 11:00:00  ¦  2026-01-01 11:01:00  ¦  7  𝄀
+p3  ¦  2026-01-01 23:59:00  ¦  2026-01-02 00:00:00  ¦  10  𝄀
+p3  ¦  2026-01-02 00:00:00  ¦  2026-01-02 00:01:00  ¦  null  𝄀
+p3  ¦  2026-01-02 00:01:00  ¦  2026-01-02 00:02:00  ¦  30
+select pump, _wstart, coalesce(count(*), 0) as reading_count
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(null)
+order by pump, _wstart;
+➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  reading_count[-5,64,0]  𝄀
+p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
+p1  ¦  2026-01-01 10:01:00  ¦  0  𝄀
+p1  ¦  2026-01-01 10:02:00  ¦  1  𝄀
+p2  ¦  2026-01-01 11:00:00  ¦  1  𝄀
+p3  ¦  2026-01-01 23:59:00  ¦  1  𝄀
+p3  ¦  2026-01-02 00:00:00  ¦  0  𝄀
+p3  ¦  2026-01-02 00:01:00  ¦  1
+select pump, _wstart, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(value, 99)
+order by pump, _wstart;
+➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
+p1  ¦  2026-01-01 10:01:00  ¦  99  𝄀
+p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
+p2  ¦  2026-01-01 11:00:00  ¦  7  𝄀
+p3  ¦  2026-01-01 23:59:00  ¦  10  𝄀
+p3  ¦  2026-01-02 00:00:00  ¦  99  𝄀
+p3  ¦  2026-01-02 00:01:00  ¦  30
+select pump, _wstart, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(prev)
+order by pump, _wstart;
+➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
+p1  ¦  2026-01-01 10:01:00  ¦  1  𝄀
+p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
+p2  ¦  2026-01-01 11:00:00  ¦  7  𝄀
+p3  ¦  2026-01-01 23:59:00  ¦  10  𝄀
+p3  ¦  2026-01-02 00:00:00  ¦  10  𝄀
+p3  ¦  2026-01-02 00:01:00  ¦  30
+select pump, _wstart, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(next)
+order by pump, _wstart;
+➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
+p1  ¦  2026-01-01 10:01:00  ¦  3  𝄀
+p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
+p2  ¦  2026-01-01 11:00:00  ¦  7  𝄀
+p3  ¦  2026-01-01 23:59:00  ¦  10  𝄀
+p3  ¦  2026-01-02 00:00:00  ¦  30  𝄀
+p3  ¦  2026-01-02 00:01:00  ¦  30
+select pump, _wstart, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by pump, _wstart;
+➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
+p1  ¦  2026-01-01 10:01:00  ¦  2  𝄀
+p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
+p2  ¦  2026-01-01 11:00:00  ¦  7  𝄀
+p3  ¦  2026-01-01 23:59:00  ¦  10  𝄀
+p3  ¦  2026-01-02 00:00:00  ¦  20  𝄀
+p3  ¦  2026-01-02 00:01:00  ¦  30
+select pump, _wstart, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) fill(null)
+order by pump, _wstart;
+➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[-5,64,0]  𝄀
+p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
+p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
+p2  ¦  2026-01-01 11:00:00  ¦  7  𝄀
+p3  ¦  2026-01-01 23:59:00  ¦  10  𝄀
+p3  ¦  2026-01-02 00:01:00  ¦  30
+drop database time_window_gapfill_bvt;

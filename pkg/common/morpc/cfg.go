@@ -76,7 +76,7 @@ type Config struct {
 	// idle backends, not the idle timeout (which is controlled by MaxIdleDuration).
 	GCIdleCheckInterval toml.Duration `toml:"gc-idle-check-interval"`
 	// GCChannelBufferSize buffer size for GC task channels (gcInactiveC and createC).
-	// Default is 1024. When channel is full, requests are dropped to avoid blocking.
+	// Default is 4096. When channel is full, requests are dropped to avoid blocking.
 	GCChannelBufferSize int `toml:"gc-channel-buffer-size"`
 
 	// BackendOptions extra backend options

@@ -60,6 +60,169 @@ func TestCloseLocalLockTable(t *testing.T) {
 	)
 }
 
+func TestCloseLocalLockTableNotifiesOutsideTableMutex(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			reuse.RunReuseTests(func() {
+				logger := getLogger("")
+				events := newWaiterEvents(1, nil, nil, time.Hour, nil, logger)
+				// A one-element queue makes the old close -> eventC -> worker ->
+				// table mutex cycle deterministic with only three waiters.
+				events.eventC = make(chan *lockContext, 1)
+				events.start()
+
+				lt := newLocalLockTable(
+					pb.LockTable{Table: 1, ServiceID: "test"},
+					nil,
+					events,
+					rt.Clock(),
+					nil,
+					logger,
+				).(*localLockTable)
+
+				lock := newRowLock(logger, &lockContext{
+					waitTxn: pb.WaitTxn{TxnID: []byte("holder")},
+					opts: LockOptions{LockOptions: pb.LockOptions{
+						Mode: pb.LockMode_Exclusive,
+					}},
+				})
+				handled := make(chan struct{}, 3)
+				waiters := make([]*waiter, 0, 3)
+				for i := 0; i < 3; i++ {
+					w := acquireWaiter(
+						pb.WaitTxn{TxnID: []byte(fmt.Sprintf("waiter-%d", i))},
+						"test",
+						logger,
+					)
+					w.setStatus(blocking)
+					w.event = event{
+						c: &lockContext{
+							txn: &activeTxn{RWMutex: &sync.RWMutex{}},
+							lockFunc: func(_ *lockContext, _ bool) {
+								// The real terminal async path re-enters l.mu while
+								// removing the notified waiter.
+								lt.mu.Lock()
+								lt.mu.Unlock()
+								handled <- struct{}{}
+							},
+						},
+						eventC: events.eventC,
+					}
+					lock.addWaiter(logger, w)
+					waiters = append(waiters, w)
+				}
+				lt.mu.store.Add([]byte{1}, lock)
+
+				closed := make(chan struct{})
+				go func() {
+					lt.close(closeReasonServiceClose)
+					close(closed)
+				}()
+				select {
+				case <-closed:
+				case <-time.After(5 * time.Second):
+					t.Fatal("local lock table close deadlocked with a full waiter event queue")
+				}
+				for _, w := range waiters {
+					require.ErrorIs(t, w.mustRecvNotification(logger).err, ErrLockTableNotFound)
+					w.close("test", logger)
+				}
+
+				events.close()
+				require.Len(t, handled, 3)
+				lt.mu.RLock()
+				require.True(t, lt.mu.closed)
+				require.Zero(t, lt.mu.store.Len())
+				lt.mu.RUnlock()
+			})
+		},
+	)
+}
+
+func TestRemoveLocalLockTableClosesOutsideHolderMutex(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			reuse.RunReuseTests(func() {
+				logger := getLogger("")
+				events := newWaiterEvents(1, nil, nil, time.Hour, nil, logger)
+				events.eventC = make(chan *lockContext, 1)
+				events.start()
+
+				lt := newLocalLockTable(
+					pb.LockTable{Table: 1, ServiceID: "test"},
+					nil,
+					events,
+					rt.Clock(),
+					nil,
+					logger,
+				).(*localLockTable)
+				holder := &lockTableHolder{
+					tables: map[uint64]lockTable{1: lt},
+				}
+				holders := &lockTableHolders{
+					holders: map[uint32]*lockTableHolder{0: holder},
+				}
+
+				lock := newRowLock(logger, &lockContext{
+					waitTxn: pb.WaitTxn{TxnID: []byte("holder")},
+					opts: LockOptions{LockOptions: pb.LockOptions{
+						Mode: pb.LockMode_Exclusive,
+					}},
+				})
+				handled := make(chan struct{}, 3)
+				waiters := make([]*waiter, 0, 3)
+				for i := 0; i < 3; i++ {
+					w := acquireWaiter(
+						pb.WaitTxn{TxnID: []byte(fmt.Sprintf("waiter-%d", i))},
+						"test",
+						logger,
+					)
+					w.setStatus(blocking)
+					w.event = event{
+						c: &lockContext{
+							txn: &activeTxn{RWMutex: &sync.RWMutex{}},
+							lockFunc: func(_ *lockContext, _ bool) {
+								// A real completion callback validates that its
+								// table is still current through this holder.
+								_ = holder.get(1)
+								handled <- struct{}{}
+							},
+						},
+						eventC: events.eventC,
+					}
+					lock.addWaiter(logger, w)
+					waiters = append(waiters, w)
+				}
+				lt.mu.store.Add([]byte{1}, lock)
+
+				removed := make(chan int, 1)
+				go func() {
+					removed <- holders.removeWithFilter(
+						func(_ uint64, _ lockTable) bool { return true },
+						closeReasonServiceClose,
+					)
+				}()
+				select {
+				case count := <-removed:
+					require.Equal(t, 1, count)
+				case <-time.After(5 * time.Second):
+					t.Fatal("table close retained the holder mutex while the waiter queue was full")
+				}
+				for _, w := range waiters {
+					require.ErrorIs(t, w.mustRecvNotification(logger).err, ErrLockTableNotFound)
+					w.close("test", logger)
+				}
+
+				events.close()
+				require.Len(t, handled, 3)
+				require.Nil(t, holder.get(1))
+			})
+		},
+	)
+}
+
 func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 	runLockServiceTests(
 		t,
