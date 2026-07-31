@@ -173,7 +173,11 @@ func (v *Vector) Length() int {
 }
 
 func (v *Vector) Capacity() int {
-	return cap(v.data) / v.typ.TypeSize()
+	typeSize := v.typ.TypeSize()
+	if typeSize == 0 {
+		return 0
+	}
+	return cap(v.data) / typeSize
 }
 
 // Allocated returns the total allocated memory size of the vector.

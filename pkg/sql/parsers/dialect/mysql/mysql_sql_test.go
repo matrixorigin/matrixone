@@ -83,6 +83,38 @@ func TestDropFunctionIfExists(t *testing.T) {
 	}
 }
 
+func TestQuantifiedTableSubqueryParse(t *testing.T) {
+	tests := []struct {
+		sql  string
+		want string
+	}{
+		{
+			sql:  "select 1 where 1 = any (table tv)",
+			want: "select * from tv",
+		},
+		{
+			sql:  "select 1 where 1 = any (table tv order by v desc limit 1)",
+			want: "select * from tv order by v desc limit 1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt := stmt.(*tree.Select)
+			where := selectStmt.Select.(*tree.SelectClause).Where
+			comparison := where.Expr.(*tree.ComparisonExpr)
+			subquery := comparison.Right.(*tree.Subquery)
+			parenSelect := subquery.Select.(*tree.ParenSelect)
+
+			require.Equal(t, test.want, tree.String(parenSelect.Select, dialect.MYSQL))
+		})
+	}
+}
+
 func TestSQLModeParserModes(t *testing.T) {
 	t.Run("ansi quotes changes double quoted token from string to identifier", func(t *testing.T) {
 		stmt, err := ParseOneWithSQLMode(context.Background(), `select "abc"`, 1, "")

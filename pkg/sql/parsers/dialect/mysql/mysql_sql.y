@@ -674,7 +674,7 @@ func sqlTaskInt64(v any) int64 {
 %type <diffOutputOpt> diff_output_opt
 
 %type <select> select_stmt select_no_parens replace_table_source
-%type <selectStatement> simple_select select_with_parens simple_select_clause
+%type <selectStatement> simple_select select_with_parens simple_select_clause table_query_subquery table_query_expr table_query_term table_query_primary values_query_subquery values_query_expr values_query_term values_query_primary
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
 %type <selectOptions> select_options_opt select_option_list
@@ -6624,19 +6624,14 @@ select_with_parens:
     {
         $$ = &tree.ParenSelect{Select: &tree.Select{Select: $2}}
     }
-|   '(' values_stmt ')'
+|   values_query_subquery
     {
-        valuesStmt := $2.(*tree.ValuesStatement);
-        $$ = &tree.ParenSelect{Select: &tree.Select {
-            Select: &tree.ValuesClause {
-                Rows: valuesStmt.Rows,
-                RowWord: true,
-            },
-            OrderBy: valuesStmt.OrderBy,
-            Limit:   valuesStmt.Limit,
-        }}
+        $$ = $1
     }
-
+|   table_query_subquery
+    {
+        $$ = $1
+    }
 simple_select:
     simple_select_clause
     {
@@ -6681,6 +6676,102 @@ simple_select:
             All: $2.All,
             Distinct: $2.Distinct,
         }
+    }
+|   simple_select union_op table_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+|   select_with_parens union_op table_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+|   simple_select union_op values_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+|   select_with_parens union_op values_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+// TABLE is a query term in MySQL. Keep it separate from replace_table_source,
+// and preserve top-level VALUES as the existing ValuesStatement AST.
+table_query_subquery:
+    '(' table_query_expr order_by_opt limit_opt ')'
+    {
+        $$ = &tree.ParenSelect{Select: tree.NewSelect($2, $3, $4)}
+    }
+
+table_query_expr:
+    table_query_primary
+    {
+        $$ = $1
+    }
+|   table_query_expr union_op table_query_term
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+
+table_query_primary:
+    TABLE table_name
+    {
+        $$ = makeSelectStarFromTable($2)
+    }
+table_query_term:
+    simple_select_clause
+    {
+        $$ = $1
+    }
+|   table_query_primary
+    {
+        $$ = $1
+    }
+|   select_with_parens
+    {
+        $$ = $1
+    }
+|   VALUES row_constructor_list
+    {
+        $$ = &tree.ValuesClause{Rows: $2, RowWord: true}
+    }
+
+values_query_subquery:
+    '(' values_query_expr order_by_opt limit_opt ')'
+    {
+        $$ = &tree.ParenSelect{Select: tree.NewSelect($2, $3, $4)}
+    }
+
+values_query_expr:
+    values_query_primary
+    {
+        $$ = $1
+    }
+|   values_query_expr union_op values_query_term
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+
+values_query_primary:
+    VALUES row_constructor_list
+    {
+        $$ = &tree.ValuesClause{Rows: $2, RowWord: true}
+    }
+
+values_query_term:
+    simple_select_clause
+    {
+        $$ = $1
+    }
+|   values_query_primary
+    {
+        $$ = $1
+    }
+|   table_query_primary
+    {
+        $$ = $1
+    }
+|   select_with_parens
+    {
+        $$ = $1
     }
 
 union_op:
