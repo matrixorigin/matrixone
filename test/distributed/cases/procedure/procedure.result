@@ -95,6 +95,33 @@ select @id;
 1000
 drop procedure test_inout_param;
 
+drop table if exists t_prepare_inside;
+create table t_prepare_inside (id int primary key, v int);
+insert into t_prepare_inside values (1, 10), (2, 20), (3, 30);
+drop procedure if exists test_prepare_literal;
+create procedure test_prepare_literal() 'begin prepare s from ''select sum(v) as prep_sum from t_prepare_inside''; execute s; deallocate prepare s; end';
+call test_prepare_literal();
+prep_sum
+60
+drop procedure test_prepare_literal;
+drop procedure if exists test_prepare_user_var;
+create procedure test_prepare_user_var() 'begin set @sql = ''select sum(v) as prep_sum from t_prepare_inside''; prepare s from @sql; execute s; deallocate prepare s; end';
+call test_prepare_user_var();
+prep_sum
+60
+drop procedure test_prepare_user_var;
+drop procedure if exists test_prepare_using;
+create procedure test_prepare_using() 'begin set @left_arg = 20; set @right_arg = 40; prepare s from ''select ? + ? as prep_sum''; execute s using @left_arg, @right_arg; end';
+call test_prepare_using();
+prep_sum
+60
+execute s using @left_arg, @right_arg;
+prep_sum
+60
+deallocate prepare s;
+drop procedure test_prepare_using;
+drop table t_prepare_inside;
+
 drop procedure if exists test_temp_table_lifecycle;
 create procedure test_temp_table_lifecycle() 'begin create temporary table tmp_proc_lifecycle (id int primary key, v int); insert into tmp_proc_lifecycle select id, val from tbh1 where id <= 2; select sum(v) as tmp_sum from tmp_proc_lifecycle; drop table tmp_proc_lifecycle; end';
 call test_temp_table_lifecycle();
