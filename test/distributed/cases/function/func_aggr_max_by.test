@@ -1,0 +1,37 @@
+drop database if exists max_by_bvt;
+create database max_by_bvt;
+use max_by_bvt;
+
+create table readings(grp int, value varchar(20), ts bigint, tie varchar(20));
+insert into readings values
+    (1, 'older', 10, 'a'),
+    (1, null, 11, 'b'),
+    (1, 'latest-tie-a', 12, 'a'),
+    (1, 'latest-tie-z', 12, 'z'),
+    (2, null, 2, 'b'),
+    (2, 'kept', 1, 'a'),
+    (3, 'alpha', 5, 'same'),
+    (3, 'beta', 5, 'same'),
+    (4, 'ignored-null-order', null, 'z');
+
+select grp,
+       max_by(value, ts, tie) as latest_value,
+       max_by_non_null(value, ts, tie) as latest_non_null_value
+from readings
+group by grp
+order by grp;
+
+create table window_readings(pump varchar(8), ts datetime, tie varchar(20), value varchar(20));
+insert into window_readings values
+    ('p1', '2026-01-01 10:00:05', 'a', 'first'),
+    ('p1', '2026-01-01 10:00:05', 'z', null),
+    ('p1', '2026-01-01 10:02:05', 'a', 'last');
+
+select pump, _wstart,
+       max_by(value, ts, tie) as latest_value,
+       max_by_non_null(value, ts, tie) as latest_non_null_value
+from window_readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(null)
+order by pump, _wstart;
+
+drop database max_by_bvt;

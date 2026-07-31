@@ -106,6 +106,7 @@ type Rewrite struct {
 type TimeWindow struct {
 	Interval *Interval
 	Sliding  *Sliding
+	GapFill  bool
 	Fill     *Fill
 }
 
@@ -114,6 +115,9 @@ func (node *TimeWindow) Format(ctx *FmtCtx) {
 	if node.Sliding != nil {
 		ctx.WriteByte(' ')
 		node.Sliding.Format(ctx)
+	}
+	if node.GapFill {
+		ctx.WriteString(" gapfill(partition)")
 	}
 	if node.Fill != nil {
 		ctx.WriteByte(' ')
