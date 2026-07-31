@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/big"
 	"slices"
@@ -27,8 +29,11 @@ import (
 
 	"github.com/itchyny/gojq"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -72,6 +77,13 @@ func (op *opBuiltInJq) tryJq(params []*vector.Vector, result vector.FunctionResu
 func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList,
 	isTry bool) error {
+	var scratchOutput functionScratchOutput
+	if result.HasFunctionScratch() {
+		scratchOutput.result = result
+		op.enc.useWriter(&scratchOutput)
+		defer op.enc.restoreWriter()
+	}
+
 	p1 := vector.GenerateFunctionStrParameter(params[0])
 	p2 := vector.GenerateFunctionStrParameter(params[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -95,14 +107,16 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 				err = op.jqImpl(v1, code)
 			}
 			if err != nil {
-				if isTry {
+				if isTry && !isJqOutputError(err) {
 					rs.AddNullRange(0, uint64(length))
 					return nil
 				} else {
 					return err
 				}
 			}
-			rs.AppendBytes(op.enc.bytes(), false)
+			if err := rs.AppendBytes(op.enc.bytes(), false); err != nil {
+				return err
+			}
 			op.enc.done()
 		}
 		return nil
@@ -117,20 +131,26 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 			for i := uint64(0); i < uint64(length); i++ {
 				v2, null2 := p2.GetStrValue(i)
 				if null2 || selectList.Contains(i) {
-					rs.AppendBytes(nil, true)
+					if err := rs.AppendBytes(nil, true); err != nil {
+						return err
+					}
 				} else {
 					code, err := op.getJqCode(string(v2))
 					if err == nil {
 						err = op.jqImpl(v1, code)
 					}
 					if err != nil {
-						if isTry {
-							rs.AppendBytes(nil, true)
+						if isTry && !isJqOutputError(err) {
+							if err := rs.AppendBytes(nil, true); err != nil {
+								return err
+							}
 						} else {
 							return err
 						}
 					} else {
-						rs.AppendBytes(op.enc.bytes(), false)
+						if err := rs.AppendBytes(op.enc.bytes(), false); err != nil {
+							return err
+						}
 						op.enc.done()
 					}
 				}
@@ -157,17 +177,23 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 || selectList.Contains(i) {
-				rs.AppendBytes(nil, true)
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
 			} else {
 				err = op.jqImpl(v1, code)
 				if err != nil {
-					if isTry {
-						rs.AppendBytes(nil, true)
+					if isTry && !isJqOutputError(err) {
+						if err := rs.AppendBytes(nil, true); err != nil {
+							return err
+						}
 					} else {
 						return err
 					}
 				} else {
-					rs.AppendBytes(op.enc.bytes(), false)
+					if err := rs.AppendBytes(op.enc.bytes(), false); err != nil {
+						return err
+					}
 					op.enc.done()
 				}
 			}
@@ -178,7 +204,9 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			if null1 || null2 || selectList.Contains(i) {
-				rs.AppendBytes(nil, true)
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
 			} else {
 				code, err := op.getJqCode(string(v2))
 				if err == nil {
@@ -186,14 +214,18 @@ func (op *opBuiltInJq) tryJqImpl(params []*vector.Vector, result vector.Function
 				}
 
 				if err != nil {
-					if isTry {
-						rs.AppendBytes(nil, true)
+					if isTry && !isJqOutputError(err) {
+						if err := rs.AppendBytes(nil, true); err != nil {
+							return err
+						}
 						// continue
 					} else {
 						return err
 					}
 				} else {
-					rs.AppendBytes(op.enc.bytes(), false)
+					if err := rs.AppendBytes(op.enc.bytes(), false); err != nil {
+						return err
+					}
 					op.enc.done()
 				}
 			}
@@ -267,17 +299,160 @@ func (op *opBuiltInJq) getJqCode(jq string) (*gojq.Code, error) {
 // We removed all the terminal color related code and we write to buffer w
 // and do not flush until the encoding is done.
 type JqEncoder struct {
-	w      bytes.Buffer
+	legacy jqLegacyOutput
+	w      jqOutput
 	tab    bool
 	indent int
 	depth  int
 	buf    [64]byte
 }
 
+type jqOutputError struct {
+	err error
+}
+
+func (e *jqOutputError) Error() string { return e.err.Error() }
+func (e *jqOutputError) Unwrap() error { return e.err }
+
+func isJqOutputError(err error) bool {
+	var outputErr *jqOutputError
+	return errors.As(err, &outputErr)
+}
+
+type jqOutput interface {
+	formatBuffer
+	Bytes() []byte
+	Len() int
+	Reset()
+	Err() error
+}
+
+type jqLegacyOutput struct {
+	bytes.Buffer
+}
+
+func (*jqLegacyOutput) Err() error { return nil }
+
+type functionScratchOutput struct {
+	result  vector.FunctionResultWrapper
+	data    []byte
+	written int
+	err     error
+}
+
+func (w *functionScratchOutput) ensure(required int) error {
+	if w.err != nil {
+		return w.err
+	}
+	if required < 0 {
+		w.err = mpool.ErrAllocationAccountInvalid
+		return w.err
+	}
+	if required <= cap(w.data) {
+		w.data = w.data[:required]
+		return nil
+	}
+	capacity, ok := mpool.GrowCapacity(int64(cap(w.data)), int64(required))
+	if !ok || capacity > int64(math.MaxInt) {
+		w.err = mpool.ErrAllocationAccountInvalid
+		return w.err
+	}
+	data, selected, err := w.result.ResizeFunctionScratch(int(capacity))
+	if err != nil {
+		w.err = err
+		return err
+	}
+	if !selected {
+		w.err = mpool.ErrAllocationAccountInvalid
+		return w.err
+	}
+	w.data = data[:required]
+	return nil
+}
+
+func (w *functionScratchOutput) Write(value []byte) (int, error) {
+	if len(value) > math.MaxInt-w.written {
+		w.err = io.ErrShortBuffer
+		return 0, w.err
+	}
+	if err := w.ensure(w.written + len(value)); err != nil {
+		return 0, err
+	}
+	copy(w.data[w.written:], value)
+	w.written += len(value)
+	return len(value), nil
+}
+
+func (w *functionScratchOutput) WriteString(value string) (int, error) {
+	if len(value) > math.MaxInt-w.written {
+		w.err = io.ErrShortBuffer
+		return 0, w.err
+	}
+	if err := w.ensure(w.written + len(value)); err != nil {
+		return 0, err
+	}
+	copy(w.data[w.written:], value)
+	w.written += len(value)
+	return len(value), nil
+}
+
+func (w *functionScratchOutput) WriteByte(value byte) error {
+	if w.written == math.MaxInt {
+		w.err = io.ErrShortBuffer
+		return w.err
+	}
+	if err := w.ensure(w.written + 1); err != nil {
+		return err
+	}
+	w.data[w.written] = value
+	w.written++
+	return nil
+}
+
+func (w *functionScratchOutput) WriteRune(value rune) (int, error) {
+	var encoded [utf8.UTFMax]byte
+	size := utf8.EncodeRune(encoded[:], value)
+	return w.Write(encoded[:size])
+}
+
+func (w *functionScratchOutput) Grow(size int) {
+	if size < 0 || size > math.MaxInt-w.written {
+		w.err = io.ErrShortBuffer
+		return
+	}
+	_ = w.ensure(w.written + size)
+}
+
+func (w *functionScratchOutput) Bytes() []byte {
+	return w.data[:w.written]
+}
+
+func (w *functionScratchOutput) Len() int { return w.written }
+
+func (w *functionScratchOutput) Reset() {
+	w.data = w.data[:0]
+	w.written = 0
+	w.err = nil
+}
+
+func (w *functionScratchOutput) Err() error { return w.err }
+
 func (e *JqEncoder) intialize(tab bool, indent int) {
-	e.w.Reset()
+	e.legacy.Reset()
+	e.w = &e.legacy
 	e.tab = tab
 	e.indent = indent
+}
+
+func (e *JqEncoder) useWriter(w jqOutput) {
+	e.w = w
+	e.done()
+}
+
+func (e *JqEncoder) restoreWriter() {
+	e.done()
+	e.w = &e.legacy
+	e.legacy.Reset()
 }
 
 func (e *JqEncoder) bytes() []byte {
@@ -286,6 +461,13 @@ func (e *JqEncoder) bytes() []byte {
 func (e *JqEncoder) done() {
 	e.w.Reset()
 	e.depth = 0
+}
+
+func (e *JqEncoder) err() error {
+	if err := e.w.Err(); err != nil {
+		return &jqOutputError{err: err}
+	}
+	return nil
 }
 
 func (e *JqEncoder) encode(v any) error {
@@ -317,7 +499,7 @@ func (e *JqEncoder) encode(v any) error {
 	default:
 		panic(fmt.Sprintf("invalid type: %[1]T (%[1]v)", v))
 	}
-	return nil
+	return e.err()
 }
 
 // ref: floatEncoder in encoding/json
@@ -348,16 +530,22 @@ func (e *JqEncoder) encodeFloat64(f float64) {
 
 // ref: encodeState#string in encoding/json
 func (e *JqEncoder) encodeString(s string) {
+	e.encodeBytes(functionUtil.QuickStrToBytes(s))
+}
+
+// encodeBytes preserves JSON_ROW's legacy replacement behavior for invalid
+// UTF-8 while avoiding a per-row []byte-to-string allocation.
+func (e *JqEncoder) encodeBytes(value []byte) {
 	e.w.WriteByte('"')
 	start := 0
-	for i := 0; i < len(s); {
-		if b := s[i]; b < utf8.RuneSelf {
+	for i := 0; i < len(value); {
+		if b := value[i]; b < utf8.RuneSelf {
 			if ' ' <= b && b <= '~' && b != '"' && b != '\\' {
 				i++
 				continue
 			}
 			if start < i {
-				e.w.WriteString(s[start:i])
+				e.w.Write(value[start:i])
 			}
 			switch b {
 			case '"':
@@ -384,20 +572,20 @@ func (e *JqEncoder) encodeString(s string) {
 			start = i
 			continue
 		}
-		c, size := utf8.DecodeRuneInString(s[i:])
+		c, size := utf8.DecodeRune(value[i:])
 		if c == utf8.RuneError && size == 1 {
 			if start < i {
-				e.w.WriteString(s[start:i])
+				e.w.Write(value[start:i])
 			}
 			e.w.WriteString(`\ufffd`)
-			i += size
+			i++
 			start = i
 			continue
 		}
 		i += size
 	}
-	if start < len(s) {
-		e.w.WriteString(s[start:])
+	if start < len(value) {
+		e.w.Write(value[start:])
 	}
 	e.w.WriteByte('"')
 }
@@ -476,16 +664,10 @@ func (e *JqEncoder) writeIndent() {
 }
 
 func (e *JqEncoder) writeIndentInternal(n int, spaces string) {
-	if l := len(spaces); n <= l {
-		e.w.WriteString(spaces[:n])
-	} else {
-		e.w.WriteString(spaces)
-		for n -= l; n > 0; n, l = n-l, l*2 {
-			if n < l {
-				l = n
-			}
-			e.w.Write(e.w.Bytes()[e.w.Len()-l:])
-		}
+	for n > 0 {
+		length := min(n, len(spaces))
+		e.w.WriteString(spaces[:length])
+		n -= length
 	}
 }
 
@@ -502,6 +684,13 @@ func newOpBuiltInJsonRow() *opBuiltInJsonRow {
 
 func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
+	var scratchOutput functionScratchOutput
+	if result.HasFunctionScratch() {
+		scratchOutput.result = result
+		op.enc.useWriter(&scratchOutput)
+		defer op.enc.restoreWriter()
+	}
+
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	if cap(op.columns) < len(params) {
 		op.columns = make([]jsonRowColumnEncoder, len(params))
@@ -537,6 +726,9 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 			}
 		}
 		op.enc.w.WriteByte(']')
+		if err := op.enc.err(); err != nil {
+			return err
+		}
 		if err := rs.AppendBytes(op.enc.bytes(), false); err != nil {
 			return err
 		}
@@ -634,12 +826,7 @@ func prepareJSONRowColumn(
 			if isNull {
 				return encodeJSONRowNull(e, row)
 			}
-			jsonValue, err := types.DecodeJson(value).MarshalJSON()
-			if err != nil {
-				return err
-			}
-			e.w.Write(jsonValue)
-			return nil
+			return bytejson.WriteJSONText(e.w, types.DecodeJson(value))
 		}, nil
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		return nil, moerr.NewInvalidInputf(proc.Ctx,
@@ -730,8 +917,8 @@ func prepareJSONRowStringColumn(v *vector.Vector) jsonRowColumnEncoder {
 		if isNull {
 			return encodeJSONRowNull(e, row)
 		}
-		e.encodeString(string(value))
-		return nil
+		e.encodeBytes(value)
+		return e.err()
 	}
 }
 

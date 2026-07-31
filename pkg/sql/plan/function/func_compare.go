@@ -1581,7 +1581,7 @@ func operatorOpInt64Uint64Fn(
 
 func operatorOpStrFn(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	fn func([]byte, []byte) ([]byte, error)) error {
+	fn func([]byte, []byte, []byte)) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -1593,11 +1593,14 @@ func operatorOpStrFn(
 				return err
 			}
 		} else {
-			rv, err := fn(v1, v2)
-			if err != nil {
-				return err
+			if len(v1) != len(v2) {
+				return moerr.NewInternalErrorNoCtx(
+					"Binary operands of bitwise operators must be of equal length",
+				)
 			}
-			if err = rs.AppendBytes(rv, false); err != nil {
+			if err := rs.AppendBytesWithFill(len(v1), func(dst []byte) {
+				fn(dst, v1, v2)
+			}); err != nil {
 				return err
 			}
 		}
@@ -1622,15 +1625,10 @@ func operatorOpBitAndInt64Uint64Fn(parameters []*vector.Vector, result vector.Fu
 }
 
 func operatorOpBitAndStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
-		if len(i) != len(i2) {
-			return nil, moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+	return operatorOpStrFn(parameters, result, proc, length, func(dst, left, right []byte) {
+		for idx := range dst {
+			dst[idx] = left[idx] & right[idx]
 		}
-		rv := make([]byte, len(i))
-		for j := range rv {
-			rv[j] = i[j] & i2[j]
-		}
-		return rv, nil
 	})
 }
 
@@ -1651,15 +1649,10 @@ func operatorOpBitXorInt64Uint64Fn(parameters []*vector.Vector, result vector.Fu
 }
 
 func operatorOpBitXorStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
-		if len(i) != len(i2) {
-			return nil, moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+	return operatorOpStrFn(parameters, result, proc, length, func(dst, left, right []byte) {
+		for idx := range dst {
+			dst[idx] = left[idx] ^ right[idx]
 		}
-		rv := make([]byte, len(i))
-		for j := range rv {
-			rv[j] = i[j] ^ i2[j]
-		}
-		return rv, nil
 	})
 }
 
@@ -1680,15 +1673,10 @@ func operatorOpBitOrInt64Uint64Fn(parameters []*vector.Vector, result vector.Fun
 }
 
 func operatorOpBitOrStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
-		if len(i) != len(i2) {
-			return nil, moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+	return operatorOpStrFn(parameters, result, proc, length, func(dst, left, right []byte) {
+		for idx := range dst {
+			dst[idx] = left[idx] | right[idx]
 		}
-		rv := make([]byte, len(i))
-		for j := range rv {
-			rv[j] = i[j] | i2[j]
-		}
-		return rv, nil
 	})
 }
 

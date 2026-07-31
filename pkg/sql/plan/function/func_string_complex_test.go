@@ -838,8 +838,8 @@ func Test_EncodeCharBytes(t *testing.T) {
 		{math.MinInt64, []byte{0x00}},
 	}
 	for _, c := range cases {
-		got := encodeCharBytes(c.input)
-		require.Equal(t, c.want, got, "encodeCharBytes(%d)", c.input)
+		got := appendCharBytes(nil, c.input)
+		require.Equal(t, c.want, got, "appendCharBytes(%d)", c.input)
 	}
 }
 

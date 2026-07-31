@@ -77,6 +77,7 @@ func testBatchArrayDistanceSync[T types.RealNumbers](
 		m,
 		nil,
 		make([]float32, length),
+		nil,
 	)
 }
 
@@ -109,6 +110,7 @@ func BenchmarkBatchArrayDistanceSync8192(b *testing.B) {
 			metric.Metric_L2sqDistance,
 			nil,
 			distScratch,
+			nil,
 		)
 		require.NoError(b, err)
 		require.True(b, ok)

@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"math/big"
 	"math/bits"
@@ -33,12 +34,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3684,7 +3687,7 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	}
 
 	//format := "%b %D %M"   -> []func{func1,func2,  func3}
-	var buf bytes.Buffer
+	var legacy bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		d, null1 := dates.GetValue(i)
 		if null1 || null2 {
@@ -3692,15 +3695,19 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 				return err
 			}
 		} else {
-			buf.Reset()
 			var isNull bool
-			if isNull, err = dateFmtOperator(proc.Ctx, d, string(fmt), &buf); err != nil {
+			if isNull, err = appendFormattedBytesForResult(
+				result,
+				rs,
+				&legacy,
+				func(buf formatBuffer) (bool, error) {
+					return dateFmtOperator(proc.Ctx, d, string(fmt), buf)
+				},
+			); err != nil {
 				return err
 			}
 			if isNull {
 				err = rs.AppendBytes(nil, true)
-			} else {
-				err = rs.AppendBytes(buf.Bytes(), false)
 			}
 			if err != nil {
 				return err
@@ -3710,11 +3717,117 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return nil
 }
 
-type DateFormatFunc func(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (isNull bool, err error)
+type formatBuffer interface {
+	io.Writer
+	io.StringWriter
+	io.ByteWriter
+	WriteRune(rune) (int, error)
+	Grow(int)
+}
+
+type countingFormatBuffer struct {
+	written int
+	err     error
+}
+
+func (w *countingFormatBuffer) add(size int) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	if size < 0 || size > math.MaxInt-w.written {
+		w.err = io.ErrShortBuffer
+		return 0, w.err
+	}
+	w.written += size
+	return size, nil
+}
+
+func (w *countingFormatBuffer) Write(value []byte) (int, error) {
+	return w.add(len(value))
+}
+
+func (w *countingFormatBuffer) WriteString(value string) (int, error) {
+	return w.add(len(value))
+}
+
+func (w *countingFormatBuffer) WriteByte(byte) error {
+	_, err := w.add(1)
+	return err
+}
+
+func (w *countingFormatBuffer) WriteRune(value rune) (int, error) {
+	size := utf8.RuneLen(value)
+	if size < 0 {
+		size = utf8.RuneLen(utf8.RuneError)
+	}
+	return w.add(size)
+}
+
+func (w *countingFormatBuffer) Grow(int) {}
+
+func appendFormattedBytes(
+	rs *vector.FunctionResult[types.Varlena],
+	build func(formatBuffer) (bool, error),
+) (bool, error) {
+	var counter countingFormatBuffer
+	isNull, err := build(&counter)
+	if err != nil || isNull {
+		return isNull, err
+	}
+	if counter.err != nil {
+		return false, counter.err
+	}
+	var output fixedSliceWriter
+	err = rs.AppendBytesWithBuilder(counter.written, func(dst []byte) (int, error) {
+		output.Reset(dst)
+		secondNull, buildErr := build(&output)
+		if buildErr != nil {
+			return 0, buildErr
+		}
+		if output.Err() != nil {
+			return 0, output.Err()
+		}
+		if secondNull {
+			return 0, moerr.NewInternalErrorNoCtx(
+				"format result changed between sizing and encoding",
+			)
+		}
+		if output.Written() != counter.written {
+			return 0, moerr.NewInternalErrorNoCtx(
+				"format result size changed between sizing and encoding",
+			)
+		}
+		return output.Written(), nil
+	})
+	return false, err
+}
+
+// appendFormattedBytesForResult preserves the legacy one-pass buffer path and
+// uses exact two-pass publication only when dormant allocation accounting is
+// selected. This avoids imposing duplicate formatting work on production
+// callers before the expression owner is activated.
+func appendFormattedBytesForResult(
+	result vector.FunctionResultWrapper,
+	rs *vector.FunctionResult[types.Varlena],
+	legacy *bytes.Buffer,
+	build func(formatBuffer) (bool, error),
+) (bool, error) {
+	if result.HasFunctionScratch() {
+		return appendFormattedBytes(rs, build)
+	}
+	legacy.Reset()
+	isNull, err := build(legacy)
+	if err != nil || isNull {
+		return isNull, err
+	}
+	return false, rs.AppendBytes(legacy.Bytes(), false)
+}
+
+type DateFormatFunc func(ctx context.Context, datetime types.Datetime, format string, buf formatBuffer) (isNull bool, err error)
 
 // DATE_FORMAT       datetime
 // handle '%d/%m/%Y' ->	 22/04/2021
-func date_format_combine_pattern1(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
+func date_format_combine_pattern1(_ context.Context, t types.Datetime, format string, buf formatBuffer) (bool, error) {
 	month := int(t.Month())
 	day := int(t.Day())
 	year := int(t.Year())
@@ -3739,7 +3852,7 @@ func date_format_combine_pattern1(_ context.Context, t types.Datetime, format st
 }
 
 // handle '%Y%m%d' ->   20210422
-func date_format_combine_pattern2(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
+func date_format_combine_pattern2(_ context.Context, t types.Datetime, format string, buf formatBuffer) (bool, error) {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3764,7 +3877,7 @@ func date_format_combine_pattern2(_ context.Context, t types.Datetime, format st
 }
 
 // handle '%Y'  ->   2021
-func date_format_combine_pattern3(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
+func date_format_combine_pattern3(_ context.Context, t types.Datetime, format string, buf formatBuffer) (bool, error) {
 	year := t.Year()
 	// Year conversion
 	buf.WriteByte(byte('0' + (year / 1000 % 10)))
@@ -3775,7 +3888,7 @@ func date_format_combine_pattern3(_ context.Context, t types.Datetime, format st
 }
 
 // %Y-%m-%d	               2021-04-22
-func date_format_combine_pattern4(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
+func date_format_combine_pattern4(_ context.Context, t types.Datetime, format string, buf formatBuffer) (bool, error) {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3803,7 +3916,7 @@ func date_format_combine_pattern4(_ context.Context, t types.Datetime, format st
 
 // handle '%Y-%m-%d %H:%i:%s'  ->   2004-04-03 13:11:10
 // handle ' %Y-%m-%d %T'   ->   2004-04-03 13:11:10
-func date_format_combine_pattern5(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
+func date_format_combine_pattern5(_ context.Context, t types.Datetime, format string, buf formatBuffer) (bool, error) {
 	year := int(t.Year())
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3853,7 +3966,7 @@ func date_format_combine_pattern5(_ context.Context, t types.Datetime, format st
 }
 
 // handle '%Y/%m/%d'  ->   2010/01/07
-func date_format_combine_pattern6(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
+func date_format_combine_pattern6(_ context.Context, t types.Datetime, format string, buf formatBuffer) (bool, error) {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3881,7 +3994,7 @@ func date_format_combine_pattern6(_ context.Context, t types.Datetime, format st
 
 // handle '%Y/%m/%d %H:%i:%s'   ->    2010/01/07 23:12:34
 // handle '%Y/%m/%d %T'   ->    2010/01/07 23:12:34
-func date_format_combine_pattern7(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
+func date_format_combine_pattern7(_ context.Context, t types.Datetime, format string, buf formatBuffer) (bool, error) {
 	year := int(t.Year())
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3931,7 +4044,7 @@ func date_format_combine_pattern7(_ context.Context, t types.Datetime, format st
 }
 
 // datetimeFormat: format the datetime value according to the format string.
-func datetimeFormat(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
+func datetimeFormat(ctx context.Context, datetime types.Datetime, format string, buf formatBuffer) (bool, error) {
 	inPatternMatch := false
 	for _, b := range format {
 		if inPatternMatch {
@@ -4003,7 +4116,7 @@ var (
 )
 
 // makeDateFormat: Get the format string corresponding to the date according to a single format character
-func makeDateFormat(_ context.Context, t types.Datetime, b rune, buf *bytes.Buffer) (bool, error) {
+func makeDateFormat(_ context.Context, t types.Datetime, b rune, buf formatBuffer) (bool, error) {
 	switch b {
 	case 'b':
 		m := t.Month()
@@ -4169,7 +4282,7 @@ func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	fmt, null2 := formats.GetStrValue(0)
 	emptyFormat := len(fmt) == 0
 
-	var buf bytes.Buffer
+	var legacy bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		t, null1 := times.GetValue(i)
 		if null1 || null2 || emptyFormat {
@@ -4177,11 +4290,15 @@ func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 				return err
 			}
 		} else {
-			buf.Reset()
-			if err = timeFormat(proc.Ctx, t, string(fmt), &buf); err != nil {
-				return err
-			}
-			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
+			_, err = appendFormattedBytesForResult(
+				result,
+				rs,
+				&legacy,
+				func(buf formatBuffer) (bool, error) {
+					return false, timeFormat(proc.Ctx, t, string(fmt), buf)
+				},
+			)
+			if err != nil {
 				return err
 			}
 		}
@@ -4191,7 +4308,7 @@ func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 // timeFormat: Get the format string corresponding to the time according to format specifiers
 // Only supports time-related format specifiers: %H, %h, %I, %i, %k, %l, %S, %s, %f, %p, %r, %T
-func timeFormat(ctx context.Context, t types.Time, format string, buf *bytes.Buffer) error {
+func timeFormat(ctx context.Context, t types.Time, format string, buf formatBuffer) error {
 	hour, minute, sec, msec, isNeg := t.ClockFormat()
 	if isNeg && len(format) > 0 {
 		buf.WriteByte('-')
@@ -4218,7 +4335,7 @@ func timeFormat(ctx context.Context, t types.Time, format string, buf *bytes.Buf
 
 // makeTimeFormat: Get the format string corresponding to the time according to a single format character
 // Only supports time-related format specifiers
-func makeTimeFormat(ctx context.Context, hour uint64, minute, sec uint8, msec uint64, b rune, buf *bytes.Buffer) error {
+func makeTimeFormat(ctx context.Context, hour uint64, minute, sec uint8, msec uint64, b rune, buf formatBuffer) error {
 	switch b {
 	case 'f':
 		fmt.Fprintf(buf, "%06d", msec)
@@ -4288,7 +4405,7 @@ func FormatIntByWidth(num, n int) string {
 	return builder.String()
 }
 
-func FormatInt2BufByWidth(num, n int, buf *bytes.Buffer) {
+func FormatInt2BufByWidth(num, n int, buf formatBuffer) {
 	numStr := strconv.Itoa(num)
 	if len(numStr) >= n {
 		buf.WriteString(numStr)
@@ -5231,21 +5348,46 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			continue
 		}
 
-		// Build the result string by checking each bit position
-		var parts []string
+		resultSize := 0
+		partCount := 0
 		for j := 0; j < len(strParams); j++ {
 			// Check if bit j is set (0-based, so bit 0 corresponds to str1, bit 1 to str2, etc.)
 			if (bitsUint>>uint(j))&1 == 1 {
 				str, null := strParams[j].GetStrValue(i)
 				if !null {
-					parts = append(parts, functionUtil.QuickBytesToStr(str))
+					if len(str) > math.MaxInt-resultSize {
+						return moerr.NewInvalidInputNoCtx("MAKE_SET result is too large")
+					}
+					resultSize += len(str)
+					partCount++
 				}
 			}
 		}
-
-		// Join with comma separator
-		resultStr := strings.Join(parts, ",")
-		if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+		if partCount > 1 {
+			if partCount-1 > math.MaxInt-resultSize {
+				return moerr.NewInvalidInputNoCtx("MAKE_SET result is too large")
+			}
+			resultSize += partCount - 1
+		}
+		if err := rs.AppendBytesWithFill(resultSize, func(dst []byte) {
+			written := 0
+			parts := 0
+			for j := 0; j < len(strParams); j++ {
+				if (bitsUint>>uint(j))&1 == 0 {
+					continue
+				}
+				str, null := strParams[j].GetStrValue(i)
+				if null {
+					continue
+				}
+				if parts > 0 {
+					dst[written] = ','
+					written++
+				}
+				written += copy(dst[written:], str)
+				parts++
+			}
+		}); err != nil {
 			return err
 		}
 	}
@@ -5525,18 +5667,38 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			}
 		}
 
-		// Build the result string
-		var parts []string
+		resultSize := 0
 		for j := int64(0); j < numberOfBits; j++ {
+			partSize := len(off)
 			if (bitsUint>>uint(j))&1 == 1 {
-				parts = append(parts, functionUtil.QuickBytesToStr(on))
-			} else {
-				parts = append(parts, functionUtil.QuickBytesToStr(off))
+				partSize = len(on)
 			}
+			if partSize > math.MaxInt-resultSize {
+				return moerr.NewInvalidInputNoCtx("EXPORT_SET result is too large")
+			}
+			resultSize += partSize
 		}
-
-		resultStr := strings.Join(parts, separator)
-		if err := rs.AppendBytes([]byte(resultStr), false); err != nil {
+		separatorBytes := functionUtil.QuickStrToBytes(separator)
+		if numberOfBits > 1 {
+			separatorSize := uint64(numberOfBits-1) * uint64(len(separatorBytes))
+			if separatorSize > uint64(math.MaxInt-resultSize) {
+				return moerr.NewInvalidInputNoCtx("EXPORT_SET result is too large")
+			}
+			resultSize += int(separatorSize)
+		}
+		if err := rs.AppendBytesWithFill(resultSize, func(dst []byte) {
+			written := 0
+			for j := int64(0); j < numberOfBits; j++ {
+				if j > 0 {
+					written += copy(dst[written:], separatorBytes)
+				}
+				part := off
+				if (bitsUint>>uint(j))&1 == 1 {
+					part = on
+				}
+				written += copy(dst[written:], part)
+			}
+		}); err != nil {
 			return err
 		}
 	}
@@ -5894,7 +6056,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
 	f := string(formatMask)
 
-	var buf bytes.Buffer
+	var legacy bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
@@ -5903,12 +6065,10 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 				return err
 			}
 		} else {
-			buf.Reset()
 			r := types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, v)
-			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
-				return err
-			}
-			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
+			if _, err = appendFormattedBytesForResult(result, rs, &legacy, func(buf formatBuffer) (bool, error) {
+				return datetimeFormat(proc.Ctx, r, f, buf)
+			}); err != nil {
 				return err
 			}
 		}
@@ -5926,7 +6086,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
 	f := string(formatMask)
 
-	var buf bytes.Buffer
+	var legacy bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
@@ -5935,12 +6095,10 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 				return err
 			}
 		} else {
-			buf.Reset()
 			r := types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, int64(v))
-			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
-				return err
-			}
-			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
+			if _, err = appendFormattedBytesForResult(result, rs, &legacy, func(buf formatBuffer) (bool, error) {
+				return datetimeFormat(proc.Ctx, r, f, buf)
+			}); err != nil {
 				return err
 			}
 		}
@@ -5958,7 +6116,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
 	f := string(formatMask)
 
-	var buf bytes.Buffer
+	var legacy bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
@@ -5967,13 +6125,11 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 				return err
 			}
 		} else {
-			buf.Reset()
 			x, y := splitDecimalToIntAndFrac(v)
 			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y)
-			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
-				return err
-			}
-			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
+			if _, err = appendFormattedBytesForResult(result, rs, &legacy, func(buf formatBuffer) (bool, error) {
+				return datetimeFormat(proc.Ctx, r, f, buf)
+			}); err != nil {
 				return err
 			}
 		}
@@ -5992,7 +6148,7 @@ func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.Function
 	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
 	f := string(formatMask)
 
-	var buf bytes.Buffer
+	var legacy bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 		sec, nsec, ok, convErr := decimal256UnixTimeParts(v, scale)
@@ -6005,12 +6161,10 @@ func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.Function
 				return err
 			}
 		} else {
-			buf.Reset()
 			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, sec, nsec)
-			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
-				return err
-			}
-			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
+			if _, err = appendFormattedBytesForResult(result, rs, &legacy, func(buf formatBuffer) (bool, error) {
+				return datetimeFormat(proc.Ctx, r, f, buf)
+			}); err != nil {
 				return err
 			}
 		}
@@ -8605,6 +8759,7 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	m metric.MetricType,
 	proc *process.Process,
 	dist []float32,
+	result vector.FunctionResultWrapper,
 ) ([]float32, bool, error) {
 	c0, c1 := ivecs[0].IsConst(), ivecs[1].IsConst()
 	if c0 == c1 {
@@ -8639,7 +8794,28 @@ func batchArrayDistanceSync[T types.RealNumbers](
 		resolver = proc.GetResolveVariableFunc()
 	}
 	gpuMode := gpumode.EffectiveGpuMode(resolver)
-	handle, err := metric.PairwiseDistanceLaunchOneToMany(
+	scratchSize, usesGPU, err := metric.PairwiseDistanceOneToManyScratchSize(
+		query,
+		length,
+		m,
+		metric.GPUThresholdSQL,
+		gpuMode,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	var scratch []byte
+	if usesGPU && result != nil {
+		var selected bool
+		scratch, selected, err = result.ResizeFunctionScratch(scratchSize)
+		if err != nil {
+			return nil, false, err
+		}
+		if !selected {
+			scratch = nil
+		}
+	}
+	handle, err := metric.PairwiseDistanceLaunchOneToManyWithScratch(
 		query,
 		length,
 		func(row int) []T {
@@ -8649,6 +8825,7 @@ func batchArrayDistanceSync[T types.RealNumbers](
 		dist,
 		metric.GPUThresholdSQL,
 		gpuMode,
+		scratch,
 	)
 	if err != nil {
 		return nil, false, err
@@ -8688,6 +8865,7 @@ func tryBatchArrayDistance[T types.RealNumbers](
 		m,
 		proc,
 		distScratch,
+		result,
 	)
 	if err != nil || !ok {
 		return ok, err
@@ -12304,11 +12482,62 @@ func arrayDistanceNarrow[T types.ArrayElement](
 func arrayDistanceViaF32[T types.ArrayElement](
 	ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList,
 	kernel func(v1, v2 []float32) (float64, error)) error {
+	if result.HasFunctionScratch() {
+		return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+			left := types.BytesToArray[T](v1)
+			right := types.BytesToArray[T](v2)
+			if len(right) > math.MaxInt-len(left) || len(left)+len(right) > math.MaxInt/4 {
+				return 0, mpool.ErrAllocationAccountInvalid
+			}
+			scratch, selected, err := result.ResizeFunctionScratch((len(left) + len(right)) * 4)
+			if err != nil {
+				return 0, err
+			}
+			if !selected {
+				return 0, mpool.ErrAllocationAccountInvalid
+			}
+			values := util.UnsafeSliceCast[float32](scratch)
+			leftValues := values[:len(left)]
+			rightValues := values[len(left):]
+			arrayToFloat32Into(leftValues, left)
+			arrayToFloat32Into(rightValues, right)
+			return kernel(leftValues, rightValues)
+		}, selectList)
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
 		f1 := types.ToFloat32Array[T](types.BytesToArray[T](v1))
 		f2 := types.ToFloat32Array[T](types.BytesToArray[T](v2))
 		return kernel(f1, f2)
 	}, selectList)
+}
+
+func arrayToFloat32Into[T types.ArrayElement](dst []float32, src []T) {
+	switch values := any(src).(type) {
+	case []float32:
+		copy(dst, values)
+	case []float64:
+		for idx, value := range values {
+			dst[idx] = float32(value)
+		}
+	case []types.BF16:
+		for idx, value := range values {
+			dst[idx] = value.ToFloat32()
+		}
+	case []types.Float16:
+		for idx, value := range values {
+			dst[idx] = value.ToFloat32()
+		}
+	case []int8:
+		for idx, value := range values {
+			dst[idx] = float32(value)
+		}
+	case []uint8:
+		for idx, value := range values {
+			dst[idx] = float32(value)
+		}
+	default:
+		panic(moerr.NewInternalErrorNoCtx("unsupported array element type"))
+	}
 }
 
 func L2DistanceArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

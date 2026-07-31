@@ -16,6 +16,8 @@ package function
 
 import (
 	"bytes"
+	"encoding/binary"
+	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -84,8 +86,10 @@ func PrefixInRange(parameters []*vector.Vector, result vector.FunctionResultWrap
 }
 
 type implPrefixIn struct {
-	ready bool
-	vals  [][]byte
+	ready        bool
+	vals         [][]byte
+	scratch      []byte
+	scratchCount int
 }
 
 func newImplPrefixIn() *implPrefixIn {
@@ -93,7 +97,6 @@ func newImplPrefixIn() *implPrefixIn {
 }
 
 func (op *implPrefixIn) init(rvec *vector.Vector, mp *mpool.MPool) error {
-	op.ready = true
 	op.vals = make([][]byte, rvec.Length())
 	vlen := 0
 
@@ -123,12 +126,124 @@ func (op *implPrefixIn) init(rvec *vector.Vector, mp *mpool.MPool) error {
 		}
 	}
 	op.vals = op.vals[:vlen]
+	op.ready = true
 	return nil
+}
+
+const prefixScratchEntrySize = 8
+
+type prefixScratchEntries struct {
+	data  []byte
+	count int
+}
+
+func (e prefixScratchEntries) Len() int {
+	return e.count
+}
+
+func (e prefixScratchEntries) Less(left, right int) bool {
+	return bytes.Compare(e.value(left), e.value(right)) < 0
+}
+
+func (e prefixScratchEntries) Swap(left, right int) {
+	leftEntry := e.data[left*prefixScratchEntrySize : (left+1)*prefixScratchEntrySize]
+	rightEntry := e.data[right*prefixScratchEntrySize : (right+1)*prefixScratchEntrySize]
+	var saved [prefixScratchEntrySize]byte
+	copy(saved[:], leftEntry)
+	copy(leftEntry, rightEntry)
+	copy(rightEntry, saved[:])
+}
+
+func (e prefixScratchEntries) value(index int) []byte {
+	entry := e.data[index*prefixScratchEntrySize:]
+	offset := binary.LittleEndian.Uint32(entry)
+	length := binary.LittleEndian.Uint32(entry[4:])
+	return e.data[int(offset):int(offset+length)]
+}
+
+func (op *implPrefixIn) initAccounted(
+	rvec *vector.Vector,
+	result vector.FunctionResultWrapper,
+) error {
+	rowCount := rvec.Length()
+	if rowCount < 0 || rowCount > math.MaxInt/prefixScratchEntrySize {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	total := rowCount * prefixScratchEntrySize
+	for row := 0; row < rowCount; row++ {
+		valueSize := len(rvec.GetBytesAt(row))
+		if valueSize > math.MaxInt-total {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		total += valueSize
+	}
+	if uint64(total) > math.MaxUint32 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	scratch, selected, err := result.ResizeFunctionScratch(total)
+	if err != nil {
+		return err
+	}
+	if !selected {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	entries := prefixScratchEntries{data: scratch, count: rowCount}
+	payloadOffset := rowCount * prefixScratchEntrySize
+	for row := 0; row < rowCount; row++ {
+		value := rvec.GetBytesAt(row)
+		entry := scratch[row*prefixScratchEntrySize:]
+		binary.LittleEndian.PutUint32(entry, uint32(payloadOffset))
+		binary.LittleEndian.PutUint32(entry[4:], uint32(len(value)))
+		payloadOffset += copy(scratch[payloadOffset:], value)
+	}
+	if !rvec.GetSorted() {
+		sort.Sort(entries)
+	}
+	compactCount := 0
+	for row := 0; row < rowCount; row++ {
+		value := entries.value(row)
+		if compactCount != 0 && bytes.HasPrefix(value, entries.value(compactCount-1)) {
+			continue
+		}
+		if compactCount != row {
+			copy(
+				scratch[compactCount*prefixScratchEntrySize:],
+				scratch[row*prefixScratchEntrySize:(row+1)*prefixScratchEntrySize],
+			)
+		}
+		compactCount++
+	}
+	op.scratch = scratch
+	op.scratchCount = compactCount
+	op.ready = true
+	return nil
+}
+
+func (op *implPrefixIn) valueCount() int {
+	if op.scratch != nil {
+		return op.scratchCount
+	}
+	return len(op.vals)
+}
+
+func (op *implPrefixIn) valueAt(index int) []byte {
+	if op.scratch != nil {
+		return (prefixScratchEntries{
+			data:  op.scratch,
+			count: op.scratchCount,
+		}).value(index)
+	}
+	return op.vals[index]
 }
 
 func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !op.ready {
-		err := op.init(parameters[1], proc.Mp())
+		var err error
+		if result.HasFunctionScratch() {
+			err = op.initAccounted(parameters[1], result)
+		} else {
+			err = op.init(parameters[1], proc.Mp())
+		}
 		if err != nil {
 			return err
 		}
@@ -136,7 +251,7 @@ func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.Fu
 
 	lvec := parameters[0]
 	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
-	if len(op.vals) == 0 {
+	if op.valueCount() == 0 {
 		for i := range length {
 			res[i] = false
 		}
@@ -147,9 +262,9 @@ func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.Fu
 	lvecHasNull := lvec.HasNull()
 
 	if lvec.GetSorted() && !lvecHasNull {
-		rval := op.vals[0]
+		rval := op.valueAt(0)
 		rpos := 0
-		rlen := len(op.vals)
+		rlen := op.valueCount()
 
 		for i := range length {
 			lval := lcol[i].GetByteSlice(larea)
@@ -162,7 +277,7 @@ func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.Fu
 					return nil
 				}
 
-				rval = op.vals[rpos]
+				rval = op.valueAt(rpos)
 			}
 
 			res[i] = bytes.HasPrefix(lval, rval)
@@ -177,21 +292,21 @@ func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.Fu
 					rNulls.Add(i)
 				} else {
 					lval := lcol[i].GetByteSlice(larea)
-					rpos, _ := sort.Find(len(op.vals), func(j int) int {
-						return types.PrefixCompare(lval, op.vals[j])
+					rpos, _ := sort.Find(op.valueCount(), func(j int) int {
+						return types.PrefixCompare(lval, op.valueAt(j))
 					})
 
-					res[i] = rpos < len(op.vals) && bytes.HasPrefix(lval, op.vals[rpos])
+					res[i] = rpos < op.valueCount() && bytes.HasPrefix(lval, op.valueAt(rpos))
 				}
 			}
 		} else {
 			for i := range length {
 				lval := lcol[i].GetByteSlice(larea)
-				rpos, _ := sort.Find(len(op.vals), func(j int) int {
-					return types.PrefixCompare(lval, op.vals[j])
+				rpos, _ := sort.Find(op.valueCount(), func(j int) int {
+					return types.PrefixCompare(lval, op.valueAt(j))
 				})
 
-				res[i] = rpos < len(op.vals) && bytes.HasPrefix(lval, op.vals[rpos])
+				res[i] = rpos < op.valueCount() && bytes.HasPrefix(lval, op.valueAt(rpos))
 			}
 		}
 	}

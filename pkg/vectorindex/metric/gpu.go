@@ -106,6 +106,7 @@ type gpuJob struct {
 	cuvsJobID    uint64
 	deallocators []malloc.Deallocator
 	dist         []float32
+	scratch      []byte
 }
 
 type gpuJobManager struct {
@@ -139,6 +140,20 @@ func (m *gpuJobManager) update(jobID uint64, cuvsID uint64, d ...malloc.Dealloca
 	if job != nil {
 		job.cuvsJobID = cuvsID
 		job.deallocators = append(job.deallocators, d...)
+	}
+}
+
+func (m *gpuJobManager) updateScratch(
+	jobID uint64,
+	cuvsID uint64,
+	scratch []byte,
+) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job := m.jobs[jobID]
+	if job != nil {
+		job.cuvsJobID = cuvsID
+		job.scratch = scratch
 	}
 }
 
@@ -212,6 +227,71 @@ func PairwiseDistanceLaunchOneToMany[T types.RealNumbers](
 	minWorkSize uint64,
 	gpuMode bool,
 ) (PairwiseJobHandle, error) {
+	return PairwiseDistanceLaunchOneToManyWithScratch(
+		query,
+		rowCount,
+		rowAt,
+		metric,
+		dist,
+		minWorkSize,
+		gpuMode,
+		nil,
+	)
+}
+
+func PairwiseDistanceOneToManyScratchSize[T types.RealNumbers](
+	query []T,
+	rowCount int,
+	metric MetricType,
+	minWorkSize uint64,
+	gpuMode bool,
+) (int, bool, error) {
+	if !gpuMode || rowCount <= 0 {
+		return 0, false, nil
+	}
+	dim := len(query)
+	work := uint64(rowCount)
+	if dim != 0 && work > ^uint64(0)/uint64(dim) {
+		work = ^uint64(0)
+	} else {
+		work *= uint64(dim)
+	}
+	_, supportedMetric := MetricTypeToCuvsMetric[metric]
+	if !supportedMetric || work < minWorkSize {
+		return 0, false, nil
+	}
+	if _, ok := any(query).([]float32); !ok {
+		return 0, false, nil
+	}
+	rows := uint64(rowCount) + 1
+	if rows == 0 || dim != 0 && rows > ^uint64(0)/uint64(dim) {
+		return 0, false, moerr.NewInternalErrorNoCtx(
+			"pairwise distance input is too large",
+		)
+	}
+	elements := rows * uint64(dim)
+	if elements > uint64(^uint(0)>>1)/4 {
+		return 0, false, moerr.NewInternalErrorNoCtx(
+			"pairwise distance input is too large",
+		)
+	}
+	return int(elements * 4), true, nil
+}
+
+// PairwiseDistanceLaunchOneToManyWithScratch uses caller-owned scratch for
+// GPU input flattening when provided. The caller must retain the buffer until
+// PairwiseDistanceWait returns. A nil buffer preserves the legacy C-allocator
+// path.
+func PairwiseDistanceLaunchOneToManyWithScratch[T types.RealNumbers](
+	query []T,
+	rowCount int,
+	rowAt func(int) []T,
+	metric MetricType,
+	dist []float32,
+	minWorkSize uint64,
+	gpuMode bool,
+	scratch []byte,
+) (PairwiseJobHandle, error) {
 	if !gpuMode {
 		return PairwiseDistanceLaunchOneToManyCPU(
 			query,
@@ -247,7 +327,7 @@ func PairwiseDistanceLaunchOneToMany[T types.RealNumbers](
 	if supportedMetric &&
 		work >= minWorkSize {
 		if typedQuery, ok := any(query).([]float32); ok {
-			return gpuPairwiseLaunchRows(
+			return gpuPairwiseLaunchRowsWithScratch(
 				1,
 				rowCount,
 				dim,
@@ -260,6 +340,7 @@ func PairwiseDistanceLaunchOneToMany[T types.RealNumbers](
 				cuvsMetric,
 				dist[:rowCount],
 				4,
+				scratch,
 			)
 		}
 	}
@@ -305,6 +386,27 @@ func gpuPairwiseLaunchRows[C cuvs.VectorType](
 	dist []float32,
 	elemSize int,
 ) (PairwiseJobHandle, error) {
+	return gpuPairwiseLaunchRowsWithScratch(
+		nX,
+		nY,
+		dim,
+		xAt,
+		yAt,
+		cuvsMetric,
+		dist,
+		elemSize,
+		nil,
+	)
+}
+
+func gpuPairwiseLaunchRowsWithScratch[C cuvs.VectorType](
+	nX, nY, dim int,
+	xAt, yAt func(int) []C,
+	cuvsMetric cuvs.DistanceType,
+	dist []float32,
+	elemSize int,
+	scratch []byte,
+) (PairwiseJobHandle, error) {
 	if nX < 0 ||
 		nY < 0 ||
 		dim < 0 ||
@@ -321,6 +423,20 @@ func gpuPairwiseLaunchRows[C cuvs.VectorType](
 			uint64(nY) > ^uint64(0)/rowBytes) {
 		return 0, moerr.NewInternalErrorNoCtx(
 			"pairwise distance input is too large",
+		)
+	}
+	if scratch != nil {
+		return gpuPairwiseLaunchRowsFromScratch(
+			nX,
+			nY,
+			dim,
+			xAt,
+			yAt,
+			cuvsMetric,
+			dist,
+			elemSize,
+			rowBytes,
+			scratch,
 		)
 	}
 	allocator := malloc.NewCAllocator()
@@ -389,6 +505,66 @@ func gpuPairwiseLaunchRows[C cuvs.VectorType](
 
 	globalGpuJobManager.update(gpuID, cuvsID, xDeallocator, yDeallocator)
 
+	return PairwiseJobHandle(gpuID), nil
+}
+
+func gpuPairwiseLaunchRowsFromScratch[C cuvs.VectorType](
+	nX, nY, dim int,
+	xAt, yAt func(int) []C,
+	cuvsMetric cuvs.DistanceType,
+	dist []float32,
+	elemSize int,
+	rowBytes uint64,
+	scratch []byte,
+) (PairwiseJobHandle, error) {
+	yBytes := uint64(nY) * rowBytes
+	xBytes := uint64(nX) * rowBytes
+	if yBytes > uint64(len(scratch)) || xBytes > uint64(len(scratch))-yBytes {
+		return 0, moerr.NewInternalErrorNoCtx(
+			"pairwise distance scratch is smaller than the flattened input",
+		)
+	}
+	yf := util.UnsafeSliceCast[C](scratch[:yBytes])
+	for row := 0; row < nY; row++ {
+		value := yAt(row)
+		if len(value) != dim {
+			return 0, moerr.NewInternalErrorNoCtx(
+				"vector dimension not matched",
+			)
+		}
+		copy(yf[row*dim:(row+1)*dim], value)
+	}
+	xScratch := scratch[yBytes : yBytes+xBytes]
+	xf := util.UnsafeSliceCast[C](xScratch)
+	for row := 0; row < nX; row++ {
+		value := xAt(row)
+		if len(value) != dim {
+			return 0, moerr.NewInternalErrorNoCtx(
+				"vector dimension not matched",
+			)
+		}
+		copy(xf[row*dim:(row+1)*dim], value)
+	}
+
+	gpuID := globalGpuJobManager.add(dist)
+	cuvsID, err := cuvs.PairwiseDistanceLaunch(
+		xf,
+		uint64(nX),
+		yf,
+		uint64(nY),
+		uint32(dim),
+		cuvsMetric,
+		dist,
+	)
+	if err != nil {
+		globalGpuJobManager.pop(gpuID)
+		return 0, err
+	}
+	globalGpuJobManager.updateScratch(
+		gpuID,
+		cuvsID,
+		scratch[:yBytes+xBytes],
+	)
 	return PairwiseJobHandle(gpuID), nil
 }
 

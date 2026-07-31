@@ -7475,17 +7475,65 @@ func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 			// upcast the source element type to []float32, then narrow to the
 			// target element type (int8 rounds+clamps; bf16/f16 round-to-even).
 			// This replaces moarray.Cast[I,O], which only handled float pairs.
-			_v := types.BytesToArray[I](v)
-			f32 := types.ToFloat32Array[I](_v)
-			out := types.FromFloat32Array[O](f32)
-			bytes := types.ArrayToBytes[O](out)
-			if err := to.AppendBytes(bytes, false); err != nil {
+			values := types.BytesToArray[I](v)
+			var outputElement O
+			elementSize := int(unsafe.Sizeof(outputElement))
+			if len(values) > math.MaxInt/elementSize {
+				return moerr.NewInvalidInputNoCtx("array cast result is too large")
+			}
+			if err := to.AppendBytesWithFill(len(values)*elementSize, func(dst []byte) {
+				output := util.UnsafeSliceCast[O](dst)
+				for idx, value := range values {
+					output[idx] = float32ToArrayElement[O](arrayElementToFloat32(value))
+				}
+			}); err != nil {
 				return err
 			}
 		}
 
 	}
 	return nil
+}
+
+func arrayElementToFloat32[T types.ArrayElement](value T) float32 {
+	switch typed := any(value).(type) {
+	case float32:
+		return typed
+	case float64:
+		return float32(typed)
+	case types.BF16:
+		return typed.ToFloat32()
+	case types.Float16:
+		return typed.ToFloat32()
+	case int8:
+		return float32(typed)
+	case uint8:
+		return float32(typed)
+	default:
+		panic(moerr.NewInternalErrorNoCtx("unsupported array element type"))
+	}
+}
+
+func float32ToArrayElement[T types.ArrayElement](value float32) T {
+	var output any
+	var zero T
+	switch any(zero).(type) {
+	case float32:
+		output = value
+	case float64:
+		output = float64(value)
+	case types.BF16:
+		output = types.BF16FromFloat32(value)
+	case types.Float16:
+		output = types.Float16FromFloat32(value)
+	case int8:
+		output = types.Float32ToInt8(value)
+	case uint8:
+		output = types.Float32ToUint8(value)
+	default:
+		panic(moerr.NewInternalErrorNoCtx("unsupported array element type"))
+	}
+	return output.(T)
 }
 
 func uuidToStr(

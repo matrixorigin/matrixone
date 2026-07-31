@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1010,15 +1011,25 @@ func Empty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 }
 
 func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	single := func(str string) ([]byte, error) {
-		bj, err := types.ParseStringToByteJson(strconv.Quote(str))
-		if err != nil {
-			return nil, err
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		value, isNull := source.GetStrValue(row)
+		if isNull || selectList.Contains(row) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
 		}
-		return bj.Marshal()
+		encoder, err := bytejson.NewStringDataEncoder(value)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendByteJsonEncoded(encoder); err != nil {
+			return err
+		}
 	}
-
-	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, single, selectList)
+	return nil
 }
 
 func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1047,6 +1058,11 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 // Escapes single quotes by doubling them, backslashes, and control characters
 func QuoteString(str string) string {
 	var result strings.Builder
+	writeQuotedString(&result, str)
+	return result.String()
+}
+
+func writeQuotedString(result formatBuffer, str string) {
 	result.WriteByte('\'')
 
 	for _, r := range str {
@@ -1079,15 +1095,28 @@ func QuoteString(str string) string {
 	}
 
 	result.WriteByte('\'')
-	return result.String()
 }
 
 func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
-		str := functionUtil.QuickBytesToStr(v)
-		quoted := QuoteString(str)
-		return functionUtil.QuickStrToBytes(quoted)
-	}, selectList)
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	var legacy bytes.Buffer
+	for row := uint64(0); row < uint64(length); row++ {
+		value, isNull := source.GetStrValue(row)
+		if isNull || selectList.Contains(row) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := appendFormattedBytesForResult(result, rs, &legacy, func(output formatBuffer) (bool, error) {
+			writeQuotedString(output, functionUtil.QuickBytesToStr(value))
+			return false, nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func StAsText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4955,11 +4984,24 @@ func HexFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func HexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
-		buf := make([]byte, hex.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
-		hex.Encode(buf, data)
-		return buf, nil
-	}, selectList)
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		data, isNull := source.GetStrValue(row)
+		if isNull || selectList.Contains(row) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		encodedSize := hex.EncodedLen(len(data))
+		if err := rs.AppendBytesWithFill(encodedSize, func(dst []byte) {
+			hex.Encode(dst, data)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func hexEncodeString(xs []byte) string {
@@ -5783,17 +5825,45 @@ func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlen
 		return rs.AppendMustNullForBytesResult()
 	}
 
-	// Add a '0' to the front, if the length is not the multiple of 2
-	str := functionUtil.QuickBytesToStr(data)
-	if len(str)%2 != 0 {
-		str = "0" + str
-	}
-
-	bs, err := hex.DecodeString(str)
-	if err != nil {
+	decodedSize := (len(data) + 1) / 2
+	var decodeErr error
+	err := rs.AppendBytesWithBuilder(decodedSize, func(dst []byte) (int, error) {
+		written, err := decodeHexInto(dst, data)
+		decodeErr = err
+		return written, err
+	})
+	if decodeErr != nil {
 		return rs.AppendMustNullForBytesResult()
 	}
-	return rs.AppendMustBytesValue(bs)
+	return err
+}
+
+func decodeHexInto(dst, src []byte) (int, error) {
+	written := 0
+	if len(src)%2 != 0 {
+		value, ok := decodeHexNibble(src[0])
+		if !ok {
+			return 0, hex.InvalidByteError(src[0])
+		}
+		dst[0] = value
+		written = 1
+		src = src[1:]
+	}
+	n, err := hex.Decode(dst[written:], src)
+	return written + n, err
+}
+
+func decodeHexNibble(value byte) (byte, bool) {
+	switch {
+	case value >= '0' && value <= '9':
+		return value - '0', true
+	case value >= 'a' && value <= 'f':
+		return value - 'a' + 10, true
+	case value >= 'A' && value <= 'F':
+		return value - 'A' + 10, true
+	default:
+		return 0, false
+	}
 }
 
 func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -5812,10 +5882,24 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		data, isNull := source.GetStrValue(row)
+		if isNull || selectList.Contains(row) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		sum := md5.Sum(data)
-		return []byte(hex.EncodeToString(sum[:]))
-	}, selectList)
+		if err := rs.AppendBytesWithFill(hex.EncodedLen(len(sum)), func(dst []byte) {
+			hex.Encode(dst, sum[:])
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 
 }
 
@@ -5843,11 +5927,24 @@ func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, resul
 }
 
 func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
-		buf := make([]byte, base64.StdEncoding.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
-		base64.StdEncoding.Encode(buf, data)
-		return buf, nil
-	}, selectList)
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		data, isNull := source.GetStrValue(row)
+		if isNull || selectList.Contains(row) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		encodedSize := base64.StdEncoding.EncodedLen(len(data))
+		if err = rs.AppendBytesWithFill(encodedSize, func(dst []byte) {
+			base64.StdEncoding.Encode(dst, data)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -5857,16 +5954,31 @@ func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		data, null := source.GetStrValue(i)
-		if null {
-			return rs.AppendMustNullForBytesResult()
+		if null || selectList.Contains(i) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
 		}
 
-		buf := make([]byte, base64.StdEncoding.DecodedLen(len(functionUtil.QuickBytesToStr(data))))
-		_, err := base64.StdEncoding.Decode(buf, data)
-		if err != nil {
-			return rs.AppendMustNullForBytesResult()
+		var decodeErr error
+		err := rs.AppendBytesWithBuilder(
+			base64.StdEncoding.DecodedLen(len(data)),
+			func(dst []byte) (int, error) {
+				var written int
+				written, decodeErr = base64.StdEncoding.Decode(dst, data)
+				return written, decodeErr
+			},
+		)
+		if decodeErr != nil {
+			if err = rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
 		}
-		_ = rs.AppendMustBytesValue(buf)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -5907,11 +6019,10 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 		}
 	}
 
-	var buf []byte
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		data, null := source.GetStrValue(i)
-		if null {
+		if null || selectList.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -5919,21 +6030,22 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 		}
 
 		need := base64.StdEncoding.DecodedLen(len(data))
-		if cap(buf) < need {
-			buf = make([]byte, need)
-		} else {
-			buf = buf[:need]
-		}
-		n, err := base64.StdEncoding.Decode(buf, data)
-		if err != nil {
-			return moerr.NewInternalErrorNoCtx("vec_from_base64: invalid base64 input")
-		}
-
-		if n%elemSize != 0 {
-			return moerr.NewInternalErrorNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
-		}
-
-		if err = rs.AppendBytes(buf[:n], false); err != nil {
+		if err := rs.AppendBytesWithBuilder(need, func(dst []byte) (int, error) {
+			written, err := base64.StdEncoding.Decode(dst, data)
+			if err != nil {
+				return 0, moerr.NewInternalErrorNoCtx(
+					"vec_from_base64: invalid base64 input",
+				)
+			}
+			if written%elemSize != 0 {
+				return 0, moerr.NewInternalErrorNoCtxf(
+					"vec_from_base64: decoded length %d is not a multiple of %d bytes",
+					written,
+					elemSize,
+				)
+			}
+			return written, nil
+		}); err != nil {
 			return err
 		}
 	}
@@ -5946,6 +6058,8 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	var writer *flate.Writer
+	var output fixedSliceWriter
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -5964,47 +6078,124 @@ func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 			continue
 		}
 
-		// Compress using zlib (flate)
-		var buf bytes.Buffer
-		writer, err := flate.NewWriter(&buf, flate.DefaultCompression)
+		capacity, err := flateResultCapacity(len(data))
 		if err != nil {
-			if err := rs.AppendBytes(nil, true); err != nil {
+			return err
+		}
+		if writer == nil {
+			writer, err = flate.NewWriter(io.Discard, flate.DefaultCompression)
+			if err != nil {
 				return err
+			}
+		}
+		var compressionErr error
+		err = rs.AppendBytesWithBuilder(capacity, func(dst []byte) (int, error) {
+			output.Reset(dst[4:])
+			writer.Reset(&output)
+			if _, compressionErr = writer.Write(data); compressionErr == nil {
+				compressionErr = writer.Close()
+			} else {
+				_ = writer.Close()
+			}
+			if compressionErr != nil {
+				return 0, compressionErr
+			}
+			binary.LittleEndian.PutUint32(dst[:4], uint32(len(data)))
+			return 4 + output.Written(), nil
+		})
+		if compressionErr != nil {
+			if nullErr := rs.AppendBytes(nil, true); nullErr != nil {
+				return nullErr
 			}
 			continue
 		}
-
-		_, err = writer.Write(data)
 		if err != nil {
-			writer.Close()
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		err = writer.Close()
-		if err != nil {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		compressed := buf.Bytes()
-
-		// MySQL format: 4-byte length (little-endian) + compressed data
-		originalLen := uint32(len(data))
-		result := make([]byte, 4+len(compressed))
-		binary.LittleEndian.PutUint32(result[0:4], originalLen)
-		copy(result[4:], compressed)
-
-		if err := rs.AppendBytes(result, false); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+type fixedSliceWriter struct {
+	dst     []byte
+	written int
+	err     error
+}
+
+func (w *fixedSliceWriter) Reset(dst []byte) {
+	w.dst = dst
+	w.written = 0
+	w.err = nil
+}
+
+func (w *fixedSliceWriter) Write(value []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	if len(value) > len(w.dst)-w.written {
+		w.err = io.ErrShortBuffer
+		return 0, w.err
+	}
+	copy(w.dst[w.written:], value)
+	w.written += len(value)
+	return len(value), nil
+}
+
+func (w *fixedSliceWriter) WriteString(value string) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	if len(value) > len(w.dst)-w.written {
+		w.err = io.ErrShortBuffer
+		return 0, w.err
+	}
+	copy(w.dst[w.written:], value)
+	w.written += len(value)
+	return len(value), nil
+}
+
+func (w *fixedSliceWriter) WriteByte(value byte) error {
+	if w.err != nil {
+		return w.err
+	}
+	if w.written == len(w.dst) {
+		w.err = io.ErrShortBuffer
+		return w.err
+	}
+	w.dst[w.written] = value
+	w.written++
+	return nil
+}
+
+func (w *fixedSliceWriter) WriteRune(value rune) (int, error) {
+	var encoded [utf8.UTFMax]byte
+	size := utf8.EncodeRune(encoded[:], value)
+	return w.Write(encoded[:size])
+}
+
+func (w *fixedSliceWriter) Grow(int) {}
+
+func (w *fixedSliceWriter) Written() int {
+	return w.written
+}
+
+func (w *fixedSliceWriter) Err() error {
+	return w.err
+}
+
+func flateResultCapacity(inputSize int) (int, error) {
+	if inputSize < 0 || uint64(inputSize) > math.MaxUint32 {
+		return 0, moerr.NewInvalidInputNoCtx("compress input is too large")
+	}
+	// zlib's compressBound is also an upper bound for the contained raw
+	// DEFLATE stream; add four bytes for MySQL's original-length prefix.
+	size := uint64(inputSize)
+	bound := size + (size >> 12) + (size >> 14) + (size >> 25) + 13
+	if bound > uint64(^uint(0)>>1)-4 {
+		return 0, moerr.NewInvalidInputNoCtx("compress result is too large")
+	}
+	return int(bound) + 4, nil
 }
 
 // Uncompress: UNCOMPRESS(string) - Uncompresses a string compressed by COMPRESS()
@@ -6043,30 +6234,31 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		originalLen := binary.LittleEndian.Uint32(data[0:4])
 		compressed := data[4:]
 
-		// Decompress using zlib (flate)
-		reader := flate.NewReader(bytes.NewReader(compressed))
-		decompressed := make([]byte, originalLen)
-		n, err := reader.Read(decompressed)
-		reader.Close()
-
-		if err != nil && err != io.EOF {
-			// Decompression failed, return NULL
+		var decodeErr error
+		err := rs.AppendBytesWithBuilder(int(originalLen), func(dst []byte) (int, error) {
+			reader := flate.NewReader(bytes.NewReader(compressed))
+			defer reader.Close()
+			if _, decodeErr = io.ReadFull(reader, dst); decodeErr != nil {
+				return 0, decodeErr
+			}
+			var extra [1]byte
+			n, err := reader.Read(extra[:])
+			if err != io.EOF || n != 0 {
+				if err == nil {
+					err = errors.New("decompressed length exceeds header")
+				}
+				decodeErr = err
+				return 0, err
+			}
+			return len(dst), nil
+		})
+		if decodeErr != nil {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
-
-		// Check if we got the expected length
-		if uint32(n) != originalLen {
-			// Length mismatch, return NULL
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := rs.AppendBytes(decompressed, false); err != nil {
+		if err != nil {
 			return err
 		}
 	}
@@ -6419,18 +6611,20 @@ func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
-		// Generate random bytes using crypto/rand
-		randomBytes := make([]byte, lenVal)
-		_, err := rand.Read(randomBytes)
-		if err != nil {
+		var randomErr error
+		err := rs.AppendBytesWithBuilder(int(lenVal), func(dst []byte) (int, error) {
+			var written int
+			written, randomErr = rand.Read(dst)
+			return written, randomErr
+		})
+		if randomErr != nil {
 			// On error, return NULL
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
-
-		if err := rs.AppendBytes(randomBytes, false); err != nil {
+		if err != nil {
 			return err
 		}
 	}

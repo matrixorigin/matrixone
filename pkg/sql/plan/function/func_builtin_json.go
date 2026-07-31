@@ -19,7 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -86,11 +86,12 @@ func encodeJsonOrderingParam(value []byte) ([]byte, error) {
 }
 
 type opBuiltInJsonExtract struct {
-	allConst bool
-	npath    int
-	pathStrs []string
-	paths    []*bytejson.Path
-	simple   bool
+	allConst     bool
+	npath        int
+	pathStrs     []string
+	paths        []*bytejson.Path
+	pathWrappers []vector.FunctionParameterWrapper[types.Varlena]
+	simple       bool
 }
 
 type opBuiltInJsonContains struct{}
@@ -979,7 +980,7 @@ func computeStringJsonRemove(json []byte, paths []*bytejson.Path) (bytejson.Byte
 	return bj.Remove(paths)
 }
 
-func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, _ int, selectList *FunctionSelectList) error {
 	op.npath = len(params) - 1
 	if op.npath == 0 {
 		return nil
@@ -1025,19 +1026,20 @@ func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int, s
 				return nil
 			}
 		}
-	} else {
-		op.pathStrs = make([]string, op.npath*length)
-		op.paths = make([]*bytejson.Path, op.npath*length)
+	} else if len(op.pathStrs) != op.npath {
+		op.pathStrs = make([]string, op.npath)
+		op.paths = make([]*bytejson.Path, op.npath)
 	}
 
-	// Do it!
-	pathWrapers := make([]vector.FunctionParameterWrapper[types.Varlena], op.npath)
+	if len(op.pathWrappers) != op.npath {
+		op.pathWrappers = make([]vector.FunctionParameterWrapper[types.Varlena], op.npath)
+	}
 	for i := 0; i < op.npath; i++ {
-		pathWrapers[i] = vector.GenerateFunctionStrParameter(params[i+1])
+		op.pathWrappers[i] = vector.GenerateFunctionStrParameter(params[i+1])
 	}
 
 	if op.allConst {
-		if err := op.buildOnePath(pathWrapers, 0, op.pathStrs, op.paths); err != nil {
+		if _, err := op.buildOnePath(0); err != nil {
 			return err
 		}
 		op.simple = true
@@ -1049,63 +1051,45 @@ func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int, s
 		}
 		return nil
 	} else {
-		op.simple = true
-		for i := 0; i < length; i++ {
-			strs := op.pathStrs[i*op.npath : (i+1)*op.npath]
-			paths := op.paths[i*op.npath : (i+1)*op.npath]
-			if selectList.Contains(uint64(i)) {
-				for j := 0; j < op.npath; j++ {
-					strs[j] = ""
-					paths[j] = nil
-				}
-				continue
-			}
-			if err := op.buildOnePath(pathWrapers, i, strs, paths); err != nil {
-				return err
-			}
-			for _, p := range paths {
-				if p == nil {
-					continue
-				}
-				op.simple = op.simple && p.IsSimple()
-			}
-		}
+		clear(op.pathStrs)
+		clear(op.paths)
+		op.simple = false
 	}
 	return nil
 }
 
 func (op *opBuiltInJsonExtract) getPaths(i uint64) []*bytejson.Path {
-	if op.allConst {
-		return op.paths
+	if !op.allConst && len(op.paths) > op.npath {
+		return op.paths[i*uint64(op.npath) : (i+1)*uint64(op.npath)]
 	}
-	return op.paths[i*uint64(op.npath) : (i+1)*uint64(op.npath)]
+	return op.paths
 }
 
-func (op *opBuiltInJsonExtract) buildOnePath(paramWrappers []vector.FunctionParameterWrapper[types.Varlena], i int, strs []string, paths []*bytejson.Path) error {
+func (op *opBuiltInJsonExtract) buildOnePath(i int) (bool, error) {
 	skip := false
-	for j := 0; j < len(paramWrappers); j++ {
-		pathBytes, pIsNull := paramWrappers[j].GetStrValue(uint64(i))
+	simple := true
+	for j := 0; j < len(op.pathWrappers); j++ {
+		pathBytes, pIsNull := op.pathWrappers[j].GetStrValue(uint64(i))
 		if pIsNull {
 			skip = true
 			break
 		}
 
-		strs[j] = string(pathBytes)
-		p, err := types.ParseStringToPath(strs[j])
+		op.pathStrs[j] = string(pathBytes)
+		p, err := types.ParseStringToPath(op.pathStrs[j])
 		if err != nil {
-			return err
+			return false, err
 		}
-		paths[j] = &p
+		op.paths[j] = &p
+		simple = simple && p.IsSimple()
 	}
 
 	if skip {
-		for j := 0; j < len(paramWrappers); j++ {
-			strs[j] = ""
-			paths[j] = nil
-		}
+		clear(op.pathStrs)
+		clear(op.paths)
 	}
 
-	return nil
+	return simple, nil
 }
 
 func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1151,6 +1135,13 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 			}
 			continue
 		}
+		rowSimple := op.simple
+		if !op.allConst {
+			rowSimple, err = op.buildOnePath(int(i))
+			if err != nil {
+				return err
+			}
+		}
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
 			if err = rs.AppendBytes(nil, true); err != nil {
@@ -1166,7 +1157,15 @@ func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result 
 			}
 			continue
 		} else {
-			out, exists, err := fn(jsonBytes, paths)
+			rowFn := fn
+			if rowSimple {
+				if jsonVec.GetType().Oid == types.T_json {
+					rowFn = computeJsonSimpleWithExists
+				} else {
+					rowFn = computeStringSimpleWithExists
+				}
+			}
+			out, exists, err := rowFn(jsonBytes, paths)
 			if err != nil {
 				return err
 			}
@@ -1207,7 +1206,7 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 		return err
 	}
 
-	if !op.simple || op.npath > 1 {
+	if op.allConst && (!op.simple || op.npath > 1) {
 		return moerr.NewInvalidInput(proc.Ctx, "json_extract_string should use a path that retrives a single value")
 	}
 	if jsonVec.GetType().Oid == types.T_json {
@@ -1222,6 +1221,16 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 				return err
 			}
 			continue
+		}
+		rowSimple := op.simple
+		if !op.allConst {
+			rowSimple, err = op.buildOnePath(int(i))
+			if err != nil {
+				return err
+			}
+		}
+		if !rowSimple || op.npath > 1 {
+			return moerr.NewInvalidInput(proc.Ctx, "json_extract_string should use a path that retrives a single value")
 		}
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
@@ -1290,7 +1299,7 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 	if err = op.buildPath(parameters, length, selectList); err != nil {
 		return err
 	}
-	if !op.simple || op.npath > 1 {
+	if op.allConst && (!op.simple || op.npath > 1) {
 		return moerr.NewInvalidInput(proc.Ctx, "json_extract_float64 should use a path that retrives a single value")
 	}
 
@@ -1306,6 +1315,16 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 				return err
 			}
 			continue
+		}
+		rowSimple := op.simple
+		if !op.allConst {
+			rowSimple, err = op.buildOnePath(int(i))
+			if err != nil {
+				return err
+			}
+		}
+		if !rowSimple || op.npath > 1 {
+			return moerr.NewInvalidInput(proc.Ctx, "json_extract_float64 should use a path that retrives a single value")
 		}
 		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
 		if jIsNull {
@@ -1738,6 +1757,13 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	valueCount := (len(parameters) - 1) / 2
+	pathExprs := make([]*bytejson.Path, valueCount)
+	valExprs := make([]bytejson.ByteJson, valueCount)
+	valueEncoders := make([]bytejson.ByteJsonDataEncoder, valueCount)
+	defer clear(pathExprs)
+	defer clear(valueEncoders)
+	accountedScratch := result.HasFunctionScratch()
 
 	if selectList.IgnoreAllRow() {
 		for i := 0; i < length; i++ {
@@ -1788,7 +1814,6 @@ rowLoop:
 		}
 
 		// build all paths
-		pathExprs := make([]*bytejson.Path, 0, (len(parameters)-1)/2+1)
 		for j := 1; j < len(parameters); j += 2 {
 			pathBytes, pIsNull := vector.GenerateFunctionStrParameter(parameters[j]).GetStrValue(uint64(i))
 			if pIsNull {
@@ -1807,17 +1832,53 @@ rowLoop:
 				return moerr.NewInvalidArg(proc.Ctx, jsonModifyFunctionName(jsonFuncType), "invalid path expression")
 			}
 
-			pathExprs = append(pathExprs, &p)
+			pathExprs[j/2] = &p
 		}
 
-		// build all values
-		valExprs := make([]bytejson.ByteJson, 0, (len(parameters)-1)/2+1)
+		// Build one storage-compatible representation for all values. Exact
+		// execution owns this backing through FunctionResult scratch; legacy
+		// execution preserves a row-local Go buffer.
+		valueBytes := 0
 		for j := 2; j < len(parameters); j += 2 {
-			val, err := op.buildJsonModifyValue(proc, parameters[j], int(i))
+			encoder, err := (&opBuiltInJsonArray{}).buildValueEncoder(
+				proc,
+				parameters[j],
+				int(i),
+			)
 			if err != nil {
 				return err
 			}
-			valExprs = append(valExprs, val)
+			valueEncoders[j/2-1] = encoder
+			size := uint64(encoder.DataSize()) + 1
+			if size > uint64(math.MaxInt-valueBytes) {
+				return moerr.NewInvalidArg(proc.Ctx, jsonModifyFunctionName(jsonFuncType), "JSON value is too large")
+			}
+			valueBytes += int(size)
+		}
+		var valueStorage []byte
+		if accountedScratch {
+			valueStorage, _, err = result.ResizeFunctionScratch(valueBytes)
+			if err != nil {
+				return err
+			}
+		} else {
+			valueStorage = make([]byte, valueBytes)
+		}
+		offset := 0
+		for idx, encoder := range valueEncoders {
+			valueStorage[offset] = byte(encoder.TypeCode())
+			size := int(encoder.DataSize())
+			written, encodeErr := encoder.EncodeDataInto(
+				valueStorage[offset+1 : offset+1+size],
+			)
+			if encodeErr != nil {
+				return encodeErr
+			}
+			if written != size {
+				return moerr.NewInternalErrorNoCtx("JSON value encoder size mismatch")
+			}
+			valExprs[idx] = types.DecodeJson(valueStorage[offset : offset+1+size])
+			offset += size + 1
 		}
 
 		out, err := fn(jsonBytes, pathExprs, valExprs)
@@ -1850,14 +1911,6 @@ func jsonModifyFunctionName(jsonFuncType bytejson.JsonModifyType) string {
 	}
 }
 
-func (op *opBuiltInJsonSet) buildJsonModifyValue(proc *process.Process, v *vector.Vector, row int) (bytejson.ByteJson, error) {
-	elem, err := (&opBuiltInJsonArray{}).convertToAny(proc, v, row)
-	if err != nil {
-		return bytejson.Null, err
-	}
-	return bytejson.CreateByteJSON(elem)
-}
-
 type opBuiltInJsonArray struct{}
 
 func newOpBuiltInJsonArray() *opBuiltInJsonArray {
@@ -1867,6 +1920,8 @@ func newOpBuiltInJsonArray() *opBuiltInJsonArray {
 func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	encoders := make([]bytejson.ByteJsonDataEncoder, len(params))
+	defer clear(encoders)
 
 	if selectList != nil && selectList.IgnoreAllRow() {
 		for j := 0; j < length; j++ {
@@ -1884,248 +1939,223 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 			}
 			continue
 		}
-		elems := make([]any, 0, len(params))
-		for i := 0; i < len(params); i++ {
-			elem, err := op.convertToAny(proc, params[i], j)
+		for i := range params {
+			encoder, err := op.buildValueEncoder(proc, params[i], j)
 			if err != nil {
 				return err
 			}
-			elems = append(elems, elem)
+			encoders[i] = encoder
 		}
-
-		bj, err := bytejson.CreateByteJSON(elems)
+		encoder, err := bytejson.NewArrayDataEncoder(encoders)
 		if err != nil {
 			return err
 		}
-		dt, err := bj.Marshal()
-		if err != nil {
-			return err
-		}
-		if err := rs.AppendBytes(dt, false); err != nil {
+		if err := rs.AppendByteJsonEncoded(encoder); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vector, row int) (any, error) {
-	ctx := context.Background()
-	if proc != nil {
-		ctx = proc.Ctx
+func (op *opBuiltInJsonArray) buildValueEncoder(
+	proc *process.Process,
+	v *vector.Vector,
+	row int,
+) (bytejson.ByteJsonDataEncoder, error) {
+	if v.IsNull(uint64(row)) {
+		return bytejson.NewLiteralDataEncoder(bytejson.LiteralNull), nil
 	}
 	fromType := v.GetType()
 	switch fromType.Oid {
 	case types.T_bool:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
+		literal := bytejson.LiteralFalse
+		if vector.GetFixedAtNoTypeCheck[bool](v, row) {
+			literal = bytejson.LiteralTrue
 		}
-		return vector.GetFixedAtNoTypeCheck[bool](v, row), nil
+		return bytejson.NewLiteralDataEncoder(literal), nil
 	case types.T_int8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return int64(vector.GetFixedAtNoTypeCheck[int8](v, row)), nil
+		return bytejson.NewInt64DataEncoder(
+			int64(vector.GetFixedAtNoTypeCheck[int8](v, row)),
+		), nil
 	case types.T_int16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return int64(vector.GetFixedAtNoTypeCheck[int16](v, row)), nil
+		return bytejson.NewInt64DataEncoder(
+			int64(vector.GetFixedAtNoTypeCheck[int16](v, row)),
+		), nil
 	case types.T_int32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return int64(vector.GetFixedAtNoTypeCheck[int32](v, row)), nil
+		return bytejson.NewInt64DataEncoder(
+			int64(vector.GetFixedAtNoTypeCheck[int32](v, row)),
+		), nil
 	case types.T_int64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[int64](v, row), nil
+		return bytejson.NewInt64DataEncoder(
+			vector.GetFixedAtNoTypeCheck[int64](v, row),
+		), nil
 	case types.T_uint8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return uint64(vector.GetFixedAtNoTypeCheck[uint8](v, row)), nil
+		return bytejson.NewUint64DataEncoder(
+			uint64(vector.GetFixedAtNoTypeCheck[uint8](v, row)),
+		), nil
 	case types.T_uint16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return uint64(vector.GetFixedAtNoTypeCheck[uint16](v, row)), nil
+		return bytejson.NewUint64DataEncoder(
+			uint64(vector.GetFixedAtNoTypeCheck[uint16](v, row)),
+		), nil
 	case types.T_uint32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return uint64(vector.GetFixedAtNoTypeCheck[uint32](v, row)), nil
+		return bytejson.NewUint64DataEncoder(
+			uint64(vector.GetFixedAtNoTypeCheck[uint32](v, row)),
+		), nil
 	case types.T_uint64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[uint64](v, row), nil
+		return bytejson.NewUint64DataEncoder(
+			vector.GetFixedAtNoTypeCheck[uint64](v, row),
+		), nil
 	case types.T_float32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return float64(vector.GetFixedAtNoTypeCheck[float32](v, row)), nil
+		return bytejson.NewFloat64DataEncoder(
+			float64(vector.GetFixedAtNoTypeCheck[float32](v, row)),
+		), nil
 	case types.T_float64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[float64](v, row), nil
-	case types.T_char, types.T_varchar, types.T_text:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return string(v.GetBytesAt(row)), nil
+		return bytejson.NewFloat64DataEncoder(
+			vector.GetFixedAtNoTypeCheck[float64](v, row),
+		), nil
+	case types.T_char, types.T_varchar, types.T_text, types.T_geometry:
+		return bytejson.NewTypedStringDataEncoder(
+			bytejson.TpCodeString,
+			v.GetBytesAt(row),
+		)
 	case types.T_json:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
 		data := v.GetBytesAt(row)
 		if len(data) == 0 {
-			return nil, nil
+			return bytejson.NewLiteralDataEncoder(bytejson.LiteralNull), nil
 		}
-		bj := types.DecodeJson(data)
-		return bj, nil
+		return bytejson.NewRawDataEncoder(types.DecodeJson(data))
 	case types.T_date:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeDate, vector.GetFixedAtNoTypeCheck[types.Date](v, row).String()), nil
+		return newJSONTypedStringEncoder(
+			bytejson.TpCodeDate,
+			vector.GetFixedAtNoTypeCheck[types.Date](v, row).String(),
+		)
 	case types.T_time:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeTime, vector.GetFixedAtNoTypeCheck[types.Time](v, row).String2(fromType.Scale)), nil
+		return newJSONTypedStringEncoder(
+			bytejson.TpCodeTime,
+			vector.GetFixedAtNoTypeCheck[types.Time](v, row).String2(fromType.Scale),
+		)
 	case types.T_datetime:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String2(fromType.Scale)), nil
+		return newJSONTypedStringEncoder(
+			bytejson.TpCodeDatetime,
+			vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String2(fromType.Scale),
+		)
 	case types.T_timestamp:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String2(jsonSessionTimeZone(proc), fromType.Scale)), nil
+		return newJSONTypedStringEncoder(
+			bytejson.TpCodeDatetime,
+			vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String2(
+				jsonSessionTimeZone(proc),
+				fromType.Scale,
+			),
+		)
 	case types.T_decimal64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](v, row)
-		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
+		return newJSONTypedStringEncoder(
+			bytejson.TpCodeDecimal,
+			string(vector.GetFixedAtNoTypeCheck[types.Decimal64](v, row).Format(fromType.Scale)),
+		)
 	case types.T_decimal128:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](v, row)
-		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
+		return newJSONTypedStringEncoder(
+			bytejson.TpCodeDecimal,
+			string(vector.GetFixedAtNoTypeCheck[types.Decimal128](v, row).Format(fromType.Scale)),
+		)
 	case types.T_decimal256:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, row)
-		return newTypedByteJson(bytejson.TpCodeDecimal, string(val.Format(fromType.Scale))), nil
+		return newJSONTypedStringEncoder(
+			bytejson.TpCodeDecimal,
+			string(vector.GetFixedAtNoTypeCheck[types.Decimal256](v, row).Format(fromType.Scale)),
+		)
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return bytejson.NewOpaqueDataEncoder(v.GetBytesAt(row))
 	case types.T_year:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[int16](v, row)
-		return strconv.FormatInt(int64(val), 10), nil
+		return newJSONTypedStringEncoder(
+			bytejson.TpCodeString,
+			strconv.FormatInt(
+				int64(vector.GetFixedAtNoTypeCheck[int16](v, row)),
+				10,
+			),
+		)
 	case types.T_bit:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
+		width := fromType.Width
+		if width <= 0 {
+			width = 1
 		}
+		if width > 64 {
+			ctx := context.Background()
+			if proc != nil && proc.Ctx != nil {
+				ctx = proc.Ctx
+			}
+			return nil, moerr.NewInvalidInputf(ctx, "cannot cast BIT(%d) to json", width)
+		}
+		value := vector.GetFixedAtNoTypeCheck[uint64](v, row)
+		if width < 64 {
+			value &= uint64(1)<<width - 1
+		}
+		byteLength := int((width + 7) / 8)
+		var raw [8]byte
+		binary.BigEndian.PutUint64(raw[:], value)
+		return bytejson.NewBitDataEncoder(raw[8-byteLength:])
+	case types.T_enum:
+		return newJSONTypedStringEncoder(
+			bytejson.TpCodeString,
+			vector.GetFixedAtNoTypeCheck[types.Enum](v, row).String(),
+		)
+	case types.T_uuid:
+		return newJSONTypedStringEncoder(
+			bytejson.TpCodeString,
+			vector.GetFixedAtNoTypeCheck[types.Uuid](v, row).String(),
+		)
+	case types.T_array_float32:
+		values := types.BytesToArray[float32](v.GetBytesAt(row))
+		return bytejson.NewIndexedFloatArrayDataEncoder(
+			len(values),
+			func(idx int) float64 { return float64(values[idx]) },
+		)
+	case types.T_array_float64:
+		values := types.BytesToArray[float64](v.GetBytesAt(row))
+		return bytejson.NewIndexedFloatArrayDataEncoder(
+			len(values),
+			func(idx int) float64 { return values[idx] },
+		)
+	case types.T_array_bf16:
+		values := types.BytesToArray[types.BF16](v.GetBytesAt(row))
+		return bytejson.NewIndexedFloatArrayDataEncoder(
+			len(values),
+			func(idx int) float64 { return float64(values[idx].ToFloat32()) },
+		)
+	case types.T_array_float16:
+		values := types.BytesToArray[types.Float16](v.GetBytesAt(row))
+		return bytejson.NewIndexedFloatArrayDataEncoder(
+			len(values),
+			func(idx int) float64 { return float64(values[idx].ToFloat32()) },
+		)
+	case types.T_array_int8:
+		values := types.BytesToArray[int8](v.GetBytesAt(row))
+		return bytejson.NewIndexedFloatArrayDataEncoder(
+			len(values),
+			func(idx int) float64 { return float64(values[idx]) },
+		)
+	case types.T_array_uint8:
+		values := types.BytesToArray[uint8](v.GetBytesAt(row))
+		return bytejson.NewIndexedFloatArrayDataEncoder(
+			len(values),
+			func(idx int) float64 { return float64(values[idx]) },
+		)
+	default:
 		ctx := context.Background()
 		if proc != nil && proc.Ctx != nil {
 			ctx = proc.Ctx
 		}
-		return bitToJSON(vector.GetFixedAtNoTypeCheck[uint64](v, row), fromType.Width, ctx)
-	case types.T_enum:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		val := vector.GetFixedAtNoTypeCheck[types.Enum](v, row)
-		return val.String(), nil
-	case types.T_geometry:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		data := v.GetBytesAt(row)
-		return string(data), nil
-	case types.T_uuid:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return vector.GetFixedAtNoTypeCheck[types.Uuid](v, row).String(), nil
-	case types.T_array_float32:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[float32](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x)
-		}
-		return out, nil
-	case types.T_array_float64:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[float64](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = x
-		}
-		return out, nil
-	case types.T_array_bf16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[types.BF16](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x.ToFloat32())
-		}
-		return out, nil
-	case types.T_array_float16:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[types.Float16](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x.ToFloat32())
-		}
-		return out, nil
-	case types.T_array_int8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[int8](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x)
-		}
-		return out, nil
-	case types.T_array_uint8:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		arr := types.BytesToArray[uint8](v.GetBytesAt(row))
-		out := make([]any, len(arr))
-		for i, x := range arr {
-			out[i] = float64(x)
-		}
-		return out, nil
-	default:
-		if v.IsNull(uint64(row)) {
-			return nil, nil
-		}
-		return nil, moerr.NewInvalidInputf(ctx, "unsupported type for json_array: %v", fromType.String())
+		return nil, moerr.NewInvalidInputf(
+			ctx,
+			"unsupported type for json_array: %v",
+			fromType.String(),
+		)
 	}
+}
+
+func newJSONTypedStringEncoder(
+	tp bytejson.TpCode,
+	value string,
+) (bytejson.ByteJsonDataEncoder, error) {
+	return bytejson.NewTypedStringDataEncoder(tp, []byte(value))
 }
 
 func jsonSessionTimeZone(proc *process.Process) *time.Location {
@@ -2145,6 +2175,18 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	arrayOp := &opBuiltInJsonArray{}
+	entryCount := len(params) / 2
+	entries := make([]bytejson.ObjectDataEncoderEntry, entryCount)
+	keyOffsets := make([][2]int, entryCount)
+	defer clear(entries)
+
+	var legacy jqLegacyOutput
+	var scratch functionScratchOutput
+	var keyOutput jqOutput = &legacy
+	if result.HasFunctionScratch() {
+		scratch.result = result
+		keyOutput = &scratch
+	}
 
 	if selectList != nil && selectList.IgnoreAllRow() {
 		for j := 0; j < length; j++ {
@@ -2162,73 +2204,184 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 			}
 			continue
 		}
-		obj := make(map[string]any, len(params)/2)
-
+		keyOutput.Reset()
 		for i := 0; i < len(params); i += 2 {
+			entryIdx := i / 2
 			// key must not be NULL
 			if params[i].IsNull(uint64(j)) {
 				return moerr.NewInvalidInputf(proc.Ctx, "JSON documents may not contain NULL member names")
 			}
-			// key may be any type, convert to string representation.
-			keyAny, err := arrayOp.convertToAny(proc, params[i], j)
+			start := keyOutput.Len()
+			if err := writeJSONObjectKey(keyOutput, proc, params[i], j); err != nil {
+				return err
+			}
+			if err := keyOutput.Err(); err != nil {
+				return err
+			}
+			keyOffsets[entryIdx] = [2]int{start, keyOutput.Len()}
+
+			value, err := arrayOp.buildValueEncoder(proc, params[i+1], j)
 			if err != nil {
 				return err
 			}
-			var key string
-			switch v := keyAny.(type) {
-			case bytejson.ByteJson:
-				// For JSON strings, unquote to get the raw key.
-				// For typed scalars (DATE/TIME/DATETIME/BLOB),
-				// MarshalJSON wraps values in quotes; strip them.
-				// For numbers/objects/arrays, MarshalJSON gives the
-				// correct text form.
-				switch v.Type {
-				case bytejson.TpCodeString:
-					s, err := v.Unquote()
-					if err == nil {
-						key = s
-					} else {
-						key = fmt.Sprint(v)
-					}
-				case bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
-					if bj, err := v.MarshalJSON(); err == nil && len(bj) >= 2 && bj[0] == '"' {
-						key = string(bj[1 : len(bj)-1])
-					} else {
-						key = fmt.Sprint(v)
-					}
-				default:
-					if bj, err := v.MarshalJSON(); err == nil {
-						key = string(bj)
-					} else {
-						key = fmt.Sprint(v)
-					}
-				}
-			case nil:
-				return moerr.NewInvalidInputf(proc.Ctx, "JSON documents may not contain NULL member names")
-			default:
-				key = fmt.Sprint(v)
-			}
-
-			elem, err := arrayOp.convertToAny(proc, params[i+1], j)
-			if err != nil {
-				return err
-			}
-			obj[key] = elem
+			entries[entryIdx].Value = value
 		}
-
-		bj, err := bytejson.CreateByteJSON(obj)
+		keyBytes := keyOutput.Bytes()
+		for idx, offsets := range keyOffsets {
+			entries[idx].Key = keyBytes[offsets[0]:offsets[1]]
+		}
+		encoder, err := bytejson.NewObjectDataEncoder(entries)
 		if err != nil {
 			return err
 		}
-		dt, err := bj.Marshal()
-		if err != nil {
-			return err
-		}
-		if err := rs.AppendBytes(dt, false); err != nil {
+		if err := rs.AppendByteJsonEncoded(encoder); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func writeJSONObjectKey(
+	w formatBuffer,
+	proc *process.Process,
+	v *vector.Vector,
+	row int,
+) error {
+	fromType := v.GetType()
+	var numeric [64]byte
+	write := func(value []byte) error {
+		_, err := w.Write(value)
+		return err
+	}
+	switch fromType.Oid {
+	case types.T_bool:
+		return write(strconv.AppendBool(
+			numeric[:0],
+			vector.GetFixedAtNoTypeCheck[bool](v, row),
+		))
+	case types.T_int8:
+		return write(strconv.AppendInt(numeric[:0], int64(vector.GetFixedAtNoTypeCheck[int8](v, row)), 10))
+	case types.T_int16:
+		return write(strconv.AppendInt(numeric[:0], int64(vector.GetFixedAtNoTypeCheck[int16](v, row)), 10))
+	case types.T_int32:
+		return write(strconv.AppendInt(numeric[:0], int64(vector.GetFixedAtNoTypeCheck[int32](v, row)), 10))
+	case types.T_int64:
+		return write(strconv.AppendInt(numeric[:0], vector.GetFixedAtNoTypeCheck[int64](v, row), 10))
+	case types.T_uint8:
+		return write(strconv.AppendUint(numeric[:0], uint64(vector.GetFixedAtNoTypeCheck[uint8](v, row)), 10))
+	case types.T_uint16:
+		return write(strconv.AppendUint(numeric[:0], uint64(vector.GetFixedAtNoTypeCheck[uint16](v, row)), 10))
+	case types.T_uint32:
+		return write(strconv.AppendUint(numeric[:0], uint64(vector.GetFixedAtNoTypeCheck[uint32](v, row)), 10))
+	case types.T_uint64:
+		return write(strconv.AppendUint(numeric[:0], vector.GetFixedAtNoTypeCheck[uint64](v, row), 10))
+	case types.T_float32:
+		return write(strconv.AppendFloat(numeric[:0], float64(vector.GetFixedAtNoTypeCheck[float32](v, row)), 'g', -1, 64))
+	case types.T_float64:
+		return write(strconv.AppendFloat(numeric[:0], vector.GetFixedAtNoTypeCheck[float64](v, row), 'g', -1, 64))
+	case types.T_char, types.T_varchar, types.T_text, types.T_geometry:
+		return write(v.GetBytesAt(row))
+	case types.T_json:
+		return bytejson.WriteJSONObjectKeyText(w, types.DecodeJson(v.GetBytesAt(row)))
+	case types.T_date:
+		_, err := w.WriteString(vector.GetFixedAtNoTypeCheck[types.Date](v, row).String())
+		return err
+	case types.T_time:
+		_, err := w.WriteString(vector.GetFixedAtNoTypeCheck[types.Time](v, row).String2(fromType.Scale))
+		return err
+	case types.T_datetime:
+		_, err := w.WriteString(vector.GetFixedAtNoTypeCheck[types.Datetime](v, row).String2(fromType.Scale))
+		return err
+	case types.T_timestamp:
+		_, err := w.WriteString(vector.GetFixedAtNoTypeCheck[types.Timestamp](v, row).String2(jsonSessionTimeZone(proc), fromType.Scale))
+		return err
+	case types.T_decimal64:
+		_, err := w.WriteString(vector.GetFixedAtNoTypeCheck[types.Decimal64](v, row).Format(fromType.Scale))
+		return err
+	case types.T_decimal128:
+		_, err := w.WriteString(vector.GetFixedAtNoTypeCheck[types.Decimal128](v, row).Format(fromType.Scale))
+		return err
+	case types.T_decimal256:
+		_, err := w.WriteString(vector.GetFixedAtNoTypeCheck[types.Decimal256](v, row).Format(fromType.Scale))
+		return err
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return bytejson.WriteJSONBase64Text(w, v.GetBytesAt(row))
+	case types.T_year:
+		return write(strconv.AppendInt(numeric[:0], int64(vector.GetFixedAtNoTypeCheck[int16](v, row)), 10))
+	case types.T_bit:
+		width := fromType.Width
+		if width <= 0 {
+			width = 1
+		}
+		if width > 64 {
+			ctx := context.Background()
+			if proc != nil && proc.Ctx != nil {
+				ctx = proc.Ctx
+			}
+			return moerr.NewInvalidInputf(ctx, "cannot cast BIT(%d) to json", width)
+		}
+		value := vector.GetFixedAtNoTypeCheck[uint64](v, row)
+		if width < 64 {
+			value &= uint64(1)<<width - 1
+		}
+		byteLength := int((width + 7) / 8)
+		var raw [8]byte
+		binary.BigEndian.PutUint64(raw[:], value)
+		return bytejson.WriteJSONBase64Text(w, raw[8-byteLength:])
+	case types.T_enum:
+		_, err := w.WriteString(vector.GetFixedAtNoTypeCheck[types.Enum](v, row).String())
+		return err
+	case types.T_uuid:
+		_, err := w.WriteString(vector.GetFixedAtNoTypeCheck[types.Uuid](v, row).String())
+		return err
+	case types.T_array_float32:
+		values := types.BytesToArray[float32](v.GetBytesAt(row))
+		return writeJSONObjectFloatArrayKey(w, len(values), func(idx int) float64 { return float64(values[idx]) })
+	case types.T_array_float64:
+		values := types.BytesToArray[float64](v.GetBytesAt(row))
+		return writeJSONObjectFloatArrayKey(w, len(values), func(idx int) float64 { return values[idx] })
+	case types.T_array_bf16:
+		values := types.BytesToArray[types.BF16](v.GetBytesAt(row))
+		return writeJSONObjectFloatArrayKey(w, len(values), func(idx int) float64 { return float64(values[idx].ToFloat32()) })
+	case types.T_array_float16:
+		values := types.BytesToArray[types.Float16](v.GetBytesAt(row))
+		return writeJSONObjectFloatArrayKey(w, len(values), func(idx int) float64 { return float64(values[idx].ToFloat32()) })
+	case types.T_array_int8:
+		values := types.BytesToArray[int8](v.GetBytesAt(row))
+		return writeJSONObjectFloatArrayKey(w, len(values), func(idx int) float64 { return float64(values[idx]) })
+	case types.T_array_uint8:
+		values := types.BytesToArray[uint8](v.GetBytesAt(row))
+		return writeJSONObjectFloatArrayKey(w, len(values), func(idx int) float64 { return float64(values[idx]) })
+	default:
+		ctx := context.Background()
+		if proc != nil && proc.Ctx != nil {
+			ctx = proc.Ctx
+		}
+		return moerr.NewInvalidInputf(ctx, "unsupported type for json_array: %v", fromType.String())
+	}
+}
+
+func writeJSONObjectFloatArrayKey(
+	w formatBuffer,
+	count int,
+	valueAt func(int) float64,
+) error {
+	if err := w.WriteByte('['); err != nil {
+		return err
+	}
+	var numeric [32]byte
+	for idx := 0; idx < count; idx++ {
+		if idx > 0 {
+			if err := w.WriteByte(' '); err != nil {
+				return err
+			}
+		}
+		value := strconv.AppendFloat(numeric[:0], valueAt(idx), 'g', -1, 64)
+		if _, err := w.Write(value); err != nil {
+			return err
+		}
+	}
+	return w.WriteByte(']')
 }
 
 type opBuiltInJsonType struct{}
@@ -2419,19 +2572,25 @@ func jsonKeysRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 
 	if selectList != nil && selectList.IgnoreAllRow() {
 		for i := 0; i < length; i++ {
-			rs.AppendMustNullForBytesResult()
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList.Contains(i) {
-			rs.AppendMustNullForBytesResult()
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 			continue
 		}
 		v, null := p1.GetStrValue(i)
 		if null {
-			rs.AppendMustNullForBytesResult()
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 			continue
 		}
 		var bj bytejson.ByteJson
@@ -2444,13 +2603,13 @@ func jsonKeysRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid JSON document")
 		}
-		keysArray, err := buildJsonKeysArray(bj)
-		if err != nil || keysArray.IsNull() {
+		appended, err := appendJsonKeysArray(rs, bj)
+		if err != nil {
+			return err
+		}
+		if !appended {
 			rs.AppendMustNullForBytesResult()
 			continue
-		}
-		if err := rs.AppendByteJson(keysArray, false); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -2501,28 +2660,33 @@ func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			rs.AppendMustNullForBytesResult()
 			continue
 		}
-		keysArray, err := buildJsonKeysArray(val)
-		if err != nil || keysArray.IsNull() {
+		appended, err := appendJsonKeysArray(rs, val)
+		if err != nil {
+			return err
+		}
+		if !appended {
 			rs.AppendMustNullForBytesResult()
 			continue
-		}
-		if err := rs.AppendByteJson(keysArray, false); err != nil {
-			return err
 		}
 	}
 	return nil
 }
 
-func buildJsonKeysArray(bj bytejson.ByteJson) (bytejson.ByteJson, error) {
+func appendJsonKeysArray(
+	rs *vector.FunctionResult[types.Varlena],
+	bj bytejson.ByteJson,
+) (bool, error) {
 	if bj.Type != bytejson.TpCodeObject {
-		return bytejson.Null, nil
+		return false, nil
 	}
-	cnt := bj.GetElemCnt()
-	keys := make([]any, cnt)
-	for i := 0; i < cnt; i++ {
-		keys[i] = string(bj.GetObjectKey(i))
+	encoder, err := bytejson.NewObjectKeysArrayEncoder(bj)
+	if err != nil {
+		return false, err
 	}
-	return bytejson.CreateByteJSON(keys)
+	if err := rs.AppendByteJsonEncoded(encoder); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // JSON_PRETTY
@@ -2531,6 +2695,7 @@ func JsonPretty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	var legacy bytes.Buffer
 
 	if selectList != nil && selectList.IgnoreAllRow() {
 		for i := 0; i < length; i++ {
@@ -2559,25 +2724,17 @@ func JsonPretty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_pretty", "invalid JSON document")
 		}
-		out, err := jsonPrettyPrint(bj, 0)
+		_, err = appendFormattedBytesForResult(result, rs, &legacy, func(w formatBuffer) (bool, error) {
+			return false, jsonPrettyPrintTo(w, bj, 0)
+		})
 		if err != nil {
 			return err
 		}
-		rs.AppendMustBytesValue(out)
 	}
 	return nil
 }
 
-func jsonPrettyPrint(bj bytejson.ByteJson, depth int) ([]byte, error) {
-	var buf bytes.Buffer
-	err := jsonPrettyPrintTo(&buf, bj, depth)
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func jsonPrettyPrintTo(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+func jsonPrettyPrintTo(w formatBuffer, bj bytejson.ByteJson, depth int) error {
 	switch bj.Type {
 	case bytejson.TpCodeObject:
 		return prettyPrintObject(w, bj, depth)
@@ -2588,67 +2745,92 @@ func jsonPrettyPrintTo(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	}
 }
 
-func prettyPrintObject(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+func prettyPrintObject(w formatBuffer, bj bytejson.ByteJson, depth int) error {
 	cnt := bj.GetElemCnt()
 	if cnt == 0 {
-		w.WriteString("{}")
-		return nil
+		_, err := w.WriteString("{}")
+		return err
 	}
-	indent := strings.Repeat("  ", depth+1)
-	w.WriteString("{\n")
+	if _, err := w.WriteString("{\n"); err != nil {
+		return err
+	}
 	for i := 0; i < cnt; i++ {
 		key := bj.GetObjectKey(i)
-		// Escape key the same way JSON_QUOTE would.
-		keyJSON, _ := json.Marshal(string(key))
-		w.WriteString(indent)
-		w.Write(keyJSON)
-		w.WriteString(": ")
+		if err := writePrettyIndent(w, depth+1); err != nil {
+			return err
+		}
+		if err := bytejson.WriteJSONString(w, key); err != nil {
+			return err
+		}
+		if _, err := w.WriteString(": "); err != nil {
+			return err
+		}
 		val := bj.GetObjectVal(i)
 		if err := jsonPrettyPrintTo(w, val, depth+1); err != nil {
 			return err
 		}
 		if i < cnt-1 {
-			w.WriteString(",")
+			if err := w.WriteByte(','); err != nil {
+				return err
+			}
 		}
-		w.WriteString("\n")
+		if err := w.WriteByte('\n'); err != nil {
+			return err
+		}
 	}
-	w.WriteString(strings.Repeat("  ", depth))
-	w.WriteString("}")
-	return nil
+	if err := writePrettyIndent(w, depth); err != nil {
+		return err
+	}
+	return w.WriteByte('}')
 }
 
-func prettyPrintArray(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+func prettyPrintArray(w formatBuffer, bj bytejson.ByteJson, depth int) error {
 	cnt := bj.GetElemCnt()
 	if cnt == 0 {
-		w.WriteString("[]")
-		return nil
+		_, err := w.WriteString("[]")
+		return err
 	}
-	indent := strings.Repeat("  ", depth+1)
-	w.WriteString("[\n")
+	if _, err := w.WriteString("[\n"); err != nil {
+		return err
+	}
 	for i := 0; i < cnt; i++ {
-		w.WriteString(indent)
+		if err := writePrettyIndent(w, depth+1); err != nil {
+			return err
+		}
 		elem := bj.GetArrayElem(i)
 		if err := jsonPrettyPrintTo(w, elem, depth+1); err != nil {
 			return err
 		}
 		if i < cnt-1 {
-			w.WriteString(",")
+			if err := w.WriteByte(','); err != nil {
+				return err
+			}
 		}
-		w.WriteString("\n")
+		if err := w.WriteByte('\n'); err != nil {
+			return err
+		}
 	}
-	w.WriteString(strings.Repeat("  ", depth))
-	w.WriteString("]")
+	if err := writePrettyIndent(w, depth); err != nil {
+		return err
+	}
+	return w.WriteByte(']')
+}
+
+func writePrettyIndent(w formatBuffer, depth int) error {
+	const spaces = "                                "
+	remaining := depth * 2
+	for remaining > 0 {
+		length := min(remaining, len(spaces))
+		if _, err := w.WriteString(spaces[:length]); err != nil {
+			return err
+		}
+		remaining -= length
+	}
 	return nil
 }
 
-func prettyPrintScalar(w *bytes.Buffer, bj bytejson.ByteJson) error {
-	// Use MarshalJSON to get properly formatted/escaped scalar value.
-	text, err := bj.MarshalJSON()
-	if err != nil {
-		return err
-	}
-	w.Write(text)
-	return nil
+func prettyPrintScalar(w formatBuffer, bj bytejson.ByteJson) error {
+	return bytejson.WriteJSONText(w, bj)
 }
 
 // JSON_SCHEMA_VALID
