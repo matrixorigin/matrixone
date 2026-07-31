@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 )
@@ -169,7 +170,8 @@ func (r ClusterRemoteClientRetirer) Retire(ctx context.Context, retirement Clien
 		return true
 	})
 
-	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	sendCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(ctx), timeout, moerr.CauseMongoDBClientRetirement)
 	defer cancel()
 	var wg sync.WaitGroup
 	for _, address := range targets {

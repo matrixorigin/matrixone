@@ -469,7 +469,8 @@ func disconnectClients(clients []Client) error {
 	if len(clients) == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), clientCleanupTimeout)
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(), clientCleanupTimeout, moerr.CauseMongoDBClientCleanup)
 	defer cancel()
 	var first error
 	for _, client := range clients {

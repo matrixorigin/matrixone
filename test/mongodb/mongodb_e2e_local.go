@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,8 +19,6 @@ import (
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 )
 
 type report struct {
@@ -296,13 +295,14 @@ func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn strin
 		return fmt.Errorf("non-admin MongoDB table creation unexpectedly succeeded")
 	}
 
-	marker := sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
-		Connection: "mongodb_ci", Database: "mongodb_source", Collection: "events",
-		Columns: []sqlmongodb.ColumnMapping{{
-			Name: "value", Path: "measurement", TypeID: int32(types.T_int64), Conversion: sqlmongodb.ConversionStrict,
-		}},
-	})
-	marker = strings.Replace(marker, "version=2; kind=mongodb_table;", "version=1;", 1)
+	// Keep the E2E runner independent from MatrixOne's kernel packages: importing
+	// the production envelope builder here pulls the kernel CGo dependency graph
+	// into a runtime `go run`. This valid legacy envelope is deliberately local
+	// test data; type_id 23 is BIGINT in the version-1 catalog encoding.
+	const columnsJSON = `[{"name":"value","path":"measurement","type_id":23,"conversion":"strict"}]`
+	marker := "/* MO_MONGODB: version=1; connection=mongodb_ci; database=mongodb_source; collection=events; " +
+		"schema_mode=explicit; conversion_mode=strict; split_key=; max_parallelism=1; columns=" +
+		url.QueryEscape(columnsJSON) + " */"
 	// Before the parser boundary was anchored, a generic external-table filepath
 	// containing this valid marker was mistaken for planner-owned MongoDB DDL.
 	injectionSQL := "create external table mongodb_ci.marker_injection(value bigint) infile{\"filepath\"='" +

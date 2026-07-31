@@ -35,7 +35,7 @@ import (
 
 const conversionErrorRateMinAttempts = 100
 
-var errDecodedBatchBudget = errors.New("MongoDB decoded batch byte limit exceeded")
+var errDecodedBatchBudget = moerr.NewInternalErrorNoCtx("MongoDB decoded batch byte limit exceeded")
 
 type Converter struct {
 	columns                []ColumnMapping

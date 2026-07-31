@@ -18,9 +18,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +31,23 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMongoDBLocalE2ERunnerDoesNotImportKernelPackages(t *testing.T) {
+	repoRoot := mongoDBTestRepoRoot(t)
+	file, err := parser.ParseFile(
+		token.NewFileSet(),
+		filepath.Join(repoRoot, "test/mongodb/mongodb_e2e_local.go"),
+		nil,
+		parser.ImportsOnly,
+	)
+	require.NoError(t, err)
+	for _, imported := range file.Imports {
+		path, err := strconv.Unquote(imported.Path.Value)
+		require.NoError(t, err)
+		require.Falsef(t, strings.HasPrefix(path, "github.com/matrixorigin/matrixone/"),
+			"standalone E2E runner must not import kernel package %s", path)
+	}
+}
 
 func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	repoRoot := mongoDBTestRepoRoot(t)
