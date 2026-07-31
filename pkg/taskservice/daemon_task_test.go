@@ -1119,6 +1119,49 @@ func TestCancelDaemonTaskWithRemovedExecutor(t *testing.T) {
 		WithRunnerFetchInterval(time.Millisecond))
 }
 
+func TestReconcileRetiredDaemonTasksClosesRollingUpgradeWrites(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	// Model both writers that can race the one-time upgrade migration: an old
+	// owner overwrites CancelRequested with its pre-upgrade Running snapshot,
+	// and another old CN inserts a new unassigned task afterwards.
+	migrated := newDaemonTaskForTest(1, task.TaskStatus_CancelRequested, "old-cn")
+	migrated.Metadata.ID = "retired-stale-snapshot"
+	migrated.Metadata.Executor = retiredKafkaSinkTaskCode
+	mustAddTestDaemonTask(t, store, 1, migrated)
+	staleSnapshot := migrated
+	staleSnapshot.TaskStatus = task.TaskStatus_Running
+	staleSnapshot.LastHeartbeat = time.Now()
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{staleSnapshot})
+
+	lateInsert := newDaemonTaskForTest(2, task.TaskStatus_Created, "")
+	lateInsert.Metadata.ID = "retired-late-insert"
+	lateInsert.Metadata.Executor = retiredKafkaSinkTaskCode
+	mustAddTestDaemonTask(t, store, 1, lateInsert)
+
+	r.reconcileRetiredDaemonTasks(context.Background())
+	got := mustGetTestDaemonTask(t, store, 2)
+	require.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
+	require.Equal(t, "old-cn", got[0].TaskRunner)
+	require.Equal(t, task.TaskStatus_CancelRequested, got[1].TaskStatus)
+	require.Empty(t, got[1].TaskRunner)
+
+	// Reconciliation only requests cancellation. It must not steal a live old
+	// owner; the ordinary cancellation fence finishes the task after that owner
+	// disappears, while an unassigned task can finish immediately.
+	require.NoError(t, newCancelTask(r, staleSnapshot.ID).Handle(context.Background()))
+	got = mustGetTestDaemonTask(t, store, 2)
+	require.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
+
+	got[0].LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustUpdateTestDaemonTask(t, store, 1, got[:1])
+	require.NoError(t, newCancelTask(r, staleSnapshot.ID).Handle(context.Background()))
+	require.NoError(t, newCancelTask(r, lateInsert.ID).Handle(context.Background()))
+	got = mustGetTestDaemonTask(t, store, 2)
+	require.Equal(t, task.TaskStatus_Canceled, got[0].TaskStatus)
+	require.Equal(t, task.TaskStatus_Canceled, got[1].TaskStatus)
+}
+
 func TestCancelTaskWaitsForLocalRoutinePublication(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
 	r.RegisterExecutor(task.TaskCode_TestOnly, func(context.Context, task.Task) error { return nil })

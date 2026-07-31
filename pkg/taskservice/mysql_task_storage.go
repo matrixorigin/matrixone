@@ -1559,9 +1559,12 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 			if err != nil {
 				return err
 			}
-			details, err := t.Details.Marshal()
-			if err != nil {
-				return err
+			var details any
+			if t.Details != nil {
+				details, err = t.Details.Marshal()
+				if err != nil {
+					return err
+				}
 			}
 
 			var lastHeartbeat, updateAt, endAt, lastRun any

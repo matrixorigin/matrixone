@@ -111,6 +111,12 @@ func (c *taskRunnerCond) eval(v any) bool {
 }
 
 func (c *taskRunnerCond) sql() string {
+	if c.op == EQ && c.taskRunner == "" {
+		// Unassigned daemon tasks are persisted as either SQL NULL (initial
+		// insert) or an empty string (explicit ownership release). Both encode
+		// the same owner state; non-empty owners remain strict equality fences.
+		return "(task_runner='' or task_runner is NULL)"
+	}
 	return fmt.Sprintf("task_runner%s'%s'", OpName[c.op], c.taskRunner)
 }
 

@@ -1542,6 +1542,38 @@ func TestRunUpdateDaemonTaskBranches(t *testing.T) {
 		require.Equal(t, 1, n)
 	})
 
+	t.Run("unassigned runner matches null", func(t *testing.T) {
+		n, err := m.RunUpdateDaemonTask(
+			ctx,
+			[]task.DaemonTask{d},
+			&mockSqlExecutor{
+				execFn: func(_ context.Context, query string, _ ...interface{}) (sql.Result, error) {
+					require.Contains(t, query, "(task_runner='' or task_runner is NULL)")
+					require.Contains(t, query, "task_status IN (8)")
+					return mockRowsAffectedResult{rows: 1}, nil
+				},
+			},
+			WithTaskRunnerCond(EQ, ""),
+			WithTaskStatusCond(task.TaskStatus_CancelRequested),
+		)
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+	})
+
+	t.Run("nil historical details", func(t *testing.T) {
+		nilDetails := d
+		nilDetails.Details = nil
+		n, err := m.RunUpdateDaemonTask(ctx, []task.DaemonTask{nilDetails}, &mockSqlExecutor{
+			execFn: func(_ context.Context, _ string, args ...interface{}) (sql.Result, error) {
+				require.Len(t, args, 12)
+				require.Nil(t, args[10])
+				return mockRowsAffectedResult{rows: 1}, nil
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+	})
+
 	t.Run("exec error", func(t *testing.T) {
 		_, err := m.RunUpdateDaemonTask(ctx, []task.DaemonTask{d}, &mockSqlExecutor{
 			execFn: func(context.Context, string, ...interface{}) (sql.Result, error) {

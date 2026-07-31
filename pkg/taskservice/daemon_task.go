@@ -52,6 +52,16 @@ var (
 	eventCDCRestartRequestStateUpdated   = logutil.Event{Name: "taskservice.cdc.restart.request-state-updated", Message: "CDC restart request state was updated"}
 )
 
+const (
+	// retiredKafkaSinkTaskCode is the reserved wire value formerly assigned to
+	// TaskCode_ConnectorKafkaSink. It is used only to fail closed persisted rows
+	// written by an older CN during a rolling upgrade; no business executor is
+	// registered for it.
+	retiredKafkaSinkTaskCode = task.TaskCode(4)
+	// Bound compatibility work so it cannot starve normal daemon dispatch.
+	retiredDaemonTaskBatchSize = 16
+)
+
 func cdcRestartEventFields(t task.DaemonTask, fields ...zap.Field) []zap.Field {
 	out := logutil.StringFingerprintFields("task-name", taskNameFromDetails(t))
 	out = append(out, logutil.StringFingerprintFields("task-id", strconv.FormatUint(t.ID, 10))...)
@@ -741,6 +751,12 @@ func (r *taskRunner) newStartTask(t task.DaemonTask) {
 }
 
 func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
+	// The version upgrade performs the initial bulk retirement, while this
+	// reconciliation closes the supported rolling-upgrade window: an old CN may
+	// still insert code-4 tasks or write an unfenced pre-upgrade snapshot after
+	// that one-time migration commits.
+	r.reconcileRetiredDaemonTasks(ctx)
+
 	// Build handlers first, then enqueue outside daemonTasks lock usage
 	// to avoid lock + channel send blocking cycles.
 	handlers := make([]TaskHandler, 0, 16)
@@ -817,6 +833,49 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 	}
 	for _, h := range handlers {
 		r.enqueue(h)
+	}
+}
+
+func (r *taskRunner) reconcileRetiredDaemonTasks(ctx context.Context) {
+	tasks := r.queryDaemonTasks(
+		ctx,
+		WithTaskExecutorCond(EQ, retiredKafkaSinkTaskCode),
+		WithTaskStatusCond(
+			task.TaskStatus_Created,
+			task.TaskStatus_Running,
+			task.TaskStatus_Paused,
+			task.TaskStatus_ResumeRequested,
+			task.TaskStatus_PauseRequested,
+			task.TaskStatus_RestartRequested,
+		),
+		WithLimitCond(retiredDaemonTaskBatchSize),
+	)
+	retiredAt := time.Now()
+	for _, observed := range tasks {
+		retired := observed
+		retired.TaskStatus = task.TaskStatus_CancelRequested
+		retired.UpdateAt = retiredAt
+
+		updateCtx, cancel := context.WithTimeout(ctx, r.options.fetchTimeout)
+		updated, err := r.service.UpdateDaemonTask(
+			updateCtx,
+			[]task.DaemonTask{retired},
+			WithTaskExecutorCond(EQ, retiredKafkaSinkTaskCode),
+			WithTaskStatusCond(observed.TaskStatus),
+			WithTaskRunnerCond(EQ, observed.TaskRunner),
+		)
+		cancel()
+		if err != nil {
+			r.logger.Error("failed to retire removed daemon task",
+				zap.Uint64("task ID", observed.ID),
+				zap.Error(err))
+			continue
+		}
+		if updated == 1 {
+			r.logger.Info("retired removed daemon task",
+				zap.Uint64("task ID", observed.ID),
+				zap.String("previous status", observed.TaskStatus.String()))
+		}
 	}
 }
 
