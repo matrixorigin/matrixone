@@ -92,6 +92,21 @@ func (mr *MockClientSessionMockRecorder) CreateCache(ctx, cacheID interface{}) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateCache", reflect.TypeOf((*MockClientSession)(nil).CreateCache), ctx, cacheID)
 }
 
+// CreateCacheWithCancel mocks base method.
+func (m *MockClientSession) CreateCacheWithCancel(ctx context.Context, cacheID uint64, cancel context.CancelFunc) (morpc.MessageCache, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateCacheWithCancel", ctx, cacheID, cancel)
+	ret0, _ := ret[0].(morpc.MessageCache)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CreateCacheWithCancel indicates an expected call of CreateCacheWithCancel.
+func (mr *MockClientSessionMockRecorder) CreateCacheWithCancel(ctx, cacheID, cancel interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateCacheWithCancel", reflect.TypeOf((*MockClientSession)(nil).CreateCacheWithCancel), ctx, cacheID, cancel)
+}
+
 // DeleteCache mocks base method.
 func (m *MockClientSession) DeleteCache(cacheID uint64) {
 	m.ctrl.T.Helper()

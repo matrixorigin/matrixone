@@ -701,7 +701,7 @@ func (cs *clientSession) Close() error {
 	}
 	clear(cs.receivedStreamSequences)
 	for _, c := range cs.mu.caches {
-		c.cache.Close()
+		c.close()
 	}
 	cs.mu.caches = nil
 	cs.cancelWrite()
@@ -844,7 +844,7 @@ func (cs *clientSession) checkCacheTimeout() {
 				cs.mu.Lock()
 				for k, c := range cs.mu.caches {
 					if c.closeIfTimeout() {
-						c.cache.Close()
+						c.close()
 						delete(cs.mu.caches, k)
 						if cs.metrics != nil {
 							cs.metrics.messageCacheStateGauge.Dec()
@@ -937,6 +937,13 @@ func (cs *clientSession) FinishStream(
 func (cs *clientSession) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (MessageCache, error) {
+	return cs.CreateCacheWithCancel(ctx, cacheID, nil)
+}
+
+func (cs *clientSession) CreateCacheWithCancel(
+	ctx context.Context,
+	cacheID uint64,
+	cancel context.CancelFunc) (MessageCache, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -947,12 +954,15 @@ func (cs *clientSession) CreateCache(
 	v, ok := cs.mu.caches[cacheID]
 	if !ok {
 		v = cacheWithContext{ctx: ctx, cache: newCache()}
-		cs.mu.caches[cacheID] = v
 		if cs.metrics != nil {
 			cs.metrics.messageCacheStateGauge.Inc()
 		}
 		cs.startCheckCacheTimeout()
 	}
+	if cancel != nil {
+		v.cancels = append(v.cancels, cancel)
+	}
+	cs.mu.caches[cacheID] = v
 	return v.cache, nil
 }
 
@@ -964,7 +974,7 @@ func (cs *clientSession) DeleteCache(cacheID uint64) {
 		return
 	}
 	if c, ok := cs.mu.caches[cacheID]; ok {
-		c.cache.Close()
+		c.close()
 		delete(cs.mu.caches, cacheID)
 		if cs.metrics != nil {
 			cs.metrics.messageCacheStateGauge.Dec()
@@ -987,8 +997,16 @@ func (cs *clientSession) GetCache(cacheID uint64) (MessageCache, error) {
 }
 
 type cacheWithContext struct {
-	ctx   context.Context
-	cache MessageCache
+	ctx     context.Context
+	cache   MessageCache
+	cancels []context.CancelFunc
+}
+
+func (c cacheWithContext) close() {
+	c.cache.Close()
+	for _, cancel := range c.cancels {
+		cancel()
+	}
 }
 
 func (c cacheWithContext) closeIfTimeout() bool {

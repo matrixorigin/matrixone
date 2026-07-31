@@ -783,6 +783,73 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 	})
 }
 
+func TestCancelableMessageCacheLifecycle(t *testing.T) {
+	t.Run("delete", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		var canceled atomic.Int32
+		cache, err := cs.CreateCacheWithCancel(
+			context.Background(),
+			1,
+			func() { canceled.Add(1) },
+		)
+		require.NoError(t, err)
+		require.NoError(t, cache.Add(newTestMessage(1)))
+		cs.DeleteCache(1)
+		require.Equal(t, int32(1), canceled.Load())
+		require.NoError(t, cs.Close())
+		require.Equal(t, int32(1), canceled.Load())
+	})
+
+	t.Run("session close", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		var canceled atomic.Int32
+		_, err := cs.CreateCacheWithCancel(
+			context.Background(),
+			1,
+			func() { canceled.Add(1) },
+		)
+		require.NoError(t, err)
+		require.NoError(t, cs.Close())
+		require.Equal(t, int32(1), canceled.Load())
+	})
+
+	t.Run("all fragments", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		var canceled atomic.Int32
+		for range 2 {
+			_, err := cs.CreateCacheWithCancel(
+				context.Background(),
+				1,
+				func() { canceled.Add(1) },
+			)
+			require.NoError(t, err)
+		}
+		cs.DeleteCache(1)
+		require.Equal(t, int32(2), canceled.Load())
+		require.NoError(t, cs.Close())
+	})
+
+	t.Run("request timeout", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		ctx, expire := context.WithCancel(context.Background())
+		var canceled atomic.Int32
+		cache, err := cs.CreateCacheWithCancel(
+			ctx,
+			1,
+			func() { canceled.Add(1) },
+		)
+		require.NoError(t, err)
+		expire()
+		require.Eventually(t, func() bool {
+			return canceled.Load() == 1
+		}, 2500*time.Millisecond, 10*time.Millisecond)
+		_, err = cache.Len()
+		require.Error(t, err)
+		require.NoError(t, cs.Close())
+		require.Equal(t, int32(1), canceled.Load())
+	})
+}
+
 func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)

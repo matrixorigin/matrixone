@@ -414,6 +414,12 @@ func (cs *testClientSession) CreateCache(
 	cacheID uint64) (morpc.MessageCache, error) {
 	panic("not implement")
 }
+func (cs *testClientSession) CreateCacheWithCancel(
+	context.Context,
+	uint64,
+	context.CancelFunc) (morpc.MessageCache, error) {
+	panic("not implement")
+}
 
 func (cs *testClientSession) DeleteCache(cacheID uint64) {
 	panic("not implement")

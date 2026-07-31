@@ -287,7 +287,8 @@ func Test_InitServer(t *testing.T) {
 	ctx := context.TODO()
 	session := mock_morpc.NewMockClientSession(ctrl)
 	msg.Cmd = pipeline.Method_PipelineMessage
-	session.EXPECT().CreateCache(gomock.Any(), uint64(0)).Return(&testMessageCache{}, nil).Times(2)
+	session.EXPECT().CreateCacheWithCancel(gomock.Any(), uint64(0), gomock.Any()).Return(&testMessageCache{}, nil)
+	session.EXPECT().CreateCache(gomock.Any(), uint64(0)).Return(&testMessageCache{}, nil)
 	session.EXPECT().DeleteCache(uint64(0)).Times(1)
 
 	msg.Sid = pipeline.Status_WaitingNext
@@ -648,6 +649,100 @@ func TestPipelineAdmissionRejectsRequestAlreadyReadDuringClose(t *testing.T) {
 	})
 }
 
+func TestFragmentedPipelineCacheSurvivesHandlerRelease(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(moruntime.Runtime) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		addr := listener.Addr().String()
+		require.NoError(t, listener.Close())
+
+		firstFragmentAdmitted := make(chan struct{})
+		assembled := make(chan []byte, 1)
+		var admissions atomic.Int32
+		s := &service{cfg: &Config{UUID: t.Name()}}
+		s.pipelines.beforeAdmission = func() {
+			if admissions.Add(1) == 1 {
+				close(firstFragmentAdmitted)
+			}
+		}
+		s.requestHandler = func(
+			_ context.Context,
+			_ string,
+			message morpc.Message,
+			_ morpc.ClientSession,
+			_ engine.Engine,
+			_ fileservice.FileService,
+			_ lockservice.LockService,
+			_ qclient.QueryClient,
+			_ logservice.CNHAKeeperClient,
+			_ udf.Service,
+			_ client.TxnClient,
+			_ *defines.AutoIncrCacheManager,
+			_ func() morpc.Message,
+		) error {
+			assembled <- append([]byte(nil), message.(*pipeline.Message).GetData()...)
+			return nil
+		}
+
+		rpcServer, err := morpc.NewRPCServer(
+			"test-fragmented-pipeline-cache",
+			addr,
+			morpc.NewMessageCodec(t.Name(), func() morpc.Message {
+				return cnclient.AcquireMessage()
+			}),
+			morpc.WithServerGoettyOptions(
+				goetty.WithSessionReleaseMsgFunc(func(v any) {
+					message := v.(morpc.RPCMessage)
+					if !message.InternalMessage() {
+						cnclient.ReleaseMessage(message.Message.(*pipeline.Message))
+					}
+				}),
+			),
+			morpc.WithServerDisableAutoCancelContext(),
+		)
+		require.NoError(t, err)
+		rpcServer.RegisterRequestHandler(s.handleRequest)
+		require.NoError(t, rpcServer.Start())
+		defer func() { require.NoError(t, rpcServer.Close()) }()
+
+		pipelineClient, err := cnclient.NewPipelineClient(t.Name(), "", &cnclient.PipelineConfig{})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, pipelineClient.Close()) }()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		stream, err := pipelineClient.NewStream(ctx, addr)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, stream.Close(true)) }()
+
+		require.NoError(t, stream.Send(ctx, &pipeline.Message{
+			Id:   stream.ID(),
+			Cmd:  pipeline.Method_PipelineMessage,
+			Sid:  pipeline.Status_WaitingNext,
+			Data: []byte("first-"),
+		}))
+		select {
+		case <-firstFragmentAdmitted:
+		case <-ctx.Done():
+			t.Fatal("first fragment was not admitted")
+		}
+		// MORPC scans canceled cache contexts once per second. Waiting for two
+		// scans proves the per-handler context did not own the fragmented cache.
+		time.Sleep(2200 * time.Millisecond)
+		require.NoError(t, stream.Send(ctx, &pipeline.Message{
+			Id:   stream.ID(),
+			Cmd:  pipeline.Method_PipelineMessage,
+			Sid:  pipeline.Status_Last,
+			Data: []byte("last"),
+		}))
+		select {
+		case data := <-assembled:
+			require.Equal(t, []byte("first-last"), data)
+		case <-ctx.Done():
+			t.Fatal("fragmented pipeline was not assembled")
+		}
+	})
+}
+
 func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
 	moruntime.RunTest(t.Name(), func(moruntime.Runtime) {
 		ctrl := gomock.NewController(t)
@@ -739,6 +834,55 @@ func TestPipelineAdmissionRejectCancelsRequestOnce(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable))
 	require.Equal(t, int32(1), cancelCount.Load())
+}
+
+func TestPipelineEarlyReturnCancelsRequestOnce(t *testing.T) {
+	t.Run("invalid fragment command", func(t *testing.T) {
+		s := &service{}
+		var cancelCount atomic.Int32
+		err := s.handleRequest(
+			context.Background(),
+			morpc.RPCMessage{
+				Message: &pipeline.Message{Sid: pipeline.Status_WaitingNext},
+				Cancel:  func() { cancelCount.Add(1) },
+			},
+			0,
+			nil,
+		)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Equal(t, int32(1), cancelCount.Load())
+	})
+
+	t.Run("assembly failure", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		session := mock_morpc.NewMockClientSession(ctrl)
+		cache := &testMessageCache{cache: []morpc.Message{
+			&pipeline.Message{
+				Cmd:                   pipeline.Method_PipelineMessage,
+				RequestedTeardownMode: pipeline.StreamTeardownMode_FinishAck,
+			},
+		}}
+		session.EXPECT().CreateCache(gomock.Any(), uint64(1)).Return(cache, nil)
+		session.EXPECT().DeleteCache(uint64(1))
+		s := &service{}
+		var cancelCount atomic.Int32
+		err := s.handleRequest(
+			context.Background(),
+			morpc.RPCMessage{
+				Message: &pipeline.Message{
+					Id:  1,
+					Cmd: pipeline.Method_PipelineMessage,
+					Sid: pipeline.Status_Last,
+				},
+				Cancel: func() { cancelCount.Add(1) },
+			},
+			0,
+			session,
+		)
+		require.Error(t, err)
+		require.Equal(t, int32(1), cancelCount.Load())
+	})
 }
 
 func Test_tenant(t *testing.T) {

@@ -650,9 +650,13 @@ func (s *service) handleRequest(
 		return moerr.NewServiceUnavailableNoCtx("CN pipeline service is closing")
 	}
 	owned := true
+	cancelOwned := value.Cancel != nil
 	defer func() {
 		if owned {
 			release()
+		}
+		if cancelOwned {
+			value.Cancel()
 		}
 	}()
 
@@ -670,10 +674,14 @@ func (s *service) handleRequest(
 	}
 	switch msg.GetSid() {
 	case pipeline.Status_WaitingNext:
-		return handleWaitingNextMsg(handlerCtx, req, cs)
+		transferred, err := handleWaitingNextMsg(ctx, value.Cancel, req, cs)
+		if transferred {
+			cancelOwned = false
+		}
+		return err
 	case pipeline.Status_Last:
 		if msg.IsPipelineMessage() { // only pipeline type need assemble msg now.
-			if err := handleAssemblePipeline(handlerCtx, req, cs); err != nil {
+			if err := handleAssemblePipeline(ctx, req, cs); err != nil {
 				return err
 			}
 		}
@@ -681,6 +689,7 @@ func (s *service) handleRequest(
 
 	// start a goroutine to handle one received message.
 	owned = false
+	cancelOwned = false
 	go func() {
 		defer release()
 		if value.Cancel != nil {
@@ -1018,18 +1027,23 @@ func (s *service) GetClock() clock.Clock {
 }
 
 // put the waiting-next type msg into client session's cache and return directly
-func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+func handleWaitingNextMsg(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	message morpc.Message,
+	cs morpc.ClientSession) (bool, error) {
 	msg, _ := message.(*pipeline.Message)
 	switch msg.GetCmd() {
 	case pipeline.Method_PipelineMessage:
 		var cache morpc.MessageCache
 		var err error
-		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
-			return err
+		cache, err = cs.CreateCacheWithCancel(ctx, message.GetID(), cancel)
+		if err != nil {
+			return false, err
 		}
-		return cache.Add(message)
+		return true, cache.Add(message)
 	default:
-		return moerr.NewInvalidInputNoCtx("only pipeline messages may be fragmented")
+		return false, moerr.NewInvalidInputNoCtx("only pipeline messages may be fragmented")
 	}
 }
 

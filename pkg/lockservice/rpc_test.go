@@ -453,6 +453,9 @@ func (s *testClientSession) AsyncWrite(response morpc.Message) error {
 func (s *testClientSession) CreateCache(ctx context.Context, cacheID uint64) (morpc.MessageCache, error) {
 	return nil, nil
 }
+func (s *testClientSession) CreateCacheWithCancel(context.Context, uint64, context.CancelFunc) (morpc.MessageCache, error) {
+	return nil, nil
+}
 
 func (s *testClientSession) DeleteCache(cacheID uint64) {}
 
