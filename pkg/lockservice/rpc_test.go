@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -46,6 +47,26 @@ type closeTrackingRPCClient struct {
 	closeErrors map[string]error
 	sent        []string
 	closedC     chan string
+	name        string
+	closeOrder  *[]string
+	closeErr    error
+	closeCalls  int
+}
+
+type blockingCloseRPCClient struct {
+	morpc.RPCClient
+	started chan<- struct{}
+	release <-chan struct{}
+}
+
+func (c *blockingCloseRPCClient) Close() error {
+	c.started <- struct{}{}
+	<-c.release
+	return nil
+}
+
+func (c *blockingCloseRPCClient) CloseBackendFor(string) error {
+	return nil
 }
 
 type refreshOnDemandCluster struct {
@@ -131,6 +152,14 @@ func (c *closeTrackingRPCClient) CloseBackendFor(remote string) error {
 	return c.closeErrors[remote]
 }
 
+func (c *closeTrackingRPCClient) Close() error {
+	c.closeCalls++
+	if c.closeOrder != nil {
+		*c.closeOrder = append(*c.closeOrder, c.name)
+	}
+	return c.closeErr
+}
+
 type testClientSession struct {
 	ctx         context.Context
 	writeCtx    context.Context
@@ -140,6 +169,25 @@ type testClientSession struct {
 	asyncCalled bool
 	closeCalled bool
 	response    morpc.Message
+}
+
+type closeResultRPCServer struct {
+	err   error
+	calls int
+}
+
+func (s *closeResultRPCServer) Start() error {
+	return nil
+}
+
+func (s *closeResultRPCServer) Close() error {
+	s.calls++
+	return s.err
+}
+
+func (s *closeResultRPCServer) RegisterRequestHandler(
+	func(context.Context, morpc.RPCMessage, uint64, morpc.ClientSession) error,
+) {
 }
 
 func TestLockserviceRemoteRPCErrorType(t *testing.T) {
@@ -162,6 +210,145 @@ func TestLockserviceRemoteRPCErrorType(t *testing.T) {
 			assert.Equal(t, tt.want, lockserviceRemoteRPCErrorType(tt.err))
 		})
 	}
+}
+
+func TestCloseCreatedClientsClosesInReverseAndJoinsErrors(t *testing.T) {
+	firstErr := errors.New("first close failed")
+	thirdErr := errors.New("third close failed")
+	var order []string
+	first := &closeTrackingRPCClient{
+		name:       "first",
+		closeOrder: &order,
+		closeErr:   firstErr,
+	}
+	second := &closeTrackingRPCClient{
+		name:       "second",
+		closeOrder: &order,
+	}
+	third := &closeTrackingRPCClient{
+		name:       "third",
+		closeOrder: &order,
+		closeErr:   thirdErr,
+	}
+
+	err := closeCreatedClients([]io.Closer{first, second, third})
+	require.ErrorIs(t, err, firstErr)
+	require.ErrorIs(t, err, thirdErr)
+	require.Equal(t, []string{"third", "second", "first"}, order)
+	require.Equal(t, 1, first.closeCalls)
+	require.Equal(t, 1, second.closeCalls)
+	require.Equal(t, 1, third.closeCalls)
+}
+
+func TestClientCloseClosesEveryDistinctTransportAndJoinsErrors(t *testing.T) {
+	normalErr := errors.New("normal close failed")
+	activeTxnErr := errors.New("active txn close failed")
+	validationErr := errors.New("validation close failed")
+	keeperErr := errors.New("keeper close failed")
+	controlErr := errors.New("control close failed")
+	normal := &closeTrackingRPCClient{closeErr: normalErr}
+	activeTxn := &closeTrackingRPCClient{closeErr: activeTxnErr}
+	validation := &closeTrackingRPCClient{closeErr: validationErr}
+	keeper := &closeTrackingRPCClient{closeErr: keeperErr}
+	control := &closeTrackingRPCClient{closeErr: controlErr}
+	c := &client{
+		client:           normal,
+		activeTxnClient:  activeTxn,
+		validationClient: validation,
+		keeperClient:     keeper,
+		controlClient:    control,
+	}
+
+	err := c.Close()
+	for _, expected := range []error{
+		normalErr,
+		activeTxnErr,
+		validationErr,
+		keeperErr,
+		controlErr,
+	} {
+		require.ErrorIs(t, err, expected)
+	}
+	for _, transport := range []*closeTrackingRPCClient{
+		normal,
+		activeTxn,
+		validation,
+		keeper,
+		control,
+	} {
+		require.Equal(t, 1, transport.closeCalls)
+	}
+
+	// Cleanup errors are sticky and concurrent/repeated callers join the same
+	// ownership transition instead of closing transports again.
+	err = c.Close()
+	for _, expected := range []error{
+		normalErr,
+		activeTxnErr,
+		validationErr,
+		keeperErr,
+		controlErr,
+	} {
+		require.ErrorIs(t, err, expected)
+	}
+	for _, transport := range []*closeTrackingRPCClient{
+		normal,
+		activeTxn,
+		validation,
+		keeper,
+		control,
+	} {
+		require.Equal(t, 1, transport.closeCalls)
+	}
+}
+
+func TestClientCloseClosesAliasedFallbackTransportOnce(t *testing.T) {
+	closeErr := errors.New("close failed")
+	shared := &closeTrackingRPCClient{closeErr: closeErr}
+	c := &client{
+		client:           shared,
+		activeTxnClient:  shared,
+		validationClient: shared,
+		keeperClient:     shared,
+		controlClient:    shared,
+	}
+
+	require.ErrorIs(t, c.Close(), closeErr)
+	require.ErrorIs(t, c.Close(), closeErr)
+	require.Equal(t, 1, shared.closeCalls)
+}
+
+func TestClientCloseClosesDistinctTransportsConcurrently(t *testing.T) {
+	started := make(chan struct{}, 5)
+	release := make(chan struct{})
+	transports := make([]*blockingCloseRPCClient, 5)
+	for idx := range transports {
+		transports[idx] = &blockingCloseRPCClient{
+			started: started,
+			release: release,
+		}
+	}
+	c := &client{
+		client:           transports[0],
+		activeTxnClient:  transports[1],
+		validationClient: transports[2],
+		keeperClient:     transports[3],
+		controlClient:    transports[4],
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- c.Close()
+	}()
+	for range transports {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("client Close serialized independent transport cleanup")
+		}
+	}
+	close(release)
+	require.NoError(t, <-closeDone)
 }
 
 func (s *testClientSession) Close() error {
@@ -325,6 +512,192 @@ func TestWriteResponseWithDeadlineClosesSessionOnWriteError(t *testing.T) {
 	require.True(t, cs.writeCalled)
 	require.True(t, cs.closeCalled)
 	require.True(t, extraFieldsCalled)
+}
+
+func TestServerCloseDrainsQueuesAfterRPCError(t *testing.T) {
+	rpcErr := errors.New("rpc close failed")
+	rpcServer := &closeResultRPCServer{err: rpcErr}
+	requests := make(chan requestCtx, 1)
+	getActiveTxnRequests := make(chan requestCtx, 1)
+	canceled := false
+	requests <- requestCtx{
+		req: acquireRequest(),
+		cancel: func() {
+			canceled = true
+		},
+	}
+	s := &server{
+		rpc:                  rpcServer,
+		stopper:              stopper.NewStopper("test-lock-rpc-server-close"),
+		requests:             requests,
+		getActiveTxnRequests: getActiveTxnRequests,
+	}
+	s.lifecycle.closingC = make(chan struct{})
+
+	err := s.Close()
+	require.ErrorIs(t, err, rpcErr)
+	require.Equal(t, 1, rpcServer.calls)
+	require.True(t, canceled)
+	_, requestsOpen := <-requests
+	require.False(t, requestsOpen)
+	_, getActiveTxnRequestsOpen := <-getActiveTxnRequests
+	require.False(t, getActiveTxnRequestsOpen)
+	require.ErrorIs(t, s.stopper.RunTask(func(context.Context) {}), stopper.ErrUnavailable)
+
+	// A session can outlive a failed listener close. Late messages must be
+	// rejected by the lifecycle gate without touching the closed queues.
+	lateRequest := acquireRequest()
+	lateRequest.Method = lock.Method_Lock
+	lateCanceled := false
+	err = s.onMessage(
+		context.Background(),
+		morpc.RPCMessage{
+			Message: lateRequest,
+			Cancel:  func() { lateCanceled = true },
+		},
+		0,
+		&testClientSession{},
+	)
+	require.Error(t, err)
+	require.True(t, lateCanceled)
+
+	// The first complete cleanup owns the sticky result. Retrying after an
+	// underlying listener error must not close worker queues a second time.
+	require.ErrorIs(t, s.Close(), rpcErr)
+	require.Equal(t, 1, rpcServer.calls)
+}
+
+func TestServerConcurrentCloseJoinsSingleCleanup(t *testing.T) {
+	rpcErr := errors.New("rpc close failed")
+	rpcServer := &closeResultRPCServer{err: rpcErr}
+	s := &server{
+		rpc:                  rpcServer,
+		stopper:              stopper.NewStopper("test-lock-rpc-server-concurrent-close"),
+		requests:             make(chan requestCtx, 1),
+		getActiveTxnRequests: make(chan requestCtx, 1),
+	}
+	s.lifecycle.closingC = make(chan struct{})
+
+	const callers = 16
+	start := make(chan struct{})
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			<-start
+			results <- s.Close()
+		}()
+	}
+	close(start)
+	for range callers {
+		require.ErrorIs(t, <-results, rpcErr)
+	}
+	require.Equal(t, 1, rpcServer.calls)
+}
+
+func TestServerCloseDoesNotWaitForBlockedFilter(t *testing.T) {
+	filterStarted := make(chan struct{})
+	releaseFilter := make(chan struct{})
+	rpcServer := &closeResultRPCServer{}
+	s := &server{
+		logger:               getLogger(""),
+		rpc:                  rpcServer,
+		handlers:             map[lock.Method]RequestHandleFunc{lock.Method_Lock: func(context.Context, context.CancelFunc, *lock.Request, *lock.Response, morpc.ClientSession) {}},
+		stopper:              stopper.NewStopper("test-lock-rpc-server-blocked-filter"),
+		requests:             make(chan requestCtx, 1),
+		getActiveTxnRequests: make(chan requestCtx, 1),
+	}
+	s.lifecycle.closingC = make(chan struct{})
+	s.options.filter = func(*lock.Request) bool {
+		close(filterStarted)
+		<-releaseFilter
+		return true
+	}
+
+	req := acquireRequest()
+	req.Method = lock.Method_Lock
+	onMessageDone := make(chan error, 1)
+	go func() {
+		onMessageDone <- s.onMessage(
+			context.Background(),
+			morpc.RPCMessage{Message: req},
+			0,
+			&testClientSession{},
+		)
+	}()
+	<-filterStarted
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- s.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("server close waited for message filter")
+	}
+
+	close(releaseFilter)
+	select {
+	case err := <-onMessageDone:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("filtered request did not observe closed server")
+	}
+}
+
+func TestServerCloseWakesSaturatedAdmission(t *testing.T) {
+	requests := make(chan requestCtx, 1)
+	requests <- requestCtx{req: acquireRequest()}
+	s := &server{
+		logger:                getLogger(""),
+		rpc:                   &closeResultRPCServer{},
+		handlers:              map[lock.Method]RequestHandleFunc{lock.Method_Lock: func(context.Context, context.CancelFunc, *lock.Request, *lock.Response, morpc.ClientSession) {}},
+		stopper:               stopper.NewStopper("test-lock-rpc-server-saturated-close"),
+		requests:              requests,
+		getActiveTxnRequests:  make(chan requestCtx, 1),
+		requestEnqueueTimeout: time.Hour,
+	}
+	s.lifecycle.closingC = make(chan struct{})
+
+	req := acquireRequest()
+	req.Method = lock.Method_Lock
+	onMessageDone := make(chan error, 1)
+	go func() {
+		onMessageDone <- s.onMessage(
+			context.Background(),
+			morpc.RPCMessage{Message: req},
+			0,
+			&testClientSession{ctx: context.Background()},
+		)
+	}()
+
+	// A failed writer TryLock proves onMessage is inside the admission read
+	// section and waiting on the full channel, rather than merely unscheduled.
+	require.Eventually(t, func() bool {
+		if s.lifecycle.TryLock() {
+			s.lifecycle.Unlock()
+			return false
+		}
+		return true
+	}, time.Second, time.Millisecond)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- s.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("server close waited for request enqueue timeout")
+	}
+	select {
+	case err := <-onMessageDone:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("saturated admission did not observe server close")
+	}
 }
 
 func TestRPCSend(t *testing.T) {
@@ -502,8 +875,10 @@ func TestRPCSendErrBackendCannotConnect(t *testing.T) {
 			if err != nil {
 				t.Logf("Error: %v, Type: %T", err, err)
 			}
-			// After auto-create wait timeout (500ms), should return ErrBackendClosed
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+			// A definitive dial failure must retain BackendCannotConnect so the
+			// allocator can disable a dead bind instead of retrying it as an
+			// ambiguous local-generation timeout.
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 		},
 	)
 }
@@ -600,6 +975,117 @@ func TestRetryValidateService(t *testing.T) {
 		},
 		WithServerMessageFilter(func(r *lock.Request) bool { return false }),
 	)
+}
+
+type scriptedValidationClient struct {
+	Client
+	results      []bool
+	sendCalls    int
+	resetCalls   int
+	resetService string
+	resetErr     error
+}
+
+func (c *scriptedValidationClient) Send(
+	_ context.Context,
+	_ *lock.Request,
+) (*lock.Response, error) {
+	result := c.results[c.sendCalls]
+	c.sendCalls++
+	resp := acquireResponse()
+	resp.ValidateService.OK = result
+	return resp, nil
+}
+
+func (c *scriptedValidationClient) ResetValidationBackend(
+	_ context.Context,
+	serviceID string,
+) error {
+	c.resetCalls++
+	c.resetService = serviceID
+	return c.resetErr
+}
+
+type sendOnlyValidationClient struct {
+	Client
+	sendCalls int
+}
+
+func (c *sendOnlyValidationClient) Send(
+	_ context.Context,
+	_ *lock.Request,
+) (*lock.Response, error) {
+	c.sendCalls++
+	resp := acquireResponse()
+	resp.ValidateService.OK = false
+	return resp, nil
+}
+
+func TestValidateServiceNegativeWithoutResetterRemainsIndeterminate(t *testing.T) {
+	client := &sendOnlyValidationClient{}
+
+	valid, err := validateService(
+		time.Second,
+		"service-generation",
+		client,
+		getLogger(""),
+	)
+	require.False(t, valid)
+	require.ErrorContains(t, err,
+		"cannot confirm negative lockservice identity without validation backend reset")
+	require.True(t, isRetryError(err),
+		"missing fresh-transport capability must retain the allocator bind")
+	require.Equal(t, 1, client.sendCalls,
+		"an unrefreshed second negative would not be independent evidence")
+}
+
+func TestValidateServiceConfirmsNegativeOnFreshBackend(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		results     []bool
+		resetErr    error
+		expectValid bool
+		expectErr   error
+		expectSends int
+	}{
+		{
+			name:        "stale negative becomes valid",
+			results:     []bool{false, true},
+			expectValid: true,
+			expectSends: 2,
+		},
+		{
+			name:        "fresh negative is authoritative",
+			results:     []bool{false, false},
+			expectValid: false,
+			expectSends: 2,
+		},
+		{
+			name:        "reset failure remains indeterminate",
+			results:     []bool{false},
+			resetErr:    moerr.NewInternalErrorNoCtx("refresh failed"),
+			expectValid: false,
+			expectErr:   moerr.NewInternalErrorNoCtx("refresh failed"),
+			expectSends: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &scriptedValidationClient{
+				results:  test.results,
+				resetErr: test.resetErr,
+			}
+			valid, err := validateService(time.Second, "service-generation", client, getLogger(""))
+			require.Equal(t, test.expectValid, valid)
+			if test.expectErr != nil {
+				require.ErrorContains(t, err, test.expectErr.Error())
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, test.expectSends, client.sendCalls)
+			require.Equal(t, 1, client.resetCalls)
+			require.Equal(t, "service-generation", client.resetService)
+		})
+	}
 }
 
 func TestValidateService(t *testing.T) {
@@ -719,12 +1205,14 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 
 	normalRPCClient := &closeTrackingRPCClient{}
 	activeTxnRPCClient := &closeTrackingRPCClient{}
+	validationRPCClient := &closeTrackingRPCClient{}
 	keeperRPCClient := &closeTrackingRPCClient{}
 	endpoint := "10.0.0.1:18101"
 	c := &client{
 		cluster:          cluster,
 		client:           normalRPCClient,
 		activeTxnClient:  activeTxnRPCClient,
+		validationClient: validationRPCClient,
 		keeperClient:     keeperRPCClient,
 		recoveryBackends: make(map[string]recoveryBackend),
 		resolveBackend: func(context.Context, string) (string, error) {
@@ -752,6 +1240,18 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 	require.Equal(t, []string{"10.0.0.1:18101"}, activeTxnRPCClient.sent)
 
 	_, err = c.AsyncSend(context.Background(), &lock.Request{
+		Method: lock.Method_ValidateService,
+		ValidateService: lock.ValidateServiceRequest{
+			ServiceID: serviceID,
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, normalRPCClient.sent)
+	require.Equal(t, []string{"10.0.0.1:18101"}, activeTxnRPCClient.sent)
+	require.Equal(t, []string{"cn.example:18101"}, validationRPCClient.sent,
+		"validation must use the current discovery address, not a pinned recovery endpoint")
+
+	_, err = c.AsyncSend(context.Background(), &lock.Request{
 		Method:    lock.Method_Unlock,
 		LockTable: lock.LockTable{ServiceID: serviceID},
 	})
@@ -770,6 +1270,7 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 	require.NoError(t, c.ResetBackend(context.Background(), serviceID))
 	require.Equal(t, "10.0.0.2:18101", c.activeTxnBackend("cn-id", "cn.example:18101"))
 	require.Empty(t, normalRPCClient.closed)
+	require.Empty(t, validationRPCClient.closed)
 	require.Equal(t, []string{
 		"cn.example:18101",
 		"cn.example:18101",
@@ -975,6 +1476,44 @@ func TestKeeperAsyncSendClusterStartupWaitHonorsContext(t *testing.T) {
 	require.Nil(t, f)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Less(t, time.Since(started), time.Second)
+}
+
+func TestResetValidationBackendReclosesStableRouteAfterRefresh(t *testing.T) {
+	cluster := &refreshOnDemandCluster{
+		before: metadata.CNService{
+			ServiceID:          "cn-id",
+			LockServiceAddress: "cn.example:18101",
+		},
+		after: metadata.CNService{
+			ServiceID:          "cn-id",
+			LockServiceAddress: "cn.example:18101",
+		},
+	}
+	normalRPCClient := &closeTrackingRPCClient{}
+	activeTxnRPCClient := &closeTrackingRPCClient{}
+	validationRPCClient := &closeTrackingRPCClient{}
+	c := &client{
+		cluster:          cluster,
+		client:           normalRPCClient,
+		activeTxnClient:  activeTxnRPCClient,
+		validationClient: validationRPCClient,
+	}
+
+	require.NoError(t, c.ResetValidationBackend(
+		context.Background(),
+		"0000000000000000000cn-id",
+	))
+	require.True(t, cluster.refreshed)
+	require.Equal(t,
+		[]string{
+			"cn.example:18101",
+			"cn.example:18101",
+		},
+		validationRPCClient.closed,
+	)
+	require.Empty(t, activeTxnRPCClient.closed,
+		"validation confirmation must not reset active-txn recovery futures")
+	require.Empty(t, normalRPCClient.closed)
 }
 
 func TestResetBackendSlowRefreshDoesNotBlockActiveTxnRouteLookup(t *testing.T) {
