@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -869,6 +870,175 @@ func preserveIndexSessionVars(p *Plan, src *plan.TableDef) error {
 	return nil
 }
 
+// preserveChecksForCreateLike installs deep copies of the source table's
+// structured CHECK metadata after the LIKE table skeleton has been rebuilt.
+// OriginSql is formatted for the source table's creation SQL mode, so it must
+// not be reparsed in the LIKE session's mode.
+func preserveChecksForCreateLike(p *Plan, src *plan.TableDef) {
+	if p == nil || src == nil || len(src.Checks) == 0 {
+		return
+	}
+	ct := p.GetDdl().GetCreateTable()
+	if ct == nil || ct.GetTableDef() == nil {
+		return
+	}
+	dstChecks := make([]*plan.CheckDef, len(src.Checks))
+	for i, srcCheck := range src.Checks {
+		if srcCheck == nil {
+			continue
+		}
+		dstChecks[i] = &plan.CheckDef{
+			Name:      srcCheck.Name,
+			Check:     DeepCopyExpr(srcCheck.Check),
+			OriginSql: srcCheck.OriginSql,
+		}
+	}
+	ct.GetTableDef().Checks = dstChecks
+}
+
+func bindLegacyChecksForCreateLike(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	sqlMode string,
+) ([]*plan.CheckDef, bool, error) {
+	stmt, err := parsers.ParseOneWithSQLMode(
+		ctx.GetContext(),
+		dialect.MYSQL,
+		tableDef.Createsql,
+		ctx.GetLowerCaseTableNames(),
+		sqlMode,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	defer stmt.Free()
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	if !ok {
+		return nil, true, moerr.NewInvalidInput(
+			ctx.GetContext(),
+			"legacy CHECK metadata is not a CREATE TABLE statement",
+		)
+	}
+
+	scratch := &plan.TableDef{
+		Name: tableDef.Name,
+		Cols: tableDef.Cols,
+	}
+	for _, def := range createStmt.Defs {
+		switch typedDef := def.(type) {
+		case *tree.CheckIndex:
+			if !typedDef.Enforced {
+				return nil, true, moerr.NewNotSupported(
+					ctx.GetContext(),
+					"NOT ENFORCED CHECK constraints",
+				)
+			}
+			if err := appendCheckDef(ctx, scratch, typedDef.ConstraintSymbol, typedDef.Expr, -1); err != nil {
+				return nil, true, err
+			}
+		case *tree.ColumnTableDef:
+			columnPos := slices.IndexFunc(
+				tableDef.Cols,
+				func(col *plan.ColDef) bool { return col.Name == typedDef.Name.ColName() },
+			)
+			if columnPos == -1 {
+				return nil, true, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"legacy CHECK column '%s' does not exist",
+					typedDef.Name.ColNameOrigin(),
+				)
+			}
+			for _, attr := range typedDef.Attributes {
+				check, ok := attr.(*tree.AttributeCheckConstraint)
+				if !ok {
+					continue
+				}
+				if !check.Enforced {
+					return nil, true, moerr.NewNotSupported(
+						ctx.GetContext(),
+						"NOT ENFORCED CHECK constraints",
+					)
+				}
+				if err := appendCheckDef(ctx, scratch, check.Name, check.Expr, columnPos); err != nil {
+					return nil, true, err
+				}
+			}
+		}
+	}
+	return scratch.Checks, true, nil
+}
+
+func equalCheckDefs(left, right []*plan.CheckDef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !proto.Equal(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// recoverLegacyChecksForCreateLike rebuilds structured CHECK metadata for
+// pre-upgrade tables, whose catalog rows contain only the original CREATE SQL.
+// The old catalog did not record the creating SQL mode, so recovery must not
+// silently choose between two valid but semantically different parses.
+func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableDef) error {
+	if tableDef == nil || len(tableDef.Checks) > 0 || tableDef.Createsql == "" ||
+		tableDef.TableType == catalog.SystemExternalRel ||
+		!strings.Contains(strings.ToUpper(tableDef.Createsql), "CHECK") {
+		return nil
+	}
+
+	var canonicalChecks []*plan.CheckDef
+	var firstParseErr error
+	var firstBindErr error
+	parsedModes := 0
+	successfulModes := 0
+	for _, sqlMode := range mysql.ParserSQLModeCombinations() {
+		checks, parsed, err := bindLegacyChecksForCreateLike(ctx, tableDef, sqlMode)
+		if !parsed {
+			if firstParseErr == nil {
+				firstParseErr = err
+			}
+			continue
+		}
+		parsedModes++
+		if err != nil {
+			if firstBindErr == nil {
+				firstBindErr = err
+			}
+			continue
+		}
+		if successfulModes == 0 {
+			canonicalChecks = checks
+		} else if !equalCheckDefs(canonicalChecks, checks) {
+			return moerr.NewInvalidInput(
+				ctx.GetContext(),
+				"cannot recover legacy CHECK constraints with ambiguous SQL mode",
+			)
+		}
+		successfulModes++
+	}
+
+	switch {
+	case successfulModes > 0 && firstBindErr != nil:
+		return moerr.NewInvalidInput(
+			ctx.GetContext(),
+			"cannot recover legacy CHECK constraints with ambiguous SQL mode",
+		)
+	case successfulModes > 0:
+		tableDef.Checks = canonicalChecks
+	case parsedModes > 0:
+		return firstBindErr
+	default:
+		return firstParseErr
+	}
+	return nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -908,6 +1078,16 @@ func buildCreateTable(
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
+		hadStructuredChecks := len(tableDef.Checks) > 0
+		if err := recoverLegacyChecksForCreateLike(ctx, tableDef); err != nil {
+			return nil, err
+		}
+		recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
+		if len(tableDef.Checks) > 0 {
+			if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+				return nil, err
+			}
+		}
 		// TODO WHY?
 		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
 			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
@@ -927,7 +1107,17 @@ func buildCreateTable(
 		}
 		tableDef.IsTemporary = stmt.Temporary
 
-		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true, cloneStmt)
+		// CHECK expressions are stored in source-session SQL syntax. Exclude them
+		// from the temporary SQL skeleton because the rewrite parser uses the
+		// current/default SQL mode, then restore the structured metadata below.
+		_, newStmt, err := constructCreateTableSQL(
+			ctx,
+			tableDef,
+			snapshot,
+			true,
+			cloneStmt,
+			recoveredLegacyChecks,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -949,6 +1139,7 @@ func buildCreateTable(
 			if err := preserveIndexSessionVars(p, tableDef); err != nil {
 				return nil, err
 			}
+			preserveChecksForCreateLike(p, tableDef)
 			return p, nil
 		}
 
@@ -1256,6 +1447,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
+	type pendingCheckDef struct {
+		name       string
+		expr       tree.Expr
+		columnName string
+		enforced   bool
+	}
+	pendingChecks := make([]pendingCheckDef, 0)
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
@@ -1327,7 +1525,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
 				case *tree.AttributeCheckConstraint:
-					if err := rejectWindowFunctionUnlessMatrixOneNative(ctx, attribute.Expr); err != nil {
+					if err := rejectWindowFunction(ctx, attribute.Expr); err != nil {
 						return err
 					}
 				case *tree.AttributeGeneratedAlways:
@@ -1467,6 +1665,24 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					defaultMap[colName] = "NULL"
 				}
 			}
+			for _, attr := range def.Attributes {
+				check, ok := attr.(*tree.AttributeCheckConstraint)
+				if !ok {
+					continue
+				}
+				if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
+					return moerr.NewNotSupported(
+						ctx.GetContext(),
+						"CHECK constraints on external tables",
+					)
+				}
+				pendingChecks = append(pendingChecks, pendingCheckDef{
+					name:       check.Name,
+					expr:       check.Expr,
+					columnName: colName,
+					enforced:   check.Enforced,
+				})
+			}
 			genColIdx++
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
@@ -1582,11 +1798,20 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				fkDatasOfFKSelfRefer = append(fkDatasOfFKSelfRefer, fkData)
 			}
 		case *tree.CheckIndex:
-			if err := rejectWindowFunctionUnlessMatrixOneNative(ctx, def.Expr); err != nil {
+			if err := rejectWindowFunction(ctx, def.Expr); err != nil {
 				return err
 			}
-			// unsupport in plan. will support in next version.
-			// return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
+			if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
+				return moerr.NewNotSupported(
+					ctx.GetContext(),
+					"CHECK constraints on external tables",
+				)
+			}
+			pendingChecks = append(pendingChecks, pendingCheckDef{
+				name:     def.ConstraintSymbol,
+				expr:     def.Expr,
+				enforced: def.Enforced,
+			})
 		default:
 			return moerr.NewNYIf(ctx.GetContext(), "table def: '%v'", def)
 		}
@@ -1645,6 +1870,32 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s) as __mo_ctas_source", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
+	}
+
+	for _, check := range pendingChecks {
+		if !check.enforced {
+			return moerr.NewNotSupported(
+				ctx.GetContext(),
+				"NOT ENFORCED CHECK constraints",
+			)
+		}
+		columnPos := -1
+		if check.columnName != "" {
+			columnPos = slices.IndexFunc(
+				createTable.TableDef.Cols,
+				func(col *ColDef) bool { return col.Name == check.columnName },
+			)
+			if columnPos == -1 {
+				return moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					"column check constraint references missing column '%s'",
+					check.columnName,
+				)
+			}
+		}
+		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, columnPos); err != nil {
+			return err
+		}
 	}
 
 	// table must have one visible column
@@ -1890,6 +2141,165 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	return nil
+}
+
+func appendCheckDef(
+	ctx CompilerContext,
+	tableDef *TableDef,
+	name string,
+	astExpr tree.Expr,
+	columnPos int,
+) error {
+	if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+		return err
+	}
+	colNames := make([]string, 0, len(tableDef.Cols))
+	colTypes := make([]plan.Type, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		colNames = append(colNames, col.Name)
+		colTypes = append(colTypes, col.Typ)
+	}
+
+	originSQL := formatCheckConstraintExpr(astExpr)
+	canonicalStmt, err := parsers.ParseOne(
+		ctx.GetContext(),
+		dialect.MYSQL,
+		"select "+originSQL,
+		1,
+	)
+	if err != nil {
+		return err
+	}
+	defer canonicalStmt.Free()
+	canonicalSelect, ok := canonicalStmt.(*tree.Select)
+	if !ok {
+		return moerr.NewInternalError(ctx.GetContext(), "invalid canonical check constraint")
+	}
+	canonicalClause, ok := canonicalSelect.Select.(*tree.SelectClause)
+	if !ok || len(canonicalClause.Exprs) != 1 {
+		return moerr.NewInternalError(ctx.GetContext(), "invalid canonical check constraint expression")
+	}
+
+	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
+	binder.enableCanonicalNameConstValueCast()
+	checkExpr, err := binder.BindExpr(canonicalClause.Exprs[0].Expr, 0, true)
+	if err != nil {
+		return err
+	}
+	if err = validateCheckExpr(ctx.GetContext(), tableDef, checkExpr, columnPos); err != nil {
+		return err
+	}
+	if checkExpr.Typ.Id != int32(types.T_bool) {
+		checkExpr, err = makePlan2CastExpr(
+			ctx.GetContext(),
+			checkExpr,
+			plan.Type{Id: int32(types.T_bool)},
+		)
+		if err != nil {
+			return err
+		}
+	}
+	if name == "" {
+		name = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
+	for _, check := range tableDef.Checks {
+		if check.Name == name {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", name)
+		}
+	}
+	tableDef.Checks = append(tableDef.Checks, &plan.CheckDef{
+		Name:      name,
+		Check:     checkExpr,
+		OriginSql: originSQL,
+	})
+	return nil
+}
+
+func formatCheckConstraintExpr(expr tree.Expr) string {
+	opts := []tree.FmtCtxOption{
+		tree.WithSingleQuoteString(),
+		tree.WithQuoteIdentifier(),
+		tree.WithModeIndependentStringLiterals(),
+	}
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, opts...)
+	expr.Format(fmtCtx)
+	return fmtCtx.String()
+}
+
+func validateCheckExpr(ctx context.Context, tableDef *TableDef, expr *plan.Expr, columnPos int) error {
+	if expr == nil {
+		return moerr.NewInvalidInput(ctx, "check constraint expression cannot be empty")
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		pos := int(e.Col.ColPos)
+		if pos < 0 || pos >= len(tableDef.Cols) {
+			return moerr.NewInvalidInput(ctx, "check constraint references an invalid column")
+		}
+		if columnPos >= 0 && pos != columnPos {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"column check constraint cannot refer to column '%s'",
+				tableDef.Cols[pos].OriginName,
+			)
+		}
+		if tableDef.Cols[pos].Typ.AutoIncr {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"check constraint cannot refer to auto-increment column '%s'",
+				tableDef.Cols[pos].OriginName,
+			)
+		}
+	case *plan.Expr_V:
+		return moerr.NewInvalidInput(ctx, "check constraint cannot refer to a variable")
+	case *plan.Expr_P:
+		return moerr.NewInvalidInput(ctx, "check constraint cannot contain a parameter marker")
+	case *plan.Expr_F:
+		switch strings.ToLower(e.F.Func.ObjName) {
+		case "connection_id",
+			"current_account_id",
+			"current_account_name",
+			"current_role",
+			"current_role_id",
+			"current_role_name",
+			"current_user",
+			"current_user_id",
+			"current_user_name",
+			"database",
+			"found_rows",
+			"last_insert_id",
+			"row_count",
+			"session_user",
+			"system_user",
+			"user":
+			return moerr.NewInvalidInputf(
+				ctx,
+				"check constraint cannot contain session-dependent function '%s'",
+				e.F.Func.ObjName,
+			)
+		}
+		if err := checkExprForVolatileFunc(ctx, expr); err != nil {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"check constraint cannot contain a non-deterministic function",
+			)
+		}
+		for _, arg := range e.F.Args {
+			if err := validateCheckExpr(ctx, tableDef, arg, columnPos); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := validateCheckExpr(ctx, tableDef, item, columnPos); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

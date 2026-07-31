@@ -71,18 +71,27 @@ func TestMultiTableUpdateRejectsOrderByAndLimit(t *testing.T) {
 
 func TestWindowFunctionsInUpdateAndCheckRespectMatrixOneNativeSQLMode(t *testing.T) {
 	updateSQL := "UPDATE nation SET n_regionkey = row_number() over (order by n_nationkey)"
-	checkSQL := "CREATE TABLE window_check (id INT PRIMARY KEY, v INT, CHECK (row_number() over (order by v) > 0))"
-	columnCheckSQL := "CREATE TABLE column_window_check (id INT PRIMARY KEY, v INT CHECK (row_number() over (order by v) > 0))"
+	requireMySQLDMLCompatibilityError(
+		t,
+		updateSQL,
+		moerr.ER_WINDOW_INVALID_WINDOW_FUNC_USE,
+		"You cannot use the window function 'row_number' in this context",
+	)
+	_, err := buildMySQLDMLCompatibilityPlanWithSQLMode(t, updateSQL, "MATRIXONE_NATIVE")
+	require.NoError(t, err)
 
-	for _, sql := range []string{updateSQL, checkSQL, columnCheckSQL} {
-		requireMySQLDMLCompatibilityError(
-			t,
-			sql,
-			moerr.ER_WINDOW_INVALID_WINDOW_FUNC_USE,
-			"You cannot use the window function 'row_number' in this context",
-		)
-		_, err := buildMySQLDMLCompatibilityPlanWithSQLMode(t, sql, "MATRIXONE_NATIVE")
-		require.NoError(t, err)
+	for _, sql := range []string{
+		"CREATE TABLE window_check (id INT PRIMARY KEY, v INT, CHECK (row_number() over (order by v) > 0))",
+		"CREATE TABLE column_window_check (id INT PRIMARY KEY, v INT CHECK (row_number() over (order by v) > 0))",
+	} {
+		for _, sqlMode := range []string{"", "MATRIXONE_NATIVE"} {
+			_, err = buildMySQLDMLCompatibilityPlanWithSQLMode(t, sql, sqlMode)
+			require.Error(t, err)
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok, "unexpected error type %T: %v", err, err)
+			require.Equal(t, uint16(moerr.ER_WINDOW_INVALID_WINDOW_FUNC_USE), moErr.MySQLCode())
+			require.Equal(t, "You cannot use the window function 'row_number' in this context", moErr.Error())
+		}
 	}
 }
 

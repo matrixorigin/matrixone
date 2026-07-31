@@ -30,6 +30,10 @@ func rejectWindowFunctionUnlessMatrixOneNative(ctx CompilerContext, expr tree.Ex
 		}
 	}
 
+	return rejectWindowFunction(ctx, expr)
+}
+
+func rejectWindowFunction(ctx CompilerContext, expr tree.Expr) error {
 	if name, ok := findNestedWindowFuncName(expr); ok {
 		return moerr.NewWindowInvalidUse(ctx.GetContext(), name)
 	}
