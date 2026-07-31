@@ -238,8 +238,12 @@ func TestHashBuildAllocationAccountRegistryUsesBoundedFormula(t *testing.T) {
 	if registry.GenerationCapacity() != hashBuildAllocationGenerationSlots {
 		t.Fatalf("generation slots = %d", registry.GenerationCapacity())
 	}
-	if registry.MaxAllocationMetadata() != 3 {
-		t.Fatalf("allocation slots = %d, want 3", registry.MaxAllocationMetadata())
+	if registry.MaxAllocationMetadata() != hashBuildAllocationSlotsPerBlock {
+		t.Fatalf(
+			"allocation slots = %d, want %d",
+			registry.MaxAllocationMetadata(),
+			hashBuildAllocationSlotsPerBlock,
+		)
 	}
 	second, err := budget.OpenGeneration(2)
 	if err != nil {

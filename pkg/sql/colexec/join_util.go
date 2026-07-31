@@ -62,6 +62,18 @@ func (bs *Batches) Reset() {
 // the batches structure hold data in fix size 8192 rows, and continue to append from next batch
 // if error return , the batches will clean itself
 func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err error) {
+	return bs.CopyIntoBatchesWithAllocation(src, proc, nil)
+}
+
+// CopyIntoBatchesWithAllocation selects provenance for every retained vector
+// destination. The Go descriptors are bounded by one Batch per 8,192 rows and
+// one Vector pointer per input column; physical data, area, null, and grouping
+// buffers are allocation-accounted and remain owned by the copied batches.
+func (bs *Batches) CopyIntoBatchesWithAllocation(
+	src *batch.Batch,
+	proc *process.Process,
+	selection *vector.AllocationAccountSelection,
+) (err error) {
 	defer func() {
 		if err != nil {
 			bs.Clean(proc.Mp())
@@ -71,10 +83,21 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 	if bs.Buf == nil {
 		bs.Buf = make([]*batch.Batch, 0, 16)
 	}
+	if len(bs.Buf) > 0 &&
+		bs.Buf[len(bs.Buf)-1].AllocationAccountSelection() != selection {
+		return mpool.ErrAllocationAccountMismatch
+	}
 
 	var tmp *batch.Batch
 	if src.RowCount() == DefaultBatchSize {
-		tmp, err = src.Dup(proc.Mp())
+		if selection == nil {
+			tmp, err = src.Dup(proc.Mp())
+		} else {
+			tmp, err = proc.NewBatchFromSrcWithAllocation(src, 0, selection)
+			if err == nil {
+				err = src.CloneTo(tmp, proc.Mp())
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -96,12 +119,19 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 		lenBuf := len(bs.Buf)
 		if lenBuf > 0 && bs.Buf[lenBuf-1].RowCount() != DefaultBatchSize {
 			tmp = bs.Buf[lenBuf-1]
+			if tmp.AllocationAccountSelection() != selection {
+				return mpool.ErrAllocationAccountMismatch
+			}
 		} else {
 			preAllocSize := length - offset
 			if preAllocSize > DefaultBatchSize {
 				preAllocSize = DefaultBatchSize
 			}
-			tmp, err = proc.NewBatchFromSrc(src, preAllocSize)
+			tmp, err = proc.NewBatchFromSrcWithAllocation(
+				src,
+				preAllocSize,
+				selection,
+			)
 			if err != nil {
 				return err
 			}

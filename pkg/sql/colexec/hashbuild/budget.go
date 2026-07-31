@@ -322,6 +322,13 @@ func batchCopyAllocatedDelta(
 }
 
 func (hb *HashmapBuilder) copyBuildBatch(src *batch.Batch, proc *process.Process) error {
+	if hb.batchAllocation != nil {
+		return hb.Batches.CopyIntoBatchesWithAllocation(
+			src,
+			proc,
+			hb.batchAllocation,
+		)
+	}
 	if hb.budget == nil {
 		return hb.Batches.CopyIntoBatches(src, proc)
 	}
@@ -588,13 +595,14 @@ func (hb *HashmapBuilder) cleanBatches(proc *process.Process) {
 
 func (hb *HashmapBuilder) buildAuxBytes(
 	needUniqueVec bool,
+	needAllocateSels ...bool,
 ) (uint64, error) {
 	uniqueBytes, err := hb.uniqueJoinKeyBytes()
 	if err != nil {
 		return 0, err
 	}
 	return hb.buildAuxBytesWithUniqueProjection(
-		needUniqueVec, uniqueBytes)
+		needUniqueVec, uniqueBytes, needAllocateSels...)
 }
 
 func (hb *HashmapBuilder) uniqueJoinKeyBytes() (uint64, error) {
@@ -616,6 +624,7 @@ func (hb *HashmapBuilder) uniqueJoinKeyBytes() (uint64, error) {
 func (hb *HashmapBuilder) buildAuxBytesWithUniqueProjection(
 	needUniqueVec bool,
 	uniqueBytes uint64,
+	needAllocateSels ...bool,
 ) (uint64, error) {
 	// Covers mandatory hashmap/sels scratch plus the selected runtime-filter
 	// key vectors' actual persistent capacities. Before their first append, a
@@ -644,15 +653,26 @@ func (hb *HashmapBuilder) buildAuxBytesWithUniqueProjection(
 		rowCount = hb.hashMapRowCount
 	}
 	rows := uint64(rowCount)
+	perRowBytes := uint64(64)
+	if len(needAllocateSels) > 0 && needAllocateSels[0] &&
+		hb.batchAllocation != nil {
+		// GroupSels' physical slices are charged by batchAllocation.
+		perRowBytes -= 16
+	}
 	const iteratorScratch = uint64(640 << 10)
-	if rows > math.MaxUint64/64 || bytes > math.MaxUint64-rows*64 || bytes+rows*64 > math.MaxUint64-iteratorScratch {
+	if rows > math.MaxUint64/perRowBytes ||
+		bytes > math.MaxUint64-rows*perRowBytes ||
+		bytes+rows*perRowBytes > math.MaxUint64-iteratorScratch {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
-	bytes += rows*64 + iteratorScratch
+	bytes += rows*perRowBytes + iteratorScratch
 	return bytes, nil
 }
 
-func (hb *HashmapBuilder) reserveBuildAux(needUniqueVec bool) error {
+func (hb *HashmapBuilder) reserveBuildAux(
+	needUniqueVec bool,
+	needAllocateSels ...bool,
+) error {
 	if hb.budget == nil {
 		return nil
 	}
@@ -663,7 +683,7 @@ func (hb *HashmapBuilder) reserveBuildAux(needUniqueVec bool) error {
 		// worse, collecting optional keys under a mandatory-only charge).
 		return hb.resizeBuildAuxReservation(needUniqueVec)
 	}
-	bytes, err := hb.buildAuxBytes(needUniqueVec)
+	bytes, err := hb.buildAuxBytes(needUniqueVec, needAllocateSels...)
 	if err != nil {
 		return err
 	}

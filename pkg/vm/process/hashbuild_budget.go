@@ -34,6 +34,11 @@ const hashBuildMinimumReserve = uint64(4 << 30)
 const (
 	hashBuildAllocationGenerationSlots = uint32(131_072)
 	hashBuildMinimumCellBlockBytes     = uint64(16 << 10)
+	// Three slots close the cell/descriptor replacement transaction. The
+	// copied-batch activation adds up to three vector buffers per minimum-width
+	// 8,192-row destination (data, nulls, grouping), so six slots per 16 KiB of
+	// aggregate capacity is the first combined owner bound.
+	hashBuildAllocationSlotsPerBlock = uint64(6)
 )
 
 const (
@@ -1136,8 +1141,9 @@ func (g *HashBuildBudgetGeneration) Closed() bool {
 
 // AllocationAccountRegistry returns the bounded CN-local registry shared by
 // every activated HashBuild generation under this aggregate budget. The slot
-// formula covers every minimum-size cell block, its published descriptor, and
-// one private replacement descriptor/block transaction.
+// formula covers every minimum-size cell block, its published descriptor, one
+// private replacement transaction, and the copied-batch vector buffers added
+// by the second activation.
 func (g *HashBuildBudgetGeneration) AllocationAccountRegistry() (
 	*mpool.AllocationAccountRegistry,
 	error,
@@ -1155,14 +1161,14 @@ func (g *HashBuildBudgetGeneration) AllocationAccountRegistry() (
 		if blocks == 0 {
 			blocks = 1
 		}
-		if blocks > math.MaxUint64/3 {
+		if blocks > math.MaxUint64/hashBuildAllocationSlotsPerBlock {
 			b.allocationRegistryErr = ErrHashBuildBudgetInvalid
 			return
 		}
 		b.allocationRegistry, b.allocationRegistryErr =
 			mpool.NewAllocationAccountRegistry(
 				hashBuildAllocationGenerationSlots,
-				blocks*3,
+				blocks*hashBuildAllocationSlotsPerBlock,
 			)
 	})
 	return b.allocationRegistry, b.allocationRegistryErr

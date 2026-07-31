@@ -343,7 +343,7 @@ func TestPublishedJoinMapResizeKeepsReservationWithConsumer(t *testing.T) {
 	hb.Reset(proc, false)
 }
 
-func TestHashmapBuilderAccountedCellsDoNotStackLegacyMapReservation(t *testing.T) {
+func TestHashmapBuilderAccountedJoinMapDoesNotStackLegacyReservations(t *testing.T) {
 	const budgetCap = uint64(16 << 20)
 	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
 	require.NoError(t, err)
@@ -375,6 +375,11 @@ func TestHashmapBuilderAccountedCellsDoNotStackLegacyMapReservation(t *testing.T
 		proc.Mp(),
 	)
 	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.Empty(t, hb.batchReservations)
+	require.NotEmpty(t, hb.Batches.Buf)
+	for _, copied := range hb.Batches.Buf {
+		require.Same(t, hb.batchAllocation, copied.AllocationAccountSelection())
+	}
 	hb.InputBatchRowCount = input.RowCount()
 	input.Clean(proc.Mp())
 
@@ -389,15 +394,132 @@ func TestHashmapBuilderAccountedCellsDoNotStackLegacyMapReservation(t *testing.T
 
 	jm := hb.GetJoinMap(proc.Mp())
 	require.NotNil(t, jm)
-	jm.IncRef(1)
+	jm.IncRef(2)
+	hb.Reset(proc, false)
 	beforeResize := account.Snapshot().Used
 	require.NoError(t, jm.PreAlloc(100_000))
 	require.Greater(t, account.Snapshot().Used, beforeResize)
+	beforeFirstConsumer := account.Snapshot().Used
+	jm.Free()
+	require.Equal(t, beforeFirstConsumer, account.Snapshot().Used)
 	jm.Free()
 	require.Zero(t, account.Snapshot().Used)
 	require.Zero(t, generation.Used())
 
+	terminal, first, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.True(t, first)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
+}
+
+func TestHashmapBuilderAccountedBatchCopyOneByteShortRollsBack(t *testing.T) {
+	const budgetCap = uint64(64 << 20)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType(), types.T_varchar.ToType()},
+		true,
+		10_000,
+		proc.Mp(),
+	)
+	defer input.Clean(proc.Mp())
+
+	measure := func(limit uint64, metadataSlots uint64) (
+		mpool.AllocationAccountSnapshot,
+		uint64,
+		error,
+	) {
+		budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+		generation, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+		registry, err := mpool.NewAllocationAccountRegistry(1, metadataSlots)
+		require.NoError(t, err)
+		account, err := registry.OpenWithController(limit, generation)
+		require.NoError(t, err)
+		var op HashBuild
+		op.NeedHashMap = true
+		require.NoError(t, op.SetAllocationAccount(account))
+		hb := &op.ctr.hashmapBuilder
+		hb.setBudget(generation)
+
+		copyErr := hb.copyBuildBatch(input, proc)
+		snapshot := account.Snapshot()
+		metadataPeak := registry.PeakAllocationMetadata()
+		if copyErr == nil {
+			hb.cleanBatches(proc)
+		}
+		require.Empty(t, hb.Batches.Buf)
+		require.Empty(t, hb.batchReservations)
+		require.Zero(t, account.Snapshot().Used)
+		require.Zero(t, generation.Used())
+		require.NoError(t, op.ClearAllocationAccount(account))
+		terminal, first, terminalErr := registry.CompleteTerminal(account)
+		require.NoError(t, terminalErr)
+		require.True(t, first)
+		require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
+		return snapshot, metadataPeak, copyErr
+	}
+
+	probe, metadataPeak, err := measure(budgetCap, 128)
+	require.NoError(t, err)
+	require.Positive(t, probe.Peak)
+	require.Positive(t, metadataPeak)
+	rejected, _, err := measure(probe.Peak-1, 128)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, rejected.Used)
+	rejected, _, err = measure(budgetCap, metadataPeak-1)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.Zero(t, rejected.Used)
+}
+
+func TestAccountedJoinMapTransfersBatchesAndGroupSelsToLastConsumer(t *testing.T) {
+	const budgetCap = uint64(16 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(budgetCap, generation)
+	require.NoError(t, err)
+	var op HashBuild
+	op.NeedHashMap = true
+	require.NoError(t, op.SetAllocationAccount(account))
+	hb := &op.ctr.hashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	require.NoError(t, hb.Prepare(
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())},
+		-1,
+		-1,
+		nil,
+		proc,
+	))
+	input := makeIntKeyValueBatch(
+		proc,
+		[]int32{1, 1, 2, 2},
+		[]int32{10, 20, 30, 40},
+	)
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+	require.NoError(t, hb.BuildHashmap(false, true, false, proc))
+	require.Positive(t, hb.Sels.Size())
+
+	jm := hb.GetJoinMap(proc.Mp())
+	require.NotNil(t, jm)
+	jm.IncRef(2)
 	hb.Reset(proc, false)
+	require.Equal(t, []int32{0, 1}, jm.GetSels(0))
+	require.Equal(t, []int32{2, 3}, jm.GetSels(1))
+	live := account.Snapshot().Used
+	require.Positive(t, live)
+	jm.Free()
+	require.Equal(t, live, account.Snapshot().Used)
+	jm.Free()
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+
 	terminal, first, err := registry.CompleteTerminal(account)
 	require.NoError(t, err)
 	require.True(t, first)
@@ -539,6 +661,37 @@ func TestAccountedEmptyJoinMapInitialFailureRollsBackController(t *testing.T) {
 	require.Zero(t, registry.LiveAllocationMetadata())
 	require.Zero(t, mp.CurrNB())
 	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
+func TestAccountedJoinMapLateFreeKeepsOriginalGeneration(t *testing.T) {
+	const capBytes = uint64(64 << 20)
+	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	firstGeneration, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	secondGeneration, err := budget.OpenGeneration(2)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(2, 16)
+	require.NoError(t, err)
+	firstAccount, err := registry.OpenWithController(capBytes, firstGeneration)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	jm, err := NewAccountedEmptyJoinMap(4, firstAccount, mp)
+	require.NoError(t, err)
+	firstUsed := firstGeneration.Used()
+	require.Positive(t, firstUsed)
+
+	secondAccount, err := registry.OpenWithController(capBytes, secondGeneration)
+	require.NoError(t, err)
+	require.Zero(t, secondGeneration.Used())
+	jm.Free()
+	require.Zero(t, firstGeneration.Used())
+	require.Zero(t, firstAccount.Snapshot().Used)
+	require.Zero(t, secondGeneration.Used())
+
+	_, _, err = registry.CompleteTerminal(firstAccount)
+	require.NoError(t, err)
+	_, _, err = registry.CompleteTerminal(secondAccount)
 	require.NoError(t, err)
 }
 
@@ -986,12 +1139,40 @@ func TestReserveBuildAuxChargesOneRetainedCopy(t *testing.T) {
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	hb.setBudget(generation)
-	require.NoError(t, hb.reserveBuildAux(true))
+	require.NoError(t, hb.reserveBuildAux(true, false))
 	require.Equal(t, want, generation.Used())
 	hb.releaseReservations()
 	require.Zero(t, generation.Used())
 	// The batch belongs to the test rather than batchReservations.
 	hb.Batches.Buf = nil
+}
+
+func TestReserveBuildAuxDoesNotStackAccountedGroupSels(t *testing.T) {
+	const rows = 10_000
+	const iteratorScratch = uint64(640 << 10)
+	want := uint64(rows)*48 + iteratorScratch
+	budget := process.MustNewHashBuildBudget(want, want)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(want, generation)
+	require.NoError(t, err)
+	var op HashBuild
+	op.NeedHashMap = true
+	require.NoError(t, op.SetAllocationAccount(account))
+	hb := &op.ctr.hashmapBuilder
+	hb.InputBatchRowCount = rows
+	hb.setBudget(generation)
+
+	require.NoError(t, hb.reserveBuildAux(false, true))
+	require.Equal(t, want, generation.Used())
+	require.Zero(t, generation.Snapshot().AllocationUsed)
+	hb.releaseReservations()
+	require.Zero(t, generation.Used())
+	require.NoError(t, op.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
 }
 
 func TestReserveUniqueAppendOverlapChargesReplacedCapacity(t *testing.T) {
@@ -2256,6 +2437,76 @@ func BenchmarkBuildHashmapColdStr(b *testing.B) {
 		require.NoError(b, hb.Batches.CopyIntoBatches(data, proc))
 		require.NoError(b, hb.BuildHashmap(false, false, false, proc))
 		hb.Free(proc)
+	}
+}
+
+func BenchmarkCopyBuildBatchAccounting(b *testing.B) {
+	const capBytes = uint64(256 << 20)
+	for _, accounted := range []bool{false, true} {
+		name := "legacy"
+		if accounted {
+			name = "accounted"
+		}
+		b.Run(name, func(b *testing.B) {
+			proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+			defer proc.Free()
+			input := testutil.NewBatch(
+				[]types.Type{types.T_int32.ToType(), types.T_varchar.ToType()},
+				true,
+				colexec.DefaultBatchSize,
+				proc.Mp(),
+			)
+			defer input.Clean(proc.Mp())
+			budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+			generation, err := budget.OpenGeneration(1)
+			if err != nil {
+				b.Fatal(err)
+			}
+			var hb HashmapBuilder
+			hb.setBudget(generation)
+			var (
+				registry *mpool.AllocationAccountRegistry
+				account  *mpool.AllocationAccount
+				op       HashBuild
+			)
+			if accounted {
+				registry, err = mpool.NewAllocationAccountRegistry(1, 64)
+				if err != nil {
+					b.Fatal(err)
+				}
+				account, err = registry.OpenWithController(capBytes, generation)
+				if err != nil {
+					b.Fatal(err)
+				}
+				op.NeedHashMap = true
+				if err = op.SetAllocationAccount(account); err != nil {
+					b.Fatal(err)
+				}
+				hb.batchAllocation = op.ctr.hashmapBuilder.batchAllocation
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if err = hb.copyBuildBatch(input, proc); err != nil {
+					b.Fatal(err)
+				}
+				hb.cleanBatches(proc)
+			}
+			b.StopTimer()
+			if generation.Used() != 0 {
+				b.Fatalf("generation used = %d", generation.Used())
+			}
+			if accounted {
+				op.ctr.hashmapBuilder.batchAllocation = nil
+				if err = op.ClearAllocationAccount(account); err != nil {
+					b.Fatal(err)
+				}
+				if _, _, err = registry.CompleteTerminal(account); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

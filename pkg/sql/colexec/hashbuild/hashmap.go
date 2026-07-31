@@ -91,6 +91,7 @@ type HashmapBuilder struct {
 	retainedBatchRecoverySafe       bool
 	mapAllocationAccount            *mpool.AllocationAccount
 	mapAllocation                   *hashtable.AllocationAccountSelection
+	batchAllocation                 *vector.AllocationAccountSelection
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -245,6 +246,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	hb.FreeExecutors()
 	hb.mapAllocationAccount = nil
 	hb.mapAllocation = nil
+	hb.batchAllocation = nil
 }
 
 func (hb *HashmapBuilder) Free(proc *process.Process) {
@@ -268,6 +270,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.uniqueKeySlots = nil
 	hb.mapAllocationAccount = nil
 	hb.mapAllocation = nil
+	hb.batchAllocation = nil
 }
 
 func (hb *HashmapBuilder) FreeExecutors() {
@@ -616,7 +619,7 @@ func (hb *HashmapBuilder) buildHashmap(
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
-	if err := hb.reserveBuildAux(needUniqueVec); err != nil {
+	if err := hb.reserveBuildAux(needUniqueVec, needAllocateSels); err != nil {
 		if !needUniqueVec {
 			return err
 		}
@@ -628,7 +631,7 @@ func (hb *HashmapBuilder) buildHashmap(
 		// retention. Retry the admission in place without that owner before
 		// allocating or mutating the mandatory map.
 		needUniqueVec = false
-		if err = hb.reserveBuildAux(false); err != nil {
+		if err = hb.reserveBuildAux(false, needAllocateSels); err != nil {
 			return err
 		}
 		// Linearize the fallback only after mandatory admission succeeds. A
@@ -733,7 +736,19 @@ func (hb *HashmapBuilder) buildHashmap(
 	}
 
 	if needAllocateSels {
-		if err := hb.Sels.Init(hb.InputBatchRowCount, proc.Mp()); err != nil {
+		var err error
+		if hb.batchAllocation == nil {
+			err = hb.Sels.Init(hb.InputBatchRowCount, proc.Mp())
+		} else {
+			err = hb.Sels.InitWithAllocation(
+				hb.InputBatchRowCount,
+				proc.Mp(),
+				hb.mapAllocationAccount,
+				HashBuildAllocationOwner,
+				HashBuildAllocationSiteGroupSels,
+			)
+		}
+		if err != nil {
 			return err
 		}
 	}

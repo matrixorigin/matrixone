@@ -53,6 +53,11 @@ const HashBuildAllocationOwner mpool.AllocationOwner = 1
 const (
 	HashBuildAllocationSiteHashCell mpool.AllocationSite = iota + 24
 	HashBuildAllocationSiteHashDescriptor
+	HashBuildAllocationSiteBatchData
+	HashBuildAllocationSiteBatchArea
+	HashBuildAllocationSiteBatchNulls
+	HashBuildAllocationSiteBatchGrouping
+	HashBuildAllocationSiteGroupSels
 )
 
 type container struct {
@@ -302,8 +307,20 @@ func (hashBuild *HashBuild) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
+	batchSelection, err := vector.NewAllocationAccountSelectionWithBitmaps(
+		account,
+		HashBuildAllocationOwner,
+		HashBuildAllocationSiteBatchData,
+		HashBuildAllocationSiteBatchArea,
+		HashBuildAllocationSiteBatchNulls,
+		HashBuildAllocationSiteBatchGrouping,
+	)
+	if err != nil {
+		return err
+	}
 	builder.mapAllocationAccount = account
 	builder.mapAllocation = selection
+	builder.batchAllocation = batchSelection
 	return nil
 }
 
@@ -317,11 +334,13 @@ func (hashBuild *HashBuild) ClearAllocationAccount(
 	if builder.mapAllocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
 	}
-	if builder.IntHashMap != nil || builder.StrHashMap != nil {
+	if builder.IntHashMap != nil || builder.StrHashMap != nil ||
+		len(builder.Batches.Buf) != 0 || builder.Sels.Size() != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	builder.mapAllocationAccount = nil
 	builder.mapAllocation = nil
+	builder.batchAllocation = nil
 	return nil
 }
 

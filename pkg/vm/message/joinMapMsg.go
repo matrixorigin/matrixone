@@ -17,6 +17,7 @@ package message
 import (
 	"bytes"
 	"context"
+	"math"
 	"os"
 	"strconv"
 	"sync"
@@ -39,6 +40,10 @@ type GroupSels struct {
 
 	// tmp holds (groupID, rowID) pairs during the build phase, before Finalize.
 	tmp []int32
+
+	account *mpool.AllocationAccount
+	owner   mpool.AllocationOwner
+	site    mpool.AllocationSite
 }
 
 func freeSlice[T any](mp *mpool.MPool, s []T) {
@@ -46,13 +51,62 @@ func freeSlice[T any](mp *mpool.MPool, s []T) {
 }
 
 func (sels *GroupSels) Init(n int, mp *mpool.MPool) error {
+	return sels.InitWithAllocation(n, mp, nil, 0, 0)
+}
+
+// InitWithAllocation makes the complete temporary/final row-index owner use
+// one immutable allocation generation. GroupSels is copied into JoinMap at
+// publication, so its physical slices retain this provenance until the last
+// consumer frees the map.
+func (sels *GroupSels) InitWithAllocation(
+	n int,
+	mp *mpool.MPool,
+	account *mpool.AllocationAccount,
+	owner mpool.AllocationOwner,
+	site mpool.AllocationSite,
+) error {
+	if n < 0 || n > math.MaxInt/2 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if sels.tmp != nil || sels.vals != nil || sels.offsets != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
 	var err error
-	sels.tmp, err = mpool.MakeSlice[int32](n*2, mp, false)
+	if account == nil {
+		if owner != 0 || site != 0 {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		sels.tmp, err = mpool.MakeSlice[int32](n*2, mp, false)
+	} else {
+		sels.tmp, err = mpool.MakeSliceAccounted[int32](
+			n*2,
+			mp,
+			account,
+			owner,
+			site,
+		)
+	}
 	if err != nil {
 		return err
 	}
+	sels.account = account
+	sels.owner = owner
+	sels.site = site
 	sels.tmp = sels.tmp[:0]
 	return nil
+}
+
+func (sels *GroupSels) makeSlice(n int, mp *mpool.MPool) ([]int32, error) {
+	if sels.account == nil {
+		return mpool.MakeSlice[int32](n, mp, false)
+	}
+	return mpool.MakeSliceAccounted[int32](
+		n,
+		mp,
+		sels.account,
+		sels.owner,
+		sels.site,
+	)
 }
 
 func (sels *GroupSels) Free(mp *mpool.MPool) {
@@ -64,6 +118,9 @@ func (sels *GroupSels) Free(mp *mpool.MPool) {
 	sels.vals = nil
 	sels.offsets = nil
 	sels.tmp = nil
+	sels.account = nil
+	sels.owner = 0
+	sels.site = 0
 }
 
 func (sels *GroupSels) Size() int64 {
@@ -107,8 +164,7 @@ func (sels *GroupSels) Finalize(groupCount int, inputRowCount int, mp *mpool.MPo
 		}
 	}
 	// groupCount+2: +1 for sentinel, +1 for 1-based callers (dedup UPDATE uses keys 1..groupCount)
-	var err error
-	sels.offsets, err = mpool.MakeSlice[int32](groupCount+2, mp, false)
+	offsets, err := sels.makeSlice(groupCount+2, mp)
 	if err != nil {
 		return err
 	}
@@ -116,26 +172,29 @@ func (sels *GroupSels) Finalize(groupCount int, inputRowCount int, mp *mpool.MPo
 	// count occurrences per group
 	for i := 0; i < len(sels.tmp); i += 2 {
 		k := sels.tmp[i]
-		sels.offsets[k+1]++
+		offsets[k+1]++
 	}
 	// prefix sum
-	for i := int32(1); i < int32(len(sels.offsets)); i++ {
-		sels.offsets[i] += sels.offsets[i-1]
+	for i := int32(1); i < int32(len(offsets)); i++ {
+		offsets[i] += offsets[i-1]
 	}
 	// scatter vals using offsets as write cursors, then recover
-	sels.vals, err = mpool.MakeSlice[int32](n, mp, false)
+	vals, err := sels.makeSlice(n, mp)
 	if err != nil {
+		freeSlice(mp, offsets)
 		return err
 	}
 	for i := 0; i < len(sels.tmp); i += 2 {
 		k := sels.tmp[i]
 		v := sels.tmp[i+1]
-		sels.vals[sels.offsets[k]] = v
-		sels.offsets[k]++
+		vals[offsets[k]] = v
+		offsets[k]++
 	}
 	// recover offsets: shift right by one
-	copy(sels.offsets[1:], sels.offsets[:len(sels.offsets)-1])
-	sels.offsets[0] = 0
+	copy(offsets[1:], offsets[:len(offsets)-1])
+	offsets[0] = 0
+	sels.vals = vals
+	sels.offsets = offsets
 	freeSlice(mp, sels.tmp)
 	sels.tmp = nil
 	return nil

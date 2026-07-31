@@ -112,3 +112,66 @@ func TestGroupSels_NullsSkipped(t *testing.T) {
 	require.ElementsMatch(t, []int32{3}, js.Get(2))
 	js.Free(mp)
 }
+
+func TestGroupSelsAllocationAccountLifecycleAndRollback(t *testing.T) {
+	const (
+		owner mpool.AllocationOwner = 1
+		site  mpool.AllocationSite  = 30
+	)
+	for _, tc := range []struct {
+		name          string
+		limit         uint64
+		metadataSlots uint64
+		wantErr       error
+	}{
+		{name: "exact", limit: 64, metadataSlots: 3},
+		{
+			name:          "one byte short",
+			limit:         63,
+			metadataSlots: 3,
+			wantErr:       mpool.ErrAllocationAccountCapacity,
+		},
+		{
+			name:          "one metadata slot short",
+			limit:         64,
+			metadataSlots: 2,
+			wantErr:       mpool.ErrAllocationMetadataSlots,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, err := mpool.NewAllocationAccountRegistry(1, tc.metadataSlots)
+			require.NoError(t, err)
+			account, err := registry.Open(tc.limit)
+			require.NoError(t, err)
+			mp := testMp()
+			var sels GroupSels
+			require.NoError(t, sels.InitWithAllocation(4, mp, account, owner, site))
+			sels.Insert(0, 0)
+			sels.Insert(0, 1)
+			sels.Insert(1, 2)
+			sels.Insert(1, 3)
+
+			err = sels.Finalize(2, 4, mp)
+			if tc.wantErr == nil {
+				require.NoError(t, err)
+				require.Equal(t, uint64(64), account.Snapshot().Peak)
+				require.Equal(t, uint64(32), account.Snapshot().Used)
+				require.ElementsMatch(t, []int32{0, 1}, sels.Get(0))
+				require.ElementsMatch(t, []int32{2, 3}, sels.Get(1))
+			} else {
+				require.ErrorIs(t, err, tc.wantErr)
+				require.Nil(t, sels.offsets)
+				require.Nil(t, sels.vals)
+				require.NotNil(t, sels.tmp)
+				require.Equal(t, uint64(32), account.Snapshot().Used)
+			}
+			sels.Free(mp)
+			require.Zero(t, account.Snapshot().Used)
+			require.Zero(t, registry.LiveAllocationMetadata())
+			snapshot, first, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+			require.True(t, first)
+			require.Equal(t, mpool.AllocationAccountTerminalValid, snapshot.State)
+		})
+	}
+}
