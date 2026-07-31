@@ -143,15 +143,17 @@ func (mo *MOServer) startConnectionLivenessMonitor() {
 
 func (mo *MOServer) Stop() error {
 	mo.mu.Lock()
-	if !mo.running {
+	if !mo.running && len(mo.listeners) == 0 {
 		mo.mu.Unlock()
 		return nil
 	}
 	mo.running = false
+	listeners := mo.listeners
+	mo.listeners = nil
 	mo.mu.Unlock()
 
 	var err error
-	for _, listener := range mo.listeners {
+	for _, listener := range listeners {
 		err = errors.Join(err, listener.Close())
 	}
 
