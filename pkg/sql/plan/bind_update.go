@@ -82,6 +82,18 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err = validateUpdateTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
 		return 0, err
 	}
+	updatedTargetCount := 0
+	for i := range dmlCtx.aliases {
+		if len(dmlCtx.updateCol2Expr[i]) > 0 {
+			updatedTargetCount++
+		}
+	}
+	routeUnsupported := func(reason updatePlannerRouteReason, routeErr error) error {
+		if updatedTargetCount > 1 {
+			return newUpdatePlannerRouteError(updatePlannerRejected, reason, routeErr)
+		}
+		return newLegacyUpdatePlannerRouteError(reason, routeErr)
+	}
 	onDuplicateAction := plan.Node_FAIL
 	if stmt.Ignore {
 		onDuplicateAction = plan.Node_IGNORE
@@ -117,36 +129,37 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		// The MULTI_UPDATE fast path below maintains regular index tables itself.
 		// It cannot rebuild irregular hidden tables when the base-table PK changes
-		// (for example IVF entries store the origin PK), so ask the caller to use
-		// the fallback update planner that runs the delete+insert rebuild path.
+		// (for example IVF entries store the origin PK). A single-target UPDATE
+		// may use the table-update planner; multi-target UPDATE is rejected
+		// instead of falling back from the modern planner.
 		if hasIrregularIndex && primaryKeyUpdated(tableDef, dmlCtx.updateCol2Expr[i]) {
-			return 0, newLegacyUpdatePlannerRouteError(
+			return 0, routeUnsupported(
 				updateRouteReasonIrregularIndex,
 				moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index"),
 			)
 		}
 
 		// Only block if irregular index exists AND indexed columns are being updated.
-		// bindAndOptimizeUpdateQuery catches this UnsupportedDML and falls back to
-		// buildTableUpdate, where irregular indexes are rebuilt by the old path.
+		// A single-target UPDATE may use buildTableUpdate to rebuild irregular
+		// indexes. Multi-target UPDATE is rejected instead of falling back.
 		if hasIrregularIndex {
 			for colName := range dmlCtx.updateCol2Expr[i] {
 				if irregularIndexCols[colName] {
-					return 0, newLegacyUpdatePlannerRouteError(
+					return 0, routeUnsupported(
 						updateRouteReasonIrregularIndex,
 						moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index"),
 					)
 				}
 			}
 			// An UPDATE that changes a primary key column of an irregular-index table must go
-			// through the table-update path: for a synchronous FULLTEXT/IVF index that path
-			// rejects it (its hidden table is keyed by the old PK and would go stale, #25617),
-			// and for async indexes it maintains them via CDC. This binder cannot maintain
-			// either, so bail out to it (ErrUnsupportedDML triggers the fallback).
+			// use the table-update path for a single target: synchronous FULLTEXT/IVF
+			// rejects it (its hidden table is keyed by the old PK and would go stale,
+			// #25617), while async indexes maintain it via CDC. Multi-target UPDATE
+			// is rejected instead of falling back.
 			if tableDef.Pkey != nil {
 				for _, pkColName := range tableDef.Pkey.Names {
 					if _, ok := dmlCtx.updateCol2Expr[i][pkColName]; ok {
-						return 0, newLegacyUpdatePlannerRouteError(
+						return 0, routeUnsupported(
 							updateRouteReasonIrregularIndex,
 							moerr.NewUnsupportedDML(
 								builder.GetContext(),
@@ -183,7 +196,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
 			if pkAndUkCols[colName] {
-				return 0, newLegacyUpdatePlannerRouteError(
+				return 0, routeUnsupported(
 					updateRouteReasonPubSubKey,
 					moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table"),
 				)
@@ -216,7 +229,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if colDef.Name == colName {
 					if isEnumOrSetPlanType(&colDef.Typ) {
 						if colDef.Typ.AutoIncr {
-							return 0, newLegacyUpdatePlannerRouteError(
+							return 0, routeUnsupported(
 								updateRouteReasonAutoIncrement,
 								moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value"),
 							)
@@ -299,12 +312,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	)
 	if err != nil {
 		return 0, err
-	}
-	updatedTargetCount := 0
-	for i := range dmlCtx.aliases {
-		if len(dmlCtx.updateCol2Expr[i]) > 0 {
-			updatedTargetCount++
-		}
 	}
 	isMultiTargetUpdate := updatedTargetCount > 1
 	targetRowNumberPos := make([]int32, len(dmlCtx.aliases))
@@ -487,7 +494,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		for i, tableDef := range dmlCtx.tableDefs {
 			if updateAutoIncrCols[i] &&
 				len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 {
-				return 0, newLegacyUpdatePlannerRouteError(
+				return 0, routeUnsupported(
 					updateRouteReasonAutoIncrement,
 					moerr.NewUnsupportedDML(
 						builder.compCtx.GetContext(),
@@ -1424,6 +1431,20 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignments(
 	if !hasRepeatedPhysicalTarget {
 		return lastNodeID, selectNode, selectNodeTag, nil
 	}
+	if len(targetsByTableID) == 1 {
+		for _, targets := range targetsByTableID {
+			return builder.mergeSamePhysicalTargetAssignmentsAcrossTuples(
+				bindCtx,
+				lastNodeID,
+				selectNode,
+				selectNodeTag,
+				dmlCtx,
+				targets,
+				oldColName2Idx,
+				newColName2Idx,
+			)
+		}
+	}
 
 	childColExpr := func(pos int32) *plan.Expr {
 		return &plan.Expr{
@@ -1520,6 +1541,228 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignments(
 	}
 	lastNodeID = builder.appendNode(projectNode, bindCtx)
 	return lastNodeID, projectNode, projectTag, nil
+}
+
+// mergeSamePhysicalTargetAssignmentsAcrossTuples normalizes every writable
+// alias of one physical table into a common row image, then groups those images
+// by Rowid. This lets assignments made through different aliases meet even
+// when those aliases reference the row in different join tuples.
+func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectNode *plan.Node,
+	_ int32,
+	dmlCtx *DMLContext,
+	targets []int,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (int32, *plan.Node, int32, error) {
+	tableDef := dmlCtx.tableDefs[targets[0]]
+	updatedColsSet := make(map[string]struct{})
+	for _, targetIdx := range targets {
+		for colName := range dmlCtx.updateCol2Expr[targetIdx] {
+			updatedColsSet[colName] = struct{}{}
+		}
+	}
+	updatedCols := make([]string, 0, len(updatedColsSet))
+	for colName := range updatedColsSet {
+		updatedCols = append(updatedCols, colName)
+	}
+	sort.Strings(updatedCols)
+
+	nullExpr := func(typ plan.Type) *plan.Expr {
+		expr := makePlan2NullConstExprWithType()
+		expr.Typ = typ
+		expr.Typ.NotNullable = false
+		return expr
+	}
+
+	// Canonical layout: old physical row followed by one nullable contribution
+	// for every column assigned through any alias.
+	canonicalTypes := make([]plan.Type, 0, len(tableDef.Cols)+len(updatedCols))
+	for _, col := range tableDef.Cols {
+		canonicalTypes = append(canonicalTypes, col.Typ)
+	}
+	for _, colName := range updatedCols {
+		colIdx := tableDef.Name2ColIndex[colName]
+		canonicalTypes = append(canonicalTypes, tableDef.Cols[colIdx].Typ)
+	}
+
+	branchIDs := make([]int32, 0, len(targets))
+	branchTags := make([]int32, 0, len(targets))
+	sourceSinkID := appendSinkNode(builder, bindCtx, lastNodeID)
+	if builder.preserveSinkProjection == nil {
+		builder.preserveSinkProjection = make(map[int32]struct{})
+	}
+	builder.preserveSinkProjection[sourceSinkID] = struct{}{}
+	sourceStep := builder.appendStep(sourceSinkID)
+	for _, sourceIdx := range targets {
+		sourceAlias := dmlCtx.aliases[sourceIdx]
+		branchTag := builder.genNewBindTag()
+		branchScanID := appendSinkScanNode(builder, bindCtx, sourceStep)
+		if builder.preserveScanProjection == nil {
+			builder.preserveScanProjection = make(map[int32]struct{})
+		}
+		builder.preserveScanProjection[branchScanID] = struct{}{}
+		if builder.positionalSinkScans == nil {
+			builder.positionalSinkScans = make(map[int32]struct{})
+		}
+		builder.positionalSinkScans[branchScanID] = struct{}{}
+		branchColExpr := func(pos int32) *plan.Expr {
+			return &plan.Expr{
+				Typ: selectNode.ProjectList[pos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{RelPos: 0, ColPos: pos},
+				},
+			}
+		}
+		branchProject := make([]*plan.Expr, 0, len(canonicalTypes))
+		for _, col := range tableDef.Cols {
+			branchProject = append(
+				branchProject,
+				branchColExpr(oldColName2Idx[sourceAlias+"."+col.Name]),
+			)
+		}
+		for _, colName := range updatedCols {
+			if _, updatesCol := dmlCtx.updateCol2Expr[sourceIdx][colName]; updatesCol {
+				branchProject = append(
+					branchProject,
+					branchColExpr(newColName2Idx[sourceAlias+"."+colName]),
+				)
+			} else {
+				colIdx := tableDef.Name2ColIndex[colName]
+				branchProject = append(branchProject, nullExpr(tableDef.Cols[colIdx].Typ))
+			}
+		}
+		branchIDs = append(branchIDs, builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{branchScanID},
+			ProjectList: branchProject,
+			BindingTags: []int32{branchTag},
+		}, bindCtx))
+		branchTags = append(branchTags, branchTag)
+	}
+
+	unionID := branchIDs[0]
+	unionInputTag := branchTags[0]
+	for branchIdx := 1; branchIdx < len(branchIDs); branchIdx++ {
+		unionProject := make([]*plan.Expr, len(canonicalTypes))
+		for pos, typ := range canonicalTypes {
+			unionProject[pos] = &plan.Expr{
+				Typ: typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{RelPos: unionInputTag, ColPos: int32(pos)},
+				},
+			}
+		}
+		unionTag := builder.genNewBindTag()
+		unionID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_UNION_ALL,
+			Children:    []int32{unionID, branchIDs[branchIdx]},
+			ProjectList: unionProject,
+			BindingTags: []int32{unionTag},
+		}, bindCtx)
+		unionInputTag = unionTag
+	}
+	unionTag := unionInputTag
+
+	rowIDCanonicalPos := int32(tableDef.Name2ColIndex[catalog.Row_ID])
+	groupExpr := &plan.Expr{
+		Typ: canonicalTypes[rowIDCanonicalPos],
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: unionTag, ColPos: rowIDCanonicalPos},
+		},
+	}
+	groupTag := builder.genNewBindTag()
+	aggTag := builder.genNewBindTag()
+	aggList := make([]*plan.Expr, 0, len(canonicalTypes)-1)
+	canonicalAggPos := make([]int32, len(canonicalTypes))
+	for pos, typ := range canonicalTypes {
+		if int32(pos) == rowIDCanonicalPos {
+			canonicalAggPos[pos] = -1
+			continue
+		}
+		input := &plan.Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: unionTag, ColPos: int32(pos)},
+			},
+		}
+		aggExpr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"any_value",
+			[]*plan.Expr{input},
+		)
+		if err != nil {
+			return 0, nil, 0, err
+		}
+		canonicalAggPos[pos] = int32(len(aggList))
+		aggList = append(aggList, aggExpr)
+	}
+	aggID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_AGG,
+		Children:    []int32{unionID},
+		GroupBy:     []*plan.Expr{groupExpr},
+		AggList:     aggList,
+		BindingTags: []int32{groupTag, aggTag},
+		SpillMem:    builder.aggSpillMem,
+	}, bindCtx)
+
+	canonicalResultExpr := func(pos int32) *plan.Expr {
+		typ := canonicalTypes[pos]
+		if pos == rowIDCanonicalPos {
+			return &plan.Expr{
+				Typ: typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{RelPos: groupTag, ColPos: 0},
+				},
+			}
+		}
+		return &plan.Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: aggTag, ColPos: canonicalAggPos[pos]},
+			},
+		}
+	}
+
+	finalProject := make([]*plan.Expr, len(selectNode.ProjectList))
+	for pos, expr := range selectNode.ProjectList {
+		finalProject[pos] = nullExpr(expr.Typ)
+	}
+	updatedCanonicalPos := make(map[string]int32, len(updatedCols))
+	for i, colName := range updatedCols {
+		updatedCanonicalPos[colName] = int32(len(tableDef.Cols) + i)
+	}
+	for _, targetIdx := range targets {
+		alias := dmlCtx.aliases[targetIdx]
+		for colPos, col := range tableDef.Cols {
+			finalProject[oldColName2Idx[alias+"."+col.Name]] =
+				canonicalResultExpr(int32(colPos))
+		}
+		for _, colName := range updatedCols {
+			key := alias + "." + colName
+			targetPos, exists := newColName2Idx[key]
+			if !exists {
+				oldPos := oldColName2Idx[key]
+				oldColName2Idx[key] = int32(len(finalProject))
+				finalProject = append(finalProject, canonicalResultExpr(int32(tableDef.Name2ColIndex[colName])))
+				targetPos = oldPos
+				newColName2Idx[key] = targetPos
+			}
+			finalProject[targetPos] = canonicalResultExpr(updatedCanonicalPos[colName])
+		}
+	}
+
+	projectTag := builder.genNewBindTag()
+	projectNode := &plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{aggID},
+		ProjectList: finalProject,
+		BindingTags: []int32{projectTag},
+	}
+	projectID := builder.appendNode(projectNode, bindCtx)
+	return projectID, projectNode, projectTag, nil
 }
 
 func collectIrregularIndexUpdateCols(tableDef *plan.TableDef) (bool, map[string]bool) {

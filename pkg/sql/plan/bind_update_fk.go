@@ -35,6 +35,12 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 	}
 
 	var err error
+	updatedTargets := 0
+	for i := range dmlCtx.updateCol2Expr {
+		if len(dmlCtx.updateCol2Expr[i]) > 0 {
+			updatedTargets++
+		}
+	}
 	for i, tableDef := range dmlCtx.tableDefs {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
@@ -46,6 +52,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			tableDef,
 			alias,
 			newColName2Idx,
+			updatedTargets > 1,
 		); err != nil {
 			return 0, 0, nil, err
 		}
@@ -207,6 +214,7 @@ func (builder *QueryBuilder) rejectUpdateOfReferencedParentKey(
 	tableDef *plan.TableDef,
 	alias string,
 	newColName2Idx map[string]int32,
+	multiTarget bool,
 ) error {
 	if tableDef == nil || len(tableDef.RefChildTbls) == 0 {
 		return nil
@@ -247,12 +255,20 @@ func (builder *QueryBuilder) rejectUpdateOfReferencedParentKey(
 			}
 			for _, parentColID := range fk.ForeignCols {
 				if _, ok := newColName2Idx[alias+"."+parentColIDToName[parentColID]]; ok {
+					routeErr := moerr.NewUnsupportedDML(
+						builder.GetContext(),
+						foreignKeyUnsupportedDMLCause,
+					)
+					if multiTarget {
+						return newUpdatePlannerRouteError(
+							updatePlannerRejected,
+							updateRouteReasonForeignKey,
+							routeErr,
+						)
+					}
 					return newLegacyUpdatePlannerRouteError(
 						updateRouteReasonForeignKey,
-						moerr.NewUnsupportedDML(
-							builder.GetContext(),
-							foreignKeyUnsupportedDMLCause,
-						),
+						routeErr,
 					)
 				}
 			}

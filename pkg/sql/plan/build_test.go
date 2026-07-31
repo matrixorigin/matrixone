@@ -2282,58 +2282,50 @@ func TestPartitionedMultiTargetUpdateUsesModernPlan(t *testing.T) {
 }
 
 func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	logicPlan, err := runOneStmt(
-		mock,
-		t,
-		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
-			"SET a.n_name = 'a', b.n_comment = 'b'",
-	)
-	require.NoError(t, err)
+	for _, joinCond := range []string{"=", "<>"} {
+		mock := NewMockOptimizer(true)
+		logicPlan, err := runOneStmt(
+			mock,
+			t,
+			"UPDATE nation a JOIN nation b ON a.n_nationkey "+joinCond+" b.n_nationkey "+
+				"SET a.n_name = 'a', b.n_comment = 'b'",
+		)
+		require.NoError(t, err)
 
-	query := logicPlan.GetQuery()
-	var multiUpdate *plan.Node
-	mainContexts := 0
-	mergedAssignments := 0
-	var walkExpr func(*plan.Expr)
-	walkExpr = func(expr *plan.Expr) {
-		if expr == nil {
-			return
-		}
-		if fn := expr.GetF(); fn != nil {
-			if fn.GetFunc().GetObjName() == "if" {
-				mergedAssignments++
-			}
-			for _, arg := range fn.Args {
-				walkExpr(arg)
+		query := logicPlan.GetQuery()
+		var multiUpdate *plan.Node
+		mainContexts := 0
+		hasUnionAll := false
+		hasAggregate := false
+		for _, node := range query.Nodes {
+			switch node.NodeType {
+			case plan.Node_MULTI_UPDATE:
+				multiUpdate = node
+			case plan.Node_UNION_ALL:
+				hasUnionAll = true
+			case plan.Node_AGG:
+				hasAggregate = true
 			}
 		}
-	}
-	for _, node := range query.Nodes {
-		if node.NodeType == plan.Node_MULTI_UPDATE {
-			multiUpdate = node
-		}
-		for _, expr := range node.ProjectList {
-			walkExpr(expr)
-		}
-	}
 
-	require.NotNil(t, multiUpdate)
-	var tableID uint64
-	for _, updateCtx := range multiUpdate.UpdateCtxList {
-		if updateCtx.TableDef == nil || updateCtx.TableDef.Name != "nation" {
-			continue
+		require.NotNil(t, multiUpdate)
+		require.True(t, hasUnionAll)
+		require.True(t, hasAggregate)
+		var tableID uint64
+		for _, updateCtx := range multiUpdate.UpdateCtxList {
+			if updateCtx.TableDef == nil || updateCtx.TableDef.Name != "nation" {
+				continue
+			}
+			mainContexts++
+			require.True(t, updateCtx.DedupByTargetRowId)
+			if tableID == 0 {
+				tableID = updateCtx.TableDef.TblId
+			} else {
+				require.Equal(t, tableID, updateCtx.TableDef.TblId)
+			}
 		}
-		mainContexts++
-		require.True(t, updateCtx.DedupByTargetRowId)
-		if tableID == 0 {
-			tableID = updateCtx.TableDef.TblId
-		} else {
-			require.Equal(t, tableID, updateCtx.TableDef.TblId)
-		}
+		require.Equal(t, 2, mainContexts)
 	}
-	require.Equal(t, 2, mainContexts)
-	require.GreaterOrEqual(t, mergedAssignments, 2)
 }
 
 func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
@@ -2710,14 +2702,6 @@ func setMockDefaultExpr(t *testing.T, mock *MockOptimizer, tableName, colName, v
 	}
 }
 
-func setMockOnUpdateExpr(t *testing.T, mock *MockOptimizer, tableName, colName, value string) {
-	col := requireMockColumn(t, mock, tableName, colName)
-	col.OnUpdate = &plan.OnUpdate{
-		Expr:         makeStringConstExpr(col.Typ, value),
-		OriginString: value,
-	}
-}
-
 func setMockColumnType(t *testing.T, mock *MockOptimizer, tableName, colName string, typ plan.Type) {
 	col := requireMockColumn(t, mock, tableName, colName)
 	col.Typ = typ
@@ -2746,49 +2730,6 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 			},
 		},
 	}
-}
-
-func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int, marker string) *Node {
-	for _, node := range query.Nodes {
-		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
-			continue
-		}
-		return node
-	}
-	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
-	return nil
-}
-
-func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
-	for _, node := range query.Nodes {
-		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
-			continue
-		}
-		if pos >= len(node.ProjectList) {
-			continue
-		}
-		return node.ProjectList[pos]
-	}
-	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
-	return nil
-}
-
-func isFallbackSourceProjectNode(query *Query, node *Node, projectLen int, marker string) bool {
-	if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
-		return false
-	}
-	if len(node.Children) == 1 {
-		childIdx := node.Children[0]
-		if childIdx >= 0 && childIdx < int32(len(query.Nodes)) && query.Nodes[childIdx].NodeType == plan.Node_SINK_SCAN {
-			return false
-		}
-	}
-	for _, expr := range node.ProjectList {
-		if exprContainsStringLiteral(expr, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func hasUpdateFromDedupAnyValueAgg(query *Query, groupByLen int) bool {
@@ -2907,49 +2848,6 @@ func queryContainsExpr(query *Query, accept func(*plan.Expr) bool) bool {
 		}
 	}
 	return false
-}
-
-func nodeContainsStringLiteral(node *Node, value string) bool {
-	for _, expr := range node.ProjectList {
-		if exprContainsStringLiteral(expr, value) {
-			return true
-		}
-	}
-	return false
-}
-
-func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen int) {
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || len(node.Children) != 1 {
-			continue
-		}
-		child := query.Nodes[node.Children[0]]
-		if child.NodeType != plan.Node_SINK_SCAN {
-			continue
-		}
-		return
-	}
-	t.Fatalf("missing fallback update project with length %d", projectLen)
-}
-
-func assertFallbackUpdateAggDedupWithAnyValue(t *testing.T, query *Query) {
-	foundAgg := false
-	foundAnyValue := false
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_AGG {
-			continue
-		}
-		foundAgg = true
-		for _, expr := range node.AggList {
-			if exprContainsFuncName(expr, "any_value") {
-				foundAnyValue = true
-				break
-			}
-		}
-	}
-	if !foundAgg || !foundAnyValue {
-		t.Fatalf("fallback update should build agg dedup path with any_value, foundAgg=%v foundAnyValue=%v", foundAgg, foundAnyValue)
-	}
 }
 
 func exprContainsFuncName(expr *plan.Expr, name string) bool {

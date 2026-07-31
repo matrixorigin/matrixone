@@ -90,6 +90,16 @@ SET
     b.y = 4;
 
 SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
+
+UPDATE multi_update_alias_target SET x = 0, y = 0;
+UPDATE multi_update_alias_target a
+JOIN multi_update_alias_target b ON a.id <> b.id
+SET
+    a.x = 1,
+    b.y = 2;
+
+SELECT ROW_COUNT();
+SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
 DROP TABLE multi_update_alias_target;
 
 DROP TABLE IF EXISTS multi_update_partition_target;

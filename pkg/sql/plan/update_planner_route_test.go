@@ -112,6 +112,16 @@ func TestClassifyUpdateTableResolutionError(t *testing.T) {
 			wantText:   foreignKeyUnsupportedDMLMsg,
 		},
 		{
+			name: "multi target foreign key never enters legacy",
+			err: moerr.NewUnsupportedDML(
+				ctx.GetContext(),
+				foreignKeyUnsupportedDMLCause,
+			),
+			wantRoute:  updatePlannerRejected,
+			wantReason: updateRouteReasonForeignKey,
+			wantText:   foreignKeyUnsupportedDMLMsg,
+		},
+		{
 			name: "iceberg uses specialized planner",
 			err: moerr.NewUnsupportedDML(
 				ctx.GetContext(),
@@ -155,7 +165,20 @@ func TestClassifyUpdateTableResolutionError(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			classifiedErr := classifyUpdateTableResolutionError(ctx, updateStmt, test.err)
+			testStmt := updateStmt
+			if test.name == "multi target foreign key never enters legacy" {
+				parsed, parseErr := parsers.ParseOne(
+					ctx.GetContext(),
+					dialect.MYSQL,
+					"UPDATE nation a JOIN region b ON a.n_regionkey = b.r_regionkey "+
+						"SET a.n_name = 'x', b.r_name = 'y'",
+					1,
+				)
+				require.NoError(t, parseErr)
+				defer parsed.Free()
+				testStmt = parsed.(*tree.Update)
+			}
+			classifiedErr := classifyUpdateTableResolutionError(ctx, testStmt, test.err)
 			route, reason, gotErr := classifyUpdatePlannerError(classifiedErr)
 			require.Equal(t, test.wantRoute, route)
 			require.Equal(t, test.wantReason, reason)
@@ -183,6 +206,20 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 				}}
 			},
 			wantRoute:  updatePlannerLegacy,
+			wantReason: updateRouteReasonIrregularIndex,
+		},
+		{
+			name: "multi target never falls back for irregular index",
+			sql: "UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+				"SET a.n_comment = 'a', b.n_name = 'b'",
+			prepare: func(mock *MockOptimizer) {
+				mock.ctxt.tables["nation"].Indexes = []*planpb.IndexDef{{
+					IndexName: "idx",
+					IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
+					Parts:     []string{"n_comment"},
+				}}
+			},
+			wantRoute:  updatePlannerRejected,
 			wantReason: updateRouteReasonIrregularIndex,
 		},
 		{
