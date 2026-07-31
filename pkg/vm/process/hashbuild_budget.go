@@ -894,6 +894,70 @@ func (b *HashBuildBudget) OpenGenerationWithSpillCaps(id, memoryCap, spillDiskCa
 	return g, nil
 }
 
+// openProcessGeneration opens the generation selected by GetHashBuildBudget.
+// The caller's resolved query cap may have been sampled before another
+// statement refreshed the shared CN aggregate to a lower live ceiling. Clamp
+// that stale sample and construct the generation under the same aggregate
+// lock; otherwise the check-then-open sequence can reject an ordinary query
+// with an "invalid hash build budget" configuration error.
+func (b *HashBuildBudget) openProcessGeneration(
+	id, requestedMemoryCap, spillDiskCap uint64,
+) (*HashBuildBudgetGeneration, error) {
+	if b == nil || requestedMemoryCap == 0 {
+		return nil, &HashBuildBudgetError{
+			Kind:      HashBuildBudgetErrorInvalid,
+			Requested: requestedMemoryCap,
+			Message:   "invalid process hash build generation cap",
+		}
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil, &HashBuildBudgetError{
+			Kind:    HashBuildBudgetErrorClosed,
+			Message: ErrHashBuildBudgetClosed.Error(),
+		}
+	}
+
+	memoryCap := requestedMemoryCap
+	if memoryCap > b.aggregateCap {
+		memoryCap = b.aggregateCap
+	}
+	if memoryCap == 0 {
+		return nil, &HashBuildBudgetError{
+			Kind:      HashBuildBudgetErrorInvalid,
+			Requested: requestedMemoryCap,
+			Cap:       b.aggregateCap,
+			Message:   "zero live process hash build generation cap",
+		}
+	}
+
+	if spillDiskCap == 0 {
+		spillDiskCap = defaultSpillCap(memoryCap)
+	}
+	if spillDiskCap > b.spillDiskCap {
+		spillDiskCap = b.spillDiskCap
+	}
+	configuredFDCap := configuredSpillFDCap(memoryCap)
+	if configuredFDCap > b.spillFDConfiguredCap {
+		configuredFDCap = b.spillFDConfiguredCap
+	}
+	effectiveFDCap := configuredFDCap
+	if effectiveFDCap > b.spillFDCap {
+		effectiveFDCap = b.spillFDCap
+	}
+
+	return &HashBuildBudgetGeneration{
+		budget:               b,
+		id:                   id,
+		cap:                  memoryCap,
+		spillDiskCap:         spillDiskCap,
+		spillFDConfiguredCap: configuredFDCap,
+		spillFDCap:           effectiveFDCap,
+	}, nil
+}
+
 // OpenGenerationWithLimits is a compatibility spelling for explicit spill caps.
 func (b *HashBuildBudget) OpenGenerationWithLimits(id, memoryCap, spillDiskCap, spillFDCap uint64) (*HashBuildBudgetGeneration, error) {
 	return b.OpenGenerationWithSpillCaps(id, memoryCap, spillDiskCap, spillFDCap)
@@ -1890,15 +1954,15 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 			return nil, err
 		}
 	}
-	queryCap := ceiling.QueryCap
-	if aggregate.AggregateCap() < queryCap {
-		queryCap = aggregate.AggregateCap()
-	}
 	spillDiskCap := uint64(0)
 	if proc.Base.Lim.SpillSize > 0 {
 		spillDiskCap = uint64(proc.Base.Lim.SpillSize)
 	}
-	generation, err := aggregate.OpenGenerationWithSpillCaps(hashBuildGenerationSequence.Add(1), queryCap, spillDiskCap, 0)
+	generation, err := aggregate.openProcessGeneration(
+		hashBuildGenerationSequence.Add(1),
+		ceiling.QueryCap,
+		spillDiskCap,
+	)
 	if err != nil {
 		return nil, err
 	}
