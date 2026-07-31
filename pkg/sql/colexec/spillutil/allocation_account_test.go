@@ -639,6 +639,100 @@ func TestSpillAllocationAccountExpressionPressureReducesBeforePublication(t *tes
 	finalizeTestSpillAllocationAccount(t, state)
 }
 
+// BenchmarkSpillScatterAccounting measures the steady streaming closure with
+// the same selected-vector, hash/row-ID, marshal, and coalesce owners used by
+// initial and recursive join spill. /dev/null keeps the benchmark bounded and
+// retains the write syscall without turning repeated measurements into a disk
+// capacity test.
+func BenchmarkSpillScatterAccounting(b *testing.B) {
+	for _, accounted := range []bool{false, true} {
+		mode := "legacy"
+		if accounted {
+			mode = "accounted"
+		}
+		b.Run(mode, func(b *testing.B) {
+			proc := testutil.NewProcessWithMPool(
+				b,
+				"",
+				mpool.MustNewZero(),
+			)
+			defer proc.Free()
+			values := make([]int64, 4_096)
+			for i := range values {
+				values[i] = int64(i)
+			}
+			source := testutil.NewBatchWithVectors([]*vector.Vector{
+				testutil.MakeInt64Vector(values, nil, proc.Mp()),
+			}, nil)
+			defer source.Clean(proc.Mp())
+
+			var (
+				engine *SpillEngine
+				state  testSpillAllocationAccount
+				err    error
+			)
+			if accounted {
+				state = newTestSpillAllocationAccount(b, 64<<20, 4_096)
+				engine, err = NewSpillEngineWithAllocation(
+					SpillEngineConfig{},
+					state.allocation,
+				)
+				if err != nil {
+					b.Fatal(err)
+				}
+			} else {
+				engine = NewSpillEngine(SpillEngineConfig{})
+			}
+			writers := make([]BucketWriter, SpillNumBuckets)
+			for i := range writers {
+				writers[i].Name = "benchmark-discard"
+				writers[i].Fd, err = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			defer func() {
+				for i := range writers {
+					writers[i].Close()
+				}
+			}()
+			analyzer := process.NewAnalyzer(0, false, false, "benchmark")
+
+			b.ReportAllocs()
+			b.SetBytes(int64(source.Size()))
+			b.ResetTimer()
+			for range b.N {
+				if err = engine.scatterBatchWithPressure(
+					proc,
+					source,
+					source.Vecs,
+					writers,
+					0,
+					false,
+					analyzer,
+				); err != nil {
+					b.Fatal(err)
+				}
+				if err = engine.flushScatterBuffers(proc, writers, analyzer); err != nil {
+					b.Fatal(err)
+				}
+				for i := range writers {
+					writers[i].Rows = 0
+					writers[i].Bytes = 0
+				}
+			}
+			b.StopTimer()
+			engine.Cleanup(proc)
+			if accounted {
+				if state.account.Snapshot().Used != 0 {
+					b.Fatalf("account used = %d", state.account.Snapshot().Used)
+				}
+				finalizeTestSpillAllocationAccount(b, state)
+			}
+		})
+	}
+}
+
 func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(
 		t,

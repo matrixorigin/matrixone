@@ -809,34 +809,40 @@ func (mp *MPool) allocAccountedWithDetailK(
 	detailk string,
 	sz int64,
 	request allocationAccountRequest,
-) (result []byte, retErr error) {
-	defer func() {
-		if retErr != nil {
-			retErr = fmt.Errorf(
-				"allocation owner=%d site=%d: %w",
-				request.owner,
-				request.site,
-				retErr,
-			)
-		}
-	}()
+) ([]byte, error) {
 	if err := request.validate(); err != nil {
-		return nil, err
+		return nil, allocationAccountSiteError(request, err)
 	}
 	// reject unexpected alloc size.
 	if sz < 0 || sz > maxAllocationSize() {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
-		return nil, fmt.Errorf(
+		return nil, allocationAccountSiteError(request, fmt.Errorf(
 			"%w: requested=%d maximum=%d",
 			ErrAllocationAllocatorLimit,
 			sz,
 			maxAllocationSize(),
-		)
+		))
 	}
 	if sz == 0 {
 		return nil, nil
 	}
-	return mp.allocAccounted(detailk, sz, request)
+	result, err := mp.allocAccounted(detailk, sz, request)
+	if err != nil {
+		return nil, allocationAccountSiteError(request, err)
+	}
+	return result, nil
+}
+
+func allocationAccountSiteError(
+	request allocationAccountRequest,
+	err error,
+) error {
+	return fmt.Errorf(
+		"allocation owner=%d site=%d: %w",
+		request.owner,
+		request.site,
+		err,
+	)
 }
 
 func (mp *MPool) alloc(

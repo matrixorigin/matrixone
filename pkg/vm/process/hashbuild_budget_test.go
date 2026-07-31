@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -2109,6 +2110,128 @@ func BenchmarkHashBuildBudgetAllocationAccount(b *testing.B) {
 	if _, err = registry.Finalize(account); err != nil {
 		b.Fatal(err)
 	}
+}
+
+// BenchmarkHashBuildAllocationAttemptLifecycle covers the production control
+// plane around high-frequency statements: concurrent generation open, account
+// publication, one physical owner allocation, release, terminal snapshot, and
+// slot reuse. The explicit quantiles make the contention tail visible when the
+// benchmark is run with -cpu=1,8.
+func BenchmarkHashBuildAllocationAttemptLifecycle(b *testing.B) {
+	const (
+		aggregateCap = uint64(1 << 50)
+		attemptCap   = uint64(1 << 20)
+	)
+	budget := MustNewHashBuildBudget(aggregateCap, attemptCap)
+	registry, err := commonmpool.NewAllocationAccountRegistry(4_096, 4_096)
+	if err != nil {
+		b.Fatal(err)
+	}
+	mp := commonmpool.MustNew("hash-build-attempt-lifecycle-benchmark")
+	defer commonmpool.DeleteMPool(mp)
+	latencies := make([]int64, b.N)
+	var (
+		nextID atomic.Uint64
+		sample atomic.Uint64
+	)
+
+	b.ReportAllocs()
+	b.SetBytes(4 << 10)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			started := time.Now()
+			generation, openErr := budget.OpenGenerationWithCap(
+				nextID.Add(1),
+				attemptCap,
+			)
+			if openErr != nil {
+				b.Errorf("open generation: %v", openErr)
+				return
+			}
+			account, openErr := registry.OpenWithController(attemptCap, generation)
+			if openErr != nil {
+				generation.Close()
+				b.Errorf("open account: %v", openErr)
+				return
+			}
+			buffer, allocErr := mp.AllocAccounted(4<<10, account, 1, 1)
+			if allocErr == nil {
+				mp.Free(buffer)
+			}
+			_, _, terminalErr := registry.CompleteTerminal(account)
+			generation.Close()
+			if allocErr != nil || terminalErr != nil {
+				b.Errorf("attempt alloc=%v terminal=%v", allocErr, terminalErr)
+				return
+			}
+			index := sample.Add(1) - 1
+			latencies[index] = time.Since(started).Nanoseconds()
+		}
+	})
+	b.StopTimer()
+	count := int(sample.Load())
+	if count != b.N {
+		b.Fatalf("completed attempts = %d, want %d", count, b.N)
+	}
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	b.ReportMetric(float64(latencies[(count-1)*50/100]), "p50-ns/op")
+	b.ReportMetric(float64(latencies[(count-1)*99/100]), "p99-ns/op")
+	if budget.AggregateUsed() != 0 || registry.LiveAllocationMetadata() != 0 {
+		b.Fatalf(
+			"terminal leak: budget=%d metadata=%d",
+			budget.AggregateUsed(),
+			registry.LiveAllocationMetadata(),
+		)
+	}
+}
+
+// BenchmarkHashBuildAllocationReleaseStorm isolates concurrent physical
+// alloc/free against one live generation, the shape produced when broadcast
+// consumers and spill buffers drain together.
+func BenchmarkHashBuildAllocationReleaseStorm(b *testing.B) {
+	const capacity = uint64(1 << 50)
+	budget := MustNewHashBuildBudget(capacity, capacity)
+	generation, err := budget.OpenGeneration(1)
+	if err != nil {
+		b.Fatal(err)
+	}
+	registry, err := commonmpool.NewAllocationAccountRegistry(1, 65_536)
+	if err != nil {
+		b.Fatal(err)
+	}
+	account, err := registry.OpenWithController(capacity, generation)
+	if err != nil {
+		b.Fatal(err)
+	}
+	mp := commonmpool.MustNew("hash-build-release-storm-benchmark")
+	defer commonmpool.DeleteMPool(mp)
+
+	b.ReportAllocs()
+	b.SetBytes(4 << 10)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			buffer, allocErr := mp.AllocAccounted(4<<10, account, 1, 1)
+			if allocErr != nil {
+				b.Errorf("allocate: %v", allocErr)
+				return
+			}
+			mp.Free(buffer)
+		}
+	})
+	b.StopTimer()
+	if account.Snapshot().Used != 0 || generation.Used() != 0 {
+		b.Fatalf(
+			"release storm leak: account=%d generation=%d",
+			account.Snapshot().Used,
+			generation.Used(),
+		)
+	}
+	if _, _, err = registry.CompleteTerminal(account); err != nil {
+		b.Fatal(err)
+	}
+	generation.Close()
 }
 
 func TestResolveHashBuildCeiling(t *testing.T) {
