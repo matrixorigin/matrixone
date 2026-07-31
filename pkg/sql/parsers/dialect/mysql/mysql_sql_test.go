@@ -1825,6 +1825,9 @@ var (
 		}, {
 			input: "create table t (a int, b char, check (1 + 1) enforced)",
 		}, {
+			input:  "create table t (a int, constraint positive_a check (a > 0))",
+			output: "create table t (a int, constraint positive_a check (a > 0) enforced)",
+		}, {
 			input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 		}, {
 			input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",

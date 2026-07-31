@@ -276,7 +276,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.baseBindVar(exprImpl, depth, isRoot)
 
 	case *tree.ParamExpr:
-		if !b.builder.isPrepareStatement {
+		if b.builder == nil || !b.builder.isPrepareStatement {
 			err = moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
 		} else {
 			expr, err = b.baseBindParam(exprImpl, depth, isRoot)
@@ -2532,10 +2532,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	if name == "name_const" {
-		if !validNameConstNameAst(astArgs) || !validNameConstValueAst(astArgs) {
+		if !validNameConstNameAst(astArgs) ||
+			!validNameConstValueAst(astArgs, b.allowCanonicalNameConstValueCast) {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
 		}
-		if err := validateNameConstArgs(b.GetContext(), args); err != nil {
+		if err := validateNameConstArgs(
+			b.GetContext(),
+			args,
+			b.allowCanonicalNameConstValueCast,
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -2567,6 +2572,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	// not a builtin func, look to resolve udf
+	if b.builder == nil {
+		return nil, moerr.NewInvalidInputf(
+			b.GetContext(),
+			"function '%s' is not allowed in this expression",
+			name,
+		)
+	}
 	cmpCtx := b.builder.compCtx
 	udf, err := cmpCtx.ResolveUdf(name, args)
 	if err != nil {
@@ -4875,7 +4887,7 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 }
 
 func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
-	if err := validateNameConstArgs(ctx, args); err != nil {
+	if err := validateNameConstArgs(ctx, args, false); err != nil {
 		return err
 	}
 
@@ -4891,19 +4903,24 @@ func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.
 	return nil
 }
 
-func validateNameConstArgs(ctx context.Context, args []*plan.Expr) error {
+func validateNameConstArgs(
+	ctx context.Context,
+	args []*plan.Expr,
+	allowCanonicalStringCast bool,
+) error {
 	if len(args) != 2 {
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
 	}
 
 	nameLit := args[0].GetLit()
-	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
+	if nameLit == nil || nameLit.Isnull ||
+		!validNameConstValueExpr(args[1], allowCanonicalStringCast) {
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
 	}
 	return nil
 }
 
-func validNameConstValueExpr(arg *plan.Expr) bool {
+func validNameConstValueExpr(arg *plan.Expr, allowCanonicalStringCast bool) bool {
 	if arg == nil {
 		return false
 	}
@@ -4911,6 +4928,9 @@ func validNameConstValueExpr(arg *plan.Expr) bool {
 		return true
 	}
 	if isDecimalLiteralCast(arg) {
+		return true
+	}
+	if allowCanonicalStringCast && isCanonicalStringLiteralCast(arg) {
 		return true
 	}
 	fn := arg.GetF()
@@ -4928,22 +4948,26 @@ func validNameConstNameAst(args []tree.Expr) bool {
 		return false
 	}
 	name := stripNameConstParens(args[0])
-	nameLit, ok := name.(*tree.NumVal)
-	return ok && validNameConstNameLiteral(nameLit)
+	if nameLit, ok := name.(*tree.NumVal); ok {
+		return validNameConstNameLiteral(nameLit)
+	}
+	return false
 }
 
-func validNameConstValueAst(args []tree.Expr) bool {
+func validNameConstValueAst(args []tree.Expr, allowCanonicalStringCast bool) bool {
 	if len(args) != 2 {
 		return false
 	}
-	return validNameConstLiteralValueAst(args[1])
+	return validNameConstLiteralValueAst(args[1], allowCanonicalStringCast)
 }
 
-func validNameConstLiteralValueAst(expr tree.Expr) bool {
+func validNameConstLiteralValueAst(expr tree.Expr, allowCanonicalStringCast bool) bool {
 	expr = stripNameConstParens(expr)
 	switch value := expr.(type) {
 	case *tree.NumVal:
 		return true
+	case *tree.CastExpr:
+		return allowCanonicalStringCast && isCanonicalStringLiteralCastAst(value)
 	case *tree.UnaryExpr:
 		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
 			return false
@@ -4953,6 +4977,32 @@ func validNameConstLiteralValueAst(expr tree.Expr) bool {
 	default:
 		return false
 	}
+}
+
+func isCanonicalStringLiteralCastAst(expr tree.Expr) bool {
+	castExpr, ok := stripNameConstParens(expr).(*tree.CastExpr)
+	if !ok {
+		return false
+	}
+	lit, ok := stripNameConstParens(castExpr.Expr).(*tree.NumVal)
+	if !ok || lit.ValType != tree.P_hexnum {
+		return false
+	}
+	target, ok := castExpr.Type.(*tree.T)
+	return ok && target.InternalType.Family == tree.StringFamily
+}
+
+func isCanonicalStringLiteralCast(expr *plan.Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return false
+	}
+	return fn.Args[0].GetLit() != nil &&
+		fn.Args[0].GetLit().IsBin &&
+		types.T(expr.Typ.Id) == types.T_varchar
 }
 
 func stripNameConstParens(expr tree.Expr) tree.Expr {
