@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+const foreignKeyNoReferencedRowAssert = "fk_no_referenced_row"
+
 func (builder *QueryBuilder) updateInputProjectNode(nodeID int32) *plan.Node {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_PRE_INSERT && len(node.Children) == 1 {
@@ -116,6 +118,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 		errExpr := makePlan2StringConstExprWithType(
 			"Cannot add or update a child row: a foreign key constraint fails",
 		)
+		errTypeExpr := makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)
 		for j, fk := range validatedFks {
 			unchanged, buildErr := builder.buildUpdateFkUnchangedExpr(
 				tableDef,
@@ -143,7 +146,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			assertConds[j], err = BindFuncExprImplByPlanExpr(
 				builder.GetContext(),
 				"assert",
-				[]*plan.Expr{ok, DeepCopyExpr(errExpr)},
+				[]*plan.Expr{ok, DeepCopyExpr(errExpr), DeepCopyExpr(errTypeExpr)},
 			)
 			if err != nil {
 				return 0, 0, nil, err

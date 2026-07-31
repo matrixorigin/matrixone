@@ -430,6 +430,10 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 1, countUpdateFkMarkJoins(logicPlan.GetQuery()))
 		require.Equal(t, 1, countUpdateFkAsserts(logicPlan.GetQuery()))
+		require.True(t, updateFkPlanContainsTypedAssert(
+			logicPlan.GetQuery(),
+			foreignKeyNoReferencedRowAssert,
+		))
 		require.True(t, updateFkPlanContainsFunc(logicPlan.GetQuery(), "<=>"))
 	})
 
@@ -689,6 +693,21 @@ func countUpdateFkAsserts(query *planpb.Query) int {
 		}
 	}
 	return count
+}
+
+func updateFkPlanContainsTypedAssert(query *planpb.Query, errType string) bool {
+	for _, node := range query.Nodes {
+		for _, filter := range node.FilterList {
+			fn := filter.GetF()
+			if fn == nil || fn.Func.ObjName != "assert" || len(fn.Args) != 3 {
+				continue
+			}
+			if lit := fn.Args[2].GetLit(); lit != nil && lit.GetSval() == errType {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func updateFkPlanContainsFunc(query *planpb.Query, name string) bool {
