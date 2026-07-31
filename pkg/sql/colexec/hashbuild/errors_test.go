@@ -36,7 +36,7 @@ func TestTerminalBudgetError(t *testing.T) {
 		resource process.HashBuildBudgetResource
 		want     []string
 	}{
-		{"memory", process.HashBuildBudgetResourceMemory, []string{"memory", "requested=3", "used=5", "limit=7", "processLimitationSize"}},
+		{"memory", process.HashBuildBudgetResourceMemory, []string{"memory", "requested=3", "used=5", "limit=7", "build width", "processLimitationSize", "eligible shuffle joins"}},
 		{"spill disk", process.HashBuildBudgetResourceSpillDisk, []string{"spill disk", "requested=3", "used=5", "limit=7", "processLimitationSpillSize"}},
 		{"spill fd", process.HashBuildBudgetResourceSpillFD, []string{"spill file descriptor", "requested=3", "used=5", "limit=7", "open-file limit"}},
 	} {
