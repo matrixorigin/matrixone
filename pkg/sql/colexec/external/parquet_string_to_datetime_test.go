@@ -103,6 +103,34 @@ func TestParquet_StringToDate(t *testing.T) {
 	}
 }
 
+// TestParquet_StringToDatetimeOptional covers issue #24914 directly at the
+// mapper layer: optional Parquet STRING values, including NULL, must load into
+// a nullable MatrixOne DATETIME column.
+func TestParquet_StringToDatetimeOptional(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.Optional(parquet.String()), []parquet.Row{
+		{parquet.ByteArrayValue([]byte("2024-01-01 12:30:45")).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+		{parquet.ByteArrayValue([]byte("2024-12-31 23:59:59.123456")).Level(0, 1, 0)},
+	})
+
+	vec := vector.NewVec(types.New(types.T_datetime, 0, 6))
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_datetime), Scale: 6})
+	require.NotNil(t, mp)
+	require.NoError(t, mp.mapping(page, proc, vec))
+
+	wantFirst, err := types.ParseDatetime("2024-01-01 12:30:45", 6)
+	require.NoError(t, err)
+	wantLast, err := types.ParseDatetime("2024-12-31 23:59:59.123456", 6)
+	require.NoError(t, err)
+	got := vector.MustFixedColWithTypeCheck[types.Datetime](vec)
+	require.Equal(t, 3, len(got))
+	require.Equal(t, wantFirst, got[0])
+	require.True(t, vec.GetNulls().Contains(1))
+	require.Equal(t, wantLast, got[2])
+}
+
 // TestParquet_StringToTime tests STRING → TIME conversion
 func TestParquet_StringToTime(t *testing.T) {
 	proc := testutil.NewProc(t)
