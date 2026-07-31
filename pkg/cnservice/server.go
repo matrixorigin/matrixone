@@ -1086,16 +1086,11 @@ func (s *service) bootstrap() error {
 	return nil
 }
 
-// handleBootstrapErr decides whether a bootstrap error should be returned
-// gracefully (for context cancellation during shutdown) or trigger a panic
-// (for real bootstrap failures).  Only context.Canceled is treated as a
-// graceful shutdown signal; DeadlineExceeded from the 5-minute bootstrap
-// timeout is a legitimate failure that should still panic.
+// handleBootstrapErr preserves the bootstrap context cause and returns the
+// failure to Start's caller. The caller owns rolling back a partially started
+// service; panicking here would bypass that cleanup path.
 func handleBootstrapErr(ctx context.Context, err error) error {
-	if errors.Is(err, context.Canceled) {
-		return err
-	}
-	panic(moerr.AttachCause(ctx, err))
+	return moerr.AttachCause(ctx, err)
 }
 
 func (s *service) initTxnTraceService() {
