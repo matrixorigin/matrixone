@@ -143,7 +143,8 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	defer vec1.Release()
 	for i := range vec1.Entries {
-		require.True(t, isValidatedVectorCacheData(vec1.Entries[i].CachedData))
+		require.False(t, isValidatedVectorCacheData(vec1.Entries[i].CachedData),
+			"fixed vectors keep their O(1) checked zero-copy decode")
 	}
 
 	obj, err := DecodeCached(vec1.Entries[0].CachedData)
@@ -186,7 +187,8 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	defer vec2.Release()
 	for i := range vec2.Entries {
-		require.True(t, isValidatedVectorCacheData(vec2.Entries[i].CachedData))
+		require.False(t, isValidatedVectorCacheData(vec2.Entries[i].CachedData),
+			"fixed vectors keep their O(1) checked zero-copy decode")
 	}
 
 	obj, err = DecodeCached(vec2.Entries[0].CachedData)

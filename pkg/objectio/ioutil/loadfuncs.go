@@ -71,7 +71,7 @@ func LoadColumnsData(
 		cacheVectors.Free(m)
 	}
 	for i := range columns {
-		if err = objectio.MustVectorToCached(&cacheVectors[i], vectors.Entries[i].CachedData); err != nil {
+		if err = objectio.MustVectorToCachedWithMpool(&cacheVectors[i], vectors.Entries[i].CachedData, m); err != nil {
 			logutil.Errorf("LoadColumnsData %s error: %v", location.String(), err.Error())
 			release()
 			release = nil

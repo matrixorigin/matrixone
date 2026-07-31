@@ -319,6 +319,20 @@ func TestColumnCacheConstructorValidatesAndMarksV2(t *testing.T) {
 	target := vector.NewVecFromReuse()
 	require.NoError(t, MustVectorToCached(target, cacheData))
 	require.Equal(t, "value longer than inline storage", target.GetStringAt(0))
+
+	ownedTarget := vector.NewVecFromReuse()
+	require.NoError(t, MustVectorToCachedWithMpool(ownedTarget, cacheData, mp))
+	require.False(t, ownedTarget.NeedDup())
+	require.Equal(t, "value longer than inline storage", ownedTarget.GetStringAt(0))
+	invalidOffset := uint32(len(encoded) + 1)
+	copy(ownedTarget.GetData()[4:8], types.EncodeUint32(&invalidOffset))
+	ownedTarget.GetArea()[0] = 'X'
+	ownedTarget.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+
+	obj, err = DecodeCached(cacheData)
+	require.NoError(t, err)
+	require.Equal(t, "value longer than inline storage", obj.(*vector.Vector).GetStringAt(0))
 }
 
 func TestColumnCacheConstructorRejectsInvalidV2BeforeAdmission(t *testing.T) {
@@ -419,6 +433,48 @@ func TestValidatedVectorCacheDataDoesNotExposeMutableBackingBytes(t *testing.T) 
 		}
 	})
 	require.NoError(t, err)
+}
+
+func TestValidatedVectorCacheDataDecodedVectorDoesNotMutateCache(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := vector.NewVec(types.T_varchar.ToType())
+	const value = "value longer than inline storage"
+	require.NoError(t, vector.AppendBytes(source, []byte(value), false, mp))
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type:    IOET_ColData,
+		Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+	cacheData, err := validateVectorCacheData(fileservice.NewBytes(encoded))
+	require.NoError(t, err)
+	defer cacheData.Release()
+
+	firstObject, err := DecodeCached(cacheData)
+	require.NoError(t, err)
+	first := firstObject.(*vector.Vector)
+	defer first.Free(mp)
+
+	// A decoded Vector intentionally exposes mutable data and area slices. The
+	// trusted cache marker must remain valid even if that Vector is modified.
+	invalidOffset := uint32(len(encoded) + 1)
+	copy(first.GetData()[4:8], types.EncodeUint32(&invalidOffset))
+	first.GetArea()[0] = 'X'
+	firstVarlena, _ := vector.MustVarlenaRawData(first)
+	offset, _ := firstVarlena[0].OffsetLen()
+	require.Equal(t, invalidOffset, offset)
+
+	var secondObject any
+	require.NotPanics(t, func() {
+		secondObject, err = DecodeCached(cacheData)
+	})
+	require.NoError(t, err)
+	second := secondObject.(*vector.Vector)
+	defer second.Free(mp)
+	require.Equal(t, value, second.GetStringAt(0))
 }
 
 func TestValidatedVectorCapabilitySurvivesMemoryCache(t *testing.T) {

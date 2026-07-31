@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -50,9 +51,9 @@ func newColumnIOEntry(ext Extent, factory CacheConstructorFactory) fileservice.I
 }
 
 // validatedVectorCacheData owns bytes that passed the full V2 vector validator
-// after decompression. The backing Data is deliberately not embedded: the
-// public FileService interface receives snapshots, while objectio's private
-// method is the only zero-copy access to the sealed representation.
+// after decompression. The backing Data is deliberately not embedded or
+// exposed: every consumer receives an independent snapshot, so a decoded
+// Vector cannot mutate the sealed representation retained by the cache.
 type validatedVectorCacheData struct {
 	data fscache.Data
 }
@@ -60,15 +61,15 @@ type validatedVectorCacheData struct {
 var _ fscache.Data = (*validatedVectorCacheData)(nil)
 
 func (d *validatedVectorCacheData) Bytes() []byte {
-	return bytes.Clone(d.validatedVectorBytes())
+	return d.validatedVectorSnapshot()
 }
 
 func (d *validatedVectorCacheData) Size() int64 {
-	return int64(len(d.validatedVectorBytes()))
+	return int64(len(d.data.Bytes()))
 }
 
 func (d *validatedVectorCacheData) Slice(length int) fscache.Data {
-	buf := d.validatedVectorBytes()
+	buf := d.data.Bytes()
 	if length == len(buf) {
 		return d
 	}
@@ -86,12 +87,19 @@ func (d *validatedVectorCacheData) Release() {
 	d.data.Release()
 }
 
-func (d *validatedVectorCacheData) validatedVectorBytes() []byte {
+func (d *validatedVectorCacheData) validatedVectorSnapshot() []byte {
+	return bytes.Clone(d.data.Bytes())
+}
+
+// validatedVectorBackingForCopy may only be consumed synchronously while
+// creating an owned copy. The returned slice must never escape to a caller.
+func (d *validatedVectorCacheData) validatedVectorBackingForCopy() []byte {
 	return d.data.Bytes()
 }
 
 type validatedVectorCacheDataMarker interface {
-	validatedVectorBytes() []byte
+	validatedVectorSnapshot() []byte
+	validatedVectorBackingForCopy() []byte
 }
 
 func isValidatedVectorCacheData(data fscache.Data) bool {
@@ -101,7 +109,7 @@ func isValidatedVectorCacheData(data fscache.Data) bool {
 
 func vectorCacheDataBytes(data fscache.Data) (buf []byte, trusted bool) {
 	if marked, ok := data.(validatedVectorCacheDataMarker); ok {
-		return marked.validatedVectorBytes(), true
+		return marked.validatedVectorSnapshot(), true
 	}
 	return data.Bytes(), false
 }
@@ -135,8 +143,10 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 }
 
 // columnCacheConstructorFactory validates V2 column data once, after
-// decompression and before it can enter the memory cache. Cache hits can then
-// bind the already-validated encoding without repeating linear value scans.
+// decompression and before it can enter the memory cache. Varlen cache hits can
+// then bind an isolated snapshot without repeating linear value scans. Fixed
+// vectors stay unmarked because they do not perform the per-value scan, and
+// copying their payload would make the common empty-bitmap path O(bytes).
 func columnCacheConstructorFactory(size int64, algo uint8) CacheConstructor {
 	construct := constructorFactory(size, algo)
 	return func(
@@ -188,6 +198,9 @@ func validateVectorCacheData(data fscache.Data) (fscache.Data, error) {
 	if err := vec.UnmarshalBinary(buf[IOEntryHeaderSize:]); err != nil {
 		return nil, err
 	}
+	if !vec.GetType().IsVarlen() {
+		return data, nil
+	}
 	return &validatedVectorCacheData{data: data}, nil
 }
 
@@ -196,8 +209,9 @@ func Decode(buf []byte) (any, error) {
 }
 
 // DecodeCached uses the trusted V2 bind only for FileService cache data that
-// objectio itself validated before cache admission. Unmarked data uses the
-// normal versioned decoder; V2 therefore keeps its full validation.
+// objectio itself validated before cache admission. The trusted decoder binds
+// an independent snapshot, not the sealed cache backing. Unmarked data uses
+// the normal versioned decoder; V2 therefore keeps its full validation.
 func DecodeCached(data fscache.Data) (any, error) {
 	if data == nil {
 		return nil, moerr.NewInvalidInputNoCtx("nil object cache data")
@@ -244,17 +258,33 @@ func MustVectorToCached(toVec *vector.Vector, data fscache.Data) error {
 	return mustVectorTo(toVec, buf, trusted)
 }
 
-func mustVectorTo(toVec *vector.Vector, buf []byte, trusted bool) (err error) {
-	// check if vector cannot be freed
-	if !toVec.NeedDup() && toVec.Allocated() > 0 {
-		eventVectorDestinationNotEmpty.WarnLazy(func() []zap.Field {
-			return []zap.Field{
-				zap.Bool("need-dup", toVec.NeedDup()),
-				zap.Int("allocated-bytes", toVec.Allocated()),
-				zap.Int("input-bytes", len(buf)),
-			}
-		})
+// MustVectorToCachedWithMpool is the owned hot-path variant of
+// MustVectorToCached. A validated varlen Vector is duplicated into mp before it
+// is exposed; fixed and unmarked data keep the checked zero-copy path.
+func MustVectorToCachedWithMpool(toVec *vector.Vector, data fscache.Data, mp *mpool.MPool) error {
+	if data == nil {
+		return moerr.NewInvalidInputNoCtx("nil object cache data")
 	}
+	marked, ok := data.(validatedVectorCacheDataMarker)
+	if !ok || mp == nil {
+		return MustVectorToCached(toVec, data)
+	}
+	buf := marked.validatedVectorBackingForCopy()
+	warnVectorDestinationNotEmpty(toVec, len(buf))
+	var borrowed vector.Vector
+	if err := mustVectorTo(&borrowed, buf, true); err != nil {
+		return err
+	}
+	owned, err := borrowed.Dup(mp)
+	if err != nil {
+		return err
+	}
+	*toVec = *owned
+	return nil
+}
+
+func mustVectorTo(toVec *vector.Vector, buf []byte, trusted bool) (err error) {
+	warnVectorDestinationNotEmpty(toVec, len(buf))
 	if len(buf) < IOEntryHeaderSize {
 		return io.ErrUnexpectedEOF
 	}
@@ -274,6 +304,18 @@ func mustVectorTo(toVec *vector.Vector, buf []byte, trusted bool) (err error) {
 		return
 	}
 	panic(fmt.Sprintf("invalid column data: %s", header.String()))
+}
+
+func warnVectorDestinationNotEmpty(toVec *vector.Vector, inputBytes int) {
+	if !toVec.NeedDup() && toVec.Allocated() > 0 {
+		eventVectorDestinationNotEmpty.WarnLazy(func() []zap.Field {
+			return []zap.Field{
+				zap.Bool("need-dup", toVec.NeedDup()),
+				zap.Int("allocated-bytes", toVec.Allocated()),
+				zap.Int("input-bytes", inputBytes),
+			}
+		})
+	}
 }
 
 func MustObjectMeta(buffer []byte) ObjectMeta {
