@@ -95,10 +95,10 @@ working ledger is allocation-site based:
 | `mpool.memHdr` and account-ID side map | Go maps; one pointer record plus optional account record per live allocation | pointer removal at physical deallocation | H | bounded by the measured finite registry/allocation-slot policy |
 | `Vector.data` | MPool; capacity from `Grow`, on/off-heap follows `v.offHeap` | owning `Vector.Free` | D | A only when off-heap |
 | `Vector.area` | MPool; independent varlen payload capacity | owning `Vector.Free` | D | A only when off-heap |
-| `Vector.nsp/gsp` bitmap data | Go `[]uint64`; `ceil(rows/64)*8`, retained by `Clear` | bitmap `Reset` from `Vector.Free` | L | move off-heap; blocks Vector-dependent activation |
+| `Vector.nsp/gsp` bitmap data | allocation-accounted off-heap `[]uint64`; independent geometric capacity, paired replacement admission | owning `Vector.Free`; `Reset` retains and clears only published words | D | A after the selected Vector owner closes |
 | `FunctionResult.vec` data/area | off-heap Vector; rows and appended payload | executor `Free` | D | A after expression ledger closure |
 | `FunctionResult.convenientParam` | Go slice; expression arity, not rows | executor `Free`/reuse | L | H after a proved arity bound |
-| decimal parameter conversion | Go `[]T`; `rows*sizeof(T)` in `GenerateFunctionFixedTypeParameter` | evaluation wrapper/GC | L | move off-heap; blocks expression activation |
+| decimal parameter conversion | retained allocation-accounted off-heap buffer; `rows*sizeof(Decimal128)` for decimal64/float32/float64 promotion | `FunctionResult.Free`; Reset/evaluation reuse capacity | D | A after expression ledger closure |
 | IFF/CASE/COALESCE selection arrays | allocation-accounted off-heap `[]bool`; one or two arrays of `rows`, retained by executor | executor `Free`/reuse | D | A after expression ledger closure |
 | selected row IDs | allocation-accounted off-heap `[]int64`; capacity up to `rows`, retained by executor | executor `Free`/reuse | D | A after expression ledger closure |
 | selected parameter/result vectors | allocation-accounted off-heap Vector capacities | executor `Free` | D | A after expression ledger closure |
@@ -135,6 +135,16 @@ production path retains the old raw-slice representation behind guards that
 reject an accounted Vector. `Vector.SetTypeAndFixData` now returns a failed
 growth admission and rolls type and length back without losing the original
 backing.
+
+Bitmap-aware selections are also `D`. Null and grouping backing remain
+independent physical allocations, are included in `Vector.Allocated`, and use
+the same immutable account/owner with distinct sites. The legacy `Bitmap`
+footprint is unchanged: a tagged nonnegative/bitwise-complemented length
+records backing ownership without adding a field. Accounted Vector growth
+admits both bitmap replacements before either publishes, raw unadmitted bitmap
+growth fails instead of escaping to the Go heap, Reset retains capacity while
+clearing only represented words, copy/reader decode fills admitted backing
+directly, and Free is the one terminal release owner.
 
 ## 3. Decisions required before production integration
 
@@ -513,8 +523,8 @@ Required behavior:
 - within-capacity append performs no account operation;
 - aliases/views/const/shared area do not create another charge;
 - deep copies use the destination account;
-- on-heap null/group bitmaps remain explicit ledger blockers, not silently
-  included in the Vector charge;
+- at the PR 2 boundary, on-heap null/group bitmaps remain explicit later-PR
+  blockers and are not silently included in the Vector charge;
 - HashBuild production remains legacy until a later owner migration.
 
 Gate:
@@ -581,19 +591,20 @@ Gate:
 - all migrated rows become `D`; production rows remain `L`.
 
 The current dormant PR 3 candidate is
-`feature/26459-expression-propagation` at commit `1f82b218c2`, stacked on PR 2
+`feature/26459-expression-propagation` at commit `a63c68b07b`, stacked on PR 2
 commit `dbfee20ecc`. Its closure commits are `03296c5246` (expressions),
 `0b4a7b5bb5` (spill vectors/scratch), `a0754a6beb` (streaming buffers),
 `9f88a0e83e` (spill serialization), and `1f82b218c2` (spool/type-change
-ownership).
+ownership), followed by `a63c68b07b` (Vector bitmaps and decimal conversion
+scratch).
 
 Its propagation call chains are:
 
 ```text
 NewExpressionExecutorWithAllocation
   -> recursive expression construction
-  -> constant/result/scratch AllocationAccountSelection
-  -> FunctionResult or selected/decode Vector growth
+  -> constant/result/scratch bitmap-aware AllocationAccountSelection
+  -> FunctionResult result/parameter scratch or selected/decode Vector growth
   -> MPool AllocAccounted/Grow/Free
 
 NewSpillEngineWithAllocation
@@ -618,6 +629,22 @@ the accounted path; the old and replacement capacities are simultaneously
 charged until publication, and terminal cleanup frees a zero-length view by
 its retained capacity.
 
+Vector null/group bitmap growth now follows the same rule. Both replacement
+buffers are admitted before publication, so rejection of the second buffer
+rolls the first unpublished buffer back and preserves both old owners.
+`pSpool` releases bitmap backing after data/area detach, recreates it under the
+destination provenance, and preserves grouping semantics including constant
+vectors. Accounted window/duplicate/decode paths pre-admit bitmap coverage
+before legacy raw bitmap APIs can mutate it.
+
+Decimal128 promotion from decimal64, float32, and float64 now writes into one
+retained allocation-accounted parameter buffer per argument. Const promotion
+uses the scalar wrapper and allocates no row scratch; normal/null promotion
+reuses the admitted buffer across evaluations. Capacity, sealed-account, and
+metadata failures return through the function executor instead of panicking or
+falling back to a Go slice. The allocation selection and parameter buffer must
+share the same account and owner.
+
 The spill record path now streams Bitmap, Nulls, Vector, and Batch wire formats
 directly into one allocation-accounted off-heap buffer. It computes the exact
 wire size before admission, retains one record buffer for the phase, bounds
@@ -639,12 +666,11 @@ the overlapping counts are 233 `make([]...)`, 205 capacity-growing or
 potentially growing `append`, 44 `bytes.Buffer`/`NewBuffer`, and 5
 `strings.Builder` sites. This is a review queue, not proof that every match is
 data-scaled or reachable. The currently closed rows are the ones marked `D`
-in the ledger above. Activation remains blocked by:
-
-- Vector null/group bitmap backing;
-- decimal parameter conversion slices;
-- data-scaled function-specific Go-heap scratch identified by the remaining
-  built-in scan.
+in the ledger above. Vector null/group backing and decimal parameter conversion
+no longer block activation. Expression activation remains blocked by
+data-scaled function-specific Go-heap scratch identified by the remaining
+built-in scan; the dormant constructor is not a license to enable partial
+accounting.
 
 Fresh local validation on linux/amd64 with CGO and the repository-built
 third-party artifacts passes:
@@ -661,6 +687,13 @@ third-party artifacts passes:
   Nulls, 48.3% Vector, 73.4% Batch, 82.1% pSpool, 78.8% spillutil, and 54.1%
   Function.
 
+For `a63c68b07b`, every new bitmap, buffer, Vector, decimal-conversion, spool,
+spill, and directly affected aggregate test passed an exact
+`-race -count=100` run after the final edit. Bitmap, MPool, Vector, pSpool,
+spillutil, aggregate, expression, and Function packages then passed complete
+`-race -count=1` runs; the full affected normal-test and vet closure also
+passed with repository-built CGO third parties.
+
 The existing constant-flow-control benchmark remains 0 B/op and
 0 allocs/op. Five-run medians at `GOMAXPROCS=8` were 4.480 ns/op on the PR 2
 base and 4.464 ns/op on the PR 3 candidate; this focused benchmark shows no
@@ -671,6 +704,21 @@ The legacy 8,192-row pipeline-spool copy/reuse benchmark remains 200 B/op and
 2 allocs/op. An interleaved five-run comparison at `GOMAXPROCS=8` measured a
 1,542 ns/op median at commit `9f88a0e83e` and 1,540 ns/op at `1f82b218c2`;
 the guarded allocation-unaccounted fast path has no measurable regression.
+
+At `a63c68b07b`, the same legacy pipeline-spool benchmark remains 200 B/op and
+2 allocs/op with a 1,545 ns/op five-run median. The constant flow-control
+benchmark remains 0 B/op and 0 allocs/op with a 4.259 ns/op median. The tagged
+bitmap ownership representation is what preserves the legacy allocation
+footprint.
+
+An 8,192-row first pre-extend/free costs 1,059 ns/op for the legacy Vector,
+1,159 ns/op for data-only dormant accounting, and 1,986 ns/op when the two
+independent bitmap allocations are also admitted; all three remain 0 B/op and
+0 allocs/op. This one-time physical-allocation cost is explicit rather than
+hidden. Capacity reuse is the steady-state path: empty Reset measured
+2.431 ns/op for data-only accounting and 2.650 ns/op with bitmap ownership,
+again with zero Go allocations. Activation performance tests must retain this
+distinction instead of presenting the first-allocation cost as a per-row cost.
 
 ### PR 4: statement lifecycle and minimum pressure foundation
 
