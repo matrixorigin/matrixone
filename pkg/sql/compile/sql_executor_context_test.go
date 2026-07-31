@@ -21,6 +21,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
@@ -141,4 +142,73 @@ func TestCompilerContext_Database(t *testing.T) {
 
 	sql := c.GetRootSql()
 	require.Equal(t, sql, "")
+}
+
+func TestCompilerContextBuildTableDefByMoColumns(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	tableDef := &plan.TableDef{
+		Name: "src",
+		Cols: []*plan.ColDef{
+			{Name: "a"},
+			{Name: "b"},
+		},
+	}
+	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42))
+	database := mock_frontend.NewMockDatabase(ctrl)
+	database.EXPECT().Relation(gomock.Any(), "src", nil).Return(relation, nil)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+
+	c := &compilerContext{
+		defaultDB: "db",
+		engine:    eng,
+		proc:      proc,
+	}
+	actual, err := c.BuildTableDefByMoColumns("db", "src")
+	require.NoError(t, err)
+	require.Equal(t, tableDef.Cols, actual.Cols)
+	require.NotSame(t, tableDef, actual)
+}
+
+func TestCompilerContextBuildTableDefByMoColumnsPropagatesRelationError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	relationErr := moerr.NewInternalErrorNoCtx("relation failed")
+
+	database := mock_frontend.NewMockDatabase(ctrl)
+	database.EXPECT().Relation(gomock.Any(), "src", nil).Return(nil, relationErr)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+
+	c := &compilerContext{
+		defaultDB: "db",
+		engine:    eng,
+		proc:      proc,
+	}
+	actual, err := c.BuildTableDefByMoColumns("db", "src")
+	require.Nil(t, actual)
+	require.ErrorIs(t, err, relationErr)
+}
+
+func TestCompilerContextBuildTableDefByMoColumnsNoSuchTable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	database := mock_frontend.NewMockDatabase(ctrl)
+	database.EXPECT().Relation(gomock.Any(), "src", nil).Return(nil, nil)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+
+	c := &compilerContext{
+		defaultDB: "db",
+		engine:    eng,
+		proc:      proc,
+	}
+	actual, err := c.BuildTableDefByMoColumns("db", "src")
+	require.Nil(t, actual)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 }

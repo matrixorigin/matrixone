@@ -115,13 +115,14 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 }
 
 func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
-	delegate := c.viewMetadataCompilerContext()
-	if delegate == nil {
-		return nil, moerr.NewNYI(c.GetContext(), "catalog table definition in internal sql executor")
+	_, tableDef, err := c.Resolve(dbName, table, nil)
+	if err != nil {
+		return nil, err
 	}
-	restore := c.useViewMetadataContext(delegate)
-	defer restore()
-	return delegate.BuildTableDefByMoColumns(dbName, table)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(c.GetContext(), dbName, table)
+	}
+	return tableDef, nil
 }
 
 func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
@@ -291,7 +292,11 @@ func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snap
 	if plan.IsSnapshotValid(snapshot) {
 		return nil, nil
 	}
-	if resolver, ok := c.ctx.Value(viewMetadataSubscriptionResolverKey{}).(viewMetadataSubscriptionResolver); ok {
+	resolverCtx := c.ctx
+	if resolverCtx == nil {
+		resolverCtx = c.GetContext()
+	}
+	if resolver, ok := resolverCtx.Value(viewMetadataSubscriptionResolverKey{}).(viewMetadataSubscriptionResolver); ok {
 		return resolver.GetSubscriptionMeta(dbName)
 	}
 	helper := c.proc.GetSessionInfo().SqlHelper
