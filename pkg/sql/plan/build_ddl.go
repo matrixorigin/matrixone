@@ -1136,6 +1136,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colNameOrigin := def.Name.ColNameOrigin()
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
+				case *tree.AttributeCheckConstraint:
+					if err := rejectWindowFunctionUnlessMatrixOneNative(ctx, attribute.Expr); err != nil {
+						return err
+					}
 				case *tree.AttributeGeneratedAlways:
 					isGenerated = true
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
@@ -1388,6 +1392,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				fkDatasOfFKSelfRefer = append(fkDatasOfFKSelfRefer, fkData)
 			}
 		case *tree.CheckIndex:
+			if err := rejectWindowFunctionUnlessMatrixOneNative(ctx, def.Expr); err != nil {
+				return err
+			}
 			// unsupport in plan. will support in next version.
 			// return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		default:
