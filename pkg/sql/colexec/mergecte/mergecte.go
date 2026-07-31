@@ -17,6 +17,7 @@ package mergecte
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -46,6 +47,13 @@ func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
 
 	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
 	mergeCTE.ctr.status = sendInitial
+	if mergeCTE.Distinct && mergeCTE.ctr.hashTable == nil {
+		hashTable, err := hashmap.NewStrHashMap(true, proc.Mp())
+		if err != nil {
+			return err
+		}
+		mergeCTE.ctr.hashTable = hashTable
+	}
 	return nil
 }
 
@@ -152,12 +160,24 @@ func (ctr *container) cacheBatch(
 	analyzer process.Analyzer,
 	src *batch.Batch,
 ) (*batch.Batch, error) {
+	var insertedRows []int64
+	if ctr.hashTable != nil && !src.Last() && !src.IsEmpty() {
+		var err error
+		insertedRows, err = ctr.filterInsertedRows(src, analyzer)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if ctr.i == len(ctr.freeBats) {
 		appBat, err := src.Dup(proc.Mp())
 		if err != nil {
 			return nil, err
 		}
 		analyzer.Alloc(int64(appBat.Size()))
+		if insertedRows != nil {
+			appBat.Shrink(insertedRows, false)
+		}
 		ctr.freeBats = append(ctr.freeBats, appBat)
 		ctr.i++
 		return appBat, nil
@@ -174,6 +194,9 @@ func (ctr *container) cacheBatch(
 		appBat.ShuffleIDX = src.ShuffleIDX
 		appBat.Attrs = append(appBat.Attrs[:0], src.Attrs...)
 		appBat.SetRowCount(src.RowCount())
+		if insertedRows != nil {
+			appBat.Shrink(insertedRows, false)
+		}
 		ctr.i++
 		return appBat, nil
 	}
@@ -185,12 +208,47 @@ func (ctr *container) cacheBatch(
 		return nil, err
 	}
 	analyzer.Alloc(int64(appBat.Size()))
+	if insertedRows != nil {
+		appBat.Shrink(insertedRows, false)
+	}
 	if cached != nil {
 		cached.Clean(proc.Mp())
 	}
 	ctr.freeBats[ctr.i] = appBat
 	ctr.i++
 	return appBat, nil
+}
+
+func (ctr *container) filterInsertedRows(
+	src *batch.Batch,
+	analyzer process.Analyzer,
+) ([]int64, error) {
+	ctr.insertedRows = ctr.insertedRows[:0]
+	itr := ctr.hashTable.NewIterator()
+	count := src.RowCount()
+	oldSize := ctr.hashTable.Size()
+	for i := 0; i < count; i += hashmap.UnitLimit {
+		n := count - i
+		if n > hashmap.UnitLimit {
+			n = hashmap.UnitLimit
+		}
+		oldGroupCount := ctr.hashTable.GroupCount()
+		values, _, err := itr.Insert(i, n, src.Vecs)
+		if err != nil {
+			return nil, err
+		}
+		nextGroup := oldGroupCount
+		for j, value := range values {
+			if value > nextGroup {
+				nextGroup++
+				ctr.insertedRows = append(ctr.insertedRows, int64(i+j))
+			}
+		}
+	}
+	if allocated := ctr.hashTable.Size() - oldSize; allocated > 0 {
+		analyzer.Alloc(allocated)
+	}
+	return ctr.insertedRows, nil
 }
 
 func sameBatchSchema(left, right *batch.Batch) bool {
