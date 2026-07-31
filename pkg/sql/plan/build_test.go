@@ -2209,7 +2209,7 @@ func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
 			for _, specExpr := range node.WinSpecList {
 				if spec := specExpr.GetW(); spec != nil &&
 					spec.Name == "row_number" &&
-					len(spec.PartitionBy) == 1 {
+					len(spec.PartitionBy) == 2 {
 					rowNumberWindows++
 				}
 			}
@@ -2235,8 +2235,9 @@ func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
 		updateCtx := mainCtxs[name]
 		require.NotNil(t, updateCtx)
 		require.True(t, updateCtx.DedupByTargetRowId)
-		require.Len(t, updateCtx.DeleteCols, 3)
+		require.Len(t, updateCtx.DeleteCols, 4)
 		require.NotEqual(t, updateCtx.DeleteCols[0].ColPos, updateCtx.DeleteCols[2].ColPos)
+		require.NotEqual(t, updateCtx.DeleteCols[2].ColPos, updateCtx.DeleteCols[3].ColPos)
 	}
 	require.NotEqual(
 		t,
@@ -2282,15 +2283,18 @@ func TestPartitionedMultiTargetUpdateUsesModernPlan(t *testing.T) {
 }
 
 func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
-	for _, joinCond := range []string{"=", "<>"} {
+	for _, sql := range []string{
+		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+			"SET a.n_name = 'a', b.n_comment = 'b'",
+		"UPDATE nation a JOIN nation b ON a.n_nationkey <> b.n_nationkey " +
+			"SET a.n_name = 'a', b.n_comment = 'b'",
+		"UPDATE nation a JOIN nation b ON a.n_nationkey <> b.n_nationkey " +
+			"JOIN nation2 n2 ON n2.n_nationkey = a.n_nationkey " +
+			"SET a.n_name = 'a', b.n_comment = 'b', n2.n_name = 'n2'",
+	} {
 		mock := NewMockOptimizer(true)
-		logicPlan, err := runOneStmt(
-			mock,
-			t,
-			"UPDATE nation a JOIN nation b ON a.n_nationkey "+joinCond+" b.n_nationkey "+
-				"SET a.n_name = 'a', b.n_comment = 'b'",
-		)
-		require.NoError(t, err)
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
 
 		query := logicPlan.GetQuery()
 		var multiUpdate *plan.Node
@@ -2325,6 +2329,9 @@ func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
 			}
 		}
 		require.Equal(t, 2, mainContexts)
+		if strings.Contains(sql, "nation2") {
+			require.Len(t, multiUpdate.UpdateCtxList, 3)
+		}
 	}
 }
 

@@ -196,6 +196,59 @@ func TestFilterTargetRowsDedupsAliasesAcrossBatchesWithAccountedHashMap(t *testi
 	require.Positive(t, seen.Size())
 }
 
+func TestFilterTargetRowsSkipsInactivePhysicalTargetBranch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = testutil.MakeRowIdVector(
+		[]types.Rowid{
+			types.BuildTestRowid(1, 1),
+			types.BuildTestRowid(1, 2),
+			types.BuildTestRowid(1, 3),
+		},
+		nil,
+		mp,
+	)
+	bat.Vecs[1] = testutil.NewInt64Vector(
+		3,
+		types.T_int64.ToType(),
+		mp,
+		false,
+		nil,
+		[]int64{1, 1, 2},
+	)
+	bat.Vecs[2] = testutil.NewBoolVector(
+		3,
+		types.T_bool.ToType(),
+		mp,
+		false,
+		nil,
+		[]bool{false, true, true},
+	)
+	bat.Vecs[3] = testutil.NewInt32Vector(
+		3,
+		types.T_int32.ToType(),
+		mp,
+		false,
+		nil,
+		[]int32{10, 20, 30},
+	)
+	bat.SetRowCount(3)
+	defer bat.Clean(mp)
+
+	filtered, clean, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 42},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 3, 1, 2},
+	}, bat, nil)
+	require.NoError(t, err)
+	require.True(t, clean)
+	require.Zero(t, duplicateRows)
+	defer filtered.Clean(mp)
+	require.Equal(t, []int32{20}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[3]))
+}
+
 type testSeenRowsThrottler struct {
 	available int64
 	acquired  int64

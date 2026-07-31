@@ -100,6 +100,52 @@ SET
 
 SELECT ROW_COUNT();
 SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
+
+CREATE TABLE multi_update_alias_source (
+    target_id INT,
+    source_x INT,
+    source_y INT
+);
+INSERT INTO multi_update_alias_source VALUES
+    (1, NULL, 1),
+    (1, 2, 2),
+    (2, NULL, 1),
+    (2, 2, 2);
+
+UPDATE multi_update_alias_target SET x = 0, y = 0;
+UPDATE multi_update_alias_target a
+JOIN multi_update_alias_target b ON a.id = b.id
+JOIN multi_update_alias_source s ON s.target_id = a.id
+SET
+    a.x = s.source_x,
+    a.y = s.source_y,
+    b.id = b.id;
+
+SELECT COUNT(*) AS mixed_source_rows
+FROM multi_update_alias_target
+WHERE NOT ((x IS NULL AND y = 1) OR (x = 2 AND y = 2));
+
+CREATE TABLE multi_update_third_target (
+    id INT PRIMARY KEY,
+    z INT
+);
+INSERT INTO multi_update_third_target VALUES (1, 0), (2, 0);
+
+UPDATE multi_update_alias_target SET x = 0, y = 0;
+UPDATE multi_update_alias_target a
+JOIN multi_update_alias_target b ON a.id <> b.id
+JOIN multi_update_third_target u ON u.id = a.id
+SET
+    a.x = 1,
+    b.y = 2,
+    u.z = 3;
+
+SELECT ROW_COUNT();
+SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
+SELECT id, z FROM multi_update_third_target ORDER BY id;
+
+DROP TABLE multi_update_third_target;
+DROP TABLE multi_update_alias_source;
 DROP TABLE multi_update_alias_target;
 
 DROP TABLE IF EXISTS multi_update_partition_target;
