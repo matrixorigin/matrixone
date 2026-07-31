@@ -39,6 +39,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -8603,6 +8604,7 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	length int,
 	m metric.MetricType,
 	proc *process.Process,
+	dist []float32,
 ) ([]float32, bool, error) {
 	c0, c1 := ivecs[0].IsConst(), ivecs[1].IsConst()
 	if c0 == c1 {
@@ -8626,15 +8628,9 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	if len(queryBytes) == 0 {
 		return nil, false, nil
 	}
-	x := [][]T{types.BytesToArray[T](queryBytes)}
+	query := types.BytesToArray[T](queryBytes)
 
 	col := ivecs[colIdx]
-	y := make([][]T, length)
-	for i := range y {
-		y[i] = types.BytesToArray[T](col.GetBytesAt(i))
-	}
-
-	dist := make([]float32, length)
 	// proc is non-nil under SQL execution; the nil branch keeps unit
 	// tests (which don't synthesize a process) compiling and lets
 	// EffectiveGpuMode fall back to the build-tag default.
@@ -8643,7 +8639,17 @@ func batchArrayDistanceSync[T types.RealNumbers](
 		resolver = proc.GetResolveVariableFunc()
 	}
 	gpuMode := gpumode.EffectiveGpuMode(resolver)
-	handle, err := metric.PairwiseDistanceLaunch(x, y, m, dist, metric.GPUThresholdSQL, gpuMode)
+	handle, err := metric.PairwiseDistanceLaunchOneToMany(
+		query,
+		length,
+		func(row int) []T {
+			return types.BytesToArray[T](col.GetBytesAt(row))
+		},
+		m,
+		dist,
+		metric.GPUThresholdSQL,
+		gpuMode,
+	)
 	if err != nil {
 		return nil, false, err
 	}
@@ -8654,15 +8660,59 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	return dist, true, nil
 }
 
+func tryBatchArrayDistance[T types.RealNumbers](
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	m metric.MetricType,
+	cosineSimilarity bool,
+) (bool, error) {
+	rs := vector.MustFunctionResult[float64](result)
+	output := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
+	if len(output) < length {
+		return false, moerr.NewInternalErrorNoCtx(
+			"array distance result is smaller than the input batch",
+		)
+	}
+
+	// The float64 result already owns 8*length admitted bytes. Pairwise distance
+	// needs 4*length temporary bytes, so use the upper half of that same backing
+	// store and convert forward after Wait. Each float64 write can only overwrite
+	// float32 values that were already read.
+	outputBytes := util.UnsafeSliceCast[float32](output[:length])
+	distScratch := outputBytes[length:]
+	dist, ok, err := batchArrayDistanceSync[T](
+		ivecs,
+		length,
+		m,
+		proc,
+		distScratch,
+	)
+	if err != nil || !ok {
+		return ok, err
+	}
+	for idx, value := range dist {
+		if cosineSimilarity {
+			output[idx] = 1 - float64(value)
+		} else {
+			output[idx] = float64(value)
+		}
+	}
+	return true, nil
+}
+
 func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_InnerProduct, proc); err != nil {
+	if ok, err := tryBatchArrayDistance[T](
+		ivecs,
+		result,
+		proc,
+		length,
+		metric.Metric_InnerProduct,
+		false,
+	); err != nil {
 		return err
 	} else if ok {
-		rs := vector.MustFunctionResult[float64](result)
-		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
-		for i, d := range dist {
-			rss[i] = float64(d)
-		}
 		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
@@ -8674,14 +8724,16 @@ func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 
 func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// Use Metric_CosineDistance and convert: similarity = 1 - distance.
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance, proc); err != nil {
+	if ok, err := tryBatchArrayDistance[T](
+		ivecs,
+		result,
+		proc,
+		length,
+		metric.Metric_CosineDistance,
+		true,
+	); err != nil {
 		return err
 	} else if ok {
-		rs := vector.MustFunctionResult[float64](result)
-		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
-		for i, d := range dist {
-			rss[i] = 1.0 - float64(d)
-		}
 		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
@@ -8692,14 +8744,16 @@ func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result v
 }
 
 func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2Distance, proc); err != nil {
+	if ok, err := tryBatchArrayDistance[T](
+		ivecs,
+		result,
+		proc,
+		length,
+		metric.Metric_L2Distance,
+		false,
+	); err != nil {
 		return err
 	} else if ok {
-		rs := vector.MustFunctionResult[float64](result)
-		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
-		for i, d := range dist {
-			rss[i] = float64(d)
-		}
 		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
@@ -12171,14 +12225,16 @@ func sameGeometryPoint(a, b geometryPoint2D) bool {
 }
 
 func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2sqDistance, proc); err != nil {
+	if ok, err := tryBatchArrayDistance[T](
+		ivecs,
+		result,
+		proc,
+		length,
+		metric.Metric_L2sqDistance,
+		false,
+	); err != nil {
 		return err
 	} else if ok {
-		rs := vector.MustFunctionResult[float64](result)
-		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
-		for i, d := range dist {
-			rss[i] = float64(d)
-		}
 		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
@@ -12189,14 +12245,16 @@ func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 }
 
 func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance, proc); err != nil {
+	if ok, err := tryBatchArrayDistance[T](
+		ivecs,
+		result,
+		proc,
+		length,
+		metric.Metric_CosineDistance,
+		false,
+	); err != nil {
 		return err
 	} else if ok {
-		rs := vector.MustFunctionResult[float64](result)
-		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
-		for i, d := range dist {
-			rss[i] = float64(d)
-		}
 		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
@@ -12293,107 +12351,110 @@ func generateAESKey(key []byte, keyLen int) ([]byte, error) {
 	return out, nil
 }
 
-// pkcs7Padding adds PKCS7 padding to the data
-func pkcs7Padding(data []byte, blockSize int) []byte {
-	padding := blockSize - len(data)%blockSize
-	padtext := make([]byte, padding)
-	for i := range padtext {
-		padtext[i] = byte(padding)
+func aesPaddedSize(plaintextSize int) (int, error) {
+	padding := aes.BlockSize - plaintextSize%aes.BlockSize
+	if plaintextSize > int(^uint(0)>>1)-padding {
+		return 0, moerr.NewInvalidInputNoCtx("plaintext is too large")
 	}
-	return append(data, padtext...)
+	return plaintextSize + padding, nil
 }
 
-// pkcs7Unpadding removes PKCS7 padding from the data
-func pkcs7Unpadding(data []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, moerr.NewInvalidInputNoCtx("invalid padding")
+func encryptAESPKCS7Into(
+	block cipher.Block,
+	plaintext []byte,
+	iv []byte,
+	useCBC bool,
+	ciphertext []byte,
+) {
+	fullBytes := len(plaintext) - len(plaintext)%aes.BlockSize
+	var finalBlock [aes.BlockSize]byte
+	copy(finalBlock[:], plaintext[fullBytes:])
+	padding := byte(aes.BlockSize - len(plaintext)%aes.BlockSize)
+	for idx := len(plaintext) % aes.BlockSize; idx < aes.BlockSize; idx++ {
+		finalBlock[idx] = padding
 	}
-	padding := int(data[len(data)-1])
-	if padding > len(data) || padding == 0 {
-		return nil, moerr.NewInvalidInputNoCtx("invalid padding")
+
+	if useCBC {
+		mode := cipher.NewCBCEncrypter(block, iv[:aes.BlockSize])
+		if fullBytes > 0 {
+			mode.CryptBlocks(ciphertext[:fullBytes], plaintext[:fullBytes])
+		}
+		mode.CryptBlocks(ciphertext[fullBytes:], finalBlock[:])
+		return
 	}
-	// Verify padding
-	for i := len(data) - padding; i < len(data); i++ {
-		if data[i] != byte(padding) {
-			return nil, moerr.NewInvalidInputNoCtx("invalid padding")
+	for offset := 0; offset < fullBytes; offset += aes.BlockSize {
+		block.Encrypt(
+			ciphertext[offset:offset+aes.BlockSize],
+			plaintext[offset:offset+aes.BlockSize],
+		)
+	}
+	block.Encrypt(ciphertext[fullBytes:], finalBlock[:])
+}
+
+func decryptAESPKCS7LastBlock(
+	block cipher.Block,
+	ciphertext []byte,
+	iv []byte,
+	useCBC bool,
+) ([aes.BlockSize]byte, int, error) {
+	var finalBlock [aes.BlockSize]byte
+	if len(ciphertext) == 0 || len(ciphertext)%aes.BlockSize != 0 {
+		return finalBlock, 0, moerr.NewInvalidInputNoCtx(
+			"invalid ciphertext length",
+		)
+	}
+	lastOffset := len(ciphertext) - aes.BlockSize
+	block.Decrypt(finalBlock[:], ciphertext[lastOffset:])
+	if useCBC {
+		previous := iv[:aes.BlockSize]
+		if lastOffset > 0 {
+			previous = ciphertext[lastOffset-aes.BlockSize : lastOffset]
+		}
+		for idx := range finalBlock {
+			finalBlock[idx] ^= previous[idx]
 		}
 	}
-	return data[:len(data)-padding], nil
+
+	padding := int(finalBlock[aes.BlockSize-1])
+	if padding == 0 || padding > aes.BlockSize {
+		return finalBlock, 0, moerr.NewInvalidInputNoCtx("invalid padding")
+	}
+	for idx := aes.BlockSize - padding; idx < aes.BlockSize; idx++ {
+		if finalBlock[idx] != byte(padding) {
+			return finalBlock, 0, moerr.NewInvalidInputNoCtx(
+				"invalid padding",
+			)
+		}
+	}
+	return finalBlock, padding, nil
 }
 
-// encryptECB encrypts data using AES-128-ECB mode
-func encryptECB(plaintext, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
+func decryptAESPKCS7Into(
+	block cipher.Block,
+	ciphertext []byte,
+	iv []byte,
+	useCBC bool,
+	finalBlock [aes.BlockSize]byte,
+	padding int,
+	plaintext []byte,
+) {
+	fullBytes := len(ciphertext) - aes.BlockSize
+	if useCBC {
+		if fullBytes > 0 {
+			cipher.NewCBCDecrypter(
+				block,
+				iv[:aes.BlockSize],
+			).CryptBlocks(plaintext[:fullBytes], ciphertext[:fullBytes])
+		}
+	} else {
+		for offset := 0; offset < fullBytes; offset += aes.BlockSize {
+			block.Decrypt(
+				plaintext[offset:offset+aes.BlockSize],
+				ciphertext[offset:offset+aes.BlockSize],
+			)
+		}
 	}
-
-	// Add PKCS7 padding
-	padded := pkcs7Padding(plaintext, aes.BlockSize)
-
-	// Encrypt each block independently (ECB mode)
-	ciphertext := make([]byte, len(padded))
-	for i := 0; i < len(padded); i += aes.BlockSize {
-		block.Encrypt(ciphertext[i:i+aes.BlockSize], padded[i:i+aes.BlockSize])
-	}
-
-	return ciphertext, nil
-}
-
-// decryptECB decrypts data using AES-128-ECB mode
-func decryptECB(ciphertext, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check that ciphertext length is a multiple of block size
-	if len(ciphertext)%aes.BlockSize != 0 {
-		return nil, moerr.NewInvalidInputNoCtx("invalid ciphertext length")
-	}
-
-	// Decrypt each block independently (ECB mode)
-	plaintext := make([]byte, len(ciphertext))
-	for i := 0; i < len(ciphertext); i += aes.BlockSize {
-		block.Decrypt(plaintext[i:i+aes.BlockSize], ciphertext[i:i+aes.BlockSize])
-	}
-
-	// Remove PKCS7 padding
-	return pkcs7Unpadding(plaintext)
-}
-
-// encryptCBC encrypts data using AES-CBC mode
-func encryptCBC(plaintext, key, iv []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	if len(iv) < aes.BlockSize {
-		return nil, moerr.NewInvalidInputNoCtx("invalid iv length")
-	}
-	padded := pkcs7Padding(plaintext, aes.BlockSize)
-	ciphertext := make([]byte, len(padded))
-	mode := cipher.NewCBCEncrypter(block, iv[:aes.BlockSize])
-	mode.CryptBlocks(ciphertext, padded)
-	return ciphertext, nil
-}
-
-// decryptCBC decrypts data using AES-CBC mode
-func decryptCBC(ciphertext, key, iv []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	if len(iv) < aes.BlockSize {
-		return nil, moerr.NewInvalidInputNoCtx("invalid iv length")
-	}
-	if len(ciphertext)%aes.BlockSize != 0 {
-		return nil, moerr.NewInvalidInputNoCtx("invalid ciphertext length")
-	}
-	plaintext := make([]byte, len(ciphertext))
-	mode := cipher.NewCBCDecrypter(block, iv[:aes.BlockSize])
-	mode.CryptBlocks(plaintext, ciphertext)
-	return pkcs7Unpadding(plaintext)
+	copy(plaintext[fullBytes:], finalBlock[:aes.BlockSize-padding])
 }
 
 type aesModeInfo struct {
@@ -12472,14 +12533,9 @@ func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
-		var ciphertext []byte
-		var encErr error
-		if modeInfo.useCBC {
-			ciphertext, encErr = encryptCBC(str, aesKey, iv)
-		} else {
-			ciphertext, encErr = encryptECB(str, aesKey)
-		}
-		if encErr != nil {
+		block, blockErr := aes.NewCipher(aesKey)
+		ciphertextSize, sizeErr := aesPaddedSize(len(str))
+		if blockErr != nil || sizeErr != nil {
 			// On error, return NULL (MySQL behavior)
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -12487,7 +12543,18 @@ func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
-		if err := rs.AppendBytes(ciphertext, false); err != nil {
+		if err := rs.AppendBytesWithFill(
+			ciphertextSize,
+			func(ciphertext []byte) {
+				encryptAESPKCS7Into(
+					block,
+					str,
+					iv,
+					modeInfo.useCBC,
+					ciphertext,
+				)
+			},
+		); err != nil {
 			return err
 		}
 	}
@@ -12545,14 +12612,8 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
-		var plaintext []byte
-		var decErr error
-		if modeInfo.useCBC {
-			plaintext, decErr = decryptCBC(crypt, aesKey, iv)
-		} else {
-			plaintext, decErr = decryptECB(crypt, aesKey)
-		}
-		if decErr != nil {
+		block, blockErr := aes.NewCipher(aesKey)
+		if blockErr != nil {
 			// On error, return NULL (MySQL behavior)
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -12560,7 +12621,33 @@ func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
-		if err := rs.AppendBytes(plaintext, false); err != nil {
+		finalBlock, padding, decErr := decryptAESPKCS7LastBlock(
+			block,
+			crypt,
+			iv,
+			modeInfo.useCBC,
+		)
+		if decErr != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		plaintextSize := len(crypt) - padding
+		if err := rs.AppendBytesWithFill(
+			plaintextSize,
+			func(plaintext []byte) {
+				decryptAESPKCS7Into(
+					block,
+					crypt,
+					iv,
+					modeInfo.useCBC,
+					finalBlock,
+					padding,
+					plaintext,
+				)
+			},
+		); err != nil {
 			return err
 		}
 	}

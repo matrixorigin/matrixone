@@ -15,10 +15,13 @@
 package function
 
 import (
+	"crypto/aes"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -42,8 +45,12 @@ func TestAESEncryptDecryptECB(t *testing.T) {
 
 	aesKey, err := generateAESKey([]byte(key), 16)
 	require.NoError(t, err)
-	ciphertext, err := encryptECB([]byte(plain), aesKey)
+	block, err := aes.NewCipher(aesKey)
 	require.NoError(t, err)
+	ciphertextSize, err := aesPaddedSize(len(plain))
+	require.NoError(t, err)
+	ciphertext := make([]byte, ciphertextSize)
+	encryptAESPKCS7Into(block, []byte(plain), nil, false, ciphertext)
 
 	encryptCase := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
@@ -76,8 +83,18 @@ func TestAESEncryptDecryptCBC(t *testing.T) {
 
 	aesKey, err := generateAESKey([]byte(key), 32)
 	require.NoError(t, err)
-	ciphertext, err := encryptCBC([]byte(plain), aesKey, []byte(iv))
+	block, err := aes.NewCipher(aesKey)
 	require.NoError(t, err)
+	ciphertextSize, err := aesPaddedSize(len(plain))
+	require.NoError(t, err)
+	ciphertext := make([]byte, ciphertextSize)
+	encryptAESPKCS7Into(
+		block,
+		[]byte(plain),
+		[]byte(iv),
+		true,
+		ciphertext,
+	)
 
 	encryptCase := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
@@ -102,6 +119,105 @@ func TestAESEncryptDecryptCBC(t *testing.T) {
 	)
 	ok, info = decryptCase.Run()
 	require.True(t, ok, fmt.Sprintf("decrypt cbc failed: %s", info))
+}
+
+func TestAESEncryptDecryptBlockBoundaries(t *testing.T) {
+	plaintexts := []string{
+		"",
+		strings.Repeat("a", aes.BlockSize-1),
+		strings.Repeat("b", aes.BlockSize),
+		strings.Repeat("c", aes.BlockSize+1),
+		strings.Repeat("d", 2*aes.BlockSize),
+	}
+	for _, tc := range []struct {
+		name string
+		mode string
+		key  string
+		iv   string
+	}{
+		{name: "ecb", mode: "aes-128-ecb", key: "boundary-key"},
+		{name: "cbc", mode: "aes-256-cbc", key: "boundary-key", iv: "0123456789abcdef"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newAESProcess(t, tc.mode)
+			mp := proc.Mp()
+			plainVec := newVectorByType(
+				mp,
+				types.T_varchar.ToType(),
+				plaintexts,
+				nil,
+			)
+			defer plainVec.Free(mp)
+			keys := make([]string, len(plaintexts))
+			for idx := range keys {
+				keys[idx] = tc.key
+			}
+			keyVec := newVectorByType(
+				mp,
+				types.T_varchar.ToType(),
+				keys,
+				nil,
+			)
+			defer keyVec.Free(mp)
+			params := []*vector.Vector{plainVec, keyVec}
+			if tc.iv != "" {
+				ivs := make([]string, len(plaintexts))
+				for idx := range ivs {
+					ivs[idx] = tc.iv
+				}
+				ivVec := newVectorByType(
+					mp,
+					types.T_varchar.ToType(),
+					ivs,
+					nil,
+				)
+				defer ivVec.Free(mp)
+				params = append(params, ivVec)
+			}
+
+			encrypted := vector.NewFunctionResultWrapper(
+				types.T_blob.ToType(),
+				mp,
+			)
+			defer encrypted.Free()
+			require.NoError(t, encrypted.PreExtendAndReset(len(plaintexts)))
+			require.NoError(t, AESEncrypt(
+				params,
+				encrypted,
+				proc,
+				len(plaintexts),
+				nil,
+			))
+
+			decryptParams := []*vector.Vector{
+				encrypted.GetResultVector(),
+				keyVec,
+			}
+			if len(params) == 3 {
+				decryptParams = append(decryptParams, params[2])
+			}
+			decrypted := vector.NewFunctionResultWrapper(
+				types.T_varchar.ToType(),
+				mp,
+			)
+			defer decrypted.Free()
+			require.NoError(t, decrypted.PreExtendAndReset(len(plaintexts)))
+			require.NoError(t, AESDecrypt(
+				decryptParams,
+				decrypted,
+				proc,
+				len(plaintexts),
+				nil,
+			))
+			for idx, plaintext := range plaintexts {
+				require.Equal(
+					t,
+					[]byte(plaintext),
+					decrypted.GetResultVector().GetBytesAt(idx),
+				)
+			}
+		})
+	}
 }
 
 func TestAESEncryptCBCMissingIV(t *testing.T) {

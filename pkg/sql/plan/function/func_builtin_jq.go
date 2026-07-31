@@ -267,7 +267,7 @@ func (op *opBuiltInJq) getJqCode(jq string) (*gojq.Code, error) {
 // We removed all the terminal color related code and we write to buffer w
 // and do not flush until the encoding is done.
 type JqEncoder struct {
-	w      *bytes.Buffer
+	w      bytes.Buffer
 	tab    bool
 	indent int
 	depth  int
@@ -275,7 +275,7 @@ type JqEncoder struct {
 }
 
 func (e *JqEncoder) intialize(tab bool, indent int) {
-	e.w = new(bytes.Buffer)
+	e.w.Reset()
 	e.tab = tab
 	e.indent = indent
 }
@@ -490,281 +490,277 @@ func (e *JqEncoder) writeIndentInternal(n int, spaces string) {
 }
 
 type opBuiltInJsonRow struct {
-	enc []JqEncoder
+	enc     JqEncoder
+	columns []jsonRowColumnEncoder
 }
 
 func newOpBuiltInJsonRow() *opBuiltInJsonRow {
 	var op opBuiltInJsonRow
+	op.enc.intialize(false, 0)
 	return &op
-}
-
-func (op *opBuiltInJsonRow) grow(length int) {
-	if len(op.enc) == 0 {
-		op.enc = make([]JqEncoder, length)
-		for i := 0; i < length; i++ {
-			op.enc[i].intialize(false, 0)
-		}
-	} else if length > len(op.enc) {
-		for i := len(op.enc); i < length; i++ {
-			op.enc = append(op.enc, JqEncoder{})
-			op.enc[i].intialize(false, 0)
-		}
-	}
 }
 
 func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.FunctionResultWrapper,
 	proc *process.Process, length int, selectList *FunctionSelectList) error {
-	op.grow(length)
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	ulen := uint64(length)
-
-	for j := 0; j < length; j++ {
-		op.enc[j].w.WriteByte('[')
+	if cap(op.columns) < len(params) {
+		op.columns = make([]jsonRowColumnEncoder, len(params))
+	} else {
+		op.columns = op.columns[:len(params)]
 	}
-
-	for i := 0; i < len(params); i++ {
-		// write separator first
-		if i > 0 {
-			for j := 0; j < length; j++ {
-				op.enc[j].w.WriteByte(',')
-			}
+	for idx, param := range params {
+		column, err := prepareJSONRowColumn(param, proc)
+		if err != nil {
+			clear(op.columns)
+			return err
 		}
+		op.columns[idx] = column
+	}
+	defer clear(op.columns)
 
-		// oh the dreaded type switch
-		fromType := params[i].GetType()
-		switch fromType.Oid {
-		case types.T_any: // scalar null
-			op.encodeScalarNull(ulen)
-		case types.T_bool:
-			op.encodeBool(params[i], ulen)
-		case types.T_int8:
-			encodeInt[int8](op, params[i], ulen)
-		case types.T_int16:
-			encodeInt[int16](op, params[i], ulen)
-		case types.T_int32:
-			encodeInt[int32](op, params[i], ulen)
-		case types.T_int64:
-			encodeInt[int64](op, params[i], ulen)
-		case types.T_uint8:
-			encodeInt[uint8](op, params[i], ulen)
-		case types.T_uint16:
-			encodeInt[uint16](op, params[i], ulen)
-		case types.T_uint32:
-			encodeInt[uint32](op, params[i], ulen)
-		case types.T_uint64:
-			encodeInt[uint64](op, params[i], ulen)
-		case types.T_float32:
-			encodeFloat[float32](op, params[i], ulen)
-		case types.T_float64:
-			encodeFloat[float64](op, params[i], ulen)
-		case types.T_decimal64:
-			encodeDecimal[types.Decimal64](op, params[i], ulen)
-		case types.T_decimal128:
-			encodeDecimal[types.Decimal128](op, params[i], ulen)
-		case types.T_date:
-			encodeFixedStringer[types.Date](op, params[i], ulen)
-		case types.T_time:
-			encodeFixedStringer[types.Time](op, params[i], ulen)
-		case types.T_datetime:
-			encodeFixedStringer[types.Datetime](op, params[i], ulen)
-		case types.T_timestamp:
-			encodeFixedStringer[types.Timestamp](op, params[i], ulen)
-		case types.T_char, types.T_varchar, types.T_text:
-			encodeString(op, params[i], ulen)
-		case types.T_binary, types.T_varbinary, types.T_blob:
-			// well, in cast, we handle binary as if they are string.
-			// However it id deemed too dangerous to do so in json_row.
-			return moerr.NewInvalidInputf(proc.Ctx, "binary data not supported json_row: %v", fromType.String())
-		case types.T_array_float32:
-			// vector of float, we will encode them as json array
-			encodeFloatArray[float32](op, params[i], ulen)
-		case types.T_array_float64:
-			// vector of float, we will encode them as json array
-			encodeFloatArray[float64](op, params[i], ulen)
-		case types.T_array_bf16:
-			encodeNarrowArray[types.BF16](op, params[i], ulen,
-				func(x types.BF16) float64 { return float64(x.ToFloat32()) })
-		case types.T_array_float16:
-			encodeNarrowArray[types.Float16](op, params[i], ulen,
-				func(x types.Float16) float64 { return float64(x.ToFloat32()) })
-		case types.T_array_int8:
-			encodeNarrowArray[int8](op, params[i], ulen,
-				func(x int8) float64 { return float64(x) })
-		case types.T_array_uint8:
-			encodeNarrowArray[uint8](op, params[i], ulen,
-				func(x uint8) float64 { return float64(x) })
-		case types.T_uuid:
-			encodeFixedStringer[types.Uuid](op, params[i], ulen)
-		case types.T_json:
-			if err := encodeJson(op, params[i], ulen); err != nil {
+	op.enc.done()
+	defer op.enc.done()
+	for row := uint64(0); row < uint64(length); row++ {
+		if selectList.Contains(row) {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		default:
-			return moerr.NewInvalidInputf(proc.Ctx, "unsupported type for json_row: %v", fromType.String())
+			continue
 		}
-	}
-
-	for j := 0; j < length; j++ {
-		op.enc[j].w.WriteByte(']')
-		if selectList.Contains(uint64(j)) {
-			rs.AppendBytes(nil, true)
-		} else {
-			rs.AppendBytes(op.enc[j].bytes(), false)
+		op.enc.w.WriteByte('[')
+		for paramIdx := range op.columns {
+			if paramIdx > 0 {
+				op.enc.w.WriteByte(',')
+			}
+			if err := op.columns[paramIdx](&op.enc, row); err != nil {
+				return err
+			}
 		}
-		op.enc[j].done()
+		op.enc.w.WriteByte(']')
+		if err := rs.AppendBytes(op.enc.bytes(), false); err != nil {
+			return err
+		}
+		op.enc.done()
 	}
 	return nil
 }
 
-func (op *opBuiltInJsonRow) encodeScalarNull(length uint64) {
-	for i := uint64(0); i < length; i++ {
-		op.enc[i].w.WriteString("null")
-	}
+type jsonRowColumnEncoder func(*JqEncoder, uint64) error
+
+func encodeJSONRowNull(e *JqEncoder, _ uint64) error {
+	e.w.WriteString("null")
+	return nil
 }
 
-func (op *opBuiltInJsonRow) encodeBool(v *vector.Vector, length uint64) {
-	p := vector.GenerateFunctionFixedTypeParameter[bool](v)
-	for i := uint64(0); i < length; i++ {
-		v, null := p.GetValue(i)
-		if null {
-			op.enc[i].w.WriteString("null")
-		} else {
-			if v {
-				op.enc[i].w.WriteString("true")
+func prepareJSONRowColumn(
+	v *vector.Vector,
+	proc *process.Process,
+) (jsonRowColumnEncoder, error) {
+	switch fromType := v.GetType(); fromType.Oid {
+	case types.T_any:
+		return encodeJSONRowNull, nil
+	case types.T_bool:
+		param := vector.GenerateFunctionFixedTypeParameter[bool](v)
+		return func(e *JqEncoder, row uint64) error {
+			value, isNull := param.GetValue(row)
+			if isNull {
+				return encodeJSONRowNull(e, row)
+			}
+			if value {
+				e.w.WriteString("true")
 			} else {
-				op.enc[i].w.WriteString("false")
+				e.w.WriteString("false")
 			}
-		}
-	}
-}
-
-func encodeInt[T constraints.Integer](op *opBuiltInJsonRow, v *vector.Vector, length uint64) {
-	p := vector.GenerateFunctionFixedTypeParameter[T](v)
-	for i := uint64(0); i < length; i++ {
-		v, null := p.GetValue(i)
-		if null {
-			op.enc[i].w.WriteString("null")
-		} else {
-			op.enc[i].w.Write(strconv.AppendInt(op.enc[i].buf[:0], int64(v), 10))
-		}
-	}
-}
-
-func encodeFloat[T constraints.Float](op *opBuiltInJsonRow, v *vector.Vector, length uint64) {
-	p := vector.GenerateFunctionFixedTypeParameter[T](v)
-	for i := uint64(0); i < length; i++ {
-		v, null := p.GetValue(i)
-		if null {
-			op.enc[i].w.WriteString("null")
-		} else {
-			op.enc[i].encodeFloat64(float64(v))
-		}
-	}
-}
-
-func encodeDecimal[T types.DecimalWithFormat](op *opBuiltInJsonRow, v *vector.Vector, length uint64) {
-	p := vector.GenerateFunctionFixedTypeParameter[T](v)
-	fromTyp := v.GetType()
-	for i := uint64(0); i < length; i++ {
-		v, null := p.GetValue(i)
-		if null {
-			op.enc[i].w.WriteString("null")
-		} else {
-			bs := []byte(v.Format(fromTyp.Scale))
-			op.enc[i].w.Write(bs)
-		}
-	}
-}
-
-func encodeFixedStringer[T types.FixedWithStringer](op *opBuiltInJsonRow, v *vector.Vector, length uint64) {
-	p := vector.GenerateFunctionFixedTypeParameter[T](v)
-	for i := uint64(0); i < length; i++ {
-		v, null := p.GetValue(i)
-		if null {
-			op.enc[i].w.WriteString("null")
-		} else {
-			op.enc[i].encodeString(v.String())
-		}
-	}
-}
-
-func encodeString(op *opBuiltInJsonRow, v *vector.Vector, length uint64) {
-	p := vector.GenerateFunctionStrParameter(v)
-	for i := uint64(0); i < length; i++ {
-		v, null := p.GetStrValue(i)
-		if null {
-			op.enc[i].w.WriteString("null")
-		} else {
-			op.enc[i].encodeString(string(v))
-		}
-	}
-}
-
-func encodeFloatArray[T constraints.Float](op *opBuiltInJsonRow, v *vector.Vector, length uint64) {
-	// GenStrParam: array is varlena also.
-	p := vector.GenerateFunctionStrParameter(v)
-	for i := uint64(0); i < length; i++ {
-		v, null := p.GetStrValue(i)
-		if null {
-			op.enc[i].w.WriteString("null")
-		} else {
-			vv := types.BytesToArray[T](v)
-			op.enc[i].w.WriteByte('[')
-			for j, val := range vv {
-				if j > 0 {
-					op.enc[i].w.WriteByte(',')
-				}
-				ff := float64(val)
-				op.enc[i].encodeFloat64(ff)
+			return nil
+		}, nil
+	case types.T_int8:
+		return prepareJSONRowSignedColumn[int8](v), nil
+	case types.T_int16:
+		return prepareJSONRowSignedColumn[int16](v), nil
+	case types.T_int32:
+		return prepareJSONRowSignedColumn[int32](v), nil
+	case types.T_int64:
+		return prepareJSONRowSignedColumn[int64](v), nil
+	case types.T_uint8:
+		return prepareJSONRowUnsignedColumn[uint8](v), nil
+	case types.T_uint16:
+		return prepareJSONRowUnsignedColumn[uint16](v), nil
+	case types.T_uint32:
+		return prepareJSONRowUnsignedColumn[uint32](v), nil
+	case types.T_uint64:
+		return prepareJSONRowUnsignedColumn[uint64](v), nil
+	case types.T_float32:
+		return prepareJSONRowFloatColumn[float32](v), nil
+	case types.T_float64:
+		return prepareJSONRowFloatColumn[float64](v), nil
+	case types.T_decimal64:
+		return prepareJSONRowDecimalColumn[types.Decimal64](v), nil
+	case types.T_decimal128:
+		return prepareJSONRowDecimalColumn[types.Decimal128](v), nil
+	case types.T_date:
+		return prepareJSONRowStringerColumn[types.Date](v), nil
+	case types.T_time:
+		return prepareJSONRowStringerColumn[types.Time](v), nil
+	case types.T_datetime:
+		return prepareJSONRowStringerColumn[types.Datetime](v), nil
+	case types.T_timestamp:
+		return prepareJSONRowStringerColumn[types.Timestamp](v), nil
+	case types.T_char, types.T_varchar, types.T_text:
+		return prepareJSONRowStringColumn(v), nil
+	case types.T_array_float32:
+		return prepareJSONRowArrayColumn(v,
+			func(value float32) float64 { return float64(value) }), nil
+	case types.T_array_float64:
+		return prepareJSONRowArrayColumn(v,
+			func(value float64) float64 { return value }), nil
+	case types.T_array_bf16:
+		return prepareJSONRowArrayColumn(v,
+			func(value types.BF16) float64 { return float64(value.ToFloat32()) }), nil
+	case types.T_array_float16:
+		return prepareJSONRowArrayColumn(v,
+			func(value types.Float16) float64 { return float64(value.ToFloat32()) }), nil
+	case types.T_array_int8:
+		return prepareJSONRowArrayColumn(v,
+			func(value int8) float64 { return float64(value) }), nil
+	case types.T_array_uint8:
+		return prepareJSONRowArrayColumn(v,
+			func(value uint8) float64 { return float64(value) }), nil
+	case types.T_uuid:
+		return prepareJSONRowStringerColumn[types.Uuid](v), nil
+	case types.T_json:
+		param := vector.GenerateFunctionStrParameter(v)
+		return func(e *JqEncoder, row uint64) error {
+			value, isNull := param.GetStrValue(row)
+			if isNull {
+				return encodeJSONRowNull(e, row)
 			}
-			op.enc[i].w.WriteByte(']')
-		}
-	}
-}
-
-// encodeNarrowArray is encodeFloatArray for element types that are not
-// constraints.Float: BF16/Float16 need ToFloat32(), int8/uint8 are plain
-// integers. The JSON shape emitted is identical to the f32/f64 arrays.
-func encodeNarrowArray[T types.ArrayElement](op *opBuiltInJsonRow, v *vector.Vector, length uint64, toF64 func(T) float64) {
-	p := vector.GenerateFunctionStrParameter(v)
-	for i := uint64(0); i < length; i++ {
-		v, null := p.GetStrValue(i)
-		if null {
-			op.enc[i].w.WriteString("null")
-		} else {
-			vv := types.BytesToArray[T](v)
-			op.enc[i].w.WriteByte('[')
-			for j, val := range vv {
-				if j > 0 {
-					op.enc[i].w.WriteByte(',')
-				}
-				op.enc[i].encodeFloat64(toF64(val))
-			}
-			op.enc[i].w.WriteByte(']')
-		}
-	}
-}
-
-func encodeJson(op *opBuiltInJsonRow, v *vector.Vector, length uint64) error {
-	// GenStrParam: json is varlena also.
-	p := vector.GenerateFunctionStrParameter(v)
-	for i := uint64(0); i < length; i++ {
-		v, null := p.GetStrValue(i)
-		if null {
-			op.enc[i].w.WriteString("null")
-		} else {
-			bj := types.DecodeJson(v)
-			val, err := bj.MarshalJSON()
-			// this should a valid json and we should never
-			// error here.   Check it anyway.
+			jsonValue, err := types.DecodeJson(value).MarshalJSON()
 			if err != nil {
 				return err
 			}
-			// note here we already have a valid json string
-			// do NOT use encodeString, which will escape
-			// the string again.
-			op.enc[i].w.Write(val)
-		}
+			e.w.Write(jsonValue)
+			return nil
+		}, nil
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return nil, moerr.NewInvalidInputf(proc.Ctx,
+			"binary data not supported json_row: %v",
+			fromType.String())
+	default:
+		return nil, moerr.NewInvalidInputf(proc.Ctx,
+			"unsupported type for json_row: %v",
+			fromType.String())
 	}
-	return nil
+}
+
+func prepareJSONRowSignedColumn[T constraints.Signed](
+	v *vector.Vector,
+) jsonRowColumnEncoder {
+	param := vector.GenerateFunctionFixedTypeParameter[T](v)
+	return func(e *JqEncoder, row uint64) error {
+		value, isNull := param.GetValue(row)
+		if isNull {
+			return encodeJSONRowNull(e, row)
+		}
+		e.w.Write(strconv.AppendInt(e.buf[:0], int64(value), 10))
+		return nil
+	}
+}
+
+func prepareJSONRowUnsignedColumn[T constraints.Unsigned](
+	v *vector.Vector,
+) jsonRowColumnEncoder {
+	param := vector.GenerateFunctionFixedTypeParameter[T](v)
+	return func(e *JqEncoder, row uint64) error {
+		value, isNull := param.GetValue(row)
+		if isNull {
+			return encodeJSONRowNull(e, row)
+		}
+		e.w.Write(strconv.AppendUint(e.buf[:0], uint64(value), 10))
+		return nil
+	}
+}
+
+func prepareJSONRowFloatColumn[T constraints.Float](
+	v *vector.Vector,
+) jsonRowColumnEncoder {
+	param := vector.GenerateFunctionFixedTypeParameter[T](v)
+	return func(e *JqEncoder, row uint64) error {
+		value, isNull := param.GetValue(row)
+		if isNull {
+			return encodeJSONRowNull(e, row)
+		}
+		e.encodeFloat64(float64(value))
+		return nil
+	}
+}
+
+func prepareJSONRowDecimalColumn[T types.DecimalWithFormat](
+	v *vector.Vector,
+) jsonRowColumnEncoder {
+	param := vector.GenerateFunctionFixedTypeParameter[T](v)
+	scale := v.GetType().Scale
+	return func(e *JqEncoder, row uint64) error {
+		value, isNull := param.GetValue(row)
+		if isNull {
+			return encodeJSONRowNull(e, row)
+		}
+		e.w.WriteString(value.Format(scale))
+		return nil
+	}
+}
+
+func prepareJSONRowStringerColumn[T types.FixedWithStringer](
+	v *vector.Vector,
+) jsonRowColumnEncoder {
+	param := vector.GenerateFunctionFixedTypeParameter[T](v)
+	return func(e *JqEncoder, row uint64) error {
+		value, isNull := param.GetValue(row)
+		if isNull {
+			return encodeJSONRowNull(e, row)
+		}
+		e.encodeString(value.String())
+		return nil
+	}
+}
+
+func prepareJSONRowStringColumn(v *vector.Vector) jsonRowColumnEncoder {
+	param := vector.GenerateFunctionStrParameter(v)
+	return func(e *JqEncoder, row uint64) error {
+		value, isNull := param.GetStrValue(row)
+		if isNull {
+			return encodeJSONRowNull(e, row)
+		}
+		e.encodeString(string(value))
+		return nil
+	}
+}
+
+func prepareJSONRowArrayColumn[T types.ArrayElement](
+	v *vector.Vector,
+	toFloat64 func(T) float64,
+) jsonRowColumnEncoder {
+	param := vector.GenerateFunctionStrParameter(v)
+	return func(e *JqEncoder, row uint64) error {
+		value, isNull := param.GetStrValue(row)
+		if isNull {
+			return encodeJSONRowNull(e, row)
+		}
+		encodeJSONRowArray(e, types.BytesToArray[T](value), toFloat64)
+		return nil
+	}
+}
+
+func encodeJSONRowArray[T types.ArrayElement](
+	e *JqEncoder,
+	values []T,
+	toFloat64 func(T) float64,
+) {
+	e.w.WriteByte('[')
+	for idx, value := range values {
+		if idx > 0 {
+			e.w.WriteByte(',')
+		}
+		e.encodeFloat64(toFloat64(value))
+	}
+	e.w.WriteByte(']')
 }

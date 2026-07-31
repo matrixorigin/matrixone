@@ -138,6 +138,54 @@ func TestFunctionResultAllocationAccountFailure(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestFunctionResultAppendBytesWithFillLifecycle(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 8)
+	mp := mpool.MustNew("function-result-fill")
+	defer mpool.DeleteMPool(mp)
+	wrapper, err := NewFunctionResultWrapperWithAllocation(
+		types.T_varchar.ToType(),
+		mp,
+		state.selection,
+	)
+	require.NoError(t, err)
+	require.NoError(t, wrapper.PreExtendAndReset(3))
+	result := MustFunctionResult[types.Varlena](wrapper)
+
+	require.NoError(t, result.AppendBytesWithFill(5, func(dst []byte) {
+		copy(dst, "small")
+	}))
+	large := make([]byte, 256)
+	for idx := range large {
+		large[idx] = byte(idx)
+	}
+	require.NoError(t, result.AppendBytesWithFill(len(large), func(dst []byte) {
+		copy(dst, large)
+	}))
+	require.Equal(t, []byte("small"), wrapper.GetResultVector().GetBytesAt(0))
+	require.Equal(t, large, wrapper.GetResultVector().GetBytesAt(1))
+
+	beforeLength := wrapper.GetResultVector().Length()
+	beforeAreaLength := len(wrapper.GetResultVector().GetArea())
+	require.Panics(t, func() {
+		_ = result.AppendBytesWithFill(512, func(dst []byte) {
+			dst[0] = 1
+			panic("injected fill failure")
+		})
+	})
+	require.Equal(t, beforeLength, wrapper.GetResultVector().Length())
+	require.Equal(t, beforeAreaLength, len(wrapper.GetResultVector().GetArea()))
+
+	require.NoError(t, result.AppendBytesWithFill(4, func(dst []byte) {
+		copy(dst, "last")
+	}))
+	require.Equal(t, []byte("last"), wrapper.GetResultVector().GetBytesAt(2))
+	require.Positive(t, state.account.Snapshot().Used)
+
+	wrapper.Free()
+	require.Zero(t, state.account.Snapshot().Used)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestFunctionResultAllocationAccountDecimalParameterScratch(t *testing.T) {
 	state := newTestVectorParameterAllocationAccount(t, 1<<20, 16)
 	mp := mpool.MustNew("function-parameter-allocation")

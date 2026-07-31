@@ -49,6 +49,24 @@ func PairwiseDistanceLaunch[T types.ArrayElement](
 	return PairwiseDistanceLaunchCPU(x, y, metric, dist)
 }
 
+func PairwiseDistanceLaunchOneToMany[T types.RealNumbers](
+	query []T,
+	rowCount int,
+	rowAt func(int) []T,
+	metric MetricType,
+	dist []float32,
+	_ uint64,
+	_ bool,
+) (PairwiseJobHandle, error) {
+	return PairwiseDistanceLaunchOneToManyCPU(
+		query,
+		rowCount,
+		rowAt,
+		metric,
+		dist,
+	)
+}
+
 func PairwiseDistanceWait(handle PairwiseJobHandle, metric MetricType) ([]float32, error) {
 	return PairwiseDistanceWaitCPU(handle, metric)
 }

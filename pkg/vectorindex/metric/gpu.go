@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
@@ -202,6 +203,75 @@ func PairwiseDistanceLaunch[T types.ArrayElement](
 	return PairwiseDistanceLaunchCPU(x, y, metric, dist)
 }
 
+func PairwiseDistanceLaunchOneToMany[T types.RealNumbers](
+	query []T,
+	rowCount int,
+	rowAt func(int) []T,
+	metric MetricType,
+	dist []float32,
+	minWorkSize uint64,
+	gpuMode bool,
+) (PairwiseJobHandle, error) {
+	if !gpuMode {
+		return PairwiseDistanceLaunchOneToManyCPU(
+			query,
+			rowCount,
+			rowAt,
+			metric,
+			dist,
+		)
+	}
+	if rowCount < 0 || len(dist) < rowCount {
+		return 0, moerr.NewInternalErrorNoCtx(
+			"pairwise distance output is smaller than the row count",
+		)
+	}
+	if rowCount == 0 {
+		return PairwiseDistanceLaunchOneToManyCPU(
+			query,
+			rowCount,
+			rowAt,
+			metric,
+			dist,
+		)
+	}
+
+	dim := len(query)
+	work := uint64(rowCount)
+	if dim != 0 && work > ^uint64(0)/uint64(dim) {
+		work = ^uint64(0)
+	} else {
+		work *= uint64(dim)
+	}
+	cuvsMetric, supportedMetric := MetricTypeToCuvsMetric[metric]
+	if supportedMetric &&
+		work >= minWorkSize {
+		if typedQuery, ok := any(query).([]float32); ok {
+			return gpuPairwiseLaunchRows(
+				1,
+				rowCount,
+				dim,
+				func(_ int) []float32 {
+					return typedQuery
+				},
+				func(row int) []float32 {
+					return any(rowAt(row)).([]float32)
+				},
+				cuvsMetric,
+				dist[:rowCount],
+				4,
+			)
+		}
+	}
+	return PairwiseDistanceLaunchOneToManyCPU(
+		query,
+		rowCount,
+		rowAt,
+		metric,
+		dist,
+	)
+}
+
 // gpuPairwiseLaunch flattens [][]C into a C-allocator buffer (elemSize bytes per
 // element) and launches the async cuVS pairwise distance. C is float32 (4B) or
 // cuvs.Float16 (2B). Mirrors the old f32-only path, generalized over the element.
@@ -212,27 +282,88 @@ func gpuPairwiseLaunch[C cuvs.VectorType](
 	dist []float32,
 	elemSize int,
 ) (PairwiseJobHandle, error) {
-	nX, nY := len(x), len(y)
+	return gpuPairwiseLaunchRows(
+		len(x),
+		len(y),
+		dim,
+		func(row int) []C {
+			return x[row]
+		},
+		func(row int) []C {
+			return y[row]
+		},
+		cuvsMetric,
+		dist,
+		elemSize,
+	)
+}
+
+func gpuPairwiseLaunchRows[C cuvs.VectorType](
+	nX, nY, dim int,
+	xAt, yAt func(int) []C,
+	cuvsMetric cuvs.DistanceType,
+	dist []float32,
+	elemSize int,
+) (PairwiseJobHandle, error) {
+	if nX < 0 ||
+		nY < 0 ||
+		dim < 0 ||
+		elemSize <= 0 ||
+		uint64(dim) > uint64(^uint32(0)) ||
+		uint64(dim) > ^uint64(0)/uint64(elemSize) {
+		return 0, moerr.NewInternalErrorNoCtx(
+			"pairwise distance input is too large",
+		)
+	}
+	rowBytes := uint64(dim) * uint64(elemSize)
+	if rowBytes != 0 &&
+		(uint64(nX) > ^uint64(0)/rowBytes ||
+			uint64(nY) > ^uint64(0)/rowBytes) {
+		return 0, moerr.NewInternalErrorNoCtx(
+			"pairwise distance input is too large",
+		)
+	}
 	allocator := malloc.NewCAllocator()
 
 	// 1. Flatten Y
-	yBuf, yDeallocator, err := allocator.Allocate(uint64(nY*dim*elemSize), malloc.NoClear)
+	yBuf, yDeallocator, err := allocator.Allocate(
+		uint64(nY)*rowBytes,
+		malloc.NoClear,
+	)
 	if err != nil {
 		return 0, err
 	}
 	yf := util.UnsafeSliceCast[C](yBuf)
-	for i, v := range y {
+	for i := 0; i < nY; i++ {
+		v := yAt(i)
+		if len(v) != dim {
+			yDeallocator.Deallocate()
+			return 0, moerr.NewInternalErrorNoCtx(
+				"vector dimension not matched",
+			)
+		}
 		copy(yf[i*dim:(i+1)*dim], v)
 	}
 
 	// 2. Flatten X
-	xBuf, xDeallocator, err := allocator.Allocate(uint64(nX*dim*elemSize), malloc.NoClear)
+	xBuf, xDeallocator, err := allocator.Allocate(
+		uint64(nX)*rowBytes,
+		malloc.NoClear,
+	)
 	if err != nil {
 		yDeallocator.Deallocate()
 		return 0, err
 	}
 	xf := util.UnsafeSliceCast[C](xBuf)
-	for i, v := range x {
+	for i := 0; i < nX; i++ {
+		v := xAt(i)
+		if len(v) != dim {
+			xDeallocator.Deallocate()
+			yDeallocator.Deallocate()
+			return 0, moerr.NewInternalErrorNoCtx(
+				"vector dimension not matched",
+			)
+		}
 		copy(xf[i*dim:(i+1)*dim], v)
 	}
 

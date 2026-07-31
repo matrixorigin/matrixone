@@ -216,120 +216,146 @@ func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Functio
 	}, selectList)
 }
 
-var (
-	arrayF32Pool = sync.Pool{
-		New: func() interface{} {
-			s := make([]float32, 128)
-			return &s
-		},
-	}
-
-	arrayF64Pool = sync.Pool{
-		New: func() interface{} {
-			s := make([]float64, 128)
-			return &s
-		},
-	}
-)
-
 func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	rowCount := uint64(length)
 
-	var inArrayF32 []float32
-	var outArrayF32Ptr *[]float32
-	var outArrayF32 []float32
-
-	var inArrayF64 []float64
-	var outArrayF64Ptr *[]float64
-	var outArrayF64 []float64
-
-	var data []byte
-	var null bool
-
 	for i := uint64(0); i < rowCount; i++ {
-		data, null = source.GetStrValue(i)
+		data, null := source.GetStrValue(i)
 		if null {
-			_ = rs.AppendMustNullForBytesResult()
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 			continue
 		}
 
 		switch t := parameters[0].GetType().Oid; t {
 		case types.T_array_float32:
-			inArrayF32 = types.BytesToArray[float32](data)
-
-			outArrayF32Ptr = arrayF32Pool.Get().(*[]float32)
-			outArrayF32 = *outArrayF32Ptr
-
-			if cap(outArrayF32) < len(inArrayF32) {
-				outArrayF32 = make([]float32, len(inArrayF32))
-			} else {
-				outArrayF32 = outArrayF32[:len(inArrayF32)]
+			if err := appendNormalizedRealArray[float32](rs, data); err != nil {
+				return err
 			}
-			_ = moarray.NormalizeL2(inArrayF32, outArrayF32)
-			_ = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
-
-			*outArrayF32Ptr = outArrayF32
-			arrayF32Pool.Put(outArrayF32Ptr)
 		case types.T_array_float64:
-			inArrayF64 = types.BytesToArray[float64](data)
-
-			outArrayF64Ptr = arrayF64Pool.Get().(*[]float64)
-			outArrayF64 = *outArrayF64Ptr
-
-			if cap(outArrayF64) < len(inArrayF64) {
-				outArrayF64 = make([]float64, len(inArrayF64))
-			} else {
-				outArrayF64 = outArrayF64[:len(inArrayF64)]
+			if err := appendNormalizedRealArray[float64](rs, data); err != nil {
+				return err
 			}
-			_ = moarray.NormalizeL2(inArrayF64, outArrayF64)
-			_ = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
-
-			*outArrayF64Ptr = outArrayF64
-			arrayF64Pool.Put(outArrayF64Ptr)
 		case types.T_array_bf16:
-			_ = appendNormalizedNarrowArray[types.BF16](rs, data)
+			if err := appendNormalizedNarrowArray(
+				rs,
+				data,
+				types.BF16.ToFloat32,
+				types.BF16FromFloat32,
+			); err != nil {
+				return err
+			}
 		case types.T_array_float16:
-			_ = appendNormalizedNarrowArray[types.Float16](rs, data)
+			if err := appendNormalizedNarrowArray(
+				rs,
+				data,
+				types.Float16.ToFloat32,
+				types.Float16FromFloat32,
+			); err != nil {
+				return err
+			}
 		case types.T_array_int8:
 			// A normalized vector is a unit vector, which cannot be represented in
 			// an integer element type (components round to 0/±1 and the norm is no
 			// longer 1), so int8/uint8 normalize_l2 widens the result to vecf32.
 			// The overload's retType is T_array_float32 to match (see list_builtIn).
-			_ = appendNormalizedIntArrayAsFloat32[int8](rs, data)
+			if err := appendNormalizedArrayAsFloat32(
+				rs,
+				data,
+				func(value int8) float32 { return float32(value) },
+			); err != nil {
+				return err
+			}
 		case types.T_array_uint8:
-			_ = appendNormalizedIntArrayAsFloat32[uint8](rs, data)
+			if err := appendNormalizedArrayAsFloat32(
+				rs,
+				data,
+				func(value uint8) float32 { return float32(value) },
+			); err != nil {
+				return err
+			}
 		}
-
 	}
 
 	return nil
 }
 
-// appendNormalizedNarrowArray normalizes a bf16/f16 vector by upcasting to
-// float32, normalizing in float32, then narrowing back to T. bf16/f16 are
-// floating-point so they can hold a (near-)unit vector; int8/uint8 cannot and
-// use appendNormalizedIntArrayAsFloat32 instead.
-func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
-	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
-	out := make([]float32, len(in))
-	_ = moarray.NormalizeL2(in, out)
-	return rs.AppendBytes(types.ArrayToBytes[T](types.FromFloat32Array[T](out)), false)
+func appendNormalizedRealArray[T types.RealNumbers](
+	rs *vector.FunctionResult[types.Varlena],
+	data []byte,
+) error {
+	input := types.BytesToArray[T](data)
+	return rs.AppendBytesWithFill(len(data), func(dst []byte) {
+		_ = moarray.NormalizeL2(input, types.BytesToArray[T](dst))
+	})
 }
 
-// appendNormalizedIntArrayAsFloat32 normalizes an integer-typed (int8/uint8)
+// appendNormalizedNarrowArray normalizes a bf16/f16 vector through float32
+// arithmetic while writing the narrowed values directly into the result.
+func appendNormalizedNarrowArray[T types.ArrayElement](
+	rs *vector.FunctionResult[types.Varlena],
+	data []byte,
+	toFloat32 func(T) float32,
+	fromFloat32 func(float32) T,
+) error {
+	input := types.BytesToArray[T](data)
+	return rs.AppendBytesWithFill(len(data), func(dst []byte) {
+		output := types.BytesToArray[T](dst)
+		normalizeArrayInto(input, output, toFloat32, fromFloat32)
+	})
+}
+
+// appendNormalizedArrayAsFloat32 normalizes an integer-typed (int8/uint8)
 // vector and writes the result as float32. A unit vector cannot be represented
 // in an integer element type — narrowing back would round components to 0/±1 so
 // the norm is no longer 1 (e.g. normalize_l2([0,1,2,3]::vecuint8) would become
 // [0,0,1,1], whose norm is √2). Widening the result to vecf32 keeps the unit-norm
 // contract; the int8/uint8 overloads declare retType T_array_float32 to match.
-func appendNormalizedIntArrayAsFloat32[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
-	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
-	out := make([]float32, len(in))
-	_ = moarray.NormalizeL2(in, out)
-	return rs.AppendBytes(types.ArrayToBytes[float32](out), false)
+func appendNormalizedArrayAsFloat32[T types.ArrayElement](
+	rs *vector.FunctionResult[types.Varlena],
+	data []byte,
+	toFloat32 func(T) float32,
+) error {
+	input := types.BytesToArray[T](data)
+	if len(input) > int(^uint(0)>>1)/4 {
+		return moerr.NewInternalErrorNoCtx("normalized array result is too large")
+	}
+	return rs.AppendBytesWithFill(len(input)*4, func(dst []byte) {
+		output := types.BytesToArray[float32](dst)
+		normalizeArrayInto(
+			input,
+			output,
+			toFloat32,
+			func(value float32) float32 { return value },
+		)
+	})
+}
+
+func normalizeArrayInto[TIn, TOut types.ArrayElement](
+	input []TIn,
+	output []TOut,
+	toFloat32 func(TIn) float32,
+	fromFloat32 func(float32) TOut,
+) {
+	var sumSquares float64
+	for _, value := range input {
+		converted := float64(toFloat32(value))
+		sumSquares += converted * converted
+	}
+	norm := math.Sqrt(sumSquares)
+	if norm == 0 {
+		for idx, value := range input {
+			output[idx] = fromFloat32(toFloat32(value))
+		}
+		return
+	}
+	for idx, value := range input {
+		output[idx] = fromFloat32(float32(float64(toFloat32(value)) / norm))
+	}
 }
 
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6205,9 +6231,12 @@ func generateSHAKey(key []byte) []byte {
 }
 
 func generateInitializationVector(key []byte, length int) []byte {
-	data := append(key, byte(length))
-	hash := sha256.Sum256(data)
-	return hash[:aes.BlockSize]
+	hasher := sha256.New()
+	_, _ = hasher.Write(key)
+	var lengthByte [1]byte
+	lengthByte[0] = byte(length)
+	_, _ = hasher.Write(lengthByte[:])
+	return hasher.Sum(nil)[:aes.BlockSize]
 }
 
 // encode function encrypts a string, returns a binary string of the same length of the original string.
@@ -6222,10 +6251,10 @@ func encodeByAES(plaintext []byte, key []byte, null bool, rs *vector.FunctionRes
 		return err
 	}
 	initializationVector := generateInitializationVector(key, len(plaintext))
-	ciphertext := make([]byte, len(plaintext))
 	stream := cipher.NewCTR(block, initializationVector)
-	stream.XORKeyStream(ciphertext, plaintext)
-	return rs.AppendMustBytesValue(ciphertext)
+	return rs.AppendBytesWithFill(len(plaintext), func(ciphertext []byte) {
+		stream.XORKeyStream(ciphertext, plaintext)
+	})
 }
 
 func Encode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6257,10 +6286,10 @@ func decodeByAES(ciphertext []byte, key []byte, null bool, rs *vector.FunctionRe
 		return err
 	}
 	iv := generateInitializationVector(key, len(ciphertext))
-	plaintext := make([]byte, len(ciphertext))
 	stream := cipher.NewCTR(block, iv)
-	stream.XORKeyStream(plaintext, ciphertext)
-	return rs.AppendMustBytesValue(plaintext)
+	return rs.AppendBytesWithFill(len(ciphertext), func(plaintext []byte) {
+		stream.XORKeyStream(plaintext, ciphertext)
+	})
 }
 
 func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

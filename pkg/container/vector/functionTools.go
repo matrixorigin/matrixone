@@ -880,6 +880,60 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 	return nil
 }
 
+// AppendBytesWithFill appends one non-null varlena value and lets fill write
+// directly into the result Vector's admitted backing storage. The provided
+// slice is valid only during fill. A panic rolls the unpublished row and area
+// length back before propagating.
+func (fr *FunctionResult[T]) AppendBytesWithFill(
+	size int,
+	fill func([]byte),
+) error {
+	if !fr.isVarlena ||
+		fr.vec == nil ||
+		fr.vec.IsConst() ||
+		size < 0 ||
+		fill == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	oldAreaLen := len(fr.vec.area)
+	if uint64(oldAreaLen)+uint64(size) > uint64(math.MaxUint32) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	areaSize := size
+	if size <= types.VarlenaInlineSize {
+		areaSize = 0
+	}
+	if err := fr.vec.PreExtendWithArea(1, areaSize, fr.mp); err != nil {
+		return err
+	}
+
+	index := fr.vec.length
+	values := toSliceOfLengthNoTypeCheck[types.Varlena](fr.vec, index+1)
+	oldValue := values[index]
+	values[index] = types.Varlena{}
+	var target []byte
+	if size <= types.VarlenaInlineSize {
+		values[index][0] = byte(size)
+		target = values[index][1 : 1+size]
+	} else {
+		fr.vec.area = fr.vec.area[:oldAreaLen+size]
+		values[index].SetOffsetLen(uint32(oldAreaLen), uint32(size))
+		target = fr.vec.area[oldAreaLen:]
+	}
+
+	published := false
+	defer func() {
+		if !published {
+			fr.vec.area = fr.vec.area[:oldAreaLen]
+			values[index] = oldValue
+		}
+	}()
+	fill(target)
+	fr.vec.length++
+	published = true
+	return nil
+}
+
 func (fr *FunctionResult[T]) AppendByteJson(bj bytejson.ByteJson, isnull bool) error {
 	if !fr.vec.IsConst() {
 		return AppendByteJson(fr.vec, bj, isnull, fr.mp)
