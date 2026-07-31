@@ -16,7 +16,6 @@ package process
 
 import (
 	"context"
-	"errors"
 	"math"
 	"sync"
 
@@ -30,9 +29,9 @@ const (
 )
 
 var (
-	ErrCTEMemoryBudgetClosed        = errors.New("recursive CTE memory budget is closed")
-	ErrCTEMemoryBudgetInvalid       = errors.New("invalid recursive CTE memory budget accounting")
-	ErrCTEMemoryReservationInactive = errors.New("recursive CTE memory reservation is inactive")
+	ErrCTEMemoryBudgetClosed        = moerr.NewInternalErrorNoCtx("recursive CTE memory budget is closed")
+	ErrCTEMemoryBudgetInvalid       = moerr.NewInternalErrorNoCtx("invalid recursive CTE memory budget accounting")
+	ErrCTEMemoryReservationInactive = moerr.NewInternalErrorNoCtx("recursive CTE memory reservation is inactive")
 )
 
 // CTEMemoryBudget is a statement-generation budget shared by every child
