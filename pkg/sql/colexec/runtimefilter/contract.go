@@ -25,10 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,9 +38,8 @@ import (
 func ExactKeyEncoding(
 	spec *plan.RuntimeFilterSpec,
 	payloadType types.Type,
-	service string,
 ) keycodec.ExactRuntimeFilterEncoding {
-	return ExactKeyEncodingWithComponents(spec, payloadType, nil, service)
+	return ExactKeyEncodingWithComponents(spec, payloadType, nil)
 }
 
 // ExactKeyEncodingWithComponents additionally validates the materialized
@@ -53,7 +50,6 @@ func ExactKeyEncodingWithComponents(
 	spec *plan.RuntimeFilterSpec,
 	payloadType types.Type,
 	componentPayloadTypes []types.Type,
-	service string,
 ) keycodec.ExactRuntimeFilterEncoding {
 	buildExpr := BuildKeyExpr(spec)
 	if buildExpr == nil ||
@@ -84,15 +80,13 @@ func ExactKeyEncodingWithComponents(
 		if buildExpr.GetCol() == nil || buildExpr.GetCol().ColPos < 0 ||
 			len(spec.KeyComponentProbeTypes) != 0 ||
 			len(componentPayloadTypes) != 0 ||
-			spec.MatchPrefix ||
-			!localProtocolEnablesVersionedExactKeyContract(service) {
+			spec.MatchPrefix {
 			return keycodec.ExactRuntimeFilterUnsupported
 		}
 		advertised = keycodec.ExactRuntimeFilterFloatZeroClosed
 	case plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_V1,
 		plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1:
-		if !localProtocolEnablesVersionedExactKeyContract(service) ||
-			types.T(spec.ProbeType.Id) != types.T_varchar ||
+		if types.T(spec.ProbeType.Id) != types.T_varchar ||
 			types.T(buildExpr.Typ.Id) != types.T_varchar ||
 			payloadType.Oid != types.T_varchar ||
 			!validateTupleEncodingComponents(spec, componentPayloadTypes) {
@@ -129,9 +123,9 @@ func ExactKeyEncodingWithComponents(
 }
 
 // BuildKeyExpr returns the producer expression only for a versioned layout.
-// RAW_V1 may also carry an identical legacy Expr so older producers retain
-// raw-safe filters during rolling upgrade. Transforming encodings keep Expr
-// nil so an older producer takes its established PASS path.
+// Below the rollout gate, RAW_V1 may also carry an identical legacy Expr so
+// older producers retain raw-safe filters. Versioned steady-state and
+// transforming encodings keep Expr nil.
 func BuildKeyExpr(spec *plan.RuntimeFilterSpec) *plan.Expr {
 	if spec == nil || spec.BuildExpr == nil ||
 		spec.KeyEncoding ==
@@ -216,21 +210,6 @@ func validateTupleEncodingComponents(
 
 func planType(typ plan.Type) types.Type {
 	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
-}
-
-// localProtocolEnablesVersionedExactKeyContract reads only this service's
-// deployment-controlled rollout gate. It is not peer capability discovery.
-func localProtocolEnablesVersionedExactKeyContract(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion7
 }
 
 // CloseFloatSignedZero appends the complementary representation when an exact

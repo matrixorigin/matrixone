@@ -642,7 +642,6 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 			runtimefilter.ExactKeyEncoding(
 				restoredOp.RuntimeFilterSpec,
 				types.New(types.T_decimal64, 18, 2),
-				"",
 			))
 	})
 

@@ -141,7 +141,6 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 		ctr.runtimeFilterUsable = runtimefilter.ExactKeyEncoding(
 			fuzzyFilter.RuntimeFilterSpec,
 			pkType,
-			proc.GetService(),
 		) != keycodec.ExactRuntimeFilterUnsupported
 	}
 	if ctr.runtimeFilterUsable {
@@ -375,7 +374,6 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	encoding := runtimefilter.ExactKeyEncoding(
 		fuzzyFilter.RuntimeFilterSpec,
 		*ctr.pass2RuntimeFilter.GetType(),
-		proc.GetService(),
 	)
 	if encoding == keycodec.ExactRuntimeFilterUnsupported {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
@@ -472,7 +470,6 @@ func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(
 		if runtimefilter.ExactKeyEncoding(
 			fuzzyFilter.RuntimeFilterSpec,
 			*v.GetType(),
-			proc.GetService(),
 		) == keycodec.ExactRuntimeFilterUnsupported {
 			fuzzyFilter.abandonRuntimeFilter(proc)
 			return nil

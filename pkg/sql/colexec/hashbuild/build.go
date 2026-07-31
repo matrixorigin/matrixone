@@ -631,8 +631,7 @@ func (hashBuild *HashBuild) declaredRuntimeFilterEncoding(
 		if !ok {
 			return keycodec.ExactRuntimeFilterUnsupported, false
 		}
-		return runtimefilter.ExactKeyEncoding(
-			spec, payloadType, proc.GetService()), true
+		return runtimefilter.ExactKeyEncoding(spec, payloadType), true
 	}
 
 	slots, ok := runtimeFilterComponentSlots(spec)
@@ -654,7 +653,7 @@ func (hashBuild *HashBuild) declaredRuntimeFilterEncoding(
 		return keycodec.ExactRuntimeFilterUnsupported, false
 	}
 	return runtimefilter.ExactKeyEncodingWithComponents(
-		spec, payloadType, componentTypes, proc.GetService()), true
+		spec, payloadType, componentTypes), true
 }
 
 // materializedRuntimeFilterComponents resolves the tuple arguments against the
@@ -806,7 +805,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 
 	keyVec := ctr.hashmapBuilder.UniqueJoinKeys[keySlot]
 	keyType := keyVec.GetType()
-	encoding := runtimefilter.ExactKeyEncoding(spec, *keyType, proc.GetService())
+	encoding := runtimefilter.ExactKeyEncoding(spec, *keyType)
 	if encoding == keycodec.ExactRuntimeFilterUnsupported {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
@@ -893,7 +892,6 @@ func (hashBuild *HashBuild) handleSerializedRuntimeFilter(
 		spec,
 		declaredPayloadType,
 		componentTypes,
-		proc.GetService(),
 	) != keycodec.ExactRuntimeFilterRaw {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
@@ -1065,7 +1063,6 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 		spec,
 		*payload.GetType(),
 		componentTypes,
-		proc.GetService(),
 	) != keycodec.ExactRuntimeFilterRaw {
 		return nil, nil, 0, false, nil
 	}

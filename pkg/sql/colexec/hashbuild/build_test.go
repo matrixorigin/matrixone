@@ -1052,14 +1052,12 @@ func TestExactRuntimeFilterEncodingContract(t *testing.T) {
 		buildType types.Type
 		payload   types.Type
 		encoding  plan.RuntimeFilterKeyEncoding
-		protocol  int64
 		want      keycodec.ExactRuntimeFilterEncoding
 	}{
 		{
 			name:      "legacy default has no pair contract",
 			buildType: decimal3,
 			payload:   decimal3,
-			protocol:  defines.MORPCVersion7,
 		},
 		{
 			name:      "stale probe scale differs from matching spec and payload",
@@ -1067,7 +1065,6 @@ func TestExactRuntimeFilterEncodingContract(t *testing.T) {
 			buildType: decimal3,
 			payload:   decimal3,
 			encoding:  plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
-			protocol:  defines.MORPCVersion7,
 		},
 		{
 			name:      "materialized payload drifts from declared build",
@@ -1075,7 +1072,6 @@ func TestExactRuntimeFilterEncodingContract(t *testing.T) {
 			buildType: decimal2,
 			payload:   decimal3,
 			encoding:  plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
-			protocol:  defines.MORPCVersion7,
 		},
 		{
 			name:      "valid explicit decimal raw",
@@ -1083,7 +1079,6 @@ func TestExactRuntimeFilterEncodingContract(t *testing.T) {
 			buildType: decimal3,
 			payload:   decimal3,
 			encoding:  plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
-			protocol:  defines.MORPCVersion7,
 			want:      keycodec.ExactRuntimeFilterRaw,
 		},
 		{
@@ -1092,7 +1087,6 @@ func TestExactRuntimeFilterEncodingContract(t *testing.T) {
 			buildType: decimal3,
 			payload:   decimal3,
 			encoding:  plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
-			protocol:  defines.MORPCVersion7,
 		},
 		{
 			name:      "float cannot underclaim raw",
@@ -1100,7 +1094,6 @@ func TestExactRuntimeFilterEncodingContract(t *testing.T) {
 			buildType: float64Type,
 			payload:   float64Type,
 			encoding:  plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
-			protocol:  defines.MORPCVersion7,
 		},
 		{
 			name:      "scaled float32 remains unsupported",
@@ -1108,48 +1101,26 @@ func TestExactRuntimeFilterEncodingContract(t *testing.T) {
 			buildType: float32Scaled,
 			payload:   float32Scaled,
 			encoding:  plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
-			protocol:  defines.MORPCVersion7,
 		},
 		{
-			name:      "float closure disabled by local v6 gate",
+			name:      "valid explicit float closure",
 			probeType: runtimeFilterPlanType(float64Type),
 			buildType: float64Type,
 			payload:   float64Type,
 			encoding:  plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
-			protocol:  defines.MORPCVersion6,
-		},
-		{
-			name:      "float closure enabled by local v7 gate",
-			probeType: runtimeFilterPlanType(float64Type),
-			buildType: float64Type,
-			payload:   float64Type,
-			encoding:  plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
-			protocol:  defines.MORPCVersion7,
 			want:      keycodec.ExactRuntimeFilterFloatZeroClosed,
 		},
 	}
 
-	service := ""
-	rt := moruntime.ServiceRuntime(service)
-	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.protocol)
 			spec := &plan.RuntimeFilterSpec{
 				BuildExpr:   newExpr(0, test.buildType),
 				KeyEncoding: test.encoding,
 				ProbeType:   test.probeType,
 			}
 			require.Equal(t, test.want,
-				runtimefilter.ExactKeyEncoding(spec, test.payload, service))
+				runtimefilter.ExactKeyEncoding(spec, test.payload))
 		})
 	}
 }

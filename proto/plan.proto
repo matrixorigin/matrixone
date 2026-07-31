@@ -1168,23 +1168,18 @@ message PreInsertCtx {
 // type needed to validate the SQL equality contract at execution.
 enum RuntimeFilterKeyEncoding {
   RUNTIME_FILTER_KEY_UNSPECIFIED = 0;
-  // Wire value 1 was emitted by the previous FLOAT_ZERO_CLOSED contract.
-  // Keep it permanently reserved as a legacy marker.  It predates the
-  // probe/build/payload triangle and therefore always fails open in current
-  // executors.
-  RUNTIME_FILTER_KEY_LEGACY_FLOAT_ZERO_CLOSED = 1 [deprecated = true];
-  RUNTIME_FILTER_KEY_RAW_V1 = 2;
+  RUNTIME_FILTER_KEY_RAW_V1 = 1;
   // The payload contains both physical representations of zero whenever zero
   // is present, so raw Bloom-filter consumers cannot reject a SQL-equal signed
   // zero. A producer which cannot perform that closure must publish PASS.
-  RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1 = 3;
+  RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1 = 2;
   // SERIAL_V1 and SERIAL_FULL_V1 describe the corresponding tuple encoders.
   // Their ordered component contracts are carried in
   // key_component_probe_types. A producer must validate every component
   // before evaluating the encoder; an unrecognized or invalid contract is
   // PASS.
-  RUNTIME_FILTER_KEY_SERIAL_V1 = 4;
-  RUNTIME_FILTER_KEY_SERIAL_FULL_V1 = 5;
+  RUNTIME_FILTER_KEY_SERIAL_V1 = 3;
+  RUNTIME_FILTER_KEY_SERIAL_FULL_V1 = 4;
 }
 
 message RuntimeFilterSpec {
@@ -1203,11 +1198,11 @@ message RuntimeFilterSpec {
   // executors additionally validate the materialized component vectors.
   repeated Type key_component_probe_types = 9 [(gogoproto.nullable) = false];
   // Producer expression for a versioned exact-key contract.
-  // Metadata-independent RAW_V1 may carry an identical legacy expr so
-  // pre-contract executors retain raw-safe filters during rolling upgrade.
-  // Metadata-dependent or transforming encodings deliberately leave legacy
-  // expr unset, making an older producer publish PASS. Probe specs continue to
-  // use expr for scan-side evaluation.
+  // Below the rollout gate, metadata-independent RAW_V1 may also carry an
+  // identical legacy expr so pre-contract executors retain raw-safe filters.
+  // Versioned steady-state, metadata-dependent, and transforming encodings
+  // leave legacy expr unset. Probe specs continue to use expr for scan-side
+  // evaluation.
   Expr build_expr = 10;
 }
 

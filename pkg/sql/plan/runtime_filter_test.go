@@ -317,9 +317,8 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
 			spec.KeyEncoding)
 		require.Equal(t, probeType, *spec.ProbeType)
-		require.NotNil(t, spec.Expr)
+		require.Nil(t, spec.Expr)
 		require.Equal(t, buildType, spec.BuildExpr.Typ)
-		require.True(t, exprStructuralEqual(spec.Expr, spec.BuildExpr))
 	})
 
 	t.Run("float closure follows the deployment rollout gate", func(t *testing.T) {
@@ -403,10 +402,8 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 		_, versioned, ok := builder.makeExactRuntimeFilterPair(
 			1, false, 100, probeExpr, buildExpr, false)
 		require.True(t, ok)
-		require.NotNil(t, versioned.Expr)
+		require.Nil(t, versioned.Expr)
 		require.NotNil(t, versioned.BuildExpr)
-		require.True(t,
-			exprStructuralEqual(versioned.Expr, versioned.BuildExpr))
 
 		rt.SetGlobalVariables(
 			moruntime.MOProtocolVersion, defines.MORPCVersion6)
@@ -416,6 +413,9 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 		require.Equal(t,
 			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
 			loweredGate.KeyEncoding)
+		require.NotNil(t, loweredGate.Expr)
+		require.True(t,
+			exprStructuralEqual(loweredGate.Expr, loweredGate.BuildExpr))
 
 		decimalType := planpb.Type{
 			Id: int32(types.T_decimal64), Width: 18, Scale: 2}
@@ -805,6 +805,7 @@ func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
 		buildSpec := MakeRuntimeFilter(
 			71, false, 100, GetColExpr(typ, 0, 0), false)
 		buildSpec.BuildExpr = DeepCopyExpr(buildSpec.Expr)
+		buildSpec.Expr = nil
 		buildSpec.ProbeType = DeepCopyType(&typ)
 		buildSpec.KeyEncoding =
 			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1
@@ -832,7 +833,7 @@ func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
 	t.Run("malformed pair cannot publish optimistic state", func(t *testing.T) {
 		builder, tableScan, _, fuzzy := newBuilder(100, 100)
 		before := DeepCopyStats(tableScan.Stats)
-		fuzzy.RuntimeFilterBuildList[0].Expr.GetCol().ColPos = 1
+		fuzzy.RuntimeFilterBuildList[0].BuildExpr.GetCol().ColPos = 1
 
 		builder.finalizeFuzzyRuntimeFilter(fuzzy)
 

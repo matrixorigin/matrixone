@@ -235,13 +235,14 @@ func (builder *QueryBuilder) makeExactRuntimeFilterPair(
 	switch encoding {
 	case keycodec.ExactRuntimeFilterRaw:
 		// Metadata-independent RAW_V1 needs no producer-side transformation.
-		// Retain the legacy expression only for those types so an older
-		// HashBuild/IndexBuild can keep its established filter during rolling
-		// upgrade. Metadata-dependent types and types without a legacy consumer
-		// executor (such as ENUM) require the versioned triangle and deliberately
-		// make an older producer PASS.
+		// Below v7, retain an identical legacy expression only for types whose
+		// old producer and consumer contracts are both safe. Once rollout
+		// completes, publish only BuildExpr so compatibility metadata does not
+		// permanently inflate every exact-filter plan.
 		if !keycodec.LegacyExactRawProducerSafe(
 			types.T(buildExpr.Typ.Id),
+		) || localProtocolEnablesVersionedExactKeyContract(
+			builder.compCtx.GetProcess().GetService(),
 		) {
 			buildSpec.Expr = nil
 		}
@@ -295,6 +296,11 @@ func (builder *QueryBuilder) exactRuntimeFilterPairContractValid(
 		if keycodec.LegacyExactRawProducerSafe(
 			types.T(buildSpec.BuildExpr.Typ.Id),
 		) {
+			if localProtocolEnablesVersionedExactKeyContract(
+				builder.compCtx.GetProcess().GetService(),
+			) {
+				return buildSpec.Expr == nil
+			}
 			return buildSpec.Expr != nil &&
 				exprStructuralEqual(buildSpec.Expr, buildSpec.BuildExpr)
 		}

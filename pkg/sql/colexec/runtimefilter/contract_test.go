@@ -19,10 +19,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,19 +36,6 @@ func exactContractPlanType(typ types.Type) *plan.Type {
 }
 
 func TestTupleContractRejectsForgedNonVarcharResult(t *testing.T) {
-	rt := moruntime.ServiceRuntime("")
-	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion7)
-	t.Cleanup(func() {
-		if hadOriginal {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		} else {
-			rt.SetGlobalVariables(
-				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-
 	intType := types.T_int32.ToType()
 	intPlanType := *exactContractPlanType(intType)
 	spec := &plan.RuntimeFilterSpec{
@@ -72,7 +57,7 @@ func TestTupleContractRejectsForgedNonVarcharResult(t *testing.T) {
 
 	require.Equal(t, keycodec.ExactRuntimeFilterUnsupported,
 		ExactKeyEncodingWithComponents(
-			spec, intType, []types.Type{intType}, ""))
+			spec, intType, []types.Type{intType}))
 }
 
 func exactContractCol(typ types.Type) *plan.Expr {
@@ -222,7 +207,7 @@ func TestExactKeyEncodingRejectsUnprovableWireContracts(t *testing.T) {
 			require.NoError(t, decoded.Unmarshal(wire))
 			require.Equal(t, test.spec.KeyEncoding, decoded.KeyEncoding)
 			require.Equal(t, test.want,
-				ExactKeyEncoding(decoded, test.payloadType, ""))
+				ExactKeyEncoding(decoded, test.payloadType))
 		})
 	}
 }

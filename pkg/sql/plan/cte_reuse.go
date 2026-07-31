@@ -217,9 +217,9 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 			}
 			if filter.Expr != nil && filter.BuildExpr != nil &&
 				!exprStructuralEqual(filter.Expr, filter.BuildExpr) {
-				// Metadata-independent RAW_V1 deliberately carries the same
-				// expression in both fields for rolling upgrade. Only a
-				// divergent dual layout is contradictory.
+				// During rollout, metadata-independent RAW_V1 can carry the
+				// same expression in both fields. Only a divergent dual layout
+				// is contradictory.
 				return false
 			}
 			if filter.Expr != nil &&

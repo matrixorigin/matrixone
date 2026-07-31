@@ -60,7 +60,7 @@ func (indexBuild *IndexBuild) Prepare(proc *process.Process) (err error) {
 			buildExpr.Typ.Scale,
 		)
 		ctr.runtimeFilterUsable = runtimefilter.ExactKeyEncoding(
-			spec, declaredType, proc.GetService()) != keycodec.ExactRuntimeFilterUnsupported
+			spec, declaredType) != keycodec.ExactRuntimeFilterUnsupported
 	}
 	return nil
 }
@@ -154,7 +154,6 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 			runtimefilter.ExactKeyEncoding(
 				indexBuild.RuntimeFilterSpec,
 				*result.Batch.Vecs[0].GetType(),
-				proc.GetService(),
 			) == keycodec.ExactRuntimeFilterUnsupported {
 			ctr.abandonRuntimeFilter(proc)
 			return nil
@@ -266,7 +265,7 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 		vec = flat
 	}
 	encoding := runtimefilter.ExactKeyEncoding(
-		ap.RuntimeFilterSpec, *vec.GetType(), proc.GetService())
+		ap.RuntimeFilterSpec, *vec.GetType())
 	if encoding == keycodec.ExactRuntimeFilterUnsupported {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		message.SendRuntimeFilter(runtimeFilter, ap.RuntimeFilterSpec, proc.GetMessageBoard())
