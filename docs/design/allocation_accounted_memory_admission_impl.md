@@ -6,12 +6,14 @@
 - Architecture:
   [Allocation-Accounted Memory Admission RFC](../rfcs/00000000_allocation_accounted_memory_admission.md)
 - Baseline at plan creation: `main` at `38ce3a774`
-- Rebased implementation baseline: `main` at `5b9eeb54ec`
+- Rebased implementation baseline: `main` at `a9c13b02d8`
 - Allocation-site closure baseline (PR 3): `f61b64d56c`
 - Lifecycle/activation heads (PRs 4--10): `8633757dc1`, `5ae8eca00a`,
   `8e4b689f45`, `c9ad0ea810`, `e072568998`, `eec23dcdc5`, and
   `383fc6dce3`
-- Owner-atomic activation and final cleanup: `656e254fe6`
+- Owner-atomic activation and cleanup: `656e254fe6`
+- Post-activation ownership closure: `73d20085c0`, `3f10c23f21`, and
+  `91839ea91f`
 - Merged prerequisite: #26455 at `93e8b22d2`
 - Independent design review: completed against RFC commit `a7d54cb5f`
 - Activation status: enabled for the closed HashBuild expression owner set.
@@ -104,6 +106,7 @@ working ledger is allocation-site based:
 | `Vector.data` | MPool; capacity from `Grow`, on/off-heap follows `v.offHeap` | owning `Vector.Free` | A | activated HashBuild destinations use immutable off-heap provenance |
 | `Vector.area` | MPool; independent varlen payload capacity | owning `Vector.Free` | A | activated HashBuild destinations use immutable off-heap provenance |
 | `Vector.nsp/gsp` bitmap data | allocation-accounted off-heap `[]uint64`; independent geometric capacity, paired replacement admission | owning `Vector.Free`; `Reset` retains and clears only published words | A | selected HashBuild vectors and expression results are active |
+| ordered/masked Vector filtering | old bitmap backing is remapped in place; arbitrary row reordering uses allocation-accounted scratch admitted before publication | owning `Vector.Free`; scratch ends at `Shuffle` return | A | rejection leaves the old Vector and bitmap owners unchanged |
 | `FunctionResult.vec` data/area | off-heap Vector; rows and appended payload | executor `Free` | A | active for the closed HashBuild expression set |
 | `FunctionResult.convenientParam` | Go slice; expression arity, not rows | executor `Free`/reuse | H | bounded by plan expression arity, not input rows or payload |
 | decimal parameter conversion | retained allocation-accounted off-heap buffer; `rows*sizeof(Decimal128)` for decimal64/float32/float64 promotion | `FunctionResult.Free`; Reset/evaluation reuse capacity | A | active when present in a closed expression owner |
@@ -171,6 +174,16 @@ admits both bitmap replacements before either publishes, raw unadmitted bitmap
 growth fails instead of escaping to the Go heap, Reset retains capacity while
 clearing only represented words, copy/reader decode fills admitted backing
 directly, and Free is the one terminal release owner.
+
+Post-activation filtering closes the corresponding mutation boundary. Ordered
+filters remap null/group bitmaps in place, while arbitrary permutations admit
+the replacement scratch against the same immutable allocation owner before
+publication. `ShuffleWithBuf` cannot fall back to an unaccounted Go slice for
+an accounted Vector. Aggregate compactors such as `maxby` preserve the same
+selection while rewriting retained state. Generic `CopyBatch` is instead an
+explicit ownership exit: it creates a compact clone owned by the destination
+MPool and does not leak a statement-generation account into transaction or
+bootstrap lifetime.
 
 ## 3. Decisions required before production integration
 
@@ -1067,10 +1080,14 @@ Required proof:
 Current validation status:
 
 - the complete affected package matrix passes after rebasing on
-  `5b9eeb54ec`;
+  `a9c13b02d8`;
 - the complete affected package matrix, the same matrix under `-race`, a
   20-iteration focused lifecycle/pressure race stress, affected-package vet,
-  and `make build` pass at `656e254fe6`;
+  `make static-check`, and `make build` pass through `91839ea91f`;
+- accounted ordered/masked filtering, arbitrary shuffle rollback, `maxby`
+  retained-state compaction, generic `CopyBatch` ownership exit, CN bootstrap,
+  cross-package spill fixtures, and owner finalization-before-release have
+  dedicated regressions;
 - local regression tests cover the five incident mechanisms without an
   estimator-only rejection on the activated owner;
 - TPCH 100G/1T candidate-versus-main runs remain the remote workload gate and
