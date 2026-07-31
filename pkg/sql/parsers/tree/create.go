@@ -2638,11 +2638,15 @@ func NewFullTextIndex(k []*KeyPart, n string, e bool, io *IndexOption) *FullText
 
 type CheckIndex struct {
 	tableDefImpl
-	Expr     Expr
-	Enforced bool
+	Expr             Expr
+	Enforced         bool
+	ConstraintSymbol string
 }
 
 func (node *CheckIndex) Format(ctx *FmtCtx) {
+	if node.ConstraintSymbol != "" {
+		ctx.WriteString("constraint " + node.ConstraintSymbol + " ")
+	}
 	ctx.WriteString("check (")
 	node.Expr.Format(ctx)
 	ctx.WriteByte(')')

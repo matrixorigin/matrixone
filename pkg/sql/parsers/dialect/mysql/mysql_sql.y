@@ -11118,7 +11118,6 @@ index_def:
             IndexOption,
         )
     }
-
 constaint_def:
     constraint_keyword constraint_elem
     {
@@ -11130,6 +11129,7 @@ constaint_def:
                 v.ConstraintSymbol = $1
             case *tree.UniqueIndex:
                 v.ConstraintSymbol = $1
+            case *tree.CheckIndex: v.ConstraintSymbol = $1
             }
         }
         $$ = $2
@@ -11219,9 +11219,9 @@ constraint_elem:
 
 enforce_opt:
     {
-        $$ = false
+        $$ = true
     }
-|    enforce
+|   enforce
 
 key_or_index_opt:
     {
@@ -11429,7 +11429,7 @@ column_attribute_elem:
     }
 |   constraint_keyword_opt CHECK '(' expression ')'
     {
-        $$ = tree.NewAttributeCheckConstraint($4, false, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, true, $1)
     }
 |   constraint_keyword_opt CHECK '(' expression ')' enforce
     {

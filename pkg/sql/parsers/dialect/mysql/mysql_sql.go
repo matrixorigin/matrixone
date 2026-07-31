@@ -27545,7 +27545,7 @@ yydefault:
 	case 1661:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		var yyLOCAL tree.TableDef
-//line mysql_sql.y:11124
+//line mysql_sql.y:11123
 		{
 			if yyDollar[1].str != "" {
 				switch v := yyDollar[2].tableDefUnion().(type) {
@@ -27554,6 +27554,8 @@ yydefault:
 				case *tree.ForeignKey:
 					v.ConstraintSymbol = yyDollar[1].str
 				case *tree.UniqueIndex:
+					v.ConstraintSymbol = yyDollar[1].str
+				case *tree.CheckIndex:
 					v.ConstraintSymbol = yyDollar[1].str
 				}
 			}
@@ -27673,7 +27675,7 @@ yydefault:
 		var yyLOCAL bool
 //line mysql_sql.y:11221
 		{
-			yyLOCAL = false
+			yyLOCAL = true
 		}
 		yyVAL.union = yyLOCAL
 	case 1671:
@@ -27990,7 +27992,7 @@ yydefault:
 		var yyLOCAL tree.ColumnAttribute
 //line mysql_sql.y:11431
 		{
-			yyLOCAL = tree.NewAttributeCheckConstraint(yyDollar[4].exprUnion(), false, yyDollar[1].str)
+			yyLOCAL = tree.NewAttributeCheckConstraint(yyDollar[4].exprUnion(), true, yyDollar[1].str)
 		}
 		yyVAL.union = yyLOCAL
 	case 1725:

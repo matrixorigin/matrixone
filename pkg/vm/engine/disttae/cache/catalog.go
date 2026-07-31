@@ -955,6 +955,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		FeatureFlag:    tblItem.ExtraInfo.GetFeatureFlag(),
 		AutoIncrOffset: tblItem.ExtraInfo.GetAutoIncrOffset(),
 		AutoIncrEpoch:  tblItem.ExtraInfo.GetAutoIncrEpoch(),
+		Checks:         tblItem.ExtraInfo.GetChecks(),
 		LogicalId:      tblItem.LogicalId,
 	}, tableDef
 }
