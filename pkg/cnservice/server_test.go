@@ -17,10 +17,12 @@ package cnservice
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
@@ -541,6 +544,106 @@ func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
 			}
 		},
 	)
+}
+
+func TestPipelineAdmissionRejectsRequestAlreadyReadDuringClose(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(moruntime.Runtime) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		addr := listener.Addr().String()
+		require.NoError(t, listener.Close())
+
+		requestEntered := make(chan struct{})
+		allowAdmission := make(chan struct{})
+		requestHandled := make(chan struct{}, 1)
+		s := &service{}
+		require.True(t, s.admitPipelineHandler())
+		s.pipelines.wg.Done()
+		s.pipelines.beforeAdmission = func() {
+			close(requestEntered)
+			<-allowAdmission
+		}
+		s.requestHandler = func(
+			context.Context,
+			string,
+			morpc.Message,
+			morpc.ClientSession,
+			engine.Engine,
+			fileservice.FileService,
+			lockservice.LockService,
+			qclient.QueryClient,
+			logservice.CNHAKeeperClient,
+			udf.Service,
+			client.TxnClient,
+			*defines.AutoIncrCacheManager,
+			func() morpc.Message,
+		) error {
+			requestHandled <- struct{}{}
+			return nil
+		}
+
+		rpcServer, err := morpc.NewRPCServer(
+			"test-pipeline-admission",
+			addr,
+			morpc.NewMessageCodec(t.Name(), func() morpc.Message {
+				return cnclient.AcquireMessage()
+			}),
+			morpc.WithServerGoettyOptions(
+				goetty.WithSessionReleaseMsgFunc(func(v any) {
+					message := v.(morpc.RPCMessage)
+					if !message.InternalMessage() {
+						cnclient.ReleaseMessage(message.Message.(*pipeline.Message))
+					}
+				}),
+			),
+		)
+		require.NoError(t, err)
+		rpcServer.RegisterRequestHandler(s.handleRequest)
+		require.NoError(t, rpcServer.Start())
+
+		pipelineClient, err := cnclient.NewPipelineClient(t.Name(), "", &cnclient.PipelineConfig{})
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, pipelineClient.Close())
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		stream, err := pipelineClient.NewStream(ctx, addr)
+		require.NoError(t, err)
+		receiveC, err := stream.Receive()
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, stream.Close(true))
+		}()
+
+		message := &pipeline.Message{
+			Id:  stream.ID(),
+			Sid: pipeline.Status_Last,
+		}
+		require.NoError(t, stream.Send(ctx, message))
+		select {
+		case <-requestEntered:
+		case <-ctx.Done():
+			t.Fatal("RPC request did not reach the pre-admission hook")
+		}
+
+		require.NoError(t, s.closePipelineAdmission())
+		require.NoError(t, rpcServer.Close())
+		require.NoError(t, s.waitPipelineHandlers())
+		close(allowAdmission)
+
+		select {
+		case response := <-receiveC:
+			require.Nil(t, response)
+		case <-ctx.Done():
+			t.Fatal("RPC session did not terminate after admission rejected the request")
+		}
+		select {
+		case <-requestHandled:
+			t.Fatal("request entered pipeline execution after admission was closed")
+		default:
+		}
+	})
 }
 
 func Test_tenant(t *testing.T) {

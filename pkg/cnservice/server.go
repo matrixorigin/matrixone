@@ -424,6 +424,7 @@ func (s *service) Close() error {
 		// MongoScan operator.
 		s.stopTask,
 		s.closeMongoDBRuntime,
+		s.closePipelineAdmission,
 		s.server.Close,
 		s.stopRPCs,
 		s.waitPipelineHandlers,
@@ -454,6 +455,23 @@ func (s *service) Close() error {
 			return nil
 		},
 	)
+}
+
+func (s *service) closePipelineAdmission() error {
+	s.pipelines.mu.Lock()
+	s.pipelines.closing = true
+	s.pipelines.mu.Unlock()
+	return nil
+}
+
+func (s *service) admitPipelineHandler() bool {
+	s.pipelines.mu.Lock()
+	defer s.pipelines.mu.Unlock()
+	if s.pipelines.closing {
+		return false
+	}
+	s.pipelines.wg.Add(1)
+	return true
 }
 
 func (s *service) waitPipelineHandlers() error {
@@ -595,6 +613,18 @@ func (s *service) handleRequest(
 	value morpc.RPCMessage,
 	_ uint64,
 	cs morpc.ClientSession) error {
+	if s.pipelines.beforeAdmission != nil {
+		s.pipelines.beforeAdmission()
+	}
+	if !s.admitPipelineHandler() {
+		return moerr.NewServiceUnavailableNoCtx("CN pipeline service is closing")
+	}
+	owned := true
+	defer func() {
+		if owned {
+			s.pipelines.wg.Done()
+		}
+	}()
 
 	// the following comment is not related to my PR, but I suddenly saw this piece of code.
 	// so I wrote it, hoping it can help future developers understand what this is doing.
@@ -619,10 +649,8 @@ func (s *service) handleRequest(
 		}
 	}
 
-	// Register ownership before publishing the goroutine. Close first stops the
-	// RPC server, so no Add can race with the subsequent Wait.
-	s.pipelines.wg.Add(1)
 	// start a goroutine to handle one received message.
+	owned = false
 	go func() {
 		defer s.pipelines.wg.Done()
 		defer value.Cancel()

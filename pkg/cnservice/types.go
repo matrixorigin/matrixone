@@ -699,6 +699,10 @@ type service struct {
 		counter atomic.Int64
 		client  cnclient.PipelineClient
 		wg      sync.WaitGroup
+		mu      sync.Mutex
+		closing bool
+
+		beforeAdmission func()
 	}
 
 	CNMemoryThrottler rscthrottler.RSCThrottler
