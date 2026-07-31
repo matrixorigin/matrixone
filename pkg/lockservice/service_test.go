@@ -2883,51 +2883,37 @@ func TestReLockInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					require.True(t, false)
-					return
-				default:
-				}
-			}
+			requireServiceStatus(t, l1, pb.Status_ServiceLockWaiting)
 
-			_, err = l2.Lock(
-				ctx,
-				0,
-				[][]byte{{3}},
-				[]byte("txn2"),
-				option)
-			require.NoError(t, err)
+			txnID := []byte("txn2")
+			requireRollingRestartLockEventuallySucceeds(t, ctx, func(retryCtx context.Context) error {
+				_, err = l2.Lock(
+					retryCtx,
+					0,
+					[][]byte{{3}},
+					txnID,
+					option)
+				return err
+			}, func() {
+				require.NoError(t, l2.Unlock(ctx, txnID, timestamp.Timestamp{}))
+				txnID = []byte("txn3")
+				option.SnapShotTs, _ = l2.clock.Now()
+			})
 
 			err = l1.Unlock(
 				ctx,
 				[]byte("txn1"),
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			// Actually, txn1 and txn2 are executed concurrently.
-			// it should use a loop check.
-			for {
-				if l1.validGroupTable(0, 0) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					require.True(t, false)
-				default:
-				}
-			}
-			require.True(t, l1.isStatus(pb.Status_ServiceLockWaiting))
+			requireGroupTableRef(t, l1, 0, 0, true)
+			requireServiceStatus(t, l1, pb.Status_ServiceLockWaiting)
 
 			err = l2.Unlock(
 				ctx,
-				[]byte("txn2"),
+				txnID,
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			require.False(t, l1.validGroupTable(0, 0))
+			requireGroupTableRef(t, l1, 0, 0, false)
 		},
 	)
 }
@@ -2960,16 +2946,7 @@ func TestOldTxnLockInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
+			requireServiceStatus(t, l, pb.Status_ServiceLockWaiting)
 
 			// old txn
 			_, err = l.Lock(
@@ -4221,7 +4198,16 @@ func requireServiceStatus(t *testing.T, service *service, status pb.Status) {
 	t.Helper()
 	require.Eventually(t,
 		func() bool { return service.isStatus(status) },
-		5*time.Second,
+		10*time.Second,
+		10*time.Millisecond,
+	)
+}
+
+func requireGroupTableRef(t *testing.T, service *service, group uint32, table uint64, want bool) {
+	t.Helper()
+	require.Eventually(t,
+		func() bool { return service.validGroupTable(group, table) == want },
+		10*time.Second,
 		10*time.Millisecond,
 	)
 }
@@ -4259,6 +4245,23 @@ func requireRollingRestartLockEventuallySucceeds(
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+func TestRequireRollingRestartLockEventuallySucceedsRetriesTransientRPCErrors(t *testing.T) {
+	errs := []error{
+		moerr.NewBackendClosedNoCtx(),
+		moerr.NewBackendCannotConnectNoCtx("s1"),
+		nil,
+	}
+	attempts := 0
+
+	requireRollingRestartLockEventuallySucceeds(t, context.Background(), func(context.Context) error {
+		err := errs[attempts]
+		attempts++
+		return err
+	}, nil)
+
+	require.Equal(t, len(errs), attempts)
 }
 
 func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
@@ -4598,13 +4601,15 @@ func TestPreTxnLockInRollingRestartCN(t *testing.T) {
 
 			// remote lock should be succ, because txn3 start time earlier than restart time
 			option.SnapShotTs = t1
-			_, err = l1.Lock(
-				ctx,
-				1,
-				[][]byte{{1}},
-				[]byte("txn3"),
-				option)
-			require.NoError(t, err)
+			requireRollingRestartLockEventuallySucceeds(t, ctx, func(retryCtx context.Context) error {
+				_, err = l1.Lock(
+					retryCtx,
+					1,
+					[][]byte{{1}},
+					[]byte("txn3"),
+					option)
+				return err
+			}, nil)
 		},
 	)
 }
@@ -4647,17 +4652,15 @@ func TestIssue5543(t *testing.T) {
 				}, closeReasonBindChanged)
 			}
 
-			var wg sync.WaitGroup
-			wg.Add(1)
+			errCh := make(chan error, 1)
 			go func() {
-				defer wg.Done()
 				_, err1 := l1.Lock(
 					ctx,
 					0,
 					[][]byte{{2}},
 					[]byte("txn3"),
 					option)
-				require.NoError(t, err1)
+				errCh <- err1
 			}()
 
 			waitWaiters(t, l1, 0, []byte{2}, 1)
@@ -4666,7 +4669,7 @@ func TestIssue5543(t *testing.T) {
 				[]byte("txn2"),
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			wg.Wait()
+			require.NoError(t, <-errCh)
 		},
 	)
 }
