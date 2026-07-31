@@ -108,13 +108,13 @@ working ledger is allocation-site based:
 | hash-table `ResizePlan` and callback | fixed-size Go values/closures, one per table/resize | resize return / hash map Free | L | H; remove legacy reservation owner after cell activation |
 | `GroupSels.{tmp,vals,offsets}` | on-heap `mpool.MakeSlice(..., false)`; O(build rows/groups) | builder or `JoinMap.FreeMemory` | L | switch off-heap; blocks auxiliary/copied-batch activation |
 | copied build-batch vector buffers | MPool Vector data/area | builder or `JoinMap.FreeMemory` | L | A after per-buffer provenance |
-| spill marshal/coalesce buffers | Go `bytes.Buffer`; O(serialized batch), retained by phase | spill cleanup | L | off-heap writer; blocks spill activation |
+| spill marshal/coalesce buffers | allocation-accounted off-heap streaming buffers; exact serialized size and bounded 64 KiB per-bucket coalesce capacity | spill phase cleanup | D | A after spill ledger closure |
 | spill hash values | allocation-accounted off-heap `[]uint64`; geometric capacity, `8*cap` | spill phase cleanup | D | A after spill ledger closure |
 | spill row IDs | allocation-accounted off-heap `[]int32`; geometric capacity, `4*cap` | spill phase cleanup | D | A after spill ledger closure |
 | spill counts/offsets/positions | Go `[]int32`; O(bucket count), bucket count finite | spill cleanup | L | H after bound is asserted |
 | selected spill bucket vectors | allocation-accounted off-heap Vector capacities | per-call selected-batch cleanup | D | A after spill ledger closure |
 | BucketReader decoded vectors | allocation-accounted MPool Vector data/area | reusable batch cleanup / `BucketReader.Close` | D | A after spill ledger closure |
-| `pSpool` cached Vector data/area | raw MPool slices retained and reassigned independently of their Vector | `spoolBuffer.clean` or the receiving Vector's `Free` | L | persist generation/selection provenance for a missing data or area allocation; blocks pipeline activation |
+| `pSpool` cached Vector data/area | provenance-bearing detached MPool buffers; accounted data/area sites cannot cross and legacy buffers keep a guarded fast path | `spoolBuffer.clean` or the receiving Vector's `Free` | D | A with the pipeline owner activation |
 | runtime-filter serialized payload | Go buffer/message payload; O(filter rows) | message release | L | off-heap or PASS degradation; blocks runtime-filter activation |
 | spill disk and FD | disk/FD ledgers | file removal/close | A | A |
 
@@ -128,11 +128,13 @@ scratch” can declare closure.
 Batch destination propagation is now `D`: Clone, Dup, selected-column copy,
 Union destinations, windows, reader decode, Clean, and FreeColumns preserve
 the immutable destination selection without creating a synthetic batch-level
-charge. `pSpool` is deliberately still `L`; its raw buffer cache can retain an
-allocation after detaching it from a Vector, so merely copying the Batch
-selection would disagree with the original account still recorded in the
-MPool lease. `Vector.SetTypeAndFixData` also remains a PR 3 closure blocker
-because its legacy API cannot currently return a failed growth admission.
+charge. `pSpool` now transfers a detached buffer together with its immutable
+selection and data/area site, reuses it only for the same provenance, and
+returns every cache ID on construction failure. Its allocation-unaccounted
+production path retains the old raw-slice representation behind guards that
+reject an accounted Vector. `Vector.SetTypeAndFixData` now returns a failed
+growth admission and rolls type and length back without losing the original
+backing.
 
 ## 3. Decisions required before production integration
 
@@ -579,8 +581,11 @@ Gate:
 - all migrated rows become `D`; production rows remain `L`.
 
 The current dormant PR 3 candidate is
-`feature/26459-expression-propagation` at expression commit `03296c5246` and
-spill commit `0b4a7b5bb5`, stacked on PR 2 commit `dbfee20ecc`.
+`feature/26459-expression-propagation` at commit `1f82b218c2`, stacked on PR 2
+commit `dbfee20ecc`. Its closure commits are `03296c5246` (expressions),
+`0b4a7b5bb5` (spill vectors/scratch), `a0754a6beb` (streaming buffers),
+`9f88a0e83e` (spill serialization), and `1f82b218c2` (spool/type-change
+ownership).
 
 Its propagation call chains are:
 
@@ -594,7 +599,13 @@ NewExpressionExecutorWithAllocation
 NewSpillEngineWithAllocation
   -> BucketReader decoded/reused Batch selection
   -> scatter hash/row typed slices and selected Batch selection
+  -> exact streaming record and optional coalesce buffers
   -> MPool AllocAccounted/Grow/Free
+
+Pipeline spool accounted copy
+  -> detach Vector data/area with immutable provenance
+  -> cache only by matching selection and data/area site
+  -> attach to the next owning Vector or free at spool cleanup
 ```
 
 The candidate adds no production caller of either dormant constructor and
@@ -607,6 +618,21 @@ the accounted path; the old and replacement capacities are simultaneously
 charged until publication, and terminal cleanup frees a zero-length view by
 its retained capacity.
 
+The spill record path now streams Bitmap, Nulls, Vector, and Batch wire formats
+directly into one allocation-accounted off-heap buffer. It computes the exact
+wire size before admission, retains one record buffer for the phase, bounds
+each bucket's coalesce buffer at 64 KiB, and degrades optional coalescing to a
+direct write when payload or metadata capacity rejects it. Wire round trips,
+legacy byte equivalence, retained-buffer reuse, coalesce fallback, write
+failure, and phase cleanup are covered.
+
+The pipeline spool now preserves Batch and Vector selection through cached
+copies, keeps data and area allocation sites distinct, refuses cross-account
+reuse, returns the cache slot after allocation failure, and fixes a legacy
+non-last cache removal that previously dropped a still-owned buffer
+descriptor. `SetTypeAndFixData` publishes a fixed-width type change only after
+growth succeeds and propagates its error through all four callers.
+
 The first syntax inventory over non-test expression/builtin and spill sources
 found 484 candidate lines. Because one line can match more than one category,
 the overlapping counts are 233 `make([]...)`, 205 capacity-growing or
@@ -617,29 +643,34 @@ in the ledger above. Activation remains blocked by:
 
 - Vector null/group bitmap backing;
 - decimal parameter conversion slices;
-- spill marshal and coalesce `bytes.Buffer` backing;
 - data-scaled function-specific Go-heap scratch identified by the remaining
-  built-in scan;
-- `pSpool` raw-buffer provenance and `Vector.SetTypeAndFixData`.
+  built-in scan.
 
 Fresh local validation on linux/amd64 with CGO and the repository-built
 third-party artifacts passes:
 
 - complete normal tests for MPool, Vector, Batch, SQL util, expression,
-  spillutil, HashBuild, HashJoin, DedupJoin, RightDedupJoin, and Process;
+  pSpool, spillutil, HashBuild, HashJoin, DedupJoin, RightDedupJoin,
+  Connector, Dispatch, Function, and Process;
 - build and vet for the same package closure;
 - exact `-race -count=100` runs for every new test plus directly affected flow
   control, BucketReader merge, scatter lifecycle, and re-spill tests;
-- complete race runs for MPool, Vector, Batch, SQL util, expression, and
-  spillutil;
-- package coverage of 73.3% MPool, 47.8% Vector, 74.4% Batch, 26.6% SQL util,
-  64.3% expression, and 79.7% spillutil.
+- complete race runs for MPool, Vector, Batch, SQL util, expression, spillutil,
+  pSpool, Connector, and Dispatch;
+- package coverage after the new closures of 74.0% MPool, 77.0% Bitmap, 41.2%
+  Nulls, 48.3% Vector, 73.4% Batch, 82.1% pSpool, 78.8% spillutil, and 54.1%
+  Function.
 
 The existing constant-flow-control benchmark remains 0 B/op and
 0 allocs/op. Five-run medians at `GOMAXPROCS=8` were 4.480 ns/op on the PR 2
 base and 4.464 ns/op on the PR 3 candidate; this focused benchmark shows no
 measurable legacy fast-path regression, but it is not an activation-level
 performance result.
+
+The legacy 8,192-row pipeline-spool copy/reuse benchmark remains 200 B/op and
+2 allocs/op. An interleaved five-run comparison at `GOMAXPROCS=8` measured a
+1,542 ns/op median at commit `9f88a0e83e` and 1,540 ns/op at `1f82b218c2`;
+the guarded allocation-unaccounted fast path has no measurable regression.
 
 ### PR 4: statement lifecycle and minimum pressure foundation
 
