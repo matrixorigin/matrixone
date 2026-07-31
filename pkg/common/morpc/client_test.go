@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -49,6 +51,14 @@ type blockingCreateFactory struct {
 	backend *testBackend
 }
 
+type resetPublicationFactory struct {
+	firstEntered  chan struct{}
+	firstRelease  chan struct{}
+	firstReturned chan struct{}
+	firstBackend  *testBackend
+	calls         atomic.Int32
+}
+
 type failingCreateFactory struct {
 	attempts atomic.Int32
 }
@@ -64,6 +74,26 @@ func (b *newStreamErrorBackend) NewStream(bool) (Stream, error) {
 
 type operationClosedBackend struct {
 	*testBackend
+}
+
+type backgroundSendBackend struct {
+	*testBackend
+}
+
+func (b *backgroundSendBackend) Send(
+	ctx context.Context,
+	request Message,
+) (*Future, error) {
+	b.active()
+	f := newFuture(nil)
+	// The production regression uses context.Background deliberately. Mark
+	// this in-memory test transport as internal so Future does not impose the
+	// public transport's caller-deadline contract.
+	f.init(RPCMessage{Ctx: ctx, Message: request, internal: true})
+	f.ref()
+	f.messageSent(nil)
+	f.done(newTestMessage(request.GetID()), nil)
+	return f, nil
 }
 
 func (b *operationClosedBackend) Send(context.Context, Message) (*Future, error) {
@@ -205,6 +235,25 @@ func (f *blockingCreateFactory) Create(string, ...BackendOption) (Backend, error
 	close(f.entered)
 	<-f.release
 	return f.backend, nil
+}
+
+func (f *resetPublicationFactory) Create(
+	string,
+	...BackendOption,
+) (Backend, error) {
+	call := f.calls.Add(1)
+	if call == 1 {
+		close(f.firstEntered)
+		<-f.firstRelease
+		close(f.firstReturned)
+		return f.firstBackend, nil
+	}
+	return &backgroundSendBackend{
+		testBackend: &testBackend{
+			id:         int(call),
+			activeTime: time.Now(),
+		},
+	}, nil
 }
 
 func TestCreateBackendLocked(t *testing.T) {
@@ -676,6 +725,60 @@ func TestClientCloseJoinsConcurrentTargetedReset(t *testing.T) {
 	}
 }
 
+func TestClientCloseJoinsConcurrentFullBackendReset(t *testing.T) {
+	rc, err := NewClient(
+		"full-reset-cleanup-join",
+		newTestBackendFactory(),
+		WithClientDisableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	backend := &operationClosedBlockingCloseBackend{
+		testBackend: &testBackend{id: 1, activeTime: time.Now()},
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(backend.release) })
+		require.NoError(t, c.Close())
+	})
+	c.mu.Lock()
+	c.mu.backends["remote"] = []Backend{backend}
+	c.mu.ops["remote"] = &op{}
+	c.mu.Unlock()
+
+	resetDone := make(chan error, 1)
+	go func() { resetDone <- c.CloseBackend() }()
+	select {
+	case <-backend.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("full backend teardown did not start")
+	}
+
+	clientCloseDone := make(chan error, 1)
+	go func() { clientCloseDone <- c.Close() }()
+	select {
+	case err := <-clientCloseDone:
+		require.NoError(t, err)
+		t.Fatal("client Close returned before full backend teardown")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseOnce.Do(func() { close(backend.release) })
+	for _, done := range []<-chan error{resetDone, clientCloseDone} {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("close did not finish after full teardown was released")
+		}
+	}
+	require.EqualValues(t, 1, backend.closeCalls.Load(),
+		"the detached backend must have exactly one physical close owner")
+}
+
 func TestClientCloseJoinsInflightBackendCreate(t *testing.T) {
 	factory := &blockingCreateFactory{
 		entered: make(chan struct{}),
@@ -986,6 +1089,111 @@ func TestCloseBackendForSynchronouslyDetachesOnlyTarget(t *testing.T) {
 	require.NotNil(t, replacement)
 }
 
+func TestCloseBackendDoesNotBlockReplacementCreatePublication(t *testing.T) {
+	factory := &resetPublicationFactory{
+		firstEntered:  make(chan struct{}),
+		firstRelease:  make(chan struct{}),
+		firstReturned: make(chan struct{}),
+		firstBackend:  &testBackend{id: 1, activeTime: time.Now()},
+	}
+	rc, err := NewClient(
+		t.Name(),
+		factory,
+		WithClientMaxBackendPerHost(2),
+		WithClientAutoCreateWaitTimeout(30*time.Second),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+
+	oldBase := &testBackend{id: 0, activeTime: time.Now()}
+	oldBase.Lock()
+	old := &blockingCloseBackend{
+		testBackend: oldBase,
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	var releaseFactory sync.Once
+	var releaseOld sync.Once
+	t.Cleanup(func() {
+		releaseFactory.Do(func() { close(factory.firstRelease) })
+		releaseOld.Do(func() { close(old.release) })
+		require.NoError(t, c.Close())
+	})
+
+	c.mu.Lock()
+	c.mu.backends["remote"] = []Backend{old}
+	c.mu.ops["remote"] = &op{}
+	c.mu.Unlock()
+
+	type sendResult struct {
+		future *Future
+		err    error
+	}
+	sendDone := make(chan sendResult, 1)
+	go func() {
+		future, err := c.Send(
+			context.Background(),
+			"remote",
+			newTestMessage(1),
+		)
+		sendDone <- sendResult{future: future, err: err}
+	}()
+	select {
+	case <-factory.firstEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial backend create did not reach the factory")
+	}
+
+	resetDone := make(chan error, 1)
+	go func() { resetDone <- c.CloseBackend() }()
+	select {
+	case <-old.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old backend teardown did not start")
+	}
+
+	// The old generation completes well inside the factory budget while its
+	// detached predecessor is still blocked in Close. It must be rejected at
+	// publication, and Send must be able to create/use a fresh generation
+	// without waiting for that old physical teardown.
+	releaseFactory.Do(func() { close(factory.firstRelease) })
+	select {
+	case <-factory.firstReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial factory call did not return")
+	}
+
+	var result sendResult
+	select {
+	case result = <-sendDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background Send waited for old backend Close")
+	}
+	require.NoError(t, result.err)
+	require.NotNil(t, result.future)
+	response, err := result.future.Get()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), response.GetID())
+	result.future.Close()
+	require.EqualValues(t, 2, factory.calls.Load())
+
+	select {
+	case err := <-resetDone:
+		require.NoError(t, err)
+		t.Fatal("CloseBackend returned before the old backend was released")
+	default:
+	}
+
+	releaseOld.Do(func() { close(old.release) })
+	select {
+	case err := <-resetDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("CloseBackend did not finish after old backend release")
+	}
+}
+
 func TestCloseBackendForRejectsConcurrentSynchronousCreate(t *testing.T) {
 	factory := &blockingCreateFactory{
 		entered: make(chan struct{}),
@@ -1035,7 +1243,7 @@ func TestCloseBackendForRejectsConcurrentSynchronousCreate(t *testing.T) {
 	require.True(t, backendClosed)
 }
 
-func TestQueueFullFallbackRejectsGenerationCapturedBeforeReset(t *testing.T) {
+func TestExplicitCreateRejectsGenerationCapturedBeforeReset(t *testing.T) {
 	factory := &createNotifyFactory{
 		inner:   newTestBackendFactory(),
 		created: make(chan struct{}, 1),
@@ -1059,7 +1267,7 @@ func TestQueueFullFallbackRejectsGenerationCapturedBeforeReset(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
 	select {
 	case <-factory.created:
-		t.Fatal("stale queue-full fallback reached backend factory")
+		t.Fatal("stale explicit create reached backend factory")
 	default:
 	}
 	c.mu.Lock()
@@ -1354,6 +1562,20 @@ func TestInitBackendsAndMaxBackendsPerHostNotMatch(t *testing.T) {
 	}()
 
 	assert.Equal(t, 3, c.options.maxBackendsPerHost)
+}
+
+func TestFailedClientInitializationDoesNotDecrementActiveGauge(t *testing.T) {
+	name := t.Name()
+	gauge := v2.NewRPCClientActiveGaugeByName(name)
+	before := testutil.ToFloat64(gauge)
+
+	_, err := NewClient(
+		name,
+		&failingCreateFactory{},
+		WithClientInitBackends([]string{"unreachable"}, []int{1}),
+	)
+	require.Error(t, err)
+	require.Equal(t, before, testutil.ToFloat64(gauge))
 }
 
 func TestGetBackendWithCreateBackend(t *testing.T) {

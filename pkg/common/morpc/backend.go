@@ -85,7 +85,7 @@ func WithBackendBatchSendSize(size int) BackendOption {
 	}
 }
 
-// WithBackendConnectTimeout set the timeout for connect to remote. Default 10s.
+// WithBackendConnectTimeout set the timeout for connect to remote. Default 5s.
 func WithBackendConnectTimeout(timeout time.Duration) BackendOption {
 	return func(rb *remoteBackend) {
 		rb.options.connectTimeout = timeout
