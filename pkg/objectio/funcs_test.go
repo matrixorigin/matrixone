@@ -30,6 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 type releaseTrackingData struct {
@@ -80,6 +84,41 @@ func (p *partialReadErrorFS) ReadCache(context.Context, *fileservice.IOVector) e
 type trackingCacheDataAllocator struct {
 	data fscache.Data
 }
+
+type objectioRemoteCacheClient struct {
+	response *query.Response
+	sends    atomic.Int32
+	releases atomic.Int32
+}
+
+func (*objectioRemoteCacheClient) ServiceID() string { return "objectio-remote-cache-test" }
+
+func (c *objectioRemoteCacheClient) SendMessage(
+	context.Context,
+	string,
+	*query.Request,
+) (*query.Response, error) {
+	c.sends.Add(1)
+	return c.response, nil
+}
+
+func (*objectioRemoteCacheClient) NewRequest(method query.CmdMethod) *query.Request {
+	return &query.Request{CmdMethod: method}
+}
+
+func (c *objectioRemoteCacheClient) Release(resp *query.Response) {
+	c.releases.Add(1)
+	for _, data := range resp.GetCacheDataResponse.ResponseCacheData {
+		clear(data.Data)
+	}
+}
+
+func (*objectioRemoteCacheClient) Close() error { return nil }
+
+type objectioRemoteCacheRouter struct{}
+
+func (objectioRemoteCacheRouter) Target(fscache.CacheKey) string { return "remote" }
+func (objectioRemoteCacheRouter) AddItem(gossip.CommonItem)      {}
 
 func (t *trackingCacheDataAllocator) AllocateCacheData(context.Context, int) fscache.Data {
 	return t.data
@@ -335,7 +374,8 @@ func TestColumnCacheConstructorRejectsNilCacheData(t *testing.T) {
 }
 
 func TestValidatedVectorCacheDataSliceDropsCapability(t *testing.T) {
-	data := &validatedVectorCacheData{Data: fileservice.NewBytes([]byte{1, 2, 3})}
+	data := &validatedVectorCacheData{data: fileservice.NewBytes([]byte{1, 2, 3})}
+	defer data.Release()
 	require.True(t, isValidatedVectorCacheData(data))
 
 	same := data.Slice(3)
@@ -343,7 +383,42 @@ func TestValidatedVectorCacheDataSliceDropsCapability(t *testing.T) {
 
 	shorter := same.Slice(2)
 	require.False(t, isValidatedVectorCacheData(shorter))
+	require.Equal(t, []byte{1, 2, 3}, data.Bytes())
 	shorter.Release()
+}
+
+func TestValidatedVectorCacheDataDoesNotExposeMutableBackingBytes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(source, []byte("value longer than inline storage"), false, mp))
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type:    IOET_ColData,
+		Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+	cacheData, err := validateVectorCacheData(fileservice.NewBytes(encoded))
+	require.NoError(t, err)
+	defer cacheData.Release()
+
+	// Bytes is part of the public FileService cache interface. Mutating the
+	// returned slice must not mutate bytes covered by the validation capability.
+	exposed := cacheData.Bytes()
+	varlenOffset := IOEntryHeaderSize + 1 + types.TSize + 4 + 4
+	invalidOffset := uint32(len(encoded) + 1)
+	copy(exposed[varlenOffset+4:varlenOffset+8], types.EncodeUint32(&invalidOffset))
+
+	var obj any
+	require.NotPanics(t, func() {
+		obj, err = DecodeCached(cacheData)
+		if err == nil {
+			require.Equal(t, "value longer than inline storage", obj.(*vector.Vector).GetStringAt(0))
+		}
+	})
+	require.NoError(t, err)
 }
 
 func TestValidatedVectorCapabilitySurvivesMemoryCache(t *testing.T) {
@@ -389,6 +464,94 @@ func TestValidatedVectorCapabilitySurvivesMemoryCache(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "cached value", obj.(*vector.Vector).GetStringAt(0))
 	read.Release()
+}
+
+func TestRemoteColumnCacheHitIsValidatedBeforeMemoryAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(source, []byte("remote cached value"), false, mp))
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type:    IOET_ColData,
+		Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+	queryClient := &objectioRemoteCacheClient{
+		response: &query.Response{
+			GetCacheDataResponse: &query.GetCacheDataResponse{
+				ResponseCacheData: []*query.ResponseCacheData{{
+					Index: 0,
+					Hit:   true,
+					Data:  append([]byte(nil), encoded...),
+				}},
+			},
+		},
+	}
+	capacity := toml.ByteSize(1 << 20)
+	ctx := context.Background()
+	fs, err := fileservice.NewS3FS(
+		ctx,
+		fileservice.ObjectStorageArguments{
+			Name:     "s3",
+			Endpoint: "disk",
+			Bucket:   t.TempDir(),
+		},
+		fileservice.CacheConfig{
+			MemoryCapacity:     &capacity,
+			RemoteCacheEnabled: true,
+			QueryClient:        queryClient,
+			KeyRouterFactory: func() client.KeyRouter[query.CacheKey] {
+				return objectioRemoteCacheRouter{}
+			},
+		},
+		nil,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+
+	// The remote key uses the compressed extent length, while CachedData has
+	// the decompressed OriginSize. This is the normal object-column contract.
+	ext := NewExtent(compress.Lz4, 0, 1, uint32(len(encoded)))
+	var validations atomic.Int32
+	newRead := func() *fileservice.IOVector {
+		entry := newColumnIOEntry(ext, columnCacheConstructorFactory)
+		validate := entry.ValidateCacheData
+		entry.ValidateCacheData = func(data fscache.Data) (fscache.Data, error) {
+			validations.Add(1)
+			return validate(data)
+		}
+		return &fileservice.IOVector{
+			FilePath: "remote-object",
+			Entries:  []fileservice.IOEntry{entry},
+		}
+	}
+
+	first := newRead()
+	require.NoError(t, fs.Read(ctx, first))
+	require.True(t, first.Entries[0].WasFromCache())
+	require.True(t, isValidatedVectorCacheData(first.Entries[0].CachedData))
+	obj, err := DecodeCached(first.Entries[0].CachedData)
+	require.NoError(t, err)
+	require.Equal(t, "remote cached value", obj.(*vector.Vector).GetStringAt(0))
+	first.Release()
+
+	second := newRead()
+	require.NoError(t, fs.Read(ctx, second))
+	require.True(t, second.Entries[0].WasFromCache())
+	require.True(t, isValidatedVectorCacheData(second.Entries[0].CachedData))
+	obj, err = DecodeCached(second.Entries[0].CachedData)
+	require.NoError(t, err)
+	require.Equal(t, "remote cached value", obj.(*vector.Vector).GetStringAt(0))
+	second.Release()
+
+	require.Equal(t, int32(1), validations.Load(), "memory-cache hit must not revalidate")
+	require.Equal(t, int32(1), queryClient.sends.Load(), "second read must not return to remote cache")
+	require.Equal(t, int32(1), queryClient.releases.Load())
 }
 
 func TestReadOneBlockAllColumnsReleasesPartialReadOnError(t *testing.T) {

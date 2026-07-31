@@ -298,12 +298,7 @@ func (r *objectReaderV1) ReadMultiSubBlocks(
 				continue
 			}
 			col := blkmeta.ColumnMeta(seqnum)
-			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-				Offset: int64(col.Location().Offset()),
-				Size:   int64(col.Location().Length()),
-
-				ToCacheData: columnCacheConstructorFactory(int64(col.Location().OriginSize()), col.Location().Alg()),
-			})
+			ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(col.Location(), columnCacheConstructorFactory))
 		}
 	}
 

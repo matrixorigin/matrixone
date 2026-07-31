@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -38,31 +39,71 @@ var eventVectorDestinationNotEmpty = logutil.Event{
 type CacheConstructor = func(ctx context.Context, r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
-// validatedVectorCacheData is a capability marker: its bytes passed the full
-// V2 vector validator after decompression and have stayed in the immutable
-// FileService cache representation since then. The unexported marker method
-// prevents packages outside objectio from manufacturing this capability.
-type validatedVectorCacheData struct {
-	fscache.Data
+func newColumnIOEntry(ext Extent, factory CacheConstructorFactory) fileservice.IOEntry {
+	return fileservice.IOEntry{
+		Offset:            int64(ext.Offset()),
+		Size:              int64(ext.Length()),
+		CachedDataSize:    int64(ext.OriginSize()),
+		ToCacheData:       factory(int64(ext.OriginSize()), ext.Alg()),
+		ValidateCacheData: validateVectorCacheData,
+	}
 }
 
-func (*validatedVectorCacheData) validatedVectorCacheData() {}
+// validatedVectorCacheData owns bytes that passed the full V2 vector validator
+// after decompression. The backing Data is deliberately not embedded: the
+// public FileService interface receives snapshots, while objectio's private
+// method is the only zero-copy access to the sealed representation.
+type validatedVectorCacheData struct {
+	data fscache.Data
+}
+
+var _ fscache.Data = (*validatedVectorCacheData)(nil)
+
+func (d *validatedVectorCacheData) Bytes() []byte {
+	return bytes.Clone(d.validatedVectorBytes())
+}
+
+func (d *validatedVectorCacheData) Size() int64 {
+	return int64(len(d.validatedVectorBytes()))
+}
 
 func (d *validatedVectorCacheData) Slice(length int) fscache.Data {
-	if length != len(d.Bytes()) {
-		// A changed byte range no longer has the validation capability.
-		return d.Data.Slice(length)
+	buf := d.validatedVectorBytes()
+	if length == len(buf) {
+		return d
 	}
-	return d
+	// A changed range gets independent storage and no validation capability.
+	// In particular, do not call Data.Slice: fileservice.Bytes slices in place,
+	// which would mutate this sealed owner and every existing alias.
+	return fileservice.NewBytes(bytes.Clone(buf[:length]))
+}
+
+func (d *validatedVectorCacheData) Retain() {
+	d.data.Retain()
+}
+
+func (d *validatedVectorCacheData) Release() {
+	d.data.Release()
+}
+
+func (d *validatedVectorCacheData) validatedVectorBytes() []byte {
+	return d.data.Bytes()
 }
 
 type validatedVectorCacheDataMarker interface {
-	validatedVectorCacheData()
+	validatedVectorBytes() []byte
 }
 
 func isValidatedVectorCacheData(data fscache.Data) bool {
 	_, ok := data.(validatedVectorCacheDataMarker)
 	return ok
+}
+
+func vectorCacheDataBytes(data fscache.Data) (buf []byte, trusted bool) {
+	if marked, ok := data.(validatedVectorCacheDataMarker); ok {
+		return marked.validatedVectorBytes(), true
+	}
+	return data.Bytes(), false
 }
 
 // use this to replace all other constructors
@@ -147,7 +188,7 @@ func validateVectorCacheData(data fscache.Data) (fscache.Data, error) {
 	if err := vec.UnmarshalBinary(buf[IOEntryHeaderSize:]); err != nil {
 		return nil, err
 	}
-	return &validatedVectorCacheData{Data: data}, nil
+	return &validatedVectorCacheData{data: data}, nil
 }
 
 func Decode(buf []byte) (any, error) {
@@ -155,14 +196,14 @@ func Decode(buf []byte) (any, error) {
 }
 
 // DecodeCached uses the trusted V2 bind only for FileService cache data that
-// objectio itself validated before cache admission. Unmarked data, including
-// remote-cache payloads, uses the normal versioned decoder; V2 therefore keeps
-// its full validation.
+// objectio itself validated before cache admission. Unmarked data uses the
+// normal versioned decoder; V2 therefore keeps its full validation.
 func DecodeCached(data fscache.Data) (any, error) {
 	if data == nil {
 		return nil, moerr.NewInvalidInputNoCtx("nil object cache data")
 	}
-	return decode(data.Bytes(), isValidatedVectorCacheData(data))
+	buf, trusted := vectorCacheDataBytes(data)
+	return decode(buf, trusted)
 }
 
 func decode(buf []byte, trusted bool) (any, error) {
@@ -199,7 +240,8 @@ func MustVectorToCached(toVec *vector.Vector, data fscache.Data) error {
 	if data == nil {
 		return moerr.NewInvalidInputNoCtx("nil object cache data")
 	}
-	return mustVectorTo(toVec, data.Bytes(), isValidatedVectorCacheData(data))
+	buf, trusted := vectorCacheDataBytes(data)
+	return mustVectorTo(toVec, buf, trusted)
 }
 
 func mustVectorTo(toVec *vector.Vector, buf []byte, trusted bool) (err error) {
