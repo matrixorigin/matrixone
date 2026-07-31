@@ -59,6 +59,26 @@ func TestGroupConcatMaxLenDefault(t *testing.T) {
 	})
 }
 
+func TestCTEMaxMemoryBytesDefinition(t *testing.T) {
+	sv, ok := gSysVarsDefs["cte_max_memory_bytes"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeBoth, sv.Scope)
+	assert.True(t, sv.Dynamic)
+	assert.False(t, sv.SetVarHintApplies)
+	assert.Equal(t, int64(1073741824), sv.Default)
+
+	converted, err := sv.Type.Convert(int64(0))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), converted)
+	converted, err = sv.Type.Convert(int64(1099511627776))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1099511627776), converted)
+	_, err = sv.Type.Convert(int64(-1))
+	assert.Error(t, err)
+	_, err = sv.Type.Convert(int64(1099511627777))
+	assert.Error(t, err)
+}
+
 func TestScope(t *testing.T) {
 	convey.Convey("test scope", t, func() {
 		wanted := make(map[Scope]string)

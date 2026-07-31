@@ -111,6 +111,28 @@ select @id;
 drop procedure test_inout_param;
 
 -- @case
+-- @desc:PREPARE/EXECUTE inside a stored procedure (issue #25413)
+-- @label:bvt
+drop table if exists t_prepare_inside;
+create table t_prepare_inside (id int primary key, v int);
+insert into t_prepare_inside values (1, 10), (2, 20), (3, 30);
+drop procedure if exists test_prepare_literal;
+create procedure test_prepare_literal() 'begin prepare s from ''select sum(v) as prep_sum from t_prepare_inside''; execute s; deallocate prepare s; end';
+call test_prepare_literal();
+drop procedure test_prepare_literal;
+drop procedure if exists test_prepare_user_var;
+create procedure test_prepare_user_var() 'begin set @sql = ''select sum(v) as prep_sum from t_prepare_inside''; prepare s from @sql; execute s; deallocate prepare s; end';
+call test_prepare_user_var();
+drop procedure test_prepare_user_var;
+drop procedure if exists test_prepare_using;
+create procedure test_prepare_using() 'begin set @left_arg = 20; set @right_arg = 40; prepare s from ''select ? + ? as prep_sum''; execute s using @left_arg, @right_arg; end';
+call test_prepare_using();
+execute s using @left_arg, @right_arg;
+deallocate prepare s;
+drop procedure test_prepare_using;
+drop table t_prepare_inside;
+
+-- @case
 -- @desc:temporary table lifecycle inside a stored procedure
 -- @label:bvt
 drop procedure if exists test_temp_table_lifecycle;

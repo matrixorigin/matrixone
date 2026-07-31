@@ -379,6 +379,8 @@ type BaseProcess struct {
 	messageBoard             *message.MessageBoard
 	hashBuildBudgetMu        sync.Mutex
 	hashBuildBudget          *HashBuildBudgetGeneration
+	cteMemoryBudgetMu        sync.Mutex
+	cteMemoryBudget          *CTEMemoryBudget
 	logger                   *log.MOLogger
 	TxnOperator              client.TxnOperator
 	CloneTxnOperator         client.TxnOperator
@@ -479,6 +481,12 @@ func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 		proc.Base.hashBuildBudget = nil
 	}
 	proc.Base.hashBuildBudgetMu.Unlock()
+	proc.Base.cteMemoryBudgetMu.Lock()
+	if proc.Base.cteMemoryBudget != nil {
+		proc.Base.cteMemoryBudget.Close()
+		proc.Base.cteMemoryBudget = nil
+	}
+	proc.Base.cteMemoryBudgetMu.Unlock()
 	proc.Base.StmtProfile = sp
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode

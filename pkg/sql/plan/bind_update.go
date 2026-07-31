@@ -76,6 +76,10 @@ func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 }
 
 func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext) (int32, error) {
+	if err := validateUpdateWindowFunctions(builder.compCtx, stmt); err != nil {
+		return 0, err
+	}
+
 	dmlCtx := NewDMLContext()
 	err := dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
 	if err != nil {
