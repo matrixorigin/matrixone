@@ -1,7 +1,7 @@
 -- @suite
 
 -- @case
--- @desc: MySQL rejects window functions in UPDATE assignments and CHECK constraints unless MATRIXONE_NATIVE is enabled
+-- @desc: MATRIXONE_NATIVE allows window functions in UPDATE assignments, but CHECK constraints remain row-local
 -- @label:bvt
 
 drop database if exists mysql_compat_window_invalid_context;
@@ -22,7 +22,8 @@ create table check_bad (
   check (row_number() over (order by v) > 0)
 );
 
--- MatrixOne native mode intentionally preserves support for these contexts.
+-- MatrixOne native mode preserves UPDATE support. CHECK constraints still reject
+-- window functions because constraint evaluation has no window execution context.
 set session sql_mode = 'MATRIXONE_NATIVE';
 update t set rn = row_number() over (order by id);
 select id, rn from t order by id;
@@ -32,7 +33,6 @@ create table check_bad (
   check (row_number() over (order by v) > 0)
 );
 
-drop table check_bad;
 drop table t;
 set session sql_mode = @old_sql_mode;
 drop database mysql_compat_window_invalid_context;
