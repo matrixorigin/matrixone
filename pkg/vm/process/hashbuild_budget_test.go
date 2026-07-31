@@ -63,6 +63,58 @@ func TestHashBuildBudgetExactLimitAndOverflow(t *testing.T) {
 	}
 }
 
+func TestHashBuildBudgetAdmissionIdentifiesResource(t *testing.T) {
+	b := MustNewHashBuildBudget(10, 10)
+	g, err := b.OpenGenerationWithSpillCaps(1, 10, 5, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(g.Close)
+
+	tests := []struct {
+		name string
+		want HashBuildBudgetResource
+		call func() error
+	}{
+		{
+			name: "memory",
+			want: HashBuildBudgetResourceMemory,
+			call: func() error {
+				_, reserveErr := g.Reserve(11)
+				return reserveErr
+			},
+		},
+		{
+			name: "spill disk",
+			want: HashBuildBudgetResourceSpillDisk,
+			call: func() error {
+				_, reserveErr := g.ReserveSpillDisk(6)
+				return reserveErr
+			},
+		},
+		{
+			name: "spill fd",
+			want: HashBuildBudgetResourceSpillFD,
+			call: func() error {
+				_, reserveErr := g.ReserveSpillFD(2)
+				return reserveErr
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var budgetErr *HashBuildBudgetError
+			if err := test.call(); !errors.As(err, &budgetErr) {
+				t.Fatalf("error=%v, want typed admission", err)
+			}
+			if budgetErr.Kind != HashBuildBudgetErrorAdmission || budgetErr.Resource != test.want {
+				t.Fatalf("admission kind/resource=(%d,%d), want=(%d,%d)",
+					budgetErr.Kind, budgetErr.Resource, HashBuildBudgetErrorAdmission, test.want)
+			}
+		})
+	}
+}
+
 func TestHashBuildBudgetQueryRejectRollsBackCN(t *testing.T) {
 	b := MustNewHashBuildBudget(10, 4)
 	g1, _ := b.OpenGeneration(1)

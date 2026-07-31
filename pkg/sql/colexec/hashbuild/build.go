@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -107,6 +108,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.state {
 		case BuildHashMap:
 			if err := hashBuild.build(proc, analyzer); err != nil {
+				err = hashBuildUserError(proc.Ctx, err)
 				hashBuild.finalizeBuildFailure(proc, err)
 				return result, err
 			}
@@ -115,6 +117,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case HandleRuntimeFilter:
 			if err := hashBuild.handleRuntimeFilter(proc); err != nil {
+				err = hashBuildUserError(proc.Ctx, err)
 				hashBuild.finalizeBuildFailure(proc, err)
 				return result, err
 			}
@@ -194,6 +197,46 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 	}
+}
+
+// hashBuildUserError converts only terminal capacity admissions. Internal
+// callers retain the typed error while spill recovery is still possible; once
+// Call has exhausted those paths, the client should see a stable resource
+// error with enough context to act on it rather than an internal-error
+// sentinel used for control flow.
+func hashBuildUserError(ctx context.Context, err error) error {
+	if !errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+		return err
+	}
+	var budgetErr *process.HashBuildBudgetError
+	if errors.As(err, &budgetErr) && budgetErr.Kind == process.HashBuildBudgetErrorAdmission {
+		resource := "resource"
+		action := "inspect hash-build budget metrics and resource limits"
+		switch budgetErr.Resource {
+		case process.HashBuildBudgetResourceMemory:
+			resource = "memory"
+			action = "make the join spill-eligible, reduce query memory, or increase processLimitationSize"
+		case process.HashBuildBudgetResourceSpillDisk:
+			resource = "spill disk"
+			action = "free spill storage or increase processLimitationSpillSize"
+		case process.HashBuildBudgetResourceSpillFD:
+			resource = "spill file descriptor"
+			action = "reduce concurrent spill work or raise the CN open-file limit"
+		}
+		return moerr.NewResourceExhaustedf(
+			ctx,
+			"hash build %s budget exceeded (requested=%d, used=%d, limit=%d); %s",
+			resource,
+			budgetErr.Requested,
+			budgetErr.Used,
+			budgetErr.Cap,
+			action,
+		)
+	}
+	return moerr.NewResourceExhaustedf(
+		ctx,
+		"hash build resource budget exceeded; inspect hash-build budget metrics and resource limits",
+	)
 }
 
 // finalizeBuildFailure publishes every producer-side dependency before Call

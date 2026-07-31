@@ -617,7 +617,13 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 			ctr.spillScratchBase = need
 		} else if need > ctr.spillScratchBase {
 			if ctr.spillScratchEmergency && !sourceAlreadyCharged {
-				return process.ErrHashBuildBudgetAdmission
+				return &process.HashBuildBudgetError{
+					Kind:      process.HashBuildBudgetErrorAdmission,
+					Resource:  process.HashBuildBudgetResourceMemory,
+					Requested: need - ctr.spillScratchBase,
+					Used:      ctr.hashmapBuilder.budget.Used(),
+					Cap:       ctr.hashmapBuilder.budget.Cap(),
+				}
 			}
 			grow := need - ctr.spillScratchBase
 			if err := ctr.spillScratchReservation.Grow(grow); err != nil {

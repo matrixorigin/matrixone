@@ -873,6 +873,39 @@ func TestRetainedSpillGrowsEmergencyLeaseWithoutDoubleChargingSource(t *testing.
 	proofSource.Release()
 	require.Zero(t, proofGeneration.Used())
 
+	// A direct source cannot consume a retained-source emergency lease. Keep
+	// that policy rejection typed and diagnostic instead of collapsing it to
+	// the bare admission sentinel at the eventual client boundary.
+	directBudget := process.MustNewHashBuildBudget(fullNeed, fullNeed)
+	directGeneration, err := directBudget.OpenGeneration(1)
+	require.NoError(t, err)
+	directScratch, err := directGeneration.Reserve(retainedNeed)
+	require.NoError(t, err)
+	directCtr := &container{
+		spillScratchReservation: directScratch,
+		spillScratchEmergency:   true,
+		spillScratchBase:        retainedNeed,
+	}
+	directCtr.hashmapBuilder.setBudget(directGeneration)
+	err = directCtr.spillBatchBounded(
+		proc,
+		bat,
+		nil,
+		nil,
+		process.NewAnalyzer(0, false, false, "direct"),
+		false,
+	)
+	var directErr *process.HashBuildBudgetError
+	require.ErrorAs(t, err, &directErr)
+	require.Equal(t, process.HashBuildBudgetErrorAdmission, directErr.Kind)
+	require.Equal(t, process.HashBuildBudgetResourceMemory, directErr.Resource)
+	require.Equal(t, source, directErr.Requested)
+	require.Equal(t, retainedNeed, directErr.Used)
+	require.Equal(t, fullNeed, directErr.Cap)
+	directCtr.releaseSpillScratchReservation()
+	require.Zero(t, directGeneration.Used())
+	directGeneration.Close()
+
 	// The retained path may grow only through normal admission. If even the
 	// incremental byte is unavailable, it still fails closed without changing
 	// either token.

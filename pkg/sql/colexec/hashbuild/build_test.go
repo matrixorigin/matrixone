@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -178,7 +179,11 @@ func TestBroadcastBudgetFailureUnblocksAllConsumers(t *testing.T) {
 
 	_, buildErr := vm.Exec(tc.arg, tc.proc)
 	require.Error(t, buildErr)
-	require.True(t, errors.Is(buildErr, process.ErrHashBuildBudgetAdmission))
+	require.True(t, moerr.IsMoErrCode(buildErr, moerr.ErrOOM))
+	require.Contains(t, buildErr.Error(), "hash build memory budget exceeded")
+	require.Contains(t, buildErr.Error(), "requested=")
+	require.Contains(t, buildErr.Error(), "processLimitationSize")
+	require.NotErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
 
 	const consumers = 4
 	results := make([]message.JoinMapResult, consumers)
@@ -219,7 +224,9 @@ func TestHashBuildWithoutMapStillBudgetsRetainedBatches(t *testing.T) {
 	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, tc.proc.Mp())
 	_, err := vm.Exec(tc.arg, tc.proc)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, process.ErrHashBuildBudgetAdmission))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+	require.Contains(t, err.Error(), "hash build memory budget exceeded")
+	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
 	tc.arg.Free(tc.proc, true, err)
 	bat.Clean(tc.proc.Mp())
 	budget, budgetErr := tc.proc.GetHashBuildBudget()
@@ -985,7 +992,11 @@ func TestShuffleDedupAdmissionAfterRewriteDoesNotSpillPartialInput(
 	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 
 	_, buildErr := vm.Exec(tc.arg, tc.proc)
-	require.ErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
+	require.True(t, moerr.IsMoErrCode(buildErr, moerr.ErrOOM))
+	require.Contains(t, buildErr.Error(), "hash build memory budget exceeded")
+	require.Contains(t, buildErr.Error(), "requested=")
+	require.Contains(t, buildErr.Error(), "processLimitationSize")
+	require.NotErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
 	require.True(t, forcedUnsafeReject)
 	require.False(t,
 		tc.arg.ctr.hashmapBuilder.retainedBatchRecoverySafe)
@@ -2746,7 +2757,11 @@ func TestShuffleHashBuildSpillFailureReleasesEmergencyResources(t *testing.T) {
 	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, tc.proc.Mp())
 	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 	_, buildErr := vm.Exec(tc.arg, tc.proc)
-	require.ErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
+	require.True(t, moerr.IsMoErrCode(buildErr, moerr.ErrOOM))
+	require.Contains(t, buildErr.Error(), "hash build spill disk budget exceeded")
+	require.Contains(t, buildErr.Error(), "requested=")
+	require.Contains(t, buildErr.Error(), "processLimitationSpillSize")
+	require.NotErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
 	require.Nil(t, tc.arg.ctr.spillScratchReservation)
 	require.Zero(t, cap(tc.arg.ctr.spillHashValues))
 	require.Zero(t, cap(tc.arg.ctr.spillSelection))
