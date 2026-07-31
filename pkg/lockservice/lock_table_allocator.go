@@ -1019,13 +1019,6 @@ func (b *serviceBinds) getServiceID() string {
 	return b.serviceID
 }
 
-func (b *serviceBinds) timeout(
-	now time.Time,
-	timeout time.Duration) bool {
-	_, ok := b.timeoutSnapshot(now, timeout)
-	return ok
-}
-
 func (b *serviceBinds) timeoutSnapshot(
 	now time.Time,
 	timeout time.Duration,
