@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -303,7 +304,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
 
 		// running.
-		allocationAttempt, err = runC.beginAllocationAccountAttempt()
+		exporter := func(snapshot mpool.AllocationAccountTerminalSnapshot) {
+			if resourceRecorder != nil {
+				resourceRecorder.recordAllocationAccountTerminal(snapshot)
+			}
+		}
+		err = runC.ensureAllocationAccountLifecycle(exporter)
+		if err == nil {
+			allocationAttempt, err = runC.beginAllocationAccountAttempt()
+		}
 		if err == nil {
 			err = runC.prePipelineInitializer()
 		}

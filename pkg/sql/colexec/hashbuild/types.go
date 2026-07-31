@@ -21,8 +21,10 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -44,6 +46,13 @@ const (
 	HandleRuntimeFilter
 	SendJoinMap
 	SendSucceed
+)
+
+const HashBuildAllocationOwner mpool.AllocationOwner = 1
+
+const (
+	HashBuildAllocationSiteHashCell mpool.AllocationSite = iota + 24
+	HashBuildAllocationSiteHashDescriptor
 )
 
 type container struct {
@@ -265,6 +274,55 @@ type HashBuild struct {
 
 func (hashBuild *HashBuild) GetOperatorBase() *vm.OperatorBase {
 	return &hashBuild.OperatorBase
+}
+
+func (hashBuild *HashBuild) AllocationAccountEnabled() bool {
+	return hashBuild != nil && hashBuild.NeedHashMap
+}
+
+// SetAllocationAccount selects immutable provenance for the hash-table owner
+// before Prepare. Compile invokes it once for each execution attempt; Reset
+// clears the selection only after producer or JoinMap ownership has moved on.
+func (hashBuild *HashBuild) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	builder := &hashBuild.ctr.hashmapBuilder
+	if builder.mapAllocationAccount != nil {
+		if builder.mapAllocationAccount == account {
+			return nil
+		}
+		return mpool.ErrAllocationAccountMismatch
+	}
+	selection, err := hashtable.NewAllocationAccountSelection(
+		account,
+		HashBuildAllocationOwner,
+		HashBuildAllocationSiteHashCell,
+		HashBuildAllocationSiteHashDescriptor,
+	)
+	if err != nil {
+		return err
+	}
+	builder.mapAllocationAccount = account
+	builder.mapAllocation = selection
+	return nil
+}
+
+func (hashBuild *HashBuild) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	builder := &hashBuild.ctr.hashmapBuilder
+	if builder.mapAllocationAccount == nil {
+		return nil
+	}
+	if builder.mapAllocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if builder.IntHashMap != nil || builder.StrHashMap != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	builder.mapAllocationAccount = nil
+	builder.mapAllocation = nil
+	return nil
 }
 
 func init() {

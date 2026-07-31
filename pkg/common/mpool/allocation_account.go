@@ -490,6 +490,17 @@ func (r *AllocationAccountRegistry) OpenWithController(
 func (r *AllocationAccountRegistry) CompleteTerminal(
 	account *AllocationAccount,
 ) (snapshot AllocationAccountTerminalSnapshot, first bool, err error) {
+	return r.CompleteTerminalWithError(account, nil)
+}
+
+// CompleteTerminalWithError additionally records an owner-lifecycle invariant
+// discovered after physical producers quiesced. A zero-live failure is removed
+// immediately (there is no provenance to retain); a nonzero failure follows
+// the same tombstone/suspension path as CompleteTerminal.
+func (r *AllocationAccountRegistry) CompleteTerminalWithError(
+	account *AllocationAccount,
+	terminalCause error,
+) (snapshot AllocationAccountTerminalSnapshot, first bool, err error) {
 	if r == nil || account == nil || account.registry != r {
 		return snapshot, false, ErrAllocationAccountInvalid
 	}
@@ -525,9 +536,18 @@ func (r *AllocationAccountRegistry) CompleteTerminal(
 		AllocationAccountSnapshot: current,
 		State:                     AllocationAccountTerminalValid,
 	}
+	if terminalCause != nil {
+		snapshot.State = AllocationAccountTerminalInvariantFailure
+	}
 	if current.Used == 0 {
 		entry.terminal = &snapshot
 		r.removeSlotLocked(slot, account)
+		if snapshot.State == AllocationAccountTerminalInvariantFailure {
+			return snapshot, true, errors.Join(
+				terminalCause,
+				newAllocationTerminalInvariantError(snapshot),
+			)
+		}
 		return snapshot, true, nil
 	}
 
@@ -542,7 +562,10 @@ func (r *AllocationAccountRegistry) CompleteTerminal(
 	if account.Snapshot().Used == 0 && account.inflight.Load() == 0 {
 		r.removeTombstoneLocked(slot, account)
 	}
-	return snapshot, true, newAllocationTerminalInvariantError(snapshot)
+	return snapshot, true, errors.Join(
+		terminalCause,
+		newAllocationTerminalInvariantError(snapshot),
+	)
 }
 
 func newAllocationTerminalInvariantError(
@@ -722,6 +745,20 @@ func (r *AllocationAccountRegistry) PeakAllocationMetadata() uint64 {
 		return 0
 	}
 	return r.peakAllocations.Load()
+}
+
+func (r *AllocationAccountRegistry) MaxAllocationMetadata() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.maxAllocations
+}
+
+func (r *AllocationAccountRegistry) GenerationCapacity() uint32 {
+	if r == nil || len(r.slots) == 0 {
+		return 0
+	}
+	return uint32(len(r.slots) - 1)
 }
 
 type allocationAccountRequest struct {

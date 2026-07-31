@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -27,14 +28,16 @@ import (
 )
 
 type executionResourceRecorder struct {
-	root         *resource.Root
-	stats        *statistic.StatsInfo
-	execution    resource.ExecutionSummary
-	published    bool
-	ownsAttempts bool
+	root                     *resource.Root
+	stats                    *statistic.StatsInfo
+	execution                resource.ExecutionSummary
+	published                bool
+	ownsAttempts             bool
+	pendingAllocation        resource.AllocationAccountTotals
+	pendingAllocationQuality resource.QualityFlags
 }
 
-const remoteTerminalResourceVersion = 1
+const remoteTerminalResourceVersion = 2
 
 // remoteTerminalEnvelope keeps PhyPlan fields at the top level so clients from
 // before resource accounting can still decode the terminal plan during a
@@ -42,11 +45,12 @@ const remoteTerminalResourceVersion = 1
 // appended resource facts from a legacy bare PhyPlan payload.
 type remoteTerminalEnvelope struct {
 	models.PhyPlan
-	TerminalResourceVersion  uint32                `json:"terminal_resource_version,omitempty"`
-	Delta                    resource.Delta        `json:"resource_delta"`
-	Memory                   resource.MemoryTotals `json:"memory"`
-	MissingFragmentCount     uint64                `json:"missing_fragment_count,omitempty"`
-	MissingMemoryDomainCount uint64                `json:"missing_memory_domain_count,omitempty"`
+	TerminalResourceVersion  uint32                           `json:"terminal_resource_version,omitempty"`
+	Delta                    resource.Delta                   `json:"resource_delta"`
+	Memory                   resource.MemoryTotals            `json:"memory"`
+	Allocation               resource.AllocationAccountTotals `json:"allocation_account"`
+	MissingFragmentCount     uint64                           `json:"missing_fragment_count,omitempty"`
+	MissingMemoryDomainCount uint64                           `json:"missing_memory_domain_count,omitempty"`
 }
 
 // remoteResourceAggregate is the already-reduced terminal output sent by one
@@ -54,8 +58,22 @@ type remoteTerminalEnvelope struct {
 type remoteResourceAggregate struct {
 	Delta                    resource.Delta
 	Memory                   resource.MemoryTotals
+	Allocation               resource.AllocationAccountTotals
 	MissingFragmentCount     uint64
 	MissingMemoryDomainCount uint64
+}
+
+func (r *executionResourceRecorder) recordAllocationAccountTerminal(
+	snapshot mpool.AllocationAccountTerminalSnapshot,
+) {
+	if r == nil {
+		return
+	}
+	r.pendingAllocationQuality |= r.pendingAllocation.AddGeneration(
+		snapshot.Peak,
+		snapshot.Used,
+		snapshot.State == mpool.AllocationAccountTerminalValid,
+	)
 }
 
 func newExecutionResourceRecorder(
@@ -170,6 +188,17 @@ func (r *executionResourceRecorder) finishAttempt(
 	summary := resource.AttemptSummary{WallNS: wallNS}
 	summary.Quality |= delta.Quality | resource.MergeUsage(&summary.Usage, delta.Usage)
 	summary.Quality |= resource.MergeMemoryTotals(&summary.Memory, remoteAggregate.Memory)
+	summary.Quality |= resource.MergeAllocationAccountTotals(
+		&summary.Allocation,
+		remoteAggregate.Allocation,
+	)
+	summary.Quality |= r.pendingAllocationQuality |
+		resource.MergeAllocationAccountTotals(
+			&summary.Allocation,
+			r.pendingAllocation,
+		)
+	r.pendingAllocation = resource.AllocationAccountTotals{}
+	r.pendingAllocationQuality = 0
 	var quality resource.QualityFlags
 	summary.MissingFragmentCount, quality = addCheckedRemoteCounter(
 		summary.MissingFragmentCount, remoteAggregate.MissingFragmentCount, summary.Quality)
@@ -236,6 +265,10 @@ func composeRemoteResourceAggregate(
 	result.Delta.Quality |= resource.MergeUsage(&result.Delta.Usage, descendant.Usage)
 	result.Delta.Quality |= resource.MergeMemoryDomain(&result.Memory, localMemory)
 	result.Delta.Quality |= resource.MergeMemoryTotals(&result.Memory, descendant.Memory)
+	result.Delta.Quality |= resource.MergeAllocationAccountTotals(
+		&result.Allocation,
+		descendant.Allocation,
+	)
 	result.MissingFragmentCount = descendant.MissingFragmentCount
 	result.MissingMemoryDomainCount = descendant.MissingMemoryDomainCount
 	if descendant.MissingFragmentCount > 0 {

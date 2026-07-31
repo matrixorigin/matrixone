@@ -38,8 +38,16 @@ func init() {
 }
 
 func NewStrHashMap(hasNull bool, memPool *mpool.MPool) (*StrHashMap, error) {
+	return NewStrHashMapWithAllocation(hasNull, memPool, nil)
+}
+
+func NewStrHashMapWithAllocation(
+	hasNull bool,
+	memPool *mpool.MPool,
+	allocation *hashtable.AllocationAccountSelection,
+) (*StrHashMap, error) {
 	mp := &hashtable.StringHashMap{}
-	if err := mp.Init(memPool); err != nil {
+	if err := mp.InitWithAllocation(memPool, allocation); err != nil {
 		return nil, err
 	}
 	return &StrHashMap{

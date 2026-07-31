@@ -345,6 +345,24 @@ func TestAllocationAccountTerminalTombstoneSuspendsAdmission(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestAllocationAccountZeroLiveOwnerInvariantExportsFailure(t *testing.T) {
+	registry, err := NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	ownerErr := errors.New("owner teardown failed")
+
+	snapshot, first, err := registry.CompleteTerminalWithError(account, ownerErr)
+	require.True(t, first)
+	require.ErrorIs(t, err, ownerErr)
+	require.ErrorIs(t, err, ErrAllocationAccountInvariant)
+	require.Equal(t, AllocationAccountTerminalInvariantFailure, snapshot.State)
+	require.Zero(t, snapshot.Used)
+	require.False(t, registry.AdmissionSuspended())
+	_, ok := registry.Resolve(account.Handle())
+	require.False(t, ok)
+}
+
 func TestAllocationAccountMultipleTombstonesDrainBeforeResume(t *testing.T) {
 	registry, err := NewAllocationAccountRegistry(3, 2)
 	require.NoError(t, err)

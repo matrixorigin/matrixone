@@ -343,6 +343,67 @@ func TestPublishedJoinMapResizeKeepsReservationWithConsumer(t *testing.T) {
 	hb.Reset(proc, false)
 }
 
+func TestHashmapBuilderAccountedCellsDoNotStackLegacyMapReservation(t *testing.T) {
+	const budgetCap = uint64(16 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(budgetCap, generation)
+	require.NoError(t, err)
+
+	var op HashBuild
+	op.NeedHashMap = true
+	require.NoError(t, op.SetAllocationAccount(account))
+	hb := &op.ctr.hashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	require.NoError(t, hb.Prepare(
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())},
+		-1,
+		-1,
+		nil,
+		proc,
+	))
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()},
+		true,
+		10_000,
+		proc.Mp(),
+	)
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.Nil(t, hb.mapReservation)
+	require.Positive(t, account.Snapshot().Used)
+	require.Equal(
+		t,
+		account.Snapshot().Used,
+		generation.Snapshot().AllocationUsed,
+	)
+
+	jm := hb.GetJoinMap(proc.Mp())
+	require.NotNil(t, jm)
+	jm.IncRef(1)
+	beforeResize := account.Snapshot().Used
+	require.NoError(t, jm.PreAlloc(100_000))
+	require.Greater(t, account.Snapshot().Used, beforeResize)
+	jm.Free()
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+
+	hb.Reset(proc, false)
+	terminal, first, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.True(t, first)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
+}
+
 func TestHashMapReservationOwnerRetainsSegmentedGrowthTokens(t *testing.T) {
 	budget, err := process.NewHashBuildBudget(1<<20, 1<<20)
 	require.NoError(t, err)
@@ -410,6 +471,75 @@ func TestBudgetedEmptyJoinMapRejectsUnadmittedAllocationAndResize(t *testing.T) 
 			require.Zero(t, mp.CurrNB())
 		})
 	}
+}
+
+func TestAccountedEmptyJoinMapUsesPhysicalAllocationAsSoleCharge(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		keyWidth     int
+		initialBytes uint64
+	}{
+		{name: "int", keyWidth: 4, initialBytes: hashtable.Int64HashMapInitialAllocationBytes()},
+		{name: "string", keyWidth: 128, initialBytes: hashtable.StringHashMapInitialAllocationBytes()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const capBytes = uint64(64 << 20)
+			budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(capBytes, generation)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+
+			jm, err := NewAccountedEmptyJoinMap(tc.keyWidth, account, mp)
+			require.NoError(t, err)
+			descriptorBytes := hashtable.HashMapBlockDescriptorBytes()
+			expectedInitial := tc.initialBytes + descriptorBytes
+			require.Equal(t, expectedInitial, account.Snapshot().Used)
+			require.Equal(t, expectedInitial, generation.Used())
+			require.Equal(t, expectedInitial, generation.Snapshot().AllocationUsed)
+
+			require.NoError(t, jm.PreAlloc(10_000))
+			require.Equal(t, account.Snapshot().Used, generation.Used())
+			require.Equal(
+				t,
+				account.Snapshot().Used,
+				generation.Snapshot().AllocationUsed,
+			)
+			jm.Free()
+			require.Zero(t, account.Snapshot().Used)
+			require.Zero(t, generation.Used())
+			terminal, first, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+			require.True(t, first)
+			require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
+		})
+	}
+}
+
+func TestAccountedEmptyJoinMapInitialFailureRollsBackController(t *testing.T) {
+	initial := hashtable.Int64HashMapInitialAllocationBytes() +
+		hashtable.HashMapBlockDescriptorBytes()
+	budget := process.MustNewHashBuildBudget(initial, initial)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 2)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(initial-1, generation)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+
+	jm, err := NewAccountedEmptyJoinMap(4, account, mp)
+	require.Nil(t, jm)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	require.Zero(t, registry.LiveAllocationMetadata())
+	require.Zero(t, mp.CurrNB())
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
 }
 
 func TestCopyBuildBatchBudgetsSmallIngressAfterFullBatches(t *testing.T) {

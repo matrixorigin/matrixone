@@ -49,6 +49,7 @@ type AnalyzeModule struct {
 	explainPhyBuffer           *bytes.Buffer
 	remoteUsage                resource.Usage
 	remoteMemory               resource.MemoryTotals
+	remoteAllocation           resource.AllocationAccountTotals
 	remoteQuality              resource.QualityFlags
 	remoteMissingFragments     uint64
 	remoteMissingMemoryDomains uint64
@@ -62,6 +63,7 @@ type AnalyzeModule struct {
 type remoteResourceSnapshot struct {
 	Usage                    resource.Usage
 	Memory                   resource.MemoryTotals
+	Allocation               resource.AllocationAccountTotals
 	Quality                  resource.QualityFlags
 	MissingFragmentCount     uint64
 	MissingMemoryDomainCount uint64
@@ -82,6 +84,7 @@ func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 		anal.retryTimes = 0
 		anal.remoteUsage = resource.Usage{}
 		anal.remoteMemory = resource.MemoryTotals{}
+		anal.remoteAllocation = resource.AllocationAccountTotals{}
 		anal.remoteQuality = 0
 		anal.remoteMissingFragments = 0
 		anal.remoteMissingMemoryDomains = 0
@@ -102,6 +105,7 @@ func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 func (anal *AnalyzeModule) appendRemoteResource(
 	delta resource.Delta,
 	memory resource.MemoryTotals,
+	allocation resource.AllocationAccountTotals,
 	missingFragments uint64,
 	missingMemoryDomains uint64,
 ) {
@@ -113,6 +117,10 @@ func (anal *AnalyzeModule) appendRemoteResource(
 	quality := delta.Quality
 	quality |= resource.MergeUsage(&anal.remoteUsage, delta.Usage)
 	quality |= resource.MergeMemoryTotals(&anal.remoteMemory, memory)
+	quality |= resource.MergeAllocationAccountTotals(
+		&anal.remoteAllocation,
+		allocation,
+	)
 	anal.remoteMissingFragments, quality = addCheckedRemoteCounter(
 		anal.remoteMissingFragments, missingFragments, quality)
 	anal.remoteMissingMemoryDomains, quality = addCheckedRemoteCounter(
@@ -130,6 +138,7 @@ func (anal *AnalyzeModule) remoteResourceSummary() remoteResourceSnapshot {
 	return remoteResourceSnapshot{
 		Usage:                    anal.remoteUsage,
 		Memory:                   anal.remoteMemory,
+		Allocation:               anal.remoteAllocation,
 		Quality:                  anal.remoteQuality,
 		MissingFragmentCount:     anal.remoteMissingFragments,
 		MissingMemoryDomainCount: anal.remoteMissingMemoryDomains,

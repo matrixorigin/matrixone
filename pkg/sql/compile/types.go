@@ -346,7 +346,9 @@ type Compile struct {
 	resourceAttemptOwnerEligible bool
 	allocationAccountRegistry    *mpool.AllocationAccountRegistry
 	allocationAccountLimit       uint64
+	allocationControllerProvider func() (mpool.AllocationCapacityController, error)
 	allocationTerminalExporter   func(mpool.AllocationAccountTerminalSnapshot)
+	allocationLifecycleAutomatic bool
 	allocationAttempt            *statementAllocationAttempt
 	hasMergeOp                   bool
 

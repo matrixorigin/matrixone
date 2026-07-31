@@ -79,7 +79,6 @@ type HashmapBuilder struct {
 	auxReservation            *process.HashBuildReservation
 	keyExprs                  []*plan.Expr
 	expressionLease           *ExpressionMemoryLease
-
 	// Exact runtime-filter keys are an optional owner inside the mandatory
 	// JoinMap build. The fallback bit is observed by HashBuild for diagnostics.
 	//
@@ -90,6 +89,8 @@ type HashmapBuilder struct {
 	// must not be retried or re-spilled.
 	runtimeFilterCollectionFallback bool
 	retainedBatchRecoverySafe       bool
+	mapAllocationAccount            *mpool.AllocationAccount
+	mapAllocation                   *hashtable.AllocationAccountSelection
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -242,6 +243,8 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	// Free them before releasing expression reservations; Prepare recreates the
 	// executor set for the next generation.
 	hb.FreeExecutors()
+	hb.mapAllocationAccount = nil
+	hb.mapAllocation = nil
 }
 
 func (hb *HashmapBuilder) Free(proc *process.Process) {
@@ -263,6 +266,8 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	}
 	hb.UniqueJoinKeys = nil
 	hb.uniqueKeySlots = nil
+	hb.mapAllocationAccount = nil
+	hb.mapAllocation = nil
 }
 
 func (hb *HashmapBuilder) FreeExecutors() {
@@ -649,16 +654,27 @@ func (hb *HashmapBuilder) buildHashmap(
 	var err error
 	var itr hashmap.Iterator
 	if hb.keyWidth <= 8 {
-		if err = hb.reserveInitialMap(int64(hashtable.Int64HashMapInitialAllocationBytes())); err != nil {
-			return err
+		if hb.mapAllocation == nil {
+			if err = hb.reserveInitialMap(int64(hashtable.Int64HashMapInitialAllocationBytes())); err != nil {
+				return err
+			}
+			hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp())
+			if err == nil {
+				err = hb.attachIntHashMapAdmission(hb.IntHashMap)
+			}
+		} else {
+			hb.IntHashMap, err = hashmap.NewIntHashMapWithAllocation(
+				false,
+				proc.Mp(),
+				hb.mapAllocation,
+			)
 		}
-		if hb.IntHashMap, err = hashmap.NewIntHashMap(false, proc.Mp()); err != nil {
+		if err != nil {
+			if hb.IntHashMap != nil {
+				hb.IntHashMap.Free()
+				hb.IntHashMap = nil
+			}
 			hb.releaseMapReservation()
-			return err
-		}
-		if err = hb.attachIntHashMapAdmission(hb.IntHashMap); err != nil {
-			hb.IntHashMap.Free()
-			hb.IntHashMap = nil
 			return err
 		}
 		if hb.cachedIntIterator != nil {
@@ -669,16 +685,27 @@ func (hb *HashmapBuilder) buildHashmap(
 			hb.cachedIntIterator = itr
 		}
 	} else {
-		if err = hb.reserveInitialMap(int64(hashtable.StringHashMapInitialAllocationBytes())); err != nil {
-			return err
+		if hb.mapAllocation == nil {
+			if err = hb.reserveInitialMap(int64(hashtable.StringHashMapInitialAllocationBytes())); err != nil {
+				return err
+			}
+			hb.StrHashMap, err = hashmap.NewStrHashMap(false, proc.Mp())
+			if err == nil {
+				err = hb.attachStrHashMapAdmission(hb.StrHashMap)
+			}
+		} else {
+			hb.StrHashMap, err = hashmap.NewStrHashMapWithAllocation(
+				false,
+				proc.Mp(),
+				hb.mapAllocation,
+			)
 		}
-		if hb.StrHashMap, err = hashmap.NewStrHashMap(false, proc.Mp()); err != nil {
+		if err != nil {
+			if hb.StrHashMap != nil {
+				hb.StrHashMap.Free()
+				hb.StrHashMap = nil
+			}
 			hb.releaseMapReservation()
-			return err
-		}
-		if err = hb.attachStrHashMapAdmission(hb.StrHashMap); err != nil {
-			hb.StrHashMap.Free()
-			hb.StrHashMap = nil
 			return err
 		}
 		if hb.cachedStrIterator != nil {

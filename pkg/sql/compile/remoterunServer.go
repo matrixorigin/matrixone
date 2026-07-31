@@ -252,6 +252,8 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			return errBuildCompile
 		}
 		var allocationAttempt *statementAllocationAttempt
+		var localAllocation resource.AllocationAccountTotals
+		var localAllocationQuality resource.QualityFlags
 		var runErr error
 		defer func() {
 			// Capture operator and descendant facts before cleanup. The MPool
@@ -277,8 +279,14 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				descendant,
 				expectedDirect,
 			)
+			aggregate.Delta.Quality |= localAllocationQuality |
+				resource.MergeAllocationAccountTotals(
+					&aggregate.Allocation,
+					localAllocation,
+				)
 			receiver.resourceDelta = aggregate.Delta
 			receiver.resourceMemory = aggregate.Memory
+			receiver.resourceAllocation = aggregate.Allocation
 			receiver.resourceMissingFragments = aggregate.MissingFragmentCount
 			receiver.resourceMissingMemoryDomains = aggregate.MissingMemoryDomainCount
 
@@ -307,7 +315,18 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		}
 
 		runCompile.scopes = []*Scope{s}
-		allocationAttempt, runErr = runCompile.beginAllocationAccountAttempt()
+		runErr = runCompile.ensureAllocationAccountLifecycle(func(
+			snapshot mpool.AllocationAccountTerminalSnapshot,
+		) {
+			localAllocationQuality |= localAllocation.AddGeneration(
+				snapshot.Peak,
+				snapshot.Used,
+				snapshot.State == mpool.AllocationAccountTerminalValid,
+			)
+		})
+		if runErr == nil {
+			allocationAttempt, runErr = runCompile.beginAllocationAccountAttempt()
+		}
 		if runErr != nil {
 			return runErr
 		}
@@ -569,6 +588,7 @@ type messageReceiverOnServer struct {
 	phyPlan                      *models.PhyPlan
 	resourceDelta                resource.Delta
 	resourceMemory               resource.MemoryTotals
+	resourceAllocation           resource.AllocationAccountTotals
 	resourceMissingFragments     uint64
 	resourceMissingMemoryDomains uint64
 }
@@ -871,6 +891,7 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 		TerminalResourceVersion:  remoteTerminalResourceVersion,
 		Delta:                    receiver.resourceDelta,
 		Memory:                   receiver.resourceMemory,
+		Allocation:               receiver.resourceAllocation,
 		MissingFragmentCount:     receiver.resourceMissingFragments,
 		MissingMemoryDomainCount: receiver.resourceMissingMemoryDomains,
 	}

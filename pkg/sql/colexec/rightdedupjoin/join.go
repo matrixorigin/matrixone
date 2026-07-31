@@ -290,6 +290,13 @@ func (rightDedupJoin *RightDedupJoin) newEmptyJoinMap(proc *process.Process) (*m
 	if err != nil {
 		return nil, err
 	}
+	if rightDedupJoin.allocationAccount != nil {
+		return hashbuild.NewAccountedEmptyJoinMap(
+			keyWidth,
+			rightDedupJoin.allocationAccount,
+			proc.Mp(),
+		)
+	}
 	return hashbuild.NewBudgetedEmptyJoinMap(keyWidth, budget, proc.Mp())
 }
 

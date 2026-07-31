@@ -322,7 +322,9 @@ func (c *Compile) clear() {
 	c.resourceAttemptOwnerEligible = false
 	c.allocationAccountRegistry = nil
 	c.allocationAccountLimit = 0
+	c.allocationControllerProvider = nil
 	c.allocationTerminalExporter = nil
+	c.allocationLifecycleAutomatic = false
 	c.allocationAttempt = nil
 	c.isPrepare = false
 	c.hasMergeOp = false
@@ -7003,9 +7005,25 @@ func (c *Compile) ConfigureAllocationAccountLifecycle(
 	limit uint64,
 	exporter func(mpool.AllocationAccountTerminalSnapshot),
 ) {
+	c.ConfigureAllocationAccountLifecycleWithController(
+		registry,
+		limit,
+		nil,
+		exporter,
+	)
+}
+
+func (c *Compile) ConfigureAllocationAccountLifecycleWithController(
+	registry *mpool.AllocationAccountRegistry,
+	limit uint64,
+	controllerProvider func() (mpool.AllocationCapacityController, error),
+	exporter func(mpool.AllocationAccountTerminalSnapshot),
+) {
 	c.allocationAccountRegistry = registry
 	c.allocationAccountLimit = limit
+	c.allocationControllerProvider = controllerProvider
 	c.allocationTerminalExporter = exporter
+	c.allocationLifecycleAutomatic = false
 }
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)) {

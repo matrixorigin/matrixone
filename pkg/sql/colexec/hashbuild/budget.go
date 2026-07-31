@@ -174,6 +174,52 @@ func NewBudgetedEmptyJoinMap(
 	return jm, nil
 }
 
+// NewAccountedEmptyJoinMap creates the consumer-grown empty-map variant under
+// the statement allocation generation. Physical cell/descriptor Free is its
+// only memory release owner; the account's controller already charges the
+// shared query/CN policy, so no legacy reservation is stacked on it.
+func NewAccountedEmptyJoinMap(
+	keyWidth int,
+	account *mpool.AllocationAccount,
+	mp *mpool.MPool,
+) (*message.JoinMap, error) {
+	if account == nil || mp == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	selection, err := hashtable.NewAllocationAccountSelection(
+		account,
+		HashBuildAllocationOwner,
+		HashBuildAllocationSiteHashCell,
+		HashBuildAllocationSiteHashDescriptor,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var (
+		intHashMap *hashmap.IntHashMap
+		strHashMap *hashmap.StrHashMap
+	)
+	if keyWidth <= 8 {
+		intHashMap, err = hashmap.NewIntHashMapWithAllocation(false, mp, selection)
+	} else {
+		strHashMap, err = hashmap.NewStrHashMapWithAllocation(false, mp, selection)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	jm := message.NewJoinMap(
+		message.GroupSels{},
+		intHashMap,
+		strHashMap,
+		nil,
+		nil,
+		mp,
+	)
+	jm.IncRef(1)
+	return jm, nil
+}
+
 func (hb *HashmapBuilder) attachIntHashMapAdmission(m *hashmap.IntHashMap) error {
 	owner := hb.mapReservation
 	budget := hb.budget

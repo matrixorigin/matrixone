@@ -15,6 +15,7 @@
 package process
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -29,6 +30,11 @@ import (
 )
 
 const hashBuildMinimumReserve = uint64(4 << 30)
+
+const (
+	hashBuildAllocationGenerationSlots = uint32(131_072)
+	hashBuildMinimumCellBlockBytes     = uint64(16 << 10)
+)
 
 const (
 	// Keep a process-wide reserve for listeners, RPC connections, object
@@ -257,6 +263,10 @@ type HashBuildBudget struct {
 	spillFDConfiguredCap uint64
 	spillFDCap           uint64
 	spillFDUsed          uint64
+
+	allocationRegistryOnce sync.Once
+	allocationRegistry     *mpool.AllocationAccountRegistry
+	allocationRegistryErr  error
 }
 
 // NewHashBuildBudget creates a local-CN budget.  Both caps are finite and
@@ -1124,6 +1134,40 @@ func (g *HashBuildBudgetGeneration) Closed() bool {
 	return g.closed || g.budget.closed
 }
 
+// AllocationAccountRegistry returns the bounded CN-local registry shared by
+// every activated HashBuild generation under this aggregate budget. The slot
+// formula covers every minimum-size cell block, its published descriptor, and
+// one private replacement descriptor/block transaction.
+func (g *HashBuildBudgetGeneration) AllocationAccountRegistry() (
+	*mpool.AllocationAccountRegistry,
+	error,
+) {
+	if g == nil || g.budget == nil {
+		return nil, ErrHashBuildBudgetInvalid
+	}
+	b := g.budget
+	b.allocationRegistryOnce.Do(func() {
+		capBytes := b.AggregateCap()
+		blocks := capBytes / hashBuildMinimumCellBlockBytes
+		if capBytes%hashBuildMinimumCellBlockBytes != 0 {
+			blocks++
+		}
+		if blocks == 0 {
+			blocks = 1
+		}
+		if blocks > math.MaxUint64/3 {
+			b.allocationRegistryErr = ErrHashBuildBudgetInvalid
+			return
+		}
+		b.allocationRegistry, b.allocationRegistryErr =
+			mpool.NewAllocationAccountRegistry(
+				hashBuildAllocationGenerationSlots,
+				blocks*3,
+			)
+	})
+	return b.allocationRegistry, b.allocationRegistryErr
+}
+
 // Close rejects future reservations for this generation while allowing all
 // currently live tokens to release.  It is idempotent.
 func (g *HashBuildBudgetGeneration) Close() {
@@ -1144,7 +1188,17 @@ func (g *HashBuildBudgetGeneration) AcquireAllocationCapacity(size uint64) error
 		return nil
 	}
 	_, err := g.reserve(size, true)
-	return err
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, ErrHashBuildBudgetClosed):
+		return errors.Join(mpool.ErrAllocationAccountSealed, err)
+	case errors.Is(err, ErrHashBuildBudgetAdmission):
+		return errors.Join(mpool.ErrAllocationAccountCapacity, err)
+	default:
+		return errors.Join(mpool.ErrAllocationAccountInvariant, err)
+	}
 }
 
 // ReleaseAllocationCapacity is called only by physical MPool Free through the

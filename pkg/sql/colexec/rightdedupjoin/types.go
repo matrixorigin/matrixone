@@ -17,6 +17,7 @@ package rightdedupjoin
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -90,8 +91,43 @@ type RightDedupJoin struct {
 	DelColIdx         int32
 	UpdateColIdxList  []int32
 	UpdateColExprList []*plan.Expr
+	allocationAccount *mpool.AllocationAccount
 
 	vm.OperatorBase
+}
+
+func (rightDedupJoin *RightDedupJoin) AllocationAccountEnabled() bool {
+	return rightDedupJoin != nil
+}
+
+func (rightDedupJoin *RightDedupJoin) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if rightDedupJoin.allocationAccount != nil &&
+		rightDedupJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	rightDedupJoin.allocationAccount = account
+	return nil
+}
+
+func (rightDedupJoin *RightDedupJoin) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if rightDedupJoin.allocationAccount == nil {
+		return nil
+	}
+	if rightDedupJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if rightDedupJoin.ctr.mp != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	rightDedupJoin.allocationAccount = nil
+	return nil
 }
 
 func (rightDedupJoin *RightDedupJoin) GetOperatorBase() *vm.OperatorBase {
@@ -150,6 +186,7 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 		ctr.resetEvalVectors()
 	}
 	ctr.state = Build
+	rightDedupJoin.allocationAccount = nil
 }
 
 func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -164,6 +201,7 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 	}
 	ctr.cleanEvalVectors()
 	ctr.releaseProbeExpressionLease()
+	rightDedupJoin.allocationAccount = nil
 }
 
 func (rightDedupJoin *RightDedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

@@ -184,6 +184,11 @@ func TestHashBuildBudgetAllocationAccountAdapter(t *testing.T) {
 	) {
 		t.Fatalf("combined legacy/exact admission error = %v", err)
 	}
+	if !errors.Is(err, commonmpool.ErrAllocationAccountCapacity) ||
+		commonmpool.AllocationFailureReasonOf(err) !=
+			commonmpool.AllocationFailureCapacity {
+		t.Fatalf("adapter did not type policy pressure as capacity: %v", err)
+	}
 	if account.Snapshot().Used != 6 ||
 		registry.LiveAllocationMetadata() != 1 {
 		t.Fatal("failed adapter admission did not roll back")
@@ -195,6 +200,10 @@ func TestHashBuildBudgetAllocationAccountAdapter(t *testing.T) {
 		ErrHashBuildBudgetClosed,
 	) {
 		t.Fatalf("closed generation admission error = %v", err)
+	}
+	if !errors.Is(err, commonmpool.ErrAllocationAccountSealed) ||
+		commonmpool.IsRetryableAllocationCapacity(err) {
+		t.Fatalf("closed adapter error entered capacity retry: %v", err)
 	}
 	if account.Snapshot().Used != 6 ||
 		registry.LiveAllocationMetadata() != 1 {
@@ -213,6 +222,35 @@ func TestHashBuildBudgetAllocationAccountAdapter(t *testing.T) {
 	account.Seal()
 	if _, err = registry.Finalize(account); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHashBuildAllocationAccountRegistryUsesBoundedFormula(t *testing.T) {
+	budget := MustNewHashBuildBudget(16<<10, 16<<10)
+	first, err := budget.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := first.AllocationAccountRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registry.GenerationCapacity() != hashBuildAllocationGenerationSlots {
+		t.Fatalf("generation slots = %d", registry.GenerationCapacity())
+	}
+	if registry.MaxAllocationMetadata() != 3 {
+		t.Fatalf("allocation slots = %d, want 3", registry.MaxAllocationMetadata())
+	}
+	second, err := budget.OpenGeneration(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRegistry, err := second.AllocationAccountRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondRegistry != registry {
+		t.Fatal("one CN budget created multiple allocation registries")
 	}
 }
 

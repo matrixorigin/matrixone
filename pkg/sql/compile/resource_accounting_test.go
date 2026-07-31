@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -51,6 +52,7 @@ func TestExecutionResourceRecorder(t *testing.T) {
 			MaxDomainPeakLiveBytes:      80,
 			SumDomainPeakLiveBytesBound: 80,
 		},
+		resource.AllocationAccountTotals{},
 		0,
 		0,
 	)
@@ -73,6 +75,42 @@ func TestExecutionResourceRecorder(t *testing.T) {
 	require.Equal(t, uint64(80), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Zero(t, summary.Quality&resource.QualityMissingMemoryDomain)
 	require.Zero(t, summary.Quality&resource.QualityMissingFragment)
+}
+
+func TestExecutionResourceRecorderPublishesAllocationTerminal(t *testing.T) {
+	root := resource.NewRoot(resource.ConnExternal)
+	recorder := newExecutionResourceRecorder(
+		resource.ContextWithRoot(context.Background(), root),
+		true,
+	)
+	require.NotNil(t, recorder)
+	recorder.recordAllocationAccountTerminal(
+		mpool.AllocationAccountTerminalSnapshot{
+			AllocationAccountSnapshot: mpool.AllocationAccountSnapshot{
+				Peak: 64,
+			},
+			State: mpool.AllocationAccountTerminalValid,
+		},
+	)
+	recorder.finishAttempt(
+		0,
+		time.Now(),
+		0,
+		0,
+		nil,
+		nil,
+		nil,
+		"",
+		false,
+	)
+	recorder.publish()
+
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(1), summary.Allocation.GenerationCount)
+	require.Equal(t, uint64(1), summary.Allocation.ValidGenerationCount)
+	require.Equal(t, uint64(64), summary.Allocation.MaxGenerationPeak)
+	require.Zero(t, summary.Allocation.LiveBytesAtTerminal)
+	require.Zero(t, summary.Quality&resource.QualityInvariantFailure)
 }
 
 func TestExplainPhyBufferUsesPublishedCurrentAttempt(t *testing.T) {
@@ -258,6 +296,12 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 			MaxDomainPeakLiveBytes:      15,
 			SumDomainPeakLiveBytesBound: 15,
 		},
+		Allocation: resource.AllocationAccountTotals{
+			GenerationCount:      1,
+			ValidGenerationCount: 1,
+			MaxGenerationPeak:    17,
+			SumGenerationPeak:    17,
+		},
 	}
 	data, err := json.Marshal(envelope)
 	require.NoError(t, err)
@@ -269,6 +313,8 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 	require.Equal(t, uint64(11), summary.Usage.ExclusiveActiveNS)
 	require.Equal(t, uint64(12), summary.Usage.S3ReadBytes)
 	require.Equal(t, uint64(15), summary.Memory.MaxDomainPeakLiveBytes)
+	require.Equal(t, uint64(1), summary.Allocation.GenerationCount)
+	require.Equal(t, uint64(17), summary.Allocation.MaxGenerationPeak)
 	require.NotZero(t, summary.Quality&resource.QualityPartial)
 	require.Len(t, anal.remotePhyPlans, 1)
 	require.Equal(t, "Merge", anal.remotePhyPlans[0].LocalScope[0].Magic)
@@ -444,7 +490,13 @@ func TestRemoteResourceCounterSaturates(t *testing.T) {
 		remoteMissingMemoryDomains: math.MaxUint64,
 		remoteReports:              math.MaxUint64,
 	}
-	anal.appendRemoteResource(resource.Delta{}, resource.MemoryTotals{}, 1, 1)
+	anal.appendRemoteResource(
+		resource.Delta{},
+		resource.MemoryTotals{},
+		resource.AllocationAccountTotals{},
+		1,
+		1,
+	)
 	snapshot := anal.remoteResourceSummary()
 	require.Equal(t, uint64(math.MaxUint64), snapshot.MissingFragmentCount)
 	require.Equal(t, uint64(math.MaxUint64), snapshot.MissingMemoryDomainCount)
@@ -466,7 +518,11 @@ func TestAnalyzeModuleResetClearsRemoteResourceAggregate(t *testing.T) {
 	anal := &AnalyzeModule{}
 	anal.appendRemoteResource(
 		resource.Delta{Usage: resource.Usage{S3ReadBytes: 11}, Quality: resource.QualityPartial},
-		resource.MemoryTotals{MaxDomainPeakLiveBytes: 8}, 2, 3)
+		resource.MemoryTotals{MaxDomainPeakLiveBytes: 8},
+		resource.AllocationAccountTotals{},
+		2,
+		3,
+	)
 	anal.Reset(false, false)
 	snapshot := anal.remoteResourceSummary()
 	require.Equal(t, remoteResourceSnapshot{}, snapshot)
@@ -480,7 +536,13 @@ func TestAnalyzeModuleRemoteResourceConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				anal.appendRemoteResource(resource.Delta{Usage: resource.Usage{SpillBytes: 1}}, resource.MemoryTotals{}, 1, 1)
+				anal.appendRemoteResource(
+					resource.Delta{Usage: resource.Usage{SpillBytes: 1}},
+					resource.MemoryTotals{},
+					resource.AllocationAccountTotals{},
+					1,
+					1,
+				)
 				_ = anal.remoteResourceSummary()
 			}
 		}()
