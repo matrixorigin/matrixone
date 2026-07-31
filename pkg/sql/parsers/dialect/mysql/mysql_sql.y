@@ -116,6 +116,9 @@ func sqlTaskInt64(v any) int64 {
     icebergOptions tree.IcebergOptions
     icebergTableParam *tree.IcebergTableParam
     icebergRefSpec *tree.IcebergRefSpec
+    mongodbOption *tree.MongoDBOption
+    mongodbOptions tree.MongoDBOptions
+    mongodbTableParam *tree.MongoDBTableParam
 
     functionName *tree.FunctionName
     funcArg tree.FunctionArg
@@ -553,7 +556,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> CALL
 
 // Time window
-%token <str> PREV SLIDING FILL
+%token <str> PREV SLIDING FILL GAPFILL
 
 // sp_begin_sym
 %token <str> SPBEGIN
@@ -579,6 +582,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Iceberg
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
+%token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
 
 // ROLLUP
 %token <str> GROUPING SETS CUBE ROLLUP 
@@ -593,18 +597,18 @@ func sqlTaskInt64(v any) int64 {
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt insert_no_with_stmt delete_stmt merge_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt drop_iceberg_catalog_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt drop_iceberg_catalog_stmt drop_mongodb_connection_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
-%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt create_iceberg_catalog_stmt
+%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt create_iceberg_catalog_stmt create_mongodb_connection_stmt
 %type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt create_sql_task_stmt drop_sql_task_stmt alter_sql_task_stmt show_sql_tasks_stmt show_sql_task_runs_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt show_iceberg_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt show_iceberg_stmt show_mongodb_connections_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> show_servers_stmt show_connectors_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt
 %type <merge> merge_no_with_stmt
 %type <mergeClauses> merge_when_list
 %type <mergeClause> merge_when_clause
@@ -728,6 +732,10 @@ func sqlTaskInt64(v any) int64 {
 %type <icebergTableParam> iceberg_table_param
 %type <icebergOptions> iceberg_option_list_opt iceberg_option_list
 %type <icebergOption> iceberg_option
+%type <mongodbTableParam> mongodb_table_param
+%type <mongodbOptions> mongodb_option_list_opt mongodb_option_list
+%type <mongodbOption> mongodb_option
+%type <str> mongodb_option_key mongodb_option_value
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -954,6 +962,7 @@ func sqlTaskInt64(v any) int64 {
 %type <timeWindow> time_window_opt time_window
 %type <timeInterval> interval
 %type <timeSliding> sliding_opt
+%type <boolVal> gapfill_opt
 %type <timeFill> fill_opt
 %type <fillMode> fill_mode
 
@@ -3693,6 +3702,7 @@ alter_stmt:
 |   alter_role_stmt
 |   alter_sql_task_stmt
 |   alter_iceberg_catalog_stmt
+|   alter_mongodb_connection_stmt
 |   rename_stmt
 // |    alter_ddl_stmt
 
@@ -3709,6 +3719,38 @@ alter_iceberg_catalog_stmt:
         $$ = &tree.AlterIcebergCatalog{
             Name: tree.Identifier($4.Compare()),
             Options: $7,
+        }
+    }
+
+alter_mongodb_connection_stmt:
+    ALTER MONGODB CONNECTION ident SET mongodb_option_list
+    {
+        $$ = &tree.AlterMongoDBConnection{
+            Name: tree.Identifier($4.Compare()),
+            Action: tree.AlterMongoDBConnectionSet,
+            Options: $6,
+        }
+    }
+|   ALTER MONGODB CONNECTION ident SET '(' mongodb_option_list ')'
+    {
+        $$ = &tree.AlterMongoDBConnection{
+            Name: tree.Identifier($4.Compare()),
+            Action: tree.AlterMongoDBConnectionSet,
+            Options: $7,
+        }
+    }
+|   ALTER MONGODB CONNECTION ident ENABLE
+    {
+        $$ = &tree.AlterMongoDBConnection{
+            Name: tree.Identifier($4.Compare()),
+            Action: tree.AlterMongoDBConnectionEnable,
+        }
+    }
+|   ALTER MONGODB CONNECTION ident DISABLE
+    {
+        $$ = &tree.AlterMongoDBConnection{
+            Name: tree.Identifier($4.Compare()),
+            Action: tree.AlterMongoDBConnectionDisable,
         }
     }
 
@@ -4656,6 +4698,7 @@ show_stmt:
 |   show_sql_tasks_stmt
 |   show_sql_task_runs_stmt
 |   show_iceberg_stmt
+|   show_mongodb_connections_stmt
 
 show_sql_tasks_stmt:
     SHOW TASKS
@@ -4704,6 +4747,7 @@ show_iceberg_stmt:
             Where: $5,
         }
     }
+
 |   SHOW ICEBERG NAMESPACES FROM ident like_opt where_expression_opt
     {
         $$ = &tree.ShowIcebergNamespaces{
@@ -4774,6 +4818,15 @@ show_iceberg_stmt:
             Catalog: tree.Identifier($9.Compare()),
             Like: $10,
             Where: $11,
+        }
+    }
+
+show_mongodb_connections_stmt:
+    SHOW MONGODB CONNECTIONS like_opt where_expression_opt
+    {
+        $$ = &tree.ShowMongoDBConnections{
+            Like: $4,
+            Where: $5,
         }
     }
 
@@ -5359,6 +5412,7 @@ drop_ddl_stmt:
 |   drop_cdc_stmt
 |   drop_sql_task_stmt
 |   drop_iceberg_catalog_stmt
+|   drop_mongodb_connection_stmt
 
 drop_sql_task_stmt:
     DROP TASK exists_opt ident
@@ -5373,6 +5427,15 @@ drop_iceberg_catalog_stmt:
     DROP ICEBERG CATALOG exists_opt ident
     {
         $$ = &tree.DropIcebergCatalog{
+            IfExists: $4,
+            Name: tree.Identifier($5.Compare()),
+        }
+    }
+
+drop_mongodb_connection_stmt:
+    DROP MONGODB CONNECTION exists_opt ident
+    {
+        $$ = &tree.DropMongoDBConnection{
             IfExists: $4,
             Name: tree.Identifier($5.Compare()),
         }
@@ -6285,12 +6348,13 @@ time_window_opt:
 	}
 
 time_window:
-	interval sliding_opt fill_opt
+	interval sliding_opt gapfill_opt fill_opt
 	{
 		$$ = &tree.TimeWindow{
 			Interval: $1,
 			Sliding: $2,
-			Fill: $3,
+			GapFill: $3,
+			Fill: $4,
 		}
 	}
 
@@ -6326,6 +6390,15 @@ sliding_opt:
         	Val: tree.NewNumVal(v, str, false, tree.P_int64),
         	Unit: $5,
         }
+	}
+
+gapfill_opt:
+	{
+		$$ = false
+	}
+|	GAPFILL '(' PARTITION ')'
+	{
+		$$ = true
 	}
 
 fill_opt:
@@ -7509,6 +7582,7 @@ create_ddl_stmt:
 |   create_source_stmt
 |   create_connector_stmt
 |   create_iceberg_catalog_stmt
+|   create_mongodb_connection_stmt
 |   pause_daemon_task_stmt
 |   cancel_daemon_task_stmt
 |   resume_daemon_task_stmt
@@ -7517,6 +7591,16 @@ create_iceberg_catalog_stmt:
     CREATE ICEBERG CATALOG not_exists_opt ident iceberg_option_list_opt
     {
         $$ = &tree.CreateIcebergCatalog{
+            IfNotExists: $4,
+            Name: tree.Identifier($5.Compare()),
+            Options: $6,
+        }
+    }
+
+create_mongodb_connection_stmt:
+    CREATE MONGODB CONNECTION not_exists_opt ident mongodb_option_list_opt
+    {
+        $$ = &tree.CreateMongoDBConnection{
             IfNotExists: $4,
             Name: tree.Identifier($5.Compare()),
             Options: $6,
@@ -9616,6 +9700,15 @@ create_table_stmt:
         t.IcebergParam = $9
         $$ = t
     }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' mongodb_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.MongoDBParam = $9
+        $$ = t
+    }
 |   CREATE EXTERNAL TABLE not_exists_opt table_name iceberg_table_param
     {
         t := tree.NewCreateTable()
@@ -10457,6 +10550,57 @@ iceberg_option_value:
         $$ = $1
     }
 
+mongodb_table_param:
+    ENGINE equal_opt MONGODB mongodb_option_list_opt
+    {
+        $$ = tree.NewMongoDBTableParam($4)
+    }
+
+mongodb_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' mongodb_option_list ')'
+    {
+        $$ = $3
+    }
+
+mongodb_option_list:
+    mongodb_option
+    {
+        $$ = tree.MongoDBOptions{$1}
+    }
+|   mongodb_option_list ',' mongodb_option
+    {
+        $$ = append($1, $3)
+    }
+
+mongodb_option:
+    mongodb_option_key '=' mongodb_option_value
+    {
+        $$ = tree.NewMongoDBOption(tree.Identifier($1), $3)
+    }
+
+mongodb_option_key:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
+mongodb_option_value:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
 table_option_list_opt:
     {
         $$ = nil
@@ -11246,6 +11390,14 @@ column_attribute_elem:
     {
     	str := util.DealCommentString($2)
         $$ = tree.NewAttributeComment(tree.NewNumVal(str, str, false, tree.P_char))
+    }
+|   MONGODB_PATH STRING
+    {
+        $$ = tree.NewAttributeMongoDBPath($2)
+    }
+|   MONGODB_CONVERT STRING
+    {
+        $$ = tree.NewAttributeMongoDBConvert($2)
     }
 |   COLLATE collate_name
     {
@@ -14882,6 +15034,10 @@ non_reserved_keyword:
 |   INTEGER
 |   INDEXES
 |   ICEBERG
+|   MONGODB
+|   MONGODB_PATH
+|   MONGODB_CONVERT
+|   CONNECTIONS
 |   INTERMEDIATE_GRAPH_DEGREE
 |   ISOLATION
 |   ITOPK_SIZE
@@ -15174,6 +15330,8 @@ non_reserved_keyword:
 |	PRECEDING
 |	FOLLOWING
 |	FILL
+
+|	GAPFILL
 |	TABLE_NUMBER
 |	TABLE_VALUES
 |	TABLE_SIZE

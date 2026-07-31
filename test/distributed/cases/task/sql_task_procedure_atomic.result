@@ -1,0 +1,39 @@
+drop database if exists sql_task_procedure_atomic;
+create database sql_task_procedure_atomic;
+use sql_task_procedure_atomic;
+create table target_rows(id int primary key);
+create table ingest_control(id int primary key, watermark int not null);
+insert into ingest_control values (1, 0);
+create procedure ingest_once() '
+begin
+insert into target_rows values (1);
+update ingest_control set watermark = 1 where id = 1;
+insert into table_that_does_not_exist values (1);
+end';
+call ingest_once();
+no such table sql_task_procedure_atomic.table_that_does_not_exist
+select count(*) as target_count from target_rows;
+target_count
+0
+select watermark from ingest_control where id = 1;
+watermark
+0
+create task task_ingest_once as begin call ingest_once(); end;
+execute task task_ingest_once;
+no such table sql_task_procedure_atomic.table_that_does_not_exist
+select count(*) as target_count from target_rows;
+target_count
+0
+select watermark from ingest_control where id = 1;
+watermark
+0
+select status
+from mo_task.sql_task_run
+where task_name = 'task_ingest_once'
+order by run_id desc
+limit 1;
+status
+FAILED
+drop task task_ingest_once;
+drop procedure ingest_once;
+drop database sql_task_procedure_atomic;

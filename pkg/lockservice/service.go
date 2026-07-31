@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/crc64"
 	"strconv"
@@ -59,6 +60,15 @@ type service struct {
 	clock                 clock.Clock
 	stopper               *stopper.Stopper
 	stopOnce              sync.Once
+	closeErr              error
+	lifecycle             struct {
+		sync.RWMutex
+		closing            bool
+		ctx                context.Context
+		cancel             context.CancelFunc
+		operations         sync.WaitGroup
+		resolverAdmissions sync.WaitGroup
+	}
 	// lockWaitCeilingWarned prevents a large explicit timeout from logging on
 	// every lock operation. The metric still counts every clamped request.
 	lockWaitCeilingWarned atomic.Bool
@@ -133,6 +143,7 @@ func NewLockService(
 		fetchWhoWaitingListC: make(chan who, 10240),
 		logger:               getLogger(cfg.ServiceID),
 	}
+	s.lifecycle.ctx, s.lifecycle.cancel = context.WithCancel(context.Background())
 
 	for _, opt := range opts {
 		opt(s)
@@ -178,6 +189,8 @@ func (s *service) Lock(
 		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
 	}
 	defer func() { s.endLockAdmission(admission) }()
+	ctx, cancelServiceClose := contextWithServiceClose(ctx, admission.serviceCtx)
+	defer cancelServiceClose()
 
 	v2.TxnLockTotalCounter.Inc()
 	options.Validate(rows)
@@ -394,9 +407,21 @@ func (s *service) Unlock(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
+	serviceCtx, admitted := s.beginTxnClosure()
+	if !admitted {
+		// Close owns every remaining local and remote lock once service
+		// admission is sealed.
+		return nil
+	}
+	defer s.endTxnClosure()
+
 	// Keep ordinary unlock behavior unchanged: it retries remote cleanup until
-	// completion even when the caller's request context has ended.
-	unlockCtx := context.Background()
+	// completion even when the caller's request context has ended. Service
+	// shutdown is the one terminal cancellation owner.
+	unlockCtx := serviceCtx
+	if unlockCtx == nil {
+		unlockCtx = context.Background()
+	}
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
@@ -405,9 +430,6 @@ func (s *service) Unlock(
 	if err := s.wait(unlockCtx); err != nil {
 		return err
 	}
-
-	s.beginTxnClosure()
-	defer s.endTxnClosure()
 
 	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
 	if txn == nil {
@@ -449,6 +471,14 @@ func (s *service) unlockUnknownCommit(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
+	serviceCtx, admitted := s.beginTxnClosure()
+	if !admitted {
+		return nil
+	}
+	defer s.endTxnClosure()
+	ctx, cancelServiceClose := contextWithServiceClose(ctx, serviceCtx)
+	defer cancelServiceClose()
+
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
@@ -510,6 +540,14 @@ func (s *service) unlockWithContext(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
+	serviceCtx, admitted := s.beginTxnClosure()
+	if !admitted {
+		return nil
+	}
+	defer s.endTxnClosure()
+	ctx, cancelServiceClose := contextWithServiceClose(ctx, serviceCtx)
+	defer cancelServiceClose()
+
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
@@ -524,9 +562,6 @@ func (s *service) unlockWithContext(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	s.beginTxnClosure()
-	defer s.endTxnClosure()
 
 	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
 	if txn == nil {
@@ -711,6 +746,7 @@ type lockAdmission struct {
 	preDrain     bool
 	reservedBind pb.LockTable
 	reserved     bool
+	serviceCtx   context.Context
 }
 
 func (a *lockAdmission) consume(bind pb.LockTable) bool {
@@ -729,13 +765,20 @@ func (s *service) beginLockAdmission(
 	tableID uint64,
 	rows [][]byte,
 ) (lockAdmission, bool) {
+	serviceCtx, admitted := s.beginServiceOperation()
+	if !admitted {
+		return lockAdmission{}, false
+	}
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if !s.canLockOnServiceStatusLocked(txnID, opts, tableID, rows) {
+		s.mu.Unlock()
+		s.endServiceOperation()
 		return lockAdmission{}, false
 	}
 	admission := lockAdmission{
-		preDrain: s.mu.status == pb.Status_ServiceLockEnable,
+		preDrain:   s.mu.status == pb.Status_ServiceLockEnable,
+		serviceCtx: serviceCtx,
 	}
 	if !admission.preDrain {
 		if opts.Sharding == pb.Sharding_ByRow {
@@ -743,6 +786,8 @@ func (s *service) beginLockAdmission(
 		}
 		l := s.tableGroups.get(opts.Group, tableID)
 		if l == nil {
+			s.mu.Unlock()
+			s.endServiceOperation()
 			return lockAdmission{}, false
 		}
 		admission.reservedBind = l.getBind()
@@ -750,13 +795,14 @@ func (s *service) beginLockAdmission(
 		s.mu.lockTableRef[opts.Group][tableID]++
 	}
 	s.mu.lockAdmissions++
+	s.mu.Unlock()
 	return admission, true
 }
 
 func (s *service) endLockAdmission(admission lockAdmission) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.mu.lockAdmissions == 0 {
+		s.mu.Unlock()
 		panic("lock admission underflow")
 	}
 	s.mu.lockAdmissions--
@@ -777,6 +823,8 @@ func (s *service) endLockAdmission(admission lockAdmission) {
 	}
 	s.prepareDrainSnapshotLocked()
 	s.tryCompleteDrainLocked()
+	s.mu.Unlock()
+	s.endServiceOperation()
 }
 
 func (s *service) tryCompleteDrain() {
@@ -808,20 +856,70 @@ func (s *service) hasLockTableRefsLocked() bool {
 	return false
 }
 
-func (s *service) beginTxnClosure() {
+func (s *service) beginTxnClosure() (context.Context, bool) {
+	serviceCtx, admitted := s.beginServiceOperation()
+	if !admitted {
+		return nil, false
+	}
 	s.mu.Lock()
 	s.mu.txnClosures++
 	s.mu.Unlock()
+	return serviceCtx, true
 }
 
 func (s *service) endTxnClosure() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.mu.txnClosures == 0 {
+		s.mu.Unlock()
 		panic("transaction closure underflow")
 	}
 	s.mu.txnClosures--
 	s.tryCompleteDrainLocked()
+	s.mu.Unlock()
+	s.endServiceOperation()
+}
+
+func (s *service) beginServiceOperation() (context.Context, bool) {
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.lifecycle.closing {
+		return nil, false
+	}
+	s.lifecycle.operations.Add(1)
+	return s.lifecycle.ctx, true
+}
+
+func (s *service) endServiceOperation() {
+	s.lifecycle.operations.Done()
+}
+
+func (s *service) beginResolverAdmission() bool {
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.lifecycle.closing {
+		return false
+	}
+	s.lifecycle.resolverAdmissions.Add(1)
+	return true
+}
+
+func (s *service) endResolverAdmission() {
+	s.lifecycle.resolverAdmissions.Done()
+}
+
+func contextWithServiceClose(
+	parent context.Context,
+	serviceCtx context.Context,
+) (context.Context, context.CancelFunc) {
+	if serviceCtx == nil {
+		return parent, func() {}
+	}
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(serviceCtx, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 func (s *service) validGroupTable(group uint32, tableID uint64) bool {
@@ -840,28 +938,72 @@ func (s *service) GetConfig() Config {
 }
 
 func (s *service) Close() error {
-	var err error
+	var resolvedCallbacks []func()
 	s.stopOnce.Do(func() {
+		// Seal every public mutation and bind-publication path first. Add and
+		// Wait are serialized by lifecycle: once closing is visible, no new
+		// operation or resolver admission can join either wait group.
+		s.lifecycle.Lock()
+		s.lifecycle.closing = true
+		if s.lifecycle.cancel != nil {
+			s.lifecycle.cancel()
+		}
+		s.lifecycle.Unlock()
+
+		// Stop producers before their consumers and dependencies. Inbound RPC
+		// handlers, service background tasks, and keeper tasks can all use lock
+		// tables, waiter state, the detector, and the RPC client.
+		serverErr := s.remote.server.Close()
+		s.lifecycle.resolverAdmissions.Wait()
 		s.stopper.Stop()
+		keeperErr := s.remote.keeper.Close()
+		releaseQueuedWhoWaitingList(s.fetchWhoWaitingListC)
 		s.tableGroups.removeWithFilter(func(_ uint64, _ lockTable) bool { return true }, closeReasonServiceClose)
-		if err = s.remote.client.Close(); err != nil {
-			return
-		}
+		// Closing tables wakes admitted local lock waiters. Service cancellation
+		// bounds remote lock/unlock and bind waits. Join them while detector,
+		// event workers, txn ownership, and the RPC client are still alive.
+		s.lifecycle.operations.Wait()
+		// Deadlock checks can abort a txn and notify one of its async waiters.
+		// Seal that producer before waiterEvents closes its admission channel;
+		// the event workers remain alive while detector.Close joins in-flight
+		// checks, then drain every notification accepted before the seal.
 		s.deadlockDetector.close()
-		if err = s.remote.keeper.Close(); err != nil {
-			return
-		}
-		if err = s.remote.client.Close(); err != nil {
-			return
-		}
-		if err = s.remote.server.Close(); err != nil {
-			return
-		}
 		s.events.close()
 		s.activeTxnHolder.close()
+		if s.unknownCommitResolver != nil {
+			resolvedCallbacks = s.unknownCommitResolver.takeResolvedCallbacks()
+		}
+		clientErr := s.remote.client.Close()
 		close(s.fetchWhoWaitingListC)
+		s.closeErr = errors.Join(serverErr, keeperErr, clientErr)
 	})
-	return err
+	// User callbacks are outside sync.Once and after complete component
+	// teardown. A callback may safely re-enter Close without deadlocking on the
+	// in-progress Once, and a blocked callback cannot strand other concurrent
+	// Close callers inside component cleanup.
+	for _, callback := range resolvedCallbacks {
+		callback()
+	}
+	return s.closeErr
+}
+
+func releaseQueuedWhoWaitingList(values chan who) {
+	for {
+		select {
+		case value, ok := <-values:
+			if !ok {
+				return
+			}
+			if value.cancel != nil {
+				value.cancel()
+			}
+			if value.resp != nil {
+				releaseResponse(value.resp)
+			}
+		default:
+			return
+		}
+	}
 }
 
 func (s *service) setStatus(status pb.Status) {
@@ -1122,6 +1264,11 @@ func (s *service) publishLockTableBindFromAllocator(
 	allocator allocatorState,
 	requestAllocator allocatorState,
 ) (lockTable, error) {
+	if !s.beginLockTablePublication() {
+		return nil, ErrLockTableBindChanged
+	}
+	defer s.lifecycle.RUnlock()
+
 	s.allocatorVersionMu.Lock()
 	defer s.allocatorVersionMu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -1153,6 +1300,11 @@ func (s *service) publishLockTableBindFromAllocator(
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
+	if !s.beginLockTablePublication() {
+		return
+	}
+	defer s.lifecycle.RUnlock()
+
 	s.bindChangeMu.Lock()
 	defer s.bindChangeMu.Unlock()
 
@@ -1168,6 +1320,11 @@ func (s *service) handleBindChangedFromAllocator(
 	allocator allocatorState,
 	requestAllocator allocatorState,
 ) error {
+	if !s.beginLockTablePublication() {
+		return ErrLockTableBindChanged
+	}
+	defer s.lifecycle.RUnlock()
+
 	s.allocatorVersionMu.Lock()
 	defer s.allocatorVersionMu.Unlock()
 
@@ -1198,6 +1355,15 @@ func (s *service) handleBindChangedFromAllocator(
 	s.tableGroups.set(newBind.Group, newBind.Table, new)
 	s.fenceByBindChanged(newBind)
 	return nil
+}
+
+func (s *service) beginLockTablePublication() bool {
+	s.lifecycle.RLock()
+	if s.lifecycle.closing {
+		s.lifecycle.RUnlock()
+		return false
+	}
+	return true
 }
 
 func (s *service) fenceByBindChanged(bind pb.LockTable) {
@@ -1987,11 +2153,25 @@ func (m *lockTableHolders) get(group uint32, id uint64) lockTable {
 }
 
 func (m *lockTableHolders) set(group uint32, id uint64, new lockTable) lockTable {
-	v, changed := m.mustGetHolder(group).set(id, new, m.logger)
-	if changed {
+	result := m.mustGetHolder(group).set(id, new)
+	if result.changed {
 		m.version.Add(1)
 	}
-	return v
+	// Closing can synchronously publish into the bounded waiter-event queue.
+	// The holder mutation and version publication must therefore complete
+	// before lifecycle callbacks run and potentially re-enter table lookup.
+	if result.toClose != nil {
+		result.toClose.close(closeReasonBindChanged)
+	}
+	if result.replaced {
+		logRemoteBindChanged(
+			m.logger,
+			m.service,
+			result.oldBind,
+			result.newBind,
+		)
+	}
+	return result.current
 }
 
 func (m *lockTableHolders) mustGetHolder(group uint32) *lockTableHolder {
@@ -2008,8 +2188,7 @@ func (m *lockTableHolders) mustGetHolder(group uint32) *lockTableHolder {
 		return h
 	}
 	h = &lockTableHolder{
-		service: m.service,
-		tables:  map[uint64]lockTable{},
+		tables: map[uint64]lockTable{},
 	}
 	m.holders[group] = h
 	m.version.Add(1)
@@ -2031,16 +2210,22 @@ func (m *lockTableHolders) removeWithFilter(
 	reason closeReason,
 ) int {
 	m.RLock()
-	defer m.RUnlock()
-
-	removed := 0
+	var removed []lockTable
 	for _, h := range m.holders {
-		removed += h.removeWithFilter(filter, reason)
+		removed = append(removed, h.detachWithFilter(filter)...)
 	}
-	if removed > 0 {
+	m.RUnlock()
+
+	if len(removed) > 0 {
 		m.version.Add(1)
 	}
-	return removed
+	// No holder lock is retained across table.close. An event consumer may
+	// need the same holder to finish the callback that frees event-queue
+	// capacity.
+	for _, table := range removed {
+		table.close(reason)
+	}
+	return len(removed)
 }
 
 // getVersion returns the current version of the lockTableHolders
@@ -2050,8 +2235,16 @@ func (m *lockTableHolders) getVersion() uint64 {
 
 type lockTableHolder struct {
 	sync.RWMutex
-	service string
-	tables  map[uint64]lockTable
+	tables map[uint64]lockTable
+}
+
+type lockTableHolderSetResult struct {
+	current  lockTable
+	toClose  lockTable
+	oldBind  pb.LockTable
+	newBind  pb.LockTable
+	changed  bool
+	replaced bool
 }
 
 func (m *lockTableHolder) get(id uint64) lockTable {
@@ -2063,28 +2256,38 @@ func (m *lockTableHolder) get(id uint64) lockTable {
 func (m *lockTableHolder) set(
 	id uint64,
 	new lockTable,
-	logger *log.MOLogger,
-) (lockTable, bool) {
+) lockTableHolderSetResult {
 	m.Lock()
-	defer m.Unlock()
-
 	old, ok := m.tables[id]
 
 	if !ok {
 		m.tables[id] = new
-		return new, true
+		m.Unlock()
+		return lockTableHolderSetResult{
+			current: new,
+			changed: true,
+		}
 	}
 
 	oldBind := old.getBind()
 	newBind := new.getBind()
 	if oldBind.Changed(newBind) {
-		old.close(closeReasonBindChanged)
 		m.tables[id] = new
-		logRemoteBindChanged(logger, m.service, oldBind, newBind)
-		return new, true
+		m.Unlock()
+		return lockTableHolderSetResult{
+			current:  new,
+			toClose:  old,
+			oldBind:  oldBind,
+			newBind:  newBind,
+			changed:  true,
+			replaced: true,
+		}
 	}
-	new.close(closeReasonBindChanged)
-	return old, false
+	m.Unlock()
+	return lockTableHolderSetResult{
+		current: old,
+		toClose: new,
+	}
 }
 
 func (m *lockTableHolder) iter(fn func(uint64, lockTable) bool) bool {
@@ -2098,19 +2301,17 @@ func (m *lockTableHolder) iter(fn func(uint64, lockTable) bool) bool {
 	return true
 }
 
-func (m *lockTableHolder) removeWithFilter(
+func (m *lockTableHolder) detachWithFilter(
 	filter func(uint64, lockTable) bool,
-	reason closeReason,
-) int {
+) []lockTable {
 	m.Lock()
-	defer m.Unlock()
-	removed := 0
+	var removed []lockTable
 	for id, v := range m.tables {
 		if filter(id, v) {
-			v.close(reason)
 			delete(m.tables, id)
-			removed++
+			removed = append(removed, v)
 		}
 	}
+	m.Unlock()
 	return removed
 }
