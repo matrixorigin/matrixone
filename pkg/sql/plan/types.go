@@ -538,15 +538,14 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx                  context.Context
-	builder                 *QueryBuilder
-	ctx                     *BindContext
-	impl                    Binder
-	boundCols               []string
-	numericParamType        *Type
-	numericSubqueryTarget   *Type
-	numericFunctionTarget   bool
-	bindRawMySQLSpecialType bool
+	sysCtx                context.Context
+	builder               *QueryBuilder
+	ctx                   *BindContext
+	impl                  Binder
+	boundCols             []string
+	numericParamType      *Type
+	numericSubqueryTarget *Type
+	numericFunctionTarget bool
 }
 
 type DefaultBinder struct {

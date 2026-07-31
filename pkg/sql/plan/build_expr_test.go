@@ -536,17 +536,6 @@ func TestEnumAndSetKeepStoredValuesInExpressionContexts(t *testing.T) {
 			sql:  "select n_name = 1 from nation",
 		},
 		{
-			name: "enum numeric in list",
-			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
-			sql:  "select n_name in (1, 2) from nation",
-		},
-		{
-			name:        "enum mixed string and numeric in list",
-			typ:         plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
-			sql:         "select n_name in ('a', 2) from nation",
-			wantDisplay: true,
-		},
-		{
 			name: "set numeric arithmetic",
 			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
 			sql:  "select n_name + 0 from nation",
