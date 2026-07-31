@@ -410,6 +410,38 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		})
 	}
 
+	t.Run("cascade recomputes generated child column from new foreign key", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		setMockGeneratedColumn(t, mock, "emp", "sal", "deptno")
+		mock.ctxt.tables["emp"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+
+		logicPlan, err := runOneStmt(mock, t, "UPDATE dept SET deptno = 2")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.Equal(t, 2, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+
+		emp := mock.ctxt.tables["emp"]
+		salPos := emp.Name2ColIndex["sal"]
+		deptnoPos := emp.Name2ColIndex["deptno"]
+		hasRecomputedSal := false
+		projectPairs := make([][2]string, 0)
+		for _, node := range query.Nodes {
+			if node.NodeType != planpb.Node_PROJECT || len(node.ProjectList) < len(emp.Cols) {
+				continue
+			}
+			projectPairs = append(projectPairs, [2]string{
+				node.ProjectList[salPos].String(),
+				node.ProjectList[deptnoPos].String(),
+			})
+			if node.ProjectList[salPos].String() == node.ProjectList[deptnoPos].String() {
+				hasRecomputedSal = true
+				break
+			}
+		}
+		require.True(t, hasRecomputedSal, "candidate sal/deptno projections: %v", projectPairs)
+	})
+
 	t.Run("disabled checks skip child probe and parent fallback", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
