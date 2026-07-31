@@ -591,12 +591,12 @@ Gate:
 - all migrated rows become `D`; production rows remain `L`.
 
 The current dormant PR 3 candidate is
-`feature/26459-expression-propagation` at commit `a63c68b07b`, stacked on PR 2
+`feature/26459-expression-propagation` at commit `0fd87ffebe`, stacked on PR 2
 commit `dbfee20ecc`. Its closure commits are `03296c5246` (expressions),
 `0b4a7b5bb5` (spill vectors/scratch), `a0754a6beb` (streaming buffers),
 `9f88a0e83e` (spill serialization), and `1f82b218c2` (spool/type-change
 ownership), followed by `a63c68b07b` (Vector bitmaps and decimal conversion
-scratch).
+scratch) and `0fd87ffebe` (direct-output Field/VALUES paths).
 
 Its propagation call chains are:
 
@@ -671,6 +671,14 @@ no longer block activation. Expression activation remains blocked by
 data-scaled function-specific Go-heap scratch identified by the remaining
 built-in scan; the dormant constructor is not a license to enable partial
 accounting.
+
+The first follow-up scan also removed two allocations instead of moving them:
+`FIELD` now writes directly into its pre-extended result and retains
+arity-bounded parameter wrappers, while `VALUES` uses contiguous `UnionBatch`
+instead of constructing one row ID per input row. Their exact tests passed
+`-race -count=100` and the complete Function package passed normal, vet, and
+race runs. Remaining candidates must first make this same
+direct-output/streaming test before introducing a scratch owner.
 
 Fresh local validation on linux/amd64 with CGO and the repository-built
 third-party artifacts passes:
