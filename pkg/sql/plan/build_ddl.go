@@ -1510,7 +1510,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if !ok {
 					continue
 				}
-				if stmt.Param != nil || stmt.IcebergParam != nil {
+				if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 					return moerr.NewNotSupported(
 						ctx.GetContext(),
 						"CHECK constraints on external tables",
@@ -1638,7 +1638,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				fkDatasOfFKSelfRefer = append(fkDatasOfFKSelfRefer, fkData)
 			}
 		case *tree.CheckIndex:
-			if stmt.Param != nil || stmt.IcebergParam != nil {
+			if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 				return moerr.NewNotSupported(
 					ctx.GetContext(),
 					"CHECK constraints on external tables",
