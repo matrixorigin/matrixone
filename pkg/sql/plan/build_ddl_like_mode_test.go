@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -89,8 +90,6 @@ func TestCreateTableLikeRequiresCheckProtocol(t *testing.T) {
 		require.NoError(t, err)
 		return built.GetDdl().GetCreateTable().GetTableDef()
 	}()
-	mock.ctxt.tables["source_t"] = source
-
 	proc := mock.ctxt.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -103,9 +102,53 @@ func TestCreateTableLikeRequiresCheckProtocol(t *testing.T) {
 		}
 	}()
 
-	stmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "structured", true: "legacy"}[legacy], func(t *testing.T) {
+			sourceDef := DeepCopyTableDef(source, true)
+			if legacy {
+				sourceDef.Checks = nil
+				sourceDef.Createsql = "create table source_t(a int, constraint legacy_positive check (a > 0))"
+			}
+			mock.ctxt.tables["source_t"] = sourceDef
+
+			stmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(mock.CurrentContext(), stmt, false)
+			require.ErrorContains(t, err, "protocol version 7")
+		})
+	}
+}
+
+func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int)", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	_, err = BuildPlan(mock.CurrentContext(), stmt, false)
-	require.ErrorContains(t, err, "protocol version 7")
+	built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	require.NoError(t, err)
+
+	source := built.GetDdl().GetCreateTable().GetTableDef()
+	require.Empty(t, source.Checks)
+	source.Createsql = "create table source_t(a int, constraint legacy_positive check (a > 0))"
+	mock.ctxt.tables["source_t"] = source
+
+	likeStmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
+	require.NoError(t, err)
+	defer likeStmt.Free()
+	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false)
+	require.NoError(t, err)
+	clone := clonePlan.GetDdl().GetCreateTable().GetTableDef()
+	require.Len(t, clone.Checks, 1)
+	require.Equal(t, "legacy_positive", clone.Checks[0].Name)
+	require.Equal(t, "`a` > 0", clone.Checks[0].OriginSql)
+	var createSQL string
+	for _, def := range clone.Defs {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.Key == catalog.SystemRelAttr_CreateSQL {
+				createSQL = property.Value
+			}
+		}
+	}
+	require.Contains(t, createSQL, "constraint legacy_positive check (`a` > 0) enforced")
 }

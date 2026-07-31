@@ -934,7 +934,12 @@ func buildCreateTable(
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
-		if len(tableDef.Checks) > 0 {
+		// Structured CHECK metadata is restored after rebuilding the LIKE
+		// skeleton. Pre-upgrade tables have no structured metadata, so retain
+		// their top-level CHECK definitions in the skeleton and bind them into
+		// the clone instead.
+		includeLegacyChecks := len(tableDef.Checks) == 0 && len(extractTopLevelCheckDefs(tableDef)) > 0
+		if len(tableDef.Checks) > 0 || includeLegacyChecks {
 			if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
 				return nil, err
 			}
@@ -961,7 +966,14 @@ func buildCreateTable(
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
-		_, newStmt, err := constructCreateTableSQL(ctx, tableDef, snapshot, true, cloneStmt, false)
+		_, newStmt, err := constructCreateTableSQL(
+			ctx,
+			tableDef,
+			snapshot,
+			true,
+			cloneStmt,
+			includeLegacyChecks,
+		)
 		if err != nil {
 			return nil, err
 		}
