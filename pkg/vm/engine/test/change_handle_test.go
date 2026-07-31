@@ -4854,7 +4854,7 @@ func TestRenameSrcTable(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	txn.Commit(ctxWithTimeout)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
 	// init cdc executor
 	checkLeaseStub := gostub.Stub(
@@ -4888,7 +4888,7 @@ func TestRenameSrcTable(t *testing.T) {
 	require.NoError(t, err)
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
-	cdcExecutor.Start()
+	require.NoError(t, cdcExecutor.Start())
 	defer cdcExecutor.Stop()
 	registerFn := func(indexName string) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
@@ -4907,17 +4907,17 @@ func TestRenameSrcTable(t *testing.T) {
 			},
 			false,
 		)
-		assert.True(t, ok)
-		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit(ctxWithTimeout))
+		require.True(t, ok)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctxWithTimeout))
 	}
 	for i := 0; i < 10; i++ {
 		registerFn(fmt.Sprintf("hnsw_idx_%d", i))
 	}
 
 	now := taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		4000,
+	require.Eventually(
+		t,
 		func() bool {
 			for i := 0; i < 10; i++ {
 				ts, ok := cdcExecutor.GetWatermark(accountId, tableID, fmt.Sprintf("hnsw_idx_%d", i))
@@ -4927,12 +4927,15 @@ func TestRenameSrcTable(t *testing.T) {
 			}
 			return true
 		},
+		30*time.Second,
+		10*time.Millisecond,
 	)
 	for i := 0; i < 10; i++ {
 		ts, ok := cdcExecutor.GetWatermark(accountId, tableID, fmt.Sprintf("hnsw_idx_%d", i))
-		assert.True(t, ok)
-		assert.True(t, ts.GE(&now))
+		require.True(t, ok)
+		require.True(t, ts.GE(&now))
 	}
+	cdcExecutor.Stop()
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
