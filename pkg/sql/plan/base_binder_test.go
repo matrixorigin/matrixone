@@ -306,6 +306,63 @@ func TestReplaceSQLUdfArgMarkers(t *testing.T) {
 	}
 }
 
+func TestCorrelateSQLUdfArgumentTraversesNestedExpressions(t *testing.T) {
+	column := func(relPos, colPos int32) *plan.Expr {
+		return &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: relPos, ColPos: colPos}},
+		}
+	}
+
+	original := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			nil,
+			{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: 1, ColPos: 2, Depth: 3}}},
+			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Src: column(2, 3)}}},
+			{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				WindowFunc:  column(3, 4),
+				PartitionBy: []*plan.Expr{column(4, 5)},
+				OrderBy: []*plan.OrderBySpec{
+					nil,
+					{Expr: column(5, 6)},
+				},
+				Frame: &plan.FrameClause{
+					Start: &plan.FrameBound{Val: column(6, 7)},
+					End:   &plan.FrameBound{Val: column(7, 8)},
+				},
+			}}},
+			{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{Child: column(8, 9)}}},
+			{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{column(9, 10)}}}},
+		}}},
+	}
+
+	correlatedExpr, correlated := correlateSQLUdfArgument(original, 2)
+	require.True(t, correlated)
+	require.NotSame(t, original, correlatedExpr)
+	require.Equal(t, int32(3), original.GetF().Args[1].GetCorr().Depth, "the caller-owned expression must not be mutated")
+
+	args := correlatedExpr.GetF().Args
+	require.Nil(t, args[0])
+	require.Equal(t, int32(5), args[1].GetCorr().Depth)
+	require.Equal(t, int32(2), args[2].GetLit().Src.GetCorr().Depth)
+
+	window := args[3].GetW()
+	require.Equal(t, int32(2), window.WindowFunc.GetCorr().Depth)
+	require.Equal(t, int32(2), window.PartitionBy[0].GetCorr().Depth)
+	require.Nil(t, window.OrderBy[0])
+	require.Equal(t, int32(2), window.OrderBy[1].Expr.GetCorr().Depth)
+	require.Equal(t, int32(2), window.Frame.Start.Val.GetCorr().Depth)
+	require.Equal(t, int32(2), window.Frame.End.Val.GetCorr().Depth)
+	require.Equal(t, int32(2), args[4].GetSub().Child.GetCorr().Depth)
+	require.Equal(t, int32(2), args[5].GetList().List[0].GetCorr().Depth)
+
+	localOriginal := column(10, 11)
+	localExpr, correlated := correlateSQLUdfArgument(localOriginal, 0)
+	require.False(t, correlated)
+	require.NotSame(t, localOriginal, localExpr)
+	require.Equal(t, int32(10), localExpr.GetCol().RelPos)
+	require.Equal(t, int32(11), localExpr.GetCol().ColPos)
+}
+
 func queryContainsCrossRelationEquality(query *plan.Query) bool {
 	for _, node := range query.Nodes {
 		for _, exprs := range [][]*plan.Expr{
