@@ -34,6 +34,16 @@ func buildMySQLDMLCompatibilityPlan(t *testing.T, sql string) (*Plan, error) {
 	return BuildPlan(ctx, stmt, false)
 }
 
+func buildMySQLDMLCompatibilityPlanWithSQLMode(t *testing.T, sql, sqlMode string) (*Plan, error) {
+	t.Helper()
+	ctx := NewMockCompilerContext(true)
+	ctx.SetSqlModeOverride(sqlMode)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	return BuildPlan(ctx, stmt, false)
+}
+
 func requireMySQLDMLCompatibilityError(t *testing.T, sql string, code uint16, message string) {
 	t.Helper()
 	_, err := buildMySQLDMLCompatibilityPlan(t, sql)
@@ -57,6 +67,23 @@ func TestMultiTableUpdateRejectsOrderByAndLimit(t *testing.T) {
 		moerr.ER_WRONG_USAGE,
 		"Incorrect usage of UPDATE and LIMIT",
 	)
+}
+
+func TestWindowFunctionsInUpdateAndCheckRespectMatrixOneNativeSQLMode(t *testing.T) {
+	updateSQL := "UPDATE nation SET n_regionkey = row_number() over (order by n_nationkey)"
+	checkSQL := "CREATE TABLE window_check (id INT PRIMARY KEY, v INT, CHECK (row_number() over (order by v) > 0))"
+	columnCheckSQL := "CREATE TABLE column_window_check (id INT PRIMARY KEY, v INT CHECK (row_number() over (order by v) > 0))"
+
+	for _, sql := range []string{updateSQL, checkSQL, columnCheckSQL} {
+		requireMySQLDMLCompatibilityError(
+			t,
+			sql,
+			moerr.ER_WINDOW_INVALID_WINDOW_FUNC_USE,
+			"You cannot use the window function 'row_number' in this context",
+		)
+		_, err := buildMySQLDMLCompatibilityPlanWithSQLMode(t, sql, "MATRIXONE_NATIVE")
+		require.NoError(t, err)
+	}
 }
 
 func TestUpdateRejectsDirectTargetTableSubqueries(t *testing.T) {
