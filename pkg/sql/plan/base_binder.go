@@ -2337,6 +2337,11 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
+		if _, ok := astArgs[0].(*tree.NumVal); !ok {
+			return nil, invalidUTCFunctionFSPError(b.GetContext(), name)
+		}
+	}
 	isIfNull := name == "ifnull"
 
 	// rewrite some ast Exprs before binding
@@ -2959,6 +2964,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var err error
 	if name == NameApproxPercentile {
 		if err = validateApproxPercentileArgs(ctx, args); err != nil {
+			return nil, err
+		}
+	}
+
+	if (name == "utc_time" || name == "utc_timestamp") && len(args) == 1 {
+		if _, err := utcFunctionFSPFromPlanExpr(ctx, name, args[0]); err != nil {
 			return nil, err
 		}
 	}
@@ -3642,6 +3653,17 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
+	case "utc_time", "utc_timestamp":
+		// The overload receives only argument types, while the temporal result
+		// precision is determined by the literal FSP. Preserve it in the plan
+		// type's Width and Scale so views and the MySQL protocol expose
+		// TIME/DATETIME(fsp) correctly.
+		if len(args) == 1 {
+			fsp, _ := utcFunctionFSPFromPlanExpr(ctx, name, args[0])
+			returnType.Width = fsp
+			returnType.Scale = fsp
+		}
+
 	case "timestampadd":
 		// For TIMESTAMPADD with DATE input, check if unit is constant and adjust return type
 		// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
@@ -3736,6 +3758,28 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func invalidUTCFunctionFSPError(ctx context.Context, name string) error {
+	return moerr.NewInvalidInputf(ctx, "%s fractional seconds precision must be an integer literal between 0 and 6", strings.ToUpper(name))
+}
+
+func utcFunctionFSPFromPlanExpr(ctx context.Context, name string, expr *Expr) (int32, error) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, invalidUTCFunctionFSPError(ctx, name)
+	}
+	fsp, ok := literal.GetValue().(*plan.Literal_I64Val)
+	if !ok {
+		return 0, invalidUTCFunctionFSPError(ctx, name)
+	}
+	if fsp.I64Val < 0 {
+		return 0, moerr.NewInvalidArg(ctx, name, fmt.Sprintf("negative precision %d specified", fsp.I64Val))
+	}
+	if fsp.I64Val > 6 {
+		return 0, moerr.NewErrTooBigPrecision(ctx, fsp.I64Val, name, 6)
+	}
+	return int32(fsp.I64Val), nil
 }
 
 func adjustControlFlowStringMetadata(name string, args []*Expr, argTypes []types.Type, returnType *types.Type) {

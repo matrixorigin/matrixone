@@ -310,3 +310,17 @@ select count(*) as dst_tables_after_commit
 
 drop database if exists br_txn_dst;
 drop database br_txn_src;
+
+-- @bvt:issue#26456
+drop pitr if exists issue26456_pitr;
+drop database if exists issue26456_pitr_db;
+create database issue26456_pitr_db;
+use issue26456_pitr_db;
+create table base(id int primary key, value int);
+insert into base values (1, 10), (2, 20);
+data branch create table child from base;
+create pitr issue26456_pitr for database issue26456_pitr_db range 1 'h';
+alter table base add column added int default 7;
+select id, value, added from base order by id;
+drop pitr issue26456_pitr;
+drop database issue26456_pitr_db;
