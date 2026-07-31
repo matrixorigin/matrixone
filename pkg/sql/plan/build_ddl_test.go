@@ -28,8 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -777,6 +779,75 @@ func TestBuildCreateIndexOnExternalTableError(t *testing.T) {
 		require.Error(t, err, sql)
 		require.Contains(t, err.Error(), "cannot create index on external table", sql)
 	}
+}
+
+func TestBuildAlterTableRejectsMongoDBExternalTable(t *testing.T) {
+	mock := NewEmptyMockOptimizer()
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.objects["mongo_ext"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mongo_ext"}
+	ctx.tables["mongo_ext"] = &plan.TableDef{
+		Name:      "mongo_ext",
+		TableType: catalog.SystemExternalRel,
+		Cols: []*plan.ColDef{
+			{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
+			{Name: "measurement", Typ: plan.Type{Id: int32(types.T_float64)}},
+		},
+		Createsql: sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
+			Connection: "source", Database: "telemetry", Collection: "samples",
+			SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict,
+			MaxParallelism: 1,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: "device_id", Path: "metadata.device_id", TypeID: int32(types.T_varchar), Width: 64},
+				{Name: "measurement", Path: "reading.measurement", TypeID: int32(types.T_float64)},
+			},
+		}),
+	}
+
+	for _, sql := range []string{
+		"ALTER TABLE mongo_ext RENAME COLUMN device_id TO device_key",
+		"ALTER TABLE mongo_ext MODIFY COLUMN measurement DECIMAL(18, 6)",
+		"ALTER TABLE mongo_ext ADD COLUMN site_id VARCHAR(32)",
+		"ALTER TABLE mongo_ext DROP COLUMN measurement",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.ErrorContains(t, err, "ALTER TABLE on a MongoDB external table", sql)
+	}
+}
+
+func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_not_null (
+			v BIGINT NOT NULL MONGODB_PATH 'payload.value' MONGODB_CONVERT 'try_null'
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`)
+	require.NoError(t, err)
+	tableDef := logicPlan.GetDdl().GetCreateTable().GetTableDef()
+	require.NotEmpty(t, tableDef.Cols)
+	require.Equal(t, "v", tableDef.Cols[0].Name)
+	require.False(t, tableDef.Cols[0].Default.NullAbility)
+
+	var createSQL string
+	for _, def := range tableDef.Defs {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.Key == catalog.SystemRelAttr_CreateSQL {
+				createSQL = property.Value
+			}
+		}
+	}
+	require.NotEmpty(t, createSQL)
+	envelope, found, err := sqlmongodb.ParseCreateSQLEnvelope(t.Context(), createSQL)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, envelope.Columns, 1)
+	require.True(t, envelope.Columns[0].NotNullable)
+	require.True(t, sqlmongodb.ColumnsToPlan(envelope.Columns)[0].MoType.NotNullable)
 }
 
 func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
