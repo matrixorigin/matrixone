@@ -121,34 +121,78 @@ func TestCreateTableLikeRequiresCheckProtocol(t *testing.T) {
 }
 
 func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int)", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	built, err := BuildPlan(mock.CurrentContext(), stmt, false)
-	require.NoError(t, err)
+	for _, tc := range []struct {
+		name          string
+		baseSQL       string
+		legacySQL     string
+		checkName     string
+		checkOrigin   string
+		persistedText string
+	}{
+		{
+			name:          "top level",
+			baseSQL:       "create table source_t(a int)",
+			legacySQL:     "create table source_t(a int, constraint legacy_positive check (a > 0))",
+			checkName:     "legacy_positive",
+			checkOrigin:   "`a` > 0",
+			persistedText: "constraint legacy_positive check (`a` > 0) enforced",
+		},
+		{
+			name:          "column level",
+			baseSQL:       "create table source_t(a int)",
+			legacySQL:     "create table source_t(a int check (a > 0))",
+			checkName:     "__mo_chk_1",
+			checkOrigin:   "`a` > 0",
+			persistedText: "constraint __mo_chk_1 check (`a` > 0) enforced",
+		},
+		{
+			name:          "comment before top level",
+			baseSQL:       "create table source_t(a int)",
+			legacySQL:     "create table source_t(a int, /* retained */ constraint c check (a > 0))",
+			checkName:     "c",
+			checkOrigin:   "`a` > 0",
+			persistedText: "constraint c check (`a` > 0) enforced",
+		},
+		{
+			name:          "no backslash escapes source",
+			baseSQL:       "create table source_t(s varchar(10))",
+			legacySQL:     `create table source_t(s varchar(10), check (s = 'a\nb'))`,
+			checkName:     "__mo_chk_1",
+			checkOrigin:   "`s` = cast(0x615c6e62 as varchar)",
+			persistedText: "constraint __mo_chk_1 check (`s` = cast(0x615c6e62 as varchar)) enforced",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			stmt, err := mysql.ParseOne(t.Context(), tc.baseSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			require.NoError(t, err)
 
-	source := built.GetDdl().GetCreateTable().GetTableDef()
-	require.Empty(t, source.Checks)
-	source.Createsql = "create table source_t(a int, constraint legacy_positive check (a > 0))"
-	mock.ctxt.tables["source_t"] = source
+			source := built.GetDdl().GetCreateTable().GetTableDef()
+			require.Empty(t, source.Checks)
+			source.Createsql = tc.legacySQL
+			mock.ctxt.tables["source_t"] = source
 
-	likeStmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
-	require.NoError(t, err)
-	defer likeStmt.Free()
-	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false)
-	require.NoError(t, err)
-	clone := clonePlan.GetDdl().GetCreateTable().GetTableDef()
-	require.Len(t, clone.Checks, 1)
-	require.Equal(t, "legacy_positive", clone.Checks[0].Name)
-	require.Equal(t, "`a` > 0", clone.Checks[0].OriginSql)
-	var createSQL string
-	for _, def := range clone.Defs {
-		for _, property := range def.GetProperties().GetProperties() {
-			if property.Key == catalog.SystemRelAttr_CreateSQL {
-				createSQL = property.Value
+			likeStmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
+			require.NoError(t, err)
+			defer likeStmt.Free()
+			clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false)
+			require.NoError(t, err)
+			clone := clonePlan.GetDdl().GetCreateTable().GetTableDef()
+			require.Len(t, clone.Checks, 1)
+			require.Equal(t, tc.checkName, clone.Checks[0].Name)
+			require.Equal(t, tc.checkOrigin, clone.Checks[0].OriginSql)
+			var createSQL string
+			for _, def := range clone.Defs {
+				for _, property := range def.GetProperties().GetProperties() {
+					if property.Key == catalog.SystemRelAttr_CreateSQL {
+						createSQL = property.Value
+					}
+				}
 			}
-		}
+			require.Contains(t, createSQL, tc.persistedText)
+		})
 	}
-	require.Contains(t, createSQL, "constraint legacy_positive check (`a` > 0) enforced")
 }

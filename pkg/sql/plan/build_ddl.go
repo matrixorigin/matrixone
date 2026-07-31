@@ -895,6 +895,88 @@ func preserveChecksForCreateLike(p *Plan, src *plan.TableDef) {
 	ct.GetTableDef().Checks = dstChecks
 }
 
+// recoverLegacyChecksForCreateLike rebuilds structured CHECK metadata for
+// pre-upgrade tables, whose catalog rows contain only the original CREATE SQL.
+// The old catalog did not record the creating SQL mode. Prefer
+// NO_BACKSLASH_ESCAPES so recovery preserves the literal backslash bytes stored
+// in that SQL; fall back to the default mode for legacy statements that use
+// backslash-escaped quotes and therefore cannot be parsed in that mode.
+func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableDef) error {
+	if tableDef == nil || len(tableDef.Checks) > 0 || tableDef.Createsql == "" ||
+		tableDef.TableType == catalog.SystemExternalRel ||
+		!strings.Contains(strings.ToUpper(tableDef.Createsql), "CHECK") {
+		return nil
+	}
+
+	stmt, err := parsers.ParseOneWithSQLMode(
+		ctx.GetContext(),
+		dialect.MYSQL,
+		tableDef.Createsql,
+		ctx.GetLowerCaseTableNames(),
+		"NO_BACKSLASH_ESCAPES",
+	)
+	if err != nil {
+		stmt, err = parsers.ParseOneWithSQLMode(
+			ctx.GetContext(),
+			dialect.MYSQL,
+			tableDef.Createsql,
+			ctx.GetLowerCaseTableNames(),
+			"",
+		)
+	}
+	if err != nil {
+		return err
+	}
+	defer stmt.Free()
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	if !ok {
+		return moerr.NewInvalidInput(ctx.GetContext(), "legacy CHECK metadata is not a CREATE TABLE statement")
+	}
+
+	scratch := &plan.TableDef{
+		Name: tableDef.Name,
+		Cols: tableDef.Cols,
+	}
+	for _, def := range createStmt.Defs {
+		switch typedDef := def.(type) {
+		case *tree.CheckIndex:
+			if !typedDef.Enforced {
+				return moerr.NewNotSupported(ctx.GetContext(), "NOT ENFORCED CHECK constraints")
+			}
+			if err := appendCheckDef(ctx, scratch, typedDef.ConstraintSymbol, typedDef.Expr, -1); err != nil {
+				return err
+			}
+		case *tree.ColumnTableDef:
+			columnPos := slices.IndexFunc(
+				tableDef.Cols,
+				func(col *plan.ColDef) bool { return col.Name == typedDef.Name.ColName() },
+			)
+			if columnPos == -1 {
+				return moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"legacy CHECK column '%s' does not exist",
+					typedDef.Name.ColNameOrigin(),
+				)
+			}
+			for _, attr := range typedDef.Attributes {
+				check, ok := attr.(*tree.AttributeCheckConstraint)
+				if !ok {
+					continue
+				}
+				if !check.Enforced {
+					return moerr.NewNotSupported(ctx.GetContext(), "NOT ENFORCED CHECK constraints")
+				}
+				if err := appendCheckDef(ctx, scratch, check.Name, check.Expr, columnPos); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	tableDef.Checks = scratch.Checks
+	return nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -934,12 +1016,12 @@ func buildCreateTable(
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
-		// Structured CHECK metadata is restored after rebuilding the LIKE
-		// skeleton. Pre-upgrade tables have no structured metadata, so retain
-		// their top-level CHECK definitions in the skeleton and bind them into
-		// the clone instead.
-		includeLegacyChecks := len(tableDef.Checks) == 0 && len(extractTopLevelCheckDefs(tableDef)) > 0
-		if len(tableDef.Checks) > 0 || includeLegacyChecks {
+		hadStructuredChecks := len(tableDef.Checks) > 0
+		if err := recoverLegacyChecksForCreateLike(ctx, tableDef); err != nil {
+			return nil, err
+		}
+		recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
+		if len(tableDef.Checks) > 0 {
 			if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
 				return nil, err
 			}
@@ -972,7 +1054,7 @@ func buildCreateTable(
 			snapshot,
 			true,
 			cloneStmt,
-			includeLegacyChecks,
+			recoveredLegacyChecks,
 		)
 		if err != nil {
 			return nil, err
