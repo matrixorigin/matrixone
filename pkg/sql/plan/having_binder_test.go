@@ -73,29 +73,90 @@ func TestGroupConcatOrderKeyUsesEnumAndSetStorageValue(t *testing.T) {
 }
 
 func TestRemapAggToTimeWindowResultAggUsesRegularSumForCountCache(t *testing.T) {
-	countFn, err := function.GetFunctionByName(context.Background(), "count", []types.Type{types.T_int64.ToType()})
-	require.NoError(t, err)
+	for _, name := range []string{"count", "starcount"} {
+		t.Run(name, func(t *testing.T) {
+			countFn, err := function.GetFunctionByName(context.Background(), name, []types.Type{types.T_int64.ToType()})
+			require.NoError(t, err)
 
-	expr := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_int64), Width: 64},
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					Obj:     countFn.GetEncodedOverloadID(),
-					ObjName: "count",
+			expr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64), Width: 64},
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{
+							Obj:     countFn.GetEncodedOverloadID(),
+							ObjName: name,
+						},
+						Args: []*plan.Expr{{
+							Typ: plan.Type{Id: int32(types.T_int64), Width: 64},
+						}},
+					},
 				},
-				Args: []*plan.Expr{{
-					Typ: plan.Type{Id: int32(types.T_int64), Width: 64},
+			}
+
+			got, err := (&HavingBinder{baseBinder: baseBinder{sysCtx: context.Background()}}).remapAggToTimeWindowResultAgg(expr)
+			require.NoError(t, err)
+			require.Equal(t, "sum", got.Expr.(*plan.Expr_F).F.Func.ObjName)
+			require.Equal(t, int32(types.T_decimal128), got.Typ.Id)
+			require.Equal(t, int32(0), got.Typ.Scale)
+		})
+	}
+}
+
+func TestRemapMaxByToTimeWindowIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   int32
+	}{
+		{name: "max_by", id: function.MAX_BY},
+		{name: "max_by_non_null", id: function.MAX_BY_NON_NULL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			valueType := types.New(types.T_varchar, 42, 0)
+			expr := &plan.Expr{
+				Typ: makePlan2Type(&valueType),
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(tc.id, 0), ObjName: tc.name},
+					Args: []*plan.Expr{{Typ: makePlan2Type(&valueType)}},
 				}},
-			},
-		},
+			}
+
+			got, err := (&HavingBinder{baseBinder: baseBinder{sysCtx: context.Background()}}).remapAggToTimeWindowResultAgg(expr)
+			require.NoError(t, err)
+			require.Equal(t, "any_value", got.GetF().Func.ObjName)
+			require.Equal(t, makePlan2Type(&valueType), got.Typ)
+		})
+	}
+}
+
+func TestSlidingTimeWindowRejectsMaxByWithoutMergeableCache(t *testing.T) {
+	valueType := types.T_varchar.ToType()
+	expr := &plan.Expr{
+		Typ: makePlan2Type(&valueType),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.MAX_BY, 0), ObjName: "max_by"},
+		}},
 	}
 
-	got, err := (&HavingBinder{baseBinder: baseBinder{sysCtx: context.Background()}}).remapAggToTimeWindowResultAgg(expr)
+	ctx := NewBindContext(nil, nil)
+	ctx.explicitSliding = true
+	_, err := (&HavingBinder{baseBinder: baseBinder{sysCtx: context.Background(), ctx: ctx}}).remapAggToTimeWindowCacheAgg(expr)
+	require.ErrorContains(t, err, "sliding time window")
+}
+
+func TestGapFillTimeWindowKeepsMaxByChildAggregate(t *testing.T) {
+	valueType := types.T_varchar.ToType()
+	expr := &plan.Expr{
+		Typ: makePlan2Type(&valueType),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.MAX_BY, 0), ObjName: "max_by"},
+		}},
+	}
+	ctx := NewBindContext(nil, nil)
+	ctx.sliding = true
+
+	got, err := (&HavingBinder{baseBinder: baseBinder{sysCtx: context.Background(), ctx: ctx}}).remapAggToTimeWindowCacheAgg(expr)
 	require.NoError(t, err)
-	require.Equal(t, "sum", got.Expr.(*plan.Expr_F).F.Func.ObjName)
-	require.Equal(t, int32(types.T_decimal128), got.Typ.Id)
-	require.Equal(t, int32(0), got.Typ.Scale)
+	require.Equal(t, "max_by", got.GetF().Func.ObjName)
 }
 
 func TestBindTimeWindowFuncCastsCountProjectionAfterDecimalCache(t *testing.T) {

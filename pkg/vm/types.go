@@ -106,6 +106,7 @@ const (
 	PostDml
 	IcebergWrite
 	TableClone
+	MongoScan
 	// OpTypeEnd is the exclusive upper bound for executable operator types.
 	// New operator types must be added before it.
 	OpTypeEnd
@@ -180,6 +181,7 @@ func init() {
 		PostDml:                 "PostDml",
 		IcebergWrite:            "IcebergWrite",
 		TableClone:              "TableClone",
+		MongoScan:               "MongoScan",
 	}
 
 	// Initialize StrToOperatorMap
@@ -201,6 +203,7 @@ func init() {
 	MajorOpMap = map[string]bool{
 		OperatorToStrMap[TableScan]: true,
 		OperatorToStrMap[External]:  true,
+		OperatorToStrMap[MongoScan]: true,
 		OperatorToStrMap[Order]:     true,
 		OperatorToStrMap[Window]:    true,
 		OperatorToStrMap[Group]:     true,

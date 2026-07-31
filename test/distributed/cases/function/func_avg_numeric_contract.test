@@ -1,0 +1,14 @@
+# MongoDB aggregate-v1 uses the existing MO numeric contract. These are
+# ordinary SQL regressions and intentionally do not require MongoDB.
+
+select round(cast(0.125 as double), 2) as p0125,
+       round(cast(2.675 as double), 2) as p2675,
+       round(cast(-0.125 as double), 2) as n0125,
+       round(cast(-2.675 as double), 2) as n2675;
+
+select cast(avg(v) as char) as decimal_avg
+from (
+    select cast(0.10 as decimal(18,2)) v
+    union all
+    select cast(0.20 as decimal(18,2))
+) x;

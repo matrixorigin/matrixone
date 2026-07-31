@@ -1829,7 +1829,7 @@ func NewErrExecutorRunning(ctx context.Context, executor string) *Error {
 	return newError(ctx, ErrExecutorRunning, executor)
 }
 
-func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string, maxPrecision uint64) *Error {
+func NewErrTooBigPrecision(ctx context.Context, precision int64, funcName string, maxPrecision uint64) *Error {
 	return newError(ctx, ErrTooBigPrecision, precision, funcName, maxPrecision)
 }
 
