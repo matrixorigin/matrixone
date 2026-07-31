@@ -41,6 +41,10 @@ func NewGeneratedColBinder(sysCtx context.Context, colNames []string, colTypes [
 	return b
 }
 
+func (b *GeneratedColBinder) allowCanonicalNameConstCast() {
+	b.allowCanonicalNameConstStringCast = true
+}
+
 func (b *GeneratedColBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }

@@ -514,14 +514,15 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx                context.Context
-	builder               *QueryBuilder
-	ctx                   *BindContext
-	impl                  Binder
-	boundCols             []string
-	numericParamType      *Type
-	numericSubqueryTarget *Type
-	numericFunctionTarget bool
+	sysCtx                            context.Context
+	builder                           *QueryBuilder
+	ctx                               *BindContext
+	impl                              Binder
+	boundCols                         []string
+	numericParamType                  *Type
+	numericSubqueryTarget             *Type
+	numericFunctionTarget             bool
+	allowCanonicalNameConstStringCast bool
 }
 
 type DefaultBinder struct {

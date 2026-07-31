@@ -547,6 +547,10 @@ func TestBindNameConstConstArgs(t *testing.T) {
 			name: "positive signed decimal value",
 			sql:  "select name_const('myname', +12.34)",
 		},
+		{
+			name: "string value with backslash",
+			sql:  `select name_const('myname', 'a\\b')`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, bindNameConstSelect(tc.sql))

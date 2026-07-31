@@ -466,6 +466,20 @@ func TestConstructCreateTableSQLPreservesCheckAcrossSQLModes(t *testing.T) {
 			createSQL:  `create table t(a int, check (name_const('a\b', 1) = 1))`,
 			canonical:  "name_const(0x615c62, 1)",
 		},
+		{
+			name:       "name const value from no backslash escapes",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(s varchar(10), check (name_const('n', 'a\b') = s))`,
+			canonical:  "name_const('n', cast(0x615c62 as varchar))",
+		},
+		{
+			name:       "name const value from default mode",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(s varchar(10), check (name_const('n', 'a\\b') = s))`,
+			canonical:  "name_const('n', cast(0x615c62 as varchar))",
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {

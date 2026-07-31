@@ -1990,6 +1990,7 @@ func appendCheckDef(
 	}
 
 	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
+	binder.allowCanonicalNameConstCast()
 	checkExpr, err := binder.BindExpr(canonicalClause.Exprs[0].Expr, 0, true)
 	if err != nil {
 		return err
