@@ -95,7 +95,7 @@ type TransferHashPage struct {
 	id          *common.ID // not include blk offset
 	objects     []*objectio.ObjectId
 	hashmap     atomic.Pointer[api.TransferMap]
-	path        Path
+	path        atomic.Pointer[Path]
 	isTransient bool
 	fs          fileservice.FileService
 	ttl         time.Duration
@@ -348,15 +348,23 @@ func (page *TransferHashPage) Unmarshal(data []byte) (*api.TransferMap, error) {
 }
 
 func (page *TransferHashPage) SetPath(path Path) {
-	page.path = path
+	page.path.Store(&path)
+}
+
+func (page *TransferHashPage) getPath() Path {
+	path := page.path.Load()
+	if path == nil {
+		return Path{}
+	}
+	return *path
 }
 
 func (page *TransferHashPage) loadTable() *api.TransferMap {
-	if page.path.Name == "" {
+	path := page.getPath()
+	if path.Name == "" {
 		return nil
 	}
 
-	path := page.path
 	name, offset, size := path.Name, path.Offset, path.Size
 
 	ioVector := fileservice.IOVector{
@@ -379,7 +387,7 @@ func (page *TransferHashPage) loadTable() *api.TransferMap {
 	err := page.fs.Read(ctx, &ioVector)
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
-		logutil.Errorf("[TransferPage] read persist table %v: %v", page.path.Name, err)
+		logutil.Errorf("[TransferPage] read persist table %v: %v", path.Name, err)
 		return nil
 	}
 	defer ioVector.Release()
@@ -401,16 +409,17 @@ func (page *TransferHashPage) loadTable() *api.TransferMap {
 }
 
 func (page *TransferHashPage) ClearPersistTable() {
-	if page.path.Name == "" {
+	path := page.getPath()
+	if path.Name == "" {
 		return
 	}
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseClearPersistTable)
 	defer cancel()
-	err := page.fs.Delete(ctx, page.path.Name)
+	err := page.fs.Delete(ctx, path.Name)
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
-		logutil.Errorf("[TransferPage] clear transfer table %v: %v", page.path.Name, err)
+		logutil.Errorf("[TransferPage] clear transfer table %v: %v", path.Name, err)
 	}
 }
 
