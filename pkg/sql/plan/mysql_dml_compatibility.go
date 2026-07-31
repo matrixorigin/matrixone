@@ -18,8 +18,23 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func rejectWindowFunctionUnlessMatrixOneNative(ctx CompilerContext, expr tree.Expr) error {
+	mode, err := ctx.ResolveVariable("sql_mode", true, false)
+	if err == nil {
+		if modeStr, ok := mode.(string); ok && mysql.HasMatrixOneNativeSQLMode(modeStr) {
+			return nil
+		}
+	}
+
+	if name, ok := findNestedWindowFuncName(expr); ok {
+		return moerr.NewWindowInvalidUse(ctx.GetContext(), name)
+	}
+	return nil
+}
 
 // validateMultiTableUpdateClauses enforces the MySQL multiple-table UPDATE
 // grammar. ORDER BY and LIMIT belong to the single-table form only.
@@ -32,6 +47,15 @@ func validateMultiTableUpdateClauses(ctx CompilerContext, stmt *tree.Update) err
 	}
 	if stmt.Limit != nil {
 		return moerr.NewWrongUsage(ctx.GetContext(), "UPDATE", "LIMIT")
+	}
+	return nil
+}
+
+func validateUpdateWindowFunctions(ctx CompilerContext, stmt *tree.Update) error {
+	for _, updateExpr := range stmt.Exprs {
+		if err := rejectWindowFunctionUnlessMatrixOneNative(ctx, updateExpr.Expr); err != nil {
+			return err
+		}
 	}
 	return nil
 }
