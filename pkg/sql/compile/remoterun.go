@@ -1387,6 +1387,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				InsertPkColIdx:     int(muCtx.InsertPkColIdx),
 				DedupByTargetRowID: muCtx.DedupByTargetRowId,
 				TargetUpdateCtxIdx: int(muCtx.TargetUpdateCtxIdx),
+				TargetTableID:      muCtx.TableDef.TblId,
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))

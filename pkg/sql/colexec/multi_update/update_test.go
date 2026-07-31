@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -116,51 +117,54 @@ func TestFilterTargetRowsKeepsIndependentWholeRows(t *testing.T) {
 	bat.SetRowCount(4)
 	defer bat.Clean(mp)
 
-	first, clean, err := filterTargetRows(proc, &MultiUpdateCtx{
+	first, clean, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
 		TableDef:           &plan.TableDef{TblId: 1},
 		DedupByTargetRowID: true,
 		DeleteCols:         []int{0, 4, 1},
 	}, bat, nil)
 	require.NoError(t, err)
 	require.True(t, clean)
+	require.Zero(t, duplicateRows)
 	defer first.Clean(mp)
 	require.Equal(t, []int32{10, 30}, vector.MustFixedColWithTypeCheck[int32](first.Vecs[4]))
 
-	second, clean, err := filterTargetRows(proc, &MultiUpdateCtx{
+	second, clean, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
 		TableDef:           &plan.TableDef{TblId: 2},
 		DedupByTargetRowID: true,
 		DeleteCols:         []int{2, 4, 3},
 	}, bat, nil)
 	require.NoError(t, err)
 	require.True(t, clean)
+	require.Zero(t, duplicateRows)
 	defer second.Clean(mp)
 	require.Equal(t, []int32{10, 20, 40}, vector.MustFixedColWithTypeCheck[int32](second.Vecs[4]))
 }
 
-func TestFilterTargetRowsDedupsPhysicalRowsAcrossContextsAndBatches(t *testing.T) {
+func TestFilterTargetRowsDedupsAliasesAcrossBatchesWithAccountedHashMap(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
-	rowID := types.BuildTestRowid(1, 1)
-	makeBatch := func(value int32) *batch.Batch {
+	rowID1 := types.BuildTestRowid(1, 1)
+	rowID2 := types.BuildTestRowid(1, 2)
+	makeBatch := func() *batch.Batch {
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = testutil.MakeRowIdVector([]types.Rowid{rowID}, nil, mp)
+		bat.Vecs[0] = testutil.MakeRowIdVector([]types.Rowid{rowID1, rowID2}, nil, mp)
 		bat.Vecs[1] = testutil.NewInt64Vector(
-			1,
+			2,
 			types.T_int64.ToType(),
 			mp,
 			false,
 			nil,
-			[]int64{1},
+			[]int64{1, 1},
 		)
 		bat.Vecs[2] = testutil.NewInt32Vector(
-			1,
+			2,
 			types.T_int32.ToType(),
 			mp,
 			false,
 			nil,
-			[]int32{value},
+			[]int32{10, 20},
 		)
-		bat.SetRowCount(1)
+		bat.SetRowCount(2)
 		return bat
 	}
 	updateCtx := &MultiUpdateCtx{
@@ -168,28 +172,70 @@ func TestFilterTargetRowsDedupsPhysicalRowsAcrossContextsAndBatches(t *testing.T
 		DedupByTargetRowID: true,
 		DeleteCols:         []int{0, 2, 1},
 	}
-	seen := make(map[uint64]map[types.Rowid]struct{})
+	seen, err := hashmap.NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	defer seen.Free()
 
-	firstInput := makeBatch(10)
+	firstInput := makeBatch()
 	defer firstInput.Clean(mp)
-	first, clean, err := filterTargetRows(proc, updateCtx, firstInput, seen)
+	first, clean, duplicateRows, err := filterTargetRows(proc, updateCtx, firstInput, seen)
 	require.NoError(t, err)
 	require.True(t, clean)
 	defer first.Clean(mp)
-	require.Equal(t, 1, first.RowCount())
+	require.Equal(t, 2, first.RowCount())
+	require.Zero(t, duplicateRows)
 
-	secondInput := makeBatch(20)
+	secondInput := makeBatch()
 	defer secondInput.Clean(mp)
-	secondCtx := &MultiUpdateCtx{
-		TableDef:           &plan.TableDef{TblId: 42},
-		DedupByTargetRowID: true,
-		DeleteCols:         []int{0, 2, 1},
-	}
-	second, clean, err := filterTargetRows(proc, secondCtx, secondInput, seen)
+	second, clean, duplicateRows, err := filterTargetRows(proc, updateCtx, secondInput, seen)
 	require.NoError(t, err)
 	require.True(t, clean)
 	defer second.Clean(mp)
-	require.Equal(t, 0, second.RowCount())
+	require.Zero(t, second.RowCount())
+	require.Equal(t, uint64(2), duplicateRows)
+	require.Positive(t, seen.Size())
+}
+
+type testSeenRowsThrottler struct {
+	available int64
+	acquired  int64
+	released  int64
+}
+
+func (m *testSeenRowsThrottler) Refresh()    {}
+func (m *testSeenRowsThrottler) PrintUsage() {}
+func (m *testSeenRowsThrottler) Available() int64 {
+	return m.available
+}
+func (m *testSeenRowsThrottler) Acquire(size int64) (int64, bool) {
+	if size > m.available {
+		return m.available, false
+	}
+	m.available -= size
+	m.acquired += size
+	return m.available, true
+}
+func (m *testSeenRowsThrottler) Release(size int64) int64 {
+	m.available += size
+	m.released += size
+	return m.available
+}
+
+func TestSeenTargetRowsGrowthUsesS3MemoryAdmission(t *testing.T) {
+	throttler := &testSeenRowsThrottler{available: 128}
+	update := &MultiUpdate{}
+	update.ctr.seenRowsRSC = throttler
+
+	require.NoError(t, update.admitSeenTargetRowsGrowth(96))
+	require.Equal(t, int64(96), update.ctr.seenRowsGrant)
+	require.Equal(t, int64(96), throttler.acquired)
+	require.Error(t, update.admitSeenTargetRowsGrowth(64))
+	require.Equal(t, int64(96), update.ctr.seenRowsGrant)
+
+	update.freeSeenTargetRows()
+	require.Equal(t, int64(96), throttler.released)
+	require.Zero(t, update.ctr.seenRowsGrant)
+	require.Nil(t, update.ctr.seenRowsRSC)
 }
 
 func TestRetainedS3InputColsCountsEveryContextCopy(t *testing.T) {

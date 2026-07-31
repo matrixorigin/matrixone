@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -172,16 +171,6 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 		wantRoute  updatePlannerRoute
 		wantReason updatePlannerRouteReason
 	}{
-		{
-			name: "multi target with partitioned table",
-			sql: "UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey " +
-				"SET n.n_name = 'a', n2.n_comment = 'b'",
-			prepare: func(mock *MockOptimizer) {
-				mock.ctxt.tables["nation"].FeatureFlag |= features.Partitioned
-			},
-			wantRoute:  updatePlannerLegacy,
-			wantReason: updateRouteReasonMultiTarget,
-		},
 		{
 			name: "foreign key metadata",
 			sql:  "UPDATE nation SET n_name = 'x'",

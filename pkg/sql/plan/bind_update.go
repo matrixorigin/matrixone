@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -24,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -79,9 +77,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	dmlCtx := NewDMLContext()
 	err := dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
 	if err != nil {
-		return 0, err
-	}
-	if err = validateModernMultiTargetUpdate(builder.GetContext(), dmlCtx); err != nil {
 		return 0, err
 	}
 	if err = validateUpdateTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
@@ -1359,28 +1354,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
-}
-
-func validateModernMultiTargetUpdate(ctx context.Context, dmlCtx *DMLContext) error {
-	updatedTargetCount := 0
-	hasPartitionedTarget := false
-
-	for i, updateCols := range dmlCtx.updateCol2Expr {
-		if len(updateCols) == 0 {
-			continue
-		}
-		updatedTargetCount++
-		tableDef := dmlCtx.tableDefs[i]
-		hasPartitionedTarget = hasPartitionedTarget || features.IsPartitioned(tableDef.FeatureFlag)
-	}
-
-	if updatedTargetCount > 1 && hasPartitionedTarget {
-		return newLegacyUpdatePlannerRouteError(
-			updateRouteReasonMultiTarget,
-			moerr.NewUnsupportedDML(ctx, "multi-target update with partitioned table"),
-		)
-	}
-	return nil
 }
 
 func (builder *QueryBuilder) mergeSamePhysicalTargetAssignments(

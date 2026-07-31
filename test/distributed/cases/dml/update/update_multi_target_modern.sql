@@ -80,6 +80,7 @@ SET
     a.x = 1,
     b.y = 2;
 
+SELECT ROW_COUNT();
 SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
 
 UPDATE multi_update_alias_target a
