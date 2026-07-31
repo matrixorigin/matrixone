@@ -29,13 +29,12 @@ import (
 )
 
 func TestIssue26095ConcurrentDataBranchDeletion(t *testing.T) {
-	c, err := embed.NewCluster(embed.WithCNCount(1), embed.WithTesting())
-	require.NoError(t, err)
-	require.NoError(t, c.Start())
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+		runIssue26095ConcurrentDataBranchDeletion(t, c)
+	})
+}
 
+func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

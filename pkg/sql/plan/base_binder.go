@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -112,6 +113,10 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindRangeCond(exprImpl, depth, isRoot)
 
 	case *tree.UnresolvedName:
+		if udfArg, ok := b.bindSQLUdfArgument(exprImpl); ok {
+			expr = udfArg
+			break
+		}
 		// check existence
 		if b.GetContext() != nil && b.GetContext().Value(defines.InSp{}) != nil && b.GetContext().Value(defines.InSp{}).(bool) {
 			tmpScope := b.GetContext().Value(defines.VarScopeKey{}).(*[]map[string]interface{})
@@ -2568,7 +2573,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		return nil, err
 	}
 
-	return bindFuncExprImplUdf(b, name, udf, astArgs, depth)
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
@@ -2600,26 +2605,27 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 	return args, nil
 }
 
-func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []tree.Expr, depth int32) (*plan.Expr, error) {
+func bindFuncExprImplUdf(
+	b *baseBinder,
+	name string,
+	udf *function.Udf,
+	astArgs []tree.Expr,
+	boundArgs []*plan.Expr,
+	depth int32,
+) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
 	}
 
 	switch udf.Language {
 	case string(tree.SQL):
-		sql := udf.Body
 		parserSQLMode := "PIPES_AS_CONCAT"
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode
 		}
-		// replace sql with actual arg value
-		fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-		for i := 0; i < len(args); i++ {
-			args[i].Format(fmtctx)
-			sql = strings.Replace(sql, "$"+strconv.Itoa(i+1), fmtctx.String(), 1)
-			fmtctx.Reset()
-		}
-
+		sql, udfArgs := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode)
+		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
+		defer restoreUdfArgs()
 		// if does not contain SELECT, an expression. In order to pass the parser,
 		// make it start with a 'SELECT'.
 
@@ -2658,7 +2664,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 		}
 		return expr, nil
 	case string(tree.PYTHON):
-		expr, err := b.bindPythonUdf(udf, args, depth)
+		expr, err := b.bindPythonUdf(udf, astArgs, depth)
 		if err != nil {
 			return nil, err
 		}
@@ -2666,6 +2672,176 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 	default:
 		return nil, moerr.NewInvalidArg(b.GetContext(), "function language", udf.Language)
 	}
+}
+
+// expandSQLUdfArguments replaces each $n parameter with an identifier that is
+// provably absent from the original UDF body. The identifier is resolved from
+// sqlUdfArgs while the parsed body is bound, so a column argument keeps its
+// outer-query identity even when an inner table exposes a column with the same
+// name. Checking the entire body (including quotes and comments) is deliberately
+// conservative: absence from the raw text guarantees that no user-authored
+// identifier in the parsed tree can be captured by the marker.
+func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMode string) (string, map[string]*plan.Expr) {
+	if len(args) == 0 {
+		return sql, nil
+	}
+
+	var callID uint64
+	if b.builder != nil {
+		b.builder.nextSQLUdfCallID++
+		callID = b.builder.nextSQLUdfCallID
+	}
+
+	markers := make(map[string]*plan.Expr, len(args))
+	markerByOrdinal := make(map[int]string, len(args))
+	foldedBody := strings.ToLower(sql)
+	markerForOrdinal := func(ordinal int) string {
+		if name, ok := markerByOrdinal[ordinal]; ok {
+			return "`" + name + "`"
+		}
+
+		baseName := fmt.Sprintf("__mo_sql_udf_%d_arg_%d", callID, ordinal)
+		name := baseName
+		for collisionID := uint64(1); strings.Contains(foldedBody, name); collisionID++ {
+			name = fmt.Sprintf("%s_%d", baseName, collisionID)
+		}
+		markerByOrdinal[ordinal] = name
+		markers[name] = args[ordinal-1]
+		return "`" + name + "`"
+	}
+	rewritten := replaceSQLUdfArgMarkers(sql, len(args), sqlMode, markerForOrdinal)
+	return rewritten, markers
+}
+
+func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerForOrdinal func(int) string) string {
+	scanner := mysqlparser.NewScannerWithSQLMode(
+		dialect.MYSQL,
+		sql,
+		mysqlparser.ParseSQLModeFlags(sqlMode),
+	)
+	defer mysqlparser.PutScanner(scanner)
+
+	var result strings.Builder
+	result.Grow(len(sql))
+	written := 0
+	for {
+		token, value := scanner.Scan()
+		if token == 0 || token == mysqlparser.LEX_ERROR {
+			break
+		}
+		if token != mysqlparser.ID || len(value) < 2 || value[0] != '$' {
+			continue
+		}
+
+		ordinal, err := strconv.Atoi(value[1:])
+		if err != nil || ordinal < 1 || ordinal > argCount {
+			continue
+		}
+
+		// ID tokens are returned byte-for-byte from the source, so their start is
+		// the scanner's current byte offset minus the token length.
+		start := scanner.Pos - len(value)
+		result.WriteString(sql[written:start])
+		result.WriteString(markerForOrdinal(ordinal))
+		written = scanner.Pos
+	}
+
+	result.WriteString(sql[written:])
+	return result.String()
+}
+
+func (b *baseBinder) pushSQLUdfArguments(args map[string]*plan.Expr) func() {
+	if b.ctx == nil || len(args) == 0 {
+		return func() {}
+	}
+
+	previous := b.ctx.sqlUdfArgs
+	b.ctx.sqlUdfArgs = args
+	return func() {
+		b.ctx.sqlUdfArgs = previous
+	}
+}
+
+func (b *baseBinder) bindSQLUdfArgument(name *tree.UnresolvedName) (*plan.Expr, bool) {
+	if b.ctx == nil || name.NumParts != 1 {
+		return nil, false
+	}
+
+	argName := name.ColName()
+	depth := int32(0)
+	for ctx := b.ctx; ctx != nil; ctx = ctx.parent {
+		if arg, ok := ctx.sqlUdfArgs[argName]; ok {
+			expr, correlated := correlateSQLUdfArgument(arg, depth)
+			if correlated {
+				for inner := b.ctx; inner != nil && inner != ctx; inner = inner.parent {
+					inner.isCorrelated = true
+				}
+			}
+			return expr, true
+		}
+		depth++
+	}
+	return nil, false
+}
+
+func correlateSQLUdfArgument(arg *plan.Expr, depth int32) (*plan.Expr, bool) {
+	expr := DeepCopyExpr(arg)
+	correlated := false
+
+	var rewrite func(*plan.Expr)
+	rewrite = func(current *plan.Expr) {
+		if current == nil {
+			return
+		}
+
+		switch item := current.Expr.(type) {
+		case *plan.Expr_Col:
+			if depth > 0 {
+				current.Expr = &plan.Expr_Corr{Corr: &plan.CorrColRef{
+					RelPos: item.Col.RelPos,
+					ColPos: item.Col.ColPos,
+					Depth:  depth,
+				}}
+				correlated = true
+			}
+		case *plan.Expr_Corr:
+			item.Corr.Depth += depth
+			correlated = true
+		case *plan.Expr_Lit:
+			rewrite(item.Lit.Src)
+		case *plan.Expr_F:
+			for _, child := range item.F.Args {
+				rewrite(child)
+			}
+		case *plan.Expr_W:
+			rewrite(item.W.WindowFunc)
+			for _, child := range item.W.PartitionBy {
+				rewrite(child)
+			}
+			for _, orderBy := range item.W.OrderBy {
+				if orderBy != nil {
+					rewrite(orderBy.Expr)
+				}
+			}
+			if item.W.Frame != nil {
+				if item.W.Frame.Start != nil {
+					rewrite(item.W.Frame.Start.Val)
+				}
+				if item.W.Frame.End != nil {
+					rewrite(item.W.Frame.End.Val)
+				}
+			}
+		case *plan.Expr_Sub:
+			rewrite(item.Sub.Child)
+		case *plan.Expr_List:
+			for _, child := range item.List.List {
+				rewrite(child)
+			}
+		}
+	}
+
+	rewrite(expr)
+	return expr, correlated
 }
 
 func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {

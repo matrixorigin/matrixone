@@ -201,6 +201,65 @@ func TestCircuitBreakerHalfOpenLimitedRequests(t *testing.T) {
 	assert.False(t, cb.Allow())
 }
 
+func TestCircuitBreakerPermitNeutralRelease(t *testing.T) {
+	manager := NewCircuitBreakerManager("test-client", CircuitBreakerConfig{
+		Enabled:             true,
+		FailureThreshold:    1,
+		ResetTimeout:        0,
+		HalfOpenMaxRequests: 1,
+	}, zap.NewNop())
+	const backend = "backend1"
+	manager.RecordFailure(backend)
+
+	handle := manager.newHandle(backend)
+	first, err := handle.Admit()
+	require.NoError(t, err)
+	require.Equal(t, CircuitHalfOpen, handle.breaker.State())
+	first.Release()
+
+	second, err := handle.Admit()
+	require.NoError(t, err, "neutral completion must return the probe slot")
+	second.RecordSuccess()
+	require.Equal(t, CircuitClosed, handle.breaker.State())
+}
+
+func TestCircuitBreakerPermitIgnoresPreviousGenerationCompletion(t *testing.T) {
+	manager := NewCircuitBreakerManager("test-client", CircuitBreakerConfig{
+		Enabled:             true,
+		FailureThreshold:    1,
+		ResetTimeout:        0,
+		HalfOpenMaxRequests: 2,
+	}, zap.NewNop())
+	const backend = "backend1"
+	manager.RecordFailure(backend)
+	handle := manager.newHandle(backend)
+
+	oldFailure, err := handle.Admit()
+	require.NoError(t, err)
+	oldSuccess, err := handle.Admit()
+	require.NoError(t, err)
+	oldFailure.RecordFailure()
+	require.Equal(t, CircuitOpen, handle.breaker.State())
+
+	current1, err := handle.Admit()
+	require.NoError(t, err)
+	current2, err := handle.Admit()
+	require.NoError(t, err)
+	require.Equal(t, CircuitHalfOpen, handle.breaker.State())
+
+	// This success belonged to the previous half-open generation. It is still
+	// counted as an observed outcome, but it must not complete the new probe set.
+	oldSuccess.RecordSuccess()
+	_, err = handle.Admit()
+	require.ErrorIs(t, err, ErrCircuitHalfOpen,
+		"a stale completion must not release a current-generation probe slot")
+
+	current1.RecordSuccess()
+	require.Equal(t, CircuitHalfOpen, handle.breaker.State())
+	current2.RecordSuccess()
+	require.Equal(t, CircuitClosed, handle.breaker.State())
+}
+
 func TestCircuitBreakerReset(t *testing.T) {
 	logger := zap.NewNop()
 	config := CircuitBreakerConfig{
