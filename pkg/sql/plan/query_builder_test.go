@@ -143,6 +143,20 @@ func TestChooseRowCarrier(t *testing.T) {
 	})
 }
 
+func TestLegacySourceTableFailsClosed(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.dbs["db"] = true
+	mock.ctxt.objects["src"] = &plan.ObjectRef{DbName: "db", ObjName: "src", Obj: 42}
+	mock.ctxt.tables["src"] = &plan.TableDef{
+		Name:      "src",
+		TableType: catalog.SystemSourceRel,
+		Cols:      []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}},
+	}
+
+	_, err := runOneStmt(mock, t, "select * from db.src")
+	require.ErrorContains(t, err, "not supported: source table db.src")
+}
+
 func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.dbs["telemetry_source"] = true

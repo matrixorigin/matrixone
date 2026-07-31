@@ -945,8 +945,6 @@ type CreateTable struct {
 	IcebergParam       *IcebergTableParam
 	MongoDBParam       *MongoDBTableParam
 	AsSource           *Select
-	IsDynamicTable     bool
-	DTOptions          []TableOption
 	IsAsSelect         bool
 	IsAsLike           bool
 	LikeTableName      TableName
@@ -968,10 +966,6 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.Param != nil || node.IcebergParam != nil || node.MongoDBParam != nil {
 		ctx.WriteString(" external")
 	}
-	if node.IsDynamicTable {
-		ctx.WriteString(" dynamic")
-	}
-
 	ctx.WriteString(" table")
 
 	if node.IfNotExists {
@@ -989,19 +983,6 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 
 	if node.SubscriptionOption != nil {
 		node.SubscriptionOption.Format(ctx)
-	} else if node.IsDynamicTable {
-		ctx.WriteString(" as ")
-		node.AsSource.Format(ctx)
-
-		if node.DTOptions != nil {
-			prefix := " with ("
-			for _, t := range node.DTOptions {
-				ctx.WriteString(prefix)
-				t.Format(ctx)
-				prefix = ", "
-			}
-			ctx.WriteByte(')')
-		}
 	} else {
 
 		if !node.IsAsSelect && !(node.IcebergParam != nil && len(node.Defs) == 0) {
@@ -1022,7 +1003,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		node.AsSource.Format(ctx)
 	}
 
-	if node.Options != nil && !node.IsDynamicTable {
+	if node.Options != nil {
 		prefix := " "
 		for _, t := range node.Options {
 			ctx.WriteString(prefix)
@@ -1234,83 +1215,6 @@ func (node *CreateTable) reset() {
 	// if node.AsSource != nil {
 	// 	reuse.Free[Select](node.AsSource, nil)
 	// }
-
-	if node.DTOptions != nil {
-		for _, item := range node.DTOptions {
-			switch opt := item.(type) {
-			case *TableOptionProperties:
-				opt.Free()
-			case *TableOptionEngine:
-				opt.Free()
-			case *TableOptionEngineAttr:
-				opt.Free()
-			case *TableOptionInsertMethod:
-				opt.Free()
-			case *TableOptionSecondaryEngine:
-				opt.Free()
-			case *TableOptionSecondaryEngineNull:
-				panic("currently not used")
-			case *TableOptionCharset:
-				opt.Free()
-			case *TableOptionCollate:
-				opt.Free()
-			case *TableOptionAUTOEXTEND_SIZE:
-				opt.Free()
-			case *TableOptionAutoIncrement:
-				opt.Free()
-			case *TableOptionComment:
-				opt.Free()
-			case *TableOptionAvgRowLength:
-				opt.Free()
-			case *TableOptionChecksum:
-				opt.Free()
-			case *TableOptionCompression:
-				opt.Free()
-			case *TableOptionConnection:
-				opt.Free()
-			case *TableOptionPassword:
-				opt.Free()
-			case *TableOptionKeyBlockSize:
-				opt.Free()
-			case *TableOptionMaxRows:
-				opt.Free()
-			case *TableOptionMinRows:
-				opt.Free()
-			case *TableOptionDelayKeyWrite:
-				opt.Free()
-			case *TableOptionRowFormat:
-				opt.Free()
-			case *TableOptionStartTrans:
-				opt.Free()
-			case *TableOptionSecondaryEngineAttr:
-				opt.Free()
-			case *TableOptionStatsPersistent:
-				opt.Free()
-			case *TableOptionStatsAutoRecalc:
-				opt.Free()
-			case *TableOptionPackKeys:
-				opt.Free()
-			case *TableOptionTablespace:
-				opt.Free()
-			case *TableOptionDataDirectory:
-				opt.Free()
-			case *TableOptionIndexDirectory:
-				opt.Free()
-			case *TableOptionStorageMedia:
-				opt.Free()
-			case *TableOptionStatsSamplePages:
-				opt.Free()
-			case *TableOptionUnion:
-				opt.Free()
-			case *TableOptionEncryption:
-				opt.Free()
-			default:
-				if opt != nil {
-					panic(fmt.Sprintf("miss Free for %v", item))
-				}
-			}
-		}
-	}
 
 	*node = CreateTable{}
 }

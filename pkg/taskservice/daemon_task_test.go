@@ -211,7 +211,7 @@ func TestDaemonTaskPollResumesAfterTaskFrameworkReenabled(t *testing.T) {
 func daemonTaskMetadata() task.TaskMetadata {
 	return task.TaskMetadata{
 		ID:       "-",
-		Executor: task.TaskCode_ConnectorKafkaSink,
+		Executor: task.TaskCode_TestOnly,
 		Options: task.TaskOptions{
 			MaxRetryTimes: 0,
 			RetryInterval: 0,
@@ -234,10 +234,8 @@ func newDaemonTaskForTest(id uint64, status task.TaskStatus, runner string) task
 			AccountID: 0,
 			Account:   "sys",
 			Username:  "dump",
-			Details: &task.Details_Connector{
-				Connector: &task.ConnectorDetails{
-					TableName: "d1.t1",
-				},
+			Details: &task.Details_ISCP{
+				ISCP: &task.ISCPDetails{TaskName: "test-task"},
 			},
 		},
 	}
@@ -741,7 +739,7 @@ func TestPauseCompletedTasksClearedByLifecycle(t *testing.T) {
 func TestRunDaemonTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
-		r.RegisterExecutor(task.TaskCode_ConnectorKafkaSink, func(ctx context.Context, task task.Task) error {
+		r.RegisterExecutor(task.TaskCode_TestOnly, func(ctx context.Context, task task.Task) error {
 			defer close(c)
 			return nil
 		})
@@ -829,7 +827,7 @@ func waitStarted(started *atomic.Bool, timeout time.Duration) {
 
 func TestPauseResumeDaemonTask(t *testing.T) {
 	for _, code := range []task.TaskCode{
-		task.TaskCode_ConnectorKafkaSink,
+		task.TaskCode_TestOnly,
 		task.TaskCode_ISCPExecutor,
 		task.TaskCode_PublicationExecutor,
 	} {
@@ -855,7 +853,7 @@ func TestPauseTaskHandleIdempotent(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
+		r.testRegisterExecutor(t, task.TaskCode_TestOnly, &started)
 		waitStarted(&started, time.Second*5)
 
 		localDT, ok := r.getDaemonTask(1)
@@ -889,8 +887,8 @@ func TestTaskNameFromDetails(t *testing.T) {
 	require.Equal(t, "", taskNameFromDetails(tk))
 
 	tk.Details = &task.Details{
-		Details: &task.Details_Connector{
-			Connector: &task.ConnectorDetails{TableName: "d1.t1"},
+		Details: &task.Details_ISCP{
+			ISCP: &task.ISCPDetails{TaskName: "iscp-task"},
 		},
 	}
 	require.Equal(t, "", taskNameFromDetails(tk))
@@ -986,7 +984,7 @@ func TestStartTasksWithHAKeeperClientError(t *testing.T) {
 
 func TestDispatchTaskHandleCoverBranches(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
-		r.RegisterExecutor(task.TaskCode_ConnectorKafkaSink, func(context.Context, task.Task) error { return nil })
+		r.RegisterExecutor(task.TaskCode_TestOnly, func(context.Context, task.Task) error { return nil })
 
 		t1 := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		t2 := newDaemonTaskForTest(2, task.TaskStatus_ResumeRequested, r.runnerID)
@@ -1015,7 +1013,7 @@ func TestCancelDaemonTask(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
+		r.testRegisterExecutor(t, task.TaskCode_TestOnly, &started)
 		waitStarted(&started, time.Second*5)
 
 		expectTaskStatus(t, store, dt, task.TaskStatus_CancelRequested, task.TaskStatus_Canceled)
@@ -1028,7 +1026,7 @@ func TestRestartDaemonTask(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
+		r.testRegisterExecutor(t, task.TaskCode_TestOnly, &started)
 		waitStarted(&started, time.Second*5)
 
 		expectTaskStatus(t, store, dt, task.TaskStatus_RestartRequested, task.TaskStatus_Running)
@@ -1044,7 +1042,7 @@ func TestRestartDaemonTaskWithEmptyRunner(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
 		mustAddTestDaemonTask(t, store, 1, dt)
 		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
+		r.testRegisterExecutor(t, task.TaskCode_TestOnly, &started)
 		waitStarted(&started, time.Second*5)
 
 		// Update task status to RestartRequested (TaskRunner still empty)
@@ -1069,7 +1067,7 @@ func TestRestartDaemonTaskTakesOverStaleForeignRunner(t *testing.T) {
 		mustAddTestDaemonTask(t, store, 1, dt)
 
 		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
+		r.testRegisterExecutor(t, task.TaskCode_TestOnly, &started)
 		expectTaskStatus(t, store, dt, task.TaskStatus_RestartRequested, task.TaskStatus_Running)
 
 		updatedTasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
@@ -1086,7 +1084,7 @@ func TestRestartDaemonTaskPassesRestartAdmissionToExecutor(t *testing.T) {
 		mustAddTestDaemonTask(t, store, 1, dt)
 
 		admission := make(chan bool, 1)
-		r.RegisterExecutor(task.TaskCode_ConnectorKafkaSink, func(ctx context.Context, _ task.Task) error {
+		r.RegisterExecutor(task.TaskCode_TestOnly, func(ctx context.Context, _ task.Task) error {
 			admission <- IsRestartAdmission(ctx)
 			return nil
 		})

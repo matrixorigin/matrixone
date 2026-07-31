@@ -250,7 +250,6 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers,
 		*tree.ShowAccountUpgrade,
-		*tree.ShowConnectors,
 		*tree.ShowIcebergCatalogs,
 		*tree.ShowIcebergNamespaces,
 		*tree.ShowIcebergTables,

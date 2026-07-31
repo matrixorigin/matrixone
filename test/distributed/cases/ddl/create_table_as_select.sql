@@ -1433,7 +1433,6 @@ CREATE TABLE tx1 (
 );
 
 -- error test
-create dynamic table dt_test as select * from tx1;
 drop table tx1;
 drop database db9;
 

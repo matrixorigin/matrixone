@@ -570,13 +570,8 @@ func TestCreateDaemonTask(t *testing.T) {
 			AccountID: 10,
 			Account:   "a1",
 			Username:  "u1",
-			Details: &task.Details_Connector{
-				Connector: &task.ConnectorDetails{
-					TableName: "d1.t1",
-					Options: map[string]string{
-						"k1": "v1",
-					},
-				},
+			Details: &task.Details_ISCP{
+				ISCP: &task.ISCPDetails{TaskId: "id-1", TaskName: "task-1"},
 			},
 		}))
 
@@ -587,14 +582,14 @@ func TestCreateDaemonTask(t *testing.T) {
 	assert.Equal(t, "", v.TaskRunner)
 	assert.True(t, v.LastHeartbeat.IsZero())
 	assert.Equal(t, newTestTaskMetadata("t1"), v.Metadata)
-	assert.Equal(t, task.TaskType_TypeKafkaSinkConnector, v.TaskType)
+	assert.Equal(t, task.TaskType_ISCP, v.TaskType)
 	assert.Equal(t, uint32(10), v.Details.AccountID)
 	assert.Equal(t, "a1", v.Details.Account)
 	assert.Equal(t, "u1", v.Details.Username)
-	details, ok := v.Details.Details.(*task.Details_Connector)
+	details, ok := v.Details.Details.(*task.Details_ISCP)
 	assert.True(t, ok)
-	assert.Equal(t, "d1.t1", details.Connector.TableName)
-	assert.Equal(t, "v1", details.Connector.Options["k1"])
+	assert.Equal(t, "id-1", details.ISCP.TaskId)
+	assert.Equal(t, "task-1", details.ISCP.TaskName)
 }
 
 func TestQueryDaemonTask(t *testing.T) {

@@ -65,8 +65,7 @@ option (gogoproto.protosizer_all) = true;
    MetricLogMerge = 2;
    // MetricStorageUsage handle metric server_storage_usage collection
    MetricStorageUsage = 3;
-   // ConnectorKafkaSink is for the streaming connector task.
-   ConnectorKafkaSink = 4;
+   reserved 4; // former ConnectorKafkaSink
    // MergeObject is for the merge object task.
    MergeObject = 5;
    reserved 6;
@@ -199,16 +198,11 @@ option (gogoproto.protosizer_all) = true;
 
 enum TaskType {
   Unknown = 0 [(gogoproto.enumvalue_customname) = "TypeUnknown"];
-  KafkaSinkConnector = 1 [(gogoproto.enumvalue_customname) = "TypeKafkaSinkConnector"];
+  reserved 1; // former KafkaSinkConnector
   reserved 2;
   CreateCdc = 3 [(gogoproto.enumvalue_customname) = "CreateCdc"];
   ISCP = 4 [(gogoproto.enumvalue_customname) = "ISCP"];
   Publication = 5 [(gogoproto.enumvalue_customname) = "Publication"];
-}
-
-message ConnectorDetails {
-  string TableName = 1;
-  map<string, string> Options = 2;
 }
 
 message Account {
@@ -247,9 +241,8 @@ message Details {
   string Account = 3;
   string Username = 4;
   string Error = 5;
-  reserved 11;
+  reserved 10, 11; // 10 was ConnectorDetails
   oneof Details {
-    ConnectorDetails Connector = 10;
     CreateCdcDetails CreateCdc = 12;
     ISCPDetails ISCP = 13;
     PublicationDetails Publication = 14;
