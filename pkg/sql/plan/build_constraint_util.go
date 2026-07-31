@@ -1989,7 +1989,6 @@ func appendPrimaryConstraintPlan(
 						},
 					},
 				}},
-				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)},
 			}
 
 			if builder.isRestore {
@@ -2010,7 +2009,6 @@ func appendPrimaryConstraintPlan(
 				scanNode.RuntimeFilterProbeList = nil // can not use both
 			} else {
 				tableScanId = builder.appendNode(scanNode, bindCtx)
-				scanNode.Stats.ForceOneCN = true
 			}
 
 			// fuzzy_filter
@@ -2039,8 +2037,18 @@ func appendPrimaryConstraintPlan(
 						},
 					},
 				}
-				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr, false)}
-				recalcStatsByRuntimeFilter(scanNode, fuzzyFilterNode, builder)
+				probeSpec, buildSpec, ok := builder.makeExactRuntimeFilterPair(
+					rfTag,
+					false,
+					GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt),
+					probeExpr,
+					buildExpr,
+					false,
+				)
+				if ok {
+					scanNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+					fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
+				}
 			}
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
@@ -2092,12 +2100,11 @@ func appendPrimaryConstraintPlan(
 					},
 				}
 				scanNode := &Node{
-					NodeType:               plan.Node_TABLE_SCAN,
-					Stats:                  &plan.Stats{},
-					ObjRef:                 objRef,
-					TableDef:               scanTableDef,
-					ProjectList:            []*Expr{scanPkExpr, scanRowIdExpr},
-					RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)},
+					NodeType:    plan.Node_TABLE_SCAN,
+					Stats:       &plan.Stats{},
+					ObjRef:      objRef,
+					TableDef:    scanTableDef,
+					ProjectList: []*Expr{scanPkExpr, scanRowIdExpr},
 				}
 				rightId := builder.appendNode(scanNode, bindCtx)
 
@@ -2152,17 +2159,32 @@ func appendPrimaryConstraintPlan(
 						},
 					},
 				}
+				probeSpec, buildSpec, hasRuntimeFilter := builder.makeExactRuntimeFilterPair(
+					rfTag,
+					false,
+					GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt),
+					probeExpr,
+					buildExpr,
+					false,
+				)
+				if hasRuntimeFilter {
+					scanNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+				}
 				joinNode := &plan.Node{
-					NodeType:               plan.Node_JOIN,
-					Children:               []int32{rightId, lastNodeId},
-					JoinType:               plan.Node_RIGHT,
-					IsRightJoin:            true,
-					OnList:                 []*Expr{condExpr},
-					ProjectList:            []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
-					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr, false)},
+					NodeType:    plan.Node_JOIN,
+					Children:    []int32{rightId, lastNodeId},
+					JoinType:    plan.Node_RIGHT,
+					IsRightJoin: true,
+					OnList:      []*Expr{condExpr},
+					ProjectList: []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
+				}
+				if hasRuntimeFilter {
+					joinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
 				}
 				lastNodeId = builder.appendNode(joinNode, bindCtx)
-				recalcStatsByRuntimeFilter(scanNode, joinNode, builder)
+				if hasRuntimeFilter {
+					recalcStatsByRuntimeFilter(scanNode, joinNode, builder)
+				}
 
 				// append agg node.
 				aggGroupBy := []*Expr{

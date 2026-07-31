@@ -4539,12 +4539,20 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeUint64(&maxVal)
 
 	case types.T_float32:
-		minVal, maxVal := OrderedGetMinAndMax[float32](v)
+		minVal, maxVal, hasComparableValue := FloatGetMinAndMax[float32](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
 		minv = types.EncodeFloat32(&minVal)
 		maxv = types.EncodeFloat32(&maxVal)
 
 	case types.T_float64:
-		minVal, maxVal := OrderedGetMinAndMax[float64](v)
+		minVal, maxVal, hasComparableValue := FloatGetMinAndMax[float64](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
 		minv = types.EncodeFloat64(&minVal)
 		maxv = types.EncodeFloat64(&maxVal)
 

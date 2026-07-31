@@ -49,7 +49,9 @@ type container struct {
 	rbat         *batch.Batch
 
 	// about runtime filter
-	pass2RuntimeFilter *vector.Vector
+	pass2RuntimeFilter  *vector.Vector
+	runtimeFilterUsable bool
+	runtimeFilterDone   bool
 }
 
 type FuzzyFilter struct {
@@ -109,9 +111,19 @@ func (fuzzyFilter *FuzzyFilter) getProbeIdx() int {
 func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	runtimeSucceed := fuzzyFilter.ctr.state > HandleRuntimeFilter
 
-	message.FinalizeRuntimeFilter(fuzzyFilter.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
+	if !fuzzyFilter.ctr.runtimeFilterDone {
+		if !runtimeSucceed && (pipelineFailed || err != nil) {
+			message.FinalizeRuntimeFilterOnBuildError(
+				fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
+		} else {
+			message.FinalizeRuntimeFilter(
+				fuzzyFilter.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
+		}
+	}
 	ctr := &fuzzyFilter.ctr
 	ctr.state = Build
+	ctr.runtimeFilterUsable = false
+	ctr.runtimeFilterDone = false
 	ctr.collisionCnt = 0
 	if ctr.pass2RuntimeFilter != nil {
 		ctr.pass2RuntimeFilter.CleanOnlyData()

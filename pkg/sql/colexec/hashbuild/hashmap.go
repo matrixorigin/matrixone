@@ -48,6 +48,7 @@ type HashmapBuilder struct {
 	Batches            colexec.Batches
 	executors          []colexec.ExpressionExecutor
 	UniqueJoinKeys     []*vector.Vector
+	uniqueKeySlots     []bool
 	uniqueSels         []int64
 	cachedIntIterator  hashmap.Iterator
 	cachedStrIterator  hashmap.Iterator
@@ -70,6 +71,17 @@ type HashmapBuilder struct {
 	auxReservation            *process.HashBuildReservation
 	keyExprs                  []*plan.Expr
 	expressionLease           *ExpressionMemoryLease
+
+	// Exact runtime-filter keys are an optional owner inside the mandatory
+	// JoinMap build. The fallback bit is observed by HashBuild for diagnostics.
+	//
+	// retainedBatchRecoverySafe is an ownership contract for every caller that
+	// may replay or repartition Batches after BuildHashmap returns an admission
+	// error. It becomes false before a destructive Dedup rewrite starts. From
+	// that point, Batches are no longer equivalent to the original ingress and
+	// must not be retried or re-spilled.
+	runtimeFilterCollectionFallback bool
+	retainedBatchRecoverySafe       bool
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -213,6 +225,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 		}
 	}
 	hb.UniqueJoinKeys = nil
+	hb.uniqueKeySlots = nil
 	// Function executors retain result-vector capacity across ResetForNextQuery.
 	// Free them before releasing expression reservations; Prepare recreates the
 	// executor set for the next generation.
@@ -237,6 +250,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 		}
 	}
 	hb.UniqueJoinKeys = nil
+	hb.uniqueKeySlots = nil
 }
 
 func (hb *HashmapBuilder) FreeExecutors() {
@@ -540,7 +554,30 @@ func (hb *HashmapBuilder) releaseExpressionLease() {
 }
 
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
+	hb.runtimeFilterCollectionFallback = false
+	hb.retainedBatchRecoverySafe = true
 	return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, hb.DedupBuildKeepLast, proc)
+}
+
+func (hb *HashmapBuilder) runtimeFilterFallbackState() (bool, bool) {
+	return hb.runtimeFilterCollectionFallback,
+		hb.retainedBatchRecoverySafe
+}
+
+func (hb *HashmapBuilder) collectUniqueKeySlot(slot int) bool {
+	return len(hb.uniqueKeySlots) == 0 ||
+		(slot >= 0 && slot < len(hb.uniqueKeySlots) &&
+			hb.uniqueKeySlots[slot])
+}
+
+// RetainedBatchRecoverySafe reports whether the batches retained by this
+// builder are still semantically equivalent to its original ingress and may be
+// replayed or repartitioned after BuildHashmap fails.
+//
+// Callers must read this before freeing partial hashmap state. A false result
+// is sticky for the current BuildHashmap generation.
+func (hb *HashmapBuilder) RetainedBatchRecoverySafe() bool {
+	return hb.retainedBatchRecoverySafe
 }
 
 func (hb *HashmapBuilder) buildHashmap(
@@ -550,6 +587,7 @@ func (hb *HashmapBuilder) buildHashmap(
 	dedupBuildKeepLast bool,
 	proc *process.Process,
 ) (retErr error) {
+	runtimeFilterRequested := needUniqueVec
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
@@ -557,7 +595,17 @@ func (hb *HashmapBuilder) buildHashmap(
 		return nil
 	}
 	if err := hb.reserveBuildAux(needUniqueVec); err != nil {
-		return err
+		if !needUniqueVec {
+			return err
+		}
+		// The extra auxiliary charge exists only for optional exact-filter key
+		// retention. Retry the admission in place without that owner before
+		// allocating or mutating the mandatory map.
+		needUniqueVec = false
+		hb.runtimeFilterCollectionFallback = true
+		if err = hb.reserveBuildAux(false); err != nil {
+			return err
+		}
 	}
 	dedupBuildKeepLast = dedupBuildKeepLast && hb.IsDedup && hb.OnDuplicateAction == plan.Node_FAIL
 	defer func() {
@@ -819,26 +867,45 @@ func (hb *HashmapBuilder) buildHashmap(
 			if len(hb.UniqueJoinKeys) == 0 {
 				hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executors))
 				for j, vec := range hb.curVecs {
-					hb.UniqueJoinKeys[j] = vector.NewOffHeapVecWithType(*vec.GetType())
+					if hb.collectUniqueKeySlot(j) {
+						hb.UniqueJoinKeys[j] =
+							vector.NewOffHeapVecWithType(*vec.GetType())
+					}
 				}
 			}
 
 			if hashOnPK {
 				for j, vec := range hb.curVecs {
-					areaBytes, reserveErr := uniqueAppendAreaBytes(vec, vecIdx2, n, nil)
+					if !hb.collectUniqueKeySlot(j) {
+						continue
+					}
+					areaBytes, reserveErr :=
+						unionBatchAreaBytes(vec, vecIdx2, n)
 					if reserveErr != nil {
-						return reserveErr
+						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+							return err
+						}
+						needUniqueVec = false
+						break
 					}
 					overlap, reserveErr := hb.reserveUniqueAppendOverlap(hb.UniqueJoinKeys[j], n, areaBytes)
 					if reserveErr != nil {
-						return reserveErr
+						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+							return err
+						}
+						needUniqueVec = false
+						break
 					}
 					err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
 					if overlap != nil {
 						overlap.Release()
 					}
 					if err != nil {
-						return err
+						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+							return err
+						}
+						needUniqueVec = false
+						break
 					}
 				}
 			} else {
@@ -855,20 +922,35 @@ func (hb *HashmapBuilder) buildHashmap(
 				hb.uniqueSels = newSels
 
 				for j, vec := range hb.curVecs {
+					if !hb.collectUniqueKeySlot(j) {
+						continue
+					}
 					areaBytes, reserveErr := uniqueAppendAreaBytes(vec, 0, len(newSels), newSels)
 					if reserveErr != nil {
-						return reserveErr
+						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+							return err
+						}
+						needUniqueVec = false
+						break
 					}
 					overlap, reserveErr := hb.reserveUniqueAppendOverlap(hb.UniqueJoinKeys[j], len(newSels), areaBytes)
 					if reserveErr != nil {
-						return reserveErr
+						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+							return err
+						}
+						needUniqueVec = false
+						break
 					}
 					err = hb.UniqueJoinKeys[j].Union(vec, newSels, proc.Mp())
 					if overlap != nil {
 						overlap.Release()
 					}
 					if err != nil {
-						return err
+						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+							return err
+						}
+						needUniqueVec = false
+						break
 					}
 				}
 			}
@@ -876,6 +958,16 @@ func (hb *HashmapBuilder) buildHashmap(
 	}
 
 	if dedupBuildKeepLast && hb.IgnoreRows.Count() > 0 {
+		if needUniqueVec {
+			if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+				return err
+			}
+			needUniqueVec = false
+		}
+		// keepDiscardedRowsForDelete rewrites Batches in place before copying
+		// delete-only rows. An admission failure after that boundary cannot be
+		// recovered by replaying the original BuildHashmap call.
+		hb.retainedBatchRecoverySafe = false
 		if err := hb.keepDiscardedRowsForDelete(proc); err != nil {
 			return err
 		}
@@ -886,6 +978,11 @@ func (hb *HashmapBuilder) buildHashmap(
 			hb.InputBatchRowCount = totalRowCount
 		}
 		hb.resetHashStateForRebuild(proc)
+		needUniqueVec, err = hb.prepareCanonicalRuntimeFilterCollection(
+			runtimeFilterRequested)
+		if err != nil {
+			return err
+		}
 		if err := hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc); err != nil {
 			return err
 		}
@@ -893,6 +990,13 @@ func (hb *HashmapBuilder) buildHashmap(
 		return nil
 	}
 	if hb.IsDedup && hb.OnDuplicateAction == plan.Node_IGNORE && hb.IgnoreRows.Count() > 0 {
+		if needUniqueVec {
+			if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+				return err
+			}
+			needUniqueVec = false
+		}
+		hb.retainedBatchRecoverySafe = false
 		// Shrinking changes physical row indexes. Rebuild before producing
 		// DelRows and GroupSels so bucket-to-row mappings address the compacted
 		// batches, including when a later unchanged-key owner replaced an earlier
@@ -903,6 +1007,11 @@ func (hb *HashmapBuilder) buildHashmap(
 		hb.InputBatchRowCount = hb.Batches.RowCount()
 		hb.DelRows = nil
 		hb.resetHashStateForRebuild(proc)
+		needUniqueVec, err = hb.prepareCanonicalRuntimeFilterCollection(
+			runtimeFilterRequested)
+		if err != nil {
+			return err
+		}
 		return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc)
 	}
 
@@ -1016,8 +1125,9 @@ func (hb *HashmapBuilder) resetHashStateForRebuild(proc *process.Process) {
 }
 
 // FreeHashMapOnly discards a partial hash build while preserving the copied
-// build batches and their reservations for bounded spill recovery. It is the
-// only supported transition from a failed BuildHashmap attempt to re-spill.
+// build batches and their reservations. It is the supported transition from a
+// failed BuildHashmap attempt to either a less memory-intensive rebuild or
+// bounded spill recovery.
 func (hb *HashmapBuilder) FreeHashMapOnly(proc *process.Process) {
 	hb.resetHashStateForRebuild(proc)
 	hb.DelRows = nil

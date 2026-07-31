@@ -631,10 +631,15 @@ func TestReserveUniqueAppendOverlapChargesReplacedCapacity(t *testing.T) {
 	defer src.Free(proc.Mp())
 
 	want := uint64(cap(dst.GetData()) + cap(dst.GetArea()))
-	budget := process.MustNewHashBuildBudget(want, want)
+	const budgetCap = uint64(64 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
-	hb := HashmapBuilder{budget: generation}
+	hb := HashmapBuilder{
+		budget:         generation,
+		UniqueJoinKeys: []*vector.Vector{dst},
+	}
+	require.NoError(t, hb.reserveBuildAux(true))
 	areaBytes, err := uniqueAppendAreaBytes(src, 0, 1, nil)
 	require.NoError(t, err)
 	token, err := hb.reserveUniqueAppendOverlap(dst, 1, areaBytes)
@@ -642,6 +647,8 @@ func TestReserveUniqueAppendOverlapChargesReplacedCapacity(t *testing.T) {
 	require.NotNil(t, token)
 	require.Equal(t, want, token.Size())
 	token.Release()
+	require.Equal(t, hb.auxReservation.Size(), generation.Used())
+	hb.releaseReservations()
 	require.Zero(t, generation.Used())
 
 	largeValue := strings.Repeat("z", 100)
@@ -683,6 +690,47 @@ func TestReserveUniqueAppendOverlapChargesReplacedCapacity(t *testing.T) {
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
 	token, err = hb.reserveUniqueAppendOverlap(dst, 1, -1)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
+func TestUniqueAppendBudgetIncludesDeadAreaCopiedByUnionBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	src := testutil.MakeVarcharVector(
+		[]string{"inline", strings.Repeat("d", 128<<10)}, nil, proc.Mp())
+	defer src.Free(proc.Mp())
+	// SetLength leaves the second value's area allocation behind. The sole live
+	// row is inline, but UnionBatch's whole-vector fast path copies all of area.
+	src.SetLength(1)
+	liveArea, err := uniqueAppendAreaBytes(src, 0, 1, nil)
+	require.NoError(t, err)
+	require.Zero(t, liveArea)
+	unionArea, err := unionBatchAreaBytes(src, 0, 1)
+	require.NoError(t, err)
+	require.Equal(t, len(src.GetArea()), unionArea)
+	require.Greater(t, unionArea, 0)
+
+	dst := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	defer dst.Free(proc.Mp())
+	const mandatoryAux = uint64(640 << 10)
+	budget := process.MustNewHashBuildBudget(mandatoryAux, mandatoryAux)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	hb := HashmapBuilder{
+		budget:         generation,
+		UniqueJoinKeys: []*vector.Vector{dst},
+	}
+	require.NoError(t, hb.reserveBuildAux(true))
+
+	_, err = hb.reserveUniqueAppendOverlap(dst, 1, unionArea)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Zero(t, dst.Length())
+	require.Zero(t, dst.Allocated(),
+		"admission must fail before UnionBatch allocates copied dead area")
+
+	hb.releaseReservations()
+	require.Zero(t, generation.Used())
+	generation.Close()
 }
 
 func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {

@@ -25,9 +25,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -385,26 +388,71 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			return err
 		}
 		needUniqueVec := false
-		if !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil && hashBuild.RuntimeFilterSpec.Expr != nil {
-			specType := types.New(
-				types.T(hashBuild.RuntimeFilterSpec.Expr.Typ.Id),
-				hashBuild.RuntimeFilterSpec.Expr.Typ.Width,
-				hashBuild.RuntimeFilterSpec.Expr.Typ.Scale,
-			)
-			encoding := exactRuntimeFilterEncoding(hashBuild.RuntimeFilterSpec, specType)
+		ctr.hashmapBuilder.uniqueKeySlots = nil
+		if !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil {
 			// Membership-filter consumers own a separate typed-key contract.
 			// Ordinary exact filters collect unique keys only when the plan
 			// advertises every producer-side closure required by their payload
-			// consumers. Both paths already fall back to PASS for composite
-			// expressions, so do not retain keys which cannot be serialized.
-			needUniqueVec = hashBuild.RuntimeFilterSpec.Expr.GetF() == nil &&
-				(hashBuild.RuntimeFilterSpec.UseMembershipFilter ||
-					encoding != keycodec.ExactRuntimeFilterUnsupported)
+			// consumers. Serialized tuple filters additionally validate every
+			// declared component slot before retaining the aligned unique-key
+			// vectors needed to evaluate serial/serial_full.
+			if hashBuild.RuntimeFilterSpec.UseMembershipFilter {
+				needUniqueVec = hashBuild.RuntimeFilterSpec.Expr != nil &&
+					hashBuild.RuntimeFilterSpec.Expr.GetF() == nil
+			} else {
+				encoding, ok := hashBuild.declaredRuntimeFilterEncoding(proc)
+				needUniqueVec = ok &&
+					encoding != keycodec.ExactRuntimeFilterUnsupported
+			}
+		}
+		if needUniqueVec {
+			var ok bool
+			ctr.hashmapBuilder.uniqueKeySlots, ok =
+				runtimeFilterCollectionSlotMask(
+					hashBuild.RuntimeFilterSpec,
+					len(hashBuild.Conditions),
+				)
+			if !ok {
+				needUniqueVec = false
+				ctr.hashmapBuilder.uniqueKeySlots = nil
+			}
 		}
 
 		err := ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc)
+		collectionFallback, _ :=
+			ctr.hashmapBuilder.runtimeFilterFallbackState()
+		rebuildSafe := ctr.hashmapBuilder.RetainedBatchRecoverySafe()
+		if err != nil && needUniqueVec &&
+			!collectionFallback && rebuildSafe &&
+			errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+			// Unique-key retention exists only for the optional runtime filter.
+			// A mandatory map allocation can still lose admission while the
+			// optional owner is live. Rebuild only while HashmapBuilder proves
+			// that no destructive Dedup batch rewrite has started.
+			ctr.hashmapBuilder.FreeHashMapOnly(proc)
+			collectionFallback = true
+			err = ctr.hashmapBuilder.BuildHashmap(
+				hashBuild.HashOnPK,
+				hashBuild.NeedAllocateSels,
+				false,
+				proc,
+			)
+			rebuildSafe = ctr.hashmapBuilder.RetainedBatchRecoverySafe()
+		}
+		if collectionFallback && analyzer != nil {
+			analyzer.GetOpStats().AddExtraStat(
+				"HashBuildRuntimeFilterCollectionFallbacks", 1)
+		}
 		if err != nil {
 			if !hashBuild.IsShuffle || !errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+				return err
+			}
+			if !rebuildSafe {
+				// Dedup may already have compacted Batches or be between
+				// shrinking survivors and appending delete-only rows. Neither
+				// replay nor spill can reconstruct the original input at this
+				// point; return a controlled admission error instead of
+				// publishing a semantically incomplete spill payload.
 				return err
 			}
 			// Preserve the copied batches, discard only partial map state, and use
@@ -491,7 +539,154 @@ func calculateBloomFilterProbability(rowCount int) float64 {
 	}
 }
 
-func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
+func planExprType(expr *plan.Expr) (types.Type, bool) {
+	if expr == nil {
+		return types.Type{}, false
+	}
+	return types.New(
+		types.T(expr.Typ.Id),
+		expr.Typ.Width,
+		expr.Typ.Scale,
+	), true
+}
+
+func runtimeFilterComponentSlots(spec *plan.RuntimeFilterSpec) ([]int, bool) {
+	buildExpr := runtimefilter.BuildKeyExpr(spec)
+	if buildExpr == nil || buildExpr.GetF() == nil {
+		return nil, false
+	}
+	args := buildExpr.GetF().Args
+	if len(args) == 0 {
+		return nil, false
+	}
+	slots := make([]int, len(args))
+	for i, arg := range args {
+		if arg == nil || arg.GetCol() == nil || arg.GetCol().ColPos < 0 {
+			return nil, false
+		}
+		slots[i] = int(arg.GetCol().ColPos)
+	}
+	return slots, true
+}
+
+func runtimeFilterCollectionSlotMask(
+	spec *plan.RuntimeFilterSpec,
+	conditionCount int,
+) ([]bool, bool) {
+	if spec == nil || conditionCount <= 0 {
+		return nil, false
+	}
+	mask := make([]bool, conditionCount)
+	if spec.UseMembershipFilter {
+		if spec.Expr == nil || spec.Expr.GetF() != nil {
+			return nil, false
+		}
+		// The established membership payload is the first join condition.
+		mask[0] = true
+		return mask, true
+	}
+	buildExpr := runtimefilter.BuildKeyExpr(spec)
+	if buildExpr == nil {
+		return nil, false
+	}
+	if col := buildExpr.GetCol(); col != nil {
+		slot := int(col.ColPos)
+		if slot < 0 || slot >= conditionCount {
+			return nil, false
+		}
+		mask[slot] = true
+		return mask, true
+	}
+	slots, ok := runtimeFilterComponentSlots(spec)
+	if !ok {
+		return nil, false
+	}
+	for _, slot := range slots {
+		if slot < 0 || slot >= conditionCount {
+			return nil, false
+		}
+		mask[slot] = true
+	}
+	return mask, true
+}
+
+// declaredRuntimeFilterEncoding validates the plan contract against the
+// HashBuild condition slots which will materialize it. It is used before map
+// construction so an invalid/stale plan cannot retain unique-key vectors just
+// to publish PASS.
+func (hashBuild *HashBuild) declaredRuntimeFilterEncoding(
+	proc *process.Process,
+) (keycodec.ExactRuntimeFilterEncoding, bool) {
+	spec := hashBuild.RuntimeFilterSpec
+	buildExpr := runtimefilter.BuildKeyExpr(spec)
+	if buildExpr == nil {
+		return keycodec.ExactRuntimeFilterUnsupported, false
+	}
+	if buildExpr.GetCol() != nil {
+		slot := int(buildExpr.GetCol().ColPos)
+		if slot < 0 || slot >= len(hashBuild.Conditions) {
+			return keycodec.ExactRuntimeFilterUnsupported, false
+		}
+		payloadType, ok := planExprType(hashBuild.Conditions[slot])
+		if !ok {
+			return keycodec.ExactRuntimeFilterUnsupported, false
+		}
+		return runtimefilter.ExactKeyEncoding(
+			spec, payloadType, proc.GetService()), true
+	}
+
+	slots, ok := runtimeFilterComponentSlots(spec)
+	if !ok {
+		return keycodec.ExactRuntimeFilterUnsupported, false
+	}
+	componentTypes := make([]types.Type, len(slots))
+	for i, slot := range slots {
+		if slot >= len(hashBuild.Conditions) {
+			return keycodec.ExactRuntimeFilterUnsupported, false
+		}
+		componentTypes[i], ok = planExprType(hashBuild.Conditions[slot])
+		if !ok {
+			return keycodec.ExactRuntimeFilterUnsupported, false
+		}
+	}
+	payloadType, ok := planExprType(buildExpr)
+	if !ok {
+		return keycodec.ExactRuntimeFilterUnsupported, false
+	}
+	return runtimefilter.ExactKeyEncodingWithComponents(
+		spec, payloadType, componentTypes, proc.GetService()), true
+}
+
+// materializedRuntimeFilterComponents resolves the tuple arguments against the
+// actual unique-key vectors. It also proves that every referenced slot is
+// present and row-aligned before expression evaluation.
+func materializedRuntimeFilterComponents(
+	spec *plan.RuntimeFilterSpec,
+	keys []*vector.Vector,
+) ([]types.Type, int, bool) {
+	slots, ok := runtimeFilterComponentSlots(spec)
+	if !ok {
+		return nil, 0, false
+	}
+	componentTypes := make([]types.Type, len(slots))
+	rowCount := -1
+	for i, slot := range slots {
+		if slot >= len(keys) || keys[slot] == nil {
+			return nil, 0, false
+		}
+		componentTypes[i] = *keys[slot].GetType()
+		if rowCount == -1 {
+			rowCount = keys[slot].Length()
+		} else if keys[slot].Length() != rowCount {
+			return nil, 0, false
+		}
+	}
+	return componentTypes, rowCount, rowCount >= 0
+}
+
+func (hashBuild *HashBuild) handleRuntimeFilter(
+	proc *process.Process,
+) (retErr error) {
 	ctr := &hashBuild.ctr
 	if hashBuild.IsShuffle {
 		//only support runtime filter pass for now in shuffle join
@@ -514,12 +709,12 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 	// with the message payload. Release them on every terminal path, including
 	// malformed cached plans and contradictory empty/missing states.
 	defer func() {
-		for i := range ctr.hashmapBuilder.UniqueJoinKeys {
-			if ctr.hashmapBuilder.UniqueJoinKeys[i] != nil {
-				ctr.hashmapBuilder.UniqueJoinKeys[i].Free(proc.Mp())
-			}
+		if err := ctr.hashmapBuilder.releaseOptionalRuntimeFilterKeys(
+			proc,
+		); retErr == nil && err != nil {
+			retErr = err
 		}
-		ctr.hashmapBuilder.UniqueJoinKeys = nil
+		ctr.hashmapBuilder.uniqueKeySlots = nil
 	}()
 
 	// send the unique join keys (doc_id membership pushdown) when requested
@@ -575,27 +770,33 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		return nil
 	}
 
-	if spec.Expr == nil {
+	buildExpr := runtimefilter.BuildKeyExpr(spec)
+	if buildExpr == nil {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
-	} else if ctr.hashmapBuilder.InputBatchRowCount == 0 {
+	}
+
+	declaredEncoding, declared := hashBuild.declaredRuntimeFilterEncoding(proc)
+	if !declared || declaredEncoding == keycodec.ExactRuntimeFilterUnsupported {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
+		return nil
+	}
+	if ctr.hashmapBuilder.InputBatchRowCount == 0 {
 		runtimeFilter.Typ = message.RuntimeFilter_DROP
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
 	}
 
-	if spec.Expr.GetF() != nil {
-		// Composite runtime-filter expression evaluation has no sound peak
-		// estimator yet. PASS preserves query correctness without collecting or
-		// allocating expression intermediates.
-		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
-		return nil
+	if buildExpr.GetF() != nil {
+		return hashBuild.handleSerializedRuntimeFilter(
+			proc, &runtimeFilter, spec)
 	}
 
-	if len(ctr.hashmapBuilder.UniqueJoinKeys) == 0 ||
-		ctr.hashmapBuilder.UniqueJoinKeys[0] == nil {
+	keySlot := int(buildExpr.GetCol().ColPos)
+	if keySlot >= len(ctr.hashmapBuilder.UniqueJoinKeys) ||
+		ctr.hashmapBuilder.UniqueJoinKeys[keySlot] == nil {
 		// Missing payload state cannot prove that the probe is empty. Runtime
 		// filters are optional, so fail open instead of silently discarding rows.
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
@@ -603,16 +804,19 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		return nil
 	}
 
-	if ctr.hashmapBuilder.UniqueJoinKeys[0].Length() == 0 {
-		runtimeFilter.Typ = message.RuntimeFilter_DROP
+	keyVec := ctr.hashmapBuilder.UniqueJoinKeys[keySlot]
+	keyType := keyVec.GetType()
+	encoding := runtimefilter.ExactKeyEncoding(spec, *keyType, proc.GetService())
+	if encoding == keycodec.ExactRuntimeFilterUnsupported {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
 	}
-
-	keyType := ctr.hashmapBuilder.UniqueJoinKeys[0].GetType()
-	encoding := exactRuntimeFilterEncoding(spec, *keyType)
-	if encoding == keycodec.ExactRuntimeFilterUnsupported {
-		runtimeFilter.Typ = message.RuntimeFilter_PASS
+	if keyVec.Length() == 0 {
+		// A non-empty build may still have no joinable keys (for example, all
+		// keys are NULL), but only a validated payload contract makes that empty
+		// vector trustworthy evidence for DROP.
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
 	}
@@ -625,9 +829,20 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		return nil
 	}
 
-	keyVec := ctr.hashmapBuilder.UniqueJoinKeys[0]
 	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
-		if err := closeFloatRuntimeFilterSignedZero(&ctr.hashmapBuilder, keyVec, proc); err != nil {
+		if err := runtimefilter.CloseFloatSignedZero(
+			keyVec,
+			proc.Mp(),
+			func() (func(), error) {
+				overlap, err := ctr.hashmapBuilder.reserveUniqueAppendOverlap(keyVec, 1, 0)
+				if err != nil || overlap == nil {
+					return nil, err
+				}
+				return func() {
+					overlap.Release()
+				}, nil
+			},
+		); err != nil {
 			if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(err, &runtimeFilter, spec, proc) {
 				return nil
 			}
@@ -659,89 +874,315 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 	return nil
 }
 
-func exactRuntimeFilterEncoding(
-	spec *plan.RuntimeFilterSpec,
-	payloadType types.Type,
-) keycodec.ExactRuntimeFilterEncoding {
-	if spec == nil || spec.Expr == nil {
-		return keycodec.ExactRuntimeFilterUnsupported
-	}
-	specType := types.New(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale)
-	encoding := keycodec.ExactRuntimeFilterEncodingForPair(specType, payloadType)
-	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed &&
-		spec.KeyEncoding != plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED {
-		// Legacy plans did not carry the probe/build float contract. Fail open
-		// instead of assuming that an unmarked payload was generated from
-		// unscaled operands.
-		return keycodec.ExactRuntimeFilterUnsupported
-	}
-	return encoding
-}
-
-func closeFloatRuntimeFilterSignedZero(
-	builder *HashmapBuilder,
-	vec *vector.Vector,
+func (hashBuild *HashBuild) handleSerializedRuntimeFilter(
 	proc *process.Process,
+	runtimeFilter *message.RuntimeFilterMessage,
+	spec *plan.RuntimeFilterSpec,
 ) error {
-	var hasPositiveZero, hasNegativeZero bool
-	nulls := vec.GetNulls()
-	switch vec.GetType().Oid {
-	case types.T_float32:
-		for i, value := range vector.MustFixedColNoTypeCheck[float32](vec) {
-			if nulls.Contains(uint64(i)) {
-				continue
-			}
-			bits := math.Float32bits(value)
-			if bits<<1 != 0 {
-				continue
-			}
-			if bits>>31 == 0 {
-				hasPositiveZero = true
-			} else {
-				hasNegativeZero = true
-			}
-		}
-	case types.T_float64:
-		for i, value := range vector.MustFixedColNoTypeCheck[float64](vec) {
-			if nulls.Contains(uint64(i)) {
-				continue
-			}
-			bits := math.Float64bits(value)
-			if bits<<1 != 0 {
-				continue
-			}
-			if bits>>63 == 0 {
-				hasPositiveZero = true
-			} else {
-				hasNegativeZero = true
-			}
-		}
-	default:
-		return process.ErrHashBuildBudgetInvalid
+	ctr := &hashBuild.ctr
+	componentTypes, rowCount, ok := materializedRuntimeFilterComponents(
+		spec, ctr.hashmapBuilder.UniqueJoinKeys)
+	if !ok {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
 	}
-	if hasPositiveZero == hasNegativeZero {
+	declaredPayloadType, ok := planExprType(
+		runtimefilter.BuildKeyExpr(spec))
+	if !ok || runtimefilter.ExactKeyEncodingWithComponents(
+		spec,
+		declaredPayloadType,
+		componentTypes,
+		proc.GetService(),
+	) != keycodec.ExactRuntimeFilterRaw {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
+	}
+	if rowCount == 0 {
+		// The complete component triangle is valid, so an empty aligned
+		// unique-key set is trustworthy evidence that no probe key can match.
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
+	}
+	if ctr.hashmapBuilder.GetGroupCount() > uint64(spec.UpperLimit) ||
+		rowCount > int(spec.UpperLimit) {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
 		return nil
 	}
 
-	overlap, err := builder.reserveUniqueAppendOverlap(vec, 1, 0)
+	data, release, outputRows, usable, err :=
+		hashBuild.materializeSerializedRuntimeFilter(
+			proc, spec, componentTypes, rowCount)
 	if err != nil {
+		if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(
+			err, runtimeFilter, spec, proc,
+		) {
+			return nil
+		}
 		return err
 	}
-	if overlap != nil {
-		defer overlap.Release()
+	if !usable {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
 	}
-	if vec.GetType().Oid == types.T_float32 {
-		value := float32(0)
-		if hasPositiveZero {
-			value = math.Float32frombits(uint32(1) << 31)
+	if outputRows == 0 {
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
+	}
+	if outputRows > int(spec.UpperLimit) {
+		if release != nil {
+			release()
 		}
-		return vector.AppendFixed(vec, value, false, proc.Mp())
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
 	}
-	value := float64(0)
-	if hasPositiveZero {
-		value = math.Float64frombits(uint64(1) << 63)
+
+	runtimeFilter.Typ = message.RuntimeFilter_IN
+	runtimeFilter.Card = int32(outputRows)
+	runtimeFilter.Data = data
+	runtimeFilter.SetMemoryRelease(release)
+	hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+	ctr.runtimeFilterIn = true
+	return nil
+}
+
+// materializeSerializedRuntimeFilter evaluates one proven serial/serial_full
+// contract under the same query-wide HashBuild budget as the map and unique
+// component vectors. It reuses the production component encoders, but
+// precomputes a tight output-area bound from the actual unique values. The
+// generic expression estimator must not be used here: a serial result is typed
+// VARCHAR(max), which would reserve 64 KiB per tiny integer tuple and turn a
+// useful index filter into PASS.
+func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
+	proc *process.Process,
+	spec *plan.RuntimeFilterSpec,
+	componentTypes []types.Type,
+	rowCount int,
+) (
+	data []byte,
+	release func(),
+	outputRows int,
+	usable bool,
+	err error,
+) {
+	keys := hashBuild.ctr.hashmapBuilder.UniqueJoinKeys
+	slots, ok := runtimeFilterComponentSlots(spec)
+	if !ok || len(slots) != len(componentTypes) {
+		return nil, nil, 0, false, nil
 	}
-	return vector.AppendFixed(vec, value, false, proc.Mp())
+	full := spec.KeyEncoding ==
+		plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1
+
+	encoders := make([]planfunction.SerialValueEncoder, len(slots))
+	for i, slot := range slots {
+		encoders[i], err =
+			planfunction.NewSerialValueEncoder(keys[slot])
+		if err != nil {
+			return nil, nil, 0, false, err
+		}
+	}
+
+	areaBound, maxRowBound, err := serializedRuntimeFilterBounds(
+		proc, keys, slots, rowCount, full)
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+	peak, err := serializedRuntimeFilterAllocationPeak(
+		rowCount, areaBound, maxRowBound)
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+
+	var reservation *process.HashBuildReservation
+	if budget := hashBuild.ctr.hashmapBuilder.budget; budget != nil {
+		reservation, err = budget.Reserve(peak)
+		if err != nil {
+			return nil, nil, 0, false, err
+		}
+		defer reservation.Release()
+	}
+
+	payloadType, ok := planExprType(
+		runtimefilter.BuildKeyExpr(spec))
+	if !ok || areaBound > uint64(math.MaxInt) {
+		return nil, nil, 0, false, nil
+	}
+	payload := vector.NewOffHeapVecWithType(payloadType)
+	defer payload.Free(proc.Mp())
+	if err = payload.PreExtendWithArea(
+		rowCount, int(areaBound), proc.Mp(),
+	); err != nil {
+		return nil, nil, 0, false, err
+	}
+
+	packerSize := maxRowBound
+	if packerSize == 0 {
+		packerSize = 1
+	}
+	packer := types.NewPackerWithSize(packerSize)
+	defer packer.Close()
+
+	for row := 0; row < rowCount; row++ {
+		if row&8191 == 0 {
+			if err = checkHashBuildCanceled(proc); err != nil {
+				return nil, nil, 0, false, err
+			}
+		}
+		packer.Reset()
+		rowIsNull := false
+		for i, slot := range slots {
+			component := keys[slot]
+			if component.IsNull(uint64(row)) {
+				if !full {
+					rowIsNull = true
+					break
+				}
+				packer.EncodeNull()
+				continue
+			}
+			encoders[i](component, row, packer)
+		}
+		if rowIsNull {
+			// serial is NULL if any component is NULL. NULL build keys never
+			// match SQL equality, so omit them rather than turning a reset null
+			// bitmap into an empty byte-string key.
+			continue
+		}
+		if err = vector.AppendBytes(
+			payload, packer.GetBuf(), false, proc.Mp(),
+		); err != nil {
+			return nil, nil, 0, false, err
+		}
+	}
+
+	if runtimefilter.ExactKeyEncodingWithComponents(
+		spec,
+		*payload.GetType(),
+		componentTypes,
+		proc.GetService(),
+	) != keycodec.ExactRuntimeFilterRaw {
+		return nil, nil, 0, false, nil
+	}
+	usable = true
+	outputRows = payload.Length()
+	if outputRows == 0 {
+		return nil, nil, 0, true, nil
+	}
+	payload.InplaceSort()
+	data, release, err =
+		hashBuild.ctr.hashmapBuilder.marshalRuntimeFilterVector(payload)
+	if err != nil {
+		if release != nil {
+			release()
+		}
+		return nil, nil, 0, false, err
+	}
+	return data, release, outputRows, true, nil
+}
+
+func serializedRuntimeFilterBounds(
+	proc *process.Process,
+	keys []*vector.Vector,
+	slots []int,
+	rowCount int,
+	full bool,
+) (areaBytes uint64, maxRowBytes uint64, err error) {
+	for row := 0; row < rowCount; row++ {
+		if row&8191 == 0 {
+			if err = checkHashBuildCanceled(proc); err != nil {
+				return 0, 0, err
+			}
+		}
+		var rowBytes uint64
+		rowIsNull := false
+		for _, slot := range slots {
+			component := keys[slot]
+			var valueBytes uint64
+			if component.IsNull(uint64(row)) {
+				if !full {
+					rowIsNull = true
+					break
+				}
+				valueBytes = 1
+			} else {
+				valueBytes, err =
+					planfunction.SerialEncodedValueSizeBound(component, row)
+				if err != nil {
+					return 0, 0, err
+				}
+			}
+			if rowBytes > math.MaxUint64-valueBytes {
+				return 0, 0, process.ErrHashBuildBudgetInvalid
+			}
+			rowBytes += valueBytes
+		}
+		if rowIsNull {
+			continue
+		}
+		if rowBytes > maxRowBytes {
+			maxRowBytes = rowBytes
+		}
+		if rowBytes > types.VarlenaInlineSize {
+			if areaBytes > math.MaxUint64-rowBytes {
+				return 0, 0, process.ErrHashBuildBudgetInvalid
+			}
+			areaBytes += rowBytes
+		}
+	}
+	return areaBytes, maxRowBytes, nil
+}
+
+func serializedRuntimeFilterAllocationPeak(
+	rowCount int,
+	areaBytes uint64,
+	maxRowBytes uint64,
+) (uint64, error) {
+	if rowCount < 0 ||
+		uint64(rowCount) > math.MaxUint64/types.VarlenaSize ||
+		areaBytes > math.MaxInt64 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	packerRequest := maxRowBytes
+	if packerRequest == 0 {
+		packerRequest = 1
+	}
+	packerCapacity, ok := types.PackerAllocationSize(packerRequest)
+	if !ok {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	dataBytes := uint64(rowCount) * types.VarlenaSize
+	if dataBytes > math.MaxInt64 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	dataCapacity, ok := mpool.GrowCapacity(0, int64(dataBytes))
+	if !ok || dataCapacity < 0 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	areaCapacity, ok := mpool.GrowCapacity(0, int64(areaBytes))
+	if !ok || areaCapacity < 0 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	// The output vector is pre-extended, so it has no allocate-copy-free
+	// growth overlap. Account the packer's actual size class rather than its
+	// requested slice: rounding can approach another full request.
+	peak := uint64(dataCapacity)
+	for _, part := range []uint64{
+		uint64(areaCapacity),
+		packerCapacity,
+		(uint64(rowCount) + 7) / 8,
+	} {
+		if peak > math.MaxUint64-part {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		peak += part
+	}
+	return peak, nil
 }
 
 // Runtime filters are optional probe-side optimizations. If serializing one

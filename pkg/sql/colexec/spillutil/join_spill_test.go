@@ -23,6 +23,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -2257,6 +2258,33 @@ func makeInt32Batch(proc *process.Process, vals []int32) *batch.Batch {
 	return bat
 }
 
+func makeDedupKeepLastSpillBatch(proc *process.Process) *batch.Batch {
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.MakeInt32Vector(
+		[]int32{1, 1, 2}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector(
+		[]int32{10, 20, 30}, nil, proc.Mp())
+	bat.Vecs[2] = testutil.MakeInt32Vector(
+		[]int32{100, 0, 0}, []uint64{1, 2}, proc.Mp())
+	bat.SetRowCount(3)
+	return bat
+}
+
+func runtimeStackHasFunctionSuffix(suffix string) bool {
+	var callers [32]uintptr
+	n := runtime.Callers(2, callers[:])
+	frames := runtime.CallersFrames(callers[:n])
+	for {
+		frame, more := frames.Next()
+		if strings.HasSuffix(frame.Function, suffix) {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
+}
+
 func writeBuildFile(proc *process.Process, name string, bat *batch.Batch) *os.File {
 	spillfs, _ := proc.GetSpillFileService()
 	f, _ := spillfs.CreateAndRemoveFile(context.Background(), name)
@@ -3090,6 +3118,139 @@ func TestReSpillBucket(t *testing.T) {
 	}
 
 	engine.Cleanup(proc)
+}
+
+func TestRebuildHashmapRejectsReSpillAfterDedupRewrite(t *testing.T) {
+	const budgetCap = uint64(64 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	build := makeDedupKeepLastSpillBatch(proc)
+	buildFd := writeBuildFile(proc, "dedup_unsafe_respill", build)
+	build.Clean(proc.Mp())
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:             makeTestKeyExpr(),
+		NeedsBuildForEmptyProbe:   true,
+		NeedBatches:               true,
+		IsDedup:                   true,
+		OnDuplicateAction:         plan.Node_FAIL,
+		DedupBuildKeepLast:        true,
+		DedupColName:              "id",
+		DedupColTypes:             []plan.Type{{Id: int32(types.T_int32)}},
+		DelColIdx:                 -1,
+		DedupDeleteMarkerColIdx:   2,
+		DedupDeleteKeepColIdxList: []int32{2},
+		SpillThreshold:            1 << 30,
+		Budget:                    generation,
+	})
+	engine.InitFromSpilledMap([]*os.File{buildFd})
+
+	forcedUnsafeReject := false
+	budget.SetAggregateCapProvider(func() (uint64, error) {
+		// keepDiscardedRowsForDelete has already compacted the retained input
+		// when it asks copyBuildBatch to admit the delete-only rows. Reject that
+		// exact transition without depending on a fragile global call ordinal.
+		if runtimeStackHasFunctionSuffix(
+			"hashbuild.(*HashmapBuilder).keepDiscardedRowsForDelete",
+		) {
+			forcedUnsafeReject = true
+			return max(uint64(1), generation.Used()), nil
+		}
+		return budgetCap, nil
+	})
+
+	jm, result, err := engine.RebuildHashmap(
+		proc, process.NewAnalyzer(0, false, false, "test"))
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.True(t, forcedUnsafeReject)
+	require.Nil(t, jm)
+	require.Equal(t, BucketSkip, result)
+	require.Len(t, engine.buckets, 1,
+		"unsafe recovery must not replace the parent with child buckets")
+	require.Equal(t, 1, engine.buckets[0].Depth)
+	require.Nil(t, engine.buckets[0].BuildFd,
+		"the consumed parent file must not be republished as a JoinMap or child")
+
+	engine.Cleanup(proc)
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+	require.Zero(t, proc.Mp().CurrNB())
+	generation.Close()
+	proc.Free()
+}
+
+func TestRebuildHashmapReSpillsAdmissionBeforeDedupRewrite(t *testing.T) {
+	const budgetCap = uint64(64 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	build := makeDedupKeepLastSpillBatch(proc)
+	buildFd := writeBuildFile(proc, "dedup_safe_respill", build)
+	build.Clean(proc.Mp())
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:             makeTestKeyExpr(),
+		NeedsBuildForEmptyProbe:   true,
+		NeedBatches:               true,
+		IsDedup:                   true,
+		OnDuplicateAction:         plan.Node_FAIL,
+		DedupBuildKeepLast:        true,
+		DedupColName:              "id",
+		DedupColTypes:             []plan.Type{{Id: int32(types.T_int32)}},
+		DelColIdx:                 -1,
+		DedupDeleteMarkerColIdx:   2,
+		DedupDeleteKeepColIdxList: []int32{2},
+		SpillThreshold:            1 << 30,
+		Budget:                    generation,
+	})
+	engine.InitFromSpilledMap([]*os.File{buildFd})
+
+	forcedSafeReject := false
+	budget.SetAggregateCapProvider(func() (uint64, error) {
+		// The first budget request made from buildHashmap is reserveBuildAux,
+		// before any Dedup batch rewrite. Reject once; re-spill itself does not
+		// call buildHashmap and therefore retains the normal cap.
+		if !forcedSafeReject &&
+			runtimeStackHasFunctionSuffix(
+				"hashbuild.(*HashmapBuilder).buildHashmap",
+			) &&
+			!runtimeStackHasFunctionSuffix(
+				"hashbuild.(*HashmapBuilder).keepDiscardedRowsForDelete",
+			) {
+			forcedSafeReject = true
+			return max(uint64(1), generation.Used()), nil
+		}
+		return budgetCap, nil
+	})
+
+	jm, result, err := engine.RebuildHashmap(
+		proc, process.NewAnalyzer(0, false, false, "test"))
+	require.NoError(t, err)
+	require.True(t, forcedSafeReject)
+	require.Nil(t, jm)
+	require.Equal(t, BucketReSpilled, result)
+	require.NotEmpty(t, engine.buckets)
+	var childRows int64
+	for _, child := range engine.buckets {
+		require.Equal(t, 2, child.Depth)
+		childRows += child.BuildRows
+	}
+	require.Equal(t, int64(3), childRows,
+		"safe recovery must conserve the original retained rows")
+
+	engine.Cleanup(proc)
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+	require.Zero(t, proc.Mp().CurrNB())
+	generation.Close()
+	proc.Free()
 }
 
 func TestReSpillReleasesBuilderExecutorsBeforeReplacementAdmission(t *testing.T) {

@@ -63,6 +63,13 @@ func TestSupportsExactRawRuntimeFilter(t *testing.T) {
 	for _, oid := range unsupported {
 		require.False(t, SupportsExactRawRuntimeFilter(oid), oid.String())
 	}
+	for _, oid := range supported {
+		want := oid != types.T_decimal64 &&
+			oid != types.T_decimal128 &&
+			oid != types.T_decimal256
+		require.Equal(t, want,
+			LegacyExactRawProducerSafe(oid), oid.String())
+	}
 
 	varchar10 := types.New(types.T_varchar, 10, 0)
 	varchar20 := types.New(types.T_varchar, 20, 0)

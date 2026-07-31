@@ -1963,7 +1963,14 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		return nil, BucketSkip, err
 	}
 	if err := builder.BuildHashmap(e.cfg.HashOnPK, e.cfg.NeedAllocateSels, false, proc); err != nil {
-		if isBudgetAdmission(err) && bucket.Depth < SpillMaxPass {
+		// BuildHashmap may destructively canonicalize Dedup batches before a
+		// later allocation is rejected. Only the builder can prove whether its
+		// retained batches still represent the original ingress. Read that
+		// contract before freeing any partial state: re-spilling a partially
+		// rewritten batch can silently lose delete rows or separate them from
+		// the survivor whose conflict they describe.
+		recoverySafe := builder.RetainedBatchRecoverySafe()
+		if isBudgetAdmission(err) && recoverySafe && bucket.Depth < SpillMaxPass {
 			// Release the rejected/partial map admission while retaining the
 			// original copied batches for transactional re-spill.
 			builder.FreeHashMapOnly(proc)
