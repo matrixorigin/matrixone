@@ -360,6 +360,10 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err != nil {
 		return nil, err
 	}
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+
 	enabled, err := IsForeignKeyChecksEnabled(ctx)
 	if err != nil {
 		return nil, err
