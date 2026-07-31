@@ -337,7 +337,7 @@ func (builder *QueryBuilder) makeSerializedExactRuntimeFilterPair(
 		len(fn.Args) != len(componentProbeExprs) {
 		return nil, nil, false
 	}
-	encodingMarker := plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_UNSPECIFIED
+	var encodingMarker plan.RuntimeFilterKeyEncoding
 	switch fn.Func.ObjName {
 	case function.SerialFunctionName:
 		if matchPrefix ||

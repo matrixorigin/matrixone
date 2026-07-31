@@ -194,6 +194,24 @@ func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 }
 
 func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
+	protocolProbe := newRuntimeFilterSingleTestBuilder(true)
+	rt := moruntime.ServiceRuntime(
+		protocolProbe.compCtx.GetProcess().GetService())
+	original, hadOriginal := rt.GetGlobalVariables(
+		moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion7)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion,
+				defines.MORPCLatestVersion)
+		}
+	})
+
 	tests := []struct {
 		name     string
 		typ      planpb.Type

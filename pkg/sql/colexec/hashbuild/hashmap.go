@@ -962,7 +962,6 @@ func (hb *HashmapBuilder) buildHashmap(
 			if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
 				return err
 			}
-			needUniqueVec = false
 		}
 		// keepDiscardedRowsForDelete rewrites Batches in place before copying
 		// delete-only rows. An admission failure after that boundary cannot be
@@ -994,7 +993,6 @@ func (hb *HashmapBuilder) buildHashmap(
 			if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
 				return err
 			}
-			needUniqueVec = false
 		}
 		hb.retainedBatchRecoverySafe = false
 		// Shrinking changes physical row indexes. Rebuild before producing
