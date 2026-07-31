@@ -91,15 +91,16 @@ func (d *validatedVectorCacheData) validatedVectorSnapshot() []byte {
 	return bytes.Clone(d.data.Bytes())
 }
 
-// validatedVectorBackingForCopy may only be consumed synchronously while
-// creating an owned copy. The returned slice must never escape to a caller.
-func (d *validatedVectorCacheData) validatedVectorBackingForCopy() []byte {
+// validatedVectorBackingForScope may only be consumed synchronously by an
+// ObjectIO operation that returns owned data or scalar/row-offset results. The
+// returned slice, and any Vector bound to it, must never escape to a caller.
+func (d *validatedVectorCacheData) validatedVectorBackingForScope() []byte {
 	return d.data.Bytes()
 }
 
 type validatedVectorCacheDataMarker interface {
 	validatedVectorSnapshot() []byte
-	validatedVectorBackingForCopy() []byte
+	validatedVectorBackingForScope() []byte
 }
 
 func isValidatedVectorCacheData(data fscache.Data) bool {
@@ -269,7 +270,7 @@ func MustVectorToCachedWithMpool(toVec *vector.Vector, data fscache.Data, mp *mp
 	if !ok || mp == nil {
 		return MustVectorToCached(toVec, data)
 	}
-	buf := marked.validatedVectorBackingForCopy()
+	buf := marked.validatedVectorBackingForScope()
 	warnVectorDestinationNotEmpty(toVec, len(buf))
 	var borrowed vector.Vector
 	if err := mustVectorTo(&borrowed, buf, true); err != nil {
@@ -280,6 +281,395 @@ func MustVectorToCachedWithMpool(toVec *vector.Vector, data fscache.Data, mp *mp
 		return err
 	}
 	*toVec = *owned
+	return nil
+}
+
+// CopyCachedVectorRows materializes selected cache-backed rows into toVec
+// without exposing a writable alias to the cached representation. The source
+// is bound only for the duration of this call, while its FileService cache
+// lease is held by the caller.
+func CopyCachedVectorRows(toVec *vector.Vector, data fscache.Data, sels []int64, mp *mpool.MPool) error {
+	return copyCachedVector(toVec, data, sels, false, mp)
+}
+
+// CopyCachedVectorAll materializes a complete cache-backed Vector into toVec
+// without exposing a writable alias to the cached representation.
+func CopyCachedVectorAll(toVec *vector.Vector, data fscache.Data, mp *mpool.MPool) error {
+	return copyCachedVector(toVec, data, nil, true, mp)
+}
+
+func copyCachedVector(
+	toVec *vector.Vector,
+	data fscache.Data,
+	sels []int64,
+	allRows bool,
+	mp *mpool.MPool,
+) error {
+	if toVec == nil {
+		return moerr.NewInvalidInputNoCtx("nil object column destination")
+	}
+	if mp == nil {
+		return moerr.NewInvalidInputNoCtx("nil mpool for object column materialization")
+	}
+	var source vector.Vector
+	if err := bindCachedVectorForScope(&source, data); err != nil {
+		return err
+	}
+	defer source.Free(nil)
+
+	// Width, scale, and other logical metadata may legitimately differ across
+	// schema versions while the physical Vector representation remains the same.
+	// The OID is the compatibility boundary used by the existing Union paths.
+	if toVec.GetType().Oid != source.GetType().Oid {
+		return moerr.NewInvalidInputNoCtxf(
+			"object column type %s does not match destination type %s",
+			source.GetType().String(),
+			toVec.GetType().String(),
+		)
+	}
+	if allRows {
+		return toVec.UnionBatch(&source, 0, source.Length(), nil, mp)
+	}
+	for _, sel := range sels {
+		if sel < 0 || sel >= int64(source.Length()) {
+			return moerr.NewInvalidInputNoCtxf(
+				"object column row %d out of range [0, %d)",
+				sel,
+				source.Length(),
+			)
+		}
+	}
+	return toVec.Union(&source, sels, mp)
+}
+
+// SearchCachedVector executes a fixed supported varlen search while the cache
+// entry is pinned. The borrowed Vector never crosses the ObjectIO boundary.
+func SearchCachedVector(
+	entry fileservice.IOEntry,
+	search *ReadFilterSearch,
+	sorted bool,
+) ([]int64, error) {
+	if search == nil {
+		return nil, moerr.NewInvalidInputNoCtx("nil object column search")
+	}
+	var source vector.Vector
+	if err := bindCachedVectorForScope(&source, entry.CachedData); err != nil {
+		return nil, err
+	}
+	defer source.Free(nil)
+	return search.search(&source, sorted), nil
+}
+
+func (s *ReadFilterSearch) search(source *vector.Vector, sorted bool) []int64 {
+	if source.GetType().Oid != s.oid {
+		return allReadFilterRows(source.Length(), false)
+	}
+	if source.Length() == 0 || len(s.terms) == 0 {
+		return nil
+	}
+	if source.IsConstNull() || source.GetNulls().Any() {
+		// Primary-key columns are non-null. Treat a malformed/unavailable null
+		// column as unknown and fail open; persisted tombstone checks must never
+		// turn it into a false negative.
+		return allReadFilterRows(source.Length(), false)
+	}
+	if len(s.terms) == 1 {
+		return s.terms[0].search(source, sorted)
+	}
+	marks := make([]int64, source.Length())
+	for i := range s.terms {
+		for _, row := range s.terms[i].search(source, sorted) {
+			if row >= 0 && row < int64(len(marks)) {
+				marks[row] = 1
+			}
+		}
+	}
+	rows := marks[:0]
+	for row, matched := range marks {
+		if matched != 0 {
+			rows = append(rows, int64(row))
+		}
+	}
+	return rows
+}
+
+func (t *readFilterSearchTerm) search(source *vector.Vector, sorted bool) []int64 {
+	if source.IsConst() {
+		value := source.GetBytesAt(0)
+		if !t.matches(value, sorted) {
+			return nil
+		}
+		return allReadFilterRows(
+			source.Length(),
+			t.kind == readFilterSearchGreater,
+		)
+	}
+	switch t.kind {
+	case readFilterSearchExact:
+		if len(t.values) == 0 {
+			return nil
+		}
+		if sorted {
+			return vector.VarlenBinarySearchOffsetByValFactory(t.values)(source)
+		}
+		return vector.VarlenLinearSearchOffsetByValFactory(t.values)(source)
+	case readFilterSearchPrefix:
+		if len(t.values) == 0 {
+			return nil
+		}
+		if len(t.values) == 1 {
+			if sorted {
+				return vector.CollectOffsetsByPrefixEqFactory(t.values[0])(source)
+			}
+			return vector.LinearCollectOffsetsByPrefixEqFactory(t.values[0])(source)
+		}
+		if sorted {
+			return searchSortedReadFilterPrefixes(source, t.values)
+		}
+		col, area := vector.MustVarlenaRawData(source)
+		rows := make([]int64, 0, len(t.values))
+		for row := 0; row < source.Length(); row++ {
+			value := col[row].GetByteSlice(area)
+			for i := range t.values {
+				if bytes.HasPrefix(value, t.values[i]) {
+					rows = append(rows, int64(row))
+					break
+				}
+			}
+		}
+		return rows
+	case readFilterSearchLess:
+		return vector.VarlenSearchOffsetByLess(t.ub, t.closed, sorted)(source)
+	case readFilterSearchGreater:
+		return vector.VarlenSearchOffsetByGreat(t.lb, t.closed, sorted)(source)
+	case readFilterSearchBetween:
+		if sorted {
+			return vector.CollectOffsetsByBetweenString(string(t.lb), string(t.ub), t.hint)(source)
+		}
+		return vector.LinearCollectOffsetsByBetweenString(string(t.lb), string(t.ub), t.hint)(source)
+	case readFilterSearchPrefixBetween:
+		if t.hint == 0 {
+			if sorted {
+				return vector.CollectOffsetsByPrefixBetweenFactory(t.lb, t.ub)(source)
+			}
+			return vector.LinearCollectOffsetsByPrefixBetweenFactory(t.lb, t.ub)(source)
+		}
+		if sorted {
+			return vector.CollectOffsetsByPrefixInRangeFactory(t.lb, t.ub, t.hint)(source)
+		}
+		return vector.LinearCollectOffsetsByPrefixInRangeFactory(t.lb, t.ub, t.hint)(source)
+	default:
+		return nil
+	}
+}
+
+func searchSortedReadFilterPrefixes(source *vector.Vector, values [][]byte) []int64 {
+	col, area := vector.MustVarlenaRawData(source)
+	rows := make([]int64, 0, len(values))
+	valuePos := 0
+	value := values[0]
+	row := 0
+	for row < source.Length() {
+		rowValue := col[row].GetByteSlice(area)
+		cmp := types.PrefixCompare(rowValue, value)
+		if cmp > 0 {
+			valuePos++
+			if valuePos == len(values) {
+				break
+			}
+			value = values[valuePos]
+			continue
+		}
+		if cmp == 0 {
+			rows = append(rows, int64(row))
+			row++
+			continue
+		}
+		row = gallopReadFilterPrefixGE(col, area, value, row+1, source.Length())
+	}
+	return rows
+}
+
+func gallopReadFilterPrefixGE(
+	col []types.Varlena,
+	area, value []byte,
+	low, high int,
+) int {
+	previous, current, step := low, low, 1
+	for current < high &&
+		types.PrefixCompare(col[current].GetByteSlice(area), value) < 0 {
+		previous = current + 1
+		current += step
+		step <<= 1
+	}
+	if current > high {
+		current = high
+	}
+	for previous < current {
+		middle := int(uint(previous+current) >> 1)
+		if types.PrefixCompare(col[middle].GetByteSlice(area), value) < 0 {
+			previous = middle + 1
+		} else {
+			current = middle
+		}
+	}
+	return previous
+}
+
+func (t *readFilterSearchTerm) matches(value []byte, sorted bool) bool {
+	switch t.kind {
+	case readFilterSearchExact:
+		for i := range t.values {
+			if bytes.Equal(value, t.values[i]) {
+				return true
+			}
+		}
+		return false
+	case readFilterSearchPrefix:
+		for i := range t.values {
+			if bytes.HasPrefix(value, t.values[i]) {
+				return true
+			}
+		}
+		return false
+	case readFilterSearchLess:
+		cmp := bytes.Compare(value, t.ub)
+		return cmp < 0 || t.closed && cmp == 0
+	case readFilterSearchGreater:
+		cmp := bytes.Compare(value, t.lb)
+		return cmp > 0 || t.closed && cmp == 0
+	case readFilterSearchBetween:
+		return readFilterRangeMatches(
+			bytes.Compare(value, t.lb),
+			bytes.Compare(value, t.ub),
+			t.hint,
+		)
+	case readFilterSearchPrefixBetween:
+		leftCmp := types.PrefixCompare(value, t.lb)
+		if sorted && t.hint == 0 {
+			// Preserve CollectOffsetsByPrefixBetweenFactory's sorted lower
+			// bound semantics, which use the full byte comparison.
+			leftCmp = bytes.Compare(value, t.lb)
+		}
+		return readFilterRangeMatches(
+			leftCmp,
+			types.PrefixCompare(value, t.ub),
+			t.hint,
+		)
+	default:
+		return false
+	}
+}
+
+func readFilterRangeMatches(leftCmp, rightCmp int, hint uint8) bool {
+	switch hint {
+	case 0:
+		return leftCmp >= 0 && rightCmp <= 0
+	case 1:
+		return leftCmp > 0 && rightCmp <= 0
+	case 2:
+		return leftCmp >= 0 && rightCmp < 0
+	case 3:
+		return leftCmp > 0 && rightCmp < 0
+	default:
+		return false
+	}
+}
+
+func allReadFilterRows(length int, reverse bool) []int64 {
+	rows := make([]int64, length)
+	for i := range rows {
+		if reverse {
+			rows[i] = int64(length - i - 1)
+		} else {
+			rows[i] = int64(i)
+		}
+	}
+	return rows
+}
+
+// FilterCachedRowsByCommitTS removes rows newer than snapshot from sels while
+// the cache entry is pinned. It never exposes the commit-ts Vector.
+func FilterCachedRowsByCommitTS(
+	data fscache.Data,
+	sels []int64,
+	snapshot types.TS,
+) ([]int64, error) {
+	var commits vector.Vector
+	if err := bindCachedVectorForScope(&commits, data); err != nil {
+		return nil, err
+	}
+	defer commits.Free(nil)
+	if commits.GetType().Oid != types.T_TS || commits.IsConstNull() {
+		return nil, moerr.NewInvalidInputNoCtx("object commit-ts column is unavailable")
+	}
+
+	filtered := sels[:0]
+	for _, sel := range sels {
+		if sel < 0 || sel >= int64(commits.Length()) {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"object commit-ts row %d out of range [0, %d)",
+				sel,
+				commits.Length(),
+			)
+		}
+		if commits.IsNull(uint64(sel)) {
+			return nil, moerr.NewInvalidInputNoCtxf("object commit-ts row %d is null", sel)
+		}
+		commit := vector.GetFixedAtNoTypeCheck[types.TS](&commits, int(sel))
+		if !commit.GT(&snapshot) {
+			filtered = append(filtered, sel)
+		}
+	}
+	return filtered, nil
+}
+
+// AnyCachedTSInRange checks selected commit timestamps without returning a
+// borrowed Vector. usable is false when the column cannot provide row-level
+// commit timestamps, preserving the caller's conservative fallback.
+func AnyCachedTSInRange(
+	data fscache.Data,
+	sels []int64,
+	from, to types.TS,
+) (matched bool, usable bool, err error) {
+	var commits vector.Vector
+	if err = bindCachedVectorForScope(&commits, data); err != nil {
+		return
+	}
+	defer commits.Free(nil)
+	if commits.GetType().Oid != types.T_TS || commits.IsConstNull() {
+		return false, false, nil
+	}
+	for _, sel := range sels {
+		if sel < 0 || sel >= int64(commits.Length()) || commits.IsNull(uint64(sel)) {
+			return false, false, nil
+		}
+		commit := vector.GetFixedAtNoTypeCheck[types.TS](&commits, int(sel))
+		if commit.GT(&from) && commit.LE(&to) {
+			return true, true, nil
+		}
+	}
+	return false, true, nil
+}
+
+func bindCachedVectorForScope(toVec *vector.Vector, data fscache.Data) error {
+	if toVec == nil {
+		return moerr.NewInvalidInputNoCtx("nil object vector destination")
+	}
+	if data == nil {
+		return moerr.NewInvalidInputNoCtx("nil object cache data")
+	}
+	var bound vector.Vector
+	var err error
+	if marked, ok := data.(validatedVectorCacheDataMarker); ok {
+		err = mustVectorTo(&bound, marked.validatedVectorBackingForScope(), true)
+	} else {
+		err = mustVectorTo(&bound, data.Bytes(), false)
+	}
+	if err != nil {
+		return err
+	}
+	*toVec = bound
 	return nil
 }
 

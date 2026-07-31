@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 
@@ -58,6 +59,27 @@ func (r *releaseTrackingData) Retain() {
 
 func (r *releaseTrackingData) Release() {
 	r.releases.Add(1)
+}
+
+type validatedVectorBytesProbe struct {
+	backing    []byte
+	bytesCalls atomic.Int32
+}
+
+func (d *validatedVectorBytesProbe) Bytes() []byte {
+	d.bytesCalls.Add(1)
+	return bytes.Clone(d.backing)
+}
+
+func (d *validatedVectorBytesProbe) Size() int64            { return int64(len(d.backing)) }
+func (d *validatedVectorBytesProbe) Slice(int) fscache.Data { return d }
+func (d *validatedVectorBytesProbe) Retain()                {}
+func (d *validatedVectorBytesProbe) Release()               {}
+func (d *validatedVectorBytesProbe) validatedVectorSnapshot() []byte {
+	return bytes.Clone(d.backing)
+}
+func (d *validatedVectorBytesProbe) validatedVectorBackingForScope() []byte {
+	return d.backing
 }
 
 type partialReadErrorFS struct {
@@ -333,6 +355,417 @@ func TestColumnCacheConstructorValidatesAndMarksV2(t *testing.T) {
 	obj, err = DecodeCached(cacheData)
 	require.NoError(t, err)
 	require.Equal(t, "value longer than inline storage", obj.(*vector.Vector).GetStringAt(0))
+}
+
+func TestCopyCachedVectorRowsMaterializesOnlySelectedRows(t *testing.T) {
+	const (
+		rowCount = 8192
+		valueLen = 119
+	)
+
+	writerMP := mpool.MustNewZero()
+	source := vector.NewVec(types.T_varchar.ToType())
+	for i := 0; i < rowCount; i++ {
+		value := bytes.Repeat([]byte{byte('a' + i%26)}, valueLen)
+		require.NoError(t, vector.AppendBytes(source, value, false, writerMP))
+	}
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(writerMP)
+	require.Zero(t, writerMP.CurrNB())
+	mpool.DeleteMPool(writerMP)
+
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type:    IOET_ColData,
+		Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+	cacheData, err := validateVectorCacheData(fileservice.NewBytes(encoded))
+	require.NoError(t, err)
+	require.True(t, isValidatedVectorCacheData(cacheData))
+	defer cacheData.Release()
+
+	queryMP, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(queryMP)
+
+	sels := []int64{0, 7, 511, 1024, 2047, 4095, 6000, 7001, 8000, 8191}
+	selected := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, CopyCachedVectorRows(selected, cacheData, sels, queryMP))
+	require.Equal(t, len(sels), selected.Length())
+	for i, sel := range sels {
+		require.Equal(
+			t,
+			bytes.Repeat([]byte{byte('a' + int(sel)%26)}, valueLen),
+			selected.GetBytesAt(i),
+		)
+	}
+
+	// The result owns its payload. Mutating it cannot invalidate the cache's
+	// validation marker or affect a later selected-row materialization.
+	selected.GetBytesAt(0)[0] = 'X'
+	again := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, CopyCachedVectorRows(again, cacheData, sels[:1], queryMP))
+	require.Equal(t, bytes.Repeat([]byte{'a'}, valueLen), again.GetBytesAt(0))
+	probe := &validatedVectorBytesProbe{
+		backing: cacheData.(validatedVectorCacheDataMarker).validatedVectorBackingForScope(),
+	}
+	probeResult := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, CopyCachedVectorRows(probeResult, probe, sels[:1], queryMP))
+	require.Zero(t, probe.bytesCalls.Load(), "sealed backing must not be cloned before scoped materialization")
+
+	invalidRows := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NotPanics(t, func() {
+		err = CopyCachedVectorRows(invalidRows, cacheData, []int64{-1, rowCount}, queryMP)
+	})
+	require.Error(t, err)
+	require.Zero(t, invalidRows.Length())
+	wrongType := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.Error(t, CopyCachedVectorRows(wrongType, cacheData, sels[:1], queryMP))
+	widerType := vector.NewOffHeapVecWithType(types.New(types.T_varchar, 512, 0))
+	require.NoError(t, CopyCachedVectorRows(widerType, cacheData, sels[:1], queryMP))
+	require.Equal(t, bytes.Repeat([]byte{'a'}, valueLen), widerType.GetBytesAt(0))
+
+	needle := bytes.Repeat([]byte{'h'}, valueLen)
+	search := NewReadFilterSearch(types.T_varchar, [][]byte{needle})
+	needle[0] = 'X'
+	probeSearch := &validatedVectorBytesProbe{
+		backing: cacheData.(validatedVectorCacheDataMarker).validatedVectorBackingForScope(),
+	}
+	searched, err := SearchCachedVector(
+		fileservice.IOEntry{CachedData: probeSearch},
+		search,
+		false,
+	)
+	require.NoError(t, err)
+	require.Zero(t, probeSearch.bytesCalls.Load(), "scoped search must not clone the sealed block")
+	var expectedSearch []int64
+	for row := 7; row < rowCount; row += 26 {
+		expectedSearch = append(expectedSearch, int64(row))
+	}
+	require.Equal(t, expectedSearch, searched)
+
+	require.NotPanics(t, func() {
+		_, err = SearchCachedVector(
+			fileservice.IOEntry{},
+			search,
+			false,
+		)
+	})
+	require.Error(t, err)
+
+	wrongOIDSearch := NewReadFilterSearch(types.T_char, [][]byte{[]byte("not present")})
+	allRows, err := SearchCachedVector(
+		fileservice.IOEntry{CachedData: cacheData},
+		wrongOIDSearch,
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, allRows, rowCount, "physical OID mismatch must fail open")
+
+	// Copying the complete 8192-row payload cannot fit in this pool. The same
+	// bounded pool succeeds above because only ten selected values are copied.
+	whole := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.Error(t, CopyCachedVectorAll(whole, cacheData, queryMP))
+
+	selected.Free(queryMP)
+	again.Free(queryMP)
+	probeResult.Free(queryMP)
+	invalidRows.Free(queryMP)
+	wrongType.Free(queryMP)
+	widerType.Free(queryMP)
+	whole.Free(queryMP)
+	require.Zero(t, queryMP.CurrNB())
+}
+
+func TestReadFilterSearchMatchesLegacyVarlenPredicates(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	makeVector := func(values []string) *vector.Vector {
+		vec := vector.NewVec(types.T_varchar.ToType())
+		for _, value := range values {
+			require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+		}
+		return vec
+	}
+	sortedVec := makeVector([]string{"a", "aa", "ab", "aba", "b", "ba", "c"})
+	unsortedVec := makeVector([]string{"ba", "a", "c", "aba", "b", "aa", "ab"})
+	defer sortedVec.Free(mp)
+	defer unsortedVec.Free(mp)
+
+	exactValues := [][]byte{[]byte("aa"), []byte("ba")}
+	prefixValues := [][]byte{[]byte("a"), []byte("ba")}
+	prefixNeedles := makeVector([]string{"a", "ba"})
+	defer prefixNeedles.Free(mp)
+
+	type searchCase struct {
+		name     string
+		search   *ReadFilterSearch
+		expected func(*vector.Vector, bool) []int64
+	}
+	cases := []searchCase{
+		{
+			name:   "exact",
+			search: NewReadFilterSearch(types.T_varchar, exactValues),
+			expected: func(vec *vector.Vector, sorted bool) []int64 {
+				if sorted {
+					return vector.VarlenBinarySearchOffsetByValFactory(exactValues)(vec)
+				}
+				return vector.VarlenLinearSearchOffsetByValFactory(exactValues)(vec)
+			},
+		},
+		{
+			name:   "prefix-equal",
+			search: NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("ab")}),
+			expected: func(vec *vector.Vector, sorted bool) []int64 {
+				if sorted {
+					return vector.CollectOffsetsByPrefixEqFactory([]byte("ab"))(vec)
+				}
+				return vector.LinearCollectOffsetsByPrefixEqFactory([]byte("ab"))(vec)
+			},
+		},
+		{
+			name:   "prefix-in",
+			search: NewReadFilterPrefixSearch(types.T_varchar, prefixValues),
+			expected: func(vec *vector.Vector, sorted bool) []int64 {
+				if sorted {
+					return vector.CollectOffsetsByPrefixInFactory(prefixNeedles)(vec)
+				}
+				return vector.LinearCollectOffsetsByPrefixInFactory(prefixNeedles)(vec)
+			},
+		},
+		{
+			name:   "less-open",
+			search: NewReadFilterLessSearch(types.T_varchar, []byte("b"), false),
+			expected: func(vec *vector.Vector, sorted bool) []int64 {
+				return vector.VarlenSearchOffsetByLess([]byte("b"), false, sorted)(vec)
+			},
+		},
+		{
+			name:   "less-closed",
+			search: NewReadFilterLessSearch(types.T_varchar, []byte("b"), true),
+			expected: func(vec *vector.Vector, sorted bool) []int64 {
+				return vector.VarlenSearchOffsetByLess([]byte("b"), true, sorted)(vec)
+			},
+		},
+		{
+			name:   "greater-open",
+			search: NewReadFilterGreaterSearch(types.T_varchar, []byte("ab"), false),
+			expected: func(vec *vector.Vector, sorted bool) []int64 {
+				return vector.VarlenSearchOffsetByGreat([]byte("ab"), false, sorted)(vec)
+			},
+		},
+		{
+			name:   "greater-closed",
+			search: NewReadFilterGreaterSearch(types.T_varchar, []byte("ab"), true),
+			expected: func(vec *vector.Vector, sorted bool) []int64 {
+				return vector.VarlenSearchOffsetByGreat([]byte("ab"), true, sorted)(vec)
+			},
+		},
+	}
+	for hint := uint8(0); hint <= 3; hint++ {
+		cases = append(cases, searchCase{
+			name:   fmt.Sprintf("between-hint-%d", hint),
+			search: NewReadFilterBetweenSearch(types.T_varchar, []byte("aa"), []byte("ba"), hint),
+			expected: func(vec *vector.Vector, sorted bool) []int64 {
+				if sorted {
+					return vector.CollectOffsetsByBetweenString("aa", "ba", hint)(vec)
+				}
+				return vector.LinearCollectOffsetsByBetweenString("aa", "ba", hint)(vec)
+			},
+		})
+		cases = append(cases, searchCase{
+			name:   fmt.Sprintf("prefix-between-hint-%d", hint),
+			search: NewReadFilterPrefixBetweenSearch(types.T_varchar, []byte("a"), []byte("b"), hint),
+			expected: func(vec *vector.Vector, sorted bool) []int64 {
+				if hint == 0 {
+					if sorted {
+						return vector.CollectOffsetsByPrefixBetweenFactory([]byte("a"), []byte("b"))(vec)
+					}
+					return vector.LinearCollectOffsetsByPrefixBetweenFactory([]byte("a"), []byte("b"))(vec)
+				}
+				if sorted {
+					return vector.CollectOffsetsByPrefixInRangeFactory([]byte("a"), []byte("b"), hint)(vec)
+				}
+				return vector.LinearCollectOffsetsByPrefixInRangeFactory([]byte("a"), []byte("b"), hint)(vec)
+			},
+		})
+	}
+
+	for _, test := range cases {
+		for _, sorted := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/sorted=%t", test.name, sorted), func(t *testing.T) {
+				vec := unsortedVec
+				if sorted {
+					vec = sortedVec
+				}
+				require.Equal(t, test.expected(vec, sorted), test.search.search(vec, sorted))
+			})
+		}
+	}
+
+	combined := CombineReadFilterSearch(
+		NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("aa"), []byte("b")}),
+		NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("a")}),
+	)
+	require.Equal(t, []int64{0, 1, 2, 3, 4}, combined.search(sortedVec, true))
+
+	constVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("ab"), 4, mp)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 1, 2, 3}, NewReadFilterSearch(
+		types.T_varchar, [][]byte{[]byte("ab")},
+	).search(constVec, true))
+	require.Equal(t, []int64{3, 2, 1, 0}, NewReadFilterGreaterSearch(
+		types.T_varchar, []byte("aa"), false,
+	).search(constVec, true))
+	constVec.Free(mp)
+
+	constNull := vector.NewConstNull(types.T_varchar.ToType(), 4, mp)
+	require.Equal(t, []int64{0, 1, 2, 3}, NewReadFilterSearch(
+		types.T_varchar, [][]byte{[]byte("ab")},
+	).search(constNull, true))
+	constNull.Free(mp)
+	flatNull := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(flatNull, []byte("ab"), false, mp))
+	require.NoError(t, vector.AppendBytes(flatNull, nil, true, mp))
+	require.Equal(t, []int64{0, 1}, NewReadFilterSearch(
+		types.T_varchar, [][]byte{[]byte("missing")},
+	).search(flatNull, false))
+	flatNull.Free(mp)
+
+	wrongOID := vector.NewVec(types.T_char.ToType())
+	require.NoError(t, vector.AppendBytes(wrongOID, []byte("missing"), false, mp))
+	require.Equal(t, []int64{0}, NewReadFilterSearch(
+		types.T_varchar, [][]byte{[]byte("ab")},
+	).search(wrongOID, false))
+	wrongOID.Free(mp)
+}
+
+func TestCachedCommitTSHelpersBroadcastConstants(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	encode := func(vec *vector.Vector) fscache.Data {
+		payload, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+			Type:    IOET_ColData,
+			Version: IOET_ColumnData_V2,
+		})...)
+		encoded = append(encoded, payload...)
+		data, err := validateVectorCacheData(fileservice.NewBytes(encoded))
+		require.NoError(t, err)
+		return data
+	}
+
+	commit := types.BuildTS(20, 0)
+	constTS, err := vector.NewConstFixed(types.T_TS.ToType(), commit, 4, mp)
+	require.NoError(t, err)
+	constData := encode(constTS)
+	constTS.Free(mp)
+	defer constData.Release()
+
+	matched, usable, err := AnyCachedTSInRange(
+		constData,
+		[]int64{3},
+		types.BuildTS(15, 0),
+		types.BuildTS(20, 0),
+	)
+	require.NoError(t, err)
+	require.True(t, usable)
+	require.True(t, matched)
+
+	matched, usable, err = AnyCachedTSInRange(
+		constData,
+		[]int64{3},
+		types.BuildTS(20, 0),
+		types.BuildTS(30, 0),
+	)
+	require.NoError(t, err)
+	require.True(t, usable)
+	require.False(t, matched, "the commit range is left-open")
+
+	visible, err := FilterCachedRowsByCommitTS(
+		constData,
+		[]int64{0, 1, 2, 3},
+		types.BuildTS(19, 0),
+	)
+	require.NoError(t, err)
+	require.Empty(t, visible)
+	visible, err = FilterCachedRowsByCommitTS(
+		constData,
+		[]int64{0, 1, 2, 3},
+		commit,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 1, 2, 3}, visible)
+
+	matched, usable, err = AnyCachedTSInRange(
+		constData,
+		[]int64{4},
+		types.BuildTS(15, 0),
+		types.BuildTS(25, 0),
+	)
+	require.NoError(t, err)
+	require.False(t, usable)
+	require.False(t, matched)
+
+	constNull := vector.NewConstNull(types.T_TS.ToType(), 4, mp)
+	constNullData := encode(constNull)
+	constNull.Free(mp)
+	defer constNullData.Release()
+	_, err = FilterCachedRowsByCommitTS(
+		constNullData,
+		[]int64{0},
+		commit,
+	)
+	require.Error(t, err)
+	matched, usable, err = AnyCachedTSInRange(
+		constNullData,
+		[]int64{0},
+		types.BuildTS(15, 0),
+		types.BuildTS(25, 0),
+	)
+	require.NoError(t, err)
+	require.False(t, usable)
+	require.False(t, matched)
+}
+
+func TestReadFilterPrefixSearchDoesNotAllocatePerBlockRow(t *testing.T) {
+	const rowCount = 8192
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_varchar.ToType())
+	for row := 0; row < rowCount; row++ {
+		require.NoError(t, vector.AppendBytes(
+			source,
+			[]byte(fmt.Sprintf("key-%05d", row)),
+			false,
+			mp,
+		))
+	}
+	defer source.Free(mp)
+	values := make([][]byte, 10)
+	for i := range values {
+		values[i] = []byte(fmt.Sprintf("key-%05d", i*811))
+	}
+	search := NewReadFilterPrefixSearch(types.T_varchar, values)
+
+	result := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			rows := search.search(source, true)
+			if len(rows) != len(values) {
+				b.Fatalf("unexpected prefix hits: %v", rows)
+			}
+		}
+	})
+	require.Less(
+		t,
+		result.AllocedBytesPerOp(),
+		int64(4<<10),
+		"sparse PREFIX_IN must not allocate a block-sized marks array",
+	)
 }
 
 func TestColumnCacheConstructorRejectsInvalidV2BeforeAdmission(t *testing.T) {
