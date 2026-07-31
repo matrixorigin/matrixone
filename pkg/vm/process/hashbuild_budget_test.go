@@ -1310,9 +1310,91 @@ func TestGetHashBuildBudgetInitializesAndReusesCNAggregate(t *testing.T) {
 	}
 
 	aggregate := firstGeneration.budget
+	defaultAggregateSpillCap := aggregate.SpillDiskCap()
+	raisedSpillCap := defaultAggregateSpillCap + 1<<20
+	third := &Process{Base: &BaseProcess{Lim: Limitation{
+		Size:      1 << 20,
+		SpillSize: int64(raisedSpillCap),
+	}}}
+	thirdGeneration, err := third.GetHashBuildBudget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thirdGeneration.SpillDiskCap() != raisedSpillCap ||
+		aggregate.SpillDiskCap() != raisedSpillCap {
+		t.Fatalf("explicit spill cap was not raised at the shared ledger: generation=%d aggregate=%d want=%d",
+			thirdGeneration.SpillDiskCap(), aggregate.SpillDiskCap(), raisedSpillCap)
+	}
+
+	lower := &Process{Base: &BaseProcess{Lim: Limitation{
+		Size:      1 << 20,
+		SpillSize: 2 << 20,
+	}}}
+	lowerGeneration, err := lower.GetHashBuildBudget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lowerGeneration.SpillDiskCap() != 2<<20 ||
+		aggregate.SpillDiskCap() != raisedSpillCap {
+		t.Fatalf("lower per-query spill cap changed the shared ceiling: generation=%d aggregate=%d want aggregate=%d",
+			lowerGeneration.SpillDiskCap(), aggregate.SpillDiskCap(), raisedSpillCap)
+	}
+
 	firstGeneration.Close()
 	secondGeneration.Close()
+	thirdGeneration.Close()
+	lowerGeneration.Close()
 	aggregate.Close()
+}
+
+func TestHashBuildBudgetExplicitSpillCapConcurrentRaise(t *testing.T) {
+	budget := MustNewHashBuildBudget(100, 100)
+	t.Cleanup(budget.Close)
+	generation, err := budget.OpenGenerationWithSpillCaps(1, 100, 800, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(generation.Close)
+	reservation, err := generation.ReserveSpillDisk(700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reservation.Release() })
+
+	caps := []uint64{801, 900, 1200, 1100}
+	start := make(chan struct{})
+	errs := make(chan error, len(caps))
+	var wg sync.WaitGroup
+	for _, cap := range caps {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- budget.raiseSpillDiskCapToExplicitLimit(cap)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for raiseErr := range errs {
+		if raiseErr != nil {
+			t.Fatal(raiseErr)
+		}
+	}
+	if got := budget.SpillDiskCap(); got != 1200 {
+		t.Fatalf("concurrent raised spill cap = %d, want 1200", got)
+	}
+	if !reservation.Release() || budget.SpillDiskUsed() != 0 {
+		t.Fatalf("live reservation did not release after cap growth: %+v", budget.Snapshot())
+	}
+
+	budget.Close()
+	if err = budget.raiseSpillDiskCapToExplicitLimit(1300); !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed budget raise error = %v, want %v", err, ErrHashBuildBudgetClosed)
+	}
+	if got := budget.SpillDiskCap(); got != 1200 {
+		t.Fatalf("closed budget changed spill cap to %d", got)
+	}
 }
 
 func TestOpenProcessGenerationClampsStaleResolvedCapAtomically(t *testing.T) {

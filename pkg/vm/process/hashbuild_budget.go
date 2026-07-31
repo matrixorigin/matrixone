@@ -404,6 +404,32 @@ func (b *HashBuildBudget) SetSpillCaps(diskBytes, fds uint64) error {
 	return nil
 }
 
+// raiseSpillDiskCapToExplicitLimit honors the operator-configured process
+// spill limit at the shared CN ledger. Zero keeps the bounded default, and a
+// smaller explicit limit remains generation-local. Growing is monotonic so an
+// active reservation admitted under an earlier configuration is never made
+// invalid by a concurrent process.
+func (b *HashBuildBudget) raiseSpillDiskCapToExplicitLimit(diskBytes uint64) error {
+	if b == nil {
+		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid}
+	}
+	if diskBytes == 0 {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return &HashBuildBudgetError{
+			Kind:    HashBuildBudgetErrorClosed,
+			Message: ErrHashBuildBudgetClosed.Error(),
+		}
+	}
+	if diskBytes > b.spillDiskCap {
+		b.spillDiskCap = diskBytes
+	}
+	return nil
+}
+
 // MustNewHashBuildBudget is a convenience for initialization code with
 // statically validated limits.
 func MustNewHashBuildBudget(aggregateCap, queryCap uint64) *HashBuildBudget {
@@ -1962,6 +1988,9 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 	spillDiskCap := uint64(0)
 	if proc.Base.Lim.SpillSize > 0 {
 		spillDiskCap = uint64(proc.Base.Lim.SpillSize)
+		if err = aggregate.raiseSpillDiskCapToExplicitLimit(spillDiskCap); err != nil {
+			return nil, err
+		}
 	}
 	generation, err := aggregate.openProcessGeneration(
 		hashBuildGenerationSequence.Add(1),
