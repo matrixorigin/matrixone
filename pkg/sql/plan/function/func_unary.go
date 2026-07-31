@@ -4886,26 +4886,25 @@ type timeExtractParseResult struct {
 func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	pos := 0
 	year, yearDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
-	if !ok || yearDigits > 4 || pos >= len(str) || !mysqlDateSeparatorForExtract(str[pos]) {
+	if !ok || yearDigits > 4 || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
 		return timeExtractParseResult{}
 	}
 	if yearDigits == 2 {
 		year = uint64(adjustYear(int(year)))
 	}
-	separator := str[pos]
 	pos++
 	month, _, ok := mysqlVariableDigitsForExtract(str, &pos)
-	if !ok || pos >= len(str) || str[pos] != separator {
+	if !ok || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
 		return timeExtractParseResult{}
 	}
 	pos++
 	day, _, ok := mysqlVariableDigitsForExtract(str, &pos)
-	if !ok || pos >= len(str) || str[pos] != ' ' {
+	if !ok || pos >= len(str) || !mysqlWhitespaceForExtract(str[pos]) {
 		// A complete date without a clock is still handled by the TIME path.
 		return timeExtractParseResult{}
 	}
 	result := timeExtractParseResult{matched: true}
-	for pos < len(str) && str[pos] == ' ' {
+	for pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
 		pos++
 	}
 	hour, _, ok := mysqlVariableDigitsForExtract(str, &pos)
@@ -4914,9 +4913,9 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	}
 	minute := uint64(0)
 	second := uint64(0)
-	if pos < len(str) && mysqlClockFieldSeparatorForExtract(str[pos]) {
+	if pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
 		pos++
-		for pos < len(str) && mysqlClockFieldSeparatorForExtract(str[pos]) {
+		for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
 			pos++
 		}
 		if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
@@ -4929,9 +4928,9 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 			// separator is consumed, repeated separators still retain the
 			// previously parsed hour and minute (for example,
 			// "... 12:34::56").
-			if pos < len(str) && mysqlClockFieldSeparatorForExtract(str[pos]) {
+			if pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
 				pos++
-				for pos < len(str) && mysqlClockFieldSeparatorForExtract(str[pos]) {
+				for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
 					pos++
 				}
 				if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
@@ -4995,8 +4994,35 @@ func mysqlDateSeparatorForExtract(c byte) bool {
 	return c == '-' || c == '/' || c == ':'
 }
 
-func mysqlClockFieldSeparatorForExtract(c byte) bool {
-	return c == ':' || c == '-'
+func mysqlDatetimePunctuationForExtract(c byte) bool {
+	return (c >= '!' && c <= '/') || (c >= ':' && c <= '@') ||
+		(c >= '[' && c <= '`') || (c >= '{' && c <= '~')
+}
+
+func mysqlWhitespaceForExtract(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '\f', '\v':
+		return true
+	default:
+		return false
+	}
+}
+
+func mysqlTrimLeftWhitespaceForExtract(str string) string {
+	pos := 0
+	for pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
+		pos++
+	}
+	return str[pos:]
+}
+
+func mysqlFirstWhitespaceForExtract(str string) int {
+	for i := 0; i < len(str); i++ {
+		if mysqlWhitespaceForExtract(str[i]) {
+			return i
+		}
+	}
+	return -1
 }
 
 func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
@@ -5011,7 +5037,7 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 	if len(prefix) == 0 {
 		return 0, 0, 0, false
 	}
-	prefix = strings.TrimLeft(prefix, " ")
+	prefix = mysqlTrimLeftWhitespaceForExtract(prefix)
 	if len(prefix) == 0 {
 		return 0, 0, 0, false
 	}
@@ -5025,14 +5051,14 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 
 	day := uint64(0)
 	hasDay := false
-	if space := strings.IndexByte(prefix, ' '); space >= 0 {
+	if space := mysqlFirstWhitespaceForExtract(prefix); space >= 0 {
 		if space == 0 || !asciiDigits(prefix[:space]) {
 			return 0, 0, 0, false
 		}
 		day = mysqlClampedDigitsForExtract(prefix[:space], 35)
 		hasDay = true
-		prefix = strings.TrimLeft(prefix[space:], " ")
-		if len(prefix) == 0 || strings.IndexByte(prefix, ' ') >= 0 {
+		prefix = mysqlTrimLeftWhitespaceForExtract(prefix[space:])
+		if len(prefix) == 0 || mysqlFirstWhitespaceForExtract(prefix) >= 0 {
 			return 0, 0, 0, false
 		}
 	}
@@ -5261,7 +5287,7 @@ func mysqlCompactDatetimeSuffixForExtract(suffix string) bool {
 	// MySQL consumes a compact DATETIME through the fractional separator. The
 	// fraction may be empty or may stop before trailing non-numeric text, but a
 	// suffix without a decimal separator is not part of this coercion.
-	return suffix[0] == '.'
+	return suffix[0] == '.' && (len(suffix) == 1 || (suffix[1] != '+' && suffix[1] != '-'))
 }
 
 func compactDatetimeClockForExtract(str string, twoDigitYear bool) (uint64, uint8, uint8, bool) {
@@ -5293,7 +5319,7 @@ func mysqlTimePrefixForExtract(str string) string {
 	end := 0
 	for end < len(str) {
 		c := str[end]
-		if (c < '0' || c > '9') && c != ':' && c != '.' && c != '-' && c != ' ' {
+		if (c < '0' || c > '9') && c != ':' && c != '.' && c != '-' && !mysqlWhitespaceForExtract(c) {
 			break
 		}
 		end++

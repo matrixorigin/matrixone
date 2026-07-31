@@ -149,9 +149,13 @@ HOUR('241220153045abc') AS compact_12_alpha_suffix_hour;
 SELECT HOUR('20241220153045.123abc') AS compact_14_fraction_text_hour,
 HOUR('20241220153045.') AS compact_14_empty_fraction_hour,
 HOUR('241220153045.123abc') AS compact_12_fraction_text_hour,
-HOUR('241220153045.') AS compact_12_empty_fraction_hour;
-➤ compact_14_fraction_text_hour[4,32,0]  ¦  compact_14_empty_fraction_hour[4,32,0]  ¦  compact_12_fraction_text_hour[4,32,0]  ¦  compact_12_empty_fraction_hour[4,32,0]  𝄀
-15  ¦  15  ¦  15  ¦  15
+HOUR('241220153045.') AS compact_12_empty_fraction_hour,
+HOUR('20241220153045.-') AS compact_14_negative_fraction_hour,
+HOUR('20241220153045.+') AS compact_14_positive_fraction_hour,
+HOUR('241220153045.-') AS compact_12_negative_fraction_hour,
+HOUR('241220153045.+') AS compact_12_positive_fraction_hour;
+➤ compact_14_fraction_text_hour[4,32,0]  ¦  compact_14_empty_fraction_hour[4,32,0]  ¦  compact_12_fraction_text_hour[4,32,0]  ¦  compact_12_empty_fraction_hour[4,32,0]  ¦  compact_14_negative_fraction_hour[4,32,0]  ¦  compact_14_positive_fraction_hour[4,32,0]  ¦  compact_12_negative_fraction_hour[4,32,0]  ¦  compact_12_positive_fraction_hour[4,32,0]  𝄀
+15  ¦  15  ¦  15  ¦  15  ¦  null  ¦  null  ¦  null  ¦  null
 SELECT HOUR('12:') AS trailing_colon_hour,
 HOUR(':34') AS leading_colon_hour,
 HOUR('12:34:56-') AS trailing_dash_hour,
@@ -181,7 +185,11 @@ INSERT INTO time_extract_prefix_boundaries VALUES
 ('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56'),
 ('2024-12-20foo', '2024-12-20foo', '2024-12-20foo'),
 ('2024-12-20 12:34::56', '2024-12-20 12:34::56', '2024-12-20 12:34::56'),
-('2024-12-20 12-34', '2024-12-20 12-34', '2024-12-20 12-34');
+('2024-12-20 12-34', '2024-12-20 12-34', '2024-12-20 12-34'),
+('2024-12-20 12/34/56', '2024-12-20 12/34/56', '2024-12-20 12/34/56'),
+('2024@12@20 12@34@56', '2024@12@20 12@34@56', '2024@12@20 12@34@56'),
+('2024-12-20\t12:34:56', '2024-12-20\t12:34:56', '2024-12-20\t12:34:56'),
+('1\t02:34:56', '1\t02:34:56', '1\t02:34:56');
 SELECT HOUR(v), HOUR(c), HOUR(t) FROM time_extract_prefix_boundaries;
 ➤ HOUR(v)[4,32,0]  ¦  HOUR(c)[4,32,0]  ¦  HOUR(t)[4,32,0]  𝄀
 0  ¦  0  ¦  0  𝄀
@@ -194,5 +202,9 @@ SELECT HOUR(v), HOUR(c), HOUR(t) FROM time_extract_prefix_boundaries;
 12  ¦  12  ¦  12  𝄀
 0  ¦  0  ¦  0  𝄀
 12  ¦  12  ¦  12  𝄀
-12  ¦  12  ¦  12
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+26  ¦  26  ¦  26
 DROP TABLE time_extract_prefix_boundaries;

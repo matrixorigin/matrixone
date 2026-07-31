@@ -124,7 +124,11 @@ SELECT SECOND('20241220153045') AS compact_14_second,
 SELECT SECOND('20241220153045.123abc') AS compact_14_fraction_text_second,
        SECOND('20241220153045.') AS compact_14_empty_fraction_second,
        SECOND('241220153045.123abc') AS compact_12_fraction_text_second,
-       SECOND('241220153045.') AS compact_12_empty_fraction_second;
+       SECOND('241220153045.') AS compact_12_empty_fraction_second,
+       SECOND('20241220153045.-') AS compact_14_negative_fraction_second,
+       SECOND('20241220153045.+') AS compact_14_positive_fraction_second,
+       SECOND('241220153045.-') AS compact_12_negative_fraction_second,
+       SECOND('241220153045.+') AS compact_12_positive_fraction_second;
 
 -- TIME coercion stops after the valid clock prefix.
 SELECT SECOND('12:') AS trailing_colon_second,
@@ -156,6 +160,10 @@ INSERT INTO time_extract_prefix_boundaries VALUES
   ('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56'),
   ('2024-12-20foo', '2024-12-20foo', '2024-12-20foo'),
   ('2024-12-20 12:34::56', '2024-12-20 12:34::56', '2024-12-20 12:34::56'),
-  ('2024-12-20 12-34', '2024-12-20 12-34', '2024-12-20 12-34');
+  ('2024-12-20 12-34', '2024-12-20 12-34', '2024-12-20 12-34'),
+  ('2024-12-20 12/34/56', '2024-12-20 12/34/56', '2024-12-20 12/34/56'),
+  ('2024@12@20 12@34@56', '2024@12@20 12@34@56', '2024@12@20 12@34@56'),
+  ('2024-12-20\t12:34:56', '2024-12-20\t12:34:56', '2024-12-20\t12:34:56'),
+  ('1\t02:34:56', '1\t02:34:56', '1\t02:34:56');
 SELECT SECOND(v), SECOND(c), SECOND(t) FROM time_extract_prefix_boundaries;
 DROP TABLE time_extract_prefix_boundaries;
