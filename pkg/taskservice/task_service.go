@@ -286,6 +286,17 @@ func (s *taskService) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonT
 	return s.store.UpdateDaemonTask(ctx, tasks, conds...)
 }
 
+func (s *taskService) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conds ...Condition,
+) (int, error) {
+	return s.store.UpdateDaemonTaskStatus(ctx, taskID, status, updateAt, endAt, conds...)
+}
+
 func (s *taskService) QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error) {
 	return s.store.QueryDaemonTask(ctx, conds...)
 }

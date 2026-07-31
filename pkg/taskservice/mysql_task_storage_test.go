@@ -1593,6 +1593,41 @@ func TestRunUpdateDaemonTaskBranches(t *testing.T) {
 	})
 }
 
+func TestRunUpdateDaemonTaskStatusPreservesLease(t *testing.T) {
+	m := &mysqlTaskStorage{}
+	ctx := context.Background()
+	updateAt := time.Now()
+	cutoff := updateAt.Add(-time.Minute)
+
+	n, err := m.RunUpdateDaemonTaskStatus(
+		ctx,
+		1,
+		task.TaskStatus_Canceled,
+		updateAt,
+		updateAt,
+		&mockSqlExecutor{
+			execFn: func(_ context.Context, query string, args ...interface{}) (sql.Result, error) {
+				require.Contains(t, query, updateDaemonTaskStatus)
+				require.NotContains(t, query, "last_heartbeat=?")
+				require.Contains(t, query, "task_status IN (8)")
+				require.Contains(t, query, "task_runner='old-cn'")
+				require.Contains(t, query, "last_heartbeat<=")
+				require.Len(t, args, 4)
+				require.Equal(t, task.TaskStatus_Canceled, args[0])
+				require.Equal(t, updateAt, args[1])
+				require.Equal(t, updateAt, args[2])
+				require.Equal(t, uint64(1), args[3])
+				return mockRowsAffectedResult{rows: 1}, nil
+			},
+		},
+		WithTaskStatusCond(task.TaskStatus_CancelRequested),
+		WithTaskRunnerCond(EQ, "old-cn"),
+		WithLastHeartbeat(LE, cutoff.UnixNano()),
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+}
+
 func TestRunDeleteDaemonTaskBranches(t *testing.T) {
 	m := &mysqlTaskStorage{}
 	ctx := context.Background()

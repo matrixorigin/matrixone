@@ -105,11 +105,12 @@ func (r *mockFuncActiveRoutine) Restart() error {
 
 type serviceWithDaemonHook struct {
 	TaskService
-	mu         sync.RWMutex
-	queryErr   error
-	updateErr  error
-	updateFn   func(context.Context, []task.DaemonTask, ...Condition) (int, error)
-	queryCalls atomic.Int64
+	mu             sync.RWMutex
+	queryErr       error
+	updateErr      error
+	updateFn       func(context.Context, []task.DaemonTask, ...Condition) (int, error)
+	updateStatusFn func(context.Context, uint64, task.TaskStatus, time.Time, time.Time, ...Condition) (int, error)
+	queryCalls     atomic.Int64
 }
 
 func (s *serviceWithDaemonHook) QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error) {
@@ -140,6 +141,31 @@ func (s *serviceWithDaemonHook) UpdateDaemonTask(ctx context.Context, tasks []ta
 	return s.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
 }
 
+func (s *serviceWithDaemonHook) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conds ...Condition,
+) (int, error) {
+	s.mu.RLock()
+	updateErr := s.updateErr
+	updateStatusFn := s.updateStatusFn
+	s.mu.RUnlock()
+	if updateStatusFn != nil {
+		return updateStatusFn(ctx, taskID, status, updateAt, endAt, conds...)
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if updateErr != nil {
+		return 0, updateErr
+	}
+	return s.TaskService.UpdateDaemonTaskStatus(
+		ctx, taskID, status, updateAt, endAt, conds...)
+}
+
 func (s *serviceWithDaemonHook) setQueryErr(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -158,6 +184,14 @@ func (s *serviceWithDaemonHook) setUpdateFn(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.updateFn = fn
+}
+
+func (s *serviceWithDaemonHook) setUpdateStatusFn(
+	fn func(context.Context, uint64, task.TaskStatus, time.Time, time.Time, ...Condition) (int, error),
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updateStatusFn = fn
 }
 
 func TestDaemonTaskPollResumesAfterTaskFrameworkReenabled(t *testing.T) {
@@ -1162,6 +1196,42 @@ func TestReconcileRetiredDaemonTasksClosesRollingUpgradeWrites(t *testing.T) {
 	require.Equal(t, task.TaskStatus_Canceled, got[1].TaskStatus)
 }
 
+func TestReconcileRetiredDaemonTaskPreservesConcurrentHeartbeat(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	baseService := r.service
+	hook := &serviceWithDaemonHook{TaskService: baseService}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Running, "old-cn")
+	dt.Metadata.Executor = retiredKafkaSinkTaskCode
+	dt.LastHeartbeat = time.Now().Add(-time.Minute)
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	renewedHeartbeat := time.Now()
+	hook.setUpdateStatusFn(func(
+		ctx context.Context,
+		taskID uint64,
+		status task.TaskStatus,
+		updateAt time.Time,
+		endAt time.Time,
+		conds ...Condition,
+	) (int, error) {
+		renewed := dt
+		renewed.LastHeartbeat = renewedHeartbeat
+		n, err := store.HeartbeatDaemonTask(ctx, []task.DaemonTask{renewed})
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+		return baseService.UpdateDaemonTaskStatus(
+			ctx, taskID, status, updateAt, endAt, conds...)
+	})
+
+	r.reconcileRetiredDaemonTasks(context.Background())
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))[0]
+	require.Equal(t, task.TaskStatus_CancelRequested, got.TaskStatus)
+	require.Equal(t, renewedHeartbeat, got.LastHeartbeat)
+	require.Equal(t, dt.TaskRunner, got.TaskRunner)
+}
+
 func TestCancelTaskWaitsForLocalRoutinePublication(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
 	r.RegisterExecutor(task.TaskCode_TestOnly, func(context.Context, task.Task) error { return nil })
@@ -1214,6 +1284,41 @@ func TestCancelTaskDefersFreshForeignOwnerUntilStale(t *testing.T) {
 	require.Equal(t, task.TaskStatus_Canceled, got[0].TaskStatus)
 }
 
+func TestCancelTaskDoesNotTerminateRenewedForeignLease(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	baseService := r.service
+	hook := &serviceWithDaemonHook{TaskService: baseService}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_CancelRequested, "old-cn")
+	dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	renewedHeartbeat := time.Now()
+	hook.setUpdateStatusFn(func(
+		ctx context.Context,
+		taskID uint64,
+		status task.TaskStatus,
+		updateAt time.Time,
+		endAt time.Time,
+		conds ...Condition,
+	) (int, error) {
+		renewed := dt
+		renewed.LastHeartbeat = renewedHeartbeat
+		n, err := store.HeartbeatDaemonTask(ctx, []task.DaemonTask{renewed})
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+		return baseService.UpdateDaemonTaskStatus(
+			ctx, taskID, status, updateAt, endAt, conds...)
+	})
+
+	require.NoError(t, newCancelTask(r, dt.ID).Handle(context.Background()))
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))[0]
+	require.Equal(t, task.TaskStatus_CancelRequested, got.TaskStatus)
+	require.Equal(t, renewedHeartbeat, got.LastHeartbeat)
+	require.Equal(t, dt.TaskRunner, got.TaskRunner)
+}
+
 func TestCancelTaskDoesNotOverwriteSupersedingStateOrOwner(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1237,12 +1342,20 @@ func TestCancelTaskDoesNotOverwriteSupersedingStateOrOwner(t *testing.T) {
 			taskRef.activeRoutine.Store(&activeRoutine)
 			r.addDaemonTask(taskRef)
 
-			hook.setUpdateFn(func(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
+			hook.setUpdateStatusFn(func(
+				ctx context.Context,
+				taskID uint64,
+				status task.TaskStatus,
+				updateAt time.Time,
+				endAt time.Time,
+				conds ...Condition,
+			) (int, error) {
 				current := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
 				current[0].TaskStatus = test.status
 				current[0].TaskRunner = test.runner
 				mustUpdateTestDaemonTask(t, store, 1, current)
-				return hook.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
+				return hook.TaskService.UpdateDaemonTaskStatus(
+					ctx, taskID, status, updateAt, endAt, conds...)
 			})
 
 			require.NoError(t, newCancelTask(r, taskRef.task.ID).Handle(context.Background()))

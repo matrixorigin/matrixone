@@ -278,6 +278,45 @@ func TestUpdateDaemonTaskWithConditions(t *testing.T) {
 	}
 }
 
+func TestUpdateDaemonTaskStatusPreservesLeaseAndPayload(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			v := newTestDaemonTask(1, "t1")
+			v.TaskStatus = task.TaskStatus_Running
+			v.LastHeartbeat = time.Now().Add(-time.Minute)
+			v.Metadata.Context = []byte("payload")
+			mustAddTestDaemonTask(t, s, 1, v)
+
+			updateAt := time.Now()
+			endAt := updateAt.Add(time.Second)
+			n, err := s.UpdateDaemonTaskStatus(
+				context.Background(),
+				v.ID,
+				task.TaskStatus_Canceled,
+				updateAt,
+				endAt,
+				WithTaskStatusCond(task.TaskStatus_Running),
+				WithTaskRunnerCond(EQ, v.TaskRunner),
+			)
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+
+			got := mustGetTestDaemonTask(t, s, 1, WithTaskIDCond(EQ, v.ID))[0]
+			require.Equal(t, task.TaskStatus_Canceled, got.TaskStatus)
+			require.Equal(t, updateAt, got.UpdateAt)
+			require.Equal(t, endAt, got.EndAt)
+			require.Equal(t, v.TaskRunner, got.TaskRunner)
+			require.Equal(t, v.LastHeartbeat, got.LastHeartbeat)
+			require.Equal(t, v.Metadata, got.Metadata)
+		})
+	}
+}
+
 func TestDeleteDaemonTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {

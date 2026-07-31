@@ -670,14 +670,29 @@ func TestHeartbeatDaemonTask(t *testing.T) {
 	mustAddTestDaemonTask(t, store, 1, v1)
 
 	v1.LastHeartbeat = time.Now()
+	updateAt := time.Now()
+	updated, err := store.UpdateDaemonTaskStatus(
+		ctx,
+		v1.ID,
+		task.TaskStatus_CancelRequested,
+		updateAt,
+		time.Time{},
+		WithTaskStatusCond(task.TaskStatus_Running),
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, updated)
 
-	err := s.HeartbeatDaemonTask(ctx, v1)
+	// A runner heartbeats from its local task snapshot. The heartbeat mutation
+	// must not restore stale control state from that snapshot.
+	err = s.HeartbeatDaemonTask(ctx, v1)
 	assert.NoError(t, err)
 
 	ts, err := s.QueryDaemonTask(ctx)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(ts))
 	assert.False(t, ts[0].LastHeartbeat.IsZero())
+	assert.Equal(t, task.TaskStatus_CancelRequested, ts[0].TaskStatus)
+	assert.Equal(t, updateAt, ts[0].UpdateAt)
 }
 
 func TestAddCdcTask1(t *testing.T) {

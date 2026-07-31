@@ -615,9 +615,10 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 	// handler must not retire a task that has since acquired a fresh foreign
 	// owner; that owner's runner is responsible for stopping its local routine.
 	now := time.Now()
+	heartbeatCutoff := now.Add(-t.runner.options.heartbeatTimeout)
 	localOwner := strings.EqualFold(tk.TaskRunner, t.runner.runnerID)
 	heartbeatExpired := tk.LastHeartbeat.IsZero() ||
-		!tk.LastHeartbeat.After(now.Add(-t.runner.options.heartbeatTimeout))
+		!tk.LastHeartbeat.After(heartbeatCutoff)
 	if tk.TaskRunner != "" && !localOwner && !heartbeatExpired {
 		return nil
 	}
@@ -641,14 +642,23 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 		return nil
 	}
 
-	tk.TaskStatus = task.TaskStatus_Canceled
-	tk.UpdateAt = now
-	tk.EndAt = now
-	updated, err := t.runner.service.UpdateDaemonTask(
-		handleCtx,
-		[]task.DaemonTask{tk},
+	conditions := []Condition{
 		WithTaskStatusCond(task.TaskStatus_CancelRequested),
 		WithTaskRunnerCond(EQ, tk.TaskRunner),
+	}
+	if !localOwner {
+		// Reading an expired foreign lease is not authority to terminate it: the
+		// owner may renew between this handler's read and write. Fence that race
+		// in the same storage statement that makes the task terminal.
+		conditions = append(conditions, WithLastHeartbeat(LE, heartbeatCutoff.UnixNano()))
+	}
+	updated, err := t.runner.service.UpdateDaemonTaskStatus(
+		handleCtx,
+		tk.ID,
+		task.TaskStatus_Canceled,
+		now,
+		now,
+		conditions...,
 	)
 	if err != nil {
 		return moerr.AttachCause(handleCtx, err)
@@ -852,14 +862,13 @@ func (r *taskRunner) reconcileRetiredDaemonTasks(ctx context.Context) {
 	)
 	retiredAt := time.Now()
 	for _, observed := range tasks {
-		retired := observed
-		retired.TaskStatus = task.TaskStatus_CancelRequested
-		retired.UpdateAt = retiredAt
-
 		updateCtx, cancel := context.WithTimeout(ctx, r.options.fetchTimeout)
-		updated, err := r.service.UpdateDaemonTask(
+		updated, err := r.service.UpdateDaemonTaskStatus(
 			updateCtx,
-			[]task.DaemonTask{retired},
+			observed.ID,
+			task.TaskStatus_CancelRequested,
+			retiredAt,
+			time.Time{},
 			WithTaskExecutorCond(EQ, retiredKafkaSinkTaskCode),
 			WithTaskStatusCond(observed.TaskStatus),
 			WithTaskRunnerCond(EQ, observed.TaskRunner),
