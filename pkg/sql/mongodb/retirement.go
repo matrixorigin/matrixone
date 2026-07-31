@@ -64,6 +64,91 @@ type ClusterRemoteClientRetirer struct {
 	Timeout     time.Duration
 }
 
+type RemoteClientRetirer interface {
+	Retire(context.Context, ClientRetirement)
+}
+
+const DefaultClientRetirementQueueCapacity = 256
+
+// ClientRetirementQueue moves best-effort local disconnects and cluster fanout
+// off the post-commit path. Its bounded channel prevents a slow/unavailable CN
+// from turning restore or DDL churn into unbounded goroutines or memory.
+type ClientRetirementQueue struct {
+	pool   *ClientPool
+	remote RemoteClientRetirer
+	jobs   chan ClientRetirement
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+	once   sync.Once
+}
+
+func NewClientRetirementQueue(pool *ClientPool, remote RemoteClientRetirer, capacity int) *ClientRetirementQueue {
+	if capacity <= 0 {
+		capacity = DefaultClientRetirementQueueCapacity
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	queue := &ClientRetirementQueue{
+		pool: pool, remote: remote, jobs: make(chan ClientRetirement, capacity),
+		ctx: ctx, cancel: cancel, done: make(chan struct{}),
+	}
+	go queue.run()
+	return queue
+}
+
+// Submit never waits for remote I/O or client Disconnect. False means the
+// best-effort queue is stopping or saturated; catalog generation validation
+// remains the correctness authority in either case.
+func (q *ClientRetirementQueue) Submit(retirement ClientRetirement) bool {
+	if q == nil {
+		return false
+	}
+	select {
+	case <-q.ctx.Done():
+		return false
+	default:
+	}
+	select {
+	case q.jobs <- retirement:
+		return true
+	case <-q.ctx.Done():
+		return false
+	default:
+		return false
+	}
+}
+
+func (q *ClientRetirementQueue) run() {
+	defer close(q.done)
+	for {
+		select {
+		case <-q.ctx.Done():
+			return
+		case retirement := <-q.jobs:
+			_ = retirement.Apply(q.pool)
+			if q.remote != nil {
+				q.remote.Retire(q.ctx, retirement)
+			}
+		}
+	}
+}
+
+func (q *ClientRetirementQueue) Close(ctx context.Context) error {
+	if q == nil {
+		return nil
+	}
+	q.once.Do(q.cancel)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-q.done:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
 func (r ClusterRemoteClientRetirer) Retire(ctx context.Context, retirement ClientRetirement) {
 	if r.Cluster == nil || r.QueryClient == nil {
 		return

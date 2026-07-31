@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -171,7 +172,8 @@ func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testi
 	}
 	mock.ctxt.tables["events_external"] = &plan.TableDef{
 		Name: "events_external", TableType: catalog.SystemExternalRel,
-		Createsql: sqlmongodb.BuildCreateSQLEnvelope(mapping),
+		FeatureFlag: features.MongoDBExternal,
+		Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
 		Cols: []*plan.ColDef{
 			{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
 			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime), Scale: 3}},

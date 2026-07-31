@@ -16,6 +16,7 @@ package mongoscan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -367,6 +368,42 @@ func TestMongoScanBatchAndStatementLimits(t *testing.T) {
 		require.NoError(t, scan.Prepare(proc))
 		_, err := scan.Call(proc)
 		require.ErrorContains(t, err, "batch byte limit")
+		require.Equal(t, 1, cursor.closed)
+		scan.Free(proc, true, err)
+		require.NoError(t, deps.Pool.Close(t.Context()))
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	t.Run("decoded duplicated projection exceeds batch", func(t *testing.T) {
+		payload := make([]byte, 256<<10)
+		doc, err := bson.Marshal(bson.D{{Key: "payload", Value: bson.Binary{Data: payload}}})
+		require.NoError(t, err)
+		cursor := &testCursor{docs: [][]byte{doc}}
+		deps, _ := testScanDependencies(cursor)
+		deps.Config.BatchRows = 10
+		deps.Config.MaxBatchBytes = 1 << 20
+		mapping := deps.Mappings.(testMappingResolver)
+		mapping.mapping.Columns = nil
+		spec := testScanPlan()
+		spec.Columns = nil
+		for i := range 8 {
+			name := fmt.Sprintf("payload_%d", i)
+			mapping.mapping.Columns = append(mapping.mapping.Columns, mongodb.ColumnMapping{
+				Name: name, Path: "payload", TypeID: int32(types.T_blob), Conversion: mongodb.ConversionStrict,
+			})
+			spec.Columns = append(spec.Columns, &plan.MongoColumnMapping{
+				Name: name, Path: "payload", MoType: plan.Type{Id: int32(types.T_blob)}, ConversionMode: mongodb.ConversionStrict,
+			})
+		}
+		deps.Mappings = mapping
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		scan := NewArgument().WithScan(spec)
+		scan.Dependencies = deps
+		require.NoError(t, scan.Prepare(proc))
+		_, err = scan.Call(proc)
+		require.True(t, mongodb.IsDecodedBatchBudgetExceeded(err))
 		require.Equal(t, 1, cursor.closed)
 		scan.Free(proc, true, err)
 		require.NoError(t, deps.Pool.Close(t.Context()))

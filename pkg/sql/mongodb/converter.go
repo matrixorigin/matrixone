@@ -35,6 +35,8 @@ import (
 
 const conversionErrorRateMinAttempts = 100
 
+var errDecodedBatchBudget = errors.New("MongoDB decoded batch byte limit exceeded")
+
 type Converter struct {
 	columns                []ColumnMapping
 	maxValueBytes          int64
@@ -117,6 +119,19 @@ func (c *Converter) NewBatch() *batch.Batch {
 }
 
 func (c *Converter) AppendDocument(ctx context.Context, bat *batch.Batch, raw []byte, mp *mpool.MPool) error {
+	return c.AppendDocumentWithBudget(ctx, bat, raw, mp, 0)
+}
+
+// AppendDocumentWithBudget appends one BSON document while admitting every
+// vector slot and varlen payload before it is copied. maxBatchBytes <= 0 keeps
+// the legacy unbounded behavior for direct converter users.
+func (c *Converter) AppendDocumentWithBudget(
+	ctx context.Context,
+	bat *batch.Batch,
+	raw []byte,
+	mp *mpool.MPool,
+	maxBatchBytes int64,
+) error {
 	if int64(len(raw)) > c.maxValueBytes {
 		return moerr.NewInvalidInput(ctx, "MongoDB BSON document exceeds max-value-bytes")
 	}
@@ -125,9 +140,18 @@ func (c *Converter) AppendDocument(ctx context.Context, bat *batch.Batch, raw []
 		return moerr.NewInvalidInput(ctx, "MongoDB returned invalid BSON")
 	}
 	startRows := bat.RowCount()
+	startAttempts, startErrors := c.conversionAttempts, c.conversionErrors
+	budget := decodedBatchBudget{remaining: maxBatchBytes - int64(bat.Size()), enabled: maxBatchBytes > 0}
+	if budget.enabled && budget.remaining < 0 {
+		return errDecodedBatchBudget
+	}
 	committed := false
 	defer func() {
 		if !committed {
+			// A budget miss can defer this same raw document to the next batch.
+			// Keep statement-level try_null accounting transactional with the row
+			// so the retry does not count its conversions twice.
+			c.conversionAttempts, c.conversionErrors = startAttempts, startErrors
 			for _, vec := range bat.Vecs {
 				vec.SetLength(startRows)
 			}
@@ -136,6 +160,9 @@ func (c *Converter) AppendDocument(ctx context.Context, bat *batch.Batch, raw []
 	}()
 	for i, column := range c.columns {
 		value, found, lookupErr := lookupScalarPath(doc, column.Path)
+		if err := budget.reserve(int64(bat.Vecs[i].GetType().TypeSize())); err != nil {
+			return err
+		}
 		if !found || lookupErr == nil && (value.Type == bson.TypeNull || value.Type == bson.TypeUndefined) {
 			if column.NotNullable {
 				return mongoDBNotNullError(ctx, column)
@@ -150,7 +177,7 @@ func (c *Converter) AppendDocument(ctx context.Context, bat *batch.Batch, raw []
 		}
 		appendErr := lookupErr
 		if appendErr == nil {
-			appendErr = c.appendValue(bat.Vecs[i], value, column, mp)
+			appendErr = c.appendValue(bat.Vecs[i], value, column, mp, &budget)
 		}
 		if err := appendErr; err != nil {
 			if errors.Is(err, errConversion) && column.Conversion == ConversionTryNull {
@@ -178,6 +205,26 @@ func (c *Converter) AppendDocument(ctx context.Context, bat *batch.Batch, raw []
 	bat.SetRowCount(startRows + 1)
 	committed = true
 	return nil
+}
+
+type decodedBatchBudget struct {
+	remaining int64
+	enabled   bool
+}
+
+func (b *decodedBatchBudget) reserve(bytes int64) error {
+	if !b.enabled || bytes <= 0 {
+		return nil
+	}
+	if bytes > b.remaining {
+		return errDecodedBatchBudget
+	}
+	b.remaining -= bytes
+	return nil
+}
+
+func IsDecodedBatchBudgetExceeded(err error) bool {
+	return errors.Is(err, errDecodedBatchBudget)
 }
 
 func mongoDBNotNullError(ctx context.Context, column ColumnMapping) error {
@@ -209,7 +256,13 @@ func lookupScalarPath(doc bson.Raw, path string) (bson.RawValue, bool, error) {
 	return bson.RawValue{}, false, nil
 }
 
-func (c *Converter) appendValue(vec *vector.Vector, value bson.RawValue, column ColumnMapping, mp *mpool.MPool) error {
+func (c *Converter) appendValue(
+	vec *vector.Vector,
+	value bson.RawValue,
+	column ColumnMapping,
+	mp *mpool.MPool,
+	budget *decodedBatchBudget,
+) error {
 	target := types.T(column.TypeID)
 	switch target {
 	case types.T_bool:
@@ -309,14 +362,18 @@ func (c *Converter) appendValue(vec *vector.Vector, value bson.RawValue, column 
 		if !ok {
 			return errConversion
 		}
-		dt := types.DatetimeFromUnixWithNsec(time.UTC, millis/1000, (millis%1000)*int64(time.Millisecond))
+		instant := time.UnixMilli(millis).UTC()
+		if instant.Year() < types.MinDatetimeYear || instant.Year() > types.MaxDatetimeYear {
+			return errConversion
+		}
+		dt := types.DatetimeFromUnixWithNsec(time.UTC, instant.Unix(), int64(instant.Nanosecond()))
 		switch target {
 		case types.T_date:
 			return vector.AppendFixed(vec, dt.ToDate(), false, mp)
 		case types.T_datetime:
 			return vector.AppendFixed(vec, dt.TruncateToScale(column.Scale), false, mp)
 		default:
-			return vector.AppendFixed(vec, dt.ToTimestamp(time.UTC), false, mp)
+			return vector.AppendFixed(vec, dt.ToTimestamp(time.UTC).TruncateToScale(column.Scale), false, mp)
 		}
 	case types.T_char, types.T_varchar, types.T_text:
 		var data []byte
@@ -327,7 +384,7 @@ func (c *Converter) appendValue(vec *vector.Vector, value bson.RawValue, column 
 		} else {
 			return errConversion
 		}
-		return c.appendString(vec, data, column.Width, mp)
+		return c.appendString(vec, data, column.Width, mp, budget)
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		var data []byte
 		if _, bytes, ok := value.BinaryOK(); ok {
@@ -337,7 +394,7 @@ func (c *Converter) appendValue(vec *vector.Vector, value bson.RawValue, column 
 		} else {
 			return errConversion
 		}
-		return c.appendBytes(vec, data, column.Width, mp)
+		return c.appendBytes(vec, data, column.Width, mp, budget)
 	case types.T_json:
 		var decoded any
 		if err := value.Unmarshal(&decoded); err != nil {
@@ -358,25 +415,43 @@ func (c *Converter) appendValue(vec *vector.Vector, value bson.RawValue, column 
 		if err != nil {
 			return errConversion
 		}
-		return c.appendBytes(vec, data, column.Width, mp)
+		return c.appendBytes(vec, data, column.Width, mp, budget)
 	default:
 		return errConversion
 	}
 }
 
-func (c *Converter) appendBytes(vec *vector.Vector, value []byte, width int32, mp *mpool.MPool) error {
+func (c *Converter) appendBytes(
+	vec *vector.Vector,
+	value []byte,
+	width int32,
+	mp *mpool.MPool,
+	budget *decodedBatchBudget,
+) error {
 	if int64(len(value)) > c.maxValueBytes || width > 0 && int32(len(value)) > width {
 		return errConversion
+	}
+	if err := budget.reserve(int64(len(value))); err != nil {
+		return err
 	}
 	return vector.AppendBytes(vec, value, false, mp)
 }
 
-func (c *Converter) appendString(vec *vector.Vector, value []byte, width int32, mp *mpool.MPool) error {
+func (c *Converter) appendString(
+	vec *vector.Vector,
+	value []byte,
+	width int32,
+	mp *mpool.MPool,
+	budget *decodedBatchBudget,
+) error {
 	// MO CHAR/VARCHAR width is measured in Unicode code points, while the
 	// memory-protection limit remains a byte limit. This matches the existing
 	// external reader and avoids rejecting valid multi-byte strings early.
 	if int64(len(value)) > c.maxValueBytes || width > 0 && utf8.RuneCount(value) > int(width) {
 		return errConversion
+	}
+	if err := budget.reserve(int64(len(value))); err != nil {
+		return err
 	}
 	return vector.AppendBytes(vec, value, false, mp)
 }

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -961,8 +962,9 @@ func TestBuildAlterTableRejectsMongoDBExternalTable(t *testing.T) {
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.objects["mongo_ext"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mongo_ext"}
 	ctx.tables["mongo_ext"] = &plan.TableDef{
-		Name:      "mongo_ext",
-		TableType: catalog.SystemExternalRel,
+		Name:        "mongo_ext",
+		TableType:   catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
 		Cols: []*plan.ColDef{
 			{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
 			{Name: "measurement", Typ: plan.Type{Id: int32(types.T_float64)}},
@@ -1030,6 +1032,7 @@ func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	require.NoError(t, err)
 	tableDef := logicPlan.GetDdl().GetCreateTable().GetTableDef()
 	require.NotEmpty(t, tableDef.Cols)
+	require.True(t, features.IsMongoDBExternal(tableDef.FeatureFlag))
 	require.Equal(t, "v", tableDef.Cols[0].Name)
 	require.False(t, tableDef.Cols[0].Default.NullAbility)
 

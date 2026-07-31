@@ -17,7 +17,9 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 )
 
 type report struct {
@@ -46,7 +48,7 @@ func main() {
 		err = waitForMO(ctx, db)
 	}
 	if err == nil {
-		err = run(ctx, db, host, &r)
+		err = runWithDSN(ctx, db, dsn, host, &r)
 	}
 	if err == nil {
 		r.Status = "passed"
@@ -78,6 +80,10 @@ func waitForMO(ctx context.Context, db *sql.DB) error {
 }
 
 func run(ctx context.Context, db *sql.DB, host string, r *report) error {
+	return runWithDSN(ctx, db, "", host, r)
+}
+
+func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) error {
 	manifest, err := loadFixtureManifest("test/mongodb/fixture_manifest.json")
 	if err != nil {
 		return err
@@ -98,6 +104,12 @@ func run(ctx context.Context, db *sql.DB, host string, r *report) error {
 		return err
 	}
 	r.Cases = append(r.Cases, "show-create-redaction-roundtrip")
+	if dsn != "" {
+		if err := verifyAuthorizationBoundary(ctx, db, dsn); err != nil {
+			return err
+		}
+		r.Cases = append(r.Cases, "non-admin-marker-injection-boundary")
+	}
 
 	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events", "5"); err != nil {
 		return err
@@ -235,6 +247,74 @@ func run(ctx context.Context, db *sql.DB, host string, r *report) error {
 		return fmt.Errorf("scan after connection re-enable: %w", err)
 	}
 	r.Cases = append(r.Cases, "connection-disable-enable")
+	return nil
+}
+
+func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn string) error {
+	const (
+		roleName = "mongodb_ci_creator"
+		userName = "mongodb_ci_user"
+		password = "mongodb_ci_password"
+	)
+	for _, statement := range []string{
+		"drop user if exists " + userName,
+		"drop role if exists " + roleName,
+		"create role " + roleName,
+		"create user " + userName + " identified by '" + password + "' default role " + roleName,
+		"grant connect on account * to " + roleName,
+		"grant create table on database mongodb_ci to " + roleName,
+	} {
+		if _, err := adminDB.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("authorization boundary setup %s: %w", statement, err)
+		}
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = adminDB.ExecContext(cleanupCtx, "drop user if exists "+userName)
+		_, _ = adminDB.ExecContext(cleanupCtx, "drop role if exists "+roleName)
+	}()
+
+	config, err := mysqldriver.ParseDSN(dsn)
+	if err != nil {
+		return fmt.Errorf("parse MatrixOne DSN: %w", err)
+	}
+	config.User = userName
+	config.Passwd = password
+	config.DBName = "mongodb_ci"
+	userDB, err := sql.Open("mysql", config.FormatDSN())
+	if err != nil {
+		return fmt.Errorf("open non-admin MatrixOne session: %w", err)
+	}
+	defer userDB.Close()
+	if err := userDB.PingContext(ctx); err != nil {
+		return fmt.Errorf("connect non-admin MatrixOne session: %w", err)
+	}
+
+	if _, err := userDB.ExecContext(ctx,
+		"create external table mongodb_ci.denied_mongodb(value bigint) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='events','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')"); err == nil {
+		return fmt.Errorf("non-admin MongoDB table creation unexpectedly succeeded")
+	}
+
+	marker := sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
+		Connection: "mongodb_ci", Database: "mongodb_source", Collection: "events",
+		Columns: []sqlmongodb.ColumnMapping{{
+			Name: "value", Path: "measurement", TypeID: int32(types.T_int64), Conversion: sqlmongodb.ConversionStrict,
+		}},
+	})
+	marker = strings.Replace(marker, "version=2; kind=mongodb_table;", "version=1;", 1)
+	// Before the parser boundary was anchored, a generic external-table filepath
+	// containing this valid marker was mistaken for planner-owned MongoDB DDL.
+	injectionSQL := "create external table mongodb_ci.marker_injection(value bigint) infile{\"filepath\"='" +
+		strings.ReplaceAll(marker, "'", "''") + "'} fields terminated by ',' lines terminated by '\\n'"
+	if _, err := userDB.ExecContext(ctx, injectionSQL); err != nil {
+		return fmt.Errorf("generic marker-injection control table must remain creatable: %w", err)
+	}
+	if err := expectScalar(ctx, adminDB,
+		"select count(*) from mo_catalog.mo_mongodb_tables m join mo_catalog.mo_tables t on m.account_id=t.account_id and m.table_id=t.rel_id where t.account_id=0 and t.reldatabase='mongodb_ci' and t.relname='marker_injection'",
+		"0"); err != nil {
+		return fmt.Errorf("generic marker injection created a MongoDB mapping: %w", err)
+	}
 	return nil
 }
 
