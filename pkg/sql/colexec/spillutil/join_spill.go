@@ -88,6 +88,7 @@ type BucketReader struct {
 	batchCharge  uint64
 	spillFile    *message.SpillFile
 	mergeRecords bool
+	allocation   *SpillAllocationAccount
 }
 
 func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (*batch.Batch, error) {
@@ -96,6 +97,19 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 	}
 	if r.fd == nil {
 		return nil, io.EOF
+	}
+	if reuseBat == nil {
+		return nil, moerr.NewInvalidInput(
+			proc.Ctx,
+			"spill batch reader requires a reuse batch",
+		)
+	}
+	if r.allocation != nil {
+		if err := reuseBat.SetAllocationAccount(
+			r.allocation.decoded,
+		); err != nil {
+			return nil, err
+		}
 	}
 	if r.reader == nil {
 		r.reader = bufio.NewReaderSize(r.fd, 4*1024*1024)
@@ -155,7 +169,20 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 		if nextRows > int64(colexec.DefaultBatchSize-reuseBat.RowCount()) {
 			break
 		}
-		next := batch.NewOffHeapWithSize(0)
+		var selection *vector.AllocationAccountSelection
+		if r.allocation != nil {
+			selection = r.allocation.decoded
+		}
+		next, err := newSpillBatch(0, selection)
+		if err != nil {
+			return nil, r.mergeReadError(
+				proc,
+				reuseBat,
+				nil,
+				nil,
+				err,
+			)
+		}
 		_, nextToken, _, err := r.readBatchRecord(proc, next, nil, 0, false)
 		if err != nil {
 			return nil, r.mergeReadError(proc, reuseBat, next, nextToken, err)
@@ -556,6 +583,13 @@ func (r *BucketReader) readBatchRecord(
 			// A caller-provided reuse batch has no budget ownership on the first
 			// read. Drop it before admitting the decoded payload.
 			reuseBat.Clean(proc.Mp())
+			if r.allocation != nil {
+				if err := reuseBat.SetAllocationAccount(
+					r.allocation.decoded,
+				); err != nil {
+					return nil, nil, 0, err
+				}
+			}
 			var err error
 			token, err = r.budget.Reserve(projected)
 			if err != nil {
@@ -580,6 +614,14 @@ func (r *BucketReader) readBatchRecord(
 			}
 			if !retainedOK || !peakOK || growErr != nil {
 				reuseBat.Clean(proc.Mp())
+				if r.allocation != nil {
+					if err := reuseBat.SetAllocationAccount(
+						r.allocation.decoded,
+					); err != nil {
+						token.Release()
+						return nil, nil, 0, err
+					}
+				}
 				token.Release()
 				token = nil
 				var err error
@@ -1421,8 +1463,22 @@ func (e *SpillEngine) scatterBatchBounded(
 		}
 	}
 
-	if cap(e.scatterHashValues) < rows {
-		e.scatterHashValues = make([]uint64, rows)
+	if e.allocation != nil {
+		if e.allocationMP != nil && e.allocationMP != proc.Mp() {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		e.allocationMP = proc.Mp()
+	}
+	var err error
+	e.scatterHashValues, err = growSpillSlice(
+		e.scatterHashValues,
+		rows,
+		proc.Mp(),
+		e.allocation,
+		SpillAllocationSiteHashValues,
+	)
+	if err != nil {
+		return err
 	}
 	hashValues := e.scatterHashValues[:rows]
 	// Re-spill must consume fresh hash bits. Merely changing the initial seed
@@ -1437,8 +1493,15 @@ func (e *SpillEngine) scatterBatchBounded(
 	if shift >= 64 {
 		return process.ErrHashBuildBudgetInvalid
 	}
-	if cap(e.scatterBucketRowIds) < rows {
-		e.scatterBucketRowIds = make([]int32, rows)
+	e.scatterBucketRowIds, err = growSpillSlice(
+		e.scatterBucketRowIds,
+		rows,
+		proc.Mp(),
+		e.allocation,
+		SpillAllocationSiteRowIDs,
+	)
+	if err != nil {
+		return err
 	}
 	if cap(e.keyVecs) < len(keyVecs) {
 		e.keyVecs = make([]*vector.Vector, len(keyVecs))
@@ -1456,9 +1519,22 @@ func (e *SpillEngine) scatterBatchBounded(
 		}
 		sels := e.scatterBucketRowIds[start:end]
 		if selected == nil {
-			selected = batch.NewOffHeapWithSize(len(bat.Vecs))
+			var selection *vector.AllocationAccountSelection
+			if e.allocation != nil {
+				selection = e.allocation.selected
+			}
+			selected, err = newSpillBatch(len(bat.Vecs), selection)
+			if err != nil {
+				return err
+			}
 			for j, vec := range bat.Vecs {
-				selected.Vecs[j] = vector.NewOffHeapVecWithType(*vec.GetType())
+				selected.Vecs[j], err = newSpillVector(
+					*vec.GetType(),
+					selection,
+				)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		selected.CleanOnlyData()
@@ -1571,8 +1647,19 @@ func (e *SpillEngine) discardScatterBuffers() {
 // charged while the next child hashmap is rebuilt. Cleanup calls this method
 // as an idempotent fallback for cancellation paths.
 func (e *SpillEngine) releaseScatterScratch() {
+	freeSpillSlice(
+		e.scatterHashValues,
+		e.allocationMP,
+		e.allocation,
+	)
+	freeSpillSlice(
+		e.scatterBucketRowIds,
+		e.allocationMP,
+		e.allocation,
+	)
 	e.scatterHashValues = nil
 	e.scatterBucketRowIds = nil
+	e.allocationMP = nil
 	e.keyVecs = nil
 	e.scatterWriteBuf = bytes.Buffer{}
 	for i := range e.scatterBucketCounts {
@@ -1697,9 +1784,11 @@ const (
 
 // SpillEngine owns the spill bucket queue and drives the probe-batch loop.
 type SpillEngine struct {
-	cfg     SpillEngineConfig
-	buckets []SpillBucket
-	spillFS spillFileServiceCache
+	cfg          SpillEngineConfig
+	buckets      []SpillBucket
+	spillFS      spillFileServiceCache
+	allocation   *SpillAllocationAccount
+	allocationMP *mpool.MPool
 
 	// Current bucket state
 	buildReader    BucketReader
@@ -1741,10 +1830,35 @@ type SpillEngine struct {
 
 // NewSpillEngine creates an engine from configuration. Call InitFromSpilledMap next.
 func NewSpillEngine(cfg SpillEngineConfig) *SpillEngine {
+	return newSpillEngine(cfg, nil)
+}
+
+// NewSpillEngineWithAllocation constructs the dormant allocation-accounted
+// spill path. Legacy production callers continue to use NewSpillEngine.
+func NewSpillEngineWithAllocation(
+	cfg SpillEngineConfig,
+	allocation *SpillAllocationAccount,
+) (*SpillEngine, error) {
+	if err := allocation.validate(); err != nil {
+		return nil, err
+	}
+	return newSpillEngine(cfg, allocation), nil
+}
+
+func newSpillEngine(
+	cfg SpillEngineConfig,
+	allocation *SpillAllocationAccount,
+) *SpillEngine {
 	if cfg.MaxQueue <= 0 {
 		cfg.MaxQueue = SpillNumBuckets * SpillNumBuckets
 	}
-	return &SpillEngine{cfg: cfg}
+	engine := &SpillEngine{
+		cfg:        cfg,
+		allocation: allocation,
+	}
+	engine.buildReader.allocation = allocation
+	engine.probeReader.allocation = allocation
+	return engine
 }
 
 func (e *SpillEngine) makeBucketWriters(prefix string) []BucketWriter {
@@ -1935,7 +2049,15 @@ func (e *SpillEngine) NextProbeBatch(proc *process.Process) (*batch.Batch, error
 		return nil, nil
 	}
 	if e.probeReadBatch == nil {
-		e.probeReadBatch = batch.NewOffHeapWithSize(0)
+		var selection *vector.AllocationAccountSelection
+		if e.allocation != nil {
+			selection = e.allocation.decoded
+		}
+		var err error
+		e.probeReadBatch, err = newSpillBatch(0, selection)
+		if err != nil {
+			return nil, err
+		}
 	}
 	e.probeReader.mergeRecords = e.cfg.MergeProbeBatches || e.cfg.IsDedup
 	bat, err := e.probeReader.ReadBatch(proc, e.probeReadBatch)
@@ -2062,7 +2184,16 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	e.buckets[0].BuildFd = nil // prevent Cleanup double-close on error
 	defer e.buildReader.closeCurrentFile()
 	if e.buildReadBatch == nil {
-		e.buildReadBatch = batch.NewOffHeapWithSize(0)
+		var selection *vector.AllocationAccountSelection
+		if e.allocation != nil {
+			selection = e.allocation.decoded
+		}
+		readBatch, err := newSpillBatch(0, selection)
+		if err != nil {
+			builder.Free(proc)
+			return nil, BucketSkip, err
+		}
+		e.buildReadBatch = readBatch
 	}
 	// A rebuild may pre-admit one scatter workspace so a retained-copy reject
 	// can still repartition the batches already owned by the builder. Release it
@@ -2287,12 +2418,38 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 
 	// Cache key executors.
 	if len(e.keyExecs) != len(e.cfg.BuildKeyExprs) {
-		execs, lease, err := hashbuild.NewBudgetedExpressionExecutors(
-			proc,
-			e.cfg.Budget,
-			e.cfg.BuildKeyExprs,
-			false,
-		)
+		var execs []colexec.ExpressionExecutor
+		var lease *hashbuild.ExpressionMemoryLease
+		var err error
+		if e.allocation == nil {
+			execs, lease, err =
+				hashbuild.NewBudgetedExpressionExecutors(
+					proc,
+					e.cfg.Budget,
+					e.cfg.BuildKeyExprs,
+					false,
+				)
+		} else {
+			execs, err =
+				colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+					proc,
+					e.cfg.BuildKeyExprs,
+					e.allocation.expression,
+				)
+			if err == nil {
+				lease, err = hashbuild.NewExpressionMemoryLease(
+					nil,
+					e.cfg.BuildKeyExprs,
+					execs,
+					false,
+				)
+			}
+			if err != nil {
+				for _, exec := range execs {
+					exec.Free()
+				}
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -2385,7 +2542,15 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 	}
 
 	if e.probeReadBatch == nil {
-		e.probeReadBatch = batch.NewOffHeapWithSize(0)
+		var selection *vector.AllocationAccountSelection
+		if e.allocation != nil {
+			selection = e.allocation.decoded
+		}
+		readBatch, err := newSpillBatch(0, selection)
+		if err != nil {
+			return nil, err
+		}
+		e.probeReadBatch = readBatch
 	}
 
 	// Scatter probe file. Reuse reader's 4 MiB buffer from the build pass.
