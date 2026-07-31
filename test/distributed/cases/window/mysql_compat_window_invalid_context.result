@@ -16,11 +16,11 @@ You cannot use the window function 'row_number' in this context
 set session sql_mode = 'MATRIXONE_NATIVE';
 update t set rn = row_number() over (order by id);
 select id, rn from t order by id;
-id    rn
-1    1
-2    2
-3    3
-4    4
+➤ id[4,32,0]  ¦  rn[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4
 create table check_bad (
 id int primary key,
 v int,
