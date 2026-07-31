@@ -108,6 +108,14 @@ func TestWrongArgumentsMySQLError(t *testing.T) {
 	require.Equal(t, "Incorrect arguments to nth_value", err.Error())
 }
 
+func TestWindowInvalidUseMySQLError(t *testing.T) {
+	err := NewWindowInvalidUse(context.Background(), "row_number")
+	require.Equal(t, ErrWindowInvalidUse, err.ErrorCode())
+	require.Equal(t, ER_WINDOW_INVALID_WINDOW_FUNC_USE, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "You cannot use the window function 'row_number' in this context", err.Error())
+}
+
 func TestLockWaitTimeoutMySQLError(t *testing.T) {
 	err := NewLockWaitTimeout(context.Background())
 	require.Equal(t, ErrLockWaitTimeout, err.ErrorCode())
