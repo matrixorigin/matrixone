@@ -1070,6 +1070,12 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 		expr := node.FilterList[i]
 		fun := expr.GetF()
 		if fun != nil && fun.Func.ObjName == "like" {
+			// Explicit ESCAPE changes how wildcard bytes are interpreted. Keep
+			// the original predicate intact instead of applying the two-argument
+			// prefix rewrite with its hard-coded default escape semantics.
+			if len(fun.Args) != 2 {
+				continue
+			}
 			col := fun.Args[0].GetCol()
 			if col == nil {
 				continue

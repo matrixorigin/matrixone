@@ -113,6 +113,79 @@ func TestResolveCommitUnknownCompletesWhenTxnAlreadyUnlocked(t *testing.T) {
 	})
 }
 
+func TestUnknownCommitPendingActiveCallbackCanReenterClose(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		service := services[0]
+		var resolved atomic.Int32
+		closeResult := make(chan error, 1)
+
+		require.NoError(t, service.ResolveCommitUnknown(
+			[]byte("already-unlocked-reentrant-close"),
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
+			func() {
+				resolved.Add(1)
+				closeResult <- service.Close()
+			},
+		))
+
+		select {
+		case err := <-closeResult:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("pendingActiveTxns callback deadlocked re-entering service Close")
+		}
+		require.Equal(t, int32(1), resolved.Load())
+		require.Never(t, func() bool {
+			return resolved.Load() != 1
+		}, 100*time.Millisecond, 10*time.Millisecond)
+	})
+}
+
+func TestUnknownCommitRemoveCallbackCanReenterClose(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		service := services[0]
+		txnID := []byte("resolved-reentrant-close")
+		_, err := service.Lock(
+			ctx,
+			1,
+			[][]byte{[]byte("resolved-reentrant-close-key")},
+			txnID,
+			newTestRowExclusiveOptions(),
+		)
+		require.NoError(t, err)
+		_, err = allocator.Valid(service.serviceID, txnID, nil)
+		require.NoError(t, err)
+
+		var resolved atomic.Int32
+		closeResult := make(chan error, 1)
+		require.NoError(t, service.ResolveCommitUnknown(
+			txnID,
+			time.Now().Add(time.Hour),
+			service.NextCommitSequence(),
+			func() {
+				resolved.Add(1)
+				closeResult <- service.Close()
+			},
+		))
+		allocator.FinishCommit(service.serviceID, txnID)
+
+		select {
+		case err := <-closeResult:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("remove callback deadlocked re-entering service Close")
+		}
+		require.Equal(t, int32(1), resolved.Load())
+		require.Never(t, func() bool {
+			return resolved.Load() != 1
+		}, 100*time.Millisecond, 10*time.Millisecond)
+	})
+}
+
 func TestUnknownCommitBatchFencesOnlyNonCommittingTxns(t *testing.T) {
 	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
 		service := services[0]
@@ -472,11 +545,16 @@ func TestUnknownCommitResolverCloseCancelsRemoteUnlock(t *testing.T) {
 		txn.Lock()
 		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, service.logger))
 		txn.Unlock()
+		resolved := make(chan struct{}, 1)
+		callbackCloseErr := make(chan error, 1)
 		require.NoError(t, service.ResolveCommitUnknown(
 			txnID,
 			time.Now().Add(time.Hour),
 			service.NextCommitSequence(),
-			nil,
+			func() {
+				callbackCloseErr <- service.Close()
+				resolved <- struct{}{}
+			},
 		))
 
 		select {
@@ -495,5 +573,69 @@ func TestUnknownCommitResolverCloseCancelsRemoteUnlock(t *testing.T) {
 		case <-time.After(time.Second):
 			require.FailNow(t, "service close blocked on remote unknown-commit unlock")
 		}
+		select {
+		case <-resolved:
+		case <-time.After(time.Second):
+			require.FailNow(t, "service close did not release unknown-commit admission")
+		}
+		require.NoError(t, <-callbackCloseErr)
+	})
+}
+
+func TestServiceCloseCancelsOrdinaryRemoteUnlock(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		service := services[0]
+		client := &blockingUnlockClient{unlockStarted: make(chan struct{}, 1)}
+		bind := pb.LockTable{
+			Group:     0,
+			Table:     101,
+			ServiceID: "unreachable",
+			Version:   1,
+			Valid:     true,
+		}
+		service.tableGroups.set(
+			bind.Group,
+			bind.Table,
+			newRemoteLockTable(
+				service.serviceID,
+				time.Second,
+				bind,
+				client,
+				service.handleBindChanged,
+				service.logger,
+			),
+		)
+
+		txnID := []byte("ordinary-remote-unlock")
+		txn := service.activeTxnHolder.getActiveTxn(txnID, true, "")
+		txn.Lock()
+		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, service.logger))
+		txn.Unlock()
+
+		unlockDone := make(chan error, 1)
+		go func() {
+			unlockDone <- service.Unlock(
+				context.Background(),
+				txnID,
+				timestamp.Timestamp{},
+			)
+		}()
+		select {
+		case <-client.unlockStarted:
+		case <-time.After(time.Second):
+			require.FailNow(t, "ordinary remote unlock did not start")
+		}
+
+		closeDone := make(chan error, 1)
+		go func() {
+			closeDone <- service.Close()
+		}()
+		select {
+		case err := <-closeDone:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			require.FailNow(t, "service close did not cancel ordinary remote unlock")
+		}
+		require.ErrorIs(t, <-unlockDone, context.Canceled)
 	})
 }

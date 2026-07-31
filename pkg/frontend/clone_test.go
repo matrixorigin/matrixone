@@ -631,7 +631,7 @@ func Test_rewriteCloneCreateSQL_PreservesUnqualifiedViewFormat(t *testing.T) {
 		1,
 	)
 	require.NoError(t, err)
-	require.Equal(t, "create view `v1` as select * from `t1`;", got)
+	require.Equal(t, "create view v1 as select * from t1;", got)
 }
 
 func Test_rewriteCloneCreateSQL_QuotesUserViewIdentifiers(t *testing.T) {

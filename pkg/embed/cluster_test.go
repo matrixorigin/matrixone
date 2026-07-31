@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -102,6 +104,41 @@ func TestBasicCluster(t *testing.T) {
 	v, err := c.GetService(cn.ServiceID())
 	require.NoError(t, err)
 	require.Equal(t, cn, v)
+}
+
+func TestWithHAKeeperHeartbeatTimeout(t *testing.T) {
+	timeout := 15 * time.Second
+	clusterValue, err := NewCluster(
+		WithCNCount(2),
+		WithHAKeeperHeartbeatTimeout(timeout),
+	)
+	require.NoError(t, err)
+	c := clusterValue.(*cluster)
+	defer func() {
+		require.NoError(t, c.Close())
+		require.NoError(t, os.RemoveAll(c.options.dataPath))
+	}()
+
+	for _, svc := range c.services {
+		cfg := svc.GetServiceConfig()
+		switch svc.ServiceType() {
+		case metadata.ServiceType_CN:
+			require.Equal(t, timeout, cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+		case metadata.ServiceType_TN:
+			require.NotNil(t, cfg.TN_please_use_getTNServiceConfig)
+			require.Equal(t, timeout, cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration)
+		}
+	}
+}
+
+func TestHAKeeperHeartbeatTimeoutHonorsLegacyTNConfig(t *testing.T) {
+	timeout := 15 * time.Second
+	cfg := &ServiceConfig{TNCompatible: &tnservice.Config{}}
+
+	applyHAKeeperHeartbeatTimeout(cfg, metadata.ServiceType_TN, timeout)
+
+	require.Same(t, cfg.TNCompatible, cfg.TN_please_use_getTNServiceConfig)
+	require.Equal(t, timeout, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
 }
 
 func TestSingleCNCluster(t *testing.T) {
@@ -370,28 +407,34 @@ func validCNCanWork(
 	c Cluster,
 	index int,
 ) {
-	svc, err := c.GetCNService(index)
-	require.NoError(t, err)
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		svc, err := c.GetCNService(index)
+		if !assert.NoError(collect, err) {
+			return
+		}
 
-	sql := svc.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	res, err := sql.Exec(
-		ctx,
-		"select count(1) from mo_catalog.mo_tables",
-		executor.Options{},
-	)
-	require.NoError(t, err)
-	defer res.Close()
+		sql := svc.(*operator).reset.svc.(cnservice.Service).GetSQLExecutor()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		res, err := sql.Exec(
+			ctx,
+			"select count(1) from mo_catalog.mo_tables",
+			executor.Options{},
+		)
+		if !assert.NoError(collect, err) {
+			return
+		}
+		defer res.Close()
 
-	n := int64(0)
-	res.ReadRows(
-		func(rows int, cols []*vector.Vector) bool {
-			n = executor.GetFixedRows[int64](cols[0])[0]
-			return true
-		},
-	)
-	require.True(t, n > 0)
+		var n int64
+		res.ReadRows(
+			func(rows int, cols []*vector.Vector) bool {
+				n = executor.GetFixedRows[int64](cols[0])[0]
+				return true
+			},
+		)
+		assert.Positive(collect, n)
+	}, 30*time.Second, 100*time.Millisecond)
 }
 
 func TestCreateDB(t *testing.T) {

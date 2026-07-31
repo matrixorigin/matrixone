@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -140,6 +141,46 @@ func TestChooseRowCarrier(t *testing.T) {
 		}
 		require.Equal(t, 1, chooseUnionRowCarrier(left, right, 2))
 	})
+}
+
+func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.dbs["telemetry_source"] = true
+	mock.ctxt.objects["events_external"] = &plan.ObjectRef{DbName: "telemetry_source", ObjName: "events_external", Obj: 42}
+	mapping := sqlmongodb.TableMapping{
+		Connection: "telemetry_source", Database: "telemetry", Collection: "events",
+		SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict, MaxParallelism: 1,
+		Columns: []sqlmongodb.ColumnMapping{
+			{Name: "device_id", Path: "device_id", TypeID: int32(types.T_varchar), Width: 20, Conversion: sqlmongodb.ConversionStrict},
+			{Name: "ts", Path: "ts", TypeID: int32(types.T_datetime), Scale: 3, Conversion: sqlmongodb.ConversionTryNull},
+		},
+	}
+	mock.ctxt.tables["events_external"] = &plan.TableDef{
+		Name: "events_external", TableType: catalog.SystemExternalRel,
+		Createsql: sqlmongodb.BuildCreateSQLEnvelope(mapping),
+		Cols: []*plan.ColDef{
+			{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime), Scale: 3}},
+		},
+	}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"select count(*) from telemetry_source.events_external where ts >= '2026-07-27 10:55:00' and ts < '2026-07-27 11:02:00'")
+	require.NoError(t, err)
+	var scanNode *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_EXTERNAL_SCAN {
+			scanNode = node
+			break
+		}
+	}
+	require.NotNil(t, scanNode)
+	require.Len(t, scanNode.TableDef.Cols, 1)
+	require.Equal(t, "ts", scanNode.TableDef.Cols[0].Name)
+	require.Len(t, scanNode.FilterList, 2)
+	require.NotNil(t, scanNode.ExternScan.MongodbScan.PushedPredicate)
+	require.Equal(t, plan.MongoPredicateOp_MONGO_PREDICATE_AND, scanNode.ExternScan.MongodbScan.PushedPredicate.Op)
+	require.Equal(t, "mo-residual:ff", scanNode.ExternScan.MongodbScan.ResidualFilterDigest)
 }
 
 func TestCanPruneSampleExprs(t *testing.T) {
@@ -3801,6 +3842,49 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 			},
 		},
 		{
+			name:      "LIKE ESCAPE: a LIKE 'test#%' ESCAPE '#'",
+			sql:       "a LIKE 'test#%' ESCAPE '#'",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				require.NotNil(t, expr)
+				funcExpr, ok := expr.Expr.(*plan.Expr_F)
+				require.True(t, ok)
+				require.Equal(t, "like", funcExpr.F.Func.ObjName)
+				require.Len(t, funcExpr.F.Args, 3)
+			},
+		},
+		{
+			name:      "LIKE ESCAPE prepared parameters",
+			sql:       "a LIKE ? ESCAPE ?",
+			expectErr: false,
+			setupFunc: func() (*QueryBuilder, *BindContext) {
+				builder, bindCtx := genBuilderAndCtx()
+				builder.isPrepareStatement = true
+				return builder, bindCtx
+			},
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				funcExpr := expr.GetF()
+				require.NotNil(t, funcExpr)
+				require.Equal(t, "like", funcExpr.Func.ObjName)
+				require.Len(t, funcExpr.Args, 3)
+				paramPos := func(arg *plan.Expr) int32 {
+					if param := arg.GetP(); param != nil {
+						return param.Pos
+					}
+					castExpr := arg.GetF()
+					require.NotNil(t, castExpr)
+					require.Equal(t, "cast", castExpr.Func.ObjName)
+					require.NotEmpty(t, castExpr.Args)
+					require.NotNil(t, castExpr.Args[0].GetP())
+					return castExpr.Args[0].GetP().Pos
+				}
+				require.Equal(t, int32(1), paramPos(funcExpr.Args[1]))
+				require.Equal(t, int32(2), paramPos(funcExpr.Args[2]))
+			},
+		},
+		{
 			name:      "NOT_LIKE: a NOT LIKE 'test%'",
 			sql:       "a NOT LIKE 'test%'",
 			expectErr: false,
@@ -3811,6 +3895,22 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 				funcExpr, ok := expr.Expr.(*plan.Expr_F)
 				require.True(t, ok)
 				require.Equal(t, "not", funcExpr.F.Func.ObjName)
+			},
+		},
+		{
+			name:      "NOT LIKE ESCAPE: a NOT LIKE 'test#%' ESCAPE '#'",
+			sql:       "a NOT LIKE 'test#%' ESCAPE '#'",
+			expectErr: false,
+			checkFunc: func(t *testing.T, expr *plan.Expr, err error) {
+				require.NoError(t, err)
+				notExpr := expr.GetF()
+				require.NotNil(t, notExpr)
+				require.Equal(t, "not", notExpr.Func.ObjName)
+				require.Len(t, notExpr.Args, 1)
+				likeExpr := notExpr.Args[0].GetF()
+				require.NotNil(t, likeExpr)
+				require.Equal(t, "like", likeExpr.Func.ObjName)
+				require.Len(t, likeExpr.Args, 3)
 			},
 		},
 		// Note: ILIKE requires string types, but 'a' column is BIGINT in genBuilderAndCtx

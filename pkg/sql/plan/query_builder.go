@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -1126,6 +1127,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
+		}
+
+		if err := builder.refreshMongoScanPushdown(node); err != nil {
+			return nil, err
 		}
 
 	case plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
@@ -3930,6 +3935,28 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	for i, col := range cols {
 		subCtx.headings[i] = string(col)
 	}
+
+	if len(cteRef.occurrences) == 0 {
+		builder.cteRefs = append(builder.cteRefs, cteRef)
+	}
+	if ctx.bindingNonRecurCte() {
+		cteRef.hasNestedUse = true
+		if ctx.cteState.cte != nil {
+			ctx.cteState.cte.hasNestedRef = true
+		}
+	}
+	types := make([]plan.Type, len(builder.qry.Nodes[nodeID].ProjectList))
+	for i, expr := range builder.qry.Nodes[nodeID].ProjectList {
+		types[i] = expr.Typ
+	}
+	cteRef.occurrences = append(cteRef.occurrences, cteOccurrence{
+		rootID:       nodeID,
+		rootTag:      subCtx.rootTag(),
+		ctx:          subCtx,
+		headings:     append([]string(nil), subCtx.headings...),
+		types:        types,
+		isCorrelated: subCtx.isCorrelated,
+	})
 	return nodeID, nil
 }
 
@@ -4115,7 +4142,18 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		}
 		for i := range n.ProjectList {
 			projTyp := projects[i].GetTyp()
-			n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
+			if projTyp.Id == int32(types.T_char) || projTyp.Id == int32(types.T_varchar) {
+				// MySQL fixes recursive CTE column types from the anchor, but
+				// applies the width policy at execution time: strict sql_mode
+				// rejects an over-width value while non-strict mode truncates it.
+				// The assignment-cast selector uses cast_strict before MORPC v5
+				// so this plan can run on every CN during a rolling upgrade. At
+				// MORPC v5 it uses volatile cast_assign, letting a prepared CTE
+				// observe the sql_mode of each execution.
+				n.ProjectList[i], err = builder.forceAssignmentCastExpr(n.ProjectList[i], projTyp, false)
+			} else {
+				n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
+			}
 			if err != nil {
 				return
 			}
@@ -4323,9 +4361,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	ctx.sampleTag = builder.genNewBindTag()
 	if astTimeWindow != nil {
 		ctx.timeTag = builder.genNewBindTag() // ctx.timeTag > 0
-		if astTimeWindow.Sliding != nil {
+		// GAPFILL uses the same second-stage aggregate state machine as an
+		// explicit sliding window even when its external SQL is a tumbling
+		// INTERVAL. Mark it before aggregate binding so SUM/COUNT/AVG are
+		// remapped to consume the child aggregate's partial-result type and the
+		// projected type matches the executor's actual vector.
+		if astTimeWindow.Sliding != nil || astTimeWindow.GapFill {
 			ctx.sliding = true
 		}
+		ctx.explicitSliding = astTimeWindow.Sliding != nil
 
 		if helpFunc, err = makeHelpFuncForTimeWindow(astTimeWindow); err != nil {
 			return
@@ -7635,6 +7679,12 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 		TimeWindowPartitionBy: partitionBy,
 		Timestamp:             ts,
 		WEnd:                  wEnd,
+		GapFillMode: func() plan.Node_GapFillMode {
+			if astTimeWindow.GapFill {
+				return plan.Node_GAP_FILL_PARTITION
+			}
+			return plan.Node_GAP_FILL_NONE
+		}(),
 	}, ctx)
 
 	for name, id := range ctx.timeByAst {
@@ -8659,11 +8709,20 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			nodeType = plan.Node_EXTERNAL_SCAN
 			externType := plan.ExternType_EXTERNAL_TB
 			var icebergEnv sqliceberg.CreateSQLEnvelope
+			var mongoEnv sqlmongodb.CreateSQLEnvelope
 			if env, found, err := sqliceberg.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
 				return 0, err
 			} else if found {
 				icebergEnv = env
 				externType = plan.ExternType_ICEBERG_TB
+			} else if env, found, err := sqlmongodb.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
+				return 0, err
+			} else if found {
+				mongoEnv = env
+				externType = plan.ExternType_MONGODB_TB
+				if builder.isPrepareStatement {
+					return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
+				}
 			}
 			externScan = &plan.ExternScan{
 				Type:           int32(externType),
@@ -8682,6 +8741,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return 0, err
 				}
 				externScan.IcebergScan = icebergScan
+			} else if externType == plan.ExternType_MONGODB_TB {
+				externScan.MongodbScan = &plan.MongoScan{
+					TableId:        uint64(obj.Obj),
+					Database:       mongoEnv.Database,
+					Collection:     mongoEnv.Collection,
+					Columns:        sqlmongodb.ColumnsToPlan(mongoEnv.Columns),
+					ProjectedPaths: projectedMongoPaths(mongoEnv.Columns),
+					MaxParallelism: 1,
+				}
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
 			}
@@ -8890,6 +8958,48 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	}
 
 	return
+}
+
+func projectedMongoPaths(columns []sqlmongodb.ColumnMapping) []string {
+	result := make([]string, 0, len(columns))
+	seen := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		if _, ok := seen[column.Path]; ok {
+			continue
+		}
+		seen[column.Path] = struct{}{}
+		result = append(result, column.Path)
+	}
+	return result
+}
+
+// refreshMongoScanPushdown produces plan-time EXPLAIN evidence from the DDL
+// envelope. Compile re-runs the same translation after validating and loading
+// the authoritative catalog mapping. Keep the full definition snapshot on the
+// plan for that validation; use only the retained TableDef columns to interpret
+// compact filter ColPos values here.
+func (builder *QueryBuilder) refreshMongoScanPushdown(node *plan.Node) error {
+	if node == nil || node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
+		return nil
+	}
+	if node.TableDef == nil {
+		return moerr.NewInternalError(builder.GetContext(), "MongoDB external scan is missing its table definition")
+	}
+	scan := node.ExternScan.MongodbScan
+	names := make([]string, 0, len(node.TableDef.Cols))
+	for _, column := range node.TableDef.Cols {
+		if column != nil && !column.Hidden {
+			names = append(names, column.Name)
+		}
+	}
+	columns, err := sqlmongodb.ProjectColumnsByName(
+		builder.GetContext(), sqlmongodb.ColumnsFromPlan(scan.Columns), names)
+	if err != nil {
+		return err
+	}
+	scan.PushedPredicate, scan.ResidualFilterDigest = sqlmongodb.PushdownPlanFilters(
+		builder.GetContext(), node.FilterList, sqlmongodb.ColumnsToPlan(columns))
+	return nil
 }
 
 func (builder *QueryBuilder) genNewBindTag() int32 {

@@ -28,9 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -128,6 +130,15 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, tableDef.Checks, 1)
 		require.Equal(t, "`s` = 'ok'", tableDef.Checks[0].OriginSql)
+	})
+
+	t.Run("name const cast name remains invalid", func(t *testing.T) {
+		_, err := build(
+			"create table t(a int, "+
+				"check (name_const(cast(0x61 as varchar), 1) = 1))",
+			false,
+		)
+		require.ErrorContains(t, err, "invalid argument NAME_CONST")
 	})
 
 	t.Run("non boolean root is converted", func(t *testing.T) {
@@ -914,6 +925,75 @@ func TestBuildCreateIndexOnExternalTableError(t *testing.T) {
 	}
 }
 
+func TestBuildAlterTableRejectsMongoDBExternalTable(t *testing.T) {
+	mock := NewEmptyMockOptimizer()
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.objects["mongo_ext"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mongo_ext"}
+	ctx.tables["mongo_ext"] = &plan.TableDef{
+		Name:      "mongo_ext",
+		TableType: catalog.SystemExternalRel,
+		Cols: []*plan.ColDef{
+			{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
+			{Name: "measurement", Typ: plan.Type{Id: int32(types.T_float64)}},
+		},
+		Createsql: sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
+			Connection: "source", Database: "telemetry", Collection: "samples",
+			SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict,
+			MaxParallelism: 1,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: "device_id", Path: "metadata.device_id", TypeID: int32(types.T_varchar), Width: 64},
+				{Name: "measurement", Path: "reading.measurement", TypeID: int32(types.T_float64)},
+			},
+		}),
+	}
+
+	for _, sql := range []string{
+		"ALTER TABLE mongo_ext RENAME COLUMN device_id TO device_key",
+		"ALTER TABLE mongo_ext MODIFY COLUMN measurement DECIMAL(18, 6)",
+		"ALTER TABLE mongo_ext ADD COLUMN site_id VARCHAR(32)",
+		"ALTER TABLE mongo_ext DROP COLUMN measurement",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.ErrorContains(t, err, "ALTER TABLE on a MongoDB external table", sql)
+	}
+}
+
+func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_not_null (
+			v BIGINT NOT NULL MONGODB_PATH 'payload.value' MONGODB_CONVERT 'try_null'
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`)
+	require.NoError(t, err)
+	tableDef := logicPlan.GetDdl().GetCreateTable().GetTableDef()
+	require.NotEmpty(t, tableDef.Cols)
+	require.Equal(t, "v", tableDef.Cols[0].Name)
+	require.False(t, tableDef.Cols[0].Default.NullAbility)
+
+	var createSQL string
+	for _, def := range tableDef.Defs {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.Key == catalog.SystemRelAttr_CreateSQL {
+				createSQL = property.Value
+			}
+		}
+	}
+	require.NotEmpty(t, createSQL)
+	envelope, found, err := sqlmongodb.ParseCreateSQLEnvelope(t.Context(), createSQL)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, envelope.Columns, 1)
+	require.True(t, envelope.Columns[0].NotNullable)
+	require.True(t, sqlmongodb.ColumnsToPlan(envelope.Columns)[0].MoType.NotNullable)
+}
+
 func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{
@@ -1079,6 +1159,85 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
+	tests := []struct {
+		name       string
+		literal    string
+		castType   string
+		oid        types.T
+		precision  int32
+		columnName string
+	}{
+		{name: "time", literal: "07:08:09.123456", castType: "time(3)", oid: types.T_time, precision: 3, columnName: "time_lit"},
+		{name: "datetime", literal: "2025-05-06 07:08:09.123456", castType: "datetime(6)", oid: types.T_datetime, precision: 6, columnName: "datetime_lit"},
+		{name: "timestamp", literal: "2025-05-06 07:08:09.123456", castType: "timestamp(6)", oid: types.T_timestamp, precision: 6, columnName: "timestamp_lit"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			sql := "create table ctas_" + test.name + " as select cast('" + test.literal + "' as " + test.castType + ") as " + test.columnName
+			plan, err := buildSingleStmt(mock, t, sql)
+			require.NoError(t, err)
+
+			createTable := plan.GetDdl().GetCreateTable()
+			require.NotEmpty(t, createTable.TableDef.Cols)
+			column := createTable.TableDef.Cols[0]
+			require.Equal(t, test.columnName, column.Name)
+			require.Equal(t, int32(test.oid), column.Typ.Id)
+			require.Equal(t, test.precision, column.Typ.Width)
+			require.Equal(t, test.precision, column.Typ.Scale)
+			if test.oid == types.T_datetime {
+				require.True(t, column.Default.NullAbility)
+			}
+
+			createAsSelect := createTable.GetCreateAsSelectSql()
+			require.Contains(t, createAsSelect, " as "+test.castType+")")
+			require.NotContains(t, createAsSelect, test.castType[:len(test.castType)-1]+",")
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, createAsSelect, 1)
+			require.NoError(t, err)
+			stmt.Free()
+		})
+	}
+}
+
+func TestCreateTableAsSelectKeepsNonTemporalLiteralNotNull(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	plan, err := buildSingleStmt(mock, t, "create table ctas_literal as select 1 as n")
+	require.NoError(t, err)
+
+	column := plan.GetDdl().GetCreateTable().TableDef.Cols[0]
+	require.False(t, column.Default.NullAbility)
+}
+
+func TestCreateTableAsSelectTemporalInsertKeepsTargetScale(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctas, err := buildSingleStmt(mock, t, "create table ctas_datetime6 as select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt")
+	require.NoError(t, err)
+
+	createTable := ctas.GetDdl().GetCreateTable()
+	tableDef := createTable.GetTableDef()
+	tableDef.TblId = 99101
+	mock.ctxt.objects[tableDef.Name] = &ObjectRef{SchemaName: "tpch", ObjName: tableDef.Name, Obj: int64(tableDef.TblId)}
+	mock.ctxt.tables[tableDef.Name] = tableDef
+	mock.ctxt.id2name[tableDef.TblId] = tableDef.Name
+	mock.ctxt.pks[tableDef.Name] = nil
+
+	insertPlan, err := runOneStmt(mock, t, createTable.GetCreateAsSelectSql())
+	require.NoError(t, err)
+
+	var found bool
+	for _, node := range insertPlan.GetQuery().GetNodes() {
+		for _, expr := range node.GetProjectList() {
+			if types.T(expr.GetTyp().Id) == types.T_datetime {
+				found = true
+				require.Equal(t, int32(6), expr.GetTyp().Scale)
+			}
+		}
+	}
+	require.True(t, found)
+}
+
 func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
@@ -1133,6 +1292,24 @@ func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
 			require.Equal(t, test.want, createTable.GetCreateAsSelectSql())
 		})
 	}
+}
+
+func TestCreateTableAsSelectPreservesGroupConcatOrderBy(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(
+		mock,
+		t,
+		"create table ctas_group_concat as select N_REGIONKEY, group_concat(N_NAME order by N_NAME) as names from NATION group by N_REGIONKEY",
+	)
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.Contains(
+		t,
+		createTable.GetCreateAsSelectSql(),
+		"group_concat(`nation`.`N_NAME` order by `N_NAME` separator \",\")",
+	)
 }
 
 func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {

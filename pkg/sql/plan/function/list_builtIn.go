@@ -783,6 +783,10 @@ var supportedStringBuiltIns = []FuncNew{
 				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
 					return newCheckResultWithSuccess(0)
 				}
+			} else if len(inputs) == 3 {
+				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() && inputs[2].Oid.IsMySQLString() {
+					return newCheckResultWithSuccess(1)
+				}
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
@@ -790,6 +794,15 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().iLikeFn
+				},
+			},
+			{
+				overloadId: 1,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},

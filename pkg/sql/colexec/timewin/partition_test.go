@@ -224,6 +224,68 @@ func TestTimeWinPartitionEmitsTrailingWindows(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestGapFillGeneratesOnlyInteriorBuckets(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		gapFill    bool
+		wantStarts []string
+		wantNull   []bool
+	}{
+		{name: "legacy", wantStarts: []string{"2023-08-01 00:00:00", "2023-08-01 00:00:10"}, wantNull: []bool{false, false}},
+		{name: "gapfill", gapFill: true, wantStarts: []string{"2023-08-01 00:00:00", "2023-08-01 00:00:05", "2023-08-01 00:00:10"}, wantNull: []bool{false, true, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			sliding, err := calcDatetime(5, types.Second)
+			require.NoError(t, err)
+			in := makePartInput(t, proc.Mp(), []row{
+				{"2023-08-01 00:00:00", 1, 1},
+				{"2023-08-01 00:00:12", 3, 1},
+			})
+			arg := newPartArg(t, proc, sliding, false)
+			arg.GapFill = tc.gapFill
+			op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{in})
+			arg.AppendChild(op)
+			require.NoError(t, arg.Prepare(proc))
+			var starts []types.Datetime
+			var nulls []bool
+			for {
+				res, callErr := vm.Exec(arg, proc)
+				require.NoError(t, callErr)
+				if res.Batch == nil {
+					break
+				}
+				for i := 0; i < res.Batch.RowCount(); i++ {
+					starts = append(starts, vector.GetFixedAtNoTypeCheck[types.Datetime](res.Batch.Vecs[1], i))
+					nulls = append(nulls, res.Batch.Vecs[0].IsNull(uint64(i)))
+				}
+			}
+			want := make([]types.Datetime, len(tc.wantStarts))
+			for i := range want {
+				want[i] = mustDatetime(t, tc.wantStarts[i])
+			}
+			require.Equal(t, want, starts)
+			require.Equal(t, tc.wantNull, nulls)
+			arg.Free(proc, false, nil)
+			in.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestGapFillResourceAccountingLimits(t *testing.T) {
+	arg := &TimeWin{GapFill: true}
+	ctr := container{partitionWindows: maxGapFillRowsPerPartition + 1}
+	require.ErrorContains(t, ctr.accountGapFillWindow(arg), "partition")
+
+	ctr = container{gapFillWindows: maxGapFillRowsTotal}
+	require.ErrorContains(t, ctr.accountGapFillWindow(arg), "total")
+
+	ctr = container{partitionWindows: maxGapFillRowsPerPartition - 1, gapFillWindows: maxGapFillRowsTotal - 1}
+	require.NoError(t, ctr.accountGapFillWindow(arg))
+}
+
 // A single partition must behave exactly like the unpartitioned operator.
 func TestTimeWinSinglePartitionMatchesNoPartition(t *testing.T) {
 	rows := []row{

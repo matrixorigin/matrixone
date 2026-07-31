@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -338,13 +339,26 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			Alg:  plan.CompressType_Lz4,
 			Typ:  *typ,
 			Default: &plan.Default{
-				NullAbility:  !expr.Typ.NotNullable,
+				NullAbility:  ctasExprCanBeNull(expr),
 				Expr:         nil,
 				OriginString: defaultVal,
 			},
 		}
 	}
 	return cols, builder.qry, nil
+}
+
+func ctasExprCanBeNull(expr *Expr) bool {
+	if !expr.Typ.NotNullable {
+		return true
+	}
+
+	// MySQL CTAS creates nullable columns for explicit DATETIME casts, even
+	// when the source expression is a non-NULL literal. Keep this CTAS-only
+	// metadata rule separate from normal expression nullability propagation.
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
+		types.T(expr.Typ.Id) == types.T_datetime
 }
 
 func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
@@ -1129,6 +1143,24 @@ func buildCreateTable(
 					Properties: properties,
 				},
 			}})
+	} else if stmt.MongoDBParam != nil {
+		if err := ensureMongoDBTableSurfaceEnabled(ctx.GetContext()); err != nil {
+			return nil, err
+		}
+		spec, err := sqlmongodb.ParseTableMappingSpec(ctx.GetContext(), stmt.MongoDBParam, stmt.Defs, createTable.TableDef)
+		if err != nil {
+			return nil, err
+		}
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqlmongodb.BuildCreateSQLEnvelope(spec.Mapping)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
 	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
@@ -1267,7 +1299,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
 
-	if stmt.Param != nil || stmt.IcebergParam != nil {
+	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
 			return err
 		}
@@ -1990,7 +2022,7 @@ func appendCheckDef(
 	}
 
 	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
-	binder.allowCanonicalNameConstCast()
+	binder.enableCanonicalNameConstValueCast()
 	checkExpr, err := binder.BindExpr(canonicalClause.Exprs[0].Expr, 0, true)
 	if err != nil {
 		return err
