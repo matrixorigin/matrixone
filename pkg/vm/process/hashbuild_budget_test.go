@@ -1333,6 +1333,15 @@ func TestOpenProcessGenerationClampsStaleResolvedCapAtomically(t *testing.T) {
 	if _, err = budget.OpenGenerationWithCap(2, 100); !errors.Is(err, ErrHashBuildBudgetInvalid) {
 		t.Fatalf("explicit oversized generation cap returned %v", err)
 	}
+	if _, err = budget.OpenGenerationWithSpillCaps(
+		3, 100, 0, 0); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("explicit oversized spill generation cap returned %v", err)
+	}
+	budget.Close()
+	if _, err = budget.OpenGenerationWithSpillCaps(
+		4, 40, 0, 0); !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("spill generation opened after budget close: %v", err)
+	}
 }
 
 func TestHashBuildBudgetDefensiveAndProviderFailurePaths(t *testing.T) {

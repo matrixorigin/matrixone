@@ -866,32 +866,8 @@ func (b *HashBuildBudget) OpenGenerationWithCap(id, cap uint64) (*HashBuildBudge
 // OpenGenerationWithSpillCaps opens a generation with explicit memory, disk,
 // and file-descriptor ceilings. Zero spill values use the documented defaults.
 func (b *HashBuildBudget) OpenGenerationWithSpillCaps(id, memoryCap, spillDiskCap, spillFDCap uint64) (*HashBuildBudgetGeneration, error) {
-	g, err := b.OpenGenerationWithCap(id, memoryCap)
-	if err != nil {
-		return nil, err
-	}
-	b.mu.Lock()
-	if spillDiskCap == 0 {
-		spillDiskCap = defaultSpillCap(memoryCap)
-	}
-	if spillFDCap == 0 {
-		spillFDCap = configuredSpillFDCap(memoryCap)
-	}
-	if spillDiskCap > b.spillDiskCap {
-		spillDiskCap = b.spillDiskCap
-	}
-	if spillFDCap > b.spillFDConfiguredCap {
-		spillFDCap = b.spillFDConfiguredCap
-	}
-	effectiveFDCap := spillFDCap
-	if effectiveFDCap > b.spillFDCap {
-		effectiveFDCap = b.spillFDCap
-	}
-	g.spillDiskCap = spillDiskCap
-	g.spillFDConfiguredCap = spillFDCap
-	g.spillFDCap = effectiveFDCap
-	b.mu.Unlock()
-	return g, nil
+	return b.openGenerationWithSpillCaps(
+		id, memoryCap, spillDiskCap, spillFDCap, false)
 }
 
 // openProcessGeneration opens the generation selected by GetHashBuildBudget.
@@ -903,11 +879,27 @@ func (b *HashBuildBudget) OpenGenerationWithSpillCaps(id, memoryCap, spillDiskCa
 func (b *HashBuildBudget) openProcessGeneration(
 	id, requestedMemoryCap, spillDiskCap uint64,
 ) (*HashBuildBudgetGeneration, error) {
-	if b == nil || requestedMemoryCap == 0 {
+	return b.openGenerationWithSpillCaps(
+		id, requestedMemoryCap, spillDiskCap, 0, true)
+}
+
+// openGenerationWithSpillCaps validates and constructs a complete generation
+// under one aggregate lock. Process-owned cap samples may become stale and are
+// clamped to the current live aggregate; explicit public configuration remains
+// strict.
+func (b *HashBuildBudget) openGenerationWithSpillCaps(
+	id, memoryCap, spillDiskCap, spillFDCap uint64,
+	clampStaleProcessCap bool,
+) (*HashBuildBudgetGeneration, error) {
+	if b == nil || memoryCap == 0 {
+		message := "invalid hash build generation cap"
+		if clampStaleProcessCap {
+			message = "invalid process hash build generation cap"
+		}
 		return nil, &HashBuildBudgetError{
 			Kind:      HashBuildBudgetErrorInvalid,
-			Requested: requestedMemoryCap,
-			Message:   "invalid process hash build generation cap",
+			Requested: memoryCap,
+			Message:   message,
 		}
 	}
 
@@ -920,8 +912,15 @@ func (b *HashBuildBudget) openProcessGeneration(
 		}
 	}
 
-	memoryCap := requestedMemoryCap
+	requestedMemoryCap := memoryCap
 	if memoryCap > b.aggregateCap {
+		if !clampStaleProcessCap {
+			return nil, &HashBuildBudgetError{
+				Kind:      HashBuildBudgetErrorInvalid,
+				Requested: memoryCap,
+				Cap:       b.aggregateCap,
+			}
+		}
 		memoryCap = b.aggregateCap
 	}
 	if memoryCap == 0 {
@@ -939,11 +938,13 @@ func (b *HashBuildBudget) openProcessGeneration(
 	if spillDiskCap > b.spillDiskCap {
 		spillDiskCap = b.spillDiskCap
 	}
-	configuredFDCap := configuredSpillFDCap(memoryCap)
-	if configuredFDCap > b.spillFDConfiguredCap {
-		configuredFDCap = b.spillFDConfiguredCap
+	if spillFDCap == 0 {
+		spillFDCap = configuredSpillFDCap(memoryCap)
 	}
-	effectiveFDCap := configuredFDCap
+	if spillFDCap > b.spillFDConfiguredCap {
+		spillFDCap = b.spillFDConfiguredCap
+	}
+	effectiveFDCap := spillFDCap
 	if effectiveFDCap > b.spillFDCap {
 		effectiveFDCap = b.spillFDCap
 	}
@@ -953,7 +954,7 @@ func (b *HashBuildBudget) openProcessGeneration(
 		id:                   id,
 		cap:                  memoryCap,
 		spillDiskCap:         spillDiskCap,
-		spillFDConfiguredCap: configuredFDCap,
+		spillFDConfiguredCap: spillFDCap,
 		spillFDCap:           effectiveFDCap,
 	}, nil
 }
