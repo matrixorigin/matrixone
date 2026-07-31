@@ -135,6 +135,35 @@ func TestLimit(t *testing.T) {
 	}
 }
 
+func TestLimitDoesNotMutateInputBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := colexec.MakeMockBatchs(proc.Mp())
+	inputRows := input.RowCount()
+	inputLengths := make([]int, len(input.Vecs))
+	for i := range input.Vecs {
+		inputLengths[i] = input.Vecs[i].Length()
+	}
+
+	arg := NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1))
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, inputRows, input.RowCount())
+	for i := range input.Vecs {
+		require.Equal(t, inputLengths[i], input.Vecs[i].Length())
+	}
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func BenchmarkLimit(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs := []limitTestCase{
