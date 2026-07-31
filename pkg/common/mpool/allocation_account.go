@@ -38,10 +38,18 @@ const (
 )
 
 var (
-	ErrAllocationAccountCapacity = errors.New("allocation account capacity exceeded")
-	ErrAllocationAccountSealed   = errors.New("allocation account is sealed")
-	ErrAllocationAccountInvalid  = errors.New("invalid allocation account")
-	ErrAllocationAccountStale    = errors.New("stale allocation account handle")
+	ErrAllocationAccountCapacity  = errors.New("allocation account capacity exceeded")
+	ErrAllocationAccountSealed    = errors.New("allocation account is sealed")
+	ErrAllocationAccountInvalid   = errors.New("invalid allocation account")
+	ErrAllocationAccountStale     = errors.New("stale allocation account handle")
+	ErrAllocationAccountMismatch  = errors.New("allocation account ownership mismatch")
+	ErrAllocationAllocatorLimit   = errors.New("allocation exceeds allocator size limit")
+	ErrAllocationAccountInvariant = errors.New(
+		"allocation account invariant failure",
+	)
+	ErrAllocationAdmissionSuspended = errors.New(
+		"allocation account admission is suspended",
+	)
 	ErrAllocationMetadataSlots   = errors.New("allocation metadata slots exhausted")
 	ErrAllocationGenerationSlots = errors.New("allocation account generation slots exhausted")
 	ErrAllocationAccountLive     = errors.New("allocation account still owns memory")
@@ -77,6 +85,73 @@ type AllocationAccountSnapshot struct {
 	Used   uint64
 	Peak   uint64
 	Sealed bool
+}
+
+// AllocationAccountTerminalState classifies the one immutable snapshot
+// exported by an execution generation. A nonzero account at terminal cleanup
+// is an ownership invariant failure, not recoverable capacity pressure.
+type AllocationAccountTerminalState uint8
+
+const (
+	AllocationAccountTerminalValid AllocationAccountTerminalState = iota + 1
+	AllocationAccountTerminalInvariantFailure
+)
+
+// AllocationFailureReason is the non-overlapping control-flow reason exposed
+// to later pressure handling. Only Capacity is eligible for reclaim/spill or
+// a smaller operation retry; every other reason is terminal for that logical
+// operation or generation.
+type AllocationFailureReason uint8
+
+const (
+	AllocationFailureNone AllocationFailureReason = iota
+	AllocationFailureCapacity
+	AllocationFailureSealed
+	AllocationFailureMismatch
+	AllocationFailureAllocatorLimit
+	AllocationFailureInvariant
+	AllocationFailureSuspended
+)
+
+func AllocationFailureReasonOf(err error) AllocationFailureReason {
+	switch {
+	case errors.Is(err, ErrAllocationAccountInvariant):
+		return AllocationFailureInvariant
+	case errors.Is(err, ErrAllocationAccountMismatch):
+		return AllocationFailureMismatch
+	case errors.Is(err, ErrAllocationAccountSealed):
+		return AllocationFailureSealed
+	case errors.Is(err, ErrAllocationAllocatorLimit):
+		return AllocationFailureAllocatorLimit
+	case errors.Is(err, ErrAllocationAdmissionSuspended):
+		return AllocationFailureSuspended
+	case errors.Is(err, ErrAllocationAccountCapacity),
+		errors.Is(err, ErrAllocationMetadataSlots):
+		return AllocationFailureCapacity
+	default:
+		return AllocationFailureNone
+	}
+}
+
+func IsRetryableAllocationCapacity(err error) bool {
+	return AllocationFailureReasonOf(err) == AllocationFailureCapacity
+}
+
+// AllocationAccountTerminalSnapshot is the immutable terminal observation of
+// one generation. Failure snapshots retain the live-byte value observed at
+// the terminal boundary even if a later physical Free drains the tombstone.
+type AllocationAccountTerminalSnapshot struct {
+	AllocationAccountSnapshot
+	State AllocationAccountTerminalState
+}
+
+// AllocationAccountCheckpoint records the physical live-byte boundary before
+// a retryable logical operation. The owner performs its own private-allocation
+// rollback, then ValidateRollback proves that the same generation returned to
+// this exact boundary before a retry can begin.
+type AllocationAccountCheckpoint struct {
+	Handle AllocationAccountHandle
+	Used   uint64
 }
 
 // AllocationCapacityController lets an account share a higher-level aggregate
@@ -120,6 +195,78 @@ func (a *AllocationAccount) Snapshot() AllocationAccountSnapshot {
 		Peak:   a.peak.Load(),
 		Sealed: state&allocationAccountSealedBit != 0,
 	}
+}
+
+func (a *AllocationAccount) Checkpoint() (AllocationAccountCheckpoint, error) {
+	if a == nil || a.registry == nil || a.handle == 0 {
+		return AllocationAccountCheckpoint{}, ErrAllocationAccountInvalid
+	}
+	resolved, ok := a.registry.Resolve(a.handle)
+	if !ok || resolved != a {
+		return AllocationAccountCheckpoint{}, ErrAllocationAccountStale
+	}
+	snapshot := a.Snapshot()
+	if snapshot.Sealed {
+		return AllocationAccountCheckpoint{}, ErrAllocationAccountSealed
+	}
+	return AllocationAccountCheckpoint{
+		Handle: snapshot.Handle,
+		Used:   snapshot.Used,
+	}, nil
+}
+
+// ValidateRollback proves that an owner restored its complete physical
+// allocation boundary. It never mutates accounting: only physical Free owns a
+// release, so a helper cannot hide a leaked allocation by decrementing usage.
+func (a *AllocationAccount) ValidateRollback(
+	checkpoint AllocationAccountCheckpoint,
+) error {
+	if a == nil || checkpoint.Handle == 0 {
+		return ErrAllocationAccountInvalid
+	}
+	if checkpoint.Handle != a.handle {
+		return fmt.Errorf(
+			"%w: checkpoint=%d account=%d",
+			ErrAllocationAccountMismatch,
+			checkpoint.Handle,
+			a.handle,
+		)
+	}
+	snapshot := a.Snapshot()
+	if snapshot.Sealed {
+		return ErrAllocationAccountSealed
+	}
+	if snapshot.Used != checkpoint.Used {
+		return fmt.Errorf(
+			"%w: checkpoint-used=%d current-used=%d",
+			ErrAllocationAccountInvariant,
+			checkpoint.Used,
+			snapshot.Used,
+		)
+	}
+	return nil
+}
+
+// RollbackToCheckpoint runs the owner's physical cleanup and then proves the
+// exact generation boundary. It deliberately does not own or synthesize any
+// release: MPool allocation metadata remains the sole release authority.
+func (a *AllocationAccount) RollbackToCheckpoint(
+	checkpoint AllocationAccountCheckpoint,
+	rollback func() error,
+) error {
+	if rollback == nil {
+		return ErrAllocationAccountInvalid
+	}
+	if a == nil || checkpoint.Handle != a.handle {
+		return ErrAllocationAccountMismatch
+	}
+	if a.Snapshot().Sealed {
+		return ErrAllocationAccountSealed
+	}
+	if err := rollback(); err != nil {
+		return err
+	}
+	return a.ValidateRollback(checkpoint)
 }
 
 func (a *AllocationAccount) acquire(capacity uint64) error {
@@ -221,6 +368,9 @@ func (a *AllocationAccount) release(capacity uint64) {
 		}
 		next := state - capacity
 		if a.state.CompareAndSwap(state, next) {
+			if next&allocationAccountUsedMask == 0 {
+				a.registry.tryDrainTombstone(a)
+			}
 			return
 		}
 	}
@@ -247,6 +397,9 @@ func (a *AllocationAccount) Seal() AllocationAccountSnapshot {
 
 type allocationAccountRegistrySlot struct {
 	account atomic.Pointer[AllocationAccount]
+	// terminal and tombstone are protected by AllocationAccountRegistry.mu.
+	terminal  *AllocationAccountTerminalSnapshot
+	tombstone bool
 }
 
 // AllocationAccountRegistry bounds live generations and accounted-allocation
@@ -258,6 +411,8 @@ type AllocationAccountRegistry struct {
 	slots       []allocationAccountRegistrySlot
 	generations []uint32
 	free        []uint32
+	suspended   bool
+	tombstones  uint32
 
 	maxAllocations  uint64
 	liveAllocations atomic.Uint64
@@ -299,6 +454,9 @@ func (r *AllocationAccountRegistry) OpenWithController(
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.suspended {
+		return nil, ErrAllocationAdmissionSuspended
+	}
 	for len(r.free) > 0 {
 		index := len(r.free) - 1
 		slot := r.free[index]
@@ -319,6 +477,156 @@ func (r *AllocationAccountRegistry) OpenWithController(
 		return account, nil
 	}
 	return nil, ErrAllocationGenerationSlots
+}
+
+// CompleteTerminal seals one generation and publishes its immutable terminal
+// state exactly once. A nonzero terminal state remains resolvable as a
+// release-capable tombstone and suspends new generations on this registry.
+// The tombstone is removed automatically after the last physical Free.
+//
+// first is true only for the call that created the immutable snapshot. A
+// repeated call while a tombstone is live returns the same snapshot with
+// first=false.
+func (r *AllocationAccountRegistry) CompleteTerminal(
+	account *AllocationAccount,
+) (snapshot AllocationAccountTerminalSnapshot, first bool, err error) {
+	if r == nil || account == nil || account.registry != r {
+		return snapshot, false, ErrAllocationAccountInvalid
+	}
+	account.Seal()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	slot := account.handle.slot()
+	if slot == 0 || uint64(slot) >= uint64(len(r.slots)) ||
+		r.slots[slot].account.Load() != account {
+		return snapshot, false, ErrAllocationAccountStale
+	}
+	entry := &r.slots[slot]
+	if entry.terminal != nil {
+		snapshot = *entry.terminal
+		if snapshot.State == AllocationAccountTerminalInvariantFailure {
+			return snapshot, false, newAllocationTerminalInvariantError(snapshot)
+		}
+		return snapshot, false, nil
+	}
+
+	current := account.Snapshot()
+	if !current.Sealed || account.inflight.Load() != 0 {
+		return AllocationAccountTerminalSnapshot{
+				AllocationAccountSnapshot: current,
+				State:                     AllocationAccountTerminalInvariantFailure,
+			}, false, fmt.Errorf(
+				"%w: terminal account is not quiescent",
+				ErrAllocationAccountInvariant,
+			)
+	}
+	snapshot = AllocationAccountTerminalSnapshot{
+		AllocationAccountSnapshot: current,
+		State:                     AllocationAccountTerminalValid,
+	}
+	if current.Used == 0 {
+		entry.terminal = &snapshot
+		r.removeSlotLocked(slot, account)
+		return snapshot, true, nil
+	}
+
+	snapshot.State = AllocationAccountTerminalInvariantFailure
+	entry.terminal = &snapshot
+	entry.tombstone = true
+	r.tombstones++
+	r.suspended = true
+	// A physical Free may have raced the terminal observation. The immutable
+	// failure snapshot remains truthful at its linearization point, while a
+	// now-empty tombstone can be removed immediately.
+	if account.Snapshot().Used == 0 && account.inflight.Load() == 0 {
+		r.removeTombstoneLocked(slot, account)
+	}
+	return snapshot, true, newAllocationTerminalInvariantError(snapshot)
+}
+
+func newAllocationTerminalInvariantError(
+	snapshot AllocationAccountTerminalSnapshot,
+) error {
+	return fmt.Errorf(
+		"%w: handle=%d used=%d peak=%d limit=%d",
+		ErrAllocationAccountInvariant,
+		snapshot.Handle,
+		snapshot.Used,
+		snapshot.Peak,
+		snapshot.Limit,
+	)
+}
+
+func (r *AllocationAccountRegistry) removeSlotLocked(
+	slot uint32,
+	account *AllocationAccount,
+) {
+	entry := &r.slots[slot]
+	if entry.account.Load() != account {
+		return
+	}
+	entry.account.Store(nil)
+	entry.terminal = nil
+	entry.tombstone = false
+	if r.generations[slot] != math.MaxUint32 {
+		r.free = append(r.free, slot)
+	}
+}
+
+func (r *AllocationAccountRegistry) removeTombstoneLocked(
+	slot uint32,
+	account *AllocationAccount,
+) {
+	entry := &r.slots[slot]
+	if entry.account.Load() != account || !entry.tombstone {
+		return
+	}
+	if r.tombstones == 0 {
+		panic("allocation account tombstone underflow")
+	}
+	r.tombstones--
+	r.removeSlotLocked(slot, account)
+	r.suspended = r.tombstones != 0
+}
+
+func (r *AllocationAccountRegistry) tryDrainTombstone(
+	account *AllocationAccount,
+) {
+	if r == nil || account == nil || account.Snapshot().Used != 0 ||
+		account.inflight.Load() != 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	slot := account.handle.slot()
+	if slot == 0 || uint64(slot) >= uint64(len(r.slots)) {
+		return
+	}
+	if r.slots[slot].account.Load() == account &&
+		r.slots[slot].tombstone &&
+		account.Snapshot().Used == 0 &&
+		account.inflight.Load() == 0 {
+		r.removeTombstoneLocked(slot, account)
+	}
+}
+
+func (r *AllocationAccountRegistry) AdmissionSuspended() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.suspended
+}
+
+func (r *AllocationAccountRegistry) LiveTombstones() uint32 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.tombstones
 }
 
 func (r *AllocationAccountRegistry) Resolve(
@@ -360,10 +668,7 @@ func (r *AllocationAccountRegistry) Finalize(
 		account.inflight.Load() != 0 {
 		return current, ErrAllocationAccountLive
 	}
-	r.slots[slot].account.Store(nil)
-	if r.generations[slot] != math.MaxUint32 {
-		r.free = append(r.free, slot)
-	}
+	r.removeSlotLocked(slot, account)
 	return account.Snapshot(), nil
 }
 
@@ -420,9 +725,9 @@ func (r *AllocationAccountRegistry) PeakAllocationMetadata() uint64 {
 }
 
 type allocationAccountRequest struct {
-	account    *AllocationAccount
-	owner      AllocationOwner
-	site       AllocationSite
+	account *AllocationAccount
+	owner   AllocationOwner
+	site    AllocationSite
 	// checkpoint is nil for every public caller. Same-package fault tests use
 	// it to prove rollback at each unpublished transaction boundary.
 	checkpoint func(allocationCheckpoint) error

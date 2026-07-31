@@ -284,6 +284,9 @@ func (c *Compile) clear() {
 		c.fuzzys[i].release()
 	}
 
+	if err := c.finishAllocationAccountAttempt(); err != nil {
+		logutil.Errorf("allocation account terminal cleanup failed: %v", err)
+	}
 	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scopes = c.scopes[:0]
@@ -317,6 +320,10 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.resourceAttemptOwnerEligible = false
+	c.allocationAccountRegistry = nil
+	c.allocationAccountLimit = 0
+	c.allocationTerminalExporter = nil
+	c.allocationAttempt = nil
 	c.isPrepare = false
 	c.hasMergeOp = false
 	c.needBlock = false
@@ -6986,6 +6993,19 @@ func (c *Compile) SetOriginSQL(sql string) {
 // resource root enforces that at most one eligible Compile becomes the owner.
 func (c *Compile) SetResourceAttemptOwnerEligible() {
 	c.resourceAttemptOwnerEligible = true
+}
+
+// ConfigureAllocationAccountLifecycle installs the dormant generation
+// provider used by owner-activation PRs. A nil registry keeps production on
+// the legacy path and opens no generation.
+func (c *Compile) ConfigureAllocationAccountLifecycle(
+	registry *mpool.AllocationAccountRegistry,
+	limit uint64,
+	exporter func(mpool.AllocationAccountTerminalSnapshot),
+) {
+	c.allocationAccountRegistry = registry
+	c.allocationAccountLimit = limit
+	c.allocationTerminalExporter = exporter
 }
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)) {

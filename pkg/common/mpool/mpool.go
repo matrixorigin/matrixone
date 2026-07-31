@@ -816,7 +816,12 @@ func (mp *MPool) allocAccountedWithDetailK(
 	// reject unexpected alloc size.
 	if sz < 0 || sz > maxAllocationSize() {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
-		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
+		return nil, fmt.Errorf(
+			"%w: requested=%d maximum=%d",
+			ErrAllocationAllocatorLimit,
+			sz,
+			maxAllocationSize(),
+		)
 	}
 	if sz == 0 {
 		return nil, nil
@@ -1103,7 +1108,7 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHea
 		}
 		if hdr.isAccounted() {
 			if !offHeap {
-				return nil, ErrAllocationAccountInvalid
+				return nil, ErrAllocationAccountMismatch
 			}
 			accounted := allocationAccountRequest{
 				account: lease.account,
@@ -1222,7 +1227,7 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 
 	if hdr.isAccounted() {
 		if !offHeap {
-			return nil, ErrAllocationAccountInvalid
+			return nil, ErrAllocationAccountMismatch
 		}
 		request := allocationAccountRequest{
 			account: lease.account,
@@ -1348,7 +1353,13 @@ func MakeSliceAccounted[T any](
 	if elementSize == 0 ||
 		maxSize <= 0 ||
 		uint64(n) > uint64(maxSize)/uint64(elementSize) {
-		return nil, ErrAllocationAccountInvalid
+		return nil, fmt.Errorf(
+			"%w: elements=%d element-size=%d maximum=%d",
+			ErrAllocationAllocatorLimit,
+			n,
+			elementSize,
+			maxSize,
+		)
 	}
 	size := int(uint64(n) * uint64(elementSize))
 	bs, err := mp.AllocAccounted(size, account, owner, site)

@@ -15,6 +15,7 @@
 package message
 
 import (
+	"context"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -33,6 +34,32 @@ import (
 type testMessage struct {
 	tag       int32
 	destroyed *atomic.Int32
+}
+
+type accountedTestMessage struct {
+	mp     *mpool.MPool
+	buffer []byte
+}
+
+func (m *accountedTestMessage) Serialize() []byte { return nil }
+
+func (m *accountedTestMessage) Deserialize([]byte) Message { return m }
+
+func (m *accountedTestMessage) NeedBlock() bool { return true }
+
+func (m *accountedTestMessage) GetMsgTag() int32 { return 1 }
+
+func (m *accountedTestMessage) GetReceiverAddr() MessageAddress {
+	return AddrBroadCastOnCurrentCN()
+}
+
+func (m *accountedTestMessage) DebugString() string { return "accounted test message" }
+
+func (m *accountedTestMessage) Destroy() {
+	if m.buffer != nil {
+		m.mp.Free(m.buffer)
+		m.buffer = nil
+	}
 }
 
 func (m testMessage) Serialize() []byte {
@@ -95,6 +122,74 @@ func TestMessageBoardResetDestroysQueuedMessages(t *testing.T) {
 	require.Equal(t, int32(2), destroyed.Load())
 	require.Empty(t, mb.messages)
 	require.Empty(t, mb.waiters)
+}
+
+func TestMessageBoardCloseAndDrainRejectsLateMessages(t *testing.T) {
+	var destroyed atomic.Int32
+	mb := NewMessageBoard()
+	SendMessage(testMessage{tag: 1, destroyed: &destroyed}, mb)
+
+	receiver := NewMessageReceiver(
+		[]int32{2},
+		AddrBroadCastOnCurrentCN(),
+		mb,
+	)
+	waiting := make(chan error, 1)
+	go func() {
+		_, _, err := receiver.ReceiveMessage(true, context.Background())
+		waiting <- err
+	}()
+
+	require.True(t, mb.CloseAndDrain())
+	require.False(t, mb.CloseAndDrain())
+	require.ErrorContains(t, <-waiting, "message board is closed")
+	require.Equal(t, int32(1), destroyed.Load())
+	require.Empty(t, mb.messages)
+	require.Empty(t, mb.waiters)
+
+	SendMessage(testMessage{tag: 2, destroyed: &destroyed}, mb)
+	require.Equal(t, int32(2), destroyed.Load())
+	require.NotSame(t, mb, mb.Reset())
+}
+
+func TestMessageBoardCloseAndDrainRemovesMultiCNRegistration(t *testing.T) {
+	center := &MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*MessageBoard),
+		RwMutex:       &sync.Mutex{},
+	}
+	stmtID := uuid.New()
+	mb := NewMessageBoard().SetMultiCN(center, stmtID)
+	require.Same(t, mb, center.StmtIDToBoard[stmtID])
+
+	require.True(t, mb.CloseAndDrain())
+	_, ok := center.StmtIDToBoard[stmtID]
+	require.False(t, ok)
+}
+
+func TestClosedMessageBoardLatePayloadDrainsOriginalGeneration(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	buffer, err := mp.AllocAccounted(64, account, 1, 1)
+	require.NoError(t, err)
+
+	mb := NewMessageBoard()
+	require.True(t, mb.CloseAndDrain())
+	terminal, first, err := registry.CompleteTerminal(account)
+	require.True(t, first)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.Equal(t, uint64(cap(buffer)), terminal.Used)
+	require.True(t, registry.AdmissionSuspended())
+
+	// A producer that already owns a payload cannot republish it after the
+	// attempt boundary. Destroy performs the physical Free against the account
+	// captured by the allocation, even though that generation is now sealed.
+	SendMessage(&accountedTestMessage{mp: mp, buffer: buffer}, mb)
+	require.False(t, registry.AdmissionSuspended())
+	_, ok := registry.Resolve(account.Handle())
+	require.False(t, ok)
 }
 
 func TestMessageBoardFinalizerDestroysQueuedMessages(t *testing.T) {

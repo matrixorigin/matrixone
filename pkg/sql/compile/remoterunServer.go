@@ -188,7 +188,7 @@ func (receiver *messageReceiverOnServer) waitUntilDisconnectedOrCancelled() {
 	}
 }
 
-func handlePipelineMessage(receiver *messageReceiverOnServer) error {
+func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
@@ -251,6 +251,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		var allocationAttempt *statementAllocationAttempt
 		var runErr error
 		defer func() {
 			// Capture operator and descendant facts before cleanup. The MPool
@@ -262,6 +263,11 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			descendant := runCompile.anal.remoteResourceSummary()
 			expectedDirect := countExpectedRemoteScopes(runCompile.scopes, receiver.cnInformation.cnAddr)
 			memoryPool := runCompile.proc.Mp()
+			if allocationAttempt != nil {
+				runCompile.allocationAttempt = nil
+				_, terminalErr := allocationAttempt.finish()
+				err = errors.Join(err, terminalErr)
+			}
 			runCompile.clear()
 			localMemory, localMemoryQuality := memoryPool.ResourceSnapshot()
 			aggregate := composeRemoteResourceAggregate(
@@ -301,6 +307,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 
 		runCompile.scopes = []*Scope{s}
+		allocationAttempt, runErr = runCompile.beginAllocationAccountAttempt()
+		if runErr != nil {
+			return runErr
+		}
 		runCompile.InitPipelineContextToExecuteQuery()
 		normalizeRemoteDispatchReceiverAddresses(s, runCompile.addr)
 

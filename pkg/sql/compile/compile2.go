@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"math"
 	gotrace "runtime/trace"
 	"strings"
@@ -258,8 +259,22 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	attemptAnal := runC.anal
 	var coordinatorPhaseStart time.Time
 	var coordinatorPhaseBase time.Duration
+	var allocationAttempt *statementAllocationAttempt
+	finishAllocationAttempt := func() error {
+		if allocationAttempt == nil {
+			return nil
+		}
+		attempt := allocationAttempt
+		allocationAttempt = nil
+		if runC != nil && runC.allocationAttempt == attempt {
+			runC.allocationAttempt = nil
+		}
+		_, finishErr := attempt.finish()
+		return finishErr
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			_ = finishAllocationAttempt()
 			if attemptOpen {
 				if !coordinatorPhaseStart.IsZero() {
 					attemptPreRunWall = coordinatorPhaseBase + time.Since(coordinatorPhaseStart)
@@ -288,7 +303,11 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
 
 		// running.
-		if err = runC.prePipelineInitializer(); err == nil {
+		allocationAttempt, err = runC.beginAllocationAccountAttempt()
+		if err == nil {
+			err = runC.prePipelineInitializer()
+		}
+		if err == nil {
 			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
 			attemptPreRunWall = preRunWall
 			runC.MessageBoard.BeforeRunonce()
@@ -315,6 +334,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		attemptPreRunWall = preRunWall
 		coordinatorPhaseStart = time.Time{}
 		coordinatorPhaseBase = 0
+		if terminalErr := finishAllocationAttempt(); terminalErr != nil {
+			err = errors.Join(err, terminalErr)
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, preRunWall, attemptRemoteWait, stats,
+				attemptScopes, attemptAnal, c.addr, false,
+			)
+			attemptOpen = false
+			return nil, err
+		}
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
@@ -429,6 +457,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		attemptPreRunWall = carriedPreRunWall
 		coordinatorPhaseStart = time.Time{}
 		coordinatorPhaseBase = 0
+	}
+	if terminalErr := finishAllocationAttempt(); terminalErr != nil {
+		err = errors.Join(err, terminalErr)
+		resourceRecorder.finishAttempt(
+			uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+			attemptScopes, attemptAnal, c.addr, false,
+		)
+		attemptOpen = false
+		return nil, err
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
 	if c.uid != "mo_logger" &&
@@ -732,6 +769,7 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	c.copyAllocationAccountLifecycleTo(runC)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)

@@ -302,3 +302,187 @@ func TestAllocationAccountReleaseUnderflow(t *testing.T) {
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)
 }
+
+func TestAllocationAccountTerminalTombstoneSuspendsAdmission(t *testing.T) {
+	registry, err := NewAllocationAccountRegistry(3, 2)
+	require.NoError(t, err)
+	account, err := registry.Open(64)
+	require.NoError(t, err)
+	require.NoError(t, account.acquire(64))
+
+	snapshot, first, err := registry.CompleteTerminal(account)
+	require.ErrorIs(t, err, ErrAllocationAccountInvariant)
+	require.True(t, first)
+	require.Equal(t, AllocationAccountTerminalInvariantFailure, snapshot.State)
+	require.Equal(t, uint64(64), snapshot.Used)
+	require.True(t, snapshot.Sealed)
+	require.True(t, registry.AdmissionSuspended())
+	require.Equal(t, uint32(1), registry.LiveTombstones())
+	require.ErrorIs(t, account.acquire(1), ErrAllocationAccountSealed)
+	_, err = registry.Open(64)
+	require.ErrorIs(t, err, ErrAllocationAdmissionSuspended)
+
+	repeated, first, err := registry.CompleteTerminal(account)
+	require.ErrorIs(t, err, ErrAllocationAccountInvariant)
+	require.False(t, first)
+	require.Equal(t, snapshot, repeated)
+
+	account.release(64)
+	require.False(t, registry.AdmissionSuspended())
+	require.Zero(t, registry.LiveTombstones())
+	_, ok := registry.Resolve(snapshot.Handle)
+	require.False(t, ok)
+
+	next, err := registry.Open(64)
+	require.NoError(t, err)
+	require.NotEqual(t, snapshot.Handle, next.Handle())
+	valid, first, err := registry.CompleteTerminal(next)
+	require.NoError(t, err)
+	require.True(t, first)
+	require.Equal(t, AllocationAccountTerminalValid, valid.State)
+	require.Zero(t, valid.Used)
+	_, ok = registry.Resolve(valid.Handle)
+	require.False(t, ok)
+}
+
+func TestAllocationAccountMultipleTombstonesDrainBeforeResume(t *testing.T) {
+	registry, err := NewAllocationAccountRegistry(3, 2)
+	require.NoError(t, err)
+	first, err := registry.Open(64)
+	require.NoError(t, err)
+	second, err := registry.Open(64)
+	require.NoError(t, err)
+	require.NoError(t, first.acquire(1))
+	require.NoError(t, second.acquire(1))
+
+	_, created, err := registry.CompleteTerminal(first)
+	require.ErrorIs(t, err, ErrAllocationAccountInvariant)
+	require.True(t, created)
+	_, created, err = registry.CompleteTerminal(second)
+	require.ErrorIs(t, err, ErrAllocationAccountInvariant)
+	require.True(t, created)
+	require.Equal(t, uint32(2), registry.LiveTombstones())
+
+	first.release(1)
+	require.True(t, registry.AdmissionSuspended())
+	require.Equal(t, uint32(1), registry.LiveTombstones())
+	second.release(1)
+	require.False(t, registry.AdmissionSuspended())
+	require.Zero(t, registry.LiveTombstones())
+}
+
+func TestAllocationAccountOpenSuspendLinearization(t *testing.T) {
+	const contenders = 128
+
+	registry, err := NewAllocationAccountRegistry(contenders+1, 1)
+	require.NoError(t, err)
+	leaked, err := registry.Open(1)
+	require.NoError(t, err)
+	require.NoError(t, leaked.acquire(1))
+
+	start := make(chan struct{})
+	opened := make(chan *AllocationAccount, contenders)
+	var wait sync.WaitGroup
+	wait.Add(contenders)
+	for range contenders {
+		go func() {
+			defer wait.Done()
+			<-start
+			account, openErr := registry.Open(1)
+			if openErr == nil {
+				opened <- account
+				return
+			}
+			if !errors.Is(openErr, ErrAllocationAdmissionSuspended) &&
+				!errors.Is(openErr, ErrAllocationGenerationSlots) {
+				t.Errorf("unexpected open error: %v", openErr)
+			}
+		}()
+	}
+	close(start)
+	_, first, err := registry.CompleteTerminal(leaked)
+	require.ErrorIs(t, err, ErrAllocationAccountInvariant)
+	require.True(t, first)
+	wait.Wait()
+	close(opened)
+
+	_, err = registry.Open(1)
+	require.ErrorIs(t, err, ErrAllocationAdmissionSuspended)
+	for account := range opened {
+		_, _, finishErr := registry.CompleteTerminal(account)
+		require.NoError(t, finishErr)
+	}
+	leaked.release(1)
+	require.False(t, registry.AdmissionSuspended())
+}
+
+func TestAllocationAccountCheckpointValidation(t *testing.T) {
+	registry, err := NewAllocationAccountRegistry(2, 2)
+	require.NoError(t, err)
+	account, err := registry.Open(8)
+	require.NoError(t, err)
+	other, err := registry.Open(8)
+	require.NoError(t, err)
+
+	checkpoint, err := account.Checkpoint()
+	require.NoError(t, err)
+	require.NoError(t, account.acquire(1))
+	require.ErrorIs(t, account.ValidateRollback(checkpoint), ErrAllocationAccountInvariant)
+	require.NoError(t, account.RollbackToCheckpoint(checkpoint, func() error {
+		account.release(1)
+		return nil
+	}))
+	require.NoError(t, account.ValidateRollback(checkpoint))
+	require.ErrorIs(
+		t,
+		account.RollbackToCheckpoint(checkpoint, nil),
+		ErrAllocationAccountInvalid,
+	)
+
+	otherCheckpoint, err := other.Checkpoint()
+	require.NoError(t, err)
+	require.ErrorIs(t, account.ValidateRollback(otherCheckpoint), ErrAllocationAccountMismatch)
+	called := false
+	require.ErrorIs(t, account.RollbackToCheckpoint(otherCheckpoint, func() error {
+		called = true
+		return nil
+	}), ErrAllocationAccountMismatch)
+	require.False(t, called)
+	account.Seal()
+	require.ErrorIs(t, account.ValidateRollback(checkpoint), ErrAllocationAccountSealed)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	other.Seal()
+	_, err = registry.Finalize(other)
+	require.NoError(t, err)
+}
+
+func TestAllocationFailureReasonsAreNonOverlapping(t *testing.T) {
+	testCases := []struct {
+		err       error
+		reason    AllocationFailureReason
+		retryable bool
+	}{
+		{ErrAllocationAccountCapacity, AllocationFailureCapacity, true},
+		{ErrAllocationMetadataSlots, AllocationFailureCapacity, true},
+		{ErrAllocationAccountSealed, AllocationFailureSealed, false},
+		{ErrAllocationAccountMismatch, AllocationFailureMismatch, false},
+		{ErrAllocationAllocatorLimit, AllocationFailureAllocatorLimit, false},
+		{ErrAllocationAccountInvariant, AllocationFailureInvariant, false},
+		{ErrAllocationAdmissionSuspended, AllocationFailureSuspended, false},
+		{errors.New("unrelated"), AllocationFailureNone, false},
+	}
+	for _, testCase := range testCases {
+		require.Equal(t, testCase.reason, AllocationFailureReasonOf(testCase.err))
+		require.Equal(t, testCase.retryable, IsRetryableAllocationCapacity(testCase.err))
+	}
+
+	// A terminal invariant dominates a joined underlying capacity error, so a
+	// failed terminal cleanup can never enter the pressure retry loop.
+	joined := errors.Join(
+		ErrAllocationAccountCapacity,
+		ErrAllocationAccountInvariant,
+	)
+	require.Equal(t, AllocationFailureInvariant, AllocationFailureReasonOf(joined))
+	require.False(t, IsRetryableAllocationCapacity(joined))
+}

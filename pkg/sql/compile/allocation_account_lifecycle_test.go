@@ -1,0 +1,321 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package compile
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
+)
+
+type allocationLifecycleErrorOperator struct {
+	*colexec.MockOperator
+	err error
+}
+
+func (op *allocationLifecycleErrorOperator) Call(
+	*process.Process,
+) (vm.CallResult, error) {
+	return vm.CancelResult, op.err
+}
+
+func newRunLifecycleCompile(
+	t *testing.T,
+	exporter func(mpool.AllocationAccountTerminalSnapshot),
+) (*Compile, *mpool.AllocationAccountRegistry) {
+	t.Helper()
+	proc := testutil.NewProcess(t)
+	ctrl := gomock.NewController(t)
+	txnClient, txnOperator := newTestTxnClientAndOpWithIsolation(
+		ctrl,
+		txn.TxnIsolation_RC,
+	)
+	proc.Base.TxnClient = txnClient
+	proc.Base.TxnOperator = txnOperator
+	proc.ReplaceTopCtx(context.Background())
+	c := NewCompile(
+		"local",
+		"",
+		"select 1",
+		"",
+		"",
+		nil,
+		proc,
+		nil,
+		false,
+		nil,
+		time.Now(),
+	)
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
+	c.anal = newAnalyzeModule()
+	registry, err := mpool.NewAllocationAccountRegistry(2, 2)
+	require.NoError(t, err)
+	c.ConfigureAllocationAccountLifecycle(registry, 1<<20, exporter)
+	return c, registry
+}
+
+func newTestAllocationLifecycleCompile(
+	t *testing.T,
+	registry *mpool.AllocationAccountRegistry,
+	exporter func(mpool.AllocationAccountTerminalSnapshot),
+) *Compile {
+	t.Helper()
+	return &Compile{
+		proc:                       testutil.NewProcess(t),
+		MessageBoard:               message.NewMessageBoard(),
+		allocationAccountRegistry:  registry,
+		allocationAccountLimit:     1 << 20,
+		allocationTerminalExporter: exporter,
+	}
+}
+
+func TestStatementAllocationAttemptZeroTerminalExportsOnce(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(2, 2)
+	require.NoError(t, err)
+	var exported []mpool.AllocationAccountTerminalSnapshot
+	c := newTestAllocationLifecycleCompile(t, registry, func(
+		snapshot mpool.AllocationAccountTerminalSnapshot,
+	) {
+		exported = append(exported, snapshot)
+	})
+
+	attempt, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	require.NotNil(t, attempt)
+	buffer, err := c.proc.Mp().AllocAccounted(
+		64,
+		attempt.account,
+		1,
+		1,
+	)
+	require.NoError(t, err)
+	c.proc.Mp().Free(buffer)
+
+	require.NoError(t, c.finishAllocationAccountAttempt())
+	require.Len(t, exported, 1)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, exported[0].State)
+	require.Zero(t, exported[0].Used)
+	require.Equal(t, uint64(64), exported[0].Peak)
+	_, ok := registry.Resolve(exported[0].Handle)
+	require.False(t, ok)
+
+	repeated, err := attempt.finish()
+	require.NoError(t, err)
+	require.Equal(t, exported[0], repeated)
+	require.Len(t, exported, 1)
+	require.NotSame(t, c.MessageBoard, c.MessageBoard.Reset())
+}
+
+func TestStatementAllocationAttemptLateFreeDrainsTombstone(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(2, 2)
+	require.NoError(t, err)
+	var exported []mpool.AllocationAccountTerminalSnapshot
+	c := newTestAllocationLifecycleCompile(t, registry, func(
+		snapshot mpool.AllocationAccountTerminalSnapshot,
+	) {
+		exported = append(exported, snapshot)
+	})
+	attempt, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	buffer, err := c.proc.Mp().AllocAccounted(
+		64,
+		attempt.account,
+		1,
+		1,
+	)
+	require.NoError(t, err)
+
+	err = c.finishAllocationAccountAttempt()
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.Len(t, exported, 1)
+	require.Equal(
+		t,
+		mpool.AllocationAccountTerminalInvariantFailure,
+		exported[0].State,
+	)
+	require.Equal(t, uint64(cap(buffer)), exported[0].Used)
+	require.True(t, registry.AdmissionSuspended())
+	_, err = registry.Open(1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAdmissionSuspended)
+
+	// The physical allocation retains its original account after the producer
+	// process has detached the generation. Its normal Free drains the
+	// tombstone; no synthetic release is needed.
+	c.proc.Mp().Free(buffer)
+	require.False(t, registry.AdmissionSuspended())
+	_, ok := registry.Resolve(exported[0].Handle)
+	require.False(t, ok)
+
+	c.MessageBoard = c.MessageBoard.Reset()
+	next, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	require.NotEqual(t, attempt.account.Handle(), next.account.Handle())
+	require.NoError(t, c.finishAllocationAccountAttempt())
+	require.Len(t, exported, 2)
+}
+
+func TestStatementAllocationAttemptConcurrentTerminalIsOneShot(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	var exports atomic.Int32
+	c := newTestAllocationLifecycleCompile(t, registry, func(
+		mpool.AllocationAccountTerminalSnapshot,
+	) {
+		exports.Add(1)
+	})
+	attempt, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+
+	const contenders = 128
+	start := make(chan struct{})
+	errs := make(chan error, contenders)
+	var wait sync.WaitGroup
+	wait.Add(contenders)
+	for range contenders {
+		go func() {
+			defer wait.Done()
+			<-start
+			_, finishErr := attempt.finish()
+			errs <- finishErr
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errs)
+	for finishErr := range errs {
+		require.NoError(t, finishErr)
+	}
+	require.Equal(t, int32(1), exports.Load())
+	c.allocationAttempt = nil
+}
+
+func TestStatementAllocationAttemptRejectsOverlappingOpen(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	c := newTestAllocationLifecycleCompile(t, registry, func(
+		mpool.AllocationAccountTerminalSnapshot,
+	) {
+	})
+	attempt, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+
+	_, err = c.beginAllocationAccountAttempt()
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.NoError(t, c.finishAllocationAccountAttempt())
+	_, finishErr := attempt.finish()
+	require.NoError(t, finishErr)
+
+	next, err := registry.Open(1)
+	require.NoError(t, err, "rejected overlap must not consume a slot")
+	_, _, err = registry.CompleteTerminal(next)
+	require.NoError(t, err)
+}
+
+func TestStatementAllocationAttemptRequiresTerminalExporter(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	c := newTestAllocationLifecycleCompile(t, registry, nil)
+
+	_, err = c.beginAllocationAccountAttempt()
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	account, err := registry.Open(1)
+	require.NoError(t, err, "failed begin must not consume a generation slot")
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
+func TestCompileRunFinalizesAllocationAttemptOnCancellation(t *testing.T) {
+	var snapshots []mpool.AllocationAccountTerminalSnapshot
+	c, registry := newRunLifecycleCompile(t, func(
+		snapshot mpool.AllocationAccountTerminalSnapshot,
+	) {
+		snapshots = append(snapshots, snapshot)
+	})
+	// The canceled outer context is observed after runOnce, after the
+	// allocation generation has opened.
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	c.proc.ReplaceTopCtx(canceled)
+	c.scopes = []*Scope{newScope(magicType(255))}
+
+	_, err := c.Run(0)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, snapshots, 1)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, snapshots[0].State)
+	require.Zero(t, snapshots[0].Used)
+	_, ok := registry.Resolve(snapshots[0].Handle)
+	require.False(t, ok)
+	c.Release()
+}
+
+func TestCompileRunFinalizesAllocationAttemptOnExecutionError(t *testing.T) {
+	var snapshots []mpool.AllocationAccountTerminalSnapshot
+	c, registry := newRunLifecycleCompile(t, func(
+		snapshot mpool.AllocationAccountTerminalSnapshot,
+	) {
+		snapshots = append(snapshots, snapshot)
+	})
+	executionErr := moerr.NewInternalErrorNoCtx("allocation lifecycle test")
+	scope := newScope(Normal)
+	scope.Proc = c.proc.NewNoContextChildProc(0)
+	scope.RootOp = &allocationLifecycleErrorOperator{
+		MockOperator: colexec.NewMockOperator(),
+		err:          executionErr,
+	}
+	c.scopes = []*Scope{scope}
+
+	_, err := c.Run(0)
+	require.ErrorIs(t, err, executionErr)
+	require.Len(t, snapshots, 1)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, snapshots[0].State)
+	_, ok := registry.Resolve(snapshots[0].Handle)
+	require.False(t, ok)
+	c.Release()
+}
+
+func TestCompileRunFinalizesAllocationAttemptOnPanic(t *testing.T) {
+	var snapshots []mpool.AllocationAccountTerminalSnapshot
+	c, registry := newRunLifecycleCompile(t, func(
+		snapshot mpool.AllocationAccountTerminalSnapshot,
+	) {
+		snapshots = append(snapshots, snapshot)
+	})
+	c.scopes = []*Scope{newScope(magicType(255))}
+	// Force the panic after beginAllocationAccountAttempt and before runOnce.
+	c.lockMeta = nil
+
+	require.Panics(t, func() {
+		_, _ = c.Run(0)
+	})
+	require.Len(t, snapshots, 1)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, snapshots[0].State)
+	_, ok := registry.Resolve(snapshots[0].Handle)
+	require.False(t, ok)
+	c.Release()
+}

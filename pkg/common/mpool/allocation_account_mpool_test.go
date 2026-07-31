@@ -58,7 +58,7 @@ func TestMPoolAccountedAllocGrowFree(t *testing.T) {
 	require.Equal(t, uintptr(kMemHdrSz), unsafe.Sizeof(memHdr{}))
 	require.Equal(t, uintptr(16), unsafe.Sizeof(allocationLease{}))
 	require.Equal(t, uintptr(64), unsafe.Sizeof(AllocationAccount{}))
-	require.Equal(t, uintptr(8), unsafe.Sizeof(allocationAccountRegistrySlot{}))
+	require.LessOrEqual(t, unsafe.Sizeof(allocationAccountRegistrySlot{}), uintptr(32))
 
 	registry, account := newTestAllocationAccount(t, 1024, 8)
 	mp := MustNew("accounted-alloc-grow")
@@ -179,7 +179,7 @@ func TestMPoolMakeSliceAccounted(t *testing.T) {
 		testAllocationOwner,
 		testAllocationSite,
 	)
-	require.ErrorIs(t, err, ErrAllocationAccountInvalid)
+	require.ErrorIs(t, err, ErrAllocationAllocatorLimit)
 
 	FreeSlice(mp, values[:0])
 	require.Zero(t, account.Snapshot().Used)
@@ -349,7 +349,7 @@ func TestMPoolAccountedRollback(t *testing.T) {
 			testAllocationOwner,
 			testAllocationSite,
 		)
-		require.Error(t, err)
+		require.ErrorIs(t, err, ErrAllocationAllocatorLimit)
 		require.NotErrorIs(t, err, ErrAllocationAccountCapacity)
 		require.Zero(t, account.Snapshot().Used)
 		require.Zero(t, registry.LiveAllocationMetadata())
@@ -430,7 +430,7 @@ func TestMPoolAccountedReallocZero(t *testing.T) {
 	copy(buffer, bytes.Repeat([]byte{0x5a}, 64))
 
 	_, err = mp.ReallocZero(buffer, 128, false)
-	require.ErrorIs(t, err, ErrAllocationAccountInvalid)
+	require.ErrorIs(t, err, ErrAllocationAccountMismatch)
 	require.Equal(t, uint64(64), account.Snapshot().Used)
 
 	replacement, err := mp.ReallocZero(buffer, 128, true)

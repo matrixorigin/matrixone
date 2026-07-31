@@ -128,6 +128,16 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	}
 
 	c := NewCompile("test", "test", "select ?", "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	registry, err := mpool.NewAllocationAccountRegistry(4, 4)
+	require.NoError(t, err)
+	var terminalSnapshots []mpool.AllocationAccountTerminalSnapshot
+	c.ConfigureAllocationAccountLifecycle(
+		registry,
+		1<<20,
+		func(snapshot mpool.AllocationAccountTerminalSnapshot) {
+			terminalSnapshots = append(terminalSnapshots, snapshot)
+		},
+	)
 	require.NoError(t, c.Compile(ctx, pn, fill))
 	_, err = c.Run(0)
 	require.NoError(t, err)
@@ -136,6 +146,18 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
 	require.Nil(t, params.GetArea())
+	require.Len(t, terminalSnapshots, 3)
+	seenHandles := make(map[mpool.AllocationAccountHandle]struct{}, 3)
+	for _, snapshot := range terminalSnapshots {
+		require.Equal(t, mpool.AllocationAccountTerminalValid, snapshot.State)
+		require.Zero(t, snapshot.Used)
+		require.True(t, snapshot.Sealed)
+		_, duplicate := seenHandles[snapshot.Handle]
+		require.False(t, duplicate)
+		seenHandles[snapshot.Handle] = struct{}{}
+		_, ok := registry.Resolve(snapshot.Handle)
+		require.False(t, ok)
+	}
 
 	c.Release()
 	proc.Free()

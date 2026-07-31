@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
@@ -343,6 +344,10 @@ type Compile struct {
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool
+	allocationAccountRegistry    *mpool.AllocationAccountRegistry
+	allocationAccountLimit       uint64
+	allocationTerminalExporter   func(mpool.AllocationAccountTerminalSnapshot)
+	allocationAttempt            *statementAllocationAttempt
 	hasMergeOp                   bool
 
 	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.

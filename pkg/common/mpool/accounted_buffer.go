@@ -84,13 +84,13 @@ func (b *AccountedBuffer) EnsureCapacity(required int) error {
 		return nil
 	}
 	if int64(required) > maxAllocationSize() {
-		return ErrAllocationAccountInvalid
+		return ErrAllocationAllocatorLimit
 	}
 
 	oldLength := len(b.data)
 	capacity, ok := GrowCapacity(int64(cap(b.data)), int64(required))
 	if !ok || capacity > int64(math.MaxInt) {
-		return ErrAllocationAccountInvalid
+		return ErrAllocationAllocatorLimit
 	}
 	if cap(b.data) == 0 {
 		data, err := b.mp.AllocAccounted(
