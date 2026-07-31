@@ -1144,7 +1144,10 @@ func scatterTransientBudgetBytes(bat *batch.Batch, sourceAlreadyCharged bool) (u
 	if size := uint64(bat.Size()); size > allocated {
 		allocated = size
 	}
-	columns := uint64(len(bat.Vecs))
+	return scatterTransientBudgetFor(allocated, uint64(len(bat.Vecs)), sourceAlreadyCharged)
+}
+
+func scatterTransientBudgetFor(allocated, columns uint64, sourceAlreadyCharged bool) (uint64, error) {
 	oneMaterializedBatch, ok := batchPayloadWithAllocationSlack(allocated, columns)
 	if !ok {
 		return 0, process.ErrHashBuildBudgetInvalid
@@ -1162,6 +1165,128 @@ func scatterTransientBudgetBytes(bat *batch.Batch, sourceAlreadyCharged bool) (u
 		}
 	}
 	return need, nil
+}
+
+// reserveRebuildScatterScratch protects the one-batch repartition workspace
+// before the rebuild retains another decoded batch. The reservation is only an
+// accounting lease: no scatter buffers are allocated until re-spill actually
+// starts. Keeping this floor lets a copy admission fail early enough that the
+// already-retained batches can still be repartitioned under the same hard cap.
+func (e *SpillEngine) reserveRebuildScatterScratch(
+	builder *hashbuild.HashmapBuilder,
+	bat *batch.Batch,
+	analyzer process.Analyzer,
+) error {
+	if e.cfg.Budget == nil {
+		return nil
+	}
+	if builder == nil || bat == nil || bat.RowCount() < 0 {
+		return process.ErrHashBuildBudgetInvalid
+	}
+
+	allocated := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > allocated {
+		allocated = size
+	}
+	rows := bat.RowCount()
+	columns := len(bat.Vecs)
+
+	// CopyIntoBatches may complete a partial physical tail with this record.
+	// Bound that resulting batch before the copy; reserving only for either
+	// input independently is not enough when two small records coalesce.
+	batches := builder.Batches.Buf
+	if bat.RowCount() != colexec.DefaultBatchSize && len(batches) > 0 {
+		tail := batches[len(batches)-1]
+		if tail == nil {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		if tail.RowCount() != colexec.DefaultBatchSize {
+			merged, ok := predictMergedRetainedBytes(tail, bat)
+			if !ok {
+				return process.ErrHashBuildBudgetInvalid
+			}
+			if merged > allocated {
+				allocated = merged
+			}
+			if tail.RowCount() > math.MaxInt-bat.RowCount() {
+				return process.ErrHashBuildBudgetInvalid
+			}
+			rows += tail.RowCount()
+			if len(tail.Vecs) > columns {
+				columns = len(tail.Vecs)
+			}
+		}
+	}
+
+	retained, ok := e.scatterRetainedBytes()
+	if !ok {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	growth, ok := e.scatterCapacityGrowthBytes(rows, len(e.cfg.BuildKeyExprs))
+	if !ok {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	transient, err := scatterTransientBudgetFor(allocated, uint64(columns), true)
+	if err != nil {
+		return err
+	}
+	need, ok := addUint64(retained, growth)
+	if !ok {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	if need, ok = addUint64(need, transient); !ok {
+		return process.ErrHashBuildBudgetInvalid
+	}
+
+	return e.reserveRebuildScratchFloor(need, analyzer)
+}
+
+func (e *SpillEngine) reserveRebuildScratchFloor(need uint64, analyzer process.Analyzer) error {
+	if need == 0 || e.cfg.Budget == nil {
+		return nil
+	}
+	var err error
+	if e.scatterScratchReservation == nil {
+		e.scatterScratchReservation, err = e.cfg.Budget.Reserve(need)
+		if err != nil {
+			if analyzer != nil {
+				analyzer.GetOpStats().AddExtraStat("JoinSpillRebuildScratchReserveRejects", 1)
+			}
+			return err
+		}
+		if analyzer != nil {
+			analyzer.GetOpStats().AddExtraStat("JoinSpillRebuildScratchReserveCount", 1)
+		}
+	} else if current := e.scatterScratchReservation.Size(); need > current {
+		grow := need - current
+		if err = e.scatterScratchReservation.Grow(grow); err != nil {
+			if analyzer != nil {
+				analyzer.GetOpStats().AddExtraStat("JoinSpillRebuildScratchGrowRejects", 1)
+			}
+			return err
+		}
+		if analyzer != nil {
+			analyzer.GetOpStats().AddExtraStat("JoinSpillRebuildScratchGrowCount", 1)
+			analyzer.GetOpStats().AddExtraStat("JoinSpillRebuildScratchGrowBytes", spillStatInt64(grow))
+		}
+	}
+	if need > e.scatterScratchFloor {
+		e.scatterScratchFloor = need
+	}
+	if analyzer != nil {
+		analyzer.GetOpStats().SetMaxExtraStat(
+			"JoinSpillRebuildScratchFloorBytes",
+			spillStatInt64(e.scatterScratchReservation.Size()),
+		)
+	}
+	return nil
+}
+
+func spillStatInt64(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
 }
 
 func (e *SpillEngine) scatterRetainedBytes() (uint64, bool) {
@@ -1464,6 +1589,7 @@ func (e *SpillEngine) releaseScatterScratch() {
 		e.scatterScratchReservation.Release()
 		e.scatterScratchReservation = nil
 	}
+	e.scatterScratchFloor = 0
 }
 
 // reconcileScatterScratch leaves only the capacities retained by the engine
@@ -1476,6 +1602,9 @@ func (e *SpillEngine) reconcileScatterScratch() error {
 	actual, ok := e.scatterRetainedBytes()
 	if !ok {
 		return process.ErrHashBuildBudgetInvalid
+	}
+	if actual < e.scatterScratchFloor {
+		actual = e.scatterScratchFloor
 	}
 	reserved := e.scatterScratchReservation.Size()
 	if actual > reserved {
@@ -1595,10 +1724,15 @@ type SpillEngine struct {
 	scatterWriteBuf      bytes.Buffer
 	scatterWriteBuffers  [SpillNumBuckets]bytes.Buffer
 	scatterWriteRows     [SpillNumBuckets]int64
-	// The lease follows the reusable scratch capacities for the engine
-	// lifetime. It is released only by Cleanup, after all backing arrays have
-	// been dropped.
+	// The lease follows reusable scratch capacities within one rebuild/scatter
+	// phase. releaseScatterScratch drops both the backing arrays and this token;
+	// Cleanup is the idempotent terminal fallback.
 	scatterScratchReservation *process.HashBuildReservation
+	// scatterScratchFloor is pre-admitted only while rebuilding an already
+	// spilled bucket. It keeps one bounded repartition workspace available if the
+	// next retained-copy admission or threshold decision requires re-spill. It
+	// is a conservative bound, not a measurement of later physical allocations.
+	scatterScratchFloor uint64
 
 	// probeKeyEval is the unbudgeted fallback for probe re-scatter. Production
 	// spilled joins evaluate the probe executors owned by ProbeExpressionLease.
@@ -1821,16 +1955,48 @@ func (e *SpillEngine) NextProbeBatch(proc *process.Process) (*batch.Batch, error
 }
 
 // builderMemSize computes total memory used by a HashmapBuilder during the rebuild
-// loop. builder.GetSize() only covers hashmap structures (not yet built), so we add
-// builder.Batches.MemSize for the raw accumulated batches, with a per-batch fallback.
+// loop. MemSize covers completed fixed-size batches; include the one permitted
+// partial tail as well. The full scan is only a fallback for directly assembled
+// state where MemSize has not been maintained.
 func builderMemSize(builder *hashbuild.HashmapBuilder) int64 {
 	sz := builder.GetSize() + builder.Batches.MemSize
-	if sz == 0 {
+	batches := builder.Batches.Buf
+	if builder.Batches.MemSize == 0 {
 		for _, b := range builder.Batches.Buf {
 			sz += int64(b.Size())
 		}
+	} else if len(batches) > 0 {
+		tail := batches[len(batches)-1]
+		if tail != nil && tail.RowCount() != colexec.DefaultBatchSize {
+			sz += int64(tail.Size())
+		}
 	}
 	return sz
+}
+
+func shouldReSpillBeforeRetain(
+	builder *hashbuild.HashmapBuilder,
+	bat *batch.Batch,
+	threshold int64,
+) bool {
+	if builder == nil || bat == nil {
+		return false
+	}
+	predictedBytes := builderMemSize(builder)
+	batchBytes := int64(bat.Size())
+	if batchBytes < 0 || predictedBytes > math.MaxInt64-batchBytes {
+		predictedBytes = math.MaxInt64
+	} else {
+		predictedBytes += batchBytes
+	}
+	predictedRows := int64(builder.InputBatchRowCount)
+	batchRows := int64(bat.RowCount())
+	if batchRows < 0 || predictedRows > math.MaxInt64-batchRows {
+		predictedRows = math.MaxInt64
+	} else {
+		predictedRows += batchRows
+	}
+	return colexec.ShouldSpill(predictedBytes, predictedRows, threshold)
 }
 
 // RebuildHashmap rebuilds the hashmap for the next bucket in the queue.
@@ -1898,6 +2064,22 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	if e.buildReadBatch == nil {
 		e.buildReadBatch = batch.NewOffHeapWithSize(0)
 	}
+	// A rebuild may pre-admit one scatter workspace so a retained-copy reject
+	// can still repartition the batches already owned by the builder. Release it
+	// once the hashmap commits, with this defer covering every unhappy path.
+	defer e.releaseScatterScratch()
+	reSpill := func(pending *batch.Batch) (BucketResult, error) {
+		subBuckets, err := e.reSpillBucket(
+			proc, analyzer, bucket, builder, &e.buildReader, pending,
+		)
+		builder.FreeHashMapAndBatches(proc)
+		builder.Free(proc)
+		if err != nil {
+			return BucketSkip, err
+		}
+		e.buckets = append(subBuckets, e.buckets[1:]...)
+		return BucketReSpilled, nil
+	}
 
 	for {
 		if err := checkSpillCanceled(proc); err != nil {
@@ -1919,16 +2101,33 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			builder.Free(proc)
 			return nil, BucketSkip, err
 		}
+		if bucket.Depth < SpillMaxPass {
+			if err := e.reserveRebuildScatterScratch(builder, bat, analyzer); err != nil {
+				// Scratch is contingency headroom, not a prerequisite for a
+				// bucket that may still rebuild within the cap. Admission misses
+				// are observable but best-effort; lifecycle/accounting failures
+				// remain terminal and are returned unchanged.
+				if !isBudgetAdmission(err) {
+					builder.FreeHashMapAndBatches(proc)
+					builder.Free(proc)
+					return nil, BucketSkip, err
+				}
+			}
+			if shouldReSpillBeforeRetain(builder, bat, e.cfg.SpillThreshold) {
+				if analyzer != nil {
+					analyzer.GetOpStats().AddExtraStat("JoinSpillRebuildPreCopyReSpillAttempts", 1)
+				}
+				result, spillErr := reSpill(bat)
+				return nil, result, spillErr
+			}
+		}
 		if err := builder.CopyBuildBatch(bat, proc); err != nil {
 			if isBudgetAdmission(err) && bucket.Depth < SpillMaxPass {
-				subBuckets, spillErr := e.reSpillBucket(proc, analyzer, bucket, builder, &e.buildReader, bat)
-				builder.FreeHashMapAndBatches(proc)
-				builder.Free(proc)
-				if spillErr != nil {
-					return nil, BucketSkip, spillErr
+				if analyzer != nil {
+					analyzer.GetOpStats().AddExtraStat("JoinSpillRebuildCopyAdmissionReSpillAttempts", 1)
 				}
-				e.buckets = append(subBuckets, e.buckets[1:]...)
-				return nil, BucketReSpilled, nil
+				result, spillErr := reSpill(bat)
+				return nil, result, spillErr
 			}
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
@@ -1961,6 +2160,9 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		builder.Free(proc)
 		return nil, BucketSkip, err
 	}
+	// Keep an admitted recovery floor until the hashmap is committed. Releasing
+	// it before map admission would let another concurrent build consume the
+	// only headroom this bucket has already proven it needs to re-spill.
 	if err := builder.BuildHashmap(e.cfg.HashOnPK, e.cfg.NeedAllocateSels, false, proc); err != nil {
 		// BuildHashmap may destructively canonicalize Dedup batches before a
 		// later allocation is rejected. Only the builder can prove whether its
@@ -1973,14 +2175,11 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			// Release the rejected/partial map admission while retaining the
 			// original copied batches for transactional re-spill.
 			builder.FreeHashMapOnly(proc)
-			subBuckets, spillErr := e.reSpillBucket(proc, analyzer, bucket, builder, &e.buildReader, nil)
-			builder.FreeHashMapAndBatches(proc)
-			builder.Free(proc)
-			if spillErr != nil {
-				return nil, BucketSkip, spillErr
+			if analyzer != nil {
+				analyzer.GetOpStats().AddExtraStat("JoinSpillRebuildMapAdmissionReSpillAttempts", 1)
 			}
-			e.buckets = append(subBuckets, e.buckets[1:]...)
-			return nil, BucketReSpilled, nil
+			result, spillErr := reSpill(nil)
+			return nil, result, spillErr
 		}
 		builder.FreeHashMapAndBatches(proc)
 		builder.Free(proc)
@@ -1989,6 +2188,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		}
 		return nil, BucketSkip, err
 	}
+	e.releaseScatterScratch()
 	if !e.cfg.NeedBatches {
 		if err := builder.DrainCopiedBatches(proc, nil); err != nil {
 			builder.FreeHashMapAndBatches(proc)

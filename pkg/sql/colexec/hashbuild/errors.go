@@ -51,7 +51,7 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 	switch budgetErr.Resource {
 	case process.HashBuildBudgetResourceMemory:
 		resource = "memory"
-		action = "reduce join build width or query memory, or increase processLimitationSize; spill recovery is automatic only for eligible shuffle joins"
+		action = "reduce join build width or query concurrency, increase processLimitationSize, or lower join_spill_mem for an eligible shuffle join; automatic spill can still exhaust recovery headroom for wide or skewed partitions"
 	case process.HashBuildBudgetResourceSpillDisk:
 		resource = "spill disk"
 		action = "free spill storage or increase processLimitationSpillSize"
