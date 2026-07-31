@@ -16,6 +16,7 @@ package hashmap
 
 import (
 	"io"
+	"math"
 	"math/rand"
 	"strconv"
 	"testing"
@@ -30,6 +31,228 @@ import (
 const (
 	Rows = 10
 )
+
+type float64HashMapShape struct {
+	name        string
+	vectorKind  string
+	hasNull     bool
+	start       int
+	count       int
+	wantValues  []uint64
+	wantZValues []int64
+	wantGroups  uint64
+}
+
+func TestHashMapsFloat64SignedZeroContract(t *testing.T) {
+	// Vector representation and NULL policy must not change the signed-zero
+	// equality contract. Exercise both the single-key IntHashMap and a
+	// composite-key StrHashMap through their public iterator API.
+	mapKinds := []struct {
+		name      string
+		composite bool
+	}{
+		{name: "int"},
+		{name: "composite-str", composite: true},
+	}
+	shapes := []float64HashMapShape{
+		{
+			name:        "flat",
+			vectorKind:  "flat",
+			start:       1,
+			count:       1,
+			wantValues:  []uint64{1},
+			wantZValues: []int64{1},
+			wantGroups:  1,
+		},
+		{
+			name:        "flat-nullable-map",
+			vectorKind:  "flat",
+			hasNull:     true,
+			start:       1,
+			count:       1,
+			wantValues:  []uint64{1},
+			wantZValues: []int64{1},
+			wantGroups:  1,
+		},
+		{
+			name:        "flat-null-filter",
+			vectorKind:  "flat-null",
+			count:       2,
+			wantValues:  []uint64{1, 0},
+			wantZValues: []int64{1, 0},
+			wantGroups:  1,
+		},
+		{
+			name:        "flat-null-key",
+			vectorKind:  "flat-null",
+			hasNull:     true,
+			count:       2,
+			wantValues:  []uint64{1, 2},
+			wantZValues: []int64{1, 1},
+			wantGroups:  2,
+		},
+		{
+			name:        "const",
+			vectorKind:  "const",
+			count:       2,
+			wantValues:  []uint64{1, 1},
+			wantZValues: []int64{1, 1},
+			wantGroups:  1,
+		},
+		{
+			name:        "const-nullable-map",
+			vectorKind:  "const",
+			hasNull:     true,
+			count:       2,
+			wantValues:  []uint64{1, 1},
+			wantZValues: []int64{1, 1},
+			wantGroups:  1,
+		},
+		{
+			name:        "const-null-filter",
+			vectorKind:  "const-null",
+			count:       2,
+			wantValues:  []uint64{0, 0},
+			wantZValues: []int64{0, 0},
+			wantGroups:  0,
+		},
+		{
+			name:        "const-null-key",
+			vectorKind:  "const-null",
+			hasNull:     true,
+			count:       2,
+			wantValues:  []uint64{1, 1},
+			wantZValues: []int64{1, 1},
+			wantGroups:  1,
+		},
+	}
+
+	for _, mapKind := range mapKinds {
+		for _, shape := range shapes {
+			t.Run(mapKind.name+"/"+shape.name, func(t *testing.T) {
+				runFloat64HashMapShape(t, mapKind.composite, shape)
+			})
+		}
+	}
+}
+
+func runFloat64HashMapShape(t *testing.T, composite bool, shape float64HashMapShape) {
+	m := mpool.MustNewZero()
+	var (
+		hashMap HashMap
+		itr     Iterator
+		build   []*vector.Vector
+		probe   []*vector.Vector
+	)
+	if composite {
+		mp, err := NewStrHashMap(shape.hasNull, m)
+		require.NoError(t, err)
+		hashMap = mp
+		itr = mp.NewIterator()
+	} else {
+		mp, err := NewIntHashMap(shape.hasNull, m)
+		require.NoError(t, err)
+		hashMap = mp
+		itr = mp.NewIterator()
+	}
+	defer func() {
+		hashMap.Free()
+		for _, vec := range build {
+			vec.Free(m)
+		}
+		for _, vec := range probe {
+			vec.Free(m)
+		}
+		require.Zero(t, m.Stats().NumCurrBytes.Load())
+	}()
+	buildFloat, probeFloat := makeFloat64HashMapShapeVectors(t, m, shape.vectorKind)
+	build = makeFloat64HashMapKeys(t, m, buildFloat, composite)
+	probe = makeFloat64HashMapKeys(t, m, probeFloat, composite)
+
+	values, zValues, err := itr.Insert(shape.start, shape.count, build)
+	require.NoError(t, err)
+	require.Equal(t, shape.wantZValues, zValues)
+	require.Equal(t, shape.wantValues, liveHashMapValues(values, zValues))
+	require.Equal(t, shape.wantGroups, hashMap.GroupCount())
+
+	values, zValues = itr.Find(shape.start, shape.count, probe)
+	require.Equal(t, shape.wantZValues, zValues)
+	require.Equal(t, shape.wantValues, liveHashMapValues(values, zValues))
+	require.Equal(t, shape.wantGroups, hashMap.GroupCount())
+}
+
+func liveHashMapValues(values []uint64, zValues []int64) []uint64 {
+	live := append([]uint64(nil), values...)
+	for row := range live {
+		// Iterator values are unspecified when zValues marks the row filtered.
+		if zValues[row] == 0 {
+			live[row] = 0
+		}
+	}
+	return live
+}
+
+func makeFloat64HashMapShapeVectors(
+	t *testing.T,
+	m *mpool.MPool,
+	vectorKind string,
+) (*vector.Vector, *vector.Vector) {
+	floatType := types.T_float64.ToType()
+	switch vectorKind {
+	case "flat":
+		build := vector.NewVec(floatType)
+		probe := vector.NewVec(floatType)
+		require.NoError(t, vector.AppendFixed(build, float64(123), false, m))
+		require.NoError(t, vector.AppendFixed(build, float64(0), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float64(456), false, m))
+		require.NoError(t, vector.AppendFixed(probe, math.Copysign(0, -1), false, m))
+		return build, probe
+	case "flat-null":
+		build := vector.NewVec(floatType)
+		probe := vector.NewVec(floatType)
+		require.NoError(t, vector.AppendFixed(build, float64(0), false, m))
+		require.NoError(t, vector.AppendFixed(build, float64(99), true, m))
+		require.NoError(t, vector.AppendFixed(probe, math.Copysign(0, -1), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float64(77), true, m))
+		return build, probe
+	case "const":
+		build, err := vector.NewConstFixed(floatType, float64(0), 2, m)
+		require.NoError(t, err)
+		probe, err := vector.NewConstFixed(floatType, math.Copysign(0, -1), 2, m)
+		require.NoError(t, err)
+		return build, probe
+	case "const-null":
+		return vector.NewConstNull(floatType, 2, m), vector.NewConstNull(floatType, 2, m)
+	default:
+		t.Fatalf("unknown float64 hashmap vector kind %q", vectorKind)
+		return nil, nil
+	}
+}
+
+func makeFloat64HashMapKeys(
+	t *testing.T,
+	m *mpool.MPool,
+	floatVec *vector.Vector,
+	composite bool,
+) []*vector.Vector {
+	if !composite {
+		return []*vector.Vector{floatVec}
+	}
+
+	intType := types.T_int8.ToType()
+	var discriminator *vector.Vector
+	if floatVec.IsConst() {
+		var err error
+		discriminator, err = vector.NewConstFixed(intType, int8(7), floatVec.Length(), m)
+		require.NoError(t, err)
+	} else {
+		discriminator = vector.NewVec(intType)
+		for row := 0; row < floatVec.Length(); row++ {
+			require.NoError(t, vector.AppendFixed(discriminator, int8(7), false, m))
+		}
+	}
+	return []*vector.Vector{floatVec, discriminator}
+}
 
 func TestInsert(t *testing.T) {
 	m := mpool.MustNewZero()

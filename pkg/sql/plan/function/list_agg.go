@@ -664,6 +664,66 @@ var supportedAggInNewFramework = []FuncNew{
 			},
 		},
 	},
+	{
+		functionId: MAX_BY,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    maxByTypeCheck,
+		Overloads: []overload{{
+			overloadId: 0,
+			isAgg:      true,
+			retType:    ReturnFirstArgType,
+			aggName:    "max_by",
+		}},
+	},
+	{
+		functionId: MAX_BY_NON_NULL,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    maxByTypeCheck,
+		Overloads: []overload{{
+			overloadId: 0,
+			isAgg:      true,
+			retType:    ReturnFirstArgType,
+			aggName:    "max_by_non_null",
+		}},
+	},
+}
+
+func maxByTypeCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 3 {
+		return newCheckResultWithFailure(failedAggParametersWrong)
+	}
+	casts := append([]types.Type(nil), inputs...)
+	needCast := false
+	for i := range casts {
+		if casts[i].Oid == types.T_any {
+			needCast = true
+			if i == 0 {
+				casts[i] = types.T_varchar.ToType()
+			} else {
+				casts[i] = types.T_int64.ToType()
+			}
+		}
+	}
+	if !typeInList(casts[0].Oid, AnyValueSupportedTypes) ||
+		!typeInList(casts[1].Oid, MinMaxSupportedTypes) ||
+		!typeInList(casts[2].Oid, MinMaxSupportedTypes) {
+		return newCheckResultWithFailure(failedAggParametersWrong)
+	}
+	if needCast {
+		return newCheckResultWithCast(0, casts)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
+func typeInList(typ types.T, supported []types.T) bool {
+	for _, candidate := range supported {
+		if typ == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 var SumSupportedTypes = []types.T{

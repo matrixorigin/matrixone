@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -69,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -358,6 +360,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Partial = t.Partial
 		op.StartIDX = t.StartIDX
 		op.EndIDX = t.EndIDX
+		op.MaterializedSource = t.MaterializedSource
+		op.MaterializedReaderID = t.MaterializedReaderID
 		op.SetInfo(&info)
 		return op
 	case vm.MergeRecursive:
@@ -422,6 +426,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
+	case vm.MongoScan:
+		t := sourceOp.(*mongoscan.MongoScan)
+		op := mongoscan.NewArgument().WithScan(proto.Clone(t.Scan).(*plan.MongoScan))
+		op.ProjectList = t.ProjectList
+		op.SetInfo(&info)
+		return op
 	case vm.Source:
 		t := sourceOp.(*source.Source)
 		op := source.NewArgument()
@@ -470,6 +480,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ShuffleRegIdxLocal = sourceArg.ShuffleRegIdxLocal
 		op.ShuffleRegIdxRemote = sourceArg.ShuffleRegIdxRemote
 		op.FuncId = sourceArg.FuncId
+		op.MaterializedSource = sourceArg.MaterializedSource
 		op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
 		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
 		for j := range op.LocalRegs {
@@ -839,11 +850,11 @@ func constructLockOp(node *plan.Node, eng engine.Engine) (*lockop.LockOp, error)
 			partitionColPos = target.PartitionColIdxInBat
 		}
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-		arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+		arg.AddLockTargetWithMode(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 	}
 	for _, target := range node.LockTargets {
 		if target.LockTable {
-			arg.LockTable(target.TableId, false)
+			arg.LockTableWithMode(target.TableId, target.Mode, false)
 		}
 	}
 	return arg, nil
@@ -1584,6 +1595,15 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	arg.Aggs = aggregationExpressions
 	arg.Ts = node.GroupBy[0]
 	arg.PartitionBy = node.TimeWindowPartitionBy
+	arg.GapFill = node.GapFillMode == plan.Node_GAP_FILL_PARTITION
+	// A tumbling window normally uses the interval fast path (EndExpr != nil),
+	// which forwards only groups already produced by the child aggregate. That
+	// path cannot synthesize absent buckets. GAPFILL therefore uses the general
+	// sliding-window state machine with a slide equal to the interval; its
+	// explicit left/right bounds still produce the same tumbling windows.
+	if arg.GapFill && node.Sliding == nil {
+		arg.Sliding = arg.Interval
+	}
 	arg.WStart = wStart
 	arg.WEnd = wEnd
 	// The operator evaluates the window-end expression against a batch holding
@@ -1591,7 +1611,7 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	// planner leaves it pointing at the timestamp's GROUP BY position, which is
 	// 0 only while the window key is the sole grouping key. Copy before
 	// rewriting: the plan may be reused.
-	if node.WEnd != nil {
+	if node.WEnd != nil && !arg.GapFill {
 		endExpr := plan2.DeepCopyExpr(node.WEnd)
 		resetTimeWindowTsColRef(endExpr)
 		arg.EndExpr = endExpr

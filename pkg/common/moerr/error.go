@@ -97,6 +97,8 @@ const (
 	ErrViewWrongList        uint16 = 20318
 	ErrWrongArguments       uint16 = 20319
 	ErrDerivedMustHaveAlias uint16 = 20320
+	ErrWrongUsage           uint16 = 20321
+	ErrUpdateTableUsed      uint16 = 20322
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -420,6 +422,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrViewWrongList:        {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
 	ErrWrongArguments:       {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
 	ErrDerivedMustHaveAlias: {ER_DERIVED_MUST_HAVE_ALIAS, []string{"42000"}, "Every derived table must have its own alias"},
+	ErrWrongUsage:           {ER_WRONG_USAGE, []string{MySQLDefaultSqlState}, "Incorrect usage of %s and %s"},
+	ErrUpdateTableUsed:      {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -998,6 +1002,14 @@ func NewInvalidInput(ctx context.Context, msg string) *Error {
 
 func NewWrongArguments(ctx context.Context, function string) *Error {
 	return newError(ctx, ErrWrongArguments, function)
+}
+
+func NewWrongUsage(ctx context.Context, first, second string) *Error {
+	return newError(ctx, ErrWrongUsage, first, second)
+}
+
+func NewUpdateTableUsed(ctx context.Context, table string) *Error {
+	return newError(ctx, ErrUpdateTableUsed, table)
 }
 
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {
@@ -1817,7 +1829,7 @@ func NewErrExecutorRunning(ctx context.Context, executor string) *Error {
 	return newError(ctx, ErrExecutorRunning, executor)
 }
 
-func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string, maxPrecision uint64) *Error {
+func NewErrTooBigPrecision(ctx context.Context, precision int64, funcName string, maxPrecision uint64) *Error {
 	return newError(ctx, ErrTooBigPrecision, precision, funcName, maxPrecision)
 }
 
