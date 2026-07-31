@@ -2354,21 +2354,21 @@ func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
 	}
 }
 
-func TestUpdateFallbackPgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
+func TestUpdatePgStyleFromDedupFKTablePicksWholeSourceRow(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
 	if err != nil {
-		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+		t.Fatalf("build UPDATE FROM plan: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
 	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["emp"].Cols)) {
-		t.Fatalf("fallback UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
+		t.Fatalf("UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
 	}
 	if !hasUpdateFromDedupWindow(query, 1) {
-		t.Fatalf("fallback UPDATE FROM dedup should use row_number window partitioned by target row_id")
+		t.Fatalf("UPDATE FROM dedup should use row_number window partitioned by target row_id")
 	}
 }
 
@@ -2397,11 +2397,10 @@ func TestUpdatePgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
 	}
 }
 
-// TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32 guards the
-// fallback (buildTableUpdate) path against the same GEOMETRY32 partition-key
-// crash. emp has a foreign key, so UPDATE ... FROM routes through the fallback
-// planner.
-func TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
+// TestUpdatePgStyleFromDedupFKTablePartitionsByRowIDNotGeometry32 guards the
+// modern path for an FK-bearing target against the same GEOMETRY32
+// partition-key crash.
+func TestUpdatePgStyleFromDedupFKTablePartitionsByRowIDNotGeometry32(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	geoTyp := plan.Type{Id: int32(types.T_geometry32)}
 	setMockColumnType(t, mock, "emp", "hiredate", geoTyp)
@@ -2409,39 +2408,35 @@ func TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
 	if err != nil {
-		t.Fatalf("build fallback UPDATE FROM with GEOMETRY32 column: %v", err)
+		t.Fatalf("build FK-table UPDATE FROM with GEOMETRY32 column: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
 	if !hasUpdateFromDedupWindow(query, 1) {
-		t.Fatalf("fallback UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
+		t.Fatalf("FK-table UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
 	}
 	if updateFromDedupPartitionsColName(query, "hiredate") {
-		t.Fatalf("fallback UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
+		t.Fatalf("FK-table UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
 	}
 }
 
-// TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter guards the fallback path
-// against losing the join-target NULL-row safeguard. The fallback path's
-// needAggFilter drives both the any_value dedup AND an isnotnull(row_id) filter
-// that drops NULL rows from left/right-join targets. Replacing the dedup with a
-// row_number() window must still keep that NULL filter, otherwise a joined-target
-// NULL row could leak into the update pipeline.
-func TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter(t *testing.T) {
+// TestUpdatePgStyleFromFKTableUsesModernDedup guards the new FK-table route:
+// unrelated child columns stay on the modern row_number dedup path.
+func TestUpdatePgStyleFromFKTableUsesModernDedup(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
 	if err != nil {
-		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+		t.Fatalf("build FK-table UPDATE FROM plan: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
 	if hasAnyValueAgg(query) {
-		t.Fatalf("fallback UPDATE FROM dedup must not use any_value aggregation")
+		t.Fatalf("modern FK-table UPDATE FROM dedup must not use any_value aggregation")
 	}
-	if !hasRowIdIsNotNullFilter(query) {
-		t.Fatalf("fallback UPDATE FROM must keep the isnotnull(row_id) join-target NULL-row filter")
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("modern FK-table UPDATE FROM must use row_number partitioned by target row_id")
 	}
 }
 
@@ -2531,154 +2526,38 @@ func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T
 	}
 }
 
-func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
+func TestModernMultiTargetGeneratedColumns(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
 	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp, dept SET emp.job = dept.loc, dept.loc = emp.job WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback multi-target update with generated columns: %v", err)
-	}
-	query := logicPlan.GetQuery()
+	require.NoError(t, err)
 
-	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["emp"].Cols)+2)
-	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["dept"].Cols)+2)
-}
-
-// TestUpdateFallbackProjectLayoutDeterministic guards the per-target column-block
-// order of the fallback UPDATE planner. A multi-column SET must produce a
-// byte-identical project layout on every build; before the fix, ranging the
-// updateKeys map (column -> expr) appended the update expressions to the project
-// list in random order across runs. A fresh optimizer per iteration rebuilds the
-// maps, and Go randomizes map iteration, so a regression here fails reliably.
-func TestUpdateFallbackProjectLayoutDeterministic(t *testing.T) {
-	// Multi-target (emp, dept) exercises the table-block order; the two plain
-	// (non-indexed) update columns on emp (mgr, sal) exercise the per-target
-	// column order. Both were Go-map-ordered before the fix.
-	const sql = "UPDATE emp, dept SET emp.mgr = 1, emp.sal = 2, dept.loc = 'x' WHERE emp.deptno = dept.deptno"
-	var want []string
-	for iter := 0; iter < 16; iter++ {
-		mock := NewMockOptimizer(true)
-		logicPlan, err := runOneStmt(mock, t, sql)
-		if err != nil {
-			t.Fatalf("build fallback update (iter %d): %v", iter, err)
-		}
-		got := fallbackUpdateProjectLayout(logicPlan.GetQuery())
-		if len(got) == 0 {
-			t.Fatalf("iter %d: no fallback update project node found", iter)
-		}
-		if iter == 0 {
-			want = got
-			continue
-		}
-		assert.Equal(t, want, got,
-			"fallback UPDATE project layout must be deterministic across builds (iter %d)", iter)
-	}
-}
-
-// fallbackUpdateProjectLayout returns a stable signature of every fallback UPDATE
-// project node (a PROJECT over a SINK_SCAN): the ordered string form of each
-// project expression. query.Nodes is built in a deterministic index order, so
-// any cross-build difference reflects nondeterministic plan construction.
-func fallbackUpdateProjectLayout(query *Query) []string {
-	var layout []string
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 {
-			continue
-		}
-		if query.Nodes[node.Children[0]].NodeType != plan.Node_SINK_SCAN {
-			continue
-		}
-		for _, e := range node.ProjectList {
-			layout = append(layout, e.String())
+	multiUpdates := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdates++
 		}
 	}
-	return layout
-}
-
-func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	setMockDefaultExpr(t, mock, "emp", "job", "job-default")
-	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp, dept SET emp.job = DEFAULT, dept.loc = 'default-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column over DEFAULT: %v", err)
-	}
-
-	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
-		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "default-marker")
-	if !nodeContainsStringLiteral(node, "job-default") {
-		t.Fatalf("generated column should use expanded DEFAULT expression, got %v", node.ProjectList)
-	}
-}
-
-func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	setMockOnUpdateExpr(t, mock, "emp", "job", "job-on-update")
-	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'on-update-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column over ON UPDATE: %v", err)
-	}
-
-	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
-		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "on-update-marker")
-	if !nodeContainsStringLiteral(node, "job-on-update") {
-		t.Fatalf("generated column should use ON UPDATE expression, got %v", node.ProjectList)
-	}
-}
-
-func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	setMockGeneratedColumn(t, mock, "emp", "mgr", "empno")
-	setMockGeneratedColumn(t, mock, "emp", "deptno", "mgr")
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column chain: %v", err)
-	}
-
-	query := logicPlan.GetQuery()
-	assertFallbackUpdateAggDedupWithAnyValue(t, query)
-
-	// Verify the generated-column chain without depending on the order of the
-	// appended update/recompute slots (that order is sensitive to map iteration
-	// and was a source of flakiness). emp contributes len(emp.Cols) base columns
-	// followed by its appended update + recomputed-generated expressions; both
-	// generated columns (mgr, deptno) must be freshly recomputed down to empno,
-	// so within that appended region none may reference the stale mgr column and
-	// exactly two must reference empno.
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	deptCols := len(mock.ctxt.tables["dept"].Cols)
-	node := requireFallbackSourceProjectNode(t, query, empCols+3+deptCols+1, "chain-marker")
-	empnoRefs := 0
-	for pos := empCols; pos < empCols+3; pos++ {
-		e := node.ProjectList[pos]
-		if exprContainsColName(e, "mgr") {
-			t.Fatalf("generated column chain must use freshly recomputed empno, not stale mgr; appended pos %d = %s", pos, e.String())
-		}
-		if exprContainsColName(e, "empno") {
-			empnoRefs++
-		}
-	}
-	if empnoRefs != 2 {
-		t.Fatalf("expected both generated columns (mgr, deptno) freshly recomputed to empno, got %d empno refs in emp appended region", empnoRefs)
-	}
+	require.Equal(t, 1, multiUpdates)
 }
 
 func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
-	t.Run("ordinary child update keeps prepare cacheable", func(t *testing.T) {
+	t.Run("affected child key marks prepare uncacheable", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
 
 		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set deptno = ? where empno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("unrelated child column keeps prepare cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set sal = ? where empno = ?")
 		require.False(t, query.GetHasForeignKeyAction())
 	})
 
@@ -2756,78 +2635,29 @@ func setMockEmpDeptForeignKeyAction(
 	deptTable.RefChildTbls = []uint64{empTable.TblId}
 }
 
-func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	// Generate dname from loc on the second table (dept).
-	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'non-first-gen' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback multi-table update with non-first table generated column: %v", err)
-	}
-	query := logicPlan.GetQuery()
-
-	// The source project should contain emp cols (9) + SET comm (1) + dept cols (4) + SET loc (1) + generated dname (1) = 16.
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	deptCols := len(mock.ctxt.tables["dept"].Cols)
-	expectedLen := empCols + 1 + deptCols + 1 + 1 // emp SET + dept SET + dname generated
-	node := requireFallbackSourceProjectNode(t, query, expectedLen, "non-first-gen")
-	if !nodeContainsStringLiteral(node, "non-first-gen") {
-		t.Fatalf("generated column on non-first table should contain the SET value, got %v", node.ProjectList)
-	}
-}
-
-func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	// Chain: sal depends on comm, comm is a SET column.
-	// After optimization and rewrite, sal's generated expr should use the SET value of comm.
-	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-opt-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column after optimization: %v", err)
-	}
-
-	// emp cols (9) + SET comm (1) + generated sal (1) + dept cols (4) + SET loc (1) = 16
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	deptCols := len(mock.ctxt.tables["dept"].Cols)
-	expectedLen := empCols + 2 + deptCols + 1
-	// Position of generated sal: after emp cols (9) + SET comm (1) = index 10
-	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(), expectedLen,
-		empCols+1, "chain-opt-marker")
-	if generatedExpr == nil {
-		t.Fatal("generated column position after optimization should not be nil")
-	}
-	// The generated expr should be a non-nil expression (DeepCopy of the SET value).
-	// We don't check the exact contents since substituteColRefsInExpr deep-copies,
-	// but we verify the expression exists at the expected position.
-}
-
-func TestUpdateFallbackGeneratedColumnDerivedTableSource(t *testing.T) {
+func TestUpdateGeneratedColumnDerivedTableSourceOnFKTable(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET comm = 1, ename = 'derived-src-marker' FROM (SELECT deptno, loc FROM dept) AS d WHERE emp.deptno = d.deptno")
 	if err != nil {
-		t.Fatalf("build fallback update with derived table source and generated column: %v", err)
+		t.Fatalf("build modern FK-table update with derived source and generated column: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	expectedLen := empCols + 3
-	node := requireFallbackSourceProjectNode(t, query, expectedLen, "derived-src-marker")
-	if node == nil {
-		t.Fatalf("missing source PROJECT with length %d and derived-src-marker", expectedLen)
+	hasMultiUpdate := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+			break
+		}
 	}
-	generatedPos := empCols + 2
-	if generatedPos >= len(node.ProjectList) {
-		t.Fatalf("generated column position %d out of range (ProjectList length %d)", generatedPos, len(node.ProjectList))
+	if !hasMultiUpdate {
+		t.Fatal("FK-table UPDATE with an unrelated child key must use MULTI_UPDATE")
 	}
-	if node.ProjectList[generatedPos] == nil {
-		t.Fatalf("generated column expression at position %d should not be nil", generatedPos)
+	if !queryContainsStringLiteral(query, "derived-src-marker") {
+		t.Fatal("modern UPDATE must retain the derived-source assignment")
 	}
 }
 
@@ -2984,27 +2814,6 @@ func hasAnyValueAgg(query *Query) bool {
 		}
 		for _, aggExpr := range node.AggList {
 			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// hasRowIdIsNotNullFilter reports whether the plan filters out joined-target
-// NULL rows via isnotnull(row_id). This safeguard must survive on the fallback
-// UPDATE ... FROM path even after duplicate matches are deduped by row_number().
-func hasRowIdIsNotNullFilter(query *Query) bool {
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_FILTER {
-			continue
-		}
-		for _, f := range node.FilterList {
-			fn := f.GetF()
-			if fn == nil || fn.Func.ObjName != "isnotnull" || len(fn.Args) != 1 {
-				continue
-			}
-			if exprContainsColName(fn.Args[0], catalog.Row_ID) {
 				return true
 			}
 		}
