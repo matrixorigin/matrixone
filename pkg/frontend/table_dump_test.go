@@ -38,7 +38,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -91,6 +93,10 @@ func TestLockTableDumpLoadTargetsUsesRequestContext(t *testing.T) {
 
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).AnyTimes()
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "id",
+		Typ:  plan.Type{AutoIncr: true},
+	}}}).AnyTimes()
 	rel.EXPECT().GetPrimaryKeys(gomock.Any()).Return([]*engine.Attribute{{
 		Name: "id",
 		Type: types.T_int64.ToType(),
@@ -101,25 +107,32 @@ func TestLockTableDumpLoadTargetsUsesRequestContext(t *testing.T) {
 	ses.proc.Ctx = staleCtx
 	requestCtx := context.WithValue(context.Background(), tableDumpRequestContextKey{}, "request")
 
-	var locked []uint64
+	type lockCall struct {
+		tableID   uint64
+		changeDef bool
+	}
+	var locked []lockCall
 	stub := gostub.Stub(&lockTableForTableDump, func(
 		ctx context.Context,
 		_ engine.Engine,
 		_ *process.Process,
 		tableID uint64,
 		_ types.Type,
-		_ bool,
+		changeDef bool,
 	) error {
 		require.NoError(t, ctx.Err())
 		require.Equal(t, "request", ctx.Value(tableDumpRequestContextKey{}))
-		locked = append(locked, tableID)
+		locked = append(locked, lockCall{tableID: tableID, changeDef: changeDef})
 		return nil
 	})
 	defer stub.Reset()
 
 	err := lockTableDumpLoadTargets(requestCtx, ses, []tableDumpRelationRef{{relation: rel}}, true)
 	require.NoError(t, err)
-	require.Equal(t, []uint64{42, tableDumpObjectInstallLockTableID}, locked)
+	require.Equal(t, []lockCall{
+		{tableID: 42, changeDef: true},
+		{tableID: tableDumpObjectInstallLockTableID, changeDef: false},
+	}, locked)
 }
 
 func (c *testConcurrentTableDumpObjectCopier) CopyObject(
@@ -365,7 +378,7 @@ func TestGetTableDumpRelations(t *testing.T) {
 	require.Equal(t, tableDumpRelationKey("index", "idx", "regular"), "index\x00idx\x00regular")
 }
 
-func TestValidateTableDumpRelationsRejectsHiddenAutoIncrement(t *testing.T) {
+func TestValidateTableDumpRelationsAcceptsHiddenAutoIncrement(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
@@ -375,7 +388,163 @@ func TestValidateTableDumpRelationsRejectsHiddenAutoIncrement(t *testing.T) {
 		}},
 	})
 	err := validateTableDumpRelations(context.Background(), []tableDumpRelationRef{{relation: rel}})
-	require.ErrorContains(t, err, "auto-increment")
+	require.NoError(t, err)
+}
+
+func TestCollectTableDumpAutoIncrementState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableID(ctx).Return(uint64(42))
+
+	offsets := mock_frontend.NewMockExecResult(ctrl)
+	offsets.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+	offsets.EXPECT().GetString(ctx, uint64(0), uint64(0)).Return("hist_id", nil)
+	offsets.EXPECT().GetUint64(ctx, uint64(0), uint64(1)).Return(uint64(120), nil)
+	maximum := mock_frontend.NewMockExecResult(ctrl)
+	maximum.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+	maximum.EXPECT().GetUint64(ctx, uint64(0), uint64(0)).Return(uint64(100), nil)
+
+	gomock.InOrder(
+		bh.EXPECT().ClearExecResultSet(),
+		bh.EXPECT().Exec(ctx, "select col_name, offset from mo_catalog.mo_increment_columns where table_id = 42").Return(nil),
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{offsets}),
+		bh.EXPECT().ClearExecResultSet(),
+		bh.EXPECT().Exec(ctx, "select cast(coalesce(max(case when `hist_id` > 0 then `hist_id` else 0 end), 0) as unsigned) from `tpcc`.`bmsql_history`").Return(nil),
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{maximum}),
+	)
+
+	state, err := collectTableDumpAutoIncrementStateWithExec(
+		ctx,
+		bh,
+		"tpcc",
+		tableDumpRelationRef{
+			tableDumpRelation: tableDumpRelation{SourceTable: "bmsql_history"},
+			relation:          rel,
+		},
+		[]incrservice.AutoColumn{{ColName: "hist_id"}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []tableDumpAutoIncr{{Column: "hist_id", HighWatermark: 120}}, state)
+}
+
+func TestValidateAndApplyTableDumpAutoIncrementRestore(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	ses.proc.Base.TxnOperator = txnOp
+	autoService := mock_frontend.NewMockAutoIncrementService(ctrl)
+	ses.proc.Base.IncrService = autoService
+
+	def := &plan.TableDef{
+		DbId:           7,
+		TblId:          42,
+		Name:           "bmsql_history",
+		AutoIncrOffset: 80,
+		Cols: []*plan.ColDef{{
+			Name: "hist_id",
+			Typ:  plan.Type{Id: int32(types.T_int32), AutoIncr: true},
+		}},
+	}
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableDef(ctx).Return(def).AnyTimes()
+	rel.EXPECT().GetTableID(ctx).Return(uint64(42)).AnyTimes()
+	rel.EXPECT().AlterTable(ctx, nil, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+			require.Len(t, reqs, 1)
+			require.Equal(t, api.AlterKind_UpdateAutoIncrement, reqs[0].GetKind())
+			require.Equal(t, uint64(7), reqs[0].GetDbId())
+			require.Equal(t, uint64(42), reqs[0].GetTableId())
+			require.Equal(t, uint64(100), reqs[0].GetUpdateAutoIncrement().GetOffset())
+			return nil
+		},
+	)
+	autoService.EXPECT().SetOffset(ctx, uint64(42), "hist_id", uint64(100), txnOp).Return(nil)
+
+	restores, schemaOffset, err := validateTableDumpAutoIncrementRestore(
+		ctx,
+		rel,
+		[]tableDumpAutoIncr{{Column: "hist_id", HighWatermark: 100}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), schemaOffset)
+	require.Equal(t, uint64(100), restores[0].offset)
+	installed, err := applyTableDumpAutoIncrementRestore(ctx, ses, rel, restores, schemaOffset)
+	require.NoError(t, err)
+	require.True(t, installed)
+}
+
+func TestApplyTableDumpAutoIncrementRestoreReportsCleanupOnSetOffsetFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	ses.proc.Base.TxnOperator = txnOp
+	autoService := mock_frontend.NewMockAutoIncrementService(ctrl)
+	ses.proc.Base.IncrService = autoService
+
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableDef(ctx).Return(&plan.TableDef{DbId: 7})
+	rel.EXPECT().GetTableID(ctx).Return(uint64(42))
+	rel.EXPECT().AlterTable(ctx, nil, gomock.Any()).Return(nil)
+	wantErr := errors.New("set offset failed")
+	autoService.EXPECT().SetOffset(ctx, uint64(42), "hist_id", uint64(100), txnOp).Return(wantErr)
+
+	installed, err := applyTableDumpAutoIncrementRestore(
+		ctx,
+		ses,
+		rel,
+		[]tableDumpAutoIncrRestore{{
+			column: incrservice.AutoColumn{ColName: "hist_id"},
+			offset: 100,
+		}},
+		100,
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.True(t, installed)
+}
+
+func TestValidateTableDumpAutoIncrementRestore(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableName().Return("target").AnyTimes()
+	rel.EXPECT().GetTableDef(ctx).Return(&plan.TableDef{
+		AutoIncrOffset: 99,
+		Cols: []*plan.ColDef{
+			{Name: "visible", Typ: plan.Type{Id: int32(types.T_int8), AutoIncr: true}},
+			{Name: catalog.FakePrimaryKeyColName, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+	}).AnyTimes()
+
+	restores, schemaOffset, err := validateTableDumpAutoIncrementRestore(ctx, rel, nil)
+	require.NoError(t, err)
+	require.Nil(t, restores)
+	require.Zero(t, schemaOffset)
+
+	restores, schemaOffset, err = validateTableDumpAutoIncrementRestore(ctx, rel, []tableDumpAutoIncr{
+		{Column: "visible", HighWatermark: 100},
+		{Column: catalog.FakePrimaryKeyColName, HighWatermark: 7},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), schemaOffset)
+	require.Equal(t, uint64(100), restores[0].offset)
+	require.Equal(t, uint64(7), restores[1].offset)
+
+	_, _, err = validateTableDumpAutoIncrementRestore(ctx, rel, []tableDumpAutoIncr{
+		{Column: "visible", HighWatermark: 128},
+		{Column: catalog.FakePrimaryKeyColName, HighWatermark: 7},
+	})
+	require.ErrorContains(t, err, "out of range")
+
+	_, _, err = validateTableDumpAutoIncrementRestore(ctx, rel, []tableDumpAutoIncr{
+		{Column: "visible", HighWatermark: 100},
+	})
+	require.ErrorContains(t, err, "does not match")
 }
 
 func TestGetTableForDumpErrors(t *testing.T) {
@@ -658,7 +827,6 @@ func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
 		def  *plan.TableDef
 	}{
 		{name: "partition", def: &plan.TableDef{Name: "orders", Partition: &plan.Partition{}}},
-		{name: "auto-increment", def: &plan.TableDef{Name: "orders", Cols: []*plan.ColDef{{Typ: plan.Type{AutoIncr: true}}}}},
 		{name: "foreign-key", def: &plan.TableDef{Name: "orders", Fkeys: []*plan.ForeignKeyDef{{Name: "fk_parent"}}}},
 		{name: "referenced", def: &plan.TableDef{Name: "orders", RefChildTbls: []uint64{42}}},
 		{name: "temporary", def: &plan.TableDef{Name: "orders", IsTemporary: true}},
@@ -797,7 +965,8 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 	require.Equal(t, int64(len(content)), size)
 
 	manifest := &tableDumpManifest{Version: tableDumpFormatVersion, Relations: []tableDumpRelation{{
-		Role: "main", Objects: []tableDumpObject{{
+		AutoIncrement: []tableDumpAutoIncr{{Column: "id", HighWatermark: 42}},
+		Role:          "main", Objects: []tableDumpObject{{
 			Name: "obj", Size: size, SHA256: hash, FixturePath: "objects/obj",
 		}},
 	}}}
@@ -892,6 +1061,13 @@ func TestDecodeTableDumpManifestBoundsCollectionsBeforeMaterializing(t *testing.
 		emptyObjects(tableDumpMaxObjects+1),
 	)))
 	require.ErrorContains(t, err, "more than 250000 objects")
+
+	_, err = decodeTableDumpManifest([]byte(fmt.Sprintf(
+		`{"version":%d,"relations":[{"auto_increment":%s}]}`,
+		tableDumpFormatVersion,
+		emptyObjects(tableDumpMaxAutoIncr+1),
+	)))
+	require.ErrorContains(t, err, "more than 65536 auto-increment columns")
 }
 
 func TestDecodeTableDumpManifestUnknownAndMalformedFields(t *testing.T) {
@@ -910,6 +1086,7 @@ func TestDecodeTableDumpManifestUnknownAndMalformedFields(t *testing.T) {
 			"index_algo_table_type": "",
 			"source_table": "src",
 			"schema_hash": "relation",
+			"auto_increment": [{"column": "id", "high_watermark": 42}],
 			"unknown_relation_field": [{"ignored": true}],
 			"objects": [{"name": "object"}]
 		}]
@@ -919,6 +1096,7 @@ func TestDecodeTableDumpManifestUnknownAndMalformedFields(t *testing.T) {
 	require.Equal(t, "src", manifest.SourceTable)
 	require.True(t, manifest.MetadataOnly)
 	require.Len(t, manifest.Relations, 1)
+	require.Equal(t, []tableDumpAutoIncr{{Column: "id", HighWatermark: 42}}, manifest.Relations[0].AutoIncrement)
 	require.Len(t, manifest.Relations[0].Objects, 1)
 
 	for _, tc := range []struct {
@@ -930,12 +1108,15 @@ func TestDecodeTableDumpManifestUnknownAndMalformedFields(t *testing.T) {
 		{name: "relations-not-array", data: `{"relations":{}}`},
 		{name: "relation-not-object", data: `{"relations":[[]]}`},
 		{name: "objects-not-array", data: `{"relations":[{"objects":{}}]}`},
+		{name: "auto-increment-not-array", data: `{"relations":[{"auto_increment":{}}]}`},
+		{name: "invalid-auto-increment", data: `{"relations":[{"auto_increment":[1]}]}`},
 		{name: "invalid-object", data: `{"relations":[{"objects":[1]}]}`},
 		{name: "trailing-data", data: `{} {}`},
 		{name: "truncated-unknown-value", data: `{"unknown":[1,`},
 		{name: "truncated-relations", data: `{"relations":[`},
 		{name: "truncated-relation", data: `{"relations":[{"role":"main"`},
 		{name: "truncated-objects", data: `{"relations":[{"objects":[`},
+		{name: "truncated-auto-increment", data: `{"relations":[{"auto_increment":[`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := decodeTableDumpManifest([]byte(tc.data))
@@ -949,6 +1130,9 @@ func TestDecodeTableDumpManifestUnknownAndMalformedFields(t *testing.T) {
 	manifest, err = decodeTableDumpManifest([]byte(`{"relations":[{"objects":null}]}`))
 	require.NoError(t, err)
 	require.Nil(t, manifest.Relations[0].Objects)
+	manifest, err = decodeTableDumpManifest([]byte(`{"relations":[{"auto_increment":null}]}`))
+	require.NoError(t, err)
+	require.Nil(t, manifest.Relations[0].AutoIncrement)
 }
 
 func TestCopyTableDumpFilePrefersObjectCopier(t *testing.T) {
