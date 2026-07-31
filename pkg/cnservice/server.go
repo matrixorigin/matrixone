@@ -386,6 +386,14 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 }
 
 func (s *service) Start() error {
+	bootstrapFn := s.bootstrap
+	if s.bootstrapFn != nil {
+		bootstrapFn = s.bootstrapFn
+	}
+	if err := bootstrapFn(); err != nil {
+		return err
+	}
+
 	s.initSqlWriterFactory()
 
 	if err := s.queryService.Start(); err != nil {
@@ -636,7 +644,7 @@ func (s *service) initEngine(
 
 	}
 
-	return s.bootstrap()
+	return nil
 }
 
 func (s *service) createMOServer(
@@ -1087,8 +1095,8 @@ func (s *service) bootstrap() error {
 }
 
 // handleBootstrapErr preserves the bootstrap context cause and returns the
-// failure to Start's caller. The caller owns rolling back a partially started
-// service; panicking here would bypass that cleanup path.
+// failure to Start's caller. The caller owns rolling back the fully constructed
+// service before it returns the error.
 func handleBootstrapErr(ctx context.Context, err error) error {
 	return moerr.AttachCause(ctx, err)
 }

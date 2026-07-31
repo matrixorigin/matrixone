@@ -668,6 +668,7 @@ type service struct {
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
 	bootstrapService bootstrap.Service
+	bootstrapFn      func() error
 	incrservice      incrservice.AutoIncrementService
 
 	stopper *stopper.Stopper

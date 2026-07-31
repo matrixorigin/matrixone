@@ -355,7 +355,9 @@ func (c *testMessageCache) Close() {
 var _ bootstrap.Service = new(testBootService)
 
 type testBootService struct {
-	choice int
+	choice     int
+	closeCount int
+	closeErr   error
 }
 
 func (boot *testBootService) Bootstrap(ctx context.Context) error {
@@ -392,7 +394,49 @@ func (boot *testBootService) GetFinalVersionOffset() int32 {
 }
 
 func (boot *testBootService) Close() error {
-	return nil
+	boot.closeCount++
+	return boot.closeErr
+}
+
+func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
+	moruntime.RunTest(
+		t.Name(),
+		func(rt moruntime.Runtime) {
+			bootstrapErr := errors.New("bootstrap connection reset")
+			boot := &testBootService{}
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ls := mock_lock.NewMockLockService(ctrl)
+			ls.EXPECT().Close().Return(nil).Times(2)
+			s := &service{
+				cfg:                &Config{UUID: t.Name()},
+				logger:             zap.NewNop(),
+				stopper:            stopper.NewStopper("test-bootstrap-failure"),
+				bootstrapService:   boot,
+				bootstrapFn:        func() error { return bootstrapErr },
+				mo:                 closeErrorMOServer{},
+				cancelMoServerFunc: func() {},
+				server:             closeOnlyRPCServer{},
+				lockService:        ls,
+			}
+
+			stopped := make(chan struct{})
+			require.NoError(t, s.stopper.RunTask(func(ctx context.Context) {
+				<-ctx.Done()
+				close(stopped)
+			}))
+
+			err := s.Start()
+			require.ErrorIs(t, err, bootstrapErr)
+			require.NoError(t, s.Close())
+			require.Equal(t, 1, boot.closeCount)
+			select {
+			case <-stopped:
+			case <-time.After(time.Second):
+				t.Fatal("rollback did not stop CN tasks")
+			}
+		},
+	)
 }
 
 func Test_tenant(t *testing.T) {
