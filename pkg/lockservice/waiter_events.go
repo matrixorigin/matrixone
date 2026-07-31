@@ -207,8 +207,16 @@ func (mw *waiterEvents) start() {
 }
 
 func (mw *waiterEvents) close() {
-	mw.stopper.Stop()
+	// Seal event admission before stopping workers. Every notification accepted
+	// before this close remains readable from the buffered channel; workers
+	// drain those contexts to their normal terminal callback instead of leaving
+	// pooled lock contexts and response ownership stranded.
 	close(mw.eventC)
+	mw.stopper.Stop()
+	// A zero-worker instance is useful in tests, and cancellation can win a
+	// worker select after admission is sealed. The Close owner is the final
+	// drain owner for either case.
+	mw.drainEvents()
 	mw.mu.Lock()
 	for _, w := range mw.mu.blockedWaiters {
 		w.close("waiterEvents close", mw.logger)
@@ -296,12 +304,17 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// close seals eventC before canceling the worker context, so this
+			// finite drain terminates. Keeping the normal loop fair is
+			// important: a continuously non-empty event queue must not starve
+			// timeout, orphan, or deadlock checks.
+			mw.drainEvents()
 			return
-		case c := <-mw.eventC:
-			txn := c.txn
-			txn.Lock()
-			c.doLock()
-			txn.Unlock()
+		case c, ok := <-mw.eventC:
+			if !ok {
+				return
+			}
+			mw.handleEvent(c)
 		case v := <-mw.checkOrphanC:
 			mw.checkOrphan(v)
 		case <-mw.checkC:
@@ -314,6 +327,19 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 			mw.check(timeout)
 			timer.Reset(timeout)
 		}
+	}
+}
+
+func (mw *waiterEvents) handleEvent(c *lockContext) {
+	txn := c.txn
+	txn.Lock()
+	c.doLock()
+	txn.Unlock()
+}
+
+func (mw *waiterEvents) drainEvents() {
+	for c := range mw.eventC {
+		mw.handleEvent(c)
 	}
 }
 
