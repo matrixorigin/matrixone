@@ -25260,7 +25260,11 @@ yydefault:
 		var yyLOCAL *tree.DiffOutputOpt
 //line mysql_sql.y:9591
 		{
-			x := yyDollar[3].item.(int64)
+			x, errStr := util.GetInt64(yyDollar[3].item)
+			if errStr != "" {
+				yylex.Error("OUTPUT LIMIT is out of range")
+				goto ret1
+			}
 			yyLOCAL = &tree.DiffOutputOpt{
 				Limit: &x,
 			}

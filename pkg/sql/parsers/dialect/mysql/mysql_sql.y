@@ -9589,7 +9589,7 @@ diff_output_opt:
     }
     | OUTPUT LIMIT INTEGRAL
     {
-    	x := $3.(int64)
+        x, errStr := util.GetInt64($3); if errStr != "" { yylex.Error("OUTPUT LIMIT is out of range"); goto ret1 }
     	$$ = &tree.DiffOutputOpt {
            Limit: &x,
         }

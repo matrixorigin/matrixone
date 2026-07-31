@@ -789,6 +789,31 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.Nil(t, diffStmt.Columns)
 }
 
+func TestDataBranchDiffOutputLimitBoundaries(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "data branch diff t1 against t2 output limit 9223372036854775807", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.NotNil(t, diffStmt.OutputOpt.Limit)
+	require.Equal(t, int64(9223372036854775807), *diffStmt.OutputOpt.Limit)
+
+	for _, value := range []string{
+		"9223372036854775808",
+		"18446744073709551615",
+	} {
+		t.Run(value, func(t *testing.T) {
+			_, parseErr := ParseOne(context.Background(), "data branch diff t1 against t2 output limit "+value, 1)
+			require.ErrorContains(t, parseErr, "OUTPUT LIMIT is out of range")
+		})
+	}
+
+	_, err = ParseOne(context.Background(), "data branch diff t1 against t2 output limit 18446744073709551616", 1)
+	require.ErrorContains(t, err, "syntax error")
+}
+
 func TestDataBranchDiffColumns(t *testing.T) {
 	// COLUMNS with no output opt
 	stmt, err := ParseOne(context.TODO(), "data branch diff t1 against t2 columns (id, name)", 1)
