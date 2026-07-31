@@ -591,7 +591,7 @@ func (r *BucketReader) readBatchRecord(
 				growErr = token.Grow(peak - charge)
 			}
 			if growErr != nil &&
-				!errors.Is(growErr, process.ErrHashBuildBudgetAdmission) {
+				!hashbuild.IsRetryableMemoryCapacity(growErr) {
 				return nil, token, charge, growErr
 			}
 			if !retainedOK || !peakOK || growErr != nil {
@@ -1234,20 +1234,6 @@ func scatterImpl(
 	return nil
 }
 
-// scatterBatch scatters bat using the engine's reusable hash/row-id buffers.
-func (e *SpillEngine) scatterBatch(
-	proc *process.Process,
-	bat *batch.Batch,
-	keyVecs []*vector.Vector,
-	writers []BucketWriter,
-	buffers []*batch.Batch,
-	partitionLevel uint64,
-	sourceAlreadyCharged bool,
-	analyzer process.Analyzer,
-) error {
-	return e.scatterBatchBounded(proc, bat, keyVecs, writers, partitionLevel, sourceAlreadyCharged, analyzer)
-}
-
 func scatterTransientBudgetBytes(bat *batch.Batch, sourceAlreadyCharged bool) (uint64, error) {
 	if bat == nil || bat.RowCount() < 0 {
 		return 0, process.ErrHashBuildBudgetInvalid
@@ -1502,7 +1488,6 @@ func (e *SpillEngine) scatterBatchBounded(
 	}
 	rows := bat.RowCount()
 	var selected *batch.Batch
-	var externalSource *process.HashBuildReservation
 	defer func() {
 		if selected != nil {
 			selected.Clean(proc.Mp())
@@ -1512,11 +1497,9 @@ func (e *SpillEngine) scatterBatchBounded(
 		if reconcileErr != nil && retErr == nil {
 			retErr = reconcileErr
 		}
-		if retErr != nil {
+		if retErr != nil &&
+			!(e.allocation != nil && hashbuild.IsRetryableMemoryCapacity(retErr)) {
 			e.discardScatterBuffers()
-		}
-		if externalSource != nil {
-			externalSource.Release()
 		}
 	}()
 	if e.cfg.Budget != nil && e.allocation == nil {
@@ -1552,20 +1535,18 @@ func (e *SpillEngine) scatterBatchBounded(
 		if err != nil {
 			return err
 		}
-	} else if e.cfg.Budget != nil {
-		externalBytes, err := externalScatterSourceBytes(
-			bat,
-			sourceAlreadyCharged,
+	} else if e.cfg.Budget != nil && !sourceAlreadyCharged {
+		// The child batch is borrowed and already physically live. Rejecting a
+		// new logical token cannot reclaim it, so observe it while exact-account
+		// admission governs every new scatter allocation.
+		externalBytes := bat.Allocated()
+		if size := bat.Size(); size > externalBytes {
+			externalBytes = size
+		}
+		analyzer.GetOpStats().SetMaxExtraStat(
+			"JoinSpillBorrowedSourceBytes",
+			int64(externalBytes),
 		)
-		if err != nil {
-			return err
-		}
-		if externalBytes > 0 {
-			externalSource, err = e.cfg.Budget.Reserve(externalBytes)
-			if err != nil {
-				return err
-			}
-		}
 	}
 
 	if e.allocation != nil {
@@ -1622,7 +1603,6 @@ func (e *SpillEngine) scatterBatchBounded(
 		if start == end || writers[bucketID].Name == "" {
 			continue
 		}
-		sels := e.scatterBucketRowIds[start:end]
 		if selected == nil {
 			var selection *vector.AllocationAccountSelection
 			if e.allocation != nil {
@@ -1642,18 +1622,419 @@ func (e *SpillEngine) scatterBatchBounded(
 				}
 			}
 		}
-		selected.CleanOnlyData()
-		for j, vec := range bat.Vecs {
-			if err := selected.Vecs[j].UnionInt32(vec, sels, proc.Mp()); err != nil {
+		cursor := start
+		for cursor < end {
+			attemptEnd := end
+			reclaimedMinimum := false
+			for {
 				selected.CleanOnlyData()
+				sels := e.scatterBucketRowIds[cursor:attemptEnd]
+				var scatterErr error
+				for j, vec := range bat.Vecs {
+					if scatterErr = selected.Vecs[j].UnionInt32(
+						vec,
+						sels,
+						proc.Mp(),
+					); scatterErr != nil {
+						break
+					}
+				}
+				if scatterErr == nil {
+					selected.SetRowCount(len(sels))
+					scatterErr = e.appendScatterRecord(
+						proc,
+						selected,
+						&writers[bucketID],
+						bucketID,
+						analyzer,
+					)
+				}
+				selected.CleanOnlyData()
+				if scatterErr == nil {
+					cursor = attemptEnd
+					break
+				}
+				if e.allocation == nil ||
+					!hashbuild.IsRetryableMemoryCapacity(scatterErr) {
+					return scatterErr
+				}
+				if err := checkSpillCanceled(proc); err != nil {
+					return err
+				}
+				n := int(attemptEnd - cursor)
+				if n > 1 {
+					attemptEnd = cursor + int32((n+1)/2)
+					analyzer.GetOpStats().AddExtraStat(
+						"JoinSpillBatchReductions",
+						1,
+					)
+					continue
+				}
+				if !reclaimedMinimum {
+					before := e.allocation.account.Snapshot().Used
+					if err := e.reclaimOptionalScatterBuffers(
+						proc,
+						writers,
+						analyzer,
+					); err != nil {
+						return err
+					}
+					reclaimedMinimum = true
+					after := e.allocation.account.Snapshot().Used
+					if after >= before {
+						return hashbuild.NewMinimumAllocationPressureError(
+							"join-spill",
+							"scatter-selected-or-codec",
+							e.allocation.account,
+						)
+					}
+					analyzer.GetOpStats().AddExtraStat(
+						"JoinSpillOptionalReclaims",
+						1,
+					)
+					continue
+				}
+				return hashbuild.NewMinimumAllocationPressureError(
+					"join-spill",
+					"scatter-selected-or-codec",
+					e.allocation.account,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func (e *SpillEngine) reclaimOptionalScatterBuffers(
+	proc *process.Process,
+	writers []BucketWriter,
+	analyzer process.Analyzer,
+) error {
+	for bucket, buffer := range e.scatterAccountedWriteBuffers {
+		if buffer == nil {
+			continue
+		}
+		if buffer.Len() > 0 {
+			if bucket >= len(writers) {
+				return process.ErrHashBuildBudgetInvalid
+			}
+			if err := e.flushPendingScatterBucket(
+				proc,
+				&writers[bucket],
+				bucket,
+				analyzer,
+			); err != nil {
 				return err
 			}
 		}
-		selected.SetRowCount(len(sels))
-		if err := e.appendScatterRecord(proc, selected, &writers[bucketID], bucketID, analyzer); err != nil {
-			selected.CleanOnlyData()
+		buffer.Free()
+		e.scatterAccountedWriteBuffers[bucket] = nil
+	}
+	e.scatterCoalesceDisabled = true
+	if e.scatterAccountedWriteBuf != nil {
+		e.scatterAccountedWriteBuf.Free()
+		e.scatterAccountedWriteBuf = nil
+	}
+	return nil
+}
+
+func (e *SpillEngine) releaseScatterComputeScratch() {
+	if e.allocation == nil || e.allocationMP == nil {
+		return
+	}
+	freeSpillSlice(e.scatterHashValues, e.allocationMP, e.allocation)
+	freeSpillSlice(e.scatterBucketRowIds, e.allocationMP, e.allocation)
+	e.scatterHashValues = nil
+	e.scatterBucketRowIds = nil
+}
+
+func (e *SpillEngine) scatterBatchWithPressure(
+	proc *process.Process,
+	bat *batch.Batch,
+	keyVecs []*vector.Vector,
+	writers []BucketWriter,
+	partitionLevel uint64,
+	sourceAlreadyCharged bool,
+	analyzer process.Analyzer,
+) error {
+	if e.allocation == nil || bat == nil || bat.RowCount() == 0 {
+		return e.scatterBatchBounded(
+			proc,
+			bat,
+			keyVecs,
+			writers,
+			partitionLevel,
+			sourceAlreadyCharged,
+			analyzer,
+		)
+	}
+	rows := bat.RowCount()
+	chunk := rows
+	minimumRetried := false
+	guard := hashbuild.NewPressureRetryGuard(hashbuild.PressureProgress{
+		Used:             e.allocation.account.Snapshot().Used,
+		InputUnits:       rows,
+		OptionalDisabled: e.scatterCoalesceDisabled,
+	}, 64)
+	for start := 0; start < rows; {
+		end := rows
+		if chunk < rows-start {
+			end = start + chunk
+		}
+		current := bat
+		currentKeys := keyVecs
+		if start != 0 || end != rows {
+			var err error
+			current, err = bat.Window(start, end)
+			if err != nil {
+				return err
+			}
+			currentKeys = make([]*vector.Vector, len(keyVecs))
+			for i, key := range keyVecs {
+				currentKeys[i], err = key.Window(start, end)
+				if err != nil {
+					for j := 0; j < i; j++ {
+						currentKeys[j].Free(proc.Mp())
+					}
+					current.Clean(proc.Mp())
+					return err
+				}
+			}
+		}
+		err := e.scatterBatchBounded(
+			proc,
+			current,
+			currentKeys,
+			writers,
+			partitionLevel,
+			sourceAlreadyCharged,
+			analyzer,
+		)
+		if current != bat {
+			for _, key := range currentKeys {
+				key.Free(proc.Mp())
+			}
+			current.Clean(proc.Mp())
+		}
+		if err == nil {
+			start = end
+			minimumRetried = false
+			nextUnits := chunk
+			if remaining := rows - start; remaining < nextUnits {
+				nextUnits = remaining
+			}
+			guard = hashbuild.NewPressureRetryGuard(hashbuild.PressureProgress{
+				Used:             e.allocation.account.Snapshot().Used,
+				InputUnits:       nextUnits,
+				OptionalDisabled: e.scatterCoalesceDisabled,
+			}, 64)
+			continue
+		}
+		if !hashbuild.IsRetryableMemoryCapacity(err) {
 			return err
 		}
+		if cancelErr := checkSpillCanceled(proc); cancelErr != nil {
+			return cancelErr
+		}
+		e.releaseScatterComputeScratch()
+		attempted := end - start
+		if attempted <= 1 {
+			if !minimumRetried {
+				if reclaimErr := e.reclaimOptionalScatterBuffers(
+					proc,
+					writers,
+					analyzer,
+				); reclaimErr != nil {
+					return reclaimErr
+				}
+				next := hashbuild.PressureProgress{
+					Used:             e.allocation.account.Snapshot().Used,
+					InputUnits:       attempted,
+					OptionalDisabled: e.scatterCoalesceDisabled,
+				}
+				if guard.Advance(next) != nil {
+					return hashbuild.NewMinimumAllocationPressureError(
+						"join-spill",
+						"scatter-hash",
+						e.allocation.account,
+					)
+				}
+				minimumRetried = true
+				analyzer.GetOpStats().AddExtraStat(
+					"JoinSpillMinimumRetries",
+					1,
+				)
+				continue
+			}
+			return hashbuild.NewMinimumAllocationPressureError(
+				"join-spill",
+				"scatter-hash",
+				e.allocation.account,
+			)
+		}
+		chunk = (attempted + 1) / 2
+		if err := guard.Advance(hashbuild.PressureProgress{
+			Used:       e.allocation.account.Snapshot().Used,
+			InputUnits: chunk,
+		}); err != nil {
+			return err
+		}
+		analyzer.GetOpStats().AddExtraStat("JoinSpillInputReductions", 1)
+	}
+	return nil
+}
+
+// scatterEvaluatedBatchWithPressure extends the same unpublished-input
+// checkpoint across key evaluation and scatter. Exact expression executors may
+// retain successfully admitted capacities after a later child/result growth
+// fails; evaluating a smaller immutable window can then reuse those capacities
+// without replaying any bucket record. scatterBatchWithPressure owns the
+// transactional boundary after evaluation, so a capacity error returned here
+// has not published the current window.
+func (e *SpillEngine) scatterEvaluatedBatchWithPressure(
+	proc *process.Process,
+	bat *batch.Batch,
+	writers []BucketWriter,
+	partitionLevel uint64,
+	sourceAlreadyCharged bool,
+	analyzer process.Analyzer,
+	eval func(*batch.Batch) ([]*vector.Vector, error),
+) error {
+	if bat == nil || bat.RowCount() == 0 {
+		return nil
+	}
+	if eval == nil {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	if e.allocation == nil {
+		keyVecs, err := eval(bat)
+		if err != nil {
+			return err
+		}
+		return e.scatterBatchWithPressure(
+			proc,
+			bat,
+			keyVecs,
+			writers,
+			partitionLevel,
+			sourceAlreadyCharged,
+			analyzer,
+		)
+	}
+
+	rows := bat.RowCount()
+	chunk := rows
+	minimumRetried := false
+	guard := hashbuild.NewPressureRetryGuard(hashbuild.PressureProgress{
+		Used:             e.allocation.account.Snapshot().Used,
+		InputUnits:       chunk,
+		OptionalDisabled: e.scatterCoalesceDisabled,
+	}, 64)
+	for start := 0; start < rows; {
+		end := rows
+		if chunk < rows-start {
+			end = start + chunk
+		}
+		current := bat
+		if start != 0 || end != rows {
+			var err error
+			current, err = bat.Window(start, end)
+			if err != nil {
+				return err
+			}
+		}
+
+		var err error
+		if err = checkSpillCanceled(proc); err == nil {
+			var keyVecs []*vector.Vector
+			keyVecs, err = eval(current)
+			if err == nil {
+				err = checkSpillCanceled(proc)
+			}
+			if err == nil {
+				err = e.scatterBatchWithPressure(
+					proc,
+					current,
+					keyVecs,
+					writers,
+					partitionLevel,
+					sourceAlreadyCharged,
+					analyzer,
+				)
+			}
+		}
+		if current != bat {
+			current.Clean(proc.Mp())
+		}
+		if err == nil {
+			start = end
+			minimumRetried = false
+			nextUnits := chunk
+			if remaining := rows - start; remaining < nextUnits {
+				nextUnits = remaining
+			}
+			guard = hashbuild.NewPressureRetryGuard(hashbuild.PressureProgress{
+				Used:             e.allocation.account.Snapshot().Used,
+				InputUnits:       nextUnits,
+				OptionalDisabled: e.scatterCoalesceDisabled,
+			}, 64)
+			continue
+		}
+		if !hashbuild.IsRetryableMemoryCapacity(err) {
+			return err
+		}
+		if cancelErr := checkSpillCanceled(proc); cancelErr != nil {
+			return cancelErr
+		}
+
+		e.releaseScatterComputeScratch()
+		attempted := end - start
+		if attempted > 1 {
+			chunk = (attempted + 1) / 2
+			if err := guard.Advance(hashbuild.PressureProgress{
+				Used:             e.allocation.account.Snapshot().Used,
+				InputUnits:       chunk,
+				OptionalDisabled: e.scatterCoalesceDisabled,
+			}); err != nil {
+				return err
+			}
+			analyzer.GetOpStats().AddExtraStat(
+				"JoinSpillExpressionInputReductions",
+				1,
+			)
+			continue
+		}
+
+		if minimumRetried {
+			return hashbuild.NewMinimumAllocationPressureError(
+				"join-spill",
+				"scatter-expression",
+				e.allocation.account,
+			)
+		}
+		if reclaimErr := e.reclaimOptionalScatterBuffers(
+			proc,
+			writers,
+			analyzer,
+		); reclaimErr != nil {
+			return reclaimErr
+		}
+		if err := guard.Advance(hashbuild.PressureProgress{
+			Used:             e.allocation.account.Snapshot().Used,
+			InputUnits:       attempted,
+			OptionalDisabled: e.scatterCoalesceDisabled,
+		}); err != nil {
+			return hashbuild.NewMinimumAllocationPressureError(
+				"join-spill",
+				"scatter-expression",
+				e.allocation.account,
+			)
+		}
+		minimumRetried = true
+		analyzer.GetOpStats().AddExtraStat(
+			"JoinSpillExpressionMinimumRetries",
+			1,
+		)
 	}
 	return nil
 }
@@ -1731,6 +2112,9 @@ func (e *SpillEngine) appendAccountedScatterRecord(
 		return err
 	}
 	payload := e.scatterAccountedWriteBuf.Bytes()
+	if e.scatterCoalesceDisabled {
+		return writeBucketPayload(proc, payload, rows, writer, analyzer)
+	}
 	buf := e.scatterAccountedWriteBuffers[bucket]
 	if buf != nil && buf.Len() > 0 &&
 		buf.Len()+len(payload) > spillWriteCoalesceSize {
@@ -1899,6 +2283,7 @@ func (e *SpillEngine) releaseScatterScratch() {
 		e.scatterWriteRows[i] = 0
 	}
 	e.allocationMP = nil
+	e.scatterCoalesceDisabled = false
 	if e.scatterScratchReservation != nil {
 		e.scatterScratchReservation.Release()
 		e.scatterScratchReservation = nil
@@ -2041,6 +2426,7 @@ type SpillEngine struct {
 	scatterWriteBuffers          [SpillNumBuckets]bytes.Buffer
 	scatterAccountedWriteBuf     *mpool.AccountedBuffer
 	scatterAccountedWriteBuffers [SpillNumBuckets]*mpool.AccountedBuffer
+	scatterCoalesceDisabled      bool
 	scatterWriteRows             [SpillNumBuckets]int64
 	// The lease follows the reusable scratch capacities for the engine
 	// lifetime. It is released only by Cleanup, after all backing arrays have
@@ -2244,14 +2630,17 @@ func (e *SpillEngine) ScatterProbeTable(
 		if bat.IsEmpty() {
 			continue
 		}
-		keyVecs, err := e.evalProbeKeys(proc, bat, evalKeysFn)
-		if err != nil {
-			return err
-		}
-		if err := checkSpillCanceled(proc); err != nil {
-			return err
-		}
-		if err := e.scatterBatch(proc, bat, keyVecs, writers, nil, 0, false, analyzer); err != nil {
+		if err := e.scatterEvaluatedBatchWithPressure(
+			proc,
+			bat,
+			writers,
+			0,
+			false,
+			analyzer,
+			func(current *batch.Batch) ([]*vector.Vector, error) {
+				return e.evalProbeKeys(proc, current, evalKeysFn)
+			},
+		); err != nil {
 			return err
 		}
 	}
@@ -2516,7 +2905,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
 			if isBudgetAdmission(err) {
-				return nil, BucketSkip, noProgressError(bucket.Depth, err)
+				return nil, BucketSkip, noProgressError(proc, bucket.Depth)
 			}
 			return nil, BucketSkip, err
 		}
@@ -2568,7 +2957,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		builder.FreeHashMapAndBatches(proc)
 		builder.Free(proc)
 		if isBudgetAdmission(err) {
-			return nil, BucketSkip, noProgressError(bucket.Depth, err)
+			return nil, BucketSkip, noProgressError(proc, bucket.Depth)
 		}
 		return nil, BucketSkip, err
 	}
@@ -2718,13 +3107,9 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 	evalAndScatter := func(
 		bat *batch.Batch,
 		writers []BucketWriter,
-		buffers []*batch.Batch,
 		execs []colexec.ExpressionExecutor,
 		sourceAlreadyCharged bool,
 	) error {
-		if err := checkSpillCanceled(proc); err != nil {
-			return err
-		}
 		if cap(e.keyVecs) < len(execs) {
 			e.keyVecs = make([]*vector.Vector, len(execs))
 		}
@@ -2734,24 +3119,39 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 				keyVecs[i] = nil
 			}
 		}()
-		err := e.buildExprLease.Run(proc, bat.RowCount(), func(i int) error {
-			vec, evalErr := execs[i].Eval(proc, []*batch.Batch{bat}, nil)
-			if evalErr != nil {
-				return evalErr
-			}
-			keyVecs[i] = vec
-			return nil
-		})
-		if err != nil {
-			// Eval may leave newly allocated child/result vectors cached.
-			// Destroy the owned executor tree before releasing its lease.
-			e.freeKeyExecs()
-			return err
-		}
-		if err := checkSpillCanceled(proc); err != nil {
-			return err
-		}
-		return e.scatterBatch(proc, bat, keyVecs, writers, nil, partitionLevel, sourceAlreadyCharged, analyzer)
+		return e.scatterEvaluatedBatchWithPressure(
+			proc,
+			bat,
+			writers,
+			partitionLevel,
+			sourceAlreadyCharged,
+			analyzer,
+			func(current *batch.Batch) ([]*vector.Vector, error) {
+				for i := range keyVecs {
+					keyVecs[i] = nil
+				}
+				err := e.buildExprLease.Run(proc, current.RowCount(), func(i int) error {
+					vec, evalErr := execs[i].Eval(proc, []*batch.Batch{current}, nil)
+					if evalErr != nil {
+						return evalErr
+					}
+					keyVecs[i] = vec
+					return nil
+				})
+				if err != nil {
+					// Exact capacity pressure keeps the executor tree as the
+					// rollback checkpoint: admitted child/result capacities may
+					// make a smaller immutable window fit. Every other failure is
+					// terminal and can destroy the private tree immediately.
+					if e.allocation == nil ||
+						!hashbuild.IsRetryableMemoryCapacity(err) {
+						e.freeKeyExecs()
+					}
+					return nil, err
+				}
+				return keyVecs, nil
+			},
+		)
 	}
 
 	var buildRows int64
@@ -2759,7 +3159,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		if b != nil {
 			buildRows += int64(b.RowCount())
 		}
-		if err := evalAndScatter(b, buildWriters, nil, e.keyExecs, true); err != nil {
+		if err := evalAndScatter(b, buildWriters, e.keyExecs, true); err != nil {
 			return err
 		}
 		return nil
@@ -2769,7 +3169,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 	if pending != nil && pending.RowCount() > 0 {
 		// pending is the current BucketReader batch whose copy admission failed;
 		// the reader keeps its batch token live until the next ReadBatch.
-		if err := evalAndScatter(pending, buildWriters, nil, e.keyExecs, true); err != nil {
+		if err := evalAndScatter(pending, buildWriters, e.keyExecs, true); err != nil {
 			return nil, err
 		}
 	}
@@ -2789,7 +3189,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			return nil, err
 		}
 		buildRows += int64(bat.RowCount())
-		if err := evalAndScatter(bat, buildWriters, nil, e.keyExecs, true); err != nil {
+		if err := evalAndScatter(bat, buildWriters, e.keyExecs, true); err != nil {
 			return nil, err
 		}
 	}
@@ -2835,7 +3235,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			if err != nil {
 				return nil, err
 			}
-			if err := scatterProbe(proc, e, bat, probeWriters, nil, partitionLevel, analyzer); err != nil {
+			if err := scatterProbe(proc, e, bat, probeWriters, partitionLevel, analyzer); err != nil {
 				return nil, err
 			}
 		}
@@ -2862,8 +3262,8 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		if enqueue {
 			if len(e.buckets)-1+len(subBuckets)+1 > e.cfg.MaxQueue {
 				return nil, &process.HashBuildBudgetError{
-					Kind:    process.HashBuildBudgetErrorAdmission,
-					Message: fmt.Sprintf("join spill queue limit exceeded (limit=%d); reduce join-key skew or increase processLimitationSize", e.cfg.MaxQueue),
+					Kind:    process.HashBuildBudgetErrorInvalid,
+					Message: fmt.Sprintf("spill queue limit exceeded: limit=%d", e.cfg.MaxQueue),
 				}
 			}
 			buildFile, err := buildWriters[i].handOffSpillFile()
@@ -2998,12 +3398,18 @@ func (e *SpillEngine) AdvanceToNextBucket(
 // scatterProbe evaluates probe-side keys (EqConds[0]) for probe re-scatter.
 // It uses the borrowed probe lease, not build-side keyExecs; probeKeyEval is
 // retained only as the unbudgeted fallback.
-func scatterProbe(proc *process.Process, e *SpillEngine, bat *batch.Batch, writers []BucketWriter, buffers []*batch.Batch, seed uint64, analyzer process.Analyzer) error {
-	keyVecs, err := e.evalProbeKeys(proc, bat, e.probeKeyEval)
-	if err != nil {
-		return err
-	}
-	return e.scatterBatch(proc, bat, keyVecs, writers, buffers, seed, true, analyzer)
+func scatterProbe(proc *process.Process, e *SpillEngine, bat *batch.Batch, writers []BucketWriter, seed uint64, analyzer process.Analyzer) error {
+	return e.scatterEvaluatedBatchWithPressure(
+		proc,
+		bat,
+		writers,
+		seed,
+		true,
+		analyzer,
+		func(current *batch.Batch) ([]*vector.Vector, error) {
+			return e.evalProbeKeys(proc, current, e.probeKeyEval)
+		},
+	)
 }
 
 func (e *SpillEngine) evalProbeKeys(
@@ -3056,26 +3462,16 @@ func (e *SpillEngine) freeKeyExecs() {
 }
 
 func isBudgetAdmission(err error) bool {
-	return err != nil &&
-		errors.Is(err, process.ErrHashBuildBudgetAdmission)
+	return hashbuild.IsRetryableMemoryCapacity(err)
 }
 
-func noProgressError(depth int, cause error) error {
-	budgetErr := &process.HashBuildBudgetError{
-		Kind:    process.HashBuildBudgetErrorAdmission,
-		Message: fmt.Sprintf("join spill cannot make progress at depth %d; reduce join-key skew or increase processLimitationSize", depth),
-	}
-	if cause != nil {
-		var budgetCause *process.HashBuildBudgetError
-		if errors.As(cause, &budgetCause) && budgetCause.Kind == process.HashBuildBudgetErrorAdmission {
-			budgetErr.Resource = budgetCause.Resource
-			budgetErr.Requested = budgetCause.Requested
-			budgetErr.Used = budgetCause.Used
-			budgetErr.Cap = budgetCause.Cap
-			budgetErr.Message = fmt.Sprintf("join spill cannot make progress at depth %d", depth)
-		}
-	}
-	return budgetErr
+func noProgressError(proc *process.Process, depth int) error {
+	_ = proc
+	return hashbuild.NewMinimumAllocationPressureError(
+		"join-spill",
+		fmt.Sprintf("partition-depth-%d", depth),
+		nil,
+	)
 }
 
 // Cleanup releases all engine resources.

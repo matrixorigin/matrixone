@@ -215,6 +215,7 @@ func (hashBuild *HashBuild) finalizeBuildFailure(proc *process.Process, err erro
 
 func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &hashBuild.ctr
+	ctr.spillConditions = hashBuild.Conditions
 	spillMode := false
 	var spillFiles []*os.File
 	bundleTransferred := false
@@ -231,6 +232,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			ctr.spillBundle = nil
 		}
 		ctr.freeSpillExprExecs()
+		ctr.spillConditions = nil
 		// Build-key executors are producer scratch. No consumer reads them after
 		// build() returns, so release their retained vectors and expression lease
 		// here instead of holding both until pipeline Reset.
@@ -258,6 +260,12 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				hashBuild.JoinMapRefCnt,
 			)
 		}
+		if ctr.spillBatchAllocation != nil {
+			// Exact mode converts the one-unit forward-progress token into the
+			// expression and scatter allocations that follow. Keeping both live
+			// would stack the same capacity and reject the recovery path itself.
+			ctr.releaseSpillScratchReservation()
+		}
 		execs, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions)
 		if err != nil {
 			return err
@@ -281,7 +289,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				}
 				continue
 			}
-			if err := ctr.spillBatchBounded(proc, bat, spillFiles, execs, analyzer, true); err != nil {
+			if err := ctr.spillBatchWithPressure(proc, bat, spillFiles, execs, analyzer, true); err != nil {
 				return err
 			}
 			if err := ctr.hashmapBuilder.CleanCopiedBatchAt(0, proc); err != nil {
@@ -334,7 +342,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				// proof. Drain them under that lease, then retry the direct proof
 				// after their source reservations have been released.
 				if spillMode ||
-					!errors.Is(directProofErr, process.ErrHashBuildBudgetAdmission) ||
+					!IsRetryableMemoryCapacity(directProofErr) ||
 					len(ctr.hashmapBuilder.Batches.Buf) == 0 {
 					return directProofErr
 				}
@@ -352,7 +360,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				// is admitted. If that proof does not fit, do not copy it: switch
 				// to the already-proven direct-spill path.
 				if err := ctr.ensureRetainedSpillScratchReservation(result.Batch, analyzer); err != nil {
-					if !errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+					if !IsRetryableMemoryCapacity(err) {
 						return err
 					}
 					if err := startSpill(); err != nil {
@@ -363,7 +371,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 		// If in spill mode, spill this batch directly to open files.
 		if spillMode {
-			err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer, false)
+			err := ctr.spillBatchWithPressure(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer, false)
 			if err != nil {
 				return err
 			}
@@ -387,14 +395,14 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		retainedMemBefore := ctr.hashmapBuilder.Batches.MemSize
 		err = ctr.hashmapBuilder.copyBuildBatch(result.Batch, proc)
 		if err != nil {
-			if hashBuild.IsShuffle && errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+			if hashBuild.IsShuffle && IsRetryableMemoryCapacity(err) {
 				// The source batch is still owned by the upstream operator.  Do
 				// not retry CopyIntoBatches (or increment row count again); enter
 				// spill recovery and write this batch directly.
 				if err := startSpill(); err != nil {
 					return err
 				}
-				if err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer, false); err != nil {
+				if err := ctr.spillBatchWithPressure(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer, false); err != nil {
 					return err
 				}
 				continue
@@ -480,7 +488,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				"HashBuildRuntimeFilterCollectionFallbacks", 1)
 		}
 		if err != nil {
-			if !hashBuild.IsShuffle || !errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+			if !hashBuild.IsShuffle || !IsRetryableMemoryCapacity(err) {
 				return err
 			}
 			if !rebuildSafe {

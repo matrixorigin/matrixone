@@ -261,7 +261,8 @@ type container struct {
 	// Non-nil only for spilled joins, where probe expressions are part of the
 	// shared HashBuild/spill working set. Resident probe expressions remain
 	// under normal process/mpool accounting; this is not a general query budget.
-	probeExpressionLease *hashbuild.ExpressionMemoryLease
+	probeExpressionLease      *hashbuild.ExpressionMemoryLease
+	probeExpressionsAccounted bool
 }
 
 type DedupJoin struct {
@@ -331,7 +332,8 @@ func (dedupJoin *DedupJoin) ClearAllocationAccount(
 	if dedupJoin.allocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
 	}
-	if dedupJoin.ctr.mp != nil || dedupJoin.ctr.spillEngine != nil {
+	if dedupJoin.ctr.mp != nil || dedupJoin.ctr.spillEngine != nil ||
+		dedupJoin.ctr.probeExpressionsAccounted {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	dedupJoin.allocationAccount = nil
@@ -413,7 +415,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
 	}
-	if ctr.probeExpressionLease != nil {
+	if ctr.probeExpressionLease != nil || ctr.probeExpressionsAccounted {
 		ctr.cleanEvalVectors()
 		ctr.releaseProbeExpressionLease()
 	} else {
@@ -529,6 +531,7 @@ func (ctr *container) cleanEvalVectors() {
 	}
 	ctr.evecs = nil
 	ctr.vecs = nil
+	ctr.probeExpressionsAccounted = false
 }
 
 func (ctr *container) resetEvalVectors() {

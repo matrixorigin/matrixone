@@ -153,45 +153,63 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 	if ignoreRow.Count() == 0 {
 		return nil
 	}
-
-	ignoreRow.Negate()
-	count := int64(ignoreRow.Count())
-	sels := make([]int32, 0, count)
-	itr := ignoreRow.Iterator()
-	for itr.HasNext() {
-		r := itr.Next()
-		sels = append(sels, int32(r))
+	if len(bs.Buf) == 0 || bs.Buf[0] == nil {
+		return mpool.ErrAllocationAccountInvalid
 	}
 
-	n := (len(sels)-1)/DefaultBatchSize + 1
+	ignoreRow.Negate()
+	// Build the replacement privately and stream the active row IDs directly
+	// from the bitmap. The old implementation materialized one Go int32 per
+	// row and silently dropped the copied-batch allocation provenance.
+	count := ignoreRow.Count()
+	n := (count + DefaultBatchSize - 1) / DefaultBatchSize
+	if n == 0 {
+		n = 1
+	}
+	selection := bs.Buf[0].AllocationAccountSelection()
 	newBuf := make([]*batch.Batch, n)
-	for i := range newBuf {
-		newBuf[i] = batch.NewOffHeapWithSize(len(bs.Buf[i].Vecs))
-		for j, vec := range bs.Buf[0].Vecs {
-			newBuf[i].Vecs[j] = vector.NewOffHeapVecWithType(*vec.GetType())
-		}
-		var newsels []int32
-		if (i+1)*DefaultBatchSize <= len(sels) {
-			newsels = sels[i*DefaultBatchSize : (i+1)*DefaultBatchSize]
-		} else {
-			newsels = sels[i*DefaultBatchSize:]
-		}
-		for _, sel := range newsels {
-			idx1, idx2 := sel/DefaultBatchSize, sel%DefaultBatchSize
-			for j, vec := range bs.Buf[idx1].Vecs {
-				if err := newBuf[i].Vecs[j].UnionOne(vec, int64(idx2), proc.Mp()); err != nil {
-					for k := 0; k <= i; k++ {
-						newBuf[k].Clean(proc.Mp())
-					}
-					return err
+	cleanup := true
+	defer func() {
+		if cleanup {
+			for _, bat := range newBuf {
+				if bat != nil {
+					bat.Clean(proc.Mp())
 				}
 			}
+			// Preserve the caller's ignore-row checkpoint on failure.
+			ignoreRow.Negate()
 		}
-		newBuf[i].SetRowCount(len(newsels))
+	}()
+	for i := range newBuf {
+		newBuf[i] = batch.NewOffHeapWithSize(len(bs.Buf[0].Vecs))
+		if err := newBuf[i].SetAllocationAccount(selection); err != nil {
+			return err
+		}
+		for j, vec := range bs.Buf[0].Vecs {
+			newBuf[i].SetVector(int32(j), vector.NewOffHeapVecWithType(*vec.GetType()))
+		}
+	}
+	itr := ignoreRow.Iterator()
+	outRow := 0
+	for itr.HasNext() {
+		sel := int(itr.Next())
+		srcBatch, srcRow := sel/DefaultBatchSize, sel%DefaultBatchSize
+		dstBatch := outRow / DefaultBatchSize
+		for j, vec := range bs.Buf[srcBatch].Vecs {
+			if err := newBuf[dstBatch].Vecs[j].UnionOne(vec, int64(srcRow), proc.Mp()); err != nil {
+				return err
+			}
+		}
+		newBuf[dstBatch].AddRowCount(1)
+		outRow++
 	}
 
 	bs.Clean(proc.Mp())
 	bs.Buf = newBuf
+	for _, bat := range newBuf {
+		bs.MemSize += int64(bat.Size())
+	}
+	cleanup = false
 
 	return nil
 }

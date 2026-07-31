@@ -1941,33 +1941,17 @@ func TestSpillEngineInitFromOwnedFilesAndErrorClassification(t *testing.T) {
 	require.False(t, isBudgetAdmission(io.EOF))
 	require.True(t, isBudgetAdmission(process.ErrHashBuildBudgetAdmission))
 	require.False(t, isBudgetAdmission(process.ErrHashBuildBudgetClosed))
-	require.True(t, isBudgetAdmission(&process.HashBuildBudgetError{
-		Kind: process.HashBuildBudgetErrorAdmission,
+	require.False(t, isBudgetAdmission(&process.HashBuildBudgetError{
+		Kind:      process.HashBuildBudgetErrorAdmission,
+		Component: process.HashBuildBudgetComponentSpillDisk,
 	}))
 	require.False(t, isBudgetAdmission(&process.HashBuildBudgetError{
-		Kind: process.HashBuildBudgetErrorClosed,
-	}))
-	logicalNoProgress := noProgressError(3, nil)
-	require.ErrorIs(t, logicalNoProgress, process.ErrHashBuildBudgetAdmission)
-	require.Contains(t, logicalNoProgress.Error(), "depth 3")
-	require.Contains(t, logicalNoProgress.Error(), "reduce join-key skew")
-	require.NotContains(t, logicalNoProgress.Error(), process.ErrHashBuildBudgetAdmission.Error())
-
-	memoryAdmission := &process.HashBuildBudgetError{
 		Kind:      process.HashBuildBudgetErrorAdmission,
-		Resource:  process.HashBuildBudgetResourceMemory,
-		Requested: 11,
-		Used:      13,
-		Cap:       17,
-	}
-	budgetNoProgress := noProgressError(4, memoryAdmission)
-	var budgetErr *process.HashBuildBudgetError
-	require.ErrorAs(t, budgetNoProgress, &budgetErr)
-	require.Equal(t, process.HashBuildBudgetResourceMemory, budgetErr.Resource)
-	require.Equal(t, uint64(11), budgetErr.Requested)
-	require.Equal(t, uint64(13), budgetErr.Used)
-	require.Equal(t, uint64(17), budgetErr.Cap)
-	require.Equal(t, "join spill cannot make progress at depth 4", budgetErr.Message)
+		Component: process.HashBuildBudgetComponentSpillFD,
+	}))
+	require.Equal(t,
+		hashbuild.MemoryPressureMinimumUnit,
+		hashbuild.MemoryPressureReasonOf(noProgressError(nil, 3)))
 	require.NoError(t, owned.Close())
 }
 
@@ -2895,12 +2879,11 @@ func TestSpillEntryPointsRejectPreCanceledProcessWithoutOwnershipTransfer(t *tes
 	t.Cleanup(cleanEngine)
 	scatterWriters := []BucketWriter{{Name: "must_not_be_created"}}
 	t.Cleanup(scatterWriters[0].Close)
-	err = engine.scatterBatch(
+	err = engine.scatterBatchWithPressure(
 		proc,
 		input,
 		[]*vector.Vector{input.Vecs[0]},
 		scatterWriters,
-		nil,
 		0,
 		false,
 		process.NewAnalyzer(0, false, false, "test"),
@@ -4066,16 +4049,15 @@ func TestScatterProbeFunctionUsesStoredEval(t *testing.T) {
 	}
 
 	writers := MakeBucketWriters("test_scatter_func")
-	buffers := make([]*batch.Batch, len(writers))
 	bat := makeInt32Batch(proc, []int32{5, 15, 25})
 
-	err := scatterProbe(proc, engine, bat, writers, buffers, 1, nil)
+	err := scatterProbe(proc, engine, bat, writers, 1, nil)
 	require.NoError(t, err)
 	require.True(t, evalCalled, "probeKeyEval must be used for scatterProbe")
 
 	wantErr := errors.New("probe key evaluation failed")
 	engine.probeKeyEval = func(*batch.Batch) ([]*vector.Vector, error) { return nil, wantErr }
-	require.ErrorIs(t, scatterProbe(proc, engine, bat, writers, buffers, 1, nil), wantErr)
+	require.ErrorIs(t, scatterProbe(proc, engine, bat, writers, 1, nil), wantErr)
 
 	for i := range writers {
 		writers[i].Close()

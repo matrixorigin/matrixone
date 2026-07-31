@@ -212,12 +212,35 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 			if takeErr != nil {
 				return takeErr
 			}
-			probeExecutors := make([]colexec.ExpressionExecutor, len(ctr.evecs))
-			for i := range ctr.evecs {
-				probeExecutors[i] = ctr.evecs[i].executor
+			var probeExpressionLease *hashbuild.ExpressionMemoryLease
+			var leaseErr error
+			if rightDedupJoin.allocationAccount != nil &&
+				hashbuild.AllocationAccountedExpressionSetSupported(rightDedupJoin.Conditions[0]) {
+				ctr.cleanEvalVectors()
+				var probeExecutors []colexec.ExpressionExecutor
+				probeExecutors, leaseErr =
+					hashbuild.NewAllocationAccountedExpressionExecutorsForAccount(
+						proc,
+						rightDedupJoin.Conditions[0],
+						rightDedupJoin.allocationAccount,
+						hashbuild.HashBuildAllocationOwner,
+					)
+				if leaseErr == nil {
+					ctr.evecs = make([]evalVector, len(probeExecutors))
+					ctr.vecs = make([]*vector.Vector, len(probeExecutors))
+					for i := range probeExecutors {
+						ctr.evecs[i].executor = probeExecutors[i]
+					}
+					ctr.probeExpressionsAccounted = true
+				}
+			} else {
+				probeExecutors := make([]colexec.ExpressionExecutor, len(ctr.evecs))
+				for i := range ctr.evecs {
+					probeExecutors[i] = ctr.evecs[i].executor
+				}
+				probeExpressionLease, leaseErr = hashbuild.NewExpressionMemoryLease(
+					budget, rightDedupJoin.Conditions[0], probeExecutors, false)
 			}
-			probeExpressionLease, leaseErr := hashbuild.NewExpressionMemoryLease(
-				budget, rightDedupJoin.Conditions[0], probeExecutors, false)
 			if leaseErr != nil {
 				_ = payload.Close()
 				ctr.mp.Free()
@@ -256,7 +279,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				},
 				analyzer,
 				func(bat *batch.Batch) ([]*vector.Vector, error) {
-					if err := ctr.evalJoinCondition(bat, proc); err != nil {
+					if err := ctr.evalJoinConditionBudgeted(bat, proc); err != nil {
 						return nil, err
 					}
 					return ctr.vecs, nil

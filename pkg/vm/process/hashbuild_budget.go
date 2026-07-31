@@ -33,12 +33,16 @@ const hashBuildMinimumReserve = uint64(4 << 30)
 
 const (
 	hashBuildAllocationGenerationSlots = uint32(131_072)
-	hashBuildMinimumCellBlockBytes     = uint64(16 << 10)
-	// Three slots close the cell/descriptor replacement transaction. The
-	// copied-batch activation adds up to three vector buffers per minimum-width
-	// 8,192-row destination (data, nulls, grouping), so six slots per 16 KiB of
-	// aggregate capacity is the first combined owner bound.
-	hashBuildAllocationSlotsPerBlock = uint64(6)
+	// Account metadata lives outside the MPool payload cap. Bound its worst-case
+	// Go-heap footprint to half of hashBuildMinimumReserve: 128 bytes covers one
+	// sparse pointer/lease-map entry, and 16,777,216 live entries consume at most
+	// 2 GiB by construction. Small aggregate caps use the tighter byte
+	// conservation bound because every physical allocation owns at least one
+	// byte. Slot exhaustion is real metadata capacity pressure, not an
+	// estimator rejection.
+	hashBuildAllocationMetadataBytesPerSlot = uint64(128)
+	hashBuildAllocationMetadataHeadroom     = hashBuildMinimumReserve / 2
+	hashBuildAllocationMetadataMaxSlots     = hashBuildAllocationMetadataHeadroom / hashBuildAllocationMetadataBytesPerSlot
 )
 
 const (
@@ -146,16 +150,18 @@ const (
 	HashBuildBudgetErrorCeilingMissing
 )
 
-// HashBuildBudgetResource identifies the finite resource whose admission
-// failed. It is separate from Kind: every resource can reject capacity, while
-// lifecycle and accounting failures remain resource-independent.
-type HashBuildBudgetResource uint8
+// HashBuildBudgetComponent identifies the independently bounded resource that
+// rejected an admission. The zero value remains the memory component for
+// compatibility with older callers that construct HashBuildBudgetError
+// directly. A spill-disk or spill-FD rejection must never enter the memory
+// reclaim/reduce loop: reducing an in-memory batch cannot create either
+// resource and may replay already-published spill records.
+type HashBuildBudgetComponent uint8
 
 const (
-	HashBuildBudgetResourceUnknown HashBuildBudgetResource = iota
-	HashBuildBudgetResourceMemory
-	HashBuildBudgetResourceSpillDisk
-	HashBuildBudgetResourceSpillFD
+	HashBuildBudgetComponentMemory HashBuildBudgetComponent = iota
+	HashBuildBudgetComponentSpillDisk
+	HashBuildBudgetComponentSpillFD
 )
 
 // HashBuildBudgetError carries bounded, observational details for an
@@ -164,7 +170,7 @@ const (
 // to inspect; they are never produced by overflowing arithmetic.
 type HashBuildBudgetError struct {
 	Kind      HashBuildBudgetErrorKind
-	Resource  HashBuildBudgetResource
+	Component HashBuildBudgetComponent
 	Requested uint64
 	Used      uint64
 	Cap       uint64
@@ -422,10 +428,10 @@ func (b *HashBuildBudget) SetSpillCaps(diskBytes, fds uint64) error {
 	}
 	effectiveFDCap := clampSpillFDCap(fds, processLimit, limitKnown)
 	if b.spillDiskUsed > diskBytes {
-		return newAdmissionError(HashBuildBudgetResourceSpillDisk, 0, b.spillDiskUsed, diskBytes)
+		return newComponentAdmissionError(HashBuildBudgetComponentSpillDisk, 0, b.spillDiskUsed, diskBytes)
 	}
 	if b.spillFDUsed > effectiveFDCap {
-		return newAdmissionError(HashBuildBudgetResourceSpillFD, 0, b.spillFDUsed, effectiveFDCap)
+		return newComponentAdmissionError(HashBuildBudgetComponentSpillFD, 0, b.spillFDUsed, effectiveFDCap)
 	}
 	b.spillDiskCap = diskBytes
 	b.spillFDConfiguredCap = fds
@@ -1141,9 +1147,12 @@ func (g *HashBuildBudgetGeneration) Closed() bool {
 
 // AllocationAccountRegistry returns the bounded CN-local registry shared by
 // every activated HashBuild generation under this aggregate budget. The slot
-// formula covers every minimum-size cell block, its published descriptor, one
-// private replacement transaction, and the copied-batch vector buffers added
-// by the second activation.
+// bound follows a conservation fact rather than a per-operator multiplier:
+// every live allocation owns at least one byte and all accounts share the
+// aggregate byte cap, so live metadata cannot exceed aggregate capacity. A
+// second fixed bound reserves at most 2 GiB of the existing 4 GiB CN
+// headroom at 128 bytes per metadata entry. The registry stores only the
+// resulting scalar limit; it does not preallocate one object per slot.
 func (g *HashBuildBudgetGeneration) AllocationAccountRegistry() (
 	*mpool.AllocationAccountRegistry,
 	error,
@@ -1154,21 +1163,15 @@ func (g *HashBuildBudgetGeneration) AllocationAccountRegistry() (
 	b := g.budget
 	b.allocationRegistryOnce.Do(func() {
 		capBytes := b.AggregateCap()
-		blocks := capBytes / hashBuildMinimumCellBlockBytes
-		if capBytes%hashBuildMinimumCellBlockBytes != 0 {
-			blocks++
-		}
-		if blocks == 0 {
-			blocks = 1
-		}
-		if blocks > math.MaxUint64/hashBuildAllocationSlotsPerBlock {
+		if capBytes == 0 {
 			b.allocationRegistryErr = ErrHashBuildBudgetInvalid
 			return
 		}
+		allocationSlots := min(capBytes, hashBuildAllocationMetadataMaxSlots)
 		b.allocationRegistry, b.allocationRegistryErr =
 			mpool.NewAllocationAccountRegistry(
 				hashBuildAllocationGenerationSlots,
-				blocks*hashBuildAllocationSlotsPerBlock,
+				allocationSlots,
 			)
 	})
 	return b.allocationRegistry, b.allocationRegistryErr
@@ -1355,7 +1358,7 @@ func (g *HashBuildBudgetGeneration) reserveLocked(
 			g.rejectCount++
 			observeHashBuildBudget("memory", "reject", "cn", size)
 		}
-		return nil, newAdmissionError(HashBuildBudgetResourceMemory, size, b.aggregateUsed, b.aggregateCap), true
+		return nil, newAdmissionError(size, b.aggregateUsed, b.aggregateCap), true
 	}
 	b.aggregateUsed += size
 	if g.used > g.cap || size > g.cap-g.used {
@@ -1363,7 +1366,7 @@ func (g *HashBuildBudgetGeneration) reserveLocked(
 		b.aggregateUsed -= size
 		g.rejectCount++
 		observeHashBuildBudget("memory", "reject", "query", size)
-		return nil, newAdmissionError(HashBuildBudgetResourceMemory, size, g.used, g.cap), false
+		return nil, newAdmissionError(size, g.used, g.cap), false
 	}
 	g.used += size
 	g.reserveCount++
@@ -1490,12 +1493,12 @@ func (r *HashBuildReservation) growLocked(additional uint64, recordAggregateReje
 			g.rejectCount++
 			observeHashBuildBudget("memory", "reject", "cn", additional)
 		}
-		return newAdmissionError(HashBuildBudgetResourceMemory, additional, b.aggregateUsed, b.aggregateCap), true
+		return newAdmissionError(additional, b.aggregateUsed, b.aggregateCap), true
 	}
 	if g.used > g.cap || additional > g.cap-g.used {
 		g.rejectCount++
 		observeHashBuildBudget("memory", "reject", "query", additional)
-		return newAdmissionError(HashBuildBudgetResourceMemory, additional, g.used, g.cap), false
+		return newAdmissionError(additional, g.used, g.cap), false
 	}
 	if r.core.size > math.MaxUint64-additional {
 		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Requested: additional, Message: "hash build reservation size overflow"}, false
@@ -1510,10 +1513,24 @@ func (r *HashBuildReservation) growLocked(additional uint64, recordAggregateReje
 	return nil, false
 }
 
-func newAdmissionError(resource HashBuildBudgetResource, requested, used, cap uint64) error {
+func newAdmissionError(requested, used, cap uint64) error {
+	return newComponentAdmissionError(
+		HashBuildBudgetComponentMemory,
+		requested,
+		used,
+		cap,
+	)
+}
+
+func newComponentAdmissionError(
+	component HashBuildBudgetComponent,
+	requested uint64,
+	used uint64,
+	cap uint64,
+) error {
 	return &HashBuildBudgetError{
 		Kind:      HashBuildBudgetErrorAdmission,
-		Resource:  resource,
+		Component: component,
 		Requested: requested,
 		Used:      used,
 		Cap:       cap,
@@ -1721,12 +1738,12 @@ func (g *HashBuildBudgetGeneration) ReserveSpillDisk(size uint64) (*HashBuildSpi
 	if b.spillDiskUsed > b.spillDiskCap || size > b.spillDiskCap-b.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "cn", size)
-		return nil, newAdmissionError(HashBuildBudgetResourceSpillDisk, size, b.spillDiskUsed, b.spillDiskCap)
+		return nil, newComponentAdmissionError(HashBuildBudgetComponentSpillDisk, size, b.spillDiskUsed, b.spillDiskCap)
 	}
 	if g.spillDiskUsed > g.spillDiskCap || size > g.spillDiskCap-g.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "query", size)
-		return nil, newAdmissionError(HashBuildBudgetResourceSpillDisk, size, g.spillDiskUsed, g.spillDiskCap)
+		return nil, newComponentAdmissionError(HashBuildBudgetComponentSpillDisk, size, g.spillDiskUsed, g.spillDiskCap)
 	}
 	b.spillDiskUsed += size
 	g.spillDiskUsed += size
@@ -1764,12 +1781,12 @@ func (r *HashBuildSpillDiskReservation) Grow(additional uint64) error {
 	if b.spillDiskUsed > b.spillDiskCap || additional > b.spillDiskCap-b.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "cn", additional)
-		return newAdmissionError(HashBuildBudgetResourceSpillDisk, additional, b.spillDiskUsed, b.spillDiskCap)
+		return newComponentAdmissionError(HashBuildBudgetComponentSpillDisk, additional, b.spillDiskUsed, b.spillDiskCap)
 	}
 	if g.spillDiskUsed > g.spillDiskCap || additional > g.spillDiskCap-g.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "query", additional)
-		return newAdmissionError(HashBuildBudgetResourceSpillDisk, additional, g.spillDiskUsed, g.spillDiskCap)
+		return newComponentAdmissionError(HashBuildBudgetComponentSpillDisk, additional, g.spillDiskUsed, g.spillDiskCap)
 	}
 	if r.core.size > math.MaxUint64-additional {
 		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Requested: additional, Message: "spill disk reservation size overflow"}
@@ -1807,12 +1824,12 @@ func (g *HashBuildBudgetGeneration) ReserveSpillFD(size uint64) (*HashBuildSpill
 	if b.spillFDUsed > b.spillFDCap || size > b.spillFDCap-b.spillFDUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_fd", "reject", "cn", size)
-		return nil, newAdmissionError(HashBuildBudgetResourceSpillFD, size, b.spillFDUsed, b.spillFDCap)
+		return nil, newComponentAdmissionError(HashBuildBudgetComponentSpillFD, size, b.spillFDUsed, b.spillFDCap)
 	}
 	if g.spillFDUsed > g.spillFDCap || size > g.spillFDCap-g.spillFDUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_fd", "reject", "query", size)
-		return nil, newAdmissionError(HashBuildBudgetResourceSpillFD, size, g.spillFDUsed, g.spillFDCap)
+		return nil, newComponentAdmissionError(HashBuildBudgetComponentSpillFD, size, g.spillFDUsed, g.spillFDCap)
 	}
 	b.spillFDUsed += size
 	g.spillFDUsed += size

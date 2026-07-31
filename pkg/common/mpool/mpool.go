@@ -809,7 +809,17 @@ func (mp *MPool) allocAccountedWithDetailK(
 	detailk string,
 	sz int64,
 	request allocationAccountRequest,
-) ([]byte, error) {
+) (result []byte, retErr error) {
+	defer func() {
+		if retErr != nil {
+			retErr = fmt.Errorf(
+				"allocation owner=%d site=%d: %w",
+				request.owner,
+				request.site,
+				retErr,
+			)
+		}
+	}()
 	if err := request.validate(); err != nil {
 		return nil, err
 	}
@@ -922,24 +932,14 @@ func (mp *MPool) allocAccounted(
 	}()
 
 	if err = request.account.acquire(uint64(sz)); err != nil {
-		return nil, fmt.Errorf(
-			"allocation owner=%d site=%d: %w",
-			request.owner,
-			request.site,
-			err,
-		)
+		return nil, err
 	}
 	accountHeld = true
 	if err = request.reach(allocationAfterAccount); err != nil {
 		return nil, err
 	}
 	if err = request.account.registry.reserveMetadata(); err != nil {
-		return nil, fmt.Errorf(
-			"allocation owner=%d site=%d: %w",
-			request.owner,
-			request.site,
-			err,
-		)
+		return nil, err
 	}
 	metadataHeld = true
 	if err = request.reach(allocationAfterMetadata); err != nil {

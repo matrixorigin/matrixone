@@ -32,18 +32,18 @@ func TestTerminalBudgetError(t *testing.T) {
 	})
 
 	for _, tc := range []struct {
-		name     string
-		resource process.HashBuildBudgetResource
-		want     []string
+		name      string
+		component process.HashBuildBudgetComponent
+		want      []string
 	}{
-		{"memory", process.HashBuildBudgetResourceMemory, []string{"memory", "requested=3", "used=5", "limit=7", "build width", "processLimitationSize", "join_spill_mem", "recovery headroom"}},
-		{"spill disk", process.HashBuildBudgetResourceSpillDisk, []string{"spill disk", "requested=3", "used=5", "limit=7", "processLimitationSpillSize"}},
-		{"spill fd", process.HashBuildBudgetResourceSpillFD, []string{"spill file descriptor", "requested=3", "used=5", "limit=7", "open-file limit"}},
+		{"memory", process.HashBuildBudgetComponentMemory, []string{"memory", "requested=3", "used=5", "limit=7", "build width", "processLimitationSize", "join_spill_mem", "recovery headroom"}},
+		{"spill disk", process.HashBuildBudgetComponentSpillDisk, []string{"spill disk", "requested=3", "used=5", "limit=7", "processLimitationSpillSize"}},
+		{"spill fd", process.HashBuildBudgetComponentSpillFD, []string{"spill file descriptor", "requested=3", "used=5", "limit=7", "open-file limit"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := TerminalBudgetError(context.Background(), &process.HashBuildBudgetError{
 				Kind:      process.HashBuildBudgetErrorAdmission,
-				Resource:  tc.resource,
+				Component: tc.component,
 				Requested: 3,
 				Used:      5,
 				Cap:       7,
@@ -72,7 +72,7 @@ func TestTerminalBudgetError(t *testing.T) {
 	t.Run("resource admission keeps spill depth context", func(t *testing.T) {
 		err := TerminalBudgetError(context.Background(), &process.HashBuildBudgetError{
 			Kind:      process.HashBuildBudgetErrorAdmission,
-			Resource:  process.HashBuildBudgetResourceMemory,
+			Component: process.HashBuildBudgetComponentMemory,
 			Requested: 3,
 			Used:      5,
 			Cap:       7,

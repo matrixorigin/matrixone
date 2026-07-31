@@ -142,7 +142,10 @@ func IsRetryableAllocationCapacity(err error) bool {
 // the terminal boundary even if a later physical Free drains the tombstone.
 type AllocationAccountTerminalSnapshot struct {
 	AllocationAccountSnapshot
-	State AllocationAccountTerminalState
+	State           AllocationAccountTerminalState
+	LiveOwner       AllocationOwner
+	LiveSite        AllocationSite
+	LiveAllocations uint64
 }
 
 // AllocationAccountCheckpoint records the physical live-byte boundary before
@@ -552,6 +555,8 @@ func (r *AllocationAccountRegistry) CompleteTerminalWithError(
 	}
 
 	snapshot.State = AllocationAccountTerminalInvariantFailure
+	snapshot.LiveOwner, snapshot.LiveSite, snapshot.LiveAllocations =
+		allocationAccountLiveDiagnostic(account)
 	entry.terminal = &snapshot
 	entry.tombstone = true
 	r.tombstones++
@@ -572,13 +577,53 @@ func newAllocationTerminalInvariantError(
 	snapshot AllocationAccountTerminalSnapshot,
 ) error {
 	return fmt.Errorf(
-		"%w: handle=%d used=%d peak=%d limit=%d",
+		"%w: handle=%d used=%d peak=%d limit=%d owner=%d site=%d live-allocations=%d",
 		ErrAllocationAccountInvariant,
 		snapshot.Handle,
 		snapshot.Used,
 		snapshot.Peak,
 		snapshot.Limit,
+		snapshot.LiveOwner,
+		snapshot.LiveSite,
+		snapshot.LiveAllocations,
 	)
+}
+
+// allocationAccountLiveDiagnostic is a terminal-only scan. It does not add a
+// per-allocation hot-path counter: provenance already lives in the pointer
+// metadata required for physical Free. The first live owner/site plus the
+// exact live allocation count makes a nonzero terminal snapshot actionable.
+func allocationAccountLiveDiagnostic(
+	account *AllocationAccount,
+) (AllocationOwner, AllocationSite, uint64) {
+	if account == nil {
+		return 0, 0, 0
+	}
+	var owner AllocationOwner
+	var site AllocationSite
+	var count uint64
+	record := func(lease allocationLease) {
+		if lease.account != account {
+			return
+		}
+		if count == 0 {
+			owner = lease.owner
+			site = lease.site
+		}
+		count++
+	}
+	for i := range globalPtrShards {
+		shard := &globalPtrShards[i]
+		shard.mu.Lock()
+		for _, lease := range shard.leases {
+			record(lease)
+		}
+		shard.mu.Unlock()
+	}
+	// noLock pools intentionally provide no synchronization for their local
+	// maps. Do not race unrelated single-threaded pools merely to enrich a
+	// terminal error; production query pools use the sharded metadata above.
+	return owner, site, count
 }
 
 func (r *AllocationAccountRegistry) removeSlotLocked(

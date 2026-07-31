@@ -62,3 +62,37 @@ func TestHashJoinResetReleasesProbeExpressionLease(t *testing.T) {
 	require.Nil(t, arg.ctr.eqCondVecs)
 	require.Nil(t, arg.ctr.probeExpressionLease)
 }
+
+func TestHashJoinResetReleasesAccountedProbeExpressions(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	const capBytes = uint64(1 << 20)
+	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(capBytes, generation)
+	require.NoError(t, err)
+	expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 1}}}}
+	executors, err := hashbuild.NewAllocationAccountedExpressionExecutorsForAccount(
+		proc, []*plan.Expr{expr}, account, hashbuild.HashBuildAllocationOwner)
+	require.NoError(t, err)
+	arg := &HashJoin{allocationAccount: account}
+	arg.ctr.eqCondExecs = executors
+	arg.ctr.eqCondVecs = make([]*vector.Vector, len(executors))
+	arg.ctr.probeExpressionsAccounted = true
+	input := batch.NewWithSize(0)
+	input.SetRowCount(4)
+	require.NoError(t, arg.ctr.evalJoinConditionBudgeted(input, proc))
+	require.Positive(t, account.Snapshot().Used)
+
+	arg.Reset(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	require.False(t, arg.ctr.probeExpressionsAccounted)
+	require.Nil(t, arg.ctr.eqCondExecs)
+	terminal, _, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
+}

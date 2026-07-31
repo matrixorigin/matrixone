@@ -123,6 +123,30 @@ func TestMPoolAccountedAllocGrowFree(t *testing.T) {
 	finalizeTestAllocationAccount(t, registry, account)
 }
 
+func TestMPoolTerminalLeakDiagnosticUsesPublishedProvenance(t *testing.T) {
+	registry, account := newTestAllocationAccount(t, 64, 1)
+	mp := MustNew("accounted-terminal-diagnostic")
+	defer DeleteMPool(mp)
+	buffer, err := mp.AllocAccounted(
+		64,
+		account,
+		testAllocationOwner,
+		testAllocationSite,
+	)
+	require.NoError(t, err)
+	snapshot, first, err := registry.CompleteTerminal(account)
+	require.True(t, first)
+	require.ErrorIs(t, err, ErrAllocationAccountInvariant)
+	require.Equal(t, testAllocationOwner, snapshot.LiveOwner)
+	require.Equal(t, testAllocationSite, snapshot.LiveSite)
+	require.Equal(t, uint64(1), snapshot.LiveAllocations)
+	require.Contains(t, err.Error(), "owner=1 site=1 live-allocations=1")
+	mp.Free(buffer)
+	require.False(t, registry.AdmissionSuspended())
+	_, ok := registry.Resolve(snapshot.Handle)
+	require.False(t, ok)
+}
+
 func TestMPoolMakeSliceAccounted(t *testing.T) {
 	registry, account := newTestAllocationAccount(t, 64, 2)
 	mp := MustNew("accounted-typed-slice")
@@ -200,6 +224,7 @@ func TestMPoolAccountedRollback(t *testing.T) {
 			testAllocationSite,
 		)
 		require.ErrorIs(t, err, ErrAllocationAccountCapacity)
+		require.Contains(t, err.Error(), "owner=1 site=1")
 		require.Zero(t, account.Snapshot().Used)
 		require.Zero(t, registry.LiveAllocationMetadata())
 		finalizeTestAllocationAccount(t, registry, account)
@@ -217,6 +242,7 @@ func TestMPoolAccountedRollback(t *testing.T) {
 			testAllocationSite,
 		)
 		require.ErrorIs(t, err, ErrAllocationMetadataSlots)
+		require.Contains(t, err.Error(), "owner=1 site=1")
 		require.Zero(t, account.Snapshot().Used)
 		require.Zero(t, registry.LiveAllocationMetadata())
 		finalizeTestAllocationAccount(t, registry, account)

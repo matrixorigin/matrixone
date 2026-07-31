@@ -676,6 +676,12 @@ func (hb *HashmapBuilder) reserveBuildAux(
 	if hb.budget == nil {
 		return nil
 	}
+	if hb.batchAllocation != nil {
+		// Exact mode charges every data-scaled auxiliary owner at its physical
+		// allocation boundary. A second estimator reservation would double count
+		// the same memory and reintroduce false admission failures.
+		return nil
+	}
 	if hb.auxReservation != nil {
 		// BuildHashmap can be retried on the same retained batches with a
 		// different optional-runtime-filter decision. Reconcile the existing

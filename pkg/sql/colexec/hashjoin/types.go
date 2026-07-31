@@ -110,8 +110,9 @@ type container struct {
 	// Non-nil only for spilled joins, where probe expressions are part of the
 	// shared HashBuild/spill working set. Resident probe expressions remain
 	// under normal process/mpool accounting; this is not a general query budget.
-	probeExpressionLease *hashbuild.ExpressionMemoryLease
-	probeBucketActive    bool // true while reading probe batches from a bucket
+	probeExpressionLease      *hashbuild.ExpressionMemoryLease
+	probeExpressionsAccounted bool
+	probeBucketActive         bool // true while reading probe batches from a bucket
 }
 
 type HashJoin struct {
@@ -171,7 +172,8 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 	if hashJoin.allocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
 	}
-	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil {
+	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
+		hashJoin.ctr.probeExpressionsAccounted {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	hashJoin.allocationAccount = nil
@@ -234,7 +236,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	// SpillEngine borrows the probe executor lease. End that borrow before the
 	// join frees the executors and releases their reservation.
 	ctr.cleanBucketBatches(proc)
-	if ctr.probeExpressionLease != nil {
+	if ctr.probeExpressionLease != nil || ctr.probeExpressionsAccounted {
 		ctr.cleanEqCondExecutors()
 		ctr.releaseProbeExpressionLease()
 	} else {
@@ -325,6 +327,7 @@ func (ctr *container) cleanEqCondExecutors() {
 	}
 	ctr.eqCondExecs = nil
 	ctr.eqCondVecs = nil
+	ctr.probeExpressionsAccounted = false
 }
 
 func (ctr *container) resetEqCondExecutors() {

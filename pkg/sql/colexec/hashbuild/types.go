@@ -81,6 +81,16 @@ const (
 	HashBuildAllocationSiteUniqueKeyNulls
 	HashBuildAllocationSiteUniqueKeyGrouping
 	HashBuildAllocationSiteRuntimeFilterPayload
+	HashBuildAllocationSiteDedupIgnoreBitmap
+	HashBuildAllocationSiteDedupDeleteBitmap
+	HashBuildAllocationSiteDedupLastRows
+	HashBuildAllocationSiteDedupSurvivorRows
+	HashBuildAllocationSiteDedupSurvivorOwnsKey
+	HashBuildAllocationSiteDedupDiscardedRows
+	HashBuildAllocationSiteDedupDeleteOnlyData
+	HashBuildAllocationSiteDedupDeleteOnlyArea
+	HashBuildAllocationSiteDedupDeleteOnlyNulls
+	HashBuildAllocationSiteDedupDeleteOnlyGrouping
 )
 
 type container struct {
@@ -124,6 +134,7 @@ type container struct {
 	spillAllocationMP     *mpool.MPool
 	spillAccountedWrite   *mpool.AccountedBuffer
 	spillAccountedBuckets [spillNumBuckets]*mpool.AccountedBuffer
+	spillCoalesceDisabled bool
 	// spillScratchReservation is a query/CN-charged emergency lease retained
 	// while Shuffle build batches accumulate. It prevents retained copies from
 	// consuming the scratch required to recover from hard-budget rejection.
@@ -139,8 +150,9 @@ type container struct {
 	spillScratchBase uint64
 
 	// cached expression executors for spill (reused across batches)
-	spillExprExecs []colexec.ExpressionExecutor
-	spillExprLease *ExpressionMemoryLease
+	spillExprExecs  []colexec.ExpressionExecutor
+	spillExprLease  *ExpressionMemoryLease
+	spillConditions []*plan.Expr
 	// spillExprAccounted distinguishes an exact executor set from a legacy set
 	// whose retained lease has not yet been installed.
 	spillExprAccounted bool
@@ -442,7 +454,9 @@ func (hb *HashmapBuilder) ClearAllocationAccount(
 	}
 	if builder.IntHashMap != nil || builder.StrHashMap != nil ||
 		len(builder.Batches.Buf) != 0 || builder.Sels.Size() != 0 ||
-		len(builder.executors) != 0 {
+		len(builder.executors) != 0 || len(builder.curVecs) != 0 ||
+		len(builder.UniqueJoinKeys) != 0 ||
+		builder.IgnoreRows != nil || builder.DelRows != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	builder.mapAllocationAccount = nil

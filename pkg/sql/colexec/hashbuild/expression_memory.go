@@ -75,6 +75,26 @@ func NewAllocationAccountedExpressionExecutors(
 	)
 }
 
+// NewAllocationAccountedExpressionExecutorsForAccount is the join-consumer
+// entry point. It derives the same owner-scoped expression provenance used by
+// HashBuild, so probe and rebuild expressions share one exact generation.
+func NewAllocationAccountedExpressionExecutorsForAccount(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	account *mpool.AllocationAccount,
+	owner mpool.AllocationOwner,
+) ([]colexec.ExpressionExecutor, error) {
+	allocation, err := colexec.NewExpressionAllocationAccount(account, owner)
+	if err != nil {
+		return nil, err
+	}
+	return NewAllocationAccountedExpressionExecutors(
+		proc,
+		exprs,
+		allocation,
+	)
+}
+
 func expressionSetAllocationClosed(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
 		if !expressionAllocationClosed(expr) {

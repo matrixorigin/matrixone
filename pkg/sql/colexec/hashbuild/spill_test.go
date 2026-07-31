@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -1658,6 +1660,156 @@ func TestAccountedInitialSpillConvertsHeadroomToPhysicalOwnership(t *testing.T) 
 	require.Positive(t, snapshot.AllocationUsed)
 	require.NotNil(t, ctr.spillAccountedWrite)
 	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
+
+	ctr.dropSpillScratchBuffers()
+	ctr.freeSpillExprExecs()
+	for _, file := range files {
+		if file != nil {
+			_ = file.Close()
+		}
+	}
+	if ctr.spillBundle != nil {
+		ctr.spillBundle.release()
+		ctr.spillBundle = nil
+	}
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	require.NoError(t, op.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
+func TestAccountedMinimumSpillHeadroomIsOneUnitNotWholeBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	makeBatch := func(rows int) *batch.Batch {
+		values := make([]string, rows)
+		for i := range values {
+			values[i] = strings.Repeat("x", 4<<10)
+		}
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+		bat.SetRowCount(rows)
+		return bat
+	}
+	one := makeBatch(1)
+	many := makeBatch(128)
+	defer one.Clean(proc.Mp())
+	defer many.Clean(proc.Mp())
+	exprs := []*plan.Expr{newExpr(0, types.T_varchar.ToType())}
+	oneUnit, err := spillMinimumUnitBudgetBytes(one, exprs)
+	require.NoError(t, err)
+	manyUnits, err := spillMinimumUnitBudgetBytes(many, exprs)
+	require.NoError(t, err)
+	require.Equal(t, oneUnit, manyUnits)
+	require.Positive(t, oneUnit)
+	legacyWholeBatch, err := spillBudgetBytes(many)
+	require.NoError(t, err)
+	require.Greater(t, legacyWholeBatch, manyUnits)
+}
+
+func TestAccountedConcatSpillHeadroomUsesOnePhysicalRow(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	column := func(pos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}},
+		}
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx,
+		"concat",
+		[]*plan.Expr{column(0), column(1)},
+	)
+	require.NoError(t, err)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeVarcharVector(
+		[]string{strings.Repeat("a", 4<<10), "a"}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeVarcharVector(
+		[]string{"b", strings.Repeat("b", 4<<10)}, nil, proc.Mp())
+	bat.SetRowCount(2)
+	defer bat.Clean(proc.Mp())
+
+	payload, err := spillExpressionPayloadBytes(
+		expr,
+		expr.GetF().GetArgs(),
+		bat,
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint64((4<<10)+1), payload)
+	headroom, err := spillMinimumUnitBudgetBytes(bat, []*plan.Expr{expr})
+	require.NoError(t, err)
+	require.Positive(t, headroom)
+}
+
+func TestAccountedInitialSpillReducesUnpublishedInputAndPreservesRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	const limit = uint64(80 << 10)
+	budget := process.MustNewHashBuildBudget(limit, limit)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(limit, generation)
+	require.NoError(t, err)
+	var op HashBuild
+	op.NeedHashMap = true
+	require.NoError(t, op.SetAllocationAccount(account))
+	ctr := &op.ctr
+	ctr.hashmapBuilder.setBudget(generation)
+	ctr.spillUUID = "accounted-adaptive-spill"
+	exprs := []*plan.Expr{newExpr(0, types.T_int64.ToType())}
+	executors, err := ctr.initSpillExprExecs(proc, exprs)
+	require.NoError(t, err)
+	values := make([]int64, colexec.DefaultBatchSize)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt64Vector(values, nil, proc.Mp())
+	input.SetRowCount(len(values))
+	defer input.Clean(proc.Mp())
+	files := make([]*os.File, spillNumBuckets)
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, ctr.spillBatchWithPressure(
+		proc,
+		input,
+		files,
+		executors,
+		analyzer,
+		false,
+	))
+	require.Positive(t,
+		analyzer.GetOpStats().ExtraStats["HashBuildSpillInputReductions"])
+	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
+
+	var totalRows int64
+	for _, file := range files {
+		if file == nil {
+			continue
+		}
+		_, err = file.Seek(0, io.SeekStart)
+		require.NoError(t, err)
+		reader := bufio.NewReader(file)
+		for {
+			var header [16]byte
+			_, err = io.ReadFull(reader, header[:])
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			rows := types.DecodeInt64(header[:8])
+			payload := types.DecodeInt64(header[8:])
+			require.NoError(t, func() error {
+				_, copyErr := io.CopyN(io.Discard, reader, payload+8)
+				return copyErr
+			}())
+			totalRows += rows
+		}
+	}
+	require.Equal(t, int64(len(values)), totalRows)
 
 	ctr.dropSpillScratchBuffers()
 	ctr.freeSpillExprExecs()

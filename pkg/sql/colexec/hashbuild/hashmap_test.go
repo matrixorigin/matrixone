@@ -1147,10 +1147,9 @@ func TestReserveBuildAuxChargesOneRetainedCopy(t *testing.T) {
 	hb.Batches.Buf = nil
 }
 
-func TestReserveBuildAuxDoesNotStackAccountedGroupSels(t *testing.T) {
+func TestReserveBuildAuxExactDoesNotDuplicatePhysicalOrHeadroomOwners(t *testing.T) {
 	const rows = 10_000
-	const iteratorScratch = uint64(640 << 10)
-	want := uint64(rows)*48 + iteratorScratch
+	const want = uint64(1)
 	budget := process.MustNewHashBuildBudget(want, want)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
@@ -1166,7 +1165,7 @@ func TestReserveBuildAuxDoesNotStackAccountedGroupSels(t *testing.T) {
 	hb.setBudget(generation)
 
 	require.NoError(t, hb.reserveBuildAux(false, true))
-	require.Equal(t, want, generation.Used())
+	require.Zero(t, generation.Used())
 	require.Zero(t, generation.Snapshot().AllocationUsed)
 	hb.releaseReservations()
 	require.Zero(t, generation.Used())
@@ -2127,6 +2126,114 @@ func TestDedupBuildKeepLastPreservesDeleteOnlyRows(t *testing.T) {
 	require.Falsef(t, out.Vecs[2].IsNull(2), "nulls=%v", out.Vecs[2].GetNulls().GetBitmap().String())
 	markers := vector.MustFixedColNoTypeCheck[int32](out.Vecs[2])[:out.RowCount()]
 	require.Equal(t, int32(100), markers[2])
+}
+
+func TestAccountedDedupScratchAndDeleteBitmapFollowJoinMapLifetime(t *testing.T) {
+	const capBytes = uint64(64 << 20)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 256)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(capBytes, generation)
+	require.NoError(t, err)
+
+	var op HashBuild
+	op.NeedHashMap = true
+	require.NoError(t, op.SetAllocationAccount(account))
+	hb := &op.ctr.hashmapBuilder
+	hb.setBudget(generation)
+	hb.IsDedup = true
+	hb.DedupBuildKeepLast = true
+	hb.OnDuplicateAction = plan.Node_FAIL
+	hb.DedupColName = "id"
+	hb.DedupColTypes = []plan.Type{newExpr(0, types.T_int32.ToType()).Typ}
+	require.NoError(t, hb.Prepare(
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())},
+		-1,
+		2,
+		[]int32{2},
+		proc,
+	))
+	input := makeIntKeyValueBatchWithMarker(
+		proc,
+		[]int32{1, 1, 2},
+		[]int32{10, 20, 30},
+		[]int32{100, 0, 0},
+		[]uint64{1, 2},
+	)
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.NotNil(t, hb.DelRows)
+	require.True(t, hb.DelRows.HasExternalStorage())
+	require.True(t, hb.DelRows.Contains(2))
+	require.Equal(t, generation.Used(), generation.Snapshot().AllocationUsed)
+	require.Positive(t, account.Snapshot().Used)
+
+	jm := hb.GetJoinMap(proc.Mp())
+	require.NotNil(t, jm)
+	jm.IncRef(1)
+	hb.Reset(proc, false)
+	// DelRows remains physically owned by the consumer together with the map.
+	require.Positive(t, account.Snapshot().Used)
+	require.True(t, jm.IsDeleted(2))
+	jm.Free()
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	require.NoError(t, op.ClearAllocationAccount(account))
+	terminal, first, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.True(t, first)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
+}
+
+func TestAccountedDedupBitmapExactBoundaryRollsBack(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	for _, tc := range []struct {
+		name    string
+		cap     uint64
+		wantErr bool
+	}{
+		{name: "one byte short", cap: 7, wantErr: true},
+		{name: "exact", cap: 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			budget := process.MustNewHashBuildBudget(tc.cap, tc.cap)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(tc.cap, generation)
+			require.NoError(t, err)
+			var hb HashmapBuilder
+			hb.mapAllocationAccount = account
+			bm, err := hb.newDedupBitmap(
+				64,
+				proc.Mp(),
+				HashBuildAllocationSiteDedupIgnoreBitmap,
+			)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.True(t, IsRetryableMemoryCapacity(err))
+				require.Nil(t, bm)
+				require.Zero(t, account.Snapshot().Used)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, uint64(8), account.Snapshot().Used)
+				releaseDedupBitmap(bm, proc.Mp())
+				require.Zero(t, account.Snapshot().Used)
+			}
+			terminal, _, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+			require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
+		})
+	}
 }
 
 // TestDedupBuildKeepLastMarksConflictBucketForDiscardedFanout reproduces the

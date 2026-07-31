@@ -73,12 +73,12 @@ func TestHashBuildBudgetAdmissionIdentifiesResource(t *testing.T) {
 
 	tests := []struct {
 		name string
-		want HashBuildBudgetResource
+		want HashBuildBudgetComponent
 		call func() error
 	}{
 		{
 			name: "memory",
-			want: HashBuildBudgetResourceMemory,
+			want: HashBuildBudgetComponentMemory,
 			call: func() error {
 				_, reserveErr := g.Reserve(11)
 				return reserveErr
@@ -86,7 +86,7 @@ func TestHashBuildBudgetAdmissionIdentifiesResource(t *testing.T) {
 		},
 		{
 			name: "spill disk",
-			want: HashBuildBudgetResourceSpillDisk,
+			want: HashBuildBudgetComponentSpillDisk,
 			call: func() error {
 				_, reserveErr := g.ReserveSpillDisk(6)
 				return reserveErr
@@ -94,7 +94,7 @@ func TestHashBuildBudgetAdmissionIdentifiesResource(t *testing.T) {
 		},
 		{
 			name: "spill fd",
-			want: HashBuildBudgetResourceSpillFD,
+			want: HashBuildBudgetComponentSpillFD,
 			call: func() error {
 				_, reserveErr := g.ReserveSpillFD(2)
 				return reserveErr
@@ -107,9 +107,9 @@ func TestHashBuildBudgetAdmissionIdentifiesResource(t *testing.T) {
 			if err := test.call(); !errors.As(err, &budgetErr) {
 				t.Fatalf("error=%v, want typed admission", err)
 			}
-			if budgetErr.Kind != HashBuildBudgetErrorAdmission || budgetErr.Resource != test.want {
+			if budgetErr.Kind != HashBuildBudgetErrorAdmission || budgetErr.Component != test.want {
 				t.Fatalf("admission kind/resource=(%d,%d), want=(%d,%d)",
-					budgetErr.Kind, budgetErr.Resource, HashBuildBudgetErrorAdmission, test.want)
+					budgetErr.Kind, budgetErr.Component, HashBuildBudgetErrorAdmission, test.want)
 			}
 		})
 	}
@@ -225,7 +225,7 @@ func TestHashBuildBudgetAllocationAccountAdapter(t *testing.T) {
 	}
 }
 
-func TestHashBuildAllocationAccountRegistryUsesBoundedFormula(t *testing.T) {
+func TestHashBuildAllocationAccountRegistryUsesByteConservationBound(t *testing.T) {
 	budget := MustNewHashBuildBudget(16<<10, 16<<10)
 	first, err := budget.OpenGeneration(1)
 	if err != nil {
@@ -238,11 +238,11 @@ func TestHashBuildAllocationAccountRegistryUsesBoundedFormula(t *testing.T) {
 	if registry.GenerationCapacity() != hashBuildAllocationGenerationSlots {
 		t.Fatalf("generation slots = %d", registry.GenerationCapacity())
 	}
-	if registry.MaxAllocationMetadata() != hashBuildAllocationSlotsPerBlock {
+	if registry.MaxAllocationMetadata() != 16<<10 {
 		t.Fatalf(
 			"allocation slots = %d, want %d",
 			registry.MaxAllocationMetadata(),
-			hashBuildAllocationSlotsPerBlock,
+			uint64(16<<10),
 		)
 	}
 	second, err := budget.OpenGeneration(2)
@@ -255,6 +255,24 @@ func TestHashBuildAllocationAccountRegistryUsesBoundedFormula(t *testing.T) {
 	}
 	if secondRegistry != registry {
 		t.Fatal("one CN budget created multiple allocation registries")
+	}
+}
+
+func TestHashBuildAllocationAccountRegistryCapsMetadataHeadroom(t *testing.T) {
+	budget := MustNewHashBuildBudget(
+		hashBuildAllocationMetadataMaxSlots+1,
+		hashBuildAllocationMetadataMaxSlots+1,
+	)
+	generation, err := budget.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := generation.AllocationAccountRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.MaxAllocationMetadata(); got != hashBuildAllocationMetadataMaxSlots {
+		t.Fatalf("allocation slots = %d, want %d", got, hashBuildAllocationMetadataMaxSlots)
 	}
 }
 
@@ -1195,6 +1213,9 @@ func TestHashBuildBudgetCompatibilityAndObservabilitySurface(t *testing.T) {
 		!errors.Is(unknown, ErrHashBuildBudgetInvalid) {
 		t.Fatal("unknown error kind must remain a fatal invalid error")
 	}
+	if unknown.Is(ErrHashBuildBudgetInvalid) {
+		t.Fatal("unknown error kind matched a sentinel")
+	}
 	message := &HashBuildBudgetError{Message: "explicit"}
 	if message.Error() != "explicit" {
 		t.Fatalf("explicit message = %q", message.Error())
@@ -1469,6 +1490,59 @@ func TestHashBuildBudgetCompatibilityUnhappyPaths(t *testing.T) {
 	}
 	if _, err = b.OpenGenerationWithCap(3, 1); !errors.Is(err, ErrHashBuildBudgetClosed) {
 		t.Fatalf("closed budget explicit generation error = %v", err)
+	}
+}
+
+func TestHashBuildBudgetAdmissionNamesIndependentComponent(t *testing.T) {
+	b, err := NewHashBuildBudgetWithSpillCaps(8, 8, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := b.OpenGenerationWithSpillCaps(1, 8, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	assertComponent := func(err error, want HashBuildBudgetComponent) {
+		t.Helper()
+		var budgetErr *HashBuildBudgetError
+		if !errors.As(err, &budgetErr) || budgetErr.Component != want {
+			t.Fatalf("admission component: err=%v got=%v want=%v", err, budgetErr, want)
+		}
+	}
+
+	memory, err := g.Reserve(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer memory.Release()
+	_, err = g.Reserve(1)
+	assertComponent(err, HashBuildBudgetComponentMemory)
+
+	disk, err := g.ReserveSpillDisk(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer disk.Release()
+	_, err = g.ReserveSpillDisk(1)
+	assertComponent(err, HashBuildBudgetComponentSpillDisk)
+
+	fd, err := g.ReserveSpillFD(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fd.Release()
+	_, err = g.ReserveSpillFD(1)
+	assertComponent(err, HashBuildBudgetComponentSpillFD)
+
+	err = b.SetSpillCaps(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = b.SetSpillCaps(1, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -324,7 +324,7 @@ func TestSpillAllocationAccountScatterScratchLifecycle(t *testing.T) {
 	finalizeTestSpillAllocationAccount(t, state)
 }
 
-func TestSpillAllocationAccountScatterChargesOnlyExternalSource(t *testing.T) {
+func TestSpillAllocationAccountScatterDoesNotReadmitBorrowedSource(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(
 		t,
 		"",
@@ -374,9 +374,7 @@ func TestSpillAllocationAccountScatterChargesOnlyExternalSource(t *testing.T) {
 	snapshot := generation.Snapshot()
 	require.Nil(t, engine.scatterScratchReservation)
 	require.Equal(t, snapshot.AllocationUsed, snapshot.Used,
-		"the upstream source token is transient and private spill bytes are exact")
-	require.Positive(t, snapshot.ReserveCount,
-		"the unaccounted upstream source remains part of the peak")
+		"borrowed input is already live; only new private spill bytes are admitted")
 	require.Greater(t, snapshot.PeakUsed, snapshot.Used)
 
 	engine.releaseScatterScratch()
@@ -518,12 +516,126 @@ func TestSpillAllocationAccountScatterFailureCleanup(t *testing.T) {
 		false,
 		process.NewAnalyzer(0, false, false, "test"),
 	)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Equal(
+		t,
+		hashbuild.MemoryPressureMinimumUnit,
+		hashbuild.MemoryPressureReasonOf(err),
+	)
 	require.Equal(t, uint64(rows*(8+4)), state.account.Snapshot().Used)
 
 	engine.releaseScatterScratch()
 	require.Zero(t, state.account.Snapshot().Used)
 	engine.Cleanup(proc)
+	finalizeTestSpillAllocationAccount(t, state)
+}
+
+func TestSpillAllocationAccountScatterReducesUnpublishedInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(
+		t,
+		"",
+		mpool.MustNew("spill-allocation-scatter-reduce"),
+	)
+	defer proc.Free()
+	state := newTestSpillAllocationAccount(t, 80<<10, 128)
+	engine, err := NewSpillEngineWithAllocation(
+		SpillEngineConfig{},
+		state.allocation,
+	)
+	require.NoError(t, err)
+	values := make([]int64, 8_192)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	source := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.MakeInt64Vector(values, nil, proc.Mp()),
+	}, nil)
+	defer source.Clean(proc.Mp())
+	writers := MakeBucketWriters("spill_allocation_scatter_reduce")
+	defer func() {
+		for i := range writers {
+			writers[i].Close()
+		}
+	}()
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, engine.scatterBatchWithPressure(
+		proc,
+		source,
+		source.Vecs,
+		writers,
+		0,
+		false,
+		analyzer,
+	))
+	require.Positive(t,
+		analyzer.GetOpStats().ExtraStats["JoinSpillInputReductions"])
+	require.NoError(t, engine.flushScatterBuffers(proc, writers, analyzer))
+	var rows int64
+	for i := range writers {
+		rows += writers[i].Rows
+	}
+	require.Equal(t, int64(len(values)), rows)
+
+	engine.releaseScatterScratch()
+	engine.Cleanup(proc)
+	require.Zero(t, state.account.Snapshot().Used)
+	finalizeTestSpillAllocationAccount(t, state)
+}
+
+func TestSpillAllocationAccountExpressionPressureReducesBeforePublication(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(
+		t,
+		"",
+		mpool.MustNew("spill-allocation-expression-reduce"),
+	)
+	defer proc.Free()
+	state := newTestSpillAllocationAccount(t, 2<<20, 4_096)
+	engine, err := NewSpillEngineWithAllocation(
+		SpillEngineConfig{},
+		state.allocation,
+	)
+	require.NoError(t, err)
+	values := make([]int64, 257)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	source := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.MakeInt64Vector(values, nil, proc.Mp()),
+	}, nil)
+	defer source.Clean(proc.Mp())
+	writers := MakeBucketWriters("spill_allocation_expression_reduce")
+	defer func() {
+		for i := range writers {
+			writers[i].Close()
+		}
+	}()
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, engine.scatterEvaluatedBatchWithPressure(
+		proc,
+		source,
+		writers,
+		0,
+		false,
+		analyzer,
+		func(current *batch.Batch) ([]*vector.Vector, error) {
+			if current.RowCount() > 32 {
+				return nil, mpool.ErrAllocationAccountCapacity
+			}
+			return current.Vecs, nil
+		},
+	))
+	require.Positive(t,
+		analyzer.GetOpStats().ExtraStats["JoinSpillExpressionInputReductions"])
+	require.NoError(t, engine.flushScatterBuffers(proc, writers, analyzer))
+	var rows int64
+	for i := range writers {
+		rows += writers[i].Rows
+	}
+	require.Equal(t, int64(len(values)), rows,
+		"evaluation retries must not duplicate or omit published rows")
+
+	engine.releaseScatterScratch()
+	engine.Cleanup(proc)
+	require.Zero(t, state.account.Snapshot().Used)
 	finalizeTestSpillAllocationAccount(t, state)
 }
 

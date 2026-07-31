@@ -337,8 +337,29 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			if takeErr != nil {
 				return takeErr
 			}
-			probeExpressionLease, leaseErr := hashbuild.NewExpressionMemoryLease(
-				budget, hashJoin.EqConds[0], ctr.eqCondExecs, false)
+			var probeExpressionLease *hashbuild.ExpressionMemoryLease
+			var leaseErr error
+			if hashJoin.allocationAccount != nil &&
+				hashbuild.AllocationAccountedExpressionSetSupported(hashJoin.EqConds[0]) {
+				ctr.cleanEqCondExecutors()
+				ctr.eqCondExecs, leaseErr =
+					hashbuild.NewAllocationAccountedExpressionExecutorsForAccount(
+						proc,
+						hashJoin.EqConds[0],
+						hashJoin.allocationAccount,
+						hashbuild.HashBuildAllocationOwner,
+					)
+				if leaseErr == nil {
+					ctr.eqCondVecs = make(
+						[]*vector.Vector,
+						len(hashJoin.EqConds[0]),
+					)
+					ctr.probeExpressionsAccounted = true
+				}
+			} else {
+				probeExpressionLease, leaseErr = hashbuild.NewExpressionMemoryLease(
+					budget, hashJoin.EqConds[0], ctr.eqCondExecs, false)
+			}
 			if leaseErr != nil {
 				_ = payload.Close()
 				ctr.mp.Free()
@@ -380,7 +401,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				},
 				analyzer,
 				func(bat *batch.Batch) ([]*vector.Vector, error) {
-					if err := ctr.evalJoinCondition(bat, proc); err != nil {
+					if err := ctr.evalJoinConditionBudgeted(bat, proc); err != nil {
 						return nil, err
 					}
 					return ctr.eqCondVecs, nil
