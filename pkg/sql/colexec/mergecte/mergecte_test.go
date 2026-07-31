@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -154,6 +155,65 @@ func TestAuditMergeCTERecursiveErrorThenRetryDoesNotEmitStaleBatch(t *testing.T)
 	require.Nil(t, arg.ctr.freeBats)
 	require.Nil(t, arg.ctr.bats)
 	require.Nil(t, arg.ctr.buf)
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestMergeCTEResetDropsBufferedRecursiveBatches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &MergeCTE{NodeCnt: 1}
+	cleaned := false
+	t.Cleanup(func() {
+		if cleaned {
+			return
+		}
+		freeMergeCTEChildren(arg, proc, true)
+		arg.Free(proc, true, nil)
+		proc.Free()
+	})
+
+	makeBatch := func(value int64) *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.SetVector(0, testutil.MakeInt64Vector([]int64{value}, nil, proc.Mp()))
+		bat.SetRowCount(1)
+		return bat
+	}
+	firstRecursive := makeBatch(10)
+	lastRecursive := makeBatch(20)
+	lastRecursive.SetLast()
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{makeBatch(1)}))
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{firstRecursive, lastRecursive}))
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+
+	result, err = vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.True(t, result.Batch.Last())
+
+	result, err = vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+	require.Len(t, arg.ctr.bats, 1)
+	require.Equal(t, []int64{20}, vector.MustFixedColWithTypeCheck[int64](arg.ctr.bats[0].Vecs[0]))
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.bats)
+	require.Nil(t, arg.ctr.buf)
+	freeMergeCTEChildren(arg, proc, false)
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{makeBatch(99)}))
+	arg.AppendChild(colexec.NewMockOperator())
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err = vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{99}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+
+	freeMergeCTEChildren(arg, proc, false)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	cleaned = true
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
