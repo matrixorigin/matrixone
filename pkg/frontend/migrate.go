@@ -30,6 +30,8 @@ type migrateController struct {
 	closed bool
 	// inProgress indicates if a lifecycle operation is in progress.
 	inProgress bool
+	// requestInProgress indicates if a SQL request owns the routine session.
+	requestInProgress bool
 	// operationCancel cancels the active lifecycle operation. It is published
 	// together with inProgress while holding the controller lock.
 	operationCancel context.CancelFunc
@@ -94,7 +96,7 @@ func (mc *migrateController) beginOperationWithContext(ctx context.Context) (con
 
 	mc.Lock()
 	defer mc.Unlock()
-	for mc.inProgress && !mc.closed && ctx.Err() == nil {
+	for (mc.inProgress || mc.requestInProgress) && !mc.closed && ctx.Err() == nil {
 		mc.cond.Wait()
 	}
 	return mc.startOperationLocked(ctx)
@@ -120,7 +122,7 @@ func (mc *migrateController) startOperationLocked(ctx context.Context) (context.
 	if mc.closed || ctx.Err() != nil {
 		return nil, false
 	}
-	if mc.inProgress {
+	if mc.inProgress || mc.requestInProgress {
 		return nil, false
 	}
 	operationCtx, cancel := context.WithCancel(ctx)
@@ -128,6 +130,27 @@ func (mc *migrateController) startOperationLocked(ctx context.Context) (context.
 	mc.inProgress = true
 	mc.operationCancel = cancel
 	return operationCtx, true
+}
+
+// tryBeginRequest acquires the routine session for a request only when no
+// lifecycle operation is active. Requests never wait here: if reset or
+// migration already owns the routine, the caller must fail before reading the
+// session.
+func (mc *migrateController) tryBeginRequest() bool {
+	mc.Lock()
+	defer mc.Unlock()
+	if mc.closed || mc.inProgress || mc.requestInProgress {
+		return false
+	}
+	mc.requestInProgress = true
+	return true
+}
+
+func (mc *migrateController) endRequest() {
+	mc.Lock()
+	defer mc.Unlock()
+	mc.requestInProgress = false
+	mc.cond.Broadcast()
 }
 
 // endOperation completes a lifecycle operation and wakes a routine waiting

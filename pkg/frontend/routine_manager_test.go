@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -133,6 +134,22 @@ type blockingCloseConn struct {
 	closeStarted chan struct{}
 	closeRelease chan struct{}
 	startOnce    sync.Once
+}
+
+type blockingResponseProtocol struct {
+	MysqlRrWr
+	responseWritten chan struct{}
+	releaseResponse chan struct{}
+	writtenOnce     sync.Once
+}
+
+func (p *blockingResponseProtocol) WriteResponse(ctx context.Context, response *Response) error {
+	err := p.MysqlRrWr.WriteResponse(ctx, response)
+	p.writtenOnce.Do(func() {
+		close(p.responseWritten)
+	})
+	<-p.releaseResponse
+	return err
 }
 
 func (tc *blockingCloseConn) Close() error {
@@ -754,6 +771,122 @@ func TestRoutineManagerMigrationAndResetErrorBranches(t *testing.T) {
 		ConnID: 1005,
 		Action: query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease,
 	}, &query.MigrateConnFromResponse{}), "cannot migrate connection while user-level locks are held")
+}
+
+func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T) {
+	const connID = uint32(1009)
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	protocol := &blockingResponseProtocol{
+		MysqlRrWr:       oldSession.GetResponser().MysqlRrWr(),
+		responseWritten: make(chan struct{}),
+		releaseResponse: make(chan struct{}),
+	}
+	routine := NewRoutine(context.Background(), protocol, getPu("").SV)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+
+	oldSession.respr = NewMysqlResp(protocol)
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	conn := &Conn{id: uint64(connID), conn: &testConn{}, remoteAddr: "remote"}
+	rm.setRoutine(conn, connID, routine)
+
+	var releaseOnce sync.Once
+	handlerFinished := make(chan struct{})
+	handlerResult := make(chan struct {
+		err       error
+		recovered any
+	}, 1)
+	t.Cleanup(func() {
+		releaseOnce.Do(func() {
+			close(protocol.releaseResponse)
+		})
+		select {
+		case <-handlerFinished:
+		case <-time.After(time.Second):
+		}
+		if current := routine.getSession(); current != nil && current.GetProc() != nil {
+			rm.sessionManager.RemoveSession(current)
+			current.Close()
+		}
+		routine.cancelRoutineFunc()
+		rm.cancelCtx()
+	})
+
+	go func() {
+		var result struct {
+			err       error
+			recovered any
+		}
+		defer func() {
+			result.recovered = recover()
+			handlerResult <- result
+			close(handlerFinished)
+		}()
+		result.err = rm.Handler(conn, []byte{byte(COM_PING)})
+	}()
+
+	select {
+	case <-protocol.responseWritten:
+	case <-time.After(time.Second):
+		t.Fatal("request did not write its terminal response")
+	}
+
+	oldProc := oldSession.GetProc()
+	oldTxnHandler := oldSession.GetTxnHandler()
+	err = routine.resetSession("", &query.ResetSessionResponse{})
+	require.ErrorContains(t, err, "cannot reset session as routine is closed or busy")
+	require.Same(t, oldSession, routine.getSession())
+	require.Same(t, oldProc, oldSession.GetProc())
+	require.Same(t, oldTxnHandler, oldSession.GetTxnHandler())
+	registered := rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1)
+	require.Same(t, oldSession, registered[0])
+
+	releaseOnce.Do(func() {
+		close(protocol.releaseResponse)
+	})
+	select {
+	case result := <-handlerResult:
+		require.Nil(t, result.recovered)
+		require.NoError(t, result.err)
+	case <-time.After(time.Second):
+		t.Fatal("request handler did not finish after response release")
+	}
+
+	require.NoError(t, routine.resetSession("", &query.ResetSessionResponse{}))
+	newSession := routine.getSession()
+	require.NotSame(t, oldSession, newSession)
+	require.Nil(t, oldSession.GetProc())
+	require.Nil(t, oldSession.GetTxnHandler())
+	registered = rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1)
+	require.Same(t, newSession, registered[0])
+	require.NoError(t, rm.Handler(conn, []byte{byte(COM_PING)}))
+}
+
+func TestRoutineManagerHandlerRejectsLifecycleConflictBeforeSessionRead(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	require.True(t, routine.mc.tryBeginOperation())
+	defer routine.mc.endOperation()
+
+	conn := &Conn{id: 1010, conn: &testConn{}, remoteAddr: "remote"}
+	rm := &RoutineManager{
+		ctx:              context.Background(),
+		clients:          map[*Conn]*Routine{conn: routine},
+		routinesByConnID: map[uint32]*Routine{1010: routine},
+	}
+
+	require.ErrorContains(
+		t,
+		rm.Handler(conn, []byte{byte(COM_PING)}),
+		"cannot process request as routine is closed or busy",
+	)
 }
 
 func TestRoutineMigrateConnectionFromRejectsUserLevelLocks(t *testing.T) {

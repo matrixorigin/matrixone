@@ -418,6 +418,10 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
+	if !routine.mc.tryBeginRequest() {
+		return moerr.NewInternalError(ctx, "cannot process request as routine is closed or busy")
+	}
+	defer routine.mc.endRequest()
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
 	payload := msg
