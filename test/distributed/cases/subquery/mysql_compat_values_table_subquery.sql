@@ -1,0 +1,18 @@
+-- @suite
+
+-- @case
+-- @desc: MySQL-compatible quantified subqueries with VALUES ROW and TABLE
+-- @label:bvt
+drop database if exists mysql_compat_model10c;
+create database mysql_compat_model10c;
+use mysql_compat_model10c;
+
+create table t (id int primary key, v int);
+create table tv (v int);
+insert into t values (1,10),(2,20),(3,30);
+insert into tv values (20),(30);
+
+select id from t where v > any (values row(15), row(25)) order by id;
+select id from t where v = any (table tv) order by id;
+
+drop database mysql_compat_model10c;
