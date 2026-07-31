@@ -360,6 +360,9 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err != nil {
 		return nil, err
 	}
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
 	recordUpdatePlannerRoute(updatePlannerModern, updateRouteReasonNone, "selected")
 	return &Plan{
 		Plan: &plan.Plan_Query{

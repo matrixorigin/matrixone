@@ -183,13 +183,16 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			sql:  "UPDATE nation SET n_comment = 'x'",
 			prepare: func(mock *MockOptimizer) {
 				mock.ctxt.tables["nation"].Indexes = []*planpb.IndexDef{{
-					IndexName: "idx",
-					IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
-					Parts:     []string{"n_comment"},
+					IndexName:          "idx",
+					IndexTableName:     "idx_entries",
+					IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+					IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+					Parts:              []string{"n_comment"},
+					TableExist:         true,
 				}}
 			},
-			wantRoute:  updatePlannerLegacy,
-			wantReason: updateRouteReasonIrregularIndex,
+			wantRoute:  updatePlannerModern,
+			wantReason: updateRouteReasonNone,
 		},
 		{
 			name: "pub sub key",
@@ -233,6 +236,10 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 			bindCtx := NewBindContext(builder, nil)
 			_, err = builder.bindUpdate(stmt.(*tree.Update), bindCtx)
+			if test.wantRoute == updatePlannerModern {
+				require.NoError(t, err)
+				return
+			}
 			require.Error(t, err)
 
 			route, reason, _ := classifyUpdatePlannerError(err)
