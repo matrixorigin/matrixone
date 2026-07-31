@@ -1524,6 +1524,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colNameOrigin := def.Name.ColNameOrigin()
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
+				case *tree.AttributeCheckConstraint:
+					if err := rejectWindowFunction(ctx, attribute.Expr); err != nil {
+						return err
+					}
 				case *tree.AttributeGeneratedAlways:
 					isGenerated = true
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
@@ -1794,6 +1798,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				fkDatasOfFKSelfRefer = append(fkDatasOfFKSelfRefer, fkData)
 			}
 		case *tree.CheckIndex:
+			if err := rejectWindowFunction(ctx, def.Expr); err != nil {
+				return err
+			}
 			if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 				return moerr.NewNotSupported(
 					ctx.GetContext(),
