@@ -2574,6 +2574,110 @@ func TestShuffleHashBuildDoesNotPreflightFutureSpill(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestShuffleHashBuildSpillsBeforeRetainingThresholdCrossingBatch(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_varchar.ToType()}, []*plan.Expr{newExpr(0, types.T_varchar.ToType())})
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3502}
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	makeBuildBatch := func() *batch.Batch {
+		values := make([]string, colexec.DefaultBatchSize)
+		for i := range values {
+			values[i] = strings.Repeat("x", 256)
+		}
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeVarcharVector(values, nil, tc.proc.Mp())
+		bat.SetRowCount(len(values))
+		return bat
+	}
+	first := makeBuildBatch()
+	second := makeBuildBatch()
+	inputSize := int64(first.Size())
+	tc.arg.SpillThreshold = inputSize + 1
+	tc.arg.ctr.setSpillThreshold(tc.arg.SpillThreshold)
+
+	copyPeak, err := tc.arg.ctr.hashmapBuilder.projectedBatchCopyBytes(first)
+	require.NoError(t, err)
+	retainedScratch, err := spillScratchBudgetBytes(first, true)
+	require.NoError(t, err)
+	directScratch, err := spillBudgetBytes(second)
+	require.NoError(t, err)
+
+	// Calibrate the retained reservation and the second copy's pre-allocation
+	// peak. The final cap deliberately admits both copies (the old path reaches
+	// its post-copy threshold) but rejects scratch while both sources are live;
+	// the pre-copy path needs only one retained source plus scratch, then the
+	// direct scratch after that source is released.
+	calibrationBudget := process.MustNewHashBuildBudget(1<<30, 1<<30)
+	calibration, err := calibrationBudget.OpenGeneration(1)
+	require.NoError(t, err)
+	var calibrationBuilder HashmapBuilder
+	calibrationBuilder.setBudget(calibration)
+	require.NoError(t, calibrationBuilder.copyBuildBatch(first, tc.proc))
+	actualFirst := calibration.Used()
+	secondCopyPeak, err := calibrationBuilder.projectedBatchCopyBytes(second)
+	require.NoError(t, err)
+	calibrationBuilder.cleanBatches(tc.proc)
+	require.Zero(t, calibration.Used())
+	calibration.Close()
+
+	coalesceSlack := uint64(spillNumBuckets * spillWriteCoalesceSize)
+	capBytes := max(
+		copyPeak,
+		actualFirst+secondCopyPeak,
+		actualFirst+retainedScratch,
+		directScratch,
+	) + coalesceSlack
+	oldPostCopyPeak := 2*actualFirst + retainedScratch
+	require.Less(t, capBytes, oldPostCopyPeak,
+		"fixture must reject lazy scratch only after retaining the crossing batch")
+	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(first, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(second, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	_, buildErr := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, buildErr)
+
+	result, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	require.True(t, result.IsSuccess())
+	jm := result.JoinMap()
+	require.NotNil(t, jm)
+	require.True(t, jm.IsSpilled())
+	require.Equal(t, int64(2*colexec.DefaultBatchSize), jm.GetRowCount())
+	payload, err := jm.TakeSpillBuildPayload()
+	require.NoError(t, err)
+	require.NoError(t, payload.Close())
+
+	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
+	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
+	require.Zero(t, extra["HashBuildSpillScratchReserveRejects"])
+	require.Zero(t, extra["QueryHashBudgetRejects"],
+		"pre-copy thresholding must not consume recovery headroom first")
+	require.Empty(t, tc.arg.ctr.hashmapBuilder.Batches.Buf)
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.marg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	first.Clean(tc.proc.Mp())
+	second.Clean(tc.proc.Mp())
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 func TestShuffleHashBuildLazySpillAdmissionFailsClosed(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_varchar.ToType()}, []*plan.Expr{newExpr(0, types.T_varchar.ToType())})
 	tc.arg.IsShuffle = true

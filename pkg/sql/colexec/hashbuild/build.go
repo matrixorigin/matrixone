@@ -312,7 +312,8 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			continue
 		}
 
-		analyzer.Alloc(int64(result.Batch.Size()))
+		inputBatchSize := int64(result.Batch.Size())
+		analyzer.Alloc(inputBatchSize)
 		// Durable row accounting is advanced exactly once on ingress.  In
 		// particular, a rejected retained-copy admission below must not add the
 		// same upstream batch a second time when it is spilled directly.
@@ -325,8 +326,22 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			}
 			continue
 		}
+		// Decide on the same threshold before retaining the crossing batch. The
+		// input size was already computed for analyzer accounting, so this keeps
+		// speculative spill sizing and reservation off the resident hot path while
+		// preserving enough budget headroom to drain the batches already retained.
+		if hashBuild.shouldSpillBeforeRetain(inputBatchSize) {
+			if err := startSpill(); err != nil {
+				return err
+			}
+			if err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer, false); err != nil {
+				return err
+			}
+			continue
+		}
 
 		// Store original batch
+		retainedMemBefore := ctr.hashmapBuilder.Batches.MemSize
 		err = ctr.hashmapBuilder.copyBuildBatch(result.Batch, proc)
 		if err != nil {
 			if hashBuild.IsShuffle && errors.Is(err, process.ErrHashBuildBudgetAdmission) {
@@ -344,8 +359,13 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			return err
 		}
 
-		// Check if we should enter spill mode based on batch memory size
-		if hashBuild.shouldSpillBatches() {
+		// Representation expansion (including const sources) or completion of a
+		// partial retained batch can increase MemSize by more than the source's
+		// logical Size. Keep a cold post-copy fallback for that exceptional
+		// under-prediction; ordinary full non-const batches pay only the pre-copy
+		// threshold check above.
+		if ctr.hashmapBuilder.Batches.MemSize-retainedMemBefore > inputBatchSize &&
+			hashBuild.shouldSpillBatches() {
 			if err := startSpill(); err != nil {
 				return err
 			}

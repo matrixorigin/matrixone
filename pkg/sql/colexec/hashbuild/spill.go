@@ -877,10 +877,18 @@ func (ctr *container) freeSpillExprExecs() {
 
 func (ctr *container) memUsed() int64 {
 	sz := ctr.hashmapBuilder.GetSize() + ctr.hashmapBuilder.Batches.MemSize
-	// If MemSize is 0 but Buf is non-empty (e.g. set directly in tests), fall back to summing.
-	if sz == 0 {
+	batches := ctr.hashmapBuilder.Batches.Buf
+	// MemSize tracks completed fixed-size batches. Include the one permitted
+	// partial tail so a threshold decision cannot lag by almost one batch. If
+	// MemSize is zero (including directly assembled test state), sum all batches.
+	if ctr.hashmapBuilder.Batches.MemSize == 0 {
 		for _, bat := range ctr.hashmapBuilder.Batches.Buf {
 			sz += int64(bat.Size())
+		}
+	} else if len(batches) > 0 {
+		tail := batches[len(batches)-1]
+		if tail != nil && tail.RowCount() != colexec.DefaultBatchSize {
+			sz += int64(tail.Size())
 		}
 	}
 	return sz
@@ -892,6 +900,29 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 	}
 	ctr := &hashBuild.ctr
 	return colexec.ShouldSpill(ctr.memUsed(), int64(ctr.hashmapBuilder.InputBatchRowCount), ctr.spillThreshold)
+}
+
+// shouldSpillBeforeRetain applies the configured threshold to the retained
+// state plus the current upstream batch. InputBatchRowCount already includes
+// that batch when this is called. Moving the existing decision before the copy
+// prevents the threshold-crossing reservation from consuming the scratch
+// headroom needed to start spill; it does not size or reserve spill scratch.
+func (hashBuild *HashBuild) shouldSpillBeforeRetain(inputBatchSize int64) bool {
+	if !hashBuild.IsShuffle || !hashBuild.NeedHashMap {
+		return false
+	}
+	ctr := &hashBuild.ctr
+	predicted := ctr.memUsed()
+	if inputBatchSize < 0 || predicted > math.MaxInt64-inputBatchSize {
+		predicted = math.MaxInt64
+	} else {
+		predicted += inputBatchSize
+	}
+	return colexec.ShouldSpill(
+		predicted,
+		int64(ctr.hashmapBuilder.InputBatchRowCount),
+		ctr.spillThreshold,
+	)
 }
 
 // computeXXHash computes hash values for spill-partitioning using

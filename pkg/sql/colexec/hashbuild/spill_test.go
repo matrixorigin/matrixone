@@ -157,6 +157,60 @@ func TestShouldSpillBatches(t *testing.T) {
 	})
 }
 
+func TestShouldSpillBeforeRetain(t *testing.T) {
+	t.Run("byte threshold predicts crossing batch", func(t *testing.T) {
+		hb := &HashBuild{IsShuffle: true, NeedHashMap: true}
+		hb.ctr.setSpillThreshold(100_001)
+		hb.ctr.hashmapBuilder.Batches.MemSize = 60_000
+		hb.ctr.hashmapBuilder.InputBatchRowCount = 2
+
+		require.False(t, hb.shouldSpillBeforeRetain(40_001),
+			"the byte convention spills only after the threshold")
+		require.True(t, hb.shouldSpillBeforeRetain(40_002),
+			"the crossing batch must be routed directly before it consumes headroom")
+	})
+
+	t.Run("row threshold already includes ingress batch", func(t *testing.T) {
+		hb := &HashBuild{IsShuffle: true, NeedHashMap: true}
+		hb.ctr.setSpillThreshold(10)
+		hb.ctr.hashmapBuilder.InputBatchRowCount = 9
+		require.False(t, hb.shouldSpillBeforeRetain(1))
+		hb.ctr.hashmapBuilder.InputBatchRowCount = 10
+		require.True(t, hb.shouldSpillBeforeRetain(1))
+	})
+
+	t.Run("ineligible topology stays resident", func(t *testing.T) {
+		hb := &HashBuild{IsShuffle: false, NeedHashMap: true}
+		hb.ctr.setSpillThreshold(1)
+		hb.ctr.hashmapBuilder.InputBatchRowCount = 1
+		require.False(t, hb.shouldSpillBeforeRetain(math.MaxInt64))
+	})
+
+	t.Run("size overflow fails toward spill", func(t *testing.T) {
+		hb := &HashBuild{IsShuffle: true, NeedHashMap: true}
+		hb.ctr.setSpillThreshold(100_001)
+		hb.ctr.hashmapBuilder.Batches.MemSize = math.MaxInt64 - 1
+		require.True(t, hb.shouldSpillBeforeRetain(2))
+	})
+}
+
+func TestMemUsedIncludesPartialTailAfterFullBatches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	full := batch.NewWithSize(0)
+	full.SetRowCount(colexec.DefaultBatchSize)
+	partial := batch.NewWithSize(1)
+	partial.Vecs[0] = testutil.MakeVarcharVector([]string{"partial-tail"}, nil, proc.Mp())
+	partial.SetRowCount(1)
+	defer partial.Clean(proc.Mp())
+
+	ctr := container{}
+	ctr.hashmapBuilder.Batches.Buf = []*batch.Batch{full, partial}
+	ctr.hashmapBuilder.Batches.MemSize = 60_000
+	require.Equal(t, int64(60_000+partial.Size()), ctr.memUsed())
+}
+
 func TestHashDistributionBuild(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
