@@ -305,8 +305,8 @@ func TestEntry_ParseLocation(t *testing.T) {
 		)
 		assert.NoError(t, err)
 		assert.NotNil(t, p)
-		assert.Panics(t, func() {
-			getLocations(genRecord(p, 0), "")
+		assert.NotPanics(t, func() {
+			assert.Nil(t, getLocations(genRecord(p, 0), ""))
 		})
 	})
 

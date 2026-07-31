@@ -5131,6 +5131,56 @@ func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
 	}
 }
 
+func TestIssue23157VectorScoreScalarSubqueryFlattened(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	vectorCol := mock.ctxt.tables["nation"].Cols[3]
+	vectorCol.Typ = plan.Type{Id: int32(types.T_array_float64), Width: 1024}
+
+	sql := `SELECT n_name,
+	               COUNT(*) AS count,
+	               AVG(cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment
+	                      FROM nation
+	                     WHERE n_nationkey = (
+	                         SELECT n_nationkey
+	                           FROM nation
+	                          WHERE n_comment IS NOT NULL
+	                          LIMIT 1)))) AS avg_similarity
+	          FROM nation
+	         WHERE n_comment IS NOT NULL
+	           AND n_name IS NOT NULL
+	           AND n_name != ''
+	         GROUP BY n_name
+	        HAVING avg_similarity > 0.6
+	         ORDER BY avg_similarity DESC
+	         LIMIT 10`
+	logicPlan, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+
+	foundAgg := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			foundAgg = true
+		}
+		for _, exprs := range [][]*plan.Expr{
+			node.AggList,
+			node.FilterList,
+			node.ProjectList,
+		} {
+			for _, expr := range exprs {
+				require.False(t, hasSubquery(expr),
+					"executable plan expression contains Expr_Sub: %s", sql)
+			}
+		}
+		for _, orderBy := range node.OrderBy {
+			require.False(t, hasSubquery(orderBy.Expr),
+				"executable ORDER BY expression contains Expr_Sub: %s", sql)
+		}
+	}
+	require.True(t, foundAgg)
+}
+
 func TestAggregateArgumentScalarSubqueryFlattenedBeforeOrderedGroupConcat(t *testing.T) {
 	sql := `SELECT n.N_REGIONKEY,
 	               GROUP_CONCAT(n.N_NAME ORDER BY n.N_NAME),
