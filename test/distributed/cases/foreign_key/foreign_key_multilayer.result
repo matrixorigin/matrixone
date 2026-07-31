@@ -318,7 +318,7 @@ select * from PARTSUPP_fk;
 ps_partkey    ps_suppkey    ps_availqty    ps_supplycost    ps_comment
 199    9991    7872    606.64     according to the final pinto beans: carefully silent requests sleep final
 update PARTSUPP_fk set PS_PARTKEY=40;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select * from lineitem_fk;
 l_orderkey    l_partkey    l_suppkey    l_linenumber    l_quantity    l_extendedprice    l_discount    l_tax    l_returnflag    l_linestatus    l_shipdate    l_commitdate    l_receiptdate    l_shipinstruct    l_shipmode    l_comment
 5999968    199    9991    2    46.00    63179.16    0.08    0.06    R    F    1993-09-16    1993-09-21    1993-10-02    COLLECT COD    RAIL    dolites wake

@@ -2097,7 +2097,9 @@ func makeOneInsertPlan(
 
 	// if table have fk. then append join node & filter node
 	// sink_scan -> join -> filter
-	if err = appendForeignConstrantPlan(builder, bindCtx, tableDef, objRef, sourceStep, isFkRecursionCall); err != nil {
+	if err = appendForeignConstrantPlan(
+		builder, bindCtx, tableDef, objRef, sourceStep, isFkRecursionCall, updateColLength > 0,
+	); err != nil {
 		return err
 	}
 

@@ -317,6 +317,24 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.True(t, hasAssert)
 	})
 
+	t.Run("legacy child foreign key update keeps typed error", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		mock.ctxt.tables["emp"].Indexes = []*planpb.IndexDef{{
+			IndexName: "idx",
+			IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
+			Parts:     []string{"sal"},
+		}}
+
+		logicPlan, err := runOneStmt(mock, t, "UPDATE emp SET deptno = 2, sal = 1")
+		require.NoError(t, err)
+		require.Equal(t, 0, countUpdateFkPlanNodes(logicPlan.GetQuery(), planpb.Node_MULTI_UPDATE))
+		require.True(t, updateFkPlanContainsTypedAssert(
+			logicPlan.GetQuery(),
+			foreignKeyNoReferencedRowAssert,
+		))
+	})
+
 	t.Run("affected restricted parent key stays modern with child probe", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)

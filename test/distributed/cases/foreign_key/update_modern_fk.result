@@ -22,7 +22,7 @@ select * from child_single order by id;
 10  ¦  3  ¦  b  𝄀
 20  ¦  2  ¦  null
 update child_single set parent_id = 99 where id = 10;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select * from child_single order by id;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
 10  ¦  3  ¦  b  𝄀
@@ -40,7 +40,7 @@ select * from child_single order by id;
 20  ¦  2  ¦  null
 update child_single set parent_id = 1 where id = 10;
 update child_single set parent_id = case id when 10 then 2 else 98 end;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select * from child_single order by id;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
 10  ¦  1  ¦  orphan  𝄀
@@ -67,7 +67,7 @@ select * from child_composite order by id;
 2  ¦  99  ¦  null  𝄀
 3  ¦  1  ¦  1
 update child_composite set a = 98, b = 98 where id = 3;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select * from child_composite order by id;
 ➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  null  ¦  99  𝄀
