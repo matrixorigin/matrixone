@@ -166,7 +166,7 @@ func (r *objectReaderV1) ReadOneBlock(
 		return
 	}
 	meta, _ := metaHeader.DataMeta()
-	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, constructorFactory, r.dataReadPolicy)
+	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, columnCacheConstructorFactory, r.dataReadPolicy)
 }
 
 func (r *objectReaderV1) ReadSubBlock(
@@ -184,7 +184,7 @@ func (r *objectReaderV1) ReadSubBlock(
 	ioVecs = make([]fileservice.IOVector, 0, meta.BlockCount())
 	for i := uint32(0); i < meta.BlockCount(); i++ {
 		var ioVec fileservice.IOVector
-		ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, meta.BlockHeader().StartID()+uint16(i), idxs, typs, m, r.fs, constructorFactory, fileservice.Policy(0))
+		ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, meta.BlockHeader().StartID()+uint16(i), idxs, typs, m, r.fs, columnCacheConstructorFactory, fileservice.Policy(0))
 		if err != nil {
 			return
 		}
@@ -206,7 +206,7 @@ func (r *objectReaderV1) ReadOneSubBlock(
 		return
 	}
 	meta, _ := metaHeader.SubMeta(dataType)
-	ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, constructorFactory, fileservice.Policy(0))
+	ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, columnCacheConstructorFactory, fileservice.Policy(0))
 	if err != nil {
 		return
 	}
@@ -223,7 +223,7 @@ func (r *objectReaderV1) ReadAll(
 		return
 	}
 	meta := metaHeader.MustDataMeta()
-	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.dataReadPolicy, m, r.fs, constructorFactory)
+	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.dataReadPolicy, m, r.fs, columnCacheConstructorFactory)
 }
 
 // ReadOneBF read one bloom filter
@@ -302,7 +302,7 @@ func (r *objectReaderV1) ReadMultiSubBlocks(
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
 
-				ToCacheData: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg()),
+				ToCacheData: columnCacheConstructorFactory(int64(col.Location().OriginSize()), col.Location().Alg()),
 			})
 		}
 	}

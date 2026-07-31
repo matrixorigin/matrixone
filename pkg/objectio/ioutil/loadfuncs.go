@@ -71,7 +71,7 @@ func LoadColumnsData(
 		cacheVectors.Free(m)
 	}
 	for i := range columns {
-		if err = objectio.MustVectorTo(&cacheVectors[i], vectors.Entries[i].CachedData.Bytes()); err != nil {
+		if err = objectio.MustVectorToCached(&cacheVectors[i], vectors.Entries[i].CachedData); err != nil {
 			logutil.Errorf("LoadColumnsData %s error: %v", location.String(), err.Error())
 			release()
 			release = nil
@@ -118,7 +118,7 @@ func LoadColumnsData2(
 	}()
 	var obj any
 	for i := range cols {
-		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
+		obj, err = objectio.DecodeCached(ioVectors.Entries[i].CachedData)
 		if err != nil {
 			for _, col := range vectors {
 				if col != nil {

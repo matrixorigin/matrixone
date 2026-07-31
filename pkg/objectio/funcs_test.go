@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
@@ -246,6 +247,148 @@ func TestConstructorFactoryReleasesDecompressionDataOnError(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, cacheData)
 	require.Equal(t, int32(1), releases.Load())
+}
+
+func TestColumnCacheConstructorValidatesAndMarksV2(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(source, []byte("value longer than inline storage"), false, mp))
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type:    IOET_ColData,
+		Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+
+	cacheData, err := columnCacheConstructorFactory(int64(len(encoded)), compress.None)(
+		context.Background(),
+		bytes.NewReader(encoded),
+		encoded,
+		fileservice.DefaultCacheDataAllocator(),
+	)
+	require.NoError(t, err)
+	require.True(t, isValidatedVectorCacheData(cacheData))
+	defer cacheData.Release()
+
+	obj, err := DecodeCached(cacheData)
+	require.NoError(t, err)
+	require.Equal(t, "value longer than inline storage", obj.(*vector.Vector).GetStringAt(0))
+
+	target := vector.NewVecFromReuse()
+	require.NoError(t, MustVectorToCached(target, cacheData))
+	require.Equal(t, "value longer than inline storage", target.GetStringAt(0))
+}
+
+func TestColumnCacheConstructorRejectsInvalidV2BeforeAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(source, []byte("value longer than inline storage"), false, mp))
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type:    IOET_ColData,
+		Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+	varlenOffset := IOEntryHeaderSize + 1 + types.TSize + 4 + 4
+	invalidOffset := uint32(len(encoded) + 1)
+	copy(encoded[varlenOffset+4:varlenOffset+8], types.EncodeUint32(&invalidOffset))
+
+	var releases atomic.Int32
+	allocator := &trackingCacheDataAllocator{
+		data: &releaseTrackingData{
+			releases: &releases,
+			bytes:    encoded,
+		},
+	}
+	cacheData, err := columnCacheConstructorFactory(int64(len(encoded)), compress.None)(
+		context.Background(),
+		bytes.NewReader(encoded),
+		encoded,
+		allocator,
+	)
+	require.Error(t, err)
+	require.Nil(t, cacheData)
+	require.Equal(t, int32(1), releases.Load())
+
+	unmarked := fileservice.NewBytes(encoded)
+	defer unmarked.Release()
+	_, err = DecodeCached(unmarked)
+	require.Error(t, err)
+}
+
+func TestColumnCacheConstructorRejectsNilCacheData(t *testing.T) {
+	allocator := &trackingCacheDataAllocator{}
+	cacheData, err := columnCacheConstructorFactory(1, compress.None)(
+		context.Background(),
+		bytes.NewReader([]byte{1}),
+		[]byte{1},
+		allocator,
+	)
+	require.Error(t, err)
+	require.Nil(t, cacheData)
+}
+
+func TestValidatedVectorCacheDataSliceDropsCapability(t *testing.T) {
+	data := &validatedVectorCacheData{Data: fileservice.NewBytes([]byte{1, 2, 3})}
+	require.True(t, isValidatedVectorCacheData(data))
+
+	same := data.Slice(3)
+	require.True(t, isValidatedVectorCacheData(same))
+
+	shorter := same.Slice(2)
+	require.False(t, isValidatedVectorCacheData(shorter))
+	shorter.Release()
+}
+
+func TestValidatedVectorCapabilitySurvivesMemoryCache(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(source, []byte("cached value"), false, mp))
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type:    IOET_ColData,
+		Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+	cacheData, err := validateVectorCacheData(fileservice.NewBytes(encoded))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	cache := fileservice.NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "")
+	t.Cleanup(func() { cache.Close(ctx) })
+	write := fileservice.IOVector{
+		FilePath: "object",
+		Entries: []fileservice.IOEntry{{
+			Offset:     0,
+			Size:       int64(len(encoded)),
+			CachedData: cacheData,
+		}},
+	}
+	require.NoError(t, cache.Update(ctx, &write, false))
+	write.Release()
+
+	read := fileservice.IOVector{
+		FilePath: "object",
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(len(encoded)),
+		}},
+	}
+	require.NoError(t, cache.Read(ctx, &read))
+	require.True(t, isValidatedVectorCacheData(read.Entries[0].CachedData))
+	obj, err := DecodeCached(read.Entries[0].CachedData)
+	require.NoError(t, err)
+	require.Equal(t, "cached value", obj.(*vector.Vector).GetStringAt(0))
+	read.Release()
 }
 
 func TestReadOneBlockAllColumnsReleasesPartialReadOnError(t *testing.T) {

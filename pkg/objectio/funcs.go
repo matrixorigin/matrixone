@@ -127,7 +127,7 @@ func ReadOneBlock(
 	fs fileservice.FileService,
 	policy fileservice.Policy,
 ) (ioVec fileservice.IOVector, err error) {
-	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, constructorFactory, policy)
+	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy)
 }
 
 func ReadOneBlockWithMeta(

@@ -142,18 +142,21 @@ func TestNewObjectWriter(t *testing.T) {
 	vec1, err := objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
 	assert.Nil(t, err)
 	defer vec1.Release()
+	for i := range vec1.Entries {
+		require.True(t, isValidatedVectorCacheData(vec1.Entries[i].CachedData))
+	}
 
-	obj, err := Decode(vec1.Entries[0].CachedData.Bytes())
+	obj, err := DecodeCached(vec1.Entries[0].CachedData)
 	assert.Nil(t, err)
 	vector1 := obj.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedColWithTypeCheck[int8](vector1)[3])
 
-	obj, err = Decode(vec1.Entries[1].CachedData.Bytes())
+	obj, err = DecodeCached(vec1.Entries[1].CachedData)
 	assert.Nil(t, err)
 	vector2 := obj.(*vector.Vector)
 	assert.Equal(t, int32(3), vector.MustFixedColWithTypeCheck[int32](vector2)[3])
 
-	obj, err = Decode(vec1.Entries[2].CachedData.Bytes())
+	obj, err = DecodeCached(vec1.Entries[2].CachedData)
 	assert.Nil(t, err)
 	vector3 := obj.(*vector.Vector)
 	assert.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](vector3, 3))
@@ -182,18 +185,21 @@ func TestNewObjectWriter(t *testing.T) {
 	vec2, err := objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
 	assert.Nil(t, err)
 	defer vec2.Release()
+	for i := range vec2.Entries {
+		require.True(t, isValidatedVectorCacheData(vec2.Entries[i].CachedData))
+	}
 
-	obj, err = Decode(vec2.Entries[0].CachedData.Bytes())
+	obj, err = DecodeCached(vec2.Entries[0].CachedData)
 	assert.Nil(t, err)
 	vector1 = obj.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedColWithTypeCheck[int8](vector1)[3])
 
-	obj, err = Decode(vec2.Entries[1].CachedData.Bytes())
+	obj, err = DecodeCached(vec2.Entries[1].CachedData)
 	assert.Nil(t, err)
 	vector2 = obj.(*vector.Vector)
 	assert.Equal(t, int32(3), vector.MustFixedColWithTypeCheck[int32](vector2)[3])
 
-	obj, err = Decode(vec2.Entries[2].CachedData.Bytes())
+	obj, err = DecodeCached(vec2.Entries[2].CachedData)
 	assert.Nil(t, err)
 	vector3 = obj.(*vector.Vector)
 	assert.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](vector3, 3))
