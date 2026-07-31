@@ -115,6 +115,107 @@ func TestHashBuildBudgetAdmissionIdentifiesResource(t *testing.T) {
 	}
 }
 
+func TestHashBuildBudgetAllocationAccountAdapter(t *testing.T) {
+	budget := MustNewHashBuildBudget(10, 10)
+	generation, err := budget.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := generation.Reserve(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	registry, err := commonmpool.NewAllocationAccountRegistry(1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := registry.OpenWithController(10, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp := commonmpool.MustNew("hash-build-allocation-account-adapter")
+	defer commonmpool.DeleteMPool(mp)
+
+	noMetadataRegistry, err := commonmpool.NewAllocationAccountRegistry(1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noMetadataAccount, err := noMetadataRegistry.OpenWithController(
+		10,
+		generation,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = mp.AllocAccounted(
+		1,
+		noMetadataAccount,
+		1,
+		1,
+	); !errors.Is(err, commonmpool.ErrAllocationMetadataSlots) {
+		t.Fatalf("metadata admission error = %v", err)
+	}
+	if generation.Used() != 4 ||
+		generation.Snapshot().AllocationUsed != 0 {
+		t.Fatalf("metadata failure leaked controller capacity: %+v",
+			generation.Snapshot())
+	}
+	noMetadataAccount.Seal()
+	if _, err = noMetadataRegistry.Finalize(noMetadataAccount); err != nil {
+		t.Fatal(err)
+	}
+
+	buffer, err := mp.AllocAccounted(6, account, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := generation.Snapshot()
+	if snapshot.Used != 10 || snapshot.AllocationUsed != 6 {
+		t.Fatalf("unexpected generation snapshot: %+v", snapshot)
+	}
+	if account.Snapshot().Used != 6 {
+		t.Fatalf("account used = %d, want 6", account.Snapshot().Used)
+	}
+
+	if _, err = mp.AllocAccounted(1, account, 1, 1); !errors.Is(
+		err,
+		ErrHashBuildBudgetAdmission,
+	) {
+		t.Fatalf("combined legacy/exact admission error = %v", err)
+	}
+	if account.Snapshot().Used != 6 ||
+		registry.LiveAllocationMetadata() != 1 {
+		t.Fatal("failed adapter admission did not roll back")
+	}
+
+	generation.Close()
+	if _, err = mp.AllocAccounted(1, account, 1, 1); !errors.Is(
+		err,
+		ErrHashBuildBudgetClosed,
+	) {
+		t.Fatalf("closed generation admission error = %v", err)
+	}
+	if account.Snapshot().Used != 6 ||
+		registry.LiveAllocationMetadata() != 1 {
+		t.Fatal("closed adapter admission did not roll back")
+	}
+
+	// Close rejects new capacity but cannot invalidate a live physical lease.
+	mp.Free(buffer)
+	if generation.Used() != 4 || generation.Snapshot().AllocationUsed != 0 {
+		t.Fatalf("allocation release did not retain only legacy charge: %+v",
+			generation.Snapshot())
+	}
+	if !legacy.Release() || generation.Used() != 0 {
+		t.Fatal("legacy reservation did not release")
+	}
+	account.Seal()
+	if _, err = registry.Finalize(account); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHashBuildBudgetQueryRejectRollsBackCN(t *testing.T) {
 	b := MustNewHashBuildBudget(10, 4)
 	g1, _ := b.OpenGeneration(1)
@@ -1702,7 +1803,7 @@ func TestHashBuildBudgetDefensiveAndProviderFailurePaths(t *testing.T) {
 	}
 	closedGeneration.closed = true
 	closedBudget.mu.Lock()
-	_, err, rejected := closedGeneration.reserveLocked(1, true)
+	_, err, rejected := closedGeneration.reserveLocked(1, true, false)
 	closedBudget.mu.Unlock()
 	if rejected || !errors.Is(err, ErrHashBuildBudgetClosed) {
 		t.Fatalf("closed reserveLocked: rejected=%v err=%v", rejected, err)
@@ -1857,6 +1958,41 @@ func BenchmarkHashBuildBudgetReserveCachedProvider(b *testing.B) {
 	}
 	b.StopTimer()
 	b.ReportMetric(float64(calls.Load()), "provider-calls")
+}
+
+func BenchmarkHashBuildBudgetAllocationAccount(b *testing.B) {
+	const capacity = uint64(1 << 60)
+	budget := MustNewHashBuildBudget(capacity, capacity)
+	generation, err := budget.OpenGeneration(1)
+	if err != nil {
+		b.Fatal(err)
+	}
+	registry, err := commonmpool.NewAllocationAccountRegistry(1, 1)
+	if err != nil {
+		b.Fatal(err)
+	}
+	account, err := registry.OpenWithController(capacity, generation)
+	if err != nil {
+		b.Fatal(err)
+	}
+	mp := commonmpool.MustNew("hash-build-allocation-account-benchmark")
+	defer commonmpool.DeleteMPool(mp)
+
+	b.ReportAllocs()
+	b.SetBytes(64 << 10)
+	b.ResetTimer()
+	for range b.N {
+		buffer, allocErr := mp.AllocAccounted(64<<10, account, 1, 1)
+		if allocErr != nil {
+			b.Fatal(allocErr)
+		}
+		mp.Free(buffer)
+	}
+	b.StopTimer()
+	account.Seal()
+	if _, err = registry.Finalize(account); err != nil {
+		b.Fatal(err)
+	}
 }
 
 func TestResolveHashBuildCeiling(t *testing.T) {

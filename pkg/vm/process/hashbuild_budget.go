@@ -828,6 +828,7 @@ type HashBuildBudgetGeneration struct {
 	id                                                      uint64
 	cap                                                     uint64
 	used                                                    uint64
+	allocationUsed                                          uint64
 	closed                                                  bool
 	spillDiskCap, spillDiskUsed                             uint64
 	spillFDConfiguredCap, spillFDCap, spillFDUsed           uint64
@@ -835,9 +836,12 @@ type HashBuildBudgetGeneration struct {
 	peakUsed                                                uint64
 }
 
+var _ mpool.AllocationCapacityController = (*HashBuildBudgetGeneration)(nil)
+
 // HashBuildBudgetGenerationSnapshot is an immutable fixed-cardinality view.
 type HashBuildBudgetGenerationSnapshot struct {
 	ID, Cap, Used, PeakUsed                                 uint64
+	AllocationUsed                                          uint64
 	ReserveCount, RejectCount, ReconcileCount, ReleaseCount uint64
 	SpillDiskCap, SpillDiskUsed, SpillFDCap                 uint64
 	SpillFDUsed                                             uint64
@@ -1092,7 +1096,8 @@ func (g *HashBuildBudgetGeneration) Snapshot() HashBuildBudgetGenerationSnapshot
 	defer g.budget.mu.Unlock()
 	return HashBuildBudgetGenerationSnapshot{
 		ID: g.id, Cap: g.cap, Used: g.used, PeakUsed: g.peakUsed,
-		ReserveCount: g.reserveCount, RejectCount: g.rejectCount, ReconcileCount: g.reconcileCount, ReleaseCount: g.releaseCount,
+		AllocationUsed: g.allocationUsed,
+		ReserveCount:   g.reserveCount, RejectCount: g.rejectCount, ReconcileCount: g.reconcileCount, ReleaseCount: g.releaseCount,
 		SpillDiskCap: g.spillDiskCap, SpillDiskUsed: g.spillDiskUsed, SpillFDCap: g.spillFDCap, SpillFDUsed: g.spillFDUsed,
 		Closed: g.closed || g.budget.closed,
 	}
@@ -1130,10 +1135,53 @@ func (g *HashBuildBudgetGeneration) Close() {
 	g.budget.mu.Unlock()
 }
 
+// AcquireAllocationCapacity adapts allocation-accounted MPool ownership into
+// the existing HashBuild query/CN policy during migration. It creates no
+// independently releasable reservation token: the physical allocation lease
+// is the sole release owner.
+func (g *HashBuildBudgetGeneration) AcquireAllocationCapacity(size uint64) error {
+	if size == 0 {
+		return nil
+	}
+	_, err := g.reserve(size, true)
+	return err
+}
+
+// ReleaseAllocationCapacity is called only by physical MPool Free through the
+// allocation account. A mismatch is an ownership invariant failure.
+func (g *HashBuildBudgetGeneration) ReleaseAllocationCapacity(size uint64) {
+	if size == 0 {
+		return
+	}
+	if g == nil || g.budget == nil {
+		panic("nil hash build allocation capacity controller")
+	}
+	b := g.budget
+	b.mu.Lock()
+	if g.allocationUsed < size || g.used < size || b.aggregateUsed < size {
+		b.mu.Unlock()
+		panic("hash build allocation capacity release underflow")
+	}
+	g.allocationUsed -= size
+	g.used -= size
+	b.aggregateUsed -= size
+	g.releaseCount++
+	b.mu.Unlock()
+	observeHashBuildBudget("memory", "release", "query", size)
+	observeHashBuildBudget("memory", "release", "cn", size)
+}
+
 // Reserve performs the required two-level sequence: charge CN aggregate,
 // then charge query-CN.  If query-CN rejects, aggregate is rolled back before
 // returning, so callers never observe a partial reservation.
 func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation, error) {
+	return g.reserve(size, false)
+}
+
+func (g *HashBuildBudgetGeneration) reserve(
+	size uint64,
+	allocationOwned bool,
+) (*HashBuildReservation, error) {
 	if g == nil || g.budget == nil {
 		return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Message: "nil hash build generation"}
 	}
@@ -1158,9 +1206,13 @@ func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation,
 			b.mu.Unlock()
 			return nil, err
 		}
-		token, firstErr, aggregateRejected := g.reserveLocked(size, false)
+		token, firstErr, aggregateRejected := g.reserveLocked(
+			size,
+			false,
+			allocationOwned,
+		)
 		b.mu.Unlock()
-		if token != nil {
+		if firstErr == nil && !aggregateRejected {
 			observeHashBuildBudget("memory", "reserve", "query", size)
 			observeHashBuildBudget("memory", "reserve", "cn", size)
 		}
@@ -1178,9 +1230,13 @@ func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation,
 			return nil, err
 		}
 		b.mu.Lock()
-		token, firstErr, aggregateRejected := g.reserveLocked(size, false)
+		token, firstErr, aggregateRejected := g.reserveLocked(
+			size,
+			false,
+			allocationOwned,
+		)
 		b.mu.Unlock()
-		if token != nil {
+		if firstErr == nil && !aggregateRejected {
 			observeHashBuildBudget("memory", "reserve", "query", size)
 			observeHashBuildBudget("memory", "reserve", "cn", size)
 		}
@@ -1202,9 +1258,13 @@ func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation,
 	}
 
 	b.mu.Lock()
-	token, err, aggregateRejected := g.reserveLocked(size, true)
+	token, err, aggregateRejected := g.reserveLocked(
+		size,
+		true,
+		allocationOwned,
+	)
 	b.mu.Unlock()
-	if token != nil {
+	if err == nil && !aggregateRejected {
 		observeHashBuildBudget("memory", "reserve", "query", size)
 		observeHashBuildBudget("memory", "reserve", "cn", size)
 	}
@@ -1217,7 +1277,11 @@ func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation,
 // reserveLocked attempts one memory reservation. b.mu must be held. The bool
 // result identifies an aggregate-cap failure so Reserve can trigger a forced
 // live-ceiling refresh without counting a transient failure as a rejection.
-func (g *HashBuildBudgetGeneration) reserveLocked(size uint64, recordAggregateReject bool) (*HashBuildReservation, error, bool) {
+func (g *HashBuildBudgetGeneration) reserveLocked(
+	size uint64,
+	recordAggregateReject bool,
+	allocationOwned bool,
+) (*HashBuildReservation, error, bool) {
 	b := g.budget
 	if b.closed || g.closed {
 		g.rejectCount++
@@ -1245,6 +1309,13 @@ func (g *HashBuildBudgetGeneration) reserveLocked(size uint64, recordAggregateRe
 	g.reserveCount++
 	if g.used > g.peakUsed {
 		g.peakUsed = g.used
+	}
+	if allocationOwned {
+		if size > math.MaxUint64-g.allocationUsed {
+			panic("hash build allocation capacity overflow")
+		}
+		g.allocationUsed += size
+		return nil, nil, false
 	}
 	return &HashBuildReservation{budget: b, generation: g, core: &hashBuildReservationCore{size: size}}, nil, false
 }
