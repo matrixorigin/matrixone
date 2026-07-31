@@ -489,11 +489,10 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
-	// ENUM and SET have distinct storage and display representations.  Preserve
-	// the stored enum index / set bitmap while binding an expression so numeric
-	// operators and comparisons use MySQL's numeric semantics.  A bare SELECT
-	// item is the presentation boundary and is converted to its display value.
-	if isRoot && isEnumOrSetPlanType(typ) {
+	// ENUM and SET have distinct storage and display representations. Keep their
+	// display value by default. Numeric and bitwise expression binders explicitly
+	// enable raw storage binding so they follow MySQL's numeric semantics.
+	if !b.bindRawMySQLSpecialType && isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
 			return
@@ -718,6 +717,12 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 }
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if (astExpr.Op == tree.UNARY_PLUS || astExpr.Op == tree.UNARY_MINUS || astExpr.Op == tree.UNARY_TILDE) &&
+		b.mysqlSpecialTypeInAst(astExpr.Expr) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			return b.bindUnaryExprWithCurrentContext(astExpr, depth)
+		})
+	}
 	if (astExpr.Op == tree.UNARY_MINUS || astExpr.Op == tree.UNARY_PLUS) && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
@@ -739,10 +744,28 @@ func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, de
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if (isNumericBinaryOp(astExpr.Op) || isBitwiseBinaryOp(astExpr.Op)) &&
+		(b.mysqlSpecialTypeInAst(astExpr.Left) || b.mysqlSpecialTypeInAst(astExpr.Right)) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			if isNumericBinaryOp(astExpr.Op) && b.numericParamType == nil {
+				return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+			}
+			return b.bindBinaryExprWithCurrentContext(astExpr, depth)
+		})
+	}
 	if isNumericBinaryOp(astExpr.Op) && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 	return b.bindBinaryExprWithCurrentContext(astExpr, depth)
+}
+
+func isBitwiseBinaryOp(op tree.BinaryOp) bool {
+	switch op {
+	case tree.BIT_XOR, tree.BIT_OR, tree.BIT_AND, tree.LEFT_SHIFT, tree.RIGHT_SHIFT:
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *baseBinder) bindBinaryExprWithCurrentContext(astExpr *tree.BinaryExpr, depth int32) (*Expr, error) {
@@ -2218,7 +2241,67 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	if (op == "like" || op == "ilike") && astExpr.Escape != nil {
 		args = append(args, astExpr.Escape)
 	}
+	if b.mysqlSpecialTypeNumericComparison(astExpr.Left, astExpr.Right) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			return b.bindFuncExprImplByAstExpr(op, args, depth)
+		})
+	}
 	return b.bindFuncExprImplByAstExpr(op, args, depth)
+}
+
+func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
+	previous := b.bindRawMySQLSpecialType
+	b.bindRawMySQLSpecialType = true
+	defer func() { b.bindRawMySQLSpecialType = previous }()
+	return bind()
+}
+
+func (b *baseBinder) mysqlSpecialTypeNumericComparison(left, right tree.Expr) bool {
+	return (b.mysqlSpecialTypeAst(left) && mysqlSpecialTypeNumericLiteral(right)) ||
+		(b.mysqlSpecialTypeAst(right) && mysqlSpecialTypeNumericLiteral(left))
+}
+
+func (b *baseBinder) mysqlSpecialTypeAst(expr tree.Expr) bool {
+	name, ok := unwrapParenExpr(expr).(*tree.UnresolvedName)
+	if !ok {
+		return false
+	}
+	typ, ok := b.numericColumnType(name)
+	return ok && isEnumOrSetPlanType(&typ)
+}
+
+func (b *baseBinder) mysqlSpecialTypeInAst(expr tree.Expr) bool {
+	if b.mysqlSpecialTypeAst(expr) {
+		return true
+	}
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.UnaryExpr:
+		return b.mysqlSpecialTypeInAst(value.Expr)
+	case *tree.BinaryExpr:
+		return b.mysqlSpecialTypeInAst(value.Left) || b.mysqlSpecialTypeInAst(value.Right)
+	}
+	return false
+}
+
+func mysqlSpecialTypeNumericLiteral(expr tree.Expr) bool {
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.NumVal:
+		switch value.ValType {
+		case tree.P_int64, tree.P_uint64, tree.P_float64:
+			return true
+		}
+	case *tree.Tuple:
+		if len(value.Exprs) == 0 {
+			return false
+		}
+		for _, item := range value.Exprs {
+			if !mysqlSpecialTypeNumericLiteral(item) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
@@ -2515,12 +2598,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
-	var err error
-	args, err = bindEnumOrSetDisplayValuesForStringContext(b.GetContext(), name, args)
-	if err != nil {
-		return nil, err
-	}
-
 	//promote interval expr rewrite here
 	if name == "interval" {
 		if len(astArgs) == 2 {
@@ -2583,42 +2660,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
-}
-
-func bindEnumOrSetDisplayValuesForStringContext(ctx context.Context, name string, args []*Expr) ([]*Expr, error) {
-	if isNumericSpecialTypeContext(name) || !hasStringArgument(args) {
-		return args, nil
-	}
-	for i, arg := range args {
-		if isEnumOrSetPlanType(&arg.Typ) {
-			displayValue, err := makeEnumOrSetDisplayValue(ctx, arg)
-			if err != nil {
-				return nil, err
-			}
-			args[i] = displayValue
-		}
-	}
-	return args, nil
-}
-
-func isNumericSpecialTypeContext(name string) bool {
-	switch name {
-	case "+", "-", "*", "/", "div", "%", "mod", "^", "|", "&", "<<", ">>",
-		"unary_plus", "unary_minus", "unary_tilde":
-		return true
-	default:
-		return false
-	}
-}
-
-func hasStringArgument(args []*Expr) bool {
-	for _, arg := range args {
-		switch types.T(arg.Typ.Id) {
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			return true
-		}
-	}
-	return false
 }
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
