@@ -4185,25 +4185,25 @@ func TestStringTimeExtract(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
 				[]uint32{12, 272, 272, 51, 12, 15, 15, 15, 0, 15, 15, 0, 0, 0, 0, 0,
 					51, 12, 272, 272, 51, 838, 838, 838, 0, 0, 0, 12},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true,
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true,
 					false, false, false, false, false, false, false, false, true, true, false, false}),
 			fn: StringToHour,
 		},
 		{
 			name: "minute",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{30, 59, 59, 4, 30, 30, 30, 30, 20, 30, 30, 0, 0, 0, 0, 0,
+				[]uint8{30, 59, 59, 4, 30, 30, 30, 30, 20, 30, 30, 20, 0, 0, 0, 0,
 					4, 30, 59, 59, 4, 59, 59, 59, 0, 0, 20, 34},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true,
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true,
 					false, false, false, false, false, false, false, false, true, true, false, false}),
 			fn: StringToMinute,
 		},
 		{
 			name: "second",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 59, 59, 5, 45, 45, 45, 45, 24, 45, 45, 0, 0, 0, 0, 0,
+				[]uint8{45, 59, 59, 5, 45, 45, 45, 45, 24, 45, 45, 24, 0, 0, 0, 0,
 					5, 45, 59, 59, 5, 59, 59, 59, 0, 0, 24, 56},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true,
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true,
 					false, false, false, false, false, false, false, false, true, true, false, false}),
 			fn: StringToSecond,
 		},
@@ -4382,6 +4382,7 @@ func TestStringTimeExtractContextAwarePrefixBoundaries(t *testing.T) {
 				"12-34", "1234-56",
 				"1 02", "1 02:", "1 02-34",
 				"2024-12-20 12", "2024-12-20 12:", "2024-12-20 12::56",
+				"2024-12-20foo", "2024-12-20 12:34::56", "2024-12-20 12-34",
 			}, nil)
 
 			for _, tc := range []struct {
@@ -4393,19 +4394,19 @@ func TestStringTimeExtractContextAwarePrefixBoundaries(t *testing.T) {
 					name: "hour",
 					fn:   StringToHour,
 					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-						[]uint32{0, 0, 26, 26, 26, 12, 12, 12}, nil),
+						[]uint32{0, 0, 26, 26, 26, 12, 12, 12, 0, 12, 12}, nil),
 				},
 				{
 					name: "minute",
 					fn:   StringToMinute,
 					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 12, 0, 0, 0, 0, 0, 56}, nil),
+						[]uint8{0, 12, 0, 0, 0, 0, 0, 56, 20, 34, 34}, nil),
 				},
 				{
 					name: "second",
 					fn:   StringToSecond,
 					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{12, 34, 0, 0, 0, 0, 0, 0}, nil),
+						[]uint8{12, 34, 0, 0, 0, 0, 0, 0, 24, 56, 0}, nil),
 				},
 			} {
 				t.Run(tc.name, func(t *testing.T) {

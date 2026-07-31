@@ -87,7 +87,7 @@ HOUR('15:30:45abc') AS trailing_time_hour,
 HOUR('2024-12-20 15:30:45abc') AS trailing_datetime_hour,
 HOUR('2024-12-20foo') AS malformed_datetime_hour;
 ➤ compact_datetime_hour[4,32,0]  ¦  trailing_time_hour[4,32,0]  ¦  trailing_datetime_hour[4,32,0]  ¦  malformed_datetime_hour[4,32,0]  𝄀
-15  ¦  15  ¦  15  ¦  null
+15  ¦  15  ¦  15  ¦  0
 SELECT HOUR('12:34:56.789012') AS fractional_time_hour,
 HOUR('2 03:04:05.9') AS day_fractional_time_hour,
 HOUR('-12:34:56.789012') AS negative_fractional_time_hour,
@@ -178,7 +178,10 @@ INSERT INTO time_extract_prefix_boundaries VALUES
 ('1 02-34', '1 02-34', '1 02-34'),
 ('2024-12-20 12', '2024-12-20 12', '2024-12-20 12'),
 ('2024-12-20 12:', '2024-12-20 12:', '2024-12-20 12:'),
-('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56');
+('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56'),
+('2024-12-20foo', '2024-12-20foo', '2024-12-20foo'),
+('2024-12-20 12:34::56', '2024-12-20 12:34::56', '2024-12-20 12:34::56'),
+('2024-12-20 12-34', '2024-12-20 12-34', '2024-12-20 12-34');
 SELECT HOUR(v), HOUR(c), HOUR(t) FROM time_extract_prefix_boundaries;
 ➤ HOUR(v)[4,32,0]  ¦  HOUR(c)[4,32,0]  ¦  HOUR(t)[4,32,0]  𝄀
 0  ¦  0  ¦  0  𝄀
@@ -187,6 +190,9 @@ SELECT HOUR(v), HOUR(c), HOUR(t) FROM time_extract_prefix_boundaries;
 26  ¦  26  ¦  26  𝄀
 26  ¦  26  ¦  26  𝄀
 12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12
+0  ¦  0  ¦  0  𝄀
 12  ¦  12  ¦  12  𝄀
 12  ¦  12  ¦  12
 DROP TABLE time_extract_prefix_boundaries;

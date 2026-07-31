@@ -4835,11 +4835,10 @@ func mysqlTimeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
 		return hour, minute, second, true
 	}
 
-	// MySQL coerces a complete date-only string through its leading year field:
-	// "2024-12-20" becomes the compact TIME 00:20:24. An ISO-T suffix does
-	// not make it a DATETIME for this TIME coercion, so it follows the same
-	// date-prefix rule. Do not apply this to other malformed date-looking input,
-	// or invalid clocks would acquire a value.
+	// MySQL consumes a complete date prefix through its leading year field:
+	// "2024-12-20" and "2024-12-20foo" both become the compact TIME
+	// 00:20:24. An ISO-T suffix does not make it a DATETIME for this TIME
+	// coercion, so it follows the same date-prefix rule.
 	if mysqlDatePrefixTimeStringForExtract(str) {
 		if hour, minute, second, ok := mysqlTimePrefixClockForExtract(str[:4]); ok {
 			return hour, minute, second, true
@@ -4854,8 +4853,7 @@ func mysqlDateOnlyStringForExtract(str string) bool {
 }
 
 func mysqlDatePrefixTimeStringForExtract(str string) bool {
-	return mysqlDateOnlyStringForExtract(str) ||
-		(len(str) > 10 && str[10] == 'T' && mysqlDateOnlyStringForExtract(str[:10]))
+	return len(str) >= 10 && mysqlDateOnlyStringForExtract(str[:10])
 }
 
 func mysqlLeadingDigitsExceedUint32(str string) bool {
@@ -4916,28 +4914,26 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	}
 	minute := uint64(0)
 	second := uint64(0)
-	if pos < len(str) && str[pos] == ':' {
+	if pos < len(str) && mysqlClockFieldSeparatorForExtract(str[pos]) {
 		pos++
-		if pos < len(str) && str[pos] == ':' {
-			// In a separated DATETIME, an empty minute field leaves the
-			// following numeric field as the minute. The already consumed hour
-			// remains intact (for example, "... 12::56" is 12:56:00).
+		for pos < len(str) && mysqlClockFieldSeparatorForExtract(str[pos]) {
 			pos++
-			if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
-				minute, _, ok = mysqlVariableDigitsForExtract(str, &pos)
-				if !ok {
-					return result
-				}
-			}
-		} else if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		}
+		if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
 			minute, _, ok = mysqlVariableDigitsForExtract(str, &pos)
 			if !ok {
 				return result
 			}
 			// MySQL accepts a DATETIME whose clock ends after the minute and
-			// supplies the omitted seconds as zero.
-			if pos < len(str) && str[pos] == ':' {
+			// supplies the omitted seconds as zero. Once a second-field
+			// separator is consumed, repeated separators still retain the
+			// previously parsed hour and minute (for example,
+			// "... 12:34::56").
+			if pos < len(str) && mysqlClockFieldSeparatorForExtract(str[pos]) {
 				pos++
+				for pos < len(str) && mysqlClockFieldSeparatorForExtract(str[pos]) {
+					pos++
+				}
 				if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
 					second, _, ok = mysqlVariableDigitsForExtract(str, &pos)
 					if !ok {
@@ -4997,6 +4993,10 @@ func mysqlDaysInMonthForExtract(year, month uint64) uint64 {
 
 func mysqlDateSeparatorForExtract(c byte) bool {
 	return c == '-' || c == '/' || c == ':'
+}
+
+func mysqlClockFieldSeparatorForExtract(c byte) bool {
+	return c == ':' || c == '-'
 }
 
 func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {

@@ -75,7 +75,7 @@ MINUTE('15:30:45abc') AS trailing_time_minute,
 MINUTE('2024-12-20 15:30:45abc') AS trailing_datetime_minute,
 MINUTE('2024-12-20foo') AS malformed_datetime_minute;
 ➤ compact_datetime_minute[-6,8,0]  ¦  trailing_time_minute[-6,8,0]  ¦  trailing_datetime_minute[-6,8,0]  ¦  malformed_datetime_minute[-6,8,0]  𝄀
-30  ¦  30  ¦  30  ¦  null
+30  ¦  30  ¦  30  ¦  20
 SELECT MINUTE('12:34:56.789012') AS fractional_time_minute,
 MINUTE('2 03:04:05.9') AS day_fractional_time_minute,
 MINUTE('-12:34:56.789012') AS negative_fractional_time_minute,
@@ -166,7 +166,10 @@ INSERT INTO time_extract_prefix_boundaries VALUES
 ('1 02-34', '1 02-34', '1 02-34'),
 ('2024-12-20 12', '2024-12-20 12', '2024-12-20 12'),
 ('2024-12-20 12:', '2024-12-20 12:', '2024-12-20 12:'),
-('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56');
+('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56'),
+('2024-12-20foo', '2024-12-20foo', '2024-12-20foo'),
+('2024-12-20 12:34::56', '2024-12-20 12:34::56', '2024-12-20 12:34::56'),
+('2024-12-20 12-34', '2024-12-20 12-34', '2024-12-20 12-34');
 SELECT MINUTE(v), MINUTE(c), MINUTE(t) FROM time_extract_prefix_boundaries;
 ➤ MINUTE(v)[-6,8,0]  ¦  MINUTE(c)[-6,8,0]  ¦  MINUTE(t)[-6,8,0]  𝄀
 0  ¦  0  ¦  0  𝄀
@@ -177,4 +180,7 @@ SELECT MINUTE(v), MINUTE(c), MINUTE(t) FROM time_extract_prefix_boundaries;
 0  ¦  0  ¦  0  𝄀
 0  ¦  0  ¦  0  𝄀
 56  ¦  56  ¦  56
+20  ¦  20  ¦  20  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34
 DROP TABLE time_extract_prefix_boundaries;

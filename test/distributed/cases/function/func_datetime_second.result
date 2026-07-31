@@ -76,7 +76,7 @@ SECOND('15:30:45abc') AS trailing_time_second,
 SECOND('2024-12-20 15:30:45abc') AS trailing_datetime_second,
 SECOND('2024-12-20foo') AS malformed_datetime_second;
 ➤ compact_datetime_second[-6,8,0]  ¦  trailing_time_second[-6,8,0]  ¦  trailing_datetime_second[-6,8,0]  ¦  malformed_datetime_second[-6,8,0]  𝄀
-45  ¦  45  ¦  45  ¦  null
+45  ¦  45  ¦  45  ¦  24
 SELECT SECOND('12:34:56.789012') AS fractional_time_second,
 SECOND('2 03:04:05.9') AS day_fractional_time_second,
 SECOND('-12:34:56.789012') AS negative_fractional_time_second,
@@ -167,7 +167,10 @@ INSERT INTO time_extract_prefix_boundaries VALUES
 ('1 02-34', '1 02-34', '1 02-34'),
 ('2024-12-20 12', '2024-12-20 12', '2024-12-20 12'),
 ('2024-12-20 12:', '2024-12-20 12:', '2024-12-20 12:'),
-('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56');
+('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56'),
+('2024-12-20foo', '2024-12-20foo', '2024-12-20foo'),
+('2024-12-20 12:34::56', '2024-12-20 12:34::56', '2024-12-20 12:34::56'),
+('2024-12-20 12-34', '2024-12-20 12-34', '2024-12-20 12-34');
 SELECT SECOND(v), SECOND(c), SECOND(t) FROM time_extract_prefix_boundaries;
 ➤ SECOND(v)[-6,8,0]  ¦  SECOND(c)[-6,8,0]  ¦  SECOND(t)[-6,8,0]  𝄀
 12  ¦  12  ¦  12  𝄀
@@ -177,5 +180,8 @@ SELECT SECOND(v), SECOND(c), SECOND(t) FROM time_extract_prefix_boundaries;
 0  ¦  0  ¦  0  𝄀
 0  ¦  0  ¦  0  𝄀
 0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0
+24  ¦  24  ¦  24  𝄀
+56  ¦  56  ¦  56  𝄀
 0  ¦  0  ¦  0
 DROP TABLE time_extract_prefix_boundaries;
