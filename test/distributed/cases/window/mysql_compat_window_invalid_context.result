@@ -26,7 +26,7 @@ id int primary key,
 v int,
 check (row_number() over (order by v) > 0)
 );
-drop table check_bad;
+You cannot use the window function 'row_number' in this context
 drop table t;
 set session sql_mode = @old_sql_mode;
 drop database mysql_compat_window_invalid_context;
