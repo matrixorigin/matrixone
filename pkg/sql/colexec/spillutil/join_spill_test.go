@@ -1463,7 +1463,7 @@ func TestReaderBatchLeaseUsesSinglePayloadEstimate(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
-func TestMarshalSpillRecordPreallocatesSinglePayload(t *testing.T) {
+func TestMarshalSpillRecordPreallocatesExactPayload(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	bat := batch.NewWithSize(1)
@@ -1477,11 +1477,9 @@ func TestMarshalSpillRecordPreallocatesSinglePayload(t *testing.T) {
 
 	buf := bytes.NewBuffer(make([]byte, 0, 1<<20))
 	require.NoError(t, marshalSpillRecord(bat, buf))
-	base := uint64(bat.Allocated())
-	if size := uint64(bat.Size()); size > base {
-		base = size
-	}
-	require.Equal(t, base+128+24, uint64(buf.Cap()))
+	size, err := bat.MarshalBinarySize()
+	require.NoError(t, err)
+	require.Equal(t, size+24, buf.Cap())
 
 	small := batch.NewWithSize(1)
 	small.Vecs[0], err = vector.NewConstBytes(
@@ -4109,9 +4107,9 @@ func TestScatterPeakDoesNotDoubleChargeReservedSource(t *testing.T) {
 	require.True(t, ok)
 	growth, ok := emptyEngine.scatterCapacityGrowthBytes(bat.RowCount(), 1)
 	require.True(t, ok)
-	marshalOverlap, ok := marshalSpillRecordGrowBytes(bat)
-	require.True(t, ok)
-	capacity := source + retained + growth + charged + marshalOverlap
+	marshalSize, err := bat.MarshalBinarySize()
+	require.NoError(t, err)
+	capacity := source + retained + growth + charged + uint64(marshalSize+24)
 	budget, err := process.NewHashBuildBudget(capacity, capacity)
 	require.NoError(t, err)
 	generation, err := budget.OpenGeneration(capacity)

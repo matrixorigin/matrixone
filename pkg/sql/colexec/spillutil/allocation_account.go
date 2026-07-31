@@ -33,10 +33,12 @@ const (
 	SpillAllocationSiteSelectedArea
 	SpillAllocationSiteHashValues
 	SpillAllocationSiteRowIDs
+	SpillAllocationSiteMarshalBuffer
+	SpillAllocationSiteCoalesceBuffer
 )
 
 // SpillAllocationAccount is the dormant allocation provenance for one spill
-// engine. Serialization buffers remain a named activation blocker.
+// engine.
 type SpillAllocationAccount struct {
 	account *mpool.AllocationAccount
 	owner   mpool.AllocationOwner
@@ -170,4 +172,19 @@ func freeSpillSlice[T any](
 	if allocation != nil && cap(values) > 0 {
 		mpool.FreeSlice(mp, values)
 	}
+}
+
+func (a *SpillAllocationAccount) newBuffer(
+	mp *mpool.MPool,
+	site mpool.AllocationSite,
+) (*mpool.AccountedBuffer, error) {
+	if err := a.validate(); err != nil {
+		return nil, err
+	}
+	return mpool.NewAccountedBuffer(
+		mp,
+		a.account,
+		a.owner,
+		site,
+	)
 }

@@ -205,6 +205,7 @@ func TestSpillAllocationAccountScatterScratchLifecycle(t *testing.T) {
 			writers[i].Close()
 		}
 	}()
+	analyzer := process.NewAnalyzer(0, false, false, "test")
 	require.NoError(t, engine.scatterBatchBounded(
 		proc,
 		source,
@@ -212,16 +213,118 @@ func TestSpillAllocationAccountScatterScratchLifecycle(t *testing.T) {
 		writers,
 		0,
 		false,
-		process.NewAnalyzer(0, false, false, "test"),
+		analyzer,
 	))
 	require.Len(t, engine.scatterHashValues, source.RowCount())
 	require.Len(t, engine.scatterBucketRowIds, source.RowCount())
 	snapshot := state.account.Snapshot()
-	require.Equal(t, uint64(source.RowCount()*(8+4)), snapshot.Used)
+	require.Greater(
+		t,
+		snapshot.Used,
+		uint64(source.RowCount()*(8+4)),
+	)
 	require.Greater(t, snapshot.Peak, snapshot.Used)
+	require.NoError(t, engine.flushScatterBuffers(proc, writers, analyzer))
+	var writtenRows int64
+	for i := range writers {
+		writtenRows += writers[i].Rows
+	}
+	require.Equal(t, int64(source.RowCount()), writtenRows)
+	require.Equal(t, snapshot.Used, state.account.Snapshot().Used)
 
 	engine.releaseScatterScratch()
 	require.Zero(t, state.account.Snapshot().Used)
+	engine.Cleanup(proc)
+	finalizeTestSpillAllocationAccount(t, state)
+}
+
+func TestSpillAllocationAccountMarshalBufferLifecycle(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(
+		t,
+		"",
+		mpool.MustNew("spill-allocation-marshal"),
+	)
+	defer proc.Free()
+	state := newTestSpillAllocationAccount(t, 1<<20, 8)
+	source := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(
+			4,
+			types.T_int64.ToType(),
+			proc.Mp(),
+			false,
+			[]int64{1, 2, 3, 4},
+		),
+	}, nil)
+	defer source.Clean(proc.Mp())
+
+	accounted, err := state.allocation.newBuffer(
+		proc.Mp(),
+		SpillAllocationSiteMarshalBuffer,
+	)
+	require.NoError(t, err)
+	require.NoError(t, marshalSpillRecordTo(source, accounted))
+	var legacy bytes.Buffer
+	require.NoError(t, marshalSpillRecord(source, &legacy))
+	require.Equal(t, legacy.Bytes(), accounted.Bytes())
+	used := state.account.Snapshot().Used
+	require.Positive(t, used)
+
+	accounted.Reset()
+	require.Zero(t, accounted.Len())
+	require.Equal(t, used, state.account.Snapshot().Used)
+	require.NoError(t, marshalSpillRecordTo(source, accounted))
+	require.Equal(t, used, state.account.Snapshot().Used)
+
+	accounted.Free()
+	require.Zero(t, state.account.Snapshot().Used)
+	finalizeTestSpillAllocationAccount(t, state)
+}
+
+func TestSpillAllocationAccountCoalesceAdmissionFallback(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(
+		t,
+		"",
+		mpool.MustNew("spill-allocation-coalesce-fallback"),
+	)
+	defer proc.Free()
+	// The record buffer consumes the only metadata slot. Coalescing is an
+	// optional optimization, so its admission failure must fall back to one
+	// direct write instead of failing the scatter.
+	state := newTestSpillAllocationAccount(t, 1<<20, 1)
+	engine, err := NewSpillEngineWithAllocation(
+		SpillEngineConfig{},
+		state.allocation,
+	)
+	require.NoError(t, err)
+	source := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(
+			2,
+			types.T_int64.ToType(),
+			proc.Mp(),
+			false,
+			[]int64{1, 2},
+		),
+	}, nil)
+	defer source.Clean(proc.Mp())
+	writers := MakeBucketWriters("spill_allocation_coalesce_fallback")
+	defer func() {
+		for i := range writers {
+			writers[i].Close()
+		}
+	}()
+
+	require.NoError(t, engine.appendScatterRecord(
+		proc,
+		source,
+		&writers[0],
+		0,
+		process.NewAnalyzer(0, false, false, "test"),
+	))
+	require.Equal(t, int64(source.RowCount()), writers[0].Rows)
+	require.Nil(t, engine.scatterAccountedWriteBuffers[0].Bytes())
+	require.Equal(t, uint64(1), state.registry.PeakAllocationMetadata())
+
+	engine.releaseScatterScratch()
 	engine.Cleanup(proc)
 	finalizeTestSpillAllocationAccount(t, state)
 }

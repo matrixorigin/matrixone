@@ -503,18 +503,6 @@ func maxIntValue() int {
 	return int(^uint(0) >> 1)
 }
 
-func marshalSpillRecordGrowBytes(bat *batch.Batch) (uint64, bool) {
-	base := uint64(bat.Allocated())
-	if size := uint64(bat.Size()); size > base {
-		base = size
-	}
-	columns := uint64(len(bat.Vecs))
-	if columns > (math.MaxUint64-24)/128 {
-		return 0, false
-	}
-	return addUint64(base, columns*128+24)
-}
-
 func (r *BucketReader) releaseReadBatch(proc *process.Process, bat *batch.Batch, token *process.HashBuildReservation) {
 	if bat != nil {
 		bat.Clean(proc.Mp())
@@ -890,34 +878,99 @@ func FlushBucketBatch(proc *process.Process, bat *batch.Batch, w *BucketWriter, 
 	return writeBucketPayload(proc, bucketBuf.Bytes(), cnt, w, analyzer)
 }
 
+type spillRecordBuffer interface {
+	io.Writer
+	Bytes() []byte
+	EnsureCapacity(int) error
+	Len() int
+	Reset()
+}
+
+type legacySpillRecordBuffer struct {
+	buffer *bytes.Buffer
+}
+
+func (b legacySpillRecordBuffer) Write(value []byte) (int, error) {
+	return b.buffer.Write(value)
+}
+
+func (b legacySpillRecordBuffer) Bytes() []byte {
+	return b.buffer.Bytes()
+}
+
+func (b legacySpillRecordBuffer) EnsureCapacity(required int) error {
+	if b.buffer.Cap() < required {
+		*b.buffer = *bytes.NewBuffer(make([]byte, 0, required))
+	}
+	return nil
+}
+
+func (b legacySpillRecordBuffer) Len() int {
+	return b.buffer.Len()
+}
+
+func (b legacySpillRecordBuffer) Reset() {
+	b.buffer.Reset()
+}
+
 func marshalSpillRecord(bat *batch.Batch, buf *bytes.Buffer) error {
+	if buf == nil {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	return marshalSpillRecordTo(
+		bat,
+		legacySpillRecordBuffer{buffer: buf},
+	)
+}
+
+func marshalSpillRecordTo(
+	bat *batch.Batch,
+	buf spillRecordBuffer,
+) error {
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
 	cnt := int64(bat.RowCount())
 	buf.Reset()
-	grow, ok := marshalSpillRecordGrowBytes(bat)
-	if !ok || grow > uint64(maxIntValue()) {
+	batchSize, err := bat.MarshalBinarySize()
+	if err != nil || batchSize > maxIntValue()-24 {
+		if err != nil {
+			return err
+		}
 		return process.ErrHashBuildBudgetInvalid
 	}
-	if uint64(buf.Cap()) < grow {
-		// Allocate the final serialization capacity in one step. Retaining a
-		// smaller bytes.Buffer while it grows geometrically would invalidate the
-		// single-payload admission estimate.
-		*buf = *bytes.NewBuffer(make([]byte, 0, int(grow)))
-	}
-	buf.Write(types.EncodeInt64(&cnt))
-	batchSizePos := buf.Len()
-	var zero int64
-	buf.Write(types.EncodeInt64(&zero))
-	batchStart := buf.Len()
-	if _, err := bat.MarshalBinaryWithBuffer(buf, false); err != nil {
+	if err := buf.EnsureCapacity(batchSize + 24); err != nil {
 		return err
 	}
-	batchSize := int64(buf.Len() - batchStart)
-	copy(buf.Bytes()[batchSizePos:batchSizePos+8], types.EncodeInt64(&batchSize))
+	if err := writeSpillRecordBytes(buf, types.EncodeInt64(&cnt)); err != nil {
+		return err
+	}
+	batchSizePos := buf.Len()
+	var zero int64
+	if err := writeSpillRecordBytes(buf, types.EncodeInt64(&zero)); err != nil {
+		return err
+	}
+	batchStart := buf.Len()
+	if err := bat.MarshalBinaryTo(buf); err != nil {
+		return err
+	}
+	serializedSize := int64(buf.Len() - batchStart)
+	copy(
+		buf.Bytes()[batchSizePos:batchSizePos+8],
+		types.EncodeInt64(&serializedSize),
+	)
 	magic := uint64(SpillMagic)
-	buf.Write(types.EncodeUint64(&magic))
+	return writeSpillRecordBytes(buf, types.EncodeUint64(&magic))
+}
+
+func writeSpillRecordBytes(w io.Writer, value []byte) error {
+	written, err := w.Write(value)
+	if err != nil {
+		return err
+	}
+	if written != len(value) {
+		return io.ErrShortWrite
+	}
 	return nil
 }
 
@@ -1558,6 +1611,16 @@ func (e *SpillEngine) appendScatterRecord(proc *process.Process, bat *batch.Batc
 		return process.ErrHashBuildBudgetInvalid
 	}
 	cnt := int64(bat.RowCount())
+	if e.allocation != nil {
+		return e.appendAccountedScatterRecord(
+			proc,
+			bat,
+			writer,
+			bucket,
+			cnt,
+			analyzer,
+		)
+	}
 	if err := marshalSpillRecord(bat, &e.scatterWriteBuf); err != nil {
 		return err
 	}
@@ -1587,6 +1650,86 @@ func (e *SpillEngine) appendScatterRecord(proc *process.Process, bat *batch.Batc
 	return nil
 }
 
+func (e *SpillEngine) appendAccountedScatterRecord(
+	proc *process.Process,
+	bat *batch.Batch,
+	writer *BucketWriter,
+	bucket int,
+	rows int64,
+	analyzer process.Analyzer,
+) error {
+	if e.allocationMP != nil && e.allocationMP != proc.Mp() {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	e.allocationMP = proc.Mp()
+	if e.scatterAccountedWriteBuf == nil {
+		var err error
+		e.scatterAccountedWriteBuf, err = e.allocation.newBuffer(
+			proc.Mp(),
+			SpillAllocationSiteMarshalBuffer,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	if err := marshalSpillRecordTo(
+		bat,
+		e.scatterAccountedWriteBuf,
+	); err != nil {
+		return err
+	}
+	payload := e.scatterAccountedWriteBuf.Bytes()
+	buf := e.scatterAccountedWriteBuffers[bucket]
+	if buf != nil && buf.Len() > 0 &&
+		buf.Len()+len(payload) > spillWriteCoalesceSize {
+		if err := e.flushPendingScatterBucket(
+			proc,
+			writer,
+			bucket,
+			analyzer,
+		); err != nil {
+			return err
+		}
+	}
+	if len(payload) > spillWriteCoalesceSize {
+		return writeBucketPayload(proc, payload, rows, writer, analyzer)
+	}
+	if buf == nil {
+		var err error
+		buf, err = e.allocation.newBuffer(
+			proc.Mp(),
+			SpillAllocationSiteCoalesceBuffer,
+		)
+		if err != nil {
+			return err
+		}
+		e.scatterAccountedWriteBuffers[bucket] = buf
+	}
+	if buf.Len() == 0 && buf.Cap() < spillWriteCoalesceSize {
+		if err := buf.EnsureCapacity(spillWriteCoalesceSize); err != nil {
+			if errors.Is(err, mpool.ErrAllocationAccountCapacity) ||
+				errors.Is(err, mpool.ErrAllocationMetadataSlots) {
+				return writeBucketPayload(
+					proc,
+					payload,
+					rows,
+					writer,
+					analyzer,
+				)
+			}
+			return err
+		}
+	}
+	if _, err := buf.Write(payload); err != nil {
+		return err
+	}
+	e.scatterWriteRows[bucket] += rows
+	if buf.Len() >= spillWriteCoalesceSize {
+		return e.flushPendingScatterBucket(proc, writer, bucket, analyzer)
+	}
+	return nil
+}
+
 func (e *SpillEngine) ensureScatterCoalesceCapacity(buf *bytes.Buffer) bool {
 	if buf == nil || buf.Cap() >= spillWriteCoalesceSize {
 		return true
@@ -1605,6 +1748,22 @@ func (e *SpillEngine) flushPendingScatterBucket(proc *process.Process, writer *B
 	if bucket < 0 || bucket >= SpillNumBuckets || writer == nil {
 		return process.ErrHashBuildBudgetInvalid
 	}
+	if e.allocation != nil {
+		buf := e.scatterAccountedWriteBuffers[bucket]
+		if buf == nil || buf.Len() == 0 {
+			return nil
+		}
+		err := writeBucketPayload(
+			proc,
+			buf.Bytes(),
+			e.scatterWriteRows[bucket],
+			writer,
+			analyzer,
+		)
+		buf.Reset()
+		e.scatterWriteRows[bucket] = 0
+		return err
+	}
 	buf := &e.scatterWriteBuffers[bucket]
 	if buf.Len() == 0 {
 		return nil
@@ -1621,7 +1780,12 @@ func (e *SpillEngine) flushPendingScatterBucket(proc *process.Process, writer *B
 func (e *SpillEngine) flushScatterBuffers(proc *process.Process, writers []BucketWriter, analyzer process.Analyzer) error {
 	var firstErr error
 	for bucket := 0; bucket < SpillNumBuckets; bucket++ {
-		if e.scatterWriteBuffers[bucket].Len() == 0 {
+		pending := e.scatterWriteBuffers[bucket].Len()
+		if e.allocation != nil &&
+			e.scatterAccountedWriteBuffers[bucket] != nil {
+			pending = e.scatterAccountedWriteBuffers[bucket].Len()
+		}
+		if pending == 0 {
 			continue
 		}
 		var writer *BucketWriter
@@ -1638,6 +1802,9 @@ func (e *SpillEngine) flushScatterBuffers(proc *process.Process, writers []Bucke
 func (e *SpillEngine) discardScatterBuffers() {
 	for bucket := range e.scatterWriteBuffers {
 		e.scatterWriteBuffers[bucket].Reset()
+		if e.scatterAccountedWriteBuffers[bucket] != nil {
+			e.scatterAccountedWriteBuffers[bucket].Reset()
+		}
 		e.scatterWriteRows[bucket] = 0
 	}
 }
@@ -1659,9 +1826,12 @@ func (e *SpillEngine) releaseScatterScratch() {
 	)
 	e.scatterHashValues = nil
 	e.scatterBucketRowIds = nil
-	e.allocationMP = nil
 	e.keyVecs = nil
 	e.scatterWriteBuf = bytes.Buffer{}
+	if e.scatterAccountedWriteBuf != nil {
+		e.scatterAccountedWriteBuf.Free()
+		e.scatterAccountedWriteBuf = nil
+	}
 	for i := range e.scatterBucketCounts {
 		e.scatterBucketCounts[i] = 0
 	}
@@ -1670,8 +1840,13 @@ func (e *SpillEngine) releaseScatterScratch() {
 	}
 	for i := range e.scatterWriteBuffers {
 		e.scatterWriteBuffers[i] = bytes.Buffer{}
+		if e.scatterAccountedWriteBuffers[i] != nil {
+			e.scatterAccountedWriteBuffers[i].Free()
+			e.scatterAccountedWriteBuffers[i] = nil
+		}
 		e.scatterWriteRows[i] = 0
 	}
+	e.allocationMP = nil
 	if e.scatterScratchReservation != nil {
 		e.scatterScratchReservation.Release()
 		e.scatterScratchReservation = nil
@@ -1680,8 +1855,8 @@ func (e *SpillEngine) releaseScatterScratch() {
 }
 
 // reconcileScatterScratch leaves only the capacities retained by the engine
-// charged after a batch completes. The source batch, selected vectors, and
-// marshal buffer are transient and must not pin budget across the queue.
+// charged after a batch completes. Source and selected vectors are transient;
+// reusable marshal and coalesce buffers remain charged only for the phase.
 func (e *SpillEngine) reconcileScatterScratch() error {
 	if e.scatterScratchReservation == nil {
 		return nil
@@ -1806,16 +1981,18 @@ type SpillEngine struct {
 	buildExprLease *hashbuild.ExpressionMemoryLease
 
 	// Reusable scatter buffers to avoid per-batch allocations.
-	scatterHashValues    []uint64
-	scatterBucketRowIds  []int32
-	scatterBucketCounts  [SpillNumBuckets]int32
-	scatterBucketOffsets [SpillNumBuckets + 1]int32
-	scatterWriteBuf      bytes.Buffer
-	scatterWriteBuffers  [SpillNumBuckets]bytes.Buffer
-	scatterWriteRows     [SpillNumBuckets]int64
-	// The lease follows reusable scratch capacities within one rebuild/scatter
-	// phase. releaseScatterScratch drops both the backing arrays and this token;
-	// Cleanup is the idempotent terminal fallback.
+	scatterHashValues            []uint64
+	scatterBucketRowIds          []int32
+	scatterBucketCounts          [SpillNumBuckets]int32
+	scatterBucketOffsets         [SpillNumBuckets + 1]int32
+	scatterWriteBuf              bytes.Buffer
+	scatterWriteBuffers          [SpillNumBuckets]bytes.Buffer
+	scatterAccountedWriteBuf     *mpool.AccountedBuffer
+	scatterAccountedWriteBuffers [SpillNumBuckets]*mpool.AccountedBuffer
+	scatterWriteRows             [SpillNumBuckets]int64
+	// The lease follows the reusable scratch capacities for the engine
+	// lifetime. It is released only by Cleanup, after all backing arrays have
+	// been dropped.
 	scatterScratchReservation *process.HashBuildReservation
 	// scatterScratchFloor is pre-admitted only while rebuilding an already
 	// spilled bucket. It keeps one bounded repartition workspace available if the
