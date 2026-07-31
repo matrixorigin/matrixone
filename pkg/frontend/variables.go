@@ -1725,6 +1725,17 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("cte_max_recursion_depth", 0, 4294967295, false),
 		Default:           int64(1000),
 	},
+	// cte_max_memory_bytes is an approximate per-query, per-CN OOM circuit
+	// breaker for batches retained by recursive CTEs, not byte-exact billing
+	// for all operators in the statement. Zero disables the circuit breaker.
+	"cte_max_memory_bytes": {
+		Name:              "cte_max_memory_bytes",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("cte_max_memory_bytes", 0, 1099511627776, false),
+		Default:           int64(1073741824),
+	},
 	"datadir": {
 		Name:              "datadir",
 		Scope:             ScopeGlobal,
