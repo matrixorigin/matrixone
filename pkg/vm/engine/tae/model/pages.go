@@ -95,7 +95,9 @@ type TransferHashPage struct {
 	id          *common.ID // not include blk offset
 	objects     []*objectio.ObjectId
 	hashmap     atomic.Pointer[api.TransferMap]
-	path        atomic.Pointer[Path]
+	pathMu      sync.Mutex
+	path        Path
+	pathClosed  bool
 	isTransient bool
 	fs          fileservice.FileService
 	ttl         time.Duration
@@ -348,15 +350,23 @@ func (page *TransferHashPage) Unmarshal(data []byte) (*api.TransferMap, error) {
 }
 
 func (page *TransferHashPage) SetPath(path Path) {
-	page.path.Store(&path)
+	// A page publishes one persisted path. Publication and terminal cleanup
+	// share pathMu so either Close owns the published path or a late publisher
+	// owns its immediate cleanup.
+	page.pathMu.Lock()
+	if page.pathClosed {
+		page.pathMu.Unlock()
+		page.deletePersistedPath(path)
+		return
+	}
+	page.path = path
+	page.pathMu.Unlock()
 }
 
 func (page *TransferHashPage) getPath() Path {
-	path := page.path.Load()
-	if path == nil {
-		return Path{}
-	}
-	return *path
+	page.pathMu.Lock()
+	defer page.pathMu.Unlock()
+	return page.path
 }
 
 func (page *TransferHashPage) loadTable() *api.TransferMap {
@@ -409,7 +419,19 @@ func (page *TransferHashPage) loadTable() *api.TransferMap {
 }
 
 func (page *TransferHashPage) ClearPersistTable() {
-	path := page.getPath()
+	page.pathMu.Lock()
+	if page.pathClosed {
+		page.pathMu.Unlock()
+		return
+	}
+	page.pathClosed = true
+	path := page.path
+	page.path = Path{}
+	page.pathMu.Unlock()
+	page.deletePersistedPath(path)
+}
+
+func (page *TransferHashPage) deletePersistedPath(path Path) {
 	if path.Name == "" {
 		return
 	}

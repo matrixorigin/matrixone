@@ -72,9 +72,15 @@ func (fs *failWriteFS) Close(ctx context.Context)   {}
 
 type pathAccessFS struct {
 	failWriteFS
+	deleteCount atomic.Int32
+	deletedPath atomic.Pointer[string]
 }
 
-func (fs *pathAccessFS) Delete(context.Context, ...string) error { return nil }
+func (fs *pathAccessFS) Delete(_ context.Context, paths ...string) error {
+	fs.deleteCount.Add(1)
+	fs.deletedPath.Store(&paths[0])
+	return nil
+}
 
 func makeTestPages(n int) ([]*TransferHashPage, fileservice.IOVector, []*bytes.Buffer) {
 	sid := objectio.NewSegmentid()
@@ -200,7 +206,8 @@ func TestWriteTransferPage_ContextCancellation(t *testing.T) {
 }
 
 func TestTransferPageConcurrentPathAccess(t *testing.T) {
-	page := &TransferHashPage{fs: &pathAccessFS{}}
+	fs := &pathAccessFS{}
+	page := &TransferHashPage{fs: fs}
 	transferMap := make(api.TransferMap, 1)
 	page.hashmap.Store(&transferMap)
 
@@ -211,16 +218,12 @@ func TestTransferPageConcurrentPathAccess(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-start
-		for i := range iterations {
-			page.SetPath(Path{Name: "transfer", Offset: int64(i), Size: int64(i + 1)})
-		}
+		page.SetPath(Path{Name: "transfer", Offset: 1, Size: 2})
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
-		for range iterations {
-			page.ClearPersistTable()
-		}
+		page.ClearPersistTable()
 	}()
 	go func() {
 		defer wg.Done()
@@ -232,8 +235,36 @@ func TestTransferPageConcurrentPathAccess(t *testing.T) {
 
 	close(start)
 	wg.Wait()
-	require.Same(t, &transferMap, page.loadTable())
-	assert.Equal(t, Path{Name: "transfer", Offset: iterations - 1, Size: iterations}, page.getPath())
+	page.ClearPersistTable()
+	require.Equal(t, int32(1), fs.deleteCount.Load())
+	require.Equal(t, "transfer", *fs.deletedPath.Load())
+	assert.Empty(t, page.getPath())
+}
+
+func TestTransferPageCleanupBeforePathPublication(t *testing.T) {
+	fs := &pathAccessFS{}
+	page := &TransferHashPage{fs: fs}
+
+	page.ClearPersistTable()
+	page.SetPath(Path{Name: "late-transfer", Offset: 1, Size: 2})
+	page.ClearPersistTable()
+
+	require.Equal(t, int32(1), fs.deleteCount.Load())
+	require.Equal(t, "late-transfer", *fs.deletedPath.Load())
+	assert.Empty(t, page.getPath())
+}
+
+func TestTransferPagePathPublicationBeforeCleanup(t *testing.T) {
+	fs := &pathAccessFS{}
+	page := &TransferHashPage{fs: fs}
+
+	page.SetPath(Path{Name: "published-transfer", Offset: 1, Size: 2})
+	page.ClearPersistTable()
+	page.ClearPersistTable()
+
+	require.Equal(t, int32(1), fs.deleteCount.Load())
+	require.Equal(t, "published-transfer", *fs.deletedPath.Load())
+	assert.Empty(t, page.getPath())
 }
 
 func TestTransferPage_TransferWithNoPath(t *testing.T) {
