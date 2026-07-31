@@ -189,6 +189,50 @@ func TestWriteTransferPage_FileAlreadyExistsOnFirstAttempt(t *testing.T) {
 	}
 }
 
+func TestWriteTransferPage_ClosedPagePublication(t *testing.T) {
+	testCases := []struct {
+		name              string
+		fs                *pathAccessFS
+		closedPages       int
+		deletesAfterWrite int32
+	}{
+		{name: "mixed pages/write succeeds", fs: &pathAccessFS{}, closedPages: 1},
+		{name: "mixed pages/file already exists", fs: &pathAccessFS{
+			failWriteFS: failWriteFS{maxFails: 10, fileExistsOnFail: 1},
+		}, closedPages: 1},
+		{name: "all closed/write succeeds", fs: &pathAccessFS{}, closedPages: 2, deletesAfterWrite: 1},
+		{name: "all closed/file already exists", fs: &pathAccessFS{
+			failWriteFS: failWriteFS{maxFails: 10, fileExistsOnFail: 1},
+		}, closedPages: 2, deletesAfterWrite: 1},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			pages, ioVector, bufs := makeTestPages(2)
+			for i := range testCase.closedPages {
+				pages[i].ClearPersistTable()
+			}
+
+			err := WriteTransferPage(context.Background(), testCase.fs, pages, ioVector, bufs)
+
+			require.NoError(t, err)
+			for i, page := range pages {
+				if i < testCase.closedPages {
+					assert.Empty(t, page.getPath())
+				} else {
+					assertPagePath(t, page, ioVector.FilePath, ioVector.Entries[i])
+				}
+			}
+			require.Equal(t, testCase.deletesAfterWrite, testCase.fs.deleteCount.Load())
+			for _, page := range pages {
+				page.ClearPersistTable()
+			}
+			require.Equal(t, int32(1), testCase.fs.deleteCount.Load())
+			require.Equal(t, ioVector.FilePath, *testCase.fs.deletedPath.Load())
+		})
+	}
+}
+
 func TestWriteTransferPage_ContextCancellation(t *testing.T) {
 	fs := &failWriteFS{maxFails: 10}
 	pages, ioVector, bufs := makeTestPages(2)

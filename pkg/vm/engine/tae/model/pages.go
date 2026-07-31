@@ -89,6 +89,18 @@ type Path struct {
 	Size   int64
 }
 
+// persistedTransferFile owns the physical file shared by a batch of transfer
+// pages. The file is deleted after publication is complete and the last page
+// releases it.
+type persistedTransferFile struct {
+	mu      sync.Mutex
+	fs      fileservice.FileService
+	name    string
+	refs    int
+	sealed  bool
+	deleted bool
+}
+
 type TransferHashPage struct {
 	common.RefHelper
 	bornTS      atomic.Pointer[time.Time]
@@ -97,6 +109,7 @@ type TransferHashPage struct {
 	hashmap     atomic.Pointer[api.TransferMap]
 	pathMu      sync.Mutex
 	path        Path
+	pathFile    *persistedTransferFile
 	pathClosed  bool
 	isTransient bool
 	fs          fileservice.FileService
@@ -350,17 +363,20 @@ func (page *TransferHashPage) Unmarshal(data []byte) (*api.TransferMap, error) {
 }
 
 func (page *TransferHashPage) SetPath(path Path) {
-	// A page publishes one persisted path. Publication and terminal cleanup
-	// share pathMu so either Close owns the published path or a late publisher
-	// owns its immediate cleanup.
+	file := &persistedTransferFile{fs: page.fs, name: path.Name}
+	page.setPath(path, file)
+	file.seal()
+}
+
+func (page *TransferHashPage) setPath(path Path, file *persistedTransferFile) {
 	page.pathMu.Lock()
+	defer page.pathMu.Unlock()
 	if page.pathClosed {
-		page.pathMu.Unlock()
-		page.deletePersistedPath(path)
 		return
 	}
+	file.retain()
 	page.path = path
-	page.pathMu.Unlock()
+	page.pathFile = file
 }
 
 func (page *TransferHashPage) getPath() Path {
@@ -425,23 +441,69 @@ func (page *TransferHashPage) ClearPersistTable() {
 		return
 	}
 	page.pathClosed = true
-	path := page.path
+	file := page.pathFile
 	page.path = Path{}
+	page.pathFile = nil
 	page.pathMu.Unlock()
-	page.deletePersistedPath(path)
+	if file != nil {
+		file.release()
+	}
 }
 
-func (page *TransferHashPage) deletePersistedPath(path Path) {
-	if path.Name == "" {
+func (file *persistedTransferFile) retain() {
+	file.mu.Lock()
+	defer file.mu.Unlock()
+	if file.sealed || file.deleted {
+		panic("cannot retain sealed transfer file")
+	}
+	file.refs++
+}
+
+func (file *persistedTransferFile) release() {
+	file.mu.Lock()
+	file.refs--
+	if file.refs < 0 {
+		file.mu.Unlock()
+		panic("negative transfer file reference count")
+	}
+	deleteFile := file.sealed && file.refs == 0 && !file.deleted
+	if deleteFile {
+		file.deleted = true
+	}
+	file.mu.Unlock()
+	if deleteFile {
+		file.delete()
+	}
+}
+
+func (file *persistedTransferFile) seal() {
+	file.mu.Lock()
+	if file.sealed {
+		file.mu.Unlock()
+		panic("transfer file publication already sealed")
+	}
+	file.sealed = true
+	deleteFile := file.refs == 0 && !file.deleted
+	if deleteFile {
+		file.deleted = true
+	}
+	file.mu.Unlock()
+	if deleteFile {
+		file.delete()
+	}
+}
+
+func (file *persistedTransferFile) delete() {
+	if file.name == "" {
 		return
 	}
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseClearPersistTable)
 	defer cancel()
-	err := page.fs.Delete(ctx, path.Name)
+	err := file.fs.Delete(ctx, file.name)
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
-		logutil.Errorf("[TransferPage] clear transfer table %v: %v", path.Name, err)
+		logutil.Errorf("[TransferPage] clear transfer table %v: %v", file.name, err)
 	}
 }
 
@@ -496,14 +558,7 @@ func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []
 				v2.TransferPageWriteRetrySucceededCounter.Add(float64(attempt))
 			}
 			ReleaseMarshalBufs(bufs)
-			for i, page := range pages {
-				path := Path{
-					Name:   ioVector.FilePath,
-					Offset: ioVector.Entries[i].Offset,
-					Size:   ioVector.Entries[i].Size,
-				}
-				page.SetPath(path)
-			}
+			publishTransferPagePaths(fs, pages, ioVector)
 			return nil
 		}
 		// FileAlreadyExists means a prior attempt actually persisted the file
@@ -513,14 +568,7 @@ func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []
 				v2.TransferPageWriteRetrySucceededCounter.Add(float64(attempt))
 			}
 			ReleaseMarshalBufs(bufs)
-			for i, page := range pages {
-				path := Path{
-					Name:   ioVector.FilePath,
-					Offset: ioVector.Entries[i].Offset,
-					Size:   ioVector.Entries[i].Size,
-				}
-				page.SetPath(path)
-			}
+			publishTransferPagePaths(fs, pages, ioVector)
 			return nil
 		}
 		logutil.Warnf("[TransferPage] write transfer page error (attempt %d/%d), page count %d: %v",
@@ -539,4 +587,16 @@ func WriteTransferPage(ctx context.Context, fs fileservice.FileService, pages []
 	logutil.Errorf("[TransferPage] write transfer page failed after %d retries, page count %d",
 		transferPageWriteMaxRetry, len(pages))
 	return err
+}
+
+func publishTransferPagePaths(fs fileservice.FileService, pages []*TransferHashPage, ioVector fileservice.IOVector) {
+	file := &persistedTransferFile{fs: fs, name: ioVector.FilePath}
+	for i, page := range pages {
+		page.setPath(Path{
+			Name:   ioVector.FilePath,
+			Offset: ioVector.Entries[i].Offset,
+			Size:   ioVector.Entries[i].Size,
+		}, file)
+	}
+	file.seal()
 }
