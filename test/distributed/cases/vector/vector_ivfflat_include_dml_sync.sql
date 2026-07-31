@@ -119,5 +119,65 @@ execute s2;
 deallocate prepare s2;
 drop table vector_ivfflat_fake_pk;
 
+-- Async IVF maintenance is CDC-only. Updating the source PK must replace the
+-- active-version entry identity without retaining the old PK or duplicating
+-- the new one.
+create table vector_ivfflat_async_pk(
+    id bigint primary key,
+    embedding vecf32(3)
+);
+insert into vector_ivfflat_async_pk values
+    (10, "[1,2,3]"),
+    (30, "[7,8,9]");
+create index idx_ivf_async_pk using ivfflat on vector_ivfflat_async_pk(embedding)
+lists=1 op_type "vector_l2_ops" async;
+
+set @async_entries = (
+    select index_table_name
+    from mo_catalog.mo_indexes
+    where name = 'idx_ivf_async_pk'
+      and algo = 'ivfflat'
+      and algo_table_type = 'entries'
+      and table_id in (
+          select rel_id
+          from mo_catalog.mo_tables
+          where reldatabase = database()
+            and relname = 'vector_ivfflat_async_pk'
+      )
+    limit 1
+);
+set @async_metadata = (
+    select index_table_name
+    from mo_catalog.mo_indexes
+    where name = 'idx_ivf_async_pk'
+      and algo = 'ivfflat'
+      and algo_table_type = 'metadata'
+      and table_id in (
+          select rel_id
+          from mo_catalog.mo_tables
+          where reldatabase = database()
+            and relname = 'vector_ivfflat_async_pk'
+      )
+    limit 1
+);
+set @async_q = concat(
+    'select count(*) as entry_count, group_concat(`__mo_index_pri_col` order by `__mo_index_pri_col`) as identities ',
+    'from `', database(), '`.`', @async_entries, '` ',
+    'where `__mo_index_centroid_fk_version` = (',
+    'select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @async_metadata, '` ',
+    'where `__mo_index_key` = ''version'')'
+);
+prepare s3 from @async_q;
+-- @wait_expect(2, 60)
+execute s3;
+
+update vector_ivfflat_async_pk set id = 20 where id = 10;
+-- @wait_expect(2, 60)
+execute s3;
+
+select id from vector_ivfflat_async_pk order by id;
+deallocate prepare s3;
+drop table vector_ivfflat_async_pk;
+
 drop table vector_ivfflat_include_phase3;
 drop database vector_ivfflat_include_phase3;
