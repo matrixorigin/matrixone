@@ -327,8 +327,14 @@ func TestQueryDaemonTaskWithConditions(t *testing.T) {
 			mustGetTestDaemonTask(t, s, 2, WithTaskIDCond(LT, tasks[2].ID))
 			mustGetTestDaemonTask(t, s, 1, WithLimitCond(1), WithTaskIDCond(GT, tasks[0].ID))
 			mustGetTestDaemonTask(t, s, 1, WithTaskIDCond(EQ, tasks[0].ID))
-			mustGetTestDaemonTask(t, s, 2, WithTaskExecutorCond(EQ, task.TaskCode_TestOnly))
-			mustGetTestDaemonTask(t, s, 1, WithTaskExecutorCond(EQ, task.TaskCode_InitCdc))
+			testOnly := mustGetTestDaemonTask(t, s, 2,
+				WithTaskExecutorCond(EQ, task.TaskCode_TestOnly))
+			for _, daemonTask := range testOnly {
+				require.Equal(t, task.TaskCode_TestOnly, daemonTask.Metadata.Executor)
+			}
+			cdc := mustGetTestDaemonTask(t, s, 1,
+				WithTaskExecutorCond(EQ, task.TaskCode_InitCdc))
+			require.Equal(t, task.TaskCode_InitCdc, cdc[0].Metadata.Executor)
 		})
 	}
 }

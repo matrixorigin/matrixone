@@ -879,9 +879,7 @@ func TestPauseTaskHandleIdempotent(t *testing.T) {
 }
 
 func TestTaskNameFromDetails(t *testing.T) {
-	require.Panics(t, func() {
-		_ = taskNameFromDetails(task.DaemonTask{})
-	})
+	require.Equal(t, "", taskNameFromDetails(task.DaemonTask{}))
 
 	tk := task.DaemonTask{Details: &task.Details{}}
 	require.Equal(t, "", taskNameFromDetails(tk))
@@ -1019,6 +1017,75 @@ func TestCancelDaemonTask(t *testing.T) {
 		expectTaskStatus(t, store, dt, task.TaskStatus_CancelRequested, task.TaskStatus_Canceled)
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestCancelDaemonTaskWithRemovedExecutor(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, _ TaskService, store TaskStorage) {
+		require.Nil(t, r.GetExecutor(task.TaskCode(4)))
+		legacyDetails := &task.Details{}
+		require.NoError(t, legacyDetails.Unmarshal(
+			[]byte{0x52, 0x06, 0x0a, 0x04, 'd', 'b', '.', 't'},
+		))
+		require.Nil(t, legacyDetails.Details)
+		require.NotEmpty(t, legacyDetails.XXX_unrecognized)
+		legacyWire := append([]byte(nil), legacyDetails.XXX_unrecognized...)
+
+		dt := newDaemonTaskForTest(1, task.TaskStatus_CancelRequested, "")
+		dt.Metadata.Executor = task.TaskCode(4) // former ConnectorKafkaSink
+		dt.Details = legacyDetails
+		mustAddTestDaemonTask(t, store, 1, dt)
+
+		expectTaskStatus(t, store, dt, task.TaskStatus_CancelRequested, task.TaskStatus_Canceled)
+		got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+		require.False(t, got[0].UpdateAt.IsZero())
+		require.Equal(t, got[0].UpdateAt, got[0].EndAt)
+		require.Equal(t, legacyWire, got[0].Details.XXX_unrecognized)
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestCancelTaskDoesNotOverwriteSupersedingStateOrOwner(t *testing.T) {
+	tests := []struct {
+		name   string
+		status task.TaskStatus
+		runner string
+	}{
+		{"state", task.TaskStatus_RestartRequested, "r1"},
+		{"owner", task.TaskStatus_CancelRequested, "r2"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r, store := newDaemonHandleTestRunner(t)
+			hook := &serviceWithDaemonHook{TaskService: r.service}
+			r.service = hook
+
+			dt := newDaemonTaskForTest(1, task.TaskStatus_CancelRequested, r.runnerID)
+			mustAddTestDaemonTask(t, store, 1, dt)
+			routine := newMockActiveRoutine()
+			activeRoutine := ActiveRoutine(routine)
+			taskRef := &daemonTask{task: dt}
+			taskRef.activeRoutine.Store(&activeRoutine)
+			r.addDaemonTask(taskRef)
+
+			hook.setUpdateFn(func(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
+				current := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+				current[0].TaskStatus = test.status
+				current[0].TaskRunner = test.runner
+				mustUpdateTestDaemonTask(t, store, 1, current)
+				return hook.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
+			})
+
+			require.NoError(t, newCancelTask(r, taskRef).Handle(context.Background()))
+			got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+			require.Equal(t, test.status, got[0].TaskStatus)
+			require.Equal(t, test.runner, got[0].TaskRunner)
+			select {
+			case <-routine.cancelC:
+				t.Fatal("stale cancellation invoked the active routine")
+			default:
+			}
+		})
+	}
 }
 
 func TestRestartDaemonTask(t *testing.T) {

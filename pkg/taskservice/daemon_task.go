@@ -190,7 +190,7 @@ func (t *startTask) Handle(_ context.Context) error {
 }
 
 func taskNameFromDetails(t task.DaemonTask) string {
-	if t.Details.Details == nil {
+	if t.Details == nil || t.Details.Details == nil {
 		return ""
 	}
 	if d, ok := t.Details.Details.(*task.Details_CreateCdc); ok && d != nil && d.CreateCdc != nil {
@@ -595,11 +595,21 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 			zap.String("current-status", tk.TaskStatus.String()))
 		return nil
 	}
+	now := time.Now()
 	tk.TaskStatus = task.TaskStatus_Canceled
-	tk.EndAt = time.Now()
-	_, err = t.runner.service.UpdateDaemonTask(handleCtx, []task.DaemonTask{tk})
+	tk.UpdateAt = now
+	tk.EndAt = now
+	updated, err := t.runner.service.UpdateDaemonTask(
+		handleCtx,
+		[]task.DaemonTask{tk},
+		WithTaskStatusCond(task.TaskStatus_CancelRequested),
+		WithTaskRunnerCond(EQ, tk.TaskRunner),
+	)
 	if err != nil {
 		return moerr.AttachCause(handleCtx, err)
+	}
+	if updated != 1 {
+		return nil
 	}
 	if t.runner.exists(tk.ID) {
 		ar := t.task.activeRoutine.Load()
@@ -774,13 +784,10 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 		if ok {
 			handlers = append(handlers, newCancelTask(r, dt))
 		} else {
-			dt, err := r.newDaemonTask(t)
-			if err != nil {
-				r.logger.Error("failed to dispatch daemon task",
-					zap.Uint64("task ID", t.ID), zap.Error(err))
-				continue
-			}
-			handlers = append(handlers, newCancelTask(r, dt))
+			// Cancellation is a control-plane state transition. A task without a
+			// local routine must still reach Canceled even if its business executor
+			// was removed or is otherwise unavailable.
+			handlers = append(handlers, newCancelTask(r, &daemonTask{task: t}))
 		}
 	}
 	for _, h := range handlers {

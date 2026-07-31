@@ -49,11 +49,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// retiredKafkaSinkTaskCode is the reserved wire value formerly assigned to
-// TaskCode_ConnectorKafkaSink. It remains registered only as a tombstone so
-// persisted daemon tasks can reach a terminal state after the feature removal.
-const retiredKafkaSinkTaskCode = task.TaskCode(4)
-
 func (s *service) adjustSQLAddress() {
 	if s.cfg.SQLAddress == "" {
 		ip := "127.0.0.1"
@@ -296,11 +291,6 @@ func (s *service) registerExecutorsLocked() {
 		panic(moerr.NewInternalErrorNoCtx("task Service not ok"))
 	}
 
-	s.task.runner.RegisterExecutor(
-		retiredKafkaSinkTaskCode,
-		retiredKafkaSinkTaskExecutor(ts, s.cfg.UUID),
-	)
-
 	// init metric/log merge task executor
 	s.task.runner.RegisterExecutor(
 		task.TaskCode_MetricLogMerge,
@@ -402,74 +392,5 @@ func (s *service) registerExecutorsLocked() {
 		databranchutils.LineageGCTaskCronExpr,
 	); err != nil {
 		s.logger.Error("failed to create data branch lineage GC task", zap.Error(err))
-	}
-}
-
-func retiredKafkaSinkTaskExecutor(
-	ts taskservice.TaskService,
-	runnerID string,
-) taskservice.TaskExecutor {
-	return func(ctx context.Context, value task.Task) error {
-		daemonTask, ok := value.(*task.DaemonTask)
-		if !ok {
-			return moerr.NewInternalErrorf(
-				ctx,
-				"retired kafka sink executor received non-daemon task %T",
-				value,
-			)
-		}
-
-		tasks, err := ts.QueryDaemonTask(
-			ctx,
-			taskservice.WithTaskIDCond(taskservice.EQ, daemonTask.ID),
-		)
-		if err != nil {
-			return err
-		}
-		if len(tasks) == 0 {
-			return nil
-		}
-		if len(tasks) != 1 {
-			return moerr.NewInternalErrorf(
-				ctx,
-				"expected one retired kafka sink task %d, got %d",
-				daemonTask.ID,
-				len(tasks),
-			)
-		}
-
-		current := tasks[0]
-		if current.Metadata.Executor != retiredKafkaSinkTaskCode ||
-			current.TaskStatus != task.TaskStatus_Running ||
-			!strings.EqualFold(current.TaskRunner, runnerID) {
-			// A concurrent lifecycle transition or ownership change won. Its
-			// handler owns the next state, so this stale executor must not write.
-			return nil
-		}
-
-		now := time.Now()
-		current.TaskStatus = task.TaskStatus_Canceled
-		current.UpdateAt = now
-		current.EndAt = now
-		updated, err := ts.UpdateDaemonTask(
-			ctx,
-			[]task.DaemonTask{current},
-			taskservice.WithTaskIDCond(taskservice.EQ, current.ID),
-			taskservice.WithTaskStatusCond(task.TaskStatus_Running),
-			taskservice.WithTaskExecutorCond(taskservice.EQ, retiredKafkaSinkTaskCode),
-			taskservice.WithTaskRunnerCond(taskservice.EQ, runnerID),
-		)
-		if err != nil {
-			return err
-		}
-		if updated > 1 {
-			return moerr.NewInternalErrorf(
-				ctx,
-				"retired kafka sink task %d updated %d rows",
-				current.ID,
-				updated,
-			)
-		}
-		return nil
 	}
 }

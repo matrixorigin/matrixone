@@ -592,6 +592,25 @@ func TestCreateDaemonTask(t *testing.T) {
 	assert.Equal(t, "task-1", details.ISCP.TaskName)
 }
 
+func TestDaemonTaskCreationRejectsUnsupportedDetails(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() { assert.NoError(t, s.Close()) })
+
+	ctx := context.Background()
+	assert.Error(t, s.CreateDaemonTask(ctx, newTestTaskMetadata("nil-details"), nil))
+	assert.Error(t, s.CreateDaemonTask(ctx, newTestTaskMetadata("empty-details"), &task.Details{}))
+	_, err := s.AddCDCTask(
+		ctx,
+		newTestTaskMetadata("not-cdc"),
+		&task.Details{Details: &task.Details_ISCP{}},
+		nil,
+	)
+	assert.Error(t, err)
+	got := mustGetTestDaemonTask(t, store, 0)
+	assert.Empty(t, got)
+}
+
 func TestQueryDaemonTask(t *testing.T) {
 	store := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), store)

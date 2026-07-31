@@ -17,8 +17,6 @@ package task
 import (
 	"fmt"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type Task interface {
@@ -49,23 +47,21 @@ func (m CronTask) DebugString() string {
 		m.CronExpr)
 }
 
-// Type returns the task's type. It panics if the type is invalid.
+// Type returns the task's type, or TypeUnknown when Details is absent or from
+// a newer binary that this one does not understand.
 func (t *Details) Type() TaskType {
-	typ, err := detailsType(t.Details)
-	if err != nil {
-		panic(err)
+	if t == nil {
+		return TaskType_TypeUnknown
 	}
-	return typ
-}
-
-func detailsType(d isDetails_Details) (TaskType, error) {
-	switch d := d.(type) {
+	switch t.Details.(type) {
 	case *Details_CreateCdc:
-		return TaskType_CreateCdc, nil
+		return TaskType_CreateCdc
 	case *Details_ISCP:
-		return TaskType_ISCP, nil
+		return TaskType_ISCP
+	case *Details_Publication:
+		return TaskType_Publication
 	default:
-		return TaskType_TypeUnknown, moerr.NewInternalErrorNoCtxf("Unknown details type: %T", d)
+		return TaskType_TypeUnknown
 	}
 }
 
