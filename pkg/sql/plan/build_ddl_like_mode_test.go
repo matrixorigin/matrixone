@@ -128,6 +128,7 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 		checkName     string
 		checkOrigin   string
 		persistedText string
+		wantAmbiguous bool
 	}{
 		{
 			name:          "top level",
@@ -157,9 +158,13 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 			name:          "no backslash escapes source",
 			baseSQL:       "create table source_t(s varchar(10))",
 			legacySQL:     `create table source_t(s varchar(10), check (s = 'a\nb'))`,
-			checkName:     "__mo_chk_1",
-			checkOrigin:   "`s` = cast(0x615c6e62 as varchar)",
-			persistedText: "constraint __mo_chk_1 check (`s` = cast(0x615c6e62 as varchar)) enforced",
+			wantAmbiguous: true,
+		},
+		{
+			name:          "default source with escaped backslash",
+			baseSQL:       "create table source_t(s varchar(10))",
+			legacySQL:     `create table source_t(s varchar(10), check (s = 'a\\nb'))`,
+			wantAmbiguous: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -179,6 +184,10 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 			require.NoError(t, err)
 			defer likeStmt.Free()
 			clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false)
+			if tc.wantAmbiguous {
+				require.ErrorContains(t, err, "ambiguous SQL mode")
+				return
+			}
 			require.NoError(t, err)
 			clone := clonePlan.GetDdl().GetCreateTable().GetTableDef()
 			require.Len(t, clone.Checks, 1)

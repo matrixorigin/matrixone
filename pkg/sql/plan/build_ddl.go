@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -895,43 +896,29 @@ func preserveChecksForCreateLike(p *Plan, src *plan.TableDef) {
 	ct.GetTableDef().Checks = dstChecks
 }
 
-// recoverLegacyChecksForCreateLike rebuilds structured CHECK metadata for
-// pre-upgrade tables, whose catalog rows contain only the original CREATE SQL.
-// The old catalog did not record the creating SQL mode. Prefer
-// NO_BACKSLASH_ESCAPES so recovery preserves the literal backslash bytes stored
-// in that SQL; fall back to the default mode for legacy statements that use
-// backslash-escaped quotes and therefore cannot be parsed in that mode.
-func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableDef) error {
-	if tableDef == nil || len(tableDef.Checks) > 0 || tableDef.Createsql == "" ||
-		tableDef.TableType == catalog.SystemExternalRel ||
-		!strings.Contains(strings.ToUpper(tableDef.Createsql), "CHECK") {
-		return nil
-	}
-
+func bindLegacyChecksForCreateLike(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	sqlMode string,
+) ([]*plan.CheckDef, bool, error) {
 	stmt, err := parsers.ParseOneWithSQLMode(
 		ctx.GetContext(),
 		dialect.MYSQL,
 		tableDef.Createsql,
 		ctx.GetLowerCaseTableNames(),
-		"NO_BACKSLASH_ESCAPES",
+		sqlMode,
 	)
 	if err != nil {
-		stmt, err = parsers.ParseOneWithSQLMode(
-			ctx.GetContext(),
-			dialect.MYSQL,
-			tableDef.Createsql,
-			ctx.GetLowerCaseTableNames(),
-			"",
-		)
-	}
-	if err != nil {
-		return err
+		return nil, false, err
 	}
 	defer stmt.Free()
 
 	createStmt, ok := stmt.(*tree.CreateTable)
 	if !ok {
-		return moerr.NewInvalidInput(ctx.GetContext(), "legacy CHECK metadata is not a CREATE TABLE statement")
+		return nil, true, moerr.NewInvalidInput(
+			ctx.GetContext(),
+			"legacy CHECK metadata is not a CREATE TABLE statement",
+		)
 	}
 
 	scratch := &plan.TableDef{
@@ -942,10 +929,13 @@ func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableD
 		switch typedDef := def.(type) {
 		case *tree.CheckIndex:
 			if !typedDef.Enforced {
-				return moerr.NewNotSupported(ctx.GetContext(), "NOT ENFORCED CHECK constraints")
+				return nil, true, moerr.NewNotSupported(
+					ctx.GetContext(),
+					"NOT ENFORCED CHECK constraints",
+				)
 			}
 			if err := appendCheckDef(ctx, scratch, typedDef.ConstraintSymbol, typedDef.Expr, -1); err != nil {
-				return err
+				return nil, true, err
 			}
 		case *tree.ColumnTableDef:
 			columnPos := slices.IndexFunc(
@@ -953,7 +943,7 @@ func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableD
 				func(col *plan.ColDef) bool { return col.Name == typedDef.Name.ColName() },
 			)
 			if columnPos == -1 {
-				return moerr.NewInvalidInputf(
+				return nil, true, moerr.NewInvalidInputf(
 					ctx.GetContext(),
 					"legacy CHECK column '%s' does not exist",
 					typedDef.Name.ColNameOrigin(),
@@ -965,15 +955,71 @@ func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableD
 					continue
 				}
 				if !check.Enforced {
-					return moerr.NewNotSupported(ctx.GetContext(), "NOT ENFORCED CHECK constraints")
+					return nil, true, moerr.NewNotSupported(
+						ctx.GetContext(),
+						"NOT ENFORCED CHECK constraints",
+					)
 				}
 				if err := appendCheckDef(ctx, scratch, check.Name, check.Expr, columnPos); err != nil {
-					return err
+					return nil, true, err
 				}
 			}
 		}
 	}
-	tableDef.Checks = scratch.Checks
+	return scratch.Checks, true, nil
+}
+
+func equalCheckDefs(left, right []*plan.CheckDef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !proto.Equal(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// recoverLegacyChecksForCreateLike rebuilds structured CHECK metadata for
+// pre-upgrade tables, whose catalog rows contain only the original CREATE SQL.
+// The old catalog did not record the creating SQL mode, so recovery must not
+// silently choose between two valid but semantically different parses.
+func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableDef) error {
+	if tableDef == nil || len(tableDef.Checks) > 0 || tableDef.Createsql == "" ||
+		tableDef.TableType == catalog.SystemExternalRel ||
+		!strings.Contains(strings.ToUpper(tableDef.Createsql), "CHECK") {
+		return nil
+	}
+
+	defaultChecks, defaultParsed, defaultErr := bindLegacyChecksForCreateLike(ctx, tableDef, "")
+	nbeChecks, nbeParsed, nbeErr := bindLegacyChecksForCreateLike(
+		ctx,
+		tableDef,
+		"NO_BACKSLASH_ESCAPES",
+	)
+	switch {
+	case defaultParsed && defaultErr != nil:
+		return defaultErr
+	case nbeParsed && nbeErr != nil:
+		return nbeErr
+	case defaultParsed && nbeParsed:
+		if !equalCheckDefs(defaultChecks, nbeChecks) {
+			return moerr.NewInvalidInput(
+				ctx.GetContext(),
+				"cannot recover legacy CHECK constraints with ambiguous SQL mode",
+			)
+		}
+		tableDef.Checks = defaultChecks
+	case defaultParsed:
+		tableDef.Checks = defaultChecks
+	case nbeParsed:
+		tableDef.Checks = nbeChecks
+	case defaultErr != nil:
+		return defaultErr
+	default:
+		return nbeErr
+	}
 	return nil
 }
 
