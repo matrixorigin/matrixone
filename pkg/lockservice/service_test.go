@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -2143,7 +2144,8 @@ func TestIssue3288(t *testing.T) {
 			l1.Close()
 
 			// Real scenario: after s1 (l1) dies, s2 (l2) acquires the lock. Caller retries on
-			// ErrBackendClosed or ErrLockTableBindChanged per API contract until success.
+			// ErrBackendClosed, ErrBackendCannotConnect, or
+			// ErrLockTableBindChanged per API contract until success.
 			//
 			// No infinite wait: (1) success -> break; (2) retryable error -> continue; (3) any other
 			// error -> require.NoError fails and test stops; (4) ctx has 10s timeout, so even if we
@@ -2165,10 +2167,11 @@ func TestIssue3288(t *testing.T) {
 					txnSeq++
 					continue
 				}
-				if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
+				if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+					moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 					continue
 				}
-				require.NoError(t, err, "lock must succeed or return retryable error (ErrBackendClosed/ErrLockTableBindChanged)")
+				require.NoError(t, err, "lock must succeed or return a retryable backend/bind error")
 			}
 			_ = result
 
@@ -6582,4 +6585,183 @@ func TestLockReturnsWhenServiceReadinessWaitIsCanceled(t *testing.T) {
 			<-ctx.Done()
 			return ctx.Err()
 		}))
+}
+
+type closeResultClient struct {
+	Client
+	err     error
+	calls   int
+	onClose func()
+}
+
+func (c *closeResultClient) Close() error {
+	c.calls++
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return c.err
+}
+
+type closeResultKeeper struct {
+	LockTableKeeper
+	err     error
+	calls   int
+	onClose func()
+}
+
+func (k *closeResultKeeper) Close() error {
+	k.calls++
+	if k.onClose != nil {
+		k.onClose()
+	}
+	return k.err
+}
+
+type closeResultServer struct {
+	Server
+	err     error
+	calls   int
+	onClose func()
+}
+
+func (s *closeResultServer) Close() error {
+	s.calls++
+	if s.onClose != nil {
+		s.onClose()
+	}
+	return s.err
+}
+
+func TestServiceCloseAttemptsAllCleanupAfterErrors(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	clientErr := errors.New("client close failed")
+	keeperErr := errors.New("keeper close failed")
+	serverErr := errors.New("server close failed")
+	var closeOrder []string
+	client := &closeResultClient{
+		err: clientErr,
+		onClose: func() {
+			closeOrder = append(closeOrder, "client")
+		},
+	}
+	keeper := &closeResultKeeper{
+		err: keeperErr,
+		onClose: func() {
+			closeOrder = append(closeOrder, "keeper")
+		},
+	}
+	server := &closeResultServer{
+		err: serverErr,
+		onClose: func() {
+			closeOrder = append(closeOrder, "server")
+		},
+	}
+
+	logger := getLogger("")
+	fsp := newFixedSlicePool(32)
+	holder := newMapBasedTxnHandler(
+		"s1",
+		logger,
+		fsp,
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(pb.WaitTxn) (bool, error) { return true, nil },
+	)
+	detector := newDeadlockDetector(
+		logger,
+		func(context.Context, pb.WaitTxn, *waiters) (bool, error) {
+			return false, nil
+		},
+		func(pb.WaitTxn, error) {},
+	)
+	events := newWaiterEvents(0, detector, holder, time.Second, nil, logger)
+	fetchWhoWaitingListC := make(chan who, 1)
+	fetchCanceled := false
+	fetchWhoWaitingListC <- who{
+		resp: acquireResponse(),
+		cancel: func() {
+			fetchCanceled = true
+		},
+	}
+	s := &service{
+		serviceID:            "s1",
+		tableGroups:          &lockTableHolders{holders: map[uint32]*lockTableHolder{}},
+		activeTxnHolder:      holder,
+		deadlockDetector:     detector,
+		events:               events,
+		stopper:              stopper.NewStopper("test-service-close"),
+		fetchWhoWaitingListC: fetchWhoWaitingListC,
+	}
+	s.remote.client = client
+	s.remote.keeper = keeper
+	s.remote.server = server
+
+	err := s.Close()
+	require.ErrorIs(t, err, clientErr)
+	require.ErrorIs(t, err, keeperErr)
+	require.ErrorIs(t, err, serverErr)
+	require.Equal(t, 1, client.calls)
+	require.Equal(t, 1, keeper.calls)
+	require.Equal(t, 1, server.calls)
+	require.Equal(t, []string{"server", "keeper", "client"}, closeOrder)
+
+	detector.mu.Lock()
+	require.True(t, detector.mu.closed)
+	detector.mu.Unlock()
+	_, eventsOpen := <-events.eventC
+	require.False(t, eventsOpen)
+	_, fetchOpen := <-s.fetchWhoWaitingListC
+	require.False(t, fetchOpen)
+	require.True(t, fetchCanceled)
+
+	// Close is idempotent and preserves the first cleanup result for every
+	// caller instead of re-running components or returning a transient nil.
+	err = s.Close()
+	require.ErrorIs(t, err, clientErr)
+	require.ErrorIs(t, err, keeperErr)
+	require.ErrorIs(t, err, serverErr)
+	require.Equal(t, 1, client.calls)
+	require.Equal(t, 1, keeper.calls)
+	require.Equal(t, 1, server.calls)
+}
+
+func TestServiceCloseSealsCancelsAndJoinsOperationAdmission(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			serviceCtx, admitted := s.beginServiceOperation()
+			require.True(t, admitted)
+			require.NotNil(t, serviceCtx)
+
+			closeDone := make(chan error, 1)
+			go func() {
+				closeDone <- s.Close()
+			}()
+
+			select {
+			case <-serviceCtx.Done():
+			case <-time.After(time.Second):
+				t.Fatal("service close did not cancel an admitted operation")
+			}
+			select {
+			case err := <-closeDone:
+				t.Fatalf("service close returned before admitted operation: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			s.endServiceOperation()
+			select {
+			case err := <-closeDone:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("service close did not join after operation completion")
+			}
+
+			_, admitted = s.beginServiceOperation()
+			require.False(t, admitted)
+			require.False(t, s.beginLockTablePublication())
+		})
 }

@@ -98,6 +98,10 @@ type CircuitBreaker struct {
 	mu sync.RWMutex
 	// state is the current circuit state
 	state CircuitState
+	// generation changes at every state transition. An admitted request may
+	// update only the state generation that admitted it; late completions from
+	// an older closed/half-open generation are metrics, not new health evidence.
+	generation uint64
 	// failures is the count of consecutive failures in closed state
 	failures int32
 	// lastFailure is the timestamp of the last failure
@@ -116,17 +120,31 @@ type CircuitBreaker struct {
 // NewCircuitBreaker creates a new CircuitBreaker with the given configuration.
 func NewCircuitBreaker(config CircuitBreakerConfig, logger *zap.Logger) *CircuitBreaker {
 	return &CircuitBreaker{
-		config: config,
-		logger: logger,
-		state:  CircuitClosed,
+		config:     config,
+		logger:     logger,
+		state:      CircuitClosed,
+		generation: 1,
 	}
 }
 
 // Allow checks if a request should be allowed.
 // Returns true if the request is allowed, false if rejected due to open circuit.
 func (cb *CircuitBreaker) Allow() bool {
+	_, _, allowed, _ := cb.admit()
+	return allowed
+}
+
+// admit returns the state generation consumed by one request attempt. Callers
+// that need a neutral completion must retain this identity and release it;
+// dropping the identity intentionally preserves Allow's legacy API semantics.
+func (cb *CircuitBreaker) admit() (
+	generation uint64,
+	halfOpen bool,
+	allowed bool,
+	state CircuitState,
+) {
 	if !cb.config.Enabled {
-		return true
+		return 0, false, true, CircuitClosed
 	}
 
 	cb.mu.Lock()
@@ -134,7 +152,7 @@ func (cb *CircuitBreaker) Allow() bool {
 
 	switch cb.state {
 	case CircuitClosed:
-		return true
+		return cb.generation, false, true, CircuitClosed
 
 	case CircuitOpen:
 		// Check if reset timeout has passed
@@ -142,22 +160,22 @@ func (cb *CircuitBreaker) Allow() bool {
 			cb.transitionToHalfOpenLocked()
 			// Allow the first probe request
 			cb.halfOpenRequests++
-			return true
+			return cb.generation, true, true, CircuitHalfOpen
 		}
 		atomic.AddInt64(&cb.rejectCount, 1)
-		return false
+		return cb.generation, false, false, CircuitOpen
 
 	case CircuitHalfOpen:
 		// Allow limited requests for probing
 		if cb.halfOpenRequests < cb.config.HalfOpenMaxRequests {
 			cb.halfOpenRequests++
-			return true
+			return cb.generation, true, true, CircuitHalfOpen
 		}
 		atomic.AddInt64(&cb.rejectCount, 1)
-		return false
+		return cb.generation, false, false, CircuitHalfOpen
 
 	default:
-		return true
+		return cb.generation, false, true, cb.state
 	}
 }
 
@@ -171,7 +189,10 @@ func (cb *CircuitBreaker) RecordSuccess() {
 	defer cb.mu.Unlock()
 
 	atomic.AddInt64(&cb.successCount, 1)
+	cb.recordSuccessLocked()
+}
 
+func (cb *CircuitBreaker) recordSuccessLocked() {
 	switch cb.state {
 	case CircuitClosed:
 		// Reset failure count on success
@@ -200,6 +221,10 @@ func (cb *CircuitBreaker) RecordFailure() {
 	defer cb.mu.Unlock()
 
 	atomic.AddInt64(&cb.failureCount, 1)
+	cb.recordFailureLocked()
+}
+
+func (cb *CircuitBreaker) recordFailureLocked() {
 	cb.lastFailure = time.Now()
 
 	switch cb.state {
@@ -215,6 +240,58 @@ func (cb *CircuitBreaker) RecordFailure() {
 
 	case CircuitOpen:
 		// Already open, just update last failure time
+	}
+}
+
+func (cb *CircuitBreaker) recordSuccessFor(
+	generation uint64,
+) (CircuitState, CircuitState) {
+	if !cb.config.Enabled {
+		return CircuitClosed, CircuitClosed
+	}
+
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	atomic.AddInt64(&cb.successCount, 1)
+	oldState := cb.state
+	if cb.generation != generation {
+		return oldState, oldState
+	}
+	cb.recordSuccessLocked()
+	return oldState, cb.state
+}
+
+func (cb *CircuitBreaker) recordFailureFor(
+	generation uint64,
+) (CircuitState, CircuitState) {
+	if !cb.config.Enabled {
+		return CircuitClosed, CircuitClosed
+	}
+
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	atomic.AddInt64(&cb.failureCount, 1)
+	oldState := cb.state
+	if cb.generation != generation {
+		return oldState, oldState
+	}
+	cb.recordFailureLocked()
+	return oldState, cb.state
+}
+
+func (cb *CircuitBreaker) releaseFor(generation uint64, halfOpen bool) {
+	if !cb.config.Enabled || !halfOpen {
+		return
+	}
+
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if cb.generation == generation &&
+		cb.state == CircuitHalfOpen &&
+		cb.halfOpenRequests > 0 {
+		cb.halfOpenRequests--
 	}
 }
 
@@ -257,12 +334,14 @@ func (cb *CircuitBreaker) transitionToOpenLocked() {
 		cb.logger.Warn("circuit breaker opened",
 			zap.Int32("failures", cb.failures),
 			zap.Duration("reset_timeout", cb.config.ResetTimeout))
+		cb.generation++
 	}
 	cb.state = CircuitOpen
 }
 
 func (cb *CircuitBreaker) transitionToHalfOpenLocked() {
 	cb.state = CircuitHalfOpen
+	cb.generation++
 	cb.halfOpenRequests = 0
 	cb.halfOpenSuccesses = 0
 	cb.logger.Info("circuit breaker half-open, probing backend")
@@ -274,6 +353,7 @@ func (cb *CircuitBreaker) transitionToClosedLocked() {
 			zap.String("previous_state", cb.state.String()))
 	}
 	cb.state = CircuitClosed
+	cb.generation++
 	cb.failures = 0
 	cb.halfOpenRequests = 0
 	cb.halfOpenSuccesses = 0
@@ -322,11 +402,66 @@ func (h circuitBreakerHandle) Allow() bool {
 	return h.breaker.Allow()
 }
 
+// circuitBreakerPermit owns exactly one breaker admission. The request-attempt
+// goroutine is its sole owner, and each permit has one terminal outcome:
+// success, peer failure, or neutral release. The generation prevents a late
+// outcome from mutating a newer breaker state.
+type circuitBreakerPermit struct {
+	handle     circuitBreakerHandle
+	generation uint64
+	halfOpen   bool
+	admitted   bool
+	completed  bool
+}
+
+func (h circuitBreakerHandle) Admit() (circuitBreakerPermit, error) {
+	generation, halfOpen, allowed, state := h.breaker.admit()
+	if !allowed {
+		return circuitBreakerPermit{}, circuitBreakerError(state)
+	}
+	return circuitBreakerPermit{
+		handle:     h,
+		generation: generation,
+		halfOpen:   halfOpen,
+		admitted:   true,
+	}, nil
+}
+
+func (p *circuitBreakerPermit) RecordSuccess() {
+	if p == nil || !p.admitted || p.completed {
+		return
+	}
+	p.completed = true
+	oldState, newState := p.handle.breaker.recordSuccessFor(p.generation)
+	p.handle.reportStateChange(oldState, newState, false)
+}
+
+func (p *circuitBreakerPermit) RecordFailure() {
+	if p == nil || !p.admitted || p.completed {
+		return
+	}
+	p.completed = true
+	oldState, newState := p.handle.breaker.recordFailureFor(p.generation)
+	p.handle.reportStateChange(oldState, newState, true)
+}
+
+func (p *circuitBreakerPermit) Release() {
+	if p == nil || !p.admitted || p.completed {
+		return
+	}
+	p.completed = true
+	p.handle.breaker.releaseFor(p.generation, p.halfOpen)
+}
+
 func (h circuitBreakerHandle) Error() error {
 	if !h.breaker.config.Enabled {
 		return nil
 	}
-	switch h.breaker.State() {
+	return circuitBreakerError(h.breaker.State())
+}
+
+func circuitBreakerError(state CircuitState) error {
+	switch state {
 	case CircuitOpen:
 		return ErrCircuitOpen
 	case CircuitHalfOpen:
