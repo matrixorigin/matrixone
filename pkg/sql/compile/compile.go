@@ -6997,9 +6997,9 @@ func (c *Compile) SetResourceAttemptOwnerEligible() {
 	c.resourceAttemptOwnerEligible = true
 }
 
-// ConfigureAllocationAccountLifecycle installs the dormant generation
-// provider used by owner-activation PRs. A nil registry keeps production on
-// the legacy path and opens no generation.
+// ConfigureAllocationAccountLifecycle installs the generation provider used
+// by allocation-accounted owners. A nil registry keeps production on the
+// legacy path and opens no generation.
 func (c *Compile) ConfigureAllocationAccountLifecycle(
 	registry *mpool.AllocationAccountRegistry,
 	limit uint64,

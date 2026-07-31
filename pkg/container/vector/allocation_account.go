@@ -139,7 +139,7 @@ func NewOffHeapVecWithTypeAndAllocation(
 	return vec, nil
 }
 
-// NewConstNullWithAllocation constructs a constant NULL Vector with dormant
+// NewConstNullWithAllocation constructs a constant NULL Vector with explicit
 // allocation provenance for any future owned backing.
 func NewConstNullWithAllocation(
 	typ types.Type,

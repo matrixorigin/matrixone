@@ -96,3 +96,13 @@ func TestHashJoinResetReleasesAccountedProbeExpressions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
 }
+
+func TestHashJoinAllocationActivationRequiresBothKeySides(t *testing.T) {
+	col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+	arg := &HashJoin{EqConds: [][]*plan.Expr{{col}, {col}}}
+	require.True(t, arg.AllocationAccountEnabled())
+	require.False(t, arg.AllocationAccountActivationBlocked())
+	arg.EqConds[1] = []*plan.Expr{nil}
+	require.False(t, arg.AllocationAccountEnabled())
+	require.True(t, arg.AllocationAccountActivationBlocked())
+}

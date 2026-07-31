@@ -30,6 +30,15 @@ type executionAllocationAccountOwner interface {
 	ClearAllocationAccount(*mpool.AllocationAccount) error
 }
 
+// executionAllocationAccountBlocker marks an operator whose physical owner is
+// known but whose allocation-site closure is not yet complete. Automatic
+// activation is statement-atomic: one blocker keeps every participating
+// operator on the legacy path instead of creating a mixed exact/estimated
+// generation.
+type executionAllocationAccountBlocker interface {
+	AllocationAccountActivationBlocked() bool
+}
+
 // statementAllocationAttempt owns one local execution generation. The
 // MessageBoard pointer is captured at open so prepared/retry Reset cannot make
 // terminal cleanup drain a newer board.
@@ -127,6 +136,10 @@ func configureAllocationAccountOwners(
 		if err := vm.HandleAllOp(
 			scope.RootOp,
 			func(_ vm.Operator, op vm.Operator) error {
+				if blocker, ok := op.(executionAllocationAccountBlocker); ok &&
+					blocker.AllocationAccountActivationBlocked() {
+					return mpool.ErrAllocationAccountInvariant
+				}
 				if owner, ok := op.(executionAllocationAccountOwner); ok &&
 					owner.AllocationAccountEnabled() {
 					if isConfigured(owner) {
@@ -158,35 +171,31 @@ func configureAllocationAccountOwners(
 }
 
 func hasAllocationAccountOwner(scopes []*Scope) bool {
-	var inspect func(*Scope) bool
-	inspect = func(scope *Scope) bool {
+	found, blocked := false, false
+	var inspect func(*Scope)
+	inspect = func(scope *Scope) {
 		if scope == nil {
-			return false
+			return
 		}
-		found := false
 		_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			if blocker, ok := op.(executionAllocationAccountBlocker); ok &&
+				blocker.AllocationAccountActivationBlocked() {
+				blocked = true
+			}
 			if owner, ok := op.(executionAllocationAccountOwner); ok &&
 				owner.AllocationAccountEnabled() {
 				found = true
 			}
 			return nil
 		})
-		if found {
-			return true
-		}
 		for _, preScope := range scope.PreScopes {
-			if inspect(preScope) {
-				return true
-			}
+			inspect(preScope)
 		}
-		return false
 	}
 	for _, scope := range scopes {
-		if inspect(scope) {
-			return true
-		}
+		inspect(scope)
 	}
-	return false
+	return found && !blocked
 }
 
 // ensureAllocationAccountLifecycle activates accounting only when the physical

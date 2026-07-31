@@ -146,7 +146,19 @@ type HashJoin struct {
 }
 
 func (hashJoin *HashJoin) AllocationAccountEnabled() bool {
-	return hashJoin != nil
+	return hashJoin != nil && hashJoin.allocationAccountExpressionOwnerClosed()
+}
+
+func (hashJoin *HashJoin) AllocationAccountActivationBlocked() bool {
+	return hashJoin != nil && !hashJoin.allocationAccountExpressionOwnerClosed()
+}
+
+func (hashJoin *HashJoin) allocationAccountExpressionOwnerClosed() bool {
+	if hashJoin == nil || len(hashJoin.EqConds) != 2 {
+		return false
+	}
+	return hashbuild.AllocationAccountedExpressionSetSupported(hashJoin.EqConds[0]) &&
+		hashbuild.AllocationAccountedExpressionSetSupported(hashJoin.EqConds[1])
 }
 
 func (hashJoin *HashJoin) SetAllocationAccount(

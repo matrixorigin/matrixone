@@ -67,6 +67,137 @@ func (r *boundaryCancelReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// FlushBucketBatch writes one legacy-format spill record. Production
+// scatter goes through SpillEngine.scatterBatchBounded; tests that construct a
+// reader fixture directly need only this codec/writer composition.
+func FlushBucketBatch(
+	proc *process.Process,
+	bat *batch.Batch,
+	w *BucketWriter,
+	bucketBuf *bytes.Buffer,
+	analyzer process.Analyzer,
+) error {
+	if bat == nil || bat.RowCount() == 0 {
+		return nil
+	}
+	if err := marshalSpillRecord(bat, bucketBuf); err != nil {
+		return err
+	}
+	return writeBucketPayload(
+		proc,
+		bucketBuf.Bytes(),
+		int64(bat.RowCount()),
+		w,
+		analyzer,
+	)
+}
+
+// scatterImpl retains the former buffered implementation solely as a
+// compatibility oracle. It is intentionally test-only: production owns one
+// selected batch at a time in SpillEngine.scatterBatchBounded.
+func scatterImpl(
+	proc *process.Process,
+	bat *batch.Batch,
+	keyVecs []*vector.Vector,
+	writers []BucketWriter,
+	buffers []*batch.Batch,
+	seed uint64,
+	bucketBuf *bytes.Buffer,
+	analyzer process.Analyzer,
+	reuseHashValues *[]uint64,
+	reuseBucketRowIds *[][]int32,
+) error {
+	rowCount := bat.RowCount()
+	if rowCount == 0 {
+		return nil
+	}
+
+	var hashValues []uint64
+	if reuseHashValues != nil && cap(*reuseHashValues) >= rowCount {
+		hashValues = (*reuseHashValues)[:rowCount]
+	} else {
+		hashValues = make([]uint64, rowCount)
+		if reuseHashValues != nil {
+			*reuseHashValues = hashValues
+		}
+	}
+	ComputeXXHash(keyVecs, hashValues, seed)
+
+	if len(writers) == 0 || len(writers) > SpillNumBuckets ||
+		len(writers)&(len(writers)-1) != 0 {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	var bucketRowIds [][]int32
+	if reuseBucketRowIds != nil {
+		bucketRowIds = *reuseBucketRowIds
+		if cap(bucketRowIds) < len(writers) {
+			bucketRowIds = make([][]int32, len(writers))
+			*reuseBucketRowIds = bucketRowIds
+		} else {
+			bucketRowIds = bucketRowIds[:len(writers)]
+		}
+	} else {
+		bucketRowIds = make([][]int32, len(writers))
+	}
+	var rowIDs []int32
+	if len(bucketRowIds) > 0 && cap(bucketRowIds[0]) >= rowCount {
+		rowIDs = bucketRowIds[0][:rowCount]
+	} else {
+		rowIDs = make([]int32, rowCount)
+	}
+	var counts [SpillNumBuckets]int32
+	var offsets [SpillNumBuckets + 1]int32
+	if err := classifyRows(
+		hashValues,
+		len(writers),
+		0,
+		rowIDs,
+		counts[:],
+		offsets[:],
+	); err != nil {
+		return err
+	}
+	for i := range bucketRowIds {
+		bucketRowIds[i] = rowIDs[offsets[i]:offsets[i+1]]
+	}
+
+	for bucketID, sels := range bucketRowIds {
+		if len(sels) == 0 || writers[bucketID].Name == "" {
+			continue
+		}
+		buf := buffers[bucketID]
+		if buf == nil {
+			buf = batch.NewOffHeapWithSize(len(bat.Vecs))
+			for i, vec := range bat.Vecs {
+				buf.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+				if err := buf.Vecs[i].PreExtend(8192, proc.Mp()); err != nil {
+					return err
+				}
+			}
+			buffers[bucketID] = buf
+		}
+		for i, vec := range bat.Vecs {
+			if err := buf.Vecs[i].UnionInt32(vec, sels, proc.Mp()); err != nil {
+				return err
+			}
+		}
+		buf.SetRowCount(buf.RowCount() + len(sels))
+		if buf.RowCount() >= 8192 {
+			if err := FlushBucketBatch(
+				proc,
+				buf,
+				&writers[bucketID],
+				bucketBuf,
+				analyzer,
+			); err != nil {
+				return err
+			}
+			buf.CleanOnlyData()
+		}
+	}
+	return nil
+}
+
 func TestTakeSpillBuildPayloadRejectsWrongBudgetRef(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -196,6 +327,19 @@ func TestClassifyRowsConservesRows(t *testing.T) {
 	// conservation invariant.
 	require.NoError(t, classifyRows(hashes, SpillNumBuckets, 5, rowIDs, counts, offsets))
 	require.Equal(t, int32(len(hashes)), offsets[SpillNumBuckets])
+}
+
+func TestClassifyRowsRejectsNonProductionFanout(t *testing.T) {
+	const fanout = SpillNumBuckets * 2
+	err := classifyRows(
+		[]uint64{0},
+		fanout,
+		0,
+		make([]int32, 1),
+		make([]int32, fanout),
+		make([]int32, fanout+1),
+	)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
 }
 
 func legacyClassifyRows(hashes []uint64, rowIDs []int32) {

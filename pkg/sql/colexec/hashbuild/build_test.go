@@ -3155,7 +3155,7 @@ func TestShuffleHashBuildSpillFailureReleasesEmergencyResources(t *testing.T) {
 	require.NotErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
 	require.Nil(t, tc.arg.ctr.spillScratchReservation)
 	require.Zero(t, cap(tc.arg.ctr.spillHashValues))
-	require.Zero(t, cap(tc.arg.ctr.spillSelection))
+	require.Zero(t, cap(tc.arg.ctr.spillBucketRowIds))
 	require.Zero(t, cap(tc.arg.ctr.spillKeyVecs))
 	require.Zero(t, tc.arg.ctr.spillWriteBuf.Cap())
 

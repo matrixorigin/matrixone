@@ -98,7 +98,21 @@ type RightDedupJoin struct {
 }
 
 func (rightDedupJoin *RightDedupJoin) AllocationAccountEnabled() bool {
-	return rightDedupJoin != nil
+	return rightDedupJoin != nil &&
+		rightDedupJoin.allocationAccountExpressionOwnerClosed()
+}
+
+func (rightDedupJoin *RightDedupJoin) AllocationAccountActivationBlocked() bool {
+	return rightDedupJoin != nil &&
+		!rightDedupJoin.allocationAccountExpressionOwnerClosed()
+}
+
+func (rightDedupJoin *RightDedupJoin) allocationAccountExpressionOwnerClosed() bool {
+	if rightDedupJoin == nil || len(rightDedupJoin.Conditions) != 2 {
+		return false
+	}
+	return hashbuild.AllocationAccountedExpressionSetSupported(rightDedupJoin.Conditions[0]) &&
+		hashbuild.AllocationAccountedExpressionSetSupported(rightDedupJoin.Conditions[1])
 }
 
 func (rightDedupJoin *RightDedupJoin) SetAllocationAccount(

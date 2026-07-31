@@ -306,7 +306,19 @@ type DedupJoin struct {
 }
 
 func (dedupJoin *DedupJoin) AllocationAccountEnabled() bool {
-	return dedupJoin != nil
+	return dedupJoin != nil && dedupJoin.allocationAccountExpressionOwnerClosed()
+}
+
+func (dedupJoin *DedupJoin) AllocationAccountActivationBlocked() bool {
+	return dedupJoin != nil && !dedupJoin.allocationAccountExpressionOwnerClosed()
+}
+
+func (dedupJoin *DedupJoin) allocationAccountExpressionOwnerClosed() bool {
+	if dedupJoin == nil || len(dedupJoin.Conditions) != 2 {
+		return false
+	}
+	return hashbuild.AllocationAccountedExpressionSetSupported(dedupJoin.Conditions[0]) &&
+		hashbuild.AllocationAccountedExpressionSetSupported(dedupJoin.Conditions[1])
 }
 
 func (dedupJoin *DedupJoin) SetAllocationAccount(

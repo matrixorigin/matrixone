@@ -95,9 +95,9 @@ func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs 
 	return newExpressionExecutorsFromPlanExpressions(proc, planExprs, nil)
 }
 
-// NewExpressionExecutorsFromPlanExpressionsWithAllocation constructs dormant
-// allocation-accounted expression trees. No production caller uses this path
-// until the complete expression allocation-site ledger is closed.
+// NewExpressionExecutorsFromPlanExpressionsWithAllocation constructs
+// allocation-accounted expression trees for callers that have already proved
+// the complete expression allocation-site ledger closed.
 func NewExpressionExecutorsFromPlanExpressionsWithAllocation(
 	proc *process.Process,
 	planExprs []*plan.Expr,

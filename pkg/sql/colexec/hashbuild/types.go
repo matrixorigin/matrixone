@@ -122,7 +122,6 @@ type container struct {
 	spillBucketRowIds  []int32
 	spillBucketCounts  [spillNumBuckets]int32
 	spillBucketOffsets [spillNumBuckets + 1]int32
-	spillSelection     []int32
 	spillWriteBuf      bytes.Buffer
 	// spillBucketWriteBufs coalesce serialized records across source batches.
 	// Each buffer is bounded by spillWriteCoalesceSize (plus bytes.Buffer's
@@ -330,7 +329,18 @@ func (hashBuild *HashBuild) GetOperatorBase() *vm.OperatorBase {
 }
 
 func (hashBuild *HashBuild) AllocationAccountEnabled() bool {
-	return hashBuild != nil && hashBuild.NeedHashMap
+	// Activate one complete physical owner closure.  An expression family whose
+	// call-scoped allocation ledger is not closed must keep the whole HashBuild
+	// on the legacy path; mixing an exact map/batch owner with an estimator-gated
+	// expression would reintroduce the false-rejection mechanism that this
+	// activation removes.
+	return hashBuild != nil && hashBuild.NeedHashMap &&
+		expressionSetAllocationClosed(hashBuild.Conditions)
+}
+
+func (hashBuild *HashBuild) AllocationAccountActivationBlocked() bool {
+	return hashBuild != nil && hashBuild.NeedHashMap &&
+		!expressionSetAllocationClosed(hashBuild.Conditions)
 }
 
 // SetAllocationAccount selects immutable provenance for the hash-table owner

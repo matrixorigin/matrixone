@@ -832,7 +832,6 @@ func (ctr *container) dropSpillScratchBuffers() {
 	for i := range ctr.spillBucketOffsets {
 		ctr.spillBucketOffsets[i] = 0
 	}
-	ctr.spillSelection = nil
 	ctr.spillKeyVecs = nil
 	ctr.spillWriteBuf = bytes.Buffer{}
 	ctr.spillAllocationMP = nil
@@ -1288,10 +1287,6 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
-	// Keep the legacy spillSelection field as an alias for callers/tests that
-	// inspect it. It intentionally points at the same backing array: no second
-	// row-id allocation is made.
-	ctr.spillSelection = ctr.spillBucketRowIds
 	counts := ctr.spillBucketCounts[:]
 	for i := range counts {
 		counts[i] = 0
@@ -1497,7 +1492,6 @@ func (ctr *container) releaseSpillComputeScratch() {
 	}
 	ctr.spillHashValues = nil
 	ctr.spillBucketRowIds = nil
-	ctr.spillSelection = nil
 }
 
 // spillBatchWithPressure retries only the unpublished prefix of an exact
@@ -1890,15 +1884,6 @@ func (ctr *container) flushSpillBuffers(proc *process.Process, files []*os.File,
 		}
 	}
 	return firstErr
-}
-
-func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
-	// buffers is retained in the signature for source compatibility with older
-	// unit tests and callers.  The implementation intentionally ignores it:
-	// every non-empty bucket is selected and flushed before the next bucket is
-	// materialized, so no persistent fanout-sized vector set can grow.
-	_ = buffers
-	return ctr.spillBatchBounded(proc, bat, files, executors, analyzer, false)
 }
 
 // initSpillExprExecs initializes or validates spill expression executors.

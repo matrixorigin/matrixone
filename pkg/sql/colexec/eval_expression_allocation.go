@@ -23,8 +23,8 @@ import (
 )
 
 // Expression allocation sites are stable diagnostics within the owner chosen
-// by the caller. The API is dormant: legacy expression constructors do not
-// create or select an account.
+// by the caller. Legacy expression constructors still do not create or select
+// an account; an activated owner must opt in explicitly.
 const (
 	ExpressionAllocationSiteConstantData mpool.AllocationSite = iota + 1
 	ExpressionAllocationSiteConstantArea

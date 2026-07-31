@@ -341,6 +341,28 @@ func TestHashmapBuilderFallsBackOnlyForUnclosedExpressionScratch(t *testing.T) {
 	}
 }
 
+func TestHashBuildAllocationActivationRequiresClosedExpressionOwner(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	closed := &HashBuild{
+		NeedHashMap: true,
+		Conditions:  []*plan.Expr{makeIssue26454ConcatKey(t, proc)},
+	}
+	require.True(t, closed.AllocationAccountEnabled())
+
+	unclosed := &HashBuild{
+		NeedHashMap: true,
+		Conditions:  []*plan.Expr{makeExpressionLeaseTestExpr(t, proc)},
+	}
+	require.False(t, unclosed.AllocationAccountEnabled())
+
+	withoutMap := &HashBuild{
+		Conditions: []*plan.Expr{makeIssue26454ConcatKey(t, proc)},
+	}
+	require.False(t, withoutMap.AllocationAccountEnabled())
+}
+
 func BenchmarkIssue26454ExpressionAccounting(b *testing.B) {
 	const capBytes = uint64(8 << 30)
 	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())

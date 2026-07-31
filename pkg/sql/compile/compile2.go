@@ -467,15 +467,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		coordinatorPhaseStart = time.Time{}
 		coordinatorPhaseBase = 0
 	}
-	if terminalErr := finishAllocationAttempt(); terminalErr != nil {
-		err = errors.Join(err, terminalErr)
-		resourceRecorder.finishAttempt(
-			uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
-			attemptScopes, attemptAnal, c.addr, false,
-		)
-		attemptOpen = false
-		return nil, err
-	}
 	queryResult.AffectRows = runC.getAffectedRows()
 	if c.uid != "mo_logger" &&
 		strings.Contains(strings.ToLower(c.sql), "insert") &&
@@ -496,6 +487,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	// outcome. The panic defer above remains the single terminal owner until
 	// this call returns.
 	c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
+	if terminalErr := finishAllocationAttempt(); terminalErr != nil {
+		err = errors.Join(err, terminalErr)
+		resourceRecorder.finishAttempt(
+			uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+			attemptScopes, attemptAnal, c.addr, false,
+		)
+		attemptOpen = false
+		return nil, err
+	}
 
 	resourceRecorder.finishAttempt(
 		uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,

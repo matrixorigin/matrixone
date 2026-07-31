@@ -96,6 +96,9 @@ func NewAllocationAccountedExpressionExecutorsForAccount(
 }
 
 func expressionSetAllocationClosed(exprs []*plan.Expr) bool {
+	if len(exprs) == 0 {
+		return false
+	}
 	for _, expr := range exprs {
 		if !expressionAllocationClosed(expr) {
 			return false

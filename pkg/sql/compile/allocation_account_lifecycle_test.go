@@ -24,6 +24,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -45,11 +46,16 @@ type allocationLifecycleOwnerOperator struct {
 	account   *mpool.AllocationAccount
 	failSet   bool
 	failClear bool
+	blocked   bool
 	clears    int
 }
 
 func (op *allocationLifecycleOwnerOperator) AllocationAccountEnabled() bool {
 	return true
+}
+
+func (op *allocationLifecycleOwnerOperator) AllocationAccountActivationBlocked() bool {
+	return op.blocked
 }
 
 func (op *allocationLifecycleOwnerOperator) SetAllocationAccount(
@@ -332,6 +338,31 @@ func TestStatementAllocationAttemptOwnerConfigurationRollsBack(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestAllocationAccountActivationIsStatementAtomic(t *testing.T) {
+	eligible := &allocationLifecycleOwnerOperator{
+		MockOperator: colexec.NewMockOperator(),
+	}
+	blocker := &allocationLifecycleOwnerOperator{
+		MockOperator: colexec.NewMockOperator(),
+		blocked:      true,
+	}
+	scopes := []*Scope{{RootOp: eligible}, {RootOp: blocker}}
+	require.False(t, hasAllocationAccountOwner(scopes),
+		"one unclosed physical owner must keep the whole statement legacy")
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	configured, err := configureAllocationAccountOwners(scopes, account)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.Nil(t, configured)
+	require.Nil(t, eligible.account)
+	require.Equal(t, 1, eligible.clears)
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
 func TestStatementAllocationAttemptOwnerTeardownFailureExportsFailure(t *testing.T) {
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
 	require.NoError(t, err)
@@ -371,6 +402,10 @@ func TestCompileAutomaticallyActivatesCompleteHashTableOwner(t *testing.T) {
 	}
 	owner := hashbuild.NewArgument()
 	owner.NeedHashMap = true
+	owner.Conditions = []*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
+	}}
 	c.scopes = []*Scope{{RootOp: owner}}
 
 	require.NoError(t, c.ensureAllocationAccountLifecycle(func(

@@ -41,7 +41,7 @@ const (
 	SpillAllocationSiteSelectedGrouping
 )
 
-// SpillAllocationAccount is the dormant allocation provenance for one spill
+// SpillAllocationAccount is the allocation provenance for one spill
 // engine.
 type SpillAllocationAccount struct {
 	account *mpool.AllocationAccount
