@@ -83,18 +83,12 @@ type container struct {
 	spillBucketWriteBufs [spillNumBuckets]bytes.Buffer
 	spillBucketWriteRows [spillNumBuckets]int64
 	spillKeyVecs         []*vector.Vector
-	// spillScratchReservation is a query/CN-charged emergency lease retained
-	// while Shuffle build batches accumulate. It prevents retained copies from
-	// consuming the scratch required to recover from hard-budget rejection.
+	// spillScratchReservation is a query/CN-charged lease retained while spill
+	// buffers are reusable. It is established lazily before the first scratch
+	// allocation and released with the execution generation.
 	spillScratchReservation *process.HashBuildReservation
-	// spillScratchEmergency marks a lease pre-admitted by
-	// ensureDirectSpillScratchReservation or
-	// ensureRetainedSpillScratchReservation. An uncharged upstream batch may
-	// not grow beyond this lease. A retained batch may grow it because its
-	// source memory remains charged separately while the batch is drained.
-	spillScratchEmergency bool
-	// spillScratchBase is the transient emergency floor. Coalesce-buffer
-	// growth is charged on top and must never be mistaken for this floor.
+	// spillScratchBase is the retained scratch floor. Coalesce-buffer growth is
+	// charged on top and must never be mistaken for this floor.
 	spillScratchBase uint64
 
 	// cached expression executors for spill (reused across batches)
@@ -405,10 +399,9 @@ func hasHashBuildDiagnosticStats(extra map[string]int64) bool {
 		extra["HashBuildRuntimeFilterCollectionFallbacks"] != 0 ||
 		extra["HashBuildRuntimeFilterBudgetFallbacks"] != 0 ||
 		extra["HashBuildRuntimeFilterAllocationFallbacks"] != 0 ||
-		extra["HashBuildEmergencyScratchGrowRejects"] != 0 ||
+		extra["HashBuildSpillScratchReserveRejects"] != 0 ||
 		extra["HashBuildSpillScratchGrowRejects"] != 0 ||
-		extra["HashBuildRetainedEmergencyGrowCount"] != 0 ||
-		extra["HashBuildRetainedEmergencyGrowRejects"] != 0
+		extra["HashBuildSpillScratchGrowCount"] != 0
 }
 
 func (hashBuild *HashBuild) publishJoinMap(proc *process.Process, jm *message.JoinMap) bool {

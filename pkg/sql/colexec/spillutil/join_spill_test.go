@@ -1949,7 +1949,27 @@ func TestSpillEngineInitFromOwnedFilesAndErrorClassification(t *testing.T) {
 	require.False(t, isBudgetAdmission(&process.HashBuildBudgetError{
 		Kind: process.HashBuildBudgetErrorClosed,
 	}))
-	require.ErrorIs(t, noProgressError(nil, 3), process.ErrHashBuildBudgetAdmission)
+	logicalNoProgress := noProgressError(3, nil)
+	require.ErrorIs(t, logicalNoProgress, process.ErrHashBuildBudgetAdmission)
+	require.Contains(t, logicalNoProgress.Error(), "depth 3")
+	require.Contains(t, logicalNoProgress.Error(), "reduce join-key skew")
+	require.NotContains(t, logicalNoProgress.Error(), process.ErrHashBuildBudgetAdmission.Error())
+
+	memoryAdmission := &process.HashBuildBudgetError{
+		Kind:      process.HashBuildBudgetErrorAdmission,
+		Resource:  process.HashBuildBudgetResourceMemory,
+		Requested: 11,
+		Used:      13,
+		Cap:       17,
+	}
+	budgetNoProgress := noProgressError(4, memoryAdmission)
+	var budgetErr *process.HashBuildBudgetError
+	require.ErrorAs(t, budgetNoProgress, &budgetErr)
+	require.Equal(t, process.HashBuildBudgetResourceMemory, budgetErr.Resource)
+	require.Equal(t, uint64(11), budgetErr.Requested)
+	require.Equal(t, uint64(13), budgetErr.Used)
+	require.Equal(t, uint64(17), budgetErr.Cap)
+	require.Equal(t, "join spill cannot make progress at depth 4", budgetErr.Message)
 	require.NoError(t, owned.Close())
 }
 

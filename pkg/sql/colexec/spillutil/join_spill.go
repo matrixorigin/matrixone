@@ -1933,7 +1933,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
 			if isBudgetAdmission(err) {
-				return nil, BucketSkip, noProgressError(proc, bucket.Depth)
+				return nil, BucketSkip, noProgressError(bucket.Depth, err)
 			}
 			return nil, BucketSkip, err
 		}
@@ -1985,7 +1985,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		builder.FreeHashMapAndBatches(proc)
 		builder.Free(proc)
 		if isBudgetAdmission(err) {
-			return nil, BucketSkip, noProgressError(proc, bucket.Depth)
+			return nil, BucketSkip, noProgressError(bucket.Depth, err)
 		}
 		return nil, BucketSkip, err
 	}
@@ -2242,7 +2242,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			if len(e.buckets)-1+len(subBuckets)+1 > e.cfg.MaxQueue {
 				return nil, &process.HashBuildBudgetError{
 					Kind:    process.HashBuildBudgetErrorAdmission,
-					Message: fmt.Sprintf("spill queue limit exceeded: %s", process.ErrHashBuildBudgetAdmission),
+					Message: fmt.Sprintf("join spill queue limit exceeded (limit=%d); reduce join-key skew or increase processLimitationSize", e.cfg.MaxQueue),
 				}
 			}
 			buildFile, err := buildWriters[i].handOffSpillFile()
@@ -2288,7 +2288,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		}
 		return nil, nil
 	}
-	if childBuildRows != buildRows || len(subBuckets) == 0 {
+	if childBuildRows != buildRows {
 		for i := range subBuckets {
 			if subBuckets[i].BuildFd != nil {
 				subBuckets[i].BuildFd.Close()
@@ -2297,7 +2297,18 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 				subBuckets[i].ProbeFd.Close()
 			}
 		}
-		return nil, noProgressError(proc, bucket.Depth)
+		return nil, moerr.NewInternalErrorf(
+			proc.Ctx,
+			"join spill build-row conservation failed at depth %d (source=%d, children=%d)",
+			bucket.Depth, buildRows, childBuildRows,
+		)
+	}
+	if len(subBuckets) == 0 {
+		return nil, moerr.NewInternalErrorf(
+			proc.Ctx,
+			"join spill produced no child partitions at depth %d (build_rows=%d, probe_rows=%d)",
+			bucket.Depth, buildRows, bucket.ProbeRows,
+		)
 	}
 	// Inner/right joins deliberately do not create probe files for children
 	// with no build rows: those unmatched probe rows cannot affect the result.
@@ -2315,7 +2326,11 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 				subBuckets[i].ProbeFd.Close()
 			}
 		}
-		return nil, noProgressError(proc, bucket.Depth)
+		return nil, moerr.NewInternalErrorf(
+			proc.Ctx,
+			"join spill probe-row conservation failed at depth %d (source=%d, children=%d, exact=%t)",
+			bucket.Depth, bucket.ProbeRows, childProbeRows, e.cfg.NeedsProbeForEmptyBuild,
+		)
 	}
 	committed = true
 	metricv2.HashBuildSpillDepthCounter.WithLabelValues("respill", fmt.Sprintf("%d", bucket.Depth+1)).Inc()
@@ -2424,12 +2439,22 @@ func isBudgetAdmission(err error) bool {
 		errors.Is(err, process.ErrHashBuildBudgetAdmission)
 }
 
-func noProgressError(proc *process.Process, depth int) error {
-	_ = proc
-	return &process.HashBuildBudgetError{
+func noProgressError(depth int, cause error) error {
+	budgetErr := &process.HashBuildBudgetError{
 		Kind:    process.HashBuildBudgetErrorAdmission,
-		Message: fmt.Sprintf("join spill cannot make progress at depth %d: %s", depth, process.ErrHashBuildBudgetAdmission),
+		Message: fmt.Sprintf("join spill cannot make progress at depth %d; reduce join-key skew or increase processLimitationSize", depth),
 	}
+	if cause != nil {
+		var budgetCause *process.HashBuildBudgetError
+		if errors.As(cause, &budgetCause) && budgetCause.Kind == process.HashBuildBudgetErrorAdmission {
+			budgetErr.Resource = budgetCause.Resource
+			budgetErr.Requested = budgetCause.Requested
+			budgetErr.Used = budgetCause.Used
+			budgetErr.Cap = budgetCause.Cap
+			budgetErr.Message = fmt.Sprintf("join spill cannot make progress at depth %d", depth)
+		}
+	}
+	return budgetErr
 }
 
 // Cleanup releases all engine resources.

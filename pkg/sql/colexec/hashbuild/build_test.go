@@ -212,6 +212,44 @@ func TestBroadcastBudgetFailureUnblocksAllConsumers(t *testing.T) {
 	tc.arg.Free(tc.proc, true, buildErr)
 }
 
+func TestHashBuildPrepareConvertsTerminalBudgetAdmission(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+	proc.Base.Lim.Size = 1024
+	literal := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: strings.Repeat("x", 64<<10)},
+		}},
+	}
+	arg := &HashBuild{
+		NeedHashMap: true,
+		Conditions:  []*plan.Expr{literal},
+		JoinMapTag:  1,
+		OperatorBase: vm.OperatorBase{OperatorInfo: vm.OperatorInfo{
+			Idx: 0,
+		}},
+	}
+	var prepareErr error
+	t.Cleanup(func() {
+		arg.Free(proc, true, prepareErr)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	prepareErr = arg.Prepare(proc)
+	require.Error(t, prepareErr)
+	require.True(t, moerr.IsMoErrCode(prepareErr, moerr.ErrOOM), prepareErr)
+	require.Contains(t, prepareErr.Error(), "hash build memory budget exceeded")
+	require.Contains(t, prepareErr.Error(), "processLimitationSize")
+	require.NotErrorIs(t, prepareErr, process.ErrHashBuildBudgetAdmission)
+	require.NotContains(t, prepareErr.Error(), process.ErrHashBuildBudgetAdmission.Error())
+
+	budget, budgetErr := proc.GetHashBuildBudget()
+	require.NoError(t, budgetErr)
+	require.Zero(t, budget.Used())
+}
+
 func TestHashBuildWithoutMapStillBudgetsRetainedBatches(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, nil)
 	tc.arg.NeedHashMap = false
@@ -735,6 +773,9 @@ func TestHashBuildRuntimeFilterFallbackStatsTriggerDiagnostics(t *testing.T) {
 		"HashBuildRuntimeFilterCollectionFallbacks",
 		"HashBuildRuntimeFilterBudgetFallbacks",
 		"HashBuildRuntimeFilterAllocationFallbacks",
+		"HashBuildSpillScratchReserveRejects",
+		"HashBuildSpillScratchGrowRejects",
+		"HashBuildSpillScratchGrowCount",
 	} {
 		t.Run(stat, func(t *testing.T) {
 			require.True(t, hasHashBuildDiagnosticStats(
@@ -2477,7 +2518,7 @@ func TestHashBuildRejectsSharedSpillPayload(t *testing.T) {
 	tc.proc.Free()
 }
 
-func TestShuffleHashBuildFallsBackToDirectSpillWhenRetainedProofRejects(t *testing.T) {
+func TestShuffleHashBuildDoesNotPreflightFutureSpill(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_varchar.ToType()}, []*plan.Expr{newExpr(0, types.T_varchar.ToType())})
 	tc.arg.IsShuffle = true
 	tc.arg.ShuffleIdx = 0
@@ -2505,9 +2546,6 @@ func TestShuffleHashBuildFallsBackToDirectSpillWhenRetainedProofRejects(t *testi
 	directNeed, err := spillBudgetBytes(build)
 	require.NoError(t, err)
 	require.Less(t, directNeed, capBytes)
-	retainedNeed, err := spillRetainedBudgetBytes(build)
-	require.NoError(t, err)
-	require.Greater(t, retainedNeed, capBytes)
 
 	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
 	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
@@ -2519,12 +2557,11 @@ func TestShuffleHashBuildFallsBackToDirectSpillWhenRetainedProofRejects(t *testi
 	require.True(t, result.IsSuccess())
 	jm := result.JoinMap()
 	require.NotNil(t, jm)
-	require.True(t, jm.IsSpilled(), "failed future-retained proof must choose direct spill")
+	require.False(t, jm.IsSpilled(),
+		"a resident build must not pay for or be redirected by hypothetical future spill scratch")
 	require.Equal(t, int64(1), jm.GetRowCount())
-	spillPayload, err := jm.TakeSpillBuildPayload()
-	require.NoError(t, err)
-	require.NoError(t, spillPayload.Close())
-	require.Empty(t, tc.arg.ctr.hashmapBuilder.Batches.Buf)
+	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
+	jm.Free()
 	require.Zero(t, generation.Used())
 	require.Zero(t, generation.SpillDiskUsed())
 	require.Zero(t, generation.SpillFDUsed())
@@ -2532,6 +2569,68 @@ func TestShuffleHashBuildFallsBackToDirectSpillWhenRetainedProofRejects(t *testi
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.arg.Free(tc.proc, false, nil)
 	tc.marg.Reset(tc.proc, false, nil)
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestShuffleHashBuildLazySpillAdmissionFailsClosed(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_varchar.ToType()}, []*plan.Expr{newExpr(0, types.T_varchar.ToType())})
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 1
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
+		Tag: tc.arg.JoinMapTag + 3501,
+	}
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	payload := bytes.Repeat([]byte{'x'}, 1<<20)
+	build := batch.NewWithSize(1)
+	var err error
+	build.Vecs[0], err = vector.NewConstBytes(
+		types.T_varchar.ToType(), payload, 1, tc.proc.Mp())
+	require.NoError(t, err)
+	build.SetRowCount(1)
+
+	// Leave enough budget for the retained copy itself, but not for the
+	// additional scratch needed after the threshold requests spill. The lazy
+	// path must fail before scratch allocation instead of requiring every
+	// resident batch to pre-admit a hypothetical future spill.
+	copyPeak, err := tc.arg.ctr.hashmapBuilder.projectedBatchCopyBytes(build)
+	require.NoError(t, err)
+	budget := process.MustNewHashBuildBudget(copyPeak, copyPeak)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	_, buildErr := vm.Exec(tc.arg, tc.proc)
+	require.Error(t, buildErr)
+	require.True(t, moerr.IsMoErrCode(buildErr, moerr.ErrOOM),
+		"terminal spill admission must use the resource-exhausted wire code")
+	require.Contains(t, buildErr.Error(), "hash build memory budget exceeded")
+	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
+	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
+	require.Equal(t, int64(1), extra["HashBuildSpillScratchReserveRejects"])
+	require.Equal(t, int64(1), extra["QueryHashBudgetRejects"])
+
+	result, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	require.True(t, result.IsBuildError())
+	require.Equal(t, buildErr.Error(), result.BuildError().Error())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+
+	tc.arg.Reset(tc.proc, true, buildErr)
+	tc.marg.Reset(tc.proc, true, buildErr)
+	tc.arg.Free(tc.proc, true, buildErr)
+	build.Clean(tc.proc.Mp())
+	require.Zero(t, generation.Used())
 	generation.Close()
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
