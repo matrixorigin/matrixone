@@ -1,0 +1,480 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package mpool
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"runtime"
+	"sync"
+	"sync/atomic"
+)
+
+// AllocationOwner and AllocationSite are bounded diagnostic dimensions.
+// Callers assign stable values in their own allocation-site ledger. Zero is
+// reserved so an accounted allocation can never be published without an
+// explicit owner and site.
+type AllocationOwner uint8
+type AllocationSite uint8
+
+const (
+	AllocationOwnerMin AllocationOwner = 1
+	AllocationOwnerMax AllocationOwner = 63
+	AllocationSiteMin  AllocationSite  = 1
+	AllocationSiteMax  AllocationSite  = math.MaxUint8
+)
+
+var (
+	ErrAllocationAccountCapacity = errors.New("allocation account capacity exceeded")
+	ErrAllocationAccountSealed   = errors.New("allocation account is sealed")
+	ErrAllocationAccountInvalid  = errors.New("invalid allocation account")
+	ErrAllocationAccountStale    = errors.New("stale allocation account handle")
+	ErrAllocationMetadataSlots   = errors.New("allocation metadata slots exhausted")
+	ErrAllocationGenerationSlots = errors.New("allocation account generation slots exhausted")
+	ErrAllocationAccountLive     = errors.New("allocation account still owns memory")
+)
+
+const (
+	allocationAccountSealedBit = uint64(1) << 63
+	allocationAccountUsedMask  = allocationAccountSealedBit - 1
+)
+
+// AllocationAccountHandle identifies one use of a reusable registry slot.
+// The upper 32 bits are the slot generation and the lower 32 bits are the slot.
+type AllocationAccountHandle uint64
+
+func newAllocationAccountHandle(slot, generation uint32) AllocationAccountHandle {
+	return AllocationAccountHandle(uint64(generation)<<32 | uint64(slot))
+}
+
+func (h AllocationAccountHandle) slot() uint32 {
+	return uint32(h)
+}
+
+func (h AllocationAccountHandle) generation() uint32 {
+	return uint32(uint64(h) >> 32)
+}
+
+// AllocationAccountSnapshot is immutable observation state. A terminal owner
+// may publish it after Seal and exact zero; taking a snapshot does not mutate
+// account lifecycle.
+type AllocationAccountSnapshot struct {
+	Handle AllocationAccountHandle
+	Limit  uint64
+	Used   uint64
+	Peak   uint64
+	Sealed bool
+}
+
+// AllocationCapacityController lets an account share a higher-level aggregate
+// cap during migration. The controller owns cap policy only; physical MPool
+// metadata remains the sole release owner.
+type AllocationCapacityController interface {
+	AcquireAllocationCapacity(uint64) error
+	ReleaseAllocationCapacity(uint64)
+}
+
+// AllocationAccount owns physical allocation capacity for one execution
+// generation. state packs the sealed bit and used bytes into one atomic word,
+// so Acquire and Seal have one unambiguous linearization point.
+type AllocationAccount struct {
+	registry *AllocationAccountRegistry
+	handle   AllocationAccountHandle
+	limit    uint64
+	control  AllocationCapacityController
+
+	state    atomic.Uint64
+	peak     atomic.Uint64
+	inflight atomic.Int64
+}
+
+func (a *AllocationAccount) Handle() AllocationAccountHandle {
+	if a == nil {
+		return 0
+	}
+	return a.handle
+}
+
+func (a *AllocationAccount) Snapshot() AllocationAccountSnapshot {
+	if a == nil {
+		return AllocationAccountSnapshot{}
+	}
+	state := a.state.Load()
+	return AllocationAccountSnapshot{
+		Handle: a.handle,
+		Limit:  a.limit,
+		Used:   state & allocationAccountUsedMask,
+		Peak:   a.peak.Load(),
+		Sealed: state&allocationAccountSealedBit != 0,
+	}
+}
+
+func (a *AllocationAccount) acquire(capacity uint64) error {
+	if a == nil || a.registry == nil || a.handle == 0 {
+		return ErrAllocationAccountInvalid
+	}
+	if capacity == 0 {
+		return nil
+	}
+	state := a.state.Load()
+	if state&allocationAccountSealedBit != 0 {
+		return ErrAllocationAccountSealed
+	}
+	used := state & allocationAccountUsedMask
+	if used > a.limit || capacity > a.limit-used {
+		return newAllocationAccountCapacityError(used, capacity, a.limit)
+	}
+
+	// Register before consulting the shared controller. Once Seal publishes the
+	// sealed bit, it either observes this transaction or this transaction
+	// observes sealed before acquiring controller capacity.
+	a.inflight.Add(1)
+	defer a.inflight.Add(-1)
+	state = a.state.Load()
+	if state&allocationAccountSealedBit != 0 {
+		return ErrAllocationAccountSealed
+	}
+	used = state & allocationAccountUsedMask
+	if used > a.limit || capacity > a.limit-used {
+		return newAllocationAccountCapacityError(used, capacity, a.limit)
+	}
+	if a.control != nil {
+		if err := a.control.AcquireAllocationCapacity(capacity); err != nil {
+			return err
+		}
+	}
+	acquired := false
+	defer func() {
+		if !acquired && a.control != nil {
+			a.control.ReleaseAllocationCapacity(capacity)
+		}
+	}()
+
+	for {
+		state = a.state.Load()
+		if state&allocationAccountSealedBit != 0 {
+			return ErrAllocationAccountSealed
+		}
+		used = state & allocationAccountUsedMask
+		if used > a.limit || capacity > a.limit-used {
+			return newAllocationAccountCapacityError(used, capacity, a.limit)
+		}
+		next := used + capacity
+		if a.state.CompareAndSwap(state, next) {
+			for {
+				peak := a.peak.Load()
+				if next <= peak || a.peak.CompareAndSwap(peak, next) {
+					acquired = true
+					return nil
+				}
+			}
+		}
+	}
+}
+
+func newAllocationAccountCapacityError(
+	used uint64,
+	requested uint64,
+	limit uint64,
+) error {
+	return fmt.Errorf(
+		"%w: used=%d requested=%d limit=%d",
+		ErrAllocationAccountCapacity,
+		used,
+		requested,
+		limit,
+	)
+}
+
+func (a *AllocationAccount) release(capacity uint64) {
+	if capacity == 0 {
+		return
+	}
+	// Keep the local charge until the higher-level policy charge is gone. With
+	// metadata released by allocationLease first, exact local zero is therefore
+	// also a complete-release boundary.
+	if a.control != nil {
+		state := a.state.Load()
+		if capacity > state&allocationAccountUsedMask {
+			panic("allocation account release underflow")
+		}
+		a.control.ReleaseAllocationCapacity(capacity)
+	}
+	for {
+		state := a.state.Load()
+		used := state & allocationAccountUsedMask
+		if capacity > used {
+			panic("allocation account release underflow")
+		}
+		next := state - capacity
+		if a.state.CompareAndSwap(state, next) {
+			return
+		}
+	}
+}
+
+// Seal prevents every later acquisition. It waits only for acquisitions that
+// linearized before the sealed bit was published to finish updating peak.
+func (a *AllocationAccount) Seal() AllocationAccountSnapshot {
+	if a == nil {
+		return AllocationAccountSnapshot{}
+	}
+	for {
+		state := a.state.Load()
+		if state&allocationAccountSealedBit != 0 ||
+			a.state.CompareAndSwap(state, state|allocationAccountSealedBit) {
+			break
+		}
+	}
+	for a.inflight.Load() != 0 {
+		runtime.Gosched()
+	}
+	return a.Snapshot()
+}
+
+type allocationAccountRegistrySlot struct {
+	account atomic.Pointer[AllocationAccount]
+}
+
+// AllocationAccountRegistry bounds live generations and accounted-allocation
+// metadata for one CN. Registry slots are reused only after Seal and exact
+// zero. Their generation counters never wrap.
+type AllocationAccountRegistry struct {
+	mu sync.Mutex
+
+	slots       []allocationAccountRegistrySlot
+	generations []uint32
+	free        []uint32
+
+	maxAllocations  uint64
+	liveAllocations atomic.Uint64
+	peakAllocations atomic.Uint64
+}
+
+func NewAllocationAccountRegistry(
+	generationSlots uint32,
+	allocationSlots uint64,
+) (*AllocationAccountRegistry, error) {
+	if generationSlots == 0 || uint64(generationSlots) >= uint64(math.MaxInt) {
+		return nil, ErrAllocationAccountInvalid
+	}
+	registry := &AllocationAccountRegistry{
+		slots:          make([]allocationAccountRegistrySlot, uint64(generationSlots)+1),
+		generations:    make([]uint32, uint64(generationSlots)+1),
+		free:           make([]uint32, generationSlots),
+		maxAllocations: allocationSlots,
+	}
+	for i := uint32(0); i < generationSlots; i++ {
+		registry.free[i] = generationSlots - i
+	}
+	return registry, nil
+}
+
+func (r *AllocationAccountRegistry) Open(
+	limit uint64,
+) (*AllocationAccount, error) {
+	return r.OpenWithController(limit, nil)
+}
+
+func (r *AllocationAccountRegistry) OpenWithController(
+	limit uint64,
+	control AllocationCapacityController,
+) (*AllocationAccount, error) {
+	if r == nil || limit > allocationAccountUsedMask {
+		return nil, ErrAllocationAccountInvalid
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for len(r.free) > 0 {
+		index := len(r.free) - 1
+		slot := r.free[index]
+		r.free = r.free[:index]
+		generation := r.generations[slot]
+		if generation == math.MaxUint32 {
+			continue
+		}
+		generation++
+		r.generations[slot] = generation
+		account := &AllocationAccount{
+			registry: r,
+			handle:   newAllocationAccountHandle(slot, generation),
+			limit:    limit,
+			control:  control,
+		}
+		r.slots[slot].account.Store(account)
+		return account, nil
+	}
+	return nil, ErrAllocationGenerationSlots
+}
+
+func (r *AllocationAccountRegistry) Resolve(
+	handle AllocationAccountHandle,
+) (*AllocationAccount, bool) {
+	if r == nil {
+		return nil, false
+	}
+	slot := handle.slot()
+	if slot == 0 || uint64(slot) >= uint64(len(r.slots)) {
+		return nil, false
+	}
+	account := r.slots[slot].account.Load()
+	return account, account != nil && account.handle == handle
+}
+
+// Finalize removes a sealed, empty account and makes its slot reusable. A live
+// account remains resolvable so physical Free can still release its charge.
+func (r *AllocationAccountRegistry) Finalize(
+	account *AllocationAccount,
+) (AllocationAccountSnapshot, error) {
+	if r == nil || account == nil || account.registry != r {
+		return AllocationAccountSnapshot{}, ErrAllocationAccountInvalid
+	}
+	snapshot := account.Snapshot()
+	if !snapshot.Sealed || snapshot.Used != 0 ||
+		account.inflight.Load() != 0 {
+		return snapshot, ErrAllocationAccountLive
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	slot := account.handle.slot()
+	if slot == 0 || uint64(slot) >= uint64(len(r.slots)) ||
+		r.slots[slot].account.Load() != account {
+		return snapshot, ErrAllocationAccountStale
+	}
+	if current := account.Snapshot(); !current.Sealed || current.Used != 0 ||
+		account.inflight.Load() != 0 {
+		return current, ErrAllocationAccountLive
+	}
+	r.slots[slot].account.Store(nil)
+	if r.generations[slot] != math.MaxUint32 {
+		r.free = append(r.free, slot)
+	}
+	return account.Snapshot(), nil
+}
+
+func (r *AllocationAccountRegistry) reserveMetadata() error {
+	if r == nil {
+		return ErrAllocationAccountInvalid
+	}
+	for {
+		live := r.liveAllocations.Load()
+		if live >= r.maxAllocations {
+			return ErrAllocationMetadataSlots
+		}
+		if r.liveAllocations.CompareAndSwap(live, live+1) {
+			next := live + 1
+			for {
+				peak := r.peakAllocations.Load()
+				if next <= peak ||
+					r.peakAllocations.CompareAndSwap(peak, next) {
+					break
+				}
+			}
+			return nil
+		}
+	}
+}
+
+func (r *AllocationAccountRegistry) releaseMetadata() {
+	for {
+		live := r.liveAllocations.Load()
+		if live == 0 {
+			panic("allocation metadata slot release underflow")
+		}
+		if r.liveAllocations.CompareAndSwap(live, live-1) {
+			return
+		}
+	}
+}
+
+// LiveAllocationMetadata returns published and currently in-flight metadata
+// slots. A failed unpublished transaction returns its slot before returning.
+func (r *AllocationAccountRegistry) LiveAllocationMetadata() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.liveAllocations.Load()
+}
+
+// PeakAllocationMetadata returns the exact high-water slot count.
+func (r *AllocationAccountRegistry) PeakAllocationMetadata() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.peakAllocations.Load()
+}
+
+type allocationAccountRequest struct {
+	account    *AllocationAccount
+	owner      AllocationOwner
+	site       AllocationSite
+	// checkpoint is nil for every public caller. Same-package fault tests use
+	// it to prove rollback at each unpublished transaction boundary.
+	checkpoint func(allocationCheckpoint) error
+}
+
+type allocationCheckpoint uint8
+
+const (
+	allocationAfterAccount allocationCheckpoint = iota + 1
+	allocationAfterMetadata
+	allocationAfterGlobalStats
+	allocationAfterPoolStats
+	allocationAfterPhysical
+	allocationAfterHeader
+)
+
+func (r allocationAccountRequest) validate() error {
+	if r.account == nil || r.account.registry == nil ||
+		r.owner < AllocationOwnerMin || r.owner > AllocationOwnerMax ||
+		r.site < AllocationSiteMin {
+		return ErrAllocationAccountInvalid
+	}
+	resolved, ok := r.account.registry.Resolve(r.account.handle)
+	if !ok || resolved != r.account {
+		return ErrAllocationAccountStale
+	}
+	return nil
+}
+
+func (r allocationAccountRequest) reach(
+	checkpoint allocationCheckpoint,
+) error {
+	if r.checkpoint == nil {
+		return nil
+	}
+	return r.checkpoint(checkpoint)
+}
+
+type allocationLease struct {
+	account *AllocationAccount
+	owner   AllocationOwner
+	site    AllocationSite
+	_       [6]byte
+}
+
+func (l allocationLease) release(capacity uint64) {
+	if l.account == nil || l.account.registry == nil {
+		panic("invalid allocation account lease")
+	}
+	// Return finite metadata first. account.release retains the local charge
+	// until controller cleanup completes, so exact zero is a complete-release
+	// boundary.
+	l.account.registry.releaseMetadata()
+	l.account.release(capacity)
+}
