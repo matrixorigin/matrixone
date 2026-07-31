@@ -88,7 +88,14 @@ func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
 }
 
 func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
-	panic("not supported in internal sql executor")
+	_, tableDef, err := c.Resolve(dbName, table, nil)
+	if err != nil {
+		return nil, err
+	}
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(c.GetContext(), dbName, table)
+	}
+	return tableDef, nil
 }
 
 func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
