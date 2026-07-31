@@ -15,10 +15,22 @@
 package v4_0_6
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
@@ -97,4 +109,187 @@ func TestForeignKeyMetadataVersionHandleMetadataAndClusterNoop(t *testing.T) {
 	if len(clusterUpgEntries) != 0 {
 		t.Fatalf("expected no cluster upgrade entries, got %d", len(clusterUpgEntries))
 	}
+}
+
+func TestTenantViewDefinitionChecks(t *testing.T) {
+	entries := []versions.UpgradeEntry{
+		upgradeInformationSchemaKeyColumnUsage(),
+		upgradeInformationSchemaReferentialConstraints(),
+	}
+
+	for _, entry := range entries {
+		t.Run(entry.TableName+"/match", func(t *testing.T) {
+			stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+				if accountID != 42 || schema != sysview.InformationDBConst || viewName != entry.TableName {
+					t.Fatalf("unexpected view check arguments: account=%d schema=%s view=%s", accountID, schema, viewName)
+				}
+				return true, entry.UpgSql, nil
+			})
+			defer stub.Reset()
+
+			matched, err := entry.CheckFunc(nil, 42)
+			if err != nil || !matched {
+				t.Fatalf("expected matching view definition, matched=%v err=%v", matched, err)
+			}
+		})
+
+		t.Run(entry.TableName+"/mismatch", func(t *testing.T) {
+			stub := gostub.Stub(&versions.CheckViewDefinition, func(executor.TxnExecutor, uint32, string, string) (bool, string, error) {
+				return true, "old definition", nil
+			})
+			defer stub.Reset()
+
+			matched, err := entry.CheckFunc(nil, 42)
+			if err != nil || matched {
+				t.Fatalf("expected mismatching view definition, matched=%v err=%v", matched, err)
+			}
+		})
+	}
+
+	stub := gostub.Stub(&versions.CheckViewDefinition, func(executor.TxnExecutor, uint32, string, string) (bool, string, error) {
+		return false, "", errors.New("check failed")
+	})
+	defer stub.Reset()
+	matched, err := entries[0].CheckFunc(nil, 42)
+	if err == nil || matched {
+		t.Fatalf("expected check error, matched=%v err=%v", matched, err)
+	}
+}
+
+func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, _ uint32, _ string, viewName string) (bool, string, error) {
+			switch viewName {
+			case "KEY_COLUMN_USAGE":
+				return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
+			case "REFERENTIAL_CONSTRAINTS":
+				return true, sysview.InformationSchemaReferentialConstraintsDDL, nil
+			default:
+				return false, "", errors.New("unexpected view")
+			}
+		})
+		defer stub.Reset()
+
+		var executed []string
+		txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			executed = append(executed, sql)
+			return executor.Result{}, nil
+		})
+
+		if err := Handler.Prepare(context.Background(), txnExecutor, true); err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		if err := Handler.HandleTenantUpgrade(context.Background(), 9, txnExecutor); err != nil {
+			t.Fatalf("tenant upgrade: %v", err)
+		}
+		if len(executed) != 1 || executed[0] != legacyForeignKeyTableDefinitionsSQL {
+			t.Fatalf("unexpected SQL: %v", executed)
+		}
+		if err := Handler.HandleClusterUpgrade(context.Background(), txnExecutor); err != nil {
+			t.Fatalf("cluster upgrade: %v", err)
+		}
+		if err := Handler.HandleCreateFrameworkDeps(txnExecutor); err == nil || !strings.Contains(err.Error(), "Only v1.2.0") {
+			t.Fatalf("unexpected framework-dependency result: %v", err)
+		}
+	})
+}
+
+func TestVersionHandleTenantUpgradeReturnsLegacyQueryError(t *testing.T) {
+	want := errors.New("legacy query failed")
+	txnExecutor := newVersionTxnExecutor(t, func(string) (executor.Result, error) {
+		return executor.Result{}, want
+	})
+	if err := Handler.HandleTenantUpgrade(context.Background(), 9, txnExecutor); !errors.Is(err, want) {
+		t.Fatalf("expected legacy query error, got %v", err)
+	}
+}
+
+func TestLegacyForeignKeyMetadataUpgradeReadsAndUpdatesDefinitions(t *testing.T) {
+	definitionResult := newLegacyForeignKeyDefinitionResult(t)
+	var updates []string
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		if sql == legacyForeignKeyTableDefinitionsSQL {
+			return definitionResult, nil
+		}
+		updates = append(updates, sql)
+		return executor.Result{}, nil
+	})
+
+	if err := upgradeLegacyForeignKeyMetadata(context.Background(), 9, txnExecutor); err != nil {
+		t.Fatalf("upgrade legacy foreign-key metadata: %v", err)
+	}
+	if len(updates) != 2 {
+		t.Fatalf("expected two metadata updates, got %d: %v", len(updates), updates)
+	}
+	for _, update := range updates {
+		if !strings.Contains(update, "constraint_id =") || !strings.Contains(update, "constraint_name = 'fk_child_parent'") {
+			t.Fatalf("unexpected update: %s", update)
+		}
+	}
+}
+
+func TestLegacyForeignKeyMetadataUpdatesRejectInvalidDefinitions(t *testing.T) {
+	for _, createSQL := range []string{
+		"select 1",
+		"create table child (a int); create table another_child (a int)",
+		"create table child (a int, foreign key (a) references parent (id))",
+	} {
+		t.Run(createSQL, func(t *testing.T) {
+			_, err := legacyForeignKeyMetadataUpdates(legacyForeignKeyTableDefinition{
+				database:  "db",
+				table:     "child",
+				createSQL: createSQL,
+			})
+			if err == nil {
+				t.Fatalf("expected invalid persisted definition to fail: %s", createSQL)
+			}
+		})
+	}
+}
+
+func TestReferenceActionName(t *testing.T) {
+	for _, test := range []struct {
+		action tree.ReferenceOptionType
+		want   string
+	}{
+		{tree.REFERENCE_OPTION_CASCADE, "CASCADE"},
+		{tree.REFERENCE_OPTION_SET_NULL, "SET_NULL"},
+		{tree.REFERENCE_OPTION_NO_ACTION, "NO_ACTION"},
+		{tree.REFERENCE_OPTION_SET_DEFAULT, "SET_DEFAULT"},
+		{tree.REFERENCE_OPTION_RESTRICT, "RESTRICT"},
+		{tree.ReferenceOptionType(-1), "NO_ACTION"},
+	} {
+		if got := referenceActionName(test.action); got != test.want {
+			t.Fatalf("referenceActionName(%d) = %q, want %q", test.action, got, test.want)
+		}
+	}
+}
+
+func newVersionTxnExecutor(t *testing.T, mocker func(string) (executor.Result, error)) executor.TxnExecutor {
+	t.Helper()
+	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+	return executor.NewMemTxnExecutor(mocker, txnOperator)
+}
+
+func newLegacyForeignKeyDefinitionResult(t *testing.T) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	result := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(1)
+	for column, value := range []string{
+		"db",
+		"child",
+		"create table child (parent_id int, child_id int, constraint fk_child_parent foreign key (child_id, parent_id) references parent (child_id, parent_id) on delete cascade on update set null)",
+	} {
+		if err := executor.AppendStringRows(result, column, []string{value}); err != nil {
+			t.Fatalf("append legacy definition column %d: %v", column, err)
+		}
+	}
+	return result.GetResult()
 }
