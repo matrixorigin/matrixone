@@ -1606,3 +1606,73 @@ func TestCleanupSpillFiles(t *testing.T) {
 		require.Error(t, err, "file should be closed")
 	}
 }
+
+func TestAccountedInitialSpillConvertsHeadroomToPhysicalOwnership(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	const limit = uint64(8 << 20)
+	budget := process.MustNewHashBuildBudget(limit, limit)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(limit, generation)
+	require.NoError(t, err)
+	var op HashBuild
+	op.NeedHashMap = true
+	require.NoError(t, op.SetAllocationAccount(account))
+	ctr := &op.ctr
+	ctr.hashmapBuilder.setBudget(generation)
+	ctr.spillUUID = "accounted-initial-spill"
+	exprs := []*plan.Expr{newExpr(0, types.T_int64.ToType())}
+	executors, err := ctr.initSpillExprExecs(proc, exprs)
+	require.NoError(t, err)
+	require.True(t, ctr.spillExprAccounted)
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+		true,
+		1_024,
+		proc.Mp(),
+	)
+	defer input.Clean(proc.Mp())
+	headroom, err := spillBudgetBytes(input)
+	require.NoError(t, err)
+	ctr.spillScratchReservation, err = generation.Reserve(headroom)
+	require.NoError(t, err)
+	ctr.spillScratchBase = headroom
+	ctr.spillScratchEmergency = true
+	files := make([]*os.File, spillNumBuckets)
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, ctr.spillBatchBounded(
+		proc,
+		input,
+		files,
+		executors,
+		analyzer,
+		false,
+	))
+	require.Nil(t, ctr.spillScratchReservation)
+	snapshot := generation.Snapshot()
+	require.Equal(t, snapshot.AllocationUsed, snapshot.Used,
+		"external input ownership is transient and headroom is not stacked")
+	require.Positive(t, snapshot.AllocationUsed)
+	require.NotNil(t, ctr.spillAccountedWrite)
+	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
+
+	ctr.dropSpillScratchBuffers()
+	ctr.freeSpillExprExecs()
+	for _, file := range files {
+		if file != nil {
+			_ = file.Close()
+		}
+	}
+	if ctr.spillBundle != nil {
+		ctr.spillBundle.release()
+		ctr.spillBundle = nil
+	}
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	require.NoError(t, op.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}

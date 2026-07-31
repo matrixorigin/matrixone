@@ -92,6 +92,7 @@ type HashmapBuilder struct {
 	mapAllocationAccount            *mpool.AllocationAccount
 	mapAllocation                   *hashtable.AllocationAccountSelection
 	batchAllocation                 *vector.AllocationAccountSelection
+	uniqueKeyAllocation             *vector.AllocationAccountSelection
 	expressionAllocation            *colexec.ExpressionAllocationAccount
 }
 
@@ -262,6 +263,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	hb.mapAllocationAccount = nil
 	hb.mapAllocation = nil
 	hb.batchAllocation = nil
+	hb.uniqueKeyAllocation = nil
 	hb.expressionAllocation = nil
 }
 
@@ -287,6 +289,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.mapAllocationAccount = nil
 	hb.mapAllocation = nil
 	hb.batchAllocation = nil
+	hb.uniqueKeyAllocation = nil
 	hb.expressionAllocation = nil
 }
 
@@ -802,6 +805,7 @@ func (hb *HashmapBuilder) buildHashmap(
 		ignoreCandidateOldKey = make([]*vector.Vector, 1)
 	}
 
+buildUnits:
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
 			if err := checkHashBuildCanceled(proc); err != nil {
@@ -949,9 +953,30 @@ func (hb *HashmapBuilder) buildHashmap(
 			if len(hb.UniqueJoinKeys) == 0 {
 				hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executors))
 				for j, vec := range hb.curVecs {
-					if hb.collectUniqueKeySlot(j) {
-						hb.UniqueJoinKeys[j] =
-							vector.NewOffHeapVecWithType(*vec.GetType())
+					if !hb.collectUniqueKeySlot(j) {
+						continue
+					}
+					if hb.uniqueKeyAllocation == nil {
+						hb.UniqueJoinKeys[j] = vector.NewOffHeapVecWithType(*vec.GetType())
+						continue
+					}
+					hb.UniqueJoinKeys[j], err = vector.NewOffHeapVecWithTypeAndAllocation(
+						*vec.GetType(),
+						hb.uniqueKeyAllocation,
+					)
+					if err != nil {
+						cause := err
+						if mpool.IsRetryableAllocationCapacity(err) {
+							cause = runtimefilter.MarkOptionalAllocationError(err)
+						}
+						if fatalErr := hb.fallbackOptionalRuntimeFilterCollection(
+							proc,
+							cause,
+						); fatalErr != nil {
+							return fatalErr
+						}
+						needUniqueVec = false
+						continue buildUnits
 					}
 				}
 			}

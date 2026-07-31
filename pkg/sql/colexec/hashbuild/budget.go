@@ -635,7 +635,7 @@ func (hb *HashmapBuilder) buildAuxBytesWithUniqueProjection(
 	// separately. Charging multiple whole-batch copies here double-counts those
 	// owners and can reject a build before any auxiliary allocation occurs.
 	bytes := batchesAllocated(hb.Batches.Buf)
-	if needUniqueVec {
+	if needUniqueVec && hb.uniqueKeyAllocation == nil {
 		growthSlack := bytes / 4
 		if bytes%4 != 0 {
 			growthSlack++
@@ -870,7 +870,7 @@ func unionBatchAreaBytes(
 }
 
 func (hb *HashmapBuilder) reserveUniqueAppendOverlap(dst *vector.Vector, rows, areaBytes int) (*process.HashBuildReservation, error) {
-	if hb.budget == nil {
+	if hb.budget == nil || hb.uniqueKeyAllocation != nil {
 		return nil, nil
 	}
 	if dst == nil || rows < 0 || areaBytes < 0 {
@@ -946,8 +946,48 @@ func (hb *HashmapBuilder) reserveUniqueAppendOverlap(dst *vector.Vector, rows, a
 	return hb.budget.Reserve(overlap)
 }
 
-func (hb *HashmapBuilder) marshalRuntimeFilterVector(vec *vector.Vector) ([]byte, func(), error) {
-	return runtimefilter.MarshalExactFilterVector(vec, hb.budget)
+func (hb *HashmapBuilder) marshalRuntimeFilterVector(
+	vec *vector.Vector,
+	mp *mpool.MPool,
+) ([]byte, func(), error) {
+	if vec == nil || vec.GetNulls().Any() {
+		return nil, nil, process.ErrHashBuildBudgetInvalid
+	}
+	if hb.mapAllocationAccount == nil {
+		return runtimefilter.MarshalExactFilterVector(vec, hb.budget)
+	}
+	if mp == nil {
+		return nil, nil, mpool.ErrAllocationAccountInvalid
+	}
+	size, err := vec.MarshalBinarySize()
+	if err != nil {
+		return nil, nil, err
+	}
+	buf, err := mpool.NewAccountedBuffer(
+		mp,
+		hb.mapAllocationAccount,
+		HashBuildAllocationOwner,
+		HashBuildAllocationSiteRuntimeFilterPayload,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err = buf.EnsureCapacity(size); err != nil {
+		buf.Free()
+		if mpool.IsRetryableAllocationCapacity(err) {
+			err = runtimefilter.MarkOptionalAllocationError(err)
+		}
+		return nil, nil, err
+	}
+	if err = vec.MarshalBinaryTo(buf); err != nil {
+		buf.Free()
+		return nil, nil, err
+	}
+	if buf.Len() != size {
+		buf.Free()
+		return nil, nil, process.ErrHashBuildBudgetInvalid
+	}
+	return buf.Bytes(), buf.Free, nil
 }
 
 func (hb *HashmapBuilder) releaseBatchReservations() {

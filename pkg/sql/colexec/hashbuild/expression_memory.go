@@ -84,6 +84,13 @@ func expressionSetAllocationClosed(exprs []*plan.Expr) bool {
 	return true
 }
 
+// AllocationAccountedExpressionSetSupported reports whether every execution
+// path in the expression set has a closed physical-allocation ledger. Spill
+// rebuild uses this gate before selecting the shared exact account.
+func AllocationAccountedExpressionSetSupported(exprs []*plan.Expr) bool {
+	return expressionSetAllocationClosed(exprs)
+}
+
 func expressionAllocationClosed(expr *plan.Expr) bool {
 	if expr == nil {
 		return false

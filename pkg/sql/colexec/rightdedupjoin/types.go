@@ -123,7 +123,8 @@ func (rightDedupJoin *RightDedupJoin) ClearAllocationAccount(
 	if rightDedupJoin.allocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
 	}
-	if rightDedupJoin.ctr.mp != nil {
+	if rightDedupJoin.ctr.mp != nil ||
+		rightDedupJoin.ctr.spillEngine != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	rightDedupJoin.allocationAccount = nil

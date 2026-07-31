@@ -17,6 +17,7 @@ package hashjoin
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -138,8 +139,43 @@ type HashJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	SpillThreshold     int64
+	allocationAccount  *mpool.AllocationAccount
 
 	vm.OperatorBase
+}
+
+func (hashJoin *HashJoin) AllocationAccountEnabled() bool {
+	return hashJoin != nil
+}
+
+func (hashJoin *HashJoin) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if hashJoin.allocationAccount != nil &&
+		hashJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	hashJoin.allocationAccount = account
+	return nil
+}
+
+func (hashJoin *HashJoin) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if hashJoin.allocationAccount == nil {
+		return nil
+	}
+	if hashJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	hashJoin.allocationAccount = nil
+	return nil
 }
 
 func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
@@ -216,6 +252,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.state = Build
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
+	hashJoin.allocationAccount = nil
 
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
@@ -232,6 +269,7 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.releaseProbeExpressionLease()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
+	hashJoin.allocationAccount = nil
 }
 
 func (ctr *container) resetNonEqCondExecutor() {

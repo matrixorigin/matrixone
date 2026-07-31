@@ -51,6 +51,17 @@ const (
 const HashBuildAllocationOwner mpool.AllocationOwner = 1
 
 const (
+	HashBuildSpillAllocationSiteSelectedData mpool.AllocationSite = iota + 64
+	HashBuildSpillAllocationSiteSelectedArea
+	HashBuildSpillAllocationSiteSelectedNulls
+	HashBuildSpillAllocationSiteSelectedGrouping
+	HashBuildSpillAllocationSiteHashValues
+	HashBuildSpillAllocationSiteRowIDs
+	HashBuildSpillAllocationSiteMarshalBuffer
+	HashBuildSpillAllocationSiteCoalesceBuffer
+)
+
+const (
 	HashBuildAllocationSiteHashCell mpool.AllocationSite = iota + 24
 	HashBuildAllocationSiteHashDescriptor
 	HashBuildAllocationSiteBatchData
@@ -58,6 +69,18 @@ const (
 	HashBuildAllocationSiteBatchNulls
 	HashBuildAllocationSiteBatchGrouping
 	HashBuildAllocationSiteGroupSels
+)
+
+// Runtime-filter keys and their published wire payload have lifetimes that
+// differ from copied build batches: keys die after publication while the
+// payload lives on the message board until every receiver destroys it. Keep
+// their sites distinct from both the builder and SpillEngine ranges.
+const (
+	HashBuildAllocationSiteUniqueKeyData mpool.AllocationSite = iota + 44
+	HashBuildAllocationSiteUniqueKeyArea
+	HashBuildAllocationSiteUniqueKeyNulls
+	HashBuildAllocationSiteUniqueKeyGrouping
+	HashBuildAllocationSiteRuntimeFilterPayload
 )
 
 type container struct {
@@ -94,13 +117,23 @@ type container struct {
 	// spillBucketWriteBufs coalesce serialized records across source batches.
 	// Each buffer is bounded by spillWriteCoalesceSize (plus bytes.Buffer's
 	// bounded growth slack), so fanout does not imply fanout-sized vectors.
-	spillBucketWriteBufs [spillNumBuckets]bytes.Buffer
-	spillBucketWriteRows [spillNumBuckets]int64
-	spillKeyVecs         []*vector.Vector
-	// spillScratchReservation is a query/CN-charged lease retained while spill
-	// buffers are reusable. It is established lazily before the first scratch
-	// allocation and released with the execution generation.
+	spillBucketWriteBufs  [spillNumBuckets]bytes.Buffer
+	spillBucketWriteRows  [spillNumBuckets]int64
+	spillKeyVecs          []*vector.Vector
+	spillBatchAllocation  *vector.AllocationAccountSelection
+	spillAllocationMP     *mpool.MPool
+	spillAccountedWrite   *mpool.AccountedBuffer
+	spillAccountedBuckets [spillNumBuckets]*mpool.AccountedBuffer
+	// spillScratchReservation is a query/CN-charged emergency lease retained
+	// while Shuffle build batches accumulate. It prevents retained copies from
+	// consuming the scratch required to recover from hard-budget rejection.
 	spillScratchReservation *process.HashBuildReservation
+	// spillScratchEmergency marks a lease pre-admitted by
+	// ensureDirectSpillScratchReservation or
+	// ensureRetainedSpillScratchReservation. An uncharged upstream batch may
+	// not grow beyond this lease. A retained batch may grow it because its
+	// source memory remains charged separately while the batch is drained.
+	spillScratchEmergency bool
 	// spillScratchBase is the retained scratch floor. Coalesce-buffer growth is
 	// charged on top and must never be mistaken for this floor.
 	spillScratchBase uint64
@@ -294,7 +327,32 @@ func (hashBuild *HashBuild) AllocationAccountEnabled() bool {
 func (hashBuild *HashBuild) SetAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
-	builder := &hashBuild.ctr.hashmapBuilder
+	selection, err := vector.NewAllocationAccountSelectionWithBitmaps(
+		account,
+		HashBuildAllocationOwner,
+		HashBuildSpillAllocationSiteSelectedData,
+		HashBuildSpillAllocationSiteSelectedArea,
+		HashBuildSpillAllocationSiteSelectedNulls,
+		HashBuildSpillAllocationSiteSelectedGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	if err = hashBuild.ctr.hashmapBuilder.SetAllocationAccount(account); err != nil {
+		return err
+	}
+	hashBuild.ctr.spillBatchAllocation = selection
+	return nil
+}
+
+// SetAllocationAccount activates the physical allocation provenance shared by
+// the producer HashBuild and SpillEngine rebuild builders. A builder is always
+// single-generation and clears the selection only after all owned resources
+// have either been freed or transferred to a JoinMap.
+func (hb *HashmapBuilder) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	builder := hb
 	if builder.mapAllocationAccount != nil {
 		if builder.mapAllocationAccount == account {
 			return nil
@@ -321,6 +379,17 @@ func (hashBuild *HashBuild) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
+	uniqueKeySelection, err := vector.NewAllocationAccountSelectionWithBitmaps(
+		account,
+		HashBuildAllocationOwner,
+		HashBuildAllocationSiteUniqueKeyData,
+		HashBuildAllocationSiteUniqueKeyArea,
+		HashBuildAllocationSiteUniqueKeyNulls,
+		HashBuildAllocationSiteUniqueKeyGrouping,
+	)
+	if err != nil {
+		return err
+	}
 	expressionAllocation, err := colexec.NewExpressionAllocationAccount(
 		account,
 		HashBuildAllocationOwner,
@@ -331,6 +400,7 @@ func (hashBuild *HashBuild) SetAllocationAccount(
 	builder.mapAllocationAccount = account
 	builder.mapAllocation = selection
 	builder.batchAllocation = batchSelection
+	builder.uniqueKeyAllocation = uniqueKeySelection
 	builder.expressionAllocation = expressionAllocation
 	return nil
 }
@@ -339,6 +409,31 @@ func (hashBuild *HashBuild) ClearAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
 	builder := &hashBuild.ctr.hashmapBuilder
+	if len(hashBuild.ctr.spillExprExecs) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if hashBuild.ctr.spillAllocationMP != nil ||
+		hashBuild.ctr.spillAccountedWrite != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	for _, buffer := range hashBuild.ctr.spillAccountedBuckets {
+		if buffer != nil {
+			return mpool.ErrAllocationAccountInvariant
+		}
+	}
+	if err := builder.ClearAllocationAccount(account); err != nil {
+		return err
+	}
+	hashBuild.ctr.spillBatchAllocation = nil
+	return nil
+}
+
+// ClearAllocationAccount verifies that no builder-owned object can allocate
+// through the generation before dropping its selections.
+func (hb *HashmapBuilder) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	builder := hb
 	if builder.mapAllocationAccount == nil {
 		return nil
 	}
@@ -347,12 +442,13 @@ func (hashBuild *HashBuild) ClearAllocationAccount(
 	}
 	if builder.IntHashMap != nil || builder.StrHashMap != nil ||
 		len(builder.Batches.Buf) != 0 || builder.Sels.Size() != 0 ||
-		len(builder.executors) != 0 || len(hashBuild.ctr.spillExprExecs) != 0 {
+		len(builder.executors) != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	builder.mapAllocationAccount = nil
 	builder.mapAllocation = nil
 	builder.batchAllocation = nil
+	builder.uniqueKeyAllocation = nil
 	builder.expressionAllocation = nil
 	return nil
 }

@@ -2120,7 +2120,7 @@ func TestRuntimeFilterMarshalUsesSinglePayloadBudget(t *testing.T) {
 	require.NoError(t, err)
 	tc.arg.ctr.hashmapBuilder.setBudget(generation)
 
-	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec)
+	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec, tc.proc.Mp())
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 	require.Equal(t, projected, generation.Peak())
@@ -2152,7 +2152,7 @@ func TestRuntimeFilterMarshalSinglePayloadCoversVarlenaPeak(t *testing.T) {
 	require.NoError(t, err)
 	tc.arg.ctr.hashmapBuilder.setBudget(generation)
 
-	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec)
+	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec, tc.proc.Mp())
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 	require.Equal(t, projected, generation.Peak())
@@ -2161,6 +2161,123 @@ func TestRuntimeFilterMarshalSinglePayloadCoversVarlenaPeak(t *testing.T) {
 	require.Zero(t, generation.Used())
 
 	vec.Free(tc.proc.Mp())
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestRuntimeFilterMarshalAccountedPayloadMessageLifecycle(t *testing.T) {
+	tc := newTestCase(t, []bool{true}, []types.Type{types.T_varchar.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_varchar.ToType())})
+	vec := testutil.MakeVarcharVector(
+		[]string{strings.Repeat("x", 4<<10), strings.Repeat("y", 8<<10)},
+		[]uint64{1},
+		tc.proc.Mp(),
+	)
+
+	const limit = uint64(1 << 20)
+	budget := process.MustNewHashBuildBudget(limit, limit)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(limit, generation)
+	require.NoError(t, err)
+	tc.arg.NeedHashMap = true
+	require.NoError(t, tc.arg.SetAllocationAccount(account))
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(
+		vec,
+		tc.proc.Mp(),
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+	require.NotNil(t, release)
+	snapshot := account.Snapshot()
+	require.Positive(t, snapshot.Used)
+	require.Equal(t, snapshot.Used, generation.Snapshot().AllocationUsed)
+	require.Equal(t, snapshot.Used, generation.Used())
+
+	spec := &plan.RuntimeFilterSpec{Tag: 103}
+	runtimeFilter := message.RuntimeFilterMessage{
+		Tag:  spec.Tag,
+		Typ:  message.RuntimeFilter_IN,
+		Card: 2,
+		Data: data,
+	}
+	runtimeFilter.SetMemoryRelease(release)
+	message.SendRuntimeFilter(runtimeFilter, spec, tc.proc.GetMessageBoard())
+	require.True(t, tc.proc.GetMessageBoard().CloseAndDrain())
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	vec.Free(tc.proc.Mp())
+
+	require.NoError(t, tc.arg.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestRuntimeFilterMarshalAccountedOneByteShortFallsBackToPass(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp())
+	size, err := vec.MarshalBinarySize()
+	require.NoError(t, err)
+	capacity, ok := mpool.GrowCapacity(0, int64(size))
+	require.True(t, ok)
+	require.Positive(t, capacity)
+	vec.Free(tc.proc.Mp())
+
+	limit := uint64(capacity - 1)
+	budget := process.MustNewHashBuildBudget(limit, limit)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(limit, generation)
+	require.NoError(t, err)
+	tc.arg.NeedHashMap = true
+	require.NoError(t, tc.arg.SetAllocationAccount(account))
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
+		Tag:        104,
+		UpperLimit: 100,
+		Expr:       newExpr(0, types.T_int32.ToType()),
+	}
+	tc.arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
+	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 4
+	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+		testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp()),
+	}
+
+	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	require.Equal(t, int64(1),
+		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildRuntimeFilterBudgetFallbacks"])
+
+	receiver := message.NewMessageReceiver(
+		[]int32{tc.arg.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		tc.proc.GetMessageBoard(),
+	)
+	msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, msgs, 1)
+	runtimeFilter, ok := msgs[0].(message.RuntimeFilterMessage)
+	require.True(t, ok)
+	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
+	require.Empty(t, runtimeFilter.Data)
+
+	require.True(t, tc.proc.GetMessageBoard().CloseAndDrain())
+	require.NoError(t, tc.arg.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
 	generation.Close()
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())

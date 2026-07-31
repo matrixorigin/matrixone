@@ -348,7 +348,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				return leaseErr
 			}
 			ctr.probeExpressionLease = probeExpressionLease
-			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+			engine, engineErr := spillutil.NewSpillEngineForAccount(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           hashJoin.EqConds[1],
 				ProbeKeyExprs:           hashJoin.EqConds[0],
 				SpillThreshold:          ctr.spillThreshold,
@@ -359,7 +359,15 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				NeedBatches:             hashJoin.NeedBuildBatches(),
 				Budget:                  budget,
 				ProbeExpressionLease:    probeExpressionLease,
-			})
+			}, hashJoin.allocationAccount, hashbuild.HashBuildAllocationOwner)
+			if engineErr != nil {
+				_ = payload.Close()
+				ctr.mp.Free()
+				ctr.mp = nil
+				ctr.cleanEqCondExecutors()
+				ctr.releaseProbeExpressionLease()
+				return engineErr
+			}
 			if len(payload.Files) > 0 {
 				engine.InitFromSpilledFiles(payload.Files)
 			} else {

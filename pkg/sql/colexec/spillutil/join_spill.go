@@ -89,6 +89,7 @@ type BucketReader struct {
 	spillFile    *message.SpillFile
 	mergeRecords bool
 	allocation   *SpillAllocationAccount
+	cleanRetries uint64
 }
 
 func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (*batch.Batch, error) {
@@ -191,7 +192,7 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 			return nil, r.mergeReadError(proc, reuseBat, next, nextToken, err)
 		}
 		var mergeToken *process.HashBuildReservation
-		if r.budget != nil {
+		if r.budget != nil && r.allocation == nil {
 			// Keep the current destination (O) and the source record (N) live
 			// while admitting the final destination (D). UnionBatch may retain
 			// rounded capacities larger than O+N, so reserving O+N here is not a
@@ -541,7 +542,7 @@ func (r *BucketReader) readBatchRecord(
 	if err := checkSpillCanceled(proc); err != nil {
 		return nil, token, charge, err
 	}
-	if r.budget != nil {
+	if r.budget != nil && r.allocation == nil {
 		payload := uint64(batchSize)
 		if payload > uint64(maxIntValue())-(64<<10) {
 			return nil, token, charge, process.ErrHashBuildBudgetInvalid
@@ -571,13 +572,6 @@ func (r *BucketReader) readBatchRecord(
 			// A caller-provided reuse batch has no budget ownership on the first
 			// read. Drop it before admitting the decoded payload.
 			reuseBat.Clean(proc.Mp())
-			if r.allocation != nil {
-				if err := reuseBat.SetAllocationAccount(
-					r.allocation.decoded,
-				); err != nil {
-					return nil, nil, 0, err
-				}
-			}
 			var err error
 			token, err = r.budget.Reserve(projected)
 			if err != nil {
@@ -602,14 +596,6 @@ func (r *BucketReader) readBatchRecord(
 			}
 			if !retainedOK || !peakOK || growErr != nil {
 				reuseBat.Clean(proc.Mp())
-				if r.allocation != nil {
-					if err := reuseBat.SetAllocationAccount(
-						r.allocation.decoded,
-					); err != nil {
-						token.Release()
-						return nil, nil, 0, err
-					}
-				}
 				token.Release()
 				token = nil
 				var err error
@@ -624,14 +610,45 @@ func (r *BucketReader) readBatchRecord(
 		}
 	}
 
-	reuseBat.CleanOnlyData()
-	if err := checkSpillCanceled(proc); err != nil {
-		return nil, token, charge, err
+	var payloadOffset int64 = -1
+	if r.allocation != nil {
+		physical, seekErr := r.fd.Seek(0, io.SeekCurrent)
+		if seekErr != nil {
+			return nil, token, charge, seekErr
+		}
+		payloadOffset = physical - int64(r.reader.Buffered())
+		if payloadOffset < 0 {
+			return nil, token, charge, process.ErrHashBuildBudgetInvalid
+		}
 	}
-
-	limitReader := io.LimitedReader{R: r.reader, N: batchSize}
-	if err := reuseBat.UnmarshalFromReader(&limitReader, proc.Mp()); err != nil {
-		return nil, token, charge, err
+	decode := func() (io.LimitedReader, error) {
+		reuseBat.CleanOnlyData()
+		if err := checkSpillCanceled(proc); err != nil {
+			return io.LimitedReader{}, err
+		}
+		limited := io.LimitedReader{R: r.reader, N: batchSize}
+		err := reuseBat.UnmarshalFromReader(&limited, proc.Mp())
+		return limited, err
+	}
+	limitReader, decodeErr := decode()
+	if decodeErr != nil && r.allocation != nil &&
+		mpool.IsRetryableAllocationCapacity(decodeErr) {
+		// Reuse growth owns O while allocating N. If that exact overlap does
+		// not fit, rewind the seekable spill record, release O, and retry the
+		// same minimum payload from a clean batch. No multiplier predicts N.
+		reuseBat.Clean(proc.Mp())
+		if err := reuseBat.SetAllocationAccount(r.allocation.decoded); err != nil {
+			return nil, token, charge, err
+		}
+		if _, err := r.fd.Seek(payloadOffset, io.SeekStart); err != nil {
+			return nil, token, charge, err
+		}
+		r.reader.Reset(r.fd)
+		r.cleanRetries++
+		limitReader, decodeErr = decode()
+	}
+	if decodeErr != nil {
+		return nil, token, charge, decodeErr
 	}
 	if err := checkSpillCanceled(proc); err != nil {
 		return nil, token, charge, err
@@ -1384,6 +1401,23 @@ func spillStatInt64(v uint64) int64 {
 	return int64(v)
 }
 
+func externalScatterSourceBytes(
+	bat *batch.Batch,
+	sourceAlreadyCharged bool,
+) (uint64, error) {
+	if bat == nil || bat.RowCount() < 0 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	if sourceAlreadyCharged {
+		return 0, nil
+	}
+	allocated := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > allocated {
+		allocated = size
+	}
+	return allocated, nil
+}
+
 func (e *SpillEngine) scatterRetainedBytes() (uint64, bool) {
 	actual := uint64(0)
 	add := func(v uint64) bool {
@@ -1468,6 +1502,7 @@ func (e *SpillEngine) scatterBatchBounded(
 	}
 	rows := bat.RowCount()
 	var selected *batch.Batch
+	var externalSource *process.HashBuildReservation
 	defer func() {
 		if selected != nil {
 			selected.Clean(proc.Mp())
@@ -1480,8 +1515,11 @@ func (e *SpillEngine) scatterBatchBounded(
 		if retErr != nil {
 			e.discardScatterBuffers()
 		}
+		if externalSource != nil {
+			externalSource.Release()
+		}
 	}()
-	if e.cfg.Budget != nil {
+	if e.cfg.Budget != nil && e.allocation == nil {
 		// Start with retained capacities already owned by this token, add only
 		// row/hash capacity growth, then add each per-batch transient once.
 		retained, ok := e.scatterRetainedBytes()
@@ -1513,6 +1551,20 @@ func (e *SpillEngine) scatterBatchBounded(
 		}
 		if err != nil {
 			return err
+		}
+	} else if e.cfg.Budget != nil {
+		externalBytes, err := externalScatterSourceBytes(
+			bat,
+			sourceAlreadyCharged,
+		)
+		if err != nil {
+			return err
+		}
+		if externalBytes > 0 {
+			externalSource, err = e.cfg.Budget.Reserve(externalBytes)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -2022,6 +2074,24 @@ func NewSpillEngineWithAllocation(
 	return newSpillEngine(cfg, allocation), nil
 }
 
+// NewSpillEngineForAccount activates exact spill ownership when an execution
+// attempt supplied an account and preserves the legacy constructor for direct
+// operator tests and callers outside the statement lifecycle.
+func NewSpillEngineForAccount(
+	cfg SpillEngineConfig,
+	account *mpool.AllocationAccount,
+	owner mpool.AllocationOwner,
+) (*SpillEngine, error) {
+	if account == nil {
+		return NewSpillEngine(cfg), nil
+	}
+	allocation, err := NewSpillAllocationAccount(account, owner)
+	if err != nil {
+		return nil, err
+	}
+	return NewSpillEngineWithAllocation(cfg, allocation)
+}
+
 func newSpillEngine(
 	cfg SpillEngineConfig,
 	allocation *SpillAllocationAccount,
@@ -2341,6 +2411,12 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 
 	builder := &hashbuild.HashmapBuilder{}
 	builder.SetBudget(e.cfg.Budget)
+	if e.allocation != nil {
+		if err := builder.SetAllocationAccount(e.allocation.account); err != nil {
+			builder.Free(proc)
+			return nil, BucketSkip, err
+		}
+	}
 	builder.IsDedup = e.cfg.IsDedup
 	builder.OnDuplicateAction = e.cfg.OnDuplicateAction
 	builder.DedupBuildKeepLast = e.cfg.DedupBuildKeepLast
@@ -2598,7 +2674,10 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		var execs []colexec.ExpressionExecutor
 		var lease *hashbuild.ExpressionMemoryLease
 		var err error
-		if e.allocation == nil {
+		if e.allocation == nil ||
+			!hashbuild.AllocationAccountedExpressionSetSupported(
+				e.cfg.BuildKeyExprs,
+			) {
 			execs, lease, err =
 				hashbuild.NewBudgetedExpressionExecutors(
 					proc,
@@ -2608,7 +2687,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 				)
 		} else {
 			execs, err =
-				colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+				hashbuild.NewAllocationAccountedExpressionExecutors(
 					proc,
 					e.cfg.BuildKeyExprs,
 					e.allocation.expression,

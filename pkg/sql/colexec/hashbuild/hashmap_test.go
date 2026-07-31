@@ -1291,6 +1291,60 @@ func TestUniqueAppendBudgetIncludesDeadAreaCopiedByUnionBatch(t *testing.T) {
 	generation.Close()
 }
 
+func TestAccountedRuntimeFilterUniqueKeysDegradeWithoutFailingHashBuild(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	values := make([]string, 1_024)
+	for i := range values {
+		values[i] = strconv.Itoa(i) + strings.Repeat(string(rune('a'+i%26)), 4<<10)
+	}
+	input := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.MakeVarcharVector(values, nil, proc.Mp()),
+	}, nil)
+	defer input.Clean(proc.Mp())
+	exprs := []*plan.Expr{newExpr(0, types.T_varchar.ToType())}
+
+	run := func(limit uint64, needUnique bool) (mpool.AllocationAccountSnapshot, bool) {
+		budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+		generation, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.OpenWithController(limit, generation)
+		require.NoError(t, err)
+		builder := &HashmapBuilder{}
+		builder.SetBudget(generation)
+		require.NoError(t, builder.SetAllocationAccount(account))
+		require.NoError(t, builder.Prepare(exprs, -1, -1, nil, proc))
+		require.NoError(t, builder.CopyBuildBatch(input, proc))
+		builder.InputBatchRowCount = input.RowCount()
+		require.NoError(t, builder.BuildHashmap(false, false, needUnique, proc))
+		snapshot := account.Snapshot()
+		fallback, _ := builder.runtimeFilterFallbackState()
+		if needUnique {
+			require.True(t, fallback)
+			require.Empty(t, builder.UniqueJoinKeys)
+			require.NotNil(t, builder.StrHashMap)
+			require.Equal(t, uint64(input.RowCount()), builder.StrHashMap.GroupCount())
+		}
+		builder.Free(proc)
+		require.Zero(t, account.Snapshot().Used)
+		require.Zero(t, generation.Used())
+		_, _, err = registry.CompleteTerminal(account)
+		require.NoError(t, err)
+		return snapshot, fallback
+	}
+
+	baseline, fallback := run(64<<20, false)
+	require.False(t, fallback)
+	require.Positive(t, baseline.Peak)
+	// The exact baseline peak is sufficient for the required hash build, but
+	// not for a second, optional copy of the 4 MiB runtime-filter key payload.
+	constrained, fallback := run(baseline.Peak, true)
+	require.True(t, fallback)
+	require.LessOrEqual(t, constrained.Peak, baseline.Peak)
+}
+
 func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
 	const budgetCap = uint64(4 << 20)
 	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)

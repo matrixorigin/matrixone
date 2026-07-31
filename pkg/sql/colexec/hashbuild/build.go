@@ -318,6 +318,49 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		// particular, a rejected retained-copy admission below must not add the
 		// same upstream batch a second time when it is spilled directly.
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
+		if hashBuild.IsShuffle {
+			// First prove that the current upstream batch can always be spilled
+			// directly. This uses its actual materialization semantics and never
+			// projects a hypothetical retained batch.
+			var directProofErr error
+			if !spillMode || ctr.spillBatchAllocation == nil {
+				directProofErr = ctr.ensureDirectSpillScratchReservation(
+					result.Batch,
+					analyzer,
+				)
+			}
+			if directProofErr != nil {
+				// Existing retained batches were admitted with a future-drain
+				// proof. Drain them under that lease, then retry the direct proof
+				// after their source reservations have been released.
+				if spillMode ||
+					!errors.Is(directProofErr, process.ErrHashBuildBudgetAdmission) ||
+					len(ctr.hashmapBuilder.Batches.Buf) == 0 {
+					return directProofErr
+				}
+				if err := startSpill(); err != nil {
+					return err
+				}
+				if ctr.spillBatchAllocation == nil {
+					if err := ctr.ensureDirectSpillScratchReservation(result.Batch, analyzer); err != nil {
+						return err
+					}
+				}
+			}
+			if !spillMode {
+				// A batch may become retained only after its future spill scratch
+				// is admitted. If that proof does not fit, do not copy it: switch
+				// to the already-proven direct-spill path.
+				if err := ctr.ensureRetainedSpillScratchReservation(result.Batch, analyzer); err != nil {
+					if !errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+						return err
+					}
+					if err := startSpill(); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		// If in spill mode, spill this batch directly to open files.
 		if spillMode {
 			err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer, false)
@@ -749,7 +792,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 		// build a membership filter, based on its own threshold.
 		runtimeFilter.Typ = message.RuntimeFilter_UNIQUEJOINKEYS
 
-		data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(keyVec)
+		data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(keyVec, proc.Mp())
 		if err != nil {
 			if hashBuild.fallbackOptionalRuntimeFilter(err, &runtimeFilter, spec, proc) {
 				return nil
@@ -850,7 +893,10 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 	}
 	keyVec.GetNulls().Reset()
 	keyVec.InplaceSort()
-	data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(keyVec)
+	data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(
+		keyVec,
+		proc.Mp(),
+	)
 	if err != nil {
 		if hashBuild.fallbackOptionalRuntimeFilter(err, &runtimeFilter, spec, proc) {
 			return nil
@@ -1071,7 +1117,10 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 	}
 	payload.InplaceSort()
 	data, release, err =
-		hashBuild.ctr.hashmapBuilder.marshalRuntimeFilterVector(payload)
+		hashBuild.ctr.hashmapBuilder.marshalRuntimeFilterVector(
+			payload,
+			proc.Mp(),
+		)
 	if err != nil {
 		if release != nil {
 			release()
@@ -1209,6 +1258,17 @@ func (hashBuild *HashBuild) fallbackOptionalRuntimeFilter(
 		} else {
 			stats.AddExtraStat(
 				"HashBuildRuntimeFilterAllocationFallbacks", 1)
+			if account := hashBuild.ctr.hashmapBuilder.mapAllocationAccount; account != nil {
+				snapshot := account.Snapshot()
+				stats.SetMaxExtraStat(
+					"HashBuildRuntimeFilterBudgetFallbackUsedBytes",
+					hashBuildStatInt64(snapshot.Used),
+				)
+				stats.SetMaxExtraStat(
+					"HashBuildRuntimeFilterBudgetFallbackCapBytes",
+					hashBuildStatInt64(snapshot.Limit),
+				)
+			}
 		}
 	}
 	*runtimeFilter = message.RuntimeFilterMessage{

@@ -327,7 +327,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				return leaseErr
 			}
 			ctr.probeExpressionLease = probeExpressionLease
-			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+			engine, engineErr := spillutil.NewSpillEngineForAccount(spillutil.SpillEngineConfig{
 				BuildKeyExprs:             dedupJoin.Conditions[1],
 				ProbeKeyExprs:             dedupJoin.Conditions[0],
 				SpillThreshold:            ctr.spillThreshold,
@@ -344,7 +344,15 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				DedupDeleteKeepColIdxList: dedupJoin.DedupDeleteKeepColIdxList,
 				Budget:                    budget,
 				ProbeExpressionLease:      probeExpressionLease,
-			})
+			}, dedupJoin.allocationAccount, hashbuild.HashBuildAllocationOwner)
+			if engineErr != nil {
+				_ = payload.Close()
+				ctr.mp.Free()
+				ctr.mp = nil
+				ctr.cleanEvalVectors()
+				ctr.releaseProbeExpressionLease()
+				return engineErr
+			}
 			if len(payload.Files) > 0 {
 				engine.InitFromSpilledFiles(payload.Files)
 			} else {

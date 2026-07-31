@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -298,8 +299,43 @@ type DedupJoin struct {
 	// main-table scan path; empty for regular INSERT/UPDATE.
 	OldColCapturePlaceholderIdxList []int32
 	OldColCaptureProbeIdxList       []int32
+	allocationAccount               *mpool.AllocationAccount
 
 	vm.OperatorBase
+}
+
+func (dedupJoin *DedupJoin) AllocationAccountEnabled() bool {
+	return dedupJoin != nil
+}
+
+func (dedupJoin *DedupJoin) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if dedupJoin.allocationAccount != nil &&
+		dedupJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	dedupJoin.allocationAccount = account
+	return nil
+}
+
+func (dedupJoin *DedupJoin) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if dedupJoin.allocationAccount == nil {
+		return nil
+	}
+	if dedupJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if dedupJoin.ctr.mp != nil || dedupJoin.ctr.spillEngine != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	dedupJoin.allocationAccount = nil
+	return nil
 }
 
 func (dedupJoin *DedupJoin) GetOperatorBase() *vm.OperatorBase {
@@ -386,6 +422,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.roundStatusPublished = false
 	ctr.state = Build
 	ctr.lastPos = 0
+	dedupJoin.allocationAccount = nil
 }
 
 func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -405,6 +442,7 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	}
 	ctr.cleanEvalVectors()
 	ctr.releaseProbeExpressionLease()
+	dedupJoin.allocationAccount = nil
 }
 
 func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
