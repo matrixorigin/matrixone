@@ -1,7 +1,8 @@
-- Status: draft
+- Status: implementation validation
 - Start Date: 2026-07-30
 - Authors: aptend
-- Implementation PR: TBD
+- Implementation candidate: `feature/26459-statement-lifecycle` at
+  `656e254fe6`
 - Issue for this RFC:
   [#26459](https://github.com/matrixorigin/matrixone/issues/26459)
 - Implementation plan:
@@ -48,6 +49,15 @@ error for a minimum indivisible allocation that cannot fit.
 The first consumer is HashBuild and the joins that share its spill lifecycle.
 The accounting primitive is deliberately defined below the SQL operator layer
 so other spillable operators can adopt the same model later.
+
+The current activation is deliberately owner-closed. Build and probe trees
+from the audited COL/literal/CONCAT/CASE/varchar-EQUAL/string-CAST set activate
+exact accounting for the whole local HashBuild/join owner set. A tree
+containing an unclosed generic function family keeps all participating owners
+in that local attempt on the legacy path; exact map/batch ownership is never
+mixed with an estimator-gated expression. The remaining generic-function
+migration is therefore explicit rather than being misreported as RFC
+completion.
 
 ## Motivation
 
@@ -714,13 +724,12 @@ suspension check succeeds in that transaction. Once suspension publication
 linearizes, no later open may publish; opens that linearized earlier are the
 finite active set allowed to finish or become tombstones.
 
-Current `SetStmtProfile` turnover, frontend `StatementInfo.EndStatement`, and
-`HashBuildBudgetGeneration.Close` do not prove this per-CN quiescence or
-validate zero. Production activation is blocked until the `Compile` attempt
-owns an explicit post-pipeline/MessageBoard-close transition for success,
-failure, panic, cancellation, retry, broadcast, prepared reuse, and remote
-execution. A forced close must not silently zero accounting while allocations
-remain live.
+`SetStmtProfile` turnover, frontend `StatementInfo.EndStatement`, and
+`HashBuildBudgetGeneration.Close` alone do not prove this per-CN quiescence or
+validate zero. The implementation therefore gives the `Compile` attempt an
+explicit post-pipeline/MessageBoard-close transition for success, failure,
+panic, cancellation, retry, broadcast, prepared reuse, and remote execution.
+A forced close never silently zeros accounting while allocations remain live.
 
 Ownership transfer does not change generations. If a transfer would cross to a
 different generation, it must either:

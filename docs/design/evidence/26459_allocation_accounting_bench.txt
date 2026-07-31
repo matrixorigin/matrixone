@@ -154,3 +154,31 @@ An eight-generation, GOMAXPROCS=8 acquire/release latency harness sampled
 was 100, 98, 97, 68, and 73 ns (97 ns median). The measurement includes the
 `time.Now`/`time.Since` sampling cost and is therefore a conservative
 end-to-end latency observation, not a cycle-level atomic benchmark.
+
+Production activation benchmark (rebased main 5b9eeb54ec, linux/amd64,
+Go 1.26.4, i7-11700, GOMAXPROCS=16; sequential package runs):
+
+BenchmarkResidentHashBuildAccounting/legacy/int/rows-32 median: 4161 ns/op
+BenchmarkResidentHashBuildAccounting/accounted/int/rows-32 median: 5841 ns/op
+BenchmarkResidentHashBuildAccounting/legacy/varchar/rows-32 median: 7147 ns/op
+BenchmarkResidentHashBuildAccounting/accounted/varchar/rows-32 median: 8907 ns/op
+BenchmarkResidentHashBuildAccounting/legacy/int/rows-8192 median: 139602 ns/op
+BenchmarkResidentHashBuildAccounting/accounted/int/rows-8192 median: 143254 ns/op
+BenchmarkResidentHashBuildAccounting/legacy/varchar/rows-8192 median: 410074 ns/op
+BenchmarkResidentHashBuildAccounting/accounted/varchar/rows-8192 median: 400782 ns/op
+BenchmarkIssue26454ExpressionAccounting/legacy median: 909082 ns/op
+BenchmarkIssue26454ExpressionAccounting/accounted median: 940454 ns/op
+BenchmarkCopyBuildBatchAccounting/legacy median: 18584 ns/op, 230032 B/op, 10 allocs/op
+BenchmarkCopyBuildBatchAccounting/accounted median: 22051 ns/op, 632 B/op, 6 allocs/op
+BenchmarkSpillScatterAccounting/legacy median: 59073 ns/op
+BenchmarkSpillScatterAccounting/accounted median: 60571 ns/op
+
+BenchmarkHashBuildAllocationAttemptLifecycle cpu=1 median: 843.5 ns/op,
+p50 730 ns/op, p99 2011 ns/op, 256 B/op, 3 allocs/op
+BenchmarkHashBuildAllocationAttemptLifecycle cpu=8 median: 762.7 ns/op,
+p50 1995 ns/op, p99 73349 ns/op, 256 B/op, 3 allocs/op
+BenchmarkHashBuildAllocationReleaseStorm cpu=1 median: 558.4 ns/op, 0 B/op, 0 allocs/op
+BenchmarkHashBuildAllocationReleaseStorm cpu=8 median: 470.0 ns/op, 0 B/op, 0 allocs/op
+
+Commands and workload gates are recorded in
+docs/design/evidence/26459_activation_validation.md.

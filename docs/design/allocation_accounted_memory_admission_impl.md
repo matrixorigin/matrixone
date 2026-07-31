@@ -1,17 +1,24 @@
 # Allocation-Accounted Memory Admission: Implementation Plan
 
-- Status: draft
+- Status: implementation validation
 - Tracking issue:
   [#26459](https://github.com/matrixorigin/matrixone/issues/26459)
 - Architecture:
   [Allocation-Accounted Memory Admission RFC](../rfcs/00000000_allocation_accounted_memory_admission.md)
 - Baseline at plan creation: `main` at `38ce3a774`
-- Rebased implementation baseline: `main` at `60e36bef64`
-- Current dormant PR 3 head: `fd2fcc953b`
+- Rebased implementation baseline: `main` at `5b9eeb54ec`
+- Allocation-site closure baseline (PR 3): `f61b64d56c`
+- Lifecycle/activation heads (PRs 4--10): `8633757dc1`, `5ae8eca00a`,
+  `8e4b689f45`, `c9ad0ea810`, `e072568998`, `eec23dcdc5`, and
+  `383fc6dce3`
+- Owner-atomic activation and final cleanup: `656e254fe6`
 - Merged prerequisite: #26455 at `93e8b22d2`
 - Independent design review: completed against RFC commit `a7d54cb5f`
-- Activation status: blocked until PRs 1--4 and the selected owner's
-  allocation-site/Go-heap gates close
+- Activation status: enabled for the closed HashBuild expression owner set.
+  Build/probe key closure is checked statement-atomically. Unsupported
+  expression families keep all participating HashBuild/HashJoin/DedupJoin
+  owners in that local attempt on the legacy path; they are not partially
+  mixed into an exact generation.
 
 ## 1. Purpose and rules
 
@@ -94,15 +101,15 @@ working ledger is allocation-site based:
 | Allocation site | Allocator/mode and size | Terminal owner | Current | Target/blocker |
 | --- | --- | --- | ---: | --- |
 | `mpool.memHdr` and account-ID side map | Go maps; one pointer record plus optional account record per live allocation | pointer removal at physical deallocation | H | bounded by the measured finite registry/allocation-slot policy |
-| `Vector.data` | MPool; capacity from `Grow`, on/off-heap follows `v.offHeap` | owning `Vector.Free` | D | A only when off-heap |
-| `Vector.area` | MPool; independent varlen payload capacity | owning `Vector.Free` | D | A only when off-heap |
-| `Vector.nsp/gsp` bitmap data | allocation-accounted off-heap `[]uint64`; independent geometric capacity, paired replacement admission | owning `Vector.Free`; `Reset` retains and clears only published words | D | A after the selected Vector owner closes |
-| `FunctionResult.vec` data/area | off-heap Vector; rows and appended payload | executor `Free` | D | A after expression ledger closure |
-| `FunctionResult.convenientParam` | Go slice; expression arity, not rows | executor `Free`/reuse | L | H after a proved arity bound |
-| decimal parameter conversion | retained allocation-accounted off-heap buffer; `rows*sizeof(Decimal128)` for decimal64/float32/float64 promotion | `FunctionResult.Free`; Reset/evaluation reuse capacity | D | A after expression ledger closure |
-| IFF/CASE/COALESCE selection arrays | allocation-accounted off-heap `[]bool`; one or two arrays of `rows`, retained by executor | executor `Free`/reuse | D | A after expression ledger closure |
-| selected row IDs | allocation-accounted off-heap `[]int64`; capacity up to `rows`, retained by executor | executor `Free`/reuse | D | A after expression ledger closure |
-| selected parameter/result vectors | allocation-accounted off-heap Vector capacities | executor `Free` | D | A after expression ledger closure |
+| `Vector.data` | MPool; capacity from `Grow`, on/off-heap follows `v.offHeap` | owning `Vector.Free` | A | activated HashBuild destinations use immutable off-heap provenance |
+| `Vector.area` | MPool; independent varlen payload capacity | owning `Vector.Free` | A | activated HashBuild destinations use immutable off-heap provenance |
+| `Vector.nsp/gsp` bitmap data | allocation-accounted off-heap `[]uint64`; independent geometric capacity, paired replacement admission | owning `Vector.Free`; `Reset` retains and clears only published words | A | selected HashBuild vectors and expression results are active |
+| `FunctionResult.vec` data/area | off-heap Vector; rows and appended payload | executor `Free` | A | active for the closed HashBuild expression set |
+| `FunctionResult.convenientParam` | Go slice; expression arity, not rows | executor `Free`/reuse | H | bounded by plan expression arity, not input rows or payload |
+| decimal parameter conversion | retained allocation-accounted off-heap buffer; `rows*sizeof(Decimal128)` for decimal64/float32/float64 promotion | `FunctionResult.Free`; Reset/evaluation reuse capacity | A | active when present in a closed expression owner |
+| IFF/CASE/COALESCE selection arrays | allocation-accounted off-heap `[]bool`; one or two arrays of `rows`, retained by executor | executor `Free`/reuse | A | CASE is active in the closed expression set |
+| selected row IDs | allocation-accounted off-heap `[]int64`; capacity up to `rows`, retained by executor | executor `Free`/reuse | A | active when present in a closed expression owner |
+| selected parameter/result vectors | allocation-accounted off-heap Vector capacities | executor `Free` | A | active when present in a closed expression owner |
 | `JSON_ROW` output | one retained allocation-accounted function scratch buffer, then copy into the admitted result; both physical capacities are charged | `FunctionResult.Free`; row publication copies synchronously | D | A after expression-owner activation; arity-bounded column closures are cleared after every call |
 | float array-distance row descriptors and result scratch | Go `[][]T` with one descriptor per row plus `[]float32` with one value per row | call return / GC | R | caller row accessor plus the upper half of the admitted `[]float64` result backing |
 | GPU array-distance flattened inputs | allocation-accounted caller scratch; `query bytes + rows*dimension*4` for the SQL float32 GPU path; legacy callers retain the C allocator | GPU job retains the caller slice until Wait; launch failure rolls back before return | D | A only after the GPU-tag build/tests pass; the legacy API remains unaccounted and is not an activated owner |
@@ -118,28 +125,31 @@ working ledger is allocation-site based:
 | regexp compile/match/output scratch | Go regexp program and match/output buffers proportional to pattern/input | operator cache / row completion / GC | L | bounded regexp owner or exclusion from expression activation |
 | H3/S2 neighborhood scratch | Go slices; some S2 paths are statically bounded, H3 grid-disk output scales with radius | row completion / GC | L | split proved fixed bounds from data-scaled paths before activation |
 | JSON cast visible serialization | `MarshalJSON` payload slices proportional to the JSON value | row completion / GC | L | direct visible writer or exclusion from expression activation |
-| hash-table initial cell block | off-heap `mpool.MakeSlice(..., true)`; 16 KiB int / 32 KiB string | hash map / `JoinMap.FreeMemory` | L | A in first activation |
-| hash-table replacement/appended cell blocks | off-heap blocks, at most 4 MiB each; old+new overlap is physically visible | hash map / `JoinMap.FreeMemory` | L | A in first activation |
-| hash-table `cells`/`newBlocks` descriptors | Go `[][]Cell`; 24 bytes per block header plus geometric resize backing arrays; GC is not treated as synchronous Free | hash map lifetime / GC | L | replace with an owning off-heap descriptor buffer and account its initial/replacement capacity; blocks first activation |
-| hash-table `ResizePlan` and callback | fixed-size Go values/closures, one per table/resize | resize return / hash map Free | L | H; remove legacy reservation owner after cell activation |
-| `GroupSels.{tmp,vals,offsets}` | on-heap `mpool.MakeSlice(..., false)`; O(build rows/groups) | builder or `JoinMap.FreeMemory` | L | switch off-heap; blocks auxiliary/copied-batch activation |
-| copied build-batch vector buffers | MPool Vector data/area | builder or `JoinMap.FreeMemory` | L | A after per-buffer provenance |
-| spill marshal/coalesce buffers | allocation-accounted off-heap streaming buffers; exact serialized size and bounded 64 KiB per-bucket coalesce capacity | spill phase cleanup | D | A after spill ledger closure |
-| spill hash values | allocation-accounted off-heap `[]uint64`; geometric capacity, `8*cap` | spill phase cleanup | D | A after spill ledger closure |
-| spill row IDs | allocation-accounted off-heap `[]int32`; geometric capacity, `4*cap` | spill phase cleanup | D | A after spill ledger closure |
-| spill counts/offsets/positions | Go `[]int32`; O(bucket count), bucket count finite | spill cleanup | L | H after bound is asserted |
-| selected spill bucket vectors | allocation-accounted off-heap Vector capacities | per-call selected-batch cleanup | D | A after spill ledger closure |
-| BucketReader decoded vectors | allocation-accounted MPool Vector data/area | reusable batch cleanup / `BucketReader.Close` | D | A after spill ledger closure |
-| `pSpool` cached Vector data/area | provenance-bearing detached MPool buffers; accounted data/area sites cannot cross and legacy buffers keep a guarded fast path | `spoolBuffer.clean` or the receiving Vector's `Free` | D | A with the pipeline owner activation |
-| runtime-filter serialized payload | Go buffer/message payload; O(filter rows) | message release | L | off-heap or PASS degradation; blocks runtime-filter activation |
+| hash-table initial cell block | off-heap `mpool.MakeSlice(..., true)`; 16 KiB int / 32 KiB string | hash map / `JoinMap.FreeMemory` | A | physical allocation is the sole charge |
+| hash-table replacement/appended cell blocks | off-heap blocks, at most 4 MiB each; old+new overlap is physically visible | hash map / `JoinMap.FreeMemory` | A | replacement overlap is admitted before publication |
+| hash-table `cells`/`newBlocks` descriptors | owning off-heap descriptor buffer; initial and replacement capacities are distinct physical allocations | hash map / `JoinMap.FreeMemory` | A | no row-scaled Go descriptor backing remains |
+| hash-table `ResizePlan` and callback | fixed-size Go values/closures, one per table/resize | resize return / hash map Free | H | table-count bounded metadata; no row-scaled backing |
+| `GroupSels.{tmp,vals,offsets}` | allocation-accounted off-heap buffers; O(build rows/groups) | builder or `JoinMap.FreeMemory` | A | provenance follows final JoinMap consumer |
+| copied build-batch vector buffers | MPool Vector data/area | builder or `JoinMap.FreeMemory` | A | physical Vector leases replace projected batch tokens |
+| spill marshal/coalesce buffers | allocation-accounted off-heap streaming buffers; exact serialized size and bounded 64 KiB per-bucket coalesce capacity | spill phase cleanup | A | optional coalesce degrades to direct write under pressure |
+| spill hash values | allocation-accounted off-heap `[]uint64`; geometric capacity, `8*cap` | spill phase cleanup | A | exact capacity and rollback covered |
+| spill row IDs | allocation-accounted off-heap `[]int32`; geometric capacity, `4*cap` | spill phase cleanup | A | exact capacity and rollback covered |
+| spill counts/offsets/positions | Go `[]int32`; O(bucket count), bucket count finite | spill cleanup | H | bucket count is the fixed spill fanout |
+| selected spill bucket vectors | allocation-accounted off-heap Vector capacities | per-call selected-batch cleanup | A | adaptive unpublished windows bound progress |
+| BucketReader decoded vectors | allocation-accounted MPool Vector data/area | reusable batch cleanup / `BucketReader.Close` | A | replacement and retry start from a clean record |
+| BucketReader input buffer | one 64 KiB Go buffer per production spill reader; direct legacy readers use a bounded 4 MiB default | `BucketReader.Close` / GC | H | reader count is bounded by the live SpillEngine set and the statement/CN hash cap retains fixed non-payload headroom |
+| `pSpool` cached Vector data/area | provenance-bearing detached MPool buffers; accounted data/area sites cannot cross and legacy buffers keep a guarded fast path | `spoolBuffer.clean` or the receiving Vector's `Free` | A | activated vectors retain immutable provenance through cache reuse |
+| runtime-filter serialized payload | one allocation-accounted payload; optional filter publication | message release | A | capacity pressure degrades to PASS before publication |
 | spill disk and FD | disk/FD ledgers | file removal/close | A | A |
 
-This is the known-site ledger, not yet the completion ledger for every later
-owner. The hash cell/descriptor first-activation inventory is closed here.
-PR 3 must generate and review the remaining built-in/function-specific `make`,
-`append`, `bytes.Buffer`, builder, and codec sites before the corresponding
-expression or spill closure can activate. No row named “other” or “unbounded
-scratch” can declare closure.
+This is the known-site ledger for the activated HashBuild/join owner. Generic SQL
+functions with unbounded JSON, geometry, regexp, H3/S2, or JSON-cast Go scratch
+remain `L`; the build and probe activation gates reject the local statement's
+entire owner set when one of those families appears. Consequently an activated
+owner has no estimator-gated expression subtree, while an unsupported plan
+remains wholly legacy and is an explicit later migration rather than a
+partially exact owner.
+No row named “other” or “unbounded scratch” can declare closure.
 
 Batch destination propagation is now `D`: Clone, Dup, selected-column copy,
 Union destinations, windows, reader decode, Clean, and FreeColumns preserve
@@ -851,6 +861,11 @@ distinction instead of presenting the first-allocation cost as a per-row cost.
 
 ### PR 4: statement lifecycle and minimum pressure foundation
 
+Implementation: `8633757dc1`. The attempt coordinator now owns board drain,
+owner teardown, exactly-once terminal completion, immutable export, and the
+release-capable tombstone/suspension path. Typed lifecycle failures are
+disjoint from retryable capacity pressure.
+
 Scope:
 
 - add the attempt-owned post-pipeline/MessageBoard-close seal/finalize hook;
@@ -881,6 +896,11 @@ Gate:
 
 ### PR 5: hash-table cell-block activation
 
+Implementation: `5ae8eca00a`. Integer and string cells plus their descriptor
+backing are allocation-accounted through initial allocation, both resize
+modes, producer/consumer handoff, and terminal Free. Activated maps do not
+install the legacy resize reservation owner.
+
 Scope:
 
 - activate only the integer/string hash-table cell blocks;
@@ -909,6 +929,10 @@ Gate:
 
 ### PR 6: copied batches and JoinMap activation
 
+Implementation: `8e4b689f45`. Copied build vectors, GroupSels, dedup scratch,
+delete bitmaps, and final JoinMap ownership retain immutable provenance until
+the last consumer releases them.
+
 Scope:
 
 - copied build-batch destinations;
@@ -931,6 +955,12 @@ Gate:
 
 ### PR 7: expression owner activation
 
+Implementation: `c9ad0ea810`. COL/LIT/PARAM/VAR/VEC/FOLD plus audited CONCAT,
+CASE, varchar EQUAL, and integer-to-string/literal string CAST trees use exact
+result, bitmap, conversion, and function-scratch allocations. A HashBuild
+containing any other expression family is not activated at all; it cannot mix
+an exact map owner with a legacy expression estimator.
+
 Scope:
 
 - activate the complete HashBuild-owned expression site closure;
@@ -952,6 +982,12 @@ Gate:
 
 ### PR 8 family: spill and runtime-filter closures
 
+Implementation: `e072568998`. Decoded reuse, selected vectors, hash/row IDs,
+marshal/coalesce buffers, recursive rebuild, spill disk/FD, pSpool provenance,
+and runtime-filter payload publication all have explicit allocation or
+resource owners. Optional coalesce and runtime filters degrade without
+publishing partial state.
+
 Split into independently safe owner closures:
 
 1. decoded batches and retained reader reuse;
@@ -966,6 +1002,12 @@ the decoded/retained-reader closure must pass #26192 LOAD DATA. A runtime-filter
 closure adds its own build/probe and PASS-degradation workload before merging.
 
 ### PR 9: unified join pressure controller and remaining legacy deletion
+
+Implementation: `eec23dcdc5`. HashBuild, SpillEngine, HashJoin, DedupJoin, and
+RightDedupJoin share typed pressure classification and a monotonic retry guard.
+Only memory-capacity failures retry; lifecycle, invariant, disk, and FD
+failures are terminal. Unpublished input windows shrink, optional coalescing
+is disabled once, and real minimum-unit failure is finite and diagnostic.
 
 Implement across HashBuild, HashJoin, DedupJoin, and RightDedupJoin:
 
@@ -992,6 +1034,12 @@ Gate:
 
 ### PR 10: workload, performance, and cleanup
 
+Local implementation and benchmark harness: `383fc6dce3`. The harness covers
+resident int/varchar keys at 32 and 8,192 rows, complete spill scatter,
+#26454's expression, copy ownership, lifecycle latency, and concurrent release
+storms. Raw commands and medians are in
+[`evidence/26459_activation_validation.md`](evidence/26459_activation_validation.md).
+
 This re-runs all incident workloads together and supplies long-run and
 comparative confirmation; it is not the first incident-level validation of an
 earlier activation.
@@ -1015,6 +1063,19 @@ Required proof:
 - concurrent-generation P50/P99, release storm, and high-frequency TP
   allocation results meet the recorded gate;
 - temporary migration helpers are removed.
+
+Current validation status:
+
+- the complete affected package matrix passes after rebasing on
+  `5b9eeb54ec`;
+- the complete affected package matrix, the same matrix under `-race`, a
+  20-iteration focused lifecycle/pressure race stress, affected-package vet,
+  and `make build` pass at `656e254fe6`;
+- local regression tests cover the five incident mechanisms without an
+  estimator-only rejection on the activated owner;
+- TPCH 100G/1T candidate-versus-main runs remain the remote workload gate and
+  must be recorded in the linked evidence before this document moves from
+  `implementation validation` to `implemented`.
 
 ## 5. Verification and conservation model
 
