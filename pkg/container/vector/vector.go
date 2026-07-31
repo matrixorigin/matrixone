@@ -798,6 +798,11 @@ func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 	return nil
 }
 
+// UnmarshalBinary binds a vector to its binary encoding after fully validating
+// the representation. In addition to constant-time framing, size, and overflow
+// checks, it verifies null-bitmap contents and every varlena or array payload.
+// Callers must use this checked API for wire, disk, RPC, or otherwise
+// unvalidated bytes.
 func (v *Vector) UnmarshalBinary(data []byte) error {
 	return v.unmarshalBinary(data, true)
 }
