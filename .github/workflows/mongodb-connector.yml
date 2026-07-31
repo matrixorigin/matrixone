@@ -1,0 +1,82 @@
+name: MongoDB Connector E2E
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/entrypoint.yaml'
+      - '.github/workflows/mongodb-connector.yml'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+      - 'optools/mongodb_ci.bash'
+      - 'etc/launch-mongodb-local/**'
+      - 'etc/launch/**'
+      - 'test/mongodb/**'
+      - 'pkg/sql/mongodb/**'
+      - 'pkg/sql/colexec/mongoscan/**'
+      - 'pkg/sql/colexec/timewin/**'
+      - 'pkg/sql/colexec/aggexec/**'
+      - 'pkg/sql/plan/**'
+      - 'pkg/sql/compile/**'
+      - 'pkg/frontend/**'
+      - 'pkg/sql/parsers/**'
+      - 'pkg/config/**'
+      - 'pkg/bootstrap/**'
+      - 'pkg/cnservice/**'
+      - 'pkg/vm/**'
+      - 'pkg/pb/plan/**'
+      - 'pkg/pb/pipeline/**'
+      - 'pkg/util/metric/v2/**'
+      - 'proto/plan.proto'
+      - 'proto/pipeline.proto'
+      - 'vendor/go.mongodb.org/**'
+      - 'vendor/github.com/xdg-go/**'
+      - 'vendor/github.com/youmark/pkcs8/**'
+      - 'vendor/github.com/montanaflynn/stats/**'
+      - 'vendor/github.com/klauspost/compress/**'
+      - 'vendor/github.com/golang/snappy/**'
+      - 'vendor/modules.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mongodb-e2e-local:
+    name: MongoDB E2E Local
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MO_MONGODB_REPORT_DIR: test/mongodb/reports/e2e-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run MongoDB connector E2E
+        run: make test-mongodb-e2e-local
+
+      - name: Summarize MongoDB E2E
+        if: always()
+        run: |
+          {
+            echo "## MongoDB connector E2E"
+            echo ""
+            echo "Artifact: \`mongodb-e2e-local-${{ github.sha }}-${{ github.run_id }}\`"
+            echo ""
+            if [ -f "${MO_MONGODB_REPORT_DIR}/summary.md" ]; then
+              cat "${MO_MONGODB_REPORT_DIR}/summary.md"
+            else
+              echo "No summary was created."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mongodb-e2e-local-${{ github.sha }}-${{ github.run_id }}
+          path: test/mongodb/reports/**

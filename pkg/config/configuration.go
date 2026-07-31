@@ -16,8 +16,10 @@ package config
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -252,6 +254,105 @@ type IcebergParameters struct {
 	ProtectedCNToCN         bool          `toml:"protected-cn-to-cn" user_setting:"advanced"`
 	OrphanTTL               toml.Duration `toml:"orphan-ttl" user_setting:"advanced"`
 	EnableOrphanGC          bool          `toml:"enable-orphan-gc" user_setting:"advanced"`
+}
+
+type MongoDBParameters struct {
+	Enable                 bool          `toml:"enable" user_setting:"advanced"`
+	EnablePerAccount       bool          `toml:"enable-per-account" user_setting:"advanced"`
+	AllowedAccounts        []uint32      `toml:"allowed-accounts" user_setting:"advanced"`
+	AllowLoopback          bool          `toml:"allow-loopback" user_setting:"advanced"`
+	AllowedHostSuffixes    []string      `toml:"allowed-host-suffixes" user_setting:"advanced"`
+	AllowedCIDRs           []string      `toml:"allowed-cidrs" user_setting:"advanced"`
+	ConnectTimeout         toml.Duration `toml:"connect-timeout" user_setting:"advanced"`
+	ServerSelectionTimeout toml.Duration `toml:"server-selection-timeout" user_setting:"advanced"`
+	SocketTimeout          toml.Duration `toml:"socket-timeout" user_setting:"advanced"`
+	MaxPoolSize            uint64        `toml:"max-pool-size" user_setting:"advanced"`
+	MinPoolSize            uint64        `toml:"min-pool-size" user_setting:"advanced"`
+	MaxConnecting          uint64        `toml:"max-connecting" user_setting:"advanced"`
+	MaxCachedClients       int           `toml:"max-cached-clients" user_setting:"advanced"`
+	BatchRows              int32         `toml:"batch-rows" user_setting:"advanced"`
+	MaxBatchBytes          int64         `toml:"max-batch-bytes" user_setting:"advanced"`
+	MaxValueBytes          int64         `toml:"max-value-bytes" user_setting:"advanced"`
+	MaxScanRows            int64         `toml:"max-scan-rows" user_setting:"advanced"`
+	MaxScanBytes           int64         `toml:"max-scan-bytes" user_setting:"advanced"`
+	MaxConversionErrors    int64         `toml:"max-conversion-errors" user_setting:"advanced"`
+	MaxConversionErrorRate float64       `toml:"max-conversion-error-rate" user_setting:"advanced"`
+	MaxSourceConcurrency   int           `toml:"max-source-concurrency" user_setting:"advanced"`
+}
+
+func (parameters *MongoDBParameters) SetDefaultValues() {
+	if parameters.ConnectTimeout.Duration == 0 {
+		parameters.ConnectTimeout.Duration = 10 * time.Second
+	}
+	if parameters.ServerSelectionTimeout.Duration == 0 {
+		parameters.ServerSelectionTimeout.Duration = 10 * time.Second
+	}
+	if parameters.SocketTimeout.Duration == 0 {
+		parameters.SocketTimeout.Duration = 30 * time.Second
+	}
+	if parameters.MaxPoolSize == 0 {
+		parameters.MaxPoolSize = 32
+	}
+	if parameters.MaxConnecting == 0 {
+		parameters.MaxConnecting = 2
+	}
+	if parameters.MaxCachedClients == 0 {
+		parameters.MaxCachedClients = 64
+	}
+	if parameters.BatchRows == 0 {
+		parameters.BatchRows = 8192
+	}
+	if parameters.MaxBatchBytes == 0 {
+		parameters.MaxBatchBytes = 64 << 20
+	}
+	if parameters.MaxValueBytes == 0 {
+		parameters.MaxValueBytes = 16 << 20
+	}
+	if parameters.MaxScanRows == 0 {
+		parameters.MaxScanRows = 50_000_000
+	}
+	if parameters.MaxScanBytes == 0 {
+		parameters.MaxScanBytes = 32 << 30
+	}
+	if parameters.MaxConversionErrors == 0 {
+		parameters.MaxConversionErrors = 1_000
+	}
+	if parameters.MaxConversionErrorRate == 0 {
+		parameters.MaxConversionErrorRate = 0.10
+	}
+	if parameters.MaxSourceConcurrency == 0 {
+		parameters.MaxSourceConcurrency = 4
+	}
+}
+
+func (parameters MongoDBParameters) Validate(ctx context.Context) error {
+	if parameters.ConnectTimeout.Duration <= 0 || parameters.ServerSelectionTimeout.Duration <= 0 || parameters.SocketTimeout.Duration <= 0 {
+		return moerr.NewBadConfig(ctx, "mongodb timeouts must be greater than zero")
+	}
+	if parameters.MaxPoolSize == 0 || parameters.MaxConnecting == 0 || parameters.MaxCachedClients <= 0 || parameters.MinPoolSize > parameters.MaxPoolSize {
+		return moerr.NewBadConfig(ctx, "mongodb pool limits are invalid")
+	}
+	if parameters.BatchRows <= 0 || parameters.MaxBatchBytes <= 0 || parameters.MaxValueBytes <= 0 || parameters.MaxValueBytes > parameters.MaxBatchBytes {
+		return moerr.NewBadConfig(ctx, "mongodb batch/value limits are invalid")
+	}
+	if parameters.MaxScanRows <= 0 || parameters.MaxScanBytes <= 0 || parameters.MaxSourceConcurrency <= 0 {
+		return moerr.NewBadConfig(ctx, "mongodb source protection limits must be greater than zero")
+	}
+	if parameters.MaxConversionErrors <= 0 || parameters.MaxConversionErrorRate <= 0 || parameters.MaxConversionErrorRate > 1 {
+		return moerr.NewBadConfig(ctx, "mongodb conversion error limits are invalid")
+	}
+	for _, raw := range parameters.AllowedHostSuffixes {
+		suffix := strings.Trim(strings.TrimSpace(raw), ".")
+		if suffix == "" || net.ParseIP(suffix) != nil || strings.ContainsAny(suffix, "*/@: \t\r\n") {
+			return moerr.NewBadConfig(ctx, "mongodb allowed host suffix is invalid")
+		}
+	}
+	for _, raw := range parameters.AllowedCIDRs {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(raw)); err != nil {
+			return moerr.NewBadConfig(ctx, "mongodb allowed CIDR is invalid")
+		}
+	}
+	return nil
 }
 
 func (ip *IcebergParameters) SetDefaultValues() {
@@ -508,6 +609,7 @@ type FrontendParameters struct {
 	SidecarURL string `toml:"sidecarUrl" user_setting:"advanced"`
 
 	Iceberg IcebergParameters `toml:"iceberg" user_setting:"advanced"`
+	MongoDB MongoDBParameters `toml:"mongodb" user_setting:"advanced"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -666,6 +768,7 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	}
 
 	fp.Iceberg.SetDefaultValues()
+	fp.MongoDB.SetDefaultValues()
 }
 
 func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
