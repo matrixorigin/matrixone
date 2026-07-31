@@ -1001,6 +1001,8 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 		}
 	case *tree.SelectClause:
 		*selects = append(*selects, leftStmt)
+	case *tree.ValuesClause:
+		*selects = append(*selects, leftStmt)
 	case *tree.ParenSelect:
 		*selects = append(*selects, leftStmt.Select)
 	default:
@@ -1017,6 +1019,8 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 			}
 		}
 
+		*selects = append(*selects, rightStmt)
+	case *tree.ValuesClause:
 		*selects = append(*selects, rightStmt)
 	case *tree.ParenSelect:
 		if stmt.Type == tree.UNION && !stmt.All {

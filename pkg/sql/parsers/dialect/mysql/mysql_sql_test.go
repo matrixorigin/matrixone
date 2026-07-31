@@ -84,18 +84,35 @@ func TestDropFunctionIfExists(t *testing.T) {
 }
 
 func TestQuantifiedTableSubqueryParse(t *testing.T) {
-	stmt, err := ParseOne(context.Background(), "select 1 where 1 = any (table tv)", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
+	tests := []struct {
+		sql  string
+		want string
+	}{
+		{
+			sql:  "select 1 where 1 = any (table tv)",
+			want: "select * from tv",
+		},
+		{
+			sql:  "select 1 where 1 = any (table tv order by v desc limit 1)",
+			want: "select * from tv order by v desc limit 1",
+		},
+	}
 
-	selectStmt := stmt.(*tree.Select)
-	where := selectStmt.Select.(*tree.SelectClause).Where
-	comparison := where.Expr.(*tree.ComparisonExpr)
-	subquery := comparison.Right.(*tree.Subquery)
-	parenSelect := subquery.Select.(*tree.ParenSelect)
-	rewritten := parenSelect.Select
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
 
-	require.Equal(t, "select * from tv", tree.String(rewritten, dialect.MYSQL))
+			selectStmt := stmt.(*tree.Select)
+			where := selectStmt.Select.(*tree.SelectClause).Where
+			comparison := where.Expr.(*tree.ComparisonExpr)
+			subquery := comparison.Right.(*tree.Subquery)
+			parenSelect := subquery.Select.(*tree.ParenSelect)
+
+			require.Equal(t, test.want, tree.String(parenSelect.Select, dialect.MYSQL))
+		})
+	}
 }
 
 func TestSQLModeParserModes(t *testing.T) {

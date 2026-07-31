@@ -3084,6 +3084,22 @@ func TestQueryBuilderBuildValuesAndTableSubqueries(t *testing.T) {
 		"select (values row(1))",
 		"select 1 where 2 > any (values row(1), row(3))",
 		"select a from vt1 where a = any (table vt1)",
+		"select a from vt1 where a in (table vt1)",
+		"select a from vt1 where a in (values row(1), row(2))",
+		"select a from vt1 where exists (table vt1)",
+		"select a from vt1 where exists (values row(1))",
+		"select a from vt1 where a = any (table vt1 order by a desc limit 1)",
+		"select a from vt1 where a = any (table vt1 union values row(1))",
+		"select a from vt1 where a = any (table vt1 union all values row(1))",
+		"select a from vt1 where a = any (values row(1) union table vt1)",
+		"select a from vt1 where a = any ((table vt1 order by a desc limit 1) union values row(1))",
+		"select a from vt1 where a = any ((values row(1), row(2) order by column_0 desc limit 1) union table vt1)",
+		"select a from vt1 where a = any (table vt1 intersect values row(1))",
+		"select a from vt1 where a = any (values row(1) except table vt1)",
+		"select a from vt1 where a = any (values row(1) union values row(2) intersect table vt1)",
+		"select count(*) from (table vt1 union all values row(1)) as u",
+		"select 1 where 2 > any (values row(1) union select 3)",
+		"select 1 where 2 > any (values row(1), row(3) order by column_0 limit 1)",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
