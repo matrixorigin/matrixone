@@ -110,73 +110,61 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	return sender, err
 }
 
-// checkPipelineStandaloneExecutableAtRemote is responsible for checking the standalone excitability of the pipeline
-// once it was sent to other remote node.
-//
-// it returns true if the pipeline has only the root operator capable of sending data to other outer pipeline.
+// checkPipelineStandaloneExecutableAtRemote verifies that every local channel used by the
+// encoded remote pipeline is owned by the encoded scope tree. A starting Connector or
+// Dispatch is retained on the caller and is intentionally excluded by remote encoding.
 func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
-	var regs = make(map[*process.WaitRegister]struct{})
-	var toScan []*Scope
-	// record which mergeReceivers this scope tree holds.
-	{
-		toScan = append(toScan, s)
-		for len(toScan) > 0 {
-			node := toScan[len(toScan)-1]
-			toScan = toScan[:len(toScan)-1]
+	if s == nil {
+		return false
+	}
 
-			if len(node.PreScopes) > 0 {
-				toScan = append(toScan, node.PreScopes...)
-			}
-
-			for i := range node.Proc.Reg.MergeReceivers {
-				regs[node.Proc.Reg.MergeReceivers[i]] = struct{}{}
-			}
+	encoded, _ := getScopeForRemoteRunEncoding(s)
+	regs := make(map[*process.WaitRegister]struct{})
+	visited := make(map[*Scope]struct{})
+	toScan := []*Scope{encoded}
+	encodedScopes := make([]*Scope, 0, len(s.PreScopes)+1)
+	for len(toScan) > 0 {
+		node := toScan[len(toScan)-1]
+		toScan = toScan[:len(toScan)-1]
+		if node == nil {
+			continue
+		}
+		if _, ok := visited[node]; ok {
+			continue
+		}
+		visited[node] = struct{}{}
+		encodedScopes = append(encodedScopes, node)
+		toScan = append(toScan, node.PreScopes...)
+		if node.Proc == nil {
+			continue
+		}
+		for _, reg := range node.Proc.Reg.MergeReceivers {
+			regs[reg] = struct{}{}
 		}
 	}
 
-	// check if there are target channels from other trees.
-	{
-		if len(s.PreScopes) > 0 {
-			toScan = append(toScan, s.PreScopes...)
-		}
-
-		for len(toScan) > 0 {
-			node := toScan[len(toScan)-1]
-			toScan = toScan[:len(toScan)-1]
-
-			if len(node.PreScopes) > 0 {
-				toScan = append(toScan, node.PreScopes...)
-			}
-
-			if node.RootOp.OpType() == vm.Dispatch {
-				t := node.RootOp.(*dispatch.Dispatch)
-				for i := range t.LocalRegs {
-					if _, ok := regs[t.LocalRegs[i]]; !ok {
-						s.Proc.Infof(
-							s.Proc.Ctx,
-							"txn id : %s, the pipeline %p convert to execute locally because it holds a dispatch operator will send data to other local pipeline tree.",
-							s.Proc.GetTxnOperator().Txn().ID, s)
-
-						return false
+	standalone := true
+	for _, node := range encodedScopes {
+		_ = vm.HandleAllOp(node.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			switch typed := op.(type) {
+			case *dispatch.Dispatch:
+				for _, reg := range typed.LocalRegs {
+					if _, ok := regs[reg]; !ok {
+						standalone = false
+						break
 					}
 				}
-				continue
-			}
-			if node.RootOp.OpType() == vm.Connector {
-				t := node.RootOp.(*connector.Connector)
-				if _, ok := regs[t.Reg]; !ok {
-					s.Proc.Infof(
-						s.Proc.Ctx,
-						"txn id : %s, the pipeline %p convert to execute locally because it holds a connector operator will send data to other local pipeline tree.",
-						s.Proc.GetTxnOperator().Txn().ID, s)
-
-					return false
+			case *connector.Connector:
+				if _, ok := regs[typed.Reg]; !ok {
+					standalone = false
 				}
-				continue
 			}
+			return nil
+		})
+		if !standalone {
+			return false
 		}
 	}
-
 	return true
 }
 

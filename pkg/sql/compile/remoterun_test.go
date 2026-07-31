@@ -1532,6 +1532,37 @@ func TestRegisterLocalDispatchReceiversSkipsGuaranteedRemoteRunFailures(t *testi
 	}
 }
 
+func TestRegisterLocalDispatchReceiversSkipsNonStandaloneRemoteScope(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	uid := uuid.Must(uuid.NewV7())
+	proc := testutil.NewProcess(t)
+	root := dispatch.NewArgument()
+	defer root.Release()
+	root.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+
+	invalidDispatch := dispatch.NewArgument()
+	defer invalidDispatch.Release()
+	invalidDispatch.LocalRegs = []*process.WaitRegister{{}}
+	pre := &Scope{Proc: proc.NewNoContextChildProc(0), RootOp: invalidDispatch}
+	s := &Scope{
+		Magic:     Remote,
+		Proc:      proc,
+		RootOp:    root,
+		NodeInfo:  engine.Node{Addr: "remote-cn:6002"},
+		PreScopes: []*Scope{pre},
+	}
+	require.False(t, checkPipelineStandaloneExecutableAtRemote(s))
+
+	registrations, err := registerLocalDispatchReceivers([]*Scope{s}, "local-cn:6002")
+	require.NoError(t, err)
+	defer registrations.cleanup()
+	registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
+	require.False(t, ok)
+	require.Nil(t, registeredProc)
+	require.Nil(t, notifyCh)
+}
+
 func TestRegisterRemoteDispatchReceiversUsesOwningScopeProcess(t *testing.T) {
 	_ = colexec.NewServer("")
 
@@ -3082,6 +3113,35 @@ func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
 
 		require.False(t, checkPipelineStandaloneExecutableAtRemote(s0))
 	}
+
+	// Operators below the root are part of the encoded remote pipeline and
+	// must not reference a receiver owned by another scope tree.
+	{
+		nestedDispatch := dispatch.NewArgument()
+		nestedDispatch.LocalRegs = []*process.WaitRegister{{}}
+		root := merge.NewArgument()
+		root.AppendChild(nestedDispatch)
+		s := &Scope{
+			Proc:   proc.NewContextChildProc(0),
+			RootOp: root,
+		}
+
+		require.False(t, checkPipelineStandaloneExecutableAtRemote(s))
+	}
+
+	// A starting Dispatch is retained on the caller by remote encoding. Its
+	// receiver ownership is therefore outside the encoded remote pipeline.
+	{
+		root := dispatch.NewArgument()
+		root.LocalRegs = []*process.WaitRegister{{}}
+		root.AppendChild(value_scan.NewArgument())
+		s := &Scope{
+			Proc:   proc.NewContextChildProc(0),
+			RootOp: root,
+		}
+
+		require.True(t, checkPipelineStandaloneExecutableAtRemote(s))
+	}
 }
 
 // TestDeletionCanTruncateSerializationRoundtrip verifies that CanTruncate is
@@ -3161,9 +3221,8 @@ func newDispatchSrcScopeForTest(proc *process.Process, addr string, localBuckets
 //
 //	before regrouping, the bucket that carries a cross-CN shuffle dispatch is wrongly
 //	judged non-standalone-executable (its dispatch LocalRegs point to a sibling bucket
-//	that lives in a separate send tree) -> RemoteRun converts it to local -> the dispatch
-//	lands on the coordinator, mispaired with the compile-time cross-CN receiver FromAddr
-//	-> hang.
+//	that lives in a separate send tree). The legacy RemoteRun fallback placed the dispatch
+//	on the coordinator, mispaired with the compile-time cross-CN receiver FromAddr -> hang.
 //
 //	after regrouping, the dop same-CN buckets (and the nested dispatch) become one per-CN
 //	send unit, so checkPipelineStandaloneExecutableAtRemote returns true and the whole
@@ -3239,6 +3298,176 @@ func TestGroupShuffleBucketsByCNIfNeeded_Gating(t *testing.T) {
 	// single CN -> returned unchanged even if a cross-CN dispatch is present.
 	c.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 2}}
 	require.Equal(t, 4, len(c.groupShuffleBucketsByCNIfNeeded(ss)))
+
+	// A DML operator can wrap the cross-CN dispatch in the encoded operator
+	// tree; grouping must not depend on Dispatch being the root operator.
+	wrapped := make([]*Scope, 4)
+	for i, addr := range []string{"cn1:6001", "cn1:6001", "cn2:6001", "cn2:6001"} {
+		wrapped[i] = &Scope{
+			Magic:    Remote,
+			NodeInfo: engine.Node{Addr: addr, Mcpu: 1},
+			Proc:     proc.NewContextChildProc(0),
+		}
+		root := merge.NewArgument()
+		if i == 0 {
+			crossCN := dispatch.NewArgument()
+			crossCN.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uuid.Must(uuid.NewV7()), NodeAddr: "cn2:6001"}}
+			root.AppendChild(crossCN)
+		}
+		wrapped[i].RootOp = root
+	}
+	require.Len(t, c.groupShuffleBucketsByCNIfNeeded(wrapped), 2)
+}
+
+func TestNewDeleteMergeScopeGroupsRemoteDeleteUnitsByCN(t *testing.T) {
+	const (
+		dop       = 16
+		stepCount = 2
+	)
+	addrs := []string{"cn-coordinator:6001", "cn-remote-1:6001", "cn-remote-2:6001"}
+	_ = colexec.NewServer("")
+	c := NewMockCompile(t)
+	c.addr = addrs[0]
+	c.execType = plan.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+	c.proc.Base.TxnOperator = fakeTxnOperator{}
+	c.cnList = make(engine.Nodes, len(addrs))
+	for i := range addrs {
+		c.cnList[i] = engine.Node{Addr: addrs[i], Mcpu: dop}
+	}
+
+	node := &planpb.Node{Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{Shuffle: true}}}
+	type dispatchRoute struct {
+		from string
+		to   string
+	}
+	type receiverRoute struct {
+		from string
+		to   string
+	}
+	potentiallyMisplacedBySourceCN := make(map[string]int)
+	results := make([]*Scope, 0, stepCount)
+	t.Cleanup(func() { ReleaseScopes(results) })
+
+	for step := 0; step < stepCount; step++ {
+		sources := make([]*Scope, 0, len(addrs)*dop)
+		for _, addr := range addrs {
+			for range dop {
+				sourceScope := newScope(Remote)
+				sourceScope.NodeInfo = engine.Node{Addr: addr, Mcpu: 1}
+				sourceScope.Proc = c.proc.NewNoContextChildProc(0)
+				sourceScope.setRootOperator(value_scan.NewArgument())
+				sources = append(sources, sourceScope)
+			}
+		}
+
+		deleteArg := deletion.NewArgument()
+		deleteArg.DeleteCtx = &deletion.DeleteCtx{}
+		result := c.newDeleteMergeScope(deleteArg, sources, node)
+		deleteArg.Release()
+		results = append(results, result)
+
+		require.Len(t, result.PreScopes, len(addrs))
+		dispatches := make(map[uuid.UUID]dispatchRoute)
+		receivers := make(map[uuid.UUID]receiverRoute)
+		deleteBuckets := make(map[uint32]struct{})
+		dispatchCount := 0
+		visitedScopes := make(map[*Scope]struct{})
+
+		for _, unit := range result.PreScopes {
+			require.True(t, checkPipelineStandaloneExecutableAtRemote(unit))
+			unitAddr := unit.NodeInfo.Addr
+			var walk func(*Scope)
+			walk = func(scope *Scope) {
+				if scope == nil {
+					return
+				}
+				if _, ok := visitedScopes[scope]; ok {
+					return
+				}
+				visitedScopes[scope] = struct{}{}
+				for _, info := range scope.RemoteReceivRegInfos {
+					_, exists := receivers[info.Uuid]
+					require.False(t, exists)
+					receivers[info.Uuid] = receiverRoute{from: info.FromAddr, to: unitAddr}
+				}
+				_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+					switch typed := op.(type) {
+					case *dispatch.Dispatch:
+						dispatchCount++
+						require.Len(t, typed.LocalRegs, dop)
+						require.Len(t, typed.RemoteRegs, (len(addrs)-1)*dop)
+						if unitAddr != c.addr {
+							potentiallyMisplacedBySourceCN[unitAddr] += len(typed.RemoteRegs)
+						}
+						for _, remote := range typed.RemoteRegs {
+							_, exists := dispatches[remote.Uuid]
+							require.False(t, exists)
+							dispatches[remote.Uuid] = dispatchRoute{from: unitAddr, to: remote.NodeAddr}
+						}
+					case *deletion.Deletion:
+						require.True(t, typed.RemoteDelete)
+						require.Equal(t, uint32(len(addrs)*dop), typed.Nbucket)
+						_, exists := deleteBuckets[typed.IBucket]
+						require.False(t, exists)
+						deleteBuckets[typed.IBucket] = struct{}{}
+					}
+					return nil
+				})
+				for _, pre := range scope.PreScopes {
+					walk(pre)
+				}
+			}
+			walk(unit)
+		}
+
+		require.Equal(t, len(addrs)*dop, dispatchCount)
+		require.Len(t, deleteBuckets, len(addrs)*dop)
+		for bucket := range len(addrs) * dop {
+			_, ok := deleteBuckets[uint32(bucket)]
+			require.True(t, ok)
+		}
+		require.Len(t, dispatches, len(addrs)*dop*(len(addrs)-1)*dop)
+		require.Len(t, receivers, len(dispatches))
+		for uid, sender := range dispatches {
+			receiver, ok := receivers[uid]
+			require.True(t, ok)
+			require.Equal(t, sender.from, receiver.from)
+			require.Equal(t, sender.to, receiver.to)
+		}
+	}
+
+	require.Equal(t, 2048,
+		potentiallyMisplacedBySourceCN[addrs[1]]+potentiallyMisplacedBySourceCN[addrs[2]])
+	require.Equal(t, 1024, potentiallyMisplacedBySourceCN[addrs[1]])
+	require.Equal(t, 1024, potentiallyMisplacedBySourceCN[addrs[2]])
+}
+
+func TestNewDeleteMergeScopeGroupsDopOnSingleRemoteCN(t *testing.T) {
+	_ = colexec.NewServer("")
+	c := NewMockCompile(t)
+	c.addr = "cn-coordinator:6001"
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+	c.proc.Base.TxnOperator = fakeTxnOperator{}
+
+	const dop = 2
+	sources := make([]*Scope, dop)
+	for i := range sources {
+		sources[i] = newScope(Remote)
+		sources[i].NodeInfo = engine.Node{Addr: "cn-remote:6001", Mcpu: 1}
+		sources[i].Proc = c.proc.NewNoContextChildProc(0)
+		sources[i].setRootOperator(value_scan.NewArgument())
+	}
+	deleteArg := deletion.NewArgument()
+	deleteArg.DeleteCtx = &deletion.DeleteCtx{}
+	result := c.newDeleteMergeScope(deleteArg, sources,
+		&planpb.Node{Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{Shuffle: true}}})
+	deleteArg.Release()
+	t.Cleanup(result.release)
+
+	require.Len(t, result.PreScopes, 1)
+	require.Equal(t, "cn-remote:6001", result.PreScopes[0].NodeInfo.Addr)
+	require.True(t, checkPipelineStandaloneExecutableAtRemote(result.PreScopes[0]))
 }
 
 func TestCoordinatorLocalShuffleAttachesRemoteDispatchSource(t *testing.T) {

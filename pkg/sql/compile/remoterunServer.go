@@ -352,7 +352,9 @@ func registerLocalDispatchReceivers(scopes []*Scope, localAddr string) (*remoteD
 			return skipDispatchReceivers
 		}
 		if !checkPipelineStandaloneExecutableAtRemote(s) {
-			return registerDispatchReceiverTree
+			// RemoteRun rejects this tree before it starts. Publishing its UUIDs
+			// on the caller would advertise an owner that never executes here.
+			return skipDispatchReceivers
 		}
 		if _, ok := s.RootOp.(*dispatch.Dispatch); ok {
 			return registerDispatchReceiverRoot
