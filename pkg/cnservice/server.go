@@ -460,18 +460,44 @@ func (s *service) Close() error {
 func (s *service) closePipelineAdmission() error {
 	s.pipelines.mu.Lock()
 	s.pipelines.closing = true
+	cancels := make([]context.CancelFunc, 0, len(s.pipelines.cancels))
+	for _, cancel := range s.pipelines.cancels {
+		cancels = append(cancels, cancel)
+	}
 	s.pipelines.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 	return nil
 }
 
-func (s *service) admitPipelineHandler() bool {
+func (s *service) admitPipelineHandler(ctx context.Context) (context.Context, func(), bool) {
 	s.pipelines.mu.Lock()
-	defer s.pipelines.mu.Unlock()
 	if s.pipelines.closing {
-		return false
+		s.pipelines.mu.Unlock()
+		return nil, nil, false
 	}
+	if s.pipelines.cancels == nil {
+		s.pipelines.cancels = make(map[uint64]context.CancelFunc)
+	}
+	s.pipelines.nextID++
+	id := s.pipelines.nextID
+	handlerCtx, cancel := context.WithCancel(ctx)
+	s.pipelines.cancels[id] = cancel
 	s.pipelines.wg.Add(1)
-	return true
+	s.pipelines.mu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			cancel()
+			s.pipelines.mu.Lock()
+			delete(s.pipelines.cancels, id)
+			s.pipelines.mu.Unlock()
+			s.pipelines.wg.Done()
+		})
+	}
+	return handlerCtx, release, true
 }
 
 func (s *service) waitPipelineHandlers() error {
@@ -616,13 +642,17 @@ func (s *service) handleRequest(
 	if s.pipelines.beforeAdmission != nil {
 		s.pipelines.beforeAdmission()
 	}
-	if !s.admitPipelineHandler() {
+	handlerCtx, release, admitted := s.admitPipelineHandler(ctx)
+	if !admitted {
+		if value.Cancel != nil {
+			value.Cancel()
+		}
 		return moerr.NewServiceUnavailableNoCtx("CN pipeline service is closing")
 	}
 	owned := true
 	defer func() {
 		if owned {
-			s.pipelines.wg.Done()
+			release()
 		}
 	}()
 
@@ -640,10 +670,10 @@ func (s *service) handleRequest(
 	}
 	switch msg.GetSid() {
 	case pipeline.Status_WaitingNext:
-		return handleWaitingNextMsg(ctx, req, cs)
+		return handleWaitingNextMsg(handlerCtx, req, cs)
 	case pipeline.Status_Last:
 		if msg.IsPipelineMessage() { // only pipeline type need assemble msg now.
-			if err := handleAssemblePipeline(ctx, req, cs); err != nil {
+			if err := handleAssemblePipeline(handlerCtx, req, cs); err != nil {
 				return err
 			}
 		}
@@ -652,13 +682,15 @@ func (s *service) handleRequest(
 	// start a goroutine to handle one received message.
 	owned = false
 	go func() {
-		defer s.pipelines.wg.Done()
-		defer value.Cancel()
+		defer release()
+		if value.Cancel != nil {
+			defer value.Cancel()
+		}
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
 
 		// there is no need to handle the return error, because the error will be logged in the function.
-		_ = s.requestHandler(ctx,
+		_ = s.requestHandler(handlerCtx,
 			s.pipelineServiceServiceAddr(),
 			req,
 			cs,

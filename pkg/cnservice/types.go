@@ -701,6 +701,8 @@ type service struct {
 		wg      sync.WaitGroup
 		mu      sync.Mutex
 		closing bool
+		nextID  uint64
+		cancels map[uint64]context.CancelFunc
 
 		beforeAdmission func()
 	}

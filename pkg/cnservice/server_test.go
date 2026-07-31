@@ -19,6 +19,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -286,7 +287,7 @@ func Test_InitServer(t *testing.T) {
 	ctx := context.TODO()
 	session := mock_morpc.NewMockClientSession(ctrl)
 	msg.Cmd = pipeline.Method_PipelineMessage
-	session.EXPECT().CreateCache(ctx, uint64(0)).Return(&testMessageCache{}, nil).Times(2)
+	session.EXPECT().CreateCache(gomock.Any(), uint64(0)).Return(&testMessageCache{}, nil).Times(2)
 	session.EXPECT().DeleteCache(uint64(0)).Times(1)
 
 	msg.Sid = pipeline.Status_WaitingNext
@@ -557,8 +558,9 @@ func TestPipelineAdmissionRejectsRequestAlreadyReadDuringClose(t *testing.T) {
 		allowAdmission := make(chan struct{})
 		requestHandled := make(chan struct{}, 1)
 		s := &service{}
-		require.True(t, s.admitPipelineHandler())
-		s.pipelines.wg.Done()
+		_, release, admitted := s.admitPipelineHandler(context.Background())
+		require.True(t, admitted)
+		release()
 		s.pipelines.beforeAdmission = func() {
 			close(requestEntered)
 			<-allowAdmission
@@ -644,6 +646,99 @@ func TestPipelineAdmissionRejectsRequestAlreadyReadDuringClose(t *testing.T) {
 		default:
 		}
 	})
+}
+
+func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(moruntime.Runtime) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ls := mock_lock.NewMockLockService(ctrl)
+		ls.EXPECT().Close().Return(nil).Times(2)
+
+		handlerStarted := make(chan struct{})
+		handlerExited := make(chan struct{})
+		var cancelCount atomic.Int32
+		s := &service{
+			cfg:                &Config{UUID: t.Name()},
+			logger:             zap.NewNop(),
+			stopper:            stopper.NewStopper("test-pipeline-cancel"),
+			mo:                 closeErrorMOServer{},
+			cancelMoServerFunc: func() {},
+			server:             closeOnlyRPCServer{},
+			lockService:        ls,
+		}
+		s.requestHandler = func(
+			ctx context.Context,
+			_ string,
+			_ morpc.Message,
+			_ morpc.ClientSession,
+			_ engine.Engine,
+			_ fileservice.FileService,
+			_ lockservice.LockService,
+			_ qclient.QueryClient,
+			_ logservice.CNHAKeeperClient,
+			_ udf.Service,
+			_ client.TxnClient,
+			_ *defines.AutoIncrCacheManager,
+			_ func() morpc.Message,
+		) error {
+			close(handlerStarted)
+			<-ctx.Done()
+			close(handlerExited)
+			return ctx.Err()
+		}
+
+		err := s.handleRequest(
+			context.Background(),
+			morpc.RPCMessage{
+				Message: &pipeline.Message{Sid: pipeline.Status_Last},
+				Cancel:  func() { cancelCount.Add(1) },
+			},
+			0,
+			nil,
+		)
+		require.NoError(t, err)
+		select {
+		case <-handlerStarted:
+		case <-time.After(time.Second):
+			t.Fatal("pipeline handler did not start")
+		}
+
+		closed := make(chan error, 1)
+		go func() {
+			closed <- s.Close()
+		}()
+		select {
+		case err := <-closed:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("CN close did not cancel the admitted pipeline")
+		}
+		select {
+		case <-handlerExited:
+		default:
+			t.Fatal("CN close returned before the canceled pipeline exited")
+		}
+		require.Equal(t, int32(1), cancelCount.Load())
+	})
+}
+
+func TestPipelineAdmissionRejectCancelsRequestOnce(t *testing.T) {
+	s := &service{}
+	require.NoError(t, s.closePipelineAdmission())
+	var cancelCount atomic.Int32
+	err := s.handleRequest(
+		context.Background(),
+		morpc.RPCMessage{
+			Message: &pipeline.Message{Sid: pipeline.Status_Last},
+			Cancel:  func() { cancelCount.Add(1) },
+		},
+		0,
+		nil,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable))
+	require.Equal(t, int32(1), cancelCount.Load())
 }
 
 func Test_tenant(t *testing.T) {
