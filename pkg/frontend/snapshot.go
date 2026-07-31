@@ -1817,9 +1817,6 @@ func getSnapshotByName(ctx context.Context, bh BackgroundExec, snapshotName stri
 	if err != nil {
 		return nil, err
 	}
-	if len(records) == 0 {
-		return nil, moerr.NewSnapshotNotFound(ctx, snapshotName)
-	}
 	if len(records) != 1 {
 		return nil, moerr.NewInternalErrorf(ctx, "find %v snapshot records by name(%v), expect only 1", len(records), snapshotName)
 	}

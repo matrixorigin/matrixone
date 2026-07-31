@@ -463,6 +463,9 @@ func (s *Scope) AlterView(c *Compile) error {
 		}
 	}
 
+	if err := lockAndValidateViewDependencies(c, replaceDef.GetViewSql()); err != nil {
+		return err
+	}
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
@@ -472,6 +475,9 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 	if isViewMetadataRefresh(c.proc.Ctx) {
+		if !viewMetadataRefreshGenerationMatches(c.proc.Ctx, rel, refresh) {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
 		if refresh.dependentViews != nil {
 			*refresh.dependentViews = *refresh.dependentViews + 1
 			if err := checkViewMetadataRefreshLimit(
@@ -528,6 +534,17 @@ func (s *Scope) AlterView(c *Compile) error {
 			),
 		},
 	)
+}
+
+func viewMetadataRefreshGenerationMatches(
+	ctx context.Context,
+	rel engine.Relation,
+	refresh viewMetadataRefreshContext,
+) bool {
+	currentDef := rel.GetTableDef(ctx)
+	return rel.GetTableID(ctx) == refresh.targetViewID &&
+		currentDef.GetVersion() == refresh.targetViewVersion &&
+		currentDef.GetViewSql().GetView() == refresh.targetViewDefinition
 }
 
 func normalizeRefreshedViewDependencies(

@@ -1153,7 +1153,7 @@ func Test_handleGetSnapshotTs(t *testing.T) {
 
 		err := handleGetSnapshotTs(ses, execCtx, ic)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err.Error(), convey.ShouldContainSubstring, "snapshot nonexistent_snapshot does not exist")
+		convey.So(err.Error(), convey.ShouldContainSubstring, "find 0 snapshot records")
 	})
 
 	convey.Convey("handleGetSnapshotTs publication permission denied", t, func() {
@@ -1400,7 +1400,7 @@ func Test_handleGetDatabases(t *testing.T) {
 
 		err := handleGetDatabases(ses, execCtx, ic)
 		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err.Error(), convey.ShouldContainSubstring, "snapshot nonexistent_snapshot does not exist")
+		convey.So(err.Error(), convey.ShouldContainSubstring, "find 0 snapshot records")
 	})
 
 	convey.Convey("handleGetDatabases permission denied", t, func() {

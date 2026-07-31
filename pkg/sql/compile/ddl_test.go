@@ -66,15 +66,22 @@ func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
 
 func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	tableLockCalls := 0
+	dependencyLockCalls := 0
 	lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, dbName string, _ lock.LockMode) error {
 		require.Equal(t, "other_db", dbName)
 		return nil
 	})
 	defer lockMoDb.Reset()
-	lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, dbName, tableName string, _ lock.LockMode) error {
-		tableLockCalls++
-		require.Equal(t, "other_db", dbName)
-		require.Equal(t, "v", tableName)
+	lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, dbName, tableName string, mode lock.LockMode) error {
+		if tableName == "v" {
+			tableLockCalls++
+			require.Equal(t, "other_db", dbName)
+			require.Equal(t, lock.LockMode_Exclusive, mode)
+		} else {
+			dependencyLockCalls++
+			require.Equal(t, "source", tableName)
+			require.Equal(t, lock.LockMode_Shared, mode)
+		}
 		return nil
 	})
 	defer lockMoTbl.Reset()
@@ -102,6 +109,9 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	rel.tableDef = oldDef
 	db.rels["v"] = rel
 	eng.dbs["other_db"] = db
+	source := newStubRelation("source")
+	source.tableDef = &plan2.TableDef{TblId: 1, Version: 1}
+	eng.relationsByID[1] = stubRelationByID{database: "db", table: "source", relation: source}
 
 	proc := testutil.NewProcess(t)
 	dependentViews := 0
@@ -113,6 +123,9 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 			sourceLogicalID:      9,
 			currentSourceTableID: 1,
 			dependentViews:       &dependentViews,
+			targetViewID:         1,
+			targetViewVersion:    oldDef.GetVersion(),
+			targetViewDefinition: oldDef.GetViewSql().GetView(),
 		},
 	)
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
@@ -145,10 +158,14 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 
 	rel.alterReqs = nil
 	rel.tableDef = replaced
+	refresh := proc.Ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext)
+	refresh.targetViewDefinition = replaced.GetViewSql().GetView()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.ViewMetadataRefreshKey{}, refresh)
 	require.NoError(t, s.AlterView(c))
 	require.Equal(t, 2, dependentViews)
 	require.Empty(t, rel.alterReqs, "unchanged refresh must not advance the view schema")
 	require.Equal(t, 2, tableLockCalls)
+	require.Equal(t, 2, dependencyLockCalls)
 
 	refreshedViewSQL := newDef.GetViewSql().GetView()
 	newDef.ViewSql.View = `{"Stmt":"alter view v as select a from unrelated","dependencies":[{"account_id":8,"account_id_set":true,"table_id":2,"logical_id":2,"version":1}]}`
@@ -157,7 +174,14 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	require.Equal(t, 2, tableLockCalls, "false text candidates must not acquire a view lock")
 	newDef.ViewSql.View = refreshedViewSQL
 
-	proc.Ctx = context.Background()
+	rel.tableDef.ViewSql.View = `{"Stmt":"alter view v as select a from concurrently_changed"}`
+	err := s.AlterView(c)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+	require.Empty(t, rel.alterReqs)
+	rel.tableDef.ViewSql.View = refresh.targetViewDefinition
+
+	proc.Ctx = defines.AttachAccountId(context.Background(), 7)
 	require.NoError(t, s.AlterView(c))
 	require.Len(t, rel.alterReqs, 1)
 	require.Equal(

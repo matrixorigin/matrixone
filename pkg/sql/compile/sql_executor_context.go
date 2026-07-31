@@ -51,6 +51,7 @@ type compilerContext struct {
 	sql                  string
 	mu                   sync.Mutex
 	sub                  *plan.SubscriptionMeta
+	views                []string
 
 	lower int64
 }
@@ -60,10 +61,16 @@ func (c *compilerContext) GetLowerCaseTableNames() int64 {
 }
 
 func (c *compilerContext) GetViews() []string {
-	return nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.views...)
 }
 
-func (c *compilerContext) SetViews(views []string) {}
+func (c *compilerContext) SetViews(views []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.views = append(c.views[:0], views...)
+}
 
 func (c *compilerContext) GetSnapshot() *plan.Snapshot {
 	return nil

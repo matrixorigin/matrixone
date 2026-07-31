@@ -194,11 +194,11 @@ drop snapshot sp01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test';
-snapshot sp01 does not exist
+internal error: find 0 snapshot records by name(sp01), expect only 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test';
-snapshot sp01 does not exist
+internal error: find 0 snapshot records by name(sp01), expect only 1
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test';
-snapshot sp01 does not exist
+internal error: find 0 snapshot records by name(sp01), expect only 1
 drop table if exists snapshot02;
 create table test_snapshot_read (a int);
 insert into test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), (9), (10), (11), (12),(13), (14), (15), (16), (17), (18), (19), (20),(21), (22), (23), (24), (25), (26), (27), (28), (29), (30),(31), (32), (33), (34), (35), (36), (37), (38), (39), (40),(41), (42), (43), (44), (45), (46), (47), (48), (49), (50),(51), (52), (53), (54), (55), (56), (57), (58), (59), (60),(61), (62), (63), (64), (65), (66), (67), (68), (69), (70),(71), (72), (73), (74), (75), (76), (77), (78), (79), (80), (81), (82), (83), (84), (85), (86), (87), (88), (89), (90),(91), (92), (93), (94), (95), (96), (97), (98), (99), (100);
@@ -664,11 +664,11 @@ col5
 __mo_rowid
 use sub_database01;
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp06'} where reldatabase = 'sub_database01';
-snapshot sp06 does not exist
+internal error: find 0 snapshot records by name(sp06), expect only 1
 select * from mo_catalog.mo_database{snapshot = 'sp06'} where datname = 'sub_database01';
-snapshot sp06 does not exist
+internal error: find 0 snapshot records by name(sp06), expect only 1
 select attname from mo_catalog.mo_columns{snapshot = 'sp06'} where att_database = 'sub_database01';
-snapshot sp06 does not exist
+internal error: find 0 snapshot records by name(sp06), expect only 1
 drop account test_tenant_1;
 drop publication publication01;
 drop snapshot sp06;

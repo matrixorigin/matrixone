@@ -43,6 +43,7 @@ type rootSQLCompilerContext struct {
 	*MockCompilerContext
 	rootSQL string
 	calls   int
+	views   []string
 }
 
 func TestBuildDropTemporaryTableOnlyTargetsTemporaryTable(t *testing.T) {
@@ -74,6 +75,14 @@ func TestBuildDropTemporaryTableIfExistsDoesNotTargetPermanentTable(t *testing.T
 func (c *rootSQLCompilerContext) GetRootSql() string {
 	c.calls++
 	return c.rootSQL
+}
+
+func (c *rootSQLCompilerContext) GetViews() []string {
+	return c.views
+}
+
+func (c *rootSQLCompilerContext) SetViews(views []string) {
+	c.views = append(c.views[:0], views...)
 }
 
 func tableDefCreateSQL(tableDef *plan.TableDef) string {
@@ -150,6 +159,73 @@ func TestGenViewTableDefCapturesDependencyIdentity(t *testing.T) {
 	require.NotZero(t, dependency.LogicalID)
 	require.False(t, dependency.Snapshot)
 	require.False(t, dependency.Subscription)
+}
+
+func TestGenViewTableDefKeepsDirectNestedViewDependency(t *testing.T) {
+	const rootSQL = "create view v2 as select n_name from v1"
+	mockCtx := NewMockCompilerContext(false)
+	mockCtx.GetAccountIdFunc = func() (uint32, error) {
+		return 7, nil
+	}
+	baseObject := ObjectRef{Obj: 42, SchemaName: "tpch", ObjName: "nation"}
+	baseTable := &TableDef{
+		TblId:     42,
+		LogicalId: 41,
+		Version:   3,
+		Name:      "nation",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*ColDef{{
+			Name: "n_name",
+			Typ:  plan.Type{Id: int32(types.T_varchar), Width: 25},
+		}},
+	}
+	viewData, err := json.Marshal(ViewData{
+		Stmt:            "create view v1 as select n_name from nation",
+		DefaultDatabase: "tpch",
+	})
+	require.NoError(t, err)
+	viewObject := &ObjectRef{Obj: 84, SchemaName: "tpch", ObjName: "v1"}
+	viewTable := &TableDef{
+		TblId:     84,
+		LogicalId: 83,
+		Version:   5,
+		Name:      "v1",
+		TableType: catalog.SystemViewRel,
+		ViewSql:   &ViewDef{View: string(viewData)},
+	}
+	mockCtx.objects["v1"] = viewObject
+	mockCtx.tables["v1"] = viewTable
+	mockCtx.objects["nation"] = &baseObject
+	mockCtx.tables["nation"] = baseTable
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: mockCtx,
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	var persisted ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(p.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()),
+		&persisted,
+	))
+	require.Contains(t, persisted.Dependencies, ViewDependency{
+		AccountID:    7,
+		AccountIDSet: true,
+		TableID:      84,
+		LogicalID:    83,
+		Version:      5,
+	})
+	require.Contains(t, persisted.Dependencies, ViewDependency{
+		AccountID:    7,
+		AccountIDSet: true,
+		TableID:      42,
+		LogicalID:    41,
+		Version:      3,
+	})
 }
 
 func TestIsSharedSystemTable(t *testing.T) {
@@ -494,6 +570,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().ResolveById(gomock.Any(), gomock.Any()).Return(nil, nil, nil).AnyTimes()
 	ctx.EXPECT().GetStatsCache().Return(nil).AnyTimes()
 	ctx.EXPECT().GetSnapshot().Return(nil).AnyTimes()
+	ctx.EXPECT().GetViews().Return(nil).AnyTimes()
 	ctx.EXPECT().SetViews(gomock.Any()).AnyTimes()
 	ctx.EXPECT().SetSnapshot(gomock.Any()).AnyTimes()
 	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()

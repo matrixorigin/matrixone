@@ -109,6 +109,18 @@ func TestCompilerContextUsesRefreshSubscriptionResolver(t *testing.T) {
 	require.Same(t, meta, actual)
 }
 
+func TestCompilerContextRecordsViewDependencies(t *testing.T) {
+	c := &compilerContext{}
+	views := []string{"db#v1", "db#v2"}
+
+	c.SetViews(views)
+	views[0] = "changed"
+	actual := c.GetViews()
+	actual[1] = "also changed"
+
+	require.Equal(t, []string{"db#v1", "db#v2"}, c.GetViews())
+}
+
 func TestCompilerContext_Database(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	database := mock_frontend.NewMockDatabase(ctrl)

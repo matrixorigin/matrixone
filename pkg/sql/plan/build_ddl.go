@@ -224,37 +224,32 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 		if node.GetObjRef() == nil || node.GetTableDef() == nil || node.GetObjRef().GetObj() <= 0 {
 			continue
 		}
-		objRef := node.GetObjRef()
-		tableDef := node.GetTableDef()
-		dependency := ViewDependency{
-			AccountID:    currentAccountID,
-			AccountIDSet: true,
-			TableID:      uint64(objRef.GetObj()),
-			LogicalID:    tableDef.GetLogicalId(),
-			Version:      tableDef.GetVersion(),
-		}
-		if dependency.LogicalID == 0 {
-			dependency.LogicalID = dependency.TableID
-		}
-		if objRef.GetPubInfo() != nil {
-			dependency.AccountID = uint32(objRef.GetPubInfo().GetTenantId())
-			dependency.Subscription = true
-			dependency.SubscriptionDB = objRef.GetSubscriptionName()
-			dependency.PublisherDB = objRef.GetSchemaName()
-		} else if util.TableIsClusterTable(tableDef.GetTableType()) ||
-			isSharedSystemTable(objRef.GetSchemaName(), objRef.GetObjName()) {
-			dependency.AccountID = catalog.System_Account
-		}
 		snapshot := node.GetScanSnapshot()
 		if !IsSnapshotValid(snapshot) {
-			snapshot = objRef.GetSnapshot()
+			snapshot = node.GetObjRef().GetSnapshot()
 		}
-		if IsSnapshotValid(snapshot) {
-			dependency.Snapshot = true
-			if snapshot.GetTenant() != nil {
-				dependency.AccountID = snapshot.GetTenant().GetTenantID()
-			}
+		dependency := makeViewDependency(
+			currentAccountID,
+			node.GetObjRef(),
+			node.GetTableDef(),
+			snapshot,
+		)
+		key := viewDependencyIdentity(dependency)
+		dependencyByIdentity[key] = dependency
+	}
+	for _, viewKey := range ctx.GetViews() {
+		databaseName, viewName, snapshot, err := ParseViewDependencyKey(viewKey)
+		if err != nil {
+			return nil, err
 		}
+		objRef, tableDef, err := ctx.Resolve(databaseName, viewName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if objRef == nil || tableDef == nil || objRef.GetObj() <= 0 {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, viewName)
+		}
+		dependency := makeViewDependency(currentAccountID, objRef, tableDef, snapshot)
 		key := viewDependencyIdentity(dependency)
 		dependencyByIdentity[key] = dependency
 	}
@@ -335,6 +330,40 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	})
 
 	return &tableDef, nil
+}
+
+func makeViewDependency(
+	currentAccountID uint32,
+	objRef *ObjectRef,
+	tableDef *TableDef,
+	snapshot *Snapshot,
+) ViewDependency {
+	dependency := ViewDependency{
+		AccountID:    currentAccountID,
+		AccountIDSet: true,
+		TableID:      uint64(objRef.GetObj()),
+		LogicalID:    tableDef.GetLogicalId(),
+		Version:      tableDef.GetVersion(),
+	}
+	if dependency.LogicalID == 0 {
+		dependency.LogicalID = dependency.TableID
+	}
+	if objRef.GetPubInfo() != nil {
+		dependency.AccountID = uint32(objRef.GetPubInfo().GetTenantId())
+		dependency.Subscription = true
+		dependency.SubscriptionDB = objRef.GetSubscriptionName()
+		dependency.PublisherDB = objRef.GetSchemaName()
+	} else if util.TableIsClusterTable(tableDef.GetTableType()) ||
+		isSharedSystemTable(objRef.GetSchemaName(), objRef.GetObjName()) {
+		dependency.AccountID = catalog.System_Account
+	}
+	if IsSnapshotValid(snapshot) {
+		dependency.Snapshot = true
+		if snapshot.GetTenant() != nil {
+			dependency.AccountID = snapshot.GetTenant().GetTenantID()
+		}
+	}
+	return dependency
 }
 
 func viewDependencyIdentity(dependency ViewDependency) string {

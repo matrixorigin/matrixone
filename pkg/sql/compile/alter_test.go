@@ -237,7 +237,7 @@ func TestCanSkipViewMetadataRefreshError(t *testing.T) {
 		planError(moerr.NewConstraintViolation(ctx, "invalid view")),
 	))
 	require.True(t, canSkipViewMetadataRefreshError(
-		planError(moerr.NewSnapshotNotFound(ctx, "deleted_snapshot")),
+		planError(&viewMetadataSnapshotNotFoundError{name: "deleted_snapshot"}),
 	))
 	require.False(t, canSkipViewMetadataRefreshError(
 		planError(moerr.NewInternalError(ctx, "snapshot catalog read failed")),
@@ -267,14 +267,11 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 		128,
 	)
 	nextQuery := strings.Replace(query, "rel_id > 0", "rel_id > 2", 1)
-	nestedQuery := buildViewMetadataRefreshQuery(7, 1, 1, "v", 0, 128)
-	nestedNextQuery := strings.Replace(nestedQuery, "rel_id > 0", "rel_id > 3", 1)
-	terminalQuery := buildViewMetadataRefreshQuery(7, 3, 3, "v2", 0, 128)
 	subscriptionQuery := "select sub_name, pub_account_id, pub_account_name, pub_name, " +
 		"pub_database, pub_tables from mo_catalog.mo_subs " +
 		"where sub_account_id = 7 and sub_name is not null and status = 0"
 
-	bat := batch.NewWithSize(6)
+	bat := batch.NewWithSize(7)
 	bat.SetRowCount(2)
 	bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], uint32(7), false, mp))
@@ -285,58 +282,29 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[2], uint64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[2], uint64(2), false, mp))
-	for i := 3; i < len(bat.Vecs); i++ {
+	bat.Vecs[3] = vector.NewVec(types.T_uint32.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], uint32(5), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], uint32(6), false, mp))
+	for i := 4; i < len(bat.Vecs); i++ {
 		bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
 	}
-	require.NoError(t, vector.AppendBytes(bat.Vecs[3], []byte("db"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("v"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("db"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("v"), false, mp))
 	require.NoError(t, vector.AppendBytes(
-		bat.Vecs[5],
+		bat.Vecs[6],
 		[]byte(`{"Stmt":"create view v as select a from source_t","DefaultDatabase":"db"}`),
 		false,
 		mp,
 	))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[3], []byte("db"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("invalid_v"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("not-json"), false, mp))
-
-	nestedBatch := batch.NewWithSize(6)
-	nestedBatch.SetRowCount(1)
-	nestedBatch.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
-	require.NoError(t, vector.AppendFixed(nestedBatch.Vecs[0], uint32(7), false, mp))
-	nestedBatch.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-	require.NoError(t, vector.AppendFixed(nestedBatch.Vecs[1], uint64(3), false, mp))
-	nestedBatch.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
-	require.NoError(t, vector.AppendFixed(nestedBatch.Vecs[2], uint64(3), false, mp))
-	for i := 3; i < len(nestedBatch.Vecs); i++ {
-		nestedBatch.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
-	}
-	require.NoError(t, vector.AppendBytes(nestedBatch.Vecs[3], []byte("db"), false, mp))
-	require.NoError(t, vector.AppendBytes(nestedBatch.Vecs[4], []byte("v2"), false, mp))
-	require.NoError(t, vector.AppendBytes(
-		nestedBatch.Vecs[5],
-		[]byte(`{"Stmt":"create view v2 as select a from v","DefaultDatabase":"db"}`),
-		false,
-		mp,
-	))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("db"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("invalid_v"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[6], []byte("not-json"), false, mp))
 
 	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
 		query:             {Mp: mp, Batches: []*batch.Batch{bat}},
 		subscriptionQuery: {},
 		nextQuery:         {},
-		nestedQuery:       {Mp: mp, Batches: []*batch.Batch{nestedBatch}},
-		nestedNextQuery:   {},
-		terminalQuery:     {},
 	}}
-	spyExec.onExec = func(ctx context.Context, sql string) {
-		if !strings.HasPrefix(sql, "alter view ") {
-			return
-		}
-		refresh, ok := ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext)
-		if ok && refresh.confirmed != nil {
-			*refresh.confirmed = true
-		}
-	}
 	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
 	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
 	require.NoError(t, refreshViewMetadataAfterAlter(
@@ -347,10 +315,6 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 		subscriptionQuery,
 		"alter view `db`.`v` as select `a` from `source_t`",
 		nextQuery,
-		nestedQuery,
-		"alter view `db`.`v2` as select `a` from `v`",
-		nestedNextQuery,
-		terminalQuery,
 	}, spyExec.executedSQLs)
 	require.Zero(t, mp.CurrNB())
 

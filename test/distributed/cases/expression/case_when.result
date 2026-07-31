@@ -365,7 +365,7 @@ drop view if exists v_coalesce_meta;
 create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
 desc v_coalesce_meta;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  DECIMAL(38,7)  ¦  NO  ¦    ¦  null  ¦    ¦
+c  ¦  DECIMAL(38,7)  ¦  NO  ¦    ¦  null  ¦    ¦  
 drop view v_coalesce_meta;
 drop view if exists v_flow_metadata_safe;
 create view v_flow_metadata_safe as

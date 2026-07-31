@@ -1907,13 +1907,15 @@ func (s *Scope) doAlterTable(c *Compile) error {
 }
 
 type viewMetadataRefresh struct {
-	accountID uint32
-	id        uint64
-	logicalID uint64
-	database  string
-	name      string
-	viewData  plan2.ViewData
-	skip      bool
+	accountID  uint32
+	id         uint64
+	logicalID  uint64
+	version    uint32
+	database   string
+	name       string
+	definition string
+	viewData   plan2.ViewData
+	skip       bool
 }
 
 type viewMetadataRefreshContext struct {
@@ -1922,6 +1924,9 @@ type viewMetadataRefreshContext struct {
 	currentSourceTableID uint64
 	dependentViews       *int
 	confirmed            *bool
+	targetViewID         uint64
+	targetViewVersion    uint32
+	targetViewDefinition string
 }
 
 type viewMetadataRefreshPlanError struct {
@@ -2077,6 +2082,9 @@ func refreshViewMetadataAfterAlter(
 						currentSourceTableID: source.currentID,
 						dependentViews:       &dependentViews,
 						confirmed:            &confirmed,
+						targetViewID:         view.id,
+						targetViewVersion:    view.version,
+						targetViewDefinition: view.definition,
 					},
 				)
 				c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, view.accountID)
@@ -2205,9 +2213,10 @@ func loadViewMetadataRefreshPage(
 		accountIDs := executor.GetFixedRows[uint32](cols[0])
 		ids := executor.GetFixedRows[uint64](cols[1])
 		logicalIDs := executor.GetFixedRows[uint64](cols[2])
-		databases := executor.GetStringRows(cols[3])
-		names := executor.GetStringRows(cols[4])
-		definitions := executor.GetStringRows(cols[5])
+		versions := executor.GetFixedRows[uint32](cols[3])
+		databases := executor.GetStringRows(cols[4])
+		names := executor.GetStringRows(cols[5])
+		definitions := executor.GetStringRows(cols[6])
 		for i := 0; i < rows; i++ {
 			var viewData plan2.ViewData
 			if err := json.Unmarshal([]byte(definitions[i]), &viewData); err != nil {
@@ -2216,22 +2225,26 @@ func loadViewMetadataRefreshPage(
 					zap.String("view", names[i]),
 					zap.Error(err))
 				views = append(views, viewMetadataRefresh{
-					accountID: accountIDs[i],
-					id:        ids[i],
-					logicalID: logicalIDs[i],
-					database:  databases[i],
-					name:      names[i],
-					skip:      true,
+					accountID:  accountIDs[i],
+					id:         ids[i],
+					logicalID:  logicalIDs[i],
+					version:    versions[i],
+					database:   databases[i],
+					name:       names[i],
+					definition: definitions[i],
+					skip:       true,
 				})
 				continue
 			}
 			views = append(views, viewMetadataRefresh{
-				accountID: accountIDs[i],
-				id:        ids[i],
-				logicalID: logicalIDs[i],
-				database:  databases[i],
-				name:      names[i],
-				viewData:  viewData,
+				accountID:  accountIDs[i],
+				id:         ids[i],
+				logicalID:  logicalIDs[i],
+				version:    versions[i],
+				database:   databases[i],
+				name:       names[i],
+				definition: definitions[i],
+				viewData:   viewData,
 			})
 		}
 		return true
@@ -2249,7 +2262,7 @@ func buildViewMetadataRefreshQuery(
 ) string {
 	legacyCandidate := sqlquote.String(sourceTable)
 	return fmt.Sprintf(
-		"select account_id, rel_id, rel_logical_id, reldatabase, relname, viewdef from %s.mo_tables "+
+		"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
 			"where relkind = '%s' "+
 			"and reldatabase not in ('%s', '%s') and rel_id > %d "+
 			"and ((((account_id = %d) or account_id in "+
@@ -2352,6 +2365,10 @@ func canSkipViewMetadataRefreshError(err error) bool {
 	if !errors.As(err, &planErr) {
 		return false
 	}
+	var snapshotNotFound *viewMetadataSnapshotNotFoundError
+	if errors.As(planErr.err, &snapshotNotFound) {
+		return true
+	}
 	code, ok := moerr.GetMoErrCode(planErr.err)
 	if !ok {
 		return false
@@ -2366,8 +2383,7 @@ func canSkipViewMetadataRefreshError(err error) bool {
 		moerr.ErrBadDB,
 		moerr.ErrNoSuchTable,
 		moerr.ErrNoDB,
-		moerr.ErrBadView,
-		moerr.ErrSnapshotNotFound:
+		moerr.ErrBadView:
 		return true
 	default:
 		return false

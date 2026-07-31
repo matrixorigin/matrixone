@@ -16,12 +16,12 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -94,5 +94,7 @@ func TestViewMetadataRefreshResolverSnapshotNotFoundIsTyped(t *testing.T) {
 	_, err := resolver.ResolveSnapshot(context.Background(), "deleted")
 
 	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrSnapshotNotFound))
+	var notFound *viewMetadataSnapshotNotFoundError
+	require.True(t, errors.As(err, &notFound))
+	require.Equal(t, "deleted", notFound.name)
 }

@@ -263,11 +263,11 @@ show create table aff01;
 Table    Create Table
 aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp04'} where reldatabase = 'test03';
-snapshot sp04 does not exist
+internal error: find 0 snapshot records by name(sp04), expect only 1
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
-snapshot sp04 does not exist
+internal error: find 0 snapshot records by name(sp04), expect only 1
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
-snapshot sp04 does not exist
+internal error: find 0 snapshot records by name(sp04), expect only 1
 drop snapshot if exists sp04;
 create snapshot sp04 for account;
 show snapshots where snapshot_name = 'sp04';

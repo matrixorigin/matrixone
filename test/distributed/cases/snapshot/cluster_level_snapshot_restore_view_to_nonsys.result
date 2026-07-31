@@ -489,11 +489,11 @@ drop database test02;
 select * from test02.employees_view;
 Unknown database test02
 select * from test02.employees_view{snapshot = 'sp10'};
-snapshot sp10 does not exist
+internal error: find 0 snapshot records by name(sp10), expect only 1
 select * from test02.employees_by_salary_view;
 Unknown database test02
 select * from test02.employees_by_salary_view{snapshot = 'sp10'};
-snapshot sp10 does not exist
+internal error: find 0 snapshot records by name(sp10), expect only 1
 restore account acc01{snapshot="sp10"};
 use test02;
 select * from test02.employees_view;

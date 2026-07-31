@@ -38,6 +38,14 @@ type viewMetadataResolver interface {
 	ResolveUdf(context.Context, string, []*plan.Expr) (*function.Udf, error)
 }
 
+type viewMetadataSnapshotNotFoundError struct {
+	name string
+}
+
+func (e *viewMetadataSnapshotNotFoundError) Error() string {
+	return fmt.Sprintf("snapshot %s does not exist", e.name)
+}
+
 type viewMetadataRefreshResolver struct {
 	compile         *Compile
 	accountID       uint32
@@ -90,7 +98,7 @@ func (r viewMetadataRefreshResolver) ResolveSnapshot(
 		return true
 	})
 	if len(snapshots) == 0 {
-		return nil, moerr.NewSnapshotNotFound(ctx, name)
+		return nil, &viewMetadataSnapshotNotFoundError{name: name}
 	}
 	if len(snapshots) != 1 {
 		return nil, moerr.NewInternalErrorf(
