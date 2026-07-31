@@ -83,6 +83,38 @@ func TestDropFunctionIfExists(t *testing.T) {
 	}
 }
 
+func TestQuantifiedTableSubqueryParse(t *testing.T) {
+	tests := []struct {
+		sql  string
+		want string
+	}{
+		{
+			sql:  "select 1 where 1 = any (table tv)",
+			want: "select * from tv",
+		},
+		{
+			sql:  "select 1 where 1 = any (table tv order by v desc limit 1)",
+			want: "select * from tv order by v desc limit 1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt := stmt.(*tree.Select)
+			where := selectStmt.Select.(*tree.SelectClause).Where
+			comparison := where.Expr.(*tree.ComparisonExpr)
+			subquery := comparison.Right.(*tree.Subquery)
+			parenSelect := subquery.Select.(*tree.ParenSelect)
+
+			require.Equal(t, test.want, tree.String(parenSelect.Select, dialect.MYSQL))
+		})
+	}
+}
+
 func TestSQLModeParserModes(t *testing.T) {
 	t.Run("ansi quotes changes double quoted token from string to identifier", func(t *testing.T) {
 		stmt, err := ParseOneWithSQLMode(context.Background(), `select "abc"`, 1, "")
@@ -759,6 +791,31 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.False(t, diffStmt.OutputOpt.Summary)
 	require.True(t, diffStmt.OutputOpt.Count)
 	require.Nil(t, diffStmt.Columns)
+}
+
+func TestDataBranchDiffOutputLimitBoundaries(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "data branch diff t1 against t2 output limit 9223372036854775807", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.NotNil(t, diffStmt.OutputOpt.Limit)
+	require.Equal(t, int64(9223372036854775807), *diffStmt.OutputOpt.Limit)
+
+	for _, value := range []string{
+		"9223372036854775808",
+		"18446744073709551615",
+	} {
+		t.Run(value, func(t *testing.T) {
+			_, parseErr := ParseOne(context.Background(), "data branch diff t1 against t2 output limit "+value, 1)
+			require.ErrorContains(t, parseErr, "OUTPUT LIMIT is out of range")
+		})
+	}
+
+	_, err = ParseOne(context.Background(), "data branch diff t1 against t2 output limit 18446744073709551616", 1)
+	require.ErrorContains(t, err, "syntax error")
 }
 
 func TestDataBranchDiffColumns(t *testing.T) {
