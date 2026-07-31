@@ -1106,7 +1106,7 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	mrs.AddColumn(CodeCol)
 	mrs.AddColumn(MsgCol)
 
-	info := ses.GetErrInfo()
+	info := ses.diagnosticsSnapshot()
 
 	for i := info.length() - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
@@ -1124,6 +1124,26 @@ func handleShowErrors(ses FeSession, execCtx *ExecCtx) error {
 		return err
 	}
 	return err
+}
+
+func isDiagnosticsStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.ShowErrors, *tree.ShowWarnings:
+		return true
+	default:
+		return false
+	}
+}
+
+func isTopLevelClientStatement(ses *Session, execCtx *ExecCtx, input *UserInput) bool {
+	return ses != nil && execCtx != nil && input != nil &&
+		!input.isInternal() && !execCtx.inMigration && !ses.IsDerivedStmt()
+}
+
+func resetDiagnosticsForStatement(ses *Session, execCtx *ExecCtx, input *UserInput, stmt tree.Statement) {
+	if isTopLevelClientStatement(ses, execCtx, input) && !isDiagnosticsStatement(stmt) {
+		ses.resetDiagnostics()
+	}
 }
 
 func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) error {
@@ -4492,6 +4512,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	ParseDuration := time.Since(beginInstant)
 	recordParseError := func(errorInput *UserInput, parseErr error) error {
+		if isTopLevelClientStatement(ses, execCtx, errorInput) {
+			ses.resetDiagnostics()
+		}
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
 		var recordErr error
 		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
@@ -4519,6 +4542,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	singleStatement := len(cws) == 1 && !stagedSQLMode
 	if ses.GetCmd() == COM_STMT_PREPARE && !singleStatement {
+		if len(cws) > 0 {
+			resetDiagnosticsForStatement(ses, execCtx, input, cws[0].GetAst())
+		}
 		return moerr.NewNotSupported(execCtx.reqCtx, "prepare multi statements")
 	}
 
@@ -4557,6 +4583,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	for i := 0; i < len(cws); i++ {
 		cw := cws[i]
+		stmt := cw.GetAst()
 		currentInput := input
 		currentSQLRecord := ""
 		sqlType := input.getSqlSourceType(i)
@@ -4572,10 +4599,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// Install the policy that belongs to this wrapper before authorization and
 		// planning. In particular, DefaultDatabase uses it for unqualified names.
 		installStatementRemap(execCtx, cw)
-		if cw.GetAst().GetQueryType() == tree.QueryTypeDDL || cw.GetAst().GetQueryType() == tree.QueryTypeDCL ||
-			cw.GetAst().GetQueryType() == tree.QueryTypeOth ||
-			cw.GetAst().GetQueryType() == tree.QueryTypeTCL {
-			if _, ok := cw.GetAst().(*tree.SetVar); !ok {
+		if stmt.GetQueryType() == tree.QueryTypeDDL || stmt.GetQueryType() == tree.QueryTypeDCL ||
+			stmt.GetQueryType() == tree.QueryTypeOth ||
+			stmt.GetQueryType() == tree.QueryTypeTCL {
+			if _, ok := stmt.(*tree.SetVar); !ok {
 				ses.cleanCache()
 			}
 			canCache = false
@@ -4588,7 +4615,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// clear the previous statement's run result so a statement that does not
 		// set it (e.g. a status statement) does not inherit a stale AffectRows.
 		execCtx.runResult = nil
-		stmt := cw.GetAst()
+		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)
 		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error
 		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
@@ -4802,6 +4829,9 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 		return true
 	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
+		if q.Query.GetHasForeignKeyAction() {
+			return false
+		}
 		for _, node := range q.Query.Nodes {
 			if node.NotCacheable {
 				return false
@@ -4856,12 +4886,14 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			ses.addSqlCount(1)
 			err = handleSidecarOffload(ses, execCtx, query, useGPU)
 			if err == nil {
+				ses.resetDiagnostics()
 				setRowCount(ses, ses.GetProc(), -1)
 				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
 				return resp, nil
 			}
 			if err != errSidecarNotConfigured {
+				ses.resetDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
 				return resp, nil
@@ -4875,6 +4907,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
 		if rewriteErr != nil {
+			ses.resetDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 			return resp, nil
@@ -4926,6 +4959,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			var rewriteErr error
 			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
 			if rewriteErr != nil {
+				ses.resetDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
@@ -4954,6 +4988,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var prepareStmt *PrepareStmt
 		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
+			ses.resetDiagnostics()
 			if prepareStmt != nil {
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 			}

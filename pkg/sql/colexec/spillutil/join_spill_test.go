@@ -30,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -39,6 +41,100 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type boundaryCancelReader struct {
+	reader   *bytes.Reader
+	boundary int64
+	read     int64
+	cancel   func()
+	canceled bool
+}
+
+func (r *boundaryCancelReader) Read(p []byte) (int, error) {
+	if !r.canceled && r.read >= r.boundary {
+		r.canceled = true
+		r.cancel()
+	}
+	if !r.canceled {
+		remaining := r.boundary - r.read
+		if int64(len(p)) > remaining {
+			p = p[:remaining]
+		}
+	}
+	n, err := r.reader.Read(p)
+	r.read += int64(n)
+	return n, err
+}
+
+func TestTakeSpillBuildPayloadRejectsWrongBudgetRef(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	_, _, err := TakeSpillBuildPayload(proc, nil)
+	require.ErrorContains(t, err, message.ErrSpillBuildPayloadEmpty.Error())
+
+	fd, err := os.CreateTemp(t.TempDir(), "wrong-budget-ref")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = fd.Close() })
+	releases := 0
+	file := message.NewSpillFile(fd, 1, 1, func() { releases++ })
+	jm := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
+	jm.IncRef(1)
+	jmFreed := false
+	t.Cleanup(func() {
+		if !jmFreed {
+			jm.Free()
+		}
+	})
+	require.NoError(t, jm.SetSpillBuildPayload(message.SpillBuildPayload{
+		Files:     []*message.SpillFile{file},
+		BudgetRef: struct{}{},
+	}))
+
+	_, _, err = TakeSpillBuildPayload(proc, jm)
+	require.ErrorContains(t, err, "missing its producer budget generation")
+	require.Equal(t, 1, releases)
+	_, err = fd.Stat()
+	require.Error(t, err)
+
+	jm.Free()
+	jmFreed = true
+	require.Equal(t, 1, releases)
+}
+
+func TestTakeSpillBuildPayloadLegacyResolvesConsumerBudget(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	fd, err := os.CreateTemp(t.TempDir(), "legacy-build-payload")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = fd.Close() })
+	jm := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
+	jm.IncRef(1)
+	jmFreed := false
+	t.Cleanup(func() {
+		if !jmFreed {
+			jm.Free()
+		}
+	})
+	require.NoError(t, jm.SetSpillBuildPayload(message.SpillBuildPayload{
+		LegacyFds: []*os.File{fd},
+	}))
+
+	wantBudget, err := proc.GetHashBuildBudget()
+	require.NoError(t, err)
+	payload, budget, err := TakeSpillBuildPayload(proc, jm)
+	require.NoError(t, err)
+	require.Same(t, fd, payload.LegacyFds[0])
+	require.Same(t, wantBudget, budget)
+	t.Cleanup(func() { _ = payload.Close() })
+	require.NoError(t, payload.Close())
+	_, err = fd.Stat()
+	require.Error(t, err)
+
+	jm.Free()
+	jmFreed = true
+}
 
 func TestComputeXXHash(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -550,6 +646,73 @@ func TestMakeBucketWriters(t *testing.T) {
 	}
 }
 
+type countingMutableFileService struct {
+	fileservice.MutableFileService
+	ensureCalls int
+	closeCalls  int
+}
+
+func (s *countingMutableFileService) EnsureDir(ctx context.Context, path string) error {
+	s.ensureCalls++
+	return s.MutableFileService.EnsureDir(ctx, path)
+}
+
+func (s *countingMutableFileService) Close(ctx context.Context) {
+	s.closeCalls++
+	s.MutableFileService.Close(ctx)
+}
+
+func TestSpillEngineSharesFileServiceAcrossWriters(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	local, err := fileservice.Get[fileservice.MutableFileService](
+		proc.GetFileService(),
+		defines.LocalFileServiceName,
+	)
+	require.NoError(t, err)
+	countingLocal := &countingMutableFileService{MutableFileService: local}
+	services, err := fileservice.NewFileServices("", countingLocal)
+	require.NoError(t, err)
+	proc.SetFileService(services)
+
+	engine := NewSpillEngine(SpillEngineConfig{})
+	first := engine.makeBucketWriters("cached_first")
+	second := engine.makeBucketWriters("cached_second")
+	require.Same(t, first[0].spillFS, second[0].spillFS)
+	require.Same(t, &engine.spillFS, first[0].spillFS)
+	require.Zero(t, countingLocal.ensureCalls, "resolution remains lazy")
+
+	require.NoError(t, writeBucketPayload(proc, []byte("first"), 1, &first[0], nil))
+	require.Equal(t, 1, countingLocal.ensureCalls)
+	cached := engine.spillFS.fs
+	require.NotNil(t, cached)
+
+	require.NoError(t, writeBucketPayload(proc, []byte("second"), 1, &second[1], nil))
+	require.Equal(t, 1, countingLocal.ensureCalls, "all engine writers reuse one resolved service")
+	require.Equal(t, cached, engine.spillFS.fs)
+
+	first[0].Close()
+	second[1].Close()
+
+	// The service is borrowed. Cleanup releases engine-owned files and memory,
+	// but must neither close nor invalidate the process-owned service.
+	borrowed := &countingMutableFileService{MutableFileService: cached}
+	engine.spillFS.fs = borrowed
+	engine.Cleanup(proc)
+	require.Zero(t, borrowed.closeCalls)
+	file, err := borrowed.CreateAndRemoveFile(proc.Ctx, "after_engine_cleanup")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	// A writer constructed outside SpillEngine has no shared cache and keeps
+	// the historical process lookup fallback.
+	direct := BucketWriter{Name: "direct_writer_fallback"}
+	require.NoError(t, writeBucketPayload(proc, []byte("direct"), 1, &direct, nil))
+	require.Equal(t, 2, countingLocal.ensureCalls)
+	direct.Close()
+}
+
 func TestScatterProbeTableRejectsRecursiveMarker(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -558,6 +721,7 @@ func TestScatterProbeTableRejectsRecursiveMarker(t *testing.T) {
 	marker.SetRowCount(1)
 	marker.SetLast()
 	engine := NewSpillEngine(SpillEngineConfig{})
+	engine.InitFromSpilledMap([]*os.File{nil})
 	called := false
 	err := engine.ScatterProbeTable(
 		proc,
@@ -585,6 +749,7 @@ func TestScatterProbeTableErrors(t *testing.T) {
 	wantErr := errors.New("scatter probe failure")
 
 	engine := NewSpillEngine(SpillEngineConfig{})
+	engine.InitFromSpilledMap([]*os.File{nil})
 	err := engine.ScatterProbeTable(proc,
 		func() (*batch.Batch, error) { return nil, wantErr }, nil,
 		func(*batch.Batch) ([]*vector.Vector, error) { return nil, nil })
@@ -593,6 +758,7 @@ func TestScatterProbeTableErrors(t *testing.T) {
 
 	bat := makeInt32Batch(proc, []int32{1})
 	engine = NewSpillEngine(SpillEngineConfig{})
+	engine.InitFromSpilledMap([]*os.File{nil})
 	err = engine.ScatterProbeTable(proc,
 		func() (*batch.Batch, error) { return bat, nil }, nil,
 		func(*batch.Batch) ([]*vector.Vector, error) { return nil, wantErr })
@@ -611,6 +777,49 @@ func TestReusableBufferPool(t *testing.T) {
 		require.Nil(t, bufs[i])
 	}
 	pool.Release(proc)
+}
+
+func TestBucketReaderCancellationStopsBeforeMergingNextRecord(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	ctx, cancel := context.WithCancelCause(proc.Ctx)
+	process.ReplacePipelineCtx(proc, ctx, cancel)
+
+	first := makeInt32Batch(proc, []int32{1, 2})
+	second := makeInt32Batch(proc, []int32{3, 4})
+	var encoded bytes.Buffer
+	require.NoError(t, marshalSpillRecord(first, &encoded))
+	firstRecord := bytes.Clone(encoded.Bytes())
+	require.NoError(t, marshalSpillRecord(second, &encoded))
+	stream := append(firstRecord, encoded.Bytes()...)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+
+	source := &boundaryCancelReader{
+		reader:   bytes.NewReader(stream),
+		boundary: int64(len(firstRecord)),
+		cancel:   func() { proc.Cancel(context.Canceled) },
+	}
+	fd, err := os.CreateTemp(t.TempDir(), "bucket-reader-cancel")
+	require.NoError(t, err)
+	reader := BucketReader{
+		fd:           fd,
+		reader:       bufio.NewReaderSize(source, 16),
+		mergeRecords: true,
+	}
+	reuseBat := batch.NewOffHeapWithSize(0)
+
+	got, err := reader.ReadBatch(proc, reuseBat)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, got)
+	require.True(t, source.canceled)
+	require.Equal(t, int64(len(firstRecord)+16), source.read,
+		"reader may inspect the next header but must not decode its payload after cancellation")
+	require.Zero(t, reuseBat.RowCount())
+
+	reader.Close()
+	reuseBat.Clean(proc.Mp())
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestBucketReaderEmptyFile(t *testing.T) {
@@ -1528,6 +1737,122 @@ func TestBucketReaderMergesAdjacentAccountedRecords(t *testing.T) {
 	require.Zero(t, generation.SpillFDUsed())
 }
 
+func TestBucketReaderMergeRejectsTruncatedTrailingHeader(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := process.NewHashBuildBudget(16<<20, 16<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	bat := makeInt32Batch(proc, []int32{1, 2, 3})
+	var payload bytes.Buffer
+	require.NoError(t, marshalSpillRecord(bat, &payload))
+	bat.Clean(proc.Mp())
+
+	fd, err := os.CreateTemp(t.TempDir(), "truncated-spill")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = fd.Close() })
+	_, err = fd.Write(payload.Bytes())
+	require.NoError(t, err)
+	// A clean file boundary has zero bytes left. Any non-empty fragment of the
+	// next 16-byte frame header is corruption and must not be accepted as EOF.
+	_, err = fd.Write(types.EncodeInt64(new(int64)))
+	require.NoError(t, err)
+	_, err = fd.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	reader := BucketReader{mergeRecords: true}
+	require.NoError(t, reader.EnsureBuffer(generation))
+	reader.ResetForFd(fd)
+	reuse := batch.NewOffHeapWithSize(0)
+	got, err := reader.ReadBatch(proc, reuse)
+	require.Nil(t, got)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Zero(t, reuse.RowCount())
+	require.Nil(t, reader.batchToken)
+	require.Zero(t, reader.batchCharge)
+
+	reuse.Clean(proc.Mp())
+	reader.Close()
+	require.Zero(t, generation.Used())
+}
+
+func TestBucketReaderMergeRecordsRespectsBatchBoundary(t *testing.T) {
+	tests := []struct {
+		name       string
+		recordRows []int
+		wantRows   []int
+	}{
+		{
+			name:       "two medium records stay separate",
+			recordRows: []int{5000, 5000},
+			wantRows:   []int{5000, 5000},
+		},
+		{
+			name:       "records exactly fill the boundary",
+			recordRows: []int{8191, 1},
+			wantRows:   []int{8192},
+		},
+		{
+			name:       "record crossing the boundary stays separate",
+			recordRows: []int{8191, 2},
+			wantRows:   []int{8191, 2},
+		},
+		{
+			name:       "one oversized source record remains indivisible",
+			recordRows: []int{9000},
+			wantRows:   []int{9000},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			budget, err := process.NewHashBuildBudget(16<<20, 16<<20)
+			require.NoError(t, err)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+
+			var buf bytes.Buffer
+			writer := BucketWriter{Name: "merge_boundary", Budget: generation}
+			for record, rows := range tt.recordRows {
+				values := make([]int32, rows)
+				for row := range values {
+					values[row] = int32(record*10000 + row)
+				}
+				bat := makeInt32Batch(proc, values)
+				require.NoError(t, FlushBucketBatch(proc, bat, &writer, &buf, nil))
+				bat.Clean(proc.Mp())
+			}
+			file, err := writer.handOffSpillFile()
+			require.NoError(t, err)
+
+			reader := BucketReader{mergeRecords: true}
+			require.NoError(t, reader.EnsureBuffer(generation))
+			reader.ResetForSpillFile(file)
+			reuse := batch.NewOffHeapWithSize(0)
+			var gotRows []int
+			for {
+				got, err := reader.ReadBatch(proc, reuse)
+				if err == io.EOF {
+					break
+				}
+				require.NoError(t, err)
+				gotRows = append(gotRows, got.RowCount())
+			}
+			require.Equal(t, tt.wantRows, gotRows)
+
+			reuse.Clean(proc.Mp())
+			reader.Close()
+			require.Zero(t, generation.Used())
+			require.Zero(t, generation.SpillDiskUsed())
+			require.Zero(t, generation.SpillFDUsed())
+		})
+	}
+}
+
 func TestBucketReaderMergeErrorReleasesAllOwnership(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -1814,26 +2139,25 @@ func TestScatterProbeAdmitsExpressionBeforeEvaluation(t *testing.T) {
 		[]*plan.Expr{col, plan2.MakePlan2Int32ConstExprWithType(2)},
 	)
 	require.NoError(t, err)
+	execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, []*plan.Expr{modulo})
+	require.NoError(t, err)
 	budget, err := process.NewHashBuildBudget(8<<20, 8<<20)
 	require.NoError(t, err)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
+	probeLease, err := hashbuild.NewExpressionMemoryLease(
+		generation, []*plan.Expr{modulo}, execs, false)
+	require.NoError(t, err)
 	engine := NewSpillEngine(SpillEngineConfig{
-		ProbeKeyExprs: []*plan.Expr{modulo},
-		Budget:        generation,
+		ProbeKeyExprs:        []*plan.Expr{modulo},
+		Budget:               generation,
+		ProbeExpressionLease: probeLease,
 	})
 	engine.InitFromSpilledMap(make([]*os.File, SpillNumBuckets))
-	execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, []*plan.Expr{modulo})
-	require.NoError(t, err)
-	defer func() {
-		for _, exec := range execs {
-			exec.Free()
-		}
-	}()
 	input := makeInt32Batch(proc, []int32{1, 2, 3, 4})
 	defer input.Clean(proc.Mp())
 	childrenCalls := 0
-	evalCalled := false
+	fallbackCalled := false
 	err = engine.ScatterProbeTable(
 		proc,
 		func() (*batch.Batch, error) {
@@ -1844,18 +2168,22 @@ func TestScatterProbeAdmitsExpressionBeforeEvaluation(t *testing.T) {
 			return nil, nil
 		},
 		process.NewAnalyzer(0, false, false, "test"),
-		func(bat *batch.Batch) ([]*vector.Vector, error) {
-			evalCalled = true
-			vec, evalErr := execs[0].Eval(proc, []*batch.Batch{bat}, nil)
-			return []*vector.Vector{vec}, evalErr
+		func(*batch.Batch) ([]*vector.Vector, error) {
+			fallbackCalled = true
+			return nil, errors.New("budgeted probe must evaluate its leased executors")
 		},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 2, childrenCalls)
-	require.True(t, evalCalled)
-	require.NotNil(t, engine.probeExprReservation)
+	require.False(t, fallbackCalled)
+	require.Positive(t, probeLease.Reserved())
 	require.Positive(t, generation.Used())
 	engine.Cleanup(proc)
+	require.Positive(t, generation.Used(), "SpillEngine only borrows the probe lease")
+	for _, exec := range execs {
+		exec.Free()
+	}
+	probeLease.Release()
 	require.Zero(t, generation.Used())
 }
 
@@ -1872,13 +2200,24 @@ func TestScatterProbeExpressionAdmissionRejectsBeforeEval(t *testing.T) {
 		[]*plan.Expr{col, plan2.MakePlan2Int32ConstExprWithType(2)},
 	)
 	require.NoError(t, err)
-	budget, err := process.NewHashBuildBudget(1, 1)
+	execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, []*plan.Expr{modulo})
+	require.NoError(t, err)
+	retained, ok := colexec.ExpressionExecutorsRetainedBytes(execs)
+	require.True(t, ok)
+	peak, err := hashbuild.ExpressionVectorPeak(proc, modulo, 4, false)
+	require.NoError(t, err)
+	budgetCap := retained + peak - 1
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
 	require.NoError(t, err)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
+	probeLease, err := hashbuild.NewExpressionMemoryLease(
+		generation, []*plan.Expr{modulo}, execs, false)
+	require.NoError(t, err)
 	engine := NewSpillEngine(SpillEngineConfig{
-		ProbeKeyExprs: []*plan.Expr{modulo},
-		Budget:        generation,
+		ProbeKeyExprs:        []*plan.Expr{modulo},
+		Budget:               generation,
+		ProbeExpressionLease: probeLease,
 	})
 	engine.InitFromSpilledMap(make([]*os.File, SpillNumBuckets))
 	input := makeInt32Batch(proc, []int32{1, 2, 3, 4})
@@ -1904,6 +2243,10 @@ func TestScatterProbeExpressionAdmissionRejectsBeforeEval(t *testing.T) {
 	require.Equal(t, 1, childrenCalls)
 	require.False(t, evalCalled)
 	engine.Cleanup(proc)
+	for _, exec := range execs {
+		exec.Free()
+	}
+	probeLease.Release()
 	require.Zero(t, generation.Used())
 }
 
@@ -1969,7 +2312,8 @@ func TestRebuildHashmapBasic(t *testing.T) {
 	fd := writeBuildFile(proc, "test_rebuild", bat)
 
 	engine := NewSpillEngine(SpillEngineConfig{
-		BuildKeyExprs: makeTestKeyExpr(),
+		BuildKeyExprs:           makeTestKeyExpr(),
+		NeedsBuildForEmptyProbe: true,
 	})
 	engine.InitFromSpilledMap([]*os.File{fd})
 
@@ -1987,6 +2331,51 @@ func TestRebuildHashmapBasic(t *testing.T) {
 
 	jm.Free()
 	engine.Cleanup(proc)
+}
+
+func TestRebuildHashmapCancellationKeepsFileOwnedUntilCleanup(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	ctx, cancel := context.WithCancelCause(proc.Ctx)
+	process.ReplacePipelineCtx(proc, ctx, cancel)
+	budget, err := process.NewHashBuildBudget(16<<20, 16<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	build := makeInt32Batch(proc, []int32{1, 2, 3, 4})
+	var serialized bytes.Buffer
+	writer := BucketWriter{Name: "rebuild_cancel", Budget: generation}
+	defer writer.Close()
+	require.NoError(t, FlushBucketBatch(proc, build, &writer, &serialized, nil))
+	build.Clean(proc.Mp())
+	file, err := writer.handOffSpillFile()
+	require.NoError(t, err)
+	require.Positive(t, generation.SpillDiskUsed())
+	require.Positive(t, generation.SpillFDUsed())
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:           makeTestKeyExpr(),
+		NeedsBuildForEmptyProbe: true,
+		Budget:                  generation,
+	})
+	engine.InitFromSpilledFiles([]*message.SpillFile{file})
+	defer engine.Cleanup(proc)
+
+	proc.Cancel(context.Canceled)
+	jm, res, err := engine.RebuildHashmap(proc, process.NewAnalyzer(0, false, false, "test"))
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, jm)
+	require.Equal(t, BucketSkip, res)
+	require.True(t, engine.HasMoreBuckets(), "cancellation must leave the queued file with the engine cleanup owner")
+	require.Positive(t, generation.SpillDiskUsed())
+	require.Positive(t, generation.SpillFDUsed())
+
+	engine.Cleanup(proc)
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestRebuildHashmapRespectsNeedFlags(t *testing.T) {
@@ -2009,9 +2398,10 @@ func TestRebuildHashmapRespectsNeedFlags(t *testing.T) {
 			bat.Clean(proc.Mp())
 
 			engine := NewSpillEngine(SpillEngineConfig{
-				BuildKeyExprs:    makeTestKeyExpr(),
-				NeedAllocateSels: tt.needAllocateSels,
-				NeedBatches:      tt.needBatches,
+				BuildKeyExprs:           makeTestKeyExpr(),
+				NeedsBuildForEmptyProbe: true,
+				NeedAllocateSels:        tt.needAllocateSels,
+				NeedBatches:             tt.needBatches,
 			})
 			engine.InitFromSpilledMap([]*os.File{fd})
 
@@ -2151,6 +2541,11 @@ func TestRebuildHashmapEmptyFile(t *testing.T) {
 		t.Run(fmt.Sprintf("keep_probe_%t", keepProbe), func(t *testing.T) {
 			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
+			baseline := proc.Mp().CurrNB()
+			budget, err := process.NewHashBuildBudget(16<<20, 16<<20)
+			require.NoError(t, err)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
 
 			spillfs, err := proc.GetSpillFileService()
 			require.NoError(t, err)
@@ -2161,8 +2556,15 @@ func TestRebuildHashmapEmptyFile(t *testing.T) {
 			probeBat.Clean(proc.Mp())
 
 			engine := NewSpillEngine(SpillEngineConfig{
-				BuildKeyExprs:           makeTestKeyExpr(),
+				// A literal executor owns an mpool vector as soon as Prepare
+				// succeeds. This makes the empty-build branch's builder.Free
+				// observable instead of relying on a zero-allocation column
+				// executor.
+				BuildKeyExprs: []*plan.Expr{
+					plan2.MakePlan2Int32ConstExprWithType(1),
+				},
 				NeedsProbeForEmptyBuild: keepProbe,
+				Budget:                  generation,
 			})
 			engine.InitFromSpilledMap([]*os.File{buildFd})
 			engine.buckets[0].ProbeFd = message.NewSpillFile(probeFd, 0, 0, nil)
@@ -2177,6 +2579,10 @@ func TestRebuildHashmapEmptyFile(t *testing.T) {
 				require.Equal(t, BucketSkip, res)
 			}
 			engine.Cleanup(proc)
+			require.Equal(t, baseline, proc.Mp().CurrNB())
+			require.Zero(t, generation.Used())
+			require.Zero(t, generation.SpillDiskUsed())
+			require.Zero(t, generation.SpillFDUsed())
 		})
 	}
 }
@@ -2187,6 +2593,7 @@ func TestScatterProbeTable(t *testing.T) {
 
 	bat := makeInt32Batch(proc, []int32{10, 20, 30})
 	fd := writeBuildFile(proc, "test_sp_build", bat)
+	bat.Clean(proc.Mp())
 
 	engine := NewSpillEngine(SpillEngineConfig{
 		BuildKeyExprs: makeTestKeyExpr(),
@@ -2199,6 +2606,7 @@ func TestScatterProbeTable(t *testing.T) {
 		vals[i] = int32(i)
 	}
 	batches := []*batch.Batch{makeInt32Batch(proc, vals)}
+	defer batches[0].Clean(proc.Mp())
 	idx := 0
 	children := func() (*batch.Batch, error) {
 		if idx >= len(batches) {
@@ -2213,18 +2621,235 @@ func TestScatterProbeTable(t *testing.T) {
 	err := engine.ScatterProbeTable(proc, children, analyzer, makeTestEvalKeysFn())
 	require.NoError(t, err)
 	require.NotNil(t, engine.probeKeyEval)
-
-	// At least one bucket should have probe data.
-	hasProbe := false
-	for _, b := range engine.buckets {
-		if b.ProbeFd != nil {
-			hasProbe = true
-			break
-		}
-	}
-	require.True(t, hasProbe, "at least one bucket should have probe data")
+	require.Len(t, engine.buckets, 1)
+	require.NotNil(t, engine.buckets[0].ProbeFd)
+	require.Equal(t, int64(len(vals)), engine.buckets[0].ProbeRows,
+		"probe partitioning must conserve every row at the build payload's fanout")
 
 	engine.Cleanup(proc)
+}
+
+func TestScatterProbeTableRejectsInvalidBuildFanoutBeforeInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	for _, bucketCount := range []int{0, 3, SpillNumBuckets + 1} {
+		t.Run(fmt.Sprintf("buckets_%d", bucketCount), func(t *testing.T) {
+			engine := NewSpillEngine(SpillEngineConfig{})
+			engine.InitFromSpilledMap(make([]*os.File, bucketCount))
+			inputCalled := false
+			err := engine.ScatterProbeTable(
+				proc,
+				func() (*batch.Batch, error) {
+					inputCalled = true
+					return nil, nil
+				},
+				process.NewAnalyzer(0, false, false, "test"),
+				makeTestEvalKeysFn(),
+			)
+			require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+			require.False(t, inputCalled, "invalid fanout must fail before consuming probe input")
+			engine.Cleanup(proc)
+		})
+	}
+}
+
+func TestScatterProbeCancellationReleasesPhysicalAndMemoryBudget(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	ctx, cancel := context.WithCancelCause(proc.Ctx)
+	process.ReplacePipelineCtx(proc, ctx, cancel)
+	budget, err := process.NewHashBuildBudget(64<<20, 64<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	// Identical keys force one large selected payload through a real spill
+	// writer before the second upstream call cancels the pipeline.
+	const rows = 8192
+	keys := make([]int32, rows)
+	payload := make([]string, rows)
+	for i := range keys {
+		keys[i] = 7
+		payload[i] = strings.Repeat("x", 128)
+	}
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeVarcharVector(payload, nil, proc.Mp())
+	input.SetRowCount(rows)
+	defer func() {
+		if input != nil {
+			input.Clean(proc.Mp())
+		}
+	}()
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		ProbeKeyExprs:           makeTestKeyExpr(),
+		NeedsProbeForEmptyBuild: true,
+		Budget:                  generation,
+	})
+	engine.InitFromSpilledMap(make([]*os.File, SpillNumBuckets))
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	childrenCalls := 0
+	var peakDisk, peakFD uint64
+	err = engine.ScatterProbeTable(
+		proc,
+		func() (*batch.Batch, error) {
+			childrenCalls++
+			if childrenCalls == 1 {
+				return input, nil
+			}
+			peakDisk = generation.SpillDiskUsed()
+			peakFD = generation.SpillFDUsed()
+			proc.Cancel(context.Canceled)
+			return input, nil
+		},
+		analyzer,
+		makeTestEvalKeysFn(),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 2, childrenCalls)
+	require.Positive(t, peakDisk, "first batch must reach a physical spill file")
+	require.Positive(t, peakFD, "first batch must own an admitted spill descriptor")
+
+	engine.Cleanup(proc)
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+	input.Clean(proc.Mp())
+	input = nil
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestSpillEntryPointsRejectPreCanceledProcessWithoutOwnershipTransfer(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	t.Cleanup(proc.Free)
+	ctx, cancel := context.WithCancelCause(proc.Ctx)
+	process.ReplacePipelineCtx(proc, ctx, cancel)
+	proc.Cancel(context.Canceled)
+
+	reuseBat := batch.NewOffHeapWithSize(0)
+	reuseCleaned := false
+	cleanReuse := func() {
+		if !reuseCleaned {
+			reuseBat.Clean(proc.Mp())
+			reuseCleaned = true
+		}
+	}
+	t.Cleanup(cleanReuse)
+	reader := BucketReader{}
+	got, err := reader.ReadBatch(proc, reuseBat)
+	require.Nil(t, got)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, reuseBat.RowCount())
+
+	writer := BucketWriter{Name: "must_not_be_created"}
+	t.Cleanup(writer.Close)
+	err = writeBucketPayload(
+		proc,
+		[]byte{1},
+		1,
+		&writer,
+		process.NewAnalyzer(0, false, false, "test"),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, writer.Created())
+	require.Nil(t, writer.diskReservation)
+	require.Nil(t, writer.fdReservation)
+
+	input := makeInt32Batch(proc, []int32{1})
+	inputCleaned := false
+	cleanInput := func() {
+		if !inputCleaned {
+			input.Clean(proc.Mp())
+			inputCleaned = true
+		}
+	}
+	t.Cleanup(cleanInput)
+	engine := NewSpillEngine(SpillEngineConfig{})
+	engineCleaned := false
+	cleanEngine := func() {
+		if !engineCleaned {
+			engine.Cleanup(proc)
+			engineCleaned = true
+		}
+	}
+	t.Cleanup(cleanEngine)
+	scatterWriters := []BucketWriter{{Name: "must_not_be_created"}}
+	t.Cleanup(scatterWriters[0].Close)
+	err = engine.scatterBatch(
+		proc,
+		input,
+		[]*vector.Vector{input.Vecs[0]},
+		scatterWriters,
+		nil,
+		0,
+		false,
+		process.NewAnalyzer(0, false, false, "test"),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, scatterWriters[0].Created())
+	require.Nil(t, scatterWriters[0].diskReservation)
+	require.Nil(t, scatterWriters[0].fdReservation)
+
+	engine.InitFromSpilledMap([]*os.File{nil})
+	childrenCalled := false
+	err = engine.ScatterProbeTable(
+		proc,
+		func() (*batch.Batch, error) {
+			childrenCalled = true
+			return input, nil
+		},
+		process.NewAnalyzer(0, false, false, "test"),
+		makeTestEvalKeysFn(),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, childrenCalled)
+
+	probeFd, err := os.CreateTemp(t.TempDir(), "pre-canceled-probe")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = probeFd.Close() })
+	probeReleases := 0
+	probeFile := message.NewSpillFile(probeFd, 1, 1, func() { probeReleases++ })
+	engine.probeReader.ResetForSpillFile(probeFile)
+	got, err = engine.NextProbeBatch(proc)
+	require.Nil(t, got)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, probeReleases)
+	_, err = probeFd.Stat()
+	require.NoError(t, err)
+
+	reSpillFd, err := os.CreateTemp(t.TempDir(), "pre-canceled-respill")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reSpillFd.Close() })
+	reSpillReleases := 0
+	reSpillFile := message.NewSpillFile(reSpillFd, 1, 1, func() { reSpillReleases++ })
+	t.Cleanup(func() { _ = reSpillFile.Close() })
+	subBuckets, err := engine.reSpillBucket(
+		proc,
+		process.NewAnalyzer(0, false, false, "test"),
+		SpillBucket{BuildFd: reSpillFile},
+		nil,
+		nil,
+		nil,
+	)
+	require.Nil(t, subBuckets)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, reSpillReleases)
+	_, err = reSpillFd.Stat()
+	require.NoError(t, err)
+	require.NoError(t, reSpillFile.Close())
+	require.Equal(t, 1, reSpillReleases)
+	_, err = reSpillFd.Stat()
+	require.Error(t, err)
+
+	cleanEngine()
+	require.Equal(t, 1, probeReleases)
+	_, err = probeFd.Stat()
+	require.Error(t, err)
+	cleanInput()
+	cleanReuse()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestScatterProbeTableSkipEmptyBuild(t *testing.T) {
@@ -2350,13 +2975,42 @@ func TestCorruptSpillBatchErrors(t *testing.T) {
 	require.Error(t, err)
 	engine.Cleanup(proc)
 
-	engine = NewSpillEngine(SpillEngineConfig{BuildKeyExprs: makeTestKeyExpr()})
+	engine = NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:           makeTestKeyExpr(),
+		NeedsBuildForEmptyProbe: true,
+	})
 	engine.InitFromSpilledMap([]*os.File{makeCorruptBatchFile(t)})
 	jm, res, err := engine.RebuildHashmap(proc, process.NewAnalyzer(0, false, false, "test"))
 	require.Error(t, err)
 	require.Nil(t, jm)
 	require.Equal(t, BucketSkip, res)
 	engine.Cleanup(proc)
+}
+
+func TestRebuildSkipsBuildOnlyBucketWhenJoinCannotUseIt(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	fd := makeCorruptBatchFile(t)
+	releases := 0
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+	})
+	engine.InitFromSpilledFiles([]*message.SpillFile{
+		message.NewSpillFile(fd, 1, 17, func() { releases++ }),
+	})
+
+	jm, res, err := engine.RebuildHashmap(proc, process.NewAnalyzer(0, false, false, "test"))
+	require.NoError(t, err, "an irrelevant build-only file must not be read")
+	require.Nil(t, jm)
+	require.Equal(t, BucketSkip, res)
+	require.False(t, engine.HasMoreBuckets())
+	require.Equal(t, 1, releases)
+	_, err = fd.Stat()
+	require.Error(t, err)
+
+	engine.Cleanup(proc)
+	require.Equal(t, 1, releases)
 }
 
 func TestAdvanceToNextBucket(t *testing.T) {
@@ -2414,8 +3068,9 @@ func TestReSpillBucket(t *testing.T) {
 	fd := writeBuildFile(proc, "test_respill_build", bat)
 
 	engine := NewSpillEngine(SpillEngineConfig{
-		BuildKeyExprs:  makeTestKeyExpr(),
-		SpillThreshold: 100,
+		BuildKeyExprs:           makeTestKeyExpr(),
+		NeedsBuildForEmptyProbe: true,
+		SpillThreshold:          100,
 	})
 	engine.InitFromSpilledMap([]*os.File{fd})
 
@@ -2435,6 +3090,62 @@ func TestReSpillBucket(t *testing.T) {
 	}
 
 	engine.Cleanup(proc)
+}
+
+func TestReSpillReleasesBuilderExecutorsBeforeReplacementAdmission(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	col := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	modulo, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx,
+		"%",
+		[]*plan.Expr{col, plan2.MakePlan2Int32ConstExprWithType(2)},
+	)
+	require.NoError(t, err)
+	exprs := []*plan.Expr{modulo}
+
+	probeExecs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, exprs)
+	require.NoError(t, err)
+	retained, ok := colexec.ExpressionExecutorsRetainedBytes(probeExecs)
+	require.True(t, ok)
+	require.Positive(t, retained)
+	for _, executor := range probeExecs {
+		executor.Free()
+	}
+
+	// The cap intentionally fits exactly one executor set. reSpillBucket must
+	// release the failed builder's equivalent set before constructing its own.
+	budget := process.MustNewHashBuildBudget(retained, retained)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	builder := &hashbuild.HashmapBuilder{}
+	builder.SetBudget(generation)
+	require.NoError(t, builder.Prepare(exprs, -1, -1, nil, proc))
+	require.Equal(t, retained, generation.Used())
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: exprs,
+		Budget:        generation,
+	})
+	subBuckets, err := engine.reSpillBucket(
+		proc,
+		process.NewAnalyzer(0, false, false, "test"),
+		SpillBucket{},
+		builder,
+		&BucketReader{},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Empty(t, subBuckets)
+	require.Equal(t, retained, generation.Used())
+	require.NotNil(t, engine.buildExprLease)
+
+	builder.Free(proc)
+	engine.Cleanup(proc)
+	require.Zero(t, generation.Used())
 }
 
 func TestReSpillBucketReleasesDrainedBatchBudget(t *testing.T) {
@@ -2558,9 +3269,10 @@ func TestReSpillDepthLimit(t *testing.T) {
 	fd := writeBuildFile(proc, "test_depth_build", bat)
 
 	engine := NewSpillEngine(SpillEngineConfig{
-		BuildKeyExprs:  makeTestKeyExpr(),
-		SpillThreshold: 1,
-		Budget:         generation,
+		BuildKeyExprs:           makeTestKeyExpr(),
+		NeedsBuildForEmptyProbe: true,
+		SpillThreshold:          1,
+		Budget:                  generation,
 	})
 	engine.InitFromSpilledMap([]*os.File{fd})
 	engine.buckets[0].Depth = SpillMaxPass
@@ -2629,8 +3341,9 @@ func TestAdvanceToNextBucketReSpilled(t *testing.T) {
 	fd := writeBuildFile(proc, "test_adv_re_build", bat)
 
 	engine := NewSpillEngine(SpillEngineConfig{
-		BuildKeyExprs:  makeTestKeyExpr(),
-		SpillThreshold: 100,
+		BuildKeyExprs:           makeTestKeyExpr(),
+		NeedsBuildForEmptyProbe: true,
+		SpillThreshold:          100,
 	})
 	engine.InitFromSpilledMap([]*os.File{fd})
 
@@ -3173,7 +3886,8 @@ func TestRebuildHashmapPrepareError(t *testing.T) {
 	badExpr := []*plan.Expr{{}}
 
 	engine := NewSpillEngine(SpillEngineConfig{
-		BuildKeyExprs: badExpr,
+		BuildKeyExprs:           badExpr,
+		NeedsBuildForEmptyProbe: true,
 	})
 	engine.InitFromSpilledMap([]*os.File{fd})
 

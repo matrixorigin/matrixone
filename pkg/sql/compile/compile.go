@@ -595,18 +595,48 @@ func (c *Compile) prePipelineInitializer() (err error) {
 			return err
 		}
 	}
+	var spillBudget materialized.SpillBudget
+	if len(c.materializedSources) > 0 {
+		spillBudget = newMaterializedSpillBudget(c.proc)
+	}
 	for _, source := range c.materializedSources {
-		if err = source.Begin(c.proc.Mp(), func(name string) (*os.File, error) {
+		if err = source.Begin(c.proc.Mp(), materialized.SpillConfig{FileFactory: func(name string) (*os.File, error) {
 			spillFS, spillErr := c.proc.GetSpillFileService()
 			if spillErr != nil {
 				return nil, spillErr
 			}
 			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
-		}); err != nil {
+		}, Budget: spillBudget}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget {
+	return materialized.SpillBudget{
+		ReserveMemory: func(size uint64) (materialized.Reservation, error) {
+			budget, err := proc.GetHashBuildBudget()
+			if err != nil {
+				return nil, err
+			}
+			return budget.Reserve(size)
+		},
+		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
+			budget, err := proc.GetHashBuildBudget()
+			if err != nil {
+				return nil, err
+			}
+			return budget.ReserveSpillDisk(size)
+		},
+		ReserveFD: func(size uint64) (materialized.Reservation, error) {
+			budget, err := proc.GetHashBuildBudget()
+			if err != nil {
+				return nil, err
+			}
+			return budget.ReserveSpillFD(size)
+		},
+	}
 }
 
 // run once
@@ -620,12 +650,21 @@ func (c *Compile) runOnce() (err error) {
 		c.proc.Base.StageCache.Clear()
 	}()
 
-	// Pre-check: REPLACE parent→child FK RESTRICT constraints must be
-	// verified before the REPLACE execution modifies any rows.
+	// REPLACE parent checks and actions run before the main pipeline.
 	query := c.pn.GetQuery()
 	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
+		if err = validateReplaceParentTxnMode(
+			c.proc.Ctx, query, c.proc.GetTxnOperator().Txn().IsPessimistic()); err != nil {
+			return err
+		}
 		for _, sql := range query.DetectSqls {
-			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
+				continue
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
+				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_LOCK:")); err != nil {
+					return err
+				}
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
 				if err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")); err != nil {
 					// Only translate the "check returned false" signal into the
 					// parent-row-referenced error; pass through real execution
@@ -634,6 +673,10 @@ func (c *Compile) runOnce() (err error) {
 					if moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2) {
 						return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
 					}
+					return err
+				}
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
+				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")); err != nil {
 					return err
 				}
 			}
@@ -732,12 +775,14 @@ func (c *Compile) runOnce() (err error) {
 	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		// Filter out pre-check SQLs (already executed before the main operation).
-		// The modern INSERT path enforces child→parent existence in-plan now, so the
-		// remaining DetectSqls are self-referencing FK checks (plain 1452 message).
+		// Filter out REPLACE parent-side checks and actions already executed before
+		// the main operation.
 		var postCheckSqls []string
 		for _, sql := range query.DetectSqls {
-			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
 				continue
 			}
 			postCheckSqls = append(postCheckSqls, sql)
@@ -752,6 +797,20 @@ func (c *Compile) runOnce() (err error) {
 		}
 	}
 	return err
+}
+
+func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
+	if pessimistic || query == nil {
+		return nil
+	}
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
+			strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
+			return moerr.NewNotSupported(ctx,
+				"REPLACE on a referenced parent table in optimistic transaction mode")
+		}
+	}
+	return nil
 }
 
 // add log to check if background sql return NeedRetry error when origin sql execute successfully
@@ -905,11 +964,12 @@ func (c *Compile) lockTable() error {
 	for _, tableID := range tableIDs {
 		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
-		if err := lockop.LockTable(
+		if err := lockop.LockTableWithMode(
 			c.e,
 			c.proc,
 			tbl.TableId,
 			typ,
+			tbl.Mode,
 			false); err != nil {
 			return err
 		}
@@ -5560,7 +5620,9 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 	if materializedSource != nil {
 		// The materialized source is process-local state. Always terminate the
 		// producer at a local merge scope so it is never serialized as part of a
-		// remote scope without its consumers.
+		// remote scope without its consumers. Group same-CN shuffle buckets first
+		// so every remote producer scope is independently executable.
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		rs = c.newMergeScope(ss)
 	} else if c.IsSingleScope(ss) {
 		rs = ss[0]
@@ -5900,7 +5962,7 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 //
 // Background (issue #24919): newShuffleJoinScopeList leaves a CN's dop join buckets in
 // separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
-// When the consumer (here compileInsert) sends each bucket individually, RemoteRun ->
+// When a consumer sends each bucket individually, RemoteRun ->
 // checkPipelineStandaloneExecutableAtRemote sees the dispatch.LocalRegs pointing to the
 // sibling out-of-tree buckets, so the tree is not independently executable and must fail
 // before remote start. Historically RemoteRun silently moved that tree to the coordinator;
@@ -5909,7 +5971,7 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // buckets in one tree, so the whole group executes at the intended remote CN.
 //
 // It is a no-op unless we are multi-CN and ss actually carries a cross-CN shuffle dispatch,
-// so single-CN and non-shuffle inserts are completely unaffected.
+// so single-CN and non-shuffle consumers are completely unaffected.
 //
 // Operator-chain note: callers attach their own root operator to each bucket first (e.g.
 // the insert / multiUpdate operator). mergeScopesByCN (via newMergeScopeByCN ->

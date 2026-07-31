@@ -783,6 +783,10 @@ var supportedStringBuiltIns = []FuncNew{
 				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
 					return newCheckResultWithSuccess(0)
 				}
+			} else if len(inputs) == 3 {
+				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() && inputs[2].Oid.IsMySQLString() {
+					return newCheckResultWithSuccess(1)
+				}
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
@@ -790,6 +794,15 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().iLikeFn
+				},
+			},
+			{
+				overloadId: 1,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -9858,6 +9871,26 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DatetimeToQuarter
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampToQuarter
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToQuarter
+				},
+			},
 		},
 	},
 
@@ -9940,6 +9973,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampToDayName
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDayName
+				},
+			},
 		},
 	},
 
@@ -9981,6 +10024,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampToMonthName
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToMonthName
+				},
+			},
 		},
 	},
 
@@ -10020,6 +10073,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampToDay
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDay
 				},
 			},
 		},
@@ -10844,6 +10907,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampToWeekOfYear
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToWeekOfYear
 				},
 			},
 		},
@@ -12969,6 +13042,29 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInInternalAutoIncrement
+				},
+			},
+		},
+	},
+
+	// function `mo_is_legacy_temporary_table`
+	// Used by catalog metadata predicates while pre-marker temporary rows can
+	// remain alive across an asynchronous tenant upgrade.
+	{
+		functionId: MO_IS_LEGACY_TEMPORARY_TABLE,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInIsLegacyTemporaryTable
 				},
 			},
 		},

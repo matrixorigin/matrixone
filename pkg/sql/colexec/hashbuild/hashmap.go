@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -68,7 +69,7 @@ type HashmapBuilder struct {
 	batchReservations         []*process.HashBuildReservation
 	auxReservation            *process.HashBuildReservation
 	keyExprs                  []*plan.Expr
-	expressionReservations    []*process.HashBuildReservation
+	expressionLease           *ExpressionMemoryLease
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -162,14 +163,19 @@ func (hb *HashmapBuilder) Prepare(
 			}
 			keyWidth += width
 		}
-		executors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, keyCols)
+		executors, expressionLease, err := NewBudgetedExpressionExecutors(
+			proc,
+			hb.budget,
+			keyCols,
+			needDupVec,
+		)
 		if err != nil {
 			return err
 		}
 		hb.needDupVec = needDupVec
 		hb.executors = executors
 		hb.keyExprs = keyCols
-		hb.expressionReservations = make([]*process.HashBuildReservation, len(keyCols))
+		hb.expressionLease = expressionLease
 		hb.keyWidth = keyWidth
 		hb.InputBatchRowCount = 0
 	}
@@ -241,7 +247,7 @@ func (hb *HashmapBuilder) FreeExecutors() {
 	}
 	hb.executors = nil
 	hb.keyExprs = nil
-	hb.releaseExpressionReservations()
+	hb.releaseExpressionLease()
 }
 
 func (hb *HashmapBuilder) FreeTemporaryVectors(proc *process.Process) {
@@ -283,54 +289,43 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 			}
 		}
 	}
-	for idx2 := range hb.executors {
-		var candidate *process.HashBuildReservation
-		if _, isColumn := hb.keyExprs[idx2].Expr.(*plan.Expr_Col); !isColumn && hb.budget != nil {
-			peak, err := expressionVectorPeak(proc, hb.keyExprs[idx2], bat.RowCount(), hb.needDupVec)
-			if err != nil {
-				return err
-			}
-			candidate, err = hb.budget.Reserve(peak)
-			if err != nil {
-				return err
-			}
-		}
-		vec, err := hb.executors[idx2].Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			hb.abortExpressionEval(proc, candidate)
-			return err
+	evalOne := func(idx int) error {
+		vec, evalErr := hb.executors[idx].Eval(proc, []*batch.Batch{bat}, nil)
+		if evalErr != nil {
+			return evalErr
 		}
 		if hb.needDupVec {
-			hb.curVecs[idx2], err = vec.DupOffHeap(proc.Mp())
-			if err != nil {
-				hb.abortExpressionEval(proc, candidate)
-				return err
+			hb.curVecs[idx], evalErr = vec.DupOffHeap(proc.Mp())
+			if evalErr != nil {
+				return evalErr
 			}
 		} else {
-			hb.curVecs[idx2] = vec
+			hb.curVecs[idx] = vec
 		}
-		if candidate != nil {
-			// Child function executors retain their result vectors but do not
-			// expose each capacity. Keep the recursive type bound charged until
-			// the complete executor tree is freed on Reset/Free.
-			if old := hb.expressionReservations[idx2]; old != nil {
-				old.Release()
+		return nil
+	}
+	var err error
+	if hb.expressionLease != nil {
+		err = hb.expressionLease.Run(proc, bat.RowCount(), evalOne)
+	} else {
+		for idx := range hb.executors {
+			if err = evalOne(idx); err != nil {
+				break
 			}
-			hb.expressionReservations[idx2] = candidate
 		}
+	}
+	if err != nil {
+		hb.abortExpressionEval(proc)
+		return err
 	}
 	return nil
 }
 
-func (hb *HashmapBuilder) abortExpressionEval(proc *process.Process, candidate *process.HashBuildReservation) {
+func (hb *HashmapBuilder) abortExpressionEval(proc *process.Process) {
 	// Eval may allocate cached child/result vectors before returning an error.
-	// Destroy the complete executor tree while both the previous tokens and the
-	// current candidate are still charged, then release admission ownership.
+	// Destroy the complete executor tree before releasing its retained lease.
 	hb.FreeTemporaryVectors(proc)
 	hb.FreeExecutors()
-	if candidate != nil {
-		candidate.Release()
-	}
 }
 
 // expressionVectorPeak is an execution-before-allocation upper bound based on
@@ -364,6 +359,15 @@ func ExpressionVectorPeak(proc *process.Process, expr *plan.Expr, rows int, dupl
 }
 
 func expressionTreePeak(proc *process.Process, expr *plan.Expr, rows uint64) (total uint64, output uint64, err error) {
+	return expressionTreePeakWithSelection(proc, expr, rows, false)
+}
+
+func expressionTreePeakWithSelection(
+	proc *process.Process,
+	expr *plan.Expr,
+	rows uint64,
+	mayReceivePartialSelection bool,
+) (total uint64, output uint64, err error) {
 	if expr == nil {
 		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
@@ -374,8 +378,26 @@ func expressionTreePeak(proc *process.Process, expr *plan.Expr, rows uint64) (to
 		if node.F == nil {
 			return 0, 0, process.ErrHashBuildBudgetInvalid
 		}
-		for _, arg := range node.F.Args {
-			child, _, childErr := expressionTreePeak(proc, arg, rows)
+		var fid int32 = -1
+		if node.F.Func != nil {
+			fid, _ = function.DecodeOverloadID(node.F.Func.Obj)
+		}
+		for i, arg := range node.F.Args {
+			childMayReceivePartialSelection := mayReceivePartialSelection
+			switch fid {
+			case function.IFF:
+				// IFF evaluates only its value branches through generated
+				// selection masks. Its condition inherits the caller mask.
+				childMayReceivePartialSelection = mayReceivePartialSelection || i > 0
+			case function.CASE, function.COALESCE:
+				childMayReceivePartialSelection = true
+			}
+			child, _, childErr := expressionTreePeakWithSelection(
+				proc,
+				arg,
+				rows,
+				childMayReceivePartialSelection,
+			)
 			if childErr != nil || total > math.MaxUint64-child {
 				return 0, 0, process.ErrHashBuildBudgetInvalid
 			}
@@ -412,7 +434,36 @@ func expressionTreePeak(proc *process.Process, expr *plan.Expr, rows uint64) (to
 	if err != nil || total > math.MaxUint64-output {
 		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
-	return total + output, output, nil
+	total += output
+
+	if _, isFunction := expr.Expr.(*plan.Expr_F); mayReceivePartialSelection && isFunction {
+		// A partially selected function retains both its ordinary full-row
+		// result and a selected-result scratch vector. Row-aligned column and
+		// non-folded function parameters are also copied into retained selected
+		// parameter vectors before the function executes.
+		if total > math.MaxUint64-output {
+			return 0, 0, process.ErrHashBuildBudgetInvalid
+		}
+		total += output
+		for _, arg := range nodeFunctionArgs(expr) {
+			switch arg.Expr.(type) {
+			case *plan.Expr_Col, *plan.Expr_F:
+				selectedParameter, selectedErr := expressionTypePeak(arg.Typ, rows)
+				if selectedErr != nil || total > math.MaxUint64-selectedParameter {
+					return 0, 0, process.ErrHashBuildBudgetInvalid
+				}
+				total += selectedParameter
+			}
+		}
+	}
+	return total, output, nil
+}
+
+func nodeFunctionArgs(expr *plan.Expr) []*plan.Expr {
+	if node, ok := expr.Expr.(*plan.Expr_F); ok && node.F != nil {
+		return node.F.Args
+	}
+	return nil
 }
 
 // expressionParamPeak returns an upper bound for the allocations made by a
@@ -448,17 +499,25 @@ func expressionParamPeak(proc *process.Process, pos int32) (uint64, error) {
 }
 
 func expressionTypePeak(typ plan.Type, rows uint64) (uint64, error) {
-	width := int64(types.T(typ.Id).FixedLength())
+	oid := types.T(typ.Id)
+	width := int64(oid.FixedLength())
 	if width < 0 {
 		width = int64(typ.Width)
 		hardMax := int64(types.MaxVarcharLen)
-		switch types.T(typ.Id) {
-		case types.T_blob, types.T_text, types.T_json, types.T_datalink,
-			types.T_geometry, types.T_geometry32, types.T_array_float32, types.T_array_float64:
-			hardMax = int64(types.MaxBlobLen)
+		if oid.IsArrayRelate() {
+			elementWidth := int64(oid.ToType().GetArrayElementSize())
+			width *= elementWidth
+			hardMax = int64(types.MaxArrayDimension) * elementWidth
+		} else {
+			switch oid {
+			case types.T_blob, types.T_text, types.T_json, types.T_datalink,
+				types.T_geometry, types.T_geometry32:
+				hardMax = int64(types.MaxBlobLen)
+			}
 		}
 		if width > hardMax {
-			// Never clamp a declared bound downward.
+			// Never clamp a declared bound downward. Array width is declared
+			// in elements, while every other varlena width is in bytes.
 			hardMax = width
 		}
 		width = hardMax
@@ -473,14 +532,11 @@ func expressionTypePeak(typ plan.Type, rows uint64) (uint64, error) {
 	return rows*perRow + (64 << 10), nil
 }
 
-func (hb *HashmapBuilder) releaseExpressionReservations() {
-	for i, token := range hb.expressionReservations {
-		if token != nil {
-			token.Release()
-			hb.expressionReservations[i] = nil
-		}
+func (hb *HashmapBuilder) releaseExpressionLease() {
+	if hb.expressionLease != nil {
+		hb.expressionLease.Release()
+		hb.expressionLease = nil
 	}
-	hb.expressionReservations = nil
 }
 
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
@@ -494,6 +550,9 @@ func (hb *HashmapBuilder) buildHashmap(
 	dedupBuildKeepLast bool,
 	proc *process.Process,
 ) (retErr error) {
+	if err := checkHashBuildCanceled(proc); err != nil {
+		return err
+	}
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
@@ -615,6 +674,9 @@ func (hb *HashmapBuilder) buildHashmap(
 
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
+			if err := checkHashBuildCanceled(proc); err != nil {
+				return err
+			}
 			runtime.Gosched()
 		}
 		n := hb.InputBatchRowCount - i
@@ -677,7 +739,11 @@ func (hb *HashmapBuilder) buildHashmap(
 		}
 		for k, v := range vals[:n] {
 			if hb.IsDedup && hb.OnDuplicateAction == plan.Node_UPDATE {
-				hb.Sels.Insert(int32(v), int32(i+k))
+				group := int32(v)
+				if zvals[k] == 0 || v == 0 {
+					group = 0
+				}
+				hb.Sels.Insert(group, int32(i+k))
 				continue
 			}
 
@@ -860,6 +926,9 @@ func (hb *HashmapBuilder) buildHashmap(
 		}
 		for i := 0; i < delScanRowCount; i += hashmap.UnitLimit {
 			if i%(hashmap.UnitLimit*32) == 0 {
+				if err := checkHashBuildCanceled(proc); err != nil {
+					return err
+				}
 				runtime.Gosched()
 			}
 			n := delScanRowCount - i

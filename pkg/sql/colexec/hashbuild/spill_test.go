@@ -268,6 +268,33 @@ func TestFileWriteErrorBuild(t *testing.T) {
 	spillfs.RemoveFile(context.Background(), "test_error_build")
 }
 
+func TestWriteSpillPayloadCancellationStopsBeforePhysicalWrite(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	ctx, cancel := context.WithCancelCause(proc.Ctx)
+	process.ReplacePipelineCtx(proc, ctx, cancel)
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	file, err := spillfs.CreateFile(context.Background(), t.Name())
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, file.Close())
+		require.NoError(t, spillfs.RemoveFile(context.Background(), t.Name()))
+	}()
+
+	proc.Cancel(context.Canceled)
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	err = (&container{}).writeSpillPayload(proc, file, []byte("stale spill payload"), 1, analyzer)
+	require.ErrorIs(t, err, context.Canceled)
+
+	info, err := file.Stat()
+	require.NoError(t, err)
+	require.Zero(t, info.Size(), "canceled spill must not start physical I/O")
+	require.Zero(t, analyzer.GetOpStats().SpillSize)
+	require.Zero(t, analyzer.GetOpStats().SpillRows)
+}
+
 func TestAppendBatchToSpillFilesPartitioning(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -674,6 +701,49 @@ func TestBufferReuse(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSpillExpressionLeaseRetainsLargeBatchHighWater(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewHashBuildBudget(256<<20, 256<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	files := make([]*os.File, spillNumBuckets)
+	defer func() {
+		for _, file := range files {
+			if file != nil {
+				_ = file.Close()
+			}
+		}
+	}()
+	expr := makeExpressionLeaseTestExpr(t, proc)
+	ctr := &container{spillUUID: t.Name()}
+	ctr.hashmapBuilder.setBudget(generation)
+	executors, err := ctr.initSpillExprExecs(proc, []*plan.Expr{expr})
+	require.NoError(t, err)
+	require.NotNil(t, ctr.spillExprLease)
+	defer ctr.freeSpillExprExecs()
+	defer ctr.dropSpillScratchBuffers()
+	defer ctr.releaseSpillScratchReservation()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	large := makeExpressionLeaseTestBatch(proc, colexec.DefaultBatchSize)
+	defer large.Clean(proc.Mp())
+	require.NoError(t, ctr.spillBatchBounded(proc, large, files, executors, analyzer, false))
+	largeReserved := ctr.spillExprLease.Reserved()
+	require.Positive(t, largeReserved)
+
+	small := makeExpressionLeaseTestBatch(proc, 1)
+	defer small.Clean(proc.Mp())
+	require.NoError(t, ctr.spillBatchBounded(proc, small, files, executors, analyzer, false))
+	require.Equal(t, largeReserved, ctr.spillExprLease.Reserved(),
+		"a small spill batch must not release retained executor headroom")
+	retained, ok := ctr.spillExprLease.Retained()
+	require.True(t, ok)
+	require.LessOrEqual(t, retained, ctr.spillExprLease.Reserved())
+}
+
 func TestSpillWriteCoalescesAcrossBatches(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -721,7 +791,7 @@ func TestSpillWriteCoalescesAcrossBatches(t *testing.T) {
 	stat, err := file.Stat()
 	require.NoError(t, err)
 	require.Zero(t, stat.Size(), "records stay pending until the handoff flush")
-	require.NoError(t, ctr.flushSpillBuffers(files, analyzer))
+	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
 	stat, err = file.Stat()
 	require.NoError(t, err)
 	require.Positive(t, stat.Size())
@@ -872,7 +942,29 @@ func TestRetainedSpillGrowsEmergencyLeaseWithoutDoubleChargingSource(t *testing.
 	require.Equal(t, retainedNeed, ctr.spillScratchBase)
 	require.Equal(t, int64(1), analyzer.GetOpStats().ExtraStats["HashBuildRetainedEmergencyGrowCount"])
 	require.Equal(t, int64(1), analyzer.GetOpStats().ExtraStats["HashBuildRetainedEmergencyGrowBytes"])
-	require.NoError(t, ctr.flushSpillBuffers(files, analyzer))
+	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
+}
+
+func TestFlushSpillBuffersCancellationDiscardsPendingWrites(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	ctx, cancel := context.WithCancelCause(proc.Ctx)
+	process.ReplacePipelineCtx(proc, ctx, cancel)
+
+	ctr := &container{}
+	for _, bucket := range []int{0, spillNumBuckets - 1} {
+		_, err := ctr.spillBucketWriteBufs[bucket].Write([]byte("pending"))
+		require.NoError(t, err)
+		ctr.spillBucketWriteRows[bucket] = 1
+	}
+	proc.Cancel(context.Canceled)
+
+	err := ctr.flushSpillBuffers(proc, nil, process.NewAnalyzer(0, false, false, "test"))
+	require.ErrorIs(t, err, context.Canceled)
+	for bucket := 0; bucket < spillNumBuckets; bucket++ {
+		require.Zero(t, ctr.spillBucketWriteBufs[bucket].Len())
+		require.Zero(t, ctr.spillBucketWriteRows[bucket])
+	}
 }
 
 func TestSpillEmergencyBudgetDoesNotDoubleScaleShuffledConstVector(t *testing.T) {

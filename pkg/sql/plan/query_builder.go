@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -43,6 +44,26 @@ import (
 
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 )
+
+type snapshotNotFoundError struct {
+	cause error
+}
+
+func (e *snapshotNotFoundError) Error() string {
+	if e.cause == nil {
+		return ""
+	}
+	return e.cause.Error()
+}
+
+func (e *snapshotNotFoundError) Unwrap() error {
+	return e.cause
+}
+
+func IsSnapshotNotFound(err error) bool {
+	var target *snapshotNotFoundError
+	return errors.As(err, &target)
+}
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
 	//
@@ -334,10 +355,39 @@ func exprNotNullableWithColResolver(
 			argCopy.Typ.NotNullable = exprNotNullableWithColResolver(arg, resolveCol)
 			effectiveArgs[i] = &argCopy
 		}
+		if isIfNullCase(impl.F) {
+			// IFNULL(x, y) is rewritten as CASE WHEN ISNULL(x) THEN y ELSE x.
+			// The generic CASE rule treats ELSE x as independently nullable and
+			// loses the correlation with ISNULL(x). Preserve the IFNULL contract
+			// while using the current input nullability after joins/remapping.
+			return effectiveArgs[1].Typ.NotNullable || effectiveArgs[2].Typ.NotNullable
+		}
 		return function.DeduceNotNullable(impl.F.Func.Obj, effectiveArgs)
 
 	default:
 		return expr.Typ.NotNullable
+	}
+}
+
+func isIfNullCase(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 {
+		return false
+	}
+	condition := fn.Args[0].GetF()
+	return condition != nil && condition.Func != nil && condition.Func.ObjName == "isnull" &&
+		len(condition.Args) == 1 && ifNullCaseSourceMatches(condition.Args[0], fn.Args[2])
+}
+
+// CASE type reconciliation can add CAST nodes around IFNULL's ELSE source.
+// Ignore those binder-introduced casts when recognizing the rewrite; the
+// initial IFNULL metadata calculation uses the same source relationship.
+func ifNullCaseSourceMatches(source, elseExpr *plan.Expr) bool {
+	for {
+		fn := elseExpr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
+			return exprStructuralEqual(source, elseExpr)
+		}
+		elseExpr = fn.Args[0]
 	}
 }
 
@@ -1154,7 +1204,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				}
 			}
 		}
-
 		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
@@ -1436,6 +1485,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_AGG:
+		// Some DML duplicate-check aggregates intentionally expose positional
+		// output. They are already fully projected and cannot participate in the
+		// global-tag pruning protocol used by regular aggregates.
+		if len(node.BindingTags) < 2 {
+			for i := range node.ProjectList {
+				remapping.addColRef([2]int32{0, int32(i)})
+			}
+			return remapping, nil
+		}
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 		groupSize := int32(len(node.GroupBy))
@@ -2400,8 +2458,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_SINK_SCAN, plan.Node_RECURSIVE_SCAN, plan.Node_RECURSIVE_CTE:
+		if len(node.BindingTags) == 0 {
+			node.BindingTags = []int32{0}
+		}
 		tag := node.BindingTags[0]
 		var newProjList []*plan.Expr
+		if _, preserve := builder.preserveScanProjection[nodeID]; preserve {
+			for i := range node.ProjectList {
+				colRefCnt[[2]int32{tag, int32(i)}] = 1
+			}
+		}
 
 		for i, expr := range node.ProjectList {
 			globalRef := [2]int32{tag, int32(i)}
@@ -2431,11 +2497,32 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 		}
+		if len(newProjList) == 0 && len(node.ProjectList) > 0 {
+			for i, expr := range node.ProjectList {
+				globalRef := [2]int32{tag, int32(i)}
+				newProjList = append(newProjList, &plan.Expr{
+					Typ: expr.Typ,
+					Expr: &plan.Expr_Col{Col: &ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+					}},
+				})
+				remapping.addColRef(globalRef)
+			}
+		}
 		node.ProjectList = newProjList
 
 	case plan.Node_SINK:
 		childNode := builder.qry.Nodes[node.Children[0]]
+		if len(childNode.BindingTags) == 0 {
+			childNode.BindingTags = []int32{0}
+		}
 		resultTag := childNode.BindingTags[0]
+		if _, preserve := builder.preserveSinkProjection[nodeID]; preserve {
+			for i := range node.ProjectList {
+				colRefBool[[2]int32{step, int32(i)}] = true
+			}
+		}
 		for i := range childNode.ProjectList {
 			if colRefBool[[2]int32{step, int32(i)}] {
 				colRefCnt[[2]int32{resultTag, int32(i)}] = 1
@@ -2596,6 +2683,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
+		_, preserveProjection := builder.preserveLockProjection[nodeID]
+		if preserveProjection && len(preNode.BindingTags) > 0 {
+			for i := range preNode.ProjectList {
+				colRefCnt[[2]int32{preNode.BindingTags[0], int32(i)}]++
+			}
+		}
 
 		var pkExprs []*plan.Expr
 		var oldPkPos [][2]int32
@@ -2652,7 +2745,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		for i, globalRef := range childRemapping.localToGlobal {
-			if colRefCnt[globalRef] == 0 {
+			if !preserveProjection && colRefCnt[globalRef] == 0 {
 				continue
 			}
 			remapping.addColRef(globalRef)
@@ -2737,6 +2830,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_INSERT, plan.Node_DELETE:
+		if _, preserve := builder.preserveInsertProjection[nodeID]; preserve {
+			for _, expr := range builder.qry.Nodes[node.Children[0]].ProjectList {
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+		}
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
@@ -2863,6 +2961,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_PRE_INSERT:
+		if _, preserve := builder.preservePreInsertProjection[nodeID]; preserve {
+			for _, expr := range builder.qry.Nodes[node.Children[0]].ProjectList {
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+		}
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
@@ -3167,6 +3270,21 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	// after createQuery can translate pre-prune positions into the materialized
 	// sink's post-prune layout.
 	builder.sinkColRef = sinkColRef
+	for nodeID := range builder.positionalSinkScans {
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType != plan.Node_SINK_SCAN || len(node.SourceStep) == 0 {
+			continue
+		}
+		for _, expr := range node.ProjectList {
+			col, ok := expr.Expr.(*plan.Expr_Col)
+			if !ok {
+				continue
+			}
+			if newPos, ok := sinkColRef[[2]int32{node.SourceStep[0], col.Col.ColPos}]; ok {
+				col.Col.ColPos = int32(newPos)
+			}
+		}
+	}
 
 	err = builder.lockTableIfLockNoRowsAtTheEndForDelAndUpdate()
 	if err != nil {
@@ -4019,7 +4137,18 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		}
 		for i := range n.ProjectList {
 			projTyp := projects[i].GetTyp()
-			n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
+			if projTyp.Id == int32(types.T_char) || projTyp.Id == int32(types.T_varchar) {
+				// MySQL fixes recursive CTE column types from the anchor, but
+				// applies the width policy at execution time: strict sql_mode
+				// rejects an over-width value while non-strict mode truncates it.
+				// The assignment-cast selector uses cast_strict before MORPC v5
+				// so this plan can run on every CN during a rolling upgrade. At
+				// MORPC v5 it uses volatile cast_assign, letting a prepared CTE
+				// observe the sql_mode of each execution.
+				n.ProjectList[i], err = builder.forceAssignmentCastExpr(n.ProjectList[i], projTyp, false)
+			} else {
+				n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projTyp)
+			}
 			if err != nil {
 				return
 			}
@@ -8666,8 +8795,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		derivedSelect := numericProjectionTableSelect(tbl.Expr)
-		if _, directSelect := tbl.Expr.(*tree.Select); directSelect && tbl.As.Alias == "" {
-			return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "subquery in FROM must have an alias: %T", stmt)
+		if derivedSelect != nil && tbl.As.Alias == "" {
+			return 0, moerr.NewDerivedMustHaveAlias(builder.GetContext())
 		}
 		targets := ctx.numericTableProjectionTypes[strings.ToLower(string(tbl.As.Alias))]
 		if derivedSelect != nil && len(targets) > 0 {
@@ -8688,6 +8817,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 		if err != nil {
 			return
+		}
+
+		if derivedSelect != nil && len(tbl.As.Cols) > 0 {
+			derivedCtx := builder.ctxByNode[nodeID]
+			if len(tbl.As.Cols) != len(derivedCtx.headings) {
+				return 0, moerr.NewViewWrongList(builder.GetContext())
+			}
 		}
 
 		err = builder.addBinding(nodeID, tbl.As, ctx)
@@ -9390,7 +9526,11 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
 			}
 		} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
-			return builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
+			snapshot, err = builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
+			if err != nil && strings.Contains(err.Error(), "find 0 snapshot records") {
+				err = &snapshotNotFoundError{cause: err}
+			}
+			return
 		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
 			// try human-readable datetime first, fall back to debug timestamp format
 			if ts, err2 := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval); err2 == nil {

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -230,8 +231,13 @@ type container struct {
 	mp        *message.JoinMap
 	cachedItr hashmap.Iterator
 
-	matched     *bitmap.Bitmap
-	handledLast bool
+	matched *bitmap.Bitmap
+	// roundStatusPublished is true only while this worker's status for the
+	// current finalize round is in the mailbox and has not yet been
+	// acknowledged by completeRound. Reset publishes an abort when false so a
+	// merger that already advanced to the next spill bucket cannot wait
+	// forever after a normal worker early-stop.
+	roundStatusPublished bool
 
 	// Capture buffers for the REPLACE INTO merged main-table scan. When
 	// OldColCapturePlaceholderIdxList is non-empty, each entry i in the list
@@ -251,6 +257,10 @@ type container struct {
 	// Spill support for large build sides.
 	spillEngine    *spillutil.SpillEngine
 	spillThreshold int64
+	// Non-nil only for spilled joins, where probe expressions are part of the
+	// shared HashBuild/spill working set. Resident probe expressions remain
+	// under normal process/mpool accounting; this is not a general query budget.
+	probeExpressionLease *hashbuild.ExpressionMemoryLease
 }
 
 type DedupJoin struct {
@@ -339,7 +349,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 			// state so no late worker can transfer capture ownership to an
 			// execution that no longer has a consumer.
 			dedupJoin.Mailbox.stopAndDrain(proc)
-		} else if !ctr.handledLast {
+		} else if !ctr.roundStatusPublished {
 			if pipelineFailed && err == nil {
 				err = context.Cause(proc.Ctx)
 				if err == nil {
@@ -363,12 +373,17 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.cleanBuf(proc)
 	ctr.cleanBucketState(proc)
 	ctr.resetExprExecutor()
-	ctr.resetEvalVectors()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
 	}
-	ctr.handledLast = false
+	if ctr.probeExpressionLease != nil {
+		ctr.cleanEvalVectors()
+		ctr.releaseProbeExpressionLease()
+	} else {
+		ctr.resetEvalVectors()
+	}
+	ctr.roundStatusPublished = false
 	ctr.state = Build
 	ctr.lastPos = 0
 }
@@ -384,11 +399,12 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanBucketState(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanExprExecutor()
-	ctr.cleanEvalVectors()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
 	}
+	ctr.cleanEvalVectors()
+	ctr.releaseProbeExpressionLease()
 }
 
 func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -443,6 +459,8 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 		ctr.joinBat2.Clean(proc.GetMPool())
 		ctr.joinBat2 = nil
 	}
+	clear(ctr.savedVecs)
+	ctr.savedVecs = nil
 }
 
 // cleanBucketState releases per-bucket state before advancing to the next
@@ -472,6 +490,7 @@ func (ctr *container) cleanEvalVectors() {
 		ctr.evecs[i].vec = nil
 	}
 	ctr.evecs = nil
+	ctr.vecs = nil
 }
 
 func (ctr *container) resetEvalVectors() {
@@ -479,5 +498,12 @@ func (ctr *container) resetEvalVectors() {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.ResetForNextQuery()
 		}
+	}
+}
+
+func (ctr *container) releaseProbeExpressionLease() {
+	if ctr.probeExpressionLease != nil {
+		ctr.probeExpressionLease.Release()
+		ctr.probeExpressionLease = nil
 	}
 }

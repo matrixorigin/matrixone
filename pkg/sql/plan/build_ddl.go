@@ -138,7 +138,7 @@ func parserSQLModeFromContext(ctx CompilerContext) *string {
 	return &sqlMode
 }
 
-func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
+func canonicalCreateTableSQL(stmt *tree.CreateTable) string {
 	fmtCtx := tree.NewFmtCtx(
 		dialect.MYSQL,
 		tree.WithQuoteIdentifier(),
@@ -158,6 +158,39 @@ func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
 		fmtCtx.WriteByte(')')
 	}
 	return fmtCtx.String()
+}
+
+// createTableSQLForCatalog preserves the historical rel_createsql contract for
+// a single-statement request, including comments, constraint names, and exact
+// formatting consumed by SHOW CREATE TABLE. For a multi-statement COM_QUERY,
+// GetRootSql contains the whole request and cannot identify the row's creating
+// statement, so persist this statement's canonical AST instead.
+func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) string {
+	// Partition metadata is parsed again by ALTER TABLE ADD PARTITION. Keep it
+	// independent of the creating session's SQL mode, even when the request
+	// contains only this statement.
+	if stmt.PartitionOption != nil {
+		return canonicalCreateTableSQL(stmt)
+	}
+
+	rootSQL := ctx.GetRootSql()
+	if rootSQL != "" {
+		sqlMode := parserSQLModeFromContext(ctx)
+		statements, err := parsers.ParseWithSQLMode(
+			ctx.GetContext(), dialect.MYSQL, rootSQL, 1, *sqlMode,
+		)
+		if err == nil {
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+			if len(statements) == 1 {
+				return rootSQL
+			}
+		}
+	}
+	return canonicalCreateTableSQL(stmt)
 }
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
@@ -305,13 +338,26 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			Alg:  plan.CompressType_Lz4,
 			Typ:  *typ,
 			Default: &plan.Default{
-				NullAbility:  !expr.Typ.NotNullable,
+				NullAbility:  ctasExprCanBeNull(expr),
 				Expr:         nil,
 				OriginString: defaultVal,
 			},
 		}
 	}
 	return cols, builder.qry, nil
+}
+
+func ctasExprCanBeNull(expr *Expr) bool {
+	if !expr.Typ.NotNullable {
+		return true
+	}
+
+	// MySQL CTAS creates nullable columns for explicit DATETIME casts, even
+	// when the source expression is a non-NULL literal. Keep this CTAS-only
+	// metadata rule separate from normal expression nullability propagation.
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
+		types.T(expr.Typ.Id) == types.T_datetime
 }
 
 func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
@@ -917,7 +963,7 @@ func buildCreateTable(
 	}
 
 	if stmt.PartitionOption != nil {
-		createTable.RawSQL = canonicalPartitionedCreateTableSQL(stmt)
+		createTable.RawSQL = canonicalCreateTableSQL(stmt)
 		createTable.TableDef.FeatureFlag |= features.Partitioned
 	}
 
@@ -1111,10 +1157,7 @@ func buildCreateTable(
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
-		createSQL := ctx.GetRootSql()
-		if stmt.PartitionOption != nil {
-			createSQL = canonicalPartitionedCreateTableSQL(stmt)
-		}
+		createSQL := createTableSQLForCatalog(ctx, stmt)
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
@@ -1165,7 +1208,7 @@ func buildCreateTable(
 	}
 
 	if stmt.Temporary {
-		createTable.TableDef.TableType = catalog.SystemTemporaryTable
+		catalog.MarkTableDefTemporary(createTable.TableDef)
 	}
 	if !isPrepareStmt {
 		asSelectQuery = nil
@@ -1573,7 +1616,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			tree.WithQuoteIdentifier(),
 		)
 		stmt.AsSource.Format(fmtCtx)
-		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
+		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s) as __mo_ctas_source", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
 	}

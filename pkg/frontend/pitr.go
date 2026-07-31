@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -173,21 +174,21 @@ func getSqlForCheckDupPitrFormat(accountId, objId uint64) string {
 }
 
 func getPubInfoWithPitr(ts int64, accountId uint32, dbName string) string {
-	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, dbName)
+	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, sqlquote.EscapeString(dbName))
 }
 
 func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64, ts int64) string {
-	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, ts, accountName, objId)
+	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, ts, sqlquote.EscapeString(accountName), objId)
 }
 
 func getSqlForGetLengthAndUnitFmt(accountId uint32, level, accName, dbName, tblName string) string {
 	sql := fmt.Sprintf(getLengthAndUnitFmt, accountId, level)
 	if level == "account" {
-		sql += fmt.Sprintf(" and account_name = '%s'", accName)
+		sql += fmt.Sprintf(" and account_name = '%s'", sqlquote.EscapeString(accName))
 	} else if level == "database" {
-		sql += fmt.Sprintf(" and database_name = '%s'", dbName)
+		sql += fmt.Sprintf(" and database_name = '%s'", sqlquote.EscapeString(dbName))
 	} else if level == "table" {
-		sql += fmt.Sprintf(" and table_name = '%s'", tblName)
+		sql += fmt.Sprintf(" and table_name = '%s'", sqlquote.EscapeString(tblName))
 	}
 	return sql
 }
@@ -230,14 +231,14 @@ func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *t
 		return getSqlForCheckDupPitrFormat(createAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if len(stmt.AccountName) > 0 {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", stmt.AccountName)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.AccountName)))
 		} else {
-			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createAccount)
+			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", sqlquote.EscapeString(createAccount))
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", stmt.DatabaseName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.DatabaseName)))
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", stmt.DatabaseName, stmt.TableName)
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.DatabaseName)), sqlquote.EscapeString(string(stmt.TableName)))
 	}
 	return sql
 }
@@ -1413,7 +1414,7 @@ func restoreToDatabaseOrTableWithPitr(
 
 		return
 	} else {
-		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
+		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", pitrName, dbName, createDbSql))
 		if err = bh.Exec(ctx, createDbSql); err != nil {
@@ -1504,12 +1505,12 @@ func reCreateTableWithPitr(
 		return
 	}
 
-	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
+	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 		return
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: '%v',", pitrName, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
+	if err = bh.Exec(ctx, dropTableIfExistsSQL("", tblInfo.tblName)); err != nil {
 		return
 	}
 
@@ -1526,7 +1527,7 @@ func reCreateTableWithPitr(
 	}
 
 	// insert data
-	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, ts)
+	insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, ts)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to insert select table: '%v', insert sql: %s", pitrName, tblInfo.tblName, insertIntoSql))
 	if err = bh.Exec(ctx, insertIntoSql); err != nil {
@@ -1606,7 +1607,7 @@ func showFullTablesWitsTs(
 }
 
 func getCreateTableSqlWithTs(ctx context.Context, bh BackgroundExec, ts int64, dbName string, tblName string) (string, error) {
-	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
+	sql := showCreateTableSQL(dbName, tblName)
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
@@ -1684,7 +1685,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 			}
 
 			getLogger(sid).Info(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, dropTableIfExistsSQL(tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1809,11 +1810,11 @@ func restoreViewsWithPitr(
 		if tblInfo, ok := viewMap[key]; ok {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%s] start to restore view: %v, restore timestamp: %d", pitrName, tblInfo.tblName, ts))
 
-			if err = bh.Exec(ctx, "use `"+tblInfo.dbName+"`"); err != nil {
+			if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 				return err
 			}
 
-			if err = bh.Exec(ctx, "drop view if exists "+tblInfo.tblName); err != nil {
+			if err = bh.Exec(ctx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 

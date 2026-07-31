@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -307,23 +308,25 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 		if ctr.mp.IsSpilled() {
-			files := ctr.mp.TakeSpillBuildFiles()
-			var budget *process.HashBuildBudgetGeneration
-			if files != nil {
-				var ok bool
-				budget, ok = ctr.mp.TakeSpillBudget().(*process.HashBuildBudgetGeneration)
-				if !ok || budget == nil {
-					for _, file := range files {
-						_ = file.Close()
-					}
-					return moerr.NewInternalError(proc.Ctx, "spilled dedup join map is missing its producer budget generation")
-				}
-			} else {
-				budget, err = proc.GetHashBuildBudget()
-				if err != nil {
-					return err
-				}
+			payload, budget, takeErr := spillutil.TakeSpillBuildPayload(proc, ctr.mp)
+			if takeErr != nil {
+				return takeErr
 			}
+			probeExecutors := make([]colexec.ExpressionExecutor, len(ctr.evecs))
+			for i := range ctr.evecs {
+				probeExecutors[i] = ctr.evecs[i].executor
+			}
+			probeExpressionLease, leaseErr := hashbuild.NewExpressionMemoryLease(
+				budget, dedupJoin.Conditions[0], probeExecutors, false)
+			if leaseErr != nil {
+				_ = payload.Close()
+				ctr.mp.Free()
+				ctr.mp = nil
+				ctr.cleanEvalVectors()
+				ctr.releaseProbeExpressionLease()
+				return leaseErr
+			}
+			ctr.probeExpressionLease = probeExpressionLease
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:             dedupJoin.Conditions[1],
 				ProbeKeyExprs:             dedupJoin.Conditions[0],
@@ -340,11 +343,12 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				DedupDeleteMarkerColIdx:   dedupJoin.DedupDeleteMarkerColIdx,
 				DedupDeleteKeepColIdxList: dedupJoin.DedupDeleteKeepColIdxList,
 				Budget:                    budget,
+				ProbeExpressionLease:      probeExpressionLease,
 			})
-			if files != nil {
-				engine.InitFromSpilledFiles(files)
+			if len(payload.Files) > 0 {
+				engine.InitFromSpilledFiles(payload.Files)
 			} else {
-				engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+				engine.InitFromSpilledMap(payload.LegacyFds)
 			}
 			if err := engine.ScatterProbeTable(proc,
 				func() (*batch.Batch, error) {
@@ -452,7 +456,6 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if stopped {
 				// The merger already terminated this generation. Ownership
 				// remains local and Free will release the capture vectors.
-				ctr.handledLast = true
 				ctr.state = End
 				return nil
 			}
@@ -468,9 +471,15 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			// Publication, not acknowledgement, is the worker's single status
 			// for this round. Mark it before waiting so concurrent cancellation
 			// cannot make Reset enqueue a duplicate abort status.
-			ctr.handledLast = true
+			ctr.roundStatusPublished = true
 			select {
 			case <-roundDone:
+				// completeRound closes this acknowledgement and installs the
+				// next round under the same mailbox lock, before any later
+				// trySend can enter. From this point Reset must publish an
+				// abort for that next round: the merger may advance before this
+				// worker resumes execution.
+				ctr.roundStatusPublished = false
 			case <-proc.Ctx.Done():
 				return context.Cause(proc.Ctx)
 			}
@@ -521,7 +530,6 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 		ap.Mailbox.completeRound()
 	}
 
-	ctr.handledLast = true
 	if ctr.matched == nil {
 		return nil
 	}
@@ -714,44 +722,39 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				if ctr.joinBat2 == nil {
 					ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
 				}
-				if ctr.savedVecs == nil && len(ap.UpdateColIdxList) > 0 {
-					ctr.savedVecs = make([]*vector.Vector, len(ap.UpdateColIdxList))
-				}
-				for j, pos := range ap.UpdateColIdxList {
-					ctr.savedVecs[j] = ctr.joinBat1.Vecs[pos]
-				}
-				for _, sel := range sels[1:] {
-					idx1, idx2 = sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-					err = colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2), 1, ctr.cfs2)
-					if err != nil {
-						return err
-					}
-					vecs := make([]*vector.Vector, len(ctr.exprExecs))
-					for j, exprExec := range ctr.exprExecs {
-						vecs[j], err = exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
-						if err != nil {
+				err = ctr.withRestoredJoinBat1Vectors(ap.UpdateColIdxList, func() error {
+					for _, sel := range sels[1:] {
+						idx1, idx2 = sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2), 1, ctr.cfs2); err != nil {
 							return err
 						}
-					}
-					for j, pos := range ap.UpdateColIdxList {
-						ctr.joinBat1.Vecs[pos] = vecs[j]
-					}
-				}
-				for j, rp := range ap.Result {
-					if rp.Rel == 1 {
-						if err := ap.ctr.buf[batIdx].Vecs[j].UnionOne(ctr.joinBat1.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
-							return err
+						vecs := make([]*vector.Vector, len(ctr.exprExecs))
+						for j, exprExec := range ctr.exprExecs {
+							vec, err := exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
+							if err != nil {
+								return err
+							}
+							vecs[j] = vec
 						}
-					} else {
-						if err := ap.ctr.buf[batIdx].Vecs[j].UnionNull(proc.Mp()); err != nil {
-							return err
+						for j, pos := range ap.UpdateColIdxList {
+							ctr.joinBat1.Vecs[pos] = vecs[j]
 						}
 					}
-				}
-				// Restore original joinBat1 vectors to prevent corruption of
-				// expression executor internal caches by subsequent iterations.
-				for j, pos := range ap.UpdateColIdxList {
-					ctr.joinBat1.Vecs[pos] = ctr.savedVecs[j]
+					for j, rp := range ap.Result {
+						if rp.Rel == 1 {
+							if err := ap.ctr.buf[batIdx].Vecs[j].UnionOne(ctr.joinBat1.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
+								return err
+							}
+						} else {
+							if err := ap.ctr.buf[batIdx].Vecs[j].UnionNull(proc.Mp()); err != nil {
+								return err
+							}
+						}
+					}
+					return nil
+				})
+				if err != nil {
+					return err
 				}
 			}
 			ap.ctr.buf[batIdx].AddRowCount(1)
@@ -764,9 +767,32 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 	}
 	return nil
 }
+
+// withRestoredJoinBat1Vectors temporarily permits UPDATE expressions to
+// replace joinBat1 vector pointers. Expression executors retain ownership of
+// their result vectors, so every return path must restore the join batch's
+// original vectors before Reset or Free cleans either owner.
+func (ctr *container) withRestoredJoinBat1Vectors(updateCols []int32, fn func() error) (err error) {
+	if len(updateCols) == 0 {
+		return fn()
+	}
+	if len(ctr.savedVecs) != len(updateCols) {
+		ctr.savedVecs = make([]*vector.Vector, len(updateCols))
+	}
+	for i, pos := range updateCols {
+		ctr.savedVecs[i] = ctr.joinBat1.Vecs[pos]
+	}
+	defer func() {
+		for i, pos := range updateCols {
+			ctr.joinBat1.Vecs[pos] = ctr.savedVecs[i]
+		}
+	}()
+	return fn()
+}
+
 func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
 	ap.resetRBat()
-	err := ctr.evalJoinCondition(bat, proc)
+	err := ctr.evalJoinConditionBudgeted(bat, proc)
 	if err != nil {
 		return err
 	}
@@ -776,9 +802,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 		}
 		if ctr.joinBat2 == nil && ctr.batchRowCount > 0 {
 			ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
-		}
-		if ctr.savedVecs == nil && len(ap.UpdateColIdxList) > 0 {
-			ctr.savedVecs = make([]*vector.Vector, len(ap.UpdateColIdxList))
 		}
 	}
 	rowCntInc := 0
@@ -866,71 +889,67 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 				if err != nil {
 					return err
 				}
-				if ctr.mp.HashOnUnique() {
-					sel := vals[k] - 1
-					idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-					err = colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2), 1, ctr.cfs2)
-					if err != nil {
-						return err
-					}
-					vecs := make([]*vector.Vector, len(ctr.exprExecs))
-					for j, exprExec := range ctr.exprExecs {
-						vecs[j], err = exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
-						if err != nil {
-							return err
-						}
-					}
-					for j, pos := range ap.UpdateColIdxList {
-						ctr.savedVecs[j] = ctr.joinBat1.Vecs[pos]
-						ctr.joinBat1.Vecs[pos] = vecs[j]
-					}
-				} else {
-					sels := ctr.mp.GetSels(vals[k])
-					for j, pos := range ap.UpdateColIdxList {
-						ctr.savedVecs[j] = ctr.joinBat1.Vecs[pos]
-					}
-					for _, sel := range sels {
+				err = ctr.withRestoredJoinBat1Vectors(ap.UpdateColIdxList, func() error {
+					if ctr.mp.HashOnUnique() {
+						sel := vals[k] - 1
 						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-						err = colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2), 1, ctr.cfs2)
-						if err != nil {
+						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2), 1, ctr.cfs2); err != nil {
 							return err
 						}
 						vecs := make([]*vector.Vector, len(ctr.exprExecs))
 						for j, exprExec := range ctr.exprExecs {
-							vecs[j], err = exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
+							vec, err := exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
 							if err != nil {
 								return err
 							}
+							vecs[j] = vec
 						}
 						for j, pos := range ap.UpdateColIdxList {
 							ctr.joinBat1.Vecs[pos] = vecs[j]
 						}
-					}
-				}
-				for j, rp := range ap.Result {
-					if rp.Rel == 1 {
-						//if last index is row_id, meams need fetch right child's partition column
-						//@FIXME should have better way to get right child's partition column
-						var srcVec *vector.Vector
-						if ctr.joinBat1.Vecs[rp.Pos].GetType().Oid == types.T_Rowid {
-							srcVec = ctr.joinBat2.Vecs[rp.Pos]
-						} else {
-							srcVec = ctr.joinBat1.Vecs[rp.Pos]
-						}
-						if err := ctr.rbat.Vecs[j].UnionOne(srcVec, 0, proc.Mp()); err != nil {
-							return err
-						}
 					} else {
-						if err := ctr.rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
-							return err
+						sels := ctr.mp.GetSels(vals[k])
+						for _, sel := range sels {
+							idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+							if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2), 1, ctr.cfs2); err != nil {
+								return err
+							}
+							vecs := make([]*vector.Vector, len(ctr.exprExecs))
+							for j, exprExec := range ctr.exprExecs {
+								vec, err := exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
+								if err != nil {
+									return err
+								}
+								vecs[j] = vec
+							}
+							for j, pos := range ap.UpdateColIdxList {
+								ctr.joinBat1.Vecs[pos] = vecs[j]
+							}
 						}
 					}
-				}
-				// Restore original joinBat1 vectors to prevent corruption of
-				// expression executor internal caches (e.g. nullVecCache) by
-				// subsequent SetJoinBatchValues calls.
-				for j, pos := range ap.UpdateColIdxList {
-					ctr.joinBat1.Vecs[pos] = ctr.savedVecs[j]
+					for j, rp := range ap.Result {
+						if rp.Rel == 1 {
+							//if last index is row_id, meams need fetch right child's partition column
+							//@FIXME should have better way to get right child's partition column
+							var srcVec *vector.Vector
+							if ctr.joinBat1.Vecs[rp.Pos].GetType().Oid == types.T_Rowid {
+								srcVec = ctr.joinBat2.Vecs[rp.Pos]
+							} else {
+								srcVec = ctr.joinBat1.Vecs[rp.Pos]
+							}
+							if err := ctr.rbat.Vecs[j].UnionOne(srcVec, 0, proc.Mp()); err != nil {
+								return err
+							}
+						} else {
+							if err := ctr.rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
+								return err
+							}
+						}
+					}
+					return nil
+				})
+				if err != nil {
+					return err
 				}
 				ctr.matched.Add(vals[k] - 1)
 				rowCntInc++
@@ -952,6 +971,17 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		ctr.evecs[i].vec = vec
 	}
 	return nil
+}
+
+func (ctr *container) evalJoinConditionBudgeted(bat *batch.Batch, proc *process.Process) error {
+	if ctr.probeExpressionLease == nil {
+		return ctr.evalJoinCondition(bat, proc)
+	}
+	return ctr.probeExpressionLease.Eval(proc, []*batch.Batch{bat}, bat.RowCount(), func(i int, vec *vector.Vector) error {
+		ctr.vecs[i] = vec
+		ctr.evecs[i].vec = vec
+		return nil
+	})
 }
 func unionSelsByBatch(dst *vector.Vector, batches []*batch.Batch, colPos int32, sels []int32, proc *process.Process) error {
 	if len(sels) <= 16 {
