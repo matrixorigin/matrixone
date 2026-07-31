@@ -722,6 +722,16 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
+				overloadId: 101,
+				args:       []types.T{types.T_enum, types.T_enum},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Enum]().operatorIn
+				},
+			},
+			{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {

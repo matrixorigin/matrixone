@@ -563,6 +563,86 @@ func TestIndexJoinBuildsVersionedSerializedRuntimeFilter(t *testing.T) {
 	require.Equal(t, buildSpec.Tag, indexScan.RuntimeFilterProbeList[0].Tag)
 }
 
+func TestEnumIndexJoinsRemainEligible(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion7)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	enumType := planpb.Type{
+		Id:         int32(types.T_enum),
+		Enumvalues: "small,large",
+	}
+	setJoinKeyType := func(
+		builder *QueryBuilder,
+		join *planpb.Node,
+		leftDef *planpb.TableDef,
+	) {
+		right := builder.qry.Nodes[join.Children[1]]
+		leftDef.Cols[1].Typ = enumType
+		right.TableDef.Cols[1].Typ = enumType
+		join.OnList[0].GetF().Args[0].Typ = enumType
+		join.OnList[0].GetF().Args[1].Typ = enumType
+	}
+
+	t.Run("serialized secondary index", func(t *testing.T) {
+		builder, joinID, leftScanID, leftDef :=
+			makeIndexHintJoinBuilder(t)
+		join := builder.qry.Nodes[joinID]
+		setJoinKeyType(builder, join, leftDef)
+
+		_, err := builder.applyIndicesForJoins(
+			joinID, join, map[[2]int32]int{},
+			map[[2]int32]*planpb.Expr{})
+		require.NoError(t, err)
+		require.NotEqual(t, leftScanID, join.Children[0])
+		require.Len(t, join.RuntimeFilterBuildList, 1)
+		spec := join.RuntimeFilterBuildList[0]
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1,
+			spec.KeyEncoding)
+		require.Equal(t, []planpb.Type{enumType},
+			spec.KeyComponentProbeTypes)
+	})
+
+	t.Run("direct unique index", func(t *testing.T) {
+		builder, joinID, leftScanID, leftDef :=
+			makeIndexHintJoinBuilder(t)
+		join := builder.qry.Nodes[joinID]
+		setJoinKeyType(builder, join, leftDef)
+		leftDef.Indexes = []*planpb.IndexDef{{
+			IndexName:      "uidx_a",
+			IndexTableName: "idx_join_a_table",
+			Parts:          []string{"a"},
+			Unique:         true,
+			TableExist:     true,
+		}}
+		mockCtx := builder.compCtx.(*fullTextJoinMockCompilerContext)
+		mockCtx.tables["idx_join_a_table"].Cols[0].Typ = enumType
+
+		_, err := builder.applyIndicesForJoins(
+			joinID, join, map[[2]int32]int{},
+			map[[2]int32]*planpb.Expr{})
+		require.NoError(t, err)
+		require.NotEqual(t, leftScanID, join.Children[0])
+		require.Len(t, join.RuntimeFilterBuildList, 1)
+		spec := join.RuntimeFilterBuildList[0]
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+			spec.KeyEncoding)
+		require.Equal(t, int32(types.T_enum), spec.ProbeType.Id)
+		require.Equal(t, int32(types.T_enum), spec.BuildExpr.Typ.Id)
+	})
+}
+
 func TestIndexJoinSkipsUnsafeSerializedRuntimeFilter(t *testing.T) {
 	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
 	join := builder.qry.Nodes[joinID]

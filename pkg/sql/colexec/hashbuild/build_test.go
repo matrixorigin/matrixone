@@ -746,6 +746,83 @@ func TestDedupBatchRewriteRecollectsOptionalKeysWithoutUnsafeReplay(
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestDedupDeleteOnlyRowsPreserveAuxBudgetThroughRuntimeFilter(
+	t *testing.T,
+) {
+	typ := types.T_int32.ToType()
+	tc := newTestCase(
+		t,
+		[]bool{false, false, true},
+		[]types.Type{typ, typ, typ},
+		[]*plan.Expr{newExpr(0, typ)},
+	)
+	tc.arg.IsDedup = true
+	tc.arg.DedupBuildKeepLast = true
+	tc.arg.OnDuplicateAction = plan.Node_FAIL
+	tc.arg.DelColIdx = -1
+	tc.arg.DedupDeleteMarkerColIdx = 2
+	tc.arg.DedupDeleteKeepColIdxList = []int32{2}
+	tc.arg.DedupColName = "id"
+	tc.arg.DedupColTypes = []plan.Type{newExpr(0, typ).Typ}
+	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
+		tc.arg.JoinMapTag+650, 100, typ)
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	budget, err := tc.proc.GetHashBuildBudget()
+	require.NoError(t, err)
+
+	input := makeIntKeyValueBatchWithMarker(
+		tc.proc,
+		[]int32{1, 1, 2},
+		[]int32{10, 20, 30},
+		[]int32{100, 0, 0},
+		[]uint64{1, 2},
+	)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(input, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	filterReceiver := message.NewMessageReceiver(
+		[]int32{tc.arg.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		tc.proc.GetMessageBoard(),
+	)
+	messages, done, err := filterReceiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, messages, 1)
+	runtimeFilter := messages[0].(message.RuntimeFilterMessage)
+	require.Equal(t, int32(message.RuntimeFilter_IN), runtimeFilter.Typ)
+
+	joinResult, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag,
+		false,
+		0,
+		tc.proc.GetMessageBoard(),
+		tc.proc.Ctx,
+	)
+	require.NoError(t, err)
+	require.True(t, joinResult.IsSuccess())
+	joinMap := joinResult.JoinMap()
+	require.NotNil(t, joinMap)
+	require.Equal(t, int64(3), joinMap.GetRowCount())
+	require.Equal(t, uint64(2), joinMap.GetGroupCount())
+	require.True(t, joinMap.IsDeleted(2))
+
+	runtimeFilter.Destroy()
+	joinMap.Free()
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.marg.Reset(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Zero(t, budget.Used())
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 func TestShuffleDedupAdmissionAfterRewriteDoesNotSpillPartialInput(
 	t *testing.T,
 ) {

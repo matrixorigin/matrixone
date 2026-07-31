@@ -517,7 +517,11 @@ func (hb *HashmapBuilder) buildAuxBytesWithUniqueProjection(
 		}
 		bytes += growthSlack
 	}
-	rows := uint64(hb.InputBatchRowCount)
+	rowCount := hb.InputBatchRowCount
+	if hb.hashMapRowCountSet {
+		rowCount = hb.hashMapRowCount
+	}
+	rows := uint64(rowCount)
 	const iteratorScratch = uint64(640 << 10)
 	if rows > math.MaxUint64/64 || bytes > math.MaxUint64-rows*64 || bytes+rows*64 > math.MaxUint64-iteratorScratch {
 		return 0, process.ErrHashBuildBudgetInvalid

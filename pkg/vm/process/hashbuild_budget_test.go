@@ -1309,41 +1309,6 @@ func TestGetHashBuildBudgetInitializesAndReusesCNAggregate(t *testing.T) {
 	aggregate.Close()
 }
 
-func TestOpenProcessGenerationClampsStaleResolvedCapAtomically(t *testing.T) {
-	budget := MustNewHashBuildBudget(100, 100)
-	if err := budget.UpdateAggregateCap(40); err != nil {
-		t.Fatal(err)
-	}
-
-	generation, err := budget.openProcessGeneration(1, 100, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if generation.Cap() != 40 {
-		t.Fatalf("generation cap = %d, want current aggregate cap 40",
-			generation.Cap())
-	}
-	if generation.SpillDiskCap() != defaultSpillCap(40) {
-		t.Fatalf("spill disk cap = %d, want %d",
-			generation.SpillDiskCap(), defaultSpillCap(40))
-	}
-
-	// Explicit public configuration remains strict. Only the process path may
-	// clamp a ceiling sample that became stale between resolution and opening.
-	if _, err = budget.OpenGenerationWithCap(2, 100); !errors.Is(err, ErrHashBuildBudgetInvalid) {
-		t.Fatalf("explicit oversized generation cap returned %v", err)
-	}
-	if _, err = budget.OpenGenerationWithSpillCaps(
-		3, 100, 0, 0); !errors.Is(err, ErrHashBuildBudgetInvalid) {
-		t.Fatalf("explicit oversized spill generation cap returned %v", err)
-	}
-	budget.Close()
-	if _, err = budget.OpenGenerationWithSpillCaps(
-		4, 40, 0, 0); !errors.Is(err, ErrHashBuildBudgetClosed) {
-		t.Fatalf("spill generation opened after budget close: %v", err)
-	}
-}
-
 func TestHashBuildBudgetDefensiveAndProviderFailurePaths(t *testing.T) {
 	for _, limits := range [][2]uint64{{0, 1}, {1, 0}, {1, 2}} {
 		if _, err := NewHashBuildBudget(limits[0], limits[1]); !errors.Is(err, ErrHashBuildBudgetInvalid) {

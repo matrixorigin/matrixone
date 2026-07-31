@@ -56,7 +56,7 @@ func SupportsExactRawRuntimeFilter(oid types.T) bool {
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
-		types.T_uuid, types.T_year:
+		types.T_uuid, types.T_year, types.T_enum:
 		return true
 	default:
 		return false

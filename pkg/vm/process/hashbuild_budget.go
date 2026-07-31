@@ -866,80 +866,19 @@ func (b *HashBuildBudget) OpenGenerationWithCap(id, cap uint64) (*HashBuildBudge
 // OpenGenerationWithSpillCaps opens a generation with explicit memory, disk,
 // and file-descriptor ceilings. Zero spill values use the documented defaults.
 func (b *HashBuildBudget) OpenGenerationWithSpillCaps(id, memoryCap, spillDiskCap, spillFDCap uint64) (*HashBuildBudgetGeneration, error) {
-	return b.openGenerationWithSpillCaps(
-		id, memoryCap, spillDiskCap, spillFDCap, false)
-}
-
-// openProcessGeneration opens the generation selected by GetHashBuildBudget.
-// The caller's resolved query cap may have been sampled before another
-// statement refreshed the shared CN aggregate to a lower live ceiling. Clamp
-// that stale sample and construct the generation under the same aggregate
-// lock; otherwise the check-then-open sequence can reject an ordinary query
-// with an "invalid hash build budget" configuration error.
-func (b *HashBuildBudget) openProcessGeneration(
-	id, requestedMemoryCap, spillDiskCap uint64,
-) (*HashBuildBudgetGeneration, error) {
-	return b.openGenerationWithSpillCaps(
-		id, requestedMemoryCap, spillDiskCap, 0, true)
-}
-
-// openGenerationWithSpillCaps validates and constructs a complete generation
-// under one aggregate lock. Process-owned cap samples may become stale and are
-// clamped to the current live aggregate; explicit public configuration remains
-// strict.
-func (b *HashBuildBudget) openGenerationWithSpillCaps(
-	id, memoryCap, spillDiskCap, spillFDCap uint64,
-	clampStaleProcessCap bool,
-) (*HashBuildBudgetGeneration, error) {
-	if b == nil || memoryCap == 0 {
-		message := "invalid hash build generation cap"
-		if clampStaleProcessCap {
-			message = "invalid process hash build generation cap"
-		}
-		return nil, &HashBuildBudgetError{
-			Kind:      HashBuildBudgetErrorInvalid,
-			Requested: memoryCap,
-			Message:   message,
-		}
+	g, err := b.OpenGenerationWithCap(id, memoryCap)
+	if err != nil {
+		return nil, err
 	}
-
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.closed {
-		return nil, &HashBuildBudgetError{
-			Kind:    HashBuildBudgetErrorClosed,
-			Message: ErrHashBuildBudgetClosed.Error(),
-		}
-	}
-
-	requestedMemoryCap := memoryCap
-	if memoryCap > b.aggregateCap {
-		if !clampStaleProcessCap {
-			return nil, &HashBuildBudgetError{
-				Kind:      HashBuildBudgetErrorInvalid,
-				Requested: memoryCap,
-				Cap:       b.aggregateCap,
-			}
-		}
-		memoryCap = b.aggregateCap
-	}
-	if memoryCap == 0 {
-		return nil, &HashBuildBudgetError{
-			Kind:      HashBuildBudgetErrorInvalid,
-			Requested: requestedMemoryCap,
-			Cap:       b.aggregateCap,
-			Message:   "zero live process hash build generation cap",
-		}
-	}
-
 	if spillDiskCap == 0 {
 		spillDiskCap = defaultSpillCap(memoryCap)
 	}
-	if spillDiskCap > b.spillDiskCap {
-		spillDiskCap = b.spillDiskCap
-	}
 	if spillFDCap == 0 {
 		spillFDCap = configuredSpillFDCap(memoryCap)
+	}
+	if spillDiskCap > b.spillDiskCap {
+		spillDiskCap = b.spillDiskCap
 	}
 	if spillFDCap > b.spillFDConfiguredCap {
 		spillFDCap = b.spillFDConfiguredCap
@@ -948,15 +887,11 @@ func (b *HashBuildBudget) openGenerationWithSpillCaps(
 	if effectiveFDCap > b.spillFDCap {
 		effectiveFDCap = b.spillFDCap
 	}
-
-	return &HashBuildBudgetGeneration{
-		budget:               b,
-		id:                   id,
-		cap:                  memoryCap,
-		spillDiskCap:         spillDiskCap,
-		spillFDConfiguredCap: spillFDCap,
-		spillFDCap:           effectiveFDCap,
-	}, nil
+	g.spillDiskCap = spillDiskCap
+	g.spillFDConfiguredCap = spillFDCap
+	g.spillFDCap = effectiveFDCap
+	b.mu.Unlock()
+	return g, nil
 }
 
 // OpenGenerationWithLimits is a compatibility spelling for explicit spill caps.
@@ -1955,15 +1890,15 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 			return nil, err
 		}
 	}
+	queryCap := ceiling.QueryCap
+	if aggregate.AggregateCap() < queryCap {
+		queryCap = aggregate.AggregateCap()
+	}
 	spillDiskCap := uint64(0)
 	if proc.Base.Lim.SpillSize > 0 {
 		spillDiskCap = uint64(proc.Base.Lim.SpillSize)
 	}
-	generation, err := aggregate.openProcessGeneration(
-		hashBuildGenerationSequence.Add(1),
-		ceiling.QueryCap,
-		spillDiskCap,
-	)
+	generation, err := aggregate.OpenGenerationWithSpillCaps(hashBuildGenerationSequence.Add(1), queryCap, spillDiskCap, 0)
 	if err != nil {
 		return nil, err
 	}
