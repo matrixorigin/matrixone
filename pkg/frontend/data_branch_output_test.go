@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -115,8 +116,10 @@ func TestDataBranchOutputFileNameAndHintQuotePathSeparators(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, release)
 	require.NotNil(t, cleanup)
-	t.Cleanup(release)
-	t.Cleanup(cleanup)
+	t.Cleanup(func() {
+		require.NoError(t, release())
+		cleanup()
+	})
 
 	require.Equal(t, outputDir, filepath.Dir(filePath))
 	require.Regexp(t, regexp.MustCompile(
@@ -172,8 +175,10 @@ func TestDataBranchOutputFileNameSurvivesCSVFormattingAndLengthLimit(t *testing.
 		require.NoError(t, err)
 		require.NotNil(t, release)
 		require.NotNil(t, cleanup)
-		t.Cleanup(release)
-		t.Cleanup(cleanup)
+		t.Cleanup(func() {
+			require.NoError(t, release())
+			cleanup()
+		})
 
 		baseName := filepath.Base(filePath)
 		require.LessOrEqual(t, len(baseName), maxDiffFileNameStemBytes+len(".sql"))
@@ -1464,7 +1469,7 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderNilWorker(t *testing.T) {
-	_, _, err := newSingleWriteAppender(context.Background(), nil, nil, "unused", nil)
+	_, _, err := newSingleWriteAppender(context.Background(), nil, nil, "unused")
 	require.Error(t, err)
 }
 
@@ -1480,16 +1485,12 @@ func TestDataBranchOutputNewSingleWriteAppenderSuccess(t *testing.T) {
 	require.NoError(t, err)
 	defer pool.Release()
 
-	called := false
-	writeFile, release, err := newSingleWriteAppender(ctx, pool, etlFS, targetPath, func() {
-		called = true
-	})
+	writeFile, release, err := newSingleWriteAppender(ctx, pool, etlFS, targetPath)
 	require.NoError(t, err)
 
 	require.NoError(t, writeFile([]byte("BEGIN;\n")))
 	require.NoError(t, writeFile([]byte("COMMIT;\n")))
-	release()
-	require.False(t, called)
+	require.NoError(t, release())
 
 	content, err := os.ReadFile(filePath)
 	require.NoError(t, err)
@@ -1504,6 +1505,162 @@ func (fs *failingWriteFS) Write(ctx context.Context, vector fileservice.IOVector
 	return moerr.NewInternalErrorNoCtx("mock write failure")
 }
 
+type lateFailingWriteFS struct {
+	fileservice.FileService
+	deleteCalls int
+}
+
+func (fs *lateFailingWriteFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	for _, entry := range vector.Entries {
+		if entry.ReaderForWrite != nil {
+			if _, err := io.Copy(io.Discard, entry.ReaderForWrite); err != nil {
+				return err
+			}
+		}
+	}
+	return moerr.NewInternalErrorNoCtx("mock late write failure")
+}
+
+func (fs *lateFailingWriteFS) Delete(ctx context.Context, filePaths ...string) error {
+	fs.deleteCalls++
+	return fs.FileService.Delete(ctx, filePaths...)
+}
+
+type closeFailingMutator struct {
+	closeCalls int
+}
+
+func (m *closeFailingMutator) Mutate(context.Context, ...fileservice.IOEntry) error {
+	return nil
+}
+
+func (m *closeFailingMutator) Append(context.Context, ...fileservice.IOEntry) error {
+	return nil
+}
+
+func (m *closeFailingMutator) Close() error {
+	m.closeCalls++
+	return moerr.NewInternalErrorNoCtx("mock mutator close failure")
+}
+
+type closeFailingMutableFS struct {
+	fileservice.MutableFileService
+	mutator fileservice.Mutator
+}
+
+func (fs *closeFailingMutableFS) NewMutator(
+	context.Context,
+	string,
+) (fileservice.Mutator, error) {
+	return fs.mutator, nil
+}
+
+func installDataBranchTestFileService(
+	t *testing.T,
+	ses *Session,
+	fileService fileservice.FileService,
+) {
+	t.Helper()
+	pu := getPu(ses.GetService())
+	originalFS := pu.FileService
+	pu.FileService = fileService
+	t.Cleanup(func() {
+		pu.FileService = originalFS
+	})
+}
+
+func TestDataBranchOutputNewSingleWriteAppenderReturnsLateWriteFailure(t *testing.T) {
+	ctx := context.Background()
+	etlFS, _, err := fileservice.GetForETL(ctx, nil, filepath.Join(t.TempDir(), "diff.sql"))
+	require.NoError(t, err)
+
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+
+	writeFile, release, err := newSingleWriteAppender(
+		ctx,
+		pool,
+		&lateFailingWriteFS{FileService: etlFS},
+		"diff.sql",
+	)
+	require.NoError(t, err)
+	require.NoError(t, writeFile([]byte("BEGIN;\n")))
+	require.NoError(t, writeFile([]byte("COMMIT;\n")))
+	require.EqualError(t, release(), "internal error: mock late write failure")
+}
+
+func TestDataBranchOutputReturnsLateFileWriteFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ses := newValidateSession(t)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	targetFS := &lateFailingWriteFS{FileService: localFS}
+	installDataBranchTestFileService(t, ses, targetFS)
+
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+
+	ctrl := gomock.NewController(t)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkKind = fakeKind
+	tblStuff.worker = pool
+
+	retCh := make(chan batchWithKind)
+	close(retCh)
+	stmt := &tree.DataBranchDiff{
+		OutputOpt: &tree.DiffOutputOpt{DirPath: defines.SharedFileServiceName + ":/diff"},
+	}
+
+	err = satisfyDiffOutputOpt(
+		ctx,
+		cancel,
+		func() {},
+		ses,
+		nil,
+		stmt,
+		branchMetaInfo{},
+		tblStuff,
+		retCh,
+	)
+	require.EqualError(t, err, "internal error: mock late write failure")
+	require.Zero(t, ses.GetMysqlResultSet().GetRowCount())
+	require.Equal(t, 2, targetFS.deleteCalls, "prepare and failed-output cleanup must both delete")
+}
+
+func TestDataBranchOutputMutableAppenderReturnsCloseFailure(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	mutator := &closeFailingMutator{}
+	targetFS := &closeFailingMutableFS{
+		MutableFileService: localFS,
+		mutator:            mutator,
+	}
+	installDataBranchTestFileService(t, ses, targetFS)
+
+	ctrl := gomock.NewController(t)
+	stmt := &tree.DataBranchDiff{
+		OutputOpt: &tree.DiffOutputOpt{DirPath: defines.SharedFileServiceName + ":/diff"},
+	}
+	_, _, writeFile, release, cleanup, err := prepareFSForDiffAsFile(
+		ctx,
+		ses,
+		stmt,
+		newTestBranchTableStuff(ctrl),
+	)
+	require.NoError(t, err)
+	require.NoError(t, writeFile([]byte("BEGIN;\nCOMMIT;\n")))
+	require.EqualError(t, release(), "internal error: mock mutator close failure")
+	require.Equal(t, 1, mutator.closeCalls)
+	cleanup()
+}
+
 func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -1516,19 +1673,16 @@ func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
 	require.NoError(t, err)
 	defer pool.Release()
 
-	called := false
 	writeFile, release, err := newSingleWriteAppender(
 		ctx,
 		pool,
 		&failingWriteFS{FileService: etlFS},
 		"diff.sql",
-		func() { called = true },
 	)
 	require.NoError(t, err)
 
 	_ = writeFile([]byte("SOME SQL;\n"))
-	release()
-	require.True(t, called)
+	require.EqualError(t, release(), "internal error: mock write failure")
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
@@ -1543,7 +1697,7 @@ func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
 	require.NoError(t, err)
 	pool.Release()
 
-	_, _, err = newSingleWriteAppender(ctx, pool, etlFS, "diff.sql", nil)
+	_, _, err = newSingleWriteAppender(ctx, pool, etlFS, "diff.sql")
 	require.Error(t, err)
 }
 
