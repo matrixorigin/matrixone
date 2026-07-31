@@ -6,7 +6,7 @@ SELECT HOUR('2024-12-20 15:30:45') AS result2;
 15
 SELECT HOUR(NOW()) AS result3;
 ➤ result3[-6,8,0]  𝄀
-15
+18
 SELECT HOUR(CAST('15:30:45' AS TIME)) AS time_cast;
 ➤ time_cast[4,32,0]  𝄀
 15
@@ -191,7 +191,7 @@ SELECT HOUR(v), HOUR(c), HOUR(t) FROM time_extract_prefix_boundaries;
 26  ¦  26  ¦  26  𝄀
 12  ¦  12  ¦  12  𝄀
 12  ¦  12  ¦  12  𝄀
-12  ¦  12  ¦  12
+12  ¦  12  ¦  12  𝄀
 0  ¦  0  ¦  0  𝄀
 12  ¦  12  ¦  12  𝄀
 12  ¦  12  ¦  12

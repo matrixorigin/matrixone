@@ -179,7 +179,7 @@ SELECT MINUTE(v), MINUTE(c), MINUTE(t) FROM time_extract_prefix_boundaries;
 0  ¦  0  ¦  0  𝄀
 0  ¦  0  ¦  0  𝄀
 0  ¦  0  ¦  0  𝄀
-56  ¦  56  ¦  56
+56  ¦  56  ¦  56  𝄀
 20  ¦  20  ¦  20  𝄀
 34  ¦  34  ¦  34  𝄀
 34  ¦  34  ¦  34
