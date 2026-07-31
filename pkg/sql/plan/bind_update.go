@@ -78,6 +78,17 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
+	for i, tableDef := range dmlCtx.tableDefs {
+		if len(dmlCtx.updateCol2Expr[i]) > 0 &&
+			(len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0) {
+			// FK validation and parent-side actions depend on the current
+			// foreign_key_checks value. Mark the plan before that value is
+			// inspected so a plan built with checks disabled cannot be reused
+			// after they are enabled (or vice versa).
+			builder.qry.HasForeignKeyAction = true
+			break
+		}
+	}
 	if err = validateUpdateTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
 		return 0, err
 	}
