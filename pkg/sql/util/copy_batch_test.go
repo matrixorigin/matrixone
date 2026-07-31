@@ -98,7 +98,7 @@ func TestCopyBatchCrossesAllocationOwnershipBoundary(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelectionWithBitmaps(
+	selection, err := vector.NewAllocationAccountSelection(
 		account,
 		1,
 		1,

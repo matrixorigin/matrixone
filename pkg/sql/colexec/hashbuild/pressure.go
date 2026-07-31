@@ -28,7 +28,7 @@ import (
 // control flow. Sealed and invariant failures are lifecycle bugs and must
 // remain terminal. HashBuildBudgetError now exposes disjoint lifecycle and
 // capacity identities; this classifier is the one control-flow boundary for
-// physical-account and legacy-budget failures.
+// physical-allocation and spill-resource failures.
 type MemoryPressureReason uint8
 
 const (
@@ -58,12 +58,15 @@ func MemoryPressureReasonOf(err error) MemoryPressureReason {
 		switch budgetErr.Kind {
 		case process.HashBuildBudgetErrorAdmission:
 			switch budgetErr.Component {
+			case process.HashBuildBudgetComponentMemory:
+				return MemoryPressureCapacity
 			case process.HashBuildBudgetComponentSpillDisk:
 				return MemoryPressureSpillDiskLimit
 			case process.HashBuildBudgetComponentSpillFD:
 				return MemoryPressureSpillFDLimit
+			default:
+				return MemoryPressureInvalid
 			}
-			return MemoryPressureCapacity
 		case process.HashBuildBudgetErrorClosed:
 			return MemoryPressureSealed
 		case process.HashBuildBudgetErrorInvalid,
@@ -88,13 +91,11 @@ func MemoryPressureReasonOf(err error) MemoryPressureReason {
 		return MemoryPressureInvariant
 	}
 
-	// A few compatibility call sites return the bare sentinel. Check closed
-	// first; structured errors above never rely on the legacy Is alias.
+	// Resource-ledger helpers may still return a bare lifecycle sentinel.
 	if errors.Is(err, process.ErrHashBuildBudgetClosed) {
 		return MemoryPressureSealed
 	}
-	if errors.Is(err, process.ErrHashBuildBudgetAdmission) ||
-		errors.Is(err, process.ErrHashBuildBudgetRejected) {
+	if errors.Is(err, process.ErrHashBuildBudgetAdmission) {
 		return MemoryPressureCapacity
 	}
 	if errors.Is(err, process.ErrHashBuildBudgetInvalid) ||

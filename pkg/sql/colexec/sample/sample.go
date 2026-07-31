@@ -214,42 +214,204 @@ func (ctr *container) evaluateSampleAndGroupByColumns(proc *process.Process, bat
 }
 
 func (ctr *container) hashAndSample(bat *batch.Batch, proc *process.Process) (err error) {
-	var iterator hashmap.Iterator
-	var groupList []uint64
 	count := bat.RowCount()
+	if !hasGroupingRows(ctr.groupVectors) {
+		return ctr.hashNormalRows(bat, proc, 0, count)
+	}
+	if err = ctr.enableGroupingDomain(proc); err != nil {
+		return err
+	}
+	groupingIterator := ctr.groupingHashMap.NewIterator()
+	var normalIterator hashmap.Iterator
+
+	for offset := 0; offset < count; {
+		grouping := rowHasGrouping(ctr.groupVectors, offset)
+		end := offset + 1
+		for end < count && rowHasGrouping(ctr.groupVectors, end) == grouping {
+			end++
+		}
+		if grouping {
+			err = ctr.hashRows(
+				bat,
+				groupingIterator,
+				&ctr.groupingGroupIDs,
+				offset,
+				end-offset,
+				true,
+			)
+		} else {
+			if normalIterator == nil {
+				normalIterator, err = ctr.normalIterator(proc)
+				if err != nil {
+					return err
+				}
+			}
+			err = ctr.hashRows(
+				bat,
+				normalIterator,
+				&ctr.normalGroupIDs,
+				offset,
+				end-offset,
+				true,
+			)
+		}
+		if err != nil {
+			return err
+		}
+		offset = end
+	}
+	return nil
+}
+
+func hasGroupingRows(vecs []*vector.Vector) bool {
+	for _, vec := range vecs {
+		if vec != nil && vec.HasGrouping() {
+			return true
+		}
+	}
+	return false
+}
+
+func rowHasGrouping(vecs []*vector.Vector, row int) bool {
+	for _, vec := range vecs {
+		if vec != nil && vec.GetGrouping().Contains(uint64(row)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (ctr *container) normalIterator(proc *process.Process) (hashmap.Iterator, error) {
+	var err error
 
 	if ctr.useIntHashMap {
 		if ctr.intHashMap == nil {
 			ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVectorsNullable, proc.Mp())
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
-		iterator = ctr.intHashMap.NewIterator()
+		return ctr.intHashMap.NewIterator(), nil
 	} else {
 		if ctr.strHashMap == nil {
 			ctr.strHashMap, err = hashmap.NewStrHashMap(ctr.groupVectorsNullable, proc.Mp())
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
-		iterator = ctr.strHashMap.NewIterator()
+		return ctr.strHashMap.NewIterator(), nil
+	}
+}
+
+func (ctr *container) normalGroupCount() uint64 {
+	if ctr.useIntHashMap && ctr.intHashMap != nil {
+		return ctr.intHashMap.GroupCount()
+	}
+	if !ctr.useIntHashMap && ctr.strHashMap != nil {
+		return ctr.strHashMap.GroupCount()
+	}
+	return 0
+}
+
+func (ctr *container) enableGroupingDomain(proc *process.Process) error {
+	if ctr.groupingHashMap != nil {
+		return nil
+	}
+	groupingMap, err := hashmap.NewStrHashMap(
+		ctr.groupVectorsNullable,
+		proc.Mp(),
+	)
+	if err != nil {
+		return err
+	}
+	if err = groupingMap.SetGroupingAware(); err != nil {
+		groupingMap.Free()
+		return err
 	}
 
-	for i := 0; i < count; i += hashmap.UnitLimit {
-		n := count - i
+	normalGroups := ctr.normalGroupCount()
+	ctr.normalGroupIDs = make([]uint64, normalGroups+1)
+	for i := uint64(1); i <= normalGroups; i++ {
+		ctr.normalGroupIDs[i] = i
+	}
+	ctr.groupingGroupIDs = []uint64{0}
+	ctr.nextGroupID = normalGroups
+	ctr.groupingHashMap = groupingMap
+	return nil
+}
+
+func (ctr *container) globalGroupIDs(
+	local []uint64,
+	translation *[]uint64,
+) []uint64 {
+	ids := *translation
+	for i, localID := range local {
+		if localID == 0 {
+			continue
+		}
+		for uint64(len(ids)) <= localID {
+			ctr.nextGroupID++
+			ids = append(ids, ctr.nextGroupID)
+		}
+		local[i] = ids[localID]
+	}
+	*translation = ids
+	return local
+}
+
+func (ctr *container) hashNormalRows(
+	bat *batch.Batch,
+	proc *process.Process,
+	offset int,
+	count int,
+) error {
+	iterator, err := ctr.normalIterator(proc)
+	if err != nil {
+		return err
+	}
+	return ctr.hashRows(
+		bat,
+		iterator,
+		&ctr.normalGroupIDs,
+		offset,
+		count,
+		ctr.groupingHashMap != nil,
+	)
+}
+
+func (ctr *container) hashRows(
+	bat *batch.Batch,
+	iterator hashmap.Iterator,
+	translation *[]uint64,
+	offset int,
+	count int,
+	translate bool,
+) error {
+	end := offset + count
+	for offset < end {
+		n := end - offset
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
 
-		groupList, _, err = iterator.Insert(i, n, ctr.groupVectors)
+		groupList, _, err := iterator.Insert(offset, n, ctr.groupVectors)
 		if err != nil {
 			return err
 		}
-		err = ctr.samplePool.BatchSample(i, n, groupList, ctr.sampleVectors, ctr.groupVectors, bat)
-		if err != nil {
+		if translate {
+			groupList = ctr.globalGroupIDs(groupList[:n], translation)
+		}
+		if err = ctr.samplePool.BatchSample(
+			offset,
+			n,
+			groupList,
+			ctr.sampleVectors,
+			ctr.groupVectors,
+			bat,
+		); err != nil {
 			return err
 		}
+		offset += n
 	}
-	return
+	return nil
 }

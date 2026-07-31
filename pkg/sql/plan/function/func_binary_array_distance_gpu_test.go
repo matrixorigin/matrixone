@@ -60,8 +60,8 @@ func TestBatchArrayDistanceSync_GPU_L2sq(t *testing.T) {
 	constVec := makeConstArrayVec[float32](t, mp, query, N)
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
-	gpuDist, ok, err := testBatchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2sqDistance)
+	gpuDist, ok, err := batchArrayDistanceSync[float32](
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2sqDistance, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(gpuDist))
@@ -102,8 +102,8 @@ func TestBatchArrayDistanceSync_GPU_InnerProduct(t *testing.T) {
 	constVec := makeConstArrayVec[float32](t, mp, query, N)
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
-	gpuDist, ok, err := testBatchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_InnerProduct)
+	gpuDist, ok, err := batchArrayDistanceSync[float32](
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_InnerProduct, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(gpuDist))
@@ -143,8 +143,8 @@ func TestBatchArrayDistanceSync_GPU_CosineDistance(t *testing.T) {
 	constVec := makeConstArrayVec[float32](t, mp, query, N)
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
-	gpuDist, ok, err := testBatchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_CosineDistance)
+	gpuDist, ok, err := batchArrayDistanceSync[float32](
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_CosineDistance, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(gpuDist))
@@ -184,8 +184,8 @@ func TestBatchArrayDistanceSync_GPU_L2Distance(t *testing.T) {
 	constVec := makeConstArrayVec[float32](t, mp, query, N)
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
-	gpuDist, ok, err := testBatchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2Distance)
+	gpuDist, ok, err := batchArrayDistanceSync[float32](
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2Distance, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(gpuDist))

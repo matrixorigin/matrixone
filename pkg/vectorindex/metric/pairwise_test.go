@@ -126,38 +126,6 @@ func TestPairwiseDistanceLaunchWaitCPU_Float64_L2(t *testing.T) {
 	require.InDelta(t, 1.0, float64(out[3]), 1e-5)
 }
 
-func TestPairwiseDistanceLaunchOneToManyCPUUsesCallerOutput(t *testing.T) {
-	query := []float32{1, 0}
-	rows := [][]float32{{1, 0}, {1, 1}, {0, 1}}
-	dist := make([]float32, len(rows))
-
-	handle, err := PairwiseDistanceLaunchOneToManyCPU(
-		query,
-		len(rows),
-		func(row int) []float32 {
-			return rows[row]
-		},
-		Metric_L2sqDistance,
-		dist,
-	)
-	require.NoError(t, err)
-	out, err := PairwiseDistanceWaitCPU(handle, Metric_L2sqDistance)
-	require.NoError(t, err)
-	require.Equal(t, []float32{0, 1, 2}, out)
-	require.Equal(t, &dist[0], &out[0])
-
-	_, err = PairwiseDistanceLaunchOneToManyCPU(
-		query,
-		len(rows),
-		func(row int) []float32 {
-			return rows[row]
-		},
-		Metric_L2sqDistance,
-		dist[:len(rows)-1],
-	)
-	require.Error(t, err)
-}
-
 func TestPairwiseDistanceWaitCPU_InvalidHandle(t *testing.T) {
 	_, err := PairwiseDistanceWaitCPU(PairwiseJobHandle(0), Metric_L2sqDistance)
 	require.Error(t, err)

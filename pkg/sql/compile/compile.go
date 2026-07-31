@@ -327,7 +327,7 @@ func (c *Compile) clear() {
 	c.allocationAccountLimit = 0
 	c.allocationControllerProvider = nil
 	c.allocationTerminalExporter = nil
-	c.allocationLifecycleAutomatic = false
+	c.allocationAccountOwners = nil
 	c.allocationAttempt = nil
 	c.isPrepare = false
 	c.hasMergeOp = false
@@ -628,11 +628,7 @@ func (c *Compile) prePipelineInitializer() (err error) {
 func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget {
 	return materialized.SpillBudget{
 		ReserveMemory: func(size uint64) (materialized.Reservation, error) {
-			budget, err := proc.GetHashBuildBudget()
-			if err != nil {
-				return nil, err
-			}
-			return budget.Reserve(size)
+			return proc.GetCTEMemoryBudget().Reserve(proc.Ctx, size)
 		},
 		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
 			budget, err := proc.GetHashBuildBudget()
@@ -6998,35 +6994,6 @@ func (c *Compile) SetOriginSQL(sql string) {
 // resource root enforces that at most one eligible Compile becomes the owner.
 func (c *Compile) SetResourceAttemptOwnerEligible() {
 	c.resourceAttemptOwnerEligible = true
-}
-
-// ConfigureAllocationAccountLifecycle installs the generation provider used
-// by allocation-accounted owners. A nil registry keeps production on the
-// legacy path and opens no generation.
-func (c *Compile) ConfigureAllocationAccountLifecycle(
-	registry *mpool.AllocationAccountRegistry,
-	limit uint64,
-	exporter func(mpool.AllocationAccountTerminalSnapshot),
-) {
-	c.ConfigureAllocationAccountLifecycleWithController(
-		registry,
-		limit,
-		nil,
-		exporter,
-	)
-}
-
-func (c *Compile) ConfigureAllocationAccountLifecycleWithController(
-	registry *mpool.AllocationAccountRegistry,
-	limit uint64,
-	controllerProvider func() (mpool.AllocationCapacityController, error),
-	exporter func(mpool.AllocationAccountTerminalSnapshot),
-) {
-	c.allocationAccountRegistry = registry
-	c.allocationAccountLimit = limit
-	c.allocationControllerProvider = controllerProvider
-	c.allocationTerminalExporter = exporter
-	c.allocationLifecycleAutomatic = false
 }
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)) {

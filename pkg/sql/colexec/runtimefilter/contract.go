@@ -18,7 +18,6 @@
 package runtimefilter
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -84,9 +83,7 @@ func ClassifyOptionalFallback(err error) OptionalFallbackKind {
 	// traversal order chosen by errors.As below.
 	if errors.Is(err, process.ErrHashBuildBudgetClosed) ||
 		errors.Is(err, process.ErrHashBuildBudgetInvalid) ||
-		errors.Is(err, process.ErrHashBuildCeilingMissing) ||
-		errors.Is(err, process.ErrHashBuildReservationInactive) ||
-		errors.Is(err, process.ErrHashBuildReservationUpward) {
+		errors.Is(err, process.ErrHashBuildCeilingMissing) {
 		return OptionalFallbackNone
 	}
 
@@ -375,84 +372,41 @@ func CloseFloatSignedZero(
 		vector.AppendFixed(vec, value, false, mp))
 }
 
-// MarshalExactFilterVector serializes an exact-filter vector under the
-// statement/CN hash-build budget. Runtime-filter payloads live on the Go heap,
-// outside mpool accounting, so every producer must retain this reservation
-// until the MessageBoard destroys the message.
-//
-// Exact IN payloads have already discarded NULL. Requiring an empty null
-// bitmap makes the wire size exact before allocation and avoids a second,
-// unbudgeted roaring-bitmap serialization.
+// MarshalExactFilterVector serializes an exact-filter vector into physical
+// MPool storage owned by the statement allocation account. The returned
+// release closure transfers that storage lifetime to the MessageBoard.
 func MarshalExactFilterVector(
 	vec *vector.Vector,
-	budget *process.HashBuildBudgetGeneration,
+	mp *mpool.MPool,
+	account *mpool.AllocationAccount,
+	owner mpool.AllocationOwner,
+	site mpool.AllocationSite,
 ) ([]byte, func(), error) {
-	if vec == nil || budget == nil || vec.GetNulls().Any() {
+	if vec == nil || mp == nil || account == nil || vec.GetNulls().Any() {
 		return nil, nil, process.ErrHashBuildBudgetInvalid
 	}
-
-	length := vec.Length()
-	typeSize := vec.GetType().TypeSize()
-	if length < 0 || uint64(length) > math.MaxUint32 || typeSize < 0 {
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	dataBytes := uint64(typeSize)
-	if !vec.IsConst() {
-		if typeSize > 0 && uint64(length) > math.MaxUint64/uint64(typeSize) {
-			return nil, nil, process.ErrHashBuildBudgetInvalid
-		}
-		dataBytes *= uint64(length)
-	} else if vec.IsConstNull() {
-		dataBytes = 0
-	}
-	areaBytes := uint64(len(vec.GetArea()))
-	if dataBytes > math.MaxUint32 || areaBytes > math.MaxUint32 ||
-		dataBytes > uint64(len(vec.GetData())) {
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-
-	// class + encoded type + length/data/area/null lengths + sorted flag.
-	headerBytes := uint64(1 + len(types.EncodeType(vec.GetType())) + 4*4 + 1)
-	if dataBytes > math.MaxUint64-headerBytes ||
-		areaBytes > math.MaxUint64-headerBytes-dataBytes {
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	wireBytes := headerBytes + dataBytes + areaBytes
-	if wireBytes > uint64(math.MaxInt) {
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-
-	// bytes.Buffer's visible capacity may be rounded above Grow's request.
-	// Reserve a bounded allocator overlap, verify it after allocation, then
-	// reconcile to the capacity retained by the message.
-	const allocationSlack = uint64(64 << 10)
-	if wireBytes > math.MaxUint64-allocationSlack {
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	projected := wireBytes + allocationSlack
-	token, err := budget.Reserve(projected)
+	plan, err := vec.PrepareMarshalBinary()
 	if err != nil {
 		return nil, nil, err
 	}
-
-	var buf bytes.Buffer
-	buf.Grow(int(wireBytes))
-	if uint64(buf.Cap()) > projected {
-		token.Release()
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	if err = vec.MarshalBinaryWithBuffer(&buf); err != nil {
-		token.Release()
+	buf, err := mpool.NewAccountedBuffer(mp, account, owner, site)
+	if err != nil {
 		return nil, nil, err
 	}
-	data := buf.Bytes()
-	if uint64(len(data)) != wireBytes || uint64(cap(data)) > projected {
-		token.Release()
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	if _, err = token.ReconcileDown(uint64(cap(data))); err != nil {
-		token.Release()
+	if err = buf.EnsureCapacity(plan.Size()); err != nil {
+		buf.Free()
+		if mpool.IsRetryableAllocationCapacity(err) {
+			err = MarkOptionalAllocationError(err)
+		}
 		return nil, nil, err
 	}
-	return data, func() { token.Release() }, nil
+	if err = plan.MarshalTo(buf); err != nil {
+		buf.Free()
+		return nil, nil, err
+	}
+	if buf.Len() != plan.Size() {
+		buf.Free()
+		return nil, nil, process.ErrHashBuildBudgetInvalid
+	}
+	return buf.Bytes(), buf.Free, nil
 }

@@ -39,77 +39,15 @@ func allocationAccountInvalid(message string) error {
 // A selection may be shared by all vectors owned by one Batch. Views do not
 // copy it: they share storage and therefore must not create a second charge.
 type AllocationAccountSelection struct {
-	account        *mpool.AllocationAccount
-	owner          mpool.AllocationOwner
-	dataSite       mpool.AllocationSite
-	areaSite       mpool.AllocationSite
-	nullsSite      mpool.AllocationSite
-	groupingSite   mpool.AllocationSite
-	accountBitmaps bool
-}
-
-// FunctionAllocation is the immutable allocation provenance for row-scaled
-// function-owned scratch. Parameter conversion and general function scratch
-// use distinct sites so the physical charges remain diagnosable.
-type FunctionAllocation struct {
-	account       *mpool.AllocationAccount
-	owner         mpool.AllocationOwner
-	parameterSite mpool.AllocationSite
-	scratchSite   mpool.AllocationSite
-}
-
-func NewFunctionAllocation(
-	account *mpool.AllocationAccount,
-	owner mpool.AllocationOwner,
-	parameterSite mpool.AllocationSite,
-	scratchSite mpool.AllocationSite,
-) (*FunctionAllocation, error) {
-	allocation := &FunctionAllocation{
-		account:       account,
-		owner:         owner,
-		parameterSite: parameterSite,
-		scratchSite:   scratchSite,
-	}
-	if err := allocation.validate(); err != nil {
-		return nil, err
-	}
-	return allocation, nil
-}
-
-func (a *FunctionAllocation) validate() error {
-	if a == nil ||
-		a.account == nil ||
-		a.account.Handle() == 0 ||
-		a.owner < mpool.AllocationOwnerMin ||
-		a.owner > mpool.AllocationOwnerMax ||
-		a.parameterSite < mpool.AllocationSiteMin ||
-		a.scratchSite < mpool.AllocationSiteMin {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	return nil
+	account      *mpool.AllocationAccount
+	owner        mpool.AllocationOwner
+	dataSite     mpool.AllocationSite
+	areaSite     mpool.AllocationSite
+	nullsSite    mpool.AllocationSite
+	groupingSite mpool.AllocationSite
 }
 
 func NewAllocationAccountSelection(
-	account *mpool.AllocationAccount,
-	owner mpool.AllocationOwner,
-	dataSite mpool.AllocationSite,
-	areaSite mpool.AllocationSite,
-) (*AllocationAccountSelection, error) {
-	selection := &AllocationAccountSelection{
-		account:  account,
-		owner:    owner,
-		dataSite: dataSite,
-		areaSite: areaSite,
-	}
-	if err := selection.validate(); err != nil {
-		return nil, err
-	}
-	return selection, nil
-}
-
-// NewAllocationAccountSelectionWithBitmaps additionally selects physical
-// allocation sites for the Vector null and grouping bitmap backing.
-func NewAllocationAccountSelectionWithBitmaps(
 	account *mpool.AllocationAccount,
 	owner mpool.AllocationOwner,
 	dataSite mpool.AllocationSite,
@@ -118,13 +56,12 @@ func NewAllocationAccountSelectionWithBitmaps(
 	groupingSite mpool.AllocationSite,
 ) (*AllocationAccountSelection, error) {
 	selection := &AllocationAccountSelection{
-		account:        account,
-		owner:          owner,
-		dataSite:       dataSite,
-		areaSite:       areaSite,
-		nullsSite:      nullsSite,
-		groupingSite:   groupingSite,
-		accountBitmaps: true,
+		account:      account,
+		owner:        owner,
+		dataSite:     dataSite,
+		areaSite:     areaSite,
+		nullsSite:    nullsSite,
+		groupingSite: groupingSite,
 	}
 	if err := selection.validate(); err != nil {
 		return nil, err
@@ -237,16 +174,16 @@ func (s *AllocationAccountSelection) validate() error {
 		s.owner > mpool.AllocationOwnerMax ||
 		s.dataSite < mpool.AllocationSiteMin ||
 		s.areaSite < mpool.AllocationSiteMin ||
-		(s.accountBitmaps &&
-			(s.nullsSite < mpool.AllocationSiteMin ||
-				s.groupingSite < mpool.AllocationSiteMin)) {
+		s.nullsSite < mpool.AllocationSiteMin ||
+		s.groupingSite < mpool.AllocationSiteMin {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	return nil
 }
 
 // AllocationAccountSelection returns the immutable selection used by this
-// vector's future owned allocations. It is nil for legacy vectors and views.
+// vector's future owned allocations. It is nil for unaccounted vectors and
+// views outside the retained HashBuild domain.
 func (v *Vector) AllocationAccountSelection() *AllocationAccountSelection {
 	if v == nil {
 		return nil
@@ -302,14 +239,12 @@ func (v *Vector) SetAllocationAccount(
 	if v.allocationAccount == selection {
 		return nil
 	}
-	if v.allocationAccount != nil &&
-		v.allocationAccount.accountBitmaps &&
-		(selection == nil || !selection.accountBitmaps) {
+	if v.allocationAccount != nil && selection == nil {
 		v.nsp.GetBitmap().ReleaseExternalStorage()
 		v.gsp.GetBitmap().ReleaseExternalStorage()
 	}
 	v.allocationAccount = selection
-	if selection != nil && selection.accountBitmaps {
+	if selection != nil {
 		v.nsp.GetBitmap().InstallExternalStorage(nil)
 		v.gsp.GetBitmap().InstallExternalStorage(nil)
 	}
@@ -317,7 +252,7 @@ func (v *Vector) SetAllocationAccount(
 }
 
 func (v *Vector) ensureBitmapCapacity(rows int, mp *mpool.MPool) error {
-	if v.allocationAccount == nil || !v.allocationAccount.accountBitmaps {
+	if v.allocationAccount == nil {
 		return nil
 	}
 	if rows < 0 || rows > math.MaxInt-64 || mp == nil {
@@ -359,6 +294,53 @@ func (v *Vector) ensureBitmapCapacity(rows int, mp *mpool.MPool) error {
 	}
 	if cap(grouping) > 0 {
 		previous := v.gsp.GetBitmap().InstallExternalStorage(grouping)
+		mpool.FreeSlice(mp, previous)
+	}
+	return nil
+}
+
+func (v *Vector) ensureNullCapacity(rows int, mp *mpool.MPool) error {
+	if v.allocationAccount == nil {
+		return nil
+	}
+	return v.ensureSingleBitmapCapacity(
+		v.nsp.GetBitmap(),
+		rows,
+		mp,
+		v.allocationAccount.nullsSite,
+	)
+}
+
+func (v *Vector) ensureGroupingCapacity(rows int, mp *mpool.MPool) error {
+	if v.allocationAccount == nil {
+		return nil
+	}
+	return v.ensureSingleBitmapCapacity(
+		v.gsp.GetBitmap(),
+		rows,
+		mp,
+		v.allocationAccount.groupingSite,
+	)
+}
+
+func (v *Vector) ensureSingleBitmapCapacity(
+	value *bitmap.Bitmap,
+	rows int,
+	mp *mpool.MPool,
+	site mpool.AllocationSite,
+) error {
+	if rows < 0 || rows > math.MaxInt-64 || mp == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if rows > 0 {
+		rows++
+	}
+	storage, err := v.allocateBitmapGrowth(value, rows, mp, site)
+	if err != nil {
+		return err
+	}
+	if cap(storage) > 0 {
+		previous := value.InstallExternalStorage(storage)
 		mpool.FreeSlice(mp, previous)
 	}
 	return nil
@@ -539,6 +521,9 @@ func (v *Vector) readSizeBytes(
 			"negative vector buffer size",
 		)
 	}
+	if err := validateStreamingReadSize(r, int64(size)); err != nil {
+		return size, nil, err
+	}
 	var buf []byte
 	if data {
 		buf, err = v.growData(mp, int(size))
@@ -559,4 +544,21 @@ func (v *Vector) readSizeBytes(
 		return size, buf, err
 	}
 	return size, buf, nil
+}
+
+func validateStreamingReadSize(r io.Reader, size int64) error {
+	if size < 0 {
+		return moerr.NewInvalidInputNoCtx("negative vector buffer size")
+	}
+	var remaining int64 = -1
+	switch reader := r.(type) {
+	case *io.LimitedReader:
+		remaining = reader.N
+	case interface{ Len() int }:
+		remaining = int64(reader.Len())
+	}
+	if remaining >= 0 && size > remaining {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
 }

@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -66,7 +67,36 @@ func (indexBuild *IndexBuild) Prepare(proc *process.Process) (err error) {
 		ctr.runtimeFilterUsable = runtimefilter.ExactKeyEncoding(
 			spec, declaredType) != keycodec.ExactRuntimeFilterUnsupported
 	}
+	if ctr.runtimeFilterUsable &&
+		(indexBuild.allocationAccount == nil ||
+			indexBuild.runtimeFilterAllocation == nil) {
+		return mpool.ErrAllocationAccountInvalid
+	}
 	return nil
+}
+
+func (indexBuild *IndexBuild) newRuntimeFilterBatch(
+	typ types.Type,
+) (*batch.Batch, error) {
+	if indexBuild.runtimeFilterAllocation == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	vec, err := vector.NewOffHeapVecWithTypeAndAllocation(
+		typ,
+		indexBuild.runtimeFilterAllocation,
+	)
+	if err != nil {
+		return nil, err
+	}
+	buf := batch.NewOffHeapWithSize(1)
+	if err = buf.SetAllocationAccount(
+		indexBuild.runtimeFilterAllocation,
+	); err != nil {
+		vec.Free(nil)
+		return nil, err
+	}
+	buf.SetVector(0, vec)
+	return buf, nil
 }
 
 func (indexBuild *IndexBuild) Call(proc *process.Process) (vm.CallResult, error) {
@@ -195,9 +225,11 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 			// expanded into an equally large retained vector.
 			if !inputVec.IsConstNull() && inputVec.Length() > 0 {
 				if ctr.buf == nil {
-					ctr.buf = batch.NewOffHeapWithSize(1)
-					ctr.buf.Vecs[0] = vector.NewOffHeapVecWithType(
+					ctr.buf, err = indexBuild.newRuntimeFilterBatch(
 						*inputVec.GetType())
+					if err != nil {
+						return err
+					}
 				}
 				if err = ctr.buf.UnionOne(result.Batch, 0, proc.Mp()); err != nil {
 					err = runtimefilter.MarkOptionalAllocationError(err)
@@ -214,9 +246,11 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 				// cardinality-bounded copy. Off-heap growth is tracked by the
 				// process pool and can fail open to PASS instead of ending in
 				// an unrecoverable Go-heap OOM.
-				ctr.buf = batch.NewOffHeapWithSize(1)
-				ctr.buf.Vecs[0] = vector.NewOffHeapVecWithType(
+				ctr.buf, err = indexBuild.newRuntimeFilterBatch(
 					*inputVec.GetType())
+				if err != nil {
+					return err
+				}
 			}
 			ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 			if err != nil {
@@ -286,7 +320,11 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 		// Batch.Dup preserves a first-batch constant vector. Materialize only
 		// its one distinct value: expanding every repeated row would waste
 		// memory and AppendFixed cannot add signed-zero closure to a const vec.
-		flat := vector.NewOffHeapVecWithType(*vec.GetType())
+		flat, err := vector.NewOffHeapVecWithTypeAndAllocation(
+			*vec.GetType(), ap.runtimeFilterAllocation)
+		if err != nil {
+			return err
+		}
 		if !vec.IsConstNull() && vec.Length() > 0 {
 			if err := flat.UnionOne(vec, 0, proc.Mp()); err != nil {
 				flat.Free(proc.Mp())
@@ -335,15 +373,13 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 	// NULLs are irrelevant for IN-filter: clear bitmap before sort.
 	vec.GetNulls().Reset()
 	vec.InplaceSort()
-	budget, err := proc.GetHashBuildBudget()
-	if err != nil {
-		if ctr.fallbackRuntimeFilter(ap, proc, err) {
-			return nil
-		}
-		ctr.abandonRuntimeFilter(proc)
-		return err
-	}
-	data, release, err := runtimefilter.MarshalExactFilterVector(vec, budget)
+	data, release, err := runtimefilter.MarshalExactFilterVector(
+		vec,
+		proc.Mp(),
+		ap.allocationAccount,
+		indexBuildAllocationOwner,
+		indexBuildAllocationSiteRuntimeFilterPayload,
+	)
 	if err != nil {
 		if ctr.fallbackRuntimeFilter(ap, proc, err) {
 			return nil

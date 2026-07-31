@@ -29,8 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -38,7 +40,8 @@ import (
 
 type allocationLifecycleErrorOperator struct {
 	*colexec.MockOperator
-	err error
+	err     error
+	account *mpool.AllocationAccount
 }
 
 type allocationLifecycleOwnerOperator struct {
@@ -46,7 +49,6 @@ type allocationLifecycleOwnerOperator struct {
 	account               *mpool.AllocationAccount
 	failSet               bool
 	failClear             bool
-	blocked               bool
 	clears                int
 	released              bool
 	releaseSawLiveAccount bool
@@ -55,14 +57,6 @@ type allocationLifecycleOwnerOperator struct {
 func (op *allocationLifecycleOwnerOperator) Release() {
 	op.released = true
 	op.releaseSawLiveAccount = op.account != nil
-}
-
-func (op *allocationLifecycleOwnerOperator) AllocationAccountEnabled() bool {
-	return true
-}
-
-func (op *allocationLifecycleOwnerOperator) AllocationAccountActivationBlocked() bool {
-	return op.blocked
 }
 
 func (op *allocationLifecycleOwnerOperator) SetAllocationAccount(
@@ -101,9 +95,36 @@ func (op *allocationLifecycleErrorOperator) Call(
 	return vm.CancelResult, op.err
 }
 
+func (op *allocationLifecycleErrorOperator) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if op.account != nil && op.account != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	op.account = account
+	return nil
+}
+
+func (op *allocationLifecycleErrorOperator) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if op.account != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	op.account = nil
+	return nil
+}
+
+type allocationLifecycleTestController struct{}
+
+func (*allocationLifecycleTestController) AcquireAllocationCapacity(uint64) error {
+	return nil
+}
+
+func (*allocationLifecycleTestController) ReleaseAllocationCapacity(uint64) {}
+
 func newRunLifecycleCompile(
 	t *testing.T,
-	exporter func(mpool.AllocationAccountTerminalSnapshot),
 ) (*Compile, *mpool.AllocationAccountRegistry) {
 	t.Helper()
 	proc := testutil.NewProcess(t)
@@ -130,9 +151,10 @@ func newRunLifecycleCompile(
 	)
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
 	c.anal = newAnalyzeModule()
-	registry, err := mpool.NewAllocationAccountRegistry(2, 2)
+	budget, err := proc.GetHashBuildBudget()
 	require.NoError(t, err)
-	c.ConfigureAllocationAccountLifecycle(registry, 1<<20, exporter)
+	registry, err := budget.AllocationAccountRegistry()
+	require.NoError(t, err)
 	return c, registry
 }
 
@@ -143,10 +165,13 @@ func newTestAllocationLifecycleCompile(
 ) *Compile {
 	t.Helper()
 	return &Compile{
-		proc:                       testutil.NewProcess(t),
-		MessageBoard:               message.NewMessageBoard(),
-		allocationAccountRegistry:  registry,
-		allocationAccountLimit:     1 << 20,
+		proc:                      testutil.NewProcess(t),
+		MessageBoard:              message.NewMessageBoard(),
+		allocationAccountRegistry: registry,
+		allocationAccountLimit:    1 << 20,
+		allocationControllerProvider: func() (mpool.AllocationCapacityController, error) {
+			return &allocationLifecycleTestController{}, nil
+		},
 		allocationTerminalExporter: exporter,
 	}
 }
@@ -344,29 +369,104 @@ func TestStatementAllocationAttemptOwnerConfigurationRollsBack(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestAllocationAccountActivationIsStatementAtomic(t *testing.T) {
-	eligible := &allocationLifecycleOwnerOperator{
+func TestAllocationAccountConfiguresEveryStatementOwner(t *testing.T) {
+	first := &allocationLifecycleOwnerOperator{
 		MockOperator: colexec.NewMockOperator(),
 	}
-	blocker := &allocationLifecycleOwnerOperator{
+	second := &allocationLifecycleOwnerOperator{
 		MockOperator: colexec.NewMockOperator(),
-		blocked:      true,
 	}
-	scopes := []*Scope{{RootOp: eligible}, {RootOp: blocker}}
-	require.False(t, hasAllocationAccountOwner(scopes),
-		"one unclosed physical owner must keep the whole statement legacy")
+	scopes := []*Scope{{RootOp: first}, {RootOp: second}}
+	owners, err := collectAllocationAccountOwners(scopes)
+	require.NoError(t, err)
+	require.Len(t, owners, 2)
 
-	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	configured, err := configureAllocationAccountOwners(scopes, account)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
-	require.Nil(t, configured)
-	require.Nil(t, eligible.account)
-	require.Equal(t, 1, eligible.clears)
+	configured, err := configureAllocationAccountOwners(owners, account)
+	require.NoError(t, err)
+	require.Len(t, configured, 2)
+	require.Same(t, account, first.account)
+	require.Same(t, account, second.account)
+	for i := len(configured) - 1; i >= 0; i-- {
+		require.NoError(t, configured[i].ClearAllocationAccount(account))
+	}
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
+}
+
+func TestAllocationAccountCollectsProductConsumerAndHashBuild(t *testing.T) {
+	consumer := product.NewArgument()
+	producer := hashbuild.NewArgument()
+	scopes := []*Scope{{
+		RootOp: consumer,
+		PreScopes: []*Scope{
+			{RootOp: producer},
+		},
+	}}
+	owners, err := collectAllocationAccountOwners(scopes)
+	require.NoError(t, err)
+	require.Len(t, owners, 2)
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	configured, err := configureAllocationAccountOwners(owners, account)
+	require.NoError(t, err)
+	require.Len(t, configured, 2)
+	for i := len(configured) - 1; i >= 0; i-- {
+		require.NoError(t, configured[i].ClearAllocationAccount(account))
+	}
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	consumer.Release()
+	producer.Release()
+}
+
+func TestParallelRuntimeClonesJoinAllocationAttempt(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	var exported []mpool.AllocationAccountTerminalSnapshot
+	c := newTestAllocationLifecycleCompile(t, registry, func(
+		snapshot mpool.AllocationAccountTerminalSnapshot,
+	) {
+		exported = append(exported, snapshot)
+	})
+	template := hashbuild.NewArgument()
+	template.NeedHashMap = false
+	source := &Scope{
+		RootOp: template,
+		Proc:   c.proc,
+		NodeInfo: engine.Node{
+			Mcpu: 2,
+		},
+	}
+	c.scopes = []*Scope{source}
+	attempt, err := c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	require.NotNil(t, attempt)
+
+	parallel, workers := newParallelScope(source)
+	require.Len(t, workers, 2)
+	for _, worker := range workers {
+		hb := worker.RootOp.(*hashbuild.HashBuild)
+		require.ErrorIs(t, hb.Prepare(worker.Proc), mpool.ErrAllocationAccountInvalid)
+	}
+	require.NoError(t, c.attachRuntimeAllocationOwners(workers))
+	for _, worker := range workers {
+		hb := worker.RootOp.(*hashbuild.HashBuild)
+		require.NoError(t, hb.Prepare(worker.Proc))
+	}
+
+	require.NoError(t, c.finishAllocationAccountAttempt())
+	require.Len(t, exported, 1)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, exported[0].State)
+	require.Zero(t, exported[0].Used)
+	parallel.release()
+	template.Release()
 }
 
 func TestStatementAllocationAttemptOwnerTeardownFailureExportsFailure(t *testing.T) {
@@ -446,7 +546,7 @@ func TestCompileAutomaticallyActivatesCompleteHashTableOwner(t *testing.T) {
 		mpool.AllocationAccountTerminalSnapshot,
 	) {
 	}))
-	require.True(t, c.allocationLifecycleAutomatic)
+	require.NotNil(t, c.allocationControllerProvider)
 	require.NotNil(t, c.allocationAccountRegistry)
 	attempt, err := c.beginAllocationAccountAttempt()
 	require.NoError(t, err)
@@ -459,71 +559,56 @@ func TestCompileAutomaticallyActivatesCompleteHashTableOwner(t *testing.T) {
 }
 
 func TestCompileRunFinalizesAllocationAttemptOnCancellation(t *testing.T) {
-	var snapshots []mpool.AllocationAccountTerminalSnapshot
-	c, registry := newRunLifecycleCompile(t, func(
-		snapshot mpool.AllocationAccountTerminalSnapshot,
-	) {
-		snapshots = append(snapshots, snapshot)
-	})
+	c, registry := newRunLifecycleCompile(t)
 	// The canceled outer context is observed after runOnce, after the
 	// allocation generation has opened.
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	c.proc.ReplaceTopCtx(canceled)
-	c.scopes = []*Scope{newScope(magicType(255))}
+	scope := newScope(magicType(255))
+	owner := &allocationLifecycleOwnerOperator{MockOperator: colexec.NewMockOperator()}
+	scope.RootOp = owner
+	c.scopes = []*Scope{scope}
 
 	_, err := c.Run(0)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Len(t, snapshots, 1)
-	require.Equal(t, mpool.AllocationAccountTerminalValid, snapshots[0].State)
-	require.Zero(t, snapshots[0].Used)
-	_, ok := registry.Resolve(snapshots[0].Handle)
-	require.False(t, ok)
+	require.Nil(t, owner.account)
+	require.Zero(t, registry.LiveAllocationMetadata())
 	c.Release()
 }
 
 func TestCompileRunFinalizesAllocationAttemptOnExecutionError(t *testing.T) {
-	var snapshots []mpool.AllocationAccountTerminalSnapshot
-	c, registry := newRunLifecycleCompile(t, func(
-		snapshot mpool.AllocationAccountTerminalSnapshot,
-	) {
-		snapshots = append(snapshots, snapshot)
-	})
+	c, registry := newRunLifecycleCompile(t)
 	executionErr := moerr.NewInternalErrorNoCtx("allocation lifecycle test")
 	scope := newScope(Normal)
 	scope.Proc = c.proc.NewNoContextChildProc(0)
-	scope.RootOp = &allocationLifecycleErrorOperator{
+	owner := &allocationLifecycleErrorOperator{
 		MockOperator: colexec.NewMockOperator(),
 		err:          executionErr,
 	}
+	scope.RootOp = owner
 	c.scopes = []*Scope{scope}
 
 	_, err := c.Run(0)
 	require.ErrorIs(t, err, executionErr)
-	require.Len(t, snapshots, 1)
-	require.Equal(t, mpool.AllocationAccountTerminalValid, snapshots[0].State)
-	_, ok := registry.Resolve(snapshots[0].Handle)
-	require.False(t, ok)
+	require.Nil(t, owner.account)
+	require.Zero(t, registry.LiveAllocationMetadata())
 	c.Release()
 }
 
 func TestCompileRunFinalizesAllocationAttemptOnPanic(t *testing.T) {
-	var snapshots []mpool.AllocationAccountTerminalSnapshot
-	c, registry := newRunLifecycleCompile(t, func(
-		snapshot mpool.AllocationAccountTerminalSnapshot,
-	) {
-		snapshots = append(snapshots, snapshot)
-	})
-	c.scopes = []*Scope{newScope(magicType(255))}
+	c, registry := newRunLifecycleCompile(t)
+	scope := newScope(magicType(255))
+	owner := &allocationLifecycleOwnerOperator{MockOperator: colexec.NewMockOperator()}
+	scope.RootOp = owner
+	c.scopes = []*Scope{scope}
 	// Force the panic after beginAllocationAccountAttempt and before runOnce.
 	c.lockMeta = nil
 
 	require.Panics(t, func() {
 		_, _ = c.Run(0)
 	})
-	require.Len(t, snapshots, 1)
-	require.Equal(t, mpool.AllocationAccountTerminalValid, snapshots[0].State)
-	_, ok := registry.Resolve(snapshots[0].Handle)
-	require.False(t, ok)
+	require.Nil(t, owner.account)
+	require.Zero(t, registry.LiveAllocationMetadata())
 	c.Release()
 }

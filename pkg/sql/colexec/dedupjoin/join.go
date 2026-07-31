@@ -19,9 +19,9 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -138,6 +138,9 @@ func (dedupJoin *DedupJoin) OpType() vm.OpType {
 	return vm.DedupJoin
 }
 func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
+	if dedupJoin.allocationAccount == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
 	if dedupJoin.OpAnalyzer == nil {
 		dedupJoin.OpAnalyzer = process.NewAnalyzer(dedupJoin.GetIdx(), dedupJoin.IsFirst, dedupJoin.IsLast, "dedup join")
 	} else {
@@ -148,13 +151,19 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 	newUpdateExecs := len(dedupJoin.ctr.exprExecs) == 0 && len(dedupJoin.UpdateColExprList) > 0
 	var evalExecs, updateExecs []colexec.ExpressionExecutor
 	if newEvalVectors {
-		evalExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, dedupJoin.Conditions[0])
+		evalExecs, err = hashbuild.NewExpressionExecutors(
+			proc,
+			dedupJoin.Conditions[0],
+		)
 		if err != nil {
 			return err
 		}
 	}
 	if newUpdateExecs {
-		updateExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, dedupJoin.UpdateColExprList)
+		updateExecs, err = hashbuild.NewExpressionExecutors(
+			proc,
+			dedupJoin.UpdateColExprList,
+		)
 		if err != nil {
 			for _, exec := range evalExecs {
 				exec.Free()
@@ -249,22 +258,29 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.cleanBuf(proc)
 					// Clear previous bucket state before advancing.
 					ctr.cleanBucketState(proc)
+					var allocationErr error
 					ok, bktErr := ctr.spillEngine.AdvanceToNextBucket(proc, analyzer,
 						func(jm *message.JoinMap, res spillutil.BucketResult) {
 							if res == spillutil.BucketReady {
 								ctr.mp = jm
 								ctr.batches = jm.GetBatches()
 								ctr.batchRowCount = jm.GetRowCount()
-								ctr.matched = &bitmap.Bitmap{}
-								if dedupJoin.OnDuplicateAction != plan.Node_UPDATE {
-									ctr.matched.InitWithSize(ctr.batchRowCount)
-								} else {
-									ctr.matched.InitWithSize(int64(jm.GetGroupCount()))
+								rows := ctr.batchRowCount
+								if dedupJoin.OnDuplicateAction == plan.Node_UPDATE {
+									rows = int64(jm.GetGroupCount())
 								}
+								ctr.matched, allocationErr = colexec.NewAccountedBitmap(
+									rows, proc.Mp(), dedupJoin.allocationAccount,
+									hashbuild.HashBuildAllocationOwner,
+									dedupJoinAllocationSiteMatched,
+								)
 							}
 						})
 					if bktErr != nil {
 						return result, hashbuild.TerminalBudgetError(proc.Ctx, bktErr)
+					}
+					if allocationErr != nil {
+						return result, allocationErr
 					}
 					if ok && ctr.mp != nil {
 						// BucketReady: init capture buffers for REPLACE spill path.
@@ -312,45 +328,13 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 			if takeErr != nil {
 				return takeErr
 			}
-			var probeExpressionLease *hashbuild.ExpressionMemoryLease
-			var leaseErr error
-			if dedupJoin.allocationAccount != nil &&
-				hashbuild.AllocationAccountedExpressionSetSupported(dedupJoin.Conditions[0]) {
-				ctr.cleanEvalVectors()
-				var probeExecutors []colexec.ExpressionExecutor
-				probeExecutors, leaseErr =
-					hashbuild.NewAllocationAccountedExpressionExecutorsForAccount(
-						proc,
-						dedupJoin.Conditions[0],
-						dedupJoin.allocationAccount,
-						hashbuild.HashBuildAllocationOwner,
-					)
-				if leaseErr == nil {
-					ctr.evecs = make([]evalVector, len(probeExecutors))
-					ctr.vecs = make([]*vector.Vector, len(probeExecutors))
-					for i := range probeExecutors {
-						ctr.evecs[i].executor = probeExecutors[i]
-					}
-					ctr.probeExpressionsAccounted = true
-				}
-			} else {
-				probeExecutors := make([]colexec.ExpressionExecutor, len(ctr.evecs))
-				for i := range ctr.evecs {
-					probeExecutors[i] = ctr.evecs[i].executor
-				}
-				probeExpressionLease, leaseErr = hashbuild.NewExpressionMemoryLease(
-					budget, dedupJoin.Conditions[0], probeExecutors, false)
-			}
-			if leaseErr != nil {
+			if dedupJoin.allocationAccount == nil {
 				_ = payload.Close()
 				ctr.mp.Free()
 				ctr.mp = nil
-				ctr.cleanEvalVectors()
-				ctr.releaseProbeExpressionLease()
-				return leaseErr
+				return mpool.ErrAllocationAccountInvalid
 			}
-			ctr.probeExpressionLease = probeExpressionLease
-			engine, engineErr := spillutil.NewSpillEngineForAccount(spillutil.SpillEngineConfig{
+			engine, engineErr := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:             dedupJoin.Conditions[1],
 				ProbeKeyExprs:             dedupJoin.Conditions[0],
 				SpillThreshold:            ctr.spillThreshold,
@@ -366,21 +350,16 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				DedupDeleteMarkerColIdx:   dedupJoin.DedupDeleteMarkerColIdx,
 				DedupDeleteKeepColIdxList: dedupJoin.DedupDeleteKeepColIdxList,
 				Budget:                    budget,
-				ProbeExpressionLease:      probeExpressionLease,
 			}, dedupJoin.allocationAccount, hashbuild.HashBuildAllocationOwner)
 			if engineErr != nil {
 				_ = payload.Close()
 				ctr.mp.Free()
 				ctr.mp = nil
 				ctr.cleanEvalVectors()
-				ctr.releaseProbeExpressionLease()
 				return engineErr
 			}
-			if len(payload.Files) > 0 {
-				engine.InitFromSpilledFiles(payload.Files)
-			} else {
-				engine.InitFromSpilledMap(payload.LegacyFds)
-			}
+			engine.InitFromSpilledFiles(payload.Files)
+			ctr.spillEngine = engine
 			if err := engine.ScatterProbeTable(proc,
 				func() (*batch.Batch, error) {
 					input, err := vm.ChildrenCall(dedupJoin.GetChildren(0), proc, analyzer)
@@ -388,7 +367,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				},
 				analyzer,
 				func(bat *batch.Batch) ([]*vector.Vector, error) {
-					if err := ctr.evalJoinConditionBudgeted(bat, proc); err != nil {
+					if err := ctr.evalJoinCondition(bat, proc); err != nil {
 						return nil, err
 					}
 					return ctr.vecs, nil
@@ -397,10 +376,10 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				ctr.mp.Free()
 				ctr.mp = nil
 				engine.Cleanup(proc)
+				ctr.spillEngine = nil
 				return err
 			}
 			ctr.mp.Free()
-			ctr.spillEngine = engine
 			ctr.mp = nil
 			return
 		}
@@ -411,11 +390,19 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 	ctr.batches = ctr.mp.GetBatches()
 	ctr.batchRowCount = ctr.mp.GetRowCount()
 	if ctr.batchRowCount > 0 {
-		ctr.matched = &bitmap.Bitmap{}
-		if dedupJoin.OnDuplicateAction != plan.Node_UPDATE {
-			ctr.matched.InitWithSize(ctr.batchRowCount)
-		} else {
-			ctr.matched.InitWithSize(int64(ctr.mp.GetGroupCount()))
+		rows := ctr.batchRowCount
+		if dedupJoin.OnDuplicateAction == plan.Node_UPDATE {
+			rows = int64(ctr.mp.GetGroupCount())
+		}
+		ctr.matched, err = colexec.NewAccountedBitmap(
+			rows,
+			proc.Mp(),
+			dedupJoin.allocationAccount,
+			hashbuild.HashBuildAllocationOwner,
+			dedupJoinAllocationSiteMatched,
+		)
+		if err != nil {
+			return err
 		}
 	}
 	if ctr.batchRowCount > 0 && len(dedupJoin.OldColCapturePlaceholderIdxList) > 0 {
@@ -442,7 +429,13 @@ func (ctr *container) initCaptureBuffers(ap *DedupJoin, proc *process.Process) e
 	ctr.capturedVecs = make([]*vector.Vector, n)
 	for i, probePos := range ap.OldColCaptureProbeIdxList {
 		typ := ap.LeftTypes[probePos]
-		vec := vector.NewOffHeapVecWithType(typ)
+		vec, err := vector.NewOffHeapVecWithTypeAndAllocation(
+			typ,
+			ap.stateAllocation,
+		)
+		if err != nil {
+			return err
+		}
 		if err := vector.AppendMultiFixed(vec, 0, true, int(ctr.batchRowCount), proc.Mp()); err != nil {
 			vec.Free(proc.Mp())
 			ctr.capturedVecs[i] = nil
@@ -450,8 +443,18 @@ func (ctr *container) initCaptureBuffers(ap *DedupJoin, proc *process.Process) e
 		}
 		ctr.capturedVecs[i] = vec
 	}
-	ctr.captured = &bitmap.Bitmap{}
-	ctr.captured.InitWithSize(ctr.batchRowCount)
+	var err error
+	ctr.captured, err = colexec.NewAccountedBitmap(
+		ctr.batchRowCount,
+		proc.Mp(),
+		ap.allocationAccount,
+		hashbuild.HashBuildAllocationOwner,
+		dedupJoinAllocationSiteCaptured,
+	)
+	if err != nil {
+		ctr.cleanCaptured(proc)
+		return err
+	}
 	ctr.captureResultIdx = make([]int32, len(ap.Result))
 	for j := range ctr.captureResultIdx {
 		ctr.captureResultIdx[j] = -1
@@ -499,6 +502,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			// point Reset/Free still owns and releases these vectors.
 			ctr.captured = nil
 			ctr.capturedVecs = nil
+			ctr.matched = nil
 			// Publication, not acknowledgement, is the worker's single status
 			// for this round. Mark it before waiting so concurrent cancellation
 			// cannot make Reset enqueue a duplicate abort status.
@@ -644,7 +648,18 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			return nil
 		}
 		ctr.matched.Negate()
-		sels := make([]int32, 0, count)
+		sels, err := mpool.MakeSliceAccounted[int32](
+			count,
+			proc.Mp(),
+			ap.allocationAccount,
+			hashbuild.HashBuildAllocationOwner,
+			dedupJoinAllocationSiteFinalizeSelections,
+		)
+		if err != nil {
+			return err
+		}
+		sels = sels[:0]
+		defer mpool.FreeSlice(proc.Mp(), sels)
 		itr := ctr.matched.Iterator()
 		for itr.HasNext() {
 			r := itr.Next()
@@ -823,7 +838,7 @@ func (ctr *container) withRestoredJoinBat1Vectors(updateCols []int32, fn func() 
 
 func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
 	ap.resetRBat()
-	err := ctr.evalJoinConditionBudgeted(bat, proc)
+	err := ctr.evalJoinCondition(bat, proc)
 	if err != nil {
 		return err
 	}
@@ -847,7 +862,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		vals, zvals := itr.Find(i, n, ctr.vecs)
+		vals, zvals, err := itr.Find(i, n, ctr.vecs)
+		if err != nil {
+			return err
+		}
 		for k := 0; k < n; k++ {
 			if zvals[k] == 0 || vals[k] == 0 {
 				continue
@@ -1004,16 +1022,6 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 	return nil
 }
 
-func (ctr *container) evalJoinConditionBudgeted(bat *batch.Batch, proc *process.Process) error {
-	if ctr.probeExpressionLease == nil {
-		return ctr.evalJoinCondition(bat, proc)
-	}
-	return ctr.probeExpressionLease.Eval(proc, []*batch.Batch{bat}, bat.RowCount(), func(i int, vec *vector.Vector) error {
-		ctr.vecs[i] = vec
-		ctr.evecs[i].vec = vec
-		return nil
-	})
-}
 func unionSelsByBatch(dst *vector.Vector, batches []*batch.Batch, colPos int32, sels []int32, proc *process.Process) error {
 	if len(sels) <= 16 {
 		for _, sel := range sels {

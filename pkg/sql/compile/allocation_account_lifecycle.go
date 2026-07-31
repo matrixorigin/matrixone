@@ -25,18 +25,8 @@ import (
 )
 
 type executionAllocationAccountOwner interface {
-	AllocationAccountEnabled() bool
 	SetAllocationAccount(*mpool.AllocationAccount) error
 	ClearAllocationAccount(*mpool.AllocationAccount) error
-}
-
-// executionAllocationAccountBlocker marks an operator whose physical owner is
-// known but whose allocation-site closure is not yet complete. Automatic
-// activation is statement-atomic: one blocker keeps every participating
-// operator on the legacy path instead of creating a mixed exact/estimated
-// generation.
-type executionAllocationAccountBlocker interface {
-	AllocationAccountActivationBlocked() bool
 }
 
 // statementAllocationAttempt owns one local execution generation. The
@@ -47,7 +37,11 @@ type statementAllocationAttempt struct {
 	account  *mpool.AllocationAccount
 	board    *message.MessageBoard
 	exporter func(mpool.AllocationAccountTerminalSnapshot)
+
+	ownersMu sync.Mutex
 	owners   []executionAllocationAccountOwner
+	ownerSet map[executionAllocationAccountOwner]struct{}
+	closing  bool
 
 	once     sync.Once
 	snapshot mpool.AllocationAccountTerminalSnapshot
@@ -65,16 +59,24 @@ func (c *Compile) beginAllocationAccountAttempt() (
 		c.allocationTerminalExporter == nil {
 		return nil, mpool.ErrAllocationAccountInvariant
 	}
-	var controller mpool.AllocationCapacityController
+	owners := c.allocationAccountOwners
 	var err error
-	if c.allocationControllerProvider != nil {
-		controller, err = c.allocationControllerProvider()
+	if owners == nil {
+		owners, err = collectAllocationAccountOwners(c.scopes)
 		if err != nil {
 			return nil, err
 		}
-		if controller == nil {
-			return nil, mpool.ErrAllocationAccountInvariant
-		}
+	}
+	c.allocationAccountOwners = nil
+	if c.allocationControllerProvider == nil {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	controller, err := c.allocationControllerProvider()
+	if err != nil {
+		return nil, err
+	}
+	if controller == nil {
+		return nil, mpool.ErrAllocationAccountInvariant
 	}
 	account, err := c.allocationAccountRegistry.OpenWithController(
 		c.allocationAccountLimit,
@@ -83,7 +85,7 @@ func (c *Compile) beginAllocationAccountAttempt() (
 	if err != nil {
 		return nil, err
 	}
-	owners, err := configureAllocationAccountOwners(c.scopes, account)
+	owners, err = configureAllocationAccountOwners(owners, account)
 	if err != nil {
 		snapshot, first, finalizeErr := c.allocationAccountRegistry.
 			CompleteTerminalWithError(account, err)
@@ -101,24 +103,68 @@ func (c *Compile) beginAllocationAccountAttempt() (
 		board:    c.MessageBoard,
 		exporter: c.allocationTerminalExporter,
 		owners:   owners,
+		ownerSet: make(map[executionAllocationAccountOwner]struct{}, len(owners)),
+	}
+	for _, owner := range owners {
+		attempt.ownerSet[owner] = struct{}{}
 	}
 	c.allocationAttempt = attempt
 	return attempt, nil
 }
 
+// attachRuntimeOwners binds operators cloned after runOnce starts to the same
+// attempt. Parallel scan/load workers are execution-local and do not exist
+// when the template scopes are collected.
+func (a *statementAllocationAttempt) attachRuntimeOwners(scopes []*Scope) error {
+	if a == nil || a.account == nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	owners, err := collectAllocationAccountOwners(scopes)
+	if err != nil || len(owners) == 0 {
+		return err
+	}
+
+	a.ownersMu.Lock()
+	defer a.ownersMu.Unlock()
+	if a.closing {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	newOwners := make([]executionAllocationAccountOwner, 0, len(owners))
+	for _, owner := range owners {
+		if _, exists := a.ownerSet[owner]; !exists {
+			newOwners = append(newOwners, owner)
+		}
+	}
+	configured, err := configureAllocationAccountOwners(newOwners, a.account)
+	if err != nil {
+		return err
+	}
+	for _, owner := range configured {
+		a.ownerSet[owner] = struct{}{}
+	}
+	a.owners = append(a.owners, configured...)
+	return nil
+}
+
+func (c *Compile) attachRuntimeAllocationOwners(scopes []*Scope) error {
+	if c == nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if c.allocationAttempt == nil {
+		owners, err := collectAllocationAccountOwners(scopes)
+		if err != nil || len(owners) == 0 {
+			return err
+		}
+		return mpool.ErrAllocationAccountInvariant
+	}
+	return c.allocationAttempt.attachRuntimeOwners(scopes)
+}
+
 func configureAllocationAccountOwners(
-	scopes []*Scope,
+	owners []executionAllocationAccountOwner,
 	account *mpool.AllocationAccount,
 ) ([]executionAllocationAccountOwner, error) {
-	var configured []executionAllocationAccountOwner
-	isConfigured := func(candidate executionAllocationAccountOwner) bool {
-		for _, owner := range configured {
-			if owner == candidate {
-				return true
-			}
-		}
-		return false
-	}
+	configured := make([]executionAllocationAccountOwner, 0, len(owners))
 	rollback := func(cause error) error {
 		for i := len(configured) - 1; i >= 0; i-- {
 			cause = errors.Join(
@@ -128,96 +174,73 @@ func configureAllocationAccountOwners(
 		}
 		return cause
 	}
-	var configure func(*Scope) error
-	configure = func(scope *Scope) error {
+	for _, owner := range owners {
+		if err := owner.SetAllocationAccount(account); err != nil {
+			return nil, rollback(err)
+		}
+		configured = append(configured, owner)
+	}
+	return configured, nil
+}
+
+func collectAllocationAccountOwners(
+	scopes []*Scope,
+) ([]executionAllocationAccountOwner, error) {
+	owners := make([]executionAllocationAccountOwner, 0)
+	seen := make(map[executionAllocationAccountOwner]struct{})
+	var inspect func(*Scope) error
+	inspect = func(scope *Scope) error {
 		if scope == nil {
 			return nil
 		}
-		if err := vm.HandleAllOp(
-			scope.RootOp,
-			func(_ vm.Operator, op vm.Operator) error {
-				if blocker, ok := op.(executionAllocationAccountBlocker); ok &&
-					blocker.AllocationAccountActivationBlocked() {
-					return mpool.ErrAllocationAccountInvariant
+		if err := vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			if owner, ok := op.(executionAllocationAccountOwner); ok {
+				if _, exists := seen[owner]; !exists {
+					seen[owner] = struct{}{}
+					owners = append(owners, owner)
 				}
-				if owner, ok := op.(executionAllocationAccountOwner); ok &&
-					owner.AllocationAccountEnabled() {
-					if isConfigured(owner) {
-						return nil
-					}
-					if err := owner.SetAllocationAccount(account); err != nil {
-						return err
-					}
-					configured = append(configured, owner)
-				}
-				return nil
-			},
-		); err != nil {
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 		for _, preScope := range scope.PreScopes {
-			if err := configure(preScope); err != nil {
+			if err := inspect(preScope); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 	for _, scope := range scopes {
-		if err := configure(scope); err != nil {
-			return nil, rollback(err)
+		if err := inspect(scope); err != nil {
+			return nil, err
 		}
 	}
-	return configured, nil
+	return owners, nil
 }
 
-func hasAllocationAccountOwner(scopes []*Scope) bool {
-	found, blocked := false, false
-	var inspect func(*Scope)
-	inspect = func(scope *Scope) {
-		if scope == nil {
-			return
-		}
-		_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
-			if blocker, ok := op.(executionAllocationAccountBlocker); ok &&
-				blocker.AllocationAccountActivationBlocked() {
-				blocked = true
-			}
-			if owner, ok := op.(executionAllocationAccountOwner); ok &&
-				owner.AllocationAccountEnabled() {
-				found = true
-			}
-			return nil
-		})
-		for _, preScope := range scope.PreScopes {
-			inspect(preScope)
-		}
-	}
-	for _, scope := range scopes {
-		inspect(scope)
-	}
-	return found && !blocked
-}
-
-// ensureAllocationAccountLifecycle activates accounting only when the physical
-// plan contains a complete migrated owner. Legacy plans never open a registry
-// slot or initialize the HashBuild budget.
+// ensureAllocationAccountLifecycle installs one account whenever the physical
+// plan contains a HashBuild/join allocation owner. Implementing the owner
+// contract is the boundary: there is no per-owner activation switch.
 func (c *Compile) ensureAllocationAccountLifecycle(
 	exporter func(mpool.AllocationAccountTerminalSnapshot),
 ) error {
 	if c == nil {
 		return nil
 	}
-	if !hasAllocationAccountOwner(c.scopes) {
-		if c.allocationLifecycleAutomatic {
+	owners, err := collectAllocationAccountOwners(c.scopes)
+	if err != nil {
+		return err
+	}
+	c.allocationAccountOwners = owners
+	if len(owners) == 0 {
+		c.allocationAccountOwners = nil
+		if c.allocationControllerProvider != nil {
 			c.allocationAccountRegistry = nil
 			c.allocationAccountLimit = 0
 			c.allocationControllerProvider = nil
 			c.allocationTerminalExporter = nil
-			c.allocationLifecycleAutomatic = false
 		}
-		return nil
-	}
-	if c.allocationAccountRegistry != nil && !c.allocationLifecycleAutomatic {
 		return nil
 	}
 	if exporter == nil {
@@ -238,18 +261,15 @@ func (c *Compile) ensureAllocationAccountLifecycle(
 	if limit == 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	c.ConfigureAllocationAccountLifecycleWithController(
-		registry,
-		limit,
-		func() (mpool.AllocationCapacityController, error) {
-			if budget.Closed() {
-				return nil, process.ErrHashBuildBudgetClosed
-			}
-			return budget, nil
-		},
-		exporter,
-	)
-	c.allocationLifecycleAutomatic = true
+	c.allocationAccountRegistry = registry
+	c.allocationAccountLimit = limit
+	c.allocationControllerProvider = func() (mpool.AllocationCapacityController, error) {
+		if budget.Closed() {
+			return nil, process.ErrHashBuildBudgetClosed
+		}
+		return budget, nil
+	}
+	c.allocationTerminalExporter = exporter
 	return nil
 }
 
@@ -265,13 +285,18 @@ func (a *statementAllocationAttempt) finish() (
 		// before this point. Draining the board first releases queued JoinMap
 		// and spill payload ownership through their normal Destroy methods.
 		a.board.CloseAndDrain()
-		for i := len(a.owners) - 1; i >= 0; i-- {
+		a.ownersMu.Lock()
+		a.closing = true
+		owners := a.owners
+		a.owners = nil
+		a.ownerSet = nil
+		a.ownersMu.Unlock()
+		for i := len(owners) - 1; i >= 0; i-- {
 			a.err = errors.Join(
 				a.err,
-				a.owners[i].ClearAllocationAccount(a.account),
+				owners[i].ClearAllocationAccount(a.account),
 			)
 		}
-		a.owners = nil
 		var first bool
 		var terminalErr error
 		a.snapshot, first, terminalErr = a.registry.CompleteTerminalWithError(
@@ -300,11 +325,8 @@ func (c *Compile) copyAllocationAccountLifecycleTo(dst *Compile) {
 	if c == nil || dst == nil {
 		return
 	}
-	dst.ConfigureAllocationAccountLifecycle(
-		c.allocationAccountRegistry,
-		c.allocationAccountLimit,
-		c.allocationTerminalExporter,
-	)
+	dst.allocationAccountRegistry = c.allocationAccountRegistry
+	dst.allocationAccountLimit = c.allocationAccountLimit
+	dst.allocationTerminalExporter = c.allocationTerminalExporter
 	dst.allocationControllerProvider = c.allocationControllerProvider
-	dst.allocationLifecycleAutomatic = c.allocationLifecycleAutomatic
 }

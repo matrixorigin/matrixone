@@ -17,8 +17,10 @@ package batch
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -122,6 +124,12 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, 
 }
 
 func (bat *Batch) MarshalBinarySize() (int, error) {
+	return bat.prepareMarshalBinary(nil)
+}
+
+func (bat *Batch) prepareMarshalBinary(
+	plans []vector.MarshalBinaryPlan,
+) (int, error) {
 	if bat == nil {
 		return 0, moerr.NewInvalidInputNoCtx("invalid batch for marshal")
 	}
@@ -141,21 +149,28 @@ func (bat *Batch) MarshalBinarySize() (int, error) {
 			"batch field exceeds marshal format",
 		)
 	}
-	for _, vec := range bat.Vecs {
+	if plans != nil && len(plans) < len(bat.Vecs) {
+		return 0, moerr.NewInvalidInputNoCtx("short batch marshal plan")
+	}
+	for i, vec := range bat.Vecs {
 		if vec == nil {
 			return 0, moerr.NewInvalidInputNoCtx(
 				"cannot marshal a nil batch vector",
 			)
 		}
-		size, err := vec.MarshalBinarySize()
+		plan, err := vec.PrepareMarshalBinary()
 		if err != nil {
 			return 0, err
 		}
+		size := plan.Size()
 		if uint64(size) > uint64(^uint32(0)) ||
 			!add(4+uint64(size)) {
 			return 0, moerr.NewInvalidInputNoCtx(
 				"batch vector exceeds marshal format",
 			)
+		}
+		if plans != nil {
+			plans[i] = plan
 		}
 	}
 	for _, attr := range bat.Attrs {
@@ -178,42 +193,52 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	if bat == nil || w == nil {
 		return io.ErrClosedPipe
 	}
-	if _, err := bat.MarshalBinarySize(); err != nil {
+	var inlinePlans [64]vector.MarshalBinaryPlan
+	var plans []vector.MarshalBinaryPlan
+	if len(bat.Vecs) <= len(inlinePlans) {
+		plans = inlinePlans[:len(bat.Vecs)]
+	} else {
+		plans = make([]vector.MarshalBinaryPlan, len(bat.Vecs))
+	}
+	size, err := bat.prepareMarshalBinary(plans)
+	if err != nil {
 		return err
 	}
-	rl := int64(bat.rowCount)
-	if err := writeBatchMarshalBytes(w, types.EncodeInt64(&rl)); err != nil {
+	if sized, ok := w.(interface {
+		Len() int
+		EnsureCapacity(int) error
+	}); ok {
+		if sized.Len() > math.MaxInt-size {
+			return moerr.NewInvalidInputNoCtx("batch marshal size exceeds platform limit")
+		}
+		if err := sized.EnsureCapacity(sized.Len() + size); err != nil {
+			return err
+		}
+	}
+	if err := writeBatchMarshalInt64(w, int64(bat.rowCount)); err != nil {
 		return err
 	}
 
 	l := int32(len(bat.Vecs))
-	if err := writeBatchMarshalBytes(w, types.EncodeInt32(&l)); err != nil {
+	if err := writeBatchMarshalInt32(w, l); err != nil {
 		return err
 	}
 	for i := 0; i < int(l); i++ {
-		size, err := bat.Vecs[i].MarshalBinarySize()
-		if err != nil {
+		if err := writeBatchMarshalUint32(w, uint32(plans[i].Size())); err != nil {
 			return err
 		}
-		wireSize := uint32(size)
-		if err := writeBatchMarshalBytes(
-			w,
-			types.EncodeUint32(&wireSize),
-		); err != nil {
-			return err
-		}
-		if err := bat.Vecs[i].MarshalBinaryTo(w); err != nil {
+		if err := plans[i].MarshalTo(w); err != nil {
 			return err
 		}
 	}
 
 	l = int32(len(bat.Attrs))
-	if err := writeBatchMarshalBytes(w, types.EncodeInt32(&l)); err != nil {
+	if err := writeBatchMarshalInt32(w, l); err != nil {
 		return err
 	}
 	for i := 0; i < int(l); i++ {
 		size := int32(len(bat.Attrs[i]))
-		if err := writeBatchMarshalBytes(w, types.EncodeInt32(&size)); err != nil {
+		if err := writeBatchMarshalInt32(w, size); err != nil {
 			return err
 		}
 		n, err := io.WriteString(w, bat.Attrs[i])
@@ -226,20 +251,50 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	}
 
 	extraSize := int32(len(bat.ExtraBuf))
-	if err := writeBatchMarshalBytes(w, types.EncodeInt32(&extraSize)); err != nil {
+	if err := writeBatchMarshalInt32(w, extraSize); err != nil {
 		return err
 	}
 	if err := writeBatchMarshalBytes(w, bat.ExtraBuf); err != nil {
 		return err
 	}
 
-	if err := writeBatchMarshalBytes(
-		w,
-		types.EncodeInt32(&bat.Recursive),
-	); err != nil {
+	if err := writeBatchMarshalInt32(w, bat.Recursive); err != nil {
 		return err
 	}
-	return writeBatchMarshalBytes(w, types.EncodeInt32(&bat.ShuffleIDX))
+	return writeBatchMarshalInt32(w, bat.ShuffleIDX)
+}
+
+type batchPrimitiveWriter interface {
+	WriteUint32(uint32) error
+	WriteInt32(int32) error
+	WriteInt64(int64) error
+}
+
+func writeBatchMarshalUint32(w io.Writer, value uint32) error {
+	if typed, ok := w.(batchPrimitiveWriter); ok {
+		return typed.WriteUint32(value)
+	}
+	var data [4]byte
+	binary.NativeEndian.PutUint32(data[:], value)
+	return writeBatchMarshalBytes(w, data[:])
+}
+
+func writeBatchMarshalInt32(w io.Writer, value int32) error {
+	if typed, ok := w.(batchPrimitiveWriter); ok {
+		return typed.WriteInt32(value)
+	}
+	var data [4]byte
+	binary.NativeEndian.PutUint32(data[:], uint32(value))
+	return writeBatchMarshalBytes(w, data[:])
+}
+
+func writeBatchMarshalInt64(w io.Writer, value int64) error {
+	if typed, ok := w.(batchPrimitiveWriter); ok {
+		return typed.WriteInt64(value)
+	}
+	var data [8]byte
+	binary.NativeEndian.PutUint64(data[:], uint64(value))
+	return writeBatchMarshalBytes(w, data[:])
 }
 
 func writeBatchMarshalBytes(w io.Writer, value []byte) error {
@@ -505,35 +560,35 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 }
 
 func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) {
-	allocationAccount := bat.allocationAccount
+	return bat.unmarshalFromReader(r, mp, true)
+}
+
+func (bat *Batch) unmarshalFromReader(
+	r io.Reader,
+	mp *mpool.MPool,
+	allowMetadata bool,
+) (err error) {
+	if bat == nil || r == nil {
+		return io.ErrClosedPipe
+	}
 	i64, err := types.ReadInt64(r)
 	if err != nil {
 		return err
 	}
-	bat.rowCount = int(i64)
+	if i64 < 0 || int64(int(i64)) != i64 {
+		return moerr.NewInvalidInputNoCtx("invalid batch row count")
+	}
+	decodedRowCount := int(i64)
 
 	l, err := types.ReadInt32AsInt(r)
 	if err != nil {
 		return err
 	}
-	if l != len(bat.Vecs) {
-		if len(bat.Vecs) > 0 {
-			bat.Clean(mp)
-			bat.allocationAccount = allocationAccount
-		}
-		bat.Vecs = make([]*vector.Vector, l)
-		for i := range bat.Vecs {
-			if bat.offHeap {
-				bat.Vecs[i] = vector.NewOffHeapVec()
-				if allocationAccount != nil {
-					if err := bat.Vecs[i].SetAllocationAccount(allocationAccount); err != nil {
-						return err
-					}
-				}
-			} else {
-				bat.Vecs[i] = vector.NewVecFromReuse()
-			}
-		}
+	if err = validateReaderElementCount(r, l, 4, "vector"); err != nil {
+		return err
+	}
+	if err = bat.prepareOwnedDecodeVectors(l, mp); err != nil {
+		return err
 	}
 	vecs := bat.Vecs
 
@@ -558,21 +613,39 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 	if err != nil {
 		return err
 	}
+	if err = validateReaderElementCount(r, l, 4, "attribute"); err != nil {
+		return err
+	}
+	if !allowMetadata && l != 0 {
+		return moerr.NewInvalidInputNoCtx("spill batch attributes are not allowed")
+	}
 	if l != len(bat.Attrs) {
 		bat.Attrs = make([]string, l)
 	}
 
 	for i := 0; i < int(l); i++ {
-		_, bs, err := types.ReadSizeBytes(r)
+		bs, err := readBatchSizedBytes(r)
 		if err != nil {
 			return err
 		}
 		bat.Attrs[i] = string(bs)
 	}
 
-	// ExtraBuf
-	if _, bat.ExtraBuf, err = types.ReadSizeBytes(r); err != nil {
-		return err
+	// ExtraBuf is a data-scaled Go-heap field in the stable Batch codec. Spill
+	// records do not use it and reject it before allocating its payload.
+	if allowMetadata {
+		if bat.ExtraBuf, err = readBatchSizedBytes(r); err != nil {
+			return err
+		}
+	} else {
+		extraSize, readErr := types.ReadInt32AsInt(r)
+		if readErr != nil {
+			return readErr
+		}
+		if extraSize != 0 {
+			return moerr.NewInvalidInputNoCtx("spill batch extra buffer is not allowed")
+		}
+		bat.ExtraBuf = nil
 	}
 
 	if bat.Recursive, err = types.ReadInt32(r); err != nil {
@@ -580,6 +653,128 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 	}
 	if bat.ShuffleIDX, err = types.ReadInt32(r); err != nil {
 		return err
+	}
+	bat.rowCount = decodedRowCount
+	return nil
+}
+
+func readBatchSizedBytes(r io.Reader) ([]byte, error) {
+	size, err := types.ReadInt32AsInt(r)
+	if err != nil {
+		return nil, err
+	}
+	if size < 0 {
+		return nil, moerr.NewInvalidInputNoCtx("negative batch buffer size")
+	}
+	if limited, ok := r.(*io.LimitedReader); ok && int64(size) > limited.N {
+		return nil, io.ErrUnexpectedEOF
+	}
+	if lengthAware, ok := r.(interface{ Len() int }); ok && size > lengthAware.Len() {
+		return nil, io.ErrUnexpectedEOF
+	}
+	if size == 0 {
+		return nil, nil
+	}
+	value := make([]byte, size)
+	if _, err = io.ReadFull(r, value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func validateReaderElementCount(
+	r io.Reader,
+	count int,
+	minimumWireBytes int64,
+	field string,
+) error {
+	const maxBatchWireFields = 1 << 20
+	if count < 0 || count > maxBatchWireFields || minimumWireBytes <= 0 {
+		return moerr.NewInvalidInputNoCtx("invalid batch " + field + " count")
+	}
+	var remaining int64 = -1
+	switch reader := r.(type) {
+	case *io.LimitedReader:
+		remaining = reader.N
+	case interface{ Len() int }:
+		remaining = int64(reader.Len())
+	}
+	if remaining >= 0 && int64(count) > remaining/minimumWireBytes {
+		return moerr.NewInvalidInputNoCtx("invalid batch " + field + " count")
+	}
+	return nil
+}
+
+// prepareOwnedDecodeVectors makes every destination an independent owner.
+// Alias decoding deliberately installs borrowed vector buffers; those buffers
+// must never be grown or relabeled by the owned streaming decoder.
+func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
+	if count < 0 {
+		return moerr.NewInvalidInputNoCtx("invalid batch vector count")
+	}
+	allocationAccount := bat.allocationAccount
+	if count != len(bat.Vecs) {
+		if len(bat.Vecs) > 0 {
+			bat.Clean(mp)
+			bat.allocationAccount = allocationAccount
+		}
+		bat.Vecs = make([]*vector.Vector, count)
+	}
+
+	const inlineReceivers = 16
+	var inline [inlineReceivers]*vector.Vector
+	var used map[*vector.Vector]struct{}
+	for i, vec := range bat.Vecs {
+		selection := allocationAccount
+		if selection == nil && vec != nil {
+			selection = vec.AllocationAccountSelection()
+		}
+		if vec != nil {
+			exists := false
+			if i < inlineReceivers {
+				for j := 0; j < i; j++ {
+					if inline[j] == vec {
+						exists = true
+						break
+					}
+				}
+				inline[i] = vec
+			} else {
+				if used == nil {
+					used = make(map[*vector.Vector]struct{}, count)
+					for _, prior := range inline {
+						if prior != nil {
+							used[prior] = struct{}{}
+						}
+					}
+				}
+				_, exists = used[vec]
+				used[vec] = struct{}{}
+			}
+			if exists {
+				vec = nil
+			}
+		}
+		if vec == nil {
+			if bat.offHeap {
+				vec = vector.NewOffHeapVec()
+			} else {
+				vec = vector.NewVecFromReuse()
+			}
+		} else if vec.NeedDup() {
+			vec.Free(mp)
+		}
+		vec.SetOffHeap(bat.offHeap)
+		if vec.AllocationAccountSelection() != selection {
+			if err := vec.CanSetAllocationAccount(selection); err != nil {
+				vec.Free(mp)
+				vec.SetOffHeap(bat.offHeap)
+			}
+			if err := vec.SetAllocationAccount(selection); err != nil {
+				return err
+			}
+		}
+		bat.Vecs[i] = vec
 	}
 	return nil
 }
@@ -1101,6 +1296,41 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 			return nil, err
 		}
 		b.Vecs[i].SetOffHeap(bat.offHeap)
+	}
+	b.rowCount = end - start
+	return b, nil
+}
+
+// WindowWithAllocation is the allocation-accounted counterpart of Window.
+// Vector data and area remain borrowed; null/grouping range bitmaps are owned
+// by selection and are released when the returned batch is cleaned.
+func (bat *Batch) WindowWithAllocation(
+	start int,
+	end int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*Batch, error) {
+	if bat == nil || mp == nil || selection == nil ||
+		start < 0 || end < start || end > bat.RowCount() {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	b := NewOffHeapWithSize(len(bat.Vecs))
+	b.Attrs = bat.Attrs
+	if err := b.SetAllocationAccount(selection); err != nil {
+		b.Clean(mp)
+		return nil, err
+	}
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			b.Clean(mp)
+			return nil, mpool.ErrAllocationAccountInvalid
+		}
+		var err error
+		b.Vecs[i], err = vec.WindowWithAllocation(start, end, mp, selection)
+		if err != nil {
+			b.Clean(mp)
+			return nil, err
+		}
 	}
 	b.rowCount = end - start
 	return b, nil

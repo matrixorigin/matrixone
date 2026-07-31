@@ -29,7 +29,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -233,8 +232,8 @@ func parseLeadingInteger(s string) (int64, bool) {
 	return v, true
 }
 
-// appendCharBytes appends one MySQL CHAR() integer as big-endian bytes. MySQL
-// treats CHAR(N) values as unsigned 32-bit integers and expands
+// encodeCharBytes converts an int64 argument for MySQL CHAR() into big-endian
+// bytes. MySQL treats CHAR(N) values as unsigned 32-bit integers and expands
 // values > 255 into multiple big-endian bytes:
 //
 //	CHAR(256)   → 0x0100       (two bytes)
@@ -242,10 +241,10 @@ func parseLeadingInteger(s string) (int64, bool) {
 //	CHAR(-1)    → 0xFFFFFFFF   (four bytes, via two's complement uint32)
 //
 // See MySQL docs: https://dev.mysql.com/doc/refman/8.4/en/string-functions.html#function_char
-func appendCharBytes(dst []byte, v int64) []byte {
+func encodeCharBytes(v int64) []byte {
 	uv := uint32(v)
 	if uv == 0 {
-		return append(dst, 0)
+		return []byte{0}
 	}
 	// Encode as big-endian 32-bit, then strip leading zero bytes.
 	var buf [4]byte
@@ -258,7 +257,7 @@ func appendCharBytes(dst []byte, v int64) []byte {
 	for start < 3 && buf[start] == 0 {
 		start++
 	}
-	return append(dst, buf[start:]...)
+	return buf[start:]
 }
 
 const (
@@ -799,33 +798,25 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		total := 0
-		null := false
+		var vs string
+		apv := true
+
 		for _, p := range ps {
-			v, isNull := p.GetStrValue(i)
-			if isNull {
+			v, null := p.GetStrValue(i)
+			if null {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
-				null = true
+				apv = false
 				break
+			} else {
+				vs += string(v)
 			}
-			if len(v) > math.MaxInt-total {
-				return moerr.NewInvalidInputNoCtx("CONCAT result is too large")
-			}
-			total += len(v)
 		}
-		if null {
-			continue
-		}
-		if err := rs.AppendBytesWithFill(total, func(dst []byte) {
-			offset := 0
-			for _, p := range ps {
-				v, _ := p.GetStrValue(i)
-				offset += copy(dst[offset:], v)
+		if apv {
+			if err := rs.AppendBytes([]byte(vs), false); err != nil {
+				return err
 			}
-		}); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -1248,21 +1239,25 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
-		if len(getters) > math.MaxInt/4 {
-			return moerr.NewInvalidInputNoCtx("CHAR has too many arguments")
-		}
-		// MySQL skips NULL arguments and expands each remaining value to at
-		// most four bytes. Build directly in the admitted result backing.
-		if err := rs.AppendBytesWithBuilder(len(getters)*4, func(dst []byte) (int, error) {
-			output := dst[:0]
-			for _, getter := range getters {
-				value, null := getter(i)
-				if !null {
-					output = appendCharBytes(output, value)
-				}
+		var resultBytes []byte
+
+		// Process all arguments
+		for _, getter := range getters {
+			v, null := getter(i)
+			if null {
+				// MySQL skips NULL arguments instead of returning NULL
+				continue
 			}
-			return len(output), nil
-		}); err != nil {
+			// Convert argument to big-endian multi-byte sequence.
+			// MySQL treats CHAR(N) as unsigned 32-bit ints and expands
+			// values > 255 into multiple big-endian bytes (CHAR(256) → 0x0100).
+			// Negative values use two's complement uint32 (CHAR(-1) → 0xFFFFFFFF).
+			resultBytes = append(resultBytes, encodeCharBytes(v)...)
+		}
+
+		// resultBytes is empty only when every argument was NULL. MySQL returns
+		// an empty (non-NULL) string in that case, e.g. CHAR(NULL, NULL) -> ''.
+		if err := rs.AppendBytes(resultBytes, false); err != nil {
 			return err
 		}
 	}
@@ -2090,95 +2085,8 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 	return nil
 }
 
-func builtInHashAccounted(
-	parameters []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	length int,
-	appendState func(uint64),
-) error {
-	var keys [hashmap.UnitLimit][]byte
-	var states [hashmap.UnitLimit][3]uint64
-	var keySizes [hashmap.UnitLimit]int
-	for start := 0; start < length; start += hashmap.UnitLimit {
-		count := min(length-start, hashmap.UnitLimit)
-		total := 0
-		for localRow := 0; localRow < count; localRow++ {
-			row := start + localRow
-			size := 0
-			for _, parameter := range parameters {
-				if size == math.MaxInt {
-					return moerr.NewInvalidInputNoCtx("HASH input is too large")
-				}
-				size++ // one NULL marker per parameter
-				if !parameter.IsNull(uint64(row)) {
-					valueSize := len(parameter.GetRawBytesAt(row))
-					if valueSize > math.MaxInt-size {
-						return moerr.NewInvalidInputNoCtx("HASH input is too large")
-					}
-					size += valueSize
-				}
-			}
-			if size < len(hashtable.StrKeyPadding) {
-				size = len(hashtable.StrKeyPadding)
-			}
-			if size > math.MaxInt-total {
-				return moerr.NewInvalidInputNoCtx("HASH input is too large")
-			}
-			keySizes[localRow] = size
-			total += size
-		}
-
-		scratch, selected, err := result.ResizeFunctionScratch(total)
-		if err != nil {
-			return err
-		}
-		if !selected {
-			return mpool.ErrAllocationAccountInvalid
-		}
-		offset := 0
-		for localRow := 0; localRow < count; localRow++ {
-			size := keySizes[localRow]
-			keys[localRow] = scratch[offset : offset+size]
-			offset += size
-		}
-		for localRow := 0; localRow < count; localRow++ {
-			row := start + localRow
-			key := keys[localRow]
-			written := 0
-			for _, parameter := range parameters {
-				isNull := parameter.IsNull(uint64(row))
-				if isNull {
-					key[written] = 1
-					written++
-					continue
-				}
-				key[written] = 0
-				written++
-				written += copy(key[written:], parameter.GetRawBytesAt(row))
-			}
-			if written < len(hashtable.StrKeyPadding) {
-				copy(key[written:], hashtable.StrKeyPadding[written:])
-			}
-		}
-		hashtable.BytesBatchGenHashStates(&keys[0], &states[0], count)
-		for localRow := 0; localRow < count; localRow++ {
-			appendState(states[localRow][0])
-		}
-	}
-	return nil
-}
-
 // XXX I just copy this function.
 func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if result.HasFunctionScratch() {
-		rs := vector.MustFunctionResult[int64](result)
-		return builtInHashAccounted(
-			parameters,
-			result,
-			length,
-			func(state uint64) { rs.AppendMustValue(int64(state)) },
-		)
-	}
 	fillStringGroupStr := func(keys [][]byte, vec *vector.Vector, n int, start int) {
 		if vec.IsConst() {
 			area := vec.GetArea()
@@ -2292,15 +2200,6 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 
 // builtInHashPartition mirrors builtInHash but returns uint64 so downstream modulo results are non-negative.
 func builtInHashPartition(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if result.HasFunctionScratch() {
-		rs := vector.MustFunctionResult[uint64](result)
-		return builtInHashAccounted(
-			parameters,
-			result,
-			length,
-			rs.AppendMustValue,
-		)
-	}
 	fillStringGroupStr := func(keys [][]byte, vec *vector.Vector, n int, start int) {
 		if vec.IsConst() {
 			area := vec.GetArea()

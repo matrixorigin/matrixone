@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -48,6 +47,8 @@ const (
 	psSelsForOneRow
 	psBatchRow
 )
+
+const hashJoinAllocationSiteMatchedRows mpool.AllocationSite = 80
 
 type container struct {
 	state       int
@@ -105,14 +106,9 @@ type container struct {
 	maxAllocSize int64
 
 	// spill support
-	spillEngine    *spillutil.SpillEngine
-	spillThreshold int64
-	// Non-nil only for spilled joins, where probe expressions are part of the
-	// shared HashBuild/spill working set. Resident probe expressions remain
-	// under normal process/mpool accounting; this is not a general query budget.
-	probeExpressionLease      *hashbuild.ExpressionMemoryLease
-	probeExpressionsAccounted bool
-	probeBucketActive         bool // true while reading probe batches from a bucket
+	spillEngine       *spillutil.SpillEngine
+	spillThreshold    int64
+	probeBucketActive bool // true while reading probe batches from a bucket
 }
 
 type HashJoin struct {
@@ -127,7 +123,7 @@ type HashJoin struct {
 	NonEqCond  *plan.Expr
 	EqConds    [][]*plan.Expr
 
-	Channel chan *bitmap.Bitmap
+	Mailbox *BitmapMailbox
 	NumCPU  uint64
 
 	HashOnPK     bool
@@ -145,22 +141,6 @@ type HashJoin struct {
 	vm.OperatorBase
 }
 
-func (hashJoin *HashJoin) AllocationAccountEnabled() bool {
-	return hashJoin != nil && hashJoin.allocationAccountExpressionOwnerClosed()
-}
-
-func (hashJoin *HashJoin) AllocationAccountActivationBlocked() bool {
-	return hashJoin != nil && !hashJoin.allocationAccountExpressionOwnerClosed()
-}
-
-func (hashJoin *HashJoin) allocationAccountExpressionOwnerClosed() bool {
-	if hashJoin == nil || len(hashJoin.EqConds) != 2 {
-		return false
-	}
-	return hashbuild.AllocationAccountedExpressionSetSupported(hashJoin.EqConds[0]) &&
-		hashbuild.AllocationAccountedExpressionSetSupported(hashJoin.EqConds[1])
-}
-
 func (hashJoin *HashJoin) SetAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
@@ -170,6 +150,9 @@ func (hashJoin *HashJoin) SetAllocationAccount(
 	if hashJoin.allocationAccount != nil &&
 		hashJoin.allocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
+	}
+	if hashJoin.allocationAccount == account {
+		return nil
 	}
 	hashJoin.allocationAccount = account
 	return nil
@@ -185,7 +168,12 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
-		hashJoin.ctr.probeExpressionsAccounted {
+		len(hashJoin.ctr.eqCondExecs) != 0 ||
+		hashJoin.ctr.nonEqCondExec != nil ||
+		hashJoin.ctr.rightRowsMatched != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if hashJoin.NumCPU > 1 && !hashJoin.Mailbox.Terminal() {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	hashJoin.allocationAccount = nil
@@ -241,22 +229,19 @@ func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Bat
 
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
+	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
 	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
-		hashJoin.Channel <- nil
+		hashJoin.Mailbox.Send(nil)
 	}
-	// SpillEngine borrows the probe executor lease. End that borrow before the
-	// join frees the executors and releases their reservation.
+	if hashJoin.NumCPU > 1 && hashJoin.IsMerger {
+		hashJoin.Mailbox.SealAndDrain(proc.Mp())
+	}
 	ctr.cleanBucketBatches(proc)
-	if ctr.probeExpressionLease != nil || ctr.probeExpressionsAccounted {
-		ctr.cleanEqCondExecutors()
-		ctr.releaseProbeExpressionLease()
-	} else {
-		ctr.resetEqCondExecutors()
-	}
+	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
-	ctr.resetNonEqCondExecutor()
-	ctr.rightRowsMatched = nil
+	ctr.cleanNonEqCondExecutor()
+	ctr.freeRightRowsMatched(proc)
 	ctr.rightMatchedIter = nil
 	ctr.skipProbe = false
 	ctr.bitmapSynced = false
@@ -266,8 +251,6 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.state = Build
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
-	hashJoin.allocationAccount = nil
-
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
 	}
@@ -280,16 +263,8 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanBatch(proc)
 	ctr.cleanBucketBatches(proc)
 	ctr.cleanEqCondExecutors()
-	ctr.releaseProbeExpressionLease()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
-	hashJoin.allocationAccount = nil
-}
-
-func (ctr *container) resetNonEqCondExecutor() {
-	if ctr.nonEqCondExec != nil {
-		ctr.nonEqCondExec.ResetForNextQuery()
-	}
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {
@@ -311,9 +286,12 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 			ctr.joinBats[i] = nil
 		}
 	}
-	if ctr.rightRowsMatched != nil {
-		ctr.rightRowsMatched = nil
-	}
+	ctr.freeRightRowsMatched(proc)
+}
+
+func (ctr *container) freeRightRowsMatched(proc *process.Process) {
+	colexec.FreeAccountedBitmap(ctr.rightRowsMatched, proc.Mp())
+	ctr.rightRowsMatched = nil
 }
 
 func (ctr *container) cleanBucketBatches(proc *process.Process) {
@@ -325,6 +303,8 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.itr)
+	ctr.itr = nil
 	if ctr.mp != nil {
 		ctr.mp.Free()
 		ctr.mp = nil
@@ -339,22 +319,6 @@ func (ctr *container) cleanEqCondExecutors() {
 	}
 	ctr.eqCondExecs = nil
 	ctr.eqCondVecs = nil
-	ctr.probeExpressionsAccounted = false
-}
-
-func (ctr *container) resetEqCondExecutors() {
-	for i := range ctr.eqCondExecs {
-		if ctr.eqCondExecs[i] != nil {
-			ctr.eqCondExecs[i].ResetForNextQuery()
-		}
-	}
-}
-
-func (ctr *container) releaseProbeExpressionLease() {
-	if ctr.probeExpressionLease != nil {
-		ctr.probeExpressionLease.Release()
-		ctr.probeExpressionLease = nil
-	}
 }
 
 func (hashJoin *HashJoin) IsInner() bool {

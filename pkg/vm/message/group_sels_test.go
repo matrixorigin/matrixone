@@ -25,6 +25,25 @@ func testMp() *mpool.MPool {
 	return mpool.MustNewZero()
 }
 
+func initTestGroupSels(
+	t *testing.T,
+	sels *GroupSels,
+	n int,
+	mp *mpool.MPool,
+) {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	require.NoError(t, sels.InitWithAllocation(n, mp, account, 1, 1))
+	t.Cleanup(func() {
+		sels.Free(mp)
+		_, _, err := registry.CompleteTerminal(account)
+		require.NoError(t, err)
+	})
+}
+
 func TestGroupSels_NilBeforeInit(t *testing.T) {
 	var js GroupSels
 	require.NoError(t, js.Finalize(3, 3, testMp()))
@@ -35,7 +54,7 @@ func TestGroupSels_NilBeforeInit(t *testing.T) {
 func TestGroupSels_AllUnique(t *testing.T) {
 	mp := testMp()
 	var js GroupSels
-	require.NoError(t, js.Init(3, mp))
+	initTestGroupSels(t, &js, 3, mp)
 	js.Insert(0, 0)
 	js.Insert(1, 1)
 	js.Insert(2, 2)
@@ -47,7 +66,7 @@ func TestGroupSels_AllUnique(t *testing.T) {
 func TestGroupSels_Normal0Based(t *testing.T) {
 	mp := testMp()
 	var js GroupSels
-	require.NoError(t, js.Init(4, mp))
+	initTestGroupSels(t, &js, 4, mp)
 	js.Insert(0, 10)
 	js.Insert(1, 11)
 	js.Insert(0, 12)
@@ -63,7 +82,7 @@ func TestGroupSels_Normal0Based(t *testing.T) {
 func TestGroupSels_Dedup1Based(t *testing.T) {
 	mp := testMp()
 	var js GroupSels
-	require.NoError(t, js.Init(3, mp))
+	initTestGroupSels(t, &js, 3, mp)
 	js.Insert(1, 0)
 	js.Insert(2, 1)
 	js.Insert(1, 2)
@@ -78,7 +97,7 @@ func TestGroupSels_Dedup1Based(t *testing.T) {
 func TestGroupSels_Free(t *testing.T) {
 	mp := testMp()
 	var js GroupSels
-	require.NoError(t, js.Init(2, mp))
+	initTestGroupSels(t, &js, 2, mp)
 	js.Insert(0, 5)
 	js.Free(mp)
 	require.NoError(t, js.Finalize(1, 1, mp))
@@ -89,7 +108,7 @@ func TestGroupSels_AllNulls(t *testing.T) {
 	// all rows are null — Init called but Insert never called
 	mp := testMp()
 	var js GroupSels
-	require.NoError(t, js.Init(3, mp))
+	initTestGroupSels(t, &js, 3, mp)
 	// no Insert calls
 	require.NoError(t, js.Finalize(0, 3, mp))
 	require.Nil(t, js.offsets)
@@ -100,7 +119,7 @@ func TestGroupSels_NullsSkipped(t *testing.T) {
 	// must NOT trigger all-unique path
 	mp := testMp()
 	var js GroupSels
-	require.NoError(t, js.Init(4, mp))
+	initTestGroupSels(t, &js, 4, mp)
 	js.Insert(0, 0) // row 0 → group 0
 	js.Insert(1, 1) // row 1 → group 1
 	// row 2 is null, skipped

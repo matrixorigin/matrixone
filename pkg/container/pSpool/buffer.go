@@ -59,20 +59,7 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 		// 1. const vector size was too small,
 		// 2. vector doesn't own its data and area,
 		// we don't need to cache it.
-		if vec.IsConst() || vec.NeedDup() {
-			vec.Free(mp)
-		}
-
-		if vec.AllocationAccountSelection() == nil {
-			data := vector.DetachLegacyVectorData(vec)
-			area := vector.DetachLegacyVectorArea(vec)
-			if data != nil {
-				b.bytesCache[id].bs = append(b.bytesCache[id].bs, data)
-			}
-			if area != nil {
-				b.bytesCache[id].bs = append(b.bytesCache[id].bs, area)
-			}
-		} else {
+		if !vec.IsConst() && !vec.NeedDup() {
 			data := vector.DetachVectorData(vec)
 			area := vector.DetachVectorArea(vec)
 			if data.Capacity() != 0 {
@@ -119,10 +106,6 @@ func (b *spoolBuffer) getCacheID() (uint32, *batch.Batch) {
 
 func (b *spoolBuffer) clean(mp *mpool.MPool) {
 	for i := range b.bytesCache {
-		for j := range b.bytesCache[i].bs {
-			mp.Free(b.bytesCache[i].bs[j])
-		}
-		b.bytesCache[i].bs = nil
 		for j := range b.bytesCache[i].buffers {
 			b.bytesCache[i].buffers[j].Free(mp)
 		}

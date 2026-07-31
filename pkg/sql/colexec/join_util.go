@@ -60,7 +60,6 @@ func (bs *Batches) Reset() {
 
 // copy from input batch into batches
 // the batches structure hold data in fix size 8192 rows, and continue to append from next batch
-// if error return , the batches will clean itself
 func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err error) {
 	return bs.CopyIntoBatchesWithAllocation(src, proc, nil)
 }
@@ -69,17 +68,69 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 // destination. The Go descriptors are bounded by one Batch per 8,192 rows and
 // one Vector pointer per input column; physical data, area, null, and grouping
 // buffers are allocation-accounted and remain owned by the copied batches.
+//
+// The append is transactional. In particular, an allocation rejection while
+// copying a later input must not destroy batches retained from earlier inputs:
+// HashBuild needs those batches intact to recover by spilling them. A partial
+// tail is copied into the private staging set before it is extended, so an
+// error cannot leave the published tail partially mutated either.
 func (bs *Batches) CopyIntoBatchesWithAllocation(
 	src *batch.Batch,
 	proc *process.Process,
 	selection *vector.AllocationAccountSelection,
 ) (err error) {
+	if len(bs.Buf) > 0 &&
+		bs.Buf[len(bs.Buf)-1].AllocationAccountSelection() != selection {
+		return mpool.ErrAllocationAccountMismatch
+	}
+
+	var staged Batches
 	defer func() {
 		if err != nil {
-			bs.Clean(proc.Mp())
+			staged.Clean(proc.Mp())
 		}
 	}()
 
+	replaceTail := len(bs.Buf) > 0 &&
+		bs.Buf[len(bs.Buf)-1].RowCount() != DefaultBatchSize
+	if replaceTail {
+		if err = staged.copyIntoBatches(
+			bs.Buf[len(bs.Buf)-1],
+			proc,
+			selection,
+		); err != nil {
+			return err
+		}
+	}
+	if err = staged.copyIntoBatches(src, proc, selection); err != nil {
+		return err
+	}
+
+	if replaceTail {
+		oldTail := bs.Buf[len(bs.Buf)-1]
+		bs.Buf = bs.Buf[:len(bs.Buf)-1]
+		bs.Buf = append(bs.Buf, staged.Buf...)
+		bs.MemSize += staged.MemSize
+		staged.Buf = nil
+		staged.MemSize = 0
+		oldTail.Clean(proc.Mp())
+		return nil
+	}
+	if bs.Buf == nil {
+		bs.Buf = make([]*batch.Batch, 0, max(16, len(staged.Buf)))
+	}
+	bs.Buf = append(bs.Buf, staged.Buf...)
+	bs.MemSize += staged.MemSize
+	staged.Buf = nil
+	staged.MemSize = 0
+	return nil
+}
+
+func (bs *Batches) copyIntoBatches(
+	src *batch.Batch,
+	proc *process.Process,
+	selection *vector.AllocationAccountSelection,
+) (err error) {
 	if bs.Buf == nil {
 		bs.Buf = make([]*batch.Batch, 0, 16)
 	}

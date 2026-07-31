@@ -348,7 +348,7 @@ type Compile struct {
 	allocationAccountLimit       uint64
 	allocationControllerProvider func() (mpool.AllocationCapacityController, error)
 	allocationTerminalExporter   func(mpool.AllocationAccountTerminalSnapshot)
-	allocationLifecycleAutomatic bool
+	allocationAccountOwners      []executionAllocationAccountOwner
 	allocationAttempt            *statementAllocationAttempt
 	hasMergeOp                   bool
 

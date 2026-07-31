@@ -329,7 +329,7 @@ func TestHashTableAccountedHighCardinalityResizeReturnsToZero(t *testing.T) {
 
 func BenchmarkHashTableResizeAccounting(b *testing.B) {
 	const rows = 100_000
-	b.Run("legacy", func(b *testing.B) {
+	b.Run("unaccounted", func(b *testing.B) {
 		mp := mpool.MustNewZero()
 		b.ReportAllocs()
 		b.ResetTimer()

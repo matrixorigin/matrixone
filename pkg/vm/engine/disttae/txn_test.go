@@ -1262,6 +1262,8 @@ func TestDupVectorWithoutNullsLeavesSealedStatementOwner(t *testing.T) {
 				mpool.AllocationOwner(1),
 				mpool.AllocationSite(1),
 				mpool.AllocationSite(2),
+				mpool.AllocationSite(3),
+				mpool.AllocationSite(4),
 			)
 			require.NoError(t, err)
 			source, err := vector.NewOffHeapVecWithTypeAndAllocation(

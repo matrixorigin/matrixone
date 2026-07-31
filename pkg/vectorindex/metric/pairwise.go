@@ -72,15 +72,18 @@ func PairwiseDistanceLaunchCPU[T types.ArrayElement](
 		dist = make([]float32, nX*nY)
 	}
 
+	job := &pairWiseJob{
+		dist: dist,
+	}
+
 	// One unified loop over any ArrayElement type — the resolver handles f32/f64
 	// and the narrow kernels (bf16/f16/int8/uint8) uniformly.
-	var jobErr error
 	for r := 0; r < nX; r++ {
 		xr := x[r]
 		for c := 0; c < nY; c++ {
 			d, err := distFn(xr, y[c])
 			if err != nil {
-				jobErr = err
+				job.err = err
 				goto DONE
 			}
 			dist[r*nY+c] = d
@@ -94,56 +97,6 @@ func PairwiseDistanceLaunchCPU[T types.ArrayElement](
 	}
 
 DONE:
-	return registerPairwiseCPUJob(dist, jobErr), nil
-}
-
-// PairwiseDistanceLaunchOneToManyCPU computes the distances between one query
-// and rowCount caller-owned rows. The caller supplies the output storage so the
-// SQL expression path does not need a row-scaled [][]T descriptor slice or an
-// additional result allocation.
-func PairwiseDistanceLaunchOneToManyCPU[T types.RealNumbers](
-	query []T,
-	rowCount int,
-	rowAt func(int) []T,
-	metric MetricType,
-	dist []float32,
-) (PairwiseJobHandle, error) {
-	if rowCount < 0 || len(dist) < rowCount {
-		return 0, moerr.NewInternalErrorNoCtx(
-			"pairwise distance output is smaller than the row count",
-		)
-	}
-	dist = dist[:rowCount]
-	distFn, err := ResolveDistanceFn[T, float32](metric)
-	if err != nil {
-		return 0, err
-	}
-
-	var jobErr error
-	for row := 0; row < rowCount; row++ {
-		value, err := distFn(query, rowAt(row))
-		if err != nil {
-			jobErr = err
-			break
-		}
-		dist[row] = value
-	}
-	if jobErr == nil && metric == Metric_L2Distance {
-		for idx := range dist {
-			dist[idx] = float32(math.Sqrt(float64(dist[idx])))
-		}
-	}
-	return registerPairwiseCPUJob(dist, jobErr), nil
-}
-
-func registerPairwiseCPUJob(
-	dist []float32,
-	err error,
-) PairwiseJobHandle {
-	job := &pairWiseJob{
-		dist: dist,
-		err:  err,
-	}
 	jobMu.Lock()
 	id := nextID
 	nextID++
@@ -154,7 +107,7 @@ func registerPairwiseCPUJob(
 	jobMap[uint64(handle)] = job
 	jobMu.Unlock()
 
-	return handle
+	return handle, nil
 }
 
 // PairwiseDistanceWaitCPU returns the results of the pairwise distance calculation

@@ -16,12 +16,9 @@ package vector
 
 import (
 	"fmt"
-	"math"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -69,45 +66,106 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 		}
 	}
 
+	// Special handling for type conversions to decimal128
 	var cols []T
-	parameterType := *t
+	var convertedType types.Type
 	var anyT T
 	switch (any)(anyT).(type) {
 	case types.Decimal128:
-		if needsDecimal128ParameterConversion[T](v) {
-			parameter, err := generateDecimal128ParameterWithScratch[T](
-				nil,
-				0,
-				v,
-				nil,
-			)
-			if err != nil {
-				panic(err)
+		convertedType = types.T_decimal128.ToType()
+		convertedType.Width = 38
+		if t.Oid == types.T_decimal64 {
+			convertedType.Scale = t.Scale
+			d64Cols := MustFixedColWithTypeCheck[types.Decimal64](v)
+			// Optimize: for const vector, only convert one element
+			if v.IsConst() {
+				d128 := functionUtil.ConvertD64ToD128(d64Cols[0])
+				return &FunctionParameterScalar[T]{
+					typ:          convertedType,
+					sourceVector: v,
+					scalarValue:  any(d128).(T),
+				}
 			}
-			return parameter
+			cols = make([]T, len(d64Cols))
+			for i, d64 := range d64Cols {
+				cols[i] = any(functionUtil.ConvertD64ToD128(d64)).(T)
+			}
+		} else if t.Oid == types.T_float64 {
+			convertedType.Scale = 16
+			f64Cols := MustFixedColWithTypeCheck[float64](v)
+			// Optimize: for const vector, only convert one element
+			if v.IsConst() {
+				d128, err := types.Decimal128FromFloat64(f64Cols[0], 38, 16)
+				if err != nil {
+					// Conversion failed, use zero value (similar to MySQL behavior for invalid conversions)
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
+				}
+				return &FunctionParameterScalar[T]{
+					typ:          convertedType,
+					sourceVector: v,
+					scalarValue:  any(d128).(T),
+				}
+			}
+			cols = make([]T, len(f64Cols))
+			for i, f64 := range f64Cols {
+				d128, err := types.Decimal128FromFloat64(f64, 38, 16)
+				if err != nil {
+					// Conversion failed, use zero value
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
+				}
+				cols[i] = any(d128).(T)
+			}
+		} else if t.Oid == types.T_float32 {
+			convertedType.Scale = 7
+			f32Cols := MustFixedColWithTypeCheck[float32](v)
+			// Optimize: for const vector, only convert one element
+			if v.IsConst() {
+				d128, err := types.Decimal128FromFloat64(float64(f32Cols[0]), 38, 7)
+				if err != nil {
+					// Conversion failed, use zero value
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
+				}
+				return &FunctionParameterScalar[T]{
+					typ:          convertedType,
+					sourceVector: v,
+					scalarValue:  any(d128).(T),
+				}
+			}
+			cols = make([]T, len(f32Cols))
+			for i, f32 := range f32Cols {
+				d128, err := types.Decimal128FromFloat64(float64(f32), 38, 7)
+				if err != nil {
+					// Conversion failed, use zero value
+					d128 = types.Decimal128{B0_63: 0, B64_127: 0}
+				}
+				cols[i] = any(d128).(T)
+			}
+		} else {
+			convertedType = *t
+			cols = MustFixedColWithTypeCheck[T](v)
 		}
-		cols = MustFixedColWithTypeCheck[T](v)
 	default:
+		convertedType = *t
 		cols = MustFixedColWithTypeCheck[T](v)
 	}
 
 	if v.IsConst() {
 		return &FunctionParameterScalar[T]{
-			typ:          parameterType,
+			typ:          convertedType,
 			sourceVector: v,
 			scalarValue:  cols[0],
 		}
 	}
 	if !v.nsp.IsEmpty() {
 		return &FunctionParameterNormal[T]{
-			typ:          parameterType,
+			typ:          convertedType,
 			sourceVector: v,
 			values:       cols,
 			nullMap:      v.GetNulls().GetBitmap(),
 		}
 	}
 	return &FunctionParameterWithoutNull[T]{
-		typ:          parameterType,
+		typ:          convertedType,
 		sourceVector: v,
 		values:       cols,
 	}
@@ -483,227 +541,19 @@ type reusableParameterWrapper interface{}
 type OptFunctionResultWrapper interface {
 	UseOptFunctionParamFrame(paramCount int)
 	getConvenientParamList() []reusableParameterWrapper
-	hasParameterScratch() bool
-	resizeParameterScratch(idx int, size int) ([]byte, error)
-	setFunctionAllocation(allocation *FunctionAllocation)
-	HasFunctionScratch() bool
-	ResizeFunctionScratch(size int) ([]byte, bool, error)
 }
 
 func OptGetParamFromWrapper[ParamType types.FixedSizeTExceptStrType](
-	wrapper FunctionResultWrapper,
-	idx int,
-	src *Vector,
-) (FunctionParameterWrapper[ParamType], error) {
+	wrapper FunctionResultWrapper, idx int, src *Vector) FunctionParameterWrapper[ParamType] {
 	ws := wrapper.getConvenientParamList()
 
-	if needsDecimal128ParameterConversion[ParamType](src) {
-		if !wrapper.hasParameterScratch() {
-			fr := GenerateFunctionFixedTypeParameter[ParamType](src)
-			ws[idx] = fr
-			return fr, nil
-		}
-		fr, err := generateDecimal128ParameterWithScratch[ParamType](
-			wrapper,
-			idx,
-			src,
-			ws[idx],
-		)
-		if err != nil {
-			return nil, err
-		}
-		ws[idx] = fr
-		return fr, nil
-	}
 	if fr, ok := ws[idx].(FunctionParameterWrapper[ParamType]); ok && ReuseFunctionFixedTypeParameter(src, fr) {
-		return fr, nil
+		return fr
 	}
 
 	fr := GenerateFunctionFixedTypeParameter[ParamType](src)
 	ws[idx] = fr
-	return fr, nil
-}
-
-func needsDecimal128ParameterConversion[T types.FixedSizeTExceptStrType](
-	src *Vector,
-) bool {
-	var value T
-	if _, ok := any(value).(types.Decimal128); !ok {
-		return false
-	}
-	switch src.GetType().Oid {
-	case types.T_decimal64, types.T_float32, types.T_float64:
-		return true
-	default:
-		return false
-	}
-}
-
-func generateDecimal128ParameterWithScratch[
-	T types.FixedSizeTExceptStrType,
-](
-	wrapper FunctionResultWrapper,
-	idx int,
-	src *Vector,
-	reuse reusableParameterWrapper,
-) (FunctionParameterWrapper[T], error) {
-	if src.IsConstNull() {
-		if parameter, ok := reuse.(*FunctionParameterScalarNull[T]); ok {
-			parameter.typ = *src.GetType()
-			parameter.sourceVector = src
-			return parameter, nil
-		}
-		return &FunctionParameterScalarNull[T]{
-			typ:          *src.GetType(),
-			sourceVector: src,
-		}, nil
-	}
-	convertedType := types.T_decimal128.ToType()
-	convertedType.Width = 38
-	switch src.GetType().Oid {
-	case types.T_decimal64:
-		convertedType.Scale = src.GetType().Scale
-	case types.T_float32:
-		convertedType.Scale = 7
-	case types.T_float64:
-		convertedType.Scale = 16
-	default:
-		return nil, mpool.ErrAllocationAccountInvalid
-	}
-
-	convert := func(row int) types.Decimal128 {
-		switch src.GetType().Oid {
-		case types.T_decimal64:
-			values := MustFixedColWithTypeCheck[types.Decimal64](src)
-			return functionUtil.ConvertD64ToD128(values[row])
-		case types.T_float32:
-			values := MustFixedColWithTypeCheck[float32](src)
-			value, err := types.Decimal128FromFloat64(
-				float64(values[row]),
-				38,
-				7,
-			)
-			if err == nil {
-				return value
-			}
-		case types.T_float64:
-			values := MustFixedColWithTypeCheck[float64](src)
-			value, err := types.Decimal128FromFloat64(values[row], 38, 16)
-			if err == nil {
-				return value
-			}
-		}
-		return types.Decimal128{}
-	}
-
-	if src.IsConst() {
-		value := any(convert(0)).(T)
-		if parameter, ok := reuse.(*FunctionParameterScalar[T]); ok {
-			parameter.typ = convertedType
-			parameter.sourceVector = src
-			parameter.scalarValue = value
-			return parameter, nil
-		}
-		return &FunctionParameterScalar[T]{
-			typ:          convertedType,
-			sourceVector: src,
-			scalarValue:  value,
-		}, nil
-	}
-
-	var values []T
-	if wrapper == nil {
-		values = make([]T, src.Length())
-	} else {
-		var err error
-		values, err = parameterScratchSlice[T](wrapper, idx, src.Length())
-		if err != nil {
-			return nil, err
-		}
-	}
-	switch src.GetType().Oid {
-	case types.T_decimal64:
-		source := MustFixedColWithTypeCheck[types.Decimal64](src)
-		for row := range values {
-			values[row] = any(
-				functionUtil.ConvertD64ToD128(source[row]),
-			).(T)
-		}
-	case types.T_float32:
-		source := MustFixedColWithTypeCheck[float32](src)
-		for row := range values {
-			value, conversionErr := types.Decimal128FromFloat64(
-				float64(source[row]),
-				38,
-				7,
-			)
-			if conversionErr != nil {
-				value = types.Decimal128{}
-			}
-			values[row] = any(value).(T)
-		}
-	case types.T_float64:
-		source := MustFixedColWithTypeCheck[float64](src)
-		for row := range values {
-			value, conversionErr := types.Decimal128FromFloat64(
-				source[row],
-				38,
-				16,
-			)
-			if conversionErr != nil {
-				value = types.Decimal128{}
-			}
-			values[row] = any(value).(T)
-		}
-	}
-	if !src.nsp.IsEmpty() {
-		if parameter, ok := reuse.(*FunctionParameterNormal[T]); ok {
-			parameter.typ = convertedType
-			parameter.sourceVector = src
-			parameter.values = values
-			parameter.nullMap = src.GetNulls().GetBitmap()
-			return parameter, nil
-		}
-		return &FunctionParameterNormal[T]{
-			typ:          convertedType,
-			sourceVector: src,
-			values:       values,
-			nullMap:      src.GetNulls().GetBitmap(),
-		}, nil
-	}
-	if parameter, ok := reuse.(*FunctionParameterWithoutNull[T]); ok {
-		parameter.typ = convertedType
-		parameter.sourceVector = src
-		parameter.values = values
-		return parameter, nil
-	}
-	return &FunctionParameterWithoutNull[T]{
-		typ:          convertedType,
-		sourceVector: src,
-		values:       values,
-	}, nil
-}
-
-func parameterScratchSlice[T types.FixedSizeTExceptStrType](
-	wrapper FunctionResultWrapper,
-	idx int,
-	length int,
-) ([]T, error) {
-	var value T
-	elementSize := unsafe.Sizeof(value)
-	if length < 0 ||
-		elementSize == 0 ||
-		uint64(length) > uint64(math.MaxInt)/uint64(elementSize) {
-		return nil, mpool.ErrAllocationAccountInvalid
-	}
-	data, err := wrapper.resizeParameterScratch(
-		idx,
-		int(uint64(length)*uint64(elementSize)),
-	)
-	if err != nil {
-		return nil, err
-	}
-	return util.UnsafeSliceCastToLength[T](data, length), nil
+	return fr
 }
 
 func OptGetBytesParamFromWrapper(wrapper FunctionResultWrapper, idx int, src *Vector) FunctionParameterWrapper[types.Varlena] {
@@ -725,19 +575,15 @@ type FunctionResult[T types.FixedSizeT] struct {
 	vec *Vector
 	mp  *mpool.MPool
 
-	allocationAccount  *AllocationAccountSelection
-	functionAllocation *FunctionAllocation
-	isVarlena          bool
-	cols               []T
-	length             uint64
+	isVarlena bool
+	cols      []T
+	length    uint64
 
 	//  convenientParam save parameter wrappers for easy getting row values.
 	//
 	//  this field is for optimisation to reduce the allocation of FunctionParameterWrapper pointer.
 	// 	there are still many built-in functions don't use it now, and will be fixed in the future.
-	convenientParam  []reusableParameterWrapper
-	parameterScratch []*mpool.AccountedBuffer
-	functionScratch  *mpool.AccountedBuffer
+	convenientParam []reusableParameterWrapper
 }
 
 func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *FunctionResult[T] {
@@ -748,15 +594,11 @@ func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *Func
 }
 
 func newResultFunc[T types.FixedSizeT](
-	resultType types.Type,
-	mp *mpool.MPool,
-	allocationAccount *AllocationAccountSelection,
-) *FunctionResult[T] {
+	resultType types.Type, mp *mpool.MPool) *FunctionResult[T] {
 
 	f := &FunctionResult[T]{
-		typ:               resultType,
-		mp:                mp,
-		allocationAccount: allocationAccount,
+		typ: resultType,
+		mp:  mp,
 	}
 
 	var tempT T
@@ -771,100 +613,15 @@ func (fr *FunctionResult[T]) UseOptFunctionParamFrame(paramCount int) {
 	if fr.convenientParam == nil {
 		fr.convenientParam = make([]reusableParameterWrapper, paramCount)
 	}
-	if fr.allocationAccount != nil &&
-		fr.functionAllocation != nil &&
-		fr.parameterScratch == nil {
-		fr.parameterScratch = make([]*mpool.AccountedBuffer, paramCount)
-	}
 }
 
 func (fr *FunctionResult[T]) getConvenientParamList() []reusableParameterWrapper {
 	return fr.convenientParam
 }
 
-func (fr *FunctionResult[T]) hasParameterScratch() bool {
-	return fr.functionAllocation != nil
-}
-
-func (fr *FunctionResult[T]) setFunctionAllocation(
-	allocation *FunctionAllocation,
-) {
-	fr.functionAllocation = allocation
-}
-
-func (fr *FunctionResult[T]) HasFunctionScratch() bool {
-	return fr.functionAllocation != nil
-}
-
-func (fr *FunctionResult[T]) resizeParameterScratch(
-	idx int,
-	size int,
-) ([]byte, error) {
-	if !fr.hasParameterScratch() {
-		return nil, mpool.ErrAllocationAccountInvalid
-	}
-	if idx < 0 || idx >= len(fr.parameterScratch) {
-		return nil, mpool.ErrAllocationAccountInvalid
-	}
-	if fr.parameterScratch[idx] == nil {
-		buffer, err := mpool.NewAccountedBuffer(
-			fr.mp,
-			fr.functionAllocation.account,
-			fr.functionAllocation.owner,
-			fr.functionAllocation.parameterSite,
-		)
-		if err != nil {
-			return nil, err
-		}
-		fr.parameterScratch[idx] = buffer
-	}
-	if err := fr.parameterScratch[idx].Resize(size); err != nil {
-		return nil, err
-	}
-	return fr.parameterScratch[idx].Bytes(), nil
-}
-
-// ResizeFunctionScratch returns retained allocation-accounted off-heap
-// scratch for data-scaled function internals. Legacy results report selected
-// false so callers preserve their existing allocator path.
-func (fr *FunctionResult[T]) ResizeFunctionScratch(
-	size int,
-) ([]byte, bool, error) {
-	if fr.functionAllocation == nil {
-		return nil, false, nil
-	}
-	if fr.functionScratch == nil {
-		buffer, err := mpool.NewAccountedBuffer(
-			fr.mp,
-			fr.functionAllocation.account,
-			fr.functionAllocation.owner,
-			fr.functionAllocation.scratchSite,
-		)
-		if err != nil {
-			return nil, true, err
-		}
-		fr.functionScratch = buffer
-	}
-	if err := fr.functionScratch.Resize(size); err != nil {
-		return nil, true, err
-	}
-	return fr.functionScratch.Bytes(), true, nil
-}
-
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if fr.vec == nil {
-		var err error
-		if fr.allocationAccount == nil {
-			fr.vec = NewOffHeapVecWithType(fr.typ)
-		} else {
-			fr.vec, err = NewOffHeapVecWithTypeAndAllocation(
-				fr.typ,
-				fr.allocationAccount,
-			)
-			if err != nil {
-				return err
-			}
-		}
+		fr.vec = NewOffHeapVecWithType(fr.typ)
 	}
 
 	oldLength := fr.vec.Length()
@@ -911,90 +668,6 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 	} else if !isnull {
 		return SetConstBytes(fr.vec, val, fr.vec.Length(), fr.mp)
 	}
-	return nil
-}
-
-// AppendBytesWithFill appends one non-null varlena value and lets fill write
-// directly into the result Vector's admitted backing storage. The provided
-// slice is valid only during fill. A panic rolls the unpublished row and area
-// length back before propagating. Use AppendBytesWithBuilder when construction
-// can return an error or a shorter value.
-func (fr *FunctionResult[T]) AppendBytesWithFill(
-	size int,
-	fill func([]byte),
-) error {
-	return fr.AppendBytesWithBuilder(size, func(dst []byte) (int, error) {
-		fill(dst)
-		return size, nil
-	})
-}
-
-// AppendBytesWithBuilder reserves capacity for one non-null varlena value and
-// lets build return the number of bytes it initialized. This supports codecs
-// whose exact output is known only after encoding without allocating a second
-// payload buffer. Reserved capacity remains owned by the result across reuse;
-// only the published area length is reduced to the actual value size.
-func (fr *FunctionResult[T]) AppendBytesWithBuilder(
-	capacity int,
-	build func([]byte) (int, error),
-) error {
-	if !fr.isVarlena ||
-		fr.vec == nil ||
-		fr.vec.IsConst() ||
-		capacity < 0 ||
-		build == nil {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	oldAreaLen := len(fr.vec.area)
-	if uint64(oldAreaLen)+uint64(capacity) > uint64(math.MaxUint32) {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	areaSize := capacity
-	if capacity <= types.VarlenaInlineSize {
-		areaSize = 0
-	}
-	if err := fr.vec.PreExtendWithArea(1, areaSize, fr.mp); err != nil {
-		return err
-	}
-
-	index := fr.vec.length
-	values := toSliceOfLengthNoTypeCheck[types.Varlena](fr.vec, index+1)
-	oldValue := values[index]
-	values[index] = types.Varlena{}
-	var target []byte
-	if capacity <= types.VarlenaInlineSize {
-		target = values[index][1 : 1+capacity]
-	} else {
-		fr.vec.area = fr.vec.area[:oldAreaLen+capacity]
-		target = fr.vec.area[oldAreaLen:]
-	}
-
-	published := false
-	defer func() {
-		if !published {
-			fr.vec.area = fr.vec.area[:oldAreaLen]
-			values[index] = oldValue
-		}
-	}()
-	written, err := build(target)
-	if err != nil {
-		return err
-	}
-	if written < 0 || written > capacity {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	if written <= types.VarlenaInlineSize {
-		if capacity > types.VarlenaInlineSize {
-			copy(values[index][1:1+written], target[:written])
-			fr.vec.area = fr.vec.area[:oldAreaLen]
-		}
-		values[index][0] = byte(written)
-	} else {
-		fr.vec.area = fr.vec.area[:oldAreaLen+written]
-		values[index].SetOffsetLen(uint32(oldAreaLen), uint32(written))
-	}
-	fr.vec.length++
-	published = true
 	return nil
 }
 
@@ -1084,121 +757,65 @@ func (fr *FunctionResult[T]) Free() {
 		fr.vec.Free(fr.mp)
 		fr.vec = nil
 	}
-	for i := range fr.parameterScratch {
-		if fr.parameterScratch[i] != nil {
-			fr.parameterScratch[i].Free()
-			fr.parameterScratch[i] = nil
-		}
-	}
-	if fr.functionScratch != nil {
-		fr.functionScratch.Free()
-		fr.functionScratch = nil
-	}
-	fr.allocationAccount = nil
-	fr.functionAllocation = nil
 	fr.convenientParam = nil
-	fr.parameterScratch = nil
 }
 
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
-	return newFunctionResultWrapper(typ, mp, nil)
-}
-
-// NewFunctionResultWrapperWithAllocation constructs a result owner whose
-// lazily allocated Vector data and area use selection. Existing callers remain
-// on the legacy path through NewFunctionResultWrapper.
-func NewFunctionResultWrapperWithAllocation(
-	typ types.Type,
-	mp *mpool.MPool,
-	selection *AllocationAccountSelection,
-) (FunctionResultWrapper, error) {
-	if err := selection.validate(); err != nil {
-		return nil, err
-	}
-	return newFunctionResultWrapper(typ, mp, selection), nil
-}
-
-func NewFunctionResultWrapperWithFunctionAllocation(
-	typ types.Type,
-	mp *mpool.MPool,
-	selection *AllocationAccountSelection,
-	functionAllocation *FunctionAllocation,
-) (FunctionResultWrapper, error) {
-	if err := selection.validate(); err != nil {
-		return nil, err
-	}
-	if err := functionAllocation.validate(); err != nil {
-		return nil, err
-	}
-	if selection.account != functionAllocation.account ||
-		selection.owner != functionAllocation.owner {
-		return nil, mpool.ErrAllocationAccountInvalid
-	}
-	result := newFunctionResultWrapper(typ, mp, selection)
-	result.setFunctionAllocation(functionAllocation)
-	return result, nil
-}
-
-func newFunctionResultWrapper(
-	typ types.Type,
-	mp *mpool.MPool,
-	selection *AllocationAccountSelection,
-) FunctionResultWrapper {
 	if typ.IsVarlen() {
-		return newResultFunc[types.Varlena](typ, mp, selection)
+		return newResultFunc[types.Varlena](typ, mp)
 	}
 
 	switch typ.Oid {
 	case types.T_bool:
-		return newResultFunc[bool](typ, mp, selection)
+		return newResultFunc[bool](typ, mp)
 	case types.T_bit:
-		return newResultFunc[uint64](typ, mp, selection)
+		return newResultFunc[uint64](typ, mp)
 	case types.T_int8:
-		return newResultFunc[int8](typ, mp, selection)
+		return newResultFunc[int8](typ, mp)
 	case types.T_int16:
-		return newResultFunc[int16](typ, mp, selection)
+		return newResultFunc[int16](typ, mp)
 	case types.T_int32:
-		return newResultFunc[int32](typ, mp, selection)
+		return newResultFunc[int32](typ, mp)
 	case types.T_int64:
-		return newResultFunc[int64](typ, mp, selection)
+		return newResultFunc[int64](typ, mp)
 	case types.T_uint8:
-		return newResultFunc[uint8](typ, mp, selection)
+		return newResultFunc[uint8](typ, mp)
 	case types.T_uint16:
-		return newResultFunc[uint16](typ, mp, selection)
+		return newResultFunc[uint16](typ, mp)
 	case types.T_uint32:
-		return newResultFunc[uint32](typ, mp, selection)
+		return newResultFunc[uint32](typ, mp)
 	case types.T_uint64:
-		return newResultFunc[uint64](typ, mp, selection)
+		return newResultFunc[uint64](typ, mp)
 	case types.T_float32:
-		return newResultFunc[float32](typ, mp, selection)
+		return newResultFunc[float32](typ, mp)
 	case types.T_float64:
-		return newResultFunc[float64](typ, mp, selection)
+		return newResultFunc[float64](typ, mp)
 	case types.T_date:
-		return newResultFunc[types.Date](typ, mp, selection)
+		return newResultFunc[types.Date](typ, mp)
 	case types.T_year:
-		return newResultFunc[types.MoYear](typ, mp, selection)
+		return newResultFunc[types.MoYear](typ, mp)
 	case types.T_datetime:
-		return newResultFunc[types.Datetime](typ, mp, selection)
+		return newResultFunc[types.Datetime](typ, mp)
 	case types.T_time:
-		return newResultFunc[types.Time](typ, mp, selection)
+		return newResultFunc[types.Time](typ, mp)
 	case types.T_timestamp:
-		return newResultFunc[types.Timestamp](typ, mp, selection)
+		return newResultFunc[types.Timestamp](typ, mp)
 	case types.T_decimal64:
-		return newResultFunc[types.Decimal64](typ, mp, selection)
+		return newResultFunc[types.Decimal64](typ, mp)
 	case types.T_decimal128:
-		return newResultFunc[types.Decimal128](typ, mp, selection)
+		return newResultFunc[types.Decimal128](typ, mp)
 	case types.T_decimal256:
-		return newResultFunc[types.Decimal256](typ, mp, selection)
+		return newResultFunc[types.Decimal256](typ, mp)
 	case types.T_TS:
-		return newResultFunc[types.TS](typ, mp, selection)
+		return newResultFunc[types.TS](typ, mp)
 	case types.T_Rowid:
-		return newResultFunc[types.Rowid](typ, mp, selection)
+		return newResultFunc[types.Rowid](typ, mp)
 	case types.T_Blockid:
-		return newResultFunc[types.Blockid](typ, mp, selection)
+		return newResultFunc[types.Blockid](typ, mp)
 	case types.T_uuid:
-		return newResultFunc[types.Uuid](typ, mp, selection)
+		return newResultFunc[types.Uuid](typ, mp)
 	case types.T_enum:
-		return newResultFunc[types.Enum](typ, mp, selection)
+		return newResultFunc[types.Enum](typ, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }

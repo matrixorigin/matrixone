@@ -17,13 +17,14 @@ package loopjoin
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -58,6 +59,9 @@ func (loopJoin *LoopJoin) OpType() vm.OpType {
 
 func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	var err error
+	if loopJoin.allocationAccount == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
 	if loopJoin.OpAnalyzer == nil {
 		loopJoin.OpAnalyzer = process.NewAnalyzer(loopJoin.GetIdx(), loopJoin.IsFirst, loopJoin.IsLast, opName)
 	} else {
@@ -65,10 +69,15 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	}
 
 	if loopJoin.NonEqCond != nil && loopJoin.ctr.expr == nil {
-		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.NonEqCond)
+		var execs []colexec.ExpressionExecutor
+		execs, err = hashbuild.NewExpressionExecutors(
+			proc,
+			[]*plan.Expr{loopJoin.NonEqCond},
+		)
 		if err != nil {
 			return err
 		}
+		loopJoin.ctr.expr = execs[0]
 	}
 	return err
 }
@@ -90,7 +99,9 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.state = End
 			} else {
 				if loopJoin.JoinType == plan.Node_OUTER && ctr.mp != nil {
-					ctr.initRightMatchedBitmap()
+					if err = ctr.initRightMatchedBitmap(loopJoin, proc); err != nil {
+						return result, err
+					}
 				}
 				ctr.state = Probe
 			}
@@ -451,16 +462,43 @@ func (loopJoin *LoopJoin) resetResultBat() {
 }
 
 // initRightMatchedBitmap allocates the per-build-row matched bitmap.
-func (ctr *container) initRightMatchedBitmap() {
+func (ctr *container) initRightMatchedBitmap(
+	ap *LoopJoin,
+	proc *process.Process,
+) error {
 	bats := ctr.mp.GetBatches()
-	ctr.rightBatchOffset = make([]uint64, len(bats))
+	var err error
+	ctr.rightBatchOffset, err = mpool.MakeSliceAccounted[uint64](
+		len(bats),
+		proc.Mp(),
+		ap.allocationAccount,
+		hashbuild.HashBuildAllocationOwner,
+		loopJoinAllocationSiteBatchOffsets,
+	)
+	if err != nil {
+		return err
+	}
 	var total uint64
 	for i, b := range bats {
 		ctr.rightBatchOffset[i] = total
 		total += uint64(b.RowCount())
 	}
-	ctr.rightRowsMatched = &bitmap.Bitmap{}
-	ctr.rightRowsMatched.InitWithSize(int64(total))
+	if total > uint64(^uint64(0)>>1) {
+		ctr.cleanRightMatchState(proc)
+		return mpool.ErrAllocationAccountInvalid
+	}
+	ctr.rightRowsMatched, err = colexec.NewAccountedBitmap(
+		int64(total),
+		proc.Mp(),
+		ap.allocationAccount,
+		hashbuild.HashBuildAllocationOwner,
+		loopJoinAllocationSiteMatched,
+	)
+	if err != nil {
+		ctr.cleanRightMatchState(proc)
+		return err
+	}
+	return nil
 }
 
 // finalize emits one batch worth of unmatched build rows with NULL probe

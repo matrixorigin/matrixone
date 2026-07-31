@@ -32,40 +32,6 @@ const (
 	DetachedAreaBuffer
 )
 
-// DetachLegacyVectorData is the allocation-unaccounted spool fast path. The
-// explicit guard prevents raw ownership transfer from dropping provenance.
-func DetachLegacyVectorData(v *Vector) []byte {
-	if v.allocationAccount != nil {
-		panic("cannot detach accounted vector data without provenance")
-	}
-	data := v.data
-	v.data = nil
-	return data
-}
-
-func DetachLegacyVectorArea(v *Vector) []byte {
-	if v.allocationAccount != nil {
-		panic("cannot detach accounted vector area without provenance")
-	}
-	area := v.area
-	v.area = nil
-	return area
-}
-
-func AttachLegacyVectorData(v *Vector, data []byte) {
-	if v.allocationAccount != nil || cap(v.data) != 0 {
-		panic("cannot attach legacy vector data")
-	}
-	v.data = data[:cap(data)]
-}
-
-func AttachLegacyVectorArea(v *Vector, area []byte) {
-	if v.allocationAccount != nil || cap(v.area) != 0 {
-		panic("cannot attach legacy vector area")
-	}
-	v.area = area
-}
-
 func DetachVectorData(v *Vector) DetachedBuffer {
 	if v == nil {
 		return DetachedBuffer{}
@@ -98,9 +64,9 @@ func (b *DetachedBuffer) Capacity() int {
 	return cap(b.data)
 }
 
-// CanAttachTo preserves data/area site provenance for accounted allocations.
-// Legacy buffers have no site identity and retain the historical ability to
-// serve either backing.
+// CanAttachTo preserves data/area site provenance when an allocation has an
+// account. Unaccounted storage has no site identity and can serve either
+// backing without losing ownership information.
 func (b *DetachedBuffer) CanAttachTo(
 	v *Vector,
 	kind DetachedBufferKind,

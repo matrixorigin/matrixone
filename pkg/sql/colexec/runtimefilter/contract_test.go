@@ -63,8 +63,6 @@ func TestClassifyOptionalFallbackFatalFirst(t *testing.T) {
 		{name: "marked raw closed", err: marked(process.ErrHashBuildBudgetClosed), want: OptionalFallbackNone},
 		{name: "marked raw invalid", err: marked(process.ErrHashBuildBudgetInvalid), want: OptionalFallbackNone},
 		{name: "marked raw ceiling", err: marked(process.ErrHashBuildCeilingMissing), want: OptionalFallbackNone},
-		{name: "marked inactive reservation", err: marked(process.ErrHashBuildReservationInactive), want: OptionalFallbackNone},
-		{name: "marked upward reconciliation", err: marked(process.ErrHashBuildReservationUpward), want: OptionalFallbackNone},
 	}
 
 	for _, test := range tests {
@@ -274,7 +272,11 @@ func TestMarshalExactFilterVectorUsesWireSizedBudget(t *testing.T) {
 	aggregate := process.MustNewHashBuildBudget(1<<20, 1<<20)
 	budget, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
-	data, release, err := MarshalExactFilterVector(vec, budget)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(budget.Cap(), budget)
+	require.NoError(t, err)
+	data, release, err := MarshalExactFilterVector(vec, mp, account, 1, 1)
 	require.NoError(t, err)
 	require.Len(t, data, 34+vec.Length())
 	// The retained charge is the actual bytes.Buffer capacity, not a
@@ -297,7 +299,11 @@ func TestMarshalExactFilterVectorAdmissionFailsBeforeAllocation(t *testing.T) {
 	aggregate := process.MustNewHashBuildBudget(1, 1)
 	budget, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
-	data, release, err := MarshalExactFilterVector(vec, budget)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(budget.Cap(), budget)
+	require.NoError(t, err)
+	data, release, err := MarshalExactFilterVector(vec, mp, account, 1, 1)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
 	require.Nil(t, data)
 	require.Nil(t, release)

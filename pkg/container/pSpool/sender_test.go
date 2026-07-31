@@ -105,7 +105,7 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelectionWithBitmaps(
+	selection, err := vector.NewAllocationAccountSelection(
 		account,
 		1,
 		1,
@@ -116,7 +116,7 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 	require.NoError(t, err)
 	otherAccount, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	otherSelection, err := vector.NewAllocationAccountSelectionWithBitmaps(
+	otherSelection, err := vector.NewAllocationAccountSelection(
 		otherAccount,
 		1,
 		1,
@@ -139,6 +139,7 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 			false,
 			mp,
 		))
+		require.NoError(t, vec.PreExtendGrouping(1, mp))
 		vec.GetGrouping().Add(0)
 		source.SetRowCount(1)
 		return source
@@ -215,6 +216,8 @@ func TestCachedBatchAllocationFailureReturnsCacheOwnership(t *testing.T) {
 		1,
 		1,
 		2,
+		3,
+		4,
 	)
 	require.NoError(t, err)
 	source := batch.NewOffHeapWithSize(1)
@@ -243,13 +246,14 @@ func TestCachedBatchAllocationFailureReturnsCacheOwnership(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestLegacyCacheNonLastSelectionRetainsOwnership(t *testing.T) {
+func TestUnaccountedCacheNonLastSelectionRetainsOwnership(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cache := oneBatchMemoryCache{}
 	for _, size := range []int{64, 128, 256} {
-		buffer, err := mp.Alloc(size, true)
-		require.NoError(t, err)
-		cache.bs = append(cache.bs, buffer)
+		owner := vector.NewOffHeapVecWithType(types.T_int8.ToType())
+		require.NoError(t, owner.PreExtend(size, mp))
+		cache.buffers = append(cache.buffers, vector.DetachVectorData(owner))
+		owner.Free(mp)
 	}
 	vec := vector.NewOffHeapVecWithType(types.T_int8.ToType())
 	require.NoError(t, cache.setSuitableDataAreaToVector(
@@ -257,11 +261,11 @@ func TestLegacyCacheNonLastSelectionRetainsOwnership(t *testing.T) {
 		0,
 		vec,
 	))
-	require.Len(t, cache.bs, 2)
+	require.Len(t, cache.buffers, 2)
 
 	vec.Free(mp)
-	for i := range cache.bs {
-		mp.Free(cache.bs[i])
+	for i := range cache.buffers {
+		cache.buffers[i].Free(mp)
 	}
 	require.Zero(t, mp.CurrNB())
 }

@@ -1,184 +1,141 @@
-Artifact:
+Artifact
+========
 
-branch: experiment/26459-allocation-accounting-validation
-commit: cde44cd099 (rebased validation artifact)
-go: go version go1.26.4 linux/amd64
+Date: 2026-08-01
+Branch: feature/26459-statement-lifecycle
+Base: origin/main ecc389d420
+Go: go1.26.4 linux/amd64
+CPU: 11th Gen Intel Core i7-11700, GOMAXPROCS=16
 
-Setup:
+All commands used the MatrixOne CGo wrapper:
 
-make thirdparties
-make cgo
-export CGO_ENABLED=1
+  .agents/skills/mo-dev/scripts/mo-cgo-test
 
-Metadata command:
+No remote workflow or container build was used. Values below are medians of
+the displayed count unless noted otherwise.
 
-go test -v ./pkg/common/mpool -run '^TestAllocationMetadataRepresentationCosts$' -count=1
 
-Metadata results:
+Physical MPool admission
+========================
 
-baseline: 13985992 bytes total, 55.94 bytes/base-entry
-inline-all: 20992896 bytes total, 83.97 bytes/base-entry
-side-1pct: 14059896 bytes total, 56.24 bytes/base-entry
-side-10pct: 14571520 bytes total, 58.29 bytes/base-entry
-side-all: 23438864 bytes total, 93.76 bytes/base-entry
-fixed registry: 10010736 bytes total, 40.04 bytes/slot
+Command:
 
-Benchmark command:
+  mo-cgo-test ./pkg/common/mpool -run '^$' \
+    -bench '^BenchmarkMPoolAccountedAllocation$' \
+    -benchmem -benchtime=1s -count=5
 
-GOMAXPROCS=8 CGO_ENABLED=1 .agents/skills/mo-dev/scripts/mo-cgo-test -run '^$' -bench='BenchmarkAllocation(MetadataInsertFree|ConcurrentRegistryResolve|FixedRegistryResolve|AccountAcquireRelease)$' -benchmem -benchtime=500ms -count=5 ./pkg/common/mpool
+Operation                         Unaccounted   Accounted   Delta
+alloc/free 64 B                    248.6 ns      357.5 ns   +43.8%
+alloc/free 4 KiB                   294.6 ns      410.5 ns   +39.3%
+alloc/free 16 KiB                  341.4 ns      449.3 ns   +31.6%
+alloc/free 64 KiB                   1014 ns       1121 ns   +10.6%
+grow replacement                   1292 ns       1492 ns   +15.5%
+parallel accounted alloc/free 64K                   285.4 ns
 
-Environment:
+Every sample reported 0 B/op and 0 allocs/op. The fixed transaction cost is
+largest for tiny allocations; retained HashBuild cells and batch buffers use
+larger capacity changes rather than one admission per row.
 
-goos: linux
-goarch: amd64
-cpu: 11th Gen Intel(R) Core(TM) i7-11700 @ 2.50GHz
-GOMAXPROCS: 8
-CPU pinning: none
 
-Results:
+Vector growth and reuse
+=======================
 
-BenchmarkAllocationMetadataInsertFree/baseline-8  40.13 39.99 40.40 40.37 39.97 ns/op
-BenchmarkAllocationMetadataInsertFree/inline-all-8  40.67 40.36 40.21 40.00 40.17 ns/op
-BenchmarkAllocationMetadataInsertFree/side-1pct-8  40.17 40.16 40.42 40.17 40.43 ns/op
-BenchmarkAllocationMetadataInsertFree/side-10pct-8  40.81 40.97 40.77 40.79 41.19 ns/op
-BenchmarkAllocationMetadataInsertFree/side-all-8  49.89 48.39 48.84 49.39 49.42 ns/op
-BenchmarkAllocationConcurrentRegistryResolve-8  5.682 5.564 5.554 5.287 5.225 ns/op
-BenchmarkAllocationFixedRegistryResolve-8  0.4278 0.4461 0.4463 0.2876 0.3265 ns/op
-BenchmarkAllocationAccountAcquireRelease/locked-8  73.71 81.29 72.94 88.61 80.73 ns/op
-BenchmarkAllocationAccountAcquireRelease/atomic-8  21.68 21.31 20.77 20.88 21.11 ns/op
+Command:
 
-Every sample reported 0 B/op and 0 allocs/op.
+  mo-cgo-test ./pkg/container/vector -run '^$' \
+    -bench '^BenchmarkVectorAllocationAccount$' \
+    -benchmem -benchtime=1s -count=3
 
-Real MPool and Vector baseline command:
+Operation                         Unaccounted   Accounted   Allocation result
+fixed preextend/free                 1047 ns       1158 ns  0 B/op, 0 allocs/op
+varlen preextend/free               77963 ns      78360 ns  48 B/op, 2 allocs/op
+accounted fixed Reset reuse                         2.63 ns  0 B/op, 0 allocs/op
 
-GOMAXPROCS=8 CGO_ENABLED=1 .agents/skills/mo-dev/scripts/mo-cgo-test -run '^$' -bench '^BenchmarkAllocationAccounting(MPool|Vector)Baseline$' -benchmem -benchtime=200ms -count=5 ./pkg/common/mpool ./pkg/container/vector
+Accounting adds no Go object to vector allocation or Reset reuse. The varlen
+difference was 0.5%, inside local run noise.
 
-Real baseline results:
 
-BenchmarkAllocationAccountingMPoolBaseline/alloc-free/sharded/64-8  249.6 244.3 248.0 242.4 245.6 ns/op
-BenchmarkAllocationAccountingMPoolBaseline/alloc-free/sharded/4096-8  291.8 291.0 292.5 290.4 295.6 ns/op
-BenchmarkAllocationAccountingMPoolBaseline/alloc-free/sharded/65536-8  999.2 1003 991.2 1002 993.9 ns/op
-BenchmarkAllocationAccountingMPoolBaseline/grow-replacement/sharded-8  1244 1267 1279 1254 1277 ns/op
-BenchmarkAllocationAccountingMPoolBaseline/alloc-free/no-lock/64-8  222.7 226.0 223.2 222.5 222.6 ns/op
-BenchmarkAllocationAccountingMPoolBaseline/alloc-free/no-lock/4096-8  280.5 273.3 276.5 271.6 276.5 ns/op
-BenchmarkAllocationAccountingMPoolBaseline/alloc-free/no-lock/65536-8  984.2 979.6 979.9 994.1 980.9 ns/op
-BenchmarkAllocationAccountingMPoolBaseline/grow-replacement/no-lock-8  1219 1199 1198 1248 1209 ns/op
-BenchmarkAllocationAccountingMPoolBaseline/parallel-alloc-free/sharded/64-8  176.6 213.2 211.1 180.5 209.4 ns/op
-BenchmarkAllocationAccountingVectorBaseline/fixed-preextend-free-8  1089 1028 1042 1043 1037 ns/op
-BenchmarkAllocationAccountingVectorBaseline/varlen-preextend-free-8  28130 28011 27634 28170 27778 ns/op
-BenchmarkAllocationAccountingVectorBaseline/fixed-reset-reuse-8  2.810 2.691 2.852 2.701 2.835 ns/op
+Retained HashBuild closure
+==========================
 
-Every MPool sample reported 0 B/op and 0 allocs/op. Fixed Vector
-pre-extend/free and Reset/reuse also reported 0 B/op and 0 allocs/op. Varlen
-Vector pre-extend/free reported 48 B/op and 2 allocs/op.
+Command:
 
-Account-aware real-MPool wrapper command:
+  mo-cgo-test ./pkg/sql/colexec/hashbuild -run '^$' \
+    -bench '^(BenchmarkResidentHashBuildAccounting|BenchmarkCopyBuildBatchAccounting)$' \
+    -benchmem -benchtime=1s -count=3
 
-GOMAXPROCS=8 CGO_ENABLED=1 .agents/skills/mo-dev/scripts/mo-cgo-test -run '^$' -bench '^BenchmarkAllocationAccountedMPoolPrototype$' -benchmem -benchtime=200ms -count=5 ./pkg/common/mpool
+Benchmark                                      Median       B/op   allocs/op
+copy retained build batch                      18919 ns       760           7
+resident int key, 32 rows                       4428 ns      2320          24
+resident varchar key, 32 rows                   7919 ns     20136          23
+resident int key, 8192 rows                   137526 ns     10432          26
+resident varchar key, 8192 rows               411112 ns     20233          27
 
-Account-aware wrapper results:
+The retained data itself is MPool-backed; B/op here is bounded Go control
+state. Allocations do not scale per input row.
 
-BenchmarkAllocationAccountedMPoolPrototype/alloc-free/64-8  329.7 328.4 323.7 327.0 321.4 ns/op
-BenchmarkAllocationAccountedMPoolPrototype/alloc-free/4096-8  367.6 361.9 381.9 366.5 368.4 ns/op
-BenchmarkAllocationAccountedMPoolPrototype/alloc-free/65536-8  1106 1072 1085 1080 1091 ns/op
-BenchmarkAllocationAccountedMPoolPrototype/grow-replacement-8  1418 1404 1390 1400 1393 ns/op
-BenchmarkAllocationAccountedMPoolPrototype/parallel-alloc-free/64-8  203.1 227.2 205.6 233.5 230.2 ns/op
 
-Every sample reported 0 B/op and 0 allocs/op. This prototype takes a second
-side-metadata lock and is intentionally an upper-bound comparison, not the
-accepted production transaction shape.
+Pipeline spool ownership transfer
+=================================
 
-Final validation commands:
+Command:
 
-go test -count=1 ./pkg/common/mpool ./pkg/container/vector
-go vet ./pkg/common/mpool ./pkg/container/vector
-go test -race -count=100 -run '^(TestAllocationAccountedMPoolPrototype|TestAllocationAccountingReferenceModel|TestAllocationAccountingViewCopyReset|TestAllocationAccountingMetadataSlotBounds|TestAllocationAccountingOperationRollbackRetry|TestAllocationAccountingTerminalTombstone|TestAllocationAccountingOpenSuspendLinearization|TestAllocationAccountingPoolTeardown)$' ./pkg/common/mpool
-go test -race -count=23 -run '^TestAllocationAccountingReferenceModelRandomized$' ./pkg/common/mpool
-go test -race -count=1 ./pkg/common/mpool ./pkg/container/vector
+  mo-cgo-test ./pkg/container/pSpool -run '^$' \
+    -bench '^BenchmarkCachedBatchReuse$' \
+    -benchmem -benchtime=2s -count=5
 
-Production PR 1 representation measurement (250,000 entries):
+Median: 1584 ns/op, 224 B/op, 3 allocs/op.
 
-branch: feature/26459-allocation-account
-generic MPool commit: 766e1501c3
-HashBuild adapter commit: 0655af4443
+The same DetachedBuffer path handles both storage outside the controlled
+HashBuild domain and account-provenance storage. There is no second raw-byte
+cache implementation.
 
-base pointer map: 13,985,992 bytes total, 55.94 bytes/slot
-base + 16-byte lease map: 27,966,424 bytes total, 111.87 bytes/slot
-fixed registry backing: 4,022,272 bytes total, 16.09 bytes/slot
-registry + live 64-byte accounts: 20,022,400 bytes total, 80.09 bytes/slot
 
-The conservative constants remain 128 bytes/allocation slot and are raised to
-128 bytes/generation slot. The first-activation sizing test therefore checks
-that a 1 GiB MPool cap yields 196,608 allocation-metadata slots and 40 MiB
-total conservative metadata headroom, including 131,072 generation slots.
+Grouping-aware Sample correctness path
+======================================
 
-Production PR 1 benchmark command:
+Command:
 
-GOMAXPROCS=8 go test -run '^$' -bench '^BenchmarkMPoolAccountedAllocation$' \
-  -benchmem -benchtime=500ms -count=5 ./pkg/common/mpool
+  mo-cgo-test ./pkg/sql/colexec/sample -run '^$' \
+    -bench '^(BenchmarkSampleGroupedHashFastPath|BenchmarkSampleAlternatingGrouping)$' \
+    -benchmem -benchtime=1s -count=5
 
-Clean-main medians from the paired baseline worktree:
+Ordinary 256-row grouped path: 6075 ns/op, 9344 B/op, 6 allocs/op.
+Alternating ordinary/GROUPING rows: 26869 ns/op, 19256 B/op, 12 allocs/op.
 
-alloc/free 64: 244.6 ns/op
-alloc/free 4096: 297.0 ns/op
-alloc/free 16384: 333.4 ns/op
-alloc/free 65536: 1023 ns/op
-grow replacement: 1274 ns/op
+A paired temporary reference containing the pre-fix ordinary hash loop was
+measured in the same binary and then removed: reference median 5989 ns/op,
+final median 6064 ns/op (+1.25%); both were 9344 B/op and 6 allocs/op. The
+committed alternating-domain test also applies AllocsPerRun and proves the
+iterator count remains constant per batch rather than per grouping run.
 
-Production PR 1 unaccounted medians:
 
-alloc/free 64: 252.7 ns/op (+3.3%)
-alloc/free 4096: 303.2 ns/op (+2.1%)
-alloc/free 16384: 339.2 ns/op (+1.7%)
-alloc/free 65536: 1034 ns/op (+1.1%)
-grow replacement: 1306 ns/op (+2.5%)
+Spill scatter and serialization
+===============================
 
-Production PR 1 accounted medians:
+Command:
 
-alloc/free 64: 352.4 ns/op (+44.1% versus clean main)
-alloc/free 4096: 400.4 ns/op (+34.8% versus clean main)
-alloc/free 16384: 435.1 ns/op (+30.5% versus clean main)
-alloc/free 65536: 1115 ns/op (+9.0% versus clean main)
-grow replacement: 1492 ns/op (+17.1% versus clean main)
-parallel accounted alloc/free 65536: 300.9 ns/op
+  mo-cgo-test ./pkg/sql/colexec/spillutil -run '^$' \
+    -bench '^BenchmarkSpillScatterAccounting$' \
+    -benchmem -benchtime=1s -count=5
 
-The dormant HashBuild controller adapter, including query/CN policy locking
-and metrics, measured 1260 ns/op for 65536-byte alloc/free. Every production
-PR 1 sample reported 0 B/op and 0 allocs/op. The first activated hash cell
-allocation is at least 16 KiB; activation PRs still require workload-level
-resident/spill validation because the small-allocation microbenchmark is not a
-per-row path.
+Final median: 62490 ns/op, 344 B/op, 4 allocs/op, about 524 MB/s.
 
-An eight-generation, GOMAXPROCS=8 acquire/release latency harness sampled
-200,000 operations per run. Across five runs P50 was 48 ns in every run; P99
-was 100, 98, 97, 68, and 73 ns (97 ns median). The measurement includes the
-`time.Now`/`time.Since` sampling cost and is therefore a conservative
-end-to-end latency observation, not a cycle-level atomic benchmark.
+An allocation profile found that primitive marshal fallbacks took the address
+of integer parameters even when AccountedBuffer's typed writer fast path was
+selected. Before the fix the median was 67751 ns/op, 2904 B/op, and 516
+allocs/op. Encoding fallback integers into branch-local fixed arrays reduced
+time by 7.8% and removed 512 Go allocations per scatter operation without
+changing the wire format.
 
-Production activation benchmark (rebased main 5b9eeb54ec, linux/amd64,
-Go 1.26.4, i7-11700, GOMAXPROCS=16; sequential package runs):
 
-BenchmarkResidentHashBuildAccounting/legacy/int/rows-32 median: 4161 ns/op
-BenchmarkResidentHashBuildAccounting/accounted/int/rows-32 median: 5841 ns/op
-BenchmarkResidentHashBuildAccounting/legacy/varchar/rows-32 median: 7147 ns/op
-BenchmarkResidentHashBuildAccounting/accounted/varchar/rows-32 median: 8907 ns/op
-BenchmarkResidentHashBuildAccounting/legacy/int/rows-8192 median: 139602 ns/op
-BenchmarkResidentHashBuildAccounting/accounted/int/rows-8192 median: 143254 ns/op
-BenchmarkResidentHashBuildAccounting/legacy/varchar/rows-8192 median: 410074 ns/op
-BenchmarkResidentHashBuildAccounting/accounted/varchar/rows-8192 median: 400782 ns/op
-BenchmarkIssue26454ExpressionAccounting/legacy median: 909082 ns/op
-BenchmarkIssue26454ExpressionAccounting/accounted median: 940454 ns/op
-BenchmarkCopyBuildBatchAccounting/legacy median: 18584 ns/op, 230032 B/op, 10 allocs/op
-BenchmarkCopyBuildBatchAccounting/accounted median: 22051 ns/op, 632 B/op, 6 allocs/op
-BenchmarkSpillScatterAccounting/legacy median: 59073 ns/op
-BenchmarkSpillScatterAccounting/accounted median: 60571 ns/op
+Acceptance
+==========
 
-BenchmarkHashBuildAllocationAttemptLifecycle cpu=1 median: 843.5 ns/op,
-p50 730 ns/op, p99 2011 ns/op, 256 B/op, 3 allocs/op
-BenchmarkHashBuildAllocationAttemptLifecycle cpu=8 median: 762.7 ns/op,
-p50 1995 ns/op, p99 73349 ns/op, 256 B/op, 3 allocs/op
-BenchmarkHashBuildAllocationReleaseStorm cpu=1 median: 558.4 ns/op, 0 B/op, 0 allocs/op
-BenchmarkHashBuildAllocationReleaseStorm cpu=8 median: 470.0 ns/op, 0 B/op, 0 allocs/op
-
-Commands and workload gates are recorded in
-docs/design/evidence/26459_activation_validation.md.
+- physical admission/release adds zero Go allocations;
+- vector and spool reuse retain bounded allocation counts;
+- ordinary Sample grouping has unchanged allocation shape and only 1.25%
+  measured CPU delta;
+- mixed GROUPING input uses a fixed number of iterators per batch;
+- spill serialization has four bounded Go allocations per 4096-row scatter;
+- no benchmark indicates a per-row accounting object or compatibility ledger.

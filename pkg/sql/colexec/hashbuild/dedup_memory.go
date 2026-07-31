@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
-// makeDedupSlice keeps the legacy allocation unchanged and moves only the
-// activated, data-scaled owner to exact off-heap accounting.
 func makeDedupSlice[T any](
 	hb *HashmapBuilder,
 	n int,
@@ -33,7 +31,7 @@ func makeDedupSlice[T any](
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
 	if hb.mapAllocationAccount == nil {
-		return make([]T, n), nil
+		return nil, mpool.ErrAllocationAccountInvalid
 	}
 	return mpool.MakeSliceAccounted[T](
 		n,
@@ -45,7 +43,7 @@ func makeDedupSlice[T any](
 }
 
 func freeDedupSlice[T any](hb *HashmapBuilder, values []T, mp *mpool.MPool) {
-	if hb.mapAllocationAccount != nil && cap(values) > 0 {
+	if cap(values) > 0 {
 		mpool.FreeSlice(mp, values)
 	}
 }
@@ -60,8 +58,7 @@ func (hb *HashmapBuilder) newDedupBitmap(
 	}
 	bm := &bitmap.Bitmap{}
 	if hb.mapAllocationAccount == nil {
-		bm.InitWithSize(int64(rows))
-		return bm, nil
+		return nil, mpool.ErrAllocationAccountInvalid
 	}
 	words := (rows + 63) / 64
 	storage, err := mpool.MakeSliceAccounted[uint64](

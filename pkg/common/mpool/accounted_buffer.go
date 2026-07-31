@@ -15,6 +15,7 @@
 package mpool
 
 import (
+	"encoding/binary"
 	"math"
 )
 
@@ -156,6 +157,68 @@ func (b *AccountedBuffer) WriteString(value string) (int, error) {
 	b.data = b.data[:required]
 	copy(b.data[oldLength:], value)
 	return len(value), nil
+}
+
+func (b *AccountedBuffer) appendSpace(length int) ([]byte, error) {
+	if b == nil || length < 0 || length > math.MaxInt-len(b.data) {
+		return nil, ErrAllocationAccountInvalid
+	}
+	start := len(b.data)
+	if err := b.Resize(start + length); err != nil {
+		return nil, err
+	}
+	return b.data[start:], nil
+}
+
+func (b *AccountedBuffer) WriteByte(value byte) error {
+	dst, err := b.appendSpace(1)
+	if err != nil {
+		return err
+	}
+	dst[0] = value
+	return nil
+}
+
+func (b *AccountedBuffer) WriteUint32(value uint32) error {
+	dst, err := b.appendSpace(4)
+	if err != nil {
+		return err
+	}
+	binary.NativeEndian.PutUint32(dst, value)
+	return nil
+}
+
+func (b *AccountedBuffer) WriteInt32(value int32) error {
+	return b.WriteUint32(uint32(value))
+}
+
+func (b *AccountedBuffer) WriteUint64(value uint64) error {
+	dst, err := b.appendSpace(8)
+	if err != nil {
+		return err
+	}
+	binary.NativeEndian.PutUint64(dst, value)
+	return nil
+}
+
+func (b *AccountedBuffer) WriteInt64(value int64) error {
+	return b.WriteUint64(uint64(value))
+}
+
+func (b *AccountedBuffer) SetUint32(offset int, value uint32) error {
+	if b == nil || offset < 0 || offset > len(b.data)-4 {
+		return ErrAllocationAccountInvalid
+	}
+	binary.NativeEndian.PutUint32(b.data[offset:offset+4], value)
+	return nil
+}
+
+func (b *AccountedBuffer) SetInt64(offset int, value int64) error {
+	if b == nil || offset < 0 || offset > len(b.data)-8 {
+		return ErrAllocationAccountInvalid
+	}
+	binary.NativeEndian.PutUint64(b.data[offset:offset+8], uint64(value))
+	return nil
 }
 
 func (b *AccountedBuffer) Reset() {

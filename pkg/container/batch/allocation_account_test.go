@@ -39,7 +39,7 @@ func newTestBatchAllocationAccount(
 	require.NoError(t, err)
 	account, err := registry.Open(16 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
 	require.NoError(t, err)
 	return testBatchAllocationAccount{
 		registry:  registry,
@@ -155,10 +155,223 @@ func TestBatchAllocationAccountCloneDupAndWindow(t *testing.T) {
 	for _, vec := range aliasDecoded.Vecs {
 		require.Nil(t, vec.AllocationAccountSelection())
 	}
+	require.NoError(
+		t,
+		aliasDecoded.UnmarshalFromReader(bytes.NewReader(data), mp),
+	)
+	for _, vec := range aliasDecoded.Vecs {
+		require.Same(t, state.selection, vec.AllocationAccountSelection())
+	}
+	require.Equal(t, source.RowCount(), aliasDecoded.RowCount())
 	aliasDecoded.Clean(mp)
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 
 	source.Clean(mp)
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
+func TestBatchAccountedReaderAcceptsBitmapCapacityBeyondLogicalRows(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 64)
+	mp := mpool.MustNewZero()
+	source := newBatchAllocationTestSource(t, mp, nil)
+	source.Vecs[0].GetNulls().Add(31)
+	source.Shrink([]int64{0, 1, 2, 3, 4}, false)
+
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalBinaryTo(&encoded))
+	decoded := NewOffHeapEmpty()
+	require.NoError(t, decoded.SetAllocationAccount(state.selection))
+	require.NoError(t, decoded.UnmarshalFromReader(&encoded, mp))
+	require.Equal(t, 5, decoded.RowCount())
+	require.Equal(
+		t,
+		int64(0),
+		vector.GetFixedAtWithTypeCheck[int64](decoded.Vecs[0], 0),
+	)
+
+	decoded.Clean(mp)
+	source.Clean(mp)
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
+func TestBatchAccountedReaderPreservesRowsWhenVectorCountChanges(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 64)
+	mp := mpool.MustNewZero()
+	source := newBatchAllocationTestSource(t, mp, nil)
+
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalBinaryTo(&encoded))
+	decoded := NewOffHeapWithSize(1)
+	decoded.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, decoded.SetAllocationAccount(state.selection))
+	decoded.SetRowCount(7)
+	require.NoError(t, decoded.UnmarshalFromReader(&encoded, mp))
+	require.Equal(t, source.RowCount(), decoded.RowCount())
+	require.Len(t, decoded.Vecs, 2)
+	require.Equal(
+		t,
+		int64(31),
+		vector.GetFixedAtWithTypeCheck[int64](decoded.Vecs[0], 31),
+	)
+
+	decoded.Clean(mp)
+	source.Clean(mp)
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
+func TestBatchGroupingCodecRoundTrip(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 64)
+	mp := mpool.MustNewZero()
+	source := newBatchAllocationTestSource(t, mp, nil)
+	source.Vecs[0].GetGrouping().Add(1, 7, 31)
+	source.Vecs[1].GetGrouping().Add(2, 9)
+	source.ExtraBuf = bytes.Repeat([]byte("x"), 1<<20)
+
+	var encoded bytes.Buffer
+	spillSize, err := source.MarshalBinaryWithGroupingSize()
+	require.NoError(t, err)
+	stableSize, err := source.MarshalBinarySize()
+	require.NoError(t, err)
+	require.Greater(t, stableSize-spillSize, len(source.ExtraBuf)/2)
+	require.NoError(t, source.MarshalBinaryWithGroupingTo(&encoded))
+	decoded := NewOffHeapEmpty()
+	require.NoError(t, decoded.SetAllocationAccount(state.selection))
+	require.NoError(t, decoded.UnmarshalFromReaderWithGrouping(&encoded, mp))
+	require.Empty(t, decoded.Attrs)
+	require.Empty(t, decoded.ExtraBuf)
+	for i := range source.Vecs {
+		require.True(t, decoded.Vecs[i].GetGrouping().IsSame(source.Vecs[i].GetGrouping()))
+	}
+	withoutGrouping := newBatchAllocationTestSource(t, mp, nil)
+	encoded.Reset()
+	require.NoError(t, withoutGrouping.MarshalBinaryWithGroupingTo(&encoded))
+	require.NoError(t, decoded.UnmarshalFromReaderWithGrouping(&encoded, mp))
+	for _, vec := range decoded.Vecs {
+		require.True(t, vec.GetGrouping().IsEmpty())
+	}
+
+	decoded.Clean(mp)
+	withoutGrouping.Clean(mp)
+	source.Clean(mp)
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
+func TestBatchGroupingCodecRejectsStableMetadataBeforePayloadAllocation(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 32)
+	mp := mpool.MustNewZero()
+
+	for _, test := range []struct {
+		name  string
+		attrs []string
+		extra []byte
+		want  string
+	}{
+		{
+			name:  "attributes",
+			attrs: []string{string(bytes.Repeat([]byte("a"), 1<<20))},
+			want:  "attributes are not allowed",
+		},
+		{
+			name:  "extra buffer",
+			extra: bytes.Repeat([]byte("x"), 1<<20),
+			want:  "extra buffer is not allowed",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := NewWithSize(0)
+			source.Attrs = test.attrs
+			source.ExtraBuf = test.extra
+			var encoded bytes.Buffer
+			require.NoError(t, source.MarshalBinaryTo(&encoded))
+
+			decoded := NewOffHeapEmpty()
+			require.NoError(t, decoded.SetAllocationAccount(state.selection))
+			require.ErrorContains(
+				t,
+				decoded.UnmarshalFromReaderWithGrouping(&encoded, mp),
+				test.want,
+			)
+			require.Zero(t, state.account.Snapshot().Used)
+			decoded.Clean(mp)
+		})
+	}
+
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
+func TestBatchGroupingCodecRejectsMismatchedRowCount(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 32)
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(1), false, mp))
+	source.SetRowCount(2)
+
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalBinaryWithGroupingTo(&encoded))
+	decoded := NewOffHeapEmpty()
+	require.NoError(t, decoded.SetAllocationAccount(state.selection))
+	require.ErrorContains(
+		t,
+		decoded.UnmarshalFromReaderWithGrouping(&encoded, mp),
+		"vector length does not match row count",
+	)
+
+	decoded.Clean(mp)
+	source.Clean(mp)
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
+func TestBatchAccountedReaderRejectsInvalidLengthsBeforeAllocation(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 16)
+	mp := mpool.MustNewZero()
+	encode := func(values ...[]byte) []byte {
+		return bytes.Join(values, nil)
+	}
+	zeroRows := int64(0)
+	zeroCount := int32(0)
+	negative := int32(-1)
+	huge := int32(1<<20 + 1)
+	one := int32(1)
+	oversized := int32(1 << 30)
+
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{
+			name: "negative vector count",
+			data: encode(types.EncodeInt64(&zeroRows), types.EncodeInt32(&negative)),
+		},
+		{
+			name: "huge vector count",
+			data: encode(types.EncodeInt64(&zeroRows), types.EncodeInt32(&huge)),
+		},
+		{
+			name: "negative attribute count",
+			data: encode(types.EncodeInt64(&zeroRows), types.EncodeInt32(&zeroCount), types.EncodeInt32(&negative)),
+		},
+		{
+			name: "oversized attribute payload",
+			data: encode(
+				types.EncodeInt64(&zeroRows),
+				types.EncodeInt32(&zeroCount),
+				types.EncodeInt32(&one),
+				types.EncodeInt32(&oversized),
+			),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decoded := NewOffHeapEmpty()
+			require.NoError(t, decoded.SetAllocationAccount(state.selection))
+			require.NotPanics(t, func() {
+				require.Error(t, decoded.UnmarshalFromReader(bytes.NewReader(test.data), mp))
+			})
+			decoded.Clean(mp)
+			require.Zero(t, state.account.Snapshot().Used)
+		})
+	}
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
@@ -170,13 +383,13 @@ func newMixedBatchAllocationSource(
 ) *Batch {
 	t.Helper()
 	bat := NewOffHeapWithSize(2)
-	bat.Attrs = []string{"accounted", "legacy"}
+	bat.Attrs = []string{"accounted", "unaccounted"}
 	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
 	require.NoError(t, bat.Vecs[0].SetAllocationAccount(selection))
 	bat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	for i := 0; i < rows; i++ {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
-		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("legacy"), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("unaccounted"), false, mp))
 	}
 	bat.SetRowCount(rows)
 	return bat
@@ -211,10 +424,10 @@ func TestMixedBatchAllocationClonePreservesVectorProvenance(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, state.selection, accounted.Vecs[0].AllocationAccountSelection())
 	accounted.Clean(mp)
-	legacy, err := source.CloneSelectedColumns([]int{1}, []string{"legacy"}, mp)
+	unaccounted, err := source.CloneSelectedColumns([]int{1}, []string{"unaccounted"}, mp)
 	require.NoError(t, err)
-	require.Nil(t, legacy.Vecs[0].AllocationAccountSelection())
-	legacy.Clean(mp)
+	require.Nil(t, unaccounted.Vecs[0].AllocationAccountSelection())
+	unaccounted.Clean(mp)
 
 	source.FreeColumns(mp)
 	require.Zero(t, state.account.Snapshot().Used)
@@ -256,11 +469,11 @@ func TestBatchSetStartsNewTailWhenVectorProvenanceChanges(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 128)
 	mp := mpool.MustNewZero()
 	set := NewBatchSet(4)
-	legacy := newBatchAllocationTestSource(t, mp, nil)
-	legacy.Shrink([]int64{0, 1}, false)
+	unaccounted := newBatchAllocationTestSource(t, mp, nil)
+	unaccounted.Shrink([]int64{0, 1}, false)
 	mixed := newMixedBatchAllocationSource(t, mp, state.selection, 3)
 
-	_, err := set.Extend(mp, legacy, nil)
+	_, err := set.Extend(mp, unaccounted, nil)
 	require.NoError(t, err)
 	ready := set.ReadyCount()
 	require.Equal(t, 1, set.ReadyDeltaFor(mixed, mixed.RowCount()))
@@ -273,10 +486,10 @@ func TestBatchSetStartsNewTailWhenVectorProvenanceChanges(t *testing.T) {
 	require.Nil(t, set.Get(0).Vecs[0].AllocationAccountSelection())
 	require.Same(t, state.selection, set.Get(1).Vecs[0].AllocationAccountSelection())
 
-	legacyUnion := newBatchAllocationTestSource(t, mp, nil)
+	unaccountedUnion := newBatchAllocationTestSource(t, mp, nil)
 	ready = set.ReadyCount()
-	require.Equal(t, 1, set.ReadyDeltaFor(legacyUnion, 1))
-	_, err = set.Union(mp, legacyUnion, []int32{0}, nil)
+	require.Equal(t, 1, set.ReadyDeltaFor(unaccountedUnion, 1))
+	_, err = set.Union(mp, unaccountedUnion, []int32{0}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, set.ReadyCount()-ready)
 	require.Equal(t, 3, set.Length())
@@ -288,9 +501,9 @@ func TestBatchSetStartsNewTailWhenVectorProvenanceChanges(t *testing.T) {
 	require.Same(t, state.selection, set.Get(3).Vecs[0].AllocationAccountSelection())
 	require.Equal(t, 1, set.Get(3).RowCount())
 
-	legacy.Clean(mp)
+	unaccounted.Clean(mp)
 	mixed.Clean(mp)
-	legacyUnion.Clean(mp)
+	unaccountedUnion.Clean(mp)
 	set.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
 }

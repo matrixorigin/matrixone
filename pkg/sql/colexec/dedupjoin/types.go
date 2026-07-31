@@ -44,6 +44,16 @@ const (
 	End
 )
 
+const (
+	dedupJoinAllocationSiteMatched mpool.AllocationSite = iota + 82
+	dedupJoinAllocationSiteCaptured
+	dedupJoinAllocationSiteCaptureData
+	dedupJoinAllocationSiteCaptureArea
+	dedupJoinAllocationSiteCaptureNulls
+	dedupJoinAllocationSiteCaptureGrouping
+	dedupJoinAllocationSiteFinalizeSelections
+)
+
 // WorkerJoinMsg carries per-worker state from non-merger workers to the
 // merger worker at finalize time. Regular DEDUP JOIN only populates matched;
 // the REPLACE INTO merged main-table scan path (OldColCapture) additionally
@@ -200,6 +210,8 @@ func freeCapturedVecs(vecs []*vector.Vector, proc *process.Process) {
 
 func freeWorkerJoinMsg(msg *WorkerJoinMsg, proc *process.Process) {
 	if msg != nil {
+		colexec.FreeAccountedBitmap(msg.matched, proc.Mp())
+		colexec.FreeAccountedBitmap(msg.captured, proc.Mp())
 		freeCapturedVecs(msg.capturedVecs, proc)
 	}
 }
@@ -258,11 +270,6 @@ type container struct {
 	// Spill support for large build sides.
 	spillEngine    *spillutil.SpillEngine
 	spillThreshold int64
-	// Non-nil only for spilled joins, where probe expressions are part of the
-	// shared HashBuild/spill working set. Resident probe expressions remain
-	// under normal process/mpool accounting; this is not a general query budget.
-	probeExpressionLease      *hashbuild.ExpressionMemoryLease
-	probeExpressionsAccounted bool
 }
 
 type DedupJoin struct {
@@ -301,24 +308,9 @@ type DedupJoin struct {
 	OldColCapturePlaceholderIdxList []int32
 	OldColCaptureProbeIdxList       []int32
 	allocationAccount               *mpool.AllocationAccount
+	stateAllocation                 *vector.AllocationAccountSelection
 
 	vm.OperatorBase
-}
-
-func (dedupJoin *DedupJoin) AllocationAccountEnabled() bool {
-	return dedupJoin != nil && dedupJoin.allocationAccountExpressionOwnerClosed()
-}
-
-func (dedupJoin *DedupJoin) AllocationAccountActivationBlocked() bool {
-	return dedupJoin != nil && !dedupJoin.allocationAccountExpressionOwnerClosed()
-}
-
-func (dedupJoin *DedupJoin) allocationAccountExpressionOwnerClosed() bool {
-	if dedupJoin == nil || len(dedupJoin.Conditions) != 2 {
-		return false
-	}
-	return hashbuild.AllocationAccountedExpressionSetSupported(dedupJoin.Conditions[0]) &&
-		hashbuild.AllocationAccountedExpressionSetSupported(dedupJoin.Conditions[1])
 }
 
 func (dedupJoin *DedupJoin) SetAllocationAccount(
@@ -331,7 +323,22 @@ func (dedupJoin *DedupJoin) SetAllocationAccount(
 		dedupJoin.allocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
 	}
+	if dedupJoin.allocationAccount == account {
+		return nil
+	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		hashbuild.HashBuildAllocationOwner,
+		dedupJoinAllocationSiteCaptureData,
+		dedupJoinAllocationSiteCaptureArea,
+		dedupJoinAllocationSiteCaptureNulls,
+		dedupJoinAllocationSiteCaptureGrouping,
+	)
+	if err != nil {
+		return err
+	}
 	dedupJoin.allocationAccount = account
+	dedupJoin.stateAllocation = selection
 	return nil
 }
 
@@ -345,10 +352,13 @@ func (dedupJoin *DedupJoin) ClearAllocationAccount(
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if dedupJoin.ctr.mp != nil || dedupJoin.ctr.spillEngine != nil ||
-		dedupJoin.ctr.probeExpressionsAccounted {
+		len(dedupJoin.ctr.evecs) != 0 || len(dedupJoin.ctr.exprExecs) != 0 ||
+		dedupJoin.ctr.matched != nil || dedupJoin.ctr.captured != nil ||
+		len(dedupJoin.ctr.capturedVecs) != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	dedupJoin.allocationAccount = nil
+	dedupJoin.stateAllocation = nil
 	return nil
 }
 
@@ -422,21 +432,15 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 
 	ctr.cleanBuf(proc)
 	ctr.cleanBucketState(proc)
-	ctr.resetExprExecutor()
+	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
 	}
-	if ctr.probeExpressionLease != nil || ctr.probeExpressionsAccounted {
-		ctr.cleanEvalVectors()
-		ctr.releaseProbeExpressionLease()
-	} else {
-		ctr.resetEvalVectors()
-	}
+	ctr.cleanEvalVectors()
 	ctr.roundStatusPublished = false
 	ctr.state = Build
 	ctr.lastPos = 0
-	dedupJoin.allocationAccount = nil
 }
 
 func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -455,25 +459,19 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()
-	ctr.releaseProbeExpressionLease()
-	dedupJoin.allocationAccount = nil
 }
 
 func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return input, nil
 }
 
-func (ctr *container) resetExprExecutor() {
-	for i := range ctr.exprExecs {
-		ctr.exprExecs[i].ResetForNextQuery()
-	}
-}
-
 func (ctr *container) cleanExprExecutor() {
 	for i := range ctr.exprExecs {
-		ctr.exprExecs[i].Free()
-		ctr.exprExecs[i] = nil
+		if ctr.exprExecs[i] != nil {
+			ctr.exprExecs[i].Free()
+		}
 	}
+	ctr.exprExecs = nil
 }
 
 func (ctr *container) cleanBuf(proc *process.Process) {
@@ -492,6 +490,7 @@ func (ctr *container) cleanCaptured(proc *process.Process) {
 		}
 	}
 	ctr.capturedVecs = nil
+	colexec.FreeAccountedBitmap(ctr.captured, proc.Mp())
 	ctr.captured = nil
 	ctr.captureResultIdx = nil
 }
@@ -523,10 +522,12 @@ func (ctr *container) cleanBucketState(proc *process.Process) {
 	ctr.cleanHashMap()
 	ctr.batches = nil
 	ctr.batchRowCount = 0
+	colexec.FreeAccountedBitmap(ctr.matched, proc.Mp())
 	ctr.matched = nil
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.cachedItr)
 	ctr.cachedItr = nil
 	if ctr.mp != nil {
 		ctr.mp.Free()
@@ -543,20 +544,4 @@ func (ctr *container) cleanEvalVectors() {
 	}
 	ctr.evecs = nil
 	ctr.vecs = nil
-	ctr.probeExpressionsAccounted = false
-}
-
-func (ctr *container) resetEvalVectors() {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.ResetForNextQuery()
-		}
-	}
-}
-
-func (ctr *container) releaseProbeExpressionLease() {
-	if ctr.probeExpressionLease != nil {
-		ctr.probeExpressionLease.Release()
-		ctr.probeExpressionLease = nil
-	}
 }

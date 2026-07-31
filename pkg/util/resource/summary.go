@@ -57,7 +57,7 @@ type MemoryTotals struct {
 	CrossPoolFreeCount          uint64
 }
 
-// AllocationAccountTotals is the fixed-size terminal observation of activated
+// AllocationAccountTotals is the fixed-size terminal observation of accounted
 // allocation generations. It is diagnostic only: these bytes are a subset of
 // allocator memory and are never added to MemoryTotals or fed back into
 // admission.

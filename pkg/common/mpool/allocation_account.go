@@ -207,8 +207,8 @@ type AllocationAccountCheckpoint struct {
 }
 
 // AllocationCapacityController lets an account share a higher-level aggregate
-// cap during migration. The controller owns cap policy only; physical MPool
-// metadata remains the sole release owner.
+// cap. The controller owns cap policy only; physical MPool metadata remains
+// the sole release owner.
 type AllocationCapacityController interface {
 	AcquireAllocationCapacity(uint64) error
 	ReleaseAllocationCapacity(uint64)

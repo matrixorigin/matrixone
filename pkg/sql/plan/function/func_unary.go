@@ -50,7 +50,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -217,146 +216,120 @@ func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Functio
 	}, selectList)
 }
 
+var (
+	arrayF32Pool = sync.Pool{
+		New: func() interface{} {
+			s := make([]float32, 128)
+			return &s
+		},
+	}
+
+	arrayF64Pool = sync.Pool{
+		New: func() interface{} {
+			s := make([]float64, 128)
+			return &s
+		},
+	}
+)
+
 func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	rowCount := uint64(length)
 
+	var inArrayF32 []float32
+	var outArrayF32Ptr *[]float32
+	var outArrayF32 []float32
+
+	var inArrayF64 []float64
+	var outArrayF64Ptr *[]float64
+	var outArrayF64 []float64
+
+	var data []byte
+	var null bool
+
 	for i := uint64(0); i < rowCount; i++ {
-		data, null := source.GetStrValue(i)
+		data, null = source.GetStrValue(i)
 		if null {
-			if err := rs.AppendMustNullForBytesResult(); err != nil {
-				return err
-			}
+			_ = rs.AppendMustNullForBytesResult()
 			continue
 		}
 
 		switch t := parameters[0].GetType().Oid; t {
 		case types.T_array_float32:
-			if err := appendNormalizedRealArray[float32](rs, data); err != nil {
-				return err
+			inArrayF32 = types.BytesToArray[float32](data)
+
+			outArrayF32Ptr = arrayF32Pool.Get().(*[]float32)
+			outArrayF32 = *outArrayF32Ptr
+
+			if cap(outArrayF32) < len(inArrayF32) {
+				outArrayF32 = make([]float32, len(inArrayF32))
+			} else {
+				outArrayF32 = outArrayF32[:len(inArrayF32)]
 			}
+			_ = moarray.NormalizeL2(inArrayF32, outArrayF32)
+			_ = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
+
+			*outArrayF32Ptr = outArrayF32
+			arrayF32Pool.Put(outArrayF32Ptr)
 		case types.T_array_float64:
-			if err := appendNormalizedRealArray[float64](rs, data); err != nil {
-				return err
+			inArrayF64 = types.BytesToArray[float64](data)
+
+			outArrayF64Ptr = arrayF64Pool.Get().(*[]float64)
+			outArrayF64 = *outArrayF64Ptr
+
+			if cap(outArrayF64) < len(inArrayF64) {
+				outArrayF64 = make([]float64, len(inArrayF64))
+			} else {
+				outArrayF64 = outArrayF64[:len(inArrayF64)]
 			}
+			_ = moarray.NormalizeL2(inArrayF64, outArrayF64)
+			_ = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
+
+			*outArrayF64Ptr = outArrayF64
+			arrayF64Pool.Put(outArrayF64Ptr)
 		case types.T_array_bf16:
-			if err := appendNormalizedNarrowArray(
-				rs,
-				data,
-				types.BF16.ToFloat32,
-				types.BF16FromFloat32,
-			); err != nil {
-				return err
-			}
+			_ = appendNormalizedNarrowArray[types.BF16](rs, data)
 		case types.T_array_float16:
-			if err := appendNormalizedNarrowArray(
-				rs,
-				data,
-				types.Float16.ToFloat32,
-				types.Float16FromFloat32,
-			); err != nil {
-				return err
-			}
+			_ = appendNormalizedNarrowArray[types.Float16](rs, data)
 		case types.T_array_int8:
 			// A normalized vector is a unit vector, which cannot be represented in
 			// an integer element type (components round to 0/±1 and the norm is no
 			// longer 1), so int8/uint8 normalize_l2 widens the result to vecf32.
 			// The overload's retType is T_array_float32 to match (see list_builtIn).
-			if err := appendNormalizedArrayAsFloat32(
-				rs,
-				data,
-				func(value int8) float32 { return float32(value) },
-			); err != nil {
-				return err
-			}
+			_ = appendNormalizedIntArrayAsFloat32[int8](rs, data)
 		case types.T_array_uint8:
-			if err := appendNormalizedArrayAsFloat32(
-				rs,
-				data,
-				func(value uint8) float32 { return float32(value) },
-			); err != nil {
-				return err
-			}
+			_ = appendNormalizedIntArrayAsFloat32[uint8](rs, data)
 		}
+
 	}
 
 	return nil
 }
 
-func appendNormalizedRealArray[T types.RealNumbers](
-	rs *vector.FunctionResult[types.Varlena],
-	data []byte,
-) error {
-	input := types.BytesToArray[T](data)
-	return rs.AppendBytesWithFill(len(data), func(dst []byte) {
-		_ = moarray.NormalizeL2(input, types.BytesToArray[T](dst))
-	})
+// appendNormalizedNarrowArray normalizes a bf16/f16 vector by upcasting to
+// float32, normalizing in float32, then narrowing back to T. bf16/f16 are
+// floating-point so they can hold a (near-)unit vector; int8/uint8 cannot and
+// use appendNormalizedIntArrayAsFloat32 instead.
+func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
+	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
+	out := make([]float32, len(in))
+	_ = moarray.NormalizeL2(in, out)
+	return rs.AppendBytes(types.ArrayToBytes[T](types.FromFloat32Array[T](out)), false)
 }
 
-// appendNormalizedNarrowArray normalizes a bf16/f16 vector through float32
-// arithmetic while writing the narrowed values directly into the result.
-func appendNormalizedNarrowArray[T types.ArrayElement](
-	rs *vector.FunctionResult[types.Varlena],
-	data []byte,
-	toFloat32 func(T) float32,
-	fromFloat32 func(float32) T,
-) error {
-	input := types.BytesToArray[T](data)
-	return rs.AppendBytesWithFill(len(data), func(dst []byte) {
-		output := types.BytesToArray[T](dst)
-		normalizeArrayInto(input, output, toFloat32, fromFloat32)
-	})
-}
-
-// appendNormalizedArrayAsFloat32 normalizes an integer-typed (int8/uint8)
+// appendNormalizedIntArrayAsFloat32 normalizes an integer-typed (int8/uint8)
 // vector and writes the result as float32. A unit vector cannot be represented
 // in an integer element type — narrowing back would round components to 0/±1 so
 // the norm is no longer 1 (e.g. normalize_l2([0,1,2,3]::vecuint8) would become
 // [0,0,1,1], whose norm is √2). Widening the result to vecf32 keeps the unit-norm
 // contract; the int8/uint8 overloads declare retType T_array_float32 to match.
-func appendNormalizedArrayAsFloat32[T types.ArrayElement](
-	rs *vector.FunctionResult[types.Varlena],
-	data []byte,
-	toFloat32 func(T) float32,
-) error {
-	input := types.BytesToArray[T](data)
-	if len(input) > int(^uint(0)>>1)/4 {
-		return moerr.NewInternalErrorNoCtx("normalized array result is too large")
-	}
-	return rs.AppendBytesWithFill(len(input)*4, func(dst []byte) {
-		output := types.BytesToArray[float32](dst)
-		normalizeArrayInto(
-			input,
-			output,
-			toFloat32,
-			func(value float32) float32 { return value },
-		)
-	})
-}
-
-func normalizeArrayInto[TIn, TOut types.ArrayElement](
-	input []TIn,
-	output []TOut,
-	toFloat32 func(TIn) float32,
-	fromFloat32 func(float32) TOut,
-) {
-	var sumSquares float64
-	for _, value := range input {
-		converted := float64(toFloat32(value))
-		sumSquares += converted * converted
-	}
-	norm := math.Sqrt(sumSquares)
-	if norm == 0 {
-		for idx, value := range input {
-			output[idx] = fromFloat32(toFloat32(value))
-		}
-		return
-	}
-	for idx, value := range input {
-		output[idx] = fromFloat32(float32(float64(toFloat32(value)) / norm))
-	}
+func appendNormalizedIntArrayAsFloat32[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
+	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
+	out := make([]float32, len(in))
+	_ = moarray.NormalizeL2(in, out)
+	return rs.AppendBytes(types.ArrayToBytes[float32](out), false)
 }
 
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1011,25 +984,15 @@ func Empty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 }
 
 func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	source := vector.GenerateFunctionStrParameter(ivecs[0])
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	for row := uint64(0); row < uint64(length); row++ {
-		value, isNull := source.GetStrValue(row)
-		if isNull || selectList.Contains(row) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		encoder, err := bytejson.NewStringDataEncoder(value)
+	single := func(str string) ([]byte, error) {
+		bj, err := types.ParseStringToByteJson(strconv.Quote(str))
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if err := rs.AppendByteJsonEncoded(encoder); err != nil {
-			return err
-		}
+		return bj.Marshal()
 	}
-	return nil
+
+	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, single, selectList)
 }
 
 func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1058,11 +1021,6 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 // Escapes single quotes by doubling them, backslashes, and control characters
 func QuoteString(str string) string {
 	var result strings.Builder
-	writeQuotedString(&result, str)
-	return result.String()
-}
-
-func writeQuotedString(result formatBuffer, str string) {
 	result.WriteByte('\'')
 
 	for _, r := range str {
@@ -1095,28 +1053,15 @@ func writeQuotedString(result formatBuffer, str string) {
 	}
 
 	result.WriteByte('\'')
+	return result.String()
 }
 
 func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	source := vector.GenerateFunctionStrParameter(ivecs[0])
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	var legacy bytes.Buffer
-	for row := uint64(0); row < uint64(length); row++ {
-		value, isNull := source.GetStrValue(row)
-		if isNull || selectList.Contains(row) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		if _, err := appendFormattedBytesForResult(result, rs, &legacy, func(output formatBuffer) (bool, error) {
-			writeQuotedString(output, functionUtil.QuickBytesToStr(value))
-			return false, nil
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
+		str := functionUtil.QuickBytesToStr(v)
+		quoted := QuoteString(str)
+		return functionUtil.QuickStrToBytes(quoted)
+	}, selectList)
 }
 
 func StAsText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4727,13 +4672,13 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	toVec := result.GetResultVector()
 	toVec.Reset(*toVec.GetType())
 
-	return toVec.UnionBatch(
-		fromVec,
-		0,
-		fromVec.Length(),
-		nil,
-		proc.GetMPool(),
-	)
+	sels := make([]int64, fromVec.Length())
+	for j := 0; j < len(sels); j++ {
+		sels[j] = int64(j)
+	}
+
+	err := toVec.Union(fromVec, sels, proc.GetMPool())
+	return err
 }
 
 func builtInNameConst(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4984,24 +4929,11 @@ func HexFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func HexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	source := vector.GenerateFunctionStrParameter(ivecs[0])
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	for row := uint64(0); row < uint64(length); row++ {
-		data, isNull := source.GetStrValue(row)
-		if isNull || selectList.Contains(row) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		encodedSize := hex.EncodedLen(len(data))
-		if err := rs.AppendBytesWithFill(encodedSize, func(dst []byte) {
-			hex.Encode(dst, data)
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
+		buf := make([]byte, hex.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
+		hex.Encode(buf, data)
+		return buf, nil
+	}, selectList)
 }
 
 func hexEncodeString(xs []byte) string {
@@ -5825,45 +5757,17 @@ func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlen
 		return rs.AppendMustNullForBytesResult()
 	}
 
-	decodedSize := (len(data) + 1) / 2
-	var decodeErr error
-	err := rs.AppendBytesWithBuilder(decodedSize, func(dst []byte) (int, error) {
-		written, err := decodeHexInto(dst, data)
-		decodeErr = err
-		return written, err
-	})
-	if decodeErr != nil {
+	// Add a '0' to the front, if the length is not the multiple of 2
+	str := functionUtil.QuickBytesToStr(data)
+	if len(str)%2 != 0 {
+		str = "0" + str
+	}
+
+	bs, err := hex.DecodeString(str)
+	if err != nil {
 		return rs.AppendMustNullForBytesResult()
 	}
-	return err
-}
-
-func decodeHexInto(dst, src []byte) (int, error) {
-	written := 0
-	if len(src)%2 != 0 {
-		value, ok := decodeHexNibble(src[0])
-		if !ok {
-			return 0, hex.InvalidByteError(src[0])
-		}
-		dst[0] = value
-		written = 1
-		src = src[1:]
-	}
-	n, err := hex.Decode(dst[written:], src)
-	return written + n, err
-}
-
-func decodeHexNibble(value byte) (byte, bool) {
-	switch {
-	case value >= '0' && value <= '9':
-		return value - '0', true
-	case value >= 'a' && value <= 'f':
-		return value - 'a' + 10, true
-	case value >= 'A' && value <= 'F':
-		return value - 'A' + 10, true
-	default:
-		return 0, false
-	}
+	return rs.AppendMustBytesValue(bs)
 }
 
 func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -5882,24 +5786,10 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	source := vector.GenerateFunctionStrParameter(parameters[0])
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	for row := uint64(0); row < uint64(length); row++ {
-		data, isNull := source.GetStrValue(row)
-		if isNull || selectList.Contains(row) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
+	return opUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
 		sum := md5.Sum(data)
-		if err := rs.AppendBytesWithFill(hex.EncodedLen(len(sum)), func(dst []byte) {
-			hex.Encode(dst, sum[:])
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+		return []byte(hex.EncodeToString(sum[:]))
+	}, selectList)
 
 }
 
@@ -5927,24 +5817,11 @@ func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, resul
 }
 
 func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	source := vector.GenerateFunctionStrParameter(ivecs[0])
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	for row := uint64(0); row < uint64(length); row++ {
-		data, isNull := source.GetStrValue(row)
-		if isNull || selectList.Contains(row) {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		encodedSize := base64.StdEncoding.EncodedLen(len(data))
-		if err = rs.AppendBytesWithFill(encodedSize, func(dst []byte) {
-			base64.StdEncoding.Encode(dst, data)
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
+		buf := make([]byte, base64.StdEncoding.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
+		base64.StdEncoding.Encode(buf, data)
+		return buf, nil
+	}, selectList)
 }
 
 func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -5954,31 +5831,16 @@ func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		data, null := source.GetStrValue(i)
-		if null || selectList.Contains(i) {
-			if err := rs.AppendMustNullForBytesResult(); err != nil {
-				return err
-			}
-			continue
+		if null {
+			return rs.AppendMustNullForBytesResult()
 		}
 
-		var decodeErr error
-		err := rs.AppendBytesWithBuilder(
-			base64.StdEncoding.DecodedLen(len(data)),
-			func(dst []byte) (int, error) {
-				var written int
-				written, decodeErr = base64.StdEncoding.Decode(dst, data)
-				return written, decodeErr
-			},
-		)
-		if decodeErr != nil {
-			if err = rs.AppendMustNullForBytesResult(); err != nil {
-				return err
-			}
-			continue
-		}
+		buf := make([]byte, base64.StdEncoding.DecodedLen(len(functionUtil.QuickBytesToStr(data))))
+		_, err := base64.StdEncoding.Decode(buf, data)
 		if err != nil {
-			return err
+			return rs.AppendMustNullForBytesResult()
 		}
+		_ = rs.AppendMustBytesValue(buf)
 	}
 
 	return nil
@@ -6019,10 +5881,11 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 		}
 	}
 
+	var buf []byte
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		data, null := source.GetStrValue(i)
-		if null || selectList.Contains(i) {
+		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -6030,22 +5893,21 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 		}
 
 		need := base64.StdEncoding.DecodedLen(len(data))
-		if err := rs.AppendBytesWithBuilder(need, func(dst []byte) (int, error) {
-			written, err := base64.StdEncoding.Decode(dst, data)
-			if err != nil {
-				return 0, moerr.NewInternalErrorNoCtx(
-					"vec_from_base64: invalid base64 input",
-				)
-			}
-			if written%elemSize != 0 {
-				return 0, moerr.NewInternalErrorNoCtxf(
-					"vec_from_base64: decoded length %d is not a multiple of %d bytes",
-					written,
-					elemSize,
-				)
-			}
-			return written, nil
-		}); err != nil {
+		if cap(buf) < need {
+			buf = make([]byte, need)
+		} else {
+			buf = buf[:need]
+		}
+		n, err := base64.StdEncoding.Decode(buf, data)
+		if err != nil {
+			return moerr.NewInternalErrorNoCtx("vec_from_base64: invalid base64 input")
+		}
+
+		if n%elemSize != 0 {
+			return moerr.NewInternalErrorNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
+		}
+
+		if err = rs.AppendBytes(buf[:n], false); err != nil {
 			return err
 		}
 	}
@@ -6058,8 +5920,6 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	var writer *flate.Writer
-	var output fixedSliceWriter
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -6078,124 +5938,47 @@ func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 			continue
 		}
 
-		capacity, err := flateResultCapacity(len(data))
+		// Compress using zlib (flate)
+		var buf bytes.Buffer
+		writer, err := flate.NewWriter(&buf, flate.DefaultCompression)
 		if err != nil {
-			return err
-		}
-		if writer == nil {
-			writer, err = flate.NewWriter(io.Discard, flate.DefaultCompression)
-			if err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
-			}
-		}
-		var compressionErr error
-		err = rs.AppendBytesWithBuilder(capacity, func(dst []byte) (int, error) {
-			output.Reset(dst[4:])
-			writer.Reset(&output)
-			if _, compressionErr = writer.Write(data); compressionErr == nil {
-				compressionErr = writer.Close()
-			} else {
-				_ = writer.Close()
-			}
-			if compressionErr != nil {
-				return 0, compressionErr
-			}
-			binary.LittleEndian.PutUint32(dst[:4], uint32(len(data)))
-			return 4 + output.Written(), nil
-		})
-		if compressionErr != nil {
-			if nullErr := rs.AppendBytes(nil, true); nullErr != nil {
-				return nullErr
 			}
 			continue
 		}
+
+		_, err = writer.Write(data)
 		if err != nil {
+			writer.Close()
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		err = writer.Close()
+		if err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		compressed := buf.Bytes()
+
+		// MySQL format: 4-byte length (little-endian) + compressed data
+		originalLen := uint32(len(data))
+		result := make([]byte, 4+len(compressed))
+		binary.LittleEndian.PutUint32(result[0:4], originalLen)
+		copy(result[4:], compressed)
+
+		if err := rs.AppendBytes(result, false); err != nil {
 			return err
 		}
 	}
 
 	return nil
-}
-
-type fixedSliceWriter struct {
-	dst     []byte
-	written int
-	err     error
-}
-
-func (w *fixedSliceWriter) Reset(dst []byte) {
-	w.dst = dst
-	w.written = 0
-	w.err = nil
-}
-
-func (w *fixedSliceWriter) Write(value []byte) (int, error) {
-	if w.err != nil {
-		return 0, w.err
-	}
-	if len(value) > len(w.dst)-w.written {
-		w.err = io.ErrShortBuffer
-		return 0, w.err
-	}
-	copy(w.dst[w.written:], value)
-	w.written += len(value)
-	return len(value), nil
-}
-
-func (w *fixedSliceWriter) WriteString(value string) (int, error) {
-	if w.err != nil {
-		return 0, w.err
-	}
-	if len(value) > len(w.dst)-w.written {
-		w.err = io.ErrShortBuffer
-		return 0, w.err
-	}
-	copy(w.dst[w.written:], value)
-	w.written += len(value)
-	return len(value), nil
-}
-
-func (w *fixedSliceWriter) WriteByte(value byte) error {
-	if w.err != nil {
-		return w.err
-	}
-	if w.written == len(w.dst) {
-		w.err = io.ErrShortBuffer
-		return w.err
-	}
-	w.dst[w.written] = value
-	w.written++
-	return nil
-}
-
-func (w *fixedSliceWriter) WriteRune(value rune) (int, error) {
-	var encoded [utf8.UTFMax]byte
-	size := utf8.EncodeRune(encoded[:], value)
-	return w.Write(encoded[:size])
-}
-
-func (w *fixedSliceWriter) Grow(int) {}
-
-func (w *fixedSliceWriter) Written() int {
-	return w.written
-}
-
-func (w *fixedSliceWriter) Err() error {
-	return w.err
-}
-
-func flateResultCapacity(inputSize int) (int, error) {
-	if inputSize < 0 || uint64(inputSize) > math.MaxUint32 {
-		return 0, moerr.NewInvalidInputNoCtx("compress input is too large")
-	}
-	// zlib's compressBound is also an upper bound for the contained raw
-	// DEFLATE stream; add four bytes for MySQL's original-length prefix.
-	size := uint64(inputSize)
-	bound := size + (size >> 12) + (size >> 14) + (size >> 25) + 13
-	if bound > uint64(^uint(0)>>1)-4 {
-		return 0, moerr.NewInvalidInputNoCtx("compress result is too large")
-	}
-	return int(bound) + 4, nil
 }
 
 // Uncompress: UNCOMPRESS(string) - Uncompresses a string compressed by COMPRESS()
@@ -6234,33 +6017,30 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		originalLen := binary.LittleEndian.Uint32(data[0:4])
 		compressed := data[4:]
 
-		var decodeErr error
-		err := rs.AppendBytesWithBuilder(int(originalLen), func(dst []byte) (int, error) {
-			reader := flate.NewReader(bytes.NewReader(compressed))
-			defer reader.Close()
-			if _, decodeErr = io.ReadFull(reader, dst); decodeErr != nil {
-				return 0, decodeErr
-			}
-			var extra [1]byte
-			n, err := reader.Read(extra[:])
-			if err != io.EOF || n != 0 {
-				if err == nil {
-					err = moerr.NewInvalidInputNoCtx(
-						"decompressed length exceeds header",
-					)
-				}
-				decodeErr = err
-				return 0, err
-			}
-			return len(dst), nil
-		})
-		if decodeErr != nil {
+		// Decompress using zlib (flate)
+		reader := flate.NewReader(bytes.NewReader(compressed))
+		decompressed := make([]byte, originalLen)
+		n, err := reader.Read(decompressed)
+		reader.Close()
+
+		if err != nil && err != io.EOF {
+			// Decompression failed, return NULL
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
-		if err != nil {
+
+		// Check if we got the expected length
+		if uint32(n) != originalLen {
+			// Length mismatch, return NULL
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendBytes(decompressed, false); err != nil {
 			return err
 		}
 	}
@@ -6425,12 +6205,9 @@ func generateSHAKey(key []byte) []byte {
 }
 
 func generateInitializationVector(key []byte, length int) []byte {
-	hasher := sha256.New()
-	_, _ = hasher.Write(key)
-	var lengthByte [1]byte
-	lengthByte[0] = byte(length)
-	_, _ = hasher.Write(lengthByte[:])
-	return hasher.Sum(nil)[:aes.BlockSize]
+	data := append(key, byte(length))
+	hash := sha256.Sum256(data)
+	return hash[:aes.BlockSize]
 }
 
 // encode function encrypts a string, returns a binary string of the same length of the original string.
@@ -6445,10 +6222,10 @@ func encodeByAES(plaintext []byte, key []byte, null bool, rs *vector.FunctionRes
 		return err
 	}
 	initializationVector := generateInitializationVector(key, len(plaintext))
+	ciphertext := make([]byte, len(plaintext))
 	stream := cipher.NewCTR(block, initializationVector)
-	return rs.AppendBytesWithFill(len(plaintext), func(ciphertext []byte) {
-		stream.XORKeyStream(ciphertext, plaintext)
-	})
+	stream.XORKeyStream(ciphertext, plaintext)
+	return rs.AppendMustBytesValue(ciphertext)
 }
 
 func Encode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6480,10 +6257,10 @@ func decodeByAES(ciphertext []byte, key []byte, null bool, rs *vector.FunctionRe
 		return err
 	}
 	iv := generateInitializationVector(key, len(ciphertext))
+	plaintext := make([]byte, len(ciphertext))
 	stream := cipher.NewCTR(block, iv)
-	return rs.AppendBytesWithFill(len(ciphertext), func(plaintext []byte) {
-		stream.XORKeyStream(plaintext, ciphertext)
-	})
+	stream.XORKeyStream(plaintext, ciphertext)
+	return rs.AppendMustBytesValue(plaintext)
 }
 
 func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6613,20 +6390,18 @@ func RandomBytes(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
-		var randomErr error
-		err := rs.AppendBytesWithBuilder(int(lenVal), func(dst []byte) (int, error) {
-			var written int
-			written, randomErr = rand.Read(dst)
-			return written, randomErr
-		})
-		if randomErr != nil {
+		// Generate random bytes using crypto/rand
+		randomBytes := make([]byte, lenVal)
+		_, err := rand.Read(randomBytes)
+		if err != nil {
 			// On error, return NULL
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
-		if err != nil {
+
+		if err := rs.AppendBytes(randomBytes, false); err != nil {
 			return err
 		}
 	}

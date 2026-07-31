@@ -15,11 +15,11 @@
 package hashbuild
 
 import (
-	"bytes"
 	"os"
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -69,6 +69,7 @@ const (
 	HashBuildAllocationSiteBatchNulls
 	HashBuildAllocationSiteBatchGrouping
 	HashBuildAllocationSiteGroupSels
+	HashBuildAllocationSiteHashIterator
 )
 
 // Runtime-filter keys and their published wire payload have lifetimes that
@@ -119,14 +120,9 @@ type container struct {
 	// input batch.  spillBucketOffsets identifies each bucket's sub-slice;
 	// keeping one array avoids the 32 independent append/growth paths used by
 	// the old scatter implementation.
-	spillBucketRowIds  []int32
-	spillBucketCounts  [spillNumBuckets]int32
-	spillBucketOffsets [spillNumBuckets + 1]int32
-	spillWriteBuf      bytes.Buffer
-	// spillBucketWriteBufs coalesce serialized records across source batches.
-	// Each buffer is bounded by spillWriteCoalesceSize (plus bytes.Buffer's
-	// bounded growth slack), so fanout does not imply fanout-sized vectors.
-	spillBucketWriteBufs  [spillNumBuckets]bytes.Buffer
+	spillBucketRowIds     []int32
+	spillBucketCounts     [spillNumBuckets]int32
+	spillBucketOffsets    [spillNumBuckets + 1]int32
 	spillBucketWriteRows  [spillNumBuckets]int64
 	spillKeyVecs          []*vector.Vector
 	spillBatchAllocation  *vector.AllocationAccountSelection
@@ -134,27 +130,9 @@ type container struct {
 	spillAccountedWrite   *mpool.AccountedBuffer
 	spillAccountedBuckets [spillNumBuckets]*mpool.AccountedBuffer
 	spillCoalesceDisabled bool
-	// spillScratchReservation is a query/CN-charged emergency lease retained
-	// while Shuffle build batches accumulate. It prevents retained copies from
-	// consuming the scratch required to recover from hard-budget rejection.
-	spillScratchReservation *process.HashBuildReservation
-	// spillScratchEmergency marks a lease pre-admitted by
-	// ensureDirectSpillScratchReservation or
-	// ensureRetainedSpillScratchReservation. An uncharged upstream batch may
-	// not grow beyond this lease. A retained batch may grow it because its
-	// source memory remains charged separately while the batch is drained.
-	spillScratchEmergency bool
-	// spillScratchBase is the retained scratch floor. Coalesce-buffer growth is
-	// charged on top and must never be mistaken for this floor.
-	spillScratchBase uint64
-
 	// cached expression executors for spill (reused across batches)
 	spillExprExecs  []colexec.ExpressionExecutor
-	spillExprLease  *ExpressionMemoryLease
 	spillConditions []*plan.Expr
-	// spillExprAccounted distinguishes an exact executor set from a legacy set
-	// whose retained lease has not yet been installed.
-	spillExprAccounted bool
 }
 
 // spillFileBundle is deliberately owned by hashbuild.  Build converts each
@@ -230,7 +208,7 @@ func (b *spillFileBundle) growDisk(file *os.File, budget *process.HashBuildBudge
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.released {
-		return 0, false, process.ErrHashBuildReservationInactive
+		return 0, false, process.ErrHashBuildSpillReservationInactive
 	}
 	if b.entries == nil {
 		b.entries = make(map[*os.File]*spillFileEntry)
@@ -328,28 +306,13 @@ func (hashBuild *HashBuild) GetOperatorBase() *vm.OperatorBase {
 	return &hashBuild.OperatorBase
 }
 
-func (hashBuild *HashBuild) AllocationAccountEnabled() bool {
-	// Activate one complete physical owner closure.  An expression family whose
-	// call-scoped allocation ledger is not closed must keep the whole HashBuild
-	// on the legacy path; mixing an exact map/batch owner with an estimator-gated
-	// expression would reintroduce the false-rejection mechanism that this
-	// activation removes.
-	return hashBuild != nil && hashBuild.NeedHashMap &&
-		expressionSetAllocationClosed(hashBuild.Conditions)
-}
-
-func (hashBuild *HashBuild) AllocationAccountActivationBlocked() bool {
-	return hashBuild != nil && hashBuild.NeedHashMap &&
-		!expressionSetAllocationClosed(hashBuild.Conditions)
-}
-
 // SetAllocationAccount selects immutable provenance for the hash-table owner
 // before Prepare. Compile invokes it once for each execution attempt; Reset
 // clears the selection only after producer or JoinMap ownership has moved on.
 func (hashBuild *HashBuild) SetAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
-	selection, err := vector.NewAllocationAccountSelectionWithBitmaps(
+	selection, err := vector.NewAllocationAccountSelection(
 		account,
 		HashBuildAllocationOwner,
 		HashBuildSpillAllocationSiteSelectedData,
@@ -367,7 +330,7 @@ func (hashBuild *HashBuild) SetAllocationAccount(
 	return nil
 }
 
-// SetAllocationAccount activates the physical allocation provenance shared by
+// SetAllocationAccount installs the physical allocation provenance shared by
 // the producer HashBuild and SpillEngine rebuild builders. A builder is always
 // single-generation and clears the selection only after all owned resources
 // have either been freed or transferred to a JoinMap.
@@ -390,7 +353,15 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
-	batchSelection, err := vector.NewAllocationAccountSelectionWithBitmaps(
+	iteratorAllocation, err := hashmap.NewIteratorAllocation(
+		account,
+		HashBuildAllocationOwner,
+		HashBuildAllocationSiteHashIterator,
+	)
+	if err != nil {
+		return err
+	}
+	batchSelection, err := vector.NewAllocationAccountSelection(
 		account,
 		HashBuildAllocationOwner,
 		HashBuildAllocationSiteBatchData,
@@ -401,7 +372,7 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
-	uniqueKeySelection, err := vector.NewAllocationAccountSelectionWithBitmaps(
+	uniqueKeySelection, err := vector.NewAllocationAccountSelection(
 		account,
 		HashBuildAllocationOwner,
 		HashBuildAllocationSiteUniqueKeyData,
@@ -412,18 +383,11 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
-	expressionAllocation, err := colexec.NewExpressionAllocationAccount(
-		account,
-		HashBuildAllocationOwner,
-	)
-	if err != nil {
-		return err
-	}
 	builder.mapAllocationAccount = account
 	builder.mapAllocation = selection
+	builder.iteratorAllocation = iteratorAllocation
 	builder.batchAllocation = batchSelection
 	builder.uniqueKeyAllocation = uniqueKeySelection
-	builder.expressionAllocation = expressionAllocation
 	return nil
 }
 
@@ -471,9 +435,9 @@ func (hb *HashmapBuilder) ClearAllocationAccount(
 	}
 	builder.mapAllocationAccount = nil
 	builder.mapAllocation = nil
+	builder.iteratorAllocation = nil
 	builder.batchAllocation = nil
 	builder.uniqueKeyAllocation = nil
-	builder.expressionAllocation = nil
 	return nil
 }
 
@@ -527,14 +491,13 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 			hashBuild.publishBuildError(proc, err)
 		} else {
 			// Preserve the established nil JoinMap convention for a true empty
-			// build and for legacy cleanup paths that completed without a map.
+			// build and for cleanup paths that completed without a map.
 			hashBuild.publishJoinMap(proc, nil)
 		}
 	}
 
 	hashBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
 	hashBuild.ctr.dropSpillScratchBuffers()
-	hashBuild.ctr.releaseSpillScratchReservation()
 	// Only clean up build files when the join map was NOT successfully sent.
 	// When mapSucceed=true, hashjoin owns the files and deletes them after reading.
 	if !mapSucceed {
@@ -577,7 +540,6 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 	hashBuild.ctr.freeSpillExprExecs()
 	hashBuild.ctr.dropSpillScratchBuffers()
-	hashBuild.ctr.releaseSpillScratchReservation()
 }
 
 func (hashBuild *HashBuild) logDiagnostics(proc *process.Process, pipelineFailed bool, err error) {
@@ -618,13 +580,16 @@ func (hashBuild *HashBuild) publishJoinMap(proc *process.Process, jm *message.Jo
 	if !atomic.CompareAndSwapUint32(&hashBuild.ctr.terminalPublished, 0, 1) {
 		return false
 	}
-	message.SendJoinMapResult(
+	if !message.SendJoinMapResult(
 		message.NewJoinMapResult(jm),
 		hashBuild.JoinMapTag,
 		hashBuild.IsShuffle,
 		hashBuild.ShuffleIdx,
 		proc.GetMessageBoard(),
-	)
+	) {
+		atomic.StoreUint32(&hashBuild.ctr.terminalPublished, 0)
+		return false
+	}
 	return true
 }
 
@@ -632,13 +597,16 @@ func (hashBuild *HashBuild) publishBuildError(proc *process.Process, err error) 
 	if !atomic.CompareAndSwapUint32(&hashBuild.ctr.terminalPublished, 0, 1) {
 		return false
 	}
-	message.FinalizeJoinMapBuildError(
+	if !message.FinalizeJoinMapBuildError(
 		proc.GetMessageBoard(),
 		hashBuild.JoinMapTag,
 		hashBuild.IsShuffle,
 		hashBuild.ShuffleIdx,
 		err,
-	)
+	) {
+		atomic.StoreUint32(&hashBuild.ctr.terminalPublished, 0)
+		return false
+	}
 	return true
 }
 
@@ -658,9 +626,8 @@ func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
 	}
 }
 
-// CleanCopiedBatchAt is the lifecycle hook used by bounded initial spill.
-// HashBuild keeps this wrapper on the operator side so batch reservation
-// ownership remains private to the hashbuild package.
+// CleanCopiedBatchAt releases one retained build batch after it has been
+// durably transferred to spill storage.
 func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) error {
 	if idx < 0 || idx >= len(hb.Batches.Buf) {
 		return process.ErrHashBuildBudgetInvalid
@@ -676,22 +643,12 @@ func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) err
 			hb.Batches.MemSize += int64(bat.Size())
 		}
 	}
-	// CopyIntoBatches can coalesce several ingress batches into one physical
-	// batch (and can reorder a full batch around a partial tail), so an ingress
-	// reservation cannot be matched safely to Batches.Buf[idx]. Keep the
-	// conservative charges until the last physical batch has been dropped.
-	if len(hb.Batches.Buf) == 0 {
-		hb.releaseBatchReservations()
-	}
 	return nil
 }
 
 // DrainCopiedBatches visits and then releases every retained physical build
 // batch. A failed visit leaves the current and remaining batches owned by the
-// builder so its normal cleanup path can release them. CopyIntoBatches can
-// coalesce several ingress batches into one physical batch, so the associated
-// reservations are released together only after the final physical batch is
-// destroyed.
+// builder so its normal cleanup path can release them.
 func (hb *HashmapBuilder) DrainCopiedBatches(
 	proc *process.Process,
 	visit func(*batch.Batch) error,
@@ -719,7 +676,6 @@ func (hb *HashmapBuilder) DrainCopiedBatches(
 	}
 	hb.Batches.Buf = nil
 	hb.Batches.MemSize = 0
-	hb.releaseBatchReservations()
 	return nil
 }
 

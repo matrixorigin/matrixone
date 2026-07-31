@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -39,6 +38,8 @@ const (
 	Finalize
 	End
 )
+
+const rightDedupJoinAllocationSiteMatched mpool.AllocationSite = 90
 
 type evalVector struct {
 	executor colexec.ExpressionExecutor
@@ -65,12 +66,7 @@ type container struct {
 
 	spillEngine    *spillutil.SpillEngine
 	spillThreshold int64
-	// Non-nil only for spilled joins, where probe expressions are part of the
-	// shared HashBuild/spill working set. Resident probe expressions remain
-	// under normal process/mpool accounting; this is not a general query budget.
-	probeExpressionLease      *hashbuild.ExpressionMemoryLease
-	probeExpressionsAccounted bool
-	resultBatch               *batch.Batch
+	resultBatch    *batch.Batch
 }
 
 type RightDedupJoin struct {
@@ -97,24 +93,6 @@ type RightDedupJoin struct {
 	vm.OperatorBase
 }
 
-func (rightDedupJoin *RightDedupJoin) AllocationAccountEnabled() bool {
-	return rightDedupJoin != nil &&
-		rightDedupJoin.allocationAccountExpressionOwnerClosed()
-}
-
-func (rightDedupJoin *RightDedupJoin) AllocationAccountActivationBlocked() bool {
-	return rightDedupJoin != nil &&
-		!rightDedupJoin.allocationAccountExpressionOwnerClosed()
-}
-
-func (rightDedupJoin *RightDedupJoin) allocationAccountExpressionOwnerClosed() bool {
-	if rightDedupJoin == nil || len(rightDedupJoin.Conditions) != 2 {
-		return false
-	}
-	return hashbuild.AllocationAccountedExpressionSetSupported(rightDedupJoin.Conditions[0]) &&
-		hashbuild.AllocationAccountedExpressionSetSupported(rightDedupJoin.Conditions[1])
-}
-
 func (rightDedupJoin *RightDedupJoin) SetAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
@@ -124,6 +102,9 @@ func (rightDedupJoin *RightDedupJoin) SetAllocationAccount(
 	if rightDedupJoin.allocationAccount != nil &&
 		rightDedupJoin.allocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
+	}
+	if rightDedupJoin.allocationAccount == account {
+		return nil
 	}
 	rightDedupJoin.allocationAccount = account
 	return nil
@@ -140,7 +121,9 @@ func (rightDedupJoin *RightDedupJoin) ClearAllocationAccount(
 	}
 	if rightDedupJoin.ctr.mp != nil ||
 		rightDedupJoin.ctr.spillEngine != nil ||
-		rightDedupJoin.ctr.probeExpressionsAccounted {
+		len(rightDedupJoin.ctr.evecs) != 0 ||
+		len(rightDedupJoin.ctr.exprExecs) != 0 ||
+		rightDedupJoin.ctr.matched != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	rightDedupJoin.allocationAccount = nil
@@ -184,31 +167,26 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 		rightDedupJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
 	}
 	ctr.maxAllocSize = 0
+	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
 	ctr.groupCount = 0
 	ctr.buildGroupCount = 0
 
-	ctr.cleanBitmap()
+	ctr.cleanBitmap(proc)
 	ctr.cleanHashMap()
 	ctr.resetResultBatch()
-	ctr.resetExprExecutor()
+	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
 	}
-	if ctr.probeExpressionLease != nil || ctr.probeExpressionsAccounted {
-		ctr.cleanEvalVectors()
-		ctr.releaseProbeExpressionLease()
-	} else {
-		ctr.resetEvalVectors()
-	}
+	ctr.cleanEvalVectors()
 	ctr.state = Build
-	rightDedupJoin.allocationAccount = nil
 }
 
 func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightDedupJoin.ctr
-	ctr.cleanBitmap()
+	ctr.cleanBitmap(proc)
 	ctr.cleanHashMap()
 	ctr.cleanResultBatch(proc)
 	ctr.cleanExprExecutor()
@@ -217,28 +195,23 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()
-	ctr.releaseProbeExpressionLease()
-	rightDedupJoin.allocationAccount = nil
 }
 
 func (rightDedupJoin *RightDedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return input, nil
 }
 
-func (ctr *container) resetExprExecutor() {
-	for i := range ctr.exprExecs {
-		ctr.exprExecs[i].ResetForNextQuery()
-	}
-}
-
 func (ctr *container) cleanExprExecutor() {
 	for i := range ctr.exprExecs {
-		ctr.exprExecs[i].Free()
-		ctr.exprExecs[i] = nil
+		if ctr.exprExecs[i] != nil {
+			ctr.exprExecs[i].Free()
+		}
 	}
+	ctr.exprExecs = nil
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
 	if ctr.mp != nil {
 		ctr.mp.Free()
@@ -246,7 +219,8 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanBitmap() {
+func (ctr *container) cleanBitmap(proc *process.Process) {
+	colexec.FreeAccountedBitmap(ctr.matched, proc.Mp())
 	ctr.matched = nil
 }
 
@@ -277,20 +251,4 @@ func (ctr *container) cleanEvalVectors() {
 	}
 	ctr.evecs = nil
 	ctr.vecs = nil
-	ctr.probeExpressionsAccounted = false
-}
-
-func (ctr *container) resetEvalVectors() {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.ResetForNextQuery()
-		}
-	}
-}
-
-func (ctr *container) releaseProbeExpressionLease() {
-	if ctr.probeExpressionLease != nil {
-		ctr.probeExpressionLease.Release()
-		ctr.probeExpressionLease = nil
-	}
 }

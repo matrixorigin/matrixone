@@ -243,7 +243,7 @@ func (n *Bitmap) InstallExternalStorage(storage []uint64) []uint64 {
 }
 
 // ReleaseExternalStorage detaches caller-owned storage and clears the bitmap.
-// It returns nil for a legacy Go-owned bitmap.
+// It returns nil for a bitmap that owns its Go-allocated backing.
 func (n *Bitmap) ReleaseExternalStorage() []uint64 {
 	if !n.HasExternalStorage() {
 		return nil
@@ -644,6 +644,61 @@ func (n *Bitmap) Count() int {
 	return int(n.count)
 }
 
+// CountRange returns the number of set bits in [start, end). It never scans
+// outside the bitmap's logical coverage and does not allocate.
+func (n *Bitmap) CountRange(start, end uint64) int {
+	if n == nil || start >= end || start >= uint64(n.logicalLen()) {
+		return 0
+	}
+	if end > uint64(n.logicalLen()) {
+		end = uint64(n.logicalLen())
+	}
+	first := start >> 6
+	last := (end - 1) >> 6
+	if first == last {
+		mask := (^uint64(0) << (start & 63)) &
+			(^uint64(0) >> ((-end) & 63))
+		return bits.OnesCount64(n.data[first] & mask)
+	}
+	count := bits.OnesCount64(n.data[first] & (^uint64(0) << (start & 63)))
+	for word := first + 1; word < last; word++ {
+		count += bits.OnesCount64(n.data[word])
+	}
+	count += bits.OnesCount64(n.data[last] & (^uint64(0) >> ((-end) & 63)))
+	return count
+}
+
+// AnySetNotIn reports whether [start, end) contains a bit set in n and not in
+// other. It is used when one provenance bitmap (GROUPING) overrides another
+// (SQL NULL) without expanding either bitmap row by row.
+func (n *Bitmap) AnySetNotIn(other *Bitmap, start, end uint64) bool {
+	if n == nil || start >= end || start >= uint64(n.logicalLen()) {
+		return false
+	}
+	if end > uint64(n.logicalLen()) {
+		end = uint64(n.logicalLen())
+	}
+	first := start >> 6
+	last := (end - 1) >> 6
+	for word := first; word <= last; word++ {
+		mask := ^uint64(0)
+		if word == first {
+			mask &= ^uint64(0) << (start & 63)
+		}
+		if word == last {
+			mask &= ^uint64(0) >> ((-end) & 63)
+		}
+		value := n.data[word] & mask
+		if other != nil && word < uint64(len(other.data)) {
+			value &^= other.data[word]
+		}
+		if value != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (n *Bitmap) ToArray() []uint64 {
 	rows := make([]uint64, 0, n.Count())
 	ToArray(n, &rows)
@@ -679,6 +734,27 @@ func (n *Bitmap) MarshalSize() int {
 		return 0
 	}
 	return MarshalHeaderSize + len(n.data)*8
+}
+
+// Validate checks the in-memory representation after streaming decode.
+func (n *Bitmap) Validate() error {
+	if n == nil || n.logicalLen() < 0 || n.count < 0 ||
+		n.count > n.logicalLen() ||
+		len(n.data) != int((n.logicalLen()+63)/64) {
+		return moerr.NewInvalidInputNoCtx("invalid bitmap representation")
+	}
+	actual := int64(0)
+	for i, word := range n.data {
+		if i == len(n.data)-1 && n.logicalLen()%64 != 0 &&
+			word>>uint(n.logicalLen()%64) != 0 {
+			return moerr.NewInvalidInputNoCtx("invalid bitmap trailing bits")
+		}
+		actual += int64(bits.OnesCount64(word))
+	}
+	if actual != n.count {
+		return moerr.NewInvalidInputNoCtx("invalid bitmap count")
+	}
+	return nil
 }
 
 // DecodeMarshalHeader validates the fixed bitmap wire header.
@@ -743,19 +819,40 @@ func (n *Bitmap) MarshalTo(w io.Writer) error {
 	}
 	bitLength := uint64(n.logicalLen())
 	dataLength := uint64(len(n.data) * 8)
-	for _, value := range [][]byte{
-		types.EncodeInt64(&n.count),
-		types.EncodeUint64(&bitLength),
-		types.EncodeUint64(&dataLength),
-		types.EncodeSlice(n.data),
-	} {
-		written, err := w.Write(value)
-		if err != nil {
+	if typed, ok := w.(interface {
+		WriteInt64(int64) error
+		WriteUint64(uint64) error
+	}); ok {
+		if err := typed.WriteInt64(n.count); err != nil {
 			return err
 		}
-		if written != len(value) {
-			return io.ErrShortWrite
+		if err := typed.WriteUint64(bitLength); err != nil {
+			return err
 		}
+		if err := typed.WriteUint64(dataLength); err != nil {
+			return err
+		}
+		return writeBitmapMarshalBytes(w, types.EncodeSlice(n.data))
+	}
+	if err := writeBitmapMarshalBytes(w, types.EncodeInt64(&n.count)); err != nil {
+		return err
+	}
+	if err := writeBitmapMarshalBytes(w, types.EncodeUint64(&bitLength)); err != nil {
+		return err
+	}
+	if err := writeBitmapMarshalBytes(w, types.EncodeUint64(&dataLength)); err != nil {
+		return err
+	}
+	return writeBitmapMarshalBytes(w, types.EncodeSlice(n.data))
+}
+
+func writeBitmapMarshalBytes(w io.Writer, value []byte) error {
+	written, err := w.Write(value)
+	if err != nil {
+		return err
+	}
+	if written != len(value) {
+		return io.ErrShortWrite
 	}
 	return nil
 }

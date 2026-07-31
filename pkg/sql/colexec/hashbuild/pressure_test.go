@@ -29,7 +29,7 @@ func TestMemoryPressureReasonSeparatesCapacityFromLifecycle(t *testing.T) {
 		reason MemoryPressureReason
 	}{
 		{nil, MemoryPressureNone},
-		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorAdmission}, MemoryPressureCapacity},
+		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorAdmission}, MemoryPressureInvalid},
 		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorAdmission, Component: process.HashBuildBudgetComponentMemory}, MemoryPressureCapacity},
 		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorAdmission, Component: process.HashBuildBudgetComponentSpillDisk}, MemoryPressureSpillDiskLimit},
 		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorAdmission, Component: process.HashBuildBudgetComponentSpillFD}, MemoryPressureSpillFDLimit},

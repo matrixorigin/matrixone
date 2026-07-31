@@ -15,7 +15,6 @@
 package spillutil
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +34,20 @@ type testSpillAllocationAccount struct {
 	registry   *mpool.AllocationAccountRegistry
 	account    *mpool.AllocationAccount
 	allocation *SpillAllocationAccount
+	generation *process.HashBuildBudgetGeneration
+}
+
+func TestNewSpillEngineRequiresBudgetGeneration(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	_, err = NewSpillEngine(
+		SpillEngineConfig{},
+		account,
+		hashbuild.HashBuildAllocationOwner,
+	)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
 }
 
 func newTestSpillAllocationAccount(
@@ -45,7 +58,10 @@ func newTestSpillAllocationAccount(
 	t.Helper()
 	registry, err := mpool.NewAllocationAccountRegistry(1, metadataSlots)
 	require.NoError(t, err)
-	account, err := registry.Open(limit)
+	budget := process.MustNewHashBuildBudget(limit, limit)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(limit, generation)
 	require.NoError(t, err)
 	allocation, err := NewSpillAllocationAccount(account, 2)
 	require.NoError(t, err)
@@ -53,6 +69,7 @@ func newTestSpillAllocationAccount(
 		registry:   registry,
 		account:    account,
 		allocation: allocation,
+		generation: generation,
 	}
 }
 
@@ -74,9 +91,7 @@ func writeSpillAllocationTestFile(
 	truncate int,
 ) *os.File {
 	t.Helper()
-	var encoded bytes.Buffer
-	require.NoError(t, marshalSpillRecord(bat, &encoded))
-	payload := encoded.Bytes()
+	payload := marshalTestSpillRecord(bat)
 	if truncate > 0 {
 		payload = payload[:len(payload)-truncate]
 	}
@@ -92,15 +107,12 @@ func writeSpillAllocationTestRecords(
 	batches ...*batch.Batch,
 ) *os.File {
 	t.Helper()
-	var payload bytes.Buffer
+	payload := make([]byte, 0)
 	for _, bat := range batches {
-		var encoded bytes.Buffer
-		require.NoError(t, marshalSpillRecord(bat, &encoded))
-		_, err := payload.Write(encoded.Bytes())
-		require.NoError(t, err)
+		payload = append(payload, marshalTestSpillRecord(bat)...)
 	}
 	path := filepath.Join(t.TempDir(), "spill-records.bin")
-	require.NoError(t, os.WriteFile(path, payload.Bytes(), 0o600))
+	require.NoError(t, os.WriteFile(path, payload, 0o600))
 	file, err := os.Open(path)
 	require.NoError(t, err)
 	return file
@@ -235,23 +247,24 @@ func TestSpillAllocationAccountDecodedReuseRetriesFromCleanRecord(t *testing.T) 
 	require.NoError(t, err)
 	allocation, err := NewSpillAllocationAccount(account, 2)
 	require.NoError(t, err)
-	reader = BucketReader{allocation: allocation}
-	require.NoError(t, reader.EnsureBuffer(generation))
-	reader.ResetForFd(writeSpillAllocationTestRecords(t, first, second))
+	reader = BucketReader{
+		fd:         writeSpillAllocationTestRecords(t, first, second),
+		allocation: allocation,
+	}
 	reuse = batch.NewOffHeapWithSize(0)
 	_, err = reader.ReadBatch(proc, reuse)
 	require.NoError(t, err)
-	rejects := generation.RejectCount()
+	rejects := generation.Snapshot().RejectCount
 	_, err = reader.ReadBatch(proc, reuse)
 	require.NoError(t, err)
-	require.Equal(t, rejects, generation.RejectCount(),
+	require.Equal(t, rejects, generation.Snapshot().RejectCount,
 		"the local account rejects the overlap before the shared controller")
 	require.Equal(t, uint64(1), reader.cleanRetries,
 		"replacement overlap must exercise the clean-record retry")
 	require.Equal(t,
-		generation.Snapshot().AllocationUsed+uint64(64<<10),
+		account.Snapshot().Used,
 		generation.Used(),
-		"decoded payloads have no duplicate hard reservation",
+		"decoded payloads are charged only by their physical allocations",
 	)
 	reuse.Clean(proc.Mp())
 	reader.Close()
@@ -269,8 +282,8 @@ func TestSpillAllocationAccountScatterScratchLifecycle(t *testing.T) {
 	)
 	defer proc.Free()
 	state := newTestSpillAllocationAccount(t, 1<<20, 64)
-	engine, err := NewSpillEngineWithAllocation(
-		SpillEngineConfig{},
+	engine, err := newSpillEngine(
+		SpillEngineConfig{Budget: state.generation},
 		state.allocation,
 	)
 	require.NoError(t, err)
@@ -285,7 +298,7 @@ func TestSpillAllocationAccountScatterScratchLifecycle(t *testing.T) {
 		),
 	}, nil)
 	defer source.Clean(proc.Mp())
-	writers := MakeBucketWriters("spill_allocation_scatter")
+	writers := engine.makeBucketWriters("spill_allocation_scatter")
 	defer func() {
 		for i := range writers {
 			writers[i].Close()
@@ -341,7 +354,7 @@ func TestSpillAllocationAccountScatterDoesNotReadmitBorrowedSource(t *testing.T)
 	require.NoError(t, err)
 	allocation, err := NewSpillAllocationAccount(account, 2)
 	require.NoError(t, err)
-	engine, err := NewSpillEngineWithAllocation(
+	engine, err := newSpillEngine(
 		SpillEngineConfig{Budget: generation},
 		allocation,
 	)
@@ -356,7 +369,7 @@ func TestSpillAllocationAccountScatterDoesNotReadmitBorrowedSource(t *testing.T)
 		),
 	}, nil)
 	defer source.Clean(proc.Mp())
-	writers := MakeBucketWriters("spill_allocation_scatter_source")
+	writers := engine.makeBucketWriters("spill_allocation_scatter_source")
 	defer func() {
 		for i := range writers {
 			writers[i].Close()
@@ -372,8 +385,7 @@ func TestSpillAllocationAccountScatterDoesNotReadmitBorrowedSource(t *testing.T)
 		process.NewAnalyzer(0, false, false, "test"),
 	))
 	snapshot := generation.Snapshot()
-	require.Nil(t, engine.scatterScratchReservation)
-	require.Equal(t, snapshot.AllocationUsed, snapshot.Used,
+	require.Equal(t, account.Snapshot().Used, snapshot.Used,
 		"borrowed input is already live; only new private spill bytes are admitted")
 	require.Greater(t, snapshot.PeakUsed, snapshot.Used)
 
@@ -410,9 +422,7 @@ func TestSpillAllocationAccountMarshalBufferLifecycle(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NoError(t, marshalSpillRecordTo(source, accounted))
-	var legacy bytes.Buffer
-	require.NoError(t, marshalSpillRecord(source, &legacy))
-	require.Equal(t, legacy.Bytes(), accounted.Bytes())
+	require.Equal(t, marshalTestSpillRecord(source), accounted.Bytes())
 	used := state.account.Snapshot().Used
 	require.Positive(t, used)
 
@@ -438,8 +448,8 @@ func TestSpillAllocationAccountCoalesceAdmissionFallback(t *testing.T) {
 	// optional optimization, so its admission failure must fall back to one
 	// direct write instead of failing the scatter.
 	state := newTestSpillAllocationAccount(t, 1<<20, 1)
-	engine, err := NewSpillEngineWithAllocation(
-		SpillEngineConfig{},
+	engine, err := newSpillEngine(
+		SpillEngineConfig{Budget: state.generation},
 		state.allocation,
 	)
 	require.NoError(t, err)
@@ -453,7 +463,7 @@ func TestSpillAllocationAccountCoalesceAdmissionFallback(t *testing.T) {
 		),
 	}, nil)
 	defer source.Clean(proc.Mp())
-	writers := MakeBucketWriters("spill_allocation_coalesce_fallback")
+	writers := engine.makeBucketWriters("spill_allocation_coalesce_fallback")
 	defer func() {
 		for i := range writers {
 			writers[i].Close()
@@ -485,8 +495,8 @@ func TestSpillAllocationAccountScatterFailureCleanup(t *testing.T) {
 	defer proc.Free()
 	const rows = 8
 	state := newTestSpillAllocationAccount(t, rows*(8+4), 8)
-	engine, err := NewSpillEngineWithAllocation(
-		SpillEngineConfig{},
+	engine, err := newSpillEngine(
+		SpillEngineConfig{Budget: state.generation},
 		state.allocation,
 	)
 	require.NoError(t, err)
@@ -501,7 +511,7 @@ func TestSpillAllocationAccountScatterFailureCleanup(t *testing.T) {
 		),
 	}, nil)
 	defer source.Clean(proc.Mp())
-	writers := MakeBucketWriters("spill_allocation_scatter_failure")
+	writers := engine.makeBucketWriters("spill_allocation_scatter_failure")
 	defer func() {
 		for i := range writers {
 			writers[i].Close()
@@ -537,8 +547,8 @@ func TestSpillAllocationAccountScatterReducesUnpublishedInput(t *testing.T) {
 	)
 	defer proc.Free()
 	state := newTestSpillAllocationAccount(t, 80<<10, 128)
-	engine, err := NewSpillEngineWithAllocation(
-		SpillEngineConfig{},
+	engine, err := newSpillEngine(
+		SpillEngineConfig{Budget: state.generation},
 		state.allocation,
 	)
 	require.NoError(t, err)
@@ -550,7 +560,7 @@ func TestSpillAllocationAccountScatterReducesUnpublishedInput(t *testing.T) {
 		testutil.MakeInt64Vector(values, nil, proc.Mp()),
 	}, nil)
 	defer source.Clean(proc.Mp())
-	writers := MakeBucketWriters("spill_allocation_scatter_reduce")
+	writers := engine.makeBucketWriters("spill_allocation_scatter_reduce")
 	defer func() {
 		for i := range writers {
 			writers[i].Close()
@@ -589,8 +599,8 @@ func TestSpillAllocationAccountExpressionPressureReducesBeforePublication(t *tes
 	)
 	defer proc.Free()
 	state := newTestSpillAllocationAccount(t, 2<<20, 4_096)
-	engine, err := NewSpillEngineWithAllocation(
-		SpillEngineConfig{},
+	engine, err := newSpillEngine(
+		SpillEngineConfig{Budget: state.generation},
 		state.allocation,
 	)
 	require.NoError(t, err)
@@ -602,7 +612,7 @@ func TestSpillAllocationAccountExpressionPressureReducesBeforePublication(t *tes
 		testutil.MakeInt64Vector(values, nil, proc.Mp()),
 	}, nil)
 	defer source.Clean(proc.Mp())
-	writers := MakeBucketWriters("spill_allocation_expression_reduce")
+	writers := engine.makeBucketWriters("spill_allocation_expression_reduce")
 	defer func() {
 		for i := range writers {
 			writers[i].Close()
@@ -645,92 +655,75 @@ func TestSpillAllocationAccountExpressionPressureReducesBeforePublication(t *tes
 // retains the write syscall without turning repeated measurements into a disk
 // capacity test.
 func BenchmarkSpillScatterAccounting(b *testing.B) {
-	for _, accounted := range []bool{false, true} {
-		mode := "legacy"
-		if accounted {
-			mode = "accounted"
-		}
-		b.Run(mode, func(b *testing.B) {
-			proc := testutil.NewProcessWithMPool(
-				b,
-				"",
-				mpool.MustNewZero(),
-			)
-			defer proc.Free()
-			values := make([]int64, 4_096)
-			for i := range values {
-				values[i] = int64(i)
-			}
-			source := testutil.NewBatchWithVectors([]*vector.Vector{
-				testutil.MakeInt64Vector(values, nil, proc.Mp()),
-			}, nil)
-			defer source.Clean(proc.Mp())
-
-			var (
-				engine *SpillEngine
-				state  testSpillAllocationAccount
-				err    error
-			)
-			if accounted {
-				state = newTestSpillAllocationAccount(b, 64<<20, 4_096)
-				engine, err = NewSpillEngineWithAllocation(
-					SpillEngineConfig{},
-					state.allocation,
-				)
-				if err != nil {
-					b.Fatal(err)
-				}
-			} else {
-				engine = NewSpillEngine(SpillEngineConfig{})
-			}
-			writers := make([]BucketWriter, SpillNumBuckets)
-			for i := range writers {
-				writers[i].Name = "benchmark-discard"
-				writers[i].Fd, err = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-			defer func() {
-				for i := range writers {
-					writers[i].Close()
-				}
-			}()
-			analyzer := process.NewAnalyzer(0, false, false, "benchmark")
-
-			b.ReportAllocs()
-			b.SetBytes(int64(source.Size()))
-			b.ResetTimer()
-			for range b.N {
-				if err = engine.scatterBatchWithPressure(
-					proc,
-					source,
-					source.Vecs,
-					writers,
-					0,
-					false,
-					analyzer,
-				); err != nil {
-					b.Fatal(err)
-				}
-				if err = engine.flushScatterBuffers(proc, writers, analyzer); err != nil {
-					b.Fatal(err)
-				}
-				for i := range writers {
-					writers[i].Rows = 0
-					writers[i].Bytes = 0
-				}
-			}
-			b.StopTimer()
-			engine.Cleanup(proc)
-			if accounted {
-				if state.account.Snapshot().Used != 0 {
-					b.Fatalf("account used = %d", state.account.Snapshot().Used)
-				}
-				finalizeTestSpillAllocationAccount(b, state)
-			}
-		})
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	defer proc.Free()
+	values := make([]int64, 4_096)
+	for i := range values {
+		values[i] = int64(i)
 	}
+	source := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.MakeInt64Vector(values, nil, proc.Mp()),
+	}, nil)
+	defer source.Clean(proc.Mp())
+
+	state := newTestSpillAllocationAccount(b, 64<<20, 4_096)
+	engine, err := newSpillEngine(
+		SpillEngineConfig{Budget: state.generation},
+		state.allocation,
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	writers := engine.makeBucketWriters("benchmark-discard")
+	for i := range writers {
+		writers[i].Fd, err = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			b.Fatal(err)
+		}
+		writers[i].diskReservation, err = state.generation.ReserveSpillDisk(0)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	defer func() {
+		for i := range writers {
+			writers[i].Close()
+		}
+	}()
+	analyzer := process.NewAnalyzer(0, false, false, "benchmark")
+
+	b.ReportAllocs()
+	b.SetBytes(int64(source.Size()))
+	b.ResetTimer()
+	for range b.N {
+		if err = engine.scatterBatchWithPressure(
+			proc,
+			source,
+			source.Vecs,
+			writers,
+			0,
+			false,
+			analyzer,
+		); err != nil {
+			b.Fatal(err)
+		}
+		if err = engine.flushScatterBuffers(proc, writers, analyzer); err != nil {
+			b.Fatal(err)
+		}
+		for i := range writers {
+			if _, err = writers[i].diskReservation.ReconcileDown(0); err != nil {
+				b.Fatal(err)
+			}
+			writers[i].Rows = 0
+			writers[i].Bytes = 0
+		}
+	}
+	b.StopTimer()
+	engine.Cleanup(proc)
+	if state.account.Snapshot().Used != 0 {
+		b.Fatalf("account used = %d", state.account.Snapshot().Used)
+	}
+	finalizeTestSpillAllocationAccount(b, state)
 }
 
 func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
@@ -753,7 +746,7 @@ func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(limit, generation)
 	require.NoError(t, err)
-	engine, err := NewSpillEngineForAccount(
+	engine, err := NewSpillEngine(
 		SpillEngineConfig{
 			BuildKeyExprs:           makeTestKeyExpr(),
 			Budget:                  generation,
@@ -772,7 +765,7 @@ func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
 	source := makeInt32Batch(proc, values)
 	fd := writeBuildFile(proc, "accounted_recursive_build", source)
 	source.Clean(proc.Mp())
-	engine.InitFromSpilledMap([]*os.File{fd})
+	initTestSpillFiles(engine, []*os.File{fd}, int64(len(values)))
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 
 	respills := 0

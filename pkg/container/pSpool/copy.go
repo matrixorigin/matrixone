@@ -36,9 +36,6 @@ type cachedBatch struct {
 }
 
 type oneBatchMemoryCache struct {
-	// bs keeps the allocation-unaccounted production fast path unchanged.
-	bs [][]byte
-	// buffers copy vector data and area while preserving allocation provenance.
 	buffers []vector.DetachedBuffer
 }
 
@@ -155,7 +152,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, mpool.ErrAllocationAccountInvalid
 			}
-			if err = dst.Vecs[i].PreExtendBitmap(
+			if err = dst.Vecs[i].PreExtendGrouping(
 				int(groupingRows),
 				cb.mp,
 			); err != nil {
@@ -186,21 +183,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 // setSuitableDataAreaToVector get two long-enough bytes slices from the cache, and set them to the vector.
 // if not found, set the last one to the vector.
 func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
-	dataSize, areaSize int,
-	vec *vector.Vector,
-) error {
-	if vec.AllocationAccountSelection() == nil {
-		mc.setSuitableLegacyDataAreaToVector(dataSize, areaSize, vec)
-		return nil
-	}
-	return mc.setSuitableAccountedDataAreaToVector(
-		dataSize,
-		areaSize,
-		vec,
-	)
-}
-
-func (mc *oneBatchMemoryCache) setSuitableAccountedDataAreaToVector(
 	dataSize, areaSize int,
 	vec *vector.Vector,
 ) error {
@@ -300,72 +282,6 @@ func (mc *oneBatchMemoryCache) setSuitableAccountedDataAreaToVector(
 		}
 	}
 	return nil
-}
-
-func (mc *oneBatchMemoryCache) setSuitableLegacyDataAreaToVector(
-	dataSize, areaSize int,
-	vec *vector.Vector,
-) {
-	if len(mc.bs) == 0 {
-		return
-	}
-
-	setDataFirst := dataSize >= areaSize
-	first, second := dataSize, areaSize
-	if !setDataFirst {
-		first, second = areaSize, dataSize
-	}
-
-	if first > 0 {
-		if idx := mc.bestLegacyBuffer(first); idx >= 0 {
-			mem := mc.removeLegacyBuffer(idx)
-			if setDataFirst {
-				vector.AttachLegacyVectorData(vec, mem)
-			} else {
-				vector.AttachLegacyVectorArea(vec, mem)
-			}
-		}
-	}
-	if second > 0 {
-		if idx := mc.bestLegacyBuffer(second); idx >= 0 {
-			mem := mc.removeLegacyBuffer(idx)
-			if setDataFirst {
-				vector.AttachLegacyVectorArea(vec, mem)
-			} else {
-				vector.AttachLegacyVectorData(vec, mem)
-			}
-		}
-	}
-	if len(mc.bs) > 0 && cap(vec.GetData()) == 0 && dataSize > 0 {
-		vector.AttachLegacyVectorData(vec, mc.removeLegacyBuffer(len(mc.bs)-1))
-	}
-	if len(mc.bs) > 0 && cap(vec.GetArea()) == 0 && areaSize > 0 {
-		vector.AttachLegacyVectorArea(vec, mc.removeLegacyBuffer(len(mc.bs)-1))
-	}
-}
-
-func (mc *oneBatchMemoryCache) bestLegacyBuffer(size int) int {
-	best := -1
-	difference := math.MaxInt
-	for i, buffer := range mc.bs {
-		if current := cap(buffer) - size; current > 0 &&
-			current < difference {
-			best = i
-			difference = current
-		}
-	}
-	return best
-}
-
-func (mc *oneBatchMemoryCache) removeLegacyBuffer(idx int) []byte {
-	last := len(mc.bs) - 1
-	buffer := mc.bs[idx]
-	if idx != last {
-		mc.bs[idx] = mc.bs[last]
-	}
-	mc.bs[last] = nil
-	mc.bs = mc.bs[:last]
-	return buffer
 }
 
 func (mc *oneBatchMemoryCache) lastAttachable(

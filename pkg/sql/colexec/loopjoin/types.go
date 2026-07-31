@@ -37,6 +37,11 @@ const (
 	End
 )
 
+const (
+	loopJoinAllocationSiteMatched mpool.AllocationSite = iota + 92
+	loopJoinAllocationSiteBatchOffsets
+)
+
 type container struct {
 	state    int
 	probeIdx int
@@ -60,16 +65,52 @@ type container struct {
 }
 
 type LoopJoin struct {
-	ctr        container
-	LeftTypes  []types.Type
-	RightTypes []types.Type
-	NonEqCond  *plan.Expr
-	ResultCols []colexec.ResultPos
-	JoinMapTag int32
-	JoinType   plan.Node_JoinType
-	MarkPos    int
+	ctr               container
+	LeftTypes         []types.Type
+	RightTypes        []types.Type
+	NonEqCond         *plan.Expr
+	ResultCols        []colexec.ResultPos
+	JoinMapTag        int32
+	JoinType          plan.Node_JoinType
+	MarkPos           int
+	allocationAccount *mpool.AllocationAccount
 
 	vm.OperatorBase
+}
+
+func (loopJoin *LoopJoin) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if loopJoin.allocationAccount != nil &&
+		loopJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if loopJoin.allocationAccount == account {
+		return nil
+	}
+	loopJoin.allocationAccount = account
+	return nil
+}
+
+func (loopJoin *LoopJoin) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if loopJoin.allocationAccount == nil {
+		return nil
+	}
+	if loopJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	ctr := &loopJoin.ctr
+	if ctr.mp != nil || ctr.expr != nil || ctr.rightRowsMatched != nil ||
+		len(ctr.rightBatchOffset) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	loopJoin.allocationAccount = nil
+	return nil
 }
 
 func (loopJoin *LoopJoin) GetOperatorBase() *vm.OperatorBase {
@@ -106,12 +147,14 @@ func (loopJoin *LoopJoin) Release() {
 func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &loopJoin.ctr
 
-	ctr.resetNonEqCondExecutor()
+	// The executor owns allocations from this execution generation. Prepared
+	// statements must rebuild it after the next account is installed instead
+	// of carrying generation-bound storage across Reset.
+	ctr.cleanNonEqCondExecutor()
 	ctr.cleanHashMap()
 	ctr.state = Build
 	ctr.inBat = nil
-	ctr.rightRowsMatched = nil
-	ctr.rightBatchOffset = nil
+	ctr.cleanRightMatchState(proc)
 	ctr.rightMatchedIter = nil
 	ctr.rightMatchedBat = 0
 }
@@ -121,7 +164,19 @@ func (loopJoin *LoopJoin) Free(proc *process.Process, pipelineFailed bool, err e
 
 	ctr.cleanBatch(proc.Mp())
 	ctr.cleanNonEqCondExecutor()
+	ctr.cleanRightMatchState(proc)
 
+}
+
+func (ctr *container) cleanRightMatchState(proc *process.Process) {
+	colexec.FreeAccountedBitmap(ctr.rightRowsMatched, proc.Mp())
+	ctr.rightRowsMatched = nil
+	if cap(ctr.rightBatchOffset) > 0 {
+		mpool.FreeSlice(proc.Mp(), ctr.rightBatchOffset)
+	}
+	ctr.rightBatchOffset = nil
+	ctr.rightMatchedIter = nil
+	ctr.rightMatchedBat = 0
 }
 
 func (loopJoin *LoopJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -136,12 +191,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)
 		ctr.joinBat = nil
-	}
-}
-
-func (ctr *container) resetNonEqCondExecutor() {
-	if ctr.expr != nil {
-		ctr.expr.ResetForNextQuery()
 	}
 }
 

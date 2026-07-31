@@ -1484,6 +1484,21 @@ func TestShuffle(t *testing.T) {
 
 func TestCopy(t *testing.T) {
 	mp := mpool.MustNewZero()
+	{ // fixed grouping provenance
+		dst := NewVec(types.T_int32.ToType())
+		src := NewVec(types.T_int32.ToType())
+		require.NoError(t, AppendFixedList(dst, []int32{0, 0}, nil, mp))
+		require.NoError(t, AppendFixedList(src, []int32{1, 2}, nil, mp))
+		src.GetGrouping().Add(0)
+		dst.GetGrouping().Add(1)
+		require.NoError(t, dst.Copy(src, 0, 0, mp))
+		require.NoError(t, dst.Copy(src, 1, 1, mp))
+		require.True(t, dst.GetGrouping().Contains(0))
+		require.False(t, dst.GetGrouping().Contains(1))
+		dst.Free(mp)
+		src.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
 	{ // fixed
 		v := NewVec(types.T_int8.ToType())
 		AppendFixedList(v, []int8{0, 0, 1, 0}, nil, mp)

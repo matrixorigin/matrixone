@@ -94,7 +94,7 @@ func TestBatchesShrinkPreservesAllocationAndRollback(t *testing.T) {
 		require.NoError(t, err)
 		account, err := registry.Open(limit)
 		require.NoError(t, err)
-		selection, err := vector.NewAllocationAccountSelectionWithBitmaps(
+		selection, err := vector.NewAllocationAccountSelection(
 			account, 1, 1, 2, 3, 4)
 		require.NoError(t, err)
 		var batches Batches

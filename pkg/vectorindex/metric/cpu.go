@@ -49,56 +49,6 @@ func PairwiseDistanceLaunch[T types.ArrayElement](
 	return PairwiseDistanceLaunchCPU(x, y, metric, dist)
 }
 
-func PairwiseDistanceLaunchOneToMany[T types.RealNumbers](
-	query []T,
-	rowCount int,
-	rowAt func(int) []T,
-	metric MetricType,
-	dist []float32,
-	_ uint64,
-	_ bool,
-) (PairwiseJobHandle, error) {
-	return PairwiseDistanceLaunchOneToManyWithScratch(
-		query,
-		rowCount,
-		rowAt,
-		metric,
-		dist,
-		0,
-		false,
-		nil,
-	)
-}
-
-func PairwiseDistanceOneToManyScratchSize[T types.RealNumbers](
-	_ []T,
-	_ int,
-	_ MetricType,
-	_ uint64,
-	_ bool,
-) (int, bool, error) {
-	return 0, false, nil
-}
-
-func PairwiseDistanceLaunchOneToManyWithScratch[T types.RealNumbers](
-	query []T,
-	rowCount int,
-	rowAt func(int) []T,
-	metric MetricType,
-	dist []float32,
-	_ uint64,
-	_ bool,
-	_ []byte,
-) (PairwiseJobHandle, error) {
-	return PairwiseDistanceLaunchOneToManyCPU(
-		query,
-		rowCount,
-		rowAt,
-		metric,
-		dist,
-	)
-}
-
 func PairwiseDistanceWait(handle PairwiseJobHandle, metric MetricType) ([]float32, error) {
 	return PairwiseDistanceWaitCPU(handle, metric)
 }

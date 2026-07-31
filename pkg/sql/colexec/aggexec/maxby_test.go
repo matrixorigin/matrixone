@@ -91,6 +91,8 @@ func TestCompactMaxByStateVectorPreservesAllocationOwner(t *testing.T) {
 		mpool.AllocationOwner(1),
 		mpool.AllocationSite(1),
 		mpool.AllocationSite(2),
+		mpool.AllocationSite(3),
+		mpool.AllocationSite(4),
 	)
 	require.NoError(t, err)
 	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())

@@ -15,7 +15,6 @@
 package hashjoin
 
 import (
-	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -220,6 +219,7 @@ func TestHashMarkJoinEmptySpillBucketTruthTable(t *testing.T) {
 // spill scatter phase, and an empty global build makes even NULL probes FALSE.
 func TestHashMarkJoinSpilledEmptyBuild(t *testing.T) {
 	tc := newMarkSpillTestCase(t)
+	generation, registry, account := installHashJoinTestAllocation(t, tc.arg)
 	probe := batch.NewWithSize(1)
 	probe.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0}, []uint64{1}, tc.proc.Mp())
 	probe.SetRowCount(2)
@@ -229,14 +229,14 @@ func TestHashMarkJoinSpilledEmptyBuild(t *testing.T) {
 	jm.SetRowCount(0)
 	jm.IncRef(1)
 	require.NoError(t, jm.SetSpillBuildPayload(message.SpillBuildPayload{
-		LegacyFds: make([]*os.File, spillutil.SpillNumBuckets),
+		Files:     make([]*message.SpillFile, spillutil.SpillNumBuckets),
+		BudgetRef: generation,
 	}))
 	message.SendMessage(message.JoinMapMsg{
-		JoinMapPtr: jm,
+		Result:     message.NewJoinMapResult(jm),
 		IsShuffle:  true,
 		ShuffleIdx: tc.arg.ShuffleIdx,
 		Tag:        tc.arg.JoinMapTag,
-		Spilled:    true,
 	}, tc.proc.GetMessageBoard())
 
 	require.NoError(t, tc.arg.Prepare(tc.proc))
@@ -245,4 +245,7 @@ func TestHashMarkJoinSpilledEmptyBuild(t *testing.T) {
 		1: {value: false},
 	}, collectMarkResults(t, &tc))
 	finishMarkSpillTest(t, &tc)
+	require.Zero(t, account.Snapshot().Used)
+	_, _, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
 }
