@@ -63,16 +63,18 @@ func SupportsExactRawRuntimeFilter(oid types.T) bool {
 	}
 }
 
-// LegacyExactRawProducerSafe reports whether an executor which understands
-// only RuntimeFilterSpec.Expr can emit raw bytes without consulting additional
-// type metadata. Decimal equality depends on scale, so it must use only the
-// versioned BuildExpr/ProbeType contract and make a legacy producer PASS.
+// LegacyExactRawProducerSafe reports whether pre-versioned producers and
+// consumers can execute this raw contract using only RuntimeFilterSpec.Expr.
+// Decimal equality depends on scale, and legacy consumers have no ENUM IN
+// overload, so both require the versioned BuildExpr/ProbeType contract and
+// make a legacy producer PASS.
 func LegacyExactRawProducerSafe(oid types.T) bool {
 	if !SupportsExactRawRuntimeFilter(oid) {
 		return false
 	}
 	switch oid {
-	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_enum:
 		return false
 	default:
 		return true

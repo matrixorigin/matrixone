@@ -66,7 +66,8 @@ func TestSupportsExactRawRuntimeFilter(t *testing.T) {
 	for _, oid := range supported {
 		want := oid != types.T_decimal64 &&
 			oid != types.T_decimal128 &&
-			oid != types.T_decimal256
+			oid != types.T_decimal256 &&
+			oid != types.T_enum
 		require.Equal(t, want,
 			LegacyExactRawProducerSafe(oid), oid.String())
 	}

@@ -227,6 +227,50 @@ func TestExactKeyEncodingRejectsUnprovableWireContracts(t *testing.T) {
 	}
 }
 
+func TestVersionedRawExecutionFollowsDeploymentGate(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	intType := types.T_int32.ToType()
+	decimalType := types.New(types.T_decimal64, 18, 2)
+	enumType := types.T_enum.ToType()
+
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion6)
+	require.Equal(t, keycodec.ExactRuntimeFilterRaw,
+		ExactKeyEncoding(exactRawContract(intType, intType), intType, ""))
+	require.Equal(t, keycodec.ExactRuntimeFilterUnsupported,
+		ExactKeyEncoding(
+			exactRawContract(decimalType, decimalType), decimalType, ""))
+	require.Equal(t, keycodec.ExactRuntimeFilterUnsupported,
+		ExactKeyEncoding(
+			exactRawContract(enumType, enumType), enumType, ""))
+
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion7)
+	require.Equal(t, keycodec.ExactRuntimeFilterRaw,
+		ExactKeyEncoding(
+			exactRawContract(decimalType, decimalType), decimalType, ""))
+	require.Equal(t, keycodec.ExactRuntimeFilterRaw,
+		ExactKeyEncoding(
+			exactRawContract(enumType, enumType), enumType, ""))
+
+	// A cached v7 plan must fail open again before old consumers rejoin.
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion6)
+	require.Equal(t, keycodec.ExactRuntimeFilterUnsupported,
+		ExactKeyEncoding(
+			exactRawContract(enumType, enumType), enumType, ""))
+}
+
 func TestMarshalExactFilterVectorUsesWireSizedBudget(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_int8.ToType())

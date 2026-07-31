@@ -238,8 +238,9 @@ func (builder *QueryBuilder) makeExactRuntimeFilterPair(
 		// Metadata-independent RAW_V1 needs no producer-side transformation.
 		// Retain the legacy expression only for those types so an older
 		// HashBuild/IndexBuild can keep its established filter during rolling
-		// upgrade. Decimal scale requires the versioned triangle and therefore
-		// deliberately makes an older producer PASS.
+		// upgrade. Metadata-dependent types and types without a legacy consumer
+		// executor (such as ENUM) require the versioned triangle and deliberately
+		// make an older producer PASS.
 		if !keycodec.LegacyExactRawProducerSafe(
 			types.T(buildExpr.Typ.Id),
 		) {

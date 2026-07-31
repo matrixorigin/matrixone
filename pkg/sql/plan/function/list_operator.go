@@ -722,16 +722,6 @@ var supportedOperators = []FuncNew{
 				},
 			},
 			{
-				overloadId: 101,
-				args:       []types.T{types.T_enum, types.T_enum},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[types.Enum]().operatorIn
-				},
-			},
-			{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
@@ -1141,6 +1131,19 @@ var supportedOperators = []FuncNew{
 			// 		return newOpOperatorStrIn().operatorIn
 			// 	},
 			// },
+			// Keep new overloads append-only. The encoded function ID stores
+			// this slice index, not overload.overloadId, so insertion before an
+			// existing entry changes the plan wire contract.
+			{
+				overloadId: 101,
+				args:       []types.T{types.T_enum, types.T_enum},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Enum]().operatorIn
+				},
+			},
 		},
 	},
 

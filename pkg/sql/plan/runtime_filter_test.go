@@ -426,6 +426,17 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 		require.False(t, ok,
 			"metadata-dependent RAW must wait for versioned producers")
 
+		enumType := planpb.Type{
+			Id:         int32(types.T_enum),
+			Enumvalues: "small,large",
+		}
+		enumProbe := GetColExpr(enumType, 1, 0)
+		enumBuild := GetColExpr(enumType, -1, 0)
+		_, _, ok = builder.makeExactRuntimeFilterPair(
+			3, false, 100, enumProbe, enumBuild, false)
+		require.False(t, ok,
+			"ENUM RAW must wait for versioned consumers with ENUM IN")
+
 		rt.SetGlobalVariables(
 			moruntime.MOProtocolVersion, defines.MORPCVersion7)
 		_, decimalV7, ok := builder.makeExactRuntimeFilterPair(
@@ -433,6 +444,15 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 		require.True(t, ok)
 		require.Nil(t, decimalV7.Expr)
 		require.NotNil(t, decimalV7.BuildExpr)
+
+		_, enumV7, ok := builder.makeExactRuntimeFilterPair(
+			3, false, 100, enumProbe, enumBuild, false)
+		require.True(t, ok)
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+			enumV7.KeyEncoding)
+		require.Nil(t, enumV7.Expr)
+		require.NotNil(t, enumV7.BuildExpr)
 	})
 }
 
