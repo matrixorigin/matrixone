@@ -17,7 +17,6 @@ package morpc
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -194,6 +193,83 @@ func (f *testFailingBackendFactory) Create(address string, opts ...BackendOption
 	return nil, errors.New("connection refused")
 }
 
+type terminalErrorBackendFactory struct {
+	err error
+}
+
+func (f *terminalErrorBackendFactory) Create(
+	string,
+	...BackendOption,
+) (Backend, error) {
+	return nil, f.err
+}
+
+func TestAutoCreateWaitReturnsDefinitiveFactoryError(t *testing.T) {
+	factoryErr := moerr.NewBackendCannotConnectNoCtx(
+		errors.New("connection refused"),
+	)
+	c, err := NewClient(
+		"terminal-factory-error",
+		&terminalErrorBackendFactory{err: factoryErr},
+		WithClientEnableAutoCreateBackend(),
+		WithClientAutoCreateWaitTimeout(time.Second),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
+
+	_, err = c.Send(
+		context.Background(),
+		"dead-backend",
+		&testMessage{id: 1},
+	)
+	require.ErrorIs(t, err, factoryErr)
+	require.NotErrorIs(t, err, ErrBackendCreateTimeout)
+}
+
+func TestBackendCreateResetDoesNotExposeLateFactoryError(t *testing.T) {
+	rpcClient, err := NewClient(
+		"reset-invalidates-factory-error",
+		&terminalErrorBackendFactory{},
+		WithClientAutoCreateWaitTimeout(time.Second),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, rpcClient.Close())
+	}()
+	client := rpcClient.(*client)
+	const remote = "reset-remote"
+
+	client.mu.Lock()
+	state := newBackendCreateState(client.backendGenerationLocked(remote))
+	state.markStarted()
+	client.mu.creating[remote] = state
+	client.mu.Unlock()
+
+	require.NoError(t, client.CloseBackendFor(remote))
+	factoryErr := moerr.NewBackendCannotConnectNoCtx(
+		errors.New("late connection refusal"),
+	)
+	state.markCompleted(time.Now())
+	client.mu.Lock()
+	client.failBackendCreateLocked(remote, state, factoryErr)
+	client.mu.Unlock()
+
+	var creationStart time.Time
+	err = client.waitBackendCreateCompletion(
+		context.Background(),
+		remote,
+		&creationStart,
+		state,
+	)
+	require.NoError(t, err)
+	require.Nil(t, state.factoryErr,
+		"reset owns completion and must discard a late old-generation factory error")
+}
+
 // TestAutoCreateWaitTimeoutDeterministic tests bounded wait timeout deterministically
 func TestAutoCreateWaitTimeoutDeterministic(t *testing.T) {
 	bf := &testFailingBackendFactory{}
@@ -351,54 +427,183 @@ func TestAutoCreateWaitBudgetStartsAtFactoryAdmission(t *testing.T) {
 	defer c.Close()
 	client := c.(*client)
 
-	t.Run("queued time is excluded", func(t *testing.T) {
+	t.Run("initial queue has no peer deadline", func(t *testing.T) {
 		state := newBackendCreateState(&backendGeneration{})
-		var creationStart time.Time
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		waitC := make(chan error, 1)
-		go func() {
-			waitC <- client.waitBackendCreateCompletion(
-				ctx,
-				"test-backend",
-				&creationStart,
-				state,
-			)
-		}()
-
-		select {
-		case err := <-waitC:
-			t.Fatalf("queued create consumed its %s factory budget: %v", waitTimeout, err)
-		case <-time.After(3 * waitTimeout):
-		}
-
-		state.markStarted()
-		close(state.done)
-		require.NoError(t, <-waitC)
-		require.False(t, creationStart.IsZero())
+		state.queuedAt = time.Now().Add(-time.Hour)
+		deadline, kind := client.backendCreateAdmissionDeadline(time.Time{}, state)
+		require.True(t, deadline.IsZero())
+		require.Equal(t, backendCreateNoAdmissionDeadline, kind)
 	})
 
-	t.Run("started factory work is bounded", func(t *testing.T) {
+	t.Run("completion event before deadline wins over late observation", func(t *testing.T) {
 		state := newBackendCreateState(&backendGeneration{})
-		state.markStarted()
+		startedAt := time.Now().Add(-time.Hour)
+		state.startedAt = startedAt
+		close(state.started)
+		state.markCompleted(startedAt.Add(waitTimeout / 2))
+		close(state.done)
 		var creationStart time.Time
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
 
 		err := client.waitBackendCreateCompletion(
-			ctx,
+			context.Background(),
+			"test-backend",
+			&creationStart,
+			state,
+		)
+		require.NoError(t, err)
+		require.Equal(t, startedAt, creationStart)
+	})
+
+	t.Run("definitive factory error before deadline is preserved", func(t *testing.T) {
+		state := newBackendCreateState(&backendGeneration{})
+		startedAt := time.Now().Add(-time.Hour)
+		factoryErr := moerr.NewBackendCannotConnectNoCtx(
+			errors.New("connection refused"),
+		)
+		state.startedAt = startedAt
+		close(state.started)
+		state.markCompleted(startedAt.Add(waitTimeout / 2))
+		state.factoryErr = factoryErr
+		close(state.done)
+		var creationStart time.Time
+
+		err := client.waitBackendCreateCompletion(
+			context.Background(),
+			"test-backend",
+			&creationStart,
+			state,
+		)
+		require.ErrorIs(t, err, factoryErr)
+		require.NotErrorIs(t, err, ErrBackendCreateTimeout)
+		require.Equal(t, startedAt, creationStart)
+	})
+
+	t.Run("completion event after deadline is always a timeout", func(t *testing.T) {
+		state := newBackendCreateState(&backendGeneration{})
+		startedAt := time.Now().Add(-time.Hour)
+		factoryErr := moerr.NewBackendCannotConnectNoCtx(
+			errors.New("connection refused"),
+		)
+		state.startedAt = startedAt
+		close(state.started)
+		state.markCompleted(startedAt.Add(waitTimeout + time.Nanosecond))
+		state.factoryErr = factoryErr
+		close(state.done)
+		var creationStart time.Time
+
+		err := client.waitBackendCreateCompletion(
+			context.Background(),
 			"test-backend",
 			&creationStart,
 			state,
 		)
 		require.ErrorIs(t, err, ErrBackendCreateTimeout)
+		require.NotErrorIs(t, err, factoryErr)
 	})
 }
 
-func TestAutoCreateWaitExcludesGlobalCreateQueueDelay(t *testing.T) {
-	const waitTimeout = 50 * time.Millisecond
+func TestBackendCreateQueueTimeoutInvalidatesExactState(t *testing.T) {
+	factory := &failingCreateFactory{}
+	rpcClient, err := NewClient(
+		"queue-timeout-exact-state",
+		factory,
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend(),
+		WithClientAutoCreateQueueWaitTimeout(time.Minute),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, rpcClient.Close())
+	}()
+	client := rpcClient.(*client)
 
+	client.mu.Lock()
+	generation := client.backendGenerationLocked("queued")
+	expired := newBackendCreateState(generation)
+	expired.queuedAt = time.Now().Add(-2 * time.Minute)
+	client.mu.creating["queued"] = expired
+	client.mu.Unlock()
+
+	var creationStart time.Time
+	err = client.waitBackendCreateCompletion(
+		context.Background(),
+		"queued",
+		&creationStart,
+		expired,
+	)
+	require.ErrorIs(t, err, ErrBackendCreateQueueTimeout)
+	require.True(t, backendCreateDone(expired))
+	require.True(t, expired.queueTimedOut)
+
+	// A retry may install a new state in the same generation. The old queued
+	// request must not claim it when it eventually reaches a worker (ABA).
+	replacement := newBackendCreateState(generation)
+	client.mu.Lock()
+	require.Nil(t, client.mu.creating["queued"])
+	client.mu.creating["queued"] = replacement
+	client.mu.Unlock()
+
+	_, err = client.createBackendForClaimedState(
+		"queued",
+		false,
+		expired,
+		true,
+	)
+	require.Error(t, err)
+	require.Zero(t, factory.attempts.Load())
+	client.mu.Lock()
+	require.Same(t, replacement, client.mu.creating["queued"])
+	client.mu.Unlock()
+}
+
+func TestRetryQueueSharesOriginalFactoryBudget(t *testing.T) {
+	const factoryTimeout = time.Minute
+
+	factory := &failingCreateFactory{}
+	rpcClient, err := NewClient(
+		"retry-queue-factory-budget",
+		factory,
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend(),
+		WithClientAutoCreateWaitTimeout(factoryTimeout),
+		WithClientAutoCreateQueueWaitTimeout(time.Hour),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, rpcClient.Close())
+	}()
+	client := rpcClient.(*client)
+
+	client.mu.Lock()
+	generation := client.backendGenerationLocked("retry")
+	queuedRetry := newBackendCreateState(generation)
+	client.mu.creating["retry"] = queuedRetry
+	client.mu.Unlock()
+
+	creationStart := time.Now().Add(-2 * factoryTimeout)
+	err = client.waitBackendCreateCompletion(
+		context.Background(),
+		"retry",
+		&creationStart,
+		queuedRetry,
+	)
+	require.ErrorIs(t, err, ErrBackendCreateTimeout)
+	require.True(t, backendCreateDone(queuedRetry))
+	require.False(t, queuedRetry.queueTimedOut,
+		"a caller-specific retry budget is not a queue-timeout event")
+	client.mu.Lock()
+	require.Nil(t, client.mu.creating["retry"],
+		"expired retry work must not remain queued to dial later")
+	client.mu.Unlock()
+
+	// Coalesced callers do not inherit this caller's older factory budget.
+	_, started, coalescedErr := client.backendCreateAdmissionResult(queuedRetry)
+	require.False(t, started)
+	require.NoError(t, coalescedErr)
+	require.Zero(t, factory.attempts.Load())
+}
+
+func TestSlowCreateDoesNotHeadOfLineBlockHealthyCreate(t *testing.T) {
 	blockingFactory := &blockingCreateFactory{
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
@@ -412,9 +617,11 @@ func TestAutoCreateWaitExcludesGlobalCreateQueueDelay(t *testing.T) {
 		WithClientDisableCircuitBreaker(),
 	)
 	require.NoError(t, err)
-	var releaseOnce sync.Once
+	released := false
 	defer func() {
-		releaseOnce.Do(func() { close(blockingFactory.release) })
+		if !released {
+			close(blockingFactory.release)
+		}
 		require.NoError(t, blockedRPCClient.Close())
 	}()
 
@@ -424,7 +631,6 @@ func TestAutoCreateWaitExcludesGlobalCreateQueueDelay(t *testing.T) {
 		WithClientMaxBackendPerHost(1),
 		WithClientEnableAutoCreateBackend(),
 		WithClientDisableCircuitBreaker(),
-		WithClientAutoCreateWaitTimeout(waitTimeout),
 	)
 	require.NoError(t, err)
 	defer func() {
@@ -453,38 +659,26 @@ func TestAutoCreateWaitExcludesGlobalCreateQueueDelay(t *testing.T) {
 
 	healthyResultC := make(chan error, 1)
 	go send(healthyRPCClient, "healthy", healthyResultC)
-	healthyClient := healthyRPCClient.(*client)
-	require.Eventually(t, func() bool {
-		healthyClient.mu.Lock()
-		state := healthyClient.mu.creating["healthy"]
-		healthyClient.mu.Unlock()
-		if state == nil {
-			return false
-		}
-		_, started := state.startTime()
-		return !started
-	}, 5*time.Second, time.Millisecond, "healthy create was not queued behind blocked worker")
-
-	timer := time.NewTimer(3 * waitTimeout)
-	<-timer.C
 	select {
 	case err := <-healthyResultC:
-		t.Fatalf("queued healthy create consumed its %s factory budget: %v", waitTimeout, err)
-	default:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatalf("healthy create was head-of-line blocked by one slow peer: %v",
+			context.Cause(ctx))
 	}
 
-	releaseOnce.Do(func() { close(blockingFactory.release) })
-	for name, resultC := range map[string]<-chan error{
-		"blocked": blockedResultC,
-		"healthy": healthyResultC,
-	} {
-		select {
-		case err := <-resultC:
-			require.NoError(t, err, name)
-		case <-ctx.Done():
-			t.Fatalf("%s send did not finish after create worker was released: %v",
-				name, context.Cause(ctx))
-		}
+	select {
+	case err := <-blockedResultC:
+		t.Fatalf("blocking factory returned before release: %v", err)
+	default:
+	}
+	close(blockingFactory.release)
+	released = true
+	select {
+	case err := <-blockedResultC:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatalf("blocked send did not finish after release: %v", context.Cause(ctx))
 	}
 }
 
@@ -492,6 +686,8 @@ func TestAutoCreateWaitExcludesGlobalCreateQueueDelay(t *testing.T) {
 func TestErrorDistinction(t *testing.T) {
 	errors := []error{
 		ErrBackendCreating,
+		ErrBackendCreateQueueFull,
+		ErrBackendCreateQueueTimeout,
 		ErrBackendUnavailable,
 		ErrBackendCreateTimeout,
 		ErrCircuitOpen,
@@ -504,6 +700,8 @@ func TestErrorDistinction(t *testing.T) {
 	// Test that each error has correct status
 	expectedStatus := []StatusCategory{
 		StatusTransient,   // ErrBackendCreating
+		StatusTransient,   // ErrBackendCreateQueueFull
+		StatusTransient,   // ErrBackendCreateQueueTimeout
 		StatusUnavailable, // ErrBackendUnavailable
 		StatusUnavailable, // ErrBackendCreateTimeout
 		StatusUnavailable, // ErrCircuitOpen
@@ -573,6 +771,8 @@ func TestCircuitBreakerRecordFailureOnTimeout(t *testing.T) {
 	// ErrCircuitHalfOpen is StatusTransient (allows probe requests)
 	assert.Equal(t, StatusTransient, GetStatusCategory(ErrCircuitHalfOpen),
 		"ErrCircuitHalfOpen should be StatusTransient to allow probe")
+	assert.Equal(t, StatusTransient, GetStatusCategory(ErrBackendCreateQueueFull))
+	assert.Equal(t, StatusTransient, GetStatusCategory(ErrBackendCreateQueueTimeout))
 
 	// Errors that should NOT trigger circuit breaker (StatusCancelled)
 	cancelledErrors := []error{

@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -35,6 +36,43 @@ import (
 
 type blockingUnlockClient struct {
 	unlockStarted chan struct{}
+}
+
+func TestIsRetryErrorTreatsLocalBackendGenerationErrorsAsAmbiguous(t *testing.T) {
+	tests := []struct {
+		name  string
+		err   error
+		retry bool
+	}{
+		{
+			name:  "exact backend create timeout",
+			err:   morpc.ErrBackendCreateTimeout,
+			retry: true,
+		},
+		{
+			name: "wrapped exact backend create timeout",
+			err: errors.Join(
+				errors.New("cleanup failed"),
+				morpc.ErrBackendCreateTimeout,
+			),
+			retry: true,
+		},
+		{
+			name:  "backend closed by concurrent reset",
+			err:   moerr.NewBackendClosedNoCtx(),
+			retry: true,
+		},
+		{
+			name:  "backend cannot connect",
+			err:   moerr.NewBackendCannotConnectNoCtx(),
+			retry: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.retry, isRetryError(test.err))
+		})
+	}
 }
 
 func (c *blockingUnlockClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {

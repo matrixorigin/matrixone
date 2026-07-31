@@ -2144,7 +2144,8 @@ func TestIssue3288(t *testing.T) {
 			l1.Close()
 
 			// Real scenario: after s1 (l1) dies, s2 (l2) acquires the lock. Caller retries on
-			// ErrBackendClosed or ErrLockTableBindChanged per API contract until success.
+			// ErrBackendClosed, ErrBackendCannotConnect, or
+			// ErrLockTableBindChanged per API contract until success.
 			//
 			// No infinite wait: (1) success -> break; (2) retryable error -> continue; (3) any other
 			// error -> require.NoError fails and test stops; (4) ctx has 10s timeout, so even if we
@@ -2166,10 +2167,11 @@ func TestIssue3288(t *testing.T) {
 					txnSeq++
 					continue
 				}
-				if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
+				if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+					moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 					continue
 				}
-				require.NoError(t, err, "lock must succeed or return retryable error (ErrBackendClosed/ErrLockTableBindChanged)")
+				require.NoError(t, err, "lock must succeed or return a retryable backend/bind error")
 			}
 			_ = result
 
@@ -6721,4 +6723,42 @@ func TestServiceCloseAttemptsAllCleanupAfterErrors(t *testing.T) {
 	require.Equal(t, 1, client.calls)
 	require.Equal(t, 1, keeper.calls)
 	require.Equal(t, 1, server.calls)
+}
+
+func TestServiceCloseSealsCancelsAndJoinsOperationAdmission(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			serviceCtx, admitted := s.beginServiceOperation()
+			require.True(t, admitted)
+			require.NotNil(t, serviceCtx)
+
+			closeDone := make(chan error, 1)
+			go func() {
+				closeDone <- s.Close()
+			}()
+
+			select {
+			case <-serviceCtx.Done():
+			case <-time.After(time.Second):
+				t.Fatal("service close did not cancel an admitted operation")
+			}
+			select {
+			case err := <-closeDone:
+				t.Fatalf("service close returned before admitted operation: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			s.endServiceOperation()
+			select {
+			case err := <-closeDone:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("service close did not join after operation completion")
+			}
+
+			_, admitted = s.beginServiceOperation()
+			require.False(t, admitted)
+			require.False(t, s.beginLockTablePublication())
+		})
 }

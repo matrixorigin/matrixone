@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -106,52 +105,64 @@ func TestAutoCreateEnabled(t *testing.T) {
 	assert.NotNil(t, ops) // ops should be initialized
 }
 
-// TestCreateQueueFullFallback verifies fallback behavior when create queue is full
-func TestCreateQueueFullFallback(t *testing.T) {
-	// Create client with small queue size and auto-create enabled
-	rpcClient, err := NewClient("test", &testBackendFactory{},
+func TestCreateQueueFullReturnsLocalCongestion(t *testing.T) {
+	factory := &failingCreateFactory{}
+	rpcClient, err := NewClient(
+		"queue-full-backpressure",
+		factory,
 		WithClientEnableAutoCreateBackend(),
-		WithClientCreateTaskChanSize(1))
+		WithClientCircuitBreaker(CircuitBreakerConfig{
+			Enabled:             true,
+			FailureThreshold:    1,
+			ResetTimeout:        time.Hour,
+			HalfOpenMaxRequests: 1,
+		}),
+	)
 	require.NoError(t, err)
-	defer rpcClient.Close()
-
+	defer func() {
+		require.NoError(t, rpcClient.Close())
+	}()
 	c := rpcClient.(*client)
 
-	// Fill the queue by triggering creation for multiple backends
-	// This should fill the queue and trigger fallback for subsequent calls
-	_, err1 := c.getBackend("addr1", false)
-	_, err2 := c.getBackend("addr2", false)
-
-	// Both should return "no available backend" but trigger different paths
-	assert.Error(t, err1)
-	assert.Error(t, err2)
-	assert.True(t, errors.Is(err1, ErrBackendCreating) || moerr.IsMoErrCode(err1, moerr.ErrNoAvailableBackend))
-	assert.True(t, errors.Is(err2, ErrBackendCreating) || moerr.IsMoErrCode(err2, moerr.ErrNoAvailableBackend))
-
-	// Wait a bit for async creation
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify at least one backend was created (either async or sync fallback)
+	// Use a stopped manager with one occupied slot so queue saturation is
+	// deterministic and no worker can drain it between observation and send.
+	congested := newClientGCManager()
+	congested.createC = make(chan createRequest, 1)
 	c.mu.Lock()
-	n1 := len(c.mu.backends["addr1"])
-	n2 := len(c.mu.backends["addr2"])
-	totalBackends := n1 + n2
-	ops1 := c.mu.ops["addr1"]
-	ops2 := c.mu.ops["addr2"]
+	occupiedGeneration := c.backendGenerationLocked("occupied")
+	occupiedState := newBackendCreateState(occupiedGeneration)
+	c.mu.creating["occupied"] = occupiedState
 	c.mu.Unlock()
+	congested.createC <- createRequest{
+		c:       c,
+		backend: "occupied",
+		state:   occupiedState,
+	}
 
-	assert.Greater(t, totalBackends, 0, "At least one backend should be created")
-	// ops should be initialized for any created backend
-	if n1 > 0 {
-		assert.NotNil(t, ops1, "ops should be initialized for addr1")
-	}
-	if n2 > 0 {
-		assert.NotNil(t, ops2, "ops should be initialized for addr2")
-	}
+	var pingErr error
+	func() {
+		original := c.gcManager
+		c.gcManager = congested
+		defer func() {
+			c.gcManager = original
+		}()
+		pingErr = rpcClient.Ping(context.Background(), "target")
+	}()
+	congested.stop()
+
+	require.ErrorIs(t, pingErr, ErrBackendCreateQueueFull)
+	require.Equal(t, StatusTransient, GetStatusCategory(pingErr))
+	require.Zero(t, factory.attempts.Load(),
+		"queue saturation must not bypass the factory concurrency bound")
+	stats := c.circuitBreakers.GetBreaker("target").Stats()
+	require.Equal(t, CircuitClosed, stats.State)
+	require.Zero(t, stats.FailureCount,
+		"process-local queue congestion must not poison a peer breaker")
 }
 
-// TestSyncFallbackRespectsLimits verifies that sync fallback respects pool limits
-func TestSyncFallbackRespectsLimits(t *testing.T) {
+// TestExplicitCreateRespectsLimits verifies that explicit synchronous creation
+// still respects pool limits.
+func TestExplicitCreateRespectsLimits(t *testing.T) {
 	// Create client with max 1 backend per host
 	rpcClient, err := NewClient("test", &testBackendFactory{},
 		WithClientEnableAutoCreateBackend(),
