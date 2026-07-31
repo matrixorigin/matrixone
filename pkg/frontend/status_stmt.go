@@ -101,13 +101,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
-		// Start the dynamic table daemon task
-		if st.IsDynamicTable {
-			if err = handleCreateDynamicTable(execCtx.reqCtx, ses, st); err != nil {
-				return
-			}
-		}
-
 		// grant privilege implicitly
 		// must execute after run to get table id
 		err = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
@@ -304,9 +297,6 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			if execCtx.proc.GetLastInsertID() != 0 {
 				ses.SetLastInsertID(execCtx.proc.GetLastInsertID())
 			}
-		case *tree.DropTable:
-			// handle dynamic table drop, cancel all the running daemon task
-			_ = handleDropDynamicTable(execCtx.reqCtx, ses, execCtx.persistentDropTableTargets)
 		case *tree.CreateDatabase:
 			_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
 		case *tree.DropDatabase:
