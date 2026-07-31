@@ -799,25 +799,33 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		var vs string
-		apv := true
-
+		total := 0
+		null := false
 		for _, p := range ps {
-			v, null := p.GetStrValue(i)
-			if null {
+			v, isNull := p.GetStrValue(i)
+			if isNull {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
-				apv = false
+				null = true
 				break
-			} else {
-				vs += string(v)
 			}
+			if len(v) > math.MaxInt-total {
+				return moerr.NewInvalidInputNoCtx("CONCAT result is too large")
+			}
+			total += len(v)
 		}
-		if apv {
-			if err := rs.AppendBytes([]byte(vs), false); err != nil {
-				return err
+		if null {
+			continue
+		}
+		if err := rs.AppendBytesWithFill(total, func(dst []byte) {
+			offset := 0
+			for _, p := range ps {
+				v, _ := p.GetStrValue(i)
+				offset += copy(dst[offset:], v)
 			}
+		}); err != nil {
+			return err
 		}
 	}
 	return nil

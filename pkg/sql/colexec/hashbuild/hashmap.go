@@ -92,6 +92,7 @@ type HashmapBuilder struct {
 	mapAllocationAccount            *mpool.AllocationAccount
 	mapAllocation                   *hashtable.AllocationAccountSelection
 	batchAllocation                 *vector.AllocationAccountSelection
+	expressionAllocation            *colexec.ExpressionAllocationAccount
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -185,12 +186,26 @@ func (hb *HashmapBuilder) Prepare(
 			}
 			keyWidth += width
 		}
-		executors, expressionLease, err := NewBudgetedExpressionExecutors(
-			proc,
-			hb.budget,
-			keyCols,
-			needDupVec,
+		var (
+			executors       []colexec.ExpressionExecutor
+			expressionLease *ExpressionMemoryLease
+			err             error
 		)
+		if hb.expressionAllocation != nil &&
+			expressionSetAllocationClosed(keyCols) {
+			executors, err = NewAllocationAccountedExpressionExecutors(
+				proc,
+				keyCols,
+				hb.expressionAllocation,
+			)
+		} else {
+			executors, expressionLease, err = NewBudgetedExpressionExecutors(
+				proc,
+				hb.budget,
+				keyCols,
+				needDupVec,
+			)
+		}
 		if err != nil {
 			return err
 		}
@@ -247,6 +262,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	hb.mapAllocationAccount = nil
 	hb.mapAllocation = nil
 	hb.batchAllocation = nil
+	hb.expressionAllocation = nil
 }
 
 func (hb *HashmapBuilder) Free(proc *process.Process) {
@@ -271,6 +287,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.mapAllocationAccount = nil
 	hb.mapAllocation = nil
 	hb.batchAllocation = nil
+	hb.expressionAllocation = nil
 }
 
 func (hb *HashmapBuilder) FreeExecutors() {

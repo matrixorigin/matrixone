@@ -108,6 +108,9 @@ type container struct {
 	// cached expression executors for spill (reused across batches)
 	spillExprExecs []colexec.ExpressionExecutor
 	spillExprLease *ExpressionMemoryLease
+	// spillExprAccounted distinguishes an exact executor set from a legacy set
+	// whose retained lease has not yet been installed.
+	spillExprAccounted bool
 }
 
 // spillFileBundle is deliberately owned by hashbuild.  Build converts each
@@ -318,9 +321,17 @@ func (hashBuild *HashBuild) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
+	expressionAllocation, err := colexec.NewExpressionAllocationAccount(
+		account,
+		HashBuildAllocationOwner,
+	)
+	if err != nil {
+		return err
+	}
 	builder.mapAllocationAccount = account
 	builder.mapAllocation = selection
 	builder.batchAllocation = batchSelection
+	builder.expressionAllocation = expressionAllocation
 	return nil
 }
 
@@ -335,12 +346,14 @@ func (hashBuild *HashBuild) ClearAllocationAccount(
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if builder.IntHashMap != nil || builder.StrHashMap != nil ||
-		len(builder.Batches.Buf) != 0 || builder.Sels.Size() != 0 {
+		len(builder.Batches.Buf) != 0 || builder.Sels.Size() != 0 ||
+		len(builder.executors) != 0 || len(hashBuild.ctr.spillExprExecs) != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	builder.mapAllocationAccount = nil
 	builder.mapAllocation = nil
 	builder.batchAllocation = nil
+	builder.expressionAllocation = nil
 	return nil
 }
 

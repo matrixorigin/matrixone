@@ -326,6 +326,11 @@ func (v *Vector) ensureBitmapCapacity(rows int, mp *mpool.MPool) error {
 	if rows > 0 {
 		rows++
 	}
+	requiredWords := (rows + 63) / 64
+	if requiredWords <= v.nsp.GetBitmap().ExternalStorageCapacity() &&
+		requiredWords <= v.gsp.GetBitmap().ExternalStorageCapacity() {
+		return nil
+	}
 	nulls, err := v.allocateBitmapGrowth(
 		v.nsp.GetBitmap(),
 		rows,

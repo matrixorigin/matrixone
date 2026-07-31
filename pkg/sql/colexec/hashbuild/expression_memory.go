@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -52,6 +53,107 @@ type ExpressionMemoryLease struct {
 	duplicate bool
 	slots     []expressionMemoryLeaseSlot
 	released  bool
+}
+
+// NewAllocationAccountedExpressionExecutors constructs only expression trees
+// whose complete retained and call-scoped allocation ledger is closed. The
+// exact MPool leases are the sole capacity charge; unsupported function
+// families continue through NewBudgetedExpressionExecutors until their own
+// scratch owner is migrated.
+func NewAllocationAccountedExpressionExecutors(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	allocation *colexec.ExpressionAllocationAccount,
+) ([]colexec.ExpressionExecutor, error) {
+	if allocation == nil || !expressionSetAllocationClosed(exprs) {
+		return nil, process.ErrHashBuildBudgetInvalid
+	}
+	return colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+		proc,
+		exprs,
+		allocation,
+	)
+}
+
+func expressionSetAllocationClosed(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if !expressionAllocationClosed(expr) {
+			return false
+		}
+	}
+	return true
+}
+
+func expressionAllocationClosed(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch node := expr.Expr.(type) {
+	case *plan.Expr_Col, *plan.Expr_Lit, *plan.Expr_T,
+		*plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_Fold:
+		return true
+	case *plan.Expr_F:
+		if node.F == nil || node.F.Func == nil {
+			return false
+		}
+		// Keep this as an implementation audit list, not a semantic function
+		// list. CONCAT writes directly into admitted result storage, CASE owns
+		// its row selections through ExpressionAllocationAccount, and varchar
+		// equality has no row-scaled scratch. Integer string casts use a
+		// stack-backed formatter; inserted casts of literals are plan-bounded.
+		functionID, _ := function.DecodeOverloadID(node.F.Func.Obj)
+		switch functionID {
+		case function.CONCAT, function.CASE:
+		case function.EQUAL:
+			if !closedHashBuildEqual(node.F.Args) {
+				return false
+			}
+		case function.CAST:
+			if !closedHashBuildCast(expr, node.F.Args) {
+				return false
+			}
+		default:
+			return false
+		}
+		for _, arg := range node.F.Args {
+			if !expressionAllocationClosed(arg) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func closedHashBuildEqual(args []*plan.Expr) bool {
+	if len(args) != 2 || args[0] == nil || args[1] == nil {
+		return false
+	}
+	for _, arg := range args {
+		oid := types.T(arg.Typ.Id)
+		if oid != types.T_char && oid != types.T_varchar {
+			return false
+		}
+	}
+	return true
+}
+
+func closedHashBuildCast(result *plan.Expr, args []*plan.Expr) bool {
+	if result == nil || len(args) == 0 || args[0] == nil {
+		return false
+	}
+	source := types.T(args[0].Typ.Id)
+	target := types.T(result.Typ.Id)
+	if !source.ToType().IsIntOrUint() {
+		if (source == types.T_char || source == types.T_varchar) &&
+			(target == types.T_char || target == types.T_varchar) {
+			_, literal := args[0].Expr.(*plan.Expr_Lit)
+			return literal
+		}
+		return false
+	}
+	return target == types.T_char || target == types.T_varchar
 }
 
 // NewBudgetedExpressionExecutors admits the mpool-backed capacity owned by

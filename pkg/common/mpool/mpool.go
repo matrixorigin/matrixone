@@ -922,14 +922,24 @@ func (mp *MPool) allocAccounted(
 	}()
 
 	if err = request.account.acquire(uint64(sz)); err != nil {
-		return nil, err
+		return nil, fmt.Errorf(
+			"allocation owner=%d site=%d: %w",
+			request.owner,
+			request.site,
+			err,
+		)
 	}
 	accountHeld = true
 	if err = request.reach(allocationAfterAccount); err != nil {
 		return nil, err
 	}
 	if err = request.account.registry.reserveMetadata(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf(
+			"allocation owner=%d site=%d: %w",
+			request.owner,
+			request.site,
+			err,
+		)
 	}
 	metadataHeld = true
 	if err = request.reach(allocationAfterMetadata); err != nil {

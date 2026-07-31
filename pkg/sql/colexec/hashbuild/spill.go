@@ -833,20 +833,37 @@ func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*pl
 			return nil, &process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorInvalid, Message: "nil shuffle spill key"}
 		}
 	}
-	if len(ctr.spillExprExecs) != len(conditions) {
-		execs, lease, err := NewBudgetedExpressionExecutors(
-			proc,
-			ctr.hashmapBuilder.budget,
-			conditions,
-			false,
+	wantAccounted := ctr.hashmapBuilder.expressionAllocation != nil &&
+		expressionSetAllocationClosed(conditions)
+	if len(ctr.spillExprExecs) != len(conditions) ||
+		ctr.spillExprAccounted != wantAccounted {
+		var (
+			execs []colexec.ExpressionExecutor
+			lease *ExpressionMemoryLease
+			err   error
 		)
+		if wantAccounted {
+			execs, err = NewAllocationAccountedExpressionExecutors(
+				proc,
+				conditions,
+				ctr.hashmapBuilder.expressionAllocation,
+			)
+		} else {
+			execs, lease, err = NewBudgetedExpressionExecutors(
+				proc,
+				ctr.hashmapBuilder.budget,
+				conditions,
+				false,
+			)
+		}
 		if err != nil {
 			return nil, err
 		}
 		ctr.freeSpillExprExecs()
 		ctr.spillExprExecs = execs
 		ctr.spillExprLease = lease
-	} else if ctr.spillExprLease == nil {
+		ctr.spillExprAccounted = wantAccounted
+	} else if !ctr.spillExprAccounted && ctr.spillExprLease == nil {
 		lease, err := NewExpressionMemoryLease(
 			ctr.hashmapBuilder.budget,
 			conditions,
@@ -869,6 +886,7 @@ func (ctr *container) freeSpillExprExecs() {
 		}
 	}
 	ctr.spillExprExecs = nil
+	ctr.spillExprAccounted = false
 	if ctr.spillExprLease != nil {
 		ctr.spillExprLease.Release()
 		ctr.spillExprLease = nil

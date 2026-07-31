@@ -58,6 +58,463 @@ func makeExpressionLeaseTestBatch(proc *process.Process, rows int) *batch.Batch 
 	return bat
 }
 
+func makeIssue26454ConcatKey(t testing.TB, proc *process.Process) *plan.Expr {
+	t.Helper()
+	cast := func(colPos int32) *plan.Expr {
+		col := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int32)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: colPos}},
+		}
+		targetType := plan.Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		}
+		expr, err := plan2.BindFuncExprImplByPlanExpr(
+			proc.Ctx,
+			"cast",
+			[]*plan.Expr{
+				col,
+				{
+					Typ:  targetType,
+					Expr: &plan.Expr_T{T: &plan.TargetType{}},
+				},
+			},
+		)
+		require.NoError(t, err)
+		return expr
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx,
+		"concat",
+		[]*plan.Expr{
+			cast(0),
+			plan2.MakePlan2StringConstExprWithType("-"),
+			cast(1),
+		},
+	)
+	require.NoError(t, err)
+	return expr
+}
+
+func makeIssue26454CaseKey(t testing.TB, proc *process.Process) *plan.Expr {
+	t.Helper()
+	column := &plan.Expr{
+		Typ: plan.Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	condition, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx,
+		"=",
+		[]*plan.Expr{
+			column,
+			plan2.MakePlan2StringConstExprWithType("ATM_CON"),
+		},
+	)
+	require.NoError(t, err)
+	expr, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx,
+		"case",
+		[]*plan.Expr{
+			condition,
+			plan2.MakePlan2StringConstExprWithType("CON_CONTRACT_HEADERS"),
+			plan2.MakePlan2StringConstExprWithType("CON_CONTRACT_DOC"),
+		},
+	)
+	require.NoError(t, err)
+	return expr
+}
+
+func TestAllocationAccountedExpressionIssue26454AndOneByteShort(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	expr := makeIssue26454ConcatKey(t, proc)
+	require.True(t, expressionSetAllocationClosed([]*plan.Expr{expr}))
+	require.False(t, expressionSetAllocationClosed(
+		[]*plan.Expr{makeExpressionLeaseTestExpr(t, proc)},
+	))
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt32Vector([]int32{3, 4}, nil, proc.Mp())
+	input.SetRowCount(2)
+	defer input.Clean(proc.Mp())
+
+	run := func(limit uint64, verify bool) (uint64, error) {
+		budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+		generation, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+		registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+		require.NoError(t, err)
+		account, err := registry.OpenWithController(limit, generation)
+		require.NoError(t, err)
+		allocation, err := colexec.NewExpressionAllocationAccount(
+			account,
+			HashBuildAllocationOwner,
+		)
+		require.NoError(t, err)
+		executors, runErr := NewAllocationAccountedExpressionExecutors(
+			proc,
+			[]*plan.Expr{expr},
+			allocation,
+		)
+		if runErr == nil {
+			var result *vector.Vector
+			result, runErr = executors[0].Eval(
+				proc,
+				[]*batch.Batch{input},
+				nil,
+			)
+			if runErr == nil && verify {
+				require.Equal(t, []string{"1-3", "2-4"},
+					vector.InefficientMustStrCol(result))
+			}
+		}
+		peak := account.Snapshot().Peak
+		freeExpressionLeaseTestExecutors(executors)
+		require.Zero(t, account.Snapshot().Used)
+		require.Zero(t, generation.Used())
+		_, _, terminalErr := registry.CompleteTerminal(account)
+		require.NoError(t, terminalErr)
+		return peak, runErr
+	}
+
+	peak, err := run(1<<20, true)
+	require.NoError(t, err)
+	require.Positive(t, peak)
+	_, err = run(peak-1, false)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Contains(t, err.Error(), "allocation owner=1 site=")
+}
+
+func TestAllocationAccountedExpressionIssue26454CaseKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	expr := makeIssue26454CaseKey(t, proc)
+	require.True(t, expressionSetAllocationClosed([]*plan.Expr{expr}))
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeVarcharVector(
+		[]string{"ATM_CON", "OTHER"},
+		nil,
+		proc.Mp(),
+	)
+	input.SetRowCount(2)
+	defer input.Clean(proc.Mp())
+
+	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<20, generation)
+	require.NoError(t, err)
+	allocation, err := colexec.NewExpressionAllocationAccount(
+		account,
+		HashBuildAllocationOwner,
+	)
+	require.NoError(t, err)
+	executors, err := NewAllocationAccountedExpressionExecutors(
+		proc,
+		[]*plan.Expr{expr},
+		allocation,
+	)
+	require.NoError(t, err)
+	result, err := executors[0].Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t,
+		[]string{"CON_CONTRACT_HEADERS", "CON_CONTRACT_DOC"},
+		vector.InefficientMustStrCol(result),
+	)
+	require.Positive(t, account.Snapshot().Used)
+	freeExpressionLeaseTestExecutors(executors)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
+func TestAllocationAccountedExpressionRealValueOverCapRollsBack(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	column := &plan.Expr{
+		Typ: plan.Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx,
+		"concat",
+		[]*plan.Expr{column, plan2.MakePlan2StringConstExprWithType("-suffix")},
+	)
+	require.NoError(t, err)
+	require.True(t, expressionSetAllocationClosed([]*plan.Expr{expr}))
+
+	const capBytes = uint64(4 << 10)
+	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(capBytes, generation)
+	require.NoError(t, err)
+	allocation, err := colexec.NewExpressionAllocationAccount(
+		account,
+		HashBuildAllocationOwner,
+	)
+	require.NoError(t, err)
+	executors, err := NewAllocationAccountedExpressionExecutors(
+		proc,
+		[]*plan.Expr{expr},
+		allocation,
+	)
+	require.NoError(t, err)
+
+	eval := func(value string) (*vector.Vector, error) {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.MakeVarcharVector([]string{value}, nil, proc.Mp())
+		input.SetRowCount(1)
+		defer input.Clean(proc.Mp())
+		return executors[0].Eval(proc, []*batch.Batch{input}, nil)
+	}
+	_, err = eval(strings.Repeat("x", 8<<10))
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Contains(t, err.Error(), "allocation owner=1 site=")
+	result, err := eval("ok")
+	require.NoError(t, err)
+	require.Equal(t, []string{"ok-suffix"}, vector.InefficientMustStrCol(result))
+
+	freeExpressionLeaseTestExecutors(executors)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
+func TestHashmapBuilderFallsBackOnlyForUnclosedExpressionScratch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	for _, tc := range []struct {
+		name      string
+		expr      *plan.Expr
+		accounted bool
+	}{
+		{name: "closed concat cast", expr: makeIssue26454ConcatKey(t, proc), accounted: true},
+		{name: "closed case equality", expr: makeIssue26454CaseKey(t, proc), accounted: true},
+		{name: "unclosed modulo", expr: makeExpressionLeaseTestExpr(t, proc)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			budget := process.MustNewHashBuildBudget(16<<20, 16<<20)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(16<<20, generation)
+			require.NoError(t, err)
+			var op HashBuild
+			op.NeedHashMap = true
+			require.NoError(t, op.SetAllocationAccount(account))
+			hb := &op.ctr.hashmapBuilder
+			hb.setBudget(generation)
+			require.NoError(t, hb.Prepare(
+				[]*plan.Expr{tc.expr},
+				-1,
+				-1,
+				nil,
+				proc,
+			))
+			if tc.accounted {
+				require.Nil(t, hb.expressionLease)
+				require.Equal(t, generation.Used(), generation.Snapshot().AllocationUsed)
+			} else {
+				require.NotNil(t, hb.expressionLease)
+			}
+			hb.FreeExecutors()
+			require.Zero(t, account.Snapshot().Used)
+			require.Zero(t, generation.Used())
+			require.NoError(t, op.ClearAllocationAccount(account))
+			_, _, err = registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func BenchmarkIssue26454ExpressionAccounting(b *testing.B) {
+	const capBytes = uint64(8 << 30)
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	defer proc.Free()
+	expr := makeIssue26454ConcatKey(b, proc)
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		true,
+		colexec.DefaultBatchSize,
+		proc.Mp(),
+	)
+	defer input.Clean(proc.Mp())
+
+	b.Run("legacy", func(b *testing.B) {
+		budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+		generation, err := budget.OpenGeneration(1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		executors, lease, err := NewBudgetedExpressionExecutors(
+			proc,
+			generation,
+			[]*plan.Expr{expr},
+			false,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if err = lease.Eval(
+				proc,
+				[]*batch.Batch{input},
+				input.RowCount(),
+				func(_ int, _ *vector.Vector) error { return nil },
+			); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		freeExpressionLeaseTestExecutors(executors)
+		lease.Release()
+		if generation.Used() != 0 {
+			b.Fatalf("generation used = %d", generation.Used())
+		}
+	})
+
+	b.Run("accounted", func(b *testing.B) {
+		budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+		generation, err := budget.OpenGeneration(1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+		if err != nil {
+			b.Fatal(err)
+		}
+		account, err := registry.OpenWithController(capBytes, generation)
+		if err != nil {
+			b.Fatal(err)
+		}
+		allocation, err := colexec.NewExpressionAllocationAccount(
+			account,
+			HashBuildAllocationOwner,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		executors, err := NewAllocationAccountedExpressionExecutors(
+			proc,
+			[]*plan.Expr{expr},
+			allocation,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if _, err = executors[0].Eval(
+				proc,
+				[]*batch.Batch{input},
+				nil,
+			); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		freeExpressionLeaseTestExecutors(executors)
+		if account.Snapshot().Used != 0 || generation.Used() != 0 {
+			b.Fatalf(
+				"live account=%d generation=%d",
+				account.Snapshot().Used,
+				generation.Used(),
+			)
+		}
+		if _, _, err = registry.CompleteTerminal(account); err != nil {
+			b.Fatal(err)
+		}
+	})
+}
+
+func BenchmarkIssue26454CaseExpressionAccounting(b *testing.B) {
+	const capBytes = uint64(64 << 20)
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	defer proc.Free()
+	expr := makeIssue26454CaseKey(b, proc)
+	values := make([]string, colexec.DefaultBatchSize)
+	for i := range values {
+		if i%2 == 0 {
+			values[i] = "ATM_CON"
+		} else {
+			values[i] = "OTHER"
+		}
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+	input.SetRowCount(len(values))
+	defer input.Clean(proc.Mp())
+
+	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	generation, err := budget.OpenGeneration(1)
+	if err != nil {
+		b.Fatal(err)
+	}
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	if err != nil {
+		b.Fatal(err)
+	}
+	account, err := registry.OpenWithController(capBytes, generation)
+	if err != nil {
+		b.Fatal(err)
+	}
+	allocation, err := colexec.NewExpressionAllocationAccount(
+		account,
+		HashBuildAllocationOwner,
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	executors, err := NewAllocationAccountedExpressionExecutors(
+		proc,
+		[]*plan.Expr{expr},
+		allocation,
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err = executors[0].Eval(
+			proc,
+			[]*batch.Batch{input},
+			nil,
+		); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	freeExpressionLeaseTestExecutors(executors)
+	if account.Snapshot().Used != 0 || generation.Used() != 0 {
+		b.Fatalf(
+			"live account=%d generation=%d",
+			account.Snapshot().Used,
+			generation.Used(),
+		)
+	}
+	if _, _, err = registry.CompleteTerminal(account); err != nil {
+		b.Fatal(err)
+	}
+}
+
 func makeMaxArrayLeaseTestVector[T types.ArrayElement](
 	t *testing.T,
 	proc *process.Process,

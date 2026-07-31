@@ -3613,7 +3613,8 @@ func signedToStr[T constraints.Integer](
 				return err
 			}
 		} else {
-			result := []byte(strconv.FormatInt(int64(v), 10))
+			var scratch [20]byte
+			result := strconv.AppendInt(scratch[:0], int64(v), 10)
 			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
 				if int32(len(result)) > toType.Width {
 					return moerr.NewDataTruncatedNoCtx("Signed", " truncated for binary/varbinary")
@@ -3662,7 +3663,8 @@ func unsignedToStr[T constraints.Unsigned](
 				return err
 			}
 		} else {
-			result := []byte(strconv.FormatUint(uint64(v), 10))
+			var scratch [20]byte
+			result := strconv.AppendUint(scratch[:0], uint64(v), 10)
 			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
 				if int32(len(result)) > toType.Width {
 					return moerr.NewDataTruncatedNoCtx("Unsigned", "truncated for binary/varbinary")

@@ -1422,6 +1422,126 @@ func TestSpillExpressionHashKeyUsesBoundedAdmission(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestSpillExpressionUsesExactAccountForClosedKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewHashBuildBudget(16<<20, 16<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(16<<20, generation)
+	require.NoError(t, err)
+	var op HashBuild
+	op.NeedHashMap = true
+	require.NoError(t, op.SetAllocationAccount(account))
+	ctr := &op.ctr
+	ctr.hashmapBuilder.setBudget(generation)
+	expr := makeIssue26454ConcatKey(t, proc)
+	executors, err := ctr.initSpillExprExecs(proc, []*plan.Expr{expr})
+	require.NoError(t, err)
+	require.True(t, ctr.spillExprAccounted)
+	require.Nil(t, ctr.spillExprLease)
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt32Vector([]int32{3, 4}, nil, proc.Mp())
+	input.SetRowCount(2)
+	defer input.Clean(proc.Mp())
+	result, err := executors[0].Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"1-3", "2-4"}, vector.InefficientMustStrCol(result))
+	require.Equal(t, generation.Used(), generation.Snapshot().AllocationUsed)
+	require.Positive(t, account.Snapshot().Used)
+
+	ctr.freeSpillExprExecs()
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	require.NoError(t, op.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
+func TestIssue26454ExpressionKeyBuildUsesActualCapacity(t *testing.T) {
+	const capBytes = uint64(16 << 20)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	for _, tc := range []struct {
+		name  string
+		expr  *plan.Expr
+		input func() *batch.Batch
+	}{
+		{
+			name: "concat cast key",
+			expr: makeIssue26454ConcatKey(t, proc),
+			input: func() *batch.Batch {
+				return testutil.NewBatch(
+					[]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+					true,
+					10_000,
+					proc.Mp(),
+				)
+			},
+		},
+		{
+			name: "case equality key",
+			expr: makeIssue26454CaseKey(t, proc),
+			input: func() *batch.Batch {
+				values := make([]string, 10_000)
+				for i := range values {
+					if i%2 == 0 {
+						values[i] = "ATM_CON"
+					} else {
+						values[i] = "OTHER"
+					}
+				}
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+				bat.SetRowCount(len(values))
+				return bat
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			legacyPeak, err := expressionVectorPeak(proc, tc.expr, 10_000, false)
+			require.NoError(t, err)
+			require.Greater(t, legacyPeak, capBytes)
+
+			budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(capBytes, generation)
+			require.NoError(t, err)
+			var op HashBuild
+			op.NeedHashMap = true
+			require.NoError(t, op.SetAllocationAccount(account))
+			hb := &op.ctr.hashmapBuilder
+			hb.setBudget(generation)
+			require.NoError(t, hb.Prepare([]*plan.Expr{tc.expr}, -1, -1, nil, proc))
+			require.Nil(t, hb.expressionLease)
+			input := tc.input()
+			require.NoError(t, hb.copyBuildBatch(input, proc))
+			hb.InputBatchRowCount = input.RowCount()
+			input.Clean(proc.Mp())
+			require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+			require.LessOrEqual(t, generation.Used(), capBytes)
+
+			jm := hb.GetJoinMap(proc.Mp())
+			require.NotNil(t, jm)
+			jm.IncRef(1)
+			hb.Reset(proc, false)
+			jm.Free()
+			require.Zero(t, account.Snapshot().Used)
+			require.Zero(t, generation.Used())
+			terminal, first, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+			require.True(t, first)
+			require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
+		})
+	}
+}
+
 func TestExpressionHashKeyReservesDeclaredPeakBeforeEval(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
