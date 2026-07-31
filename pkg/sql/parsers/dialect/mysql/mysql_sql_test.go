@@ -1547,10 +1547,10 @@ var (
 			input: "select cast(variance(ff) as decimal(10, 3)) from t2",
 		}, {
 			input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
-			output: "select GROUP_CONCAT(distinct 2, ,) from t1",
+			output: "select GROUP_CONCAT(distinct 2 separator ,) from t1",
 		}, {
 			input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
-			output: "select GROUP_CONCAT(distinct a, ,order by a) from t1",
+			output: "select GROUP_CONCAT(distinct a order by a separator ,) from t1",
 		}, {
 			input: "select variance(2) from t1",
 		}, {
@@ -4491,6 +4491,27 @@ func TestValid(t *testing.T) {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
 		ast.StmtKind()
+	}
+}
+
+func TestGroupConcatDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select group_concat(v order by v) from t",
+		"select group_concat(distinct v order by v desc separator '|') from t",
+	} {
+		ast, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		ast.Format(fmtCtx)
+		formatted := fmtCtx.String()
+		require.Contains(t, formatted, " separator ")
+
+		roundTripped, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		roundTripFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		roundTripped.Format(roundTripFmtCtx)
+		require.Equal(t, formatted, roundTripFmtCtx.String())
 	}
 }
 

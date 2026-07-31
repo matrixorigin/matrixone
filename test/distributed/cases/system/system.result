@@ -152,3 +152,24 @@ select * from table02 {snapshot = 'snapshot01'} limit 1;
 SQL parser error: table "table02" does not exist
 drop snapshot if exists snapshot01;
 drop database db01;
+drop database if exists issue_26372;
+create database issue_26372;
+use issue_26372;
+create table t(id int primary key, uk int unique);
+insert into t values (1, 10), (2, 20);
+select * from stale_diagnostic_marker_26372;
+SQL parser error: table "stale_diagnostic_marker_26372" does not exist
+update t set uk = 20 where id = 1;
+Duplicate entry '20' for key 'uk'
+show warnings;
+Level    Code    Message
+Error    1062    Duplicate entry '20' for key 'uk'
+show warnings;
+Level    Code    Message
+Error    1062    Duplicate entry '20' for key 'uk'
+select 1;
+1
+1
+show warnings;
+Level    Code    Message
+drop database issue_26372;
