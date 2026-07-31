@@ -3599,10 +3599,9 @@ func (tbl *txnTable) GetExtraInfo() *api.SchemaExtra {
 func dupVectorWithoutNulls(v *vector.Vector, mp *mpool.MPool) (*vector.Vector, error) {
 	if !v.HasNull() {
 		if v.AllocationAccountSelection() != nil {
-			// PK validation runs during transaction commit, after the producing SQL
-			// attempt may already have sealed its allocation account. The sorted
-			// copy is a short-lived transaction-engine owner, not a continuation of
-			// the statement owner, so make that ownership exit explicit.
+			// PK validation borrows caller-owned data. Its locally sorted copy is a
+			// short-lived transaction-engine owner, not a continuation of the
+			// statement owner, so make that ownership exit explicit.
 			return v.DupOffHeapWithAllocation(mp, nil)
 		}
 		return v.Dup(mp)

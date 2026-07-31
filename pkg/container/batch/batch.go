@@ -742,10 +742,9 @@ func (bat *Batch) CloneSelectedColumns(
 			cloned.Vecs[idx] = vector.NewVec(typ)
 		}
 	}
-	if bat.allocationAccount != nil {
-		if err = cloned.SetAllocationAccount(bat.allocationAccount); err != nil {
-			return nil, err
-		}
+	if err = configureCloneAllocation(bat, cloned, selectCols); err != nil {
+		cloned.Clean(mp)
+		return nil, err
 	}
 	if err = bat.CloneSelectedColumnsTo(selectCols, cloned, mp); err != nil {
 		cloned.Clean(mp)
@@ -842,11 +841,13 @@ func (bat *Batch) CleanOnlyData() {
 func (bat *Batch) FreeColumns(m *mpool.MPool) {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
+			selection := vec.AllocationAccountSelection()
 			vec.Free(m)
 			if bat.allocationAccount != nil {
-				if err := vec.SetAllocationAccount(bat.allocationAccount); err != nil {
-					panic(err)
-				}
+				selection = bat.allocationAccount
+			}
+			if err := vec.SetAllocationAccount(selection); err != nil {
+				panic(err)
 			}
 		}
 	}
@@ -871,19 +872,66 @@ func (bat *Batch) GetSchema() (attrs []string, attrTypes []types.Type) {
 	return
 }
 
-func (bat *Batch) Clone(mp *mpool.MPool, offHeap bool) (*Batch, error) {
-	if bat.allocationAccount != nil && !offHeap {
-		return nil, mpool.ErrAllocationAccountInvalid
+func vectorAllocationSelectionsMatch(left, right *Batch) bool {
+	if left == nil || right == nil || len(left.Vecs) != len(right.Vecs) {
+		return false
 	}
+	if left.allocationAccount != right.allocationAccount {
+		return false
+	}
+	for i := range left.Vecs {
+		if left.Vecs[i] == nil || right.Vecs[i] == nil {
+			if left.Vecs[i] != right.Vecs[i] {
+				return false
+			}
+			continue
+		}
+		if left.Vecs[i].AllocationAccountSelection() !=
+			right.Vecs[i].AllocationAccountSelection() {
+			return false
+		}
+	}
+	return true
+}
+
+func configureCloneAllocation(
+	source, destination *Batch,
+	selectedColumns []int,
+) error {
+	if source == nil || destination == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if source.allocationAccount != nil {
+		return destination.SetAllocationAccount(source.allocationAccount)
+	}
+	for destinationIdx := range destination.Vecs {
+		sourceIdx := destinationIdx
+		if len(selectedColumns) > 0 {
+			sourceIdx = selectedColumns[destinationIdx]
+		}
+		selection := source.Vecs[sourceIdx].AllocationAccountSelection()
+		if selection == nil {
+			continue
+		}
+		if !destination.offHeap {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		if err := destination.Vecs[destinationIdx].SetAllocationAccount(selection); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (bat *Batch) Clone(mp *mpool.MPool, offHeap bool) (*Batch, error) {
 	var (
 		cloned           *Batch
 		attrs, attrTypes = bat.GetSchema()
 	)
 	cloned = NewWithSchema(offHeap, attrs, attrTypes)
-	if offHeap && bat.allocationAccount != nil {
-		if err := cloned.SetAllocationAccount(bat.allocationAccount); err != nil {
-			return nil, err
-		}
+	if err := configureCloneAllocation(bat, cloned, nil); err != nil {
+		cloned.Clean(mp)
+		return nil, err
 	}
 	cloned.Recursive = bat.Recursive
 	err := bat.CloneTo(cloned, mp)
