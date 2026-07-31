@@ -138,6 +138,7 @@ func TestLimit(t *testing.T) {
 func TestLimitDoesNotMutateInputBatch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	input := colexec.MakeMockBatchs(proc.Mp())
+	input.ShuffleIDX = 3
 	inputRows := input.RowCount()
 	inputLengths := make([]int, len(input.Vecs))
 	for i := range input.Vecs {
@@ -152,13 +153,32 @@ func TestLimitDoesNotMutateInputBatch(t *testing.T) {
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, int32(3), result.Batch.ShuffleIDX)
 	require.Equal(t, inputRows, input.RowCount())
 	for i := range input.Vecs {
 		require.Equal(t, inputLengths[i], input.Vecs[i].Length())
 	}
 
+	arg.Reset(proc, false, nil)
+	secondInput := colexec.MakeMockBatchs(proc.Mp())
+	secondInput.ShuffleIDX = 7
+	secondChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{secondInput})
+	arg.Children = nil
+	arg.AppendChild(secondChild)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, int32(7), result.Batch.ShuffleIDX)
+	require.Equal(t, secondInput.RowCount(), inputRows)
+	for i := range secondInput.Vecs {
+		require.Equal(t, inputLengths[i], secondInput.Vecs[i].Length())
+	}
+
 	arg.Free(proc, false, nil)
 	child.Free(proc, false, nil)
+	secondChild.Free(proc, false, nil)
 	arg.Release()
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
