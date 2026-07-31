@@ -14196,6 +14196,13 @@ var supportedOthersBuiltIns = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 {
+				if inputs[0].Oid != types.T_bool || !inputs[1].Oid.IsMySQLString() || !inputs[2].Oid.IsMySQLString() {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+				return newCheckResultWithSuccess(2)
+			}
+
 			if len(inputs) == 4 {
 				if inputs[0].Oid != types.T_bool || !inputs[1].Oid.IsMySQLString() || !inputs[2].Oid.IsMySQLString() || !inputs[3].Oid.IsMySQLString() {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -14295,6 +14302,42 @@ var supportedOthersBuiltIns = []FuncNew{
 								}
 								res.AppendMustValue(true)
 							}
+						}
+						return nil
+					}
+				},
+			},
+			{
+				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+						errMsgs := vector.GenerateFunctionStrParameter(parameters[1])
+						errTypes := vector.GenerateFunctionStrParameter(parameters[2])
+						value2, null := errMsgs.GetStrValue(0)
+						if null {
+							return moerr.NewInternalError(proc.Ctx, "the second parameter of assert() should not be null")
+						}
+						errMsg := functionUtil.QuickBytesToStr(value2)
+						value3, null := errTypes.GetStrValue(0)
+						if null {
+							return moerr.NewInternalError(proc.Ctx, "the third parameter of assert() should not be null")
+						}
+						errType := functionUtil.QuickBytesToStr(value3)
+
+						res := vector.MustFunctionResult[bool](result)
+						for i := uint64(0); i < uint64(length); i++ {
+							flag, isNull := checkFlags.GetValue(i)
+							if isNull || !flag {
+								if errType == "fk_no_referenced_row" {
+									return moerr.NewErrFKNoReferencedRow2(proc.Ctx)
+								}
+								return moerr.NewInternalError(proc.Ctx, errMsg)
+							}
+							res.AppendMustValue(true)
 						}
 						return nil
 					}

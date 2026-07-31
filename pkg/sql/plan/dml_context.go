@@ -46,7 +46,7 @@ func NewDMLContext() *DMLContext {
 }
 
 func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Update) error {
-	err := dmlCtx.ResolveTables(ctx, stmt.Tables, stmt.With, nil, false)
+	err := dmlCtx.resolveTables(ctx, stmt.Tables, stmt.With, nil, foreignKeyResolveDeferred)
 	if err != nil {
 		return classifyUpdateTableResolutionError(ctx, stmt, err)
 	}
@@ -131,6 +131,14 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 
 	return nil
 }
+
+type foreignKeyResolvePolicy uint8
+
+const (
+	foreignKeyResolveAlwaysReject foreignKeyResolvePolicy = iota
+	foreignKeyResolveRespectSession
+	foreignKeyResolveDeferred
+)
 
 func classifyUpdateTableResolutionError(ctx CompilerContext, stmt *tree.Update, err error) error {
 	if !moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
@@ -219,6 +227,20 @@ const unsupportedTableTypeDMLMsg = "unsupported DML: unsupported table type"
 const emptyTableNameDMLMsg = "unsupported DML: empty table name"
 
 func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
+	policy := foreignKeyResolveAlwaysReject
+	if respectFKCheck {
+		policy = foreignKeyResolveRespectSession
+	}
+	return dmlCtx.resolveTables(ctx, tableExprs, with, aliasMap, policy)
+}
+
+func (dmlCtx *DMLContext) resolveTables(
+	ctx CompilerContext,
+	tableExprs tree.TableExprs,
+	with *tree.With,
+	aliasMap map[string][2]string,
+	foreignKeyPolicy foreignKeyResolvePolicy,
+) error {
 	cteMap := make(map[string]bool)
 	if with != nil {
 		for _, cte := range with.CTEs {
@@ -227,7 +249,7 @@ func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.Tab
 	}
 
 	for _, tbl := range tableExprs {
-		err := dmlCtx.ResolveSingleTable(ctx, tbl, aliasMap, cteMap, respectFKCheck)
+		err := dmlCtx.resolveSingleTable(ctx, tbl, aliasMap, cteMap, foreignKeyPolicy)
 		if err != nil {
 			return err
 		}
@@ -237,6 +259,20 @@ func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.Tab
 }
 
 func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.TableExpr, aliasMap map[string][2]string, withMap map[string]bool, respectFKCheck bool) error {
+	policy := foreignKeyResolveAlwaysReject
+	if respectFKCheck {
+		policy = foreignKeyResolveRespectSession
+	}
+	return dmlCtx.resolveSingleTable(ctx, tbl, aliasMap, withMap, policy)
+}
+
+func (dmlCtx *DMLContext) resolveSingleTable(
+	ctx CompilerContext,
+	tbl tree.TableExpr,
+	aliasMap map[string][2]string,
+	withMap map[string]bool,
+	foreignKeyPolicy foreignKeyResolvePolicy,
+) error {
 	var tblName, dbName, alias string
 
 	if aliasTbl, ok := tbl.(*tree.AliasedTableExpr); ok {
@@ -320,8 +356,8 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return err
 	}
 
-	checkFK := true
-	if respectFKCheck {
+	checkFK := foreignKeyPolicy == foreignKeyResolveAlwaysReject
+	if foreignKeyPolicy == foreignKeyResolveRespectSession {
 		checkFK, err = IsForeignKeyChecksEnabled(ctx)
 		if err != nil {
 			return err
