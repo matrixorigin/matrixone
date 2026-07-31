@@ -328,7 +328,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		))
 	})
 
-	t.Run("legacy child foreign key update keeps typed error", func(t *testing.T) {
+	t.Run("irregular index child foreign key update keeps typed error", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
 		mock.ctxt.tables["emp"].Indexes = []*planpb.IndexDef{{
@@ -340,7 +340,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		logicPlan, err := runOneStmt(mock, t, "UPDATE emp SET deptno = 2, sal = 1")
 		require.NoError(t, err)
 		query := logicPlan.GetQuery()
-		require.Equal(t, 0, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
 		require.Equal(t, 1, countUpdateFkAsserts(query))
 		require.True(t, updateFkPlanScansTable(query, mock.ctxt.tables["dept"].TblId))
 		require.True(t, updateFkPlanContainsTypedAssert(
