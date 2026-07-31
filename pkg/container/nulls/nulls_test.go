@@ -15,9 +15,11 @@
 package nulls
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestOr(t *testing.T) {
@@ -66,6 +68,24 @@ func TestAny(t *testing.T) {
 		}
 		assert.EqualValues(t, true, Any(&n))
 	})
+}
+
+func TestMarshalTo(t *testing.T) {
+	var n Nulls
+	var empty bytes.Buffer
+	require.NoError(t, n.MarshalTo(&empty))
+	require.Zero(t, n.MarshalSize())
+	require.Zero(t, empty.Len())
+
+	n.InitWithSize(128)
+	n.Add(3)
+	n.Add(65)
+	encoded, err := n.Show()
+	require.NoError(t, err)
+	var streamed bytes.Buffer
+	require.NoError(t, n.MarshalTo(&streamed))
+	require.Equal(t, encoded, streamed.Bytes())
+	require.Equal(t, len(encoded), n.MarshalSize())
 }
 
 func TestSize(t *testing.T) {

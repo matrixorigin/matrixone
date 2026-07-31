@@ -759,50 +759,126 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 }
 
 func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
+	return v.MarshalBinaryTo(buf)
+}
 
-	// write class
-	buf.WriteByte(uint8(v.class))
+func (v *Vector) MarshalBinarySize() (int, error) {
+	if v == nil || v.length < 0 {
+		return 0, moerr.NewInvalidInputNoCtx("invalid vector for marshal")
+	}
+	const maxWireBuffer = uint64(^uint32(0))
+	if uint64(v.length) > maxWireBuffer {
+		return 0, moerr.NewInvalidInputNoCtx(
+			"vector length exceeds marshal format",
+		)
+	}
+	typeSize := v.typ.TypeSize()
+	if typeSize < 0 {
+		return 0, moerr.NewInvalidInputNoCtx(
+			"vector type has invalid marshal size",
+		)
+	}
+	dataLength := uint64(typeSize)
+	if !v.IsConst() {
+		if v.length != 0 &&
+			dataLength > ^uint64(0)/uint64(v.length) {
+			return 0, moerr.NewInvalidInputNoCtx(
+				"vector data exceeds marshal format",
+			)
+		}
+		dataLength *= uint64(v.length)
+	} else if v.IsConstNull() {
+		dataLength = 0
+	}
+	areaLength := uint64(len(v.area))
+	nullLength := uint64(v.nsp.MarshalSize())
+	if dataLength > maxWireBuffer ||
+		areaLength > maxWireBuffer ||
+		nullLength > maxWireBuffer {
+		return 0, moerr.NewInvalidInputNoCtx(
+			"vector buffer exceeds marshal format",
+		)
+	}
+	if dataLength > uint64(len(v.data)) {
+		return 0, moerr.NewInvalidInputNoCtx(
+			"vector data is shorter than its marshal length",
+		)
+	}
+	total := uint64(1+types.TSize+4+4+4+4+1) +
+		dataLength + areaLength + nullLength
+	if total > uint64(^uint(0)>>1) {
+		return 0, moerr.NewInvalidInputNoCtx(
+			"vector marshal size exceeds platform limit",
+		)
+	}
+	return int(total), nil
+}
 
-	// write type
-	data := types.EncodeType(&v.typ)
-	buf.Write(data)
+func (v *Vector) MarshalBinaryTo(w io.Writer) error {
+	if w == nil {
+		return io.ErrClosedPipe
+	}
+	if _, err := v.MarshalBinarySize(); err != nil {
+		return err
+	}
+	if err := writeVectorMarshalBytes(w, []byte{uint8(v.class)}); err != nil {
+		return err
+	}
+	if err := writeVectorMarshalBytes(w, types.EncodeType(&v.typ)); err != nil {
+		return err
+	}
 
-	// write length
 	length := uint32(v.length)
-	buf.Write(types.EncodeUint32(&length))
+	if err := writeVectorMarshalBytes(w, types.EncodeUint32(&length)); err != nil {
+		return err
+	}
 
-	// write dataLen, data
 	dataLen := uint32(v.typ.TypeSize())
 	if !v.IsConst() {
 		dataLen *= uint32(v.length)
 	} else if v.IsConstNull() {
 		dataLen = 0
 	}
-	buf.Write(types.EncodeUint32(&dataLen))
+	if err := writeVectorMarshalBytes(w, types.EncodeUint32(&dataLen)); err != nil {
+		return err
+	}
 	if dataLen > 0 {
-		buf.Write(v.data[:dataLen])
+		if err := writeVectorMarshalBytes(w, v.data[:dataLen]); err != nil {
+			return err
+		}
 	}
 
-	// write areaLen, area
 	areaLen := uint32(len(v.area))
-	buf.Write(types.EncodeUint32(&areaLen))
+	if err := writeVectorMarshalBytes(w, types.EncodeUint32(&areaLen)); err != nil {
+		return err
+	}
 	if areaLen > 0 {
-		buf.Write(v.area)
+		if err := writeVectorMarshalBytes(w, v.area); err != nil {
+			return err
+		}
 	}
 
-	// write nspLen, nsp
-	nspData, err := v.nsp.Show()
+	nspLen := uint32(v.nsp.MarshalSize())
+	if err := writeVectorMarshalBytes(w, types.EncodeUint32(&nspLen)); err != nil {
+		return err
+	}
+	if nspLen > 0 {
+		if err := v.nsp.MarshalTo(w); err != nil {
+			return err
+		}
+	}
+
+	return writeVectorMarshalBytes(w, types.EncodeBool(&v.sorted))
+}
+
+func writeVectorMarshalBytes(w io.Writer, value []byte) error {
+	written, err := w.Write(value)
 	if err != nil {
 		return err
 	}
-	nspLen := uint32(len(nspData))
-	buf.Write(types.EncodeUint32(&nspLen))
-	if nspLen > 0 {
-		buf.Write(nspData)
+	if written != len(value) {
+		return io.ErrShortWrite
 	}
-
-	buf.Write(types.EncodeBool(&v.sorted))
-
 	return nil
 }
 

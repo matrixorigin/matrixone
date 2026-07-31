@@ -15,7 +15,9 @@
 package vector
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -1687,6 +1689,13 @@ func TestMarshalAndUnMarshal(t *testing.T) {
 	require.NoError(t, err)
 	data, err := v.MarshalBinary()
 	require.NoError(t, err)
+	size, err := v.MarshalBinarySize()
+	require.NoError(t, err)
+	require.Equal(t, len(data), size)
+	var streamed bytes.Buffer
+	require.NoError(t, v.MarshalBinaryTo(&streamed))
+	require.Equal(t, data, streamed.Bytes())
+	require.ErrorIs(t, v.MarshalBinaryTo(shortVectorMarshalWriter{}), io.ErrShortWrite)
 	w := NewVecFromReuse()
 	err = w.UnmarshalBinary(data)
 	require.NoError(t, err)
@@ -1699,6 +1708,29 @@ func TestMarshalAndUnMarshal(t *testing.T) {
 	v.Free(mp)
 	w.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+type shortVectorMarshalWriter struct{}
+
+func (shortVectorMarshalWriter) Write(value []byte) (int, error) {
+	return len(value) - 1, nil
+}
+
+func TestMarshalBinarySizeRejectsInvalidVector(t *testing.T) {
+	var nilVector *Vector
+	_, err := nilVector.MarshalBinarySize()
+	require.Error(t, err)
+
+	typ := types.T_int64.ToType()
+	typ.Size = -1
+	invalidType := NewVec(typ)
+	_, err = invalidType.MarshalBinarySize()
+	require.Error(t, err)
+
+	shortData := NewVec(types.T_int64.ToType())
+	shortData.SetLength(1)
+	_, err = shortData.MarshalBinarySize()
+	require.Error(t, err)
 }
 
 func TestUnmarshalBinaryAcceptsNullBitmapCoveragePastLength(t *testing.T) {

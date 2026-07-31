@@ -19,6 +19,7 @@ package nulls
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -370,6 +371,20 @@ func (nsp *Nulls) Show() ([]byte, error) {
 		return nil, nil
 	}
 	return nsp.np.Marshal(), nil
+}
+
+func (nsp *Nulls) MarshalSize() int {
+	if nsp == nil || nsp.np.EmptyByFlag() {
+		return 0
+	}
+	return nsp.np.MarshalSize()
+}
+
+func (nsp *Nulls) MarshalTo(w io.Writer) error {
+	if nsp == nil || nsp.np.EmptyByFlag() {
+		return nil
+	}
+	return nsp.np.MarshalTo(w)
 }
 
 // ShowV1 in version 1, bitmap is v1

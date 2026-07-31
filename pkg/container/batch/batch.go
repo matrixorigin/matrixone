@@ -112,50 +112,145 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 }
 
 func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, error) {
-	// reset the buffer if caller wants to.
 	if reset {
 		w.Reset()
 	}
+	if err := bat.MarshalBinaryTo(w); err != nil {
+		return nil, err
+	}
+	return w.Bytes(), nil
+}
 
-	// row count.
-	rl := int64(bat.rowCount)
-	w.Write(types.EncodeInt64(&rl))
-
-	// Vecs
-	l := int32(len(bat.Vecs))
-	w.Write(types.EncodeInt32(&l))
-	for i := 0; i < int(l); i++ {
-		var size uint32
-		offset := w.Len()
-		w.Write(types.EncodeUint32(&size))
-		err := bat.Vecs[i].MarshalBinaryWithBuffer(w)
-		if err != nil {
-			return nil, err
+func (bat *Batch) MarshalBinarySize() (int, error) {
+	if bat == nil {
+		return 0, moerr.NewInvalidInputNoCtx("invalid batch for marshal")
+	}
+	const fixedSize = uint64(8 + 4 + 4 + 4 + 4 + 4)
+	total := fixedSize
+	add := func(value uint64) bool {
+		if value > uint64(^uint(0)>>1)-total {
+			return false
 		}
-		size = uint32(w.Len() - offset - 4)
-		buf := w.Bytes()
-		copy(buf[offset:], types.EncodeUint32(&size))
+		total += value
+		return true
+	}
+	if uint64(len(bat.Vecs)) > uint64(^uint32(0)>>1) ||
+		uint64(len(bat.Attrs)) > uint64(^uint32(0)>>1) ||
+		uint64(len(bat.ExtraBuf)) > uint64(^uint32(0)>>1) {
+		return 0, moerr.NewInvalidInputNoCtx(
+			"batch field exceeds marshal format",
+		)
+	}
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			return 0, moerr.NewInvalidInputNoCtx(
+				"cannot marshal a nil batch vector",
+			)
+		}
+		size, err := vec.MarshalBinarySize()
+		if err != nil {
+			return 0, err
+		}
+		if uint64(size) > uint64(^uint32(0)) ||
+			!add(4+uint64(size)) {
+			return 0, moerr.NewInvalidInputNoCtx(
+				"batch vector exceeds marshal format",
+			)
+		}
+	}
+	for _, attr := range bat.Attrs {
+		if uint64(len(attr)) > uint64(^uint32(0)>>1) ||
+			!add(4+uint64(len(attr))) {
+			return 0, moerr.NewInvalidInputNoCtx(
+				"batch attribute exceeds marshal format",
+			)
+		}
+	}
+	if !add(uint64(len(bat.ExtraBuf))) {
+		return 0, moerr.NewInvalidInputNoCtx(
+			"batch marshal size exceeds platform limit",
+		)
+	}
+	return int(total), nil
+}
+
+func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
+	if bat == nil || w == nil {
+		return io.ErrClosedPipe
+	}
+	if _, err := bat.MarshalBinarySize(); err != nil {
+		return err
+	}
+	rl := int64(bat.rowCount)
+	if err := writeBatchMarshalBytes(w, types.EncodeInt64(&rl)); err != nil {
+		return err
 	}
 
-	// Attrs
+	l := int32(len(bat.Vecs))
+	if err := writeBatchMarshalBytes(w, types.EncodeInt32(&l)); err != nil {
+		return err
+	}
+	for i := 0; i < int(l); i++ {
+		size, err := bat.Vecs[i].MarshalBinarySize()
+		if err != nil {
+			return err
+		}
+		wireSize := uint32(size)
+		if err := writeBatchMarshalBytes(
+			w,
+			types.EncodeUint32(&wireSize),
+		); err != nil {
+			return err
+		}
+		if err := bat.Vecs[i].MarshalBinaryTo(w); err != nil {
+			return err
+		}
+	}
+
 	l = int32(len(bat.Attrs))
-	w.Write(types.EncodeInt32(&l))
+	if err := writeBatchMarshalBytes(w, types.EncodeInt32(&l)); err != nil {
+		return err
+	}
 	for i := 0; i < int(l); i++ {
 		size := int32(len(bat.Attrs[i]))
-		w.Write(types.EncodeInt32(&size))
-		n, _ := w.WriteString(bat.Attrs[i])
+		if err := writeBatchMarshalBytes(w, types.EncodeInt32(&size)); err != nil {
+			return err
+		}
+		n, err := io.WriteString(w, bat.Attrs[i])
+		if err != nil {
+			return err
+		}
 		if int32(n) != size {
-			panic("unexpected length for string")
+			return io.ErrShortWrite
 		}
 	}
 
-	// ExtraBuf
-	types.WriteSizeBytes(bat.ExtraBuf, w)
+	extraSize := int32(len(bat.ExtraBuf))
+	if err := writeBatchMarshalBytes(w, types.EncodeInt32(&extraSize)); err != nil {
+		return err
+	}
+	if err := writeBatchMarshalBytes(w, bat.ExtraBuf); err != nil {
+		return err
+	}
 
-	w.Write(types.EncodeInt32(&bat.Recursive))
-	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
+	if err := writeBatchMarshalBytes(
+		w,
+		types.EncodeInt32(&bat.Recursive),
+	); err != nil {
+		return err
+	}
+	return writeBatchMarshalBytes(w, types.EncodeInt32(&bat.ShuffleIDX))
+}
 
-	return w.Bytes(), nil
+func writeBatchMarshalBytes(w io.Writer, value []byte) error {
+	written, err := w.Write(value)
+	if err != nil {
+		return err
+	}
+	if written != len(value) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) (err error) {

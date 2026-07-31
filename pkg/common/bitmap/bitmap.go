@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding"
 	"fmt"
+	"io"
 	"math/bits"
 	"unsafe"
 
@@ -394,13 +395,41 @@ func (n *Bitmap) ToI64Array(out *[]int64) []int64 {
 
 func (n *Bitmap) Marshal() []byte {
 	var buf bytes.Buffer
-	u1 := uint64(n.len)
-	u2 := uint64(len(n.data) * 8)
-	buf.Write(types.EncodeInt64(&n.count))
-	buf.Write(types.EncodeUint64(&u1))
-	buf.Write(types.EncodeUint64(&u2))
-	buf.Write(types.EncodeSlice(n.data))
+	_ = n.MarshalTo(&buf)
 	return buf.Bytes()
+}
+
+func (n *Bitmap) MarshalSize() int {
+	if n == nil {
+		return 0
+	}
+	return 24 + len(n.data)*8
+}
+
+func (n *Bitmap) MarshalTo(w io.Writer) error {
+	if n == nil {
+		return nil
+	}
+	if w == nil {
+		return io.ErrClosedPipe
+	}
+	bitLength := uint64(n.len)
+	dataLength := uint64(len(n.data) * 8)
+	for _, value := range [][]byte{
+		types.EncodeInt64(&n.count),
+		types.EncodeUint64(&bitLength),
+		types.EncodeUint64(&dataLength),
+		types.EncodeSlice(n.data),
+	} {
+		written, err := w.Write(value)
+		if err != nil {
+			return err
+		}
+		if written != len(value) {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
 }
 
 // MarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.count replace it

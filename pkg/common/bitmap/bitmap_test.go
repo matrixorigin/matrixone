@@ -15,7 +15,9 @@
 package bitmap
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -30,6 +32,12 @@ func newBm(n int) *Bitmap {
 	var bm Bitmap
 	bm.InitWithSize(int64(n))
 	return &bm
+}
+
+type shortMarshalWriter struct{}
+
+func (shortMarshalWriter) Write(value []byte) (int, error) {
+	return len(value) - 1, nil
 }
 
 func TestNulls(t *testing.T) {
@@ -68,7 +76,13 @@ func TestNulls(t *testing.T) {
 	fmt.Printf("numbers: %v\n", np.Count())
 
 	nq := newBm(Rows)
-	nq.Unmarshal(np.Marshal())
+	encoded := np.Marshal()
+	var streamed bytes.Buffer
+	require.NoError(t, np.MarshalTo(&streamed))
+	require.Equal(t, encoded, streamed.Bytes())
+	require.Equal(t, len(encoded), np.MarshalSize())
+	require.ErrorIs(t, np.MarshalTo(shortMarshalWriter{}), io.ErrShortWrite)
+	nq.Unmarshal(encoded)
 
 	require.Equal(t, np.ToArray(), nq.ToArray())
 
