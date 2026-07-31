@@ -122,6 +122,14 @@ func (q *ClientRetirementQueue) Submit(retirement ClientRetirement) bool {
 func (q *ClientRetirementQueue) run() {
 	defer close(q.done)
 	for {
+		// Once shutdown is visible, do not let a ready backlog win another
+		// randomized select. At most the retirement already in progress may
+		// finish before done is closed and the pool becomes eligible to close.
+		select {
+		case <-q.ctx.Done():
+			return
+		default:
+		}
 		select {
 		case <-q.ctx.Done():
 			return

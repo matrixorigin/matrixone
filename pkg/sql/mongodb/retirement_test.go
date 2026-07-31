@@ -107,6 +107,57 @@ func (r *blockingRemoteRetirer) Retire(ctx context.Context, retirement ClientRet
 	}
 }
 
+func TestClientRetirementQueueLifecycleBoundaries(t *testing.T) {
+	var nilQueue *ClientRetirementQueue
+	require.False(t, nilQueue.Submit(ClientRetirement{}))
+	require.NoError(t, nilQueue.Close(nil))
+
+	queue := NewClientRetirementQueue(nil, nil, 0)
+	require.Equal(t, DefaultClientRetirementQueueCapacity, cap(queue.jobs))
+	require.NoError(t, queue.Close(nil))
+}
+
+type stubbornRemoteRetirer struct {
+	started chan struct{}
+	calls   chan ClientRetirement
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *stubbornRemoteRetirer) Retire(_ context.Context, retirement ClientRetirement) {
+	r.calls <- retirement
+	r.once.Do(func() { close(r.started) })
+	<-r.release
+}
+
+func TestClientRetirementQueueCloseRespectsCallerContext(t *testing.T) {
+	remote := &stubbornRemoteRetirer{
+		started: make(chan struct{}),
+		calls:   make(chan ClientRetirement, 2),
+		release: make(chan struct{}),
+	}
+	t.Cleanup(func() {
+		select {
+		case <-remote.release:
+		default:
+			close(remote.release)
+		}
+	})
+
+	queue := NewClientRetirementQueue(nil, remote, 2)
+	require.True(t, queue.Submit(ClientRetirement{}))
+	<-remote.started
+	require.True(t, queue.Submit(ClientRetirement{AccountID: 2}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, queue.Close(ctx), context.Canceled)
+
+	close(remote.release)
+	require.NoError(t, queue.Close(t.Context()))
+	require.Equal(t, 1, len(remote.calls), "shutdown must not drain the queued backlog")
+}
+
 func TestClientRetirementQueueIsAsynchronousAndBounded(t *testing.T) {
 	remote := &blockingRemoteRetirer{
 		started: make(chan ClientRetirement, 1),
