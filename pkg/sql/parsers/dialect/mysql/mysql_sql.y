@@ -11456,6 +11456,15 @@ subquery:
     {
         $$ = &tree.Subquery{Select: $1, Exists: false}
     }
+|   '(' TABLE table_name ')' %prec SUBQUERY_AS_EXPR
+    {
+        $$ = &tree.Subquery{
+            Select: &tree.ParenSelect{
+                Select: tree.NewSelect(makeSelectStarFromTable($3), nil, nil),
+            },
+            Exists: false,
+        }
+    }
 
 bit_expr:
     bit_expr '&' bit_expr %prec '&'

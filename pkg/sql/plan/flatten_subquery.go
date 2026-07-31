@@ -84,7 +84,9 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 
 	// Strip unnecessary subqueries which have no FROM clause
 	subNode := builder.qry.Nodes[subID]
-	if subNode.NodeType == plan.Node_PROJECT && builder.qry.Nodes[subNode.Children[0]].NodeType == plan.Node_VALUE_SCAN {
+	if subNode.NodeType == plan.Node_PROJECT &&
+		builder.qry.Nodes[subNode.Children[0]].NodeType == plan.Node_VALUE_SCAN &&
+		builder.qry.Nodes[subNode.Children[0]].TableDef == nil {
 		switch subquery.Typ {
 		case plan.SubqueryRef_SCALAR:
 			newProj, _ := decreaseDepth(subNode.ProjectList[0])

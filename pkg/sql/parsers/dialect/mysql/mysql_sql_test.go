@@ -83,6 +83,21 @@ func TestDropFunctionIfExists(t *testing.T) {
 	}
 }
 
+func TestQuantifiedTableSubqueryParse(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "select 1 where 1 = any (table tv)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	selectStmt := stmt.(*tree.Select)
+	where := selectStmt.Select.(*tree.SelectClause).Where
+	comparison := where.Expr.(*tree.ComparisonExpr)
+	subquery := comparison.Right.(*tree.Subquery)
+	parenSelect := subquery.Select.(*tree.ParenSelect)
+	rewritten := parenSelect.Select
+
+	require.Equal(t, "select * from tv", tree.String(rewritten, dialect.MYSQL))
+}
+
 func TestSQLModeParserModes(t *testing.T) {
 	t.Run("ansi quotes changes double quoted token from string to identifier", func(t *testing.T) {
 		stmt, err := ParseOneWithSQLMode(context.Background(), `select "abc"`, 1, "")

@@ -367,6 +367,20 @@ DROP TABLE IF EXISTS corr_any_t2;
 DROP TABLE IF EXISTS corr_any_t3;
 
 -- @case
+-- @desc:test quantified subqueries with VALUES ROW and TABLE sources
+-- @label:bvt
+DROP TABLE IF EXISTS mysql_compat_model10c_t;
+DROP TABLE IF EXISTS mysql_compat_model10c_tv;
+CREATE TABLE mysql_compat_model10c_t (id int primary key, v int);
+CREATE TABLE mysql_compat_model10c_tv (v int);
+INSERT INTO mysql_compat_model10c_t VALUES (1,10),(2,20),(3,30);
+INSERT INTO mysql_compat_model10c_tv VALUES (20),(30);
+SELECT id FROM mysql_compat_model10c_t WHERE v > ANY (VALUES ROW(15), ROW(25)) ORDER BY id;
+SELECT id FROM mysql_compat_model10c_t WHERE v = ANY (TABLE mysql_compat_model10c_tv) ORDER BY id;
+DROP TABLE IF EXISTS mysql_compat_model10c_t;
+DROP TABLE IF EXISTS mysql_compat_model10c_tv;
+
+-- @case
 -- @desc:test nested correlated ANY/ALL/NOT IN quantifier semantics with NULL and empty set
 -- @label:bvt
 DROP TABLE IF EXISTS corr_quant_outer;
