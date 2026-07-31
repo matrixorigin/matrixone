@@ -832,6 +832,8 @@ mo_catalog  ¦  mo_iceberg_tables  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_increment_columns  ¦    ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_indexes  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_locks  ¦  v  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_mongodb_connections  ¦  r  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_mongodb_tables  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_mysql_compatibility_mode  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_partition_metadata  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_partition_tables  ¦  r  ¦  accountadmin  𝄀

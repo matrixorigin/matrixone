@@ -42,6 +42,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bindingByTable: make(map[string]*Binding),
 		bindingByCol:   make(map[string]*Binding),
 		outerUsingCols: make(map[string][]string),
+		sqlUdfArgs:     make(map[string]*plan.Expr),
 		parent:         parent,
 		boundCtes:      make(map[string]*CTERef),
 		boundViews:     make(map[[2]string]*tree.CreateView),

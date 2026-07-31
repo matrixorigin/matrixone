@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -69,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -421,6 +423,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 				},
 			},
 		)
+		op.ProjectList = t.ProjectList
+		op.SetInfo(&info)
+		return op
+	case vm.MongoScan:
+		t := sourceOp.(*mongoscan.MongoScan)
+		op := mongoscan.NewArgument().WithScan(proto.Clone(t.Scan).(*plan.MongoScan))
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -1587,6 +1595,15 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	arg.Aggs = aggregationExpressions
 	arg.Ts = node.GroupBy[0]
 	arg.PartitionBy = node.TimeWindowPartitionBy
+	arg.GapFill = node.GapFillMode == plan.Node_GAP_FILL_PARTITION
+	// A tumbling window normally uses the interval fast path (EndExpr != nil),
+	// which forwards only groups already produced by the child aggregate. That
+	// path cannot synthesize absent buckets. GAPFILL therefore uses the general
+	// sliding-window state machine with a slide equal to the interval; its
+	// explicit left/right bounds still produce the same tumbling windows.
+	if arg.GapFill && node.Sliding == nil {
+		arg.Sliding = arg.Interval
+	}
 	arg.WStart = wStart
 	arg.WEnd = wEnd
 	// The operator evaluates the window-end expression against a batch holding
@@ -1594,7 +1611,7 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	// planner leaves it pointing at the timestamp's GROUP BY position, which is
 	// 0 only while the window key is the sole grouping key. Copy before
 	// rewriting: the plan may be reused.
-	if node.WEnd != nil {
+	if node.WEnd != nil && !arg.GapFill {
 		endExpr := plan2.DeepCopyExpr(node.WEnd)
 		resetTimeWindowTsColRef(endExpr)
 		arg.EndExpr = endExpr
