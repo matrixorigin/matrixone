@@ -4861,21 +4861,26 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 }
 
 func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	result.UseOptFunctionParamFrame(len(ivecs))
 	rs := vector.MustFunctionResult[uint64](result)
-
-	fs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
-	for i := range ivecs {
-		fs[i] = vector.GenerateFunctionFixedTypeParameter[T](ivecs[i])
+	first, err := vector.OptGetParamFromWrapper[T](rs, 0, ivecs[0])
+	if err != nil {
+		return err
 	}
 
-	nums := make([]uint64, length)
+	nums := vector.MustFixedColNoTypeCheck[uint64](rs.GetResultVector())
+	clear(nums[:length])
 
 	for j := 1; j < len(ivecs); j++ {
+		candidate, err := vector.OptGetParamFromWrapper[T](rs, j, ivecs[j])
+		if err != nil {
+			return err
+		}
 
 		for i := uint64(0); i < uint64(length); i++ {
 
-			v1, null1 := fs[0].GetValue(i)
-			v2, null2 := fs[j].GetValue(i)
+			v1, null1 := first.GetValue(i)
+			v2, null2 := candidate.GetValue(i)
 
 			if (nums[i] != 0) || (null1 || null2) {
 				continue
@@ -4887,32 +4892,23 @@ func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 
 		}
 	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.Append(nums[i], false); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
 func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	result.UseOptFunctionParamFrame(len(ivecs))
 	rs := vector.MustFunctionResult[uint64](result)
-
-	fs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
-	for i := range ivecs {
-		fs[i] = vector.GenerateFunctionStrParameter(ivecs[i])
-	}
-
-	nums := make([]uint64, length)
+	first := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
+	nums := vector.MustFixedColNoTypeCheck[uint64](rs.GetResultVector())
+	clear(nums[:length])
 
 	for j := 1; j < len(ivecs); j++ {
+		candidate := vector.OptGetBytesParamFromWrapper(rs, j, ivecs[j])
 
 		for i := uint64(0); i < uint64(length); i++ {
 
-			v1, null1 := fs[0].GetStrValue(i)
-			v2, null2 := fs[j].GetStrValue(i)
+			v1, null1 := first.GetStrValue(i)
+			v2, null2 := candidate.GetStrValue(i)
 
 			if (nums[i] != 0) || (null1 || null2) {
 				continue
@@ -4924,13 +4920,6 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 
 		}
 	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.Append(nums[i], false); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
