@@ -142,3 +142,17 @@ SELECT SECOND(':34:56') AS leading_colon_with_seconds_second,
        SECOND('12::56') AS empty_minute_second,
        SECOND('12:34:56:') AS fourth_field_colon_second,
        SECOND('12-.abc') AS compact_prefix_before_fraction_second;
+
+-- Context-aware prefix consumption must agree across all string types.
+CREATE TABLE time_extract_prefix_boundaries(v VARCHAR(32), c CHAR(32), t TEXT);
+INSERT INTO time_extract_prefix_boundaries VALUES
+  ('12-34', '12-34', '12-34'),
+  ('1234-56', '1234-56', '1234-56'),
+  ('1 02', '1 02', '1 02'),
+  ('1 02:', '1 02:', '1 02:'),
+  ('1 02-34', '1 02-34', '1 02-34'),
+  ('2024-12-20 12', '2024-12-20 12', '2024-12-20 12'),
+  ('2024-12-20 12:', '2024-12-20 12:', '2024-12-20 12:'),
+  ('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56');
+SELECT SECOND(v), SECOND(c), SECOND(t) FROM time_extract_prefix_boundaries;
+DROP TABLE time_extract_prefix_boundaries;

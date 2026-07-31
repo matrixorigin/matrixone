@@ -4374,6 +4374,50 @@ func TestStringTimeExtractMySQLPartialPrefixBoundaries(t *testing.T) {
 	}
 }
 
+func TestStringTimeExtractContextAwarePrefixBoundaries(t *testing.T) {
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), []string{
+				"12-34", "1234-56",
+				"1 02", "1 02:", "1 02-34",
+				"2024-12-20 12", "2024-12-20 12:", "2024-12-20 12::56",
+			}, nil)
+
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{
+					name: "hour",
+					fn:   StringToHour,
+					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+						[]uint32{0, 0, 26, 26, 26, 12, 12, 12}, nil),
+				},
+				{
+					name: "minute",
+					fn:   StringToMinute,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 12, 0, 0, 0, 0, 0, 56}, nil),
+				},
+				{
+					name: "second",
+					fn:   StringToSecond,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{12, 34, 0, 0, 0, 0, 0, 0}, nil),
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
 func TestStringTimeExtractWhitespace(t *testing.T) {
 	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text} {
 		t.Run(typ.String(), func(t *testing.T) {

@@ -157,3 +157,24 @@ MINUTE('12:34:56:') AS fourth_field_colon_minute,
 MINUTE('12-.abc') AS compact_prefix_before_fraction_minute;
 ➤ leading_colon_with_seconds_minute[-6,8,0]  ¦  trailing_second_colon_minute[-6,8,0]  ¦  empty_minute_minute[-6,8,0]  ¦  fourth_field_colon_minute[-6,8,0]  ¦  compact_prefix_before_fraction_minute[-6,8,0]  𝄀
 34  ¦  34  ¦  0  ¦  34  ¦  0
+CREATE TABLE time_extract_prefix_boundaries(v VARCHAR(32), c CHAR(32), t TEXT);
+INSERT INTO time_extract_prefix_boundaries VALUES
+('12-34', '12-34', '12-34'),
+('1234-56', '1234-56', '1234-56'),
+('1 02', '1 02', '1 02'),
+('1 02:', '1 02:', '1 02:'),
+('1 02-34', '1 02-34', '1 02-34'),
+('2024-12-20 12', '2024-12-20 12', '2024-12-20 12'),
+('2024-12-20 12:', '2024-12-20 12:', '2024-12-20 12:'),
+('2024-12-20 12::56', '2024-12-20 12::56', '2024-12-20 12::56');
+SELECT MINUTE(v), MINUTE(c), MINUTE(t) FROM time_extract_prefix_boundaries;
+➤ MINUTE(v)[-6,8,0]  ¦  MINUTE(c)[-6,8,0]  ¦  MINUTE(t)[-6,8,0]  𝄀
+0  ¦  0  ¦  0  𝄀
+12  ¦  12  ¦  12  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+56  ¦  56  ¦  56
+DROP TABLE time_extract_prefix_boundaries;

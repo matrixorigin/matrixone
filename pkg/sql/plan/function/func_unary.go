@@ -4911,28 +4911,45 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 		pos++
 	}
 	hour, _, ok := mysqlVariableDigitsForExtract(str, &pos)
-	if !ok || pos >= len(str) || str[pos] != ':' {
-		return result
-	}
-	pos++
-	minute, _, ok := mysqlVariableDigitsForExtract(str, &pos)
 	if !ok {
 		return result
 	}
+	minute := uint64(0)
 	second := uint64(0)
-	// MySQL accepts a DATETIME whose clock ends after the minute and supplies
-	// the omitted seconds as zero.
 	if pos < len(str) && str[pos] == ':' {
 		pos++
-		if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
-			second, _, ok = mysqlVariableDigitsForExtract(str, &pos)
+		if pos < len(str) && str[pos] == ':' {
+			// In a separated DATETIME, an empty minute field leaves the
+			// following numeric field as the minute. The already consumed hour
+			// remains intact (for example, "... 12::56" is 12:56:00).
+			pos++
+			if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+				minute, _, ok = mysqlVariableDigitsForExtract(str, &pos)
+				if !ok {
+					return result
+				}
+			}
+		} else if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+			minute, _, ok = mysqlVariableDigitsForExtract(str, &pos)
 			if !ok {
 				return result
 			}
+			// MySQL accepts a DATETIME whose clock ends after the minute and
+			// supplies the omitted seconds as zero.
+			if pos < len(str) && str[pos] == ':' {
+				pos++
+				if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+					second, _, ok = mysqlVariableDigitsForExtract(str, &pos)
+					if !ok {
+						return result
+					}
+				}
+			}
 		}
-	} else if pos < len(str) {
-		return result
 	}
+	// A complete date followed by an hour or a trailing field separator is a
+	// valid DATETIME prefix. Do not fall back to compact TIME coercion after
+	// this branch has consumed the date and hour.
 	if !mysqlDatetimeDateForExtract(year, month, day) || hour > 23 || minute > 59 || second > 59 {
 		return result
 	}
@@ -5020,7 +5037,11 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 		}
 	}
 
-	hour, minute, second, ok := mysqlClockFieldsForExtract(prefix)
+	parseClock := mysqlClockFieldsForExtract
+	if hasDay {
+		parseClock = mysqlDayClockFieldsForExtract
+	}
+	hour, minute, second, ok := parseClock(prefix)
 	if !ok {
 		return 0, 0, 0, false
 	}
@@ -5051,7 +5072,7 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 		// A punctuation-only suffix terminates a valid compact TIME prefix. This
 		// keeps inputs such as "12-.abc" as 00:00:12 without turning a
 		// date-looking value such as "2024-12-20" into a compact TIME here.
-		if len(hourText) == 0 || !mysqlCompactTimePrefixBoundary(str[pos:]) {
+		if len(hourText) == 0 || !mysqlCompactTimePrefixBoundary(hourText, str[pos:]) {
 			return 0, 0, 0, false
 		}
 		switch len(hourText) {
@@ -5128,16 +5149,61 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 	return hour, uint8(minute), uint8(second), true
 }
 
-func mysqlCompactTimePrefixBoundary(str string) bool {
-	if len(str) == 0 {
+func mysqlCompactTimePrefixBoundary(prefix, suffix string) bool {
+	// Once compact TIME has consumed its leading digits, later punctuation and
+	// digits cannot reinterpret that field. Preserve the sole exception for a
+	// separated date shape, which is handled by the date branch (and
+	// therefore still validates its calendar fields).
+	if len(prefix) != 4 || len(suffix) < 3 || !mysqlDateSeparatorForExtract(suffix[0]) {
 		return true
 	}
-	for i := 0; i < len(str); i++ {
-		if str[i] >= '0' && str[i] <= '9' {
-			return false
-		}
+	pos := 1
+	_, _, ok := mysqlVariableDigitsForExtract(suffix, &pos)
+	return !ok || pos == len(suffix) || suffix[pos] != suffix[0]
+}
+
+func mysqlDayClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
+	pos := 0
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
 	}
-	return true
+	if pos == 0 {
+		return 0, 0, 0, false
+	}
+	hour := mysqlClampedDigitsForExtract(str[:pos], 839)
+	if pos == len(str) || str[pos] != ':' {
+		return hour, 0, 0, true
+	}
+
+	pos++
+	minuteStart := pos
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	if minuteStart == pos {
+		return hour, 0, 0, true
+	}
+	minute := mysqlClampedDigitsForExtract(str[minuteStart:pos], 60)
+	if minute >= 60 {
+		return 0, 0, 0, false
+	}
+	if pos == len(str) || str[pos] != ':' {
+		return hour, uint8(minute), 0, true
+	}
+
+	pos++
+	secondStart := pos
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	if secondStart == pos {
+		return hour, uint8(minute), 0, true
+	}
+	second := mysqlClampedDigitsForExtract(str[secondStart:pos], 60)
+	if second >= 60 {
+		return 0, 0, 0, false
+	}
+	return hour, uint8(minute), uint8(second), true
 }
 
 func mysqlClampedDigitsForExtract(str string, limit uint64) uint64 {
