@@ -77,6 +77,9 @@ JOIN multi_update_alias_target b ON a.id = b.id
 SET
 a.x = 1,
 b.y = 2;
+SELECT ROW_COUNT();
+row_count()
+4
 SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
 id    x    y
 1    1    2

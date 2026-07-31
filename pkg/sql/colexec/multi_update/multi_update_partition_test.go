@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,10 +49,58 @@ func TestPartitionMultiUpdateString(t *testing.T) {
 	require.Equal(t, "MultiUpdate: partition_multi_update", buf.String())
 }
 
+func TestBuildPartitionUpdateTargetsKeepsPhysicalTargetsIndependent(t *testing.T) {
+	contexts := []*MultiUpdateCtx{
+		{
+			ObjRef:             &plan.ObjectRef{},
+			TableDef:           &plan.TableDef{TblId: 10, Name: "plain"},
+			TargetUpdateCtxIdx: 0,
+		},
+		{
+			ObjRef: &plan.ObjectRef{},
+			TableDef: &plan.TableDef{
+				TblId:       20,
+				Name:        "partitioned",
+				FeatureFlag: features.Partitioned,
+			},
+			TargetUpdateCtxIdx: 1,
+		},
+		{
+			ObjRef: &plan.ObjectRef{},
+			TableDef: &plan.TableDef{
+				TblId:       21,
+				Name:        "partition_index",
+				FeatureFlag: features.IndexTable,
+			},
+			TargetUpdateCtxIdx: 1,
+		},
+	}
+
+	targets := buildPartitionUpdateTargets(contexts)
+
+	require.Len(t, targets, 2)
+	require.Equal(t, uint64(10), targets[0].tableID)
+	require.Len(t, targets[0].contexts, 1)
+	require.Equal(t, uint64(20), targets[1].tableID)
+	require.Len(t, targets[1].contexts, 2)
+	require.Equal(t, 0, targets[1].contexts[1].TargetUpdateCtxIdx)
+	require.NotSame(t, contexts[1].TableDef, targets[1].contexts[0].TableDef)
+	require.NotSame(t, contexts[1], targets[1].contexts[0])
+}
+
+func TestPartitionWriterIDsSeparateAliasesOfSamePhysicalTable(t *testing.T) {
+	first := &partitionUpdateTarget{writerIDs: make(map[uint64]uint64)}
+	second := &partitionUpdateTarget{writerIDs: make(map[uint64]uint64)}
+	op := &PartitionMultiUpdate{}
+
+	firstID := op.writerID(first, 100)
+	require.Equal(t, firstID, op.writerID(first, 100))
+	require.NotEqual(t, firstID, op.writerID(second, 100))
+}
+
 func TestNewPartitionMultiUpdateFrom(t *testing.T) {
 	ps := &PartitionMultiUpdate{
-		raw:     &MultiUpdate{RejectZeroTemporal: true},
-		tableID: 1,
+		raw: &MultiUpdate{RejectZeroTemporal: true},
 	}
 	op := NewPartitionMultiUpdateFrom(ps)
 	require.Equal(t, ps.raw.MultiUpdateCtx, op.(*PartitionMultiUpdate).raw.MultiUpdateCtx)
@@ -59,7 +108,6 @@ func TestNewPartitionMultiUpdateFrom(t *testing.T) {
 	require.Equal(t, ps.raw.IsOnduplicateKeyUpdate, op.(*PartitionMultiUpdate).raw.IsOnduplicateKeyUpdate)
 	require.Equal(t, ps.raw.Engine, op.(*PartitionMultiUpdate).raw.Engine)
 	require.Equal(t, ps.raw.RejectZeroTemporal, op.(*PartitionMultiUpdate).raw.RejectZeroTemporal)
-	require.Equal(t, ps.tableID, op.(*PartitionMultiUpdate).tableID)
 }
 
 func TestPartitionMultiUpdateSetRejectZeroTemporalUpdatesWriters(t *testing.T) {

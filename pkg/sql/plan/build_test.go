@@ -37,6 +37,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -2598,6 +2599,29 @@ func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
 				(previous.TableId == current.TableId &&
 					previous.PrimaryColIdxInBat <= current.PrimaryColIdxInBat),
 		)
+	}
+}
+
+func TestPartitionedMultiTargetUpdateUsesModernPlan(t *testing.T) {
+	for _, sql := range []string{
+		"UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey " +
+			"SET n.n_name = n2.n_name, n2.n_comment = n.n_comment",
+		"UPDATE nation2 n2 JOIN nation n ON n.n_nationkey = n2.n_nationkey " +
+			"SET n2.n_comment = n.n_comment, n.n_name = n2.n_name",
+	} {
+		mock := NewMockOptimizer(true)
+		mock.ctxt.tables["nation"].FeatureFlag |= features.Partitioned
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err)
+
+		multiUpdates := 0
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_MULTI_UPDATE {
+				multiUpdates++
+				require.Len(t, node.UpdateCtxList, 2)
+			}
+		}
+		require.Equal(t, 1, multiUpdates)
 	}
 }
 

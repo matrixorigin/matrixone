@@ -15,9 +15,10 @@
 package multi_update
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -107,7 +108,9 @@ type container struct {
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
 
-	seenTargetRows map[uint64]map[types.Rowid]struct{}
+	seenTargetRows map[uint64]*hashmap.StrHashMap
+	seenRowsGrant  int64
+	seenRowsRSC    rscthrottler.RSCThrottler
 }
 
 type MultiUpdateCtx struct {
@@ -126,6 +129,9 @@ type MultiUpdateCtx struct {
 	// row_number() partition for every updated target table.
 	DedupByTargetRowID bool
 	TargetUpdateCtxIdx int
+	// TargetTableID stays logical when a partition wrapper replaces TableDef
+	// with a physical partition definition.
+	TargetTableID uint64
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -168,8 +174,7 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	if update.ctr.s3Writer != nil {
 		update.ctr.s3Writer.reset(proc)
 	}
-	clear(update.ctr.seenTargetRows)
-
+	update.freeSeenTargetRows()
 	update.ctr.state = vm.Build
 }
 
@@ -193,9 +198,22 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 		update.ctr.s3Writer.free(proc)
 		update.ctr.s3Writer = nil
 	}
+	update.freeSeenTargetRows()
 
 	update.ctr.updateCtxInfos = nil
 	update.ctr.sources = nil
+}
+
+func (update *MultiUpdate) freeSeenTargetRows() {
+	if update.ctr.seenRowsGrant > 0 {
+		update.ctr.seenRowsRSC.Release(update.ctr.seenRowsGrant)
+		update.ctr.seenRowsGrant = 0
+	}
+	update.ctr.seenRowsRSC = nil
+	for _, seen := range update.ctr.seenTargetRows {
+		seen.Free()
+	}
+	update.ctr.seenTargetRows = nil
 }
 
 func (update *MultiUpdate) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
@@ -113,9 +114,11 @@ type s3WriterDelegate struct {
 	batchSize      uint64
 	flushThreshold uint64
 
-	checkSizeCols  []int
-	buf            bytes.Buffer
-	seenTargetRows map[uint64]map[types.Rowid]struct{}
+	checkSizeCols   []int
+	buf             bytes.Buffer
+	addAffectedRows func(uint64)
+	seenTargetRows  map[uint64]*hashmap.StrHashMap
+	admitSeenGrowth func(int64) error
 
 	memController struct {
 		grantedSize int64
@@ -146,7 +149,9 @@ func newS3Writer(
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		isRemote:            update.IsRemote,
 		rejectZeroTemporal:  update.RejectZeroTemporal,
-		seenTargetRows:      make(map[uint64]map[types.Rowid]struct{}),
+		addAffectedRows:     update.addAffectedRowsFunc,
+		seenTargetRows:      update.ctr.seenTargetRows,
+		admitSeenGrowth:     update.admitSeenTargetRowsGrowth,
 	}
 	for i := range writer.insertFreeLists {
 		writer.insertFreeLists[i] = containers.NewBatchFreeList(nil, nil, true)
@@ -277,6 +282,7 @@ func (writer *s3WriterDelegate) append(
 	}
 
 	mp := proc.Mp()
+	seenSizeBefore := writer.seenTargetRowsSize()
 	targetBatches := make(map[int]*batch.Batch)
 	defer func() {
 		for _, targetBatch := range targetBatches {
@@ -293,18 +299,24 @@ func (writer *s3WriterDelegate) append(
 		}
 		targetBatch, ok := targetBatches[targetIdx]
 		if !ok {
-			targetBatch, _, err = filterTargetRows(
+			var duplicateRows uint64
+			targetBatch, _, duplicateRows, err = filterTargetRows(
 				proc,
 				writer.updateCtxs[targetIdx],
 				inBatch,
-				writer.seenTargetRows,
+				writer.seenTargetRows[targetTableID(writer.updateCtxs[targetIdx])],
 			)
 			if err != nil {
 				return err
 			}
+			writer.addAffectedRows(duplicateRows)
 			targetBatches[targetIdx] = targetBatch
 		}
 		contextBatches[i] = targetBatch
+	}
+	seenIncrement := writer.seenTargetRowsSize() - seenSizeBefore
+	if err = writer.admitSeenGrowth(seenIncrement); err != nil {
+		return err
 	}
 
 	// Route insert columns directly to per-table sinkers (no clone).
@@ -455,6 +467,14 @@ func (writer *s3WriterDelegate) append(
 	writer.memController.grantedSize += int64(increment)
 
 	return
+}
+
+func (writer *s3WriterDelegate) seenTargetRowsSize() int64 {
+	var size int64
+	for _, seen := range writer.seenTargetRows {
+		size += seen.Size()
+	}
+	return size
 }
 
 func checkMainTableNotNull(proc *process.Process, updateCtx *MultiUpdateCtx, bat *batch.Batch) error {
@@ -886,7 +906,6 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 		writer.outputBat.CleanOnlyData()
 	}
 
-	clear(writer.seenTargetRows)
 	writer.buf.Reset()
 	return
 }
