@@ -474,6 +474,7 @@ var (
 		CondTaskID:        {},
 		CondTaskRunner:    {},
 		CondTaskStatus:    {},
+		CondTaskExecutor:  {},
 		CondTaskType:      {},
 		CondAccountID:     {},
 		CondAccount:       {},

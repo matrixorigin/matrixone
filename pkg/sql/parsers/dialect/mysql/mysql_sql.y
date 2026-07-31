@@ -239,7 +239,7 @@ func sqlTaskInt64(v any) int64 {
     ifNotExists bool
     defaultOptional bool
     sourceOptional bool
-    connectorOptional bool
+
     fullOpt bool
     boolVal bool
     int64Val int64

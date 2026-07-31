@@ -563,6 +563,7 @@ message Instruction {
   Shuffle shuffle = 34;
   Merge merge = 35;
   reserved 36; // former stream_scan
+  reserved "stream_scan";
   PreInsertSecondaryIndex pre_insert_secondary_index = 37;
   SampleFunc sample_func = 38;
   FuzzyFilter fuzzy_filter = 39;

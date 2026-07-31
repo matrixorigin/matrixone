@@ -1049,6 +1049,10 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 
 func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restartClaim bool) (bool, error) {
 	t := dt.task
+	expectedStatus := t.TaskStatus
+	if restartClaim {
+		expectedStatus = task.TaskStatus_RestartRequested
+	}
 	t.TaskRunner = r.runnerID
 	t.TaskStatus = task.TaskStatus_Running
 	nowTime := time.Now()
@@ -1065,14 +1069,12 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restar
 	t.Details = cloneDaemonTaskDetails(t.Details)
 	t.Details.Error = ""
 
-	// When update the daemon task, add the condition that last heartbeat of
-	// the task must be timeout or be null, which means that other runners does
-	// NOT try to start this task.
+	// Claim only the state that was observed by the dispatcher, with a stale or
+	// null heartbeat. The status fence prevents an old start snapshot from
+	// overwriting a concurrent pause, cancel, or restart request.
 	conditions := []Condition{
+		WithTaskStatusCond(expectedStatus),
 		WithLastHeartbeat(LE, nowTime.UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
-	}
-	if restartClaim {
-		conditions = append(conditions, WithTaskStatusCond(task.TaskStatus_RestartRequested))
 	}
 	c, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{t}, conditions...)
 	if err != nil {

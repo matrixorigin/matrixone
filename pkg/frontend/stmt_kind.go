@@ -113,7 +113,6 @@ func planChangesCatalog(queryPlan *plan.Plan) bool {
 		plan.DataDefinition_LOCK_TABLES,
 		plan.DataDefinition_UNLOCK_TABLES,
 		plan.DataDefinition_SHOW_SEQUENCES,
-		plan.DataDefinition_SHOW_CONNECTORS,
 		plan.DataDefinition_SHOW_UPGRADE:
 		return false
 	default:

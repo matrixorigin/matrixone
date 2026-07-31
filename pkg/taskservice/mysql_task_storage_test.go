@@ -1405,6 +1405,11 @@ func TestBuildLimitAndOrderByClause(t *testing.T) {
 	c = newConditions(WithTaskStatusCond(task.TaskStatus_Created))
 	require.Equal(t, "", buildLimitClause(c))
 	require.Equal(t, " order by task_id", buildOrderByClause(c))
+
+	clause := buildDaemonTaskWhereClause(newConditions(
+		WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
+	))
+	require.Contains(t, clause, "task_metadata_executor=7")
 }
 
 func TestRunAddDaemonTaskBranches(t *testing.T) {

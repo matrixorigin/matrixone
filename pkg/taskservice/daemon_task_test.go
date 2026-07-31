@@ -1122,6 +1122,27 @@ func TestRestartStartClaimDoesNotOverwriteSupersedingControlRequest(t *testing.T
 		WithRunnerFetchInterval(time.Millisecond))
 }
 
+func TestStartClaimDoesNotOverwriteSupersedingControlRequest(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+	dt.Metadata.ID = "start-claim-status-cas"
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	current := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Len(t, current, 1)
+	current[0].TaskStatus = task.TaskStatus_CancelRequested
+	mustUpdateTestDaemonTask(t, store, 1, current)
+
+	claimed, err := r.startDaemonTask(context.Background(), &daemonTask{task: dt}, false)
+	require.NoError(t, err)
+	assert.False(t, claimed)
+
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Len(t, got, 1)
+	assert.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
+}
+
 func TestRestartStartClaimErrorPreservesSupersedingControlRequest(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
 	baseService := r.service

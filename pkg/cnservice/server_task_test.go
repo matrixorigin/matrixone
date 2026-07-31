@@ -19,12 +19,14 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -187,8 +189,32 @@ func TestStopTaskStopsRunnerAfterHolderCloseFailure(t *testing.T) {
 var _ taskservice.TaskService = new(testTS)
 
 type testTS struct {
-	cronTasks []task.TaskMetadata
-	cronExprs []string
+	cronTasks        []task.TaskMetadata
+	cronExprs        []string
+	queryDaemonTask  func(context.Context, ...taskservice.Condition) ([]task.DaemonTask, error)
+	updateDaemonTask func(context.Context, []task.DaemonTask, ...taskservice.Condition) (int, error)
+}
+
+type observingTaskService struct {
+	taskservice.TaskService
+	canceled chan task.DaemonTask
+}
+
+func (s *observingTaskService) UpdateDaemonTask(
+	ctx context.Context,
+	tasks []task.DaemonTask,
+	conds ...taskservice.Condition,
+) (int, error) {
+	updated, err := s.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
+	if err != nil || updated == 0 {
+		return updated, err
+	}
+	for _, daemonTask := range tasks {
+		if daemonTask.TaskStatus == task.TaskStatus_Canceled {
+			s.canceled <- daemonTask
+		}
+	}
+	return updated, nil
 }
 
 func (ts *testTS) Close() error {
@@ -243,13 +269,17 @@ func (ts *testTS) CreateDaemonTask(ctx context.Context, value task.TaskMetadata,
 }
 
 func (ts *testTS) QueryDaemonTask(ctx context.Context, conds ...taskservice.Condition) ([]task.DaemonTask, error) {
-	//TODO implement me
-	panic("implement me")
+	if ts.queryDaemonTask == nil {
+		panic("unexpected QueryDaemonTask call")
+	}
+	return ts.queryDaemonTask(ctx, conds...)
 }
 
 func (ts *testTS) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, cond ...taskservice.Condition) (int, error) {
-	//TODO implement me
-	panic("implement me")
+	if ts.updateDaemonTask == nil {
+		panic("unexpected UpdateDaemonTask call")
+	}
+	return ts.updateDaemonTask(ctx, tasks, cond...)
 }
 
 func (ts *testTS) HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask) error {
@@ -336,9 +366,200 @@ func Test_registerExecutorsLocked(t *testing.T) {
 	}
 
 	sv.registerExecutorsLocked()
+	require.NotNil(t, run.GetExecutor(retiredKafkaSinkTaskCode))
 	require.NotNil(t, run.GetExecutor(task.TaskCode_DataBranchLineageGC))
 	require.Len(t, ts.cronTasks, 1)
 	assert.Equal(t, task.TaskCode_DataBranchLineageGC, ts.cronTasks[0].Executor)
 	assert.Equal(t, "data_branch_lineage_gc", ts.cronTasks[0].ID)
 	assert.Equal(t, "0 */5 * * * *", ts.cronExprs[0])
+}
+
+func TestRetiredKafkaSinkTaskExecutor(t *testing.T) {
+	t.Run("retires owned running task", func(t *testing.T) {
+		// Field 10 was the Connector oneof. A new binary preserves it as an
+		// unknown field while leaving the current oneof unset.
+		legacyDetails := &task.Details{}
+		require.NoError(t, legacyDetails.Unmarshal(
+			[]byte{0x52, 0x06, 0x0a, 0x04, 'd', 'b', '.', 't'},
+		))
+		require.Nil(t, legacyDetails.Details)
+		require.NotEmpty(t, legacyDetails.XXX_unrecognized)
+		legacyWire := append([]byte(nil), legacyDetails.XXX_unrecognized...)
+
+		current := task.DaemonTask{
+			ID: 7,
+			Metadata: task.TaskMetadata{
+				Executor: retiredKafkaSinkTaskCode,
+			},
+			TaskStatus: task.TaskStatus_Running,
+			TaskRunner: "cn-1",
+			Details:    legacyDetails,
+		}
+		ts := &testTS{
+			queryDaemonTask: func(context.Context, ...taskservice.Condition) ([]task.DaemonTask, error) {
+				return []task.DaemonTask{current}, nil
+			},
+			updateDaemonTask: func(_ context.Context, tasks []task.DaemonTask, conds ...taskservice.Condition) (int, error) {
+				require.Len(t, tasks, 1)
+				require.Len(t, conds, 4)
+				updated := tasks[0]
+				require.Equal(t, task.TaskStatus_Canceled, updated.TaskStatus)
+				require.Equal(t, "cn-1", updated.TaskRunner)
+				require.False(t, updated.UpdateAt.IsZero())
+				require.Equal(t, updated.UpdateAt, updated.EndAt)
+				require.Equal(t, legacyWire, updated.Details.XXX_unrecognized)
+				wire, err := updated.Details.Marshal()
+				require.NoError(t, err)
+				roundTrip := &task.Details{}
+				require.NoError(t, roundTrip.Unmarshal(wire))
+				require.Equal(t, legacyWire, roundTrip.XXX_unrecognized)
+				return 1, nil
+			},
+		}
+
+		err := retiredKafkaSinkTaskExecutor(ts, "cn-1")(
+			context.Background(),
+			&task.DaemonTask{ID: current.ID, Metadata: current.Metadata},
+		)
+		require.NoError(t, err)
+	})
+
+	for name, current := range map[string]task.DaemonTask{
+		"executor changed": {
+			ID:         7,
+			Metadata:   task.TaskMetadata{Executor: task.TaskCode_TestOnly},
+			TaskStatus: task.TaskStatus_Running,
+			TaskRunner: "cn-1",
+		},
+		"state changed": {
+			ID:         7,
+			Metadata:   task.TaskMetadata{Executor: retiredKafkaSinkTaskCode},
+			TaskStatus: task.TaskStatus_CancelRequested,
+			TaskRunner: "cn-1",
+		},
+		"owner changed": {
+			ID:         7,
+			Metadata:   task.TaskMetadata{Executor: retiredKafkaSinkTaskCode},
+			TaskStatus: task.TaskStatus_Running,
+			TaskRunner: "cn-2",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ts := &testTS{
+				queryDaemonTask: func(context.Context, ...taskservice.Condition) ([]task.DaemonTask, error) {
+					return []task.DaemonTask{current}, nil
+				},
+				updateDaemonTask: func(context.Context, []task.DaemonTask, ...taskservice.Condition) (int, error) {
+					t.Fatal("stale executor must not update the task")
+					return 0, nil
+				},
+			}
+			err := retiredKafkaSinkTaskExecutor(ts, "cn-1")(
+				context.Background(),
+				&task.DaemonTask{ID: current.ID},
+			)
+			require.NoError(t, err)
+		})
+	}
+
+	t.Run("missing task is already terminal", func(t *testing.T) {
+		ts := &testTS{
+			queryDaemonTask: func(context.Context, ...taskservice.Condition) ([]task.DaemonTask, error) {
+				return nil, nil
+			},
+		}
+		err := retiredKafkaSinkTaskExecutor(ts, "cn-1")(
+			context.Background(),
+			&task.DaemonTask{ID: 7},
+		)
+		require.NoError(t, err)
+	})
+
+	t.Run("rejects non-daemon task", func(t *testing.T) {
+		err := retiredKafkaSinkTaskExecutor(&testTS{}, "cn-1")(
+			context.Background(),
+			&task.AsyncTask{},
+		)
+		require.Error(t, err)
+	})
+}
+
+func TestRetiredKafkaSinkTaskDispatch(t *testing.T) {
+	store := taskservice.NewMemTaskStorage()
+	baseService := taskservice.NewTaskService(runtime.DefaultRuntime(), store)
+	service := &observingTaskService{
+		TaskService: baseService,
+		canceled:    make(chan task.DaemonTask, 2),
+	}
+	runner := taskservice.NewTaskRunner(
+		"cn-1",
+		service,
+		func(string) bool { return true },
+		taskservice.WithRunnerLogger(zap.NewNop()),
+		taskservice.WithRunnerFetchInterval(time.Millisecond),
+		taskservice.WithRunnerHeartbeatInterval(time.Hour),
+	)
+	runner.RegisterExecutor(
+		retiredKafkaSinkTaskCode,
+		retiredKafkaSinkTaskExecutor(service, runner.ID()),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, runner.Stop())
+		require.NoError(t, baseService.Close())
+	})
+
+	legacyDetails := &task.Details{}
+	require.NoError(t, legacyDetails.Unmarshal(
+		[]byte{0x52, 0x06, 0x0a, 0x04, 'd', 'b', '.', 't'},
+	))
+	created := task.DaemonTask{
+		ID: 1,
+		Metadata: task.TaskMetadata{
+			ID:       "legacy-kafka-sink",
+			Executor: retiredKafkaSinkTaskCode,
+		},
+		Account:    "sys",
+		TaskStatus: task.TaskStatus_Created,
+		CreateAt:   time.Now(),
+		UpdateAt:   time.Now(),
+		Details:    legacyDetails,
+	}
+	migrated := created
+	migrated.ID = 2
+	migrated.Metadata.ID = "migrated-kafka-sink"
+	migrated.TaskStatus = task.TaskStatus_CancelRequested
+	added, err := store.AddDaemonTask(context.Background(), created, migrated)
+	require.NoError(t, err)
+	require.Equal(t, 2, added)
+	require.NoError(t, runner.Start())
+
+	retiredTasks := make(map[string]task.DaemonTask, 2)
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for len(retiredTasks) < 2 {
+		select {
+		case retired := <-service.canceled:
+			retiredTasks[retired.Metadata.ID] = retired
+		case <-deadline.C:
+			t.Fatalf("legacy kafka sink tasks that reached Canceled: %v", retiredTasks)
+		}
+	}
+	for _, retired := range retiredTasks {
+		require.Equal(t, retiredKafkaSinkTaskCode, retired.Metadata.Executor)
+		require.Equal(t, task.TaskStatus_Canceled, retired.TaskStatus)
+		require.False(t, retired.EndAt.IsZero())
+		require.Equal(t, legacyDetails.XXX_unrecognized, retired.Details.XXX_unrecognized)
+	}
+	require.Equal(t, "cn-1", retiredTasks["legacy-kafka-sink"].TaskRunner)
+	require.Empty(t, retiredTasks["migrated-kafka-sink"].TaskRunner)
+
+	tasks, err := service.QueryDaemonTask(
+		context.Background(),
+		taskservice.WithTaskExecutorCond(taskservice.EQ, retiredKafkaSinkTaskCode),
+	)
+	require.NoError(t, err)
+	require.Len(t, tasks, 2)
+	for _, daemonTask := range tasks {
+		require.Equal(t, task.TaskStatus_Canceled, daemonTask.TaskStatus)
+	}
 }

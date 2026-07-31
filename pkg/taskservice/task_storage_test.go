@@ -264,6 +264,10 @@ func TestUpdateDaemonTaskWithConditions(t *testing.T) {
 
 			mustUpdateTestDaemonTask(t, s, 0, tasks, WithTaskRunnerCond(EQ, "t2"))
 			mustUpdateTestDaemonTask(t, s, 1, tasks, WithTaskRunnerCond(EQ, "t1"))
+			mustUpdateTestDaemonTask(t, s, 0, tasks,
+				WithTaskExecutorCond(EQ, task.TaskCode_InitCdc))
+			mustUpdateTestDaemonTask(t, s, 1, tasks,
+				WithTaskExecutorCond(EQ, task.TaskCode_TestOnly))
 
 			tasks[0].Metadata.Context = []byte{1}
 			mustUpdateTestDaemonTask(t, s, 0, tasks, WithTaskIDCond(EQ, tasks[0].ID+1))
@@ -306,9 +310,13 @@ func TestQueryDaemonTaskWithConditions(t *testing.T) {
 				assert.NoError(t, s.Close())
 			}()
 
-			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(1, "t1"))
-			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(2, "t2"))
-			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(3, "t3"))
+			t1 := newTestDaemonTask(1, "t1")
+			t2 := newTestDaemonTask(2, "t2")
+			t2.Metadata.Executor = task.TaskCode_InitCdc
+			t3 := newTestDaemonTask(3, "t3")
+			mustAddTestDaemonTask(t, s, 1, t1)
+			mustAddTestDaemonTask(t, s, 1, t2)
+			mustAddTestDaemonTask(t, s, 1, t3)
 			tasks := mustGetTestDaemonTask(t, s, 3)
 
 			mustGetTestDaemonTask(t, s, 1, WithLimitCond(1))
@@ -319,6 +327,8 @@ func TestQueryDaemonTaskWithConditions(t *testing.T) {
 			mustGetTestDaemonTask(t, s, 2, WithTaskIDCond(LT, tasks[2].ID))
 			mustGetTestDaemonTask(t, s, 1, WithLimitCond(1), WithTaskIDCond(GT, tasks[0].ID))
 			mustGetTestDaemonTask(t, s, 1, WithTaskIDCond(EQ, tasks[0].ID))
+			mustGetTestDaemonTask(t, s, 2, WithTaskExecutorCond(EQ, task.TaskCode_TestOnly))
+			mustGetTestDaemonTask(t, s, 1, WithTaskExecutorCond(EQ, task.TaskCode_InitCdc))
 		})
 	}
 }

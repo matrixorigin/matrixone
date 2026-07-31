@@ -610,6 +610,13 @@ func (s *memTaskStorage) filterDaemonTask(c *conditions, task task.DaemonTask) b
 		return false
 	}
 
+	if cond, e := (*c)[CondTaskExecutor]; e {
+		ok = cond.eval(task.Metadata.Executor)
+	}
+	if !ok {
+		return false
+	}
+
 	if cond, e := (*c)[CondTaskType]; e {
 		ok = cond.eval(task.TaskType)
 	}

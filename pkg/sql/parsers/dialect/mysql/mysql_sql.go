@@ -10380,11 +10380,6 @@ func (st *yySymType) conflictOptUnion() *tree.ConflictOpt {
 	return v
 }
 
-func (st *yySymType) connectorOptionalUnion() bool {
-	v, _ := st.union.(bool)
-	return v
-}
-
 func (st *yySymType) createOptionUnion() tree.CreateOption {
 	v, _ := st.union.(tree.CreateOption)
 	return v
