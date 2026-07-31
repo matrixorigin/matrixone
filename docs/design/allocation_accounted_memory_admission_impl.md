@@ -6,14 +6,14 @@
 - Architecture:
   [Allocation-Accounted Memory Admission RFC](../rfcs/00000000_allocation_accounted_memory_admission.md)
 - Baseline at plan creation: `main` at `38ce3a774`
-- Rebased implementation baseline: `main` at `a9c13b02d8`
+- Latest implementation baseline: `main` at `26ed429b60`
 - Allocation-site closure baseline (PR 3): `f61b64d56c`
 - Lifecycle/activation heads (PRs 4--10): `8633757dc1`, `5ae8eca00a`,
   `8e4b689f45`, `c9ad0ea810`, `e072568998`, `eec23dcdc5`, and
   `383fc6dce3`
 - Owner-atomic activation and cleanup: `656e254fe6`
-- Post-activation ownership closure: `73d20085c0`, `3f10c23f21`, and
-  `91839ea91f`
+- Post-activation ownership closure: `73d20085c0`, `3f10c23f21`,
+  `91839ea91f`, `abb1637882`, and `75cd58dc7a`
 - Merged prerequisite: #26455 at `93e8b22d2`
 - Independent design review: completed against RFC commit `a7d54cb5f`
 - Activation status: enabled for the closed HashBuild expression owner set.
@@ -1079,15 +1079,15 @@ Required proof:
 
 Current validation status:
 
-- the complete affected package matrix passes after rebasing on
-  `a9c13b02d8`;
+- the complete affected package matrix passes after merging `26ed429b60`;
 - the complete affected package matrix, the same matrix under `-race`, a
   20-iteration focused lifecycle/pressure race stress, affected-package vet,
-  `make static-check`, and `make build` pass through `91839ea91f`;
+  `make static-check`, and `make build` pass through `75cd58dc7a`;
 - accounted ordered/masked filtering, arbitrary shuffle rollback, `maxby`
-  retained-state compaction, generic `CopyBatch` ownership exit, CN bootstrap,
-  cross-package spill fixtures, and owner finalization-before-release have
-  dedicated regressions;
+  retained-state compaction, generic/transaction ownership exits, mixed Batch
+  clone and BatchSet provenance, provenance-aware ShufflePool credits, CN
+  bootstrap, cross-package spill fixtures, and owner finalization-before-release
+  have dedicated regressions;
 - local regression tests cover the five incident mechanisms without an
   estimator-only rejection on the activated owner;
 - TPCH 100G/1T candidate-versus-main runs remain the remote workload gate and
