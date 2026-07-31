@@ -320,6 +320,7 @@ const (
 	ErrRowSinglePartitionField             uint16 = 20822
 	ErrTooManyPartitionFuncFields          uint16 = 20823
 	ErrTooManyParameter                    uint16 = 20824
+	ErrCteMemoryQuotaExceeded              uint16 = 20825
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -604,6 +605,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRowSinglePartitionField:             {ER_ROW_SINGLE_PARTITION_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Row expressions in VALUES IN only allowed for multi-field column partitioning"},
 	ErrTooManyPartitionFuncFields:          {ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, []string{MySQLDefaultSqlState}, "Too many fields in '%-.192s'"},
 	ErrTooManyParameter:                    {ER_PS_MANY_PARAM, []string{MySQLDefaultSqlState}, "Prepared statement contains too many placeholders"},
+	ErrCteMemoryQuotaExceeded:              {ErrCteMemoryQuotaExceeded, []string{MySQLDefaultSqlState}, "recursive CTE memory quota exceeded on this CN: projected %d bytes, query limit %d bytes; increase @@cte_max_memory_bytes or rewrite the query to converge"},
 
 	// Group 9: streaming
 	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
@@ -1667,6 +1669,10 @@ func NewErrForeignKeyOnPartitioned(ctx context.Context) *Error {
 }
 func NewCheckRecursiveLevel(ctx context.Context) *Error {
 	return newError(ctx, ErrCheckRecursiveLevel)
+}
+
+func NewCteMemoryQuotaExceeded(ctx context.Context, projected, limit uint64) *Error {
+	return newError(ctx, ErrCteMemoryQuotaExceeded, projected, limit)
 }
 
 func NewErrTooManyFields(ctx context.Context) *Error {
