@@ -1285,23 +1285,6 @@ func spillStatInt64(v uint64) int64 {
 	return int64(v)
 }
 
-func externalScatterSourceBytes(
-	bat *batch.Batch,
-	sourceAlreadyCharged bool,
-) (uint64, error) {
-	if bat == nil || bat.RowCount() < 0 {
-		return 0, process.ErrHashBuildBudgetInvalid
-	}
-	if sourceAlreadyCharged {
-		return 0, nil
-	}
-	allocated := uint64(bat.Allocated())
-	if size := uint64(bat.Size()); size > allocated {
-		allocated = size
-	}
-	return allocated, nil
-}
-
 func (e *SpillEngine) scatterRetainedBytes() (uint64, bool) {
 	actual := uint64(0)
 	add := func(v uint64) bool {

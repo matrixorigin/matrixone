@@ -277,6 +277,12 @@ func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
+	// The attempt owns references to allocation-aware operators. Finalize it
+	// before Scope.release returns those operators to reuse pools; otherwise a
+	// defensive cleanup path could clear an already-reset or reused owner.
+	if err := c.finishAllocationAccountAttempt(); err != nil {
+		logutil.Errorf("allocation account terminal cleanup failed: %v", err)
+	}
 	for i := range c.scopes {
 		c.scopes[i].release()
 	}
@@ -284,9 +290,6 @@ func (c *Compile) clear() {
 		c.fuzzys[i].release()
 	}
 
-	if err := c.finishAllocationAccountAttempt(); err != nil {
-		logutil.Errorf("allocation account terminal cleanup failed: %v", err)
-	}
 	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scopes = c.scopes[:0]

@@ -43,11 +43,18 @@ type allocationLifecycleErrorOperator struct {
 
 type allocationLifecycleOwnerOperator struct {
 	*colexec.MockOperator
-	account   *mpool.AllocationAccount
-	failSet   bool
-	failClear bool
-	blocked   bool
-	clears    int
+	account               *mpool.AllocationAccount
+	failSet               bool
+	failClear             bool
+	blocked               bool
+	clears                int
+	released              bool
+	releaseSawLiveAccount bool
+}
+
+func (op *allocationLifecycleOwnerOperator) Release() {
+	op.released = true
+	op.releaseSawLiveAccount = op.account != nil
 }
 
 func (op *allocationLifecycleOwnerOperator) AllocationAccountEnabled() bool {
@@ -153,7 +160,6 @@ func TestStatementAllocationAttemptZeroTerminalExportsOnce(t *testing.T) {
 	) {
 		exported = append(exported, snapshot)
 	})
-
 	attempt, err := c.beginAllocationAccountAttempt()
 	require.NoError(t, err)
 	require.NotNil(t, attempt)
@@ -392,6 +398,34 @@ func TestStatementAllocationAttemptOwnerTeardownFailureExportsFailure(t *testing
 	require.False(t, registry.AdmissionSuspended())
 	_, ok := registry.Resolve(attempt.account.Handle())
 	require.False(t, ok)
+}
+
+func TestCompileClearFinalizesAllocationOwnerBeforeRelease(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	var exported []mpool.AllocationAccountTerminalSnapshot
+	c := newTestAllocationLifecycleCompile(t, registry, func(
+		snapshot mpool.AllocationAccountTerminalSnapshot,
+	) {
+		exported = append(exported, snapshot)
+	})
+	c.affectRows = &atomic.Uint64{}
+	owner := &allocationLifecycleOwnerOperator{
+		MockOperator: colexec.NewMockOperator(),
+	}
+	c.scopes = []*Scope{{RootOp: owner}}
+
+	_, err = c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	c.clear()
+
+	require.True(t, owner.released)
+	require.False(t, owner.releaseSawLiveAccount)
+	require.Nil(t, owner.account)
+	require.Equal(t, 1, owner.clears)
+	require.Len(t, exported, 1)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, exported[0].State)
+	require.Zero(t, exported[0].Used)
 }
 
 func TestCompileAutomaticallyActivatesCompleteHashTableOwner(t *testing.T) {
