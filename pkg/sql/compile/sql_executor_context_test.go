@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -35,7 +36,7 @@ type testSubscriptionResolver struct {
 	meta *plan.SubscriptionMeta
 }
 
-func (r testSubscriptionResolver) GetSubscriptionMeta(string) (*plan.SubscriptionMeta, error) {
+func (r testSubscriptionResolver) GetSubscriptionMeta(string, *plan.Snapshot) (*plan.SubscriptionMeta, error) {
 	return r.meta, nil
 }
 
@@ -94,18 +95,24 @@ func TestCompilerContextQueryingSubscription(t *testing.T) {
 
 func TestCompilerContextUsesRefreshSubscriptionResolver(t *testing.T) {
 	meta := &plan.SubscriptionMeta{SubName: "subdb"}
-	ctx := context.WithValue(
+	procCtx := context.WithValue(
 		context.Background(),
 		viewMetadataSubscriptionResolverKey{},
 		viewMetadataSubscriptionResolver(testSubscriptionResolver{meta: meta}),
 	)
 	c := &compilerContext{
-		ctx:  ctx,
+		ctx:  context.Background(),
 		proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 	}
+	c.proc.ReplaceTopCtx(procCtx)
 
 	actual, err := c.GetSubscriptionMeta("subdb", nil)
 
+	require.NoError(t, err)
+	require.Same(t, meta, actual)
+
+	snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+	actual, err = c.GetSubscriptionMeta("subdb", snapshot)
 	require.NoError(t, err)
 	require.Same(t, meta, actual)
 }

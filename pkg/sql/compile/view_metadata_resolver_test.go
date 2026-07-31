@@ -75,7 +75,7 @@ func TestViewMetadataRefreshResolverWithoutSQLHelper(t *testing.T) {
 	snapshot, err := resolver.ResolveSnapshot(context.Background(), "sn")
 	require.NoError(t, err)
 	require.Equal(t, int64(123), snapshot.GetTS().GetPhysicalTime())
-	require.Equal(t, uint32(7), snapshot.GetTenant().GetTenantID())
+	require.Equal(t, uint32(9), snapshot.GetTenant().GetTenantID())
 
 	udf, err := resolver.ResolveUdf(context.Background(), "f", nil)
 	require.NoError(t, err)
@@ -97,4 +97,11 @@ func TestViewMetadataRefreshResolverSnapshotNotFoundIsTyped(t *testing.T) {
 	var notFound *viewMetadataSnapshotNotFoundError
 	require.True(t, errors.As(err, &notFound))
 	require.Equal(t, "deleted", notFound.name)
+}
+
+func TestSnapshotTenantID(t *testing.T) {
+	require.Equal(t, uint32(0), snapshotTenantID("cluster", 9, 7))
+	require.Equal(t, uint32(9), snapshotTenantID("account", 9, 7))
+	require.Equal(t, uint32(7), snapshotTenantID("database", 9, 7))
+	require.Equal(t, uint32(7), snapshotTenantID("table", 9, 7))
 }

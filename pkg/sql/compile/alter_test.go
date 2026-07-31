@@ -166,7 +166,7 @@ func TestCurrentViewSubscriptionResolver(t *testing.T) {
 		},
 	}}
 
-	meta, err := resolver.GetSubscriptionMeta("subdb")
+	meta, err := resolver.GetSubscriptionMeta("subdb", nil)
 
 	require.NoError(t, err)
 	require.Equal(t, int32(9), meta.GetAccountId())
@@ -174,9 +174,59 @@ func TestCurrentViewSubscriptionResolver(t *testing.T) {
 	require.Equal(t, "subdb", meta.GetSubName())
 	require.Equal(t, "allowed", meta.GetTables())
 
-	meta, err = resolver.GetSubscriptionMeta("localdb")
+	meta, err = resolver.GetSubscriptionMeta("localdb", nil)
 	require.NoError(t, err)
 	require.Nil(t, meta)
+
+	snapshotDependency := plan.ViewDependency{
+		AccountID:          7,
+		AccountIDSet:       true,
+		PublisherAccountID: 11,
+		Snapshot:           true,
+		Subscription:       true,
+		SubscriptionDB:     "Historical_SubDB",
+		PublisherDB:        "historical_pubdb",
+		PublisherTable:     "source_t",
+	}
+	secondSnapshotDependency := snapshotDependency
+	secondSnapshotDependency.PublisherTable = "other_t"
+	resolver = resolver.withViewDependencies([]plan.ViewDependency{
+		snapshotDependency,
+		secondSnapshotDependency,
+		snapshotDependency,
+	})
+	meta, err = resolver.GetSubscriptionMeta("historical_subdb", &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 1},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(11), meta.GetAccountId())
+	require.Equal(t, "historical_pubdb", meta.GetDbName())
+	require.Equal(t, "source_t,other_t", meta.GetTables())
+}
+
+func TestViewDependenciesContainLiveSource(t *testing.T) {
+	source := viewMetadataRefreshSource{accountID: 7, logicalID: 24, previousID: 41, currentID: 42}
+	snapshotOnly := []plan.ViewDependency{{
+		AccountID: 7, AccountIDSet: true, LogicalID: 24, TableID: 41, Snapshot: true,
+	}}
+	require.False(t, viewDependenciesContainLiveSource(snapshotOnly, source))
+	require.True(t, viewDependenciesContainLiveSource(append(snapshotOnly, plan.ViewDependency{
+		AccountID: 7, AccountIDSet: true, LogicalID: 24, TableID: 42,
+	}), source))
+	require.False(t, viewDependenciesContainLiveSource([]plan.ViewDependency{{
+		AccountID: 8, AccountIDSet: true, LogicalID: 24, TableID: 42,
+	}}, source))
+}
+
+func TestCheckViewMetadataCandidateLimit(t *testing.T) {
+	require.NoError(t, checkViewMetadataCandidateLimit(
+		context.Background(), maxLegacyCandidatesPerMetadataRefresh,
+	))
+	err := checkViewMetadataCandidateLimit(
+		context.Background(), maxLegacyCandidatesPerMetadataRefresh+1,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 }
 
 func TestCheckViewMetadataRefreshLimit(t *testing.T) {

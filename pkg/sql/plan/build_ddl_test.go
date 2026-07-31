@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -159,6 +160,32 @@ func TestGenViewTableDefCapturesDependencyIdentity(t *testing.T) {
 	require.NotZero(t, dependency.LogicalID)
 	require.False(t, dependency.Snapshot)
 	require.False(t, dependency.Subscription)
+}
+
+func TestMakeViewDependencyKeepsSnapshotPublisherAccount(t *testing.T) {
+	dependency := makeViewDependency(
+		7,
+		&ObjectRef{
+			Obj:              42,
+			ObjName:          "source_t",
+			SchemaName:       "publisher_db",
+			SubscriptionName: "subscriber_db",
+			PubInfo:          &plan.PubInfo{TenantId: 11},
+		},
+		&TableDef{TblId: 42, LogicalId: 41, Version: 3},
+		&Snapshot{
+			TS:     &timestamp.Timestamp{PhysicalTime: 1},
+			Tenant: &SnapshotTenant{TenantID: 7},
+		},
+	)
+
+	require.Equal(t, uint32(7), dependency.AccountID)
+	require.Equal(t, uint32(11), dependency.PublisherAccountID)
+	require.True(t, dependency.Snapshot)
+	require.True(t, dependency.Subscription)
+	require.Equal(t, "subscriber_db", dependency.SubscriptionDB)
+	require.Equal(t, "publisher_db", dependency.PublisherDB)
+	require.Equal(t, "source_t", dependency.PublisherTable)
 }
 
 func TestGenViewTableDefKeepsDirectNestedViewDependency(t *testing.T) {

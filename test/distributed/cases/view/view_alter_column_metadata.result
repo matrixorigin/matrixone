@@ -180,7 +180,18 @@ create publication pub database pubdb table source_t, excluded_t account view_al
 create database subdb from view_alter_pub publication pub;
 create database localdb;
 use localdb;
+create table local_source_t (a int);
 create view v as select a from subdb.source_t;
+create snapshot view_alter_sub_sn for account view_alter_sub;
+create view localdb.snapshot_sub_v as
+select live.a, frozen.a as frozen_a
+from localdb.local_source_t live,
+subdb.source_t {snapshot = 'view_alter_sub_sn'} frozen;
+alter table localdb.local_source_t modify column a bigint;
+desc localdb.snapshot_sub_v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+frozen_a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 alter table pubdb.source_t modify column a bigint;
 desc localdb.v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -197,6 +208,7 @@ alter table pubdb.source_t modify column a decimal(12, 3);
 desc localdb.v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  DECIMAL(12,3)  ¦  YES  ¦    ¦  null  ¦    ¦
+drop snapshot view_alter_sub_sn;
 drop database localdb;
 drop database subdb;
 drop publication pub;

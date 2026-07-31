@@ -1940,17 +1940,62 @@ type viewMetadataCompilerContextKey struct{}
 type viewMetadataResolverKey struct{}
 
 type viewMetadataSubscriptionResolver interface {
-	GetSubscriptionMeta(string) (*plan2.SubscriptionMeta, error)
+	GetSubscriptionMeta(string, *plan2.Snapshot) (*plan2.SubscriptionMeta, error)
 }
 
 type currentViewSubscriptionResolver struct {
-	byDatabase map[string]*plan2.SubscriptionMeta
+	byDatabase         map[string]*plan2.SubscriptionMeta
+	snapshotByDatabase map[string]*plan2.SubscriptionMeta
 }
 
 func (r currentViewSubscriptionResolver) GetSubscriptionMeta(
 	database string,
+	snapshot *plan2.Snapshot,
 ) (*plan2.SubscriptionMeta, error) {
+	if plan2.IsSnapshotValid(snapshot) {
+		return r.snapshotByDatabase[strings.ToLower(database)], nil
+	}
 	return r.byDatabase[strings.ToLower(database)], nil
+}
+
+func (r currentViewSubscriptionResolver) withViewDependencies(
+	dependencies []plan2.ViewDependency,
+) currentViewSubscriptionResolver {
+	r.snapshotByDatabase = make(map[string]*plan2.SubscriptionMeta)
+	for _, dependency := range dependencies {
+		if !dependency.Snapshot || !dependency.Subscription || dependency.SubscriptionDB == "" {
+			continue
+		}
+		publisherAccountID := dependency.PublisherAccountID
+		if publisherAccountID == 0 {
+			if current := r.byDatabase[strings.ToLower(dependency.SubscriptionDB)]; current != nil {
+				publisherAccountID = uint32(current.GetAccountId())
+			}
+		}
+		if publisherAccountID == 0 {
+			continue
+		}
+		database := strings.ToLower(dependency.SubscriptionDB)
+		meta := r.snapshotByDatabase[database]
+		if meta == nil {
+			meta = &plan2.SubscriptionMeta{
+				AccountId: int32(publisherAccountID),
+				DbName:    dependency.PublisherDB,
+				SubName:   dependency.SubscriptionDB,
+			}
+			r.snapshotByDatabase[database] = meta
+		}
+		if dependency.PublisherTable != "" {
+			if meta.Tables == "" {
+				meta.Tables = dependency.PublisherTable
+			} else if !pubsub.InSubMetaTables(meta, dependency.PublisherTable) {
+				meta.Tables += pubsub.Sep + dependency.PublisherTable
+			}
+		} else if current := r.byDatabase[database]; current != nil {
+			meta.Tables = current.GetTables()
+		}
+	}
+	return r
 }
 
 func (e *viewMetadataRefreshPlanError) Error() string {
@@ -1998,7 +2043,7 @@ func refreshViewMetadataAfterAlter(
 	sourceTable string,
 ) error {
 	var dependentViews int
-	var legacyCandidates int
+	var examinedCandidates int
 	subscriptionsByAccount := make(map[uint32]currentViewSubscriptionResolver)
 	sources := []viewMetadataRefreshSource{{
 		accountID:  sourceAccountID,
@@ -2033,15 +2078,14 @@ func refreshViewMetadataAfterAlter(
 				if _, ok := processedViews[viewKey]; ok {
 					continue
 				}
-				if len(view.viewData.Dependencies) == 0 {
-					legacyCandidates++
-					if legacyCandidates > maxLegacyCandidatesPerMetadataRefresh {
-						return moerr.NewInvalidInputf(
-							c.proc.Ctx,
-							"alter table examines more than %d legacy view candidates",
-							maxLegacyCandidatesPerMetadataRefresh,
-						)
-					}
+				examinedCandidates++
+				if err := checkViewMetadataCandidateLimit(c.proc.Ctx, examinedCandidates); err != nil {
+					return err
+				}
+				if len(view.viewData.Dependencies) > 0 &&
+					!viewDependenciesContainLiveSource(view.viewData.Dependencies, source) {
+					processedViews[viewKey] = struct{}{}
+					continue
 				}
 				if view.skip {
 					processedViews[viewKey] = struct{}{}
@@ -2088,7 +2132,12 @@ func refreshViewMetadataAfterAlter(
 					},
 				)
 				c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, view.accountID)
-				err = runViewMetadataRefreshSQL(c, sql, view.viewData, subscriptions)
+				err = runViewMetadataRefreshSQL(
+					c,
+					sql,
+					view.viewData,
+					subscriptions.withViewDependencies(view.viewData.Dependencies),
+				)
 				c.proc.Ctx = oldCtx
 				if err != nil {
 					if !canSkipViewMetadataRefreshError(err) {
@@ -2119,6 +2168,34 @@ func refreshViewMetadataAfterAlter(
 		}
 	}
 	return nil
+}
+
+func checkViewMetadataCandidateLimit(ctx context.Context, count int) error {
+	if count <= maxLegacyCandidatesPerMetadataRefresh {
+		return nil
+	}
+	return moerr.NewInvalidInputf(
+		ctx,
+		"alter table examines more than %d view candidates",
+		maxLegacyCandidatesPerMetadataRefresh,
+	)
+}
+
+func viewDependenciesContainLiveSource(
+	dependencies []plan2.ViewDependency,
+	source viewMetadataRefreshSource,
+) bool {
+	for _, dependency := range dependencies {
+		if dependency.Snapshot || !dependency.AccountIDSet || dependency.AccountID != source.accountID {
+			continue
+		}
+		if dependency.LogicalID == source.logicalID ||
+			dependency.TableID == source.previousID ||
+			dependency.TableID == source.currentID {
+			return true
+		}
+	}
+	return false
 }
 
 func loadCurrentViewSubscriptions(
@@ -2328,6 +2405,7 @@ func runViewMetadataRefreshSQL(
 			compile:         c,
 			accountID:       accountID,
 			defaultDatabase: viewData.DefaultDatabase,
+			subscriptions:   subscriptions,
 		},
 	)
 	if helper := c.proc.GetSessionInfo().SqlHelper; helper != nil {

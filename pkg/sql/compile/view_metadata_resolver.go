@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -50,6 +51,25 @@ type viewMetadataRefreshResolver struct {
 	compile         *Compile
 	accountID       uint32
 	defaultDatabase string
+	subscriptions   currentViewSubscriptionResolver
+}
+
+func (r viewMetadataRefreshResolver) GetSubscriptionMeta(
+	database string,
+	snapshot *plan.Snapshot,
+) (*plan.SubscriptionMeta, error) {
+	return r.subscriptions.GetSubscriptionMeta(database, snapshot)
+}
+
+func snapshotTenantID(level string, objectID uint64, currentAccountID uint32) uint32 {
+	switch level {
+	case tree.RESTORELEVELCLUSTER.String():
+		return catalog.System_Account
+	case tree.RESTORELEVELACCOUNT.String():
+		return uint32(objectID)
+	default:
+		return currentAccountID
+	}
 }
 
 func (r viewMetadataRefreshResolver) ResolveSnapshot(
@@ -82,11 +102,12 @@ func (r viewMetadataRefreshResolver) ResolveSnapshot(
 		accountNames := executor.GetStringRows(cols[3])
 		objectIDs := executor.GetFixedRows[uint64](cols[4])
 		for i := 0; i < rows; i++ {
+			tenantID := snapshotTenantID(levels[i], objectIDs[i], r.accountID)
 			snapshots = append(snapshots, &plan.Snapshot{
 				TS: &timestamp.Timestamp{PhysicalTime: timestamps[i]},
 				Tenant: &plan.SnapshotTenant{
 					TenantName: accountNames[i],
-					TenantID:   r.accountID,
+					TenantID:   tenantID,
 				},
 				ExtraInfo: &plan.SnapshotExtraInfo{
 					Level: levels[i],

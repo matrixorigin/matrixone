@@ -349,10 +349,13 @@ func makeViewDependency(
 		dependency.LogicalID = dependency.TableID
 	}
 	if objRef.GetPubInfo() != nil {
-		dependency.AccountID = uint32(objRef.GetPubInfo().GetTenantId())
+		publisherAccountID := uint32(objRef.GetPubInfo().GetTenantId())
+		dependency.AccountID = publisherAccountID
+		dependency.PublisherAccountID = publisherAccountID
 		dependency.Subscription = true
 		dependency.SubscriptionDB = objRef.GetSubscriptionName()
 		dependency.PublisherDB = objRef.GetSchemaName()
+		dependency.PublisherTable = objRef.GetObjName()
 	} else if util.TableIsClusterTable(tableDef.GetTableType()) ||
 		isSharedSystemTable(objRef.GetSchemaName(), objRef.GetObjName()) {
 		dependency.AccountID = catalog.System_Account
@@ -368,14 +371,16 @@ func makeViewDependency(
 
 func viewDependencyIdentity(dependency ViewDependency) string {
 	return fmt.Sprintf(
-		"%d/%d/%d/%t/%t/%s/%s",
+		"%d/%d/%d/%t/%t/%d/%s/%s/%s",
 		dependency.AccountID,
 		dependency.LogicalID,
 		dependency.TableID,
 		dependency.Snapshot,
 		dependency.Subscription,
+		dependency.PublisherAccountID,
 		dependency.SubscriptionDB,
 		dependency.PublisherDB,
+		dependency.PublisherTable,
 	)
 }
 
@@ -401,10 +406,16 @@ func compareViewDependencies(left, right ViewDependency) int {
 		}
 		return -1
 	}
+	if order := cmp.Compare(left.PublisherAccountID, right.PublisherAccountID); order != 0 {
+		return order
+	}
 	if order := cmp.Compare(left.SubscriptionDB, right.SubscriptionDB); order != 0 {
 		return order
 	}
-	return cmp.Compare(left.PublisherDB, right.PublisherDB)
+	if order := cmp.Compare(left.PublisherDB, right.PublisherDB); order != 0 {
+		return order
+	}
+	return cmp.Compare(left.PublisherTable, right.PublisherTable)
 }
 
 func isSharedSystemTable(database, table string) bool {

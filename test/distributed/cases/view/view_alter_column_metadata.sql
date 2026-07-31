@@ -142,7 +142,16 @@ create publication pub database pubdb table source_t, excluded_t account view_al
 create database subdb from view_alter_pub publication pub;
 create database localdb;
 use localdb;
+create table local_source_t (a int);
 create view v as select a from subdb.source_t;
+create snapshot view_alter_sub_sn for account view_alter_sub;
+create view localdb.snapshot_sub_v as
+select live.a, frozen.a as frozen_a
+from localdb.local_source_t live,
+subdb.source_t {snapshot = 'view_alter_sub_sn'} frozen;
+alter table localdb.local_source_t modify column a bigint;
+-- @ignore:5,6
+desc localdb.snapshot_sub_v;
 -- @session
 
 -- @session:id=1&user=view_alter_pub:admin&password=111
@@ -173,6 +182,7 @@ alter table pubdb.source_t modify column a decimal(12, 3);
 -- @session:id=2&user=view_alter_sub:admin&password=111
 -- @ignore:5,6
 desc localdb.v;
+drop snapshot view_alter_sub_sn;
 drop database localdb;
 drop database subdb;
 -- @session

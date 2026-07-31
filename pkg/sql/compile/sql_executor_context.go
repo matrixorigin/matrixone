@@ -289,15 +289,19 @@ func (c *compilerContext) GetStatsCache() *plan.StatsCache {
 }
 
 func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snapshot) (*plan.SubscriptionMeta, error) {
-	if plan.IsSnapshotValid(snapshot) {
-		return nil, nil
-	}
-	resolverCtx := c.ctx
-	if resolverCtx == nil {
-		resolverCtx = c.GetContext()
+	resolverCtx := c.GetContext()
+	if _, ok := resolverCtx.Value(viewMetadataSubscriptionResolverKey{}).(viewMetadataSubscriptionResolver); !ok &&
+		c.ctx != nil {
+		resolverCtx = c.ctx
 	}
 	if resolver, ok := resolverCtx.Value(viewMetadataSubscriptionResolverKey{}).(viewMetadataSubscriptionResolver); ok {
-		return resolver.GetSubscriptionMeta(dbName)
+		return resolver.GetSubscriptionMeta(dbName, snapshot)
+	}
+	if resolver, ok := resolverCtx.Value(viewMetadataResolverKey{}).(viewMetadataSubscriptionResolver); ok {
+		return resolver.GetSubscriptionMeta(dbName, snapshot)
+	}
+	if plan.IsSnapshotValid(snapshot) {
+		return nil, nil
 	}
 	helper := c.proc.GetSessionInfo().SqlHelper
 	if helper == nil {
@@ -536,17 +540,16 @@ func (c *compilerContext) getRelation(
 
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
-	if sub != nil {
-		ctx = defines.AttachAccountId(ctx, uint32(sub.GetAccountId()))
-		dbName = sub.GetDbName()
-	}
-
 	if plan.IsSnapshotValid(snapshot) && snapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
 		txnOpt = c.proc.GetTxnOperator().CloneSnapshotOp(*snapshot.TS)
 
 		if snapshot.Tenant != nil {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
+	}
+	if sub != nil {
+		ctx = defines.AttachAccountId(ctx, uint32(sub.GetAccountId()))
+		dbName = sub.GetDbName()
 	}
 
 	db, err := c.engine.Database(ctx, dbName, txnOpt)
