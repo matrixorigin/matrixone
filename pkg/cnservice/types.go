@@ -698,6 +698,7 @@ type service struct {
 		// details are not recorded for simplicity as suggested by @nnsgmsone
 		counter atomic.Int64
 		client  cnclient.PipelineClient
+		wg      sync.WaitGroup
 	}
 
 	CNMemoryThrottler rscthrottler.RSCThrottler

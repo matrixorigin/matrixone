@@ -41,8 +41,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -66,6 +68,7 @@ func (s closeErrorMOServer) Stop() error {
 
 type closeOnlyRPCServer struct {
 	closeErr error
+	onClose  func()
 }
 
 func (s closeOnlyRPCServer) Start() error {
@@ -73,7 +76,20 @@ func (s closeOnlyRPCServer) Start() error {
 }
 
 func (s closeOnlyRPCServer) Close() error {
+	if s.onClose != nil {
+		s.onClose()
+	}
 	return s.closeErr
+}
+
+type closeRecordingTraceService struct {
+	trace.Service
+	closed chan struct{}
+}
+
+func (s *closeRecordingTraceService) Close() {
+	close(s.closed)
+	s.Service.Close()
 }
 
 func (s closeOnlyRPCServer) RegisterRequestHandler(
@@ -448,6 +464,80 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 			case <-stopped:
 			case <-time.After(time.Second):
 				t.Fatal("rollback did not stop CN tasks")
+			}
+		},
+	)
+}
+
+func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
+	moruntime.RunTest(
+		t.Name(),
+		func(rt moruntime.Runtime) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ls := mock_lock.NewMockLockService(ctrl)
+			ls.EXPECT().Close().Return(nil).Times(2)
+
+			traceService, err := trace.NewService(
+				t.TempDir(),
+				t.Name(),
+				nil,
+				rt.Clock(),
+				nil,
+				trace.WithEnable(true, []uint64{1}),
+				trace.WithBufferSize(8),
+			)
+			require.NoError(t, err)
+			recordingTrace := &closeRecordingTraceService{
+				Service: traceService,
+				closed:  make(chan struct{}),
+			}
+			rt.SetGlobalVariables(moruntime.TxnTraceService, recordingTrace)
+
+			startFinalEvent := make(chan struct{})
+			finalEventSubmitted := make(chan struct{})
+			s := &service{
+				cfg:                &Config{UUID: t.Name()},
+				logger:             zap.NewNop(),
+				stopper:            stopper.NewStopper("test-trace-close-order"),
+				txnTraceService:    recordingTrace,
+				mo:                 closeErrorMOServer{},
+				cancelMoServerFunc: func() {},
+				server: closeOnlyRPCServer{onClose: func() {
+					close(startFinalEvent)
+				}},
+				lockService: ls,
+			}
+
+			s.pipelines.wg.Add(1)
+			go func() {
+				defer s.pipelines.wg.Done()
+				<-startFinalEvent
+				select {
+				case <-recordingTrace.closed:
+					t.Error("trace closed before pipeline producer stopped")
+				default:
+				}
+				recordingTrace.ApplyFlush(
+					[]byte("txn"),
+					1,
+					timestamp.Timestamp{PhysicalTime: 1},
+					timestamp.Timestamp{PhysicalTime: 2},
+					1,
+				)
+				close(finalEventSubmitted)
+			}()
+
+			require.NoError(t, s.Close())
+			select {
+			case <-finalEventSubmitted:
+			default:
+				t.Fatal("CN close returned before the final trace event was submitted")
+			}
+			select {
+			case <-recordingTrace.closed:
+			default:
+				t.Fatal("trace service was not closed")
 			}
 		},
 	)

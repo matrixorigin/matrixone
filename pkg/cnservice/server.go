@@ -417,8 +417,6 @@ func (s *service) Close() error {
 
 	return closeCNServiceSteps(
 		s.closeBootstrapService,
-		s.closeTxnTraceService,
-		s.closeIncrService,
 		s.stopFrontend,
 		// Frontend shutdown stops accepting interactive work, while stopTask
 		// drains scheduled ingestion statements. Only after both producers have
@@ -426,7 +424,11 @@ func (s *service) Close() error {
 		// MongoScan operator.
 		s.stopTask,
 		s.closeMongoDBRuntime,
+		s.server.Close,
 		s.stopRPCs,
+		s.waitPipelineHandlers,
+		s.closeIncrService,
+		s.closeTxnTraceService,
 		func() error {
 			// stop I/O pipeline
 			ioutil.Stop(s.cfg.UUID)
@@ -438,7 +440,6 @@ func (s *service) Close() error {
 			}
 			return nil
 		},
-		s.server.Close,
 		s.lockService.Close,
 		func() error {
 			if s.shardService != nil {
@@ -453,6 +454,11 @@ func (s *service) Close() error {
 			return nil
 		},
 	)
+}
+
+func (s *service) waitPipelineHandlers() error {
+	s.pipelines.wg.Wait()
+	return nil
 }
 
 func (s *service) closeBootstrapService() error {
@@ -613,8 +619,12 @@ func (s *service) handleRequest(
 		}
 	}
 
+	// Register ownership before publishing the goroutine. Close first stops the
+	// RPC server, so no Add can race with the subsequent Wait.
+	s.pipelines.wg.Add(1)
 	// start a goroutine to handle one received message.
 	go func() {
+		defer s.pipelines.wg.Done()
 		defer value.Cancel()
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
