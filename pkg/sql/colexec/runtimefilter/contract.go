@@ -69,14 +69,6 @@ func ExactKeyEncodingWithComponents(
 			len(componentPayloadTypes) != 0 {
 			return keycodec.ExactRuntimeFilterUnsupported
 		}
-		if !keycodec.LegacyExactRawProducerSafe(
-			types.T(buildExpr.Typ.Id),
-		) && !localProtocolEnablesVersionedExactKeyContract(service) {
-			// A cached v7 plan can outlive a deployment-gate downgrade. Do not
-			// let a new producer publish metadata- or executor-dependent RAW
-			// payloads while old consumers may participate again.
-			return keycodec.ExactRuntimeFilterUnsupported
-		}
 		// prefix_in has a deliberately narrower execution contract than IN:
 		// its direct-vector overload consumes VARCHAR only.  Do not let stale
 		// metadata reach MakeInExpr, whose legacy fallback ID cannot prove that

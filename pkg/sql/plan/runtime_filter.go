@@ -153,8 +153,8 @@ func localProtocolEnablesVersionedExactKeyContract(sid string) bool {
 	// MOProtocolVersion is a service-local compatibility gate written by the
 	// deployment control plane. This helper does not discover peers or infer
 	// their capabilities. Deployment orchestration is responsible for raising
-	// participating services consistently after rollout, and lowering them
-	// before rollback introduces an older producer.
+	// participating services consistently after rollout, and for draining v7
+	// work before lowering the gate and reintroducing older participants.
 	rt := runtime.ServiceRuntime(sid)
 	if rt == nil {
 		return false
@@ -180,11 +180,10 @@ func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
 		!localProtocolEnablesVersionedExactKeyContract(
 			builder.compCtx.GetProcess().GetService(),
 		) {
-		// Only metadata-independent raw types can keep their exact filters
-		// below v7. Metadata-dependent raw contracts and contracts which promise
-		// a new closure remain disabled until every producer understands their
-		// versioned metadata. Guarded BuildExpr still makes an unexpected older
-		// producer fail open.
+		// Only metadata-independent raw types can keep their exact filters below
+		// v7. Metadata-dependent contracts, new closures, and types without a
+		// legacy consumer executor remain disabled until rollout completes.
+		// Guarded BuildExpr still makes an unexpected older producer fail open.
 		return keycodec.ExactRuntimeFilterUnsupported, false
 	}
 	filterFunction := function.InFunctionName
