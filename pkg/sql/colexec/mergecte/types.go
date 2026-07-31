@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/cteaccount"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -47,6 +48,7 @@ type container struct {
 	recursiveLevel int
 	hashTable      *hashmap.StrHashMap
 	insertedRows   []int64
+	memory         cteaccount.Accountant
 }
 
 type MergeCTE struct {
@@ -115,6 +117,7 @@ func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &mergeCTE.ctr
+	ctr.memory.Release()
 	for _, bat := range ctr.freeBats {
 		if bat != nil {
 			bat.Clean(proc.Mp())

@@ -29,6 +29,7 @@ type container struct {
 	seen          uint64 // seen is the number of tuples seen so far
 	limit         uint64
 	limitExecutor colexec.ExpressionExecutor
+	buf           *batch.Batch
 }
 type Limit struct {
 	ctr       container
@@ -84,6 +85,10 @@ func (limit *Limit) Free(proc *process.Process, pipelineFailed bool, err error) 
 	if limit.ctr.limitExecutor != nil {
 		limit.ctr.limitExecutor.Free()
 		limit.ctr.limitExecutor = nil
+	}
+	if limit.ctr.buf != nil {
+		limit.ctr.buf.Clean(proc.Mp())
+		limit.ctr.buf = nil
 	}
 }
 
