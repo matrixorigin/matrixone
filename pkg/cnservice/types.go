@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -668,8 +669,8 @@ type service struct {
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
 	bootstrapService bootstrap.Service
-	bootstrapFn      func() error
 	incrservice      incrservice.AutoIncrementService
+	txnTraceService  trace.Service
 
 	stopper *stopper.Stopper
 	aicm    *defines.AutoIncrCacheManager

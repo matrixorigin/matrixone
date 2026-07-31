@@ -355,14 +355,14 @@ func (c *testMessageCache) Close() {
 var _ bootstrap.Service = new(testBootService)
 
 type testBootService struct {
-	choice     int
-	closeCount int
-	closeErr   error
+	choice       int
+	closeCount   int
+	closeErr     error
+	bootstrapErr error
 }
 
 func (boot *testBootService) Bootstrap(ctx context.Context) error {
-	//TODO implement me
-	panic("implement me")
+	return boot.bootstrapErr
 }
 
 func (boot *testBootService) BootstrapUpgrade(ctx context.Context) error {
@@ -403,22 +403,24 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 		t.Name(),
 		func(rt moruntime.Runtime) {
 			bootstrapErr := errors.New("bootstrap connection reset")
-			boot := &testBootService{}
+			boot := &testBootService{bootstrapErr: bootstrapErr}
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
 			ls.EXPECT().Close().Return(nil).Times(2)
+			cfg := &Config{UUID: t.Name()}
+			cfg.Txn.Trace.BufferSize = 1
 			s := &service{
-				cfg:                &Config{UUID: t.Name()},
+				cfg:                cfg,
 				logger:             zap.NewNop(),
 				stopper:            stopper.NewStopper("test-bootstrap-failure"),
 				bootstrapService:   boot,
-				bootstrapFn:        func() error { return bootstrapErr },
 				mo:                 closeErrorMOServer{},
 				cancelMoServerFunc: func() {},
 				server:             closeOnlyRPCServer{},
 				lockService:        ls,
 			}
+			s.options.traceDataPath = t.TempDir()
 
 			stopped := make(chan struct{})
 			require.NoError(t, s.stopper.RunTask(func(ctx context.Context) {
@@ -428,8 +430,20 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 
 			err := s.Start()
 			require.ErrorIs(t, err, bootstrapErr)
+			require.NotNil(t, s.incrservice)
+			require.NotNil(t, s.txnTraceService)
+			_, ok := rt.GetGlobalVariables(moruntime.AutoIncrementService)
+			require.True(t, ok)
+			_, ok = rt.GetGlobalVariables(moruntime.TxnTraceService)
+			require.True(t, ok)
 			require.NoError(t, s.Close())
 			require.Equal(t, 1, boot.closeCount)
+			require.Nil(t, s.incrservice)
+			require.Nil(t, s.txnTraceService)
+			_, ok = rt.GetGlobalVariables(moruntime.AutoIncrementService)
+			require.False(t, ok)
+			_, ok = rt.GetGlobalVariables(moruntime.TxnTraceService)
+			require.False(t, ok)
 			select {
 			case <-stopped:
 			case <-time.After(time.Second):

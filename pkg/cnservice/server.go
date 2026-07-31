@@ -386,11 +386,7 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 }
 
 func (s *service) Start() error {
-	bootstrapFn := s.bootstrap
-	if s.bootstrapFn != nil {
-		bootstrapFn = s.bootstrapFn
-	}
-	if err := bootstrapFn(); err != nil {
+	if err := s.bootstrap(); err != nil {
 		return err
 	}
 
@@ -420,7 +416,9 @@ func (s *service) Close() error {
 	s.stopper.Stop()
 
 	return closeCNServiceSteps(
-		s.bootstrapService.Close,
+		s.closeBootstrapService,
+		s.closeTxnTraceService,
+		s.closeIncrService,
 		s.stopFrontend,
 		// Frontend shutdown stops accepting interactive work, while stopTask
 		// drains scheduled ingestion statements. Only after both producers have
@@ -455,6 +453,37 @@ func (s *service) Close() error {
 			return nil
 		},
 	)
+}
+
+func (s *service) closeBootstrapService() error {
+	if s.bootstrapService == nil {
+		return nil
+	}
+	service := s.bootstrapService
+	s.bootstrapService = nil
+	return service.Close()
+}
+
+func (s *service) closeTxnTraceService() error {
+	if s.txnTraceService == nil {
+		return nil
+	}
+	service := s.txnTraceService
+	s.txnTraceService = nil
+	service.Close()
+	runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(runtime.TxnTraceService, service)
+	return nil
+}
+
+func (s *service) closeIncrService() error {
+	if s.incrservice == nil {
+		return nil
+	}
+	service := s.incrservice
+	s.incrservice = nil
+	service.Close()
+	runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(runtime.AutoIncrementService, service)
+	return nil
 }
 
 func closeCNServiceSteps(steps ...func() error) error {
@@ -1056,14 +1085,16 @@ func (s *service) bootstrap() error {
 	s.initTxnTraceService()
 
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
-	s.bootstrapService = bootstrap.NewService(
-		s.cfg.UUID,
-		&locker{hakeeperClient: s._hakeeperClient, requestID: s.cfg.UUID},
-		rt.Clock(),
-		s._txnClient,
-		s.sqlExecutor,
-		s.options.bootstrapOptions...,
-	)
+	if s.bootstrapService == nil {
+		s.bootstrapService = bootstrap.NewService(
+			s.cfg.UUID,
+			&locker{hakeeperClient: s._hakeeperClient, requestID: s.cfg.UUID},
+			rt.Clock(),
+			s._txnClient,
+			s.sqlExecutor,
+			s.options.bootstrapOptions...,
+		)
+	}
 
 	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseBootstrap)
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
@@ -1118,7 +1149,8 @@ func (s *service) initTxnTraceService() {
 	if err != nil {
 		panic(err)
 	}
-	rt.SetGlobalVariables(runtime.TxnTraceService, ts)
+	s.txnTraceService = ts
+	rt.SetGlobalVariables(runtime.TxnTraceService, s.txnTraceService)
 }
 
 // SaveProfile saves profile into etl fs
