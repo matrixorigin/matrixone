@@ -63,7 +63,7 @@ const (
 	Deletion
 	Insert
 	External
-	Source
+	_ // reserved: former Source opcode; keep later wire values stable
 	MultiUpdate
 	PartitionInsert
 	PartitionDelete
@@ -152,7 +152,6 @@ func init() {
 		Deletion:                "Deletion",
 		Insert:                  "Insert",
 		External:                "External",
-		Source:                  "Source",
 		MultiUpdate:             "MultiUpdate",
 		PartitionInsert:         "PartitionInsert",
 		PartitionDelete:         "PartitionDelete",

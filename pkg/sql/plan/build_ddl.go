@@ -46,72 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 )
-
-func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
-	var tableDef plan.TableDef
-
-	// check view statement
-	var stmtPlan *Plan
-	var err error
-	switch s := stmt.Select.(type) {
-	case *tree.ParenSelect:
-		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, s.Select, false, true)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, false, true)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	query := stmtPlan.GetQuery()
-	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
-	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
-		cols[idx] = &plan.ColDef{
-			Name: strings.ToLower(query.Headings[idx]),
-			Alg:  plan.CompressType_Lz4,
-			Typ:  expr.Typ,
-			Default: &plan.Default{
-				NullAbility:  !expr.Typ.NotNullable,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-	}
-	tableDef.Cols = cols
-
-	viewData, err := json.Marshal(ViewData{
-		Stmt:            ctx.GetRootSql(),
-		DefaultDatabase: ctx.DefaultDatabase(),
-		SQLMode:         parserSQLModeFromContext(ctx),
-		SecurityType:    getViewSecurityTypeFromContext(ctx),
-	})
-	if err != nil {
-		return nil, err
-	}
-	tableDef.ViewSql = &plan.ViewDef{
-		View: string(viewData),
-	}
-	properties := []*plan.Property{
-		{
-			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: ctx.GetRootSql(),
-		},
-	}
-	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_Properties{
-			Properties: &plan.PropertiesDef{
-				Properties: properties,
-			},
-		},
-	})
-
-	return &tableDef, nil
-}
 
 func getViewSecurityTypeFromContext(ctx CompilerContext) string {
 	securityType := ""
@@ -360,120 +295,6 @@ func ctasExprCanBeNull(expr *Expr) bool {
 	fn := expr.GetF()
 	return fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
 		types.T(expr.Typ.Id) == types.T_datetime
-}
-
-func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
-	streamName := string(stmt.SourceName.ObjectName)
-	createStream := &plan.CreateTable{
-		IfNotExists: stmt.IfNotExists,
-		TableDef: &TableDef{
-			TableType: catalog.SystemSourceRel,
-			Name:      streamName,
-		},
-	}
-	if len(stmt.SourceName.SchemaName) == 0 {
-		createStream.Database = ctx.DefaultDatabase()
-	} else {
-		createStream.Database = string(stmt.SourceName.SchemaName)
-	}
-
-	if sub, err := ctx.GetSubscriptionMeta(createStream.Database, nil); err != nil {
-		return nil, err
-	} else if sub != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create stream in subscription database")
-	}
-
-	if err := buildSourceDefs(stmt, ctx, createStream); err != nil {
-		return nil, err
-	}
-
-	var properties []*plan.Property
-	properties = append(properties, &plan.Property{
-		Key:   catalog.SystemRelAttr_Kind,
-		Value: catalog.SystemSourceRel,
-	})
-	configs := make(map[string]interface{})
-	for _, option := range stmt.Options {
-		switch opt := option.(type) {
-		case *tree.CreateSourceWithOption:
-			key := strings.ToLower(string(opt.Key))
-			val := opt.Val.(*tree.NumVal).String()
-			properties = append(properties, &plan.Property{
-				Key:   key,
-				Value: val,
-			})
-			configs[key] = val
-		}
-	}
-	if err := mokafka.ValidateConfig(context.Background(), configs, mokafka.NewKafkaAdapter); err != nil {
-		return nil, err
-	}
-	createStream.TableDef.Defs = append(createStream.TableDef.Defs, &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_Properties{
-			Properties: &plan.PropertiesDef{
-				Properties: properties,
-			},
-		},
-	})
-	return &Plan{
-		Plan: &plan.Plan_Ddl{
-			Ddl: &plan.DataDefinition{
-				DdlType: plan.DataDefinition_CREATE_TABLE,
-				Definition: &plan.DataDefinition_CreateTable{
-					CreateTable: createStream,
-				},
-			},
-		},
-	}, nil
-}
-
-func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream *plan.CreateTable) error {
-	colMap := make(map[string]*ColDef)
-	for _, item := range stmt.Defs {
-		switch def := item.(type) {
-		case *tree.ColumnTableDef:
-			colName := def.Name.ColName()
-			colNameOrigin := def.Name.ColNameOrigin()
-			if _, ok := colMap[colName]; ok {
-				return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate column name: %s", colNameOrigin)
-			}
-			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
-			if err != nil {
-				return err
-			}
-			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
-				return err
-			}
-			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
-				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
-				if colType.GetWidth() > types.MaxStringSize {
-					return moerr.NewInvalidInputf(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
-				}
-			}
-			col := &ColDef{
-				Name:       colName,
-				OriginName: colNameOrigin,
-				Alg:        plan.CompressType_Lz4,
-				Typ:        colType,
-			}
-			colMap[colName] = col
-			for _, attr := range def.Attributes {
-				switch a := attr.(type) {
-				case *tree.AttributeKey:
-					col.Primary = true
-				case *tree.AttributeHeader:
-					col.Header = a.Key
-				case *tree.AttributeHeaders:
-					col.Headers = true
-				}
-			}
-			createStream.TableDef.Cols = append(createStream.TableDef.Cols, col)
-		case *tree.CreateSourceWithOption:
-		default:
-			return moerr.NewNYIf(ctx.GetContext(), "stream def: '%v'", def)
-		}
-	}
-	return nil
 }
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
@@ -1178,17 +999,6 @@ func buildCreateTable(
 
 	// set tableDef
 	var err error
-	if stmt.IsDynamicTable {
-		tableDef, err := genDynamicTableDef(ctx, stmt.AsSource)
-		if err != nil {
-			return nil, err
-		}
-
-		createTable.TableDef.Cols = tableDef.Cols
-		// createTable.TableDef.ViewSql = tableDef.ViewSql
-		// createTable.TableDef.Defs = tableDef.Defs
-	}
-
 	var asSelectCols []*ColDef
 	var asSelectQuery *Query
 	if stmt.IsAsSelect {

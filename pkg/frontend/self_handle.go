@@ -106,13 +106,6 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
 			return
 		}
-	case *tree.CreateConnector:
-		ses.EnterFPrint(FPCreateConnector)
-		defer ses.ExitFPrint(FPCreateConnector)
-		err = handleCreateConnector(execCtx.reqCtx, ses, st)
-		if err != nil {
-			return
-		}
 	case *tree.PauseDaemonTask:
 		ses.EnterFPrint(FPPauseDaemonTask)
 		defer ses.ExitFPrint(FPPauseDaemonTask)
@@ -168,19 +161,6 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		ses.EnterFPrint(FPShowSQLTaskRuns)
 		defer ses.ExitFPrint(FPShowSQLTaskRuns)
 		if err = handleShowSQLTaskRuns(execCtx.reqCtx, ses, execCtx, st); err != nil {
-			return
-		}
-	case *tree.DropConnector:
-		ses.EnterFPrint(FPDropConnector)
-		defer ses.ExitFPrint(FPDropConnector)
-		err = handleDropConnector(execCtx.reqCtx, ses, st)
-		if err != nil {
-			return
-		}
-	case *tree.ShowConnectors:
-		ses.EnterFPrint(FPShowConnectors)
-		defer ses.ExitFPrint(FPShowConnectors)
-		if err = handleShowConnectors(execCtx.reqCtx, ses); err != nil {
 			return
 		}
 	case *tree.CreateIcebergCatalog:
