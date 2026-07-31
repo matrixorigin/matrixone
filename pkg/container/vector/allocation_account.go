@@ -41,23 +41,27 @@ type AllocationAccountSelection struct {
 	accountBitmaps bool
 }
 
-// FunctionParameterAllocation is the immutable allocation provenance for
-// row-scaled function-parameter conversion scratch.
-type FunctionParameterAllocation struct {
-	account *mpool.AllocationAccount
-	owner   mpool.AllocationOwner
-	site    mpool.AllocationSite
+// FunctionAllocation is the immutable allocation provenance for row-scaled
+// function-owned scratch. Parameter conversion and general function scratch
+// use distinct sites so the physical charges remain diagnosable.
+type FunctionAllocation struct {
+	account       *mpool.AllocationAccount
+	owner         mpool.AllocationOwner
+	parameterSite mpool.AllocationSite
+	scratchSite   mpool.AllocationSite
 }
 
-func NewFunctionParameterAllocation(
+func NewFunctionAllocation(
 	account *mpool.AllocationAccount,
 	owner mpool.AllocationOwner,
-	site mpool.AllocationSite,
-) (*FunctionParameterAllocation, error) {
-	allocation := &FunctionParameterAllocation{
-		account: account,
-		owner:   owner,
-		site:    site,
+	parameterSite mpool.AllocationSite,
+	scratchSite mpool.AllocationSite,
+) (*FunctionAllocation, error) {
+	allocation := &FunctionAllocation{
+		account:       account,
+		owner:         owner,
+		parameterSite: parameterSite,
+		scratchSite:   scratchSite,
 	}
 	if err := allocation.validate(); err != nil {
 		return nil, err
@@ -65,13 +69,14 @@ func NewFunctionParameterAllocation(
 	return allocation, nil
 }
 
-func (a *FunctionParameterAllocation) validate() error {
+func (a *FunctionAllocation) validate() error {
 	if a == nil ||
 		a.account == nil ||
 		a.account.Handle() == 0 ||
 		a.owner < mpool.AllocationOwnerMin ||
 		a.owner > mpool.AllocationOwnerMax ||
-		a.site < mpool.AllocationSiteMin {
+		a.parameterSite < mpool.AllocationSiteMin ||
+		a.scratchSite < mpool.AllocationSiteMin {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	return nil

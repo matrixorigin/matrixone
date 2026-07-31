@@ -425,6 +425,41 @@ func TestExpressionAllocationAccountConstructionRollback(t *testing.T) {
 	finalizeTestExpressionAllocationAccount(t, state)
 }
 
+func TestExpressionAllocationAccountConstNullPreservesBinaryFlag(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(
+		t,
+		"",
+		mpool.MustNew("expression-allocation-const-null"),
+	)
+	defer proc.Free()
+	state := newTestExpressionAllocationAccount(t, 1<<20, 4)
+
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varbinary)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Isnull: true,
+			IsBin:  true,
+		}},
+	}
+	executor, err := NewExpressionExecutorWithAllocation(
+		proc,
+		expr,
+		state.allocation,
+	)
+	require.NoError(t, err)
+	result, err := executor.Eval(
+		proc,
+		[]*batch.Batch{batch.EmptyForConstFoldBatch},
+		nil,
+	)
+	require.NoError(t, err)
+	require.True(t, result.IsConstNull())
+	require.True(t, result.GetIsBin())
+
+	executor.Free()
+	finalizeTestExpressionAllocationAccount(t, state)
+}
+
 func TestExpressionAllocationAccountScratchFailureCleanup(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(
 		t,

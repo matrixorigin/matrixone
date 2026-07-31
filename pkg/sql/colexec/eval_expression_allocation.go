@@ -41,6 +41,7 @@ const (
 	ExpressionAllocationSiteScratchNulls
 	ExpressionAllocationSiteScratchGrouping
 	ExpressionAllocationSiteParameterConversion
+	ExpressionAllocationSiteFunctionScratch
 )
 
 // ExpressionAllocationAccount is the immutable allocation provenance shared
@@ -50,10 +51,10 @@ type ExpressionAllocationAccount struct {
 	account *mpool.AllocationAccount
 	owner   mpool.AllocationOwner
 
-	constant  *vector.AllocationAccountSelection
-	result    *vector.AllocationAccountSelection
-	scratch   *vector.AllocationAccountSelection
-	parameter *vector.FunctionParameterAllocation
+	constant *vector.AllocationAccountSelection
+	result   *vector.AllocationAccountSelection
+	scratch  *vector.AllocationAccountSelection
+	function *vector.FunctionAllocation
 }
 
 func NewExpressionAllocationAccount(
@@ -93,21 +94,22 @@ func NewExpressionAllocationAccount(
 	if err != nil {
 		return nil, err
 	}
-	parameter, err := vector.NewFunctionParameterAllocation(
+	function, err := vector.NewFunctionAllocation(
 		account,
 		owner,
 		ExpressionAllocationSiteParameterConversion,
+		ExpressionAllocationSiteFunctionScratch,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &ExpressionAllocationAccount{
-		account:   account,
-		owner:     owner,
-		constant:  constant,
-		result:    result,
-		scratch:   scratch,
-		parameter: parameter,
+		account:  account,
+		owner:    owner,
+		constant: constant,
+		result:   result,
+		scratch:  scratch,
+		function: function,
 	}, nil
 }
 
@@ -116,7 +118,7 @@ func (a *ExpressionAllocationAccount) validate() error {
 		a.owner < mpool.AllocationOwnerMin ||
 		a.owner > mpool.AllocationOwnerMax ||
 		a.constant == nil || a.result == nil || a.scratch == nil ||
-		a.parameter == nil {
+		a.function == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	return nil

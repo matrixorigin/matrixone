@@ -485,7 +485,9 @@ type OptFunctionResultWrapper interface {
 	getConvenientParamList() []reusableParameterWrapper
 	hasParameterScratch() bool
 	resizeParameterScratch(idx int, size int) ([]byte, error)
-	setParameterAllocation(allocation *FunctionParameterAllocation)
+	setFunctionAllocation(allocation *FunctionAllocation)
+	HasFunctionScratch() bool
+	ResizeFunctionScratch(size int) ([]byte, bool, error)
 }
 
 func OptGetParamFromWrapper[ParamType types.FixedSizeTExceptStrType](
@@ -723,11 +725,11 @@ type FunctionResult[T types.FixedSizeT] struct {
 	vec *Vector
 	mp  *mpool.MPool
 
-	allocationAccount   *AllocationAccountSelection
-	parameterAllocation *FunctionParameterAllocation
-	isVarlena           bool
-	cols                []T
-	length              uint64
+	allocationAccount  *AllocationAccountSelection
+	functionAllocation *FunctionAllocation
+	isVarlena          bool
+	cols               []T
+	length             uint64
 
 	//  convenientParam save parameter wrappers for easy getting row values.
 	//
@@ -735,6 +737,7 @@ type FunctionResult[T types.FixedSizeT] struct {
 	// 	there are still many built-in functions don't use it now, and will be fixed in the future.
 	convenientParam  []reusableParameterWrapper
 	parameterScratch []*mpool.AccountedBuffer
+	functionScratch  *mpool.AccountedBuffer
 }
 
 func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *FunctionResult[T] {
@@ -769,7 +772,7 @@ func (fr *FunctionResult[T]) UseOptFunctionParamFrame(paramCount int) {
 		fr.convenientParam = make([]reusableParameterWrapper, paramCount)
 	}
 	if fr.allocationAccount != nil &&
-		fr.parameterAllocation != nil &&
+		fr.functionAllocation != nil &&
 		fr.parameterScratch == nil {
 		fr.parameterScratch = make([]*mpool.AccountedBuffer, paramCount)
 	}
@@ -780,13 +783,17 @@ func (fr *FunctionResult[T]) getConvenientParamList() []reusableParameterWrapper
 }
 
 func (fr *FunctionResult[T]) hasParameterScratch() bool {
-	return fr.parameterAllocation != nil
+	return fr.functionAllocation != nil
 }
 
-func (fr *FunctionResult[T]) setParameterAllocation(
-	allocation *FunctionParameterAllocation,
+func (fr *FunctionResult[T]) setFunctionAllocation(
+	allocation *FunctionAllocation,
 ) {
-	fr.parameterAllocation = allocation
+	fr.functionAllocation = allocation
+}
+
+func (fr *FunctionResult[T]) HasFunctionScratch() bool {
+	return fr.functionAllocation != nil
 }
 
 func (fr *FunctionResult[T]) resizeParameterScratch(
@@ -802,9 +809,9 @@ func (fr *FunctionResult[T]) resizeParameterScratch(
 	if fr.parameterScratch[idx] == nil {
 		buffer, err := mpool.NewAccountedBuffer(
 			fr.mp,
-			fr.parameterAllocation.account,
-			fr.parameterAllocation.owner,
-			fr.parameterAllocation.site,
+			fr.functionAllocation.account,
+			fr.functionAllocation.owner,
+			fr.functionAllocation.parameterSite,
 		)
 		if err != nil {
 			return nil, err
@@ -815,6 +822,33 @@ func (fr *FunctionResult[T]) resizeParameterScratch(
 		return nil, err
 	}
 	return fr.parameterScratch[idx].Bytes(), nil
+}
+
+// ResizeFunctionScratch returns retained allocation-accounted off-heap
+// scratch for data-scaled function internals. Legacy results report selected
+// false so callers preserve their existing allocator path.
+func (fr *FunctionResult[T]) ResizeFunctionScratch(
+	size int,
+) ([]byte, bool, error) {
+	if fr.functionAllocation == nil {
+		return nil, false, nil
+	}
+	if fr.functionScratch == nil {
+		buffer, err := mpool.NewAccountedBuffer(
+			fr.mp,
+			fr.functionAllocation.account,
+			fr.functionAllocation.owner,
+			fr.functionAllocation.scratchSite,
+		)
+		if err != nil {
+			return nil, true, err
+		}
+		fr.functionScratch = buffer
+	}
+	if err := fr.functionScratch.Resize(size); err != nil {
+		return nil, true, err
+	}
+	return fr.functionScratch.Bytes(), true, nil
 }
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
@@ -883,24 +917,40 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 // AppendBytesWithFill appends one non-null varlena value and lets fill write
 // directly into the result Vector's admitted backing storage. The provided
 // slice is valid only during fill. A panic rolls the unpublished row and area
-// length back before propagating.
+// length back before propagating. Use AppendBytesWithBuilder when construction
+// can return an error or a shorter value.
 func (fr *FunctionResult[T]) AppendBytesWithFill(
 	size int,
 	fill func([]byte),
 ) error {
+	return fr.AppendBytesWithBuilder(size, func(dst []byte) (int, error) {
+		fill(dst)
+		return size, nil
+	})
+}
+
+// AppendBytesWithBuilder reserves capacity for one non-null varlena value and
+// lets build return the number of bytes it initialized. This supports codecs
+// whose exact output is known only after encoding without allocating a second
+// payload buffer. Reserved capacity remains owned by the result across reuse;
+// only the published area length is reduced to the actual value size.
+func (fr *FunctionResult[T]) AppendBytesWithBuilder(
+	capacity int,
+	build func([]byte) (int, error),
+) error {
 	if !fr.isVarlena ||
 		fr.vec == nil ||
 		fr.vec.IsConst() ||
-		size < 0 ||
-		fill == nil {
+		capacity < 0 ||
+		build == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	oldAreaLen := len(fr.vec.area)
-	if uint64(oldAreaLen)+uint64(size) > uint64(math.MaxUint32) {
+	if uint64(oldAreaLen)+uint64(capacity) > uint64(math.MaxUint32) {
 		return mpool.ErrAllocationAccountInvalid
 	}
-	areaSize := size
-	if size <= types.VarlenaInlineSize {
+	areaSize := capacity
+	if capacity <= types.VarlenaInlineSize {
 		areaSize = 0
 	}
 	if err := fr.vec.PreExtendWithArea(1, areaSize, fr.mp); err != nil {
@@ -912,12 +962,10 @@ func (fr *FunctionResult[T]) AppendBytesWithFill(
 	oldValue := values[index]
 	values[index] = types.Varlena{}
 	var target []byte
-	if size <= types.VarlenaInlineSize {
-		values[index][0] = byte(size)
-		target = values[index][1 : 1+size]
+	if capacity <= types.VarlenaInlineSize {
+		target = values[index][1 : 1+capacity]
 	} else {
-		fr.vec.area = fr.vec.area[:oldAreaLen+size]
-		values[index].SetOffsetLen(uint32(oldAreaLen), uint32(size))
+		fr.vec.area = fr.vec.area[:oldAreaLen+capacity]
 		target = fr.vec.area[oldAreaLen:]
 	}
 
@@ -928,7 +976,23 @@ func (fr *FunctionResult[T]) AppendBytesWithFill(
 			values[index] = oldValue
 		}
 	}()
-	fill(target)
+	written, err := build(target)
+	if err != nil {
+		return err
+	}
+	if written < 0 || written > capacity {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if written <= types.VarlenaInlineSize {
+		if capacity > types.VarlenaInlineSize {
+			copy(values[index][1:1+written], target[:written])
+			fr.vec.area = fr.vec.area[:oldAreaLen]
+		}
+		values[index][0] = byte(written)
+	} else {
+		fr.vec.area = fr.vec.area[:oldAreaLen+written]
+		values[index].SetOffsetLen(uint32(oldAreaLen), uint32(written))
+	}
 	fr.vec.length++
 	published = true
 	return nil
@@ -1026,8 +1090,12 @@ func (fr *FunctionResult[T]) Free() {
 			fr.parameterScratch[i] = nil
 		}
 	}
+	if fr.functionScratch != nil {
+		fr.functionScratch.Free()
+		fr.functionScratch = nil
+	}
 	fr.allocationAccount = nil
-	fr.parameterAllocation = nil
+	fr.functionAllocation = nil
 	fr.convenientParam = nil
 	fr.parameterScratch = nil
 }
@@ -1050,24 +1118,24 @@ func NewFunctionResultWrapperWithAllocation(
 	return newFunctionResultWrapper(typ, mp, selection), nil
 }
 
-func NewFunctionResultWrapperWithParameterAllocation(
+func NewFunctionResultWrapperWithFunctionAllocation(
 	typ types.Type,
 	mp *mpool.MPool,
 	selection *AllocationAccountSelection,
-	parameterAllocation *FunctionParameterAllocation,
+	functionAllocation *FunctionAllocation,
 ) (FunctionResultWrapper, error) {
 	if err := selection.validate(); err != nil {
 		return nil, err
 	}
-	if err := parameterAllocation.validate(); err != nil {
+	if err := functionAllocation.validate(); err != nil {
 		return nil, err
 	}
-	if selection.account != parameterAllocation.account ||
-		selection.owner != parameterAllocation.owner {
+	if selection.account != functionAllocation.account ||
+		selection.owner != functionAllocation.owner {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
 	result := newFunctionResultWrapper(typ, mp, selection)
-	result.setParameterAllocation(parameterAllocation)
+	result.setFunctionAllocation(functionAllocation)
 	return result, nil
 }
 

@@ -772,11 +772,11 @@ func (expr *FunctionExpressionExecutor) init(
 		expr.resultVector = vector.NewFunctionResultWrapper(retType, m)
 		return nil
 	}
-	expr.resultVector, err = vector.NewFunctionResultWrapperWithParameterAllocation(
+	expr.resultVector, err = vector.NewFunctionResultWrapperWithFunctionAllocation(
 		retType,
 		m,
 		allocation.result,
-		allocation.parameter,
+		allocation.function,
 	)
 	return err
 }
@@ -1117,11 +1117,11 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			)
 		} else {
 			expr.selectedResult, err =
-				vector.NewFunctionResultWrapperWithParameterAllocation(
+				vector.NewFunctionResultWrapperWithFunctionAllocation(
 					expr.resultType,
 					expr.m,
 					expr.allocation.scratch,
-					expr.allocation.parameter,
+					expr.allocation.function,
 				)
 			if err != nil {
 				return nil, err
@@ -1573,17 +1573,17 @@ func generateConstExpressionExecutor(
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
-		if err != nil {
-			return nil, err
-		}
-		if vec == nil {
-			return nil, moerr.NewNYI(
-				proc.Ctx,
-				fmt.Sprintf("const expression %v", con.GetValue()),
-			)
-		}
-		vec.SetIsBin(con.IsBin)
 	}
+	if err != nil {
+		return nil, err
+	}
+	if vec == nil {
+		return nil, moerr.NewNYI(
+			proc.Ctx,
+			fmt.Sprintf("const expression %v", con.GetValue()),
+		)
+	}
+	vec.SetIsBin(con.IsBin)
 	return vec, nil
 }
 

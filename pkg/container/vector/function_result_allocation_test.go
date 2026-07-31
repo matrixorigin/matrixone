@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -92,30 +93,32 @@ func TestFunctionResultAllocationAccountFailure(t *testing.T) {
 	)
 
 	state := newTestVectorAllocationAccount(t, 1<<20, 4)
-	_, err := NewFunctionResultWrapperWithParameterAllocation(
+	_, err := NewFunctionResultWrapperWithFunctionAllocation(
 		types.T_int64.ToType(),
 		zeroMP,
 		state.selection,
 		nil,
 	)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
-	otherOwner, err := NewFunctionParameterAllocation(
+	otherOwner, err := NewFunctionAllocation(
 		state.account,
 		testVectorAllocationOwner+1,
 		testVectorParamAllocationSite,
+		testVectorScratchAllocationSite,
 	)
 	require.NoError(t, err)
-	_, err = NewFunctionResultWrapperWithParameterAllocation(
+	_, err = NewFunctionResultWrapperWithFunctionAllocation(
 		types.T_int64.ToType(),
 		zeroMP,
 		state.selection,
 		otherOwner,
 	)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
-	_, err = NewFunctionParameterAllocation(
+	_, err = NewFunctionAllocation(
 		nil,
 		testVectorAllocationOwner,
 		testVectorParamAllocationSite,
+		testVectorScratchAllocationSite,
 	)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 	finalizeTestVectorAllocationAccount(t, state)
@@ -175,10 +178,25 @@ func TestFunctionResultAppendBytesWithFillLifecycle(t *testing.T) {
 	require.Equal(t, beforeLength, wrapper.GetResultVector().Length())
 	require.Equal(t, beforeAreaLength, len(wrapper.GetResultVector().GetArea()))
 
-	require.NoError(t, result.AppendBytesWithFill(4, func(dst []byte) {
+	fillErr := errors.New("injected fill error")
+	require.ErrorIs(t, result.AppendBytesWithBuilder(128, func(dst []byte) (int, error) {
+		dst[0] = 2
+		return 0, fillErr
+	}), fillErr)
+	require.Equal(t, beforeLength, wrapper.GetResultVector().Length())
+	require.Equal(t, beforeAreaLength, len(wrapper.GetResultVector().GetArea()))
+	require.ErrorIs(t, result.AppendBytesWithBuilder(128, func([]byte) (int, error) {
+		return 129, nil
+	}), mpool.ErrAllocationAccountInvalid)
+	require.Equal(t, beforeLength, wrapper.GetResultVector().Length())
+	require.Equal(t, beforeAreaLength, len(wrapper.GetResultVector().GetArea()))
+
+	require.NoError(t, result.AppendBytesWithBuilder(512, func(dst []byte) (int, error) {
 		copy(dst, "last")
+		return 4, nil
 	}))
 	require.Equal(t, []byte("last"), wrapper.GetResultVector().GetBytesAt(2))
+	require.Equal(t, beforeAreaLength, len(wrapper.GetResultVector().GetArea()))
 	require.Positive(t, state.account.Snapshot().Used)
 
 	wrapper.Free()
@@ -187,14 +205,14 @@ func TestFunctionResultAppendBytesWithFillLifecycle(t *testing.T) {
 }
 
 func TestFunctionResultAllocationAccountDecimalParameterScratch(t *testing.T) {
-	state := newTestVectorParameterAllocationAccount(t, 1<<20, 16)
+	state := newTestVectorFunctionAllocationAccount(t, 1<<20, 16)
 	mp := mpool.MustNew("function-parameter-allocation")
 	defer mpool.DeleteMPool(mp)
-	result, err := NewFunctionResultWrapperWithParameterAllocation(
+	result, err := NewFunctionResultWrapperWithFunctionAllocation(
 		types.T_bool.ToType(),
 		mp,
 		state.selection,
-		state.parameter,
+		state.function,
 	)
 	require.NoError(t, err)
 	result.UseOptFunctionParamFrame(1)
@@ -289,14 +307,14 @@ func TestFunctionResultAllocationAccountDecimalParameterScratch(t *testing.T) {
 }
 
 func TestFunctionResultAllocationAccountDecimalParameterFailure(t *testing.T) {
-	state := newTestVectorParameterAllocationAccount(t, 127, 4)
+	state := newTestVectorFunctionAllocationAccount(t, 127, 4)
 	mp := mpool.MustNew("function-parameter-allocation-failure")
 	defer mpool.DeleteMPool(mp)
-	result, err := NewFunctionResultWrapperWithParameterAllocation(
+	result, err := NewFunctionResultWrapperWithFunctionAllocation(
 		types.T_bool.ToType(),
 		mp,
 		state.selection,
-		state.parameter,
+		state.function,
 	)
 	require.NoError(t, err)
 	result.UseOptFunctionParamFrame(1)
@@ -330,5 +348,62 @@ func TestFunctionResultAllocationAccountDecimalParameterFailure(t *testing.T) {
 
 	result.Free()
 	source.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestFunctionResultAllocationAccountFunctionScratch(t *testing.T) {
+	state := newTestVectorFunctionAllocationAccount(t, 1<<20, 8)
+	mp := mpool.MustNew("function-scratch-allocation")
+	defer mpool.DeleteMPool(mp)
+	result, err := NewFunctionResultWrapperWithFunctionAllocation(
+		types.T_bool.ToType(),
+		mp,
+		state.selection,
+		state.function,
+	)
+	require.NoError(t, err)
+
+	scratch, selected, err := result.ResizeFunctionScratch(128)
+	require.NoError(t, err)
+	require.True(t, selected)
+	require.Len(t, scratch, 128)
+	used := state.account.Snapshot().Used
+	require.Positive(t, used)
+
+	scratch, selected, err = result.ResizeFunctionScratch(64)
+	require.NoError(t, err)
+	require.True(t, selected)
+	require.Len(t, scratch, 64)
+	require.Equal(t, used, state.account.Snapshot().Used)
+
+	result.Free()
+	require.Zero(t, state.account.Snapshot().Used)
+	finalizeTestVectorAllocationAccount(t, state)
+
+	legacy := NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	scratch, selected, err = legacy.ResizeFunctionScratch(128)
+	require.NoError(t, err)
+	require.False(t, selected)
+	require.Nil(t, scratch)
+	legacy.Free()
+}
+
+func TestFunctionResultAllocationAccountFunctionScratchFailure(t *testing.T) {
+	state := newTestVectorFunctionAllocationAccount(t, 127, 2)
+	mp := mpool.MustNew("function-scratch-allocation-failure")
+	defer mpool.DeleteMPool(mp)
+	result, err := NewFunctionResultWrapperWithFunctionAllocation(
+		types.T_bool.ToType(),
+		mp,
+		state.selection,
+		state.function,
+	)
+	require.NoError(t, err)
+
+	_, selected, err := result.ResizeFunctionScratch(128)
+	require.True(t, selected)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, state.account.Snapshot().Used)
+	result.Free()
 	finalizeTestVectorAllocationAccount(t, state)
 }

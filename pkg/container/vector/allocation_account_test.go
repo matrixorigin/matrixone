@@ -26,22 +26,23 @@ import (
 )
 
 const (
-	testVectorAllocationOwner     mpool.AllocationOwner = 1
-	testVectorDataAllocationSite  mpool.AllocationSite  = 1
-	testVectorAreaAllocationSite  mpool.AllocationSite  = 2
-	testVectorNullAllocationSite  mpool.AllocationSite  = 3
-	testVectorGroupAllocationSite mpool.AllocationSite  = 4
-	testVectorParamAllocationSite mpool.AllocationSite  = 5
+	testVectorAllocationOwner       mpool.AllocationOwner = 1
+	testVectorDataAllocationSite    mpool.AllocationSite  = 1
+	testVectorAreaAllocationSite    mpool.AllocationSite  = 2
+	testVectorNullAllocationSite    mpool.AllocationSite  = 3
+	testVectorGroupAllocationSite   mpool.AllocationSite  = 4
+	testVectorParamAllocationSite   mpool.AllocationSite  = 5
+	testVectorScratchAllocationSite mpool.AllocationSite  = 6
 )
 
 type testVectorAllocationAccount struct {
 	registry  *mpool.AllocationAccountRegistry
 	account   *mpool.AllocationAccount
 	selection *AllocationAccountSelection
-	parameter *FunctionParameterAllocation
+	function  *FunctionAllocation
 }
 
-func newTestVectorParameterAllocationAccount(
+func newTestVectorFunctionAllocationAccount(
 	t testing.TB,
 	limit uint64,
 	allocationSlots uint64,
@@ -60,17 +61,18 @@ func newTestVectorParameterAllocationAccount(
 		testVectorGroupAllocationSite,
 	)
 	require.NoError(t, err)
-	parameter, err := NewFunctionParameterAllocation(
+	function, err := NewFunctionAllocation(
 		account,
 		testVectorAllocationOwner,
 		testVectorParamAllocationSite,
+		testVectorScratchAllocationSite,
 	)
 	require.NoError(t, err)
 	return testVectorAllocationAccount{
 		registry:  registry,
 		account:   account,
 		selection: selection,
-		parameter: parameter,
+		function:  function,
 	}
 }
 
