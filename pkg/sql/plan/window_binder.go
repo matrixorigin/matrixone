@@ -292,10 +292,19 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 				return nil, err
 			}
 
-			// Keep enum/set window ordering aligned with definition order.
-			if fn := expr.GetF(); fn != nil &&
-				(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun) {
-				expr = fn.Args[1]
+			// Keep enum/set window ordering aligned with definition order. The
+			// originating block can use the raw storage value; a pure display
+			// column crossing a query boundary uses its planner provenance.
+			if isEnumOrSetDisplayValueExpr(expr) {
+				fn := expr.GetF()
+				if len(fn.Args) == 2 && isEnumOrSetPlanType(&fn.Args[1].Typ) {
+					expr = fn.Args[1]
+				}
+			} else if storageType := ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
+				expr, err = makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			orderBy := &plan.OrderBySpec{

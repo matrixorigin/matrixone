@@ -26,6 +26,8 @@ insert into set01 values
 select * from set01 order by id;
 select * from set01 where colors = 'red,green' order by id;
 select * from set01 order by colors;
+-- SET bit-order, including multi-member values, must survive a derived table.
+select id, colors from (select id, colors from set01) d order by colors, id;
 
 drop table if exists set_idx;
 create table set_idx (

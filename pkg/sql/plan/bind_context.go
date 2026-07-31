@@ -36,6 +36,8 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 
 		projectColByAst: make(map[string]int32),
 
+		mysqlSpecialOrderTypes: make(map[int32]*plan.Type),
+
 		aliasMap:       make(map[string]*aliasItem),
 		aliasFrequency: make(map[string]int),
 		bindingByTag:   make(map[int32]*Binding),

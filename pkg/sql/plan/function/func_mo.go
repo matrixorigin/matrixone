@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"go.uber.org/zap"
@@ -1011,6 +1012,13 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
+	var exactIndexes map[string]types.Enum
+	if length >= enumExactIndexMinRows && ivecs[0].IsConst() && !ivecs[0].IsConstNull() {
+		typeEnum, typeEnumNull := typeEnums.GetStrValue(0)
+		if !typeEnumNull {
+			exactIndexes = buildEnumExactIndexesForBatch(functionUtil.QuickBytesToStr(typeEnum), length)
+		}
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
@@ -1024,17 +1032,83 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			enumStr := functionUtil.QuickBytesToStr(enumValue)
 
 			var index types.Enum
-			index, err := types.ParseEnum(typeEnumVal, enumStr)
-			if err != nil {
-				return err
+			if exactIndexes != nil {
+				index = exactIndexes[enumStr]
+			}
+			if index == 0 {
+				var err error
+				index, err = types.ParseEnum(typeEnumVal, enumStr)
+				if err != nil {
+					return err
+				}
 			}
 
-			if err = rs.Append(index, false); err != nil {
+			if err := rs.Append(index, false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+const (
+	enumExactIndexMinRows = 8
+	enumExactIndexMinWork = 64
+)
+
+// Small batches and small total scan work stay on ParseEnum's existing linear
+// path: building maps there would penalize common single-row DML. The index is
+// reserved for workloads whose rows multiplied by labels are large enough to
+// amortize it, including large sorts over short ENUM definitions.
+func buildEnumExactIndexesForBatch(enumValues string, length int) map[string]types.Enum {
+	if length < enumExactIndexMinRows {
+		return nil
+	}
+	labelCount := strings.Count(enumValues, ",") + 1
+	rowsNeeded := (enumExactIndexMinWork + labelCount - 1) / labelCount
+	if length < rowsNeeded {
+		return nil
+	}
+	return buildEnumExactIndexes(enumValues)
+}
+
+// buildEnumExactIndexes makes the planner-generated display-to-index path
+// O(labels + rows) for a constant ENUM definition. Each exact spelling maps
+// to the first EqualFold-equivalent member, preserving ParseEnum semantics for
+// definitions that contain duplicate or case-equivalent labels. Non-exact
+// inputs still fall back to ParseEnum.
+func buildEnumExactIndexes(enumValues string) map[string]types.Enum {
+	if enumValues == "" {
+		return nil
+	}
+
+	values := strings.Split(enumValues, ",")
+	firstByFold := make(map[string]types.Enum, len(values))
+	exactIndexes := make(map[string]types.Enum, len(values))
+	for i, value := range values {
+		foldKey := enumEqualFoldKey(value)
+		index, ok := firstByFold[foldKey]
+		if !ok {
+			index = types.Enum(i + 1)
+			firstByFold[foldKey] = index
+		}
+		exactIndexes[value] = index
+	}
+	return exactIndexes
+}
+
+func enumEqualFoldKey(value string) string {
+	var folded strings.Builder
+	for _, r := range value {
+		min := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < min {
+				min = next
+			}
+		}
+		folded.WriteRune(min)
+	}
+	return folded.String()
 }
 
 // enum("a","b","c") -> CastIndexValueToIndex(1) -> 1

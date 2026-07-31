@@ -3423,6 +3423,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		subCtxList[idx] = subCtx
 		nodes[idx] = nodeID
 	}
+	// Type coercion below mutates branch project expressions in place, including
+	// the ENUM display expression and the type attached to a literal NULL.
+	// Capture both kinds of provenance before that mutation so a pure NULL can
+	// remain neutral without mistaking an explicit CAST(NULL AS string) for a
+	// neutral branch.
+	setBranchPureNull := make([][]bool, len(subCtxList))
+	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
+	for branchIdx, branchCtx := range subCtxList {
+		setBranchPureNull[branchIdx] = make([]bool, projectLength)
+		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
+		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
+			setBranchPureNull[branchIdx][colIdx] = isNullLiteralExpr(branchCtx.projects[colIdx])
+			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
+		}
+	}
 
 	// reset all select's return Projection(type cast up)
 	// we use coalesce function's type check&type cast rule
@@ -3601,6 +3616,39 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			},
 		})
 	}
+	// A set-operation result keeps ENUM/SET definition-order provenance only
+	// when every non-NULL branch is the same pure display contract. A literal
+	// NULL is neutral because it cannot introduce a competing comparison
+	// contract. Mixed definitions, explicit string casts, and ordinary strings
+	// intentionally clear provenance.
+	for colIdx, output := range ctx.projects {
+		if !types.T(output.Typ.Id).IsMySQLString() {
+			continue
+		}
+		var candidate *plan.Type
+		compatible := true
+		for branchIdx := range subCtxList {
+			branchType := setBranchOrderTypes[branchIdx][colIdx]
+			if branchType == nil {
+				if colIdx >= len(setBranchPureNull[branchIdx]) || !setBranchPureNull[branchIdx][colIdx] {
+					compatible = false
+					break
+				}
+				continue
+			}
+			if candidate == nil {
+				candidate = branchType
+				continue
+			}
+			if !mysqlSpecialOrderTypesCompatible(candidate, branchType) {
+				compatible = false
+				break
+			}
+		}
+		if compatible && candidate != nil {
+			ctx.mysqlSpecialOrderTypes[int32(colIdx)] = candidate
+		}
+	}
 	havingBinder := NewHavingBinder(builder, ctx)
 	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
 
@@ -3720,6 +3768,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				if err != nil {
 					return 0, err
 				}
+			}
+
+			expr, err = builder.rewriteMySQLSpecialOrderByExpr(ctx, expr)
+			if err != nil {
+				return 0, err
 			}
 
 			orderBy := &plan.OrderBySpec{
@@ -4096,6 +4149,19 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	builder.qry.Nodes[initLastNodeID].RecursiveCte = false
 
 	projects := builder.qry.Nodes[builder.qry.Nodes[initLastNodeID].Children[0]].ProjectList
+	// A recursive CTE may expose the anchor's ENUM/SET display contract only if
+	// every recursive member preserves the same contract. Capture the anchor
+	// before recursive-member coercion; a literal NULL is neutral, while an
+	// ordinary string expression starts (and keeps) the column incompatible.
+	recursiveOrderTypes := make([]*plan.Type, len(projects))
+	recursiveOrderCompatible := make([]bool, len(projects))
+	for colIdx := range projects {
+		if colIdx < len(initCtx.projects) {
+			recursiveOrderTypes[colIdx] = initCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
+			recursiveOrderCompatible[colIdx] = recursiveOrderTypes[colIdx] != nil ||
+				isNullLiteralExpr(initCtx.projects[colIdx])
+		}
+	}
 	// recursive statement
 	recursiveLastNodeID := initLastNodeID
 	initSourceStep := int32(len(builder.qry.Steps))
@@ -4130,6 +4196,27 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		recursiveLastNodeID, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
 		if err != nil {
 			return
+		}
+		// Snapshot the recursive member before it is coerced to the anchor's
+		// projection types. A cast inserted below must not be mistaken for proof
+		// that an ordinary string member has the anchor's definition order.
+		for colIdx := range projects {
+			if !recursiveOrderCompatible[colIdx] || colIdx >= len(subCtx.projects) {
+				recursiveOrderCompatible[colIdx] = false
+				continue
+			}
+			memberType := subCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
+			if memberType == nil {
+				if !isNullLiteralExpr(subCtx.projects[colIdx]) {
+					recursiveOrderCompatible[colIdx] = false
+				}
+				continue
+			}
+			if recursiveOrderTypes[colIdx] == nil {
+				recursiveOrderTypes[colIdx] = memberType
+			} else if !mysqlSpecialOrderTypesCompatible(recursiveOrderTypes[colIdx], memberType) {
+				recursiveOrderCompatible[colIdx] = false
+			}
 		}
 
 		//3.2 add Sink Node on the top of single recursive part
@@ -4170,6 +4257,16 @@ func (builder *QueryBuilder) bindRecursiveCte(
 
 		for i, col := range cols {
 			subCtx.headings[i] = string(col)
+		}
+	}
+	// Record every column explicitly, including incompatible columns as nil.
+	// The nil entry is a suppression sentinel: without it, the final binding
+	// would rediscover provenance from the anchor expression alone.
+	for colIdx := range projects {
+		if recursiveOrderCompatible[colIdx] && recursiveOrderTypes[colIdx] != nil {
+			initCtx.mysqlSpecialOrderTypes[int32(colIdx)] = recursiveOrderTypes[colIdx]
+		} else {
+			initCtx.mysqlSpecialOrderTypes[int32(colIdx)] = nil
 		}
 	}
 
@@ -7316,31 +7413,9 @@ func (builder *QueryBuilder) bindOrderBy(
 			return
 		}
 
-		// If the ORDER BY expression references a projected cast_index_to_value(enum_str, col),
-		// replace it with a hidden projection of the original ENUM/SET column so that sorting
-		// uses the internal definition order instead of the visible string order.
-		// This hidden raw key is a 1:1 mapping of the visible value, so keeping it through
-		// DISTINCT preserves dedup semantics and the final result projection trims it away.
-		if col := expr.GetCol(); col != nil && col.RelPos == ctx.projectTag {
-			if projExpr := ctx.projects[col.ColPos]; projExpr != nil {
-				if fn := projExpr.GetF(); fn != nil &&
-					(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun) {
-					orderKeyExpr := DeepCopyExpr(fn.Args[1])
-					colPos, appendErr := appendOrderByProjectExpr(ctx, orderKeyExpr)
-					if appendErr != nil {
-						return nil, appendErr
-					}
-					expr = &plan.Expr{
-						Typ: orderKeyExpr.Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: ctx.projectTag,
-								ColPos: colPos,
-							},
-						},
-					}
-				}
-			}
+		expr, err = builder.rewriteMySQLSpecialOrderByExpr(ctx, expr)
+		if err != nil {
+			return nil, err
 		}
 
 		orderBy := &plan.OrderBySpec{
@@ -7366,6 +7441,45 @@ func (builder *QueryBuilder) bindOrderBy(
 	}
 
 	return
+}
+
+// rewriteMySQLSpecialOrderByExpr materializes a numeric ENUM/SET ordering key
+// as a hidden projection. In the originating query block the raw storage value
+// is still available. Across a CTE/derived/set-operation boundary only a pure
+// display ColRef carries provenance, so the visible value is safely converted
+// back to its storage index.
+func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, expr *plan.Expr) (*plan.Expr, error) {
+	col := expr.GetCol()
+	if col == nil || col.RelPos != ctx.projectTag || col.ColPos < 0 || int(col.ColPos) >= len(ctx.projects) {
+		return expr, nil
+	}
+
+	projectExpr := ctx.projects[col.ColPos]
+	var orderKeyExpr *plan.Expr
+	if isEnumOrSetDisplayValueExpr(projectExpr) {
+		fn := projectExpr.GetF()
+		if len(fn.Args) != 2 || !isEnumOrSetPlanType(&fn.Args[1].Typ) {
+			return expr, nil
+		}
+		if ctx.isDistinct && !mysqlSpecialOrderTypeReversible(&fn.Args[1].Typ) {
+			return nil, newNonReversibleMySQLSpecialOrderError(builder.GetContext())
+		}
+		orderKeyExpr = DeepCopyExpr(fn.Args[1])
+	} else if storageType := ctx.mysqlSpecialOrderTypeForProject(col.ColPos); storageType != nil {
+		var err error
+		orderKeyExpr, err = makeMySQLSpecialOrderKey(builder.GetContext(), projectExpr, storageType)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		return expr, nil
+	}
+
+	colPos, err := appendOrderByProjectExpr(ctx, orderKeyExpr)
+	if err != nil {
+		return nil, err
+	}
+	return GetColExpr(orderKeyExpr.Typ, ctx.projectTag, colPos), nil
 }
 
 // projectExprKey uses the full proto encoding so large ORDER BY expressions
@@ -9019,6 +9133,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var cols []string
 	var colIsHidden []bool
 	var types []*plan.Type
+	var mysqlSpecialOrderTypes []*plan.Type
 	var defaultVals []string
 	var binding *Binding
 	var bindingToReplace *Binding
@@ -9125,6 +9240,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
 		defaultVals = make([]string, colLength)
+		mysqlSpecialOrderTypes = make([]*plan.Type, colLength)
 
 		for i, col := range headings {
 			if i < len(alias.Cols) {
@@ -9137,12 +9253,14 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			types[i] = &projects[i].Typ
 			colIsHidden[i] = false
 			defaultVals[i] = ""
+			mysqlSpecialOrderTypes[i] = subCtx.mysqlSpecialOrderTypeForProject(int32(i))
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
 		binding = NewBinding(tag, nodeID, "", table, 0, cols, colIsHidden, types, false, defaultVals)
 		binding.originCols = originCols
+		binding.mysqlSpecialOrderTypes = mysqlSpecialOrderTypes
 	}
 
 	if bindingToReplace != nil {

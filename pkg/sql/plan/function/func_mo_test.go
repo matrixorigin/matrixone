@@ -62,6 +62,39 @@ func TestCastGeometryToSubtype(t *testing.T) {
 	}
 }
 
+func TestCastValueToIndexConstDefinition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	descriptor := "zero,one,two,three,four,five,six,seven"
+	inputs := []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varchar.ToType(),
+			[]string{descriptor, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"seven", "zero", "THREE", "2", "four", "five", "six", "one"}, nil),
+	}
+	expect := NewFunctionTestResult(types.T_enum.ToType(), false,
+		[]types.Enum{8, 1, 4, 2, 5, 6, 7, 2}, nil)
+
+	tcc := NewFunctionTestCase(proc, inputs, expect, CastValueToIndex)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestBuildEnumExactIndexesPreservesEqualFoldFirstMatch(t *testing.T) {
+	indexes := buildEnumExactIndexes("low,LOW,high,high")
+	require.Equal(t, types.Enum(1), indexes["low"])
+	require.Equal(t, types.Enum(1), indexes["LOW"])
+	require.Equal(t, types.Enum(3), indexes["high"])
+	unicodeIndexes := buildEnumExactIndexes("K,K,Σ,ς,σ")
+	require.Equal(t, types.Enum(1), unicodeIndexes["K"])
+	require.Equal(t, types.Enum(3), unicodeIndexes["ς"])
+	require.Equal(t, types.Enum(3), unicodeIndexes["σ"])
+	require.Nil(t, buildEnumExactIndexes(""))
+	require.Nil(t, buildEnumExactIndexesForBatch("a,b,c,d,e,f,g,h", enumExactIndexMinRows-1))
+	require.Nil(t, buildEnumExactIndexesForBatch("a,b,c,d,e,f,g", enumExactIndexMinRows))
+	require.NotNil(t, buildEnumExactIndexesForBatch("a,b,c,d,e,f,g,h", enumExactIndexMinRows))
+	require.NotNil(t, buildEnumExactIndexesForBatch("a,b,c", 22))
+}
+
 func TestCastGeometryToSubtypeRejectMismatch(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
