@@ -3329,7 +3329,7 @@ func TestUpdateJobSpec(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	txn.Commit(ctxWithTimeout)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
 	// init cdc executor
 	checkLeaseStub := gostub.Stub(
@@ -3362,7 +3362,7 @@ func TestUpdateJobSpec(t *testing.T) {
 	require.NoError(t, err)
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
-	cdcExecutor.Start()
+	require.NoError(t, cdcExecutor.Start())
 	defer cdcExecutor.Stop()
 	jobName := "job1"
 	dbName := "srcdb"
@@ -3384,46 +3384,58 @@ func TestUpdateJobSpec(t *testing.T) {
 		},
 		false,
 	)
-	assert.True(t, ok)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(ctxWithTimeout))
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
-	appendFn := func(idx int) {
+	appendFn := func(idx int) types.TS {
 		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, dbName, tableName)
-		require.Nil(t, err)
+		require.NoError(t, err)
 
 		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]))
-		require.Nil(t, err)
+		require.NoError(t, err)
 
-		txn.Commit(ctxWithTimeout)
+		require.NoError(t, txn.Commit(ctxWithTimeout))
+		return types.TimestampToTS(txn.Txn().CommitTS)
 	}
 
-	checkWaterMarkFn := func(waitTime int) {
-		now := taeHandler.GetDB().TxnMgr.Now()
-		testutils.WaitExpect(
-			waitTime,
-			func() bool {
-				ts, _ := cdcExecutor.GetWatermark(accountId, tableID, jobName)
-				return ts.GE(&now)
+	waitForWatermark := func(target types.TS) {
+		waitForISCPWatermark(
+			t,
+			func() (types.TS, bool) {
+				return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 			},
+			target,
+			10*time.Second,
+			10*time.Millisecond,
+			accountId,
+			tableID,
+			jobName,
 		)
-		ts, _ := cdcExecutor.GetWatermark(accountId, tableID, jobName)
-		assert.True(t, ts.GE(&now), jobName)
 	}
 
-	checkJobTypeFn := func(waitTime int, expectJobType uint16) {
-		testutils.WaitExpect(
-			waitTime,
-			func() bool {
-				jobType, _ := cdcExecutor.GetJobType(accountId, tableID, jobName)
-				return jobType == expectJobType
-			},
+	waitForJobType := func(expected uint16) {
+		reached := assert.Eventually(t, func() bool {
+			jobType, found := cdcExecutor.GetJobType(accountId, tableID, jobName)
+			return found && jobType == expected
+		}, 10*time.Second, 10*time.Millisecond)
+		if reached {
+			return
+		}
+		jobType, found := cdcExecutor.GetJobType(accountId, tableID, jobName)
+		require.FailNowf(
+			t,
+			"ISCP job type did not reach target",
+			"account=%d table=%d job=%s found=%t current=%d target=%d",
+			accountId,
+			tableID,
+			jobName,
+			found,
+			jobType,
+			expected,
 		)
-		jobType, _ := cdcExecutor.GetJobType(accountId, tableID, jobName)
-		assert.True(t, jobType == expectJobType, jobName)
 	}
-	appendFn(0)
-	checkWaterMarkFn(4000)
+	waitForWatermark(appendFn(0))
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
@@ -3443,13 +3455,11 @@ func TestUpdateJobSpec(t *testing.T) {
 			},
 		},
 	)
-	assert.True(t, ok)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(ctxWithTimeout))
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
-	checkJobTypeFn(4000, iscp.TriggerType_AlwaysUpdate)
-	appendFn(1)
-	checkWaterMarkFn(4000)
+	waitForJobType(iscp.TriggerType_AlwaysUpdate)
+	waitForWatermark(appendFn(1))
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	err = iscp.UpdateJobSpec(
@@ -3471,15 +3481,13 @@ func TestUpdateJobSpec(t *testing.T) {
 			},
 		},
 	)
-	assert.True(t, ok)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(ctxWithTimeout))
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
-	checkJobTypeFn(4000, iscp.TriggerType_Timed)
-	appendFn(2)
-	checkWaterMarkFn(4000)
+	waitForJobType(iscp.TriggerType_Timed)
+	waitForWatermark(appendFn(2))
 
-	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, "job1")
+	CheckTableData(t, disttaeEngine, ctxWithTimeout, dbName, tableName, tableID, jobName)
 }
 
 func TestFlushWatermark(t *testing.T) {
@@ -5764,6 +5772,7 @@ func TestISCPTableIDChange(t *testing.T) {
 	var (
 		accountId = catalog.System_Account
 	)
+	const jobName = "test_idx"
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -5791,14 +5800,15 @@ func TestISCPTableIDChange(t *testing.T) {
 
 	// append 1 row
 	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
 	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
-	require.Nil(t, err)
+	require.NoError(t, err)
 
-	txn.Commit(ctxWithTimeout)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+	initialTarget := types.TimestampToTS(txn.Txn().CommitTS)
 
 	// init cdc executor
 	checkLeaseStub := gostub.Stub(
@@ -5845,45 +5855,60 @@ func TestISCPTableIDChange(t *testing.T) {
 			},
 		},
 		&iscp.JobID{
-			JobName:   "test_idx",
+			JobName:   jobName,
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
 		false,
 	)
-	assert.True(t, ok)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(ctxWithTimeout))
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
-	// wait for synchronization to initialize prevISCPTableID
+	// Establish the initial replay and snapshot before simulating a table ID
+	// change. Otherwise the fault can race the state it is meant to invalidate.
+	waitForISCPWatermark(
+		t,
+		func() (types.TS, bool) {
+			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
+		},
+		initialTarget,
+		10*time.Second,
+		10*time.Millisecond,
+		accountId,
+		tableID,
+		jobName,
+	)
 
 	// enable injection to trigger table id change check
 	fault.Enable()
 	defer fault.Disable()
 	rmFn, err := objectio.InjectCDCExecutor("tableIDChange")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer rmFn()
 
 	// append more data to trigger synchronization
 	_, rel, txn, err = disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[1]))
-	require.Nil(t, err)
+	require.NoError(t, err)
 
-	txn.Commit(ctxWithTimeout)
-
-	now := taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		4000,
-		func() bool {
-			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "test_idx")
-			return ok && ts.GE(&now)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+	target := types.TimestampToTS(txn.Txn().CommitTS)
+	waitForISCPWatermark(
+		t,
+		func() (types.TS, bool) {
+			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
+		target,
+		10*time.Second,
+		10*time.Millisecond,
+		accountId,
+		tableID,
+		jobName,
 	)
-	ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "test_idx")
-	assert.True(t, ok)
-	assert.True(t, ts.GE(&now))
+	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, jobName)
 }
 
 func TestIterationError(t *testing.T) {
