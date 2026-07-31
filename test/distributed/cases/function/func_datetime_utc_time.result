@@ -1,59 +1,92 @@
 SELECT UTC_TIME() AS result1;
-result1
-23:15:20
+➤ result1[92,64,0]  𝄀
+10:08:23
 SELECT UTC_TIME() AS current_utc_time;
-current_utc_time
-23:15:20
+➤ current_utc_time[92,64,0]  𝄀
+10:08:23
 SELECT UTC_TIME AS current_utc_time_no_parens;
-current_utc_time_no_parens
-23:15:20
+➤ current_utc_time_no_parens[92,64,0]  𝄀
+10:08:23
 select utc_time() = utc_time as should_be_true;
-should_be_true
+➤ should_be_true[-7,1,0]  𝄀
 1
 SELECT UTC_TIME(0) AS utc_time_scale0;
-utc_time_scale0
-23:15:20
+➤ utc_time_scale0[92,64,0]  𝄀
+10:08:23
 SELECT UTC_TIME(3) AS utc_time_scale3;
-utc_time_scale3
-23:15:19.643000000
+➤ utc_time_scale3[92,64,0]  𝄀
+10:08:22.840000000
 SELECT UTC_TIME(6) AS utc_time_scale6;
-utc_time_scale6
-23:15:19.643727000
-SELECT UTC_TIME() AS utc_time, CURRENT_TIME() AS local_time;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " utc_time, CURRENT_TIME() AS local_time;";
+➤ utc_time_scale6[92,64,0]  𝄀
+10:08:22.841108000
+SELECT UTC_TIME() AS utc_time_value, CURRENT_TIME() AS local_time_value;
+➤ utc_time_value[92,64,0]  ¦  local_time_value[92,64,0]  𝄀
+10:08:23  ¦  18:08:23
 CREATE TABLE t1(id INT);
 INSERT INTO t1 VALUES (1), (2), (3);
-SELECT id, UTC_TIME() AS utc_time FROM t1;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 33 near " utc_time FROM t1;";
+SELECT id, UTC_TIME() AS utc_time_value FROM t1;
+➤ id[4,32,0]  ¦  utc_time_value[92,64,0]  𝄀
+1  ¦  10:08:23  𝄀
+2  ¦  10:08:23  𝄀
+3  ¦  10:08:23
 DROP TABLE t1;
 SELECT UTC_TIME() IS NOT NULL AS not_null_check;
-not_null_check
+➤ not_null_check[-7,1,0]  𝄀
 1
 SELECT UTC_TIME() + INTERVAL 1 HOUR AS one_hour_later;
 invalid argument operator +, bad value [TIME INTERVAL]
 SELECT UTC_TIME() - INTERVAL 30 MINUTE AS thirty_minutes_ago;
 invalid argument operator -, bad value [TIME INTERVAL]
 SELECT UTC_TIME() AS time_format;
-time_format
-23:15:20
+➤ time_format[92,64,0]  𝄀
+10:08:23
 SELECT UTC_TIME(0) AS no_fractional;
-no_fractional
-23:15:20
+➤ no_fractional[92,64,0]  𝄀
+10:08:23
 SELECT UTC_TIME(1) AS one_digit;
-one_digit
-23:15:19.700000000
+➤ one_digit[92,64,0]  𝄀
+10:08:22.900000000
 SELECT UTC_TIME(2) AS two_digits;
-two_digits
-23:15:19.670000000
+➤ two_digits[92,64,0]  𝄀
+10:08:22.900000000
 SELECT UTC_TIME(3) AS three_digits;
-three_digits
-23:15:19.669000000
+➤ three_digits[92,64,0]  𝄀
+10:08:22.896000000
 SELECT UTC_TIME(4) AS four_digits;
-four_digits
-23:15:19.669300000
+➤ four_digits[92,64,0]  𝄀
+10:08:22.896400000
 SELECT UTC_TIME(5) AS five_digits;
-five_digits
-23:15:19.669570000
+➤ five_digits[92,64,0]  𝄀
+10:08:22.897050000
 SELECT UTC_TIME(6) AS six_digits;
-six_digits
-23:15:19.669814000
+➤ six_digits[92,64,0]  𝄀
+10:08:22.897663000
+SELECT MICROSECOND(UTC_TIME(3)) % 1000 AS utc_time_millisecond_precision;
+➤ utc_time_millisecond_precision[-5,64,0]  𝄀
+0
+SELECT LENGTH(CAST(UTC_TIME(3) AS CHAR)) = 12 AS utc_time_fsp3_text_width;
+➤ utc_time_fsp3_text_width[-7,1,0]  𝄀
+1
+DROP VIEW IF EXISTS v_utc_time_fsp;
+CREATE VIEW v_utc_time_fsp AS
+SELECT UTC_TIME(0) AS value0, UTC_TIME(3) AS value3, UTC_TIME(6) AS value6;
+DESC v_utc_time_fsp;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+value0  ¦  TIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+value3  ¦  TIME(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+value6  ¦  TIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦  
+DROP VIEW v_utc_time_fsp;
+DROP TABLE IF EXISTS utc_time_fsp_arg;
+CREATE TABLE utc_time_fsp_arg(fsp BIGINT);
+INSERT INTO utc_time_fsp_arg VALUES (0), (6);
+SELECT UTC_TIME(fsp) FROM utc_time_fsp_arg;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 19 near "fsp) FROM utc_time_fsp_arg;";
+SELECT UTC_TIME(1 + 2);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 19 near " + 2);";
+SELECT UTC_TIME(NULL);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 20 near "NULL);";
+SELECT UTC_TIME(-1);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 17 near "-1);";
+SELECT UTC_TIME(7);
+Too-big precision 7 specified for 'utc_time'. Maximum is 6.
+DROP TABLE utc_time_fsp_arg;
