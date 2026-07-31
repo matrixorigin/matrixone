@@ -123,6 +123,70 @@ func TestMPoolAccountedAllocGrowFree(t *testing.T) {
 	finalizeTestAllocationAccount(t, registry, account)
 }
 
+func TestMPoolMakeSliceAccounted(t *testing.T) {
+	registry, account := newTestAllocationAccount(t, 64, 2)
+	mp := MustNew("accounted-typed-slice")
+	defer DeleteMPool(mp)
+
+	values, err := MakeSliceAccounted[int64](
+		4,
+		mp,
+		account,
+		testAllocationOwner,
+		testAllocationSite,
+	)
+	require.NoError(t, err)
+	require.Len(t, values, 4)
+	require.Equal(t, uint64(32), account.Snapshot().Used)
+	require.Equal(t, uint64(1), registry.LiveAllocationMetadata())
+	for i := range values {
+		values[i] = int64(i + 1)
+	}
+	require.Equal(t, []int64{1, 2, 3, 4}, values)
+
+	_, err = MakeSliceAccounted[int64](
+		5,
+		mp,
+		account,
+		testAllocationOwner,
+		testAllocationSite,
+	)
+	require.ErrorIs(t, err, ErrAllocationAccountCapacity)
+	require.Equal(t, uint64(32), account.Snapshot().Used)
+	require.Equal(t, uint64(1), registry.LiveAllocationMetadata())
+
+	empty, err := MakeSliceAccounted[int64](
+		0,
+		mp,
+		account,
+		testAllocationOwner,
+		testAllocationSite,
+	)
+	require.NoError(t, err)
+	require.Nil(t, empty)
+	_, err = MakeSliceAccounted[int64](
+		-1,
+		mp,
+		account,
+		testAllocationOwner,
+		testAllocationSite,
+	)
+	require.ErrorIs(t, err, ErrAllocationAccountInvalid)
+	_, err = MakeSliceAccounted[struct{}](
+		1,
+		mp,
+		account,
+		testAllocationOwner,
+		testAllocationSite,
+	)
+	require.ErrorIs(t, err, ErrAllocationAccountInvalid)
+
+	FreeSlice(mp, values[:0])
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, registry.LiveAllocationMetadata())
+	finalizeTestAllocationAccount(t, registry, account)
+}
+
 func TestMPoolAccountedRollback(t *testing.T) {
 	t.Run("account-capacity", func(t *testing.T) {
 		registry, account := newTestAllocationAccount(t, 63, 1)

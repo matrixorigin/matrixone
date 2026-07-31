@@ -19,7 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,6 +42,53 @@ func TestHexToInt(t *testing.T) {
 
 	_, err = HexToInt("0xg")
 	require.Error(t, err)
+}
+
+func TestGenVectorByVarValueWithAllocation(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 4)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		1,
+		1,
+		2,
+	)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(
+		t,
+		"",
+		mpool.MustNew("variable-value-allocation"),
+	)
+	defer proc.Free()
+
+	nullVec, err := GenVectorByVarValueWithAllocation(
+		proc,
+		types.T_varchar.ToType(),
+		nil,
+		selection,
+	)
+	require.NoError(t, err)
+	require.Same(t, selection, nullVec.AllocationAccountSelection())
+
+	valueVec, err := GenVectorByVarValueWithAllocation(
+		proc,
+		types.T_varchar.ToType(),
+		"variable payload longer than the inline varlena limit",
+		selection,
+	)
+	require.NoError(t, err)
+	require.Same(t, selection, valueVec.AllocationAccountSelection())
+	require.Positive(t, account.Snapshot().Used)
+
+	nullVec.Free(proc.Mp())
+	valueVec.Free(proc.Mp())
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	require.Zero(t, registry.LiveAllocationMetadata())
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
 }
 
 func TestSetInsertValueStringBinaryHexPadding(t *testing.T) {

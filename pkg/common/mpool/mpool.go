@@ -1327,6 +1327,38 @@ func MakeSlice[T any](n int, mp *MPool, offHeap bool) ([]T, error) {
 	return makeSliceWithCapWithDetailK[T](detailk, n, n, mp, offHeap)
 }
 
+// MakeSliceAccounted allocates an off-heap typed slice whose physical
+// allocation is owned by account. FreeSlice releases the resulting charge.
+func MakeSliceAccounted[T any](
+	n int,
+	mp *MPool,
+	account *AllocationAccount,
+	owner AllocationOwner,
+	site AllocationSite,
+) ([]T, error) {
+	if n < 0 {
+		return nil, ErrAllocationAccountInvalid
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	var value T
+	elementSize := unsafe.Sizeof(value)
+	maxSize := maxAllocationSize()
+	if elementSize == 0 ||
+		maxSize <= 0 ||
+		uint64(n) > uint64(maxSize)/uint64(elementSize) {
+		return nil, ErrAllocationAccountInvalid
+	}
+	size := int(uint64(n) * uint64(elementSize))
+	bs, err := mp.AllocAccounted(size, account, owner, site)
+	if err != nil {
+		return nil, err
+	}
+	values := unsafe.Slice((*T)(unsafe.Pointer(&bs[0])), n)
+	return values[:n:n], nil
+}
+
 func MakeSliceArgs[T any](mp *MPool, offHeap bool, args ...T) ([]T, error) {
 	detailk := mp.getDetailK()
 	ret, err := makeSliceWithCapWithDetailK[T](detailk, len(args), len(args), mp, offHeap)
@@ -1341,6 +1373,7 @@ func FreeSlice[T any](mp *MPool, bs []T) {
 	if cap(bs) == 0 {
 		return
 	}
+	bs = bs[:1]
 	detailk := mp.getDetailK()
 	mp.freePtr(detailk, unsafe.Pointer(&bs[0]))
 }

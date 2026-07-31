@@ -54,6 +54,105 @@ func NewAllocationAccountSelection(
 	return selection, nil
 }
 
+// NewOffHeapVecWithTypeAndAllocation constructs an empty owning Vector whose
+// future data and area allocations use selection.
+func NewOffHeapVecWithTypeAndAllocation(
+	typ types.Type,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	vec := NewOffHeapVecWithType(typ)
+	if err := vec.SetAllocationAccount(selection); err != nil {
+		vec.Free(nil)
+		return nil, err
+	}
+	return vec, nil
+}
+
+// NewConstNullWithAllocation constructs a constant NULL Vector with dormant
+// allocation provenance for any future owned backing.
+func NewConstNullWithAllocation(
+	typ types.Type,
+	length int,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	vec, err := NewOffHeapVecWithTypeAndAllocation(typ, selection)
+	if err != nil {
+		return nil, err
+	}
+	vec.class = CONSTANT
+	vec.length = length
+	return vec, nil
+}
+
+// NewConstFixedWithAllocation constructs an off-heap constant fixed-width
+// Vector and charges its physical backing to selection.
+func NewConstFixedWithAllocation[T any](
+	typ types.Type,
+	value T,
+	length int,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	vec, err := NewOffHeapVecWithTypeAndAllocation(typ, selection)
+	if err != nil {
+		return nil, err
+	}
+	vec.class = CONSTANT
+	if length > 0 {
+		if err = SetConstFixed(vec, value, length, mp); err != nil {
+			vec.Free(mp)
+			return nil, err
+		}
+	}
+	return vec, nil
+}
+
+// NewConstBytesWithAllocation constructs an off-heap constant varlen Vector
+// and charges data and area independently through selection.
+func NewConstBytesWithAllocation(
+	typ types.Type,
+	value []byte,
+	length int,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	vec, err := NewOffHeapVecWithTypeAndAllocation(typ, selection)
+	if err != nil {
+		return nil, err
+	}
+	vec.class = CONSTANT
+	if length > 0 {
+		if err = SetConstBytes(vec, value, length, mp); err != nil {
+			vec.Free(mp)
+			return nil, err
+		}
+	}
+	return vec, nil
+}
+
+// NewConstArrayWithAllocation constructs an off-heap constant array Vector
+// and charges data and area independently through selection.
+func NewConstArrayWithAllocation[T types.ArrayElement](
+	typ types.Type,
+	value []T,
+	length int,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	vec, err := NewOffHeapVecWithTypeAndAllocation(typ, selection)
+	if err != nil {
+		return nil, err
+	}
+	vec.class = CONSTANT
+	if length > 0 {
+		if err = SetConstArray(vec, value, length, mp); err != nil {
+			vec.Free(mp)
+			return nil, err
+		}
+	}
+	return vec, nil
+}
+
 func (s *AllocationAccountSelection) validate() error {
 	if s == nil || s.account == nil || s.account.Handle() == 0 ||
 		s.owner < mpool.AllocationOwnerMin ||

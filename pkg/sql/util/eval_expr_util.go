@@ -111,12 +111,40 @@ func DecodeBinaryString(s string) ([]byte, error) {
 }
 
 func GenVectorByVarValue(proc *process.Process, typ types.Type, val any) (*vector.Vector, error) {
+	return GenVectorByVarValueWithAllocation(proc, typ, val, nil)
+}
+
+// GenVectorByVarValueWithAllocation is the dormant allocation-accounted
+// variant used by expression executors. A nil selection preserves the legacy
+// allocation mode.
+func GenVectorByVarValueWithAllocation(
+	proc *process.Process,
+	typ types.Type,
+	val any,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
 	if val == nil {
-		vec := vector.NewConstNull(typ, 1, proc.Mp())
-		return vec, nil
+		if selection == nil {
+			return vector.NewConstNull(typ, 1, proc.Mp()), nil
+		}
+		return vector.NewConstNullWithAllocation(typ, 1, selection)
 	} else {
 		strVal := getVal(val)
-		return vector.NewConstBytes(typ, []byte(strVal), 1, proc.Mp())
+		if selection == nil {
+			return vector.NewConstBytes(
+				typ,
+				[]byte(strVal),
+				1,
+				proc.Mp(),
+			)
+		}
+		return vector.NewConstBytesWithAllocation(
+			typ,
+			[]byte(strVal),
+			1,
+			proc.Mp(),
+			selection,
+		)
 	}
 }
 

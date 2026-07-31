@@ -575,9 +575,10 @@ type FunctionResult[T types.FixedSizeT] struct {
 	vec *Vector
 	mp  *mpool.MPool
 
-	isVarlena bool
-	cols      []T
-	length    uint64
+	allocationAccount *AllocationAccountSelection
+	isVarlena         bool
+	cols              []T
+	length            uint64
 
 	//  convenientParam save parameter wrappers for easy getting row values.
 	//
@@ -594,11 +595,15 @@ func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *Func
 }
 
 func newResultFunc[T types.FixedSizeT](
-	resultType types.Type, mp *mpool.MPool) *FunctionResult[T] {
+	resultType types.Type,
+	mp *mpool.MPool,
+	allocationAccount *AllocationAccountSelection,
+) *FunctionResult[T] {
 
 	f := &FunctionResult[T]{
-		typ: resultType,
-		mp:  mp,
+		typ:               resultType,
+		mp:                mp,
+		allocationAccount: allocationAccount,
 	}
 
 	var tempT T
@@ -621,7 +626,18 @@ func (fr *FunctionResult[T]) getConvenientParamList() []reusableParameterWrapper
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if fr.vec == nil {
-		fr.vec = NewOffHeapVecWithType(fr.typ)
+		var err error
+		if fr.allocationAccount == nil {
+			fr.vec = NewOffHeapVecWithType(fr.typ)
+		} else {
+			fr.vec, err = NewOffHeapVecWithTypeAndAllocation(
+				fr.typ,
+				fr.allocationAccount,
+			)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	oldLength := fr.vec.Length()
@@ -757,65 +773,88 @@ func (fr *FunctionResult[T]) Free() {
 		fr.vec.Free(fr.mp)
 		fr.vec = nil
 	}
+	fr.allocationAccount = nil
 	fr.convenientParam = nil
 }
 
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
+	return newFunctionResultWrapper(typ, mp, nil)
+}
+
+// NewFunctionResultWrapperWithAllocation constructs a result owner whose
+// lazily allocated Vector data and area use selection. Existing callers remain
+// on the legacy path through NewFunctionResultWrapper.
+func NewFunctionResultWrapperWithAllocation(
+	typ types.Type,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (FunctionResultWrapper, error) {
+	if err := selection.validate(); err != nil {
+		return nil, err
+	}
+	return newFunctionResultWrapper(typ, mp, selection), nil
+}
+
+func newFunctionResultWrapper(
+	typ types.Type,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) FunctionResultWrapper {
 	if typ.IsVarlen() {
-		return newResultFunc[types.Varlena](typ, mp)
+		return newResultFunc[types.Varlena](typ, mp, selection)
 	}
 
 	switch typ.Oid {
 	case types.T_bool:
-		return newResultFunc[bool](typ, mp)
+		return newResultFunc[bool](typ, mp, selection)
 	case types.T_bit:
-		return newResultFunc[uint64](typ, mp)
+		return newResultFunc[uint64](typ, mp, selection)
 	case types.T_int8:
-		return newResultFunc[int8](typ, mp)
+		return newResultFunc[int8](typ, mp, selection)
 	case types.T_int16:
-		return newResultFunc[int16](typ, mp)
+		return newResultFunc[int16](typ, mp, selection)
 	case types.T_int32:
-		return newResultFunc[int32](typ, mp)
+		return newResultFunc[int32](typ, mp, selection)
 	case types.T_int64:
-		return newResultFunc[int64](typ, mp)
+		return newResultFunc[int64](typ, mp, selection)
 	case types.T_uint8:
-		return newResultFunc[uint8](typ, mp)
+		return newResultFunc[uint8](typ, mp, selection)
 	case types.T_uint16:
-		return newResultFunc[uint16](typ, mp)
+		return newResultFunc[uint16](typ, mp, selection)
 	case types.T_uint32:
-		return newResultFunc[uint32](typ, mp)
+		return newResultFunc[uint32](typ, mp, selection)
 	case types.T_uint64:
-		return newResultFunc[uint64](typ, mp)
+		return newResultFunc[uint64](typ, mp, selection)
 	case types.T_float32:
-		return newResultFunc[float32](typ, mp)
+		return newResultFunc[float32](typ, mp, selection)
 	case types.T_float64:
-		return newResultFunc[float64](typ, mp)
+		return newResultFunc[float64](typ, mp, selection)
 	case types.T_date:
-		return newResultFunc[types.Date](typ, mp)
+		return newResultFunc[types.Date](typ, mp, selection)
 	case types.T_year:
-		return newResultFunc[types.MoYear](typ, mp)
+		return newResultFunc[types.MoYear](typ, mp, selection)
 	case types.T_datetime:
-		return newResultFunc[types.Datetime](typ, mp)
+		return newResultFunc[types.Datetime](typ, mp, selection)
 	case types.T_time:
-		return newResultFunc[types.Time](typ, mp)
+		return newResultFunc[types.Time](typ, mp, selection)
 	case types.T_timestamp:
-		return newResultFunc[types.Timestamp](typ, mp)
+		return newResultFunc[types.Timestamp](typ, mp, selection)
 	case types.T_decimal64:
-		return newResultFunc[types.Decimal64](typ, mp)
+		return newResultFunc[types.Decimal64](typ, mp, selection)
 	case types.T_decimal128:
-		return newResultFunc[types.Decimal128](typ, mp)
+		return newResultFunc[types.Decimal128](typ, mp, selection)
 	case types.T_decimal256:
-		return newResultFunc[types.Decimal256](typ, mp)
+		return newResultFunc[types.Decimal256](typ, mp, selection)
 	case types.T_TS:
-		return newResultFunc[types.TS](typ, mp)
+		return newResultFunc[types.TS](typ, mp, selection)
 	case types.T_Rowid:
-		return newResultFunc[types.Rowid](typ, mp)
+		return newResultFunc[types.Rowid](typ, mp, selection)
 	case types.T_Blockid:
-		return newResultFunc[types.Blockid](typ, mp)
+		return newResultFunc[types.Blockid](typ, mp, selection)
 	case types.T_uuid:
-		return newResultFunc[types.Uuid](typ, mp)
+		return newResultFunc[types.Uuid](typ, mp, selection)
 	case types.T_enum:
-		return newResultFunc[types.Enum](typ, mp)
+		return newResultFunc[types.Enum](typ, mp, selection)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }

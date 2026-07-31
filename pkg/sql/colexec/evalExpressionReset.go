@@ -209,13 +209,27 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 	return false, nil
 }
 
-func (expr *FunctionExpressionExecutor) fillSkippedFlowControlParameters() func() {
+func (expr *FunctionExpressionExecutor) fillSkippedFlowControlParameters() (
+	func(),
+	error,
+) {
 	// The registered kernels still receive their complete argument list. Supply
 	// typed NULLs for branches that lazy folding deliberately did not evaluate;
 	// the selected conditions make those placeholders unobservable.
 	var boolNull *vector.Vector
 	var resultNull *vector.Vector
 	temporaryIndexes := make([]int, 0, len(expr.parameterResults))
+	cleanup := func() {
+		for _, i := range temporaryIndexes {
+			expr.parameterResults[i] = nil
+		}
+		if boolNull != nil {
+			boolNull.Free(expr.m)
+		}
+		if resultNull != nil {
+			resultNull.Free(expr.m)
+		}
+	}
 	parameterCount := len(expr.parameterResults)
 	for i := range expr.parameterResults {
 		if expr.parameterResults[i] != nil {
@@ -227,28 +241,45 @@ func (expr *FunctionExpressionExecutor) fillSkippedFlowControlParameters() func(
 		}
 		if isCondition {
 			if boolNull == nil {
-				boolNull = vector.NewConstNull(types.T_bool.ToType(), 1, expr.m)
+				var selection *vector.AllocationAccountSelection
+				if expr.allocation != nil {
+					selection = expr.allocation.result
+				}
+				var err error
+				boolNull, err = newExpressionConstNull(
+					types.T_bool.ToType(),
+					1,
+					selection,
+					expr.m,
+				)
+				if err != nil {
+					return nil, err
+				}
 			}
 			expr.parameterResults[i] = boolNull
 		} else {
 			if resultNull == nil {
-				resultNull = vector.NewConstNull(expr.resultType, 1, expr.m)
+				var selection *vector.AllocationAccountSelection
+				if expr.allocation != nil {
+					selection = expr.allocation.result
+				}
+				var err error
+				resultNull, err = newExpressionConstNull(
+					expr.resultType,
+					1,
+					selection,
+					expr.m,
+				)
+				if err != nil {
+					cleanup()
+					return nil, err
+				}
 			}
 			expr.parameterResults[i] = resultNull
 		}
 		temporaryIndexes = append(temporaryIndexes, i)
 	}
-	return func() {
-		for _, i := range temporaryIndexes {
-			expr.parameterResults[i] = nil
-		}
-		if boolNull != nil {
-			boolNull.Free(expr.m)
-		}
-		if resultNull != nil {
-			resultNull.Free(expr.m)
-		}
-	}
+	return cleanup, nil
 }
 
 func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, execLen int) error {
@@ -281,7 +312,10 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 		if err != nil || !folded {
 			return err
 		}
-		cleanup := expr.fillSkippedFlowControlParameters()
+		cleanup, err := expr.fillSkippedFlowControlParameters()
+		if err != nil {
+			return err
+		}
 		defer cleanup()
 		return expr.finishFolding(proc, 1)
 	}
