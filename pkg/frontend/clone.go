@@ -763,7 +763,15 @@ func handleCloneTable(
 			return
 		}
 	}
-	sql = cloneTableRestoreSQL(stmt, snapshotTS)
+	restoreSnapshotTS := snapshotTS
+	if ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN) {
+		// A timestamp hint resolves through a cloned snapshot transaction and
+		// cannot see tables created earlier in the current transaction. Keep
+		// snapshotTS for branch bookkeeping, but let the shared transaction
+		// resolve and scan its own uncommitted source table.
+		restoreSnapshotTS = 0
+	}
+	sql = cloneTableRestoreSQL(stmt, restoreSnapshotTS)
 
 	if stmt.CopyGrants && stmt.CreateTable.IfNotExists {
 		if dstTableExistedBeforeRestore, err = cloneTargetTableExists(
@@ -782,7 +790,7 @@ func handleCloneTable(
 	}
 
 	if stmt.CopyGrants && !dstTableExistedBeforeRestore {
-		copyGrantsSnapshotTS := snapshotTS
+		copyGrantsSnapshotTS := restoreSnapshotTS
 		if snapshot != nil && snapshot.TS != nil {
 			copyGrantsSnapshotTS = snapshot.TS.PhysicalTime
 		}
@@ -1118,10 +1126,13 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 		return "", moerr.NewInternalErrorNoCtxf("clone view SQL is %T, expected *tree.CreateView", stmt)
 	}
 
-	applyRemapDb([]tree.Statement{createView}, map[string]string{srcDBName: dstDBName})
-
 	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
+	original := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
+	applyRemapDb([]tree.Statement{createView}, map[string]string{srcDBName: dstDBName})
 	rewritten := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
+	if rewritten == original {
+		return sql, nil
+	}
 	if !strings.HasSuffix(strings.TrimSpace(rewritten), ";") {
 		rewritten += ";"
 	}

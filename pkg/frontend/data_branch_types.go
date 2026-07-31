@@ -216,7 +216,9 @@ type tableStuff struct {
 	tarSnap  *plan.Snapshot
 	baseSnap *plan.Snapshot
 
-	lcaRel engine.Relation
+	lcaRel            engine.Relation
+	lcaCTS            types.TS
+	lcaHasZeroHistory bool
 
 	def struct {
 		colNames     []string     // all columns
