@@ -315,6 +315,10 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.True(t, hasParentScan)
 		require.True(t, hasMarkJoin)
 		require.True(t, hasAssert)
+		require.True(t, updateFkPlanContainsTypedAssert(
+			logicPlan.GetQuery(),
+			foreignKeyNoReferencedRowAssert,
+		))
 	})
 
 	t.Run("legacy child foreign key update keeps typed error", func(t *testing.T) {
@@ -328,9 +332,12 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 
 		logicPlan, err := runOneStmt(mock, t, "UPDATE emp SET deptno = 2, sal = 1")
 		require.NoError(t, err)
-		require.Equal(t, 0, countUpdateFkPlanNodes(logicPlan.GetQuery(), planpb.Node_MULTI_UPDATE))
+		query := logicPlan.GetQuery()
+		require.Equal(t, 0, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		require.Equal(t, 1, countUpdateFkAsserts(query))
+		require.True(t, updateFkPlanScansTable(query, mock.ctxt.tables["dept"].TblId))
 		require.True(t, updateFkPlanContainsTypedAssert(
-			logicPlan.GetQuery(),
+			query,
 			foreignKeyNoReferencedRowAssert,
 		))
 	})
@@ -604,6 +611,10 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		require.NotEqual(t, -1, preInsert)
 		require.NotEqual(t, -1, markJoin)
 		require.Less(t, preInsert, markJoin)
+		require.True(t, updateFkPlanContainsTypedAssert(
+			query,
+			foreignKeyNoReferencedRowAssert,
+		))
 	})
 
 	t.Run("parent action on generated key uses legacy planner", func(t *testing.T) {
@@ -644,6 +655,31 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 			return node.NodeType == planpb.Node_PRE_INSERT
 		}))
 	})
+}
+
+func TestLegacyInsertForeignKeyKeepsGenericAssert(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	emp := mock.ctxt.tables["emp"]
+	dept := mock.ctxt.tables["dept"]
+	emp.TblId = 88887
+	emp.Fkeys[0].ForeignTbl = dept.TblId
+	emp.Fkeys[0].ForeignCols = []uint64{0}
+	mock.ctxt.id2name[emp.TblId] = "emp"
+
+	stmt, err := parsers.ParseOne(
+		mock.CurrentContext().GetContext(),
+		dialect.MYSQL,
+		"INSERT INTO emp (empno, deptno) VALUES (1, 10)",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	logicPlan, err := buildInsert(stmt.(*tree.Insert), mock.CurrentContext(), false, false)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.True(t, updateFkPlanContainsAssertWithArity(query, 2))
+	require.False(t, updateFkPlanContainsTypedAssert(query, foreignKeyNoReferencedRowAssert))
 }
 
 func TestResolveSingleTablePreservesForeignKeyPolicy(t *testing.T) {
@@ -723,6 +759,27 @@ func updateFkPlanContainsTypedAssert(query *planpb.Query, errType string) bool {
 			if lit := fn.Args[2].GetLit(); lit != nil && lit.GetSval() == errType {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func updateFkPlanContainsAssertWithArity(query *planpb.Query, arity int) bool {
+	for _, node := range query.Nodes {
+		for _, filter := range node.FilterList {
+			fn := filter.GetF()
+			if fn != nil && fn.Func.ObjName == "assert" && len(fn.Args) == arity {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func updateFkPlanScansTable(query *planpb.Query, tableID uint64) bool {
+	for _, node := range query.Nodes {
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.TblId == tableID {
+			return true
 		}
 	}
 	return false
