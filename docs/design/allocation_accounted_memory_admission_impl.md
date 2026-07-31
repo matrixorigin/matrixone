@@ -96,12 +96,12 @@ working ledger is allocation-site based:
 | `Vector.data` | MPool; capacity from `Grow`, on/off-heap follows `v.offHeap` | owning `Vector.Free` | D | A only when off-heap |
 | `Vector.area` | MPool; independent varlen payload capacity | owning `Vector.Free` | D | A only when off-heap |
 | `Vector.nsp/gsp` bitmap data | Go `[]uint64`; `ceil(rows/64)*8`, retained by `Clear` | bitmap `Reset` from `Vector.Free` | L | move off-heap; blocks Vector-dependent activation |
-| `FunctionResult.vec` data/area | off-heap Vector; rows and appended payload | executor `Free` | L | A |
+| `FunctionResult.vec` data/area | off-heap Vector; rows and appended payload | executor `Free` | D | A after expression ledger closure |
 | `FunctionResult.convenientParam` | Go slice; expression arity, not rows | executor `Free`/reuse | L | H after a proved arity bound |
 | decimal parameter conversion | Go `[]T`; `rows*sizeof(T)` in `GenerateFunctionFixedTypeParameter` | evaluation wrapper/GC | L | move off-heap; blocks expression activation |
-| IFF/CASE/COALESCE selection arrays | Go `[]bool`; one or two arrays of `rows`, retained by executor | executor `Free`/reuse | L | move off-heap; blocks expression activation |
-| selected row IDs | Go `[]int64`; up to `rows`, retained by executor | executor `Free`/reuse | L | move off-heap; blocks expression activation |
-| selected parameter/result vectors | off-heap Vector capacities | executor `Free` | L | A |
+| IFF/CASE/COALESCE selection arrays | allocation-accounted off-heap `[]bool`; one or two arrays of `rows`, retained by executor | executor `Free`/reuse | D | A after expression ledger closure |
+| selected row IDs | allocation-accounted off-heap `[]int64`; capacity up to `rows`, retained by executor | executor `Free`/reuse | D | A after expression ledger closure |
+| selected parameter/result vectors | allocation-accounted off-heap Vector capacities | executor `Free` | D | A after expression ledger closure |
 | hash-table initial cell block | off-heap `mpool.MakeSlice(..., true)`; 16 KiB int / 32 KiB string | hash map / `JoinMap.FreeMemory` | L | A in first activation |
 | hash-table replacement/appended cell blocks | off-heap blocks, at most 4 MiB each; old+new overlap is physically visible | hash map / `JoinMap.FreeMemory` | L | A in first activation |
 | hash-table `cells`/`newBlocks` descriptors | Go `[][]Cell`; 24 bytes per block header plus geometric resize backing arrays; GC is not treated as synchronous Free | hash map lifetime / GC | L | replace with an owning off-heap descriptor buffer and account its initial/replacement capacity; blocks first activation |
@@ -109,11 +109,11 @@ working ledger is allocation-site based:
 | `GroupSels.{tmp,vals,offsets}` | on-heap `mpool.MakeSlice(..., false)`; O(build rows/groups) | builder or `JoinMap.FreeMemory` | L | switch off-heap; blocks auxiliary/copied-batch activation |
 | copied build-batch vector buffers | MPool Vector data/area | builder or `JoinMap.FreeMemory` | L | A after per-buffer provenance |
 | spill marshal/coalesce buffers | Go `bytes.Buffer`; O(serialized batch), retained by phase | spill cleanup | L | off-heap writer; blocks spill activation |
-| spill hash values | Go `[]uint64`; `8*rows`, retained by phase | spill cleanup | L | move off-heap; blocks spill activation |
-| spill row IDs | Go `[]int32`; `4*rows`, retained by phase | spill cleanup | L | move off-heap; blocks spill activation |
+| spill hash values | allocation-accounted off-heap `[]uint64`; geometric capacity, `8*cap` | spill phase cleanup | D | A after spill ledger closure |
+| spill row IDs | allocation-accounted off-heap `[]int32`; geometric capacity, `4*cap` | spill phase cleanup | D | A after spill ledger closure |
 | spill counts/offsets/positions | Go `[]int32`; O(bucket count), bucket count finite | spill cleanup | L | H after bound is asserted |
-| selected spill bucket vectors | off-heap Vector capacities | selected batch cleanup | L | A |
-| BucketReader decoded vectors | MPool Vector data/area | `BucketReader.Close` | L | A after mode/provenance audit |
+| selected spill bucket vectors | allocation-accounted off-heap Vector capacities | per-call selected-batch cleanup | D | A after spill ledger closure |
+| BucketReader decoded vectors | allocation-accounted MPool Vector data/area | reusable batch cleanup / `BucketReader.Close` | D | A after spill ledger closure |
 | `pSpool` cached Vector data/area | raw MPool slices retained and reassigned independently of their Vector | `spoolBuffer.clean` or the receiving Vector's `Free` | L | persist generation/selection provenance for a missing data or area allocation; blocks pipeline activation |
 | runtime-filter serialized payload | Go buffer/message payload; O(filter rows) | message release | L | off-heap or PASS degradation; blocks runtime-filter activation |
 | spill disk and FD | disk/FD ledgers | file removal/close | A | A |
@@ -577,6 +577,69 @@ Gate:
 - repeated Eval/Reset/Free and construction failure reach the same terminal
   owners;
 - all migrated rows become `D`; production rows remain `L`.
+
+The current dormant PR 3 candidate is
+`feature/26459-expression-propagation` at expression commit `03296c5246` and
+spill commit `0b4a7b5bb5`, stacked on PR 2 commit `dbfee20ecc`.
+
+Its propagation call chains are:
+
+```text
+NewExpressionExecutorWithAllocation
+  -> recursive expression construction
+  -> constant/result/scratch AllocationAccountSelection
+  -> FunctionResult or selected/decode Vector growth
+  -> MPool AllocAccounted/Grow/Free
+
+NewSpillEngineWithAllocation
+  -> BucketReader decoded/reused Batch selection
+  -> scatter hash/row typed slices and selected Batch selection
+  -> MPool AllocAccounted/Grow/Free
+```
+
+The candidate adds no production caller of either dormant constructor and
+removes no legacy reservation. It covers fixed, varlen, NULL, decoded-vector,
+nested `CASE(CONCAT(CAST))`, folded and non-folded result transfer, partial
+selection, repeated Reset/reuse, construction rollback, zero-length retained
+scratch growth, decoded-record merge/error cleanup, scatter selected-vector
+peak, and capacity-failure cleanup. Typed slices grow geometrically only on
+the accounted path; the old and replacement capacities are simultaneously
+charged until publication, and terminal cleanup frees a zero-length view by
+its retained capacity.
+
+The first syntax inventory over non-test expression/builtin and spill sources
+found 484 candidate lines. Because one line can match more than one category,
+the overlapping counts are 233 `make([]...)`, 205 capacity-growing or
+potentially growing `append`, 44 `bytes.Buffer`/`NewBuffer`, and 5
+`strings.Builder` sites. This is a review queue, not proof that every match is
+data-scaled or reachable. The currently closed rows are the ones marked `D`
+in the ledger above. Activation remains blocked by:
+
+- Vector null/group bitmap backing;
+- decimal parameter conversion slices;
+- spill marshal and coalesce `bytes.Buffer` backing;
+- data-scaled function-specific Go-heap scratch identified by the remaining
+  built-in scan;
+- `pSpool` raw-buffer provenance and `Vector.SetTypeAndFixData`.
+
+Fresh local validation on linux/amd64 with CGO and the repository-built
+third-party artifacts passes:
+
+- complete normal tests for MPool, Vector, Batch, SQL util, expression,
+  spillutil, HashBuild, HashJoin, DedupJoin, RightDedupJoin, and Process;
+- build and vet for the same package closure;
+- exact `-race -count=100` runs for every new test plus directly affected flow
+  control, BucketReader merge, scatter lifecycle, and re-spill tests;
+- complete race runs for MPool, Vector, Batch, SQL util, expression, and
+  spillutil;
+- package coverage of 73.3% MPool, 47.8% Vector, 74.4% Batch, 26.6% SQL util,
+  64.3% expression, and 79.7% spillutil.
+
+The existing constant-flow-control benchmark remains 0 B/op and
+0 allocs/op. Five-run medians at `GOMAXPROCS=8` were 4.480 ns/op on the PR 2
+base and 4.464 ns/op on the PR 3 candidate; this focused benchmark shows no
+measurable legacy fast-path regression, but it is not an activation-level
+performance result.
 
 ### PR 4: statement lifecycle and minimum pressure foundation
 
