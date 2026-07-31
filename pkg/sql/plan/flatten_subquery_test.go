@@ -220,6 +220,289 @@ func TestDirectCorrelatedScalarProjectionUsesMatchMarker(t *testing.T) {
 	}
 }
 
+func TestCorrelatedScalarAggregateEmptyProjectionUsesMatchMarker(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"select n.n_nationkey, (select coalesce(sum(r.r_regionkey), 0) from tpch.region r where r.r_regionkey = n.n_regionkey) as total from tpch.nation n")
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	var scalarJoin *plan.Node
+	hasOuterCase := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT {
+			scalarJoin = node
+		}
+		for _, expr := range node.ProjectList {
+			if f := expr.GetF(); f != nil && f.Func.GetObjName() == "case" {
+				hasOuterCase = true
+			}
+		}
+	}
+
+	require.NotNil(t, scalarJoin)
+	require.Len(t, scalarJoin.Children, 2)
+	rightProject := query.Nodes[scalarJoin.Children[1]]
+	require.Equal(t, plan.Node_PROJECT, rightProject.NodeType)
+	require.NotEmpty(t, rightProject.ProjectList)
+
+	hasTrueMarker := false
+	for _, expr := range rightProject.ProjectList {
+		if lit := expr.GetLit(); lit != nil && !lit.Isnull && lit.GetBval() {
+			hasTrueMarker = true
+			break
+		}
+	}
+	require.True(t, hasTrueMarker)
+	require.True(t, hasOuterCase)
+}
+
+func TestCorrelatedScalarAggregateEmptyProjectionPlanEligibility(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		sql  string
+		want bool
+	}{
+		{
+			name: "ifnull aggregate",
+			sql:  "select n.n_nationkey, (select ifnull(avg(r.r_regionkey), 7) from tpch.region r where r.r_regionkey = n.n_regionkey) from tpch.nation n",
+			want: true,
+		},
+		{
+			name: "mixed sum and count",
+			sql:  "select n.n_nationkey, (select sum(r.r_regionkey) + count(*) from tpch.region r where r.r_regionkey = n.n_regionkey) from tpch.nation n",
+			want: true,
+		},
+		{
+			name: "null-safe equality",
+			sql:  "select n.n_nationkey, (select max(r.r_regionkey) from tpch.region r where r.r_regionkey <=> n.n_regionkey) from tpch.nation n",
+			want: true,
+		},
+		{
+			name: "cte aggregate input",
+			sql:  "with r as (select r_regionkey from tpch.region) select n.n_nationkey, (select min(r.r_regionkey) from r where r.r_regionkey = n.n_regionkey) from tpch.nation n",
+			want: true,
+		},
+		{
+			name: "explicit group by",
+			sql:  "select n.n_nationkey, (select sum(r.r_regionkey) from tpch.region r where r.r_regionkey = n.n_regionkey group by r.r_regionkey) from tpch.nation n",
+		},
+		{
+			name: "having can remove aggregate row",
+			sql:  "select n.n_nationkey, (select sum(r.r_regionkey) from tpch.region r where r.r_regionkey = n.n_regionkey having sum(r.r_regionkey) > 100) from tpch.nation n",
+		},
+		{
+			name: "unsupported aggregate",
+			sql:  "select n.n_nationkey, (select bit_or(r.r_regionkey) from tpch.region r where r.r_regionkey = n.n_regionkey) from tpch.nation n",
+		},
+		{
+			name: "limited aggregate",
+			sql:  "select n.n_nationkey, (select sum(r.r_regionkey) from tpch.region r where r.r_regionkey = n.n_regionkey limit 1) from tpch.nation n",
+		},
+		{
+			name: "distinct aggregate projection",
+			sql:  "select n.n_nationkey, (select distinct sum(r.r_regionkey) from tpch.region r where r.r_regionkey = n.n_regionkey) from tpch.nation n",
+		},
+		{
+			name: "sorted aggregate",
+			sql:  "select n.n_nationkey, (select sum(r.r_regionkey) from tpch.region r where r.r_regionkey = n.n_regionkey order by sum(r.r_regionkey)) from tpch.nation n",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, hasCorrelatedAggregateMatchMarker(logicPlan.GetQuery()))
+		})
+	}
+}
+
+func TestPrepareCorrelatedScalarAggregateEmptyProjection(t *testing.T) {
+	const (
+		groupTag     int32 = 10
+		aggregateTag int32 = 11
+		projectTag   int32 = 12
+		outerTag     int32 = 13
+	)
+
+	aggregateType := func(id types.T) plan.Type {
+		return plan.Type{Id: int32(id), NotNullable: true}
+	}
+	aggregates := []*plan.Expr{
+		newFlattenSubqueryTestAggregate("sum", aggregateType(types.T_decimal128)),
+		newFlattenSubqueryTestAggregate("avg", aggregateType(types.T_float64)),
+		newFlattenSubqueryTestAggregate("min", aggregateType(types.T_int32)),
+		newFlattenSubqueryTestAggregate("max", aggregateType(types.T_int64)),
+		newFlattenSubqueryTestAggregate("count", aggregateType(types.T_int64)),
+		newFlattenSubqueryTestAggregate("starcount", aggregateType(types.T_int64)),
+	}
+	projectionArgs := make([]*plan.Expr, 0, len(aggregates)+1)
+	for i, aggregate := range aggregates {
+		projectionArgs = append(projectionArgs, GetColExpr(aggregate.Typ, aggregateTag, int32(i)))
+	}
+	projectionArgs = append(projectionArgs, &plan.Expr{
+		Typ: aggregateType(types.T_int64),
+		Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{
+			RelPos: outerTag,
+			ColPos: 3,
+			Depth:  1,
+		}},
+	})
+	projection := &plan.Expr{
+		Typ: aggregateType(types.T_int64),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "case"},
+			Args: projectionArgs,
+		}},
+	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.qry.Nodes = []*plan.Node{
+		{
+			NodeType:    plan.Node_AGG,
+			AggList:     aggregates,
+			BindingTags: []int32{groupTag, aggregateTag},
+		},
+		{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{0},
+			BindingTags: []int32{projectTag},
+			ProjectList: []*plan.Expr{projection},
+		},
+	}
+	ctx := &BindContext{
+		hasSingleRow: true,
+		aggregateTag: aggregateTag,
+		aggregates:   aggregates,
+	}
+
+	marker, emptyProjection, ok := builder.prepareCorrelatedScalarAggregateEmptyProjection(1, ctx, []*plan.Expr{constTrue})
+	require.True(t, ok)
+	require.Equal(t, projectTag, marker.GetCol().RelPos)
+	require.Equal(t, int32(1), marker.GetCol().ColPos)
+	require.False(t, marker.Typ.NotNullable)
+	require.Len(t, builder.qry.Nodes[1].ProjectList, 2)
+	require.True(t, builder.qry.Nodes[1].ProjectList[1].GetLit().GetBval())
+
+	emptyArgs := emptyProjection.GetF().Args
+	require.Len(t, emptyArgs, len(aggregates)+1)
+	for i := 0; i < 4; i++ {
+		require.True(t, emptyArgs[i].GetLit().Isnull)
+		require.Equal(t, aggregates[i].Typ.Id, emptyArgs[i].Typ.Id)
+		require.False(t, emptyArgs[i].Typ.NotNullable)
+	}
+	for i := 4; i < 6; i++ {
+		require.Equal(t, int64(0), emptyArgs[i].GetLit().GetI64Val())
+		require.Equal(t, aggregates[i].Typ.Id, emptyArgs[i].Typ.Id)
+		require.True(t, emptyArgs[i].Typ.NotNullable)
+	}
+	require.Nil(t, emptyArgs[6].GetCorr())
+	require.Equal(t, outerTag, emptyArgs[6].GetCol().RelPos)
+	require.Equal(t, int32(3), emptyArgs[6].GetCol().ColPos)
+}
+
+func TestPrepareCorrelatedScalarAggregateEmptyProjectionRejectsUnsupportedShapes(t *testing.T) {
+	const (
+		aggregateTag int32 = 21
+		projectTag   int32 = 22
+	)
+
+	for _, tt := range []struct {
+		name      string
+		aggregate string
+		mutate    func(*BindContext, []*plan.Node)
+	}{
+		{name: "unknown aggregate", aggregate: "bit_or"},
+		{
+			name:      "explicit group",
+			aggregate: "sum",
+			mutate: func(ctx *BindContext, _ []*plan.Node) {
+				ctx.groups = []*plan.Expr{makePlan2Int64ConstExprWithType(1)}
+			},
+		},
+		{
+			name:      "having filter",
+			aggregate: "sum",
+			mutate: func(_ *BindContext, nodes []*plan.Node) {
+				nodes[1].Children[0] = 2
+			},
+		},
+		{
+			name:      "limit",
+			aggregate: "sum",
+			mutate: func(_ *BindContext, nodes []*plan.Node) {
+				nodes[1].Limit = makePlan2Uint64ConstExprWithType(1)
+			},
+		},
+		{
+			name:      "deep correlation",
+			aggregate: "sum",
+			mutate: func(_ *BindContext, nodes []*plan.Node) {
+				nodes[1].ProjectList[0] = &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_int64)},
+					Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: 30, Depth: 2}},
+				}
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			aggregate := newFlattenSubqueryTestAggregate(tt.aggregate, plan.Type{Id: int32(types.T_int64)})
+			nodes := []*plan.Node{
+				{NodeType: plan.Node_AGG, AggList: []*plan.Expr{aggregate}, BindingTags: []int32{20, aggregateTag}},
+				{
+					NodeType:    plan.Node_PROJECT,
+					Children:    []int32{0},
+					BindingTags: []int32{projectTag},
+					ProjectList: []*plan.Expr{GetColExpr(aggregate.Typ, aggregateTag, 0)},
+				},
+				{NodeType: plan.Node_FILTER, Children: []int32{0}},
+			}
+			ctx := &BindContext{hasSingleRow: true, aggregateTag: aggregateTag, aggregates: []*plan.Expr{aggregate}}
+			if tt.mutate != nil {
+				tt.mutate(ctx, nodes)
+			}
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder.qry.Nodes = nodes
+
+			marker, emptyProjection, ok := builder.prepareCorrelatedScalarAggregateEmptyProjection(1, ctx, []*plan.Expr{constTrue})
+			require.False(t, ok)
+			require.Nil(t, marker)
+			require.Nil(t, emptyProjection)
+			require.Len(t, builder.qry.Nodes[1].ProjectList, 1)
+		})
+	}
+}
+
+func hasCorrelatedAggregateMatchMarker(query *plan.Query) bool {
+	if query == nil {
+		return false
+	}
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_JOIN || len(node.Children) != 2 {
+			continue
+		}
+		right := query.Nodes[node.Children[1]]
+		if right.NodeType != plan.Node_PROJECT {
+			continue
+		}
+		for _, expr := range right.ProjectList {
+			if lit := expr.GetLit(); lit != nil && !lit.Isnull && lit.GetBval() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func newFlattenSubqueryTestAggregate(name string, typ plan.Type) *plan.Expr {
+	return &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+		}},
+	}
+}
+
 func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 

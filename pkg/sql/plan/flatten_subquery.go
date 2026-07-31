@@ -156,11 +156,12 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 
 	switch subquery.Typ {
 	case plan.SubqueryRef_SCALAR:
-		var rewrite bool
+		var rewriteCount bool
 
-		// Uncorrelated subquery
+		// Preserve the legacy COUNT fallback for plan shapes that cannot use the
+		// more precise empty-input projection reconstruction below.
 		if len(joinPreds) > 0 && builder.findAggrCount(subCtx.aggregates) {
-			rewrite = true
+			rewriteCount = true
 		}
 
 		if scalarExistential {
@@ -191,6 +192,9 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		if subCtx.hasSingleRow {
 			joinType = plan.Node_LEFT
 		}
+
+		matchMarker, emptyProjection, reconstructEmptyProjection :=
+			builder.prepareCorrelatedScalarAggregateEmptyProjection(subID, subCtx, joinPreds)
 
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
@@ -230,7 +234,16 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 				return 0, nil, err
 			}
 		}
-		if rewrite {
+		if reconstructEmptyProjection {
+			retExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+				matchMarker,
+				retExpr,
+				emptyProjection,
+			})
+			if err != nil {
+				return nodeID, retExpr, err
+			}
+		} else if rewriteCount {
 			argsType := make([]types.Type, 1)
 			argsType[0] = makeTypeByPlan2Expr(retExpr)
 			fGet, err := function.GetFunctionByName(builder.GetContext(), "isnull", argsType)
@@ -592,6 +605,106 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 			child,
 			getProjectExpr(0, ctx, strip),
 		})
+	}
+}
+
+// prepareCorrelatedScalarAggregateEmptyProjection reconstructs the scalar
+// projection for an empty correlated aggregate group. pullupThroughAgg groups
+// the inner input by the correlation key, so a missing key produces no right
+// row and a LEFT JOIN cannot execute the original projection. A hidden marker
+// distinguishes that case from a matching group whose aggregate value is NULL.
+//
+// This is intentionally limited to the ordinary PROJECT -> AGG shape of an
+// implicit single-group aggregate. Wrappers that can remove or reorder the
+// aggregate row (for example HAVING, DISTINCT, SORT, or LIMIT) keep the legacy
+// behavior.
+func (builder *QueryBuilder) prepareCorrelatedScalarAggregateEmptyProjection(
+	subID int32,
+	subCtx *BindContext,
+	joinPreds []*plan.Expr,
+) (*plan.Expr, *plan.Expr, bool) {
+	if !subCtx.hasSingleRow || len(subCtx.groups) != 0 || len(subCtx.aggregates) == 0 || len(joinPreds) == 0 {
+		return nil, nil, false
+	}
+
+	project := builder.qry.Nodes[subID]
+	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 || len(project.BindingTags) != 1 ||
+		len(project.ProjectList) == 0 || project.Limit != nil || project.Offset != nil || project.RankOption != nil {
+		return nil, nil, false
+	}
+
+	agg := builder.qry.Nodes[project.Children[0]]
+	if agg.NodeType != plan.Node_AGG || len(agg.BindingTags) < 2 || agg.BindingTags[1] != subCtx.aggregateTag ||
+		len(agg.AggList) != len(subCtx.aggregates) {
+		return nil, nil, false
+	}
+
+	emptyValues := make([]*plan.Expr, len(agg.AggList))
+	for i, aggregate := range agg.AggList {
+		fn := aggregate.GetF()
+		if fn == nil || fn.Func == nil {
+			return nil, nil, false
+		}
+
+		switch fn.Func.ObjName {
+		case "sum", "avg", "min", "max":
+			emptyValues[i] = makePlan2NullConstExprWithType()
+			emptyValues[i].Typ = aggregate.Typ
+			emptyValues[i].Typ.NotNullable = false
+		case "count", "starcount":
+			emptyValues[i] = makePlan2Int64ConstExprWithType(0)
+			emptyValues[i].Typ = aggregate.Typ
+			emptyValues[i].Typ.NotNullable = true
+		default:
+			return nil, nil, false
+		}
+	}
+
+	emptyProjection := DeepCopyExpr(project.ProjectList[0])
+	if !replaceAggregateRefsWithEmptyValues(emptyProjection, subCtx.aggregateTag, emptyValues) {
+		return nil, nil, false
+	}
+	emptyProjection, stillCorrelated := decreaseDepth(emptyProjection)
+	if stillCorrelated {
+		return nil, nil, false
+	}
+
+	markerPos := int32(len(project.ProjectList))
+	project.ProjectList = append(project.ProjectList, DeepCopyExpr(constTrue))
+	markerType := constTrue.Typ
+	markerType.NotNullable = false
+	matchMarker := GetColExpr(markerType, project.BindingTags[0], markerPos)
+	return matchMarker, emptyProjection, true
+}
+
+func replaceAggregateRefsWithEmptyValues(expr *plan.Expr, aggregateTag int32, emptyValues []*plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if item.Col.RelPos != aggregateTag {
+			return true
+		}
+		if item.Col.ColPos < 0 || int(item.Col.ColPos) >= len(emptyValues) {
+			return false
+		}
+		emptyValue := DeepCopyExpr(emptyValues[item.Col.ColPos])
+		expr.Typ = emptyValue.Typ
+		expr.Expr = emptyValue.Expr
+		return true
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			if !replaceAggregateRefsWithEmptyValues(arg, aggregateTag, emptyValues) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List, *plan.Expr_W, *plan.Expr_Sub:
+		return false
+	default:
+		return true
 	}
 }
 
