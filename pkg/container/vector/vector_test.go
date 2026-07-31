@@ -62,6 +62,11 @@ func TestLength(t *testing.T) {
 	}
 }
 
+func TestCapacityForUntypedNull(t *testing.T) {
+	vec := NewVec(types.T_any.ToType())
+	require.Equal(t, 0, vec.Capacity())
+}
+
 func TestDupOffHeap(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_varchar.ToType())
