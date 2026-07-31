@@ -41,6 +41,7 @@ type pipelineStreamLifecycle struct {
 	finishC   chan pipelineStreamFinishRequest
 	cleanedC  chan struct{}
 	cleanOnce sync.Once
+	batchFlow *pipelineBatchFlow
 }
 
 var pipelineStreamLifecycles sync.Map

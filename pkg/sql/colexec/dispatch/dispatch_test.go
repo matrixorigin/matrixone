@@ -19,16 +19,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -1155,6 +1158,69 @@ func TestSendBatchToClientSession_TolerantMode(t *testing.T) {
 
 	require.True(t, done, "receiver should be marked as done")
 	require.NoError(t, err, "tolerant mode should NOT return error when ReceiverDone=true")
+}
+
+func TestSendBatchToClientSessionUsesBatchCredits(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+
+	reserved := uint64(0)
+	rolledBack := uint64(0)
+	wcs := &process.WrapCs{
+		MsgId:        42,
+		Cs:           session,
+		BatchCredits: 8,
+		ByteCredits:  64 << 20,
+		ReserveBatch: func(_ context.Context, size uint64) (uint64, error) {
+			reserved = size
+			return 7, nil
+		},
+		RollbackBatch: func(sequence uint64) {
+			rolledBack = sequence
+		},
+	}
+
+	done, err := sendBatchToClientSession(
+		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, uint64(5), reserved)
+	require.Zero(t, rolledBack)
+	require.NotNil(t, sent)
+	require.Equal(t, uint64(7), sent.GetBatchSequence())
+	require.Equal(t, uint32(8), sent.GetAcceptedBatchCreditCount())
+	require.Equal(t, uint64(64<<20), sent.GetAcceptedBatchCreditBytes())
+}
+
+func TestSendBatchToClientSessionRollsBackBatchCreditOnWriteFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	wantErr := moerr.NewInternalErrorNoCtx("remote write failed")
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).Return(wantErr)
+
+	rolledBack := uint64(0)
+	wcs := &process.WrapCs{
+		MsgId: 42,
+		Cs:    session,
+		ReserveBatch: func(_ context.Context, _ uint64) (uint64, error) {
+			return 7, nil
+		},
+		RollbackBatch: func(sequence uint64) {
+			rolledBack = sequence
+		},
+	}
+
+	done, err := sendBatchToClientSession(
+		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
+	require.ErrorIs(t, err, wantErr)
+	require.False(t, done)
+	require.Equal(t, uint64(7), rolledBack)
 }
 
 // TestSendToAllRemoteFunc_ReceiverFailure tests SendToAll scenario with receiver failure
