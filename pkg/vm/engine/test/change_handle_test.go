@@ -4032,6 +4032,7 @@ func TestInvalidTimestamp(t *testing.T) {
 	var (
 		accountId = catalog.System_Account
 	)
+	const jobName = "hnsw_idx"
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -4102,7 +4103,7 @@ func TestInvalidTimestamp(t *testing.T) {
 	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
 	require.Nil(t, err)
 
-	txn.Commit(ctxWithTimeout)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
 	fault.Enable()
 	defer fault.Disable()
@@ -4120,40 +4121,43 @@ func TestInvalidTimestamp(t *testing.T) {
 			},
 		},
 		&iscp.JobID{
-			JobName:   "hnsw_idx",
+			JobName:   jobName,
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
 		false,
 	)
-	assert.True(t, ok)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(ctxWithTimeout))
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+
+	assert.Never(
+		t,
+		func() bool {
+			_, ok := cdcExecutor.GetWatermark(accountId, tableID, jobName)
+			return ok
+		},
+		4*time.Second,
+		10*time.Millisecond,
+	)
+
+	removed, err := rmFn()
+	require.NoError(t, err)
+	require.True(t, removed)
 
 	now := taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		4000,
-		func() bool {
-			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-			return ok && ts.GE(&now)
+	waitForISCPWatermark(
+		t,
+		func() (types.TS, bool) {
+			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
+		now,
+		10*time.Second,
+		10*time.Millisecond,
+		accountId,
+		tableID,
+		jobName,
 	)
-	_, ok = cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-	assert.False(t, ok)
-
-	rmFn()
-
-	now = taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		4000,
-		func() bool {
-			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-			return ok && ts.GE(&now)
-		},
-	)
-	ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-	assert.True(t, ok)
-	assert.True(t, ts.GE(&now))
 }
 
 func TestCancelIteration1(t *testing.T) {
@@ -4850,7 +4854,7 @@ func TestRenameSrcTable(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	txn.Commit(ctxWithTimeout)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
 	// init cdc executor
 	checkLeaseStub := gostub.Stub(
@@ -4884,7 +4888,7 @@ func TestRenameSrcTable(t *testing.T) {
 	require.NoError(t, err)
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
-	cdcExecutor.Start()
+	require.NoError(t, cdcExecutor.Start())
 	defer cdcExecutor.Stop()
 	registerFn := func(indexName string) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
@@ -4903,17 +4907,17 @@ func TestRenameSrcTable(t *testing.T) {
 			},
 			false,
 		)
-		assert.True(t, ok)
-		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit(ctxWithTimeout))
+		require.True(t, ok)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctxWithTimeout))
 	}
 	for i := 0; i < 10; i++ {
 		registerFn(fmt.Sprintf("hnsw_idx_%d", i))
 	}
 
 	now := taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		4000,
+	require.Eventually(
+		t,
 		func() bool {
 			for i := 0; i < 10; i++ {
 				ts, ok := cdcExecutor.GetWatermark(accountId, tableID, fmt.Sprintf("hnsw_idx_%d", i))
@@ -4923,12 +4927,15 @@ func TestRenameSrcTable(t *testing.T) {
 			}
 			return true
 		},
+		30*time.Second,
+		10*time.Millisecond,
 	)
 	for i := 0; i < 10; i++ {
 		ts, ok := cdcExecutor.GetWatermark(accountId, tableID, fmt.Sprintf("hnsw_idx_%d", i))
-		assert.True(t, ok)
-		assert.True(t, ts.GE(&now))
+		require.True(t, ok)
+		require.True(t, ts.GE(&now))
 	}
+	cdcExecutor.Stop()
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
@@ -5209,7 +5216,7 @@ func TestInitSql(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	txn.Commit(ctxWithAccount)
+	require.NoError(t, txn.Commit(ctxWithAccount))
 
 	// init cdc executor
 	opts := &iscp.ISCPExecutorOption{
@@ -5243,9 +5250,10 @@ func TestInitSql(t *testing.T) {
 	require.NoError(t, err)
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 
-	cdcExecutor.Start()
+	require.NoError(t, cdcExecutor.Start())
 	defer cdcExecutor.Stop()
 
+	const jobName = "idx"
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
@@ -5257,30 +5265,29 @@ func TestInitSql(t *testing.T) {
 			},
 		},
 		&iscp.JobID{
-			JobName:   "idx",
+			JobName:   jobName,
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
 		false,
 	)
-	assert.True(t, ok)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(ctxWithTimeout))
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 
-	now := taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		4000,
-		func() bool {
-			ts, ok := cdcExecutor.GetWatermark(tableAccountID, tableID, "idx")
-			if !ok || !ts.GE(&now) {
-				return false
-			}
-			return true
+	target := types.TimestampToTS(txn.Txn().CommitTS)
+	waitForISCPWatermark(
+		t,
+		func() (types.TS, bool) {
+			return cdcExecutor.GetWatermark(tableAccountID, tableID, jobName)
 		},
+		target,
+		10*time.Second,
+		10*time.Millisecond,
+		tableAccountID,
+		tableID,
+		jobName,
 	)
-	ts, ok := cdcExecutor.GetWatermark(tableAccountID, tableID, "idx")
-	assert.True(t, ok)
-	assert.True(t, ts.GE(&now))
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
 	require.NoError(t, err)
@@ -5291,25 +5298,24 @@ func TestInitSql(t *testing.T) {
 	require.NoError(t, err)
 
 	txn2, rel2 := testutil2.GetRelation(t, tableAccountID, taeHandler.GetDB(), "srcdb", "src_table")
-	require.Nil(t, rel2.Append(ctx, bats))
-	require.Nil(t, txn2.Commit(ctx))
+	require.NoError(t, rel2.Append(ctx, bats))
+	require.NoError(t, txn2.Commit(ctx))
 
-	now = taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		4000,
-		func() bool {
-			ts, ok := cdcExecutor.GetWatermark(tableAccountID, tableID, "idx")
-			if !ok || !ts.GE(&now) {
-				return false
-			}
-			return true
+	target = txn2.GetCommitTS()
+	waitForISCPWatermark(
+		t,
+		func() (types.TS, bool) {
+			return cdcExecutor.GetWatermark(tableAccountID, tableID, jobName)
 		},
+		target,
+		10*time.Second,
+		10*time.Millisecond,
+		tableAccountID,
+		tableID,
+		jobName,
 	)
-	ts, ok = cdcExecutor.GetWatermark(tableAccountID, tableID, "idx")
-	assert.True(t, ok)
-	assert.True(t, ts.GE(&now))
 
-	CheckTableData(t, disttaeEngine, ctxWithAccount, "srcdb", "src_table", tableID, "idx")
+	CheckTableData(t, disttaeEngine, ctxWithAccount, "srcdb", "src_table", tableID, jobName)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 }
 

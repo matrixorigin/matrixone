@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -63,22 +64,38 @@ func init() {
 	stats.SkipPanicONDuplicate.Store(true)
 }
 
+const (
+	basicClusterHAKeeperHeartbeatTimeout = 30 * time.Second
+	basicClusterHAKeeperStoreTimeout     = 60 * time.Second
+)
+
 func startBasicCluster() (Cluster, error) {
 	c, err := NewCluster(
 		WithCNCount(3),
 		WithTesting(),
+		WithHAKeeperHeartbeatTimeout(basicClusterHAKeeperHeartbeatTimeout),
 		WithPreStart(func(svc ServiceOperator) {
-			if svc.ServiceType() == metadata.ServiceType_CN {
+			switch svc.ServiceType() {
+			case metadata.ServiceType_CN:
 				svc.Adjust(
 					func(config *ServiceConfig) {
 						config.CN.LockService.MaxFixedSliceSize = 10001
 						config.CN.LockService.MaxLockRowCount = 10000
-						config.CN.Frontend.SkipCheckUser = true
+						config.CN.Frontend.SkipCheckUser = false
 						config.CN.Frontend.Iceberg.Enable = true
 						config.CN.Frontend.Iceberg.EnableWrite = true
 						config.CN.Frontend.Iceberg.EnableDelete = true
 						config.CN.Frontend.Iceberg.EnableDML = true
 						config.CN.Frontend.Iceberg.EnableMaintenance = true
+					},
+				)
+			case metadata.ServiceType_LOG:
+				svc.Adjust(
+					func(config *ServiceConfig) {
+						config.LogService.HAKeeperConfig.TNStoreTimeout.Duration =
+							basicClusterHAKeeperStoreTimeout
+						config.LogService.HAKeeperConfig.CNStoreTimeout.Duration =
+							basicClusterHAKeeperStoreTimeout
 					},
 				)
 			}

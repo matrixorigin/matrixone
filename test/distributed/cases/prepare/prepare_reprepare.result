@@ -46,7 +46,7 @@ rollback;
 prepare active_variable from 'select 103';
 begin;
 prepare active_variable from @bad_prepare_sql;
-internal error: unclassified statement appears in uncommitted transaction
+SQL parser error: table "missing_prepare_table" does not exist
 execute active_variable;
 invalid state prepared statement 'active_variable' does not exist
 rollback;

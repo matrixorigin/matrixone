@@ -1016,6 +1016,7 @@ var functionIdRegister = map[string]int32{
 	"octet_length":                   LENGTH,
 	"lengthutf8":                     LENGTH_UTF8,
 	"char_length":                    LENGTH_UTF8,
+	"character_length":               LENGTH_UTF8,
 	"ln":                             LN,
 	"log":                            LOG,
 	"log2":                           LOG2,
