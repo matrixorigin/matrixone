@@ -570,6 +570,64 @@ func TestCopyBuildBatchBudgetsPartialTailWithRemainder(t *testing.T) {
 	require.Equal(t, 1, hb.Batches.Buf[3].RowCount())
 }
 
+func TestBatchCopyAllocatedDeltaTracksOnlyChangedSuffix(t *testing.T) {
+	tests := []struct {
+		name         string
+		retainedRows int
+		ingressRows  int
+	}{
+		{name: "empty/multiple-destinations", ingressRows: 2*colexec.DefaultBatchSize + 7},
+		{name: "full-tail/append", retainedRows: colexec.DefaultBatchSize, ingressRows: colexec.DefaultBatchSize},
+		{name: "partial-tail/grow-and-append", retainedRows: 7000, ingressRows: 2000},
+		{name: "partial-tail/full-ingress-swap", retainedRows: 7, ingressRows: colexec.DefaultBatchSize},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+
+			var batches colexec.Batches
+			defer batches.Clean(proc.Mp())
+			if tc.retainedRows > 0 {
+				retained := testutil.NewBatch(
+					[]types.Type{types.T_int32.ToType()}, true, tc.retainedRows, proc.Mp())
+				defer retained.Clean(proc.Mp())
+				require.NoError(t, batches.CopyIntoBatches(retained, proc))
+			}
+			before := batchesAllocated(batches.Buf)
+			snapshot, err := snapshotBatchCopyAllocation(batches.Buf)
+			require.NoError(t, err)
+
+			ingress := testutil.NewBatch(
+				[]types.Type{types.T_int32.ToType()}, true, tc.ingressRows, proc.Mp())
+			defer ingress.Clean(proc.Mp())
+			require.NoError(t, batches.CopyIntoBatches(ingress, proc))
+
+			after := batchesAllocated(batches.Buf)
+			require.GreaterOrEqual(t, after, before)
+			delta, err := batchCopyAllocatedDelta(batches.Buf, snapshot)
+			require.NoError(t, err)
+			require.Equal(t, after-before, delta)
+		})
+	}
+}
+
+func TestBatchCopyAllocatedDeltaRejectsLostTail(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	retained := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 7, proc.Mp())
+	defer retained.Clean(proc.Mp())
+	snapshot, err := snapshotBatchCopyAllocation([]*batch.Batch{retained})
+	require.NoError(t, err)
+
+	replacement := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 7, proc.Mp())
+	defer replacement.Clean(proc.Mp())
+	_, err = batchCopyAllocatedDelta([]*batch.Batch{replacement}, snapshot)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
 func TestProjectedPartialTailReplacementRejectsInvalidInputs(t *testing.T) {
 	_, _, err := projectedPartialTailReplacementBytes(nil, nil, -1)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)

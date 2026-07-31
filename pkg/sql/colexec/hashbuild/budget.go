@@ -202,6 +202,79 @@ func batchesAllocated(batches []*batch.Batch) uint64 {
 	return total
 }
 
+type batchCopyAllocationSnapshot struct {
+	length        int
+	tail          *batch.Batch
+	tailAllocated uint64
+}
+
+func snapshotBatchCopyAllocation(batches []*batch.Batch) (batchCopyAllocationSnapshot, error) {
+	snapshot := batchCopyAllocationSnapshot{length: len(batches)}
+	if snapshot.length == 0 {
+		return snapshot, nil
+	}
+	snapshot.tail = batches[snapshot.length-1]
+	if snapshot.tail == nil {
+		return batchCopyAllocationSnapshot{}, process.ErrHashBuildBudgetInvalid
+	}
+	allocated := snapshot.tail.Allocated()
+	if allocated < 0 {
+		return batchCopyAllocationSnapshot{}, process.ErrHashBuildBudgetInvalid
+	}
+	snapshot.tailAllocated = uint64(allocated)
+	return snapshot, nil
+}
+
+// batchCopyAllocatedDelta relies on CopyIntoBatches' append-only contract: it
+// may grow the old partial tail and append destination batches. A full-size
+// source can swap one new batch with that partial tail, so inspect the old tail
+// plus the appended suffix by identity instead of rescanning every retained
+// batch. Across a build this keeps retained-copy accounting linear in the
+// number of destination batches rather than quadratic.
+func batchCopyAllocatedDelta(
+	batches []*batch.Batch,
+	snapshot batchCopyAllocationSnapshot,
+) (uint64, error) {
+	if snapshot.length < 0 || len(batches) < snapshot.length {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	start := 0
+	seenTail := snapshot.length == 0
+	if snapshot.length > 0 {
+		if snapshot.tail == nil {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		start = snapshot.length - 1
+	}
+	var delta uint64
+	for i := start; i < len(batches); i++ {
+		bat := batches[i]
+		if bat == nil {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		allocated := bat.Allocated()
+		if allocated < 0 {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		value := uint64(allocated)
+		if bat == snapshot.tail {
+			if seenTail || value < snapshot.tailAllocated {
+				return 0, process.ErrHashBuildBudgetInvalid
+			}
+			seenTail = true
+			value -= snapshot.tailAllocated
+		}
+		if delta > math.MaxUint64-value {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		delta += value
+	}
+	if !seenTail {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return delta, nil
+}
+
 func (hb *HashmapBuilder) copyBuildBatch(src *batch.Batch, proc *process.Process) error {
 	if hb.budget == nil {
 		return hb.Batches.CopyIntoBatches(src, proc)
@@ -214,20 +287,23 @@ func (hb *HashmapBuilder) copyBuildBatch(src *batch.Batch, proc *process.Process
 	if err != nil {
 		return err
 	}
-	before := batchesAllocated(hb.Batches.Buf)
+	snapshot, err := snapshotBatchCopyAllocation(hb.Batches.Buf)
+	if err != nil {
+		reservation.Release()
+		return err
+	}
 	if err = hb.Batches.CopyIntoBatches(src, proc); err != nil {
 		reservation.Release()
 		hb.releaseBatchReservations()
 		return err
 	}
-	after := batchesAllocated(hb.Batches.Buf)
-	if after < before {
+	actual, err := batchCopyAllocatedDelta(hb.Batches.Buf, snapshot)
+	if err != nil {
 		hb.Batches.Clean(proc.Mp())
 		reservation.Release()
 		hb.releaseBatchReservations()
-		return process.ErrHashBuildBudgetInvalid
+		return err
 	}
-	actual := after - before
 	metadata, ok := retainedMetadataAllowance(src)
 	if !ok || actual > math.MaxUint64-metadata {
 		hb.Batches.Clean(proc.Mp())
