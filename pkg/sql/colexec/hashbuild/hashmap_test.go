@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -56,6 +57,194 @@ func TestBuildHashMap(t *testing.T) {
 	hb.Reset(proc, true)
 	hb.Free(proc)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBuildHashmapOptionalAuxClosedBudgetRemainsFatal(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	generation.Close()
+
+	hb := HashmapBuilder{InputBatchRowCount: 1}
+	hb.setBudget(generation)
+	err = hb.BuildHashmap(false, false, true, proc)
+	require.Error(t, err)
+	var budgetErr *process.HashBuildBudgetError
+	require.ErrorAs(t, err, &budgetErr)
+	require.Equal(t, process.HashBuildBudgetErrorClosed, budgetErr.Kind)
+	fallback, _ := hb.runtimeFilterFallbackState()
+	require.False(t, fallback)
+	require.Nil(t, hb.UniqueJoinKeys)
+	require.Zero(t, generation.Used())
+	hb.Free(proc)
+}
+
+func TestBuildHashmapMandatoryAuxRetryFailureDoesNotRecordFallback(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	budget := process.MustNewHashBuildBudget(1, 1)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	hb := HashmapBuilder{InputBatchRowCount: 1}
+	hb.setBudget(generation)
+	err = hb.BuildHashmap(false, false, true, proc)
+	require.Error(t, err)
+	var budgetErr *process.HashBuildBudgetError
+	require.ErrorAs(t, err, &budgetErr)
+	require.Equal(t, process.HashBuildBudgetErrorAdmission, budgetErr.Kind)
+	fallback, _ := hb.runtimeFilterFallbackState()
+	require.False(t, fallback,
+		"fatal mandatory retry must not be counted as an optional fallback")
+	require.Equal(t, uint64(2), generation.RejectCount())
+	require.Zero(t, generation.Used())
+	hb.Free(proc)
+}
+
+func TestPrepareCanonicalRuntimeFilterCollectionClosedBudgetRemainsFatal(
+	t *testing.T,
+) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 16, proc.Mp())
+	defer input.Clean(proc.Mp())
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	hb := HashmapBuilder{
+		Batches:            colexec.Batches{Buf: []*batch.Batch{input}},
+		InputBatchRowCount: input.RowCount(),
+	}
+	hb.setBudget(generation)
+	require.NoError(t, hb.reserveBuildAux(false))
+	generation.Close()
+
+	collect, err := hb.prepareCanonicalRuntimeFilterCollection(true)
+	require.Error(t, err)
+	require.False(t, collect)
+	var budgetErr *process.HashBuildBudgetError
+	require.ErrorAs(t, err, &budgetErr)
+	require.Equal(t, process.HashBuildBudgetErrorClosed, budgetErr.Kind)
+	fallback, _ := hb.runtimeFilterFallbackState()
+	require.False(t, fallback)
+	hb.Batches.Buf = nil
+	hb.releaseReservations()
+	require.Zero(t, generation.Used())
+}
+
+func TestOptionalRuntimeFilterCollectionCleanupFailureRemainsFatal(
+	t *testing.T,
+) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	key := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	hb := HashmapBuilder{
+		InputBatchRowCount: 1,
+		UniqueJoinKeys:     []*vector.Vector{key},
+	}
+	hb.setBudget(generation)
+	require.NoError(t, hb.reserveBuildAux(true))
+	require.True(t, hb.auxReservation.Release())
+
+	err = hb.fallbackOptionalRuntimeFilterCollection(
+		proc,
+		runtimefilter.MarkOptionalAllocationError(
+			errors.New("mpool allocation failed")),
+	)
+	require.ErrorIs(t, err, process.ErrHashBuildReservationInactive)
+	fallback, _ := hb.runtimeFilterFallbackState()
+	require.False(t, fallback)
+	require.Nil(t, hb.UniqueJoinKeys)
+	require.Zero(t, generation.Used())
+	hb.releaseReservations()
+}
+
+func TestBuildHashmapUniqueUnionAllocationFailureFallsBack(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		hashOnPK bool
+	}{
+		{name: "union"},
+		{name: "union-batch", hashOnPK: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testBuildHashmapUniqueUnionAllocationFailureFallsBack(
+				t, test.hashOnPK)
+		})
+	}
+}
+
+func testBuildHashmapUniqueUnionAllocationFailureFallsBack(
+	t *testing.T,
+	hashOnPK bool,
+) {
+	mp, err := mpool.NewMPool(t.Name(), 8<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	var hb HashmapBuilder
+	require.NoError(t, hb.Prepare(
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())},
+		-1, -1, nil, proc))
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 16, mp)
+	hb.Batches.Buf = []*batch.Batch{input}
+	hb.InputBatchRowCount = input.RowCount()
+
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	hb.setBudget(generation)
+
+	var filler []byte
+	defer func() {
+		hb.Free(proc)
+		require.Zero(t, generation.Used())
+		if filler != nil {
+			mp.Free(filler)
+		}
+		generation.Close()
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	// Calibrate the deterministic mandatory map footprint, then leave exactly
+	// that much headroom. The second build can recreate its required map, while
+	// the first optional-key Union allocation must fail at the mpool boundary.
+	retainedBytes := mp.CurrNB()
+	require.NoError(t, hb.BuildHashmap(hashOnPK, false, false, proc))
+	mapBytes := mp.CurrNB() - retainedBytes
+	require.Greater(t, mapBytes, int64(0))
+	hb.FreeHashMapOnly(proc)
+	require.Equal(t, retainedBytes, mp.CurrNB())
+
+	fillerBytes := mp.Cap() - mp.CurrNB() - mapBytes
+	require.Greater(t, fillerBytes, int64(0))
+	filler, err = mp.Alloc(int(fillerBytes), true)
+	require.NoError(t, err)
+
+	require.NoError(t, hb.BuildHashmap(hashOnPK, false, true, proc))
+	fallback, rebuildSafe := hb.runtimeFilterFallbackState()
+	require.True(t, fallback)
+	require.True(t, rebuildSafe)
+	require.Nil(t, hb.UniqueJoinKeys)
+	require.Greater(t, hb.GetGroupCount(), uint64(0))
+	require.Zero(t, generation.RejectCount(),
+		"mpool failure must not be misclassified as budget admission")
 }
 
 func TestBuildHashMapBudgetRejectsResizeAndReleasesOnReset(t *testing.T) {

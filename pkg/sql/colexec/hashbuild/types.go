@@ -349,8 +349,11 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 		} else {
 			message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
 		}
+		hashBuild.ctr.runtimeFilterDone = hashBuild.RuntimeFilterSpec != nil
 	}
-	hashBuild.ctr.runtimeFilterDone = false
+	// Keep the terminal gate closed for this execution generation. Prepare is
+	// the only boundary that opens it for the next generation, which makes
+	// repeated Reset calls idempotent.
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	hashBuild.ctr.terminalMu.Lock()
@@ -382,13 +385,7 @@ func (hashBuild *HashBuild) logDiagnostics(proc *process.Process, pipelineFailed
 		return
 	}
 	extra := hashBuild.OpAnalyzer.GetOpStats().ExtraStats
-	if extra["HashBuildSpillStarts"] == 0 &&
-		extra["QueryHashBudgetRejects"] == 0 &&
-		extra["HashBuildRuntimeFilterBudgetFallbacks"] == 0 &&
-		extra["HashBuildEmergencyScratchGrowRejects"] == 0 &&
-		extra["HashBuildSpillScratchGrowRejects"] == 0 &&
-		extra["HashBuildRetainedEmergencyGrowCount"] == 0 &&
-		extra["HashBuildRetainedEmergencyGrowRejects"] == 0 {
+	if !hasHashBuildDiagnosticStats(extra) {
 		return
 	}
 	logutil.Info("operator diagnostic summary",
@@ -400,6 +397,18 @@ func (hashBuild *HashBuild) logDiagnostics(proc *process.Process, pipelineFailed
 		zap.Bool("pipeline_failed", pipelineFailed),
 		zap.Error(err),
 		zap.Any("extra_stats", extra))
+}
+
+func hasHashBuildDiagnosticStats(extra map[string]int64) bool {
+	return extra["HashBuildSpillStarts"] != 0 ||
+		extra["QueryHashBudgetRejects"] != 0 ||
+		extra["HashBuildRuntimeFilterCollectionFallbacks"] != 0 ||
+		extra["HashBuildRuntimeFilterBudgetFallbacks"] != 0 ||
+		extra["HashBuildRuntimeFilterAllocationFallbacks"] != 0 ||
+		extra["HashBuildEmergencyScratchGrowRejects"] != 0 ||
+		extra["HashBuildSpillScratchGrowRejects"] != 0 ||
+		extra["HashBuildRetainedEmergencyGrowCount"] != 0 ||
+		extra["HashBuildRetainedEmergencyGrowRejects"] != 0
 }
 
 func (hashBuild *HashBuild) publishJoinMap(proc *process.Process, jm *message.JoinMap) bool {

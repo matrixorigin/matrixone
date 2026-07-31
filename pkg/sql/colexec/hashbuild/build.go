@@ -424,19 +424,22 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		rebuildSafe := ctr.hashmapBuilder.RetainedBatchRecoverySafe()
 		if err != nil && needUniqueVec &&
 			!collectionFallback && rebuildSafe &&
-			errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+			runtimefilter.ClassifyOptionalFallback(err) ==
+				runtimefilter.OptionalFallbackBudgetAdmission {
 			// Unique-key retention exists only for the optional runtime filter.
 			// A mandatory map allocation can still lose admission while the
 			// optional owner is live. Rebuild only while HashmapBuilder proves
 			// that no destructive Dedup batch rewrite has started.
 			ctr.hashmapBuilder.FreeHashMapOnly(proc)
-			collectionFallback = true
 			err = ctr.hashmapBuilder.BuildHashmap(
 				hashBuild.HashOnPK,
 				hashBuild.NeedAllocateSels,
 				false,
 				proc,
 			)
+			// Count a collection fallback only after the mandatory rebuild
+			// succeeds. A failed retry is a fatal build, not a downgrade.
+			collectionFallback = err == nil
 			rebuildSafe = ctr.hashmapBuilder.RetainedBatchRecoverySafe()
 		}
 		if collectionFallback && analyzer != nil {
@@ -757,7 +760,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 
 		data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(keyVec)
 		if err != nil {
-			if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(err, &runtimeFilter, spec, proc) {
+			if hashBuild.fallbackOptionalRuntimeFilter(err, &runtimeFilter, spec, proc) {
 				return nil
 			}
 			return err
@@ -842,7 +845,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 				}, nil
 			},
 		); err != nil {
-			if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(err, &runtimeFilter, spec, proc) {
+			if hashBuild.fallbackOptionalRuntimeFilter(err, &runtimeFilter, spec, proc) {
 				return nil
 			}
 			return err
@@ -858,7 +861,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 	keyVec.InplaceSort()
 	data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(keyVec)
 	if err != nil {
-		if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(err, &runtimeFilter, spec, proc) {
+		if hashBuild.fallbackOptionalRuntimeFilter(err, &runtimeFilter, spec, proc) {
 			return nil
 		}
 		return err
@@ -915,7 +918,7 @@ func (hashBuild *HashBuild) handleSerializedRuntimeFilter(
 		hashBuild.materializeSerializedRuntimeFilter(
 			proc, spec, componentTypes, rowCount)
 	if err != nil {
-		if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(
+		if hashBuild.fallbackOptionalRuntimeFilter(
 			err, runtimeFilter, spec, proc,
 		) {
 			return nil
@@ -1016,7 +1019,8 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 	if err = payload.PreExtendWithArea(
 		rowCount, int(areaBound), proc.Mp(),
 	); err != nil {
-		return nil, nil, 0, false, err
+		return nil, nil, 0, false,
+			runtimefilter.MarkOptionalAllocationError(err)
 	}
 
 	packerSize := maxRowBound
@@ -1052,6 +1056,9 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 			// bitmap into an empty byte-string key.
 			continue
 		}
+		// Bounds plus PreExtendWithArea reserved the complete data and area
+		// capacities. An append error contradicts that oracle and must remain
+		// an unmarked fatal invariant error.
 		if err = vector.AppendBytes(
 			payload, packer.GetBuf(), false, proc.Mp(),
 		); err != nil {
@@ -1182,27 +1189,36 @@ func serializedRuntimeFilterAllocationPeak(
 	return peak, nil
 }
 
-// Runtime filters are optional probe-side optimizations. If serializing one
-// cannot be admitted under the query/CN hash-build budget, PASS preserves
-// correctness and avoids turning a successful hash build into a query error.
-// Lifecycle and accounting errors remain fatal.
-func (hashBuild *HashBuild) fallbackRuntimeFilterOnBudgetAdmission(
+// Runtime filters are optional probe-side optimizations. Fail open only for a
+// query/CN admission rejection or an allocation error marked at an exact
+// optional payload/vector boundary. Cancellation, contract violations, and
+// budget lifecycle/accounting errors remain fatal.
+func (hashBuild *HashBuild) fallbackOptionalRuntimeFilter(
 	err error,
 	runtimeFilter *message.RuntimeFilterMessage,
 	spec *plan.RuntimeFilterSpec,
 	proc *process.Process,
 ) bool {
-	var budgetErr *process.HashBuildBudgetError
-	if !errors.As(err, &budgetErr) || budgetErr.Kind != process.HashBuildBudgetErrorAdmission {
+	kind := runtimefilter.ClassifyOptionalFallback(err)
+	if kind == runtimefilter.OptionalFallbackNone {
 		return false
 	}
 
 	if hashBuild.OpAnalyzer != nil {
 		stats := hashBuild.OpAnalyzer.GetOpStats()
-		stats.AddExtraStat("HashBuildRuntimeFilterBudgetFallbacks", 1)
-		stats.SetMaxExtraStat("HashBuildRuntimeFilterBudgetFallbackRequestedBytes", hashBuildStatInt64(budgetErr.Requested))
-		stats.SetMaxExtraStat("HashBuildRuntimeFilterBudgetFallbackUsedBytes", hashBuildStatInt64(budgetErr.Used))
-		stats.SetMaxExtraStat("HashBuildRuntimeFilterBudgetFallbackCapBytes", hashBuildStatInt64(budgetErr.Cap))
+		if kind == runtimefilter.OptionalFallbackBudgetAdmission {
+			var budgetErr *process.HashBuildBudgetError
+			if !errors.As(err, &budgetErr) {
+				return false
+			}
+			stats.AddExtraStat("HashBuildRuntimeFilterBudgetFallbacks", 1)
+			stats.SetMaxExtraStat("HashBuildRuntimeFilterBudgetFallbackRequestedBytes", hashBuildStatInt64(budgetErr.Requested))
+			stats.SetMaxExtraStat("HashBuildRuntimeFilterBudgetFallbackUsedBytes", hashBuildStatInt64(budgetErr.Used))
+			stats.SetMaxExtraStat("HashBuildRuntimeFilterBudgetFallbackCapBytes", hashBuildStatInt64(budgetErr.Cap))
+		} else {
+			stats.AddExtraStat(
+				"HashBuildRuntimeFilterAllocationFallbacks", 1)
+		}
 	}
 	*runtimeFilter = message.RuntimeFilterMessage{
 		Tag: spec.Tag,

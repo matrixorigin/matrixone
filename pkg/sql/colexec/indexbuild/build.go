@@ -47,6 +47,10 @@ func (indexBuild *IndexBuild) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &indexBuild.ctr
+	// Prepare starts a new execution generation. Reset deliberately keeps the
+	// previous generation's terminal gate closed so repeated cleanup is
+	// idempotent.
+	ctr.runtimeFilterDone = false
 	ctr.runtimeFilterUsable = false
 	if spec := indexBuild.RuntimeFilterSpec; spec != nil {
 		buildExpr := runtimefilter.BuildKeyExpr(spec)
@@ -133,6 +137,30 @@ func (ctr *container) sendRuntimeFilterPass(
 	ctr.runtimeFilterDone = true
 }
 
+func (ctr *container) fallbackRuntimeFilter(
+	indexBuild *IndexBuild,
+	proc *process.Process,
+	err error,
+) bool {
+	kind := runtimefilter.ClassifyOptionalFallback(err)
+	if kind == runtimefilter.OptionalFallbackNone {
+		return false
+	}
+	if indexBuild.OpAnalyzer != nil {
+		stats := indexBuild.OpAnalyzer.GetOpStats()
+		if kind == runtimefilter.OptionalFallbackBudgetAdmission {
+			stats.AddExtraStat(
+				"IndexBuildRuntimeFilterBudgetFallbacks", 1)
+		} else {
+			stats.AddExtraStat(
+				"IndexBuildRuntimeFilterAllocationFallbacks", 1)
+		}
+	}
+	ctr.abandonRuntimeFilter(proc)
+	ctr.sendRuntimeFilterPass(indexBuild.RuntimeFilterSpec, proc)
+	return true
+}
+
 func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.Process, analyzer process.Analyzer) error {
 	// A legacy or contradictory contract can only produce PASS. Avoid scanning
 	// and retaining the index solely for an optimization we cannot safely send.
@@ -172,8 +200,11 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 						*inputVec.GetType())
 				}
 				if err = ctr.buf.UnionOne(result.Batch, 0, proc.Mp()); err != nil {
-					ctr.abandonRuntimeFilter(proc)
-					return nil
+					err = runtimefilter.MarkOptionalAllocationError(err)
+					if ctr.fallbackRuntimeFilter(indexBuild, proc, err) {
+						return nil
+					}
+					return err
 				}
 			}
 		} else {
@@ -189,8 +220,11 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 			}
 			ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
 			if err != nil {
-				ctr.abandonRuntimeFilter(proc)
-				return nil
+				err = runtimefilter.MarkOptionalAllocationError(err)
+				if ctr.fallbackRuntimeFilter(indexBuild, proc, err) {
+					return nil
+				}
+				return err
 			}
 		}
 
@@ -256,9 +290,12 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 		if !vec.IsConstNull() && vec.Length() > 0 {
 			if err := flat.UnionOne(vec, 0, proc.Mp()); err != nil {
 				flat.Free(proc.Mp())
+				err = runtimefilter.MarkOptionalAllocationError(err)
+				if ctr.fallbackRuntimeFilter(ap, proc, err) {
+					return nil
+				}
 				ctr.abandonRuntimeFilter(proc)
-				ctr.sendRuntimeFilterPass(ap.RuntimeFilterSpec, proc)
-				return nil
+				return err
 			}
 		}
 		defer flat.Free(proc.Mp())
@@ -280,9 +317,11 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 	}
 	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
 		if err := runtimefilter.CloseFloatSignedZero(vec, proc.Mp(), nil); err != nil {
+			if ctr.fallbackRuntimeFilter(ap, proc, err) {
+				return nil
+			}
 			ctr.abandonRuntimeFilter(proc)
-			ctr.sendRuntimeFilterPass(ap.RuntimeFilterSpec, proc)
-			return nil
+			return err
 		}
 	}
 	if vec.Length() > int(inFilterCardLimit) {
@@ -298,15 +337,19 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 	vec.InplaceSort()
 	budget, err := proc.GetHashBuildBudget()
 	if err != nil {
+		if ctr.fallbackRuntimeFilter(ap, proc, err) {
+			return nil
+		}
 		ctr.abandonRuntimeFilter(proc)
-		ctr.sendRuntimeFilterPass(ap.RuntimeFilterSpec, proc)
-		return nil
+		return err
 	}
 	data, release, err := runtimefilter.MarshalExactFilterVector(vec, budget)
 	if err != nil {
+		if ctr.fallbackRuntimeFilter(ap, proc, err) {
+			return nil
+		}
 		ctr.abandonRuntimeFilter(proc)
-		ctr.sendRuntimeFilterPass(ap.RuntimeFilterSpec, proc)
-		return nil
+		return err
 	}
 
 	runtimeFilter.Typ = message.RuntimeFilter_IN

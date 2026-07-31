@@ -136,9 +136,14 @@ func fillFloat32Keys(itr *intHashMapIterator, vec *vector.Vector, start, n int) 
 	}
 
 	values := vector.MustFixedColNoTypeCheck[float32](vec)
-	codec := keycodec.NewFloat32Codec(vec.GetType().Scale)
+	scale := vec.GetType().Scale
 	if vec.IsConst() {
-		bits := codec.CanonicalBits(values[0])
+		var bits uint32
+		if scale > 0 {
+			bits = keycodec.NewFloat32Codec(scale).CanonicalBits(values[0])
+		} else {
+			bits = keycodec.CanonicalFloat32Bits(values[0])
+		}
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
@@ -153,7 +158,11 @@ func fillFloat32Keys(itr *intHashMapIterator, vec *vector.Vector, start, n int) 
 		}
 		return
 	}
-
+	if scale <= 0 {
+		fillUnscaledFloat32Keys(itr, vec, values, start, n)
+		return
+	}
+	codec := keycodec.NewFloat32Codec(scale)
 	if !vec.GetNulls().Any() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
@@ -193,6 +202,58 @@ func fillFloat32Keys(itr *intHashMapIterator, vec *vector.Vector, start, n int) 
 			}
 			*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
 				codec.CanonicalBits(values[i+start])
+			keyOffs[i] += uint32(types.T_float32.TypeLen())
+		}
+	}
+}
+
+func fillUnscaledFloat32Keys(
+	itr *intHashMapIterator,
+	vec *vector.Vector,
+	values []float32,
+	start, n int,
+) {
+	keys := itr.keys
+	keyOffs := itr.keyOffs
+	if !vec.GetNulls().Any() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					keycodec.CanonicalFloat32Bits(values[i+start])
+			}
+			uint32AddScalar(1+uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		} else {
+			for i := 0; i < n; i++ {
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+					keycodec.CanonicalFloat32Bits(values[i+start])
+			}
+			uint32AddScalar(uint32(types.T_float32.TypeLen()), keyOffs[:n], keyOffs[:n])
+		}
+		return
+	}
+
+	nsp := vec.GetNulls()
+	if itr.mp.hasNull {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+				keyOffs[i]++
+			} else {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) =
+					keycodec.CanonicalFloat32Bits(values[i+start])
+				keyOffs[i] += 1 + uint32(types.T_float32.TypeLen())
+			}
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			if nsp.Contains(uint64(i + start)) {
+				itr.zValues[i] = 0
+				continue
+			}
+			*(*uint32)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) =
+				keycodec.CanonicalFloat32Bits(values[i+start])
 			keyOffs[i] += uint32(types.T_float32.TypeLen())
 		}
 	}

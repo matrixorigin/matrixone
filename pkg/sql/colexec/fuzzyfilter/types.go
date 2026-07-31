@@ -119,11 +119,12 @@ func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool
 			message.FinalizeRuntimeFilter(
 				fuzzyFilter.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
 		}
+		fuzzyFilter.ctr.runtimeFilterDone =
+			fuzzyFilter.RuntimeFilterSpec != nil
 	}
 	ctr := &fuzzyFilter.ctr
 	ctr.state = Build
 	ctr.runtimeFilterUsable = false
-	ctr.runtimeFilterDone = false
 	ctr.collisionCnt = 0
 	if ctr.pass2RuntimeFilter != nil {
 		ctr.pass2RuntimeFilter.CleanOnlyData()

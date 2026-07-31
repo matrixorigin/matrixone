@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -614,14 +615,20 @@ func (hb *HashmapBuilder) buildHashmap(
 		if !needUniqueVec {
 			return err
 		}
+		if runtimefilter.ClassifyOptionalFallback(err) !=
+			runtimefilter.OptionalFallbackBudgetAdmission {
+			return err
+		}
 		// The extra auxiliary charge exists only for optional exact-filter key
 		// retention. Retry the admission in place without that owner before
 		// allocating or mutating the mandatory map.
 		needUniqueVec = false
-		hb.runtimeFilterCollectionFallback = true
 		if err = hb.reserveBuildAux(false); err != nil {
 			return err
 		}
+		// Linearize the fallback only after mandatory admission succeeds. A
+		// failed retry is a fatal build, not a successful optional downgrade.
+		hb.runtimeFilterCollectionFallback = true
 	}
 	dedupBuildKeepLast = dedupBuildKeepLast && hb.IsDedup && hb.OnDuplicateAction == plan.Node_FAIL
 	defer func() {
@@ -898,16 +905,16 @@ func (hb *HashmapBuilder) buildHashmap(
 					areaBytes, reserveErr :=
 						unionBatchAreaBytes(vec, vecIdx2, n)
 					if reserveErr != nil {
-						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
-							return err
-						}
-						needUniqueVec = false
-						break
+						// Range and overflow failures contradict the collection
+						// oracle; they are never optional allocation failures.
+						return reserveErr
 					}
 					overlap, reserveErr := hb.reserveUniqueAppendOverlap(hb.UniqueJoinKeys[j], n, areaBytes)
 					if reserveErr != nil {
-						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
-							return err
+						if fatalErr :=
+							hb.fallbackOptionalRuntimeFilterCollection(
+								proc, reserveErr); fatalErr != nil {
+							return fatalErr
 						}
 						needUniqueVec = false
 						break
@@ -917,8 +924,14 @@ func (hb *HashmapBuilder) buildHashmap(
 						overlap.Release()
 					}
 					if err != nil {
-						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
-							return err
+						// With the range and capacity oracle above satisfied,
+						// UnionBatch error returns are only mpool growth failures.
+						allocationErr :=
+							runtimefilter.MarkOptionalAllocationError(err)
+						if fatalErr :=
+							hb.fallbackOptionalRuntimeFilterCollection(
+								proc, allocationErr); fatalErr != nil {
+							return fatalErr
 						}
 						needUniqueVec = false
 						break
@@ -943,16 +956,16 @@ func (hb *HashmapBuilder) buildHashmap(
 					}
 					areaBytes, reserveErr := uniqueAppendAreaBytes(vec, 0, len(newSels), newSels)
 					if reserveErr != nil {
-						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
-							return err
-						}
-						needUniqueVec = false
-						break
+						// Selector/range/overflow failures are collection
+						// contract errors and remain fatal.
+						return reserveErr
 					}
 					overlap, reserveErr := hb.reserveUniqueAppendOverlap(hb.UniqueJoinKeys[j], len(newSels), areaBytes)
 					if reserveErr != nil {
-						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
-							return err
+						if fatalErr :=
+							hb.fallbackOptionalRuntimeFilterCollection(
+								proc, reserveErr); fatalErr != nil {
+							return fatalErr
 						}
 						needUniqueVec = false
 						break
@@ -962,8 +975,14 @@ func (hb *HashmapBuilder) buildHashmap(
 						overlap.Release()
 					}
 					if err != nil {
-						if err = hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
-							return err
+						// With generated selectors and the capacity oracle above
+						// satisfied, Union error returns are mpool growth failures.
+						allocationErr :=
+							runtimefilter.MarkOptionalAllocationError(err)
+						if fatalErr :=
+							hb.fallbackOptionalRuntimeFilterCollection(
+								proc, allocationErr); fatalErr != nil {
+							return fatalErr
 						}
 						needUniqueVec = false
 						break
@@ -975,7 +994,7 @@ func (hb *HashmapBuilder) buildHashmap(
 
 	if dedupBuildKeepLast && hb.IgnoreRows.Count() > 0 {
 		if needUniqueVec {
-			if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+			if err := hb.releaseOptionalRuntimeFilterKeys(proc); err != nil {
 				return err
 			}
 		}
@@ -1007,7 +1026,7 @@ func (hb *HashmapBuilder) buildHashmap(
 	}
 	if hb.IsDedup && hb.OnDuplicateAction == plan.Node_IGNORE && hb.IgnoreRows.Count() > 0 {
 		if needUniqueVec {
-			if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+			if err := hb.releaseOptionalRuntimeFilterKeys(proc); err != nil {
 				return err
 			}
 		}

@@ -567,6 +567,24 @@ func (hb *HashmapBuilder) abandonOptionalRuntimeFilterKeys(
 	return nil
 }
 
+// fallbackOptionalRuntimeFilterCollection converts only a proven optional
+// cause into in-place key abandonment. Fatal causes are returned unchanged,
+// leaving the fallback bit untouched and builder ownership with terminal
+// cleanup.
+func (hb *HashmapBuilder) fallbackOptionalRuntimeFilterCollection(
+	proc *process.Process,
+	cause error,
+) error {
+	if runtimefilter.ClassifyOptionalFallback(cause) ==
+		runtimefilter.OptionalFallbackNone {
+		return cause
+	}
+	if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+		return err
+	}
+	return nil
+}
+
 // releaseOptionalRuntimeFilterKeys drops terminal producer-only state without
 // marking collection fallback. The JoinMap retains only the mandatory
 // auxiliary projection, so its transferred budget owner must be reconciled
@@ -634,6 +652,10 @@ func (hb *HashmapBuilder) prepareCanonicalRuntimeFilterCollection(
 		return false, nil
 	}
 	if err := hb.resizeBuildAuxReservation(true); err != nil {
+		if runtimefilter.ClassifyOptionalFallback(err) !=
+			runtimefilter.OptionalFallbackBudgetAdmission {
+			return false, err
+		}
 		hb.runtimeFilterCollectionFallback = true
 		return false, nil
 	}

@@ -19,6 +19,8 @@ package runtimefilter
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"math"
 
 	"github.com/gogo/protobuf/proto"
@@ -31,6 +33,83 @@ import (
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// optionalAllocationError marks only recoverable allocation failures while
+// materializing an optional runtime-filter vector or payload. Contract,
+// cancellation, and budget lifecycle errors deliberately remain unmarked.
+type optionalAllocationError struct {
+	cause error
+}
+
+func (e *optionalAllocationError) Error() string { return e.cause.Error() }
+func (e *optionalAllocationError) Unwrap() error { return e.cause }
+
+// MarkOptionalAllocationError preserves the allocation error while giving a
+// runtime-filter producer a narrow fail-open classification.
+func MarkOptionalAllocationError(err error) error {
+	if err == nil || IsOptionalAllocationError(err) {
+		return err
+	}
+	return &optionalAllocationError{cause: err}
+}
+
+// IsOptionalAllocationError reports whether err came from an explicitly
+// marked optional runtime-filter allocation boundary.
+func IsOptionalAllocationError(err error) bool {
+	var allocationErr *optionalAllocationError
+	return errors.As(err, &allocationErr)
+}
+
+// OptionalFallbackKind identifies the only failures for which an optional
+// runtime-filter producer may publish PASS and continue its primary work.
+type OptionalFallbackKind uint8
+
+const (
+	OptionalFallbackNone OptionalFallbackKind = iota
+	OptionalFallbackBudgetAdmission
+	OptionalFallbackAllocation
+)
+
+// ClassifyOptionalFallback is deliberately fatal-first. Only a typed capacity
+// admission rejection or an error marked at an exact optional allocation
+// boundary may fail open. Cancellation, lifecycle, accounting, provider, raw
+// sentinel, and invariant errors remain fatal.
+func ClassifyOptionalFallback(err error) OptionalFallbackKind {
+	if err == nil || errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return OptionalFallbackNone
+	}
+	// Reject every known fatal branch before accepting an admission branch.
+	// This also keeps errors.Join(admission, fatal) fatal regardless of the
+	// traversal order chosen by errors.As below.
+	if errors.Is(err, process.ErrHashBuildBudgetClosed) ||
+		errors.Is(err, process.ErrHashBuildBudgetInvalid) ||
+		errors.Is(err, process.ErrHashBuildCeilingMissing) ||
+		errors.Is(err, process.ErrHashBuildReservationInactive) ||
+		errors.Is(err, process.ErrHashBuildReservationUpward) {
+		return OptionalFallbackNone
+	}
+
+	var budgetErr *process.HashBuildBudgetError
+	if errors.As(err, &budgetErr) {
+		if budgetErr != nil &&
+			budgetErr.Kind == process.HashBuildBudgetErrorAdmission {
+			return OptionalFallbackBudgetAdmission
+		}
+		return OptionalFallbackNone
+	}
+
+	// Raw sentinels cannot prove an ordinary capacity rejection and a marker
+	// must never override a lifecycle or accounting failure wrapped below it.
+	if errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+		return OptionalFallbackNone
+	}
+
+	if IsOptionalAllocationError(err) {
+		return OptionalFallbackAllocation
+	}
+	return OptionalFallbackNone
+}
 
 // ExactKeyEncoding validates a versioned exact-filter contract against the
 // vector an executor actually materialized. Legacy/default metadata and any
@@ -285,13 +364,15 @@ func CloseFloatSignedZero(
 		if hasPositiveZero {
 			value = math.Float32frombits(uint32(1) << 31)
 		}
-		return vector.AppendFixed(vec, value, false, mp)
+		return MarkOptionalAllocationError(
+			vector.AppendFixed(vec, value, false, mp))
 	}
 	value := float64(0)
 	if hasPositiveZero {
 		value = math.Float64frombits(uint64(1) << 63)
 	}
-	return vector.AppendFixed(vec, value, false, mp)
+	return MarkOptionalAllocationError(
+		vector.AppendFixed(vec, value, false, mp))
 }
 
 // MarshalExactFilterVector serializes an exact-filter vector under the

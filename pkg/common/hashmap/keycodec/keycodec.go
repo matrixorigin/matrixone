@@ -134,7 +134,14 @@ func NewFloat32Codec(scale int32) Float32Codec {
 // values are normalized exactly as scalar comparisons normalize them, and
 // signed zero uses the single all-zero representation.
 func (c Float32Codec) CanonicalBits(value float32) uint32 {
-	bits := math.Float32bits(c.normalizer.Normalize(value))
+	return CanonicalFloat32Bits(c.normalizer.Normalize(value))
+}
+
+// CanonicalFloat32Bits returns canonical bits for a FLOAT32 value after any
+// required scale normalization. SQL equality identifies signed zero, so both
+// zero representations use the single all-zero key.
+func CanonicalFloat32Bits(value float32) uint32 {
+	bits := math.Float32bits(value)
 	if bits<<1 == 0 {
 		return 0
 	}

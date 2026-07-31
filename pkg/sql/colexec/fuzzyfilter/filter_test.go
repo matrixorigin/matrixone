@@ -251,6 +251,7 @@ func TestRuntimeFilterContract(t *testing.T) {
 		arg, proc := newRuntimeFilterTest(t, spec, typ)
 
 		arg.Reset(proc, false, errors.New("build failed"))
+		arg.Reset(proc, false, errors.New("build failed"))
 		runtimeFilter := receiveRuntimeFilter(t, proc, spec.Tag)
 		require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
 		require.Zero(t, runtimeFilter.Card)
@@ -295,6 +296,8 @@ func TestFuzzyRuntimeFilterCopyFailureFailsOpen(t *testing.T) {
 	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
 	require.Zero(t, runtimeFilter.Card)
 	require.Empty(t, runtimeFilter.Data)
+	require.Equal(t, int64(1), arg.OpAnalyzer.GetOpStats().ExtraStats["FuzzyFilterRuntimeFilterAllocationFallbacks"])
+	require.Zero(t, arg.OpAnalyzer.GetOpStats().ExtraStats["FuzzyFilterRuntimeFilterBudgetFallbacks"])
 
 	limited.Free(filler)
 	payload.Free(sourceMP)
@@ -356,12 +359,71 @@ func TestFuzzyRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
 	require.Zero(t, runtimeFilter.Card)
 	require.Empty(t, runtimeFilter.Data)
+	require.Equal(t, int64(1), arg.OpAnalyzer.GetOpStats().ExtraStats["FuzzyFilterRuntimeFilterAllocationFallbacks"])
+	require.Zero(t, arg.OpAnalyzer.GetOpStats().ExtraStats["FuzzyFilterRuntimeFilterBudgetFallbacks"])
 
 	limited.Free(filler)
 	arg.Free(proc, false, nil)
 	proc.GetMessageBoard().Reset()
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestFuzzyRuntimeFilterBudgetErrorPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		closed bool
+	}{
+		{name: "admission fails open"},
+		{name: "closed remains fatal", closed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			typ := types.T_int32.ToType()
+			spec := newRuntimeFilterSpec(109, typ, typ)
+			arg, proc := newRuntimeFilterTest(t, spec, typ)
+			require.NoError(t, arg.Prepare(proc))
+			require.NoError(t, vector.AppendFixed(
+				arg.ctr.pass2RuntimeFilter, int32(1), false, proc.Mp()))
+
+			generation, err := proc.GetHashBuildBudget()
+			require.NoError(t, err)
+			var held *process.HashBuildReservation
+			if test.closed {
+				generation.Close()
+			} else {
+				held, err = generation.Reserve(generation.Cap())
+				require.NoError(t, err)
+			}
+
+			err = arg.handleRuntimeFilter(proc)
+			stats := arg.OpAnalyzer.GetOpStats().ExtraStats
+			if test.closed {
+				require.ErrorIs(t, err, process.ErrHashBuildBudgetClosed)
+				require.NotErrorIs(t, err,
+					process.ErrHashBuildBudgetAdmission)
+				require.False(t, arg.ctr.runtimeFilterDone)
+				require.Zero(t,
+					stats["FuzzyFilterRuntimeFilterBudgetFallbacks"])
+				arg.finalizeBuildFailure(proc)
+			} else {
+				require.NoError(t, err)
+				require.True(t, arg.ctr.runtimeFilterDone)
+				require.Equal(t, int64(1),
+					stats["FuzzyFilterRuntimeFilterBudgetFallbacks"])
+				require.True(t, held.Release())
+			}
+			require.False(t, arg.ctr.runtimeFilterUsable)
+			require.Nil(t, arg.ctr.pass2RuntimeFilter)
+			runtimeFilter := receiveRuntimeFilter(t, proc, spec.Tag)
+			require.Equal(t, int32(message.RuntimeFilter_PASS),
+				runtimeFilter.Typ)
+
+			arg.Free(proc, test.closed, err)
+			proc.GetMessageBoard().Reset()
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
 }
 
 func TestFuzzyCallErrorUnblocksRuntimeFilterBeforeReset(t *testing.T) {
@@ -402,6 +464,21 @@ func TestFuzzyCallErrorUnblocksRuntimeFilterBeforeReset(t *testing.T) {
 	require.NoError(t, receiveErr)
 	require.False(t, done)
 	require.Empty(t, messages, "Reset must not publish a second terminal value")
+	arg.Reset(proc, true, err)
+	messages, done, receiveErr = receiver.ReceiveMessage(false, proc.Ctx)
+	require.NoError(t, receiveErr)
+	require.False(t, done)
+	require.Empty(t, messages,
+		"repeated Reset must remain idempotent within one generation")
+	require.True(t, arg.ctr.runtimeFilterDone)
+
+	proc.GetMessageBoard().Reset()
+	require.NoError(t, arg.Prepare(proc))
+	require.False(t, arg.ctr.runtimeFilterDone,
+		"Prepare must open the terminal gate for the next generation")
+	arg.finalizeBuildFailure(proc)
+	runtimeFilter = receiveRuntimeFilter(t, proc, spec.Tag)
+	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
 
 	buildChild.Free(proc, true, err)
 	probeChild.Free(proc, true, err)

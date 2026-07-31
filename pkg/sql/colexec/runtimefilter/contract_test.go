@@ -15,6 +15,8 @@
 package runtimefilter
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
@@ -26,6 +28,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestClassifyOptionalFallbackFatalFirst(t *testing.T) {
+	mpoolErr := errors.New("mpool allocation failed")
+	providerErr := errors.New("budget provider failed")
+	var nilBudgetErr *process.HashBuildBudgetError
+	budgetErr := func(kind process.HashBuildBudgetErrorKind) error {
+		return &process.HashBuildBudgetError{Kind: kind}
+	}
+	marked := MarkOptionalAllocationError
+
+	tests := []struct {
+		name string
+		err  error
+		want OptionalFallbackKind
+	}{
+		{name: "nil", want: OptionalFallbackNone},
+		{name: "typed nil budget error", err: nilBudgetErr, want: OptionalFallbackNone},
+		{name: "typed admission", err: budgetErr(process.HashBuildBudgetErrorAdmission), want: OptionalFallbackBudgetAdmission},
+		{name: "marked typed admission", err: marked(budgetErr(process.HashBuildBudgetErrorAdmission)), want: OptionalFallbackBudgetAdmission},
+		{name: "joined admission and closed", err: errors.Join(budgetErr(process.HashBuildBudgetErrorAdmission), budgetErr(process.HashBuildBudgetErrorClosed)), want: OptionalFallbackNone},
+		{name: "marked mpool allocation", err: marked(mpoolErr), want: OptionalFallbackAllocation},
+		{name: "plain mpool error", err: mpoolErr, want: OptionalFallbackNone},
+		{name: "plain provider error", err: providerErr, want: OptionalFallbackNone},
+		{name: "raw admission sentinel", err: process.ErrHashBuildBudgetAdmission, want: OptionalFallbackNone},
+		{name: "typed closed", err: budgetErr(process.HashBuildBudgetErrorClosed), want: OptionalFallbackNone},
+		{name: "marked typed closed", err: marked(budgetErr(process.HashBuildBudgetErrorClosed)), want: OptionalFallbackNone},
+		{name: "typed invalid", err: budgetErr(process.HashBuildBudgetErrorInvalid), want: OptionalFallbackNone},
+		{name: "marked typed invalid", err: marked(budgetErr(process.HashBuildBudgetErrorInvalid)), want: OptionalFallbackNone},
+		{name: "typed ceiling missing", err: budgetErr(process.HashBuildBudgetErrorCeilingMissing), want: OptionalFallbackNone},
+		{name: "marked typed ceiling missing", err: marked(budgetErr(process.HashBuildBudgetErrorCeilingMissing)), want: OptionalFallbackNone},
+		{name: "marked canceled", err: marked(context.Canceled), want: OptionalFallbackNone},
+		{name: "marked deadline", err: marked(context.DeadlineExceeded), want: OptionalFallbackNone},
+		{name: "marked raw closed", err: marked(process.ErrHashBuildBudgetClosed), want: OptionalFallbackNone},
+		{name: "marked raw invalid", err: marked(process.ErrHashBuildBudgetInvalid), want: OptionalFallbackNone},
+		{name: "marked raw ceiling", err: marked(process.ErrHashBuildCeilingMissing), want: OptionalFallbackNone},
+		{name: "marked inactive reservation", err: marked(process.ErrHashBuildReservationInactive), want: OptionalFallbackNone},
+		{name: "marked upward reconciliation", err: marked(process.ErrHashBuildReservationUpward), want: OptionalFallbackNone},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, ClassifyOptionalFallback(test.err))
+		})
+	}
+}
 
 func exactContractPlanType(typ types.Type) *plan.Type {
 	return &plan.Type{

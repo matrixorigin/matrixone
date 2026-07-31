@@ -369,6 +369,8 @@ func TestIndexBuildRuntimeFilterCopyFailureFailsOpen(t *testing.T) {
 	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
 	require.Zero(t, runtimeFilter.Card)
 	require.Empty(t, runtimeFilter.Data)
+	require.Equal(t, int64(1), arg.OpAnalyzer.GetOpStats().ExtraStats["IndexBuildRuntimeFilterAllocationFallbacks"])
+	require.Zero(t, arg.OpAnalyzer.GetOpStats().ExtraStats["IndexBuildRuntimeFilterBudgetFallbacks"])
 
 	arg.Free(proc, false, nil)
 	child.ResetBatchs()
@@ -433,6 +435,8 @@ func TestIndexBuildRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
 	require.Zero(t, runtimeFilter.Card)
 	require.Empty(t, runtimeFilter.Data)
+	require.Equal(t, int64(1), arg.OpAnalyzer.GetOpStats().ExtraStats["IndexBuildRuntimeFilterAllocationFallbacks"])
+	require.Zero(t, arg.OpAnalyzer.GetOpStats().ExtraStats["IndexBuildRuntimeFilterBudgetFallbacks"])
 
 	limited.Free(filler)
 	arg.Free(proc, false, nil)
@@ -442,12 +446,75 @@ func TestIndexBuildRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestIndexBuildRuntimeFilterBudgetErrorPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		closed bool
+	}{
+		{name: "admission fails open"},
+		{name: "closed remains fatal", closed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := indexBuildTestProcess(t)
+			typ := types.T_int32.ToType()
+			spec := indexBuildRawSpec(111, 16, typ)
+			arg := NewArgument()
+			arg.RuntimeFilterSpec = spec
+			require.NoError(t, arg.Prepare(proc))
+			arg.ctr.buf = indexBuildBatch(
+				testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp()),
+				3,
+			)
+
+			generation, err := proc.GetHashBuildBudget()
+			require.NoError(t, err)
+			var held *process.HashBuildReservation
+			if test.closed {
+				generation.Close()
+			} else {
+				held, err = generation.Reserve(generation.Cap())
+				require.NoError(t, err)
+			}
+
+			err = arg.ctr.handleRuntimeFilter(arg, proc)
+			stats := arg.OpAnalyzer.GetOpStats().ExtraStats
+			if test.closed {
+				require.ErrorIs(t, err, process.ErrHashBuildBudgetClosed)
+				require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+				require.False(t, arg.ctr.runtimeFilterDone)
+				require.Zero(t,
+					stats["IndexBuildRuntimeFilterBudgetFallbacks"])
+				arg.finalizeBuildFailure(proc)
+			} else {
+				require.NoError(t, err)
+				require.True(t, arg.ctr.runtimeFilterDone)
+				require.Equal(t, int64(1),
+					stats["IndexBuildRuntimeFilterBudgetFallbacks"])
+				require.True(t, held.Release())
+			}
+			require.False(t, arg.ctr.runtimeFilterUsable)
+			require.Nil(t, arg.ctr.buf)
+			runtimeFilter := receiveIndexBuildRuntimeFilter(
+				t, proc, spec.Tag)
+			require.Equal(t, int32(message.RuntimeFilter_PASS),
+				runtimeFilter.Typ)
+
+			arg.Free(proc, test.closed, err)
+			arg.Release()
+			proc.GetMessageBoard().Reset()
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestIndexBuildResetOnBuildErrorFailsOpen(t *testing.T) {
 	proc := indexBuildTestProcess(t)
 	spec := indexBuildRawSpec(107, 16, types.T_int32.ToType())
 	arg := NewArgument()
 	arg.RuntimeFilterSpec = spec
 
+	arg.Reset(proc, true, errors.New("build failed"))
 	arg.Reset(proc, true, errors.New("build failed"))
 	runtimeFilter := receiveIndexBuildRuntimeFilter(t, proc, spec.Tag)
 	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
@@ -495,6 +562,21 @@ func TestIndexBuildCallErrorUnblocksRuntimeFilterBeforeReset(t *testing.T) {
 	require.NoError(t, receiveErr)
 	require.False(t, done)
 	require.Empty(t, messages, "Reset must not publish a second terminal value")
+	arg.Reset(proc, true, err)
+	messages, done, receiveErr = receiver.ReceiveMessage(false, proc.Ctx)
+	require.NoError(t, receiveErr)
+	require.False(t, done)
+	require.Empty(t, messages,
+		"repeated Reset must remain idempotent within one generation")
+	require.True(t, arg.ctr.runtimeFilterDone)
+
+	proc.GetMessageBoard().Reset()
+	require.NoError(t, arg.Prepare(proc))
+	require.False(t, arg.ctr.runtimeFilterDone,
+		"Prepare must open the terminal gate for the next generation")
+	arg.finalizeBuildFailure(proc)
+	runtimeFilter = receiveIndexBuildRuntimeFilter(t, proc, spec.Tag)
+	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
 
 	arg.Free(proc, true, err)
 	child.Free(proc, true, err)

@@ -132,6 +132,37 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+func TestHashBuildRepeatedResetFinalizesRuntimeFilterOnce(t *testing.T) {
+	tc := newTestCase(t, []bool{false},
+		[]types.Type{types.T_int32.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
+		Tag: tc.arg.JoinMapTag + 6000,
+	}
+	buildErr := errors.New("build failed before Call")
+
+	tc.arg.Reset(tc.proc, true, buildErr)
+	tc.arg.Reset(tc.proc, true, buildErr)
+	receiver := message.NewMessageReceiver(
+		[]int32{tc.arg.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		tc.proc.GetMessageBoard(),
+	)
+	runtimeFilters, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, runtimeFilters, 1,
+		"Reset-owned finalization must be idempotent within one generation")
+	runtimeFilter, ok := runtimeFilters[0].(message.RuntimeFilterMessage)
+	require.True(t, ok)
+	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
+
+	tc.arg.Free(tc.proc, true, buildErr)
+	tc.proc.GetMessageBoard().Reset()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 func TestBroadcastBudgetFailureUnblocksAllConsumers(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
@@ -632,6 +663,80 @@ func TestHashBuildOptionalRuntimeFilterCollectionFallsBackToJoinMap(
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestHashBuildClosedMapBudgetDoesNotRecordCollectionFallback(
+	t *testing.T,
+) {
+	typ := types.T_int32.ToType()
+	tc := newTestCase(
+		t,
+		[]bool{false},
+		[]types.Type{typ},
+		[]*plan.Expr{newExpr(0, typ)},
+	)
+	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
+		tc.arg.JoinMapTag+501, 100, typ)
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	const capBytes = uint64(64 << 20)
+	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
+	generation, err := aggregate.OpenGeneration(1)
+	require.NoError(t, err)
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+	providerCalls := 0
+	forcedClosed := false
+	aggregate.SetAggregateCapProvider(func() (uint64, error) {
+		providerCalls++
+		// Retained copy and optional aux admission succeed. Fail the initial
+		// mandatory map admission with a lifecycle error; it must not enter the
+		// optional-key rebuild path or increment its fallback metric.
+		if providerCalls == 3 {
+			forcedClosed = true
+			return 0, &process.HashBuildBudgetError{
+				Kind: process.HashBuildBudgetErrorClosed,
+			}
+		}
+		return capBytes, nil
+	})
+
+	input := newBatch([]types.Type{typ}, tc.proc, Rows)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(input, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	_, buildErr := vm.Exec(tc.arg, tc.proc)
+	require.Error(t, buildErr)
+	require.True(t, forcedClosed)
+	var budgetErr *process.HashBuildBudgetError
+	require.ErrorAs(t, buildErr, &budgetErr)
+	require.Equal(t, process.HashBuildBudgetErrorClosed, budgetErr.Kind)
+	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildRuntimeFilterCollectionFallbacks"])
+	fallback, _ := tc.arg.ctr.hashmapBuilder.runtimeFilterFallbackState()
+	require.False(t, fallback)
+
+	tc.arg.Reset(tc.proc, true, buildErr)
+	tc.arg.Free(tc.proc, true, buildErr)
+	tc.marg.Reset(tc.proc, true, buildErr)
+	require.Zero(t, generation.Used())
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestHashBuildRuntimeFilterFallbackStatsTriggerDiagnostics(t *testing.T) {
+	for _, stat := range []string{
+		"HashBuildRuntimeFilterCollectionFallbacks",
+		"HashBuildRuntimeFilterBudgetFallbacks",
+		"HashBuildRuntimeFilterAllocationFallbacks",
+	} {
+		t.Run(stat, func(t *testing.T) {
+			require.True(t, hasHashBuildDiagnosticStats(
+				map[string]int64{stat: 1}))
+		})
+	}
+	require.False(t, hasHashBuildDiagnosticStats(nil))
+}
+
 func TestHashmapBuilderUniqueGrowthFailureAbandonsOptionalKeysInPlace(
 	t *testing.T,
 ) {
@@ -1041,6 +1146,81 @@ func TestHashBuildFloatRuntimeFilterClosesSignedZero(t *testing.T) {
 	}
 }
 
+func TestHashBuildFloatRuntimeFilterAllocationFailureFallsBackToPass(t *testing.T) {
+	mp, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc.SetMessageBoard(message.NewMessageBoard())
+
+	typ := types.T_float32.ToType()
+	spec := &plan.RuntimeFilterSpec{
+		Tag:         105,
+		UpperLimit:  1 << 20,
+		BuildExpr:   newExpr(0, typ),
+		KeyEncoding: plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+		ProbeType:   runtimeFilterPlanType(typ),
+	}
+	arg := &HashBuild{
+		Conditions:        []*plan.Expr{newExpr(0, typ)},
+		RuntimeFilterSpec: spec,
+	}
+	arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
+
+	keyVec := vector.NewOffHeapVecWithType(typ)
+	require.NoError(t, keyVec.PreExtend(256, mp))
+	keyVec.SetLength(keyVec.Capacity())
+	arg.ctr.hashmapBuilder.InputBatchRowCount = keyVec.Length()
+	arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{keyVec}
+
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	arg.ctr.hashmapBuilder.setBudget(generation)
+	require.NoError(t, arg.ctr.hashmapBuilder.reserveBuildAux(true))
+	usedWithUniqueKeys := generation.Used()
+
+	var filler []byte
+	defer func() {
+		if filler != nil {
+			mp.Free(filler)
+		}
+		arg.ctr.hashmapBuilder.Free(proc)
+		require.Zero(t, generation.Used())
+		generation.Close()
+		proc.GetMessageBoard().Reset()
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	filler, err = mp.Alloc(int(mp.Cap()-mp.CurrNB()), true)
+	require.NoError(t, err)
+	require.Equal(t, mp.Cap(), mp.CurrNB())
+
+	require.NoError(t, arg.handleRuntimeFilter(proc))
+	require.True(t, arg.ctr.runtimeFilterDone)
+	require.False(t, arg.ctr.runtimeFilterIn)
+	require.Nil(t, arg.ctr.hashmapBuilder.UniqueJoinKeys)
+	require.Zero(t, generation.RejectCount())
+	require.Less(t, generation.Used(), usedWithUniqueKeys)
+	extra := arg.OpAnalyzer.GetOpStats().ExtraStats
+	require.Equal(t, int64(1),
+		extra["HashBuildRuntimeFilterAllocationFallbacks"])
+	require.Zero(t, extra["HashBuildRuntimeFilterBudgetFallbacks"])
+
+	receiver := message.NewMessageReceiver(
+		[]int32{spec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		proc.GetMessageBoard(),
+	)
+	messages, done, err := receiver.ReceiveMessage(false, proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, messages, 1)
+	runtimeFilter := messages[0].(message.RuntimeFilterMessage)
+	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
+	require.Zero(t, runtimeFilter.Card)
+	require.Empty(t, runtimeFilter.Data)
+}
+
 func TestExactRuntimeFilterEncodingContract(t *testing.T) {
 	decimal2 := types.New(types.T_decimal64, 18, 2)
 	decimal3 := types.New(types.T_decimal64, 18, 3)
@@ -1417,6 +1597,86 @@ func makeSerializedRuntimeFilterSpec(
 	}
 }
 
+func TestHashBuildSerializedRuntimeFilterAllocationFailureFallsBackToPass(t *testing.T) {
+	mp, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc.SetMessageBoard(message.NewMessageBoard())
+
+	componentType := types.T_int32.ToType()
+	spec := makeSerializedRuntimeFilterSpec(
+		t, proc, 106, 100, []types.Type{componentType}, false)
+	arg := &HashBuild{
+		Conditions:        []*plan.Expr{newExpr(0, componentType)},
+		RuntimeFilterSpec: spec,
+	}
+	arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
+	arg.ctr.hashmapBuilder.InputBatchRowCount = 1
+	arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+		testutil.MakeInt32Vector([]int32{1}, nil, mp),
+	}
+
+	service := proc.GetService()
+	rt := moruntime.ServiceRuntime(service)
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion7)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	arg.ctr.hashmapBuilder.setBudget(generation)
+
+	var filler []byte
+	defer func() {
+		if filler != nil {
+			mp.Free(filler)
+		}
+		arg.ctr.hashmapBuilder.Free(proc)
+		require.Zero(t, generation.Used())
+		generation.Close()
+		proc.GetMessageBoard().Reset()
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	filler, err = mp.Alloc(int(mp.Cap()-mp.CurrNB()), true)
+	require.NoError(t, err)
+	require.Equal(t, mp.Cap(), mp.CurrNB())
+
+	require.NoError(t, arg.handleRuntimeFilter(proc))
+	require.True(t, arg.ctr.runtimeFilterDone)
+	require.False(t, arg.ctr.runtimeFilterIn)
+	require.Nil(t, arg.ctr.hashmapBuilder.UniqueJoinKeys)
+	require.Zero(t, generation.RejectCount())
+	require.Zero(t, generation.Used())
+	require.NotZero(t, generation.Peak())
+	extra := arg.OpAnalyzer.GetOpStats().ExtraStats
+	require.Equal(t, int64(1),
+		extra["HashBuildRuntimeFilterAllocationFallbacks"])
+	require.Zero(t, extra["HashBuildRuntimeFilterBudgetFallbacks"])
+
+	receiver := message.NewMessageReceiver(
+		[]int32{spec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		proc.GetMessageBoard(),
+	)
+	messages, done, err := receiver.ReceiveMessage(false, proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, messages, 1)
+	runtimeFilter := messages[0].(message.RuntimeFilterMessage)
+	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
+	require.Zero(t, runtimeFilter.Card)
+	require.Empty(t, runtimeFilter.Data)
+}
+
 func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 	const rowCount = 1000
 	componentType := types.T_int32.ToType()
@@ -1783,6 +2043,7 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 
 			extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
 			require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbacks"])
+			require.Zero(t, extra["HashBuildRuntimeFilterAllocationFallbacks"])
 			require.Greater(t, extra["HashBuildRuntimeFilterBudgetFallbackRequestedBytes"], int64(1))
 			require.Zero(t, extra["HashBuildRuntimeFilterBudgetFallbackUsedBytes"])
 			require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbackCapBytes"])
@@ -1875,6 +2136,7 @@ func TestRuntimeFilterMarshalClosedBudgetRemainsFatal(t *testing.T) {
 	require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
 	require.False(t, tc.arg.ctr.runtimeFilterDone)
 	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildRuntimeFilterBudgetFallbacks"])
+	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildRuntimeFilterAllocationFallbacks"])
 
 	receiver := message.NewMessageReceiver(
 		[]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), tc.proc.GetMessageBoard())
@@ -2371,6 +2633,71 @@ func TestShuffleHashBuildResizeRejectReleasesPartialMapAndSpills(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestShuffleHashBuildClosedMapBudgetDoesNotSpill(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 1 << 30
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3001}
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	const capBytes = uint64(64 << 20)
+	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
+	generation, err := aggregate.OpenGeneration(1)
+	require.NoError(t, err)
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+	// With one full ingress batch, the fourth admission is the initial hashmap.
+	// A lifecycle failure there is fatal and must never enter spill recovery.
+	providerCalls := 0
+	forcedClosed := &process.HashBuildBudgetError{
+		Kind: process.HashBuildBudgetErrorClosed,
+	}
+	aggregate.SetAggregateCapProvider(func() (uint64, error) {
+		providerCalls++
+		if providerCalls == 4 {
+			return 0, forcedClosed
+		}
+		return capBytes, nil
+	})
+
+	bat := newBatch(tc.types, tc.proc, 8192)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	_, buildErr := vm.Exec(tc.arg, tc.proc)
+	require.Same(t, forcedClosed, buildErr)
+	require.ErrorIs(t, buildErr, process.ErrHashBuildBudgetClosed)
+	require.NotErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
+	require.Equal(t, 4, providerCalls)
+	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
+	require.Empty(t, tc.arg.ctr.spilledFds)
+	require.Nil(t, tc.arg.ctr.spillBundle)
+
+	result, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag,
+		true,
+		tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(),
+		tc.proc.Ctx,
+	)
+	require.NoError(t, err)
+	require.True(t, result.IsBuildError())
+	require.False(t, result.IsSuccess())
+	require.Nil(t, result.JoinMap())
+
+	tc.arg.Reset(tc.proc, true, buildErr)
+	tc.arg.Free(tc.proc, true, buildErr)
+	tc.marg.Reset(tc.proc, true, buildErr)
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 func TestObserveHashBuildBudgetUsesGenerationSnapshot(t *testing.T) {
 	budget := process.MustNewHashBuildBudget(1024, 1024)
 	generation, err := budget.OpenGeneration(1)
@@ -2402,6 +2729,11 @@ func TestShuffleHashBuildSpillFailureReleasesEmergencyResources(t *testing.T) {
 	tc.arg.SpillThreshold = 1
 	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 4000}
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	runtimeFilterReceiver := message.NewMessageReceiver(
+		[]int32{tc.arg.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		tc.proc.GetMessageBoard(),
+	)
 	require.NoError(t, tc.marg.Prepare(tc.proc))
 	require.NoError(t, tc.arg.Prepare(tc.proc))
 
@@ -2423,6 +2755,12 @@ func TestShuffleHashBuildSpillFailureReleasesEmergencyResources(t *testing.T) {
 
 	tc.arg.Reset(tc.proc, true, buildErr)
 	tc.arg.Reset(tc.proc, true, buildErr)
+	runtimeFilters, done, receiveErr := runtimeFilterReceiver.ReceiveMessage(
+		false, tc.proc.Ctx)
+	require.NoError(t, receiveErr)
+	require.False(t, done)
+	require.Len(t, runtimeFilters, 1,
+		"repeated Reset must publish one terminal value per generation")
 	tc.arg.Free(tc.proc, true, buildErr)
 	tc.arg.Free(tc.proc, true, buildErr)
 	tc.marg.Reset(tc.proc, true, buildErr)

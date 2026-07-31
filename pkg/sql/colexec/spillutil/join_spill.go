@@ -575,8 +575,7 @@ func (r *BucketReader) readBatchRecord(
 				growErr = token.Grow(peak - charge)
 			}
 			if growErr != nil &&
-				!errors.Is(growErr, process.ErrHashBuildBudgetAdmission) &&
-				!errors.Is(growErr, process.ErrHashBuildBudgetRejected) {
+				!errors.Is(growErr, process.ErrHashBuildBudgetAdmission) {
 				return nil, token, charge, growErr
 			}
 			if !retainedOK || !peakOK || growErr != nil {
@@ -2421,9 +2420,8 @@ func (e *SpillEngine) freeKeyExecs() {
 }
 
 func isBudgetAdmission(err error) bool {
-	return err != nil && (errors.Is(err, process.ErrHashBuildBudgetAdmission) ||
-		errors.Is(err, process.ErrHashBuildBudgetClosed) ||
-		errors.Is(err, process.ErrHashBuildBudgetRejected))
+	return err != nil &&
+		errors.Is(err, process.ErrHashBuildBudgetAdmission)
 }
 
 func noProgressError(proc *process.Process, depth int) error {

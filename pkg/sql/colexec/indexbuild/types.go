@@ -86,10 +86,11 @@ func (indexBuild *IndexBuild) Reset(proc *process.Process, pipelineFailed bool, 
 			message.FinalizeRuntimeFilter(
 				indexBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
 		}
+		indexBuild.ctr.runtimeFilterDone =
+			indexBuild.RuntimeFilterSpec != nil
 	}
 	indexBuild.ctr.state = ReceiveBatch
 	indexBuild.ctr.runtimeFilterUsable = false
-	indexBuild.ctr.runtimeFilterDone = false
 	if indexBuild.ctr.buf != nil {
 		indexBuild.ctr.buf.CleanOnlyData()
 	}

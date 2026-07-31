@@ -91,6 +91,10 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &fuzzyFilter.ctr
+	// Prepare starts a new execution generation. Reset deliberately keeps the
+	// previous generation's terminal gate closed so repeated cleanup is
+	// idempotent.
+	ctr.runtimeFilterDone = false
 	if ctr.rbat == nil {
 		rowCount := int64(fuzzyFilter.N)
 		if rowCount < 1000 {
@@ -365,9 +369,7 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 
 	//                                                 the number of data insert is greater than inFilterCardLimit
 	if !ctr.runtimeFilterUsable || ctr.pass2RuntimeFilter == nil {
-		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		message.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
-		ctr.runtimeFilterDone = true
+		fuzzyFilter.sendRuntimeFilterPass(proc)
 		return nil
 	}
 
@@ -390,11 +392,11 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
 		if err := runtimefilter.CloseFloatSignedZero(
 			ctr.pass2RuntimeFilter, proc.Mp(), nil); err != nil {
-			// This vector is an optional probe-side optimization. Failure to
-			// grow it must not decide whether the uniqueness check succeeds.
+			if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
+				return nil
+			}
 			fuzzyFilter.abandonRuntimeFilter(proc)
-			fuzzyFilter.sendRuntimeFilterPass(proc)
-			return nil
+			return err
 		}
 	}
 	if ctr.pass2RuntimeFilter.Length() > int(fuzzyFilter.RuntimeFilterSpec.UpperLimit) {
@@ -410,16 +412,20 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	ctr.pass2RuntimeFilter.InplaceSort()
 	budget, err := proc.GetHashBuildBudget()
 	if err != nil {
+		if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
+			return nil
+		}
 		fuzzyFilter.abandonRuntimeFilter(proc)
-		fuzzyFilter.sendRuntimeFilterPass(proc)
-		return nil
+		return err
 	}
 	data, release, err := runtimefilter.MarshalExactFilterVector(
 		ctr.pass2RuntimeFilter, budget)
 	if err != nil {
+		if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
+			return nil
+		}
 		fuzzyFilter.abandonRuntimeFilter(proc)
-		fuzzyFilter.sendRuntimeFilterPass(proc)
-		return nil
+		return err
 	}
 
 	runtimeFilter.Typ = message.RuntimeFilter_IN
@@ -447,6 +453,29 @@ func (fuzzyFilter *FuzzyFilter) sendRuntimeFilterPass(
 		proc.GetMessageBoard(),
 	)
 	fuzzyFilter.ctr.runtimeFilterDone = true
+}
+
+func (fuzzyFilter *FuzzyFilter) fallbackRuntimeFilter(
+	proc *process.Process,
+	err error,
+) bool {
+	kind := runtimefilter.ClassifyOptionalFallback(err)
+	if kind == runtimefilter.OptionalFallbackNone {
+		return false
+	}
+	if fuzzyFilter.OpAnalyzer != nil {
+		stats := fuzzyFilter.OpAnalyzer.GetOpStats()
+		if kind == runtimefilter.OptionalFallbackBudgetAdmission {
+			stats.AddExtraStat(
+				"FuzzyFilterRuntimeFilterBudgetFallbacks", 1)
+		} else {
+			stats.AddExtraStat(
+				"FuzzyFilterRuntimeFilterAllocationFallbacks", 1)
+		}
+	}
+	fuzzyFilter.abandonRuntimeFilter(proc)
+	fuzzyFilter.sendRuntimeFilterPass(proc)
+	return true
 }
 
 func (fuzzyFilter *FuzzyFilter) abandonRuntimeFilter(
@@ -481,10 +510,12 @@ func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(
 			if err = ctr.pass2RuntimeFilter.UnionBatch(
 				v, 0, al, nil, proc.Mp(),
 			); err != nil {
-				// Retaining exact keys is optional. Keep executing the primary
-				// duplicate-detection algorithm and publish PASS later.
+				err = runtimefilter.MarkOptionalAllocationError(err)
+				if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
+					return nil
+				}
 				fuzzyFilter.abandonRuntimeFilter(proc)
-				return nil
+				return err
 			}
 		} else {
 			fuzzyFilter.abandonRuntimeFilter(proc)

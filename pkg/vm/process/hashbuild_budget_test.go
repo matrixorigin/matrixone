@@ -982,17 +982,23 @@ func TestHashBuildBudgetCompatibilityAndObservabilitySurface(t *testing.T) {
 		target error
 	}{
 		{HashBuildBudgetErrorAdmission, ErrHashBuildBudgetAdmission},
-		{HashBuildBudgetErrorClosed, ErrHashBuildBudgetAdmission},
 		{HashBuildBudgetErrorClosed, ErrHashBuildBudgetClosed},
 		{HashBuildBudgetErrorInvalid, ErrHashBuildBudgetInvalid},
 		{HashBuildBudgetErrorCeilingMissing, ErrHashBuildCeilingMissing},
 	} {
-		if !(&HashBuildBudgetError{Kind: tc.kind}).Is(tc.target) {
+		if !errors.Is(&HashBuildBudgetError{Kind: tc.kind}, tc.target) {
 			t.Fatalf("kind %d did not match %v", tc.kind, tc.target)
 		}
 	}
-	if (&HashBuildBudgetError{Kind: HashBuildBudgetErrorKind(255)}).Is(ErrHashBuildBudgetInvalid) {
-		t.Fatal("unknown error kind matched a sentinel")
+	if errors.Is(&HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed},
+		ErrHashBuildBudgetAdmission,
+	) {
+		t.Fatal("closed budget must not match a recoverable capacity admission")
+	}
+	unknown := &HashBuildBudgetError{Kind: HashBuildBudgetErrorKind(255)}
+	if errors.Is(unknown, ErrHashBuildBudgetAdmission) ||
+		!errors.Is(unknown, ErrHashBuildBudgetInvalid) {
+		t.Fatal("unknown error kind must remain a fatal invalid error")
 	}
 	message := &HashBuildBudgetError{Message: "explicit"}
 	if message.Error() != "explicit" {
@@ -1307,6 +1313,34 @@ func TestGetHashBuildBudgetInitializesAndReusesCNAggregate(t *testing.T) {
 	firstGeneration.Close()
 	secondGeneration.Close()
 	aggregate.Close()
+}
+
+func TestOpenProcessGenerationClampsStaleResolvedCapAtomically(t *testing.T) {
+	budget := MustNewHashBuildBudget(100, 100)
+	if err := budget.UpdateAggregateCap(40); err != nil {
+		t.Fatal(err)
+	}
+
+	generation, err := budget.openProcessGeneration(1, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generation.Cap() != 40 {
+		t.Fatalf("generation cap = %d, want current aggregate cap 40",
+			generation.Cap())
+	}
+	if generation.SpillDiskCap() != defaultSpillCap(40) {
+		t.Fatalf("spill disk cap = %d, want %d",
+			generation.SpillDiskCap(), defaultSpillCap(40))
+	}
+
+	// Explicit public configuration remains strict. Only the process path may
+	// clamp a ceiling sample that became stale between resolution and opening.
+	if _, err = budget.OpenGenerationWithCap(2, 100); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("explicit oversized generation cap returned %v", err)
+	}
+	generation.Close()
+	budget.Close()
 }
 
 func TestHashBuildBudgetDefensiveAndProviderFailurePaths(t *testing.T) {

@@ -1547,6 +1547,49 @@ func TestReaderBatchLeaseGrowRejectionReleasesToken(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestReaderBatchClosedLeaseDoesNotRetryAdmission(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	f, err := spillfs.CreateAndRemoveFile(context.Background(), "test_read_closed_lease")
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	w := BucketWriter{Name: "test_read_closed_lease", Fd: f}
+	for _, size := range []int{2, 1_000} {
+		bat := makeInt32Batch(proc, make([]int32, size))
+		require.NoError(t, FlushBucketBatch(proc, bat, &w, &buf, nil))
+		bat.Clean(proc.Mp())
+	}
+
+	budget := process.MustNewHashBuildBudget(8<<20, 8<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	reader := BucketReader{}
+	require.NoError(t, reader.EnsureBuffer(generation))
+	reader.ResetForFd(w.HandOffFd())
+	reuseBat := batch.NewOffHeapWithSize(0)
+
+	got, err := reader.ReadBatch(proc, reuseBat)
+	require.NoError(t, err)
+	require.Equal(t, 2, got.RowCount())
+	before := generation.Snapshot()
+	generation.Close()
+
+	_, err = reader.ReadBatch(proc, reuseBat)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetClosed)
+	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	after := generation.Snapshot()
+	require.Equal(t, before.RejectCount+1, after.RejectCount,
+		"a closed lease must not fall through to a second Reserve attempt")
+	require.Nil(t, reader.batchToken)
+	require.Zero(t, reader.batchCharge)
+	require.Zero(t, reuseBat.RowCount())
+
+	reader.Close()
+	require.Zero(t, generation.Used())
+}
+
 func TestScatterWithMultiColumn(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -1899,7 +1942,13 @@ func TestSpillEngineInitFromOwnedFilesAndErrorClassification(t *testing.T) {
 	require.False(t, isBudgetAdmission(nil))
 	require.False(t, isBudgetAdmission(io.EOF))
 	require.True(t, isBudgetAdmission(process.ErrHashBuildBudgetAdmission))
-	require.True(t, isBudgetAdmission(process.ErrHashBuildBudgetClosed))
+	require.False(t, isBudgetAdmission(process.ErrHashBuildBudgetClosed))
+	require.True(t, isBudgetAdmission(&process.HashBuildBudgetError{
+		Kind: process.HashBuildBudgetErrorAdmission,
+	}))
+	require.False(t, isBudgetAdmission(&process.HashBuildBudgetError{
+		Kind: process.HashBuildBudgetErrorClosed,
+	}))
 	require.ErrorIs(t, noProgressError(nil, 3), process.ErrHashBuildBudgetAdmission)
 	require.NoError(t, owned.Close())
 }
@@ -3243,6 +3292,63 @@ func TestRebuildHashmapReSpillsAdmissionBeforeDedupRewrite(t *testing.T) {
 	}
 	require.Equal(t, int64(3), childRows,
 		"safe recovery must conserve the original retained rows")
+
+	engine.Cleanup(proc)
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+	require.Zero(t, proc.Mp().CurrNB())
+	generation.Close()
+	proc.Free()
+}
+
+func TestRebuildHashmapClosedBudgetDoesNotReSpill(t *testing.T) {
+	const budgetCap = uint64(64 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	build := makeInt32Batch(proc, []int32{1, 2, 3})
+	buildFd := writeBuildFile(proc, "closed_budget_no_respill", build)
+	build.Clean(proc.Mp())
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs:           makeTestKeyExpr(),
+		NeedsBuildForEmptyProbe: true,
+		SpillThreshold:          1 << 30,
+		Budget:                  generation,
+	})
+	engine.InitFromSpilledMap([]*os.File{buildFd})
+
+	closedErr := &process.HashBuildBudgetError{
+		Kind:    process.HashBuildBudgetErrorClosed,
+		Message: "forced closed hash-build budget",
+	}
+	forcedClosed := false
+	budget.SetAggregateCapProvider(func() (uint64, error) {
+		if !forcedClosed && runtimeStackHasFunctionSuffix(
+			"hashbuild.(*HashmapBuilder).buildHashmap",
+		) {
+			forcedClosed = true
+			return 0, closedErr
+		}
+		return budgetCap, nil
+	})
+
+	jm, result, err := engine.RebuildHashmap(
+		proc, process.NewAnalyzer(0, false, false, "test"))
+	require.True(t, forcedClosed)
+	require.Same(t, closedErr, err,
+		"a lifecycle failure must be returned unchanged")
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetClosed)
+	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Nil(t, jm)
+	require.Equal(t, BucketSkip, result)
+	require.Len(t, engine.buckets, 1,
+		"a lifecycle failure must not replace the parent with child buckets")
+	require.Equal(t, 1, engine.buckets[0].Depth)
+	require.Nil(t, engine.buckets[0].BuildFd)
 
 	engine.Cleanup(proc)
 	require.Zero(t, generation.Used())
