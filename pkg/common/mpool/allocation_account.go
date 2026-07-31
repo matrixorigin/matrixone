@@ -38,22 +38,71 @@ const (
 )
 
 var (
-	ErrAllocationAccountCapacity  = errors.New("allocation account capacity exceeded")
-	ErrAllocationAccountSealed    = errors.New("allocation account is sealed")
-	ErrAllocationAccountInvalid   = errors.New("invalid allocation account")
-	ErrAllocationAccountStale     = errors.New("stale allocation account handle")
-	ErrAllocationAccountMismatch  = errors.New("allocation account ownership mismatch")
-	ErrAllocationAllocatorLimit   = errors.New("allocation exceeds allocator size limit")
-	ErrAllocationAccountInvariant = errors.New(
-		"allocation account invariant failure",
-	)
-	ErrAllocationAdmissionSuspended = errors.New(
-		"allocation account admission is suspended",
-	)
-	ErrAllocationMetadataSlots   = errors.New("allocation metadata slots exhausted")
-	ErrAllocationGenerationSlots = errors.New("allocation account generation slots exhausted")
-	ErrAllocationAccountLive     = errors.New("allocation account still owns memory")
+	ErrAllocationAccountCapacity    error = allocationAccountSentinel("allocation account capacity exceeded")
+	ErrAllocationAccountSealed      error = allocationAccountSentinel("allocation account is sealed")
+	ErrAllocationAccountInvalid     error = allocationAccountSentinel("invalid allocation account")
+	ErrAllocationAccountStale       error = allocationAccountSentinel("stale allocation account handle")
+	ErrAllocationAccountMismatch    error = allocationAccountSentinel("allocation account ownership mismatch")
+	ErrAllocationAllocatorLimit     error = allocationAccountSentinel("allocation exceeds allocator size limit")
+	ErrAllocationAccountInvariant   error = allocationAccountSentinel("allocation account invariant failure")
+	ErrAllocationAdmissionSuspended error = allocationAccountSentinel("allocation account admission is suspended")
+	ErrAllocationMetadataSlots      error = allocationAccountSentinel("allocation metadata slots exhausted")
+	ErrAllocationGenerationSlots    error = allocationAccountSentinel("allocation account generation slots exhausted")
+	ErrAllocationAccountLive        error = allocationAccountSentinel("allocation account still owns memory")
 )
+
+type allocationAccountSentinel string
+
+func (e allocationAccountSentinel) Error() string { return string(e) }
+
+type allocationAccountDetailError struct {
+	cause       error
+	detail      string
+	detailFirst bool
+}
+
+func (e *allocationAccountDetailError) Error() string {
+	if e == nil || e.cause == nil {
+		return "allocation account error"
+	}
+	if e.detail == "" {
+		return e.cause.Error()
+	}
+	if e.detailFirst {
+		return e.detail + ": " + e.cause.Error()
+	}
+	return e.cause.Error() + ": " + e.detail
+}
+
+func prefixAllocationAccountError(
+	cause error,
+	format string,
+	args ...any,
+) error {
+	return &allocationAccountDetailError{
+		cause:       cause,
+		detail:      fmt.Sprintf(format, args...),
+		detailFirst: true,
+	}
+}
+
+func (e *allocationAccountDetailError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func wrapAllocationAccountError(
+	cause error,
+	format string,
+	args ...any,
+) error {
+	return &allocationAccountDetailError{
+		cause:  cause,
+		detail: fmt.Sprintf(format, args...),
+	}
+}
 
 const (
 	allocationAccountSealedBit = uint64(1) << 63
@@ -228,9 +277,9 @@ func (a *AllocationAccount) ValidateRollback(
 		return ErrAllocationAccountInvalid
 	}
 	if checkpoint.Handle != a.handle {
-		return fmt.Errorf(
-			"%w: checkpoint=%d account=%d",
+		return wrapAllocationAccountError(
 			ErrAllocationAccountMismatch,
+			"checkpoint=%d account=%d",
 			checkpoint.Handle,
 			a.handle,
 		)
@@ -240,9 +289,9 @@ func (a *AllocationAccount) ValidateRollback(
 		return ErrAllocationAccountSealed
 	}
 	if snapshot.Used != checkpoint.Used {
-		return fmt.Errorf(
-			"%w: checkpoint-used=%d current-used=%d",
+		return wrapAllocationAccountError(
 			ErrAllocationAccountInvariant,
+			"checkpoint-used=%d current-used=%d",
 			checkpoint.Used,
 			snapshot.Used,
 		)
@@ -340,9 +389,9 @@ func newAllocationAccountCapacityError(
 	requested uint64,
 	limit uint64,
 ) error {
-	return fmt.Errorf(
-		"%w: used=%d requested=%d limit=%d",
+	return wrapAllocationAccountError(
 		ErrAllocationAccountCapacity,
+		"used=%d requested=%d limit=%d",
 		used,
 		requested,
 		limit,
@@ -530,9 +579,9 @@ func (r *AllocationAccountRegistry) CompleteTerminalWithError(
 		return AllocationAccountTerminalSnapshot{
 				AllocationAccountSnapshot: current,
 				State:                     AllocationAccountTerminalInvariantFailure,
-			}, false, fmt.Errorf(
-				"%w: terminal account is not quiescent",
+			}, false, wrapAllocationAccountError(
 				ErrAllocationAccountInvariant,
+				"terminal account is not quiescent",
 			)
 	}
 	snapshot = AllocationAccountTerminalSnapshot{
@@ -576,9 +625,9 @@ func (r *AllocationAccountRegistry) CompleteTerminalWithError(
 func newAllocationTerminalInvariantError(
 	snapshot AllocationAccountTerminalSnapshot,
 ) error {
-	return fmt.Errorf(
-		"%w: handle=%d used=%d peak=%d limit=%d owner=%d site=%d live-allocations=%d",
+	return wrapAllocationAccountError(
 		ErrAllocationAccountInvariant,
+		"handle=%d used=%d peak=%d limit=%d owner=%d site=%d live-allocations=%d",
 		snapshot.Handle,
 		snapshot.Used,
 		snapshot.Peak,

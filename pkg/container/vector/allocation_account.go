@@ -15,7 +15,7 @@
 package vector
 
 import (
-	"fmt"
+	"errors"
 	"io"
 	"math"
 
@@ -24,6 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
+
+func allocationAccountInvalid(message string) error {
+	return errors.Join(
+		mpool.ErrAllocationAccountInvalid,
+		moerr.NewInternalErrorNoCtx(message),
+	)
+}
 
 // AllocationAccountSelection is an immutable choice for the first owned
 // off-heap allocations of a Vector. The physical MPool allocation metadata
@@ -260,9 +267,8 @@ func (v *Vector) CanSetAllocationAccount(
 			return err
 		}
 		if !v.offHeap {
-			return fmt.Errorf(
-				"%w: allocation-accounted vector must be off-heap",
-				mpool.ErrAllocationAccountInvalid,
+			return allocationAccountInvalid(
+				"allocation-accounted vector must be off-heap",
 			)
 		}
 	}
@@ -270,10 +276,7 @@ func (v *Vector) CanSetAllocationAccount(
 		return nil
 	}
 	if v.hasBackingStorage() {
-		return fmt.Errorf(
-			"%w: vector already has backing storage",
-			mpool.ErrAllocationAccountInvalid,
-		)
+		return allocationAccountInvalid("vector already has backing storage")
 	}
 	return nil
 }
@@ -426,9 +429,8 @@ func (v *Vector) allocOwned(
 		return mp.Alloc(size, offHeap)
 	}
 	if !offHeap {
-		return nil, fmt.Errorf(
-			"%w: accounted allocation must be off-heap",
-			mpool.ErrAllocationAccountInvalid,
+		return nil, allocationAccountInvalid(
+			"accounted allocation must be off-heap",
 		)
 	}
 	site := v.allocationAccount.areaSite

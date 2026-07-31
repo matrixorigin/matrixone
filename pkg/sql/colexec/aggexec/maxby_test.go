@@ -80,6 +80,48 @@ func TestMaxByCompactsReplacedVarlenaState(t *testing.T) {
 	require.Less(t, state.Allocated(), 2<<20, "winner state must be bounded by live groups, not by replaced input rows")
 }
 
+func TestCompactMaxByStateVectorPreservesAllocationOwner(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(8 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwner(1),
+		mpool.AllocationSite(1),
+		mpool.AllocationSite(2),
+	)
+	require.NoError(t, err)
+	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, vec.SetAllocationAccount(selection))
+	defer func() {
+		vec.Free(mp)
+		snapshot := account.Seal()
+		require.Zero(t, snapshot.Used)
+		require.Zero(t, registry.LiveAllocationMetadata())
+		_, err = registry.Finalize(account)
+		require.NoError(t, err)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	value := []byte(strings.Repeat("x", 4096))
+	require.NoError(t, vector.AppendBytes(vec, value, false, mp))
+	for i := 0; i < 400; i++ {
+		value[0] = byte(i)
+		require.NoError(t, vec.SetRawBytesAt(0, value, mp))
+	}
+	before := account.Snapshot()
+	require.Greater(t, before.Used, uint64(maxByVarlenaCompactionSlack))
+
+	require.NoError(t, compactMaxByStateVector(vec, mp))
+	require.Same(t, selection, vec.AllocationAccountSelection())
+	require.Equal(t, value, vec.GetBytesAt(0))
+	after := account.Snapshot()
+	require.Less(t, after.Used, before.Used)
+	require.GreaterOrEqual(t, after.Peak, before.Used)
+}
+
 func TestMaxByNullContractAndDeterministicMerge(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}

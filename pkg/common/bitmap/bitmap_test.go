@@ -270,6 +270,60 @@ func TestBitmapExternalStorageLifecycle(t *testing.T) {
 	require.True(t, value.Contains(128))
 }
 
+func TestBitmapRemapOrdered(t *testing.T) {
+	for _, external := range []bool{false, true} {
+		t.Run(fmt.Sprintf("external=%t", external), func(t *testing.T) {
+			var value Bitmap
+			if external {
+				value.InstallExternalStorage(make([]uint64, 3))
+			}
+			value.InitWithSize(130)
+			value.AddMany([]uint64{0, 2, 63, 64, 65, 128, 129})
+
+			value.RemapOrdered([]int64{0, 2, 64, 65, 129}, false)
+			require.Equal(t, int64(5), value.Len())
+			require.Equal(t, 5, value.Count())
+			for row := uint64(0); row < 5; row++ {
+				require.True(t, value.Contains(row))
+			}
+
+			value.InitWithSize(130)
+			value.AddMany([]uint64{0, 2, 63, 64, 65, 128, 129})
+			value.RemapOrdered([]int64{1, 63, 128}, true)
+			require.Equal(t, int64(130), value.Len())
+			require.Equal(t, 5, value.Count())
+			require.True(t, value.Contains(0))
+			require.True(t, value.Contains(1))
+			require.True(t, value.Contains(62))
+			require.True(t, value.Contains(63))
+			require.True(t, value.Contains(126))
+		})
+	}
+}
+
+func TestBitmapRemapMaskOrdered(t *testing.T) {
+	var value Bitmap
+	value.InitWithSize(130)
+	value.AddMany([]uint64{1, 63, 64, 127, 129})
+
+	selection := newBm(130)
+	selection.AddMany([]uint64{1, 64, 129})
+	value.RemapMaskOrdered(selection, false)
+	require.Equal(t, int64(3), value.Len())
+	require.Equal(t, 3, value.Count())
+	require.True(t, value.Contains(0))
+	require.True(t, value.Contains(1))
+	require.True(t, value.Contains(2))
+
+	value.InitWithSize(130)
+	value.AddMany([]uint64{1, 63, 64, 127, 129})
+	value.RemapMaskOrdered(selection, true)
+	require.Equal(t, int64(130), value.Len())
+	require.Equal(t, 2, value.Count())
+	require.True(t, value.Contains(62))
+	require.True(t, value.Contains(125))
+}
+
 func TestBitmapExternalStorageUnmarshal(t *testing.T) {
 	source := newBm(128)
 	source.Add(1)

@@ -23,6 +23,7 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -461,6 +462,173 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 	}
 }
 
+// RemapOrdered rewrites the bitmap in place for an ordered row selection.
+// When negate is false, output row i comes from sels[i]. When negate is true,
+// sels identifies rows to remove. The caller must provide strictly increasing,
+// non-negative row indexes. Because every destination row is at or before its
+// source row, one cached source word is sufficient to avoid allocating a
+// second data-scaled bitmap. Selection rows beyond the bitmap's logical
+// length are valid and read as clear: a null bitmap may be shorter than its
+// owning vector when the vector's trailing rows are all non-null.
+func (n *Bitmap) RemapOrdered(sels []int64, negate bool) {
+	if n == nil {
+		return
+	}
+	oldLength := n.logicalLen()
+	previous := int64(-1)
+	for _, sel := range sels {
+		if sel <= previous || sel < 0 {
+			panic("bitmap ordered remap requires strictly increasing non-negative rows")
+		}
+		previous = sel
+	}
+	logicalLength := int64(len(sels))
+	if negate {
+		logicalLength = oldLength
+	}
+	n.prepareOrderedRemap(logicalLength)
+
+	sourceWordIndex := int64(-1)
+	var sourceWord uint64
+	readSource := func(row int64) bool {
+		if row >= oldLength {
+			return false
+		}
+		wordIndex := row >> 6
+		if wordIndex != sourceWordIndex {
+			sourceWordIndex = wordIndex
+			sourceWord = n.data[wordIndex]
+		}
+		return sourceWord&(uint64(1)<<uint(row&63)) != 0
+	}
+	writeDestination := func(row int64, value bool) {
+		wordIndex := row >> 6
+		mask := uint64(1) << uint(row&63)
+		if value {
+			n.data[wordIndex] |= mask
+		} else {
+			n.data[wordIndex] &^= mask
+		}
+	}
+
+	output := int64(0)
+	if !negate {
+		for _, sel := range sels {
+			writeDestination(output, readSource(sel))
+			output++
+		}
+	} else {
+		selIndex := 0
+		for source := int64(0); source < oldLength; source++ {
+			if selIndex < len(sels) && source == sels[selIndex] {
+				selIndex++
+				continue
+			}
+			writeDestination(output, readSource(source))
+			output++
+		}
+	}
+	n.finishOrderedRemap(output, logicalLength)
+}
+
+// RemapMaskOrdered is RemapOrdered for an ordered bitmap selection. Selection
+// bitmap iteration is monotonic, so the rewrite uses no row-scaled scratch.
+func (n *Bitmap) RemapMaskOrdered(sels *Bitmap, negate bool) {
+	if n == nil || sels == nil {
+		return
+	}
+	oldLength := n.logicalLen()
+	logicalLength := int64(sels.Count())
+	if negate {
+		logicalLength = oldLength
+	}
+	n.prepareOrderedRemap(logicalLength)
+	sourceWordIndex := int64(-1)
+	var sourceWord uint64
+	readSource := func(row int64) bool {
+		if row >= oldLength {
+			return false
+		}
+		wordIndex := row >> 6
+		if wordIndex != sourceWordIndex {
+			sourceWordIndex = wordIndex
+			sourceWord = n.data[wordIndex]
+		}
+		return sourceWord&(uint64(1)<<uint(row&63)) != 0
+	}
+	writeDestination := func(row int64, value bool) {
+		wordIndex := row >> 6
+		mask := uint64(1) << uint(row&63)
+		if value {
+			n.data[wordIndex] |= mask
+		} else {
+			n.data[wordIndex] &^= mask
+		}
+	}
+
+	output := int64(0)
+	iterator := sels.Iterator()
+	if !negate {
+		for iterator.HasNext() {
+			source := int64(iterator.Next())
+			writeDestination(output, readSource(source))
+			output++
+		}
+	} else {
+		var selected int64 = -1
+		if iterator.HasNext() {
+			selected = int64(iterator.Next())
+		}
+		for source := int64(0); source < oldLength; source++ {
+			if source == selected {
+				if iterator.HasNext() {
+					selected = int64(iterator.Next())
+				} else {
+					selected = -1
+				}
+				continue
+			}
+			writeDestination(output, readSource(source))
+			output++
+		}
+	}
+	n.finishOrderedRemap(output, logicalLength)
+}
+
+func (n *Bitmap) prepareOrderedRemap(logicalLength int64) {
+	words := int((logicalLength + 63) / 64)
+	if words > cap(n.data) {
+		panic("bitmap external storage capacity exceeded")
+	}
+	if words > len(n.data) {
+		storage := n.data[:cap(n.data)]
+		clear(storage[len(n.data):words])
+		n.data = storage[:words]
+	}
+}
+
+func (n *Bitmap) finishOrderedRemap(written, logicalLength int64) {
+	words := int((logicalLength + 63) / 64)
+	if written < logicalLength {
+		word := int(written >> 6)
+		if tail := uint(written & 63); tail != 0 {
+			n.data[word] &= (uint64(1) << tail) - 1
+			word++
+		}
+		clear(n.data[word:words])
+	}
+	if words > 0 && logicalLength&63 != 0 {
+		n.data[words-1] &= (uint64(1) << uint(logicalLength&63)) - 1
+	}
+	clear(n.data[words:])
+	n.data = n.data[:words]
+	n.setLogicalLen(logicalLength)
+	n.count = 0
+	for _, word := range n.data {
+		n.count += int64(bits.OnesCount64(word))
+	}
+}
+
 func (n *Bitmap) Filter(sels []int64) *Bitmap {
 	var b Bitmap
 	b.InitWithSize(n.logicalLen())
@@ -530,13 +698,13 @@ func DecodeMarshalHeader(data []byte) (
 		rawBitLength > math.MaxInt64 ||
 		rawDataSize > math.MaxInt ||
 		rawDataSize%8 != 0 {
-		return 0, 0, 0, fmt.Errorf("invalid bitmap wire header")
+		return 0, 0, 0, moerr.NewInvalidInputNoCtx("invalid bitmap wire header")
 	}
 	bitLength = int64(rawBitLength)
 	dataSize = int(rawDataSize)
 	if count > bitLength ||
 		uint64(dataSize/8) != (rawBitLength+63)/64 {
-		return 0, 0, 0, fmt.Errorf("invalid bitmap wire header")
+		return 0, 0, 0, moerr.NewInvalidInputNoCtx("invalid bitmap wire header")
 	}
 	return count, bitLength, dataSize, nil
 }
@@ -548,7 +716,7 @@ func (n *Bitmap) PrepareExternalUnmarshal(
 	totalSize int,
 ) ([]byte, error) {
 	if !n.HasExternalStorage() {
-		return nil, fmt.Errorf("bitmap does not use external storage")
+		return nil, moerr.NewInvalidInputNoCtx("bitmap does not use external storage")
 	}
 	count, bitLength, dataSize, err := DecodeMarshalHeader(header)
 	if err != nil {
@@ -556,7 +724,7 @@ func (n *Bitmap) PrepareExternalUnmarshal(
 	}
 	if totalSize != MarshalHeaderSize+dataSize ||
 		dataSize/8 > cap(n.data) {
-		return nil, fmt.Errorf("invalid bitmap external storage capacity")
+		return nil, moerr.NewInvalidInputNoCtx("invalid bitmap external storage capacity")
 	}
 	storage := n.data[:cap(n.data)]
 	clear(storage)

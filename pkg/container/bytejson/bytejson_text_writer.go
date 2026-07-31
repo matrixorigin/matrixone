@@ -16,11 +16,12 @@ package bytejson
 
 import (
 	"encoding/base64"
-	"fmt"
 	"io"
 	"math"
 	"strconv"
 	"unicode/utf8"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // WriteJSONText writes the visible JSON representation without allocating a
@@ -72,7 +73,7 @@ func WriteJSONText(w io.Writer, value ByteJson) error {
 		return writeBytes(w, strconv.AppendUint(buf[:0], value.GetUint64(), 10))
 	case TpCodeLiteral:
 		if len(value.Data) == 0 {
-			return fmt.Errorf("invalid JSON literal")
+			return moerr.NewInvalidInputNoCtx("invalid JSON literal")
 		}
 		switch value.Data[0] {
 		case LiteralNull:
@@ -82,12 +83,12 @@ func WriteJSONText(w io.Writer, value ByteJson) error {
 		case LiteralFalse:
 			return writeString(w, "false")
 		default:
-			return fmt.Errorf("invalid JSON literal %d", value.Data[0])
+			return moerr.NewInvalidInputNoCtxf("invalid JSON literal %d", value.Data[0])
 		}
 	case TpCodeFloat64:
 		f := value.GetFloat64()
 		if math.IsInf(f, 0) || math.IsNaN(f) {
-			return fmt.Errorf("invalid JSON float64 %f", f)
+			return moerr.NewInvalidInputNoCtxf("invalid JSON float64 %f", f)
 		}
 		format := byte('e')
 		abs := math.Abs(f)
@@ -125,7 +126,7 @@ func WriteJSONText(w io.Writer, value ByteJson) error {
 		}
 		return writeByte(w, '"')
 	default:
-		return fmt.Errorf("invalid JSON type %d", value.Type)
+		return moerr.NewInvalidInputNoCtxf("invalid JSON type %d", value.Type)
 	}
 }
 
@@ -214,7 +215,7 @@ func WriteJSONString(w io.Writer, value []byte) error {
 		}
 		_, size := utf8.DecodeRune(value[offset:])
 		if size == 1 {
-			return fmt.Errorf("invalid UTF-8")
+			return moerr.NewInvalidInputNoCtx("invalid UTF-8")
 		}
 		offset += size
 	}
@@ -229,7 +230,7 @@ func writeNormalizedBase64(w io.Writer, encoded []byte) error {
 	for offset := 0; offset < len(encoded); {
 		n, next, ok := decodeBase64Chunk(encoded, offset, decoded[:])
 		if !ok {
-			return fmt.Errorf("invalid base64 JSON value")
+			return moerr.NewInvalidInputNoCtx("invalid base64 JSON value")
 		}
 		if err := writeRawBase64(w, decoded[:n]); err != nil {
 			return err

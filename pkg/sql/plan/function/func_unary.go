@@ -6245,7 +6245,9 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			n, err := reader.Read(extra[:])
 			if err != io.EOF || n != 0 {
 				if err == nil {
-					err = errors.New("decompressed length exceeds header")
+					err = moerr.NewInvalidInputNoCtx(
+						"decompressed length exceeds header",
+					)
 				}
 				decodeErr = err
 				return 0, err

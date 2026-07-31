@@ -16,9 +16,7 @@ package vector
 
 import (
 	"bytes"
-	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -73,9 +71,8 @@ func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
 
 func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 	if v.allocationAccount != nil {
-		return fmt.Errorf(
-			"%w: cannot install aliases in an accounted vector",
-			mpool.ErrAllocationAccountInvalid,
+		return allocationAccountInvalid(
+			"cannot install aliases in an accounted vector",
 		)
 	}
 	// read class

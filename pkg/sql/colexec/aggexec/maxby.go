@@ -286,7 +286,15 @@ func compactMaxByStateVector(vec *vector.Vector, mp *mpool.MPool) error {
 	if areaCapacity <= 2*liveBytes+maxByVarlenaCompactionSlack {
 		return nil
 	}
-	compact, err := vec.CloneToFlatCompact(mp)
+	var (
+		compact *vector.Vector
+		err     error
+	)
+	if selection := vec.AllocationAccountSelection(); selection != nil {
+		compact, err = vec.CloneToFlatCompactWithAllocation(mp, selection)
+	} else {
+		compact, err = vec.CloneToFlatCompact(mp)
+	}
 	if err != nil {
 		return err
 	}

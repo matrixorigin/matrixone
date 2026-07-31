@@ -313,6 +313,103 @@ func TestVectorAllocationAccountBitmapResetReuseAndFree(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestVectorAllocationAccountBitmapShrinkUsesNoScratch(t *testing.T) {
+	state := newTestVectorBitmapAllocationAccount(t, 8<<20, 16)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	require.NoError(t, vec.PreExtend(130, mp))
+	for i := range 130 {
+		require.NoError(t, AppendFixed(vec, int64(i), false, mp))
+	}
+	for _, row := range []uint64{0, 2, 63, 64, 129} {
+		vec.SetNull(row)
+	}
+	for _, row := range []uint64{1, 65, 128} {
+		vec.GetGrouping().Add(row)
+	}
+	before := state.account.Snapshot()
+
+	vec.Shrink([]int64{0, 2, 64, 65, 129}, false)
+	require.Equal(t, []int64{0, 2, 64, 65, 129}, MustFixedColWithTypeCheck[int64](vec))
+	for _, row := range []uint64{0, 1, 2, 4} {
+		require.True(t, vec.IsNull(row))
+	}
+	require.Equal(t, 4, vec.GetNulls().Count())
+	require.True(t, vec.GetGrouping().Contains(3))
+	require.Equal(t, 1, vec.GetGrouping().Count())
+	after := state.account.Snapshot()
+	require.Equal(t, before.Used, after.Used)
+	require.Equal(t, before.Peak, after.Peak)
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestVectorAllocationAccountBitmapShuffleAccountsScratch(t *testing.T) {
+	state := newTestVectorBitmapAllocationAccount(t, 8<<20, 16)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	require.NoError(t, vec.PreExtend(130, mp))
+	for i := range 130 {
+		require.NoError(t, AppendFixed(vec, int64(i), false, mp))
+	}
+	for _, row := range []uint64{1, 64, 129} {
+		vec.SetNull(row)
+	}
+	for _, row := range []uint64{2, 63, 128} {
+		vec.GetGrouping().Add(row)
+	}
+	before := state.account.Snapshot()
+
+	require.NoError(t, vec.Shuffle([]int64{129, 1, 64, 1, 2, 128, 63}, mp))
+	require.Equal(t, []int64{129, 1, 64, 1, 2, 128, 63}, MustFixedColWithTypeCheck[int64](vec))
+	for _, row := range []uint64{0, 1, 2, 3} {
+		require.True(t, vec.IsNull(row))
+	}
+	require.Equal(t, 4, vec.GetNulls().Count())
+	for _, row := range []uint64{4, 5, 6} {
+		require.True(t, vec.GetGrouping().Contains(row))
+	}
+	require.Equal(t, 3, vec.GetGrouping().Count())
+	after := state.account.Snapshot()
+	require.Greater(t, after.Peak, before.Peak)
+	require.Equal(t, uint64(3), state.registry.LiveAllocationMetadata())
+
+	var goScratch []byte
+	require.NoError(t, vec.ShuffleWithBuf([]int64{6, 5, 4, 3, 2, 1, 0}, mp, &goScratch))
+	require.Nil(t, goScratch)
+	require.Equal(t, []int64{63, 128, 2, 1, 64, 1, 129}, MustFixedColWithTypeCheck[int64](vec))
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestVectorAllocationAccountBitmapShuffleFailurePreservesVector(t *testing.T) {
+	state := newTestVectorBitmapAllocationAccount(t, 8<<20, 4)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	require.NoError(t, vec.PreExtend(130, mp))
+	for i := range 130 {
+		require.NoError(t, AppendFixed(vec, int64(i), false, mp))
+	}
+	vec.SetNull(1)
+	vec.GetGrouping().Add(2)
+	before := state.account.Snapshot()
+
+	err := vec.Shuffle([]int64{2, 1, 0}, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.Equal(t, before.Used, state.account.Snapshot().Used)
+	require.Equal(t, uint64(3), state.registry.LiveAllocationMetadata())
+	require.Equal(t, 130, vec.Length())
+	require.True(t, vec.IsNull(1))
+	require.True(t, vec.GetGrouping().Contains(2))
+	require.Equal(t, int64(0), MustFixedColWithTypeCheck[int64](vec)[0])
+	require.Equal(t, int64(129), MustFixedColWithTypeCheck[int64](vec)[129])
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestVectorAllocationAccountBitmapGrowthFailurePreservesOwner(t *testing.T) {
 	state := newTestVectorBitmapAllocationAccount(t, 1000, 8)
 	mp := mpool.MustNewZero()

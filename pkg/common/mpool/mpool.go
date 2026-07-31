@@ -816,9 +816,9 @@ func (mp *MPool) allocAccountedWithDetailK(
 	// reject unexpected alloc size.
 	if sz < 0 || sz > maxAllocationSize() {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
-		return nil, allocationAccountSiteError(request, fmt.Errorf(
-			"%w: requested=%d maximum=%d",
+		return nil, allocationAccountSiteError(request, wrapAllocationAccountError(
 			ErrAllocationAllocatorLimit,
+			"requested=%d maximum=%d",
 			sz,
 			maxAllocationSize(),
 		))
@@ -837,11 +837,11 @@ func allocationAccountSiteError(
 	request allocationAccountRequest,
 	err error,
 ) error {
-	return fmt.Errorf(
-		"allocation owner=%d site=%d: %w",
+	return prefixAllocationAccountError(
+		err,
+		"allocation owner=%d site=%d",
 		request.owner,
 		request.site,
-		err,
 	)
 }
 
@@ -1369,9 +1369,9 @@ func MakeSliceAccounted[T any](
 	if elementSize == 0 ||
 		maxSize <= 0 ||
 		uint64(n) > uint64(maxSize)/uint64(elementSize) {
-		return nil, fmt.Errorf(
-			"%w: elements=%d element-size=%d maximum=%d",
+		return nil, wrapAllocationAccountError(
 			ErrAllocationAllocatorLimit,
+			"elements=%d element-size=%d maximum=%d",
 			n,
 			elementSize,
 			maxSize,

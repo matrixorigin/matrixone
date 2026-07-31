@@ -920,9 +920,8 @@ func (v *Vector) UnmarshalBinaryTrusted(data []byte) error {
 
 func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 	if v.allocationAccount != nil {
-		return fmt.Errorf(
-			"%w: cannot install aliases in an accounted vector",
-			mpool.ErrAllocationAccountInvalid,
+		return allocationAccountInvalid(
+			"cannot install aliases in an accounted vector",
 		)
 	}
 	read := func(size int) ([]byte, error) {
@@ -1133,9 +1132,8 @@ func canonicalVectorTypeSize(typ types.Type) (int, error) {
 
 func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	if v.allocationAccount != nil && v.hasBackingStorage() {
-		return fmt.Errorf(
-			"%w: cannot replace accounted vector storage without Free",
-			mpool.ErrAllocationAccountInvalid,
+		return allocationAccountInvalid(
+			"cannot replace accounted vector storage without Free",
 		)
 	}
 	var err error
@@ -1348,9 +1346,8 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 // Dup use to copy an identical vector
 func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	if v.allocationAccount != nil {
-		return nil, fmt.Errorf(
-			"%w: accounted vector duplication requires an off-heap destination",
-			mpool.ErrAllocationAccountInvalid,
+		return nil, allocationAccountInvalid(
+			"accounted vector duplication requires an off-heap destination",
 		)
 	}
 	return v.dup(mp, false, v.offHeap, nil)
@@ -1453,16 +1450,16 @@ func (v *Vector) dup(
 // unreferenced bytes in area are not propagated into batch memory accounting.
 func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
 	if v.allocationAccount != nil {
-		return nil, fmt.Errorf(
-			"%w: accounted compact clone requires a destination selection",
-			mpool.ErrAllocationAccountInvalid,
+		return nil, allocationAccountInvalid(
+			"accounted compact clone requires a destination selection",
 		)
 	}
 	return v.cloneToFlatCompact(mp, nil)
 }
 
 // CloneToFlatCompactWithAllocation creates an off-heap compact copy under the
-// explicit destination selection.
+// explicit destination selection. Passing nil creates an unaccounted
+// destination and is reserved for a deliberate ownership boundary.
 func (v *Vector) CloneToFlatCompactWithAllocation(
 	mp *mpool.MPool,
 	selection *AllocationAccountSelection,
@@ -1782,6 +1779,12 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
 	if v.IsConst() {
 		return nil
+	}
+	// The reusable buffer is Go-heap storage and therefore has no physical
+	// allocation provenance. Allocation-accounted vectors must use Shuffle,
+	// whose replacement data and bitmap scratch are admitted to their owner.
+	if v.allocationAccount != nil {
+		return v.Shuffle(sels, mp)
 	}
 	// Fall back to allocating Shuffle if the vector doesn't own its data
 	// or the selection changes the element count.
@@ -4431,8 +4434,8 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 		for i, sel := range sels {
 			vs[i] = vs[sel]
 		}
-		nulls.Filter(&v.gsp, sels, false)
-		nulls.Filter(&v.nsp, sels, false)
+		nulls.FilterInPlaceOrdered(&v.gsp, sels, false)
+		nulls.FilterInPlaceOrdered(&v.nsp, sels, false)
 		v.length = len(sels)
 	} else if len(sels) > 0 {
 		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < v.length; oldIdx++ {
@@ -4451,8 +4454,8 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 				sel = sels[selIdx]
 			}
 		}
-		nulls.Filter(&v.gsp, sels, true)
-		nulls.Filter(&v.nsp, sels, true)
+		nulls.FilterInPlaceOrdered(&v.gsp, sels, true)
+		nulls.FilterInPlaceOrdered(&v.nsp, sels, true)
 		v.length -= len(sels)
 	}
 }
@@ -4467,8 +4470,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 			vs[idx] = vs[itr.Next()+offset]
 			idx++
 		}
-		nulls.FilterByMask(&v.gsp, sels, false)
-		nulls.FilterByMask(&v.nsp, sels, false)
+		nulls.FilterByMaskInPlace(&v.gsp, sels, false)
+		nulls.FilterByMaskInPlace(&v.nsp, sels, false)
 		v.length = length
 	} else if length > 0 {
 		sel := itr.Next() + offset
@@ -4487,8 +4490,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 				sel = itr.Next() + offset
 			}
 		}
-		nulls.FilterByMask(&v.gsp, sels, true)
-		nulls.FilterByMask(&v.nsp, sels, true)
+		nulls.FilterByMaskInPlace(&v.gsp, sels, true)
+		nulls.FilterByMaskInPlace(&v.nsp, sels, true)
 		v.length -= length
 	}
 }
@@ -4504,12 +4507,14 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	if err != nil {
 		return err
 	}
-	v.data = data
-	ws := toSliceOfLengthNoTypeCheck[T](v, ns)
+	ws := util.UnsafeSliceCastToLength[T](data, ns)
 
 	shuffle.FixedLengthShuffle(vs, ws, sels)
-	nulls.Filter(&v.gsp, sels, false)
-	nulls.Filter(&v.nsp, sels, false)
+	if err := v.remapShuffleBitmaps(sels, mp); err != nil {
+		mp.Free(data)
+		return err
+	}
+	v.data = data
 	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
 	if v.cantFreeData {
 		v.cantFreeData = false
@@ -4517,6 +4522,88 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 		mp.Free(olddata)
 	}
 	v.length = ns
+	return nil
+}
+
+type bitmapRemapScratch struct {
+	destination *bitmap.Bitmap
+	value       bitmap.Bitmap
+	storage     []uint64
+}
+
+func (s *bitmapRemapScratch) release(mp *mpool.MPool) {
+	if s == nil || cap(s.storage) == 0 {
+		return
+	}
+	s.value.ReleaseExternalStorage()
+	mpool.FreeSlice(mp, s.storage)
+	s.storage = nil
+}
+
+// remapShuffleBitmaps preserves Shuffle's arbitrary-selection semantics. An
+// allocation-accounted vector builds both results in admitted temporary
+// storage before publishing either, so rejection cannot leave null and
+// grouping ownership half-mutated.
+func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
+	if v.allocationAccount == nil || !v.allocationAccount.accountBitmaps {
+		nulls.Filter(&v.gsp, sels, false)
+		nulls.Filter(&v.nsp, sels, false)
+		return nil
+	}
+
+	targets := [...]struct {
+		destination *bitmap.Bitmap
+		site        mpool.AllocationSite
+	}{
+		{v.gsp.GetBitmap(), v.allocationAccount.groupingSite},
+		{v.nsp.GetBitmap(), v.allocationAccount.nullsSite},
+	}
+	if targets[0].destination.EmptyByFlag() &&
+		targets[1].destination.EmptyByFlag() {
+		return nil
+	}
+	if err := v.ensureBitmapCapacity(len(sels), mp); err != nil {
+		return err
+	}
+
+	var scratch [2]bitmapRemapScratch
+	for i, target := range targets {
+		if target.destination.EmptyByFlag() {
+			continue
+		}
+		words := (len(sels) + 63) / 64
+		storage, err := mpool.MakeSliceAccounted[uint64](
+			words,
+			mp,
+			v.allocationAccount.account,
+			v.allocationAccount.owner,
+			target.site,
+		)
+		if err != nil {
+			for j := range i {
+				scratch[j].release(mp)
+			}
+			return err
+		}
+		scratch[i].destination = target.destination
+		scratch[i].storage = storage
+		scratch[i].value.InstallExternalStorage(storage)
+		scratch[i].value.InitWithSize(int64(len(sels)))
+		for output, source := range sels {
+			if target.destination.Contains(uint64(source)) {
+				scratch[i].value.Add(uint64(output))
+			}
+		}
+	}
+
+	for i := range scratch {
+		if scratch[i].destination != nil {
+			scratch[i].destination.InitWith(&scratch[i].value)
+		}
+	}
+	for i := range scratch {
+		scratch[i].release(mp)
+	}
 	return nil
 }
 

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -179,9 +180,11 @@ func (g *PressureRetryGuard) Advance(next PressureProgress) error {
 		return process.ErrHashBuildBudgetInvalid
 	}
 	if g.attempts >= g.limit {
-		return fmt.Errorf(
-			"%w: memory-pressure retry limit exceeded",
+		return errors.Join(
 			process.ErrHashBuildBudgetInvalid,
+			moerr.NewInternalErrorNoCtx(
+				"memory-pressure retry limit exceeded",
+			),
 		)
 	}
 	progress := next.Used < g.previous.Used ||
@@ -189,9 +192,11 @@ func (g *PressureRetryGuard) Advance(next PressureProgress) error {
 		(g.previous.InputUnits > 0 && next.InputUnits < g.previous.InputUnits) ||
 		(!g.previous.OptionalDisabled && next.OptionalDisabled)
 	if !progress {
-		return fmt.Errorf(
-			"%w: memory-pressure retry made no progress",
+		return errors.Join(
 			process.ErrHashBuildBudgetInvalid,
+			moerr.NewInternalErrorNoCtx(
+				"memory-pressure retry made no progress",
+			),
 		)
 	}
 	g.previous = next
