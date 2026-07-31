@@ -463,6 +463,14 @@ test-iceberg-readiness:
 test-iceberg-e2e-local:
 	@optools/iceberg_ci.bash e2e-local
 
+.PHONY: test-mongodb-e2e-local
+test-mongodb-e2e-local:
+	@optools/mongodb_ci.bash e2e-local
+
+.PHONY: test-mongodb-unit
+test-mongodb-unit:
+	@optools/mongodb_ci.bash unit
+
 .PHONY: test-iceberg-local
 test-iceberg-local:
 	@optools/iceberg_ci.bash local

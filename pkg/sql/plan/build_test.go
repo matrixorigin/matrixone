@@ -2208,21 +2208,21 @@ func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
 	}
 }
 
-func TestUpdateFallbackPgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
+func TestUpdatePgStyleFromDedupFKTablePicksWholeSourceRow(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
 	if err != nil {
-		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+		t.Fatalf("build UPDATE FROM plan: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
 	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["emp"].Cols)) {
-		t.Fatalf("fallback UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
+		t.Fatalf("UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
 	}
 	if !hasUpdateFromDedupWindow(query, 1) {
-		t.Fatalf("fallback UPDATE FROM dedup should use row_number window partitioned by target row_id")
+		t.Fatalf("UPDATE FROM dedup should use row_number window partitioned by target row_id")
 	}
 }
 
@@ -2251,11 +2251,10 @@ func TestUpdatePgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
 	}
 }
 
-// TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32 guards the
-// fallback (buildTableUpdate) path against the same GEOMETRY32 partition-key
-// crash. emp has a foreign key, so UPDATE ... FROM routes through the fallback
-// planner.
-func TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
+// TestUpdatePgStyleFromDedupFKTablePartitionsByRowIDNotGeometry32 guards the
+// modern path for an FK-bearing target against the same GEOMETRY32
+// partition-key crash.
+func TestUpdatePgStyleFromDedupFKTablePartitionsByRowIDNotGeometry32(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	geoTyp := plan.Type{Id: int32(types.T_geometry32)}
 	setMockColumnType(t, mock, "emp", "hiredate", geoTyp)
@@ -2263,39 +2262,35 @@ func TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
 	if err != nil {
-		t.Fatalf("build fallback UPDATE FROM with GEOMETRY32 column: %v", err)
+		t.Fatalf("build FK-table UPDATE FROM with GEOMETRY32 column: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
 	if !hasUpdateFromDedupWindow(query, 1) {
-		t.Fatalf("fallback UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
+		t.Fatalf("FK-table UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
 	}
 	if updateFromDedupPartitionsColName(query, "hiredate") {
-		t.Fatalf("fallback UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
+		t.Fatalf("FK-table UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
 	}
 }
 
-// TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter guards the fallback path
-// against losing the join-target NULL-row safeguard. The fallback path's
-// needAggFilter drives both the any_value dedup AND an isnotnull(row_id) filter
-// that drops NULL rows from left/right-join targets. Replacing the dedup with a
-// row_number() window must still keep that NULL filter, otherwise a joined-target
-// NULL row could leak into the update pipeline.
-func TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter(t *testing.T) {
+// TestUpdatePgStyleFromFKTableUsesModernDedup guards the new FK-table route:
+// unrelated child columns stay on the modern row_number dedup path.
+func TestUpdatePgStyleFromFKTableUsesModernDedup(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
 	if err != nil {
-		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+		t.Fatalf("build FK-table UPDATE FROM plan: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
 	if hasAnyValueAgg(query) {
-		t.Fatalf("fallback UPDATE FROM dedup must not use any_value aggregation")
+		t.Fatalf("modern FK-table UPDATE FROM dedup must not use any_value aggregation")
 	}
-	if !hasRowIdIsNotNullFilter(query) {
-		t.Fatalf("fallback UPDATE FROM must keep the isnotnull(row_id) join-target NULL-row filter")
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("modern FK-table UPDATE FROM must use row_number partitioned by target row_id")
 	}
 }
 
@@ -2528,11 +2523,19 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 }
 
 func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
-	t.Run("ordinary child update keeps prepare cacheable", func(t *testing.T) {
+	t.Run("affected child key marks prepare uncacheable", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
 
 		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set deptno = ? where empno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("unrelated child column keeps prepare cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set sal = ? where empno = ?")
 		require.False(t, query.GetHasForeignKeyAction())
 	})
 
@@ -2659,29 +2662,29 @@ func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
 	// but we verify the expression exists at the expected position.
 }
 
-func TestUpdateFallbackGeneratedColumnDerivedTableSource(t *testing.T) {
+func TestUpdateGeneratedColumnDerivedTableSourceOnFKTable(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET comm = 1, ename = 'derived-src-marker' FROM (SELECT deptno, loc FROM dept) AS d WHERE emp.deptno = d.deptno")
 	if err != nil {
-		t.Fatalf("build fallback update with derived table source and generated column: %v", err)
+		t.Fatalf("build modern FK-table update with derived source and generated column: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	expectedLen := empCols + 3
-	node := requireFallbackSourceProjectNode(t, query, expectedLen, "derived-src-marker")
-	if node == nil {
-		t.Fatalf("missing source PROJECT with length %d and derived-src-marker", expectedLen)
+	hasMultiUpdate := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+			break
+		}
 	}
-	generatedPos := empCols + 2
-	if generatedPos >= len(node.ProjectList) {
-		t.Fatalf("generated column position %d out of range (ProjectList length %d)", generatedPos, len(node.ProjectList))
+	if !hasMultiUpdate {
+		t.Fatal("FK-table UPDATE with an unrelated child key must use MULTI_UPDATE")
 	}
-	if node.ProjectList[generatedPos] == nil {
-		t.Fatalf("generated column expression at position %d should not be nil", generatedPos)
+	if !queryContainsStringLiteral(query, "derived-src-marker") {
+		t.Fatal("modern UPDATE must retain the derived-source assignment")
 	}
 }
 
@@ -2838,27 +2841,6 @@ func hasAnyValueAgg(query *Query) bool {
 		}
 		for _, aggExpr := range node.AggList {
 			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// hasRowIdIsNotNullFilter reports whether the plan filters out joined-target
-// NULL rows via isnotnull(row_id). This safeguard must survive on the fallback
-// UPDATE ... FROM path even after duplicate matches are deduped by row_number().
-func hasRowIdIsNotNullFilter(query *Query) bool {
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_FILTER {
-			continue
-		}
-		for _, f := range node.FilterList {
-			fn := f.GetF()
-			if fn == nil || fn.Func.ObjName != "isnotnull" || len(fn.Args) != 1 {
-				continue
-			}
-			if exprContainsColName(fn.Args[0], catalog.Row_ID) {
 				return true
 			}
 		}
@@ -3826,6 +3808,60 @@ func TestReplaceSelfRefPlanStructure(t *testing.T) {
 		}
 	}
 	assert.True(t, hasMultiUpdate, "self-ref FK REPLACE should contain MULTI_UPDATE node")
+}
+
+func TestDeleteSelfReferSetNull(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["self_ref_cascade"]
+	tableDef.Fkeys[0].OnDelete = plan.ForeignKeyDef_SET_NULL
+	tableDef.Fkeys[0].OnUpdate = plan.ForeignKeyDef_SET_NULL
+
+	logicPlan, err := runOneStmt(mock, t, "DELETE FROM self_ref_cascade WHERE id = 2")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	assert.True(t, query.GetHasForeignKeyAction())
+	assert.True(t, queryUpdatesTable(query, "self_ref_cascade"))
+	requireQueryStepDependenciesAcyclic(t, query)
+}
+
+func requireQueryStepDependenciesAcyclic(t *testing.T, query *plan.Query) {
+	t.Helper()
+	state := make([]uint8, len(query.Steps))
+	var visitStep func(int)
+	visitStep = func(step int) {
+		require.GreaterOrEqual(t, step, 0)
+		require.Less(t, step, len(query.Steps))
+		if state[step] == 1 {
+			t.Fatalf("query step dependency cycle contains step %d", step)
+		}
+		if state[step] == 2 {
+			return
+		}
+		state[step] = 1
+		seenNodes := make(map[int32]struct{})
+		var visitNode func(int32)
+		visitNode = func(nodeID int32) {
+			require.GreaterOrEqual(t, nodeID, int32(0))
+			require.Less(t, int(nodeID), len(query.Nodes))
+			if _, ok := seenNodes[nodeID]; ok {
+				return
+			}
+			seenNodes[nodeID] = struct{}{}
+			node := query.Nodes[nodeID]
+			for _, sourceStep := range node.SourceStep {
+				visitStep(int(sourceStep))
+			}
+			for _, childID := range node.Children {
+				visitNode(childID)
+			}
+		}
+		visitNode(query.Steps[step])
+		state[step] = 2
+	}
+	for step := range query.Steps {
+		visitStep(step)
+	}
 }
 
 func TestReplaceSelfRefCascade(t *testing.T) {
@@ -5129,6 +5165,55 @@ func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
 		}
 		require.True(t, foundAgg, sql)
 	}
+}
+
+func TestIssue23154VectorScalarSubqueryFlattenedEverywhere(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	vectorCol := mock.ctxt.tables["nation"].Cols[3]
+	vectorCol.Typ = plan.Type{Id: int32(types.T_array_float64), Width: 1024}
+
+	sql := `SELECT COUNT(*) AS count,
+	               AVG(cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref'))) AS avg_similarity,
+	               MAX(cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref'))) AS max_similarity,
+	               MIN(cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref'))) AS min_similarity
+	          FROM nation
+	         WHERE n_comment IS NOT NULL
+	           AND n_name != 'ref'
+	           AND cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref')) >= 0.9`
+	logicPlan, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+
+	foundAgg := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			foundAgg = true
+		}
+		for _, exprs := range [][]*plan.Expr{
+			node.AggList,
+			node.FilterList,
+			node.ProjectList,
+			node.OnList,
+			node.GroupBy,
+		} {
+			for _, expr := range exprs {
+				require.False(t, hasSubquery(expr),
+					"executable plan expression contains Expr_Sub: %s", sql)
+			}
+		}
+		for _, orderBy := range node.OrderBy {
+			require.False(t, hasSubquery(orderBy.Expr),
+				"executable ORDER BY expression contains Expr_Sub: %s", sql)
+		}
+	}
+	require.True(t, foundAgg)
 }
 
 func TestIssue23157VectorScoreScalarSubqueryFlattened(t *testing.T) {

@@ -19,6 +19,8 @@ import (
 	"context"
 	"encoding/hex"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -31,6 +33,63 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
+
+// asyncLockAdmissionCompletion transfers cleanup ownership from an RPC handler
+// to its asynchronous lock callback. A callback may run synchronously inside
+// lockTable.lock or asynchronously after the handler returns, so the transfer
+// and callback completion need one linearization point.
+type asyncLockAdmissionCompletion struct {
+	once sync.Once
+	// state follows one of two paths:
+	// handler-owned -> callback-completed, or
+	// handler-owned -> callback-owned -> callback-completed.
+	// Only the latter completion transition owns finalization.
+	state                 atomic.Uint32
+	finalizeLockAdmission func()
+}
+
+const (
+	asyncLockHandlerOwned uint32 = iota
+	asyncLockCallbackOwned
+	asyncLockCallbackCompleted
+)
+
+func newAsyncLockAdmissionCompletion(
+	finalizeLockAdmission func(),
+) *asyncLockAdmissionCompletion {
+	return &asyncLockAdmissionCompletion{
+		finalizeLockAdmission: finalizeLockAdmission,
+	}
+}
+
+func (c *asyncLockAdmissionCompletion) transferToCallbackIfPending() bool {
+	return c.state.CompareAndSwap(
+		asyncLockHandlerOwned,
+		asyncLockCallbackOwned,
+	)
+}
+
+func (c *asyncLockAdmissionCompletion) callbackDone() {
+	// A synchronous callback wins handler-owned -> completed, leaving the
+	// handler as finalization owner. An asynchronous callback observes the
+	// ownership transfer and performs the only callback-owned finalization.
+	if c.state.CompareAndSwap(
+		asyncLockHandlerOwned,
+		asyncLockCallbackCompleted,
+	) {
+		return
+	}
+	if c.state.CompareAndSwap(
+		asyncLockCallbackOwned,
+		asyncLockCallbackCompleted,
+	) {
+		c.finalize()
+	}
+}
+
+func (c *asyncLockAdmissionCompletion) finalize() {
+	c.once.Do(c.finalizeLockAdmission)
+}
 
 var methodVersions = map[pb.Method]int64{
 	pb.Method_Lock:                   defines.MORPCVersion1,
@@ -285,7 +344,17 @@ func (s *service) handleRemoteLock(
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
-	defer func() { s.endLockAdmission(admission) }()
+	ctx, cancelServiceClose := contextWithServiceClose(ctx, admission.serviceCtx)
+	completion := newAsyncLockAdmissionCompletion(func() {
+		cancelServiceClose()
+		s.endLockAdmission(admission)
+	})
+	handlerOwnsAdmission := true
+	defer func() {
+		if handlerOwnsAdmission {
+			completion.finalize()
+		}
+	}()
 
 	bindCtx, cancelBind := newLockWaitContext(ctx, req.Lock.Options)
 	if cancelBind != nil {
@@ -370,6 +439,7 @@ func (s *service) handleRemoteLock(
 			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
 		},
 		func(result pb.Result, err error) {
+			defer completion.callbackDone()
 			if err == nil {
 				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
 					result = pb.Result{}
@@ -379,6 +449,7 @@ func (s *service) handleRemoteLock(
 			resp.Lock.Result = result
 			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		})
+	handlerOwnsAdmission = !completion.transferToCallbackIfPending()
 }
 
 func (s *service) handleForwardLock(
@@ -398,7 +469,17 @@ func (s *service) handleForwardLock(
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
-	defer func() { s.endLockAdmission(admission) }()
+	ctx, cancelServiceClose := contextWithServiceClose(ctx, admission.serviceCtx)
+	completion := newAsyncLockAdmissionCompletion(func() {
+		cancelServiceClose()
+		s.endLockAdmission(admission)
+	})
+	handlerOwnsAdmission := true
+	defer func() {
+		if handlerOwnsAdmission {
+			completion.finalize()
+		}
+	}()
 
 	bindCtx, cancelBind := newLockWaitContext(ctx, req.Lock.Options)
 	if cancelBind != nil {
@@ -481,6 +562,7 @@ func (s *service) handleForwardLock(
 			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
 		},
 		func(result pb.Result, err error) {
+			defer completion.callbackDone()
 			if err == nil {
 				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
 					result = pb.Result{}
@@ -490,6 +572,7 @@ func (s *service) handleForwardLock(
 			resp.Lock.Result = result
 			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		})
+	handlerOwnsAdmission = !completion.transferToCallbackIfPending()
 }
 
 func remoteLockResponseLogFields(req *pb.Request) func() []zap.Field {
