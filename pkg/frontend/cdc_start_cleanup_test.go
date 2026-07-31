@@ -1217,6 +1217,29 @@ func TestStartSupersededBeforeSchedulingDoesNotPublishOrCleanNewGeneration(t *te
 	require.Nil(t, exec.activeStart())
 }
 
+func TestCancelBeforeFactoryStartFencesExecutor(t *testing.T) {
+	exec := &CDCTaskExecutor{
+		stateMachine: NewExecutorStateMachine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "cancel-before-start",
+			TaskName: "cancel-before-start",
+		},
+		holdCh: make(chan int, 1),
+	}
+	exec.bindLifecycleContext(context.Background())
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+
+	require.NoError(t, exec.Cancel())
+	require.Equal(t, StateCancelled, exec.stateMachine.State())
+	select {
+	case <-exec.holdCh:
+	default:
+		t.Fatal("cancel did not release a start waiting to enter execution")
+	}
+	require.ErrorContains(t, exec.Start(context.Background()), "canceled before execution")
+	require.Nil(t, exec.activeStart())
+}
+
 func TestResumeWaitsForPreviousStartAttemptBeforeReplacingRoutine(t *testing.T) {
 	started := make(chan struct{}, 1)
 	exec := &CDCTaskExecutor{

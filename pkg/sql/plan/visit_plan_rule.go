@@ -98,7 +98,6 @@ func NewGetParamRule() *GetParamRule {
 func (rule *GetParamRule) MatchNode(node *Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN ||
 		node.NodeType == plan.Node_EXTERNAL_SCAN ||
-		node.NodeType == plan.Node_SOURCE_SCAN ||
 		node.NodeType == plan.Node_INSERT {
 		if node.ObjRef != nil && node.TableDef != nil {
 			rule.schemas = append(rule.schemas, prepareSchemaRefWithSnapshot(
