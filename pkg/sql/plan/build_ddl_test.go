@@ -160,6 +160,8 @@ func TestGenViewTableDefCapturesDependencyIdentity(t *testing.T) {
 	require.NotZero(t, dependency.LogicalID)
 	require.False(t, dependency.Snapshot)
 	require.False(t, dependency.Subscription)
+	require.Equal(t, "tpch", dependency.DatabaseName)
+	require.Equal(t, "nation", dependency.TableName)
 }
 
 func TestMakeViewDependencyKeepsSnapshotPublisherAccount(t *testing.T) {
@@ -181,11 +183,27 @@ func TestMakeViewDependencyKeepsSnapshotPublisherAccount(t *testing.T) {
 
 	require.Equal(t, uint32(7), dependency.AccountID)
 	require.Equal(t, uint32(11), dependency.PublisherAccountID)
+	require.True(t, dependency.PublisherAccountIDSet)
 	require.True(t, dependency.Snapshot)
 	require.True(t, dependency.Subscription)
 	require.Equal(t, "subscriber_db", dependency.SubscriptionDB)
+	require.Equal(t, "source_t", dependency.SubscriptionTable)
 	require.Equal(t, "publisher_db", dependency.PublisherDB)
 	require.Equal(t, "source_t", dependency.PublisherTable)
+	require.Equal(t, "publisher_db", dependency.DatabaseName)
+	require.Equal(t, "source_t", dependency.TableName)
+
+	systemPublisher := makeViewDependency(
+		7,
+		&ObjectRef{
+			Obj: 43, ObjName: "system_t", SchemaName: "system_pub",
+			SubscriptionName: "system_sub", PubInfo: &plan.PubInfo{TenantId: 0},
+		},
+		&TableDef{TblId: 43, LogicalId: 42, Version: 1},
+		&Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}},
+	)
+	require.Zero(t, systemPublisher.PublisherAccountID)
+	require.True(t, systemPublisher.PublisherAccountIDSet)
 }
 
 func TestGenViewTableDefKeepsDirectNestedViewDependency(t *testing.T) {
@@ -245,6 +263,8 @@ func TestGenViewTableDefKeepsDirectNestedViewDependency(t *testing.T) {
 		TableID:      84,
 		LogicalID:    83,
 		Version:      5,
+		DatabaseName: "tpch",
+		TableName:    "v1",
 	})
 	require.Contains(t, persisted.Dependencies, ViewDependency{
 		AccountID:    7,
@@ -252,6 +272,8 @@ func TestGenViewTableDefKeepsDirectNestedViewDependency(t *testing.T) {
 		TableID:      42,
 		LogicalID:    41,
 		Version:      3,
+		DatabaseName: "tpch",
+		TableName:    "nation",
 	})
 }
 

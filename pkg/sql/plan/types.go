@@ -235,17 +235,21 @@ type ViewData struct {
 }
 
 type ViewDependency struct {
-	AccountID          uint32 `json:"account_id"`
-	AccountIDSet       bool   `json:"account_id_set,omitempty"`
-	TableID            uint64 `json:"table_id"`
-	LogicalID          uint64 `json:"logical_id,omitempty"`
-	Version            uint32 `json:"version"`
-	Snapshot           bool   `json:"snapshot,omitempty"`
-	Subscription       bool   `json:"subscription,omitempty"`
-	SubscriptionDB     string `json:"subscription_db,omitempty"`
-	PublisherDB        string `json:"publisher_db,omitempty"`
-	PublisherAccountID uint32 `json:"publisher_account_id,omitempty"`
-	PublisherTable     string `json:"publisher_table,omitempty"`
+	AccountID             uint32 `json:"account_id"`
+	AccountIDSet          bool   `json:"account_id_set,omitempty"`
+	TableID               uint64 `json:"table_id"`
+	LogicalID             uint64 `json:"logical_id,omitempty"`
+	Version               uint32 `json:"version"`
+	Snapshot              bool   `json:"snapshot,omitempty"`
+	Subscription          bool   `json:"subscription,omitempty"`
+	SubscriptionDB        string `json:"subscription_db,omitempty"`
+	SubscriptionTable     string `json:"subscription_table,omitempty"`
+	PublisherDB           string `json:"publisher_db,omitempty"`
+	PublisherTable        string `json:"publisher_table,omitempty"`
+	PublisherAccountID    uint32 `json:"publisher_account_id,omitempty"`
+	PublisherAccountIDSet bool   `json:"publisher_account_id_set,omitempty"`
+	DatabaseName          string `json:"database_name,omitempty"`
+	TableName             string `json:"table_name,omitempty"`
 }
 
 type QueryBuilder struct {

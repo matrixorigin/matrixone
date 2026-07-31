@@ -134,6 +134,7 @@ func TestBuildViewMetadataRefreshQueryEscapesLegacyTableName(t *testing.T) {
 		7,
 		24,
 		42,
+		"db",
 		`x\')) OR 1=1 -- x`,
 		128,
 		128,
@@ -152,6 +153,8 @@ func TestBuildViewMetadataRefreshQueryEscapesLegacyTableName(t *testing.T) {
 	require.Contains(t, query, `x\\'')) OR 1=1 -- x`)
 	require.Contains(t, query, `\"logical_id\":24,`)
 	require.Contains(t, query, `\"table_id\":42,`)
+	require.Contains(t, query, `"database_name":"db","table_name"`)
+	require.Contains(t, query, `"subscription_table":"x`)
 	require.Contains(t, query, "pub_account_id = 7")
 	require.NotContains(t, query, "account_id = 7 and viewdef not like")
 }
@@ -178,44 +181,100 @@ func TestCurrentViewSubscriptionResolver(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, meta)
 
-	snapshotDependency := plan.ViewDependency{
-		AccountID:          7,
-		AccountIDSet:       true,
-		PublisherAccountID: 11,
-		Snapshot:           true,
-		Subscription:       true,
-		SubscriptionDB:     "Historical_SubDB",
-		PublisherDB:        "historical_pubdb",
-		PublisherTable:     "source_t",
+	resolver.accountID = 7
+	resolver.snapshotByIdentity = make(map[viewMetadataSnapshotSubscriptionKey]*plan.SubscriptionMeta)
+	resolver.loadedSnapshots = make(map[viewMetadataSnapshotSubscriptionKey]struct{})
+	var loaded []viewMetadataSnapshotSubscriptionKey
+	resolver.loadSnapshot = func(accountID uint32, database string, snapshot *plan.Snapshot) (*plan.SubscriptionMeta, error) {
+		loaded = append(loaded, viewMetadataSnapshotSubscriptionKey{
+			accountID: accountID, database: strings.ToLower(database),
+			physicalTime: snapshot.GetTS().GetPhysicalTime(),
+			logicalTime:  snapshot.GetTS().GetLogicalTime(),
+		})
+		return &plan.SubscriptionMeta{AccountId: int32(snapshot.GetTS().GetPhysicalTime())}, nil
 	}
-	secondSnapshotDependency := snapshotDependency
-	secondSnapshotDependency.PublisherTable = "other_t"
-	resolver = resolver.withViewDependencies([]plan.ViewDependency{
-		snapshotDependency,
-		secondSnapshotDependency,
-		snapshotDependency,
-	})
 	meta, err = resolver.GetSubscriptionMeta("historical_subdb", &plan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: 1},
 	})
 	require.NoError(t, err)
-	require.Equal(t, int32(11), meta.GetAccountId())
-	require.Equal(t, "historical_pubdb", meta.GetDbName())
-	require.Equal(t, "source_t,other_t", meta.GetTables())
+	require.Equal(t, int32(1), meta.GetAccountId())
+	_, err = resolver.GetSubscriptionMeta("historical_subdb", &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 1},
+	})
+	require.NoError(t, err)
+	meta, err = resolver.GetSubscriptionMeta("historical_subdb", &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 2},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(2), meta.GetAccountId())
+	require.Len(t, loaded, 2)
+}
+
+func TestLoadSnapshotViewSubscriptionKeepsSystemPublisher(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mp := mpool.MustNewZero()
+	query := "select sub_name, pub_account_id, pub_account_name, pub_name, " +
+		"pub_database, pub_tables from mo_catalog.mo_subs " +
+		"where sub_account_id = 7 and lower(sub_name) = lower('subdb') and status = 0"
+	result := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(), types.T_int32.ToType(), types.T_varchar.ToType(),
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(result, 0, []string{"subdb"}))
+	require.NoError(t, executor.AppendFixedRows(result, 1, []int32{0}))
+	require.NoError(t, executor.AppendStringRows(result, 2, []string{"sys"}))
+	require.NoError(t, executor.AppendStringRows(result, 3, []string{"pub"}))
+	require.NoError(t, executor.AppendStringRows(result, 4, []string{"pubdb"}))
+	require.NoError(t, executor.AppendStringRows(result, 5, []string{"source_t"}))
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		query: result.GetResult(),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	meta, err := loadSnapshotViewSubscription(c, 7, "subdb", &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 1},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(0), meta.GetAccountId())
+	require.Equal(t, "pubdb", meta.GetDbName())
+	require.Equal(t, "source_t", meta.GetTables())
+	require.Equal(t, []string{query}, spyExec.executedSQLs)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestViewDependenciesContainLiveSource(t *testing.T) {
-	source := viewMetadataRefreshSource{accountID: 7, logicalID: 24, previousID: 41, currentID: 42}
+	source := viewMetadataRefreshSource{
+		accountID: 7, logicalID: 24, previousID: 41, currentID: 42,
+		database: "db", tableName: "t",
+	}
 	snapshotOnly := []plan.ViewDependency{{
 		AccountID: 7, AccountIDSet: true, LogicalID: 24, TableID: 41, Snapshot: true,
 	}}
-	require.False(t, viewDependenciesContainLiveSource(snapshotOnly, source))
+	require.False(t, viewDependenciesContainLiveSource(snapshotOnly, source, nil))
 	require.True(t, viewDependenciesContainLiveSource(append(snapshotOnly, plan.ViewDependency{
 		AccountID: 7, AccountIDSet: true, LogicalID: 24, TableID: 42,
-	}), source))
+	}), source, nil))
 	require.False(t, viewDependenciesContainLiveSource([]plan.ViewDependency{{
 		AccountID: 8, AccountIDSet: true, LogicalID: 24, TableID: 42,
-	}}, source))
+	}}, source, nil))
+	require.True(t, viewDependenciesContainLiveSource([]plan.ViewDependency{{
+		AccountID: 7, AccountIDSet: true, LogicalID: 100, TableID: 101,
+		DatabaseName: "DB", TableName: "T",
+	}}, source, nil))
+	require.True(t, viewDependenciesContainLiveSource([]plan.ViewDependency{{
+		AccountID: 0, AccountIDSet: true, LogicalID: 100, TableID: 101,
+		Subscription: true, PublisherAccountIDSet: true, PublisherAccountID: 0,
+		PublisherDB: "DB", PublisherTable: "T",
+	}}, viewMetadataRefreshSource{accountID: 0, database: "db", tableName: "t"}, nil))
+	require.True(t, viewDependenciesContainLiveSource([]plan.ViewDependency{{
+		AccountID: 9, AccountIDSet: true, LogicalID: 100, TableID: 101,
+		Subscription: true, SubscriptionDB: "subdb", SubscriptionTable: "t",
+		PublisherAccountIDSet: true, PublisherAccountID: 9,
+		PublisherDB: "old_db", PublisherTable: "t",
+	}}, viewMetadataRefreshSource{accountID: 11, database: "new_db", tableName: "t"},
+		map[string]*plan.SubscriptionMeta{
+			"subdb": {AccountId: 11, DbName: "new_db", Tables: "t"},
+		}))
 }
 
 func TestCheckViewMetadataCandidateLimit(t *testing.T) {
@@ -312,6 +371,7 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 		7,
 		sourceLogicalID,
 		sourceTableID,
+		"db",
 		"source_t",
 		0,
 		128,
@@ -358,7 +418,7 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
 	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
 	require.NoError(t, refreshViewMetadataAfterAlter(
-		c, 7, sourceLogicalID, sourceTableID, sourceTableID, "source_t",
+		c, 7, sourceLogicalID, sourceTableID, sourceTableID, "db", "source_t",
 	))
 	require.Equal(t, []string{
 		query,

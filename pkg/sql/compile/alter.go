@@ -1875,6 +1875,7 @@ func (s *Scope) doAlterTable(c *Compile) error {
 			sourceLogicalID,
 			qry.GetTableDef().GetTblId(),
 			relation.GetTableID(c.proc.Ctx),
+			qry.GetDatabase(),
 			qry.GetTableDef().GetName(),
 		)
 	} else {
@@ -1902,6 +1903,7 @@ func (s *Scope) doAlterTable(c *Compile) error {
 		sourceLogicalID,
 		qry.GetTableDef().GetTblId(),
 		qry.GetTableDef().GetTblId(),
+		qry.GetDatabase(),
 		qry.GetTableDef().GetName(),
 	)
 }
@@ -1944,58 +1946,46 @@ type viewMetadataSubscriptionResolver interface {
 }
 
 type currentViewSubscriptionResolver struct {
+	accountID          uint32
+	loadSnapshot       func(uint32, string, *plan2.Snapshot) (*plan2.SubscriptionMeta, error)
 	byDatabase         map[string]*plan2.SubscriptionMeta
-	snapshotByDatabase map[string]*plan2.SubscriptionMeta
+	snapshotByIdentity map[viewMetadataSnapshotSubscriptionKey]*plan2.SubscriptionMeta
+	loadedSnapshots    map[viewMetadataSnapshotSubscriptionKey]struct{}
+}
+
+type viewMetadataSnapshotSubscriptionKey struct {
+	accountID    uint32
+	database     string
+	physicalTime int64
+	logicalTime  uint32
 }
 
 func (r currentViewSubscriptionResolver) GetSubscriptionMeta(
 	database string,
 	snapshot *plan2.Snapshot,
 ) (*plan2.SubscriptionMeta, error) {
-	if plan2.IsSnapshotValid(snapshot) {
-		return r.snapshotByDatabase[strings.ToLower(database)], nil
+	if !plan2.IsSnapshotValid(snapshot) {
+		return r.byDatabase[strings.ToLower(database)], nil
 	}
-	return r.byDatabase[strings.ToLower(database)], nil
-}
-
-func (r currentViewSubscriptionResolver) withViewDependencies(
-	dependencies []plan2.ViewDependency,
-) currentViewSubscriptionResolver {
-	r.snapshotByDatabase = make(map[string]*plan2.SubscriptionMeta)
-	for _, dependency := range dependencies {
-		if !dependency.Snapshot || !dependency.Subscription || dependency.SubscriptionDB == "" {
-			continue
-		}
-		publisherAccountID := dependency.PublisherAccountID
-		if publisherAccountID == 0 {
-			if current := r.byDatabase[strings.ToLower(dependency.SubscriptionDB)]; current != nil {
-				publisherAccountID = uint32(current.GetAccountId())
-			}
-		}
-		if publisherAccountID == 0 {
-			continue
-		}
-		database := strings.ToLower(dependency.SubscriptionDB)
-		meta := r.snapshotByDatabase[database]
-		if meta == nil {
-			meta = &plan2.SubscriptionMeta{
-				AccountId: int32(publisherAccountID),
-				DbName:    dependency.PublisherDB,
-				SubName:   dependency.SubscriptionDB,
-			}
-			r.snapshotByDatabase[database] = meta
-		}
-		if dependency.PublisherTable != "" {
-			if meta.Tables == "" {
-				meta.Tables = dependency.PublisherTable
-			} else if !pubsub.InSubMetaTables(meta, dependency.PublisherTable) {
-				meta.Tables += pubsub.Sep + dependency.PublisherTable
-			}
-		} else if current := r.byDatabase[database]; current != nil {
-			meta.Tables = current.GetTables()
-		}
+	key := viewMetadataSnapshotSubscriptionKey{
+		accountID:    r.accountID,
+		database:     strings.ToLower(database),
+		physicalTime: snapshot.GetTS().GetPhysicalTime(),
+		logicalTime:  snapshot.GetTS().GetLogicalTime(),
 	}
-	return r
+	if _, ok := r.loadedSnapshots[key]; ok {
+		return r.snapshotByIdentity[key], nil
+	}
+	if r.loadSnapshot == nil {
+		return nil, nil
+	}
+	meta, err := r.loadSnapshot(r.accountID, database, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	r.snapshotByIdentity[key] = meta
+	r.loadedSnapshots[key] = struct{}{}
+	return meta, nil
 }
 
 func (e *viewMetadataRefreshPlanError) Error() string {
@@ -2023,6 +2013,7 @@ type viewMetadataRefreshSource struct {
 	logicalID  uint64
 	previousID uint64
 	currentID  uint64
+	database   string
 	tableName  string
 }
 
@@ -2040,6 +2031,7 @@ func refreshViewMetadataAfterAlter(
 	sourceLogicalID uint64,
 	previousSourceTableID uint64,
 	currentSourceTableID uint64,
+	sourceDatabase string,
 	sourceTable string,
 ) error {
 	var dependentViews int
@@ -2050,6 +2042,7 @@ func refreshViewMetadataAfterAlter(
 		logicalID:  sourceLogicalID,
 		previousID: previousSourceTableID,
 		currentID:  currentSourceTableID,
+		database:   sourceDatabase,
 		tableName:  sourceTable,
 	}}
 	processedViews := make(map[[2]uint64]struct{})
@@ -2063,6 +2056,7 @@ func refreshViewMetadataAfterAlter(
 				source.accountID,
 				source.logicalID,
 				source.previousID,
+				source.database,
 				source.tableName,
 				afterViewID,
 			)
@@ -2082,10 +2076,35 @@ func refreshViewMetadataAfterAlter(
 				if err := checkViewMetadataCandidateLimit(c.proc.Ctx, examinedCandidates); err != nil {
 					return err
 				}
-				if len(view.viewData.Dependencies) > 0 &&
-					!viewDependenciesContainLiveSource(view.viewData.Dependencies, source) {
-					processedViews[viewKey] = struct{}{}
-					continue
+				var subscriptions currentViewSubscriptionResolver
+				subscriptionsLoaded := false
+				if len(view.viewData.Dependencies) > 0 {
+					confirmed := viewDependenciesContainLiveSource(
+						view.viewData.Dependencies,
+						source,
+						nil,
+					)
+					if !confirmed && viewDependenciesHaveLiveSubscription(view.viewData.Dependencies) {
+						var ok bool
+						subscriptions, ok = subscriptionsByAccount[view.accountID]
+						if !ok {
+							subscriptions, err = loadCurrentViewSubscriptions(c, view.accountID)
+							if err != nil {
+								return err
+							}
+							subscriptionsByAccount[view.accountID] = subscriptions
+						}
+						subscriptionsLoaded = true
+						confirmed = viewDependenciesContainLiveSource(
+							view.viewData.Dependencies,
+							source,
+							subscriptions.byDatabase,
+						)
+					}
+					if !confirmed {
+						processedViews[viewKey] = struct{}{}
+						continue
+					}
 				}
 				if view.skip {
 					processedViews[viewKey] = struct{}{}
@@ -2100,8 +2119,14 @@ func refreshViewMetadataAfterAlter(
 					processedViews[viewKey] = struct{}{}
 					continue
 				}
-				subscriptions, ok := subscriptionsByAccount[view.accountID]
-				if !ok {
+				if !subscriptionsLoaded {
+					var ok bool
+					subscriptions, ok = subscriptionsByAccount[view.accountID]
+					if ok {
+						subscriptionsLoaded = true
+					}
+				}
+				if !subscriptionsLoaded {
 					subscriptions, err = loadCurrentViewSubscriptions(c, view.accountID)
 					if err != nil {
 						return err
@@ -2136,7 +2161,7 @@ func refreshViewMetadataAfterAlter(
 					c,
 					sql,
 					view.viewData,
-					subscriptions.withViewDependencies(view.viewData.Dependencies),
+					subscriptions,
 				)
 				c.proc.Ctx = oldCtx
 				if err != nil {
@@ -2161,6 +2186,7 @@ func refreshViewMetadataAfterAlter(
 						logicalID:  logicalID,
 						previousID: view.id,
 						currentID:  view.id,
+						database:   view.database,
 						tableName:  view.name,
 					})
 				}
@@ -2184,14 +2210,48 @@ func checkViewMetadataCandidateLimit(ctx context.Context, count int) error {
 func viewDependenciesContainLiveSource(
 	dependencies []plan2.ViewDependency,
 	source viewMetadataRefreshSource,
+	currentSubscriptions map[string]*plan2.SubscriptionMeta,
 ) bool {
 	for _, dependency := range dependencies {
-		if dependency.Snapshot || !dependency.AccountIDSet || dependency.AccountID != source.accountID {
+		if dependency.Snapshot || !dependency.AccountIDSet {
 			continue
 		}
-		if dependency.LogicalID == source.logicalID ||
-			dependency.TableID == source.previousID ||
-			dependency.TableID == source.currentID {
+		if dependency.AccountID == source.accountID &&
+			(dependency.LogicalID == source.logicalID ||
+				dependency.TableID == source.previousID ||
+				dependency.TableID == source.currentID) {
+			return true
+		}
+		if dependency.Subscription {
+			if dependency.PublisherAccountIDSet &&
+				dependency.PublisherAccountID == source.accountID &&
+				strings.EqualFold(dependency.PublisherDB, source.database) &&
+				strings.EqualFold(dependency.PublisherTable, source.tableName) {
+				return true
+			}
+			current := currentSubscriptions[strings.ToLower(dependency.SubscriptionDB)]
+			if current != nil && uint32(current.GetAccountId()) == source.accountID &&
+				strings.EqualFold(current.GetDbName(), source.database) &&
+				strings.EqualFold(dependency.SubscriptionTable, source.tableName) &&
+				pubsub.InSubMetaTables(current, source.tableName) {
+				return true
+			}
+			continue
+		}
+		if dependency.AccountID != source.accountID {
+			continue
+		}
+		if strings.EqualFold(dependency.DatabaseName, source.database) &&
+			strings.EqualFold(dependency.TableName, source.tableName) {
+			return true
+		}
+	}
+	return false
+}
+
+func viewDependenciesHaveLiveSubscription(dependencies []plan2.ViewDependency) bool {
+	for _, dependency := range dependencies {
+		if dependency.Subscription && !dependency.Snapshot && dependency.SubscriptionDB != "" {
 			return true
 		}
 	}
@@ -2203,7 +2263,13 @@ func loadCurrentViewSubscriptions(
 	accountID uint32,
 ) (currentViewSubscriptionResolver, error) {
 	resolver := currentViewSubscriptionResolver{
-		byDatabase: make(map[string]*plan2.SubscriptionMeta),
+		accountID:          accountID,
+		byDatabase:         make(map[string]*plan2.SubscriptionMeta),
+		snapshotByIdentity: make(map[viewMetadataSnapshotSubscriptionKey]*plan2.SubscriptionMeta),
+		loadedSnapshots:    make(map[viewMetadataSnapshotSubscriptionKey]struct{}),
+	}
+	resolver.loadSnapshot = func(accountID uint32, database string, snapshot *plan2.Snapshot) (*plan2.SubscriptionMeta, error) {
+		return loadSnapshotViewSubscription(c, accountID, database, snapshot)
 	}
 	sql := fmt.Sprintf(
 		"select sub_name, pub_account_id, pub_account_name, pub_name, "+
@@ -2246,6 +2312,76 @@ func loadCurrentViewSubscriptions(
 	return resolver, nil
 }
 
+func loadSnapshotViewSubscription(
+	c *Compile,
+	accountID uint32,
+	database string,
+	snapshot *plan2.Snapshot,
+) (*plan2.SubscriptionMeta, error) {
+	if c == nil || !plan2.IsSnapshotValid(snapshot) {
+		return nil, nil
+	}
+	txnOp := c.proc.GetTxnOperator()
+	if snapshot.GetTS().Less(txnOp.Txn().SnapshotTS) {
+		txnOp = txnOp.CloneSnapshotOp(*snapshot.GetTS())
+	}
+	sql := fmt.Sprintf(
+		"select sub_name, pub_account_id, pub_account_name, pub_name, "+
+			"pub_database, pub_tables from %s.%s "+
+			"where sub_account_id = %d and lower(sub_name) = lower(%s) and status = %d",
+		catalog.MO_CATALOG,
+		catalog.MO_SUBS,
+		accountID,
+		sqlquote.String(database),
+		pubsub.SubStatusNormal,
+	)
+	result, err := c.runSqlWithResultAndOptionsOnTxn(
+		sql,
+		int32(catalog.System_Account),
+		executor.StatementOption{}.WithDisableLog(),
+		txnOp,
+	)
+	if err != nil {
+		result.Close()
+		return nil, err
+	}
+	defer result.Close()
+
+	var subscriptions []*plan2.SubscriptionMeta
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		subNames := executor.GetStringRows(cols[0])
+		pubAccountIDs := executor.GetFixedRows[int32](cols[1])
+		pubAccountNames := executor.GetStringRows(cols[2])
+		pubNames := executor.GetStringRows(cols[3])
+		pubDatabases := executor.GetStringRows(cols[4])
+		pubTables := executor.GetStringRows(cols[5])
+		for i := 0; i < rows; i++ {
+			subscriptions = append(subscriptions, &plan2.SubscriptionMeta{
+				Name:        pubNames[i],
+				AccountId:   pubAccountIDs[i],
+				DbName:      pubDatabases[i],
+				AccountName: pubAccountNames[i],
+				SubName:     subNames[i],
+				Tables:      pubTables[i],
+			})
+		}
+		return true
+	})
+	if len(subscriptions) > 1 {
+		return nil, moerr.NewInternalErrorf(
+			c.proc.Ctx,
+			"find %d subscription records for account %d database %s at snapshot, expect at most 1",
+			len(subscriptions),
+			accountID,
+			database,
+		)
+	}
+	if len(subscriptions) == 0 {
+		return nil, nil
+	}
+	return subscriptions[0], nil
+}
+
 func checkViewMetadataRefreshLimit(ctx context.Context, count int) error {
 	if count <= maxViewsPerMetadataRefresh {
 		return nil
@@ -2262,6 +2398,7 @@ func loadViewMetadataRefreshPage(
 	sourceAccountID uint32,
 	sourceLogicalID uint64,
 	sourceTableID uint64,
+	sourceDatabase string,
 	sourceTable string,
 	afterViewID uint64,
 ) ([]viewMetadataRefresh, error) {
@@ -2270,6 +2407,7 @@ func loadViewMetadataRefreshPage(
 		sourceAccountID,
 		sourceLogicalID,
 		sourceTableID,
+		sourceDatabase,
 		sourceTable,
 		afterViewID,
 		pageSize,
@@ -2333,11 +2471,26 @@ func buildViewMetadataRefreshQuery(
 	sourceAccountID uint32,
 	sourceLogicalID uint64,
 	sourceTableID uint64,
+	sourceDatabase string,
 	sourceTable string,
 	afterViewID uint64,
 	pageSize int,
 ) string {
 	legacyCandidate := sqlquote.String(sourceTable)
+	databaseNameJSON, _ := json.Marshal(sourceDatabase)
+	tableNameJSON, _ := json.Marshal(sourceTable)
+	qualifiedNameCandidate := sqlquote.String(
+		"%\"database_name\":" + string(databaseNameJSON) +
+			",\"table_name\":" + string(tableNameJSON) + "%",
+	)
+	publisherQualifiedNameCandidate := sqlquote.String(
+		"%\"publisher_db\":" + string(databaseNameJSON) +
+			",\"publisher_table\":" + string(tableNameJSON) + "%",
+	)
+	subscriptionNamePrefix := sqlquote.String("\"subscription_db\":")
+	subscriptionTableSuffix := sqlquote.String(
+		",\"subscription_table\":" + string(tableNameJSON),
+	)
 	return fmt.Sprintf(
 		"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
 			"where relkind = '%s' "+
@@ -2351,7 +2504,17 @@ func buildViewMetadataRefreshQuery(
 			"or viewdef like '%%\\\"table_id\\\":%d,%%')) "+
 			"or (account_id = %d "+
 			"and viewdef like '%%\\\"table_id\\\":%d,%%' "+
-			"and viewdef not like '%%\\\"logical_id\\\":%%')) order by rel_id limit %d",
+			"and viewdef not like '%%\\\"logical_id\\\":%%') "+
+			"or ((((account_id = %d) or account_id in "+
+			"(select sub_account_id from %s.%s where pub_account_id = %d and status = %d)) "+
+			"and viewdef like '%%\\\"dependencies\\\":%%' and "+
+			"(viewdef like %s or viewdef like %s)) "+
+			"or exists (select 1 from %s.%s where sub_account_id = account_id "+
+			"and pub_account_id = %d and lower(pub_database) = lower(%s) and status = %d "+
+			"and instr(viewdef, concat(%s, char(34), "+
+			"replace(replace(sub_name, char(92), concat(char(92), char(92))), "+
+			"char(34), concat(char(92), char(34))), char(34), %s)) > 0))) "+
+			"order by rel_id limit %d",
 		catalog.MO_CATALOG,
 		catalog.SystemViewRel,
 		catalog.MO_CATALOG,
@@ -2368,6 +2531,20 @@ func buildViewMetadataRefreshQuery(
 		sourceTableID,
 		sourceAccountID,
 		sourceTableID,
+		sourceAccountID,
+		catalog.MO_CATALOG,
+		catalog.MO_SUBS,
+		sourceAccountID,
+		pubsub.SubStatusNormal,
+		qualifiedNameCandidate,
+		publisherQualifiedNameCandidate,
+		catalog.MO_CATALOG,
+		catalog.MO_SUBS,
+		sourceAccountID,
+		sqlquote.String(sourceDatabase),
+		pubsub.SubStatusNormal,
+		subscriptionNamePrefix,
+		subscriptionTableSuffix,
 		pageSize,
 	)
 }

@@ -344,6 +344,8 @@ func makeViewDependency(
 		TableID:      uint64(objRef.GetObj()),
 		LogicalID:    tableDef.GetLogicalId(),
 		Version:      tableDef.GetVersion(),
+		DatabaseName: objRef.GetSchemaName(),
+		TableName:    objRef.GetObjName(),
 	}
 	if dependency.LogicalID == 0 {
 		dependency.LogicalID = dependency.TableID
@@ -352,8 +354,10 @@ func makeViewDependency(
 		publisherAccountID := uint32(objRef.GetPubInfo().GetTenantId())
 		dependency.AccountID = publisherAccountID
 		dependency.PublisherAccountID = publisherAccountID
+		dependency.PublisherAccountIDSet = true
 		dependency.Subscription = true
 		dependency.SubscriptionDB = objRef.GetSubscriptionName()
+		dependency.SubscriptionTable = objRef.GetObjName()
 		dependency.PublisherDB = objRef.GetSchemaName()
 		dependency.PublisherTable = objRef.GetObjName()
 	} else if util.TableIsClusterTable(tableDef.GetTableType()) ||
@@ -371,16 +375,20 @@ func makeViewDependency(
 
 func viewDependencyIdentity(dependency ViewDependency) string {
 	return fmt.Sprintf(
-		"%d/%d/%d/%t/%t/%d/%s/%s/%s",
+		"%d/%d/%d/%t/%t/%d/%t/%s/%s/%s/%s/%s/%s",
 		dependency.AccountID,
 		dependency.LogicalID,
 		dependency.TableID,
 		dependency.Snapshot,
 		dependency.Subscription,
 		dependency.PublisherAccountID,
+		dependency.PublisherAccountIDSet,
 		dependency.SubscriptionDB,
+		dependency.SubscriptionTable,
 		dependency.PublisherDB,
 		dependency.PublisherTable,
+		dependency.DatabaseName,
+		dependency.TableName,
 	)
 }
 
@@ -409,13 +417,28 @@ func compareViewDependencies(left, right ViewDependency) int {
 	if order := cmp.Compare(left.PublisherAccountID, right.PublisherAccountID); order != 0 {
 		return order
 	}
+	if left.PublisherAccountIDSet != right.PublisherAccountIDSet {
+		if left.PublisherAccountIDSet {
+			return 1
+		}
+		return -1
+	}
 	if order := cmp.Compare(left.SubscriptionDB, right.SubscriptionDB); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.SubscriptionTable, right.SubscriptionTable); order != 0 {
 		return order
 	}
 	if order := cmp.Compare(left.PublisherDB, right.PublisherDB); order != 0 {
 		return order
 	}
-	return cmp.Compare(left.PublisherTable, right.PublisherTable)
+	if order := cmp.Compare(left.PublisherTable, right.PublisherTable); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.DatabaseName, right.DatabaseName); order != 0 {
+		return order
+	}
+	return cmp.Compare(left.TableName, right.TableName)
 }
 
 func isSharedSystemTable(database, table string) bool {

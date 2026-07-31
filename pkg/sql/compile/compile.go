@@ -6955,6 +6955,20 @@ func (c *Compile) runSqlWithResultAndOptions(
 	accountId int32,
 	options executor.StatementOption,
 ) (executor.Result, error) {
+	return c.runSqlWithResultAndOptionsOnTxn(
+		sql,
+		accountId,
+		options,
+		c.proc.GetTxnOperator(),
+	)
+}
+
+func (c *Compile) runSqlWithResultAndOptionsOnTxn(
+	sql string,
+	accountId int32,
+	options executor.StatementOption,
+	txnOp client.TxnOperator,
+) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -6983,7 +6997,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 		WithDisableIncrStatement().
-		WithTxn(c.proc.GetTxnOperator()).
+		WithTxn(txnOp).
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower).

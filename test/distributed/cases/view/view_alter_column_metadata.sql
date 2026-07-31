@@ -22,6 +22,14 @@ create table invalid_source (a int);
 create view invalid_view as select a from invalid_source;
 drop table invalid_source;
 
+create table recreated_source (a int);
+create view recreated_view as select a from recreated_source;
+drop table recreated_source;
+create table recreated_source (a int);
+alter table recreated_source modify column a bigint;
+-- @ignore:5,6
+desc recreated_view;
+
 create table ambiguity_left (a int);
 create table ambiguity_right (b int);
 create view ambiguity_view as
@@ -182,12 +190,43 @@ alter table pubdb.source_t modify column a decimal(12, 3);
 -- @session:id=2&user=view_alter_sub:admin&password=111
 -- @ignore:5,6
 desc localdb.v;
+
+-- @session:id=1&user=view_alter_pub:admin&password=111
+create database pubdb2;
+create table pubdb2.source_t (a int);
+create publication pub2 database pubdb2 table source_t account view_alter_sub;
+-- @session
+
+-- @session:id=2&user=view_alter_sub:admin&password=111
+drop database subdb;
+create database subdb from view_alter_pub publication pub2;
+create snapshot view_alter_sub_sn2 for account view_alter_sub;
+create view localdb.dual_snapshot_sub_v as
+select live.a, old_source.a as old_a, new_source.a as new_a
+from localdb.local_source_t live,
+subdb.source_t {snapshot = 'view_alter_sub_sn'} old_source,
+subdb.source_t {snapshot = 'view_alter_sub_sn2'} new_source;
+alter table localdb.local_source_t modify column a decimal(10, 2);
+-- @ignore:5,6
+desc localdb.dual_snapshot_sub_v;
+-- @session
+
+-- @session:id=1&user=view_alter_pub:admin&password=111
+alter table pubdb2.source_t modify column a bigint;
+-- @session
+
+-- @session:id=2&user=view_alter_sub:admin&password=111
+-- @ignore:5,6
+desc localdb.v;
+drop snapshot view_alter_sub_sn2;
 drop snapshot view_alter_sub_sn;
 drop database localdb;
 drop database subdb;
 -- @session
 
 -- @session:id=1&user=view_alter_pub:admin&password=111
+drop publication pub2;
+drop database pubdb2;
 drop publication pub;
 drop database pubdb;
 -- @session
