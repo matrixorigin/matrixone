@@ -34,6 +34,13 @@ const (
 	ExpressionAllocationSiteScratchArea
 	ExpressionAllocationSiteSelection
 	ExpressionAllocationSiteSelectedRows
+	ExpressionAllocationSiteConstantNulls
+	ExpressionAllocationSiteConstantGrouping
+	ExpressionAllocationSiteResultNulls
+	ExpressionAllocationSiteResultGrouping
+	ExpressionAllocationSiteScratchNulls
+	ExpressionAllocationSiteScratchGrouping
+	ExpressionAllocationSiteParameterConversion
 )
 
 // ExpressionAllocationAccount is the immutable allocation provenance shared
@@ -43,48 +50,64 @@ type ExpressionAllocationAccount struct {
 	account *mpool.AllocationAccount
 	owner   mpool.AllocationOwner
 
-	constant *vector.AllocationAccountSelection
-	result   *vector.AllocationAccountSelection
-	scratch  *vector.AllocationAccountSelection
+	constant  *vector.AllocationAccountSelection
+	result    *vector.AllocationAccountSelection
+	scratch   *vector.AllocationAccountSelection
+	parameter *vector.FunctionParameterAllocation
 }
 
 func NewExpressionAllocationAccount(
 	account *mpool.AllocationAccount,
 	owner mpool.AllocationOwner,
 ) (*ExpressionAllocationAccount, error) {
-	constant, err := vector.NewAllocationAccountSelection(
+	constant, err := vector.NewAllocationAccountSelectionWithBitmaps(
 		account,
 		owner,
 		ExpressionAllocationSiteConstantData,
 		ExpressionAllocationSiteConstantArea,
+		ExpressionAllocationSiteConstantNulls,
+		ExpressionAllocationSiteConstantGrouping,
 	)
 	if err != nil {
 		return nil, err
 	}
-	result, err := vector.NewAllocationAccountSelection(
+	result, err := vector.NewAllocationAccountSelectionWithBitmaps(
 		account,
 		owner,
 		ExpressionAllocationSiteResultData,
 		ExpressionAllocationSiteResultArea,
+		ExpressionAllocationSiteResultNulls,
+		ExpressionAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return nil, err
 	}
-	scratch, err := vector.NewAllocationAccountSelection(
+	scratch, err := vector.NewAllocationAccountSelectionWithBitmaps(
 		account,
 		owner,
 		ExpressionAllocationSiteScratchData,
 		ExpressionAllocationSiteScratchArea,
+		ExpressionAllocationSiteScratchNulls,
+		ExpressionAllocationSiteScratchGrouping,
+	)
+	if err != nil {
+		return nil, err
+	}
+	parameter, err := vector.NewFunctionParameterAllocation(
+		account,
+		owner,
+		ExpressionAllocationSiteParameterConversion,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &ExpressionAllocationAccount{
-		account:  account,
-		owner:    owner,
-		constant: constant,
-		result:   result,
-		scratch:  scratch,
+		account:   account,
+		owner:     owner,
+		constant:  constant,
+		result:    result,
+		scratch:   scratch,
+		parameter: parameter,
 	}, nil
 }
 
@@ -92,7 +115,8 @@ func (a *ExpressionAllocationAccount) validate() error {
 	if a == nil || a.account == nil || a.account.Handle() == 0 ||
 		a.owner < mpool.AllocationOwnerMin ||
 		a.owner > mpool.AllocationOwnerMax ||
-		a.constant == nil || a.result == nil || a.scratch == nil {
+		a.constant == nil || a.result == nil || a.scratch == nil ||
+		a.parameter == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	return nil

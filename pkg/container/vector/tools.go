@@ -208,6 +208,9 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 	}
 
 	tgtLen := v.length + rows
+	if err := v.ensureBitmapCapacity(tgtLen, m); err != nil {
+		return err
+	}
 	tgtDataCap := tgtLen * v.typ.TypeSize()
 	if tgtDataCap > cap(v.data) {
 		ndata, err := v.growData(m, tgtDataCap)

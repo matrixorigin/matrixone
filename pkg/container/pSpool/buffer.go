@@ -88,6 +88,10 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 				)
 			}
 		}
+		// data/area ownership has moved to the cache. Release the remaining
+		// Vector-owned state, including allocation-accounted bitmap backing,
+		// before dropping the Vector pointer.
+		vec.Free(mp)
 
 		bat.ReplaceVector(vec, nil, i)
 	}

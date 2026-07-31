@@ -269,8 +269,7 @@ func compactMaxByStateVector(vec *vector.Vector, mp *mpool.MPool) error {
 	if vec == nil || !vec.GetType().IsVarlen() {
 		return nil
 	}
-	fixedCapacity := vec.Capacity() * vec.GetType().TypeSize()
-	areaCapacity := vec.Allocated() - fixedCapacity
+	areaCapacity := cap(vec.GetArea())
 	if areaCapacity <= maxByVarlenaCompactionSlack {
 		return nil
 	}

@@ -105,20 +105,24 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := vector.NewAllocationAccountSelectionWithBitmaps(
 		account,
 		1,
 		1,
 		2,
+		3,
+		4,
 	)
 	require.NoError(t, err)
 	otherAccount, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	otherSelection, err := vector.NewAllocationAccountSelection(
+	otherSelection, err := vector.NewAllocationAccountSelectionWithBitmaps(
 		otherAccount,
 		1,
 		1,
 		2,
+		3,
+		4,
 	)
 	require.NoError(t, err)
 	newSource := func(
@@ -135,11 +139,13 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 			false,
 			mp,
 		))
+		vec.GetGrouping().Add(0)
 		source.SetRowCount(1)
 		return source
 	}
 	firstSource := newSource("first cached allocation payload", selection)
 	secondSource := newSource("second", selection)
+	secondSource.Vecs[0].ToConst()
 	cache := initCachedBatch(mp, 1)
 
 	first, useCache, cacheID, err := cache.GetCopiedBatch(firstSource)
@@ -151,20 +157,23 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 		selection,
 		first.Vecs[0].AllocationAccountSelection(),
 	)
+	require.True(t, first.Vecs[0].GetGrouping().Contains(0))
 	cache.CacheBatch(useCache, cacheID, first)
 	beforeReuse := account.Snapshot().Used
 
 	second, useCache, cacheID, err := cache.GetCopiedBatch(secondSource)
 	require.NoError(t, err)
 	require.True(t, useCache)
-	require.Equal(t, beforeReuse, account.Snapshot().Used)
+	require.Greater(t, account.Snapshot().Used, beforeReuse)
 	require.Same(t, selection, second.AllocationAccountSelection())
 	require.Same(
 		t,
 		selection,
 		second.Vecs[0].AllocationAccountSelection(),
 	)
+	require.True(t, second.Vecs[0].GetGrouping().Contains(0))
 	cache.CacheBatch(useCache, cacheID, second)
+	require.Equal(t, beforeReuse, account.Snapshot().Used)
 
 	otherSource := newSource("other allocation account", otherSelection)
 	firstAccountBeforeOther := account.Snapshot().Used

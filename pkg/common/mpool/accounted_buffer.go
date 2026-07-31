@@ -114,6 +114,19 @@ func (b *AccountedBuffer) EnsureCapacity(required int) error {
 	return nil
 }
 
+// Resize changes the logical length after admitting any required retained
+// capacity. Existing bytes are preserved.
+func (b *AccountedBuffer) Resize(length int) error {
+	if b == nil || length < 0 {
+		return ErrAllocationAccountInvalid
+	}
+	if err := b.EnsureCapacity(length); err != nil {
+		return err
+	}
+	b.data = b.data[:length]
+	return nil
+}
+
 func (b *AccountedBuffer) Write(value []byte) (int, error) {
 	if b == nil {
 		return 0, ErrAllocationAccountInvalid

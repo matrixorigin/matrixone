@@ -35,6 +35,10 @@ const (
 	SpillAllocationSiteRowIDs
 	SpillAllocationSiteMarshalBuffer
 	SpillAllocationSiteCoalesceBuffer
+	SpillAllocationSiteDecodedNulls
+	SpillAllocationSiteDecodedGrouping
+	SpillAllocationSiteSelectedNulls
+	SpillAllocationSiteSelectedGrouping
 )
 
 // SpillAllocationAccount is the dormant allocation provenance for one spill
@@ -52,20 +56,24 @@ func NewSpillAllocationAccount(
 	account *mpool.AllocationAccount,
 	owner mpool.AllocationOwner,
 ) (*SpillAllocationAccount, error) {
-	decoded, err := vector.NewAllocationAccountSelection(
+	decoded, err := vector.NewAllocationAccountSelectionWithBitmaps(
 		account,
 		owner,
 		SpillAllocationSiteDecodedData,
 		SpillAllocationSiteDecodedArea,
+		SpillAllocationSiteDecodedNulls,
+		SpillAllocationSiteDecodedGrouping,
 	)
 	if err != nil {
 		return nil, err
 	}
-	selected, err := vector.NewAllocationAccountSelection(
+	selected, err := vector.NewAllocationAccountSelectionWithBitmaps(
 		account,
 		owner,
 		SpillAllocationSiteSelectedData,
 		SpillAllocationSiteSelectedArea,
+		SpillAllocationSiteSelectedNulls,
+		SpillAllocationSiteSelectedGrouping,
 	)
 	if err != nil {
 		return nil, err

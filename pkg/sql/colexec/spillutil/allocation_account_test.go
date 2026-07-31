@@ -182,7 +182,7 @@ func TestSpillAllocationAccountScatterScratchLifecycle(t *testing.T) {
 		mpool.MustNew("spill-allocation-scatter"),
 	)
 	defer proc.Free()
-	state := newTestSpillAllocationAccount(t, 1<<20, 8)
+	state := newTestSpillAllocationAccount(t, 1<<20, 64)
 	engine, err := NewSpillEngineWithAllocation(
 		SpillEngineConfig{},
 		state.allocation,

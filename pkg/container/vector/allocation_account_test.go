@@ -26,15 +26,78 @@ import (
 )
 
 const (
-	testVectorAllocationOwner    mpool.AllocationOwner = 1
-	testVectorDataAllocationSite mpool.AllocationSite  = 1
-	testVectorAreaAllocationSite mpool.AllocationSite  = 2
+	testVectorAllocationOwner     mpool.AllocationOwner = 1
+	testVectorDataAllocationSite  mpool.AllocationSite  = 1
+	testVectorAreaAllocationSite  mpool.AllocationSite  = 2
+	testVectorNullAllocationSite  mpool.AllocationSite  = 3
+	testVectorGroupAllocationSite mpool.AllocationSite  = 4
+	testVectorParamAllocationSite mpool.AllocationSite  = 5
 )
 
 type testVectorAllocationAccount struct {
 	registry  *mpool.AllocationAccountRegistry
 	account   *mpool.AllocationAccount
 	selection *AllocationAccountSelection
+	parameter *FunctionParameterAllocation
+}
+
+func newTestVectorParameterAllocationAccount(
+	t testing.TB,
+	limit uint64,
+	allocationSlots uint64,
+) testVectorAllocationAccount {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, allocationSlots)
+	require.NoError(t, err)
+	account, err := registry.Open(limit)
+	require.NoError(t, err)
+	selection, err := NewAllocationAccountSelectionWithBitmaps(
+		account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite,
+		testVectorAreaAllocationSite,
+		testVectorNullAllocationSite,
+		testVectorGroupAllocationSite,
+	)
+	require.NoError(t, err)
+	parameter, err := NewFunctionParameterAllocation(
+		account,
+		testVectorAllocationOwner,
+		testVectorParamAllocationSite,
+	)
+	require.NoError(t, err)
+	return testVectorAllocationAccount{
+		registry:  registry,
+		account:   account,
+		selection: selection,
+		parameter: parameter,
+	}
+}
+
+func newTestVectorBitmapAllocationAccount(
+	t testing.TB,
+	limit uint64,
+	allocationSlots uint64,
+) testVectorAllocationAccount {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, allocationSlots)
+	require.NoError(t, err)
+	account, err := registry.Open(limit)
+	require.NoError(t, err)
+	selection, err := NewAllocationAccountSelectionWithBitmaps(
+		account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite,
+		testVectorAreaAllocationSite,
+		testVectorNullAllocationSite,
+		testVectorGroupAllocationSite,
+	)
+	require.NoError(t, err)
+	return testVectorAllocationAccount{
+		registry:  registry,
+		account:   account,
+		selection: selection,
+	}
 }
 
 func newTestVectorAllocationAccount(
@@ -204,6 +267,164 @@ func TestVectorAllocationAccountLeavesGoBitmapsUnaccounted(t *testing.T) {
 	require.Equal(t, before, state.account.Snapshot().Used)
 
 	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestVectorAllocationAccountBitmapResetReuseAndFree(t *testing.T) {
+	state := newTestVectorBitmapAllocationAccount(t, 8<<20, 16)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+
+	require.NoError(t, vec.PreExtend(32*1024, mp))
+	vec.SetLength(32 * 1024)
+	vec.SetAllNulls(32 * 1024)
+	vec.GetGrouping().AddRange(0, 32*1024)
+	require.True(t, vec.nsp.GetBitmap().HasExternalStorage())
+	require.True(t, vec.gsp.GetBitmap().HasExternalStorage())
+	require.Equal(t, 32*1024, vec.GetNulls().Count())
+	require.Equal(t, 32*1024, vec.GetGrouping().Count())
+
+	initial := state.account.Snapshot()
+	expected := cap(vec.data) +
+		8*vec.nsp.GetBitmap().ExternalStorageCapacity() +
+		8*vec.gsp.GetBitmap().ExternalStorageCapacity()
+	require.Equal(t, uint64(expected), initial.Used)
+	require.Equal(t, uint64(3), state.registry.LiveAllocationMetadata())
+
+	vec.ResetWithSameType()
+	require.True(t, vec.GetNulls().IsEmpty())
+	require.True(t, vec.GetGrouping().IsEmpty())
+	require.Equal(t, initial.Used, state.account.Snapshot().Used)
+	require.NoError(t, vec.PreExtend(32*1024, mp))
+	vec.SetNull(32*1024 - 1)
+	require.True(t, vec.IsNull(32*1024-1))
+	require.Equal(t, initial.Used, state.account.Snapshot().Used)
+
+	vec.ResetWithSameType()
+	require.NoError(t, vec.PreExtend(64*1024, mp))
+	grown := state.account.Snapshot()
+	require.Greater(t, grown.Used, initial.Used)
+	require.Greater(t, grown.Peak, grown.Used)
+	require.Equal(t, uint64(3), state.registry.LiveAllocationMetadata())
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestVectorAllocationAccountBitmapGrowthFailurePreservesOwner(t *testing.T) {
+	state := newTestVectorBitmapAllocationAccount(t, 1000, 8)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	require.NoError(t, vec.PreExtend(64, mp))
+	vec.SetLength(64)
+	vec.SetNull(7)
+	vec.GetGrouping().Add(9)
+
+	used := state.account.Snapshot().Used
+	dataCapacity := cap(vec.data)
+	nullCapacity := vec.nsp.GetBitmap().ExternalStorageCapacity()
+	groupCapacity := vec.gsp.GetBitmap().ExternalStorageCapacity()
+	// The null replacement fits by itself, but admitting the grouping
+	// replacement would exceed the account. Neither replacement is published.
+	err := vec.PreExtend(2*1024, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Equal(t, used, state.account.Snapshot().Used)
+	require.Equal(t, dataCapacity, cap(vec.data))
+	require.Equal(t, nullCapacity, vec.nsp.GetBitmap().ExternalStorageCapacity())
+	require.Equal(t, groupCapacity, vec.gsp.GetBitmap().ExternalStorageCapacity())
+	require.True(t, vec.IsNull(7))
+	require.True(t, vec.GetGrouping().Contains(9))
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestVectorAllocationAccountBitmapRejectsUnadmittedRawGrowth(t *testing.T) {
+	state := newTestVectorBitmapAllocationAccount(t, 1<<20, 8)
+	mp := mpool.MustNewZero()
+	legacy := NewOffHeapVecWithType(types.T_int64.ToType())
+	legacy.GetNulls().Add(0)
+	require.ErrorIs(
+		t,
+		legacy.SetAllocationAccount(state.selection),
+		mpool.ErrAllocationAccountInvalid,
+	)
+	legacy.Free(mp)
+
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	require.Panics(t, func() {
+		vec.GetNulls().Add(0)
+	})
+	require.Zero(t, state.account.Snapshot().Used)
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestVectorAllocationAccountBitmapCopyDecode(t *testing.T) {
+	state := newTestVectorBitmapAllocationAccount(t, 1<<20, 32)
+	mp := mpool.MustNewZero()
+	source := NewOffHeapVecWithType(types.T_int64.ToType())
+	for i := 0; i < 128; i++ {
+		require.NoError(t, AppendFixed(source, int64(i), i%7 == 0, mp))
+	}
+	source.GetGrouping().Add(2, 9, 64)
+	encoded, err := source.MarshalBinary()
+	require.NoError(t, err)
+
+	copied := newAccountedTestVector(
+		t,
+		types.T_int64.ToType(),
+		state.selection,
+	)
+	require.NoError(t, copied.UnmarshalBinaryWithCopy(encoded, mp))
+	require.Equal(t, source.Length(), copied.Length())
+	require.True(t, copied.GetNulls().IsSame(source.GetNulls()))
+	require.True(t, copied.nsp.GetBitmap().HasExternalStorage())
+	require.True(t, copied.gsp.GetBitmap().HasExternalStorage())
+	copied.Free(mp)
+
+	fromReader := newAccountedTestVector(
+		t,
+		types.T_int64.ToType(),
+		state.selection,
+	)
+	require.NoError(t, fromReader.UnmarshalWithReader(bytes.NewReader(encoded), mp))
+	require.Equal(t, source.Length(), fromReader.Length())
+	require.True(t, fromReader.GetNulls().IsSame(source.GetNulls()))
+	require.True(t, fromReader.nsp.GetBitmap().HasExternalStorage())
+	fromReader.Free(mp)
+
+	duplicate, err := source.DupOffHeapWithAllocation(mp, state.selection)
+	require.NoError(t, err)
+	require.True(t, duplicate.GetNulls().IsSame(source.GetNulls()))
+	require.True(t, duplicate.GetGrouping().IsSame(source.GetGrouping()))
+	duplicate.Free(mp)
+
+	window, err := source.CloneWindowWithAllocation(
+		1,
+		65,
+		mp,
+		state.selection,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 64, window.Length())
+	require.True(t, window.IsNull(6))
+	require.True(t, window.IsNull(13))
+	window.Free(mp)
+
+	rollup := NewOffHeapVecWithType(types.T_int64.ToType())
+	rollup.SetLength(128)
+	rollup.GetGrouping().AddRange(0, 128)
+	rollup.ToConst()
+	rollupCopy, err := rollup.DupOffHeapWithAllocation(mp, state.selection)
+	require.NoError(t, err)
+	require.True(t, rollupCopy.IsConstNull())
+	require.True(t, rollupCopy.GetGrouping().IsSame(rollup.GetGrouping()))
+	rollupCopy.Free(mp)
+	rollup.Free(mp)
+
+	source.Free(mp)
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
@@ -413,6 +634,7 @@ func BenchmarkVectorAllocationAccount(b *testing.B) {
 	const rows = 8192
 	mp := mpool.MustNewZero()
 	state := newTestVectorAllocationAccount(b, 1<<40, 64)
+	bitmapState := newTestVectorBitmapAllocationAccount(b, 1<<40, 64)
 
 	b.Run("legacy-fixed-preextend-free", func(b *testing.B) {
 		b.ReportAllocs()
@@ -429,6 +651,19 @@ func BenchmarkVectorAllocationAccount(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			vec := NewOffHeapVecWithType(types.T_int64.ToType())
 			if err := vec.SetAllocationAccount(state.selection); err != nil {
+				b.Fatal(err)
+			}
+			if err := vec.PreExtend(rows, mp); err != nil {
+				b.Fatal(err)
+			}
+			vec.Free(mp)
+		}
+	})
+	b.Run("accounted-bitmap-fixed-preextend-free", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			vec := NewOffHeapVecWithType(types.T_int64.ToType())
+			if err := vec.SetAllocationAccount(bitmapState.selection); err != nil {
 				b.Fatal(err)
 			}
 			if err := vec.PreExtend(rows, mp); err != nil {
@@ -473,8 +708,26 @@ func BenchmarkVectorAllocationAccount(b *testing.B) {
 		b.StopTimer()
 		vec.Free(mp)
 	})
+	b.Run("accounted-bitmap-fixed-reset-reuse", func(b *testing.B) {
+		vec := newAccountedTestVector(
+			b,
+			types.T_int64.ToType(),
+			bitmapState.selection,
+		)
+		if err := vec.PreExtend(rows, mp); err != nil {
+			b.Fatal(err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			vec.ResetWithSameType()
+		}
+		b.StopTimer()
+		vec.Free(mp)
+	})
 
 	finalizeTestVectorAllocationAccount(b, state)
+	finalizeTestVectorAllocationAccount(b, bitmapState)
 }
 
 func TestVectorAllocationAccountErrorsAreTyped(t *testing.T) {

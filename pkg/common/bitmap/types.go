@@ -22,8 +22,11 @@ type Iterator interface {
 
 type Bitmap struct {
 	count int64 //in version 1, we use emptyFlag with type int32 to indicate whether it is empty
-	len   int64
-	data  []uint64
+	// taggedLen stores the logical length directly for legacy backing and its
+	// bitwise complement for caller-owned backing. This keeps Bitmap's legacy
+	// footprint unchanged while making backing ownership explicit.
+	taggedLen int64
+	data      []uint64
 }
 
 type BitmapIterator struct {

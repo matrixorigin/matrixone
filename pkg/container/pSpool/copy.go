@@ -149,6 +149,21 @@ func (cb *cachedBatch) GetCopiedBatch(
 
 			dst.Vecs[i].SetSorted(vec.GetSorted())
 		}
+		if vec.HasGrouping() {
+			groupingRows := vec.GetGrouping().GetBitmap().Len()
+			if groupingRows < 0 || groupingRows > int64(math.MaxInt) {
+				cb.CacheBatch(true, cacheID, dst)
+				return nil, false, 0, mpool.ErrAllocationAccountInvalid
+			}
+			if err = dst.Vecs[i].PreExtendBitmap(
+				int(groupingRows),
+				cb.mp,
+			); err != nil {
+				cb.CacheBatch(true, cacheID, dst)
+				return nil, false, 0, err
+			}
+			dst.Vecs[i].SetGrouping(vec.GetGrouping())
+		}
 		dst.Vecs[i].SetIsBin(vec.GetIsBin())
 
 		// range src and found the same vector.

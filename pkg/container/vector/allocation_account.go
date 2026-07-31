@@ -17,23 +17,64 @@ package vector
 import (
 	"fmt"
 	"io"
+	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // AllocationAccountSelection is an immutable choice for the first owned
-// off-heap data and area allocations of a Vector. The physical MPool
-// allocation metadata remains the sole owner of the resulting charge.
+// off-heap allocations of a Vector. The physical MPool allocation metadata
+// remains the sole owner of the resulting charge.
 //
 // A selection may be shared by all vectors owned by one Batch. Views do not
 // copy it: they share storage and therefore must not create a second charge.
 type AllocationAccountSelection struct {
-	account  *mpool.AllocationAccount
-	owner    mpool.AllocationOwner
-	dataSite mpool.AllocationSite
-	areaSite mpool.AllocationSite
+	account        *mpool.AllocationAccount
+	owner          mpool.AllocationOwner
+	dataSite       mpool.AllocationSite
+	areaSite       mpool.AllocationSite
+	nullsSite      mpool.AllocationSite
+	groupingSite   mpool.AllocationSite
+	accountBitmaps bool
+}
+
+// FunctionParameterAllocation is the immutable allocation provenance for
+// row-scaled function-parameter conversion scratch.
+type FunctionParameterAllocation struct {
+	account *mpool.AllocationAccount
+	owner   mpool.AllocationOwner
+	site    mpool.AllocationSite
+}
+
+func NewFunctionParameterAllocation(
+	account *mpool.AllocationAccount,
+	owner mpool.AllocationOwner,
+	site mpool.AllocationSite,
+) (*FunctionParameterAllocation, error) {
+	allocation := &FunctionParameterAllocation{
+		account: account,
+		owner:   owner,
+		site:    site,
+	}
+	if err := allocation.validate(); err != nil {
+		return nil, err
+	}
+	return allocation, nil
+}
+
+func (a *FunctionParameterAllocation) validate() error {
+	if a == nil ||
+		a.account == nil ||
+		a.account.Handle() == 0 ||
+		a.owner < mpool.AllocationOwnerMin ||
+		a.owner > mpool.AllocationOwnerMax ||
+		a.site < mpool.AllocationSiteMin {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return nil
 }
 
 func NewAllocationAccountSelection(
@@ -54,8 +95,33 @@ func NewAllocationAccountSelection(
 	return selection, nil
 }
 
+// NewAllocationAccountSelectionWithBitmaps additionally selects physical
+// allocation sites for the Vector null and grouping bitmap backing.
+func NewAllocationAccountSelectionWithBitmaps(
+	account *mpool.AllocationAccount,
+	owner mpool.AllocationOwner,
+	dataSite mpool.AllocationSite,
+	areaSite mpool.AllocationSite,
+	nullsSite mpool.AllocationSite,
+	groupingSite mpool.AllocationSite,
+) (*AllocationAccountSelection, error) {
+	selection := &AllocationAccountSelection{
+		account:        account,
+		owner:          owner,
+		dataSite:       dataSite,
+		areaSite:       areaSite,
+		nullsSite:      nullsSite,
+		groupingSite:   groupingSite,
+		accountBitmaps: true,
+	}
+	if err := selection.validate(); err != nil {
+		return nil, err
+	}
+	return selection, nil
+}
+
 // NewOffHeapVecWithTypeAndAllocation constructs an empty owning Vector whose
-// future data and area allocations use selection.
+// future allocations use selection.
 func NewOffHeapVecWithTypeAndAllocation(
 	typ types.Type,
 	selection *AllocationAccountSelection,
@@ -108,7 +174,7 @@ func NewConstFixedWithAllocation[T any](
 }
 
 // NewConstBytesWithAllocation constructs an off-heap constant varlen Vector
-// and charges data and area independently through selection.
+// and charges its backing independently through selection.
 func NewConstBytesWithAllocation(
 	typ types.Type,
 	value []byte,
@@ -131,7 +197,7 @@ func NewConstBytesWithAllocation(
 }
 
 // NewConstArrayWithAllocation constructs an off-heap constant array Vector
-// and charges data and area independently through selection.
+// and charges its backing independently through selection.
 func NewConstArrayWithAllocation[T types.ArrayElement](
 	typ types.Type,
 	value []T,
@@ -158,7 +224,10 @@ func (s *AllocationAccountSelection) validate() error {
 		s.owner < mpool.AllocationOwnerMin ||
 		s.owner > mpool.AllocationOwnerMax ||
 		s.dataSite < mpool.AllocationSiteMin ||
-		s.areaSite < mpool.AllocationSiteMin {
+		s.areaSite < mpool.AllocationSiteMin ||
+		(s.accountBitmaps &&
+			(s.nullsSite < mpool.AllocationSiteMin ||
+				s.groupingSite < mpool.AllocationSiteMin)) {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	return nil
@@ -205,20 +274,123 @@ func (v *Vector) CanSetAllocationAccount(
 }
 
 func (v *Vector) hasBackingStorage() bool {
-	return cap(v.data) != 0 || cap(v.area) != 0
+	return cap(v.data) != 0 ||
+		cap(v.area) != 0 ||
+		v.nsp.GetBitmap().Size() != 0 ||
+		v.gsp.GetBitmap().Size() != 0 ||
+		v.nsp.GetBitmap().ExternalStorageCapacity() != 0 ||
+		v.gsp.GetBitmap().ExternalStorageCapacity() != 0
 }
 
-// SetAllocationAccount selects the account used by future owned data and area
-// allocations. It is intentionally explicit and is legal only before the
-// first backing allocation. Reset retains the selection; Free clears it.
+// SetAllocationAccount selects the account used by future owned allocations.
+// It is intentionally explicit and is legal only before the first backing
+// allocation. Reset retains the selection; Free clears it.
 func (v *Vector) SetAllocationAccount(
 	selection *AllocationAccountSelection,
 ) error {
 	if err := v.CanSetAllocationAccount(selection); err != nil {
 		return err
 	}
+	if v.allocationAccount == selection {
+		return nil
+	}
+	if v.allocationAccount != nil &&
+		v.allocationAccount.accountBitmaps &&
+		(selection == nil || !selection.accountBitmaps) {
+		v.nsp.GetBitmap().ReleaseExternalStorage()
+		v.gsp.GetBitmap().ReleaseExternalStorage()
+	}
 	v.allocationAccount = selection
+	if selection != nil && selection.accountBitmaps {
+		v.nsp.GetBitmap().InstallExternalStorage(nil)
+		v.gsp.GetBitmap().InstallExternalStorage(nil)
+	}
 	return nil
+}
+
+func (v *Vector) ensureBitmapCapacity(rows int, mp *mpool.MPool) error {
+	if v.allocationAccount == nil || !v.allocationAccount.accountBitmaps {
+		return nil
+	}
+	if rows < 0 || rows > math.MaxInt-64 || mp == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	// Nulls.AddRange currently expands through end+1 even though end is
+	// exclusive. Keep one admitted sentinel bit so raw bitmap mutation cannot
+	// escape to a Go allocation at the vector's logical row boundary.
+	if rows > 0 {
+		rows++
+	}
+	nulls, err := v.allocateBitmapGrowth(
+		v.nsp.GetBitmap(),
+		rows,
+		mp,
+		v.allocationAccount.nullsSite,
+	)
+	if err != nil {
+		return err
+	}
+	grouping, err := v.allocateBitmapGrowth(
+		v.gsp.GetBitmap(),
+		rows,
+		mp,
+		v.allocationAccount.groupingSite,
+	)
+	if err != nil {
+		mpool.FreeSlice(mp, nulls)
+		return err
+	}
+	if cap(nulls) > 0 {
+		previous := v.nsp.GetBitmap().InstallExternalStorage(nulls)
+		mpool.FreeSlice(mp, previous)
+	}
+	if cap(grouping) > 0 {
+		previous := v.gsp.GetBitmap().InstallExternalStorage(grouping)
+		mpool.FreeSlice(mp, previous)
+	}
+	return nil
+}
+
+func (v *Vector) allocateBitmapGrowth(
+	value *bitmap.Bitmap,
+	rows int,
+	mp *mpool.MPool,
+	site mpool.AllocationSite,
+) ([]uint64, error) {
+	requiredWords := (rows + 63) / 64
+	if requiredWords <= value.ExternalStorageCapacity() {
+		return nil, nil
+	}
+	requiredBytes := int64(requiredWords) * 8
+	oldBytes := int64(value.ExternalStorageCapacity()) * 8
+	newBytes, ok := mpool.GrowCapacity(oldBytes, requiredBytes)
+	if !ok || newBytes > int64(math.MaxInt) || newBytes%8 != 0 {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	next, err := mpool.MakeSliceAccounted[uint64](
+		int(newBytes/8),
+		mp,
+		v.allocationAccount.account,
+		v.allocationAccount.owner,
+		site,
+	)
+	if err != nil {
+		return nil, err
+	}
+	clear(next)
+	return next, nil
+}
+
+func (v *Vector) freeBitmapStorage(mp *mpool.MPool) {
+	for _, value := range []*bitmap.Bitmap{
+		v.nsp.GetBitmap(),
+		v.gsp.GetBitmap(),
+	} {
+		storage := value.ReleaseExternalStorage()
+		if cap(storage) > 0 {
+			mpool.FreeSlice(mp, storage)
+		}
+	}
 }
 
 func (v *Vector) allocData(mp *mpool.MPool, size int) ([]byte, error) {

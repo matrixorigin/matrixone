@@ -36,6 +36,13 @@ func TestAccountedBufferLifecycle(t *testing.T) {
 	firstCapacity := buffer.Cap()
 	require.GreaterOrEqual(t, firstCapacity, 32)
 	require.Equal(t, uint64(firstCapacity), account.Snapshot().Used)
+	require.NoError(t, buffer.Resize(16))
+	require.Equal(t, 16, buffer.Len())
+	require.Equal(t, firstCapacity, buffer.Cap())
+	copy(buffer.Bytes(), "retained")
+	require.NoError(t, buffer.Resize(8))
+	require.Equal(t, "retained", string(buffer.Bytes()))
+	buffer.Reset()
 	_, err = buffer.WriteString("accounted")
 	require.NoError(t, err)
 	require.Equal(t, "accounted", string(buffer.Bytes()))
@@ -98,10 +105,25 @@ func TestAccountedBufferConfiguration(t *testing.T) {
 	require.Nil(t, buffer.Bytes())
 	require.Zero(t, buffer.Len())
 	require.Zero(t, buffer.Cap())
+	require.ErrorIs(t, buffer.Resize(0), ErrAllocationAccountInvalid)
 	_, err = buffer.Write([]byte("x"))
 	require.ErrorIs(t, err, ErrAllocationAccountInvalid)
 	buffer.Reset()
 	buffer.Free()
+
+	registry, account := newTestAllocationAccount(t, 1<<20, 1)
+	mp := MustNew("accounted-buffer-invalid-resize")
+	defer DeleteMPool(mp)
+	buffer, err = NewAccountedBuffer(
+		mp,
+		account,
+		testAllocationOwner,
+		testAllocationSite,
+	)
+	require.NoError(t, err)
+	require.ErrorIs(t, buffer.Resize(-1), ErrAllocationAccountInvalid)
+	buffer.Free()
+	finalizeTestAllocationAccount(t, registry, account)
 }
 
 func usedSizeToInt(t testing.TB, value uint64) int {

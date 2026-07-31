@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 )
@@ -173,8 +174,8 @@ func TestBitmap_Compatibility(t *testing.T) {
 	np.AddMany(rows)
 
 	npV1 := &Bitmap{
-		len:  np.len,
-		data: np.data,
+		taggedLen: np.taggedLen,
+		data:      np.data,
 	}
 	data := npV1.MarshalV1()
 
@@ -231,4 +232,71 @@ func TestBitmap_And2(t *testing.T) {
 	require.Equal(t, 100, np2.Count())
 	np.And(np2)
 	require.Equal(t, 100, np.Count())
+}
+
+func TestBitmapExternalStorageLifecycle(t *testing.T) {
+	require.Equal(
+		t,
+		2*unsafe.Sizeof(int64(0))+unsafe.Sizeof([]uint64(nil)),
+		unsafe.Sizeof(Bitmap{}),
+	)
+	storage := []uint64{^uint64(0), ^uint64(0)}
+	var value Bitmap
+	require.Nil(t, value.InstallExternalStorage(storage))
+	require.True(t, value.HasExternalStorage())
+	require.Equal(t, 2, value.ExternalStorageCapacity())
+
+	value.InitWithSize(65)
+	require.Equal(t, []uint64{0, 0}, storage)
+	value.Add(64)
+	require.True(t, value.Contains(64))
+
+	value.Reset()
+	require.True(t, value.HasExternalStorage())
+	require.Equal(t, 2, value.ExternalStorageCapacity())
+	require.Equal(t, []uint64{0, 0}, storage)
+	value.TryExpandWithSize(128)
+	value.Add(127)
+	require.True(t, value.Contains(127))
+	require.Panics(t, func() {
+		value.TryExpandWithSize(129)
+	})
+
+	released := value.ReleaseExternalStorage()
+	require.Equal(t, storage, released)
+	require.False(t, value.HasExternalStorage())
+	value.TryExpandWithSize(129)
+	value.Add(128)
+	require.True(t, value.Contains(128))
+}
+
+func TestBitmapExternalStorageUnmarshal(t *testing.T) {
+	source := newBm(128)
+	source.Add(1)
+	source.Add(127)
+	encoded := source.Marshal()
+
+	storage := make([]uint64, 2)
+	var copied Bitmap
+	copied.InstallExternalStorage(storage)
+	copied.Unmarshal(encoded)
+	require.True(t, copied.IsSame(source))
+	require.True(t, copied.HasExternalStorage())
+
+	var streamed Bitmap
+	streamStorage := make([]uint64, 2)
+	streamed.InstallExternalStorage(streamStorage)
+	payload, err := streamed.PrepareExternalUnmarshal(
+		encoded[:MarshalHeaderSize],
+		len(encoded),
+	)
+	require.NoError(t, err)
+	copy(payload, encoded[MarshalHeaderSize:])
+	require.True(t, streamed.IsSame(source))
+
+	_, err = streamed.PrepareExternalUnmarshal(
+		encoded[:MarshalHeaderSize],
+		len(encoded)-1,
+	)
+	require.Error(t, err)
 }

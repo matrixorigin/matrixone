@@ -1818,8 +1818,14 @@ func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	// Use custom implementation to handle maximum overflow (return NULL)
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Date](result)
-	p1 := vector.OptGetParamFromWrapper[types.Date](rs, 0, ivecs[0])
-	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	p1, err := vector.OptGetParamFromWrapper[types.Date](rs, 0, ivecs[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
 	rsNull := rsVec.GetNulls()
@@ -1863,8 +1869,14 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 	// Use custom implementation to handle maximum overflow (return NULL)
 	result.UseOptFunctionParamFrame(2)
-	p1 := vector.OptGetParamFromWrapper[types.Datetime](rs, 0, ivecs[0])
-	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	p1, err := vector.OptGetParamFromWrapper[types.Datetime](rs, 0, ivecs[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[types.Datetime](rsVec)
 	rsNull := rsVec.GetNulls()
@@ -1985,8 +1997,14 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
 	result.UseOptFunctionParamFrame(2)
-	p1 := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[0])
-	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	p1, err := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[types.Timestamp](rsVec)
 	rsNull := rsVec.GetNulls()
@@ -4446,8 +4464,14 @@ func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Date](result)
-	p1 := vector.OptGetParamFromWrapper[types.Date](rs, 0, ivecs[0])
-	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	p1, err := vector.OptGetParamFromWrapper[types.Date](rs, 0, ivecs[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
 	rsNull := rsVec.GetNulls()
@@ -4595,8 +4619,14 @@ func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 	// Use custom implementation to handle maximum overflow (return NULL)
 	result.UseOptFunctionParamFrame(2)
-	p1 := vector.OptGetParamFromWrapper[types.Datetime](rs, 0, ivecs[0])
-	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	p1, err := vector.OptGetParamFromWrapper[types.Datetime](rs, 0, ivecs[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[types.Datetime](rsVec)
 	rsNull := rsVec.GetNulls()
@@ -4718,8 +4748,14 @@ func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 
 	// Use custom implementation to handle maximum overflow (return NULL)
 	result.UseOptFunctionParamFrame(2)
-	p1 := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[0])
-	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	p1, err := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[types.Timestamp](rsVec)
 	rsNull := rsVec.GetNulls()

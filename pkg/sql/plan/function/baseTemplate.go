@@ -58,8 +58,14 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 		return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 			result.UseOptFunctionParamFrame(2)
 			rs := vector.MustFunctionResult[T2](result)
-			p1 := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
-			p2 := vector.OptGetParamFromWrapper[T1](rs, 1, parameters[1])
+			p1, err := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
+			if err != nil {
+				return err
+			}
+			p2, err := vector.OptGetParamFromWrapper[T1](rs, 1, parameters[1])
+			if err != nil {
+				return err
+			}
 			rsVec := rs.GetResultVector()
 			rss := vector.MustFixedColNoTypeCheck[T2](rsVec)
 
@@ -155,8 +161,14 @@ func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 		return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 			result.UseOptFunctionParamFrame(2)
 			rs := vector.MustFunctionResult[T2](result)
-			p1 := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
-			p2 := vector.OptGetParamFromWrapper[T1](rs, 1, parameters[1])
+			p1, err := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
+			if err != nil {
+				return err
+			}
+			p2, err := vector.OptGetParamFromWrapper[T1](rs, 1, parameters[1])
+			if err != nil {
+				return err
+			}
 			rsVec := rs.GetResultVector()
 			rss := vector.MustFixedColNoTypeCheck[T2](rsVec)
 
@@ -383,8 +395,14 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 	arithFn func(v1, v2 []TIn, rs []TOut, scale1, scale2 int32, rsnull *nulls.Nulls) error, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[TOut](result)
-	p1 := vector.OptGetParamFromWrapper[TIn](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[TIn](rs, 1, parameters[1])
+	p1, err := vector.OptGetParamFromWrapper[TIn](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[TIn](rs, 1, parameters[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[TOut](rsVec)
 	scale1 := p1.GetType().Scale
@@ -441,7 +459,7 @@ func decimalBatchArith[TIn templateDec, TOut templateDecOut](parameters []*vecto
 	} else {
 		v2 = p2.UnSafeGetAllValue()
 	}
-	err := arithFn(v1, v2, rss, scale1, scale2, rsNull)
+	err = arithFn(v1, v2, rss, scale1, scale2, rsNull)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 			return moerr.NewOutOfRange(proc.Ctx, "DECIMAL", err.Error())
@@ -467,8 +485,14 @@ func opBinaryFixedFixedToFixed[
 	resultFn func(v1 T1, v2 T2) Tr, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
-	p1 := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	p1, err := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
@@ -590,8 +614,14 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 	resultFn func(v1 T1, v2 T2) (Tr, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
-	p1 := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	p1, err := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
@@ -740,8 +770,14 @@ func opBinaryFixedFixedToFixedWithNullOnError[
 	resultFn func(v1 T1, v2 T2) (Tr, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
-	p1 := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	p1, err := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
@@ -897,7 +933,10 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	p2, err := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
@@ -1047,7 +1086,10 @@ func opBinaryStrFixedToStrWithErrorCheck[
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	p2, err := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
@@ -1210,7 +1252,10 @@ func opBinaryFixedStrToFixedWithErrorCheck[
 	resultFn func(v1 T1, v2 string) (Tr, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[Tr](result)
-	p1 := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
+	p1, err := vector.OptGetParamFromWrapper[T1](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
 	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, parameters[1])
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
@@ -1359,8 +1404,14 @@ func specialTemplateForModFunction[
 	modFn func(v1, v2 T) T, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T](result)
-	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[T](rs, 1, parameters[1])
+	p1, err := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[T](rs, 1, parameters[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[T](rsVec)
 
@@ -1631,8 +1682,14 @@ func specialTemplateForDivFunction[
 	divFn func(v1, v2 T) (T2, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[T2](result)
-	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[T](rs, 1, parameters[1])
+	p1, err := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[T](rs, 1, parameters[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[T2](rsVec)
 
@@ -2586,7 +2643,10 @@ func opUnaryFixedToFixed[
 	resultFn func(v T) Tr, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[Tr](result)
-	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	p1, err := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
@@ -2997,7 +3057,10 @@ func opUnaryFixedToStr[
 	resultFn func(v T) string, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	p1, err := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 
 	c1 := parameters[0].IsConst()
@@ -3074,7 +3137,10 @@ func opUnaryFixedToStrWithNullOnError[
 	resultFn func(v T) (string, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	p1, err := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
 
 	var constValue []byte
 	constNull := false
@@ -3137,7 +3203,10 @@ func opUnaryFixedToStrWithErrorCheck[
 	resultFn func(v T) (string, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	p1, err := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 
 	c1 := parameters[0].IsConst()
@@ -3564,7 +3633,10 @@ func opUnaryFixedToFixedWithErrorCheck[
 	resultFn func(v T) (Tr, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[Tr](result)
-	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	p1, err := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 
@@ -3604,7 +3676,6 @@ func opUnaryFixedToFixedWithErrorCheck[
 	}
 
 	// basic case.
-	var err error
 	if p1.WithAnyNullValue() || rsAnyNull {
 		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
 		rowCount := uint64(length)
@@ -3638,7 +3709,10 @@ func opUnaryFixedToFixedWithNullOnError[
 	resultFn func(v T) (Tr, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[Tr](result)
-	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	p1, err := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
 

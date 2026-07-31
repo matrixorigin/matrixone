@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"math/bits"
 	"slices"
 	"sort"
@@ -187,7 +188,10 @@ func (v *Vector) Capacity() int {
 // Allocated returns the total allocated memory size of the vector.
 // it can be used to estimate the memory usage of the vector.
 func (v *Vector) Allocated() int {
-	return cap(v.data) + cap(v.area)
+	return cap(v.data) +
+		cap(v.area) +
+		8*v.nsp.GetBitmap().ExternalStorageCapacity() +
+		8*v.gsp.GetBitmap().ExternalStorageCapacity()
 }
 
 func (v *Vector) SetLength(n int) {
@@ -733,6 +737,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	if !v.cantFreeArea {
 		mp.Free(v.area)
 	}
+	v.freeBitmapStorage(mp)
 	v.class = FLAT
 	v.data = nil
 	v.area = nil
@@ -1068,14 +1073,15 @@ func validateVectorNullBitmap(data []byte, validateValues bool) error {
 	if len(data) == 0 {
 		return nil
 	}
-	if len(data) < 24 {
+	if len(data) < bitmap.MarshalHeaderSize {
 		return io.ErrUnexpectedEOF
 	}
 	count := types.DecodeInt64(data[:8])
 	bitmapLen := types.DecodeUint64(data[8:16])
 	bitmapDataLen := types.DecodeUint64(data[16:24])
 	if count < 0 || bitmapLen > uint64(1<<63-1) || uint64(count) > bitmapLen ||
-		bitmapDataLen%8 != 0 || bitmapDataLen != uint64(len(data)-24) {
+		bitmapDataLen%8 != 0 ||
+		bitmapDataLen != uint64(len(data)-bitmap.MarshalHeaderSize) {
 		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap")
 	}
 	if bitmapDataLen != ((bitmapLen+63)/64)*8 {
@@ -1084,7 +1090,7 @@ func validateVectorNullBitmap(data []byte, validateValues bool) error {
 	if !validateValues {
 		return nil
 	}
-	words := types.DecodeSlice[uint64](data[24:])
+	words := types.DecodeSlice[uint64](data[bitmap.MarshalHeaderSize:])
 	actualCount := int64(0)
 	for i, word := range words {
 		if i == len(words)-1 && bitmapLen%64 != 0 && word>>uint(bitmapLen%64) != 0 {
@@ -1145,6 +1151,9 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	// read length
 	v.length = int(types.DecodeUint32(data[:4]))
 	data = data[4:]
+	if err = v.ensureBitmapCapacity(v.length, mp); err != nil {
+		return err
+	}
 
 	// read data
 	dataLen := int(types.DecodeUint32(data[:4]))
@@ -1202,6 +1211,9 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 	if v.length, err = types.ReadInt32AsInt(r); err != nil {
 		return err
 	}
+	if err = v.ensureBitmapCapacity(v.length, mp); err != nil {
+		return err
+	}
 
 	// read data
 	dataLen, dataBuf, err := v.readSizeBytes(r, mp, true)
@@ -1221,17 +1233,8 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 		v.area = areaBuf
 	}
 
-	// read nsp, do not use mpool.  nspBuf is different because
-	// it is not managed by vector.  In the following, it will
-	// be unmarshalled into v.nsp
-	nspLen, nspBuf, err := types.ReadSizeBytes(r)
-	if err != nil {
+	if err = v.readNullsWithReader(r); err != nil {
 		return err
-	}
-	if nspLen > 0 {
-		v.nsp.Read(nspBuf)
-	} else {
-		v.nsp.Reset()
 	}
 
 	v.sorted, err = types.ReadBool(r)
@@ -1240,6 +1243,51 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 	}
 
 	return nil
+}
+
+func (v *Vector) readNullsWithReader(r io.Reader) error {
+	if v.allocationAccount == nil || !v.allocationAccount.accountBitmaps {
+		nspLen, nspBuf, err := types.ReadSizeBytes(r)
+		if err != nil {
+			return err
+		}
+		if nspLen > 0 {
+			return v.nsp.Read(nspBuf)
+		}
+		v.nsp.Reset()
+		return nil
+	}
+
+	size, err := types.ReadInt32(r)
+	if err != nil {
+		return err
+	}
+	if size == 0 {
+		v.nsp.Reset()
+		return nil
+	}
+	if size < bitmap.MarshalHeaderSize {
+		return moerr.NewInvalidInputNoCtx("invalid bitmap wire size")
+	}
+	var header [bitmap.MarshalHeaderSize]byte
+	if _, err = io.ReadFull(r, header[:]); err != nil {
+		return err
+	}
+	_, bitLength, _, err := bitmap.DecodeMarshalHeader(header[:])
+	if err != nil || bitLength > int64(v.length)+1 {
+		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap")
+	}
+	payload, err := v.nsp.GetBitmap().PrepareExternalUnmarshal(
+		header[:],
+		int(size),
+	)
+	if err != nil {
+		return err
+	}
+	if _, err = io.ReadFull(r, payload); err != nil {
+		v.nsp.Reset()
+	}
+	return err
 }
 
 func (v *Vector) ToConst() {
@@ -1254,6 +1302,12 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	}
 
 	return extend(v, rows, mp)
+}
+
+// PreExtendBitmap ensures allocation-accounted null and grouping storage can
+// represent rows without allocating vector data. Legacy vectors are unchanged.
+func (v *Vector) PreExtendBitmap(rows int, mp *mpool.MPool) error {
+	return v.ensureBitmapCapacity(rows, mp)
 }
 
 // PreExtendArea use to expand the mpool and area of vector
@@ -1331,11 +1385,25 @@ func (v *Vector) dup(
 	}
 	w.class = v.class
 	w.typ = v.typ
-	w.length = v.length
 	w.sorted = v.sorted
-	w.GetNulls().InitWith(v.GetNulls())
 
 	if v.IsConstNull() {
+		w.length = v.length
+		if v.HasGrouping() {
+			groupingRows := v.GetGrouping().GetBitmap().Len()
+			if groupingRows < 0 || groupingRows > int64(math.MaxInt) {
+				w.Free(mp)
+				return nil, mpool.ErrAllocationAccountInvalid
+			}
+			if err := w.ensureBitmapCapacity(
+				int(groupingRows),
+				mp,
+			); err != nil {
+				w.Free(mp)
+				return nil, err
+			}
+			w.GetGrouping().InitWith(v.GetGrouping())
+		}
 		return w, nil
 	}
 
@@ -1353,6 +1421,21 @@ func (v *Vector) dup(
 		}
 		dataLen *= v.length
 	}
+	bitmapRows := max(
+		v.GetNulls().GetBitmap().Len(),
+		v.GetGrouping().GetBitmap().Len(),
+	)
+	if bitmapRows < 0 || bitmapRows > int64(math.MaxInt) {
+		w.Free(mp)
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	if err := w.ensureBitmapCapacity(int(bitmapRows), mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
+	w.length = v.length
+	w.GetNulls().InitWith(v.GetNulls())
+	w.GetGrouping().InitWith(v.GetGrouping())
 	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
@@ -4590,6 +4673,9 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 			w.sorted = v.sorted
 			return nil
 		}
+	}
+	if err := w.PreExtendBitmap(end-start, mp); err != nil {
+		return err
 	}
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	length := (end - start) * v.typ.TypeSize()

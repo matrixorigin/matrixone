@@ -772,10 +772,11 @@ func (expr *FunctionExpressionExecutor) init(
 		expr.resultVector = vector.NewFunctionResultWrapper(retType, m)
 		return nil
 	}
-	expr.resultVector, err = vector.NewFunctionResultWrapperWithAllocation(
+	expr.resultVector, err = vector.NewFunctionResultWrapperWithParameterAllocation(
 		retType,
 		m,
 		allocation.result,
+		allocation.parameter,
 	)
 	return err
 }
@@ -1116,10 +1117,11 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			)
 		} else {
 			expr.selectedResult, err =
-				vector.NewFunctionResultWrapperWithAllocation(
+				vector.NewFunctionResultWrapperWithParameterAllocation(
 					expr.resultType,
 					expr.m,
 					expr.allocation.scratch,
+					expr.allocation.parameter,
 				)
 			if err != nil {
 				return nil, err

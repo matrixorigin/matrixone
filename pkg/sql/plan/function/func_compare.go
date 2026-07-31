@@ -104,8 +104,14 @@ func opBinaryFixedFixedToFixedNullSafe[T types.FixedSizeTExceptStrType](
 ) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[bool](result)
-	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
-	p2 := vector.OptGetParamFromWrapper[T](rs, 1, parameters[1])
+	p1, err := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+	if err != nil {
+		return err
+	}
+	p2, err := vector.OptGetParamFromWrapper[T](rs, 1, parameters[1])
+	if err != nil {
+		return err
+	}
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
 
