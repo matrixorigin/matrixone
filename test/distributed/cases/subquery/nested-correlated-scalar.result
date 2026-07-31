@@ -1,0 +1,67 @@
+drop database if exists test_nested_correlated_scalar;
+create database test_nested_correlated_scalar;
+use test_nested_correlated_scalar;
+create table j_dim  (id int);
+create table j_fact (id int, dim_id int, ts int, val double);
+insert into j_dim values (1), (2), (3);
+insert into j_fact values
+(1, 1, 10, 100),
+(2, 1, 20, 200),
+(3, 2, 20, 220),
+(4, 2, 30, 300),
+(5, 99, 0, 900);
+SELECT a.id,
+(SELECT MAX(x.val)
+FROM j_fact x
+WHERE x.ts = (SELECT MAX(y.ts)
+FROM j_fact y
+WHERE y.dim_id = a.id)
+) AS latest
+FROM j_dim a
+ORDER BY a.id;
+id	latest
+1	220
+2	300
+3	null
+SELECT a.id,
+(SELECT MAX(x.val)
+FROM j_fact x
+WHERE x.ts = (SELECT APPROX_COUNT(y.ts)
+FROM j_fact y
+WHERE y.dim_id = a.id)
+) AS latest
+FROM j_dim a
+WHERE a.id = 3;
+(correlated columns in SCALAR subquery deeper than 1 level.*)
+SELECT a.id,
+(SELECT COUNT(COALESCE(
+(SELECT MAX(y.ts)
+FROM j_fact y
+WHERE y.dim_id = a.id),
+0))
+FROM j_fact x) AS actual
+FROM j_dim a
+WHERE a.id = 3;
+(correlated columns in SCALAR subquery deeper than 1 level.*)
+SELECT a.id,
+(SELECT MAX(x.val)
+FROM j_fact x
+WHERE x.ts = COALESCE(
+(SELECT MAX(y.ts)
+FROM j_fact y
+WHERE y.dim_id = a.id),
+0)) AS latest
+FROM j_dim a
+WHERE a.id = 3;
+(correlated columns in SCALAR subquery deeper than 1 level.*)
+SELECT a.id,
+(SELECT MAX(x.val)
+FROM j_fact x
+WHERE x.ts = (
+SELECT COALESCE(MAX(y.ts), 0)
+FROM j_fact y
+WHERE y.dim_id = a.id)) AS latest
+FROM j_dim a
+WHERE a.id = 3;
+(correlated columns in SCALAR subquery deeper than 1 level.*)
+drop database test_nested_correlated_scalar;

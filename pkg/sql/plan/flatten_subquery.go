@@ -53,25 +53,44 @@ var (
 )
 
 func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
+	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, false)
+}
+
+func (builder *QueryBuilder) flattenFilterSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
+	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, true)
+}
+
+func (builder *QueryBuilder) flattenSubqueriesWithContext(
+	nodeID int32,
+	expr *plan.Expr,
+	ctx *BindContext,
+	nullResultRejected bool,
+) (int32, *plan.Expr, error) {
 	var err error
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
+		childNullResultRejected := nullResultRejected && nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func)
 		for i, arg := range exprImpl.F.Args {
-			nodeID, exprImpl.F.Args[i], err = builder.flattenSubqueries(nodeID, arg, ctx)
+			nodeID, exprImpl.F.Args[i], err = builder.flattenSubqueriesWithContext(nodeID, arg, ctx, childNullResultRejected)
 			if err != nil {
 				return 0, nil, err
 			}
 		}
 
 	case *plan.Expr_Sub:
-		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx)
+		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx, nullResultRejected)
 	}
 
 	return nodeID, expr, err
 }
 
-func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext) (int32, *plan.Expr, error) {
+func (builder *QueryBuilder) flattenSubquery(
+	nodeID int32,
+	subquery *plan.SubqueryRef,
+	ctx *BindContext,
+	nullResultRejected bool,
+) (int32, *plan.Expr, error) {
 	if subquery.Child != nil && hasSubquery(subquery.Child) {
 		return 0, nil, moerr.NewNotSupported(builder.GetContext(), "a quantified subquery's left operand can't contain subquery")
 	}
@@ -148,10 +167,18 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
 	if len(filterPreds) > 0 {
-		if !canPullupDeepCorrelatedPredicates(subquery.Typ) {
+		deepScalarAggregate := subquery.Typ == plan.SubqueryRef_SCALAR &&
+			subCtx.hasSingleRow && len(subCtx.groups) == 0 && len(subCtx.aggregates) > 0 &&
+			scalarAggregateResultReturnsNullOnEmpty(subCtx) && nullResultRejected
+		if !deepScalarAggregate && !canPullupDeepCorrelatedPredicates(subquery.Typ) {
 			return 0, nil, moerr.NewNYIf(builder.GetContext(), "correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
 		}
-		if builder.hasInnerColumnInDeepCorrelatedFilters(subID, filterPreds) {
+		// MARK JOIN only exposes its marker, so a predicate that still refers
+		// to the inner relation cannot be moved above it.  A scalar aggregate
+		// is different: pulling the predicate through the aggregate has already
+		// turned its inner columns into grouping keys, and LEFT JOIN preserves
+		// those keys so the enclosing subquery can pull them up again.
+		if !deepScalarAggregate && builder.hasInnerColumnInDeepCorrelatedFilters(subID, filterPreds) {
 			return 0, nil, moerr.NewNYIf(builder.GetContext(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
 		}
 	}
@@ -607,6 +634,88 @@ func (builder *QueryBuilder) findAggrCount(aggrs []*plan.Expr) bool {
 		}
 	}
 	return false
+}
+
+// allAggregatesReturnNullOnEmpty is deliberately conservative. Pulling a deep
+// correlated predicate through an aggregate turns its inner expression into a
+// GROUP BY key. If that key has no input rows, the grouped plan has no row and
+// the LEFT JOIN exposes NULL. Matching the aggregate's SQL result for empty
+// input is necessary but not sufficient: the complete consuming expression
+// must also reject that NULL. Unknown and newly added aggregates remain on the
+// NYI path until their empty-input contract is verified here.
+func allAggregatesReturnNullOnEmpty(aggrs []*plan.Expr) bool {
+	if len(aggrs) == 0 {
+		return false
+	}
+
+	for _, aggr := range aggrs {
+		f := aggr.GetF()
+		if f == nil || f.Func == nil {
+			return false
+		}
+
+		fid, _ := function.DecodeOverloadID(f.Func.Obj & function.DistinctMask)
+		switch fid {
+		case function.MIN, function.MAX, function.SUM, function.AVG, function.ANY_VALUE:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// scalarAggregateResultReturnsNullOnEmpty verifies the missing-group contract
+// through the scalar subquery's own result projection. It is not enough for
+// the underlying aggregates to return NULL: a projection such as
+// COALESCE(MAX(...), 0) observes that NULL, while the grouped rewrite has no
+// row on which to evaluate the projection at all.
+func scalarAggregateResultReturnsNullOnEmpty(ctx *BindContext) bool {
+	return len(ctx.projects) > 0 &&
+		allAggregatesReturnNullOnEmpty(ctx.aggregates) &&
+		nullPropagatesFromAggregate(ctx.projects[0], ctx.aggregateTag)
+}
+
+func nullPropagatesFromAggregate(expr *plan.Expr, aggregateTag int32) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return exprImpl.Col.RelPos == aggregateTag
+
+	case *plan.Expr_F:
+		if !nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func) {
+			return false
+		}
+		for _, arg := range exprImpl.F.Args {
+			if nullPropagatesFromAggregate(arg, aggregateTag) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// nullPropagatesThroughDeepScalarConsumer identifies the deliberately narrow
+// set of scalar functions through which a missing deep scalar result can be
+// proven to remain NULL. Combined with a FILTER root, that means both the SQL
+// expression and the decorrelated plan discard the enclosing input row.
+//
+// Keep this list conservative. In particular, COALESCE/CASE can observe NULL,
+// and logical AND is not NULL-propagating for every input combination.
+func nullPropagatesThroughDeepScalarConsumer(fn *plan.ObjectRef) bool {
+	if fn == nil {
+		return false
+	}
+
+	fid, _ := function.DecodeOverloadID(fn.Obj)
+	switch fid {
+	case function.EQUAL, function.NOT_EQUAL,
+		function.GREAT_THAN, function.GREAT_EQUAL,
+		function.LESS_THAN, function.LESS_EQUAL,
+		function.NOT, function.CAST, function.CAST_STRICT:
+		return true
+	default:
+		return false
+	}
 }
 
 func (builder *QueryBuilder) findNonEqPred(preds []*plan.Expr) bool {

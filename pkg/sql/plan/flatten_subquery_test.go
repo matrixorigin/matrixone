@@ -70,6 +70,121 @@ func TestHasInnerColumnInDeepCorrelatedFilters(t *testing.T) {
 	}))
 }
 
+func TestNestedCorrelatedScalarAggregatePullsUpGroupingKey(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT MAX(n2.N_REGIONKEY)
+		          FROM NATION n2
+		         WHERE n2.N_REGIONKEY = (
+		               SELECT MAX(n3.N_REGIONKEY)
+		                 FROM NATION n3
+		                WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		  FROM NATION n1`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.NotEmpty(t, query.Steps)
+
+	visited := make(map[int32]bool)
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		require.GreaterOrEqual(t, nodeID, int32(0))
+		require.Less(t, int(nodeID), len(query.Nodes))
+		if visited[nodeID] {
+			return
+		}
+		visited[nodeID] = true
+
+		node := query.Nodes[nodeID]
+		require.NotNil(t, node)
+		for _, exprs := range [][]*plan.Expr{
+			node.ProjectList,
+			node.OnList,
+			node.FilterList,
+			node.GroupBy,
+			node.AggList,
+		} {
+			for _, expr := range exprs {
+				require.False(t, hasCorrCol(expr), "reachable %s node contains a correlated expression", node.NodeType)
+			}
+		}
+		for _, orderBy := range node.OrderBy {
+			require.False(t, hasCorrCol(orderBy.Expr), "reachable SORT contains a correlated expression")
+		}
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+	}
+
+	for _, rootID := range query.Steps {
+		visit(rootID)
+	}
+}
+
+func TestNestedCorrelatedScalarStillRejectsUnsafeShapes(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT n3.N_REGIONKEY
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT COUNT(*)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT APPROX_COUNT(n3.N_REGIONKEY)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT APPROX_COUNT_DISTINCT(n3.N_REGIONKEY)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT COUNT(COALESCE((
+		                SELECT MAX(n3.N_REGIONKEY)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY), 0))
+		           FROM NATION n2)
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = COALESCE((
+		                SELECT MAX(n3.N_REGIONKEY)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY), 0))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT COALESCE(MAX(n3.N_REGIONKEY), 0)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		   FROM NATION n1`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "correlated columns in SCALAR subquery deeper than 1 level")
+	}
+}
+
 func TestInSubqueryJoinShapePreservesThreeValuedSemantics(t *testing.T) {
 	tests := []struct {
 		name       string
