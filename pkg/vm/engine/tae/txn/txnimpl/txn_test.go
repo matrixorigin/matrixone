@@ -207,7 +207,7 @@ func TestReplaySkipsCheckpointGCedDirtyTables(t *testing.T) {
 	replayTxn := newPreparingEpochTestTxn(t, "replay-checkpoint-gc", startTS, types.BuildTS(11, 0))
 	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID)
 	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID+1)
-	replayTxn.GetMemo().AddTable(dbEntry.ID+1, tableEntry.ID)
+	replayTxn.GetMemo().AddTable(dbEntry.ID+1, tableEntry.ID+2)
 	assert.NoError(t, replayTxn.SetCommitTS(commitTS))
 	store := &replayTxnStore{Cmd: &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}, Observer: noopReplayObserver{}, catalog: c}
 
