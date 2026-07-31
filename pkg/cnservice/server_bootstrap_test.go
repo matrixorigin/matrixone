@@ -23,7 +23,45 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 )
+
+type bootstrapLockClient struct {
+	logservice.CNHAKeeperClient
+	key       string
+	batch     uint64
+	requestID string
+}
+
+func (c *bootstrapLockClient) AllocateIDByKeyWithRequestID(
+	_ context.Context,
+	key string,
+	batch uint64,
+	requestID string,
+) (uint64, error) {
+	c.key = key
+	c.batch = batch
+	c.requestID = requestID
+	return 1, nil
+}
+
+func TestBootstrapLockerUsesCNUUIDAsRequestID(t *testing.T) {
+	client := &bootstrapLockClient{}
+	l := locker{hakeeperClient: client, requestID: "cn-1"}
+	ok, err := l.Get(context.Background(), "bootstrap")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "bootstrap", client.key)
+	require.Equal(t, uint64(1), client.batch)
+	require.Equal(t, "cn-1", client.requestID)
+}
+
+func TestBootstrapLockerRejectsClientWithoutIdempotentAllocation(t *testing.T) {
+	l := locker{hakeeperClient: &testHAKClient{}, requestID: "cn-1"}
+	_, err := l.Get(context.Background(), "bootstrap")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "idempotent bootstrap lock allocation")
+}
 
 func TestHandleBootstrapErr(t *testing.T) {
 	t.Run("context.Canceled returns error", func(t *testing.T) {

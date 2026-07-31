@@ -931,7 +931,7 @@ func hashDiff(
 	buildTargetCost = time.Since(buildTargetStart)
 
 	diffStart := time.Now()
-	if !dagInfo.hasLCA() {
+	if !dagInfo.hasLCA() || tblStuff.lcaHasZeroHistory {
 		if err = hashDiffIfNoLCA(
 			ctx, ses, tblStuff, copt, emit,
 			tarDataHashmap, tarTombstoneHashmap,
@@ -974,7 +974,18 @@ func hashDiffIfHasLCA(
 	tarSP, baseSP := tblStuff.resolvedSnapshots(ses)
 	tarLCAProbe := dagInfo.tarLCASnapshot(baseSP)
 	baseLCAProbe := dagInfo.baseLCASnapshot(tarSP)
-
+	// A parent created earlier in the same explicit transaction has no
+	// catalog state at the pre-commit CloneTS recorded by its child.  Both
+	// tables become visible together, so the parent's creation commit is the
+	// earliest valid (and equivalent) LCA probe for that zero-history edge.
+	if !tblStuff.lcaCTS.IsEmpty() {
+		if tarLCAProbe.LT(&tblStuff.lcaCTS) {
+			tarLCAProbe = tblStuff.lcaCTS
+		}
+		if baseLCAProbe.LT(&tblStuff.lcaCTS) {
+			baseLCAProbe = tblStuff.lcaCTS
+		}
+	}
 	var (
 		wg        sync.WaitGroup
 		atomicErr atomic.Value
