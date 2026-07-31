@@ -90,11 +90,11 @@ Ledger states:
 The independent review rejected owner-class rows as proof of closure. The
 working ledger is allocation-site based:
 
-| Allocation site | Allocator/mode and size | Terminal owner | Initial | Target/blocker |
+| Allocation site | Allocator/mode and size | Terminal owner | Current | Target/blocker |
 | --- | --- | --- | ---: | --- |
-| `mpool.memHdr` and account-ID side map | Go maps; one pointer record plus optional account record per live allocation | pointer removal at physical deallocation | L | H after per-entry and maximum-live-count proof |
-| `Vector.data` | MPool; capacity from `Grow`, on/off-heap follows `v.offHeap` | owning `Vector.Free` | L | A only when off-heap |
-| `Vector.area` | MPool; independent varlen payload capacity | owning `Vector.Free` | L | A only when off-heap |
+| `mpool.memHdr` and account-ID side map | Go maps; one pointer record plus optional account record per live allocation | pointer removal at physical deallocation | H | bounded by the measured finite registry/allocation-slot policy |
+| `Vector.data` | MPool; capacity from `Grow`, on/off-heap follows `v.offHeap` | owning `Vector.Free` | D | A only when off-heap |
+| `Vector.area` | MPool; independent varlen payload capacity | owning `Vector.Free` | D | A only when off-heap |
 | `Vector.nsp/gsp` bitmap data | Go `[]uint64`; `ceil(rows/64)*8`, retained by `Clear` | bitmap `Reset` from `Vector.Free` | L | move off-heap; blocks Vector-dependent activation |
 | `FunctionResult.vec` data/area | off-heap Vector; rows and appended payload | executor `Free` | L | A |
 | `FunctionResult.convenientParam` | Go slice; expression arity, not rows | executor `Free`/reuse | L | H after a proved arity bound |
@@ -114,6 +114,7 @@ working ledger is allocation-site based:
 | spill counts/offsets/positions | Go `[]int32`; O(bucket count), bucket count finite | spill cleanup | L | H after bound is asserted |
 | selected spill bucket vectors | off-heap Vector capacities | selected batch cleanup | L | A |
 | BucketReader decoded vectors | MPool Vector data/area | `BucketReader.Close` | L | A after mode/provenance audit |
+| `pSpool` cached Vector data/area | raw MPool slices retained and reassigned independently of their Vector | `spoolBuffer.clean` or the receiving Vector's `Free` | L | persist generation/selection provenance for a missing data or area allocation; blocks pipeline activation |
 | runtime-filter serialized payload | Go buffer/message payload; O(filter rows) | message release | L | off-heap or PASS degradation; blocks runtime-filter activation |
 | spill disk and FD | disk/FD ledgers | file removal/close | A | A |
 
@@ -123,6 +124,15 @@ PR 3 must generate and review the remaining built-in/function-specific `make`,
 `append`, `bytes.Buffer`, builder, and codec sites before the corresponding
 expression or spill closure can activate. No row named “other” or “unbounded
 scratch” can declare closure.
+
+Batch destination propagation is now `D`: Clone, Dup, selected-column copy,
+Union destinations, windows, reader decode, Clean, and FreeColumns preserve
+the immutable destination selection without creating a synthetic batch-level
+charge. `pSpool` is deliberately still `L`; its raw buffer cache can retain an
+allocation after detaching it from a Vector, so merely copying the Batch
+selection would disagree with the original account still recorded in the
+MPool lease. `Vector.SetTypeAndFixData` also remains a PR 3 closure blocker
+because its legacy API cannot currently return a failed growth admission.
 
 ## 3. Decisions required before production integration
 
@@ -511,6 +521,41 @@ Gate:
 - Reset/reuse/Free, views, partial selection, copy rollback, cross-pool Free;
 - package race tests and vector benchmarks;
 - Vector/Batch ledger rows become `D`.
+
+The current PR 2 candidate is
+`feature/26459-vector-propagation` at commit `dbfee20ecc`. It remains dormant.
+It adds one immutable shared selection pointer to Vector and Batch, accounts
+the first owned off-heap data/area allocation, lets later Grow/Grow2 inherit
+the physical MPool lease, and rejects implicit conversion to on-heap or
+no-copy aliases. Reset retains the selection and charge; Free clears the
+selection after the physical allocations release their leases. Views carry no
+selection, while Batch windows retain only the destination context needed for
+a later deep copy.
+
+The implementation also closes two error edges found during self-review:
+reader growth publishes the replacement buffer before a short read can return,
+so cleanup never retains a freed old pointer, and no-copy Batch decode
+explicitly detaches an empty Vector selection while retaining the Batch
+destination context.
+
+Fresh local evidence on linux/amd64, Go 1.26.4, i7-11700:
+
+| Vector operation, `GOMAXPROCS=8` | Legacy median | Accounted median | Difference |
+| --- | ---: | ---: | ---: |
+| fixed pre-extend/free, 8,192 rows | 1,026 ns | 1,116 ns | +8.8% |
+| varlen data+1 MiB area pre-extend/free | 76,766 ns | 77,650 ns | +1.2% |
+| accounted fixed Reset/reuse | n/a | 1.524 ns | no account operation |
+
+Fixed paths remain 0 B/op and 0 allocs/op. Both varlen paths report the same
+48 B/op and 2 allocs/op, so accounting adds no Go allocation. Randomized
+fixed/varlen append, separate data/area charge, within-capacity reuse, Reset,
+Free, views, partial selection, cross-owner copies, metadata rollback,
+cross-pool Free, sealed accounts, shuffle replacement, copy/reader decode, and
+Batch Clone/Dup/Union/FreeColumns pass. Every new and directly affected test
+passed an exact `-race -count=100` run; both owning packages passed complete
+race runs, build, vet, coverage, and dependent HashBuild/SQL/engine package
+tests. No production owner selects an account and no legacy hard gate is
+removed.
 
 ### PR 3: allocation-site closure and dormant propagation
 
