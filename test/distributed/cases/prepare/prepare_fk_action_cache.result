@@ -48,7 +48,7 @@ prepare stmt_toggle_fk from 'update child_toggle set parent_id = ? where id = 10
 set foreign_key_checks = 1;
 set @missing_parent_id = 2;
 execute stmt_toggle_fk using @missing_parent_id;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 deallocate prepare stmt_toggle_fk;
 select id, parent_id from child_toggle;
 id	parent_id
