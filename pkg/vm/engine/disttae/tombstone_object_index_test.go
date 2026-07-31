@@ -99,6 +99,31 @@ func TestTombstoneObjectIndexMatchesExhaustiveScan(t *testing.T) {
 	}
 }
 
+func TestIndexedObjectStatsIter(t *testing.T) {
+	objects := []objectio.ObjectStats{
+		testTombstoneStats(0, 5),
+		testTombstoneStats(10, 20),
+		testTombstoneStats(30, 40),
+	}
+	idx := newTombstoneObjectIndex(objects)
+	iter := indexedObjectStatsIter{
+		index:      &idx,
+		candidates: []int{2, 0},
+	}
+
+	stats, err := iter.next()
+	require.NoError(t, err)
+	require.Same(t, &idx.objects[2], stats)
+
+	stats, err = iter.next()
+	require.NoError(t, err)
+	require.Same(t, &idx.objects[0], stats)
+
+	stats, err = iter.next()
+	require.NoError(t, err)
+	require.Nil(t, stats)
+}
+
 func BenchmarkTombstoneObjectIndexQA(b *testing.B) {
 	objects := make([]objectio.ObjectStats, 700)
 	for n := range objects {
