@@ -266,8 +266,9 @@ type QueryBuilder struct {
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
 
-	nextBindTag int32
-	nextMsgTag  int32
+	nextBindTag      int32
+	nextMsgTag       int32
+	nextSQLUdfCallID uint64
 
 	isPrepareStatement    bool
 	mysqlCompatible       bool
@@ -416,6 +417,7 @@ type BindContext struct {
 	//cteState records state of binding cte
 	cteState                     CteBindState
 	sliding                      bool
+	explicitSliding              bool
 	isDistinct                   bool
 	normalizeGroupingSetDistinct bool
 	isCorrelated                 bool
@@ -476,6 +478,11 @@ type BindContext struct {
 	// Only populated when the column has been merged through at least one
 	// FULL OUTER JOIN ... USING. Length is always >= 2 when present.
 	outerUsingCols map[string][]string
+	// sqlUdfArgs holds the already-bound arguments of the SQL UDF currently
+	// being expanded in this query block. The UDF body uses body-unique marker
+	// names for its $n parameters; resolving those markers from a child query
+	// block turns the argument's column references into correlated references.
+	sqlUdfArgs map[string]*plan.Expr
 
 	// for join tables
 	bindingTree *BindingTreeNode

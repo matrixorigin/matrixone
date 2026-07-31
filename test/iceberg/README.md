@@ -6,7 +6,7 @@ remaining external Iceberg tests:
 - `ICE-TEST-124`: credential vending
 - `ICE-TEST-130`: public dataset read-only checks
 - `ICE-TEST-131..134`: Tier C sandbox catalog checks
-- `ICE-TEST-135`: NESR demo checks
+- `ICE-TEST-135`: reference-profile demo checks
 - `ICE-TEST-156..159`: real-file golden checks
 
 The templates are intentionally not marked complete in the test plan. A test is
@@ -22,7 +22,7 @@ report artifact.
 | `tier_b_public_dataset_scenarios.example.json` | Public dataset count/filter/projection scenarios. |
 | `nyc_tlc_perf_queries.example.sql` | Optional NYC TLC performance query set for local benchmark runs. |
 | `tier_c_sandbox_scenarios.example.json` | Polaris/Open Catalog/Gravitino REST, remote signing, server planning and capability scenarios. |
-| `tier_d_nesr_scenarios.example.json` | NESR publish/KPI/residency scenarios. |
+| `tier_d_reference_scenarios.example.json` | Reference-profile publish/KPI/residency scenarios. |
 | `golden_real_scenarios.example.json` | Real-file timestamp, bucket/truncate, field-id and row ordinal golden scenarios. |
 
 ## Local structural gates
@@ -166,7 +166,7 @@ pass only when the query fails and the output contains the expected error text.
 Current templates use it for:
 
 - expired credential fail-fast in `ICE-TEST-124`
-- KSA residency denial in `ICE-TEST-135`
+- regional residency denial in `ICE-TEST-135`
 
 ## Artifact requirements
 

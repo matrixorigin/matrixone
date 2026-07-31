@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -113,6 +114,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlPrefetchOnSubscribed, s.handleCtlPrefetchOnSubscribed, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ISCPDrainConsumer, s.handleISCPDrainConsumer, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_IcebergCacheInvalidate, s.handleIcebergCacheInvalidate, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_MongoDBClientRetire, s.handleMongoDBClientRetire, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -775,6 +777,32 @@ func (s *service) handleIcebergCacheInvalidate(
 		return err
 	}
 	resp.IcebergCacheInvalidateResponse.RemovedEntries = int64(removed)
+	return nil
+}
+
+func (s *service) handleMongoDBClientRetire(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	if req == nil {
+		return moerr.NewInternalError(ctx, "invalid MongoDB client retirement request")
+	}
+	value, ok := moruntime.ServiceRuntime(s.serviceID()).GetGlobalVariables(sqlmongodb.RuntimeDependenciesKey)
+	if !ok || value == nil {
+		resp.MongoDBClientRetireResponse.Success = true
+		return nil
+	}
+	dependencies, ok := value.(*sqlmongodb.RuntimeDependencies)
+	if !ok {
+		return moerr.NewInternalError(ctx, "invalid MongoDB runtime dependencies")
+	}
+	payload := req.GetMongoDBClientRetireRequest()
+	if err := (sqlmongodb.ClientRetirement{
+		AccountID: payload.AccountID, ConnectionID: payload.ConnectionID,
+		VersionExclusive: payload.VersionExclusive,
+	}).Apply(dependencies.Pool); err != nil {
+		return err
+	}
+	resp.MongoDBClientRetireResponse.Success = true
 	return nil
 }
 

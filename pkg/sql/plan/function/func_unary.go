@@ -7140,21 +7140,13 @@ func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 func UTCTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 
-	// Get scale from parameter, default to 0 if not provided (matching MySQL behavior)
-	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
-		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
-		// Validate scale range: 0-6 (matching MySQL behavior)
-		if scale < 0 {
-			return moerr.NewInvalidArg(proc.Ctx, "utc_timestamp", fmt.Sprintf("negative precision %d specified", scale))
-		}
-		if scale > 6 {
-			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "utc_timestamp", 6)
-		}
+	scale, err := utcFunctionScale(ivecs, proc, "utc_timestamp")
+	if err != nil {
+		return err
 	}
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))
 
-	resultValue := types.UTC().TruncateToScale(scale)
+	resultValue := types.UnixNanoToTimestamp(proc.GetUnixTime()).ToDatetime(time.UTC).TruncateToScale(scale)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err
