@@ -168,8 +168,8 @@ func TestGetSqlForAddFkEscapesCatalogValues(t *testing.T) {
 
 	require.Equal(t,
 		"insert into `mo_catalog`.`mo_foreign_keys`   values "+
-			"('fk\\\\name\\'one','0','child\\'db\\\\part','0','child\\\\table\\'name','0','child\\\\col\\'name','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent\\\\col\\'name','0','CASCADE','RESTRICT'),"+
-			"('fk\\\\name\\'one','0','child\\'db\\\\part','0','child\\\\table\\'name','0','child_col_two','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent_col_two','0','CASCADE','RESTRICT')",
+			"('fk\\\\name\\'one','1','child\\'db\\\\part','0','child\\\\table\\'name','0','child\\\\col\\'name','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent\\\\col\\'name','0','CASCADE','RESTRICT'),"+
+			"('fk\\\\name\\'one','2','child\\'db\\\\part','0','child\\\\table\\'name','0','child_col_two','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent_col_two','0','CASCADE','RESTRICT')",
 		getSqlForAddFk(`child'db\part`, `child\table'name`, fk),
 	)
 }
