@@ -49,6 +49,8 @@ def    mo_catalog    mo_index_update    BASE TABLE    Tae
 def    mo_catalog    mo_indexes    BASE TABLE    Tae
 def    mo_catalog    mo_iscp_log    BASE TABLE    Tae
 def    mo_catalog    mo_merge_settings    BASE TABLE    Tae
+def    mo_catalog    mo_mongodb_connections    BASE TABLE    Tae
+def    mo_catalog    mo_mongodb_tables    BASE TABLE    Tae
 def    mo_catalog    mo_mysql_compatibility_mode    BASE TABLE    Tae
 def    mo_catalog    mo_partition_metadata    BASE TABLE    Tae
 def    mo_catalog    mo_partition_tables    BASE TABLE    Tae

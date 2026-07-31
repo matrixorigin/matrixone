@@ -403,6 +403,7 @@ type BindContext struct {
 	//cteState records state of binding cte
 	cteState                     CteBindState
 	sliding                      bool
+	explicitSliding              bool
 	isDistinct                   bool
 	normalizeGroupingSetDistinct bool
 	isCorrelated                 bool
