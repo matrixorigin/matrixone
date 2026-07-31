@@ -102,6 +102,14 @@ working ledger is allocation-site based:
 | IFF/CASE/COALESCE selection arrays | allocation-accounted off-heap `[]bool`; one or two arrays of `rows`, retained by executor | executor `Free`/reuse | D | A after expression ledger closure |
 | selected row IDs | allocation-accounted off-heap `[]int64`; capacity up to `rows`, retained by executor | executor `Free`/reuse | D | A after expression ledger closure |
 | selected parameter/result vectors | allocation-accounted off-heap Vector capacities | executor `Free` | D | A after expression ledger closure |
+| `JSON_ROW` per-row encoders and buffers | one Go `bytes.Buffer` per output row, each retaining its row payload | function operator reuse / GC | R | one reusable row encoder now streams directly to the accounted result; parameter closures are arity-bounded and cleared after every call |
+| float array-distance row descriptors and result scratch | Go `[][]T` with one descriptor per row plus `[]float32` with one value per row | call return / GC | R | caller row accessor plus the upper half of the admitted `[]float64` result backing |
+| GPU array-distance flattened inputs | C allocator; `query bytes + rows*dimension*4` for the SQL float32 GPU path | GPU job Wait or launch rollback | L | external allocation remains data-scaled and blocks expression activation until it is admitted or the activated owner excludes GPU dispatch |
+| `NORMALIZE_L2` output scratch | pooled or per-row Go arrays with one output element per input element | pool / call return and GC | R | normalize directly into admitted varlen result storage |
+| AES/ENCODE/DECODE output scratch | Go payload slices, one plaintext/ciphertext-sized allocation per row; AES padding could append into spare input capacity | call return / GC | R | validate size/padding first and write directly into admitted result storage |
+| JQ object sort keys and gojq value graph | Go slices/maps/interfaces proportional to input JSON structure | row completion / GC | L | requires a separately bounded or allocation-accounted JSON execution owner |
+| JSON typed-array/value builders and pretty-print buffer | Go `[]any`, ByteJson payloads, and `bytes.Buffer` proportional to row input/output | row completion / GC | L | direct ByteJson/result builders or an admitted reusable JSON scratch owner |
+| geometry parse/overlay scratch | Go point/ring/interval/match slices proportional to geometry payload | row completion / GC | L | admitted per-row geometry workspace or streaming algorithm; remains an activation blocker |
 | hash-table initial cell block | off-heap `mpool.MakeSlice(..., true)`; 16 KiB int / 32 KiB string | hash map / `JoinMap.FreeMemory` | L | A in first activation |
 | hash-table replacement/appended cell blocks | off-heap blocks, at most 4 MiB each; old+new overlap is physically visible | hash map / `JoinMap.FreeMemory` | L | A in first activation |
 | hash-table `cells`/`newBlocks` descriptors | Go `[][]Cell`; 24 bytes per block header plus geometric resize backing arrays; GC is not treated as synchronous Free | hash map lifetime / GC | L | replace with an owning off-heap descriptor buffer and account its initial/replacement capacity; blocks first activation |
@@ -591,12 +599,13 @@ Gate:
 - all migrated rows become `D`; production rows remain `L`.
 
 The current dormant PR 3 candidate is
-`feature/26459-expression-propagation` at commit `0fd87ffebe`, stacked on PR 2
+`feature/26459-expression-propagation` at commit `ad71c4fb50`, stacked on PR 2
 commit `dbfee20ecc`. Its closure commits are `03296c5246` (expressions),
 `0b4a7b5bb5` (spill vectors/scratch), `a0754a6beb` (streaming buffers),
 `9f88a0e83e` (spill serialization), and `1f82b218c2` (spool/type-change
 ownership), followed by `a63c68b07b` (Vector bitmaps and decimal conversion
-scratch) and `0fd87ffebe` (direct-output Field/VALUES paths).
+scratch), `0fd87ffebe` (direct-output Field/VALUES paths), and `ad71c4fb50`
+(direct-output function scratch).
 
 Its propagation call chains are:
 
@@ -679,6 +688,58 @@ instead of constructing one row ID per input row. Their exact tests passed
 `-race -count=100` and the complete Function package passed normal, vet, and
 race runs. Remaining candidates must first make this same
 direct-output/streaming test before introducing a scratch owner.
+
+The second follow-up removes rather than accounts four more scratch families:
+
+- `JSON_ROW` no longer owns one encoder and buffer per row. It prepares
+  arity-bounded typed column closures once, streams one complete row through a
+  single reusable encoder, appends it to the admitted result, and clears every
+  closure on success, error, or panic. The unsigned path now preserves the full
+  `uint64` range.
+- float array distance no longer materializes one `[]T` descriptor per input
+  row or a second result slice. The metric layer accepts a synchronous row
+  accessor and caller-owned output; SQL uses the upper half of its already
+  admitted `[]float64` result bytes as `[]float32` scratch and converts forward
+  only after Wait. GPU launch still copies flattened inputs into the existing C
+  allocator and therefore remains a named activation blocker.
+- `NORMALIZE_L2` writes float32, float64, BF16, Float16, int8, and uint8 results
+  directly into admitted varlen storage. The old float pools and per-row
+  widened/narrowed arrays are deleted.
+- AES ECB/CBC and legacy ENCODE/DECODE write directly into admitted result
+  storage. AES validates the final decrypted block before result publication,
+  and padding is assembled in one stack block, removing both payload copies
+  and the old possibility that `append` modified spare input-vector capacity.
+
+`FunctionResult.AppendBytesWithFill` is the shared publication primitive. It
+admits result data/area capacity before exposing a row, publishes length only
+after the callback finishes, and restores the unpublished varlena header and
+area length on panic. Capacity acquired before a callback panic remains owned
+and charged to the result until normal reuse or `Free`; no allocation is
+released without its terminal owner.
+
+Fresh five-run benchmarks on linux/amd64, Go 1.26.4, i7-11700:
+
+| 8,192-row function path | Before median | `ad71c4fb50` median | Before allocation | `ad71c4fb50` allocation |
+| --- | ---: | ---: | ---: | ---: |
+| float32 L2-squared batch distance, 128 dimensions | about 483 us | 429.5 us | 229,488 B/op, 6 allocs/op | 112 B/op, 4 allocs/op |
+| `JSON_ROW`, fresh operator | about 838 us | 449.6 us | 1,704,081 B/op, 16,387 allocs/op | 440 B/op, 7 allocs/op |
+| `JSON_ROW`, reused operator | about 474.7 us | 450.9 us | about 831 B/op, 8 allocs/op | 200 B/op, 4 allocs/op |
+
+The direct-output candidate passed each new or directly affected behavioral
+test separately under `-race -count=100` with the default 30-second adaptive
+budget (the measured exact-test durations were 0 or 0.01 seconds, so the
+100-run cap applied). Vector, metric, Function, and colexec passed complete
+normal and race runs; the same package closure passed build and vet. The
+unsafe result alias has its own functional test, and callback panic rollback
+proves result length, area length, reuse, and final account zero.
+
+The GPU source path passed manual ownership review: dimension or allocation
+failure releases every C buffer locally, successful launch transfers both
+buffers to the job, and Wait deallocates them after the asynchronous kernel
+terminates. This host has neither `nvcc` nor a CUDA conda environment, so the
+GPU-tag build and tests were not run locally. That validation gap and the
+data-scaled C allocation both remain explicit merge/activation gates; CPU
+success is not treated as GPU evidence.
 
 Fresh local validation on linux/amd64 with CGO and the repository-built
 third-party artifacts passes:
