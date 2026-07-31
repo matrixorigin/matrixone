@@ -489,7 +489,11 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
-	if isEnumOrSetPlanType(typ) {
+	// ENUM and SET have distinct storage and display representations.  Preserve
+	// the stored enum index / set bitmap while binding an expression so numeric
+	// operators and comparisons use MySQL's numeric semantics.  A bare SELECT
+	// item is the presentation boundary and is converted to its display value.
+	if isRoot && isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
 			return
@@ -2511,6 +2515,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
+	var err error
+	args, err = bindEnumOrSetDisplayValuesForStringContext(b.GetContext(), name, args)
+	if err != nil {
+		return nil, err
+	}
 
 	//promote interval expr rewrite here
 	if name == "interval" {
@@ -2574,6 +2583,42 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func bindEnumOrSetDisplayValuesForStringContext(ctx context.Context, name string, args []*Expr) ([]*Expr, error) {
+	if isNumericSpecialTypeContext(name) || !hasStringArgument(args) {
+		return args, nil
+	}
+	for i, arg := range args {
+		if isEnumOrSetPlanType(&arg.Typ) {
+			displayValue, err := makeEnumOrSetDisplayValue(ctx, arg)
+			if err != nil {
+				return nil, err
+			}
+			args[i] = displayValue
+		}
+	}
+	return args, nil
+}
+
+func isNumericSpecialTypeContext(name string) bool {
+	switch name {
+	case "+", "-", "*", "/", "div", "%", "mod", "^", "|", "&", "<<", ">>",
+		"unary_plus", "unary_minus", "unary_tilde":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasStringArgument(args []*Expr) bool {
+	for _, arg := range args {
+		switch types.T(arg.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			return true
+		}
+	}
+	return false
 }
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
@@ -4458,14 +4503,33 @@ func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType T
 	if toType.Id != int32(types.T_json) {
 		return expr, false, nil
 	}
-	if expr.Typ.Id == int32(types.T_enum) {
-		return nil, false, moerr.NewInvalidArg(ctx, "operator cast", "[ENUM JSON]")
+	if isEnumOrSetPlanType(&expr.Typ) {
+		displayValue, err := makeEnumOrSetDisplayValue(ctx, expr)
+		if err != nil {
+			return nil, false, err
+		}
+		quoted, err := quoteEnumOrSetDisplayValueAsJSON(ctx, displayValue)
+		return quoted, err == nil, err
 	}
 	if isEnumOrSetDisplayValueExpr(expr) {
 		quoted, err := quoteEnumOrSetDisplayValueAsJSON(ctx, expr)
 		return quoted, err == nil, err
 	}
 	return expr, false, nil
+}
+
+func makeEnumOrSetDisplayValue(ctx context.Context, expr *Expr) (*Expr, error) {
+	if expr == nil || !isEnumOrSetPlanType(&expr.Typ) {
+		return expr, nil
+	}
+	indexToValueFun, _, _, err := mysqlSpecialTypeFuncNames(&expr.Typ)
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx, indexToValueFun, []*Expr{
+		makePlan2StringConstExprWithType(expr.Typ.Enumvalues),
+		expr,
+	})
 }
 
 func isEnumOrSetDisplayValueExpr(expr *Expr) bool {

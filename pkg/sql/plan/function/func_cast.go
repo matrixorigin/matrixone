@@ -801,7 +801,11 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_enum: {
-		types.T_enum, types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
+		types.T_enum,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text,
 	},
@@ -2955,9 +2959,33 @@ func enumToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Enum],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	switch toType.Oid {
-	case types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128:
+	case types.T_int8:
+		return numericToNumeric(ctx, source, vector.MustFunctionResult[int8](result), length, selectList)
+	case types.T_int16:
+		return numericToNumeric(ctx, source, vector.MustFunctionResult[int16](result), length, selectList)
+	case types.T_int32:
+		return numericToNumeric(ctx, source, vector.MustFunctionResult[int32](result), length, selectList)
+	case types.T_int64:
+		return numericToNumeric(ctx, source, vector.MustFunctionResult[int64](result), length, selectList)
+	case types.T_uint8:
+		return numericToNumeric(ctx, source, vector.MustFunctionResult[uint8](result), length, selectList)
+	case types.T_uint16, types.T_uint128:
 		rs := vector.MustFunctionResult[uint16](result)
 		return enumToUint16(source, rs, length, selectList)
+	case types.T_uint32:
+		return numericToNumeric(ctx, source, vector.MustFunctionResult[uint32](result), length, selectList)
+	case types.T_uint64:
+		return numericToNumeric(ctx, source, vector.MustFunctionResult[uint64](result), length, selectList)
+	case types.T_float32:
+		return numericToNumeric(ctx, source, vector.MustFunctionResult[float32](result), length, selectList)
+	case types.T_float64:
+		return numericToNumeric(ctx, source, vector.MustFunctionResult[float64](result), length, selectList)
+	case types.T_decimal64:
+		return unsignedToDecimal64(source, vector.MustFunctionResult[types.Decimal64](result), length, selectList)
+	case types.T_decimal128:
+		return unsignedToDecimal128(source, vector.MustFunctionResult[types.Decimal128](result), length, selectList)
+	case types.T_decimal256:
+		return unsignedToDecimal256(source, vector.MustFunctionResult[types.Decimal256](result), length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return enumToStr(ctx, source, rs, length, selectList, strictStringWidth...)

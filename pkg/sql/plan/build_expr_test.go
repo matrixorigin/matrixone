@@ -518,6 +518,76 @@ func TestEnumToJSONQuotesDisplayValueDuringBinding(t *testing.T) {
 	}
 }
 
+func TestEnumAndSetKeepStoredValuesInExpressionContexts(t *testing.T) {
+	tests := []struct {
+		name        string
+		typ         plan.Type
+		sql         string
+		wantDisplay bool
+	}{
+		{
+			name: "enum numeric arithmetic",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name + 0 from nation",
+		},
+		{
+			name: "enum numeric comparison",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name = 1 from nation",
+		},
+		{
+			name: "set numeric arithmetic",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name + 0 from nation",
+		},
+		{
+			name: "set bitwise operation",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name & 1 from nation",
+		},
+		{
+			name:        "enum string comparison",
+			typ:         plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:         "select n_name = 'a' from nation",
+			wantDisplay: true,
+		},
+		{
+			name:        "set string comparison",
+			typ:         plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:         "select n_name = 'x,z' from nation",
+			wantDisplay: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["nation"].Cols[1].Typ = tc.typ
+
+			pl, err := runOneExprStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantDisplay, containsEnumOrSetDisplayValue(pl.GetQuery().Nodes[1].ProjectList[0]))
+		})
+	}
+}
+
+func containsEnumOrSetDisplayValue(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if isEnumOrSetDisplayValueExpr(expr) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if containsEnumOrSetDisplayValue(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestEnumDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	ctx := NewMockCompilerContext(true).GetContext()
 	displayExpr := &plan.Expr{

@@ -191,6 +191,12 @@ insert into insert01 values(1,'111',1),(2,'222',2),(3,'333',3),(4,'444','Cancell
 select * from insert01;
 show create table insert01;
 show columns from insert01;
+-- MySQL ENUM uses its 1-based member index in numeric contexts while retaining
+-- label semantics when compared with a string.
+select id, status + 0, status = 1, status = 'Pending' from insert01 order by id;
+select id from insert01 where status = 3 order by id;
+select id from insert01 where status in (1, 4) order by id;
+select id from insert01 where status in ('Pending', 4) order by id;
 delete from insert01 where status=3;
 update insert01 set status='Pending' where status=2;
 select * from insert01;
