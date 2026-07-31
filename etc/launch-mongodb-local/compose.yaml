@@ -1,0 +1,31 @@
+# Copyright 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+
+services:
+  mongo:
+    image: mongo@sha256:95a98776f273721a295b03098578b06bc10281bb56aa828c77e9f60ecc70b150
+    entrypoint: ["bash", "-c", "cp /run/key-source /tmp/mongodb-keyfile && chown mongodb:mongodb /tmp/mongodb-keyfile && chmod 400 /tmp/mongodb-keyfile && exec /usr/local/bin/docker-entrypoint.sh \"$$@\"", "--"]
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--auth", "--keyFile", "/tmp/mongodb-keyfile"]
+    ports:
+      - "127.0.0.1:${MONGODB_PORT}:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD}
+    volumes:
+      - mongodb-data:/data/db
+      - ${MONGODB_KEYFILE}:/run/key-source:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --username $$MONGO_INITDB_ROOT_USERNAME --password $$MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin --eval 'quit(db.adminCommand({ping:1}).ok ? 0 : 2)' >/dev/null"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+    networks: [mongodb-e2e]
+
+volumes:
+  mongodb-data:
+
+networks:
+  mongodb-e2e:
+    driver: bridge
