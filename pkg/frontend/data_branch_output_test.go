@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -75,15 +77,64 @@ func TestDataBranchOutputMakeFileName(t *testing.T) {
 		tarRel:  tarRel,
 	}
 
-	got := makeFileName(nil, nil, tblStuff)
-	require.Regexp(t, regexp.MustCompile(`^diff_t2_t1_\d{8}_\d{6}$`), got)
+	got, err := makeFileName(nil, nil, tblStuff)
+	require.NoError(t, err)
+	require.Regexp(t, regexp.MustCompile(`^diff_t2_t1_\d{8}_\d{6}_[0-9a-f-]{36}$`), got)
 
-	got = makeFileName(
+	got, err = makeFileName(
 		&tree.AtTimeStamp{SnapshotName: "sp1"},
 		&tree.AtTimeStamp{SnapshotName: "sp2"},
 		tblStuff,
 	)
-	require.Regexp(t, regexp.MustCompile(`^diff_t2_sp2_t1_sp1_\d{8}_\d{6}$`), got)
+	require.NoError(t, err)
+	require.Regexp(t, regexp.MustCompile(`^diff_t2_sp2_t1_sp1_\d{8}_\d{6}_[0-9a-f-]{36}$`), got)
+}
+
+func TestDataBranchOutputMakeFileNameUUIDError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("base")
+	tarRel.EXPECT().GetTableName().Return("target")
+
+	_, err := makeFileNameWithUUID(nil, nil, tableStuff{baseRel: baseRel, tarRel: tarRel}, func() (uuid.UUID, error) {
+		return uuid.Nil, errors.New("entropy unavailable")
+	})
+	require.ErrorContains(t, err, "generate data branch output file name: entropy unavailable")
+}
+
+func TestDataBranchOutputMakeFileNameConcurrent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
+	tarRel.EXPECT().GetTableName().Return("target").AnyTimes()
+	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
+
+	const concurrency = 128
+	type result struct {
+		name string
+		err  error
+	}
+	results := make(chan result, concurrency)
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+	for range concurrency {
+		go func() {
+			defer wg.Done()
+			name, err := makeFileName(nil, nil, tblStuff)
+			results <- result{name: name, err: err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	unique := make(map[string]struct{}, concurrency)
+	for result := range results {
+		require.NoError(t, result.err)
+		unique[result.name] = struct{}{}
+	}
+	require.Len(t, unique, concurrency)
 }
 
 func TestDataBranchOutputFileNameAndHintQuotePathSeparators(t *testing.T) {
@@ -123,7 +174,7 @@ func TestDataBranchOutputFileNameAndHintQuotePathSeparators(t *testing.T) {
 
 	require.Equal(t, outputDir, filepath.Dir(filePath))
 	require.Regexp(t, regexp.MustCompile(
-		`^diff_child@5Cname@3Aquoted_target@5Csnapshot@251_base@2Fname@60quoted_base@2Fsnapshot@201_\d{8}_\d{6}\.sql$`,
+		`^diff_child@5Cname@3Aquoted_target@5Csnapshot@251_base@2Fname@60quoted_base@2Fsnapshot@201_\d{8}_\d{6}_[0-9a-f-]{36}\.sql$`,
 	), filepath.Base(filePath))
 	require.Equal(t,
 		"DELETE FROM `db/name``quoted`.`base/name``quoted`, INSERT INTO `db/name``quoted`.`base/name``quoted`",
@@ -147,7 +198,9 @@ func TestDataBranchOutputFileNameSurvivesCSVFormattingAndLengthLimit(t *testing.
 				baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
 				tarRel.EXPECT().GetTableName().Return(name).AnyTimes()
 
-				fileName := makeFileName(nil, nil, tableStuff{baseRel: baseRel, tarRel: tarRel}) + ".csv"
+				fileName, err := makeFileName(nil, nil, tableStuff{baseRel: baseRel, tarRel: tarRel})
+				require.NoError(t, err)
+				fileName += ".csv"
 				require.Equal(t, fileName, getExportFilePath(fileName, 0))
 			})
 		}
@@ -183,7 +236,7 @@ func TestDataBranchOutputFileNameSurvivesCSVFormattingAndLengthLimit(t *testing.
 		baseName := filepath.Base(filePath)
 		require.LessOrEqual(t, len(baseName), maxDiffFileNameStemBytes+len(".sql"))
 		require.True(t, utf8.ValidString(baseName))
-		require.Regexp(t, regexp.MustCompile(`_[0-9a-f]{32}_\d{8}_\d{6}\.sql$`), baseName)
+		require.Regexp(t, regexp.MustCompile(`_[0-9a-f]{32}_\d{8}_\d{6}_[0-9a-f-]{36}\.sql$`), baseName)
 		require.Equal(t, outputDir, filepath.Dir(filePath))
 	})
 }
