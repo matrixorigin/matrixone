@@ -390,6 +390,33 @@ func GetHashColumn(expr *plan.Expr) (*plan.ColRef, int32) {
 	return nil, -1
 }
 
+func reusableShuffleChild(
+	col *plan.ColRef,
+	node *plan.Node,
+	builder *QueryBuilder,
+) (*plan.Node, bool) {
+	if col == nil || node == nil || builder == nil || builder.qry == nil ||
+		len(node.Children) == 0 || builder.tag2Table[col.RelPos] != nil {
+		return nil, false
+	}
+	childID := node.Children[0]
+	if childID < 0 || int(childID) >= len(builder.qry.Nodes) {
+		return nil, false
+	}
+	child := builder.qry.Nodes[childID]
+	if child == nil || child.NodeType != plan.Node_AGG || child.Stats == nil ||
+		child.Stats.HashmapStats == nil || !child.Stats.HashmapStats.Shuffle ||
+		len(child.BindingTags) == 0 || col.RelPos != child.BindingTags[0] ||
+		col.ColPos < 0 || int(col.ColPos) >= len(child.GroupBy) {
+		return nil, false
+	}
+	groupCol := child.GroupBy[col.ColPos].GetCol()
+	if groupCol == nil || builder.tag2Table[groupCol.RelPos] == nil {
+		return nil, false
+	}
+	return child, true
+}
+
 func maybeSorted(node *plan.Node, builder *QueryBuilder, tag int32) bool {
 	// for scan node, primary key and cluster by may be sorted
 	if node.NodeType == plan.Node_TABLE_SCAN {
@@ -413,24 +440,17 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 	tableDef, ok := builder.tag2Table[col.RelPos]
 
 	if !ok {
-		child := builder.qry.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_AGG && child.Stats.HashmapStats.Shuffle && col.RelPos == child.BindingTags[0] {
-			col = child.GroupBy[col.ColPos].GetCol()
-			if col == nil {
-				return
-			}
-			_, ok = builder.tag2Table[col.RelPos]
-			if !ok {
-				return
-			}
-			node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
-			node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-			node.Stats.HashmapStats.HashmapSize = child.Stats.HashmapStats.HashmapSize
-			node.Stats.HashmapStats.ShuffleColMin = child.Stats.HashmapStats.ShuffleColMin
-			node.Stats.HashmapStats.ShuffleColMax = child.Stats.HashmapStats.ShuffleColMax
-			node.Stats.HashmapStats.Ranges = child.Stats.HashmapStats.Ranges
-			node.Stats.HashmapStats.Nullcnt = child.Stats.HashmapStats.Nullcnt
+		child, reusable := reusableShuffleChild(col, node, builder)
+		if !reusable {
+			return
 		}
+		node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+		node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+		node.Stats.HashmapStats.HashmapSize = child.Stats.HashmapStats.HashmapSize
+		node.Stats.HashmapStats.ShuffleColMin = child.Stats.HashmapStats.ShuffleColMin
+		node.Stats.HashmapStats.ShuffleColMax = child.Stats.HashmapStats.ShuffleColMax
+		node.Stats.HashmapStats.Ranges = child.Stats.HashmapStats.Ranges
+		node.Stats.HashmapStats.Nullcnt = child.Stats.HashmapStats.Nullcnt
 		return
 	}
 
@@ -480,6 +500,67 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 // to determine if join need to go shuffle
 func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	determineShuffleForJoinWithColRefMode(node, builder, false)
+}
+
+func isSupportedShuffleJoinKeyType(typ int32) bool {
+	switch types.T(typ) {
+	case types.T_int64, types.T_int32, types.T_int16,
+		types.T_uint64, types.T_uint32, types.T_uint16,
+		types.T_varchar, types.T_char, types.T_text:
+		return true
+	default:
+		return false
+	}
+}
+
+// selectShuffleJoinCondition keeps the first condition that the current plan
+// can already shuffle on, including reuse and unknown-NDV plans. It only scans
+// later conditions when an earlier condition is unsupported or known to be
+// below the NDV threshold. This removes predicate-order-dependent eligibility
+// without changing established valid plans.
+func selectShuffleJoinCondition(
+	node *plan.Node,
+	builder *QueryBuilder,
+	onList []*plan.Expr,
+	leftTags, rightTags map[int32]bool,
+	afterRemap bool,
+) int {
+	firstSupportedIdx := -1
+
+	for i, condition := range onList {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 {
+			continue
+		}
+
+		isEqui := isEquiCond(condition, leftTags, rightTags)
+		if afterRemap {
+			isEqui = isEquiCond2(condition)
+		}
+		if !isEqui {
+			continue
+		}
+
+		leftHashCol, leftType := GetHashColumn(fn.Args[0])
+		rightHashCol, rightType := GetHashColumn(fn.Args[1])
+		if (leftHashCol == nil && leftType == -1) ||
+			(rightHashCol == nil && rightType == -1) ||
+			!isSupportedShuffleJoinKeyType(leftType) {
+			continue
+		}
+
+		if firstSupportedIdx == -1 {
+			firstSupportedIdx = i
+		}
+		if _, reusable := reusableShuffleChild(leftHashCol, node, builder); reusable {
+			return i
+		}
+		if condition.Ndv < 0 || condition.Ndv >= ShuffleThreshHoldOfNDV {
+			return i
+		}
+	}
+
+	return firstSupportedIdx
 }
 
 // determineShuffleForJoinWithColRefMode plans join shuffle either before or
@@ -534,16 +615,6 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 		return
 	}
 
-	idx := 0
-	isEquiJoin := false
-	if afterRemap {
-		isEquiJoin = IsEquiJoin2(node.OnList)
-	} else {
-		isEquiJoin = builder.IsEquiJoin(node)
-	}
-	if !isEquiJoin {
-		return
-	}
 	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
 		leftTags[tag] = true
@@ -555,16 +626,9 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	if node.JoinType == plan.Node_MARK && !markJoinSupportsShuffle(node, builder, leftTags, rightTags, afterRemap) {
 		return
 	}
-	// for now ,only support the first join condition
-	for i := range node.OnList {
-		isEqui := isEquiCond(node.OnList[i], leftTags, rightTags)
-		if afterRemap {
-			isEqui = isEquiCond2(node.OnList[i])
-		}
-		if isEqui {
-			idx = i
-			break
-		}
+	idx := selectShuffleJoinCondition(node, builder, node.OnList, leftTags, rightTags, afterRemap)
+	if idx == -1 {
+		return
 	}
 	if node.IsRightJoin {
 		if node.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
@@ -597,10 +661,9 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 		return
 	}
 
-	//for now ,only support integer and string type
+	// Only integer and string keys are supported by the shuffle executor.
 	isExprBasedShuffle := leftHashCol == nil || rightHashCol == nil
-	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	if isSupportedShuffleJoinKeyType(typ) {
 		node.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		node.Stats.HashmapStats.Shuffle = true
 		if leftHashCol != nil && !isExprBasedShuffle {
