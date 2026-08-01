@@ -5600,7 +5600,9 @@ func (c *Compile) compileRecursiveCte(node *plan.Node, curNodeIdx int32) ([]*Sco
 	rs.setRootOperator(mergeOp1)
 
 	currentFirstFlag := c.anal.isFirst
-	mergecteArg := mergecte.NewArgument().WithNodeCnt(len(node.SourceStep) - 1)
+	mergecteArg := mergecte.NewArgument().
+		WithNodeCnt(len(node.SourceStep) - 1).
+		WithDistinct(node.RecursiveUnionDistinct)
 	mergecteArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergecteArg)
 	c.anal.isFirst = false

@@ -978,6 +978,11 @@ message Node {
   // TIME_WINDOW only: explicitly generate missing buckets between each
   // partition's observed minimum and maximum timestamp.
   GapFillMode gap_fill_mode = 75;
+
+  // RECURSIVE_CTE only: exclude rows already emitted by the anchor or an
+  // earlier recursive iteration, implementing UNION / UNION DISTINCT fixpoint
+  // semantics instead of UNION ALL bag semantics.
+  bool recursive_union_distinct = 76;
 }
 
 message SnapshotExtraInfo {
