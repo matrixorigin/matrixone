@@ -14139,3 +14139,77 @@ func TestCheckpointTableIDBatch2(t *testing.T) {
 	}
 	assert.Equal(t, 100000+1+3+2, rowCount) // 100000 mock, 1 special, 3 mo_catalog tables, 2 user tables
 }
+
+func TestGlobalCheckpointRebuildsMissingTableIDBatch(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.Extra.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	defer bat.Close()
+	tae.CreateRelAndAppend2(bat, true)
+
+	txn, rel := tae.GetRelation()
+	tableID := rel.ID()
+	require.NoError(t, txn.Commit(ctx))
+
+	forceGlobalCheckpoint := func(end types.TS) {
+		checkpointCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
+		defer cancel()
+		require.NoError(t, tae.DB.ForceGlobalCheckpoint(checkpointCtx, end, 0))
+	}
+	forceGlobalCheckpoint(tae.TxnMgr.Now())
+
+	predecessor := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+	require.NotNil(t, predecessor)
+	require.NotEmpty(t, predecessor.GetTableIDLocation())
+	predecessor.SetTableIDLocation(nil)
+
+	forceGlobalCheckpoint(predecessor.GetEnd())
+
+	global := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+	require.NotNil(t, global)
+	require.NotSame(t, predecessor, global)
+	require.NotEmpty(t, global.GetTableIDLocation())
+
+	reader, err := logtail.NewSyncTableIDReader(
+		global.GetTableIDLocation(),
+		common.CheckpointAllocator,
+		tae.Runtime.Fs,
+	)
+	require.NoError(t, err)
+
+	foundTable := false
+	foundRange := false
+	for {
+		release, tableIDBatch, isEnd, err := reader.Read(ctx)
+		require.NoError(t, err)
+		if isEnd {
+			break
+		}
+		func() {
+			defer release()
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](tableIDBatch.Vecs[2])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](tableIDBatch.Vecs[3])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](tableIDBatch.Vecs[4])
+			for i, currentTableID := range tableIDs {
+				switch currentTableID {
+				case logtail.CKPTableIDBatch_SpecialTableID:
+					foundRange = true
+					require.Equal(t, global.GetStart(), starts[i])
+					require.Equal(t, global.GetEnd(), ends[i])
+				case tableID:
+					foundTable = true
+				}
+			}
+		}()
+	}
+	require.True(t, foundRange)
+	require.True(t, foundTable)
+}

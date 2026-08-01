@@ -144,16 +144,22 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	entry.SetLocation(location, location)
 
-	var emptyLocation objectio.Location
+	var tableIDSourceLocation objectio.Location
+	tableIDSourceVersion := predecessor.GetVersion()
+	predecessorTableIDLocation := predecessor.GetTableIDLocation()
+	if predecessorTableIDLocation.Len() == 0 {
+		tableIDSourceLocation = location
+		tableIDSourceVersion = entry.GetVersion()
+	}
 	tableIDLocation, err := logtail.SyncTableIDBatch(
 		job.executor.ctx,
 		entry.start,
 		entry.end,
 		job.executor.cfg.TableIDHistoryDuration,
 		job.executor.cfg.TableIDSinkerThreshold,
-		emptyLocation,
-		predecessor.GetVersion(),
-		predecessor.GetTableIDLocation(),
+		tableIDSourceLocation,
+		tableIDSourceVersion,
+		predecessorTableIDLocation,
 		common.CheckpointAllocator,
 		runner.rt.Fs,
 	)
