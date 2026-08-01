@@ -67,11 +67,11 @@ const (
 
 	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
 
-	restoreTableDataByTsFmt = "create table `%s`.`%s` clone `%s`.`%s` {MO_TS = %d }"
-	//restoreTableDataByTsFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {MO_TS = %d }"
+	restoreTableDataByTsFmt = "create table %s clone %s {MO_TS = %d }"
+	//restoreTableDataByTsFmt = "insert into %s SELECT * FROM %s {MO_TS = %d }"
 
-	restoreTableDataByNameFmt = "create table `%s`.`%s` clone `%s`.`%s` {SNAPSHOT = '%s'}"
-	//restoreTableDataByNameFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {SNAPSHOT = '%s'}"
+	restoreTableDataByNameFmt = "create table %s clone %s {SNAPSHOT = %s}"
+	//restoreTableDataByNameFmt = "insert into %s SELECT * FROM %s {SNAPSHOT = %s}"
 
 	getPastAccountsFmt = "select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } ORDER BY account_id ASC;"
 
@@ -135,6 +135,45 @@ var (
 	}
 )
 
+func restoreTableDataByTsSQL(dbName, tableName string, snapshotTS int64) string {
+	qualifiedName := qualifiedTableName(dbName, tableName)
+	return fmt.Sprintf(restoreTableDataByTsFmt, qualifiedName, qualifiedName, snapshotTS)
+}
+
+func restoreTableDataByNameSQL(dbName, tableName, snapshotName string) string {
+	qualifiedName := qualifiedTableName(dbName, tableName)
+	return fmt.Sprintf(restoreTableDataByNameFmt,
+		qualifiedName, qualifiedName, escapeSQLString(snapshotName))
+}
+
+func showCreateTableSQL(dbName, tableName string) string {
+	return "show create table " + qualifiedTableName(dbName, tableName)
+}
+
+func useDatabaseSQL(dbName string) string {
+	return "use " + quoteIdentifierForSQL(dbName)
+}
+
+func createDatabaseIfNotExistsSQL(dbName string) string {
+	return "CREATE DATABASE IF NOT EXISTS " + quoteIdentifierForSQL(dbName)
+}
+
+func dropDatabaseIfExistsSQL(dbName string) string {
+	return "drop database if exists " + quoteIdentifierForSQL(dbName)
+}
+
+func dropTableIfExistsSQL(dbName, tableName string) string {
+	name := quoteIdentifierForSQL(tableName)
+	if dbName != "" {
+		name = qualifiedTableName(dbName, tableName)
+	}
+	return "drop table if exists " + name
+}
+
+func dropViewIfExistsSQL(viewName string) string {
+	return "drop view if exists " + quoteIdentifierForSQL(viewName)
+}
+
 type snapshotRecord struct {
 	snapshotId   string
 	snapshotName string
@@ -180,8 +219,7 @@ func NewSubDbRestoreRecord(dbName string, account uint32, createSql string, spTs
 	}
 }
 
-func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
-	var err error
+func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) (err error) {
 	var snapshotLevel tree.SnapshotLevel
 	var snapshotForAccount string
 	var snapshotName string
@@ -247,6 +285,13 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		} else {
 			return nil
 		}
+	}
+
+	// Serialize the timestamp choice and owner-row publication with COPY ALTER.
+	// Unlike locking mo_snapshots itself, this stable catalog write also covers
+	// an empty owner set and forces an optimistic loser to retry.
+	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
+		return err
 	}
 
 	// 3.1 generate snapshot id
@@ -567,6 +612,9 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 		if err != nil {
 			return err
 		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("drop snapshot %s success", string(stmt.Name)))
@@ -589,12 +637,13 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	var restoreAccount uint32
 	var toAccountId uint32
+	var retiredMongoDBAccountIDs []uint32
 	// restore as a txn
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return stats, err
 	}
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
 
 	// check snapshot
@@ -624,7 +673,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 		// restore cluster
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
-		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore, &retiredMongoDBAccountIDs); err != nil {
 			return
 		}
 
@@ -649,6 +698,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		if err != nil {
 			return stats, err
 		}
+		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 		return
 	}
 
@@ -707,6 +757,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			nil); err != nil {
 			return stats, err
 		}
+		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 
@@ -943,7 +994,7 @@ func deleteCurFkTables(
 			}
 
 			getLogger(sid).Debug(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, dropTableIfExistsSQL(tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1181,7 +1232,7 @@ func restoreToDatabaseOrTable(
 
 		return
 	} else {
-		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
+		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", snapshotName, dbName, createDbSql))
 		if err = bh.Exec(toCtx, createDbSql); err != nil {
@@ -1338,7 +1389,7 @@ func dropClusterTable(
 	for _, tblInfo := range tableInfos {
 		if toAccountId == 0 && tblInfo.typ == clusterTable {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", moCatalog, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, dropTableIfExistsSQL(moCatalog, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1394,11 +1445,11 @@ func restoreViews(
 			getLogger(ses.GetService()).Debug(fmt.Sprintf(
 				"[%s] start to restore view: %v", snapshotName, tblInfo.tblName))
 
-			if err = bh.Exec(toCtx, "use `"+tblInfo.dbName+"`"); err != nil {
+			if err = bh.Exec(toCtx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 				return err
 			}
 
-			if err = bh.Exec(toCtx, "drop view if exists "+tblInfo.tblName); err != nil {
+			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 
@@ -1552,12 +1603,12 @@ func recreateTable(
 		return
 	}
 
-	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
+	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 		return
 	}
 
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop table: %v,", snapshotName, tblInfo.tblName))
-	sql := fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)
+	sql := dropTableIfExistsSQL("", tblInfo.tblName)
 	if err = bh.Exec(ctx, sql); err != nil {
 		return
 	}
@@ -1576,7 +1627,7 @@ func recreateTable(
 
 	if curAccountId == toAccountId {
 		// insert data
-		insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotTs)
+		insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, snapshotTs)
 		beginTime := time.Now()
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 		if err = bh.Exec(ctx, insertIntoSql); err != nil {
@@ -1588,7 +1639,7 @@ func recreateTable(
 		}
 		getLogger(sid).Debug(fmt.Sprintf("[%s] insert select table: %v, cost: %v", snapshotName, tblInfo.tblName, time.Since(beginTime)))
 	} else {
-		insertIntoSql := fmt.Sprintf(restoreTableDataByNameFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotName)
+		insertIntoSql := restoreTableDataByNameSQL(tblInfo.dbName, tblInfo.tblName, snapshotName)
 		beginTime := time.Now()
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 		if err = bh.ExecRestore(ctx, insertIntoSql, curAccountId, toAccountId); err != nil {
@@ -1996,10 +2047,10 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 	clusterTableClause := fmt.Sprintf(" or relkind = %s", quoteSQLStringLiteral(catalog.SystemClusterRel))
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTableClause)
 	whereClause := fmt.Sprintf(
-		"reldatabase = %s and relkind not in (%s) and relkind != %s and relkind != %s and (%s)",
+		"reldatabase = %s and relkind not in (%s) and %s and relkind != %s and (%s)",
 		quoteSQLStringLiteral(dbName),
 		hiddenIndexTableTypesSQL(),
-		quoteSQLStringLiteral(catalog.SystemTemporaryTable),
+		catalog.NonTemporaryTableSQLPredicate(""),
 		quoteSQLStringLiteral(catalog.SystemPartitionRel),
 		accountClause,
 	)
@@ -2014,7 +2065,7 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 		)
 	}
 	if len(tblName) > 0 {
-		whereClause += fmt.Sprintf(" and relname like %s", quoteSQLStringLiteral(tblName))
+		whereClause += fmt.Sprintf(" and relname = %s", quoteSQLStringLiteral(tblName))
 	}
 	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
 	return whereClause
@@ -2537,6 +2588,7 @@ func restoreToCluster(ctx context.Context,
 	snapshotName string,
 	snapshotTs int64,
 	subDbToRestore map[string]*subDbRestoreRecord,
+	retiredMongoDBAccountIDs *[]uint32,
 ) (err error) {
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
 
@@ -2592,6 +2644,7 @@ func restoreToCluster(ctx context.Context,
 		if err != nil {
 			return err
 		}
+		markMongoDBAccountForRetirement(retiredMongoDBAccountIDs, uint32(account.accountId))
 	}
 
 	// get restore accounts exists in snapshot
@@ -2610,6 +2663,7 @@ func restoreToCluster(ctx context.Context,
 		if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, isRestoreToCluster, isNeedToCleanToDatabase); err != nil {
 			return err
 		}
+		markMongoDBAccountForRetirement(retiredMongoDBAccountIDs, newAccountId)
 
 		getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] restore account: %v, account id: %d success", snapshotName, account.accountName, account.accountId))
 	}
@@ -3053,7 +3107,7 @@ func dropDb(ctx context.Context, bh BackgroundExec, dbName string) (err error) {
 	}
 
 	// drop db
-	return bh.Exec(ctx, fmt.Sprintf("drop database if exists `%s`", dbName))
+	return bh.Exec(ctx, dropDatabaseIfExistsSQL(dbName))
 }
 
 // checkTableIsMaster check if the table is master table

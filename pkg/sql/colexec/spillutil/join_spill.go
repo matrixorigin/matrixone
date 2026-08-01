@@ -23,15 +23,17 @@ import (
 	"io"
 	"math"
 	"os"
+	"sync"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -63,6 +65,18 @@ type SpillBucket struct {
 	ProbeRows int64
 }
 
+// checkSpillCanceled is intentionally used at batch, bucket, and physical-I/O
+// boundaries. Those are frequent enough to bound cancellation latency without
+// adding a select to the row-at-a-time hash and vector loops.
+func checkSpillCanceled(proc *process.Process) error {
+	select {
+	case <-proc.Ctx.Done():
+		return proc.Ctx.Err()
+	default:
+		return nil
+	}
+}
+
 // BucketReader reads serialized batch records from an fd.
 type BucketReader struct {
 	fd           *os.File
@@ -77,6 +91,9 @@ type BucketReader struct {
 }
 
 func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (*batch.Batch, error) {
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, err
+	}
 	if r.fd == nil {
 		return nil, io.EOF
 	}
@@ -95,21 +112,55 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 		oldToken.Release()
 	}
 	if !r.mergeRecords {
+		if err := checkSpillCanceled(proc); err != nil {
+			r.releaseReadBatch(proc, reuseBat, nil)
+			return nil, err
+		}
 		return reuseBat, nil
 	}
-	// Merge adjacent records up to the bounded historical 8192-row payload.
+	// Merge adjacent records up to the bounded historical batch payload.
 	// This preserves dedup/outer-join behaviour across small source batches
 	// without retaining one selected batch per bucket during scatter.
-	for reuseBat.RowCount() < 8192 {
-		if _, err := r.reader.Peek(16); err != nil {
-			if err == io.EOF {
+	for reuseBat.RowCount() < colexec.DefaultBatchSize {
+		if err := checkSpillCanceled(proc); err != nil {
+			return nil, r.mergeReadError(proc, reuseBat, nil, nil, err)
+		}
+		header, err := r.reader.Peek(16)
+		if err != nil {
+			if err == io.EOF && len(header) == 0 {
 				break
 			}
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
 			return nil, r.mergeReadError(proc, reuseBat, nil, nil, err)
+		}
+		if err := checkSpillCanceled(proc); err != nil {
+			return nil, r.mergeReadError(proc, reuseBat, nil, nil, err)
+		}
+		nextRows := types.DecodeInt64(header[:8])
+		nextBatchSize := types.DecodeInt64(header[8:16])
+		if nextRows < 0 || nextBatchSize < 0 {
+			return nil, r.mergeReadError(
+				proc,
+				reuseBat,
+				nil,
+				nil,
+				moerr.NewInternalError(proc.Ctx, "negative spill batch header"),
+			)
+		}
+		// A source record is an indivisible ownership and budget unit. Leave it
+		// for the next ReadBatch rather than consuming it and growing this batch
+		// beyond the advertised merge bound.
+		if nextRows > int64(colexec.DefaultBatchSize-reuseBat.RowCount()) {
+			break
 		}
 		next := batch.NewOffHeapWithSize(0)
 		_, nextToken, _, err := r.readBatchRecord(proc, next, nil, 0, false)
 		if err != nil {
+			return nil, r.mergeReadError(proc, reuseBat, next, nextToken, err)
+		}
+		if err := checkSpillCanceled(proc); err != nil {
 			return nil, r.mergeReadError(proc, reuseBat, next, nextToken, err)
 		}
 		var mergeToken *process.HashBuildReservation
@@ -156,6 +207,9 @@ func (r *BucketReader) ReadBatch(proc *process.Process, reuseBat *batch.Batch) (
 			r.batchToken = mergeToken
 			r.batchCharge = actual
 		}
+	}
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, r.mergeReadError(proc, reuseBat, nil, nil, err)
 	}
 	return reuseBat, nil
 }
@@ -455,6 +509,9 @@ func (r *BucketReader) readBatchRecord(
 	charge uint64,
 	retainLease bool,
 ) (*batch.Batch, *process.HashBuildReservation, uint64, error) {
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, token, charge, err
+	}
 	if _, err := io.ReadFull(r.reader, r.buf[:]); err != nil {
 		if err == io.EOF {
 			return nil, token, charge, io.EOF
@@ -465,6 +522,9 @@ func (r *BucketReader) readBatchRecord(
 	batchSize := types.DecodeInt64(r.buf[8:16])
 	if cnt < 0 || batchSize < 0 {
 		return nil, token, charge, moerr.NewInternalError(proc.Ctx, "negative spill batch header")
+	}
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, token, charge, err
 	}
 	if r.budget != nil {
 		payload := uint64(batchSize)
@@ -536,9 +596,15 @@ func (r *BucketReader) readBatchRecord(
 	}
 
 	reuseBat.CleanOnlyData()
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, token, charge, err
+	}
 
 	limitReader := io.LimitedReader{R: r.reader, N: batchSize}
 	if err := reuseBat.UnmarshalFromReader(&limitReader, proc.Mp()); err != nil {
+		return nil, token, charge, err
+	}
+	if err := checkSpillCanceled(proc); err != nil {
 		return nil, token, charge, err
 	}
 
@@ -666,8 +732,37 @@ type BucketWriter struct {
 	Budget          *process.HashBuildBudgetGeneration
 	Rows            int64
 	Bytes           uint64
+	spillFS         *spillFileServiceCache
 	diskReservation *process.HashBuildSpillDiskReservation
 	fdReservation   *process.HashBuildSpillFDReservation
+}
+
+// spillFileServiceCache is shared by every writer created by one SpillEngine.
+// The service is borrowed from Process: the cache resolves it lazily at the
+// existing first-file boundary and never closes it.
+type spillFileServiceCache struct {
+	once sync.Once
+	fs   fileservice.MutableFileService
+	err  error
+}
+
+func (c *spillFileServiceCache) get(proc *process.Process) (fileservice.MutableFileService, error) {
+	if c == nil {
+		return proc.GetSpillFileService()
+	}
+	c.once.Do(func() {
+		c.fs, c.err = proc.GetSpillFileService()
+	})
+	return c.fs, c.err
+}
+
+func (w *BucketWriter) getSpillFileService(proc *process.Process) (fileservice.MutableFileService, error) {
+	// Directly constructed writers intentionally retain the historical
+	// fallback. SpillEngine writers all point at one engine-owned cache.
+	if w.spillFS == nil {
+		return proc.GetSpillFileService()
+	}
+	return w.spillFS.get(proc)
 }
 
 func (w *BucketWriter) Created() bool { return w.Fd != nil }
@@ -791,6 +886,9 @@ func writeBucketPayload(proc *process.Process, payload []byte, rows int64, w *Bu
 	if w == nil || len(payload) == 0 {
 		return process.ErrHashBuildBudgetInvalid
 	}
+	if err := checkSpillCanceled(proc); err != nil {
+		return err
+	}
 	oldDiskSize := uint64(0)
 	newDiskToken := false
 	rollbackDisk := func() {
@@ -831,7 +929,7 @@ func writeBucketPayload(proc *process.Process, payload []byte, rows int64, w *Bu
 				return err
 			}
 		}
-		fs, err := proc.GetSpillFileService()
+		fs, err := w.getSpillFileService(proc)
 		if err != nil {
 			if fdToken != nil {
 				fdToken.Release()
@@ -849,6 +947,9 @@ func writeBucketPayload(proc *process.Process, payload []byte, rows int64, w *Bu
 		}
 		w.Fd = f
 		w.fdReservation = fdToken
+	}
+	if err := checkSpillCanceled(proc); err != nil {
+		return err
 	}
 	written, err := w.Fd.Write(payload)
 	if err != nil {
@@ -868,55 +969,14 @@ func writeBucketPayload(proc *process.Process, payload []byte, rows int64, w *Bu
 
 // hashCombine merges a new hash value into a running hash state (Boost-style).
 func hashCombine(h, val uint64) uint64 {
-	return h ^ (val + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2))
+	return keycodec.HashCombine(h, val)
 }
 
 // ComputeXXHash evaluates key vectors and computes XXHash64 values using
 // column-at-a-time processing for better cache locality. seed initialises every
 // hash slot so different spill depths produce different bucket distributions.
 func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
-	if len(hashValues) == 0 {
-		return
-	}
-
-	rowCount := len(hashValues)
-	for i := 0; i < rowCount; i++ {
-		hashValues[i] = seed
-	}
-	if len(keyVecs) == 0 {
-		return
-	}
-
-	for _, vec := range keyVecs {
-		if vec.IsConst() {
-			colHash := uint64(0)
-			if !vec.IsConstNull() {
-				colHash = xxhash.Sum64(vec.GetRawBytesAt(0))
-			}
-			for i := 0; i < rowCount; i++ {
-				hashValues[i] = hashCombine(hashValues[i], colHash)
-			}
-		} else {
-			n := rowCount
-			if vec.Length() < n {
-				n = vec.Length()
-			}
-			if vec.GetNulls().Any() {
-				nulls := vec.GetNulls()
-				for i := 0; i < n; i++ {
-					if nulls.Contains(uint64(i)) {
-						hashValues[i] = hashCombine(hashValues[i], 0)
-					} else {
-						hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
-					}
-				}
-			} else {
-				for i := 0; i < n; i++ {
-					hashValues[i] = hashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
-				}
-			}
-		}
-	}
+	keycodec.ComputeXXHash(keyVecs, hashValues, seed)
 }
 
 // classifyRows computes bucket counts, prefix offsets, and one contiguous row
@@ -1181,6 +1241,9 @@ func (e *SpillEngine) scatterBatchBounded(
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
+	if err := checkSpillCanceled(proc); err != nil {
+		return err
+	}
 	if len(writers) == 0 || len(writers) > SpillNumBuckets {
 		return process.ErrHashBuildBudgetInvalid
 	}
@@ -1243,6 +1306,9 @@ func (e *SpillEngine) scatterBatchBounded(
 	// every parent row into one child, making repartition unable to progress.
 	// Level zero uses bits 0..4, level one bits 5..9, and so on.
 	ComputeXXHash(keyVecs, hashValues, 0)
+	if err := checkSpillCanceled(proc); err != nil {
+		return err
+	}
 	shift := partitionLevel * 5
 	if shift >= 64 {
 		return process.ErrHashBuildBudgetInvalid
@@ -1257,6 +1323,9 @@ func (e *SpillEngine) scatterBatchBounded(
 		return err
 	}
 	for bucketID := range writers {
+		if err := checkSpillCanceled(proc); err != nil {
+			return err
+		}
 		start, end := e.scatterBucketOffsets[bucketID], e.scatterBucketOffsets[bucketID+1]
 		if start == end || writers[bucketID].Name == "" {
 			continue
@@ -1479,8 +1548,12 @@ type SpillEngineConfig struct {
 	// Budget is the statement generation shared with HashBuild. Rebuild and
 	// re-spill must charge this exact generation; creating a fresh generation
 	// would bypass aggregate admission and make ownership impossible to audit.
-	Budget   *process.HashBuildBudgetGeneration
-	MaxQueue int
+	Budget *process.HashBuildBudgetGeneration
+	// ProbeExpressionLease is owned by the consuming join operator and borrowed
+	// by SpillEngine while it scatters or re-scatters probe batches. The join
+	// must free its probe executors before releasing this lease.
+	ProbeExpressionLease *hashbuild.ExpressionMemoryLease
+	MaxQueue             int
 }
 
 // BucketResult encodes the outcome of a RebuildHashmap call.
@@ -1498,6 +1571,7 @@ const (
 type SpillEngine struct {
 	cfg     SpillEngineConfig
 	buckets []SpillBucket
+	spillFS spillFileServiceCache
 
 	// Current bucket state
 	buildReader    BucketReader
@@ -1510,10 +1584,9 @@ type SpillEngine struct {
 	probePool ReusableBufferPool
 
 	// Cached key executors for re-spill
-	keyExecs             []colexec.ExpressionExecutor
-	keyVecs              []*vector.Vector
-	buildExprReservation *process.HashBuildReservation
-	probeExprReservation *process.HashBuildReservation
+	keyExecs       []colexec.ExpressionExecutor
+	keyVecs        []*vector.Vector
+	buildExprLease *hashbuild.ExpressionMemoryLease
 
 	// Reusable scatter buffers to avoid per-batch allocations.
 	scatterHashValues    []uint64
@@ -1528,9 +1601,8 @@ type SpillEngine struct {
 	// been dropped.
 	scatterScratchReservation *process.HashBuildReservation
 
-	// probeKeyEval evaluates probe-side key expressions for probe re-scatter.
-	// Stored from ScatterProbeTable. Must use probe-side conditions
-	// (EqConds[0]), not build-side (EqConds[1]) to ensure correct bucket assignment.
+	// probeKeyEval is the unbudgeted fallback for probe re-scatter. Production
+	// spilled joins evaluate the probe executors owned by ProbeExpressionLease.
 	probeKeyEval func(*batch.Batch) ([]*vector.Vector, error)
 }
 
@@ -1540,6 +1612,47 @@ func NewSpillEngine(cfg SpillEngineConfig) *SpillEngine {
 		cfg.MaxQueue = SpillNumBuckets * SpillNumBuckets
 	}
 	return &SpillEngine{cfg: cfg}
+}
+
+func (e *SpillEngine) makeBucketWriters(prefix string) []BucketWriter {
+	writers := MakeBucketWriters(prefix)
+	for i := range writers {
+		writers[i].spillFS = &e.spillFS
+	}
+	return writers
+}
+
+// TakeSpillBuildPayload transfers the complete build-side spill dependency
+// from a single-consumer JoinMap and resolves its budget generation. Any
+// validation failure closes the moved files before returning.
+func TakeSpillBuildPayload(
+	proc *process.Process,
+	jm *message.JoinMap,
+) (message.SpillBuildPayload, *process.HashBuildBudgetGeneration, error) {
+	payload, err := jm.TakeSpillBuildPayload()
+	if err != nil {
+		return message.SpillBuildPayload{}, nil, moerr.NewInternalError(proc.Ctx, err.Error())
+	}
+
+	var budget *process.HashBuildBudgetGeneration
+	if len(payload.Files) > 0 {
+		var ok bool
+		budget, ok = payload.BudgetRef.(*process.HashBuildBudgetGeneration)
+		if !ok || budget == nil {
+			_ = payload.Close()
+			return message.SpillBuildPayload{}, nil, moerr.NewInternalError(
+				proc.Ctx,
+				"spilled join map is missing its producer budget generation",
+			)
+		}
+	} else {
+		budget, err = proc.GetHashBuildBudget()
+		if err != nil {
+			_ = payload.Close()
+			return message.SpillBuildPayload{}, nil, err
+		}
+	}
+	return payload, budget, nil
 }
 
 // InitFromSpilledMap creates SpillBucket entries from build FDs.
@@ -1581,8 +1694,18 @@ func (e *SpillEngine) ScatterProbeTable(
 	analyzer process.Analyzer,
 	evalKeysFn func(bat *batch.Batch) ([]*vector.Vector, error),
 ) error {
+	bucketCount := len(e.buckets)
+	if bucketCount == 0 ||
+		bucketCount > SpillNumBuckets ||
+		bucketCount&(bucketCount-1) != 0 {
+		return process.ErrHashBuildBudgetInvalid
+	}
 	e.probeKeyEval = evalKeysFn
-	writers := MakeBucketWriters("probe")
+	// The build payload defines the partition fanout. Using the production
+	// maximum unconditionally would hash probe rows into writers that have no
+	// corresponding build bucket; those files are never handed off and their
+	// rows would be silently discarded for legacy or reduced-fanout payloads.
+	writers := e.makeBucketWriters("probe")[:bucketCount]
 	for i := range writers {
 		writers[i].Budget = e.cfg.Budget
 	}
@@ -1606,8 +1729,16 @@ func (e *SpillEngine) ScatterProbeTable(
 
 	// Consume all probe batches.
 	for {
+		if err := checkSpillCanceled(proc); err != nil {
+			return err
+		}
 		bat, err := children()
 		if err != nil {
+			return err
+		}
+		// children may have blocked in an upstream operator while cancellation
+		// arrived. Do not evaluate or materialize the returned batch afterward.
+		if err := checkSpillCanceled(proc); err != nil {
 			return err
 		}
 		if bat == nil {
@@ -1619,16 +1750,13 @@ func (e *SpillEngine) ScatterProbeTable(
 		if bat.IsEmpty() {
 			continue
 		}
-		candidate, err := e.reserveExpressionPeak(proc, e.cfg.ProbeKeyExprs, bat.RowCount())
+		keyVecs, err := e.evalProbeKeys(proc, bat, evalKeysFn)
 		if err != nil {
 			return err
 		}
-		keyVecs, err := evalKeysFn(bat)
-		if err != nil {
-			e.replaceProbeExpressionReservation(candidate)
+		if err := checkSpillCanceled(proc); err != nil {
 			return err
 		}
-		e.replaceProbeExpressionReservation(candidate)
 		if err := e.scatterBatch(proc, bat, keyVecs, writers, nil, 0, false, analyzer); err != nil {
 			return err
 		}
@@ -1636,6 +1764,9 @@ func (e *SpillEngine) ScatterProbeTable(
 
 	// Flush remaining buffers and hand off FDs transactionally. A failed rewind
 	// must not publish an EOF-positioned file or orphan earlier handoffs.
+	if err := checkSpillCanceled(proc); err != nil {
+		return err
+	}
 	if err := e.flushScatterBuffers(proc, writers, analyzer); err != nil {
 		return err
 	}
@@ -1664,6 +1795,9 @@ func (e *SpillEngine) ScatterProbeTable(
 // NextProbeBatch returns the next probe batch from the current bucket's probe file.
 // Returns nil when EOF is reached (caller should then call FinishBucket).
 func (e *SpillEngine) NextProbeBatch(proc *process.Process) (*batch.Batch, error) {
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, err
+	}
 	if e.probeReader.fd == nil {
 		return nil, nil
 	}
@@ -1676,6 +1810,12 @@ func (e *SpillEngine) NextProbeBatch(proc *process.Process) (*batch.Batch, error
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	// Cancellation can race the reader's final record-boundary check. Do not
+	// hand a freshly decoded batch to the join probe loop after that point.
+	if err := checkSpillCanceled(proc); err != nil {
+		e.probeReader.releaseReadBatch(proc, e.probeReadBatch, nil)
 		return nil, err
 	}
 	return bat, nil
@@ -1696,10 +1836,25 @@ func builderMemSize(builder *hashbuild.HashmapBuilder) int64 {
 
 // RebuildHashmap rebuilds the hashmap for the next bucket in the queue.
 func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Analyzer) (*message.JoinMap, BucketResult, error) {
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, BucketSkip, err
+	}
 	if len(e.buckets) == 0 {
 		return nil, BucketQueueEmpty, nil
 	}
 	bucket := e.buckets[0]
+
+	// A build-only bucket cannot contribute to joins that never emit unmatched
+	// build rows. Close and pop it before allocating a reader, copying batches,
+	// building a hashmap, or recursively spilling data that will be discarded.
+	if bucket.ProbeFd == nil && !e.cfg.NeedsBuildForEmptyProbe {
+		e.buckets[0].BuildFd = nil
+		e.buckets = e.buckets[1:]
+		if bucket.BuildFd != nil {
+			_ = bucket.BuildFd.Close()
+		}
+		return nil, BucketSkip, nil
+	}
 
 	if bucket.BuildFd == nil {
 		// Empty build bucket.
@@ -1746,11 +1901,21 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	}
 
 	for {
+		if err := checkSpillCanceled(proc); err != nil {
+			builder.FreeHashMapAndBatches(proc)
+			builder.Free(proc)
+			return nil, BucketSkip, err
+		}
 		bat, err := e.buildReader.ReadBatch(proc, e.buildReadBatch)
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
+			builder.FreeHashMapAndBatches(proc)
+			builder.Free(proc)
+			return nil, BucketSkip, err
+		}
+		if err := checkSpillCanceled(proc); err != nil {
 			builder.FreeHashMapAndBatches(proc)
 			builder.Free(proc)
 			return nil, BucketSkip, err
@@ -1792,6 +1957,11 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		}
 	}
 
+	if err := checkSpillCanceled(proc); err != nil {
+		builder.FreeHashMapAndBatches(proc)
+		builder.Free(proc)
+		return nil, BucketSkip, err
+	}
 	if err := builder.BuildHashmap(e.cfg.HashOnPK, e.cfg.NeedAllocateSels, false, proc); err != nil {
 		if isBudgetAdmission(err) && bucket.Depth < SpillMaxPass {
 			// Release the rejected/partial map admission while retaining the
@@ -1823,6 +1993,10 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 
 	jm := builder.GetJoinMap(proc.Mp())
 	if jm == nil {
+		// GetJoinMap transfers nothing when the decoded build contains no
+		// rows. Release executors and every residual builder allocation before
+		// handing an empty-build probe file to the caller.
+		builder.Free(proc)
 		e.buckets[0].ProbeFd = nil // transferred to reader below; prevent Cleanup double-close
 		e.buckets = e.buckets[1:]
 		if e.cfg.NeedsProbeForEmptyBuild && bucket.ProbeFd != nil {
@@ -1837,7 +2011,6 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		if bucket.ProbeFd != nil {
 			bucket.ProbeFd.Close()
 		}
-		builder.Free(proc)
 		return nil, BucketSkip, nil
 	}
 	jm.SetRowCount(int64(builder.InputBatchRowCount))
@@ -1860,11 +2033,18 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 }
 
 func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Analyzer, bucket SpillBucket, builder *hashbuild.HashmapBuilder, reader *BucketReader, pending *batch.Batch) ([]SpillBucket, error) {
-	buildWriters := MakeBucketWriters("build_sub")
+	if err := checkSpillCanceled(proc); err != nil {
+		return nil, err
+	}
+	// Re-spill only drains the builder's copied batches. Drop the failed
+	// hashmap-build executor set before admitting the engine's re-partition
+	// executors, so the two equivalent retained working sets never overlap.
+	builder.FreeExecutors()
+	buildWriters := e.makeBucketWriters("build_sub")
 	for i := range buildWriters {
 		buildWriters[i].Budget = e.cfg.Budget
 	}
-	probeWriters := MakeBucketWriters("probe_sub")
+	probeWriters := e.makeBucketWriters("probe_sub")
 	for i := range probeWriters {
 		probeWriters[i].Budget = e.cfg.Budget
 	}
@@ -1901,12 +2081,18 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 
 	// Cache key executors.
 	if len(e.keyExecs) != len(e.cfg.BuildKeyExprs) {
-		execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, e.cfg.BuildKeyExprs)
+		execs, lease, err := hashbuild.NewBudgetedExpressionExecutors(
+			proc,
+			e.cfg.Budget,
+			e.cfg.BuildKeyExprs,
+			false,
+		)
 		if err != nil {
 			return nil, err
 		}
 		e.freeKeyExecs()
 		e.keyExecs = execs
+		e.buildExprLease = lease
 	}
 
 	// evalAndScatter builds key vectors using the given executors and scatters.
@@ -1917,8 +2103,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		execs []colexec.ExpressionExecutor,
 		sourceAlreadyCharged bool,
 	) error {
-		candidate, err := e.reserveExpressionPeak(proc, e.cfg.BuildKeyExprs, bat.RowCount())
-		if err != nil {
+		if err := checkSpillCanceled(proc); err != nil {
 			return err
 		}
 		if cap(e.keyVecs) < len(execs) {
@@ -1930,21 +2115,23 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 				keyVecs[i] = nil
 			}
 		}()
-		for i, exec := range execs {
-			vec, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
-			if err != nil {
-				// Eval may leave newly allocated child/result vectors cached.
-				// Destroy the owned executor tree while both its previous
-				// reservation and this candidate are still charged.
-				e.freeKeyExecs()
-				if candidate != nil {
-					candidate.Release()
-				}
-				return err
+		err := e.buildExprLease.Run(proc, bat.RowCount(), func(i int) error {
+			vec, evalErr := execs[i].Eval(proc, []*batch.Batch{bat}, nil)
+			if evalErr != nil {
+				return evalErr
 			}
 			keyVecs[i] = vec
+			return nil
+		})
+		if err != nil {
+			// Eval may leave newly allocated child/result vectors cached.
+			// Destroy the owned executor tree before releasing its lease.
+			e.freeKeyExecs()
+			return err
 		}
-		e.replaceBuildExpressionReservation(candidate)
+		if err := checkSpillCanceled(proc); err != nil {
+			return err
+		}
 		return e.scatterBatch(proc, bat, keyVecs, writers, nil, partitionLevel, sourceAlreadyCharged, analyzer)
 	}
 
@@ -1972,6 +2159,9 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		buildRows += int64(pending.RowCount())
 	}
 	for {
+		if err := checkSpillCanceled(proc); err != nil {
+			return nil, err
+		}
 		bat, err := reader.ReadBatch(proc, e.buildReadBatch)
 		if err == io.EOF {
 			break
@@ -2008,6 +2198,9 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 			}
 		}
 		for {
+			if err := checkSpillCanceled(proc); err != nil {
+				return nil, err
+			}
 			bat, err := reader.ReadBatch(proc, e.probeReadBatch)
 			if err == io.EOF {
 				break
@@ -2161,52 +2354,50 @@ func (e *SpillEngine) AdvanceToNextBucket(
 }
 
 // scatterProbe evaluates probe-side keys (EqConds[0]) for probe re-scatter.
-// Uses probeKeyEval — NOT keyExecs — to get correct column subscripts
-// when probe and build batches have different column layouts.
+// It uses the borrowed probe lease, not build-side keyExecs; probeKeyEval is
+// retained only as the unbudgeted fallback.
 func scatterProbe(proc *process.Process, e *SpillEngine, bat *batch.Batch, writers []BucketWriter, buffers []*batch.Batch, seed uint64, analyzer process.Analyzer) error {
-	candidate, err := e.reserveExpressionPeak(proc, e.cfg.ProbeKeyExprs, bat.RowCount())
+	keyVecs, err := e.evalProbeKeys(proc, bat, e.probeKeyEval)
 	if err != nil {
 		return err
 	}
-	keyVecs, err := e.probeKeyEval(bat)
-	if err != nil {
-		e.replaceProbeExpressionReservation(candidate)
-		return err
-	}
-	e.replaceProbeExpressionReservation(candidate)
 	return e.scatterBatch(proc, bat, keyVecs, writers, buffers, seed, true, analyzer)
 }
 
-func (e *SpillEngine) reserveExpressionPeak(proc *process.Process, exprs []*plan.Expr, rows int) (*process.HashBuildReservation, error) {
-	if e.cfg.Budget == nil {
-		return nil, nil
-	}
-	var peak uint64
-	for _, expr := range exprs {
-		exprPeak, err := hashbuild.ExpressionVectorPeak(proc, expr, rows, false)
-		if err != nil || peak > math.MaxUint64-exprPeak {
+func (e *SpillEngine) evalProbeKeys(
+	proc *process.Process,
+	bat *batch.Batch,
+	fallback func(*batch.Batch) ([]*vector.Vector, error),
+) ([]*vector.Vector, error) {
+	if e.cfg.ProbeExpressionLease == nil {
+		if fallback == nil {
 			return nil, process.ErrHashBuildBudgetInvalid
 		}
-		peak += exprPeak
+		return fallback(bat)
 	}
-	if peak == 0 {
-		return nil, nil
+	if e.cfg.ProbeExpressionLease.Len() != len(e.cfg.ProbeKeyExprs) {
+		return nil, process.ErrHashBuildBudgetInvalid
 	}
-	return e.cfg.Budget.Reserve(peak)
-}
-
-func (e *SpillEngine) replaceBuildExpressionReservation(candidate *process.HashBuildReservation) {
-	if e.buildExprReservation != nil {
-		e.buildExprReservation.Release()
+	if cap(e.keyVecs) < len(e.cfg.ProbeKeyExprs) {
+		e.keyVecs = make([]*vector.Vector, len(e.cfg.ProbeKeyExprs))
 	}
-	e.buildExprReservation = candidate
-}
-
-func (e *SpillEngine) replaceProbeExpressionReservation(candidate *process.HashBuildReservation) {
-	if e.probeExprReservation != nil {
-		e.probeExprReservation.Release()
+	keyVecs := e.keyVecs[:len(e.cfg.ProbeKeyExprs)]
+	err := e.cfg.ProbeExpressionLease.Eval(
+		proc,
+		[]*batch.Batch{bat},
+		bat.RowCount(),
+		func(index int, vec *vector.Vector) error {
+			keyVecs[index] = vec
+			return nil
+		},
+	)
+	if err != nil {
+		for i := range keyVecs {
+			keyVecs[i] = nil
+		}
+		return nil, err
 	}
-	e.probeExprReservation = candidate
+	return keyVecs, nil
 }
 
 func (e *SpillEngine) freeKeyExecs() {
@@ -2216,9 +2407,9 @@ func (e *SpillEngine) freeKeyExecs() {
 		}
 	}
 	e.keyExecs = nil
-	if e.buildExprReservation != nil {
-		e.buildExprReservation.Release()
-		e.buildExprReservation = nil
+	if e.buildExprLease != nil {
+		e.buildExprLease.Release()
+		e.buildExprLease = nil
 	}
 }
 
@@ -2260,9 +2451,5 @@ func (e *SpillEngine) Cleanup(proc *process.Process) {
 	e.buildPool.Release(proc)
 	e.probePool.Release(proc)
 	e.freeKeyExecs()
-	if e.probeExprReservation != nil {
-		e.probeExprReservation.Release()
-		e.probeExprReservation = nil
-	}
 	e.releaseScatterScratch()
 }

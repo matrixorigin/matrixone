@@ -150,6 +150,9 @@ message CNStoreHeartbeat {
 message CNAllocateID {
   string key = 1;
   uint64 Batch = 2;
+  // RequestID makes a keyed allocation idempotent when a caller cannot tell
+  // whether a prior request was committed. It is used by CN bootstrap locks.
+  string RequestID = 3;
 }
 
 // LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.

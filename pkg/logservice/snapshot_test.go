@@ -113,6 +113,52 @@ func TestInitSnapshotMgr(t *testing.T) {
 	assert.Equal(t, mgr.snapshots[nid].items[3].index, snapshotIndex(1324))
 }
 
+func TestInitSnapshotMgrReplacesInMemoryView(t *testing.T) {
+	const (
+		shardID   uint64 = 1
+		replicaID uint64 = 1
+	)
+	cfg := &Config{
+		FS:                vfs.NewStrictMem(),
+		SnapshotExportDir: "/tmp/exported",
+	}
+	mgr := newSnapshotManager(cfg)
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+
+	testPrepareSnapshot(t, mgr, nid, snapshotIndex(100))
+	testPrepareSnapshot(t, mgr, nid, snapshotIndex(200))
+	assert.NoError(t, mgr.Init(shardID, replicaID))
+	assert.Equal(t, 2, mgr.Count(shardID, replicaID))
+
+	// An export can finish writing its directory before Add runs. If a retrying
+	// replica start initializes the manager in that window, the later Add of
+	// the same index must remain idempotent.
+	require.NoError(t, mgr.Add(shardID, replicaID, 200))
+	require.Equal(t, 2, mgr.Count(shardID, replicaID))
+
+	// Retrying initialization enough times to fill the default quota must not
+	// append the same on-disk snapshots.
+	for range defaultMaxExportedSnapshot {
+		require.NoError(t, mgr.Init(shardID, replicaID))
+	}
+	require.Equal(t, 2, mgr.Count(shardID, replicaID))
+
+	// Initialization reloads the current disk state rather than retaining a
+	// snapshot directory that disappeared between attempts.
+	assert.NoError(t, mgr.cfg.FS.RemoveAll(mgr.snapshotPath(nid, snapshotIndex(100))))
+	testPrepareSnapshot(t, mgr, nid, snapshotIndex(300))
+	require.NoError(t, mgr.Init(shardID, replicaID))
+	require.Equal(t, 2, mgr.Count(shardID, replicaID))
+	assert.Equal(t, snapshotIndex(200), mgr.snapshots[nid].items[0].index)
+	assert.Equal(t, snapshotIndex(300), mgr.snapshots[nid].items[1].index)
+
+	// An empty disk view must clear all previously loaded snapshots.
+	require.NoError(t, mgr.cfg.FS.RemoveAll(mgr.snapshotPath(nid, snapshotIndex(200))))
+	require.NoError(t, mgr.cfg.FS.RemoveAll(mgr.snapshotPath(nid, snapshotIndex(300))))
+	require.NoError(t, mgr.Init(shardID, replicaID))
+	assert.Equal(t, 0, mgr.Count(shardID, replicaID))
+}
+
 func TestAddSnapshot(t *testing.T) {
 	var (
 		shardID   uint64 = 1

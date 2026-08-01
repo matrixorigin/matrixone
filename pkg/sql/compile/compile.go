@@ -68,21 +68,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -595,18 +595,48 @@ func (c *Compile) prePipelineInitializer() (err error) {
 			return err
 		}
 	}
+	var spillBudget materialized.SpillBudget
+	if len(c.materializedSources) > 0 {
+		spillBudget = newMaterializedSpillBudget(c.proc)
+	}
 	for _, source := range c.materializedSources {
-		if err = source.Begin(c.proc.Mp(), func(name string) (*os.File, error) {
+		if err = source.Begin(c.proc.Mp(), materialized.SpillConfig{FileFactory: func(name string) (*os.File, error) {
 			spillFS, spillErr := c.proc.GetSpillFileService()
 			if spillErr != nil {
 				return nil, spillErr
 			}
 			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
-		}); err != nil {
+		}, Budget: spillBudget}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget {
+	return materialized.SpillBudget{
+		ReserveMemory: func(size uint64) (materialized.Reservation, error) {
+			budget, err := proc.GetHashBuildBudget()
+			if err != nil {
+				return nil, err
+			}
+			return budget.Reserve(size)
+		},
+		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
+			budget, err := proc.GetHashBuildBudget()
+			if err != nil {
+				return nil, err
+			}
+			return budget.ReserveSpillDisk(size)
+		},
+		ReserveFD: func(size uint64) (materialized.Reservation, error) {
+			budget, err := proc.GetHashBuildBudget()
+			if err != nil {
+				return nil, err
+			}
+			return budget.ReserveSpillFD(size)
+		},
+	}
 }
 
 // run once
@@ -620,12 +650,21 @@ func (c *Compile) runOnce() (err error) {
 		c.proc.Base.StageCache.Clear()
 	}()
 
-	// Pre-check: REPLACE parent→child FK RESTRICT constraints must be
-	// verified before the REPLACE execution modifies any rows.
+	// REPLACE parent checks and actions run before the main pipeline.
 	query := c.pn.GetQuery()
 	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
+		if err = validateReplaceParentTxnMode(
+			c.proc.Ctx, query, c.proc.GetTxnOperator().Txn().IsPessimistic()); err != nil {
+			return err
+		}
 		for _, sql := range query.DetectSqls {
-			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
+				continue
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
+				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_LOCK:")); err != nil {
+					return err
+				}
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
 				if err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")); err != nil {
 					// Only translate the "check returned false" signal into the
 					// parent-row-referenced error; pass through real execution
@@ -634,6 +673,10 @@ func (c *Compile) runOnce() (err error) {
 					if moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2) {
 						return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
 					}
+					return err
+				}
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
+				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")); err != nil {
 					return err
 				}
 			}
@@ -732,12 +775,14 @@ func (c *Compile) runOnce() (err error) {
 	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		// Filter out pre-check SQLs (already executed before the main operation).
-		// The modern INSERT path enforces child→parent existence in-plan now, so the
-		// remaining DetectSqls are self-referencing FK checks (plain 1452 message).
+		// Filter out REPLACE parent-side checks and actions already executed before
+		// the main operation.
 		var postCheckSqls []string
 		for _, sql := range query.DetectSqls {
-			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
 				continue
 			}
 			postCheckSqls = append(postCheckSqls, sql)
@@ -752,6 +797,20 @@ func (c *Compile) runOnce() (err error) {
 		}
 	}
 	return err
+}
+
+func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
+	if pessimistic || query == nil {
+		return nil
+	}
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
+			strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
+			return moerr.NewNotSupported(ctx,
+				"REPLACE on a referenced parent table in optimistic transaction mode")
+		}
+	}
+	return nil
 }
 
 // add log to check if background sql return NeedRetry error when origin sql execute successfully
@@ -905,11 +964,12 @@ func (c *Compile) lockTable() error {
 	for _, tableID := range tableIDs {
 		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
-		if err := lockop.LockTable(
+		if err := lockop.LockTableWithMode(
 			c.e,
 			c.proc,
 			tbl.TableId,
 			typ,
+			tbl.Mode,
 			false); err != nil {
 			return err
 		}
@@ -1191,15 +1251,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if node.Limit != nil {
 			ss = c.compileLimit(node, ss)
 		}
-		return ss, nil
-	case plan.Node_SOURCE_SCAN:
-		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileSourceScan(node)
-		if err != nil {
-			return nil, err
-		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_FILTER, plan.Node_PROJECT:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -1621,62 +1672,6 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 	return ds
 }
 
-func (c *Compile) compileSourceScan(node *plan.Node) ([]*Scope, error) {
-	_, span := trace.Start(c.proc.Ctx, "compileSourceScan")
-	defer span.End()
-	configs := make(map[string]interface{})
-	for _, def := range node.TableDef.Defs {
-		switch v := def.Def.(type) {
-		case *plan.TableDef_DefType_Properties:
-			for _, p := range v.Properties.Properties {
-				configs[p.Key] = p.Value
-			}
-		}
-	}
-
-	end, err := mokafka.GetStreamCurrentSize(c.proc.Ctx, configs, mokafka.NewKafkaAdapter)
-	if err != nil {
-		return nil, err
-	}
-	ps := calculatePartitions(0, end, int64(c.ncpu))
-
-	ss := make([]*Scope, len(ps))
-
-	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		ss[i] = newScope(Merge)
-		ss[i].NodeInfo = getEngineNode(c)
-		ss[i].Proc = c.proc.NewNoContextChildProc(0)
-		arg := constructStream(node, ps[i])
-		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].setRootOperator(arg)
-	}
-	c.anal.isFirst = false
-	return ss, nil
-}
-
-const StreamMaxInterval = 8192
-
-func calculatePartitions(start, end, n int64) [][2]int64 {
-	var ps [][2]int64
-	interval := (end - start) / n
-	if interval < StreamMaxInterval {
-		interval = StreamMaxInterval
-	}
-	var r int64
-	l := start
-	for i := int64(0); i < n; i++ {
-		r = l + interval
-		if r >= end {
-			ps = append(ps, [2]int64{l, end})
-			break
-		}
-		ps = append(ps, [2]int64{l, r})
-		l = r
-	}
-	return ps
-}
-
 func StrictSqlMode(proc *process.Process) (error, bool) {
 	mode, err := resolveVariableOrDefault(proc, "sql_mode", true, false)
 	if err != nil {
@@ -2000,6 +1995,19 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		}
 	}()
 
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_MONGODB_TB) {
+		if err := c.hydrateMongoScan(node); err != nil {
+			return nil, err
+		}
+		scope := c.constructScopeForExternal(c.addr, false)
+		currentFirstFlag := c.anal.isFirst
+		op := mongoscan.NewArgument().WithScan(node.ExternScan.MongodbScan)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		scope.setRootOperator(op)
+		c.anal.isFirst = false
+		return []*Scope{scope}, nil
+	}
+
 	err, strictSqlMode := StrictSqlMode(c.proc)
 	if err != nil {
 		return nil, err
@@ -2078,6 +2086,116 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	} else {
 		return c.compileExternScanSerialReadWrite(node, param, fileList, fileSize, strictSqlMode)
 	}
+}
+
+func (c *Compile) hydrateMongoScan(node *plan.Node) error {
+	if node == nil || node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
+		return moerr.NewInvalidInput(c.proc.Ctx, "MongoDB external table is missing scan metadata")
+	}
+	scan := node.ExternScan.MongodbScan
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	res, err := c.runSqlWithResultAndOptions(
+		sqlmongodb.GetMappingByTableIDSQL(accountID, scan.TableId),
+		NoAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	found := false
+	var parseErr error
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 || len(cols) < 9 {
+			return true
+		}
+		mappingIDs := executor.GetFixedRows[uint64](cols[0])
+		connectionIDs := executor.GetFixedRows[uint64](cols[1])
+		versions := executor.GetFixedRows[uint64](cols[2])
+		parallelism := executor.GetFixedRows[int32](cols[6])
+		disabled := executor.GetFixedRows[uint64](cols[7])
+		mappingVersions := executor.GetFixedRows[uint64](cols[8])
+		if len(mappingIDs) == 0 || len(connectionIDs) == 0 || len(versions) == 0 || len(parallelism) == 0 || len(disabled) == 0 || len(mappingVersions) == 0 {
+			parseErr = moerr.NewInternalError(c.proc.Ctx, "MongoDB catalog mapping row has invalid types")
+			return false
+		}
+		if disabled[0] != 0 {
+			parseErr = moerr.NewInvalidInput(c.proc.Ctx, "MongoDB connection is disabled")
+			return false
+		}
+		var columns []sqlmongodb.ColumnMapping
+		if err := json.Unmarshal(cols[5].GetBytesAt(0), &columns); err != nil {
+			parseErr = moerr.NewInternalError(c.proc.Ctx, "MongoDB catalog column mapping is invalid")
+			return false
+		}
+		catalogMapping := sqlmongodb.TableMapping{
+			TableID: scan.TableId, MappingID: mappingIDs[0], ConnectionID: connectionIDs[0],
+			Database: string(cols[3].GetBytesAt(0)), Collection: string(cols[4].GetBytesAt(0)),
+			Columns: columns, MaxParallelism: parallelism[0], Version: mappingVersions[0],
+		}
+		if !sqlmongodb.MappingDefinitionMatchesPlan(catalogMapping, scan) {
+			parseErr = moerr.NewInvalidInput(c.proc.Ctx, "MongoDB table mapping changed during planning; retry the statement")
+			return false
+		}
+		columns, parseErr = projectedMongoColumns(c.proc.Ctx, columns, node.TableDef)
+		if parseErr != nil {
+			return false
+		}
+		scan.MappingId = mappingIDs[0]
+		scan.MappingVersion = mappingVersions[0]
+		scan.ConnectionId = connectionIDs[0]
+		scan.ConnectionVersion = versions[0]
+		scan.Database = string(cols[3].GetBytesAt(0))
+		scan.Collection = string(cols[4].GetBytesAt(0))
+		scan.Columns = sqlmongodb.ColumnsToPlan(columns)
+		scan.ProjectedPaths = projectedMongoPlanPaths(columns)
+		scan.MaxParallelism = parallelism[0]
+		found = true
+		return false
+	})
+	if parseErr != nil {
+		return parseErr
+	}
+	if !found {
+		return moerr.NewInvalidInput(c.proc.Ctx, "MongoDB table mapping does not exist for this account")
+	}
+	if scan.MaxParallelism != 1 {
+		return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP requires max_parallelism=1")
+	}
+	scan.PushedPredicate, scan.ResidualFilterDigest = sqlmongodb.PushdownPlanFilters(c.proc.Ctx, node.FilterList, scan.Columns)
+	return nil
+}
+
+func projectedMongoColumns(ctx context.Context, columns []sqlmongodb.ColumnMapping, tableDef *plan.TableDef) ([]sqlmongodb.ColumnMapping, error) {
+	if tableDef == nil {
+		return nil, moerr.NewInternalError(ctx, "MongoDB external scan is missing its table definition")
+	}
+	names := make([]string, 0, len(tableDef.Cols))
+	for _, column := range tableDef.Cols {
+		if column != nil && !column.Hidden {
+			names = append(names, column.Name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, moerr.NewInternalError(ctx, "MongoDB external scan has no retained mapped columns")
+	}
+	return sqlmongodb.ProjectColumnsByName(ctx, columns, names)
+}
+
+func projectedMongoPlanPaths(columns []sqlmongodb.ColumnMapping) []string {
+	result := make([]string, 0, len(columns))
+	seen := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		if _, ok := seen[column.Path]; ok {
+			continue
+		}
+		seen[column.Path] = struct{}{}
+		result = append(result, column.Path)
+	}
+	return result
 }
 
 func (c *Compile) getParallelSizeForExternalScan(node *plan.Node, cpuNum int) int {
@@ -3638,13 +3756,13 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 			} else {
 				c.setProjection(node, ss[i])
 			}
-		case *source.Source:
+		case *external.External:
 			if op.ProjectList == nil {
 				op.ProjectList = node.ProjectList
 			} else {
 				c.setProjection(node, ss[i])
 			}
-		case *external.External:
+		case *mongoscan.MongoScan:
 			if op.ProjectList == nil {
 				op.ProjectList = node.ProjectList
 			} else {
@@ -5482,7 +5600,9 @@ func (c *Compile) compileRecursiveCte(node *plan.Node, curNodeIdx int32) ([]*Sco
 	rs.setRootOperator(mergeOp1)
 
 	currentFirstFlag := c.anal.isFirst
-	mergecteArg := mergecte.NewArgument().WithNodeCnt(len(node.SourceStep) - 1)
+	mergecteArg := mergecte.NewArgument().
+		WithNodeCnt(len(node.SourceStep) - 1).
+		WithDistinct(node.RecursiveUnionDistinct)
 	mergecteArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergecteArg)
 	c.anal.isFirst = false
@@ -5560,7 +5680,9 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 	if materializedSource != nil {
 		// The materialized source is process-local state. Always terminate the
 		// producer at a local merge scope so it is never serialized as part of a
-		// remote scope without its consumers.
+		// remote scope without its consumers. Group same-CN shuffle buckets first
+		// so every remote producer scope is independently executable.
+		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		rs = c.newMergeScope(ss)
 	} else if c.IsSingleScope(ss) {
 		rs = ss[0]
@@ -5900,7 +6022,7 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 //
 // Background (issue #24919): newShuffleJoinScopeList leaves a CN's dop join buckets in
 // separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
-// When the consumer (here compileInsert) sends each bucket individually, RemoteRun ->
+// When a consumer sends each bucket individually, RemoteRun ->
 // checkPipelineStandaloneExecutableAtRemote sees the dispatch.LocalRegs pointing to the
 // sibling out-of-tree buckets, so the tree is not independently executable and must fail
 // before remote start. Historically RemoteRun silently moved that tree to the coordinator;
@@ -5909,7 +6031,7 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // buckets in one tree, so the whole group executes at the intended remote CN.
 //
 // It is a no-op unless we are multi-CN and ss actually carries a cross-CN shuffle dispatch,
-// so single-CN and non-shuffle inserts are completely unaffected.
+// so single-CN and non-shuffle consumers are completely unaffected.
 //
 // Operator-chain note: callers attach their own root operator to each bucket first (e.g.
 // the insert / multiUpdate operator). mergeScopesByCN (via newMergeScopeByCN ->

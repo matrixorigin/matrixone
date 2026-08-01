@@ -55,6 +55,16 @@ func makeObjectListOrderTestEntry(
 	return entry
 }
 
+func collectVisibleObjectMarkers(list *ObjectList) []byte {
+	it := list.MakeVisibleCommittedObjectIt(txnbase.MockTxnReaderWithNow())
+	defer it.Release()
+	var markers []byte
+	for it.Next() {
+		markers = append(markers, it.Item().ID()[0])
+	}
+	return markers
+}
+
 func TestObjectListOrder(t *testing.T) {
 	list := NewObjectList(false)
 	entries := []*ObjectEntry{
@@ -76,7 +86,7 @@ func TestObjectListOrder(t *testing.T) {
 	}
 
 	var markers []byte
-	it := list.tree.Load().Iter()
+	it := list.loadTree().Iter()
 	for ok := it.First(); ok; ok = it.Next() {
 		markers = append(markers, it.Item().ID()[0])
 	}
@@ -86,6 +96,7 @@ func TestObjectListOrder(t *testing.T) {
 	for _, entry := range entries {
 		require.Same(t, entry, list.GetLastestNode(entry.ID()))
 	}
+	require.Equal(t, []byte{8, 2, 7, 1}, collectVisibleObjectMarkers(list))
 }
 
 func TestObjectListGroupSeek(t *testing.T) {
@@ -99,7 +110,7 @@ func TestObjectListGroupSeek(t *testing.T) {
 	}
 	list.Set(makeObjectListOrderTestEntry(4, ObjectListGroupAppendableDrop, 2))
 
-	it := list.tree.Load().Iter()
+	it := list.loadTree().Iter()
 	defer it.Release()
 
 	require.True(t, SeekObjectListGroup(&it, ObjectListGroupAppendableCreate, types.BuildTS(2, 0)))
@@ -199,6 +210,41 @@ func TestObjectListUncommittedSeekKeysConcurrent(t *testing.T) {
 	}
 }
 
+func TestObjectListDynamicSeekKeysConcurrent(t *testing.T) {
+	tree := newObjectEntryTree()
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+		tree.Set(makeObjectListOrderTestEntry(byte(group+1), group, 1))
+	}
+
+	const workers = 16
+	errC := make(chan error, workers)
+	var wg sync.WaitGroup
+	for worker := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			group := ObjectListGroup(worker % len(objectListUncommittedMaxKeys))
+			it := tree.Iter()
+			defer it.Release()
+			for range 100 {
+				if !SeekObjectListGroup(&it, group, types.BuildTS(1, 0)) {
+					errC <- fmt.Errorf("group %d not found", group)
+					return
+				}
+				if actual := it.Item().ObjectListGroup(); actual != group {
+					errC <- fmt.Errorf("got group %d, want %d", actual, group)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errC)
+	for err := range errC {
+		require.NoError(t, err)
+	}
+}
+
 func TestObjectListGroupUsesVersionLink(t *testing.T) {
 	entry := makeObjectListOrderTestEntry(1, ObjectListGroupAppendableCreate, 1)
 	entry.DeletedAt = types.BuildTS(2, 0)
@@ -222,13 +268,7 @@ func TestVisibleObjectIteratorMergesGroupsByCreateTS(t *testing.T) {
 		list.Set(entry)
 	}
 
-	it := list.MakeVisibleCommittedObjectIt(txnbase.MockTxnReaderWithNow())
-	defer it.Release()
-	var markers []byte
-	for it.Next() {
-		markers = append(markers, it.Item().ID()[0])
-	}
-	require.Equal(t, []byte{1, 4, 2, 3}, markers)
+	require.Equal(t, []byte{1, 4, 2, 3}, collectVisibleObjectMarkers(list))
 }
 
 func TestObjectListMovesCreateEntryWhenDropStarts(t *testing.T) {
@@ -239,13 +279,14 @@ func TestObjectListMovesCreateEntryWhenDropStarts(t *testing.T) {
 
 	updatedCreate := created.Clone()
 	dropped := makeObjectListOrderTestEntry(1, ObjectListGroupAppendableDrop, 3)
+	dropped.CreatedAt = created.CreatedAt
 	updatedCreate.nextVersion = dropped
 	dropped.prevVersion = updatedCreate
 	list.modify(nil, dropped, updatedCreate)
 
 	var groups []ObjectListGroup
 	var markers []byte
-	it := list.tree.Load().Iter()
+	it := list.loadTree().Iter()
 	for ok := it.First(); ok; ok = it.Next() {
 		groups = append(groups, it.Item().ObjectListGroup())
 		markers = append(markers, it.Item().ID()[0])
@@ -259,6 +300,7 @@ func TestObjectListMovesCreateEntryWhenDropStarts(t *testing.T) {
 	}, groups)
 	require.Equal(t, []byte{2, 1, 1}, markers)
 	require.Len(t, list.GetAllNodes(created.ID()), 2)
+	require.Equal(t, []byte{2}, collectVisibleObjectMarkers(list))
 
 	restored := dropped.Clone()
 	restored.DeletedAt = types.TS{}
@@ -266,13 +308,14 @@ func TestObjectListMovesCreateEntryWhenDropStarts(t *testing.T) {
 	restored.nextVersion = nil
 	list.modify(dropped, restored, nil)
 
-	require.Equal(t, 2, list.tree.Load().Len())
+	require.Equal(t, 2, list.loadTree().Len())
 	require.Same(t, restored, list.GetLastestNode(restored.ID()))
-	it = list.tree.Load().Iter()
+	it = list.loadTree().Iter()
 	for ok := it.First(); ok; ok = it.Next() {
 		require.Equal(t, ObjectListGroupAppendableCreate, it.Item().ObjectListGroup())
 	}
 	it.Release()
+	require.Equal(t, []byte{2, 1}, collectVisibleObjectMarkers(list))
 }
 
 func TestObjectListReplayTimestampReordersEntry(t *testing.T) {
@@ -285,7 +328,7 @@ func TestObjectListReplayTimestampReordersEntry(t *testing.T) {
 
 	updated := list.UpdateReplayTs(replayed, types.BuildTS(5, 0))
 
-	it := list.tree.Load().Iter()
+	it := list.loadTree().Iter()
 	defer it.Release()
 	require.True(t, it.First())
 	require.Same(t, updated, it.Item())
@@ -293,6 +336,7 @@ func TestObjectListReplayTimestampReordersEntry(t *testing.T) {
 	require.Same(t, committed, it.Item())
 	require.Same(t, updated, list.GetLastestNode(replayed.ID()))
 	require.Equal(t, types.BuildTS(5, 0), replayed.CreatedAt)
+	require.Equal(t, []byte{1, 2}, collectVisibleObjectMarkers(list))
 }
 
 func TestObjectListReplayTimestampReordersDropEntry(t *testing.T) {
@@ -306,7 +350,8 @@ func TestObjectListReplayTimestampReordersDropEntry(t *testing.T) {
 	dropped.DeletedAt = txnif.UncommitTS
 	updatedCreate.nextVersion = dropped
 	dropped.prevVersion = updatedCreate
-	list.modify(nil, dropped, updatedCreate)
+	list.Set(dropped)
+	require.Empty(t, collectVisibleObjectMarkers(list))
 
 	updatedDrop := list.UpdateReplayTs(dropped, types.BuildTS(3, 0))
 	require.Equal(t, types.BuildTS(3, 0), dropped.DeletedAt)
@@ -317,4 +362,5 @@ func TestObjectListReplayTimestampReordersDropEntry(t *testing.T) {
 	require.Len(t, nodes, 2)
 	require.Same(t, updatedDrop, nodes[0])
 	require.Same(t, updatedDrop.prevVersion, nodes[1])
+	require.Empty(t, collectVisibleObjectMarkers(list))
 }

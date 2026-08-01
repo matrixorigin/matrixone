@@ -143,9 +143,9 @@ func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objec
 	}
 
 	var shuffleIDX uint64
-	if rsp.ShuffleRangeUint64 != nil {
+	if len(rsp.ShuffleRangeUint64) > 0 {
 		shuffleIDX = GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(rsp.ShuffleRangeUint64, zm, t)
-	} else if rsp.ShuffleRangeInt64 != nil {
+	} else if len(rsp.ShuffleRangeInt64) > 0 {
 		shuffleIDX = GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(rsp.ShuffleRangeInt64, zm, t)
 	} else {
 		shuffleIDX = GetRangeShuffleIndexForExtractedZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(bucketNum), t)

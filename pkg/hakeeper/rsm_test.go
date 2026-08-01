@@ -267,6 +267,37 @@ func TestAllocateIDByKeyCmd(t *testing.T) {
 	assert.Equal(t, uint64(101), tsm1.assignIDByKey("k2"))
 }
 
+func TestAllocateIDByKeyWithRequestIDIsIdempotentAcrossSnapshot(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	tsm1.state.State = pb.HAKeeperRunning
+	cmd := GetAllocateIDCmd(pb.CNAllocateID{
+		Key:       "bootstrap",
+		Batch:     1,
+		RequestID: "cn-1",
+	})
+
+	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), result.Value)
+
+	buf := bytes.NewBuffer(nil)
+	require.NoError(t, tsm1.SaveSnapshot(buf, nil, nil))
+	tsm2 := NewStateMachine(0, 2).(*stateMachine)
+	require.NoError(t, tsm2.RecoverFromSnapshot(buf, nil, nil))
+
+	result, err = tsm2.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), result.Value)
+
+	result, err = tsm2.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{
+		Key:       "bootstrap",
+		Batch:     1,
+		RequestID: "cn-2",
+	})})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), result.Value)
+}
+
 func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	sc1 := pb.ScheduleCommand{

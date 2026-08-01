@@ -240,6 +240,12 @@ func (proc *Process) Free() {
 		proc.Base.messageBoard.Reset()
 		proc.Base.messageBoard = nil
 	}
+	proc.Base.cteMemoryBudgetMu.Lock()
+	if proc.Base.cteMemoryBudget != nil {
+		proc.Base.cteMemoryBudget.Close()
+		proc.Base.cteMemoryBudget = nil
+	}
+	proc.Base.cteMemoryBudgetMu.Unlock()
 	proc.setPrepareParams(nil, nil, false)
 }
 

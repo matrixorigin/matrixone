@@ -37,7 +37,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -328,7 +327,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 func redactStatementTextForLogging(statement tree.Statement, text string) string {
 	switch statement.(type) {
-	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog:
+	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
+		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection:
 		return tree.String(statement, dialect.MYSQL)
 	default:
 		return text
@@ -1106,7 +1106,7 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	mrs.AddColumn(CodeCol)
 	mrs.AddColumn(MsgCol)
 
-	info := ses.GetErrInfo()
+	info := ses.diagnosticsSnapshot()
 
 	for i := info.length() - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
@@ -1124,6 +1124,26 @@ func handleShowErrors(ses FeSession, execCtx *ExecCtx) error {
 		return err
 	}
 	return err
+}
+
+func isDiagnosticsStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.ShowErrors, *tree.ShowWarnings:
+		return true
+	default:
+		return false
+	}
+}
+
+func isTopLevelClientStatement(ses *Session, execCtx *ExecCtx, input *UserInput) bool {
+	return ses != nil && execCtx != nil && input != nil &&
+		!input.isInternal() && !execCtx.inMigration && !ses.IsDerivedStmt()
+}
+
+func resetDiagnosticsForStatement(ses *Session, execCtx *ExecCtx, input *UserInput, stmt tree.Statement) {
+	if isTopLevelClientStatement(ses, execCtx, input) && !isDiagnosticsStatement(stmt) {
+		ses.resetDiagnostics()
+	}
 }
 
 func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) error {
@@ -1766,11 +1786,22 @@ func extractPrepareStmtSQL(ctx context.Context, sql, sqlMode string) (string, er
 }
 
 func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
-	originSql, err := extractPrepareStmtSQL(execCtx.reqCtx, sql, sessionSQLModeForParser(ses))
+	return doPrepareStmtInSession(execCtx, ses, ses, st, sql, paramTypes)
+}
+
+func doPrepareStmtInSession(
+	execCtx *ExecCtx,
+	owner *Session,
+	executionSes FeSession,
+	st *tree.PrepareStmt,
+	sql string,
+	paramTypes []byte,
+) (*PrepareStmt, error) {
+	originSql, err := extractPrepareStmtSQL(execCtx.reqCtx, sql, sessionSQLModeForParser(owner))
 	if err != nil {
 		return nil, err
 	}
-	prepareStmt, err := createPrepareStmt(execCtx, ses, originSql, st, st.Stmt)
+	prepareStmt, err := createPrepareStmtInSession(execCtx, owner, executionSes, originSql, st, st.Stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -1778,7 +1809,7 @@ func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql str
 		prepareStmt.ParamTypes = paramTypes
 	}
 
-	if err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
+	if err = owner.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
 		prepareStmt.Close()
 		return nil, err
 	}
@@ -1791,27 +1822,42 @@ func handlePrepareStmt(ses FeSession, execCtx *ExecCtx, st *tree.PrepareStmt, sq
 }
 
 func handlePrepareVar(ses *Session, execCtx *ExecCtx, st *tree.PrepareVar) (*PrepareStmt, error) {
-	wrapper := &tree.PrepareString{
-		Name: st.Name,
-		Sql:  st.Var,
-	}
-	p, err := ses.GetUserDefinedVar(st.Var)
+	return doPrepareVarInSession(ses, ses, execCtx, st)
+}
+
+func prepareSQLFromUserVar(ses FeSession, name string) (string, error) {
+	p, err := ses.GetUserDefinedVar(name)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	// MySQL converts numeric and NULL user variables to statement text so that
 	// the SQL parser reports the invalid statement consistently.
 	if p.Value == nil {
-		wrapper.Sql = "NULL"
-	} else {
-		wrapper.Sql = fmt.Sprint(p.Value)
+		return "NULL", nil
 	}
+	return fmt.Sprint(p.Value), nil
+}
 
-	return doPrepareString(ses, execCtx, wrapper)
+func doPrepareVarInSession(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.PrepareVar) (*PrepareStmt, error) {
+	wrapper := &tree.PrepareString{
+		Name: st.Name,
+		Sql:  st.Var,
+	}
+	prepareSQL, err := prepareSQLFromUserVar(owner, st.Var)
+	if err != nil {
+		return nil, err
+	}
+	wrapper.Sql = prepareSQL
+
+	return doPrepareStringInSession(owner, executionSes, execCtx, wrapper)
 }
 
 func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
-	rewritten, innerStmt, remapDb, err := prepareStringStatement(execCtx, ses, st.Sql)
+	return doPrepareStringInSession(ses, ses, execCtx, st)
+}
+
+func doPrepareStringInSession(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
+	rewritten, innerStmt, remapDb, err := prepareStringStatement(execCtx, owner, st.Sql)
 	if err != nil {
 		return nil, err
 	}
@@ -1824,14 +1870,14 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 
 	previousRemapDb := execCtx.remapDb
 	execCtx.remapDb = remapDb
-	prepareStmt, err := createPrepareStmt(execCtx, ses, rewritten, prepareNode, innerStmt)
+	prepareStmt, err := createPrepareStmtInSession(execCtx, owner, executionSes, rewritten, prepareNode, innerStmt)
 	execCtx.remapDb = previousRemapDb
 	if err != nil {
 		innerStmt.Free()
 		return nil, err
 	}
 
-	if err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
+	if err = owner.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
 		prepareStmt.Close()
 		return nil, err
 	}
@@ -1902,35 +1948,52 @@ func createPrepareStmt(
 	originSQL string,
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
+	return createPrepareStmtInSession(execCtx, ses, ses, originSQL, stmt, saveStmt)
+}
+
+func createPrepareStmtInSession(
+	execCtx *ExecCtx,
+	owner *Session,
+	executionSes FeSession,
+	originSQL string,
+	stmt tree.Statement,
+	saveStmt tree.Statement) (*PrepareStmt, error) {
 	// A preceding statement may have run nested/background SQL and left the
 	// compiler context pointing at a temporary ExecCtx that has already been
 	// closed. PREPARE plans synchronously against the current request context.
 	if execCtx.proc != nil {
-		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+		executionSes.GetTxnCompileCtx().SetExecCtx(execCtx)
 	}
 
-	cloneSQL := preparedCloneSQL(saveStmt, ses.GetTxnCompileCtx().DefaultDatabase())
+	cloneSQL := preparedCloneSQL(saveStmt, executionSes.GetTxnCompileCtx().DefaultDatabase())
+	executionProc := owner.proc
+	if executionSes.IsBackgroundSession() {
+		executionProc = execCtx.proc
+	}
 	var preparePlan *plan.Plan
-	protocolVersion := currentProtocolVersion(ses.proc)
+	protocolVersion := currentProtocolVersion(executionProc)
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
-		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
+		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), stmt)
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	prepareTs := currentTxnSnapshotTS(ses)
+	prepareTs := currentTxnSnapshotTSForProcess(executionProc)
 
-	schedulingSQLMode := sessionSQLModeForParser(ses)
+	schedulingSQLMode := sessionSQLModeForParser(owner)
 	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(
-		ses, originSQL, schedulingSQLMode)
+		owner, originSQL, schedulingSQLMode)
 	var comp *compile.Compile
-	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok &&
-		shouldCachePrepareCompile(preparePlan.GetDcl().GetPrepare().Plan) &&
+	prepareControl := preparePlan.GetDcl().GetPrepare()
+	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
+	if !executionSes.IsBackgroundSession() &&
+		isQueryPlan &&
+		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &schedulingSQLMode, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil)
+		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, owner.GetOutputCallback(execCtx), true, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -1950,11 +2013,11 @@ func createPrepareStmt(
 		compile:             comp,
 		PreparePlan:         preparePlan,
 		PrepareStmt:         saveStmt,
-		NativeMode:          ses.sqlModeHasMatrixOneNative(),
+		NativeMode:          owner.sqlModeHasMatrixOneNative(),
 		remapDb:             maps.Clone(execCtx.remapDb),
-		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:    ses.GetTempTableVersion(),
-		ddlVersion:          ses.getDDLVersion(),
+		defaultDatabase:     executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:    owner.GetTempTableVersion(),
+		ddlVersion:          owner.getDDLVersion(),
 		cloneSQL:            cloneSQL,
 		protocolVersion:     protocolVersion,
 		getFromSendLongData: make(map[int]struct{}),
@@ -1963,8 +2026,12 @@ func createPrepareStmt(
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
-		columns := getPreparedResultColumns(prepareStmt, sessionTxnHaveDDL(ses))
-		if prepareStmt.ColDefData, err = execCtx.resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns); err != nil {
+		columns := getPreparedResultColumns(prepareStmt, sessionTxnHaveDDL(executionSes))
+		resper := execCtx.resper
+		if executionSes.IsBackgroundSession() {
+			resper = owner.GetResponser()
+		}
+		if prepareStmt.ColDefData, err = resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns); err != nil {
 			logutil.Errorf("Error make column def data for prepare statement: %v", err)
 		}
 	}
@@ -2029,12 +2096,16 @@ func freshPreparedCloneStatement(
 }
 
 func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
-	deallocatePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
+	return doDeallocateInSession(ses, ses, execCtx, st)
+}
+
+func doDeallocateInSession(owner *Session, executionSes FeSession, execCtx *ExecCtx, st *tree.Deallocate) error {
+	deallocatePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, executionSes, executionSes.GetTxnCompileCtx(), st)
 	if err != nil {
 		return err
 	}
 	name := deallocatePlan.GetDcl().GetDeallocate().GetName()
-	if !ses.RemovePrepareStmt(name) {
+	if !owner.RemovePrepareStmt(name) {
 		return moerr.NewUnknownStmtHandler(execCtx.reqCtx, name, "DEALLOCATE PREPARE")
 	}
 	return nil
@@ -3511,6 +3582,12 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 	}
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+		if !canCreateMongoDBTableMapping(stmt, ses.GetTenantInfo()) {
+			// The privilege model has no external-connection USAGE object yet.
+			// Fail closed instead of letting any ordinary CREATE TABLE holder use
+			// an administrator's connection against an arbitrary collection.
+			return stats, moerr.NewInternalError(reqCtx, "MongoDB external table creation requires account admin until connection USAGE privileges are available")
+		}
 
 		// can or not execute in retricted status
 		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
@@ -3554,6 +3631,14 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		}
 	}
 	return stats, nil
+}
+
+func canCreateMongoDBTableMapping(stmt tree.Statement, tenant *TenantInfo) bool {
+	create, ok := stmt.(*tree.CreateTable)
+	if !ok || create.MongoDBParam == nil {
+		return true
+	}
+	return tenant != nil && tenant.IsAdminRole()
 }
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
@@ -4334,13 +4419,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	defer ses.ExitFPrint(FPDoComQuery)
 	defer ses.ClearDDLOwnerRoleID()
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
-	// set the batch buf for stream scan
-	var inMemStreamScan []*kafka.Message
-
-	if batchValue, ok := execCtx.reqCtx.Value(defines.SourceScanResKey{}).([]*kafka.Message); ok {
-		inMemStreamScan = batchValue
-	}
-
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
 	execCtx.reqCtx = defines.AttachDDLOwnerRoleIDProvider(execCtx.reqCtx, ses)
@@ -4387,19 +4465,18 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.Base.SessionInfo = process.SessionInfo{
-		User:                 ses.GetUserName(),
-		Host:                 pu.SV.Host,
-		ConnectionID:         uint64(resper.GetU32(CONNID)),
-		Database:             ses.GetDatabaseName(),
-		Version:              makeServerVersion(pu, version),
-		TimeZone:             ses.GetTimeZone(),
-		StorageEngine:        pu.StorageEngine,
-		LastInsertID:         ses.GetLastInsertID(),
-		SqlHelper:            ses.GetSqlHelper(),
-		Buf:                  ses.GetBuffer(),
-		SourceInMemScanBatch: inMemStreamScan,
-		LogLevel:             zapcore.InfoLevel, //TODO: need set by session level config
-		SessionId:            ses.GetSessId(),
+		User:          ses.GetUserName(),
+		Host:          pu.SV.Host,
+		ConnectionID:  uint64(resper.GetU32(CONNID)),
+		Database:      ses.GetDatabaseName(),
+		Version:       makeServerVersion(pu, version),
+		TimeZone:      ses.GetTimeZone(),
+		StorageEngine: pu.StorageEngine,
+		LastInsertID:  ses.GetLastInsertID(),
+		SqlHelper:     ses.GetSqlHelper(),
+		Buf:           ses.GetBuffer(),
+		LogLevel:      zapcore.InfoLevel, //TODO: need set by session level config
+		SessionId:     ses.GetSessId(),
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
 	// Carry the previous statement's affected rows into this proc so the
@@ -4492,6 +4569,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	ParseDuration := time.Since(beginInstant)
 	recordParseError := func(errorInput *UserInput, parseErr error) error {
+		if isTopLevelClientStatement(ses, execCtx, errorInput) {
+			ses.resetDiagnostics()
+		}
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
 		var recordErr error
 		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
@@ -4519,6 +4599,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	singleStatement := len(cws) == 1 && !stagedSQLMode
 	if ses.GetCmd() == COM_STMT_PREPARE && !singleStatement {
+		if len(cws) > 0 {
+			resetDiagnosticsForStatement(ses, execCtx, input, cws[0].GetAst())
+		}
 		return moerr.NewNotSupported(execCtx.reqCtx, "prepare multi statements")
 	}
 
@@ -4557,6 +4640,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	for i := 0; i < len(cws); i++ {
 		cw := cws[i]
+		stmt := cw.GetAst()
 		currentInput := input
 		currentSQLRecord := ""
 		sqlType := input.getSqlSourceType(i)
@@ -4572,10 +4656,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// Install the policy that belongs to this wrapper before authorization and
 		// planning. In particular, DefaultDatabase uses it for unqualified names.
 		installStatementRemap(execCtx, cw)
-		if cw.GetAst().GetQueryType() == tree.QueryTypeDDL || cw.GetAst().GetQueryType() == tree.QueryTypeDCL ||
-			cw.GetAst().GetQueryType() == tree.QueryTypeOth ||
-			cw.GetAst().GetQueryType() == tree.QueryTypeTCL {
-			if _, ok := cw.GetAst().(*tree.SetVar); !ok {
+		if stmt.GetQueryType() == tree.QueryTypeDDL || stmt.GetQueryType() == tree.QueryTypeDCL ||
+			stmt.GetQueryType() == tree.QueryTypeOth ||
+			stmt.GetQueryType() == tree.QueryTypeTCL {
+			if _, ok := stmt.(*tree.SetVar); !ok {
 				ses.cleanCache()
 			}
 			canCache = false
@@ -4588,7 +4672,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// clear the previous statement's run result so a statement that does not
 		// set it (e.g. a status statement) does not inherit a stale AffectRows.
 		execCtx.runResult = nil
-		stmt := cw.GetAst()
+		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)
 		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error
 		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
@@ -4802,6 +4886,9 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 		return true
 	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {
+		if q.Query.GetHasForeignKeyAction() {
+			return false
+		}
 		for _, node := range q.Query.Nodes {
 			if node.NotCacheable {
 				return false
@@ -4856,12 +4943,14 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			ses.addSqlCount(1)
 			err = handleSidecarOffload(ses, execCtx, query, useGPU)
 			if err == nil {
+				ses.resetDiagnostics()
 				setRowCount(ses, ses.GetProc(), -1)
 				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
 				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
 				return resp, nil
 			}
 			if err != errSidecarNotConfigured {
+				ses.resetDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
 				return resp, nil
@@ -4875,6 +4964,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
 		if rewriteErr != nil {
+			ses.resetDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 			return resp, nil
@@ -4926,6 +5016,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			var rewriteErr error
 			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
 			if rewriteErr != nil {
+				ses.resetDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
@@ -4954,6 +5045,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var prepareStmt *PrepareStmt
 		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
+			ses.resetDiagnostics()
 			if prepareStmt != nil {
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 			}

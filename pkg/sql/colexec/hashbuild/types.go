@@ -98,8 +98,8 @@ type container struct {
 	spillScratchBase uint64
 
 	// cached expression executors for spill (reused across batches)
-	spillExprExecs       []colexec.ExpressionExecutor
-	spillExprReservation *process.HashBuildReservation
+	spillExprExecs []colexec.ExpressionExecutor
+	spillExprLease *ExpressionMemoryLease
 }
 
 // spillFileBundle is deliberately owned by hashbuild.  Build converts each
@@ -337,6 +337,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 		hashBuild.cleanupSpillFiles(proc)
 	}
 	hashBuild.ctr.spilledFds = nil
+	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
 	if !hashBuild.ctr.runtimeFilterDone {
@@ -365,6 +366,7 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 		hashBuild.publishBuildError(proc, err)
 	}
 	hashBuild.cleanupSpillFiles(proc)
+	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 	hashBuild.ctr.freeSpillExprExecs()
 	hashBuild.ctr.dropSpillScratchBuffers()

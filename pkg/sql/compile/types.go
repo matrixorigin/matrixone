@@ -190,6 +190,12 @@ type Scope struct {
 	DataSource *Source
 	// PreScopes contains children of this scope will inherit and execute.
 	PreScopes []*Scope
+	// parallelGenerations are execution-created scope trees retained only so
+	// post-run physical-plan analysis can observe their real DOP and stats.
+	// Compile.Reset releases the previous execution's trees before the template
+	// is reused; otherwise prepared executions would append and execute every
+	// prior generation again.
+	parallelGenerations []*Scope
 	// NodeInfo contains the information about the remote node.
 	NodeInfo engine.Node
 	// TxnOffset represents the transaction's write offset, specifying the starting position for reading data.

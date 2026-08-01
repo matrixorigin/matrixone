@@ -130,6 +130,7 @@ func buildColumnAndConstraint(
 
 	newCol := &ColDef{
 		ColId:      oldCol.ColId,
+		Seqnum:     oldCol.Seqnum,
 		Primary:    oldCol.Primary,
 		ClusterBy:  oldCol.ClusterBy,
 		Name:       newColName,

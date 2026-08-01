@@ -291,7 +291,6 @@ func TestCollectPrepareDdlSchemasUsesCloneSourceMetadata(t *testing.T) {
 func TestCollectPrepareDdlSchemasTracksCreateTargetDatabase(t *testing.T) {
 	testCases := []string{
 		"create sequence db1.seq as bigint",
-		"create source db1.src (i int) with (type='kafka')",
 	}
 	for _, sql := range testCases {
 		t.Run(sql, func(t *testing.T) {
@@ -396,23 +395,6 @@ func TestCollectPrepareDdlSchemasCollectsViewQuery(t *testing.T) {
 	require.Equal(t, "v", schemas[1].ObjName)
 }
 
-func TestCollectPrepareDdlSchemasCollectsDynamicTableQuery(t *testing.T) {
-	statements, err := mysql.Parse(
-		context.Background(),
-		"create dynamic table dt as select n_name from nation with (\"type\"='kafka')",
-		1,
-	)
-	require.NoError(t, err)
-
-	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false), statements[0], &planpb.Plan{
-		Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
-	})
-	require.NoError(t, err)
-	require.Len(t, schemas, 2)
-	require.Equal(t, "nation", schemas[0].ObjName)
-	require.Equal(t, "dt", schemas[1].ObjName)
-}
-
 func TestAppendPrepareSchemasDeduplicatesByNameWithoutObjectID(t *testing.T) {
 	schemas := appendPrepareSchemas(nil,
 		&planpb.ObjectRef{SchemaName: "db", ObjName: "tbl"},
@@ -477,10 +459,9 @@ func TestResetPreparePlanCollectsDdlQuerySchemas(t *testing.T) {
 	require.Equal(t, int64(30), schemas[0].Server)
 }
 
-func TestResetPreparePlanCollectsExternalAndSourceScans(t *testing.T) {
+func TestResetPreparePlanCollectsExternalScans(t *testing.T) {
 	for _, nodeType := range []planpb.Node_NodeType{
 		planpb.Node_EXTERNAL_SCAN,
-		planpb.Node_SOURCE_SCAN,
 	} {
 		t.Run(nodeType.String(), func(t *testing.T) {
 			queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
@@ -864,6 +845,123 @@ func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {
 	require.Equal(t, int64(30), schemas[1].Server)
 	require.Equal(t, int64(10), schemas[1].Db)
 	require.Equal(t, int64(20), schemas[1].Obj)
+}
+
+func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
+	const hiddenTable = "__mo_index_hidden"
+	snapshot := &planpb.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+	}
+	mock := NewMockCompilerContext(false)
+	mock.objects[hiddenTable] = &planpb.ObjectRef{
+		Db:         10,
+		Obj:        20,
+		SchemaName: "db",
+		ObjName:    hiddenTable,
+	}
+	mock.tables[hiddenTable] = &planpb.TableDef{
+		Name: hiddenTable, DbId: 10, TblId: 20, Version: 30,
+	}
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock, true, true)
+	scanNode := &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef: &planpb.ObjectRef{
+			Db: 1, Obj: 2, SchemaName: "db", ObjName: "src",
+		},
+		TableDef: &planpb.TableDef{
+			Name: "src", DbId: 1, TblId: 2, Version: 3,
+			Indexes: []*planpb.IndexDef{{
+				IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+				IndexTableName: hiddenTable,
+			}},
+		},
+		ScanSnapshot: snapshot,
+	}
+
+	require.NoError(t, builder.recordPreparedPluginDependencies(scanNode))
+	require.NoError(t, builder.recordPreparedPluginDependencies(scanNode))
+	require.Len(t, builder.qry.GetCatalogDependencies(), 2)
+	require.Equal(t, "src", builder.qry.CatalogDependencies[0].ObjName)
+	require.Equal(t, int64(3), builder.qry.CatalogDependencies[0].Server)
+	require.Equal(t, hiddenTable, builder.qry.CatalogDependencies[1].ObjName)
+	require.Equal(t, int64(30), builder.qry.CatalogDependencies[1].Server)
+
+	encoded, err := builder.qry.Marshal()
+	require.NoError(t, err)
+	var decoded planpb.Query
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, builder.qry.CatalogDependencies, decoded.CatalogDependencies)
+
+	builder.qry.Steps = []int32{0}
+	builder.qry.Nodes = []*planpb.Node{scanNode}
+	schemas, _, err := ResetPreparePlan(mock, &planpb.Plan{
+		Plan: &planpb.Plan_Query{Query: builder.qry},
+	})
+	require.NoError(t, err)
+	require.Len(t, schemas, 2)
+	require.Equal(t, snapshot, schemas[0].GetSnapshot())
+	require.Equal(t, snapshot, schemas[1].GetSnapshot())
+
+	builder.qry.Nodes = []*planpb.Node{{
+		NodeType: planpb.Node_FUNCTION_SCAN,
+		TableDef: &planpb.TableDef{
+			TblFunc: &planpb.TableFunction{Name: "plugin_search"},
+		},
+	}}
+	schemas, _, err = ResetPreparePlan(mock, &planpb.Plan{
+		Plan: &planpb.Plan_Query{Query: builder.qry},
+	})
+	require.NoError(t, err)
+	require.Len(t, schemas, 2)
+	require.Equal(t, "src", schemas[0].ObjName)
+	require.Equal(t, hiddenTable, schemas[1].ObjName)
+
+	cloned := DeepCopyQuery(builder.qry)
+	require.Equal(t, builder.qry.CatalogDependencies, cloned.CatalogDependencies)
+	require.NotSame(t, builder.qry.CatalogDependencies[0], cloned.CatalogDependencies[0])
+}
+
+func TestResetPreparedSetMergesTransientCatalogDependencies(t *testing.T) {
+	dependency := &planpb.ObjectRef{
+		Db: 10, Obj: 20, SchemaName: "db", ObjName: "__mo_index_hidden", Server: 30,
+	}
+	preparePlan := &planpb.Plan{
+		Plan: &planpb.Plan_Dcl{Dcl: &planpb.DataControl{
+			DclType: planpb.DataControl_SET_VARIABLES,
+			Control: &planpb.DataControl_SetVariables{
+				SetVariables: &planpb.SetVariables{},
+			},
+		}},
+	}
+	transientQuery := &planpb.Query{
+		CatalogDependencies: []*planpb.ObjectRef{dependency},
+	}
+
+	schemas, _, err := resetPreparePlan(
+		NewMockCompilerContext(false), preparePlan, transientQuery)
+	require.NoError(t, err)
+	require.Equal(t, []*planpb.ObjectRef{dependency}, schemas)
+}
+
+func TestRecordPreparedPluginDependenciesIsAtomicOnResolutionFailure(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), true, true)
+	scanNode := &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef: &planpb.ObjectRef{
+			Db: 1, Obj: 2, SchemaName: "db", ObjName: "src",
+		},
+		TableDef: &planpb.TableDef{
+			Name: "src", DbId: 1, TblId: 2, Version: 3,
+			Indexes: []*planpb.IndexDef{{
+				IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+				IndexTableName: "__missing_hidden",
+			}},
+		},
+	}
+
+	require.Error(t, builder.recordPreparedPluginDependencies(scanNode))
+	require.Empty(t, builder.qry.GetCatalogDependencies())
 }
 
 func TestResetPreparePlanResetsWindowParameterOrder(t *testing.T) {

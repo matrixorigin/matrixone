@@ -98,7 +98,6 @@ func NewGetParamRule() *GetParamRule {
 func (rule *GetParamRule) MatchNode(node *Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN ||
 		node.NodeType == plan.Node_EXTERNAL_SCAN ||
-		node.NodeType == plan.Node_SOURCE_SCAN ||
 		node.NodeType == plan.Node_INSERT {
 		if node.ObjRef != nil && node.TableDef != nil {
 			rule.schemas = append(rule.schemas, prepareSchemaRefWithSnapshot(
@@ -121,6 +120,40 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 		}
 	}
 	return false
+}
+
+// recordPreparedPluginDependencies preserves the catalog dependency closure of
+// a plugin-index rewrite. Some rewrites can replace the owning TABLE_SCAN with
+// a FUNCTION_SCAN, so ResetPreparePlan cannot recover these objects by walking
+// the final plan alone.
+func (builder *QueryBuilder) recordPreparedPluginDependencies(scanNode *Node) error {
+	if !builder.isPrepareStatement || scanNode == nil || scanNode.ObjRef == nil || scanNode.TableDef == nil {
+		return nil
+	}
+
+	dependencies := []*plan.ObjectRef{
+		prepareSchemaRefWithSnapshot(scanNode.ObjRef, scanNode.TableDef, scanNode.ScanSnapshot),
+	}
+	for _, indexDef := range scanNode.TableDef.Indexes {
+		if !indexplugin.IsPluginAlgo(indexDef.IndexAlgo) || indexDef.IndexTableName == "" {
+			continue
+		}
+		objRef, tableDef, err := builder.compCtx.ResolveIndexTableByRef(
+			scanNode.ObjRef, indexDef.IndexTableName, scanNode.ScanSnapshot)
+		if err != nil {
+			return err
+		}
+		if objRef == nil || tableDef == nil {
+			return moerr.NewInternalErrorf(
+				builder.GetContext(), "resolved index table %q without catalog metadata", indexDef.IndexTableName)
+		}
+		dependencies = append(dependencies,
+			prepareSchemaRefWithSnapshot(objRef, tableDef, scanNode.ScanSnapshot))
+	}
+
+	builder.qry.CatalogDependencies = appendPrepareSchemas(
+		builder.qry.CatalogDependencies, dependencies...)
+	return nil
 }
 
 func (rule *GetParamRule) IsApplyExpr() bool {

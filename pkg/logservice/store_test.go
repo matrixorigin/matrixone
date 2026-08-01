@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -472,7 +474,11 @@ func TestTickerForTaskSchedule(t *testing.T) {
 		defer tickerCancel()
 
 		//do task schedule background
-		go store.tickerForTaskSchedule(tickerCxt, time.Millisecond*10)
+		go store.tickerForTaskSchedule(
+			tickerCxt,
+			time.Millisecond*10,
+			store.getCheckerStateFromLeader,
+		)
 
 		// making hakeeper state proceeds to running before test task schedule
 		proceedHAKeeperToRunning(t, store)
@@ -509,6 +515,81 @@ func TestTickerForTaskSchedule(t *testing.T) {
 	}
 
 	runHakeeperTaskServiceTest(t, fn)
+}
+
+func TestStoreCloseWaitsForTaskScheduleTicker(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce atomic.Bool
+	var releaseOnce sync.Once
+	releaseTicker := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+
+	store := &store{
+		cfg: Config{
+			HAKeeperCheckInterval: toml.Duration{Duration: time.Millisecond},
+		},
+		stopper:       stopper.NewStopper("log-store-test"),
+		tickerStopper: stopper.NewStopper("hakeeper-ticker-test"),
+	}
+	defer store.stopper.Stop()
+	defer store.tickerStopper.Stop()
+	defer releaseTicker()
+
+	require.NoError(t, store.startTaskScheduleTicker(func() (*pb.CheckerState, uint64) {
+		if enteredOnce.CompareAndSwap(false, true) {
+			close(entered)
+		}
+		<-release
+		return nil, 0
+	}))
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("task schedule ticker did not enter checker state lookup")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- store.close()
+	}()
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	probeTicker := time.NewTicker(time.Millisecond)
+	defer probeTicker.Stop()
+	for {
+		err := store.tickerStopper.RunNamedTask(
+			"close-admission-probe",
+			func(context.Context) {},
+		)
+		if err != nil {
+			require.ErrorIs(t, err, stopper.ErrUnavailable)
+			break
+		}
+		select {
+		case <-probeTicker.C:
+		case <-deadline.C:
+			t.Fatal("store close did not stop ticker task admission")
+		}
+	}
+
+	select {
+	case err := <-closeResult:
+		require.NoError(t, err)
+		t.Fatal("store close returned while task schedule ticker was still running")
+	default:
+	}
+
+	releaseTicker()
+	select {
+	case err := <-closeResult:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("store close did not return after task schedule ticker exited")
+	}
 }
 
 func TestHAKeeperTick(t *testing.T) {

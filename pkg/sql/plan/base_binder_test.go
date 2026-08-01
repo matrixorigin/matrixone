@@ -16,7 +16,9 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -106,7 +108,7 @@ func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
 		expr, err := bindFuncExprImplUdf(&binder.baseBinder, "legacy_pipe", &function.Udf{
 			Body:     "0 || 1",
 			Language: string(tree.SQL),
-		}, nil, 0)
+		}, nil, nil, 0)
 		require.NoError(t, err)
 		require.Equal(t, "concat", expr.GetF().GetFunc().GetObjName())
 	})
@@ -117,10 +119,288 @@ func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
 			Body:     "0 || 1",
 			Language: string(tree.SQL),
 			SQLMode:  &emptyMode,
-		}, nil, 0)
+		}, nil, nil, 0)
 		require.NoError(t, err)
 		require.Equal(t, "or", expr.GetF().GetFunc().GetObjName())
 	})
+}
+
+type sqlUdfMockCompilerContext struct {
+	*MockCompilerContext
+}
+
+func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*function.Udf, error) {
+	switch name {
+	case "f_lookup":
+		return &function.Udf{
+			Body:     "select n_regionkey from nation where n_nationkey = $1",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_ansi_quotes":
+		mode := "ANSI_QUOTES"
+		return &function.Udf{
+			Body:     `select 1 from (select 1) as "a\" where $1 = 2`,
+			Language: string(tree.SQL),
+			SQLMode:  &mode,
+		}, nil
+	case "f_ansi":
+		mode := "ANSI"
+		return &function.Udf{
+			Body:     `select 1 from (select 1) as "a\" where $1 = 2`,
+			Language: string(tree.SQL),
+			SQLMode:  &mode,
+		}, nil
+	case "f_executable_comment":
+		return &function.Udf{
+			Body:     "/*! $1 + */ 1",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_slash_comment":
+		return &function.Udf{
+			Body:     "select 1 // '\n + $1",
+			Language: string(tree.SQL),
+		}, nil
+	default:
+		return nil, nil
+	}
+}
+
+func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.Background(),
+		dialect.MYSQL,
+		"select n_nationkey, f_lookup(n_nationkey) from nation",
+		1,
+	)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+	built, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+
+	query := built.GetQuery()
+	require.NotNil(t, query)
+	require.True(t, queryContainsCrossRelationEquality(query), "SQL UDF parameter must bind to the outer scan column")
+}
+
+func TestBindSQLUDFArgumentMarkersFollowLexerSemantics(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "ANSI_QUOTES identifier", query: "select f_ansi_quotes(2)"},
+		{name: "ANSI composite mode identifier", query: "select f_ansi(2)"},
+		{name: "executable comment", query: "select f_executable_comment(2)"},
+		{name: "slash line comment", query: "select f_slash_comment(2)"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, test.query, 1)
+			require.NoError(t, err)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+
+			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+			_, err = BuildPlan(ctx, stmts[0], false)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestExpandSQLUdfArgumentsAvoidsIdentifierCollision(t *testing.T) {
+	const userColumn = "__mo_sql_udf_1_arg_1"
+
+	builder := &QueryBuilder{}
+	bindCtx := NewBindContext(nil, nil)
+	binder := NewDefaultBinder(
+		context.Background(),
+		builder,
+		bindCtx,
+		plan.Type{Id: int32(types.T_int64)},
+		[]string{userColumn},
+	)
+	arg := makeInt64ConstPlanExpr(42)
+	body := "select " + userColumn + ", $1"
+	rewritten, markers := binder.expandSQLUdfArguments(body, []*plan.Expr{arg}, "")
+
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, rewritten, 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	require.Len(t, selectClause.Exprs, 2)
+	originalName := selectClause.Exprs[0].Expr.(*tree.UnresolvedName)
+	argumentName := selectClause.Exprs[1].Expr.(*tree.UnresolvedName)
+	require.Equal(t, userColumn, originalName.ColName())
+	require.NotEqual(t, originalName.ColName(), argumentName.ColName())
+	require.NotContains(t, strings.ToLower(body), strings.ToLower(argumentName.ColName()))
+	require.NotContains(t, markers, originalName.ColName())
+	require.Contains(t, markers, argumentName.ColName())
+
+	restore := binder.pushSQLUdfArguments(markers)
+	defer restore()
+	boundOriginal, err := binder.BindExpr(originalName, 0, false)
+	require.NoError(t, err)
+	require.NotNil(t, boundOriginal.GetCol(), "user-authored identifier must retain normal column binding")
+	boundArgument, err := binder.BindExpr(argumentName, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(42), boundArgument.GetLit().GetI64Val())
+}
+
+func TestReplaceSQLUdfArgMarkers(t *testing.T) {
+	marker := func(ordinal int) string { return fmt.Sprintf("<arg%d>", ordinal) }
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "repeated parameter",
+			sql:  "select $1 + $1, $2",
+			want: "select <arg1> + <arg1>, <arg2>",
+		},
+		{
+			name: "quoted text and identifiers",
+			sql:  "select '$1', \"$1\", `$1`, $1",
+			want: "select '$1', \"$1\", `$1`, <arg1>",
+		},
+		{
+			name: "comments",
+			sql:  "select $1 -- $2\n, $2 /* $1 */ # $1\n",
+			want: "select <arg1> -- $2\n, <arg2> /* $1 */ # $1\n",
+		},
+		{
+			name: "double minus without comment whitespace",
+			sql:  "select 1--$1",
+			want: "select 1--<arg1>",
+		},
+		{
+			name: "out of range parameter",
+			sql:  "select $0, $3, $1",
+			want: "select $0, $3, <arg1>",
+		},
+		{
+			name: "parameter-like identifier",
+			sql:  "select $1suffix, $1",
+			want: "select $1suffix, <arg1>",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, replaceSQLUdfArgMarkers(test.sql, 2, "", marker))
+		})
+	}
+}
+
+func TestCorrelateSQLUdfArgumentTraversesNestedExpressions(t *testing.T) {
+	column := func(relPos, colPos int32) *plan.Expr {
+		return &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: relPos, ColPos: colPos}},
+		}
+	}
+
+	original := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			nil,
+			{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: 1, ColPos: 2, Depth: 3}}},
+			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Src: column(2, 3)}}},
+			{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				WindowFunc:  column(3, 4),
+				PartitionBy: []*plan.Expr{column(4, 5)},
+				OrderBy: []*plan.OrderBySpec{
+					nil,
+					{Expr: column(5, 6)},
+				},
+				Frame: &plan.FrameClause{
+					Start: &plan.FrameBound{Val: column(6, 7)},
+					End:   &plan.FrameBound{Val: column(7, 8)},
+				},
+			}}},
+			{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{Child: column(8, 9)}}},
+			{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{column(9, 10)}}}},
+		}}},
+	}
+
+	correlatedExpr, correlated := correlateSQLUdfArgument(original, 2)
+	require.True(t, correlated)
+	require.NotSame(t, original, correlatedExpr)
+	require.Equal(t, int32(3), original.GetF().Args[1].GetCorr().Depth, "the caller-owned expression must not be mutated")
+
+	args := correlatedExpr.GetF().Args
+	require.Nil(t, args[0])
+	require.Equal(t, int32(5), args[1].GetCorr().Depth)
+	require.Equal(t, int32(2), args[2].GetLit().Src.GetCorr().Depth)
+
+	window := args[3].GetW()
+	require.Equal(t, int32(2), window.WindowFunc.GetCorr().Depth)
+	require.Equal(t, int32(2), window.PartitionBy[0].GetCorr().Depth)
+	require.Nil(t, window.OrderBy[0])
+	require.Equal(t, int32(2), window.OrderBy[1].Expr.GetCorr().Depth)
+	require.Equal(t, int32(2), window.Frame.Start.Val.GetCorr().Depth)
+	require.Equal(t, int32(2), window.Frame.End.Val.GetCorr().Depth)
+	require.Equal(t, int32(2), args[4].GetSub().Child.GetCorr().Depth)
+	require.Equal(t, int32(2), args[5].GetList().List[0].GetCorr().Depth)
+
+	localOriginal := column(10, 11)
+	localExpr, correlated := correlateSQLUdfArgument(localOriginal, 0)
+	require.False(t, correlated)
+	require.NotSame(t, localOriginal, localExpr)
+	require.Equal(t, int32(10), localExpr.GetCol().RelPos)
+	require.Equal(t, int32(11), localExpr.GetCol().ColPos)
+}
+
+func queryContainsCrossRelationEquality(query *plan.Query) bool {
+	for _, node := range query.Nodes {
+		for _, exprs := range [][]*plan.Expr{
+			node.ProjectList,
+			node.OnList,
+			node.FilterList,
+			node.BlockFilterList,
+		} {
+			for _, expr := range exprs {
+				if exprContainsCrossRelationEquality(expr) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func exprContainsCrossRelationEquality(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	if fn.Func.GetObjName() == "=" && len(fn.Args) == 2 {
+		left, right := fn.Args[0].GetCol(), fn.Args[1].GetCol()
+		if left != nil && right != nil && left.RelPos != right.RelPos {
+			return true
+		}
+	}
+	for _, arg := range fn.Args {
+		if exprContainsCrossRelationEquality(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCombinePlanExprsBalancedHasLogarithmicDepth(t *testing.T) {
@@ -547,6 +827,10 @@ func TestBindNameConstConstArgs(t *testing.T) {
 			name: "positive signed decimal value",
 			sql:  "select name_const('myname', +12.34)",
 		},
+		{
+			name: "string value with backslash",
+			sql:  `select name_const('myname', 'a\\b')`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, bindNameConstSelect(tc.sql))
@@ -586,6 +870,14 @@ func TestBindNameConstInvalidArgs(t *testing.T) {
 		{
 			name: "decimal cast function value",
 			sql:  "select name_const('myname', cast('12.34' as decimal(10,2)))",
+		},
+		{
+			name: "cast hex name",
+			sql:  "select name_const(cast(0x61 as varchar), 1)",
+		},
+		{
+			name: "cast hex value",
+			sql:  "select name_const('x', cast(0x31 as varchar))",
 		},
 		{
 			name: "foldable function value",

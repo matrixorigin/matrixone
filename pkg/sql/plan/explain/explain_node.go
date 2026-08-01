@@ -67,8 +67,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		}
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
-	case plan.Node_SOURCE_SCAN:
-		pname = "Source Scan"
 	case plan.Node_MATERIAL_SCAN:
 		pname = "Material Scan"
 	case plan.Node_PROJECT:
@@ -164,7 +162,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")
-		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_SOURCE_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
 				if ndesc.Node.IndexScanInfo.IsIndexScan {
@@ -303,6 +301,26 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		}
 		lines = append(lines, icebergInfo)
 	}
+	if ndesc.Node.NodeType == plan.Node_EXTERNAL_SCAN &&
+		ndesc.Node.GetExternScan() != nil && ndesc.Node.GetExternScan().GetMongodbScan() != nil {
+		scan := ndesc.Node.GetExternScan().GetMongodbScan()
+		pushed := 0
+		var countPredicate func(*plan.MongoPredicate)
+		countPredicate = func(predicate *plan.MongoPredicate) {
+			if predicate == nil {
+				return
+			}
+			if predicate.Op != plan.MongoPredicateOp_MONGO_PREDICATE_AND {
+				pushed++
+			}
+			for _, child := range predicate.Children {
+				countPredicate(child)
+			}
+		}
+		countPredicate(scan.PushedPredicate)
+		lines = append(lines, fmt.Sprintf("MongoDB Scan: table=%d columns=%d pushed=%d residual=%s",
+			scan.TableId, len(scan.Columns), pushed, scan.ResidualFilterDigest))
+	}
 
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
@@ -347,6 +365,9 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			return nil, err
 		}
 		lines = append(lines, groupByInfo)
+	}
+	if ndesc.Node.NodeType == plan.Node_TIME_WINDOW && ndesc.Node.GapFillMode == plan.Node_GAP_FILL_PARTITION {
+		lines = append(lines, "Gap Fill: Partition")
 	}
 
 	if ndesc.Node.NodeType == plan.Node_FILL {

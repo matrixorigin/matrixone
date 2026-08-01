@@ -18,9 +18,28 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
+	uniqueName := "__mo_tmp_018f1f767b9d7f35b2d99b8d7774bde8_db_" +
+		catalog.UniqueIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
+	secondaryName := "__mo_tmp_018f1f767b9d7f35b2d99b8d7774bde8_db_" +
+		catalog.SecondaryIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
+	op := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{
+		{TableDef: &plan.TableDef{Name: "main_table"}},
+		{TableDef: &plan.TableDef{Name: uniqueName}},
+		{TableDef: &plan.TableDef{Name: secondaryName}},
+	}}
+
+	op.resetMultiUpdateCtxs()
+
+	require.Equal(t, UpdateMainTable, op.ctr.updateCtxInfos["main_table"].tableType)
+	require.Equal(t, UpdateUniqueIndexTable, op.ctr.updateCtxInfos[uniqueName].tableType)
+	require.Equal(t, UpdateSecondaryIndexTable, op.ctr.updateCtxInfos[secondaryName].tableType)
+}
 
 func TestPartitionMultiUpdateString(t *testing.T) {
 	op := &PartitionMultiUpdate{}

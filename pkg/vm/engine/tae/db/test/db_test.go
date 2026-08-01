@@ -8901,6 +8901,33 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
+	requireCheckpointCovered := func(requestedTS types.TS, entry *checkpoint.CheckpointEntry) {
+		require.NotNil(t, entry)
+		require.True(t, entry.IsFinished())
+		end := entry.GetEnd()
+		require.Truef(
+			t,
+			end.GE(&requestedTS),
+			"checkpoint end %s does not cover requested timestamp %s",
+			end.ToString(),
+			requestedTS.ToString(),
+		)
+		targetLSN := entry.LSN()
+		require.NotZero(t, targetLSN)
+		// Wait only for the forced checkpoint's WAL intent. A later commit may
+		// legitimately leave a newer LSN pending outside requestedTS.
+		require.Eventuallyf(
+			t,
+			func() bool {
+				return tae.Wal.GetCheckpointed() >= targetLSN
+			},
+			10*time.Second,
+			10*time.Millisecond,
+			"WAL checkpoint did not cover checkpoint LSN %d",
+			targetLSN,
+		)
+	}
+
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2
@@ -8924,19 +8951,42 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	assert.NoError(t, err)
 	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
 
-	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
+	forceTS := tae.TxnMgr.Now()
+	err = tae.DB.ForceCheckpoint(ctx, forceTS)
 	require.NoError(t, err)
-	tae.WaitAllCheckpointsFinished()
-	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	requireCheckpointCovered(forceTS, tae.DB.BGCheckpointRunner.MaxIncrementalCheckpoint())
 
-	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), 0)
+	forceTS = txn.GetStartTS()
+	err = tae.DB.ForceGlobalCheckpoint(ctx, forceTS, 0)
 	require.NoError(t, err)
-	tae.WaitAllCheckpointsFinished()
-	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	forcedEntry := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	requireCheckpointCovered(forceTS, forcedEntry)
 
 	assert.NoError(t, txn.Commit(context.Background()))
 
+	// Freeze checkpoint execution so the next data commit remains outside the
+	// forced entry while its WAL LSN is observably pending.
+	cfg, err := tae.DB.BGCheckpointRunner.DisableCheckpoint(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	checkpointDisabled := true
+	defer func() {
+		if checkpointDisabled {
+			tae.DB.BGCheckpointRunner.EnableCheckpoint(cfg)
+		}
+	}()
+
 	tae.CreateRelAndAppend2(bat, false)
+
+	forcedLSN := forcedEntry.LSN()
+	checkpointedLSN := tae.Wal.GetCheckpointed()
+	currentLSN := tae.Wal.GetLSNWatermark()
+	require.GreaterOrEqual(t, checkpointedLSN, forcedLSN)
+	require.Greater(t, currentLSN, forcedLSN)
+	require.Greater(t, tae.Wal.GetPenddingCnt(), uint64(0))
+
+	tae.DB.BGCheckpointRunner.EnableCheckpoint(cfg)
+	checkpointDisabled = false
 
 	currTs := tae.TxnMgr.Now()
 	assert.NoError(t, err)
@@ -8944,13 +8994,12 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	// 	return tae.AllCheckpointsFinished()
 	// })
 	tae.AllFlushExpected(currTs, 4000)
-	err = tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Duration(1))
-	assert.NoError(t, err)
-	tae.WaitAllCheckpointsFinished()
-	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	forceTS = tae.TxnMgr.Now()
+	err = tae.DB.ForceGlobalCheckpoint(ctx, forceTS, time.Duration(1))
+	require.NoError(t, err)
 
 	maxEntry := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
-	assert.NotNil(t, maxEntry)
+	requireCheckpointCovered(forceTS, maxEntry)
 	maxEnd := maxEntry.GetEnd()
 	t.Logf("maxEntry: %s, currTs: %s", maxEntry.String(), currTs.ToString())
 	assert.True(t, maxEnd.GT(&currTs))
@@ -9911,17 +9960,8 @@ func TestDedupSnapshot1(t *testing.T) {
 
 	targetLSN := tae.Wal.GetLSNWatermark()
 	require.NotZero(t, targetLSN)
-	require.Eventually(
-		t,
-		func() bool {
-			return tae.AllCheckpointsFinished() &&
-				tae.Wal.GetCheckpointed() >= targetLSN
-		},
-		30*time.Second,
-		25*time.Millisecond,
-		"background checkpoint did not cover LSN %d",
-		targetLSN,
-	)
+	tae.WaitAllCheckpointsFinished()
+	require.GreaterOrEqual(t, tae.Wal.GetCheckpointed(), targetLSN)
 
 	txn, rel := tae.GetRelation()
 	startTS := txn.GetStartTS()
@@ -12117,6 +12157,77 @@ func TestRollbackMergeAfterTransferredDeleteError(t *testing.T) {
 	require.Equal(t, catalog.ObjectState_Create_ApplyCommit, meta.ObjectState)
 	require.True(t, meta.DeletedAt.IsEmpty())
 	require.Equal(t, 3, rel.GetMeta().(*catalog.TableEntry).ObjectCnt(false) /*Aobj(created + deleted), Nobj(rollbacked)*/)
+}
+
+func transferSlabCurrBytes(t *testing.T) int64 {
+	t.Helper()
+	var reports []map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(mpool.ReportMemUsage("transfer-slab")), &reports))
+	for _, report := range reports {
+		raw, ok := report["transfer-slab"]
+		if !ok || string(raw) == `""` {
+			continue
+		}
+		var stats struct {
+			CurrBytes int64 `json:"currBytes"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &stats))
+		return stats.CurrBytes
+	}
+	return 0
+}
+
+func TestRollbackMergeBeforeRegistrationCleansTransferState(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	mergesort.DrainTransferSlabPool()
+	before := transferSlabCurrBytes(t)
+	t.Cleanup(mergesort.DrainTransferSlabPool)
+
+	txn, rel := tae.GetRelation()
+	defer func() {
+		assert.NoError(t, txn.Rollback(ctx))
+	}()
+	obj := testutil.GetOneBlockMeta(rel)
+	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+	require.NoError(t, err)
+
+	// Commit the delete before the merge entry is built so phase-1 transfer
+	// writes TransferDelsMap during NewMergeObjectsEntry.
+	require.NoError(t, tae.DeleteAll(true))
+
+	const injectedErr = "mock pre-registration transfer error"
+	require.True(t, fault.Enable())
+	t.Cleanup(func() {
+		assert.True(t, fault.Disable())
+	})
+	require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_TransferErrorAfterTransfer, ":::", "echo", 0, injectedErr, false))
+	t.Cleanup(func() {
+		removed, err := fault.RemoveFaultPoint(ctx, objectio.FJ_TransferErrorAfterTransfer)
+		assert.NoError(t, err)
+		assert.True(t, removed)
+	})
+
+	require.ErrorContains(t, task.OnExec(ctx), injectedErr)
+
+	created := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[0])
+	createdBlk := objectio.NewBlockidWithObjectID(created.ObjectName().ObjectId(), 0)
+	require.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(createdBlk))
+
+	mergesort.DrainTransferSlabPool()
+	require.Equal(t, before, transferSlabCurrBytes(t))
 }
 
 func TestTransferInMerge(t *testing.T) {

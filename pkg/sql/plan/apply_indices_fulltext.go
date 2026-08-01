@@ -618,6 +618,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// scanNode.Limit to set up the SORT node, so we don't clear it here.
 	// The caller is responsible for clearing scanNode.Limit/Offset after using it.
 
+	if err := builder.recordPreparedPluginDependencies(scanNode); err != nil {
+		return -1, nil, nil, err
+	}
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, nil
 }
 

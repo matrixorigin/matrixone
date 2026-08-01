@@ -15,8 +15,10 @@
 package compile
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -36,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -63,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -74,7 +78,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -225,7 +228,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		},
 		&hashbuild.HashBuild{},
 		&indexbuild.IndexBuild{},
-		&source.Source{},
 		&apply.Apply{TableFunction: &table_function.TableFunction{}},
 		&postdml.PostDml{
 			PostDmlCtx: &postdml.PostDmlCtx{
@@ -297,7 +299,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.TableFunction), TableFunction: &pipeline.TableFunction{}},
 		{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},
 		{Op: int32(vm.External), ExternalScan: &pipeline.ExternalScan{}},
-		{Op: int32(vm.Source), StreamScan: &pipeline.StreamScan{}},
 		{Op: int32(vm.IndexBuild), IndexBuild: &pipeline.Indexbuild{}},
 		{Op: int32(vm.Apply), Apply: &pipeline.Apply{}, TableFunction: &pipeline.TableFunction{}},
 		{Op: int32(vm.PostDml), PostDml: &pipeline.PostDml{}},
@@ -357,6 +358,37 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		defer restored.Release()
 		require.IsType(t, &intersectall.IntersectAll{}, restored)
 		require.Equal(t, vm.IntersectAll, restored.OpType())
+	})
+
+	t.Run("SharedTableLock", func(t *testing.T) {
+		original := lockop.NewArgumentByEngine(nil)
+		original.AddLockTargetWithMode(42, nil, lockpb.LockMode_Shared, 0,
+			types.T_int64.ToType(), -1, -1, nil, false)
+		original.LockTableWithMode(42, lockpb.LockMode_Shared, false)
+
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredLock, ok := restored.(*lockop.LockOp)
+		require.True(t, ok)
+		targets := restoredLock.CopyToPipelineTarget()
+		require.Len(t, targets, 1)
+		require.True(t, targets[0].LockTable)
+		require.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
+	})
+
+	t.Run("SharedRowLock", func(t *testing.T) {
+		original := lockop.NewArgumentByEngine(nil)
+		original.AddLockTargetWithMode(43, nil, lockpb.LockMode_Shared, 0,
+			types.T_int64.ToType(), -1, -1, nil, false)
+
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredLock, ok := restored.(*lockop.LockOp)
+		require.True(t, ok)
+		targets := restoredLock.CopyToPipelineTarget()
+		require.Len(t, targets, 1)
+		require.False(t, targets[0].LockTable)
+		require.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
 	})
 }
 
@@ -802,39 +834,41 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, restored.(*hashbuild.HashBuild).TrackNullKeys)
 	})
 
-	t.Run("JoinSpillThreshold_ReceiverResolvesLocally", func(t *testing.T) {
-		for name, op := range map[string]vm.Operator{
-			"hashjoin": &hashjoin.HashJoin{
-				EqConds:        [][]*planpb.Expr{{}, {}},
-				SpillThreshold: 4096,
-			},
-			"dedupjoin": &dedupjoin.DedupJoin{
-				Conditions:     [][]*planpb.Expr{{}, {}},
-				SpillThreshold: 4096,
-			},
-			"rightdedupjoin": &rightdedupjoin.RightDedupJoin{
-				Conditions:     [][]*planpb.Expr{{}, {}},
-				SpillThreshold: 4096,
-			},
-		} {
-			t.Run(name, func(t *testing.T) {
-				_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
-				require.NoError(t, err)
-				require.Equal(t, int64(4096), pipeInstr.SpillMem)
+	t.Run("JoinSpillThreshold_ReceiverRoundtripPreservesPolicy", func(t *testing.T) {
+		for _, threshold := range []int64{0, 4096, 100001} {
+			for name, op := range map[string]vm.Operator{
+				"hashjoin": &hashjoin.HashJoin{
+					EqConds:        [][]*planpb.Expr{{}, {}},
+					SpillThreshold: threshold,
+				},
+				"dedupjoin": &dedupjoin.DedupJoin{
+					Conditions:     [][]*planpb.Expr{{}, {}},
+					SpillThreshold: threshold,
+				},
+				"rightdedupjoin": &rightdedupjoin.RightDedupJoin{
+					Conditions:     [][]*planpb.Expr{{}, {}},
+					SpillThreshold: threshold,
+				},
+			} {
+				t.Run(fmt.Sprintf("%s/%d", name, threshold), func(t *testing.T) {
+					_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+					require.NoError(t, err)
+					require.Equal(t, threshold, pipeInstr.SpillMem)
 
-				restored, err := convertToVmOperator(pipeInstr, ctx, nil)
-				require.NoError(t, err)
-				switch join := restored.(type) {
-				case *hashjoin.HashJoin:
-					require.Zero(t, join.SpillThreshold)
-				case *dedupjoin.DedupJoin:
-					require.Zero(t, join.SpillThreshold)
-				case *rightdedupjoin.RightDedupJoin:
-					require.Zero(t, join.SpillThreshold)
-				default:
-					t.Fatalf("unexpected restored operator %T", restored)
-				}
-			})
+					restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+					require.NoError(t, err)
+					switch join := restored.(type) {
+					case *hashjoin.HashJoin:
+						require.Equal(t, threshold, join.SpillThreshold)
+					case *dedupjoin.DedupJoin:
+						require.Equal(t, threshold, join.SpillThreshold)
+					case *rightdedupjoin.RightDedupJoin:
+						require.Equal(t, threshold, join.SpillThreshold)
+					default:
+						t.Fatalf("unexpected restored operator %T", restored)
+					}
+				})
+			}
 		}
 	})
 
@@ -3241,6 +3275,41 @@ func TestDeletionCanTruncateSerializationRoundtrip(t *testing.T) {
 	require.Equal(t, 1, restored.DeleteCtx.RowIdIdx)
 	require.Equal(t, 0, restored.DeleteCtx.PrimaryKeyIdx)
 	require.True(t, restored.DeleteCtx.AddAffectedRows)
+}
+
+func TestMongoScanPipelineRoundTripContainsNoCredential(t *testing.T) {
+	ctx := &scopeContext{
+		id:    0,
+		plan:  &planpb.Plan{},
+		scope: &Scope{},
+		root:  &scopeContext{},
+		regs:  make(map[*process.WaitRegister]int32),
+	}
+	ctx.root = ctx
+	spec := &planpb.MongoScan{
+		TableId: 33, MappingId: 11, MappingVersion: 4, ConnectionId: 22, ConnectionVersion: 3,
+		Database: "telemetry", Collection: "raw", MaxParallelism: 1,
+		Columns:         []*planpb.MongoColumnMapping{{Name: "pump", Path: "meta.pump", MoType: planpb.Type{Id: int32(types.T_varchar)}}},
+		PushedPredicate: &planpb.MongoPredicate{Op: planpb.MongoPredicateOp_MONGO_PREDICATE_EQUAL, Path: "meta.pump", ValueBson: []byte{3, 0, 0, 0, 10, 0}},
+	}
+	original := mongoscan.NewArgument().WithScan(spec)
+	defer original.Release()
+
+	_, instruction, err := convertToPipelineInstruction(original, nil, ctx, 0)
+	require.NoError(t, err)
+	wire, err := instruction.Marshal()
+	require.NoError(t, err)
+	for _, forbidden := range []string{"mongodb://", "secret://", "username", "password", "credential", "token"} {
+		require.False(t, bytes.Contains(bytes.ToLower(wire), []byte(forbidden)))
+	}
+
+	decoded := new(pipeline.Instruction)
+	require.NoError(t, decoded.Unmarshal(wire))
+	restoredOperator, err := convertToVmOperator(decoded, ctx, nil)
+	require.NoError(t, err)
+	restored := restoredOperator.(*mongoscan.MongoScan)
+	defer restored.Release()
+	require.Equal(t, spec, restored.Scan)
 }
 
 // newDispatchSrcScopeForTest builds a cross-CN shuffle dispatch source scope:

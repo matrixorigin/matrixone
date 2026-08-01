@@ -16,6 +16,7 @@ package embed
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -54,13 +55,17 @@ type cluster struct {
 	state    state
 	files    []string
 	services []*operator
+	startFn  func(*operator) error
+
+	pendingCleanup []*operator
 
 	options struct {
-		dataPath  string
-		cn        int
-		withProxy bool
-		preStart  func(ServiceOperator)
-		testing   bool
+		dataPath         string
+		cn               int
+		withProxy        bool
+		preStart         func(ServiceOperator)
+		testing          bool
+		heartbeatTimeout time.Duration
 	}
 
 	ports struct {
@@ -74,8 +79,9 @@ func NewCluster(
 	opts ...Option,
 ) (Cluster, error) {
 	c := &cluster{
-		id:    atomic.AddUint64(&clusterID, 1),
-		state: stopped,
+		id:      atomic.AddUint64(&clusterID, 1),
+		state:   stopped,
+		startFn: func(op *operator) error { return op.Start() },
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -105,7 +111,7 @@ func (c *cluster) Start() error {
 	}
 
 	if err := c.doStartLocked(0); err != nil {
-		return err
+		return errors.Join(err, c.closeServicesFromLocked(0))
 	}
 	c.state = started
 	return nil
@@ -116,7 +122,7 @@ func (c *cluster) doStartLocked(from int) error {
 	var startErr atomic.Value
 	for _, s := range c.services[from:] {
 		if s.serviceType != metadata.ServiceType_CN {
-			if err := s.Start(); err != nil {
+			if err := c.startServiceLocked(s); err != nil {
 				return err
 			}
 			continue
@@ -125,7 +131,7 @@ func (c *cluster) doStartLocked(from int) error {
 		wg.Add(1)
 		go func(s *operator) {
 			defer wg.Done()
-			if err := s.Start(); err != nil {
+			if err := c.startServiceLocked(s); err != nil {
 				// Only the first error is captured; concurrent failures
 				// from other services are discarded since knowing that
 				// any service failed is sufficient to abort startup.
@@ -141,19 +147,35 @@ func (c *cluster) doStartLocked(from int) error {
 	return nil
 }
 
+func (c *cluster) startServiceLocked(op *operator) error {
+	if c.startFn != nil {
+		return c.startFn(op)
+	}
+	return op.Start()
+}
+
 func (c *cluster) Close() error {
 	c.Lock()
 	defer c.Unlock()
 
-	for i := len(c.services) - 1; i >= 0; i-- {
-		s := c.services[i]
-		if err := s.Close(); err != nil {
-			return err
-		}
-	}
+	return c.closeServicesLocked()
+}
 
+func (c *cluster) closeServicesLocked() error {
+	err := errors.Join(
+		c.closeServicesFromLocked(0),
+		c.retryPendingCleanupLocked(),
+	)
 	c.state = stopped
-	return nil
+	return err
+}
+
+func (c *cluster) closeServicesFromLocked(from int) error {
+	var err error
+	for i := len(c.services) - 1; i >= from; i-- {
+		err = errors.Join(err, c.services[i].Close())
+	}
+	return err
 }
 
 func (c *cluster) GetService(
@@ -223,19 +245,57 @@ func (c *cluster) StartNewCNService(n int) error {
 	if c.state != started {
 		panic("cannot start cn services in stopped cluster")
 	}
+	if err := c.retryPendingCleanupLocked(); err != nil {
+		return err
+	}
 
 	serviceFrom := len(c.services)
 	cnFrom := c.options.cn
 	c.options.cn += n
 
 	if err := c.initCNConfigs(cnFrom); err != nil {
-		return err
+		return errors.Join(err, c.rollbackNewServicesLocked(serviceFrom, cnFrom))
 	}
 	if err := c.createServiceOperators(serviceFrom); err != nil {
-		return err
+		return errors.Join(err, c.rollbackNewServicesLocked(serviceFrom, cnFrom))
 	}
 
-	return c.doStartLocked(serviceFrom)
+	if err := c.doStartLocked(serviceFrom); err != nil {
+		return errors.Join(err, c.rollbackNewServicesLocked(serviceFrom, cnFrom))
+	}
+	return nil
+}
+
+func (c *cluster) rollbackNewServicesLocked(serviceFrom, cnFrom int) error {
+	newServices := append([]*operator(nil), c.services[serviceFrom:]...)
+	err := c.closeServicesFromLocked(serviceFrom)
+	c.services = c.services[:serviceFrom]
+	c.files = c.files[:serviceFrom]
+	c.options.cn = cnFrom
+
+	if err != nil {
+		for _, op := range newServices {
+			if op.needsCleanup() {
+				c.pendingCleanup = append(c.pendingCleanup, op)
+			}
+		}
+	}
+	return err
+}
+
+func (c *cluster) retryPendingCleanupLocked() error {
+	pending := c.pendingCleanup
+	c.pendingCleanup = nil
+
+	var err error
+	for _, op := range pending {
+		closeErr := op.Close()
+		err = errors.Join(err, closeErr)
+		if closeErr != nil && op.needsCleanup() {
+			c.pendingCleanup = append(c.pendingCleanup, op)
+		}
+	}
+	return err
 }
 
 func (c *cluster) adjust() {
@@ -278,6 +338,11 @@ func (c *cluster) createServiceOperators(from int) error {
 		if err != nil {
 			return err
 		}
+		if c.options.heartbeatTimeout > 0 {
+			s.Adjust(func(cfg *ServiceConfig) {
+				applyHAKeeperHeartbeatTimeout(cfg, s.serviceType, c.options.heartbeatTimeout)
+			})
+		}
 
 		if c.options.preStart != nil {
 			c.options.preStart(s)
@@ -285,6 +350,28 @@ func (c *cluster) createServiceOperators(from int) error {
 		c.services = append(c.services, s)
 	}
 	return nil
+}
+
+func applyHAKeeperHeartbeatTimeout(
+	cfg *ServiceConfig,
+	serviceType metadata.ServiceType,
+	timeout time.Duration,
+) {
+	switch serviceType {
+	case metadata.ServiceType_CN:
+		cfg.CN.HAKeeper.HeatbeatTimeout.Duration = timeout
+	case metadata.ServiceType_TN:
+		// Keep the legacy [dn] alias effective for callers that still use it.
+		if cfg.TN_please_use_getTNServiceConfig == nil {
+			cfg.TN_please_use_getTNServiceConfig = cfg.TNCompatible
+		}
+		if cfg.TN_please_use_getTNServiceConfig != nil {
+			cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration = timeout
+		}
+		if cfg.TNCompatible != nil && cfg.TNCompatible != cfg.TN_please_use_getTNServiceConfig {
+			cfg.TNCompatible.HAKeeper.HeatbeatTimeout.Duration = timeout
+		}
+	}
 }
 
 func (c *cluster) initConfigs() error {

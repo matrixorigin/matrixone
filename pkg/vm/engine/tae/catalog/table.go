@@ -264,7 +264,7 @@ func (entry *TableEntry) UpdateObjectCreateTS(id *types.Objectid, isTombstone bo
 }
 
 func (entry *TableEntry) MakeTombstoneObjectIt() btree.IterG[*ObjectEntry] {
-	return entry.tombstoneObjects.tree.Load().Iter()
+	return entry.tombstoneObjects.loadTree().Iter()
 }
 
 // committed visible object iterator
@@ -277,7 +277,7 @@ func (entry *TableEntry) WaitTombstoneObjectCommitted(ts types.TS) {
 }
 
 func (entry *TableEntry) MakeDataObjectIt() btree.IterG[*ObjectEntry] {
-	return entry.dataObjects.tree.Load().Iter()
+	return entry.dataObjects.loadTree().Iter()
 }
 
 func (entry *TableEntry) MakeDataVisibleObjectIt(txn txnif.TxnReader) *VisibleCommittedObjectIt {
@@ -498,9 +498,9 @@ func (entry *TableEntry) ShowObjectList(isTombstone bool) string {
 
 func (entry *TableEntry) ObjectCnt(isTombstone bool) int {
 	if isTombstone {
-		return entry.tombstoneObjects.tree.Load().Len()
+		return entry.tombstoneObjects.loadTree().Len()
 	}
-	return entry.dataObjects.tree.Load().Len()
+	return entry.dataObjects.loadTree().Len()
 }
 
 func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTombstone bool) (stat TableStat, w bytes.Buffer) {
@@ -882,6 +882,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {
+		checks := apipb.CloneExtra(newSchema.Extra).Checks
 		// Extra info(except seqnnum etc.) is meaningful to the previous version schema
 		// reset in new Schema
 		var hints []apipb.MergeHint
@@ -897,6 +898,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			Hints:             hints,
 			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
 			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
+			Checks:            checks,
 		}
 
 	}

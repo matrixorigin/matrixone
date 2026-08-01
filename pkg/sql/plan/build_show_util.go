@@ -23,11 +23,13 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -40,20 +42,47 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
+	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+}
 
+func constructCreateTableSQL(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+	useDbName bool,
+	cloneStmt *tree.CloneTable,
+	includeChecks bool,
+) (string, tree.Statement, error) {
 	var err error
 	var createStr string
 	rewritePairs := make([]struct {
 		display string
 		rewrite string
 	}, 0)
-	checkDefs := extractTopLevelCheckDefs(tableDef)
+	var checkDefs []string
+	if includeChecks {
+		checkDefs = constructCheckDefs(tableDef)
+	}
+	var mongoEnvelope sqlmongodb.CreateSQLEnvelope
+	mongoColumns := make(map[string]sqlmongodb.ColumnMapping)
+	if tableDef.TableType == catalog.SystemExternalRel {
+		var found bool
+		mongoEnvelope, found, err = sqlmongodb.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql)
+		if err != nil {
+			return "", nil, err
+		}
+		if found {
+			for _, column := range mongoEnvelope.Columns {
+				mongoColumns[strings.ToLower(column.Name)] = column
+			}
+		}
+	}
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
-	dbTblName := fmt.Sprintf("`%s`", formatStr(tblName))
+	dbTblName := sqlquote.Ident(tblName)
 	if useDbName {
-		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
+		dbTblName = sqlquote.QualifiedIdent(schemaName, tblName)
 	}
 
 	if tableDef.TableType == catalog.SystemExternalRel {
@@ -112,7 +141,7 @@ func ConstructCreateTableSQL(
 		} else {
 			typeStr = strings.ToLower(typeStr)
 		}
-		fmt.Fprintf(buf, "  `%s` %s", formatStr(colNameOrigin), typeStr)
+		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -153,6 +182,13 @@ func ConstructCreateTableSQL(
 		if col.Comment != "" {
 			buf.WriteString(" COMMENT '" + col.Comment + "'")
 		}
+		if mapping, ok := mongoColumns[strings.ToLower(col.Name)]; ok {
+			buf.WriteString(" MONGODB_PATH '")
+			buf.WriteString(formatStrInSingleQuotes(mapping.Path))
+			buf.WriteString("' MONGODB_CONVERT '")
+			buf.WriteString(formatStrInSingleQuotes(mapping.Conversion))
+			buf.WriteString("'")
+		}
 
 		createStr += buf.String()
 		rowCount++
@@ -171,9 +207,9 @@ func ConstructCreateTableSQL(
 		for i, def := range pkDefs {
 			def = colNameToOriginName[def]
 			if i == len(pkDefs)-1 {
-				pkStr += fmt.Sprintf("`%s`)", formatStr(def))
+				pkStr += fmt.Sprintf("%s)", sqlquote.Ident(def))
 			} else {
-				pkStr += fmt.Sprintf("`%s`,", formatStr(def))
+				pkStr += fmt.Sprintf("%s,", sqlquote.Ident(def))
 			}
 		}
 		if rowCount != 0 {
@@ -203,7 +239,7 @@ func ConstructCreateTableSQL(
 				indexStr += " FULLTEXT "
 
 				if len(indexdef.IndexName) > 0 {
-					indexStr += fmt.Sprintf("`%s`", formatStr(indexdef.IndexName))
+					indexStr += sqlquote.Ident(indexdef.IndexName)
 				}
 				indexStr += "("
 				i := 0
@@ -216,7 +252,7 @@ func ConstructCreateTableSQL(
 					}
 
 					part = colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
+					indexStr += sqlquote.Ident(part)
 					i++
 				}
 
@@ -265,8 +301,8 @@ func ConstructCreateTableSQL(
 					indexStr = "  KEY "
 					rewriteIndexStr = "  KEY "
 				}
-				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-				rewriteIndexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				indexStr += fmt.Sprintf("%s ", sqlquote.Ident(indexdef.IndexName))
+				rewriteIndexStr += fmt.Sprintf("%s ", sqlquote.Ident(indexdef.IndexName))
 				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) && !catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
 					indexStr += fmt.Sprintf("USING %s ", indexdef.IndexAlgo)
 				}
@@ -290,8 +326,8 @@ func ConstructCreateTableSQL(
 					}
 
 					originPart := colNameToOriginName[part]
-					indexStr += fmt.Sprintf("`%s`", formatStr(originPart))
-					rewriteIndexStr += fmt.Sprintf("`%s`", formatStr(originPart))
+					indexStr += sqlquote.Ident(originPart)
+					rewriteIndexStr += sqlquote.Ident(originPart)
 					if length, ok := prefixLengths[part]; ok {
 						prefixLength := fmt.Sprintf("(%d)", length)
 						indexStr += prefixLength
@@ -476,12 +512,12 @@ func ConstructCreateTableSQL(
 			cloneStmt.SrcTable.SchemaName.String() == fkTableDef.DbName {
 			fkRefDbName = schemaName
 		}
-		fkRefDbTblName := fmt.Sprintf("`%s`", formatStr(fkTableDef.Name))
+		fkRefDbTblName := sqlquote.Ident(fkTableDef.Name)
 		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
-			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkRefDbName), formatStr(fkTableDef.Name))
+			fkRefDbTblName = sqlquote.QualifiedIdent(fkRefDbName, fkTableDef.Name)
 		}
-		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
-			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
+		createStr += fmt.Sprintf("  CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s) ON DELETE %s ON UPDATE %s",
+			sqlquote.Ident(fk.Name), joinQuotedIdentifiers(colOriginNames), fkRefDbTblName, joinQuotedIdentifiers(fkColOriginNames), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
 	for _, checkDef := range checkDefs {
@@ -584,14 +620,14 @@ func ConstructCreateTableSQL(
 			cbNames := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			for i, cbName := range cbNames {
 				if i != 0 {
-					clusterby += fmt.Sprintf(", `%s`", formatStr(cbName))
+					clusterby += fmt.Sprintf(", %s", sqlquote.Ident(cbName))
 				} else {
-					clusterby += fmt.Sprintf("`%s`", formatStr(cbName))
+					clusterby += sqlquote.Ident(cbName)
 				}
 			}
 		} else {
 			//single column cluster by
-			clusterby += fmt.Sprintf("`%s`", formatStr(tableDef.ClusterBy.Name))
+			clusterby += sqlquote.Ident(tableDef.ClusterBy.Name)
 		}
 		clusterby += ")"
 		createStr += clusterby
@@ -602,6 +638,14 @@ func ConstructCreateTableSQL(
 			return "", nil, parseErr
 		} else if found {
 			createStr += formatIcebergTableOptionsForShowCreate(env)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmt(ctx, createStr)
+			}
+			return createStr, stmt, err
+		}
+		if len(mongoColumns) > 0 {
+			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope)
 			var stmt tree.Statement
 			if ctx != nil {
 				stmt, err = getRewriteSQLStmt(ctx, createStr)
@@ -733,6 +777,42 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 	return checks
 }
 
+func constructCheckDefs(tableDef *plan.TableDef) []string {
+	if tableDef == nil || tableDef.TableType == catalog.SystemExternalRel {
+		return nil
+	}
+	if len(tableDef.Checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
+	}
+
+	checks := make([]string, 0, len(tableDef.Checks))
+	for _, check := range tableDef.Checks {
+		if check == nil || check.OriginSql == "" {
+			continue
+		}
+		checks = append(
+			checks,
+			fmt.Sprintf(
+				"CONSTRAINT `%s` CHECK (%s)",
+				formatStr(check.Name),
+				check.OriginSql,
+			),
+		)
+	}
+	if len(checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
+	}
+	return checks
+}
+
+func joinQuotedIdentifiers(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = sqlquote.Ident(name)
+	}
+	return strings.Join(quoted, ",")
+}
+
 func extractCreateTableDefsSection(createSQL string) (string, bool) {
 	start := findTopLevelByte(createSQL, '(')
 	if start == -1 {
@@ -788,10 +868,10 @@ func isTopLevelCheckDef(def string) bool {
 
 	trimmed := strings.TrimSpace(def)
 	upper := strings.ToUpper(trimmed)
-	if strings.HasPrefix(upper, "CHECK") {
+	if hasKeywordAt(upper, "CHECK", 0) {
 		return true
 	}
-	if !strings.HasPrefix(upper, "CONSTRAINT") {
+	if !hasKeywordAt(upper, "CONSTRAINT", 0) {
 		return false
 	}
 	return containsKeywordOutsideQuotes(trimmed, "CHECK")
@@ -833,7 +913,7 @@ func hasKeywordAt(s string, keyword string, pos int) bool {
 }
 
 func isIdentChar(ch byte) bool {
-	return ch == '_' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
+	return ch == '_' || ch == '$' || ch >= '0' && ch <= '9' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z'
 }
 
 func findTopLevelByte(s string, target byte) int {
@@ -1044,6 +1124,40 @@ func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) st
 	}
 	var builder strings.Builder
 	builder.WriteString(" ENGINE = ICEBERG WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotes(option.value))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "connection", value: env.Connection},
+		{key: "database", value: env.Database},
+		{key: "collection", value: env.Collection},
+		{key: "schema_mode", value: env.SchemaMode},
+		{key: "conversion_mode", value: env.ConversionMode},
+		{key: "max_parallelism", value: fmt.Sprintf("%d", env.MaxParallelism)},
+	}
+	if env.SplitKey != "" {
+		options = append(options, struct {
+			key   string
+			value string
+		}{key: "split_key", value: env.SplitKey})
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = MONGODB WITH (")
 	for i, option := range options {
 		if i > 0 {
 			builder.WriteString(", ")

@@ -17,6 +17,10 @@ package process
 import (
 	"errors"
 	"math"
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -341,11 +345,132 @@ func TestHashBuildSpillLedgersTransferReconcile(t *testing.T) {
 	}
 }
 
-func TestDefaultSpillFDCapAdmitsNormalShuffleRepartitionPeak(t *testing.T) {
-	const normalPeak = uint64(16 * (32 + 64))
+func TestConfiguredSpillFDCapCushionsFirstShuffleRepartitionPeak(t *testing.T) {
+	const firstRepartitionPeak = uint64(16 * (64 + 64))
+	if got := configuredSpillFDCap(192 << 20); got < firstRepartitionPeak {
+		t.Fatalf("configured spill fd cap=%d, want at least first 16-way repartition peak=%d", got, firstRepartitionPeak)
+	}
+}
+
+func TestClampSpillFDCapBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		configured, processLimit uint64
+		limitKnown               bool
+		want                     uint64
+	}{
+		{name: "unknown fails closed", configured: 2048, processLimit: 1 << 20, want: 0},
+		{name: "zero configured", configured: 0, processLimit: 1024, limitKnown: true, want: 0},
+		{name: "below absolute headroom", configured: 2048, processLimit: 63, limitKnown: true, want: 0},
+		{name: "at absolute headroom", configured: 2048, processLimit: 64, limitKnown: true, want: 0},
+		{name: "one fd above headroom", configured: 2048, processLimit: 65, limitKnown: true, want: 1},
+		{name: "absolute headroom dominates", configured: 2048, processLimit: 128, limitKnown: true, want: 64},
+		{name: "quarter headroom dominates", configured: 2048, processLimit: 1024, limitKnown: true, want: 768},
+		{name: "explicit finite cap retained", configured: 10, processLimit: 1024, limitKnown: true, want: 10},
+		{name: "unlimited retains configured", configured: 2048, processLimit: math.MaxUint64, limitKnown: true, want: 2048},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := clampSpillFDCap(tc.configured, tc.processLimit, tc.limitKnown); got != tc.want {
+				t.Fatalf("clampSpillFDCap(%d, %d, %v)=%d, want %d",
+					tc.configured, tc.processLimit, tc.limitKnown, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDefaultSpillFDCapMatchesProcessLimit(t *testing.T) {
+	limit, ok := processOpenFileLimit()
+	want := clampSpillFDCap(configuredSpillFDCap(192<<20), limit, ok)
 	b := MustNewHashBuildBudget(192<<20, 192<<20)
-	if b.SpillFDCap() < normalPeak {
-		t.Fatalf("spill fd cap=%d, want at least normal 16-way peak=%d", b.SpillFDCap(), normalPeak)
+	if got := b.SpillFDCap(); got != want {
+		t.Fatalf("spill fd cap=%d, want process-clamped cap=%d (limit=%d known=%v)", got, want, limit, ok)
+	}
+}
+
+func TestHashBuildSpillFDCapUnderRLIMIT(t *testing.T) {
+	const (
+		childEnv = "MO_HASHBUILD_RLIMIT_CHILD"
+		limitEnv = "MO_HASHBUILD_RLIMIT_NOFILE"
+	)
+	if os.Getenv(childEnv) == "1" {
+		limit, ok := processOpenFileLimit()
+		if !ok {
+			t.Fatal("RLIMIT_NOFILE unavailable in RLIMIT child")
+		}
+		rawTarget := os.Getenv(limitEnv)
+		target, err := strconv.ParseUint(rawTarget, 10, 64)
+		if err != nil {
+			t.Fatalf("parse target %q: %v", rawTarget, err)
+		}
+		if limit != target {
+			t.Fatalf("child RLIMIT_NOFILE=%d, want %d", limit, target)
+		}
+
+		configured := configuredSpillFDCap(192 << 20)
+		want := clampSpillFDCap(configured, limit, true)
+		b := MustNewHashBuildBudget(192<<20, 192<<20)
+		if got := b.SpillFDCap(); got != want {
+			t.Fatalf("child spill fd cap=%d, want %d", got, want)
+		}
+		g, err := b.OpenGeneration(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Simulate a budget/generation opened while the process limit was
+		// higher. ReserveSpillFD must sample the current RLIMIT again instead
+		// of trusting these stale effective caps.
+		b.mu.Lock()
+		b.spillFDCap = configured
+		g.spillFDCap = configured
+		b.mu.Unlock()
+		if _, err = g.ReserveSpillFD(want + 1); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+			t.Fatalf("RLIMIT+headroom overflow error=%v, want admission rejection", err)
+		}
+		if got := b.SpillFDCap(); got != want {
+			t.Fatalf("runtime preflight refreshed spill fd cap=%d, want %d", got, want)
+		}
+		token, err := g.ReserveSpillFD(want)
+		if err != nil {
+			t.Fatalf("exact safe FD cap rejected: %v", err)
+		}
+		if !token.Release() {
+			t.Fatal("exact safe FD reservation did not release")
+		}
+
+		if err = b.SetSpillCaps(0, 10); err != nil {
+			t.Fatal(err)
+		}
+		wantExplicit := clampSpillFDCap(10, limit, true)
+		if got := b.SpillFDCap(); got != wantExplicit {
+			t.Fatalf("explicit finite FD cap=%d, want process-clamped %d", got, wantExplicit)
+		}
+		return
+	}
+
+	switch runtime.GOOS {
+	case "darwin", "linux":
+	default:
+		t.Skip("RLIMIT_NOFILE subprocess is only supported on Darwin and Linux")
+	}
+	parentLimit, ok := processOpenFileLimit()
+	if !ok || parentLimit < hashBuildNonSpillFDHeadroom+1 {
+		t.Skipf("parent RLIMIT_NOFILE=%d known=%v is too small for isolated child test", parentLimit, ok)
+	}
+	target := uint64(128)
+	if parentLimit < target {
+		target = parentLimit
+	}
+	targetText := strconv.FormatUint(target, 10)
+	cmd := exec.Command(
+		"/bin/sh", "-c",
+		`ulimit -S -n "$MO_HASHBUILD_RLIMIT_NOFILE" &&
+ulimit -H -n "$MO_HASHBUILD_RLIMIT_NOFILE" &&
+exec "$@"`,
+		"sh", os.Args[0], "-test.run=^TestHashBuildSpillFDCapUnderRLIMIT$", "-test.count=1",
+	)
+	cmd.Env = append(os.Environ(), childEnv+"=1", limitEnv+"="+targetText)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("RLIMIT child failed: %v\n%s", err, output)
 	}
 }
 

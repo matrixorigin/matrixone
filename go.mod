@@ -29,7 +29,6 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/cockroachdb/errors v1.9.1
 	github.com/colinmarc/hdfs/v2 v2.4.0
-	github.com/confluentinc/confluent-kafka-go/v2 v2.4.0
 	github.com/containerd/cgroups/v3 v3.0.1
 	github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e
 	github.com/detailyang/go-fallocate v0.0.0-20180908115635-432fa640bd2e
@@ -58,7 +57,6 @@ require (
 	github.com/hayageek/threadsafe v1.0.1
 	github.com/itchyny/gojq v0.12.16
 	github.com/jcmturner/gokrb5/v8 v8.4.4
-	github.com/jhump/protoreflect v1.15.2
 	github.com/jonboulle/clockwork v0.4.0
 	github.com/json-iterator/go v1.1.12
 	github.com/klauspost/compress v1.18.2
@@ -100,6 +98,7 @@ require (
 	github.com/xeipuuv/gojsonschema v1.2.0
 	github.com/yalue/onnxruntime_go v1.31.0
 	github.com/yanyiwu/gojieba v1.4.7
+	go.mongodb.org/mongo-driver/v2 v2.8.0
 	go.starlark.net v0.0.0-20250701195324-d457b4515e0e
 	go.uber.org/automaxprocs v1.5.3
 	go.uber.org/ratelimit v0.2.0
@@ -139,7 +138,6 @@ require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
-	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic/loader v0.5.1 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
@@ -242,9 +240,13 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
+	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
+	github.com/xdg-go/scram v1.2.0 // indirect
+	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
+	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yusufpapurcu/wmi v1.2.3 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect

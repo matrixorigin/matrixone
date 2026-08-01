@@ -385,6 +385,7 @@ message CheckDef {
   string name = 1;
   // Name for anonymous constraints, __mo_chk_[INDEX_ID]
   Expr check = 2;
+  string origin_sql = 3;
 }
 
 message Partition {
@@ -746,7 +747,8 @@ message Node {
     FUNCTION_SCAN = 3;
     EXTERNAL_SCAN = 4;
     MATERIAL_SCAN = 5;
-    SOURCE_SCAN = 6;
+    reserved 6; // former SOURCE_SCAN
+    reserved "SOURCE_SCAN";
     EXTERNAL_FUNCTION = 7;
 
     // Proper Relational Operators
@@ -827,6 +829,11 @@ message Node {
     NULL = 3;
     VALUE = 4;
     LINEAR = 5;
+  }
+
+  enum GapFillMode {
+    GAP_FILL_NONE = 0;
+    GAP_FILL_PARTITION = 1;
   }
 
   enum OnDuplicateAction {
@@ -967,6 +974,15 @@ message Node {
   // carry values across a partition boundary, so the operator compares these
   // columns to find where one group ends and the next begins.
   repeated int32 time_window_partition_col_pos = 74;
+
+  // TIME_WINDOW only: explicitly generate missing buckets between each
+  // partition's observed minimum and maximum timestamp.
+  GapFillMode gap_fill_mode = 75;
+
+  // RECURSIVE_CTE only: exclude rows already emitted by the anchor or an
+  // earlier recursive iteration, implementing UNION / UNION DISTINCT fixpoint
+  // semantics instead of UNION ALL bag semantics.
+  bool recursive_union_distinct = 76;
 }
 
 message SnapshotExtraInfo {
@@ -996,6 +1012,7 @@ enum ExternType {
   EXTERNAL_TB = 1;
   RESULT_SCAN = 2;
   ICEBERG_TB = 3;
+  MONGODB_TB = 4;
 }
 
 message ExternScan {
@@ -1010,6 +1027,7 @@ message ExternScan {
   bytes escaped_by = 9;
   map<string, int32> TbColToDataCol = 10;
   IcebergScan iceberg_scan = 11;
+  MongoScan mongodb_scan = 12;
 }
 
 message IcebergScan {
@@ -1023,6 +1041,70 @@ message IcebergScan {
   string read_mode = 8;
   repeated int32 projected_field_ids = 9;
   string filter_digest = 10;
+}
+
+// MongoScan is a credential-free scan description. Authentication and TLS
+// material are resolved on the execution CN from connection_id/version.
+message MongoScan {
+  uint64 mapping_id = 1;
+  uint64 connection_id = 2;
+  uint64 connection_version = 3;
+  string database = 4;
+  string collection = 5;
+  repeated MongoColumnMapping columns = 6;
+  MongoPredicate pushed_predicate = 7;
+  repeated string projected_paths = 8;
+  string residual_filter_digest = 9;
+  int32 max_parallelism = 10;
+  MongoSplit split = 11;
+  int64 max_scan_rows = 12;
+  int64 max_scan_bytes = 13;
+  // mapping_version pins the tenant-scoped mapping row that was validated at
+  // compile time. The execution CN re-reads that exact catalog generation.
+  uint64 mapping_version = 14;
+  // table_id is the stable MO relation identity used to locate the mapping
+  // during compilation. It remains distinct from the catalog mapping_id so a
+  // cached logical plan can be compiled more than once without identity drift.
+  uint64 table_id = 15;
+}
+
+message MongoColumnMapping {
+  string name = 1;
+  string path = 2;
+  Type mo_type = 3 [(gogoproto.nullable) = false];
+  string conversion_mode = 4;
+}
+
+enum MongoPredicateOp {
+  MONGO_PREDICATE_INVALID = 0;
+  MONGO_PREDICATE_AND = 1;
+  MONGO_PREDICATE_EQUAL = 2;
+  MONGO_PREDICATE_NOT_EQUAL = 3;
+  MONGO_PREDICATE_LESS = 4;
+  MONGO_PREDICATE_LESS_EQUAL = 5;
+  MONGO_PREDICATE_GREATER = 6;
+  MONGO_PREDICATE_GREATER_EQUAL = 7;
+  MONGO_PREDICATE_IN = 8;
+  MONGO_PREDICATE_IS_NULL = 9;
+  MONGO_PREDICATE_IS_NOT_NULL = 10;
+}
+
+message MongoPredicate {
+  MongoPredicateOp op = 1;
+  string path = 2;
+  // Canonical BSON value bytes retain Mongo numeric and temporal types while
+  // keeping the protobuf independent from the Go driver.
+  bytes value_bson = 3;
+  repeated bytes values_bson = 4;
+  repeated MongoPredicate children = 5;
+}
+
+message MongoSplit {
+  string key_path = 1;
+  bytes lower_bson = 2;
+  bytes upper_bson = 3;
+  bool lower_inclusive = 4;
+  bool upper_inclusive = 5;
 }
 
 message ExternAttr {
@@ -1164,6 +1246,10 @@ message Query {
 
   // True when the planner generated recursive FK side-effect DML for this query.
   bool has_foreign_key_action = 11;
+
+  // Catalog objects that a rewrite depends on even when the final plan no
+  // longer contains the scans that originally carried those objects.
+  repeated ObjectRef catalog_dependencies = 12;
 }
 
 message TransationControl {
@@ -1276,7 +1362,8 @@ message DataDefinition {
     ALTER_SEQUENCE = 30;
     DROP_SEQUENCE = 31;
     SHOW_SEQUENCES = 32;
-    SHOW_CONNECTORS = 33;
+    reserved 33; // former SHOW_CONNECTORS
+    reserved "SHOW_CONNECTORS";
     SHOW_UPGRADE = 34;
     RENAME_TABLE = 35;
     CREATE_PITR = 36;

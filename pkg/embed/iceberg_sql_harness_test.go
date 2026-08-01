@@ -54,7 +54,12 @@ const (
 	embeddedIcebergSnapshotCurrent      int64 = 202
 	embeddedIcebergTimestampCutoff            = int64(1767312000000) // 2026-01-02T00:00:00Z in ms.
 	embeddedIcebergAccountRetryInterval       = 100 * time.Millisecond
-	embeddedIcebergAccountCreateTimeout       = 10 * time.Second
+	// CREATE ACCOUNT initializes all tenant system tables, so it can legitimately
+	// take longer than a regular SQL statement on a loaded integration runner.
+	// Keep an outer setup budget separate from each attempt so a slow or lost
+	// response cannot consume the retry budget it is supposed to trigger.
+	embeddedIcebergAccountAttemptTimeout = 10 * time.Second
+	embeddedIcebergAccountCreateTimeout  = 30 * time.Second
 )
 
 type embeddedIcebergSQLExecer interface {
@@ -65,6 +70,18 @@ type embeddedIcebergSQLExecerFunc func(context.Context, string, ...any) (sql.Res
 
 func (f embeddedIcebergSQLExecerFunc) ExecContext(ctx context.Context, stmt string, args ...any) (sql.Result, error) {
 	return f(ctx, stmt, args...)
+}
+
+type embeddedIcebergAccountRetryPolicy struct {
+	attemptTimeout time.Duration
+	retryInterval  time.Duration
+}
+
+func defaultEmbeddedIcebergAccountRetryPolicy() embeddedIcebergAccountRetryPolicy {
+	return embeddedIcebergAccountRetryPolicy{
+		attemptTimeout: embeddedIcebergAccountAttemptTimeout,
+		retryInterval:  embeddedIcebergAccountRetryInterval,
+	}
 }
 
 func TestCreateEmbeddedIcebergTenantAccountRetriesConnectionErrors(t *testing.T) {
@@ -81,9 +98,102 @@ func TestCreateEmbeddedIcebergTenantAccountRetriesConnectionErrors(t *testing.T)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	require.NoError(t, createEmbeddedIcebergTenantAccount(ctx, execer, "iceacc_retry"))
+	require.NoError(t, createEmbeddedIcebergTenantAccountWithRetryPolicy(
+		ctx,
+		execer,
+		"iceacc_retry",
+		embeddedIcebergAccountRetryPolicy{
+			attemptTimeout: time.Second,
+		},
+	))
 	require.Equal(t, 2, calls)
 	require.Equal(t, "create account if not exists iceacc_retry admin_name 'admin' identified by '111'", statement)
+}
+
+func TestCreateEmbeddedIcebergTenantAccountRetriesExpiredAttempt(t *testing.T) {
+	var calls int
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	outerDeadline, ok := ctx.Deadline()
+	require.True(t, ok)
+
+	execer := embeddedIcebergSQLExecerFunc(func(ctx context.Context, _ string, _ ...any) (sql.Result, error) {
+		calls++
+		if calls == 1 {
+			attemptDeadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			require.True(t, attemptDeadline.Before(outerDeadline))
+			return nil, context.DeadlineExceeded
+		}
+		return nil, nil
+	})
+
+	require.NoError(t, createEmbeddedIcebergTenantAccountWithRetryPolicy(
+		ctx,
+		execer,
+		"iceacc_slow_attempt",
+		embeddedIcebergAccountRetryPolicy{
+			attemptTimeout: time.Minute,
+		},
+	))
+	require.Equal(t, 2, calls)
+}
+
+func TestCreateEmbeddedIcebergTenantAccountStopsAtExpiredOuterDeadline(t *testing.T) {
+	var calls int
+	execer := embeddedIcebergSQLExecerFunc(func(context.Context, string, ...any) (sql.Result, error) {
+		calls++
+		return nil, nil
+	})
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Unix(0, 1))
+	defer cancel()
+	<-ctx.Done()
+	err := createEmbeddedIcebergTenantAccountWithRetryPolicy(
+		ctx,
+		execer,
+		"iceacc_outer_deadline",
+		embeddedIcebergAccountRetryPolicy{
+			attemptTimeout: time.Second,
+		},
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Zero(t, calls)
+}
+
+func TestCreateEmbeddedIcebergTenantAccountRejectsInvalidRetryPolicy(t *testing.T) {
+	var calls int
+	execer := embeddedIcebergSQLExecerFunc(func(context.Context, string, ...any) (sql.Result, error) {
+		calls++
+		return nil, nil
+	})
+
+	tests := []struct {
+		name   string
+		policy embeddedIcebergAccountRetryPolicy
+	}{
+		{
+			name: "non-positive attempt timeout",
+		},
+		{
+			name: "negative retry interval",
+			policy: embeddedIcebergAccountRetryPolicy{
+				attemptTimeout: time.Second,
+				retryInterval:  -time.Nanosecond,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Error(t, createEmbeddedIcebergTenantAccountWithRetryPolicy(
+				context.Background(),
+				execer,
+				"iceacc_invalid_policy",
+				test.policy,
+			))
+		})
+	}
+	require.Zero(t, calls)
 }
 
 func TestCreateEmbeddedIcebergTenantAccountRejectsNonConnectionErrors(t *testing.T) {
@@ -702,17 +812,46 @@ func openIcebergTenantTestSQL(t *testing.T, c Cluster, rootDB *sql.DB) *embedded
 }
 
 func createEmbeddedIcebergTenantAccount(ctx context.Context, db embeddedIcebergSQLExecer, accountName string) error {
+	return createEmbeddedIcebergTenantAccountWithRetryPolicy(
+		ctx,
+		db,
+		accountName,
+		defaultEmbeddedIcebergAccountRetryPolicy(),
+	)
+}
+
+func createEmbeddedIcebergTenantAccountWithRetryPolicy(
+	ctx context.Context,
+	db embeddedIcebergSQLExecer,
+	accountName string,
+	policy embeddedIcebergAccountRetryPolicy,
+) error {
+	if policy.attemptTimeout <= 0 {
+		return fmt.Errorf("create embedded Iceberg tenant account: attempt timeout must be positive")
+	}
+	if policy.retryInterval < 0 {
+		return fmt.Errorf("create embedded Iceberg tenant account: retry interval must not be negative")
+	}
+
 	stmt := fmt.Sprintf("create account if not exists %s admin_name 'admin' identified by '111'", accountName)
 	for {
-		_, err := db.ExecContext(ctx, stmt)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("create embedded Iceberg tenant account: %w", ctxErr)
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, policy.attemptTimeout)
+		_, err := db.ExecContext(attemptCtx, stmt)
+		cancel()
 		if err == nil {
 			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("create embedded Iceberg tenant account: %w (last connection error: %v)", ctxErr, err)
 		}
 		if !morpc.IsConnectionError(err) {
 			return err
 		}
 
-		timer := time.NewTimer(embeddedIcebergAccountRetryInterval)
+		timer := time.NewTimer(policy.retryInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -726,7 +865,8 @@ func openIcebergTenantFrontendDB(t *testing.T, c Cluster, accountName string) *s
 	t.Helper()
 	cn0, err := c.GetCNService(0)
 	require.NoError(t, err)
-	dsn := fmt.Sprintf("%s#admin#moadmin:111@tcp(127.0.0.1:%d)/", accountName, cn0.GetServiceConfig().CN.Frontend.Port)
+	dsn := fmt.Sprintf("%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/",
+		accountName, cn0.GetServiceConfig().CN.Frontend.Port)
 	db, err := sql.Open("mysql", dsn)
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)

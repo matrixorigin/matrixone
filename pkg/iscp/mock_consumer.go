@@ -206,26 +206,28 @@ func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
 	return err
 }
 
-func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) error {
+func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) (err error) {
 	s.dataRetriever = data
 	data.GetAccountID()
 	data.GetTableID()
 
 	if !s.inited {
-
-		err := s.createTargetTable(context.Background())
+		err = s.createTargetTable(ctx)
 		if err != nil {
 			return err
 		}
+		s.inited = true
 	}
 
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "consume" {
+		objectio.WaitForISCPExecutorFault(ctx, msg)
 		return moerr.NewInternalErrorNoCtx(msg)
 	}
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "consumeWithJobName") {
 		strs := strings.Split(msg, ":")
 		for i := 1; i < len(strs); i++ {
 			if s.jobName == strs[i] {
+				objectio.WaitForISCPExecutorFault(ctx, msg)
 				return moerr.NewInternalErrorNoCtx(strs[0])
 			}
 		}
@@ -244,24 +246,17 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 			}
 		}
 	case ISCPDataType_Tail:
-		ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
+		ctx := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
-		txn, err := getTxn(ctx, s.cnEngine, s.cnTxnClient, "internalSqlConsumer")
+		var txn client.TxnOperator
+		txn, err = getTxn(ctx, s.cnEngine, s.cnTxnClient, "internalSqlConsumer")
 		if err != nil {
 			return err
 		}
 
 		defer func() {
-			if err != nil {
-				err = txn.Rollback(ctx)
-			} else {
-				err = txn.Commit(ctx)
-			}
-
-			if err != nil {
-				logutil.Error("InteralSqlConsumer Consume Tail failed")
-			}
+			err = finishISCPTransaction(ctx, txn, err)
 		}()
 
 		for {
@@ -332,17 +327,17 @@ func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *AtomicBatch)
 			}
 			// step1: get row from the batch
 			if err = extractRowFromEveryVector(ctx, bat, i, s.insertRow); err != nil {
-				panic(err)
+				return err
 			}
 
 			// step2: transform rows into sql parts
 			if err = s.getInsertRowBuf(ctx); err != nil {
-				panic(err)
+				return err
 			}
 
 			// step3: append to sqlBuf, send sql if sqlBuf is full
 			if sqlBuffer, err = s.appendSqlBuf(ctx, UpsertRow, sqlBuffer, nil); err != nil {
-				panic(err)
+				return err
 			}
 		}
 	}
@@ -376,7 +371,7 @@ func (s *interalSqlConsumer) sinkTail(ctx context.Context, insertBatch, deleteBa
 			s.preRowType = DeleteRow
 		}
 		if sqlBuffer, err = s.sinkDelete(ctx, deleteIter, sqlBuffer, txn); err != nil {
-			panic(err)
+			return err
 		}
 		// get next item
 		deleteIterHasNext = deleteIter.Next()
@@ -393,7 +388,7 @@ func (s *interalSqlConsumer) sinkTail(ctx context.Context, insertBatch, deleteBa
 			s.preRowType = InsertRow
 		}
 		if sqlBuffer, err = s.sinkInsert(ctx, insertIter, sqlBuffer, txn); err != nil {
-			panic(err)
+			return err
 		}
 		// get next item
 		insertIterHasNext = insertIter.Next()
@@ -466,7 +461,6 @@ func (s *interalSqlConsumer) tryFlushSqlBuf(ctx context.Context, txn client.TxnO
 		result.Close()
 		if err != nil {
 			logutil.Errorf("iscp interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
-			panic(err)
 		}
 		return
 	}
@@ -476,8 +470,6 @@ func (s *interalSqlConsumer) tryFlushSqlBuf(ctx context.Context, txn client.TxnO
 	result.Close()
 	if err != nil {
 		logutil.Errorf("iscp interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
-		// record error
-		panic(err)
 	}
 	return
 }
@@ -518,7 +510,9 @@ func (s *interalSqlConsumer) appendSqlBuf(ctx context.Context, rowType RowType, 
 		if s.isNonEmptyDeleteStmt(sqlBuffer) {
 			sqlBuffer = appendBytes(sqlBuffer, s.deleteSuffix)
 		}
-		s.tryFlushSqlBuf(ctx, txn, sqlBuffer)
+		if err = s.tryFlushSqlBuf(ctx, txn, sqlBuffer); err != nil {
+			return nil, err
+		}
 		sqlBuffer = make([]byte, 0)
 
 		// reset s.sqlBuf

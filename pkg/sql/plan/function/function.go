@@ -284,18 +284,31 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
+	switch fid {
+	case CASE:
+		if caseHasTemporalPromotion(args) {
+			return false
+		}
+	case COALESCE:
+		for _, arg := range args {
+			if arg.Typ.NotNullable {
+				return true
+			}
+		}
+		return false
+	case GREATEST, LEAST:
+		return false
 	// Value window functions can synthesize NULLs even when every input is
 	// NOT NULL. LAG/LEAD do so outside the partition unless an explicit,
 	// non-NULL default is present. FIRST_VALUE/LAST_VALUE can observe an empty
 	// frame, and NTH_VALUE can also miss the requested row. The frame is not
 	// available here, so keep those contracts conservative.
-	switch fid {
+	case FIRST_VALUE, LAST_VALUE, NTH_VALUE:
+		return false
 	case LAG, LEAD:
 		if len(args) != 3 {
 			return false
 		}
-	case FIRST_VALUE, LAST_VALUE, NTH_VALUE:
-		return false
 	}
 	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
@@ -307,6 +320,30 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		}
 	}
 	return true
+}
+
+func caseHasTemporalPromotion(args []*plan.Expr) bool {
+	for i := 1; i < len(args); i += 2 {
+		if isTemporalPromotion(args[i]) {
+			return true
+		}
+	}
+	// CASE arguments are condition/value pairs followed by ELSE. The ELSE
+	// expression is at the final even index and needs the same check.
+	if len(args)%2 == 1 && isTemporalPromotion(args[len(args)-1]) {
+		return true
+	}
+	return false
+}
+
+func isTemporalPromotion(arg *plan.Expr) bool {
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return false
+	}
+	source := types.T(fn.Args[0].Typ.Id)
+	target := types.T(arg.Typ.Id)
+	return source.IsDateRelate() && target.IsDateRelate() && source != target
 }
 
 // ProducesNoNull reports whether a function's contract guarantees a non-NULL

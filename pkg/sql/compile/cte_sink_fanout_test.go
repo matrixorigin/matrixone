@@ -23,9 +23,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestMaterializedSpillBudgetUsesProcessLimits(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.Lim.SpillSize = 128
+	budget := newMaterializedSpillBudget(proc)
+
+	disk, err := budget.ReserveDisk(128)
+	require.NoError(t, err)
+	_, err = budget.ReserveDisk(1)
+	require.Error(t, err, "materialized spill must honor the query SpillSize limit")
+	require.True(t, disk.Release())
+
+	memory, err := budget.ReserveMemory(1)
+	require.NoError(t, err)
+	require.True(t, memory.Release())
+	fd, err := budget.ReserveFD(1)
+	require.NoError(t, err)
+	require.True(t, fd.Release())
+	proc.SetStmtProfile(nil)
+}
 
 func TestCTESinkFanoutRegistersEveryConsumer(t *testing.T) {
 	c := NewMockCompile(t)
@@ -69,6 +91,55 @@ func TestCTESinkFanoutRegistersEveryConsumer(t *testing.T) {
 	require.Equal(t, dispatch.SendToAllLocalFunc, fanout.FuncId)
 	require.Len(t, fanout.LocalRegs, 2)
 	require.Same(t, leftScan.MaterializedSource, fanout.MaterializedSource)
+}
+
+func TestMaterializedCTESinkGroupsShuffleBucketsByCN(t *testing.T) {
+	c := NewMockCompile(t)
+	c.cnList = engine.Nodes{
+		{Addr: "cn1:6001", Mcpu: 2},
+		{Addr: "cn2:6001", Mcpu: 2},
+	}
+	c.addr = "cn1:6001"
+	c.nodeRegs = make(map[[2]int32]*process.WaitRegister)
+	c.stepRegs = make(map[int32][][2]int32)
+	query := &plan.Query{Nodes: []*plan.Node{
+		{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{0}},
+		{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{0}},
+		{NodeType: plan.Node_SINK, ExtraOptions: materialized.CTESinkOption},
+	}, Steps: []int32{2}}
+	c.anal = &AnalyzeModule{qry: query}
+
+	require.NoError(t, c.compileSinkScan(query, 0))
+	require.NoError(t, c.compileSinkScan(query, 1))
+
+	addrs := []string{"cn1:6001", "cn1:6001", "cn2:6001", "cn2:6001"}
+	buckets := make([]*Scope, len(addrs))
+	for i, addr := range addrs {
+		buckets[i] = &Scope{
+			Magic:    Remote,
+			NodeInfo: engine.Node{Addr: addr, Mcpu: 1},
+			Proc:     c.proc.NewContextChildProc(1),
+		}
+		buckets[i].setRootOperator(merge.NewArgument())
+	}
+
+	// A grouped producer has one shuffle source per CN. Each source dispatches
+	// to both same-CN buckets, so the buckets must travel in one RemoteRun tree.
+	buckets[0].PreScopes = append(buckets[0].PreScopes,
+		newDispatchSrcScopeForTest(c.proc, "cn1:6001",
+			[]*Scope{buckets[0], buckets[1]}, []*Scope{buckets[2], buckets[3]}))
+	buckets[2].PreScopes = append(buckets[2].PreScopes,
+		newDispatchSrcScopeForTest(c.proc, "cn2:6001",
+			[]*Scope{buckets[2], buckets[3]}, []*Scope{buckets[0], buckets[1]}))
+
+	scopes, err := c.compileSinkNode(&plan.Node{NodeType: plan.Node_SINK}, buckets, 0)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	require.Len(t, scopes[0].PreScopes, 2, "materialized producer must have one send tree per CN")
+	for _, cnScope := range scopes[0].PreScopes {
+		require.Len(t, cnScope.PreScopes, 2)
+		require.True(t, checkPipelineStandaloneExecutableAtRemote(cnScope))
+	}
 }
 
 func TestMaterializedCTEStepGuards(t *testing.T) {

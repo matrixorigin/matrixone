@@ -651,6 +651,12 @@ END_FULLTEXT:
 		if len(multiTableIndexes) == 0 {
 			return nodeID, nil
 		}
+		// Preserve the dependency closure before a plugin is allowed to rewrite
+		// away the owning TABLE_SCAN. The final plan shape cannot be used as the
+		// source of truth after an index-only rewrite.
+		if err := builder.recordPreparedPluginDependencies(vecCtx.scanNode); err != nil {
+			return nodeID, err
+		}
 
 		var multiTableIndexKeys []string
 		for key := range multiTableIndexes {
@@ -682,9 +688,12 @@ END_FULLTEXT:
 				continue
 			}
 			vctxExt, mtiExt := toPlanplugin(vecCtx, multiTableIndex)
-			newNodeID, _, err := p.Plan().ApplyForSort(builder, vctxExt, mtiExt, nodeID, opts)
-			if err != nil || newNodeID != nodeID {
+			newNodeID, applied, err := p.Plan().ApplyForSort(builder, vctxExt, mtiExt, nodeID, opts)
+			if err != nil {
 				return newNodeID, err
+			}
+			if applied {
+				return newNodeID, nil
 			}
 		}
 

@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -115,8 +116,10 @@ func TestDataBranchOutputFileNameAndHintQuotePathSeparators(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, release)
 	require.NotNil(t, cleanup)
-	t.Cleanup(release)
-	t.Cleanup(cleanup)
+	t.Cleanup(func() {
+		require.NoError(t, release())
+		cleanup()
+	})
 
 	require.Equal(t, outputDir, filepath.Dir(filePath))
 	require.Regexp(t, regexp.MustCompile(
@@ -172,8 +175,10 @@ func TestDataBranchOutputFileNameSurvivesCSVFormattingAndLengthLimit(t *testing.
 		require.NoError(t, err)
 		require.NotNil(t, release)
 		require.NotNil(t, cleanup)
-		t.Cleanup(release)
-		t.Cleanup(cleanup)
+		t.Cleanup(func() {
+			require.NoError(t, release())
+			cleanup()
+		})
 
 		baseName := filepath.Base(filePath)
 		require.LessOrEqual(t, len(baseName), maxDiffFileNameStemBytes+len(".sql"))
@@ -276,6 +281,36 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int{1, 0}, output.projectedIdxes)
 		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "name", "id"}, output.columnNames)
+	})
+
+	t.Run("target-only column uses target type and remains nullable", func(t *testing.T) {
+		targetDef := tarRel.GetTableDef(ctx)
+		targetDef.Cols = append(targetDef.Cols, &plan.ColDef{
+			Name: "extra", ColId: 5, Seqnum: 4,
+			Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true},
+		})
+		defer func() { targetDef.Cols = targetDef.Cols[:len(targetDef.Cols)-1] }()
+
+		targetOnlyTblStuff := tblStuff
+		targetOnlyTblStuff.def.colNames = append(
+			append([]string(nil), tblStuff.def.colNames...), "extra",
+		)
+		targetOnlyTblStuff.def.colTypes = append(
+			append([]types.Type(nil), tblStuff.def.colTypes...), types.T_int32.ToType(),
+		)
+		targetOnlyTblStuff.def.visibleIdxes = append(
+			append([]int(nil), tblStuff.def.visibleIdxes...), 4,
+		)
+		targetOnlyTblStuff.def.tarOnlyIdxes = []int{4}
+
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+		}, targetOnlyTblStuff)
+		require.NoError(t, err)
+		sql, err := output.createSQL(ctx, targetOnlyTblStuff)
+		require.NoError(t, err)
+		require.Contains(t, sql, "`extra` INT default null")
+		require.NotContains(t, sql, "`extra` INT not null")
 	})
 
 	t.Run("renamed target column retains target name and base type", func(t *testing.T) {
@@ -711,6 +746,61 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 	})
 }
 
+func TestDataBranchOutputLimitBoundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		limit     int64
+		wantRows  uint64
+		wantStops int
+	}{
+		{name: "zero", limit: 0, wantRows: 0, wantStops: 1},
+		{name: "one", limit: 1, wantRows: 1, wantStops: 1},
+		{name: "exact row count", limit: 2, wantRows: 2, wantStops: 1},
+		{name: "above row count", limit: 3, wantRows: 2, wantStops: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			ses := newValidateSession(t)
+			ses.SetMysqlResultSet(&MysqlResultSet{})
+
+			ctrl := gomock.NewController(t)
+			tblStuff := newTestBranchTableStuff(ctrl)
+			bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+			t.Cleanup(func() {
+				tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+			})
+			for i, name := range []string{"one", "two"} {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i+1), false, ses.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(name), false, ses.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("hidden"), false, ses.proc.Mp()))
+			}
+			bat.SetRowCount(2)
+
+			retCh := make(chan batchWithKind, 1)
+			retCh <- batchWithKind{name: "child", kind: diffUpdate, batch: bat}
+			close(retCh)
+
+			stopCalls := 0
+			stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{Limit: &tt.limit}}
+			require.NoError(t, satisfyDiffOutputOpt(
+				ctx,
+				cancel,
+				func() { stopCalls++ },
+				ses,
+				nil,
+				stmt,
+				branchMetaInfo{},
+				tblStuff,
+				retCh,
+			))
+			require.Equal(t, tt.wantRows, ses.GetMysqlResultSet().GetRowCount())
+			require.Equal(t, tt.wantStops, stopCalls)
+		})
+	}
+}
+
 func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 	tblStuff := tableStuff{}
 	tblStuff.def.colNames = []string{"id", "name", "age"}
@@ -1002,7 +1092,7 @@ func TestDataBranchOutputWriteRowValues(t *testing.T) {
 	row := []any{int64(7), "alice"}
 
 	insertBuf := &bytes.Buffer{}
-	require.NoError(t, writeInsertRowValues(nil, tblStuff, row, insertBuf))
+	require.NoError(t, writeInsertRowValues(nil, tblStuff, row, insertBuf, tblStuff.def.visibleIdxes))
 	require.Equal(t, "(7,'alice')", insertBuf.String())
 
 	deleteBuf := &bytes.Buffer{}
@@ -1434,7 +1524,7 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderNilWorker(t *testing.T) {
-	_, _, err := newSingleWriteAppender(context.Background(), nil, nil, "unused", nil)
+	_, _, err := newSingleWriteAppender(context.Background(), nil, nil, "unused")
 	require.Error(t, err)
 }
 
@@ -1450,16 +1540,12 @@ func TestDataBranchOutputNewSingleWriteAppenderSuccess(t *testing.T) {
 	require.NoError(t, err)
 	defer pool.Release()
 
-	called := false
-	writeFile, release, err := newSingleWriteAppender(ctx, pool, etlFS, targetPath, func() {
-		called = true
-	})
+	writeFile, release, err := newSingleWriteAppender(ctx, pool, etlFS, targetPath)
 	require.NoError(t, err)
 
 	require.NoError(t, writeFile([]byte("BEGIN;\n")))
 	require.NoError(t, writeFile([]byte("COMMIT;\n")))
-	release()
-	require.False(t, called)
+	require.NoError(t, release())
 
 	content, err := os.ReadFile(filePath)
 	require.NoError(t, err)
@@ -1474,6 +1560,162 @@ func (fs *failingWriteFS) Write(ctx context.Context, vector fileservice.IOVector
 	return moerr.NewInternalErrorNoCtx("mock write failure")
 }
 
+type lateFailingWriteFS struct {
+	fileservice.FileService
+	deleteCalls int
+}
+
+func (fs *lateFailingWriteFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	for _, entry := range vector.Entries {
+		if entry.ReaderForWrite != nil {
+			if _, err := io.Copy(io.Discard, entry.ReaderForWrite); err != nil {
+				return err
+			}
+		}
+	}
+	return moerr.NewInternalErrorNoCtx("mock late write failure")
+}
+
+func (fs *lateFailingWriteFS) Delete(ctx context.Context, filePaths ...string) error {
+	fs.deleteCalls++
+	return fs.FileService.Delete(ctx, filePaths...)
+}
+
+type closeFailingMutator struct {
+	closeCalls int
+}
+
+func (m *closeFailingMutator) Mutate(context.Context, ...fileservice.IOEntry) error {
+	return nil
+}
+
+func (m *closeFailingMutator) Append(context.Context, ...fileservice.IOEntry) error {
+	return nil
+}
+
+func (m *closeFailingMutator) Close() error {
+	m.closeCalls++
+	return moerr.NewInternalErrorNoCtx("mock mutator close failure")
+}
+
+type closeFailingMutableFS struct {
+	fileservice.MutableFileService
+	mutator fileservice.Mutator
+}
+
+func (fs *closeFailingMutableFS) NewMutator(
+	context.Context,
+	string,
+) (fileservice.Mutator, error) {
+	return fs.mutator, nil
+}
+
+func installDataBranchTestFileService(
+	t *testing.T,
+	ses *Session,
+	fileService fileservice.FileService,
+) {
+	t.Helper()
+	pu := getPu(ses.GetService())
+	originalFS := pu.FileService
+	pu.FileService = fileService
+	t.Cleanup(func() {
+		pu.FileService = originalFS
+	})
+}
+
+func TestDataBranchOutputNewSingleWriteAppenderReturnsLateWriteFailure(t *testing.T) {
+	ctx := context.Background()
+	etlFS, _, err := fileservice.GetForETL(ctx, nil, filepath.Join(t.TempDir(), "diff.sql"))
+	require.NoError(t, err)
+
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+
+	writeFile, release, err := newSingleWriteAppender(
+		ctx,
+		pool,
+		&lateFailingWriteFS{FileService: etlFS},
+		"diff.sql",
+	)
+	require.NoError(t, err)
+	require.NoError(t, writeFile([]byte("BEGIN;\n")))
+	require.NoError(t, writeFile([]byte("COMMIT;\n")))
+	require.EqualError(t, release(), "internal error: mock late write failure")
+}
+
+func TestDataBranchOutputReturnsLateFileWriteFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ses := newValidateSession(t)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	targetFS := &lateFailingWriteFS{FileService: localFS}
+	installDataBranchTestFileService(t, ses, targetFS)
+
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+
+	ctrl := gomock.NewController(t)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkKind = fakeKind
+	tblStuff.worker = pool
+
+	retCh := make(chan batchWithKind)
+	close(retCh)
+	stmt := &tree.DataBranchDiff{
+		OutputOpt: &tree.DiffOutputOpt{DirPath: defines.SharedFileServiceName + ":/diff"},
+	}
+
+	err = satisfyDiffOutputOpt(
+		ctx,
+		cancel,
+		func() {},
+		ses,
+		nil,
+		stmt,
+		branchMetaInfo{},
+		tblStuff,
+		retCh,
+	)
+	require.EqualError(t, err, "internal error: mock late write failure")
+	require.Zero(t, ses.GetMysqlResultSet().GetRowCount())
+	require.Equal(t, 2, targetFS.deleteCalls, "prepare and failed-output cleanup must both delete")
+}
+
+func TestDataBranchOutputMutableAppenderReturnsCloseFailure(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	mutator := &closeFailingMutator{}
+	targetFS := &closeFailingMutableFS{
+		MutableFileService: localFS,
+		mutator:            mutator,
+	}
+	installDataBranchTestFileService(t, ses, targetFS)
+
+	ctrl := gomock.NewController(t)
+	stmt := &tree.DataBranchDiff{
+		OutputOpt: &tree.DiffOutputOpt{DirPath: defines.SharedFileServiceName + ":/diff"},
+	}
+	_, _, writeFile, release, cleanup, err := prepareFSForDiffAsFile(
+		ctx,
+		ses,
+		stmt,
+		newTestBranchTableStuff(ctrl),
+	)
+	require.NoError(t, err)
+	require.NoError(t, writeFile([]byte("BEGIN;\nCOMMIT;\n")))
+	require.EqualError(t, release(), "internal error: mock mutator close failure")
+	require.Equal(t, 1, mutator.closeCalls)
+	cleanup()
+}
+
 func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -1486,19 +1728,16 @@ func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
 	require.NoError(t, err)
 	defer pool.Release()
 
-	called := false
 	writeFile, release, err := newSingleWriteAppender(
 		ctx,
 		pool,
 		&failingWriteFS{FileService: etlFS},
 		"diff.sql",
-		func() { called = true },
 	)
 	require.NoError(t, err)
 
 	_ = writeFile([]byte("SOME SQL;\n"))
-	release()
-	require.True(t, called)
+	require.EqualError(t, release(), "internal error: mock write failure")
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
@@ -1513,8 +1752,33 @@ func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
 	require.NoError(t, err)
 	pool.Release()
 
-	_, _, err = newSingleWriteAppender(ctx, pool, etlFS, "diff.sql", nil)
+	_, _, err = newSingleWriteAppender(ctx, pool, etlFS, "diff.sql")
 	require.Error(t, err)
+}
+
+func TestNewApplyBatchInfoUsesCommonVisibleColumnsForEvolvedSchema(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"a", "__mo_cbkey_001a", "c", "b"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 2, 3}
+	tblStuff.def.commonIdxes = []int{0, 1, 3}
+	tblStuff.def.commonVisibleIdxes = []int{0, 3}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+
+	info := newApplyBatchInfo(ctx, ses, tblStuff, []int{0}, false)
+	require.NotNil(t, info)
+	require.Equal(t, []string{"a"}, info.deleteKeyNames)
+	require.Equal(t, []string{"a", "b"}, info.visibleNames)
 }
 
 func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {

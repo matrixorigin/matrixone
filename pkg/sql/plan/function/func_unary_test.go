@@ -4899,6 +4899,30 @@ func TestLengthUTF8(t *testing.T) {
 	}
 }
 
+func TestLengthBinary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, typ := range []types.Type{
+		types.T_binary.ToType(),
+		types.T_varbinary.ToType(),
+		types.T_blob.ToType(),
+	} {
+		input := NewFunctionTestInput(
+			typ,
+			[]string{"你好", "", string([]byte{0xff, 0xfe, 0xfd}), "ignored"},
+			[]bool{false, false, false, true},
+		)
+		expected := NewFunctionTestResult(
+			types.T_uint64.ToType(),
+			false,
+			[]uint64{6, 0, 3, 0},
+			[]bool{false, false, false, true},
+		)
+		testCase := NewFunctionTestCase(proc, []FunctionTestInput{input}, expected, LengthBinary)
+		success, info := testCase.Run()
+		require.True(t, success, fmt.Sprintf("type is '%s', err info is '%s'", typ, info))
+	}
+}
+
 // Ltrim
 
 func initLtrimTestCase() []tcTemp {
@@ -6557,7 +6581,7 @@ func initDateToWeekOfYearTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{8, 1, 53, 1},
+				[]int64{8, 1, 1, 1},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -6568,7 +6592,7 @@ func initDateToWeekOfYearTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{53, 1, 53, 1},
+				[]int64{1, 1, 53, 53},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -6613,7 +6637,7 @@ func initDatetimeToWeekOfYearTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{8, 1, 53, 1},
+				[]int64{8, 1, 1, 1},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -6624,7 +6648,7 @@ func initDatetimeToWeekOfYearTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{53, 1},
+				[]int64{1, 1},
 				[]bool{false, false}),
 		},
 		{
@@ -7124,26 +7148,16 @@ func TestRowCount(t *testing.T) {
 	}
 }
 
-func initUTCTimestampTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test UTCTimestamp",
-			//TODO: Validate: Original Code: https://github.com/m-schen/matrixone/blob/9a29d4656c2c6be66885270a2a50664d3ba2a203/pkg/sql/plan/function/builtin/multi/utctimestamp_test.go#L24
-			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_int8.ToType(), []int8{}, []bool{})},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false, []types.Datetime{}, []bool{}),
-		},
-	}
-}
-
 func TestUTCTimestamp(t *testing.T) {
-	testCases := initUTCTimestampTestCase()
-
 	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, UTCTimestamp)
-		s, info := fcTC.Run()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
+	fn, err := GetFunctionByName(proc.Ctx, "utc_timestamp", nil)
+	require.NoError(t, err)
+
+	out, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), nil, 1)
+	require.NoError(t, err)
+	defer out.Free(proc.Mp())
+	require.Equal(t, types.New(types.T_datetime, 0, 0), *out.GetType())
+	require.Len(t, vector.MustFixedColWithTypeCheck[types.Datetime](out), 1)
 }
 
 // TestUTCTimestamp_ScaleValidation tests scale validation for UTCTimestamp
@@ -10159,5 +10173,87 @@ func TestHllCardinality(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HllCardinality)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestParseDateExtractPartsVarcharTemporalValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		ok         bool
+		month, day uint8
+	}{
+		{name: "ISO datetime", input: "2024-01-01T12:34:56", ok: true, month: 1, day: 1},
+		{name: "slash date", input: "2024/01/15", ok: true, month: 1, day: 15},
+		{name: "colon datetime", input: "2024:01:15T12:34:56", ok: true, month: 1, day: 15},
+		{name: "valid year zero", input: "0000-01-01", ok: true, month: 1, day: 1},
+		{name: "invalid year zero leap day", input: "0000-02-29"},
+		{name: "invalid month separator", input: "2024-0x-01"},
+		{name: "hour out of range", input: "2024-01-01 24:00:00"},
+		{name: "minute out of range", input: "2024-01-01 23:60:00"},
+		{name: "oversized year", input: "4294967297-01-01"},
+		{name: "dangling ISO separator", input: "2024-01-01T"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parts, ok := parseDateExtractParts(test.input)
+			require.Equal(t, test.ok, ok)
+			if ok {
+				assert.Equal(t, test.month, parts.month)
+				assert.Equal(t, test.day, parts.day)
+			}
+		})
+	}
+}
+
+func TestDateStringExtractorsYearZeroAndLegacyDelimiters(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := []FunctionTestInput{
+		NewFunctionTestInput(
+			types.T_varchar.ToType(),
+			[]string{"0000-01-01", "2024/01/15", "2024:01:15T12:34:56", "0000-02-29"},
+			[]bool{false, false, false, false},
+		),
+	}
+	nulls := []bool{false, false, false, true}
+	tests := []struct {
+		name   string
+		result FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name:   "day of month",
+			result: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{1, 15, 15, 0}, nulls),
+			fn:     DateStringToDay,
+		},
+		{
+			name:   "day name",
+			result: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"Sunday", "Monday", "Monday", ""}, nulls),
+			fn:     DateStringToDayName,
+		},
+		{
+			name:   "month name",
+			result: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"January", "January", "January", ""}, nulls),
+			fn:     DateStringToMonthName,
+		},
+		{
+			name:   "quarter",
+			result: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{1, 1, 1, 0}, nulls),
+			fn:     DateStringToQuarter,
+		},
+		{
+			name:   "week of year",
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{52, 3, 3, 0}, nulls),
+			fn:     DateStringToWeekOfYear,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, input, test.result, test.fn)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
 	}
 }

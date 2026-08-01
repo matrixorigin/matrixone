@@ -154,8 +154,20 @@ func (d *DataBranchCreateTable) StmtKind() StmtKind {
 }
 
 func (d *DataBranchCreateTable) Format(ctx *FmtCtx) {
-	//TODO implement me
-	panic("implement me")
+	ctx.WriteString("data branch create table ")
+	quoteIdentifier := ctx.quoteIdentifier
+	ctx.quoteIdentifier = true
+	d.CreateTable.Table.Format(ctx)
+	ctx.quoteIdentifier = quoteIdentifier
+	ctx.WriteString(" from ")
+	quoteIdentifier = ctx.quoteIdentifier
+	ctx.quoteIdentifier = true
+	d.SrcTable.Format(ctx)
+	ctx.quoteIdentifier = quoteIdentifier
+	if d.ToAccountOpt != nil {
+		ctx.WriteByte(' ')
+		d.ToAccountOpt.Format(ctx)
+	}
 }
 
 func (d *DataBranchCreateTable) String() string {
@@ -171,8 +183,7 @@ func (d *DataBranchCreateTable) GetQueryType() string {
 }
 
 func (d *DataBranchCreateTable) TypeName() string {
-	//TODO implement me
-	panic("implement me")
+	return "data branch create table"
 }
 
 func (d *DataBranchCreateTable) Free() {

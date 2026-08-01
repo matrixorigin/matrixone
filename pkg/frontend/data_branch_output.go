@@ -209,8 +209,12 @@ func newApplyBatchInfo(
 		deleteStageNames[i] = fmt.Sprintf("branch_apply_key_%d", i)
 	}
 
-	visibleNames := make([]string, len(tblStuff.def.visibleIdxes))
-	for i, idx := range tblStuff.def.visibleIdxes {
+	visibleIdxes := tblStuff.def.visibleIdxes
+	if len(tblStuff.def.tarOnlyIdxes) > 0 {
+		visibleIdxes = tblStuff.def.commonVisibleIdxes
+	}
+	visibleNames := make([]string, len(visibleIdxes))
+	for i, idx := range visibleIdxes {
 		visibleNames[i] = tblStuff.def.colNames[idx]
 	}
 
@@ -464,10 +468,18 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 	}
 
 	projectedNames := make([]string, len(output.projectedIdxes))
+	projectedTargetOnly := make([]bool, len(output.projectedIdxes))
+	targetOnlyIdxes := make(map[int]struct{}, len(tblStuff.def.tarOnlyIdxes))
+	for _, idx := range tblStuff.def.tarOnlyIdxes {
+		targetOnlyIdxes[idx] = struct{}{}
+	}
 	for i, idx := range output.projectedIdxes {
 		projectedNames[i] = tblStuff.def.colNames[idx]
+		_, projectedTargetOnly[i] = targetOnlyIdxes[idx]
 	}
-	baseColDefs, err := dataBranchColumnsByIdentity(targetTableDef, baseTableDef, projectedNames)
+	outputColDefs, targetOnly, err := dataBranchOutputColumnDefs(
+		targetTableDef, baseTableDef, projectedNames, projectedTargetOnly,
+	)
 	if err != nil {
 		return "", err
 	}
@@ -477,10 +489,10 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 		fmt.Sprintf("%s varchar(16) default null", quoteIdentifierForSQL(output.columnNames[1])),
 	}
 	for i, name := range projectedNames {
-		colDef := baseColDefs[i]
+		colDef := outputColDefs[i]
 
 		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), plan2.FormatColType(colDef.Typ))
-		if colDef.Typ.NotNullable {
+		if colDef.Typ.NotNullable && !targetOnly[i] {
 			columnDef += " not null"
 		} else {
 			columnDef += " default null"
@@ -505,6 +517,9 @@ func dataBranchColumnDefByName(tableDef *plan2.TableDef, name string) *plan2.Col
 }
 
 func dataBranchColumnDefByIdentity(tableDef *plan2.TableDef, sourceColDef *plan2.ColDef) *plan2.ColDef {
+	if tableDef == nil || sourceColDef == nil || sourceColDef.ColId == 0 {
+		return nil
+	}
 	for _, colDef := range tableDef.Cols {
 		if colDef != nil &&
 			colDef.ColId == sourceColDef.ColId &&
@@ -515,36 +530,86 @@ func dataBranchColumnDefByIdentity(tableDef *plan2.TableDef, sourceColDef *plan2
 	return nil
 }
 
+func dataBranchColumnDefByLogicalName(tableDef *plan2.TableDef, sourceColDef *plan2.ColDef) *plan2.ColDef {
+	if tableDef == nil || sourceColDef == nil {
+		return nil
+	}
+	if colDef := dataBranchColumnDefByName(tableDef, sourceColDef.Name); colDef != nil {
+		return colDef
+	}
+	if originName := sourceColDef.GetOriginCaseName(); !strings.EqualFold(originName, sourceColDef.Name) {
+		if colDef := dataBranchColumnDefByName(tableDef, originName); colDef != nil {
+			return colDef
+		}
+	}
+	for _, colDef := range tableDef.Cols {
+		if colDef != nil && !strings.EqualFold(colDef.GetOriginCaseName(), colDef.Name) &&
+			strings.EqualFold(colDef.GetOriginCaseName(), sourceColDef.Name) {
+			return colDef
+		}
+	}
+	return nil
+}
+
+func dataBranchEndpointColumnDef(tableDef *plan2.TableDef, sourceColDef *plan2.ColDef) *plan2.ColDef {
+	if colDef := dataBranchColumnDefByLogicalName(tableDef, sourceColDef); colDef != nil {
+		return colDef
+	}
+	// A rename on an ordinary clone keeps the physical identity even when the
+	// endpoint definition no longer carries OriginName. Later path validation
+	// still rejects DROP/ADD discontinuities before DIFF or MERGE reads data.
+	colDef := dataBranchColumnDefByIdentity(tableDef, sourceColDef)
+	if colDef == nil ||
+		isDataBranchUserVisibleColumn(colDef) != isDataBranchUserVisibleColumn(sourceColDef) ||
+		!isDataBranchLogicalTypeEquivalent(colDef.Typ, sourceColDef.Typ) ||
+		colDef.NotNull != sourceColDef.NotNull {
+		return nil
+	}
+	return colDef
+}
+
 // dataBranchColumnsByIdentity maps each source column name to the column with
 // the same stable identity in the destination definition. Column names are
 // intentionally not part of schema equivalence: a branch may rename a column
 // without changing its identity, so physical reads from another branch or an
 // ancestor must resolve that branch's local name through ColId and Seqnum.
-func dataBranchColumnsByIdentity(
+func dataBranchOutputColumnDefs(
 	sourceTableDef *plan2.TableDef,
 	destinationTableDef *plan2.TableDef,
 	sourceColumnNames []string,
-) ([]*plan2.ColDef, error) {
+	sourceTargetOnly []bool,
+) ([]*plan2.ColDef, []bool, error) {
 	if sourceTableDef == nil || destinationTableDef == nil {
-		return nil, moerr.NewInternalErrorNoCtx("DATA BRANCH table definition is unavailable")
+		return nil, nil, moerr.NewInternalErrorNoCtx("DATA BRANCH table definition is unavailable")
+	}
+	if len(sourceColumnNames) != len(sourceTargetOnly) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("DATA BRANCH output column classification is unavailable")
 	}
 
-	destinationColDefs := make([]*plan2.ColDef, len(sourceColumnNames))
+	outputColDefs := make([]*plan2.ColDef, len(sourceColumnNames))
+	targetOnly := make([]bool, len(sourceColumnNames))
 	for i, sourceColumnName := range sourceColumnNames {
 		sourceColDef := dataBranchColumnDefByName(sourceTableDef, sourceColumnName)
 		if sourceColDef == nil {
-			return nil, moerr.NewInternalErrorNoCtxf(
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
 				"DATA BRANCH source column %q is unavailable", sourceColumnName,
 			)
 		}
-		destinationColDefs[i] = dataBranchColumnDefByIdentity(destinationTableDef, sourceColDef)
-		if destinationColDefs[i] == nil {
-			return nil, moerr.NewInternalErrorNoCtxf(
-				"DATA BRANCH destination column for source column %q is unavailable", sourceColumnName,
-			)
+		outputColDefs[i] = dataBranchColumnDefByIdentity(destinationTableDef, sourceColDef)
+		if outputColDefs[i] == nil {
+			if !sourceTargetOnly[i] {
+				return nil, nil, moerr.NewInternalErrorNoCtxf(
+					"DATA BRANCH destination column for source column %q is unavailable", sourceColumnName,
+				)
+			}
+			// A target-only column has no base identity. Keep its target type in
+			// the materialized schema, but make the output column nullable because
+			// base-side DIFF rows project target-only values as NULL.
+			outputColDefs[i] = sourceColDef
+			targetOnly[i] = true
 		}
 	}
-	return destinationColDefs, nil
+	return outputColDefs, targetOnly, nil
 }
 
 func (output *diffOutputTable) insertSQL(values *bytes.Buffer) string {
@@ -741,6 +806,10 @@ func satisfyDiffOutputOpt(
 		var (
 			rows = make([][]any, 0, 100)
 		)
+		limitReached := func() bool {
+			return stmt.OutputOpt != nil && stmt.OutputOpt.Limit != nil &&
+				int64(len(rows)) >= *stmt.OutputOpt.Limit
+		}
 
 		// Resolve column projection (nil means show all visible columns).
 		displayIdxes, resolveErr := resolveProjectedIdxes(stmt.Columns, tblStuff)
@@ -769,6 +838,12 @@ func satisfyDiffOutputOpt(
 			}
 			// Sparse row: indexed by colIdx+2, so size must accommodate the largest index.
 			rowSize = slices.Max(extractIdxes) + 3
+		}
+
+		if limitReached() {
+			// The limit is already satisfied before consuming any rows (LIMIT 0).
+			hitLimit = true
+			stop()
 		}
 
 		for wrapped := range retCh {
@@ -804,8 +879,7 @@ func satisfyDiffOutputOpt(
 				}
 
 				rows = append(rows, row)
-				if stmt.OutputOpt != nil && stmt.OutputOpt.Limit != nil &&
-					int64(len(rows)) >= *stmt.OutputOpt.Limit {
+				if limitReached() {
 					// hit limit, cancel producers but keep draining the channel
 					hitLimit = true
 					stop()
@@ -945,17 +1019,17 @@ func satisfyDiffOutputOpt(
 			fileHint     string
 			fullFilePath string
 			writeFile    func([]byte) error
-			release      func()
+			release      func() error
 			cleanup      func()
 			succeeded    bool
 		)
 
 		defer func() {
+			if release != nil {
+				err = errors.Join(err, release())
+			}
 			if !succeeded && cleanup != nil {
 				cleanup()
-			}
-			if release != nil {
-				release()
 			}
 			releaseBuffer(tblStuff.bufPool, deleteFromValsBuffer)
 			releaseBuffer(tblStuff.bufPool, insertIntoValsBuffer)
@@ -1040,6 +1114,11 @@ func satisfyDiffOutputOpt(
 				return err
 			}
 		}
+		if err = release(); err != nil {
+			release = nil
+			return err
+		}
+		release = nil
 
 		succeeded = true
 		mrs.AddRow([]any{fullFilePath, fileHint})
@@ -1625,7 +1704,11 @@ func appendDataBranchApplyRowAsSQLValues(
 			}
 		}
 	} else {
-		if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
+		insertIdxes := tblStuff.def.visibleIdxes
+		if len(tblStuff.def.tarOnlyIdxes) > 0 {
+			insertIdxes = tblStuff.def.commonVisibleIdxes
+		}
+		if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer, insertIdxes); err != nil {
 			return err
 		}
 	}
@@ -1678,7 +1761,7 @@ func prepareFSForDiffAsFile(
 ) (
 	sqlRetPath, sqlRetHint string,
 	writeFile func([]byte) error,
-	release func(),
+	release func() error,
 	cleanup func(),
 	err error,
 ) {
@@ -1778,13 +1861,14 @@ func prepareFSForDiffAsFile(
 			})
 		}
 
-		release = func() {
-			_ = mut.Close()
+		release = func() error {
+			closeErr := mut.Close()
 			targetFS.Close(ctx)
+			return closeErr
 		}
 	} else {
 		if writeFile, release, err = newSingleWriteAppender(
-			ctx, tblStuff.worker, targetFS, targetPath, cleanup,
+			ctx, tblStuff.worker, targetFS, targetPath,
 		); err != nil {
 			return
 		}
@@ -1798,8 +1882,7 @@ func newSingleWriteAppender(
 	worker *ants.Pool,
 	targetFS fileservice.FileService,
 	targetPath string,
-	onError func(),
-) (writeFile func([]byte) error, release func(), err error) {
+) (writeFile func([]byte) error, release func() error, err error) {
 	pr, pw := io.Pipe()
 	done := make(chan error, 1)
 
@@ -1839,12 +1922,11 @@ func newSingleWriteAppender(
 		return err
 	}
 
-	release = func() {
-		_ = pw.Close()
-		if wErr := <-done; wErr != nil && onError != nil {
-			onError()
-		}
+	release = func() error {
+		closeErr := pw.Close()
+		writeErr := <-done
 		targetFS.Close(ctx)
+		return errors.Join(closeErr, writeErr)
 	}
 
 	return
@@ -1984,13 +2066,14 @@ func writeInsertRowValues(
 	tblStuff tableStuff,
 	row []any,
 	buf *bytes.Buffer,
+	idxes []int,
 ) error {
 	buf.WriteString("(")
-	for i, idx := range tblStuff.def.visibleIdxes {
+	for i, idx := range idxes {
 		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
 			return err
 		}
-		if i != len(tblStuff.def.visibleIdxes)-1 {
+		if i != len(idxes)-1 {
 			buf.WriteString(",")
 		}
 	}
@@ -2283,13 +2366,17 @@ func flushSqlValues(
 	defer releaseBuffer(tblStuff.bufPool, sqlBuffer)
 
 	initInsertIntoBuf := func() {
+		insertIdxes := tblStuff.def.visibleIdxes
+		if len(tblStuff.def.tarOnlyIdxes) > 0 {
+			insertIdxes = tblStuff.def.commonVisibleIdxes
+		}
 		sqlBuffer.WriteString(fmt.Sprintf(
 			"insert into %s (%s) values ",
 			qualifiedTableName(
 				tblStuff.baseRel.GetTableDef(ctx).DbName,
 				tblStuff.baseRel.GetTableDef(ctx).Name,
 			),
-			strings.Join(quotedColumnNamesByIdxes(tblStuff, tblStuff.def.visibleIdxes), ","),
+			strings.Join(quotedColumnNamesByIdxes(tblStuff, insertIdxes), ","),
 		))
 	}
 

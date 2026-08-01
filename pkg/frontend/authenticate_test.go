@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -189,6 +190,64 @@ func TestEscapeSQLStringForDoubleQuotes_PythonUdfBodyRoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(goodStored), &decoded))
 }
 
+func TestViewMetadataSQLAcceptsQuotedIdentifiers(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 42)
+	dbName := "db`\\'name"
+	viewName := "view`\\'name"
+
+	for _, name := range []string{dbName, viewName} {
+		scanner := mysqlparser.NewScanner(dialect.MYSQL, escapeSQLString(name))
+		typ, value := scanner.Scan()
+		require.Equal(t, mysqlparser.STRING, typ)
+		require.Equal(t, name, value)
+		typ, _ = scanner.Scan()
+		require.Equal(t, 0, typ)
+	}
+
+	checkSQL, err := getSqlForCheckDatabaseView(ctx, dbName, viewName)
+	require.NoError(t, err)
+	require.Contains(t, checkSQL, "relname = "+escapeSQLString(viewName))
+	require.Contains(t, checkSQL, "reldatabase = "+escapeSQLString(dbName))
+
+	metaSQL, err := getSqlForCheckViewMeta(ctx, dbName, viewName)
+	require.NoError(t, err)
+	require.Contains(t, metaSQL, "relname = "+escapeSQLString(viewName))
+	require.Contains(t, metaSQL, "reldatabase = "+escapeSQLString(dbName))
+
+	snapshotSQL, err := getSqlForCheckViewMetaWithSnapshot(ctx, dbName, viewName, 123)
+	require.NoError(t, err)
+	require.Contains(t, snapshotSQL, "relname = "+escapeSQLString(viewName))
+	require.Contains(t, snapshotSQL, "reldatabase = "+escapeSQLString(dbName))
+
+	queries := []string{checkSQL, metaSQL, snapshotSQL}
+	for _, build := range []func() (string, error){
+		func() (string, error) { return getSqlForCheckDatabase(ctx, dbName) },
+		func() (string, error) { return getSqlForCheckDatabaseByAccount(ctx, dbName) },
+		func() (string, error) { return getSqlForCheckDatabaseWithOwner(ctx, dbName, 42) },
+		func() (string, error) { return getSqlForCheckDatabaseTable(ctx, dbName, viewName) },
+		func() (string, error) {
+			return getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(
+				ctx, objectTypeView, 7, PrivilegeTypeSelect, dbName, viewName)
+		},
+		func() (string, error) {
+			return getSqlForCheckWithGrantOptionForTableDatabaseTableWithObjType(
+				ctx, objectTypeView, 7, PrivilegeTypeSelect, dbName, viewName)
+		},
+	} {
+		sql, err := build()
+		require.NoError(t, err)
+		require.Contains(t, sql, escapeSQLString(dbName))
+		queries = append(queries, sql)
+	}
+
+	for _, sql := range queries {
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		freeStatements(stmts)
+	}
+}
+
 func TestPrivilegeType_Scope(t *testing.T) {
 	convey.Convey("scope", t, func() {
 		pss := []struct {
@@ -333,7 +392,7 @@ func TestGetSqlForCheckDatabaseByAccountUsesAccountID(t *testing.T) {
 	sql, err := getSqlForCheckDatabaseByAccount(ctx, "db1")
 	require.NoError(t, err)
 	require.Equal(t,
-		`select dat_id from mo_catalog.mo_database where datname = "db1" and account_id = 42;`,
+		`select dat_id from mo_catalog.mo_database where datname = 'db1' and account_id = 42;`,
 		sql,
 	)
 
@@ -15364,6 +15423,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		registerEmptyHistoricalLineageResults(bh)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -15414,6 +15474,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		err := doDropSnapshot(ctx, ses, ds)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(bh.executedSQLs, convey.ShouldContain, historicalAlterLineageMetadataSQL())
 	})
 
 	convey.Convey("doDropSnapshot success", t, func() {
@@ -15425,6 +15486,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		registerEmptyHistoricalLineageResults(bh)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -15646,6 +15708,11 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		err := doCreateSnapshot(ctx, ses, cs)
 		convey.So(err, convey.ShouldBeNil)
+
+		commitErr := errors.New("snapshot commit conflict")
+		bh.sql2err["commit;"] = commitErr
+		err = doCreateSnapshot(ctx, ses, cs)
+		convey.So(err, convey.ShouldEqual, commitErr)
 	})
 
 	// non-system tenant can't create cluster level snapshot

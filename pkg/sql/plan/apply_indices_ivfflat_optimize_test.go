@@ -84,6 +84,155 @@ func makeConsistentIvfMultiTableIndexForOptimizeTest(part, idxAlgoParams string)
 	}
 }
 
+func TestApplyIndicesForProjectPreparedIvfIndexOnlyKeepsCatalogDependencies(t *testing.T) {
+	baseMockCtx := NewMockCompilerContext(false)
+	mockCtx := &customMockCompilerContext{
+		MockCompilerContext: baseMockCtx,
+		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
+			switch varName {
+			case "enable_vector_prefilter_by_default", "enable_vector_auto_mode_by_default":
+				return int8(0), nil
+			case "ivf_threads_search":
+				return int64(4), nil
+			case "probe_limit":
+				return int64(10), nil
+			default:
+				return baseMockCtx.ResolveVariable(varName, isSystem, isGlobal)
+			}
+		},
+	}
+
+	const (
+		schemaName = "db"
+		tableName  = "src"
+	)
+	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 2}`
+	multiTableIndex := makeConsistentIvfMultiTableIndexForOptimizeTest("v", idxAlgoParams)
+	indexTableTypes := []string{
+		catalog.SystemSI_IVFFLAT_TblType_Metadata,
+		catalog.SystemSI_IVFFLAT_TblType_Centroids,
+		catalog.SystemSI_IVFFLAT_TblType_Entries,
+	}
+	indexDefs := make([]*plan.IndexDef, 0, len(indexTableTypes))
+	for i, tableType := range indexTableTypes {
+		indexDef := multiTableIndex.IndexDefs[tableType]
+		indexDefs = append(indexDefs, indexDef)
+		tableID := uint64(20 + i)
+		baseMockCtx.objects[indexDef.IndexTableName] = &plan.ObjectRef{
+			Db:         10,
+			Obj:        int64(tableID),
+			SchemaName: schemaName,
+			ObjName:    indexDef.IndexTableName,
+		}
+		baseMockCtx.tables[indexDef.IndexTableName] = &plan.TableDef{
+			Name:    indexDef.IndexTableName,
+			DbId:    10,
+			TblId:   tableID,
+			Version: uint32(30 + i),
+		}
+	}
+
+	tableDef := &plan.TableDef{
+		Name:    tableName,
+		DbId:    1,
+		TblId:   2,
+		Version: 3,
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "v", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+		Name2ColIndex: map[string]int32{"id": 0, "v": 1},
+		Indexes:       indexDefs,
+	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, true, true)
+	ctx := NewBindContext(builder, nil)
+	scanTag := builder.genNewBindTag()
+	scanNodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		ObjRef: &plan.ObjectRef{
+			Db: 1, Obj: 2, SchemaName: schemaName, ObjName: tableName,
+		},
+		TableDef:    tableDef,
+		BindingTags: []int32{scanTag},
+	}, ctx)
+
+	vectorType := plan.Type{Id: int32(types.T_array_float32)}
+	distanceExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "l2_distance"},
+			Args: []*plan.Expr{
+				{
+					Typ: vectorType,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: scanTag, ColPos: 1, Name: "v",
+					}},
+				},
+				{
+					Typ: vectorType,
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+						Value: &plan.Literal_VecVal{VecVal: "[1,1,1]"},
+					}},
+				},
+			},
+		}},
+	}
+	sortNodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{scanNodeID},
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: distanceExpr,
+		}},
+		Limit:      makePlan2Uint64ConstExprWithType(2),
+		RankOption: &plan.RankOption{Mode: "pre"},
+	}, ctx)
+	projectNodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{sortNodeID},
+		ProjectList: []*plan.Expr{{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: scanTag, ColPos: 0, Name: "id",
+			}},
+		}},
+	}, ctx)
+	builder.qry.Steps = []int32{projectNodeID}
+
+	newNodeID, err := builder.applyIndicesForProject(projectNodeID, builder.qry.Nodes[projectNodeID], nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, projectNodeID, newNodeID)
+
+	reachableTypes := make(map[plan.Node_NodeType]bool)
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		node := builder.qry.Nodes[nodeID]
+		reachableTypes[node.NodeType] = true
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+	}
+	visit(builder.qry.Steps[0])
+	require.True(t, reachableTypes[plan.Node_FUNCTION_SCAN])
+	require.False(t, reachableTypes[plan.Node_TABLE_SCAN])
+	// A successful plugin rewrite returns the original project ID after
+	// changing its child in place. It must not fall through to exact-sort
+	// stabilization, which would add a PK tiebreaker to this detached sort.
+	require.Len(t, builder.qry.Nodes[sortNodeID].OrderBy, 1)
+
+	require.Len(t, builder.qry.CatalogDependencies, 4)
+	schemas, _, err := ResetPreparePlan(mockCtx, &plan.Plan{
+		Plan: &plan.Plan_Query{Query: builder.qry},
+	})
+	require.NoError(t, err)
+	require.Len(t, schemas, 4)
+	require.Equal(t, tableName, schemas[0].ObjName)
+	for i, tableType := range indexTableTypes {
+		require.Equal(t, multiTableIndex.IndexDefs[tableType].IndexTableName, schemas[i+1].ObjName)
+	}
+}
+
 func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 	// Setup Compiler Context with mocked variables
 	baseMockCtx := NewMockCompilerContext(false)

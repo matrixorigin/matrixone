@@ -19,10 +19,13 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -38,9 +41,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,6 +67,28 @@ func TestDupOperator(t *testing.T) {
 		0,
 		0,
 	)
+}
+
+func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
+	operators := []vm.Operator{
+		&hashjoin.HashJoin{EqConds: [][]*plan.Expr{{}, {}}},
+		&dedupjoin.DedupJoin{Conditions: [][]*plan.Expr{{}, {}}},
+		&rightdedupjoin.RightDedupJoin{Conditions: [][]*plan.Expr{{}, {}}},
+	}
+
+	for _, operator := range operators {
+		t.Run(operator.OpType().String(), func(t *testing.T) {
+			broadcast := constructBroadcastHashBuild(operator, nil, 4)
+			require.False(t, broadcast.IsShuffle)
+			require.Equal(t, int32(4), broadcast.JoinMapRefCnt)
+			broadcast.Release()
+
+			shuffle := constructShuffleHashBuild(&plan.Node{}, operator, nil)
+			require.True(t, shuffle.IsShuffle)
+			require.Equal(t, int32(1), shuffle.JoinMapRefCnt)
+			shuffle.Release()
+		})
+	}
 }
 
 func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
@@ -427,6 +454,48 @@ func makeTimeWindowAggNode(functionID int64, name string, config *plan.Expr) *pl
 	}
 }
 
+func TestConstructGapFillDisablesTumblingFastPath(t *testing.T) {
+	node := &plan.Node{
+		NodeType:    plan.Node_TIME_WINDOW,
+		Interval:    makeTimeWindowIntervalExpr(1, "minute"),
+		GroupBy:     []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
+		Timestamp:   &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}},
+		WEnd:        &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		GapFillMode: plan.Node_GAP_FILL_PARTITION,
+		ProjectList: []*plan.Expr{},
+		BindingTags: []int32{},
+		AggList:     []*plan.Expr{},
+	}
+	arg := constructTimeWindow(context.Background(), node, nil)
+	require.True(t, arg.GapFill)
+	require.Equal(t, arg.Interval, arg.Sliding)
+	require.Nil(t, arg.EndExpr, "GAPFILL must not use the existing-window-only interval fast path")
+	arg.Release()
+}
+
+func TestProjectedMongoColumnsUsesExternalScanLayout(t *testing.T) {
+	columns := []sqlmongodb.ColumnMapping{
+		{Name: "id", Path: "_id"},
+		{Name: "pump", Path: "pump"},
+		{Name: "value", Path: "value"},
+	}
+	tableDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "value"},
+		{Name: "pump"},
+		{Name: "__mo_hidden", Hidden: true},
+	}}
+	projected, err := projectedMongoColumns(t.Context(), columns, tableDef)
+	require.NoError(t, err)
+	require.Equal(t, []sqlmongodb.ColumnMapping{columns[2], columns[1]}, projected)
+
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "missing"}}})
+	require.Error(t, err)
+	_, err = projectedMongoColumns(t.Context(), columns, nil)
+	require.Error(t, err)
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}})
+	require.Error(t, err)
+}
+
 func TestDupOperatorLoopJoinMarkPos(t *testing.T) {
 	op := loopjoin.NewArgument()
 	op.MarkPos = 3
@@ -470,6 +539,23 @@ func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	require.Same(t, dup1.Mailbox, dup2.Mailbox)
 	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*dedupjoin.DedupJoin)
 	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
+}
+
+func TestDupOperatorHashJoinSharesChannelOnlyWithinGeneration(t *testing.T) {
+	op := hashjoin.NewArgument()
+	staleChannel := make(chan *bitmap.Bitmap, 2)
+	close(staleChannel)
+	op.Channel = staleChannel
+
+	dupCtx := newOperatorDupContext()
+	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*hashjoin.HashJoin)
+	dup2 := dupOperatorWithContext(op, 1, 2, dupCtx).(*hashjoin.HashJoin)
+
+	require.Equal(t, staleChannel, op.Channel, "duplicating must not mutate the reusable template")
+	require.NotEqual(t, staleChannel, dup1.Channel, "a stale closed template channel must not enter a new execution")
+	require.Equal(t, dup1.Channel, dup2.Channel)
+	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*hashjoin.HashJoin)
+	require.NotEqual(t, dup1.Channel, nextGeneration.Channel)
 }
 
 func TestDupOperatorAssignsSharedShuffleConsumerIndex(t *testing.T) {
@@ -523,6 +609,70 @@ func TestConstructShuffleOperatorForJoinSupportsColumnsAndExpressions(t *testing
 	require.Equal(t, right.Typ.Id, rightShuffle.ShuffleExpr.Typ.Id)
 	require.Equal(t, "serial_full", rightShuffle.ShuffleExpr.GetF().Func.ObjName)
 	require.Nil(t, rightShuffle.RuntimeFilterSpec)
+}
+
+func TestRangeShuffleJoinSingleBucketSkewedBatch(t *testing.T) {
+	const (
+		key       = int64(7)
+		rowCount  = 8192
+		bucketNum = int32(1)
+	)
+	left := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	right := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	node := &plan.Node{
+		OnList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{left, right}}}}},
+		Stats: &plan.Stats{
+			TableCnt: rowCount,
+			HashmapStats: &plan.HashMapStats{
+				ShuffleColIdx: 0,
+				ShuffleType:   plan.ShuffleType_Range,
+				ShuffleColMin: key,
+				ShuffleColMax: key,
+				Ranges:        []float64{float64(key), float64(key), float64(key), float64(key)},
+			},
+		},
+	}
+
+	arg := constructShuffleOperatorForJoin(bucketNum, node, true)
+	require.Nil(t, arg.ShuffleRangeInt64)
+
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeScalarInt64(key, rowCount, mp)
+	input.SetRowCount(rowCount)
+	source := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(source)
+	defer func() {
+		source.Free(proc, false, nil)
+		arg.Reset(proc, false, nil)
+		arg.Free(proc, false, nil)
+		arg.Release()
+		proc.Free()
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+	require.NoError(t, vm.Prepare(arg, proc))
+
+	rows := 0
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		if result.Batch.IsEmpty() {
+			continue
+		}
+		require.Equal(t, int32(0), result.Batch.ShuffleIDX)
+		rows += result.Batch.RowCount()
+	}
+	require.Equal(t, rowCount, rows)
 }
 
 func TestGetPercentileConfig(t *testing.T) {

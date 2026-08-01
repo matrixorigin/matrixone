@@ -16,9 +16,11 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -38,6 +41,171 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/exp/rand"
 )
+
+func TestLockTableAllocatorCloseJoinsErrorsAndIsIdempotent(t *testing.T) {
+	serverErr := errors.New("server close failed")
+	clientErr := errors.New("client close failed")
+	server := &closeResultServer{err: serverErr}
+	client := &closeResultClient{err: clientErr}
+	allocator := &lockTableAllocator{
+		logger:  getLogger(""),
+		stopper: stopper.NewStopper("test-lock-table-allocator-close"),
+		server:  server,
+		client:  client,
+	}
+
+	for range 2 {
+		err := allocator.Close()
+		require.ErrorIs(t, err, serverErr)
+		require.ErrorIs(t, err, clientErr)
+	}
+	require.Equal(t, 1, server.calls)
+	require.Equal(t, 1, client.calls)
+	require.ErrorIs(t,
+		allocator.stopper.RunTask(func(context.Context) {}),
+		stopper.ErrUnavailable,
+	)
+}
+
+func TestLockTableAllocatorCloseCancelsValidationBatch(t *testing.T) {
+	client := &cancelAwareValidationClient{
+		started: make(chan struct{}),
+	}
+	server := &closeResultServer{}
+	allocator := &lockTableAllocator{
+		logger:          getLogger(""),
+		stopper:         stopper.NewStopper("test-lock-table-allocator-validation-close"),
+		keepBindTimeout: time.Hour,
+		server:          server,
+		client:          client,
+	}
+	binds := []timedOutServiceBinds{
+		{binds: newServiceBinds("s1", allocator.logger, allocator.logger)},
+		{binds: newServiceBinds("s2", allocator.logger, allocator.logger)},
+	}
+	require.NoError(t, allocator.stopper.RunTask(func(ctx context.Context) {
+		allocator.validateTimeoutBinds(ctx, binds)
+	}))
+
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("validation did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- allocator.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("allocator close did not cancel validation")
+	}
+	require.Equal(t, int32(1), client.sendCalls.Load(),
+		"shutdown must not start validation for the next timed-out bind")
+	require.Equal(t, int32(1), client.closeCalls.Load())
+	require.Equal(t, 1, server.calls)
+}
+
+type cancelAwareValidationClient struct {
+	Client
+	started    chan struct{}
+	sendCalls  atomic.Int32
+	closeCalls atomic.Int32
+}
+
+func (c *cancelAwareValidationClient) Send(
+	ctx context.Context,
+	_ *pb.Request,
+) (*pb.Response, error) {
+	if c.sendCalls.Add(1) == 1 {
+		close(c.started)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (c *cancelAwareValidationClient) Close() error {
+	c.closeCalls.Add(1)
+	return nil
+}
+
+type keepaliveDuringValidationClient struct {
+	Client
+	binds        *serviceBinds
+	sendCalls    int
+	resetCalls   int
+	becameActive bool
+}
+
+func (c *keepaliveDuringValidationClient) Send(
+	_ context.Context,
+	_ *pb.Request,
+) (*pb.Response, error) {
+	c.sendCalls++
+	if c.sendCalls == 2 {
+		c.becameActive = c.binds.active()
+	}
+	resp := acquireResponse()
+	resp.ValidateService.OK = false
+	return resp, nil
+}
+
+func (c *keepaliveDuringValidationClient) ResetValidationBackend(
+	context.Context,
+	string,
+) error {
+	c.resetCalls++
+	return nil
+}
+
+func TestValidateTimeoutBindsDoesNotCommitAcrossKeepaliveGeneration(t *testing.T) {
+	logger := getLogger("")
+	const (
+		serviceID = "service-generation"
+		groupID   = uint32(1)
+		tableID   = uint64(2)
+	)
+	binds := newServiceBinds(serviceID, logger, logger)
+	require.True(t, binds.bind(groupID, tableID))
+	binds.Lock()
+	binds.lastKeepaliveTime = time.Now().Add(-time.Hour)
+	binds.Unlock()
+
+	client := &keepaliveDuringValidationClient{binds: binds}
+	allocator := &lockTableAllocator{
+		logger:          logger,
+		keepBindTimeout: time.Second,
+		client:          client,
+	}
+	allocator.mu.services = map[string]*serviceBinds{serviceID: binds}
+	allocator.mu.lockTables = map[uint32]map[uint64]pb.LockTable{
+		groupID: {
+			tableID: {
+				Group:     groupID,
+				Table:     tableID,
+				ServiceID: serviceID,
+				Valid:     true,
+			},
+		},
+	}
+
+	timeoutBinds := allocator.getTimeoutBinds(time.Now())
+	require.Len(t, timeoutBinds, 1)
+	require.True(t, allocator.validateTimeoutBinds(
+		context.Background(),
+		timeoutBinds,
+	))
+
+	require.Equal(t, 2, client.sendCalls)
+	require.Equal(t, 1, client.resetCalls)
+	require.True(t, client.becameActive)
+	require.Same(t, binds, allocator.getServiceBinds(serviceID))
+	require.False(t, binds.disabled)
+	require.True(t, allocator.GetLatest(groupID, tableID).Valid)
+}
 
 type fenceTestClock struct {
 	upper timestamp.Timestamp

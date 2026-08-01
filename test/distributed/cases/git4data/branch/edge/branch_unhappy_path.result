@@ -22,11 +22,15 @@ data branch diff br against missing_base;
 SQL parser error: table "missing_base" does not exist
 alter table br add column c int default 0;
 data branch diff br against base;
--- @regex("schema is not equivalent", true)
-internal error: the target table schema is not equivalent to the base table.
+diff br against base    flag    a    b    c
 data branch merge br into base;
--- @regex("schema is not equivalent", true)
-internal error: the target table schema is not equivalent to the base table.
+create table type_base(a int primary key, b int);
+insert into type_base values (1, 10);
+create table type_branch(a int primary key, b varchar(20));
+insert into type_branch values (1, '10');
+data branch diff type_branch against type_base;
+-- @regex("schema compatibility check: column 'b' exists in both schemas but has different types", true)
+internal error: schema compatibility check: column 'b' exists in both schemas but has different types (target: 61, base: 22)
 create table no_pk(a int, b int);
 insert into no_pk values (1, 10), (2, 20);
 data branch create table no_pk_branch from no_pk;
@@ -38,9 +42,6 @@ insert into single_pk values (1, 10), (2, 20);
 data branch create table single_left from single_pk;
 data branch create table single_right from single_pk;
 insert into single_right values (3, 30);
-data branch pick single_right into single_left;
--- @regex("requires a KEYS or BETWEEN SNAPSHOT clause", true)
-invalid input: DATA BRANCH PICK requires a KEYS or BETWEEN SNAPSHOT clause
 data branch pick single_right into single_left keys((3, 3));
 -- @regex("single-column primary key; use scalar values", true)
 invalid input: KEYS contains tuples but table has a single-column primary key; use scalar values
@@ -94,6 +95,7 @@ comp_left_rows
 drop snapshot br_unhappy_single_sp;
 drop database br_unhappy;
 drop database if exists br_view_literal_copy;
+drop database if exists clone_view_literal_copy;
 drop database if exists br_view_literal_src;
 create database br_view_literal_src;
 use br_view_literal_src;
@@ -103,6 +105,38 @@ create view v_literal as select 'br_view_literal_src' as marker, a from t;
 data branch create database br_view_literal_copy from br_view_literal_src;
 select marker from br_view_literal_copy.v_literal;
 marker
-br_view_literal_copy
+br_view_literal_src
+show create view br_view_literal_copy.v_literal;
+View    Create View    character_set_client    collation_connection
+v_literal    create view v_literal as select 'br_view_literal_src' as marker, a from t;    utf8mb4    utf8mb4_general_ci
+create database clone_view_literal_copy clone br_view_literal_src;
+select marker from clone_view_literal_copy.v_literal;
+marker
+br_view_literal_src
+drop database clone_view_literal_copy;
 drop database br_view_literal_copy;
 drop database br_view_literal_src;
+drop database if exists staging;
+drop database if exists sales;
+create database sales;
+create table sales.orders(id int primary key);
+create table sales.sales_data(id int primary key);
+insert into sales.orders values (1);
+insert into sales.sales_data values (2);
+create view sales.v_ok as select id from sales.orders;
+create view sales.v_bad as select id from sales.sales_data;
+data branch create database staging from sales;
+show full tables from staging;
+Tables_in_staging    Table_type
+orders    BASE TABLE
+sales_data    BASE TABLE
+v_bad    VIEW
+v_ok    VIEW
+select * from staging.v_ok;
+id
+1
+select * from staging.v_bad;
+id
+2
+drop database staging;
+drop database sales;

@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -326,7 +328,9 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = plan.SystemExternalRel
-	SystemSourceRel       = "s"
+	// Keep the former source relation kind as a catalog tombstone so legacy
+	// objects fail closed and can still be dropped after the feature is removed.
+	SystemSourceRel = "s"
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"
@@ -1008,11 +1012,32 @@ var SystemDatabases = []string{
 }
 
 func IsUniqueIndexTable(name string) bool {
-	return strings.HasPrefix(name, UniqueIndexTableNamePrefix)
+	return isIndexTableWithPrefix(name, UniqueIndexTableNamePrefix)
 }
 
 func IsSecondaryIndexTable(name string) bool {
-	return strings.HasPrefix(name, SecondaryIndexTableNamePrefix)
+	return isIndexTableWithPrefix(name, SecondaryIndexTableNamePrefix)
+}
+
+func isIndexTableWithPrefix(name, prefix string) bool {
+	if strings.HasPrefix(name, prefix) {
+		return true
+	}
+	if !defines.IsTempTableName(name) {
+		return false
+	}
+
+	// A temporary index table is stored as
+	// __mo_tmp_<session>_<database>_<original-index-table-name>. Keep using the
+	// generated index UUID as the discriminator: database and table names may
+	// legally contain the internal-looking prefix too.
+	marker := "_" + prefix
+	markerPos := strings.LastIndex(name, marker)
+	if markerPos < 0 {
+		return false
+	}
+	_, err := uuid.Parse(name[markerPos+len(marker):])
+	return err == nil
 }
 
 func IsFullTextIndexTableType(tableType string, tableName string) bool {

@@ -1001,6 +1001,8 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 		}
 	case *tree.SelectClause:
 		*selects = append(*selects, leftStmt)
+	case *tree.ValuesClause:
+		*selects = append(*selects, leftStmt)
 	case *tree.ParenSelect:
 		*selects = append(*selects, leftStmt.Select)
 	default:
@@ -1017,6 +1019,8 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 			}
 		}
 
+		*selects = append(*selects, rightStmt)
+	case *tree.ValuesClause:
 		*selects = append(*selects, rightStmt)
 	case *tree.ParenSelect:
 		if stmt.Type == tree.UNION && !stmt.All {
@@ -2758,12 +2762,8 @@ func resetPreparePlan(
 			if objRef == nil || tableDef == nil {
 				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "resolved index table %q without catalog metadata", dependency.tableName)
 			}
-			ref := DeepCopyObjectRef(objRef)
-			ref.Server = int64(tableDef.Version)
-			ref.Db = int64(tableDef.DbId)
-			ref.Schema = int64(tableDef.DbId)
-			ref.Obj = int64(tableDef.TblId)
-			querySchemas = append(querySchemas, ref)
+			querySchemas = appendPrepareSchemas(querySchemas,
+				prepareSchemaRefWithSnapshot(objRef, tableDef, dependency.snapshot))
 		}
 		return querySchemas, nil
 	}
@@ -2781,6 +2781,7 @@ func resetPreparePlan(
 		if err != nil {
 			return nil, nil, err
 		}
+		querySchemas = appendPrepareSchemas(querySchemas, query.GetCatalogDependencies()...)
 
 		resetParamRule := NewResetParamOrderRule(args)
 		visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
@@ -2856,6 +2857,10 @@ func resetPreparePlan(
 		querySchemas, err := resolveIndexDependencies(getParamRule)
 		if err != nil {
 			return nil, nil, err
+		}
+		if transientQuery != nil {
+			querySchemas = appendPrepareSchemas(
+				querySchemas, transientQuery.GetCatalogDependencies()...)
 		}
 		return querySchemas, getParamRule.paramTypes, nil
 	}
