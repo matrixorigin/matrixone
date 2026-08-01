@@ -529,7 +529,6 @@ func TestCTEReuseRejectsExternalAndSideEffectingNodes(t *testing.T) {
 	for _, nodeType := range []planpb.Node_NodeType{
 		planpb.Node_FUNCTION_SCAN,
 		planpb.Node_EXTERNAL_SCAN,
-		planpb.Node_SOURCE_SCAN,
 		planpb.Node_EXTERNAL_FUNCTION,
 		planpb.Node_LOCK_OP,
 		planpb.Node_INSERT,

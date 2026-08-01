@@ -827,6 +827,10 @@ func TestBindNameConstConstArgs(t *testing.T) {
 			name: "positive signed decimal value",
 			sql:  "select name_const('myname', +12.34)",
 		},
+		{
+			name: "string value with backslash",
+			sql:  `select name_const('myname', 'a\\b')`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, bindNameConstSelect(tc.sql))
@@ -866,6 +870,14 @@ func TestBindNameConstInvalidArgs(t *testing.T) {
 		{
 			name: "decimal cast function value",
 			sql:  "select name_const('myname', cast('12.34' as decimal(10,2)))",
+		},
+		{
+			name: "cast hex name",
+			sql:  "select name_const(cast(0x61 as varchar), 1)",
+		},
+		{
+			name: "cast hex value",
+			sql:  "select name_const('x', cast(0x31 as varchar))",
 		},
 		{
 			name: "foldable function value",
