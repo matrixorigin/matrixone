@@ -60,7 +60,6 @@ func BenchmarkHashBuildNonSpillE2E(b *testing.B) {
 		{name: "VARCHAR", typ: types.T_varchar.ToType()},
 	}
 	for _, benchmark := range benchmarks {
-		benchmark := benchmark
 		b.Run("Shuffle/"+benchmark.name, func(b *testing.B) {
 			benchmarkHashBuildNonSpillE2E(b, benchmark.typ)
 		})
