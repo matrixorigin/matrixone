@@ -117,6 +117,31 @@ func (job *checkpointJob) doGlobalCheckpoint(
 		return
 	}
 
+	predecessorTableIDLocation := predecessor.GetTableIDLocation()
+	historyStart, _, historyKnown, historyErr := logtail.ReadTableIDHistoryRange(
+		job.executor.ctx,
+		predecessorTableIDLocation,
+		common.CheckpointAllocator,
+		runner.rt.Fs,
+	)
+	if historyErr != nil {
+		errPhase = "validate-table-id-history"
+		err = historyErr
+		return
+	}
+	requiredHistoryStart := types.BuildTS(
+		end.Physical()-job.executor.cfg.TableIDHistoryDuration.Nanoseconds(),
+		0,
+	)
+	if !historyKnown || historyStart.GT(&requiredHistoryStart) {
+		errPhase = "validate-table-id-history"
+		err = moerr.NewInternalErrorNoCtxf(
+			"global checkpoint table-ID history is incomplete: covered from %s, required from %s",
+			historyStart.ToString(), requiredHistoryStart.ToString(),
+		)
+		return
+	}
+
 	if ok := runner.store.AddGCKPIntent(entry); !ok {
 		err = ErrBadIntent
 		return
@@ -144,32 +169,26 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	entry.SetLocation(location, location)
 
-	predecessorTableIDLocation := predecessor.GetTableIDLocation()
-	// An absent predecessor index does not prove how much history its checkpoint
-	// contains. Keep the new index empty so changed-table discovery
-	// falls back to the durable checkpoint data instead of trusting a partial index.
-	if predecessorTableIDLocation.Len() > 0 {
-		var emptyLocation objectio.Location
-		tableIDLocation, syncErr := logtail.SyncTableIDBatch(
-			job.executor.ctx,
-			entry.start,
-			entry.end,
-			job.executor.cfg.TableIDHistoryDuration,
-			job.executor.cfg.TableIDSinkerThreshold,
-			emptyLocation,
-			predecessor.GetVersion(),
-			predecessorTableIDLocation,
-			common.CheckpointAllocator,
-			runner.rt.Fs,
-		)
-		if syncErr != nil {
-			runner.store.RemoveGCKPIntent()
-			errPhase = "sync-table-id"
-			err = syncErr
-			return
-		}
-		entry.SetTableIDLocation(tableIDLocation)
+	var emptyLocation objectio.Location
+	tableIDLocation, syncErr := logtail.SyncTableIDBatch(
+		job.executor.ctx,
+		entry.start,
+		entry.end,
+		job.executor.cfg.TableIDHistoryDuration,
+		job.executor.cfg.TableIDSinkerThreshold,
+		emptyLocation,
+		predecessor.GetVersion(),
+		predecessorTableIDLocation,
+		common.CheckpointAllocator,
+		runner.rt.Fs,
+	)
+	if syncErr != nil {
+		runner.store.RemoveGCKPIntent()
+		errPhase = "sync-table-id"
+		err = syncErr
+		return
 	}
+	entry.SetTableIDLocation(tableIDLocation)
 
 	files = append(files, location.Name().String())
 	var name string

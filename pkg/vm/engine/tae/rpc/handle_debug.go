@@ -370,33 +370,28 @@ func tryGetChangedListFromTableIDBatch(
 		return
 	}
 
-	consumeFn := func(bat *batch.Batch, release func()) {
-
-		defer release()
+	var historyEnd types.TS
+	consumeFn := func(bat *batch.Batch) {
 		accounts := vector.MustFixedColNoTypeCheck[uint32](bat.Vecs[0])
 		dbids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[1])
 		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
 		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
 		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
 
-		var start types.TS
 		for i := 0; i < bat.RowCount(); i++ {
 			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
-				start = starts[i]
-				break
-			}
-		}
-		if start.GT(&from) {
-			return
-		}
-		ok = true
-		oldest = start
-
-		tblIds = make([]uint64, 0)
-		accIds = make([]uint64, 0)
-		dbIds = make([]uint64, 0)
-		for i := 0; i < bat.RowCount(); i++ {
-			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
+				if !ok {
+					oldest, historyEnd, ok = starts[i], ends[i], true
+				} else {
+					// Multiple coverage rows are unexpected. Their intersection is
+					// the only range all fragments prove is available.
+					if oldest.LT(&starts[i]) {
+						oldest = starts[i]
+					}
+					if historyEnd.GT(&ends[i]) {
+						historyEnd = ends[i]
+					}
+				}
 				continue
 			}
 			if !isTheTblIWantWithTimeRange(tblIds, tids[i], starts[i], ends[i]) {
@@ -412,12 +407,18 @@ func tryGetChangedListFromTableIDBatch(
 	for {
 		release, bat, isEnd, err := reader.Read(ctx)
 		if err != nil {
-			return
+			return nil, nil, nil, types.MaxTs(), false
 		}
 		if isEnd {
 			break
 		}
-		consumeFn(bat, release)
+		func() {
+			defer release()
+			consumeFn(bat)
+		}()
+	}
+	if !ok || oldest.GT(&historyEnd) || oldest.GT(&from) {
+		return nil, nil, nil, types.MaxTs(), false
 	}
 	return
 }

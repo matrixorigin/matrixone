@@ -14257,8 +14257,8 @@ func TestGlobalCheckpointFailsClosedWithoutTableIDBatch(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	options.WithDisableGCCheckpoint()(opts)
-	options.WithDisableGCCatalog()(opts)
+	historyWindow := time.Second
+	opts.CheckpointCfg.TableIDHistoryDuration = historyWindow
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
@@ -14302,12 +14302,12 @@ func TestGlobalCheckpointFailsClosedWithoutTableIDBatch(t *testing.T) {
 		return found
 	}
 
-	forceGlobalCheckpoint := func(end types.TS, retention time.Duration) {
+	forceGlobalCheckpoint := func(end types.TS, retention time.Duration) error {
 		checkpointCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
 		defer cancel()
-		require.NoError(t, tae.DB.ForceGlobalCheckpoint(checkpointCtx, end, retention))
+		return tae.DB.ForceGlobalCheckpoint(checkpointCtx, end, retention)
 	}
-	forceGlobalCheckpoint(tae.TxnMgr.Now(), time.Hour)
+	require.NoError(t, forceGlobalCheckpoint(tae.TxnMgr.Now(), time.Hour))
 
 	predecessor := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
 	require.NotNil(t, predecessor)
@@ -14315,29 +14315,71 @@ func TestGlobalCheckpointFailsClosedWithoutTableIDBatch(t *testing.T) {
 	require.True(t, checkpointContainsTable(predecessor))
 	predecessor.SetTableIDLocation(nil)
 
-	forceGlobalCheckpoint(predecessor.GetEnd(), time.Nanosecond)
+	err := forceGlobalCheckpoint(predecessor.GetEnd(), time.Nanosecond)
+	require.ErrorContains(t, err, "table-ID history is incomplete")
 
 	global := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
-	require.NotNil(t, global)
-	require.NotSame(t, predecessor, global)
-	require.Empty(t, global.GetTableIDLocation())
-	require.False(t, checkpointContainsTable(global))
+	require.Same(t, predecessor, global)
 
-	globalEnd := global.GetEnd()
+	assertProductionFallbackSource := func() {
+		t.Helper()
+		entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+		require.NotEmpty(t, entries)
+		require.Same(t, tae.BGCheckpointRunner.MaxGlobalCheckpoint(), entries[0])
+		require.True(t, checkpointContainsTable(entries[0]))
+	}
+	assertProductionFallbackSource()
+
+	// Exercise the real checkpoint-GC path. Since no replacement GCKP was
+	// published, its safe timestamp must not retire the fallback source.
+	gcTS := tae.TxnMgr.Now()
+	require.NoError(t, tae.BGCheckpointRunner.GCByTS(ctx, gcTS))
+	require.Eventually(t, func() bool {
+		return !tae.BGCheckpointRunner.GCNeeded()
+	}, testutil.TestCheckpointTimeout, 10*time.Millisecond)
+	require.Same(t, predecessor, tae.BGCheckpointRunner.MaxGlobalCheckpoint())
+	assertProductionFallbackSource()
+
+	predecessorEnd := predecessor.GetEnd()
 	tae.Restart(ctx)
-
 	replayed := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
 	require.NotNil(t, replayed)
-	require.Equal(t, globalEnd, replayed.GetEnd())
-	require.Empty(t, replayed.GetTableIDLocation())
-	require.False(t, checkpointContainsTable(replayed))
+	require.Equal(t, predecessorEnd, replayed.GetEnd())
+	// A legacy checkpoint replays with no table-ID index. Clear the fixture's
+	// modern metadata to exercise the same production fallback after restart.
+	replayed.SetTableIDLocation(nil)
+	assertProductionFallbackSource()
 
-	foundFallbackSource := false
-	for _, entry := range tae.BGCheckpointRunner.GetAllGlobalCheckpoints() {
-		if checkpointContainsTable(entry) {
-			foundFallbackSource = true
-			break
-		}
-	}
-	require.True(t, foundFallbackSource)
+	// Missing history is recoverable without trusting the legacy checkpoint:
+	// ICKPs begin a new range at their real start, and GCKP resumes only after
+	// that range spans the configured history window.
+	partialTarget := types.BuildTS(
+		replayed.GetEnd().Physical()+(historyWindow/2).Nanoseconds(),
+		0,
+	)
+	err = forceGlobalCheckpoint(partialTarget, time.Nanosecond)
+	require.ErrorContains(t, err, "table-ID history is incomplete")
+	require.Same(t, replayed, tae.BGCheckpointRunner.MaxGlobalCheckpoint())
+
+	recoveryTarget := types.BuildTS(
+		replayed.GetEnd().Physical()+historyWindow.Nanoseconds()+1,
+		0,
+	)
+	require.NoError(t, forceGlobalCheckpoint(recoveryTarget, time.Nanosecond))
+	recovered := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+	require.NotSame(t, replayed, recovered)
+	require.NotEmpty(t, recovered.GetTableIDLocation())
+	historyStart, _, historyKnown, err := logtail.ReadTableIDHistoryRange(
+		ctx,
+		recovered.GetTableIDLocation(),
+		common.CheckpointAllocator,
+		tae.Runtime.Fs,
+	)
+	require.NoError(t, err)
+	require.True(t, historyKnown)
+	requiredStart := types.BuildTS(
+		recoveryTarget.Physical()-historyWindow.Nanoseconds(),
+		0,
+	)
+	require.False(t, historyStart.GT(&requiredStart))
 }

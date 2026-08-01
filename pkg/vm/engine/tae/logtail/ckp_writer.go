@@ -717,9 +717,10 @@ func SyncTableIDBatch(
 
 	tableBatchStart := types.MaxTs()
 	tableBatchEnd := types.TS{}
+	hasPreviousHistory := false
 	minTS := types.BuildTS(end.Physical()-ttl.Nanoseconds(), 0)
 
-	consumeFn := func(preTableIDBatch *batch.Batch, release func()) {
+	consumeFn := func(preTableIDBatch *batch.Batch) error {
 		accountIDs := vector.MustFixedColNoTypeCheck[uint32](preTableIDBatch.Vecs[0])
 		dbIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[1])
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[2])
@@ -728,8 +729,19 @@ func SyncTableIDBatch(
 
 		for i := 0; i < preTableIDBatch.RowCount(); i++ {
 			if tableIDs[i] == CKPTableIDBatch_SpecialTableID {
-				tableBatchStart = starts[i]
-				tableBatchEnd = ends[i]
+				if !hasPreviousHistory {
+					tableBatchStart = starts[i]
+					tableBatchEnd = ends[i]
+					hasPreviousHistory = true
+				} else {
+					// Preserve only the range every fragment proves it covers.
+					if tableBatchStart.LT(&starts[i]) {
+						tableBatchStart = starts[i]
+					}
+					if tableBatchEnd.GT(&ends[i]) {
+						tableBatchEnd = ends[i]
+					}
+				}
 			}
 			if ends[i].LT(&minTS) {
 				continue
@@ -745,10 +757,13 @@ func SyncTableIDBatch(
 			bat.SetRowCount(bat.Vecs[0].Length())
 
 			if bat.RowCount() >= BatchRowCountThreshold {
-				sinker.Write(ctx, bat)
+				if err := sinker.Write(ctx, bat); err != nil {
+					return err
+				}
 				bat.CleanOnlyData()
 			}
 		}
+		return nil
 	}
 
 	reader, err := NewSyncTableIDReader(prevTableIDLocation, mp, fs)
@@ -766,8 +781,13 @@ func SyncTableIDBatch(
 		if isEnd {
 			break
 		}
-		defer release()
-		consumeFn(bat, release)
+		func() {
+			defer release()
+			err = consumeFn(bat)
+		}()
+		if err != nil {
+			return
+		}
 	}
 
 	if !ckpLocation.IsEmpty() {
@@ -783,7 +803,7 @@ func SyncTableIDBatch(
 			end     types.TS
 		}
 		tableInfofs := make(map[uint64]*tableInfo)
-		reader.ForEachRow(
+		if err = reader.ForEachRow(
 			ctx,
 			func(
 				account uint32,
@@ -847,7 +867,9 @@ func SyncTableIDBatch(
 				}
 				return nil
 			},
-		)
+		); err != nil {
+			return
+		}
 
 		for tid, info := range tableInfofs {
 			if tid == CKPTableIDBatch_SpecialTableID {
@@ -858,14 +880,20 @@ func SyncTableIDBatch(
 			vector.AppendFixed(bat.Vecs[2], tid, false, mp)
 			vector.AppendFixed(bat.Vecs[3], info.start, false, mp)
 			vector.AppendFixed(bat.Vecs[4], info.end, false, mp)
+			bat.SetRowCount(bat.Vecs[0].Length())
 			if bat.RowCount() >= BatchRowCountThreshold {
-				sinker.Write(ctx, bat)
+				if err = sinker.Write(ctx, bat); err != nil {
+					return
+				}
 				bat.CleanOnlyData()
 			}
 		}
 
 	}
 
+	if hasPreviousHistory && tableBatchStart.GT(&tableBatchEnd) {
+		hasPreviousHistory = false
+	}
 	if !ckpLocation.IsEmpty() {
 		tableBatchEnd = end
 	}
@@ -874,7 +902,7 @@ func SyncTableIDBatch(
 		tableBatchStart = minTS
 	}
 
-	if prevTableIDLocation.Len() == 0 {
+	if !hasPreviousHistory {
 		tableBatchStart = start
 		tableBatchEnd = end
 	}
@@ -944,7 +972,9 @@ func MockTableIDBatch(
 		vector.AppendFixed(bat.Vecs[4], end, false, mp)
 		bat.SetRowCount(bat.Vecs[0].Length())
 		if bat.RowCount() >= BatchRowCountThreshold {
-			sinker.Write(ctx, bat)
+			if err = sinker.Write(ctx, bat); err != nil {
+				return
+			}
 			bat.CleanOnlyData()
 		}
 	}
