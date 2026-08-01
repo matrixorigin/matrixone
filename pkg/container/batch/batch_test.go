@@ -358,7 +358,7 @@ func TestBatchUnmarshalRejectsOwnedVectorCountChangeWithoutMpool(t *testing.T) {
 }
 
 func TestBatchUnmarshalSeparatesAliasedReuseVectors(t *testing.T) {
-	for _, columnCount := range []int{2, 3} {
+	for _, columnCount := range []int{2, 3, 64, 65} {
 		t.Run(fmt.Sprintf("%d_columns", columnCount), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			source := NewWithSize(columnCount)

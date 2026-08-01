@@ -258,6 +258,46 @@ func TestRemoteCacheReadIgnoresInvalidResponses(t *testing.T) {
 	}
 }
 
+func TestRemoteCacheReadReleasesRejectedValidatedData(t *testing.T) {
+	qt := &remoteCacheTestQueryClient{
+		responses: map[string]*query.Response{
+			"target": {
+				GetCacheDataResponse: &query.GetCacheDataResponse{
+					ResponseCacheData: []*query.ResponseCacheData{{
+						Index: 0,
+						Hit:   true,
+						Data:  []byte{1, 2},
+					}},
+				},
+			},
+		},
+	}
+	rc := NewRemoteCache(qt, func() client.KeyRouter[query.CacheKey] {
+		return remoteCacheTestRouter(func(fscache.CacheKey) string { return "target" })
+	})
+	var received fscache.Data
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset:         0,
+			Size:           1,
+			CachedDataSize: 2,
+			ValidateCacheData: func(data fscache.Data) (fscache.Data, error) {
+				received = data
+				return nil, fmt.Errorf("invalid final cache representation")
+			},
+		}},
+	}
+
+	require.NoError(t, rc.Read(context.Background(), vector))
+	require.False(t, vector.Entries[0].done)
+	require.Nil(t, vector.Entries[0].CachedData)
+	require.Nil(t, vector.Entries[0].fromCache)
+	require.NotNil(t, received)
+	require.Panics(t, func() { received.Bytes() }, "rejected owned data must be released")
+	require.Equal(t, 1, qt.releaseCount)
+}
+
 func TestRemoteCacheReadAcceptsOnlyIndicesRequestedFromTarget(t *testing.T) {
 	qt := &remoteCacheTestQueryClient{
 		responses: map[string]*query.Response{
