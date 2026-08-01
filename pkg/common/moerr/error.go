@@ -951,6 +951,17 @@ func NewOOM(ctx context.Context) *Error {
 	return newError(ctx, ErrOOM)
 }
 
+// NewResourceExhaustedf preserves the existing resource-exhaustion wire code
+// while adding bounded, actionable context for guards that reject before the
+// allocator or operating system itself fails. The formatted message is
+// serialized with the error, so remote execution does not collapse the
+// diagnostic back to a generic internal error.
+func NewResourceExhaustedf(ctx context.Context, format string, args ...any) *Error {
+	err := newError(ctx, ErrOOM)
+	err.message = fmt.Sprintf("error: resource exhausted: %s", fmt.Sprintf(format, args...))
+	return err
+}
+
 func NewQueryInterrupted(ctx context.Context) *Error {
 	return newError(ctx, ErrQueryInterrupted)
 }

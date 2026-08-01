@@ -555,6 +555,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.PkName = t.PkName
 		op.PkTyp = t.PkTyp
 		op.BuildIdx = t.BuildIdx
+		op.IfInsertFromUnique = t.IfInsertFromUnique
+		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(t.RuntimeFilterSpec)
 		op.SetInfo(&info)
 		return op
 	case vm.TableScan:
@@ -721,7 +723,14 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 	op.PkTyp = pkTyp
 	op.IfInsertFromUnique = node.IfInsertFromUnique
 
-	if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.3 {
+	costRatio := tableScan.Stats.Cost / sinkScan.Stats.Cost
+	buildOnTable := node.FuzzyBuildSide ==
+		plan.Node_FUZZY_BUILD_SIDE_TABLE ||
+		(node.FuzzyBuildSide ==
+			plan.Node_FUZZY_BUILD_SIDE_UNSPECIFIED &&
+			!math.IsNaN(costRatio) &&
+			costRatio < 0.3)
+	if buildOnTable {
 		// build on tableScan, because the existing data is significantly less than the data to be inserted
 		// this will happend
 		op.BuildIdx = 0

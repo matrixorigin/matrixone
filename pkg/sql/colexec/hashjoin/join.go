@@ -150,7 +150,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case Build:
 			err = hashJoin.build(analyzer, proc)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
 			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() && !hashJoin.IsMark() {
@@ -171,7 +171,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.leftBat == nil {
 				input, err = hashJoin.getInputBatch(proc, analyzer)
 				if err != nil {
-					return result, err
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
 				bat := input.Batch
 
@@ -219,7 +219,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					targetVec = ctr.resBat.Vecs[i]
 					err = targetVec.UnionBatch(srcVec, 0, rowCount, nil, proc.Mp())
 					if err != nil {
-						return result, err
+						return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 					}
 				}
 
@@ -238,7 +238,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				err = ctr.probe(hashJoin, proc, &result)
 			}
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
 			if hashJoin.IsRightSemi() || hashJoin.IsRightAnti() {
@@ -255,7 +255,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case SyncBitmap:
 			err := ctr.syncBitmap(hashJoin, proc)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
 			// Only enter Finalize when syncBitmap ran to completion and set
@@ -274,7 +274,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case Finalize:
 			err := ctr.finalize(hashJoin, proc, &result)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
 			if result.Batch == nil {
