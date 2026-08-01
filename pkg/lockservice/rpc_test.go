@@ -21,6 +21,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -176,6 +177,57 @@ type closeResultRPCServer struct {
 	calls int
 }
 
+type blockingBackendFactory struct {
+	entered chan struct{}
+	release chan struct{}
+	started atomic.Bool
+}
+
+func (f *blockingBackendFactory) Create(
+	string,
+	...morpc.BackendOption,
+) (morpc.Backend, error) {
+	if f.started.CompareAndSwap(false, true) {
+		close(f.entered)
+	}
+	<-f.release
+	return timeoutPolicyTestBackend{}, nil
+}
+
+type timeoutPolicyTestBackend struct{}
+
+var errTimeoutPolicyBackendReached = errors.New("backend reached")
+
+func (timeoutPolicyTestBackend) Send(
+	context.Context,
+	morpc.Message,
+) (*morpc.Future, error) {
+	return nil, errTimeoutPolicyBackendReached
+}
+
+func (timeoutPolicyTestBackend) SendInternal(
+	context.Context,
+	morpc.Message,
+) (*morpc.Future, error) {
+	return nil, errTimeoutPolicyBackendReached
+}
+
+func (timeoutPolicyTestBackend) NewStream(bool) (morpc.Stream, error) {
+	return nil, errTimeoutPolicyBackendReached
+}
+
+func (timeoutPolicyTestBackend) Close() {}
+
+func (timeoutPolicyTestBackend) Busy() bool { return false }
+
+func (timeoutPolicyTestBackend) LastActiveTime() time.Time { return time.Now() }
+
+func (timeoutPolicyTestBackend) Lock() {}
+
+func (timeoutPolicyTestBackend) Unlock() {}
+
+func (timeoutPolicyTestBackend) Locked() bool { return false }
+
 func (s *closeResultRPCServer) Start() error {
 	return nil
 }
@@ -199,6 +251,8 @@ func TestLockserviceRemoteRPCErrorType(t *testing.T) {
 		{"nil", nil, ""},
 		{"rpc timeout", moerr.NewRPCTimeoutNoCtx(), "rpc_timeout"},
 		{"backend cannot connect", moerr.NewBackendCannotConnectNoCtx(), "backend_cannot_connect"},
+		{"backend create timeout", morpc.ErrBackendCreateTimeout, "backend_create_timeout"},
+		{"wrapped backend create timeout", fmt.Errorf("wrapped: %w", morpc.ErrBackendCreateTimeout), "backend_create_timeout"},
 		{"backend closed", moerr.NewBackendClosedNoCtx(), "backend_closed"},
 		{"unexpected eof", io.ErrUnexpectedEOF, "unexpected_eof"},
 		{"caller context deadline ignored", context.DeadlineExceeded, ""},
@@ -210,6 +264,136 @@ func TestLockserviceRemoteRPCErrorType(t *testing.T) {
 			assert.Equal(t, tt.want, lockserviceRemoteRPCErrorType(tt.err))
 		})
 	}
+}
+
+func TestLockserviceBackendCreateTimeoutPolicy(t *testing.T) {
+	normal := withBackendCreateQueueWaitTimeout(morpc.Config{
+		ClientOptions: []morpc.ClientOption{
+			morpc.WithClientEnableAutoCreateBackend(),
+			morpc.WithClientDisableCircuitBreaker(),
+		},
+	})
+	recovery := withBackendCreateWaitTimeout(normal)
+
+	require.Len(t, normal.ClientOptions, 3,
+		"normal lock traffic must not inherit the recovery factory deadline")
+	require.Len(t, recovery.ClientOptions, 4)
+
+	t.Run("normal traffic follows caller context", func(t *testing.T) {
+		factory := &blockingBackendFactory{
+			entered: make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		client, err := morpc.NewClient(
+			t.Name(),
+			factory,
+			normal.ClientOptions...,
+		)
+		require.NoError(t, err)
+		var released atomic.Bool
+		release := func() {
+			if released.CompareAndSwap(false, true) {
+				close(factory.release)
+			}
+		}
+		t.Cleanup(func() {
+			release()
+			require.NoError(t, client.Close())
+		})
+
+		result := make(chan error, 1)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		go func() {
+			result <- client.Ping(ctx, "normal-backend")
+		}()
+		select {
+		case <-factory.entered:
+		case <-time.After(time.Second):
+			t.Fatal("normal backend factory did not start")
+		}
+		select {
+		case err := <-result:
+			t.Fatalf("normal traffic stopped at the recovery deadline: %v", err)
+		case <-time.After(recoveryBackendCreateWaitTimeout + 100*time.Millisecond):
+		}
+		release()
+		select {
+		case err := <-result:
+			require.ErrorIs(t, err, errTimeoutPolicyBackendReached)
+		case <-time.After(time.Second):
+			t.Fatal("normal backend did not become usable after creation")
+		}
+	})
+
+	t.Run("recovery traffic keeps fast failure", func(t *testing.T) {
+		factory := &blockingBackendFactory{
+			entered: make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		client, err := morpc.NewClient(
+			t.Name(),
+			factory,
+			recovery.ClientOptions...,
+		)
+		require.NoError(t, err)
+		defer func() {
+			close(factory.release)
+			require.NoError(t, client.Close())
+		}()
+
+		result := make(chan error, 1)
+		go func() {
+			result <- client.Ping(context.Background(), "recovery-backend")
+		}()
+		select {
+		case <-factory.entered:
+		case <-time.After(time.Second):
+			t.Fatal("recovery backend factory did not start")
+		}
+		select {
+		case err := <-result:
+			require.ErrorIs(t, err, morpc.ErrBackendCreateTimeout)
+		case <-time.After(2 * time.Second):
+			t.Fatal("recovery traffic did not honor the backend-create deadline")
+		}
+	})
+
+	t.Run("normal traffic remains caller cancellable", func(t *testing.T) {
+		factory := &blockingBackendFactory{
+			entered: make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		client, err := morpc.NewClient(
+			t.Name(),
+			factory,
+			normal.ClientOptions...,
+		)
+		require.NoError(t, err)
+		defer func() {
+			close(factory.release)
+			require.NoError(t, client.Close())
+		}()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		result := make(chan error, 1)
+		go func() {
+			result <- client.Ping(ctx, "cancelled-normal-backend")
+		}()
+		select {
+		case <-factory.entered:
+		case <-time.After(time.Second):
+			t.Fatal("normal backend factory did not start")
+		}
+		cancel()
+		select {
+		case err := <-result:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(time.Second):
+			t.Fatal("normal traffic did not observe caller cancellation")
+		}
+	})
 }
 
 func TestCloseCreatedClientsClosesInReverseAndJoinsErrors(t *testing.T) {

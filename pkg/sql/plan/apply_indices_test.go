@@ -24,9 +24,19 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
@@ -521,6 +531,397 @@ func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIndexJoinBuildsVersionedSerializedRuntimeFilter(t *testing.T) {
+	builder, joinID, leftScanID, _ := makeIndexHintJoinBuilder(t)
+	join := builder.qry.Nodes[joinID]
+
+	newID, err := builder.applyIndicesForJoins(
+		joinID, join, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.NotEqual(t, leftScanID, join.Children[0])
+	require.Len(t, join.RuntimeFilterBuildList, 1)
+
+	buildSpec := join.RuntimeFilterBuildList[0]
+	require.Equal(t,
+		planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1,
+		buildSpec.KeyEncoding)
+	require.True(t, buildSpec.MatchPrefix)
+	require.Equal(t,
+		[]planpb.Type{{Id: int32(types.T_int32)}},
+		buildSpec.KeyComponentProbeTypes)
+	require.Nil(t, buildSpec.Expr)
+	require.Equal(t, int32(0),
+		buildSpec.BuildExpr.GetF().Args[0].GetCol().ColPos)
+
+	indexJoin := builder.qry.Nodes[join.Children[0]]
+	require.Equal(t, planpb.Node_INDEX, indexJoin.JoinType)
+	indexScan := builder.qry.Nodes[indexJoin.Children[1]]
+	require.Len(t, indexScan.RuntimeFilterProbeList, 1)
+	require.Equal(t, buildSpec.Tag, indexScan.RuntimeFilterProbeList[0].Tag)
+}
+
+func TestEnumIndexJoinsRemainEligible(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	enumType := planpb.Type{
+		Id:         int32(types.T_enum),
+		Enumvalues: "small,large",
+	}
+	setJoinKeyType := func(
+		builder *QueryBuilder,
+		join *planpb.Node,
+		leftDef *planpb.TableDef,
+	) {
+		right := builder.qry.Nodes[join.Children[1]]
+		leftDef.Cols[1].Typ = enumType
+		right.TableDef.Cols[1].Typ = enumType
+		join.OnList[0].GetF().Args[0].Typ = enumType
+		join.OnList[0].GetF().Args[1].Typ = enumType
+	}
+
+	t.Run("serialized secondary index", func(t *testing.T) {
+		builder, joinID, leftScanID, leftDef :=
+			makeIndexHintJoinBuilder(t)
+		join := builder.qry.Nodes[joinID]
+		setJoinKeyType(builder, join, leftDef)
+
+		_, err := builder.applyIndicesForJoins(
+			joinID, join, map[[2]int32]int{},
+			map[[2]int32]*planpb.Expr{})
+		require.NoError(t, err)
+		require.NotEqual(t, leftScanID, join.Children[0])
+		require.Len(t, join.RuntimeFilterBuildList, 1)
+		spec := join.RuntimeFilterBuildList[0]
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1,
+			spec.KeyEncoding)
+		require.Equal(t, []planpb.Type{enumType},
+			spec.KeyComponentProbeTypes)
+	})
+
+	t.Run("direct unique index", func(t *testing.T) {
+		builder, joinID, leftScanID, leftDef :=
+			makeIndexHintJoinBuilder(t)
+		join := builder.qry.Nodes[joinID]
+		setJoinKeyType(builder, join, leftDef)
+		leftDef.Indexes = []*planpb.IndexDef{{
+			IndexName:      "uidx_a",
+			IndexTableName: "idx_join_a_table",
+			Parts:          []string{"a"},
+			Unique:         true,
+			TableExist:     true,
+		}}
+		mockCtx := builder.compCtx.(*fullTextJoinMockCompilerContext)
+		mockCtx.tables["idx_join_a_table"].Cols[0].Typ = enumType
+
+		_, err := builder.applyIndicesForJoins(
+			joinID, join, map[[2]int32]int{},
+			map[[2]int32]*planpb.Expr{})
+		require.NoError(t, err)
+		require.NotEqual(t, leftScanID, join.Children[0])
+		require.Len(t, join.RuntimeFilterBuildList, 1)
+		spec := join.RuntimeFilterBuildList[0]
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+			spec.KeyEncoding)
+		require.Equal(t, int32(types.T_enum), spec.ProbeType.Id)
+		require.Equal(t, int32(types.T_enum), spec.BuildExpr.Typ.Id)
+	})
+}
+
+func TestIndexJoinSkipsUnsafeSerializedRuntimeFilter(t *testing.T) {
+	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+	join := builder.qry.Nodes[joinID]
+	right := builder.qry.Nodes[join.Children[1]]
+	floatType := planpb.Type{Id: int32(types.T_float64)}
+	leftDef.Cols[1].Typ = floatType
+	right.TableDef.Cols[1].Typ = floatType
+	join.OnList[0].GetF().Args[0].Typ = floatType
+	join.OnList[0].GetF().Args[1].Typ = floatType
+	nodeCount := len(builder.qry.Nodes)
+	statsBefore := DeepCopyStats(builder.qry.Nodes[leftScanID].Stats)
+
+	newID, err := builder.applyIndicesForJoins(
+		joinID, join, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	require.Equal(t, leftScanID, join.Children[0])
+	require.Empty(t, join.RuntimeFilterBuildList)
+	require.Equal(t, nodeCount, len(builder.qry.Nodes))
+	require.Equal(t, statsBefore, builder.qry.Nodes[leftScanID].Stats)
+}
+
+func TestIndexJoinSerializedRuntimeFilterUsesCompactedHashSlot(t *testing.T) {
+	builder, joinID, _, _ := makeIndexHintJoinBuilder(t)
+	join := builder.qry.Nodes[joinID]
+	join.OnList = append(
+		[]*planpb.Expr{MakePlan2BoolConstExprWithType(true)},
+		join.OnList...,
+	)
+
+	_, err := builder.applyIndicesForJoins(
+		joinID, join, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Len(t, join.RuntimeFilterBuildList, 1)
+	require.Equal(t, int32(0),
+		join.RuntimeFilterBuildList[0].
+			BuildExpr.GetF().Args[0].GetCol().ColPos,
+		"residual OnList predicates must not shift compact HashBuild key slots")
+}
+
+func TestUniqueIndexRuntimeFilterUsesSelectedHashSlot(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	builder, joinID, _, leftDef := makeIndexHintJoinBuilder(t)
+	leftDef.Indexes = []*planpb.IndexDef{{
+		IndexName:      "uidx_b",
+		IndexTableName: "idx_join_b_table",
+		Parts:          []string{"b"},
+		Unique:         true,
+		TableExist:     true,
+	}}
+	mockCtx := builder.compCtx.(*fullTextJoinMockCompilerContext)
+	mockCtx.tables["idx_join_b_table"].Cols[0].Typ =
+		planpb.Type{Id: int32(types.T_int32)}
+
+	join := builder.qry.Nodes[joinID]
+	leftTag := builder.qry.Nodes[join.Children[0]].BindingTags[0]
+	right := builder.qry.Nodes[join.Children[1]]
+	rightTag := right.BindingTags[0]
+	// The existing a=b predicate occupies HashBuild slot 0. The unique index
+	// matches this second b=a predicate and must therefore publish slot 1.
+	join.OnList = append(join.OnList, ftjMakeEqExpr(
+		t,
+		ftjColExpr(leftDef, leftTag, 2),
+		ftjColExpr(right.TableDef, rightTag, 0),
+	))
+
+	_, err := builder.applyIndicesForJoins(
+		joinID, join, map[[2]int32]int{},
+		map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Len(t, join.RuntimeFilterBuildList, 1)
+	spec := DeepCopyRuntimeFilterSpec(join.RuntimeFilterBuildList[0])
+	require.Equal(t,
+		planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+		spec.KeyEncoding)
+	require.Equal(t, int32(1), spec.BuildExpr.GetCol().ColPos)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+	first := testutil.MakeInt32Vector([]int32{901, 902, 903}, nil, proc.Mp())
+	selected := testutil.MakeInt32Vector([]int32{11, 12, 13}, nil, proc.Mp())
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = first
+	input.Vecs[1] = selected
+	input.SetRowCount(3)
+	child := colexec.NewMockOperator().WithBatchs(
+		[]*batch.Batch{input, nil})
+	arg := hashbuild.NewArgument()
+	arg.JoinMapTag = 9002
+	arg.JoinMapRefCnt = 1
+	arg.NeedHashMap = true
+	arg.Conditions = []*planpb.Expr{
+		GetColExpr(planpb.Type{Id: int32(types.T_int32)}, 0, 0),
+		GetColExpr(planpb.Type{Id: int32(types.T_int32)}, 0, 1),
+	}
+	arg.RuntimeFilterSpec = spec
+	arg.AppendChild(child)
+	require.NoError(t, child.Prepare(proc))
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	receiver := message.NewMessageReceiver(
+		[]int32{spec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		proc.GetMessageBoard(),
+	)
+	msgs, done, err := receiver.ReceiveMessage(false, proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, msgs, 1)
+	runtimeFilter, ok := msgs[0].(message.RuntimeFilterMessage)
+	require.True(t, ok)
+	require.Equal(t, int32(message.RuntimeFilter_IN), runtimeFilter.Typ)
+	payload := vector.NewVec(types.T_any.ToType())
+	require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
+	require.Equal(t, []int32{11, 12, 13},
+		vector.MustFixedColNoTypeCheck[int32](payload))
+
+	payload.Free(proc.Mp())
+	runtimeFilter.Destroy()
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+	child.Release()
+	proc.GetMessageBoard().Reset()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestIndexJoinGeneratedSerializedRuntimeFilterExecutesEndToEnd(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	builder, joinID, _, _ := makeIndexHintJoinBuilder(t)
+	join := builder.qry.Nodes[joinID]
+	join.OnList = append(
+		[]*planpb.Expr{MakePlan2BoolConstExprWithType(true)},
+		join.OnList...,
+	)
+	_, err := builder.applyIndicesForJoins(
+		joinID, join, map[[2]int32]int{},
+		map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Len(t, join.RuntimeFilterBuildList, 1)
+	spec := DeepCopyRuntimeFilterSpec(join.RuntimeFilterBuildList[0])
+	require.Nil(t, spec.Expr)
+	require.NotNil(t, spec.BuildExpr)
+	require.True(t, spec.MatchPrefix)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+	values := make([]int32, 37)
+	for i := range values {
+		values[i] = int32(i*17 - 101)
+	}
+	inputVec := testutil.MakeInt32Vector(values, nil, proc.Mp())
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = inputVec
+	input.SetRowCount(len(values))
+
+	encoder, err := function.NewSerialValueEncoder(inputVec)
+	require.NoError(t, err)
+	packer := types.NewPacker()
+	expected := make(map[string]struct{}, len(values))
+	fullKeys := vector.NewVec(types.T_varchar.ToType())
+	for i := range values {
+		packer.Reset()
+		encoder(inputVec, i, packer)
+		expected[string(packer.GetBuf())] = struct{}{}
+		packer.EncodeInt64(int64(i + 1))
+		require.NoError(t, vector.AppendBytes(
+			fullKeys, packer.GetBuf(), false, proc.Mp()))
+	}
+	packer.Reset()
+	packer.EncodeInt32(999_999)
+	packer.EncodeInt64(1)
+	require.NoError(t, vector.AppendBytes(
+		fullKeys, packer.GetBuf(), false, proc.Mp()))
+	packer.Close()
+
+	child := colexec.NewMockOperator().WithBatchs(
+		[]*batch.Batch{input, nil})
+	arg := hashbuild.NewArgument()
+	arg.JoinMapTag = 9001
+	arg.JoinMapRefCnt = 1
+	arg.NeedHashMap = true
+	arg.HashOnPK = true
+	arg.Conditions = []*planpb.Expr{GetColExpr(
+		planpb.Type{Id: int32(types.T_int32)}, 0, 0)}
+	arg.RuntimeFilterSpec = spec
+	arg.AppendChild(child)
+	require.NoError(t, child.Prepare(proc))
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	receiver := message.NewMessageReceiver(
+		[]int32{spec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		proc.GetMessageBoard(),
+	)
+	msgs, done, err := receiver.ReceiveMessage(false, proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, msgs, 1)
+	runtimeFilter, ok := msgs[0].(message.RuntimeFilterMessage)
+	require.True(t, ok)
+	require.Equal(t, int32(message.RuntimeFilter_IN), runtimeFilter.Typ)
+	require.Equal(t, int32(len(values)), runtimeFilter.Card)
+
+	payload := vector.NewVec(types.T_any.ToType())
+	require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
+	require.Equal(t, len(values), payload.Length())
+	for i := 0; i < payload.Length(); i++ {
+		key := string(payload.GetBytesAt(i))
+		_, exists := expected[key]
+		require.Truef(t, exists, "unexpected serialized key at row %d", i)
+		delete(expected, key)
+	}
+	require.Empty(t, expected)
+
+	fullBatch := batch.NewWithSize(1)
+	fullBatch.Vecs[0] = fullKeys
+	fullBatch.SetRowCount(fullKeys.Length())
+	inExpr := MakeInExpr(
+		proc.Ctx,
+		GetColExpr(
+			planpb.Type{Id: int32(types.T_varchar)}, 0, 0),
+		runtimeFilter.Card,
+		runtimeFilter.Data,
+		true,
+	)
+	matches, freeMatches, err := colexec.GetReadonlyResultFromExpression(
+		proc, inExpr, []*batch.Batch{fullBatch})
+	require.NoError(t, err)
+	matchValues := vector.MustFixedColNoTypeCheck[bool](matches)
+	require.Len(t, matchValues, len(values)+1)
+	for i := range values {
+		require.Truef(t, matchValues[i],
+			"generated prefix filter rejected row %d", i)
+	}
+	require.False(t, matchValues[len(values)])
+	freeMatches()
+
+	fullBatch.Clean(proc.Mp())
+	payload.Free(proc.Mp())
+	runtimeFilter.Destroy()
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+	child.Release()
+	proc.GetMessageBoard().Reset()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestForceIndexForJoinBuildsRightAccessWithoutReorder(t *testing.T) {

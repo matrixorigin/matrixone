@@ -846,11 +846,21 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RuntimeFilterBuildList {
+			if v == nil {
+				continue
+			}
+			expr := v.BuildExpr
+			if expr == nil {
+				expr = v.Expr
+			}
+			if expr == nil {
+				continue
+			}
 			if !first {
 				buf.WriteString(", ")
 			}
 			first = false
-			err := describeExpr(ctx, v.Expr, options, buf)
+			err := describeExpr(ctx, expr, options, buf)
 			if err != nil {
 				return "", err
 			}

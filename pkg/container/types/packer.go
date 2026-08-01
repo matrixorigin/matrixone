@@ -43,6 +43,13 @@ func NewPacker() *Packer {
 	return NewPackerWithSize(4096)
 }
 
+// PackerAllocationSize returns the backing size-class allocation made by
+// NewPackerWithSize. It lets memory-governed callers reserve the actual
+// allocation, including allocator rounding, before constructing a packer.
+func PackerAllocationSize(size uint64) (uint64, bool) {
+	return malloc.ClassAllocationSize(size)
+}
+
 func NewPackerWithSize(size uint64) *Packer {
 	bs, dec, err := packerAllocator.Allocate(size, malloc.NoClear)
 	if err != nil {
