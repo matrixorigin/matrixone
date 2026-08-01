@@ -2312,6 +2312,34 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 }
 
+func isPreparedNumericAggregate(name string, argCount int) bool {
+	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
+}
+
+// bindPreparedNumericAggregateFuncExpr gives prepared SUM/AVG arguments the
+// same static numeric context as prepared arithmetic. ParamRef remains TEXT for
+// transport and an explicit cast materializes the inferred computation type.
+// Non-parameter expressions stay on their original binding path, so ordinary
+// SUM/AVG over string columns continues to be rejected by aggregate overload
+// resolution.
+func (b *baseBinder) bindPreparedNumericAggregateFuncExpr(
+	name string,
+	astArgs []tree.Expr,
+	depth int32,
+) (*plan.Expr, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement || !isPreparedNumericAggregate(name, len(astArgs)) {
+		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+	}
+
+	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, nil)
+	if err != nil {
+		return nil, err
+	}
+	return bindFuncExprAndConstFold(
+		b.GetContext(), b.builder.compCtx.GetProcess(), name, []*plan.Expr{arg},
+	)
+}
+
 func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
 
 	args := make([]*Expr, 2+len(astExpr.KeyParts))
