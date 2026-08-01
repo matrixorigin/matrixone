@@ -368,7 +368,7 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err != nil {
 		return nil, err
 	}
-	if enabled {
+	if enabled && query.HasForeignKeyAction {
 		tblInfo, resolveErr := getUpdateTableInfo(ctx, stmt)
 		if resolveErr != nil {
 			return nil, resolveErr

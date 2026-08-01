@@ -105,7 +105,7 @@ insert into parent_restrict values (1), (2);
 insert into child_restrict values (10, 1);
 update parent_restrict set id = id where id = 1;
 update parent_restrict set id = 11 where id = 1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select * from parent_restrict order by id;
 ➤ id[4,32,0]  𝄀
 1  𝄀
@@ -295,6 +295,31 @@ update update_preinsert_index set a = 90;
 Duplicate entry '90' for key 'a'
 set foreign_key_checks = 1;
 drop table update_preinsert_index;
+create table parent_lock_order (
+id int primary key
+);
+create table child_lock_order (
+id int primary key,
+parent_id int,
+constraint fk_lock_order foreign key (parent_id)
+references parent_lock_order(id) on update cascade
+);
+insert into parent_lock_order values (1);
+begin;
+update parent_lock_order set id = 2 where id = 1;
+use update_modern_fk;
+begin;
+insert into child_lock_order values (10, 1);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+commit;
+commit;
+select * from parent_lock_order;
+➤ id[4,32,0]  𝄀
+2
+select * from child_lock_order;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]
+drop table child_lock_order;
+drop table parent_lock_order;
 drop table child_generated_unique;
 drop table parent_generated_unique;
 drop table child_dual_fk;

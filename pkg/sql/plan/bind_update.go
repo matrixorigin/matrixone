@@ -86,8 +86,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		return 0, err
 	}
 	for i, tableDef := range dmlCtx.tableDefs {
-		if len(dmlCtx.updateCol2Expr[i]) > 0 &&
-			(len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0) {
+		affected, affectedErr := builder.updateActuallyAffectsForeignKey(
+			bindCtx, tableDef, dmlCtx.updateCol2Expr[i])
+		if affectedErr != nil {
+			return 0, affectedErr
+		}
+		if affected {
 			// FK validation and parent-side actions depend on the current
 			// foreign_key_checks value. Mark the plan before that value is
 			// inspected so a plan built with checks disabled cannot be reused
@@ -1205,6 +1209,57 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
+}
+
+func (builder *QueryBuilder) updateActuallyAffectsForeignKey(
+	bindCtx *BindContext,
+	tableDef *plan.TableDef,
+	updatedCols map[string]tree.Expr,
+) (bool, error) {
+	if tableDef == nil || len(updatedCols) == 0 {
+		return false, nil
+	}
+	colIDToName := make(map[uint64]string, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		colIDToName[col.ColId] = col.Name
+	}
+	for _, fk := range tableDef.Fkeys {
+		for _, colID := range fk.Cols {
+			if _, ok := updatedCols[colIDToName[colID]]; ok {
+				return true, nil
+			}
+		}
+	}
+
+	visited := make(map[uint64]struct{}, len(tableDef.RefChildTbls))
+	for _, childID := range tableDef.RefChildTbls {
+		if childID == 0 {
+			childID = tableDef.TblId
+		}
+		if _, ok := visited[childID]; ok {
+			continue
+		}
+		visited[childID] = struct{}{}
+		_, childDef, err := builder.compCtx.ResolveById(childID, bindCtx.snapshot)
+		if err != nil {
+			return false, err
+		}
+		if childDef == nil {
+			return false, moerr.NewInternalErrorf(
+				builder.GetContext(), "foreign-key child table %d not found", childID)
+		}
+		for _, fk := range childDef.Fkeys {
+			if fk.ForeignTbl != tableDef.TblId && !(fk.ForeignTbl == 0 && childDef.TblId == tableDef.TblId) {
+				continue
+			}
+			for _, parentColID := range fk.ForeignCols {
+				if _, ok := updatedCols[colIDToName[parentColID]]; ok {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
 }
 
 func irregularIndexAffectedByUpdate(

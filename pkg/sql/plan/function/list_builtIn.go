@@ -14365,6 +14365,9 @@ var supportedOthersBuiltIns = []FuncNew{
 								if errType == "fk_no_referenced_row" {
 									return moerr.NewErrFKNoReferencedRow2(proc.Ctx)
 								}
+								if errType == "fk_row_is_referenced" {
+									return moerr.NewErrFKRowIsReferenced(proc.Ctx)
+								}
 								return moerr.NewInternalError(proc.Ctx, errMsg)
 							}
 							res.AppendMustValue(true)

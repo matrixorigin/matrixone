@@ -18,12 +18,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -361,6 +363,10 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.Equal(t, 1, countUpdateFkMarkJoins(query))
 		require.Equal(t, 1, countUpdateFkAsserts(query))
 		require.True(t, updateFkPlanContainsFunc(query, "<=>"))
+		require.True(t, updateFkPlanContainsTypedAssert(
+			query,
+			foreignKeyRowIsReferencedAssert,
+		))
 	})
 
 	t.Run("set default preserves restrict compatibility on modern path", func(t *testing.T) {
@@ -472,8 +478,9 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
 			require.ErrorContains(t, err, "complete child update row closure")
-			route, _, _ := classifyUpdatePlannerError(err)
+			route, reason, _ := classifyUpdatePlannerError(err)
 			require.Equal(t, updatePlannerRejected, route)
+			require.Equal(t, updateRouteReasonForeignKey, reason)
 		})
 	}
 
@@ -557,6 +564,107 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		route, _, _ := classifyUpdatePlannerError(err)
 		require.Equal(t, updatePlannerRejected, route)
 	})
+}
+
+func TestUpdateParentForeignKeyLocksPrecedeChildConsumers(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockEmpDeptForeignKeyAction(t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_CASCADE)
+	child := mock.ctxt.tables["emp"]
+	child.Indexes = append(child.Indexes, &planpb.IndexDef{
+		IndexName: "building_idx", IndexTableName: "missing_building_idx",
+		Parts: []string{"ename"}, TableExist: false,
+		IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+	})
+
+	logicPlan, err := runOneStmt(mock, t, "update dept set deptno = deptno + 10 where deptno = 1")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	parentID := mock.ctxt.tables["dept"].TblId
+	childID := child.TblId
+
+	contains := func(root, target int32) bool {
+		var visit func(int32) bool
+		visit = func(nodeID int32) bool {
+			if nodeID == target {
+				return true
+			}
+			for _, childNodeID := range query.Nodes[nodeID].Children {
+				if visit(childNodeID) {
+					return true
+				}
+			}
+			return false
+		}
+		return visit(root)
+	}
+	stepContaining := func(target int32) int {
+		for step, root := range query.Steps {
+			if contains(root, target) {
+				return step
+			}
+		}
+		return -1
+	}
+	var stepDependsOn func(int, int, map[int]bool) bool
+	stepDependsOn = func(step, dependency int, visited map[int]bool) bool {
+		if step == dependency {
+			return true
+		}
+		if visited[step] {
+			return false
+		}
+		visited[step] = true
+		var nodeDependsOn func(int32) bool
+		nodeDependsOn = func(nodeID int32) bool {
+			for _, sourceStep := range query.Nodes[nodeID].SourceStep {
+				if stepDependsOn(int(sourceStep), dependency, visited) {
+					return true
+				}
+			}
+			for _, childNodeID := range query.Nodes[nodeID].Children {
+				if nodeDependsOn(childNodeID) {
+					return true
+				}
+			}
+			return false
+		}
+		return nodeDependsOn(query.Steps[step])
+	}
+
+	lockNodeID := int32(-1)
+	for nodeID, node := range query.Nodes {
+		for _, target := range node.LockTargets {
+			if target.TableId == parentID && target.Mode == lockpb.LockMode_Exclusive {
+				lockNodeID = int32(nodeID)
+				require.Len(t, node.Children, 1)
+				lockInput := query.Nodes[node.Children[0]]
+				require.Less(t, int(target.PrimaryColIdxInBat), len(lockInput.ProjectList))
+				assert.Equal(t, target.PrimaryColTyp.Id,
+					lockInput.ProjectList[target.PrimaryColIdxInBat].Typ.Id)
+				break
+			}
+		}
+		if lockNodeID >= 0 {
+			break
+		}
+	}
+	require.NotEqual(t, int32(-1), lockNodeID)
+	lockStep := stepContaining(lockNodeID)
+	require.GreaterOrEqual(t, lockStep, 0)
+	assert.Equal(t, planpb.Node_SINK, query.Nodes[query.Steps[lockStep]].NodeType)
+
+	foundChildConsumer := false
+	for nodeID, node := range query.Nodes {
+		if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef == nil || node.TableDef.TblId != childID {
+			continue
+		}
+		foundChildConsumer = true
+		consumerStep := stepContaining(int32(nodeID))
+		require.GreaterOrEqual(t, consumerStep, 0)
+		assert.True(t, stepDependsOn(consumerStep, lockStep, make(map[int]bool)),
+			"every child scan must depend on the materialized parent-key lock step")
+	}
+	assert.True(t, foundChildConsumer)
 }
 
 func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {

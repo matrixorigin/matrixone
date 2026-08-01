@@ -15,16 +15,21 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-const foreignKeyNoReferencedRowAssert = "fk_no_referenced_row"
+const (
+	foreignKeyNoReferencedRowAssert = "fk_no_referenced_row"
+	foreignKeyRowIsReferencedAssert = "fk_row_is_referenced"
+)
 
 func (builder *QueryBuilder) updateInputProjectNode(nodeID int32) *plan.Node {
 	node := builder.qry.Nodes[nodeID]
@@ -284,6 +289,23 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 		}
 		return affected[i].fk.Name < affected[j].fk.Name
 	})
+	if len(affected) == 0 {
+		return lastNodeID, selectNodeTag, nil
+	}
+
+	lastNodeID, selectNodeTag, err := builder.appendUpdateParentKeyLocks(
+		bindCtx,
+		tableDef,
+		alias,
+		affected,
+		lastNodeID,
+		selectNodeTag,
+		oldColName2Idx,
+		newColName2Idx,
+	)
+	if err != nil {
+		return 0, 0, err
+	}
 
 	for _, affectedFK := range affected {
 		if affectedFK.childTableDef.TblId == tableDef.TblId {
@@ -375,6 +397,193 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	}
 	lastNodeID = builder.appendTaggedSinkScan(bindCtx, sourceStep, selectNodeTag)
 	return lastNodeID, selectNodeTag, nil
+}
+
+func (builder *QueryBuilder) appendUpdateParentKeyLocks(
+	bindCtx *BindContext,
+	parentTableDef *plan.TableDef,
+	parentAlias string,
+	affected []updateParentForeignKey,
+	lastNodeID int32,
+	selectNodeTag int32,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (int32, int32, error) {
+	parentObjRef, resolvedParent, err := builder.compCtx.ResolveById(parentTableDef.TblId, bindCtx.snapshot)
+	if err != nil {
+		return 0, 0, err
+	}
+	if resolvedParent == nil {
+		return 0, 0, moerr.NewInternalErrorf(
+			builder.GetContext(), "foreign-key parent table %d not found", parentTableDef.TblId)
+	}
+
+	rowProject := getProjectionByLastNodeWithTag(builder, lastNodeID, selectNodeTag)
+	lockTag := builder.genNewBindTag()
+	lockProject := append([]*plan.Expr(nil), rowProject...)
+	lockTargets := make([]*plan.LockTarget, 0, len(affected)*2)
+	tableLocked := false
+	validIndexes, _ := getValidIndexes(parentTableDef)
+
+	for _, affectedFK := range affected {
+		referencedNames, buildErr := updateParentColNames(
+			builder.GetContext(), parentTableDef, affectedFK.fk.ForeignCols)
+		if buildErr != nil {
+			return 0, 0, buildErr
+		}
+
+		lockTableDef := parentTableDef
+		lockObjRef := parentObjRef
+		lockTable := false
+		var matchedIndex *plan.IndexDef
+		var pkeyNames []string
+		if parentTableDef.Pkey != nil {
+			pkeyNames = parentTableDef.Pkey.Names
+			if len(pkeyNames) == 0 && parentTableDef.Pkey.PkeyColName != "" {
+				pkeyNames = []string{parentTableDef.Pkey.PkeyColName}
+			}
+		}
+		if !updateForeignKeyPartsEqual(pkeyNames, referencedNames) {
+			for _, idxDef := range validIndexes {
+				if idxDef.Unique && updateForeignKeyPartsEqual(idxDef.Parts, referencedNames) {
+					matchedIndex = idxDef
+					break
+				}
+			}
+			if matchedIndex == nil {
+				lockTable = true
+			} else {
+				lockObjRef, lockTableDef, buildErr = builder.compCtx.ResolveIndexTableByRef(
+					parentObjRef, matchedIndex.IndexTableName, bindCtx.snapshot)
+				if buildErr != nil {
+					return 0, 0, buildErr
+				}
+			}
+		}
+		if lockTable && tableLocked {
+			continue
+		}
+
+		for _, useNew := range []bool{false, true} {
+			keyParts := make([]*plan.Expr, len(referencedNames))
+			for i, colName := range referencedNames {
+				pos := oldColName2Idx[parentAlias+"."+colName]
+				if useNew {
+					if newPos, ok := newColName2Idx[parentAlias+"."+colName]; ok {
+						pos = newPos
+					}
+				}
+				keyParts[i] = &plan.Expr{
+					Typ: rowProject[pos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: selectNodeTag, ColPos: pos,
+					}},
+				}
+			}
+
+			lockExpr := keyParts[0]
+			if !lockTable {
+				if matchedIndex != nil {
+					prefixLengths, prefixErr := catalog.IndexPrefixLengthsFromParamsWithError(
+						matchedIndex.IndexAlgoParams)
+					if prefixErr != nil {
+						return 0, 0, prefixErr
+					}
+					for i := range keyParts {
+						keyParts[i], buildErr = builder.makeIndexPartExprFromInputExpr(
+							keyParts[i], referencedNames[i], prefixLengths)
+						if buildErr != nil {
+							return 0, 0, buildErr
+						}
+					}
+				}
+				if len(keyParts) > 1 || (matchedIndex != nil && indexTableStoresSerializedKey(matchedIndex)) {
+					lockExpr, buildErr = BindFuncExprImplByPlanExpr(
+						builder.GetContext(), "serial", keyParts)
+					if buildErr != nil {
+						return 0, 0, buildErr
+					}
+				}
+			}
+			lockProject = append(lockProject, lockExpr)
+			_, lockTyp := getPkPos(lockTableDef, false)
+			lockTargets = append(lockTargets, &plan.LockTarget{
+				TableId: lockTableDef.TblId, ObjRef: lockObjRef,
+				PrimaryColIdxInBat: int32(len(lockProject) - 1), PrimaryColRelPos: lockTag,
+				PrimaryColTyp: lockTyp, Mode: lockpb.LockMode_Exclusive, LockTable: lockTable,
+			})
+			if lockTable {
+				tableLocked = true
+				break
+			}
+		}
+	}
+	sort.SliceStable(lockTargets, func(i, j int) bool {
+		leftName, rightName := "", ""
+		if lockTargets[i].ObjRef != nil {
+			leftName = lockTargets[i].ObjRef.ObjName
+		}
+		if lockTargets[j].ObjRef != nil {
+			rightName = lockTargets[j].ObjRef.ObjName
+		}
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		if lockTargets[i].TableId != lockTargets[j].TableId {
+			return lockTargets[i].TableId < lockTargets[j].TableId
+		}
+		return lockTargets[i].PrimaryColIdxInBat < lockTargets[j].PrimaryColIdxInBat
+	})
+
+	lockInputID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+		ProjectList: lockProject, BindingTags: []int32{lockTag},
+	}, bindCtx)
+	lockOutput := getProjectionByLastNodeWithTag(builder, lockInputID, lockTag)
+	lockNodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_LOCK_OP, Children: []int32{lockInputID},
+		TableDef: resolvedParent, LockTargets: lockTargets,
+	}, bindCtx)
+	lockedNodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{lockNodeID},
+		ProjectList: append([]*plan.Expr(nil), lockOutput[:len(rowProject)]...),
+		BindingTags: []int32{selectNodeTag},
+	}, bindCtx)
+	lockedSinkID := appendSinkNodeWithTag(builder, bindCtx, lockedNodeID, selectNodeTag)
+	lockedStep := builder.appendStep(lockedSinkID)
+	return builder.appendTaggedSinkScan(bindCtx, lockedStep, selectNodeTag), selectNodeTag, nil
+}
+
+func updateParentColNames(
+	ctx context.Context,
+	tableDef *plan.TableDef,
+	colIDs []uint64,
+) ([]string, error) {
+	idToName := make(map[uint64]string, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		idToName[col.ColId] = col.Name
+	}
+	names := make([]string, len(colIDs))
+	for i, colID := range colIDs {
+		name, ok := idToName[colID]
+		if !ok {
+			return nil, moerr.NewInternalErrorf(ctx, "foreign-key parent column %d not found", colID)
+		}
+		names[i] = name
+	}
+	return names, nil
+}
+
+func updateForeignKeyPartsEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if catalog.ResolveAlias(left[i]) != catalog.ResolveAlias(right[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (builder *QueryBuilder) validateModernUpdateParentMutation(
@@ -556,9 +765,13 @@ func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
 }
 
 func (builder *QueryBuilder) newUnsupportedUpdateParentRowClosureError() error {
-	return moerr.NewNotSupported(
-		builder.GetContext(),
-		"parent foreign key action requires complete child update row closure",
+	return newUpdatePlannerRouteError(
+		updatePlannerRejected,
+		updateRouteReasonForeignKey,
+		moerr.NewNotSupported(
+			builder.GetContext(),
+			"parent foreign key action requires complete child update row closure",
+		),
 	)
 }
 
@@ -692,11 +905,9 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		tableDef *plan.TableDef
 		tag      int32
 	}
-	indexes := make([]mutationIndex, 0, len(childTableDef.Indexes))
-	for _, idxDef := range childTableDef.Indexes {
-		if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
-			continue
-		}
+	validIndexes, _ := getValidIndexes(childTableDef)
+	indexes := make([]mutationIndex, 0, len(validIndexes))
+	for _, idxDef := range validIndexes {
 		idxObjRef, idxTableDef, resolveErr := builder.compCtx.ResolveIndexTableByRef(
 			affectedFK.childObjRef,
 			idxDef.IndexTableName,
@@ -1131,6 +1342,7 @@ func (builder *QueryBuilder) appendUpdateParentRestrictCheck(
 			makePlan2StringConstExprWithType(
 				"Cannot delete or update a parent row: a foreign key constraint fails",
 			),
+			makePlan2StringConstExprWithType(foreignKeyRowIsReferencedAssert),
 		},
 	)
 	if err != nil {

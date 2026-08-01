@@ -234,6 +234,31 @@ update update_preinsert_index set a = 90;
 set foreign_key_checks = 1;
 drop table update_preinsert_index;
 
+create table parent_lock_order (
+    id int primary key
+);
+create table child_lock_order (
+    id int primary key,
+    parent_id int,
+    constraint fk_lock_order foreign key (parent_id)
+        references parent_lock_order(id) on update cascade
+);
+insert into parent_lock_order values (1);
+begin;
+update parent_lock_order set id = 2 where id = 1;
+-- @session:id=1{
+use update_modern_fk;
+begin;
+-- @wait:0:commit
+insert into child_lock_order values (10, 1);
+commit;
+-- @session}
+commit;
+select * from parent_lock_order;
+select * from child_lock_order;
+drop table child_lock_order;
+drop table parent_lock_order;
+
 drop table child_generated_unique;
 drop table parent_generated_unique;
 drop table child_dual_fk;
