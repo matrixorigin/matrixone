@@ -76,6 +76,121 @@ func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
 	require.Equal(t, byte(1), source.GetF().AggConfig[0])
 }
 
+func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
+	source := &planpb.RuntimeFilterSpec{
+		Tag:                 7,
+		MatchPrefix:         true,
+		UpperLimit:          11,
+		BuildExpr:           MakePlan2Int64ConstExprWithType(1),
+		NotOnPk:             true,
+		UseMembershipFilter: true,
+		KeyEncoding:         planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+		ProbeType: &planpb.Type{
+			Id:         4,
+			Width:      18,
+			Scale:      3,
+			Table:      "probe_table",
+			Enumvalues: "a,b",
+		},
+		KeyComponentProbeTypes: []planpb.Type{
+			{Id: 4, Width: 18, Scale: 2},
+		},
+	}
+
+	cloned := DeepCopyRuntimeFilterSpec(source)
+
+	require.Equal(t, source.Tag, cloned.Tag)
+	require.Equal(t, source.MatchPrefix, cloned.MatchPrefix)
+	require.Equal(t, source.UpperLimit, cloned.UpperLimit)
+	require.Equal(t, source.NotOnPk, cloned.NotOnPk)
+	require.Equal(t, source.UseMembershipFilter, cloned.UseMembershipFilter)
+	require.Equal(t, source.KeyEncoding, cloned.KeyEncoding)
+	require.Equal(t, source.ProbeType, cloned.ProbeType)
+	require.NotSame(t, source.ProbeType, cloned.ProbeType)
+	require.Nil(t, cloned.Expr)
+	require.NotSame(t, source.BuildExpr, cloned.BuildExpr)
+	require.Equal(t, source.BuildExpr, cloned.BuildExpr)
+	require.Equal(t,
+		source.KeyComponentProbeTypes,
+		cloned.KeyComponentProbeTypes)
+
+	cloned.ProbeType.Scale = 9
+	cloned.BuildExpr.Typ.Scale = 9
+	cloned.KeyComponentProbeTypes[0].Scale = 9
+	require.Equal(t, int32(3), source.ProbeType.Scale)
+	require.NotEqual(t, cloned.BuildExpr.Typ.Scale, source.BuildExpr.Typ.Scale)
+	require.Equal(t, int32(2), source.KeyComponentProbeTypes[0].Scale)
+}
+
+func TestDeepCopyRuntimeFilterSpecPreservesProbeLayout(t *testing.T) {
+	source := &planpb.RuntimeFilterSpec{
+		Tag:  17,
+		Expr: MakePlan2Int64ConstExprWithType(1),
+	}
+
+	cloned := DeepCopyRuntimeFilterSpec(source)
+	require.Equal(t, source.Expr, cloned.Expr)
+	require.NotSame(t, source.Expr, cloned.Expr)
+	require.Nil(t, cloned.BuildExpr)
+
+	cloned.Expr.Typ.Scale = 9
+	require.NotEqual(t, cloned.Expr.Typ.Scale, source.Expr.Typ.Scale)
+}
+
+func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
+	buildSpec := &planpb.RuntimeFilterSpec{
+		Tag:         8,
+		BuildExpr:   MakePlan2Int64ConstExprWithType(1),
+		KeyEncoding: planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+	}
+	probeSpec := &planpb.RuntimeFilterSpec{
+		Tag:  8,
+		Expr: MakePlan2Int64ConstExprWithType(1),
+	}
+	source := &planpb.Node{
+		NodeType:               planpb.Node_FUZZY_FILTER,
+		FuzzyBuildSide:         planpb.Node_FUZZY_BUILD_SIDE_SINK,
+		IfInsertFromUnique:     true,
+		SpillMem:               64 << 10,
+		RuntimeFilterProbeList: []*planpb.RuntimeFilterSpec{probeSpec},
+		RuntimeFilterBuildList: []*planpb.RuntimeFilterSpec{buildSpec},
+		Fuzzymessage: &planpb.OriginTableMessageForFuzzy{
+			ParentTableName:  "parent",
+			ParentUniqueCols: []*planpb.ColDef{{Name: "uk"}},
+		},
+	}
+
+	cloned := DeepCopyNode(source)
+
+	require.Equal(t, source.FuzzyBuildSide, cloned.FuzzyBuildSide)
+	require.Equal(t, source.IfInsertFromUnique, cloned.IfInsertFromUnique)
+	require.Equal(t, source.SpillMem, cloned.SpillMem)
+	require.Equal(t, source.RuntimeFilterProbeList,
+		cloned.RuntimeFilterProbeList)
+	require.Equal(t, source.RuntimeFilterBuildList,
+		cloned.RuntimeFilterBuildList)
+	require.Equal(t, source.Fuzzymessage, cloned.Fuzzymessage)
+	require.NotSame(t, source.RuntimeFilterProbeList[0],
+		cloned.RuntimeFilterProbeList[0])
+	require.NotSame(t, source.RuntimeFilterBuildList[0],
+		cloned.RuntimeFilterBuildList[0])
+	require.NotSame(t, source.Fuzzymessage, cloned.Fuzzymessage)
+	require.NotSame(t, source.Fuzzymessage.ParentUniqueCols[0],
+		cloned.Fuzzymessage.ParentUniqueCols[0])
+
+	cloned.FuzzyBuildSide = planpb.Node_FUZZY_BUILD_SIDE_TABLE
+	cloned.SpillMem = 1
+	cloned.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale = 9
+	cloned.Fuzzymessage.ParentUniqueCols[0].Name = "changed"
+	require.Equal(t, planpb.Node_FUZZY_BUILD_SIDE_SINK,
+		source.FuzzyBuildSide)
+	require.Equal(t, int64(64<<10), source.SpillMem)
+	require.NotEqual(t,
+		cloned.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale,
+		source.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale)
+	require.Equal(t, "uk", source.Fuzzymessage.ParentUniqueCols[0].Name)
+}
+
 var clonedTableDef *planpb.TableDef
 
 func BenchmarkCloneTableDefForPlan(b *testing.B) {

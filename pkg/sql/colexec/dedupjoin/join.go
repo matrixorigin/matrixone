@@ -185,7 +185,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case Build:
 			err = dedupJoin.build(analyzer, proc)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 			if ctr.mp == nil && !dedupJoin.IsShuffle && ctr.spillEngine == nil {
 				ctr.state = End
@@ -199,7 +199,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				var readErr error
 				bat, readErr = ctr.spillEngine.NextProbeBatch(proc)
 				if readErr != nil {
-					return result, readErr
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, readErr)
 				}
 				if bat == nil {
 					ctr.spillEngine.FinishBucket()
@@ -214,7 +214,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				result, err = vm.ChildrenCall(dedupJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
-					return result, err
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
 				bat = result.Batch
 				if bat == nil {
@@ -230,7 +230,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if err := ctr.probe(bat, dedupJoin, proc, analyzer, &result); err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 			return result, nil
 		case Finalize:
@@ -238,7 +238,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				dedupJoin.ctr.lastPos = 0
 				err := ctr.finalize(dedupJoin, proc)
 				if err != nil {
-					return result, err
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
 				if ctr.state == End {
 					continue
@@ -264,13 +264,13 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 							}
 						})
 					if bktErr != nil {
-						return result, bktErr
+						return result, hashbuild.TerminalBudgetError(proc.Ctx, bktErr)
 					}
 					if ok && ctr.mp != nil {
 						// BucketReady: init capture buffers for REPLACE spill path.
 						if ctr.batchRowCount > 0 && len(dedupJoin.OldColCapturePlaceholderIdxList) > 0 {
 							if err := ctr.initCaptureBuffers(dedupJoin, proc); err != nil {
-								return result, err
+								return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 							}
 						}
 						ctr.state = Probe
