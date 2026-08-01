@@ -16,8 +16,9 @@ package lockservice
 
 import (
 	"context"
-	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -39,17 +40,24 @@ func RunLockServicesForTest(
 	opts ...Option,
 ) {
 	defaultLazyCheckDuration.Store(time.Millisecond * 50)
-	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+	testSocketDir, err := createTestSocketDir()
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		if err := removeTestSocketDir(testSocketDir); err != nil {
+			panic(err)
+		}
+	}()
+	testSockets := "unix://" + filepath.Join(testSocketDir, "allocator.sock")
 	services := make([]LockService, 0, len(serviceIDs))
 	cns := make([]metadata.CNService, 0, len(serviceIDs))
 	configs := make([]Config, 0, len(serviceIDs))
-	for _, v := range serviceIDs {
+	for idx, v := range serviceIDs {
 		runtime.SetupServiceBasedRuntime(v, runtime.ServiceRuntime(""))
-		address := fmt.Sprintf("unix:///tmp/service-%d-%s.sock",
-			time.Now().Nanosecond(), v)
-		if err := os.RemoveAll(address[7:]); err != nil {
-			panic(err)
-		}
+		address := "unix://" + filepath.Join(
+			testSocketDir,
+			"service-"+strconv.Itoa(idx)+".sock")
 		cns = append(cns, metadata.CNService{
 			ServiceID:          v,
 			LockServiceAddress: address,
@@ -101,6 +109,14 @@ func RunLockServicesForTest(
 	if err := allocator.Close(); err != nil {
 		panic(err)
 	}
+}
+
+func createTestSocketDir() (string, error) {
+	return os.MkdirTemp("/tmp", "mo-lockservice-")
+}
+
+func removeTestSocketDir(dir string) error {
+	return os.RemoveAll(dir)
 }
 
 // WaitWaiters wait waiters
