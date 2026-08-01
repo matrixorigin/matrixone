@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -72,6 +74,82 @@ func TestPrepare(t *testing.T) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
+}
+
+func TestMergeCTEDistinctFiltersAcrossBatchesAndReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := NewArgument().WithNodeCnt(1).WithDistinct(true)
+	analyzer := process.NewAnalyzer(0, false, false, "merge cte distinct test")
+
+	first := makeMergeCTEDistinctBatch(
+		t,
+		proc,
+		[]int64{1, 1, 2},
+		[]string{"a", "a", ""},
+		[]bool{false, false, true},
+	)
+	second := makeMergeCTEDistinctBatch(
+		t,
+		proc,
+		[]int64{1, 2, 3},
+		[]string{"a", "", "c"},
+		[]bool{false, true, false},
+	)
+	defer first.Clean(proc.Mp())
+	defer second.Clean(proc.Mp())
+
+	require.NoError(t, arg.Prepare(proc))
+	firstOut, err := arg.ctr.cacheBatch(proc, analyzer, first)
+	require.NoError(t, err)
+	require.Equal(t, 2, firstOut.RowCount())
+	require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](firstOut.Vecs[0]))
+	require.False(t, firstOut.Vecs[1].GetNulls().Contains(0))
+	require.True(t, firstOut.Vecs[1].GetNulls().Contains(1))
+
+	secondOut, err := arg.ctr.cacheBatch(proc, analyzer, second)
+	require.NoError(t, err)
+	require.Equal(t, 1, secondOut.RowCount())
+	require.Equal(t, []int64{3}, vector.MustFixedColWithTypeCheck[int64](secondOut.Vecs[0]))
+	require.Equal(t, uint64(3), arg.ctr.hashTable.GroupCount())
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.hashTable)
+	require.NoError(t, arg.Prepare(proc))
+	replayed, err := arg.ctr.cacheBatch(proc, analyzer, first)
+	require.NoError(t, err)
+	require.Equal(t, 2, replayed.RowCount())
+	require.Equal(t, uint64(2), arg.ctr.hashTable.GroupCount())
+
+	arg.Free(proc, false, nil)
+	arg.Release()
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func makeMergeCTEDistinctBatch(
+	t *testing.T,
+	proc *process.Process,
+	intValues []int64,
+	stringValues []string,
+	stringNulls []bool,
+) *batch.Batch {
+	require.Len(t, stringValues, len(intValues))
+	require.Len(t, stringNulls, len(intValues))
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	for i := range intValues {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], intValues[i], false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(
+			bat.Vecs[1],
+			[]byte(stringValues[i]),
+			stringNulls[i],
+			proc.Mp(),
+		))
+	}
+	bat.SetRowCount(len(intValues))
+	return bat
 }
 
 func TestMergeCTE(t *testing.T) {
