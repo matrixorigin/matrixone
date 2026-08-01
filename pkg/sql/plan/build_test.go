@@ -3691,6 +3691,69 @@ func TestInsertIgnoreChildParentFKDropsRows(t *testing.T) {
 	assert.True(t, hasMultiUpdate, "INSERT IGNORE FK should stay on the modern MULTI_UPDATE path")
 }
 
+func TestCheckConstraintWithChildForeignKey(t *testing.T) {
+	build := func(sql string) *plan.Query {
+		mock := NewMockOptimizer(true)
+		tableDef := mock.ctxt.tables["emp"]
+		colPos := tableDef.Name2ColIndex["empno"]
+		colExpr := &plan.Expr{
+			Typ: tableDef.Cols[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: colPos},
+			},
+		}
+		checkExpr, err := BindFuncExprImplByPlanExpr(
+			t.Context(),
+			">",
+			[]*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)},
+		)
+		require.NoError(t, err)
+		tableDef.Checks = []*plan.CheckDef{{
+			Name:  "positive_empno",
+			Check: checkExpr,
+		}}
+
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.NotNil(t, query)
+		return query
+	}
+
+	assertPlanShape := func(t *testing.T, query *plan.Query, checkFunc string) {
+		t.Helper()
+		hasCheck, hasParentJoin, hasMultiUpdate := false, false, false
+		for _, node := range query.Nodes {
+			if node.NodeType == plan.Node_FILTER {
+				for _, expr := range node.FilterList {
+					if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == checkFunc {
+						hasCheck = true
+					}
+				}
+			}
+			if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+				hasParentJoin = true
+			}
+			if node.NodeType == plan.Node_MULTI_UPDATE {
+				hasMultiUpdate = true
+			}
+		}
+		require.True(t, hasCheck)
+		require.True(t, hasParentJoin)
+		require.True(t, hasMultiUpdate)
+	}
+
+	t.Run("replace", func(t *testing.T) {
+		query := build("REPLACE INTO emp (empno, deptno) VALUES (1, 10)")
+		assertPlanShape(t, query, "_check_constraint_assert")
+	})
+
+	t.Run("insert ignore", func(t *testing.T) {
+		query := build("INSERT IGNORE INTO emp (empno, deptno) VALUES (1, 10)")
+		assertPlanShape(t, query, "coalesce")
+	})
+}
+
 func TestInsertOnDupSelfReferFKUsesModernPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
