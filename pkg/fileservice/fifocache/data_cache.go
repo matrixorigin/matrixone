@@ -147,7 +147,14 @@ func (d *DataCache) CurrentSeq(key query.CacheKey) (uint64, bool) {
 }
 
 func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.Data) error {
-	_, rejected := d.fifo.Set(ctx, key, value, int64(len(value.Bytes())))
+	size := int64(-1)
+	if sized, ok := value.(interface{ Size() int64 }); ok {
+		size = sized.Size()
+	}
+	if size < 0 {
+		size = int64(len(value.Bytes()))
+	}
+	_, rejected := d.fifo.Set(ctx, key, value, size)
 	if rejected {
 		return fscache.ErrCacheAdmissionRejected
 	}
