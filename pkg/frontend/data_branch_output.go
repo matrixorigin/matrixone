@@ -68,7 +68,7 @@ func makeFileName(
 	namePrefix := fmt.Sprintf("diff_%s_%s", srcName, baseName)
 	id, err := uuid.NewRandom()
 	if err != nil {
-		return "", fmt.Errorf("generate data branch output file name: %w", err)
+		return "", moerr.NewInternalErrorNoCtxf("generate data branch output file name: %v", err)
 	}
 	uniqueSuffix := fmt.Sprintf("_%s_%s", time.Now().UTC().Format("20060102_150405"), id)
 	if len(namePrefix)+len(uniqueSuffix) <= maxDiffFileNameStemBytes {
