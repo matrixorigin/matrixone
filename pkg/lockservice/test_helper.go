@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -44,20 +45,24 @@ func RunLockServicesForTest(
 	if err != nil {
 		panic(err)
 	}
+	cleanup := testTopologyCleanup{socketDir: testSocketDir}
 	defer func() {
-		if err := removeTestSocketDir(testSocketDir); err != nil {
-			panic(err)
+		panicValue := recover()
+		cleanupErr := cleanup.close()
+		if panicValue != nil {
+			panic(panicValue)
+		}
+		if cleanupErr != nil {
+			panic(cleanupErr)
 		}
 	}()
-	testSockets := "unix://" + filepath.Join(testSocketDir, "allocator.sock")
+	testSockets := testSocketAddress(testSocketDir, "allocator.sock")
 	services := make([]LockService, 0, len(serviceIDs))
 	cns := make([]metadata.CNService, 0, len(serviceIDs))
 	configs := make([]Config, 0, len(serviceIDs))
 	for idx, v := range serviceIDs {
 		runtime.SetupServiceBasedRuntime(v, runtime.ServiceRuntime(""))
-		address := "unix://" + filepath.Join(
-			testSocketDir,
-			"service-"+strconv.Itoa(idx)+".sock")
+		address := testSocketAddress(testSocketDir, "service-"+strconv.Itoa(idx)+".sock")
 		cns = append(cns, metadata.CNService{
 			ServiceID:          v,
 			LockServiceAddress: address,
@@ -78,7 +83,7 @@ func RunLockServicesForTest(
 				},
 			}))
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, cluster)
-	defer cluster.Close()
+	cleanup.clusterCloser = cluster.Close
 
 	var removeDisconnectDuration time.Duration
 	for _, cfg := range configs {
@@ -86,8 +91,9 @@ func RunLockServicesForTest(
 			adjustConfig(&cfg)
 			removeDisconnectDuration = cfg.removeDisconnectDuration
 		}
-		services = append(services,
-			NewLockService(cfg, opts...).(*service))
+		lockService := NewLockService(cfg, opts...)
+		services = append(services, lockService)
+		cleanup.serviceClosers = append(cleanup.serviceClosers, lockService.Close)
 	}
 
 	allocator := NewLockTableAllocator(
@@ -99,16 +105,32 @@ func RunLockServicesForTest(
 			lta.options.removeDisconnectDuration = removeDisconnectDuration
 		},
 	)
+	cleanup.allocatorCloser = allocator.Close
 	fn(allocator.(*lockTableAllocator), services)
+}
 
-	for _, s := range services {
-		if err := s.Close(); err != nil {
-			panic(err)
-		}
+type testTopologyCleanup struct {
+	serviceClosers  []func() error
+	allocatorCloser func() error
+	clusterCloser   func()
+	socketDir       string
+}
+
+func (c *testTopologyCleanup) close() error {
+	var cleanupErr error
+	for _, closeService := range c.serviceClosers {
+		cleanupErr = errors.Join(cleanupErr, closeService())
 	}
-	if err := allocator.Close(); err != nil {
-		panic(err)
+	if c.allocatorCloser != nil {
+		cleanupErr = errors.Join(cleanupErr, c.allocatorCloser())
 	}
+	if c.clusterCloser != nil {
+		c.clusterCloser()
+	}
+	if c.socketDir != "" {
+		cleanupErr = errors.Join(cleanupErr, removeTestSocketDir(c.socketDir))
+	}
+	return cleanupErr
 }
 
 func createTestSocketDir() (string, error) {
@@ -117,6 +139,10 @@ func createTestSocketDir() (string, error) {
 
 func removeTestSocketDir(dir string) error {
 	return os.RemoveAll(dir)
+}
+
+func testSocketAddress(dir, name string) string {
+	return "unix://" + filepath.Join(dir, name)
 }
 
 // WaitWaiters wait waiters

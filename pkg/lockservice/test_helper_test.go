@@ -15,7 +15,10 @@
 package lockservice
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -63,4 +66,88 @@ func TestLockServiceTestSocketDirectoriesAreIsolated(t *testing.T) {
 		_, err := os.Stat(dir)
 		require.ErrorIs(t, err, os.ErrNotExist)
 	}
+}
+
+func TestTopologyCleanupAttemptsEveryResourceInOrder(t *testing.T) {
+	closeErr := errors.New("injected service close failure")
+	var closed []string
+	dir, err := createTestSocketDir()
+	require.NoError(t, err)
+	cleanup := testTopologyCleanup{
+		serviceClosers: []func() error{
+			func() error {
+				closed = append(closed, "service-0")
+				return closeErr
+			},
+			func() error {
+				closed = append(closed, "service-1")
+				return nil
+			},
+		},
+		allocatorCloser: func() error {
+			closed = append(closed, "allocator")
+			return nil
+		},
+		clusterCloser: func() {
+			closed = append(closed, "cluster")
+		},
+		socketDir: dir,
+	}
+
+	err = cleanup.close()
+	require.ErrorIs(t, err, closeErr)
+	require.Equal(t, []string{"service-0", "service-1", "allocator", "cluster"}, closed)
+	_, err = os.Stat(dir)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestTopologyCleanupSupportsPartialConstruction(t *testing.T) {
+	var closed []string
+	dir, err := createTestSocketDir()
+	require.NoError(t, err)
+	cleanup := testTopologyCleanup{
+		serviceClosers: []func() error{func() error {
+			closed = append(closed, "service-0")
+			return nil
+		}},
+		clusterCloser: func() {
+			closed = append(closed, "cluster")
+		},
+		socketDir: dir,
+	}
+
+	require.NoError(t, cleanup.close())
+	require.Equal(t, []string{"service-0", "cluster"}, closed)
+	_, err = os.Stat(dir)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRunLockServicesForTestCleansUpAfterCallbackPanic(t *testing.T) {
+	panicValue := errors.New("injected callback panic")
+	var lockService *service
+	var socketDir string
+	var recovered any
+	func() {
+		defer func() {
+			recovered = recover()
+		}()
+		runLockServiceTests(
+			t,
+			[]string{"s1"},
+			func(_ *lockTableAllocator, services []*service) {
+				lockService = services[0]
+				socketPath := strings.TrimPrefix(lockService.GetConfig().ListenAddress, "unix://")
+				socketDir = filepath.Dir(socketPath)
+				panic(panicValue)
+			},
+		)
+	}()
+
+	require.Same(t, panicValue, recovered)
+	lockService.lifecycle.RLock()
+	closing := lockService.lifecycle.closing
+	lockService.lifecycle.RUnlock()
+	require.True(t, closing)
+	_, err := os.Stat(socketDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
