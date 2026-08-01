@@ -1414,8 +1414,63 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
 			DoAndReturn(func(_ context.Context, sql string) error {
-				require.Contains(t, sql, "as pks(__idx_,`select`) on")
-				require.Contains(t, sql, "lca.`select` = cast(pks.`select` as BIGINT)")
+				require.Contains(t, sql,
+					"as pks(`__mo_data_branch_ordinal`,`__mo_data_branch_pk_0`) on")
+				require.Contains(t, sql,
+					"lca.`select` = cast(pks.`__mo_data_branch_pk_0` as BIGINT)")
+				return wantErr
+			}).
+			Times(1)
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
+		tBat.SetRowCount(1)
+		defer tBat.Clean(ses.proc.Mp())
+
+		_, err := handleDelsOnLCA(
+			context.Background(),
+			ses,
+			bh,
+			tBat,
+			tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("internal aliases do not collide with user primary key", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.colNames[0] = "__idx_"
+		targetDef := tblStuff.tarRel.GetTableDef(context.Background())
+		targetDef.Cols[0].Name = "__idx_"
+		targetDef.Pkey.Names = []string{"__idx_"}
+		targetDef.Pkey.PkeyColName = "__idx_"
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
+		lcaDef.Cols[0].Name = "__idx_"
+		lcaDef.Pkey.Names = []string{"__idx_"}
+		lcaDef.Pkey.PkeyColName = "__idx_"
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
+			GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
+			GetTableID(gomock.Any()).Return(uint64(76)).AnyTimes()
+
+		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, sql string) error {
+				require.Contains(t, sql,
+					"select pks.`__mo_data_branch_ordinal`, lca.`__idx_`")
+				require.Contains(t, sql,
+					"as pks(`__mo_data_branch_ordinal`,`__mo_data_branch_pk_0`) on")
+				require.Contains(t, sql,
+					"lca.`__idx_` = cast(pks.`__mo_data_branch_pk_0` as BIGINT)")
+				require.Contains(t, sql, "order by pks.`__mo_data_branch_ordinal`")
+				require.NotContains(t, sql, "as pks(__idx_,")
 				return wantErr
 			}).
 			Times(1)
