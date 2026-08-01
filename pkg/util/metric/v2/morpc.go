@@ -107,6 +107,14 @@ var (
 			Help:      "Total number of auto-create backend wait timeouts.",
 		}, []string{"name"})
 
+	rpcBackendAutoCreateTimeoutEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "backend_auto_create_timeout_event_total",
+			Help:      "Total number of distinct backend-create states that caused one or more auto-create wait timeouts.",
+		}, []string{"name"})
+
 	rpcBackendUnavailableCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -374,6 +382,10 @@ func GetRPCGCInactiveProcessedCounter() prometheus.Counter {
 
 func NewRPCBackendAutoCreateTimeoutCounterByName(name string) prometheus.Counter {
 	return rpcBackendAutoCreateTimeoutCounter.WithLabelValues(name)
+}
+
+func NewRPCBackendAutoCreateTimeoutEventCounterByName(name string) prometheus.Counter {
+	return rpcBackendAutoCreateTimeoutEventCounter.WithLabelValues(name)
 }
 
 func NewRPCBackendUnavailableCounterByName(name string) prometheus.Counter {
