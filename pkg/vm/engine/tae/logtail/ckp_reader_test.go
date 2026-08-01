@@ -136,6 +136,56 @@ func TestConsumeCheckpointWithTableIDPropagatesIteratorError(t *testing.T) {
 	}
 }
 
+func TestSyncTableIDBatchDoesNotClaimHistoryAcrossGap(t *testing.T) {
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.GetFileService(),
+		defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	previousStart := types.BuildTS(time.Now().UnixNano(), 0)
+	previousEnd := types.BuildTS(previousStart.Physical()+time.Second.Nanoseconds(), 0)
+	previous, err := MockTableIDBatch(
+		ctx,
+		previousStart,
+		previousEnd,
+		64,
+		1,
+		proc.Mp(),
+		fs,
+	)
+	require.NoError(t, err)
+
+	currentStart := types.BuildTS(previousEnd.Physical()+time.Second.Nanoseconds(), 0)
+	currentEnd := types.BuildTS(currentStart.Physical()+time.Second.Nanoseconds(), 0)
+	locations, err := SyncTableIDBatch(
+		ctx,
+		currentStart,
+		currentEnd,
+		24*time.Hour,
+		64,
+		objectio.Location{},
+		0,
+		previous,
+		proc.Mp(),
+		fs,
+	)
+	require.NoError(t, err)
+
+	historyStart, historyEnd, known, err := ReadTableIDHistoryRange(
+		ctx,
+		locations,
+		proc.Mp(),
+		fs,
+	)
+	require.NoError(t, err)
+	require.True(t, known)
+	require.Equal(t, currentStart, historyStart)
+	require.Equal(t, currentEnd, historyEnd)
+}
+
 func makeCheckpointObjectRanges(
 	t *testing.T,
 	mp *mpool.MPool,

@@ -5411,6 +5411,128 @@ func TestReadCheckpoint(t *testing.T) {
 	readCheckpoint(replayed)
 }
 
+func TestICKPPreservesTableIDHistoryWhileGCKPIntentIsPending(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx, cancel := context.WithTimeout(context.Background(), testutil.TestCheckpointTimeout)
+	t.Cleanup(cancel)
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	t.Cleanup(func() {
+		require.NoError(t, tae.Close())
+	})
+
+	schema := catalog.MockSchemaAll(2, 1)
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 4)
+	t.Cleanup(bat.Close)
+	tae.CreateRelAndAppend2(bat, true)
+
+	require.NoError(t, tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now()))
+	firstICKP := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	require.NotNil(t, firstICKP)
+	require.True(t, firstICKP.IsFinished())
+
+	require.True(t, fault.Enable())
+	t.Cleanup(func() {
+		require.True(t, fault.Disable())
+	})
+
+	rmWait, err := objectio.InjectWait(objectio.FJ_GCKPWaitAfterIntent)
+	require.NoError(t, err)
+	t.Cleanup(func() { rmWait() })
+
+	waiterProbe := t.Name() + "/gckp-waiters"
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, waiterProbe, ":::", "getwaiters", 0,
+		objectio.FJ_GCKPWaitAfterIntent, false,
+	))
+	t.Cleanup(func() {
+		_, _ = fault.RemoveFaultPoint(context.Background(), waiterProbe)
+	})
+
+	notify := t.Name() + "/gckp-notify"
+	rmNotify, err := objectio.InjectNotify(notify, objectio.FJ_GCKPWaitAfterIntent)
+	require.NoError(t, err)
+	t.Cleanup(func() { rmNotify() })
+
+	gckpErrC := make(chan error, 1)
+	gckpDone := false
+	go func() {
+		gckpErrC <- tae.DB.ForceGlobalCheckpoint(ctx, firstICKP.GetEnd(), 0)
+	}()
+	t.Cleanup(func() {
+		if gckpDone {
+			return
+		}
+		objectio.NotifyInjected(notify)
+		select {
+		case <-gckpErrC:
+		case <-time.After(testutil.TestCheckpointTimeout):
+			t.Errorf("pending global checkpoint did not terminate during cleanup")
+		}
+	})
+
+	// Observe the actual waiter: the GCKP intent is now published, while its
+	// table-ID location is intentionally still unset.
+	require.Eventually(t, func() bool {
+		waiters, _, ok := fault.TriggerFault(waiterProbe)
+		return ok && waiters == 1
+	}, testutil.TestCheckpointTimeout, 10*time.Millisecond)
+
+	secondBat := catalog.MockBatch(schema, 4)
+	for i := 0; i < secondBat.Length(); i++ {
+		secondBat.Vecs[1].Update(i, int16(i+10), false)
+	}
+	t.Cleanup(secondBat.Close)
+	secondCommit := testutil.AppendWithCommitTS(
+		t, 0, tae.DB, testutil.DefaultTestDB, schema.Name, secondBat,
+	)
+	require.NoError(t, tae.DB.ForceCheckpoint(ctx, secondCommit))
+	secondICKP := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	require.NotNil(t, secondICKP)
+	require.NotSame(t, firstICKP, secondICKP)
+	require.True(t, secondICKP.IsFinished())
+
+	historyStart, _, historyKnown, err := logtail.ReadTableIDHistoryRange(
+		ctx,
+		secondICKP.GetTableIDLocation(),
+		common.CheckpointAllocator,
+		tae.Runtime.Fs,
+	)
+	require.NoError(t, err)
+	require.True(t, historyKnown)
+	requiredStart := types.BuildTS(
+		secondICKP.GetEnd().Physical()-opts.CheckpointCfg.TableIDHistoryDuration.Nanoseconds(),
+		0,
+	)
+	require.False(t, historyStart.GT(&requiredStart),
+		"ICKP history starts at %s, after required boundary %s",
+		historyStart.ToString(), requiredStart.ToString())
+
+	objectio.NotifyInjected(notify)
+	select {
+	case err = <-gckpErrC:
+		require.NoError(t, err)
+		gckpDone = true
+	case <-ctx.Done():
+		t.Fatalf("pending global checkpoint did not finish: %v", context.Cause(ctx))
+	}
+
+	// Remove the barrier before proving that the preserved history can be used
+	// to publish the following GCKP.
+	rmWait()
+	rmWait = func() {}
+	rmNotify()
+	rmNotify = func() {}
+	require.NoError(t, tae.DB.ForceGlobalCheckpoint(ctx, secondICKP.GetEnd(), 0))
+	global := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+	require.NotNil(t, global)
+	globalEnd := global.GetEnd()
+	secondICKPEnd := secondICKP.GetEnd()
+	require.True(t, globalEnd.GT(&secondICKPEnd))
+}
+
 func TestDelete4(t *testing.T) {
 	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
@@ -14346,8 +14468,14 @@ func TestGlobalCheckpointFailsClosedWithoutTableIDBatch(t *testing.T) {
 	require.NotNil(t, replayed)
 	require.Equal(t, predecessorEnd, replayed.GetEnd())
 	// A legacy checkpoint replays with no table-ID index. Clear the fixture's
-	// modern metadata to exercise the same production fallback after restart.
+	// modern metadata and retire its covered ICKP to reproduce the durable
+	// global-only state produced by checkpoint GC.
 	replayed.SetTableIDLocation(nil)
+	require.NoError(t, tae.BGCheckpointRunner.GCByTS(ctx, tae.TxnMgr.Now()))
+	require.Eventually(t, func() bool {
+		return tae.BGCheckpointRunner.MaxIncrementalCheckpoint() == nil &&
+			!tae.BGCheckpointRunner.GCNeeded()
+	}, testutil.TestCheckpointTimeout, 10*time.Millisecond)
 	assertProductionFallbackSource()
 
 	// Missing history is recoverable without trusting the legacy checkpoint:

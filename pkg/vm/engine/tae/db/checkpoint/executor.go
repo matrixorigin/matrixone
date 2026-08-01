@@ -118,7 +118,7 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	}
 
 	predecessorTableIDLocation := predecessor.GetTableIDLocation()
-	historyStart, _, historyKnown, historyErr := logtail.ReadTableIDHistoryRange(
+	historyStart, historyEnd, historyKnown, historyErr := logtail.ReadTableIDHistoryRange(
 		job.executor.ctx,
 		predecessorTableIDLocation,
 		common.CheckpointAllocator,
@@ -133,11 +133,16 @@ func (job *checkpointJob) doGlobalCheckpoint(
 		end.Physical()-job.executor.cfg.TableIDHistoryDuration.Nanoseconds(),
 		0,
 	)
-	if !historyKnown || historyStart.GT(&requiredHistoryStart) {
+	// A GCKP's endpoint is the successor of the last ICKP timestamp it
+	// incorporates, so an inherited index only needs to prove history through
+	// the predecessor boundary immediately before end.
+	requiredHistoryEnd := end.Prev()
+	if !historyKnown || historyStart.GT(&requiredHistoryStart) || historyEnd.LT(&requiredHistoryEnd) {
 		errPhase = "validate-table-id-history"
 		err = moerr.NewInternalErrorNoCtxf(
-			"global checkpoint table-ID history is incomplete: covered from %s, required from %s",
-			historyStart.ToString(), requiredHistoryStart.ToString(),
+			"global checkpoint table-ID history is incomplete: covered %s-%s, required %s-%s",
+			historyStart.ToString(), historyEnd.ToString(),
+			requiredHistoryStart.ToString(), requiredHistoryEnd.ToString(),
 		)
 		return
 	}
@@ -146,6 +151,10 @@ func (job *checkpointJob) doGlobalCheckpoint(
 		err = ErrBadIntent
 		return
 	}
+	// The intent is deliberately visible to status and rollback paths before
+	// its durable metadata has been written. Consumers must ignore that pending
+	// state; this barrier makes the publication boundary deterministic in tests.
+	objectio.WaitInjectedCtx(job.executor.ctx, objectio.FJ_GCKPWaitAfterIntent)
 
 	var data *logtail.CheckpointData_V2
 	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval, runner.rt.Fs)
@@ -210,6 +219,84 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	return
 }
 
+// resolveICKPTableIDPredecessor pins the newest authoritative, finished
+// checkpoint that immediately precedes entry. A GCKP intent is published before
+// its table-ID index is durable, so it must never participate in this handoff.
+//
+// A current-format finished GCKP is preferred when its index contains a
+// coverage marker. Legacy GCKPs can legitimately have no table-ID index; in
+// that case a still-available finished ICKP is the authoritative source. If no
+// such ICKP remains, returning an empty location starts a new, explicitly
+// partial history range. doGlobalCheckpoint keeps publication fail-closed until
+// that range spans the configured history window.
+func (job *checkpointJob) resolveICKPTableIDPredecessor(
+	entry *CheckpointEntry,
+) (objectio.LocationSlice, error) {
+	runner := job.executor.runner
+	global := runner.store.MaxGlobalCheckpoint()
+	var globalEnd types.TS
+	var globalLocation objectio.LocationSlice
+	if global != nil {
+		globalEnd = global.GetEnd()
+		globalLocation = global.GetTableIDLocation()
+	}
+	globalMatches := global != nil && globalEnd.EQ(&entry.start)
+	var globalHistoryErr error
+	if globalMatches {
+		if globalLocation.Len() > 0 {
+			_, historyEnd, known, err := logtail.ReadTableIDHistoryRange(
+				job.executor.ctx,
+				globalLocation,
+				common.CheckpointAllocator,
+				runner.rt.Fs,
+			)
+			requiredEnd := entry.start.Prev()
+			switch {
+			case err != nil:
+				globalHistoryErr = err
+			case known && !historyEnd.LT(&requiredEnd):
+				return globalLocation, nil
+			default:
+				globalHistoryErr = moerr.NewInternalErrorNoCtxf(
+					"global checkpoint %s has no authoritative table-ID history through %s",
+					globalEnd.ToString(), requiredEnd.ToString(),
+				)
+			}
+		}
+	}
+
+	if !entry.start.IsEmpty() {
+		incremental := runner.store.MaxIncrementalCheckpoint()
+		predecessorEnd := entry.start.Prev()
+		if incremental != nil {
+			incrementalEnd := incremental.GetEnd()
+			if incrementalEnd.EQ(&predecessorEnd) {
+				// SyncTableIDBatch validates this index's continuity while it is
+				// already streaming the rows. Keeping that check in the merge path
+				// avoids reading every ICKP index twice.
+				return incremental.GetTableIDLocation(), nil
+			}
+		}
+	}
+
+	if globalMatches {
+		// Empty table-ID metadata identifies a legacy checkpoint. Recover by
+		// beginning a new partial range; never convert unreadable or malformed
+		// non-empty metadata into an apparently valid range.
+		if globalLocation.Len() == 0 {
+			return nil, nil
+		}
+		return nil, globalHistoryErr
+	}
+	if entry.start.IsEmpty() {
+		return nil, nil
+	}
+	return nil, moerr.NewInternalErrorNoCtxf(
+		"incremental checkpoint %s has no finished checkpoint predecessor",
+		entry.String(),
+	)
+}
+
 func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	if job.runICKPFunc != nil {
 		return job.runICKPFunc(ctx, job.executor.runner)
@@ -270,6 +357,13 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		}
 	}()
 
+	preTableIDLocation, err := job.resolveICKPTableIDPredecessor(entry)
+	if err != nil {
+		errPhase = "resolve-table-id-predecessor"
+		rollback()
+		return err
+	}
+
 	var files []string
 	var file string
 	if fields, files, err = job.executor.doIncrementalCheckpoint(entry); err != nil {
@@ -278,29 +372,6 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		return
 	}
 
-	gckps := runner.store.GetAllGlobalCheckpoints()
-	var prevCkp *CheckpointEntry
-	for _, ckp := range gckps {
-		if ckp.end.EQ(&entry.start) {
-			prevCkp = ckp
-			break
-		}
-	}
-
-	if prevCkp == nil {
-		ickps := runner.store.GetAllIncrementalCheckpoints()
-		prevEnd := entry.start.Prev()
-		for _, ckp := range ickps {
-			if ckp.end.EQ(&prevEnd) {
-				prevCkp = ckp
-				break
-			}
-		}
-	}
-	var preTableIDLocation objectio.LocationSlice
-	if prevCkp != nil {
-		preTableIDLocation = prevCkp.GetTableIDLocation()
-	}
 	tableIDLocation, err := logtail.SyncTableIDBatch(
 		job.executor.ctx,
 		entry.start,

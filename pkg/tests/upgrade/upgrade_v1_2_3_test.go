@@ -28,8 +28,10 @@ import (
 
 func Test_UpgradeEntry(t *testing.T) {
 	c, err := embed.StartTestCluster(embed.WithCNCount(1))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, c.Close()) })
 
 	svc, err := c.GetCNService(0)
 	require.NoError(t, err)

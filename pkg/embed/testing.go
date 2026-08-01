@@ -44,6 +44,7 @@ type SharedTestCluster struct {
 	once    sync.Once
 	cluster Cluster
 	err     error
+	closed  bool
 }
 
 type testReporter interface {
@@ -59,22 +60,48 @@ func (c *SharedTestCluster) Run(
 	t.Helper()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		t.Fatalf("shared cluster is closed")
+		return
+	}
 
 	c.once.Do(func() {
 		c.cluster, c.err = init()
-		if c.err != nil && c.cluster != nil {
-			c.err = errors.Join(c.err, c.cluster.Close())
-			c.cluster = nil
-		}
 		if c.err == nil && c.cluster == nil {
 			c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
 		}
 	})
+	if c.err != nil && c.cluster != nil {
+		cleanupErr := c.cluster.Close()
+		if cleanupErr == nil {
+			c.cluster = nil
+		} else {
+			c.err = errors.Join(c.err, cleanupErr)
+		}
+	}
 	if c.err != nil {
 		t.Fatalf("failed to initialize shared cluster: %v", c.err)
 		return
 	}
 	fn(c.cluster)
+}
+
+// Close releases the shared cluster or retries cleanup retained from a failed
+// initialization. Ownership is cleared only after the underlying Close has
+// completed successfully.
+func (c *SharedTestCluster) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cluster == nil {
+		c.closed = true
+		return nil
+	}
+	if err := c.cluster.Close(); err != nil {
+		return err
+	}
+	c.cluster = nil
+	c.closed = true
+	return nil
 }
 
 func init() {
@@ -83,15 +110,16 @@ func init() {
 
 // StartTestCluster constructs and starts an embedded cluster with test mode
 // enabled. If startup fails, it closes the partially started cluster before
-// returning the original error.
+// returning the original error. If rollback itself fails, the returned cluster
+// is non-nil solely so the caller can retain it and retry Close.
 func StartTestCluster(opts ...Option) (Cluster, error) {
 	opts = append([]Option{WithTesting()}, opts...)
 	c, err := NewCluster(opts...)
 	if err != nil {
-		return nil, err
+		return cleanupClusterOnError(c, err)
 	}
 	if err := c.Start(); err != nil {
-		return nil, errors.Join(err, c.Close())
+		return cleanupClusterOnError(c, err)
 	}
 	return c, nil
 }

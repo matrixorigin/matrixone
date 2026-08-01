@@ -91,10 +91,10 @@ func TestBasicCluster(t *testing.T) {
 			},
 		),
 	)
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
 
 	validCNCanWork(t, c, 0)
 	validCNCanWork(t, c, 1)
@@ -113,12 +113,14 @@ func TestWithHAKeeperHeartbeatTimeout(t *testing.T) {
 		WithCNCount(2),
 		WithHAKeeperHeartbeatTimeout(timeout),
 	)
+	if clusterValue != nil {
+		t.Cleanup(func() {
+			require.NoError(t, clusterValue.Close())
+			require.NoError(t, os.RemoveAll(clusterValue.(*cluster).options.dataPath))
+		})
+	}
 	require.NoError(t, err)
 	c := clusterValue.(*cluster)
-	defer func() {
-		require.NoError(t, c.Close())
-		require.NoError(t, os.RemoveAll(c.options.dataPath))
-	}()
 
 	for _, svc := range c.services {
 		cfg := svc.GetServiceConfig()
@@ -144,11 +146,11 @@ func TestHAKeeperHeartbeatTimeoutHonorsLegacyTNConfig(t *testing.T) {
 
 func TestSingleCNCluster(t *testing.T) {
 	c, err := NewCluster(WithTesting())
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
 	require.Error(t, c.Start())
 
 	validCNCanWork(t, c, 0)
@@ -162,10 +164,10 @@ func TestSingleCNCluster(t *testing.T) {
 
 func TestClusterCanStartNewCNServices(t *testing.T) {
 	c, err := StartTestCluster(WithCNCount(3))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
 
 	validCNCanWork(t, c, 0)
 	validCNCanWork(t, c, 1)
@@ -178,10 +180,10 @@ func TestClusterCanStartNewCNServices(t *testing.T) {
 func TestMultiClusterCanWork(t *testing.T) {
 	new := func() *cluster {
 		value, err := StartTestCluster(WithCNCount(1))
+		if value != nil {
+			t.Cleanup(func() { require.NoError(t, value.Close()) })
+		}
 		require.NoError(t, err)
-		t.Cleanup(func() {
-			require.NoError(t, value.Close())
-		})
 		return value.(*cluster)
 	}
 
@@ -202,10 +204,10 @@ func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
 	)
 
 	c, err := StartTestCluster(WithCNCount(1))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
 
 	validCNCanWork(t, c, 0)
 }
@@ -447,6 +449,9 @@ func TestNewClusterRejectsPortRangeExhaustion(t *testing.T) {
 	maxCN := (capacity - clusterInfrastructurePortBaseCount - tnPortBaseCount) / cnPortBaseCount
 
 	value, err := NewCluster(WithCNCount(int(maxCN + 1)))
+	if value != nil {
+		t.Cleanup(func() { require.NoError(t, value.Close()) })
+	}
 	require.Nil(t, value)
 	require.ErrorContains(t, err, "exceeds embedded cluster port lease capacity")
 }
@@ -486,6 +491,9 @@ func TestStartNewCNServiceRejectsCapacityWithoutMutatingTopology(t *testing.T) {
 
 func TestClusterRejectsNegativeCNCounts(t *testing.T) {
 	value, err := NewCluster(WithCNCount(-1))
+	if value != nil {
+		t.Cleanup(func() { require.NoError(t, value.Close()) })
+	}
 	require.Nil(t, value)
 	require.ErrorContains(t, err, "CN count cannot be negative")
 
@@ -525,9 +533,11 @@ func TestClusterStartupLeaseIsExclusive(t *testing.T) {
 
 func TestWithTestingUsesCoherentHAKeeperTimeouts(t *testing.T) {
 	clusterValue, err := NewCluster(WithTesting())
+	if clusterValue != nil {
+		t.Cleanup(func() { require.NoError(t, clusterValue.Close()) })
+	}
 	require.NoError(t, err)
 	c := clusterValue.(*cluster)
-	t.Cleanup(func() { require.NoError(t, c.Close()) })
 
 	for _, svc := range c.services {
 		cfg := svc.GetServiceConfig()
@@ -826,6 +836,9 @@ func TestRollbackNewServicesDropsTopologyAfterCloseError(t *testing.T) {
 	closeErr := errors.New("close new CN")
 	newService := &closeTrackingService{closeErr: closeErr}
 	clusterValue, err := NewCluster(WithCNCount(1))
+	if clusterValue != nil {
+		t.Cleanup(func() { require.NoError(t, clusterValue.Close()) })
+	}
 	require.NoError(t, err)
 	c := clusterValue.(*cluster)
 	c.state = started

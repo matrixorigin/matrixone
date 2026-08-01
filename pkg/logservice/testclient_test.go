@@ -91,13 +91,16 @@ func TestNewTestServicesUseIndependentPorts(t *testing.T) {
 	require.NotEqual(t, ccfg1.ServiceAddresses, ccfg2.ServiceAddresses)
 }
 
-func TestNewTestServiceRetriesGossipPortCollisionWithStableIdentity(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+func TestNewTestServiceRetriesRaftPortCollisionWithStableIdentity(t *testing.T) {
+	// Reserve the exact endpoint that Dragonboat will bind. This exercises the
+	// address-collision retry contract without depending on memberlist's
+	// wildcard binding and self-join timing, which differ across platforms.
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, listener.Close())
 	})
-	occupiedPort := listener.Addr().(*net.TCPAddr).Port
+	occupiedAddress := listener.Addr().String()
 
 	baseGenerator := newTestServiceConfigGenerator(vfs.NewStrictMem())
 	var generatedIDs []string
@@ -107,8 +110,7 @@ func TestNewTestServiceRetriesGossipPortCollisionWithStableIdentity(t *testing.T
 		generatedIDs = append(generatedIDs, cfg.UUID)
 		attempts++
 		if attempts == 1 {
-			cfg.GossipPort = occupiedPort
-			cfg.GossipSeedAddresses = []string{getTestGossipAddress(occupiedPort)}
+			cfg.RaftAddress = occupiedAddress
 		}
 		return cfg
 	})

@@ -894,6 +894,17 @@ func SyncTableIDBatch(
 	if hasPreviousHistory && tableBatchStart.GT(&tableBatchEnd) {
 		hasPreviousHistory = false
 	}
+	if hasPreviousHistory && !start.IsEmpty() {
+		// Carrying an index across a gap would make the new coverage row claim
+		// history that neither the predecessor index nor this checkpoint
+		// contains. Reject that authority while the predecessor is already being
+		// streamed; the durable checkpoints remain available to the fallback
+		// reader until a continuous index is rebuilt.
+		requiredPreviousEnd := start.Prev()
+		if tableBatchEnd.LT(&requiredPreviousEnd) {
+			hasPreviousHistory = false
+		}
+	}
 	if !ckpLocation.IsEmpty() {
 		tableBatchEnd = end
 	}

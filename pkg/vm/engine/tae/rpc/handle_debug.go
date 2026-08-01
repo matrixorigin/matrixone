@@ -258,8 +258,9 @@ func getChangedListFromCheckpoints(
 	}
 
 	tableIDLocation := ckp.GetTableIDLocation()
+	checkpointCoverageEnd := ckp.GetEnd().Prev()
 	accIds, dbIds, tblIds, oldest, ok := tryGetChangedListFromTableIDBatch(
-		ctx, from, to, tableIDLocation, h, isTheTblIWantWithTimeRange,
+		ctx, from, checkpointCoverageEnd, tableIDLocation, h, isTheTblIWantWithTimeRange,
 	)
 	// for ckp with old version,
 	// tableIDLocation is empty,
@@ -355,7 +356,7 @@ func getChangedListFromCheckpoints(
 func tryGetChangedListFromTableIDBatch(
 	ctx context.Context,
 	from types.TS,
-	to types.TS,
+	requiredHistoryEnd types.TS,
 	tableIDLocations objectio.LocationSlice,
 	h *Handle,
 	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
@@ -417,7 +418,7 @@ func tryGetChangedListFromTableIDBatch(
 			consumeFn(bat)
 		}()
 	}
-	if !ok || oldest.GT(&historyEnd) || oldest.GT(&from) {
+	if !ok || oldest.GT(&historyEnd) || oldest.GT(&from) || historyEnd.LT(&requiredHistoryEnd) {
 		return nil, nil, nil, types.MaxTs(), false
 	}
 	return

@@ -945,10 +945,10 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 			},
 		),
 	)
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
 
 	op, err := c.GetCNService(0)
 	require.NoError(t, err)

@@ -120,6 +120,10 @@ func TestTryGetChangedListFromTableIDBatchReadsCompleteIndex(t *testing.T) {
 		context.Background(), start.Prev(), end, locations, h.Handle, acceptAll,
 	)
 	require.False(t, ok, "an index must not be trusted before its declared history range")
+	_, _, _, _, ok = tryGetChangedListFromTableIDBatch(
+		context.Background(), start, end.Next(), locations, h.Handle, acceptAll,
+	)
+	require.False(t, ok, "an index must not be trusted past its declared history range")
 
 	accIDs, dbIDs, tableIDs, oldest, ok := tryGetChangedListFromTableIDBatch(
 		context.Background(), start, end, locations, h.Handle, acceptAll,

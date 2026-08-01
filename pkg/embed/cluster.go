@@ -78,6 +78,7 @@ type cluster struct {
 	portLease      *clusterPortLease
 	portLeaseBase  uint64
 	portLeaseNext  uint64
+	startupLease   *flock.Flock
 
 	options struct {
 		dataPath         string
@@ -112,13 +113,28 @@ func NewCluster(
 	}
 
 	if err := c.initConfigs(); err != nil {
-		return nil, errors.Join(err, c.releasePortLeaseLocked())
+		return cleanupClusterOnError(c, err)
 	}
 
 	if err := c.createServiceOperators(0); err != nil {
-		return nil, errors.Join(err, c.releasePortLeaseLocked())
+		return cleanupClusterOnError(c, err)
 	}
 	return c, nil
+}
+
+// cleanupClusterOnError preserves the cleanup owner when rollback is not yet
+// complete. A non-nil cluster returned with an error is not usable, but its
+// caller must retain it and retry Close. Returning nil is safe only after Close
+// has proved that every service and both cluster leases were released.
+func cleanupClusterOnError(c Cluster, cause error) (Cluster, error) {
+	if c == nil {
+		return nil, cause
+	}
+	cleanupErr := c.Close()
+	if cleanupErr != nil {
+		return c, errors.Join(cause, cleanupErr)
+	}
+	return nil, cause
 }
 
 func (c *cluster) ID() uint64 {
@@ -131,6 +147,9 @@ func (c *cluster) Start() (err error) {
 
 	if c.state == started {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
+	}
+	if err = c.releaseStartupLeaseLocked(); err != nil {
+		return err
 	}
 	if err = c.ensurePortLeaseLocked(); err != nil {
 		return err
@@ -151,8 +170,9 @@ func (c *cluster) Start() (err error) {
 		if acquireErr != nil {
 			return acquireErr
 		}
+		c.startupLease = startupLease
 		defer func() {
-			err = errors.Join(err, startupLease.Close())
+			err = errors.Join(err, c.releaseStartupLeaseLocked())
 		}()
 	}
 
@@ -204,7 +224,10 @@ func (c *cluster) Close() error {
 	c.Lock()
 	defer c.Unlock()
 
-	err := c.closeServicesLocked()
+	err := errors.Join(
+		c.closeServicesLocked(),
+		c.releaseStartupLeaseLocked(),
+	)
 	if err == nil {
 		err = c.releasePortLeaseLocked()
 	}
@@ -717,6 +740,17 @@ func (c *cluster) releasePortLeaseLocked() error {
 		c.portLease = nil
 	}
 	return err
+}
+
+func (c *cluster) releaseStartupLeaseLocked() error {
+	if c.startupLease == nil {
+		return nil
+	}
+	if err := c.startupLease.Close(); err != nil {
+		return err
+	}
+	c.startupLease = nil
+	return nil
 }
 
 func genConfig(
