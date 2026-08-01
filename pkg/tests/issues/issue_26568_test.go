@@ -132,6 +132,11 @@ func runIssue26568ExplainAttack(
 
 	issue26568Exec(t, ctx, conn, "set role moadmin")
 	issue26568Exec(t, ctx, conn, "use `"+dbName+"`")
+	// SET optimizer_hints also updates the CN service runtime, so closing this
+	// session is not enough to isolate the next test that reuses the cluster.
+	// Register cleanup before the mutation and use a fresh connection/context so
+	// restoration does not depend on the attack connection remaining healthy.
+	defer resetOptimizerHintsOnCN(t, port)
 	issue26568Exec(t, ctx, conn,
 		fmt.Sprintf(`set session optimizer_hints = "%s"`, attack.hint))
 	issue26568Exec(t, ctx, conn, "set session join_spill_mem = 1073741824")

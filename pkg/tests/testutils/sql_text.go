@@ -17,8 +17,9 @@ package testutils
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // SQLTextQueryer is the subset of database/sql used by text-returning SQL
@@ -53,7 +54,7 @@ func QueryTextResult(
 		return TextQueryResult{}, err
 	}
 	if len(columns) != 1 {
-		return TextQueryResult{}, fmt.Errorf(
+		return TextQueryResult{}, moerr.NewInternalErrorf(ctx,
 			"expected one text column, got %d columns", len(columns))
 	}
 

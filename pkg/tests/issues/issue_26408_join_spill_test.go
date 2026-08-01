@@ -86,6 +86,7 @@ func TestIssue26408JoinSpillSQLRegression(t *testing.T) {
 		}()
 		execJoinSpillSQL(t, ctx, conn, "use `"+dbName+"`")
 		execJoinSpillSQL(t, ctx, conn, "set @@max_dop = 1")
+		defer resetOptimizerHintsOnCN(t, port)
 		execJoinSpillSQL(t, ctx, conn, `set session optimizer_hints = "forceOneCN=1"`)
 
 		execJoinSpillSQL(t, ctx, conn, "create table probe_keys (k bigint not null, payload bigint not null) cluster by k")
