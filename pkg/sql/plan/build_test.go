@@ -3215,8 +3215,7 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 }
 
 func TestInsertAddsCheckConstraintFilter(t *testing.T) {
-	build := func(sql string) *plan.Query {
-		mock := NewMockOptimizer(true)
+	addDeptCheck := func(mock *MockOptimizer) {
 		tableDef := mock.ctxt.tables["dept"]
 		colPos := tableDef.Name2ColIndex["deptno"]
 		colExpr := &plan.Expr{
@@ -3235,6 +3234,11 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 			Name:  "dept_chk_1",
 			Check: checkExpr,
 		}}
+	}
+
+	build := func(sql string) *plan.Query {
+		mock := NewMockOptimizer(true)
+		addDeptCheck(mock)
 
 		stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 		require.NoError(t, err)
@@ -3258,6 +3262,25 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 			}
 		}
 		require.True(t, found)
+	})
+
+	t.Run("replace rejects mixed-version cluster", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addDeptCheck(mock)
+		proc := testutil.NewProc(nil)
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion6)
+		mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+		stmt, err := mysql.ParseOne(
+			t.Context(),
+			"replace into dept values (1, 'Sales', 'NY')",
+			1,
+		)
+		require.NoError(t, err)
+		_, err = mock.Optimize(stmt)
+		require.ErrorContains(t, err, "CHECK constraints require all CNs to support protocol version 7")
 	})
 
 	t.Run("insert ignore filters invalid rows", func(t *testing.T) {
