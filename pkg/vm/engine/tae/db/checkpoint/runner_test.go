@@ -809,6 +809,55 @@ func TestRunnerStoreMaxCheckpoint(t *testing.T) {
 	assert.True(t, store.AddICKPFinishedEntry(newIncremental))
 	assert.Same(t, newIncremental, store.MaxCheckpoint())
 }
+
+func TestForceGCKPRebuildsGlobalForRequestedRetention(t *testing.T) {
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
+	defer r.StopExecutor(ErrStopRunner)
+
+	existingEnd := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	existing := NewCheckpointEntry("", types.TS{}, existingEnd, ET_Global)
+	existing.SetState(ST_Finished)
+	assert.True(t, r.store.AddGCKPFinishedEntry(existing))
+
+	requestedRetention := 2 * time.Hour
+	executor := r.executor.Load()
+	var executed *gckpContext
+	executor.runGCKPFunc = func(_ context.Context, request *gckpContext, r *runner) error {
+		executed = request
+		entry := NewCheckpointEntry("", types.TS{}, request.end.Next(), ET_Global)
+		entry.SetState(ST_Finished)
+		r.store.AddGCKPFinishedEntry(entry)
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	assert.NoError(t, r.ForceGCKP(ctx, existingEnd, requestedRetention))
+	if assert.NotNil(t, executed) {
+		assert.Equal(t, requestedRetention, executed.histroyRetention)
+		assert.Same(t, existing, executed.predecessor)
+	}
+	assert.NotSame(t, existing, r.store.MaxGlobalCheckpoint())
+}
+
+func TestForceGCKPReportsGlobalRebuildFailure(t *testing.T) {
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
+	defer r.StopExecutor(ErrStopRunner)
+
+	existingEnd := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	existing := NewCheckpointEntry("", types.TS{}, existingEnd, ET_Global)
+	existing.SetState(ST_Finished)
+	assert.True(t, r.store.AddGCKPFinishedEntry(existing))
+	r.executor.Load().runGCKPFunc = func(context.Context, *gckpContext, *runner) error {
+		return ErrBadIntent
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	assert.ErrorIs(t, r.ForceGCKP(ctx, existingEnd, 2*time.Hour), ErrBadIntent)
+	assert.Same(t, existing, r.store.MaxGlobalCheckpoint())
+}
+
 func Test_Executor1(t *testing.T) {
 	var (
 		gctx1, gctx2 gckpContext
@@ -824,7 +873,7 @@ func Test_Executor1(t *testing.T) {
 	gctx1.Merge(&gctx2)
 	assert.True(t, gctx1.force)
 	assert.Equal(t, gctx2.end, gctx1.end)
-	assert.Equal(t, gctx2.histroyRetention, gctx1.histroyRetention)
+	assert.Equal(t, time.Duration(2), gctx1.histroyRetention)
 	assert.Equal(t, gctx2.ckpLSN, gctx1.ckpLSN)
 	assert.Equal(t, gctx2.truncateLSN, gctx1.truncateLSN)
 	assert.Same(t, gctx2.predecessor, gctx1.predecessor)

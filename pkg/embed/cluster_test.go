@@ -423,7 +423,8 @@ func TestClusterPortLeasesAreExclusive(t *testing.T) {
 		require.GreaterOrEqual(t, first.base-second.base, portLeaseSpan)
 	}
 
-	firstPort := firstCluster.nextBasePort()
+	firstPort, err := firstCluster.nextBasePort()
+	require.NoError(t, err)
 	require.Greater(t, firstPort, int(first.base))
 	require.Less(t, firstPort, int(first.base+portLeaseSpan))
 
@@ -434,8 +435,65 @@ func TestClusterPortLeasesAreExclusive(t *testing.T) {
 	require.Error(t, firstCluster.ensurePortLeaseLocked())
 	require.NoError(t, contender.lock.Close())
 	require.NoError(t, firstCluster.ensurePortLeaseLocked())
-	require.Equal(t, firstPort+int(basePortStep), firstCluster.nextBasePort())
+	nextPort, err := firstCluster.nextBasePort()
+	require.NoError(t, err)
+	require.Equal(t, firstPort+int(basePortStep), nextPort)
 	require.NoError(t, firstCluster.releasePortLeaseLocked())
+}
+
+func TestNewClusterRejectsPortRangeExhaustion(t *testing.T) {
+	capacity, err := portBaseCapacity()
+	require.NoError(t, err)
+	maxCN := (capacity - clusterInfrastructurePortBaseCount - tnPortBaseCount) / cnPortBaseCount
+
+	value, err := NewCluster(WithCNCount(int(maxCN + 1)))
+	require.Nil(t, value)
+	require.ErrorContains(t, err, "exceeds embedded cluster port lease capacity")
+}
+
+func TestNextBasePortExhaustionDoesNotConsumeCapacity(t *testing.T) {
+	lease := &clusterPortLease{base: minPort}
+	lastValid := lease.base + portLeaseSpan - basePortStep
+	lease.next.Store(lastValid)
+	c := &cluster{id: 1, portLease: lease, portLeaseNext: lastValid}
+
+	_, err := c.nextBasePort()
+	require.ErrorContains(t, err, "exhausted port range")
+	require.Equal(t, lastValid, lease.next.Load())
+	require.Equal(t, lastValid, c.portLeaseNext)
+}
+
+func TestStartNewCNServiceRejectsCapacityWithoutMutatingTopology(t *testing.T) {
+	lease := &clusterPortLease{base: minPort}
+	lastValid := lease.base + portLeaseSpan - basePortStep
+	lease.next.Store(lastValid)
+	c := &cluster{
+		id:            1,
+		state:         started,
+		portLease:     lease,
+		portLeaseBase: lease.base,
+		portLeaseNext: lastValid,
+	}
+	c.options.cn = 1
+
+	err := c.StartNewCNService(1)
+	require.ErrorContains(t, err, "port lease has capacity for 0")
+	require.Equal(t, 1, c.options.cn)
+	require.Empty(t, c.files)
+	require.Empty(t, c.services)
+	require.Equal(t, lastValid, lease.next.Load())
+}
+
+func TestClusterRejectsNegativeCNCounts(t *testing.T) {
+	value, err := NewCluster(WithCNCount(-1))
+	require.Nil(t, value)
+	require.ErrorContains(t, err, "CN count cannot be negative")
+
+	c := &cluster{state: started, portLease: &clusterPortLease{base: minPort}}
+	c.portLease.next.Store(minPort)
+	err = c.StartNewCNService(-1)
+	require.ErrorContains(t, err, "additional CN count cannot be negative")
+	require.Zero(t, c.options.cn)
 }
 
 func TestClusterStartupLeaseIsExclusive(t *testing.T) {

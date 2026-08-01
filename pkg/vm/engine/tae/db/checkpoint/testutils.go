@@ -124,13 +124,12 @@ func (r *runner) ForceGCKP(
 	maxEntry = r.store.MaxCheckpoint()
 
 	// ForceICKP may return after an automatic GCKP has already covered end and
-	// checkpoint GC has removed its incremental predecessor from the store. In
-	// that case the requested global checkpoint is already durable.
+	// checkpoint GC has removed its incremental predecessor from the store. The
+	// finished GCKP can still be used as the predecessor of a new GCKP, but it
+	// cannot satisfy this request by itself: checkpoint metadata does not prove
+	// which history retention was used to create it.
 	if maxEntry == nil || maxEntry.end.LT(&end) {
 		err = ErrPendingCheckpoint
-		return
-	}
-	if maxEntry.IsGlobal() {
 		return
 	}
 
@@ -141,69 +140,24 @@ func (r *runner) ForceGCKP(
 		truncateLSN:      maxEntry.truncateLSN,
 		ckpLSN:           maxEntry.ckpLSN,
 		predecessor:      maxEntry,
+		done:             make(chan error, 1),
 	}
 
 	if err = r.TryTriggerExecuteGCKP(request); err != nil {
 		return
 	}
 
-	var job *checkpointJob
-
-	var retryTimes int
-
-	wait := func() {
-		interval := time.Millisecond * 10 * time.Duration(retryTimes+1)
-		time.Sleep(interval)
-		if retryTimes < 10 {
-			retryTimes++
-		}
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 
-	for {
-		select {
-		case <-ctx.Done():
-			err = context.Cause(ctx)
-			return
-		case <-r.ctx.Done():
-			err = context.Cause(r.ctx)
-			return
-		default:
-		}
-
-		global := r.store.MaxGlobalCheckpoint()
-		// if the max global contains the end, quick return
-		if global != nil && global.IsFinished() && global.end.GE(&end) {
-			return
-		}
-
-		if job, err = r.getRunningCKPJob(true); err != nil {
-			return
-		}
-
-		// if there is no running job or the running job is not the right one
-		// try to trigger the global checkpoint and wait for the next round
-		if job == nil || job.gckpCtx.end.LT(&end) {
-			wait()
-			continue
-		}
-
-		// [job != nil && job.gckpCtx.end >= end]
-		// wait for the job to finish
-		select {
-		case <-ctx.Done():
-			err = context.Cause(ctx)
-			return
-		case <-r.ctx.Done():
-			err = context.Cause(r.ctx)
-			return
-		case <-job.WaitC():
-			err = job.Err()
-			return
-		}
+	select {
+	case <-ctx.Done():
+		err = context.Cause(ctx)
+	case <-r.ctx.Done():
+		err = context.Cause(r.ctx)
+	case err = <-request.done:
 	}
+	return
 }
 
 func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {

@@ -24,7 +24,7 @@ type templateArgs struct {
 	ID           uint64
 	DataDir      string
 	ServicePort  int
-	NextBasePort func() int
+	NextBasePort func() (int, error)
 }
 
 var (
@@ -152,10 +152,10 @@ unix-socket = "{{.DataDir}}/mysql{{.I}}.sock"
 `))
 )
 
-func genConfigText(template *template.Template, args templateArgs) string {
+func genConfigText(template *template.Template, args templateArgs) (string, error) {
 	buf := new(strings.Builder)
 	if err := template.Execute(buf, args); err != nil {
-		panic(err)
+		return "", err
 	}
-	return buf.String()
+	return buf.String(), nil
 }

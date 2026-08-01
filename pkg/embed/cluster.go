@@ -53,6 +53,10 @@ const (
 	clusterStartupLeaseFilename = "mo-test-cluster-start.lock"
 	clusterStartupLeaseTimeout  = 5 * time.Minute
 	clusterStartupLeaseRetry    = 50 * time.Millisecond
+
+	clusterInfrastructurePortBaseCount = uint64(3)
+	tnPortBaseCount                    = uint64(1)
+	cnPortBaseCount                    = uint64(2)
 )
 
 type clusterPortLease struct {
@@ -294,6 +298,9 @@ func (c *cluster) StartNewCNService(n int) error {
 	if err := c.retryPendingCleanupLocked(); err != nil {
 		return err
 	}
+	if err := c.validateAdditionalCNPortCapacityLocked(n); err != nil {
+		return err
+	}
 
 	serviceFrom := len(c.services)
 	cnFrom := c.options.cn
@@ -345,10 +352,14 @@ func (c *cluster) retryPendingCleanupLocked() error {
 }
 
 func (c *cluster) adjust() error {
-	createdDataPath := false
 	if c.options.cn == 0 {
 		c.options.cn = 1
 	}
+	if err := validateInitialCNPortCapacity(c.options.cn); err != nil {
+		return err
+	}
+
+	createdDataPath := false
 	if c.options.dataPath == "" {
 		dataPath, err := os.MkdirTemp(os.TempDir(), "mo-cluster-test-")
 		if err != nil {
@@ -368,9 +379,23 @@ func (c *cluster) adjust() error {
 	c.portLease = lease
 	c.portLeaseBase = lease.base
 	c.portLeaseNext = lease.base
-	c.ports.servicePort = c.nextBasePort()
-	c.ports.raftPort = c.nextBasePort()
-	c.ports.gossipPort = c.nextBasePort()
+	cleanup := func(cause error) error {
+		cause = errors.Join(cause, c.releasePortLeaseLocked())
+		if createdDataPath {
+			cause = errors.Join(cause, os.RemoveAll(c.options.dataPath))
+			c.options.dataPath = ""
+		}
+		return cause
+	}
+	if c.ports.servicePort, err = c.nextBasePort(); err != nil {
+		return cleanup(err)
+	}
+	if c.ports.raftPort, err = c.nextBasePort(); err != nil {
+		return cleanup(err)
+	}
+	if c.ports.gossipPort, err = c.nextBasePort(); err != nil {
+		return cleanup(err)
+	}
 	return nil
 }
 
@@ -454,19 +479,20 @@ func (c *cluster) initCNConfigs(from int) error {
 	for i := from; i < c.options.cn; i++ {
 		file := filepath.Join(c.options.dataPath, fmt.Sprintf("cn-%d.toml", i))
 		c.files = append(c.files, file)
-		err := genConfig(
-			file,
-			genConfigText(
-				cnConfig,
-				templateArgs{
-					I:            i,
-					ID:           c.id,
-					DataDir:      c.options.dataPath,
-					ServicePort:  c.ports.servicePort,
-					NextBasePort: c.nextBasePort,
-				},
-			),
+		text, err := genConfigText(
+			cnConfig,
+			templateArgs{
+				I:            i,
+				ID:           c.id,
+				DataDir:      c.options.dataPath,
+				ServicePort:  c.ports.servicePort,
+				NextBasePort: c.nextBasePort,
+			},
 		)
+		if err != nil {
+			return err
+		}
+		err = genConfig(file, text)
 		if err != nil {
 			return err
 		}
@@ -477,35 +503,37 @@ func (c *cluster) initCNConfigs(from int) error {
 func (c *cluster) initLogServiceConfig() error {
 	file := filepath.Join(c.options.dataPath, "log.toml")
 	c.files = append(c.files, file)
-	return genConfig(
-		file,
-		genConfigText(
-			logConfig,
-			templateArgs{
-				ID:           c.id,
-				DataDir:      c.options.dataPath,
-				ServicePort:  c.ports.servicePort,
-				NextBasePort: c.nextBasePort,
-			},
-		),
+	text, err := genConfigText(
+		logConfig,
+		templateArgs{
+			ID:           c.id,
+			DataDir:      c.options.dataPath,
+			ServicePort:  c.ports.servicePort,
+			NextBasePort: c.nextBasePort,
+		},
 	)
+	if err != nil {
+		return err
+	}
+	return genConfig(file, text)
 }
 
 func (c *cluster) initTNServiceConfig() error {
 	file := filepath.Join(c.options.dataPath, "tn.toml")
 	c.files = append(c.files, file)
-	return genConfig(
-		file,
-		genConfigText(
-			tnConfig,
-			templateArgs{
-				ID:           c.id,
-				DataDir:      c.options.dataPath,
-				ServicePort:  c.ports.servicePort,
-				NextBasePort: c.nextBasePort,
-			},
-		),
+	text, err := genConfigText(
+		tnConfig,
+		templateArgs{
+			ID:           c.id,
+			DataDir:      c.options.dataPath,
+			ServicePort:  c.ports.servicePort,
+			NextBasePort: c.nextBasePort,
+		},
 	)
+	if err != nil {
+		return err
+	}
+	return genConfig(file, text)
 }
 
 func acquireClusterPortLease() (*clusterPortLease, error) {
@@ -561,14 +589,104 @@ func acquireClusterStartupLease(ctx context.Context) (*flock.Flock, error) {
 	return fl, nil
 }
 
-func (c *cluster) nextBasePort() int {
-	next := c.portLease.next.Add(basePortStep)
-	if next >= c.portLease.base+portLeaseSpan {
-		panic(fmt.Sprintf("embedded cluster %d exhausted port range [%d, %d)",
-			c.id, c.portLease.base, c.portLease.base+portLeaseSpan))
+func portBaseCapacity() (uint64, error) {
+	if basePortStep == 0 || portLeaseSpan == 0 {
+		return 0, moerr.NewInvalidStateNoCtxf(
+			"invalid embedded cluster port lease: step=%d span=%d",
+			basePortStep,
+			portLeaseSpan,
+		)
 	}
-	c.portLeaseNext = next
-	return int(next)
+	return (portLeaseSpan - 1) / basePortStep, nil
+}
+
+func validateInitialCNPortCapacity(cn int) error {
+	if cn < 0 {
+		return moerr.NewInvalidInputNoCtxf("CN count cannot be negative: %d", cn)
+	}
+	capacity, err := portBaseCapacity()
+	if err != nil {
+		return err
+	}
+	fixed := clusterInfrastructurePortBaseCount + tnPortBaseCount
+	if capacity < fixed {
+		return moerr.NewInvalidStateNoCtxf(
+			"embedded cluster port lease has %d slots, fewer than %d required infrastructure slots",
+			capacity,
+			fixed,
+		)
+	}
+	maxCN := (capacity - fixed) / cnPortBaseCount
+	if uint64(cn) > maxCN {
+		return moerr.NewInvalidInputNoCtxf(
+			"CN count %d exceeds embedded cluster port lease capacity %d",
+			cn,
+			maxCN,
+		)
+	}
+	return nil
+}
+
+func (c *cluster) validateAdditionalCNPortCapacityLocked(n int) error {
+	if n < 0 {
+		return moerr.NewInvalidInputNoCtxf("additional CN count cannot be negative: %d", n)
+	}
+	if c.portLease == nil {
+		return moerr.NewInvalidStateNoCtx("embedded cluster has no port lease")
+	}
+	if basePortStep == 0 || portLeaseSpan == 0 {
+		return moerr.NewInvalidStateNoCtxf(
+			"invalid embedded cluster port lease: step=%d span=%d",
+			basePortStep,
+			portLeaseSpan,
+		)
+	}
+	current := c.portLease.next.Load()
+	base := c.portLease.base
+	if current < base || current-base >= portLeaseSpan {
+		return moerr.NewInvalidStateNoCtxf(
+			"embedded cluster port allocator is outside its lease: base=%d current=%d span=%d",
+			base,
+			current,
+			portLeaseSpan,
+		)
+	}
+	remainingSlots := (portLeaseSpan - 1 - (current - base)) / basePortStep
+	maxAdditionalCN := remainingSlots / cnPortBaseCount
+	if uint64(n) > maxAdditionalCN {
+		return moerr.NewInvalidInputNoCtxf(
+			"cannot add %d CN services: embedded cluster port lease has capacity for %d",
+			n,
+			maxAdditionalCN,
+		)
+	}
+	return nil
+}
+
+func (c *cluster) nextBasePort() (int, error) {
+	if c.portLease == nil {
+		return 0, moerr.NewInvalidStateNoCtx("embedded cluster has no port lease")
+	}
+	base := c.portLease.base
+	for {
+		current := c.portLease.next.Load()
+		if current < base || basePortStep == 0 || portLeaseSpan == 0 ||
+			current-base >= portLeaseSpan ||
+			basePortStep >= portLeaseSpan-(current-base) {
+			return 0, moerr.NewInvalidStateNoCtxf(
+				"embedded cluster %d exhausted port range [%d, %d)",
+				c.id,
+				base,
+				base+portLeaseSpan,
+			)
+		}
+		next := current + basePortStep
+		if !c.portLease.next.CompareAndSwap(current, next) {
+			continue
+		}
+		c.portLeaseNext = next
+		return int(next), nil
+	}
 }
 
 func (c *cluster) ensurePortLeaseLocked() error {

@@ -66,6 +66,13 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 		now              = time.Now()
 	)
 	defer func() {
+		for _, item := range items {
+			request := item.(*gckpContext)
+			if request.done != nil {
+				request.done <- err
+			}
+		}
+
 		var createdEntry string
 		logger := logutil.Debug
 		if err != nil {
@@ -91,6 +98,9 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 
 	for _, item := range items {
 		oneCtx := item.(*gckpContext)
+		if oneCtx.histroyRetention == 0 {
+			oneCtx.histroyRetention = executor.cfg.GlobalHistoryDuration
+		}
 		if mergedCtx == nil {
 			mergedCtx = oneCtx
 		} else {
@@ -101,8 +111,11 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 		return
 	}
 
-	if mergedCtx.histroyRetention == 0 {
-		mergedCtx.histroyRetention = executor.cfg.GlobalHistoryDuration
+	if mergedCtx.force {
+		// A force request must produce a checkpoint with its requested retention.
+		// Rebase it on the latest finished checkpoint so a concurrent GCKP cannot
+		// make the request look successful without actually executing it.
+		mergedCtx.rebase(executor.runner.store.MaxCheckpoint())
 	}
 
 	fromEntry := executor.runner.store.MaxGlobalCheckpoint()
@@ -110,7 +123,7 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 		fromCheckpointed = fromEntry.GetEnd()
 	}
 
-	if mergedCtx.end.LE(&fromCheckpointed) {
+	if !mergedCtx.force && mergedCtx.end.LE(&fromCheckpointed) {
 		logutil.Info(
 			"GCKP-Execute-Skip",
 			zap.String("have", fromCheckpointed.ToString()),

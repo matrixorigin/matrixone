@@ -113,7 +113,7 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	if predecessor == nil || !predecessor.IsFinished() || !predecessor.end.EQ(&end) {
 		errPhase = "resolve-predecessor"
 		err = moerr.NewInternalErrorNoCtxf(
-			"global checkpoint %s has no finished incremental predecessor", end.ToString())
+			"global checkpoint %s has no finished checkpoint predecessor", end.ToString())
 		return
 	}
 
