@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"iter"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -69,6 +70,18 @@ func (fs *failWriteFS) PrefetchFile(ctx context.Context, filePath string) error 
 func (fs *failWriteFS) Cost() *fileservice.CostAttr { panic("unimplemented") }
 func (fs *failWriteFS) Close(ctx context.Context)   {}
 
+type pathAccessFS struct {
+	failWriteFS
+	deleteCount atomic.Int32
+	deletedPath atomic.Pointer[string]
+}
+
+func (fs *pathAccessFS) Delete(_ context.Context, paths ...string) error {
+	fs.deleteCount.Add(1)
+	fs.deletedPath.Store(&paths[0])
+	return nil
+}
+
 func makeTestPages(n int) ([]*TransferHashPage, fileservice.IOVector, []*bytes.Buffer) {
 	sid := objectio.NewSegmentid()
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
@@ -102,6 +115,15 @@ func makeTestPages(n int) ([]*TransferHashPage, fileservice.IOVector, []*bytes.B
 	return pages, ioVector, marshalBufs
 }
 
+func assertPagePath(t *testing.T, page *TransferHashPage, filePath string, entry fileservice.IOEntry) {
+	t.Helper()
+	assert.Equal(t, Path{
+		Name:   filePath,
+		Offset: entry.Offset,
+		Size:   entry.Size,
+	}, page.getPath())
+}
+
 func TestWriteTransferPage_AllRetriesFail(t *testing.T) {
 	fs := &failWriteFS{maxFails: 10}
 	pages, ioVector, bufs := makeTestPages(3)
@@ -111,7 +133,7 @@ func TestWriteTransferPage_AllRetriesFail(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, int32(transferPageWriteMaxRetry), fs.failCount.Load())
 	for _, page := range pages {
-		assert.Empty(t, page.path.Name, "path should not be set when write fails")
+		assert.Empty(t, page.getPath().Name, "path should not be set when write fails")
 	}
 }
 
@@ -124,9 +146,7 @@ func TestWriteTransferPage_SucceedsAfterRetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(3), fs.failCount.Load())
 	for i, page := range pages {
-		assert.Equal(t, ioVector.FilePath, page.path.Name)
-		assert.Equal(t, ioVector.Entries[i].Offset, page.path.Offset)
-		assert.Equal(t, ioVector.Entries[i].Size, page.path.Size)
+		assertPagePath(t, page, ioVector.FilePath, ioVector.Entries[i])
 	}
 }
 
@@ -139,9 +159,7 @@ func TestWriteTransferPage_SucceedsFirstTry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), fs.failCount.Load())
 	for i, page := range pages {
-		assert.Equal(t, ioVector.FilePath, page.path.Name)
-		assert.Equal(t, ioVector.Entries[i].Offset, page.path.Offset)
-		assert.Equal(t, ioVector.Entries[i].Size, page.path.Size)
+		assertPagePath(t, page, ioVector.FilePath, ioVector.Entries[i])
 	}
 }
 
@@ -154,9 +172,7 @@ func TestWriteTransferPage_FileAlreadyExistsOnRetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), fs.failCount.Load())
 	for i, page := range pages {
-		assert.Equal(t, ioVector.FilePath, page.path.Name)
-		assert.Equal(t, ioVector.Entries[i].Offset, page.path.Offset)
-		assert.Equal(t, ioVector.Entries[i].Size, page.path.Size)
+		assertPagePath(t, page, ioVector.FilePath, ioVector.Entries[i])
 	}
 }
 
@@ -169,9 +185,51 @@ func TestWriteTransferPage_FileAlreadyExistsOnFirstAttempt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), fs.failCount.Load())
 	for i, page := range pages {
-		assert.Equal(t, ioVector.FilePath, page.path.Name)
-		assert.Equal(t, ioVector.Entries[i].Offset, page.path.Offset)
-		assert.Equal(t, ioVector.Entries[i].Size, page.path.Size)
+		assertPagePath(t, page, ioVector.FilePath, ioVector.Entries[i])
+	}
+}
+
+func TestWriteTransferPage_ClosedPagePublication(t *testing.T) {
+	testCases := []struct {
+		name              string
+		fs                *pathAccessFS
+		closedPages       int
+		deletesAfterWrite int32
+	}{
+		{name: "mixed pages/write succeeds", fs: &pathAccessFS{}, closedPages: 1},
+		{name: "mixed pages/file already exists", fs: &pathAccessFS{
+			failWriteFS: failWriteFS{maxFails: 10, fileExistsOnFail: 1},
+		}, closedPages: 1},
+		{name: "all closed/write succeeds", fs: &pathAccessFS{}, closedPages: 2, deletesAfterWrite: 1},
+		{name: "all closed/file already exists", fs: &pathAccessFS{
+			failWriteFS: failWriteFS{maxFails: 10, fileExistsOnFail: 1},
+		}, closedPages: 2, deletesAfterWrite: 1},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			pages, ioVector, bufs := makeTestPages(2)
+			for i := range testCase.closedPages {
+				pages[i].ClearPersistTable()
+			}
+
+			err := WriteTransferPage(context.Background(), testCase.fs, pages, ioVector, bufs)
+
+			require.NoError(t, err)
+			for i, page := range pages {
+				if i < testCase.closedPages {
+					assert.Empty(t, page.getPath())
+				} else {
+					assertPagePath(t, page, ioVector.FilePath, ioVector.Entries[i])
+				}
+			}
+			require.Equal(t, testCase.deletesAfterWrite, testCase.fs.deleteCount.Load())
+			for _, page := range pages {
+				page.ClearPersistTable()
+			}
+			require.Equal(t, int32(1), testCase.fs.deleteCount.Load())
+			require.Equal(t, ioVector.FilePath, *testCase.fs.deletedPath.Load())
+		})
 	}
 }
 
@@ -187,8 +245,70 @@ func TestWriteTransferPage_ContextCancellation(t *testing.T) {
 	require.Error(t, err)
 	assert.Less(t, fs.failCount.Load(), int32(transferPageWriteMaxRetry))
 	for _, page := range pages {
-		assert.Empty(t, page.path.Name, "path should not be set on cancellation")
+		assert.Empty(t, page.getPath().Name, "path should not be set on cancellation")
 	}
+}
+
+func TestTransferPageConcurrentPathAccess(t *testing.T) {
+	fs := &pathAccessFS{}
+	page := &TransferHashPage{fs: fs}
+	transferMap := make(api.TransferMap, 1)
+	page.hashmap.Store(&transferMap)
+
+	const iterations = 1000
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		<-start
+		page.SetPath(Path{Name: "transfer", Offset: 1, Size: 2})
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		page.ClearPersistTable()
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range iterations {
+			_ = page.loadTable()
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+	page.ClearPersistTable()
+	require.Equal(t, int32(1), fs.deleteCount.Load())
+	require.Equal(t, "transfer", *fs.deletedPath.Load())
+	assert.Empty(t, page.getPath())
+}
+
+func TestTransferPageCleanupBeforePathPublication(t *testing.T) {
+	fs := &pathAccessFS{}
+	page := &TransferHashPage{fs: fs}
+
+	page.ClearPersistTable()
+	page.SetPath(Path{Name: "late-transfer", Offset: 1, Size: 2})
+	page.ClearPersistTable()
+
+	require.Equal(t, int32(1), fs.deleteCount.Load())
+	require.Equal(t, "late-transfer", *fs.deletedPath.Load())
+	assert.Empty(t, page.getPath())
+}
+
+func TestTransferPagePathPublicationBeforeCleanup(t *testing.T) {
+	fs := &pathAccessFS{}
+	page := &TransferHashPage{fs: fs}
+
+	page.SetPath(Path{Name: "published-transfer", Offset: 1, Size: 2})
+	page.ClearPersistTable()
+	page.ClearPersistTable()
+
+	require.Equal(t, int32(1), fs.deleteCount.Load())
+	require.Equal(t, "published-transfer", *fs.deletedPath.Load())
+	assert.Empty(t, page.getPath())
 }
 
 func TestTransferPage_TransferWithNoPath(t *testing.T) {

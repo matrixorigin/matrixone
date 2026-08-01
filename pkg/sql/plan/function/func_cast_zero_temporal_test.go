@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -264,6 +265,49 @@ func TestAssignmentCastZeroTemporalStringsPreserveSentinels(t *testing.T) {
 
 			assignment := runStringTemporalCast(t, proc, NewStrictCast, tc.input, tc.target, nil)
 			require.False(t, assignment.nulls[0], "assignment cast should preserve zero temporal sentinel")
+		})
+	}
+}
+
+func TestAssignmentDateCastRejectsInvalidStrings(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	for _, input := range []string{"2020-00-00", "2024-02-31"} {
+		t.Run(input, func(t *testing.T) {
+			// Invalid DATE values in an expression keep the existing CAST
+			// behavior and evaluate to SQL NULL.
+			expression := runStringTemporalCast(
+				t,
+				proc,
+				NewCast,
+				input,
+				types.T_date.ToType(),
+				nil,
+			)
+			require.True(t, expression.nulls[0])
+
+			// Runtime DML assignments, including prepared parameters, use
+			// cast_strict and must not silently persist the invalid value as
+			// NULL when the equivalent literal assignment is rejected.
+			inputVec := testutil.MakeVarcharVector([]string{input}, nil, proc.Mp())
+			defer inputVec.Free(proc.Mp())
+			targetType := vector.NewConstNull(types.T_date.ToType(), 1, proc.Mp())
+			defer targetType.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			err := NewStrictCast(
+				[]*vector.Vector{inputVec, targetType},
+				result,
+				proc,
+				1,
+				nil,
+			)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
+			require.Contains(t, err.Error(), input)
 		})
 	}
 }

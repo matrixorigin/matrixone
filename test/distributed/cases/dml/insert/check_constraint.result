@@ -1,0 +1,49 @@
+drop database if exists check_constraint_test;
+create database check_constraint_test;
+use check_constraint_test;
+create table t(
+a int,
+b varchar(10),
+constraint positive_a check(a > 0),
+constraint short_b check(length(b) < 5)
+);
+insert into t values (1, 'ok'), (null, null);
+insert into t values (-1, 'bad');
+constraint violation: Check constraint 'positive_a' is violated
+insert into t values (2, 'too long');
+constraint violation: Check constraint 'short_b' is violated
+select * from t order by a, b;
+a    b
+NULL    NULL
+1    ok
+insert ignore into t values (-1, 'bad'), (3, 'yes');
+select * from t order by a, b;
+a    b
+NULL    NULL
+1    ok
+3    yes
+insert into t select * from (values row(4, 'four'), row(-2, 'bad')) as src;
+constraint violation: Check constraint 'positive_a' is violated
+select * from t order by a, b;
+a    b
+NULL    NULL
+1    ok
+3    yes
+create table ctas_check(
+a int constraint ctas_positive_a check(a > 0)
+) as select 5 as a;
+insert into ctas_check values (-1);
+constraint violation: Check constraint 'ctas_positive_a' is violated
+select * from ctas_check;
+a
+5
+create table no_key_odku(
+a int check(a > 0),
+b varchar(10)
+);
+insert into no_key_odku(a, b) values (-1, 'bad')
+on duplicate key update b = 'updated';
+constraint violation: Check constraint '__mo_chk_1' is violated
+select * from no_key_odku;
+a    b
+drop database check_constraint_test;

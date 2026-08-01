@@ -15,63 +15,83 @@
 package issues
 
 import (
-	"fmt"
-	"os"
-	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
 
-var authenticatedClusterSuite struct {
-	once    sync.Once
-	running sync.Mutex
-	cluster embed.Cluster
-	err     error
-}
+const (
+	authenticatedClusterHeartbeatTimeout = 30 * time.Second
+	authenticatedClusterStoreTimeout     = 60 * time.Second
+)
 
 func runAuthenticatedClusterTest(t *testing.T, fn func(embed.Cluster)) {
 	t.Helper()
-
-	authenticatedClusterSuite.running.Lock()
-	defer authenticatedClusterSuite.running.Unlock()
-
-	authenticatedClusterSuite.once.Do(func() {
-		authenticatedClusterSuite.cluster, authenticatedClusterSuite.err = embed.NewCluster(
-			embed.WithCNCount(1),
-			embed.WithTesting(),
-			embed.WithPreStart(func(svc embed.ServiceOperator) {
-				if svc.ServiceType() != metadata.ServiceType_CN {
-					return
-				}
-				svc.Adjust(func(cfg *embed.ServiceConfig) {
-					cfg.CN.LockService.MaxFixedSliceSize = 10001
-					cfg.CN.LockService.MaxLockRowCount = 10000
-					cfg.CN.Frontend.SkipCheckUser = false
-				})
-			}),
-		)
-		if authenticatedClusterSuite.err != nil {
-			return
-		}
-		authenticatedClusterSuite.err = authenticatedClusterSuite.cluster.Start()
-	})
-
-	require.NoError(t, authenticatedClusterSuite.err)
-	fn(authenticatedClusterSuite.cluster)
+	embed.RunBaseClusterTests(t, fn)
 }
 
-func TestMain(m *testing.M) {
-	code := m.Run()
-	if authenticatedClusterSuite.cluster != nil {
-		if err := authenticatedClusterSuite.cluster.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "close authenticated test cluster: %v\n", err)
-			if code == 0 {
-				code = 1
-			}
+func TestAuthenticatedTestsReuseBaseCluster(t *testing.T) {
+	var baseCluster embed.Cluster
+	var authenticatedCluster embed.Cluster
+
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		baseCluster = c
+	})
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+		authenticatedCluster = c
+	})
+
+	require.Same(t, baseCluster, authenticatedCluster)
+
+	var cnCount, tnCount, logCount int
+	authenticatedCluster.ForeachServices(func(svc embed.ServiceOperator) bool {
+		cfg := svc.GetServiceConfig()
+		switch svc.ServiceType() {
+		case metadata.ServiceType_CN:
+			cnCount++
+			require.False(t, cfg.CN.Frontend.SkipCheckUser)
+			require.Equal(
+				t,
+				authenticatedClusterHeartbeatTimeout,
+				cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
+			)
+		case metadata.ServiceType_TN:
+			tnCount++
+			require.NotNil(t, cfg.TN_please_use_getTNServiceConfig)
+			require.Equal(
+				t,
+				authenticatedClusterHeartbeatTimeout,
+				cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration,
+			)
+		case metadata.ServiceType_LOG:
+			logCount++
+			require.Equal(
+				t,
+				authenticatedClusterStoreTimeout,
+				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration,
+			)
+			require.Equal(
+				t,
+				authenticatedClusterStoreTimeout,
+				cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration,
+			)
+			require.Less(
+				t,
+				authenticatedClusterHeartbeatTimeout,
+				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration,
+			)
+			require.Less(
+				t,
+				authenticatedClusterHeartbeatTimeout,
+				cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration,
+			)
 		}
-	}
-	os.Exit(code)
+		return true
+	})
+	require.Equal(t, 3, cnCount)
+	require.Equal(t, 1, tnCount)
+	require.Equal(t, 1, logCount)
 }

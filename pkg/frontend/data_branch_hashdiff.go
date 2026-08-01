@@ -218,9 +218,12 @@ func handleDelsOnLCA(
 		mots := fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
 		pkNames := lcaTblDef.Pkey.Names
 		quotedPKNames := make([]string, len(pkNames))
+		quotedPKValueAliases := make([]string, len(pkNames))
 		for i, name := range pkNames {
 			quotedPKNames[i] = quoteIdentifierForSQL(name)
+			quotedPKValueAliases[i] = quoteIdentifierForSQL(fmt.Sprintf("__mo_data_branch_pk_%d", i))
 		}
+		quotedOrdinalAlias := quoteIdentifierForSQL("__mo_data_branch_ordinal")
 
 		// composite pk
 		if baseTblDef.Pkey.CompPkeyCol != nil {
@@ -276,7 +279,7 @@ func handleDelsOnLCA(
 		}
 
 		selectCols := make([]string, len(lcaLayout.attrs)+1)
-		selectCols[0] = "pks.__idx_"
+		selectCols[0] = fmt.Sprintf("pks.%s", quotedOrdinalAlias)
 		for i, colName := range lcaLayout.attrs {
 			selectCols[i+1] = fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
 		}
@@ -290,22 +293,22 @@ func handleDelsOnLCA(
 			mots),
 		)
 		sqlBuf.WriteString(fmt.Sprintf(
-			"right join (values %s) as pks(__idx_,%s) on ",
-			valsBuf.String(), strings.Join(quotedPKNames, ",")),
+			"right join (values %s) as pks(%s,%s) on ",
+			valsBuf.String(), quotedOrdinalAlias, strings.Join(quotedPKValueAliases, ",")),
 		)
 
 		for i := range quotedPKNames {
 			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", quotedPKNames[i]))
 			if castType, ok := lcaProbeJoinCastType(colTypes[expandedPKColIdxes[i]]); ok {
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", quotedPKNames[i], castType))
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", quotedPKValueAliases[i], castType))
 			} else {
-				sqlBuf.WriteString(fmt.Sprintf("pks.%s", quotedPKNames[i]))
+				sqlBuf.WriteString(fmt.Sprintf("pks.%s", quotedPKValueAliases[i]))
 			}
 			if i != len(quotedPKNames)-1 {
 				sqlBuf.WriteString(" AND ")
 			}
 		}
-		sqlBuf.WriteString(" order by pks.__idx_")
+		sqlBuf.WriteString(fmt.Sprintf(" order by pks.%s", quotedOrdinalAlias))
 
 		sqlPreview := sqlBuf.String()
 		if len(sqlPreview) > 512 {
