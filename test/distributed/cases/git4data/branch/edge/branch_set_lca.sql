@@ -62,4 +62,43 @@ data branch merge empty_member_src into empty_member_dst;
 select cast(v as unsigned) as bitmap from empty_member_dst;
 data branch diff empty_member_src against empty_member_dst output count;
 
+-- Numeric consumers beyond the direct LCA expression must retain the same
+-- physical bitmap across SELECT, INSERT ... SELECT, and pure SET UNION paths.
+create table projection_src(
+    id int primary key,
+    v set('','a')
+);
+insert into projection_src values (1,0),(2,1);
+
+select id, cast(name as unsigned) as bitmap
+from (select id, v as name from projection_src) src
+order by id;
+
+create table projection_dst(
+    id int primary key,
+    bitmap bigint unsigned
+);
+insert into projection_dst select id, v from projection_src;
+select * from projection_dst order by id;
+
+select cast(name as unsigned) as bitmap
+from (
+    select v as name from projection_src
+    union all
+    select v from projection_src
+) src
+order by bitmap;
+
+-- Once a set operation mixes SET and VARCHAR, its output is an ordinary
+-- string. A SET label therefore follows VARCHAR cast semantics.
+create table mixed_projection_src(v set('a',''));
+insert into mixed_projection_src values (1);
+select cast(name as unsigned) as bitmap
+from (
+    select v as name from mixed_projection_src
+    union all
+    select cast('1' as varchar) from mixed_projection_src
+) src
+order by bitmap;
+
 drop database br_set_lca;

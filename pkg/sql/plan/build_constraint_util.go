@@ -1278,16 +1278,26 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 ) (*Expr, error) {
 	var err error
 	var rewritten bool
-	expr, rewritten, err = builder.rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, sourceExpr, targetType)
+	expr, rewritten, err = builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr, targetType)
 	if err != nil || rewritten {
 		return expr, err
 	}
 	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore)
 }
 
-func (builder *QueryBuilder) rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
-	if builder == nil || expr == nil || sourceExpr == nil ||
-		targetType.Id != int32(types.T_json) || sourceExpr.Typ.Id == int32(types.T_enum) {
+func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
+	if builder == nil || expr == nil || sourceExpr == nil {
+		return expr, false, nil
+	}
+	if types.T(targetType.Id).IsInteger() && !isSetPlanType(&targetType) &&
+		builder.isProjectedDisplayValueExpr(expr, isSetDisplayValueExpr, true, nil) {
+		bitmap, ok := builder.materializeProjectedSetBitmap(expr, nil)
+		if !ok {
+			return nil, false, moerr.NewInternalError(builder.GetContext(), "failed to materialize proven SET bitmap projection")
+		}
+		return bitmap, false, nil
+	}
+	if targetType.Id != int32(types.T_json) || sourceExpr.Typ.Id == int32(types.T_enum) {
 		return expr, false, nil
 	}
 	if builder.isProjectedEnumOrSetDisplayValueExpr(sourceExpr, nil) {
@@ -1298,7 +1308,16 @@ func (builder *QueryBuilder) rewriteProjectedEnumOrSetDisplayValueToJSONCast(exp
 }
 
 func (builder *QueryBuilder) isProjectedEnumOrSetDisplayValueExpr(expr *Expr, visited map[[2]int32]struct{}) bool {
-	if isEnumOrSetDisplayValueExpr(expr) {
+	return builder.isProjectedDisplayValueExpr(expr, isEnumOrSetDisplayValueExpr, false, visited)
+}
+
+func (builder *QueryBuilder) isProjectedDisplayValueExpr(
+	expr *Expr,
+	isDisplayValue func(*Expr) bool,
+	requireAllSetInputs bool,
+	visited map[[2]int32]struct{},
+) bool {
+	if isDisplayValue(expr) {
 		return true
 	}
 	col := expr.GetCol()
@@ -1321,7 +1340,19 @@ func (builder *QueryBuilder) isProjectedEnumOrSetDisplayValueExpr(expr *Expr, vi
 	}
 	node := builder.qry.Nodes[nodeID]
 	switch node.NodeType {
-	case plan.Node_UNION, plan.Node_UNION_ALL:
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		if !requireAllSetInputs && node.NodeType != plan.Node_UNION && node.NodeType != plan.Node_UNION_ALL {
+			if len(node.Children) == 0 || node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) {
+				return false
+			}
+			leftProjectList := builder.qry.Nodes[node.Children[0]].ProjectList
+			if col.ColPos < 0 || int(col.ColPos) >= len(leftProjectList) {
+				return false
+			}
+			return builder.isProjectedDisplayValueExpr(leftProjectList[col.ColPos], isDisplayValue, requireAllSetInputs, visited)
+		}
 		if len(node.Children) == 0 {
 			return false
 		}
@@ -1333,28 +1364,100 @@ func (builder *QueryBuilder) isProjectedEnumOrSetDisplayValueExpr(expr *Expr, vi
 			if col.ColPos < 0 || int(col.ColPos) >= len(childProjectList) {
 				return false
 			}
-			if !builder.isProjectedEnumOrSetDisplayValueExpr(childProjectList[col.ColPos], visited) {
+			if !builder.isProjectedDisplayValueExpr(childProjectList[col.ColPos], isDisplayValue, requireAllSetInputs, visited) {
 				return false
 			}
 		}
 		return true
-	case plan.Node_MINUS, plan.Node_MINUS_ALL,
-		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
-		if len(node.Children) == 0 || node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) {
-			return false
-		}
-		leftProjectList := builder.qry.Nodes[node.Children[0]].ProjectList
-		if col.ColPos < 0 || int(col.ColPos) >= len(leftProjectList) {
-			return false
-		}
-		return builder.isProjectedEnumOrSetDisplayValueExpr(leftProjectList[col.ColPos], visited)
 	}
 
 	projectList := node.ProjectList
 	if col.ColPos < 0 || int(col.ColPos) >= len(projectList) {
 		return false
 	}
-	return builder.isProjectedEnumOrSetDisplayValueExpr(projectList[col.ColPos], visited)
+	return builder.isProjectedDisplayValueExpr(projectList[col.ColPos], isDisplayValue, requireAllSetInputs, visited)
+}
+
+// materializeProjectedSetBitmap carries a proven SET bitmap through projection
+// boundaries. Set-operation inputs are materialized at the same hidden position
+// so the node can expose one physical uint64 output. The proof phase above runs
+// first, therefore mixed SET/VARCHAR operations are never mutated here.
+func (builder *QueryBuilder) materializeProjectedSetBitmap(
+	expr *Expr,
+	visited map[[2]int32]struct{},
+) (*Expr, bool) {
+	if bitmap, ok := storedSetBitmapExpr(expr); ok {
+		return bitmap, true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return expr, false
+	}
+	key := [2]int32{col.RelPos, col.ColPos}
+	if pos, ok := builder.setBitmapByDisplayCol[key]; ok {
+		return GetColExpr(plan.Type{Id: int32(types.T_uint64), NotNullable: expr.Typ.NotNullable}, col.RelPos, pos), true
+	}
+	if visited == nil {
+		visited = make(map[[2]int32]struct{})
+	}
+	if _, ok := visited[key]; ok {
+		return expr, false
+	}
+	visited[key] = struct{}{}
+	defer delete(visited, key)
+
+	nodeID, ok := builder.tag2NodeID[col.RelPos]
+	if !ok || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return expr, false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+		return expr, false
+	}
+
+	if node.NodeType == plan.Node_UNION || node.NodeType == plan.Node_UNION_ALL ||
+		node.NodeType == plan.Node_MINUS || node.NodeType == plan.Node_MINUS_ALL ||
+		node.NodeType == plan.Node_INTERSECT || node.NodeType == plan.Node_INTERSECT_ALL {
+		bitmaps := make([]*Expr, len(node.Children))
+		for i, childID := range node.Children {
+			if childID < 0 || int(childID) >= len(builder.qry.Nodes) {
+				return expr, false
+			}
+			child := builder.qry.Nodes[childID]
+			if col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+				return expr, false
+			}
+			bitmap, found := builder.materializeProjectedSetBitmap(child.ProjectList[col.ColPos], visited)
+			if !found {
+				return expr, false
+			}
+			bitmaps[i] = bitmap
+		}
+		pos := int32(len(node.ProjectList))
+		for i, childID := range node.Children {
+			child := builder.qry.Nodes[childID]
+			if int32(len(child.ProjectList)) != pos {
+				return expr, false
+			}
+			child.ProjectList = append(child.ProjectList, bitmaps[i])
+		}
+		leftTag := builder.qry.Nodes[node.Children[0]].BindingTags[0]
+		bitmapType := plan.Type{Id: int32(types.T_uint64), NotNullable: expr.Typ.NotNullable}
+		node.ProjectList = append(node.ProjectList, GetColExpr(bitmapType, leftTag, pos))
+		builder.setBitmapByDisplayCol[key] = pos
+		return GetColExpr(bitmapType, col.RelPos, pos), true
+	}
+
+	bitmap, found := builder.materializeProjectedSetBitmap(node.ProjectList[col.ColPos], visited)
+	if !found {
+		return expr, false
+	}
+	pos := int32(len(node.ProjectList))
+	node.ProjectList = append(node.ProjectList, bitmap)
+	bitmapType := bitmap.Typ
+	bitmapType.Enumvalues = ""
+	builder.setBitmapByDisplayCol[key] = pos
+	return GetColExpr(bitmapType, col.RelPos, pos), true
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {

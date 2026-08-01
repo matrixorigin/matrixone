@@ -592,7 +592,8 @@ func TestSetDisplayValueNumericCastUsesStoredBitmap(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.False(t, rewritten)
-		require.Equal(t, raw, got)
+		require.Equal(t, raw.GetCol(), got.GetCol())
+		require.Empty(t, got.Typ.Enumvalues)
 		require.NotSame(t, raw, got)
 	}
 }

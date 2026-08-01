@@ -164,7 +164,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		if b.builder != nil {
 			var rewritten bool
-			expr, rewritten, err = b.builder.rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, expr, typ)
+			expr, rewritten, err = b.builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, expr, typ)
 			if err != nil {
 				return
 			}
@@ -4500,9 +4500,8 @@ func rewriteMySQLSpecialTypeDisplayCast(ctx context.Context, expr *Expr, toType 
 		// binding so ordinary projections expose their labels. Integer casts
 		// require the stored bitmap instead; casting the label is both incorrect
 		// and lossy for SET definitions that contain an empty member.
-		fn := expr.GetF()
-		if len(fn.Args) == 2 {
-			return DeepCopyExpr(fn.Args[1]), false, nil
+		if bitmap, ok := storedSetBitmapExpr(expr); ok {
+			return bitmap, false, nil
 		}
 	}
 	if toType.Id != int32(types.T_json) {
@@ -4516,6 +4515,22 @@ func rewriteMySQLSpecialTypeDisplayCast(ctx context.Context, expr *Expr, toType 
 		return quoted, err == nil, err
 	}
 	return expr, false, nil
+}
+
+func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
+	if !isSetDisplayValueExpr(expr) {
+		return expr, false
+	}
+	fn := expr.GetF()
+	if len(fn.Args) != 2 || fn.Args[1] == nil {
+		return expr, false
+	}
+	bitmap := DeepCopyExpr(fn.Args[1])
+	// The hidden projection is the physical uint64 representation, not a SQL
+	// SET value. Clear the member metadata so downstream assignment treats it
+	// as an ordinary bitmap and does not convert it back through SET semantics.
+	bitmap.Typ.Enumvalues = ""
+	return bitmap, true
 }
 
 func isSetDisplayValueExpr(expr *Expr) bool {
