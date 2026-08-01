@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/publication"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -309,9 +308,6 @@ func (s *service) registerExecutorsLocked() {
 	s.task.runner.RegisterExecutor(
 		task.TaskCode_MetricStorageUsage,
 		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
-	// streaming connector task
-	s.task.runner.RegisterExecutor(task.TaskCode_ConnectorKafkaSink,
-		moconnector.KafkaSinkConnectorExecutor(s.logger, ts, ieFactory, s.task.runner.Attach))
 	s.task.runner.RegisterExecutor(task.TaskCode_MergeObject,
 		func(ctx context.Context, task task.Task) error {
 			metadata := task.GetMetadata()

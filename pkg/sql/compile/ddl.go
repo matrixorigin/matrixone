@@ -5797,8 +5797,8 @@ func deleteManyWatermark(
 }
 
 const (
-	defaultConnectorTaskMaxRetryTimes = 10
-	defaultConnectorTaskRetryInterval = int64(time.Second * 10)
+	defaultCDCTaskMaxRetryTimes = 10
+	defaultCDCTaskRetryInterval = int64(time.Second * 10)
 )
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
@@ -5806,8 +5806,8 @@ func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 		ID:       opts.TaskId,
 		Executor: task.TaskCode_InitCdc,
 		Options: task.TaskOptions{
-			MaxRetryTimes: defaultConnectorTaskMaxRetryTimes,
-			RetryInterval: defaultConnectorTaskRetryInterval,
+			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
+			RetryInterval: defaultCDCTaskRetryInterval,
 			DelayDuration: 0,
 			Concurrency:   0,
 		},

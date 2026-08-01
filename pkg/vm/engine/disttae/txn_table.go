@@ -1600,6 +1600,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
 			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
 			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
+			tbl.tableDef.Checks = tbl.extraInfo.Checks
 		}
 	}
 	return tbl.tableDef

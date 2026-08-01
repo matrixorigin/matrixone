@@ -22,7 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"github.com/hayageek/threadsafe"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -129,19 +128,18 @@ type SessionInfo struct {
 	ExplicitZeroTemporalCastReturnsNull bool
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
-	SqlMode              string
-	StorageEngine        engine.Engine
-	QueryId              []string
-	ResultColTypes       []types.Type
-	SeqCurValues         map[uint64]string
-	SeqDeleteKeys        []uint64
-	SeqAddValues         map[uint64]string
-	SeqLastValue         []string
-	SqlHelper            sqlHelper
-	Buf                  *buffer.Buffer
-	SourceInMemScanBatch []*kafka.Message
-	LogLevel             zapcore.Level
-	SessionId            uuid.UUID
+	SqlMode        string
+	StorageEngine  engine.Engine
+	QueryId        []string
+	ResultColTypes []types.Type
+	SeqCurValues   map[uint64]string
+	SeqDeleteKeys  []uint64
+	SeqAddValues   map[uint64]string
+	SeqLastValue   []string
+	SqlHelper      sqlHelper
+	Buf            *buffer.Buffer
+	LogLevel       zapcore.Level
+	SessionId      uuid.UUID
 }
 
 type Session interface {
@@ -379,6 +377,8 @@ type BaseProcess struct {
 	messageBoard             *message.MessageBoard
 	hashBuildBudgetMu        sync.Mutex
 	hashBuildBudget          *HashBuildBudgetGeneration
+	cteMemoryBudgetMu        sync.Mutex
+	cteMemoryBudget          *CTEMemoryBudget
 	logger                   *log.MOLogger
 	TxnOperator              client.TxnOperator
 	CloneTxnOperator         client.TxnOperator
@@ -479,6 +479,12 @@ func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 		proc.Base.hashBuildBudget = nil
 	}
 	proc.Base.hashBuildBudgetMu.Unlock()
+	proc.Base.cteMemoryBudgetMu.Lock()
+	if proc.Base.cteMemoryBudget != nil {
+		proc.Base.cteMemoryBudget.Close()
+		proc.Base.cteMemoryBudget = nil
+	}
+	proc.Base.cteMemoryBudgetMu.Unlock()
 	proc.Base.StmtProfile = sp
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode

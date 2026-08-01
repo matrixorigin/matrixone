@@ -42,7 +42,8 @@ const (
 	MORPCVersion4      int64 = 4 // start from 2.0.1
 	MORPCVersion5      int64 = 5 // assignment-aware CHAR/VARCHAR casts
 	MORPCVersion6      int64 = 6 // ordered aggregate pipeline configuration
-	MORPCLatestVersion       = MORPCVersion6
+	MORPCVersion7      int64 = 7 // structured CHECK constraint metadata and enforcement
+	MORPCLatestVersion       = MORPCVersion7
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
