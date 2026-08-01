@@ -72,7 +72,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
@@ -84,7 +83,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -1254,15 +1252,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 			ss = c.compileLimit(node, ss)
 		}
 		return ss, nil
-	case plan.Node_SOURCE_SCAN:
-		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileSourceScan(node)
-		if err != nil {
-			return nil, err
-		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
-		return ss, nil
 	case plan.Node_FILTER, plan.Node_PROJECT:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -1681,62 +1670,6 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 
 	ds.setRootOperator(arg)
 	return ds
-}
-
-func (c *Compile) compileSourceScan(node *plan.Node) ([]*Scope, error) {
-	_, span := trace.Start(c.proc.Ctx, "compileSourceScan")
-	defer span.End()
-	configs := make(map[string]interface{})
-	for _, def := range node.TableDef.Defs {
-		switch v := def.Def.(type) {
-		case *plan.TableDef_DefType_Properties:
-			for _, p := range v.Properties.Properties {
-				configs[p.Key] = p.Value
-			}
-		}
-	}
-
-	end, err := mokafka.GetStreamCurrentSize(c.proc.Ctx, configs, mokafka.NewKafkaAdapter)
-	if err != nil {
-		return nil, err
-	}
-	ps := calculatePartitions(0, end, int64(c.ncpu))
-
-	ss := make([]*Scope, len(ps))
-
-	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		ss[i] = newScope(Merge)
-		ss[i].NodeInfo = getEngineNode(c)
-		ss[i].Proc = c.proc.NewNoContextChildProc(0)
-		arg := constructStream(node, ps[i])
-		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].setRootOperator(arg)
-	}
-	c.anal.isFirst = false
-	return ss, nil
-}
-
-const StreamMaxInterval = 8192
-
-func calculatePartitions(start, end, n int64) [][2]int64 {
-	var ps [][2]int64
-	interval := (end - start) / n
-	if interval < StreamMaxInterval {
-		interval = StreamMaxInterval
-	}
-	var r int64
-	l := start
-	for i := int64(0); i < n; i++ {
-		r = l + interval
-		if r >= end {
-			ps = append(ps, [2]int64{l, end})
-			break
-		}
-		ps = append(ps, [2]int64{l, r})
-		l = r
-	}
-	return ps
 }
 
 func StrictSqlMode(proc *process.Process) (error, bool) {
@@ -3818,12 +3751,6 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 				c.setProjection(node, ss[i])
 			}
 		case *fill.Fill:
-			if op.ProjectList == nil {
-				op.ProjectList = node.ProjectList
-			} else {
-				c.setProjection(node, ss[i])
-			}
-		case *source.Source:
 			if op.ProjectList == nil {
 				op.ProjectList = node.ProjectList
 			} else {

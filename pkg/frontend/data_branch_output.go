@@ -806,6 +806,10 @@ func satisfyDiffOutputOpt(
 		var (
 			rows = make([][]any, 0, 100)
 		)
+		limitReached := func() bool {
+			return stmt.OutputOpt != nil && stmt.OutputOpt.Limit != nil &&
+				int64(len(rows)) >= *stmt.OutputOpt.Limit
+		}
 
 		// Resolve column projection (nil means show all visible columns).
 		displayIdxes, resolveErr := resolveProjectedIdxes(stmt.Columns, tblStuff)
@@ -834,6 +838,12 @@ func satisfyDiffOutputOpt(
 			}
 			// Sparse row: indexed by colIdx+2, so size must accommodate the largest index.
 			rowSize = slices.Max(extractIdxes) + 3
+		}
+
+		if limitReached() {
+			// The limit is already satisfied before consuming any rows (LIMIT 0).
+			hitLimit = true
+			stop()
 		}
 
 		for wrapped := range retCh {
@@ -869,8 +879,7 @@ func satisfyDiffOutputOpt(
 				}
 
 				rows = append(rows, row)
-				if stmt.OutputOpt != nil && stmt.OutputOpt.Limit != nil &&
-					int64(len(rows)) >= *stmt.OutputOpt.Limit {
+				if limitReached() {
 					// hit limit, cancel producers but keep draining the channel
 					hitLimit = true
 					stop()
@@ -1010,17 +1019,17 @@ func satisfyDiffOutputOpt(
 			fileHint     string
 			fullFilePath string
 			writeFile    func([]byte) error
-			release      func()
+			release      func() error
 			cleanup      func()
 			succeeded    bool
 		)
 
 		defer func() {
+			if release != nil {
+				err = errors.Join(err, release())
+			}
 			if !succeeded && cleanup != nil {
 				cleanup()
-			}
-			if release != nil {
-				release()
 			}
 			releaseBuffer(tblStuff.bufPool, deleteFromValsBuffer)
 			releaseBuffer(tblStuff.bufPool, insertIntoValsBuffer)
@@ -1105,6 +1114,11 @@ func satisfyDiffOutputOpt(
 				return err
 			}
 		}
+		if err = release(); err != nil {
+			release = nil
+			return err
+		}
+		release = nil
 
 		succeeded = true
 		mrs.AddRow([]any{fullFilePath, fileHint})
@@ -1747,7 +1761,7 @@ func prepareFSForDiffAsFile(
 ) (
 	sqlRetPath, sqlRetHint string,
 	writeFile func([]byte) error,
-	release func(),
+	release func() error,
 	cleanup func(),
 	err error,
 ) {
@@ -1847,13 +1861,14 @@ func prepareFSForDiffAsFile(
 			})
 		}
 
-		release = func() {
-			_ = mut.Close()
+		release = func() error {
+			closeErr := mut.Close()
 			targetFS.Close(ctx)
+			return closeErr
 		}
 	} else {
 		if writeFile, release, err = newSingleWriteAppender(
-			ctx, tblStuff.worker, targetFS, targetPath, cleanup,
+			ctx, tblStuff.worker, targetFS, targetPath,
 		); err != nil {
 			return
 		}
@@ -1867,8 +1882,7 @@ func newSingleWriteAppender(
 	worker *ants.Pool,
 	targetFS fileservice.FileService,
 	targetPath string,
-	onError func(),
-) (writeFile func([]byte) error, release func(), err error) {
+) (writeFile func([]byte) error, release func() error, err error) {
 	pr, pw := io.Pipe()
 	done := make(chan error, 1)
 
@@ -1908,12 +1922,11 @@ func newSingleWriteAppender(
 		return err
 	}
 
-	release = func() {
-		_ = pw.Close()
-		if wErr := <-done; wErr != nil && onError != nil {
-			onError()
-		}
+	release = func() error {
+		closeErr := pw.Close()
+		writeErr := <-done
 		targetFS.Close(ctx)
+		return errors.Join(closeErr, writeErr)
 	}
 
 	return

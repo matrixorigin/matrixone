@@ -651,6 +651,18 @@ func (ts *testTaskService) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 	panic("implement me")
 }
 
+func (ts *testTaskService) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	cond ...taskservice.Condition,
+) (int, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (ts *testTaskService) HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask) error {
 	//TODO implement me
 	panic("implement me")

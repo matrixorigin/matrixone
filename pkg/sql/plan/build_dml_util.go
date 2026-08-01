@@ -168,6 +168,23 @@ func buildInsertPlans(
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
 
+	checkColName2Idx := make(map[string]int32, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		checkColName2Idx[tableDef.Name+"."+col.Name] = int32(i)
+	}
+	lastNodeId, err = appendCheckConstraintPlan(
+		builder,
+		bindCtx,
+		tableDef,
+		lastNodeId,
+		0,
+		checkColName2Idx,
+		false,
+	)
+	if err != nil {
+		return err
+	}
+
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep := builder.appendStep(lastNodeId)
 
@@ -333,6 +350,36 @@ func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
 		}
 	}
 	return -1
+}
+
+// collectStepDependencyNodes returns every node needed to produce sourceStep,
+// including nodes reached through nested SINK_SCAN step dependencies.
+func collectStepDependencyNodes(builder *QueryBuilder, sourceStep int32) map[int32]struct{} {
+	nodes := make(map[int32]struct{})
+	steps := make(map[int32]struct{})
+	var collectNode func(int32)
+	collectStep := func(step int32) {
+		if _, ok := steps[step]; ok {
+			return
+		}
+		steps[step] = struct{}{}
+		collectNode(builder.qry.Steps[step])
+	}
+	collectNode = func(nodeID int32) {
+		if _, ok := nodes[nodeID]; ok {
+			return
+		}
+		nodes[nodeID] = struct{}{}
+		node := builder.qry.Nodes[nodeID]
+		for _, childID := range node.Children {
+			collectNode(childID)
+		}
+		for _, step := range node.SourceStep {
+			collectStep(step)
+		}
+	}
+	collectStep(sourceStep)
+	return nodes
 }
 
 func checkDeleteOptToTruncate(ctx CompilerContext) (bool, error) {
@@ -640,6 +687,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			if step == -1 || delCtx.sourceStep == -1 {
 				panic("steps should not be -1")
 			}
+			newSourceDependencies := collectStepDependencyNodes(builder, delCtx.sourceStep)
 
 			oldDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, int32(step))
 			thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
@@ -668,7 +716,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
 			endStep := builder.appendStep(newSinkNodeId)
 			for i, n := range builder.qry.Nodes {
-				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep[0] == int32(step) && i != int(oldDelPlanSinkScanNodeId) {
+				_, feedsNewSource := newSourceDependencies[int32(i)]
+				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep[0] == int32(step) &&
+					i != int(oldDelPlanSinkScanNodeId) && !feedsNewSource {
 					n.SourceStep[0] = endStep
 				}
 			}
