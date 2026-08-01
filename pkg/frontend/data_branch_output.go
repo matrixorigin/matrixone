@@ -33,6 +33,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -50,7 +51,7 @@ func makeFileName(
 	baseAtTsExpr *tree.AtTimeStamp,
 	tarAtTsExpr *tree.AtTimeStamp,
 	tblStuff tableStuff,
-) string {
+) (string, error) {
 	var (
 		srcName  = encodeDiffFileNamePart(tblStuff.tarRel.GetTableName())
 		baseName = encodeDiffFileNamePart(tblStuff.baseRel.GetTableName())
@@ -65,14 +66,18 @@ func makeFileName(
 	}
 
 	namePrefix := fmt.Sprintf("diff_%s_%s", srcName, baseName)
-	timeSuffix := "_" + time.Now().UTC().Format("20060102_150405")
-	if len(namePrefix)+len(timeSuffix) <= maxDiffFileNameStemBytes {
-		return namePrefix + timeSuffix
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return "", fmt.Errorf("generate data branch output file name: %w", err)
+	}
+	uniqueSuffix := fmt.Sprintf("_%s_%s", time.Now().UTC().Format("20060102_150405"), id)
+	if len(namePrefix)+len(uniqueSuffix) <= maxDiffFileNameStemBytes {
+		return namePrefix + uniqueSuffix, nil
 	}
 
 	digest := sha256.Sum256([]byte(namePrefix))
-	digestSuffix := fmt.Sprintf("_%x%s", digest[:16], timeSuffix)
-	return truncateDiffFileNamePrefix(namePrefix, maxDiffFileNameStemBytes-len(digestSuffix)) + digestSuffix
+	digestSuffix := fmt.Sprintf("_%x%s", digest[:16], uniqueSuffix)
+	return truncateDiffFileNamePrefix(namePrefix, maxDiffFileNameStemBytes-len(digestSuffix)) + digestSuffix, nil
 }
 
 const maxDiffFileNameStemBytes = 240
@@ -1370,9 +1375,12 @@ func writeCSV(
 		mrs        = &MysqlResultSet{}
 		sqlRetHint string
 		sqlRetPath string
-		fileName   = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
+		fileName   string
 		cleanup    func()
 	)
+	if fileName, err = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff); err != nil {
+		return
+	}
 
 	ep := &ExportConfig{
 		userConfig: newDiffCSVUserConfig(),
@@ -1772,7 +1780,9 @@ func prepareFSForDiffAsFile(
 		fullFilePath string
 	)
 
-	fileName = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
+	if fileName, err = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff); err != nil {
+		return
+	}
 	fileName += ".sql"
 
 	sqlRetPath = path.Join(stmt.OutputOpt.DirPath, fileName)
