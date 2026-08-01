@@ -17,6 +17,7 @@ package compile
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -44,16 +45,18 @@ type AnalyzeModule struct {
 	phyPlan        *models.PhyPlan
 	remotePhyPlans []models.PhyPlan
 	// Added read-write lock
-	mu                         sync.RWMutex
-	retryTimes                 int
-	explainPhyBuffer           *bytes.Buffer
-	remoteUsage                resource.Usage
-	remoteMemory               resource.MemoryTotals
-	remoteAllocation           resource.AllocationAccountTotals
-	remoteQuality              resource.QualityFlags
-	remoteMissingFragments     uint64
-	remoteMissingMemoryDomains uint64
-	remoteReports              uint64
+	mu                              sync.RWMutex
+	retryTimes                      int
+	explainPhyBuffer                *bytes.Buffer
+	remoteUsage                     resource.Usage
+	remoteMemory                    resource.MemoryTotals
+	remoteAllocation                resource.AllocationAccountTotals
+	remoteQuality                   resource.QualityFlags
+	remoteMissingFragments          uint64
+	remoteMissingMemoryDomains      uint64
+	remoteReports                   uint64
+	remotePendingAllocationGroups   map[string]uint64
+	remoteCompletedAllocationGroups map[string]struct{}
 }
 
 // remoteResourceSnapshot is a by-value view of the terminal resource facts
@@ -61,13 +64,15 @@ type AnalyzeModule struct {
 // separately from the nested missing counts so each hop can account for the
 // remote scopes it expected to hear from exactly once.
 type remoteResourceSnapshot struct {
-	Usage                    resource.Usage
-	Memory                   resource.MemoryTotals
-	Allocation               resource.AllocationAccountTotals
-	Quality                  resource.QualityFlags
-	MissingFragmentCount     uint64
-	MissingMemoryDomainCount uint64
-	DirectReportCount        uint64
+	Usage                     resource.Usage
+	Memory                    resource.MemoryTotals
+	Allocation                resource.AllocationAccountTotals
+	Quality                   resource.QualityFlags
+	MissingFragmentCount      uint64
+	MissingMemoryDomainCount  uint64
+	DirectReportCount         uint64
+	PendingAllocationGroups   []remoteAllocationGroupPending
+	CompletedAllocationGroups []string
 }
 
 // Reset When Compile reused, reset AnalyzeModule to prevent resource accumulation
@@ -89,6 +94,8 @@ func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 		anal.remoteMissingFragments = 0
 		anal.remoteMissingMemoryDomains = 0
 		anal.remoteReports = 0
+		anal.remotePendingAllocationGroups = nil
+		anal.remoteCompletedAllocationGroups = nil
 		if anal.qry != nil {
 			for _, node := range anal.qry.Nodes {
 				if node.AnalyzeInfo == nil {
@@ -108,6 +115,8 @@ func (anal *AnalyzeModule) appendRemoteResource(
 	allocation resource.AllocationAccountTotals,
 	missingFragments uint64,
 	missingMemoryDomains uint64,
+	pendingAllocationGroups []remoteAllocationGroupPending,
+	completedAllocationGroups []string,
 ) {
 	if anal == nil {
 		return
@@ -126,7 +135,66 @@ func (anal *AnalyzeModule) appendRemoteResource(
 	anal.remoteMissingMemoryDomains, quality = addCheckedRemoteCounter(
 		anal.remoteMissingMemoryDomains, missingMemoryDomains, quality)
 	anal.remoteReports, quality = addCheckedRemoteCounter(anal.remoteReports, 1, quality)
+	if len(completedAllocationGroups) > 0 && anal.remoteCompletedAllocationGroups == nil {
+		anal.remoteCompletedAllocationGroups = make(map[string]struct{})
+	}
+	for _, key := range completedAllocationGroups {
+		if key == "" {
+			quality |= resource.QualityInvariantFailure
+			continue
+		}
+		anal.remoteCompletedAllocationGroups[key] = struct{}{}
+		delete(anal.remotePendingAllocationGroups, key)
+	}
+	if len(pendingAllocationGroups) > 0 && anal.remotePendingAllocationGroups == nil {
+		anal.remotePendingAllocationGroups = make(map[string]uint64)
+	}
+	for _, signal := range pendingAllocationGroups {
+		if signal.Key == "" || signal.Count == 0 {
+			quality |= resource.QualityInvariantFailure
+			continue
+		}
+		if _, completed := anal.remoteCompletedAllocationGroups[signal.Key]; !completed {
+			anal.remotePendingAllocationGroups[signal.Key], quality =
+				addCheckedRemoteCounter(
+					anal.remotePendingAllocationGroups[signal.Key],
+					signal.Count,
+					quality,
+				)
+		}
+	}
 	anal.remoteQuality |= quality
+}
+
+func sortedRemoteAllocationGroupKeys(values map[string]struct{}) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func sortedRemoteAllocationGroupPending(
+	values map[string]uint64,
+) []remoteAllocationGroupPending {
+	if len(values) == 0 {
+		return nil
+	}
+	signals := make([]remoteAllocationGroupPending, 0, len(values))
+	for key, count := range values {
+		signals = append(signals, remoteAllocationGroupPending{
+			Key:   key,
+			Count: count,
+		})
+	}
+	slices.SortFunc(signals, func(a, b remoteAllocationGroupPending) int {
+		return strings.Compare(a.Key, b.Key)
+	})
+	return signals
 }
 
 func (anal *AnalyzeModule) remoteResourceSummary() remoteResourceSnapshot {
@@ -143,6 +211,12 @@ func (anal *AnalyzeModule) remoteResourceSummary() remoteResourceSnapshot {
 		MissingFragmentCount:     anal.remoteMissingFragments,
 		MissingMemoryDomainCount: anal.remoteMissingMemoryDomains,
 		DirectReportCount:        anal.remoteReports,
+		PendingAllocationGroups: sortedRemoteAllocationGroupPending(
+			anal.remotePendingAllocationGroups,
+		),
+		CompletedAllocationGroups: sortedRemoteAllocationGroupKeys(
+			anal.remoteCompletedAllocationGroups,
+		),
 	}
 }
 

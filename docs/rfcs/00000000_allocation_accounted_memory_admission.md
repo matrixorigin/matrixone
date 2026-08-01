@@ -154,6 +154,36 @@ live metadata. A late allocation or release mismatch is a lifecycle invariant,
 not capacity pressure. Prepared statements and retries use new generations;
 generation-bound state cannot survive Reset.
 
+Remote pipeline RPCs for one statement on one CN share a MessageBoard, so an
+individual RPC is not a terminal ownership boundary. The coordinator carries
+the exact number of planned fragments per target CN plus a unique physical
+execution ID. Every received fragment joins the execution-and-board-keyed
+statement group, clears its reachable operators when it quiesces, and transfers
+its account and MPool terminal ownership to that group. Quiesced handlers do not
+wait for siblings, because nested B-to-C-to-B execution can otherwise create a
+response dependency cycle. Their terminal responses carry a counted pending
+memory-domain signal. The finalizer drains the board, completes all accounts, samples all
+fragment MPool domains, and lets exactly one terminal response publish the
+aggregate plus a completion marker; the other responses publish no duplicate
+terminal facts. Pending/completed signals reduce independent of response order;
+unresolved counts preserve the cardinality of every suppressed fragment MPool
+domain and make the root summary explicitly partial.
+A missing planned RPC is bounded by the MessageBoard receive interval: expiry
+closes the old board generation and cancels active registered fragments; their
+accounts remain live until those fragments actually quiesce. A fragment failure
+aborts the incomplete group immediately. The timer is canceled once all planned
+fragments register, so it never limits a fully dispatched statement. Prepared
+executions and retries use new execution IDs, so an incomplete old group cannot
+capture a replacement.
+
+The topology and execution-ID fields are a required capability for remote
+plans containing allocation-account owners. A legacy ProcessInfo remains
+decodable, and remote plans outside the accounted domain keep their legacy
+lifecycle. An accounted legacy plan is rejected explicitly rather than running
+with a guessed fragment count or an unaccounted fallback. Query-candidate
+discovery admits only CNs with the coordinator binary's CommitID, which prevents
+the inverse new-coordinator-to-old-handler execution during a rolling upgrade.
+
 ## Pressure protocol
 
 Typed reasons keep control flow honest:

@@ -350,6 +350,8 @@ type Compile struct {
 	allocationTerminalExporter   func(mpool.AllocationAccountTerminalSnapshot)
 	allocationAccountOwners      []executionAllocationAccountOwner
 	allocationAttempt            *statementAllocationAttempt
+	remoteFragmentCounts         map[string]uint32
+	remoteExecutionID            uuid.UUID
 	hasMergeOp                   bool
 
 	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.

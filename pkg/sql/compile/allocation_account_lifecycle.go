@@ -16,6 +16,7 @@ package compile
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -23,6 +24,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func allocationLifecycleCall(call func() error) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = errors.Join(
+				err,
+				mpool.ErrAllocationAccountInvariant,
+				fmt.Errorf("allocation lifecycle panic: %v", recovered),
+			)
+		}
+	}()
+	return call()
+}
 
 type executionAllocationAccountOwner interface {
 	SetAllocationAccount(*mpool.AllocationAccount) error
@@ -43,9 +57,11 @@ type statementAllocationAttempt struct {
 	ownerSet map[executionAllocationAccountOwner]struct{}
 	closing  bool
 
-	once     sync.Once
-	snapshot mpool.AllocationAccountTerminalSnapshot
-	err      error
+	prepareOnce  sync.Once
+	completeOnce sync.Once
+	snapshot     mpool.AllocationAccountTerminalSnapshot
+	prepareErr   error
+	completeErr  error
 }
 
 func (c *Compile) beginAllocationAccountAttempt() (
@@ -87,13 +103,25 @@ func (c *Compile) beginAllocationAccountAttempt() (
 	}
 	owners, err = configureAllocationAccountOwners(owners, account)
 	if err != nil {
-		snapshot, first, finalizeErr := c.allocationAccountRegistry.
-			CompleteTerminalWithError(account, err)
+		var snapshot mpool.AllocationAccountTerminalSnapshot
+		var first bool
+		finalizeErr := allocationLifecycleCall(func() error {
+			var terminalErr error
+			snapshot, first, terminalErr = c.allocationAccountRegistry.
+				CompleteTerminalWithError(account, err)
+			return terminalErr
+		})
 		if first {
-			c.allocationTerminalExporter(snapshot)
+			finalizeErr = errors.Join(
+				finalizeErr,
+				allocationLifecycleCall(func() error {
+					c.allocationTerminalExporter(snapshot)
+					return nil
+				}),
+			)
 		}
 		if finalizeErr != nil {
-			return nil, finalizeErr
+			return nil, errors.Join(err, finalizeErr)
 		}
 		return nil, err
 	}
@@ -169,13 +197,17 @@ func configureAllocationAccountOwners(
 		for i := len(configured) - 1; i >= 0; i-- {
 			cause = errors.Join(
 				cause,
-				configured[i].ClearAllocationAccount(account),
+				allocationLifecycleCall(func() error {
+					return configured[i].ClearAllocationAccount(account)
+				}),
 			)
 		}
 		return cause
 	}
 	for _, owner := range owners {
-		if err := owner.SetAllocationAccount(account); err != nil {
+		if err := allocationLifecycleCall(func() error {
+			return owner.SetAllocationAccount(account)
+		}); err != nil {
 			return nil, rollback(err)
 		}
 		configured = append(configured, owner)
@@ -280,11 +312,28 @@ func (a *statementAllocationAttempt) finish() (
 	if a == nil {
 		return mpool.AllocationAccountTerminalSnapshot{}, nil
 	}
-	a.once.Do(func() {
-		// Scope.Run/MergeRun and remote notifier barriers must have returned
-		// before this point. Draining the board first releases queued JoinMap
-		// and spill payload ownership through their normal Destroy methods.
-		a.board.CloseAndDrain()
+	a.prepareTerminal(true)
+	return a.completeTerminal()
+}
+
+// prepareTerminal closes the operator-owned part of an attempt after every
+// scope producer has quiesced. A coordinator-owned board can be closed here.
+// Remote fragments share one board on a CN, so their statement group closes it
+// only after every expected fragment has reached this boundary.
+func (a *statementAllocationAttempt) prepareTerminal(closeBoard bool) error {
+	if a == nil {
+		return nil
+	}
+	a.prepareOnce.Do(func() {
+		if closeBoard {
+			a.prepareErr = errors.Join(
+				a.prepareErr,
+				allocationLifecycleCall(func() error {
+					a.board.CloseAndDrain()
+					return nil
+				}),
+			)
+		}
 		a.ownersMu.Lock()
 		a.closing = true
 		owners := a.owners
@@ -292,23 +341,47 @@ func (a *statementAllocationAttempt) finish() (
 		a.ownerSet = nil
 		a.ownersMu.Unlock()
 		for i := len(owners) - 1; i >= 0; i-- {
-			a.err = errors.Join(
-				a.err,
-				owners[i].ClearAllocationAccount(a.account),
+			a.prepareErr = errors.Join(
+				a.prepareErr,
+				allocationLifecycleCall(func() error {
+					return owners[i].ClearAllocationAccount(a.account)
+				}),
 			)
 		}
+	})
+	return a.prepareErr
+
+}
+
+func (a *statementAllocationAttempt) completeTerminal() (
+	mpool.AllocationAccountTerminalSnapshot,
+	error,
+) {
+	if a == nil {
+		return mpool.AllocationAccountTerminalSnapshot{}, nil
+	}
+	a.completeOnce.Do(func() {
+		prepareErr := a.prepareTerminal(false)
 		var first bool
-		var terminalErr error
-		a.snapshot, first, terminalErr = a.registry.CompleteTerminalWithError(
-			a.account,
-			a.err,
-		)
-		a.err = terminalErr
+		a.completeErr = allocationLifecycleCall(func() error {
+			var terminalErr error
+			a.snapshot, first, terminalErr = a.registry.CompleteTerminalWithError(
+				a.account,
+				prepareErr,
+			)
+			return terminalErr
+		})
 		if first && a.exporter != nil {
-			a.exporter(a.snapshot)
+			a.completeErr = errors.Join(
+				a.completeErr,
+				allocationLifecycleCall(func() error {
+					a.exporter(a.snapshot)
+					return nil
+				}),
+			)
 		}
 	})
-	return a.snapshot, a.err
+	return a.snapshot, a.completeErr
 }
 
 func (c *Compile) finishAllocationAccountAttempt() error {

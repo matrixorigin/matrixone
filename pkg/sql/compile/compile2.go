@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -304,6 +305,17 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
 
 		// running.
+		if runC.remoteFragmentCounts == nil {
+			runC.remoteFragmentCounts = collectRemoteFragmentCounts(runC.scopes, runC.addr)
+		}
+		// A retry is a new physical execution generation. Reusing the previous
+		// ID could attach late RPCs from the failed generation to the new
+		// generation's shared board and terminal-account group.
+		if len(runC.remoteFragmentCounts) > 0 {
+			runC.remoteExecutionID = newRemoteExecutionID()
+		} else {
+			runC.remoteExecutionID = uuid.Nil
+		}
 		exporter := func(snapshot mpool.AllocationAccountTerminalSnapshot) {
 			if resourceRecorder != nil {
 				resourceRecorder.recordAllocationAccountTerminal(snapshot)

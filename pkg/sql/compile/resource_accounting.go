@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"math"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -37,7 +39,7 @@ type executionResourceRecorder struct {
 	pendingAllocationQuality resource.QualityFlags
 }
 
-const remoteTerminalResourceVersion = 2
+const remoteTerminalResourceVersion = 3
 
 // remoteTerminalEnvelope keeps PhyPlan fields at the top level so clients from
 // before resource accounting can still decode the terminal plan during a
@@ -45,22 +47,31 @@ const remoteTerminalResourceVersion = 2
 // appended resource facts from a legacy bare PhyPlan payload.
 type remoteTerminalEnvelope struct {
 	models.PhyPlan
-	TerminalResourceVersion  uint32                           `json:"terminal_resource_version,omitempty"`
-	Delta                    resource.Delta                   `json:"resource_delta"`
-	Memory                   resource.MemoryTotals            `json:"memory"`
-	Allocation               resource.AllocationAccountTotals `json:"allocation_account"`
-	MissingFragmentCount     uint64                           `json:"missing_fragment_count,omitempty"`
-	MissingMemoryDomainCount uint64                           `json:"missing_memory_domain_count,omitempty"`
+	TerminalResourceVersion   uint32                           `json:"terminal_resource_version,omitempty"`
+	Delta                     resource.Delta                   `json:"resource_delta"`
+	Memory                    resource.MemoryTotals            `json:"memory"`
+	Allocation                resource.AllocationAccountTotals `json:"allocation_account"`
+	MissingFragmentCount      uint64                           `json:"missing_fragment_count,omitempty"`
+	MissingMemoryDomainCount  uint64                           `json:"missing_memory_domain_count,omitempty"`
+	PendingAllocationGroups   []remoteAllocationGroupPending   `json:"pending_allocation_groups,omitempty"`
+	CompletedAllocationGroups []string                         `json:"completed_allocation_groups,omitempty"`
+}
+
+type remoteAllocationGroupPending struct {
+	Key   string `json:"key"`
+	Count uint64 `json:"count"`
 }
 
 // remoteResourceAggregate is the already-reduced terminal output sent by one
 // remote hop. Delta contains local plus descendant usage and quality.
 type remoteResourceAggregate struct {
-	Delta                    resource.Delta
-	Memory                   resource.MemoryTotals
-	Allocation               resource.AllocationAccountTotals
-	MissingFragmentCount     uint64
-	MissingMemoryDomainCount uint64
+	Delta                     resource.Delta
+	Memory                    resource.MemoryTotals
+	Allocation                resource.AllocationAccountTotals
+	MissingFragmentCount      uint64
+	MissingMemoryDomainCount  uint64
+	PendingAllocationGroups   []remoteAllocationGroupPending
+	CompletedAllocationGroups []string
 }
 
 func (r *executionResourceRecorder) recordAllocationAccountTerminal(
@@ -135,6 +146,24 @@ func (r *executionResourceRecorder) finishAttempt(
 		remote,
 		countExpectedRemoteScopes(scopes, localAddress),
 	)
+	var pending uint64
+	for _, signal := range remoteAggregate.PendingAllocationGroups {
+		pending, remoteAggregate.Delta.Quality = addCheckedRemoteCounter(
+			pending,
+			signal.Count,
+			remoteAggregate.Delta.Quality,
+		)
+	}
+	if pending > 0 {
+		remoteAggregate.MissingMemoryDomainCount, remoteAggregate.Delta.Quality =
+			addCheckedRemoteCounter(
+				remoteAggregate.MissingMemoryDomainCount,
+				pending,
+				remoteAggregate.Delta.Quality,
+			)
+		remoteAggregate.Delta.Quality |= resource.QualityPartial |
+			resource.QualityMissingMemoryDomain
+	}
 	delta = remoteAggregate.Delta
 
 	var coordinator resource.LocalRecorder
@@ -250,6 +279,80 @@ func addCheckedRemoteCounter(value, add uint64, quality resource.QualityFlags) (
 	return value + add, quality
 }
 
+func reduceRemoteAllocationGroupSignals(
+	pending []remoteAllocationGroupPending,
+	completed []string,
+) ([]remoteAllocationGroupPending, []string, resource.QualityFlags) {
+	var quality resource.QualityFlags
+	completedSet := make(map[string]struct{}, len(completed))
+	for _, key := range completed {
+		if key == "" {
+			quality |= resource.QualityInvariantFailure
+			continue
+		}
+		completedSet[key] = struct{}{}
+	}
+	pendingCounts := make(map[string]uint64, len(pending))
+	for _, signal := range pending {
+		if signal.Key == "" || signal.Count == 0 {
+			quality |= resource.QualityInvariantFailure
+			continue
+		}
+		if _, resolved := completedSet[signal.Key]; !resolved {
+			pendingCounts[signal.Key], quality = addCheckedRemoteCounter(
+				pendingCounts[signal.Key],
+				signal.Count,
+				quality,
+			)
+		}
+	}
+	pending = pending[:0]
+	for key, count := range pendingCounts {
+		pending = append(pending, remoteAllocationGroupPending{
+			Key:   key,
+			Count: count,
+		})
+	}
+	completed = completed[:0]
+	for key := range completedSet {
+		completed = append(completed, key)
+	}
+	slices.SortFunc(pending, func(a, b remoteAllocationGroupPending) int {
+		return strings.Compare(a.Key, b.Key)
+	})
+	slices.Sort(completed)
+	return pending, completed, quality
+}
+
+func addRemoteAllocationGroupSignal(
+	aggregate *remoteResourceAggregate,
+	key string,
+	completed bool,
+) {
+	if aggregate == nil {
+		return
+	}
+	if completed {
+		aggregate.CompletedAllocationGroups = append(
+			aggregate.CompletedAllocationGroups,
+			key,
+		)
+	} else {
+		aggregate.PendingAllocationGroups = append(
+			aggregate.PendingAllocationGroups,
+			remoteAllocationGroupPending{Key: key, Count: 1},
+		)
+	}
+	var quality resource.QualityFlags
+	aggregate.PendingAllocationGroups,
+		aggregate.CompletedAllocationGroups,
+		quality = reduceRemoteAllocationGroupSignals(
+		aggregate.PendingAllocationGroups,
+		aggregate.CompletedAllocationGroups,
+	)
+	aggregate.Delta.Quality |= quality
+}
+
 // composeRemoteResourceAggregate composes one hop's captured local resource
 // facts with an already-reduced descendant aggregate. It is pure so every
 // remote hop and the coordinator use the same merge algebra.
@@ -271,12 +374,27 @@ func composeRemoteResourceAggregate(
 	)
 	result.MissingFragmentCount = descendant.MissingFragmentCount
 	result.MissingMemoryDomainCount = descendant.MissingMemoryDomainCount
+	result.PendingAllocationGroups = append(
+		[]remoteAllocationGroupPending(nil),
+		descendant.PendingAllocationGroups...,
+	)
+	result.CompletedAllocationGroups = append(
+		[]string(nil), descendant.CompletedAllocationGroups...,
+	)
 	if descendant.MissingFragmentCount > 0 {
 		result.Delta.Quality |= resource.QualityPartial | resource.QualityMissingFragment
 	}
 	if descendant.MissingMemoryDomainCount > 0 {
 		result.Delta.Quality |= resource.QualityPartial | resource.QualityMissingMemoryDomain
 	}
+	var groupQuality resource.QualityFlags
+	result.PendingAllocationGroups,
+		result.CompletedAllocationGroups,
+		groupQuality = reduceRemoteAllocationGroupSignals(
+		result.PendingAllocationGroups,
+		result.CompletedAllocationGroups,
+	)
+	result.Delta.Quality |= groupQuality
 	if descendant.DirectReportCount < expectedDirect {
 		directMissing := expectedDirect - descendant.DirectReportCount
 		result.MissingFragmentCount, result.Delta.Quality = addCheckedRemoteCounter(

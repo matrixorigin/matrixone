@@ -49,6 +49,7 @@ type allocationLifecycleOwnerOperator struct {
 	account               *mpool.AllocationAccount
 	failSet               bool
 	failClear             bool
+	panicClear            bool
 	clears                int
 	released              bool
 	releaseSawLiveAccount bool
@@ -75,6 +76,9 @@ func (op *allocationLifecycleOwnerOperator) SetAllocationAccount(
 func (op *allocationLifecycleOwnerOperator) ClearAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
+	if op.panicClear {
+		panic("test allocation owner clear panic")
+	}
 	if op.account == nil {
 		return nil
 	}
@@ -87,6 +91,34 @@ func (op *allocationLifecycleOwnerOperator) ClearAllocationAccount(
 	op.account = nil
 	op.clears++
 	return nil
+}
+
+func TestStatementAllocationAttemptOwnerTeardownPanicIsTerminalFailure(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	var exported []mpool.AllocationAccountTerminalSnapshot
+	c := newTestAllocationLifecycleCompile(t, registry, func(
+		snapshot mpool.AllocationAccountTerminalSnapshot,
+	) {
+		exported = append(exported, snapshot)
+	})
+	owner := &allocationLifecycleOwnerOperator{
+		MockOperator: colexec.NewMockOperator(),
+		panicClear:   true,
+	}
+	c.scopes = []*Scope{{RootOp: owner}}
+
+	_, err = c.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	err = c.finishAllocationAccountAttempt()
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.Len(t, exported, 1)
+	require.Equal(
+		t,
+		mpool.AllocationAccountTerminalInvariantFailure,
+		exported[0].State,
+	)
+	require.Zero(t, registry.LiveAllocationMetadata())
 }
 
 func (op *allocationLifecycleErrorOperator) Call(

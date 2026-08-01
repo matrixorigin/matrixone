@@ -69,6 +69,17 @@ The final semantic edit was followed by a clean local run on 2026-08-01.
 
 No partial or still-running session is counted as a pass.
 
+After the distributed q7 failure exposed the shared remote-MessageBoard
+boundary, the final remote-lifecycle amendment was validated separately:
+
+- the complete `pkg/sql/compile` suite passed in normal and race modes;
+- `pkg/pb/pipeline`, `pkg/vm/message`, and `pkg/vm/process` passed;
+- protobuf regeneration was clean and reproducible;
+- vet passed for all four affected packages;
+- an independent lifecycle/concurrency review converged with no blocker or
+  major finding after its pending-domain cardinality and mixed-version concerns
+  were resolved in code or by existing scheduling evidence.
+
 ## Behavioral coverage
 
 The local suite covers:
@@ -93,6 +104,22 @@ The local suite covers:
   modes;
 - Product cleanup and account terminal zero;
 - accounted JoinMap release after an unaccounted ProductL2 consumer frees it.
+- remote scope-graph fragment counting across nested CN execution addresses;
+- ProcessInfo topology-map and execution-ID wire round trips, with distinct
+  MessageBoard generations across retries;
+- remote statement-group board drain after a producer finishes before a later
+  sibling registers, including accounted queued-message destruction, exact
+  account terminal zero, and aggregate MPool terminal sampling;
+- incomplete remote dispatch expiry releases staged account and MPool domains,
+  while an unresolved pending terminal marker makes the coordinator summary
+  explicitly partial; this includes the case where another registered fragment
+  is still active when the old board generation closes;
+- fragment failure aborts an incomplete group immediately, and a legacy remote
+  plan containing an accounted owner is rejected instead of running without an
+  account;
+- counted pending/completed group markers resolve independent of
+  terminal-response order; a four-fragment lost-final-response case preserves
+  all three suppressed reported domains plus the directly missing domain.
 
 ## Performance evidence
 

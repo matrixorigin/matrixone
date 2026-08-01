@@ -100,6 +100,44 @@ The sequence is:
 7. seal and finalize the account;
 8. export exactly one terminal snapshot.
 
+For a coordinator-local attempt, that sequence owns one MessageBoard. Remote
+PipelineMessage handlers are different: all fragments of the same statement on
+one CN share the board, and accounted JoinMap/result storage may remain owned by
+a producer account until a sibling consumes it. The coordinator therefore
+computes the complete physical scope graph's RPC count per CN, creates a unique
+physical execution ID, and carries both in ProcessInfo. Each remote handler
+registers before decoding/execution, stages its account and MPool after its
+operators quiesce, and detaches the shared board before Compile cleanup. A
+quiesced handler returns without waiting for siblings and adds one counted
+pending terminal-memory-domain signal. This avoids a B-to-C-to-B response
+dependency cycle.
+The final fragment drains the board, completes every staged account, samples
+every staged MPool, and publishes the aggregate plus a completion marker exactly
+once. The coordinator reduces pending/completed markers independent of response
+order; unresolved counts preserve every suppressed fragment MPool domain and
+make the attempt explicitly partial instead of silently omitting memory.
+
+If dispatch fails before every planned handler arrives, the first quiesced
+fragment starts a bounded orphan-registration timer. Registration of the full
+set cancels it. Expiry closes only that board generation; active registered
+fragments retain their accounts until they quiesce, after which the final
+registered fragment completes the group. If no response remains to carry a
+completion marker, the already-returned pending marker preserves the missing
+domain as an explicit partial result. A fragment failure aborts an incomplete
+group without waiting for the timer and cancels active registered siblings.
+This bounds the MessageCenter/group maps without sealing live
+allocations or imposing an execution timeout on a fully registered query.
+Prepared executions and retries use fresh execution IDs, so a stale group and
+board cannot capture the next generation.
+
+ProcessInfo without both topology and execution-ID metadata remains decodable.
+Remote plans outside the accounted owner domain keep their legacy lifecycle;
+plans containing an allocation-account owner are rejected explicitly. The
+server never guesses a group size and never silently falls back to unaccounted
+HashBuild execution. In the opposite upgrade direction, query-candidate
+discovery already excludes CNs whose CommitID differs from the coordinator
+binary, so a new coordinator cannot dispatch this lifecycle to an old handler.
+
 Prepared statements and retries create a new generation. Reset frees all
 generation-bound state; it does not carry an executor, bitmap, mailbox payload,
 or allocation selection into the next attempt. Runtime parallel clones are
@@ -185,5 +223,8 @@ The implementation is complete only when:
 - every transfer has exactly one owner after success and on cancellation;
 - memory, disk, and FD rejection remain distinct;
 - prepared/retry generations terminate independently at zero;
+- remote fragments sharing one MessageBoard terminate at the per-CN statement
+  boundary, with incomplete dispatch bounded and old board generations unable
+  to close a replacement;
 - local unit, race, build, vet, lifecycle, spill, and performance checks pass;
 - independent reviews report no blocker or major correctness/performance issue.
