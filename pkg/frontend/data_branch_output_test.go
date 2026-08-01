@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -86,6 +88,19 @@ func TestDataBranchOutputMakeFileName(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Regexp(t, regexp.MustCompile(`^diff_t2_sp2_t1_sp1_\d{8}_\d{6}_[0-9a-f-]{36}$`), got)
+}
+
+func TestDataBranchOutputMakeFileNameUUIDError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("base")
+	tarRel.EXPECT().GetTableName().Return("target")
+
+	_, err := makeFileNameWithUUID(nil, nil, tableStuff{baseRel: baseRel, tarRel: tarRel}, func() (uuid.UUID, error) {
+		return uuid.Nil, errors.New("entropy unavailable")
+	})
+	require.ErrorContains(t, err, "generate data branch output file name: entropy unavailable")
 }
 
 func TestDataBranchOutputMakeFileNameConcurrent(t *testing.T) {

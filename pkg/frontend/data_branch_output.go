@@ -52,6 +52,15 @@ func makeFileName(
 	tarAtTsExpr *tree.AtTimeStamp,
 	tblStuff tableStuff,
 ) (string, error) {
+	return makeFileNameWithUUID(baseAtTsExpr, tarAtTsExpr, tblStuff, uuid.NewRandom)
+}
+
+func makeFileNameWithUUID(
+	baseAtTsExpr *tree.AtTimeStamp,
+	tarAtTsExpr *tree.AtTimeStamp,
+	tblStuff tableStuff,
+	newUUID func() (uuid.UUID, error),
+) (string, error) {
 	var (
 		srcName  = encodeDiffFileNamePart(tblStuff.tarRel.GetTableName())
 		baseName = encodeDiffFileNamePart(tblStuff.baseRel.GetTableName())
@@ -66,7 +75,7 @@ func makeFileName(
 	}
 
 	namePrefix := fmt.Sprintf("diff_%s_%s", srcName, baseName)
-	id, err := uuid.NewRandom()
+	id, err := newUUID()
 	if err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("generate data branch output file name: %v", err)
 	}
