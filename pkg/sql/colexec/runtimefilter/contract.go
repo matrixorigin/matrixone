@@ -46,7 +46,8 @@ func (e *optionalAllocationError) Unwrap() error { return e.cause }
 // MarkOptionalAllocationError preserves the allocation error while giving a
 // runtime-filter producer a narrow fail-open classification.
 func MarkOptionalAllocationError(err error) error {
-	if err == nil || IsOptionalAllocationError(err) {
+	if err == nil || IsOptionalAllocationError(err) ||
+		!mpool.IsRetryableAllocationCapacity(err) {
 		return err
 	}
 	return &optionalAllocationError{cause: err}
@@ -78,6 +79,11 @@ func ClassifyOptionalFallback(err error) OptionalFallbackKind {
 		errors.Is(err, context.DeadlineExceeded) {
 		return OptionalFallbackNone
 	}
+	allocationReason := mpool.AllocationFailureReasonOf(err)
+	if allocationReason != mpool.AllocationFailureNone &&
+		allocationReason != mpool.AllocationFailureCapacity {
+		return OptionalFallbackNone
+	}
 	// Reject every known fatal branch before accepting an admission branch.
 	// This also keeps errors.Join(admission, fatal) fatal regardless of the
 	// traversal order chosen by errors.As below.
@@ -90,7 +96,8 @@ func ClassifyOptionalFallback(err error) OptionalFallbackKind {
 	var budgetErr *process.HashBuildBudgetError
 	if errors.As(err, &budgetErr) {
 		if budgetErr != nil &&
-			budgetErr.Kind == process.HashBuildBudgetErrorAdmission {
+			budgetErr.Kind == process.HashBuildBudgetErrorAdmission &&
+			budgetErr.Component == process.HashBuildBudgetComponentMemory {
 			return OptionalFallbackBudgetAdmission
 		}
 		return OptionalFallbackNone
@@ -102,7 +109,8 @@ func ClassifyOptionalFallback(err error) OptionalFallbackKind {
 		return OptionalFallbackNone
 	}
 
-	if IsOptionalAllocationError(err) {
+	if IsOptionalAllocationError(err) &&
+		mpool.IsRetryableAllocationCapacity(err) {
 		return OptionalFallbackAllocation
 	}
 	return OptionalFallbackNone
@@ -289,12 +297,10 @@ func planType(typ plan.Type) types.Type {
 }
 
 // CloseFloatSignedZero appends the complementary representation when an exact
-// float payload contains only one of +0 and -0. beforeAppend lets budgeted
-// producers reserve the vector-growth overlap before the allocation occurs.
+// float payload contains only one of +0 and -0.
 func CloseFloatSignedZero(
 	vec *vector.Vector,
 	mp *mpool.MPool,
-	beforeAppend func() (release func(), err error),
 ) error {
 	if vec == nil || mp == nil {
 		return moerr.NewInternalErrorNoCtx("invalid float runtime-filter vector")
@@ -342,18 +348,6 @@ func CloseFloatSignedZero(
 	}
 	if hasPositiveZero == hasNegativeZero {
 		return nil
-	}
-
-	var release func()
-	var err error
-	if beforeAppend != nil {
-		release, err = beforeAppend()
-		if err != nil {
-			return err
-		}
-	}
-	if release != nil {
-		defer release()
 	}
 
 	if vec.GetType().Oid == types.T_float32 {

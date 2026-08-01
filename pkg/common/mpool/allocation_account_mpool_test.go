@@ -16,7 +16,6 @@ package mpool
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -273,6 +272,9 @@ func TestMPoolAccountedRollback(t *testing.T) {
 			testAllocationSite,
 		)
 		require.Error(t, err)
+		require.True(t, IsMPoolCapacityFailure(err))
+		require.Equal(t, AllocationFailureCapacity, AllocationFailureReasonOf(err))
+		require.True(t, IsRetryableAllocationCapacity(err))
 		require.Equal(t, uint64(allocationSize), account.Snapshot().Used)
 		require.Equal(t, uint64(1), registry.LiveAllocationMetadata())
 		require.Equal(t, uint64(2), registry.PeakAllocationMetadata())
@@ -302,6 +304,9 @@ func TestMPoolAccountedRollback(t *testing.T) {
 			testAllocationSite,
 		)
 		require.Error(t, err)
+		require.True(t, IsMPoolCapacityFailure(err))
+		require.Equal(t, AllocationFailureCapacity, AllocationFailureReasonOf(err))
+		require.True(t, IsRetryableAllocationCapacity(err))
 		require.Equal(t, globalBefore, GlobalStats().NumCurrBytes.Load())
 		require.Zero(t, mp.CurrNB())
 		require.Zero(t, account.Snapshot().Used)
@@ -602,112 +607,6 @@ func TestMPoolAccountedConcurrentAllocFree(t *testing.T) {
 	require.Zero(t, account.Snapshot().Used)
 	require.Zero(t, registry.LiveAllocationMetadata())
 	finalizeTestAllocationAccount(t, registry, account)
-}
-
-func TestMPoolAccountedTransactionRollback(t *testing.T) {
-	countGlobalMetadata := func() (headers int, leases int) {
-		for i := range globalPtrShards {
-			shard := &globalPtrShards[i]
-			shard.mu.Lock()
-			headers += len(shard.m)
-			leases += len(shard.leases)
-			shard.mu.Unlock()
-		}
-		return headers, leases
-	}
-
-	injectedError := errors.New("injected allocation error")
-	stages := []struct {
-		name       string
-		checkpoint allocationCheckpoint
-	}{
-		{name: "account", checkpoint: allocationAfterAccount},
-		{name: "metadata", checkpoint: allocationAfterMetadata},
-		{name: "global-stats", checkpoint: allocationAfterGlobalStats},
-		{name: "pool-stats", checkpoint: allocationAfterPoolStats},
-		{name: "physical", checkpoint: allocationAfterPhysical},
-		{name: "header-publication", checkpoint: allocationAfterHeader},
-	}
-	for _, fault := range []struct {
-		name      string
-		trigger   func() error
-		wantPanic bool
-	}{
-		{
-			name: "error",
-			trigger: func() error {
-				return injectedError
-			},
-		},
-		{
-			name: "panic",
-			trigger: func() error {
-				panic("injected allocation panic")
-			},
-			wantPanic: true,
-		},
-	} {
-		for _, stage := range stages {
-			for _, noLock := range []bool{false, true} {
-				poolKind := "sharded"
-				if noLock {
-					poolKind = "no-lock"
-				}
-				t.Run(fault.name+"/"+stage.name+"/"+poolKind, func(t *testing.T) {
-					registry, account := newTestAllocationAccount(t, 64, 1)
-					var mp *MPool
-					if noLock {
-						mp = MustNewNoLock("accounted-rollback-no-lock")
-					} else {
-						mp = MustNew("accounted-rollback")
-					}
-					defer DeleteMPool(mp)
-
-					globalBytesBefore := GlobalStats().NumCurrBytes.Load()
-					headersBefore, leasesBefore := countGlobalMetadata()
-					request := allocationAccountRequest{
-						account: account,
-						owner:   testAllocationOwner,
-						site:    testAllocationSite,
-						checkpoint: func(
-							reached allocationCheckpoint,
-						) error {
-							if reached != stage.checkpoint {
-								return nil
-							}
-							return fault.trigger()
-						},
-					}
-					if fault.wantPanic {
-						require.PanicsWithValue(t, "injected allocation panic", func() {
-							_, _ = mp.allocAccountedWithDetailK("", 64, request)
-						})
-					} else {
-						_, err := mp.allocAccountedWithDetailK("", 64, request)
-						require.ErrorIs(t, err, injectedError)
-					}
-
-					require.Zero(t, mp.CurrNB())
-					require.Equal(
-						t,
-						globalBytesBefore,
-						GlobalStats().NumCurrBytes.Load(),
-					)
-					require.Zero(t, account.Snapshot().Used)
-					require.Zero(t, registry.LiveAllocationMetadata())
-					if noLock {
-						require.Empty(t, mp.ptrs)
-						require.Empty(t, mp.leases)
-					} else {
-						headersAfter, leasesAfter := countGlobalMetadata()
-						require.Equal(t, headersBefore, headersAfter)
-						require.Equal(t, leasesBefore, leasesAfter)
-					}
-					finalizeTestAllocationAccount(t, registry, account)
-				})
-			}
-		}
-	}
 }
 
 func BenchmarkMPoolAccountedAllocation(b *testing.B) {

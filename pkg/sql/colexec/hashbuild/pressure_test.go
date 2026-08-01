@@ -15,9 +15,11 @@
 package hashbuild
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -35,8 +37,9 @@ func TestMemoryPressureReasonSeparatesCapacityFromLifecycle(t *testing.T) {
 		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorAdmission, Component: process.HashBuildBudgetComponentSpillFD}, MemoryPressureSpillFDLimit},
 		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorClosed}, MemoryPressureSealed},
 		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorInvalid}, MemoryPressureInvalid},
-		{fmt.Errorf("wrapped: %w", process.ErrHashBuildBudgetAdmission), MemoryPressureCapacity},
+		{fmt.Errorf("wrapped: %w", process.ErrHashBuildBudgetAdmission), MemoryPressureNone},
 		{mpool.ErrAllocationAccountCapacity, MemoryPressureCapacity},
+		{moerr.NewMPoolCapacityNoCtxf("test"), MemoryPressureCapacity},
 		{mpool.ErrAllocationMetadataSlots, MemoryPressureCapacity},
 		{mpool.ErrAllocationAccountSealed, MemoryPressureSealed},
 		{mpool.ErrAllocationAccountMismatch, MemoryPressureMismatch},
@@ -47,6 +50,22 @@ func TestMemoryPressureReasonSeparatesCapacityFromLifecycle(t *testing.T) {
 	for _, test := range tests {
 		require.Equal(t, test.reason, MemoryPressureReasonOf(test.err))
 		require.Equal(t, test.reason == MemoryPressureCapacity, IsRetryableMemoryCapacity(test.err))
+	}
+
+	memoryAdmission := &process.HashBuildBudgetError{
+		Kind:      process.HashBuildBudgetErrorAdmission,
+		Component: process.HashBuildBudgetComponentMemory,
+	}
+	for _, test := range []struct {
+		err    error
+		reason MemoryPressureReason
+	}{
+		{errors.Join(memoryAdmission, mpool.ErrAllocationAccountInvariant), MemoryPressureInvariant},
+		{errors.Join(memoryAdmission, mpool.ErrAllocationAccountInvalid), MemoryPressureInvariant},
+		{errors.Join(memoryAdmission, mpool.ErrAllocationAccountSealed), MemoryPressureSealed},
+	} {
+		require.Equal(t, test.reason, MemoryPressureReasonOf(test.err))
+		require.False(t, IsRetryableMemoryCapacity(test.err))
 	}
 }
 

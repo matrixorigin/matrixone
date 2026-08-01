@@ -53,6 +53,23 @@ func MemoryPressureReasonOf(err error) MemoryPressureReason {
 		return MemoryPressureMinimumUnit
 	}
 
+	// Physical-account ownership and lifecycle failures dominate any joined
+	// logical budget error. Otherwise a sealed or invariant account could be
+	// mistaken for retryable memory pressure.
+	switch mpool.AllocationFailureReasonOf(err) {
+	case mpool.AllocationFailureCapacity:
+		return MemoryPressureCapacity
+	case mpool.AllocationFailureSealed,
+		mpool.AllocationFailureSuspended:
+		return MemoryPressureSealed
+	case mpool.AllocationFailureMismatch:
+		return MemoryPressureMismatch
+	case mpool.AllocationFailureAllocatorLimit:
+		return MemoryPressureAllocatorLimit
+	case mpool.AllocationFailureInvariant:
+		return MemoryPressureInvariant
+	}
+
 	var budgetErr *process.HashBuildBudgetError
 	if errors.As(err, &budgetErr) {
 		switch budgetErr.Kind {
@@ -77,26 +94,9 @@ func MemoryPressureReasonOf(err error) MemoryPressureReason {
 		}
 	}
 
-	switch mpool.AllocationFailureReasonOf(err) {
-	case mpool.AllocationFailureCapacity:
-		return MemoryPressureCapacity
-	case mpool.AllocationFailureSealed,
-		mpool.AllocationFailureSuspended:
-		return MemoryPressureSealed
-	case mpool.AllocationFailureMismatch:
-		return MemoryPressureMismatch
-	case mpool.AllocationFailureAllocatorLimit:
-		return MemoryPressureAllocatorLimit
-	case mpool.AllocationFailureInvariant:
-		return MemoryPressureInvariant
-	}
-
 	// Resource-ledger helpers may still return a bare lifecycle sentinel.
 	if errors.Is(err, process.ErrHashBuildBudgetClosed) {
 		return MemoryPressureSealed
-	}
-	if errors.Is(err, process.ErrHashBuildBudgetAdmission) {
-		return MemoryPressureCapacity
 	}
 	if errors.Is(err, process.ErrHashBuildBudgetInvalid) ||
 		errors.Is(err, process.ErrHashBuildCeilingMissing) {

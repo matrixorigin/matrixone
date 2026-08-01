@@ -43,7 +43,8 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 	if !errors.As(err, &budgetErr) || budgetErr.Kind != process.HashBuildBudgetErrorAdmission {
 		switch {
 		case mpool.AllocationFailureReasonOf(err) ==
-			mpool.AllocationFailureCapacity:
+			mpool.AllocationFailureCapacity &&
+			!mpool.IsMPoolCapacityFailure(err):
 			return moerr.NewResourceExhaustedf(ctx,
 				"hash build memory budget exceeded; reduce join build width or query concurrency, increase processLimitationSize, or lower join_spill_mem for an eligible shuffle join")
 		case errors.Is(err, process.ErrHashBuildBudgetAdmission):

@@ -2092,17 +2092,19 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	sourceGrouping := w.GetGrouping().Contains(uint64(wi))
-	if sourceGrouping {
+	if sourceGrouping && v.allocationAccount != nil {
 		if err := v.ensureGroupingCapacity(int(vi)+1, mp); err != nil {
 			return err
 		}
+	}
+	if sourceGrouping {
 		v.GetGrouping().Set(uint64(vi))
 	} else {
 		v.GetGrouping().Unset(uint64(vi))
 	}
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && w.GetNulls().Contains(uint64(wi)))
-	if sourceNull {
+	if sourceNull && v.allocationAccount != nil {
 		if err := v.ensureNullCapacity(int(vi)+1, mp); err != nil {
 			return err
 		}
@@ -2121,7 +2123,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 		// Non-null constant vectors still share the regular null/data path below.
 		wi = 0
 	}
-	if w.GetNulls().Contains(uint64(wi)) {
+	if sourceNull {
 		if !v.typ.IsFixedLen() {
 			vva := MustFixedColNoTypeCheck[types.Varlena](v)
 			vva[vi] = types.Varlena{}
@@ -3366,25 +3368,31 @@ func (v *Vector) UnionNull(mp *mpool.MPool) error {
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
-	needGrouping := nulls.Contains(&w.gsp, uint64(sel))
-	needNulls := w.IsConstNull() ||
+	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
+	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
-	if err := extendWithBitmaps(v, 1, mp, needNulls, needGrouping); err != nil {
+	if err := extendWithBitmaps(
+		v,
+		1,
+		mp,
+		sourceNull && v.allocationAccount != nil,
+		sourceGrouping && v.allocationAccount != nil,
+	); err != nil {
 		return err
 	}
 
 	oldLen := v.length
 	v.length++
-	if nulls.Contains(&w.gsp, uint64(sel)) {
+	if sourceGrouping {
 		nulls.Add(&v.gsp, uint64(oldLen))
 	}
 	if w.IsConst() {
-		if w.IsConstNull() {
+		if sourceNull {
 			nulls.Add(&v.nsp, uint64(oldLen))
 			return nil
 		}
 		sel = 0
-	} else if nulls.Contains(&w.nsp, uint64(sel)) {
+	} else if sourceNull {
 		nulls.Add(&v.nsp, uint64(oldLen))
 		return nil
 	}
@@ -3443,25 +3451,31 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 		return nil
 	}
 
-	needGrouping := nulls.Contains(&w.gsp, uint64(sel))
-	needNulls := w.IsConstNull() ||
+	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
+	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
-	if err := extendWithBitmaps(v, cnt, mp, needNulls, needGrouping); err != nil {
+	if err := extendWithBitmaps(
+		v,
+		cnt,
+		mp,
+		sourceNull && v.allocationAccount != nil,
+		sourceGrouping && v.allocationAccount != nil,
+	); err != nil {
 		return err
 	}
 
 	oldLen := v.length
 	v.length += cnt
-	if nulls.Contains(&w.gsp, uint64(sel)) {
+	if sourceGrouping {
 		nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+cnt))
 	}
 	if w.IsConst() {
-		if w.IsConstNull() {
+		if sourceNull {
 			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+cnt))
 			return nil
 		}
 		sel = 0
-	} else if nulls.Contains(&w.nsp, uint64(sel)) {
+	} else if sourceNull {
 		nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+cnt))
 		return nil
 	}

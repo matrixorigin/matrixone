@@ -76,6 +76,7 @@ type MessageCenter struct {
 type MessageBoard struct {
 	reset         bool // for debug purpose
 	closed        bool
+	drained       bool
 	multiCN       bool
 	stmtId        uuid.UUID
 	messageCenter *MessageCenter
@@ -174,13 +175,26 @@ func (m *MessageBoard) Reset() *MessageBoard {
 	return m
 }
 
+// Close prevents publication and wakes blocked receivers without destroying
+// queued ownership. It is safe while consumers are still unwinding; the
+// terminal owner must call CloseAndDrain after every producer and consumer is
+// quiescent. True identifies the call that first closed the board.
+func (m *MessageBoard) Close() bool {
+	return m.close(false)
+}
+
 // CloseAndDrain is the terminal MessageBoard boundary for one execution
 // attempt. Callers invoke it only after all scope and remote-notifier producers
-// are quiescent. It removes a multi-CN registration, destroys every queued
-// ownership-bearing message, and prevents a late producer from republishing
-// into the closed generation. The operation is idempotent; true identifies
-// the call that performed the close.
+// and consumers are quiescent. It removes a multi-CN registration, destroys
+// every queued ownership-bearing message, and prevents a late producer from
+// republishing into the closed generation. The operation is idempotent; true
+// identifies the call that performed the drain, including a drain after an
+// earlier Close.
 func (m *MessageBoard) CloseAndDrain() bool {
+	return m.close(true)
+}
+
+func (m *MessageBoard) close(drain bool) bool {
 	if m == nil || m.rwMutex == nil {
 		return false
 	}
@@ -199,20 +213,27 @@ func (m *MessageBoard) CloseAndDrain() bool {
 
 	m.rwMutex.Lock()
 	defer m.rwMutex.Unlock()
-	if m.closed {
+	firstClose := !m.closed
+	if firstClose {
+		m.closed = true
+		m.reset = true
+		for _, waiter := range m.waiters {
+			if waiter == nil {
+				continue
+			}
+			select {
+			case waiter <- true:
+			default:
+			}
+		}
+	}
+	if !drain {
+		return firstClose
+	}
+	if m.drained {
 		return false
 	}
-	m.closed = true
-	m.reset = true
-	for _, waiter := range m.waiters {
-		if waiter == nil {
-			continue
-		}
-		select {
-		case waiter <- true:
-		default:
-		}
-	}
+	m.drained = true
 	m.cleanupQueuedMessagesLocked()
 	return true
 }

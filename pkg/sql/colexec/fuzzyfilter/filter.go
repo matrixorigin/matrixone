@@ -402,7 +402,7 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	}
 	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
 		if err := runtimefilter.CloseFloatSignedZero(
-			ctr.pass2RuntimeFilter, proc.Mp(), nil); err != nil {
+			ctr.pass2RuntimeFilter, proc.Mp()); err != nil {
 			if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
 				return nil
 			}

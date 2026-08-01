@@ -16,6 +16,7 @@ package process
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -504,27 +505,61 @@ func TestHashBuildBudgetUsesCurrentMemoryInputs(t *testing.T) {
 }
 
 func BenchmarkHashBuildBudgetAllocationAccount(b *testing.B) {
-	budget := MustNewHashBuildBudget(math.MaxUint64, math.MaxUint64)
-	generation, err := budget.OpenGeneration(1)
-	if err != nil {
-		b.Fatal(err)
-	}
-	registry, err := mpool.NewAllocationAccountRegistry(1, uint64(b.N)+1)
-	if err != nil {
-		b.Fatal(err)
-	}
-	account, err := registry.OpenWithController(math.MaxUint64, generation)
-	if err != nil {
-		b.Fatal(err)
-	}
-	mp := mpool.MustNewZero()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		allocation, allocErr := mp.AllocAccounted(1, account, 1, 1)
-		if allocErr != nil {
-			b.Fatal(allocErr)
+	for _, accounted := range []bool{false, true} {
+		mode := "unaccounted"
+		if accounted {
+			mode = "accounted"
 		}
-		mp.Free(allocation)
+		for _, size := range []int{64, 4 << 10, 64 << 10} {
+			b.Run(mode+"/alloc-free/"+fmt.Sprint(size), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				var generation *HashBuildBudgetGeneration
+				var registry *mpool.AllocationAccountRegistry
+				var account *mpool.AllocationAccount
+				if accounted {
+					budget := MustNewHashBuildBudget(math.MaxUint64, math.MaxUint64)
+					var err error
+					generation, err = budget.OpenGeneration(1)
+					if err != nil {
+						b.Fatal(err)
+					}
+					registry, err = mpool.NewAllocationAccountRegistry(1, 2)
+					if err != nil {
+						b.Fatal(err)
+					}
+					account, err = registry.OpenWithController(math.MaxInt64, generation)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+
+				b.ReportAllocs()
+				b.SetBytes(int64(size))
+				b.ResetTimer()
+				for range b.N {
+					var allocation []byte
+					var err error
+					if accounted {
+						allocation, err = mp.AllocAccounted(size, account, 1, 1)
+					} else {
+						allocation, err = mp.Alloc(size, true)
+					}
+					if err != nil {
+						b.Fatal(err)
+					}
+					mp.Free(allocation)
+				}
+				b.StopTimer()
+				if accounted {
+					if generation.Used() != 0 || account.Snapshot().Used != 0 {
+						b.Fatal("physical allocation capacity leaked")
+					}
+					if _, _, err := registry.CompleteTerminal(account); err != nil {
+						b.Fatal(err)
+					}
+					generation.Close()
+				}
+			})
+		}
 	}
 }

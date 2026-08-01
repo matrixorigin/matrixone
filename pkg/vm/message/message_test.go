@@ -166,6 +166,34 @@ func TestMessageBoardCloseAndDrainRemovesMultiCNRegistration(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestMessageBoardCloseDefersQueuedOwnershipDrain(t *testing.T) {
+	mb := NewMessageBoard()
+	var destroyed atomic.Int32
+	SendMessage(testMessage{tag: 1, destroyed: &destroyed}, mb)
+
+	receiver := NewMessageReceiver(
+		[]int32{2},
+		AddrBroadCastOnCurrentCN(),
+		mb,
+	)
+	waiting := make(chan error, 1)
+	go func() {
+		_, _, err := receiver.ReceiveMessage(true, context.Background())
+		waiting <- err
+	}()
+
+	require.True(t, mb.Close())
+	require.False(t, mb.Close())
+	require.ErrorContains(t, <-waiting, "message board is closed")
+	require.Zero(t, destroyed.Load())
+	require.Len(t, mb.messages, 1)
+
+	require.True(t, mb.CloseAndDrain())
+	require.False(t, mb.CloseAndDrain())
+	require.Equal(t, int32(1), destroyed.Load())
+	require.Empty(t, mb.messages)
+}
+
 func TestClosedMessageBoardLatePayloadDrainsOriginalGeneration(t *testing.T) {
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
 	require.NoError(t, err)

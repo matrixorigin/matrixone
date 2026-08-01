@@ -354,7 +354,7 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 		return nil
 	}
 	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
-		if err := runtimefilter.CloseFloatSignedZero(vec, proc.Mp(), nil); err != nil {
+		if err := runtimefilter.CloseFloatSignedZero(vec, proc.Mp()); err != nil {
 			if ctr.fallbackRuntimeFilter(ap, proc, err) {
 				return nil
 			}

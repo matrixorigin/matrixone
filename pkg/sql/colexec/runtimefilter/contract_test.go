@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,13 +31,22 @@ import (
 )
 
 func TestClassifyOptionalFallbackFatalFirst(t *testing.T) {
-	mpoolErr := errors.New("mpool allocation failed")
+	mpoolErr := mpool.ErrAllocationAccountCapacity
 	providerErr := errors.New("budget provider failed")
 	var nilBudgetErr *process.HashBuildBudgetError
-	budgetErr := func(kind process.HashBuildBudgetErrorKind) error {
-		return &process.HashBuildBudgetError{Kind: kind}
+	budgetErr := func(
+		kind process.HashBuildBudgetErrorKind,
+		component process.HashBuildBudgetComponent,
+	) error {
+		return &process.HashBuildBudgetError{Kind: kind, Component: component}
 	}
 	marked := MarkOptionalAllocationError
+	memoryAdmission := func() error {
+		return budgetErr(
+			process.HashBuildBudgetErrorAdmission,
+			process.HashBuildBudgetComponentMemory,
+		)
+	}
 
 	tests := []struct {
 		name string
@@ -45,19 +55,29 @@ func TestClassifyOptionalFallbackFatalFirst(t *testing.T) {
 	}{
 		{name: "nil", want: OptionalFallbackNone},
 		{name: "typed nil budget error", err: nilBudgetErr, want: OptionalFallbackNone},
-		{name: "typed admission", err: budgetErr(process.HashBuildBudgetErrorAdmission), want: OptionalFallbackBudgetAdmission},
-		{name: "marked typed admission", err: marked(budgetErr(process.HashBuildBudgetErrorAdmission)), want: OptionalFallbackBudgetAdmission},
-		{name: "joined admission and closed", err: errors.Join(budgetErr(process.HashBuildBudgetErrorAdmission), budgetErr(process.HashBuildBudgetErrorClosed)), want: OptionalFallbackNone},
+		{name: "typed memory admission", err: memoryAdmission(), want: OptionalFallbackBudgetAdmission},
+		{name: "marked typed memory admission", err: marked(memoryAdmission()), want: OptionalFallbackBudgetAdmission},
+		{name: "typed spill disk admission", err: budgetErr(process.HashBuildBudgetErrorAdmission, process.HashBuildBudgetComponentSpillDisk), want: OptionalFallbackNone},
+		{name: "typed spill fd admission", err: budgetErr(process.HashBuildBudgetErrorAdmission, process.HashBuildBudgetComponentSpillFD), want: OptionalFallbackNone},
+		{name: "typed admission without component", err: budgetErr(process.HashBuildBudgetErrorAdmission, 0), want: OptionalFallbackNone},
+		{name: "joined admission and closed", err: errors.Join(memoryAdmission(), budgetErr(process.HashBuildBudgetErrorClosed, 0)), want: OptionalFallbackNone},
 		{name: "marked mpool allocation", err: marked(mpoolErr), want: OptionalFallbackAllocation},
 		{name: "plain mpool error", err: mpoolErr, want: OptionalFallbackNone},
+		{name: "marked sealed", err: marked(mpool.ErrAllocationAccountSealed), want: OptionalFallbackNone},
+		{name: "marked mismatch", err: marked(mpool.ErrAllocationAccountMismatch), want: OptionalFallbackNone},
+		{name: "marked invariant", err: marked(mpool.ErrAllocationAccountInvariant), want: OptionalFallbackNone},
+		{name: "marked allocator limit", err: marked(mpool.ErrAllocationAllocatorLimit), want: OptionalFallbackNone},
+		{name: "marked suspended", err: marked(mpool.ErrAllocationAdmissionSuspended), want: OptionalFallbackNone},
+		{name: "marked joined capacity and invariant", err: marked(errors.Join(mpool.ErrAllocationAccountCapacity, mpool.ErrAllocationAccountInvariant)), want: OptionalFallbackNone},
+		{name: "marked joined mpool capacity and invalid", err: marked(errors.Join(moerr.NewMPoolCapacityNoCtxf("test"), mpool.ErrAllocationAccountInvalid)), want: OptionalFallbackNone},
 		{name: "plain provider error", err: providerErr, want: OptionalFallbackNone},
 		{name: "raw admission sentinel", err: process.ErrHashBuildBudgetAdmission, want: OptionalFallbackNone},
-		{name: "typed closed", err: budgetErr(process.HashBuildBudgetErrorClosed), want: OptionalFallbackNone},
-		{name: "marked typed closed", err: marked(budgetErr(process.HashBuildBudgetErrorClosed)), want: OptionalFallbackNone},
-		{name: "typed invalid", err: budgetErr(process.HashBuildBudgetErrorInvalid), want: OptionalFallbackNone},
-		{name: "marked typed invalid", err: marked(budgetErr(process.HashBuildBudgetErrorInvalid)), want: OptionalFallbackNone},
-		{name: "typed ceiling missing", err: budgetErr(process.HashBuildBudgetErrorCeilingMissing), want: OptionalFallbackNone},
-		{name: "marked typed ceiling missing", err: marked(budgetErr(process.HashBuildBudgetErrorCeilingMissing)), want: OptionalFallbackNone},
+		{name: "typed closed", err: budgetErr(process.HashBuildBudgetErrorClosed, 0), want: OptionalFallbackNone},
+		{name: "marked typed closed", err: marked(budgetErr(process.HashBuildBudgetErrorClosed, 0)), want: OptionalFallbackNone},
+		{name: "typed invalid", err: budgetErr(process.HashBuildBudgetErrorInvalid, 0), want: OptionalFallbackNone},
+		{name: "marked typed invalid", err: marked(budgetErr(process.HashBuildBudgetErrorInvalid, 0)), want: OptionalFallbackNone},
+		{name: "typed ceiling missing", err: budgetErr(process.HashBuildBudgetErrorCeilingMissing, 0), want: OptionalFallbackNone},
+		{name: "marked typed ceiling missing", err: marked(budgetErr(process.HashBuildBudgetErrorCeilingMissing, 0)), want: OptionalFallbackNone},
 		{name: "marked canceled", err: marked(context.Canceled), want: OptionalFallbackNone},
 		{name: "marked deadline", err: marked(context.DeadlineExceeded), want: OptionalFallbackNone},
 		{name: "marked raw closed", err: marked(process.ErrHashBuildBudgetClosed), want: OptionalFallbackNone},
@@ -279,7 +299,7 @@ func TestMarshalExactFilterVectorUsesWireSizedBudget(t *testing.T) {
 	data, release, err := MarshalExactFilterVector(vec, mp, account, 1, 1)
 	require.NoError(t, err)
 	require.Len(t, data, 34+vec.Length())
-	// The retained charge is the actual bytes.Buffer capacity, not a
+	// The retained charge is the actual caller-owned buffer capacity, not a
 	// row-count-derived metadata estimate.
 	require.LessOrEqual(t, budget.Used(), uint64(2*len(data)))
 	require.NotZero(t, budget.Used())

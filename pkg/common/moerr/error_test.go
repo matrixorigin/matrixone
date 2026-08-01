@@ -173,6 +173,19 @@ func TestResourceExhaustedWithDetailsEncoding(t *testing.T) {
 	require.Equal(t, err, decoded)
 }
 
+func TestMPoolCapacityEncoding(t *testing.T) {
+	err := NewMPoolCapacityNoCtxf("alloc %d bytes, cap %d", 8, 4)
+	require.Equal(t, ErrMPoolCapacity, err.ErrorCode())
+	require.Equal(t, ER_ENGINE_OUT_OF_MEMORY, err.MySQLCode())
+	require.Contains(t, err.Error(), "alloc 8 bytes, cap 4")
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 func TestErrSubqueryNo1RowContract(t *testing.T) {
 	err := NewErrSubqueryNo1Row(context.Background())
 	require.Equal(t, ErrSubqueryNo1Row, err.ErrorCode())

@@ -214,14 +214,19 @@ func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 
 func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 	for _, test := range []struct {
-		name  string
-		typ   types.Type
-		probe func(*process.Process) *vector.Vector
-		build func(*process.Process) *vector.Vector
+		name           string
+		typ            types.Type
+		rows           int
+		spillThreshold int64
+		wantRespill    bool
+		probe          func(*process.Process) *vector.Vector
+		build          func(*process.Process) *vector.Vector
 	}{
 		{
-			name: "varchar",
-			typ:  types.T_varchar.ToType(),
+			name:           "varchar",
+			typ:            types.T_varchar.ToType(),
+			rows:           1,
+			spillThreshold: 1,
 			probe: func(proc *process.Process) *vector.Vector {
 				return testutil.MakeVarcharVector([]string{"probe"}, nil, proc.Mp())
 			},
@@ -230,8 +235,10 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 			},
 		},
 		{
-			name: "int32",
-			typ:  types.T_int32.ToType(),
+			name:           "int32",
+			typ:            types.T_int32.ToType(),
+			rows:           1,
+			spillThreshold: 1,
 			probe: func(proc *process.Process) *vector.Vector {
 				return testutil.MakeInt32Vector([]int32{222}, nil, proc.Mp())
 			},
@@ -239,10 +246,45 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 				return testutil.MakeInt32Vector([]int32{111}, nil, proc.Mp())
 			},
 		},
+		{
+			name:           "scaled-float32",
+			rows:           8192,
+			spillThreshold: 50,
+			wantRespill:    true,
+			typ: func() types.Type {
+				typ := types.T_float32.ToType()
+				typ.Scale = 2
+				return typ
+			}(),
+			probe: func(proc *process.Process) *vector.Vector {
+				values := make([]float32, 8192)
+				values[0] = 1.234
+				for i := 1; i < len(values); i++ {
+					values[i] = float32(i)/10 + 0.001
+				}
+				vec := testutil.MakeFloat32Vector(values, nil, proc.Mp())
+				vec.GetType().Scale = 2
+				return vec
+			},
+			build: func(proc *process.Process) *vector.Vector {
+				values := make([]float32, 8192)
+				values[0] = 9.876
+				for i := 1; i < len(values); i++ {
+					values[i] = float32(i) / 10
+				}
+				vec := testutil.MakeFloat32Vector(values, nil, proc.Mp())
+				vec.GetType().Scale = 2
+				return vec
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			keyExpr := []*plan.Expr{{
-				Typ: plan.Type{Id: int32(test.typ.Oid), Width: test.typ.Width},
+				Typ: plan.Type{
+					Id:    int32(test.typ.Oid),
+					Width: test.typ.Width,
+					Scale: test.typ.Scale,
+				},
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{
 					ColPos: 0,
 				}},
@@ -257,10 +299,10 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 			tc.arg.NonEqCond = nil
 			tc.arg.IsShuffle = true
 			tc.arg.ShuffleIdx = 0
-			tc.arg.SpillThreshold = 1
+			tc.arg.SpillThreshold = test.spillThreshold
 			tc.barg.IsShuffle = true
 			tc.barg.ShuffleIdx = 0
-			tc.barg.SpillThreshold = 1
+			tc.barg.SpillThreshold = test.spillThreshold
 			tc.barg.NeedBatches = false
 			tc.barg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
 				Tag: tc.arg.JoinMapTag + 1_500,
@@ -268,14 +310,19 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 
 			probe := batch.NewWithSize(1)
 			probe.Vecs[0] = test.probe(tc.proc)
-			probe.SetRowCount(1)
+			probe.SetRowCount(test.rows)
 			build := batch.NewWithSize(1)
 			build.Vecs[0] = test.build(tc.proc)
-			build.SetRowCount(1)
+			build.SetRowCount(test.rows)
 			probe.Vecs[0].GetGrouping().Add(0)
 			build.Vecs[0].GetGrouping().Add(0)
 			resetChildrenWithBatch(tc.arg, probe)
 			resetHashBuildChildrenWithBatch(tc.barg, build)
+
+			spillBefore := promtestutil.ToFloat64(
+				metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"))
+			respillBefore := promtestutil.ToFloat64(
+				metricv2.HashBuildSpillDepthCounter.WithLabelValues("respill", "2"))
 
 			require.NoError(t, tc.arg.Prepare(tc.proc))
 			require.NoError(t, tc.barg.Prepare(tc.proc))
@@ -293,9 +340,13 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 					break
 				}
 			}
-			require.Equal(t, 1, rows)
-			require.Positive(t,
-				tc.barg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
+			require.Equal(t, test.rows, rows)
+			require.Greater(t, promtestutil.ToFloat64(
+				metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")), spillBefore)
+			if test.wantRespill {
+				require.Greater(t, promtestutil.ToFloat64(
+					metricv2.HashBuildSpillDepthCounter.WithLabelValues("respill", "2")), respillBefore)
+			}
 
 			tc.arg.Reset(tc.proc, false, nil)
 			tc.barg.Reset(tc.proc, false, nil)

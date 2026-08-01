@@ -299,8 +299,12 @@ func TestRemoteAllocationStatementRegistrationTimerStartsBeforeFinish(t *testing
 		t.Fatal("registration timeout did not cancel the active fragment")
 	}
 	require.Eventually(t, func() bool {
-		return destroyed.Load() == 1 && strings.Contains(board.DebugString(), "closed")
+		return strings.Contains(board.DebugString(), "closed")
 	}, time.Second, time.Millisecond)
+	// Closing wakes the active fragment but cannot destroy ownership that the
+	// fragment may still be consuming. The last finish performs the drain.
+	require.Zero(t, destroyed.Load())
+	require.Equal(t, uint64(cap(buffer)), attempt.account.Snapshot().Used)
 
 	participant.stage(attempt, producer.proc.Mp())
 	terminal, err := participant.finish(errors.New("active fragment observed cancellation"))
@@ -309,6 +313,7 @@ func TestRemoteAllocationStatementRegistrationTimerStartsBeforeFinish(t *testing
 	require.Len(t, terminal.allocation, 1)
 	require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.allocation[0].State)
 	require.Zero(t, terminal.allocation[0].Used)
+	require.Equal(t, int32(1), destroyed.Load())
 	require.Zero(t, terminal.memory.LiveBytesAtSeal)
 	require.Zero(t, registry.LiveAllocationMetadata())
 	require.False(t, remoteAllocationStatementGroupRegistered(board))

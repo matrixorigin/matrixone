@@ -21,6 +21,8 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // AllocationOwner and AllocationSite are bounded diagnostic dimensions.
@@ -166,6 +168,11 @@ func AllocationFailureReasonOf(err error) AllocationFailureReason {
 	switch {
 	case errors.Is(err, ErrAllocationAccountInvariant):
 		return AllocationFailureInvariant
+	case errors.Is(err, ErrAllocationAccountInvalid),
+		errors.Is(err, ErrAllocationAccountStale),
+		errors.Is(err, ErrAllocationAccountLive),
+		errors.Is(err, ErrAllocationGenerationSlots):
+		return AllocationFailureInvariant
 	case errors.Is(err, ErrAllocationAccountMismatch):
 		return AllocationFailureMismatch
 	case errors.Is(err, ErrAllocationAccountSealed):
@@ -175,11 +182,19 @@ func AllocationFailureReasonOf(err error) AllocationFailureReason {
 	case errors.Is(err, ErrAllocationAdmissionSuspended):
 		return AllocationFailureSuspended
 	case errors.Is(err, ErrAllocationAccountCapacity),
-		errors.Is(err, ErrAllocationMetadataSlots):
+		errors.Is(err, ErrAllocationMetadataSlots),
+		IsMPoolCapacityFailure(err):
 		return AllocationFailureCapacity
 	default:
 		return AllocationFailureNone
 	}
+}
+
+// IsMPoolCapacityFailure recognizes both a direct MO error and a contextual
+// wrapper retained by an intermediate owner.
+func IsMPoolCapacityFailure(err error) bool {
+	var moErr *moerr.Error
+	return errors.As(err, &moErr) && moErr.ErrorCode() == moerr.ErrMPoolCapacity
 }
 
 func IsRetryableAllocationCapacity(err error) bool {
@@ -195,15 +210,6 @@ type AllocationAccountTerminalSnapshot struct {
 	LiveOwner       AllocationOwner
 	LiveSite        AllocationSite
 	LiveAllocations uint64
-}
-
-// AllocationAccountCheckpoint records the physical live-byte boundary before
-// a retryable logical operation. The owner performs its own private-allocation
-// rollback, then ValidateRollback proves that the same generation returned to
-// this exact boundary before a retry can begin.
-type AllocationAccountCheckpoint struct {
-	Handle AllocationAccountHandle
-	Used   uint64
 }
 
 // AllocationCapacityController lets an account share a higher-level aggregate
@@ -247,78 +253,6 @@ func (a *AllocationAccount) Snapshot() AllocationAccountSnapshot {
 		Peak:   a.peak.Load(),
 		Sealed: state&allocationAccountSealedBit != 0,
 	}
-}
-
-func (a *AllocationAccount) Checkpoint() (AllocationAccountCheckpoint, error) {
-	if a == nil || a.registry == nil || a.handle == 0 {
-		return AllocationAccountCheckpoint{}, ErrAllocationAccountInvalid
-	}
-	resolved, ok := a.registry.Resolve(a.handle)
-	if !ok || resolved != a {
-		return AllocationAccountCheckpoint{}, ErrAllocationAccountStale
-	}
-	snapshot := a.Snapshot()
-	if snapshot.Sealed {
-		return AllocationAccountCheckpoint{}, ErrAllocationAccountSealed
-	}
-	return AllocationAccountCheckpoint{
-		Handle: snapshot.Handle,
-		Used:   snapshot.Used,
-	}, nil
-}
-
-// ValidateRollback proves that an owner restored its complete physical
-// allocation boundary. It never mutates accounting: only physical Free owns a
-// release, so a helper cannot hide a leaked allocation by decrementing usage.
-func (a *AllocationAccount) ValidateRollback(
-	checkpoint AllocationAccountCheckpoint,
-) error {
-	if a == nil || checkpoint.Handle == 0 {
-		return ErrAllocationAccountInvalid
-	}
-	if checkpoint.Handle != a.handle {
-		return wrapAllocationAccountError(
-			ErrAllocationAccountMismatch,
-			"checkpoint=%d account=%d",
-			checkpoint.Handle,
-			a.handle,
-		)
-	}
-	snapshot := a.Snapshot()
-	if snapshot.Sealed {
-		return ErrAllocationAccountSealed
-	}
-	if snapshot.Used != checkpoint.Used {
-		return wrapAllocationAccountError(
-			ErrAllocationAccountInvariant,
-			"checkpoint-used=%d current-used=%d",
-			checkpoint.Used,
-			snapshot.Used,
-		)
-	}
-	return nil
-}
-
-// RollbackToCheckpoint runs the owner's physical cleanup and then proves the
-// exact generation boundary. It deliberately does not own or synthesize any
-// release: MPool allocation metadata remains the sole release authority.
-func (a *AllocationAccount) RollbackToCheckpoint(
-	checkpoint AllocationAccountCheckpoint,
-	rollback func() error,
-) error {
-	if rollback == nil {
-		return ErrAllocationAccountInvalid
-	}
-	if a == nil || checkpoint.Handle != a.handle {
-		return ErrAllocationAccountMismatch
-	}
-	if a.Snapshot().Sealed {
-		return ErrAllocationAccountSealed
-	}
-	if err := rollback(); err != nil {
-		return err
-	}
-	return a.ValidateRollback(checkpoint)
 }
 
 func (a *AllocationAccount) acquire(capacity uint64) error {
@@ -859,21 +793,7 @@ type allocationAccountRequest struct {
 	account *AllocationAccount
 	owner   AllocationOwner
 	site    AllocationSite
-	// checkpoint is nil for every public caller. Same-package fault tests use
-	// it to prove rollback at each unpublished transaction boundary.
-	checkpoint func(allocationCheckpoint) error
 }
-
-type allocationCheckpoint uint8
-
-const (
-	allocationAfterAccount allocationCheckpoint = iota + 1
-	allocationAfterMetadata
-	allocationAfterGlobalStats
-	allocationAfterPoolStats
-	allocationAfterPhysical
-	allocationAfterHeader
-)
 
 func (r allocationAccountRequest) validate() error {
 	if r.account == nil || r.account.registry == nil ||
@@ -886,15 +806,6 @@ func (r allocationAccountRequest) validate() error {
 		return ErrAllocationAccountStale
 	}
 	return nil
-}
-
-func (r allocationAccountRequest) reach(
-	checkpoint allocationCheckpoint,
-) error {
-	if r.checkpoint == nil {
-		return nil
-	}
-	return r.checkpoint(checkpoint)
 }
 
 type allocationLease struct {

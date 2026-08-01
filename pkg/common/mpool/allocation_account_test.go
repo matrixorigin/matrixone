@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -434,47 +435,6 @@ func TestAllocationAccountOpenSuspendLinearization(t *testing.T) {
 	require.False(t, registry.AdmissionSuspended())
 }
 
-func TestAllocationAccountCheckpointValidation(t *testing.T) {
-	registry, err := NewAllocationAccountRegistry(2, 2)
-	require.NoError(t, err)
-	account, err := registry.Open(8)
-	require.NoError(t, err)
-	other, err := registry.Open(8)
-	require.NoError(t, err)
-
-	checkpoint, err := account.Checkpoint()
-	require.NoError(t, err)
-	require.NoError(t, account.acquire(1))
-	require.ErrorIs(t, account.ValidateRollback(checkpoint), ErrAllocationAccountInvariant)
-	require.NoError(t, account.RollbackToCheckpoint(checkpoint, func() error {
-		account.release(1)
-		return nil
-	}))
-	require.NoError(t, account.ValidateRollback(checkpoint))
-	require.ErrorIs(
-		t,
-		account.RollbackToCheckpoint(checkpoint, nil),
-		ErrAllocationAccountInvalid,
-	)
-
-	otherCheckpoint, err := other.Checkpoint()
-	require.NoError(t, err)
-	require.ErrorIs(t, account.ValidateRollback(otherCheckpoint), ErrAllocationAccountMismatch)
-	called := false
-	require.ErrorIs(t, account.RollbackToCheckpoint(otherCheckpoint, func() error {
-		called = true
-		return nil
-	}), ErrAllocationAccountMismatch)
-	require.False(t, called)
-	account.Seal()
-	require.ErrorIs(t, account.ValidateRollback(checkpoint), ErrAllocationAccountSealed)
-	_, err = registry.Finalize(account)
-	require.NoError(t, err)
-	other.Seal()
-	_, err = registry.Finalize(other)
-	require.NoError(t, err)
-}
-
 func TestAllocationFailureReasonsAreNonOverlapping(t *testing.T) {
 	testCases := []struct {
 		err       error
@@ -483,10 +443,18 @@ func TestAllocationFailureReasonsAreNonOverlapping(t *testing.T) {
 	}{
 		{ErrAllocationAccountCapacity, AllocationFailureCapacity, true},
 		{ErrAllocationMetadataSlots, AllocationFailureCapacity, true},
+		{moerr.NewMPoolCapacityNoCtxf("test"), AllocationFailureCapacity, true},
 		{ErrAllocationAccountSealed, AllocationFailureSealed, false},
 		{ErrAllocationAccountMismatch, AllocationFailureMismatch, false},
 		{ErrAllocationAllocatorLimit, AllocationFailureAllocatorLimit, false},
 		{ErrAllocationAccountInvariant, AllocationFailureInvariant, false},
+		{ErrAllocationAccountInvalid, AllocationFailureInvariant, false},
+		{ErrAllocationAccountStale, AllocationFailureInvariant, false},
+		{ErrAllocationAccountLive, AllocationFailureInvariant, false},
+		{ErrAllocationGenerationSlots, AllocationFailureInvariant, false},
+		{errors.Join(moerr.NewMPoolCapacityNoCtxf("test"), ErrAllocationAccountInvariant), AllocationFailureInvariant, false},
+		{errors.Join(moerr.NewMPoolCapacityNoCtxf("test"), ErrAllocationAccountInvalid), AllocationFailureInvariant, false},
+		{errors.Join(moerr.NewMPoolCapacityNoCtxf("test"), ErrAllocationAccountSealed), AllocationFailureSealed, false},
 		{ErrAllocationAdmissionSuspended, AllocationFailureSuspended, false},
 		{errors.New("unrelated"), AllocationFailureNone, false},
 	}

@@ -763,9 +763,6 @@ func TestHashBuildRuntimeFilterFallbackStatsTriggerDiagnostics(t *testing.T) {
 		"HashBuildRuntimeFilterCollectionFallbacks",
 		"HashBuildRuntimeFilterBudgetFallbacks",
 		"HashBuildRuntimeFilterAllocationFallbacks",
-		"HashBuildSpillScratchReserveRejects",
-		"HashBuildSpillScratchGrowRejects",
-		"HashBuildSpillScratchGrowCount",
 	} {
 		t.Run(stat, func(t *testing.T) {
 			require.True(t, hasHashBuildDiagnosticStats(
@@ -1806,6 +1803,47 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 	generation.Close()
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestSerializedRuntimeFilterScratchUsesPhysicalAccount(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	componentType := types.T_varchar.ToType()
+	spec := makeSerializedRuntimeFilterSpec(
+		t, proc, 107, 2, []types.Type{componentType}, false)
+	arg := &HashBuild{RuntimeFilterSpec: spec}
+	budget := process.MustNewHashBuildBudget(450<<10, 450<<10)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	installTestHashBuildBudget(t, arg, generation)
+
+	value := strings.Repeat("x", 300<<10)
+	arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+		testutil.MakeVarcharVector([]string{value}, nil, proc.Mp()),
+	}
+	arg.ctr.hashmapBuilder.InputBatchRowCount = 1
+
+	data, release, rows, usable, err :=
+		arg.materializeSerializedRuntimeFilter(
+			proc,
+			spec,
+			[]types.Type{componentType},
+			1,
+		)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Equal(t, runtimefilter.OptionalFallbackBudgetAdmission,
+		runtimefilter.ClassifyOptionalFallback(err))
+	require.Nil(t, data)
+	require.Nil(t, release)
+	require.Zero(t, rows)
+	require.False(t, usable)
+	require.Equal(t, uint64(1), generation.RejectCount())
+	require.Zero(t, generation.Used())
+	require.NotZero(t, generation.Peak())
+
+	arg.ctr.hashmapBuilder.Free(proc)
+	generation.Close()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestSerializedRuntimeFilterBoundsObserveCancellation(t *testing.T) {

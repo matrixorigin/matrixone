@@ -858,7 +858,6 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 		if err := runtimefilter.CloseFloatSignedZero(
 			keyVec,
 			proc.Mp(),
-			nil,
 		); err != nil {
 			if hashBuild.fallbackOptionalRuntimeFilter(err, &runtimeFilter, spec, proc) {
 				return nil
@@ -1015,6 +1014,7 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 	payloadType, ok := planExprType(
 		runtimefilter.BuildKeyExpr(spec))
 	if !ok || areaBound > uint64(math.MaxInt) ||
+		maxRowBound > uint64(math.MaxInt) ||
 		hashBuild.ctr.hashmapBuilder.uniqueKeyAllocation == nil {
 		return nil, nil, 0, false, nil
 	}
@@ -1037,8 +1037,23 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 	if packerSize == 0 {
 		packerSize = 1
 	}
-	packer := types.NewPackerWithSize(packerSize)
-	defer packer.Close()
+	scratch, err := mpool.NewAccountedBuffer(
+		proc.Mp(),
+		hashBuild.ctr.hashmapBuilder.mapAllocationAccount,
+		HashBuildAllocationOwner,
+		HashBuildAllocationSiteRuntimeFilterScratch,
+	)
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+	defer scratch.Free()
+	if err = scratch.Resize(int(packerSize)); err != nil {
+		if mpool.IsRetryableAllocationCapacity(err) {
+			err = runtimefilter.MarkOptionalAllocationError(err)
+		}
+		return nil, nil, 0, false, err
+	}
+	packer := types.NewPackerWithFixedBuffer(scratch.Bytes())
 
 	for row := 0; row < rowCount; row++ {
 		if row&8191 == 0 {
@@ -1059,6 +1074,12 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 				continue
 			}
 			encoders[i](component, row, packer)
+		}
+		if err = packer.Err(); err != nil {
+			return nil, nil, 0, false, errors.Join(
+				mpool.ErrAllocationAccountInvariant,
+				err,
+			)
 		}
 		if rowIsNull {
 			// serial is NULL if any component is NULL. NULL build keys never

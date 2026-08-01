@@ -992,6 +992,72 @@ func BenchmarkVectorAllocationAccount(b *testing.B) {
 	finalizeTestVectorAllocationAccount(b, state)
 }
 
+func BenchmarkVectorElementAccounting(b *testing.B) {
+	const rows = 8192
+	mp := mpool.MustNewZero()
+	state := newTestVectorAllocationAccount(b, 1<<40, 64)
+	source := NewOffHeapVecWithType(types.T_int64.ToType())
+	for i := range rows {
+		if err := AppendFixed(source, int64(i), false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.Cleanup(func() {
+		source.Free(mp)
+		finalizeTestVectorAllocationAccount(b, state)
+	})
+
+	for _, accounted := range []bool{false, true} {
+		mode := "unaccounted"
+		if accounted {
+			mode = "accounted"
+		}
+		b.Run("union-one/"+mode, func(b *testing.B) {
+			destination := NewOffHeapVecWithType(types.T_int64.ToType())
+			if accounted {
+				if err := destination.SetAllocationAccount(state.selection); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := destination.PreExtend(1, mp); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				destination.ResetWithSameType()
+				if err := destination.UnionOne(source, int64(i%rows), mp); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			destination.Free(mp)
+		})
+
+		b.Run("copy/"+mode, func(b *testing.B) {
+			destination := NewOffHeapVecWithType(types.T_int64.ToType())
+			if accounted {
+				if err := destination.SetAllocationAccount(state.selection); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := destination.PreExtend(1, mp); err != nil {
+				b.Fatal(err)
+			}
+			destination.SetLength(1)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := destination.Copy(source, 0, int64(i%rows), mp); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			destination.Free(mp)
+		})
+	}
+}
+
 func TestVectorAllocationAccountErrorsAreTyped(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1, 1)
 	mp := mpool.MustNewZero()

@@ -100,6 +100,12 @@ func TestTerminalBudgetError(t *testing.T) {
 		require.Contains(t, err.Error(), "processLimitationSize")
 	})
 
+	t.Run("mpool capacity preserves allocator error", func(t *testing.T) {
+		capacity := moerr.NewMPoolCapacityNoCtxf("mpool out of space")
+		require.Same(t, capacity,
+			TerminalBudgetError(context.Background(), capacity))
+	})
+
 	t.Run("physical lifecycle failure stays fatal", func(t *testing.T) {
 		joined := errors.Join(
 			mpool.ErrAllocationAccountCapacity,

@@ -1720,9 +1720,11 @@ func BenchmarkCopyBuildBatchAccounting(b *testing.B) {
 	}
 }
 
-// BenchmarkResidentHashBuildAccounting compares the complete resident owner
-// closure, not only the primitive allocator: copied batches, key expression,
-// hash cells/descriptors, and terminal release all run on every iteration.
+// BenchmarkResidentHashBuildAccounting compares a local physical account with
+// the production shared budget controller across the complete resident owner
+// closure: copied batches, key expression, hash cells/descriptors, and terminal
+// release all run on every iteration. The builder intentionally has no
+// unaccounted mode.
 // The 32-row case models high-frequency TP statements; 8,192 rows exercises a
 // full physical batch without entering spill.
 func BenchmarkResidentHashBuildAccounting(b *testing.B) {
@@ -1733,73 +1735,92 @@ func BenchmarkResidentHashBuildAccounting(b *testing.B) {
 			if stringKey {
 				kind = "varchar"
 			}
-			b.Run(fmt.Sprintf("%s/rows-%d", kind, rows), func(b *testing.B) {
-				proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
-				defer proc.Free()
-				var input *batch.Batch
-				var keyType types.Type
-				if stringKey {
-					input = makeStrBatch(b, rows, proc)
-					keyType = types.T_varchar.ToType()
-				} else {
-					input = makeIntBatch(b, rows, proc)
-					keyType = types.T_int32.ToType()
+			for _, controlled := range []bool{false, true} {
+				mode := "local-account"
+				if controlled {
+					mode = "budget-controlled"
 				}
-				defer input.Clean(proc.Mp())
+				b.Run(fmt.Sprintf("%s/rows-%d/%s", kind, rows, mode), func(b *testing.B) {
+					proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+					defer proc.Free()
+					var input *batch.Batch
+					var keyType types.Type
+					if stringKey {
+						input = makeStrBatch(b, rows, proc)
+						keyType = types.T_varchar.ToType()
+					} else {
+						input = makeIntBatch(b, rows, proc)
+						keyType = types.T_int32.ToType()
+					}
+					defer input.Clean(proc.Mp())
 
-				budget := process.MustNewHashBuildBudget(capBytes, capBytes)
-				generation, err := budget.OpenGeneration(1)
-				if err != nil {
-					b.Fatal(err)
-				}
-				registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
-				if err != nil {
-					b.Fatal(err)
-				}
-				account, err := registry.OpenWithController(capBytes, generation)
-				if err != nil {
-					b.Fatal(err)
-				}
+					var generation *process.HashBuildBudgetGeneration
+					registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
+					if err != nil {
+						b.Fatal(err)
+					}
+					var account *mpool.AllocationAccount
+					if controlled {
+						budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+						generation, err = budget.OpenGeneration(1)
+						if err != nil {
+							b.Fatal(err)
+						}
+						account, err = registry.OpenWithController(capBytes, generation)
+						if err != nil {
+							b.Fatal(err)
+						}
+					} else {
+						account, err = registry.Open(capBytes)
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
 
-				b.ReportAllocs()
-				b.SetBytes(int64(input.Size()))
-				b.ResetTimer()
-				for range b.N {
-					hb := &HashmapBuilder{}
-					hb.SetBudget(generation)
-					if err = hb.SetAllocationAccount(account); err != nil {
+					b.ReportAllocs()
+					b.SetBytes(int64(input.Size()))
+					b.ResetTimer()
+					for range b.N {
+						hb := &HashmapBuilder{}
+						if controlled {
+							hb.SetBudget(generation)
+						}
+						if err := hb.SetAllocationAccount(account); err != nil {
+							b.Fatal(err)
+						}
+						if err := hb.Prepare(
+							[]*plan.Expr{newExpr(0, keyType)},
+							-1,
+							-1,
+							nil,
+							proc,
+						); err != nil {
+							b.Fatal(err)
+						}
+						hb.InputBatchRowCount = input.RowCount()
+						if err := hb.CopyBuildBatch(input, proc); err != nil {
+							b.Fatal(err)
+						}
+						if err := hb.BuildHashmap(false, false, false, proc); err != nil {
+							b.Fatal(err)
+						}
+						hb.Free(proc)
+					}
+					b.StopTimer()
+					if account.Snapshot().Used != 0 {
+						b.Fatalf("account used = %d", account.Snapshot().Used)
+					}
+					if _, _, err := registry.CompleteTerminal(account); err != nil {
 						b.Fatal(err)
 					}
-					if err = hb.Prepare(
-						[]*plan.Expr{newExpr(0, keyType)},
-						-1,
-						-1,
-						nil,
-						proc,
-					); err != nil {
-						b.Fatal(err)
+					if controlled {
+						if generation.Used() != 0 {
+							b.Fatalf("generation used = %d", generation.Used())
+						}
+						generation.Close()
 					}
-					hb.InputBatchRowCount = input.RowCount()
-					if err = hb.CopyBuildBatch(input, proc); err != nil {
-						b.Fatal(err)
-					}
-					if err = hb.BuildHashmap(false, false, false, proc); err != nil {
-						b.Fatal(err)
-					}
-					hb.Free(proc)
-				}
-				b.StopTimer()
-				if generation.Used() != 0 {
-					b.Fatalf("generation used = %d", generation.Used())
-				}
-				if account.Snapshot().Used != 0 {
-					b.Fatalf("account used = %d", account.Snapshot().Used)
-				}
-				if _, _, err = registry.CompleteTerminal(account); err != nil {
-					b.Fatal(err)
-				}
-				generation.Close()
-			})
+				})
+			}
 		}
 	}
 }

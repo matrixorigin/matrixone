@@ -361,14 +361,12 @@ func (mp *MPool) recordAccountedPtrMetadata(
 	ptr unsafe.Pointer,
 	pHdr memHdr,
 	lease allocationLease,
-	request allocationAccountRequest,
 ) error {
 	if !mp.noLock {
 		return gRecordAccountedPtrMetadata(
 			ptr,
 			pHdr,
 			lease,
-			request,
 		)
 	}
 	if _, ok := mp.ptrs[ptr]; ok {
@@ -377,22 +375,11 @@ func (mp *MPool) recordAccountedPtrMetadata(
 	if _, ok := mp.leases[ptr]; ok {
 		return moerr.NewInternalErrorNoCtx("account lease already recorded")
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			delete(mp.ptrs, ptr)
-			delete(mp.leases, ptr)
-		}
-	}()
-	mp.ptrs[ptr] = pHdr
-	if err := request.reach(allocationAfterHeader); err != nil {
-		return err
-	}
 	if mp.leases == nil {
 		mp.leases = make(map[unsafe.Pointer]allocationLease)
 	}
+	mp.ptrs[ptr] = pHdr
 	mp.leases[ptr] = lease
-	committed = true
 	return nil
 }
 
@@ -837,6 +824,17 @@ func allocationAccountSiteError(
 	request allocationAccountRequest,
 	err error,
 ) error {
+	if IsMPoolCapacityFailure(err) {
+		// Keep a direct MO error at the operator boundary: remote pipeline
+		// encoding preserves only direct *moerr.Error values. The ownership
+		// dimensions are folded into the serialized message instead.
+		return moerr.NewMPoolCapacityNoCtxf(
+			"allocation owner=%d site=%d: %s",
+			request.owner,
+			request.site,
+			err.Error(),
+		)
+	}
 	return prefixAllocationAccountError(
 		err,
 		"allocation owner=%d site=%d",
@@ -866,19 +864,22 @@ func (mp *MPool) alloc(
 		gcurr := globalStats.RecordAlloc("global", sz)
 		if gcurr > GlobalCap() {
 			globalStats.RecordFree("global", sz)
-			return nil, moerr.NewOOMNoCtx()
+			return nil, moerr.NewMPoolCapacityNoCtxf(
+				"global cap exceeded while allocating %d bytes", sz)
 		}
 		mycurr := mp.stats.RecordAlloc(mp.tag, sz)
 		if mycurr > mp.Cap() {
 			mp.stats.RecordFree(mp.tag, sz)
 			globalStats.RecordFree("global", sz)
-			return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
+			return nil, moerr.NewMPoolCapacityNoCtxf(
+				"mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 		}
 		bs, err = simpleCAllocator().Allocate(uint64(sz))
 		if err != nil {
 			mp.stats.RecordFree(mp.tag, sz)
 			globalStats.RecordFree("global", sz)
-			return nil, err
+			return nil, moerr.NewMPoolCapacityNoCtxf(
+				"physical allocator rejected %d bytes: %v", sz, err)
 		}
 	} else {
 		bs = make([]byte, sz)
@@ -941,16 +942,10 @@ func (mp *MPool) allocAccounted(
 		return nil, err
 	}
 	accountHeld = true
-	if err = request.reach(allocationAfterAccount); err != nil {
-		return nil, err
-	}
 	if err = request.account.registry.reserveMetadata(); err != nil {
 		return nil, err
 	}
 	metadataHeld = true
-	if err = request.reach(allocationAfterMetadata); err != nil {
-		return nil, err
-	}
 
 	hdr := memHdr{
 		poolId:  mp.id,
@@ -966,39 +961,28 @@ func (mp *MPool) allocAccounted(
 
 	gcurr := globalStats.RecordAlloc("global", sz)
 	globalHeld = true
-	if err = request.reach(allocationAfterGlobalStats); err != nil {
-		return nil, err
-	}
 	if gcurr > GlobalCap() {
-		return nil, moerr.NewOOMNoCtx()
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"global cap exceeded while allocating %d bytes", sz)
 	}
 	mycurr := mp.stats.RecordAlloc(mp.tag, sz)
 	poolHeld = true
-	if err = request.reach(allocationAfterPoolStats); err != nil {
-		return nil, err
-	}
 	if mycurr > mp.Cap() {
-		return nil, moerr.NewInternalErrorNoCtxf(
-			"mpool out of space, alloc %d bytes, cap %d",
-			sz,
-			mp.cap,
-		)
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 	}
 	bs, err = simpleCAllocator().Allocate(uint64(sz))
 	if err != nil {
-		return nil, err
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"physical allocator rejected %d bytes: %v", sz, err)
 	}
 	physicalHeld = true
-	if err = request.reach(allocationAfterPhysical); err != nil {
-		return nil, err
-	}
 
 	ptr := unsafe.Pointer(&bs[0])
 	if err = mp.recordAccountedPtrMetadata(
 		ptr,
 		hdr,
 		lease,
-		request,
 	); err != nil {
 		return nil, err
 	}
@@ -1282,12 +1266,14 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	// retain the new-size charge and release only the old-size charge on success.
 	if globalStats.RecordAlloc("global", int64(sz)) > GlobalCap() {
 		globalStats.RecordFree("global", int64(sz))
-		return nil, moerr.NewOOMNoCtx()
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"global cap exceeded while reallocating %d bytes", sz)
 	}
 	if mp.stats.RecordAlloc(mp.tag, int64(sz)) > mp.Cap() {
 		mp.stats.RecordFree(mp.tag, int64(sz))
 		globalStats.RecordFree("global", int64(sz))
-		return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, realloc %d bytes, cap %d", sz, mp.cap)
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"mpool out of space, realloc %d bytes, cap %d", sz, mp.cap)
 	}
 
 	newbs, err := simpleCAllocator().ReallocZero(
@@ -1298,7 +1284,8 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	if err != nil {
 		mp.stats.RecordFree(mp.tag, int64(sz))
 		globalStats.RecordFree("global", int64(sz))
-		return nil, err
+		return nil, moerr.NewMPoolCapacityNoCtxf(
+			"physical allocator rejected realloc to %d bytes: %v", sz, err)
 	}
 	newptr := unsafe.Pointer(&newbs[0])
 	var removedLease allocationLease
@@ -1497,7 +1484,6 @@ func gRecordAccountedPtrMetadata(
 	ptr unsafe.Pointer,
 	hdr memHdr,
 	lease allocationLease,
-	request allocationAccountRequest,
 ) error {
 	shard := getPtrShard(ptr)
 	shard.mu.Lock()
@@ -1508,22 +1494,11 @@ func gRecordAccountedPtrMetadata(
 	if _, ok := shard.leases[ptr]; ok {
 		return moerr.NewInternalErrorNoCtx("account lease already recorded")
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			delete(shard.m, ptr)
-			delete(shard.leases, ptr)
-		}
-	}()
-	shard.m[ptr] = hdr
-	if err := request.reach(allocationAfterHeader); err != nil {
-		return err
-	}
 	if shard.leases == nil {
 		shard.leases = make(map[unsafe.Pointer]allocationLease)
 	}
+	shard.m[ptr] = hdr
 	shard.leases[ptr] = lease
-	committed = true
 	return nil
 }
 

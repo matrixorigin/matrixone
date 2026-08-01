@@ -82,6 +82,7 @@ const (
 	HashBuildAllocationSiteUniqueKeyNulls
 	HashBuildAllocationSiteUniqueKeyGrouping
 	HashBuildAllocationSiteRuntimeFilterPayload
+	HashBuildAllocationSiteRuntimeFilterScratch
 	HashBuildAllocationSiteDedupIgnoreBitmap
 	HashBuildAllocationSiteDedupDeleteBitmap
 	HashBuildAllocationSiteDedupLastRows
@@ -570,10 +571,7 @@ func hasHashBuildDiagnosticStats(extra map[string]int64) bool {
 		extra["QueryHashBudgetRejects"] != 0 ||
 		extra["HashBuildRuntimeFilterCollectionFallbacks"] != 0 ||
 		extra["HashBuildRuntimeFilterBudgetFallbacks"] != 0 ||
-		extra["HashBuildRuntimeFilterAllocationFallbacks"] != 0 ||
-		extra["HashBuildSpillScratchReserveRejects"] != 0 ||
-		extra["HashBuildSpillScratchGrowRejects"] != 0 ||
-		extra["HashBuildSpillScratchGrowCount"] != 0
+		extra["HashBuildRuntimeFilterAllocationFallbacks"] != 0
 }
 
 func (hashBuild *HashBuild) publishJoinMap(proc *process.Process, jm *message.JoinMap) bool {
