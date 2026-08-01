@@ -1039,7 +1039,7 @@ func ProcessInitSQL(
 	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if txnOp != nil {
 		defer func() {
-			err = finishInitSQLTxn(ctx, txnOp, err)
+			err = finishISCPTransaction(ctx, txnOp, err)
 		}()
 	}
 	// injection is for ut
@@ -1098,14 +1098,14 @@ func ProcessInitSQL(
 	return
 }
 
-func finishInitSQLTxn(ctx context.Context, txnOp client.TxnOperator, err error) error {
+func finishISCPTransaction(ctx context.Context, txnOp client.TxnOperator, err error) error {
 	if txnOp == nil {
 		return err
 	}
 	cleanupCtx, cancel := context.WithTimeoutCause(
 		context.WithoutCancel(ctx),
 		time.Minute*5,
-		moerr.NewInternalErrorNoCtx("iscp init sql txn finish timeout"),
+		moerr.NewInternalErrorNoCtx("iscp transaction finish timeout"),
 	)
 	defer cancel()
 	if err != nil {

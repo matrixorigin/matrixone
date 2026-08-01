@@ -142,6 +142,11 @@ var (
 		"last_run=?, " +
 		"details=? where task_id=?"
 
+	updateDaemonTaskStatus = "update sys_daemon_task set " +
+		"task_status=?, " +
+		"update_at=?, " +
+		"end_at=? where task_id=?"
+
 	heartbeatDaemonTask = "update sys_daemon_task set last_heartbeat=? where task_id=?"
 
 	deleteDaemonTask = "delete from sys_daemon_task where 1=1"
@@ -1559,9 +1564,12 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 			if err != nil {
 				return err
 			}
-			details, err := t.Details.Marshal()
-			if err != nil {
-				return err
+			var details any
+			if t.Details != nil {
+				details, err = t.Details.Marshal()
+				if err != nil {
+					return err
+				}
 			}
 
 			var lastHeartbeat, updateAt, endAt, lastRun any
@@ -1607,6 +1615,49 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 		}
 	}
 	return n, nil
+}
+
+func (m *mysqlTaskStorage) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conditions ...Condition,
+) (int, error) {
+	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+	return m.RunUpdateDaemonTaskStatus(
+		ctx,
+		taskID,
+		status,
+		updateAt,
+		endAt,
+		m.db,
+		conditions...,
+	)
+}
+
+func (m *mysqlTaskStorage) RunUpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	db SqlExecutor,
+	conditions ...Condition,
+) (int, error) {
+	updateSQL := updateDaemonTaskStatus + buildDaemonTaskWhereClause(newConditions(conditions...))
+	exec, err := db.ExecContext(ctx, updateSQL, status, updateAt, nullTime(endAt), taskID)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := exec.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
 }
 
 func (m *mysqlTaskStorage) DeleteDaemonTask(ctx context.Context, condition ...Condition) (int, error) {

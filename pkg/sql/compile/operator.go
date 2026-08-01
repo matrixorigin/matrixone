@@ -85,7 +85,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -429,17 +428,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.MongoScan:
 		t := sourceOp.(*mongoscan.MongoScan)
 		op := mongoscan.NewArgument().WithScan(proto.Clone(t.Scan).(*plan.MongoScan))
-		op.ProjectList = t.ProjectList
-		op.SetInfo(&info)
-		return op
-	case vm.Source:
-		t := sourceOp.(*source.Source)
-		op := source.NewArgument()
-		op.TblDef = t.TblDef
-		op.Limit = t.Limit
-		op.Offset = t.Offset
-		op.Configs = t.Configs
-		op.ProjectList = t.ProjectList
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -1316,14 +1304,6 @@ func externalColumnListLen(node *plan.Node) int32 {
 		return 0
 	}
 	return int32(len(node.ExternScan.TbColToDataCol))
-}
-
-func constructStream(node *plan.Node, p [2]int64) *source.Source {
-	arg := source.NewArgument()
-	arg.TblDef = node.TableDef
-	arg.Offset = p[0]
-	arg.Limit = p[1]
-	return arg
 }
 
 func constructTableFunction(node *plan.Node, qry *plan.Query) *table_function.TableFunction {

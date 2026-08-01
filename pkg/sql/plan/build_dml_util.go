@@ -168,6 +168,23 @@ func buildInsertPlans(
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
 
+	checkColName2Idx := make(map[string]int32, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		checkColName2Idx[tableDef.Name+"."+col.Name] = int32(i)
+	}
+	lastNodeId, err = appendCheckConstraintPlan(
+		builder,
+		bindCtx,
+		tableDef,
+		lastNodeId,
+		0,
+		checkColName2Idx,
+		false,
+	)
+	if err != nil {
+		return err
+	}
+
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep := builder.appendStep(lastNodeId)
 

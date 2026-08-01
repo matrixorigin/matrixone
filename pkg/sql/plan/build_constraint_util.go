@@ -94,6 +94,119 @@ func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, alia
 	}
 }
 
+func appendCheckConstraintPlan(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeID int32,
+	inputTag int32,
+	colName2Idx map[string]int32,
+	ignoreMode bool,
+) (int32, error) {
+	if len(tableDef.Checks) == 0 {
+		return lastNodeID, nil
+	}
+	if err := requireCheckConstraintProtocol(builder.GetContext(), builder.compCtx.GetProcess()); err != nil {
+		return 0, err
+	}
+
+	tableColProjList := make([]*plan.Expr, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		colPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(
+				builder.GetContext(),
+				"cannot find column %s.%s for check constraint",
+				tableDef.Name,
+				col.Name,
+			)
+		}
+		tableColProjList[i] = &plan.Expr{
+			Typ: col.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: inputTag,
+					ColPos: colPos,
+					Name:   col.Name,
+				},
+			},
+		}
+	}
+
+	filterList := make([]*plan.Expr, 0, len(tableDef.Checks))
+	for _, check := range tableDef.Checks {
+		checkExpr := substituteColRefsInExpr(check.Check, tableColProjList, 0)
+		passExpr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"coalesce",
+			[]*plan.Expr{checkExpr, makePlan2BoolConstExprWithType(true)},
+		)
+		if err != nil {
+			return 0, err
+		}
+		if ignoreMode {
+			filterList = append(filterList, passExpr)
+			continue
+		}
+		errMsg := makePlan2StringConstExprWithType(
+			fmt.Sprintf("Check constraint '%s' is violated", check.Name),
+		)
+		assertExpr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"_check_constraint_assert",
+			[]*plan.Expr{passExpr, errMsg},
+		)
+		if err != nil {
+			return 0, err
+		}
+		filterList = append(filterList, assertExpr)
+	}
+
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_FILTER,
+		Children:    []int32{lastNodeID},
+		FilterList:  filterList,
+		ProjectList: getProjectionByLastNodeIfAvailable(builder, lastNodeID),
+	}, bindCtx), nil
+}
+
+func requireCheckConstraintProtocol(ctx context.Context, proc *process.Process) error {
+	if proc == nil {
+		return nil
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion7 {
+		return moerr.NewNotSupported(
+			ctx,
+			"CHECK constraints require all CNs to support protocol version 7",
+		)
+	}
+	return nil
+}
+
+func getProjectionByLastNodeIfAvailable(builder *QueryBuilder, lastNodeID int32) []*Expr {
+	visited := make(map[int32]struct{})
+	for {
+		if _, ok := visited[lastNodeID]; ok {
+			return nil
+		}
+		visited[lastNodeID] = struct{}{}
+		lastNode := builder.qry.Nodes[lastNodeID]
+		if len(lastNode.ProjectList) > 0 {
+			return getProjectionByLastNode(builder, lastNodeID)
+		}
+		if len(lastNode.Children) == 0 {
+			return nil
+		}
+		lastNodeID = lastNode.Children[0]
+	}
+}
+
 func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, error) {
 	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, nil, "update")
 	if err != nil {

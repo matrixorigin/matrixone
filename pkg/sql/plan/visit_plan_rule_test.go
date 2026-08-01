@@ -291,7 +291,6 @@ func TestCollectPrepareDdlSchemasUsesCloneSourceMetadata(t *testing.T) {
 func TestCollectPrepareDdlSchemasTracksCreateTargetDatabase(t *testing.T) {
 	testCases := []string{
 		"create sequence db1.seq as bigint",
-		"create source db1.src (i int) with (type='kafka')",
 	}
 	for _, sql := range testCases {
 		t.Run(sql, func(t *testing.T) {
@@ -396,23 +395,6 @@ func TestCollectPrepareDdlSchemasCollectsViewQuery(t *testing.T) {
 	require.Equal(t, "v", schemas[1].ObjName)
 }
 
-func TestCollectPrepareDdlSchemasCollectsDynamicTableQuery(t *testing.T) {
-	statements, err := mysql.Parse(
-		context.Background(),
-		"create dynamic table dt as select n_name from nation with (\"type\"='kafka')",
-		1,
-	)
-	require.NoError(t, err)
-
-	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false), statements[0], &planpb.Plan{
-		Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
-	})
-	require.NoError(t, err)
-	require.Len(t, schemas, 2)
-	require.Equal(t, "nation", schemas[0].ObjName)
-	require.Equal(t, "dt", schemas[1].ObjName)
-}
-
 func TestAppendPrepareSchemasDeduplicatesByNameWithoutObjectID(t *testing.T) {
 	schemas := appendPrepareSchemas(nil,
 		&planpb.ObjectRef{SchemaName: "db", ObjName: "tbl"},
@@ -477,10 +459,9 @@ func TestResetPreparePlanCollectsDdlQuerySchemas(t *testing.T) {
 	require.Equal(t, int64(30), schemas[0].Server)
 }
 
-func TestResetPreparePlanCollectsExternalAndSourceScans(t *testing.T) {
+func TestResetPreparePlanCollectsExternalScans(t *testing.T) {
 	for _, nodeType := range []planpb.Node_NodeType{
 		planpb.Node_EXTERNAL_SCAN,
-		planpb.Node_SOURCE_SCAN,
 	} {
 		t.Run(nodeType.String(), func(t *testing.T) {
 			queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{

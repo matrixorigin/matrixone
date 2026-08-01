@@ -78,7 +78,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -229,7 +228,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		},
 		&hashbuild.HashBuild{},
 		&indexbuild.IndexBuild{},
-		&source.Source{},
 		&apply.Apply{TableFunction: &table_function.TableFunction{}},
 		&postdml.PostDml{
 			PostDmlCtx: &postdml.PostDmlCtx{
@@ -301,7 +299,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.TableFunction), TableFunction: &pipeline.TableFunction{}},
 		{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{}},
 		{Op: int32(vm.External), ExternalScan: &pipeline.ExternalScan{}},
-		{Op: int32(vm.Source), StreamScan: &pipeline.StreamScan{}},
 		{Op: int32(vm.IndexBuild), IndexBuild: &pipeline.Indexbuild{}},
 		{Op: int32(vm.Apply), Apply: &pipeline.Apply{}, TableFunction: &pipeline.TableFunction{}},
 		{Op: int32(vm.PostDml), PostDml: &pipeline.PostDml{}},
