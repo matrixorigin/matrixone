@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -311,6 +312,16 @@ func TestRightDedupEmptyBuildProbeMapHonorsHashBuildBudget(t *testing.T) {
 		JoinMapTag:        tag,
 	}
 	arg.AppendChild(probeSource)
+	var callErr error
+	t.Cleanup(func() {
+		arg.Free(proc, true, callErr)
+		require.Zero(t, budget.Used())
+		require.Zero(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		probeSource.Free(proc, true, callErr)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	message.SendJoinMapResult(
 		message.NewJoinMapResult(nil),
 		arg.JoinMapTag,
@@ -320,18 +331,15 @@ func TestRightDedupEmptyBuildProbeMapHonorsHashBuildBudget(t *testing.T) {
 	)
 
 	require.NoError(t, arg.Prepare(proc))
-	_, err = vm.Exec(arg, proc)
-	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	_, callErr = arg.Call(proc)
+	require.Error(t, callErr)
+	require.True(t, moerr.IsMoErrCode(callErr, moerr.ErrOOM), callErr)
+	require.NotErrorIs(t, callErr, process.ErrHashBuildBudgetAdmission)
+	require.NotContains(t, callErr.Error(), "convert go error")
+	require.NotContains(t, callErr.Error(), process.ErrHashBuildBudgetAdmission.Error())
+	require.Contains(t, callErr.Error(), "hash build memory budget exceeded")
 	require.Equal(t, initialBytes, budget.Used(),
 		"the admitted initial table remains owned until operator cleanup")
-
-	arg.Free(proc, true, err)
-	require.Zero(t, budget.Used())
-	require.Zero(t, budget.SpillDiskUsed())
-	require.Zero(t, budget.SpillFDUsed())
-	probeSource.Free(proc, true, err)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
 }
 
 var (
