@@ -46,7 +46,6 @@ func TestLockServiceTestSocketDirectoriesAreIsolated(t *testing.T) {
 
 	seen := make(map[string]struct{}, count)
 	for dir := range dirs {
-		dir := dir
 		t.Cleanup(func() {
 			_ = removeTestSocketDir(dir)
 		})
