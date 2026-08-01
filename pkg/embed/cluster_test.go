@@ -531,22 +531,26 @@ func TestClusterStartupLeaseIsExclusive(t *testing.T) {
 	require.NoError(t, next.Close())
 }
 
-func TestWithTestingUsesCoherentHAKeeperTimeouts(t *testing.T) {
+func TestWithTestingExtendsStoreLivenessWithoutExtendingHeartbeatDeadline(t *testing.T) {
 	clusterValue, err := NewCluster(WithTesting())
 	if clusterValue != nil {
 		t.Cleanup(func() { require.NoError(t, clusterValue.Close()) })
 	}
 	require.NoError(t, err)
 	c := clusterValue.(*cluster)
+	// The heartbeat loop performs RPCs serially. A test mode must allow
+	// temporarily missing stores without turning a failed heartbeat into a
+	// long-lived blocked request that prevents the next scheduling command from
+	// being observed.
+	require.Zero(t, c.options.heartbeatTimeout)
 
 	for _, svc := range c.services {
 		cfg := svc.GetServiceConfig()
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
-			require.Equal(t, testHAKeeperHeartbeatTimeout, cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+			require.Zero(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
 		case metadata.ServiceType_TN:
-			require.Equal(t, testHAKeeperHeartbeatTimeout,
-				cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
+			require.Zero(t, cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
 		case metadata.ServiceType_LOG:
 			require.Equal(t, testHAKeeperStoreTimeout,
 				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
