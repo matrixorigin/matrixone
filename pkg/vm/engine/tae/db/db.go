@@ -273,9 +273,13 @@ func (db *DB) ForceGlobalCheckpoint(
 			return
 		}
 		if freshICKPRetries >= maxForceGCKPFreshICKPRetries {
-			err = fmt.Errorf(
-				"force global checkpoint could not obtain a fresh incremental predecessor after %d retries: %w",
-				freshICKPRetries, err,
+			err = errors.Join(
+				moerr.NewInternalErrorf(
+					ctx,
+					"force global checkpoint could not obtain a fresh incremental predecessor after %d retries",
+					freshICKPRetries,
+				),
+				err,
 			)
 			return
 		}

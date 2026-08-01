@@ -20,6 +20,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -867,7 +868,8 @@ func syncTableIDBatch(
 	historyKnown = hasPreviousHistory
 	if !requiredPreviousEnd.IsEmpty() &&
 		(!historyKnown || historyEnd.LT(&requiredPreviousEnd)) {
-		err = fmt.Errorf(
+		err = moerr.NewInternalErrorf(
+			ctx,
 			"table-ID predecessor history is incomplete: covered %s-%s, required through %s",
 			historyStart.ToString(), historyEnd.ToString(), requiredPreviousEnd.ToString(),
 		)
