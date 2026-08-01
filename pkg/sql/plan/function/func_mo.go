@@ -1053,21 +1053,20 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 const (
-	enumValueIndexMinRows = 8
-	enumValueIndexMinWork = 256
+	enumValueIndexMinRows   = 64
+	enumValueIndexMinLabels = 8
 )
 
-// Small batches and small total scan work stay on ParseEnum's existing linear
-// path: building maps there would penalize common single-row DML. The index is
-// reserved for workloads whose rows multiplied by labels are large enough to
-// amortize it, including large sorts over short ENUM definitions.
+// Small batches and short definitions stay on ParseEnum's existing linear
+// path: benchmarks show that hash/fold overhead does not amortize for fewer
+// than eight labels, especially for numeric and case-insensitive inputs. The
+// index is reserved for batches large enough to amortize both maps.
 func buildEnumValueIndexForBatch(enumValues string, length int) *enumValueIndex {
 	if length < enumValueIndexMinRows {
 		return nil
 	}
 	labelCount := strings.Count(enumValues, ",") + 1
-	rowsNeeded := (enumValueIndexMinWork + labelCount - 1) / labelCount
-	if length < rowsNeeded {
+	if labelCount < enumValueIndexMinLabels {
 		return nil
 	}
 	return buildEnumValueIndex(enumValues)

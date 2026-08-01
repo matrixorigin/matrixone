@@ -363,6 +363,8 @@ select val from test_enum_order group by val order by val;
 select val from (select val from test_enum_order group by val) d order by val;
 select val, row_number() over (order by val) as rn
 from test_enum_order group by val order by rn;
+select group_concat(val order by val separator '|') as ordered_values
+from (select val from test_enum_order) d;
 
 -- An explicit character cast intentionally requests lexical order.
 select id, cast(val as char) as lexical_val

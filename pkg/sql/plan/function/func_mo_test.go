@@ -69,10 +69,10 @@ func TestCastValueToIndexConstDefinition(t *testing.T) {
 	descriptor := "zero,one,two,three,four,five,six,seven"
 	values := []string{"seven", "zero", "THREE", "2", "four", "five", "six", "one"}
 	want := []types.Enum{8, 1, 4, 2, 5, 6, 7, 2}
-	typeEnums := make([]string, 0, len(values)*4)
-	enumValues := make([]string, 0, len(values)*4)
-	expected := make([]types.Enum, 0, len(values)*4)
-	for range 4 {
+	typeEnums := make([]string, 0, len(values)*8)
+	enumValues := make([]string, 0, len(values)*8)
+	expected := make([]types.Enum, 0, len(values)*8)
+	for range 8 {
 		typeEnums = append(typeEnums, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor)
 		enumValues = append(enumValues, values...)
 		expected = append(expected, want...)
@@ -111,24 +111,21 @@ func TestEnumValueIndexPreservesParseEnumSemantics(t *testing.T) {
 	}
 
 	require.Nil(t, buildEnumValueIndex(""))
+	largeDefinition := strings.Repeat("a,", 1023) + "a"
+	require.Nil(t, buildEnumValueIndexForBatch(largeDefinition, 8))
+	require.Nil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g", 1024))
 	require.Nil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g,h", enumValueIndexMinRows-1))
-	require.Nil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g,h", enumValueIndexMinRows))
-	require.NotNil(t, buildEnumValueIndexForBatch(strings.Repeat("a,", 31)+"a", enumValueIndexMinRows))
-	require.NotNil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g,h", 32))
-	require.NotNil(t, buildEnumValueIndexForBatch("a,b,c", 86))
+	require.NotNil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g,h", enumValueIndexMinRows))
 }
 
 func BenchmarkEnumValueIndex(b *testing.B) {
-	for _, labelCount := range []int{8, 1024} {
+	for _, labelCount := range []int{8, 32, 64, 256, 512, 1024} {
 		labels := make([]string, labelCount)
 		for i := range labels {
 			labels[i] = "value" + strconv.Itoa(i)
 		}
 		definition := strings.Join(labels, ",")
-		batchSize := (enumValueIndexMinWork + labelCount - 1) / labelCount
-		if batchSize < enumValueIndexMinRows {
-			batchSize = enumValueIndexMinRows
-		}
+		batchSize := enumValueIndexMinRows
 		inputs := []struct {
 			name  string
 			value string
@@ -138,7 +135,8 @@ func BenchmarkEnumValueIndex(b *testing.B) {
 			{name: "numeric", value: strconv.Itoa(labelCount)},
 		}
 		for _, input := range inputs {
-			b.Run(strconv.Itoa(labelCount)+"-labels/"+input.name+"/linear", func(b *testing.B) {
+			prefix := strconv.Itoa(labelCount) + "-labels/" + strconv.Itoa(batchSize) + "-rows/" + input.name
+			b.Run(prefix+"/linear", func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
 					for row := 0; row < batchSize; row++ {
@@ -148,7 +146,7 @@ func BenchmarkEnumValueIndex(b *testing.B) {
 					}
 				}
 			})
-			b.Run(strconv.Itoa(labelCount)+"-labels/"+input.name+"/indexed", func(b *testing.B) {
+			b.Run(prefix+"/indexed", func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
 					index := buildEnumValueIndexForBatch(definition, batchSize)

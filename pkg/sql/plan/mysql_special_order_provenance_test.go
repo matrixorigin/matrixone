@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -92,6 +93,30 @@ func requireSingleWindowOrderKeyType(t *testing.T, logicPlan *planpb.Plan, typ t
 		require.NotNil(t, window)
 		require.Len(t, window.OrderBy, 1)
 		found = append(found, window.OrderBy[0].Expr)
+	}
+	require.Len(t, found, 1)
+	require.Equal(t, int32(typ), found[0].Typ.Id)
+}
+
+func requireSingleGroupConcatOrderKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T) {
+	t.Helper()
+	var found []*planpb.Expr
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, aggregate := range node.AggList {
+			fn := aggregate.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != NameGroupConcat {
+				continue
+			}
+			require.Equal(t, planpb.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER, fn.AggConfigType)
+			require.GreaterOrEqual(t, len(fn.AggConfig), 14)
+			require.Equal(t, groupConcatOrderConfigVersion, fn.AggConfig[0])
+			orderCount := int(binary.BigEndian.Uint32(fn.AggConfig[5:9]))
+			require.Equal(t, 1, orderCount)
+			indexOffset := 9 + orderCount
+			argIndex := int(binary.BigEndian.Uint32(fn.AggConfig[indexOffset : indexOffset+4]))
+			require.Less(t, argIndex, len(fn.Args))
+			found = append(found, fn.Args[argIndex])
+		}
 	}
 	require.Len(t, found, 1)
 	require.Equal(t, int32(typ), found[0].Typ.Id)
@@ -213,4 +238,31 @@ func TestMySQLSpecialOrderProvenanceRejectsNonReversibleEnum(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestMySQLSpecialOrderProvenanceInGroupConcat(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		typ  types.T
+	}{
+		{name: "direct enum", sql: "select group_concat(e order by e) from enum_order_t", typ: types.T_enum},
+		{name: "direct non-reversible enum keeps raw ordinal", sql: "select group_concat(e order by e) from enum_duplicate_t", typ: types.T_enum},
+		{name: "derived enum", sql: "select group_concat(e order by e) from (select e from enum_order_t) d", typ: types.T_enum},
+		{name: "derived enum ordinal", sql: "select group_concat(e order by 1) from (select e from enum_order_t) d", typ: types.T_enum},
+		{name: "cte set", sql: "with c as (select s from enum_order_t) select group_concat(s order by s) from c", typ: types.T_uint64},
+		{name: "derived explicit cast stays lexical", sql: "select group_concat(e order by cast(e as char)) from (select e from enum_order_t) d", typ: types.T_varchar},
+		{name: "derived expression stays lexical", sql: "select group_concat(e order by concat(e, '')) from (select e from enum_order_t) d", typ: types.T_varchar},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+			require.NoError(t, err)
+			requireSingleGroupConcatOrderKeyType(t, logicPlan, tc.typ)
+		})
+	}
+
+	_, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select group_concat(e order by e) from (select e from enum_duplicate_t) d")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "non-unique display labels")
 }

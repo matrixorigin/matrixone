@@ -29,6 +29,9 @@ select * from set01 order by colors;
 -- SET bit-order, including multi-member values, must survive a derived table.
 select id, colors from (select id, colors from set01) d order by colors, id;
 select colors from (select colors from set01 group by colors) d order by colors;
+with c as (select colors from set01)
+select group_concat(colors order by colors separator '|') as ordered_values
+from c where colors is not null and colors <> '';
 
 drop table if exists set_idx;
 create table set_idx (

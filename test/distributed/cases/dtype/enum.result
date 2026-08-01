@@ -679,6 +679,10 @@ low  ¦  1  𝄀
 medium  ¦  2  𝄀
 high  ¦  3  𝄀
 critical  ¦  4
+select group_concat(val order by val separator '|') as ordered_values
+from (select val from test_enum_order) d;
+➤ ordered_values[12,0,0]  𝄀
+low|medium|high|critical
 select id, cast(val as char) as lexical_val
 from (select id, val from test_enum_order) d
 order by lexical_val, id;

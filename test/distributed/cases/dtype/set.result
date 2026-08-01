@@ -58,6 +58,11 @@ null  𝄀
 red  𝄀
 red,green  𝄀
 red,blue
+with c as (select colors from set01)
+select group_concat(colors order by colors separator '|') as ordered_values
+from c where colors is not null and colors <> '';
+➤ ordered_values[12,0,0]  𝄀
+red|red,green|red,blue
 drop table if exists set_idx;
 create table set_idx (
 id int primary key,
