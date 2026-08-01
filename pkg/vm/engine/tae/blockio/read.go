@@ -813,11 +813,11 @@ func BlockDataReadInner(
 	if len(selectRows) > 0 {
 		var dists []float64
 
-		if orderByLimit != nil {
-			selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, info, phyAddrColumnPos, cacheVectors)
-			if err != nil {
-				return err
-			}
+		// The selected-row fast path above already returned when orderByLimit
+		// was nil (or is an ordered-limit); this remaining path is vector TopN.
+		selectRows, dists, err = handleOrderByLimitOnSelectRows(ctx, selectRows, orderByLimit, info, phyAddrColumnPos, cacheVectors)
+		if err != nil {
+			return err
 		}
 
 		return fillOutputBatchBySelectedRows(
