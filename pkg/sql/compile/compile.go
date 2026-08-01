@@ -5170,6 +5170,13 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, node 
 		arg.Nbucket = uint32(len(rs))
 		rs[i].setRootOperator(dupOperator(arg, 0, len(rs)))
 	}
+	// Every source dispatch targets all delete receivers on its CN through
+	// LocalRegs. Put those receivers in one RemoteRun tree so the encoded tree
+	// owns every local channel its dispatches reference.
+	stageNodes := shuffleBucketStageNodes(rs)
+	if len(rs) > len(stageNodes) {
+		rs = c.mergeScopesByStageNodes(rs, stageNodes)
+	}
 	return c.newMergeScope(rs)
 }
 
@@ -5423,10 +5430,8 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 // dispatch operator that sends to remote (cross-CN) receivers. A non-empty RemoteRegs is
 // the signature of a cross-CN shuffle dispatch (see constructDispatchLocalAndRemote).
 //
-// Precondition: it only inspects each scope's RootOp, assuming a shuffle dispatch is always
-// the root operator of its scope (constructDispatch results are attached via setRootOperator
-// with IsEnd=true, so nothing is appended on top of them). A dispatch nested as a child of
-// another operator would be missed -- which does not happen for shuffle dispatches today.
+// It inspects every operator in every scope because DML operators can wrap a shuffle dispatch
+// before this gate decides whether the receiver buckets need a per-CN transport envelope.
 //
 // Scope of the check (intentionally narrower than checkPipelineStandaloneExecutableAtRemote,
 // which rejects out-of-tree dispatch *and* out-of-tree connector targets): this gate only
@@ -5434,15 +5439,35 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 // dispatch together with its dop buckets. A scope tree that crosses CNs solely via a connector
 // is not the shuffle-bucket pattern grouping addresses and is intentionally left untouched.
 func scopeTreeHasCrossCNDispatch(s *Scope) bool {
-	if d, ok := s.RootOp.(*dispatch.Dispatch); ok && len(d.RemoteRegs) > 0 {
-		return true
-	}
-	for _, pre := range s.PreScopes {
-		if scopeTreeHasCrossCNDispatch(pre) {
+	visited := make(map[*Scope]struct{})
+	var containsCrossCNDispatch func(*Scope) bool
+	containsCrossCNDispatch = func(current *Scope) bool {
+		if current == nil {
+			return false
+		}
+		if _, ok := visited[current]; ok {
+			return false
+		}
+		visited[current] = struct{}{}
+
+		found := false
+		_ = vm.HandleAllOp(current.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			if d, ok := op.(*dispatch.Dispatch); ok && len(d.RemoteRegs) > 0 {
+				found = true
+			}
+			return nil
+		})
+		if found {
 			return true
 		}
+		for _, pre := range current.PreScopes {
+			if containsCrossCNDispatch(pre) {
+				return true
+			}
+		}
+		return false
 	}
-	return false
+	return containsCrossCNDispatch(s)
 }
 
 // groupShuffleBucketsByCNIfNeeded groups the same-CN shuffle buckets (together with the
@@ -5453,8 +5478,8 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
 // When the consumer (here compileInsert) sends each bucket individually, RemoteRun ->
 // checkPipelineStandaloneExecutableAtRemote sees the dispatch.LocalRegs pointing to the
-// sibling out-of-tree buckets, converts the pipeline to local on the coordinator, and the
-// dispatch then runs on the coordinator instead of its compile-time CN -- mispaired with
+// sibling out-of-tree buckets. The legacy fallback ran the dispatch on the coordinator
+// instead of its compile-time CN, mispairing it with
 // the cross-CN receiver's FromAddr -> the remote receiver's GetProcByUuid spins / merge
 // WaitingEnd waits forever -> hang. Regrouping by CN keeps all of a CN's buckets in one
 // tree, so the whole group is really executed at the remote CN and the pairing is correct.
