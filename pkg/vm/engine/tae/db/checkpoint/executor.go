@@ -184,12 +184,8 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	files = append(files, name)
 
-	fileEntry, err := wal.BuildFilesEntry(files)
-	if err != nil {
-		return
-	}
-	_, err = runner.wal.AppendEntry(wal.GroupFiles, fileEntry)
-	if err != nil {
+	if err = appendCheckpointFilesToWAL(runner, files); err != nil {
+		errPhase = "wal-files"
 		return
 	}
 	return
@@ -305,12 +301,10 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	}
 	entry.SetTableIDLocation(tableIDLocation)
 
-	lsn = runner.source.GetMaxLSN(entry.start, entry.end)
-	if lsn == 0 {
-		if maxICKP := runner.store.MaxIncrementalCheckpoint(); maxICKP != nil {
-			lsn = maxICKP.LSN()
-		}
-	}
+	lsn = resolveCheckpointLSN(
+		runner.store,
+		runner.source.GetMaxLSN(entry.start, entry.end),
+	)
 	if lsn > job.executor.cfg.IncrementalReservedWALCount {
 		lsnToTruncate = lsn - job.executor.cfg.IncrementalReservedWALCount
 	}
@@ -347,6 +341,17 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	v2.TaskCkpEntryPendingDurationHistogram.Observe(entry.Age().Seconds())
 
 	files = append(files, file)
+	if lsnToTruncate == 0 {
+		// There is no valid user-WAL range [1, 0]. Publish the checkpoint files
+		// through GroupFiles, as global checkpoints do, without advancing the
+		// user-WAL checkpoint/truncation watermark. This covers both an initial
+		// checkpoint with no user WAL and a reservation that covers every LSN.
+		if err = appendCheckpointFilesToWAL(runner, files); err != nil {
+			errPhase = "wal-files"
+			return
+		}
+		return nil
+	}
 
 	// PXU TODO: if crash here, the checkpoint log entry will be lost
 	var logEntry wal.LogEntry
@@ -362,6 +367,31 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	}
 
 	return nil
+}
+
+func appendCheckpointFilesToWAL(runner *runner, files []string) error {
+	fileEntry, err := wal.BuildFilesEntry(files)
+	if err != nil {
+		return err
+	}
+	if _, err = runner.wal.AppendEntry(wal.GroupFiles, fileEntry); err != nil {
+		return err
+	}
+	return nil
+}
+
+func resolveCheckpointLSN(store *runnerStore, lsn uint64) uint64 {
+	if lsn != 0 {
+		return lsn
+	}
+	// Checkpoint GC may remove every incremental checkpoint after a global
+	// checkpoint has durably replaced them. An empty forced checkpoint must
+	// inherit its LSN from that durable global boundary instead of emitting a
+	// zero-LSN WAL range, which the WAL correctly rejects as invalid.
+	if previous := store.MaxCheckpoint(); previous != nil {
+		return previous.LSN()
+	}
+	return 0
 }
 
 func (job *checkpointJob) WaitC() <-chan struct{} {

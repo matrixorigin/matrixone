@@ -9589,6 +9589,10 @@ func TestGCCatalog2(t *testing.T) {
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
+	// Keep the retention window much larger than the flush duration. This makes
+	// the post-flush checkpoint boundary part of the contract: a target derived
+	// before flush cannot accidentally pass because the scheduler was slow.
+	opts.GCCfg.GCInMemoryTTL = time.Second
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
@@ -9727,6 +9731,114 @@ func TestForceCheckpoint(t *testing.T) {
 	ts := tae.TxnMgr.Now()
 	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
 	assert.NoError(t, err)
+}
+
+func TestForceCheckpointWithoutWAL(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	target := tae.TxnMgr.Now()
+	func() {
+		checkpointCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
+		defer cancel()
+		require.NoError(t, tae.DB.ForceCheckpoint(checkpointCtx, target))
+	}()
+
+	checkpointed := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	require.NotNil(t, checkpointed)
+	require.True(t, checkpointed.IsFinished())
+	require.Zero(t, checkpointed.LSN())
+	end := checkpointed.GetEnd()
+	require.True(t, end.GE(&target))
+
+	tae.Restart(ctx)
+	replayed := tae.BGCheckpointRunner.MaxCheckpoint()
+	require.NotNil(t, replayed)
+	require.True(t, replayed.IsFinished())
+	require.Zero(t, replayed.LSN())
+	require.Equal(t, end, replayed.GetEnd())
+}
+
+func TestForceCheckpointWithFullyReservedWAL(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	options.WithReserveWALEntryCount(math.MaxUint64)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer func() {
+		if tae != nil {
+			require.NoError(t, tae.Close())
+		}
+	}()
+
+	schema := catalog.MockSchemaAll(18, 2)
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+
+	target := tae.TxnMgr.Now()
+	func() {
+		checkpointCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
+		defer cancel()
+		require.NoError(t, tae.DB.ForceCheckpoint(checkpointCtx, target))
+	}()
+
+	checkpointed := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	require.NotNil(t, checkpointed)
+	require.True(t, checkpointed.IsFinished())
+	lsn := checkpointed.LSN()
+	require.NotZero(t, lsn)
+	end := checkpointed.GetEnd()
+	require.True(t, end.GE(&target))
+	metaFiles := tae.BGCheckpointRunner.GetCheckpointMetaFiles()
+	require.NotEmpty(t, metaFiles)
+
+	tae.Restart(ctx)
+	replayed := tae.BGCheckpointRunner.MaxCheckpoint()
+	require.NotNil(t, replayed)
+	require.True(t, replayed.IsFinished())
+	require.Equal(t, lsn, replayed.LSN())
+	require.Equal(t, end, replayed.GetEnd())
+
+	dir := tae.Dir
+	require.NoError(t, tae.Close())
+	tae = nil
+	walStore := wal.NewLocalHandle(dir, "wal", nil)
+	defer func() {
+		require.NoError(t, walStore.Close())
+	}()
+	files := make(map[string]struct{})
+	require.NoError(t, walStore.Replay(
+		ctx,
+		func(group uint32, _ uint64, payload []byte, _ uint16, _ any) driver.ReplayEntryState {
+			if group != wal.GroupFiles {
+				return driver.RE_Nomal
+			}
+			vec := vector.NewVec(types.Type{})
+			defer vec.Free(nil)
+			if err := vec.UnmarshalBinary(payload); err != nil {
+				return driver.RE_Internal
+			}
+			for i := 0; i < vec.Length(); i++ {
+				file := vec.GetStringAt(i)
+				_, decoded := ioutil.TryDecodeTSRangeFile(file)
+				if decoded.IsMetadataFile() {
+					file = decoded.GetName()
+				}
+				files[file] = struct{}{}
+			}
+			return driver.RE_Internal
+		},
+		func() driver.ReplayMode { return driver.ReplayMode_ReplayForWrite },
+		nil,
+	))
+	for file := range metaFiles {
+		require.Contains(t, files, file)
+	}
 }
 
 func TestLogailAppend(t *testing.T) {

@@ -810,6 +810,19 @@ func TestRunnerStoreMaxCheckpoint(t *testing.T) {
 	assert.Same(t, newIncremental, store.MaxCheckpoint())
 }
 
+func TestResolveCheckpointLSNAfterIncrementalGC(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
+
+	global := NewCheckpointEntry("", types.TS{}, types.NextGlobalTsForTest(), ET_Global)
+	global.SetLSN(42, 42)
+	global.SetState(ST_Finished)
+	assert.True(t, store.AddGCKPFinishedEntry(global))
+	assert.Nil(t, store.MaxIncrementalCheckpoint())
+
+	assert.Equal(t, uint64(42), resolveCheckpointLSN(store, 0))
+	assert.Equal(t, uint64(43), resolveCheckpointLSN(store, 43))
+}
+
 func TestForceGCKPRebuildsGlobalForRequestedRetention(t *testing.T) {
 	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
 	defer r.StopExecutor(ErrStopRunner)
