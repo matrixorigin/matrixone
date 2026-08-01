@@ -42,6 +42,77 @@ func TestCreateServerWithOptions(t *testing.T) {
 		WithServerSessionBufferSize(200))
 }
 
+type connectionTrackingApplication struct {
+	tracker       *serverConnectionTracker
+	connection    goetty.IOSession
+	stopReturned  chan struct{}
+	releaseClosed chan struct{}
+}
+
+func (a *connectionTrackingApplication) Start() error {
+	return nil
+}
+
+func (a *connectionTrackingApplication) Stop() error {
+	a.tracker.Created(a.connection)
+	go func() {
+		close(a.stopReturned)
+		<-a.releaseClosed
+		a.tracker.Closed(a.connection)
+	}()
+	return nil
+}
+
+func (a *connectionTrackingApplication) GetSession(uint64) (goetty.IOSession, error) {
+	return nil, nil
+}
+
+func TestServerCloseWaitsForAcceptedConnections(t *testing.T) {
+	tracker := &serverConnectionTracker{}
+	application := &connectionTrackingApplication{
+		tracker:       tracker,
+		connection:    newTestIOSession(nil, nil),
+		stopReturned:  make(chan struct{}),
+		releaseClosed: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	releaseConnection := func() {
+		releaseOnce.Do(func() {
+			close(application.releaseClosed)
+		})
+	}
+	t.Cleanup(releaseConnection)
+	s := &server{
+		logger:      logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		application: application,
+		stopper:     stopper.NewStopper("test-server-close-connections"),
+		connections: tracker,
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- s.Close()
+	}()
+
+	select {
+	case <-application.stopReturned:
+	case <-time.After(time.Second):
+		t.Fatal("application Stop did not return")
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("server Close returned before the accepted connection closed: %v", err)
+	default:
+	}
+
+	releaseConnection()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("server Close did not return after the accepted connection closed")
+	}
+}
+
 func TestHandleServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		c := newTestClient(t)

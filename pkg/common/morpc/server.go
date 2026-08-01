@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -108,6 +109,7 @@ type server struct {
 	codec       Codec
 	application goetty.NetApplication
 	stopper     *stopper.Stopper
+	connections *serverConnectionTracker
 	handler     func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
 	sessions    *sync.Map // session-id => *clientSession
 	options     struct {
@@ -123,6 +125,35 @@ type server struct {
 	}
 }
 
+// serverConnectionTracker joins the connection goroutines admitted by an RPC
+// server. goetty's application Stop disconnects active sessions, but it does
+// not wait for each connection handler to observe that disconnect and return.
+// The application listener is stopped before wait is called, so no Add can
+// race with Wait.
+type serverConnectionTracker struct {
+	wg      sync.WaitGroup
+	entries sync.Map
+}
+
+func (t *serverConnectionTracker) Created(rs goetty.IOSession) {
+	t.wg.Add(1)
+	t.entries.Store(rs.ID(), struct{}{})
+}
+
+func (t *serverConnectionTracker) Closed(rs goetty.IOSession) {
+	t.finish(rs)
+}
+
+func (t *serverConnectionTracker) finish(rs goetty.IOSession) {
+	if _, ok := t.entries.LoadAndDelete(rs.ID()); ok {
+		t.wg.Done()
+	}
+}
+
+func (t *serverConnectionTracker) wait() {
+	t.wg.Wait()
+}
+
 // NewRPCServer create rpc server with options. After the rpc server starts, one link corresponds to two
 // goroutines, one read and one write. All messages to be written are first written to a buffer chan and
 // sent to the client by the write goroutine.
@@ -131,12 +162,13 @@ func NewRPCServer(
 	codec Codec,
 	options ...ServerOption) (RPCServer, error) {
 	s := &server{
-		name:     name,
-		metrics:  newServerMetrics(name),
-		address:  address,
-		codec:    codec,
-		stopper:  stopper.NewStopper(name),
-		sessions: &sync.Map{},
+		name:        name,
+		metrics:     newServerMetrics(name),
+		address:     address,
+		codec:       codec,
+		stopper:     stopper.NewStopper(name),
+		connections: &serverConnectionTracker{},
+		sessions:    &sync.Map{},
 	}
 	for _, opt := range options {
 		opt(s)
@@ -144,7 +176,8 @@ func NewRPCServer(
 	s.adjust()
 
 	s.options.goettyOptions = append(s.options.goettyOptions,
-		goetty.WithSessionCodec(codec))
+		goetty.WithSessionCodec(codec),
+		goetty.WithSessionAware(s.connections))
 	// Don't pass session logger to goetty to avoid noisy error logs from goetty library
 	// (e.g., "close connection failed" which is expected during normal connection lifecycle)
 
@@ -152,6 +185,8 @@ func NewRPCServer(
 		s.address,
 		s.onMessage,
 		goetty.WithAppLogger(s.logger),
+		goetty.WithAppHandleSessionFunc(s.handleConnection),
+		goetty.WithAppSessionAware(s.connections),
 		goetty.WithAppSessionOptions(s.options.goettyOptions...),
 	)
 	if err != nil {
@@ -171,6 +206,25 @@ func NewRPCServer(
 	return s, nil
 }
 
+func (s *server) handleConnection(rs goetty.IOSession) error {
+	defer s.connections.finish(rs)
+
+	sequence := uint64(0)
+	for {
+		value, err := rs.Read(goetty.ReadOptions{})
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		sequence++
+		if err := s.onMessage(rs, value, sequence); err != nil {
+			return err
+		}
+	}
+}
+
 func (s *server) Start() error {
 	err := s.application.Start()
 	if err != nil {
@@ -187,6 +241,12 @@ func (s *server) Close() error {
 	if err != nil {
 		s.logger.Error("stop rpc server failed",
 			zap.Error(err))
+	}
+	if err == nil {
+		// application.Stop first seals listener admission and disconnects every
+		// active session. Join the corresponding connection goroutines only
+		// after that seal, so WaitGroup.Add cannot race with Wait.
+		s.connections.wait()
 	}
 
 	return err
