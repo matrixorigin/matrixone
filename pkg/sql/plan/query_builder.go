@@ -4113,6 +4113,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	table string,
 	left *tree.SelectStatement,
 	stmts []tree.SelectStatement,
+	distinct bool,
 ) (nodeID int32, err error) {
 	if len(s.OrderBy) > 0 {
 		return 0, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
@@ -4285,6 +4286,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		recursiveNodeIDs,
 	)
 	nodeID = appendCTEScanNode(builder, ctx, initSourceStep, initCtx.sinkTag)
+	builder.qry.Nodes[nodeID].RecursiveUnionDistinct = distinct
 	setMaterializedProjectionNullability(builder.qry.Nodes[nodeID], recursiveNotNullable)
 	if limitExpr != nil || offsetExpr != nil {
 		node := builder.qry.Nodes[nodeID]
@@ -4360,7 +4362,8 @@ func (builder *QueryBuilder) bindCte(
 
 	var left *tree.SelectStatement
 	var stmts []tree.SelectStatement
-	left, err = builder.splitRecursiveMember(&s.Select, table, &stmts)
+	var distinct bool
+	left, distinct, err = builder.splitRecursiveMember(&s.Select, table, &stmts)
 	if err != nil {
 		return 0, err
 	}
@@ -4374,7 +4377,7 @@ func (builder *QueryBuilder) bindCte(
 			return 0, err
 		}
 	} else {
-		nodeID, err = builder.bindRecursiveCte(ctx, s, cteRef, table, left, stmts)
+		nodeID, err = builder.bindRecursiveCte(ctx, s, cteRef, table, left, stmts, distinct)
 		if err != nil {
 			return 0, err
 		}
@@ -4427,6 +4430,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.remapOption = stmt.RewriteOption
 	}
 	registerNumericCteDefinitions(stmt, ctx)
+	seedPreparedNumericAggregateTableProjectionTypes(builder, stmt, ctx)
 	seedNumericTableProjectionTypes(builder, stmt, ctx)
 	seedNumericCteProjectionTypes(builder, ctx)
 
@@ -4898,6 +4902,14 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 		}
 	}
 
+	return storeNumericProjectionSourceTargets(ctx, sources, false)
+}
+
+func storeNumericProjectionSourceTargets(
+	ctx *BindContext,
+	sources []numericProjectionSourceInfo,
+	mergeCompatibleNumericTargets bool,
+) []string {
 	var changed []string
 	for i := range sources {
 		if !hasNumericProjectionTarget(sources[i].targets) {
@@ -4909,22 +4921,182 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 		if ctx.numericTableProjectionAmbiguous == nil {
 			ctx.numericTableProjectionAmbiguous = make(map[string][]bool)
 		}
-		if storeNumericTableProjectionTargets(
+		if storeNumericTableProjectionTargetsWithMerge(
 			ctx.numericTableProjectionTypes, ctx.numericTableProjectionAmbiguous,
-			sources[i].alias, sources[i].targets,
+			sources[i].alias, sources[i].targets, mergeCompatibleNumericTargets,
 		) {
 			changed = append(changed, strings.ToLower(sources[i].alias))
 		}
 		if sources[i].sourceName != "" && sources[i].sourceSchema == "" {
-			if storeNumericTableProjectionTargets(
+			if storeNumericTableProjectionTargetsWithMerge(
 				ctx.numericTableProjectionTypes, ctx.numericTableProjectionAmbiguous,
-				sources[i].sourceName, sources[i].targets,
+				sources[i].sourceName, sources[i].targets, mergeCompatibleNumericTargets,
 			) {
 				changed = append(changed, strings.ToLower(sources[i].sourceName))
 			}
 		}
 	}
 	return changed
+}
+
+// seedPreparedNumericAggregateTableProjectionTypes propagates the numeric
+// contract of prepared SUM/AVG through a derived table or CTE before that
+// source is bound. This is required when a marker is hidden behind a recursive
+// CTE column: by aggregate binding time the ParamRef itself is no longer
+// visible. Numeric projection targets only shape parameter-bearing expressions;
+// they do not coerce ordinary string columns.
+func seedPreparedNumericAggregateTableProjectionTypes(
+	builder *QueryBuilder,
+	stmt *tree.Select,
+	ctx *BindContext,
+) {
+	if builder == nil || !builder.isPrepareStatement {
+		return
+	}
+	clause, ok := getSelectTree(stmt).Select.(*tree.SelectClause)
+	if !ok || clause.From == nil || len(clause.From.Tables) != 1 {
+		return
+	}
+
+	sources := collectNumericProjectionSources(clause.From.Tables[0], "", nil)
+	resolveNumericProjectionSourceOutputs(builder, stmt, ctx, sources, make(map[*tree.Select]bool))
+	for i := range sources {
+		if !sources[i].outputKnown || sources[i].source == nil {
+			continue
+		}
+		sources[i].targets = make([]Type, len(sources[i].outputNames))
+		sources[i].targetAmbiguous = make([]bool, len(sources[i].outputNames))
+		sources[i].mergeCompatibleNumericTargets = true
+	}
+
+	binder := NewProjectionBinder(builder, ctx, nil)
+	for _, selectExpr := range clause.Exprs {
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, selectExpr.Expr)
+	}
+	if clause.Having != nil {
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, clause.Having.Expr)
+	}
+	for _, order := range stmt.OrderBy {
+		if order != nil {
+			seedPreparedNumericAggregateExprColumnTargets(binder, sources, order.Expr)
+		}
+	}
+	storeNumericProjectionSourceTargets(ctx, sources, true)
+}
+
+func seedPreparedNumericAggregateExprColumnTargets(
+	binder *ProjectionBinder,
+	sources []numericProjectionSourceInfo,
+	expr tree.Expr,
+) {
+	switch item := expr.(type) {
+	case *tree.FuncExpr:
+		if isPreparedNumericAggregate(numericAstFunctionName(item), len(item.Exprs)) {
+			numericType := types.T_float64.ToType()
+			target := makePlan2Type(&numericType)
+			scan, err := binder.numericAstTypesInternalWithHint(item.Exprs[0], 0, nil, nil)
+			if err == nil && !scan.incompatible {
+				if inferred, ok := numericTypeFromAstScan(scan, nil); ok {
+					target = inferred
+				}
+			}
+			seedNumericExprColumnTargets(binder, sources, item.Exprs[0], target)
+		} else {
+			for _, arg := range item.Exprs {
+				seedPreparedNumericAggregateExprColumnTargets(binder, sources, arg)
+			}
+		}
+		for _, order := range item.OrderBy {
+			if order != nil {
+				seedPreparedNumericAggregateExprColumnTargets(binder, sources, order.Expr)
+			}
+		}
+		if item.WindowSpec != nil {
+			for _, expr := range item.WindowSpec.PartitionBy {
+				seedPreparedNumericAggregateExprColumnTargets(binder, sources, expr)
+			}
+			for _, order := range item.WindowSpec.OrderBy {
+				if order != nil {
+					seedPreparedNumericAggregateExprColumnTargets(binder, sources, order.Expr)
+				}
+			}
+			if item.WindowSpec.Frame != nil {
+				if item.WindowSpec.Frame.Start != nil {
+					seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.WindowSpec.Frame.Start.Expr)
+				}
+				if item.WindowSpec.Frame.End != nil {
+					seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.WindowSpec.Frame.End.Expr)
+				}
+			}
+		}
+	case *tree.BinaryExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Left)
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Right)
+	case *tree.ComparisonExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Left)
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Right)
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Escape)
+	case *tree.AndExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Left)
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Right)
+	case *tree.XorExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Left)
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Right)
+	case *tree.OrExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Left)
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Right)
+	case *tree.NotExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.IsNullExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.IsNotNullExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.IsUnknownExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.IsNotUnknownExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.IsTrueExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.IsNotTrueExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.IsFalseExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.IsNotFalseExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.UnaryExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.ParenExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.CastExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.BitCastExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.Tuple:
+		for _, expr := range item.Exprs {
+			seedPreparedNumericAggregateExprColumnTargets(binder, sources, expr)
+		}
+	case *tree.RangeCond:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Left)
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.From)
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.To)
+	case *tree.CaseExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+		for _, when := range item.Whens {
+			if when == nil {
+				continue
+			}
+			seedPreparedNumericAggregateExprColumnTargets(binder, sources, when.Cond)
+			seedPreparedNumericAggregateExprColumnTargets(binder, sources, when.Val)
+		}
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Else)
+	case *tree.IntervalExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.DefaultVal:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.SerialExtractExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.SerialExpr)
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.IndexExpr)
+	}
 }
 
 func numericProjectionExprTarget(
@@ -5141,11 +5313,37 @@ func uniqueNumericStarOutput(outputs []numericProjectionStarOutput, name string)
 	return matched, matched >= 0
 }
 
+func sameNumericProjectionTarget(left, right Type) bool {
+	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale
+}
+
+func mergeNumericProjectionTargets(left, right Type) (Type, bool) {
+	resolved, ok := function.InferNumericParameterType(
+		[]types.Type{makeTypeByPlan2Type(left), makeTypeByPlan2Type(right)}, nil,
+	)
+	if !ok {
+		return Type{}, false
+	}
+	return makePlan2Type(&resolved), true
+}
+
 func storeNumericTableProjectionTargets(
 	targetsByTable map[string][]Type,
 	ambiguousByTable map[string][]bool,
 	table string,
 	targets []Type,
+) bool {
+	return storeNumericTableProjectionTargetsWithMerge(
+		targetsByTable, ambiguousByTable, table, targets, false,
+	)
+}
+
+func storeNumericTableProjectionTargetsWithMerge(
+	targetsByTable map[string][]Type,
+	ambiguousByTable map[string][]bool,
+	table string,
+	targets []Type,
+	mergeCompatibleNumericTargets bool,
 ) bool {
 	key := strings.ToLower(table)
 	existing, ok := targetsByTable[key]
@@ -5180,25 +5378,36 @@ func storeNumericTableProjectionTargets(
 		if targets[i].Id == 0 {
 			continue
 		}
-		if existing[i].Id != targets[i].Id || existing[i].Width != targets[i].Width || existing[i].Scale != targets[i].Scale {
-			existing[i] = Type{}
-			ambiguous[i] = true
-			changed = true
+		if sameNumericProjectionTarget(existing[i], targets[i]) {
+			continue
 		}
+		if mergeCompatibleNumericTargets {
+			if merged, ok := mergeNumericProjectionTargets(existing[i], targets[i]); ok {
+				if !sameNumericProjectionTarget(existing[i], merged) {
+					existing[i] = merged
+					changed = true
+				}
+				continue
+			}
+		}
+		existing[i] = Type{}
+		ambiguous[i] = true
+		changed = true
 	}
 	return changed
 }
 
 type numericProjectionSourceInfo struct {
-	source          *tree.Select
-	sourceName      string
-	sourceSchema    string
-	alias           string
-	aliasCols       tree.IdentifierList
-	outputNames     []string
-	outputKnown     bool
-	targets         []Type
-	targetAmbiguous []bool
+	source                        *tree.Select
+	sourceName                    string
+	sourceSchema                  string
+	alias                         string
+	aliasCols                     tree.IdentifierList
+	outputNames                   []string
+	outputKnown                   bool
+	targets                       []Type
+	targetAmbiguous               []bool
+	mergeCompatibleNumericTargets bool
 }
 
 func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjectionSourceInfo) []*plan.ColDef {
@@ -5565,10 +5774,17 @@ func seedNumericSourceTarget(source *numericProjectionSourceInfo, pos int, targe
 		source.targets[pos] = target
 		return
 	}
-	if existing.Id != target.Id || existing.Width != target.Width || existing.Scale != target.Scale {
-		source.targets[pos] = Type{}
-		source.targetAmbiguous[pos] = true
+	if sameNumericProjectionTarget(existing, target) {
+		return
 	}
+	if source.mergeCompatibleNumericTargets {
+		if merged, ok := mergeNumericProjectionTargets(existing, target); ok {
+			source.targets[pos] = merged
+			return
+		}
+	}
+	source.targets[pos] = Type{}
+	source.targetAmbiguous[pos] = true
 }
 
 func hasNumericProjectionTarget(targets []Type) bool {
@@ -8426,39 +8642,70 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext, i
 	// return leftChildID, err
 }
 
-func (builder *QueryBuilder) splitRecursiveMember(stmt *tree.SelectStatement, name string, stmts *[]tree.SelectStatement) (*tree.SelectStatement, error) {
-	ok, left, err := builder.checkRecursiveCTE(stmt, name, stmts)
+func (builder *QueryBuilder) splitRecursiveMember(
+	stmt *tree.SelectStatement,
+	name string,
+	stmts *[]tree.SelectStatement,
+) (*tree.SelectStatement, bool, error) {
+	var distinctMode *bool
+	left, err := builder.splitRecursiveMemberWithMode(stmt, name, stmts, &distinctMode)
+	if err != nil {
+		return left, false, err
+	}
+	return left, distinctMode != nil && *distinctMode, nil
+}
+
+func (builder *QueryBuilder) splitRecursiveMemberWithMode(
+	stmt *tree.SelectStatement,
+	name string,
+	stmts *[]tree.SelectStatement,
+	distinctMode **bool,
+) (*tree.SelectStatement, error) {
+	ok, left, distinct, err := builder.checkRecursiveCTE(stmt, name, stmts)
 	if !ok || err != nil {
 		return left, err
 	}
-	return builder.splitRecursiveMember(left, name, stmts)
+	if *distinctMode == nil {
+		mode := distinct
+		*distinctMode = &mode
+	} else if **distinctMode != distinct {
+		return left, moerr.NewParseError(
+			builder.GetContext(),
+			"mixing UNION ALL and UNION DISTINCT in recursive cte is not supported",
+		)
+	}
+	return builder.splitRecursiveMemberWithMode(left, name, stmts, distinctMode)
 }
 
-func (builder *QueryBuilder) checkRecursiveCTE(left *tree.SelectStatement, name string, stmts *[]tree.SelectStatement) (bool, *tree.SelectStatement, error) {
+func (builder *QueryBuilder) checkRecursiveCTE(
+	left *tree.SelectStatement,
+	name string,
+	stmts *[]tree.SelectStatement,
+) (bool, *tree.SelectStatement, bool, error) {
 	if u, ok := (*left).(*tree.UnionClause); ok {
-		if !u.All {
-			return false, left, nil
+		if u.Type != tree.UNION {
+			return false, left, false, nil
 		}
 
 		rt, ok := u.Right.(*tree.SelectClause)
 		if !ok {
-			return false, left, nil
+			return false, left, false, nil
 		}
 
 		count, err := builder.checkRecursiveTable(rt.From.Tables[0], name)
 		if err != nil && count > 0 {
-			return false, left, err
+			return false, left, false, err
 		}
 		if count == 0 {
-			return false, left, nil
+			return false, left, false, nil
 		}
 		if count > 1 {
-			return false, left, moerr.NewParseErrorf(builder.GetContext(), "unsupport multiple recursive table expr in recursive CTE: %T", left)
+			return false, left, false, moerr.NewParseErrorf(builder.GetContext(), "unsupport multiple recursive table expr in recursive CTE: %T", left)
 		}
 		*stmts = append(*stmts, u.Right)
-		return true, &u.Left, nil
+		return true, &u.Left, !u.All, nil
 	}
-	return false, left, nil
+	return false, left, false, nil
 }
 
 func (builder *QueryBuilder) checkRecursiveTable(stmt tree.TableExpr, name string) (int, error) {

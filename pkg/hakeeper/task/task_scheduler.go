@@ -153,8 +153,8 @@ func allocateTask(
 	if t.Metadata.Options.Resource.GetMemory() > 0 {
 		rules = append(rules, withMemory(t.Metadata.Options.Resource.Memory))
 	}
-	cnPool = cnPool.selectCNs(rules...)
-	runner := cnPool.min()
+	candidateCNPool := cnPool.selectCNs(rules...)
+	runner := candidateCNPool.min()
 	if runner.uuid == "" {
 		runtime.ServiceRuntime(service).Logger().Error("failed to allocate task",
 			zap.Uint64("task-id", t.ID),
