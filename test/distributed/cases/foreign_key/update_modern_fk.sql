@@ -203,6 +203,23 @@ update parent_dual_a set id = 2 where id = 1;
 select * from parent_dual_a order by id;
 select * from child_dual_fk;
 
+create table parent_generated_unique (
+    id int primary key
+);
+create table child_generated_unique (
+    id int primary key,
+    parent_id int,
+    u int generated always as (parent_id % 10) stored,
+    unique key uk_generated_unique(u),
+    constraint fk_generated_unique foreign key (parent_id)
+        references parent_generated_unique(id) on update cascade
+);
+insert into parent_generated_unique values (1), (12);
+insert into child_generated_unique(id, parent_id) values (10, 1), (20, 12);
+update parent_generated_unique set id = 2 where id = 1;
+select * from parent_generated_unique order by id;
+select * from child_generated_unique order by id;
+
 set foreign_key_checks = 0;
 create table update_preinsert_index (
     a int not null auto_increment primary key,
@@ -217,6 +234,8 @@ update update_preinsert_index set a = 90;
 set foreign_key_checks = 1;
 drop table update_preinsert_index;
 
+drop table child_generated_unique;
+drop table parent_generated_unique;
 drop table child_dual_fk;
 drop table parent_dual_b;
 drop table parent_dual_a;

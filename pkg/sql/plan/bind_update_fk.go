@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 const foreignKeyNoReferencedRowAssert = "fk_no_referenced_row"
@@ -398,6 +399,9 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 			)
 		}
 	}
+	if err := builder.validateModernUpdateParentRowClosure(parentTableDef, affectedFK); err != nil {
+		return err
+	}
 	if childTableDef.TblId == parentTableDef.TblId {
 		return newLegacyUpdatePlannerRouteError(
 			updateRouteReasonForeignKey,
@@ -491,6 +495,74 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 		}
 	}
 	return nil
+}
+
+func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
+	parentTableDef *plan.TableDef,
+	affectedFK updateParentForeignKey,
+) error {
+	childTableDef := affectedFK.childTableDef
+	childColByID := make(map[uint64]*plan.ColDef, len(childTableDef.Cols))
+	parentColByID := make(map[uint64]*plan.ColDef, len(parentTableDef.Cols))
+	updatedChildNames := make(map[string]struct{}, len(affectedFK.fk.Cols))
+	for _, col := range childTableDef.Cols {
+		childColByID[col.ColId] = col
+		if col.GeneratedCol != nil || col.OnUpdate != nil {
+			return builder.newLegacyUpdateParentRowClosureError()
+		}
+	}
+	for _, col := range parentTableDef.Cols {
+		parentColByID[col.ColId] = col
+	}
+	for i, childColID := range affectedFK.fk.Cols {
+		childCol := childColByID[childColID]
+		if childCol == nil || i >= len(affectedFK.fk.ForeignCols) {
+			return moerr.NewInternalError(builder.GetContext(), "invalid parent foreign key action columns")
+		}
+		updatedChildNames[childCol.Name] = struct{}{}
+		if affectedFK.fk.OnUpdate != plan.ForeignKeyDef_CASCADE {
+			continue
+		}
+		parentCol := parentColByID[affectedFK.fk.ForeignCols[i]]
+		if parentCol == nil {
+			return moerr.NewInternalError(builder.GetContext(), "invalid parent foreign key action columns")
+		}
+		if parentCol.Typ.Id != childCol.Typ.Id ||
+			parentCol.Typ.Width != childCol.Typ.Width ||
+			parentCol.Typ.Scale != childCol.Typ.Scale ||
+			parentCol.Typ.Enumvalues != childCol.Typ.Enumvalues {
+			return builder.newLegacyUpdateParentRowClosureError()
+		}
+	}
+	for _, idxDef := range childTableDef.Indexes {
+		if !idxDef.Unique {
+			continue
+		}
+		for _, part := range idxDef.Parts {
+			if _, changed := updatedChildNames[catalog.ResolveAlias(part)]; changed {
+				return builder.newLegacyUpdateParentRowClosureError()
+			}
+		}
+	}
+	if childTableDef.ClusterBy != nil &&
+		planutil.JudgeIsCompositeClusterByColumn(childTableDef.ClusterBy.Name) {
+		for _, colName := range planutil.SplitCompositeClusterByColumnName(childTableDef.ClusterBy.Name) {
+			if _, changed := updatedChildNames[colName]; changed {
+				return builder.newLegacyUpdateParentRowClosureError()
+			}
+		}
+	}
+	return nil
+}
+
+func (builder *QueryBuilder) newLegacyUpdateParentRowClosureError() error {
+	return newLegacyUpdatePlannerRouteError(
+		updateRouteReasonForeignKey,
+		moerr.NewUnsupportedDML(
+			builder.GetContext(),
+			"parent foreign key action requires complete child update row closure",
+		),
+	)
 }
 
 func (builder *QueryBuilder) appendUpdateParentMutation(
@@ -706,28 +778,9 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			}},
 		}
 	}
-	for i, col := range childTableDef.Cols {
-		if col.GeneratedCol == nil {
-			continue
-		}
-		generatedExpr := builder.applyGeneratedColumnAssignmentCast(
-			DeepCopyExpr(col.GeneratedCol.Expr),
-			false,
-		)
-		actionProjection[i] = substituteColRefsInExpr(
-			generatedExpr,
-			actionProjection,
-			0,
-		)
-	}
 	finalReplacements := make(map[int32]*plan.Expr, len(newChildExprs))
 	for pos, expr := range newChildExprs {
 		finalReplacements[pos] = expr
-	}
-	for i, col := range childTableDef.Cols {
-		if col.GeneratedCol != nil {
-			finalReplacements[int32(i)] = actionProjection[i]
-		}
 	}
 
 	type mutationIndexPositions struct {

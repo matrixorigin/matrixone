@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func TestClassifyUpdatePlannerError(t *testing.T) {
@@ -417,37 +418,65 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		})
 	}
 
-	t.Run("cascade recomputes generated child column from new foreign key", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
-		prepareEmpDept(mock)
-		setMockGeneratedColumn(t, mock, "emp", "sal", "deptno")
-		mock.ctxt.tables["emp"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+	for _, test := range []struct {
+		name    string
+		prepare func(*MockOptimizer)
+	}{
+		{
+			name: "generated unique collision requires complete child row closure",
+			prepare: func(mock *MockOptimizer) {
+				setMockGeneratedColumn(t, mock, "emp", "sal", "deptno")
+				mock.ctxt.tables["emp"].Indexes = append(mock.ctxt.tables["emp"].Indexes, &planpb.IndexDef{
+					IndexName: "uk_sal", Parts: []string{"sal"}, Unique: true,
+				})
+			},
+		},
+		{
+			name: "parent child width mismatch requires assignment cast",
+			prepare: func(mock *MockOptimizer) {
+				requireMockColumn(t, mock, "emp", "deptno").Typ.Width = 16
+			},
+		},
+		{
+			name: "composite cluster by dependency requires recomputation",
+			prepare: func(mock *MockOptimizer) {
+				emp := mock.ctxt.tables["emp"]
+				emp.ClusterBy = &planpb.ClusterByDef{
+					Name: planutil.BuildCompositeClusterByColumnName([]string{"deptno", "empno"}),
+				}
+			},
+		},
+		{
+			name: "on update feeding generated column requires dependency closure",
+			prepare: func(mock *MockOptimizer) {
+				setMockOnUpdateExpr(t, mock, "emp", "job", "changed")
+				setMockGeneratedColumn(t, mock, "emp", "ename", "job")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			prepareEmpDept(mock)
+			mock.ctxt.tables["emp"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+			test.prepare(mock)
 
-		logicPlan, err := runOneStmt(mock, t, "UPDATE dept SET deptno = 2")
-		require.NoError(t, err)
-		query := logicPlan.GetQuery()
-		require.Equal(t, 2, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+			stmt, err := parsers.ParseOne(
+				mock.CurrentContext().GetContext(),
+				dialect.MYSQL,
+				"UPDATE dept SET deptno = 2",
+				1,
+			)
+			require.NoError(t, err)
+			defer stmt.Free()
 
-		emp := mock.ctxt.tables["emp"]
-		salPos := emp.Name2ColIndex["sal"]
-		deptnoPos := emp.Name2ColIndex["deptno"]
-		hasRecomputedSal := false
-		projectPairs := make([][2]string, 0)
-		for _, node := range query.Nodes {
-			if node.NodeType != planpb.Node_PROJECT || len(node.ProjectList) < len(emp.Cols) {
-				continue
-			}
-			projectPairs = append(projectPairs, [2]string{
-				node.ProjectList[salPos].String(),
-				node.ProjectList[deptnoPos].String(),
-			})
-			if node.ProjectList[salPos].String() == node.ProjectList[deptnoPos].String() {
-				hasRecomputedSal = true
-				break
-			}
-		}
-		require.True(t, hasRecomputedSal, "candidate sal/deptno projections: %v", projectPairs)
-	})
+			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			require.ErrorContains(t, err, "complete child update row closure")
+			route, reason, _ := classifyUpdatePlannerError(err)
+			require.Equal(t, updatePlannerLegacy, route)
+			require.Equal(t, updateRouteReasonForeignKey, reason)
+		})
+	}
 
 	t.Run("disabled checks skip child probe and parent fallback", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
