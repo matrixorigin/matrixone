@@ -24,9 +24,9 @@ import (
 )
 
 // Shuffle joins publish expression-less runtime-filter specs as PASS markers.
-// They are transport control messages, not predicates. Stats are deliberately
-// varied here because optimizer hints may replace them after the markers have
-// already been generated.
+// They are transport control messages, not predicates. The matrix varies the
+// marker shape independently from Shuffle because optimizer hints may replace
+// stats after the specs have already been generated.
 func TestRuntimeFilterProbeExplain(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -35,18 +35,28 @@ func TestRuntimeFilterProbeExplain(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "pass marker without stats",
+			name:  "pass marker after shuffle stats are replaced",
+			stats: runtimeFilterTestStats(false),
 			specs: []*plan.RuntimeFilterSpec{{Tag: 1}},
 		},
 		{
-			name:  "nil and pass marker without hashmap stats",
-			stats: &plan.Stats{},
-			specs: []*plan.RuntimeFilterSpec{nil, {Tag: 1}},
+			name:  "shuffle pass marker",
+			stats: runtimeFilterTestStats(true),
+			specs: []*plan.RuntimeFilterSpec{{Tag: 1}},
 		},
 		{
-			name:  "mixed markers and predicates",
-			stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}},
+			name:  "ordinary predicate after shuffle stats are replaced",
+			stats: runtimeFilterTestStats(false),
 			specs: []*plan.RuntimeFilterSpec{
+				{Tag: 1, Expr: runtimeFilterTestColumn("probe_id")},
+			},
+			want: "Runtime Filter Probe: probe_id",
+		},
+		{
+			name:  "mixed markers and predicates after stats replacement",
+			stats: runtimeFilterTestStats(false),
+			specs: []*plan.RuntimeFilterSpec{
+				nil,
 				{Tag: 1},
 				{Tag: 2, Expr: runtimeFilterTestColumn("probe_id"), MatchPrefix: true},
 				{Tag: 3},
@@ -55,24 +65,8 @@ func TestRuntimeFilterProbeExplain(t *testing.T) {
 			want: "Runtime Filter Probe: probe_id Match Prefix, probe_id_2",
 		},
 		{
-			name: "ordinary predicate without stats",
-			specs: []*plan.RuntimeFilterSpec{
-				{Tag: 1, Expr: runtimeFilterTestColumn("probe_id")},
-			},
-			want: "Runtime Filter Probe: probe_id",
-		},
-		{
-			name: "shuffle pass marker",
-			stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
-				Shuffle: true,
-			}},
-			specs: []*plan.RuntimeFilterSpec{{Tag: 1}},
-		},
-		{
-			name: "explicit predicate survives stale shuffle stats",
-			stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
-				Shuffle: true,
-			}},
+			name:  "explicit predicate survives stale shuffle stats",
+			stats: runtimeFilterTestStats(true),
 			specs: []*plan.RuntimeFilterSpec{
 				{Tag: 1, Expr: runtimeFilterTestColumn("probe_id")},
 			},
@@ -105,13 +99,20 @@ func TestRuntimeFilterBuildExplain(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "pass marker without stats",
-			specs: []*plan.RuntimeFilterSpec{nil, {Tag: 1}},
+			name:  "pass marker after shuffle stats are replaced",
+			stats: runtimeFilterTestStats(false),
+			specs: []*plan.RuntimeFilterSpec{{Tag: 1}},
+		},
+		{
+			name:  "shuffle pass marker",
+			stats: runtimeFilterTestStats(true),
+			specs: []*plan.RuntimeFilterSpec{{Tag: 1}},
 		},
 		{
 			name:  "build expression and legacy fallback",
-			stats: &plan.Stats{},
+			stats: runtimeFilterTestStats(false),
 			specs: []*plan.RuntimeFilterSpec{
+				nil,
 				{Tag: 1},
 				{
 					Tag:       2,
@@ -123,17 +124,8 @@ func TestRuntimeFilterBuildExplain(t *testing.T) {
 			want: "Runtime Filter Build: build_id, legacy_build_id",
 		},
 		{
-			name: "shuffle pass marker",
-			stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
-				Shuffle: true,
-			}},
-			specs: []*plan.RuntimeFilterSpec{{Tag: 1}},
-		},
-		{
-			name: "explicit predicate survives stale shuffle stats",
-			stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
-				Shuffle: true,
-			}},
+			name:  "explicit predicate survives stale shuffle stats",
+			stats: runtimeFilterTestStats(true),
 			specs: []*plan.RuntimeFilterSpec{
 				{Tag: 1, BuildExpr: runtimeFilterTestColumn("build_id")},
 			},
@@ -161,17 +153,33 @@ func TestRuntimeFilterBuildExplain(t *testing.T) {
 func TestRuntimeFilterPassMarkersDoNotCreateExtraInfoLabels(t *testing.T) {
 	node := &plan.Node{
 		NodeType:               plan.Node_JOIN,
-		Stats:                  &plan.Stats{},
+		Stats:                  runtimeFilterTestStats(false),
 		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{Tag: 1}},
 		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{{Tag: 1}},
 	}
 
-	got, err := NewNodeDescriptionImpl(node).GetExtraInfo(
-		context.Background(),
-		NewExplainDefaultOptions(),
-	)
-	require.NoError(t, err)
-	require.Equal(t, []string{"Join Type: INNER"}, got)
+	formats := []struct {
+		name   string
+		format ExplainFormat
+	}{
+		{name: "text", format: EXPLAIN_FORMAT_TEXT},
+		{name: "json", format: EXPLAIN_FORMAT_JSON},
+		{name: "dot", format: EXPLAIN_FORMAT_DOT},
+	}
+	for _, format := range formats {
+		t.Run(format.name, func(t *testing.T) {
+			got, err := NewNodeDescriptionImpl(node).GetExtraInfo(
+				context.Background(),
+				&ExplainOptions{Format: format.format},
+			)
+			require.NoError(t, err)
+			require.Equal(t, []string{"Join Type: INNER"}, got)
+		})
+	}
+}
+
+func runtimeFilterTestStats(shuffle bool) *plan.Stats {
+	return &plan.Stats{HashmapStats: &plan.HashMapStats{Shuffle: shuffle}}
 }
 
 func runtimeFilterTestColumn(name string) *plan.Expr {

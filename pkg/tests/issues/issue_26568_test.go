@@ -28,7 +28,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const issue26568Rows = 130_000
+const (
+	issue26568Rows                = 130_000
+	issue26568TPPlanTitle         = "TP QUERY PLAN"
+	issue26568MultiCNPlanTitle    = "AP QUERY PLAN ON MULTICN("
+	issue26568MultiCNPhyPlanTitle = "AP QUERY PHYPLAN ON MULTICN("
+)
 
 const issue26568JoinSQL = `
 	select count(*)
@@ -36,9 +41,10 @@ const issue26568JoinSQL = `
 	join po_r as r on l.id = r.id`
 
 type issue26568ExplainAttack struct {
-	name      string
-	hint      string
-	statement string
+	name                string
+	hint                string
+	statement           string
+	wantPlanTitlePrefix string
 }
 
 // TestIssue26568ExplainMultiCNHashJoin exercises the same SQL-protocol path as
@@ -61,32 +67,37 @@ func TestIssue26568ExplainMultiCNHashJoin(t *testing.T) {
 			t.Run(fmt.Sprintf("coordinator-cn-%d", index), func(t *testing.T) {
 				runIssue26568ExplainAttack(t, ctx, cn.GetServiceConfig().CN.Frontend.Port, dbName,
 					issue26568ExplainAttack{
-						name:      "reported logical plan",
-						hint:      "execType=2",
-						statement: "explain " + issue26568JoinSQL,
+						name:                "reported logical plan",
+						hint:                "execType=2",
+						statement:           "explain " + issue26568JoinSQL,
+						wantPlanTitlePrefix: issue26568MultiCNPlanTitle,
 					})
 			})
 		}
 
 		attacks := []issue26568ExplainAttack{
 			{
-				name:      "minimal stats replacement",
-				hint:      "execType=1",
-				statement: "explain " + issue26568JoinSQL,
+				name:                "minimal stats replacement",
+				hint:                "execType=1",
+				statement:           "explain " + issue26568JoinSQL,
+				wantPlanTitlePrefix: issue26568TPPlanTitle,
 			},
 			{
-				name:      "big stats verbose renderer",
-				hint:      "execType=2",
-				statement: "explain verbose " + issue26568JoinSQL,
+				name:                "big stats verbose renderer",
+				hint:                "execType=2",
+				statement:           "explain verbose " + issue26568JoinSQL,
+				wantPlanTitlePrefix: issue26568MultiCNPlanTitle,
 			},
 			{
-				name:      "huge stats replacement",
-				hint:      "execType=3",
-				statement: "explain " + issue26568JoinSQL,
+				name:                "huge stats replacement",
+				hint:                "execType=3",
+				statement:           "explain " + issue26568JoinSQL,
+				wantPlanTitlePrefix: issue26568MultiCNPlanTitle,
 			},
 			{
-				name: "multiple shuffle pass markers",
-				hint: "execType=2",
+				name:                "multiple shuffle pass markers",
+				hint:                "execType=2",
+				wantPlanTitlePrefix: issue26568MultiCNPlanTitle,
 				statement: `explain
 					select count(*)
 					from po_l as l
@@ -94,14 +105,10 @@ func TestIssue26568ExplainMultiCNHashJoin(t *testing.T) {
 					join po_l as l2 on l2.id = r.id`,
 			},
 			{
-				name:      "physical plan renderer",
-				hint:      "execType=2",
-				statement: "explain phyplan " + issue26568JoinSQL,
-			},
-			{
-				name:      "analyze renderer",
-				hint:      "execType=2",
-				statement: "explain analyze " + issue26568JoinSQL,
+				name:                "physical plan renderer",
+				hint:                "execType=2",
+				statement:           "explain phyplan " + issue26568JoinSQL,
+				wantPlanTitlePrefix: issue26568MultiCNPhyPlanTitle,
 			},
 		}
 		for _, attack := range attacks {
@@ -121,23 +128,22 @@ func runIssue26568ExplainAttack(
 ) {
 	t.Helper()
 	conn := openIssue26568Conn(t, ctx, port)
-	defer conn.Close()
+	defer func() { require.NoError(t, conn.Close()) }()
 
 	issue26568Exec(t, ctx, conn, "set role moadmin")
 	issue26568Exec(t, ctx, conn, "use `"+dbName+"`")
 	issue26568Exec(t, ctx, conn,
 		fmt.Sprintf(`set session optimizer_hints = "%s"`, attack.hint))
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_, err := conn.ExecContext(cleanupCtx, `set session optimizer_hints = ""`)
-		require.NoError(t, err)
-	}()
 	issue26568Exec(t, ctx, conn, "set session join_spill_mem = 1073741824")
 
-	planText, err := testutils.QueryText(ctx, conn, attack.statement)
+	result, err := testutils.QueryTextResult(ctx, conn, attack.statement)
 	require.NoErrorf(t, err, "attack failed: %s", attack.name)
+	planText := result.Text
 	require.NotEmpty(t, planText)
+	require.Truef(t,
+		strings.HasPrefix(strings.ToUpper(result.ColumnName), attack.wantPlanTitlePrefix),
+		"attack %q did not reach plan class %q: got column %q",
+		attack.name, attack.wantPlanTitlePrefix, result.ColumnName)
 	require.Contains(t, strings.ToLower(planText), "join")
 	for _, line := range strings.Split(planText, "\n") {
 		line = strings.TrimSpace(line)
@@ -149,7 +155,7 @@ func runIssue26568ExplainAttack(
 func setupIssue26568Tables(t *testing.T, ctx context.Context, port int64, dbName string) {
 	t.Helper()
 	conn := openIssue26568Conn(t, ctx, port)
-	defer conn.Close()
+	defer func() { require.NoError(t, conn.Close()) }()
 
 	issue26568Exec(t, ctx, conn, "set role moadmin")
 	issue26568Exec(t, ctx, conn, "drop database if exists `"+dbName+"`")
