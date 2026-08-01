@@ -3276,6 +3276,28 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 		require.True(t, found)
 	})
 
+	for _, sql := range []string{
+		"replace into dept values (1, 'Sales', 'NY')",
+		"replace into dept set deptno = 1, dname = 'Sales', loc = 'NY'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			query := build(sql)
+			found := false
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_FILTER {
+					continue
+				}
+				for _, expr := range node.FilterList {
+					if expr.GetF() != nil &&
+						expr.GetF().GetFunc().GetObjName() == "_check_constraint_assert" {
+						found = true
+					}
+				}
+			}
+			require.True(t, found)
+		})
+	}
+
 	t.Run("ODKU without unique key asserts on legacy fallback", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		tableDef := mock.ctxt.tables["fake_pk_t"]
