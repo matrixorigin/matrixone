@@ -15,6 +15,8 @@
 package function
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -65,34 +67,103 @@ func TestCastGeometryToSubtype(t *testing.T) {
 func TestCastValueToIndexConstDefinition(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	descriptor := "zero,one,two,three,four,five,six,seven"
-	inputs := []FunctionTestInput{
-		NewFunctionTestConstInput(types.T_varchar.ToType(),
-			[]string{descriptor, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor}, nil),
-		NewFunctionTestInput(types.T_varchar.ToType(),
-			[]string{"seven", "zero", "THREE", "2", "four", "five", "six", "one"}, nil),
+	values := []string{"seven", "zero", "THREE", "2", "four", "five", "six", "one"}
+	want := []types.Enum{8, 1, 4, 2, 5, 6, 7, 2}
+	typeEnums := make([]string, 0, len(values)*4)
+	enumValues := make([]string, 0, len(values)*4)
+	expected := make([]types.Enum, 0, len(values)*4)
+	for range 4 {
+		typeEnums = append(typeEnums, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor)
+		enumValues = append(enumValues, values...)
+		expected = append(expected, want...)
 	}
-	expect := NewFunctionTestResult(types.T_enum.ToType(), false,
-		[]types.Enum{8, 1, 4, 2, 5, 6, 7, 2}, nil)
+	inputs := []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varchar.ToType(), typeEnums, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), enumValues, nil),
+	}
+	expect := NewFunctionTestResult(types.T_enum.ToType(), false, expected, nil)
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastValueToIndex)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
 }
 
-func TestBuildEnumExactIndexesPreservesEqualFoldFirstMatch(t *testing.T) {
-	indexes := buildEnumExactIndexes("low,LOW,high,high")
-	require.Equal(t, types.Enum(1), indexes["low"])
-	require.Equal(t, types.Enum(1), indexes["LOW"])
-	require.Equal(t, types.Enum(3), indexes["high"])
-	unicodeIndexes := buildEnumExactIndexes("K,K,Σ,ς,σ")
-	require.Equal(t, types.Enum(1), unicodeIndexes["K"])
-	require.Equal(t, types.Enum(3), unicodeIndexes["ς"])
-	require.Equal(t, types.Enum(3), unicodeIndexes["σ"])
-	require.Nil(t, buildEnumExactIndexes(""))
-	require.Nil(t, buildEnumExactIndexesForBatch("a,b,c,d,e,f,g,h", enumExactIndexMinRows-1))
-	require.Nil(t, buildEnumExactIndexesForBatch("a,b,c,d,e,f,g", enumExactIndexMinRows))
-	require.NotNil(t, buildEnumExactIndexesForBatch("a,b,c,d,e,f,g,h", enumExactIndexMinRows))
-	require.NotNil(t, buildEnumExactIndexesForBatch("a,b,c", 22))
+func TestEnumValueIndexPreservesParseEnumSemantics(t *testing.T) {
+	for _, definition := range []string{
+		"low,LOW,2,high,high",
+		"K,K,Σ,ς,σ",
+	} {
+		index := buildEnumValueIndex(definition)
+		require.NotNil(t, index)
+		for _, input := range []string{
+			"low", "LOW", "LoW", "2", "0x2", "K", "k", "Σ", "ς", "σ",
+			"missing", "0", "65537", "18446744073709551615",
+		} {
+			want, wantErr := types.ParseEnum(definition, input)
+			got, gotErr := index.parse(input)
+			require.Equal(t, want, got, "definition=%q input=%q", definition, input)
+			if wantErr == nil {
+				require.NoError(t, gotErr, "definition=%q input=%q", definition, input)
+			} else {
+				require.EqualError(t, gotErr, wantErr.Error(), "definition=%q input=%q", definition, input)
+			}
+		}
+	}
+
+	require.Nil(t, buildEnumValueIndex(""))
+	require.Nil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g,h", enumValueIndexMinRows-1))
+	require.Nil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g,h", enumValueIndexMinRows))
+	require.NotNil(t, buildEnumValueIndexForBatch(strings.Repeat("a,", 31)+"a", enumValueIndexMinRows))
+	require.NotNil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g,h", 32))
+	require.NotNil(t, buildEnumValueIndexForBatch("a,b,c", 86))
+}
+
+func BenchmarkEnumValueIndex(b *testing.B) {
+	for _, labelCount := range []int{8, 1024} {
+		labels := make([]string, labelCount)
+		for i := range labels {
+			labels[i] = "value" + strconv.Itoa(i)
+		}
+		definition := strings.Join(labels, ",")
+		batchSize := (enumValueIndexMinWork + labelCount - 1) / labelCount
+		if batchSize < enumValueIndexMinRows {
+			batchSize = enumValueIndexMinRows
+		}
+		inputs := []struct {
+			name  string
+			value string
+		}{
+			{name: "exact", value: labels[len(labels)-1]},
+			{name: "case-insensitive", value: strings.ToUpper(labels[len(labels)-1])},
+			{name: "numeric", value: strconv.Itoa(labelCount)},
+		}
+		for _, input := range inputs {
+			b.Run(strconv.Itoa(labelCount)+"-labels/"+input.name+"/linear", func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					for row := 0; row < batchSize; row++ {
+						if _, err := types.ParseEnum(definition, input.value); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+			b.Run(strconv.Itoa(labelCount)+"-labels/"+input.name+"/indexed", func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					index := buildEnumValueIndexForBatch(definition, batchSize)
+					if index == nil {
+						b.Fatal("batch should use the enum value index")
+					}
+					for row := 0; row < batchSize; row++ {
+						if _, err := index.parse(input.value); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		}
+	}
 }
 
 func TestCastGeometryToSubtypeRejectMismatch(t *testing.T) {

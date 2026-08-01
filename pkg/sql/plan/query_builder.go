@@ -3646,7 +3646,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 		}
 		if compatible && candidate != nil {
-			ctx.mysqlSpecialOrderTypes[int32(colIdx)] = candidate
+			ctx.setMySQLSpecialOrderType(int32(colIdx), candidate)
 		}
 	}
 	havingBinder := NewHavingBinder(builder, ctx)
@@ -4265,9 +4265,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	// would rediscover provenance from the anchor expression alone.
 	for colIdx := range projects {
 		if recursiveOrderCompatible[colIdx] && recursiveOrderTypes[colIdx] != nil {
-			initCtx.mysqlSpecialOrderTypes[int32(colIdx)] = recursiveOrderTypes[colIdx]
+			initCtx.setMySQLSpecialOrderType(int32(colIdx), recursiveOrderTypes[colIdx])
 		} else {
-			initCtx.mysqlSpecialOrderTypes[int32(colIdx)] = nil
+			initCtx.setMySQLSpecialOrderType(int32(colIdx), nil)
 		}
 	}
 
@@ -9487,8 +9487,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
 		defaultVals = make([]string, colLength)
-		mysqlSpecialOrderTypes = make([]*plan.Type, colLength)
-
 		for i, col := range headings {
 			if i < len(alias.Cols) {
 				cols[i] = string(alias.Cols[i])
@@ -9500,7 +9498,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			types[i] = &projects[i].Typ
 			colIsHidden[i] = false
 			defaultVals[i] = ""
-			mysqlSpecialOrderTypes[i] = subCtx.mysqlSpecialOrderTypeForProject(int32(i))
+			if orderType := subCtx.mysqlSpecialOrderTypeForProject(int32(i)); orderType != nil {
+				if mysqlSpecialOrderTypes == nil {
+					mysqlSpecialOrderTypes = make([]*plan.Type, colLength)
+				}
+				mysqlSpecialOrderTypes[i] = orderType
+			}
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}

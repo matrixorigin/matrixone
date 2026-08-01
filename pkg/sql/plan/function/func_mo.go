@@ -1012,11 +1012,11 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
-	var exactIndexes map[string]types.Enum
-	if length >= enumExactIndexMinRows && ivecs[0].IsConst() && !ivecs[0].IsConstNull() {
+	var valueIndex *enumValueIndex
+	if length >= enumValueIndexMinRows && ivecs[0].IsConst() && !ivecs[0].IsConstNull() {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(0)
 		if !typeEnumNull {
-			exactIndexes = buildEnumExactIndexesForBatch(functionUtil.QuickBytesToStr(typeEnum), length)
+			valueIndex = buildEnumValueIndexForBatch(functionUtil.QuickBytesToStr(typeEnum), length)
 		}
 	}
 
@@ -1031,16 +1031,17 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			enumStr := functionUtil.QuickBytesToStr(enumValue)
 
-			var index types.Enum
-			if exactIndexes != nil {
-				index = exactIndexes[enumStr]
-			}
-			if index == 0 {
-				var err error
+			var (
+				index types.Enum
+				err   error
+			)
+			if valueIndex != nil {
+				index, err = valueIndex.parse(enumStr)
+			} else {
 				index, err = types.ParseEnum(typeEnumVal, enumStr)
-				if err != nil {
-					return err
-				}
+			}
+			if err != nil {
+				return err
 			}
 
 			if err := rs.Append(index, false); err != nil {
@@ -1052,49 +1053,79 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 const (
-	enumExactIndexMinRows = 8
-	enumExactIndexMinWork = 64
+	enumValueIndexMinRows = 8
+	enumValueIndexMinWork = 256
 )
 
 // Small batches and small total scan work stay on ParseEnum's existing linear
 // path: building maps there would penalize common single-row DML. The index is
 // reserved for workloads whose rows multiplied by labels are large enough to
 // amortize it, including large sorts over short ENUM definitions.
-func buildEnumExactIndexesForBatch(enumValues string, length int) map[string]types.Enum {
-	if length < enumExactIndexMinRows {
+func buildEnumValueIndexForBatch(enumValues string, length int) *enumValueIndex {
+	if length < enumValueIndexMinRows {
 		return nil
 	}
 	labelCount := strings.Count(enumValues, ",") + 1
-	rowsNeeded := (enumExactIndexMinWork + labelCount - 1) / labelCount
+	rowsNeeded := (enumValueIndexMinWork + labelCount - 1) / labelCount
 	if length < rowsNeeded {
 		return nil
 	}
-	return buildEnumExactIndexes(enumValues)
+	return buildEnumValueIndex(enumValues)
 }
 
-// buildEnumExactIndexes makes the planner-generated display-to-index path
-// O(labels + rows) for a constant ENUM definition. Each exact spelling maps
-// to the first EqualFold-equivalent member, preserving ParseEnum semantics for
-// definitions that contain duplicate or case-equivalent labels. Non-exact
-// inputs still fall back to ParseEnum.
-func buildEnumExactIndexes(enumValues string) map[string]types.Enum {
+// enumValueIndex makes every label lookup O(1) after Unicode case folding. The
+// exact map keeps the planner-generated display-to-index path allocation-free
+// per row, while foldedIndexes preserves ParseEnum's case-insensitive behavior.
+type enumValueIndex struct {
+	values        []string
+	exactIndexes  map[string]types.Enum
+	foldedIndexes map[string]types.Enum
+}
+
+func buildEnumValueIndex(enumValues string) *enumValueIndex {
 	if enumValues == "" {
 		return nil
 	}
 
 	values := strings.Split(enumValues, ",")
-	firstByFold := make(map[string]types.Enum, len(values))
-	exactIndexes := make(map[string]types.Enum, len(values))
+	index := &enumValueIndex{
+		values:        values,
+		exactIndexes:  make(map[string]types.Enum, len(values)),
+		foldedIndexes: make(map[string]types.Enum, len(values)),
+	}
 	for i, value := range values {
 		foldKey := enumEqualFoldKey(value)
-		index, ok := firstByFold[foldKey]
+		firstIndex, ok := index.foldedIndexes[foldKey]
 		if !ok {
-			index = types.Enum(i + 1)
-			firstByFold[foldKey] = index
+			firstIndex = types.Enum(i + 1)
+			index.foldedIndexes[foldKey] = firstIndex
 		}
-		exactIndexes[value] = index
+		index.exactIndexes[value] = firstIndex
 	}
-	return exactIndexes
+	return index
+}
+
+func (index *enumValueIndex) parse(value string) (types.Enum, error) {
+	if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
+		return enumIndex, nil
+	}
+	if enumIndex := index.foldedIndexes[enumEqualFoldKey(value)]; enumIndex != 0 {
+		return enumIndex, nil
+	}
+
+	num, err := strconv.ParseUint(value, 0, 64)
+	if err == nil {
+		number := uint16(num)
+		if number == 0 || int(number) > len(index.values) {
+			return 0, moerr.NewInternalErrorNoCtxf(
+				"convert to MySQL enum failed: number %d overflow enum boundary [1, %d]",
+				number, len(index.values))
+		}
+		return types.Enum(number), nil
+	}
+
+	return 0, moerr.NewInternalErrorNoCtxf(
+		"convert to MySQL enum failed: item %s is not in enum %v", value, index.values)
 }
 
 func enumEqualFoldKey(value string) string {

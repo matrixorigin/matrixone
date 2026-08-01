@@ -51,6 +51,13 @@ select id, colors from (select id, colors from set01) d order by colors, id;
 1  ¦  red  𝄀
 3  ¦  red,green  𝄀
 2  ¦  red,blue
+select colors from (select colors from set01 group by colors) d order by colors;
+➤ colors[12,-1,0]  𝄀
+null  𝄀
+  𝄀
+red  𝄀
+red,green  𝄀
+red,blue
 drop table if exists set_idx;
 create table set_idx (
 id int primary key,

@@ -357,6 +357,13 @@ order by val;
 with c as (select id, val from test_enum_order)
 select id, val, row_number() over (order by val desc) as rn from c order by rn;
 
+-- GROUP BY materializes the visible value; definition-order provenance must
+-- still drive same-block, boundary, and window ordering.
+select val from test_enum_order group by val order by val;
+select val from (select val from test_enum_order group by val) d order by val;
+select val, row_number() over (order by val) as rn
+from test_enum_order group by val order by rn;
+
 -- An explicit character cast intentionally requests lexical order.
 select id, cast(val as char) as lexical_val
 from (select id, val from test_enum_order) d

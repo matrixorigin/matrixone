@@ -660,6 +660,25 @@ select id, val, row_number() over (order by val desc) as rn from c order by rn;
 3  ¦  high  ¦  2  𝄀
 2  ¦  medium  ¦  3  𝄀
 1  ¦  low  ¦  4
+select val from test_enum_order group by val order by val;
+➤ val[12,-1,0]  𝄀
+low  𝄀
+medium  𝄀
+high  𝄀
+critical
+select val from (select val from test_enum_order group by val) d order by val;
+➤ val[12,-1,0]  𝄀
+low  𝄀
+medium  𝄀
+high  𝄀
+critical
+select val, row_number() over (order by val) as rn
+from test_enum_order group by val order by rn;
+➤ val[12,-1,0]  ¦  rn[-5,64,0]  𝄀
+low  ¦  1  𝄀
+medium  ¦  2  𝄀
+high  ¦  3  𝄀
+critical  ¦  4
 select id, cast(val as char) as lexical_val
 from (select id, val from test_enum_order) d
 order by lexical_val, id;

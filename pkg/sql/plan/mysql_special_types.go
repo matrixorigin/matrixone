@@ -278,11 +278,28 @@ func (bc *BindContext) mysqlSpecialOrderTypeForExpr(expr *plan.Expr) *plan.Type 
 			return DeepCopyType(typ)
 		}
 	}
+	if bc.groupTag > 0 && col.RelPos == bc.groupTag && col.ColPos >= 0 && int(col.ColPos) < len(bc.groups) {
+		groupExpr := bc.groups[col.ColPos]
+		if groupExpr == nil {
+			return nil
+		}
+		if groupCol := groupExpr.GetCol(); groupCol != nil && groupCol.RelPos == bc.groupTag {
+			return nil
+		}
+		return bc.mysqlSpecialOrderTypeForExpr(groupExpr)
+	}
 	binding := bc.bindingByTag[col.RelPos]
 	if binding == nil || col.ColPos < 0 || int(col.ColPos) >= len(binding.mysqlSpecialOrderTypes) {
 		return nil
 	}
 	return DeepCopyType(binding.mysqlSpecialOrderTypes[col.ColPos])
+}
+
+func (bc *BindContext) setMySQLSpecialOrderType(colPos int32, typ *plan.Type) {
+	if bc.mysqlSpecialOrderTypes == nil {
+		bc.mysqlSpecialOrderTypes = make(map[int32]*plan.Type)
+	}
+	bc.mysqlSpecialOrderTypes[colPos] = typ
 }
 
 func (bc *BindContext) mysqlSpecialOrderTypeForProject(colPos int32) *plan.Type {
