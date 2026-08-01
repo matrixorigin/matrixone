@@ -2584,6 +2584,41 @@ func buildViewMetadataRefreshQuery(
 	subscriptionTableSuffix := sqlquote.String(
 		",\"subscription_table\":" + string(tableNameJSON),
 	)
+	if pendingFilter != "" {
+		return fmt.Sprintf(
+			"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
+				"where relkind = '%s' %s"+
+				"and reldatabase not in ('%s', '%s') and rel_id > %d "+
+				"and ((account_id = %d and json_extract(viewdef, '$.dependencies') is null "+
+				"and instr(viewdef, %s) > 0) "+
+				"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
+				"and (viewdef like '%%\\\"logical_id\\\":%d,%%' "+
+				"or viewdef like '%%\\\"table_id\\\":%d,%%')) "+
+				"or (account_id = %d and viewdef like '%%\\\"table_id\\\":%d,%%' "+
+				"and viewdef not like '%%\\\"logical_id\\\":%%') "+
+				"or (json_extract(viewdef, '$.dependencies') is not null "+
+				"and ((account_id = %d and instr(viewdef, %s) > 0) "+
+				"or instr(viewdef, %s) > 0))) "+
+				"order by rel_id limit %d",
+			catalog.MO_CATALOG,
+			catalog.SystemViewRel,
+			pendingFilter,
+			catalog.MO_CATALOG,
+			"information_schema",
+			afterViewID,
+			sourceAccountID,
+			legacyCandidate,
+			sourceAccountID,
+			sourceLogicalID,
+			sourceTableID,
+			sourceAccountID,
+			sourceTableID,
+			sourceAccountID,
+			qualifiedNameCandidate,
+			publisherQualifiedNameCandidate,
+			pageSize,
+		)
+	}
 	return fmt.Sprintf(
 		"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
 			"where relkind = '%s' %s"+

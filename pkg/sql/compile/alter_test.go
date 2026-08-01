@@ -160,6 +160,14 @@ func TestBuildViewMetadataRefreshQueryEscapesLegacyTableName(t *testing.T) {
 	require.NotContains(t, query, "viewdef like '\\%")
 	pendingQuery := buildViewMetadataRefreshQuery(7, 24, 42, "db", "source", 0, 128, true)
 	require.Contains(t, pendingQuery, "json_extract(viewdef, '$.metadata_refresh_pending')")
+	require.NotContains(t, pendingQuery, "mo_catalog.mo_subs")
+	pendingStmts, err := mysql.Parse(context.Background(), pendingQuery, 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range pendingStmts {
+			stmt.Free()
+		}
+	}()
 }
 
 func TestCurrentViewSubscriptionResolver(t *testing.T) {
